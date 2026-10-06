@@ -1,0 +1,425 @@
+// Tenant model: Workspace -> Membership(User, role) -> Store -> store-scoped data.
+// Every store-scoped table carries workspace_id so Postgres RLS can enforce
+// isolation without joins (see migrations/*_rls). No customer PII is stored:
+// customers are reduced to a salted hash (customer_key).
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated"
+  // Same generated client runs on Workers (via Hyperdrive) and in Node (tests, scripts).
+  runtime      = "workerd"
+  moduleFormat = "esm"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  owner
+  admin
+  analyst
+  viewer
+}
+
+enum StoreStatus {
+  pending
+  syncing
+  active
+  uninstalled
+  error
+}
+
+enum JobStatus {
+  queued
+  running
+  succeeded
+  failed
+}
+
+model User {
+  id            String       @id @default(cuid())
+  firebaseUid   String       @unique @map("firebase_uid")
+  email         String       @unique
+  emailVerified Boolean      @default(false) @map("email_verified")
+  displayName   String?      @map("display_name")
+  timezone      String       @default("UTC")
+  createdAt     DateTime     @default(now()) @map("created_at")
+  updatedAt     DateTime     @updatedAt @map("updated_at")
+  memberships   Membership[]
+
+  @@map("users")
+}
+
+model Workspace {
+  id           String        @id @default(cuid())
+  name         String
+  createdAt    DateTime      @default(now()) @map("created_at")
+  memberships  Membership[]
+  stores       Store[]
+  apiKeys      ApiKey[]
+  auditLogs    AuditLog[]
+  alerts       Alert[]
+  invitations  Invitation[]
+  subscription Subscription?
+
+  @@map("workspaces")
+}
+
+model Membership {
+  id          String    @id @default(cuid())
+  workspaceId String    @map("workspace_id")
+  userId      String    @map("user_id")
+  role        Role
+  createdAt   DateTime  @default(now()) @map("created_at")
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId])
+  @@index([userId])
+  @@map("memberships")
+}
+
+model Invitation {
+  id          String    @id @default(cuid())
+  workspaceId String    @map("workspace_id")
+  email       String
+  role        Role
+  tokenHash   String    @unique @map("token_hash")
+  expiresAt   DateTime  @map("expires_at")
+  acceptedAt  DateTime? @map("accepted_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@map("invitations")
+}
+
+model NotificationPreference {
+  userId       String  @map("user_id")
+  workspaceId  String  @map("workspace_id")
+  syncFailures Boolean @default(true) @map("sync_failures")
+  weeklyDigest Boolean @default(false) @map("weekly_digest")
+  productNews  Boolean @default(false) @map("product_news")
+
+  @@id([userId, workspaceId])
+  @@map("notification_preferences")
+}
+
+model Store {
+  id                    String      @id @default(cuid())
+  workspaceId           String      @map("workspace_id")
+  shopDomain            String      @unique @map("shop_domain")
+  // Which of our Shopify apps the store is connected through ("default" = SHOPIFY_API_KEY;
+  // others come from SHOPIFY_EXTRA_APPS, e.g. a custom-distribution app for one client).
+  shopifyAppKey         String      @default("default") @map("shopify_app_key")
+  name                  String?
+  timezone              String      @default("UTC")
+  currency              String      @default("USD")
+  status                StoreStatus @default(pending)
+  // AES-256-GCM ciphertexts (packages/shared/crypto.ts); never returned by the API.
+  accessTokenEnc        String?     @map("access_token_enc")
+  refreshTokenEnc       String?     @map("refresh_token_enc")
+  accessTokenExpiresAt  DateTime?   @map("access_token_expires_at")
+  refreshTokenExpiresAt DateTime?   @map("refresh_token_expires_at")
+  tokenKeyVersion       Int?        @map("token_key_version")
+  grantedScopes         String[]    @map("granted_scopes")
+  pixelInstalled        Boolean     @default(false) @map("pixel_installed")
+  pixelIngestKey        String?     @unique @map("pixel_ingest_key")
+  installedAt           DateTime?   @map("installed_at")
+  uninstalledAt         DateTime?   @map("uninstalled_at")
+  lastSyncedAt          DateTime?   @map("last_synced_at")
+  createdAt             DateTime    @default(now()) @map("created_at")
+  updatedAt             DateTime    @updatedAt @map("updated_at")
+  workspace             Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@map("stores")
+}
+
+model WebhookEvent {
+  id          String    @id @default(cuid())
+  webhookId   String    @unique @map("webhook_id")
+  shopDomain  String    @map("shop_domain")
+  topic       String
+  storeId     String?   @map("store_id")
+  workspaceId String?   @map("workspace_id")
+  status      JobStatus @default(queued)
+  attempts    Int       @default(0)
+  error       String?
+  receivedAt  DateTime  @default(now()) @map("received_at")
+  processedAt DateTime? @map("processed_at")
+
+  @@index([shopDomain, topic])
+  @@index([status])
+  @@map("webhook_events")
+}
+
+model Product {
+  id          String   @id @default(cuid())
+  workspaceId String   @map("workspace_id")
+  storeId     String   @map("store_id")
+  shopifyId   String   @map("shopify_id")
+  title       String
+  status      String?
+  vendor      String?
+  productType String?  @map("product_type")
+  shopifyCreatedAt DateTime? @map("shopify_created_at")
+  shopifyUpdatedAt DateTime @map("shopify_updated_at")
+
+  @@unique([storeId, shopifyId])
+  @@index([workspaceId])
+  @@map("products")
+}
+
+// One row per product variant: price, stock and unit cost (inventory module).
+model ProductVariant {
+  id                String   @id @default(cuid())
+  workspaceId       String   @map("workspace_id")
+  storeId           String   @map("store_id")
+  productShopifyId  String   @map("product_shopify_id")
+  shopifyId         String   @map("shopify_id")
+  title             String
+  sku               String?
+  price             Decimal  @db.Decimal(18, 2)
+  // Total sellable quantity across locations; null when Shopify doesn't track inventory for it.
+  inventoryQuantity Int?     @map("inventory_quantity")
+  unitCost          Decimal? @map("unit_cost") @db.Decimal(18, 2)
+  shopifyUpdatedAt  DateTime @map("shopify_updated_at")
+
+  @@unique([storeId, shopifyId])
+  @@index([storeId, productShopifyId])
+  @@index([workspaceId])
+  @@map("product_variants")
+}
+
+model Order {
+  id                  String          @id @default(cuid())
+  workspaceId         String          @map("workspace_id")
+  storeId             String          @map("store_id")
+  shopifyId           String          @map("shopify_id")
+  name                String
+  currency            String
+  localDay            String          @map("local_day")
+  shopifyCreatedAt    DateTime        @map("shopify_created_at")
+  shopifyUpdatedAt    DateTime        @map("shopify_updated_at")
+  cancelledAt         DateTime?       @map("cancelled_at")
+  financialStatus     String?         @map("financial_status")
+  subtotal            Decimal         @db.Decimal(18, 2)
+  totalDiscounts      Decimal         @map("total_discounts") @db.Decimal(18, 2)
+  totalTax            Decimal         @map("total_tax") @db.Decimal(18, 2)
+  totalShipping       Decimal         @map("total_shipping") @db.Decimal(18, 2)
+  totalPrice          Decimal         @map("total_price") @db.Decimal(18, 2)
+  customerKey         String?         @map("customer_key")
+  isReturningCustomer Boolean         @default(false) @map("is_returning_customer")
+  // Sales channel as Shopify reports it (web, pos, shopify_draft_order, an app id, ...).
+  sourceName          String?         @map("source_name")
+  // Lowercase: fulfilled | partially_fulfilled | unfulfilled | ... (GraphQL displayFulfillmentStatus).
+  fulfillmentStatus   String?         @map("fulfillment_status")
+  // When the first fulfillment was created (time-to-ship).
+  fulfilledAt         DateTime?       @map("fulfilled_at")
+  discountCodes       String[]        @default([]) @map("discount_codes")
+  lineItems           OrderLineItem[]
+  refunds             Refund[]
+
+  @@unique([storeId, shopifyId])
+  @@index([storeId, localDay])
+  @@index([workspaceId])
+  @@map("orders")
+}
+
+model OrderLineItem {
+  id               String  @id @default(cuid())
+  workspaceId      String  @map("workspace_id")
+  storeId          String  @map("store_id")
+  orderId          String  @map("order_id")
+  shopifyId        String  @map("shopify_id")
+  productShopifyId String? @map("product_shopify_id")
+  variantShopifyId String? @map("variant_shopify_id")
+  sku              String?
+  title            String
+  quantity         Int
+  price            Decimal @db.Decimal(18, 2)
+  discount         Decimal @db.Decimal(18, 2)
+  order            Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, shopifyId])
+  @@index([orderId])
+  @@map("order_line_items")
+}
+
+model Refund {
+  id               String   @id @default(cuid())
+  workspaceId      String   @map("workspace_id")
+  storeId          String   @map("store_id")
+  orderId          String   @map("order_id")
+  shopifyId        String   @map("shopify_id")
+  localDay         String   @map("local_day")
+  shopifyCreatedAt DateTime @map("shopify_created_at")
+  lineSubtotal     Decimal  @map("line_subtotal") @db.Decimal(18, 2)
+  order            Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, shopifyId])
+  @@index([storeId, localDay])
+  @@map("refunds")
+}
+
+model DailyStoreMetrics {
+  workspaceId             String  @map("workspace_id")
+  storeId                 String  @map("store_id")
+  day                     String
+  grossSales              Decimal @default(0) @map("gross_sales") @db.Decimal(18, 2)
+  discounts               Decimal @default(0) @db.Decimal(18, 2)
+  refunds                 Decimal @default(0) @db.Decimal(18, 2)
+  orders                  Int     @default(0)
+  units                   Int     @default(0)
+  ordersWithCustomer      Int     @default(0) @map("orders_with_customer")
+  returningCustomerOrders Int     @default(0) @map("returning_customer_orders")
+  refundedOrders          Int     @default(0) @map("refunded_orders")
+
+  @@id([storeId, day])
+  @@index([workspaceId])
+  @@map("daily_store_metrics")
+}
+
+model FunnelDaily {
+  workspaceId        String @map("workspace_id")
+  storeId            String @map("store_id")
+  day                String
+  sessions           Int    @default(0)
+  productViews       Int    @default(0) @map("product_views")
+  addToCarts         Int    @default(0) @map("add_to_carts")
+  checkoutsStarted   Int    @default(0) @map("checkouts_started")
+  checkoutsCompleted Int    @default(0) @map("checkouts_completed")
+
+  @@id([storeId, day])
+  @@index([workspaceId])
+  @@map("funnel_daily")
+}
+
+// One storefront visit: a shopper (hashed Shopify client id) on one store-local day. Where they
+// landed, where they were last seen, how far down the funnel they got (0 visited … 4 purchased)
+// and which site sections they saw (bitmask). Paths are cleaned of tokens and query strings
+// before they get here; see packages/shared/src/journey.ts.
+model FunnelVisit {
+  workspaceId  String    @map("workspace_id")
+  storeId      String    @map("store_id")
+  day          String
+  visitor      String
+  enteredAt    DateTime? @map("entered_at")
+  entrySection String?   @map("entry_section")
+  entryPath    String?   @map("entry_path")
+  exitedAt     DateTime? @map("exited_at")
+  exitSection  String?   @map("exit_section")
+  exitPath     String?   @map("exit_path")
+  furthestStep Int       @default(0) @map("furthest_step") @db.SmallInt
+  sections     Int       @default(0)
+  pageViews    Int       @default(0) @map("page_views")
+
+  @@id([storeId, day, visitor])
+  @@index([workspaceId])
+  @@map("funnel_visits")
+}
+
+// Dedupe table for pixel events (Shopify may redeliver) and sessions.
+model PixelEventSeen {
+  storeId  String   @map("store_id")
+  eventId  String   @map("event_id")
+  seenAt   DateTime @default(now()) @map("seen_at")
+
+  @@id([storeId, eventId])
+  @@map("pixel_events_seen")
+}
+
+model SyncJob {
+  id             String    @id @default(cuid())
+  workspaceId    String    @map("workspace_id")
+  storeId        String    @map("store_id")
+  kind           String
+  status         JobStatus @default(queued)
+  attempts       Int       @default(0)
+  progress       Int       @default(0)
+  error          String?
+  startedAt      DateTime? @map("started_at")
+  // Last sign of life from the chain working on the job: its first message, every page or bulk
+  // step. startedAt is only stamped once, so on its own it cannot tell a long import from a dead one.
+  lastActivityAt DateTime? @map("last_activity_at")
+  finishedAt     DateTime? @map("finished_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  @@index([storeId, kind])
+  @@index([workspaceId])
+  @@map("sync_jobs")
+}
+
+model Alert {
+  id          String    @id @default(cuid())
+  workspaceId String    @map("workspace_id")
+  storeId     String?   @map("store_id")
+  severity    String
+  code        String
+  message     String
+  createdAt   DateTime  @default(now()) @map("created_at")
+  resolvedAt  DateTime? @map("resolved_at")
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, resolvedAt])
+  @@map("alerts")
+}
+
+model ApiKey {
+  id          String    @id @default(cuid())
+  workspaceId String    @map("workspace_id")
+  name        String
+  prefix      String
+  keyHash     String    @unique @map("key_hash")
+  createdById String    @map("created_by_id")
+  lastUsedAt  DateTime? @map("last_used_at")
+  revokedAt   DateTime? @map("revoked_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@map("api_keys")
+}
+
+model AuditLog {
+  id          String    @id @default(cuid())
+  workspaceId String    @map("workspace_id")
+  actorUserId String?   @map("actor_user_id")
+  action      String
+  targetType  String?   @map("target_type")
+  targetId    String?   @map("target_id")
+  metadata    Json?
+  ip          String?
+  createdAt   DateTime  @default(now()) @map("created_at")
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, createdAt])
+  @@map("audit_logs")
+}
+
+model Subscription {
+  workspaceId      String    @id @map("workspace_id")
+  plan             String    @default("free")
+  status           String    @default("active")
+  shopifyChargeId  String?   @map("shopify_charge_id")
+  currentPeriodEnd DateTime? @map("current_period_end")
+  workspace        Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@map("subscriptions")
+}
+
+model EmailOtp {
+  id         String    @id @default(cuid())
+  email      String
+  codeHash   String    @map("code_hash")
+  expiresAt  DateTime  @map("expires_at")
+  attempts   Int       @default(0)
+  consumedAt DateTime? @map("consumed_at")
+  ip         String?
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  @@index([email, createdAt])
+  @@map("email_otps")
+}

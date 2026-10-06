@@ -1,0 +1,195 @@
+@import "tailwindcss";
+
+:root {
+  --bg: #f7f7f5;
+  --surface: #ffffff;
+  --border: #e4e4e0;
+  --text: #1b1b18;
+  --muted: #6b6b63;
+  --accent: #2f6f4f;
+  --accent-ink: #ffffff;
+  /* Warm partner to the green: highlights, gradients, the second series. */
+  --accent-2: #c9662a;
+  --danger: #b42318;
+  --warn: #a15c07;
+  --good: #1f7a46;
+  --chart: #2f6f4f;
+  --shadow: 0 1px 2px rgb(20 28 22 / 0.04), 0 8px 24px -14px rgb(20 28 22 / 0.14);
+  --shadow-lift: 0 2px 4px rgb(20 28 22 / 0.06), 0 22px 44px -18px rgb(20 28 22 / 0.26);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #121211;
+    --surface: #1b1b19;
+    --border: #2e2e2a;
+    --text: #ecece8;
+    --muted: #a3a39a;
+    --accent: #6fbf94;
+    --accent-ink: #0d1f15;
+    --accent-2: #f2a65a;
+    --danger: #f97066;
+    --warn: #f0b048;
+    --good: #6fcf97;
+    --chart: #6fbf94;
+    --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 10px 28px -16px rgb(0 0 0 / 0.7);
+    --shadow-lift: 0 2px 6px rgb(0 0 0 / 0.35), 0 24px 48px -18px rgb(0 0 0 / 0.85);
+  }
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-border: var(--border);
+  --color-text: var(--text);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-2: var(--accent-2);
+  --color-danger: var(--danger);
+  --color-warn: var(--warn);
+  --color-good: var(--good);
+}
+
+body {
+  /* Two soft washes of the brand colours behind everything, so pages don't read as flat grey. */
+  background:
+    radial-gradient(1100px 520px at 0% -10%, color-mix(in oklab, var(--accent) 11%, transparent), transparent 62%),
+    radial-gradient(900px 480px at 100% -5%, color-mix(in oklab, var(--accent-2) 9%, transparent), transparent 58%),
+    var(--bg);
+  background-attachment: fixed;
+  color: var(--text);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+@utility btn {
+  @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition disabled:opacity-50;
+}
+@utility btn-primary {
+  @apply btn bg-accent text-accent-ink hover:opacity-90;
+}
+@utility btn-secondary {
+  @apply btn border border-border bg-surface text-text hover:bg-bg;
+}
+@utility btn-danger {
+  @apply btn border border-danger text-danger hover:bg-danger hover:text-white;
+}
+@utility input {
+  @apply w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-accent;
+}
+@utility card {
+  @apply rounded-xl border border-border bg-surface p-5;
+  box-shadow: var(--shadow);
+}
+@utility label {
+  @apply mb-1 block text-sm font-medium;
+}
+
+/* ---- Motion ------------------------------------------------------------------------------
+ * Everything below plays once, when an element first appears: the dashboard re-checks every
+ * few seconds but keeps its elements, so nothing re-animates on a refresh. `--i` staggers
+ * siblings. All of it is switched off for people who ask their system for less motion.
+ */
+@keyframes rise {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes grow-x {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+@keyframes grow-y {
+  from { transform: scaleY(0); }
+  to { transform: scaleY(1); }
+}
+@keyframes draw {
+  from { stroke-dashoffset: 1; }
+  to { stroke-dashoffset: 0; }
+}
+@keyframes fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes shimmer {
+  100% { transform: translateX(100%); }
+}
+@keyframes ping-soft {
+  0% { transform: scale(1); opacity: 0.55; }
+  80%, 100% { transform: scale(2.6); opacity: 0; }
+}
+@keyframes pan {
+  from { background-position: 0% 50%; }
+  to { background-position: 200% 50%; }
+}
+
+@utility animate-rise {
+  animation: rise 0.55s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  animation-delay: calc(var(--i, 0) * 70ms);
+}
+@utility animate-grow-x {
+  transform-origin: left center;
+  animation: grow-x 0.95s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  animation-delay: calc(var(--i, 0) * 70ms + 120ms);
+}
+@utility animate-grow-y {
+  transform-origin: center bottom;
+  animation: grow-y 0.7s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  animation-delay: calc(var(--i, 0) * 22ms);
+}
+/* For an SVG path with pathLength="1". */
+@utility animate-draw {
+  stroke-dasharray: 1;
+  animation: draw 1.3s cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+@utility animate-fade {
+  animation: fade 0.8s ease both;
+  animation-delay: calc(var(--i, 0) * 70ms);
+}
+@utility animate-ping-soft {
+  animation: ping-soft 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+@utility lift {
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+  &:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-lift);
+    border-color: color-mix(in oklab, var(--accent) 35%, var(--border));
+  }
+}
+@utility brand-gradient {
+  background-image: linear-gradient(110deg, var(--accent), var(--accent-2), var(--accent));
+  background-size: 200% 100%;
+}
+@utility animate-pan {
+  animation: pan 8s linear infinite;
+}
+/* Placeholder block with a light sweeping across it while data loads. */
+@utility skeleton {
+  position: relative;
+  overflow: hidden;
+  border-radius: 0.75rem;
+  background: color-mix(in oklab, var(--border) 65%, transparent);
+  &::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background: linear-gradient(90deg, transparent, color-mix(in oklab, var(--surface) 70%, transparent), transparent);
+    animation: shimmer 1.4s infinite;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    animation-delay: 0s !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+html {
+  scroll-behavior: smooth;
+}

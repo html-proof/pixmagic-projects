@@ -1,0 +1,26 @@
+# Local secrets/overrides for `wrangler dev` (copy to .dev.vars; never commit .dev.vars).
+# Values here override "vars" in wrangler.jsonc during local development.
+NODE_ENV=development
+APP_URL=http://localhost:8787
+API_URL=http://localhost:8787/api
+
+SESSION_SECRET=change-me-32-bytes-minimum-random-string
+# Format: "<version>:<base64 32-byte key>[,...]"; first is active. openssl rand -base64 32
+TOKEN_ENCRYPTION_KEYS=1:REPLACE_WITH_openssl_rand_base64_32
+OTP_PEPPER=change-me-otp-pepper
+
+# Firebase: either the emulator (docker compose) or a real project's service account (base64 JSON).
+FIREBASE_PROJECT_ID=demo-insights
+FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099
+FIREBASE_SERVICE_ACCOUNT_B64=
+# Public Firebase web API key (same value as NEXT_PUBLIC_FIREBASE_API_KEY); redeems emailed sign-in links
+FIREBASE_WEB_API_KEY=
+
+SHOPIFY_API_KEY=
+SHOPIFY_API_SECRET=
+
+EMAIL_FROM="Insights <no-reply@localhost>"
+# Local only: deliver mail to Mailpit (docker compose) instead of Cloudflare Email Sending.
+MAILPIT_URL=http://localhost:8025
+ALERT_SLACK_WEBHOOK_URL=
+LOG_LEVEL=debug

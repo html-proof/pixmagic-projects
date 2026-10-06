@@ -1,0 +1,191 @@
+import { dbReachable, systemDb } from "@app/db";
+import {
+  backoffSeconds,
+  logger,
+  MAX_ATTEMPTS,
+  raiseAlert,
+  type AggregateJobData,
+  type Producer,
+  type QueueName,
+  type SyncJobData,
+  type WebhookJobData,
+} from "@app/core";
+import { failStaleJobs, processWebhook, refreshExpiringTokens, runAggregate, runSync, scheduleReconcile, UnrecoverableError, type WorkerDeps } from "./handlers.js";
+
+export * from "./handlers.js";
+
+/** The subset of a Cloudflare Queues `Message` the consumer needs (lets tests drive it). */
+export interface QueueMessage<T = unknown> {
+  readonly id: string;
+  readonly body: T;
+  readonly attempts: number;
+  ack(): void;
+  retry(options?: { delaySeconds?: number }): void;
+}
+
+export interface ConsumeDeps extends WorkerDeps {
+  /** Whether the database answers right now. Defaults to `dbReachable()`; tests inject an outage. */
+  dbHealthy?: () => Promise<boolean>;
+}
+
+/**
+ * Carried in the body of a message that was re-sent because the database was unreachable
+ * (see deferForDb). It has to travel in the body: the re-send is a new message, so Cloudflare's
+ * `attempts` starts again at 1.
+ */
+interface DbDeferral {
+  /** Re-sends so far, for the backoff. */
+  count: number;
+  /** When the first one happened (epoch ms), for the give-up cap. */
+  since: number;
+}
+
+/** Ceiling on the delay between re-sends while the database is unreachable. */
+const DB_DEFER_MAX_DELAY_S = 300;
+/**
+ * How long a message keeps waiting for the database before it is let through to insights-dlq.
+ * The database lives on a PC that can sleep for hours, so this is generous.
+ */
+const DB_DEFER_MAX_MS = 24 * 3600_000;
+
+/**
+ * Process one message. Success acks; failure retries with exponential backoff
+ * until MAX_ATTEMPTS (or immediately fails on UnrecoverableError), then records
+ * the failure and raises an alert. A failure while the database is unreachable
+ * is not the job's fault and spends none of that budget (see deferForDb). Never
+ * throws, so one bad message does not redeliver the rest of its batch.
+ */
+export async function consume(queue: QueueName, msg: QueueMessage, deps: ConsumeDeps): Promise<void> {
+  // The deferral is consume's bookkeeping, not part of the job. Handlers re-enqueue
+  // `{ ...data, ... }` (the next page, a halved page, the next bulk phase), so passing it through
+  // would start every follow-up message part-way through an outage it never saw.
+  const { dbDeferral, ...job } = (msg.body ?? {}) as { dbDeferral?: DbDeferral };
+  try {
+    if (queue === "sync") await runSync(job as SyncJobData, deps);
+    else if (queue === "webhooks") await processWebhook(job as WebhookJobData, deps);
+    else await runAggregate(job as AggregateJobData);
+    msg.ack();
+  } catch (e) {
+    const err = e instanceof Error ? e : new Error(String(e));
+    if (!(err instanceof UnrecoverableError) && !(await (deps.dbHealthy ?? dbReachable)())) {
+      await deferForDb(queue, msg, job, dbDeferral, err, deps);
+      return;
+    }
+    const final = err instanceof UnrecoverableError || msg.attempts >= MAX_ATTEMPTS;
+    logger.error({ err, queue, messageId: msg.id, attempts: msg.attempts, final }, `${queue} job failed`);
+    try {
+      await onFailure(queue, job, err, final, deps);
+    } catch (hookErr) {
+      // Acking now would drop the message with nothing recorded: no failed row, no alert. Retry
+      // instead - past max_retries Cloudflare moves it to insights-dlq rather than deleting it.
+      logger.error({ err: hookErr, queue }, "failure bookkeeping failed");
+      msg.retry({ delaySeconds: backoffSeconds(msg.attempts) });
+      return;
+    }
+    if (final) msg.ack();
+    else msg.retry({ delaySeconds: backoffSeconds(msg.attempts) });
+  }
+}
+
+/**
+ * A job failed while the database was unreachable, so the failure says nothing about the job:
+ * every handler starts with a database read, and the tunnel to Postgres drops for minutes at a
+ * time. Counted against MAX_ATTEMPTS, a 5-minute outage spent the whole budget (5+10+20+40+80s
+ * of backoff) and onFailure could not record anything either, so the message was acked and lost.
+ *
+ * Instead the job is re-sent as a new message (Queues does not depend on the tunnel), backing
+ * off to every 5 minutes, and the original is acked only once the copy is enqueued. onFailure is
+ * skipped: it could not write anyway. Past DB_DEFER_MAX_MS the message is retried normally
+ * instead, so it ends up in insights-dlq rather than circling forever.
+ */
+async function deferForDb(queue: QueueName, msg: QueueMessage, job: object, prev: DbDeferral | undefined, err: Error, deps: WorkerDeps) {
+  const now = Date.now();
+  const since = prev?.since ?? now;
+  const count = prev?.count ?? 0;
+  const log = { err, queue, messageId: msg.id, attempts: msg.attempts, deferrals: count, deferredSince: new Date(since).toISOString() };
+  if (now - since >= DB_DEFER_MAX_MS) {
+    logger.error(log, `${queue} job gave up waiting for the database`);
+    msg.retry({ delaySeconds: backoffSeconds(msg.attempts) });
+    return;
+  }
+  const delaySeconds = Math.min(DB_DEFER_MAX_DELAY_S, 30 * 2 ** count);
+  logger.warn({ ...log, delaySeconds }, `${queue} job deferred: database unreachable`);
+  try {
+    await (deps.queues[queue] as Producer<unknown>).send({ ...job, dbDeferral: { count: count + 1, since } }, { delaySeconds });
+  } catch (sendErr) {
+    logger.error({ err: sendErr, queue, messageId: msg.id }, "re-sending a deferred job failed");
+    msg.retry({ delaySeconds: 60 });
+    return;
+  }
+  msg.ack();
+}
+
+async function onFailure(queue: QueueName, body: unknown, err: Error, final: boolean, deps: WorkerDeps) {
+  const error = err.message.slice(0, 500);
+  if (queue === "sync") {
+    const data = body as SyncJobData;
+    if (!data?.syncJobId) return;
+    // Only a final failure settles the status; a retry is the same run carrying on. Rewriting it to
+    // "queued" stranded it there: only a chain's first message marks the job running (later pages
+    // carry a cursor), so if the chain then died the row looked like an import still waiting to
+    // start, and kept its store "syncing" with nothing behind it.
+    await systemDb.syncJob.update({ where: { id: data.syncJobId }, data: final ? { status: "failed", error } : { error } }).catch(() => {});
+    if (!final) return;
+    const store = await systemDb.store.findUnique({ where: { id: data.storeId } });
+    if (!store) return;
+    await systemDb.store.update({ where: { id: store.id }, data: { status: "error" } });
+    await raiseAlert(
+      {
+        workspaceId: store.workspaceId,
+        storeId: store.id,
+        severity: "critical",
+        code: `sync_${data.kind}_failed`,
+        message: `We couldn't sync ${data.kind} for ${store.shopDomain}: ${err.message}`,
+      },
+      deps.mailer,
+      deps.fetchImpl,
+    );
+  } else if (queue === "webhooks") {
+    const data = body as WebhookJobData;
+    await systemDb.webhookEvent.update({ where: { id: data.eventId }, data: { status: final ? "failed" : "queued", error } }).catch(() => {});
+    if (!final) return;
+    const ev = await systemDb.webhookEvent.findUnique({ where: { id: data.eventId } });
+    if (ev?.workspaceId) {
+      await raiseAlert(
+        { workspaceId: ev.workspaceId, storeId: ev.storeId, severity: "warning", code: "webhook_failed", message: `Processing ${ev.topic} failed: ${err.message}` },
+        deps.mailer,
+        deps.fetchImpl,
+      );
+    }
+    if (data.payloadKey) await deps.payloads.delete(data.payloadKey).catch(() => {});
+  }
+}
+
+/** Cron schedules (keep in sync with `triggers.crons` in apps/cloudflare/wrangler.jsonc). */
+export const CRON = {
+  reconcile: "15 3 * * *",
+  refreshTokens: "*/15 * * * *",
+} as const;
+
+export async function runScheduled(cron: string, deps: WorkerDeps) {
+  if (cron === CRON.reconcile) return { reconciled: await scheduleReconcile(deps) };
+  // Shares the */15 trigger rather than adding a schedule: both are cheap sweeps, and a stale
+  // job only needs noticing within the window it has already been stuck for.
+  if (cron === CRON.refreshTokens) {
+    const refreshed = await refreshExpiringTokens(deps);
+    const staleJobsFailed = await failStaleJobs(deps);
+    // The reconcile rides on every tick too: run once at 03:15, a database that was unreachable
+    // then (the PC asleep or offline, as it often is at that hour) skipped the day's safety net
+    // with nothing to catch up, and in production it went four days without once getting through.
+    // Per-store leases make this a no-op for stores already reconciled (see scheduleReconcile).
+    // Last and on its own, so its failure holds up neither token refresh nor the reaper; the next
+    // tick takes over.
+    const reconciled = await scheduleReconcile(deps).catch((err: unknown) => {
+      logger.error({ err }, "reconcile failed; the next tick picks up the stores it did not reach");
+      return null;
+    });
+    return { refreshed, staleJobsFailed, reconciled };
+  }
+  logger.warn({ cron }, "unknown cron trigger");
+  return {};
+}

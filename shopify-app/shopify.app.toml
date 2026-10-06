@@ -1,0 +1,60 @@
+# Shopify CLI app configuration (public, unlisted distribution).
+# Deploy with: cd shopify-app && shopify app deploy
+# Replace the placeholder URLs with your deployed hosts (see docs/shopify-setup.md).
+client_id = "57e9ef75435db908617fdd46099afe0e"
+name = "Insights"
+application_url = "https://insights.imeseban.workers.dev/api/shopify/launch"
+embedded = false
+
+[access_scopes]
+# Least privilege. THIS is what merchants are asked to grant: with
+# use_legacy_install_flow = false (Shopify managed installation) the scopes come from this
+# file, NOT from the `scope` parameter our authorize URL sends. SHOPIFY_SCOPES in the Worker
+# env must mirror this list exactly - packages/core/test/appConfig.test.ts enforces that.
+scopes = "read_orders,read_products"
+# Optional (dynamic) scopes: NOT part of the install grant. The install screen asks only for
+# `scopes` above; these are requested afterwards, one feature at a time, when the merchant
+# clicks "Enable" on a locked dashboard module (packages/core/src/scopes.ts,
+# apps/api/src/routes/scopes.ts). Declaring them here is what makes them requestable at all -
+# `declaredOptionalScopes` reads SHOPIFY_OPTIONAL_SCOPES, which must mirror this list exactly,
+# and an undeclared scope can never be granted however often we ask.
+#
+# These three are protected customer data. Enabling them before "Protected customer data
+# access" is approved makes Shopify refuse *new installs on live merchant stores*; development
+# stores are exempt. That is accepted deliberately here, because it costs nothing today: the
+# main app is unapproved and so cannot install on a live store at all, and the custom app's one
+# store is already installed (the install screen is not shown again). Re-check this the day the
+# main app is submitted - if PCD approval has not landed by then, comment this back out, clear
+# SHOPIFY_OPTIONAL_SCOPES, and redeploy both. See docs/shopify-setup.md "Optional scopes".
+optional_scopes = ["read_customers", "write_pixels", "read_customer_events"]
+use_legacy_install_flow = false
+
+[auth]
+redirect_urls = ["https://insights.imeseban.workers.dev/api/shopify/callback"]
+
+[webhooks]
+api_version = "2025-10"
+
+  [[webhooks.subscriptions]]
+  topics = [
+    "orders/create",
+    "orders/updated",
+    "orders/paid",
+    "orders/cancelled",
+    "refunds/create",
+    "products/create",
+    "products/update",
+    "products/delete",
+    "app/uninstalled",
+    "app/scopes_update",
+    "app_subscriptions/update"
+  ]
+  uri = "https://insights.imeseban.workers.dev/api/webhooks/shopify"
+
+  # Mandatory GDPR compliance webhooks
+  [[webhooks.subscriptions]]
+  compliance_topics = ["customers/data_request", "customers/redact", "shop/redact"]
+  uri = "https://insights.imeseban.workers.dev/api/webhooks/shopify"
+
+[pos]
+embedded = false

@@ -1,0 +1,6 @@
+{
+  "name": "shopify-app-config",
+  "private": true,
+  "scripts": { "deploy": "shopify app deploy", "info": "shopify app info" },
+  "devDependencies": { "@shopify/cli": "^3.85.0" }
+}

@@ -1,0 +1,29 @@
+node_modules
+.next
+dist
+coverage
+.env
+.env.*
+!.env.example
+*.log
+.turbo
+playwright-report
+test-results
+.terraform
+*.tfstate*
+
+# Firebase service account keys
+*-firebase-adminsdk-*.json
+serviceAccountKey*.json
+
+# Local Postgres TLS cert (generated; used by the Cloudflare Tunnel / Hyperdrive path)
+infra/postgres/certs/
+
+# Static export output (default and NEXT_EXPORT_DIR alternates for deploys/demos)
+apps/web/out/
+apps/web/out-*
+*.tsbuildinfo
+
+# Shopify CLI build output
+shopify-app/.shopify/
+shopify-app/extensions/*/dist/

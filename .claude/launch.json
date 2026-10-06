@@ -1,0 +1,42 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "cloudflare",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": [
+        "--filter",
+        "@app/cloudflare",
+        "dev"
+      ],
+      "port": 8787
+    },
+    {
+      "name": "web",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": [
+        "--filter",
+        "@app/web",
+        "dev"
+      ],
+      "port": 3001
+    },
+    {
+      "name": "demo",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        ".claude/demo-server.mjs"
+      ],
+      "port": 8789
+    },
+    {
+      "name": "demo-nomail",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        ".claude/demo-server.mjs",
+        "--no-mail"
+      ],
+      "port": 8789
+    }
+  ]
+}

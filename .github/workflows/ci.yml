@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PG_PORT: 5434
+
+jobs:
+  checks:
+    name: Typecheck, unit & integration tests, build
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env: { POSTGRES_USER: app, POSTGRES_PASSWORD: app, POSTGRES_DB: app }
+        ports: ["5434:5432"]
+        options: >-
+          --health-cmd "pg_isready -U app" --health-interval 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - name: Create tenant DB role
+        run: PGPASSWORD=app psql -h localhost -p 5434 -U app -d app -f infra/postgres/init.sql
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm test:integration
+      - run: pnpm --filter @app/web build
+        env:
+          NEXT_PUBLIC_FIREBASE_API_KEY: ci
+          NEXT_PUBLIC_FIREBASE_PROJECT_ID: demo-insights
+      - name: Bundle the Worker (wrangler dry run)
+        run: pnpm --filter @app/cloudflare build
+
+  e2e:
+    name: End-to-end (Playwright)
+    runs-on: ubuntu-latest
+    needs: checks
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - name: Start dev stack (Postgres, Mailpit, Firebase emulator)
+        run: docker compose up -d --wait postgres mailpit && docker compose up -d firebase-emulator
+      - name: Wait for Firebase emulator
+        run: timeout 240 bash -c 'until curl -s http://127.0.0.1:9099 >/dev/null; do sleep 3; done'
+      - run: pnpm --filter @app/web exec playwright install --with-deps chromium
+      - run: pnpm e2e
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with: { name: playwright-report, path: apps/web/test-results }

@@ -1,0 +1,216 @@
+"use client";
+import { useState } from "react";
+import Link from "next/link";
+import { canManage, StoresPending, useApp } from "@/components/AppContext";
+import { Alert, EmptyState } from "@/components/ui";
+import { actionError, api, ApiError } from "@/lib/api";
+import { fmtDateTime, fmtRelative } from "@/components/dashboard/format";
+import { CAPABILITIES, SCOPE_LABELS, expandScopes, scopeLabel, scopeList } from "@app/shared/capabilities";
+
+/** The modules that stop working without `scope`, so a confirm can name them. */
+function modulesNeeding(scope: string): string[] {
+  return CAPABILITIES.filter((c) => c.requiredScopes.includes(scope)).map((c) => c.title);
+}
+
+/** Plain words for a status a merchant has no reason to know the internal name of. */
+function statusLabel(status: string): { text: string; tone: string } {
+  switch (status) {
+    case "active":
+      return { text: "Connected", tone: "text-good" };
+    case "syncing":
+      return { text: "Importing your data…", tone: "text-muted" };
+    case "pending":
+      return { text: "Finishing setup…", tone: "text-muted" };
+    case "uninstalled":
+      return { text: "Removed in Shopify", tone: "text-muted" };
+    case "error":
+      return { text: "Something went wrong — reconnect to fix it", tone: "text-danger" };
+    default:
+      return { text: status, tone: "text-muted" };
+  }
+}
+
+export default function StoresPage() {
+  const { workspace, stores, storesStatus, reloadStores } = useApp();
+  const manage = canManage(workspace.role);
+  /** `${storeId}:${scope}` while that one revoke is in flight, so only its button is busy. */
+  const [revoking, setRevoking] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function disconnect(id: string, domain: string) {
+    if (!confirm(`Disconnect ${domain}? Its synced data will be deleted from Insights. You can reconnect later.`)) return;
+    setError(null);
+    try {
+      await api(`/workspaces/${workspace.id}/stores/${id}`, { method: "DELETE" });
+    } catch (e) {
+      setError(actionError(e, `disconnect ${domain}`));
+    }
+    // Either way: a failure can come after the store was already marked disconnected (the data
+    // purge runs last), so the card should show what is true now. Disconnecting again is safe.
+    await reloadStores().catch(() => {});
+  }
+
+  /**
+   * Hand one optional permission back to Shopify. The merchant can grant it again from the
+   * locked module on the dashboard, so this is reversible — but the modules it feeds go dark
+   * until they do, and the confirm says which ones rather than naming the scope alone.
+   */
+  async function revoke(id: string, domain: string, scope: string) {
+    const affected = modulesNeeding(scope);
+    const consequence = affected.length
+      ? `${affected.join(", ")} will stop working until you grant it again.`
+      : "Nothing on your dashboard uses it today.";
+    if (!confirm(`Stop letting Insights read ${scopeLabel(scope).toLowerCase()} for ${domain}?\n\n${consequence}`)) return;
+    setRevoking(`${id}:${scope}`);
+    setError(null);
+    try {
+      await api(`/workspaces/${workspace.id}/stores/${id}/scopes/revoke`, { method: "POST", body: { scopes: [scope] } });
+      await reloadStores();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : `We couldn't remove ${scopeLabel(scope).toLowerCase()}. Please try again.`);
+    } finally {
+      setRevoking(null);
+    }
+  }
+
+  return (
+    <section className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h1 className="text-lg font-semibold">Stores</h1>
+        {manage && <Link href="/onboarding" className="btn-primary">Connect a store</Link>}
+      </div>
+      {error && <Alert>{error}</Alert>}
+      <StoresPending />
+      {storesStatus === "ready" && stores.length === 0 && <EmptyState title="No stores yet" body="Connect a Shopify store to start seeing metrics." />}
+      {stores.map((s) => {
+        const status = statusLabel(s.status);
+        // write_X implies read_X, so a store granted write_pixels satisfies a read_pixels need.
+        const granted = expandScopes(s.grantedScopes);
+        const modules = CAPABILITIES.map((c) => ({
+          ...c,
+          missingScopes: c.requiredScopes.filter((r) => !granted.has(r)),
+        }));
+        const working = modules.filter((c) => c.missingScopes.length === 0);
+        const blocked = modules.filter((c) => c.missingScopes.length > 0);
+        const removable = s.grantedScopes.filter((scope) => s.revocableScopes.includes(scope));
+        // Connected, synced, and holding nothing. Without this the card reads exactly like a
+        // working store — green ticks, a sync time — while every report has nothing to show.
+        const empty = s.status === "active" && s.imported && s.imported.orders === 0 && s.imported.products === 0;
+
+        return (
+          <div key={s.id} className="card space-y-5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="font-medium">{s.name ?? s.shopDomain}</p>
+                <p className="text-xs text-muted">{s.shopDomain} · {s.currency} · {s.timezone}</p>
+              </div>
+              <span className={`text-xs ${status.tone}`}>● {status.text}</span>
+            </div>
+
+            {empty && (
+              <p className="rounded-lg border border-border bg-bg p-3 text-sm" data-testid="store-empty">
+                Connected, but there was nothing to import: this store has no orders or products in Shopify yet. Add a product or
+                place a test order and it will appear here on its own.
+              </p>
+            )}
+
+            {/* What the app can read. Lead with what the data *is*, because the scope string is
+                the one part of this page a merchant has no way to interpret. */}
+            <div className="space-y-2">
+              <h2 className="text-sm font-medium">What Insights can read from this store</h2>
+              {s.grantedScopes.length === 0 ? (
+                <p className="text-sm text-muted">Nothing yet — reconnect the store to grant access.</p>
+              ) : (
+                <ul className="divide-y divide-border border-y border-border">
+                  {s.grantedScopes.map((scope) => {
+                    const canRevoke = manage && s.revocableScopes.includes(scope);
+                    const busy = revoking === `${s.id}:${scope}`;
+                    return (
+                      <li key={scope} className="flex items-start justify-between gap-4 py-2" title={scope}>
+                        <div>
+                          <p className="text-sm">
+                            {scopeLabel(scope)}
+                            <span className="ml-2 text-xs text-muted">{canRevoke ? "Optional" : "Required"}</span>
+                          </p>
+                          <p className="text-xs text-muted">{SCOPE_LABELS[scope]?.description ?? scope}</p>
+                        </div>
+                        {/* A word, not a ×: this gives up access, and the page's other controls
+                            are worded too. */}
+                        {canRevoke && (
+                          <button
+                            type="button"
+                            className="shrink-0 text-xs text-muted underline hover:text-danger disabled:opacity-50"
+                            data-testid={`revoke-${scope}`}
+                            disabled={busy}
+                            onClick={() => revoke(s.id, s.shopDomain, scope)}
+                          >
+                            {busy ? "Removing…" : "Remove"}
+                          </button>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+              {manage && removable.length > 0 && (
+                <p className="text-xs text-muted">
+                  Remove an optional permission and the reports using it go quiet until you grant it again from the
+                  dashboard. The required ones only go when you disconnect the store.
+                </p>
+              )}
+            </div>
+
+            {/* The same list as before, but split: a row of identical pills made "working" and
+                "not working" look like one undifferentiated set. */}
+            <div className="space-y-2">
+              <h2 className="text-sm font-medium">
+                What you get on the dashboard{" "}
+                <span className="font-normal text-muted">
+                  ({working.length} of {modules.length} reports{empty ? ", waiting for data" : ""})
+                </span>
+              </h2>
+              {working.length > 0 && (
+                <ul className="flex flex-wrap gap-2 text-xs">
+                  {working.map((c) => (
+                    <li key={c.id} className="rounded-full border border-good px-2 py-0.5 text-good" title={c.description}>
+                      ✓ {c.title}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {blocked.length > 0 && (
+                <>
+                  <p className="text-xs text-muted">Not available yet:</p>
+                  <ul className="space-y-1 text-xs text-muted">
+                    {blocked.map((c) => (
+                      <li key={c.id}>
+                        <span className="text-text">{c.title}</span> — needs access to{" "}
+                        {scopeList(c.missingScopes)}.
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              {s.lastSyncedAt ? (
+                // Relative, the way the dashboard header already says it, with the exact time on
+                // hover — in the *store's* zone, not the viewer's: the line above this card states
+                // the store's time zone, so a timestamp in another one reads as a contradiction.
+                <p className="text-xs text-muted" title={`${fmtDateTime(s.lastSyncedAt, s.timezone)} (${s.timezone})`}>
+                  Last updated {fmtRelative(s.lastSyncedAt) ?? "just now"} · Insights keeps this current on its own
+                </p>
+              ) : (
+                <span />
+              )}
+              {manage && (
+                <button className="btn-danger" onClick={() => disconnect(s.id, s.shopDomain)}>Disconnect</button>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </section>
+  );
+}

@@ -1,0 +1,21 @@
+{
+  "name": "shopify-insights",
+  "private": true,
+  "packageManager": "pnpm@9.15.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "pnpm -r --parallel --filter ./apps/** dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm --filter @app/shared --filter @app/core test",
+    "test:integration": "pnpm --workspace-concurrency=1 --filter @app/api --filter @app/worker test",
+    "e2e": "pnpm --filter @app/web e2e",
+    "db:generate": "pnpm --filter @app/db generate",
+    "db:migrate": "pnpm --filter @app/db migrate:deploy",
+    "db:migrate:dev": "pnpm --filter @app/db migrate:dev",
+    "db:seed": "pnpm --filter @app/db seed",
+    "test:all": "pnpm test && pnpm test:integration"
+  }
+}

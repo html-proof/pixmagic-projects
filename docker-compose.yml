@@ -1,0 +1,72 @@
+# Local dev stack: Postgres, Redis, Mailpit (SMTP catcher), Firebase Auth emulator.
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: app
+    ports: ["${PG_PORT:-5434}:5432"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/01-roles.sql:ro
+      - ./infra/postgres/certs:/certs:ro
+    # Hyperdrive requires TLS. If infra/postgres/certs/server.{crt,key} exist, enable SSL (optional
+    # for clients); the key is copied so Postgres sees the ownership/permissions it insists on.
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        if [ -f /certs/server.key ]; then
+          install -o postgres -m 600 /certs/server.key /var/lib/postgresql/server.key
+          install -o postgres -m 644 /certs/server.crt /var/lib/postgresql/server.crt
+          set -- -c ssl=on -c ssl_cert_file=/var/lib/postgresql/server.crt -c ssl_key_file=/var/lib/postgresql/server.key
+        fi
+        exec docker-entrypoint.sh postgres "$$@"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app"]
+      interval: 5s
+      retries: 10
+  redis:
+    image: redis:7-alpine
+    ports: ["${REDIS_PORT:-6380}:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 10
+  mailpit:
+    image: axllent/mailpit:latest
+    ports: ["1025:1025", "8025:8025"]
+  firebase-emulator:
+    image: node:24-alpine
+    working_dir: /emu
+    command: npx -y firebase-tools@14 emulators:start --only auth --project demo-insights
+    volumes: ["./infra/firebase:/emu"]
+    ports: ["9099:9099"]
+  # Connects this Postgres to Cloudflare (Workers VPC -> Hyperdrive) for the deployed Worker.
+  # Needs CLOUDFLARE_TUNNEL_TOKEN in .env; start with `docker compose --profile tunnel up -d cloudflared`.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    profiles: ["tunnel"]
+    # --protocol quic is REQUIRED, not optional: Workers VPC (how Hyperdrive reaches this
+    # Postgres) only works over QUIC. Cloudflare: "Workers VPC requires Cloudflare Tunnel to
+    # connect using the QUIC transport protocol"; HTTP/2 "works for Cloudflare Zero Trust
+    # traffic but prevents DNS resolution from Workers VPC"
+    # (developers.cloudflare.com/workers-vpc/reference/troubleshooting/).
+    # This was previously pinned to http2 because QUIC died on a UDP-throttled network, but that
+    # trades one failure for another: the connector registers and reports healthy while Hyperdrive
+    # gets `connection_refused` (error 2015) and /readyz reports {"db":false}.
+    # QUIC needs outbound UDP/7844. If it is blocked, fix the network - do not pin http2.
+    # --retries 1 caps the reconnect backoff at 20s instead of the default 320s (5 retries). The host
+    # is on a mobile hotspot whose link drops for seconds-to-minutes; with the default, cloudflared
+    # kept sleeping ~2.5 min after the link was already back (2026-10-06: last failure 06:07:05, no
+    # dial attempt until 06:09:40), stretching every DB outage. It cannot cause an http2 fallback:
+    # an explicit --protocol quic disables protocol fallback. --retries is a `tunnel` flag, before `run`.
+    command: tunnel --no-autoupdate --protocol quic --retries 1 run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+volumes:
+  pgdata: {}
