@@ -26,8 +26,8 @@ This pushes, as one versioned config:
 | App URL | `https://APP_DOMAIN/api/shopify/launch` (HMAC-verified, sends merchant to onboarding) |
 | Redirect URL | `https://APP_DOMAIN/api/shopify/callback` |
 | Scopes | `read_orders,read_products` (required) |
-| Optional scopes | *none* — declared nowhere yet; the request/revoke flow exists but is dormant, see [3e](#3e-optional-scopes-and-why-the-env-var-cant-fix-an-install) |
-| Webhooks | see [webhooks.md](webhooks.md), delivered to `https://API_DOMAIN/webhooks/shopify` |
+| Optional scopes | `read_customers`, `write_pixels`, `read_customer_events` — declared in both tomls and mirrored in `SHOPIFY_OPTIONAL_SCOPES` since 2026-10-04; merchants grant them per module with **Enable**, see [3e](#3e-optional-scopes-and-why-the-env-var-cant-fix-an-install) |
+| Webhooks | see [webhooks.md](webhooks.md), delivered to `https://APP_DOMAIN/api/webhooks/shopify` |
 | Compliance webhooks | `customers/data_request`, `customers/redact`, `shop/redact` |
 | Web pixel extension | `extensions/insights-pixel` |
 
@@ -211,14 +211,14 @@ What a revoke does *not* do: it does not delete data the scope let us import, an
 
 ### Turning it on
 
-The flow is deliberately **dormant**: `declaredOptionalScopes()` reads `SHOPIFY_OPTIONAL_SCOPES`, which is empty, so nothing is requestable, no module offers a button, and `request` and `revoke` both answer `scope_unavailable` (with nothing declared optional, every scope a store holds came from the install grant). Approval is the only remaining gate. In this order:
+**Current state (2026-10-06): turned on.** `optional_scopes` is declared in both tomls and mirrored in `SHOPIFY_OPTIONAL_SCOPES`, so the dashboard offers **Enable** and Settings → Stores offers **Remove** (see "What is declared optional, and why it is on"). The steps below are how it was switched on, and in reverse how to switch it off again before app review if protected customer data approval has not landed. With `SHOPIFY_OPTIONAL_SCOPES` empty the flow is dormant: `declaredOptionalScopes()` finds nothing, no module offers a button, and `request` and `revoke` both answer `scope_unavailable`. In this order:
 
 1. Get **API access → Protected customer data access** granted for `read_customers`, `write_pixels`, `read_customer_events`.
 2. Uncomment `optional_scopes` in **both** tomls, mirror it into `SHOPIFY_OPTIONAL_SCOPES` (`apps/cloudflare/wrangler.jsonc` *and* `.env.example`), then `shopify app deploy` and `npx wrangler deploy`.
 
-Doing step 2 without step 1 breaks installs on live stores again, which is what `packages/core/test/appConfig.test.ts` fails the build over. Note the env var can only ever *narrow* what we ask for: a scope in `SHOPIFY_OPTIONAL_SCOPES` that the deployed toml does not declare gives merchants an "Enable" button that lands them on a Shopify error.
+`packages/core/test/appConfig.test.ts` fails the build if the tomls, `wrangler.jsonc` and `.env.example` disagree about the optional scopes. Note the env var can only ever *narrow* what we ask for: a scope in `SHOPIFY_OPTIONAL_SCOPES` that the deployed toml does not declare gives merchants an "Enable" button that lands them on a Shopify error.
 
-Giving scopes back is implemented too, and is dormant for the same reason: see [Giving a scope back](#giving-a-scope-back) above.
+Giving scopes back follows the same switch: see [Giving a scope back](#giving-a-scope-back) above.
 
 ## 3d. Troubleshooting installs
 

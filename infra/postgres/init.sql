@@ -11,5 +11,16 @@ END $$;
 GRANT USAGE ON SCHEMA public TO app_rls;
 ALTER DEFAULT PRIVILEGES FOR ROLE app IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO app_rls;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO app_rls;
--- Tenant role never needs these.
-REVOKE ALL ON email_otps, pixel_events_seen, _prisma_migrations FROM app_rls;
+-- Tenant role never needs these. On a fresh volume (docker-entrypoint-initdb.d) the tables do not
+-- exist yet - migrations create them later - and an unconditional REVOKE aborts the entrypoint,
+-- so Postgres never starts. The default privileges above would then grant them on creation, so
+-- the test/e2e setup re-runs this file after migrating, which is when the REVOKE takes effect.
+DO $$
+DECLARE t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['email_otps', 'pixel_events_seen', '_prisma_migrations'] LOOP
+    IF to_regclass(format('public.%I', t)) IS NOT NULL THEN
+      EXECUTE format('REVOKE ALL ON %I FROM app_rls', t);
+    END IF;
+  END LOOP;
+END $$;

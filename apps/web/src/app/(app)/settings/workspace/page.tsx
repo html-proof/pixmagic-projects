@@ -1,5 +1,5 @@
 "use client";
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { canManage, useApp } from "@/components/AppContext";
 import { Alert } from "@/components/ui";
 import { actionError, api } from "@/lib/api";
@@ -10,6 +10,11 @@ export default function WorkspacePage() {
   const [newName, setNewName] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
   const editable = canManage(workspace.role);
+  // Settings pages stay mounted across a workspace switch. Without this the field kept the
+  // previous workspace's name, and Save then renamed the newly selected workspace to it.
+  useEffect(() => setName(workspace.name), [workspace.id, workspace.name]);
+  // Only a switch clears the message: a rename changes the name too, and "Saved." must survive it.
+  useEffect(() => setMsg(null), [workspace.id]);
 
   async function rename(e: FormEvent) {
     e.preventDefault();

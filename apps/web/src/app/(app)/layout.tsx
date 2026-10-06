@@ -43,8 +43,8 @@ function TopBar() {
           </select>
         )}
         <nav className="ml-auto flex items-center gap-4 text-sm">
-          <Link className={`rounded-full px-3 py-1 transition ${path.startsWith("/dashboard") ? "bg-accent/12 font-semibold text-accent" : "text-muted hover:text-text"}`} href="/dashboard">Dashboard</Link>
-          <Link className={`rounded-full px-3 py-1 transition ${path.startsWith("/settings") ? "bg-accent/12 font-semibold text-accent" : "text-muted hover:text-text"}`} href="/settings/profile">Settings</Link>
+          <Link aria-current={path.startsWith("/dashboard") ? "page" : undefined} className={`rounded-full px-3 py-1 transition ${path.startsWith("/dashboard") ? "bg-accent/12 font-semibold text-accent" : "text-muted hover:text-text"}`} href="/dashboard">Dashboard</Link>
+          <Link aria-current={path.startsWith("/settings") ? "page" : undefined} className={`rounded-full px-3 py-1 transition ${path.startsWith("/settings") ? "bg-accent/12 font-semibold text-accent" : "text-muted hover:text-text"}`} href="/settings/profile">Settings</Link>
           <button className="text-muted transition hover:text-text" onClick={logout}>Sign out</button>
         </nav>
       </div>

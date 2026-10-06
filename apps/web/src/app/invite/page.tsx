@@ -1,7 +1,8 @@
 "use client";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
-import { api } from "@/lib/api";
+import { actionError, api, isSignedOut } from "@/lib/api";
+import { setReturnTo } from "@/lib/returnTo";
 import { Alert, AuthShell } from "@/components/ui";
 
 function Invite() {
@@ -9,21 +10,37 @@ function Invite() {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
 
+  const [busy, setBusy] = useState(false);
+
   async function accept() {
+    setBusy(true);
+    setError(null);
     try {
-      await api("/invitations/accept", { method: "POST", body: { token } });
+      const { workspaceId } = await api<{ workspaceId: string }>("/invitations/accept", { method: "POST", body: { token } });
+      // Open the workspace they just joined, not whichever one the app had selected before.
+      try {
+        localStorage.setItem("ws", workspaceId);
+      } catch {
+        /* storage blocked: the dashboard falls back to the first workspace */
+      }
       router.replace("/dashboard");
     } catch (e) {
-      const err = e as { status?: number; message: string };
-      if (err.status === 401) router.push(`/login`);
-      else setError(err.message);
+      // Signed out: come back here after signing in. Sending them to /login alone lost the
+      // invitation, and a new invitee then set up a workspace of their own instead of joining.
+      if (isSignedOut(e)) {
+        setReturnTo(`/invite?token=${encodeURIComponent(token)}`);
+        router.push("/login");
+        return;
+      }
+      setError(actionError(e, "accept the invitation"));
+      setBusy(false);
     }
   }
 
   return (
     <AuthShell title="Join workspace" subtitle="Sign in with the email address the invitation was sent to, then accept.">
       {error && <Alert>{error}</Alert>}
-      <button className="btn-primary w-full" onClick={accept}>Accept invitation</button>
+      <button className="btn-primary w-full" onClick={accept} disabled={busy || !token}>{busy ? "Joining…" : "Accept invitation"}</button>
     </AuthShell>
   );
 }

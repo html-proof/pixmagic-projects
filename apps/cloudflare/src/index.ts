@@ -42,16 +42,24 @@ function r2Blobs(bucket: R2Bucket): BlobStore {
 /** Payloads kept without R2 expire after a week (processed ones are deleted right away). */
 const BLOB_TTL_S = 7 * 86400;
 
+/** Characters per stored chunk: 2 MB per value even if every character took two bytes. */
+const BLOB_CHUNK_CHARS = 512 * 1024;
+
 /**
  * Fallback when the R2 bucket isn't bound (R2 must be enabled on the account first): keep
  * large webhook payloads in Durable Object storage instead, one object per payload.
- * Durable Object values are limited to 2 MB, which covers all but the rarest payloads.
+ * Durable Object values are limited to 2 MB and webhook bodies may be 5 MB, so payloads are
+ * split into chunks; stored whole, a 2-5 MB payload failed on every one of Shopify's retries.
  */
 function durableBlobs(ns: DurableObjectNamespace<Coordinator>): BlobStore {
   const stub = (key: string) => ns.get(ns.idFromName(`blob:${key}`));
   return {
-    put: (key, value) => stub(key).put(value, BLOB_TTL_S),
-    get: (key) => stub(key).peek(),
+    put: (key, value) => {
+      const chunks: string[] = [];
+      for (let i = 0; i < value.length; i += BLOB_CHUNK_CHARS) chunks.push(value.slice(i, i + BLOB_CHUNK_CHARS));
+      return stub(key).putChunks(chunks.length ? chunks : [""], BLOB_TTL_S);
+    },
+    get: (key) => stub(key).peekChunks(),
     delete: (key) => stub(key).release(),
   };
 }

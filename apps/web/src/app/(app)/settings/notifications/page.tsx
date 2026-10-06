@@ -6,10 +6,13 @@ import { LoadError } from "@/components/LoadError";
 import { actionError, api, useApi } from "@/lib/api";
 
 type Prefs = { syncFailures: boolean; weeklyDigest: boolean; productNews: boolean };
+/**
+ * Only emails Insights actually sends. The preferences API also stores `weeklyDigest` and
+ * `productNews`, but nothing sends either yet, so offering them promised a Monday email that never
+ * came. List them here once their senders exist.
+ */
 const LABELS: Array<[keyof Prefs, string, string]> = [
   ["syncFailures", "Sync problems", "Email me if a store stops syncing (owners and admins)."],
-  ["weeklyDigest", "Weekly summary", "A Monday email with last week's key numbers."],
-  ["productNews", "Product updates", "Occasional news about new features."],
 ];
 
 export default function NotificationsPage() {

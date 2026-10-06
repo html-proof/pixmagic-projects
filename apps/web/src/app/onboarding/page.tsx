@@ -1,4 +1,5 @@
 "use client";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { api, fmtNum, friendlyError, isSignedOut, keepRetrying, type ApiError } from "@/lib/api";
@@ -19,6 +20,7 @@ const OAUTH_ERRORS: Record<string, string> = {
   exchange_failed: "Shopify didn't complete the connection. Please try again.",
   stale_request: "That request was too old. Please try again.",
   shop_mismatch: "Shopify returned a different store than the one you picked. Please try again.",
+  app_mismatch: "Shopify answered for a different version of our app than the one this connection started with. Please start again.",
   missing_params: "Shopify didn't send everything we need. Please try again.",
   invalid_shop: "Enter your store's myshopify.com address, e.g. your-store.myshopify.com.",
   shop_required: "Enter your store's myshopify.com address so we can open the right install page.",
@@ -56,6 +58,15 @@ function jobStatus(j: SyncJob): string {
   if (j.status === "failed") return "Failed – we'll retry";
   if (j.status === "running") return j.progress ? `Importing… ${fmtNum(j.progress)}` : "Working…";
   return "Waiting";
+}
+
+/** The workspace the app shell has selected (localStorage "ws"), if storage is readable. */
+function selectedWorkspaceId(): string | null {
+  try {
+    return localStorage.getItem("ws");
+  } catch {
+    return null;
+  }
 }
 
 /** Same keys the app shell reads to pick the current workspace / store. */
@@ -125,7 +136,13 @@ function Onboarding() {
   const meFailing = meError !== null;
   useEffect(() => (meFailing ? keepRetrying(loadMe) : undefined), [meFailing, loadMe]);
 
-  const ws = me?.workspaces[0];
+  // Connect into the workspace the user came from: `?ws=`, else the one the app shell has selected.
+  // Always taking the first one attached a store connected from a second workspace to the wrong
+  // workspace, and made Reconnect fail with "store taken" for a store living in another one.
+  const wantedWs = params.get("ws");
+  const ws = me
+    ? (me.workspaces.find((w) => w.id === wantedWs) ?? me.workspaces.find((w) => w.id === selectedWorkspaceId()) ?? me.workspaces[0])
+    : undefined;
   const step = !me || !me.user.emailVerified ? 0 : ws && storeId ? 2 : 1;
 
   // Find the store's workspace, and make it (and the store) the dashboard's selection.
@@ -301,7 +318,7 @@ function Onboarding() {
                 {ready
                   ? "All set. Your numbers are ready."
                   : sync?.store.status === "error"
-                    ? "We hit a problem importing your store. We'll keep retrying; your dashboard shows whatever has arrived so far."
+                    ? "We hit a problem importing your store. Open your dashboard: Insights retries the import from there, and shows whatever has arrived so far."
                     : "We're importing your orders, products and inventory. This usually takes a minute or two, and it's fine to leave this page."}
               </p>
             </div>
@@ -332,6 +349,12 @@ function Onboarding() {
           </div>
         )}
       </div>
+      {/* The errors above tell merchants to contact support; this page has no AuthShell, so link it here. */}
+      <p className="mt-6 text-center text-xs text-muted">
+        <Link className="underline" href="/support">Support</Link>
+        {" · "}
+        <Link className="underline" href="/privacy">Privacy</Link>
+      </p>
     </main>
   );
 }

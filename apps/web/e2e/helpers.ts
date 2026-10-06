@@ -1,21 +1,25 @@
 import { createHmac } from "node:crypto";
 import { expect, type Page } from "@playwright/test";
-import { E2E_BASE_URL } from "../playwright.config";
+import { E2E_AUTH_EMULATOR_HOST, E2E_BASE_URL, E2E_MAILPIT_URL } from "../playwright.config";
 
 export const uniqueEmail = (p: string) => `${p}-${Date.now()}-${Math.floor(Math.random() * 1e6)}@example.com`;
 
 /** Follow the email-verification link the Firebase emulator "sent". */
 export async function verifyEmailInEmulator(email: string) {
-  const res = await fetch("http://127.0.0.1:9099/emulator/v1/projects/demo-insights/oobCodes");
+  const res = await fetch(`http://${E2E_AUTH_EMULATOR_HOST}/emulator/v1/projects/demo-insights/oobCodes`);
   const { oobCodes } = (await res.json()) as { oobCodes: Array<{ email: string; requestType: string; oobLink: string }> };
   const code = oobCodes.reverse().find((c) => c.email === email && c.requestType === "VERIFY_EMAIL");
   expect(code, "verification email").toBeTruthy();
-  await fetch(code!.oobLink);
+  // The emulator writes links with the port it listens on inside its container (9099); when it is
+  // published on another host port (E2E_AUTH_EMULATOR_HOST), follow the link there instead.
+  const link = new URL(code!.oobLink);
+  link.host = E2E_AUTH_EMULATOR_HOST;
+  await fetch(link);
 }
 
 export async function latestOtp(email: string): Promise<string> {
   for (let i = 0; i < 20; i++) {
-    const r = await fetch(`http://localhost:8025/api/v1/search?query=${encodeURIComponent(`to:${email}`)}`);
+    const r = await fetch(`${E2E_MAILPIT_URL}/api/v1/search?query=${encodeURIComponent(`to:${email}`)}`);
     const j = (await r.json()) as { messages?: Array<{ Subject: string }> };
     const m = j.messages?.[0]?.Subject.match(/(\d{6})/);
     if (m) return m[1]!;

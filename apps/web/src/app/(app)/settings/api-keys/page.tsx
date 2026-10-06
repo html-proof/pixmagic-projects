@@ -67,7 +67,7 @@ export default function ApiKeysPage() {
             <span className="flex-1">{k.name} <code className="text-muted">{k.prefix}…</code></span>
             <span className="text-xs text-muted">{k.revokedAt ? "Revoked" : k.lastUsedAt ? `Used ${new Date(k.lastUsedAt).toLocaleDateString()}` : "Never used"}</span>
             {!k.revokedAt && (
-              <button className="text-danger" onClick={() => revoke(k.id)}>
+              <button className="text-danger" aria-label={`Revoke key ${k.name}`} onClick={() => revoke(k.id)}>
                 Revoke
               </button>
             )}

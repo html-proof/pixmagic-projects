@@ -405,6 +405,11 @@ model Subscription {
   status           String    @default("active")
   shopifyChargeId  String?   @map("shopify_charge_id")
   currentPeriodEnd DateTime? @map("current_period_end")
+  /// A plan change the merchant has been sent to Shopify to approve. `plan` stays the plan they
+  /// actually have until Shopify reports this charge active; a declined or abandoned change
+  /// leaves it untouched.
+  pendingPlan      String?   @map("pending_plan")
+  pendingChargeId  String?   @map("pending_charge_id")
   workspace        Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
   @@map("subscriptions")

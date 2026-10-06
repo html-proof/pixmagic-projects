@@ -17,6 +17,8 @@ const eventSchema = z.object({
   path: z.string().max(2048).optional(),
 });
 const bodySchema = z.object({ events: z.array(eventSchema).min(1).max(50) });
+/** Clock skew tolerated on a shopper's device. */
+const PIXEL_MAX_FUTURE_MS = 3600_000;
 
 /**
  * Web pixel ingest. The ingest key identifies the store; it is embedded in the
@@ -52,11 +54,17 @@ export function pixelRoutes(app: App, deps: Deps) {
     if (!parsed.success) return c.json({ error: "invalid_body" }, 400);
     const store = await systemDb.store.findUnique({ where: { pixelIngestKey: key } });
     if (!store || store.status === "uninstalled") return c.json({ error: "not_found" }, 404);
+    // The ingest key is public, so the timestamp is whatever the caller says. A real pixel reports
+    // after the fact; an event dated in the future (beyond clock skew) would sit in days that have
+    // not happened yet and inflate them when they arrive, so it is dropped rather than counted.
+    const latest = Date.now() + PIXEL_MAX_FUTURE_MS;
+    const events = parsed.data.events.filter((e) => Date.parse(e.timestamp) <= latest);
+    if (!events.length) return c.json({ ok: true, accepted: 0 });
 
     // One transaction, so an event is never marked seen without being counted. The pixel sends a
     // batch per page or so, nearly always from one shopper: that is one dedupe insert and one upsert.
     const accepted = await systemDb.$transaction(async (tx) => {
-      const ids = [...new Set(parsed.data.events.map((e) => `e:${e.id}`))];
+      const ids = [...new Set(events.map((e) => `e:${e.id}`))];
       const fresh = await tx.$queryRaw<Array<{ event_id: string }>>`
         INSERT INTO pixel_events_seen (store_id, event_id)
         SELECT ${store.id}, unnest(${ids}::text[])
@@ -65,7 +73,7 @@ export function pixelRoutes(app: App, deps: Deps) {
       const freshIds = new Set(fresh.map((r) => r.event_id));
 
       const visits = new Map<string, { day: string; visitor: string; events: PixelEventIn[] }>();
-      for (const ev of parsed.data.events) {
+      for (const ev of events) {
         // Delete as we go: a batch that repeats an id counts it once.
         if (!freshIds.delete(`e:${ev.id}`)) continue;
         const at = new Date(ev.timestamp);

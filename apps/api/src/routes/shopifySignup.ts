@@ -17,7 +17,7 @@ import {
   type TokenResponse,
 } from "@app/core";
 import { decrypt, encrypt, expandScopes, normalizeShopDomain, randomToken, safeEqual } from "@app/shared";
-import { body, clientIp, HttpError, requireUser, type Ctx, type Deps } from "../context.js";
+import { body, clientIp, HttpError, requireAppOrigin, requireUser, type Ctx, type Deps } from "../context.js";
 import type { App } from "../app.js";
 import { limit } from "../rateLimit.js";
 import { connectStore } from "../connectStore.js";
@@ -106,21 +106,6 @@ function signupNonce(c: Ctx): string | null {
 export function freshTimestamp(ts: string | undefined): boolean {
   const n = Number(ts);
   return Number.isFinite(n) && Math.abs(Date.now() / 1000 - n) <= MAX_LINK_AGE_S;
-}
-
-/**
- * Signup calls carry no session cookie, so the app-wide CSRF check doesn't cover them.
- * They must come from our web app too.
- */
-function requireAppOrigin(c: Ctx) {
-  const origin = c.req.header("origin") ?? c.req.header("referer");
-  let ok = false;
-  try {
-    ok = !!origin && new URL(origin).origin === new URL(env().APP_URL).origin;
-  } catch {
-    ok = false;
-  }
-  if (!ok) throw new HttpError(403, "Cross-site request blocked", "csrf");
 }
 
 // ---------------- Signup record (coord) ----------------

@@ -6,7 +6,6 @@
   "scripts": {
     "dev": "next dev -p 3001",
     "build": "next build && node scripts/fix-export-prefetch.mjs",
-    "start": "next start -p 3000",
     "typecheck": "tsc --noEmit",
     "test": "echo 'web: see e2e'",
     "e2e": "playwright test"

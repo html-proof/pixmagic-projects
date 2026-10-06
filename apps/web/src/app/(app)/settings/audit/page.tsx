@@ -1,8 +1,8 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { canManage, useApp } from "@/components/AppContext";
 import { Alert } from "@/components/ui";
-import { api } from "@/lib/api";
+import { friendlyError, api } from "@/lib/api";
 
 interface Item { id: string; action: string; actor: string | null; targetType: string | null; targetId: string | null; createdAt: string }
 
@@ -24,6 +24,9 @@ const DESCRIBE: Record<string, string> = {
   "apikey.created": "created an API key",
   "apikey.revoked": "revoked an API key",
   "billing.subscribe_started": "started a plan change",
+  "billing.plan_changed": "Shopify approved a plan change",
+  "billing.plan_change_ended": "a plan change was not approved in Shopify",
+  "billing.subscription_ended": "the Shopify subscription ended; the workspace is on the free plan",
   "gdpr.customer_data_request": "received a customer data request (no personal data is stored)",
   "gdpr.customer_redacted": "processed a customer deletion request",
   "gdpr.shop_redacted": "deleted all data for a store at Shopify's request",
@@ -34,18 +37,30 @@ export default function AuditPage() {
   const [items, setItems] = useState<Item[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
   const allowed = canManage(workspace.role);
+  /** Bumped on every workspace switch: a response for the previous workspace is dropped. */
+  const generation = useRef(0);
 
-  async function load(c?: string | null) {
+  async function load(c: string | null) {
+    const gen = generation.current;
+    setLoading(true);
+    setError(null);
     try {
-      const r = await api<{ items: Item[]; nextCursor: string | null }>(`/workspaces/${workspace.id}/audit-logs${c ? `?cursor=${c}` : ""}`);
+      const r = await api<{ items: Item[]; nextCursor: string | null }>(`/workspaces/${workspace.id}/audit-logs${c ? `?cursor=${encodeURIComponent(c)}` : ""}`);
+      if (gen !== generation.current) return;
       setItems((prev) => (c ? [...prev, ...r.items] : r.items));
       setCursor(r.nextCursor);
     } catch (e) {
-      setError((e as Error).message);
+      if (gen === generation.current) setError(friendlyError(e));
+    } finally {
+      if (gen === generation.current) setLoading(false);
     }
   }
   useEffect(() => {
+    generation.current++;
+    setItems([]);
+    setCursor(null);
     if (allowed) void load(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspace.id, allowed]);
@@ -64,9 +79,10 @@ export default function AuditPage() {
             </span>
           </li>
         ))}
-        {items.length === 0 && <li className="py-2 text-muted">Nothing recorded yet.</li>}
+        {items.length === 0 && !loading && !error && <li className="py-2 text-muted">Nothing recorded yet.</li>}
+        {loading && <li className="py-2 text-muted">Loading…</li>}
       </ul>
-      {cursor && <button className="btn-secondary" onClick={() => load(cursor)}>Load more</button>}
+      {cursor && !loading && <button className="btn-secondary" onClick={() => load(cursor)}>Load more</button>}
     </section>
   );
 }

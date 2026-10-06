@@ -52,6 +52,30 @@ export class Coordinator extends DurableObject<Env> {
     return (await this.live())?.value ?? null;
   }
 
+  /**
+   * Store a large value split across storage keys (blob storage fallback). A SQLite-backed
+   * object caps each value at 2 MB, below the 5 MB a webhook body may carry. `count` records
+   * how many chunks there are; expiry and release delete them with everything else.
+   */
+  async putChunks(chunks: string[], ttlSec: number): Promise<void> {
+    await this.ctx.storage.deleteAll();
+    const entries: Record<string, string> = {};
+    chunks.forEach((c, i) => (entries[`c${i}`] = c));
+    await this.ctx.storage.put(entries);
+    await this.save({ value: "", count: chunks.length, expiresAt: Date.now() + ttlSec * 1000 });
+  }
+
+  /** Read a value written by putChunks (or a whole value written by put). */
+  async peekChunks(): Promise<string | null> {
+    const e = await this.live();
+    if (!e) return null;
+    if (!e.count) return e.value;
+    const keys = Array.from({ length: e.count }, (_, i) => `c${i}`);
+    const parts = await this.ctx.storage.get<string>(keys);
+    if (parts.size !== keys.length) return null;
+    return keys.map((k) => parts.get(k)!).join("");
+  }
+
   async acquire(ttlMs: number): Promise<boolean> {
     if (await this.live()) return false;
     await this.save({ value: "1", count: 0, expiresAt: Date.now() + ttlMs });

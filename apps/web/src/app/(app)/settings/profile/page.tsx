@@ -11,7 +11,10 @@ export default function ProfilePage() {
   const [name, setName] = useState(me.user.displayName ?? "");
   const [tz, setTz] = useState(me.user.timezone);
   const [msg, setMsg] = useState<{ kind: "error" | "success" | "info"; text: string } | null>(null);
-  const zones = typeof Intl.supportedValuesOf === "function" ? Intl.supportedValuesOf("timeZone") : [tz];
+  // Browsers' list omits "UTC" (every account's default), so a select without it showed the first
+  // zone in the list (Africa/Abidjan) as the user's time zone. Keep UTC and the saved zone in it.
+  const known = typeof Intl.supportedValuesOf === "function" ? Intl.supportedValuesOf("timeZone") : [];
+  const zones = [...new Set(["UTC", me.user.timezone, ...known])];
 
   async function save(e: FormEvent) {
     e.preventDefault();
@@ -31,7 +34,7 @@ export default function ProfilePage() {
       {msg && <Alert kind={msg.kind}>{msg.text}</Alert>}
       <form onSubmit={save} className="space-y-3">
         <div>
-          <label className="label">Email</label>
+          <p className="label">Email</p>
           <p className="text-sm">{me.user.email} {me.user.emailVerified && <span className="text-good">· verified</span>}</p>
         </div>
         <div>

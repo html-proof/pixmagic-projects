@@ -85,6 +85,17 @@ const SESSION_CERTS_URL = "https://www.googleapis.com/identitytoolkit/v3/relying
 const CUSTOM_TOKEN_AUD = "https://identitytoolkit.googleapis.com/google.identity.identitytoolkit.v1.IdentityToolkit";
 const SCOPES = "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/identitytoolkit";
 
+/** localhost, 127.0.0.1, [::1], or a *.localhost / *.test name. */
+export function isLocalUrl(url: string): boolean {
+  let host: string;
+  try {
+    host = new URL(url).hostname;
+  } catch {
+    return false;
+  }
+  return ["localhost", "127.0.0.1", "[::1]", "::1"].includes(host) || host.endsWith(".localhost") || host.endsWith(".test");
+}
+
 /**
  * Firebase Auth over its REST API (the Admin SDK needs Node's http stack and
  * does not run on Workers). Behaviour matches the Admin SDK calls this replaced:
@@ -100,6 +111,15 @@ export function firebaseAuthProvider(fetchImpl: FetchLike = fetch): AuthProvider
     throw new Error(
       `FIREBASE_AUTH_EMULATOR_HOST=${emulator} is set alongside a real service account (project ${projectId}). ` +
         "Remove one of them: the emulator would reject real Google-signed tokens.",
+    );
+  }
+  // Emulator tokens are unsigned and accepted as such, so the emulator setting is an auth bypass
+  // anywhere real users can reach. Only a local APP_URL may use it; a deployment that carried it
+  // over (a copied .dev.vars, a stray var) fails closed instead of accepting forged tokens.
+  if (emulator && !isLocalUrl(e.APP_URL)) {
+    throw new Error(
+      `FIREBASE_AUTH_EMULATOR_HOST=${emulator} is set but APP_URL (${e.APP_URL}) is not local. ` +
+        "The emulator accepts unsigned tokens; it must never be configured on a deployed app.",
     );
   }
   const sa: ServiceAccount | null = e.FIREBASE_SERVICE_ACCOUNT_B64

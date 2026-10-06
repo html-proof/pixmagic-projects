@@ -66,7 +66,9 @@ export function memoryMailer(): Mailer & { sent: Array<{ to: string; subject: st
 /**
  * Raise a workspace alert: persisted (shown in the UI), emailed to members who
  * opted in to sync-failure notifications, and posted to Slack if configured.
- * De-duplicated: an unresolved alert with the same code+store is not repeated.
+ * De-duplicated: an unresolved alert with the same code+store is not repeated, so
+ * whatever fixes the problem must resolve it (see resolveAlerts) or the next
+ * incident goes unannounced.
  */
 export async function raiseAlert(
   input: { workspaceId: string; storeId?: string | null; severity: "info" | "warning" | "critical"; code: string; message: string },
@@ -80,6 +82,8 @@ export async function raiseAlert(
   const alert = await systemDb.alert.create({ data: { ...input, storeId: input.storeId ?? null } });
   logger.warn({ alert }, "alert raised");
 
+  // Each channel and each recipient on its own: one address the sender refuses (or no working
+  // sender at all) used to abort the loop, so later members and Slack never heard about it.
   try {
     const recipients = await systemDb.membership.findMany({
       where: { workspaceId: input.workspaceId, role: { in: ["owner", "admin"] } },
@@ -91,20 +95,40 @@ export async function raiseAlert(
     const optedOut = new Set(prefs.map((p) => p.userId));
     for (const m of recipients) {
       if (optedOut.has(m.userId)) continue;
-      await mailer.send(m.user.email, `[${input.severity}] ${input.code}`, input.message);
+      await mailer.send(m.user.email, `[${input.severity}] ${input.code}`, input.message).catch((err: unknown) => {
+        logger.error({ err, alertId: alert.id, userId: m.userId }, "alert email failed");
+      });
     }
-    const hook = env().ALERT_SLACK_WEBHOOK_URL;
-    if (hook) {
-      await fetchImpl(hook, {
+  } catch (err) {
+    logger.error({ err, alertId: alert.id }, "alert email recipients could not be loaded");
+  }
+  const hook = env().ALERT_SLACK_WEBHOOK_URL;
+  if (hook) {
+    try {
+      const res = await fetchImpl(hook, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ text: `:warning: ${input.code} (${input.workspaceId}): ${input.message}` }),
       });
+      if (!res.ok) logger.error({ status: res.status, alertId: alert.id }, "alert Slack post rejected");
+    } catch (err) {
+      logger.error({ err, alertId: alert.id }, "alert Slack post failed");
     }
-  } catch (err) {
-    logger.error({ err }, "alert notification failed");
   }
   return alert;
+}
+
+/**
+ * Close a store's open alerts once the thing they reported works again: the next successful
+ * run of the same sync kind, or the next webhook processed for the store. Returns how many.
+ */
+export async function resolveAlerts(storeId: string, codes: string[]): Promise<number> {
+  const { count } = await systemDb.alert.updateMany({
+    where: { storeId, code: { in: codes }, resolvedAt: null },
+    data: { resolvedAt: new Date() },
+  });
+  if (count) logger.info({ storeId, codes, count }, "alerts resolved");
+  return count;
 }
 
 export async function audit(input: {

@@ -1,6 +1,6 @@
 import { execSync } from "node:child_process";
 import { resolve } from "node:path";
-import { E2E_ENV } from "../playwright.config";
+import { E2E_AUTH_EMULATOR_HOST, E2E_ENV, E2E_MAILPIT_URL } from "../playwright.config";
 
 export default async function globalSetup() {
   const root = resolve(import.meta.dirname, "../../..");
@@ -12,6 +12,6 @@ export default async function globalSetup() {
     input: `DO $$ DECLARE r record; BEGIN FOR r IN SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename <> '_prisma_migrations' LOOP EXECUTE 'TRUNCATE "' || r.tablename || '" CASCADE'; END LOOP; END $$;`,
   });
   // Reset emulator accounts and the Mailpit inbox.
-  await fetch("http://127.0.0.1:9099/emulator/v1/projects/demo-insights/accounts", { method: "DELETE" });
-  await fetch("http://localhost:8025/api/v1/messages", { method: "DELETE" });
+  await fetch(`http://${E2E_AUTH_EMULATOR_HOST}/emulator/v1/projects/demo-insights/accounts`, { method: "DELETE" });
+  await fetch(`${E2E_MAILPIT_URL}/api/v1/messages`, { method: "DELETE" });
 }

@@ -18,6 +18,13 @@ import { contactRoutes } from "./routes/contacts.js";
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 const CSRF_EXEMPT = [/^\/webhooks\//, /^\/pixel\//];
+/**
+ * Not subject to the global per-IP limit. Shopify delivers every store's webhooks from a small
+ * pool of addresses, so a per-IP cap meant one busy merchant (or a backfill burst) could get
+ * every store's webhooks 429ed into Shopify's retry/disable path; they are HMAC-verified
+ * instead. The pixel has its own, more generous per-IP limit that the global one shadowed.
+ */
+const GLOBAL_LIMIT_EXEMPT = [/^\/healthz$/, /^\/readyz$/, /^\/webhooks\//, /^\/pixel\//];
 const MB = 1024 * 1024;
 
 export type App = Hono<AppEnv>;
@@ -34,7 +41,7 @@ export function buildApp(deps: Deps): App {
   );
 
   app.use("*", async (c, next) => {
-    if (deps.globalLimit && c.req.path !== "/healthz" && c.req.path !== "/readyz") {
+    if (deps.globalLimit && !GLOBAL_LIMIT_EXEMPT.some((r) => r.test(c.req.path))) {
       if (!(await deps.globalLimit(clientIp(c)))) {
         return c.json({ error: "rate_limited", message: "Rate limit exceeded, retry in a minute" }, 429);
       }

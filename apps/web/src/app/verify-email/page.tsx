@@ -4,15 +4,27 @@ import { useEffect, useState } from "react";
 import { onAuthStateChanged, sendEmailVerification, type User } from "firebase/auth";
 import { firebaseAuth } from "@/lib/firebase";
 import { api } from "@/lib/api";
+import { authErrorMessage } from "@/lib/session";
 import { Alert, AuthShell } from "@/components/ui";
+import { takeReturnTo } from "@/lib/returnTo";
 
 export default function VerifyEmailPage() {
   const router = useRouter();
   const [user, setUser] = useState<User | null>(null);
+  // Firebase restores the signed-in user asynchronously. Until it has answered, "no user" means
+  // "not known yet", and a click must not bounce a signed-in person to /login.
+  const [authReady, setAuthReady] = useState(false);
   const [msg, setMsg] = useState<{ kind: "error" | "info" | "success"; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => onAuthStateChanged(firebaseAuth(), setUser), []);
+  useEffect(
+    () =>
+      onAuthStateChanged(firebaseAuth(), (u) => {
+        setUser(u);
+        setAuthReady(true);
+      }),
+    [],
+  );
 
   async function check() {
     if (!user) return router.replace("/login");
@@ -24,9 +36,9 @@ export default function VerifyEmailPage() {
         return;
       }
       await api("/auth/sync-profile", { method: "POST", body: { idToken: await user.getIdToken(true) } });
-      router.replace("/onboarding");
+      router.replace(takeReturnTo() ?? "/onboarding");
     } catch (e) {
-      setMsg({ kind: "error", text: (e as Error).message });
+      setMsg({ kind: "error", text: authErrorMessage(e) });
     } finally {
       setBusy(false);
     }
@@ -42,8 +54,8 @@ export default function VerifyEmailPage() {
   return (
     <AuthShell title="Check your email" subtitle={`We sent a verification link to ${user?.email ?? "your inbox"}. Verifying keeps your store data safe.`}>
       {msg && <Alert kind={msg.kind}>{msg.text}</Alert>}
-      <button className="btn-primary w-full" onClick={check} disabled={busy}>I&apos;ve verified my email</button>
-      <button className="btn-secondary w-full" onClick={resend}>Resend the email</button>
+      <button className="btn-primary w-full" onClick={check} disabled={busy || !authReady}>I&apos;ve verified my email</button>
+      <button className="btn-secondary w-full" onClick={resend} disabled={!authReady}>Resend the email</button>
     </AuthShell>
   );
 }

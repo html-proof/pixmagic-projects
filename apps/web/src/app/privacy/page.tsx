@@ -114,8 +114,8 @@ export default function PrivacyPage() {
       <Section title="Access tokens">
         <p>
           The access token Shopify issues for your store is encrypted with AES-256-GCM before it is written down, with
-          each ciphertext cryptographically bound to the store it belongs to. Tokens expire and are rotated
-          automatically, are never returned by our API, and are never shown in the dashboard.
+          each ciphertext cryptographically bound to the store it belongs to. Tokens are never returned by our API, are
+          never shown in the dashboard, and are destroyed when you uninstall the app.
         </p>
       </Section>
 
@@ -146,7 +146,8 @@ export default function PrivacyPage() {
         <p>
           Store data is kept while the app is installed. Uninstalling the app from Shopify immediately destroys the
           stored access tokens, and we act on Shopify&apos;s mandatory data-request, customer-redact and shop-redact
-          webhooks. Deleting your workspace deletes its stores, orders and metrics.
+          webhooks. Disconnecting a store in Settings → Stores deletes its orders and metrics from Insights. To have
+          your whole workspace and account deleted, write to {orUnset(CONTACT.supportEmail)}.
         </p>
       </Section>
 

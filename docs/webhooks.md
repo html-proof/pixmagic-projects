@@ -1,6 +1,6 @@
 # Webhooks
 
-Webhooks drive all updates after the initial backfill. Endpoint: `POST https://API_DOMAIN/webhooks/shopify` (`apps/api/src/routes/webhooks.ts`).
+Webhooks drive all updates after the initial backfill. Endpoint: `POST https://APP_DOMAIN/api/webhooks/shopify` (`apps/api/src/routes/webhooks.ts`, served by the Worker in `apps/cloudflare`). The endpoint is exempt from the global per-IP rate limit: Shopify sends every store's webhooks from a small pool of addresses, and each delivery is HMAC-verified instead.
 
 ## Intake contract
 
@@ -11,7 +11,7 @@ Webhooks drive all updates after the initial backfill. Endpoint: `POST https://A
    - still `queued` with `attempts=0` and younger than that (Shopify's first retry can come about a second after it gave up), or a lease another request holds → `503 {error:"in_progress"}`, so Shopify retries again later.
 
    If the queue send fails, a row this request inserted is removed again (when the DB allows) so the retry starts afresh; a re-armed row is kept for any earlier message still behind it. Either way the API answers `500` so Shopify retries.
-3. **Queue, then ack.** The payload goes to the `webhooks` BullMQ queue (job id = event id); the API replies `200` in milliseconds. Payloads live only in Redis, never in Postgres.
+3. **Queue, then ack.** The payload goes to the `webhooks` Cloudflare Queue (the message carries the event id); the API replies `200` in milliseconds. Payloads over 100 KB are kept in R2, or, while R2 is not bound, in Durable Object storage split into chunks (a stored value is capped at 2 MB, a webhook body at 5 MB). Payloads are never written to Postgres.
 
 ## Processing (worker, `apps/worker/src/handlers.ts`)
 
@@ -36,7 +36,7 @@ Webhooks drive all updates after the initial backfill. Endpoint: `POST https://A
 
 ### Retries & failure
 
-Jobs get 6 attempts with exponential backoff (5 s base). After the final attempt the event is marked `failed` and an alert is raised (UI + email to owners/admins who opted in + optional Slack). Failures while the database is unreachable don't count against those attempts: the job is re-sent every few minutes until the database is back (up to 24 h). The daily **reconcile** job (03:15 UTC) re-pulls orders updated in the last 3 days for every active store, which repairs anything a missed or failed webhook left behind.
+Jobs get 6 attempts with exponential backoff (5 s base). After the final attempt the event is marked `failed` and an alert is raised (stored, emailed to owners/admins who opted in, and posted to Slack if `ALERT_SLACK_WEBHOOK_URL` is set; each channel is tried independently). The alert is resolved automatically by the store's next successfully processed webhook, so a later failure is announced again rather than de-duplicated into the old one. Alerts are not shown in the web UI yet; `GET /api/workspaces/:ws/alerts` lists the open ones. Failures while the database is unreachable don't count against those attempts: the job is re-sent every few minutes until the database is back (up to 24 h). The daily **reconcile** job (03:15 UTC) re-pulls orders updated in the last 3 days for every active store, which repairs anything a missed or failed webhook left behind.
 
 ## Testing webhooks
 
@@ -44,5 +44,5 @@ Jobs get 6 attempts with exponential backoff (5 s base). After the final attempt
 - Manual against a running API:
 
 ```bash
-npx shopify app webhook trigger --topic orders/create --api-version 2025-10 --delivery-method http --address http://localhost:4000/webhooks/shopify
+npx shopify app webhook trigger --topic orders/create --api-version 2025-10 --delivery-method http --address http://localhost:8787/api/webhooks/shopify
 ```

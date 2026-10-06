@@ -10,6 +10,7 @@ import { emailLinkCode, linkEmail, rememberLinkEmail, signInWithEmailLinkCode } 
 import { Alert, AuthShell, Divider } from "@/components/ui";
 import { SocialButtons } from "@/components/SocialButtons";
 import { ShopifyIcon } from "@/components/ShopifyIcon";
+import { takeReturnTo } from "@/lib/returnTo";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -44,7 +45,7 @@ export default function LoginPage() {
     void run(async () => {
       const cred = await signInWithEmailAndPassword(firebaseAuth(), email, password);
       await establishSession(cred.user);
-      router.replace("/");
+      router.replace(takeReturnTo() ?? "/");
     });
   };
 
@@ -74,7 +75,7 @@ export default function LoginPage() {
         setLinkCode(null);
         throw err;
       }
-      router.replace("/");
+      router.replace(takeReturnTo() ?? "/");
     });
 
   // Opened from a sign-in link (?mode=signIn&oobCode=…): finish right away when we know the email.
@@ -107,7 +108,7 @@ export default function LoginPage() {
         const me = await api<{ user: { emailVerified: boolean } }>("/me");
         // Verified only, like /start: /verify-email sends an unverified session here, and sending
         // it back into the app would bounce it straight back.
-        if (me.user.emailVerified) router.replace("/");
+        if (me.user.emailVerified) router.replace(takeReturnTo() ?? "/");
         return true;
       } catch (e) {
         return !isTransient(e);
@@ -133,7 +134,7 @@ export default function LoginPage() {
       const { customToken } = await api<{ customToken: string }>("/auth/otp/verify", { method: "POST", body: { email, code } });
       const cred = await signInWithCustomToken(firebaseAuth(), customToken);
       await establishSession(cred.user);
-      router.replace("/");
+      router.replace(takeReturnTo() ?? "/");
     });
   };
 

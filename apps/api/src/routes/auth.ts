@@ -3,7 +3,7 @@ import { z } from "zod";
 import { systemDb } from "@app/db";
 import { env, logger } from "@app/core";
 import { generateOtp, hashOtp, OTP_MAX_ATTEMPTS, OTP_TTL_MS, verifyOtp } from "@app/shared";
-import { body, clientIp, HttpError, requireUser, SESSION_COOKIE, type Deps } from "../context.js";
+import { body, clientIp, HttpError, requireAppOrigin, requireUser, SESSION_COOKIE, type Deps } from "../context.js";
 import { FirebaseUnavailableError } from "../authProvider.js";
 import type { App } from "../app.js";
 import { limit } from "../rateLimit.js";
@@ -22,6 +22,7 @@ export function authRoutes(app: App, deps: Deps) {
 
   /** Exchange a fresh Firebase ID token for an httpOnly session cookie. */
   app.post("/auth/session", async (c) => {
+    requireAppOrigin(c);
     const { idToken } = z.object({ idToken: z.string().min(10) }).parse(await body(c));
     await limit(deps.coord, `rl:session:${clientIp(c)}`, 30, 300);
     const claims = await deps.auth.verifyIdToken(idToken).catch((err) => {
@@ -42,11 +43,7 @@ export function authRoutes(app: App, deps: Deps) {
       throw new HttpError(401, "Please sign in again", "stale_sign_in");
     }
     const email = claims.email.toLowerCase();
-    const user = await systemDb.user.upsert({
-      where: { firebaseUid: claims.uid },
-      create: { firebaseUid: claims.uid, email, emailVerified: claims.emailVerified, displayName: claims.name },
-      update: { email, emailVerified: claims.emailVerified },
-    });
+    const user = await sessionUser({ uid: claims.uid, email, emailVerified: claims.emailVerified, name: claims.name });
     const cookie = await deps.auth.createSessionCookie(idToken, SESSION_TTL_MS);
     setCookie(c, SESSION_COOKIE, cookie, { ...cookieOpts, maxAge: SESSION_TTL_MS / 1000 });
     return c.json({ user: publicUser(user) });
@@ -106,6 +103,7 @@ export function authRoutes(app: App, deps: Deps) {
   // ---------------- Email OTP (custom; Firebase has no native 6-digit email OTP) -------------
 
   app.post("/auth/otp/request", async (c) => {
+    requireAppOrigin(c);
     const { email: raw, continuePath } = z
       .object({ email: z.string().email().max(254), continuePath: z.enum(["/login", "/start"]).optional() })
       .parse(await body(c));
@@ -148,6 +146,7 @@ export function authRoutes(app: App, deps: Deps) {
 
   /** The page opened from a sign-in link sends its code here; same outcome as /auth/otp/verify. */
   app.post("/auth/email-link/verify", async (c) => {
+    requireAppOrigin(c);
     const input = z.object({ email: z.string().email().max(254), oobCode: z.string().min(10).max(2000) }).parse(await body(c));
     await limit(deps.coord, `rl:emaillink:verify:${clientIp(c)}`, 20, 900);
     const uid = await deps.auth.redeemEmailSignInLink(input.email.toLowerCase(), input.oobCode).catch((err) => {
@@ -164,6 +163,7 @@ export function authRoutes(app: App, deps: Deps) {
   });
 
   app.post("/auth/otp/verify", async (c) => {
+    requireAppOrigin(c);
     const input = z.object({ email: z.string().email(), code: z.string().regex(/^\d{6}$/) }).parse(await body(c));
     const email = input.email.toLowerCase();
     await limit(deps.coord, `rl:otp:verify:${clientIp(c)}`, 20, 900);
@@ -201,6 +201,48 @@ export function authRoutes(app: App, deps: Deps) {
  * them apart — retrying a 503 is the right move, while re-running sign-in against an outage only
  * loops, and "invalid token" sends the user hunting for a fault that isn't theirs.
  */
+const isUniqueViolation = (err: unknown) => (err as { code?: string })?.code === "P2002";
+
+/**
+ * The user row for a verified Firebase sign-in.
+ *
+ * Rows are keyed by Firebase uid, but `email` is unique too, and the two can disagree: an account
+ * deleted and re-created in Firebase (or an Auth emulator restart) comes back with a new uid for
+ * the same address. A plain upsert-by-uid then tried to *create* a second row for that email,
+ * hit the unique constraint, and every sign-in for that person was a 500 from then on.
+ *
+ * The existing row is re-linked to the new uid only when Firebase vouches for the address
+ * (`emailVerified`) - otherwise anyone could register an unverified Firebase account under
+ * someone else's email and inherit their workspaces. An unverified newcomer is told the address
+ * is taken; proving it by email code (which verifies it) then signs them in to the old row.
+ */
+async function sessionUser(claims: { uid: string; email: string; emailVerified: boolean; name?: string | null }) {
+  const { uid, email, emailVerified } = claims;
+  const taken = () => new HttpError(409, "That email address belongs to another account. Sign in with an email code to prove it's yours.", "email_in_use");
+  const known = await systemDb.user.findUnique({ where: { firebaseUid: uid } });
+  if (known) {
+    return systemDb.user.update({ where: { id: known.id }, data: { email, emailVerified } }).catch((err: unknown) => {
+      if (isUniqueViolation(err)) throw taken();
+      throw err;
+    });
+  }
+  const sameEmail = await systemDb.user.findUnique({ where: { email } });
+  if (sameEmail) {
+    if (!emailVerified) throw taken();
+    logger.warn({ userId: sameEmail.id }, "re-linking user to a new Firebase account for the same verified email");
+    return systemDb.user.update({ where: { id: sameEmail.id }, data: { firebaseUid: uid, emailVerified: true } });
+  }
+  try {
+    return await systemDb.user.create({ data: { firebaseUid: uid, email, emailVerified, displayName: claims.name } });
+  } catch (err) {
+    // Two first sign-ins racing: the other request created the row.
+    if (!isUniqueViolation(err)) throw err;
+    const raced = await systemDb.user.findUnique({ where: { firebaseUid: uid } });
+    if (!raced) throw taken();
+    return raced;
+  }
+}
+
 function signInFailure(err: unknown, idToken: string, at: string): HttpError {
   const [h, p] = idToken.split(".").map((s) => { try { return JSON.parse(Buffer.from(s, "base64url").toString()); } catch { return null; } });
   const code = (err as { code?: string }).code;

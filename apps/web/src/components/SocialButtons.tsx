@@ -5,6 +5,7 @@ import { useState } from "react";
 import { firebaseAuth } from "@/lib/firebase";
 import { authErrorMessage, establishSession } from "@/lib/session";
 import { Alert } from "./ui";
+import { takeReturnTo } from "@/lib/returnTo";
 
 export function SocialButtons() {
   const router = useRouter();
@@ -17,7 +18,7 @@ export function SocialButtons() {
     try {
       const cred = await signInWithPopup(firebaseAuth(), provider);
       await establishSession(cred.user);
-      router.replace("/");
+      router.replace(takeReturnTo() ?? "/");
     } catch (e) {
       setError(authErrorMessage(e));
     } finally {

@@ -32,7 +32,7 @@ Generate an encryption key and paste it into `TOKEN_ENCRYPTION_KEYS=1:<key>`:
 node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
 ```
 
-Put the `NEXT_PUBLIC_FIREBASE_*` values in `apps/web/.env.local` (baked into the UI at build time). To use the emulator, also set `NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR=http://127.0.0.1:9099` there and keep `FIREBASE_SERVICE_ACCOUNT_B64` empty in `.dev.vars`. To use a real project, set the service account and remove `FIREBASE_AUTH_EMULATOR_HOST`.
+Put the `NEXT_PUBLIC_FIREBASE_*` values in `apps/web/.env.local` (baked into the UI at build time). To use the emulator, also set `NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR=http://127.0.0.1:9099` there (and build with `NEXT_EXPORT_DIR=out-local`: a build into `out`, which is what gets deployed, refuses to run with the emulator set) and keep `FIREBASE_SERVICE_ACCOUNT_B64` empty in `.dev.vars`. To use a real project, set the service account and remove `FIREBASE_AUTH_EMULATOR_HOST`.
 
 `DATABASE_URL` in the repo-root `.env` is only used by the Prisma CLI (migrations).
 
@@ -82,3 +82,23 @@ in a different place every run, which reads as a flaky suite. Postgres drops the
 connection goes, so a killed run leaves nothing to clear up. To run two suites at once — a second
 checkout, or a watch alongside a one-shot run — give each its own database with
 `TEST_DB=<name>_test`; it is created and migrated on first use.
+
+The suites default to the compose Postgres on port 5434, which also holds the `app` database the
+deployed Worker uses (through the tunnel). To keep test load and migrations off that server, run
+them against a throwaway container and point `TEST_PG_PORT` at it (integration and e2e both read it):
+
+```bash
+docker run -d --name insights-test-pg -p 127.0.0.1:5440:5432 -p "[::1]:5440:5432" -e POSTGRES_USER=app -e POSTGRES_PASSWORD=app -e POSTGRES_DB=app --tmpfs /var/lib/postgresql/data postgres:17-alpine -c fsync=off
+TEST_PG_PORT=5440 pnpm test:integration
+```
+
+Publish it on both loopbacks as above. The connection strings say `localhost`, which workerd (the
+e2e Worker) tries over IPv6 first; with only `127.0.0.1` published, every database call in e2e
+waits about two seconds for that attempt to fail, and sign-in assertions time out.
+
+E2E can run beside a local demo the same way. Give it its own Worker port, Auth emulator and
+Mailpit, because its global setup deletes every emulator account and every Mailpit message:
+
+```bash
+TEST_PG_PORT=5440 E2E_PORT=8790 E2E_AUTH_EMULATOR_HOST=127.0.0.1:9199 E2E_MAILPIT_URL=http://localhost:8125 pnpm e2e
+```

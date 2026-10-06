@@ -56,9 +56,10 @@ export default function SupportPage() {
         </Faq>
 
         <Faq q="Why can I not see sessions, conversion rate or new-versus-returning customers?">
-          Those need permissions we deliberately do not ask for — storefront tracking and customer records. We keep the
-          permission set as small as the dashboard allows, and hide anything we cannot calculate rather than showing you
-          an empty chart.
+          Those need extra permissions — storefront tracking and customer records — that Insights does not take when you
+          install it. Each card that needs one has an Enable button on your dashboard that asks Shopify for it, and you
+          can give it back any time from Settings → Stores. Until then we hide what we cannot calculate rather than show
+          you an empty chart.
         </Faq>
 
         <Faq q="Shopify says the installation link cannot be used.">
@@ -68,8 +69,8 @@ export default function SupportPage() {
 
         <Faq q="How do I disconnect?">
           Uninstall Insights from your Shopify admin under Settings → Apps and sales channels. Your access tokens are
-          destroyed the moment Shopify tells us, and you can delete the workspace from Settings → Workspace to remove
-          the imported history as well.
+          destroyed the moment Shopify tells us. To remove the imported history as well, disconnect the store in
+          Settings → Stores, or write to us and we will delete your whole workspace and account.
         </Faq>
 
         <Faq q="Can I connect more than one store?">

@@ -38,7 +38,11 @@ export default function StoresPage() {
   const [error, setError] = useState<string | null>(null);
 
   async function disconnect(id: string, domain: string) {
-    if (!confirm(`Disconnect ${domain}? Its synced data will be deleted from Insights. You can reconnect later.`)) return;
+    // Disconnecting is ours alone: the app stays installed in the merchant's Shopify admin until
+    // they uninstall it there, so say so rather than imply Shopify access ends here.
+    if (!confirm(`Disconnect ${domain}? Its synced data will be deleted from Insights. You can reconnect later.
+
+To stop Insights' access in Shopify too, uninstall the app from your Shopify admin.`)) return;
     setError(null);
     try {
       await api(`/workspaces/${workspace.id}/stores/${id}`, { method: "DELETE" });
@@ -123,14 +127,17 @@ export default function StoresPage() {
               ) : (
                 <ul className="divide-y divide-border border-y border-border">
                   {s.grantedScopes.map((scope) => {
-                    const canRevoke = manage && s.revocableScopes.includes(scope);
+                    // Optional is a fact about the permission, not about who is looking: viewers and
+                    // analysts saw every optional permission labelled "Required".
+                    const optional = s.revocableScopes.includes(scope);
+                    const canRevoke = manage && optional;
                     const busy = revoking === `${s.id}:${scope}`;
                     return (
                       <li key={scope} className="flex items-start justify-between gap-4 py-2" title={scope}>
                         <div>
                           <p className="text-sm">
                             {scopeLabel(scope)}
-                            <span className="ml-2 text-xs text-muted">{canRevoke ? "Optional" : "Required"}</span>
+                            <span className="ml-2 text-xs text-muted">{optional ? "Optional" : "Required"}</span>
                           </p>
                           <p className="text-xs text-muted">{SCOPE_LABELS[scope]?.description ?? scope}</p>
                         </div>
@@ -141,6 +148,7 @@ export default function StoresPage() {
                             type="button"
                             className="shrink-0 text-xs text-muted underline hover:text-danger disabled:opacity-50"
                             data-testid={`revoke-${scope}`}
+                            aria-label={`Remove ${scopeLabel(scope).toLowerCase()} permission for ${s.shopDomain}`}
                             disabled={busy}
                             onClick={() => revoke(s.id, s.shopDomain, scope)}
                           >
@@ -205,7 +213,7 @@ export default function StoresPage() {
                 <span />
               )}
               {manage && (
-                <button className="btn-danger" onClick={() => disconnect(s.id, s.shopDomain)}>Disconnect</button>
+                <button className="btn-danger" aria-label={`Disconnect ${s.shopDomain}`} onClick={() => disconnect(s.id, s.shopDomain)}>Disconnect</button>
               )}
             </div>
           </div>

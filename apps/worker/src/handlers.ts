@@ -25,6 +25,7 @@ import {
   pruneVariants,
   purgeStoreData,
   raiseAlert,
+  resolveAlerts,
   REFUND_LINE_ITEMS_QUERY,
   SHOP_QUERY,
   shopifyGraphqlWithCost,
@@ -66,6 +67,14 @@ export interface WorkerDeps {
 /** Thrown when retrying cannot help (store disconnected, access revoked). The job fails immediately. */
 export class UnrecoverableError extends Error {
   override name = "UnrecoverableError";
+}
+
+/**
+ * Shopify no longer accepts our credentials for the store (401/403, or no token at all): every
+ * job for it will fail the same way until the merchant reconnects, whatever kind it is.
+ */
+export class AccessRevokedError extends UnrecoverableError {
+  // Keeps the parent's `name`: logs and callers that match on "UnrecoverableError" still see one.
 }
 
 /** Shopify only exposes the last 60 days of orders without read_all_orders. */
@@ -133,9 +142,9 @@ async function gql<T>(deps: WorkerDeps, store: Store, pace: Pace, query: string,
     return data;
   } catch (err) {
     // Not connected / auth revoked: retrying won't help.
-    if (err instanceof StoreDisconnectedError) throw new UnrecoverableError(err.message);
+    if (err instanceof StoreDisconnectedError) throw new AccessRevokedError(err.message);
     if (err instanceof ShopifyHttpError && (err.status === 401 || err.status === 403)) {
-      throw new UnrecoverableError(`Shopify rejected our access (${err.status}); merchant must reconnect`);
+      throw new AccessRevokedError(`Shopify rejected our access (${err.status}); merchant must reconnect`);
     }
     throw err;
   }
@@ -409,6 +418,12 @@ export async function runSync(data: SyncJobData, deps: WorkerDeps) {
     }
   }
   await systemDb.syncJob.update({ where: { id: data.syncJobId }, data: { status: "succeeded", finishedAt: new Date(), error: null } });
+  // This kind syncs again, so its failure alert is over (and the next failure gets announced).
+  // Except a short orders refresh on a store whose full import never completed: that import is
+  // still the open problem, and the store stays in `error` for it (see finishBackfill).
+  if (!(data.kind === "orders" && data.sinceDays && !store.lastSyncedAt)) {
+    await resolveAlerts(store.id, [`sync_${data.kind}_failed`, `sync_${data.kind}_stalled`]);
+  }
   return { ok: true };
 }
 
@@ -550,10 +565,7 @@ export async function processWebhook(data: WebhookJobData, deps: WorkerDeps) {
       }
       case "app_subscriptions/update": {
         const sub = p.app_subscription ?? {};
-        await systemDb.subscription.updateMany({
-          where: { workspaceId: store.workspaceId, shopifyChargeId: sub.admin_graphql_api_id },
-          data: { status: String(sub.status ?? "unknown").toLowerCase() },
-        });
+        await applySubscriptionUpdate(store.workspaceId, sub.admin_graphql_api_id, String(sub.status ?? "unknown").toLowerCase());
         break;
       }
       // ---- Mandatory GDPR compliance topics ----
@@ -578,7 +590,48 @@ export async function processWebhook(data: WebhookJobData, deps: WorkerDeps) {
   }
   await systemDb.webhookEvent.update({ where: { id: ev.id }, data: { status: "succeeded", processedAt: new Date(), error: null } });
   if (data.payloadKey) await deps.payloads.delete(data.payloadKey).catch(() => {});
+  const storeId = store?.id ?? ev.storeId;
+  if (storeId) await resolveAlerts(storeId, ["webhook_failed"]);
   return { ok: true };
+}
+
+/** Shopify charge statuses after which the merchant is no longer paying for that charge. */
+const ENDED_CHARGE = new Set(["cancelled", "declined", "expired"]);
+
+/**
+ * Apply a Shopify charge status to the workspace's subscription. Two charges can be in play: the
+ * one in force (`shopifyChargeId`) and a plan change awaiting approval (`pendingChargeId`).
+ * Activating the pending one makes it the plan; a pending one that ends just goes away; the one in
+ * force ending drops the workspace to free. Statuses for any other charge (one replaced by a later
+ * change, delivered late) are ignored, so retries and out-of-order delivery cannot resurrect it.
+ */
+export async function applySubscriptionUpdate(workspaceId: string, chargeId: string | undefined, status: string) {
+  if (!chargeId) return;
+  const row = await systemDb.subscription.findUnique({ where: { workspaceId } });
+  if (!row) return;
+  if (chargeId === row.pendingChargeId) {
+    if (status === "active") {
+      await systemDb.subscription.update({
+        where: { workspaceId },
+        data: { plan: row.pendingPlan ?? row.plan, status: "active", shopifyChargeId: chargeId, pendingPlan: null, pendingChargeId: null },
+      });
+      await audit({ workspaceId, action: "billing.plan_changed", metadata: { plan: row.pendingPlan, from: row.plan } });
+    } else if (ENDED_CHARGE.has(status)) {
+      await systemDb.subscription.update({ where: { workspaceId }, data: { pendingPlan: null, pendingChargeId: null } });
+      await audit({ workspaceId, action: "billing.plan_change_ended", metadata: { plan: row.pendingPlan, status } });
+    }
+    return;
+  }
+  if (chargeId === row.shopifyChargeId) {
+    if (ENDED_CHARGE.has(status)) {
+      await systemDb.subscription.update({ where: { workspaceId }, data: { plan: "free", status: "active", shopifyChargeId: null } });
+      await audit({ workspaceId, action: "billing.subscription_ended", metadata: { plan: row.plan, status } });
+    } else {
+      await systemDb.subscription.update({ where: { workspaceId }, data: { status } });
+    }
+    return;
+  }
+  logger.info({ workspaceId, chargeId, status }, "ignoring a status for a charge that is neither current nor pending");
 }
 
 // ---------------------------------------------------------------- aggregate

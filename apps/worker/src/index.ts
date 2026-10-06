@@ -1,4 +1,4 @@
-import { dbReachable, systemDb } from "@app/db";
+import { dbReachable, systemDb, type StoreStatus } from "@app/db";
 import {
   backoffSeconds,
   logger,
@@ -10,7 +10,7 @@ import {
   type SyncJobData,
   type WebhookJobData,
 } from "@app/core";
-import { failStaleJobs, processWebhook, refreshExpiringTokens, runAggregate, runSync, scheduleReconcile, UnrecoverableError, type WorkerDeps } from "./handlers.js";
+import { AccessRevokedError, failStaleJobs, processWebhook, refreshExpiringTokens, runAggregate, runSync, scheduleReconcile, UnrecoverableError, type WorkerDeps } from "./handlers.js";
 
 export * from "./handlers.js";
 
@@ -132,13 +132,21 @@ async function onFailure(queue: QueueName, body: unknown, err: Error, final: boo
     await systemDb.syncJob.update({ where: { id: data.syncJobId }, data: final ? { status: "failed", error } : { error } }).catch(() => {});
     if (!final) return;
     const store = await systemDb.store.findUnique({ where: { id: data.storeId } });
-    if (!store) return;
-    await systemDb.store.update({ where: { id: store.id }, data: { status: "error" } });
+    if (!store || store.status === "uninstalled") return;
+    // `error` means "this store's data has stopped": the dashboard offers Reconnect and stops
+    // claiming an import is running. That is true when credentials are gone (every job fails), or
+    // when the store's import was in progress and this was part of it. A catalog refresh, a daily
+    // reconcile or a pixel install giving up on an otherwise healthy store is not that: flipping it
+    // turned one Shopify 5xx streak into a "your store is broken" banner and a critical alert.
+    const flippable: StoreStatus[] = err instanceof AccessRevokedError ? ["active", "syncing"] : data.kind === "install_pixel" ? [] : ["syncing"];
+    const flipped = flippable.length
+      ? await systemDb.store.updateMany({ where: { id: store.id, status: { in: flippable } }, data: { status: "error" } })
+      : { count: 0 };
     await raiseAlert(
       {
         workspaceId: store.workspaceId,
         storeId: store.id,
-        severity: "critical",
+        severity: (flipped.count || store.status === "error") ? "critical" : "warning",
         code: `sync_${data.kind}_failed`,
         message: `We couldn't sync ${data.kind} for ${store.shopDomain}: ${err.message}`,
       },

@@ -33,6 +33,7 @@ const SHOPIFY_ERRORS: Record<string, string> = {
   state_expired: "That connection link expired. Please try again.",
   stale_request: "That request was too old. Please try again.",
   shop_mismatch: "Shopify returned a different store than the one you picked. Please try again.",
+  app_mismatch: "Shopify answered for a different version of our app than the one this connection started with. Please start again.",
   missing_required_scopes: "We need permission to read orders to show any numbers. Please approve access on Shopify.",
   exchange_failed: "Shopify didn't complete the connection. Please try again.",
   signup_expired: "That took a little too long. Please start again.",

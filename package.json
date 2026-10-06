@@ -15,7 +15,6 @@
     "db:generate": "pnpm --filter @app/db generate",
     "db:migrate": "pnpm --filter @app/db migrate:deploy",
     "db:migrate:dev": "pnpm --filter @app/db migrate:dev",
-    "db:seed": "pnpm --filter @app/db seed",
     "test:all": "pnpm test && pnpm test:integration"
   }
 }

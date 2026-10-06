@@ -1,12 +1,13 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useApp } from "@/components/AppContext";
 import { Alert } from "@/components/ui";
 import { LoadError } from "@/components/LoadError";
 import { actionError, api, useApi } from "@/lib/api";
 
 interface Billing {
-  subscription: { plan: string; status: string };
+  /** `plan` is the plan in force; `pendingPlan` a change still awaiting approval in Shopify. */
+  subscription: { plan: string; status: string; pendingPlan?: string | null };
   plans: Array<{ id: string; name: string; priceUsd: number; features: string[] }>;
 }
 
@@ -15,6 +16,12 @@ export default function BillingPage() {
   const { data, error: loadError, loading, reload } = useApi<Billing>(`/workspaces/${workspace.id}/billing`);
   const [error, setError] = useState<string | null>(null);
   const isOwner = workspace.role === "owner";
+  // Shopify sends the merchant back here after the approval screen; the plan itself changes when
+  // Shopify confirms the charge (a webhook), which can land a few seconds after they arrive.
+  const [returned, setReturned] = useState(false);
+  useEffect(() => setReturned(new URLSearchParams(window.location.search).get("confirmed") === "1"), []);
+  const planName = (id: string) => data?.plans.find((p) => p.id === id)?.name ?? id;
+  const sub = data?.subscription;
 
   async function choose(plan: string) {
     // No store yet is only true once the list has loaded; before that we just don't know which one.
@@ -35,18 +42,28 @@ export default function BillingPage() {
         <LoadError what="your plan" error={loadError} onRetry={() => void reload()} busy={loading} />
       ) : (
         <p className="text-sm text-muted">
-          Current plan: <strong className="text-text">{data?.subscription.plan ?? "…"}</strong> ({data?.subscription.status}). Charges appear on the Shopify bill of the selected store.
+          Current plan: <strong className="text-text">{sub ? planName(sub.plan) : "…"}</strong>
+          {sub && sub.status !== "active" ? ` (${sub.status})` : ""}. Charges appear on the Shopify bill of the selected store.
         </p>
+      )}
+      {sub?.pendingPlan && (
+        <Alert kind="info">
+          {returned
+            ? `Thanks. Shopify is confirming your change to ${planName(sub.pendingPlan)}; this page shows it once Shopify reports it, usually within a minute.`
+            : `A change to ${planName(sub.pendingPlan)} is waiting for approval in Shopify. Choose it again to reopen the approval page.`}
+        </Alert>
       )}
       {error && <Alert>{error}</Alert>}
       <div className="grid gap-4 md:grid-cols-3">
         {data?.plans.map((p) => (
-          <div key={p.id} className={`card space-y-2 ${data.subscription.plan === p.id ? "border-accent" : ""}`}>
+          <div key={p.id} className={`card space-y-2 ${data.subscription.plan === p.id ? "border-accent" : ""}`} aria-current={data.subscription.plan === p.id ? "true" : undefined}>
             <p className="font-semibold">{p.name}</p>
             <p className="text-2xl font-semibold">${p.priceUsd}<span className="text-sm font-normal text-muted">/month</span></p>
             <ul className="space-y-1 text-sm text-muted">{p.features.map((f) => <li key={f}>• {f}</li>)}</ul>
             {p.id !== "free" && data.subscription.plan !== p.id && isOwner && (
-              <button className="btn-primary w-full" onClick={() => choose(p.id)}>Choose {p.name}</button>
+              <button className="btn-primary w-full" onClick={() => choose(p.id)}>
+                {data.subscription.pendingPlan === p.id ? `Approve ${p.name} in Shopify` : `Choose ${p.name}`}
+              </button>
             )}
           </div>
         ))}

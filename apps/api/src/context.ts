@@ -2,7 +2,7 @@ import type { Context } from "hono";
 import { getCookie } from "hono/cookie";
 import { systemDb, type User } from "@app/db";
 import { can, sha256Hex, type Permission, type Role } from "@app/shared";
-import { logger, type BlobStore, type Coord, type FetchLike, type Mailer, type Queues } from "@app/core";
+import { env, logger, type BlobStore, type Coord, type FetchLike, type Mailer, type Queues } from "@app/core";
 import { FirebaseUnavailableError, type AuthProvider } from "./authProvider.js";
 
 export interface Deps {
@@ -30,6 +30,24 @@ export class HttpError extends Error {
   ) {
     super(message);
   }
+}
+
+/**
+ * The request must come from our web app. The app-wide CSRF check only covers requests that
+ * already carry a session cookie, so sign-in and signup calls need this themselves: `body()`
+ * parses any content type, so a cross-site `text/plain` form could otherwise POST an attacker's
+ * ID token to /auth/session and sign the visitor's browser in to the attacker's account (login
+ * CSRF), and whatever store they connect next would land in the attacker's workspace.
+ */
+export function requireAppOrigin(c: Ctx) {
+  const origin = c.req.header("origin") ?? c.req.header("referer");
+  let ok = false;
+  try {
+    ok = !!origin && new URL(origin).origin === new URL(env().APP_URL).origin;
+  } catch {
+    ok = false;
+  }
+  if (!ok) throw new HttpError(403, "Cross-site request blocked", "csrf");
 }
 
 /** Parsed JSON body, or `{}` when absent/invalid (zod then reports what's missing). */

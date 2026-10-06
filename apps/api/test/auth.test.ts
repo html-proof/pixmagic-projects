@@ -95,7 +95,7 @@ describe("when a sign-in can't be verified", () => {
       throw new FirebaseUnavailableError("Redeeming the sign-in link failed (503): backend error");
     };
     try {
-      const res = await ctx.app.inject({ method: "POST", url: "/auth/email-link/verify", payload: { email: "link@x.com", oobCode: "link-link@x.com" } });
+      const res = await ctx.app.inject({ method: "POST", url: "/auth/email-link/verify", headers: ORIGIN, payload: { email: "link@x.com", oobCode: "link-link@x.com" } });
       expect(res.statusCode).toBe(503);
       expect(res.json().error).toBe("auth_unavailable");
     } finally {
@@ -105,8 +105,8 @@ describe("when a sign-in can't be verified", () => {
 });
 
 describe("email OTP", () => {
-  const request = (email: string) => ctx.app.inject({ method: "POST", url: "/auth/otp/request", payload: { email } });
-  const verify = (email: string, code: string) => ctx.app.inject({ method: "POST", url: "/auth/otp/verify", payload: { email, code } });
+  const request = (email: string) => ctx.app.inject({ method: "POST", url: "/auth/otp/request", headers: ORIGIN, payload: { email } });
+  const verify = (email: string, code: string) => ctx.app.inject({ method: "POST", url: "/auth/otp/verify", headers: ORIGIN, payload: { email, code } });
   const lastCode = () => /(\d{6})/.exec(ctx.mailer.sent.at(-1)!.subject)![1]!;
 
   it("issues a code by email, stores only a hash, and verifies once", async () => {
@@ -168,7 +168,7 @@ describe("email OTP", () => {
         const res = await request("Link@x.com");
         expect(res.statusCode).toBe(200);
         expect(res.json()).toEqual({ ok: true, method: "link" });
-        const fromStart = await ctx.app.inject({ method: "POST", url: "/auth/otp/request", payload: { email: "start@x.com", continuePath: "/start" } });
+        const fromStart = await ctx.app.inject({ method: "POST", url: "/auth/otp/request", headers: ORIGIN, payload: { email: "start@x.com", continuePath: "/start" } });
         expect(fromStart.json().method).toBe("link");
       });
       expect(ctx.auth.links).toEqual([
@@ -176,7 +176,7 @@ describe("email OTP", () => {
         { email: "start@x.com", continueUrl: "http://localhost:3001/start?step=link" },
       ]);
       // Only our own pages can be the destination.
-      const evil = await ctx.app.inject({ method: "POST", url: "/auth/otp/request", payload: { email: "e@x.com", continuePath: "https://evil.example" } });
+      const evil = await ctx.app.inject({ method: "POST", url: "/auth/otp/request", headers: ORIGIN, payload: { email: "e@x.com", continuePath: "https://evil.example" } });
       expect(evil.statusCode).toBe(400);
     });
 
@@ -184,7 +184,7 @@ describe("email OTP", () => {
       await withBrokenMailer(async () => {
         await request("link@x.com");
       });
-      const redeem = (email: string, oobCode: string) => ctx.app.inject({ method: "POST", url: "/auth/email-link/verify", payload: { email, oobCode } });
+      const redeem = (email: string, oobCode: string) => ctx.app.inject({ method: "POST", url: "/auth/email-link/verify", headers: ORIGIN, payload: { email, oobCode } });
       const bad = await redeem("other@x.com", "link-link@x.com");
       expect(bad.statusCode).toBe(400);
       expect(bad.json().error).toBe("invalid_link");

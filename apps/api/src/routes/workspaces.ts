@@ -231,7 +231,8 @@ export function workspaceRoutes(app: App, deps: Deps) {
     const { ws } = c.req.param();
     await requireWorkspace(c, deps, ws, "dashboard:read");
     const sub = await withTenant(ws, (tx) => tx.subscription.findUnique({ where: { workspaceId: ws } }));
-    return c.json({ subscription: sub ?? { plan: "free", status: "active" }, plans: PLANS });
+    const { plan, status, pendingPlan } = sub ?? { plan: "free", status: "active", pendingPlan: null };
+    return c.json({ subscription: { plan, status, pendingPlan }, plans: PLANS });
   });
 
   app.post("/workspaces/:ws/billing/subscribe", async (c) => {
@@ -260,10 +261,13 @@ export function workspaceRoutes(app: App, deps: Deps) {
     });
     const r = data.appSubscriptionCreate;
     if (r.userErrors.length || !r.confirmationUrl) throw new HttpError(400, r.userErrors.map((e) => e.message).join("; ") || "Billing failed", "billing_error");
+    // Recorded as pending only: the plan in force changes when Shopify reports this charge active
+    // (app_subscriptions/update). Writing it to `plan` here made an abandoned or declined approval
+    // look like a plan the merchant had, and hid the button to try again.
     await systemDb.subscription.upsert({
       where: { workspaceId: ws },
-      create: { workspaceId: ws, plan: input.plan, status: "pending", shopifyChargeId: r.appSubscription?.id },
-      update: { plan: input.plan, status: "pending", shopifyChargeId: r.appSubscription?.id },
+      create: { workspaceId: ws, plan: "free", status: "active", pendingPlan: input.plan, pendingChargeId: r.appSubscription?.id ?? null },
+      update: { pendingPlan: input.plan, pendingChargeId: r.appSubscription?.id ?? null },
     });
     await audit({ workspaceId: ws, actorUserId: a.user?.id, action: "billing.subscribe_started", metadata: { plan: input.plan }, ip: clientIp(c) });
     return c.json({ confirmationUrl: r.confirmationUrl });
