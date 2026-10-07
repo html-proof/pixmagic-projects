@@ -108,7 +108,7 @@ Sign-in codes, invitations and alerts are sent with Cloudflare Email Sending fro
 
 ### Deploying while `wrangler dev` is running
 
-`wrangler dev` watches `apps/web/out`, which Windows then refuses to delete during `next build`. Build into another folder and deploy that instead:
+`wrangler dev` watches `apps/web/out`, which Windows then refuses to delete during `next build`. `pnpm --filter @app/cloudflare run deploy` (`apps/cloudflare/scripts/deploy.mjs`) therefore always builds into `apps/web/out-deploy` and deploys exactly that folder with `--assets`; by hand it is:
 
 ```bash
 NEXT_EXPORT_DIR=out-deploy pnpm --filter @app/web build
