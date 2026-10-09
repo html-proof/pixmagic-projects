@@ -40,7 +40,7 @@ const LIVE: Record<LiveState, { tone: Tone; label: string }> = {
 };
 
 /**
- * Store identity, connection status and what has been imported. The dashboard keeps itself
+ * Store identity and connection status, with what has been imported folded under "About this data". The dashboard keeps itself
  * up to date (it re-checks every few seconds), so there is no refresh button: the "Live"
  * badge says so, and turns grey if the last check couldn't reach the server.
  */
@@ -61,9 +61,7 @@ export function StoreHeader({ store, data, live, everySec }: { store: OverviewSt
           <div className="min-w-0">
             <p className="text-xs font-medium uppercase tracking-wide text-accent">{greeting(store.timezone)}</p>
             <h1 className="truncate text-xl font-semibold sm:text-2xl">{store.name ?? store.shopDomain}</h1>
-            <p className="truncate text-sm text-muted">
-              {store.shopDomain} · {store.currency} · {store.timezone}
-            </p>
+            <p className="truncate text-sm text-muted">{store.shopDomain}</p>
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-3">
@@ -82,30 +80,37 @@ export function StoreHeader({ store, data, live, everySec }: { store: OverviewSt
         </div>
       </div>
 
-      <div className="mt-4 flex flex-wrap items-center gap-x-6 gap-y-1 border-t border-border pt-3 text-sm">
-        {data ? (
-          <p data-testid="imported-summary">
-            Imported <Count n={data.orders} one="order" /> · <Count n={data.products} one="product" /> · <Count n={data.variants} one="variant" />
+      {/* One line that matters; the rest of what we know about the data is a tap away. */}
+      <p className="mt-4 border-t border-border pt-3 text-sm text-muted">
+        {synced ? <>Synced with Shopify {synced}</> : <>Waiting for the first sync with Shopify</>} · this page updates by itself
+      </p>
+      <details className="mt-1 text-sm">
+        <summary className="w-fit cursor-pointer text-muted underline decoration-border underline-offset-4 hover:text-text">About this data</summary>
+        <div className="mt-2 space-y-1 text-muted">
+          {data ? (
+            <p data-testid="imported-summary" className="text-text">
+              Imported <Count n={data.orders} one="order" /> · <Count n={data.products} one="product" /> · <Count n={data.variants} one="variant" />
+            </p>
+          ) : (
+            <p>Counting what&apos;s been imported…</p>
+          )}
+          {data?.oldestOrderDay && data.newestOrderDay && (
+            <p>
+              Orders from {fmtDay(data.oldestOrderDay)} to {fmtDay(data.newestOrderDay)}
+            </p>
+          )}
+          <p>
+            Money in {store.currency}. Days and times follow the store&apos;s time zone ({store.timezone}). {store.shopDomain}
           </p>
-        ) : (
-          <p className="text-muted">Counting what&apos;s been imported…</p>
-        )}
-        {data?.oldestOrderDay && data.newestOrderDay && (
-          <p className="text-muted">
-            Orders from {fmtDay(data.oldestOrderDay)} to {fmtDay(data.newestOrderDay)}
-          </p>
-        )}
-        {synced && <p className="text-muted">Synced with Shopify {synced}</p>}
-        <p className="text-muted">Updates automatically every {everySec} seconds</p>
-      </div>
+          <p>New numbers are checked every {everySec} seconds.</p>
+          {!fullHistory && <p>Shopify shares the most recent 60 days of orders with apps, so older history isn&apos;t included.</p>}
+        </div>
+      </details>
       {data && store.status === "active" && data.orders === 0 && data.products === 0 && (
         <p className="mt-2 text-sm" data-testid="empty-store">
           Your Shopify store doesn&apos;t have any orders or products yet. Add a product or place a test order in Shopify and it will
           show up here automatically.
         </p>
-      )}
-      {!fullHistory && (
-        <p className="mt-1 text-xs text-muted">Shopify shares the most recent 60 days of orders with apps, so older history isn&apos;t included.</p>
       )}
     </section>
   );

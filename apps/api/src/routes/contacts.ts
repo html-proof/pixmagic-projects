@@ -26,7 +26,7 @@ const CUSTOMER_FIELDS = `
   numberOfOrders
   amountSpent { amount currencyCode }
   defaultEmailAddress { emailAddress marketingState }
-  defaultPhoneNumber { phoneNumber }`;
+  defaultPhoneNumber { phoneNumber marketingState }`;
 
 const CONTACTS_QUERY = `#graphql
   query Contacts($first: Int!) {
@@ -37,6 +37,8 @@ const CONTACTS_QUERY = `#graphql
         abandonedCheckoutUrl
         totalPriceSet { shopMoney { amount currencyCode } }
         lineItems(first: 3) { nodes { title quantity } }
+        shippingAddress { firstName lastName phone }
+        billingAddress { firstName lastName phone }
         customer { ${CUSTOMER_FIELDS} }
       }
     }
@@ -55,7 +57,13 @@ interface GqlCustomer {
   numberOfOrders: string | number | null;
   amountSpent: { amount: string; currencyCode: string } | null;
   defaultEmailAddress: { emailAddress: string | null; marketingState: string | null } | null;
-  defaultPhoneNumber: { phoneNumber: string | null } | null;
+  defaultPhoneNumber: { phoneNumber: string | null; marketingState?: string | null } | null;
+}
+
+interface GqlAddress {
+  firstName: string | null;
+  lastName: string | null;
+  phone: string | null;
 }
 
 interface GqlContacts {
@@ -66,6 +74,8 @@ interface GqlContacts {
       abandonedCheckoutUrl: string;
       totalPriceSet: { shopMoney: { amount: string; currencyCode: string } } | null;
       lineItems: { nodes: Array<{ title: string; quantity: number }> } | null;
+      shippingAddress?: GqlAddress | null;
+      billingAddress?: GqlAddress | null;
       customer: GqlCustomer | null;
     }>;
   } | null;
@@ -83,6 +93,8 @@ function person(c: GqlCustomer | null, shopDomain: string) {
     email: c?.defaultEmailAddress?.emailAddress ?? null,
     phone: c?.defaultPhoneNumber?.phoneNumber ?? null,
     subscribed: c?.defaultEmailAddress?.marketingState === "SUBSCRIBED",
+    /** Agreed to marketing by text message (Shopify's SMS consent, which also covers WhatsApp here). */
+    smsSubscribed: c?.defaultPhoneNumber?.marketingState === "SUBSCRIBED",
     adminUrl: c ? `https://${shopDomain}/admin/customers/${encodeURIComponent(numericId(c.id))}` : null,
   };
 }
@@ -140,9 +152,16 @@ export function contactRoutes(app: App, deps: Deps) {
 
     const abandoned = (data.abandonedCheckouts?.nodes ?? []).map((a) => {
       const items = a.lineItems?.nodes ?? [];
+      const who = person(a.customer, store.shopDomain);
+      // A guest who never got a customer record still typed a name and often a phone number into
+      // the checkout's shipping or billing address: use those, so the merchant can reach them.
+      const address = [a.shippingAddress, a.billingAddress].filter((x): x is GqlAddress => !!x);
+      const addressName = address.map((x) => [x.firstName, x.lastName].filter(Boolean).join(" ").trim()).find(Boolean) ?? null;
       return {
         id: numericId(a.id),
-        ...person(a.customer, store.shopDomain),
+        ...who,
+        name: who.name ?? addressName,
+        phone: who.phone ?? address.map((x) => x.phone?.trim()).find(Boolean) ?? null,
         createdAt: a.createdAt,
         total: Number(a.totalPriceSet?.shopMoney.amount ?? 0),
         currency: a.totalPriceSet?.shopMoney.currencyCode ?? store.currency,

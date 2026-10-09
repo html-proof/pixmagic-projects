@@ -1,5 +1,6 @@
 /** Response of GET /workspaces/:ws/stores/:storeId/overview (see apps/api/src/routes/dashboard.ts). */
 import type { JourneyPageRow, JourneySummary } from "@app/shared/journey";
+import type { SalesDay, YearBreakdown } from "@app/shared/sales";
 
 export interface Capability {
   id: string;
@@ -37,8 +38,13 @@ export interface SalesOverview {
     tax: number;
     shipping: number;
   };
+  /** The same figures for the period before (as many days, immediately before). */
+  previous: { grossSales: number; netSales: number; orders: number; averageOrderValue: number | null };
   deltas: { netSales: number | null; orders: number | null; averageOrderValue: number | null; grossSales: number | null };
-  series: Array<{ day: string; netSales: number; orders: number }>;
+  /** Every day of the range, quiet days as zero. */
+  series: SalesDay[];
+  /** This calendar year by month, whatever the range. */
+  year: YearBreakdown;
 }
 
 export interface ChannelsModule {
@@ -112,6 +118,8 @@ export interface ContactPerson {
   phone: string | null;
   /** Agreed to email marketing. */
   subscribed: boolean;
+  /** Agreed to marketing by text message. */
+  smsSubscribed: boolean;
   adminUrl: string | null;
 }
 
@@ -152,6 +160,8 @@ export interface Overview {
   store: OverviewStore;
   range: { from: string; to: string };
   previous: { from: string; to: string };
+  /** The store's today (YYYY-MM-DD). */
+  today: string;
   capabilities: Capability[];
   hasData: boolean;
   data?: ImportedData;

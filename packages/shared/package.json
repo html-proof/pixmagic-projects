@@ -8,8 +8,10 @@
   "exports": {
     ".": "./src/index.ts",
     "./capabilities": "./src/capabilities.ts",
+    "./dates": "./src/dates.ts",
     "./journey": "./src/journey.ts",
-    "./roles": "./src/roles.ts"
+    "./roles": "./src/roles.ts",
+    "./sales": "./src/sales.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

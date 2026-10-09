@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { recomputeDays } from "@app/core";
 import { systemDb } from "@app/db";
 import { addDays, localDay } from "@app/shared";
 import { clean, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
@@ -214,6 +215,76 @@ describe("order modules (store time zone, DST weekend)", () => {
     expect(m.catalog).toEqual({ products: { active: 0, draft: 0, archived: 0, total: 0 }, variants: 0, topVendors: [] });
     expect(m.sales_overview.current).toMatchObject({ tax: 0, shipping: 0 });
     expect(data).toEqual({ orders: 0, products: 0, variants: 0, oldestOrderDay: null, newestOrderDay: null });
+  });
+});
+
+describe("date ranges", () => {
+  it("charts every day of the range, quiet days as zero", async () => {
+    const { a, ws, store } = await owner();
+    await seedOrder(store, { id: "A", createdAt: "2026-03-06T17:00:00Z", lines: [{ qty: 1, price: 40 }] });
+    await seedOrder(store, { id: "B", createdAt: "2026-03-08T17:00:00Z", lines: [{ qty: 2, price: 30, discount: 5 }] });
+    await seedOrder(store, { id: "C", createdAt: "2026-03-08T18:00:00Z", cancelled: true, lines: [{ qty: 1, price: 99 }] });
+    await recomputeDays(store, ["2026-03-06", "2026-03-08"]);
+
+    const res = await overview(a.headers, ws, store.id, "preset=custom&from=2026-03-05&to=2026-03-09");
+    expect(res.statusCode).toBe(200);
+    const s = res.json().modules.sales_overview;
+    // Only the 6th and 8th have daily rows; the chart used to be just those two points.
+    const quiet = { netSales: 0, orders: 0, refunds: 0, averageOrderValue: null };
+    expect(s.series).toEqual([
+      { day: "2026-03-05", ...quiet },
+      { day: "2026-03-06", netSales: 40, orders: 1, refunds: 0, averageOrderValue: 40 },
+      { day: "2026-03-07", ...quiet },
+      { day: "2026-03-08", netSales: 55, orders: 1, refunds: 0, averageOrderValue: 55 },
+      { day: "2026-03-09", ...quiet },
+    ]);
+    expect(s.current).toMatchObject({ netSales: 95, orders: 2 });
+  });
+
+  it("breaks this year down by month, whatever dates are picked, from the first imported order on", async () => {
+    const { a, ws, store } = await owner();
+    const today = localDay(new Date(), TZ);
+    const thisMonth = today.slice(0, 7);
+    // Two orders this month (one today), and the first imported order earlier this month or today.
+    await seedOrder(store, { id: "T", createdAt: new Date(), lines: [{ qty: 1, price: 70 }] });
+    await recomputeDays(store, [today]);
+
+    const res = await overview(a.headers, ws, store.id, "preset=7d");
+    const body = res.json();
+    expect(body.today).toBe(today);
+    const y = body.modules.sales_overview.year;
+    expect(y.year).toBe(Number(today.slice(0, 4)));
+    expect(y.months.at(-1)).toMatchObject({ month: thisMonth, current: true, to: today, netSales: 70, orders: 1, averageOrderValue: 70 });
+    // Nothing was imported before today's order: earlier months are "none", not $0 months.
+    expect(y.months.slice(0, -1).every((m: { coverage: string }) => m.coverage === "none")).toBe(true);
+    expect(y.total).toBe(70);
+  });
+
+  it("reports a custom range up to the store's today, and compares it with as many days before", async () => {
+    const { a, ws, store } = await owner();
+    const today = localDay(new Date(), TZ);
+    const res = await overview(a.headers, ws, store.id, `preset=custom&from=${addDays(today, -2)}&to=${addDays(today, 20)}`);
+    expect(res.statusCode).toBe(200);
+    const { range, previous, modules } = res.json();
+    expect(range).toEqual({ from: addDays(today, -2), to: today });
+    expect(previous).toEqual({ from: addDays(today, -5), to: addDays(today, -3) });
+    expect(modules.sales_overview.series.map((x: { day: string }) => x.day)).toEqual([addDays(today, -2), addDays(today, -1), today]);
+  });
+
+  it("refuses ranges it can't report on with a 400, never a 500", async () => {
+    const { a, ws, store } = await owner();
+    const today = localDay(new Date(), TZ);
+    for (const qs of [
+      `preset=custom&from=${addDays(today, 1)}&to=${addDays(today, 3)}`,
+      "preset=custom&from=2026-13-01&to=2026-13-05",
+      "preset=custom&from=2026-02-30&to=2026-03-02",
+      "preset=custom&from=2026-03-09&to=2026-03-01",
+      "preset=custom&from=2026-03-09",
+    ]) {
+      const res = await overview(a.headers, ws, store.id, qs);
+      expect(res.statusCode, qs).toBe(400);
+      expect(res.json().error, qs).toBe("invalid_range");
+    }
   });
 });
 

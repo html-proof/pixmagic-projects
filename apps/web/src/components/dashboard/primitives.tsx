@@ -76,14 +76,14 @@ export function Badge({ tone, children }: { tone: Tone; children: ReactNode }) {
 }
 
 /** Change against the previous period, coloured by whether it's good news (`invert` for costs). */
-export function Delta({ value, invert = false }: { value: number | null | undefined; invert?: boolean }) {
+export function Delta({ value, invert = false, label = "vs previous period" }: { value: number | null | undefined; invert?: boolean; label?: string }) {
   if (value === null || value === undefined) return <span className="text-xs text-muted">no earlier data to compare</span>;
   const good = invert ? value < 0 : value > 0;
   const arrow = value > 0 ? "▲" : value < 0 ? "▼" : "■";
   const tone = value === 0 ? "bg-border/60 text-muted" : good ? "bg-good/12 text-good" : "bg-danger/12 text-danger";
   return (
     <span className={`inline-flex w-fit items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${tone}`}>
-      {arrow} {fmtPct(Math.abs(value))} <span className="font-normal opacity-80">vs previous period</span>
+      {arrow} {fmtPct(Math.abs(value))} <span className="font-normal opacity-80">{label}</span>
     </span>
   );
 }

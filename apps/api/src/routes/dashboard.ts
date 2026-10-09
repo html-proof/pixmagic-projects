@@ -3,6 +3,7 @@ import { Prisma, toNumber, withTenant, type Tx } from "@app/db";
 import {
   DATE_PRESETS,
   addDays,
+  eachDay,
   channelLabel,
   daysBetweenInclusive,
   delta,
@@ -11,6 +12,7 @@ import {
   resolvePreset,
   summarize,
   summarizeJourney,
+  yearBreakdown,
   PURCHASED_STEP,
   SITE_SECTIONS,
   type DailyMetricsRow,
@@ -96,6 +98,27 @@ const r1 = (n: number) => Math.round(n * 10) / 10;
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const num = (v: unknown) => (v === null || v === undefined ? 0 : Number(v));
 const numOrNull = (v: unknown) => (v === null || v === undefined ? null : Number(v));
+
+/**
+ * One point per day of the range. daily_store_metrics only has rows for days with orders or
+ * refunds, so the quiet days are filled in as zeros: without them the chart drew "last 30 days"
+ * as however many days happened to sell, ending on the last sale rather than on today.
+ */
+function dailySeries(rows: DailyMetricsRow[], r: DateRange) {
+  const byDay = new Map(rows.map((x) => [x.day, x]));
+  return eachDay(r.from, r.to).map((day) => {
+    const x = byDay.get(day);
+    if (!x) return { day, netSales: 0, orders: 0, refunds: 0, averageOrderValue: null };
+    const beforeRefunds = r2(x.grossSales - x.discounts);
+    return {
+      day,
+      netSales: r2(beforeRefunds - x.refunds),
+      orders: x.orders,
+      refunds: r2(x.refunds),
+      averageOrderValue: x.orders > 0 ? r2(beforeRefunds / x.orders) : null,
+    };
+  });
+}
 
 const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"] as const;
 
@@ -571,6 +594,7 @@ export function dashboardRoutes(app: App, deps: Deps) {
       });
       const enabled = new Set(capabilities.filter((c) => c.enabled).map((c) => c.id));
       const modules: Record<string, unknown> = {};
+      const data = await importedData(tx, scope);
 
       let hasData = false;
       if (enabled.has("sales_overview") || enabled.has("refunds") || enabled.has("customers")) {
@@ -598,7 +622,14 @@ export function dashboardRoutes(app: App, deps: Deps) {
               averageOrderValue: delta(c.averageOrderValue, p.averageOrderValue),
               grossSales: delta(c.grossSales, p.grossSales),
             },
-            series: cur.map((r) => ({ day: r.day, netSales: Math.round((r.grossSales - r.discounts - r.refunds) * 100) / 100, orders: r.orders })),
+            series: dailySeries(cur, range),
+            // This calendar year month by month, whatever the dates picked. Reaches back to the
+            // December before so January has something to compare with.
+            year: yearBreakdown(
+              await dailyRows(tx, ws, storeId, { from: `${Number(today.slice(0, 4)) - 1}-12-01`, to: today }),
+              today,
+              data.oldestOrderDay,
+            ),
           };
         }
         if (enabled.has("refunds")) {
@@ -646,10 +677,12 @@ export function dashboardRoutes(app: App, deps: Deps) {
         store: publicStore(store),
         range,
         previous,
+        // The store's today, so the page can tell a finished day from one still running.
+        today,
         capabilities,
         modules,
         hasData,
-        data: await importedData(tx, scope),
+        data,
       };
     });
     // The dashboard polls this every 15 s: use that to keep the store fresh from Shopify.

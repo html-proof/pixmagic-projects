@@ -9,7 +9,7 @@ function Svg({ children, ...p }: SVGProps<SVGSVGElement> & { children: ReactNode
   );
 }
 
-export type IconName = "trendUp" | "trendDown" | "bag" | "receipt" | "trophy" | "clock" | "door" | "box" | "truck" | "mail" | "users" | "eye" | "sparkle" | "refresh" | "copy" | "check" | "external" | "phone" | "cart" | "store" | "chart" | "link";
+export type IconName = "trendUp" | "trendDown" | "bag" | "receipt" | "trophy" | "clock" | "door" | "box" | "truck" | "mail" | "users" | "eye" | "sparkle" | "refresh" | "copy" | "check" | "external" | "phone" | "cart" | "store" | "chart" | "link" | "close" | "chevronRight" | "tag" | "printer" | "chat" | "share";
 
 export function Icon({ name, className }: { name: IconName; className?: string }) {
   const p = { className };
@@ -58,5 +58,17 @@ export function Icon({ name, className }: { name: IconName; className?: string }
       return <Svg {...p}><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1" /><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" /></Svg>;
     case "chart":
       return <Svg {...p}><path d="M4 20V10M10 20V4M16 20v-7M22 20H2" /></Svg>;
+    case "close":
+      return <Svg {...p}><path d="M6 6l12 12M18 6L6 18" /></Svg>;
+    case "chevronRight":
+      return <Svg {...p}><path d="M9 5l7 7-7 7" /></Svg>;
+    case "chat":
+      return <Svg {...p}><path d="M4 5h16v11H9l-5 4V5z" /><path d="M8 9h8M8 12h5" /></Svg>;
+    case "share":
+      return <Svg {...p}><circle cx="18" cy="5" r="2.5" /><circle cx="6" cy="12" r="2.5" /><circle cx="18" cy="19" r="2.5" /><path d="M8.2 10.8l7.6-4.4M8.2 13.2l7.6 4.4" /></Svg>;
+    case "printer":
+      return <Svg {...p}><path d="M7 9V3h10v6" /><rect x="3" y="9" width="18" height="8" rx="2" /><path d="M7 14h10v7H7z" /></Svg>;
+    case "tag":
+      return <Svg {...p}><path d="M3 12V4h8l10 10-8 8L3 12z" /><circle cx="7.5" cy="8.5" r="1.5" /></Svg>;
   }
 }
