@@ -169,17 +169,19 @@ export function authRoutes(app: App, deps: Deps) {
     const input = z.object({ email: z.string().email(), code: z.string().regex(/^\d{6}$/) }).parse(await body(c));
     const email = input.email.toLowerCase();
     await limit(deps.coord, `rl:otp:verify:${clientIp(c)}`, LIMITS.otpVerifyIp);
+    const outage = dbOutage("We can't check your code right now. Please try again in a moment.");
     // The per-IP limit does nothing against guesses spread over many addresses: cap the guesses
     // at this address's codes too (see LIMITS.otpGuessesPerEmail).
-    const guesses = await systemDb.emailOtp.aggregate({
-      where: { email, createdAt: { gt: new Date(Date.now() - LIMITS.otpGuessesPerEmail.windowSec * 1000) } },
-      _sum: { attempts: true },
-    });
+    const guesses = await systemDb.emailOtp
+      .aggregate({
+        where: { email, createdAt: { gt: new Date(Date.now() - LIMITS.otpGuessesPerEmail.windowSec * 1000) } },
+        _sum: { attempts: true },
+      })
+      .catch(outage);
     if ((guesses._sum.attempts ?? 0) >= LIMITS.otpGuessesPerEmail.max) {
       throw new HttpError(429, "Too many attempts for this email address. Please sign in another way or try again tomorrow.", "rate_limited");
     }
 
-    const outage = dbOutage("We can't check your code right now. Please try again in a moment.");
     const otp = await systemDb.emailOtp
       .findFirst({ where: { email, consumedAt: null, expiresAt: { gt: new Date() } }, orderBy: { createdAt: "desc" } })
       .catch(outage);
