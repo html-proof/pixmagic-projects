@@ -1806,6 +1806,23 @@ describe("bulk order backfill", () => {
     expect(queues.sent.sync.at(-1)).toMatchObject({ pagedOnly: true });
   });
 
+  it("never fetches a result link that isn't https (SSRF guard)", async () => {
+    const store = await makeStore(["read_orders"]);
+    const job = await makeJob(store, "orders");
+    const fetched: string[] = [];
+    fetchImpl = async (u, init) => {
+      fetched.push(String(u));
+      const { query } = gqlBody(init);
+      if (query.includes("node(")) {
+        return gqlJson({ node: { id: BULK_ID, status: "COMPLETED", objectCount: "2", url: "http://169.254.169.254/latest/meta-data/", partialDataUrl: null } });
+      }
+      return gqlJson({});
+    };
+    await runSync({ storeId: store.id, kind: "orders", syncJobId: job.id, bulk: { phase: "ingest", id: BULK_ID, byteOffset: 0 } }, deps);
+    expect(fetched.filter((u) => u.includes("169.254.169.254"))).toEqual([]);
+    expect(queues.sent.sync.at(-1)).toMatchObject({ pagedOnly: true });
+  });
+
   it("marks a store with no orders in the window fully synced", async () => {
     const store = await makeStore(["read_orders"]);
     const job = await makeJob(store, "orders");

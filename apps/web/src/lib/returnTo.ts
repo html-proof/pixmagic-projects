@@ -6,8 +6,14 @@
 const KEY = "insights:returnTo";
 const TTL_MS = 60 * 60_000;
 
-/** Same-origin paths only: never an absolute or protocol-relative URL. */
-const safe = (path: unknown): path is string => typeof path === "string" && path.startsWith("/") && !path.startsWith("//");
+/**
+ * Same-origin paths only: never an absolute or protocol-relative URL. Browsers read a backslash
+ * as a slash, so "/\evil.com" is "//evil.com"; control characters are dropped from URLs, so
+ * "/\t/evil.com" is too. Neither belongs in a path of ours.
+ */
+export const isSafePath = (path: unknown): path is string =>
+  typeof path === "string" && path.startsWith("/") && !path.startsWith("//") && !/[\\\u0000-\u001f\u007f]/.test(path);
+const safe = isSafePath;
 
 export function setReturnTo(path: string) {
   if (!safe(path)) return;

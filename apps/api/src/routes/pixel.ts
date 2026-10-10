@@ -3,7 +3,7 @@ import { systemDb } from "@app/db";
 import { EVENT_STEP, foldVisit, localDay, sha256Hex, type PixelEventIn, type PixelEventName } from "@app/shared";
 import { clientIp, type Deps } from "../context.js";
 import type { App } from "../app.js";
-import { limit } from "../rateLimit.js";
+import { limit, LIMITS } from "../rateLimit.js";
 
 /** Shopify standard customer events we turn into funnel steps (see EVENT_STEP). */
 const EVENT_NAMES = Object.keys(EVENT_STEP) as [PixelEventName, ...PixelEventName[]];
@@ -40,7 +40,7 @@ export function pixelRoutes(app: App, deps: Deps) {
   app.post("/pixel/:key", async (c) => {
     c.header("access-control-allow-origin", "*");
     const { key } = c.req.param();
-    await limit(deps.coord, `rl:pixel:${clientIp(c)}`, 600, 60);
+    await limit(deps.coord, `rl:pixel:${clientIp(c)}`, LIMITS.pixelIp);
     // navigator.sendBeacon posts text/plain, so parse the raw text whatever the content type.
     const raw = await c.req.text();
     if (raw.length > 64 * 1024) return c.json({ error: "invalid_body" }, 413);

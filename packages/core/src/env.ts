@@ -40,9 +40,40 @@ const schema = z.object({
 
 export type Env = z.infer<typeof schema>;
 
+/**
+ * Secret values that are public: the placeholders in .env.example / .dev.vars.example and the
+ * fixed values the test and e2e setups commit. Anyone can read them in this repository, so a
+ * production deployment carrying one has no secret at all (a known TOKEN_ENCRYPTION_KEYS entry
+ * decrypts every stored Shopify token).
+ */
+const PUBLIC_SECRET_MARKERS = [
+  "change-me",
+  "REPLACE_WITH",
+  "test-session-secret",
+  "e2e-session-secret",
+  "test-pepper",
+  "e2e-pepper",
+  // base64("01234567890123456789012345678901"), the test/e2e TOKEN_ENCRYPTION_KEYS key.
+  "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=",
+];
+const SECRET_VARS = ["SESSION_SECRET", "OTP_PEPPER", "TOKEN_ENCRYPTION_KEYS"] as const;
+
+/** Names (never values) of production secrets still set to a publicly known value. */
+export function publicSecrets(e: Pick<Env, (typeof SECRET_VARS)[number]>): string[] {
+  return SECRET_VARS.filter((name) => PUBLIC_SECRET_MARKERS.some((m) => e[name].toLowerCase().includes(m.toLowerCase())));
+}
+
 let cached: Env | undefined;
 export function env(): Env {
-  cached ??= schema.parse(process.env);
+  if (!cached) {
+    const parsed = schema.parse(process.env);
+    // Fail closed: a deployment must not run on secrets published in this repository.
+    const exposed = parsed.NODE_ENV === "production" ? publicSecrets(parsed) : [];
+    if (exposed.length) {
+      throw new Error(`${exposed.join(", ")} still set to a placeholder or test value. Generate new ones (see docs/deployment-cloudflare.md) before running in production.`);
+    }
+    cached = parsed;
+  }
   return cached;
 }
 

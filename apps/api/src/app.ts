@@ -29,8 +29,29 @@ const MB = 1024 * 1024;
 
 export type App = Hono<AppEnv>;
 
+/**
+ * On every API response, including errors and early 413/429s. public/_headers covers the static
+ * UI, but Workers Static Assets never applies it to responses the Worker generates. API responses
+ * are JSON or redirects, never a page: nothing may sniff them into HTML, render them, frame them,
+ * or keep a copy (they carry account and customer data).
+ */
+const API_HEADERS: Record<string, string> = {
+  "x-content-type-options": "nosniff",
+  "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
+  "x-frame-options": "DENY",
+  "referrer-policy": "strict-origin-when-cross-origin",
+  "cache-control": "no-store",
+};
+
 export function buildApp(deps: Deps): App {
   const app = new Hono<AppEnv>();
+
+  app.use("*", async (c, next) => {
+    await next();
+    for (const [name, value] of Object.entries(API_HEADERS)) {
+      if (!c.res.headers.has(name)) c.res.headers.set(name, value);
+    }
+  });
 
   // Webhooks carry up to 5 MB; everything else is small JSON.
   app.use("*", (c, next) =>

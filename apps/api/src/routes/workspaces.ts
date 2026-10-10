@@ -5,6 +5,7 @@ import { randomToken, ROLES, sha256Hex } from "@app/shared";
 import { body, clientIp, HttpError, requireUser, requireWorkspace, type Deps } from "../context.js";
 import type { App } from "../app.js";
 import { seedResync } from "../sync.js";
+import { limit, LIMITS } from "../rateLimit.js";
 
 /**
  * Shown on the billing page, which is a page Shopify's reviewer sees — so these strings are
@@ -27,6 +28,7 @@ export function workspaceRoutes(app: App, deps: Deps) {
   app.post("/workspaces", async (c) => {
     const user = await requireUser(c, deps);
     const { name } = z.object({ name: z.string().trim().min(1).max(80) }).parse(await body(c));
+    await limit(deps.coord, `rl:workspace:create:${user.id}`, LIMITS.workspaceCreate);
     const ws = await systemDb.$transaction(async (tx) => {
       const w = await tx.workspace.create({ data: { name } });
       await tx.membership.create({ data: { workspaceId: w.id, userId: user.id, role: "owner" } });
@@ -63,7 +65,9 @@ export function workspaceRoutes(app: App, deps: Deps) {
   app.post("/workspaces/:ws/invitations", async (c) => {
     const { ws } = c.req.param();
     const a = await requireWorkspace(c, deps, ws, "members:manage");
-    const input = z.object({ email: z.string().email(), role: roleSchema.exclude(["owner"]) }).parse(await body(c));
+    const input = z.object({ email: z.string().email().max(254), role: roleSchema.exclude(["owner"]) }).parse(await body(c));
+    // Each invitation sends an email from our domain: don't let one workspace turn it into a spam relay.
+    await limit(deps.coord, `rl:invite:${ws}`, LIMITS.invitations);
     const token = randomToken(32);
     await withTenant(ws, (tx) =>
       tx.invitation.create({
@@ -147,9 +151,7 @@ export function workspaceRoutes(app: App, deps: Deps) {
     const store = await withTenant(ws, (tx) => tx.store.findFirst({ where: { id: storeId, workspaceId: ws, status: { not: "uninstalled" } } }));
     if (!store) throw new HttpError(404, "Not found", "not_found");
     // One refresh per store every 5 minutes is plenty (and keeps Shopify's rate limit for real work).
-    if ((await deps.coord.hit(`rl:resync:${store.id}`, 300)) > 1) {
-      throw new HttpError(429, "A refresh is already under way. Try again in a few minutes.", "too_soon");
-    }
+    await limit(deps.coord, `rl:resync:${store.id}`, LIMITS.resync, "A refresh is already under way. Try again in a few minutes.", "too_soon");
     const jobs = await seedResync(deps, store);
     await audit({ workspaceId: ws, actorUserId: a.user?.id, action: "store.resync", targetId: storeId, ip: clientIp(c) });
     return c.json({ ok: true, jobs: jobs.length });
@@ -208,6 +210,7 @@ export function workspaceRoutes(app: App, deps: Deps) {
     const a = await requireWorkspace(c, deps, ws, "apikeys:manage");
     if (!a.user) throw new HttpError(403, "Session required", "forbidden");
     const { name } = z.object({ name: z.string().trim().min(1).max(60) }).parse(await body(c));
+    await limit(deps.coord, `rl:apikey:create:${ws}`, LIMITS.apiKeyCreate);
     const secret = `sk_live_${randomToken(30)}`;
     const key = await withTenant(ws, (tx) =>
       tx.apiKey.create({ data: { workspaceId: ws, name, prefix: secret.slice(0, 14), keyHash: sha256Hex(secret), createdById: a.user!.id } }),

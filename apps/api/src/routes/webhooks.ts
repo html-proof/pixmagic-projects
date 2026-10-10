@@ -49,6 +49,17 @@ async function redelivery(webhookId: string): Promise<"duplicate" | "retry" | { 
 }
 
 /**
+ * The shop a payload says it is about, lowercased: `shop_domain` on the GDPR topics,
+ * `myshopify_domain` on shop objects (app/uninstalled). Null when it names none, which is most topics.
+ */
+function payloadShop(payload: unknown): string | null {
+  if (!payload || typeof payload !== "object") return null;
+  const p = payload as { shop_domain?: unknown; myshopify_domain?: unknown };
+  const named = typeof p.shop_domain === "string" ? p.shop_domain : typeof p.myshopify_domain === "string" ? p.myshopify_domain : null;
+  return named ? named.toLowerCase() : null;
+}
+
+/**
  * Shopify webhook intake. Contract:
  *  - HMAC of the *raw* body is verified before anything else (401 otherwise).
  *  - X-Shopify-Webhook-Id is recorded under a unique constraint, so retries
@@ -79,6 +90,14 @@ export function webhookRoutes(app: App, deps: Deps) {
       payload = JSON.parse(raw);
     } catch {
       return c.json({ error: "invalid_json" }, 400);
+    }
+    // The HMAC covers the body only, so the shop (and topic) headers are unauthenticated. Where
+    // the body names its shop - the GDPR topics and app/uninstalled, the ones that delete data or
+    // tokens - it must be the shop the headers say, or a signed body could be replayed at another store.
+    const claimed = payloadShop(payload);
+    if (claimed !== null && claimed !== shop) {
+      logger.warn({ topic, shop, claimed, ip: clientIp(c) }, "webhook rejected: payload is for another shop");
+      return c.json({ error: "shop_mismatch" }, 401);
     }
 
     const store = await systemDb.store.findUnique({ where: { shopDomain: shop }, select: { id: true, workspaceId: true } });

@@ -9,6 +9,10 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Checks only read the repository; nothing here should be able to push or edit issues/PRs.
+permissions:
+  contents: read
+
 env:
   PG_PORT: 5434
 

@@ -148,6 +148,14 @@ function cutAtLastParent(lines: Line[], raw: string[]): { lines: Line[]; raw: st
 
 const byteLength = (s: string) => new TextEncoder().encode(s).length;
 
+function isHttpsUrl(url: string): boolean {
+  try {
+    return new URL(url).protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 async function bulkStatus(api: BulkApi, id: string): Promise<BulkOperationStatus | null> {
   const d = await api.gql<{ node: BulkOperationStatus | null }>(BULK_OPERATION_NODE, { id });
   return d.node ?? null;
@@ -286,6 +294,8 @@ async function ingestBulk(data: SyncJobData, store: Store, deps: WorkerDeps, api
   const op = await bulkStatus(api, id);
   const url = op?.url ?? op?.partialDataUrl;
   if (!url) return fallbackToPaged(data, deps, "bulk result url is gone");
+  // The only URL we fetch that a response handed us (Shopify's signed result link): HTTPS only.
+  if (!isHttpsUrl(url)) return fallbackToPaged(data, deps, "bulk result url is not https");
 
   const byteOffset = data.bulk?.byteOffset ?? 0;
   let chunk = CHUNK_BYTES;

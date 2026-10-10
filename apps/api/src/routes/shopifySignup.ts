@@ -19,7 +19,7 @@ import {
 import { decrypt, encrypt, expandScopes, normalizeShopDomain, randomToken, safeEqual } from "@app/shared";
 import { body, clientIp, HttpError, requireAppOrigin, requireUser, type Ctx, type Deps } from "../context.js";
 import type { App } from "../app.js";
-import { limit } from "../rateLimit.js";
+import { limit, LIMITS } from "../rateLimit.js";
 import { connectStore } from "../connectStore.js";
 import { authorizeRedirect, installApp, logHandoff, REQUIRED_SCOPES, shopifyConfig, type SignupState } from "./shopify.js";
 
@@ -318,7 +318,7 @@ export function shopifySignupRoutes(app: App, deps: Deps) {
   /** Panel 1 → "Continue with Shopify": remember the email in this browser and send them to Shopify. */
   app.post("/auth/shopify/start", async (c) => {
     requireAppOrigin(c);
-    await limit(deps.coord, `rl:shopify-start:ip:${clientIp(c)}`, 20, 3600);
+    await limit(deps.coord, `rl:shopify-start:ip:${clientIp(c)}`, LIMITS.shopifyStartIp);
     const input = z
       .object({
         email: z.string().trim().toLowerCase().email().max(254),
@@ -368,7 +368,7 @@ export function shopifySignupRoutes(app: App, deps: Deps) {
    */
   app.post("/auth/shopify/finish", async (c) => {
     requireAppOrigin(c);
-    await limit(deps.coord, `rl:shopify-finish:ip:${clientIp(c)}`, 30, 900);
+    await limit(deps.coord, `rl:shopify-finish:ip:${clientIp(c)}`, LIMITS.shopifyFinishIp);
     const { useShopifyEmail } = z.object({ useShopifyEmail: z.boolean().optional() }).parse(await body(c));
     const nonce = signupNonce(c);
     if (!nonce) throw signupExpired();

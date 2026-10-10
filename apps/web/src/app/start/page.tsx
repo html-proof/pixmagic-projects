@@ -9,6 +9,7 @@ import { authErrorMessage, establishSession } from "@/lib/session";
 import { Alert, AuthShell } from "@/components/ui";
 import { ShopifyIcon } from "@/components/ShopifyIcon";
 import { emailLinkCode, forgetLinkEmail, linkEmail, rememberLinkEmail } from "@/lib/emailLink";
+import { isSafePath } from "@/lib/returnTo";
 
 /**
  * Shopify-first sign-up: email → Continue with Shopify → (Shopify approval) → finish → dashboard.
@@ -89,7 +90,7 @@ function selectStore(workspaceId: string | undefined, storeId: string | undefine
 }
 
 /** Only follow same-site paths from the API (never an absolute or protocol-relative URL). */
-const safeNext = (next: string | undefined) => (next && next.startsWith("/") && !next.startsWith("//") ? next : "/");
+const safeNext = (next: string | undefined) => (isSafePath(next) ? next : "/");
 
 function errorMessage(err: unknown): string {
   if (err instanceof ApiError) {

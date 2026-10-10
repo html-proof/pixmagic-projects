@@ -3,7 +3,7 @@ import { audit, env, getAccessToken, logger, ShopifyGraphqlError, ShopifyHttpErr
 import { hasCapability } from "@app/shared";
 import { clientIp, HttpError, requireWorkspace, type Deps } from "../context.js";
 import type { App } from "../app.js";
-import { limit } from "../rateLimit.js";
+import { limit, LIMITS } from "../rateLimit.js";
 
 /**
  * Customers a merchant can get back in touch with: shoppers who gave an email at checkout and
@@ -101,7 +101,7 @@ export function contactRoutes(app: App, deps: Deps) {
   app.get("/workspaces/:ws/stores/:storeId/contacts", async (c) => {
     const { ws, storeId } = c.req.param();
     const access = await requireWorkspace(c, deps, ws, "customers:contact");
-    await limit(deps.coord, `rl:contacts:${ws}:${access.user?.id ?? clientIp(c)}`, 20, 60);
+    await limit(deps.coord, `rl:contacts:${ws}:${access.user?.id ?? clientIp(c)}`, LIMITS.contacts);
     // Personal data: never let a browser or proxy keep a copy.
     c.header("cache-control", "no-store");
 

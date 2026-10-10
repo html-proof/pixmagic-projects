@@ -6,7 +6,7 @@ import { generateOtp, hashOtp, OTP_MAX_ATTEMPTS, OTP_TTL_MS, verifyOtp } from "@
 import { body, clientIp, HttpError, requireAppOrigin, requireUser, SESSION_COOKIE, type Deps } from "../context.js";
 import { FirebaseUnavailableError } from "../authProvider.js";
 import type { App } from "../app.js";
-import { limit } from "../rateLimit.js";
+import { limit, LIMITS } from "../rateLimit.js";
 import { clearSignup } from "./shopifySignup.js";
 
 const SESSION_TTL_MS = 5 * 24 * 3600 * 1000;
@@ -24,7 +24,7 @@ export function authRoutes(app: App, deps: Deps) {
   app.post("/auth/session", async (c) => {
     requireAppOrigin(c);
     const { idToken } = z.object({ idToken: z.string().min(10) }).parse(await body(c));
-    await limit(deps.coord, `rl:session:${clientIp(c)}`, 30, 300);
+    await limit(deps.coord, `rl:session:${clientIp(c)}`, LIMITS.session);
     const claims = await deps.auth.verifyIdToken(idToken).catch((err) => {
       throw signInFailure(err, idToken, "POST /auth/session");
     });
@@ -109,8 +109,8 @@ export function authRoutes(app: App, deps: Deps) {
       .parse(await body(c));
     const email = raw.toLowerCase();
     const ip = clientIp(c);
-    await limit(deps.coord, `rl:otp:ip:${ip}`, 10, 3600);
-    await limit(deps.coord, `rl:otp:email:${email}`, 3, 900);
+    await limit(deps.coord, `rl:otp:ip:${ip}`, LIMITS.otpRequestIp);
+    await limit(deps.coord, `rl:otp:email:${email}`, LIMITS.otpRequestEmail);
 
     const code = generateOtp();
     await systemDb.$transaction([
@@ -148,7 +148,7 @@ export function authRoutes(app: App, deps: Deps) {
   app.post("/auth/email-link/verify", async (c) => {
     requireAppOrigin(c);
     const input = z.object({ email: z.string().email().max(254), oobCode: z.string().min(10).max(2000) }).parse(await body(c));
-    await limit(deps.coord, `rl:emaillink:verify:${clientIp(c)}`, 20, 900);
+    await limit(deps.coord, `rl:emaillink:verify:${clientIp(c)}`, LIMITS.emailLinkVerifyIp);
     const uid = await deps.auth.redeemEmailSignInLink(input.email.toLowerCase(), input.oobCode).catch((err) => {
       if (err instanceof FirebaseUnavailableError) {
         logger.error({ msg: err.message }, "email sign-in link could not be checked");
@@ -166,7 +166,16 @@ export function authRoutes(app: App, deps: Deps) {
     requireAppOrigin(c);
     const input = z.object({ email: z.string().email(), code: z.string().regex(/^\d{6}$/) }).parse(await body(c));
     const email = input.email.toLowerCase();
-    await limit(deps.coord, `rl:otp:verify:${clientIp(c)}`, 20, 900);
+    await limit(deps.coord, `rl:otp:verify:${clientIp(c)}`, LIMITS.otpVerifyIp);
+    // The per-IP limit does nothing against guesses spread over many addresses: cap the guesses
+    // at this address's codes too (see LIMITS.otpGuessesPerEmail).
+    const guesses = await systemDb.emailOtp.aggregate({
+      where: { email, createdAt: { gt: new Date(Date.now() - LIMITS.otpGuessesPerEmail.windowSec * 1000) } },
+      _sum: { attempts: true },
+    });
+    if ((guesses._sum.attempts ?? 0) >= LIMITS.otpGuessesPerEmail.max) {
+      throw new HttpError(429, "Too many attempts for this email address. Please sign in another way or try again tomorrow.", "rate_limited");
+    }
 
     const otp = await systemDb.emailOtp.findFirst({
       where: { email, consumedAt: null, expiresAt: { gt: new Date() } },

@@ -19,6 +19,7 @@ import {
 import { resolveCapabilities, scopesForModule, type ModuleId } from "@app/shared";
 import { body, clientIp, HttpError, requireWorkspace, type Deps } from "../context.js";
 import type { App } from "../app.js";
+import { limit, LIMITS } from "../rateLimit.js";
 
 /**
  * Dynamic (optional) scope requests: how a merchant unlocks a module whose scopes weren't part
@@ -159,9 +160,7 @@ export function scopeRoutes(app: App, deps: Deps) {
     const { ws, storeId } = c.req.param();
     await requireWorkspace(c, deps, ws, "stores:manage");
     const store = await liveStore(ws, storeId);
-    if ((await deps.coord.hit(`rl:scopes:${store.id}`, 10)) > 3) {
-      throw new HttpError(429, "Give us a moment and try again.", "too_soon");
-    }
+    await limit(deps.coord, `rl:scopes:${store.id}`, LIMITS.scopes, "Give us a moment and try again.", "too_soon");
 
     let result;
     try {
@@ -220,9 +219,7 @@ export function scopeRoutes(app: App, deps: Deps) {
       return c.json({ revoked: [], alreadyRevoked: true, scopes: store.grantedScopes });
     }
 
-    if ((await deps.coord.hit(`rl:scopes:${store.id}`, 10)) > 3) {
-      throw new HttpError(429, "Give us a moment and try again.", "too_soon");
-    }
+    await limit(deps.coord, `rl:scopes:${store.id}`, LIMITS.scopes, "Give us a moment and try again.", "too_soon");
 
     let revoked: string[];
     try {

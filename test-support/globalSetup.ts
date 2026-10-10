@@ -1,6 +1,8 @@
 import { execSync } from "node:child_process";
 import { resolve } from "node:path";
-import { lockTestDatabase } from "@app/db/testing";
+// By path, not "@app/db/testing": Vitest 4 resolves a global setup's imports from this folder,
+// which sits outside every workspace package and so has no link to @app/db.
+import { lockTestDatabase } from "../packages/db/src/testing.js";
 import { testEnv } from "./env.js";
 
 /** Create/migrate the *_test database and apply role grants before integration tests. */

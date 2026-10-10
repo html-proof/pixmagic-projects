@@ -1,12 +1,19 @@
 # Local dev stack: Postgres, Redis, Mailpit (SMTP catcher), Firebase Auth emulator.
+#
+# Every port is published on the loopback addresses only (IPv4 and IPv6, so `localhost` works
+# either way). A bare "5434:5432" listens on all interfaces, and Docker Desktop's firewall rule
+# admits it on every network profile: anyone on the same Wi-Fi could log in to Postgres as the
+# superuser. The cloudflared tunnel reaches Postgres over the compose network, not these ports.
 services:
   postgres:
     image: postgres:17-alpine
     environment:
       POSTGRES_USER: app
-      POSTGRES_PASSWORD: app
+      # Only read when the data volume is first created. Anything reachable from elsewhere (the
+      # tunnel to Hyperdrive) needs a real password: see docs/security.md, "Database credentials".
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-app}
       POSTGRES_DB: app
-    ports: ["${PG_PORT:-5434}:5432"]
+    ports: ["127.0.0.1:${PG_PORT:-5434}:5432", "[::1]:${PG_PORT:-5434}:5432"]
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/01-roles.sql:ro
@@ -28,20 +35,20 @@ services:
       retries: 10
   redis:
     image: redis:7-alpine
-    ports: ["${REDIS_PORT:-6380}:6379"]
+    ports: ["127.0.0.1:${REDIS_PORT:-6380}:6379", "[::1]:${REDIS_PORT:-6380}:6379"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       retries: 10
   mailpit:
     image: axllent/mailpit:latest
-    ports: ["1025:1025", "8025:8025"]
+    ports: ["127.0.0.1:1025:1025", "[::1]:1025:1025", "127.0.0.1:8025:8025", "[::1]:8025:8025"]
   firebase-emulator:
     image: node:24-alpine
     working_dir: /emu
     command: npx -y firebase-tools@14 emulators:start --only auth --project demo-insights
     volumes: ["./infra/firebase:/emu"]
-    ports: ["9099:9099"]
+    ports: ["127.0.0.1:9099:9099", "[::1]:9099:9099"]
   # Connects this Postgres to Cloudflare (Workers VPC -> Hyperdrive) for the deployed Worker.
   # Needs CLOUDFLARE_TUNNEL_TOKEN in .env; start with `docker compose --profile tunnel up -d cloudflared`.
   cloudflared:
