@@ -2,7 +2,9 @@ import { z } from "zod";
 import { Prisma, systemDb, withTenant, type WhatsappTemplate } from "@app/db";
 import {
   audit,
+  checkManualApp,
   connectWhatsapp,
+  discoverWhatsapp,
   disconnectWhatsapp,
   ensureSettings,
   env,
@@ -11,6 +13,7 @@ import {
   refreshConnection,
   registerWhatsapp,
   scheduleMessage,
+  setupManualWebhook,
   storeName,
   waCreateTemplate,
   waExchangeCode,
@@ -68,6 +71,7 @@ const connectError = (err: unknown): never => {
 };
 
 const idSchema = z.string().trim().regex(/^\d{5,25}$/, "must be the numeric id from WhatsApp Manager");
+const accessTokenSchema = z.string().trim().min(20).max(1000).regex(/^[A-Za-z0-9_-]+$/, "doesn't look like a Meta access token");
 
 export function whatsappRoutes(app: App, deps: Deps) {
   /** Everything the WhatsApp overview needs, in one call. */
@@ -166,7 +170,25 @@ export function whatsappRoutes(app: App, deps: Deps) {
     return c.json({ connection: publicConnection(conn, true) });
   });
 
-  /** The merchant's own Meta app: WABA id, phone number id, a system-user token and the app secret. */
+  /**
+   * The merchant's own Meta app, step one: from just the access token, the WhatsApp accounts and
+   * numbers it reaches and the app it belongs to. Nothing is saved.
+   */
+  app.post(`${base}/manual/discover`, async (c) => {
+    const { ws, storeId } = c.req.param();
+    await requireWorkspace(c, deps, ws, "stores:manage");
+    await waStore(ws, storeId);
+    await limit(deps.coord, `rl:wa-connect:${storeId}`, LIMITS.waConnect);
+    const { accessToken } = z.object({ accessToken: accessTokenSchema }).parse(await body(c));
+    const found = await discoverWhatsapp(accessToken, deps.fetchImpl).catch(connectError);
+    return c.json(found);
+  });
+
+  /**
+   * The merchant's own Meta app: WABA id, phone number id, a system-user token and the app secret.
+   * The secret is checked against the token's app, and the app's webhook is pointed at Insights,
+   * so there's nothing to paste into Meta's dashboard (unless Meta wouldn't let us).
+   */
   app.post(`${base}/manual`, async (c) => {
     const { ws, storeId } = c.req.param();
     const access = await requireWorkspace(c, deps, ws, "stores:manage");
@@ -176,14 +198,17 @@ export function whatsappRoutes(app: App, deps: Deps) {
       .object({
         wabaId: idSchema,
         phoneNumberId: idSchema,
-        accessToken: z.string().trim().min(20).max(1000).regex(/^[A-Za-z0-9_-]+$/, "doesn't look like a Meta access token"),
+        accessToken: accessTokenSchema,
         // Without it, Insights can't verify Meta's deliveries, so it would never hear STOP replies.
         appSecret: z.string().trim().regex(/^[a-f0-9]{32}$/i, "must be the 32-character app secret from your Meta app's Basic settings"),
       })
       .parse(await body(c));
-    const conn = await connectWhatsapp({ store, mode: "manual", ...input, userId: access.user!.id }, deps.fetchImpl).catch(connectError);
-    await audit({ workspaceId: ws, actorUserId: access.user!.id, action: "whatsapp.connected", targetType: "store", targetId: storeId, metadata: { mode: "manual", wabaId: conn.wabaId, phoneNumberId: conn.phoneNumberId }, ip: clientIp(c) });
-    return c.json({ connection: publicConnection(conn, true) });
+    const appId = await checkManualApp(input.accessToken, input.appSecret, deps.fetchImpl).catch(connectError);
+    let conn = await connectWhatsapp({ store, mode: "manual", ...input, userId: access.user!.id }, deps.fetchImpl).catch(connectError);
+    const webhook = appId ? await setupManualWebhook(conn, appId, input.appSecret, deps.fetchImpl) : "failed";
+    if (webhook === "verified") conn = (await systemDb.whatsappConnection.findUnique({ where: { id: conn.id } })) ?? conn;
+    await audit({ workspaceId: ws, actorUserId: access.user!.id, action: "whatsapp.connected", targetType: "store", targetId: storeId, metadata: { mode: "manual", wabaId: conn.wabaId, phoneNumberId: conn.phoneNumberId, webhook }, ip: clientIp(c) });
+    return c.json({ connection: publicConnection(conn, true), webhook });
   });
 
   /** Register the number with the Cloud API (it can't send until it is). */

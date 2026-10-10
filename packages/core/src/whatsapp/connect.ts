@@ -1,9 +1,21 @@
 /** Connecting and disconnecting a store's WhatsApp number. */
 import { systemDb, type WhatsappConnection } from "@app/db";
 import { keyVersionOf, randomToken, sha256Hex } from "@app/shared";
+import { env } from "../env.js";
 import { logger } from "../logger.js";
 import type { FetchLike } from "../shopify.js";
-import { graph, waAccountInfo, waAccountPhoneIds, waPhoneInfo, waRegisterPhone, waSubscribeApp, WhatsappApiError } from "./graph.js";
+import {
+  graph,
+  waAccountInfo,
+  waAccountNumbers,
+  waAccountPhoneIds,
+  waPhoneInfo,
+  waRegisterPhone,
+  waSetAppWebhook,
+  waSubscribeApp,
+  waTokenInfo,
+  WhatsappApiError,
+} from "./graph.js";
 import { connectionToken, ensureSettings, syncTemplates, waDecrypt, waEncrypt } from "./store.js";
 
 export class WhatsappConnectError extends Error {
@@ -97,6 +109,103 @@ export async function connectWhatsapp(input: ConnectInput, fetchImpl: FetchLike)
   await ensureSettings(input.store);
   await syncTemplates(conn, input.accessToken, fetchImpl).catch((err: unknown) => logger.warn({ err, storeId: input.store.id }, "template sync after connect failed; Refresh retries it"));
   return conn;
+}
+
+const NEEDED_SCOPES = ["whatsapp_business_management", "whatsapp_business_messaging"];
+
+const tokenRejected = () =>
+  new WhatsappConnectError("Meta didn't accept that access token. Copy it again from Meta (it's long and starts with EAA), or generate a new one.", "token_rejected");
+
+export interface DiscoveredNumber {
+  id: string;
+  displayPhoneNumber: string | null;
+  verifiedName: string | null;
+  /** On the Cloud API already; otherwise Insights asks for a PIN after connecting. */
+  registered: boolean;
+}
+
+export interface Discovered {
+  /** The Meta app the token belongs to (so the page can link straight to its app secret). */
+  appId: string | null;
+  accounts: Array<{ id: string; name: string | null; numbers: DiscoveredNumber[] }>;
+}
+
+/**
+ * From nothing but the merchant's access token: the WhatsApp Business Accounts and numbers it can
+ * reach, so they pick a number instead of hunting for two numeric ids. An empty list means Meta
+ * didn't say which accounts the token was given; the page then asks for the ids.
+ */
+export async function discoverWhatsapp(accessToken: string, fetchImpl: FetchLike): Promise<Discovered> {
+  let info;
+  try {
+    info = await waTokenInfo(accessToken, fetchImpl);
+  } catch (err) {
+    if (err instanceof WhatsappApiError && (err.action === "reconnect" || err.httpStatus === 400 || err.httpStatus === 401 || err.httpStatus === 403)) throw tokenRejected();
+    throw err;
+  }
+  const missing = info.scopes.length ? NEEDED_SCOPES.filter((s) => !info.scopes.includes(s)) : [];
+  if (missing.length) {
+    throw new WhatsappConnectError(`This token is missing the ${missing.join(" and ")} permission${missing.length > 1 ? "s" : ""}. Generate a new one and tick both WhatsApp permissions.`, "missing_permissions");
+  }
+  const accounts = await Promise.all(
+    (info.wabaIds ?? []).slice(0, 10).map(async (id) => {
+      try {
+        const [account, numbers] = await Promise.all([waAccountInfo(id, accessToken, fetchImpl), waAccountNumbers(id, accessToken, fetchImpl)]);
+        return {
+          id,
+          name: account.name ?? null,
+          numbers: numbers.map((n) => ({ id: n.id, displayPhoneNumber: n.display_phone_number ?? null, verifiedName: n.verified_name ?? null, registered: n.platform_type === "CLOUD_API" })),
+        };
+      } catch (err) {
+        logger.warn({ err, wabaId: id }, "whatsapp discovery: could not read an account");
+        return null;
+      }
+    }),
+  );
+  return { appId: info.appId, accounts: accounts.filter((a): a is NonNullable<typeof a> => !!a) };
+}
+
+/**
+ * Before saving a manual connection: the app secret must belong to the token's app, or every
+ * webhook Meta sends would fail its signature check. Returns the app id (null when Meta wouldn't
+ * say, in which case the secret can't be checked and the webhook is set up by hand).
+ */
+export async function checkManualApp(accessToken: string, appSecret: string, fetchImpl: FetchLike): Promise<string | null> {
+  const appId = await waTokenInfo(accessToken, fetchImpl).then(
+    (i) => i.appId,
+    (err: unknown) => {
+      logger.warn({ err }, "whatsapp: couldn't read the token's app; skipping the app secret check");
+      return null;
+    },
+  );
+  if (!appId) return null;
+  try {
+    await graph(fetchImpl, `${appId}|${appSecret}`, "GET", `${appId}/subscriptions`);
+  } catch (err) {
+    if (err instanceof WhatsappApiError && err.httpStatus >= 400 && err.httpStatus < 500) {
+      throw new WhatsappConnectError("That app secret doesn't belong to the Meta app your token was made with. Copy the secret from the same app.", "wrong_app_secret");
+    }
+    throw err;
+  }
+  return appId;
+}
+
+/**
+ * Point the merchant's app's webhook at Insights. "verified": Meta completed the handshake;
+ * "in_use": the app's WhatsApp webhook already goes elsewhere (left alone); "failed": do it by hand.
+ */
+export async function setupManualWebhook(conn: WhatsappConnection, appId: string, appSecret: string, fetchImpl: FetchLike): Promise<"verified" | "in_use" | "failed"> {
+  const verifyToken = manualVerifyToken(conn);
+  if (!verifyToken) return "failed";
+  try {
+    const r = await waSetAppWebhook({ appId, appSecret }, `${env().API_URL}/webhooks/whatsapp`, verifyToken, fetchImpl);
+    if (r === "in_use") return "in_use";
+    const after = await systemDb.whatsappConnection.findUnique({ where: { id: conn.id }, select: { webhookVerifiedAt: true } });
+    return after?.webhookVerifiedAt ? "verified" : "failed";
+  } catch (err) {
+    logger.warn({ err, connectionId: conn.id }, "whatsapp: setting the app's webhook failed; the merchant can do it by hand");
+    return "failed";
+  }
 }
 
 /** Register the number with the Cloud API (Embedded Signup numbers that aren't yet). */

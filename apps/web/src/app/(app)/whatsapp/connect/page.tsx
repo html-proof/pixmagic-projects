@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Badge } from "@/components/dashboard/primitives";
 import { fmtRelative } from "@/components/dashboard/format";
 import { LoadError } from "@/components/LoadError";
@@ -140,62 +140,273 @@ function EmbeddedSignup({ platform, onConnected }: { platform: Overview["platfor
   );
 }
 
+// ---------------------------------------------------------------------------
+// The merchant's own Meta app, as three steps: paste the token, pick the number Insights found
+// with it, paste the app secret. Insights points the app's webhook at itself, so nothing has to
+// be copied back into Meta.
+// ---------------------------------------------------------------------------
+
+interface Discovered {
+  appId: string | null;
+  accounts: Array<{ id: string; name: string | null; numbers: Array<{ id: string; displayPhoneNumber: string | null; verifiedName: string | null; registered: boolean }> }>;
+}
+
+const META = {
+  createApp: "https://developers.facebook.com/apps/creation/",
+  apps: "https://developers.facebook.com/apps/",
+  systemUsers: "https://business.facebook.com/settings/system-users",
+  numbers: "https://business.facebook.com/wa/manage/phone-numbers/",
+};
+
+function Ext({ href, children }: { href: string; children: ReactNode }) {
+  return (
+    <a href={href} target="_blank" rel="noopener noreferrer" className="font-medium text-accent underline-offset-2 hover:underline">
+      {children} <span aria-hidden="true">↗</span>
+    </a>
+  );
+}
+
+function Step({ n, title, done, children }: { n: number; title: string; done?: boolean; children?: ReactNode }) {
+  return (
+    <li className="flex gap-3">
+      <span
+        aria-hidden="true"
+        className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-sm font-semibold ${done ? "bg-good/15 text-good" : "bg-accent/15 text-accent"}`}
+      >
+        {done ? "✓" : n}
+      </span>
+      <div className="min-w-0 flex-1">
+        <h3 className="font-medium">
+          <span className="sr-only">
+            Step {n}
+            {done ? " (done)" : ""}:{" "}
+          </span>
+          {title}
+        </h3>
+        {children && <div className="mt-2 space-y-3 text-sm">{children}</div>}
+      </div>
+    </li>
+  );
+}
+
 function ManualConnect({ onConnected, reconnect }: { onConnected: () => void; reconnect: boolean }) {
   const { base } = useWa();
   const toast = useToast();
-  const [form, setForm] = useState({ wabaId: "", phoneNumberId: "", accessToken: "", appSecret: "" });
-  const [busy, setBusy] = useState(false);
+  const [token, setToken] = useState("");
+  const [found, setFound] = useState<Discovered | null>(null);
+  const [pick, setPick] = useState<{ wabaId: string; phoneNumberId: string } | null>(null);
+  const [typeIds, setTypeIds] = useState(false);
+  const [ids, setIds] = useState({ wabaId: "", phoneNumberId: "" });
+  const [secret, setSecret] = useState("");
+  const [busy, setBusy] = useState<null | "find" | "connect">(null);
   const [error, setError] = useState<string | null>(null);
-  const submit = async (e: FormEvent) => {
+
+  const numbers = found?.accounts.flatMap((a) => a.numbers.map((n) => ({ ...n, wabaId: a.id, wabaName: a.name }))) ?? [];
+  const typed = /^\d{5,}$/.test(ids.wabaId) && /^\d{5,}$/.test(ids.phoneNumberId) ? ids : null;
+  const chosen = typeIds ? typed : pick;
+
+  const find = async (e: FormEvent) => {
     e.preventDefault();
-    setBusy(true);
+    setBusy("find");
     setError(null);
     try {
-      await api(`${base}/manual`, { method: "POST", body: form });
-      setForm({ wabaId: "", phoneNumberId: "", accessToken: "", appSecret: "" });
-      toast("success", "WhatsApp is connected.");
+      const r = await api<Discovered>(`${base}/manual/discover`, { method: "POST", body: { accessToken: token.trim() } });
+      const all = r.accounts.flatMap((a) => a.numbers.map((n) => ({ wabaId: a.id, phoneNumberId: n.id })));
+      setFound(r);
+      setPick(all.length === 1 ? all[0]! : null);
+      setTypeIds(all.length === 0);
+    } catch (err) {
+      setFound(null);
+      setError(actionError(err, "check the token"));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const connect = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!chosen) return;
+    setBusy("connect");
+    setError(null);
+    try {
+      const r = await api<{ webhook: "verified" | "in_use" | "failed" }>(`${base}/manual`, {
+        method: "POST",
+        body: { ...chosen, accessToken: token.trim(), appSecret: secret.trim() },
+      });
+      toast(
+        "success",
+        r.webhook === "verified"
+          ? "WhatsApp is connected. Delivery updates and replies will reach Insights automatically."
+          : "WhatsApp is connected. One more thing: set up the webhook below.",
+      );
+      setToken("");
+      setSecret("");
+      setFound(null);
       onConnected();
     } catch (err) {
       setError(actionError(err, "connect"));
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   };
-  const field = (k: keyof typeof form, label: string, help: string, secret = false) => (
-    <div>
-      <label className="label" htmlFor={`wa-${k}`}>
-        {label}
-      </label>
-      <input
-        id={`wa-${k}`}
-        className="input font-mono"
-        type={secret ? "password" : "text"}
-        inputMode={secret ? undefined : "numeric"}
-        autoComplete="off"
-        spellCheck={false}
-        required
-        value={form[k]}
-        onChange={(e) => setForm({ ...form, [k]: e.target.value })}
-      />
-      <p className="mt-1 text-xs text-muted">{help}</p>
-    </div>
-  );
+
+  const secretLink = found?.appId ? `${META.apps}${found.appId}/settings/basic/` : META.apps;
+
   return (
-    <form onSubmit={(e) => void submit(e)} className="space-y-3">
+    <div className="space-y-4">
       {error && <Alert>{error}</Alert>}
-      <div className="grid gap-3 sm:grid-cols-2">
-        {field("wabaId", "WhatsApp Business Account ID", "WhatsApp Manager → Account tools → Phone numbers, or the API Setup page of your Meta app.")}
-        {field("phoneNumberId", "Phone number ID", "The number's ID (not the phone number itself), from the same page.")}
-        {field("accessToken", "Permanent access token", "A system user token with whatsapp_business_messaging and whatsapp_business_management.", true)}
-        {field("appSecret", "App secret", "Your Meta app → App settings → Basic. Insights uses it to check that webhooks really come from Meta.", true)}
-      </div>
-      <p className="text-xs text-muted">
-        The token and secret are sent once, over HTTPS, stored encrypted on the server, and never shown again, not even to you. Insights checks them with Meta before saving.
-      </p>
-      <button type="submit" className="btn-primary" disabled={busy}>
-        {busy ? "Checking with Meta…" : reconnect ? "Replace the connection" : "Connect"}
-      </button>
-    </form>
+      <ol className="space-y-6">
+        <Step n={1} title="Copy your access token from Meta" done={!!found}>
+          <details className="rounded-lg border border-border px-3 py-2" open={!reconnect && !found}>
+            <summary className="cursor-pointer font-medium">Don&apos;t have one yet? Here&apos;s how (about 10 minutes)</summary>
+            <ol className="mt-2 list-decimal space-y-2 pl-5 text-muted">
+              <li>
+                <span className="text-text">Create a Meta app.</span> Choose <em>Connect with customers through WhatsApp</em> and your business. <Ext href={META.createApp}>Create an app</Ext>
+              </li>
+              <li>
+                <span className="text-text">Add your business number</span> in the app under WhatsApp → API Setup, and enter the code Meta texts you. Use a number that isn&apos;t
+                signed in to the WhatsApp app on a phone. <Ext href={META.numbers}>WhatsApp Manager</Ext>
+              </li>
+              <li>
+                <span className="text-text">Make a token that doesn&apos;t expire.</span> In Business settings → System users, add a user (Admin) and give it your app and your
+                WhatsApp account. Then <em>Generate token</em>: pick your app, choose <em>Never</em> for expiry, tick <code>whatsapp_business_messaging</code> and{" "}
+                <code>whatsapp_business_management</code>, and copy it. <Ext href={META.systemUsers}>System users</Ext>
+              </li>
+            </ol>
+          </details>
+          <form onSubmit={(e) => void find(e)} className="flex flex-wrap items-end gap-2">
+            <div className="min-w-0 flex-1 basis-64">
+              <label className="label" htmlFor="wa-token">
+                Access token
+              </label>
+              <input
+                id="wa-token"
+                className="input font-mono"
+                type="password"
+                autoComplete="off"
+                spellCheck={false}
+                placeholder="EAA…"
+                required
+                minLength={20}
+                value={token}
+                onChange={(e) => {
+                  setToken(e.target.value);
+                  setFound(null);
+                  setPick(null);
+                }}
+              />
+            </div>
+            <button type="submit" className="btn-primary" disabled={busy !== null || token.trim().length < 20}>
+              {busy === "find" ? "Looking…" : found ? "Look again" : "Find my numbers"}
+            </button>
+          </form>
+        </Step>
+
+        <Step n={2} title="Choose the number customers will see" done={!!chosen}>
+          {!found ? (
+            <p className="text-muted">Your WhatsApp numbers appear here once Meta accepts the token.</p>
+          ) : (
+            <>
+              {numbers.length > 0 && !typeIds && (
+                <fieldset className="space-y-2">
+                  <legend className="sr-only">Your WhatsApp numbers</legend>
+                  {numbers.map((n) => {
+                    const on = pick?.phoneNumberId === n.id;
+                    return (
+                      <label
+                        key={n.id}
+                        className={`flex cursor-pointer items-center gap-3 rounded-lg border px-3 py-2 transition ${on ? "border-accent bg-accent/5" : "border-border hover:border-accent/50"}`}
+                      >
+                        <input type="radio" name="wa-number" className="accent-[#25D366]" checked={on} onChange={() => setPick({ wabaId: n.wabaId, phoneNumberId: n.id })} />
+                        <span className="min-w-0 flex-1">
+                          <span className="block font-medium">{n.displayPhoneNumber ?? "A number without a display name"}</span>
+                          <span className="block text-xs text-muted">
+                            {n.verifiedName ?? "No display name yet"}
+                            {n.wabaName && n.wabaName !== n.verifiedName ? ` · ${n.wabaName}` : ""}
+                          </span>
+                        </span>
+                        {!n.registered && <Badge tone="warn">Needs a PIN next</Badge>}
+                      </label>
+                    );
+                  })}
+                </fieldset>
+              )}
+              {numbers.length === 0 && (
+                <p className="text-muted">
+                  Meta accepted the token but didn&apos;t list a number for it. In System users, check the user has your WhatsApp account under <em>Assigned assets</em>, then
+                  press Look again, or enter the IDs yourself.
+                </p>
+              )}
+              {typeIds ? (
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <label className="label" htmlFor="wa-waba">
+                      WhatsApp Business Account ID
+                    </label>
+                    <input
+                      id="wa-waba"
+                      className="input font-mono"
+                      inputMode="numeric"
+                      autoComplete="off"
+                      value={ids.wabaId}
+                      onChange={(e) => setIds({ ...ids, wabaId: e.target.value.replace(/\D/g, "") })}
+                    />
+                  </div>
+                  <div>
+                    <label className="label" htmlFor="wa-phone">
+                      Phone number ID
+                    </label>
+                    <input
+                      id="wa-phone"
+                      className="input font-mono"
+                      inputMode="numeric"
+                      autoComplete="off"
+                      value={ids.phoneNumberId}
+                      onChange={(e) => setIds({ ...ids, phoneNumberId: e.target.value.replace(/\D/g, "") })}
+                    />
+                  </div>
+                  <p className="text-xs text-muted sm:col-span-2">Both are on your app&apos;s WhatsApp → API Setup page. The phone number ID is a long number, not the phone number itself.</p>
+                </div>
+              ) : (
+                <button type="button" className="text-xs text-muted underline underline-offset-2 hover:text-text" onClick={() => setTypeIds(true)}>
+                  My number isn&apos;t listed: enter the IDs instead
+                </button>
+              )}
+            </>
+          )}
+        </Step>
+
+        <Step n={3} title="Paste your app secret">
+          <form onSubmit={(e) => void connect(e)} className="space-y-3">
+            <p className="text-muted">
+              <Ext href={secretLink}>{found?.appId ? "Open your app's settings" : "Open your Meta apps"}</Ext>, click <em>Show</em> next to <em>App secret</em>, and copy it. It lets
+              Insights check that updates really come from Meta.
+            </p>
+            <div className="max-w-md">
+              <label className="label" htmlFor="wa-secret">
+                App secret
+              </label>
+              <input
+                id="wa-secret"
+                className="input font-mono"
+                type="password"
+                autoComplete="off"
+                spellCheck={false}
+                required
+                pattern="[A-Fa-f0-9]{32}"
+                title="32 letters and numbers"
+                value={secret}
+                onChange={(e) => setSecret(e.target.value)}
+              />
+            </div>
+            <button type="submit" className="btn-primary" disabled={busy !== null || !found || !chosen || !/^[a-f0-9]{32}$/i.test(secret.trim())}>
+              {busy === "connect" ? "Connecting…" : reconnect ? "Replace the connection" : "Connect WhatsApp"}
+            </button>
+            <p className="text-xs text-muted">Your token and secret are stored encrypted and never shown again, not even to you.</p>
+          </form>
+        </Step>
+      </ol>
+    </div>
   );
 }
 
@@ -311,7 +522,9 @@ export default function ConnectWhatsapp() {
             Meta tells Insights when messages are delivered and read, and when a customer replies STOP. Without it, marketing campaigns stay locked, because opt-outs couldn&apos;t
             reach us.
           </p>
-          {c.mode === "manual" ? (
+          {c.mode === "manual" && c.webhookVerifiedAt ? (
+            <p className="mt-2 text-sm text-muted">Set up: Meta sends updates for this number to Insights. Nothing to do.</p>
+          ) : c.mode === "manual" ? (
             <div className="mt-3 space-y-2 text-sm">
               <p>In your Meta app: WhatsApp → Configuration → Webhook → Edit, enter these two values, then subscribe to the <strong>messages</strong>, <strong>message_template_status_update</strong> and <strong>user_preferences</strong> fields.</p>
               <div><p className="text-xs text-muted">Callback URL</p><Copy value={data.webhookUrl} label="Callback URL" /></div>
@@ -330,28 +543,27 @@ export default function ConnectWhatsapp() {
       {manage && (
         <section className="card animate-rise" aria-labelledby="conn-h">
           <h2 id="conn-h" className="font-semibold">{c ? "Reconnect or change number" : "Connect your WhatsApp Business number"}</h2>
+          {!c && !data.platform.embeddedSignup && <p className="mt-1 text-sm text-muted">Three steps. You need a Meta Business account; everything else is explained as you go.</p>}
           {data.platform.embeddedSignup ? (
-            <div className="mt-3 space-y-2">
-              <p className="text-sm text-muted">
-                Sign in with Facebook, choose (or create) your Meta business and WhatsApp Business Account, and verify your number. It takes a few minutes.
-              </p>
-              <EmbeddedSignup platform={data.platform} onConnected={reloaded} />
-            </div>
+            <>
+              <div className="mt-3 space-y-2">
+                <p className="text-sm text-muted">
+                  Sign in with Facebook, choose (or create) your Meta business and WhatsApp Business Account, and verify your number. It takes a few minutes.
+                </p>
+                <EmbeddedSignup platform={data.platform} onConnected={reloaded} />
+              </div>
+              <div className="mt-4 border-t border-border pt-4">
+                <button type="button" className="text-sm font-medium text-accent underline-offset-2 hover:underline" aria-expanded={showManual} onClick={() => setShowManual((s) => !s)}>
+                  Use your own Meta app instead
+                </button>
+                {showManual && <div className="mt-3"><ManualConnect onConnected={reloaded} reconnect={!!c} /></div>}
+              </div>
+            </>
           ) : (
-            <div className="mt-3 rounded-lg border border-dashed border-border px-3 py-3 text-sm text-muted">
-              <p className="font-medium text-text">Meta&apos;s one-click sign-up isn&apos;t set up on this Insights server yet.</p>
-              <p className="mt-1">
-                It needs Insights&apos; Meta app (with the WhatsApp product and an Embedded Signup configuration) and its keys on the server. The steps are in docs/whatsapp.md.
-                Meanwhile, you can connect with your own Meta app below.
-              </p>
+            <div className="mt-4">
+              <ManualConnect onConnected={reloaded} reconnect={!!c} />
             </div>
           )}
-          <div className="mt-4 border-t border-border pt-4">
-            <button type="button" className="text-sm font-medium text-accent underline-offset-2 hover:underline" aria-expanded={showManual || !data.platform.embeddedSignup} onClick={() => setShowManual((s) => !s)}>
-              {showManual || !data.platform.embeddedSignup ? "Use your own Meta app and access token" : "Use your own Meta app instead"}
-            </button>
-            {(showManual || !data.platform.embeddedSignup) && <div className="mt-3"><ManualConnect onConnected={reloaded} reconnect={!!c} /></div>}
-          </div>
         </section>
       )}
 

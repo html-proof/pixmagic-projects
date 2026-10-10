@@ -148,6 +148,75 @@ export async function waAccountPhoneIds(wabaId: string, token: string, fetchImpl
   return (r.data ?? []).map((p) => p.id);
 }
 
+export interface WaTokenInfo {
+  /** The Meta app the token was made for. */
+  appId: string | null;
+  scopes: string[];
+  /** The WhatsApp Business Accounts the token was given; null when Meta doesn't list them. */
+  wabaIds: string[] | null;
+}
+
+/** What a token can reach: its app, its permissions and the WhatsApp accounts it was given. */
+export async function waTokenInfo(token: string, fetchImpl: FetchLike): Promise<WaTokenInfo> {
+  const r = await graph<{ data?: { app_id?: string; is_valid?: boolean; scopes?: string[]; granular_scopes?: Array<{ scope?: string; target_ids?: string[] }> } }>(fetchImpl, token, "GET", "debug_token", {
+    query: { input_token: token },
+  });
+  const d = r.data ?? {};
+  if (d.is_valid === false) throw new WhatsappApiError(401, 190, "OAuthException", "The access token isn't valid");
+  const targets = (d.granular_scopes ?? []).filter((g) => g.scope === "whatsapp_business_management" || g.scope === "whatsapp_business_messaging").flatMap((g) => g.target_ids ?? []);
+  return { appId: d.app_id ?? null, scopes: d.scopes ?? [], wabaIds: targets.length ? [...new Set(targets)] : null };
+}
+
+export interface WaNumber {
+  id: string;
+  display_phone_number?: string;
+  verified_name?: string;
+  platform_type?: string;
+  quality_rating?: string;
+}
+
+/** The phone numbers in an account, with what a person needs to recognise them. */
+export async function waAccountNumbers(wabaId: string, token: string, fetchImpl: FetchLike): Promise<WaNumber[]> {
+  const r = await graph<{ data?: WaNumber[] }>(fetchImpl, token, "GET", `${wabaId}/phone_numbers`, {
+    query: { fields: "id,display_phone_number,verified_name,platform_type,quality_rating", limit: "100" },
+  });
+  return r.data ?? [];
+}
+
+/** The webhook fields Insights reads (webhook.ts). */
+export const WA_WEBHOOK_FIELDS = [
+  "messages",
+  "user_preferences",
+  "message_template_status_update",
+  "message_template_quality_update",
+  "template_category_update",
+  "phone_number_quality_update",
+  "account_update",
+];
+
+/**
+ * Point a merchant's own Meta app's WhatsApp webhook at Insights, so they don't have to paste a
+ * callback URL and verify token into Meta's dashboard. Meta checks the URL straight away (the
+ * verify-token handshake), so the connection has to be saved first. An app whose WhatsApp webhook
+ * already goes somewhere else is left alone ("in_use"): it may be feeding another tool.
+ * Throws when Meta refuses the app id and secret (a secret from a different app, say).
+ */
+export async function waSetAppWebhook(
+  app: { appId: string; appSecret: string },
+  callbackUrl: string,
+  verifyToken: string,
+  fetchImpl: FetchLike,
+): Promise<"set" | "in_use"> {
+  const appToken = `${app.appId}|${app.appSecret}`;
+  const current = await graph<{ data?: Array<{ object?: string; callback_url?: string; active?: boolean }> }>(fetchImpl, appToken, "GET", `${app.appId}/subscriptions`);
+  const wa = (current.data ?? []).find((s) => s.object === "whatsapp_business_account");
+  if (wa?.active && wa.callback_url && wa.callback_url !== callbackUrl) return "in_use";
+  await graph(fetchImpl, appToken, "POST", `${app.appId}/subscriptions`, {
+    query: { object: "whatsapp_business_account", callback_url: callbackUrl, verify_token: verifyToken, fields: WA_WEBHOOK_FIELDS.join(",") },
+  });
+  return "set";
+}
+
 /** Have the account's webhooks (messages, statuses, template reviews) sent to the token's app. */
 export async function waSubscribeApp(wabaId: string, token: string, fetchImpl: FetchLike): Promise<void> {
   await graph(fetchImpl, token, "POST", `${wabaId}/subscribed_apps`);

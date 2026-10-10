@@ -117,6 +117,102 @@ describe("connecting WhatsApp", () => {
     expect(await systemDb.whatsappConnection.count()).toBe(0);
   });
 
+  /**
+   * Meta as the guided flow sees it: the token's app and accounts (debug_token), the account's
+   * numbers, and the app's webhook settings, whose POST runs the verify handshake against
+   * Insights the way Meta does.
+   */
+  function guidedMeta(opts: { scopes?: string[]; otherWebhook?: string; listAccounts?: boolean } = {}) {
+    const subscribed: Array<Record<string, string>> = [];
+    const fetch: FetchLike = async (input, init) => {
+      const u = new URL(String(input));
+      const auth = (init?.headers as Record<string, string> | undefined)?.authorization;
+      if (u.pathname.endsWith("/777/subscriptions")) {
+        if (auth !== "Bearer 777|0123456789abcdef0123456789abcdef") return json({ error: { code: 101, message: "Error validating client secret.", type: "OAuthException" } }, 400);
+        if (init?.method === "GET") {
+          return json({ data: opts.otherWebhook ? [{ object: "whatsapp_business_account", callback_url: opts.otherWebhook, active: true }] : [] });
+        }
+        const q = Object.fromEntries(u.searchParams);
+        const hs = await ctx.app.inject({ method: "GET", url: `/webhooks/whatsapp?hub.mode=subscribe&hub.verify_token=${encodeURIComponent(q.verify_token ?? "")}&hub.challenge=meta-check` });
+        if (hs.body !== "meta-check") return json({ error: { code: 2200, message: "Callback verification failed", type: "OAuthException" } }, 400);
+        subscribed.push(q);
+        return json({ success: true });
+      }
+      if (auth !== "Bearer EAAG_valid_system_user_token_0123456789") return json({ error: { code: 190, message: "Invalid OAuth access token", type: "OAuthException" } }, 401);
+      if (u.pathname.endsWith("/debug_token")) {
+        const scopes = opts.scopes ?? ["whatsapp_business_management", "whatsapp_business_messaging"];
+        return json({
+          data: { app_id: "777", is_valid: true, scopes, granular_scopes: opts.listAccounts === false ? [] : scopes.map((scope) => ({ scope, target_ids: ["1111111111"] })) },
+        });
+      }
+      if (u.pathname.endsWith("/1111111111/phone_numbers")) {
+        return json({ data: [{ id: "2222222222", display_phone_number: "+91 98765 00000", verified_name: "Green Leaf", platform_type: "CLOUD_API" }] });
+      }
+      return graph(input, init);
+    };
+    return { fetch, subscribed };
+  }
+
+  it("finds the numbers a token reaches, from the token alone", async () => {
+    const o = await owner();
+    ctx.setFetch(guidedMeta().fetch);
+    const res = await ctx.app.inject({ method: "POST", url: `${o.base}/manual/discover`, headers: o.headers, payload: { accessToken: "EAAG_valid_system_user_token_0123456789" } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      appId: "777",
+      accounts: [{ id: "1111111111", name: "Green Leaf WABA", numbers: [{ id: "2222222222", displayPhoneNumber: "+91 98765 00000", verifiedName: "Green Leaf", registered: true }] }],
+    });
+    expect(await systemDb.whatsappConnection.count()).toBe(0);
+
+    const bad = await ctx.app.inject({ method: "POST", url: `${o.base}/manual/discover`, headers: o.headers, payload: { accessToken: "EAAGwrong_token_value_000000000000" } });
+    expect(bad.json().error).toBe("token_rejected");
+
+    ctx.setFetch(guidedMeta({ scopes: ["whatsapp_business_management"] }).fetch);
+    const scoped = await ctx.app.inject({ method: "POST", url: `${o.base}/manual/discover`, headers: o.headers, payload: { accessToken: "EAAG_valid_system_user_token_0123456789" } });
+    expect(scoped.json()).toMatchObject({ error: "missing_permissions", message: expect.stringContaining("whatsapp_business_messaging") });
+
+    // Meta doesn't always say which accounts a token was given: the page then asks for the ids.
+    ctx.setFetch(guidedMeta({ listAccounts: false }).fetch);
+    const unlisted = await ctx.app.inject({ method: "POST", url: `${o.base}/manual/discover`, headers: o.headers, payload: { accessToken: "EAAG_valid_system_user_token_0123456789" } });
+    expect(unlisted.json()).toEqual({ appId: "777", accounts: [] });
+  });
+
+  it("points the merchant's app's webhook at Insights, so there's nothing to paste into Meta", async () => {
+    const o = await owner();
+    const meta = guidedMeta();
+    ctx.setFetch(meta.fetch);
+    const res = await ctx.app.inject({
+      method: "POST",
+      url: `${o.base}/manual`,
+      headers: o.headers,
+      payload: { wabaId: "1111111111", phoneNumberId: "2222222222", accessToken: "EAAG_valid_system_user_token_0123456789", appSecret: "0123456789abcdef0123456789abcdef" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().webhook).toBe("verified");
+    expect(res.json().connection.webhookVerifiedAt).not.toBeNull();
+    expect(meta.subscribed).toHaveLength(1);
+    expect(meta.subscribed[0]).toMatchObject({ object: "whatsapp_business_account", callback_url: "http://localhost:4000/webhooks/whatsapp" });
+    expect(meta.subscribed[0]!.fields!.split(",")).toEqual(expect.arrayContaining(["messages", "user_preferences", "message_template_status_update"]));
+  });
+
+  it("refuses an app secret from a different app, and leaves a webhook that goes elsewhere alone", async () => {
+    const o = await owner();
+    ctx.setFetch(guidedMeta().fetch);
+    const payload = { wabaId: "1111111111", phoneNumberId: "2222222222", accessToken: "EAAG_valid_system_user_token_0123456789" };
+    const wrong = await ctx.app.inject({ method: "POST", url: `${o.base}/manual`, headers: o.headers, payload: { ...payload, appSecret: "ffffffffffffffffffffffffffffffff" } });
+    expect(wrong.statusCode).toBe(400);
+    expect(wrong.json().error).toBe("wrong_app_secret");
+    expect(await systemDb.whatsappConnection.count()).toBe(0);
+
+    const meta = guidedMeta({ otherWebhook: "https://another-tool.example/hook" });
+    ctx.setFetch(meta.fetch);
+    const kept = await ctx.app.inject({ method: "POST", url: `${o.base}/manual`, headers: o.headers, payload: { ...payload, appSecret: "0123456789abcdef0123456789abcdef" } });
+    expect(kept.statusCode).toBe(200);
+    expect(kept.json().webhook).toBe("in_use");
+    expect(meta.subscribed).toHaveLength(0);
+    expect(kept.json().connection.verifyToken).toMatch(/^wa_vt_/);
+  });
+
   it("says Embedded Signup isn't set up rather than pretending", async () => {
     ctx.setEnv({ WHATSAPP_CONFIG_ID: "", META_APP_ID: "", WHATSAPP_APP_ID: "" });
     const o = await owner();

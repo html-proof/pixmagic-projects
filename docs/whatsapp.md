@@ -204,9 +204,18 @@ evaluates a rule against a recent order without doing anything (and can send the
 7. Each merchant adds a **payment method** in WhatsApp Manager and gets their **display name** approved; Meta's
    messaging limit grows with quality.
 
-**Without an Insights Meta app** a merchant can still connect their own: a system-user token (permanent, with the two
-permissions above, assigned to the WABA), the WABA id, the phone number id and their app secret, entered on
-Connect WhatsApp. They then point *their* app's webhook at the same callback URL with the verify token Insights shows.
+**Without an Insights Meta app** a merchant can still connect their own, in three steps on Connect WhatsApp:
+
+1. Paste a system-user token (permanent, with the two permissions above, assigned to the WABA). Insights asks Meta
+   (`debug_token`) which app it belongs to and which WABAs it was given, and lists their numbers
+   (`POST …/whatsapp/manual/discover`; nothing is saved).
+2. Pick the number. If Meta doesn't list the token's accounts, the page asks for the WABA id and phone number id.
+3. Paste the app secret (the page links straight to that app's Basic settings). Insights checks it belongs to the
+   token's app (an app access token call), saves the connection, then points the app's WhatsApp webhook at itself
+   (`POST /{app-id}/subscriptions` with the connection's own verify token; Meta runs the handshake there and then).
+
+An app whose WhatsApp webhook already goes to another URL is left alone, and the page shows the callback URL and
+verify token to set by hand, as it does if Meta refuses the subscription.
 
 ### 2. Server (owner)
 
