@@ -18,6 +18,11 @@ appears only for a store that already has Google Ads accounts connected. To offe
 `OFFERED` in `apps/web/src/app/(app)/settings/ads/page.tsx` and to `offered` in
 `apps/web/src/components/dashboard/advertising.tsx`.
 
+**Current Google Cloud state (project insights-511119, 2026-10-10):**
+- The app is published (**In production**).
+- Data Access lists only `adsense.readonly`, which is non-sensitive, so no verification is needed and merchants see no "unverified app" screen.
+- The Google Ads scope `adwords` was removed while Google Ads is hidden. To bring Google Ads back, re-add `adwords` under Data Access. It's sensitive, so Google will then require verification, and until it's approved users see the unverified-app warning (capped at 100 users).
+
 **The integrations page** is for management only:
 - each platform's status (Connected, Syncing, Needs reconnecting, Sync problem, Not connected, Not set up);
 - account details and last sync;
