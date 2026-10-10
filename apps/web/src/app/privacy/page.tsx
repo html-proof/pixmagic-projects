@@ -111,7 +111,7 @@ export default function PrivacyPage() {
         </p>
       </Section>
 
-      <Section title="Access tokens">
+      <Section title="Access tokens" id="access-tokens">
         <p>
           The access token Shopify issues for your store is encrypted with AES-256-GCM before it is written down, with
           each ciphertext cryptographically bound to the store it belongs to. Tokens are never returned by our API, are
@@ -177,9 +177,10 @@ export default function PrivacyPage() {
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+/** `id` makes a section linkable (the homepage footer's "Security" link opens #access-tokens). */
+function Section({ title, id, children }: { title: string; id?: string; children: React.ReactNode }) {
   return (
-    <section className="mt-8">
+    <section id={id} className="mt-8 scroll-mt-6">
       <h2 className="text-lg font-medium">{title}</h2>
       <div className="mt-2 space-y-3 text-sm [&_code]:text-xs [&_li]:ml-4 [&_li]:list-disc [&_ul]:space-y-1">
         {children}

@@ -47,10 +47,21 @@ test("unauthenticated users are sent to sign in", async ({ page }) => {
   await expect(page.getByRole("link", { name: "Continue with Shopify" })).toHaveAttribute("href", "/start");
 });
 
+test("the homepage introduces Insight and offers only Log in and Sign up", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByRole("heading", { level: 1, name: /Your store is talking/ })).toBeVisible();
+  const nav = page.getByRole("navigation", { name: "Main" });
+  await expect(nav.getByRole("link", { name: "Log in" })).toHaveAttribute("href", "/login");
+  await expect(nav.getByRole("link", { name: "Sign up" })).toHaveAttribute("href", "/signup");
+  // The landing page sells; the auth pages hold the forms.
+  await expect(page.locator("input, textarea, select")).toHaveCount(0);
+  await nav.getByRole("link", { name: "Sign up" }).click();
+  await expect(page).toHaveURL(/\/signup/);
+});
+
 test("new visitors start with email, then Continue with Shopify (managed install)", async ({ page, context }) => {
   await stubShopify(page);
-  await page.goto("/");
-  await expect(page).toHaveURL(/\/start/);
+  await page.goto("/start");
   await expect(page.getByRole("heading", { name: /numbers in minutes/ })).toBeVisible();
 
   // Plain-language validation before anything is sent.

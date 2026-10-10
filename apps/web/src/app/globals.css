@@ -289,3 +289,195 @@ body {
 html {
   scroll-behavior: smooth;
 }
+
+/* ---- Landing page (/) ------------------------------------------------------------------------
+ * The public homepage has its own always-dark identity, separate from the app's light/dark
+ * palette above. Every token is prefixed `lp-` so nothing here leaks into the dashboard; the
+ * Tailwind colours below give components `bg-lp-surface`, `text-lp-muted`, `border-lp-line`…
+ */
+:root {
+  --lp-bg-main: #080a0d;
+  --lp-bg-secondary: #0d1015;
+  --lp-bg-elevated: #12161c;
+  --lp-surface: #151a21;
+  --lp-surface-hover: #1a2029;
+  --lp-text-primary: #f7f9fc;
+  --lp-text-secondary: #a8b0bc;
+  /* A touch lighter than #6F7885 so small muted text still clears 4.5:1 on --lp-surface. */
+  --lp-text-muted: #7d8693;
+  --lp-line: rgb(255 255 255 / 0.08);
+  --lp-line-strong: rgb(255 255 255 / 0.14);
+  --lp-primary: #8c7bff;
+  --lp-primary-bright: #a798ff;
+  --lp-blue: #5ea6ff;
+  --lp-cyan: #65d8d0;
+  --lp-positive: #58d39b;
+  --lp-warning: #f4b85a;
+  --lp-negative: #ff7272;
+  --lp-card-shadow: 0 30px 80px rgb(0 0 0 / 0.35);
+  --lp-radius-sm: 10px;
+  --lp-radius-md: 16px;
+  --lp-radius-lg: 24px;
+  --lp-radius-xl: 34px;
+  --lp-ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --lp-gradient: linear-gradient(120deg, var(--lp-primary), var(--lp-blue) 55%, var(--lp-cyan));
+}
+
+@theme inline {
+  --color-lp-bg: var(--lp-bg-main);
+  --color-lp-bg-2: var(--lp-bg-secondary);
+  --color-lp-elevated: var(--lp-bg-elevated);
+  --color-lp-surface: var(--lp-surface);
+  --color-lp-surface-hover: var(--lp-surface-hover);
+  --color-lp-text: var(--lp-text-primary);
+  --color-lp-text-2: var(--lp-text-secondary);
+  --color-lp-muted: var(--lp-text-muted);
+  --color-lp-line: var(--lp-line);
+  --color-lp-line-strong: var(--lp-line-strong);
+  --color-lp-violet: var(--lp-primary);
+  --color-lp-violet-bright: var(--lp-primary-bright);
+  --color-lp-blue: var(--lp-blue);
+  --color-lp-cyan: var(--lp-cyan);
+  --color-lp-positive: var(--lp-positive);
+  --color-lp-warning: var(--lp-warning);
+  --color-lp-negative: var(--lp-negative);
+  --ease-lp: cubic-bezier(0.16, 1, 0.3, 1);
+  --font-lp: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-lp-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* Root of the landing page: dark canvas, Geist, no horizontal scroll from wide visuals. */
+@utility lp-root {
+  background: var(--lp-bg-main);
+  color: var(--lp-text-primary);
+  /* Not var(--font-lp): `@theme inline` values are only inlined into utilities, never emitted. */
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  font-feature-settings: "ss01", "cv11";
+  overflow-x: clip;
+  -webkit-font-smoothing: antialiased;
+  ::selection {
+    background: color-mix(in oklab, var(--lp-primary) 45%, transparent);
+    color: var(--lp-text-primary);
+  }
+}
+/* Hero-scale headline. */
+@utility lp-display {
+  font-size: clamp(64px, 9vw, 150px);
+  font-weight: 600;
+  letter-spacing: -0.06em;
+  line-height: 0.92;
+  @media (max-width: 768px) {
+    font-size: clamp(48px, 15vw, 78px);
+  }
+}
+/* Section headline. */
+@utility lp-heading {
+  font-size: clamp(42px, 6vw, 92px);
+  font-weight: 550;
+  letter-spacing: -0.045em;
+  line-height: 0.96;
+  @media (max-width: 768px) {
+    font-size: clamp(36px, 10.5vw, 56px);
+  }
+}
+/* Smaller headline for cards and sub-scenes. */
+@utility lp-title {
+  font-size: clamp(26px, 2.6vw, 40px);
+  font-weight: 550;
+  letter-spacing: -0.035em;
+  line-height: 1.02;
+}
+/* Supporting copy. */
+@utility lp-lead {
+  font-size: clamp(17px, 1.5vw, 21px);
+  line-height: 1.55;
+  color: var(--lp-text-secondary);
+}
+/* Small uppercase mono label: section numbers, event names, axis captions. */
+@utility lp-eyebrow {
+  font-family: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--lp-text-muted);
+}
+/* Gradient text for the one or two words per scene that deserve it. */
+@utility lp-gradient-text {
+  background: var(--lp-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+/* Technical grid. Use on selected areas only, ideally with a mask so it fades out. */
+@utility lp-grid {
+  background-image:
+    linear-gradient(rgb(255 255 255 / 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(255 255 255 / 0.025) 1px, transparent 1px);
+  background-size: 48px 48px;
+}
+/* Standard card surface. */
+@utility lp-card {
+  background: linear-gradient(180deg, color-mix(in oklab, var(--lp-surface) 98%, white 2%), var(--lp-bg-elevated));
+  border: 1px solid var(--lp-line);
+  border-radius: 28px;
+  box-shadow: var(--lp-card-shadow);
+}
+/* Primary call to action (Sign up / Start with Insight). */
+@utility lp-btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border-radius: 12px;
+  background: var(--lp-primary);
+  color: #0b0a1a;
+  font-weight: 600;
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 0.12) inset, 0 8px 30px -8px color-mix(in oklab, var(--lp-primary) 75%, transparent);
+  transition: background-color 0.3s var(--lp-ease), box-shadow 0.3s var(--lp-ease), transform 0.3s var(--lp-ease);
+  &:hover {
+    background: var(--lp-primary-bright);
+    box-shadow: 0 0 0 1px rgb(255 255 255 / 0.18) inset, 0 10px 40px -6px color-mix(in oklab, var(--lp-primary) 90%, transparent);
+  }
+}
+/* Quiet secondary action (Log in). */
+@utility lp-btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border-radius: 12px;
+  color: var(--lp-text-primary);
+  font-weight: 500;
+  transition: background-color 0.3s var(--lp-ease);
+  &:hover {
+    background: rgb(255 255 255 / 0.06);
+  }
+}
+/* Visible keyboard focus on the dark canvas. */
+@utility lp-focus {
+  &:focus-visible {
+    outline: 2px solid var(--lp-primary-bright);
+    outline-offset: 3px;
+  }
+}
+
+/*
+ * People who ask for less motion never see the intro, even before JS runs, and the nav and hero
+ * headline that would otherwise wait for it (`lp-enter`) are shown straight away in the static
+ * HTML instead of a blank first screen until hydration swaps in the static scenes.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .lp-intro {
+    display: none !important;
+  }
+  .lp-enter {
+    opacity: 1 !important;
+    transform: none !important;
+  }
+}
+/* The custom cursor replaces the system one only while it is active (fine pointers). */
+html.lp-cursor-on,
+html.lp-cursor-on * {
+  cursor: none !important;
+}
