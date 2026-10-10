@@ -6,9 +6,10 @@ import { EASE, easeInOut, easeOut, lerp, segment } from "@/lib/motion";
 import { CORE_STOPS, MARK, ORBIT_POINTS, RING_PATH } from "../shared/InsightMark";
 
 /**
- * Every stage reads one master clock `t` (seconds), so the whole build is a pure function of
- * time: skipping is just running the clock to `handoff` faster, and the server HTML is `t = 0`
- * (a black screen with one point of light).
+ * Every stage reads one master clock `t` (design seconds), so the whole build is a pure function
+ * of time: playing it faster or skipping it is just running the clock to `handoff` quicker, and
+ * the server HTML is `t = 0` (a black screen with one point of light). The clock runs faster than
+ * real time (see introPace), so these 2.3 design seconds play in about 1.25 s.
  */
 const T = {
   core: [0.1, 0.6],
@@ -22,23 +23,26 @@ const T = {
   tagIn: [1.28, 1.58],
   tagOut: [2.02, 2.22],
   handoff: 2.3,
-  /** After the flight starts: when the page behind starts to appear, so the mark clears the hero first. */
-  reveal: 0.16,
+  /** Real seconds after the flight starts: when the page behind starts to appear, so the mark clears the hero first. */
+  reveal: 0.1,
 } as const;
 
 /**
- * The static HTML shows the opening's first frame (one point of light) from the first paint, and
- * the build starts when the script has loaded. On a slow phone that can be a couple of seconds
- * later, so the build then plays faster: hand-off at most about INTRO_BUDGET seconds after the
- * first paint, never more than MAX_PACE times the designed speed. Fast devices see it as designed.
+ * The opening holds the hero (and its headline, the page's largest paint) back, so it is short:
+ * the build takes BUILD seconds. The static HTML already shows its first frame (one point of light)
+ * from the first paint, and the build starts when the script has loaded, which on a slow phone can
+ * be a second or more later; it then plays faster still, so the hand-off comes at most about
+ * INTRO_BUDGET seconds after the first paint (but the build never takes less than T.handoff / MAX_PACE).
  */
-const INTRO_BUDGET = 3.2;
-const MAX_PACE = 1.6;
+const BUILD = 1.25;
+const INTRO_BUDGET = 1.8;
+const MAX_PACE = 3.2;
 
+/** Design seconds per real second for the build. */
 function introPace() {
   const paint = performance.getEntriesByName("first-contentful-paint")[0]?.startTime ?? 0;
   const left = INTRO_BUDGET - Math.max(0, performance.now() - paint) / 1000;
-  return Math.min(MAX_PACE, Math.max(1, T.handoff / Math.max(0.01, left)));
+  return Math.min(MAX_PACE, Math.max(T.handoff / BUILD, T.handoff / Math.max(0.01, left)));
 }
 
 /**
@@ -46,7 +50,7 @@ function introPace() {
  * without its long overdamped tail (which crept for half a second and still snapped at the swap).
  * Rest thresholds are tight enough that it stops well under a pixel from the slot.
  */
-const FLIGHT = { type: "spring", stiffness: 64, damping: 16, mass: 1, restDelta: 0.00012, restSpeed: 0.002 } as const;
+const FLIGHT = { type: "spring", stiffness: 100, damping: 20, mass: 1, restDelta: 0.00012, restSpeed: 0.002 } as const;
 
 /** Ease-out (fast first) and ease-in (late) shaping for the wordmark's path round the mark. */
 const early = (p: number) => 1 - (1 - p) ** 3;
@@ -68,7 +72,7 @@ type Stoppable = { stop: () => void };
  * away on its own after a few seconds. The effect cancels it as soon as the intro takes over.
  */
 const FALLBACK_CSS =
-  "@keyframes lp-intro-fallback{to{opacity:0;visibility:hidden}}.lp-intro[data-fallback]{animation:lp-intro-fallback .6s ease 6s forwards}";
+  "@keyframes lp-intro-fallback{to{opacity:0;visibility:hidden}}.lp-intro[data-fallback]{animation:lp-intro-fallback .5s ease 3.5s forwards}";
 
 /** Vertical offset of an element's nav header right now, so we can aim at where it will rest. */
 function headerShift(el: Element) {
@@ -219,7 +223,7 @@ export function IntroAnimation({ onHandoff, onDone }: { onHandoff: () => void; o
       const reveal = () => {
         if (disposed) return;
         callHandoff();
-        track(animate(backdropOpacity, 0, { duration: 0.85, ease: [0.4, 0, 0.2, 1] }));
+        track(animate(backdropOpacity, 0, { duration: 0.6, ease: [0.4, 0, 0.2, 1] }));
       };
 
       if (!markEl || !wordEl || !before || !navMark || !navWord) {
@@ -274,9 +278,10 @@ export function IntroAnimation({ onHandoff, onDone }: { onHandoff: () => void; o
       skipping = true;
       clock?.stop();
       if (t.get() < T.tagIn[0]) tagGate.set(0);
-      const remaining = T.handoff - t.get();
+      // About half the time the build had left at its normal pace, so skipping is always quicker.
+      const remaining = (T.handoff - t.get()) / (T.handoff / BUILD);
       clock = animate(t, T.handoff, {
-        duration: Math.min(0.5, Math.max(0.28, remaining * 0.3)),
+        duration: Math.min(0.3, Math.max(0.12, remaining * 0.5)),
         ease: EASE,
         onComplete: handoff,
       });

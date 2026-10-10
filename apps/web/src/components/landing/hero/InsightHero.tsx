@@ -64,7 +64,7 @@ function useStatement(progress: MotionValue<number>, enter: readonly [number, nu
 function RiseLine({ show, delay, children }: { show: boolean; delay: number; children: ReactNode }) {
   return (
     <span className="-mb-[0.12em] block overflow-hidden pb-[0.12em]">
-      <motion.span className="lp-enter block" initial={{ y: "112%" }} animate={{ y: show ? "0%" : "112%" }} transition={{ duration: 1.5, ease: EASE, delay }}>
+      <motion.span className="lp-enter block" initial={{ y: "112%" }} animate={{ y: show ? "0%" : "112%" }} transition={{ duration: 1.2, ease: EASE, delay }}>
         {children}
       </motion.span>
     </span>
@@ -210,7 +210,7 @@ function HeroCinematic({ ready }: { ready: boolean }) {
                   className="lp-enter lp-lead mt-7 max-w-[34rem] text-pretty md:mt-9"
                   initial={{ opacity: 0, y: 18 }}
                   animate={ready ? { opacity: 1, y: 0 } : { opacity: 0, y: 18 }}
-                  transition={{ duration: 1.2, ease: EASE, delay: 0.6 }}
+                  transition={{ duration: 1, ease: EASE, delay: 0.25 }}
                 >
                   {SUB}
                 </motion.p>
@@ -274,7 +274,7 @@ function HeroCinematic({ ready }: { ready: boolean }) {
               className="flex flex-col items-center gap-3"
               initial={{ opacity: 0 }}
               animate={{ opacity: ready ? 1 : 0 }}
-              transition={{ duration: 1, ease: EASE, delay: 1.3 }}
+              transition={{ duration: 1, ease: EASE, delay: 0.9 }}
             >
               <span className="lp-eyebrow text-[10.5px]">Scroll</span>
               <span className="relative block h-10 w-px overflow-hidden bg-white/10">
