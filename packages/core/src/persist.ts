@@ -556,5 +556,19 @@ export async function purgeStoreData(storeId: string) {
     systemDb.adCampaignDaily.deleteMany({ where: { storeId } }),
     systemDb.adsenseDaily.deleteMany({ where: { storeId } }),
     systemDb.adConnection.deleteMany({ where: { storeId } }),
+    // WhatsApp: customers' numbers, messages, timelines, reviews, and the store's own credentials.
+    systemDb.whatsappMessageEvent.deleteMany({ where: { storeId } }),
+    systemDb.whatsappMessage.deleteMany({ where: { storeId } }),
+    systemDb.whatsappContact.deleteMany({ where: { storeId } }),
+    systemDb.orderTrackingEvent.deleteMany({ where: { storeId } }),
+    systemDb.orderTracking.deleteMany({ where: { storeId } }),
+    systemDb.abandonedCheckout.deleteMany({ where: { storeId } }),
+    systemDb.customerReview.deleteMany({ where: { storeId } }),
+    systemDb.whatsappCampaign.deleteMany({ where: { storeId } }),
+    systemDb.whatsappAutomationRun.deleteMany({ where: { storeId } }),
+    systemDb.whatsappAutomationRule.deleteMany({ where: { storeId } }),
+    systemDb.whatsappTemplate.deleteMany({ where: { storeId } }),
+    systemDb.whatsappConnection.deleteMany({ where: { storeId } }),
+    systemDb.whatsappSettings.deleteMany({ where: { storeId } }),
   ]);
 }

@@ -1162,7 +1162,7 @@ describe("daily reconcile", () => {
   it("runs from the quarter-hour tick too, so a missed 03:15 run is caught up, and never enqueues a store twice", async () => {
     await activeStore();
     // 03:15 came and went with the database unreachable. The first tick that reaches it catches up.
-    expect(await runScheduled(CRON.refreshTokens, deps)).toEqual({ refreshed: 0, staleJobsFailed: 0, reconciled: 1, adsSynced: 0 });
+    expect(await runScheduled(CRON.refreshTokens, deps)).toMatchObject({ refreshed: 0, staleJobsFailed: 0, reconciled: 1, adsSynced: 0 });
     expect(queues.sent.sync.map((j) => j.kind)).toEqual(["orders"]);
 
     // Every later tick finds it done - including the next 03:15, when both triggers fire at once.
@@ -1206,7 +1206,7 @@ describe("daily reconcile", () => {
       data: { workspaceId: store.workspaceId, storeId: store.id, kind: "products", status: "running", startedAt: new Date(Date.now() - 40 * 60_000) },
     });
     const broken = { ...deps, queues: { ...queues, sync: { send: async () => Promise.reject(new Error("queue unavailable")) } } };
-    expect(await runScheduled(CRON.refreshTokens, broken)).toEqual({ refreshed: 0, staleJobsFailed: 1, reconciled: null, adsSynced: 0 });
+    expect(await runScheduled(CRON.refreshTokens, broken)).toMatchObject({ refreshed: 0, staleJobsFailed: 1, reconciled: null, adsSynced: 0 });
     // Its lease was given back, so the next tick reconciles it.
     expect(await runScheduled(CRON.refreshTokens, deps)).toMatchObject({ reconciled: 1 });
   });

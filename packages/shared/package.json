@@ -12,7 +12,8 @@
     "./dates": "./src/dates.ts",
     "./journey": "./src/journey.ts",
     "./roles": "./src/roles.ts",
-    "./sales": "./src/sales.ts"
+    "./sales": "./src/sales.ts",
+    "./whatsapp": "./src/whatsapp.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

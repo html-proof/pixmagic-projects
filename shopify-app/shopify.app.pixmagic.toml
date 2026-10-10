@@ -49,13 +49,20 @@ api_version = "2025-10"
     "orders/updated",
     "orders/paid",
     "orders/cancelled",
+    "orders/fulfilled",
+    "orders/partially_fulfilled",
     "refunds/create",
     "products/create",
     "products/update",
     "products/delete",
     "app/uninstalled",
     "app/scopes_update",
-    "app_subscriptions/update"
+    "app_subscriptions/update",
+    # WhatsApp cart recovery (read_orders, like the order topics). Carrier tracking events
+    # (fulfillments/*, fulfillment_events/create) need read_fulfillments, which isn't requested:
+    # the worker reads shipment status from order payloads and a GraphQL poll instead.
+    "checkouts/create",
+    "checkouts/update"
   ]
   uri = "https://insights.imeseban.workers.dev/api/webhooks/shopify"
 

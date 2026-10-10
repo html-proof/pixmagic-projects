@@ -60,6 +60,11 @@ import {
   type SyncJobData,
   type SyncKind,
   type WebhookJobData,
+  dispatchStore,
+  redactWhatsappCustomer,
+  sendWhatsappMessage,
+  whatsappOnShopifyEvent,
+  type WhatsappJob,
 } from "@app/core";
 import { expandScopes, localDay } from "@app/shared";
 
@@ -488,6 +493,8 @@ export async function processWebhook(data: WebhookJobData, deps: WorkerDeps) {
       case "orders/updated":
       case "orders/paid":
       case "orders/cancelled":
+      case "orders/fulfilled":
+      case "orders/partially_fulfilled":
       case "orders/edited": {
         if (store.status === "uninstalled") break;
         // orders/edited sends {order_edit: {...}}: refetching would need the order; reconcile job covers it.
@@ -576,24 +583,39 @@ export async function processWebhook(data: WebhookJobData, deps: WorkerDeps) {
         break;
       }
       // ---- Mandatory GDPR compliance topics ----
-      case "customers/data_request":
-        // We store no customer PII (only a keyed hash), so there is nothing to export.
-        await audit({ workspaceId: store.workspaceId, action: "gdpr.customer_data_request", metadata: { customerId: p.customer?.id, ordersRequested: (p.orders_requested ?? []).length } });
+      case "customers/data_request": {
+        // Analytics keep no customer PII (only a keyed hash). WhatsApp messaging, when the store
+        // uses it, holds the customer's number and first name (encrypted): the audit entry says
+        // so, and the merchant can see those records in the WhatsApp message history.
+        const ck = p.customer?.id ? customerKey(store, String(p.customer.id)) : null;
+        const whatsappContacts = ck ? await systemDb.whatsappContact.count({ where: { storeId: store.id, customerKey: ck } }) : 0;
+        await audit({
+          workspaceId: store.workspaceId,
+          action: "gdpr.customer_data_request",
+          metadata: { customerId: p.customer?.id, ordersRequested: (p.orders_requested ?? []).length, whatsappContacts },
+        });
         break;
-      case "customers/redact":
+      }
+      case "customers/redact": {
         if (p.customer?.id) {
           await systemDb.order.updateMany({ where: { storeId: store.id, customerKey: customerKey(store, String(p.customer.id)) }, data: { customerKey: null } });
         }
-        await audit({ workspaceId: store.workspaceId, action: "gdpr.customer_redacted" });
+        const whatsappRecords = await redactWhatsappCustomer(store, p);
+        await audit({ workspaceId: store.workspaceId, action: "gdpr.customer_redacted", metadata: { whatsappRecords } });
         break;
+      }
       case "shop/redact":
         await purgeStoreData(store.id);
         await systemDb.store.update({ where: { id: store.id }, data: { accessTokenEnc: null, refreshTokenEnc: null, status: "uninstalled" } });
         await audit({ workspaceId: store.workspaceId, action: "gdpr.shop_redacted", targetId: store.id });
         break;
       default:
-        logger.info({ topic: data.topic }, "unhandled webhook topic");
+        // checkouts/* and fulfillments/* are only for WhatsApp (below).
+        if (!data.topic.startsWith("checkouts/") && !data.topic.startsWith("fulfillment")) logger.info({ topic: data.topic }, "unhandled webhook topic");
     }
+    // WhatsApp order updates, delivery updates and cart reminders (a no-op unless the store turned them on).
+    // After the analytics write, and idempotent, so a retry of this delivery repeats nothing.
+    await whatsappOnShopifyEvent(store, data.topic, p, deps);
   }
   await systemDb.webhookEvent.update({ where: { id: ev.id }, data: { status: "succeeded", processedAt: new Date(), error: null } });
   if (data.payloadKey) await deps.payloads.delete(data.payloadKey).catch(() => {});
@@ -888,6 +910,16 @@ export async function refreshExpiringTokens(deps: WorkerDeps) {
     }
   }
   return stores.length;
+}
+
+// ---------------------------------------------------------------------------
+// WhatsApp
+// ---------------------------------------------------------------------------
+
+/** One WhatsApp message, or a store's due messages in a batch (campaigns, catch-up). */
+export async function runWhatsappJob(job: WhatsappJob, deps: WorkerDeps) {
+  if (job.kind === "whatsapp") return { outcome: await sendWhatsappMessage(job.messageId, deps) };
+  return dispatchStore(job.storeId, deps);
 }
 
 // ---------------------------------------------------------------------------

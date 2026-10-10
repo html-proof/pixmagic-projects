@@ -11,3 +11,4 @@ export * from "./notify.js";
 export * from "./coord.js";
 export * from "./ads.js";
 export * from "./adConnections.js";
+export * from "./whatsapp/index.js";

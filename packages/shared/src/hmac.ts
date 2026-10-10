@@ -55,3 +55,17 @@ export function signWebhookBody(rawBody: Buffer | string, secret: string): strin
 export function hmacSha256Hex(secret: string, message: string): string {
   return createHmac("sha256", secret).update(message).digest("hex");
 }
+
+/**
+ * Verify Meta's X-Hub-Signature-256 ("sha256=<hex HMAC-SHA256 of the raw body, keyed with the
+ * app secret>"), which signs every WhatsApp Cloud API webhook.
+ */
+export function verifyMetaSignature(rawBody: Buffer | string, header: string | undefined, appSecret: string): boolean {
+  if (!header || !appSecret || !header.startsWith("sha256=")) return false;
+  const digest = createHmac("sha256", appSecret).update(rawBody).digest("hex");
+  return safeEqual(digest, header.slice(7).toLowerCase());
+}
+
+export function signMetaBody(rawBody: Buffer | string, appSecret: string): string {
+  return `sha256=${createHmac("sha256", appSecret).update(rawBody).digest("hex")}`;
+}

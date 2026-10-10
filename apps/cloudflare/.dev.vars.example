@@ -27,6 +27,12 @@ META_CONFIG_ID=
 GOOGLE_ADS_CLIENT_ID=
 GOOGLE_ADS_CLIENT_SECRET=
 GOOGLE_ADS_DEVELOPER_TOKEN=
+# WhatsApp (optional; docs/whatsapp.md). Webhook callback URL: <API_URL>/webhooks/whatsapp.
+# The app id falls back to META_APP_ID and the secret to META_APP_SECRET when empty.
+WHATSAPP_APP_ID=
+WHATSAPP_APP_SECRET=
+WHATSAPP_CONFIG_ID=
+WHATSAPP_WEBHOOK_VERIFY_TOKEN=
 
 EMAIL_FROM="Insights <no-reply@localhost>"
 # Local only: deliver mail to Mailpit (docker compose) instead of Cloudflare Email Sending.

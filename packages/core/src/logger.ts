@@ -39,6 +39,15 @@ const REDACT = new Set(
     "hmac",
     "x-shopify-access-token",
     "x-shopify-hmac-sha256",
+    // WhatsApp: the customer's number and the merchant's credentials.
+    "x-hub-signature-256",
+    "phone",
+    "wa_id",
+    "waId",
+    "pin",
+    "verifyToken",
+    "verify_token",
+    "hub.verify_token",
   ].map((k) => k.toLowerCase()),
 );
 
@@ -50,6 +59,8 @@ const REDACT = new Set(
 const SCRUB: Array<[RegExp, string]> = [
   [/\bshp(?:at|ua|ca|ss|pa)_[A-Za-z0-9]+/g, "[redacted]"],
   [/\bsk_live_[A-Za-z0-9_-]+/g, "[redacted]"],
+  // Meta access tokens (user, business and system-user tokens all start with EA).
+  [/\bEA[A-Za-z0-9]{40,}/g, "[redacted]"],
   [/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]"],
   [/\b([A-Za-z0-9])[A-Za-z0-9._%+-]*@([A-Za-z0-9.-]+\.[A-Za-z]{2,})\b/g, "$1***@$2"],
 ];

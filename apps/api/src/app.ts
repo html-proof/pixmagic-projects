@@ -16,6 +16,8 @@ import { workspaceRoutes } from "./routes/workspaces.js";
 import { scopeRoutes } from "./routes/scopes.js";
 import { contactRoutes } from "./routes/contacts.js";
 import { adsRoutes } from "./routes/ads.js";
+import { whatsappRoutes } from "./routes/whatsapp.js";
+import { whatsappPublicRoutes } from "./routes/whatsappPublic.js";
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 const CSRF_EXEMPT = [/^\/webhooks\//, /^\/pixel\//];
@@ -131,5 +133,7 @@ export function buildApp(deps: Deps): App {
   scopeRoutes(app, deps);
   contactRoutes(app, deps);
   adsRoutes(app, deps);
+  whatsappRoutes(app, deps);
+  whatsappPublicRoutes(app, deps);
   return app;
 }

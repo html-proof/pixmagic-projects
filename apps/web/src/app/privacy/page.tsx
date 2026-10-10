@@ -12,8 +12,11 @@ export const metadata: Metadata = {
  *
  * Every claim here is a statement about what the code actually does. Before changing the
  * schema or the scopes, change this page too:
- *   - no customer personal data is stored (packages/core/src/persist.ts: `customerKey` is a
+ *   - analytics store no customer personal data (packages/core/src/persist.ts: `customerKey` is a
  *     keyed HMAC, and orders keep no name, email, address or phone);
+ *   - WhatsApp messaging, only once a merchant turns it on, stores customers' WhatsApp numbers and
+ *     first names encrypted, with the retention in packages/core/src/whatsapp/scheduler.ts
+ *     (RETENTION) and redaction in packages/core/src/whatsapp/events.ts (redactWhatsappCustomer);
  *   - tokens are AES-256-GCM encrypted at rest (packages/core/src/tokens.ts);
  *   - uninstall wipes tokens and the compliance webhooks redact/purge (apps/worker/src/handlers.ts);
  *   - the funnel stores hashed browser ids and cleaned page paths only (apps/api/src/routes/pixel.ts,
@@ -76,9 +79,10 @@ export default function PrivacyPage() {
           </li>
         </ul>
         <p>
-          <strong>We do not store your customers&apos; personal data.</strong> No names, email addresses, postal
-          addresses or phone numbers are saved in our database. The one place the dashboard shows them, described
-          under &ldquo;Customers to follow up&rdquo; below, reads them from Shopify while you look.
+          <strong>Analytics store none of your customers&apos; personal data.</strong> No names, email addresses,
+          postal addresses or phone numbers are saved for the dashboard. The one place it shows them, described
+          under &ldquo;Customers to follow up&rdquo; below, reads them from Shopify while you look. WhatsApp messaging,
+          only if you turn it on, is the exception described below.
           Where the dashboard distinguishes new from returning buyers, it uses a one-way keyed hash of the Shopify
           customer id, scoped to the single store, from which no identity can be recovered.
         </p>
@@ -100,6 +104,17 @@ export default function PrivacyPage() {
           emails. Insights reads these from Shopify each time you open that card and shows them only to members of your
           workspace who are owners, admins or analysts. They are not saved in our database. We only record that the card
           was viewed, and by whom, in your workspace&apos;s audit log.
+        </p>
+        <p>
+          <strong>WhatsApp messaging (only if you connect WhatsApp).</strong> To send your customers the order updates,
+          delivery updates, cart reminders, review requests and campaigns you switch on, Insights keeps each
+          customer&apos;s WhatsApp number and first name, encrypted with AES-256-GCM, plus a one-way keyed hash of the
+          number to recognise replies; the dashboard shows numbers masked. It keeps what each customer agreed to, and
+          every opt-out, so nobody who said STOP is messaged again. Delivery addresses are used only to write the
+          order confirmation and are deleted once it is sent. Messages are sent through Meta&apos;s WhatsApp Business
+          Platform. Message history is kept for 180 days, unfinished-checkout links and names for 30 days, and order
+          timelines for a year. Customers&apos; reviews are kept until you delete your store from Insights. When Shopify
+          asks us to erase a customer or your store, all of it is deleted.
         </p>
       </Section>
 
@@ -137,6 +152,10 @@ export default function PrivacyPage() {
           </li>
           <li>
             <strong>Shopify</strong> — the source of the store data.
+          </li>
+          <li>
+            <strong>Meta (WhatsApp Business Platform)</strong> — delivers WhatsApp messages, only for stores that connect
+            WhatsApp.
           </li>
         </ul>
         <p>Other members of your workspace see your store&apos;s figures, according to the role you gave them.</p>

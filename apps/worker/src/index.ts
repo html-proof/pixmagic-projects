@@ -8,8 +8,10 @@ import {
   type AggregateJobData,
   type Producer,
   type QueueName,
+  sweepWhatsapp,
   type SyncJobData,
   type WebhookJobData,
+  type WhatsappJob,
 } from "@app/core";
 import {
   AccessRevokedError,
@@ -18,6 +20,7 @@ import {
   refreshExpiringTokens,
   runAdsSync,
   runAggregate,
+  runWhatsappJob,
   runSync,
   scheduleAdsSync,
   scheduleReconcile,
@@ -75,7 +78,10 @@ export async function consume(queue: QueueName, msg: QueueMessage, deps: Consume
   const { dbDeferral, ...job } = (msg.body ?? {}) as { dbDeferral?: DbDeferral };
   try {
     // Ad account syncs ride the sync queue too (see adsQueue), told apart by their kind.
-    if (queue === "sync" && (job as { kind?: string }).kind === "ads") await runAdsSync(job as AdsSyncData, deps);
+    const kind = (job as { kind?: string }).kind;
+    if (queue === "sync" && kind === "ads") await runAdsSync(job as AdsSyncData, deps);
+    // WhatsApp messages ride the sync queue too; the message rows carry their own state.
+    else if (queue === "sync" && (kind === "whatsapp" || kind === "whatsapp_dispatch")) await runWhatsappJob(job as WhatsappJob, deps);
     else if (queue === "sync") await runSync(job as SyncJobData, deps);
     else if (queue === "webhooks") await processWebhook(job as WebhookJobData, deps);
     else await runAggregate(job as AggregateJobData);
@@ -137,6 +143,13 @@ async function deferForDb(queue: QueueName, msg: QueueMessage, job: object, prev
 
 async function onFailure(queue: QueueName, body: unknown, err: Error, final: boolean, deps: WorkerDeps) {
   const error = err.message.slice(0, 500);
+  const kind = (body as { kind?: string })?.kind;
+  if (queue === "sync" && (kind === "whatsapp" || kind === "whatsapp_dispatch")) {
+    // The message row is the record (scheduled / failed with its reason), and the sweeper picks up
+    // anything still due. A dispatch chain that gave up lets the next tick start a new one.
+    if (final && kind === "whatsapp_dispatch") await deps.coord.release(`wa-dispatch:${(body as { storeId: string }).storeId}`).catch(() => {});
+    return;
+  }
   if (queue === "sync" && (body as { kind?: string })?.kind === "ads") {
     // An ad account, not the store's import: never touches the store's status or raises a store
     // alert. Settings shows the account's own state (runAdsSync marks reconnect / error).
@@ -223,7 +236,12 @@ export async function runScheduled(cron: string, deps: WorkerDeps) {
       logger.error({ err }, "ad sync scheduling failed; the next tick tries again");
       return null;
     });
-    return { refreshed, staleJobsFailed, reconciled, adsSynced };
+    // WhatsApp: campaigns, due messages, parcel status, retention. Last, on its own leases.
+    const whatsapp = await sweepWhatsapp(deps).catch((err: unknown) => {
+      logger.error({ err }, "whatsapp sweep failed; the next tick tries again");
+      return null;
+    });
+    return { refreshed, staleJobsFailed, reconciled, adsSynced, whatsapp };
   }
   logger.warn({ cron }, "unknown cron trigger");
   return {};

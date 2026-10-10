@@ -18,8 +18,9 @@
   },
 
   // Non-secret configuration. Secrets (SESSION_SECRET, TOKEN_ENCRYPTION_KEYS, OTP_PEPPER,
-  // SHOPIFY_API_SECRET, FIREBASE_SERVICE_ACCOUNT_B64, ALERT_SLACK_WEBHOOK_URL, and for ad accounts
-  // META_APP_SECRET, GOOGLE_ADS_CLIENT_SECRET, GOOGLE_ADS_DEVELOPER_TOKEN) are set with
+  // SHOPIFY_API_SECRET, FIREBASE_SERVICE_ACCOUNT_B64, ALERT_SLACK_WEBHOOK_URL, for ad accounts
+  // META_APP_SECRET, GOOGLE_ADS_CLIENT_SECRET, GOOGLE_ADS_DEVELOPER_TOKEN, and for WhatsApp
+  // WHATSAPP_APP_SECRET, WHATSAPP_WEBHOOK_VERIFY_TOKEN) are set with
   // `wrangler secret put`; for local dev put everything in apps/cloudflare/.dev.vars.
   "vars": {
     "NODE_ENV": "production",
@@ -60,7 +61,15 @@
     // Facebook Login for Business "Configuration ID" (user access token, ads_read). Optional.
     "META_CONFIG_ID": "",
     "GOOGLE_ADS_CLIENT_ID": "534794119904-9esdp8dhskcupf6ekbb0iej2dr10gomf.apps.googleusercontent.com",
-    "GOOGLE_ADS_API_VERSION": "v25"
+    "GOOGLE_ADS_API_VERSION": "v25",
+    // WhatsApp Business Platform (Cloud API), docs/whatsapp.md. "Connect WhatsApp Business" (Meta's
+    // Embedded Signup) needs the Meta app id (empty: META_APP_ID is used), the Facebook Login for
+    // Business configuration id of its WhatsApp Embedded Signup variation, and the secrets
+    // WHATSAPP_APP_SECRET (or META_APP_SECRET) and WHATSAPP_WEBHOOK_VERIFY_TOKEN. Until then the
+    // dashboard says it isn't set up, and merchants can still connect with their own Meta app.
+    "WHATSAPP_APP_ID": "",
+    "WHATSAPP_CONFIG_ID": "",
+    "WHATSAPP_API_VERSION": "v25.0"
   },
 
   // Postgres through Hyperdrive: owner role (migrations/system paths) and the RLS-enforced app_rls role.

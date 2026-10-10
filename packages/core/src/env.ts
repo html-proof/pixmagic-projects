@@ -48,6 +48,18 @@ const schema = z.object({
   GOOGLE_ADS_CLIENT_SECRET: z.string().optional().default(""),
   GOOGLE_ADS_DEVELOPER_TOKEN: z.string().optional().default(""),
   GOOGLE_ADS_API_VERSION: z.string().default("v25"),
+  /**
+   * WhatsApp Business Platform (Cloud API). Embedded Signup ("Connect WhatsApp Business") needs
+   * the Meta app's id and secret (the ad accounts' Meta app is used when these are empty) and the
+   * Facebook Login for Business configuration id of its WhatsApp Embedded Signup variation. The
+   * verify token is what the Meta app's webhook settings were given. Manual connections (the
+   * merchant's own app and system-user token) work without any of these.
+   */
+  WHATSAPP_APP_ID: z.string().optional().default(""),
+  WHATSAPP_APP_SECRET: z.string().optional().default(""),
+  WHATSAPP_CONFIG_ID: z.string().optional().default(""),
+  WHATSAPP_API_VERSION: z.string().default("v25.0"),
+  WHATSAPP_WEBHOOK_VERIFY_TOKEN: z.string().optional().default(""),
   EMAIL_FROM: z.string().default("Insights <no-reply@localhost>"),
   ALERT_SLACK_WEBHOOK_URL: z.string().optional().default(""),
 });

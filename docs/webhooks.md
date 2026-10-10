@@ -17,15 +17,17 @@ Webhooks drive all updates after the initial backfill. Endpoint: `POST https://A
 
 | Topic | Effect |
 | --- | --- |
-| `orders/create`, `orders/updated`, `orders/paid`, `orders/cancelled` | Upsert order + line items + embedded refunds; enqueue re-aggregation of affected days |
+| `orders/create`, `orders/updated`, `orders/paid`, `orders/cancelled`, `orders/fulfilled`, `orders/partially_fulfilled` | Upsert order + line items + embedded refunds; enqueue re-aggregation of affected days. With WhatsApp on: order timeline, tracking link, notifications (docs/whatsapp.md) |
+| `checkouts/create`, `checkouts/update` | WhatsApp only: abandoned-checkout rows (only with a phone number) and cart reminders; `completed_at` cancels them |
+| `fulfillments/create`, `fulfillments/update`, `fulfillment_events/create` | WhatsApp only: parcel stages. Need `read_fulfillments`, which isn't requested today, so they aren't subscribed; the worker reads shipment status from order payloads and a GraphQL poll instead |
 | `refunds/create` | Upsert refund (booked on refund date). If the order isn't known yet the job throws and retries with backoff |
 | `products/create`, `products/update`, `products/delete` | Upsert / delete product |
 | `app/uninstalled` | Store → `uninstalled`, tokens wiped. Data kept until `shop/redact` |
 | `app/scopes_update` | Replace granted scopes → dashboard modules update immediately |
 | `app_subscriptions/update` | Update billing status |
-| `customers/data_request` | Audit entry. We hold no customer PII to export |
-| `customers/redact` | Null the hashed customer key on that customer's orders |
-| `shop/redact` | Delete all synced data for the store |
+| `customers/data_request` | Audit entry, with how many WhatsApp contacts the store holds for that customer (analytics hold no PII) |
+| `customers/redact` | Null the hashed customer key on that customer's orders; delete the customer's WhatsApp number, messages, timelines and reviews |
+| `shop/redact` | Delete all synced data for the store, WhatsApp included |
 
 ### Idempotency guarantees
 

@@ -510,3 +510,416 @@ model EmailOtp {
   @@index([email, createdAt])
   @@map("email_otps")
 }
+
+// ---------------------------------------------------------------------------------------------
+// WhatsApp (Cloud API). Unlike the analytics tables, these hold what messaging a customer needs:
+// their WhatsApp number and first name, ENCRYPTED (AES-256-GCM, AAD bound to the store), with a
+// keyed hash for lookups and a masked form for the dashboard. Retention is enforced by the worker
+// (packages/core/src/whatsapp/retention.ts); customers/redact and shop/redact delete them.
+// ---------------------------------------------------------------------------------------------
+
+// The store's WhatsApp Business phone number. One per store.
+model WhatsappConnection {
+  id                 String    @id @default(cuid())
+  workspaceId        String    @map("workspace_id")
+  storeId            String    @unique @map("store_id")
+  /** "embedded" (Embedded Signup through Insights' Meta app) | "manual" (the merchant's own app and system-user token). */
+  mode               String
+  businessId         String?   @map("business_id")
+  wabaId             String    @map("waba_id")
+  wabaName           String?   @map("waba_name")
+  phoneNumberId      String    @map("phone_number_id")
+  displayPhoneNumber String?   @map("display_phone_number")
+  verifiedName       String?   @map("verified_name")
+  nameStatus         String?   @map("name_status")
+  qualityRating      String?   @map("quality_rating")
+  /** TIER_250, TIER_1K, ... : how many customers a day the number may start conversations with. */
+  messagingLimitTier String?   @map("messaging_limit_tier")
+  /** Whether the number is registered with the Cloud API (it can't send until it is). */
+  registered         Boolean   @default(false)
+  /** "active" | "pending" (number not registered yet) | "reconnect" (Meta rejected the token) | "error". */
+  status             String    @default("active")
+  lastError          String?   @map("last_error")
+  accessTokenEnc     String    @map("access_token_enc")
+  /** Manual mode: the merchant's Meta app secret, which signs their webhooks. */
+  appSecretEnc       String?   @map("app_secret_enc")
+  /** Manual mode: the verify token the merchant enters in their Meta app's webhook settings. */
+  verifyTokenEnc     String?   @map("verify_token_enc")
+  verifyTokenHash    String?   @unique @map("verify_token_hash")
+  tokenKeyVersion    Int       @map("token_key_version")
+  /** When Meta last proved it can reach our webhook for this number (challenge or signed delivery). */
+  webhookVerifiedAt  DateTime? @map("webhook_verified_at")
+  lastWebhookAt      DateTime? @map("last_webhook_at")
+  lastSyncedAt       DateTime? @map("last_synced_at")
+  connectedByUserId  String?   @map("connected_by_user_id")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  @@index([workspaceId])
+  @@index([wabaId])
+  @@index([phoneNumberId])
+  @@map("whatsapp_connections")
+}
+
+// What the store sends, when, and to whom (validated by whatsappConfigSchema in packages/shared).
+// A row existing is what "WhatsApp is turned on for this store" means to the event handlers.
+model WhatsappSettings {
+  storeId          String    @id @map("store_id")
+  workspaceId      String    @map("workspace_id")
+  config           Json      @default("{}")
+  /** Who chose the consent basis for order updates, and when (also in the audit log). */
+  basisSetByUserId String?   @map("basis_set_by_user_id")
+  basisSetAt       DateTime? @map("basis_set_at")
+  updatedByUserId  String?   @map("updated_by_user_id")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  @@index([workspaceId])
+  @@map("whatsapp_settings")
+}
+
+// Message templates in the store's WhatsApp Business Account, as Meta last reported them.
+model WhatsappTemplate {
+  id             String   @id @default(cuid())
+  workspaceId    String   @map("workspace_id")
+  storeId        String   @map("store_id")
+  connectionId   String   @map("connection_id")
+  metaId         String   @map("meta_id")
+  name           String
+  language       String
+  /** UTILITY | MARKETING | AUTHENTICATION (Meta's, which may differ from what was asked for). */
+  category       String
+  /** APPROVED | PENDING | REJECTED | PAUSED | DISABLED | IN_APPEAL ... */
+  status         String
+  components     Json
+  rejectedReason String?  @map("rejected_reason")
+  qualityScore   String?  @map("quality_score")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@unique([connectionId, name, language])
+  @@index([storeId])
+  @@index([workspaceId])
+  @@map("whatsapp_templates")
+}
+
+// A customer's WhatsApp number and what they agreed to. Opt-outs are kept for as long as the store
+// uses WhatsApp, so a customer who said STOP is never messaged again.
+model WhatsappContact {
+  id                 String    @id @default(cuid())
+  workspaceId        String    @map("workspace_id")
+  storeId            String    @map("store_id")
+  /** HMAC(OTP_PEPPER, "wa:<storeId>:<wa_id>"): finds the contact from a webhook without decrypting anything. */
+  phoneHash          String    @map("phone_hash")
+  phoneEnc           String    @map("phone_enc")
+  phoneMasked        String    @map("phone_masked")
+  country            String?
+  /** Same keyed hash as orders.customer_key, when Shopify said which customer this is. */
+  customerKey        String?   @map("customer_key")
+  firstNameEnc       String?   @map("first_name_enc")
+  /** "opted_in" | "opted_out" | "unknown" (never asked: no marketing). */
+  marketingStatus    String    @default("unknown") @map("marketing_status")
+  marketingSource    String?   @map("marketing_source")
+  marketingUpdatedAt DateTime? @map("marketing_updated_at")
+  /** Replied STOP: nothing at all is sent to this number any more, order updates included. */
+  optedOut           Boolean   @default(false) @map("opted_out")
+  optedOutAt         DateTime? @map("opted_out_at")
+  optOutSource       String?   @map("opt_out_source")
+  /** Last message from the customer (opens WhatsApp's 24-hour customer service window). */
+  lastInboundAt      DateTime? @map("last_inbound_at")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  @@unique([storeId, phoneHash])
+  @@index([storeId, customerKey])
+  @@index([storeId, marketingStatus])
+  @@index([workspaceId])
+  @@map("whatsapp_contacts")
+}
+
+// Every WhatsApp message: the queue (scheduled → sending) and the history (sent → delivered → read,
+// or failed / cancelled / skipped with the reason). Campaign recipients are the rows with a campaign_id.
+model WhatsappMessage {
+  id                String    @id @default(cuid())
+  workspaceId       String    @map("workspace_id")
+  storeId           String    @map("store_id")
+  contactId         String?   @map("contact_id")
+  /** order_confirmation, order_shipped, abandoned_cart_1, review_request, campaign, automation, test, ... */
+  kind              String
+  /** utility | marketing | authentication | unknown: from the template Meta approved. */
+  category          String    @default("unknown")
+  templateName      String?   @map("template_name")
+  templateLanguage  String?   @map("template_language")
+  /** What the send needs that only the triggering event knew (customer name, address, ...), encrypted; cleared once sent. */
+  paramsEnc         String?   @map("params_enc")
+  /** One message per purpose: "order:<id>:order_shipped", "cart:<token>:1", "campaign:<id>:<contact>". */
+  dedupeKey         String    @map("dedupe_key")
+  phoneMasked       String?   @map("phone_masked")
+  trackingId        String?   @map("tracking_id")
+  orderName         String?   @map("order_name")
+  checkoutId        String?   @map("checkout_id")
+  campaignId        String?   @map("campaign_id")
+  ruleId            String?   @map("rule_id")
+  /** scheduled | sending | sent | delivered | read | failed | cancelled | skipped */
+  status            String    @default("scheduled")
+  scheduledFor      DateTime  @map("scheduled_for")
+  enqueuedAt        DateTime? @map("enqueued_at")
+  attempts          Int       @default(0)
+  providerMessageId String?   @unique @map("provider_message_id")
+  errorCode         String?   @map("error_code")
+  errorTitle        String?   @map("error_title")
+  /** Why it was skipped or cancelled (no_phone, opted_out, no_marketing_consent, checkout_completed, ...). */
+  reason            String?
+  sentAt            DateTime? @map("sent_at")
+  deliveredAt       DateTime? @map("delivered_at")
+  readAt            DateTime? @map("read_at")
+  failedAt          DateTime? @map("failed_at")
+  cancelledAt       DateTime? @map("cancelled_at")
+  pricingCategory   String?   @map("pricing_category")
+  billable          Boolean?
+  /** Short code of this message's tracked link (/api/r/<code>), and when it was first opened. */
+  clickCode         String?   @unique @map("click_code")
+  clickUrlEnc       String?   @map("click_url_enc")
+  clickedAt         DateTime? @map("clicked_at")
+  /** The order this message is credited with (each order at most once; see docs/whatsapp.md, Attribution). */
+  attributedOrderId String?   @map("attributed_order_id")
+  attributedRevenue Decimal?  @map("attributed_revenue") @db.Decimal(18, 2)
+  attributedAt      DateTime? @map("attributed_at")
+  test              Boolean   @default(false)
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  @@unique([storeId, dedupeKey])
+  @@unique([storeId, attributedOrderId])
+  @@index([status, scheduledFor])
+  @@index([storeId, createdAt])
+  @@index([campaignId])
+  @@index([trackingId])
+  @@index([checkoutId])
+  @@index([contactId, sentAt])
+  @@index([workspaceId])
+  @@map("whatsapp_messages")
+}
+
+// Delivery callbacks as Meta sent them (one row per message and status).
+model WhatsappMessageEvent {
+  id          String   @id @default(cuid())
+  workspaceId String   @map("workspace_id")
+  storeId     String   @map("store_id")
+  messageId   String   @map("message_id")
+  status      String
+  occurredAt  DateTime @map("occurred_at")
+  errorCode   String?  @map("error_code")
+  errorTitle  String?  @map("error_title")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@unique([messageId, status])
+  @@index([storeId])
+  @@index([workspaceId])
+  @@map("whatsapp_message_events")
+}
+
+// An order as the customer's tracking page shows it. The link carries a random token (only its
+// hash is looked up); the order id is never enough to see an order.
+model OrderTracking {
+  id              String    @id @default(cuid())
+  workspaceId     String    @map("workspace_id")
+  storeId         String    @map("store_id")
+  shopifyOrderId  String    @map("shopify_order_id")
+  orderName       String    @map("order_name")
+  contactId       String?   @map("contact_id")
+  tokenHash       String    @unique @map("token_hash")
+  tokenEnc        String    @map("token_enc")
+  reviewTokenHash String    @unique @map("review_token_hash")
+  reviewTokenEnc  String    @map("review_token_enc")
+  currency        String
+  totalPrice      Decimal   @map("total_price") @db.Decimal(18, 2)
+  /** [{ productId, title, quantity }]: product data only. */
+  items           Json
+  financialStatus String?   @map("financial_status")
+  /** placed | paid | processing | packed | shipped | in_transit | out_for_delivery | delivered | delivery_failed | cancelled | refunded */
+  status          String    @default("placed")
+  /** SHIPMENT_RANK of the furthest parcel stage seen (notifications never go backwards). */
+  shipmentRank    Int       @default(0) @map("shipment_rank")
+  /** Whether a courier has ever reported progress (else the page says live tracking isn't available). */
+  carrierEvents   Boolean   @default(false) @map("carrier_events")
+  tags            String[]  @default([])
+  checkoutToken   String?   @map("checkout_token")
+  /** What the order said about consent: the whatsapp_opt_in cart attribute, Shopify SMS marketing consent. */
+  cartOptIn       Boolean   @default(false) @map("cart_opt_in")
+  smsConsent      Boolean   @default(false) @map("sms_consent")
+  country         String?
+  orderCreatedAt  DateTime  @map("order_created_at")
+  paidAt          DateTime? @map("paid_at")
+  deliveredAt     DateTime? @map("delivered_at")
+  cancelledAt     DateTime? @map("cancelled_at")
+  /** The link stops working after this; the row goes a year after the order. */
+  expiresAt       DateTime  @map("expires_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  @@unique([storeId, shopifyOrderId])
+  @@index([storeId, orderCreatedAt])
+  @@index([contactId])
+  @@index([workspaceId])
+  @@map("order_trackings")
+}
+
+// The order's timeline: what happened, when, and who said so (shopify | carrier | merchant).
+model OrderTrackingEvent {
+  id                  String    @id @default(cuid())
+  workspaceId         String    @map("workspace_id")
+  storeId             String    @map("store_id")
+  trackingId          String    @map("tracking_id")
+  type                String
+  occurredAt          DateTime  @map("occurred_at")
+  source              String
+  fulfillmentId       String?   @map("fulfillment_id")
+  courier             String?
+  trackingNumber      String?   @map("tracking_number")
+  trackingUrl         String?   @map("tracking_url")
+  estimatedDeliveryAt DateTime? @map("estimated_delivery_at")
+  dedupeKey           String    @map("dedupe_key")
+  createdAt           DateTime  @default(now()) @map("created_at")
+
+  @@unique([trackingId, dedupeKey])
+  @@index([storeId])
+  @@index([workspaceId])
+  @@map("order_tracking_events")
+}
+
+// A checkout someone started and (so far) didn't finish, from Shopify's checkouts/* webhooks.
+model AbandonedCheckout {
+  id                 String    @id @default(cuid())
+  workspaceId        String    @map("workspace_id")
+  storeId            String    @map("store_id")
+  checkoutToken      String    @map("checkout_token")
+  contactId          String?   @map("contact_id")
+  customerNameEnc    String?   @map("customer_name_enc")
+  phoneMasked        String?   @map("phone_masked")
+  currency           String
+  totalPrice         Decimal   @map("total_price") @db.Decimal(18, 2)
+  /** [{ title, quantity, price }]: product data only. */
+  items              Json
+  /** Shopify's recovery link (it opens the customer's checkout, so it is encrypted). */
+  recoveryUrlEnc     String?   @map("recovery_url_enc")
+  marketingConsent   Boolean   @default(false) @map("marketing_consent")
+  /** open | reminded | recovered | completed | expired | ineligible */
+  status             String    @default("open")
+  ineligibleReason   String?   @map("ineligible_reason")
+  checkoutCreatedAt  DateTime  @map("checkout_created_at")
+  lastActivityAt     DateTime  @map("last_activity_at")
+  completedAt        DateTime? @map("completed_at")
+  recoveredOrderId   String?   @map("recovered_order_id")
+  recoveredOrderName String?   @map("recovered_order_name")
+  recoveredRevenue   Decimal?  @map("recovered_revenue") @db.Decimal(18, 2)
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  @@unique([storeId, checkoutToken])
+  @@index([storeId, lastActivityAt])
+  @@index([workspaceId])
+  @@map("abandoned_checkouts")
+}
+
+// A marketing campaign the merchant wrote, scheduled and authorized. Nothing is sent because a date approaches.
+model WhatsappCampaign {
+  id                  String    @id @default(cuid())
+  workspaceId         String    @map("workspace_id")
+  storeId             String    @map("store_id")
+  name                String
+  occasion            String
+  objective           String?
+  templateName        String    @map("template_name")
+  templateLanguage    String    @map("template_language")
+  mapping             Json      @default("{}")
+  /** Values for the campaign's own variables: { greeting, discountPercentage, endDate }. */
+  variables           Json      @default("{}")
+  mediaUrl            String?   @map("media_url")
+  linkUrl             String?   @map("link_url")
+  discountCode        String?   @map("discount_code")
+  audience            Json      @default("{}")
+  startAt             DateTime  @map("start_at")
+  endAt               DateTime? @map("end_at")
+  /** draft | scheduled | sending | paused | completed | cancelled */
+  status              String    @default("draft")
+  estimatedRecipients Int?      @map("estimated_recipients")
+  createdByUserId     String?   @map("created_by_user_id")
+  approvedByUserId    String?   @map("approved_by_user_id")
+  approvedAt          DateTime? @map("approved_at")
+  startedAt           DateTime? @map("started_at")
+  completedAt         DateTime? @map("completed_at")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+
+  @@index([storeId, status])
+  @@index([workspaceId])
+  @@map("whatsapp_campaigns")
+}
+
+// A customer's rating of an order, or of one product in it. One per order and product (editable).
+model CustomerReview {
+  id                String    @id @default(cuid())
+  workspaceId       String    @map("workspace_id")
+  storeId           String    @map("store_id")
+  trackingId        String    @map("tracking_id")
+  shopifyOrderId    String    @map("shopify_order_id")
+  orderName         String    @map("order_name")
+  /** "" for the order as a whole. */
+  productId         String    @default("") @map("product_id")
+  productTitle      String?   @map("product_title")
+  rating            Int
+  body              String?
+  reviewerName      String?   @map("reviewer_name")
+  /** pending | published | rejected */
+  status            String    @default("pending")
+  moderationReason  String?   @map("moderation_reason")
+  moderatedByUserId String?   @map("moderated_by_user_id")
+  moderatedAt       DateTime? @map("moderated_at")
+  submittedAt       DateTime  @default(now()) @map("submitted_at")
+  editedAt          DateTime? @map("edited_at")
+
+  @@unique([trackingId, productId])
+  @@index([storeId, status])
+  @@index([workspaceId])
+  @@map("customer_reviews")
+}
+
+// Trigger → conditions → action, written by the merchant.
+model WhatsappAutomationRule {
+  id              String   @id @default(cuid())
+  workspaceId     String   @map("workspace_id")
+  storeId         String   @map("store_id")
+  name            String
+  enabled         Boolean  @default(false)
+  trigger         String
+  conditions      Json     @default("[]")
+  action          Json
+  createdByUserId String?  @map("created_by_user_id")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@index([storeId, trigger])
+  @@index([workspaceId])
+  @@map("whatsapp_automation_rules")
+}
+
+// Each time a rule met its trigger: at most once per rule, trigger and order/checkout/customer.
+model WhatsappAutomationRun {
+  id          String   @id @default(cuid())
+  workspaceId String   @map("workspace_id")
+  storeId     String   @map("store_id")
+  ruleId      String   @map("rule_id")
+  trigger     String
+  subjectKey  String   @map("subject_key")
+  /** done | skipped | error | test */
+  outcome     String
+  detail      String?
+  messageId   String?  @map("message_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@unique([ruleId, trigger, subjectKey])
+  @@index([storeId, createdAt])
+  @@index([workspaceId])
+  @@map("whatsapp_automation_runs")
+}

@@ -49,10 +49,29 @@ export const LIMITS = {
   scopes: { max: 3, windowSec: 10 },
   /** Ad accounts "Sync now", per store and user: each queues a sync per connected account. */
   adsSync: { max: 6, windowSec: 600 },
+  /** WhatsApp: connecting a number (Meta calls each), per store. */
+  waConnect: { max: 10, windowSec: 600 },
+  /** WhatsApp: "Refresh" (number and templates from Meta), per store. */
+  waRefresh: { max: 6, windowSec: 600 },
+  /** WhatsApp: templates submitted for Meta's review, per store. */
+  waTemplateCreate: { max: 30, windowSec: 3600 },
+  /** WhatsApp: test messages to the merchant's own phone, per store. */
+  waTest: { max: 10, windowSec: 600 },
+  /** WhatsApp: "Send reminder" on an abandoned cart, per store. */
+  waRemind: { max: 30, windowSec: 600 },
 
   // ---- Public ingest ----
   /** Web pixel, per IP (a storefront sends a batch per page or so). */
   pixelIp: { max: 600, windowSec: 60 },
+  /** Customers' order tracking pages, per IP. */
+  trackIp: { max: 120, windowSec: 60 },
+  /** Review form loads and submissions, per IP, and submissions per order. */
+  reviewIp: { max: 60, windowSec: 600 },
+  reviewSubmitPerOrder: { max: 10, windowSec: 3600 },
+  /** Tracked links in WhatsApp messages, per IP. */
+  clickIp: { max: 300, windowSec: 60 },
+  /** Meta's webhook verification handshake (GET), per IP. */
+  waVerifyIp: { max: 30, windowSec: 60 },
 } as const satisfies Record<string, Limit>;
 
 /** Fixed-window limiter. Throws 429 once more than `max` hits occur within `windowSec`. */
