@@ -191,16 +191,21 @@ evaluates a rule against a recent order without doing anything (and can send the
 1. A **Meta Business portfolio** for Insights, **business verification** done (Security Center).
 2. A **Meta app** (type Business). The ad accounts' app can be reused: then `WHATSAPP_APP_ID`/`WHATSAPP_APP_SECRET`
    may stay empty and `META_APP_ID`/`META_APP_SECRET` are used.
-3. Add the **WhatsApp** product. To onboard merchants with one click, become a Tech Provider and create a Facebook
-   Login for Business **configuration** with the *WhatsApp Embedded Signup* login variation (Embedded Signup v4; v2
-   is deprecated on 2026-10-15). Its id is `WHATSAPP_CONFIG_ID`.
+3. Add the **WhatsApp** product. To onboard merchants with one click ("Continue with WhatsApp"), become a Tech
+   Provider and create a Facebook Login for Business **configuration** with *Create configuration* (not the template:
+   "WhatsApp Embedded Signup Configuration With 60 Expiration Token" issues tokens that die after 60 days, which
+   would disconnect every store): login variation *WhatsApp Embedded Signup* (v4; v2 is deprecated on 2026-10-15),
+   product WhatsApp Cloud API, asset WhatsApp accounts, permissions `whatsapp_business_management` and
+   `whatsapp_business_messaging`, token expiration **Never**. Its id is `WHATSAPP_CONFIG_ID`.
 4. Permissions `whatsapp_business_messaging` and `whatsapp_business_management` with **Advanced Access** (App Review).
 5. App settings: add `insights.imeseban.workers.dev` to **App domains**, **Allowed domains for the JavaScript SDK**
    and **Valid OAuth redirect URIs** (Embedded Signup only returns ids to listed HTTPS domains).
-6. WhatsApp → Configuration → **Webhook**: callback URL `https://insights.imeseban.workers.dev/api/webhooks/whatsapp`,
-   verify token = the value you put in `WHATSAPP_WEBHOOK_VERIFY_TOKEN` (any long random string). Subscribe to
-   `messages`, `message_template_status_update`, `template_category_update`, `message_template_quality_update`,
-   `phone_number_quality_update`, `account_update` and `user_preferences`.
+6. The app's WhatsApp **webhook** needs no clicking: once `WHATSAPP_APP_SECRET` (or `META_APP_SECRET`) and
+   `WHATSAPP_WEBHOOK_VERIFY_TOKEN` are set, the */15 cron (`ensurePlatformWebhook`, at most every 6 hours) points it
+   at `https://insights.imeseban.workers.dev/api/webhooks/whatsapp` with `messages`, `message_template_status_update`,
+   `template_category_update`, `message_template_quality_update`, `phone_number_quality_update`, `account_update` and
+   `user_preferences`. A webhook already pointing at another URL is left alone (logged); set it by hand in WhatsApp →
+   Configuration → Webhook then.
 7. Each merchant adds a **payment method** in WhatsApp Manager and gets their **display name** approved; Meta's
    messaging limit grows with quality.
 

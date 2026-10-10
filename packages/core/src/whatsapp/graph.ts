@@ -199,6 +199,7 @@ export const WA_WEBHOOK_FIELDS = [
  * callback URL and verify token into Meta's dashboard. Meta checks the URL straight away (the
  * verify-token handshake), so the connection has to be saved first. An app whose WhatsApp webhook
  * already goes somewhere else is left alone ("in_use"): it may be feeding another tool.
+ * "already": it points here with every field, so Meta isn't asked again.
  * Throws when Meta refuses the app id and secret (a secret from a different app, say).
  */
 export async function waSetAppWebhook(
@@ -206,11 +207,17 @@ export async function waSetAppWebhook(
   callbackUrl: string,
   verifyToken: string,
   fetchImpl: FetchLike,
-): Promise<"set" | "in_use"> {
+): Promise<"set" | "already" | "in_use"> {
   const appToken = `${app.appId}|${app.appSecret}`;
-  const current = await graph<{ data?: Array<{ object?: string; callback_url?: string; active?: boolean }> }>(fetchImpl, appToken, "GET", `${app.appId}/subscriptions`);
+  const current = await graph<{ data?: Array<{ object?: string; callback_url?: string; active?: boolean; fields?: Array<{ name?: string }> }> }>(
+    fetchImpl,
+    appToken,
+    "GET",
+    `${app.appId}/subscriptions`,
+  );
   const wa = (current.data ?? []).find((s) => s.object === "whatsapp_business_account");
   if (wa?.active && wa.callback_url && wa.callback_url !== callbackUrl) return "in_use";
+  if (wa?.active && WA_WEBHOOK_FIELDS.every((f) => wa.fields?.some((x) => x.name === f))) return "already";
   await graph(fetchImpl, appToken, "POST", `${app.appId}/subscriptions`, {
     query: { object: "whatsapp_business_account", callback_url: callbackUrl, verify_token: verifyToken, fields: WA_WEBHOOK_FIELDS.join(",") },
   });

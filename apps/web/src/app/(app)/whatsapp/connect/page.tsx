@@ -55,14 +55,16 @@ function EmbeddedSignup({ platform, onConnected }: { platform: Overview["platfor
   const code = useRef<string | null>(null);
   const done = useRef(false);
 
-  const finish = useCallback(async () => {
-    if (done.current || !code.current || !session.current?.waba_id || !session.current.phone_number_id) return;
+  // Needs the code (from FB.login) and, normally, the ids Meta posts to this window. If those
+  // never arrive, `fallback` sends the code alone and the server asks Meta what was shared.
+  const finish = useCallback(async (fallback = false) => {
+    if (done.current || !code.current) return;
+    const s = session.current;
+    const ids = s?.waba_id && s.phone_number_id ? { wabaId: s.waba_id, phoneNumberId: s.phone_number_id, ...(s.business_id ? { businessId: s.business_id } : {}) } : null;
+    if (!ids && !fallback) return;
     done.current = true;
     try {
-      await api(`${base}/embedded`, {
-        method: "POST",
-        body: { code: code.current, wabaId: session.current.waba_id, phoneNumberId: session.current.phone_number_id, businessId: session.current.business_id },
-      });
+      await api(`${base}/embedded`, { method: "POST", body: { code: code.current, ...ids } });
       toast("success", "WhatsApp is connected.");
       onConnected();
     } catch (e) {
@@ -91,6 +93,7 @@ function EmbeddedSignup({ platform, onConnected }: { platform: Overview["platfor
       if (data.event?.startsWith("FINISH")) {
         session.current = data.data ?? null;
         if (!data.data?.phone_number_id) {
+          done.current = true;
           toast("error", "Meta's sign-up finished without a phone number. Add a number to the account, then connect again.");
           setBusy(false);
           return;
@@ -121,6 +124,8 @@ function EmbeddedSignup({ platform, onConnected }: { platform: Overview["platfor
           if (r.authResponse?.code) {
             code.current = r.authResponse.code;
             void finish();
+            // The code lives 30 seconds: don't wait long for Meta's message.
+            window.setTimeout(() => void finish(true), 4000);
           } else {
             setBusy(false);
           }
@@ -135,7 +140,7 @@ function EmbeddedSignup({ platform, onConnected }: { platform: Overview["platfor
 
   return (
     <button type="button" className="inline-flex h-11 items-center gap-2 rounded-lg bg-[#25D366] px-5 text-sm font-semibold text-[#0b3d20] shadow-sm transition hover:brightness-95 disabled:opacity-60" onClick={() => void start()} disabled={busy} data-testid="wa-connect">
-      <WhatsappIcon size={20} /> {busy ? "Waiting for Meta…" : "Connect WhatsApp Business"}
+      <WhatsappIcon size={20} /> {busy ? "Waiting for Meta…" : "Continue with WhatsApp"}
     </button>
   );
 }
@@ -548,7 +553,8 @@ export default function ConnectWhatsapp() {
             <>
               <div className="mt-3 space-y-2">
                 <p className="text-sm text-muted">
-                  Sign in with Facebook, choose (or create) your Meta business and WhatsApp Business Account, and verify your number. It takes a few minutes.
+                  Meta opens a window: log in with Facebook, choose your business and WhatsApp number (or add one), and enter the code Meta texts you. About 3
+                  minutes, and nothing to copy.
                 </p>
                 <EmbeddedSignup platform={data.platform} onConnected={reloaded} />
               </div>

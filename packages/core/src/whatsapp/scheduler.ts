@@ -8,6 +8,7 @@
 import { systemDb } from "@app/db";
 import { logger } from "../logger.js";
 import { advanceCampaigns } from "./campaigns.js";
+import { ensurePlatformWebhook } from "./connect.js";
 import { pollShipments } from "./events.js";
 import { enqueueSend, waQueue, type WaDeps } from "./messages.js";
 
@@ -16,6 +17,7 @@ const STUCK_SENDING_MS = 10 * 60_000;
 const DISPATCH_LEASE_MS = 10 * 60_000;
 const SHIPMENT_POLL_LEASE_MS = 2 * 3600_000;
 const RETENTION_LEASE_MS = 22 * 3600_000;
+const PLATFORM_WEBHOOK_LEASE_MS = 6 * 3600_000;
 
 /** How long things are kept (docs/whatsapp.md, "Data and retention"). */
 export const RETENTION = {
@@ -33,7 +35,14 @@ export const RETENTION = {
 };
 
 export async function sweepWhatsapp(deps: WaDeps) {
-  const out = { campaigns: { started: 0, finished: 0 }, dispatched: 0, queued: 0, interrupted: 0, polled: 0, purged: 0 };
+  const out: { campaigns: { started: number; finished: number }; dispatched: number; queued: number; interrupted: number; polled: number; purged: number; platformWebhook?: string } = {
+    campaigns: { started: 0, finished: 0 },
+    dispatched: 0,
+    queued: 0,
+    interrupted: 0,
+    polled: 0,
+    purged: 0,
+  };
   out.campaigns = await advanceCampaigns(deps);
 
   // Cut off mid-send: Meta may or may not have it. Failing it (never re-sending on our own) avoids
@@ -81,6 +90,15 @@ export async function sweepWhatsapp(deps: WaDeps) {
   }
 
   if (await deps.coord.acquire("wa-retention", RETENTION_LEASE_MS)) out.purged = await purgeWhatsappRetention();
+
+  // Insights' own Meta app: its webhook points here (checked a few times a day; a failure retries next tick).
+  if (await deps.coord.acquire("wa-platform-webhook", PLATFORM_WEBHOOK_LEASE_MS)) {
+    out.platformWebhook = await ensurePlatformWebhook(deps.fetchImpl).catch(async (err: unknown) => {
+      logger.warn({ err }, "couldn't check Insights' WhatsApp webhook with Meta; the next tick tries again");
+      await deps.coord.release("wa-platform-webhook").catch(() => {});
+      return "failed" as const;
+    });
+  }
   return out;
 }
 

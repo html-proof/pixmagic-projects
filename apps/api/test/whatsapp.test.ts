@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { systemDb, type Prisma } from "@app/db";
-import { newLinkToken, waEncrypt, type FetchLike } from "@app/core";
+import { ensurePlatformWebhook, newLinkToken, waEncrypt, type FetchLike } from "@app/core";
 import { sha256Hex, signMetaBody, TEMPLATE_LIBRARY, whatsappConfigSchema } from "@app/shared";
 import { clean, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
 
@@ -211,6 +211,83 @@ describe("connecting WhatsApp", () => {
     expect(kept.json().webhook).toBe("in_use");
     expect(meta.subscribed).toHaveLength(0);
     expect(kept.json().connection.verifyToken).toMatch(/^wa_vt_/);
+  });
+
+  /** Meta behind "Continue with WhatsApp": the code exchange, then the business token as above. */
+  function embeddedMeta(numbers = 1) {
+    const exchanged: string[] = [];
+    const fetch: FetchLike = async (input, init) => {
+      const u = new URL(String(input));
+      if (u.pathname.endsWith("/oauth/access_token")) {
+        exchanged.push(`${u.searchParams.get("client_id")}:${u.searchParams.get("client_secret")}:${u.searchParams.get("code")}`);
+        return u.searchParams.get("code") === "es-code-123456" ? json({ access_token: "EAAG_valid_system_user_token_0123456789" }) : json({ error: { message: "bad code", type: "OAuthException" } }, 400);
+      }
+      if (u.pathname.endsWith("/1111111111/phone_numbers") && u.searchParams.get("fields")?.includes("verified_name")) {
+        return json({ data: Array.from({ length: numbers }, (_, i) => ({ id: i ? `55555${i}0000` : "2222222222", display_phone_number: `+91 98765 0000${i}`, platform_type: "CLOUD_API" })) });
+      }
+      return guidedMeta().fetch(input, init);
+    };
+    return { fetch, exchanged };
+  }
+
+  it("connects with Continue with WhatsApp, using the ids Meta posted to the page", async () => {
+    const o = await owner();
+    const meta = embeddedMeta();
+    ctx.setFetch(meta.fetch);
+    const view = await ctx.app.inject({ method: "GET", url: o.base, headers: o.headers });
+    expect(view.json().platform).toMatchObject({ embeddedSignup: true, appId: "123", configId: "456" });
+    expect(JSON.stringify(view.json().platform)).not.toContain("platform_secret");
+
+    const res = await ctx.app.inject({ method: "POST", url: `${o.base}/embedded`, headers: o.headers, payload: { code: "es-code-123456", wabaId: "1111111111", phoneNumberId: "2222222222", businessId: "9999999" } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().connection).toMatchObject({ mode: "embedded", phoneNumberId: "2222222222", businessId: "9999999", verifyToken: null });
+    expect(meta.exchanged).toEqual(["123:platform_secret:es-code-123456"]);
+    expect(res.body).not.toContain("EAAG_valid");
+
+    const expired = await ctx.app.inject({ method: "POST", url: `${o.base}/embedded`, headers: o.headers, payload: { code: "es-code-expired", wabaId: "1111111111", phoneNumberId: "2222222222" } });
+    expect(expired.json().error).toBe("exchange_failed");
+  });
+
+  it("asks Meta which number was shared when the page never heard, and won't guess between two", async () => {
+    const o = await owner();
+    ctx.setFetch(embeddedMeta().fetch);
+    const res = await ctx.app.inject({ method: "POST", url: `${o.base}/embedded`, headers: o.headers, payload: { code: "es-code-123456" } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().connection).toMatchObject({ mode: "embedded", wabaId: "1111111111", phoneNumberId: "2222222222" });
+
+    await systemDb.whatsappTemplate.deleteMany({});
+    await systemDb.whatsappConnection.deleteMany({});
+    ctx.setFetch(embeddedMeta(2).fetch);
+    const two = await ctx.app.inject({ method: "POST", url: `${o.base}/embedded`, headers: o.headers, payload: { code: "es-code-123456" } });
+    expect(two.json().error).toBe("number_unknown");
+    expect(await systemDb.whatsappConnection.count()).toBe(0);
+
+    const half = await ctx.app.inject({ method: "POST", url: `${o.base}/embedded`, headers: o.headers, payload: { code: "es-code-123456", wabaId: "1111111111" } });
+    expect(half.statusCode).toBe(400);
+  });
+
+  it("points Insights' own Meta app's webhook here by itself, once", async () => {
+    const subs: Array<{ object: string; callback_url: string; active: boolean; fields: Array<{ name: string }> }> = [];
+    const posts: Array<Record<string, string>> = [];
+    ctx.setFetch(async (input, init) => {
+      const u = new URL(String(input));
+      const auth = (init?.headers as Record<string, string> | undefined)?.authorization;
+      if (!u.pathname.endsWith("/123/subscriptions") || auth !== "Bearer 123|platform_secret") return json({ error: { message: "unexpected" } }, 400);
+      if (init?.method === "GET") return json({ data: subs });
+      const q = Object.fromEntries(u.searchParams);
+      const hs = await ctx.app.inject({ method: "GET", url: `/webhooks/whatsapp?hub.mode=subscribe&hub.verify_token=${encodeURIComponent(q.verify_token ?? "")}&hub.challenge=c1` });
+      if (hs.body !== "c1") return json({ error: { message: "Callback verification failed" } }, 400);
+      posts.push(q);
+      subs.splice(0, subs.length, { object: q.object!, callback_url: q.callback_url!, active: true, fields: q.fields!.split(",").map((name) => ({ name })) });
+      return json({ success: true });
+    });
+    expect(await ensurePlatformWebhook(ctx.deps.fetchImpl)).toBe("set");
+    expect(posts[0]).toMatchObject({ object: "whatsapp_business_account", callback_url: "http://localhost:4000/webhooks/whatsapp", verify_token: "platform-verify-token" });
+    expect(await ensurePlatformWebhook(ctx.deps.fetchImpl)).toBe("already");
+    expect(posts).toHaveLength(1);
+
+    ctx.setEnv({ WHATSAPP_WEBHOOK_VERIFY_TOKEN: "" });
+    expect(await ensurePlatformWebhook(ctx.deps.fetchImpl)).toBe("unconfigured");
   });
 
   it("says Embedded Signup isn't set up rather than pretending", async () => {

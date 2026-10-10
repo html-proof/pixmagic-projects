@@ -13,6 +13,7 @@ import {
   waRegisterPhone,
   waSetAppWebhook,
   waSubscribeApp,
+  waPlatformConfig,
   waTokenInfo,
   WhatsappApiError,
 } from "./graph.js";
@@ -200,12 +201,29 @@ export async function setupManualWebhook(conn: WhatsappConnection, appId: string
   try {
     const r = await waSetAppWebhook({ appId, appSecret }, `${env().API_URL}/webhooks/whatsapp`, verifyToken, fetchImpl);
     if (r === "in_use") return "in_use";
+    if (r === "already") {
+      // Already delivering here (an earlier connection with this app): no handshake comes, nor is one needed.
+      await systemDb.whatsappConnection.update({ where: { id: conn.id }, data: { webhookVerifiedAt: new Date() } });
+      return "verified";
+    }
     const after = await systemDb.whatsappConnection.findUnique({ where: { id: conn.id }, select: { webhookVerifiedAt: true } });
     return after?.webhookVerifiedAt ? "verified" : "failed";
   } catch (err) {
     logger.warn({ err, connectionId: conn.id }, "whatsapp: setting the app's webhook failed; the merchant can do it by hand");
     return "failed";
   }
+}
+
+/**
+ * Insights' own Meta app (Continue with WhatsApp): keep its WhatsApp webhook pointed at Insights,
+ * so the owner never pastes a callback URL into Meta. Needs the app id, secret and verify token.
+ */
+export async function ensurePlatformWebhook(fetchImpl: FetchLike): Promise<"unconfigured" | "set" | "already" | "in_use"> {
+  const cfg = waPlatformConfig();
+  if (!cfg?.verifyToken) return "unconfigured";
+  const r = await waSetAppWebhook({ appId: cfg.appId, appSecret: cfg.appSecret }, `${env().API_URL}/webhooks/whatsapp`, cfg.verifyToken, fetchImpl);
+  if (r === "in_use") logger.warn({ appId: cfg.appId }, "Insights' Meta app sends WhatsApp webhooks to another URL; left alone");
+  return r;
 }
 
 /** Register the number with the Cloud API (Embedded Signup numbers that aren't yet). */

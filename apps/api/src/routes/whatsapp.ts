@@ -155,7 +155,11 @@ export function whatsappRoutes(app: App, deps: Deps) {
     const access = await requireWorkspace(c, deps, ws, "stores:manage");
     const store = await waStore(ws, storeId);
     await limit(deps.coord, `rl:wa-connect:${storeId}`, LIMITS.waConnect);
-    const input = z.object({ code: z.string().min(10).max(2000), wabaId: idSchema, phoneNumberId: idSchema, businessId: idSchema.optional() }).parse(await body(c));
+    // The ids come from Meta's message to the page; when that never arrived, they're asked of Meta below.
+    const input = z
+      .object({ code: z.string().min(10).max(2000), wabaId: idSchema.optional(), phoneNumberId: idSchema.optional(), businessId: idSchema.optional() })
+      .refine((v) => !!v.wabaId === !!v.phoneNumberId, "wabaId and phoneNumberId go together")
+      .parse(await body(c));
     const cfg = waPlatformConfig();
     if (!cfg) throw new HttpError(503, "Connect WhatsApp Business isn't set up on this Insights server yet.", "not_configured");
     let token: string;
@@ -165,7 +169,16 @@ export function whatsappRoutes(app: App, deps: Deps) {
       logger.warn({ err, storeId }, "whatsapp embedded signup code exchange failed");
       throw new HttpError(400, "Meta didn't accept the sign-in (it expires after 30 seconds). Please press Connect again.", "exchange_failed");
     }
-    const conn = await connectWhatsapp({ store, mode: "embedded", wabaId: input.wabaId, phoneNumberId: input.phoneNumberId, businessId: input.businessId, accessToken: token, userId: access.user!.id }, deps.fetchImpl).catch(connectError);
+    let ids = input.wabaId && input.phoneNumberId ? { wabaId: input.wabaId, phoneNumberId: input.phoneNumberId } : null;
+    if (!ids) {
+      const found = await discoverWhatsapp(token, deps.fetchImpl).catch(connectError);
+      const numbers = found.accounts.flatMap((a) => a.numbers.map((n) => ({ wabaId: a.id, phoneNumberId: n.id })));
+      if (numbers.length !== 1) {
+        throw new HttpError(400, "Meta didn't say which number you chose. Please press Continue with WhatsApp again.", "number_unknown");
+      }
+      ids = numbers[0]!;
+    }
+    const conn = await connectWhatsapp({ store, mode: "embedded", ...ids, businessId: input.businessId, accessToken: token, userId: access.user!.id }, deps.fetchImpl).catch(connectError);
     await audit({ workspaceId: ws, actorUserId: access.user!.id, action: "whatsapp.connected", targetType: "store", targetId: storeId, metadata: { mode: "embedded", wabaId: conn.wabaId, phoneNumberId: conn.phoneNumberId }, ip: clientIp(c) });
     return c.json({ connection: publicConnection(conn, true) });
   });
