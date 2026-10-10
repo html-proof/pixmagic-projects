@@ -567,6 +567,22 @@ export default function ConnectWhatsapp() {
             </>
           ) : (
             <div className="mt-4">
+              {/* The one-click button, shown but off until Insights' Meta app is configured (docs/whatsapp.md). */}
+              {!c && (
+                <div className="mb-6 flex flex-wrap items-center gap-3 rounded-lg border border-dashed border-border px-3 py-3">
+                  <button
+                    type="button"
+                    disabled
+                    aria-describedby="wa-soon"
+                    className="inline-flex h-11 cursor-not-allowed items-center gap-2 rounded-lg bg-[#25D366] px-5 text-sm font-semibold text-[#0b3d20] opacity-50"
+                  >
+                    <WhatsappIcon size={20} /> Continue with WhatsApp
+                  </button>
+                  <p id="wa-soon" className="min-w-0 flex-1 basis-56 text-sm text-muted">
+                    <span className="font-medium text-text">Coming soon:</span> connect in one click through Meta. For now, connect in three steps below.
+                  </p>
+                </div>
+              )}
               <ManualConnect onConnected={reloaded} reconnect={!!c} />
             </div>
           )}
