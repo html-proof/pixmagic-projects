@@ -164,8 +164,9 @@ function Start() {
    */
   const checkSignedIn = useCallback(async () => {
     try {
-      const me = await api<{ user: { emailVerified: boolean } }>("/me");
-      if (me.user.emailVerified && !errorCode) router.replace("/");
+      // /auth/whoami: a visitor is `user: null`, not a 401 the browser would log as an error.
+      const me = await api<{ user: { emailVerified: boolean } | null }>("/auth/whoami");
+      if (me.user?.emailVerified && !errorCode) router.replace("/");
     } catch (err) {
       if (isTransient(err)) {
         setCheckError(err);

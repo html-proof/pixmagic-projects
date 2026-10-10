@@ -78,6 +78,13 @@ describe("while the database is unreachable", () => {
     expect(forged.statusCode).toBe(401);
   });
 
+  it("/auth/whoami says so too, so the homepage never takes a merchant for a visitor", async () => {
+    const { cookie } = await signIn(ctx, "u1", "a@x.com");
+    const who = await dbDown(() => ctx.app.inject({ method: "GET", url: "/auth/whoami", headers: { cookie } }));
+    expect(who.statusCode).toBe(503);
+    expect((await dbDown(() => ctx.app.inject({ method: "GET", url: "/auth/whoami" }))).json()).toEqual({ user: null, workspaces: [] });
+  });
+
   it("claim tells a signed-in merchant to try again, not to sign in", async () => {
     const { headers } = await signIn(ctx, "u1", "a@x.com");
     const res = await dbDown(() => ctx.app.inject({ method: "POST", url: "/auth/shopify/claim", headers, payload: {} }));

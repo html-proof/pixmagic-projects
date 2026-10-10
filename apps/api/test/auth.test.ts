@@ -26,6 +26,21 @@ describe("session", () => {
     expect((await ctx.app.inject({ method: "GET", url: "/me", headers: { cookie: "__session=garbage" } })).statusCode).toBe(401);
   });
 
+  it("/auth/whoami answers /me for a session and a plain 200 for visitors", async () => {
+    const { cookie } = await signIn(ctx, "u1", "a@x.com");
+    const signedIn = await ctx.app.inject({ method: "GET", url: "/auth/whoami", headers: { cookie } });
+    const me = await ctx.app.inject({ method: "GET", url: "/me", headers: { cookie } });
+    expect(signedIn.statusCode).toBe(200);
+    expect(signedIn.json()).toEqual(me.json());
+
+    const visitors: Record<string, string>[] = [{}, { cookie: "__session=garbage" }];
+    for (const headers of visitors) {
+      const visitor = await ctx.app.inject({ method: "GET", url: "/auth/whoami", headers });
+      expect(visitor.statusCode).toBe(200);
+      expect(visitor.json()).toEqual({ user: null, workspaces: [] });
+    }
+  });
+
   it("blocks cross-site state-changing requests (CSRF)", async () => {
     const { cookie } = await signIn(ctx, "u1", "a@x.com");
     const res = await ctx.app.inject({ method: "POST", url: "/workspaces", headers: { cookie, origin: "https://evil.example" }, payload: { name: "x" } });

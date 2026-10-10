@@ -3,7 +3,7 @@ import { z } from "zod";
 import { systemDb } from "@app/db";
 import { env, logger } from "@app/core";
 import { generateOtp, hashOtp, OTP_MAX_ATTEMPTS, OTP_TTL_MS, verifyOtp } from "@app/shared";
-import { body, clientIp, HttpError, requireAppOrigin, requireUser, SESSION_COOKIE, type Deps } from "../context.js";
+import { body, clientIp, HttpError, loadUser, requireAppOrigin, requireUser, SESSION_COOKIE, type Ctx, type Deps } from "../context.js";
 import { FirebaseUnavailableError } from "../authProvider.js";
 import type { App } from "../app.js";
 import { limit, LIMITS } from "../rateLimit.js";
@@ -77,8 +77,7 @@ export function authRoutes(app: App, deps: Deps) {
     return c.json({ ok: true });
   });
 
-  app.get("/me", async (c) => {
-    const user = await requireUser(c, deps);
+  async function me(c: Ctx, user: Awaited<ReturnType<typeof requireUser>>) {
     const memberships = await systemDb.membership.findMany({
       where: { userId: user.id },
       include: { workspace: { select: { id: true, name: true } } },
@@ -88,6 +87,18 @@ export function authRoutes(app: App, deps: Deps) {
       user: publicUser(user),
       workspaces: memberships.map((m) => ({ id: m.workspace.id, name: m.workspace.name, role: m.role })),
     });
+  }
+
+  app.get("/me", async (c) => me(c, await requireUser(c, deps)));
+
+  /**
+   * The public homepage's "already signed in?" check: GET /me's answer for a session, and
+   * `{ user: null }` with a 200 for everyone else. A 401 there is expected, but every browser logs
+   * it as a console error on the page most visitors see. Outages still answer 503 (loadUser).
+   */
+  app.get("/auth/whoami", async (c) => {
+    const user = await loadUser(c, deps);
+    return user ? me(c, user) : c.json({ user: null, workspaces: [] });
   });
 
   app.patch("/me", async (c) => {
