@@ -9,9 +9,11 @@ import { Cursor } from "./shared/Cursor";
 import { Navbar } from "./navigation/Navbar";
 import { IntroAnimation } from "./intro/IntroAnimation";
 import { InsightHero } from "./hero/InsightHero";
+import { Deferred, releaseWhenIdle } from "./shared/Deferred";
 
 // Everything below the hero is split into its own chunks. They still render into the static
-// HTML (SEO, no layout jump), but their JavaScript doesn't hold up the first screen.
+// HTML (SEO, no layout jump), but their JavaScript doesn't hold up the first screen, and each one
+// hydrates only as it nears the viewport or once the page is idle (Deferred).
 const SignalsToDecisions = dynamic(() => import("./story/SignalsToDecisions").then((m) => m.SignalsToDecisions));
 const BusinessPulse = dynamic(() => import("./story/BusinessPulse").then((m) => m.BusinessPulse));
 const CustomerJourney = dynamic(() => import("./story/CustomerJourney").then((m) => m.CustomerJourney));
@@ -31,7 +33,7 @@ type Phase = "intro" | "handoff" | "done";
  */
 let introPlayed = false;
 
-type Me = { user: { emailVerified: boolean }; workspaces: unknown[] };
+type Me = { user: { emailVerified: boolean } | null; workspaces: unknown[] };
 
 export function LandingPage() {
   const router = useRouter();
@@ -42,17 +44,22 @@ export function LandingPage() {
   useEffect(() => {
     if (reduced) setPhase("done");
   }, [reduced]);
+  // Hydrate the scenes below the hero in the browser's idle moments from now on (and any of them
+  // straight away as it nears the viewport): small pieces between the opening's frames, instead of
+  // one long task before the opening could start.
+  useEffect(() => releaseWhenIdle(250), []);
   useEffect(() => {
     if (phase === "done") introPlayed = true;
   }, [phase]);
 
   // `/` is still where sign-in sends people: a signed-in merchant goes straight on to the app.
-  // Anyone else (not signed in, or the API unreachable) stays on the landing page.
+  // Anyone else (not signed in, or the API unreachable) stays on the landing page. /auth/whoami
+  // answers visitors with `user: null` rather than /me's 401, which browsers log as an error.
   useEffect(() => {
     let cancelled = false;
-    api<Me>("/me")
+    api<Me>("/auth/whoami")
       .then((me) => {
-        if (!cancelled) router.replace(me.user.emailVerified && me.workspaces.length ? "/dashboard" : "/onboarding");
+        if (!cancelled && me.user) router.replace(me.user.emailVerified && me.workspaces.length ? "/dashboard" : "/onboarding");
       })
       .catch(() => {});
     return () => {
@@ -73,17 +80,37 @@ export function LandingPage() {
       {phase !== "done" && <IntroAnimation onHandoff={() => setPhase("handoff")} onDone={() => setPhase("done")} />}
       <main id="main">
         <InsightHero ready={phase !== "intro"} />
-        <SignalsToDecisions />
-        <BusinessPulse />
-        <CustomerJourney />
-        <CustomerIntelligence />
-        <ProfitIntelligence />
-        <AskInsight />
-        <ShopifyConnection />
-        <ProductReveal />
-        <FinalCTA />
+        <Deferred id="signals">
+          <SignalsToDecisions />
+        </Deferred>
+        <Deferred id="pulse">
+          <BusinessPulse />
+        </Deferred>
+        <Deferred id="journey">
+          <CustomerJourney />
+        </Deferred>
+        <Deferred id="customers">
+          <CustomerIntelligence />
+        </Deferred>
+        <Deferred id="profit">
+          <ProfitIntelligence />
+        </Deferred>
+        <Deferred id="ask">
+          <AskInsight />
+        </Deferred>
+        <Deferred id="connection">
+          <ShopifyConnection />
+        </Deferred>
+        <Deferred id="product">
+          <ProductReveal />
+        </Deferred>
+        <Deferred id="final">
+          <FinalCTA />
+        </Deferred>
       </main>
-      <Footer />
+      <Deferred id="footer">
+        <Footer />
+      </Deferred>
     </div>
   );
 }

@@ -27,6 +27,21 @@ const T = {
 } as const;
 
 /**
+ * The static HTML shows the opening's first frame (one point of light) from the first paint, and
+ * the build starts when the script has loaded. On a slow phone that can be a couple of seconds
+ * later, so the build then plays faster: hand-off at most about INTRO_BUDGET seconds after the
+ * first paint, never more than MAX_PACE times the designed speed. Fast devices see it as designed.
+ */
+const INTRO_BUDGET = 3.2;
+const MAX_PACE = 1.6;
+
+function introPace() {
+  const paint = performance.getEntriesByName("first-contentful-paint")[0]?.startTime ?? 0;
+  const left = INTRO_BUDGET - Math.max(0, performance.now() - paint) / 1000;
+  return Math.min(MAX_PACE, Math.max(1, T.handoff / Math.max(0.01, left)));
+}
+
+/**
  * The flight is one 0..1 progress on a critically damped spring: the same calm settle as SPRING,
  * without its long overdamped tail (which crept for half a second and still snapped at the swap).
  * Rest thresholds are tight enough that it stops well under a pixel from the slot.
@@ -287,7 +302,7 @@ export function IntroAnimation({ onHandoff, onDone }: { onHandoff: () => void; o
 
     lock();
     skipEvents.forEach((e) => window.addEventListener(e, skip, { passive: true }));
-    clock = animate(t, T.handoff, { duration: Math.max(0.01, T.handoff - t.get()), ease: "linear", onComplete: handoff });
+    clock = animate(t, T.handoff, { duration: Math.max(0.01, (T.handoff - t.get()) / introPace()), ease: "linear", onComplete: handoff });
 
     return () => {
       disposed = true;
@@ -305,7 +320,7 @@ export function IntroAnimation({ onHandoff, onDone }: { onHandoff: () => void; o
       <style>{FALLBACK_CSS}</style>
       <motion.div className="absolute inset-0 overflow-hidden bg-lp-bg" style={{ opacity: backdropOpacity }}>
         <motion.div
-          className="absolute left-1/2 top-1/2 -mt-[280px] ml-[calc(var(--lp-intro-shift,0px)_-_280px)] size-[560px] rounded-full"
+          className="absolute left-1/2 top-1/2 -mt-[280px] ml-[calc(var(--lp-intro-shift,0px)_-_280px)] size-[560px] rounded-full will-change-transform"
           style={{
             opacity: haloOpacity,
             scale: haloScale,
