@@ -248,6 +248,16 @@ trigger and queue; nothing else to provision.
 
 ### 5. First use (merchant)
 
+**Registering the number is automatic for a new number.** When Meta's flow finishes with `FINISH`
+(a new Cloud API number), `POST …/whatsapp/embedded` registers it straight away
+(`autoRegisterWhatsapp`) with a random 6-digit PIN, which becomes the number's two-step verification
+PIN. The PIN is stored encrypted (`whatsapp_connections.pin_enc`, AAD `wa:<storeId>:pin`, migration
+`20261011090000_whatsapp_pin`) and owners and admins can reveal it (`POST …/whatsapp/pin`, audited as
+`whatsapp.pin_viewed`), which they only need to move the number elsewhere. A number that already has a
+PIN refuses ours (Meta error 133005) and the merchant is asked for theirs, as before. A WhatsApp
+Business app number (`FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING`, coexistence), or a finish Meta didn't
+describe, is never registered by Insights: registering would take it off the app.
+
 Connect WhatsApp → register the number (6-digit PIN) if asked → Message templates: submit Insights' templates (or
 create your own) and wait for approval → Settings: choose the consent basis → turn notifications on and pick each
 template → send yourself a test.

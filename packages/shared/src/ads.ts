@@ -186,6 +186,130 @@ export function fromMetaInsight(accountId: string, r: MetaInsightRow): AdDayRow 
   };
 }
 
+// ---------------------------------------------------------------------------
+// The Meta Ads report: one date range at a time, asked of Meta directly (not added up from the
+// stored days), because reach and frequency count people once over the whole range.
+// ---------------------------------------------------------------------------
+
+export const META_REPORT_LEVELS = ["campaign", "adset", "ad"] as const;
+export type MetaReportLevel = (typeof META_REPORT_LEVELS)[number];
+
+/** One row of GET /act_<id>/insights for a whole range (no time_increment). */
+export interface MetaRangeInsight {
+  campaign_id?: string;
+  campaign_name?: string;
+  adset_id?: string;
+  adset_name?: string;
+  ad_id?: string;
+  ad_name?: string;
+  spend?: string;
+  impressions?: string;
+  reach?: string;
+  frequency?: string;
+  clicks?: string;
+  inline_link_clicks?: string;
+  actions?: MetaAction[];
+  action_values?: MetaAction[];
+  attribution_setting?: string;
+}
+
+export interface MetaReportMetrics {
+  spend: number;
+  impressions: number;
+  /** People who saw an ad at least once in the range; null when Meta didn't say. */
+  reach: number | null;
+  /** Impressions per person reached. */
+  frequency: number | null;
+  /** Every click, including likes, comments and profile clicks. */
+  clicks: number;
+  /** Clicks on the ad's link (to the store, the app, WhatsApp...). */
+  linkClicks: number;
+  /** Link clicks per impression. */
+  linkCtr: number | null;
+  costPerLinkClick: number | null;
+  /** Spend per thousand impressions. */
+  cpm: number | null;
+  /** Purchases Meta attributes to the ads (its own count, not the store's orders). */
+  purchases: number;
+  purchaseValue: number;
+  costPerPurchase: number | null;
+  /** Purchase value per unit of spend. */
+  roas: number | null;
+  leads: number;
+}
+
+export interface MetaReportRow extends MetaReportMetrics {
+  id: string;
+  name: string;
+  /** The campaign an ad set or ad is in (null on the campaign level). */
+  campaignName: string | null;
+  /** The ad set an ad is in (null above the ad level). */
+  adsetName: string | null;
+  /** Meta's effective_status (ACTIVE, PAUSED, CAMPAIGN_PAUSED, WITH_ISSUES...), null when unknown. */
+  status: string | null;
+  /** How Meta credited purchases, e.g. "7d_click_1d_view". */
+  attribution: string | null;
+}
+
+const num = (s: string | undefined) => {
+  const n = Number(s ?? 0);
+  return Number.isFinite(n) ? n : 0;
+};
+
+export function metaReportMetrics(r: MetaRangeInsight): MetaReportMetrics {
+  const spend = r2(num(r.spend));
+  const impressions = Math.round(num(r.impressions));
+  const linkClicks = Math.round(num(r.inline_link_clicks));
+  const purchases = firstAction(r.actions, META_PURCHASE);
+  const purchaseValue = r2(firstAction(r.action_values, META_PURCHASE));
+  const reach = r.reach === undefined ? null : Math.round(num(r.reach));
+  const frequency = r.frequency !== undefined ? Math.round(num(r.frequency) * 100) / 100 : reach ? Math.round((impressions / reach) * 100) / 100 : null;
+  const cpl = ratio(spend, linkClicks);
+  const cpm = ratio(spend * 1000, impressions);
+  const cpp = ratio(spend, purchases);
+  return {
+    spend,
+    impressions,
+    reach,
+    frequency,
+    clicks: Math.round(num(r.clicks)),
+    linkClicks,
+    linkCtr: ratio(linkClicks, impressions),
+    costPerLinkClick: cpl === null ? null : r2(cpl),
+    cpm: cpm === null ? null : r2(cpm),
+    purchases,
+    purchaseValue,
+    costPerPurchase: cpp === null ? null : r2(cpp),
+    roas: ratio(purchaseValue, spend),
+    leads: Math.round(firstAction(r.actions, META_LEAD)),
+  };
+}
+
+export function fromMetaRangeInsight(level: MetaReportLevel, r: MetaRangeInsight): MetaReportRow {
+  const id = (level === "campaign" ? r.campaign_id : level === "adset" ? r.adset_id : r.ad_id) ?? "unknown";
+  const name = (level === "campaign" ? r.campaign_name : level === "adset" ? r.adset_name : r.ad_name) ?? id;
+  return {
+    id,
+    name,
+    campaignName: level === "campaign" ? null : (r.campaign_name ?? null),
+    adsetName: level === "ad" ? (r.adset_name ?? null) : null,
+    status: null,
+    attribution: r.attribution_setting ?? null,
+    ...metaReportMetrics(r),
+  };
+}
+
+/** "7d_click_1d_view" → "7-day click, 1-day view"; anything unrecognised is shown as Meta wrote it. */
+export function metaAttributionLabel(setting: string | null | undefined): string | null {
+  if (!setting) return null;
+  const parts = setting.split(/[,_](?=\d)/).map((p) => {
+    const m = /^(\d+)d_(click|view|ev)$/.exec(p.trim());
+    if (!m) return null;
+    return `${m[1]}-day ${m[2] === "click" ? "click" : m[2] === "view" ? "view" : "engaged view"}`;
+  });
+  return parts.every((p) => p !== null) ? parts.join(", ") : setting;
+}
+
 /** One result of googleAds:searchStream for the campaign query (JSON field names are camelCase). */
 export interface GoogleAdsRow {
   campaign?: { id?: string; name?: string };

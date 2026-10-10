@@ -35,6 +35,8 @@ export function publicConnection(c: WhatsappConnection, manage: boolean) {
     lastSyncedAt: c.lastSyncedAt,
     connectedAt: c.createdAt,
     hasAppSecret: !!c.appSecretEnc,
+    /** Whether Insights knows the number's two-step verification PIN (POST .../pin shows it to owners and admins). */
+    hasPin: !!c.pinEnc,
     verifyToken: manage && c.mode === "manual" ? manualVerifyToken(c) : null,
   };
 }

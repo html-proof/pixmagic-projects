@@ -14,14 +14,20 @@ import {
   fromAdsenseReport,
   fromGoogleAdsRow,
   fromMetaInsight,
+  fromMetaRangeInsight,
   googleCustomerId,
   isDay,
   metaAccountId,
+  metaReportMetrics,
   type AdDayRow,
   type AdsenseDayRow,
   type AdsenseReport,
   type GoogleAdsRow,
   type MetaInsightRow,
+  type MetaRangeInsight,
+  type MetaReportLevel,
+  type MetaReportMetrics,
+  type MetaReportRow,
 } from "@app/shared";
 import type { FetchLike } from "./shopify.js";
 
@@ -177,6 +183,8 @@ export async function metaCampaignDays(c: MetaConfig, accessToken: string, accou
     time_increment: "1",
     time_range: JSON.stringify({ since, until }),
     fields: "campaign_id,campaign_name,spend,impressions,clicks,actions,action_values",
+    // Purchases credited by each ad set's own attribution setting, the way Ads Manager counts them.
+    use_unified_attribution_setting: "true",
     limit: "500",
     access_token: accessToken,
   });
@@ -187,6 +195,91 @@ export async function metaCampaignDays(c: MetaConfig, accessToken: string, accou
     page = await metaGet(c, next, {});
   }
   return out;
+}
+
+const RANGE_FIELDS = "spend,impressions,reach,frequency,clicks,inline_link_clicks,actions,action_values";
+const LEVEL_FIELDS: Record<MetaReportLevel, string> = {
+  campaign: "campaign_id,campaign_name",
+  adset: "campaign_name,adset_id,adset_name,attribution_setting",
+  ad: "campaign_name,adset_name,ad_id,ad_name,attribution_setting",
+};
+
+/**
+ * Totals for one whole range, for the account or per campaign / ad set / ad. Results follow each
+ * ad set's own attribution setting, as Ads Manager shows them.
+ */
+export async function metaRangeInsights(c: MetaConfig, accessToken: string, accountId: string, level: "account" | MetaReportLevel, since: string, until: string, maxRows = 2000): Promise<MetaRangeInsight[]> {
+  if (!isDay(since) || !isDay(until)) throw new AdsApiError(`Invalid date range ${since}..${until}`, 400);
+  const out: MetaRangeInsight[] = [];
+  let page = await metaGet<{ data: MetaRangeInsight[]; paging?: { next?: string } }>(c, `${metaAccountId(accountId)}/insights`, {
+    level,
+    time_range: JSON.stringify({ since, until }),
+    fields: level === "account" ? RANGE_FIELDS : `${LEVEL_FIELDS[level]},${RANGE_FIELDS}`,
+    use_unified_attribution_setting: "true",
+    limit: "500",
+    access_token: accessToken,
+  });
+  for (let i = 0; i < 20; i++) {
+    out.push(...(page.data ?? []));
+    const next = page.paging?.next;
+    if (!next || out.length >= maxRows) break;
+    page = await metaGet(c, next, {});
+  }
+  return out;
+}
+
+/** effective_status per campaign / ad set / ad id (ACTIVE, PAUSED, CAMPAIGN_PAUSED, WITH_ISSUES...). */
+export async function metaStatuses(c: MetaConfig, accessToken: string, ids: string[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const valid = [...new Set(ids)].filter((id) => /^\d{1,30}$/.test(id));
+  for (let i = 0; i < valid.length; i += 50) {
+    const res = await metaGet<Record<string, { id?: string; effective_status?: string }>>(c, "", {
+      ids: valid.slice(i, i + 50).join(","),
+      fields: "effective_status",
+      access_token: accessToken,
+    });
+    for (const [id, v] of Object.entries(res)) if (v?.effective_status) out.set(id, v.effective_status);
+  }
+  return out;
+}
+
+export interface MetaReport {
+  level: MetaReportLevel;
+  since: string;
+  until: string;
+  /** The account's own totals: reach and frequency count each person once over the whole range. */
+  totals: MetaReportMetrics;
+  /** Biggest spend first. */
+  rows: MetaReportRow[];
+  /** More rows had spend than are listed. */
+  truncated: boolean;
+  /** The attribution settings the rows were reported with. */
+  attribution: string[];
+}
+
+export async function metaReport(c: MetaConfig, accessToken: string, accountId: string, level: MetaReportLevel, since: string, until: string, maxRows = 200): Promise<MetaReport> {
+  const [account, raw] = await Promise.all([
+    metaRangeInsights(c, accessToken, accountId, "account", since, until),
+    metaRangeInsights(c, accessToken, accountId, level, since, until),
+  ]);
+  const all = raw.map((r) => fromMetaRangeInsight(level, r)).sort((a, b) => b.spend - a.spend || b.impressions - a.impressions);
+  const rows = all.slice(0, maxRows);
+  // A status that can't be read (an ad deleted since) leaves the row's status unknown, not the report broken.
+  const statuses = await metaStatuses(c, accessToken, rows.map((r) => r.id)).catch((err: unknown) => {
+    if (err instanceof AdsApiError) return new Map<string, string>();
+    throw err;
+  });
+  for (const r of rows) r.status = statuses.get(r.id) ?? null;
+  return {
+    level,
+    since,
+    until,
+    // No row at all: nothing was shown in the range, so nobody was reached.
+    totals: metaReportMetrics(account[0] ?? { reach: "0" }),
+    rows,
+    truncated: all.length > rows.length,
+    attribution: [...new Set(all.map((r) => r.attribution).filter((a): a is string => !!a))],
+  };
 }
 
 // ---------------------------------------------------------------------------

@@ -9,6 +9,9 @@ import {
   fromAdsenseReport,
   fromGoogleAdsRow,
   fromMetaInsight,
+  fromMetaRangeInsight,
+  metaAttributionLabel,
+  metaReportMetrics,
   googleCustomerId,
   metaAccountId,
   previousRange,
@@ -166,5 +169,66 @@ describe("AdSense", () => {
   it("takes the publisher id out of an account name", () => {
     expect(adsenseAccountId("accounts/pub-123")).toBe("pub-123");
     expect(adsenseAccountId("pub-123")).toBe("pub-123");
+  });
+});
+
+describe("the Meta Ads report's numbers", () => {
+  it("works out link clicks, costs, purchases and return from one range's row, counting a purchase once", () => {
+    const m = metaReportMetrics({
+      spend: "250.00",
+      impressions: "50000",
+      reach: "20000",
+      frequency: "2.5",
+      clicks: "900",
+      inline_link_clicks: "600",
+      actions: [
+        { action_type: "omni_purchase", value: "10" },
+        { action_type: "purchase", value: "10" },
+        { action_type: "offsite_conversion.fb_pixel_purchase", value: "10" },
+        { action_type: "lead", value: "3" },
+      ],
+      action_values: [
+        { action_type: "omni_purchase", value: "1000" },
+        { action_type: "purchase", value: "1000" },
+      ],
+    });
+    expect(m).toEqual({
+      spend: 250,
+      impressions: 50000,
+      reach: 20000,
+      frequency: 2.5,
+      clicks: 900,
+      linkClicks: 600,
+      linkCtr: 0.012,
+      costPerLinkClick: 0.42,
+      cpm: 5,
+      purchases: 10,
+      purchaseValue: 1000,
+      costPerPurchase: 25,
+      roas: 4,
+      leads: 3,
+    });
+  });
+
+  it("says 'unknown' rather than zero when Meta leaves a figure out, and never divides by zero", () => {
+    const m = metaReportMetrics({ spend: "0", impressions: "0" });
+    expect(m).toMatchObject({ reach: null, frequency: null, linkCtr: null, costPerLinkClick: null, cpm: null, costPerPurchase: null, roas: null, purchases: 0 });
+    // Frequency is impressions per person when Meta gives reach but not frequency.
+    expect(metaReportMetrics({ impressions: "300", reach: "120" }).frequency).toBe(2.5);
+  });
+
+  it("names rows by their level and keeps the campaign and ad set they sit in", () => {
+    const row = { campaign_id: "1", campaign_name: "Spring", adset_id: "2", adset_name: "Women 25-34", ad_id: "3", ad_name: "Carousel", attribution_setting: "7d_click_1d_view" };
+    expect(fromMetaRangeInsight("campaign", row)).toMatchObject({ id: "1", name: "Spring", campaignName: null, adsetName: null });
+    expect(fromMetaRangeInsight("adset", row)).toMatchObject({ id: "2", name: "Women 25-34", campaignName: "Spring", adsetName: null, attribution: "7d_click_1d_view" });
+    expect(fromMetaRangeInsight("ad", row)).toMatchObject({ id: "3", name: "Carousel", campaignName: "Spring", adsetName: "Women 25-34", status: null });
+  });
+
+  it("puts Meta's attribution settings into words", () => {
+    expect(metaAttributionLabel("7d_click_1d_view")).toBe("7-day click, 1-day view");
+    expect(metaAttributionLabel("1d_click")).toBe("1-day click");
+    expect(metaAttributionLabel("7d_click_1d_view_1d_ev")).toBe("7-day click, 1-day view, 1-day engaged view");
+    expect(metaAttributionLabel("skan")).toBe("skan");
+    expect(metaAttributionLabel(null)).toBeNull();
   });
 });

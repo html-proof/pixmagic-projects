@@ -167,3 +167,19 @@ See `docs/kpis.md`, "Ads" and "Ad earnings (AdSense)". In short:
 - **Purchases and their value** are each platform's **own attribution**: Meta and Google can both claim the same sale, so they are never added into the store's sales.
 - Only accounts in one currency are added together: the store's currency, when any account uses it. Others are listed as left out.
 - Recent days are refreshed hourly. The last 30 days are fetched again daily, because the platforms keep crediting purchases for days after a click.
+- Meta's purchases are counted with `use_unified_attribution_setting=true`: each ad set's own attribution setting, the way Ads Manager shows them.
+
+## The Meta Ads report (dashboard → Ads → "Meta Ads report")
+
+The Ads detail view has a table per connected Meta ad account, by **campaign, ad set or ad**:
+spent, impressions, **reach**, **frequency**, **link clicks**, link click rate, cost per link
+click, cost per 1,000 impressions, purchases, cost per purchase, purchase value and return on ad
+spend, plus each row's delivery status (Active, Paused, In review, Rejected, Has issues...).
+
+- It is asked of Meta for exactly the dates picked (`GET /workspaces/:ws/stores/:storeId/ads/meta/report?connection=&level=&from=&to=`), never added up from the stored days: reach counts each person once over the whole range, so daily reach can't be summed. The "Whole ad account" row is Meta's own account-level figure.
+- Days follow the **ad account's** time zone. Ranges including today say the numbers are still coming in.
+- Answers are cached in the coordinator for 10 minutes (ranges including today) or an hour (past ranges), and limited to 30 Meta reports per store and user per 10 minutes (`LIMITS.adsReport`), to stay inside Meta's rate limits.
+- Expired or revoked access (Meta error 190, or `ads_read` taken back) turns the account to "reconnect" at once, and the report says so instead of showing old numbers as current.
+- Read-only: there is no control that edits a campaign, budget or ad, and `ads_management` is never requested.
+
+Merchants manage all three integrations (Shopify, WhatsApp, Meta Ads) from **Settings → Connect your business** (`/settings/integrations`): one button each, a status (Not connected, Connecting, Connected, Action required, Permission expired, Connection failed), the account and identifier, the last sync, and Reconnect / Disconnect.

@@ -205,6 +205,21 @@ describe("dates & time zones", () => {
     expect(() => resolvePreset("custom", now, "UTC", { from: "2026-10-02", to: "2026-10-01" })).toThrow();
   });
 
+  it("resolves last month as the whole calendar month, against the whole month before it", () => {
+    expect(resolvePreset("lastmonth", new Date("2026-10-02T12:00:00Z"), "UTC")).toEqual({
+      range: { from: "2026-09-01", to: "2026-09-30" },
+      previous: { from: "2026-08-01", to: "2026-08-31" },
+    });
+    // January looks back across the year; March compares with a short February.
+    expect(resolvePreset("lastmonth", new Date("2026-01-15T12:00:00Z"), "UTC").range).toEqual({ from: "2025-12-01", to: "2025-12-31" });
+    expect(resolvePreset("lastmonth", new Date("2026-04-01T12:00:00Z"), "UTC")).toEqual({
+      range: { from: "2026-03-01", to: "2026-03-31" },
+      previous: { from: "2026-02-01", to: "2026-02-28" },
+    });
+    // The store's own calendar: 1 Nov in Sydney is still October in UTC.
+    expect(resolvePreset("lastmonth", new Date("2026-10-31T20:00:00Z"), "Australia/Sydney").range).toEqual({ from: "2026-10-01", to: "2026-10-31" });
+  });
+
   it("only treats a finished, in-order custom range as one to report on", () => {
     const now = new Date("2026-10-02T12:00:00Z");
     expect(customRangeProblem({ from: "2026-09-01", to: "2026-09-15" })).toBeNull();

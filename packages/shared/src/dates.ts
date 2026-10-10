@@ -19,7 +19,7 @@ export function daysBetweenInclusive(from: string, to: string): number {
   return Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000) + 1;
 }
 
-export const DATE_PRESETS = ["today", "yesterday", "7d", "30d", "90d", "mtd", "custom"] as const;
+export const DATE_PRESETS = ["today", "yesterday", "7d", "30d", "90d", "mtd", "lastmonth", "custom"] as const;
 export type DatePreset = (typeof DATE_PRESETS)[number];
 
 export interface DateRange {
@@ -113,6 +113,13 @@ export function resolvePreset(
     case "mtd":
       range = { from: `${today.slice(0, 8)}01`, to: today };
       break;
+    case "lastmonth": {
+      // The whole calendar month before this one, against the whole month before that.
+      const lastDay = addDays(`${today.slice(0, 8)}01`, -1);
+      range = { from: `${lastDay.slice(0, 8)}01`, to: lastDay };
+      const prevLast = addDays(range.from, -1);
+      return { range, previous: { from: `${prevLast.slice(0, 8)}01`, to: prevLast } };
+    }
     case "custom": {
       const problem = customRangeProblem(custom ?? {}, today);
       if (problem) throw new Error(CUSTOM_RANGE_ERROR[problem]);

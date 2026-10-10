@@ -5,7 +5,7 @@
  * sync job is apps/worker.
  */
 import { systemDb, type AdConnection } from "@app/db";
-import { addDays, decrypt, encrypt, keyVersionOf, localDay, type AdDayRow, type AdProvider, type AdsenseDayRow } from "@app/shared";
+import { addDays, decrypt, encrypt, keyVersionOf, localDay, type AdDayRow, type AdProvider, type AdsenseDayRow, type MetaReportLevel } from "@app/shared";
 import {
   AdsApiError,
   AdsAuthError,
@@ -15,7 +15,9 @@ import {
   isMetaPermissionError,
   metaCampaignDays,
   metaGrantedPermissions,
+  metaReport,
   type AdAccount,
+  type MetaReport,
   type AdsenseConfig,
   type GoogleConfig,
   type MetaConfig,
@@ -313,6 +315,33 @@ export async function syncAdConnection(connectionId: string, since: string, unti
       await systemDb.adConnection.update({ where: { id: conn.id }, data: { status: "reconnect", lastError: message } });
     } else if (err instanceof AdsApiError) {
       await systemDb.adConnection.update({ where: { id: conn.id }, data: { status: "error", lastError: message } });
+    }
+    throw err;
+  }
+}
+
+/**
+ * The Meta Ads report for one connected account and range, straight from Meta. Lost access
+ * (expired, revoked, ads_read taken back) marks the connection "reconnect", as a sync would, so
+ * the dashboard stops presenting its numbers as current.
+ */
+export async function metaReportForConnection(conn: AdConnection, level: MetaReportLevel, since: string, until: string, fetchImpl?: FetchLike): Promise<MetaReport> {
+  const cfg = metaConfig(fetchImpl);
+  if (!cfg) throw new AdsApiError("Meta isn't set up on this server", 503);
+  try {
+    const token = await adAccessToken(conn, fetchImpl);
+    try {
+      return await metaReport(cfg, token, conn.accountId, level, since, until);
+    } catch (err) {
+      if (isMetaPermissionError(err)) {
+        const granted = await metaGrantedPermissions(cfg, token).catch(() => null);
+        if (granted && !granted.includes("ads_read")) throw new AdsAuthError("Meta's ads_read permission was taken back");
+      }
+      throw err;
+    }
+  } catch (err) {
+    if (err instanceof AdsAuthError) {
+      await systemDb.adConnection.update({ where: { id: conn.id }, data: { status: "reconnect", lastError: err.message.slice(0, 500) } });
     }
     throw err;
   }

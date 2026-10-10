@@ -20,7 +20,9 @@ export const metadata: Metadata = {
  *   - tokens are AES-256-GCM encrypted at rest (packages/core/src/tokens.ts);
  *   - uninstall wipes tokens and the compliance webhooks redact/purge (apps/worker/src/handlers.ts);
  *   - the funnel stores hashed browser ids and cleaned page paths only (apps/api/src/routes/pixel.ts,
- *     packages/shared/src/journey.ts `cleanPath`).
+ *     packages/shared/src/journey.ts `cleanPath`);
+ *   - ad accounts are read-only (ads_read / adsense.readonly) and their daily figures and token are deleted on
+ *     disconnect (apps/api/src/routes/ads.ts); /data-deletion is the Meta app's deletion instructions URL.
  */
 export default function PrivacyPage() {
   return (
@@ -116,6 +118,14 @@ export default function PrivacyPage() {
           timelines for a year. Customers&apos; reviews are kept until you delete your store from Insights. When Shopify
           asks us to erase a customer or your store, all of it is deleted.
         </p>
+        <p>
+          <strong>Advertising accounts (only if you connect them).</strong> With your permission on Meta&apos;s or Google&apos;s own
+          screen, Insights reads your ad accounts&apos; reports, read-only (Meta&apos;s <code>ads_read</code>, Google&apos;s
+          <code>adsense.readonly</code>): account names, ids, currency and time zone; campaign, ad set and ad names and
+          status; and what was spent, shown, reached, clicked and the purchases the platform credits to its ads, per day.
+          It keeps those figures so the dashboard can compare periods, and deletes them, with the access token, when you
+          disconnect the account. Insights never creates, changes or pauses an ad, and never spends money.
+        </p>
       </Section>
 
       <Section title="What we store about you">
@@ -130,7 +140,8 @@ export default function PrivacyPage() {
         <p>
           The access token Shopify issues for your store is encrypted with AES-256-GCM before it is written down, with
           each ciphertext cryptographically bound to the store it belongs to. Tokens are never returned by our API, are
-          never shown in the dashboard, and are destroyed when you uninstall the app.
+          never shown in the dashboard, and are destroyed when you uninstall the app. The tokens Meta and Google issue
+          when you connect WhatsApp or an ad account are kept the same way, and destroyed when you disconnect it.
         </p>
       </Section>
 
@@ -157,6 +168,10 @@ export default function PrivacyPage() {
             <strong>Meta (WhatsApp Business Platform)</strong> — delivers WhatsApp messages, only for stores that connect
             WhatsApp.
           </li>
+          <li>
+            <strong>Meta (Marketing API) and Google (AdSense)</strong> — the source of advertising reports, only for stores
+            that connect an ad account.
+          </li>
         </ul>
         <p>Other members of your workspace see your store&apos;s figures, according to the role you gave them.</p>
       </Section>
@@ -166,7 +181,8 @@ export default function PrivacyPage() {
           Store data is kept while the app is installed. Uninstalling the app from Shopify immediately destroys the
           stored access tokens, and we act on Shopify&apos;s mandatory data-request, customer-redact and shop-redact
           webhooks. Disconnecting a store in Settings → Stores deletes its orders and metrics from Insights. To have
-          your whole workspace and account deleted, write to {orUnset(CONTACT.supportEmail)}.
+          your whole workspace and account deleted, write to {orUnset(CONTACT.supportEmail)}. How to remove what came
+          from Meta (WhatsApp and ad accounts) is on <Link className="underline" href="/data-deletion">Delete your data</Link>.
         </p>
       </Section>
 

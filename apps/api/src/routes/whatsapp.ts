@@ -2,7 +2,9 @@ import { z } from "zod";
 import { Prisma, systemDb, withTenant, type WhatsappTemplate } from "@app/db";
 import {
   audit,
+  autoRegisterWhatsapp,
   checkManualApp,
+  connectionPin,
   connectWhatsapp,
   discoverWhatsapp,
   disconnectWhatsapp,
@@ -157,7 +159,14 @@ export function whatsappRoutes(app: App, deps: Deps) {
     await limit(deps.coord, `rl:wa-connect:${storeId}`, LIMITS.waConnect);
     // The ids come from Meta's message to the page; when that never arrived, they're asked of Meta below.
     const input = z
-      .object({ code: z.string().min(10).max(2000), wabaId: idSchema.optional(), phoneNumberId: idSchema.optional(), businessId: idSchema.optional() })
+      .object({
+        code: z.string().min(10).max(2000),
+        wabaId: idSchema.optional(),
+        phoneNumberId: idSchema.optional(),
+        businessId: idSchema.optional(),
+        // How Meta's flow finished (its WA_EMBEDDED_SIGNUP message): only "FINISH" is a new Cloud API number.
+        event: z.string().max(64).optional(),
+      })
       .refine((v) => !!v.wabaId === !!v.phoneNumberId, "wabaId and phoneNumberId go together")
       .parse(await body(c));
     const cfg = waPlatformConfig();
@@ -178,9 +187,21 @@ export function whatsappRoutes(app: App, deps: Deps) {
       }
       ids = numbers[0]!;
     }
-    const conn = await connectWhatsapp({ store, mode: "embedded", ...ids, businessId: input.businessId, accessToken: token, userId: access.user!.id }, deps.fetchImpl).catch(connectError);
-    await audit({ workspaceId: ws, actorUserId: access.user!.id, action: "whatsapp.connected", targetType: "store", targetId: storeId, metadata: { mode: "embedded", wabaId: conn.wabaId, phoneNumberId: conn.phoneNumberId }, ip: clientIp(c) });
-    return c.json({ connection: publicConnection(conn, true) });
+    let conn = await connectWhatsapp({ store, mode: "embedded", ...ids, businessId: input.businessId, accessToken: token, userId: access.user!.id }, deps.fetchImpl).catch(connectError);
+    // The merchant just chose this number in Meta's own flow: register it so it can send straight away.
+    // Never a WhatsApp Business app number (coexistence) or one Meta didn't say how it finished.
+    const registration = input.event === "FINISH" ? await autoRegisterWhatsapp(conn, deps.fetchImpl) : { conn, outcome: conn.registered ? "already" : "pin_needed" };
+    conn = registration.conn;
+    await audit({
+      workspaceId: ws,
+      actorUserId: access.user!.id,
+      action: "whatsapp.connected",
+      targetType: "store",
+      targetId: storeId,
+      metadata: { mode: "embedded", wabaId: conn.wabaId, phoneNumberId: conn.phoneNumberId, event: input.event ?? null, registration: registration.outcome },
+      ip: clientIp(c),
+    });
+    return c.json({ connection: publicConnection(conn, true), registration: registration.outcome });
   });
 
   /**
@@ -236,6 +257,24 @@ export function whatsappRoutes(app: App, deps: Deps) {
     const updated = await registerWhatsapp(conn, pin, deps.fetchImpl).catch(connectError);
     await audit({ workspaceId: ws, actorUserId: access.user!.id, action: "whatsapp.number_registered", targetType: "store", targetId: storeId, ip: clientIp(c) });
     return c.json({ connection: publicConnection(updated, true) });
+  });
+
+  /**
+   * The number's two-step verification PIN, for an owner or admin who needs it (to move the number
+   * to another provider, say). Only known when Insights registered the number or the merchant typed it.
+   */
+  app.post(`${base}/pin`, async (c) => {
+    const { ws, storeId } = c.req.param();
+    const access = await requireWorkspace(c, deps, ws, "stores:manage");
+    await waStore(ws, storeId);
+    await limit(deps.coord, `rl:wa-pin:${storeId}`, LIMITS.waRefresh);
+    const conn = await systemDb.whatsappConnection.findUnique({ where: { storeId } });
+    if (!conn || conn.workspaceId !== ws) throw new HttpError(404, "Connect WhatsApp first.", "not_connected");
+    const pin = connectionPin(conn);
+    if (!pin) throw new HttpError(404, "Insights doesn't know this number's PIN. You can set a new one in WhatsApp Manager → Phone numbers → Two-step verification.", "pin_unknown");
+    await audit({ workspaceId: ws, actorUserId: access.user!.id, action: "whatsapp.pin_viewed", targetType: "store", targetId: storeId, ip: clientIp(c) });
+    c.header("cache-control", "no-store");
+    return c.json({ pin });
   });
 
   /** Read the number's status and the templates from Meta again. */

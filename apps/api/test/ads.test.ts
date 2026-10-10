@@ -471,3 +471,138 @@ describe("AdSense on the dashboard", () => {
     expect(after.json().modules.ads.current.spend).toBe(30);
   });
 });
+
+describe("the Meta Ads report", () => {
+  /** Meta's insights for act_1 by level, and effective_status by id; everything else as the connect flow sees it. */
+  const reportPlatform =
+    (calls: string[], opts: { revoked?: boolean } = {}): FetchLike =>
+    async (input) => {
+      const u = new URL(String(input));
+      if (u.pathname.endsWith("/act_1/insights")) {
+        calls.push(`insights:${u.searchParams.get("level")}`);
+        if (opts.revoked) return json({ error: { message: "Error validating access token: The user has not authorized application", code: 190 } }, 400);
+        expect(u.searchParams.get("use_unified_attribution_setting")).toBe("true");
+        expect(JSON.parse(u.searchParams.get("time_range")!)).toEqual({ since: "2026-09-01", until: "2026-09-30" });
+        expect(u.searchParams.get("time_increment")).toBeNull();
+        const level = u.searchParams.get("level");
+        if (level === "account") {
+          return json({
+            data: [
+              {
+                spend: "120.50",
+                impressions: "10000",
+                reach: "4000",
+                frequency: "2.5",
+                clicks: "300",
+                inline_link_clicks: "200",
+                actions: [
+                  { action_type: "omni_purchase", value: "6" },
+                  { action_type: "purchase", value: "6" },
+                ],
+                action_values: [{ action_type: "omni_purchase", value: "482" }],
+              },
+            ],
+          });
+        }
+        return json({
+          data: [
+            { campaign_id: "12", campaign_name: "Retarget", spend: "20.50", impressions: "2000", reach: "900", frequency: "2.22", clicks: "50", inline_link_clicks: "20" },
+            {
+              campaign_id: "11",
+              campaign_name: "Spring sale",
+              spend: "100",
+              impressions: "8000",
+              reach: "3500",
+              frequency: "2.29",
+              clicks: "250",
+              inline_link_clicks: "180",
+              actions: [{ action_type: "omni_purchase", value: "6" }],
+              action_values: [{ action_type: "omni_purchase", value: "482" }],
+            },
+          ],
+        });
+      }
+      if (u.pathname.endsWith("/v25.0/") && u.searchParams.get("ids")) {
+        calls.push(`status:${u.searchParams.get("ids")}`);
+        return json({ "11": { id: "11", effective_status: "ACTIVE" }, "12": { id: "12", effective_status: "CAMPAIGN_PAUSED" } });
+      }
+      return metaPlatform(input);
+    };
+
+  async function connectedMeta() {
+    ctx.setFetch(metaPlatform);
+    await connectAll("meta");
+    return systemDb.adConnection.findFirstOrThrow({ where: { storeId, accountId: "act_1" } });
+  }
+  const reportUrl = (connection: string, q: Record<string, string> = {}) =>
+    `/workspaces/${ws}/stores/${storeId}/ads/meta/report?${new URLSearchParams({ connection, from: "2026-09-01", to: "2026-09-30", ...q })}`;
+
+  it("asks Meta for exactly those dates: account reach, campaigns biggest first with their status, read-only, cached", async () => {
+    const conn = await connectedMeta();
+    const calls: string[] = [];
+    ctx.setFetch(reportPlatform(calls));
+    const res = await ctx.app.inject({ method: "GET", url: reportUrl(conn.id), headers });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(res.body).not.toContain("META_LONG_SECRET");
+    expect(body.account).toMatchObject({ id: conn.id, accountId: "act_1", name: "Shop ads", currency: "USD" });
+    expect(body.cached).toBe(false);
+    // Reach for the account is Meta's own, de-duplicated figure: not 3500 + 900.
+    expect(body.report.totals).toMatchObject({ spend: 120.5, impressions: 10000, reach: 4000, frequency: 2.5, linkClicks: 200, purchases: 6, purchaseValue: 482, cpm: 12.05, costPerLinkClick: 0.6 });
+    expect(body.report.totals.roas).toBeCloseTo(4, 1);
+    expect(body.report.rows.map((r: { id: string; name: string; status: string; spend: number }) => [r.id, r.name, r.status, r.spend])).toEqual([
+      ["11", "Spring sale", "ACTIVE", 100],
+      ["12", "Retarget", "CAMPAIGN_PAUSED", 20.5],
+    ]);
+    expect(body.report.rows[0]).toMatchObject({ purchases: 6, purchaseValue: 482, costPerPurchase: 16.67, roas: 4.82, linkCtr: 180 / 8000 });
+    expect(body.report.rows[1]).toMatchObject({ purchases: 0, costPerPurchase: null, roas: 0 });
+    expect(calls.sort()).toEqual(["insights:account", "insights:campaign", "status:11,12"]);
+
+    // Asked again: from the cache, not from Meta.
+    const again = await ctx.app.inject({ method: "GET", url: reportUrl(conn.id), headers });
+    expect(again.json().cached).toBe(true);
+    expect(again.json().report).toEqual(body.report);
+    expect(calls).toHaveLength(3);
+  });
+
+  it("is only for the workspace and store the account belongs to", async () => {
+    const conn = await connectedMeta();
+    ctx.setFetch(reportPlatform([]));
+    const other = await signIn(ctx, "ads-other", "other@y.com");
+    const otherWs = await createWorkspace(ctx, other.headers, "Other");
+    const otherStore = (await createStore(otherWs, "other-shop.myshopify.com", ["read_orders"], { currency: "USD" })).id;
+    // Someone else, with this workspace's address: not a member, and not told the workspace exists.
+    expect((await ctx.app.inject({ method: "GET", url: reportUrl(conn.id), headers: other.headers })).statusCode).toBe(404);
+    // Their own workspace and store, with this store's connection id: no such account there.
+    const cross = await ctx.app.inject({
+      method: "GET",
+      url: `/workspaces/${otherWs}/stores/${otherStore}/ads/meta/report?${new URLSearchParams({ connection: conn.id, from: "2026-09-01", to: "2026-09-30" })}`,
+      headers: other.headers,
+    });
+    expect(cross.statusCode).toBe(404);
+  });
+
+  it("access Meta took back marks the account 'reconnect' and says so, instead of showing old numbers as current", async () => {
+    const conn = await connectedMeta();
+    ctx.setFetch(reportPlatform([], { revoked: true }));
+    const res = await ctx.app.inject({ method: "GET", url: reportUrl(conn.id), headers });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe("reconnect");
+    expect((await systemDb.adConnection.findUniqueOrThrow({ where: { id: conn.id } })).status).toBe("reconnect");
+    // From then on it doesn't ask Meta at all until it's reconnected.
+    const calls: string[] = [];
+    ctx.setFetch(reportPlatform(calls));
+    expect((await ctx.app.inject({ method: "GET", url: reportUrl(conn.id), headers })).statusCode).toBe(409);
+    expect(calls).toEqual([]);
+  });
+
+  it("refuses dates that aren't a real range of up to a year, and levels it doesn't know", async () => {
+    const conn = await connectedMeta();
+    ctx.setFetch(reportPlatform([]));
+    const bad: Array<Record<string, string>> = [{ from: "2026-09-30", to: "2026-09-01" }, { from: "2024-01-01", to: "2026-09-30" }, { from: "2026-02-31" }, { level: "account" }];
+    for (const q of bad) {
+      expect((await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, q), headers })).statusCode).toBe(400);
+    }
+    expect((await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, { level: "ad" }), headers })).statusCode).toBe(200);
+  });
+});

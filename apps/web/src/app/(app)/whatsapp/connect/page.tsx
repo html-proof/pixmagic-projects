@@ -1,149 +1,13 @@
 "use client";
-import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useState, type FormEvent, type ReactNode } from "react";
 import { Badge } from "@/components/dashboard/primitives";
 import { fmtRelative } from "@/components/dashboard/format";
 import { LoadError } from "@/components/LoadError";
 import { Alert } from "@/components/ui";
 import { actionError, api, useApi } from "@/lib/api";
 import { ConfirmDialog, PageHeader, Skeleton, useAction, useToast, useWa, WhatsappIcon } from "@/components/whatsapp/common";
+import { EmbeddedSignup } from "@/components/whatsapp/EmbeddedSignup";
 import { connectionStatus, quality, tier, type Overview } from "@/components/whatsapp/types";
-
-// ---------------------------------------------------------------------------
-// Meta's Embedded Signup (Facebook Login for Business, WhatsApp variation). The browser opens
-// Meta's flow; Meta posts the chosen account and number ids to this window and hands back a
-// code that lives 30 seconds, which the server exchanges for the business's token at once.
-// No token ever reaches this page.
-// ---------------------------------------------------------------------------
-
-interface FbLoginResponse {
-  authResponse?: { code?: string } | null;
-  status?: string;
-}
-interface FbSdk {
-  init(opts: Record<string, unknown>): void;
-  login(cb: (r: FbLoginResponse) => void, opts: Record<string, unknown>): void;
-}
-declare global {
-  interface Window {
-    FB?: FbSdk;
-    fbAsyncInit?: () => void;
-  }
-}
-
-function loadFacebookSdk(appId: string, version: string): Promise<FbSdk> {
-  return new Promise((resolve, reject) => {
-    if (window.FB) return resolve(window.FB);
-    window.fbAsyncInit = () => {
-      window.FB!.init({ appId, autoLogAppEvents: true, xfbml: false, version });
-      resolve(window.FB!);
-    };
-    const s = document.createElement("script");
-    s.src = "https://connect.facebook.net/en_US/sdk.js";
-    s.async = true;
-    s.defer = true;
-    s.crossOrigin = "anonymous";
-    s.onerror = () => reject(new Error("Meta's sign-in couldn't load. Check that nothing (an ad blocker) is blocking connect.facebook.net."));
-    document.body.appendChild(s);
-  });
-}
-
-function EmbeddedSignup({ platform, onConnected }: { platform: Overview["platform"]; onConnected: () => void }) {
-  const { base } = useWa();
-  const toast = useToast();
-  const [busy, setBusy] = useState(false);
-  const session = useRef<{ waba_id?: string; phone_number_id?: string; business_id?: string } | null>(null);
-  const code = useRef<string | null>(null);
-  const done = useRef(false);
-
-  // Needs the code (from FB.login) and, normally, the ids Meta posts to this window. If those
-  // never arrive, `fallback` sends the code alone and the server asks Meta what was shared.
-  const finish = useCallback(async (fallback = false) => {
-    if (done.current || !code.current) return;
-    const s = session.current;
-    const ids = s?.waba_id && s.phone_number_id ? { wabaId: s.waba_id, phoneNumberId: s.phone_number_id, ...(s.business_id ? { businessId: s.business_id } : {}) } : null;
-    if (!ids && !fallback) return;
-    done.current = true;
-    try {
-      await api(`${base}/embedded`, { method: "POST", body: { code: code.current, ...ids } });
-      toast("success", "WhatsApp is connected.");
-      onConnected();
-    } catch (e) {
-      toast("error", actionError(e, "finish connecting"));
-    } finally {
-      setBusy(false);
-    }
-  }, [base, toast, onConnected]);
-
-  useEffect(() => {
-    const onMessage = (event: MessageEvent) => {
-      let host = "";
-      try {
-        host = new URL(event.origin).hostname;
-      } catch {
-        return;
-      }
-      if (!/(^|\.)facebook\.com$/.test(host)) return;
-      let data: { type?: string; event?: string; data?: Record<string, string> };
-      try {
-        data = typeof event.data === "string" ? JSON.parse(event.data) : event.data;
-      } catch {
-        return;
-      }
-      if (data?.type !== "WA_EMBEDDED_SIGNUP") return;
-      if (data.event?.startsWith("FINISH")) {
-        session.current = data.data ?? null;
-        if (!data.data?.phone_number_id) {
-          done.current = true;
-          toast("error", "Meta's sign-up finished without a phone number. Add a number to the account, then connect again.");
-          setBusy(false);
-          return;
-        }
-        void finish();
-      } else if (data.event === "CANCEL") {
-        setBusy(false);
-        if (data.data?.error_message) toast("error", `Meta reported a problem: ${data.data.error_message}`);
-      } else if (data.event === "ERROR") {
-        setBusy(false);
-        toast("error", `Meta reported a problem: ${data.data?.error_message ?? "unknown error"}`);
-      }
-    };
-    window.addEventListener("message", onMessage);
-    return () => window.removeEventListener("message", onMessage);
-  }, [finish, toast]);
-
-  const start = async () => {
-    if (!platform.appId || !platform.configId) return;
-    setBusy(true);
-    done.current = false;
-    code.current = null;
-    session.current = null;
-    try {
-      const FB = await loadFacebookSdk(platform.appId, platform.version ?? "v25.0");
-      FB.login(
-        (r) => {
-          if (r.authResponse?.code) {
-            code.current = r.authResponse.code;
-            void finish();
-            // The code lives 30 seconds: don't wait long for Meta's message.
-            window.setTimeout(() => void finish(true), 4000);
-          } else {
-            setBusy(false);
-          }
-        },
-        { config_id: platform.configId, response_type: "code", override_default_response_type: true, extras: { setup: {} } },
-      );
-    } catch (e) {
-      setBusy(false);
-      toast("error", (e as Error).message);
-    }
-  };
-
-  return (
-    <button type="button" className="inline-flex h-11 items-center gap-2 rounded-lg bg-[#25D366] px-5 text-sm font-semibold text-[#0b3d20] shadow-sm transition hover:brightness-95 disabled:opacity-60" onClick={() => void start()} disabled={busy} data-testid="wa-connect">
-      <WhatsappIcon size={20} /> {busy ? "Waiting for Meta…" : "Continue with WhatsApp"}
-    </button>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // The merchant's own Meta app, as three steps: paste the token, pick the number Insights found
@@ -439,8 +303,30 @@ function Copy({ value, label }: { value: string; label: string }) {
   );
 }
 
+/** The number's two-step verification PIN, shown on request (the request is audited). */
+function PinReveal({ base }: { base: string }) {
+  const [pin, setPin] = useState<string | null>(null);
+  const { busy, run } = useAction();
+  return (
+    <p className="mt-3 flex flex-wrap items-center gap-2 text-sm text-muted">
+      Two-step verification PIN:
+      {pin ? (
+        <span className="font-mono text-text" data-testid="wa-pin-value">{pin}</span>
+      ) : (
+        <button type="button" className="text-accent underline-offset-2 hover:underline" disabled={!!busy} onClick={() => void run("pin", "show the PIN", async () => {
+          setPin((await api<{ pin: string }>(`${base}/pin`, { method: "POST" })).pin);
+        })}>
+          {busy === "pin" ? "Loading…" : "Show"}
+        </button>
+      )}
+      <span className="text-xs">You only need it to move this number to another provider. Change it in WhatsApp Manager.</span>
+    </p>
+  );
+}
+
 export default function ConnectWhatsapp() {
   const { base, manage } = useWa();
+  const toast = useToast();
   const { data, error, reload } = useApi<Overview>(base);
   const { busy, run } = useAction();
   const [pin, setPin] = useState("");
@@ -487,6 +373,7 @@ export default function ConnectWhatsapp() {
             <div><dt className="text-xs text-muted">Last checked</dt><dd>{c.lastSyncedAt ? fmtRelative(c.lastSyncedAt) : "—"}</dd></div>
           </dl>
           {c.lastError && c.status !== "active" && <div className="mt-3"><Alert>{c.lastError}</Alert></div>}
+          {c.registered && c.hasPin && manage && base && <PinReveal base={base} />}
 
           {!c.registered && manage && (
             <form
@@ -556,7 +443,7 @@ export default function ConnectWhatsapp() {
                   Meta opens a window: log in with Facebook, choose your business and WhatsApp number (or add one), and enter the code Meta texts you. About 3
                   minutes, and nothing to copy.
                 </p>
-                <EmbeddedSignup platform={data.platform} onConnected={reloaded} />
+                <EmbeddedSignup base={base!} platform={data.platform} onConnected={reloaded} notify={toast} />
               </div>
               <div className="mt-4 border-t border-border pt-4">
                 <button type="button" className="text-sm font-medium text-accent underline-offset-2 hover:underline" aria-expanded={showManual} onClick={() => setShowManual((s) => !s)}>

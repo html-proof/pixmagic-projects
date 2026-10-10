@@ -45,6 +45,7 @@ export interface Connection {
   lastSyncedAt: string | null;
   connectedAt: string;
   hasAppSecret: boolean;
+  hasPin?: boolean;
   verifyToken: string | null;
 }
 

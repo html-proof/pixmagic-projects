@@ -49,6 +49,8 @@ export const LIMITS = {
   scopes: { max: 3, windowSec: 10 },
   /** Ad accounts "Sync now", per store and user: each queues a sync per connected account. */
   adsSync: { max: 6, windowSec: 600 },
+  /** Meta Ads report, per store and user: each one is a few Meta calls (a cached answer doesn't count). */
+  adsReport: { max: 30, windowSec: 600 },
   /** WhatsApp: connecting a number (Meta calls each), per store. */
   waConnect: { max: 10, windowSec: 600 },
   /** WhatsApp: "Refresh" (number and templates from Meta), per store. */

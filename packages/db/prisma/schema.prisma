@@ -546,6 +546,8 @@ model WhatsappConnection {
   /** Manual mode: the verify token the merchant enters in their Meta app's webhook settings. */
   verifyTokenEnc     String?   @map("verify_token_enc")
   verifyTokenHash    String?   @unique @map("verify_token_hash")
+  /** The number's two-step verification PIN, encrypted: the one Insights set when registering it, or the one the merchant entered. */
+  pinEnc             String?   @map("pin_enc")
   tokenKeyVersion    Int       @map("token_key_version")
   /** When Meta last proved it can reach our webhook for this number (challenge or signed delivery). */
   webhookVerifiedAt  DateTime? @map("webhook_verified_at")

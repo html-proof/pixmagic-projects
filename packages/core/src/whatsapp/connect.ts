@@ -226,18 +226,49 @@ export async function ensurePlatformWebhook(fetchImpl: FetchLike): Promise<"unco
   return r;
 }
 
+const isPinMismatch = (err: unknown) => err instanceof WhatsappApiError && (err.code === 133005 || err.code === 133006 || /pin/i.test(err.details ?? ""));
+
 /** Register the number with the Cloud API (Embedded Signup numbers that aren't yet). */
 export async function registerWhatsapp(conn: WhatsappConnection, pin: string, fetchImpl: FetchLike): Promise<WhatsappConnection> {
   try {
     await waRegisterPhone(conn.phoneNumberId, pin, connectionToken(conn), fetchImpl);
   } catch (err) {
-    if (err instanceof WhatsappApiError && (err.code === 133005 || err.code === 133006 || /pin/i.test(err.details ?? ""))) {
+    if (isPinMismatch(err)) {
       throw new WhatsappConnectError("That PIN doesn't match the number's two-step verification PIN. Use the PIN you set in WhatsApp Manager, or reset it there.", "wrong_pin");
     }
     throw err;
   }
-  return systemDb.whatsappConnection.update({ where: { id: conn.id }, data: { registered: true, status: "active", lastError: null } });
+  return systemDb.whatsappConnection.update({ where: { id: conn.id }, data: { registered: true, status: "active", lastError: null, pinEnc: waEncrypt(conn.storeId, "pin", pin) } });
 }
+
+/** A random 6-digit PIN (leading zeros allowed). */
+function randomPin(): string {
+  const n = new Uint32Array(1);
+  crypto.getRandomValues(n);
+  return String(n[0]! % 1_000_000).padStart(6, "0");
+}
+
+/**
+ * Right after Embedded Signup's Cloud API flow: register the new number so it can send, without
+ * asking the merchant for anything. Meta's registration takes a PIN, which becomes the number's
+ * two-step verification PIN when it has none; Insights picks one and keeps it (encrypted) so the
+ * merchant can see it later. A number that already has a PIN refuses ours and stays "pending":
+ * the merchant then types their own. Numbers kept on the WhatsApp Business app (coexistence) are
+ * never registered here, since that would move them off the app.
+ */
+export async function autoRegisterWhatsapp(conn: WhatsappConnection, fetchImpl: FetchLike): Promise<{ conn: WhatsappConnection; outcome: "already" | "registered" | "pin_needed" | "failed" }> {
+  if (conn.registered) return { conn, outcome: "already" };
+  try {
+    return { conn: await registerWhatsapp(conn, randomPin(), fetchImpl), outcome: "registered" };
+  } catch (err) {
+    if (err instanceof WhatsappConnectError && err.code === "wrong_pin") return { conn, outcome: "pin_needed" };
+    logger.warn({ err, connectionId: conn.id }, "whatsapp: registering the number after Embedded Signup failed; the merchant can retry with a PIN");
+    return { conn, outcome: "failed" };
+  }
+}
+
+/** The number's two-step verification PIN, when Insights knows it. */
+export const connectionPin = (conn: Pick<WhatsappConnection, "storeId" | "pinEnc">) => (conn.pinEnc ? waDecrypt(conn.storeId, "pin", conn.pinEnc) : null);
 
 /** The verify token a manual connection's Meta app is given (shown to the store's admins). */
 export const manualVerifyToken = (conn: Pick<WhatsappConnection, "storeId" | "verifyTokenEnc">) => (conn.verifyTokenEnc ? waDecrypt(conn.storeId, "verify", conn.verifyTokenEnc) : null);

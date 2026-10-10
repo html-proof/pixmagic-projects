@@ -8,6 +8,9 @@ import {
   adsenseAuthorizeUrl,
   adsenseConfig,
   AdsApiError,
+  AdsAuthError,
+  AdsRetryableError,
+  adToday,
   adsRedirectUri,
   ADS_BACKFILL_DAYS,
   ADS_RECHECK_DAYS,
@@ -25,15 +28,17 @@ import {
   metaConfig,
   metaExchangeCode,
   metaGrantedPermissions,
+  metaReportForConnection,
   peekPendingAdConnect,
   pendingTokens,
   REQUIRED_AD_SCOPE,
   saveAdConnections,
   takePendingAdConnect,
   type AdAccount,
+  type MetaReport,
   type TokenSet,
 } from "@app/core";
-import { AD_PROVIDERS, randomToken, safeEqual, type AdProvider } from "@app/shared";
+import { AD_PROVIDERS, daysBetweenInclusive, isDay, MAX_CUSTOM_DAYS, META_REPORT_LEVELS, randomToken, safeEqual, type AdProvider } from "@app/shared";
 import { body, clientIp, HttpError, loadUser, requireWorkspace, type Deps } from "../context.js";
 import type { App } from "../app.js";
 import { limit, LIMITS } from "../rateLimit.js";
@@ -333,6 +338,52 @@ export function adsRoutes(app: App, deps: Deps) {
       ip: clientIp(c),
     }).catch(() => {});
     return c.json({ ok: true });
+  });
+
+  /**
+   * The Meta Ads report for one connected account and range: campaigns, ad sets or ads with reach,
+   * frequency, link clicks, purchases and their value, asked of Meta for exactly those dates.
+   * Read-only, and cached briefly so the dashboard's polling doesn't spend Meta's rate limit.
+   */
+  app.get("/workspaces/:ws/stores/:storeId/ads/meta/report", async (c) => {
+    const { ws, storeId } = c.req.param();
+    const access = await requireWorkspace(c, deps, ws, "dashboard:read");
+    await storeInWorkspace(ws, storeId);
+    const q = z
+      .object({
+        connection: z.string().min(1).max(64),
+        level: z.enum(META_REPORT_LEVELS).default("campaign"),
+        from: z.string().refine(isDay, "must be a YYYY-MM-DD day"),
+        to: z.string().refine(isDay, "must be a YYYY-MM-DD day"),
+      })
+      .refine((v) => v.from <= v.to, "from is after to")
+      // Meta keeps 37 months of insights; a year at a time is what the dashboard asks for.
+      .refine((v) => daysBetweenInclusive(v.from, v.to) <= MAX_CUSTOM_DAYS, "Pick up to a year at a time")
+      .parse(c.req.query());
+    const conn = await withTenant(ws, (tx) => tx.adConnection.findFirst({ where: { id: q.connection, workspaceId: ws, storeId, provider: "meta" } }));
+    if (!conn) throw new HttpError(404, "Not found", "not_found");
+    if (conn.status === "reconnect") throw new HttpError(409, "Meta access for this ad account has ended. Reconnect it in Settings → Advertising.", "reconnect");
+    const account = { id: conn.id, accountId: conn.accountId, name: conn.accountName, currency: conn.currency, timezone: conn.timezone };
+    const today = adToday(conn);
+    const key = `ads-report:${conn.id}:${q.level}:${q.from}:${q.to}`;
+    const cached = await deps.coord.peek(key);
+    if (cached) return c.json({ account, today, cached: true, report: JSON.parse(cached) as MetaReport });
+    await limit(deps.coord, `rl:ads-report:${storeId}:${access.user?.id ?? clientIp(c)}`, LIMITS.adsReport);
+    let report: MetaReport;
+    try {
+      report = await metaReportForConnection(conn, q.level, q.from, q.to, deps.fetchImpl);
+    } catch (err) {
+      if (err instanceof AdsAuthError) throw new HttpError(409, "Meta access for this ad account has ended. Reconnect it in Settings → Advertising.", "reconnect");
+      if (err instanceof AdsRetryableError) throw new HttpError(503, "Meta is busy right now. Try again in a minute.", "meta_busy");
+      if (err instanceof AdsApiError) {
+        logger.warn({ err, connectionId: conn.id }, "meta report failed");
+        throw new HttpError(502, `Meta didn't return the report: ${err.message}`, "meta_error");
+      }
+      throw err;
+    }
+    // Days that are over change little (Meta still revises purchases for a while); today's keep coming in.
+    await deps.coord.put(key, JSON.stringify(report), q.to >= today ? 600 : 3600);
+    return c.json({ account, today, cached: false, report });
   });
 
   /** "Sync now" / "Refresh": fetch the last 30 days of every shown account, or one platform's. */

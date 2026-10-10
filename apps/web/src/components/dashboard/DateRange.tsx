@@ -9,7 +9,8 @@ export const PRESETS = [
   { id: "7d", label: "Last 7 days" },
   { id: "30d", label: "Last 30 days" },
   { id: "90d", label: "Last 90 days" },
-  { id: "mtd", label: "Month to date" },
+  { id: "mtd", label: "This month" },
+  { id: "lastmonth", label: "Last month" },
   { id: "custom", label: "Custom" },
 ] as const;
 export type PresetId = (typeof PRESETS)[number]["id"];

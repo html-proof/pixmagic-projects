@@ -27,7 +27,7 @@ import { waListTemplates, waPhoneInfo, WhatsappApiError } from "./graph.js";
 // to another store's row or read back as something else.
 // ---------------------------------------------------------------------------
 
-export type WaSecretKind = "access" | "app_secret" | "verify" | "phone" | "name" | "params" | "track" | "review" | "recovery" | "click";
+export type WaSecretKind = "access" | "app_secret" | "verify" | "pin" | "phone" | "name" | "params" | "track" | "review" | "recovery" | "click";
 
 const aad = (storeId: string, kind: WaSecretKind) => `wa:${storeId}:${kind}`;
 
@@ -280,7 +280,7 @@ export async function reencryptWhatsappSecrets(): Promise<number> {
     const accessTokenEnc = re("access", r.accessTokenEnc)!;
     await systemDb.whatsappConnection.update({
       where: { id: r.id },
-      data: { accessTokenEnc, appSecretEnc: re("app_secret", r.appSecretEnc), verifyTokenEnc: re("verify", r.verifyTokenEnc), tokenKeyVersion: keyVersionOf(accessTokenEnc) },
+      data: { accessTokenEnc, appSecretEnc: re("app_secret", r.appSecretEnc), verifyTokenEnc: re("verify", r.verifyTokenEnc), pinEnc: re("pin", r.pinEnc), tokenKeyVersion: keyVersionOf(accessTokenEnc) },
     });
   }
   return rows.length;

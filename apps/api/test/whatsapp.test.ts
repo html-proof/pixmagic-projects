@@ -266,6 +266,72 @@ describe("connecting WhatsApp", () => {
     expect(half.statusCode).toBe(400);
   });
 
+  /** A number Embedded Signup just added: not on the Cloud API yet. `hasPin`: it already has a two-step PIN. */
+  function newNumberMeta(opts: { hasPin?: boolean } = {}) {
+    const pins: string[] = [];
+    const inner = embeddedMeta();
+    const fetch: FetchLike = async (input, init) => {
+      const u = new URL(String(input));
+      if (u.pathname.endsWith("/2222222222/register")) {
+        if (opts.hasPin) return json({ error: { code: 133005, message: "Two step verification PIN Mismatch", type: "OAuthException" } }, 400);
+        pins.push((JSON.parse(String(init?.body)) as { pin: string }).pin);
+        return json({ success: true });
+      }
+      if (u.pathname.endsWith("/2222222222") && u.searchParams.get("fields")?.includes("display_phone_number")) {
+        return json({ id: "2222222222", display_phone_number: "+91 98765 00000", verified_name: "Green Leaf", quality_rating: "UNKNOWN", platform_type: "NOT_APPLICABLE", name_status: "APPROVED" });
+      }
+      return inner.fetch(input, init);
+    };
+    return { fetch, pins };
+  }
+  const embeddedPayload = { code: "es-code-123456", wabaId: "1111111111", phoneNumberId: "2222222222" };
+
+  it("registers a new number straight after Meta's sign-up, with a PIN only owners and admins can see", async () => {
+    const o = await owner();
+    const meta = newNumberMeta();
+    ctx.setFetch(meta.fetch);
+    const res = await ctx.app.inject({ method: "POST", url: `${o.base}/embedded`, headers: o.headers, payload: { ...embeddedPayload, event: "FINISH" } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().registration).toBe("registered");
+    expect(res.json().connection).toMatchObject({ registered: true, status: "active", hasPin: true });
+    expect(meta.pins).toHaveLength(1);
+    expect(meta.pins[0]).toMatch(/^\d{6}$/);
+    expect(res.body).not.toContain(meta.pins[0]);
+    const row = await systemDb.whatsappConnection.findFirstOrThrow({ where: { storeId: o.store.id } });
+    expect(row.pinEnc).toBeTruthy();
+    expect(row.pinEnc).not.toContain(meta.pins[0]);
+
+    const shown = await ctx.app.inject({ method: "POST", url: `${o.base}/pin`, headers: o.headers });
+    expect(shown.json()).toEqual({ pin: meta.pins[0] });
+    expect(shown.headers["cache-control"]).toBe("no-store");
+    expect(await systemDb.auditLog.count({ where: { action: "whatsapp.pin_viewed" } })).toBe(1);
+
+    const me = await systemDb.user.findFirstOrThrow({ where: { email: "o@shop.test" } });
+    await systemDb.membership.update({ where: { workspaceId_userId: { workspaceId: o.ws, userId: me.id } }, data: { role: "analyst" } });
+    expect((await ctx.app.inject({ method: "POST", url: `${o.base}/pin`, headers: o.headers })).statusCode).toBe(403);
+  });
+
+  it("leaves a number that has its own PIN, or isn't a new Cloud API number, for the merchant", async () => {
+    const o = await owner();
+    // Already protected by a PIN the merchant chose: ours is refused, and they're asked for theirs.
+    ctx.setFetch(newNumberMeta({ hasPin: true }).fetch);
+    const own = await ctx.app.inject({ method: "POST", url: `${o.base}/embedded`, headers: o.headers, payload: { ...embeddedPayload, event: "FINISH" } });
+    expect(own.statusCode).toBe(200);
+    expect(own.json().registration).toBe("pin_needed");
+    expect(own.json().connection).toMatchObject({ registered: false, status: "pending", hasPin: false });
+
+    // A WhatsApp Business app number (coexistence), or a finish Meta didn't describe: never registered here.
+    for (const event of ["FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING", undefined]) {
+      const meta = newNumberMeta();
+      ctx.setFetch(meta.fetch);
+      const res = await ctx.app.inject({ method: "POST", url: `${o.base}/embedded`, headers: o.headers, payload: { ...embeddedPayload, ...(event ? { event } : {}) } });
+      expect(res.statusCode).toBe(200);
+      expect(meta.pins).toEqual([]);
+      expect(res.json().connection.registered).toBe(false);
+    }
+    expect((await ctx.app.inject({ method: "POST", url: `${o.base}/pin`, headers: o.headers })).json().error).toBe("pin_unknown");
+  });
+
   it("points Insights' own Meta app's webhook here by itself, once", async () => {
     const subs: Array<{ object: string; callback_url: string; active: boolean; fields: Array<{ name: string }> }> = [];
     const posts: Array<Record<string, string>> = [];
