@@ -13,6 +13,11 @@
    - impressions and clicks per platform;
    - a by-platform comparison.
 
+**Google Ads is not offered** (owner's choice, 2026-10-10): the integration stays in the code, and its card
+appears only for a store that already has Google Ads accounts connected. To offer it again, add `"google"` to
+`OFFERED` in `apps/web/src/app/(app)/settings/ads/page.tsx` and to `offered` in
+`apps/web/src/components/dashboard/advertising.tsx`.
+
 **The integrations page** is for management only:
 - each platform's status (Connected, Syncing, Needs reconnecting, Sync problem, Not connected, Not set up);
 - account details and last sync;
@@ -122,8 +127,9 @@ AdSense uses the **same Google Cloud project and OAuth client** as Google Ads. I
 
 1. **APIs & Services → Library**: enable the **AdSense Management API**.
 2. **Clients → your web client → Authorized redirect URIs**: add the AdSense callback address above.
-3. **Data Access**: add the scope `https://www.googleapis.com/auth/adsense.readonly`. It is read-only,
-   but Google treats it as sensitive, so publishing the app needs the same verification as the Ads scope.
+3. **Data Access**: add the scope `https://www.googleapis.com/auth/adsense.readonly`. Google lists it as
+   **non-sensitive** (only the Ads scope `adwords` is sensitive), so AdSense alone needs no sensitive-scope
+   verification to publish the app.
 4. While the app is in **Testing**, only its test users can connect, and their access lasts 7 days.
 
 There is no developer token and no manager account. A Google login with no AdSense account gets

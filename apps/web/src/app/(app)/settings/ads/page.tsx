@@ -75,6 +75,12 @@ const PROVIDERS: Array<{ id: Provider; name: string; sub: string; button: string
 
 const INFO = Object.fromEntries(PROVIDERS.map((p) => [p.id, p])) as Record<Provider, (typeof PROVIDERS)[number]>;
 
+/**
+ * Google Ads isn't offered (the owner's call, 2026-10-10): the integration stays in the code, and its
+ * card only shows for a store that already has Google Ads accounts connected, so they can be managed.
+ */
+const OFFERED: Provider[] = ["meta", "adsense"];
+
 /** What the callback's ?error= means, in words. A provider-specific message wins. */
 const ERRORS: Record<string, string> = {
   denied: "You chose not to give Insights access, so nothing was connected.",
@@ -319,7 +325,7 @@ export default function AdAccountsPage() {
           <div className="min-w-0">
             <h1 className="text-lg font-semibold">Advertising integrations</h1>
             <p className="mt-1 text-sm text-muted">
-              Connect Meta Ads and Google Ads to see what you spend on ads and what it brings, and Google AdSense to see what your site earns from ads. Once
+              Connect Meta Ads to see what you spend on ads and what it brings, and Google AdSense to see what your site earns from ads. Once
               connected, the numbers appear on your <Link className="text-accent underline" href="/dashboard">dashboard</Link> and refresh every hour. Access is
               read-only: Insights can&apos;t create, change or pause your ads.
             </p>
@@ -349,7 +355,7 @@ export default function AdAccountsPage() {
         />
       )}
 
-      {PROVIDERS.map((p) => {
+      {PROVIDERS.filter((p) => OFFERED.includes(p.id) || connections.some((c) => c.provider === p.id)).map((p) => {
         const mine = connections.filter((c) => c.provider === p.id);
         const configured = data?.configured[p.id] ?? false;
         const status = platformStatus(configured, mine);
