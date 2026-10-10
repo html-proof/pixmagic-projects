@@ -38,9 +38,11 @@ describe("normalizeShopDomain", () => {
     ["My-Store.myshopify.com", "my-store.myshopify.com"],
     ["https://my-store.myshopify.com/admin/orders?x=1", "my-store.myshopify.com"],
     ["  shop1.myshopify.com  ", "shop1.myshopify.com"],
+    ["https://admin.shopify.com/store/My-Store/orders?x=1", "my-store.myshopify.com"],
+    ["admin.shopify.com/store/shop1", "shop1.myshopify.com"],
   ])("%s -> %s", (input, out) => expect(normalizeShopDomain(input)).toBe(out));
 
-  it.each(["", "evil.com", "my-store.myshopify.com.evil.com", "-bad.myshopify.com", "a b.myshopify.com", "shop.myshopify.co"])(
+  it.each(["", "evil.com", "my-store.myshopify.com.evil.com", "-bad.myshopify.com", "a b.myshopify.com", "shop.myshopify.co", "admin.shopify.com", "admin.shopify.com/store/evil.com"])(
     "rejects %s",
     (input) => expect(normalizeShopDomain(input)).toBeNull(),
   );

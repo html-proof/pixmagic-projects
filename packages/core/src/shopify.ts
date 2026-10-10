@@ -261,6 +261,14 @@ export async function shopifyGraphqlWithCost<T>(opts: ShopifyCallOptions): Promi
       await sleep(retryAfter > 0 ? retryAfter * 1000 : Math.min(30_000, 500 * 2 ** attempt));
       continue;
     }
+    // Any other failure (402 for a frozen or unpaid store, 404 for one that is gone, 423 for a
+    // locked one) answers `{"errors": "<text>"}`, a string rather than GraphQL's array, and asking
+    // again won't change it.
+    if (!res.ok) {
+      const body = (await res.json().catch(() => null)) as { errors?: unknown } | null;
+      const detail = typeof body?.errors === "string" ? `: ${body.errors}` : "";
+      throw new ShopifyHttpError(`Shopify ${res.status}${detail}`, res.status);
+    }
     const json = (await res.json()) as {
       data?: T;
       errors?: Array<{ message: string; extensions?: { code?: string } }>;

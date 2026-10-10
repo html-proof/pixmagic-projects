@@ -96,6 +96,14 @@ describe("shopifyGraphql", () => {
     ).rejects.toThrow(/401/);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
+
+  it("reports a frozen store's 402 plainly and does not retry it", async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ errors: "Unavailable Shop" }), { status: 402 }));
+    const call = shopifyGraphql({ shop: "s.myshopify.com", accessToken: "t", apiVersion: "x", query: "{}", fetchImpl: fetchImpl as typeof fetch });
+    await expect(call).rejects.toThrow("Shopify 402: Unavailable Shop");
+    await expect(call).rejects.toMatchObject({ status: 402, retryable: false });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
 });
 
 /**

@@ -229,16 +229,32 @@ test("Shopify is connected from Settings, through Shopify's OAuth screen", async
   await expect(page.getByRole("heading", { name: "Shopify stores" })).toBeVisible();
   const card = page.getByTestId("shopify-connect");
 
-  await card.getByLabel("Store address").fill("not a shop!");
-  await card.getByRole("button", { name: "Connect with Shopify" }).click();
+  // Like onboarding: "Continue with Shopify" first, the address field one click away.
+  await expect(card.getByRole("button", { name: "Continue with Shopify" })).toBeVisible();
+  const field = card.getByLabel("Store address, store ID or Shopify email");
+  const connect = card.getByRole("button", { name: "Connect this store" });
+  await expect(field).toHaveCount(0);
+  await card.getByRole("button", { name: "Enter store address instead" }).click();
+  await field.fill("not a shop!");
+  await connect.click();
   await expect(alert(page)).toContainText("myshopify.com");
 
+  // The admin's own address works as well as the store ID or myshopify.com address.
   const authorize = page.waitForRequest((r) => r.url().startsWith("https://e2e-settings.myshopify.com/admin/oauth/authorize"));
-  await card.getByLabel("Store address").fill("e2e-settings");
-  await card.getByRole("button", { name: "Connect with Shopify" }).click();
+  await field.fill("https://admin.shopify.com/store/e2e-settings/orders");
+  await connect.click();
   const url = new URL((await authorize).url());
   expect(url.searchParams.get("client_id")).toBe("e2e_key");
   expect(url.searchParams.get("state")).toBeTruthy();
+
+  // A Shopify login email goes to Shopify's own store picker, like "Continue with Shopify".
+  await page.goto("/settings/stores");
+  const install = page.waitForRequest((r) => r.url().startsWith("https://admin.shopify.com/oauth/install"));
+  await card.getByRole("button", { name: "Enter store address instead" }).click();
+  await field.fill("owner@example.com");
+  await expect(card).toContainText("log in with owner@example.com");
+  await connect.click();
+  expect(new URL((await install).url()).searchParams.get("client_id")).toBe("e2e_key");
 
   // Shopify's errors come back to Settings in plain words.
   await page.goto("/settings/stores?error=state_expired");
