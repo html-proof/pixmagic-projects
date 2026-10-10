@@ -34,6 +34,20 @@ const schema = z.object({
    * page that cannot work (see docs/shopify-setup.md).
    */
   SHOPIFY_DEFAULT_APP_SHOPS: z.string().optional().default(""),
+  /**
+   * Ad platforms ("Continue with Meta" / "Continue with Google" on Settings → Ad accounts). Empty
+   * means not set up: the buttons say so instead of sending people to an error page. The app ids
+   * are public; the secrets and the Google Ads developer token are Worker secrets.
+   */
+  META_APP_ID: z.string().optional().default(""),
+  META_APP_SECRET: z.string().optional().default(""),
+  META_API_VERSION: z.string().default("v25.0"),
+  /** Facebook Login for Business configuration id (public). Empty: classic `scope=ads_read`. */
+  META_CONFIG_ID: z.string().optional().default(""),
+  GOOGLE_ADS_CLIENT_ID: z.string().optional().default(""),
+  GOOGLE_ADS_CLIENT_SECRET: z.string().optional().default(""),
+  GOOGLE_ADS_DEVELOPER_TOKEN: z.string().optional().default(""),
+  GOOGLE_ADS_API_VERSION: z.string().default("v25"),
   EMAIL_FROM: z.string().default("Insights <no-reply@localhost>"),
   ALERT_SLACK_WEBHOOK_URL: z.string().optional().default(""),
 });

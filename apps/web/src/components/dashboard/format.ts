@@ -13,6 +13,49 @@ export function fmtDay(day: string | null | undefined, opts: { year?: boolean } 
   }).format(d);
 }
 
+/** "1–9 Mar", "28 Feb – 8 Mar", with the year only when the span crosses one (in the viewer's order). */
+export function fmtSpan(from: string, to: string): string {
+  const year = from.slice(0, 4) !== to.slice(0, 4);
+  const f = new Intl.DateTimeFormat(undefined, { timeZone: "UTC", day: "numeric", month: "short", ...(year ? { year: "numeric" } : {}) });
+  try {
+    return f.formatRange(new Date(`${from}T00:00:00Z`), new Date(`${to}T00:00:00Z`));
+  } catch {
+    return `${fmtDay(from, { year })} – ${fmtDay(to, { year })}`;
+  }
+}
+
+/** "Wed" — the short weekday of a calendar day, in the viewer's language. */
+export function fmtWeekday(day: string): string {
+  return new Intl.DateTimeFormat(undefined, { timeZone: "UTC", weekday: "short" }).format(new Date(`${day}T00:00:00Z`));
+}
+
+/** "Wed, 24 Jun 2026". */
+export function fmtLongDay(day: string): string {
+  return new Intl.DateTimeFormat(undefined, { timeZone: "UTC", weekday: "short", day: "numeric", month: "short", year: "numeric" }).format(new Date(`${day}T00:00:00Z`));
+}
+
+/** "2026-06" → "June" (or "Jun" short, or "June 2026" with the year). */
+export function fmtMonth(month: string, opts: { short?: boolean; year?: boolean } = {}): string {
+  return new Intl.DateTimeFormat(undefined, { timeZone: "UTC", month: opts.short ? "short" : "long", ...(opts.year ? { year: "numeric" } : {}) }).format(
+    new Date(`${month}-01T00:00:00Z`),
+  );
+}
+
+/** Money without cents, for labels on chart marks: "A$1,751". */
+export function fmtMoneyWhole(n: number, currency: string): string {
+  return new Intl.NumberFormat(undefined, { style: "currency", currency, minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(n);
+}
+
+/** Money for chart axes: "A$3.2K". */
+export function fmtMoneyCompact(n: number, currency: string): string {
+  return new Intl.NumberFormat(undefined, { style: "currency", currency, notation: "compact", minimumFractionDigits: 0, maximumFractionDigits: 1 }).format(n);
+}
+
+/** "8 Mar 2026" for a single day, "1 Mar 2026 – 8 Mar 2026" for a span. */
+export function fmtRange(from: string, to: string): string {
+  return from === to ? fmtDay(from) : `${fmtDay(from)} – ${fmtDay(to)}`;
+}
+
 /** An instant shown in the store's time zone, e.g. "8 Mar, 3:30 pm". */
 export function fmtDateTime(iso: string, timeZone: string): string {
   const d = new Date(iso);

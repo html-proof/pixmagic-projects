@@ -4,12 +4,16 @@ import {
   aggregateDaily,
   can,
   channelLabel,
+  clampCustomRange,
+  customRangeProblem,
   decrypt,
+  eachDay,
   delta,
   encrypt,
   expandScopes,
   generateOtp,
   hashOtp,
+  isDay,
   keyVersionOf,
   localDay,
   normalizeShopDomain,
@@ -197,6 +201,67 @@ describe("dates & time zones", () => {
     expect(previous).toEqual({ from: "2026-09-19", to: "2026-09-25" });
     expect(resolvePreset("mtd", now, "UTC").range.from).toBe("2026-10-01");
     expect(() => resolvePreset("custom", now, "UTC", { from: "2026-10-02", to: "2026-10-01" })).toThrow();
+  });
+
+  it("only treats a finished, in-order custom range as one to report on", () => {
+    const now = new Date("2026-10-02T12:00:00Z");
+    expect(customRangeProblem({ from: "2026-09-01", to: "2026-09-15" })).toBeNull();
+    expect(resolvePreset("custom", now, "UTC", { from: "2026-09-01", to: "2026-09-15" }).previous).toEqual({ from: "2026-08-17", to: "2026-08-31" });
+    expect(customRangeProblem({ from: "2026-09-01", to: "" })).toBe("incomplete");
+    expect(customRangeProblem({})).toBe("incomplete");
+    // What Chrome reports while "2026" is typed into the year, one digit at a time.
+    for (const partial of ["0002-09-15", "0020-09-15", "0202-09-15"]) {
+      expect(customRangeProblem({ from: "2026-09-01", to: partial })).toBe("incomplete");
+      expect(() => resolvePreset("custom", now, "UTC", { from: "2026-09-01", to: partial })).toThrow("Invalid custom range");
+    }
+    expect(customRangeProblem({ from: "2026-09-15", to: "2026-09-01" })).toBe("reversed");
+    expect(customRangeProblem({ from: "2025-01-01", to: "2025-12-31" })).toBeNull();
+    expect(customRangeProblem({ from: "2025-01-01", to: "2026-01-02" })).toBe("too_long");
+    expect(() => resolvePreset("custom", now, "UTC", { from: "2025-01-01", to: "2026-01-02" })).toThrow("Range too long");
+  });
+
+  it("accepts only real calendar days", () => {
+    expect(isDay("2024-02-29")).toBe(true);
+    // The shape alone let these through, and month 13 then threw a RangeError (a 500) in addDays.
+    for (const bad of ["2026-02-29", "2026-02-31", "2026-13-01", "2026-00-10", "2026-9-1", "", null, undefined]) {
+      expect(isDay(bad)).toBe(false);
+    }
+    expect(customRangeProblem({ from: "2026-13-01", to: "2026-13-05" })).toBe("incomplete");
+    expect(() => resolvePreset("custom", new Date("2026-10-02T12:00:00Z"), "UTC", { from: "2026-09-01", to: "2026-02-31" })).toThrow("Invalid custom range");
+  });
+
+  it("lists every day of a range, across month ends and DST", () => {
+    expect(eachDay("2026-02-27", "2026-03-02")).toEqual(["2026-02-27", "2026-02-28", "2026-03-01", "2026-03-02"]);
+    expect(eachDay("2026-03-07", "2026-03-09")).toHaveLength(3);
+    expect(eachDay("2026-10-09", "2026-10-09")).toEqual(["2026-10-09"]);
+    expect(eachDay("2026-10-09", "2026-10-08")).toEqual([]);
+  });
+
+  it("reports a custom range only up to the store's today", () => {
+    // 9 Oct, 01:00 in Sydney is still 8 Oct in UTC.
+    const now = new Date("2026-10-08T14:00:00Z");
+    const sydney = "Australia/Sydney";
+    const today = localDay(now, sydney);
+    expect(today).toBe("2026-10-09");
+
+    // 1–31 Oct is reported as 1–9 Oct and compared with the 9 days before, not with 31.
+    expect(customRangeProblem({ from: "2026-10-01", to: "2026-10-31" }, today)).toBeNull();
+    expect(resolvePreset("custom", now, sydney, { from: "2026-10-01", to: "2026-10-31" })).toEqual({
+      range: { from: "2026-10-01", to: "2026-10-09" },
+      previous: { from: "2026-09-22", to: "2026-09-30" },
+    });
+    expect(clampCustomRange({ from: "2026-10-01", to: "2026-10-05" }, today)).toEqual({ from: "2026-10-01", to: "2026-10-05" });
+
+    // Starting after today has nothing to report.
+    expect(customRangeProblem({ from: "2026-10-10", to: "2026-10-12" }, today)).toBe("future");
+    expect(() => resolvePreset("custom", now, sydney, { from: "2026-10-10", to: "2026-10-12" })).toThrow("Range starts after today");
+    // Today itself is fine, in the store's zone rather than UTC's.
+    expect(resolvePreset("custom", now, sydney, { from: "2026-10-09", to: "2026-10-09" }).range).toEqual({ from: "2026-10-09", to: "2026-10-09" });
+    expect(() => resolvePreset("custom", now, "UTC", { from: "2026-10-09", to: "2026-10-09" })).toThrow("Range starts after today");
+
+    // The year limit counts the days actually reported.
+    expect(customRangeProblem({ from: "2025-10-09", to: "2026-12-31" }, today)).toBeNull();
+    expect(customRangeProblem({ from: "2025-10-08", to: "2026-12-31" }, today)).toBe("too_long");
   });
 });
 

@@ -14,11 +14,26 @@
   --warn: #a15c07;
   --good: #1f7a46;
   --chart: #2f6f4f;
+  /* Sales breakdown charts: one blue ramp for ordinary → strong → best days (validated as an
+     ordinal ramp against the surface, light and dark), and orange for the running total. */
+  --viz-tier-1: #6da7ec;
+  --viz-tier-2: #2a78d6;
+  --viz-tier-3: #184f95;
+  --viz-total: #eb6834;
+  /* Categories with no order (sales channels, new vs returning): the reference palette's first
+     three slots, which pass every colour-blindness check together. Always shown with labels. */
+  --viz-cat-1: #2a78d6;
+  --viz-cat-2: #eb6834;
+  --viz-cat-3: #1baf7a;
   --shadow: 0 1px 2px rgb(20 28 22 / 0.04), 0 8px 24px -14px rgb(20 28 22 / 0.14);
   --shadow-lift: 0 2px 4px rgb(20 28 22 / 0.06), 0 22px 44px -18px rgb(20 28 22 / 0.26);
 }
 @media (prefers-color-scheme: dark) {
   :root {
+    /* Native controls too: without this the date fields' calendar button was drawn black on the
+       dark box and opened a light calendar. Only here, so light mode keeps whatever a page's own
+       color-scheme meta asks for. */
+    color-scheme: dark;
     --bg: #121211;
     --surface: #1b1b19;
     --border: #2e2e2a;
@@ -31,6 +46,13 @@
     --warn: #f0b048;
     --good: #6fcf97;
     --chart: #6fbf94;
+    --viz-tier-1: #1c5cab;
+    --viz-tier-2: #3987e5;
+    --viz-tier-3: #86b6ef;
+    --viz-total: #d95926;
+    --viz-cat-1: #3987e5;
+    --viz-cat-2: #d95926;
+    --viz-cat-3: #199e70;
     --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 10px 28px -16px rgb(0 0 0 / 0.7);
     --shadow-lift: 0 2px 6px rgb(0 0 0 / 0.35), 0 24px 48px -18px rgb(0 0 0 / 0.85);
   }
@@ -144,6 +166,21 @@ body {
   animation: fade 0.8s ease both;
   animation-delay: calc(var(--i, 0) * 70ms);
 }
+/* The detail panel: slides in from the right on wide screens, up from the bottom on phones. */
+@keyframes sheet-in {
+  from { opacity: 0; transform: translateY(24px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes sheet-in-side {
+  from { opacity: 0; transform: translateX(32px); }
+  to { opacity: 1; transform: none; }
+}
+@utility animate-sheet {
+  animation: sheet-in 0.28s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  @media (min-width: 640px) {
+    animation-name: sheet-in-side;
+  }
+}
 @utility animate-ping-soft {
   animation: ping-soft 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
 }
@@ -175,6 +212,65 @@ body {
     transform: translateX(-100%);
     background: linear-gradient(90deg, transparent, color-mix(in oklab, var(--surface) 70%, transparent), transparent);
     animation: shimmer 1.4s infinite;
+  }
+}
+
+/* "Print or save as PDF" on a detail panel: only the panel, every part of it, light colors. */
+@media print {
+  :root {
+    color-scheme: light;
+    --bg: #ffffff;
+    --surface: #ffffff;
+    --border: #d9d9d4;
+    --text: #1b1b18;
+    --muted: #55554e;
+    --accent: #2f6f4f;
+    --accent-2: #c9662a;
+    --danger: #b42318;
+    --warn: #a15c07;
+    --good: #1f7a46;
+    --viz-tier-1: #6da7ec;
+    --viz-tier-2: #2a78d6;
+    --viz-tier-3: #184f95;
+    --viz-total: #eb6834;
+    --viz-cat-1: #2a78d6;
+    --viz-cat-2: #eb6834;
+    --viz-cat-3: #1baf7a;
+  }
+  body {
+    background: #fff;
+    overflow: visible !important;
+  }
+  body:has([data-print-root]) * {
+    visibility: hidden;
+  }
+  /* As specific as the rule above plus one, or it loses and the page prints blank. */
+  body:has([data-print-root]) [data-print-root],
+  body:has([data-print-root]) [data-print-root] * {
+    visibility: visible;
+  }
+  [data-print-root] {
+    position: absolute !important;
+    inset: 0 auto auto 0 !important;
+    width: 100%;
+    display: block !important;
+  }
+  [data-print-root] [data-print-panel] {
+    height: auto !important;
+    max-width: none !important;
+    box-shadow: none !important;
+    border: 0 !important;
+    animation: none !important;
+  }
+  [data-print-root] [data-print-scroll] {
+    overflow: visible !important;
+  }
+  [data-print-root] [data-print-hide] {
+    display: none !important;
+  }
+  [data-print-root] .card {
+    break-inside: avoid;
+    box-shadow: none;
   }
 }
 

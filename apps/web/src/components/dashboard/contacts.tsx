@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { can } from "@app/shared/roles";
 import { useApp } from "@/components/AppContext";
 import { Alert } from "@/components/ui";
@@ -17,7 +17,7 @@ const TABS: Array<{ id: Tab; label: string; icon: IconName; empty: string; help:
     label: "Left at checkout",
     icon: "cart",
     empty: "Nobody has left a checkout unfinished recently. Nice!",
-    help: "Shoppers who typed their email at checkout but didn't pay. Each one has a link back to their saved cart.",
+    help: "Shoppers who started checkout but didn't pay. Each has a link back to their saved cart: send it, and they carry on exactly where they stopped.",
   },
   {
     id: "subscribers",
@@ -35,6 +35,62 @@ const TABS: Array<{ id: Tab; label: string; icon: IconName; empty: string; help:
   },
 ];
 
+/**
+ * What gets sent, per tab. {name}, {store}, {items}, {total} and {link} are filled in for each
+ * person; the merchant can rewrite the rest, and it's remembered in this browser.
+ */
+const DEFAULT_MESSAGE: Record<Tab, string> = {
+  abandoned:
+    "Hi {name}, you left {items} in your cart at {store}. It's saved for you, so you can finish your order right here: {link}\n\nIf anything stopped you, just reply and we'll help.",
+  subscribers: "Hi {name}, thanks for signing up to hear from {store}! ",
+  recent: "Hi {name}, thanks for shopping with {store}! If there's anything we can help with, just reply to this message.",
+};
+
+const SUBJECT: Record<Tab, string> = {
+  abandoned: "Your cart at {store} is saved for you",
+  subscribers: "A note from {store}",
+  recent: "Thanks from {store}",
+};
+
+const messageKey = (storeId: string, tab: Tab) => `insights:contact-message:${storeId}:${tab}`;
+
+function readMessage(storeId: string, tab: Tab): string {
+  try {
+    return window.localStorage.getItem(messageKey(storeId, tab)) || DEFAULT_MESSAGE[tab];
+  } catch {
+    return DEFAULT_MESSAGE[tab];
+  }
+}
+
+function saveMessage(storeId: string, tab: Tab, text: string) {
+  try {
+    if (text === DEFAULT_MESSAGE[tab]) window.localStorage.removeItem(messageKey(storeId, tab));
+    else window.localStorage.setItem(messageKey(storeId, tab), text);
+  } catch {
+    // Storage blocked: the edit still applies until the page is closed.
+  }
+}
+
+const firstName = (p: ContactPerson) => p.name?.split(/\s+/)[0] ?? "there";
+
+/** The template with this person's details filled in. */
+function fill(template: string, p: ContactPerson, storeName: string, abandoned?: AbandonedContact): string {
+  const items = abandoned?.items.length
+    ? abandoned.items.map((i) => `${i.title}${i.quantity > 1 ? ` ×${i.quantity}` : ""}`).join(", ")
+    : "a few things";
+  return template
+    .replaceAll("{name}", firstName(p))
+    .replaceAll("{store}", storeName)
+    .replaceAll("{items}", items)
+    .replaceAll("{total}", abandoned ? fmtMoney(abandoned.total, abandoned.currency) : "")
+    .replaceAll("{link}", abandoned?.recoveryUrl ?? "")
+    .trim();
+}
+
+/** "+61 400 000 000" → "61400000000": what wa.me wants (country code, digits only). */
+const waNumber = (phone: string) => phone.replace(/^00/, "+").replace(/[^\d]/g, "");
+const telNumber = (phone: string) => phone.replace(/[^\d+]/g, "");
+
 /** Two letters for the avatar: initials of the name, else the start of the email. */
 function initials(p: ContactPerson) {
   const src = p.name ?? p.email ?? "?";
@@ -44,146 +100,296 @@ function initials(p: ContactPerson) {
 
 /** A steady colour per person, so the same shopper always looks the same. */
 function hue(p: ContactPerson) {
-  const key = p.email ?? p.name ?? p.customerId ?? "";
+  const key = p.email ?? p.phone ?? p.name ?? p.customerId ?? "";
   let h = 0;
   for (const ch of key) h = (h * 31 + ch.charCodeAt(0)) % 360;
   return h;
 }
 
-const firstName = (p: ContactPerson) => p.name?.split(/\s+/)[0] ?? "there";
-
-function mailto(p: ContactPerson, storeName: string, abandoned?: AbandonedContact) {
-  if (!p.email) return null;
-  const subject = abandoned ? `Your cart at ${storeName}` : `Hello from ${storeName}`;
-  const things = abandoned?.items.length ? abandoned.items.map((i) => i.title).join(", ") : "a few things";
-  const body = abandoned
-    ? `Hi ${firstName(p)},\n\nYou left ${things} in your cart at ${storeName}. It's saved for you here:\n${abandoned.recoveryUrl}\n\nIf anything stopped you, just reply to this email and we'll help.\n`
-    : `Hi ${firstName(p)},\n\n`;
-  return `mailto:${p.email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+function useCopied(): [boolean, (text: string) => Promise<void>] {
+  const [done, setDone] = useState(false);
+  const copy = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setDone(true);
+      window.setTimeout(() => setDone(false), 1500);
+    } catch {
+      // Clipboard blocked: the text is on screen to select by hand.
+    }
+  };
+  return [done, copy];
 }
 
-function CopyButton({ text, label, icon = "copy" }: { text: string; label: string; icon?: IconName }) {
-  const [done, setDone] = useState(false);
+function IconButton({ label, icon, onClick, href, external }: { label: string; icon: IconName; onClick?: () => void; href?: string; external?: boolean }) {
+  const cls = "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border bg-surface text-muted transition hover:border-accent hover:text-accent";
+  if (href) {
+    return (
+      <a className={cls} href={href} title={label} aria-label={label} {...(external ? { target: "_blank", rel: "noopener noreferrer" } : {})}>
+        <Icon name={icon} className="h-4 w-4" />
+      </a>
+    );
+  }
   return (
-    <button
-      type="button"
-      className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-border text-muted transition hover:border-accent hover:text-accent"
-      title={label}
-      aria-label={label}
-      onClick={async () => {
-        try {
-          await navigator.clipboard.writeText(text);
-          setDone(true);
-          window.setTimeout(() => setDone(false), 1500);
-        } catch {
-          // Clipboard blocked: the address is on screen to select by hand.
-        }
-      }}
-    >
-      <Icon name={done ? "check" : icon} className={`h-4 w-4 ${done ? "text-good" : ""}`} />
+    <button type="button" className={cls} title={label} aria-label={label} onClick={onClick}>
+      <Icon name={icon} className="h-4 w-4" />
     </button>
   );
 }
 
-function PersonRow({ p, i, storeName, abandoned, customer }: { p: ContactPerson; i: number; storeName: string; abandoned?: AbandonedContact; customer?: CustomerContact }) {
-  const h = hue(p);
-  const href = mailto(p, storeName, abandoned);
-  const when = fmtRelative(abandoned?.createdAt ?? customer?.createdAt);
+function CopyIcon({ text, label }: { text: string; label: string }) {
+  const [done, copy] = useCopied();
   return (
-    <li className="animate-rise flex flex-col gap-3 py-3 sm:flex-row sm:items-center" style={{ ["--i" as string]: Math.min(i, 8) }} data-testid="contact-row">
-      <div className="flex min-w-0 flex-1 items-start gap-3">
-        <span
-          aria-hidden
-          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-sm font-semibold text-white shadow-sm"
-          style={{ background: `linear-gradient(135deg, hsl(${h} 62% 52%), hsl(${(h + 45) % 360} 62% 42%))` }}
-        >
-          {initials(p)}
-        </span>
-        <div className="min-w-0">
-          <p className="flex flex-wrap items-center gap-2">
-            <span className={`truncate font-medium ${p.name ? "" : "text-muted"}`}>{p.name ?? "Guest shopper"}</span>
-            {p.subscribed ? (
-              <span className="rounded-full bg-good/12 px-2 py-0.5 text-[11px] font-medium text-good">Subscribed</span>
-            ) : (
-              <span className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted">Not subscribed</span>
-            )}
+    <button
+      type="button"
+      className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border bg-surface text-muted transition hover:border-accent hover:text-accent"
+      title={label}
+      aria-label={label}
+      onClick={() => void copy(text)}
+    >
+      <Icon name={done ? "check" : "copy"} className={`h-4 w-4 ${done ? "text-good" : ""}`} />
+    </button>
+  );
+}
+
+/** Email or phone, each in its own box, with whether the person agreed to marketing on it. */
+function ContactBox({ kind, value, agreed }: { kind: "email" | "phone"; value: string | null; agreed: boolean }) {
+  const label = kind === "email" ? "Email" : "Phone";
+  return (
+    <div className="min-w-0 rounded-lg border border-border bg-bg px-3 py-2">
+      <p className="flex items-center gap-1.5 text-xs text-muted">
+        <Icon name={kind === "email" ? "mail" : "phone"} className="h-3.5 w-3.5" />
+        {label}
+      </p>
+      {value ? (
+        <>
+          <div className="mt-0.5 flex items-center justify-between gap-2">
+            <a
+              className="min-w-0 truncate font-medium hover:text-accent hover:underline"
+              href={kind === "email" ? `mailto:${value}` : `tel:${telNumber(value)}`}
+              data-testid={`contact-${kind}`}
+            >
+              {value}
+            </a>
+            <CopyIcon text={value} label={`Copy ${value}`} />
+          </div>
+          <p className={`mt-0.5 text-[11px] ${agreed ? "text-good" : "text-muted"}`}>
+            {kind === "email" ? (agreed ? "Agreed to marketing emails" : "Hasn't agreed to marketing emails") : agreed ? "Agreed to marketing texts" : "Hasn't agreed to marketing texts"}
           </p>
-          <p className="mt-0.5 flex flex-wrap gap-x-3 text-sm text-muted">
-            {p.email && (
-              <a className="truncate hover:text-accent hover:underline" href={`mailto:${p.email}`}>{p.email}</a>
+        </>
+      ) : (
+        <p className="mt-0.5 text-sm text-muted">{kind === "email" ? "No email on file" : "No phone number on file"}</p>
+      )}
+    </div>
+  );
+}
+
+function SendButton({ label, icon, href, onClick, disabledReason, primary, testId }: { label: string; icon: IconName; href?: string | null; onClick?: () => void; disabledReason?: string | null; primary?: boolean; testId: string }) {
+  const cls = `inline-flex h-9 items-center gap-1.5 rounded-lg px-3 text-sm font-medium transition ${
+    disabledReason ? "cursor-not-allowed border border-dashed border-border text-muted opacity-60" : primary ? "bg-accent text-accent-ink hover:opacity-90" : "border border-border bg-surface hover:border-accent hover:text-accent"
+  }`;
+  if (disabledReason) {
+    return (
+      <span className={cls} title={disabledReason} aria-disabled="true" data-testid={testId}>
+        <Icon name={icon} className="h-4 w-4" />
+        {label}
+      </span>
+    );
+  }
+  if (href) {
+    return (
+      <a className={cls} href={href} target={href.startsWith("http") ? "_blank" : undefined} rel="noopener noreferrer" data-testid={testId}>
+        <Icon name={icon} className="h-4 w-4" />
+        {label}
+      </a>
+    );
+  }
+  return (
+    <button type="button" className={cls} onClick={onClick} data-testid={testId}>
+      <Icon name={icon} className="h-4 w-4" />
+      {label}
+    </button>
+  );
+}
+
+function ContactRow({
+  p,
+  i,
+  tab,
+  template,
+  storeName,
+  abandoned,
+  customer,
+}: {
+  p: ContactPerson;
+  i: number;
+  tab: Tab;
+  template: string;
+  storeName: string;
+  abandoned?: AbandonedContact;
+  customer?: CustomerContact;
+}) {
+  const h = hue(p);
+  const when = fmtRelative(abandoned?.createdAt ?? customer?.createdAt);
+  const message = fill(template, p, storeName, abandoned);
+  const subject = fill(SUBJECT[tab], p, storeName, abandoned);
+  const [copiedMessage, copyMessage] = useCopied();
+  const [copiedLink, copyLink] = useCopied();
+  const [canShare, setCanShare] = useState(false);
+  useEffect(() => setCanShare(typeof navigator !== "undefined" && typeof navigator.share === "function"), []);
+
+  const whatsapp = p.phone ? `https://wa.me/${waNumber(p.phone)}?text=${encodeURIComponent(message)}` : null;
+  const email = p.email ? `mailto:${p.email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(message)}` : null;
+  // "?&body=" is the form both iPhone and Android Messages read.
+  const sms = p.phone ? `sms:${telNumber(p.phone)}?&body=${encodeURIComponent(message)}` : null;
+  const best = whatsapp ? "whatsapp" : email ? "email" : "sms";
+
+  return (
+    <li className="animate-rise rounded-xl border border-border bg-surface p-4" style={{ ["--i" as string]: Math.min(i, 8) }} data-testid="contact-row">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <span
+            aria-hidden
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-sm font-semibold text-white shadow-sm"
+            style={{ background: `linear-gradient(135deg, hsl(${h} 62% 52%), hsl(${(h + 45) % 360} 62% 42%))` }}
+          >
+            {initials(p)}
+          </span>
+          <div className="min-w-0">
+            <p className={`truncate font-medium ${p.name ? "" : "text-muted"}`}>{p.name ?? "Guest shopper"}</p>
+            {abandoned && abandoned.items.length > 0 && (
+              <p className="truncate text-xs text-muted">{abandoned.items.map((it) => `${it.title}${it.quantity > 1 ? ` ×${it.quantity}` : ""}`).join(" · ")}</p>
             )}
-            {p.phone && (
-              <a className="whitespace-nowrap hover:text-accent hover:underline" href={`tel:${p.phone.replace(/[^\d+]/g, "")}`}>{p.phone}</a>
-            )}
-            {!p.email && !p.phone && <span>No email or phone on file</span>}
-          </p>
-          {abandoned && abandoned.items.length > 0 && (
-            <p className="mt-0.5 truncate text-xs text-muted">
-              {abandoned.items.map((it) => `${it.title}${it.quantity > 1 ? ` ×${it.quantity}` : ""}`).join(" · ")}
-            </p>
-          )}
+            {customer && <p className="text-xs text-muted">{customer.orders > 0 ? `${plural(customer.orders, "order")} so far` : "No orders yet"}</p>}
+          </div>
+        </div>
+        <div className="text-right">
+          {abandoned && <p className="font-semibold tabular-nums">{fmtMoney(abandoned.total, abandoned.currency)}</p>}
+          {customer && customer.orders > 0 && <p className="font-semibold tabular-nums">{fmtMoney(customer.spent, customer.currency ?? undefined)}</p>}
+          <p className="text-xs text-muted">{abandoned ? `left ${when ?? ""}` : `joined ${when ?? ""}`}</p>
         </div>
       </div>
-      <div className="flex shrink-0 items-center justify-between gap-4 pl-13 sm:justify-end sm:pl-0">
-        <div className="text-right text-sm">
-          {abandoned && <p className="font-semibold tabular-nums">{fmtMoney(abandoned.total, abandoned.currency)}</p>}
-          {customer && (
-            <p className="font-semibold tabular-nums">
-              {customer.orders > 0 ? fmtMoney(customer.spent, customer.currency ?? undefined) : "No orders yet"}
-            </p>
-          )}
-          <p className="text-xs text-muted">
-            {customer && customer.orders > 0 ? `${plural(customer.orders, "order")} · ` : ""}
-            {when}
+
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        <ContactBox kind="email" value={p.email} agreed={p.subscribed} />
+        <ContactBox kind="phone" value={p.phone} agreed={p.smsSubscribed} />
+      </div>
+
+      {abandoned && (
+        <div className="mt-2 rounded-lg border border-border bg-bg px-3 py-2">
+          <p className="flex items-center gap-1.5 text-xs text-muted">
+            <Icon name="link" className="h-3.5 w-3.5" />
+            Link back to their cart: opens checkout with everything still in it
           </p>
+          <div className="mt-0.5 flex items-center justify-between gap-2">
+            <a className="min-w-0 truncate font-mono text-xs text-accent hover:underline" href={abandoned.recoveryUrl} target="_blank" rel="noopener noreferrer" data-testid="recovery-link">
+              {abandoned.recoveryUrl}
+            </a>
+            <div className="flex shrink-0 gap-1.5">
+              <button
+                type="button"
+                className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-surface px-2.5 text-xs font-medium text-muted transition hover:border-accent hover:text-accent"
+                onClick={() => void copyLink(abandoned.recoveryUrl)}
+              >
+                <Icon name={copiedLink ? "check" : "copy"} className={`h-3.5 w-3.5 ${copiedLink ? "text-good" : ""}`} />
+                {copiedLink ? "Copied" : "Copy link"}
+              </button>
+              <IconButton label="Open the checkout" icon="external" href={abandoned.recoveryUrl} external />
+            </div>
+          </div>
         </div>
-        <div className="flex items-center gap-1.5">
-          {href && (
-            <a className="btn-primary h-8 px-3 text-xs" href={href} title={abandoned ? "Email them a link back to their cart" : "Write them an email"}>
-              <Icon name="mail" className="h-4 w-4" /> Email
-            </a>
+      )}
+
+      <div className="mt-3">
+        <p className="mb-1.5 text-xs font-medium text-muted">{abandoned ? "Send them the link to finish their purchase" : "Get in touch"}</p>
+        <div className="flex flex-wrap items-center gap-2">
+          <SendButton label="WhatsApp" icon="chat" href={whatsapp} disabledReason={whatsapp ? null : "No phone number"} primary={best === "whatsapp"} testId="send-whatsapp" />
+          <SendButton label="Email" icon="mail" href={email} disabledReason={email ? null : "No email address"} primary={best === "email"} testId="send-email" />
+          <SendButton label="Text message" icon="phone" href={sms} disabledReason={sms ? null : "No phone number"} primary={best === "sms"} testId="send-sms" />
+          {canShare && (
+            <SendButton
+              label="Other apps"
+              icon="share"
+              onClick={() => void navigator.share({ title: subject, text: message }).catch(() => undefined)}
+              testId="send-share"
+            />
           )}
-          {p.email && <CopyButton text={p.email} label={`Copy ${p.email}`} />}
-          {abandoned && <CopyButton text={abandoned.recoveryUrl} label="Copy the link back to their cart" icon="link" />}
-          {p.adminUrl && (
-            <a
-              className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-border text-muted transition hover:border-accent hover:text-accent"
-              href={p.adminUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              title="Open in Shopify"
-              aria-label="Open in Shopify"
-            >
-              <Icon name="external" className="h-4 w-4" />
-            </a>
-          )}
+          <SendButton label={copiedMessage ? "Copied" : "Copy message"} icon={copiedMessage ? "check" : "copy"} onClick={() => void copyMessage(message)} testId="copy-message" />
+          {p.adminUrl && <IconButton label="Open in Shopify" icon="external" href={p.adminUrl} external />}
         </div>
       </div>
     </li>
   );
 }
 
+/** Edit the message every send button uses on this tab. */
+function MessageEditor({ tab, value, onChange }: { tab: Tab; value: string; onChange: (v: string) => void }) {
+  const tokens = tab === "abandoned" ? ["{name}", "{items}", "{total}", "{link}", "{store}"] : ["{name}", "{store}"];
+  return (
+    <details className="mt-3 rounded-lg border border-border bg-bg px-3 py-2 text-sm">
+      <summary className="cursor-pointer font-medium">Your message <span className="font-normal text-muted">(tap to change what gets sent)</span></summary>
+      <textarea
+        className="input mt-2 min-h-28 font-normal"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        aria-label="Message to send"
+      />
+      <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2 text-xs text-muted">
+        <p>
+          Filled in for each person:{" "}
+          {tokens.map((t) => (
+            <code key={t} className="mr-1 rounded border border-border bg-surface px-1">{t}</code>
+          ))}
+        </p>
+        {value !== DEFAULT_MESSAGE[tab] && (
+          <button type="button" className="underline" onClick={() => onChange(DEFAULT_MESSAGE[tab])}>Back to the suggested message</button>
+        )}
+      </div>
+    </details>
+  );
+}
+
 function Skeleton() {
   return (
-    <ul className="divide-y divide-border" aria-hidden>
+    <ul className="mt-3 space-y-3" aria-hidden>
       {[0, 1, 2].map((i) => (
-        <li key={i} className="flex items-center gap-3 py-3">
-          <span className="skeleton h-10 w-10 shrink-0 rounded-full" />
-          <span className="flex-1 space-y-2">
+        <li key={i} className="space-y-3 rounded-xl border border-border p-4">
+          <span className="flex items-center gap-3">
+            <span className="skeleton h-10 w-10 shrink-0 rounded-full" />
             <span className="skeleton block h-3 w-40" />
-            <span className="skeleton block h-3 w-56" />
           </span>
-          <span className="skeleton h-8 w-20" />
+          <span className="grid gap-2 sm:grid-cols-2">
+            <span className="skeleton block h-14" />
+            <span className="skeleton block h-14" />
+          </span>
         </li>
       ))}
     </ul>
   );
 }
 
+function CopyAll({ values, what }: { values: string[]; what: string }) {
+  const [done, copy] = useCopied();
+  return (
+    <button type="button" className="inline-flex items-center gap-1.5 text-xs font-medium text-accent hover:underline" onClick={() => void copy(values.join(", "))}>
+      <Icon name={done ? "check" : "copy"} className="h-3.5 w-3.5" />
+      {done ? "Copied" : `Copy all ${values.length} ${what}`}
+    </button>
+  );
+}
+
+const Note = ({ children }: { children: ReactNode }) => (
+  <p className="mt-3 flex items-start gap-1.5 text-xs text-muted">
+    <Icon name="sparkle" className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent-2" />
+    <span>{children}</span>
+  </p>
+);
+
 /**
- * People who gave the store their email, with one-click ways to get back in touch. Loaded when
- * the card appears and on "Refresh" (not on the dashboard's 15-second poll): it's a live call to
- * Shopify, and the data is personal, so we fetch it only when someone is looking.
+ * People who gave the store a way to reach them, with one-tap ways to get back in touch: the
+ * link back to an unfinished checkout by WhatsApp, email, text message or any other app.
+ * Loaded when the card appears and on "Refresh" (not on the dashboard's 15-second poll): it's a
+ * live call to Shopify, and the data is personal, so we fetch it only when someone is looking.
+ * Messages are sent from the merchant's own apps; Insights never sends or stores them.
  */
 export function ContactsCard({ storeId, storeName, shopDomain }: { storeId: string; storeName: string; shopDomain: string }) {
   const { workspace } = useApp();
@@ -192,6 +398,7 @@ export function ContactsCard({ storeId, storeName, shopDomain }: { storeId: stri
   const [data, setData] = useState<Contacts | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [templates, setTemplates] = useState<Record<Tab, string>>(DEFAULT_MESSAGE);
   const path = `/workspaces/${workspace.id}/stores/${storeId}/contacts`;
 
   const load = useCallback(async () => {
@@ -210,7 +417,12 @@ export function ContactsCard({ storeId, storeName, shopDomain }: { storeId: stri
     if (allowed) void load();
   }, [allowed, load]);
 
-  const help = "People who gave your store their email, so you can get back in touch. Fetched from Shopify each time; Insights doesn't keep a copy.";
+  // The merchant's own wording, if they changed it before (per store, in this browser).
+  useEffect(() => {
+    setTemplates({ abandoned: readMessage(storeId, "abandoned"), subscribers: readMessage(storeId, "subscribers"), recent: readMessage(storeId, "recent") });
+  }, [storeId]);
+
+  const help = "People who gave your store a way to reach them, so you can get back in touch. Fetched from Shopify each time; Insights doesn't keep a copy, and messages go from your own apps.";
   if (!allowed) {
     return (
       <Panel id="contacts" title="Customers to follow up" help={help}>
@@ -221,7 +433,13 @@ export function ContactsCard({ storeId, storeName, shopDomain }: { storeId: stri
 
   const lists = { abandoned: data?.abandoned ?? [], subscribers: data?.subscribers ?? [], recent: data?.recent ?? [] };
   const current = TABS.find((t) => t.id === tab)!;
-  const subscribedEmails = lists.subscribers.map((s) => s.email).filter((e): e is string => !!e);
+  const people: ContactPerson[] = lists[tab];
+  const emails = people.map((x) => x.email).filter((e): e is string => !!e);
+  const phones = people.map((x) => x.phone).filter((e): e is string => !!e);
+  const setTemplate = (text: string) => {
+    setTemplates((t) => ({ ...t, [tab]: text }));
+    saveMessage(storeId, tab, text);
+  };
 
   return (
     <Panel
@@ -256,60 +474,44 @@ export function ContactsCard({ storeId, storeName, shopDomain }: { storeId: stri
         })}
       </div>
 
-      <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
-        <p className="text-xs text-muted">{current.help}</p>
-        {tab === "subscribers" && subscribedEmails.length > 1 && <CopyAll emails={subscribedEmails} />}
-      </div>
+      <p className="mt-3 text-xs text-muted">{current.help}</p>
 
       {error && <div className="mt-3"><Alert>{error}</Alert></div>}
       {!data && loading && <Skeleton />}
       {data?.restricted && (
         <div className="mt-3">
           <Alert kind="info">
-            Shopify hasn&apos;t approved Insights to show customers&apos; names and emails for this store yet. You can still see them in{" "}
+            Shopify hasn&apos;t approved Insights to show customers&apos; names, emails and phone numbers for this store yet. You can still see them in{" "}
             <a className="underline" href={`https://${shopDomain}/admin/${tab === "abandoned" ? "checkouts" : "customers"}`} target="_blank" rel="noopener noreferrer">your Shopify admin</a>.
           </Alert>
         </div>
       )}
       {data && !data.restricted && (
-        lists[tab].length === 0 ? (
+        people.length === 0 ? (
           <div className="mt-3"><Empty>{current.empty}</Empty></div>
         ) : (
-          <ul key={tab} className="mt-1 divide-y divide-border" aria-label={current.label}>
-            {tab === "abandoned"
-              ? lists.abandoned.map((a, i) => <PersonRow key={a.id} p={a} i={i} storeName={storeName} abandoned={a} />)
-              : lists[tab].map((c, i) => <PersonRow key={c.customerId ?? i} p={c} i={i} storeName={storeName} customer={c} />)}
-          </ul>
+          <>
+            <MessageEditor tab={tab} value={templates[tab]} onChange={setTemplate} />
+            {(emails.length > 1 || phones.length > 1) && (
+              <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1">
+                {emails.length > 1 && <CopyAll values={emails} what="emails" />}
+                {phones.length > 1 && <CopyAll values={phones} what="phone numbers" />}
+              </div>
+            )}
+            <ul key={tab} className="mt-3 space-y-3" aria-label={current.label}>
+              {tab === "abandoned"
+                ? lists.abandoned.map((a, i) => <ContactRow key={a.id} p={a} i={i} tab={tab} template={templates[tab]} storeName={storeName} abandoned={a} />)
+                : lists[tab].map((c, i) => <ContactRow key={c.customerId ?? i} p={c} i={i} tab={tab} template={templates[tab]} storeName={storeName} customer={c} />)}
+            </ul>
+          </>
         )
       )}
       {data && !data.restricted && (
-        <p className="mt-3 flex items-center gap-1.5 text-xs text-muted">
-          <Icon name="sparkle" className="h-3.5 w-3.5 text-accent-2" />
-          Only send offers and promotions to people marked Subscribed: they agreed to hear from you.
-        </p>
+        <Note>
+          WhatsApp, Email and Text message open your own app with the message ready: check it and press send. Rules differ by country: send offers only
+          to people who agreed (shown under each email and phone number), and keep cart reminders short and personal.
+        </Note>
       )}
     </Panel>
-  );
-}
-
-function CopyAll({ emails }: { emails: string[] }) {
-  const [done, setDone] = useState(false);
-  return (
-    <button
-      type="button"
-      className="inline-flex items-center gap-1.5 text-xs font-medium text-accent hover:underline"
-      onClick={async () => {
-        try {
-          await navigator.clipboard.writeText(emails.join(", "));
-          setDone(true);
-          window.setTimeout(() => setDone(false), 1500);
-        } catch {
-          // Clipboard blocked.
-        }
-      }}
-    >
-      <Icon name={done ? "check" : "copy"} className="h-3.5 w-3.5" />
-      {done ? "Copied" : `Copy all ${emails.length} emails`}
-    </button>
   );
 }

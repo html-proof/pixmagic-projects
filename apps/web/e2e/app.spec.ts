@@ -225,7 +225,7 @@ test("dashboard shows webhook-driven metrics and only granted modules", async ({
   await expect(page.getByTestId("metric-Average order value")).toContainText("$100.00");
   await expect(page.getByRole("heading", { name: "Top products" })).toHaveCount(0);
 
-  await page.getByRole("button", { name: "Last 7 days" }).click();
+  await page.getByLabel("Dates").selectOption({ label: "Last 7 days" });
   await expect(page.getByTestId("metric-Net sales")).toContainText("$100.00");
 
   await page.goto("/settings/stores");

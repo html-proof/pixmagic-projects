@@ -104,6 +104,7 @@ export function durableCoord(ns: DurableObjectNamespace<Coordinator>): Coord {
     hit: (key, windowSec) => stub(key).hit(windowSec),
     put: (key, value, ttlSec) => stub(key).put(value, ttlSec),
     take: (key) => stub(key).take(),
+    peek: (key) => stub(key).peek(),
     acquire: (key, ttlMs) => stub(key).acquire(ttlMs),
     release: (key) => stub(key).release(),
     ping: () => stub("__ping").ping(),

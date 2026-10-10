@@ -6,7 +6,9 @@ Source of truth: `packages/shared/src/kpi.ts` (reference implementation) and `re
 
 - **Currency:** the store's currency (Shopify `shop_money`). Presentment currencies are ignored. Money totals are rounded to cents before ratios are derived.
 - **Day:** calendar day in the **store's IANA time zone** (from `shop.ianaTimezone`), not the viewer's and not UTC. Date presets (`today`, `7d`, `mtd`, …) resolve in that zone too.
-- **Comparison period:** the same number of days immediately before the selected range.
+- **Custom ranges** run from 2000-01-01 at the earliest, cover at most 366 days, and are reported only up to the store's today: picking 1–31 Oct on 9 Oct reports 1–9 Oct. A range that starts after today is refused (`400 invalid_range`).
+- **Comparison period:** the same number of days immediately before the selected range (after that clamp).
+- **Daily series** (the net sales chart and sparklines) has one point per day of the range; days without orders or refunds are 0.
 - **Cancelled orders** are excluded entirely.
 - **Refunds** are booked on the day the refund was **created**, not the day of the original order. Last month's numbers can change only if a refund is backdated, which Shopify doesn't allow.
 - **Missing denominators** produce `null` (shown as "—"), never a fake 0.
@@ -31,6 +33,78 @@ Source of truth: `packages/shared/src/kpi.ts` (reference implementation) and `re
 | Left at a step | visits whose furthest step is exactly this one | Plus the site section they were last on |
 | Section exit rate | visits that left the site from this section without buying ÷ visits that saw this section | |
 | Δ vs previous | (current − previous) ÷ \|previous\| | `null` when previous is 0 |
+
+## Sales breakdown (Sales section)
+
+Reference implementation: `packages/shared/src/sales.ts`.
+
+**Day by day** (the dates picked, two days or more):
+
+- **Average day**: net sales of finished, imported days ÷ their count. Today is still running, so it is left out.
+- **Day tiers**: a *strong* day is ≥ 1.5 × the average day, a *best* day ≥ 2 × it, each rounded to a figure a merchant would set as a target (A$1,530 → A$1,500). They are relative to the store, not fixed amounts, and only set once the range has 14 finished days.
+- **Best weekday**: the weekday with the highest average net sales over finished days, shown from 14 finished days.
+- **Running total**: net sales from the first imported day of the range to the end of each day. It is drawn as its own strip under the columns, not on a second axis.
+
+**Month by month** (this calendar year in the store's time zone, whatever dates are picked):
+
+- Net sales, orders and average order value per month, January to the current month.
+- **Change**: on the month before (January on December). The current month is compared with the same days of the month before (1–9 Oct with 1–9 Sep), never with the whole month.
+- **Average month**: over finished months that were fully imported.
+
+**Not imported.** Days and months before the store's first imported order are drawn hatched and labelled, never as $0. Shopify shares only the last 60 days of orders without `read_all_orders`. A month that is only partly imported is drawn lighter, and no change is calculated for it or against it.
+
+## Business overview (health check)
+
+Reference implementation: `businessHealth` in `apps/web/src/components/dashboard/overview.tsx`. Each area gets one of four labels, always shown as words beside a colored dot:
+
+| Area | Looks good | Keep an eye on | Needs attention |
+| --- | --- | --- | --- |
+| Net sales, orders, average order, visitors who bought, returning customers | up or level on the period before | down by less than 10% | down by 10% or more |
+| Refunds | up to 5% of sales | over 5% and up to 10% | over 10% |
+| Stock | nothing sold out or low | something running low | something sold out |
+| Shipping | nothing waiting | orders waiting, none over 3 days | an order waiting over 3 days |
+
+Best seller, top channel and busiest time are information only. With nothing earlier to compare with, an area is information only too. When the only day picked is today, trends aren't graded, because the day isn't over.
+
+## Ads (Meta Ads, Google Ads)
+
+Reference implementation: `packages/shared/src/ads.ts`. Connection and sync: `docs/ads-setup.md`.
+
+| KPI | Formula | Notes |
+| --- | --- | --- |
+| Ad spend | Σ spend per campaign per day | What the platform billed; in the ad account's currency |
+| Views, clicks | Σ impressions, Σ clicks | |
+| Click-through rate | clicks ÷ views | |
+| Cost per click, per 1,000 views | spend ÷ clicks, spend × 1000 ÷ views | |
+| Purchases | Meta: the first of `omni_purchase`, `purchase`, `offsite_conversion.fb_pixel_purchase`, `onsite_web_purchase` (never their sum: they overlap). Google: `metrics.conversions` | The platform's own attribution |
+| Sales value | the matching `action_values` (Meta), `metrics.conversions_value` (Google) | The platform's own attribution |
+| Return on ad spend | sales value ÷ spend | |
+| Cost per purchase | spend ÷ purchases | |
+| Ads as share of sales | ad spend ÷ the store's net sales for the same dates | Only when both are in the same currency |
+
+- **Days** are each ad account's own calendar days. They line up with the store's days when the time zones match.
+- **Currency:** only accounts in one currency are added together. That is the store's currency when any connected account uses it, otherwise the first account's. Other accounts are listed and left out.
+- **Platform attribution is never mixed into store sales.** Meta and Google can both claim one sale, and neither matches Shopify's orders exactly.
+- **Freshness:** the last 3 days are refreshed hourly. The last 30 days are fetched again daily, because purchases keep being credited after the click. A first connection fetches 90 days.
+
+## Ad earnings (Google AdSense)
+
+Reference implementation: `adsenseTotals` and `fromAdsenseReport` in `packages/shared/src/ads.ts`.
+Stored per AdSense account, site (`DOMAIN_CODE`) and day in `adsense_daily`; never in `ad_campaign_daily`.
+
+| KPI | Formula | Notes |
+| --- | --- | --- |
+| Estimated earnings | Σ `ESTIMATED_EARNINGS` | AdSense finalizes a month after it ends; in the account's currency, read from the report |
+| Page views, ads shown, clicks | Σ `PAGE_VIEWS`, Σ `IMPRESSIONS`, Σ `CLICKS` | |
+| Earnings per 1,000 views (page RPM) | earnings × 1000 ÷ page views | |
+| Earnings per click | earnings ÷ clicks | |
+| Click rate | clicks ÷ ads shown | |
+| Next to your sales | earnings ÷ the store's net sales for the same dates | Only when both are in the same currency |
+
+- **Days** are the AdSense account's own calendar days (`reportingTimeZone=ACCOUNT_TIME_ZONE`).
+- **Currency** is chosen as for ads: the store's when any AdSense account uses it, otherwise the first known.
+- **Earnings are money in, ad spend is money out:** the two modules are separate and never summed.
+- **Freshness:** as for ads (last 3 days hourly, last 30 days daily, 90 days on first connect).
 
 ## Funnel (web pixel)
 

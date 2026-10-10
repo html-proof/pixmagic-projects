@@ -105,5 +105,7 @@ export async function reencryptAllTokens(): Promise<number> {
       },
     });
   }
-  return stores.length;
+  // Ad platform tokens use the same keyring (loaded lazily: adConnections imports this module).
+  const { reencryptAdTokens } = await import("./adConnections.js");
+  return stores.length + (await reencryptAdTokens());
 }

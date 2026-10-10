@@ -30,6 +30,13 @@ interface __BaseEnv_Env {
 	EMAIL_FROM: string;
 	ALERT_SLACK_WEBHOOK_URL: string;
 	FIREBASE_WEB_API_KEY: string;
+	META_APP_ID: string;
+	META_APP_SECRET: string;
+	META_API_VERSION: string;
+	GOOGLE_ADS_CLIENT_ID: string;
+	GOOGLE_ADS_CLIENT_SECRET: string;
+	GOOGLE_ADS_DEVELOPER_TOKEN: string;
+	GOOGLE_ADS_API_VERSION: string;
 	COORD: DurableObjectNamespace<import("./src/index").Coordinator>;
 }
 declare namespace Cloudflare {
@@ -44,7 +51,7 @@ type StringifyValues<EnvType extends Record<string, unknown>> = {
 	[Binding in keyof EnvType]: EnvType[Binding] extends string ? EnvType[Binding] : string;
 };
 declare namespace NodeJS {
-	interface ProcessEnv extends StringifyValues<Pick<Cloudflare.Env, "SHOPIFY_DEFAULT_APP_SHOPS" | "SHOPIFY_EXTRA_APPS" | "NODE_ENV" | "APP_URL" | "API_URL" | "MAILPIT_URL" | "LOG_LEVEL" | "SESSION_SECRET" | "TOKEN_ENCRYPTION_KEYS" | "OTP_PEPPER" | "FIREBASE_PROJECT_ID" | "FIREBASE_SERVICE_ACCOUNT_B64" | "SHOPIFY_API_KEY" | "SHOPIFY_API_SECRET" | "SHOPIFY_SCOPES" | "SHOPIFY_OPTIONAL_SCOPES" | "SHOPIFY_API_VERSION" | "EMAIL_FROM" | "ALERT_SLACK_WEBHOOK_URL" | "FIREBASE_WEB_API_KEY">> {}
+	interface ProcessEnv extends StringifyValues<Pick<Cloudflare.Env, "SHOPIFY_DEFAULT_APP_SHOPS" | "SHOPIFY_EXTRA_APPS" | "NODE_ENV" | "APP_URL" | "API_URL" | "MAILPIT_URL" | "LOG_LEVEL" | "SESSION_SECRET" | "TOKEN_ENCRYPTION_KEYS" | "OTP_PEPPER" | "FIREBASE_PROJECT_ID" | "FIREBASE_SERVICE_ACCOUNT_B64" | "SHOPIFY_API_KEY" | "SHOPIFY_API_SECRET" | "SHOPIFY_SCOPES" | "SHOPIFY_OPTIONAL_SCOPES" | "SHOPIFY_API_VERSION" | "EMAIL_FROM" | "ALERT_SLACK_WEBHOOK_URL" | "FIREBASE_WEB_API_KEY" | "META_APP_ID" | "META_APP_SECRET" | "META_API_VERSION" | "GOOGLE_ADS_CLIENT_ID" | "GOOGLE_ADS_CLIENT_SECRET" | "GOOGLE_ADS_DEVELOPER_TOKEN" | "GOOGLE_ADS_API_VERSION">> {}
 }
 
 // Begin runtime types

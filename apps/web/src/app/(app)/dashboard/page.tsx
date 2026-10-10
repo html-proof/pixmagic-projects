@@ -3,22 +3,12 @@ import Link from "next/link";
 import { useEffect, useState, type ReactNode } from "react";
 import { useApp, canManage, StoresPending } from "@/components/AppContext";
 import { EmptyState, Alert } from "@/components/ui";
-import { TrendChart } from "@/components/TrendChart";
 import { StoreHeader, type LiveState } from "@/components/dashboard/StoreHeader";
-import {
-  CatalogCard,
-  ChannelsCard,
-  DiscountCodesCard,
-  FulfillmentCard,
-  InventoryCard,
-  OrderTimingCard,
-  RecentOrdersCard,
-  SalesExtras,
-} from "@/components/dashboard/modules";
-import { ContactsCard } from "@/components/dashboard/contacts";
-import { FunnelCard, JourneyCard } from "@/components/dashboard/funnel";
-import { fmtDay } from "@/components/dashboard/format";
-import { Highlights } from "@/components/dashboard/highlights";
+import { DateRangeBar, useDateRange } from "@/components/dashboard/DateRange";
+import { availableTopics, TopicDetail, useDetailView } from "@/components/dashboard/details";
+import { AreaList, StoreSummary } from "@/components/dashboard/overview";
+import { AdvertisingSection } from "@/components/dashboard/advertising";
+import { fmtRange } from "@/components/dashboard/format";
 import { Icon, type IconName } from "@/components/dashboard/icons";
 import { AnimatedNumber, Sparkline } from "@/components/dashboard/motion";
 import { Delta } from "@/components/dashboard/primitives";
@@ -78,16 +68,6 @@ function LockedModule({ c, onRequest, pending }: { c: Capability; onRequest: (c:
   );
 }
 
-const PRESETS = [
-  { id: "today", label: "Today" },
-  { id: "yesterday", label: "Yesterday" },
-  { id: "7d", label: "Last 7 days" },
-  { id: "30d", label: "Last 30 days" },
-  { id: "90d", label: "Last 90 days" },
-  { id: "mtd", label: "Month to date" },
-  { id: "custom", label: "Custom" },
-] as const;
-
 /**
  * The dashboard re-checks the backend this often and only redraws when something changed.
  * (Each check also lets the server re-pull recent data from Shopify on its own schedule.)
@@ -101,7 +81,38 @@ const LIVE_EVERY_SEC = 15;
  */
 const IMPORTING_EVERY_SEC = 2;
 const IMPORTING = new Set(["syncing", "pending"]);
+/** Just after an ad account is connected, its first 90 days arrive within a minute or two: look more often until they do. */
+const ADS_FETCHING_EVERY_SEC = 5;
 
+const AD_PLATFORM_NAME: Record<string, string> = { meta: "Meta Ads", google: "Google Ads", adsense: "Google AdSense" };
+
+/**
+ * Coming back from connecting an ad platform (the API sends the browser to
+ * /dashboard?adsConnected=meta&accounts=2&store=…): say so once, show that store, and tidy the
+ * address without touching the dates the page keeps there.
+ */
+function useAdsConnectedNotice(): string | null {
+  const { stores, storesStatus, setStoreId } = useApp();
+  const [notice, setNotice] = useState<string | null>(null);
+  useEffect(() => {
+    if (storesStatus !== "ready") return;
+    const url = new URL(window.location.href);
+    const provider = url.searchParams.get("adsConnected");
+    if (!provider) return;
+    const target = url.searchParams.get("store");
+    if (target && stores.some((s) => s.id === target)) setStoreId(target);
+    const n = Number(url.searchParams.get("accounts") ?? 0);
+    const what = provider === "adsense" ? "AdSense account" : "ad account";
+    setNotice(`${AD_PLATFORM_NAME[provider] ?? "Ad platform"} connected: ${n} ${what}${n === 1 ? "" : "s"}. We're fetching the last 90 days; the Advertising numbers below fill in within a few minutes.`);
+    for (const k of ["adsConnected", "accounts", "store"]) url.searchParams.delete(k);
+    window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+    // Once, when the store list is known.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storesStatus]);
+  return notice;
+}
+
+/** One headline number. Tapping it opens the full details behind it. */
 function Metric({
   title,
   value,
@@ -111,6 +122,7 @@ function Metric({
   icon,
   spark,
   i = 0,
+  onClick,
 }: {
   title: string;
   value: ReactNode;
@@ -121,58 +133,32 @@ function Metric({
   /** Daily values for a small trend line under the figure. */
   spark?: number[];
   i?: number;
+  onClick: () => void;
 }) {
   return (
-    <div className="card lift animate-rise relative flex flex-col overflow-hidden" style={{ ["--i" as string]: i }} data-testid={`metric-${title}`}>
-      <div className="flex items-start justify-between gap-2">
-        <p className="text-sm text-muted">{title}</p>
-        <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent/12 text-accent">
+    <button
+      type="button"
+      onClick={onClick}
+      className="card lift animate-rise group relative flex flex-col overflow-hidden text-left"
+      style={{ ["--i" as string]: i }}
+      data-testid={`metric-${title}`}
+      aria-label={`${title}: open details`}
+    >
+      <span className="flex w-full items-start justify-between gap-2">
+        <span className="text-sm text-muted">{title}</span>
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent/12 text-accent">
           <Icon name={icon} className="h-4 w-4" />
         </span>
-      </div>
-      <p className="mt-1 text-2xl font-semibold tabular-nums">{value}</p>
-      {delta !== undefined && <Delta value={delta} invert={invert} />}
+      </span>
+      <span className="mt-1 block text-xl font-semibold sm:text-2xl">{value}</span>
+      {/* "vs before": the tiles sit two to a row on a phone, where the long label wrapped three times. */}
+      {delta !== undefined && <Delta value={delta} invert={invert} label="vs before" />}
       {spark && spark.length > 1 && <Sparkline values={spark} className="mt-3 h-9 w-full" />}
-      <p className="mt-auto pt-2 text-xs text-muted">{help}</p>
-    </div>
-  );
-}
-
-/** Quick links to each part of the dashboard; sticks to the top while scrolling, and marks where you are. */
-function SectionNav({ items }: { items: Array<{ id: string; label: string; icon: IconName }> }) {
-  const [active, setActive] = useState<string | null>(null);
-  const ids = items.map((i) => i.id).join(",");
-  useEffect(() => {
-    const els = ids.split(",").map((id) => document.getElementById(id)).filter((e): e is HTMLElement => !!e);
-    if (!els.length || typeof IntersectionObserver === "undefined") return;
-    const io = new IntersectionObserver(
-      (entries) => {
-        const seen = entries.filter((e) => e.isIntersecting).sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)[0];
-        if (seen) setActive(seen.target.id);
-      },
-      { rootMargin: "-120px 0px -60% 0px" },
-    );
-    els.forEach((e) => io.observe(e));
-    return () => io.disconnect();
-  }, [ids]);
-  if (items.length < 3) return null;
-  return (
-    <nav aria-label="Dashboard sections" className="sticky top-0 z-20 -mx-4 border-b border-border/60 bg-bg/80 px-4 py-2 backdrop-blur-md">
-      <ul className="flex gap-1.5 overflow-x-auto [scrollbar-width:none]">
-        {items.map((it) => (
-          <li key={it.id} className="shrink-0">
-            <a
-              href={`#${it.id}`}
-              aria-current={active === it.id ? "true" : undefined}
-              className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm transition ${active === it.id ? "bg-accent text-accent-ink shadow-sm" : "text-muted hover:bg-surface hover:text-text"}`}
-            >
-              <Icon name={it.icon} className="h-4 w-4" />
-              {it.label}
-            </a>
-          </li>
-        ))}
-      </ul>
-    </nav>
+      <span className="mt-auto flex w-full items-end gap-1 pt-2 text-xs text-muted">
+        <span className="min-w-0 flex-1">{help}</span>
+        <Icon name="chevronRight" className="h-4 w-4 shrink-0 transition-transform group-hover:translate-x-0.5" />
+      </span>
+    </button>
   );
 }
 
@@ -193,19 +179,20 @@ function DashboardSkeleton() {
 
 export default function DashboardPage() {
   const { workspace, stores, storesStatus, store } = useApp();
-  const [preset, setPreset] = useState<(typeof PRESETS)[number]["id"]>("30d");
-  const [from, setFrom] = useState("");
-  const [to, setTo] = useState("");
-  const qs = preset === "custom" ? (from && to ? `preset=custom&from=${from}&to=${to}` : null) : `preset=${preset}`;
+  const adsNotice = useAdsConnectedNotice();
+  const dates = useDateRange(store?.timezone ?? "UTC");
+  const detail = useDetailView();
+  const asking = dates.asking;
   // Driven by the answer the poll itself brings back, so the page speeds up the moment it sees
   // an import running and relaxes again as soon as that import reports it is done.
   const [everySec, setEverySec] = useState(LIVE_EVERY_SEC);
-  const path = store && qs ? `/workspaces/${workspace.id}/stores/${store.id}/overview?${qs}` : null;
+  const path = store && asking ? `/workspaces/${workspace.id}/stores/${store.id}/overview?${asking.qs}` : null;
   const { data, dataPath, error, loading, checkedAt, failing } = useLiveApi<Overview>(path, everySec * 1000);
   const syncState = data?.store?.status;
+  const adsFetching = !!data && [...(data.modules.ads?.accounts ?? []), ...(data.modules.adsense?.accounts ?? [])].some((a) => a.status === "active" && !a.lastSyncedAt);
   useEffect(() => {
-    setEverySec(syncState && IMPORTING.has(syncState) ? IMPORTING_EVERY_SEC : LIVE_EVERY_SEC);
-  }, [syncState]);
+    setEverySec(syncState && IMPORTING.has(syncState) ? IMPORTING_EVERY_SEC : adsFetching ? ADS_FETCHING_EVERY_SEC : LIVE_EVERY_SEC);
+  }, [syncState, adsFetching]);
   // "Live" while the last successful check is recent (a missed check or two is fine: the odd
   // request fails even when all is well, e.g. a Worker CPU-limit 1102); "checking" until the first
   // answer for this question arrives, or "Reconnecting…" straight away if that check failed
@@ -283,7 +270,6 @@ export default function DashboardPage() {
   const ov = data && store && data.store.id === store.id ? data : null;
   // The same store's numbers for the previous dates stay up while new dates load. If that load
   // fails they would sit under the new dates' button as if they answered it, so say what they are.
-  const asked = preset === "custom" ? `${fmtDay(from)} – ${fmtDay(to)}` : PRESETS.find((p) => p.id === preset)!.label;
   const olderAnswer = ov !== null && dataPath !== path;
 
   // "No stores" only once the list has actually loaded: until then it means "not known yet".
@@ -299,21 +285,13 @@ export default function DashboardPage() {
   }
 
   const cur = ov?.store.currency ?? store?.currency ?? "USD";
-  const tz = ov?.store.timezone ?? store?.timezone ?? "UTC";
   const m = ov?.modules;
   const disabled = ov?.capabilities.filter((c) => !c.enabled) ?? [];
   const headerStore = ov?.store ?? store;
   const contactsOn = ov?.capabilities.some((c) => c.id === "contacts" && c.enabled) ?? false;
-  const sections: Array<{ id: string; label: string; icon: IconName }> = [
-    { id: "highlights", label: "Highlights", icon: "sparkle" },
-    ...(m?.sales_overview ? [{ id: "sales", label: "Sales", icon: "chart" as IconName }] : []),
-    ...(m?.funnel ? [{ id: "shoppers", label: "Shoppers", icon: "eye" as IconName }] : []),
-    ...(contactsOn ? [{ id: "contacts", label: "Follow up", icon: "mail" as IconName }] : []),
-    ...(m?.channels ? [{ id: "channels", label: "Channels", icon: "store" as IconName }] : []),
-    ...(m?.top_products ? [{ id: "top-products", label: "Products", icon: "trophy" as IconName }] : []),
-    ...(m?.inventory ? [{ id: "inventory", label: "Stock", icon: "box" as IconName }] : []),
-    ...(m?.recent_orders ? [{ id: "recent_orders", label: "Orders", icon: "receipt" as IconName }] : []),
-  ];
+  const topics = ov ? availableTopics(ov, contactsOn) : [];
+  const s = m?.sales_overview;
+  const f = m?.funnel;
 
   return (
     <div className="space-y-6">
@@ -321,32 +299,14 @@ export default function DashboardPage() {
         <StoreHeader key={headerStore.id} store={headerStore} data={ov?.data} live={live} everySec={everySec} />
       )}
 
-      <div className="space-y-2">
-        <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Date range">
-          {PRESETS.map((p) => (
-            <button key={p.id} onClick={() => setPreset(p.id)} aria-pressed={preset === p.id} className={`rounded-full border px-3 py-1 text-sm transition ${preset === p.id ? "border-accent bg-accent text-accent-ink shadow-sm" : "border-border bg-surface hover:border-accent/60"}`}>
-              {p.label}
-            </button>
-          ))}
-          {preset === "custom" && (
-            <span className="flex flex-wrap items-center gap-2 text-sm">
-              <input aria-label="From" type="date" className="input w-auto" value={from} onChange={(e) => setFrom(e.target.value)} />
-              to
-              <input aria-label="To" type="date" className="input w-auto" value={to} onChange={(e) => setTo(e.target.value)} />
-            </span>
-          )}
-        </div>
-        {ov && (
-          <p className="text-xs text-muted">
-            Showing {fmtDay(ov.range.from)} – {fmtDay(ov.range.to)} in the store&apos;s time zone ({ov.store.timezone}), compared with {fmtDay(ov.previous.from)} – {fmtDay(ov.previous.to)}.
-          </p>
-        )}
-      </div>
+      <DateRangeBar r={dates} shown={ov && { range: ov.range, previous: ov.previous, timezone: ov.store.timezone }} />
+
+      {adsNotice && <Alert kind="success">{adsNotice}</Alert>}
 
       {error && !ov && <Alert kind={isTransient(error) ? "info" : "error"}>{friendlyError(error)}</Alert>}
       {error && ov && olderAnswer && (
         <Alert kind={isTransient(error) ? "info" : "error"}>
-          Couldn&apos;t load {asked}, so the numbers below are still for {fmtDay(ov.range.from)} – {fmtDay(ov.range.to)}. {friendlyError(error)}
+          Couldn&apos;t load {asking?.label}, so the numbers below are still for {fmtRange(ov.range.from, ov.range.to)}. {friendlyError(error)}
         </Alert>
       )}
       {loading && !ov && (
@@ -370,103 +330,37 @@ export default function DashboardPage() {
         </Alert>
       )}
 
-      {ov && !ov.hasData && ov.store.status !== "syncing" && m?.sales_overview && (
+      {ov && !ov.hasData && ov.store.status !== "syncing" && s && (
         <EmptyState title="No orders in this period" body="Try a longer date range. New orders show up here within a minute of being placed." />
       )}
 
-      {ov && <SectionNav items={sections} />}
-
-      {ov && <Highlights ov={ov} currency={cur} period={`${fmtDay(ov.range.from)} – ${fmtDay(ov.range.to)}`} />}
-
-      {m?.sales_overview && (
-        <section id="sales" className="scroll-mt-28" aria-labelledby="sales-h">
-          <h2 id="sales-h" className="mb-3 flex items-center gap-2 font-semibold"><Icon name="chart" className="h-5 w-5 text-accent" />Sales</h2>
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <Metric i={0} icon="bag" title="Net sales" value={<AnimatedNumber value={m.sales_overview.current.netSales} format={(n) => fmtMoney(n, cur)} />} delta={m.sales_overview.deltas.netSales} spark={m.sales_overview.series.map((x) => x.netSales)} help="What you kept: sales after discounts and refunds, before tax and shipping." />
-            <Metric i={1} icon="receipt" title="Orders" value={<AnimatedNumber value={m.sales_overview.current.orders} format={fmtNum} />} delta={m.sales_overview.deltas.orders} spark={m.sales_overview.series.map((x) => x.orders)} help="Orders placed, not counting cancelled ones." />
-            <Metric i={2} icon="cart" title="Average order value" value={<AnimatedNumber value={m.sales_overview.current.averageOrderValue} format={(n) => fmtMoney(n, cur)} />} delta={m.sales_overview.deltas.averageOrderValue} help="Typical spend per order, after discounts." />
-            <Metric i={3} icon="trendUp" title="Gross sales" value={<AnimatedNumber value={m.sales_overview.current.grossSales} format={(n) => fmtMoney(n, cur)} />} delta={m.sales_overview.deltas.grossSales} help={`Full price of items sold. Discounts given: ${fmtMoney(m.sales_overview.current.discounts, cur)}.`} />
+      {/* The main page says each thing once: one sentence, four numbers, and one list of every
+          area of the store (worst first). Every number and row opens the full details
+          (components/dashboard/details.tsx), so nothing is lost by keeping this page short. */}
+      {s && (
+        <section aria-labelledby="numbers-h">
+          <h2 id="numbers-h" className="mb-1 flex items-center gap-2 font-semibold"><Icon name="chart" className="h-5 w-5 text-accent" />How your store is doing</h2>
+          <div className="mb-3">
+            {ov && <StoreSummary ov={ov} currency={cur} />}
           </div>
-          <SalesExtras s={m.sales_overview.current} currency={cur} />
-          {ov?.hasData && (
-            <div className="card animate-rise mt-4" style={{ ["--i" as string]: 4 }}>
-              <TrendChart label="Net sales per day" format={(n) => fmtMoney(n, cur)} series={m.sales_overview.series.map((s) => ({ day: s.day, value: s.netSales }))} />
-            </div>
-          )}
+          <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
+            <Metric i={0} icon="bag" title="Net sales" value={<AnimatedNumber value={s.current.netSales} format={(n) => fmtMoney(n, cur)} />} delta={s.deltas.netSales} spark={s.series.map((x) => x.netSales)} help="What you kept, after discounts and refunds." onClick={() => detail.open("sales")} />
+            <Metric i={1} icon="receipt" title="Orders" value={<AnimatedNumber value={s.current.orders} format={fmtNum} />} delta={s.deltas.orders} spark={s.series.map((x) => x.orders)} help="Orders placed, not counting cancelled ones." onClick={() => detail.open("sales")} />
+            <Metric i={2} icon="cart" title="Average order value" value={<AnimatedNumber value={s.current.averageOrderValue} format={(n) => fmtMoney(n, cur)} />} delta={s.deltas.averageOrderValue} help="Typical spend per order." onClick={() => detail.open("sales")} />
+            {f && f.visits > 0 ? (
+              <Metric i={3} icon="eye" title="Visitors who bought" value={<AnimatedNumber value={f.conversionRate} format={fmtPct} />} delta={f.deltas.conversionRate} help={`Of ${fmtNum(f.visits)} visits to your store.`} onClick={() => detail.open("shoppers")} />
+            ) : (
+              <Metric i={3} icon="trendUp" title="Gross sales" value={<AnimatedNumber value={s.current.grossSales} format={(n) => fmtMoney(n, cur)} />} delta={s.deltas.grossSales} help="Full price of items sold." onClick={() => detail.open("sales")} />
+            )}
+          </div>
         </section>
       )}
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        {m?.refunds && (
-          <section className="grid gap-4 sm:grid-cols-2" aria-label="Refunds">
-            <Metric icon="refresh" title="Refunded" value={<AnimatedNumber value={m.refunds.current.refunds} format={(n) => fmtMoney(n, cur)} />} delta={m.refunds.deltas.refunds} invert help={`Money returned to customers in this period, across ${fmtNum(m.refunds.current.refundedOrders)} orders.`} />
-            <Metric i={1} icon="receipt" title="Refund rate" value={<AnimatedNumber value={m.refunds.current.refundRate} format={fmtPct} />} help="Share of sales (after discounts) that was later refunded." />
-          </section>
-        )}
-        {m?.customers && (
-          <Metric i={2} icon="users" title="Returning customers" value={<AnimatedNumber value={m.customers.current.returningCustomerRate} format={fmtPct} />} help="Share of orders from people who had ordered before. Higher usually means loyal customers." />
-        )}
-      </div>
+      {/* Ad platforms report about themselves, so they get their own section rather than a row in
+          the store's list: results when connected, one way in when not (components/dashboard/advertising.tsx). */}
+      {ov && <AdvertisingSection ov={ov} manage={canManage(workspace.role)} onOpen={detail.open} />}
 
-      {(m?.channels || m?.order_timing) && (
-        <div className="grid gap-4 lg:grid-cols-2">
-          {m.channels && <ChannelsCard m={m.channels} currency={cur} />}
-          {m.order_timing && <OrderTimingCard m={m.order_timing} timezone={tz} />}
-        </div>
-      )}
-
-      {(m?.fulfillment || m?.discount_codes) && (
-        <div className="grid gap-4 lg:grid-cols-2">
-          {m.fulfillment && <FulfillmentCard m={m.fulfillment} />}
-          {m.discount_codes && <DiscountCodesCard m={m.discount_codes} currency={cur} />}
-        </div>
-      )}
-
-      {(m?.top_products || m?.catalog) && (
-        <div className="grid gap-4 lg:grid-cols-2">
-          {m.top_products && (
-            <section id="top-products" className="card animate-rise min-w-0 scroll-mt-28" aria-labelledby="top-h">
-              <h2 id="top-h" className="flex items-center gap-2 font-semibold"><Icon name="trophy" className="h-5 w-5 text-accent-2" />Top products</h2>
-              <p className="mt-0.5 text-xs text-muted">Best sellers in these dates, by sales after discounts.</p>
-              {m.top_products.items.length === 0 ? (
-                <p className="mt-2 text-sm text-muted">No product sales in this period yet.</p>
-              ) : (
-                <table className="mt-3 w-full text-sm">
-                  <thead className="text-left text-xs text-muted">
-                    <tr><th className="pb-2 font-normal">Product</th><th className="pb-2 text-right font-normal">Units</th><th className="pb-2 text-right font-normal">Revenue</th></tr>
-                  </thead>
-                  <tbody>
-                    {m.top_products.items.map((p, rank) => (
-                      <tr key={p.productId ?? p.title} className="border-t border-border transition-colors hover:bg-bg">
-                        <td className="py-2 pr-2">
-                          <span className={`mr-2 inline-flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-semibold ${rank === 0 ? "bg-accent-2 text-white" : "bg-border text-muted"}`}>{rank + 1}</span>
-                          {p.title}
-                        </td>
-                        <td className="py-2 text-right tabular-nums">{fmtNum(p.units)}</td>
-                        <td className="py-2 text-right tabular-nums">{fmtMoney(p.revenue, cur)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </section>
-          )}
-          {m.catalog && <CatalogCard m={m.catalog} currency={cur} />}
-        </div>
-      )}
-
-      {m?.inventory && <InventoryCard m={m.inventory} currency={cur} />}
-
-      {m?.recent_orders && ov && <RecentOrdersCard items={m.recent_orders.items} currency={cur} timezone={tz} shopDomain={ov.store.shopDomain} />}
-
-      {m?.funnel && (
-        <section id="shoppers" className="scroll-mt-28 space-y-4" aria-label="Storefront visits">
-          <FunnelCard m={m.funnel} />
-          {m.funnel.visits > 0 && <JourneyCard m={m.funnel} />}
-        </section>
-      )}
-
-      {ov && contactsOn && <ContactsCard key={ov.store.id} storeId={ov.store.id} storeName={ov.store.name ?? ov.store.shopDomain} shopDomain={ov.store.shopDomain} />}
+      {ov && <AreaList ov={ov} currency={cur} topics={topics} onOpen={detail.open} />}
 
       {disabled.length > 0 && (
         <section aria-labelledby="more-h">
@@ -486,6 +380,8 @@ export default function DashboardPage() {
           </ul>
         </section>
       )}
+
+      {ov && detail.view && <TopicDetail topic={detail.view} ov={ov} currency={cur} contactsOn={contactsOn} onClose={detail.close} onOpen={detail.open} />}
     </div>
   );
 }

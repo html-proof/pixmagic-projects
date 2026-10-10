@@ -32,7 +32,7 @@ const jane = {
   numberOfOrders: "2",
   amountSpent: { amount: "120.50", currencyCode: "AUD" },
   defaultEmailAddress: { emailAddress: "jane@example.com", marketingState: "SUBSCRIBED" },
-  defaultPhoneNumber: { phoneNumber: "+61400000000" },
+  defaultPhoneNumber: { phoneNumber: "+61400000000", marketingState: "SUBSCRIBED" },
 };
 const bob = {
   ...jane,
@@ -95,6 +95,7 @@ describe("customer contacts", () => {
         email: "bob@example.com",
         phone: null,
         subscribed: false,
+        smsSubscribed: false,
         adminUrl: `https://${SHOP}/admin/customers/12`,
         createdAt: "2026-10-06T08:00:00Z",
         total: 68,
@@ -105,13 +106,40 @@ describe("customer contacts", () => {
     ]);
     expect(body.subscribers.map((s: { email: string }) => s.email)).toEqual(["jane@example.com"]);
     expect(body.recent).toHaveLength(2);
-    expect(body.recent[1]).toMatchObject({ name: "Jane Doe", orders: 2, spent: 120.5, currency: "AUD", subscribed: true, phone: "+61400000000" });
+    expect(body.recent[1]).toMatchObject({ name: "Jane Doe", orders: 2, spent: 120.5, currency: "AUD", subscribed: true, phone: "+61400000000", smsSubscribed: true });
 
     // Viewing personal data is audited; the data itself is nowhere in our database.
     const log = await systemDb.auditLog.findFirstOrThrow({ where: { workspaceId: ws, action: "customers.contacts_viewed" } });
     expect(log.targetId).toBe(store.id);
     const dump = JSON.stringify(await systemDb.auditLog.findMany());
     expect(dump).not.toContain("jane@example.com");
+  });
+
+  it("reaches a guest through the name and phone they typed into the checkout", async () => {
+    const store = await connectedStore(ws, ["read_orders", "read_customers"]);
+    let sent = "";
+    const guest = {
+      ...shopifyData.abandonedCheckouts.nodes[0]!,
+      id: "gid://shopify/AbandonedCheckout/901",
+      customer: null,
+      shippingAddress: { firstName: "Ana", lastName: "Ruiz", phone: null },
+      billingAddress: { firstName: "Ana", lastName: "Ruiz", phone: " +61411111111 " },
+    };
+    const withCustomer = {
+      ...shopifyData.abandonedCheckouts.nodes[0]!,
+      id: "gid://shopify/AbandonedCheckout/902",
+      customer: jane,
+      shippingAddress: { firstName: "Someone", lastName: "Else", phone: "+61499999999" },
+    };
+    ctx.setFetch(async (input, init) => {
+      sent = String(init?.body ?? "");
+      return reply({ data: { ...shopifyData, abandonedCheckouts: { nodes: [guest, withCustomer] } } })(input, init);
+    });
+    const body = (await get(store.id)).json();
+    expect(sent).toContain("shippingAddress");
+    expect(body.abandoned[0]).toMatchObject({ id: "901", customerId: null, name: "Ana Ruiz", email: null, phone: "+61411111111", adminUrl: null });
+    // The customer's own details win over whatever was typed into the address.
+    expect(body.abandoned[1]).toMatchObject({ name: "Jane Doe", phone: "+61400000000", smsSubscribed: true });
   });
 
   it("says when Shopify withholds contact details instead of showing an empty list", async () => {

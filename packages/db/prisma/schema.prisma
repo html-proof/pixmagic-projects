@@ -321,6 +321,88 @@ model FunnelVisit {
   @@map("funnel_visits")
 }
 
+// An ad account (Meta Ads, Google Ads, or a Google AdSense account) connected to a store with
+// "Continue with Meta/Google Ads/Google AdSense". One row per account. The token belongs to the
+// person who connected: every account they connected in one go shares it, encrypted with the same
+// AAD (`ads:<provider>:<storeId>:<kind>`).
+model AdConnection {
+  id                   String    @id @default(cuid())
+  workspaceId          String    @map("workspace_id")
+  storeId              String    @map("store_id")
+  provider             String // "meta" | "google" | "adsense"
+  accountId            String    @map("account_id")
+  accountName          String?   @map("account_name")
+  currency             String?
+  timezone             String?
+  /** Google: the manager account the client account is reached through. */
+  loginCustomerId      String?   @map("login_customer_id")
+  /** Shown on the dashboard and synced. Turned off from Settings without losing the connection. */
+  enabled              Boolean   @default(true)
+  /** "active" | "reconnect" (access ended: connect again) | "error" (see last_error). */
+  status               String    @default("active")
+  lastError            String?   @map("last_error")
+  lastSyncedAt         DateTime? @map("last_synced_at")
+  accessTokenEnc       String    @map("access_token_enc")
+  refreshTokenEnc      String?   @map("refresh_token_enc")
+  accessTokenExpiresAt DateTime? @map("access_token_expires_at")
+  tokenKeyVersion      Int       @map("token_key_version")
+  connectedByUserId    String?   @map("connected_by_user_id")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
+
+  @@unique([storeId, provider, accountId])
+  @@index([workspaceId])
+  @@map("ad_connections")
+}
+
+// What an ad platform reports for one campaign on one day (the ad account's own calendar day).
+model AdCampaignDaily {
+  workspaceId     String   @map("workspace_id")
+  storeId         String   @map("store_id")
+  connectionId    String   @map("connection_id")
+  provider        String
+  accountId       String   @map("account_id")
+  campaignId      String   @map("campaign_id")
+  campaignName    String   @map("campaign_name")
+  day             String
+  spend           Decimal  @default(0) @db.Decimal(18, 2)
+  impressions     Int      @default(0)
+  clicks          Int      @default(0)
+  conversions     Decimal  @default(0) @db.Decimal(18, 2)
+  conversionValue Decimal  @default(0) @map("conversion_value") @db.Decimal(18, 2)
+  leads           Int      @default(0)
+  currency        String?
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@id([connectionId, campaignId, day])
+  @@index([workspaceId])
+  @@index([storeId, day])
+  @@map("ad_campaign_daily")
+}
+
+// What an AdSense account earned from ads shown on one site on one day (the account's own
+// calendar day). Earnings, never spend: kept apart from ad_campaign_daily so the two can't be summed.
+model AdsenseDaily {
+  workspaceId  String   @map("workspace_id")
+  storeId      String   @map("store_id")
+  connectionId String   @map("connection_id")
+  accountId    String   @map("account_id")
+  /** The host the ads were shown on (AdSense DOMAIN_CODE); "" when the report isn't split by site. */
+  site         String
+  day          String
+  earnings     Decimal  @default(0) @db.Decimal(18, 2)
+  pageViews    Int      @default(0) @map("page_views")
+  impressions  Int      @default(0)
+  clicks       Int      @default(0)
+  currency     String?
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@id([connectionId, site, day])
+  @@index([workspaceId])
+  @@index([storeId, day])
+  @@map("adsense_daily")
+}
+
 // Dedupe table for pixel events (Shopify may redeliver) and sessions.
 model PixelEventSeen {
   storeId  String   @map("store_id")

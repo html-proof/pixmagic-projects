@@ -2,7 +2,14 @@ import { z } from "zod";
 import { Prisma, toNumber, withTenant, type Tx } from "@app/db";
 import {
   DATE_PRESETS,
+  adSeries,
+  adTotals,
+  adsenseSeries,
+  adsenseTotals,
   addDays,
+  campaignTotals,
+  siteTotals,
+  eachDay,
   channelLabel,
   daysBetweenInclusive,
   delta,
@@ -11,14 +18,18 @@ import {
   resolvePreset,
   summarize,
   summarizeJourney,
+  yearBreakdown,
   PURCHASED_STEP,
   SITE_SECTIONS,
+  type AdDayRow,
+  type AdsenseDayRow,
+  type AdSpendProvider,
   type DailyMetricsRow,
   type DateRange,
   type JourneyPageRow,
   type SiteSection,
 } from "@app/shared";
-import { declaredOptionalScopes, declaredScopes, logger, revocableScopes } from "@app/core";
+import { adsConfigured, declaredOptionalScopes, declaredScopes, logger, revocableScopes } from "@app/core";
 import { HttpError, requireWorkspace, type Deps } from "../context.js";
 import type { App } from "../app.js";
 import { autoRefresh } from "../sync.js";
@@ -96,6 +107,27 @@ const r1 = (n: number) => Math.round(n * 10) / 10;
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const num = (v: unknown) => (v === null || v === undefined ? 0 : Number(v));
 const numOrNull = (v: unknown) => (v === null || v === undefined ? null : Number(v));
+
+/**
+ * One point per day of the range. daily_store_metrics only has rows for days with orders or
+ * refunds, so the quiet days are filled in as zeros: without them the chart drew "last 30 days"
+ * as however many days happened to sell, ending on the last sale rather than on today.
+ */
+function dailySeries(rows: DailyMetricsRow[], r: DateRange) {
+  const byDay = new Map(rows.map((x) => [x.day, x]));
+  return eachDay(r.from, r.to).map((day) => {
+    const x = byDay.get(day);
+    if (!x) return { day, netSales: 0, orders: 0, refunds: 0, averageOrderValue: null };
+    const beforeRefunds = r2(x.grossSales - x.discounts);
+    return {
+      day,
+      netSales: r2(beforeRefunds - x.refunds),
+      orders: x.orders,
+      refunds: r2(x.refunds),
+      averageOrderValue: x.orders > 0 ? r2(beforeRefunds / x.orders) : null,
+    };
+  });
+}
 
 const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"] as const;
 
@@ -428,6 +460,135 @@ async function importedData(tx: Tx, { ws, storeId }: Scope) {
 }
 
 // ---------------------------------------------------------------------------
+// Ad platforms (Meta Ads, Google Ads), connected on Settings → Ad accounts.
+// ---------------------------------------------------------------------------
+
+/**
+ * What the store's connected ad accounts report for these dates. Only accounts in one currency
+ * are added up (the store's, when any account uses it): adding dollars to euros means nothing.
+ * Accounts in other currencies are listed as left out. The platforms' days are their own
+ * accounts' calendar days, which match the store's when the time zones do.
+ */
+async function adsModule(tx: Tx, { ws, storeId }: Scope, range: DateRange, previous: DateRange, storeCurrency: string, netSales: number | null) {
+  const conns = await tx.adConnection.findMany({
+    // Spend only: AdSense accounts earn money for the store and have their own module below.
+    where: { workspaceId: ws, storeId, enabled: true, provider: { in: ["meta", "google"] } },
+    select: { id: true, provider: true, accountId: true, accountName: true, currency: true, status: true, lastSyncedAt: true, lastError: true },
+    orderBy: [{ provider: "asc" }, { createdAt: "asc" }],
+  });
+  if (!conns.length) return null;
+  const currency = conns.some((c) => c.currency === storeCurrency) ? storeCurrency : (conns.find((c) => c.currency)?.currency ?? storeCurrency);
+  const counted = conns.filter((c) => (c.currency ?? currency) === currency);
+  const raw = await tx.adCampaignDaily.findMany({
+    where: { workspaceId: ws, storeId, connectionId: { in: counted.map((c) => c.id) }, day: { gte: previous.from, lte: range.to } },
+  });
+  const rows: AdDayRow[] = raw.map((r) => ({
+    provider: r.provider as AdSpendProvider,
+    accountId: r.accountId,
+    campaignId: r.campaignId,
+    campaignName: r.campaignName,
+    day: r.day,
+    spend: toNumber(r.spend),
+    impressions: r.impressions,
+    clicks: r.clicks,
+    conversions: toNumber(r.conversions),
+    conversionValue: toNumber(r.conversionValue),
+    leads: r.leads,
+  }));
+  const inRange = (d: DateRange) => rows.filter((r) => r.day >= d.from && r.day <= d.to);
+  const cur = inRange(range);
+  const prev = inRange(previous);
+  const current = adTotals(cur);
+  const before = adTotals(prev);
+  const providers = [...new Set(counted.map((c) => c.provider as AdSpendProvider))];
+  return {
+    currency,
+    accounts: conns.map((c) => ({
+      id: c.id,
+      provider: c.provider,
+      accountId: c.accountId,
+      name: c.accountName,
+      currency: c.currency,
+      status: c.status,
+      lastSyncedAt: c.lastSyncedAt,
+      counted: counted.some((x) => x.id === c.id),
+    })),
+    current,
+    previous: { spend: before.spend, clicks: before.clicks, conversions: before.conversions, conversionValue: before.conversionValue, roas: before.roas },
+    deltas: {
+      spend: delta(current.spend, before.spend),
+      clicks: delta(current.clicks, before.clicks),
+      conversions: delta(current.conversions, before.conversions),
+      roas: delta(current.roas, before.roas),
+    },
+    series: adSeries(cur, range),
+    byProvider: providers.map((p) => ({ provider: p, ...adTotals(cur.filter((r) => r.provider === p)) })),
+    /** Each platform's own days, for comparing platforms on the main page. */
+    seriesByProvider: providers.map((p) => ({ provider: p, series: adSeries(cur.filter((r) => r.provider === p), range) })),
+    campaigns: campaignTotals(cur, 10),
+    /** Ad spend as a share of the store's net sales, when both are in the same currency. */
+    shareOfSales: currency === storeCurrency && netSales !== null && netSales > 0 ? current.spend / netSales : null,
+  };
+}
+
+/**
+ * What the store's connected AdSense accounts earned from ads shown on its site, for these dates.
+ * Money the other way from adsModule: never added to ad spend. One currency only, chosen as for
+ * ads; AdSense says an account's currency in its reports, so it's known after the first sync.
+ */
+async function adsenseModule(tx: Tx, { ws, storeId }: Scope, range: DateRange, previous: DateRange, storeCurrency: string, netSales: number | null) {
+  const conns = await tx.adConnection.findMany({
+    where: { workspaceId: ws, storeId, enabled: true, provider: "adsense" },
+    select: { id: true, accountId: true, accountName: true, currency: true, status: true, lastSyncedAt: true },
+    orderBy: { createdAt: "asc" },
+  });
+  if (!conns.length) return null;
+  const currency = conns.some((c) => c.currency === storeCurrency) ? storeCurrency : (conns.find((c) => c.currency)?.currency ?? storeCurrency);
+  const counted = conns.filter((c) => (c.currency ?? currency) === currency);
+  const raw = await tx.adsenseDaily.findMany({
+    where: { workspaceId: ws, storeId, connectionId: { in: counted.map((c) => c.id) }, day: { gte: previous.from, lte: range.to } },
+  });
+  const rows: AdsenseDayRow[] = raw.map((r) => ({
+    accountId: r.accountId,
+    site: r.site,
+    day: r.day,
+    earnings: toNumber(r.earnings),
+    pageViews: r.pageViews,
+    impressions: r.impressions,
+    clicks: r.clicks,
+  }));
+  const inRange = (d: DateRange) => rows.filter((r) => r.day >= d.from && r.day <= d.to);
+  const cur = inRange(range);
+  const current = adsenseTotals(cur);
+  const before = adsenseTotals(inRange(previous));
+  return {
+    currency,
+    accounts: conns.map((c) => ({
+      id: c.id,
+      provider: "adsense" as const,
+      accountId: c.accountId,
+      name: c.accountName,
+      currency: c.currency,
+      status: c.status,
+      lastSyncedAt: c.lastSyncedAt,
+      counted: counted.some((x) => x.id === c.id),
+    })),
+    current,
+    previous: { earnings: before.earnings, pageViews: before.pageViews, clicks: before.clicks, pageRpm: before.pageRpm },
+    deltas: {
+      earnings: delta(current.earnings, before.earnings),
+      pageViews: delta(current.pageViews, before.pageViews),
+      clicks: delta(current.clicks, before.clicks),
+      pageRpm: delta(current.pageRpm, before.pageRpm),
+    },
+    series: adsenseSeries(cur, range),
+    sites: siteTotals(cur, 10),
+    /** Ad earnings next to the store's own net sales, when both are in the same currency. */
+    vsSales: currency === storeCurrency && netSales !== null && netSales > 0 ? current.earnings / netSales : null,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Storefront funnel (web pixel). One row per shopper per store-local day in
 // funnel_visits; see packages/shared/src/journey.ts for what each column means.
 // ---------------------------------------------------------------------------
@@ -571,6 +732,7 @@ export function dashboardRoutes(app: App, deps: Deps) {
       });
       const enabled = new Set(capabilities.filter((c) => c.enabled).map((c) => c.id));
       const modules: Record<string, unknown> = {};
+      const data = await importedData(tx, scope);
 
       let hasData = false;
       if (enabled.has("sales_overview") || enabled.has("refunds") || enabled.has("customers")) {
@@ -598,7 +760,14 @@ export function dashboardRoutes(app: App, deps: Deps) {
               averageOrderValue: delta(c.averageOrderValue, p.averageOrderValue),
               grossSales: delta(c.grossSales, p.grossSales),
             },
-            series: cur.map((r) => ({ day: r.day, netSales: Math.round((r.grossSales - r.discounts - r.refunds) * 100) / 100, orders: r.orders })),
+            series: dailySeries(cur, range),
+            // This calendar year month by month, whatever the dates picked. Reaches back to the
+            // December before so January has something to compare with.
+            year: yearBreakdown(
+              await dailyRows(tx, ws, storeId, { from: `${Number(today.slice(0, 4)) - 1}-12-01`, to: today }),
+              today,
+              data.oldestOrderDay,
+            ),
           };
         }
         if (enabled.has("refunds")) {
@@ -634,6 +803,26 @@ export function dashboardRoutes(app: App, deps: Deps) {
 
       if (enabled.has("funnel")) modules.funnel = await funnel(tx, scope, range, previous);
 
+      // Not a Shopify capability: present once an ad account is connected to the store.
+      const netSales = (modules.sales_overview as { current?: { netSales?: number } } | undefined)?.current?.netSales ?? null;
+      const ads = await adsModule(tx, scope, range, previous, store.currency, netSales);
+      if (ads) modules.ads = ads;
+      const adsense = await adsenseModule(tx, scope, range, previous, store.currency, netSales);
+      if (adsense) modules.adsense = adsense;
+      // Which platforms are connected at all, hidden accounts included: the Advertising section
+      // offers the ones that aren't, and says so when every account is hidden. Counts only, and
+      // only for a store with ad accounts (absent means none).
+      const adCounts = await tx.adConnection.groupBy({ by: ["provider", "enabled"], where: { workspaceId: ws, storeId: store.id }, _count: { _all: true } });
+      const connected = { meta: 0, google: 0, adsense: 0, hidden: 0 };
+      for (const g of adCounts) {
+        if (g.provider === "meta" || g.provider === "google" || g.provider === "adsense") connected[g.provider] += g._count._all;
+        if (!g.enabled) connected.hidden += g._count._all;
+      }
+      if (adCounts.length) modules.ad_connections = connected;
+      // Which platforms this server can connect at all: the dashboard only offers those.
+      const configured = adsConfigured();
+      if (configured.meta || configured.google || configured.adsense) modules.ad_configured = configured;
+
       if (enabled.has("channels")) modules.channels = await channels(tx, scope, range);
       if (enabled.has("order_timing")) modules.order_timing = await orderTiming(tx, scope, range, store.timezone);
       if (enabled.has("fulfillment")) modules.fulfillment = await fulfillment(tx, scope, range, today);
@@ -646,10 +835,12 @@ export function dashboardRoutes(app: App, deps: Deps) {
         store: publicStore(store),
         range,
         previous,
+        // The store's today, so the page can tell a finished day from one still running.
+        today,
         capabilities,
         modules,
         hasData,
-        data: await importedData(tx, scope),
+        data,
       };
     });
     // The dashboard polls this every 15 s: use that to keep the store fresh from Shopify.

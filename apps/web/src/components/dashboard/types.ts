@@ -1,5 +1,6 @@
 /** Response of GET /workspaces/:ws/stores/:storeId/overview (see apps/api/src/routes/dashboard.ts). */
 import type { JourneyPageRow, JourneySummary } from "@app/shared/journey";
+import type { SalesDay, YearBreakdown } from "@app/shared/sales";
 
 export interface Capability {
   id: string;
@@ -37,8 +38,68 @@ export interface SalesOverview {
     tax: number;
     shipping: number;
   };
+  /** The same figures for the period before (as many days, immediately before). */
+  previous: { grossSales: number; netSales: number; orders: number; averageOrderValue: number | null };
   deltas: { netSales: number | null; orders: number | null; averageOrderValue: number | null; grossSales: number | null };
-  series: Array<{ day: string; netSales: number; orders: number }>;
+  /** Every day of the range, quiet days as zero. */
+  series: SalesDay[];
+  /** This calendar year by month, whatever the range. */
+  year: YearBreakdown;
+}
+
+export interface AdTotals {
+  spend: number;
+  impressions: number;
+  clicks: number;
+  conversions: number;
+  conversionValue: number;
+  leads: number;
+  ctr: number | null;
+  cpc: number | null;
+  cpm: number | null;
+  costPerConversion: number | null;
+  roas: number | null;
+}
+
+/** What connected Meta / Google ad accounts report for the dates (see adsModule in the API). */
+export interface AdsModule {
+  /** The one currency everything below is in. */
+  currency: string;
+  accounts: Array<{ id: string; provider: "meta" | "google"; accountId: string; name: string | null; currency: string | null; status: string; lastSyncedAt: string | null; counted: boolean }>;
+  current: AdTotals;
+  previous: { spend: number; clicks: number; conversions: number; conversionValue: number; roas: number | null };
+  deltas: { spend: number | null; clicks: number | null; conversions: number | null; roas: number | null };
+  series: Array<{ day: string; spend: number; clicks: number; impressions: number; conversions: number; conversionValue: number }>;
+  byProvider: Array<AdTotals & { provider: "meta" | "google" }>;
+  /** Each platform's own days (same shape as series). */
+  seriesByProvider: Array<{ provider: "meta" | "google"; series: Array<{ day: string; spend: number; clicks: number; impressions: number; conversions: number; conversionValue: number }> }>;
+  campaigns: Array<AdTotals & { provider: "meta" | "google"; accountId: string; campaignId: string; name: string }>;
+  /** Ad spend divided by the store's net sales (same currency only). */
+  shareOfSales: number | null;
+}
+
+export interface AdsenseTotals {
+  earnings: number;
+  pageViews: number;
+  impressions: number;
+  clicks: number;
+  pageRpm: number | null;
+  perClick: number | null;
+  ctr: number | null;
+}
+
+/** What connected AdSense accounts earned from ads shown on the store's site (see adsenseModule in the API). */
+export interface AdsenseModule {
+  currency: string;
+  accounts: Array<{ id: string; provider: "adsense"; accountId: string; name: string | null; currency: string | null; status: string; lastSyncedAt: string | null; counted: boolean }>;
+  current: AdsenseTotals;
+  previous: { earnings: number; pageViews: number; clicks: number; pageRpm: number | null };
+  deltas: { earnings: number | null; pageViews: number | null; clicks: number | null; pageRpm: number | null };
+  series: Array<{ day: string; earnings: number; pageViews: number; impressions: number; clicks: number }>;
+  /** Per site the ads were shown on; one row with site "" when AdSense didn't split by site. */
+  sites: Array<AdsenseTotals & { site: string }>;
+  /** Ad earnings divided by the store's net sales (same currency only). */
+  vsSales: number | null;
 }
 
 export interface ChannelsModule {
@@ -112,6 +173,8 @@ export interface ContactPerson {
   phone: string | null;
   /** Agreed to email marketing. */
   subscribed: boolean;
+  /** Agreed to marketing by text message. */
+  smsSubscribed: boolean;
   adminUrl: string | null;
 }
 
@@ -152,6 +215,8 @@ export interface Overview {
   store: OverviewStore;
   range: { from: string; to: string };
   previous: { from: string; to: string };
+  /** The store's today (YYYY-MM-DD). */
+  today: string;
   capabilities: Capability[];
   hasData: boolean;
   data?: ImportedData;
@@ -168,5 +233,11 @@ export interface Overview {
     recent_orders?: { items: RecentOrder[] };
     inventory?: InventoryModule;
     catalog?: CatalogModule;
+    ads?: AdsModule;
+    adsense?: AdsenseModule;
+    /** How many accounts of each platform are connected to the store, hidden ones included. */
+    ad_connections?: { meta: number; google: number; adsense: number; hidden: number };
+    /** Which platforms this server can connect (absent: none is set up). */
+    ad_configured?: { meta: boolean; google: boolean; adsense: boolean };
   };
 }
