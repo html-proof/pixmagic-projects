@@ -24,6 +24,15 @@ export function setReturnTo(path: string) {
   }
 }
 
+/**
+ * A protected page found the visitor signed out: remember it (query included, so ?shop= or
+ * ?view= survive) for after they sign in, and send them to sign in.
+ */
+export function signInAndReturn(router: { replace(href: string): void }) {
+  setReturnTo(window.location.pathname + window.location.search);
+  router.replace("/login");
+}
+
 /** The pending path, consumed; null when there is none or it has expired. */
 export function takeReturnTo(): string | null {
   try {

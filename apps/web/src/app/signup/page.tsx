@@ -1,13 +1,27 @@
 "use client";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState, type FormEvent } from "react";
-import { createUserWithEmailAndPassword, sendEmailVerification, updateProfile } from "firebase/auth";
+import { useEffect, useRef, useState, type FormEvent } from "react";
+import { createUserWithEmailAndPassword, sendEmailVerification, updateProfile, type User } from "firebase/auth";
 import { firebaseAuth } from "@/lib/firebase";
-import { authErrorMessage, establishSession } from "@/lib/session";
+import { api, isTransient, keepRetrying } from "@/lib/api";
+import { afterSignIn, authErrorMessage, establishSession } from "@/lib/session";
 import { Alert, AuthShell, Divider } from "@/components/ui";
 import { SocialButtons } from "@/components/SocialButtons";
-import { ShopifyIcon } from "@/components/ShopifyIcon";
+
+/** PATCH /me's limit on a display name. */
+const NAME_MAX = 80;
+const PASSWORD_MIN = 8;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** What's wrong with the form, in plain words, before anything is sent. */
+function problem(name: string, email: string, password: string): string | null {
+  if (!name.trim()) return "Enter your name.";
+  if (name.trim().length > NAME_MAX) return `Keep your name under ${NAME_MAX} characters.`;
+  if (!EMAIL_RE.test(email.trim())) return "Enter a valid email address.";
+  if (password.length < PASSWORD_MIN) return `Use at least ${PASSWORD_MIN} characters for your password.`;
+  return null;
+}
 
 export default function SignupPage() {
   const router = useRouter();
@@ -15,20 +29,59 @@ export default function SignupPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [taken, setTaken] = useState(false);
   const [busy, setBusy] = useState(false);
+  /** The account an earlier attempt created, when signing it in then failed (an outage). */
+  const created = useRef<User | null>(null);
+
+  // Already signed in (and verified): there is nothing to sign up for, go into the app.
+  useEffect(() => {
+    let stopped = false;
+    let stopRetrying: (() => void) | undefined;
+    const check = async () => {
+      try {
+        // /auth/whoami: a visitor is `user: null`, not a 401 the browser would log as an error.
+        const me = await api<{ user: { emailVerified: boolean } | null }>("/auth/whoami");
+        if (me.user?.emailVerified) router.replace(afterSignIn());
+        return true;
+      } catch (e) {
+        return !isTransient(e);
+      }
+    };
+    void check().then((done) => {
+      if (!done && !stopped) stopRetrying = keepRetrying(check);
+    });
+    return () => {
+      stopped = true;
+      stopRetrying?.();
+    };
+  }, [router]);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
-    if (password.length < 8) return setError("Use at least 8 characters.");
+    const invalid = problem(name, email, password);
+    setTaken(false);
+    if (invalid) return setError(invalid);
     setBusy(true);
     setError(null);
     try {
-      const cred = await createUserWithEmailAndPassword(firebaseAuth(), email, password);
-      if (name) await updateProfile(cred.user, { displayName: name });
-      await sendEmailVerification(cred.user, { url: `${window.location.origin}/verify-email` });
-      await establishSession(cred.user);
+      const address = email.trim();
+      // A retry after the session step failed: the Firebase account already exists, so creating
+      // it again would only answer "email already in use".
+      let user = created.current?.email === address.toLowerCase() ? created.current : null;
+      if (!user) {
+        user = (await createUserWithEmailAndPassword(firebaseAuth(), address, password)).user;
+        created.current = user;
+        // Before the session: the ID token sent to the API then carries the name.
+        await updateProfile(user, { displayName: name.trim() }).catch(() => {});
+      }
+      await establishSession(user);
+      // Not fatal: /verify-email can send it again, and a throttled send must not strand an
+      // account that already exists with no way back into it.
+      await sendEmailVerification(user, { url: `${window.location.origin}/verify-email` }).catch(() => {});
       router.replace("/verify-email");
     } catch (err) {
+      setTaken((err as { code?: string }).code === "auth/email-already-in-use");
       setError(authErrorMessage(err));
     } finally {
       setBusy(false);
@@ -36,21 +89,24 @@ export default function SignupPage() {
   }
 
   return (
-    <AuthShell title="Create your account" subtitle="Free to start. You'll connect your Shopify store next.">
-      <div className="space-y-2">
-        <Link href="/start" className="btn-primary w-full">
-          <ShopifyIcon />
-          Continue with Shopify
-        </Link>
-        <p className="text-center text-xs text-muted">Fastest: sign up and connect your store in one go.</p>
-        <SocialButtons />
-      </div>
-      <Divider label="or with email" />
-      {error && <Alert>{error}</Alert>}
-      <form onSubmit={onSubmit} className="space-y-3">
+    <AuthShell title="Create your account" subtitle="Free to start. You'll connect your Shopify store from your dashboard.">
+      <SocialButtons />
+      <Divider label="or sign up with your email" />
+      {error && (
+        <Alert>
+          {error}
+          {taken && (
+            <>
+              {" "}
+              <Link href="/login" className="underline">Log in</Link>
+            </>
+          )}
+        </Alert>
+      )}
+      <form onSubmit={onSubmit} className="space-y-3" noValidate>
         <div>
           <label className="label" htmlFor="name">Your name</label>
-          <input id="name" className="input" autoComplete="name" value={name} onChange={(e) => setName(e.target.value)} />
+          <input id="name" className="input" autoComplete="name" required maxLength={NAME_MAX} value={name} onChange={(e) => setName(e.target.value)} />
         </div>
         <div>
           <label className="label" htmlFor="email">Email</label>
@@ -58,13 +114,13 @@ export default function SignupPage() {
         </div>
         <div>
           <label className="label" htmlFor="password">Password</label>
-          <input id="password" className="input" type="password" autoComplete="new-password" minLength={8} required value={password} onChange={(e) => setPassword(e.target.value)} />
-          <p className="mt-1 text-xs text-muted">At least 8 characters.</p>
+          <input id="password" className="input" type="password" autoComplete="new-password" minLength={PASSWORD_MIN} required value={password} onChange={(e) => setPassword(e.target.value)} />
+          <p className="mt-1 text-xs text-muted">At least {PASSWORD_MIN} characters.</p>
         </div>
-        <button className="btn-primary w-full" disabled={busy}>Create account</button>
+        <button className="btn-primary w-full" disabled={busy}>{busy ? "Creating your account…" : "Create account"}</button>
       </form>
       <p className="text-sm text-muted">
-        Already have an account? <Link href="/login" className="underline">Sign in</Link>
+        Already have an account? <Link href="/login" className="font-medium text-text underline">Log in</Link>
       </p>
     </AuthShell>
   );

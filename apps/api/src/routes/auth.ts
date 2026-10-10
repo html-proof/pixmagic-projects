@@ -1,9 +1,9 @@
-import { deleteCookie, setCookie } from "hono/cookie";
+import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { z } from "zod";
 import { systemDb } from "@app/db";
 import { env, logger } from "@app/core";
 import { generateOtp, hashOtp, OTP_MAX_ATTEMPTS, OTP_TTL_MS, verifyOtp } from "@app/shared";
-import { body, clientIp, HttpError, loadUser, requireAppOrigin, requireUser, SESSION_COOKIE, type Ctx, type Deps } from "../context.js";
+import { body, clientIp, HttpError, loadUser, requireAppOrigin, requireUser, retiredSessionKey, SESSION_COOKIE, type Ctx, type Deps } from "../context.js";
 import { FirebaseUnavailableError } from "../authProvider.js";
 import type { App } from "../app.js";
 import { limit, LIMITS } from "../rateLimit.js";
@@ -68,9 +68,18 @@ export function authRoutes(app: App, deps: Deps) {
   });
 
   app.post("/auth/logout", async (c) => {
-    // Best effort, outages included: signing out must always clear the session cookie below.
-    const user = await requireUser(c, deps).catch(() => null);
-    if (user) await deps.auth.revokeRefreshTokens(user.firebaseUid).catch(() => {});
+    // Sign out this browser, not the account. Revoking the account's Firebase tokens (as this
+    // did) ended every session it had, so signing out on one device or browser logged the person
+    // out everywhere else on their next refresh. Instead the cookie itself is retired until it
+    // would have expired, so a copy of it can't be replayed. Only a genuine cookie is recorded,
+    // and Firebase alone vouches for that, so signing out works while our database is down.
+    // Best effort throughout: signing out must always clear the cookie below.
+    const cookie = getCookie(c, SESSION_COOKIE);
+    if (cookie && (await deps.auth.verifySessionCookie(cookie).then(() => true, () => false))) {
+      await deps.coord
+        .put(retiredSessionKey(cookie), "1", SESSION_TTL_MS / 1000)
+        .catch((err: unknown) => logger.error({ err }, "could not retire the signed-out session cookie"));
+    }
     deleteCookie(c, SESSION_COOKIE, cookieOpts);
     // A half-finished "Continue with Shopify" must not outlive the session in this browser.
     await clearSignup(c, deps).catch(() => {});

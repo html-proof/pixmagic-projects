@@ -25,13 +25,8 @@ async function createWorkspace(page: Page, name: string) {
   }, name);
 }
 
-/** Fill the first /start panel and move on to "Continue with Shopify". */
-async function enterEmail(page: Page, email: string) {
-  await page.getByLabel("Email").fill(email);
-  await page.getByRole("button", { name: "Continue", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Continue with Shopify" })).toBeVisible();
-  await expect(page.getByTestId("start-email")).toHaveText(email);
-}
+/** The password `signUp` gives every account it creates. */
+const PASSWORD = "correct-horse-battery";
 
 const workspaceCount = async (email: string) =>
   Number(
@@ -40,14 +35,32 @@ const workspaceCount = async (email: string) =>
     ).rows[0].n,
   );
 
-test("unauthenticated users are sent to sign in", async ({ page }) => {
-  await page.goto("/dashboard");
+test("unauthenticated users are sent to log in, and come back to the page they opened", async ({ page }) => {
+  await page.goto("/settings/members");
   await expect(page).toHaveURL(/\/login/);
-  await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Continue with Shopify" })).toHaveAttribute("href", "/start");
+  await expect(page.getByRole("heading", { name: "Log in" })).toBeVisible();
+  // Google, Apple, email and password, and a way to sign up. Shopify is connected from inside the app only.
+  await expect(page.getByRole("button", { name: "Continue with Google" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Continue with Apple" })).toBeVisible();
+  await expect(page.getByLabel("Password")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Sign up" })).toHaveAttribute("href", "/signup");
+  await expect(page.getByText("Continue with Shopify")).toHaveCount(0);
+
+  // Signing in finishes on the page that sent them here, not on a generic one.
+  const email = uniqueEmail("deeplink");
+  await signUp(page, email);
+  await verifyEmail(page, email);
+  await createWorkspace(page, "Deep Co");
+  await page.context().clearCookies();
+  await page.goto("/settings/members");
+  await expect(page).toHaveURL(/\/login/);
+  await page.getByLabel("Email").fill(email);
+  await page.getByLabel("Password").fill(PASSWORD);
+  await page.getByRole("button", { name: "Log in", exact: true }).click();
+  await expect(page).toHaveURL(/\/settings\/members/);
 });
 
-test("the homepage introduces Insight and offers only Log in and Sign up", async ({ page }) => {
+test("the homepage introduces Insight, and Log in and Sign up open their own pages", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("heading", { level: 1, name: /Your store is talking/ })).toBeVisible();
   const nav = page.getByRole("navigation", { name: "Main" });
@@ -55,97 +68,181 @@ test("the homepage introduces Insight and offers only Log in and Sign up", async
   await expect(nav.getByRole("link", { name: "Sign up" })).toHaveAttribute("href", "/signup");
   // The landing page sells; the auth pages hold the forms.
   await expect(page.locator("input, textarea, select")).toHaveCount(0);
+
   await nav.getByRole("link", { name: "Sign up" }).click();
   await expect(page).toHaveURL(/\/signup/);
+  await expect(page.getByRole("heading", { name: "Create your account" })).toBeVisible();
+  await expect(page.getByLabel("Your name")).toBeVisible();
+
+  await page.goto("/");
+  await nav.getByRole("link", { name: "Log in" }).click();
+  await expect(page).toHaveURL(/\/login/);
+  await expect(page.getByRole("heading", { name: "Log in" })).toBeVisible();
+  await expect(page.getByLabel("Your name")).toHaveCount(0);
+
+  // And each page leads to the other.
+  await page.getByRole("link", { name: "Sign up" }).click();
+  await expect(page.getByRole("heading", { name: "Create your account" })).toBeVisible();
+  await page.getByRole("link", { name: "Log in" }).click();
+  await expect(page.getByRole("heading", { name: "Log in" })).toBeVisible();
 });
 
-test("new visitors start with email, then Continue with Shopify (managed install)", async ({ page, context }) => {
-  await stubShopify(page);
-  await page.goto("/start");
-  await expect(page.getByRole("heading", { name: /numbers in minutes/ })).toBeVisible();
-
-  // Plain-language validation before anything is sent.
+test("signing up checks the form, refuses a taken email, and the session survives a refresh", async ({ page }) => {
+  await page.goto("/signup");
+  await expect(page.getByText("Continue with Shopify")).toHaveCount(0);
+  await page.getByLabel("Your name").fill("E2E User");
   await page.getByLabel("Email").fill("not-an-email");
-  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await page.getByLabel("Password").fill(PASSWORD);
+  await page.getByRole("button", { name: "Create account" }).click();
   await expect(alert(page)).toContainText("valid email");
+  await page.getByLabel("Email").fill(uniqueEmail("short"));
+  await page.getByLabel("Password").fill("short");
+  await page.getByRole("button", { name: "Create account" }).click();
+  await expect(alert(page)).toContainText("at least 8 characters");
 
-  const email = uniqueEmail("start");
-  await enterEmail(page, email);
-  await expect(page.getByText("Read-only access")).toBeVisible();
-
-  // "Change" goes back with the email kept.
-  await page.getByRole("button", { name: "Change" }).click();
-  await expect(page.getByLabel("Email")).toHaveValue(email);
-  await page.getByRole("button", { name: "Continue", exact: true }).click();
-
-  // The email survives a reload (and so the round trip to Shopify).
+  const email = uniqueEmail("persist");
+  await signUp(page, email);
+  // Refreshing right after signing up keeps the account signed in.
   await page.reload();
-  await expect(page.getByTestId("start-email")).toHaveText(email);
+  await expect(page).toHaveURL(/verify-email/);
+  await verifyEmail(page, email);
+  await createWorkspace(page, "Persist Co");
+  await page.goto("/dashboard");
+  await expect(page).toHaveURL(/\/dashboard/);
+  await page.reload();
+  await expect(page).toHaveURL(/\/dashboard/);
+  await expect(page.getByRole("button", { name: /sign out/i })).toBeVisible();
 
-  // No store address: Shopify's managed install lets the merchant sign in and pick a store.
-  const nav = page.waitForRequest((r) => r.url().startsWith("https://admin.shopify.com/oauth/install"));
-  await page.getByRole("button", { name: "Continue with Shopify" }).click();
-  expect(new URL((await nav).url()).searchParams.get("client_id")).toBe("e2e_key");
-  // Let that navigation land before simulating Shopify's next redirect.
-  await page.waitForURL(/admin\.shopify\.com/);
-  const signup = (await context.cookies()).find((c) => c.name === "shopify_signup");
-  expect(signup?.httpOnly).toBe(true);
+  // The same email can't be signed up twice.
+  await page.context().clearCookies();
+  await page.goto("/signup");
+  await page.getByLabel("Your name").fill("Someone Else");
+  await page.getByLabel("Email").fill(email);
+  await page.getByLabel("Password").fill("another-password-1");
+  await page.getByRole("button", { name: "Create account" }).click();
+  await expect(alert(page)).toContainText("already exists");
+  await expect(alert(page).getByRole("link", { name: "Log in" })).toHaveAttribute("href", "/login");
+});
 
-  // Shopify then opens our App URL for the chosen store, which continues with the per-user grant.
-  const grant = page.waitForRequest((r) => r.url().startsWith("https://e2e-shop.myshopify.com/admin/oauth/authorize"));
-  await page.goto(signedLaunchUrl("e2e-shop.myshopify.com"));
-  const url = new URL((await grant).url());
+test("logging in with a password survives a refresh; signing out ends it", async ({ page }) => {
+  const email = uniqueEmail("login");
+  await signUp(page, email);
+  await verifyEmail(page, email);
+  await createWorkspace(page, "Login Co");
+  await page.goto("/dashboard");
+  await page.getByRole("button", { name: /sign out/i }).click();
+  await expect(page).toHaveURL(/\/login/);
+
+  // Wrong password: a plain message, still signed out.
+  await page.getByLabel("Email").fill(email);
+  await page.getByLabel("Password").fill("not-the-password");
+  await page.getByRole("button", { name: "Log in", exact: true }).click();
+  await expect(alert(page)).toContainText("don't match");
+
+  await page.getByLabel("Password").fill(PASSWORD);
+  await page.getByRole("button", { name: "Log in", exact: true }).click();
+  await expect(page).toHaveURL(/\/dashboard/);
+  await page.reload();
+  await expect(page).toHaveURL(/\/dashboard/);
+  await page.goto("/settings/profile");
+  await page.reload();
+  await expect(page).toHaveURL(/\/settings\/profile/);
+
+  // Signing out ends this session; the dashboard is closed to it afterwards.
+  await page.getByRole("button", { name: /sign out/i }).click();
+  await expect(page).toHaveURL(/\/login/);
+  await page.goto("/dashboard");
+  await expect(page).toHaveURL(/\/login/);
+});
+
+test.describe("social sign-in through the Auth emulator's provider popup", () => {
+  // The emulator's stand-in provider page now and then drops the "Sign in with" click (about one
+  // run in six, with nothing reaching our app): retry that, and only that.
+  test.describe.configure({ retries: 2 });
+  for (const provider of ["Google", "Apple"] as const) {
+    test(`Continue with ${provider} signs in, and the session survives a refresh`, async ({ page }) => {
+      // The Auth emulator stands in for the provider's own screen: a popup where an account is made up.
+      await page.goto("/login");
+      const popup = page.waitForEvent("popup");
+      await page.getByRole("button", { name: `Continue with ${provider}` }).click();
+      const idp = await popup;
+      // The emulator's form differs by provider: Google offers "Auto-generate", Apple asks for an email.
+      // Its page can take the first click before its script is listening, so click until the form opens.
+      const autogen = idp.locator("#autogen-button");
+      const email = idp.locator("#email-input");
+      await expect(async () => {
+        await idp.getByRole("button", { name: "Add new account" }).click({ timeout: 2_000 });
+        await expect(idp.locator("#autogen-button:visible, #email-input:visible").first()).toBeVisible({ timeout: 2_000 });
+      }).toPass({ timeout: 20_000 });
+      if (await autogen.isVisible()) await autogen.click();
+      else await email.fill(uniqueEmail(provider.toLowerCase()));
+      // Only once the made-up account is filled in; the popup closes when the emulator has signed it in.
+      await expect(email).not.toHaveValue("");
+      await Promise.all([idp.waitForEvent("close"), idp.getByRole("button", { name: /^sign in with/i }).click()]);
+      // A brand-new account has no workspace yet: the app sends it to connect a store. The popup
+      // closing is only the start: the session is then made server-side, which takes a moment.
+      await expect(page).toHaveURL(/\/onboarding/, { timeout: 20_000 });
+      await expect(page.getByRole("button", { name: "Continue with Shopify" })).toBeVisible();
+      await page.reload();
+      await expect(page).toHaveURL(/\/onboarding/);
+      await expect(page.getByRole("button", { name: "Continue with Shopify" })).toBeVisible();
+    });
+  }
+});
+
+test("/start, the old Shopify sign-up address, forwards into the new flow", async ({ page }) => {
+  await page.goto("/start");
+  await expect(page).toHaveURL(/\/signup/);
+  // With a store: the in-app connect page, which asks a visitor to log in first.
+  await page.goto("/start?shop=e2e-old.myshopify.com");
+  await expect(page).toHaveURL(/\/login/);
+});
+
+test("opening the app from the Shopify admin without an account: sign up, then the store connects", async ({ page }) => {
+  await stubShopify(page);
+  await page.goto(signedLaunchUrl("e2e-launch.myshopify.com"));
+  await expect(page).toHaveURL(/\/login/);
+  await page.getByRole("link", { name: "Sign up" }).click();
+  const email = uniqueEmail("launch");
+  await page.getByLabel("Your name").fill("E2E User");
+  await page.getByLabel("Email").fill(email);
+  await page.getByLabel("Password").fill(PASSWORD);
+  await page.getByRole("button", { name: "Create account" }).click();
+  await expect(page).toHaveURL(/verify-email/);
+  await verifyEmailInEmulator(email);
+  // Verified: back to the connect page for that store, which goes straight to Shopify's OAuth screen.
+  const authorize = page.waitForRequest((r) => r.url().startsWith("https://e2e-launch.myshopify.com/admin/oauth/authorize"));
+  await page.getByRole("button", { name: /verified my email/ }).click();
+  const url = new URL((await authorize).url());
   expect(url.searchParams.get("client_id")).toBe("e2e_key");
   expect(url.searchParams.get("state")).toBeTruthy();
-  expect(url.searchParams.getAll("grant_options[]")).toContain("per-user");
   expect(url.searchParams.get("redirect_uri")).toContain("/api/shopify/callback");
 });
 
-test("Continue with Shopify with a known store address", async ({ page }) => {
+test("Shopify is connected from Settings, through Shopify's OAuth screen", async ({ page }) => {
   await stubShopify(page);
-  await page.goto("/start");
-  await enterEmail(page, uniqueEmail("shop"));
+  const email = uniqueEmail("connect");
+  await signUp(page, email);
+  await verifyEmail(page, email);
+  await createWorkspace(page, "Connect Co");
+  await page.goto("/settings/stores");
+  await expect(page.getByRole("heading", { name: "Shopify stores" })).toBeVisible();
+  const card = page.getByTestId("shopify-connect");
 
-  await page.getByRole("button", { name: "Know your store address?" }).click();
-  await page.getByLabel("Store address").fill("not a shop!");
-  await page.getByRole("button", { name: "Continue with Shopify" }).click();
+  await card.getByLabel("Store address").fill("not a shop!");
+  await card.getByRole("button", { name: "Connect with Shopify" }).click();
   await expect(alert(page)).toContainText("myshopify.com");
 
-  const nav = page.waitForRequest((r) => r.url().startsWith("https://e2e-shop.myshopify.com/admin/oauth/authorize"));
-  await page.getByLabel("Store address").fill("e2e-shop");
-  await page.getByRole("button", { name: "Continue with Shopify" }).click();
-  const url = new URL((await nav).url());
+  const authorize = page.waitForRequest((r) => r.url().startsWith("https://e2e-settings.myshopify.com/admin/oauth/authorize"));
+  await card.getByLabel("Store address").fill("e2e-settings");
+  await card.getByRole("button", { name: "Connect with Shopify" }).click();
+  const url = new URL((await authorize).url());
   expect(url.searchParams.get("client_id")).toBe("e2e_key");
   expect(url.searchParams.get("state")).toBeTruthy();
-  expect(url.searchParams.getAll("grant_options[]")).toContain("per-user");
-});
 
-test("opening the app from the Shopify admin without an account starts sign-up for that store", async ({ page }) => {
-  await page.goto(signedLaunchUrl("e2e-launch.myshopify.com"));
-  await expect(page).toHaveURL(/\/start\?shop=e2e-launch\.myshopify\.com/);
-  await expect(page.getByRole("status")).toContainText("e2e-launch.myshopify.com");
-  await enterEmail(page, uniqueEmail("launch"));
-  await expect(page.getByLabel("Store address")).toHaveValue("e2e-launch");
-});
-
-test("Shopify errors and expired sign-ups are explained, with a way to start again", async ({ page }) => {
-  const email = uniqueEmail("err");
-  await page.goto("/start");
-  await enterEmail(page, email);
-
-  await page.goto("/start?error=state_expired");
-  await expect(page.getByTestId("start-email")).toHaveText(email);
+  // Shopify's errors come back to Settings in plain words.
+  await page.goto("/settings/stores?error=state_expired");
   await expect(alert(page)).toContainText("expired");
-
-  await page.goto("/start?error=something_new");
-  await expect(alert(page)).toContainText("Shopify didn't complete the connection");
-
-  // Back from Shopify, but this browser has no sign-up in progress.
-  await page.goto("/start?step=finish");
-  await expect(alert(page)).toContainText("took a little too long");
-  await page.getByRole("button", { name: "Start again" }).click();
-  await expect(page).toHaveURL(/\/start\/?$/);
-  await expect(page.getByLabel("Email")).toBeVisible();
 });
 
 test("sign up with a password, verify email, connect from onboarding", async ({ page }) => {

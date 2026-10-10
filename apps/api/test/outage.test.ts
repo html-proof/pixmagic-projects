@@ -236,7 +236,7 @@ describe("when the database drops part-way through a browser navigation", () => 
     expect(state).toMatchObject({ workspaceId: ws, shop: SHOP });
   });
 
-  it("a visitor without a session goes back to sign-up with an explanation", async () => {
+  it("a visitor without a session goes to the in-app connect page with an explanation", async () => {
     const b = testBrowser(ctx);
     await b.post("/auth/shopify/start", { email: "merchant@x.com" });
     const acquire = ctx.deps.coord.acquire;
@@ -245,7 +245,7 @@ describe("when the database drops part-way through a browser navigation", () => 
     };
     try {
       const res = await b.get(launchUrl());
-      expect(res.headers.location).toBe(`${APP}/start?shop=${SHOP}&error=temporarily_unavailable`);
+      expect(res.headers.location).toBe(`${APP}/onboarding?shop=${SHOP}&error=temporarily_unavailable`);
     } finally {
       ctx.deps.coord.acquire = acquire;
     }

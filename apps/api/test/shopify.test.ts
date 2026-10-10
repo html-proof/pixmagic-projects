@@ -150,23 +150,24 @@ describe("Shopify OAuth", () => {
 
     it("launch rejects a bad signature without connecting anything", async () => {
       const res = await ctx.app.inject({ method: "GET", url: "/shopify/launch?shop=demo-shop.myshopify.com&hmac=deadbeef" });
-      // A browser entry point, so the merchant gets the sign-in page and an explanation rather
+      // A browser entry point, so the merchant gets the connect page and an explanation rather
       // than raw JSON. The signature is still not accepted: no authorize redirect is issued.
       expect(res.statusCode).toBe(302);
-      expect(res.headers.location).toBe("http://localhost:3001/start?error=launch_unverified");
+      expect(res.headers.location).toBe("http://localhost:3001/onboarding?error=launch_unverified");
       expect(await systemDb.store.findUnique({ where: { shopDomain: "demo-shop.myshopify.com" } })).toBeNull();
     });
 
     it("launch rejects a signed link whose shop is malformed", async () => {
       const res = await ctx.app.inject({ method: "GET", url: "/shopify/launch?shop=not-a-store&hmac=deadbeef" });
       expect(res.statusCode).toBe(302);
-      expect(res.headers.location).toBe("http://localhost:3001/start?error=launch_unverified");
+      expect(res.headers.location).toBe("http://localhost:3001/onboarding?error=launch_unverified");
     });
 
-    it("launch without a session (or signup) sends the visitor to /start with the shop", async () => {
+    it("launch without a session (or signup) sends the visitor to the in-app connect page with the shop", async () => {
+      // Shopify connects only from inside the app: that page signs the visitor in (or up) first.
       const res = await ctx.app.inject({ method: "GET", url: launchUrl() });
       expect(res.statusCode).toBe(302);
-      expect(res.headers.location).toMatch(/\/start\?shop=demo-shop\.myshopify\.com$/);
+      expect(res.headers.location).toMatch(/\/onboarding\?shop=demo-shop\.myshopify\.com$/);
     });
 
     it("launch for a signed-in but unverified user still goes to onboarding", async () => {

@@ -153,7 +153,7 @@ describe("several Shopify apps", () => {
     // explanation, never to an authorize URL.
     const forged = await b.get(`/shopify/launch?${signedQuery({ shop: CLIENT_SHOP, timestamp: now() }, "nope")}`);
     expect(forged.statusCode).toBe(302);
-    expect(forged.headers.location).toBe("http://localhost:3001/start?error=launch_unverified");
+    expect(forged.headers.location).toBe("http://localhost:3001/onboarding?error=launch_unverified");
   });
 
   it("signed-in users connecting the client's store from the app also use its app", async () => {

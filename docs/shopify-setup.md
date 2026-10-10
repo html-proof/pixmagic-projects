@@ -44,9 +44,13 @@ This pushes, as one versioned config:
 
 The dashboard reads the scopes **actually granted** (from the token response and `app/scopes_update`) and hides any module whose scopes are missing.
 
-## 3. "Continue with Shopify" sign-up (the default entry point)
+## 3. Connecting a store (inside the app)
 
-New visitors land on `/start`: they enter their email, then click **Continue with Shopify**. No password, no separate email check when Shopify vouches for the address.
+Since 2026-10-10 a store is connected only by a signed-in user: from **Settings → Shopify** (`/settings/stores`) or the first-run connect page (`/onboarding`), through Shopify's own OAuth screen. `POST /workspaces/:ws/shopify/install {shop, from?}` returns the authorize URL with single-use state bound to the browser; `/api/shopify/callback` exchanges the code server-side, stores the token encrypted, and sends the merchant back where they started (`from: "settings"` → `/settings/stores?connected=<id>`, otherwise the first-sync page). When Shopify opens the app (`/api/shopify/launch`) for someone who isn't signed in, they go to `/onboarding?shop=…`, which asks them to log in or sign up and then carries on with that store. The old public entry `/start` now forwards there (or to `/signup`).
+
+### The retired "Continue with Shopify" sign-up
+
+The flow below is no longer offered in the UI. Its API is kept so sign-ups already under way finish, and documented for reference.
 
 1. `POST /auth/shopify/start {email, shop?}` (from the web app's origin only, rate limited) stores a short-lived signup record (`signup:<nonce>`, 30 min, Durable Object) and sets the httpOnly `shopify_signup` cookie. Without a store address the browser goes to Shopify's managed install (`admin.shopify.com/oauth/install?client_id=…`), where the merchant signs in, picks a store and approves; Shopify then opens `/api/shopify/launch`, which continues the signup from the cookie. With a store address it goes straight to that store's authorize screen.
 2. **Per-user grant** (`grant_options[]=per-user`): `/shopify/callback` learns which Shopify staff account approved (email + `email_verified`).
@@ -116,7 +120,7 @@ Until the main app passes Shopify's review, Shopify only lets it be installed on
 2. The app's **Distribution** → **Custom distribution** → enter the client's `*.myshopify.com` domain → **Generate link** → copy the install link. (Custom distribution installs on one store, or on several stores in the same Plus organization.)
 3. Put the Client ID in `shopify-app/shopify.app.pixmagic.toml`, then push URLs, scopes and webhooks: `cd shopify-app && shopify app deploy --config pixmagic`.
 4. Tell the Worker about it. In `apps/cloudflare/wrangler.jsonc` `vars`: `"SHOPIFY_EXTRA_APPS": "[{\"key\":\"pixmagic\",\"clientId\":\"<client id>\",\"shops\":[\"pixmagic.myshopify.com\"]}]"`, and the secret (prompted, never written to a file): `npx wrangler secret put SHOPIFY_APP_SECRET_PIXMAGIC`. Deploy.
-5. The store owner opens the install link from step 2, approves, and lands on `/start` to finish. Typing the store address on `/start` or in **Connect a store** also picks that store's app automatically.
+5. The store owner opens the install link from step 2, approves, and lands on the connect page (after logging in or signing up) to finish. Typing the store address in **Settings → Shopify** also picks that store's app automatically.
 
 A misconfigured extra app is logged and skipped; the main app keeps working.
 
@@ -246,13 +250,13 @@ Check, in order:
    ```
 
    The `client_id` in the returned URL is the app that store is really being sent to. If it is the main app's, the store's own app is not in the registry — and the cause is almost always that **the configuration never reached production**: `SHOPIFY_EXTRA_APPS` lives in `apps/cloudflare/wrangler.jsonc`, and editing that file changes nothing until `npx wrangler deploy`. `wrangler secret put` does deploy a new version, which makes it look as though the var went out too; it does not — it carries over the *previous* version's vars. Confirm with `npx wrangler versions view <id>`, which lists the bindings the live version actually has. A missing secret (`SHOPIFY_APP_SECRET_<KEY>`) does the same thing for the same reason. Either way the store is now refused by us with `app_unavailable` instead of being handed to Shopify's dead end (`packages/core/src/apps.ts`, `blocked`), so the merchant gets a message that names the problem — but the install is still broken until the Worker is redeployed.
-5. **A stale link.** `access_change_uuid` is single use and short lived, and it is bound to the install attempt that created it — so a grant URL copied out of one person's address bar and sent to someone else *always* lands on this page. Send merchants to `/start`, never to an `admin.shopify.com/.../app/grant?...` URL.
+5. **A stale link.** `access_change_uuid` is single use and short lived, and it is bound to the install attempt that created it — so a grant URL copied out of one person's address bar and sent to someone else *always* lands on this page. Send merchants to `/signup` (then Settings → Shopify), never to an `admin.shopify.com/.../app/grant?...` URL.
 
 While the app is unapproved, set `SHOPIFY_DEFAULT_APP_SHOPS` to our development stores. Merchants we cannot serve then get `app_unavailable` ("This store can't install our app yet…") from us, instead of being handed to a Shopify page that cannot work. Clear it again the day the app is approved, or the store picker stays disabled — see "Which app a store is sent to" above.
 
 **"Unauthorized access"** on the grant screen: the released app version asks for protected customer data scopes it has not been approved for. Fix it in the toml and redeploy — clearing `SHOPIFY_OPTIONAL_SCOPES` in the Worker env does **not** change what Shopify asks for (see 3e).
 
-**A merchant reports a blank page or raw JSON after clicking the app in their admin:** they reached `/shopify/launch` with a link Shopify didn't sign (usually a bookmark or a hand-edited URL). They are now redirected to `/start?error=launch_unverified` with an explanation; the event is logged as `shopify_launch_rejected`.
+**A merchant reports a blank page or raw JSON after clicking the app in their admin:** they reached `/shopify/launch` with a link Shopify didn't sign (usually a bookmark or a hand-edited URL). They are now redirected to `/onboarding?error=launch_unverified` with an explanation; the event is logged as `shopify_launch_rejected`.
 
 ## 3f. Getting approved, so live stores can install
 
@@ -262,10 +266,10 @@ This is the only thing that makes a client's store installable, and it is entire
 2. **Check what the app actually asks for.** `cd shopify-app && shopify app deploy`, then Dev Dashboard → **Versions** → confirm the active version declares `read_orders,read_products`, no optional scopes, and our URLs. `packages/core/test/appConfig.test.ts` keeps the repo side honest; only a deploy changes Shopify's side.
 3. **Billing through Shopify.** A public app that charges merchants has to bill through the Billing API — section 4. This is implemented; it has to be *demonstrable* to the reviewer.
 4. **The listing.** App name, icon, description, pricing, a privacy policy URL, and support contact. Unlisted apps still need a complete listing: choose **Unlisted / limited visibility** at submission so it is reachable by link without appearing in search.
-5. **Reviewer access.** Give test credentials and step-by-step instructions for a reviewer who has never seen the app: sign up at `/start`, Continue with Shopify, approve, wait for the first import, see the dashboard.
+5. **Reviewer access.** Give test credentials and step-by-step instructions for a reviewer who has never seen the app: sign up at `/signup`, verify the email, connect the store (Settings → Shopify), approve on Shopify, wait for the first import, see the dashboard.
 6. **Submit for review**, then answer Shopify's feedback. Approval flips the gate for every live store at once.
 
-Once approved: clear `SHOPIFY_DEFAULT_APP_SHOPS` so Shopify's store picker and one-click connect work again for everyone, and give clients the app's install link or `/start` — never a copied `app/grant` URL.
+Once approved: clear `SHOPIFY_DEFAULT_APP_SHOPS` so Shopify's store picker and one-click connect work again for everyone, and give clients the app's install link or `/signup` — never a copied `app/grant` URL.
 
 ## 4. Billing
 

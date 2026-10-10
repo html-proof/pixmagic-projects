@@ -85,6 +85,34 @@ const SESSION_CERTS_URL = "https://www.googleapis.com/identitytoolkit/v3/relying
 const CUSTOM_TOKEN_AUD = "https://identitytoolkit.googleapis.com/google.identity.identitytoolkit.v1.IdentityToolkit";
 const SCOPES = "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/identitytoolkit";
 
+/**
+ * Google's session-cookie signing certificates (PEM by key id), kept for as long as Google's
+ * Cache-Control allows. Google rotates them, and a cookie minted after our copy was fetched can name
+ * a key we don't have yet: rejecting it signed a valid session out (a 401, so "log in again") until
+ * the copy expired, which can be hours. An unknown key id is therefore looked up again before it is
+ * called unknown, at most once per `cooldownMs` so junk cookies can't make us hammer Google.
+ */
+export function sessionCertCache(
+  load: () => Promise<{ certs: Record<string, string>; maxAgeSec: number }>,
+  cooldownMs = 60_000,
+  now: () => number = Date.now,
+) {
+  let cache: { certs: Record<string, string>; fetchedAt: number; expiresAt: number } | undefined;
+  const refresh = async () => {
+    const { certs, maxAgeSec } = await load();
+    cache = { certs, fetchedAt: now(), expiresAt: now() + maxAgeSec * 1000 };
+    return cache;
+  };
+  return {
+    /** The certificate for `kid`, or null when Google doesn't publish one. */
+    async pem(kid: string): Promise<string | null> {
+      let c = !cache || cache.expiresAt < now() ? await refresh() : cache;
+      if (!c.certs[kid] && now() - c.fetchedAt > cooldownMs) c = await refresh();
+      return c.certs[kid] ?? null;
+    },
+  };
+}
+
 /** localhost, 127.0.0.1, [::1], or a *.localhost / *.test name. */
 export function isLocalUrl(url: string): boolean {
   let host: string;
@@ -135,7 +163,14 @@ export function firebaseAuthProvider(fetchImpl: FetchLike = fetch): AuthProvider
   let accessToken: { value: string; expiresAt: number } | undefined;
   // The PEMs and the keys imported from them: importX509 parses a certificate, which is far
   // too much CPU to repeat on every request that carries a session cookie.
-  let sessionKeys: { keys: Record<string, string>; imported: Map<string, SigningKey>; expiresAt: number } | undefined;
+  const sessionCerts = sessionCertCache(async () => {
+    const res = await fetchImpl(SESSION_CERTS_URL).catch(unreachable("Fetching session cookie keys failed"));
+    if (!res.ok) throw new FirebaseUnavailableError(`Fetching session cookie keys failed (${res.status})`);
+    const maxAgeSec = Number(/max-age=(\d+)/.exec(res.headers.get("cache-control") ?? "")?.[1] ?? 3600);
+    return { certs: (await res.json()) as Record<string, string>, maxAgeSec };
+  });
+  /** Keys imported from those certificates, by certificate. */
+  const importedKeys = new Map<string, SigningKey>();
 
   function requireSa(): ServiceAccount {
     if (!sa) throw new Error("FIREBASE_SERVICE_ACCOUNT_B64 is required (or set FIREBASE_AUTH_EMULATOR_HOST for local dev)");
@@ -213,19 +248,13 @@ export function firebaseAuthProvider(fetchImpl: FetchLike = fetch): AuthProvider
   }
 
   async function sessionKey(kid: string | undefined) {
-    if (!sessionKeys || sessionKeys.expiresAt < Date.now()) {
-      const res = await fetchImpl(SESSION_CERTS_URL).catch(unreachable("Fetching session cookie keys failed"));
-      if (!res.ok) throw new FirebaseUnavailableError(`Fetching session cookie keys failed (${res.status})`);
-      const maxAge = Number(/max-age=(\d+)/.exec(res.headers.get("cache-control") ?? "")?.[1] ?? 3600);
-      sessionKeys = { keys: (await res.json()) as Record<string, string>, imported: new Map(), expiresAt: Date.now() + maxAge * 1000 };
-    }
-    if (!kid) throw new FirebaseAuthError("auth/argument-error", "Unknown session cookie signing key");
-    const cached = sessionKeys.imported.get(kid);
-    if (cached) return cached;
-    const pem = sessionKeys.keys[kid];
+    if (!kid) throw new FirebaseAuthError("auth/argument-error", "Session cookie names no signing key");
+    const pem = await sessionCerts.pem(kid);
     if (!pem) throw new FirebaseAuthError("auth/argument-error", "Unknown session cookie signing key");
+    const cached = importedKeys.get(pem);
+    if (cached) return cached;
     const key = await importX509(pem, "RS256");
-    sessionKeys.imported.set(kid, key);
+    importedKeys.set(pem, key);
     return key;
   }
 

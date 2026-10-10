@@ -213,7 +213,7 @@ describe("Continue with Shopify: sign-up", () => {
     const b = testBrowser(ctx);
     await b.post("/auth/shopify/start", { email: "merchant@x.com" });
     const launch = await b.get(launchUrl(SHOP, String(Math.floor(Date.now() / 1000) - 3600)));
-    expect(launch.headers.location).toBe(`${APP}/start?shop=${SHOP}`);
+    expect(launch.headers.location).toBe(`${APP}/onboarding?shop=${SHOP}`);
   });
 
   it("different Shopify email → verify_email → OTP for the typed email → claim", async () => {

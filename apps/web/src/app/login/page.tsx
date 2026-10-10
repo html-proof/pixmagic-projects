@@ -5,12 +5,10 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { signInWithCustomToken, signInWithEmailAndPassword } from "firebase/auth";
 import { firebaseAuth } from "@/lib/firebase";
 import { api, isTransient, keepRetrying } from "@/lib/api";
-import { authErrorMessage, establishSession } from "@/lib/session";
+import { afterSignIn, authErrorMessage, establishSession } from "@/lib/session";
 import { emailLinkCode, linkEmail, rememberLinkEmail, signInWithEmailLinkCode } from "@/lib/emailLink";
 import { Alert, AuthShell, Divider } from "@/components/ui";
 import { SocialButtons } from "@/components/SocialButtons";
-import { ShopifyIcon } from "@/components/ShopifyIcon";
-import { takeReturnTo } from "@/lib/returnTo";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -45,7 +43,7 @@ export default function LoginPage() {
     void run(async () => {
       const cred = await signInWithEmailAndPassword(firebaseAuth(), email, password);
       await establishSession(cred.user);
-      router.replace(takeReturnTo() ?? "/");
+      router.replace(afterSignIn());
     });
   };
 
@@ -75,7 +73,7 @@ export default function LoginPage() {
         setLinkCode(null);
         throw err;
       }
-      router.replace(takeReturnTo() ?? "/");
+      router.replace(afterSignIn());
     });
 
   // Opened from a sign-in link (?mode=signIn&oobCode=…): finish right away when we know the email.
@@ -109,7 +107,7 @@ export default function LoginPage() {
         const me = await api<{ user: { emailVerified: boolean } | null }>("/auth/whoami");
         // Verified only, like /start: /verify-email sends an unverified session here, and sending
         // it back into the app would bounce it straight back.
-        if (me.user?.emailVerified) router.replace(takeReturnTo() ?? "/");
+        if (me.user?.emailVerified) router.replace(afterSignIn());
         return true;
       } catch (e) {
         return !isTransient(e);
@@ -135,20 +133,14 @@ export default function LoginPage() {
       const { customToken } = await api<{ customToken: string }>("/auth/otp/verify", { method: "POST", body: { email, code } });
       const cred = await signInWithCustomToken(firebaseAuth(), customToken);
       await establishSession(cred.user);
-      router.replace(takeReturnTo() ?? "/");
+      router.replace(afterSignIn());
     });
   };
 
   return (
-    <AuthShell title="Sign in" subtitle="Welcome back. Pick whichever way is easiest.">
-      <div className="space-y-2">
-        <Link href="/start" className="btn-primary w-full">
-          <ShopifyIcon />
-          Continue with Shopify
-        </Link>
-        <SocialButtons />
-      </div>
-      <Divider label="or with email" />
+    <AuthShell title="Log in" subtitle="Welcome back. Log in to see your store's numbers.">
+      <SocialButtons />
+      <Divider label="or with your email" />
       <div className="flex gap-2 text-sm" role="tablist">
         <button role="tab" aria-selected={mode === "password"} className={mode === "password" ? "font-semibold underline" : "text-muted"} onClick={() => setMode("password")}>
           Password
@@ -167,7 +159,7 @@ export default function LoginPage() {
             <label className="label" htmlFor="link-email">Email</label>
             <input id="link-email" className="input" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
           </div>
-          <button className="btn-primary w-full" disabled={busy}>Sign in</button>
+          <button className="btn-primary w-full" disabled={busy}>Log in</button>
         </form>
       ) : mode === "password" ? (
         <form onSubmit={onPassword} className="space-y-3">
@@ -179,7 +171,7 @@ export default function LoginPage() {
             <label className="label" htmlFor="password">Password</label>
             <input id="password" className="input" type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} />
           </div>
-          <button className="btn-primary w-full" disabled={busy}>Sign in</button>
+          <button className="btn-primary w-full" disabled={busy}>{busy ? "Logging in…" : "Log in"}</button>
           <Link href="/reset" className="block text-sm text-muted underline">Forgot your password?</Link>
         </form>
       ) : !codeSent ? (
@@ -208,7 +200,7 @@ export default function LoginPage() {
       )}
 
       <p className="text-sm text-muted">
-        New here? <Link href="/signup" className="underline">Create an account</Link>
+        Don&apos;t have an account? <Link href="/signup" className="font-medium text-text underline">Sign up</Link>
       </p>
     </AuthShell>
   );

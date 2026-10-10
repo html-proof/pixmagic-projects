@@ -1,6 +1,6 @@
 # Insights for Shopify
 
-A multi-tenant SaaS that gives Shopify merchants plain-language analytics. New merchants enter their email and click **Continue with Shopify**: one approval on Shopify creates their account and workspace, connects the store and imports orders, products and inventory into the dashboard (public, unlisted app, authorization-code grant, expiring offline tokens; see [docs/shopify-setup.md](docs/shopify-setup.md)). Existing users can also sign in with Google, Apple, a password or an email code (Firebase Auth) and connect more stores.
+A multi-tenant SaaS that gives Shopify merchants plain-language analytics. Merchants sign up or log in with Google, Apple, or an email and password (Firebase Auth; an emailed one-time code also works), then connect their store from inside the app (**Settings → Shopify**, or the first-run connect page) through Shopify's own OAuth screen. Insights imports orders, products and inventory into the dashboard (public, unlisted app, authorization-code grant, permanent offline tokens kept encrypted on the server; see [docs/shopify-setup.md](docs/shopify-setup.md)).
 
 Runs on **Cloudflare Workers**: one Worker serves the UI (static assets), the API (`/api/*`), Queue consumers and Cron Triggers, with Postgres via Hyperdrive.
 

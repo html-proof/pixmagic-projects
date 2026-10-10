@@ -22,6 +22,13 @@ export type Ctx = Context<AppEnv>;
 
 export const SESSION_COOKIE = "__session";
 
+/**
+ * Coordinator key that retires one session cookie after it is signed out (POST /auth/logout).
+ * Firebase can only revoke every session of an account at once, so a single browser's sign-out
+ * is recorded here instead, by the cookie's hash, until the cookie would have expired anyway.
+ */
+export const retiredSessionKey = (cookie: string) => `session:retired:${sha256Hex(cookie)}`;
+
 export class HttpError extends Error {
   constructor(
     public statusCode: number,
@@ -76,6 +83,13 @@ export async function loadUser(c: Ctx, deps: Deps): Promise<User | null> {
     }
     return null;
   }
+  // Signed out in this browser: Firebase would still accept the cookie, so check our own record.
+  // Not being able to look is an outage, never "signed out" (see above).
+  const retired = await deps.coord.peek(retiredSessionKey(cookie)).catch((err: unknown) => {
+    logger.error({ err, path: c.req.path }, "signed-out session check failed");
+    throw new HttpError(503, "We can't verify your session right now. Please try again in a moment.", "auth_unavailable");
+  });
+  if (retired) return null;
   // The session is genuine from here on, so failing to load its user is our outage (the database
   // is reachable only through a tunnel that drops), never "signed out": a 401 would send a
   // signed-in merchant to sign in, or into sign-up, for the length of the blip. A missing row

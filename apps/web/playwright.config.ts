@@ -33,6 +33,8 @@ const env = {
   NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR: `http://${E2E_AUTH_EMULATOR_HOST}`,
   NEXT_PUBLIC_FIREBASE_PROJECT_ID: "demo-insights",
   NEXT_PUBLIC_FIREBASE_API_KEY: "demo-key",
+  // Popup sign-in (Google, Apple) needs an auth domain even against the emulator.
+  NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: "demo-insights.firebaseapp.com",
   /**
    * Build into our own folder, and serve that folder below.
    *

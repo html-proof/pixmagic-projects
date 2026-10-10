@@ -3,6 +3,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { useRouter } from "next/navigation";
 import { api, isSignedOut, isTransient, keepRetrying } from "@/lib/api";
 import { LoadError, Unreachable } from "@/components/LoadError";
+import { signInAndReturn } from "@/lib/returnTo";
 
 export interface Me {
   user: { id: string; email: string; emailVerified: boolean; displayName: string | null; timezone: string };
@@ -93,7 +94,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setMeError(e);
         return false;
       }
-      router.replace("/login");
+      signInAndReturn(router);
       return true;
     }
     setMeError(null);
@@ -142,7 +143,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     } catch (e) {
       if (currentWs.current !== wsId) return true;
       if (isSignedOut(e)) {
-        router.replace("/login");
+        signInAndReturn(router);
         return true;
       }
       setStoresError(e);

@@ -1,7 +1,8 @@
 "use client";
-import { useState } from "react";
-import Link from "next/link";
+import { useEffect, useState } from "react";
 import { canManage, StoresPending, useApp } from "@/components/AppContext";
+import { ShopifyConnect } from "@/components/ShopifyConnect";
+import { OAUTH_ERRORS } from "@/lib/shopifyErrors";
 import { Alert, EmptyState } from "@/components/ui";
 import { actionError, api, ApiError } from "@/lib/api";
 import { fmtDateTime, fmtRelative } from "@/components/dashboard/format";
@@ -31,11 +32,31 @@ function statusLabel(status: string): { text: string; tone: string } {
 }
 
 export default function StoresPage() {
-  const { workspace, stores, storesStatus, reloadStores } = useApp();
+  const { workspace, stores, storesStatus, reloadStores, setStoreId } = useApp();
   const manage = canManage(workspace.role);
   /** `${storeId}:${scope}` while that one revoke is in flight, so only its button is busy. */
   const [revoking, setRevoking] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** Just back from Shopify with a store connected (`?connected=<store id>`). */
+  const [connected, setConnected] = useState<string | null>(null);
+
+  // Shopify's answer to a connect started here comes back to this page: ?connected= or ?error=.
+  // Read once, then dropped from the address so a refresh doesn't announce it again.
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    const id = q.get("connected");
+    const code = q.get("error");
+    if (!id && !code) return;
+    if (id) {
+      setConnected(id);
+      setStoreId(id);
+      void reloadStores().catch(() => {});
+    }
+    if (code) setError(OAUTH_ERRORS[code] ?? "Shopify didn't complete the connection. Please try again.");
+    window.history.replaceState(null, "", window.location.pathname);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const justConnected = connected ? stores.find((s) => s.id === connected) : undefined;
 
   async function disconnect(id: string, domain: string) {
     // Disconnecting is ours alone: the app stays installed in the merchant's Shopify admin until
@@ -79,13 +100,19 @@ To stop Insights' access in Shopify too, uninstall the app from your Shopify adm
 
   return (
     <section className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold">Stores</h1>
-        {manage && <Link href="/onboarding" className="btn-primary">Connect a store</Link>}
-      </div>
+      <h1 className="text-lg font-semibold">Shopify stores</h1>
+      {connected && (
+        <Alert kind="success">
+          {justConnected ? `${justConnected.name ?? justConnected.shopDomain} is connected.` : "Your store is connected."} We&apos;re importing its
+          orders and products now; its card below shows how that&apos;s going, and the dashboard fills in as it lands.
+        </Alert>
+      )}
       {error && <Alert>{error}</Alert>}
+      {manage && <ShopifyConnect workspaceId={workspace.id} />}
       <StoresPending />
-      {storesStatus === "ready" && stores.length === 0 && <EmptyState title="No stores yet" body="Connect a Shopify store to start seeing metrics." />}
+      {storesStatus === "ready" && stores.length === 0 && (
+        <EmptyState title="No stores yet" body={manage ? "Connect a Shopify store above to start seeing metrics." : "Ask a workspace admin to connect a Shopify store."} />
+      )}
       {stores.map((s) => {
         const status = statusLabel(s.status);
         // write_X implies read_X, so a store granted write_pixels satisfies a read_pixels need.

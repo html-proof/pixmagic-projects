@@ -41,11 +41,25 @@ const cookieOpts = () => ({
  * absent) is a signed-in user connecting a store to a workspace; the signup modes belong to
  * "Continue with Shopify" (see shopifySignup.ts).
  */
-export type ConnectState = { mode?: "connect"; userId: string; workspaceId: string; shop: string; app?: string };
+export type ConnectState = { mode?: "connect"; userId: string; workspaceId: string; shop: string; app?: string; from?: ConnectFrom };
 export type SignupState = { mode: "signup_user" | "signup_offline"; signup: string; shop: string; app?: string };
 type OAuthState = ConnectState | SignupState;
 
 const isSignupState = (s: OAuthState): s is SignupState => s.mode === "signup_user" || s.mode === "signup_offline";
+
+/**
+ * Where an in-app connect was started, so Shopify's answer brings the merchant back there: Settings
+ * shows the store's card (status, what it can read), the default is the first-sync progress page.
+ * A fixed list, never a URL from the request.
+ */
+const CONNECT_FROM = ["settings"] as const;
+type ConnectFrom = (typeof CONNECT_FROM)[number];
+const connectFromSchema = z.enum(CONNECT_FROM).optional();
+/** Settings → Stores, where a connect started from there lands. */
+const SETTINGS_STORES = "/settings/stores";
+const connectPage = (from: ConnectFrom | undefined) => (from === "settings" ? SETTINGS_STORES : "/onboarding");
+const connectedPage = (from: ConnectFrom | undefined, storeId: string) =>
+  from === "settings" ? `${SETTINGS_STORES}?connected=${encodeURIComponent(storeId)}` : syncPage(storeId);
 
 /** Create single-use OAuth state, bind it to this browser and return Shopify's authorize URL. */
 export async function authorizeRedirect(c: Ctx, deps: Deps, state: OAuthState, opts: { perUser?: boolean } = {}): Promise<string> {
@@ -65,8 +79,8 @@ export function appForSignedQuery(q: Record<string, string>): ShopifyApp | null 
 }
 
 /** Authorize redirect for a signed-in user connecting `shop` to `workspaceId`. */
-const beginAuthorize = (c: Ctx, deps: Deps, userId: string, workspaceId: string, shop: string, app: string) =>
-  authorizeRedirect(c, deps, { mode: "connect", userId, workspaceId, shop, app });
+const beginAuthorize = (c: Ctx, deps: Deps, userId: string, workspaceId: string, shop: string, app: string, from?: ConnectFrom) =>
+  authorizeRedirect(c, deps, { mode: "connect", userId, workspaceId, shop, app, ...(from ? { from } : {}) });
 
 /**
  * The app `shop` installs through. Shopify shows "This installation link can't be used" when a
@@ -123,14 +137,14 @@ export function shopifyRoutes(app: App, deps: Deps) {
     const access = await requireWorkspace(c, deps, ws, "stores:manage");
     const user = access.user!;
     if (!user.emailVerified) throw new HttpError(403, "Verify your email before connecting a store", "email_unverified");
-    const { shop: rawShop } = z.object({ shop: z.string().min(1).max(255) }).parse(await body(c));
+    const { shop: rawShop, from } = z.object({ shop: z.string().min(1).max(255), from: connectFromSchema }).parse(await body(c));
     const shop = normalizeShopDomain(rawShop);
     if (!shop) throw new HttpError(400, "Enter your store's myshopify.com address", "invalid_shop");
 
     if (await storeTakenElsewhere(shop, ws)) {
       throw new HttpError(409, "This store is already connected to another workspace", "store_taken");
     }
-    return c.json({ url: await beginAuthorize(c, deps, user.id, ws, shop, installApp(shop).key) });
+    return c.json({ url: await beginAuthorize(c, deps, user.id, ws, shop, installApp(shop).key, from) });
   });
 
   /**
@@ -148,13 +162,14 @@ export function shopifyRoutes(app: App, deps: Deps) {
     const access = await requireWorkspace(c, deps, ws, "stores:manage");
     const user = access.user!;
     if (!user.emailVerified) throw new HttpError(403, "Verify your email before connecting a store", "email_unverified");
+    const { from } = z.object({ from: connectFromSchema }).parse(await body(c));
     const mainApp = shopifyApp(DEFAULT_APP);
     if (!servesAnyShop(mainApp)) {
       throw new HttpError(400, "Enter your store's myshopify.com address to connect it", "shop_required");
     }
 
     const nonce = randomToken(24);
-    await deps.coord.put(`oauth:pending:${nonce}`, JSON.stringify({ userId: user.id, workspaceId: ws }), STATE_TTL_S);
+    await deps.coord.put(`oauth:pending:${nonce}`, JSON.stringify({ userId: user.id, workspaceId: ws, ...(from ? { from } : {}) }), STATE_TTL_S);
     setCookie(c, PENDING_COOKIE, nonce, cookieOpts());
     logHandoff("oneclick", null, mainApp, shopifyConfig(mainApp).scopes);
     return c.json({ url: managedInstallUrl(mainApp.clientId) });
@@ -186,7 +201,7 @@ export function shopifyRoutes(app: App, deps: Deps) {
       const raw = await deps.coord.take(stateKey);
       if (!raw) return fail("state_expired");
       const state = JSON.parse(raw) as OAuthState;
-      errorPage = isSignupState(state) ? "/start" : "/onboarding";
+      errorPage = isSignupState(state) ? "/start" : connectPage(state.from);
       if (state.shop !== shop) return fail("shop_mismatch");
       // The redirect must come back signed by the app the flow was started for.
       if ((state.app ?? DEFAULT_APP) !== app.key) return fail("app_mismatch");
@@ -218,7 +233,7 @@ export function shopifyRoutes(app: App, deps: Deps) {
 
       try {
         const store = await attachStore(deps, { workspaceId: state.workspaceId, shop, token, appKey: app.key, actorUserId: user.id, ip: clientIp(c) });
-        return c.redirect(`${appUrl}${syncPage(store.id)}`);
+        return c.redirect(`${appUrl}${connectedPage(state.from, store.id)}`);
       } catch (err) {
         if (err instanceof HttpError && err.code === "store_taken") return fail("store_taken");
         throw err;
@@ -251,7 +266,7 @@ export function shopifyRoutes(app: App, deps: Deps) {
     const shop = app ? normalizeShopDomain(q.shop ?? "") : null;
     if (!app || !shop) {
       logger.warn({ event: "shopify_launch_rejected", reason: app ? "invalid_shop" : "invalid_hmac" }, "unverified app launch");
-      return c.redirect(`${appUrl}/start?error=launch_unverified`);
+      return c.redirect(`${appUrl}/onboarding?error=launch_unverified`);
     }
     logReturn("launch", shop, app);
     const toOnboarding = () => c.redirect(`${appUrl}/onboarding?shop=${encodeURIComponent(shop)}`);
@@ -264,18 +279,25 @@ export function shopifyRoutes(app: App, deps: Deps) {
       // which used to send signed-in merchants into sign-up.
       const user = await loadUser(c, deps);
       if (!user || !user.emailVerified) {
+        // A "Continue with Shopify" sign-up already under way in this browser carries on. Anyone
+        // else connects from inside the app: the connect page asks a visitor to sign in or create
+        // an account first and then picks this store up from ?shop=.
         const next = await signupLaunch(c, deps, shop, q.timestamp, app.key);
         if (next) return c.redirect(next);
-        return user ? toOnboarding() : c.redirect(`${appUrl}/start?shop=${encodeURIComponent(shop)}`);
+        return toOnboarding();
       }
 
       let workspaceId: string | null = null;
       let role: Role | null = null;
+      let from: ConnectFrom | undefined;
       if (pendingNonce) {
         deleteCookie(c, PENDING_COOKIE, { path: "/" });
         pendingRaw = await deps.coord.take(`oauth:pending:${pendingNonce}`);
-        const pending = pendingRaw ? (JSON.parse(pendingRaw) as { userId: string; workspaceId: string }) : null;
-        if (pending?.userId === user.id) workspaceId = pending.workspaceId;
+        const pending = pendingRaw ? (JSON.parse(pendingRaw) as { userId: string; workspaceId: string; from?: unknown }) : null;
+        if (pending?.userId === user.id) {
+          workspaceId = pending.workspaceId;
+          from = connectFromSchema.catch(undefined).parse(pending.from);
+        }
       }
       if (!workspaceId) {
         // Opened from the Shopify admin: only auto-connect when there's exactly one workspace to use.
@@ -294,7 +316,7 @@ export function shopifyRoutes(app: App, deps: Deps) {
       if (!role || !can(role, "stores:manage")) return toOnboarding();
       if (await storeTakenElsewhere(shop, workspaceId)) return c.redirect(`${appUrl}/onboarding?error=store_taken`);
 
-      return c.redirect(await beginAuthorize(c, deps, user.id, workspaceId, shop, app.key));
+      return c.redirect(await beginAuthorize(c, deps, user.id, workspaceId, shop, app.key, from));
     } catch (err) {
       // A browser entry point (see the top of this handler): a blip in the database or coordinator
       // must land on a page that says so. Put the one-click choice back so relaunching from the
@@ -305,8 +327,7 @@ export function shopifyRoutes(app: App, deps: Deps) {
         await deps.coord.put(`oauth:pending:${pendingNonce}`, pendingRaw, STATE_TTL_S).catch(() => {});
         setCookie(c, PENDING_COOKIE, pendingNonce, cookieOpts());
       }
-      const page = getCookie(c, SESSION_COOKIE) ? "/onboarding" : "/start";
-      return c.redirect(`${appUrl}${page}?shop=${encodeURIComponent(shop)}&error=temporarily_unavailable`);
+      return c.redirect(`${appUrl}/onboarding?shop=${encodeURIComponent(shop)}&error=temporarily_unavailable`);
     }
   });
 }
