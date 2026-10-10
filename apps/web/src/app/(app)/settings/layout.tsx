@@ -7,6 +7,7 @@ const ITEMS = [
   ["profile", "Profile"],
   ["workspace", "Workspace"],
   ["stores", "Stores"],
+  ["ads", "Ad accounts"],
   ["members", "Members & roles"],
   ["notifications", "Notifications"],
   ["api-keys", "API keys"],

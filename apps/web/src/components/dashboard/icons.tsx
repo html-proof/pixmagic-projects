@@ -9,7 +9,7 @@ function Svg({ children, ...p }: SVGProps<SVGSVGElement> & { children: ReactNode
   );
 }
 
-export type IconName = "trendUp" | "trendDown" | "bag" | "receipt" | "trophy" | "clock" | "door" | "box" | "truck" | "mail" | "users" | "eye" | "sparkle" | "refresh" | "copy" | "check" | "external" | "phone" | "cart" | "store" | "chart" | "link" | "close" | "chevronRight" | "tag" | "printer" | "chat" | "share";
+export type IconName = "trendUp" | "trendDown" | "bag" | "receipt" | "trophy" | "clock" | "door" | "box" | "truck" | "mail" | "users" | "eye" | "sparkle" | "refresh" | "copy" | "check" | "external" | "phone" | "cart" | "store" | "chart" | "link" | "close" | "chevronRight" | "tag" | "printer" | "chat" | "share" | "megaphone";
 
 export function Icon({ name, className }: { name: IconName; className?: string }) {
   const p = { className };
@@ -62,6 +62,8 @@ export function Icon({ name, className }: { name: IconName; className?: string }
       return <Svg {...p}><path d="M6 6l12 12M18 6L6 18" /></Svg>;
     case "chevronRight":
       return <Svg {...p}><path d="M9 5l7 7-7 7" /></Svg>;
+    case "megaphone":
+      return <Svg {...p}><path d="M3 11v2a1 1 0 0 0 1 1h3l6 4V6L7 10H4a1 1 0 0 0-1 1z" /><path d="M16 9a4 4 0 0 1 0 6M19 6a8 8 0 0 1 0 12" /></Svg>;
     case "chat":
       return <Svg {...p}><path d="M4 5h16v11H9l-5 4V5z" /><path d="M8 9h8M8 12h5" /></Svg>;
     case "share":

@@ -4,12 +4,13 @@ import type { IconName } from "./icons";
 import type { Overview } from "./types";
 
 /** Everything a dashboard card can open, each as its own detail panel (?view=<topic>). */
-export const TOPICS = ["overview", "sales", "products", "shoppers", "timing", "channels", "shipping", "stock", "discounts", "customers", "orders"] as const;
+export const TOPICS = ["overview", "sales", "ads", "products", "shoppers", "timing", "channels", "shipping", "stock", "discounts", "customers", "orders"] as const;
 export type Topic = (typeof TOPICS)[number];
 
 const INFO: Record<Topic, { title: string; icon: IconName }> = {
   overview: { title: "Business overview", icon: "sparkle" },
   sales: { title: "Sales", icon: "chart" },
+  ads: { title: "Ads", icon: "megaphone" },
   products: { title: "Best sellers", icon: "trophy" },
   shoppers: { title: "Shoppers", icon: "eye" },
   timing: { title: "Busiest times", icon: "clock" },
@@ -34,6 +35,11 @@ export function topicSummary(t: Topic, ov: Overview, currency: string): string {
     case "sales": {
       const c = m.sales_overview?.current;
       return c ? `${money(c.netSales)} from ${plural(c.orders, "order")}` : "";
+    }
+    case "ads": {
+      const a = m.ads;
+      if (!a) return "Connect Meta or Google Ads";
+      return `${fmtMoney(a.current.spend, a.currency)} spent · ${plural(a.current.clicks, "click")}`;
     }
     case "products": {
       const top = m.top_products?.items[0];

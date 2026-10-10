@@ -127,6 +127,23 @@ export function AreaPreview({ topic, ov, currency, health }: { topic: Topic; ov:
         </>
       );
     }
+    case "ads": {
+      const a = m.ads;
+      if (!a || a.series.length < 2) return null;
+      const values = a.series.map((d) => d.spend);
+      const top = values.indexOf(Math.max(...values));
+      const today = a.series.findIndex((d) => d.day === ov.today);
+      const split = a.byProvider.length > 1 && a.current.spend > 0 ? a.byProvider.map((p) => `${p.provider === "meta" ? "Meta" : "Google"} ${fmtPct(p.spend / a.current.spend)}`).join(" · ") : null;
+      return (
+        <>
+          <MiniColumns values={values} emphasis={values[top]! > 0 ? top : null} faded={today >= 0 ? today : null} />
+          <Caption>
+            Ad spend per day{split ? <> · {split}</> : null}
+            {a.current.roas !== null ? <> · platforms report {new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(a.current.roas)}× back</> : null}
+          </Caption>
+        </>
+      );
+    }
     case "shipping": {
       const f = m.fulfillment;
       if (!f || f.current.orders === 0) return null;

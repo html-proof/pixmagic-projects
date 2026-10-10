@@ -13,7 +13,7 @@ import { Delta } from "./primitives";
 // something. Hovering (or arrowing through) a column reads out both at once.
 // ---------------------------------------------------------------------------
 
-interface Column {
+export interface Column {
   key: string;
   value: number;
   fill: string;
@@ -77,7 +77,7 @@ function useWidth() {
   return [ref, width] as const;
 }
 
-function ColumnsWithTotal({
+export function ColumnsWithTotal({
   columns,
   label,
   fmtAxis,

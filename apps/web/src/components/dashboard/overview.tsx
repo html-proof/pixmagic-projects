@@ -4,6 +4,8 @@ import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { fmtDay, fmtMonth, fmtRange, fmtRelative, hourRange, plural } from "./format";
 import { STEP_LABEL } from "./funnel";
 import { AreaPreview } from "./previews";
+import { useRouter } from "next/navigation";
+import { GoogleIcon, MetaIcon } from "@/components/BrandIcons";
 import { Icon } from "./icons";
 import { Panel, Stat, type Tone } from "./primitives";
 import { topicInfo, topicSummary, type Topic } from "./topics";
@@ -87,6 +89,11 @@ export function businessHealth(ov: Overview, currency: string): Check[] {
     const health: Health = ful.openNow === 0 ? "good" : (ful.oldestOpenDays ?? 0) > 3 ? "attention" : "watch";
     const text = ful.openNow === 0 ? "Every order has shipped." : `${plural(ful.openNow, "order")} waiting to ship${ful.oldestOpenDays !== null ? `, the oldest for ${plural(ful.oldestOpenDays, "day")}` : ""}.`;
     out.push({ id: "shipping", topic: "shipping", area: "Shipping", health, text });
+  }
+  const ads = m.ads;
+  if (ads && ads.current.spend > 0) {
+    const back = ads.current.roas !== null ? `; the platforms count ${fmtMoney(ads.current.conversionValue, ads.currency)} in sales from them (${new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(ads.current.roas)}×)` : "";
+    out.push({ id: "ads", topic: "ads", area: "Ads", health: "info", text: `${fmtMoney(ads.current.spend, ads.currency)} spent on ads for ${plural(ads.current.clicks, "click")}${back}.` });
   }
   const top = m.top_products?.items[0];
   if (top) out.push({ id: "best", topic: "products", area: "Best seller", health: "info", text: `${top.title}: ${money(top.revenue)} from ${plural(top.units, "unit")}.` });
@@ -219,8 +226,9 @@ function AreaCard({
 }
 
 /** Every part of the store, each with a small picture of it: the full overview first, then each area, worst first. */
-export function AreaList({ ov, currency, topics, onOpen }: { ov: Overview; currency: string; topics: Topic[]; onOpen: (t: Topic) => void }) {
+export function AreaList({ ov, currency, topics, onOpen, canConnectAds = false }: { ov: Overview; currency: string; topics: Topic[]; onOpen: (t: Topic) => void; canConnectAds?: boolean }) {
   const rows = areaRows(ov, currency, topics);
+  const router = useRouter();
   const counts = countsOf(businessHealth(ov, currency));
   return (
     <section aria-labelledby="areas-h">
@@ -243,6 +251,25 @@ export function AreaList({ ov, currency, topics, onOpen }: { ov: Overview; curre
           preview={counts.graded > 0 ? <AreaPreview topic="overview" ov={ov} currency={currency} health={{ attention: counts.attention, watch: counts.watch, good: counts.good, info: 0 }} /> : null}
           onOpen={() => onOpen("overview")}
         />
+        {!ov.modules.ads && canConnectAds && (
+          <AreaCard
+            topic="ads"
+            title="Ads"
+            icon={
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent/12 text-accent">
+                <Icon name="megaphone" className="h-5 w-5" />
+              </span>
+            }
+            text="Connect Meta or Google Ads to see what you spend each day, the clicks and sales it brings, and what it costs next to your sales."
+            preview={
+              <span className="flex flex-wrap items-center gap-2 text-xs text-muted">
+                <span className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-white px-2 py-1 text-[#1b1b18]"><MetaIcon size={14} />Continue with Meta</span>
+                <span className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-white px-2 py-1 text-[#1b1b18]"><GoogleIcon size={14} />Continue with Google</span>
+              </span>
+            }
+            onOpen={() => router.push("/settings/ads")}
+          />
+        )}
         {rows.map((r) => (
           <AreaCard
             key={r.topic}
@@ -389,6 +416,8 @@ export function OverviewDetail({ ov, currency, onOpen }: { ov: Overview; currenc
                 <Row label="Shipping charged" now={money(s.current.shipping)} />
                 {f && <Row label="Store visits" now={fmtNum(f.visits)} before={fmtNum(f.previous.visits)} change={<Change value={f.deltas.visits} />} />}
                 {f && <Row label="Visitors who bought" now={fmtPct(f.conversionRate)} before={f.previous.conversionRate !== null ? fmtPct(f.previous.conversionRate) : null} change={<Change value={f.deltas.conversionRate} />} />}
+                {m.ads && <Row label={`Ad spend (${m.ads.currency})`} now={fmtMoney(m.ads.current.spend, m.ads.currency)} before={fmtMoney(m.ads.previous.spend, m.ads.currency)} change={<Change value={m.ads.deltas.spend} invert />} />}
+                {m.ads && <Row label="Return on ad spend" now={m.ads.current.roas !== null ? `${m.ads.current.roas.toFixed(2)}×` : "—"} before={m.ads.previous.roas !== null ? `${m.ads.previous.roas.toFixed(2)}×` : null} change={<Change value={m.ads.deltas.roas} />} />}
                 {m.customers && m.customers.current.returningCustomerRate !== null && <Row label="Returning customers" now={fmtPct(m.customers.current.returningCustomerRate)} before={m.customers.previous.returningCustomerRate !== null ? fmtPct(m.customers.previous.returningCustomerRate) : null} />}
               </tbody>
             </table>

@@ -4,13 +4,26 @@ import {
   logger,
   MAX_ATTEMPTS,
   raiseAlert,
+  type AdsSyncData,
   type AggregateJobData,
   type Producer,
   type QueueName,
   type SyncJobData,
   type WebhookJobData,
 } from "@app/core";
-import { AccessRevokedError, failStaleJobs, processWebhook, refreshExpiringTokens, runAggregate, runSync, scheduleReconcile, UnrecoverableError, type WorkerDeps } from "./handlers.js";
+import {
+  AccessRevokedError,
+  failStaleJobs,
+  processWebhook,
+  refreshExpiringTokens,
+  runAdsSync,
+  runAggregate,
+  runSync,
+  scheduleAdsSync,
+  scheduleReconcile,
+  UnrecoverableError,
+  type WorkerDeps,
+} from "./handlers.js";
 
 export * from "./handlers.js";
 
@@ -61,7 +74,9 @@ export async function consume(queue: QueueName, msg: QueueMessage, deps: Consume
   // would start every follow-up message part-way through an outage it never saw.
   const { dbDeferral, ...job } = (msg.body ?? {}) as { dbDeferral?: DbDeferral };
   try {
-    if (queue === "sync") await runSync(job as SyncJobData, deps);
+    // Ad account syncs ride the sync queue too (see adsQueue), told apart by their kind.
+    if (queue === "sync" && (job as { kind?: string }).kind === "ads") await runAdsSync(job as AdsSyncData, deps);
+    else if (queue === "sync") await runSync(job as SyncJobData, deps);
     else if (queue === "webhooks") await processWebhook(job as WebhookJobData, deps);
     else await runAggregate(job as AggregateJobData);
     msg.ack();
@@ -122,6 +137,17 @@ async function deferForDb(queue: QueueName, msg: QueueMessage, job: object, prev
 
 async function onFailure(queue: QueueName, body: unknown, err: Error, final: boolean, deps: WorkerDeps) {
   const error = err.message.slice(0, 500);
+  if (queue === "sync" && (body as { kind?: string })?.kind === "ads") {
+    // An ad account, not the store's import: never touches the store's status or raises a store
+    // alert. Settings shows the account's own state (runAdsSync marks reconnect / error).
+    if (final) {
+      const data = body as AdsSyncData;
+      await systemDb.adConnection
+        .updateMany({ where: { id: data.connectionId, status: "active" }, data: { status: "error", lastError: error } })
+        .catch(() => {});
+    }
+    return;
+  }
   if (queue === "sync") {
     const data = body as SyncJobData;
     if (!data?.syncJobId) return;
@@ -192,7 +218,12 @@ export async function runScheduled(cron: string, deps: WorkerDeps) {
       logger.error({ err }, "reconcile failed; the next tick picks up the stores it did not reach");
       return null;
     });
-    return { refreshed, staleJobsFailed, reconciled };
+    // Ad accounts on their own leases, after everything the store itself depends on.
+    const adsSynced = await scheduleAdsSync(deps).catch((err: unknown) => {
+      logger.error({ err }, "ad sync scheduling failed; the next tick tries again");
+      return null;
+    });
+    return { refreshed, staleJobsFailed, reconciled, adsSynced };
   }
   logger.warn({ cron }, "unknown cron trigger");
   return {};

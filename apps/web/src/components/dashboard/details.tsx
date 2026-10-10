@@ -7,6 +7,7 @@ import { FunnelCard, JourneyCard, SECTION_LABEL, STEP_LABEL } from "./funnel";
 import { fmtDuration, fmtRange, hourRange, plural } from "./format";
 import { Icon, type IconName } from "./icons";
 import { CatalogCard, ChannelsCard, DiscountCodesCard, FulfillmentCard, InventoryCard, OrderTimingCard, RecentOrdersCard } from "./modules";
+import { AdsDetail } from "./adsPanel";
 import { Explained } from "./explain";
 import { OverviewDetail } from "./overview";
 import { Delta, Panel, Stat } from "./primitives";
@@ -28,6 +29,7 @@ export function availableTopics(ov: Overview, contactsOn: boolean): Topic[] {
   const has: Record<Topic, boolean> = {
     // The overview has its own first row in the list.
     overview: false,
+    ads: !!m.ads,
     sales: !!m.sales_overview,
     products: !!(m.top_products || m.catalog),
     shoppers: !!m.funnel,
@@ -661,6 +663,7 @@ export function TopicDetail({
   const period: Record<Topic, string> = {
     overview: `${range} · ${ov.store.name ?? ov.store.shopDomain}`,
     sales: range,
+    ads: `${range} · each ad account's own days`,
     products: range,
     shoppers: range,
     timing: range,
@@ -676,6 +679,7 @@ export function TopicDetail({
   const body: ReactNode =
     topic === "overview" ? <OverviewDetail ov={ov} currency={currency} onOpen={onOpen} />
     : topic === "sales" && m.sales_overview ? <SalesDetail ov={ov} currency={currency} />
+    : topic === "ads" && m.ads ? <AdsDetail ov={ov} />
     : topic === "products" && (m.top_products || m.catalog) ? <ProductsDetail ov={ov} currency={currency} />
     : topic === "shoppers" && m.funnel ? <ShoppersDetail ov={ov} />
     : topic === "timing" && m.order_timing ? <TimingDetail ov={ov} />

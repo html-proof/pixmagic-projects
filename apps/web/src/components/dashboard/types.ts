@@ -47,6 +47,35 @@ export interface SalesOverview {
   year: YearBreakdown;
 }
 
+export interface AdTotals {
+  spend: number;
+  impressions: number;
+  clicks: number;
+  conversions: number;
+  conversionValue: number;
+  leads: number;
+  ctr: number | null;
+  cpc: number | null;
+  cpm: number | null;
+  costPerConversion: number | null;
+  roas: number | null;
+}
+
+/** What connected Meta / Google ad accounts report for the dates (see adsModule in the API). */
+export interface AdsModule {
+  /** The one currency everything below is in. */
+  currency: string;
+  accounts: Array<{ id: string; provider: "meta" | "google"; accountId: string; name: string | null; currency: string | null; status: string; lastSyncedAt: string | null; counted: boolean }>;
+  current: AdTotals;
+  previous: { spend: number; clicks: number; conversions: number; conversionValue: number; roas: number | null };
+  deltas: { spend: number | null; clicks: number | null; conversions: number | null; roas: number | null };
+  series: Array<{ day: string; spend: number; clicks: number; impressions: number; conversions: number }>;
+  byProvider: Array<AdTotals & { provider: "meta" | "google" }>;
+  campaigns: Array<AdTotals & { provider: "meta" | "google"; accountId: string; campaignId: string; name: string }>;
+  /** Ad spend divided by the store's net sales (same currency only). */
+  shareOfSales: number | null;
+}
+
 export interface ChannelsModule {
   items: Array<{ source: string | null; label: string; orders: number; sales: number; share: number | null }>;
 }
@@ -178,5 +207,6 @@ export interface Overview {
     recent_orders?: { items: RecentOrder[] };
     inventory?: InventoryModule;
     catalog?: CatalogModule;
+    ads?: AdsModule;
   };
 }

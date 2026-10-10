@@ -66,6 +66,27 @@ Reference implementation: `businessHealth` in `apps/web/src/components/dashboard
 
 Best seller, top channel and busiest time are information only. With nothing earlier to compare with, an area is information only too. When the only day picked is today, trends aren't graded, because the day isn't over.
 
+## Ads (Meta Ads, Google Ads)
+
+Reference implementation: `packages/shared/src/ads.ts`. Connection and sync: `docs/ads-setup.md`.
+
+| KPI | Formula | Notes |
+| --- | --- | --- |
+| Ad spend | Σ spend per campaign per day | What the platform billed; in the ad account's currency |
+| Views, clicks | Σ impressions, Σ clicks | |
+| Click-through rate | clicks ÷ views | |
+| Cost per click, per 1,000 views | spend ÷ clicks, spend × 1000 ÷ views | |
+| Purchases | Meta: the first of `omni_purchase`, `purchase`, `offsite_conversion.fb_pixel_purchase`, `onsite_web_purchase` (never their sum: they overlap). Google: `metrics.conversions` | The platform's own attribution |
+| Sales value | the matching `action_values` (Meta), `metrics.conversions_value` (Google) | The platform's own attribution |
+| Return on ad spend | sales value ÷ spend | |
+| Cost per purchase | spend ÷ purchases | |
+| Ads as share of sales | ad spend ÷ the store's net sales for the same dates | Only when both are in the same currency |
+
+- **Days** are each ad account's own calendar days. They line up with the store's days when the time zones match.
+- **Currency:** only accounts in one currency are added together. That is the store's currency when any connected account uses it, otherwise the first account's. Other accounts are listed and left out.
+- **Platform attribution is never mixed into store sales.** Meta and Google can both claim one sale, and neither matches Shopify's orders exactly.
+- **Freshness:** the last 3 days are refreshed hourly. The last 30 days are fetched again daily, because purchases keep being credited after the click. A first connection fetches 90 days.
+
 ## Funnel (web pixel)
 
 Events: `page_viewed`, `product_viewed`, `product_added_to_cart`, `checkout_started`, `checkout_completed`, each with the page's pathname. Events are deduplicated by Shopify event id, then folded into one row per **visit** in `funnel_visits`: one shopper (hashed Shopify client id) on one store-local day.

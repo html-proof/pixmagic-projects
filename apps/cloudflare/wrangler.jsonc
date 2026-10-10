@@ -18,7 +18,8 @@
   },
 
   // Non-secret configuration. Secrets (SESSION_SECRET, TOKEN_ENCRYPTION_KEYS, OTP_PEPPER,
-  // SHOPIFY_API_SECRET, FIREBASE_SERVICE_ACCOUNT_B64, ALERT_SLACK_WEBHOOK_URL) are set with
+  // SHOPIFY_API_SECRET, FIREBASE_SERVICE_ACCOUNT_B64, ALERT_SLACK_WEBHOOK_URL, and for ad accounts
+  // META_APP_SECRET, GOOGLE_ADS_CLIENT_SECRET, GOOGLE_ADS_DEVELOPER_TOKEN) are set with
   // `wrangler secret put`; for local dev put everything in apps/cloudflare/.dev.vars.
   "vars": {
     "NODE_ENV": "production",
@@ -48,7 +49,14 @@
     "SHOPIFY_EXTRA_APPS": "[{\"key\":\"pixmagic\",\"clientId\":\"bb0ea9e4ad8939a6a1513e4dbf8cbbf1\",\"shops\":[\"pixmagic.myshopify.com\"]}]",
     // Must be an address on a domain onboarded to Cloudflare Email Sending. Until then, sign-in
     // codes fall back to one-click links that Firebase emails (see docs/shopify-setup.md).
-    "EMAIL_FROM": "Insights <no-reply@example.com>"
+    "EMAIL_FROM": "Insights <no-reply@example.com>",
+    // Ad accounts ("Continue with Meta" / "Continue with Google" on Settings → Ad accounts). Empty
+    // until the apps exist: the buttons then say the platform isn't set up. Fill in the public ids
+    // and set the three secrets, then deploy. docs/ads-setup.md walks through creating both.
+    "META_APP_ID": "",
+    "META_API_VERSION": "v25.0",
+    "GOOGLE_ADS_CLIENT_ID": "",
+    "GOOGLE_ADS_API_VERSION": "v25"
   },
 
   // Postgres through Hyperdrive: owner role (migrations/system paths) and the RLS-enforced app_rls role.

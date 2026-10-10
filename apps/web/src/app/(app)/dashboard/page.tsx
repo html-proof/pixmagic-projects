@@ -321,7 +321,7 @@ export default function DashboardPage() {
         </section>
       )}
 
-      {ov && <AreaList ov={ov} currency={cur} topics={topics} onOpen={detail.open} />}
+      {ov && <AreaList ov={ov} currency={cur} topics={topics} onOpen={detail.open} canConnectAds={canManage(workspace.role)} />}
 
       {disabled.length > 0 && (
         <section aria-labelledby="more-h">

@@ -8,3 +8,4 @@ export * from "./kpi.js";
 export * from "./journey.js";
 export * from "./roles.js";
 export * from "./sales.js";
+export * from "./ads.js";

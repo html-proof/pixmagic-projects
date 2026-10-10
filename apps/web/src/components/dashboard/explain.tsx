@@ -41,6 +41,18 @@ const TERMS: Record<Topic, Terms> = {
     ["Month-by-month bars", "One bar per month this year. The change above each compares it with the month before; this month is compared with the same days of last month."],
     ["Not imported", "Shopify shares only the last 60 days of orders with most apps, so earlier days are marked instead of shown as $0."],
   ],
+  ads: [
+    ["Ad spend", "What Meta and Google charged for your ads on those days, in the ad account's currency."],
+    ["Views and clicks", "Views (impressions) are times an ad was shown; clicks are taps or clicks on it."],
+    ["Click-through rate", "Clicks divided by views: how often people who saw an ad clicked it."],
+    ["Cost per click / per 1,000 views", "Spend divided by clicks, or by thousands of views."],
+    ["Purchases (platforms' count)", "Purchases Meta or Google credit to their own ads, from their pixel or conversion tracking. Both can claim the same sale, so they won't add up to your Shopify orders."],
+    ["Sales value and return on ad spend", "The value of those purchases, and that value divided by spend: 3× means the platform counts $3 of sales for every $1 spent."],
+    ["Cost per purchase", "Spend divided by the purchases the platform counts."],
+    ["Ads as share of sales", "Ad spend divided by your store's own net sales for the same dates: what ads cost out of every dollar you keep."],
+    ["Days", "Each ad account's own calendar day, in its time zone. They line up with your store's days when the time zones match."],
+    ["Updated", "Every hour, and the last 30 days are fetched again daily because the platforms keep counting purchases for a while after the click."],
+  ],
   products: [
     ["Sales (per product)", "Price times quantity, minus that item's discounts, for orders in these dates. Refunds aren't taken off here."],
     ["Units", "How many of that product were sold."],
@@ -129,6 +141,19 @@ function nextSteps(topic: Topic, ov: Overview, currency: string): ReactNode[] {
         const f = m.fulfillment;
         if (f && (f.oldestOpenDays ?? 0) > 3) out.push(<>An order has waited {plural(f.oldestOpenDays!, "day")} to ship. <b>Shipping</b> shows what&apos;s still open.</>);
       }
+      break;
+    }
+    case "ads": {
+      const a = m.ads;
+      if (!a || a.current.spend === 0) break;
+      const [p1, p2] = [...a.byProvider].filter((p) => p.costPerConversion !== null).sort((x, y) => x.costPerConversion! - y.costPerConversion!);
+      if (p1 && p2) {
+        const name = (p: typeof p1) => (p.provider === "meta" ? "Meta" : "Google Ads");
+        out.push(<>{name(p1)} gets a purchase for {fmtMoney(p1.costPerConversion!, a.currency)} against {fmtMoney(p2.costPerConversion!, a.currency)} on {name(p2)}, by their own counts.</>);
+      }
+      const worst = a.campaigns.find((c) => c.spend > 0 && c.conversions === 0);
+      if (worst) out.push(<>&ldquo;{worst.name}&rdquo; spent {fmtMoney(worst.spend, a.currency)} with no purchase counted. Check whether it&apos;s meant to bring sales, or something else such as awareness.</>);
+      if (a.shareOfSales !== null) out.push(<>Ads cost {fmtPct(a.shareOfSales)} of your net sales. Compare that with your profit margin: if ads cost more than you make on a sale, they lose money even when they bring sales.</>);
       break;
     }
     case "products": {

@@ -2,7 +2,10 @@ import { z } from "zod";
 import { Prisma, toNumber, withTenant, type Tx } from "@app/db";
 import {
   DATE_PRESETS,
+  adSeries,
+  adTotals,
   addDays,
+  campaignTotals,
   eachDay,
   channelLabel,
   daysBetweenInclusive,
@@ -15,6 +18,8 @@ import {
   yearBreakdown,
   PURCHASED_STEP,
   SITE_SECTIONS,
+  type AdDayRow,
+  type AdProvider,
   type DailyMetricsRow,
   type DateRange,
   type JourneyPageRow,
@@ -451,6 +456,75 @@ async function importedData(tx: Tx, { ws, storeId }: Scope) {
 }
 
 // ---------------------------------------------------------------------------
+// Ad platforms (Meta Ads, Google Ads), connected on Settings → Ad accounts.
+// ---------------------------------------------------------------------------
+
+/**
+ * What the store's connected ad accounts report for these dates. Only accounts in one currency
+ * are added up (the store's, when any account uses it): adding dollars to euros means nothing.
+ * Accounts in other currencies are listed as left out. The platforms' days are their own
+ * accounts' calendar days, which match the store's when the time zones do.
+ */
+async function adsModule(tx: Tx, { ws, storeId }: Scope, range: DateRange, previous: DateRange, storeCurrency: string, netSales: number | null) {
+  const conns = await tx.adConnection.findMany({
+    where: { workspaceId: ws, storeId, enabled: true },
+    select: { id: true, provider: true, accountId: true, accountName: true, currency: true, status: true, lastSyncedAt: true, lastError: true },
+    orderBy: [{ provider: "asc" }, { createdAt: "asc" }],
+  });
+  if (!conns.length) return null;
+  const currency = conns.some((c) => c.currency === storeCurrency) ? storeCurrency : (conns.find((c) => c.currency)?.currency ?? storeCurrency);
+  const counted = conns.filter((c) => (c.currency ?? currency) === currency);
+  const raw = await tx.adCampaignDaily.findMany({
+    where: { workspaceId: ws, storeId, connectionId: { in: counted.map((c) => c.id) }, day: { gte: previous.from, lte: range.to } },
+  });
+  const rows: AdDayRow[] = raw.map((r) => ({
+    provider: r.provider as AdProvider,
+    accountId: r.accountId,
+    campaignId: r.campaignId,
+    campaignName: r.campaignName,
+    day: r.day,
+    spend: toNumber(r.spend),
+    impressions: r.impressions,
+    clicks: r.clicks,
+    conversions: toNumber(r.conversions),
+    conversionValue: toNumber(r.conversionValue),
+    leads: r.leads,
+  }));
+  const inRange = (d: DateRange) => rows.filter((r) => r.day >= d.from && r.day <= d.to);
+  const cur = inRange(range);
+  const prev = inRange(previous);
+  const current = adTotals(cur);
+  const before = adTotals(prev);
+  const providers = [...new Set(counted.map((c) => c.provider as AdProvider))];
+  return {
+    currency,
+    accounts: conns.map((c) => ({
+      id: c.id,
+      provider: c.provider,
+      accountId: c.accountId,
+      name: c.accountName,
+      currency: c.currency,
+      status: c.status,
+      lastSyncedAt: c.lastSyncedAt,
+      counted: counted.some((x) => x.id === c.id),
+    })),
+    current,
+    previous: { spend: before.spend, clicks: before.clicks, conversions: before.conversions, conversionValue: before.conversionValue, roas: before.roas },
+    deltas: {
+      spend: delta(current.spend, before.spend),
+      clicks: delta(current.clicks, before.clicks),
+      conversions: delta(current.conversions, before.conversions),
+      roas: delta(current.roas, before.roas),
+    },
+    series: adSeries(cur, range),
+    byProvider: providers.map((p) => ({ provider: p, ...adTotals(cur.filter((r) => r.provider === p)) })),
+    campaigns: campaignTotals(cur, 10),
+    /** Ad spend as a share of the store's net sales, when both are in the same currency. */
+    shareOfSales: currency === storeCurrency && netSales !== null && netSales > 0 ? current.spend / netSales : null,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Storefront funnel (web pixel). One row per shopper per store-local day in
 // funnel_visits; see packages/shared/src/journey.ts for what each column means.
 // ---------------------------------------------------------------------------
@@ -664,6 +738,10 @@ export function dashboardRoutes(app: App, deps: Deps) {
       }
 
       if (enabled.has("funnel")) modules.funnel = await funnel(tx, scope, range, previous);
+
+      // Not a Shopify capability: present once an ad account is connected to the store.
+      const ads = await adsModule(tx, scope, range, previous, store.currency, (modules.sales_overview as { current?: { netSales?: number } } | undefined)?.current?.netSales ?? null);
+      if (ads) modules.ads = ads;
 
       if (enabled.has("channels")) modules.channels = await channels(tx, scope, range);
       if (enabled.has("order_timing")) modules.order_timing = await orderTiming(tx, scope, range, store.timezone);
