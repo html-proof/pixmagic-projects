@@ -20,6 +20,7 @@ import {
   waCreateTemplate,
   waExchangeCode,
   waPlatformConfig,
+  waTokenInfo,
   WhatsappApiError,
   WhatsappConnectError,
   connectionToken,
@@ -179,6 +180,18 @@ export function whatsappRoutes(app: App, deps: Deps) {
       throw new HttpError(400, "Meta didn't accept the sign-in (it expires after 30 seconds). Please press Connect again.", "exchange_failed");
     }
     let ids = input.wabaId && input.phoneNumberId ? { wabaId: input.wabaId, phoneNumberId: input.phoneNumberId } : null;
+    if (ids) {
+      // The ids came from the browser: the account must be one this sign-up granted to Insights' app.
+      // (connectWhatsapp then checks the number is in that account, with the business's own token.)
+      const info = await waTokenInfo(token, deps.fetchImpl, `${cfg.appId}|${cfg.appSecret}`).catch((err: unknown) => {
+        logger.warn({ err, storeId }, "whatsapp embedded signup: couldn't inspect the token; relying on the account checks");
+        return null;
+      });
+      if (info?.appId && info.appId !== cfg.appId) throw new HttpError(400, "That sign-in was for a different Meta app. Please press Continue with WhatsApp again.", "wrong_app");
+      if (info?.wabaIds && !info.wabaIds.includes(ids.wabaId)) {
+        throw new HttpError(400, "Meta didn't give Insights access to that WhatsApp Business Account. Please press Continue with WhatsApp again and share it.", "waba_not_granted");
+      }
+    }
     if (!ids) {
       const found = await discoverWhatsapp(token, deps.fetchImpl).catch(connectError);
       const numbers = found.accounts.flatMap((a) => a.numbers.map((n) => ({ wabaId: a.id, phoneNumberId: n.id })));

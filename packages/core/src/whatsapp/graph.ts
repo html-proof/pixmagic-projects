@@ -157,8 +157,13 @@ export interface WaTokenInfo {
 }
 
 /** What a token can reach: its app, its permissions and the WhatsApp accounts it was given. */
-export async function waTokenInfo(token: string, fetchImpl: FetchLike): Promise<WaTokenInfo> {
-  const r = await graph<{ data?: { app_id?: string; is_valid?: boolean; scopes?: string[]; granular_scopes?: Array<{ scope?: string; target_ids?: string[] }> } }>(fetchImpl, token, "GET", "debug_token", {
+/**
+ * What Meta says about a token: its app, permissions and the WhatsApp accounts it was given.
+ * `inspector` is the token that asks (Insights' app token `<id>|<secret>` for Embedded Signup
+ * tokens); by default the token inspects itself.
+ */
+export async function waTokenInfo(token: string, fetchImpl: FetchLike, inspector = token): Promise<WaTokenInfo> {
+  const r = await graph<{ data?: { app_id?: string; is_valid?: boolean; scopes?: string[]; granular_scopes?: Array<{ scope?: string; target_ids?: string[] }> } }>(fetchImpl, inspector, "GET", "debug_token", {
     query: { input_token: token },
   });
   const d = r.data ?? {};

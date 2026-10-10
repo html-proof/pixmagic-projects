@@ -56,7 +56,9 @@
     // set up. GOOGLE_ADS_CLIENT_ID is the Google Cloud OAuth client "Insights web" (project
     // insights-511119), shared by Google Ads and AdSense. Set the secrets, then deploy.
     // docs/ads-setup.md walks through all three.
-    "META_APP_ID": "",
+    // Insights' Meta app ("pixmagic" in Meta for Developers, portfolio "Testbusiness"): one app for Meta Ads and
+    // WhatsApp. Nothing switches on until META_APP_SECRET is set (wrangler secret put) and the configuration ids below exist.
+    "META_APP_ID": "1799660384680551",
     "META_API_VERSION": "v25.0",
     // Facebook Login for Business "Configuration ID" (user access token, ads_read). Optional.
     "META_CONFIG_ID": "",

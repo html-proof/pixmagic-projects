@@ -9,6 +9,7 @@ import { systemDb } from "@app/db";
 import { logger } from "../logger.js";
 import { advanceCampaigns } from "./campaigns.js";
 import { ensurePlatformWebhook } from "./connect.js";
+import { refreshConnection } from "./store.js";
 import { pollShipments } from "./events.js";
 import { enqueueSend, waQueue, type WaDeps } from "./messages.js";
 
@@ -18,6 +19,9 @@ const DISPATCH_LEASE_MS = 10 * 60_000;
 const SHIPMENT_POLL_LEASE_MS = 2 * 3600_000;
 const RETENTION_LEASE_MS = 22 * 3600_000;
 const PLATFORM_WEBHOOK_LEASE_MS = 6 * 3600_000;
+/** How often each connected number is checked with Meta, and how many per tick (Meta's rate limits). */
+const HEALTH_EVERY_MS = 6 * 3600_000;
+const HEALTH_PER_TICK = 20;
 
 /** How long things are kept (docs/whatsapp.md, "Data and retention"). */
 export const RETENTION = {
@@ -35,13 +39,23 @@ export const RETENTION = {
 };
 
 export async function sweepWhatsapp(deps: WaDeps) {
-  const out: { campaigns: { started: number; finished: number }; dispatched: number; queued: number; interrupted: number; polled: number; purged: number; platformWebhook?: string } = {
+  const out: {
+    campaigns: { started: number; finished: number };
+    dispatched: number;
+    queued: number;
+    interrupted: number;
+    polled: number;
+    purged: number;
+    checked: number;
+    platformWebhook?: string;
+  } = {
     campaigns: { started: 0, finished: 0 },
     dispatched: 0,
     queued: 0,
     interrupted: 0,
     polled: 0,
     purged: 0,
+    checked: 0,
   };
   out.campaigns = await advanceCampaigns(deps);
 
@@ -91,6 +105,8 @@ export async function sweepWhatsapp(deps: WaDeps) {
 
   if (await deps.coord.acquire("wa-retention", RETENTION_LEASE_MS)) out.purged = await purgeWhatsappRetention();
 
+  out.checked = await checkConnections(deps);
+
   // Insights' own Meta app: its webhook points here (checked a few times a day; a failure retries next tick).
   if (await deps.coord.acquire("wa-platform-webhook", PLATFORM_WEBHOOK_LEASE_MS)) {
     out.platformWebhook = await ensurePlatformWebhook(deps.fetchImpl).catch(async (err: unknown) => {
@@ -100,6 +116,31 @@ export async function sweepWhatsapp(deps: WaDeps) {
     });
   }
   return out;
+}
+
+/**
+ * Health check: ask Meta about each connected number every few hours, so a token the business
+ * revoked, a number Meta disabled or a quality drop shows on the dashboard even when nothing is
+ * being sent. A few per tick, oldest first; a rejected token turns the connection "reconnect"
+ * (refreshConnection), while a rate limit or outage just waits for the next turn.
+ */
+export async function checkConnections(deps: WaDeps, now = Date.now()): Promise<number> {
+  const due = await systemDb.whatsappConnection.findMany({
+    where: { status: { not: "reconnect" }, OR: [{ lastSyncedAt: null }, { lastSyncedAt: { lt: new Date(now - HEALTH_EVERY_MS) } }] },
+    orderBy: { lastSyncedAt: { sort: "asc", nulls: "first" } },
+    take: HEALTH_PER_TICK,
+  });
+  let checked = 0;
+  for (const conn of due) {
+    if (!(await deps.coord.acquire(`wa-health:${conn.id}`, HEALTH_EVERY_MS))) continue;
+    try {
+      await refreshConnection(conn, deps.fetchImpl);
+      checked++;
+    } catch (err) {
+      logger.warn({ err, connectionId: conn.id }, "whatsapp health check couldn't reach Meta; it tries again later");
+    }
+  }
+  return checked;
 }
 
 /** Delete or blank what is past its retention. Returns rows touched. */

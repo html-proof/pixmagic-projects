@@ -214,10 +214,15 @@ describe("connecting WhatsApp", () => {
   });
 
   /** Meta behind "Continue with WhatsApp": the code exchange, then the business token as above. */
-  function embeddedMeta(numbers = 1) {
+  function embeddedMeta(numbers = 1, token: { appId?: string; granted?: string[] } = {}) {
     const exchanged: string[] = [];
     const fetch: FetchLike = async (input, init) => {
       const u = new URL(String(input));
+      // Insights' own app inspecting the business token Embedded Signup returned.
+      if (u.pathname.endsWith("/debug_token") && (init?.headers as Record<string, string> | undefined)?.authorization === "Bearer 123|platform_secret") {
+        const scopes = ["whatsapp_business_management", "whatsapp_business_messaging"];
+        return json({ data: { app_id: token.appId ?? "123", is_valid: true, scopes, granular_scopes: scopes.map((scope) => ({ scope, target_ids: token.granted ?? ["1111111111"] })) } });
+      }
       if (u.pathname.endsWith("/oauth/access_token")) {
         exchanged.push(`${u.searchParams.get("client_id")}:${u.searchParams.get("client_secret")}:${u.searchParams.get("code")}`);
         return u.searchParams.get("code") === "es-code-123456" ? json({ access_token: "EAAG_valid_system_user_token_0123456789" }) : json({ error: { message: "bad code", type: "OAuthException" } }, 400);
@@ -246,6 +251,18 @@ describe("connecting WhatsApp", () => {
 
     const expired = await ctx.app.inject({ method: "POST", url: `${o.base}/embedded`, headers: o.headers, payload: { code: "es-code-expired", wabaId: "1111111111", phoneNumberId: "2222222222" } });
     expect(expired.json().error).toBe("exchange_failed");
+  });
+
+  it("won't take the browser's word for the account: it must be one this sign-up granted to Insights' app", async () => {
+    const o = await owner();
+    ctx.setFetch(embeddedMeta(1, { granted: ["3333333333"] }).fetch);
+    const other = await ctx.app.inject({ method: "POST", url: `${o.base}/embedded`, headers: o.headers, payload: { code: "es-code-123456", wabaId: "1111111111", phoneNumberId: "2222222222" } });
+    expect(other.statusCode).toBe(400);
+    expect(other.json().error).toBe("waba_not_granted");
+    ctx.setFetch(embeddedMeta(1, { appId: "999" }).fetch);
+    const foreign = await ctx.app.inject({ method: "POST", url: `${o.base}/embedded`, headers: o.headers, payload: { code: "es-code-123456", wabaId: "1111111111", phoneNumberId: "2222222222" } });
+    expect(foreign.json().error).toBe("wrong_app");
+    expect(await systemDb.whatsappConnection.count()).toBe(0);
   });
 
   it("asks Meta which number was shared when the page never heard, and won't guess between two", async () => {

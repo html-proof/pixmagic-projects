@@ -3,6 +3,7 @@ import { disconnectDb, systemDb, type Prisma, type Store } from "@app/db";
 import { resetDb } from "@app/db/testing";
 import {
   applyMetaWebhook,
+  checkConnections,
   encryptTokenFields,
   memoryBlobs,
   memoryCoord,
@@ -656,5 +657,44 @@ describe("GDPR", () => {
     expect(await systemDb.whatsappContact.count({ where: { storeId: store.id } })).toBe(0);
     expect(await systemDb.orderTracking.count({ where: { storeId: store.id } })).toBe(0);
     expect(await systemDb.whatsappMessage.count({ where: { storeId: store.id } })).toBe(0);
+  });
+});
+
+describe("connection health", () => {
+  it("asks Meta about each number every few hours: re-reads a healthy one, turns a revoked one to 'reconnect', and then leaves it alone", async () => {
+    const store = await setupStore({ kinds: ["order_confirmation"] });
+    const conn = await systemDb.whatsappConnection.findFirstOrThrow({ where: { storeId: store.id } });
+    await systemDb.whatsappConnection.update({ where: { id: conn.id }, data: { lastSyncedAt: new Date(Date.now() - 7 * 3600_000), qualityRating: "GREEN" } });
+    let revoked = false;
+    const calls: string[] = [];
+    fetchImpl = async (input) => {
+      const u = new URL(String(input));
+      calls.push(u.pathname);
+      if (revoked) return json({ error: { code: 190, message: "Error validating access token: The user has not authorized application", type: "OAuthException" } }, 401);
+      if (u.pathname.endsWith("/2222222222")) return json({ id: "2222222222", display_phone_number: "+91 98765 00000", quality_rating: "YELLOW", platform_type: "CLOUD_API", messaging_limit_tier: "TIER_1K" });
+      if (u.pathname.endsWith("/1111111111/message_templates")) return json({ data: [] });
+      throw new Error(`unexpected fetch ${u}`);
+    };
+
+    expect(await checkConnections(deps)).toBe(1);
+    const fresh = await systemDb.whatsappConnection.findUniqueOrThrow({ where: { id: conn.id } });
+    expect(fresh).toMatchObject({ status: "active", qualityRating: "YELLOW", messagingLimitTier: "TIER_1K" });
+    expect(fresh.lastSyncedAt!.getTime()).toBeGreaterThan(Date.now() - 60_000);
+    // Just checked: Meta isn't asked again on the next tick.
+    const before = calls.length;
+    expect(await checkConnections(deps)).toBe(0);
+    expect(calls).toHaveLength(before);
+
+    // Hours later the business has removed Insights' access.
+    await systemDb.whatsappConnection.update({ where: { id: conn.id }, data: { lastSyncedAt: new Date(Date.now() - 7 * 3600_000) } });
+    coord.clear();
+    revoked = true;
+    await checkConnections(deps);
+    expect((await systemDb.whatsappConnection.findUniqueOrThrow({ where: { id: conn.id } })).status).toBe("reconnect");
+    // A connection waiting to be reconnected isn't polled: its token is known not to work.
+    coord.clear();
+    const after = calls.length;
+    expect(await checkConnections(deps)).toBe(0);
+    expect(calls).toHaveLength(after);
   });
 });

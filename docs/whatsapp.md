@@ -169,6 +169,34 @@ evaluates a rule against a recent order without doing anything (and can send the
 - **Costs**: Meta reports which messages are billable and their category, not prices, so Insights shows counts and
   points to WhatsApp Manager for amounts.
 
+### Connecting with "Continue with WhatsApp" (Embedded Signup)
+
+The button (`apps/web/src/components/whatsapp/EmbeddedSignup.tsx`, on WhatsApp → Connect and Settings → Connect
+your business) loads Meta's SDK once, opens Meta's flow with the login configuration, and shows where it is:
+"Opening secure Meta connection…", "Complete the setup in the Meta window.", "Connecting your WhatsApp Business
+account…". A window that closes is never a connection: only the server's answer is. A window that "closes" at once
+was blocked by the browser (allow pop-ups); one closed part-way says at which step; Meta finishing without a phone
+number connects nothing. Every failure offers Try again.
+
+Meta's `WA_EMBEDDED_SIGNUP` message is only read from `facebook.com`. The server then (`POST …/whatsapp/embedded`):
+
+1. exchanges the 30-second code for the business's token (Insights' app id and secret);
+2. asks Meta, with Insights' app token, what that token is (`debug_token`): it must belong to Insights' app, and the
+   WhatsApp Business Account the browser reported must be one this sign-up granted (`waba_not_granted` otherwise).
+   Without ids from the browser, it uses the one number the token can reach;
+3. checks the number is in that account and reads both with the business's token, subscribes Insights to the
+   account's webhooks (`POST /{waba}/subscribed_apps`), stores the token encrypted, fetches the templates;
+4. registers a new number (Meta's `FINISH`) with a PIN it keeps encrypted (see "First use" below).
+
+A sign-up that fails part-way can simply be repeated: the connection is one row per store, upserted.
+
+### Health check
+
+Every 15-minute tick checks up to 20 connected numbers whose last check is over 6 hours old (`checkConnections`
+in `scheduler.ts`, each on its own 6-hour lease): their status, quality, messaging limit and templates. A token the
+business revoked turns the connection to "reconnect" (shown as "Permission expired"); a rate limit or Meta outage
+just waits for the next turn. Connections already waiting to be reconnected aren't polled.
+
 ### Security
 
 - Meta webhooks: `X-Hub-Signature-256` (HMAC-SHA256 of the raw body, app secret) is verified before anything is
@@ -187,6 +215,13 @@ evaluates a rule against a recent order without doing anything (and can send the
 ## Setting it up
 
 ### 1. Meta (owner, in a browser; none of this can be done from code)
+
+**Where Insights stands (2026-10-11).** Insights' Meta app is **"pixmagic", App ID `1799660384680551`**, in the
+business portfolio "Testbusiness" (`1754818672920174`). It has the WhatsApp use case and Facebook Login for
+Business, but no login configuration yet, no app domain, redirect URI or JS SDK domain, and it is in Development
+mode. The portfolio's business verification and Tech Provider onboarding haven't started. Until the configuration
+id and app secret are on the server, `/api/whatsapp/platform` answers `{"embeddedSignup":false}` and the button
+shows "coming soon". The steps below are what's left, in order.
 
 1. A **Meta Business portfolio** for Insights, **business verification** done (Security Center).
 2. A **Meta app** (type Business). The ad accounts' app can be reused: then `WHATSAPP_APP_ID`/`WHATSAPP_APP_SECRET`
@@ -278,6 +313,16 @@ TEST_PG_PORT=5447 TEST_DB=wa_test pnpm --filter @app/api exec vitest run test/wh
 
 Use a throwaway Postgres for `TEST_PG_PORT`, not the one that hosts production. Meta is faked in tests; no message
 leaves the machine.
+
+The button itself, in a real browser against the real Worker, with Meta's SDK and Meta's page stubbed (blocked
+window, closed part-way, a look-alike message from another site, the server refusing, success, a number with its
+own PIN, Meta finishing without a number):
+
+```bash
+cd apps/web && TEST_PG_PORT=5447 npx playwright test e2e/whatsapp-connect.spec.ts
+```
+
+`e2e/worker.env` switches Embedded Signup on with test values (`e2e_meta_app`, `e2e_config`) for this.
 
 A local demo with sample data: start the `wa-demo` launch configuration (`.claude/wa-demo-server.mjs`, port 8793,
 database `wa_demo` on that throwaway Postgres), sign in with an emailed code from Mailpit, then
