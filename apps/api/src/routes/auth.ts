@@ -36,15 +36,17 @@ export function authRoutes(app: App, deps: Deps) {
       // for a "Continue with Shopify" signup it means proving the email by code, which an outage
       // can't issue either (each failed request still spends the address's small code budget).
       // So until the database answers, say "try again" rather than send them there.
-      await systemDb.$queryRaw`SELECT 1`.catch((err: unknown) => {
-        logger.error({ err }, "database unreachable during sign-in");
-        throw new HttpError(503, "We can't finish signing you in right now. Please try again in a moment.", "db_unavailable");
-      });
+      await systemDb.$queryRaw`SELECT 1`.catch(dbOutage(SIGN_IN_UNAVAILABLE));
       throw new HttpError(401, "Please sign in again", "stale_sign_in");
     }
     const email = claims.email.toLowerCase();
-    const user = await sessionUser({ uid: claims.uid, email, emailVerified: claims.emailVerified, name: claims.name });
-    const cookie = await deps.auth.createSessionCookie(idToken, SESSION_TTL_MS);
+    // The token is genuine from here on, so a failure to store its user is our outage.
+    const user = await sessionUser({ uid: claims.uid, email, emailVerified: claims.emailVerified, name: claims.name }).catch(
+      dbOutage(SIGN_IN_UNAVAILABLE),
+    );
+    const cookie = await deps.auth.createSessionCookie(idToken, SESSION_TTL_MS).catch((err) => {
+      throw signInFailure(err, idToken, "POST /auth/session createSessionCookie");
+    });
     setCookie(c, SESSION_COOKIE, cookie, { ...cookieOpts, maxAge: SESSION_TTL_MS / 1000 });
     return c.json({ user: publicUser(user) });
   });
@@ -119,7 +121,7 @@ export function authRoutes(app: App, deps: Deps) {
       systemDb.emailOtp.create({
         data: { email, codeHash: hashOtp(code, email, env().OTP_PEPPER), expiresAt: new Date(Date.now() + OTP_TTL_MS), ip },
       }),
-    ]);
+    ]).catch(dbOutage("We can't send you a code right now. Please try again in a moment."));
     try {
       await deps.mailer.send(
         email,
@@ -177,24 +179,22 @@ export function authRoutes(app: App, deps: Deps) {
       throw new HttpError(429, "Too many attempts for this email address. Please sign in another way or try again tomorrow.", "rate_limited");
     }
 
-    const otp = await systemDb.emailOtp.findFirst({
-      where: { email, consumedAt: null, expiresAt: { gt: new Date() } },
-      orderBy: { createdAt: "desc" },
-    });
+    const outage = dbOutage("We can't check your code right now. Please try again in a moment.");
+    const otp = await systemDb.emailOtp
+      .findFirst({ where: { email, consumedAt: null, expiresAt: { gt: new Date() } }, orderBy: { createdAt: "desc" } })
+      .catch(outage);
     const invalid = new HttpError(400, "That code is invalid or has expired", "invalid_code");
     if (!otp) throw invalid;
     // Atomically count the attempt; refuse once the budget is exhausted.
-    const bumped = await systemDb.emailOtp.updateMany({
-      where: { id: otp.id, attempts: { lt: OTP_MAX_ATTEMPTS }, consumedAt: null },
-      data: { attempts: { increment: 1 } },
-    });
+    const bumped = await systemDb.emailOtp
+      .updateMany({ where: { id: otp.id, attempts: { lt: OTP_MAX_ATTEMPTS }, consumedAt: null }, data: { attempts: { increment: 1 } } })
+      .catch(outage);
     if (bumped.count === 0) throw invalid;
     if (!verifyOtp(input.code, email, env().OTP_PEPPER, otp.codeHash)) throw invalid;
     // Single use: only one concurrent verifier can consume it.
-    const consumed = await systemDb.emailOtp.updateMany({
-      where: { id: otp.id, consumedAt: null },
-      data: { consumedAt: new Date() },
-    });
+    const consumed = await systemDb.emailOtp
+      .updateMany({ where: { id: otp.id, consumedAt: null }, data: { consumedAt: new Date() } })
+      .catch(outage);
     if (consumed.count === 0) throw invalid;
 
     const uid = await deps.auth.upsertVerifiedEmailUser(email);
@@ -211,6 +211,21 @@ export function authRoutes(app: App, deps: Deps) {
  * loops, and "invalid token" sends the user hunting for a fault that isn't theirs.
  */
 const isUniqueViolation = (err: unknown) => (err as { code?: string })?.code === "P2002";
+
+const SIGN_IN_UNAVAILABLE = "We can't finish signing you in right now. Please try again in a moment.";
+
+/**
+ * `.catch` for a database call on the sign-in path. The database is reachable only through a
+ * tunnel that drops, so a failure there is our outage: say "try again" (503) as loadUser does,
+ * not a bare 500 "Something went wrong" that leaves the merchant nowhere to go. HttpErrors pass.
+ */
+function dbOutage(message: string) {
+  return (err: unknown): never => {
+    if (err instanceof HttpError) throw err;
+    logger.error({ err }, "database unreachable during sign-in");
+    throw new HttpError(503, message, "db_unavailable");
+  };
+}
 
 /**
  * The user row for a verified Firebase sign-in.

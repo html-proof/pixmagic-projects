@@ -92,6 +92,58 @@ describe("while the database is unreachable", () => {
     expect(res.headers["set-cookie"]).toMatch(/__session=;.*Max-Age=0/);
   });
 
+  it("a fresh sign-in says 'try again' (503) instead of a bare 500, and signs in once the database is back", async () => {
+    // Production hit exactly this: Docker on the database host stopped, and every sign-in was a 500.
+    const session = () => ctx.app.inject({ method: "POST", url: "/auth/session", headers: ORIGIN, payload: { idToken: "idt|u1|a@x.com|1" } });
+    const during = await dbDown(session);
+    expect(during.statusCode).toBe(503);
+    expect(during.json().error).toBe("db_unavailable");
+    expect(during.headers["set-cookie"]).toBeUndefined();
+
+    const after = await session();
+    expect(after.statusCode).toBe(200);
+    expect(after.json().user.email).toBe("a@x.com");
+  });
+
+  it("asking for a sign-in code says 'try again' (503) instead of a bare 500, and sends nothing", async () => {
+    // Production hit this on /start's "Confirm your email" panel during a tunnel drop.
+    const request = () =>
+      ctx.app.inject({ method: "POST", url: "/auth/otp/request", headers: ORIGIN, payload: { email: "a@x.com", continuePath: "/start" } });
+    const before = ctx.mailer.sent.length;
+    const during = await dbDown(request);
+    expect(during.statusCode).toBe(503);
+    expect(during.json().error).toBe("db_unavailable");
+    expect(ctx.mailer.sent).toHaveLength(before);
+
+    expect((await request()).statusCode).toBe(200);
+    expect(ctx.mailer.sent).toHaveLength(before + 1);
+  });
+
+  it("checking a sign-in code says 'try again' (503) and leaves the code usable", async () => {
+    await ctx.app.inject({ method: "POST", url: "/auth/otp/request", headers: ORIGIN, payload: { email: "a@x.com" } });
+    const code = /(\d{6})/.exec(ctx.mailer.sent.at(-1)!.subject)![1]!;
+    const verify = () => ctx.app.inject({ method: "POST", url: "/auth/otp/verify", headers: ORIGIN, payload: { email: "a@x.com", code } });
+    const during = await dbDown(verify);
+    expect(during.statusCode).toBe(503);
+    expect(during.json().error).toBe("db_unavailable");
+
+    expect((await verify()).statusCode).toBe(200);
+  });
+
+  it("a fresh sign-in says 'try again' when Firebase can't mint the session cookie", async () => {
+    const create = ctx.auth.createSessionCookie;
+    ctx.auth.createSessionCookie = async () => {
+      throw new FirebaseUnavailableError("Identity Toolkit :createSessionCookie unreachable: fetch failed");
+    };
+    try {
+      const res = await ctx.app.inject({ method: "POST", url: "/auth/session", headers: ORIGIN, payload: { idToken: "idt|u1|a@x.com|1" } });
+      expect(res.statusCode).toBe(503);
+      expect(res.json().error).toBe("auth_unavailable");
+    } finally {
+      ctx.auth.createSessionCookie = create;
+    }
+  });
+
   it("a sign-in too old for a session says 'try again', not 'sign in again', until the database is back", async () => {
     // "Continue with Shopify" signed in to Firebase, then /auth/session failed for over 5 minutes.
     // "Sign in again" would send the merchant to prove their email by code, which can't be
