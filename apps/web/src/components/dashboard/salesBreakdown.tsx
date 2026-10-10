@@ -41,13 +41,14 @@ const FONT = 11;
 const textWidth = (s: string) => s.length * 6.3 + 6;
 
 /** Gridline steps a person would pick: 1, 2, 2.5 or 5 × a power of ten. */
-function niceTicks(max: number, count: number): number[] {
+export function niceTicks(max: number, count: number): number[] {
   if (!(max > 0)) return [0];
   const raw = max / count;
   const mag = 10 ** Math.floor(Math.log10(raw));
   const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= raw)!;
   const ticks: number[] = [];
-  for (let v = 0; v < max + step * 0.999; v += step) ticks.push(Math.round(v * 100) / 100);
+  // From a whole-number index, not a running sum: no drift, and sub-cent steps stay distinct.
+  for (let i = 0; i * step < max + step * 0.999; i++) ticks.push(Number((i * step).toPrecision(12)));
   return ticks;
 }
 
@@ -62,7 +63,7 @@ function columnPath(x: number, w: number, y0: number, y1: number): string {
   return `M${x},${y0}V${y1 - r}Q${x},${y1} ${x + r},${y1}H${x + w - r}Q${x + w},${y1} ${x + w},${y1 - r}V${y0}Z`;
 }
 
-function useWidth() {
+export function useWidth() {
   const ref = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
   useEffect(() => {

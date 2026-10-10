@@ -141,6 +141,24 @@ describe("ad account sync", () => {
     expect(await systemDb.alert.count()).toBe(0);
   });
 
+  it("a Meta permission error asks for a reconnect only when ads_read itself was taken back", async () => {
+    const revoked = await connection("meta");
+    let adsRead = "declined";
+    fetchImpl = async (input) => {
+      const u = new URL(String(input));
+      if (u.pathname.endsWith("/me/permissions")) return json({ data: [{ permission: "ads_read", status: adsRead }] });
+      return json({ error: { message: "(#200) Requires ads_read permission", code: 200 } }, 403);
+    };
+    await consume("sync", message({ kind: "ads", connectionId: revoked.id, since: today(), until: today() }).msg, deps);
+    expect((await systemDb.adConnection.findUniqueOrThrow({ where: { id: revoked.id } })).status).toBe("reconnect");
+
+    // Still granted: this login lost the account itself, which reconnecting can't fix.
+    await systemDb.adConnection.update({ where: { id: revoked.id }, data: { status: "active", lastError: null } });
+    adsRead = "granted";
+    await consume("sync", message({ kind: "ads", connectionId: revoked.id, since: today(), until: today() }).msg, deps);
+    expect(await systemDb.adConnection.findUniqueOrThrow({ where: { id: revoked.id } })).toMatchObject({ status: "error", lastError: expect.stringContaining("ads_read") });
+  });
+
   it("rate limits are retried, and only the last attempt marks the account", async () => {
     const conn = await connection("meta");
     fetchImpl = async () => json({ error: { message: "User request limit reached", code: 17 } }, 400);

@@ -17,6 +17,11 @@ const REDACT = new Set([
   "code",
   "customToken",
   "sessionCookie",
+  "client_secret",
+  "clientSecret",
+  "appSecret",
+  "developerToken",
+  "fb_exchange_token",
 ]);
 
 function threshold(): number {

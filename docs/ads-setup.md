@@ -1,4 +1,25 @@
-# Ad accounts: setting up "Continue with Meta", "Continue with Google Ads" and "Continue with Google AdSense"
+# Advertising integrations: "Continue with Meta Ads", "Continue with Google AdSense" and "Continue with Google Ads"
+
+**How a merchant uses it.**
+1. The dashboard's **Advertising** section offers **Connect advertising accounts** while nothing is connected.
+2. That opens **Settings → Advertising**, the integrations page.
+3. They press **Continue with Meta Ads**, **Continue with Google AdSense** or **Continue with Google Ads**, and approve on the platform's own screen.
+4. When the login can see several accounts and some are new, they tick the ones that belong to this store.
+   - The sign-in waits on the server, encrypted, for 15 minutes.
+   - One account, or a reconnect that sees nothing new, skips this step.
+5. They land back on the **dashboard**. The Advertising section shows its numbers as the first sync arrives, usually within a minute or two:
+   - KPI tiles, kept separate for spend and earnings;
+   - money per day;
+   - impressions and clicks per platform;
+   - a by-platform comparison.
+
+**The integrations page** is for management only:
+- each platform's status (Connected, Syncing, Needs reconnecting, Sync problem, Not connected, Not set up);
+- account details and last sync;
+- the permission granted;
+- Refresh, Reconnect or add accounts, Show on dashboard, and Disconnect.
+
+If the person unticks or declines the one permission on the platform's screen, they're told so (`permission_missing`) and nothing is connected.
 
 Merchants connect their ad accounts on **Settings → Ad accounts**. Insights then reads, every hour,
 what each campaign spent and what it brought (views, clicks, purchases, leads, sales value) and
@@ -20,6 +41,7 @@ developer token, so it can work before Google Ads does.
 | --- | --- | --- |
 | `META_APP_ID` | `apps/cloudflare/wrangler.jsonc` → `vars` | no |
 | `META_APP_SECRET` | `npx wrangler secret put META_APP_SECRET` | **yes** |
+| `META_CONFIG_ID` | `wrangler.jsonc` → `vars` (optional: Facebook Login for Business configuration) | no |
 | `GOOGLE_ADS_CLIENT_ID` | `wrangler.jsonc` → `vars` (Google Ads **and** AdSense) | no |
 | `GOOGLE_ADS_CLIENT_SECRET` | `npx wrangler secret put GOOGLE_ADS_CLIENT_SECRET` (Google Ads **and** AdSense) | **yes** |
 | `GOOGLE_ADS_DEVELOPER_TOKEN` | `npx wrangler secret put GOOGLE_ADS_DEVELOPER_TOKEN` | **yes** |
@@ -42,6 +64,12 @@ The redirect (callback) addresses, which both platforms must have registered **e
    - Connect it to your Meta Business portfolio.
 2. In the app, add the **Facebook Login for Business** product.
    - Under its settings, add the Meta callback address above to **Valid OAuth Redirect URIs**.
+   - Under **Configurations**, create one:
+     - token type **User access token**;
+     - assets: **Ad accounts**;
+     - permission: **ads_read** only.
+   - Copy its **Configuration ID** into `META_CONFIG_ID`. Meta recommends it over the `scope` parameter.
+   - Leave `META_CONFIG_ID` empty if the app uses classic Facebook Login instead. Insights then asks for `scope=ads_read`, with `auth_type=rerequest` so a declined permission is asked again.
 3. Add the **Marketing API** product.
 4. In **App settings → Basic**:
    - copy the **App ID** into `META_APP_ID`;
@@ -114,10 +142,11 @@ npx wrangler secret put GOOGLE_ADS_DEVELOPER_TOKEN
 
 1. Put the two public ids in `wrangler.jsonc` and deploy (see `docs/deployment-cloudflare.md`).
 2. The database needs migration `20261009185831_ad_accounts` (run `pnpm db:migrate` against the owner role **before** deploying).
-3. Open **Settings → Ad accounts**, press **Continue with Meta** or **Continue with Google**, and approve.
-   - Every ad account the login can see is connected and shown on the dashboard.
-   - Its last 90 days are fetched in the background.
-   - Untick **Show on dashboard** for any account that isn't this store's.
+3. Open **Settings → Advertising** (or press **Connect advertising accounts** on the dashboard).
+   - Press **Continue with Meta Ads**, **Continue with Google AdSense** or **Continue with Google Ads**, and approve.
+   - If the login sees several accounts, tick the ones for this store.
+   - You land on the dashboard. Each new account's last 90 days are fetched in the background.
+   - Untick **Show on dashboard** later for any account that isn't this store's.
 
 ## How numbers are counted
 

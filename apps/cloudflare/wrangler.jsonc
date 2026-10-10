@@ -57,6 +57,8 @@
     // docs/ads-setup.md walks through all three.
     "META_APP_ID": "",
     "META_API_VERSION": "v25.0",
+    // Facebook Login for Business "Configuration ID" (user access token, ads_read). Optional.
+    "META_CONFIG_ID": "",
     "GOOGLE_ADS_CLIENT_ID": "534794119904-9esdp8dhskcupf6ekbb0iej2dr10gomf.apps.googleusercontent.com",
     "GOOGLE_ADS_API_VERSION": "v25"
   },

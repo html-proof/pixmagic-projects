@@ -41,10 +41,18 @@ export class AdsRetryableError extends Error {
 
 /** Anything else the platform rejected (a bad request, an account we can't read). */
 export class AdsApiError extends Error {
-  constructor(message: string, public status: number) {
+  constructor(
+    message: string,
+    public status: number,
+    /** The platform's own error code, when it gives one (Meta's `error.code`). */
+    public code?: number,
+  ) {
     super(message);
   }
 }
+
+/** Meta's "permission" errors: 10 and 200-299. Either the app lost ads_read, or this login lost the account. */
+export const isMetaPermissionError = (err: unknown) => err instanceof AdsApiError && err.code !== undefined && (err.code === 10 || (err.code >= 200 && err.code <= 299));
 
 export interface AdAccount {
   accountId: string;
@@ -60,7 +68,19 @@ export interface TokenSet {
   refreshToken: string | null;
   /** When the access token stops working, if the platform says. */
   expiresAt: Date | null;
+  /**
+   * The permissions the person actually granted, when the platform says (Google lists them with
+   * the token; Meta answers /me/permissions). People can untick a permission on the consent screen.
+   */
+  grantedScopes?: string[];
 }
+
+/** The one permission each platform needs. Nothing else is asked for. */
+export const REQUIRED_AD_SCOPE = {
+  meta: "ads_read",
+  google: "https://www.googleapis.com/auth/adwords",
+  adsense: "https://www.googleapis.com/auth/adsense.readonly",
+} as const;
 
 const expiry = (seconds: unknown) => (typeof seconds === "number" && seconds > 0 ? new Date(Date.now() + seconds * 1000) : null);
 
@@ -73,13 +93,26 @@ export interface MetaConfig {
   appSecret: string;
   /** Graph / Marketing API version, e.g. "v25.0". */
   version: string;
+  /**
+   * Facebook Login for Business: the Login Configuration made in the app dashboard (user access
+   * token, ads_read). Meta recommends it over `scope`; without one, classic Facebook Login's
+   * `scope` is used.
+   */
+  configId?: string;
   fetchImpl?: FetchLike;
 }
 
-export const META_SCOPES = ["ads_read"];
+export const META_SCOPES: string[] = [REQUIRED_AD_SCOPE.meta];
 
 export function metaAuthorizeUrl(c: MetaConfig, redirectUri: string, state: string): string {
-  const q = new URLSearchParams({ client_id: c.appId, redirect_uri: redirectUri, state, scope: META_SCOPES.join(","), response_type: "code" });
+  const q = new URLSearchParams({ client_id: c.appId, redirect_uri: redirectUri, state, response_type: "code" });
+  if (c.configId) {
+    q.set("config_id", c.configId);
+  } else {
+    q.set("scope", META_SCOPES.join(","));
+    // Ask again for a permission the person declined last time (Meta won't re-show it otherwise).
+    q.set("auth_type", "rerequest");
+  }
   return `https://www.facebook.com/${c.version}/dialog/oauth?${q}`;
 }
 
@@ -90,11 +123,14 @@ async function metaGet<T>(c: MetaConfig, path: string, params: Record<string, st
   if (res.ok && !body.error) return body;
   const e = body.error ?? {};
   const msg = e.message ?? `Meta returned ${res.status}`;
-  // 190: the token is invalid or expired; 102: session expired; 10/200-299: permission missing.
-  if (e.code === 190 || e.code === 102 || res.status === 401) throw new AdsAuthError(msg);
+  // 190: the token is invalid or expired; 102: session expired. Both need the person to connect again.
+  // 10/200-299 (permission) are API errors with their code: reconnecting only helps if ads_read itself
+  // was taken back, which the sync checks (adConnections.ts); a login that lost one account can't fix it.
+  const code = e.code ?? 0;
+  if (code === 190 || code === 102 || res.status === 401) throw new AdsAuthError(msg);
   // 4, 17, 32, 613, 80000-80014: rate limits; 1/2: temporary.
   if ([1, 2, 4, 17, 32, 613].includes(e.code ?? 0) || (e.code ?? 0) >= 80000 || res.status === 429 || res.status >= 500) throw new AdsRetryableError(msg);
-  throw new AdsApiError(msg, res.status);
+  throw new AdsApiError(msg, res.status, e.code);
 }
 
 /** The code from the redirect → a long-lived (about 60 days) user token. */
@@ -107,6 +143,12 @@ export async function metaExchangeCode(c: MetaConfig, code: string, redirectUri:
     fb_exchange_token: short.access_token,
   });
   return { accessToken: long.access_token, refreshToken: null, expiresAt: expiry(long.expires_in) };
+}
+
+/** The permissions the person granted this app (a declined one is listed as "declined"). */
+export async function metaGrantedPermissions(c: MetaConfig, accessToken: string): Promise<string[]> {
+  const res = await metaGet<{ data?: Array<{ permission: string; status: string }> }>(c, "me/permissions", { access_token: accessToken });
+  return (res.data ?? []).filter((p) => p.status === "granted").map((p) => p.permission);
 }
 
 /** Ad accounts the person can read. */
@@ -165,7 +207,7 @@ export interface GoogleConfig extends GoogleOAuthClient {
   version: string;
 }
 
-export const GOOGLE_ADS_SCOPE = "https://www.googleapis.com/auth/adwords";
+export const GOOGLE_ADS_SCOPE = REQUIRED_AD_SCOPE.google;
 
 function googleConsentUrl(c: GoogleOAuthClient, scope: string, redirectUri: string, state: string): string {
   const q = new URLSearchParams({
@@ -185,14 +227,14 @@ export function googleAuthorizeUrl(c: GoogleConfig, redirectUri: string, state: 
   return googleConsentUrl(c, GOOGLE_ADS_SCOPE, redirectUri, state);
 }
 
-async function googleToken(c: GoogleOAuthClient, form: Record<string, string>): Promise<{ access_token: string; expires_in?: number; refresh_token?: string }> {
+async function googleToken(c: GoogleOAuthClient, form: Record<string, string>): Promise<{ access_token: string; expires_in?: number; refresh_token?: string; scope?: string }> {
   const res = await (c.fetchImpl ?? fetch)("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({ client_id: c.clientId, client_secret: c.clientSecret, ...form }).toString(),
   });
-  const body = (await res.json().catch(() => ({}))) as { access_token?: string; expires_in?: number; refresh_token?: string; error?: string; error_description?: string };
-  if (res.ok && body.access_token) return body as { access_token: string; expires_in?: number; refresh_token?: string };
+  const body = (await res.json().catch(() => ({}))) as { access_token?: string; expires_in?: number; refresh_token?: string; scope?: string; error?: string; error_description?: string };
+  if (res.ok && body.access_token) return body as { access_token: string; expires_in?: number; refresh_token?: string; scope?: string };
   const msg = body.error_description ?? body.error ?? `Google returned ${res.status}`;
   if (body.error === "invalid_grant" || res.status === 401) throw new AdsAuthError(msg);
   if (res.status === 429 || res.status >= 500) throw new AdsRetryableError(msg);
@@ -201,7 +243,8 @@ async function googleToken(c: GoogleOAuthClient, form: Record<string, string>): 
 
 export async function googleExchangeCode(c: GoogleOAuthClient, code: string, redirectUri: string): Promise<TokenSet> {
   const t = await googleToken(c, { code, redirect_uri: redirectUri, grant_type: "authorization_code" });
-  return { accessToken: t.access_token, refreshToken: t.refresh_token ?? null, expiresAt: expiry(t.expires_in) };
+  // Google lists what was granted, space-separated; with granular consent a scope can be left unticked.
+  return { accessToken: t.access_token, refreshToken: t.refresh_token ?? null, expiresAt: expiry(t.expires_in), grantedScopes: t.scope ? t.scope.split(/\s+/).filter(Boolean) : undefined };
 }
 
 /** A fresh one-hour access token from the stored refresh token. */
@@ -304,7 +347,7 @@ export async function googleCampaignDays(c: GoogleConfig, accessToken: string, a
 /** AdSense needs only the Google OAuth client: unlike Google Ads, there is no developer token. */
 export type AdsenseConfig = GoogleOAuthClient;
 
-export const ADSENSE_SCOPE = "https://www.googleapis.com/auth/adsense.readonly";
+export const ADSENSE_SCOPE = REQUIRED_AD_SCOPE.adsense;
 
 export function adsenseAuthorizeUrl(c: AdsenseConfig, redirectUri: string, state: string): string {
   return googleConsentUrl(c, ADSENSE_SCOPE, redirectUri, state);

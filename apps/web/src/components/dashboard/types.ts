@@ -69,8 +69,10 @@ export interface AdsModule {
   current: AdTotals;
   previous: { spend: number; clicks: number; conversions: number; conversionValue: number; roas: number | null };
   deltas: { spend: number | null; clicks: number | null; conversions: number | null; roas: number | null };
-  series: Array<{ day: string; spend: number; clicks: number; impressions: number; conversions: number }>;
+  series: Array<{ day: string; spend: number; clicks: number; impressions: number; conversions: number; conversionValue: number }>;
   byProvider: Array<AdTotals & { provider: "meta" | "google" }>;
+  /** Each platform's own days (same shape as series). */
+  seriesByProvider: Array<{ provider: "meta" | "google"; series: Array<{ day: string; spend: number; clicks: number; impressions: number; conversions: number; conversionValue: number }> }>;
   campaigns: Array<AdTotals & { provider: "meta" | "google"; accountId: string; campaignId: string; name: string }>;
   /** Ad spend divided by the store's net sales (same currency only). */
   shareOfSales: number | null;
@@ -233,5 +235,9 @@ export interface Overview {
     catalog?: CatalogModule;
     ads?: AdsModule;
     adsense?: AdsenseModule;
+    /** How many accounts of each platform are connected to the store, hidden ones included. */
+    ad_connections?: { meta: number; google: number; adsense: number; hidden: number };
+    /** Which platforms this server can connect (absent: none is set up). */
+    ad_configured?: { meta: boolean; google: boolean; adsense: boolean };
   };
 }

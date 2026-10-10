@@ -28,10 +28,11 @@ const r2 = (n: number) => Math.round(n * 100) / 100;
 export function availableTopics(ov: Overview, contactsOn: boolean): Topic[] {
   const m = ov.modules;
   const has: Record<Topic, boolean> = {
-    // The overview has its own first row in the list.
+    // The overview has its own first row in the list; ads and AdSense have their own Advertising
+    // section on the main page (advertising.tsx), which opens their detail panels.
     overview: false,
-    ads: !!m.ads,
-    adsense: !!m.adsense,
+    ads: false,
+    adsense: false,
     sales: !!m.sales_overview,
     products: !!(m.top_products || m.catalog),
     shoppers: !!m.funnel,

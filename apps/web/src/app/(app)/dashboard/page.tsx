@@ -7,6 +7,7 @@ import { StoreHeader, type LiveState } from "@/components/dashboard/StoreHeader"
 import { DateRangeBar, useDateRange } from "@/components/dashboard/DateRange";
 import { availableTopics, TopicDetail, useDetailView } from "@/components/dashboard/details";
 import { AreaList, StoreSummary } from "@/components/dashboard/overview";
+import { AdvertisingSection } from "@/components/dashboard/advertising";
 import { fmtRange } from "@/components/dashboard/format";
 import { Icon, type IconName } from "@/components/dashboard/icons";
 import { AnimatedNumber, Sparkline } from "@/components/dashboard/motion";
@@ -80,6 +81,36 @@ const LIVE_EVERY_SEC = 15;
  */
 const IMPORTING_EVERY_SEC = 2;
 const IMPORTING = new Set(["syncing", "pending"]);
+/** Just after an ad account is connected, its first 90 days arrive within a minute or two: look more often until they do. */
+const ADS_FETCHING_EVERY_SEC = 5;
+
+const AD_PLATFORM_NAME: Record<string, string> = { meta: "Meta Ads", google: "Google Ads", adsense: "Google AdSense" };
+
+/**
+ * Coming back from connecting an ad platform (the API sends the browser to
+ * /dashboard?adsConnected=meta&accounts=2&store=…): say so once, show that store, and tidy the
+ * address without touching the dates the page keeps there.
+ */
+function useAdsConnectedNotice(): string | null {
+  const { stores, storesStatus, setStoreId } = useApp();
+  const [notice, setNotice] = useState<string | null>(null);
+  useEffect(() => {
+    if (storesStatus !== "ready") return;
+    const url = new URL(window.location.href);
+    const provider = url.searchParams.get("adsConnected");
+    if (!provider) return;
+    const target = url.searchParams.get("store");
+    if (target && stores.some((s) => s.id === target)) setStoreId(target);
+    const n = Number(url.searchParams.get("accounts") ?? 0);
+    const what = provider === "adsense" ? "AdSense account" : "ad account";
+    setNotice(`${AD_PLATFORM_NAME[provider] ?? "Ad platform"} connected: ${n} ${what}${n === 1 ? "" : "s"}. We're fetching the last 90 days; the Advertising numbers below fill in within a few minutes.`);
+    for (const k of ["adsConnected", "accounts", "store"]) url.searchParams.delete(k);
+    window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+    // Once, when the store list is known.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storesStatus]);
+  return notice;
+}
 
 /** One headline number. Tapping it opens the full details behind it. */
 function Metric({
@@ -148,6 +179,7 @@ function DashboardSkeleton() {
 
 export default function DashboardPage() {
   const { workspace, stores, storesStatus, store } = useApp();
+  const adsNotice = useAdsConnectedNotice();
   const dates = useDateRange(store?.timezone ?? "UTC");
   const detail = useDetailView();
   const asking = dates.asking;
@@ -157,9 +189,10 @@ export default function DashboardPage() {
   const path = store && asking ? `/workspaces/${workspace.id}/stores/${store.id}/overview?${asking.qs}` : null;
   const { data, dataPath, error, loading, checkedAt, failing } = useLiveApi<Overview>(path, everySec * 1000);
   const syncState = data?.store?.status;
+  const adsFetching = !!data && [...(data.modules.ads?.accounts ?? []), ...(data.modules.adsense?.accounts ?? [])].some((a) => a.status === "active" && !a.lastSyncedAt);
   useEffect(() => {
-    setEverySec(syncState && IMPORTING.has(syncState) ? IMPORTING_EVERY_SEC : LIVE_EVERY_SEC);
-  }, [syncState]);
+    setEverySec(syncState && IMPORTING.has(syncState) ? IMPORTING_EVERY_SEC : adsFetching ? ADS_FETCHING_EVERY_SEC : LIVE_EVERY_SEC);
+  }, [syncState, adsFetching]);
   // "Live" while the last successful check is recent (a missed check or two is fine: the odd
   // request fails even when all is well, e.g. a Worker CPU-limit 1102); "checking" until the first
   // answer for this question arrives, or "Reconnecting…" straight away if that check failed
@@ -268,6 +301,8 @@ export default function DashboardPage() {
 
       <DateRangeBar r={dates} shown={ov && { range: ov.range, previous: ov.previous, timezone: ov.store.timezone }} />
 
+      {adsNotice && <Alert kind="success">{adsNotice}</Alert>}
+
       {error && !ov && <Alert kind={isTransient(error) ? "info" : "error"}>{friendlyError(error)}</Alert>}
       {error && ov && olderAnswer && (
         <Alert kind={isTransient(error) ? "info" : "error"}>
@@ -321,7 +356,11 @@ export default function DashboardPage() {
         </section>
       )}
 
-      {ov && <AreaList ov={ov} currency={cur} topics={topics} onOpen={detail.open} canConnectAds={canManage(workspace.role)} />}
+      {/* Ad platforms report about themselves, so they get their own section rather than a row in
+          the store's list: results when connected, one way in when not (components/dashboard/advertising.tsx). */}
+      {ov && <AdvertisingSection ov={ov} manage={canManage(workspace.role)} onOpen={detail.open} />}
+
+      {ov && <AreaList ov={ov} currency={cur} topics={topics} onOpen={detail.open} />}
 
       {disabled.length > 0 && (
         <section aria-labelledby="more-h">

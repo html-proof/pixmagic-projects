@@ -88,20 +88,28 @@ export function adTotals(rows: AdDayRow[]): AdTotals {
   };
 }
 
-/** One point per day of the range: spend, clicks and conversions, quiet days as zero. */
+/** One point per day of the range: spend, clicks, conversions and their value, quiet days as zero. */
 export function adSeries(rows: AdDayRow[], range: { from: string; to: string }) {
-  const by = new Map<string, { spend: number; clicks: number; conversions: number; impressions: number }>();
+  const by = new Map<string, { spend: number; clicks: number; conversions: number; conversionValue: number; impressions: number }>();
   for (const r of rows) {
-    const d = by.get(r.day) ?? { spend: 0, clicks: 0, conversions: 0, impressions: 0 };
+    const d = by.get(r.day) ?? { spend: 0, clicks: 0, conversions: 0, conversionValue: 0, impressions: 0 };
     d.spend += r.spend;
     d.clicks += r.clicks;
     d.conversions += r.conversions;
+    d.conversionValue += r.conversionValue;
     d.impressions += r.impressions;
     by.set(r.day, d);
   }
   return eachDay(range.from, range.to).map((day) => {
     const d = by.get(day);
-    return { day, spend: r2(d?.spend ?? 0), clicks: d?.clicks ?? 0, impressions: d?.impressions ?? 0, conversions: Math.round((d?.conversions ?? 0) * 100) / 100 };
+    return {
+      day,
+      spend: r2(d?.spend ?? 0),
+      clicks: d?.clicks ?? 0,
+      impressions: d?.impressions ?? 0,
+      conversions: Math.round((d?.conversions ?? 0) * 100) / 100,
+      conversionValue: r2(d?.conversionValue ?? 0),
+    };
   });
 }
 

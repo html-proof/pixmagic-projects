@@ -76,6 +76,15 @@ describe("Meta", () => {
     await expect(metaAdAccounts(meta(expired.fetchImpl), "T")).rejects.toBeInstanceOf(AdsAuthError);
     const busy = fake(() => json({ error: { message: "User request limit reached", code: 17 } }, 400));
     await expect(metaAdAccounts(meta(busy.fetchImpl), "T")).rejects.toBeInstanceOf(AdsRetryableError);
+    // A permission error keeps Meta's code, so a sync can tell "ads_read taken back" from "lost one account".
+    const denied = fake(() => json({ error: { message: "(#200) Requires ads_read permission", code: 200 } }, 403));
+    await expect(metaAdAccounts(meta(denied.fetchImpl), "T")).rejects.toMatchObject({ status: 403, code: 200 });
+  });
+
+  it("uses a Facebook Login for Business configuration when one is set", () => {
+    const url = new URL(metaAuthorizeUrl({ ...meta(fetch), configId: "cfg9" }, "https://app/cb", "st"));
+    expect(url.searchParams.get("config_id")).toBe("cfg9");
+    expect(url.searchParams.has("scope")).toBe(false);
   });
 });
 

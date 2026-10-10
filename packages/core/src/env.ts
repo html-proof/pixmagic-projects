@@ -42,6 +42,8 @@ const schema = z.object({
   META_APP_ID: z.string().optional().default(""),
   META_APP_SECRET: z.string().optional().default(""),
   META_API_VERSION: z.string().default("v25.0"),
+  /** Facebook Login for Business configuration id (public). Empty: classic `scope=ads_read`. */
+  META_CONFIG_ID: z.string().optional().default(""),
   GOOGLE_ADS_CLIENT_ID: z.string().optional().default(""),
   GOOGLE_ADS_CLIENT_SECRET: z.string().optional().default(""),
   GOOGLE_ADS_DEVELOPER_TOKEN: z.string().optional().default(""),

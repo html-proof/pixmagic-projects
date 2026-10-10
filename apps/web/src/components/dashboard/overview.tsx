@@ -4,8 +4,6 @@ import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { fmtDay, fmtMonth, fmtRange, fmtRelative, hourRange, plural } from "./format";
 import { STEP_LABEL } from "./funnel";
 import { AreaPreview } from "./previews";
-import { useRouter } from "next/navigation";
-import { GoogleIcon, MetaIcon } from "@/components/BrandIcons";
 import { Icon } from "./icons";
 import { Panel, Stat, type Tone } from "./primitives";
 import { topicInfo, topicSummary, type Topic } from "./topics";
@@ -231,9 +229,8 @@ function AreaCard({
 }
 
 /** Every part of the store, each with a small picture of it: the full overview first, then each area, worst first. */
-export function AreaList({ ov, currency, topics, onOpen, canConnectAds = false }: { ov: Overview; currency: string; topics: Topic[]; onOpen: (t: Topic) => void; canConnectAds?: boolean }) {
+export function AreaList({ ov, currency, topics, onOpen }: { ov: Overview; currency: string; topics: Topic[]; onOpen: (t: Topic) => void }) {
   const rows = areaRows(ov, currency, topics);
-  const router = useRouter();
   const counts = countsOf(businessHealth(ov, currency));
   return (
     <section aria-labelledby="areas-h">
@@ -256,26 +253,6 @@ export function AreaList({ ov, currency, topics, onOpen, canConnectAds = false }
           preview={counts.graded > 0 ? <AreaPreview topic="overview" ov={ov} currency={currency} health={{ attention: counts.attention, watch: counts.watch, good: counts.good, info: 0 }} /> : null}
           onOpen={() => onOpen("overview")}
         />
-        {!ov.modules.ads && !ov.modules.adsense && canConnectAds && (
-          <AreaCard
-            topic="ads"
-            title="Ads"
-            icon={
-              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent/12 text-accent">
-                <Icon name="megaphone" className="h-5 w-5" />
-              </span>
-            }
-            text="Connect Meta or Google Ads to see what you spend each day, the clicks and sales it brings, and what it costs next to your sales. Or Google AdSense, for what your site earns from ads shown on it."
-            preview={
-              <span className="flex flex-wrap items-center gap-2 text-xs text-muted">
-                <span className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-white px-2 py-1 text-[#1b1b18]"><MetaIcon size={14} />Continue with Meta</span>
-                <span className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-white px-2 py-1 text-[#1b1b18]"><GoogleIcon size={14} />Continue with Google Ads</span>
-                <span className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-white px-2 py-1 text-[#1b1b18]"><GoogleIcon size={14} />Continue with Google AdSense</span>
-              </span>
-            }
-            onOpen={() => router.push("/settings/ads")}
-          />
-        )}
         {rows.map((r) => (
           <AreaCard
             key={r.topic}

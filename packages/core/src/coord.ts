@@ -11,6 +11,8 @@ export interface Coord {
   put(key: string, value: string, ttlSec: number): Promise<void>;
   /** Atomically read and delete a value (null when missing or expired). */
   take(key: string): Promise<string | null>;
+  /** Read a value without deleting it (null when missing or expired). */
+  peek(key: string): Promise<string | null>;
   /** Try to take an expiring lock. Returns false if someone else holds it. */
   acquire(key: string, ttlMs: number): Promise<boolean>;
   release(key: string): Promise<void>;
@@ -41,6 +43,9 @@ export function memoryCoord(): Coord & { clear(): void } {
       const e = live(key);
       m.delete(key);
       return e?.value ?? null;
+    },
+    async peek(key) {
+      return live(key)?.value ?? null;
     },
     async acquire(key, ttlMs) {
       if (live(key)) return false;

@@ -24,12 +24,21 @@ const NO_KEYS = Object.fromEntries(Object.keys(KEYS).map((k) => [k, ""]));
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
-/** Meta's token endpoints and ad accounts, as seen by the callback. */
+/** Meta's token endpoints, permissions and ad accounts, as seen by the callback. */
+const metaPlatformWith =
+  (adsRead: "granted" | "declined"): FetchLike =>
+  async (input) => {
+    const u = new URL(String(input));
+    if (u.pathname.endsWith("/me/permissions")) return json({ data: [{ permission: "public_profile", status: "granted" }, { permission: "ads_read", status: adsRead }] });
+    return metaPlatform(input);
+  };
+
 const metaPlatform: FetchLike = async (input) => {
   const u = new URL(String(input));
   if (u.pathname.endsWith("/oauth/access_token")) {
     return u.searchParams.get("grant_type") === "fb_exchange_token" ? json({ access_token: "META_LONG_SECRET", expires_in: 5_184_000 }) : json({ access_token: "META_SHORT" });
   }
+  if (u.pathname.endsWith("/me/permissions")) return json({ data: [{ permission: "ads_read", status: "granted" }] });
   if (u.pathname.endsWith("/me/adaccounts")) {
     return json({ data: [{ id: "act_1", name: "Shop ads", currency: "USD", timezone_name: "UTC" }, { id: "act_2", name: "EU ads", currency: "EUR", timezone_name: "Europe/Paris" }] });
   }
@@ -89,6 +98,22 @@ async function connectFlow(provider: "meta" | "google" | "adsense", query: Recor
   return { start, cb, state };
 }
 
+const pendingUrl = (pick: string) => `/workspaces/${ws}/stores/${storeId}/ads/pending/${pick}`;
+const pickOf = (location: string) => new URL(location).searchParams.get("choose");
+
+/** Connect, and when the platform shows several accounts, choose them all (as the picker does by default). */
+async function connectAll(provider: "meta" | "google" | "adsense") {
+  const flow = await connectFlow(provider);
+  const pick = pickOf(flow.cb.headers.location as string);
+  if (pick) {
+    const list = await ctx.app.inject({ method: "GET", url: pendingUrl(pick), headers });
+    const ids = (list.json().accounts as Array<{ accountId: string }>).map((a) => a.accountId);
+    const done = await ctx.app.inject({ method: "POST", url: pendingUrl(pick), headers, payload: { accountIds: ids } });
+    expect(done.statusCode).toBe(200);
+  }
+  return flow;
+}
+
 describe("connecting ad accounts", () => {
   it("says when a platform isn't set up, instead of sending people to an error page", async () => {
     ctx.setEnv(NO_KEYS);
@@ -99,16 +124,30 @@ describe("connecting ad accounts", () => {
     expect(res.json().error).toBe("not_configured");
   });
 
-  it("Continue with Meta: read-only access, every ad account saved with an encrypted token, history fetched", async () => {
+  it("Continue with Meta Ads: read-only access, the person chooses accounts, each saved with an encrypted token, history fetched", async () => {
     ctx.setFetch(metaPlatform);
     const { start, cb } = await connectFlow("meta");
     const url = new URL(start.json().url);
     expect(url.origin).toBe("https://www.facebook.com");
     expect(url.searchParams.get("scope")).toBe("ads_read");
+    expect(url.searchParams.get("auth_type")).toBe("rerequest");
     expect(url.searchParams.get("redirect_uri")).toBe("http://localhost:3001/api/ads/meta/callback");
 
+    // Two accounts: nothing is connected until the person chooses, on the integrations page.
     expect(cb.statusCode).toBe(302);
-    expect(cb.headers.location).toBe(`http://localhost:3001/settings/ads?connected=meta&accounts=2&store=${storeId}`);
+    const location = new URL(cb.headers.location as string);
+    expect(location.pathname).toBe("/settings/ads");
+    expect(location.searchParams.get("store")).toBe(storeId);
+    const pick = location.searchParams.get("choose")!;
+    expect(await systemDb.adConnection.count()).toBe(0);
+    const offered = await ctx.app.inject({ method: "GET", url: pendingUrl(pick), headers });
+    expect(offered.statusCode).toBe(200);
+    expect(offered.body).not.toContain("META_LONG_SECRET");
+    expect(offered.body).not.toContain("Enc");
+    expect(offered.json()).toMatchObject({ provider: "meta", accounts: [{ accountId: "act_1", name: "Shop ads", currency: "USD", connected: false }, { accountId: "act_2", connected: false }] });
+    const chose = await ctx.app.inject({ method: "POST", url: pendingUrl(pick), headers, payload: { accountIds: ["act_1", "act_2"] } });
+    expect(chose.json()).toEqual({ provider: "meta", connected: 2 });
+
     const rows = await systemDb.adConnection.findMany({ where: { storeId }, orderBy: { accountId: "asc" } });
     expect(rows.map((r) => [r.provider, r.accountId, r.accountName, r.currency, r.enabled, r.status])).toEqual([
       ["meta", "act_1", "Shop ads", "USD", true, "active"],
@@ -144,7 +183,8 @@ describe("connecting ad accounts", () => {
     const url = new URL(start.json().url);
     expect(url.searchParams.get("access_type")).toBe("offline");
     expect(url.searchParams.get("scope")).toBe("https://www.googleapis.com/auth/adwords");
-    expect(cb.headers.location).toContain("connected=google&accounts=1");
+    // One account: nothing to choose, straight to the numbers.
+    expect(cb.headers.location).toBe(`http://localhost:3001/dashboard?adsConnected=google&accounts=1&store=${storeId}`);
     const row = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, provider: "google" } });
     expect(row).toMatchObject({ accountId: "901", accountName: "Store search", loginCustomerId: "900" });
     expect(row.refreshTokenEnc).toBeTruthy();
@@ -164,7 +204,7 @@ describe("connecting ad accounts", () => {
     expect(url.searchParams.get("scope")).toBe("https://www.googleapis.com/auth/adsense.readonly");
     expect(url.searchParams.get("access_type")).toBe("offline");
     expect(url.searchParams.get("redirect_uri")).toBe("http://localhost:3001/api/ads/adsense/callback");
-    expect(cb.headers.location).toBe(`http://localhost:3001/settings/ads?connected=adsense&accounts=1&store=${storeId}`);
+    expect(cb.headers.location).toBe(`http://localhost:3001/dashboard?adsConnected=adsense&accounts=1&store=${storeId}`);
 
     const row = await systemDb.adConnection.findFirstOrThrow({ where: { storeId } });
     expect(row).toMatchObject({ provider: "adsense", accountId: "pub-77", accountName: "Shop site", currency: null, timezone: "UTC", enabled: true });
@@ -185,6 +225,103 @@ describe("connecting ad accounts", () => {
     expect(cb.headers.location).toContain("error=no_accounts");
     expect(cb.headers.location).toContain("provider=adsense");
     expect(await systemDb.adConnection.count()).toBe(0);
+  });
+
+  it("choosing accounts: only the ticked ones are connected, a choice is this person's and works once", async () => {
+    ctx.setFetch(metaPlatform);
+    const { cb } = await connectFlow("meta");
+    const pick = pickOf(cb.headers.location as string)!;
+    // Someone else in the workspace can't see or use it.
+    const other = await signIn(ctx, "ads-admin", "admin@x.com");
+    const me = await systemDb.user.findFirstOrThrow({ where: { email: "admin@x.com" } });
+    await systemDb.membership.create({ data: { workspaceId: ws, userId: me.id, role: "admin" } });
+    expect((await ctx.app.inject({ method: "GET", url: pendingUrl(pick), headers: other.headers })).statusCode).toBe(404);
+    // An account that wasn't offered is refused, and the choice survives the mistake.
+    const bad = await ctx.app.inject({ method: "POST", url: pendingUrl(pick), headers, payload: { accountIds: ["act_1", "act_999"] } });
+    expect(bad.statusCode).toBe(400);
+    const ok = await ctx.app.inject({ method: "POST", url: pendingUrl(pick), headers, payload: { accountIds: ["act_2"] } });
+    expect(ok.json()).toEqual({ provider: "meta", connected: 1 });
+    expect((await systemDb.adConnection.findMany()).map((r) => r.accountId)).toEqual(["act_2"]);
+    expect((await ctx.app.inject({ method: "POST", url: pendingUrl(pick), headers, payload: { accountIds: ["act_1"] } })).statusCode).toBe(404);
+
+    // Reconnecting shows the one already chosen as connected, and Cancel drops the sign-in.
+    const again = await connectFlow("meta");
+    const pick2 = pickOf(again.cb.headers.location as string)!;
+    const list = await ctx.app.inject({ method: "GET", url: pendingUrl(pick2), headers });
+    expect(list.json().accounts.map((a: { accountId: string; connected: boolean }) => [a.accountId, a.connected])).toEqual([["act_1", false], ["act_2", true]]);
+    expect((await ctx.app.inject({ method: "DELETE", url: pendingUrl(pick2), headers })).statusCode).toBe(200);
+    expect((await ctx.app.inject({ method: "GET", url: pendingUrl(pick2), headers })).statusCode).toBe(404);
+    expect(await systemDb.adConnection.count()).toBe(1);
+  });
+
+  it("the choice decides what shows: an unticked connected account is hidden, a ticked hidden one comes back", async () => {
+    ctx.setFetch(metaPlatform);
+    await connectAll("meta");
+    await systemDb.adConnection.updateMany({ where: { accountId: "act_1" }, data: { enabled: false } });
+    // A third account appears, so reconnecting asks again.
+    ctx.setFetch(async (input) => {
+      const u = new URL(String(input));
+      if (u.pathname.endsWith("/me/adaccounts")) return json({ data: [{ id: "act_1", currency: "USD" }, { id: "act_2", currency: "EUR" }, { id: "act_3", currency: "USD" }] });
+      return metaPlatform(input);
+    });
+    const { cb } = await connectFlow("meta");
+    const pick = pickOf(cb.headers.location as string)!;
+    ctx.deps.queues.clear();
+    const ok = await ctx.app.inject({ method: "POST", url: pendingUrl(pick), headers, payload: { accountIds: ["act_1", "act_3"] } });
+    expect(ok.json()).toEqual({ provider: "meta", connected: 2 });
+    const rows = await systemDb.adConnection.findMany({ orderBy: { accountId: "asc" } });
+    expect(rows.map((r) => [r.accountId, r.enabled])).toEqual([["act_1", true], ["act_2", false], ["act_3", true]]);
+    // The two shown ones are fetched; the hidden one is left alone.
+    expect((ctx.deps.queues.sent.sync as unknown as AdsSyncData[]).map((j) => j.connectionId).sort()).toEqual([rows[0]!.id, rows[2]!.id].sort());
+  });
+
+  it("a reconnect that sees nothing new skips the choice and goes back to the dashboard", async () => {
+    ctx.setFetch(metaPlatform);
+    await connectAll("meta");
+    await systemDb.adConnection.updateMany({ data: { status: "reconnect", lastError: "Session has expired" } });
+    const { cb } = await connectFlow("meta");
+    expect(cb.headers.location).toBe(`http://localhost:3001/dashboard?adsConnected=meta&accounts=2&store=${storeId}`);
+    expect((await systemDb.adConnection.findMany()).every((r) => r.status === "active" && r.lastError === null)).toBe(true);
+  });
+
+  it("a permission left unticked on the platform's screen is named, and nothing is connected", async () => {
+    ctx.setFetch(metaPlatformWith("declined"));
+    const meta = await connectFlow("meta");
+    expect(meta.cb.headers.location).toContain("error=permission_missing");
+    expect(meta.cb.headers.location).toContain("provider=meta");
+    ctx.setFetch(async (input) => {
+      const u = new URL(String(input));
+      if (u.host === "oauth2.googleapis.com") return json({ access_token: "AT", refresh_token: "RT", expires_in: 3599, scope: "openid email" });
+      return json({ error: { message: "should not be asked" } }, 500);
+    });
+    const sense = await connectFlow("adsense");
+    expect(sense.cb.headers.location).toContain("error=permission_missing");
+    expect(await systemDb.adConnection.count()).toBe(0);
+  });
+
+  it("Facebook Login for Business: a configuration id replaces scope when it's set", async () => {
+    ctx.setEnv({ ...KEYS, META_CONFIG_ID: "cfg_123" });
+    const url = new URL((await connect("meta")).json().url);
+    expect(url.searchParams.get("config_id")).toBe("cfg_123");
+    expect(url.searchParams.get("scope")).toBeNull();
+  });
+
+  it("refresh can be for one platform", async () => {
+    ctx.setFetch(metaPlatform);
+    await connectAll("meta");
+    ctx.setFetch(adsensePlatform());
+    await connectAll("adsense");
+    ctx.deps.queues.clear();
+    const one = await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/stores/${storeId}/ads/sync`, headers, payload: { provider: "adsense" } });
+    expect(one.json().queued).toBe(1);
+    const all = await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/stores/${storeId}/ads/sync`, headers });
+    expect(all.json().queued).toBe(3);
+    const list = await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${storeId}/ads`, headers });
+    expect(list.json().connections.map((c: { provider: string; permission: string }) => [c.provider, c.permission])).toEqual([
+      ["adsense", "https://www.googleapis.com/auth/adsense.readonly"],
+      ["meta", "ads_read"],
+      ["meta", "ads_read"],
+    ]);
   });
 
   it("refuses a callback that isn't this browser's, isn't this person's, or was cancelled", async () => {
@@ -211,7 +348,7 @@ describe("connecting ad accounts", () => {
 
   it("lets owners and admins connect, hide and disconnect; analysts and viewers only look", async () => {
     ctx.setFetch(metaPlatform);
-    await connectFlow("meta");
+    await connectAll("meta");
     const [a, b] = await systemDb.adConnection.findMany({ where: { storeId }, orderBy: { accountId: "asc" } });
     await systemDb.adCampaignDaily.create({ data: { workspaceId: ws, storeId, connectionId: b!.id, provider: "meta", accountId: "act_2", campaignId: "c", campaignName: "C", day: "2026-10-01", spend: 5 } });
 
@@ -241,7 +378,7 @@ describe("connecting ad accounts", () => {
 describe("ads on the dashboard", () => {
   it("adds up spend and results for the dates, in one currency, against the store's sales", async () => {
     ctx.setFetch(metaPlatform);
-    await connectFlow("meta");
+    await connectAll("meta");
     const usd = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, accountId: "act_1" } });
     const eur = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, accountId: "act_2" } });
     const today = localDay(new Date(), "UTC");
@@ -269,6 +406,11 @@ describe("ads on the dashboard", () => {
     expect(ads.series.find((d: { day: string }) => d.day === day(1)).spend).toBe(30);
     expect(ads.campaigns.map((c: { name: string; spend: number }) => [c.name, c.spend])).toEqual([["Spring", 30], ["Retarget", 10]]);
     expect(ads.byProvider).toEqual([expect.objectContaining({ provider: "meta", spend: 40 })]);
+    expect(ads.seriesByProvider).toEqual([{ provider: "meta", series: expect.any(Array) }]);
+    expect(ads.seriesByProvider[0].series.find((d: { day: string }) => d.day === day(1))).toMatchObject({ spend: 30, conversionValue: 120 });
+    expect(res.json().modules.ad_connections).toEqual({ meta: 2, google: 0, adsense: 0, hidden: 0 });
+    // Only what this server can connect is offered (all three keys are set in these tests).
+    expect(res.json().modules.ad_configured).toEqual({ meta: true, google: true, adsense: true });
     expect(ads.accounts.map((a: { accountId: string; counted: boolean }) => [a.accountId, a.counted])).toEqual([["act_1", true], ["act_2", false]]);
     // $40 of ads against $400 of net sales.
     expect(ads.shareOfSales).toBe(0.1);
@@ -277,6 +419,8 @@ describe("ads on the dashboard", () => {
     await systemDb.adConnection.updateMany({ where: { storeId }, data: { enabled: false } });
     const after = await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${storeId}/overview?preset=7d`, headers });
     expect(after.json().modules.ads).toBeUndefined();
+    // Still connected, just hidden: the dashboard can tell that apart from "never connected".
+    expect(after.json().modules.ad_connections).toEqual({ meta: 2, google: 0, adsense: 0, hidden: 2 });
   });
 });
 
@@ -286,7 +430,7 @@ describe("AdSense on the dashboard", () => {
     const day = (n: number) => addDays(today, -n);
     // An ad account that spends...
     ctx.setFetch(metaPlatform);
-    await connectFlow("meta");
+    await connectAll("meta");
     const usd = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, accountId: "act_1" } });
     await systemDb.adCampaignDaily.create({ data: { workspaceId: ws, storeId, connectionId: usd.id, provider: "meta", accountId: "act_1", campaignId: "1", campaignName: "Spring", day: day(1), spend: 30, clicks: 10 } });
     // ...and an AdSense account that earns, synced through the real client.

@@ -29,7 +29,7 @@ import {
   type JourneyPageRow,
   type SiteSection,
 } from "@app/shared";
-import { declaredOptionalScopes, declaredScopes, logger, revocableScopes } from "@app/core";
+import { adsConfigured, declaredOptionalScopes, declaredScopes, logger, revocableScopes } from "@app/core";
 import { HttpError, requireWorkspace, type Deps } from "../context.js";
 import type { App } from "../app.js";
 import { autoRefresh } from "../sync.js";
@@ -523,6 +523,8 @@ async function adsModule(tx: Tx, { ws, storeId }: Scope, range: DateRange, previ
     },
     series: adSeries(cur, range),
     byProvider: providers.map((p) => ({ provider: p, ...adTotals(cur.filter((r) => r.provider === p)) })),
+    /** Each platform's own days, for comparing platforms on the main page. */
+    seriesByProvider: providers.map((p) => ({ provider: p, series: adSeries(cur.filter((r) => r.provider === p), range) })),
     campaigns: campaignTotals(cur, 10),
     /** Ad spend as a share of the store's net sales, when both are in the same currency. */
     shareOfSales: currency === storeCurrency && netSales !== null && netSales > 0 ? current.spend / netSales : null,
@@ -807,6 +809,19 @@ export function dashboardRoutes(app: App, deps: Deps) {
       if (ads) modules.ads = ads;
       const adsense = await adsenseModule(tx, scope, range, previous, store.currency, netSales);
       if (adsense) modules.adsense = adsense;
+      // Which platforms are connected at all, hidden accounts included: the Advertising section
+      // offers the ones that aren't, and says so when every account is hidden. Counts only, and
+      // only for a store with ad accounts (absent means none).
+      const adCounts = await tx.adConnection.groupBy({ by: ["provider", "enabled"], where: { workspaceId: ws, storeId: store.id }, _count: { _all: true } });
+      const connected = { meta: 0, google: 0, adsense: 0, hidden: 0 };
+      for (const g of adCounts) {
+        if (g.provider === "meta" || g.provider === "google" || g.provider === "adsense") connected[g.provider] += g._count._all;
+        if (!g.enabled) connected.hidden += g._count._all;
+      }
+      if (adCounts.length) modules.ad_connections = connected;
+      // Which platforms this server can connect at all: the dashboard only offers those.
+      const configured = adsConfigured();
+      if (configured.meta || configured.google || configured.adsense) modules.ad_configured = configured;
 
       if (enabled.has("channels")) modules.channels = await channels(tx, scope, range);
       if (enabled.has("order_timing")) modules.order_timing = await orderTiming(tx, scope, range, store.timezone);

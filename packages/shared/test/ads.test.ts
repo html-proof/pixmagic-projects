@@ -99,10 +99,10 @@ describe("ad totals", () => {
 
   it("charts every day of the range and ranks campaigns by spend", () => {
     expect(adSeries(rows, { from: "2026-10-01", to: "2026-10-04" })).toEqual([
-      { day: "2026-10-01", spend: 10, clicks: 20, impressions: 1000, conversions: 1 },
-      { day: "2026-10-02", spend: 0, clicks: 0, impressions: 0, conversions: 0 },
-      { day: "2026-10-03", spend: 50, clicks: 70, impressions: 3500, conversions: 3 },
-      { day: "2026-10-04", spend: 0, clicks: 0, impressions: 0, conversions: 0 },
+      { day: "2026-10-01", spend: 10, clicks: 20, impressions: 1000, conversions: 1, conversionValue: 50 },
+      { day: "2026-10-02", spend: 0, clicks: 0, impressions: 0, conversions: 0, conversionValue: 0 },
+      { day: "2026-10-03", spend: 50, clicks: 70, impressions: 3500, conversions: 3, conversionValue: 150 },
+      { day: "2026-10-04", spend: 0, clicks: 0, impressions: 0, conversions: 0, conversionValue: 0 },
     ]);
     const top = campaignTotals([...rows, row({ day: "2026-10-04", campaignName: "Spring (renamed)", spend: 1 })]);
     expect(top.map((c) => [c.provider, c.name, c.spend])).toEqual([

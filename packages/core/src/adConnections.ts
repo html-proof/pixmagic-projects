@@ -12,13 +12,16 @@ import {
   adsenseSiteDays,
   googleCampaignDays,
   googleRefresh,
+  isMetaPermissionError,
   metaCampaignDays,
+  metaGrantedPermissions,
   type AdAccount,
   type AdsenseConfig,
   type GoogleConfig,
   type MetaConfig,
   type TokenSet,
 } from "./ads.js";
+import type { Coord } from "./coord.js";
 import { env } from "./env.js";
 import { logger } from "./logger.js";
 import type { Producer, Queues } from "./queues.js";
@@ -29,7 +32,7 @@ import { keyring } from "./tokens.js";
 export function metaConfig(fetchImpl?: FetchLike): MetaConfig | null {
   const e = env();
   if (!e.META_APP_ID || !e.META_APP_SECRET) return null;
-  return { appId: e.META_APP_ID, appSecret: e.META_APP_SECRET, version: e.META_API_VERSION, fetchImpl };
+  return { appId: e.META_APP_ID, appSecret: e.META_APP_SECRET, version: e.META_API_VERSION, configId: e.META_CONFIG_ID || undefined, fetchImpl };
 }
 
 export function googleConfig(fetchImpl?: FetchLike): GoogleConfig | null {
@@ -64,6 +67,75 @@ export function encryptAdTokens(storeId: string, provider: AdProvider, t: TokenS
     refreshTokenEnc: t.refreshToken ? encrypt(t.refreshToken, k, aad(storeId, provider, "refresh")) : null,
     accessTokenExpiresAt: t.expiresAt,
     tokenKeyVersion: keyVersionOf(accessTokenEnc),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Choosing accounts after sign-in: the sign-in's tokens wait here (encrypted, a few minutes)
+// while the person picks which of the accounts it can see to connect.
+// ---------------------------------------------------------------------------
+
+export const ADS_PENDING_TTL_S = 900;
+
+export interface PendingAdConnect {
+  userId: string;
+  workspaceId: string;
+  storeId: string;
+  provider: AdProvider;
+  accounts: AdAccount[];
+  /** Encrypted exactly as a connection stores them (same AAD), so they can't move to another store. */
+  accessTokenEnc: string;
+  refreshTokenEnc: string | null;
+  accessTokenExpiresAt: string | null;
+  /** Epoch ms after which the choice is gone. */
+  expiresAt: number;
+}
+
+const pendingKey = (nonce: string) => `ads-pending:${nonce}`;
+
+export async function holdPendingAdConnect(
+  coord: Coord,
+  nonce: string,
+  input: { userId: string; workspaceId: string; storeId: string; provider: AdProvider; accounts: AdAccount[]; tokens: TokenSet },
+) {
+  const enc = encryptAdTokens(input.storeId, input.provider, input.tokens);
+  const pending: PendingAdConnect = {
+    userId: input.userId,
+    workspaceId: input.workspaceId,
+    storeId: input.storeId,
+    provider: input.provider,
+    accounts: input.accounts,
+    accessTokenEnc: enc.accessTokenEnc,
+    refreshTokenEnc: enc.refreshTokenEnc,
+    accessTokenExpiresAt: input.tokens.expiresAt ? input.tokens.expiresAt.toISOString() : null,
+    expiresAt: Date.now() + ADS_PENDING_TTL_S * 1000,
+  };
+  await coord.put(pendingKey(nonce), JSON.stringify(pending), ADS_PENDING_TTL_S);
+}
+
+/** Read a pending choice without using it up. */
+export async function peekPendingAdConnect(coord: Coord, nonce: string): Promise<PendingAdConnect | null> {
+  const raw = await coord.peek(pendingKey(nonce));
+  if (!raw) return null;
+  const p = JSON.parse(raw) as PendingAdConnect;
+  return p.expiresAt > Date.now() ? p : null;
+}
+
+/** Use a pending choice up: it can be confirmed (or cancelled) once. */
+export async function takePendingAdConnect(coord: Coord, nonce: string): Promise<PendingAdConnect | null> {
+  const raw = await coord.take(pendingKey(nonce));
+  if (!raw) return null;
+  const p = JSON.parse(raw) as PendingAdConnect;
+  return p.expiresAt > Date.now() ? p : null;
+}
+
+/** The sign-in's tokens back from a pending choice. */
+export function pendingTokens(p: PendingAdConnect): TokenSet {
+  const k = keyring();
+  return {
+    accessToken: decrypt(p.accessTokenEnc, k, aad(p.storeId, p.provider, "access")),
+    refreshToken: p.refreshTokenEnc ? decrypt(p.refreshTokenEnc, k, aad(p.storeId, p.provider, "refresh")) : null,
+    expiresAt: p.accessTokenExpiresAt ? new Date(p.accessTokenExpiresAt) : null,
   };
 }
 
@@ -208,7 +280,17 @@ export async function syncAdConnection(connectionId: string, since: string, unti
     if (conn.provider === "meta") {
       const cfg = metaConfig(fetchImpl);
       if (!cfg) throw new AdsApiError("Meta isn't set up on this server", 503);
-      const rows: AdDayRow[] = await metaCampaignDays(cfg, token, conn.accountId, since, until);
+      let rows: AdDayRow[];
+      try {
+        rows = await metaCampaignDays(cfg, token, conn.accountId, since, until);
+      } catch (err) {
+        // A permission error means "connect again" only when ads_read itself was taken back.
+        if (isMetaPermissionError(err)) {
+          const granted = await metaGrantedPermissions(cfg, token).catch(() => null);
+          if (granted && !granted.includes("ads_read")) throw new AdsAuthError("Meta's ads_read permission was taken back");
+        }
+        throw err;
+      }
       stored = await storeAdDays(conn, since, until, rows);
     } else if (conn.provider === "google") {
       const cfg = googleConfig(fetchImpl);
