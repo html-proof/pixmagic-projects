@@ -9,5 +9,8 @@ if (!process.env.DATABASE_URL && existsSync(rootEnv)) process.loadEnvFile(rootEn
 export default defineConfig({
   schema: "prisma/schema.prisma",
   migrations: { path: "prisma/migrations" },
-  datasource: { url: env("DATABASE_URL") },
+  // `prisma generate` (this package's postinstall) needs no database, and a fresh clone or a CI
+  // install has no DATABASE_URL yet: env() would throw and fail `pnpm install`. Commands that do
+  // connect (migrate, db execute) still refuse to run without one.
+  ...(process.env.DATABASE_URL ? { datasource: { url: env("DATABASE_URL") } } : {}),
 });
