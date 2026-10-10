@@ -47,6 +47,8 @@ export const LIMITS = {
   resync: { max: 1, windowSec: 300 },
   /** Optional-scope refresh/revoke, per store: one Shopify call each. */
   scopes: { max: 3, windowSec: 10 },
+  /** Ad accounts "Sync now", per store and user: each queues a sync per connected account. */
+  adsSync: { max: 6, windowSec: 600 },
 
   // ---- Public ingest ----
   /** Web pixel, per IP (a storefront sends a batch per page or so). */

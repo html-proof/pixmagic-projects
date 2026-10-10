@@ -36,7 +36,7 @@ import {
 import { AD_PROVIDERS, randomToken, safeEqual, type AdProvider } from "@app/shared";
 import { body, clientIp, HttpError, loadUser, requireWorkspace, type Deps } from "../context.js";
 import type { App } from "../app.js";
-import { limit } from "../rateLimit.js";
+import { limit, LIMITS } from "../rateLimit.js";
 
 /**
  * "Continue with Meta" / "Continue with Google Ads": connect a store's ad accounts, read-only, so
@@ -340,7 +340,7 @@ export function adsRoutes(app: App, deps: Deps) {
     const { ws, storeId } = c.req.param();
     const access = await requireWorkspace(c, deps, ws, "stores:manage");
     const { provider } = z.object({ provider: providerSchema.optional() }).parse(await body(c));
-    await limit(deps.coord, `rl:ads-sync:${storeId}:${access.user?.id ?? clientIp(c)}`, 6, 600);
+    await limit(deps.coord, `rl:ads-sync:${storeId}:${access.user?.id ?? clientIp(c)}`, LIMITS.adsSync);
     await storeInWorkspace(ws, storeId);
     const conns = await withTenant(ws, (tx) =>
       tx.adConnection.findMany({ where: { workspaceId: ws, storeId, enabled: true, status: { not: "reconnect" }, ...(provider ? { provider } : {}) } }),
