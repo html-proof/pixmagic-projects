@@ -324,7 +324,7 @@ function StackedCard({
 
   return (
     <motion.div
-      className="absolute inset-x-0"
+      className="absolute inset-x-0 will-change-transform"
       style={{
         top: `calc(var(--stack-head) + var(--stack-edge) * ${index})`,
         zIndex: index + 1,
@@ -336,7 +336,7 @@ function StackedCard({
       }}
     >
       <motion.div
-        className="h-[var(--card-h)]"
+        className="h-[var(--card-h)] will-change-transform"
         style={{ y: lift, scale, transformOrigin: "50% 0%" }}
       >
         <IntelligenceCard

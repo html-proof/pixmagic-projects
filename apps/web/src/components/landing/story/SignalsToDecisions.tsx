@@ -69,7 +69,7 @@ function Sheet({
     >
       <div aria-hidden className="pointer-events-none absolute inset-0">
         <motion.div
-          className="absolute inset-x-0 top-0 h-lvh rounded-t-[36px] bg-lp-bg-2 shadow-[inset_0_1px_0_rgb(255_255_255/0.14),0_-30px_80px_-10px_rgb(0_0_0/0.7)] max-md:rounded-t-[28px]"
+          className="absolute inset-x-0 top-0 h-lvh rounded-t-[36px] bg-lp-bg-2 shadow-[inset_0_1px_0_rgb(255_255_255/0.14),0_-30px_80px_-10px_rgb(0_0_0/0.7)] will-change-transform max-md:rounded-t-[28px]"
           style={{ scaleX: rise ? widen : 1, transformOrigin: "50% 0%" }}
         >
           <div className="absolute inset-x-0 top-0 h-[460px] overflow-hidden rounded-t-[inherit]">

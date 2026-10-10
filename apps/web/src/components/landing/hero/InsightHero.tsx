@@ -1,6 +1,7 @@
 "use client";
 import { animate, motion, useMotionValue, useTransform, type MotionValue } from "motion/react";
 import { useEffect, useRef, useSyncExternalStore, type ReactNode } from "react";
+import { usePauseWhenHidden } from "@/hooks/usePauseWhenHidden";
 import { useReducedMotion } from "@/hooks/useReducedMotion";
 import { useScrollProgress, useSegment } from "@/hooks/useScrollProgress";
 import { EASE, easeInOut, easeOut, lerp, segment } from "@/lib/motion";
@@ -75,7 +76,7 @@ function FinalLine({ progress, index, children }: { progress: MotionValue<number
   const opacity = useTransform(progress, (p) => segment(p, a, a + 0.016));
   const y = useTransform(progress, (p) => (1 - easeOut(segment(p, a, a + 0.02))) * 22);
   return (
-    <motion.p className={`${HEADLINE_FINAL} ${index === 2 ? "lp-gradient-text" : "text-lp-text"}`} style={{ opacity, y }}>
+    <motion.p className={`will-change-transform ${HEADLINE_FINAL} ${index === 2 ? "lp-gradient-text" : "text-lp-text"}`} style={{ opacity, y }}>
       {children}
     </motion.p>
   );
@@ -119,6 +120,8 @@ function HeroCinematic({ ready }: { ready: boolean }) {
   const finalCopyY = useTransform(progress, (p) => (1 - easeOut(segment(p, 0.81, 0.835))) * 18);
   const finalEvents = useTransform(progress, (p) => (p >= 0.82 ? "auto" : "none"));
   const cue = useTransform(progress, (p) => 1 - segment(p, 0.012, 0.06));
+  const cueRef = useRef<HTMLDivElement>(null);
+  usePauseWhenHidden(cueRef, [cue]);
 
   // Visual box: on stacked screens the dashboard steps back and down under the final statement,
   // its top fading out so it never sits behind the copy or the CTAs.
@@ -152,10 +155,11 @@ function HeroCinematic({ ready }: { ready: boolean }) {
       <div className="sticky top-0 h-svh overflow-hidden bg-[#06080a]">
         <motion.div
           aria-hidden
-          className="absolute inset-0 shadow-[0_50px_140px_-40px_rgb(0_0_0/0.95),0_0_80px_-20px_rgb(140_123_255/0.12)]"
+          className="absolute inset-0 shadow-[0_50px_140px_-40px_rgb(0_0_0/0.95),0_0_80px_-20px_rgb(140_123_255/0.12)] will-change-transform"
           style={{ scale: stageScale, borderRadius: stageRadius, opacity: windowEdge, transformOrigin: stageOrigin }}
         />
-        <motion.div className="absolute inset-0 overflow-hidden bg-lp-bg" style={{ scale: stageScale, borderRadius: stageRadius, transformOrigin: stageOrigin }}>
+        {/* Layers (will-change) for everything the scroll moves, so moving it never repaints it. */}
+        <motion.div className="absolute inset-0 overflow-hidden bg-lp-bg will-change-transform" style={{ scale: stageScale, borderRadius: stageRadius, transformOrigin: stageOrigin }}>
           <DataParticles progress={progress} enter={enter} coreX={cx} coreY={cy} coreScale={cs} wide={wide} boxRef={boxRef} />
 
           {/* Quiet the field behind the copy so text always reads first. */}
@@ -171,7 +175,7 @@ function HeroCinematic({ ready }: { ready: boolean }) {
                 ref={boxRef}
                 aria-hidden
                 data-cursor="VIEW"
-                className="relative aspect-[360/440] w-[min(100%,calc((100svh_-_270px)*0.818),560px)] lg:aspect-[1000/760] lg:w-[min(52vw,calc((100svh_-_200px)*1.316),780px)]"
+                className="relative aspect-[360/440] w-[min(100%,calc((100svh_-_270px)*0.818),560px)] will-change-transform lg:aspect-[1000/760] lg:w-[min(52vw,calc((100svh_-_200px)*1.316),780px)]"
                 style={{ opacity: boxOpacity, y: boxY, pointerEvents: boxEvents, maskImage: boxMask, WebkitMaskImage: boxMask }}
               >
                 <motion.div
@@ -193,7 +197,7 @@ function HeroCinematic({ ready }: { ready: boolean }) {
           {/* Statements: all in the DOM in reading order; one visible at a time. */}
           <div className="pointer-events-none absolute inset-0 px-4 pb-[5svh] pt-[104px] md:px-8 lg:pb-[9svh] lg:pt-[96px] xl:px-12">
             <div className="mx-auto grid h-full w-full max-w-[1380px] grid-cols-1 grid-rows-1">
-              <motion.div className="col-start-1 row-start-1 self-center" style={s1}>
+              <motion.div className="col-start-1 row-start-1 self-center will-change-transform" style={s1}>
                 <h1 id="hero-title" className="lp-display text-balance">
                   <RiseLine show={ready} delay={0.05}>
                     Your store
@@ -212,21 +216,21 @@ function HeroCinematic({ ready }: { ready: boolean }) {
                 </motion.p>
               </motion.div>
 
-              <motion.div className={COLUMN} style={s2}>
+              <motion.div className={`${COLUMN} will-change-transform`} style={s2}>
                 <p className="lp-eyebrow mb-5">Thousands of events</p>
                 <p className={STATEMENT}>
                   But data alone <span className="text-lp-muted">isn&rsquo;t insight.</span>
                 </p>
               </motion.div>
 
-              <motion.div className={COLUMN} style={s3}>
+              <motion.div className={`${COLUMN} will-change-transform`} style={s3}>
                 <p className="lp-eyebrow mb-5">Patterns</p>
                 <p className={STATEMENT}>
                   Insight connects <span className="lp-gradient-text">the dots.</span>
                 </p>
               </motion.div>
 
-              <motion.div className={COLUMN} style={s4}>
+              <motion.div className={`${COLUMN} will-change-transform`} style={s4}>
                 <p className="lp-eyebrow mb-5">Business intelligence</p>
                 <p className={STATEMENT}>See what matters.</p>
               </motion.div>
@@ -245,7 +249,7 @@ function HeroCinematic({ ready }: { ready: boolean }) {
                     </FinalLine>
                   ))}
                 </div>
-                <motion.div style={{ opacity: finalCopy, y: finalCopyY }}>
+                <motion.div className="will-change-transform" style={{ opacity: finalCopy, y: finalCopyY }}>
                   <p className="lp-lead mt-4 max-w-[32rem] text-pretty max-md:text-[15.5px] md:mt-7">{SUPPORT}</p>
                   <div className="mt-6 flex flex-col items-start gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-6 sm:gap-y-4 md:mt-9">
                     <SignupButton size="lg">Start with Insight</SignupButton>
@@ -259,7 +263,13 @@ function HeroCinematic({ ready }: { ready: boolean }) {
           <SrOnly>{STORY}</SrOnly>
 
           {/* Scroll cue. */}
-          <motion.div aria-hidden className="pointer-events-none absolute inset-x-0 bottom-5 flex justify-center md:bottom-7" style={{ opacity: cue }}>
+          <motion.div
+            ref={cueRef}
+            data-lp-paused=""
+            aria-hidden
+            className="pointer-events-none absolute inset-x-0 bottom-5 flex justify-center md:bottom-7"
+            style={{ opacity: cue }}
+          >
             <motion.div
               className="flex flex-col items-center gap-3"
               initial={{ opacity: 0 }}
@@ -268,11 +278,10 @@ function HeroCinematic({ ready }: { ready: boolean }) {
             >
               <span className="lp-eyebrow text-[10.5px]">Scroll</span>
               <span className="relative block h-10 w-px overflow-hidden bg-white/10">
-                <motion.span
-                  className="absolute inset-x-0 top-0 block h-1/2 bg-gradient-to-b from-transparent via-lp-violet-bright to-transparent"
-                  animate={{ transform: ["translateY(-100%)", "translateY(200%)"] }}
-                  transition={{ duration: 2.4, ease: EASE, repeat: Infinity, repeatDelay: 0.4 }}
-                />
+                {/* Mounted with the entrance, so the loop never runs under the intro. */}
+                {ready && (
+                  <span className="lp-loop lp-scroll-cue absolute inset-x-0 top-0 block h-1/2 bg-gradient-to-b from-transparent via-lp-violet-bright to-transparent" />
+                )}
               </span>
             </motion.div>
           </motion.div>

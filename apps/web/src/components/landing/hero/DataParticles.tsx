@@ -200,6 +200,12 @@ interface LoopState {
   measuredAt: number;
   font: string;
   labelFont: string;
+  /**
+   * The font last set on the context. Assigning `ctx.font` makes Chrome recompute the canvas
+   * element's style first (a forced style recalc, every frame), so it's only set when it changes.
+   * Resizing the canvas resets the context, and with it the font.
+   */
+  ctxFont: string;
   sprites: HTMLCanvasElement[] | null;
   /** Lane guide stroke, rebuilt when the focus point or the size changes. */
   guide: CanvasGradient | null;
@@ -218,6 +224,7 @@ function newLoopState(): LoopState {
     measuredAt: -1e9,
     font: "",
     labelFont: "",
+    ctxFont: "",
     sprites: null,
     guide: null,
     guideKey: -1,
@@ -306,6 +313,7 @@ export function DataParticles({ progress, enter, coreX, coreY, coreScale, wide, 
     const f = (FIELD ??= buildField());
     const s = (state.current ??= newLoopState());
 
+    if (resized) s.ctxFont = "";
     if (resized || t - s.measuredAt > 1000 || t < s.measuredAt) {
       measureBox(canvas, boxRef.current, w, h, s);
       s.measuredAt = t;
@@ -473,7 +481,7 @@ export function DataParticles({ progress, enter, coreX, coreY, coreScale, wide, 
     // Stage 1: now and then an event names itself next to its point, like a log line in passing.
     const eventLabels = fade * (1 - segment(p, 0.1, 0.17));
     if (eventLabels > 0.01) {
-      ctx.font = s.font;
+      if (s.ctxFont !== s.font) ctx.font = s.ctxFont = s.font;
       ctx.textAlign = "left";
       ctx.textBaseline = "middle";
       ctx.fillStyle = LABEL_FILL;
@@ -505,7 +513,7 @@ export function DataParticles({ progress, enter, coreX, coreY, coreScale, wide, 
 
     // Stage 2: the domains of a store drift inward and dissolve as they reach the core.
     if (s2 > 0 && s2 < 1 && R > 0) {
-      ctx.font = s.labelFont;
+      if (s.ctxFont !== s.labelFont) ctx.font = s.ctxFont = s.labelFont;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillStyle = LABEL_FILL;
@@ -528,7 +536,7 @@ export function DataParticles({ progress, enter, coreX, coreY, coreScale, wide, 
     ctx.globalAlpha = 1;
   };
 
-  useCanvasLoop(canvasRef, draw, { still, maxDpr: perf.tier === "mobile" ? 1.5 : 2 });
+  useCanvasLoop(canvasRef, draw, { still, maxDpr: perf.maxDpr });
 
   return <canvas ref={canvasRef} aria-hidden className={`pointer-events-none absolute inset-0 size-full font-lp-mono ${className}`} />;
 }

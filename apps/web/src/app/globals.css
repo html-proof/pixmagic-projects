@@ -476,6 +476,70 @@ html {
     transform: none !important;
   }
 }
+/*
+ * Ambient loops (orbit points, pulses, the caret, the scroll cue) are CSS animations of transform
+ * and opacity, so they run on the compositor. Each sits under an element that usePauseWhenHidden
+ * marks `data-lp-paused` while the loop can't be seen (off screen, or faded out by the scroll):
+ * a paused loop costs nothing, while an invisible running one falls back to the main thread.
+ * `!important` because a loop may set its `animation` shorthand inline, which resets play-state.
+ */
+[data-lp-paused] .lp-loop,
+.lp-loop[data-lp-paused] {
+  animation-play-state: paused !important;
+}
+/* Business Pulse's live dot: a soft ring expanding out of it. */
+@keyframes lp-ping {
+  from {
+    transform: scale(1);
+    opacity: 0.45;
+  }
+  to {
+    transform: scale(2.6);
+    opacity: 0;
+  }
+}
+@utility lp-ping {
+  animation: lp-ping 2.6s cubic-bezier(0, 0, 0.58, 1) infinite;
+}
+/* A text caret: on for half the beat, off for the other half. */
+@keyframes lp-blink {
+  0% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+@utility lp-blink {
+  animation: lp-blink 1.05s step-end infinite;
+}
+/* The hero's scroll cue: a light travelling down its track, then a short rest out of sight. */
+@keyframes lp-scroll-cue {
+  0% {
+    transform: translateY(-100%);
+    animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  85.7%,
+  100% {
+    transform: translateY(200%);
+  }
+}
+@utility lp-scroll-cue {
+  animation: lp-scroll-cue 2.8s infinite;
+}
+/* A short bright dash running along a hero flow line (stroke units are fractions of the path). */
+@keyframes lp-flow-pulse {
+  from {
+    stroke-dashoffset: 0.05px;
+  }
+  to {
+    stroke-dashoffset: -1px;
+  }
+}
+
 /* The custom cursor replaces the system one only while it is active (fine pointers). */
 html.lp-cursor-on,
 html.lp-cursor-on * {

@@ -12,6 +12,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { usePauseWhenHidden } from "@/hooks/usePauseWhenHidden";
 import { useReducedMotion } from "@/hooks/useReducedMotion";
 import { EASE, riseIn, seeded } from "@/lib/motion";
 import { InsightMark } from "../shared/InsightMark";
@@ -128,6 +129,8 @@ export function AskInsight() {
   const onScreen = useInView(stageRef, { margin: "0px 0px -10% 0px" });
   const [phase, setPhase] = useState<number>(PHASE.idle);
   const [highlight, setHighlight] = useState(-1);
+  // The caret blinks from page load until the question is sent: only while the window is in view.
+  usePauseWhenHidden(windowRef);
 
   // Less motion: skip straight to the answered state.
   useEffect(() => {
@@ -207,6 +210,7 @@ export function AskInsight() {
 
           <div
             ref={windowRef}
+            data-lp-paused=""
             aria-hidden
             data-cursor="VIEW"
             className="relative overflow-hidden rounded-[22px] border border-lp-line-strong bg-gradient-to-b from-lp-surface to-lp-elevated shadow-[0_40px_120px_-30px_rgb(0_0_0/0.75),0_0_0_1px_rgb(255_255_255/0.02)_inset] md:rounded-[28px]"
@@ -370,11 +374,7 @@ function QueryText({ run, complete, onDone }: { run: boolean; complete: boolean;
       <span className="col-start-1 row-start-1 text-lp-text">
         {idle ? <span className="text-lp-muted">Ask about your store</span> : text}
         {!complete && (
-          <motion.span
-            animate={{ opacity: [1, 1, 0, 0] }}
-            transition={{ duration: 1.05, repeat: Infinity, times: [0, 0.5, 0.5, 1], ease: "linear" }}
-            className="ml-[2px] inline-block h-[1.05em] w-[2px] translate-y-[0.17em] rounded-full bg-lp-violet-bright"
-          />
+          <span className="lp-loop lp-blink ml-[2px] inline-block h-[1.05em] w-[2px] translate-y-[0.17em] rounded-full bg-lp-violet-bright" />
         )}
       </span>
     </div>

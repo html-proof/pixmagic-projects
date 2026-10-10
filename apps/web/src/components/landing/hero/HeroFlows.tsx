@@ -1,6 +1,7 @@
 "use client";
 import { motion, useTransform, type MotionValue } from "motion/react";
-import { useId, type CSSProperties, type ReactNode } from "react";
+import { useId, useRef, type CSSProperties, type ReactNode } from "react";
+import { usePauseWhenHidden } from "@/hooks/usePauseWhenHidden";
 import { segment } from "@/lib/motion";
 import {
   BOX,
@@ -27,17 +28,36 @@ const PULSE_SECONDS = [3.4, 3.9, 4.4];
 /**
  * Line, light pulse and nodes of one flow, inside an SVG laid over the visual box. The line
  * draws itself with `draw`, each node lights up as the line reaches it, and once the whole path
- * exists a short bright dash keeps travelling along it (SMIL, so it costs no JavaScript).
+ * exists a short bright dash keeps travelling along it: a CSS loop that only runs while the flow
+ * is on screen and visible (`fade` is the opacity of the diagram it belongs to).
  */
-function FlowLine({ box, geo, draw, index, still, vertical }: { box: Box; geo: FlowGeometry; draw: MotionValue<number>; index: number; still: boolean; vertical: boolean }) {
+function FlowLine({
+  box,
+  geo,
+  draw,
+  fade,
+  index,
+  still,
+  vertical,
+}: {
+  box: Box;
+  geo: FlowGeometry;
+  draw: MotionValue<number>;
+  fade: MotionValue<number>;
+  index: number;
+  still: boolean;
+  vertical: boolean;
+}) {
   const id = `hero-flow-${useId().replace(/:/g, "")}`;
   const shown = useTransform(draw, (d) => (d > 0.001 ? 1 : 0));
   const track = useTransform(draw, (d) => segment(d, 0, 0.08));
   const pulse = useTransform(draw, (d) => segment(d, 0.9, 1));
+  const svgRef = useRef<SVGSVGElement>(null);
+  usePauseWhenHidden(svgRef, [pulse, fade]);
   const first = geo.nodes[0];
   const last = geo.nodes[geo.nodes.length - 1];
   return (
-    <svg viewBox={`0 0 ${box.w} ${box.h}`} className="absolute inset-0 size-full overflow-visible" fill="none">
+    <svg ref={svgRef} data-lp-paused="" viewBox={`0 0 ${box.w} ${box.h}`} className="absolute inset-0 size-full overflow-visible" fill="none">
       <defs>
         <linearGradient
           id={id}
@@ -58,15 +78,15 @@ function FlowLine({ box, geo, draw, index, still, vertical }: { box: Box; geo: F
         <motion.g style={{ opacity: pulse }}>
           <path
             d={geo.d}
+            className="lp-loop"
             stroke="#f7f9fc"
             strokeWidth={vertical ? 2 : 2.6}
             strokeLinecap="round"
             pathLength={1}
             strokeDasharray="0.05 1.2"
             strokeDashoffset={0.05}
-          >
-            <animate attributeName="stroke-dashoffset" values="0.05;-1" dur={`${PULSE_SECONDS[index]}s`} begin={`${index * 0.7}s`} repeatCount="indefinite" />
-          </path>
+            style={{ animation: `lp-flow-pulse ${PULSE_SECONDS[index]}s linear ${index * 0.7}s infinite` }}
+          />
         </motion.g>
       )}
       {geo.nodes.map((n, j) => (
@@ -103,14 +123,28 @@ function Label({ draw, at, className, style, children }: { draw: MotionValue<num
 
 /* ---- Wide: three rows radiating from the core ----------------------------------------------- */
 
-function WideFlow({ flow, geo, k, progress, still }: { flow: FlowDef; geo: FlowGeometry; k: number; progress: MotionValue<number>; still: boolean }) {
+function WideFlow({
+  flow,
+  geo,
+  k,
+  progress,
+  fade,
+  still,
+}: {
+  flow: FlowDef;
+  geo: FlowGeometry;
+  k: number;
+  progress: MotionValue<number>;
+  fade: MotionValue<number>;
+  still: boolean;
+}) {
   const box = BOX.wide;
   const draw = useTransform(progress, (p) => wideFlowDraw(p, k));
   const title = useTransform(draw, (d) => segment(d, 0.05, 0.3));
   const first = geo.nodes[0];
   return (
     <div className="absolute inset-0">
-      <FlowLine box={box} geo={geo} draw={draw} index={k} still={still} vertical={false} />
+      <FlowLine box={box} geo={geo} draw={draw} fade={fade} index={k} still={still} vertical={false} />
       <motion.span
         className="lp-eyebrow absolute -translate-y-full whitespace-nowrap pb-5 text-[10.5px] xl:text-[11.5px]"
         style={{ left: pctX(box, first.x), top: pctY(box, first.y), opacity: title, x: "-0.75em" }}
@@ -159,7 +193,7 @@ export function HeroFlowsWide({ progress, still = false }: { progress: MotionVal
   return (
     <motion.div aria-hidden className="pointer-events-none absolute inset-0" style={{ opacity }}>
       {FLOWS.map((flow, k) => (
-        <WideFlow key={flow.id} flow={flow} geo={WIDE_FLOWS[k]} k={k} progress={progress} still={still} />
+        <WideFlow key={flow.id} flow={flow} geo={WIDE_FLOWS[k]} k={k} progress={progress} fade={opacity} still={still} />
       ))}
     </motion.div>
   );
@@ -173,7 +207,7 @@ function StackedFlow({ flow, geo, k, progress, still }: { flow: FlowDef; geo: Fl
   const opacity = useTransform(progress, (p) => stackedFlowOpacity(p, k));
   return (
     <motion.div className="absolute inset-0" style={{ opacity }}>
-      <FlowLine box={box} geo={geo} draw={draw} index={k} still={still} vertical />
+      <FlowLine box={box} geo={geo} draw={draw} fade={opacity} index={k} still={still} vertical />
       <span className="lp-eyebrow absolute left-[66%] top-[10%] w-[32%] -translate-y-1/2 text-[10.5px] leading-[1.5]">
         <span className="block text-lp-violet-bright">
           0{k + 1} / 0{FLOWS.length}

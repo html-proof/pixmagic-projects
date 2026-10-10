@@ -46,7 +46,7 @@ export function FinalCTA() {
   const column = useRef<HTMLDivElement>(null);
   const slot = useRef<HTMLDivElement>(null);
   const reduced = useReducedMotion();
-  const { particleScale } = useViewportPerformance();
+  const { particleScale, maxDpr } = useViewportPerformance();
 
   const scroll = useScrollProgress(section, ["start 0.4", "end end"]);
   const progress = useSpring(scroll, { stiffness: 120, damping: 28, mass: 0.5 });
@@ -97,6 +97,7 @@ export function FinalCTA() {
             slotRef={slot}
             lift={lift}
             zoom={zoom}
+            maxDpr={maxDpr}
             className="absolute inset-0 size-full"
           />
         )}

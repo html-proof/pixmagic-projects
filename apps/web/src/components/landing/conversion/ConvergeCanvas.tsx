@@ -178,6 +178,7 @@ export function ConvergeCanvas({
   slotRef,
   lift,
   zoom,
+  maxDpr = 2,
   className = "",
 }: {
   progress: MotionValue<number>;
@@ -188,6 +189,8 @@ export function ConvergeCanvas({
   lift: MotionValue<number>;
   /** Scale the DOM mark is currently drawn at. */
   zoom: MotionValue<number>;
+  /** Canvas pixel-ratio cap (useViewportPerformance). */
+  maxDpr?: number;
   className?: string;
 }) {
   const canvas = useRef<HTMLCanvasElement>(null);
@@ -259,7 +262,7 @@ export function ConvergeCanvas({
     ctx.globalAlpha = 1;
   };
 
-  useCanvasLoop(canvas, draw);
+  useCanvasLoop(canvas, draw, { maxDpr });
 
   return <canvas ref={canvas} aria-hidden className={`pointer-events-none ${className}`} />;
 }

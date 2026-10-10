@@ -3,6 +3,7 @@ import { AnimatePresence, motion, useInView, type Transition } from "motion/reac
 import { CreditCard, Package, ShoppingBag, TrendingUp, Undo2, UserRoundCheck, Users, Webhook, type LucideIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { EASE, ENTER, riseIn } from "@/lib/motion";
+import { usePauseWhenHidden } from "@/hooks/usePauseWhenHidden";
 import { useReducedMotion } from "@/hooks/useReducedMotion";
 import { IllustrativeNote, SectionIntro, SrOnly } from "../shared/ui";
 
@@ -281,17 +282,13 @@ export function BusinessPulse() {
 
 type At = (delay: number, base?: Transition) => Transition;
 
-/** The one thing that keeps moving once the sequence has settled. */
+/** The one thing that keeps moving once the sequence has settled (a CSS loop, held while off screen). */
 function LiveDot({ reduced }: { reduced: boolean }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  usePauseWhenHidden(ref);
   return (
-    <span aria-hidden className="relative flex size-2.5">
-      {!reduced && (
-        <motion.span
-          className="absolute inset-0 rounded-full bg-lp-positive"
-          animate={{ scale: [1, 2.6], opacity: [0.45, 0] }}
-          transition={{ duration: 2.6, repeat: Infinity, ease: "easeOut" }}
-        />
-      )}
+    <span ref={ref} data-lp-paused="" aria-hidden className="relative flex size-2.5">
+      {!reduced && <span className="lp-loop lp-ping absolute inset-0 rounded-full bg-lp-positive" />}
       <span className="relative size-2.5 rounded-full bg-lp-positive" />
     </span>
   );

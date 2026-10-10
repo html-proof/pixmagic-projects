@@ -375,7 +375,7 @@ function stageAt(p: number) {
  * it forward and dims the rest; the pointer also parts the dots slightly.
  */
 export function CustomerDots({ progress }: { progress: MotionValue<number> }) {
-  const { particleScale } = useViewportPerformance();
+  const { particleScale, maxDpr } = useViewportPerformance();
   const count = Math.max(140, Math.round(600 * particleScale));
   const model = useMemo(() => buildModel(count), [count]);
 
@@ -517,7 +517,7 @@ export function CustomerDots({ progress }: { progress: MotionValue<number> }) {
     ctx.globalAlpha = 1;
   };
 
-  useCanvasLoop(canvasRef, draw);
+  useCanvasLoop(canvasRef, draw, { maxDpr });
 
   const onPointerMove = (e: ReactPointerEvent<HTMLCanvasElement>) => {
     if (e.pointerType !== "mouse") return;

@@ -240,7 +240,7 @@ function EmergingCard({
   return (
     <motion.div className="absolute inset-0" style={{ x, y }}>
       <motion.div
-        className="@container absolute overflow-hidden border border-lp-line bg-[linear-gradient(180deg,#171c24,#12161c)] p-3 shadow-[0_24px_60px_-24px_rgb(0_0_0/0.7)] @3xs:p-4"
+        className="@container absolute overflow-hidden border border-lp-line bg-[linear-gradient(180deg,#171c24,#12161c)] p-3 shadow-[0_24px_60px_-24px_rgb(0_0_0/0.7)] will-change-transform @3xs:p-4"
         style={{
           left: `${slot.x}%`,
           top: `${slot.y}%`,
@@ -281,7 +281,7 @@ export function HeroDashboardReveal({
   return (
     <div aria-hidden className="absolute inset-0">
       <motion.div
-        className="absolute inset-x-0 bottom-[2%] top-[1%] rounded-[20px] border border-lp-line bg-[linear-gradient(180deg,rgb(21_26_33/0.7),rgb(13_16_21/0.55))] shadow-[0_40px_120px_-40px_rgb(0_0_0/0.8)] md:rounded-[26px]"
+        className="absolute inset-x-0 bottom-[2%] top-[1%] rounded-[20px] border border-lp-line bg-[linear-gradient(180deg,rgb(21_26_33/0.7),rgb(13_16_21/0.55))] shadow-[0_40px_120px_-40px_rgb(0_0_0/0.8)] will-change-transform md:rounded-[26px]"
         style={{ opacity: frame, scale: frameScale }}
       >
         <div className="flex h-[9%] items-center justify-between px-[3%]">

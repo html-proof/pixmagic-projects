@@ -612,7 +612,7 @@ export function JourneyVisual({
   className?: string;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const { particleScale } = useViewportPerformance();
+  const { particleScale, maxDpr } = useViewportPerformance();
   const count = Math.max(200, Math.round(BASE_PARTICLES * particleScale));
   const simRef = useRef<Sim | null>(null);
   const spritesRef = useRef<Sprites | null>(null);
@@ -677,7 +677,7 @@ export function JourneyVisual({
       drawCore(ctx, sprites, still ? 0 : f.time);
       ctx.globalCompositeOperation = "source-over";
     },
-    { still },
+    { still, maxDpr },
   );
 
   // Labels shrink a little as the camera pulls back, so the whole journey stays uncluttered.

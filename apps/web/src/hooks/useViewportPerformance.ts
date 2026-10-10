@@ -15,9 +15,14 @@ export interface ViewportPerformance {
    * 0.4 mobile (the brief's "reduce by 60%"), halved again on low-power devices.
    */
   particleScale: number;
+  /**
+   * Cap for a canvas's device pixel ratio: 1.5 on phones and low-power devices, 2 elsewhere.
+   * Soft, glowing particles look the same at 1.5, and every pixel is fill work on every frame.
+   */
+  maxDpr: number;
 }
 
-const DEFAULT: ViewportPerformance = { tier: "desktop", isTouch: false, lowPower: false, particleScale: 1 };
+const DEFAULT: ViewportPerformance = { tier: "desktop", isTouch: false, lowPower: false, particleScale: 1, maxDpr: 2 };
 
 function tierFor(width: number): ViewportTier {
   if (width <= 768) return "mobile";
@@ -36,7 +41,7 @@ function measure(): ViewportPerformance {
     (navigator.hardwareConcurrency !== undefined && navigator.hardwareConcurrency <= 4) ||
     (nav.deviceMemory !== undefined && nav.deviceMemory <= 4) ||
     nav.connection?.saveData === true;
-  return { tier, isTouch, lowPower, particleScale: SCALE[tier] * (lowPower ? 0.5 : 1) };
+  return { tier, isTouch, lowPower, particleScale: SCALE[tier] * (lowPower ? 0.5 : 1), maxDpr: tier === "mobile" || lowPower ? 1.5 : 2 };
 }
 
 /**
