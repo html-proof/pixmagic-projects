@@ -29,12 +29,13 @@ beforeEach(async () => {
   };
 });
 
-async function connection(provider: "meta" | "google", over: Record<string, unknown> = {}) {
+async function connection(provider: "meta" | "google" | "adsense", over: Record<string, unknown> = {}) {
   const ws = await systemDb.workspace.create({ data: { name: "W" } });
   const store = await systemDb.store.create({ data: { workspaceId: ws.id, shopDomain: `${provider}.myshopify.com`, grantedScopes: ["read_orders"], status: "active", timezone: "UTC", pixelIngestKey: `pk-${provider}` } });
-  const tokens = encryptAdTokens(store.id, provider, { accessToken: "ACCESS", refreshToken: provider === "google" ? "REFRESH" : null, expiresAt: new Date(Date.now() + 86_400_000) });
+  const tokens = encryptAdTokens(store.id, provider, { accessToken: "ACCESS", refreshToken: provider === "meta" ? null : "REFRESH", expiresAt: new Date(Date.now() + 86_400_000) });
+  const accountId = { meta: "act_1", google: "111", adsense: "pub-1" }[provider];
   return systemDb.adConnection.create({
-    data: { workspaceId: ws.id, storeId: store.id, provider, accountId: provider === "meta" ? "act_1" : "111", currency: "USD", timezone: "UTC", ...tokens, ...over },
+    data: { workspaceId: ws.id, storeId: store.id, provider, accountId, currency: provider === "adsense" ? null : "USD", timezone: "UTC", ...tokens, ...over },
   });
 }
 
@@ -86,6 +87,43 @@ describe("ad account sync", () => {
     expect(calls).toEqual(["oauth2.googleapis.com", "googleads.googleapis.com"]);
     expect(toNumber((await systemDb.adCampaignDaily.findFirstOrThrow({ where: { connectionId: conn.id } })).spend)).toBe(3);
     expect((await systemDb.adConnection.findUniqueOrThrow({ where: { id: conn.id } })).accessTokenExpiresAt!.getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it("AdSense: refreshes its token, stores earnings per site per day, and learns the account's currency", async () => {
+    const conn = await connection("adsense", { accessTokenExpiresAt: new Date(Date.now() - 1000) });
+    const d1 = addDays(today(), -1);
+    // Already stored for these days, gone from the new report: replaced, not kept.
+    await systemDb.adsenseDaily.create({ data: { workspaceId: conn.workspaceId, storeId: conn.storeId, connectionId: conn.id, accountId: "pub-1", site: "old.example.com", day: d1, earnings: 50 } });
+    const calls: string[] = [];
+    fetchImpl = async (input, init) => {
+      const u = new URL(String(input));
+      calls.push(u.host);
+      if (u.host === "oauth2.googleapis.com") return json({ access_token: "NEW_ACCESS", expires_in: 3599 });
+      expect(u.pathname).toBe("/v2/accounts/pub-1/reports:generate");
+      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer NEW_ACCESS");
+      return json({
+        headers: [
+          { name: "DATE", type: "DIMENSION" },
+          { name: "DOMAIN_CODE", type: "DIMENSION" },
+          { name: "ESTIMATED_EARNINGS", type: "METRIC_CURRENCY", currencyCode: "AUD" },
+          { name: "PAGE_VIEWS", type: "METRIC_TALLY" },
+          { name: "IMPRESSIONS", type: "METRIC_TALLY" },
+          { name: "CLICKS", type: "METRIC_TALLY" },
+        ],
+        rows: [{ cells: [{ value: d1 }, { value: "shop.example.com" }, { value: "7.25" }, { value: "3000" }, { value: "6000" }, { value: "9" }] }],
+      });
+    };
+    const { msg, m } = message({ kind: "ads", connectionId: conn.id, since: addDays(today(), -2), until: today() });
+    await consume("sync", msg, deps);
+    expect(m.acked).toBe(true);
+    expect(calls).toEqual(["oauth2.googleapis.com", "adsense.googleapis.com"]);
+    const rows = await systemDb.adsenseDaily.findMany({ where: { connectionId: conn.id } });
+    expect(rows.map((r) => [r.site, r.day, toNumber(r.earnings), r.pageViews, r.impressions, r.clicks, r.currency])).toEqual([["shop.example.com", d1, 7.25, 3000, 6000, 9, "AUD"]]);
+    const after = await systemDb.adConnection.findUniqueOrThrow({ where: { id: conn.id } });
+    expect(after).toMatchObject({ status: "active", currency: "AUD" });
+    expect(after.accessTokenExpiresAt!.getTime()).toBeGreaterThan(Date.now());
+    // Nothing went into ad spend.
+    expect(await systemDb.adCampaignDaily.count()).toBe(0);
   });
 
   it("ended access asks for a reconnect at once; the store itself is untouched", async () => {

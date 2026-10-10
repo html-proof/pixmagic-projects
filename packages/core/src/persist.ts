@@ -554,6 +554,7 @@ export async function purgeStoreData(storeId: string) {
     systemDb.pixelEventSeen.deleteMany({ where: { storeId } }),
     // Connected ad accounts belong to the store too: their numbers and their tokens go with it.
     systemDb.adCampaignDaily.deleteMany({ where: { storeId } }),
+    systemDb.adsenseDaily.deleteMany({ where: { storeId } }),
     systemDb.adConnection.deleteMany({ where: { storeId } }),
   ]);
 }

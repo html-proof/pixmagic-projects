@@ -2,7 +2,12 @@ import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { z } from "zod";
 import { systemDb, withTenant } from "@app/db";
 import {
+  AD_PROVIDER_NAME,
   adsConfigured,
+  adsenseAccounts,
+  adsenseAuthorizeUrl,
+  adsenseConfig,
+  AdsApiError,
   adsRedirectUri,
   ADS_BACKFILL_DAYS,
   ADS_RECHECK_DAYS,
@@ -28,8 +33,9 @@ import type { App } from "../app.js";
 import { limit } from "../rateLimit.js";
 
 /**
- * "Continue with Meta" / "Continue with Google": connect a store's ad accounts, read-only, so
- * the dashboard can show what's spent on ads next to what the store sells.
+ * "Continue with Meta" / "Continue with Google Ads": connect a store's ad accounts, read-only, so
+ * the dashboard can show what's spent on ads next to what the store sells. "Continue with Google
+ * AdSense" connects the other direction: what the store's site earns from ads shown on it.
  *
  * The OAuth round trip mirrors the Shopify connect: single-use state in the coordinator, bound
  * to this browser by a cookie, and the callback only accepted for the person who started it.
@@ -107,15 +113,19 @@ export function adsRoutes(app: App, deps: Deps) {
     await storeInWorkspace(ws, storeId);
     const meta = metaConfig();
     const google = googleConfig();
-    if ((provider === "meta" && !meta) || (provider === "google" && !google)) {
-      throw new HttpError(503, `${provider === "meta" ? "Meta" : "Google Ads"} isn't set up on this server yet.`, "not_configured");
+    const adsense = adsenseConfig();
+    if ((provider === "meta" && !meta) || (provider === "google" && !google) || (provider === "adsense" && !adsense)) {
+      throw new HttpError(503, `${AD_PROVIDER_NAME[provider]} isn't set up on this server yet.`, "not_configured");
     }
     const nonce = randomToken(24);
     const state: AdsState = { userId: user.id, workspaceId: ws, storeId, provider };
     await deps.coord.put(`oauth:ads:${nonce}`, JSON.stringify(state), STATE_TTL_S);
     setCookie(c, STATE_COOKIE, nonce, cookieOpts());
     const redirectUri = adsRedirectUri(provider);
-    const url = provider === "meta" ? metaAuthorizeUrl(meta!, redirectUri, nonce) : googleAuthorizeUrl(google!, redirectUri, nonce);
+    const url =
+      provider === "meta" ? metaAuthorizeUrl(meta!, redirectUri, nonce)
+      : provider === "google" ? googleAuthorizeUrl(google!, redirectUri, nonce)
+      : adsenseAuthorizeUrl(adsense!, redirectUri, nonce);
     return c.json({ url });
   });
 
@@ -151,13 +161,22 @@ export function adsRoutes(app: App, deps: Deps) {
           const cfg = metaConfig(deps.fetchImpl)!;
           tokens = await metaExchangeCode(cfg, q.code, redirectUri);
           accounts = await metaAdAccounts(cfg, tokens.accessToken);
-        } else {
+        } else if (provider === "google") {
           const cfg = googleConfig(deps.fetchImpl)!;
           tokens = await googleExchangeCode(cfg, q.code, redirectUri);
           if (!tokens.refreshToken) return back({ error: "no_refresh_token", provider }, state.storeId);
           accounts = await googleAdAccounts(cfg, tokens.accessToken);
+        } else {
+          const cfg = adsenseConfig(deps.fetchImpl)!;
+          tokens = await googleExchangeCode(cfg, q.code, redirectUri);
+          if (!tokens.refreshToken) return back({ error: "no_refresh_token", provider }, state.storeId);
+          accounts = await adsenseAccounts(cfg, tokens.accessToken);
         }
       } catch (err) {
+        // A Google login with no AdSense account: AdSense answers 403 rather than an empty list.
+        if (provider === "adsense" && err instanceof AdsApiError && err.status === 403 && /adsense account/i.test(err.message)) {
+          return back({ error: "no_accounts", provider }, state.storeId);
+        }
         logger.error({ err, provider, storeId: state.storeId }, "ad platform connect failed");
         return back({ error: "exchange_failed", provider }, state.storeId);
       }
@@ -204,7 +223,11 @@ export function adsRoutes(app: App, deps: Deps) {
     const access = await requireWorkspace(c, deps, ws, "stores:manage");
     const conn = await withTenant(ws, (tx) => tx.adConnection.findFirst({ where: { id, workspaceId: ws, storeId } }));
     if (!conn) throw new HttpError(404, "Not found", "not_found");
-    await systemDb.$transaction([systemDb.adCampaignDaily.deleteMany({ where: { connectionId: conn.id } }), systemDb.adConnection.delete({ where: { id: conn.id } })]);
+    await systemDb.$transaction([
+      systemDb.adCampaignDaily.deleteMany({ where: { connectionId: conn.id } }),
+      systemDb.adsenseDaily.deleteMany({ where: { connectionId: conn.id } }),
+      systemDb.adConnection.delete({ where: { id: conn.id } }),
+    ]);
     await audit({
       workspaceId: ws,
       actorUserId: access.user?.id ?? null,

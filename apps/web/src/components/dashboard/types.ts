@@ -76,6 +76,30 @@ export interface AdsModule {
   shareOfSales: number | null;
 }
 
+export interface AdsenseTotals {
+  earnings: number;
+  pageViews: number;
+  impressions: number;
+  clicks: number;
+  pageRpm: number | null;
+  perClick: number | null;
+  ctr: number | null;
+}
+
+/** What connected AdSense accounts earned from ads shown on the store's site (see adsenseModule in the API). */
+export interface AdsenseModule {
+  currency: string;
+  accounts: Array<{ id: string; provider: "adsense"; accountId: string; name: string | null; currency: string | null; status: string; lastSyncedAt: string | null; counted: boolean }>;
+  current: AdsenseTotals;
+  previous: { earnings: number; pageViews: number; clicks: number; pageRpm: number | null };
+  deltas: { earnings: number | null; pageViews: number | null; clicks: number | null; pageRpm: number | null };
+  series: Array<{ day: string; earnings: number; pageViews: number; impressions: number; clicks: number }>;
+  /** Per site the ads were shown on; one row with site "" when AdSense didn't split by site. */
+  sites: Array<AdsenseTotals & { site: string }>;
+  /** Ad earnings divided by the store's net sales (same currency only). */
+  vsSales: number | null;
+}
+
 export interface ChannelsModule {
   items: Array<{ source: string | null; label: string; orders: number; sales: number; share: number | null }>;
 }
@@ -208,5 +232,6 @@ export interface Overview {
     inventory?: InventoryModule;
     catalog?: CatalogModule;
     ads?: AdsModule;
+    adsense?: AdsenseModule;
   };
 }

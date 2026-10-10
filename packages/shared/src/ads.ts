@@ -1,19 +1,23 @@
 /**
  * Advertising numbers from Meta Ads and Google Ads, normalized to one shape so the dashboard can
- * add them up and compare them with the store's own sales.
+ * add them up and compare them with the store's own sales. And AdSense, which runs the other way:
+ * what the store's site earns from Google ads shown on it.
  *
  * Everything here is what the ad platforms report about themselves: "conversions" and their value
  * are the platforms' own attribution, which overlaps between platforms and with Shopify. They are
  * shown as the platforms' claims, never mixed into the store's sales figures.
  */
-import { addDays, eachDay } from "./dates";
+import { addDays, eachDay, isDay } from "./dates";
 
-export const AD_PROVIDERS = ["meta", "google"] as const;
+/** Everything that can be connected on Settings → Ad accounts. */
+export const AD_PROVIDERS = ["meta", "google", "adsense"] as const;
 export type AdProvider = (typeof AD_PROVIDERS)[number];
+/** The platforms a store pays to advertise on. AdSense pays the store instead, so it is never added into spend. */
+export type AdSpendProvider = Exclude<AdProvider, "adsense">;
 
 /** One campaign on one day, as stored (ad_campaign_daily). */
 export interface AdDayRow {
-  provider: AdProvider;
+  provider: AdSpendProvider;
   accountId: string;
   campaignId: string;
   campaignName: string;
@@ -205,3 +209,127 @@ export function fromGoogleAdsRow(accountId: string, r: GoogleAdsRow): AdDayRow |
 export const googleCustomerId = (id: string) => id.replace(/[^\d]/g, "");
 /** Meta ad account ids are "act_<digits>" in the API. */
 export const metaAccountId = (id: string) => (id.startsWith("act_") ? id : `act_${id}`);
+
+// ---------------------------------------------------------------------------
+// AdSense: what the store's site earns from Google ads shown on its pages.
+// ---------------------------------------------------------------------------
+
+/** One site on one day, as stored (adsense_daily). */
+export interface AdsenseDayRow {
+  accountId: string;
+  /** The host the ads were shown on (AdSense's DOMAIN_CODE); "" when the report isn't split by site. */
+  site: string;
+  /** The AdSense account's own calendar day. */
+  day: string;
+  /** Estimated earnings: AdSense finalizes them after the month ends. */
+  earnings: number;
+  pageViews: number;
+  /** Ads shown. */
+  impressions: number;
+  clicks: number;
+}
+
+export interface AdsenseTotals {
+  earnings: number;
+  pageViews: number;
+  impressions: number;
+  clicks: number;
+  /** Earnings per thousand page views ("page RPM"). */
+  pageRpm: number | null;
+  /** Earnings per click. */
+  perClick: number | null;
+  /** Clicks per ad shown. */
+  ctr: number | null;
+}
+
+export function adsenseTotals(rows: AdsenseDayRow[]): AdsenseTotals {
+  const t = rows.reduce(
+    (a, r) => {
+      a.earnings += r.earnings;
+      a.pageViews += r.pageViews;
+      a.impressions += r.impressions;
+      a.clicks += r.clicks;
+      return a;
+    },
+    { earnings: 0, pageViews: 0, impressions: 0, clicks: 0 },
+  );
+  const earnings = r2(t.earnings);
+  const rpm = ratio(earnings * 1000, t.pageViews);
+  const perClick = ratio(earnings, t.clicks);
+  return {
+    earnings,
+    pageViews: t.pageViews,
+    impressions: t.impressions,
+    clicks: t.clicks,
+    pageRpm: rpm === null ? null : r2(rpm),
+    perClick: perClick === null ? null : r2(perClick),
+    ctr: ratio(t.clicks, t.impressions),
+  };
+}
+
+/** One point per day of the range, quiet days as zero. */
+export function adsenseSeries(rows: AdsenseDayRow[], range: { from: string; to: string }) {
+  const by = new Map<string, { earnings: number; pageViews: number; impressions: number; clicks: number }>();
+  for (const r of rows) {
+    const d = by.get(r.day) ?? { earnings: 0, pageViews: 0, impressions: 0, clicks: 0 };
+    d.earnings += r.earnings;
+    d.pageViews += r.pageViews;
+    d.impressions += r.impressions;
+    d.clicks += r.clicks;
+    by.set(r.day, d);
+  }
+  return eachDay(range.from, range.to).map((day) => {
+    const d = by.get(day);
+    return { day, earnings: r2(d?.earnings ?? 0), pageViews: d?.pageViews ?? 0, impressions: d?.impressions ?? 0, clicks: d?.clicks ?? 0 };
+  });
+}
+
+/** Totals per site, biggest earner first. */
+export function siteTotals(rows: AdsenseDayRow[], limit = 10) {
+  const by = new Map<string, AdsenseDayRow[]>();
+  for (const r of rows) {
+    const list = by.get(r.site) ?? [];
+    list.push(r);
+    by.set(r.site, list);
+  }
+  return [...by.entries()]
+    .map(([site, list]) => ({ site, ...adsenseTotals(list) }))
+    .sort((a, b) => b.earnings - a.earnings || b.pageViews - a.pageViews)
+    .slice(0, limit);
+}
+
+/** The parts of an AdSense reports:generate result (v2 ReportResult) read here. */
+export interface AdsenseReport {
+  headers?: Array<{ name?: string; type?: string; currencyCode?: string }>;
+  rows?: Array<{ cells?: Array<{ value?: string }> }>;
+}
+
+/**
+ * The rows of a report by DATE (and DOMAIN_CODE, when it was split by site), and the currency its
+ * money is in. Columns are found by name, so their order doesn't matter.
+ */
+export function fromAdsenseReport(accountId: string, report: AdsenseReport): { rows: AdsenseDayRow[]; currency: string | null } {
+  const headers = report.headers ?? [];
+  const col = (name: string) => headers.findIndex((h) => h.name === name);
+  const at = { day: col("DATE"), site: col("DOMAIN_CODE"), earnings: col("ESTIMATED_EARNINGS"), pageViews: col("PAGE_VIEWS"), impressions: col("IMPRESSIONS"), clicks: col("CLICKS") };
+  const num = (cells: Array<{ value?: string }>, i: number) => (i < 0 ? 0 : Number(cells[i]?.value ?? 0) || 0);
+  const rows: AdsenseDayRow[] = [];
+  for (const r of report.rows ?? []) {
+    const cells = r.cells ?? [];
+    const day = at.day < 0 ? undefined : cells[at.day]?.value;
+    if (!isDay(day)) continue;
+    rows.push({
+      accountId,
+      site: at.site < 0 ? "" : (cells[at.site]?.value ?? ""),
+      day,
+      earnings: r2(num(cells, at.earnings)),
+      pageViews: Math.round(num(cells, at.pageViews)),
+      impressions: Math.round(num(cells, at.impressions)),
+      clicks: Math.round(num(cells, at.clicks)),
+    });
+  }
+  return { rows, currency: headers.find((h) => h.type === "METRIC_CURRENCY")?.currencyCode ?? null };
+}
+
+/** AdSense names accounts "accounts/pub-<digits>"; the publisher id is the part after the slash. */
+export const adsenseAccountId = (name: string) => name.replace(/^accounts\//, "");

@@ -87,6 +87,25 @@ Reference implementation: `packages/shared/src/ads.ts`. Connection and sync: `do
 - **Platform attribution is never mixed into store sales.** Meta and Google can both claim one sale, and neither matches Shopify's orders exactly.
 - **Freshness:** the last 3 days are refreshed hourly. The last 30 days are fetched again daily, because purchases keep being credited after the click. A first connection fetches 90 days.
 
+## Ad earnings (Google AdSense)
+
+Reference implementation: `adsenseTotals` and `fromAdsenseReport` in `packages/shared/src/ads.ts`.
+Stored per AdSense account, site (`DOMAIN_CODE`) and day in `adsense_daily`; never in `ad_campaign_daily`.
+
+| KPI | Formula | Notes |
+| --- | --- | --- |
+| Estimated earnings | Σ `ESTIMATED_EARNINGS` | AdSense finalizes a month after it ends; in the account's currency, read from the report |
+| Page views, ads shown, clicks | Σ `PAGE_VIEWS`, Σ `IMPRESSIONS`, Σ `CLICKS` | |
+| Earnings per 1,000 views (page RPM) | earnings × 1000 ÷ page views | |
+| Earnings per click | earnings ÷ clicks | |
+| Click rate | clicks ÷ ads shown | |
+| Next to your sales | earnings ÷ the store's net sales for the same dates | Only when both are in the same currency |
+
+- **Days** are the AdSense account's own calendar days (`reportingTimeZone=ACCOUNT_TIME_ZONE`).
+- **Currency** is chosen as for ads: the store's when any AdSense account uses it, otherwise the first known.
+- **Earnings are money in, ad spend is money out:** the two modules are separate and never summed.
+- **Freshness:** as for ads (last 3 days hourly, last 30 days daily, 90 days on first connect).
+
 ## Funnel (web pixel)
 
 Events: `page_viewed`, `product_viewed`, `product_added_to_cart`, `checkout_started`, `checkout_completed`, each with the page's pathname. Events are deduplicated by Shopify event id, then folded into one row per **visit** in `funnel_visits`: one shopper (hashed Shopify client id) on one store-local day.

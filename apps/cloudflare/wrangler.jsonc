@@ -50,12 +50,14 @@
     // Must be an address on a domain onboarded to Cloudflare Email Sending. Until then, sign-in
     // codes fall back to one-click links that Firebase emails (see docs/shopify-setup.md).
     "EMAIL_FROM": "Insights <no-reply@example.com>",
-    // Ad accounts ("Continue with Meta" / "Continue with Google" on Settings → Ad accounts). Empty
-    // until the apps exist: the buttons then say the platform isn't set up. Fill in the public ids
-    // and set the three secrets, then deploy. docs/ads-setup.md walks through creating both.
+    // Ad accounts ("Continue with Meta" / "Continue with Google Ads" / "Continue with Google AdSense"
+    // on Settings → Ad accounts). Empty until the apps exist: the buttons then say the platform isn't
+    // set up. GOOGLE_ADS_CLIENT_ID is the Google Cloud OAuth client "Insights web" (project
+    // insights-511119), shared by Google Ads and AdSense. Set the secrets, then deploy.
+    // docs/ads-setup.md walks through all three.
     "META_APP_ID": "",
     "META_API_VERSION": "v25.0",
-    "GOOGLE_ADS_CLIENT_ID": "",
+    "GOOGLE_ADS_CLIENT_ID": "534794119904-9esdp8dhskcupf6ekbb0iej2dr10gomf.apps.googleusercontent.com",
     "GOOGLE_ADS_API_VERSION": "v25"
   },
 

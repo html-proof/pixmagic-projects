@@ -91,7 +91,9 @@ export function AdsDetail({ ov }: { ov: Overview }) {
   const c = a.current;
   const money = (n: number) => fmtMoney(n, a.currency);
   const left = a.accounts.filter((acc) => !acc.counted);
-  const waiting = a.accounts.filter((acc) => acc.counted && !acc.lastSyncedAt);
+  // Never synced: still fetching while the account is fine; stuck if its first sync failed.
+  const waiting = a.accounts.filter((acc) => acc.counted && !acc.lastSyncedAt && acc.status === "active");
+  const failing = a.accounts.filter((acc) => acc.counted && !acc.lastSyncedAt && acc.status !== "active");
   const split = a.byProvider.length > 1 ? a.byProvider.map((p) => `${PLATFORM[p.provider].name} ${money(p.spend)}`).join(", ") : null;
 
   return (
@@ -102,7 +104,12 @@ export function AdsDetail({ ov }: { ov: Overview }) {
         </span>
         <div className="min-w-0 space-y-1 text-sm leading-relaxed">
           <p className="text-xs font-medium uppercase tracking-wide text-muted">In short</p>
-          {waiting.length > 0 && c.spend === 0 ? (
+          {failing.length > 0 && c.spend === 0 ? (
+            <p>
+              We couldn&apos;t read {failing.length === 1 ? "an ad account" : "some ad accounts"} yet.{" "}
+              <Link className="text-accent underline" href="/settings/ads">Check them in Settings</Link>: they may need reconnecting.
+            </p>
+          ) : waiting.length > 0 && c.spend === 0 ? (
             <p>Your ad accounts are being read for the first time. Numbers appear here within a few minutes.</p>
           ) : (
             <>

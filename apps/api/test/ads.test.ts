@@ -1,12 +1,12 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { systemDb } from "@app/db";
-import { adAccessToken, type AdsSyncData, type FetchLike } from "@app/core";
+import { adAccessToken, syncAdConnection, type AdsSyncData, type FetchLike } from "@app/core";
 import { addDays, localDay } from "@app/shared";
 import { clean, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
 
 /**
- * "Continue with Meta" / "Continue with Google": connecting ad accounts to a store, and what the
- * dashboard shows from them.
+ * "Continue with Meta" / "Continue with Google Ads" / "Continue with Google AdSense": connecting
+ * ad accounts to a store, and what the dashboard shows from them.
  */
 
 let ctx: TestCtx;
@@ -36,6 +36,29 @@ const metaPlatform: FetchLike = async (input) => {
   return json({ error: { message: `unexpected ${u.pathname}` } }, 400);
 };
 
+/** Google's token endpoint and AdSense: one account, and a report by day and site in `currency`. */
+const adsensePlatform =
+  (currency = "USD", rows: string[][] = []): FetchLike =>
+  async (input) => {
+    const u = new URL(String(input));
+    if (u.host === "oauth2.googleapis.com") return json({ access_token: "AS_ACCESS", refresh_token: "AS_REFRESH_SECRET", expires_in: 3599 });
+    if (u.pathname === "/v2/accounts") return json({ accounts: [{ name: "accounts/pub-77", displayName: "Shop site", timeZone: { id: "UTC" }, state: "READY" }] });
+    if (u.pathname === "/v2/accounts/pub-77/reports:generate") {
+      return json({
+        headers: [
+          { name: "DATE", type: "DIMENSION" },
+          { name: "DOMAIN_CODE", type: "DIMENSION" },
+          { name: "ESTIMATED_EARNINGS", type: "METRIC_CURRENCY", currencyCode: currency },
+          { name: "PAGE_VIEWS", type: "METRIC_TALLY" },
+          { name: "IMPRESSIONS", type: "METRIC_TALLY" },
+          { name: "CLICKS", type: "METRIC_TALLY" },
+        ],
+        rows: rows.map((r) => ({ cells: r.map((value) => ({ value })) })),
+      });
+    }
+    return json({ error: { message: `unexpected ${u.pathname}` } }, 400);
+  };
+
 let headers: Record<string, string>;
 let cookie: string;
 let ws: string;
@@ -54,7 +77,7 @@ beforeEach(async () => {
 const connect = (provider: string, h = headers) => ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/stores/${storeId}/ads/${provider}/connect`, headers: h });
 
 /** Start a connect and follow the platform back to our callback. */
-async function connectFlow(provider: "meta" | "google", query: Record<string, string> = { code: "CODE" }) {
+async function connectFlow(provider: "meta" | "google" | "adsense", query: Record<string, string> = { code: "CODE" }) {
   const start = await connect(provider);
   expect(start.statusCode).toBe(200);
   const state = new URL(start.json().url).searchParams.get("state")!;
@@ -70,7 +93,7 @@ describe("connecting ad accounts", () => {
   it("says when a platform isn't set up, instead of sending people to an error page", async () => {
     ctx.setEnv(NO_KEYS);
     const list = await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${storeId}/ads`, headers });
-    expect(list.json()).toEqual({ configured: { meta: false, google: false }, connections: [] });
+    expect(list.json()).toEqual({ configured: { meta: false, google: false, adsense: false }, connections: [] });
     const res = await connect("meta");
     expect(res.statusCode).toBe(503);
     expect(res.json().error).toBe("not_configured");
@@ -126,6 +149,42 @@ describe("connecting ad accounts", () => {
     expect(row).toMatchObject({ accountId: "901", accountName: "Store search", loginCustomerId: "900" });
     expect(row.refreshTokenEnc).toBeTruthy();
     expect(JSON.stringify(row)).not.toContain("G_REFRESH_SECRET");
+  });
+
+  it("Continue with Google AdSense: needs only the Google OAuth client, asks read-only, saves the account", async () => {
+    // No developer token: Google Ads can't connect, AdSense can.
+    ctx.setEnv({ ...NO_KEYS, GOOGLE_ADS_CLIENT_ID: "g_client", GOOGLE_ADS_CLIENT_SECRET: "g_secret" });
+    const list = await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${storeId}/ads`, headers });
+    expect(list.json().configured).toEqual({ meta: false, google: false, adsense: true });
+    expect((await connect("google")).statusCode).toBe(503);
+
+    ctx.setFetch(adsensePlatform());
+    const { start, cb } = await connectFlow("adsense");
+    const url = new URL(start.json().url);
+    expect(url.searchParams.get("scope")).toBe("https://www.googleapis.com/auth/adsense.readonly");
+    expect(url.searchParams.get("access_type")).toBe("offline");
+    expect(url.searchParams.get("redirect_uri")).toBe("http://localhost:3001/api/ads/adsense/callback");
+    expect(cb.headers.location).toBe(`http://localhost:3001/settings/ads?connected=adsense&accounts=1&store=${storeId}`);
+
+    const row = await systemDb.adConnection.findFirstOrThrow({ where: { storeId } });
+    expect(row).toMatchObject({ provider: "adsense", accountId: "pub-77", accountName: "Shop site", currency: null, timezone: "UTC", enabled: true });
+    expect(row.refreshTokenEnc).toBeTruthy();
+    expect(JSON.stringify(row)).not.toContain("AS_REFRESH_SECRET");
+    expect(await adAccessToken(row)).toBe("AS_ACCESS");
+    const jobs = ctx.deps.queues.sent.sync as unknown as AdsSyncData[];
+    expect(jobs).toEqual([expect.objectContaining({ kind: "ads", connectionId: row.id, since: addDays(localDay(new Date(), "UTC"), -89) })]);
+  });
+
+  it("a Google login with no AdSense account is told so", async () => {
+    ctx.setFetch(async (input) => {
+      const u = new URL(String(input));
+      if (u.host === "oauth2.googleapis.com") return json({ access_token: "AT", refresh_token: "RT", expires_in: 3599 });
+      return json({ error: { code: 403, message: "User does not have an AdSense account.", status: "PERMISSION_DENIED" } }, 403);
+    });
+    const { cb } = await connectFlow("adsense");
+    expect(cb.headers.location).toContain("error=no_accounts");
+    expect(cb.headers.location).toContain("provider=adsense");
+    expect(await systemDb.adConnection.count()).toBe(0);
   });
 
   it("refuses a callback that isn't this browser's, isn't this person's, or was cancelled", async () => {
@@ -218,5 +277,53 @@ describe("ads on the dashboard", () => {
     await systemDb.adConnection.updateMany({ where: { storeId }, data: { enabled: false } });
     const after = await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${storeId}/overview?preset=7d`, headers });
     expect(after.json().modules.ads).toBeUndefined();
+  });
+});
+
+describe("AdSense on the dashboard", () => {
+  it("shows earnings on their own, never added to ad spend, and disconnecting removes them", async () => {
+    const today = localDay(new Date(), "UTC");
+    const day = (n: number) => addDays(today, -n);
+    // An ad account that spends...
+    ctx.setFetch(metaPlatform);
+    await connectFlow("meta");
+    const usd = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, accountId: "act_1" } });
+    await systemDb.adCampaignDaily.create({ data: { workspaceId: ws, storeId, connectionId: usd.id, provider: "meta", accountId: "act_1", campaignId: "1", campaignName: "Spring", day: day(1), spend: 30, clicks: 10 } });
+    // ...and an AdSense account that earns, synced through the real client.
+    ctx.setFetch(
+      adsensePlatform("USD", [
+        [day(1), "ads-shop.example.com", "12.5", "5000", "9000", "20"],
+        [day(1), "blog.example.com", "2.5", "1000", "2000", "5"],
+        [day(9), "ads-shop.example.com", "5", "2500", "4000", "8"],
+      ]),
+    );
+    await connectFlow("adsense");
+    const sense = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, provider: "adsense" } });
+    await syncAdConnection(sense.id, day(13), today, ctx.deps.fetchImpl);
+    const synced = await systemDb.adConnection.findUniqueOrThrow({ where: { id: sense.id } });
+    expect(synced).toMatchObject({ currency: "USD", status: "active" });
+    expect(await systemDb.adsenseDaily.count({ where: { connectionId: sense.id } })).toBe(3);
+    await systemDb.dailyStoreMetrics.create({ data: { workspaceId: ws, storeId, day: day(1), grossSales: 300, orders: 3 } });
+
+    const res = await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${storeId}/overview?preset=7d`, headers });
+    const m = res.json().modules;
+    // Spend is only the Meta account's.
+    expect(m.ads.current.spend).toBe(30);
+    expect(m.ads.accounts.map((a: { provider: string }) => a.provider)).toEqual(["meta", "meta"]);
+    expect(m.adsense.currency).toBe("USD");
+    expect(m.adsense.current).toMatchObject({ earnings: 15, pageViews: 6000, impressions: 11000, clicks: 25, pageRpm: 2.5 });
+    expect(m.adsense.previous).toMatchObject({ earnings: 5, pageViews: 2500 });
+    expect(m.adsense.deltas.earnings).toBe(2);
+    expect(m.adsense.sites.map((s: { site: string; earnings: number }) => [s.site, s.earnings])).toEqual([["ads-shop.example.com", 12.5], ["blog.example.com", 2.5]]);
+    expect(m.adsense.series).toHaveLength(7);
+    expect(m.adsense.vsSales).toBe(0.05);
+    expect(m.adsense.accounts).toEqual([expect.objectContaining({ provider: "adsense", accountId: "pub-77", counted: true })]);
+
+    const del = await ctx.app.inject({ method: "DELETE", url: `/workspaces/${ws}/stores/${storeId}/ads/connections/${sense.id}`, headers });
+    expect(del.statusCode).toBe(200);
+    expect(await systemDb.adsenseDaily.count()).toBe(0);
+    const after = await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${storeId}/overview?preset=7d`, headers });
+    expect(after.json().modules.adsense).toBeUndefined();
+    expect(after.json().modules.ads.current.spend).toBe(30);
   });
 });

@@ -4,8 +4,11 @@ import {
   DATE_PRESETS,
   adSeries,
   adTotals,
+  adsenseSeries,
+  adsenseTotals,
   addDays,
   campaignTotals,
+  siteTotals,
   eachDay,
   channelLabel,
   daysBetweenInclusive,
@@ -19,7 +22,8 @@ import {
   PURCHASED_STEP,
   SITE_SECTIONS,
   type AdDayRow,
-  type AdProvider,
+  type AdsenseDayRow,
+  type AdSpendProvider,
   type DailyMetricsRow,
   type DateRange,
   type JourneyPageRow,
@@ -467,7 +471,8 @@ async function importedData(tx: Tx, { ws, storeId }: Scope) {
  */
 async function adsModule(tx: Tx, { ws, storeId }: Scope, range: DateRange, previous: DateRange, storeCurrency: string, netSales: number | null) {
   const conns = await tx.adConnection.findMany({
-    where: { workspaceId: ws, storeId, enabled: true },
+    // Spend only: AdSense accounts earn money for the store and have their own module below.
+    where: { workspaceId: ws, storeId, enabled: true, provider: { in: ["meta", "google"] } },
     select: { id: true, provider: true, accountId: true, accountName: true, currency: true, status: true, lastSyncedAt: true, lastError: true },
     orderBy: [{ provider: "asc" }, { createdAt: "asc" }],
   });
@@ -478,7 +483,7 @@ async function adsModule(tx: Tx, { ws, storeId }: Scope, range: DateRange, previ
     where: { workspaceId: ws, storeId, connectionId: { in: counted.map((c) => c.id) }, day: { gte: previous.from, lte: range.to } },
   });
   const rows: AdDayRow[] = raw.map((r) => ({
-    provider: r.provider as AdProvider,
+    provider: r.provider as AdSpendProvider,
     accountId: r.accountId,
     campaignId: r.campaignId,
     campaignName: r.campaignName,
@@ -495,7 +500,7 @@ async function adsModule(tx: Tx, { ws, storeId }: Scope, range: DateRange, previ
   const prev = inRange(previous);
   const current = adTotals(cur);
   const before = adTotals(prev);
-  const providers = [...new Set(counted.map((c) => c.provider as AdProvider))];
+  const providers = [...new Set(counted.map((c) => c.provider as AdSpendProvider))];
   return {
     currency,
     accounts: conns.map((c) => ({
@@ -521,6 +526,63 @@ async function adsModule(tx: Tx, { ws, storeId }: Scope, range: DateRange, previ
     campaigns: campaignTotals(cur, 10),
     /** Ad spend as a share of the store's net sales, when both are in the same currency. */
     shareOfSales: currency === storeCurrency && netSales !== null && netSales > 0 ? current.spend / netSales : null,
+  };
+}
+
+/**
+ * What the store's connected AdSense accounts earned from ads shown on its site, for these dates.
+ * Money the other way from adsModule: never added to ad spend. One currency only, chosen as for
+ * ads; AdSense says an account's currency in its reports, so it's known after the first sync.
+ */
+async function adsenseModule(tx: Tx, { ws, storeId }: Scope, range: DateRange, previous: DateRange, storeCurrency: string, netSales: number | null) {
+  const conns = await tx.adConnection.findMany({
+    where: { workspaceId: ws, storeId, enabled: true, provider: "adsense" },
+    select: { id: true, accountId: true, accountName: true, currency: true, status: true, lastSyncedAt: true },
+    orderBy: { createdAt: "asc" },
+  });
+  if (!conns.length) return null;
+  const currency = conns.some((c) => c.currency === storeCurrency) ? storeCurrency : (conns.find((c) => c.currency)?.currency ?? storeCurrency);
+  const counted = conns.filter((c) => (c.currency ?? currency) === currency);
+  const raw = await tx.adsenseDaily.findMany({
+    where: { workspaceId: ws, storeId, connectionId: { in: counted.map((c) => c.id) }, day: { gte: previous.from, lte: range.to } },
+  });
+  const rows: AdsenseDayRow[] = raw.map((r) => ({
+    accountId: r.accountId,
+    site: r.site,
+    day: r.day,
+    earnings: toNumber(r.earnings),
+    pageViews: r.pageViews,
+    impressions: r.impressions,
+    clicks: r.clicks,
+  }));
+  const inRange = (d: DateRange) => rows.filter((r) => r.day >= d.from && r.day <= d.to);
+  const cur = inRange(range);
+  const current = adsenseTotals(cur);
+  const before = adsenseTotals(inRange(previous));
+  return {
+    currency,
+    accounts: conns.map((c) => ({
+      id: c.id,
+      provider: "adsense" as const,
+      accountId: c.accountId,
+      name: c.accountName,
+      currency: c.currency,
+      status: c.status,
+      lastSyncedAt: c.lastSyncedAt,
+      counted: counted.some((x) => x.id === c.id),
+    })),
+    current,
+    previous: { earnings: before.earnings, pageViews: before.pageViews, clicks: before.clicks, pageRpm: before.pageRpm },
+    deltas: {
+      earnings: delta(current.earnings, before.earnings),
+      pageViews: delta(current.pageViews, before.pageViews),
+      clicks: delta(current.clicks, before.clicks),
+      pageRpm: delta(current.pageRpm, before.pageRpm),
+    },
+    series: adsenseSeries(cur, range),
+    sites: siteTotals(cur, 10),
+    /** Ad earnings next to the store's own net sales, when both are in the same currency. */
+    vsSales: currency === storeCurrency && netSales !== null && netSales > 0 ? current.earnings / netSales : null,
   };
 }
 
@@ -740,8 +802,11 @@ export function dashboardRoutes(app: App, deps: Deps) {
       if (enabled.has("funnel")) modules.funnel = await funnel(tx, scope, range, previous);
 
       // Not a Shopify capability: present once an ad account is connected to the store.
-      const ads = await adsModule(tx, scope, range, previous, store.currency, (modules.sales_overview as { current?: { netSales?: number } } | undefined)?.current?.netSales ?? null);
+      const netSales = (modules.sales_overview as { current?: { netSales?: number } } | undefined)?.current?.netSales ?? null;
+      const ads = await adsModule(tx, scope, range, previous, store.currency, netSales);
       if (ads) modules.ads = ads;
+      const adsense = await adsenseModule(tx, scope, range, previous, store.currency, netSales);
+      if (adsense) modules.adsense = adsense;
 
       if (enabled.has("channels")) modules.channels = await channels(tx, scope, range);
       if (enabled.has("order_timing")) modules.order_timing = await orderTiming(tx, scope, range, store.timezone);

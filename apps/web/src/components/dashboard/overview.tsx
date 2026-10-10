@@ -95,6 +95,11 @@ export function businessHealth(ov: Overview, currency: string): Check[] {
     const back = ads.current.roas !== null ? `; the platforms count ${fmtMoney(ads.current.conversionValue, ads.currency)} in sales from them (${new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(ads.current.roas)}×)` : "";
     out.push({ id: "ads", topic: "ads", area: "Ads", health: "info", text: `${fmtMoney(ads.current.spend, ads.currency)} spent on ads for ${plural(ads.current.clicks, "click")}${back}.` });
   }
+  const adsense = m.adsense;
+  if (adsense && adsense.current.pageViews > 0) {
+    const rpm = adsense.current.pageRpm !== null ? `, ${fmtMoney(adsense.current.pageRpm, adsense.currency)} per 1,000 views` : "";
+    out.push({ id: "adsense", topic: "adsense", area: "Ad earnings", health: "info", text: `${fmtMoney(adsense.current.earnings, adsense.currency)} earned from AdSense ads on your site${rpm}.` });
+  }
   const top = m.top_products?.items[0];
   if (top) out.push({ id: "best", topic: "products", area: "Best seller", health: "info", text: `${top.title}: ${money(top.revenue)} from ${plural(top.units, "unit")}.` });
   const ch = m.channels?.items[0];
@@ -251,7 +256,7 @@ export function AreaList({ ov, currency, topics, onOpen, canConnectAds = false }
           preview={counts.graded > 0 ? <AreaPreview topic="overview" ov={ov} currency={currency} health={{ attention: counts.attention, watch: counts.watch, good: counts.good, info: 0 }} /> : null}
           onOpen={() => onOpen("overview")}
         />
-        {!ov.modules.ads && canConnectAds && (
+        {!ov.modules.ads && !ov.modules.adsense && canConnectAds && (
           <AreaCard
             topic="ads"
             title="Ads"
@@ -260,11 +265,12 @@ export function AreaList({ ov, currency, topics, onOpen, canConnectAds = false }
                 <Icon name="megaphone" className="h-5 w-5" />
               </span>
             }
-            text="Connect Meta or Google Ads to see what you spend each day, the clicks and sales it brings, and what it costs next to your sales."
+            text="Connect Meta or Google Ads to see what you spend each day, the clicks and sales it brings, and what it costs next to your sales. Or Google AdSense, for what your site earns from ads shown on it."
             preview={
               <span className="flex flex-wrap items-center gap-2 text-xs text-muted">
                 <span className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-white px-2 py-1 text-[#1b1b18]"><MetaIcon size={14} />Continue with Meta</span>
-                <span className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-white px-2 py-1 text-[#1b1b18]"><GoogleIcon size={14} />Continue with Google</span>
+                <span className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-white px-2 py-1 text-[#1b1b18]"><GoogleIcon size={14} />Continue with Google Ads</span>
+                <span className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-white px-2 py-1 text-[#1b1b18]"><GoogleIcon size={14} />Continue with Google AdSense</span>
               </span>
             }
             onOpen={() => router.push("/settings/ads")}
@@ -418,6 +424,7 @@ export function OverviewDetail({ ov, currency, onOpen }: { ov: Overview; currenc
                 {f && <Row label="Visitors who bought" now={fmtPct(f.conversionRate)} before={f.previous.conversionRate !== null ? fmtPct(f.previous.conversionRate) : null} change={<Change value={f.deltas.conversionRate} />} />}
                 {m.ads && <Row label={`Ad spend (${m.ads.currency})`} now={fmtMoney(m.ads.current.spend, m.ads.currency)} before={fmtMoney(m.ads.previous.spend, m.ads.currency)} change={<Change value={m.ads.deltas.spend} invert />} />}
                 {m.ads && <Row label="Return on ad spend" now={m.ads.current.roas !== null ? `${m.ads.current.roas.toFixed(2)}×` : "—"} before={m.ads.previous.roas !== null ? `${m.ads.previous.roas.toFixed(2)}×` : null} change={<Change value={m.ads.deltas.roas} />} />}
+                {m.adsense && <Row label={`AdSense earnings (${m.adsense.currency})`} now={fmtMoney(m.adsense.current.earnings, m.adsense.currency)} before={fmtMoney(m.adsense.previous.earnings, m.adsense.currency)} change={<Change value={m.adsense.deltas.earnings} />} />}
                 {m.customers && m.customers.current.returningCustomerRate !== null && <Row label="Returning customers" now={fmtPct(m.customers.current.returningCustomerRate)} before={m.customers.previous.returningCustomerRate !== null ? fmtPct(m.customers.previous.returningCustomerRate) : null} />}
               </tbody>
             </table>

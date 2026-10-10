@@ -4,13 +4,14 @@ import type { IconName } from "./icons";
 import type { Overview } from "./types";
 
 /** Everything a dashboard card can open, each as its own detail panel (?view=<topic>). */
-export const TOPICS = ["overview", "sales", "ads", "products", "shoppers", "timing", "channels", "shipping", "stock", "discounts", "customers", "orders"] as const;
+export const TOPICS = ["overview", "sales", "ads", "adsense", "products", "shoppers", "timing", "channels", "shipping", "stock", "discounts", "customers", "orders"] as const;
 export type Topic = (typeof TOPICS)[number];
 
 const INFO: Record<Topic, { title: string; icon: IconName }> = {
   overview: { title: "Business overview", icon: "sparkle" },
   sales: { title: "Sales", icon: "chart" },
   ads: { title: "Ads", icon: "megaphone" },
+  adsense: { title: "Ad earnings", icon: "coins" },
   products: { title: "Best sellers", icon: "trophy" },
   shoppers: { title: "Shoppers", icon: "eye" },
   timing: { title: "Busiest times", icon: "clock" },
@@ -40,6 +41,11 @@ export function topicSummary(t: Topic, ov: Overview, currency: string): string {
       const a = m.ads;
       if (!a) return "Connect Meta or Google Ads";
       return `${fmtMoney(a.current.spend, a.currency)} spent · ${plural(a.current.clicks, "click")}`;
+    }
+    case "adsense": {
+      const a = m.adsense;
+      if (!a) return "Connect Google AdSense";
+      return `${fmtMoney(a.current.earnings, a.currency)} earned · ${plural(a.current.pageViews, "page view")}`;
     }
     case "products": {
       const top = m.top_products?.items[0];

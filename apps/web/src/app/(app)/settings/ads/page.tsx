@@ -7,7 +7,7 @@ import { Alert } from "@/components/ui";
 import { actionError, api, useApi } from "@/lib/api";
 import { fmtRelative } from "@/components/dashboard/format";
 
-type Provider = "meta" | "google";
+type Provider = "meta" | "google" | "adsense";
 
 interface Connection {
   id: string;
@@ -29,10 +29,27 @@ interface AdsState {
   connections: Connection[];
 }
 
-const PROVIDERS: Array<{ id: Provider; name: string; sub: string; button: string; Icon: (p: { size?: number }) => ReactNode }> = [
-  { id: "meta", name: "Meta Ads", sub: "Facebook and Instagram ads", button: "Continue with Meta", Icon: MetaIcon },
-  { id: "google", name: "Google Ads", sub: "Search, Shopping, YouTube and Performance Max", button: "Continue with Google", Icon: GoogleIcon },
+const PROVIDERS: Array<{ id: Provider; name: string; sub: string; button: string; needs: string; Icon: (p: { size?: number }) => ReactNode }> = [
+  { id: "meta", name: "Meta Ads", sub: "Facebook and Instagram ads", button: "Continue with Meta", needs: "the app keys from Meta for Developers", Icon: MetaIcon },
+  {
+    id: "google",
+    name: "Google Ads",
+    sub: "Search, Shopping, YouTube and Performance Max",
+    button: "Continue with Google Ads",
+    needs: "the app keys from Google Cloud and a Google Ads developer token",
+    Icon: GoogleIcon,
+  },
+  {
+    id: "adsense",
+    name: "Google AdSense",
+    sub: "What your site earns from ads shown on it",
+    button: "Continue with Google AdSense",
+    needs: "the app keys from Google Cloud",
+    Icon: GoogleIcon,
+  },
 ];
+
+const BUTTON = Object.fromEntries(PROVIDERS.map((p) => [p.id, p.button])) as Record<Provider, string>;
 
 /** What the callback's ?error= means, in words. */
 const ERRORS: Record<string, string> = {
@@ -42,12 +59,13 @@ const ERRORS: Record<string, string> = {
   session_mismatch: "You were signed in as someone else when you came back. Sign in as yourself and try again.",
   exchange_failed: "The platform didn't accept the sign-in. Please try again in a moment.",
   no_accounts: "That login can't see any ad accounts. Ask the account's owner to give you access, then connect again.",
+  no_accounts_adsense: "That Google login has no AdSense account. Sign in with the Google account that owns your AdSense, or ask its owner to add you as a user.",
   no_refresh_token: "Google didn't grant lasting access. Please try again and allow access on Google's screen.",
   missing_params: "The platform didn't send everything back. Please try again.",
   temporarily_unavailable: "Something went wrong on our side. Please try again in a minute.",
 };
 
-const PROVIDER_NAME: Record<Provider, string> = { meta: "Meta", google: "Google Ads" };
+const PROVIDER_NAME: Record<Provider, string> = { meta: "Meta", google: "Google Ads", adsense: "Google AdSense" };
 
 function daysUntil(iso: string | null): number | null {
   if (!iso) return null;
@@ -56,7 +74,7 @@ function daysUntil(iso: string | null): number | null {
 
 function StatusLine({ c }: { c: Connection }) {
   if (!c.enabled) return <span className="text-muted">Hidden from the dashboard</span>;
-  if (c.status === "reconnect") return <span className="text-danger">Access has ended. Press {c.provider === "meta" ? "Continue with Meta" : "Continue with Google"} again to reconnect.</span>;
+  if (c.status === "reconnect") return <span className="text-danger">Access has ended. Press {BUTTON[c.provider] ?? "the button"} again to reconnect.</span>;
   if (c.status === "error") return <span className="text-warn">Last sync didn&apos;t work{c.lastError ? `: ${c.lastError}` : ""}. We&apos;ll keep trying.</span>;
   if (!c.lastSyncedAt) return <span className="text-muted">Fetching the last 90 days…</span>;
   const left = c.provider === "meta" ? daysUntil(c.accessExpiresAt) : null;
@@ -84,9 +102,10 @@ export default function AdAccountsPage() {
     const code = q.get("error");
     if (connected) {
       const n = Number(q.get("accounts") ?? 0);
-      setNotice(`${PROVIDER_NAME[connected] ?? "Ad platform"} connected: ${n} ad account${n === 1 ? "" : "s"}. The last 90 days are being fetched; numbers appear on the dashboard within a few minutes.`);
+      const what = connected === "adsense" ? "AdSense account" : "ad account";
+      setNotice(`${PROVIDER_NAME[connected] ?? "Ad platform"} connected: ${n} ${what}${n === 1 ? "" : "s"}. The last 90 days are being fetched; numbers appear on the dashboard within a few minutes.`);
     } else if (code) {
-      setError(ERRORS[code] ?? "Connecting didn't work. Please try again.");
+      setError(ERRORS[`${code}_${q.get("provider")}`] ?? ERRORS[code] ?? "Connecting didn't work. Please try again.");
     }
     if (connected || code) window.history.replaceState(window.history.state, "", "/settings/ads");
     // Once the store list is known.
@@ -164,7 +183,8 @@ export default function AdAccountsPage() {
         <h1 className="text-lg font-semibold">Ad accounts</h1>
         <p className="mt-1 text-sm text-muted">
           Connect Meta and Google Ads to see what you spend on ads each day, the clicks and sales they bring, and how that compares with your store&apos;s own
-          sales. Access is read-only: Insights can&apos;t create, change or pause your ads.
+          sales. Connect Google AdSense to see what your site earns from ads shown on it. Access is read-only: Insights can&apos;t create, change or pause your
+          ads.
         </p>
         <p className="mt-2 text-sm">
           For <strong>{store.name ?? store.shopDomain}</strong>
@@ -207,7 +227,7 @@ export default function AdAccountsPage() {
 
             {!configured && data && (
               <p className="mt-3 rounded-lg border border-dashed border-border px-3 py-2 text-sm text-muted">
-                {p.name} isn&apos;t set up on this Insights server yet: it needs the app keys from {p.id === "meta" ? "Meta for Developers" : "Google Cloud and a Google Ads developer token"}.
+                {p.name} isn&apos;t set up on this Insights server yet: it needs {p.needs}.
                 {manage ? " The steps are in docs/ads-setup.md." : " Ask a workspace owner or admin."}
               </p>
             )}
@@ -254,6 +274,7 @@ export default function AdAccountsPage() {
         <h2 className="font-semibold text-text">What Insights reads</h2>
         <ul className="mt-2 list-disc space-y-1 pl-5">
           <li>For each campaign and day: what was spent, impressions, clicks, and the purchases, leads and sales value the platform counts.</li>
+          <li>From AdSense, for each site and day: estimated earnings, page views, ads shown and clicks.</li>
           <li>Account names, currencies and time zones, so days and money line up.</li>
           <li>Nothing about the people who saw your ads, and nothing is ever changed in your ad accounts.</li>
           <li>Access is stored encrypted. Disconnecting deletes it and every number fetched with it.</li>

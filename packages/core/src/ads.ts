@@ -1,14 +1,28 @@
 /**
- * Meta Marketing API and Google Ads API clients: the OAuth handshake ("Continue with Meta" /
- * "Continue with Google"), the ad accounts a person can see, and daily numbers per campaign.
+ * Meta Marketing API, Google Ads API and AdSense Management API clients: the OAuth handshake
+ * ("Continue with Meta" / "Continue with Google Ads" / "Continue with Google AdSense"), the
+ * accounts a person can see, and daily numbers per campaign (ads) or per site (AdSense).
  *
- * Read-only by design: the only permissions asked for are `ads_read` (Meta) and the Google Ads
- * scope used for reporting. Nothing here creates, edits or pauses an ad.
+ * Read-only by design: the only permissions asked for are `ads_read` (Meta), the Google Ads scope
+ * used for reporting and `adsense.readonly`. Nothing here creates, edits or pauses an ad.
  *
  * Every function takes its keys and a fetch implementation as arguments, so tests run against
  * fakes and nothing in here reads the environment.
  */
-import { fromGoogleAdsRow, fromMetaInsight, googleCustomerId, isDay, metaAccountId, type AdDayRow, type GoogleAdsRow, type MetaInsightRow } from "@app/shared";
+import {
+  adsenseAccountId,
+  fromAdsenseReport,
+  fromGoogleAdsRow,
+  fromMetaInsight,
+  googleCustomerId,
+  isDay,
+  metaAccountId,
+  type AdDayRow,
+  type AdsenseDayRow,
+  type AdsenseReport,
+  type GoogleAdsRow,
+  type MetaInsightRow,
+} from "@app/shared";
 import type { FetchLike } from "./shopify.js";
 
 /** The person's access was refused or has expired: they have to connect again. */
@@ -137,24 +151,28 @@ export async function metaCampaignDays(c: MetaConfig, accessToken: string, accou
 // Google
 // ---------------------------------------------------------------------------
 
-export interface GoogleConfig {
+/** A Google Cloud OAuth client. Google Ads and AdSense both sign in through the same one. */
+export interface GoogleOAuthClient {
   clientId: string;
   clientSecret: string;
+  fetchImpl?: FetchLike;
+}
+
+export interface GoogleConfig extends GoogleOAuthClient {
   /** Issued by Google to the Ads API project; sent on every Ads API call. */
   developerToken: string;
   /** Google Ads API version, e.g. "v25". */
   version: string;
-  fetchImpl?: FetchLike;
 }
 
 export const GOOGLE_ADS_SCOPE = "https://www.googleapis.com/auth/adwords";
 
-export function googleAuthorizeUrl(c: GoogleConfig, redirectUri: string, state: string): string {
+function googleConsentUrl(c: GoogleOAuthClient, scope: string, redirectUri: string, state: string): string {
   const q = new URLSearchParams({
     client_id: c.clientId,
     redirect_uri: redirectUri,
     response_type: "code",
-    scope: GOOGLE_ADS_SCOPE,
+    scope,
     // A refresh token, every time: the access token lasts an hour and syncs run for months.
     access_type: "offline",
     prompt: "consent",
@@ -163,7 +181,11 @@ export function googleAuthorizeUrl(c: GoogleConfig, redirectUri: string, state: 
   return `https://accounts.google.com/o/oauth2/v2/auth?${q}`;
 }
 
-async function googleToken(c: GoogleConfig, form: Record<string, string>): Promise<{ access_token: string; expires_in?: number; refresh_token?: string }> {
+export function googleAuthorizeUrl(c: GoogleConfig, redirectUri: string, state: string): string {
+  return googleConsentUrl(c, GOOGLE_ADS_SCOPE, redirectUri, state);
+}
+
+async function googleToken(c: GoogleOAuthClient, form: Record<string, string>): Promise<{ access_token: string; expires_in?: number; refresh_token?: string }> {
   const res = await (c.fetchImpl ?? fetch)("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -177,13 +199,13 @@ async function googleToken(c: GoogleConfig, form: Record<string, string>): Promi
   throw new AdsApiError(msg, res.status);
 }
 
-export async function googleExchangeCode(c: GoogleConfig, code: string, redirectUri: string): Promise<TokenSet> {
+export async function googleExchangeCode(c: GoogleOAuthClient, code: string, redirectUri: string): Promise<TokenSet> {
   const t = await googleToken(c, { code, redirect_uri: redirectUri, grant_type: "authorization_code" });
   return { accessToken: t.access_token, refreshToken: t.refresh_token ?? null, expiresAt: expiry(t.expires_in) };
 }
 
 /** A fresh one-hour access token from the stored refresh token. */
-export async function googleRefresh(c: GoogleConfig, refreshToken: string): Promise<TokenSet> {
+export async function googleRefresh(c: GoogleOAuthClient, refreshToken: string): Promise<TokenSet> {
   const t = await googleToken(c, { refresh_token: refreshToken, grant_type: "refresh_token" });
   return { accessToken: t.access_token, refreshToken, expiresAt: expiry(t.expires_in) };
 }
@@ -273,4 +295,97 @@ export async function googleCampaignDays(c: GoogleConfig, accessToken: string, a
     account.loginCustomerId,
   );
   return rows.map((r) => fromGoogleAdsRow(googleCustomerId(account.accountId), r)).filter((r): r is AdDayRow => r !== null);
+}
+
+// ---------------------------------------------------------------------------
+// AdSense (what the site earns from Google ads shown on it)
+// ---------------------------------------------------------------------------
+
+/** AdSense needs only the Google OAuth client: unlike Google Ads, there is no developer token. */
+export type AdsenseConfig = GoogleOAuthClient;
+
+export const ADSENSE_SCOPE = "https://www.googleapis.com/auth/adsense.readonly";
+
+export function adsenseAuthorizeUrl(c: AdsenseConfig, redirectUri: string, state: string): string {
+  return googleConsentUrl(c, ADSENSE_SCOPE, redirectUri, state);
+}
+
+async function adsenseGet<T>(c: AdsenseConfig, accessToken: string, path: string, params: URLSearchParams): Promise<T> {
+  const res = await (c.fetchImpl ?? fetch)(`https://adsense.googleapis.com/v2/${path}?${params}`, { method: "GET", headers: { authorization: `Bearer ${accessToken}` } });
+  const body = (await res.json().catch(() => ({}))) as T & { error?: { message?: string; status?: string } };
+  if (res.ok && !body.error) return body;
+  const err = body.error ?? {};
+  const msg = err.message ?? `AdSense returned ${res.status}`;
+  if (res.status === 401 || err.status === "UNAUTHENTICATED") throw new AdsAuthError(msg);
+  if (res.status === 429 || res.status >= 500 || err.status === "RESOURCE_EXHAUSTED" || err.status === "UNAVAILABLE") throw new AdsRetryableError(msg);
+  throw new AdsApiError(msg, res.status);
+}
+
+interface AdsenseAccount {
+  name?: string;
+  displayName?: string;
+  timeZone?: { id?: string };
+  state?: string;
+}
+
+/**
+ * The AdSense accounts the person can read; closed ones are left out. The account doesn't say
+ * its currency: the first report does, and the sync stores it then.
+ */
+export async function adsenseAccounts(c: AdsenseConfig, accessToken: string): Promise<AdAccount[]> {
+  const out: AdAccount[] = [];
+  let pageToken = "";
+  for (let i = 0; i < 20; i++) {
+    const q = new URLSearchParams({ pageSize: "100" });
+    if (pageToken) q.set("pageToken", pageToken);
+    const page = await adsenseGet<{ accounts?: AdsenseAccount[]; nextPageToken?: string }>(c, accessToken, "accounts", q);
+    for (const a of page.accounts ?? []) {
+      if (!a.name || a.state === "CLOSED") continue;
+      out.push({ accountId: adsenseAccountId(a.name), name: a.displayName ?? null, currency: null, timezone: a.timeZone?.id ?? null });
+    }
+    pageToken = page.nextPageToken ?? "";
+    if (!pageToken) break;
+  }
+  return out;
+}
+
+/** Google spells a date in a query as three fields: startDate.year=2026&startDate.month=10&startDate.day=1. */
+const dateParams = (prefix: string, day: string): Array<[string, string]> => {
+  const [y, m, d] = day.split("-").map(Number);
+  return [[`${prefix}.year`, String(y)], [`${prefix}.month`, String(m)], [`${prefix}.day`, String(d)]];
+};
+
+/**
+ * Earnings, page views, ads shown and clicks per site per day, from `since` to `until`, on the
+ * account's own calendar. Asked for by site; if AdSense won't split this account's report that
+ * way, the account's daily totals are fetched instead (site "").
+ */
+export async function adsenseSiteDays(c: AdsenseConfig, accessToken: string, accountId: string, since: string, until: string): Promise<{ rows: AdsenseDayRow[]; currency: string | null }> {
+  if (!isDay(since) || !isDay(until)) throw new AdsApiError(`Invalid date range ${since}..${until}`, 400);
+  const pub = adsenseAccountId(accountId);
+  // The id goes into the URL path: only ever a publisher id.
+  if (!/^pub-\d+$/.test(pub)) throw new AdsApiError(`Invalid AdSense account ${accountId}`, 400);
+  const query = (bySite: boolean) =>
+    new URLSearchParams([
+      ["dateRange", "CUSTOM"],
+      ...dateParams("startDate", since),
+      ...dateParams("endDate", until),
+      ["dimensions", "DATE"],
+      ...(bySite ? [["dimensions", "DOMAIN_CODE"] as [string, string]] : []),
+      ["metrics", "ESTIMATED_EARNINGS"],
+      ["metrics", "PAGE_VIEWS"],
+      ["metrics", "IMPRESSIONS"],
+      ["metrics", "CLICKS"],
+      ["reportingTimeZone", "ACCOUNT_TIME_ZONE"],
+      ["limit", "100000"],
+    ]);
+  const path = `accounts/${pub}/reports:generate`;
+  let report: AdsenseReport;
+  try {
+    report = await adsenseGet<AdsenseReport>(c, accessToken, path, query(true));
+  } catch (err) {
+    if (!(err instanceof AdsApiError) || err.status !== 400) throw err;
+    report = await adsenseGet<AdsenseReport>(c, accessToken, path, query(false));
+  }
+  return fromAdsenseReport(pub, report);
 }

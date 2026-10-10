@@ -1,6 +1,6 @@
 "use client";
 import type { ReactNode } from "react";
-import { fmtNum, fmtPct } from "@/lib/api";
+import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { fmtDay, fmtMoneyWhole, fmtRelative, fmtWeekday } from "./format";
 import type { Health } from "./overview";
 import type { Topic } from "./topics";
@@ -140,6 +140,22 @@ export function AreaPreview({ topic, ov, currency, health }: { topic: Topic; ov:
           <Caption>
             Ad spend per day{split ? <> · {split}</> : null}
             {a.current.roas !== null ? <> · platforms report {new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(a.current.roas)}× back</> : null}
+          </Caption>
+        </>
+      );
+    }
+    case "adsense": {
+      const a = m.adsense;
+      if (!a || a.series.length < 2) return null;
+      const values = a.series.map((d) => d.earnings);
+      const top = values.indexOf(Math.max(...values));
+      const today = a.series.findIndex((d) => d.day === ov.today);
+      return (
+        <>
+          <MiniColumns values={values} emphasis={values[top]! > 0 ? top : null} faded={today >= 0 ? today : null} />
+          <Caption>
+            Ad earnings per day
+            {a.current.pageRpm !== null ? <> · {fmtMoney(a.current.pageRpm, a.currency)} per 1,000 views</> : null}
           </Caption>
         </>
       );

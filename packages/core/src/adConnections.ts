@@ -1,17 +1,20 @@
 /**
  * Ad accounts connected to a store: their encrypted tokens, keeping those tokens usable, and
- * storing what the platforms report (ad_campaign_daily). The platform calls themselves are in
- * ads.ts; the HTTP routes are apps/api/src/routes/ads.ts; the sync job is apps/worker.
+ * storing what the platforms report (ad_campaign_daily, and adsense_daily for AdSense). The
+ * platform calls themselves are in ads.ts; the HTTP routes are apps/api/src/routes/ads.ts; the
+ * sync job is apps/worker.
  */
 import { systemDb, type AdConnection } from "@app/db";
-import { addDays, decrypt, encrypt, keyVersionOf, localDay, type AdDayRow, type AdProvider } from "@app/shared";
+import { addDays, decrypt, encrypt, keyVersionOf, localDay, type AdDayRow, type AdProvider, type AdsenseDayRow } from "@app/shared";
 import {
   AdsApiError,
   AdsAuthError,
+  adsenseSiteDays,
   googleCampaignDays,
   googleRefresh,
   metaCampaignDays,
   type AdAccount,
+  type AdsenseConfig,
   type GoogleConfig,
   type MetaConfig,
   type TokenSet,
@@ -35,7 +38,17 @@ export function googleConfig(fetchImpl?: FetchLike): GoogleConfig | null {
   return { clientId: e.GOOGLE_ADS_CLIENT_ID, clientSecret: e.GOOGLE_ADS_CLIENT_SECRET, developerToken: e.GOOGLE_ADS_DEVELOPER_TOKEN, version: e.GOOGLE_ADS_API_VERSION, fetchImpl };
 }
 
-export const adsConfigured = (): Record<AdProvider, boolean> => ({ meta: metaConfig() !== null, google: googleConfig() !== null });
+/** AdSense signs in through the same Google OAuth client as Google Ads, and needs nothing else. */
+export function adsenseConfig(fetchImpl?: FetchLike): AdsenseConfig | null {
+  const e = env();
+  if (!e.GOOGLE_ADS_CLIENT_ID || !e.GOOGLE_ADS_CLIENT_SECRET) return null;
+  return { clientId: e.GOOGLE_ADS_CLIENT_ID, clientSecret: e.GOOGLE_ADS_CLIENT_SECRET, fetchImpl };
+}
+
+export const adsConfigured = (): Record<AdProvider, boolean> => ({ meta: metaConfig() !== null, google: googleConfig() !== null, adsense: adsenseConfig() !== null });
+
+/** The platform's name in messages. */
+export const AD_PROVIDER_NAME: Record<AdProvider, string> = { meta: "Meta", google: "Google Ads", adsense: "Google AdSense" };
 
 /** Where the platform sends people back. Must be registered exactly like this in the Meta app and the Google OAuth client. */
 export const adsRedirectUri = (provider: AdProvider) => `${env().APP_URL}/api/ads/${provider}/callback`;
@@ -87,7 +100,8 @@ export async function saveAdConnections(input: {
       },
       update: {
         accountName: a.name,
-        currency: a.currency,
+        // AdSense accounts don't say their currency when listed (the sync learns it): keep what's known.
+        ...(a.currency ? { currency: a.currency } : {}),
         timezone: a.timezone,
         loginCustomerId: a.loginCustomerId ?? null,
         connectedByUserId: input.userId,
@@ -102,9 +116,9 @@ export async function saveAdConnections(input: {
 }
 
 /**
- * A usable access token for this ad account. Google's last an hour, so a fresh one is minted
- * from the stored refresh token when needed; Meta's last about 60 days and can't be renewed
- * without the person signing in again, so an expired one means "reconnect".
+ * A usable access token for this ad account. Google's (Google Ads and AdSense) last an hour, so a
+ * fresh one is minted from the stored refresh token when needed; Meta's last about 60 days and
+ * can't be renewed without the person signing in again, so an expired one means "reconnect".
  */
 export async function adAccessToken(conn: AdConnection, fetchImpl?: FetchLike): Promise<string> {
   const k = keyring();
@@ -115,11 +129,12 @@ export async function adAccessToken(conn: AdConnection, fetchImpl?: FetchLike): 
     return access();
   }
   if (!conn.accessTokenExpiresAt || conn.accessTokenExpiresAt.getTime() > soon) return access();
-  const cfg = googleConfig(fetchImpl);
-  if (!cfg) throw new AdsApiError("Google Ads isn't set up on this server", 503);
+  const provider = conn.provider as AdProvider;
+  const cfg = provider === "adsense" ? adsenseConfig(fetchImpl) : googleConfig(fetchImpl);
+  if (!cfg) throw new AdsApiError(`${AD_PROVIDER_NAME[provider] ?? "Google"} isn't set up on this server`, 503);
   if (!conn.refreshTokenEnc) throw new AdsAuthError("Google access has no refresh token");
   const fresh = await googleRefresh(cfg, decrypt(conn.refreshTokenEnc, k, aad(conn.storeId, conn.provider, "refresh")));
-  const enc = encryptAdTokens(conn.storeId, "google", fresh);
+  const enc = encryptAdTokens(conn.storeId, provider, fresh);
   await systemDb.adConnection.update({ where: { id: conn.id }, data: { accessTokenEnc: enc.accessTokenEnc, accessTokenExpiresAt: enc.accessTokenExpiresAt, tokenKeyVersion: enc.tokenKeyVersion } });
   return fresh.accessToken;
 }
@@ -153,23 +168,61 @@ export async function storeAdDays(conn: AdConnection, since: string, until: stri
   return inRange.length;
 }
 
+/**
+ * Replace what's stored for these days with what AdSense reports now, and remember the account's
+ * currency (AdSense only says it in reports).
+ */
+export async function storeAdsenseDays(conn: AdConnection, since: string, until: string, rows: AdsenseDayRow[], currency: string | null) {
+  const inRange = rows.filter((r) => r.day >= since && r.day <= until);
+  const cur = currency ?? conn.currency;
+  await systemDb.$transaction([
+    systemDb.adsenseDaily.deleteMany({ where: { connectionId: conn.id, day: { gte: since, lte: until } } }),
+    systemDb.adsenseDaily.createMany({
+      data: inRange.map((r) => ({
+        workspaceId: conn.workspaceId,
+        storeId: conn.storeId,
+        connectionId: conn.id,
+        accountId: conn.accountId,
+        site: r.site.slice(0, 255),
+        day: r.day,
+        earnings: r.earnings,
+        pageViews: Math.min(r.pageViews, 2_147_483_647),
+        impressions: Math.min(r.impressions, 2_147_483_647),
+        clicks: Math.min(r.clicks, 2_147_483_647),
+        currency: cur,
+      })),
+      skipDuplicates: true,
+    }),
+    ...(currency && currency !== conn.currency ? [systemDb.adConnection.update({ where: { id: conn.id }, data: { currency } })] : []),
+  ]);
+  return inRange.length;
+}
+
 /** Fetch and store one ad account's days. Marks the connection with what happened. */
 export async function syncAdConnection(connectionId: string, since: string, until: string, fetchImpl?: FetchLike) {
   const conn = await systemDb.adConnection.findUnique({ where: { id: connectionId } });
   if (!conn || !conn.enabled) return { skipped: true as const };
   try {
     const token = await adAccessToken(conn, fetchImpl);
-    let rows: AdDayRow[];
+    let stored: number;
     if (conn.provider === "meta") {
       const cfg = metaConfig(fetchImpl);
       if (!cfg) throw new AdsApiError("Meta isn't set up on this server", 503);
-      rows = await metaCampaignDays(cfg, token, conn.accountId, since, until);
-    } else {
+      const rows: AdDayRow[] = await metaCampaignDays(cfg, token, conn.accountId, since, until);
+      stored = await storeAdDays(conn, since, until, rows);
+    } else if (conn.provider === "google") {
       const cfg = googleConfig(fetchImpl);
       if (!cfg) throw new AdsApiError("Google Ads isn't set up on this server", 503);
-      rows = await googleCampaignDays(cfg, token, conn, since, until);
+      const rows: AdDayRow[] = await googleCampaignDays(cfg, token, conn, since, until);
+      stored = await storeAdDays(conn, since, until, rows);
+    } else if (conn.provider === "adsense") {
+      const cfg = adsenseConfig(fetchImpl);
+      if (!cfg) throw new AdsApiError("Google AdSense isn't set up on this server", 503);
+      const report = await adsenseSiteDays(cfg, token, conn.accountId, since, until);
+      stored = await storeAdsenseDays(conn, since, until, report.rows, report.currency);
+    } else {
+      throw new AdsApiError(`Unknown ad platform ${conn.provider}`, 400);
     }
-    const stored = await storeAdDays(conn, since, until, rows);
     await systemDb.adConnection.update({ where: { id: conn.id }, data: { status: "active", lastError: null, lastSyncedAt: new Date() } });
     return { skipped: false as const, stored };
   } catch (err) {

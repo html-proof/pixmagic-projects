@@ -1,22 +1,27 @@
-# Ad accounts: setting up "Continue with Meta" and "Continue with Google"
+# Ad accounts: setting up "Continue with Meta", "Continue with Google Ads" and "Continue with Google AdSense"
 
 Merchants connect their ad accounts on **Settings → Ad accounts**. Insights then reads, every hour,
 what each campaign spent and what it brought (views, clicks, purchases, leads, sales value) and
 shows it on the dashboard's **Ads** card next to the store's own sales.
 
-Access is **read-only**: Meta's `ads_read` permission and Google's Ads reporting scope. Insights never
-creates, changes or pauses an ad. Tokens are stored encrypted with the same keyring as Shopify's
+**Google AdSense** runs the other way: it is what the store's *site* earns from Google ads shown on
+it. Its estimated earnings, page views, ads shown and clicks, per site and day, go on a separate
+**Ad earnings** card, and are never added to ad spend.
+
+Access is **read-only**: Meta's `ads_read` permission, Google's Ads reporting scope, and
+`adsense.readonly`. Insights never creates, changes or pauses an ad. Tokens are stored encrypted with the same keyring as Shopify's
 (`TOKEN_ENCRYPTION_KEYS`) and deleted when an account is disconnected or the store is removed.
 
-Until the keys below are set, both buttons say the platform "isn't set up on this server yet".
-Nothing else changes.
+Until the keys below are set, each button says its platform "isn't set up on this server yet".
+Nothing else changes. AdSense needs only the Google OAuth client (id and secret): it has no
+developer token, so it can work before Google Ads does.
 
 | Setting | Where it goes | Secret? |
 | --- | --- | --- |
 | `META_APP_ID` | `apps/cloudflare/wrangler.jsonc` → `vars` | no |
 | `META_APP_SECRET` | `npx wrangler secret put META_APP_SECRET` | **yes** |
-| `GOOGLE_ADS_CLIENT_ID` | `wrangler.jsonc` → `vars` | no |
-| `GOOGLE_ADS_CLIENT_SECRET` | `npx wrangler secret put GOOGLE_ADS_CLIENT_SECRET` | **yes** |
+| `GOOGLE_ADS_CLIENT_ID` | `wrangler.jsonc` → `vars` (Google Ads **and** AdSense) | no |
+| `GOOGLE_ADS_CLIENT_SECRET` | `npx wrangler secret put GOOGLE_ADS_CLIENT_SECRET` (Google Ads **and** AdSense) | **yes** |
 | `GOOGLE_ADS_DEVELOPER_TOKEN` | `npx wrangler secret put GOOGLE_ADS_DEVELOPER_TOKEN` | **yes** |
 | `META_API_VERSION`, `GOOGLE_ADS_API_VERSION` | `wrangler.jsonc` (`v25.0`, `v25`) | no |
 
@@ -25,7 +30,8 @@ Run the `wrangler secret put` commands from `apps/cloudflare`, then deploy.
 The redirect (callback) addresses, which both platforms must have registered **exactly**:
 
 - Meta: `https://insights.imeseban.workers.dev/api/ads/meta/callback`
-- Google: `https://insights.imeseban.workers.dev/api/ads/google/callback`
+- Google Ads: `https://insights.imeseban.workers.dev/api/ads/google/callback`
+- Google AdSense: `https://insights.imeseban.workers.dev/api/ads/adsense/callback` (on the same Google OAuth client)
 
 (For local development: `http://localhost:8787/api/ads/<provider>/callback`, with the keys in `apps/cloudflare/.dev.vars`.)
 
@@ -82,7 +88,21 @@ Google needs two things: an **OAuth client**, for the "Continue with Google" sig
 
 **Manager accounts:** a merchant who signs in with a Google account that reaches ad accounts through a manager account (an agency, say) gets each client account listed. Insights reaches them through the manager automatically (`login-customer-id`).
 
-## 3. Turn it on
+## 3. Google AdSense
+
+AdSense uses the **same Google Cloud project and OAuth client** as Google Ads. In that project:
+
+1. **APIs & Services → Library**: enable the **AdSense Management API**.
+2. **Clients → your web client → Authorized redirect URIs**: add the AdSense callback address above.
+3. **Data Access**: add the scope `https://www.googleapis.com/auth/adsense.readonly`. It is read-only,
+   but Google treats it as sensitive, so publishing the app needs the same verification as the Ads scope.
+4. While the app is in **Testing**, only its test users can connect, and their access lasts 7 days.
+
+There is no developer token and no manager account. A Google login with no AdSense account gets
+"That Google login has no AdSense account". An account that can't be split by site in reports is
+read as daily totals for the whole account, shown as "All sites".
+
+## 4. Turn it on
 
 From `apps/cloudflare`:
 
@@ -101,7 +121,7 @@ npx wrangler secret put GOOGLE_ADS_DEVELOPER_TOKEN
 
 ## How numbers are counted
 
-See `docs/kpis.md`, "Ads". In short:
+See `docs/kpis.md`, "Ads" and "Ad earnings (AdSense)". In short:
 
 - **Spend, views and clicks** are exactly what the platforms bill and count.
 - **Purchases and their value** are each platform's **own attribution**: Meta and Google can both claim the same sale, so they are never added into the store's sales.

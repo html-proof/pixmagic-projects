@@ -8,6 +8,7 @@ import { fmtDuration, fmtRange, hourRange, plural } from "./format";
 import { Icon, type IconName } from "./icons";
 import { CatalogCard, ChannelsCard, DiscountCodesCard, FulfillmentCard, InventoryCard, OrderTimingCard, RecentOrdersCard } from "./modules";
 import { AdsDetail } from "./adsPanel";
+import { AdsenseDetail } from "./adsensePanel";
 import { Explained } from "./explain";
 import { OverviewDetail } from "./overview";
 import { Delta, Panel, Stat } from "./primitives";
@@ -30,6 +31,7 @@ export function availableTopics(ov: Overview, contactsOn: boolean): Topic[] {
     // The overview has its own first row in the list.
     overview: false,
     ads: !!m.ads,
+    adsense: !!m.adsense,
     sales: !!m.sales_overview,
     products: !!(m.top_products || m.catalog),
     shoppers: !!m.funnel,
@@ -664,6 +666,7 @@ export function TopicDetail({
     overview: `${range} · ${ov.store.name ?? ov.store.shopDomain}`,
     sales: range,
     ads: `${range} · each ad account's own days`,
+    adsense: `${range} · the AdSense account's own days`,
     products: range,
     shoppers: range,
     timing: range,
@@ -680,6 +683,7 @@ export function TopicDetail({
     topic === "overview" ? <OverviewDetail ov={ov} currency={currency} onOpen={onOpen} />
     : topic === "sales" && m.sales_overview ? <SalesDetail ov={ov} currency={currency} />
     : topic === "ads" && m.ads ? <AdsDetail ov={ov} />
+    : topic === "adsense" && m.adsense ? <AdsenseDetail ov={ov} />
     : topic === "products" && (m.top_products || m.catalog) ? <ProductsDetail ov={ov} currency={currency} />
     : topic === "shoppers" && m.funnel ? <ShoppersDetail ov={ov} />
     : topic === "timing" && m.order_timing ? <TimingDetail ov={ov} />

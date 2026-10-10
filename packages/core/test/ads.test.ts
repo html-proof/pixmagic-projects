@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  AdsApiError,
   AdsAuthError,
+  adsenseAccounts,
+  adsenseAuthorizeUrl,
+  adsenseSiteDays,
   AdsRetryableError,
   googleAdAccounts,
   googleAuthorizeUrl,
@@ -117,5 +121,77 @@ describe("Google", () => {
     const rows = await googleCampaignDays(google(f.fetchImpl), "AT", { accountId: "111" }, "2026-10-01", "2026-10-01");
     expect(rows).toEqual([{ provider: "google", accountId: "111", campaignId: "5", campaignName: "Brand", day: "2026-10-01", spend: 2.5, impressions: 50, clicks: 3, conversions: 1, conversionValue: 40, leads: 0 }]);
     await expect(googleCampaignDays(google(f.fetchImpl), "AT", { accountId: "111" }, "2026-10-01' OR 1=1 --", "2026-10-01")).rejects.toThrow("Invalid date range");
+  });
+});
+
+describe("AdSense", () => {
+  const adsense = (fetchImpl: FetchLike) => ({ clientId: "cid", clientSecret: "csec", fetchImpl });
+  const report = (bySite: boolean) => ({
+    headers: [
+      { name: "DATE", type: "DIMENSION" },
+      ...(bySite ? [{ name: "DOMAIN_CODE", type: "DIMENSION" }] : []),
+      { name: "ESTIMATED_EARNINGS", type: "METRIC_CURRENCY", currencyCode: "AUD" },
+      { name: "PAGE_VIEWS", type: "METRIC_TALLY" },
+      { name: "IMPRESSIONS", type: "METRIC_TALLY" },
+      { name: "CLICKS", type: "METRIC_TALLY" },
+    ],
+    rows: [{ cells: [{ value: "2026-10-01" }, ...(bySite ? [{ value: "shop.example.com" }] : []), { value: "4.2" }, { value: "900" }, { value: "1800" }, { value: "3" }] }],
+  });
+
+  it("asks for offline, read-only access to AdSense, with no developer token", () => {
+    const url = new URL(adsenseAuthorizeUrl(adsense(fetch), "https://app/api/ads/adsense/callback", "st"));
+    expect(url.origin + url.pathname).toBe("https://accounts.google.com/o/oauth2/v2/auth");
+    expect(url.searchParams.get("scope")).toBe("https://www.googleapis.com/auth/adsense.readonly");
+    expect(url.searchParams.get("access_type")).toBe("offline");
+    expect(url.searchParams.get("redirect_uri")).toBe("https://app/api/ads/adsense/callback");
+  });
+
+  it("lists accounts across pages, leaving closed ones out", async () => {
+    const f = fake((u, init) => {
+      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer AT");
+      expect(new Headers(init?.headers).get("developer-token")).toBeNull();
+      if (u.pathname !== "/v2/accounts") return json({ error: { message: "unexpected" } }, 400);
+      if (!u.searchParams.get("pageToken")) {
+        return json({ accounts: [{ name: "accounts/pub-1", displayName: "My site", timeZone: { id: "Australia/Sydney" }, state: "READY" }, { name: "accounts/pub-2", displayName: "Old", state: "CLOSED" }], nextPageToken: "p2" });
+      }
+      return json({ accounts: [{ name: "accounts/pub-3", state: "NEEDS_ATTENTION" }] });
+    });
+    expect(await adsenseAccounts(adsense(f.fetchImpl), "AT")).toEqual([
+      { accountId: "pub-1", name: "My site", currency: null, timezone: "Australia/Sydney" },
+      { accountId: "pub-3", name: null, currency: null, timezone: null },
+    ]);
+    expect(f.calls[1]!.url.searchParams.get("pageToken")).toBe("p2");
+  });
+
+  it("reads earnings per site per day on the account's own calendar", async () => {
+    const f = fake(() => json(report(true)));
+    const r = await adsenseSiteDays(adsense(f.fetchImpl), "AT", "pub-1", "2026-09-30", "2026-10-01");
+    expect(r).toEqual({ currency: "AUD", rows: [{ accountId: "pub-1", site: "shop.example.com", day: "2026-10-01", earnings: 4.2, pageViews: 900, impressions: 1800, clicks: 3 }] });
+    const q = f.calls[0]!.url;
+    expect(q.pathname).toBe("/v2/accounts/pub-1/reports:generate");
+    expect([q.searchParams.get("startDate.year"), q.searchParams.get("startDate.month"), q.searchParams.get("startDate.day")]).toEqual(["2026", "9", "30"]);
+    expect([q.searchParams.get("endDate.year"), q.searchParams.get("endDate.month"), q.searchParams.get("endDate.day")]).toEqual(["2026", "10", "1"]);
+    expect(q.searchParams.getAll("dimensions")).toEqual(["DATE", "DOMAIN_CODE"]);
+    expect(q.searchParams.getAll("metrics")).toEqual(["ESTIMATED_EARNINGS", "PAGE_VIEWS", "IMPRESSIONS", "CLICKS"]);
+    expect(q.searchParams.get("reportingTimeZone")).toBe("ACCOUNT_TIME_ZONE");
+  });
+
+  it("falls back to whole-account days when AdSense won't split the report by site", async () => {
+    const f = fake((u) => (u.searchParams.getAll("dimensions").includes("DOMAIN_CODE") ? json({ error: { message: "Invalid dimension combination", status: "INVALID_ARGUMENT" } }, 400) : json(report(false))));
+    const r = await adsenseSiteDays(adsense(f.fetchImpl), "AT", "accounts/pub-1", "2026-10-01", "2026-10-01");
+    expect(r.rows).toEqual([{ accountId: "pub-1", site: "", day: "2026-10-01", earnings: 4.2, pageViews: 900, impressions: 1800, clicks: 3 }]);
+    expect(f.calls).toHaveLength(2);
+  });
+
+  it("tells ended access, rate limits and bad input apart", async () => {
+    const ended = fake(() => json({ error: { message: "Request had invalid authentication credentials.", status: "UNAUTHENTICATED" } }, 401));
+    await expect(adsenseAccounts(adsense(ended.fetchImpl), "AT")).rejects.toBeInstanceOf(AdsAuthError);
+    const busy = fake(() => json({ error: { message: "Quota exceeded", status: "RESOURCE_EXHAUSTED" } }, 429));
+    await expect(adsenseSiteDays(adsense(busy.fetchImpl), "AT", "pub-1", "2026-10-01", "2026-10-01")).rejects.toBeInstanceOf(AdsRetryableError);
+    const none = fake(() => json({ error: { message: "User does not have an AdSense account.", status: "PERMISSION_DENIED" } }, 403));
+    await expect(adsenseAccounts(adsense(none.fetchImpl), "AT")).rejects.toMatchObject({ status: 403 });
+    await expect(adsenseSiteDays(adsense(none.fetchImpl), "AT", "pub-1", "2026-10-01' OR 1=1", "2026-10-01")).rejects.toThrow("Invalid date range");
+    await expect(adsenseSiteDays(adsense(none.fetchImpl), "AT", "../accounts/pub-1", "2026-10-01", "2026-10-01")).rejects.toBeInstanceOf(AdsApiError);
+    expect(none.calls).toHaveLength(1);
   });
 });

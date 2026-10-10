@@ -53,6 +53,18 @@ const TERMS: Record<Topic, Terms> = {
     ["Days", "Each ad account's own calendar day, in its time zone. They line up with your store's days when the time zones match."],
     ["Updated", "Every hour, and the last 30 days are fetched again daily because the platforms keep counting purchases for a while after the click."],
   ],
+  adsense: [
+    ["Estimated earnings", "What Google AdSense says the ads shown on your site earned you, in the AdSense account's currency. AdSense finalizes each month after it ends, so recent days can still change a little."],
+    ["Page views", "Pages on your site that showed AdSense ads, as AdSense counts them."],
+    ["Earnings per 1,000 views", "Earnings divided by thousands of page views (AdSense calls it page RPM): what a thousand visits are worth in ad money."],
+    ["Ads shown and clicks", "How many ads were shown, and how many times visitors clicked one."],
+    ["Click rate", "Clicks divided by ads shown."],
+    ["Earnings per click", "Earnings divided by clicks."],
+    ["Next to your sales", "Ad earnings divided by your store's own net sales for the same dates. Earnings are money paid to you: they're never mixed with what you spend on ads."],
+    ["By site", "Each site (web address) the ads were shown on. A store and a blog on the same AdSense account show as separate rows."],
+    ["Days", "The AdSense account's own calendar day, in its time zone."],
+    ["Updated", "Every hour, and the last 30 days are fetched again daily while AdSense settles its estimates."],
+  ],
   products: [
     ["Sales (per product)", "Price times quantity, minus that item's discounts, for orders in these dates. Refunds aren't taken off here."],
     ["Units", "How many of that product were sold."],
@@ -154,6 +166,15 @@ function nextSteps(topic: Topic, ov: Overview, currency: string): ReactNode[] {
       const worst = a.campaigns.find((c) => c.spend > 0 && c.conversions === 0);
       if (worst) out.push(<>&ldquo;{worst.name}&rdquo; spent {fmtMoney(worst.spend, a.currency)} with no purchase counted. Check whether it&apos;s meant to bring sales, or something else such as awareness.</>);
       if (a.shareOfSales !== null) out.push(<>Ads cost {fmtPct(a.shareOfSales)} of your net sales. Compare that with your profit margin: if ads cost more than you make on a sale, they lose money even when they bring sales.</>);
+      break;
+    }
+    case "adsense": {
+      const a = m.adsense;
+      if (!a || a.current.pageViews === 0) break;
+      const site = a.sites.length > 1 ? a.sites[0] : null;
+      if (site && site.site && a.current.earnings > 0) out.push(<>{site.site} brings {fmtPct(site.earnings / a.current.earnings)} of your ad earnings.</>);
+      if (a.deltas.pageRpm !== null && a.deltas.pageRpm < -0.2) out.push(<>Each 1,000 page views earned {fmtPct(Math.abs(a.deltas.pageRpm))} less than the period before. Advertisers often pay less after a busy season; if it lasts, check AdSense for ad settings or blocked ad categories.</>);
+      if (a.vsSales !== null && a.vsSales > 0) out.push(<>Ad earnings add {fmtPct(a.vsSales)} to your net sales. Ads on a store can also distract shoppers: if fewer visitors buy after adding them, they may cost more than they earn.</>);
       break;
     }
     case "products": {
