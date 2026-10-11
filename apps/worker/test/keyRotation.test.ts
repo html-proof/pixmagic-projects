@@ -63,6 +63,12 @@ describe("rotating the token encryption key", () => {
       },
     });
 
+    // Retention sweeps measure from updatedAt (e.g. clearing a failed message's details after 7
+    // days), so re-encrypting must not make old rows look recently touched.
+    const longAgo = new Date("2026-01-01T00:00:00Z");
+    await systemDb.whatsappMessage.updateMany({ where: { id: message.id }, data: { updatedAt: longAgo } });
+    await systemDb.abandonedCheckout.updateMany({ where: { id: checkout.id }, data: { updatedAt: longAgo } });
+
     useKeys(`${NEW},${OLD}`);
     // 1 store + 1 ad connection + 5 WhatsApp rows.
     expect(await reencryptAllTokens()).toBe(7);
@@ -80,9 +86,11 @@ describe("rotating the token encryption key", () => {
     expect([waDecrypt(sid, "phone", k.phoneEnc), waDecrypt(sid, "name", k.firstNameEnc!)]).toEqual(["919000000001", "Asha"]);
     const m = await systemDb.whatsappMessage.findUniqueOrThrow({ where: { id: message.id } });
     expect([waDecrypt(sid, "params", m.paramsEnc!), waDecrypt(sid, "click", m.clickUrlEnc!)]).toEqual(['{"a":1}', "https://shop.test/x"]);
+    expect(m.updatedAt).toEqual(longAgo);
     const t = await systemDb.orderTracking.findUniqueOrThrow({ where: { id: tracking.id } });
     expect([waDecrypt(sid, "track", t.tokenEnc), waDecrypt(sid, "review", t.reviewTokenEnc)]).toEqual(["track-token", "review-token"]);
     const a = await systemDb.abandonedCheckout.findUniqueOrThrow({ where: { id: checkout.id } });
     expect([waDecrypt(sid, "name", a.customerNameEnc!), waDecrypt(sid, "recovery", a.recoveryUrlEnc!)]).toEqual(["Ravi", "https://shop.test/recover"]);
+    expect(a.updatedAt).toEqual(longAgo);
   });
 });

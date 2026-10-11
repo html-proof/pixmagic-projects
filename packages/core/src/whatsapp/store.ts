@@ -290,12 +290,18 @@ async function forEachRow<R extends { id: string }>(load: (afterId?: string) => 
  * secrets, contacts, message parameters and links, tracking and review tokens, abandoned
  * checkouts. Part of key rotation (reencryptAllTokens, docs/RUNBOOK.md). Values already on the
  * active key are skipped, so a second run changes nothing. Returns the number of rows rewritten.
+ *
+ * It runs while the Worker keeps writing these rows, so each write applies only if the row's
+ * encrypted values are still the ones read (a message sent meanwhile has had its parameters
+ * cleared, and must not get them back); a row changed in between is left for the next run. And it
+ * keeps `updatedAt`, which the retention sweeps measure from.
  */
 export async function reencryptWhatsappData(): Promise<number> {
   const active = keyring().active;
   /** The value under the active key, or undefined (left as is) when it already is or is empty. */
   const reseal = (storeId: string, kind: WaSecretKind, v: string | null) =>
     v && keyVersionOf(v) !== active ? waEncrypt(storeId, kind, waDecrypt(storeId, kind, v)) : undefined;
+  const unchanged = (data: Record<string, string | undefined>) => Object.values(data).every((v) => v === undefined);
   const page = { orderBy: { id: "asc" as const }, take: REENCRYPT_PAGE };
   const afterId = (id?: string) => (id ? { id: { gt: id } } : {});
 
@@ -308,45 +314,60 @@ export async function reencryptWhatsappData(): Promise<number> {
         verifyTokenEnc: reseal(r.storeId, "verify", r.verifyTokenEnc),
         pinEnc: reseal(r.storeId, "pin", r.pinEnc),
       };
-      if (Object.values(data).every((v) => v === undefined)) return false;
-      await systemDb.whatsappConnection.update({ where: { id: r.id }, data: { ...data, tokenKeyVersion: active } });
-      return true;
+      if (unchanged(data)) return false;
+      const { count } = await systemDb.whatsappConnection.updateMany({
+        where: { id: r.id, accessTokenEnc: r.accessTokenEnc, appSecretEnc: r.appSecretEnc, verifyTokenEnc: r.verifyTokenEnc, pinEnc: r.pinEnc },
+        data: { ...data, tokenKeyVersion: active, updatedAt: r.updatedAt },
+      });
+      return count === 1;
     },
   );
   const contacts = await forEachRow(
-    (id) => systemDb.whatsappContact.findMany({ ...page, where: afterId(id), select: { id: true, storeId: true, phoneEnc: true, firstNameEnc: true } }),
+    (id) => systemDb.whatsappContact.findMany({ ...page, where: afterId(id), select: { id: true, storeId: true, phoneEnc: true, firstNameEnc: true, updatedAt: true } }),
     async (r) => {
       const data = { phoneEnc: reseal(r.storeId, "phone", r.phoneEnc), firstNameEnc: reseal(r.storeId, "name", r.firstNameEnc) };
-      if (Object.values(data).every((v) => v === undefined)) return false;
-      await systemDb.whatsappContact.update({ where: { id: r.id }, data });
-      return true;
+      if (unchanged(data)) return false;
+      const { count } = await systemDb.whatsappContact.updateMany({
+        where: { id: r.id, phoneEnc: r.phoneEnc, firstNameEnc: r.firstNameEnc },
+        data: { ...data, updatedAt: r.updatedAt },
+      });
+      return count === 1;
     },
   );
   const messages = await forEachRow(
-    (id) => systemDb.whatsappMessage.findMany({ ...page, where: afterId(id), select: { id: true, storeId: true, paramsEnc: true, clickUrlEnc: true } }),
+    (id) => systemDb.whatsappMessage.findMany({ ...page, where: afterId(id), select: { id: true, storeId: true, paramsEnc: true, clickUrlEnc: true, updatedAt: true } }),
     async (r) => {
       const data = { paramsEnc: reseal(r.storeId, "params", r.paramsEnc), clickUrlEnc: reseal(r.storeId, "click", r.clickUrlEnc) };
-      if (Object.values(data).every((v) => v === undefined)) return false;
-      await systemDb.whatsappMessage.update({ where: { id: r.id }, data });
-      return true;
+      if (unchanged(data)) return false;
+      const { count } = await systemDb.whatsappMessage.updateMany({
+        where: { id: r.id, paramsEnc: r.paramsEnc, clickUrlEnc: r.clickUrlEnc },
+        data: { ...data, updatedAt: r.updatedAt },
+      });
+      return count === 1;
     },
   );
   const trackings = await forEachRow(
-    (id) => systemDb.orderTracking.findMany({ ...page, where: afterId(id), select: { id: true, storeId: true, tokenEnc: true, reviewTokenEnc: true } }),
+    (id) => systemDb.orderTracking.findMany({ ...page, where: afterId(id), select: { id: true, storeId: true, tokenEnc: true, reviewTokenEnc: true, updatedAt: true } }),
     async (r) => {
       const data = { tokenEnc: reseal(r.storeId, "track", r.tokenEnc), reviewTokenEnc: reseal(r.storeId, "review", r.reviewTokenEnc) };
-      if (Object.values(data).every((v) => v === undefined)) return false;
-      await systemDb.orderTracking.update({ where: { id: r.id }, data });
-      return true;
+      if (unchanged(data)) return false;
+      const { count } = await systemDb.orderTracking.updateMany({
+        where: { id: r.id, tokenEnc: r.tokenEnc, reviewTokenEnc: r.reviewTokenEnc },
+        data: { ...data, updatedAt: r.updatedAt },
+      });
+      return count === 1;
     },
   );
   const checkouts = await forEachRow(
-    (id) => systemDb.abandonedCheckout.findMany({ ...page, where: afterId(id), select: { id: true, storeId: true, customerNameEnc: true, recoveryUrlEnc: true } }),
+    (id) => systemDb.abandonedCheckout.findMany({ ...page, where: afterId(id), select: { id: true, storeId: true, customerNameEnc: true, recoveryUrlEnc: true, updatedAt: true } }),
     async (r) => {
       const data = { customerNameEnc: reseal(r.storeId, "name", r.customerNameEnc), recoveryUrlEnc: reseal(r.storeId, "recovery", r.recoveryUrlEnc) };
-      if (Object.values(data).every((v) => v === undefined)) return false;
-      await systemDb.abandonedCheckout.update({ where: { id: r.id }, data });
-      return true;
+      if (unchanged(data)) return false;
+      const { count } = await systemDb.abandonedCheckout.updateMany({
+        where: { id: r.id, customerNameEnc: r.customerNameEnc, recoveryUrlEnc: r.recoveryUrlEnc },
+        data: { ...data, updatedAt: r.updatedAt },
+      });
+      return count === 1;
     },
   );
   const total = connections + contacts + messages + trackings + checkouts;
