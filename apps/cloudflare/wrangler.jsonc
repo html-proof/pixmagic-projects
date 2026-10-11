@@ -56,12 +56,13 @@
     // set up. GOOGLE_ADS_CLIENT_ID is the Google Cloud OAuth client "Insights web" (project
     // insights-511119), shared by Google Ads and AdSense. Set the secrets, then deploy.
     // docs/ads-setup.md walks through all three.
-    // Insights' Meta app ("pixmagic" in Meta for Developers, portfolio "Testbusiness"): one app for Meta Ads and
-    // WhatsApp. Nothing switches on until META_APP_SECRET is set (wrangler secret put) and the configuration ids below exist.
-    "META_APP_ID": "1799660384680551",
+    // Meta Ads: the Meta app "Insights" (971575545351940, Facebook account sebanceo@gmail.com, created 2026-10-11; use case
+    // "Measure ad performance data with Marketing API"). Meta Ads stays "Coming soon" until META_APP_SECRET is set
+    // (wrangler secret put). WhatsApp runs on its own app (WHATSAPP_APP_ID below) and never borrows this app's secret.
+    "META_APP_ID": "971575545351940",
     "META_API_VERSION": "v25.0",
-    // Facebook Login for Business "Configuration ID" (user access token, ads_read). Optional.
-    "META_CONFIG_ID": "",
+    // Facebook Login for Business configuration "Insights ads reporting": user access token, ads_read only.
+    "META_CONFIG_ID": "1521935306664882",
     "GOOGLE_ADS_CLIENT_ID": "534794119904-9esdp8dhskcupf6ekbb0iej2dr10gomf.apps.googleusercontent.com",
     "GOOGLE_ADS_API_VERSION": "v25",
     // "1" once project insights-511119 has Google Ads API access for real accounts (Explorer or above,
@@ -74,7 +75,8 @@
     // Business configuration id of its WhatsApp Embedded Signup variation, and the secrets
     // WHATSAPP_APP_SECRET (or META_APP_SECRET) and WHATSAPP_WEBHOOK_VERIFY_TOKEN. Until then the
     // dashboard says it isn't set up, and merchants can still connect with their own Meta app.
-    "WHATSAPP_APP_ID": "",
+    // WhatsApp's Meta app: "pixmagic" (1799660384680551, portfolio "Testbusiness", the imeseban@gmail.com Facebook account).
+    "WHATSAPP_APP_ID": "1799660384680551",
     "WHATSAPP_CONFIG_ID": "",
     "WHATSAPP_API_VERSION": "v25.0"
   },

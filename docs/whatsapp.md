@@ -225,7 +225,9 @@ shows "coming soon". The steps below are what's left, in order.
 
 1. A **Meta Business portfolio** for Insights, **business verification** done (Security Center).
 2. A **Meta app** (type Business). The ad accounts' app can be reused: then `WHATSAPP_APP_ID`/`WHATSAPP_APP_SECRET`
-   may stay empty and `META_APP_ID`/`META_APP_SECRET` are used.
+   may stay empty and `META_APP_ID`/`META_APP_SECRET` are used. **Since 2026-10-11 they are separate apps:** Meta Ads
+   runs on "Insights" (`971575545351940`), WhatsApp stays on "pixmagic" (`WHATSAPP_APP_ID` = `1799660384680551`), so
+   WhatsApp needs its own `WHATSAPP_APP_SECRET` (it never borrows `META_APP_SECRET` from a different app).
 3. Add the **WhatsApp** product. To onboard merchants with one click ("Continue with WhatsApp"), become a Tech
    Provider and create a Facebook Login for Business **configuration** with *Create configuration* (not the template:
    "WhatsApp Embedded Signup Configuration With 60 Expiration Token" issues tokens that die after 60 days, which

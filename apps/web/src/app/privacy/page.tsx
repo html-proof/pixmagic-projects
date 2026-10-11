@@ -21,8 +21,9 @@ export const metadata: Metadata = {
  *   - uninstall wipes tokens and the compliance webhooks redact/purge (apps/worker/src/handlers.ts);
  *   - the funnel stores hashed browser ids and cleaned page paths only (apps/api/src/routes/pixel.ts,
  *     packages/shared/src/journey.ts `cleanPath`);
- *   - ad accounts are read-only (ads_read / adsense.readonly) and their daily figures and token are deleted on
- *     disconnect (apps/api/src/routes/ads.ts); /data-deletion is the Meta app's deletion instructions URL.
+ *   - ad accounts are read-only in use (Meta ads_read, Google adwords for Google Ads reporting, adsense.readonly) and
+ *     their daily figures and token are deleted, and the grant revoked, on disconnect (apps/api/src/routes/ads.ts,
+ *     packages/core/src/adConnections.ts); /data-deletion is the Meta app's deletion instructions URL.
  */
 export default function PrivacyPage() {
   return (
@@ -120,11 +121,20 @@ export default function PrivacyPage() {
         </p>
         <p>
           <strong>Advertising accounts (only if you connect them).</strong> With your permission on Meta&apos;s or Google&apos;s own
-          screen, Insights reads your ad accounts&apos; reports, read-only (Meta&apos;s <code>ads_read</code>, Google&apos;s
-          <code>adsense.readonly</code>): account names, ids, currency and time zone; campaign, ad set and ad names and
-          status; and what was spent, shown, reached, clicked and the purchases the platform credits to its ads, per day.
-          It keeps those figures so the dashboard can compare periods, and deletes them, with the access token, when you
-          disconnect the account. Insights never creates, changes or pauses an ad, and never spends money.
+          screen, Insights reads your ad accounts&apos; reports: Meta Ads with <code>ads_read</code>, Google Ads with Google&apos;s
+          <code>adwords</code> permission (Google offers no read-only Google Ads permission; Insights only reads with it), and
+          Google AdSense with <code>adsense.readonly</code>. It reads account names, ids, currency and time zone; campaign, ad
+          group, ad set and ad names, status, type and budget; and what was spent, shown, reached, clicked and the conversions
+          and purchases the platform credits to its ads, per day, by device and by country; and, for AdSense, your site&apos;s
+          estimated earnings, page views and clicks. It keeps those figures so the dashboard can compare periods, and deletes
+          them, with the access token, when you disconnect the account, and gives the access back to Meta or Google. Insights
+          never creates, changes or pauses an ad, never changes a budget or billing, and never spends money.
+        </p>
+        <p>
+          Insights&apos; use and transfer of information received from Google APIs adheres to the{" "}
+          <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>,
+          including the Limited Use requirements: the data is used only to show you your own reports, it is not sold, not used
+          for advertising and not read by people, except with your permission, for security, or where the law requires it.
         </p>
       </Section>
 
@@ -169,8 +179,8 @@ export default function PrivacyPage() {
             WhatsApp.
           </li>
           <li>
-            <strong>Meta (Marketing API) and Google (AdSense)</strong> — the source of advertising reports, only for stores
-            that connect an ad account.
+            <strong>Meta (Marketing API) and Google (Google Ads API, AdSense)</strong> — the source of advertising reports, only
+            for stores that connect an ad account.
           </li>
         </ul>
         <p>Other members of your workspace see your store&apos;s figures, according to the role you gave them.</p>

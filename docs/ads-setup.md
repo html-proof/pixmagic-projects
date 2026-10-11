@@ -87,6 +87,16 @@ The redirect (callback) addresses, which both platforms must have registered **e
 
 ## 1. Meta (Facebook and Instagram ads)
 
+**Insights' Meta Ads app (set up 2026-10-11):** "Insights", App ID `971575545351940`, owned by the Facebook account
+sebanceo@gmail.com, Development mode, no business portfolio yet. Use case "Measure ad performance data with Marketing
+API" (ads_read ready for testing). Facebook Login for Business: redirect URI
+`https://insights.imeseban.workers.dev/api/ads/meta/callback` (strict mode, HTTPS); configuration "Insights ads reporting"
+`1521935306664882` (General, user access token, ads_read only) = `META_CONFIG_ID`. Basic settings: app domain, privacy policy
+`/privacy`, data deletion instructions `/data-deletion`, category Business and pages, Website platform. Still to do: the
+app secret (`META_APP_SECRET`, pasted by the owner), an app icon, then a business portfolio + verification and App Review
+for Advanced Access to ads_read before merchants outside the app's roles can connect. WhatsApp stays on "pixmagic"
+(`1799660384680551`, `WHATSAPP_APP_ID`).
+
 1. Go to <https://developers.facebook.com/apps> with the Facebook account that manages the business, and **Create app**.
    - Use case: **Other**. App type: **Business**.
    - Connect it to your Meta Business portfolio.
