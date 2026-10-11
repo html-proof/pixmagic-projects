@@ -53,7 +53,7 @@ export default function StoresPage() {
       void reloadStores().catch(() => {});
     }
     if (code) setError(OAUTH_ERRORS[code] ?? "Shopify didn't complete the connection. Please try again.");
-    window.history.replaceState(null, "", window.location.pathname);
+    window.history.replaceState(window.history.state, "", window.location.pathname);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const justConnected = connected ? stores.find((s) => s.id === connected) : undefined;

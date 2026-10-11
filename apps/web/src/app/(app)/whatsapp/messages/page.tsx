@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { KIND_INFO, reasonLabel, type NotificationKind } from "@app/shared/whatsapp";
 import { Empty } from "@/components/dashboard/primitives";
 import { useApp } from "@/components/AppContext";
@@ -71,18 +71,23 @@ export default function MessageHistory() {
   }, []);
 
   const query = (c?: string | null) => new URLSearchParams(Object.fromEntries(Object.entries({ ...filters, limit: "50", cursor: c ?? "" }).filter(([, v]) => v)));
+  // Only the latest request may fill the list: an older one answering late (filters changed while
+  // it was in flight) would show results for filters that are no longer selected.
+  const latest = useRef(0);
   const load = async (append = false) => {
     if (!base || !contact) return;
+    const request = ++latest.current;
     setLoading(true);
     setError(null);
     try {
       const r = await api<{ messages: Message[]; nextCursor: string | null }>(`${base}/messages?${query(append ? cursor : null)}`);
+      if (request !== latest.current) return;
       setRows((prev) => (append && prev ? [...prev, ...r.messages] : r.messages));
       setCursor(r.nextCursor);
     } catch (e) {
-      setError(actionError(e, "load the messages"));
+      if (request === latest.current) setError(actionError(e, "load the messages"));
     } finally {
-      setLoading(false);
+      if (request === latest.current) setLoading(false);
     }
   };
   useEffect(() => {

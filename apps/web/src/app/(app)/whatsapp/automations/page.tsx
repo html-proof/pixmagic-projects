@@ -14,6 +14,7 @@ import {
 } from "@app/shared/whatsapp";
 import { Badge, Empty } from "@/components/dashboard/primitives";
 import { fmtRelative } from "@/components/dashboard/format";
+import { LoadError } from "@/components/LoadError";
 import { Alert } from "@/components/ui";
 import { actionError, api, useApi } from "@/lib/api";
 import { PageHeader, Skeleton, TemplateMapper, useAction, useToast, useWa, type SettingsResponse } from "@/components/whatsapp/common";
@@ -232,7 +233,8 @@ interface TestResult {
 
 function Runs({ id }: { id: string }) {
   const { base } = useWa();
-  const { data } = useApi<{ runs: Array<{ id: string; trigger: string; subject: string; outcome: string; detail: string | null; at: string }> }>(`${base}/automations/${id}/runs`);
+  const { data, error, reload } = useApi<{ runs: Array<{ id: string; trigger: string; subject: string; outcome: string; detail: string | null; at: string }> }>(`${base}/automations/${id}/runs`);
+  if (error) return <div className="mt-2"><LoadError what="this rule's runs" error={error} onRetry={() => void reload()} /></div>;
   if (!data) return <div className="skeleton mt-2 h-10" />;
   if (!data.runs.length) return <p className="mt-2 text-xs text-muted">It hasn&apos;t run yet.</p>;
   return (
@@ -258,7 +260,8 @@ export default function Automations() {
   const [tests, setTests] = useState<Record<string, TestResult>>({});
   const [phone, setPhone] = useState("");
   const { busy, run } = useAction();
-  if (error) return <div className="card text-sm text-danger">{error.message}</div>;
+  const loadError = error ?? settings.error;
+  if (loadError) return <LoadError what="your automation rules" error={loadError} onRetry={() => void Promise.all([reload(), settings.reload()])} />;
   if (!data || !settings.data) return <Skeleton lines={4} />;
 
   return (

@@ -4,6 +4,7 @@ import type { TransactionalBasis } from "@app/shared/whatsapp";
 import { Stat } from "@/components/dashboard/primitives";
 import { hourLabel } from "@/components/dashboard/format";
 import { useApp } from "@/components/AppContext";
+import { LoadError } from "@/components/LoadError";
 import { actionError, api, fmtNum, useApi } from "@/lib/api";
 import { PageHeader, Skeleton, useAction, useSettings, useToast, useWa, type SettingsResponse } from "@/components/whatsapp/common";
 
@@ -37,7 +38,7 @@ interface ContactSummary {
 export default function WhatsappSettings() {
   const { base, manage, contact } = useWa();
   const { store } = useApp();
-  const { data, error, save } = useSettings();
+  const { data, error, reload, save } = useSettings();
   const summary = useApi<ContactSummary>(base ? `${base}/contacts/summary` : null);
   const toast = useToast();
   const { busy, run } = useAction();
@@ -51,7 +52,7 @@ export default function WhatsappSettings() {
       setAttested(data.config.transactionalBasis === "checkout_notice");
     }
   }, [data]);
-  if (error) return <div className="card text-sm text-danger">{actionError(error, "load the settings")}</div>;
+  if (error) return <LoadError what="the WhatsApp settings" error={error} onRetry={() => void reload()} />;
   if (!data || !draft) return <Skeleton lines={6} />;
   const dirty = JSON.stringify(draft) !== JSON.stringify(data.config);
   const needsAttest = draft.transactionalBasis === "checkout_notice" && data.config.transactionalBasis !== "checkout_notice" && !attested;
@@ -177,6 +178,8 @@ export default function WhatsappSettings() {
             <Stat label="Stopped marketing" value={fmtNum(summary.data.marketingOptedOut)} />
             <Stat label="Replied STOP (nothing is sent)" value={fmtNum(summary.data.optedOutOfEverything)} />
           </div>
+        ) : summary.error ? (
+          <LoadError what="the consent summary" error={summary.error} onRetry={() => void summary.reload()} />
         ) : (
           <div className="skeleton h-20" />
         )}

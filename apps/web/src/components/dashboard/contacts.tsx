@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { can } from "@app/shared/roles";
 import { useApp } from "@/components/AppContext";
 import { Alert } from "@/components/ui";
@@ -395,21 +395,27 @@ export function ContactsCard({ storeId, storeName, shopDomain }: { storeId: stri
   const { workspace } = useApp();
   const allowed = can(workspace.role, "customers:contact");
   const [tab, setTab] = useState<Tab>("abandoned");
-  const [data, setData] = useState<Contacts | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [templates, setTemplates] = useState<Record<Tab, string>>(DEFAULT_MESSAGE);
   const path = `/workspaces/${workspace.id}/stores/${storeId}/contacts`;
+  // Kept with the store it is for (like useApi): after a store switch the previous store's
+  // customers never show under the new one, and a late answer for it is dropped.
+  const [answer, setAnswer] = useState<{ path: string; value: Contacts } | null>(null);
+  const data = answer?.path === path ? answer.value : null;
+  const asked = useRef(path);
 
   const load = useCallback(async () => {
+    asked.current = path;
     setLoading(true);
     setError(null);
     try {
-      setData(await api<Contacts>(path));
+      const value = await api<Contacts>(path);
+      if (asked.current === path) setAnswer({ path, value });
     } catch (e) {
-      setError(actionError(e, "load your customers"));
+      if (asked.current === path) setError(actionError(e, "load your customers"));
     } finally {
-      setLoading(false);
+      if (asked.current === path) setLoading(false);
     }
   }, [path]);
 

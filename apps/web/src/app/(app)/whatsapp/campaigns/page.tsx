@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { libraryTemplate, OCCASIONS, type Audience, type TemplateMapping } from "@app/shared/whatsapp";
 import { Badge, Empty, type Tone } from "@/components/dashboard/primitives";
+import { LoadError } from "@/components/LoadError";
 import { ApiError, actionError, api, fmtMoney, fmtNum, fmtPct, useApi } from "@/lib/api";
 import { useApp } from "@/components/AppContext";
 import { Alert } from "@/components/ui";
@@ -312,7 +313,8 @@ export default function Campaigns() {
   const [editing, setEditing] = useState<{ id: string | null; draft: Draft } | null>(null);
   const [scheduling, setScheduling] = useState<Campaign | null>(null);
   const { busy, run } = useAction();
-  if (error) return <div className="card text-sm text-danger">{error.message}</div>;
+  const loadError = error ?? overview.error ?? settings.error;
+  if (loadError) return <LoadError what="your campaigns" error={loadError} onRetry={() => void Promise.all([reload(), overview.reload(), settings.reload()])} />;
   if (!data || !overview.data || !settings.data) return <Skeleton lines={5} />;
   const conn = overview.data.connection;
   const locked = !conn ? "Connect WhatsApp first." : !conn.registered ? "Register your number first (Connect WhatsApp)." : !conn.webhookVerifiedAt ? "Finish the webhook step on Connect WhatsApp first: without it, opt-out replies couldn't reach Insights." : null;

@@ -4,6 +4,7 @@ import { KIND_INFO, reasonLabel, type NotificationKind } from "@app/shared/whats
 import { Badge, Empty, type Tone } from "@/components/dashboard/primitives";
 import { fmtMoney, api, useApi } from "@/lib/api";
 import { useApp } from "@/components/AppContext";
+import { LoadError } from "@/components/LoadError";
 import { fmtWhen, MessageStatus, overlay, Skeleton, useAction, useToast, useWa } from "./common";
 
 export const ORDER_STATUS: Record<string, { tone: Tone; label: string }> = {
@@ -74,7 +75,7 @@ function OrderDrawer({ id, onClose }: { id: string; onClose: () => void }) {
   const { base, manage } = useWa();
   const { store } = useApp();
   const tz = store?.timezone;
-  const { data, reload } = useApi<OrderDetail>(`${base}/orders/${id}`);
+  const { data, error, reload } = useApi<OrderDetail>(`${base}/orders/${id}`);
   const { busy, run } = useAction();
   const toast = useToast();
   const step = (s: "processing" | "packed" | "delivered") =>
@@ -90,7 +91,9 @@ function OrderDrawer({ id, onClose }: { id: string; onClose: () => void }) {
           <h2 className="text-lg font-semibold">{data ? `Order ${data.order.orderName}` : "Order"}</h2>
           <button type="button" className="btn-secondary h-8 px-3 text-xs" onClick={onClose} autoFocus>Close</button>
         </div>
-        {!data ? (
+        {!data && error ? (
+          <div className="mt-4"><LoadError what="this order" error={error} onRetry={() => void reload()} /></div>
+        ) : !data ? (
           <div className="mt-4"><Skeleton lines={6} /></div>
         ) : (
           <div className="mt-3 space-y-5 text-sm">

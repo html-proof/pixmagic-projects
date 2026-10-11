@@ -37,7 +37,8 @@ export default function Templates() {
   const [testFor, setTestFor] = useState<WaTemplate | null>(null);
   const [phone, setPhone] = useState("");
   const [mediaUrl, setMediaUrl] = useState("");
-  if (error) return <LoadError what="your templates" error={error} onRetry={() => void reload()} />;
+  const loadError = error ?? overview.error;
+  if (loadError) return <LoadError what="your templates" error={loadError} onRetry={() => void Promise.all([reload(), overview.reload()])} />;
   if (!data || !overview.data) return <Skeleton lines={5} />;
   const connected = !!overview.data.connection;
   const have = new Set(data.templates.map((t) => t.name));
