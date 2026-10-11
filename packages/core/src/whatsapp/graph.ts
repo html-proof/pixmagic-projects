@@ -18,18 +18,27 @@ export interface WaPlatformConfig {
   verifyToken: string;
 }
 
+/**
+ * WhatsApp's app secret: its own, or the ad accounts' Meta app secret only when WhatsApp runs on that
+ * same app. With WhatsApp on its own app (WHATSAPP_APP_ID set to another id), the Meta Ads app's
+ * secret would sign nothing WhatsApp sends, so it's never borrowed.
+ */
+function waSecret(e: ReturnType<typeof env>): string {
+  if (e.WHATSAPP_APP_SECRET) return e.WHATSAPP_APP_SECRET;
+  return !e.WHATSAPP_APP_ID || e.WHATSAPP_APP_ID === e.META_APP_ID ? e.META_APP_SECRET : "";
+}
+
 export function waPlatformConfig(): WaPlatformConfig | null {
   const e = env();
   const appId = e.WHATSAPP_APP_ID || e.META_APP_ID;
-  const appSecret = e.WHATSAPP_APP_SECRET || e.META_APP_SECRET;
+  const appSecret = waSecret(e);
   if (!appId || !appSecret || !e.WHATSAPP_CONFIG_ID) return null;
   return { appId, appSecret, configId: e.WHATSAPP_CONFIG_ID, version: e.WHATSAPP_API_VERSION, verifyToken: e.WHATSAPP_WEBHOOK_VERIFY_TOKEN };
 }
 
 /** The app secret that signs webhooks for numbers connected through Embedded Signup. */
 export function waPlatformSecret(): string {
-  const e = env();
-  return e.WHATSAPP_APP_SECRET || e.META_APP_SECRET;
+  return waSecret(env());
 }
 
 export const waVersion = () => env().WHATSAPP_API_VERSION;
