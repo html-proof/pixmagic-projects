@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { recomputeDays } from "@app/core";
 import { systemDb } from "@app/db";
 import { addDays, localDay } from "@app/shared";
+import { syncProblem } from "../src/routes/dashboard.js";
 import { clean, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
 
 let ctx: TestCtx;
@@ -472,5 +473,31 @@ describe("scopes and tenancy", () => {
     expect(mine.modules.inventory.lowStockItems).toEqual([{ productTitle: "Tee", variantTitle: "Default Title", sku: null, quantity: 1, dailySales: 0.03, daysOfCover: 30 }]);
     expect(mine.modules.catalog.topVendors).toEqual([{ vendor: "Acme", revenue: 10, units: 1 }]);
     expect(mine.data).toMatchObject({ orders: 1, products: 1, variants: 1 });
+  });
+});
+
+describe("a store whose sync stopped", () => {
+  it("reads Shopify's answers into a reason", () => {
+    expect(syncProblem("Shopify 402: Unavailable Shop")).toBe("shop_unavailable");
+    expect(syncProblem("Shopify 404: Not Found")).toBe("shop_gone");
+    expect(syncProblem("Shopify 423: Locked")).toBe("shop_locked");
+    expect(syncProblem("Shopify auth error 403")).toBe("access");
+    expect(syncProblem("Store x.myshopify.com is not connected")).toBe("access");
+    expect(syncProblem("Shopify 4020 something")).toBe("other");
+    expect(syncProblem(null)).toBe("other");
+  });
+
+  it("says why, from Shopify's own answer: a frozen store isn't the same as lost access", async () => {
+    const { a, ws, store } = await owner();
+    expect((await overview(a.headers, ws, store.id)).json().syncProblem).toBeNull();
+
+    await systemDb.store.update({ where: { id: store.id }, data: { status: "error" } });
+    const fail = (error: string, minutesAgo: number) =>
+      systemDb.syncJob.create({ data: { workspaceId: ws, storeId: store.id, kind: "orders", status: "failed", error, createdAt: new Date(Date.now() - minutesAgo * 60_000) } });
+    await fail("Shopify auth error 401", 60);
+    expect((await overview(a.headers, ws, store.id)).json().syncProblem).toBe("access");
+    // The latest failure decides: the store has since been frozen (an unpaid Shopify bill, say).
+    await fail("Shopify 402: Unavailable Shop", 5);
+    expect((await overview(a.headers, ws, store.id)).json().syncProblem).toBe("shop_unavailable");
   });
 });

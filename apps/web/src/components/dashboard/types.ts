@@ -213,6 +213,8 @@ export interface ImportedData {
 
 export interface Overview {
   store: OverviewStore;
+  /** While the store is in error: why Shopify stopped the sync (see syncProblem in the API). */
+  syncProblem?: "shop_unavailable" | "shop_gone" | "shop_locked" | "access" | "other" | null;
   range: { from: string; to: string };
   previous: { from: string; to: string };
   /** The store's today (YYYY-MM-DD). */

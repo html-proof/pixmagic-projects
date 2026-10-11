@@ -8,7 +8,7 @@ import { DateRangeBar, useDateRange } from "@/components/dashboard/DateRange";
 import { availableTopics, TopicDetail, useDetailView } from "@/components/dashboard/details";
 import { AreaList, StoreSummary } from "@/components/dashboard/overview";
 import { AdvertisingSection } from "@/components/dashboard/advertising";
-import { fmtRange } from "@/components/dashboard/format";
+import { fmtRange, fmtRelative } from "@/components/dashboard/format";
 import { Icon, type IconName } from "@/components/dashboard/icons";
 import { AnimatedNumber, Sparkline } from "@/components/dashboard/motion";
 import { Delta } from "@/components/dashboard/primitives";
@@ -321,11 +321,41 @@ export default function DashboardPage() {
           {/* What `autoRefresh` actually does: the failed *job* is given up on, but the store is
               re-seeded once every 30 minutes — from this page's own poll, for the store being
               looked at. Saying "it will not clear on its own" was true of neither half, and sent
-              people to reconnect when waiting would have done. */}
-          <p>Syncing this store has stopped. We try it again about every half hour while this page is open on this store, so it may well fix itself.</p>
-          <p className="mt-1 text-xs">If it keeps coming back, Shopify has most likely stopped accepting our access. Reconnecting grants it again and restarts the import straight away.</p>
-          {canManage(workspace.role) && (
-            <Link className="btn-primary mt-2 inline-block" href="/onboarding">Reconnect</Link>
+              people to reconnect when waiting would have done. Shopify's own answer says which
+              (ov.syncProblem): a frozen, missing or locked store isn't fixed by reconnecting. */}
+          {ov.syncProblem === "shop_unavailable" ? (
+            <>
+              <p>
+                Shopify says {ov.store.name ?? ov.store.shopDomain} is unavailable: the store is frozen, paused or closed. That usually means an unpaid Shopify
+                bill or a trial that has ended.
+              </p>
+              <p className="mt-1 text-xs">
+                Reactivate it in your Shopify admin (Settings → Plan). Syncing starts again by itself within about half an hour; reconnecting won&apos;t help until then.
+                Your numbers below are from the last sync{ov.store.lastSyncedAt ? ` (${fmtRelative(ov.store.lastSyncedAt)})` : ""}.
+              </p>
+              <a className="btn-primary mt-2 inline-block" href={`https://${ov.store.shopDomain}/admin/settings/plan`} target="_blank" rel="noreferrer">Open Shopify admin</a>
+            </>
+          ) : ov.syncProblem === "shop_locked" ? (
+            <>
+              <p>Shopify has locked {ov.store.name ?? ov.store.shopDomain}, so it can&apos;t be read right now.</p>
+              <p className="mt-1 text-xs">Check your Shopify admin for a notice. Syncing starts again by itself once Shopify unlocks the store.</p>
+            </>
+          ) : (
+            <>
+              <p>
+                {ov.syncProblem === "shop_gone"
+                  ? `Shopify can't find ${ov.store.shopDomain} any more: the store may have been closed, or its address changed.`
+                  : "Syncing this store has stopped. We try it again about every half hour while this page is open on this store, so it may well fix itself."}
+              </p>
+              <p className="mt-1 text-xs">
+                {ov.syncProblem === "access"
+                  ? "Shopify stopped accepting Insights' access. Reconnecting grants it again and restarts the import straight away."
+                  : "If it keeps coming back, Shopify has most likely stopped accepting our access. Reconnecting grants it again and restarts the import straight away."}
+              </p>
+              {canManage(workspace.role) && (
+                <Link className="btn-primary mt-2 inline-block" href="/onboarding">Reconnect</Link>
+              )}
+            </>
           )}
         </Alert>
       )}

@@ -72,6 +72,21 @@ export function publicStore(s: {
   };
 }
 
+/**
+ * Why a store's sync stopped, in a word the dashboard can explain: Shopify's own answer to the
+ * last failed job (packages/core/src/shopify.ts). 402 is a frozen, paused or closed store (an unpaid
+ * Shopify bill, an ended trial), 404 a store Shopify can't find, 423 a locked one: reconnecting
+ * fixes none of them. 401/403 or a missing token is lost access, which reconnecting does fix.
+ */
+export function syncProblem(error: string | null | undefined): "shop_unavailable" | "shop_gone" | "shop_locked" | "access" | "other" {
+  if (!error) return "other";
+  if (/^Shopify 402\b/.test(error)) return "shop_unavailable";
+  if (/^Shopify 404\b/.test(error)) return "shop_gone";
+  if (/^Shopify 423\b/.test(error)) return "shop_locked";
+  if (/Shopify auth error|is not connected/.test(error)) return "access";
+  return "other";
+}
+
 async function dailyRows(tx: Tx, workspaceId: string, storeId: string, r: DateRange): Promise<DailyMetricsRow[]> {
   const rows = await tx.dailyStoreMetrics.findMany({
     where: { workspaceId, storeId, day: { gte: r.from, lte: r.to } },
@@ -831,8 +846,11 @@ export function dashboardRoutes(app: App, deps: Deps) {
       if (enabled.has("inventory")) modules.inventory = await inventory(tx, scope, today);
       if (enabled.has("catalog")) modules.catalog = await catalog(tx, scope, range);
 
+      const failed = store.status === "error" ? await tx.syncJob.findFirst({ where: { storeId, workspaceId: ws, status: "failed" }, orderBy: { createdAt: "desc" }, select: { error: true } }) : null;
       return {
         store: publicStore(store),
+        // Only while the store is in error: why, so the page can say what will fix it.
+        syncProblem: store.status === "error" ? syncProblem(failed?.error) : null,
         range,
         previous,
         // The store's today, so the page can tell a finished day from one still running.
