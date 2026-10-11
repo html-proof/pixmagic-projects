@@ -84,6 +84,7 @@ const ERRORS: Record<string, string> = {
   exchange_failed: "The platform didn't accept the sign-in. Please try again in a moment.",
   no_accounts: "That login can't see any ad accounts. Ask the account's owner to give you access, then connect again.",
   no_accounts_adsense: "That Google login has no AdSense account. Sign in with the Google account that owns your AdSense, or ask its owner to add you as a user.",
+  not_approved_google: "Google is still approving Insights for live Google Ads accounts, so nothing was connected. This is on our side, not yours; please try again in a day or two.",
   no_accounts_google: "That Google login can't reach any Google Ads account. Sign in with the Google account you use at ads.google.com, or ask the account's owner to add you as a user.",
   no_refresh_token: "Google didn't grant lasting access. Please try again and allow access on Google's screen.",
   permission_missing: "The permission to read reports wasn't granted, so nothing could be connected. Press the button again and leave it ticked.",

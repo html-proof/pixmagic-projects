@@ -220,14 +220,21 @@ export function GoogleReportPanel({ ov, accounts }: { ov: Overview; accounts: Ad
               </tbody>
             </table>
           </div>
-          {r.rows.length === 0 && <p className="mt-2 text-sm text-muted">Nothing in this ad account was shown to anyone in these dates.</p>}
+          {r.rows.length === 0 &&
+            (r.totals.impressions === 0 && r.totals.spend === 0 ? (
+              <p className="mt-2 text-sm text-muted">Nothing in this ad account was shown to anyone in these dates.</p>
+            ) : r.level === "ad_group" ? (
+              <p className="mt-2 text-sm text-muted">No ad groups had any activity in these dates: Performance Max campaigns have no ad groups, so their spend is on the Campaigns tab.</p>
+            ) : (
+              <p className="mt-2 text-sm text-muted">Google has no split at this level for these dates; the account&apos;s activity is in the Whole ad account row above.</p>
+            ))}
           {r.truncated && <p className="mt-2 text-xs text-muted">Showing the {r.rows.length} that spent most.</p>}
           <ul className="mt-3 list-disc space-y-1 pl-4 text-xs text-muted">
             <li>
               Conversions and their value are Google&apos;s own count, using each conversion action&apos;s attribution settings. They are not your Shopify orders, they can
               overlap with what Meta claims, and they aren&apos;t added into your store&apos;s sales.
             </li>
-            {r.level === "ad_group" && <li>Performance Max campaigns have no ad groups, so their spend shows on the Campaigns tab but not here.</li>}
+            {r.level === "ad_group" && r.rows.length > 0 && <li>Performance Max campaigns have no ad groups, so their spend shows on the Campaigns tab but not here.</li>}
             {r.level === "country" && <li>Countries are where the people who saw your ads were, not the places your campaigns target.</li>}
             {answer && <li>{answer.cached ? "Fetched from Google in the last few minutes." : "Fetched from Google just now."}</li>}
           </ul>

@@ -14,6 +14,7 @@ import {
   googleRefresh,
   googleReport,
   googleRevoke,
+  googleUserId,
   isMetaPermissionError,
   metaCampaignDays,
   metaGrantedPermissions,
@@ -41,10 +42,14 @@ export function metaConfig(fetchImpl?: FetchLike): MetaConfig | null {
   return { appId: e.META_APP_ID, appSecret: e.META_APP_SECRET, version: e.META_API_VERSION, configId: e.META_CONFIG_ID || undefined, fetchImpl };
 }
 
+/** "1", "true", "yes" or "on". */
+const switchedOn = (v: string) => /^(1|true|yes|on)$/i.test(v.trim());
+
+/** Google Ads: the same Google OAuth client as AdSense, switched on once its Cloud project may reach real accounts. */
 export function googleConfig(fetchImpl?: FetchLike): GoogleConfig | null {
   const e = env();
-  if (!e.GOOGLE_ADS_CLIENT_ID || !e.GOOGLE_ADS_CLIENT_SECRET || !e.GOOGLE_ADS_DEVELOPER_TOKEN) return null;
-  return { clientId: e.GOOGLE_ADS_CLIENT_ID, clientSecret: e.GOOGLE_ADS_CLIENT_SECRET, developerToken: e.GOOGLE_ADS_DEVELOPER_TOKEN, version: e.GOOGLE_ADS_API_VERSION, fetchImpl };
+  if (!e.GOOGLE_ADS_CLIENT_ID || !e.GOOGLE_ADS_CLIENT_SECRET || !switchedOn(e.GOOGLE_ADS_ENABLED)) return null;
+  return { clientId: e.GOOGLE_ADS_CLIENT_ID, clientSecret: e.GOOGLE_ADS_CLIENT_SECRET, version: e.GOOGLE_ADS_API_VERSION, fetchImpl };
 }
 
 /** AdSense signs in through the same Google OAuth client as Google Ads, and needs nothing else. */
@@ -167,8 +172,10 @@ export async function saveAdConnections(input: {
 }): Promise<Array<AdConnection & { isNew: boolean }>> {
   const tokens = {
     ...encryptAdTokens(input.storeId, input.provider, input.tokens),
-    ...(input.externalUserId ? { externalUserId: input.externalUserId } : {}),
-    ...(input.tokens.grantedScopes ? { grantedScopes: input.tokens.grantedScopes.slice(0, 50) } : {}),
+    // Who granted it belongs to the token stored next to it: an unknown signer never inherits the previous one
+    // (a disconnect then answers "unknown_person" instead of revoking someone else's grant).
+    externalUserId: input.externalUserId ?? null,
+    grantedScopes: (input.tokens.grantedScopes ?? []).slice(0, 50),
   };
   const out: Array<AdConnection & { isNew: boolean }> = [];
   for (const a of input.accounts) {
@@ -234,6 +241,12 @@ export async function adAccessToken(conn: AdConnection, fetchImpl?: FetchLike): 
     ...(fresh.rotated ? { refreshTokenEnc: enc.refreshTokenEnc } : {}),
   };
   await systemDb.adConnection.updateMany({ where: fresh.rotated ? { storeId: conn.storeId, provider: conn.provider, refreshTokenEnc: conn.refreshTokenEnc } : { id: conn.id }, data });
+  // Connected before Insights kept who granted access: learn it now, so a later disconnect can tell
+  // whether this grant is shared. Never fails the refresh.
+  if (!conn.externalUserId) {
+    const sub = await googleUserId(cfg, fresh.accessToken).catch(() => null);
+    if (sub) await systemDb.adConnection.update({ where: { id: conn.id }, data: { externalUserId: sub } }).catch(() => undefined);
+  }
   return fresh.accessToken;
 }
 
@@ -416,10 +429,15 @@ export type RevokeOutcome = "revoked" | "still_used" | "unknown_person" | "not_c
  */
 export async function revokeAdAccessIfUnused(conn: AdConnection, fetchImpl?: FetchLike): Promise<RevokeOutcome> {
   if (!conn.externalUserId) return "unknown_person";
-  const others = await systemDb.adConnection.count({ where: { externalUserId: conn.externalUserId, provider: { in: grantFamily(conn.provider) }, NOT: { id: conn.id } } });
-  if (others > 0) return "still_used";
   const k = keyring();
   try {
+    // Any connection on the same grant (Google Ads and AdSense share one), anywhere, by this person, or by
+    // a person Insights doesn't know yet (connected before identities were kept, or their lookup failed),
+    // keeps it. Those unknown rows learn their person at their next token refresh.
+    const others = await systemDb.adConnection.count({
+      where: { provider: { in: grantFamily(conn.provider) }, NOT: { id: conn.id }, OR: [{ externalUserId: conn.externalUserId }, { externalUserId: null }] },
+    });
+    if (others > 0) return "still_used";
     if (conn.provider === "meta") {
       const cfg = metaConfig(fetchImpl);
       if (!cfg) return "not_configured";

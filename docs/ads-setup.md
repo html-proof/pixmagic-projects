@@ -14,18 +14,28 @@
    - a by-platform comparison.
 
 **Google Ads is offered again** (2026-10-11): its card comes first on Settings → Advertising, on
-Settings → Connect your business, and on the dashboard's "Connect more". Until the server has all three Google Ads
-settings (client id, client secret, developer token), the card says "Coming soon" and has no button; merchants are
-never asked for keys.
+Settings → Connect your business, and on the dashboard's "Connect more". Until `GOOGLE_ADS_ENABLED` is "1" (with the
+Google OAuth client id and secret set), the card says "Coming soon" and has no button; merchants are never asked for keys.
 
-**What still needs a person before Google Ads works in production (checked 2026-10-11):**
-1. **A Google Ads manager account.** sebanceo@gmail.com has no Google Ads account at all ("You do not have any Google
-   Ads accounts"). Create a manager account at <https://ads.google.com/home/tools/manager-accounts/>.
-2. **A developer token** from that manager account (Admin → API Center), then **Basic access** (the form: read-only
-   reporting for the merchants who connect). Put it in `GOOGLE_ADS_DEVELOPER_TOKEN` (secret).
-3. **The `adwords` scope back under Data Access** in project insights-511119 (it lists only `adsense.readonly` now).
-   It's sensitive: publishing it starts Google's verification (privacy policy, a video of the flow, a verified
-   domain). Until approved, merchants see the "Google hasn't verified this app" warning and the app is capped at 100 users.
+**Google retired developer tokens on 2026-09-09.** Google Ads API access now follows the **Google Cloud project** that
+owns the OAuth client (insights-511119): there is no token and no manager account to set up
+(<https://developers.google.com/google-ads/api/docs/api-policy/developer-token>). Access levels
+(<https://developers.google.com/google-ads/api/docs/api-policy/access-levels>), set on Cloud console → Google Ads API →
+Overview ("Access levels → Manage"):
+- **Test**: test accounts only. Real accounts answer `CLOUD_PROJECT_NOT_APPROVED_FOR_PRODUCTION`, which Insights shows as
+  "Google is still approving Insights for live Google Ads accounts" (`not_approved`), never as "no accounts".
+- **Explorer**: real accounts, 2,880 operations a day (roughly 60 connected accounts at the hourly sync). Applied for with
+  one button; Google may grant it within minutes.
+- **Basic**: 15,000 a day; needs Explorer plus **brand verification** of the Cloud project.
+
+**State on 2026-10-11:** Explorer **granted** to project insights-511119 within minutes of applying, and
+`GOOGLE_ADS_ENABLED` is "1" in production. Remaining, for a clean consent screen:
+1. ~~Explorer granted~~ (done).
+2. The `adwords` scope added under Google Auth Platform → Data Access (it lists only `adsense.readonly` now). It's
+   sensitive: until Google verifies the app, people signing in for Google Ads see the "Google hasn't verified this app"
+   screen and new users are capped at 100. Verification needs the privacy policy, a short video of the connect flow
+   (YouTube link) and a scope justification. AdSense sign-ins don't ask for `adwords`, so they stay unaffected.
+3. ~~`"GOOGLE_ADS_ENABLED": "1"`~~ (done).
 
 Verified 2026-10-11 against the real Google: the "Insights web" client accepts the production callback
 (`https://insights.imeseban.workers.dev/api/ads/google/callback`) and `http://localhost:8789/...` with the `adwords`
@@ -52,8 +62,8 @@ Access is **read-only**: Meta's `ads_read` permission, Google's Ads reporting sc
 (`TOKEN_ENCRYPTION_KEYS`) and deleted when an account is disconnected or the store is removed.
 
 Until the keys below are set, each card says its platform's sign-in is "being switched on" (Coming soon),
-without a button. Nothing else changes. AdSense needs only the Google OAuth client (id and secret): it has no
-developer token, so it can work before Google Ads does.
+without a button. Nothing else changes. AdSense needs only the Google OAuth client (id and secret), so it works
+without Google Ads API access.
 
 | Setting | Where it goes | Secret? |
 | --- | --- | --- |
@@ -62,7 +72,7 @@ developer token, so it can work before Google Ads does.
 | `META_CONFIG_ID` | `wrangler.jsonc` → `vars` (optional: Facebook Login for Business configuration) | no |
 | `GOOGLE_ADS_CLIENT_ID` | `wrangler.jsonc` → `vars` (Google Ads **and** AdSense) | no |
 | `GOOGLE_ADS_CLIENT_SECRET` | `npx wrangler secret put GOOGLE_ADS_CLIENT_SECRET` (Google Ads **and** AdSense) | **yes** |
-| `GOOGLE_ADS_DEVELOPER_TOKEN` | `npx wrangler secret put GOOGLE_ADS_DEVELOPER_TOKEN` | **yes** |
+| `GOOGLE_ADS_ENABLED` | `wrangler.jsonc` → `vars`: `"1"` once the Cloud project has Explorer access or above | no |
 | `META_API_VERSION`, `GOOGLE_ADS_API_VERSION` | `wrangler.jsonc` (`v25.0`, `v25`) | no |
 
 Run the `wrangler secret put` commands from `apps/cloudflare`, then deploy.
@@ -106,7 +116,8 @@ The redirect (callback) addresses, which both platforms must have registered **e
 
 ## 2. Google Ads
 
-Google needs two things: an **OAuth client**, for the "Continue with Google" sign-in, and a **Google Ads API developer token**, which every reporting call carries.
+Google needs an **OAuth client** for the "Continue with Google Ads" sign-in, in a Cloud project with **Google Ads API
+access for real accounts** (Explorer or above). Developer tokens are gone (2026-09-09).
 
 ### OAuth client (Google Cloud)
 
@@ -125,12 +136,14 @@ Google needs two things: an **OAuth client**, for the "Continue with Google" sig
    - a short video of the flow;
    - a domain you have verified.
 
-### Developer token (Google Ads)
+### API access level (Google Cloud)
 
-1. Sign in to a **Google Ads manager account** (create one at <https://ads.google.com/home/tools/manager-accounts/> if you don't have one; it's free).
-2. Go to **Admin → API Center** and apply for a developer token.
-3. A new token has **Test access**: it only works with test accounts. Apply for **Basic access**, filling in the form about the tool (read-only reporting for the store owners who connect). Approval usually takes a few business days.
-4. Put the token in `GOOGLE_ADS_DEVELOPER_TOKEN`.
+1. Cloud console → **APIs & Services → Google Ads API → Access levels → Manage** (the Google Ads API Overview page).
+2. Under **Upgrade access level**, with **Explorer** as the next level, press **Apply for access**. Google reviews it,
+   often within minutes.
+3. For more than about 60 connected accounts, complete **brand verification** (Google Auth Platform → Verification
+   Center), then apply for **Basic** the same way.
+4. Set `"GOOGLE_ADS_ENABLED": "1"` and deploy.
 
 **Manager accounts:** a merchant who signs in with a Google account that reaches ad accounts through a manager account (an agency, say) gets each client account listed. Insights reaches them through the manager automatically (`login-customer-id`).
 
@@ -145,7 +158,7 @@ AdSense uses the **same Google Cloud project and OAuth client** as Google Ads. I
    verification to publish the app.
 4. While the app is in **Testing**, only its test users can connect, and their access lasts 7 days.
 
-There is no developer token and no manager account. A Google login with no AdSense account gets
+There is no Google Ads API access level to request for AdSense. A Google login with no AdSense account gets
 "That Google login has no AdSense account". An account that can't be split by site in reports is
 read as daily totals for the whole account, shown as "All sites".
 
@@ -156,10 +169,9 @@ From `apps/cloudflare`:
 ```bash
 npx wrangler secret put META_APP_SECRET
 npx wrangler secret put GOOGLE_ADS_CLIENT_SECRET
-npx wrangler secret put GOOGLE_ADS_DEVELOPER_TOKEN
 ```
 
-1. Put the two public ids in `wrangler.jsonc` and deploy (see `docs/deployment-cloudflare.md`).
+1. Put the public ids (and `GOOGLE_ADS_ENABLED` once Google has granted Explorer) in `wrangler.jsonc` and deploy (see `docs/deployment-cloudflare.md`).
 2. The database needs migrations `20261009185831_ad_accounts`, `20261010080000_adsense_daily` and `20261011130000_ad_connection_identity` (run `pnpm db:migrate` against the owner role **before** deploying; the last one only adds two columns and an index).
 3. Open **Settings → Advertising** (or press **Connect advertising accounts** on the dashboard).
    - Press **Continue with Meta Ads**, **Continue with Google AdSense** or **Continue with Google Ads**, and approve.
@@ -186,7 +198,9 @@ npx wrangler secret put GOOGLE_ADS_DEVELOPER_TOKEN
   for Business **system-user** token comes back without an expiry and is kept as it is.
 - **Disconnect** deletes the token and every number fetched for that account, then gives the access back to the platform
   **only when no other connection relies on the same person's grant** (another store, or AdSense next to Google Ads, since
-  Google revokes the person's whole grant to the client). Google: `POST oauth2.googleapis.com/revoke`. Meta:
+  Google revokes the person's whole grant to the client). Connections whose person isn't known yet (made before
+  identities were kept, or whose lookup failed) count as possibly the same person, so nothing is revoked while any
+  exist; a Google connection learns its person at its next token refresh. Google: `POST oauth2.googleapis.com/revoke`. Meta:
   `DELETE /me/permissions/ads_read` (only ads_read: WhatsApp keeps working). The outcome (`revoked`, `still_used`,
   `unknown_person`, `failed`) is in the response and the audit log.
 - **Sync.** Ad syncs ride the sync queue; each tick's syncs are spread over 5 minutes and retries back off exponentially with

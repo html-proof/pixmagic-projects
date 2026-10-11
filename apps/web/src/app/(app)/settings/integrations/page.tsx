@@ -10,7 +10,7 @@ import { Alert } from "@/components/ui";
 import { EmbeddedSignup } from "@/components/whatsapp/EmbeddedSignup";
 import { WhatsappIcon } from "@/components/whatsapp/common";
 import { quality, tier, type Overview as WaOverview } from "@/components/whatsapp/types";
-import { actionError, api, useApi } from "@/lib/api";
+import { actionError, api, ApiError, useApi } from "@/lib/api";
 
 // ---------------------------------------------------------------------------
 // "Connect your business": Shopify, WhatsApp, Google Ads and Meta Ads on one page, each with one
@@ -218,8 +218,17 @@ export default function IntegrationsPage() {
         await api(`${storeBase}/whatsapp`, { method: "DELETE" });
         await reloadWa();
       } else {
-        for (const c of adConns(platform)) await api(`${storeBase}/ads/connections/${c.id}`, { method: "DELETE" });
-        await reloadAds();
+        try {
+          for (const c of adConns(platform)) {
+            // Already gone (an earlier attempt removed it): carry on with the rest.
+            await api(`${storeBase}/ads/connections/${c.id}`, { method: "DELETE" }).catch((e: unknown) => {
+              if (!(e instanceof ApiError && e.status === 404)) throw e;
+            });
+          }
+        } finally {
+          // Show what's really left, even when a removal failed part-way.
+          await reloadAds();
+        }
       }
       setNote({ kind: "success", text: platform ? `${AD_PLATFORM[platform].name} is disconnected.` : "WhatsApp is disconnected." });
     } catch (e) {

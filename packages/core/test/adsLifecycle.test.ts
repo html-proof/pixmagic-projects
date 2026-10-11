@@ -3,6 +3,8 @@ import { pkceChallenge, pkcePair } from "@app/shared";
 import {
   adsenseAuthorizeUrl,
   AdsAuthError,
+  AdsNotApprovedError,
+  googleAdAccounts,
   AdsRetryableError,
   googleAuthorizeUrl,
   googleExchangeCode,
@@ -37,7 +39,7 @@ function fake(route: (url: URL, init: RequestInit | undefined) => Response | Pro
 }
 
 const meta = (fetchImpl: FetchLike) => ({ appId: "app1", appSecret: "sec", version: "v25.0", fetchImpl });
-const google = (fetchImpl: FetchLike) => ({ clientId: "cid", clientSecret: "csec", developerToken: "dev", version: "v25", fetchImpl });
+const google = (fetchImpl: FetchLike) => ({ clientId: "cid", clientSecret: "csec", version: "v25", fetchImpl });
 const queryOf = (init: RequestInit | undefined) => (JSON.parse(String(init?.body)) as { query: string }).query;
 
 describe("sign-in security and lifecycle", () => {
@@ -134,6 +136,32 @@ describe("sign-in security and lifecycle", () => {
     const limited = fake(() => json({ error: { message: "User request limit reached", code: 17 } }, 400));
     await expect(metaCampaignDays(meta(limited.fetchImpl), "T", "1", "2026-07-01", "2026-10-01", { pollMs: 0 })).rejects.toBeInstanceOf(AdsRetryableError);
     expect(limited.calls.every((c) => c.init?.method !== "POST")).toBe(true);
+  });
+});
+
+describe("Google Ads access level", () => {
+  it("a project with Test access only is told apart from an account that can't be read, and never sends a developer token", async () => {
+    const notApproved = {
+      error: {
+        code: 403,
+        message: "The caller does not have permission",
+        status: "PERMISSION_DENIED",
+        details: [{ "@type": "type.googleapis.com/google.ads.googleads.v25.errors.GoogleAdsFailure", errors: [{ errorCode: { authorizationError: "CLOUD_PROJECT_NOT_APPROVED_FOR_PRODUCTION" }, message: "Project not approved" }] }],
+      },
+    };
+    const f = fake(async (u, init) => {
+      expect(new Headers(init?.headers).get("developer-token")).toBeNull();
+      if (u.pathname.endsWith("customers:listAccessibleCustomers")) return json({ resourceNames: ["customers/111"] });
+      return json([notApproved], 403);
+    });
+    await expect(googleAdAccounts(google(f.fetchImpl), "AT")).rejects.toBeInstanceOf(AdsNotApprovedError);
+    // A cancelled account is still just skipped.
+    const cancelled = fake(async (u) =>
+      u.pathname.endsWith("customers:listAccessibleCustomers")
+        ? json({ resourceNames: ["customers/111"] })
+        : json([{ error: { message: "The customer account can't be accessed because it is not yet enabled or has been deactivated.", status: "PERMISSION_DENIED" } }], 403),
+    );
+    expect(await googleAdAccounts(google(cancelled.fetchImpl), "AT")).toEqual([]);
   });
 });
 

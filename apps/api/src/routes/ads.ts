@@ -9,6 +9,7 @@ import {
   adsenseConfig,
   AdsApiError,
   AdsAuthError,
+  AdsNotApprovedError,
   AdsRetryableError,
   adToday,
   adsRedirectUri,
@@ -264,6 +265,11 @@ export function adsRoutes(app: App, deps: Deps) {
           accounts = google ? await googleAdAccounts(google, tokens.accessToken) : await adsenseAccounts(cfg, tokens.accessToken);
         }
       } catch (err) {
+        // Insights' Google Cloud project isn't approved for real Google Ads accounts yet: say so, don't blame the account.
+        if (err instanceof AdsNotApprovedError) {
+          logger.warn({ err, provider, storeId: state.storeId }, "google ads: project not approved for production accounts");
+          return back({ error: "not_approved", provider }, state.storeId);
+        }
         // A Google login with no AdSense account: AdSense answers 403 rather than an empty list.
         if (provider === "adsense" && err instanceof AdsApiError && err.status === 403 && /adsense account/i.test(err.message)) {
           return back({ error: "no_accounts", provider }, state.storeId);
@@ -464,6 +470,7 @@ export function adsRoutes(app: App, deps: Deps) {
       report = await googleReportForConnection(conn, q.level, q.from, q.to, deps.fetchImpl);
     } catch (err) {
       if (err instanceof AdsAuthError) throw new HttpError(409, ended, "reconnect");
+      if (err instanceof AdsNotApprovedError) throw new HttpError(503, "Google is still approving Insights for live Google Ads accounts. The report will work once that's done.", "google_not_approved");
       if (err instanceof AdsRetryableError) throw new HttpError(503, "Google Ads is busy right now. Try again in a minute.", "google_busy");
       if (err instanceof AdsApiError) {
         logger.warn({ err, connectionId: conn.id }, "google ads report failed");

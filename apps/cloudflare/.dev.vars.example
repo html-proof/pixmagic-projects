@@ -26,7 +26,7 @@ META_APP_SECRET=
 META_CONFIG_ID=
 GOOGLE_ADS_CLIENT_ID=
 GOOGLE_ADS_CLIENT_SECRET=
-GOOGLE_ADS_DEVELOPER_TOKEN=
+GOOGLE_ADS_ENABLED=
 # WhatsApp (optional; docs/whatsapp.md). Webhook callback URL: <API_URL>/webhooks/whatsapp.
 # The app id falls back to META_APP_ID and the secret to META_APP_SECRET when empty.
 WHATSAPP_APP_ID=

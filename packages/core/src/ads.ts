@@ -72,6 +72,23 @@ export class AdsApiError extends Error {
   }
 }
 
+/**
+ * Google hasn't approved Insights' Cloud project for real (production) Google Ads accounts yet: it has
+ * Test access only. Nothing the merchant does fixes it, so it's never mistaken for "no accounts".
+ */
+export class AdsNotApprovedError extends AdsApiError {
+  constructor(message: string) {
+    super(message, 403);
+  }
+}
+
+/** The Google login has no Google Ads account at all (Google's NOT_ADS_USER). */
+export class AdsNoAccountsError extends AdsApiError {
+  constructor(message: string) {
+    super(message, 403);
+  }
+}
+
 /** Meta's "permission" errors: 10 and 200-299. Either the app lost ads_read, or this login lost the account. */
 export const isMetaPermissionError = (err: unknown) => err instanceof AdsApiError && err.code !== undefined && (err.code === 10 || (err.code >= 200 && err.code <= 299));
 
@@ -260,10 +277,10 @@ export async function metaCampaignDays(c: MetaConfig, accessToken: string, accou
 }
 
 /**
- * An asynchronous Insights report: start the job, wait for it (about a minute at most), then read
- * its pages. A job that's still running is a temporary failure, so the queue tries again later.
+ * An asynchronous Insights report: start the job, wait for it (about 8 minutes at most), then read
+ * its pages. A job that's still running then is a temporary failure, so the queue tries again later.
  */
-export async function metaInsightsJob(c: MetaConfig, accessToken: string, act: string, params: Record<string, string>, pollMs = 2000): Promise<MetaInsightRow[]> {
+export async function metaInsightsJob(c: MetaConfig, accessToken: string, act: string, params: Record<string, string>, pollMs = 5000): Promise<MetaInsightRow[]> {
   const { limit: pageSize = "500", ...jobParams } = params;
   const job = await metaSend<{ report_run_id?: string }>(c, "POST", `${act}/insights`, { ...jobParams, access_token: accessToken });
   const id = job.report_run_id;
@@ -272,7 +289,8 @@ export async function metaInsightsJob(c: MetaConfig, accessToken: string, act: s
     const s = await metaGet<{ async_status?: string; async_percent_completion?: number }>(c, id, { fields: "async_status,async_percent_completion", access_token: accessToken });
     if (s.async_status === "Job Completed") break;
     if (s.async_status === "Job Failed" || s.async_status === "Job Skipped") throw new AdsRetryableError(`Meta's report job ended: ${s.async_status}`);
-    if (i >= 30) throw new AdsRetryableError("Meta's report is taking longer than usual");
+    // About 8 minutes: a queue consumer may run for 15, and a retry would only start the job again.
+    if (i >= 96) throw new AdsRetryableError("Meta's report is taking longer than usual");
     if (pollMs > 0) await new Promise((r) => setTimeout(r, pollMs));
   }
   const out: MetaInsightRow[] = [];
@@ -399,9 +417,11 @@ export interface GoogleOAuthClient {
   fetchImpl?: FetchLike;
 }
 
+/**
+ * Google Ads API access follows the Cloud project that owns the OAuth client (Google retired developer
+ * tokens on 2026-09-09), so the client and an API version are all a call needs.
+ */
 export interface GoogleConfig extends GoogleOAuthClient {
-  /** Issued by Google to the Ads API project; sent on every Ads API call. */
-  developerToken: string;
   /** Google Ads API version, e.g. "v25". */
   version: string;
 }
@@ -499,7 +519,7 @@ export async function googleUserId(c: GoogleOAuthClient, accessToken: string): P
 }
 
 async function googleAds<T>(c: GoogleConfig, accessToken: string, path: string, init: { method: "GET" | "POST"; body?: unknown; loginCustomerId?: string | null }): Promise<T> {
-  const headers: Record<string, string> = { authorization: `Bearer ${accessToken}`, "developer-token": c.developerToken };
+  const headers: Record<string, string> = { authorization: `Bearer ${accessToken}` };
   if (init.body !== undefined) headers["content-type"] = "application/json";
   if (init.loginCustomerId) headers["login-customer-id"] = googleCustomerId(init.loginCustomerId);
   const res = await (c.fetchImpl ?? fetch)(`https://googleads.googleapis.com/${c.version}/${path}`, {
@@ -507,11 +527,17 @@ async function googleAds<T>(c: GoogleConfig, accessToken: string, path: string, 
     headers,
     body: init.body === undefined ? undefined : JSON.stringify(init.body),
   });
-  const body = (await res.json().catch(() => ({}))) as T & { error?: { message?: string; status?: string; details?: unknown } };
-  const err = Array.isArray(body) ? (body[0] as { error?: { message?: string; status?: string } })?.error : (body as { error?: { message?: string; status?: string } }).error;
+  type GoogleError = { message?: string; status?: string; details?: unknown };
+  const body = (await res.json().catch(() => ({}))) as T & { error?: GoogleError };
+  const err = Array.isArray(body) ? (body[0] as { error?: GoogleError })?.error : (body as { error?: GoogleError }).error;
   if (res.ok && !err) return body;
   const msg = err?.message ?? `Google Ads returned ${res.status}`;
+  // A Google login with no Google Ads account answers NOT_ADS_USER: that's "no accounts", not ended access.
+  if (/NOT_ADS_USER/.test(JSON.stringify(err?.details ?? ""))) throw new AdsNoAccountsError(msg);
   if (res.status === 401 || err?.status === "UNAUTHENTICATED") throw new AdsAuthError(msg);
+  // The project's access level doesn't cover production accounts (CLOUD_PROJECT_NOT_APPROVED_FOR_PRODUCTION
+  // and its kin): Insights' own approval, not the merchant's account.
+  if (/NOT_APPROVED/.test(JSON.stringify(err?.details ?? "")) || /not approved for production/i.test(msg)) throw new AdsNotApprovedError(msg);
   if (res.status === 429 || res.status >= 500 || err?.status === "RESOURCE_EXHAUSTED" || err?.status === "UNAVAILABLE") throw new AdsRetryableError(msg);
   throw new AdsApiError(msg, res.status);
 }
@@ -535,7 +561,13 @@ interface CustomerClientRow {
  * any manager account they reach (which need the manager's id on every call).
  */
 export async function googleAdAccounts(c: GoogleConfig, accessToken: string): Promise<AdAccount[]> {
-  const list = await googleAds<{ resourceNames?: string[] }>(c, accessToken, "customers:listAccessibleCustomers", { method: "GET" });
+  let list: { resourceNames?: string[] };
+  try {
+    list = await googleAds<{ resourceNames?: string[] }>(c, accessToken, "customers:listAccessibleCustomers", { method: "GET" });
+  } catch (err) {
+    if (err instanceof AdsNoAccountsError) return [];
+    throw err;
+  }
   const ids = (list.resourceNames ?? []).map((r) => r.split("/").pop()!).filter(Boolean);
   const out = new Map<string, AdAccount>();
   for (const id of ids) {
@@ -544,7 +576,7 @@ export async function googleAdAccounts(c: GoogleConfig, accessToken: string): Pr
       me = (await googleSearch<CustomerRow>(c, accessToken, id, "SELECT customer.id, customer.descriptive_name, customer.currency_code, customer.time_zone, customer.manager FROM customer"))[0]?.customer;
     } catch (err) {
       // A cancelled or suspended account in the list: skip it rather than fail the connection.
-      if (err instanceof AdsApiError) continue;
+      if (err instanceof AdsApiError && !(err instanceof AdsNotApprovedError)) continue;
       throw err;
     }
     if (!me) continue;
@@ -559,7 +591,7 @@ export async function googleAdAccounts(c: GoogleConfig, accessToken: string): Pr
       "SELECT customer_client.id, customer_client.descriptive_name, customer_client.currency_code, customer_client.time_zone, customer_client.manager, customer_client.status FROM customer_client WHERE customer_client.manager = FALSE AND customer_client.status = 'ENABLED'",
       id,
     ).catch((err) => {
-      if (err instanceof AdsApiError) return [] as CustomerClientRow[];
+      if (err instanceof AdsApiError && !(err instanceof AdsNotApprovedError)) return [] as CustomerClientRow[];
       throw err;
     });
     for (const cl of clients) {
@@ -669,7 +701,7 @@ export async function googleReport(
 // AdSense (what the site earns from Google ads shown on it)
 // ---------------------------------------------------------------------------
 
-/** AdSense needs only the Google OAuth client: unlike Google Ads, there is no developer token. */
+/** AdSense needs only the Google OAuth client (and the AdSense Management API on its project). */
 export type AdsenseConfig = GoogleOAuthClient;
 
 export const ADSENSE_SCOPE = REQUIRED_AD_SCOPE.adsense;

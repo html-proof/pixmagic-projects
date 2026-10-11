@@ -32,7 +32,7 @@ function fake(route: (url: URL, init: RequestInit | undefined) => Response | Pro
 }
 
 const meta = (fetchImpl: FetchLike) => ({ appId: "app1", appSecret: "sec", version: "v25.0", fetchImpl });
-const google = (fetchImpl: FetchLike) => ({ clientId: "cid", clientSecret: "csec", developerToken: "dev", version: "v25", fetchImpl });
+const google = (fetchImpl: FetchLike) => ({ clientId: "cid", clientSecret: "csec", version: "v25", fetchImpl });
 
 describe("Meta", () => {
   it("asks only to read ads, and turns the code into a long-lived token", async () => {
@@ -108,7 +108,8 @@ describe("Google", () => {
   it("finds direct accounts and a manager's clients, and reads daily campaign numbers", async () => {
     const f = fake(async (u, init) => {
       const headers = new Headers(init?.headers);
-      expect(headers.get("developer-token")).toBe("dev");
+      // Developer tokens were retired (2026-09-09): access follows the Cloud project.
+      expect(headers.get("developer-token")).toBeNull();
       if (u.pathname === "/v25/customers:listAccessibleCustomers") return json({ resourceNames: ["customers/111", "customers/222", "customers/333"] });
       const query = init?.body ? (JSON.parse(String(init.body)) as { query: string }).query : "";
       if (u.pathname === "/v25/customers/111/googleAds:searchStream" && query.endsWith("FROM customer")) {

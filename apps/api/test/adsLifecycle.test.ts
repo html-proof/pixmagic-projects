@@ -19,7 +19,7 @@ const KEYS = {
   META_APP_SECRET: "meta_secret",
   GOOGLE_ADS_CLIENT_ID: "g_client",
   GOOGLE_ADS_CLIENT_SECRET: "g_secret",
-  GOOGLE_ADS_DEVELOPER_TOKEN: "g_dev",
+  GOOGLE_ADS_ENABLED: "1",
 };
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -192,6 +192,34 @@ describe("Continue with Google Ads: the sign-in", () => {
   });
 });
 
+describe("Google Ads before Google approves Insights for real accounts", () => {
+  it("is 'Coming soon' until switched on, and a Test-access project is named as the reason, not 'no accounts'", async () => {
+    ctx.setEnv({ ...KEYS, GOOGLE_ADS_ENABLED: "" });
+    const list = await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${storeId}/ads`, headers });
+    expect(list.json().configured).toMatchObject({ google: false, adsense: true });
+    expect((await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/stores/${storeId}/ads/google/connect`, headers })).statusCode).toBe(503);
+
+    ctx.setEnv(KEYS);
+    const seen = fresh();
+    const base = googlePlatform(seen);
+    ctx.setFetch(async (input, init) => {
+      const u = new URL(String(input));
+      if (u.pathname.endsWith("googleAds:searchStream")) {
+        return json([{ error: { code: 403, message: "denied", status: "PERMISSION_DENIED", details: [{ errors: [{ errorCode: { authorizationError: "CLOUD_PROJECT_NOT_APPROVED_FOR_PRODUCTION" } }] }] } }], 403);
+      }
+      return base(input, init);
+    });
+    const start = await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/stores/${storeId}/ads/google/connect`, headers });
+    const state = new URL(start.json().url).searchParams.get("state")!;
+    const cb = await ctx.app.inject({ method: "GET", url: `/ads/google/callback?state=${state}&code=C`, headers: { cookie: `${cookie}; ads_oauth_state=${state}` } });
+    const location = new URL(cb.headers.location as string);
+    expect(location.pathname).toBe("/settings/ads");
+    expect(location.searchParams.get("error")).toBe("not_approved");
+    expect(location.searchParams.get("provider")).toBe("google");
+    expect(await systemDb.adConnection.count()).toBe(0);
+  });
+});
+
 describe("disconnecting gives access back to the platform, only when nothing else relies on it", () => {
   it("Google: Google Ads and AdSense share one person's grant, so it is revoked with the last of them", async () => {
     const seen = fresh();
@@ -231,6 +259,57 @@ describe("disconnecting gives access back to the platform, only when nothing els
     expect(g.externalUserId).toBeNull();
     expect((await disconnect(g.id)).json()).toEqual({ ok: true, revoked: "unknown_person" });
     expect(seen.revoked).toEqual([]);
+  });
+});
+
+describe("review fixes: grants nobody can vouch for are never revoked", () => {
+  it("an older AdSense connection with no known person keeps the grant; it learns its person at its next refresh", async () => {
+    const seen = fresh();
+    // The older connection: made before identities were kept (tokeninfo didn't say).
+    ctx.setFetch(googlePlatform(seen, { sub: null }));
+    await connect("adsense");
+    const old = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, provider: "adsense" } });
+    expect(old.externalUserId).toBeNull();
+    // The same person connects Google Ads now, and their sub is known.
+    ctx.setFetch(googlePlatform(seen));
+    await connect("google");
+    const g = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, provider: "google" } });
+    expect(g.externalUserId).toBe("100200300");
+    expect((await disconnect(g.id)).json().revoked).toBe("still_used");
+    expect(seen.revoked).toEqual([]);
+
+    // The older row's next refresh learns who granted it.
+    await expire([old.id]);
+    await adAccessToken(await systemDb.adConnection.findUniqueOrThrow({ where: { id: old.id } }), googlePlatform(seen));
+    expect((await systemDb.adConnection.findUniqueOrThrow({ where: { id: old.id } })).externalUserId).toBe("100200300");
+  });
+
+  it("a reconnect whose person can't be looked up forgets the previous person instead of inheriting them", async () => {
+    ctx.setFetch(googlePlatform(fresh()));
+    await connect("google");
+    expect((await systemDb.adConnection.findFirstOrThrow({ where: { storeId, provider: "google" } })).externalUserId).toBe("100200300");
+    const seen = fresh();
+    ctx.setFetch(googlePlatform(seen, { sub: null, refreshToken: "G_REFRESH_OTHER" }));
+    await connect("google");
+    const row = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, provider: "google" } });
+    expect(row.externalUserId).toBeNull();
+    expect((await disconnect(row.id)).json().revoked).toBe("unknown_person");
+    expect(seen.revoked).toEqual([]);
+  });
+
+  it("a Google login with no Google Ads account is told so, not 'try again'", async () => {
+    const base = googlePlatform(fresh());
+    ctx.setFetch(async (input, init) => {
+      const u = new URL(String(input));
+      if (u.pathname.endsWith("customers:listAccessibleCustomers")) {
+        return json({ error: { code: 401, message: "The user's Google Account isn't associated with any Google Ads accounts.", status: "UNAUTHENTICATED", details: [{ errors: [{ errorCode: { authenticationError: "NOT_ADS_USER" } }] }] } }, 401);
+      }
+      return base(input, init);
+    });
+    const start = await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/stores/${storeId}/ads/google/connect`, headers });
+    const state = new URL(start.json().url).searchParams.get("state")!;
+    const cb = await ctx.app.inject({ method: "GET", url: `/ads/google/callback?state=${state}&code=C`, headers: { cookie: `${cookie}; ads_oauth_state=${state}` } });
+    expect(new URL(cb.headers.location as string).searchParams.get("error")).toBe("no_accounts");
   });
 });
 

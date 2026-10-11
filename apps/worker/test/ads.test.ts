@@ -15,7 +15,7 @@ let deps: WorkerDeps;
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
 beforeAll(() => {
-  Object.assign(process.env, { META_APP_ID: "a", META_APP_SECRET: "s", GOOGLE_ADS_CLIENT_ID: "c", GOOGLE_ADS_CLIENT_SECRET: "cs", GOOGLE_ADS_DEVELOPER_TOKEN: "d" });
+  Object.assign(process.env, { META_APP_ID: "a", META_APP_SECRET: "s", GOOGLE_ADS_CLIENT_ID: "c", GOOGLE_ADS_CLIENT_SECRET: "cs", GOOGLE_ADS_ENABLED: "1" });
   resetEnvCache();
   deps = { coord, queues, payloads: memoryBlobs(), mailer: memoryMailer(), fetchImpl: ((...a: Parameters<FetchLike>) => fetchImpl(...a)) as FetchLike };
 });
@@ -73,7 +73,9 @@ describe("ad account sync", () => {
     const calls: string[] = [];
     fetchImpl = async (input, init) => {
       const u = new URL(String(input));
-      calls.push(u.host);
+      calls.push(u.host + u.pathname.replace(/\/v\d+\/.*/, ""));
+      // A connection made before Insights kept who granted it learns that after its refresh.
+      if (u.host === "oauth2.googleapis.com" && u.pathname === "/tokeninfo") return json({ aud: "c", sub: "777000" });
       if (u.host === "oauth2.googleapis.com") {
         expect(new URLSearchParams(String(init?.body)).get("refresh_token")).toBe("REFRESH");
         return json({ access_token: "NEW_ACCESS", expires_in: 3599 });
@@ -84,7 +86,8 @@ describe("ad account sync", () => {
     const { msg, m } = message({ kind: "ads", connectionId: conn.id, since: today(), until: today() });
     await consume("sync", msg, deps);
     expect(m.acked).toBe(true);
-    expect(calls).toEqual(["oauth2.googleapis.com", "googleads.googleapis.com"]);
+    expect(calls).toEqual(["oauth2.googleapis.com/token", "oauth2.googleapis.com/tokeninfo", "googleads.googleapis.com"]);
+    expect((await systemDb.adConnection.findUniqueOrThrow({ where: { id: conn.id } })).externalUserId).toBe("777000");
     expect(toNumber((await systemDb.adCampaignDaily.findFirstOrThrow({ where: { connectionId: conn.id } })).spend)).toBe(3);
     expect((await systemDb.adConnection.findUniqueOrThrow({ where: { id: conn.id } })).accessTokenExpiresAt!.getTime()).toBeGreaterThan(Date.now());
   });
@@ -97,7 +100,9 @@ describe("ad account sync", () => {
     const calls: string[] = [];
     fetchImpl = async (input, init) => {
       const u = new URL(String(input));
-      calls.push(u.host);
+      calls.push(u.host + (u.host === "oauth2.googleapis.com" ? u.pathname : ""));
+      // Who granted it can't be looked up here: the sync goes on regardless.
+      if (u.host === "oauth2.googleapis.com" && u.pathname === "/tokeninfo") return json({ error: "invalid_token" }, 400);
       if (u.host === "oauth2.googleapis.com") return json({ access_token: "NEW_ACCESS", expires_in: 3599 });
       expect(u.pathname).toBe("/v2/accounts/pub-1/reports:generate");
       expect(new Headers(init?.headers).get("authorization")).toBe("Bearer NEW_ACCESS");
@@ -116,7 +121,7 @@ describe("ad account sync", () => {
     const { msg, m } = message({ kind: "ads", connectionId: conn.id, since: addDays(today(), -2), until: today() });
     await consume("sync", msg, deps);
     expect(m.acked).toBe(true);
-    expect(calls).toEqual(["oauth2.googleapis.com", "adsense.googleapis.com"]);
+    expect(calls).toEqual(["oauth2.googleapis.com/token", "oauth2.googleapis.com/tokeninfo", "adsense.googleapis.com"]);
     const rows = await systemDb.adsenseDaily.findMany({ where: { connectionId: conn.id } });
     expect(rows.map((r) => [r.site, r.day, toNumber(r.earnings), r.pageViews, r.impressions, r.clicks, r.currency])).toEqual([["shop.example.com", d1, 7.25, 3000, 6000, 9, "AUD"]]);
     const after = await systemDb.adConnection.findUniqueOrThrow({ where: { id: conn.id } });

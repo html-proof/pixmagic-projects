@@ -19,7 +19,7 @@
 
   // Non-secret configuration. Secrets (SESSION_SECRET, TOKEN_ENCRYPTION_KEYS, OTP_PEPPER,
   // SHOPIFY_API_SECRET, FIREBASE_SERVICE_ACCOUNT_B64, ALERT_SLACK_WEBHOOK_URL, for ad accounts
-  // META_APP_SECRET, GOOGLE_ADS_CLIENT_SECRET, GOOGLE_ADS_DEVELOPER_TOKEN, and for WhatsApp
+  // META_APP_SECRET, GOOGLE_ADS_CLIENT_SECRET, and for WhatsApp
   // WHATSAPP_APP_SECRET, WHATSAPP_WEBHOOK_VERIFY_TOKEN) are set with
   // `wrangler secret put`; for local dev put everything in apps/cloudflare/.dev.vars.
   "vars": {
@@ -64,6 +64,11 @@
     "META_CONFIG_ID": "",
     "GOOGLE_ADS_CLIENT_ID": "534794119904-9esdp8dhskcupf6ekbb0iej2dr10gomf.apps.googleusercontent.com",
     "GOOGLE_ADS_API_VERSION": "v25",
+    // "1" once project insights-511119 has Google Ads API access for real accounts (Explorer or above,
+    // Cloud console → Google Ads API → Overview) and the adwords scope is on its consent screen. Google
+    // retired developer tokens on 2026-09-09, so there is no token to set. Empty: "Coming soon".
+    // Explorer granted 2026-10-11 (2,880 operations a day on real accounts).
+    "GOOGLE_ADS_ENABLED": "1",
     // WhatsApp Business Platform (Cloud API), docs/whatsapp.md. "Connect WhatsApp Business" (Meta's
     // Embedded Signup) needs the Meta app id (empty: META_APP_ID is used), the Facebook Login for
     // Business configuration id of its WhatsApp Embedded Signup variation, and the secrets

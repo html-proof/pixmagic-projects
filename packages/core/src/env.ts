@@ -37,7 +37,7 @@ const schema = z.object({
   /**
    * Ad platforms ("Continue with Meta" / "Continue with Google" on Settings → Ad accounts). Empty
    * means not set up: the buttons say so instead of sending people to an error page. The app ids
-   * are public; the secrets and the Google Ads developer token are Worker secrets.
+   * are public; the secrets are Worker secrets.
    */
   META_APP_ID: z.string().optional().default(""),
   META_APP_SECRET: z.string().optional().default(""),
@@ -46,7 +46,13 @@ const schema = z.object({
   META_CONFIG_ID: z.string().optional().default(""),
   GOOGLE_ADS_CLIENT_ID: z.string().optional().default(""),
   GOOGLE_ADS_CLIENT_SECRET: z.string().optional().default(""),
-  GOOGLE_ADS_DEVELOPER_TOKEN: z.string().optional().default(""),
+  /**
+   * "1" once the Google Cloud project behind GOOGLE_ADS_CLIENT_ID has Google Ads API access for real
+   * (production) accounts, Explorer level or above, and the `adwords` scope is on its consent screen.
+   * Google retired developer tokens on 2026-09-09: API access now follows the Cloud project, so there
+   * is no token to set, only this switch. Off, the Google Ads card says "Coming soon".
+   */
+  GOOGLE_ADS_ENABLED: z.string().optional().default(""),
   GOOGLE_ADS_API_VERSION: z.string().default("v25"),
   /**
    * WhatsApp Business Platform (Cloud API). Embedded Signup ("Connect WhatsApp Business") needs

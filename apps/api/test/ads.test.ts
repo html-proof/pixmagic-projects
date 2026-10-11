@@ -18,7 +18,7 @@ const KEYS = {
   META_APP_SECRET: "meta_secret",
   GOOGLE_ADS_CLIENT_ID: "g_client",
   GOOGLE_ADS_CLIENT_SECRET: "g_secret",
-  GOOGLE_ADS_DEVELOPER_TOKEN: "g_dev",
+  GOOGLE_ADS_ENABLED: "1",
 };
 const NO_KEYS = Object.fromEntries(Object.keys(KEYS).map((k) => [k, ""]));
 
@@ -192,7 +192,7 @@ describe("connecting ad accounts", () => {
   });
 
   it("Continue with Google AdSense: needs only the Google OAuth client, asks read-only, saves the account", async () => {
-    // No developer token: Google Ads can't connect, AdSense can.
+    // Google Ads not switched on (its Cloud project isn't approved for real accounts yet): AdSense still connects.
     ctx.setEnv({ ...NO_KEYS, GOOGLE_ADS_CLIENT_ID: "g_client", GOOGLE_ADS_CLIENT_SECRET: "g_secret" });
     const list = await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${storeId}/ads`, headers });
     expect(list.json().configured).toEqual({ meta: false, google: false, adsense: true });
