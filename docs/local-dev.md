@@ -30,9 +30,9 @@ Generate an encryption key and paste it into `TOKEN_ENCRYPTION_KEYS=1:<key>`:
 node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
 ```
 
-Put the `NEXT_PUBLIC_FIREBASE_*` values in `apps/web/.env.local` (baked into the UI at build time). To use the emulator, also set `NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR=http://127.0.0.1:9099` there (and build with `NEXT_EXPORT_DIR=out-local`: a build into `out`, which is what gets deployed, refuses to run with the emulator set) and keep `FIREBASE_SERVICE_ACCOUNT_B64` empty in `.dev.vars`. To use a real project, set the service account and remove `FIREBASE_AUTH_EMULATOR_HOST`.
+Copy `apps/web/.env.example` to `apps/web/.env.local` for the `NEXT_PUBLIC_FIREBASE_*` values (baked into the UI at build time). To use the emulator, uncomment `NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR` there (and build with `NEXT_EXPORT_DIR=out-local`: a build into `out`, which is what gets deployed, refuses to run with the emulator set) and keep `FIREBASE_SERVICE_ACCOUNT_B64` empty in `.dev.vars`. To use a real project, set the service account and remove `FIREBASE_AUTH_EMULATOR_HOST`.
 
-`DATABASE_URL` in the repo-root `.env` is only used by the Prisma CLI (migrations).
+The repo-root `.env` (from `.env.example`) is only for tools on this machine: docker compose, the Prisma CLI (`DATABASE_URL`, migrations) and the maintenance tasks in [RUNBOOK.md](RUNBOOK.md#maintenance-tasks). Which file configures what: [architecture.md](architecture.md#configuration).
 
 ## 3. Database
 

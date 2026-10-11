@@ -104,7 +104,8 @@ describe("Shopify app configuration", () => {
 
   /**
    * The checks above compare the tomls with ENV_SCOPES, a constant, which left the config we
-   * actually ship unchecked — and it drifted. The Worker env and `.env.example` kept declaring
+   * actually ship unchecked — and it drifted. The Worker env (and the old root `.env.example`,
+   * which no longer carries Worker settings: local dev inherits these vars) kept declaring
    * the protected-customer-data optional scopes long after they were removed from the tomls.
    * Under managed installation that drift cannot change what Shopify grants, which is exactly
    * why nothing surfaced it: it only made our logs and authorize URLs claim scopes the app
@@ -112,7 +113,7 @@ describe("Shopify app configuration", () => {
    * that had already been fixed. Check the files themselves, not a constant describing them.
    */
   describe("the shipped configuration matches the tomls", () => {
-    for (const path of ["apps/cloudflare/wrangler.jsonc", ".env.example"]) {
+    for (const path of ["apps/cloudflare/wrangler.jsonc"]) {
       const text = read(path);
 
       it(`${path} asks for the scopes the main app declares`, () => {
@@ -137,7 +138,7 @@ describe("Shopify app configuration", () => {
      * until now nothing here would have caught it: the scope checks above read wrangler.jsonc,
      * but the URL checks only ever compared each toml against itself.
      *
-     * Only the deployed config is checked. `.env.example` points at localhost on purpose.
+     * Only the deployed config is checked. `.dev.vars.example` points at localhost on purpose.
      */
     it("the deployed APP_URL is the origin the main app registered with Shopify", () => {
       const appUrl = envValue(read("apps/cloudflare/wrangler.jsonc"), "APP_URL")!;

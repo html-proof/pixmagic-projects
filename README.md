@@ -24,7 +24,7 @@ docker compose up -d postgres mailpit firebase-emulator
 ```
 
 ```bash
-pnpm install && cp .env.example .env && cp apps/cloudflare/.dev.vars.example apps/cloudflare/.dev.vars
+pnpm install && cp .env.example .env && cp apps/cloudflare/.dev.vars.example apps/cloudflare/.dev.vars && cp apps/web/.env.example apps/web/.env.local
 ```
 
 Then follow [docs/local-dev.md](docs/local-dev.md). Progress and verification history: [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md).

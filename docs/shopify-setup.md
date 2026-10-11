@@ -170,7 +170,7 @@ stores are exempt). That is accepted deliberately, because today it costs nothin
 
 **Re-check this when the main app is submitted for review.** If PCD approval has not landed by
 then, comment `optional_scopes` back out of both tomls, clear `SHOPIFY_OPTIONAL_SCOPES` in
-`apps/cloudflare/wrangler.jsonc` and `.env.example`, and redeploy both apps and the Worker —
+`apps/cloudflare/wrangler.jsonc`, and redeploy both apps and the Worker —
 otherwise approval of the *app* will be gated behind installs that Shopify is refusing.
 
 ### The dynamic scope request flow
@@ -218,9 +218,9 @@ What a revoke does *not* do: it does not delete data the scope let us import, an
 **Current state (2026-10-06): turned on.** `optional_scopes` is declared in both tomls and mirrored in `SHOPIFY_OPTIONAL_SCOPES`, so the dashboard offers **Enable** and Settings → Stores offers **Remove** (see "What is declared optional, and why it is on"). The steps below are how it was switched on, and in reverse how to switch it off again before app review if protected customer data approval has not landed. With `SHOPIFY_OPTIONAL_SCOPES` empty the flow is dormant: `declaredOptionalScopes()` finds nothing, no module offers a button, and `request` and `revoke` both answer `scope_unavailable`. In this order:
 
 1. Get **API access → Protected customer data access** granted for `read_customers`, `write_pixels`, `read_customer_events`.
-2. Uncomment `optional_scopes` in **both** tomls, mirror it into `SHOPIFY_OPTIONAL_SCOPES` (`apps/cloudflare/wrangler.jsonc` *and* `.env.example`), then `shopify app deploy` and `npx wrangler deploy`.
+2. Uncomment `optional_scopes` in **both** tomls, mirror it into `SHOPIFY_OPTIONAL_SCOPES` in `apps/cloudflare/wrangler.jsonc`, then `shopify app deploy` and `npx wrangler deploy`.
 
-`packages/core/test/appConfig.test.ts` fails the build if the tomls, `wrangler.jsonc` and `.env.example` disagree about the optional scopes. Note the env var can only ever *narrow* what we ask for: a scope in `SHOPIFY_OPTIONAL_SCOPES` that the deployed toml does not declare gives merchants an "Enable" button that lands them on a Shopify error.
+`packages/core/test/appConfig.test.ts` fails the build if the tomls and `wrangler.jsonc` disagree about the optional scopes. Note the env var can only ever *narrow* what we ask for: a scope in `SHOPIFY_OPTIONAL_SCOPES` that the deployed toml does not declare gives merchants an "Enable" button that lands them on a Shopify error.
 
 Giving scopes back follows the same switch: see [Giving a scope back](#giving-a-scope-back) above.
 

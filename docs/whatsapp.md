@@ -263,7 +263,7 @@ verify token to set by hand, as it does if Meta refuses the subscription.
 
 Public ids in `apps/cloudflare/wrangler.jsonc` `vars` (`WHATSAPP_APP_ID`, `WHATSAPP_CONFIG_ID`,
 `WHATSAPP_API_VERSION`), secrets with `npx wrangler secret put WHATSAPP_APP_SECRET` and
-`npx wrangler secret put WHATSAPP_WEBHOOK_VERIFY_TOKEN`. Example placeholders are in `.env.example` and
+`npx wrangler secret put WHATSAPP_WEBHOOK_VERIFY_TOKEN`. Example placeholders are in
 `apps/cloudflare/.dev.vars.example`. Without them the dashboard says Meta's sign-up isn't set up (and offers the
 manual route); nothing pretends to be connected.
 
