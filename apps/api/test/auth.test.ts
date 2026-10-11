@@ -178,21 +178,19 @@ describe("email OTP", () => {
       }
     }
 
-    it("falls back to a Firebase sign-in link that returns to the page that asked", async () => {
+    it("falls back to a Firebase sign-in link that returns to /login", async () => {
       await withBrokenMailer(async () => {
         const res = await request("Link@x.com");
         expect(res.statusCode).toBe(200);
         expect(res.json()).toEqual({ ok: true, method: "link" });
-        const fromStart = await ctx.app.inject({ method: "POST", url: "/auth/otp/request", headers: ORIGIN, payload: { email: "start@x.com", continuePath: "/start" } });
-        expect(fromStart.json().method).toBe("link");
+        // The destination is always ours: whatever the client says about it is ignored.
+        const evil = await ctx.app.inject({ method: "POST", url: "/auth/otp/request", headers: ORIGIN, payload: { email: "e@x.com", continuePath: "https://evil.example" } });
+        expect(evil.json().method).toBe("link");
       });
       expect(ctx.auth.links).toEqual([
         { email: "link@x.com", continueUrl: "http://localhost:3001/login?emailLink=1" },
-        { email: "start@x.com", continueUrl: "http://localhost:3001/start?step=link" },
+        { email: "e@x.com", continueUrl: "http://localhost:3001/login?emailLink=1" },
       ]);
-      // Only our own pages can be the destination.
-      const evil = await ctx.app.inject({ method: "POST", url: "/auth/otp/request", headers: ORIGIN, payload: { email: "e@x.com", continuePath: "https://evil.example" } });
-      expect(evil.statusCode).toBe(400);
     });
 
     it("redeems the link's code for a sign-in token, once and only for that email", async () => {

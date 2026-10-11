@@ -48,18 +48,7 @@ The dashboard reads the scopes **actually granted** (from the token response and
 
 Since 2026-10-10 a store is connected only by a signed-in user: from **Settings → Shopify** (`/settings/stores`) or the first-run connect page (`/onboarding`), through Shopify's own OAuth screen. `POST /workspaces/:ws/shopify/install {shop, from?}` returns the authorize URL with single-use state bound to the browser; `/api/shopify/callback` exchanges the code server-side, stores the token encrypted, and sends the merchant back where they started (`from: "settings"` → `/settings/stores?connected=<id>`, otherwise the first-sync page). When Shopify opens the app (`/api/shopify/launch`) for someone who isn't signed in, they go to `/onboarding?shop=…`, which asks them to log in or sign up and then carries on with that store. The old public entry `/start` now forwards there (or to `/signup`).
 
-### The retired "Continue with Shopify" sign-up
-
-The flow below is no longer offered in the UI. Its API is kept so sign-ups already under way finish, and documented for reference.
-
-1. `POST /auth/shopify/start {email, shop?}` (from the web app's origin only, rate limited) stores a short-lived signup record (`signup:<nonce>`, 30 min, Durable Object) and sets the httpOnly `shopify_signup` cookie. Without a store address the browser goes to Shopify's managed install (`admin.shopify.com/oauth/install?client_id=…`), where the merchant signs in, picks a store and approves; Shopify then opens `/api/shopify/launch`, which continues the signup from the cookie. With a store address it goes straight to that store's authorize screen.
-2. **Per-user grant** (`grant_options[]=per-user`): `/shopify/callback` learns which Shopify staff account approved (email + `email_verified`).
-3. **Offline grant**: a second authorize (no prompt, the app is installed) returns the permanent offline token used for background sync. It is kept AES-GCM encrypted in the signup record until claimed.
-4. `/start?step=finish` → `POST /auth/shopify/finish`: when Shopify's verified email is the one typed (or the visitor chooses "Continue as <Shopify email>"), it returns a Firebase custom token; otherwise the page proves the typed email with a 6-digit code (`/auth/otp/*`). The sign-in token is handed out once (plus a 2-minute retry window).
-5. The browser signs in (`/auth/session`), then `POST /auth/shopify/claim` connects the store: into the user's own solo workspace, or a new workspace named after the store. A store already connected to someone else's workspace is refused (409). The record is single use; `Start again` (`/auth/shopify/cancel`) and logout delete it.
-6. The first import runs (shop → orders, products, inventory/variants) and the user lands on the progress screen, then the dashboard.
-
-Signed-in users can still connect more stores from **Settings → Stores → Connect a store** (the flow below).
+The public "Continue with Shopify" sign-up (`/auth/shopify/start`, per-user grant, claim) was retired from the UI on 2026-10-10 and removed from the API on 2026-10-11; see git history before then for how it worked.
 
 ## 3b. In-app OAuth flow (signed-in users)
 
@@ -134,7 +123,7 @@ A misconfigured extra app is logged and skipped; the main app keeps working.
 | Listed in `SHOPIFY_DEFAULT_APP_SHOPS` | main app | main app |
 | Anything else | main app | refused up front: `app_unavailable` |
 
-Shopify's **store picker** (the managed install link used by "Continue with Shopify" and one-click connect, where the merchant has not given an address) can only offer the main app, so it is only used while the main app is unrestricted. Otherwise the API answers `shop_required` and the web app opens the store-address field, which routes to the right app.
+Shopify's **store picker** (the managed install link one-click connect uses when the merchant has not given an address) can only offer the main app, so it is only used while the main app is unrestricted. Otherwise the API answers `shop_required` and the web app opens the store-address field, which routes to the right app.
 
 ## 3e. Optional scopes, and why the env var can't fix an install
 
@@ -241,15 +230,7 @@ Check, in order:
 
    Request it anyway, and **before** submitting: "Applying for protected customer data isn't possible while the app is under review", so submitting first forces a withdraw-and-resubmit and loses queue position.
 3. **The released version matches the toml.** Editing a toml changes nothing until `cd shopify-app && shopify app deploy`. Dev Dashboard → **Versions** → the active version shows the scopes and URLs merchants are actually being asked for. Compare them with `shopify-app/shopify.app.toml`.
-4. **The right `client_id`.** The one in the failing URL must be the app that store is allowed to install. For a store with its own app ([3c](#3c-a-clients-store-with-its-own-app-custom-distribution--not-the-product-strategy)) this is the check that has actually failed in production, so verify it against the deployed Worker rather than the repo:
-
-   ```bash
-   curl -s -X POST https://insights.imeseban.workers.dev/api/auth/shopify/start \
-     -H 'Content-Type: application/json' -H 'Origin: https://insights.imeseban.workers.dev' \
-     -d '{"email":"probe@example.com","shop":"THE-STORE.myshopify.com"}'
-   ```
-
-   The `client_id` in the returned URL is the app that store is really being sent to. If it is the main app's, the store's own app is not in the registry — and the cause is almost always that **the configuration never reached production**: `SHOPIFY_EXTRA_APPS` lives in `apps/cloudflare/wrangler.jsonc`, and editing that file changes nothing until `npx wrangler deploy`. `wrangler secret put` does deploy a new version, which makes it look as though the var went out too; it does not — it carries over the *previous* version's vars. Confirm with `npx wrangler versions view <id>`, which lists the bindings the live version actually has. A missing secret (`SHOPIFY_APP_SECRET_<KEY>`) does the same thing for the same reason. Either way the store is now refused by us with `app_unavailable` instead of being handed to Shopify's dead end (`packages/core/src/apps.ts`, `blocked`), so the merchant gets a message that names the problem — but the install is still broken until the Worker is redeployed.
+4. **The right `client_id`.** The one in the failing URL must be the app that store is allowed to install. For a store with its own app ([3c](#3c-a-clients-store-with-its-own-app-custom-distribution--not-the-product-strategy)) this is the check that has actually failed in production, so verify it against the deployed Worker rather than the repo: signed in, open **Settings → Shopify → Enter store address instead**, enter the store and press Connect. The `client_id` in the Shopify address the browser opens (also in the response to `POST /api/workspaces/<ws>/shopify/install`, DevTools → Network) is the app that store is really being sent to. If it is the main app's, the store's own app is not in the registry — and the cause is almost always that **the configuration never reached production**: `SHOPIFY_EXTRA_APPS` lives in `apps/cloudflare/wrangler.jsonc`, and editing that file changes nothing until `npx wrangler deploy`. `wrangler secret put` does deploy a new version, which makes it look as though the var went out too; it does not — it carries over the *previous* version's vars. Confirm with `npx wrangler versions view <id>`, which lists the bindings the live version actually has. A missing secret (`SHOPIFY_APP_SECRET_<KEY>`) does the same thing for the same reason. Either way the store is now refused by us with `app_unavailable` instead of being handed to Shopify's dead end (`packages/core/src/apps.ts`, `blocked`), so the merchant gets a message that names the problem — but the install is still broken until the Worker is redeployed.
 5. **A stale link.** `access_change_uuid` is single use and short lived, and it is bound to the install attempt that created it — so a grant URL copied out of one person's address bar and sent to someone else *always* lands on this page. Send merchants to `/signup` (then Settings → Shopify), never to an `admin.shopify.com/.../app/grant?...` URL.
 
 While the app is unapproved, set `SHOPIFY_DEFAULT_APP_SHOPS` to our development stores. Merchants we cannot serve then get `app_unavailable` ("This store can't install our app yet…") from us, instead of being handed to a Shopify page that cannot work. Clear it again the day the app is approved, or the store picker stays disabled — see "Which app a store is sent to" above.

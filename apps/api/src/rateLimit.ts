@@ -30,9 +30,6 @@ export const LIMITS = {
   otpGuessesPerEmail: { max: 30, windowSec: 86_400 },
   /** POST /auth/email-link/verify. */
   emailLinkVerifyIp: { max: 20, windowSec: 900 },
-  /** "Continue with Shopify": POST /auth/shopify/start and /finish. */
-  shopifyStartIp: { max: 20, windowSec: 3600 },
-  shopifyFinishIp: { max: 30, windowSec: 900 },
 
   // ---- Signed-in actions ----
   /** Customer contact details, fetched live from Shopify (per workspace and user). */

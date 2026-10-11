@@ -91,7 +91,7 @@ OPS_SHOP=shop.myshopify.com pnpm --filter @app/worker ops:recompute
 ### Rotate the token encryption key
 1. Generate a key (`openssl rand -base64 32`) and prepend it: `TOKEN_ENCRYPTION_KEYS=2:<new>,1:<old>`. Set it on the Worker (`npx wrangler secret put TOKEN_ENCRYPTION_KEYS`) and in the `.env` the maintenance tasks use. New writes use v2; v1 still decrypts.
 2. Re-encrypt existing data: `pnpm --filter @app/worker ops:reencrypt` (prints how many rows it rewrote).
-3. Run it again: it must print `re-encrypted 0 rows` (rows written by the Worker between deploy and step 2 are already on v2). Only then remove `1:<old>` from both places. A merchant in the middle of "Continue with Shopify" at that moment has to start it again; nothing else is lost.
+3. Run it again: it must print `re-encrypted 0 rows` (rows written by the Worker between deploy and step 2 are already on v2). Only then remove `1:<old>` from both places. Someone in the middle of choosing which ad accounts to connect at that moment has to sign in to the platform again; nothing else is lost.
 
 ### Rotate the Shopify client secret
 Partners → app → Client credentials → rotate. Shopify accepts both for a grace period. `npx wrangler secret put SHOPIFY_API_SECRET` within that window.

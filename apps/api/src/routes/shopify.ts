@@ -16,12 +16,13 @@ import {
   type ShopifyAppConfig,
 } from "@app/core";
 import { can, expandScopes, normalizeShopDomain, randomToken, safeEqual, verifyShopifyQueryHmac, type Role } from "@app/shared";
-import { body, clientIp, HttpError, loadUser, requireWorkspace, SESSION_COOKIE, type Ctx, type Deps } from "../context.js";
+import { body, clientIp, HttpError, loadUser, requireWorkspace, type Ctx, type Deps } from "../context.js";
 import type { App } from "../app.js";
 import { attachStore, storeTakenElsewhere, syncPage } from "../connectStore.js";
-import { freshTimestamp, SIGNUP_COOKIE, signupCallback, signupLaunch } from "./shopifySignup.js";
 
 const STATE_TTL_S = 600;
+/** Shopify-signed redirects (callback, launch) older than this are refused. */
+const MAX_LINK_AGE_S = 600;
 const STATE_COOKIE = "shopify_oauth_state";
 /** Remembers which user/workspace started a one-click connect while the user is on Shopify. */
 const PENDING_COOKIE = "shopify_pending";
@@ -37,15 +38,17 @@ const cookieOpts = () => ({
 });
 
 /**
- * Single-use OAuth state, kept while the merchant is on Shopify. `connect` (also when `mode` is
- * absent) is a signed-in user connecting a store to a workspace; the signup modes belong to
- * "Continue with Shopify" (see shopifySignup.ts).
+ * Single-use OAuth state, kept while the merchant is on Shopify: a signed-in user connecting a
+ * store to a workspace (`mode` is absent on state written by older releases).
  */
 export type ConnectState = { mode?: "connect"; userId: string; workspaceId: string; shop: string; app?: string; from?: ConnectFrom };
-export type SignupState = { mode: "signup_user" | "signup_offline"; signup: string; shop: string; app?: string };
-type OAuthState = ConnectState | SignupState;
+type OAuthState = ConnectState;
 
-const isSignupState = (s: OAuthState): s is SignupState => s.mode === "signup_user" || s.mode === "signup_offline";
+/** True when a Shopify-signed `timestamp` is recent. */
+function freshTimestamp(ts: string | undefined): boolean {
+  const n = Number(ts);
+  return Number.isFinite(n) && Math.abs(Date.now() / 1000 - n) <= MAX_LINK_AGE_S;
+}
 
 /**
  * Where an in-app connect was started, so Shopify's answer brings the merchant back there: Settings
@@ -62,7 +65,7 @@ const connectedPage = (from: ConnectFrom | undefined, storeId: string) =>
   from === "settings" ? `${SETTINGS_STORES}?connected=${encodeURIComponent(storeId)}` : syncPage(storeId);
 
 /** Create single-use OAuth state, bind it to this browser and return Shopify's authorize URL. */
-export async function authorizeRedirect(c: Ctx, deps: Deps, state: OAuthState, opts: { perUser?: boolean } = {}): Promise<string> {
+export async function authorizeRedirect(c: Ctx, deps: Deps, state: OAuthState): Promise<string> {
   const nonce = randomToken(24);
   await deps.coord.put(`oauth:state:${nonce}`, JSON.stringify(state), STATE_TTL_S);
   // Bind the flow to this browser too (prevents login-CSRF style state injection).
@@ -70,7 +73,7 @@ export async function authorizeRedirect(c: Ctx, deps: Deps, state: OAuthState, o
   const app = shopifyApp(state.app);
   const cfg = shopifyConfig(app);
   logHandoff(state.mode ?? "connect", state.shop, app, cfg.scopes);
-  return buildAuthorizeUrl(cfg, state.shop, nonce, opts);
+  return buildAuthorizeUrl(cfg, state.shop, nonce);
 }
 
 /** Which of our apps signed this Shopify redirect (null: none, i.e. forged or tampered). */
@@ -175,13 +178,12 @@ export function shopifyRoutes(app: App, deps: Deps) {
     return c.json({ url: managedInstallUrl(mainApp.clientId) });
   });
 
-  /** Step 2: Shopify redirects back here (in-app connect and both signup legs). */
+  /** Step 2: Shopify redirects back here. */
   app.get("/shopify/callback", async (c) => {
     const q = c.req.query();
     const appUrl = env().APP_URL;
-    // Signup errors go back to /start, in-app connect errors to /onboarding. Until the state
-    // record says which flow this is, judge by the cookies.
-    let errorPage = getCookie(c, SIGNUP_COOKIE) && !getCookie(c, SESSION_COOKIE) ? "/start" : "/onboarding";
+    // Errors go back to the page the connect started from, once the state record says which.
+    let errorPage = "/onboarding";
     const fail = (code: string, shop?: string) =>
       c.redirect(`${appUrl}${errorPage}?error=${encodeURIComponent(code)}${shop ? `&shop=${encodeURIComponent(shop)}` : ""}`);
 
@@ -201,12 +203,10 @@ export function shopifyRoutes(app: App, deps: Deps) {
       const raw = await deps.coord.take(stateKey);
       if (!raw) return fail("state_expired");
       const state = JSON.parse(raw) as OAuthState;
-      errorPage = isSignupState(state) ? "/start" : connectPage(state.from);
+      errorPage = connectPage(state.from);
       if (state.shop !== shop) return fail("shop_mismatch");
       // The redirect must come back signed by the app the flow was started for.
       if ((state.app ?? DEFAULT_APP) !== app.key) return fail("app_mismatch");
-      // Awaited, so its failures land on the retry page below too.
-      if (isSignupState(state)) return await signupCallback(c, deps, state, shop, q.code, fail, app);
 
       let user;
       try {
@@ -248,11 +248,10 @@ export function shopifyRoutes(app: App, deps: Deps) {
   });
 
   /**
-   * App URL configured in the Partner dashboard. Shopify opens it (signed) right after the
-   * managed install from /start, and whenever a merchant launches the app from their admin.
+   * App URL configured in the Partner dashboard. Shopify opens it (signed) right after a managed
+   * install (one-click connect), and whenever a merchant launches the app from their admin.
    * If we know which workspace to connect, go straight to the authorize redirect (the app is
    * already installed with its scopes, so Shopify returns to /callback without another prompt).
-   * Visitors without a session continue their "Continue with Shopify" signup, or start one.
    * Otherwise send them to the connect page, which picks up ?shop= after sign-in.
    */
   app.get("/shopify/launch", async (c) => {
@@ -278,14 +277,9 @@ export function shopifyRoutes(app: App, deps: Deps) {
       // Null only without a valid session: an outage throws instead of passing for "signed out",
       // which used to send signed-in merchants into sign-up.
       const user = await loadUser(c, deps);
-      if (!user || !user.emailVerified) {
-        // A "Continue with Shopify" sign-up already under way in this browser carries on. Anyone
-        // else connects from inside the app: the connect page asks a visitor to sign in or create
-        // an account first and then picks this store up from ?shop=.
-        const next = await signupLaunch(c, deps, shop, q.timestamp, app.key);
-        if (next) return c.redirect(next);
-        return toOnboarding();
-      }
+      // Stores connect from inside the app: the connect page asks a visitor to sign in or create
+      // an account first and then picks this store up from ?shop=.
+      if (!user || !user.emailVerified) return toOnboarding();
 
       let workspaceId: string | null = null;
       let role: Role | null = null;

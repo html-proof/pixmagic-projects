@@ -11,12 +11,8 @@ export interface ShopifyAppConfig {
   redirectUri: string;
 }
 
-/**
- * Shopify's authorize URL. Offline access mode by default (a store-level token for
- * background sync). `perUser` asks for an online token instead, whose response
- * identifies the staff member who approved (used to sign them in).
- */
-export function buildAuthorizeUrl(cfg: ShopifyAppConfig, shop: string, state: string, opts: { perUser?: boolean } = {}): string {
+/** Shopify's authorize URL, in offline access mode (a store-level token for background sync). */
+export function buildAuthorizeUrl(cfg: ShopifyAppConfig, shop: string, state: string): string {
   const normalized = normalizeShopDomain(shop);
   if (!normalized) throw new Error("Invalid shop domain");
   const url = new URL(`https://${normalized}/admin/oauth/authorize`);
@@ -24,7 +20,6 @@ export function buildAuthorizeUrl(cfg: ShopifyAppConfig, shop: string, state: st
   url.searchParams.set("scope", cfg.scopes);
   url.searchParams.set("redirect_uri", cfg.redirectUri);
   url.searchParams.set("state", state);
-  if (opts.perUser) url.searchParams.append("grant_options[]", "per-user");
   return url.toString();
 }
 
@@ -84,13 +79,9 @@ async function tokenRequest(
  * token plus a single-use 90-day refresh token. That is deliberately not done. Rotation then
  * became a liveness requirement for every store - a store whose refresh failed once was dead,
  * and the refresh token is invalidated by any later authorize for the same app and shop, so an
- * abandoned signup could kill a live store's token while leaving its row untouched. A permanent
+ * abandoned authorize could kill a live store's token while leaving its row untouched. A permanent
  * offline token has no expiry and no refresh token, so there is nothing to rotate and nothing to
  * invalidate; it stays valid until the merchant uninstalls.
- *
- * Shopify decides online vs offline from the authorize URL (`grant_options[]=per-user`), not
- * from this body, so this request is byte-identical to the online exchange above - only the
- * authorization code differs.
  */
 export function exchangeCodeForToken(
   cfg: ShopifyAppConfig,
@@ -99,63 +90,6 @@ export function exchangeCodeForToken(
   fetchImpl: FetchLike = fetch,
 ): Promise<TokenResponse> {
   return tokenRequest(shop, { client_id: cfg.apiKey, client_secret: cfg.apiSecret, code }, fetchImpl);
-}
-
-/** The staff member behind an online (per-user) token. */
-export interface ShopifyAssociatedUser {
-  id: string;
-  email: string;
-  /** Shopify's docs: trust `email` only when this is true. */
-  emailVerified: boolean;
-  firstName: string | null;
-  lastName: string | null;
-  accountOwner: boolean;
-  collaborator: boolean;
-}
-
-export interface OnlineTokenResponse {
-  scopes: string[];
-  associatedUser: ShopifyAssociatedUser;
-}
-
-/**
- * Authorization-code exchange for an *online* token (authorize URL had
- * grant_options[]=per-user). Only the associated user is returned; the token itself
- * is not needed (background work uses the offline token).
- */
-export async function exchangeCodeForOnlineToken(
-  cfg: ShopifyAppConfig,
-  shop: string,
-  code: string,
-  fetchImpl: FetchLike = fetch,
-): Promise<OnlineTokenResponse> {
-  const res = await fetchImpl(`https://${shop}/admin/oauth/access_token`, {
-    method: "POST",
-    headers: { "content-type": "application/json", accept: "application/json" },
-    body: JSON.stringify({ client_id: cfg.apiKey, client_secret: cfg.apiSecret, code }),
-  });
-  if (!res.ok) throw new ShopifyHttpError(`Token request failed (${res.status})`, res.status);
-  const json = (await res.json()) as Record<string, unknown>;
-  const u = json.associated_user as Record<string, unknown> | undefined;
-  if (!u || (typeof u.id !== "number" && typeof u.id !== "string") || typeof u.email !== "string") {
-    throw new Error("Shopify online token response has no associated user");
-  }
-  const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
-  return {
-    scopes: String(json.scope ?? "")
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean),
-    associatedUser: {
-      id: String(u.id),
-      email: u.email.trim().toLowerCase(),
-      emailVerified: u.email_verified === true,
-      firstName: str(u.first_name),
-      lastName: str(u.last_name),
-      accountOwner: u.account_owner === true,
-      collaborator: u.collaborator === true,
-    },
-  };
 }
 
 /** Rotate: Shopify returns a new access token AND a new refresh token. */

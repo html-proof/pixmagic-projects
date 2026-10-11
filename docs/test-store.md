@@ -63,10 +63,10 @@ The deployed Worker already holds the callback URL, so no toml edit and no
 | Scopes | `read_orders,read_products` |
 | Embedded | `false` (this is an external dashboard, not an admin-embedded app) |
 
-1. Open `https://insights.imeseban.workers.dev/start`, enter your email, **Continue with
-   Shopify**.
-2. Approve on Shopify. The account, workspace and store are created in one pass and the first
-   import starts (see [shopify-setup.md](shopify-setup.md) section 3).
+1. Open `https://insights.imeseban.workers.dev/signup`, create an account and confirm your email.
+2. On the connect page, **Continue with Shopify** (or enter the store address) and approve on
+   Shopify. The workspace and store are created and the first import starts (see
+   [shopify-setup.md](shopify-setup.md) section 3).
 3. The dashboard fills in over the next few minutes and keeps itself current; there is no
    refresh button by design.
 

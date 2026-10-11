@@ -7,7 +7,6 @@ import { body, clientIp, HttpError, loadUser, requireAppOrigin, requireUser, ret
 import { FirebaseUnavailableError } from "../authProvider.js";
 import type { App } from "../app.js";
 import { limit, LIMITS } from "../rateLimit.js";
-import { clearSignup } from "./shopifySignup.js";
 
 const SESSION_TTL_MS = 5 * 24 * 3600 * 1000;
 const RECENT_SIGN_IN_S = 5 * 60;
@@ -81,8 +80,6 @@ export function authRoutes(app: App, deps: Deps) {
         .catch((err: unknown) => logger.error({ err }, "could not retire the signed-out session cookie"));
     }
     deleteCookie(c, SESSION_COOKIE, cookieOpts);
-    // A half-finished "Continue with Shopify" must not outlive the session in this browser.
-    await clearSignup(c, deps).catch(() => {});
     return c.json({ ok: true });
   });
 
@@ -126,9 +123,7 @@ export function authRoutes(app: App, deps: Deps) {
 
   app.post("/auth/otp/request", async (c) => {
     requireAppOrigin(c);
-    const { email: raw, continuePath } = z
-      .object({ email: z.string().email().max(254), continuePath: z.enum(["/login", "/start"]).optional() })
-      .parse(await body(c));
+    const { email: raw } = z.object({ email: z.string().email().max(254) }).parse(await body(c));
     const email = raw.toLowerCase();
     const ip = clientIp(c);
     await limit(deps.coord, `rl:otp:ip:${ip}`, LIMITS.otpRequestIp);
@@ -155,10 +150,9 @@ export function authRoutes(app: App, deps: Deps) {
       // sign-in link that Firebase emails from its own address.
       logger.warn({ err: (err as Error).message }, "sign-in code email failed; sending a Firebase sign-in link instead");
     }
-    // Back to the page that asked: /login finishes a sign-in, /start finishes connecting a store.
-    const back = continuePath === "/start" ? "/start?step=link" : "/login?emailLink=1";
+    // Back to /login, which finishes the sign-in.
     try {
-      await deps.auth.sendEmailSignInLink(email, `${env().APP_URL}${back}`);
+      await deps.auth.sendEmailSignInLink(email, `${env().APP_URL}/login?emailLink=1`);
     } catch (err) {
       logger.error({ err }, "firebase sign-in link email failed");
       throw new HttpError(503, "We couldn't send you an email right now. Please sign in another way.", "email_unavailable");

@@ -8,7 +8,6 @@ import { env, logger } from "@app/core";
 import { clientIp, HttpError, SESSION_COOKIE, type AppEnv, type Deps } from "./context.js";
 import { authRoutes } from "./routes/auth.js";
 import { shopifyRoutes } from "./routes/shopify.js";
-import { shopifySignupRoutes } from "./routes/shopifySignup.js";
 import { webhookRoutes } from "./routes/webhooks.js";
 import { pixelRoutes } from "./routes/pixel.js";
 import { dashboardRoutes } from "./routes/dashboard.js";
@@ -125,7 +124,6 @@ export function buildApp(deps: Deps): App {
 
   authRoutes(app, deps);
   shopifyRoutes(app, deps);
-  shopifySignupRoutes(app, deps);
   webhookRoutes(app, deps);
   pixelRoutes(app, deps);
   dashboardRoutes(app, deps);

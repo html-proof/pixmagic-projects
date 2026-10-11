@@ -104,9 +104,11 @@ nothing back to the store.
 
 Install and first run
 
-1. Go to https://insights.imeseban.workers.dev/start
-2. Enter any email address you can receive mail at. No password is needed — we email a code.
-3. Click "Continue with Shopify" and approve the two permissions.
+1. Go to https://insights.imeseban.workers.dev/signup and create an account with an email
+   address you can receive mail at.
+2. Confirm the address with the link we email you.
+3. On "Let's get your store set up", click "Continue with Shopify" and approve the two
+   permissions.
 4. You are returned to the app and the first import starts automatically. It takes under a
    minute on a store with a normal order history.
 5. The dashboard opens on net sales, orders and average order value for the last 30 days.

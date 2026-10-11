@@ -202,6 +202,36 @@ describe("Shopify OAuth", () => {
     expect((await systemDb.store.findUniqueOrThrow({ where: { shopDomain: "demo-shop.myshopify.com" } })).workspaceId).toBe(rivalWs);
   });
 
+  it("revives a store uninstalled from another workspace, dropping its old data", async () => {
+    const former = await signIn(ctx, "former", "former@x.com");
+    const oldWs = await createWorkspace(ctx, former.headers, "Old");
+    const old = await createStore(oldWs, "demo-shop.myshopify.com", [], { status: "uninstalled", uninstalledAt: new Date(), lastSyncedAt: new Date(), pixelInstalled: true });
+    // Its old rows carry the old workspace_id, which RLS would hide from the new one.
+    const base = { workspaceId: oldWs, storeId: old.id };
+    await systemDb.product.create({ data: { ...base, shopifyId: "1", title: "Old tee", shopifyUpdatedAt: new Date() } });
+    await systemDb.productVariant.create({ data: { ...base, productShopifyId: "1", shopifyId: "11", title: "M", price: 10, shopifyUpdatedAt: new Date() } });
+    await systemDb.syncJob.create({ data: { ...base, kind: "orders", status: "succeeded" } });
+
+    const { res, ws, cookie } = await startInstall();
+    expect(res.statusCode).toBe(200);
+    const state = new URL(res.json().url).searchParams.get("state")!;
+    tokenFetch();
+    const cb = await ctx.app.inject({
+      method: "GET",
+      url: callbackUrl({ code: "c", shop: "demo-shop.myshopify.com", state, timestamp: String(Math.floor(Date.now() / 1000)) }),
+      headers: { cookie: `${cookie}; shopify_oauth_state=${state}` },
+    });
+    expect(cb.headers.location).toContain(`/onboarding?step=sync&store=${old.id}`);
+
+    const store = await systemDb.store.findUniqueOrThrow({ where: { id: old.id } });
+    expect(store).toMatchObject({ workspaceId: ws, status: "syncing", uninstalledAt: null, lastSyncedAt: null, pixelInstalled: false });
+    expect(await systemDb.product.count({ where: { storeId: old.id } })).toBe(0);
+    expect(await systemDb.productVariant.count({ where: { storeId: old.id } })).toBe(0);
+    const jobs = await systemDb.syncJob.findMany({ where: { storeId: old.id } });
+    expect(jobs.length).toBeGreaterThan(0);
+    expect(jobs.every((j) => j.workspaceId === ws && j.status === "queued")).toBe(true);
+  });
+
   it("callback still accepts connect state written without a mode", async () => {
     const { headers, cookie, user } = await signIn(ctx, "legacy", "legacy@x.com");
     const ws = await createWorkspace(ctx, headers);
@@ -214,6 +244,13 @@ describe("Shopify OAuth", () => {
     });
     expect(cb.headers.location).toMatch(/\/onboarding\?step=sync&store=/);
     expect((await systemDb.store.findUniqueOrThrow({ where: { shopDomain: "demo-shop.myshopify.com" } })).workspaceId).toBe(ws);
+  });
+
+  it("the retired public sign-up endpoints are gone", async () => {
+    for (const path of ["/auth/shopify/start", "/auth/shopify/finish", "/auth/shopify/claim", "/auth/shopify/cancel"]) {
+      const res = await ctx.app.inject({ method: "POST", url: path, payload: {} });
+      expect(res.statusCode, path).toBe(404);
+    }
   });
 
   it("rejects callback when the browser state cookie is missing", async () => {

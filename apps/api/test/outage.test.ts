@@ -85,13 +85,6 @@ describe("while the database is unreachable", () => {
     expect((await dbDown(() => ctx.app.inject({ method: "GET", url: "/auth/whoami" }))).json()).toEqual({ user: null, workspaces: [] });
   });
 
-  it("claim tells a signed-in merchant to try again, not to sign in", async () => {
-    const { headers } = await signIn(ctx, "u1", "a@x.com");
-    const res = await dbDown(() => ctx.app.inject({ method: "POST", url: "/auth/shopify/claim", headers, payload: {} }));
-    expect(res.statusCode).toBe(503);
-    expect(res.json().error).toBe("db_unavailable");
-  });
-
   it("sign-out still clears the session cookie", async () => {
     const { headers } = await signIn(ctx, "u1", "a@x.com");
     const res = await dbDown(() => ctx.app.inject({ method: "POST", url: "/auth/logout", headers }));
@@ -115,7 +108,7 @@ describe("while the database is unreachable", () => {
   it("asking for a sign-in code says 'try again' (503) instead of a bare 500, and sends nothing", async () => {
     // Production hit this on /start's "Confirm your email" panel during a tunnel drop.
     const request = () =>
-      ctx.app.inject({ method: "POST", url: "/auth/otp/request", headers: ORIGIN, payload: { email: "a@x.com", continuePath: "/start" } });
+      ctx.app.inject({ method: "POST", url: "/auth/otp/request", headers: ORIGIN, payload: { email: "a@x.com" } });
     const before = ctx.mailer.sent.length;
     const during = await dbDown(request);
     expect(during.statusCode).toBe(503);
@@ -234,38 +227,6 @@ describe("when the database drops part-way through a browser navigation", () => 
     expect(authorize.pathname).toBe("/admin/oauth/authorize");
     const state = JSON.parse((await ctx.deps.coord.take(`oauth:state:${authorize.searchParams.get("state")}`))!);
     expect(state).toMatchObject({ workspaceId: ws, shop: SHOP });
-  });
-
-  it("a visitor without a session goes to the in-app connect page with an explanation", async () => {
-    const b = testBrowser(ctx);
-    await b.post("/auth/shopify/start", { email: "merchant@x.com" });
-    const acquire = ctx.deps.coord.acquire;
-    ctx.deps.coord.acquire = async () => {
-      throw new Error("coordinator unavailable");
-    };
-    try {
-      const res = await b.get(launchUrl());
-      expect(res.headers.location).toBe(`${APP}/onboarding?shop=${SHOP}&error=temporarily_unavailable`);
-    } finally {
-      ctx.deps.coord.acquire = acquire;
-    }
-  });
-
-  it("a sign-up callback lands on a retry page too", async () => {
-    const b = testBrowser(ctx);
-    const start = await b.post("/auth/shopify/start", { email: "merchant@x.com", shop: "demo-shop" });
-    const state = new URL(start.json().url).searchParams.get("state")!;
-    const acquire = ctx.deps.coord.acquire;
-    ctx.deps.coord.acquire = async () => {
-      throw new Error("coordinator unavailable");
-    };
-    try {
-      const res = await b.get(callbackUrl(state, "usercode"));
-      expect(res.statusCode).toBe(302);
-      expect(res.headers.location).toBe(`${APP}/start?error=temporarily_unavailable&shop=${SHOP}`);
-    } finally {
-      ctx.deps.coord.acquire = acquire;
-    }
   });
 
   it("the connect callback lands on a retry page, and connecting again finishes the job", async () => {

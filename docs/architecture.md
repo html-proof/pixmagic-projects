@@ -168,9 +168,6 @@ that work into conflicts. Each is safe to do on its own.
 - `apps/api/src/routes/whatsappOps.ts` / `whatsapp.ts`: campaign and automation rules, cart
   eligibility and analytics grouping inline; four copies of cursor pagination. Target: core's
   `whatsapp/` modules and one pagination helper.
-- `apps/api/src/routes/shopifySignup.ts`: the retired public "Continue with Shopify" sign-up. The UI
-  no longer starts it (Shopify connects from inside the app), so its endpoints are unreachable from
-  the product but still public.
 - Two Meta Graph clients (`core/ads.ts`, `core/whatsapp/graph.ts`) with different auth and error
   handling.
 - Dashboard components: the camelCase file names above, and small helpers repeated across

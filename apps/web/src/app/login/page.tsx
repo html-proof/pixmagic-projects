@@ -50,7 +50,7 @@ export default function LoginPage() {
   const sendCode = (e?: FormEvent) => {
     e?.preventDefault();
     void run(async () => {
-      const { method } = await api<{ method?: "code" | "link" }>("/auth/otp/request", { method: "POST", body: { email, continuePath: "/login" } });
+      const { method } = await api<{ method?: "code" | "link" }>("/auth/otp/request", { method: "POST", body: { email } });
       setCodeSent(true);
       if (method === "link") {
         rememberLinkEmail(email.trim().toLowerCase());

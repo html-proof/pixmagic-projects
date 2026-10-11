@@ -51,8 +51,8 @@ Dashboard: https://dev.shopify.com/dashboard/238480582/apps/430680145921
    candidates. Each image must be unique and show a different feature; a feature image is
    1600 x 900 with a 100 px margin; no desktop backgrounds or browser chrome.
 4. **Reviewer instructions** - test credentials and steps for someone who has never seen it:
-   sign up at `/start`, Continue with Shopify, approve, wait for the first import, see the
-   dashboard. Billing has to be demonstrable too - charges run through `appSubscriptionCreate`.
+   sign up at `/signup`, confirm the email, Continue with Shopify, approve, wait for the first
+   import, see the dashboard. (`/start`, in earlier instructions, still forwards to sign-up.) Billing has to be demonstrable too - charges run through `appSubscriptionCreate`.
 5. **Automated checks**, then **Submit for review**.
 
 Approval is what unblocks every live merchant store at once. Budget days to weeks for it.
