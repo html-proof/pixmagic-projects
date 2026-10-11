@@ -106,6 +106,15 @@ export interface ChannelsModule {
   items: Array<{ source: string | null; label: string; orders: number; sales: number; share: number | null }>;
 }
 
+/** Where this period's sales came from (Shopify's record of the visit behind each order). */
+export interface TrafficModule {
+  items: Array<{ id: string; source: string; label: string; orders: number; sales: number; paidOrders: number; paidSales: number; share: number | null }>;
+  paid: { orders: number; sales: number; share: number | null };
+  campaigns: Array<{ source: string; label: string; campaign: string; orders: number; sales: number }>;
+  /** Orders whose source hasn't been read from Shopify yet. */
+  pending: number;
+}
+
 export interface OrderTimingModule {
   /** Monday … Sunday. */
   byWeekday: number[];
@@ -229,6 +238,7 @@ export interface Overview {
     top_products?: { items: Array<{ productId: string | null; title: string; revenue: number; units: number }> };
     funnel?: FunnelModule;
     channels?: ChannelsModule;
+    traffic?: TrafficModule;
     order_timing?: OrderTimingModule;
     fulfillment?: FulfillmentModule;
     discount_codes?: DiscountCodesModule;

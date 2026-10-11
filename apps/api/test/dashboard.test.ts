@@ -35,6 +35,7 @@ interface SeedOrder {
   fulfilledAfterHours?: number;
   codes?: string[];
   lines?: SeedLine[];
+  traffic?: { source: string; medium: string; campaign?: string; host?: string };
 }
 
 /** Insert an order the way the pipeline stores it (UTC timestamps, store-local day). */
@@ -64,6 +65,10 @@ async function seedOrder(store: Store, o: SeedOrder) {
       fulfillmentStatus: o.fulfillment ?? null,
       fulfilledAt: o.fulfilledAfterHours === undefined ? null : new Date(created.getTime() + o.fulfilledAfterHours * 3_600_000),
       discountCodes: o.codes ?? [],
+      trafficSource: o.traffic?.source ?? null,
+      trafficMedium: o.traffic?.medium ?? null,
+      trafficCampaign: o.traffic?.campaign ?? null,
+      referrerHost: o.traffic?.host ?? null,
       lineItems: {
         create: (o.lines ?? []).map((l, i) => ({
           workspaceId: store.workspaceId,
@@ -438,7 +443,7 @@ describe("scopes and tenancy", () => {
     await seedVariant(productsOnly, "p1", "v1", { qty: 4, price: 10 });
 
     const o = (await overview(a.headers, ws, ordersOnly.id)).json();
-    expect(Object.keys(o.modules).sort()).toEqual(["channels", "discount_codes", "fulfillment", "order_timing", "recent_orders", "refunds", "sales_overview"]);
+    expect(Object.keys(o.modules).sort()).toEqual(["channels", "discount_codes", "fulfillment", "order_timing", "recent_orders", "refunds", "sales_overview", "traffic"]);
     expect(o.capabilities.find((c: { id: string }) => c.id === "inventory").missingScopes).toEqual(["read_products"]);
     expect(o.data).toEqual({ orders: 0, products: 0, variants: 0, oldestOrderDay: null, newestOrderDay: null });
 
@@ -501,3 +506,35 @@ describe("a store whose sync stopped", () => {
     expect((await overview(a.headers, ws, store.id)).json().syncProblem).toBe("shop_unavailable");
   });
 });
+
+describe("where sales come from", () => {
+  it("adds up sales by the visit before each order: platforms, tagged ads, campaigns, other sites by name", async () => {
+    const { a, ws, store } = await owner();
+    const day = localDay(new Date(), TZ);
+    const at = `${day}T16:00:00Z`;
+    await seedOrder(store, { id: "F1", createdAt: at, subtotal: 100, traffic: { source: "facebook", medium: "paid", campaign: "Diwali" } });
+    await seedOrder(store, { id: "F2", createdAt: at, subtotal: 50, traffic: { source: "facebook", medium: "unpaid" } });
+    await seedOrder(store, { id: "I1", createdAt: at, subtotal: 200, traffic: { source: "instagram", medium: "paid", campaign: "Diwali" } });
+    await seedOrder(store, { id: "G1", createdAt: at, subtotal: 30, traffic: { source: "google", medium: "unpaid", host: "google.com" } });
+    await seedOrder(store, { id: "B1", createdAt: at, subtotal: 20, traffic: { source: "other", medium: "referral", host: "blog.example.org" } });
+    await seedOrder(store, { id: "X1", createdAt: at, subtotal: 999, cancelled: true, traffic: { source: "facebook", medium: "paid" } });
+    await seedOrder(store, { id: "P1", createdAt: at, subtotal: 40 });
+
+    const t = (await overview(a.headers, ws, store.id, "preset=today")).json().modules.traffic;
+    expect(t.items.map((x: { label: string; sales: number; orders: number; paidSales: number }) => [x.label, x.sales, x.orders, x.paidSales])).toEqual([
+      ["Instagram", 200, 1, 200],
+      ["Facebook", 150, 2, 100],
+      ["Google", 30, 1, 0],
+      ["blog.example.org", 20, 1, 0],
+    ]);
+    expect(t.paid).toMatchObject({ orders: 2, sales: 300 });
+    expect(t.paid.share).toBeCloseTo(300 / 400);
+    expect(t.campaigns).toEqual([
+      { source: "instagram", label: "Instagram", campaign: "Diwali", orders: 1, sales: 200 },
+      { source: "facebook", label: "Facebook", campaign: "Diwali", orders: 1, sales: 100 },
+    ]);
+    // P1 was stored before sources were recorded: counted as waiting, not guessed.
+    expect(t.pending).toBe(1);
+  });
+});
+

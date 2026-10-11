@@ -23,9 +23,19 @@ export async function upsertOrder(store: StoreCtx, o: NormalizedOrder): Promise<
   const day = localDay(o.createdAt, store.timezone);
   const existing = await systemDb.order.findUnique({
     where: { storeId_shopifyId: { storeId: store.id, shopifyId: o.shopifyId } },
-    select: { id: true, shopifyUpdatedAt: true, localDay: true },
+    select: { id: true, shopifyUpdatedAt: true, localDay: true, trafficSource: true },
   });
-  if (existing && existing.shopifyUpdatedAt > o.updatedAt) return days;
+  // Where the customer came from: Shopify's processed journey replaces what's stored; a
+  // webhook's landing link only fills a gap; nothing known keeps what's there.
+  const traffic =
+    o.traffic && (o.trafficFrom === "journey" || !existing?.trafficSource)
+      ? { trafficSource: o.traffic.source, trafficMedium: o.traffic.medium, trafficCampaign: o.traffic.campaign, referrerHost: o.traffic.referrerHost }
+      : {};
+  if (existing && existing.shopifyUpdatedAt > o.updatedAt) {
+    // A stale copy of the order: nothing else of it is written, but the journey can still be news.
+    if (o.trafficFrom === "journey" && "trafficSource" in traffic) await systemDb.order.update({ where: { id: existing.id }, data: traffic });
+    return days;
+  }
 
   const withCustomers = expandScopes(store.grantedScopes).has("read_customers");
   const ck = withCustomers && o.customerId ? customerKey(store, o.customerId) : null;
@@ -59,6 +69,7 @@ export async function upsertOrder(store: StoreCtx, o: NormalizedOrder): Promise<
     fulfillmentStatus: o.fulfillmentStatus,
     fulfilledAt: o.fulfilledAt,
     discountCodes: o.discountCodes,
+    ...traffic,
   };
 
   await systemDb.$transaction(async (tx) => {
@@ -181,6 +192,10 @@ export async function writeOrderBatch(store: StoreCtx, orders: NormalizedOrder[]
       fulfillment_status: o.fulfillmentStatus,
       fulfilled_at: ts(o.fulfilledAt),
       discount_codes: o.discountCodes,
+      traffic_source: o.traffic?.source ?? null,
+      traffic_medium: o.traffic?.medium ?? null,
+      traffic_campaign: o.traffic?.campaign ?? null,
+      referrer_host: o.traffic?.referrerHost ?? null,
     };
   });
 
@@ -188,18 +203,20 @@ export async function writeOrderBatch(store: StoreCtx, orders: NormalizedOrder[]
     const written = await tx.$queryRaw<Array<{ id: string; shopify_id: string }>>`
       INSERT INTO orders (id, workspace_id, store_id, shopify_id, name, currency, local_day, shopify_created_at, shopify_updated_at,
                           cancelled_at, financial_status, subtotal, total_discounts, total_tax, total_shipping, total_price,
-                          customer_key, is_returning_customer, source_name, fulfillment_status, fulfilled_at, discount_codes)
+                          customer_key, is_returning_customer, source_name, fulfillment_status, fulfilled_at, discount_codes,
+                          traffic_source, traffic_medium, traffic_campaign, referrer_host)
       SELECT gen_random_uuid()::text, ${store.workspaceId}, ${store.id}, s.shopify_id, s.name, s.currency, s.local_day,
              (s.created_at)::timestamptz AT TIME ZONE 'UTC', (s.updated_at)::timestamptz AT TIME ZONE 'UTC',
              (s.cancelled_at)::timestamptz AT TIME ZONE 'UTC', s.financial_status,
              s.subtotal::numeric, s.total_discounts::numeric, s.total_tax::numeric, s.total_shipping::numeric, s.total_price::numeric,
              s.customer_key, s.is_returning_customer, s.source_name, s.fulfillment_status,
-             (s.fulfilled_at)::timestamptz AT TIME ZONE 'UTC', s.discount_codes
+             (s.fulfilled_at)::timestamptz AT TIME ZONE 'UTC', s.discount_codes,
+             s.traffic_source, s.traffic_medium, s.traffic_campaign, s.referrer_host
       FROM jsonb_to_recordset(${JSON.stringify(payload)}::jsonb) AS s(
         shopify_id text, name text, currency text, local_day text, created_at text, updated_at text, cancelled_at text,
         financial_status text, subtotal text, total_discounts text, total_tax text, total_shipping text, total_price text,
         customer_key text, is_returning_customer boolean, source_name text, fulfillment_status text, fulfilled_at text,
-        discount_codes text[]
+        discount_codes text[], traffic_source text, traffic_medium text, traffic_campaign text, referrer_host text
       )
       ON CONFLICT (store_id, shopify_id) DO UPDATE SET
         name = EXCLUDED.name, currency = EXCLUDED.currency, local_day = EXCLUDED.local_day,
@@ -210,7 +227,12 @@ export async function writeOrderBatch(store: StoreCtx, orders: NormalizedOrder[]
         customer_key = EXCLUDED.customer_key,
         is_returning_customer = orders.is_returning_customer OR EXCLUDED.is_returning_customer,
         source_name = EXCLUDED.source_name, fulfillment_status = EXCLUDED.fulfillment_status,
-        fulfilled_at = EXCLUDED.fulfilled_at, discount_codes = EXCLUDED.discount_codes
+        fulfilled_at = EXCLUDED.fulfilled_at, discount_codes = EXCLUDED.discount_codes,
+        -- The bulk export carries Shopify's journey; while it isn't processed yet (null), keep what's known.
+        traffic_source = COALESCE(EXCLUDED.traffic_source, orders.traffic_source),
+        traffic_medium = CASE WHEN EXCLUDED.traffic_source IS NULL THEN orders.traffic_medium ELSE EXCLUDED.traffic_medium END,
+        traffic_campaign = CASE WHEN EXCLUDED.traffic_source IS NULL THEN orders.traffic_campaign ELSE EXCLUDED.traffic_campaign END,
+        referrer_host = CASE WHEN EXCLUDED.traffic_source IS NULL THEN orders.referrer_host ELSE EXCLUDED.referrer_host END
       WHERE orders.shopify_updated_at <= EXCLUDED.shopify_updated_at
       RETURNING id, shopify_id`;
 

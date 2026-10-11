@@ -66,6 +66,31 @@ Reference implementation: `businessHealth` in `apps/web/src/components/dashboard
 
 Best seller, top channel and busiest time are information only. With nothing earlier to compare with, an area is information only too. When the only day picked is today, trends aren't graded, because the day isn't over.
 
+## Where sales come from (Sales channels → "Where your sales come from")
+
+Shopify's own record of the visit before each order, so it works for every store with nothing but
+`read_orders` and no ad account: GraphQL `Order.customerJourneySummary.lastVisit` during the import,
+a webhook's `landing_site` / `referring_site` live (`packages/shared/src/traffic.ts`, `classifyVisit`).
+
+- **Source**: the link's `utm_source`, else a click id (`gclid`/`gbraid`/`wbraid` Google, `ttclid` TikTok,
+  `msclkid` Bing), else the referring site (facebook.com, instagram.com, google.*, youtube.com, wa.me...),
+  else `fbclid` (Facebook), else Shopify's own `source` word; email from utm_medium or Shopify's message
+  tactics; another site by its host; no referrer on an online-store visit = Direct; no visit at all (POS,
+  draft orders) = "Not recorded".
+- **Tagged ads** (`paid`): utm_medium cpc/ppc/paid/paid_social/ads/display/retargeting..., a Google/TikTok/Bing
+  click id, or Shopify's `AD`/`DISPLAY`/`RETARGETING` tactic. `fbclid` alone is not an ad: Facebook adds it to
+  every outgoing link. Facebook/Instagram ads count as tagged only if their URL parameters say so.
+- **Campaign**: `utm_campaign` (120 characters at most).
+- **Money**: order subtotal (after discounts, before tax and shipping), cancelled orders left out: the same as
+  sales by channel.
+- Stored per order (`orders.traffic_source`, `traffic_medium`, `traffic_campaign`, `referrer_host`), never the
+  URLs (a landing page can carry a customer's email or a cart token). Shopify's journey replaces a webhook's
+  guess; a webhook only fills a gap; a journey Shopify hasn't processed yet (`ready: false`) changes nothing.
+- Orders stored before this existed show as "being read": the dashboard's refresh (`autoRefresh`) re-reads
+  the 60-day import window once (at most daily while any lack a source).
+- It's the store's view (the last visit before buying). An ad platform credits sales by its own rules
+  (view-throughs, other devices), so its numbers differ, and the two are never added together.
+
 ## Ads (Meta Ads, Google Ads)
 
 Reference implementation: `packages/shared/src/ads.ts`. Connection and sync: `docs/ads-setup.md`.

@@ -219,6 +219,15 @@ model Order {
   // When the first fulfillment was created (time-to-ship).
   fulfilledAt         DateTime?       @map("fulfilled_at")
   discountCodes       String[]        @default([]) @map("discount_codes")
+  /// Where the customer came from (packages/shared/src/traffic.ts): facebook | instagram | google | ... | direct | other | unknown.
+  /// Null on orders stored before Insights recorded it (the dashboard re-reads those once).
+  trafficSource       String?         @map("traffic_source")
+  /// paid | unpaid | email | direct | referral | unknown
+  trafficMedium       String?         @map("traffic_medium")
+  /// The link's utm_campaign. Never the URL itself.
+  trafficCampaign     String?         @map("traffic_campaign")
+  /// The referring site's host only.
+  referrerHost        String?         @map("referrer_host")
   lineItems           OrderLineItem[]
   refunds             Refund[]
 

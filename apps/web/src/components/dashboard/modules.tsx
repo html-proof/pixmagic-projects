@@ -12,6 +12,7 @@ import type {
   OrderTimingModule,
   RecentOrder,
   SalesOverview,
+  TrafficModule,
 } from "./types";
 
 /** Smaller sales figures that sit under the headline metrics. */
@@ -59,6 +60,74 @@ export function ChannelsCard({ m, currency }: { m: ChannelsModule; currency: str
             />
           ))}
         </ul>
+      )}
+    </Panel>
+  );
+}
+
+/**
+ * Where sales came from: the visit Shopify recorded before each order (an ad, a post, a search, an
+ * email, a typed address). The store's own view, so it needs no ad account, and it is never mixed
+ * with what an ad platform says its ads brought.
+ */
+export function TrafficCard({ m, currency }: { m: TrafficModule; currency: string }) {
+  const known = m.items.filter((x) => x.source !== "unknown");
+  return (
+    <Panel
+      id="traffic"
+      title="Where your sales come from"
+      help="The visit Shopify recorded before each order: an ad, a post, a search, an email or a typed address. Sales after discounts, before tax and shipping."
+      aside={m.paid.sales > 0 ? <span className="text-xs text-muted">From tagged ads: <strong className="text-text">{fmtMoney(m.paid.sales, currency)}</strong> ({fmtPct(m.paid.share)})</span> : undefined}
+    >
+      {m.pending > 0 && (
+        <p className="mb-3 text-xs text-muted">
+          Reading from Shopify where {plural(m.pending, "older order")} came from; {m.pending === 1 ? "it appears" : "they appear"} here within a few minutes.
+        </p>
+      )}
+      {m.items.length === 0 ? (
+        <Empty>{m.pending > 0 ? "Sources are being read from Shopify." : "No sales to show for these dates."}</Empty>
+      ) : (
+        <ul className="space-y-4">
+          {m.items.map((x) => (
+            <BarRow
+              key={x.id}
+              label={x.label}
+              value={fmtMoney(x.sales, currency)}
+              fraction={x.share ?? 0}
+              sub={
+                <>
+                  {plural(x.orders, "order")} · {fmtPct(x.share)} of sales
+                  {x.paidOrders > 0 && x.paidOrders < x.orders && <> · {fmtMoney(x.paidSales, currency)} from tagged ads</>}
+                  {x.paidOrders > 0 && x.paidOrders === x.orders && <> · all from tagged ads</>}
+                </>
+              }
+            />
+          ))}
+        </ul>
+      )}
+      {m.campaigns.length > 0 && (
+        <div className="mt-5">
+          <h3 className="text-sm font-medium">Campaigns</h3>
+          <p className="text-xs text-muted">From the campaign name in your ad and email links (utm_campaign).</p>
+          <ul className="mt-2 divide-y divide-border text-sm">
+            {m.campaigns.map((c) => (
+              <li key={`${c.source}:${c.campaign}`} className="flex flex-wrap items-baseline justify-between gap-2 py-2">
+                <span className="min-w-0 truncate">
+                  <span className="font-medium">{c.campaign}</span> <span className="text-xs text-muted">{c.label}</span>
+                </span>
+                <span className="tabular-nums">
+                  {fmtMoney(c.sales, currency)} <span className="text-xs text-muted">· {plural(c.orders, "order")}</span>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {known.length > 0 && (
+        <p className="mt-4 text-xs text-muted">
+          &ldquo;Tagged ads&rdquo; are visits whose link said it was an ad (Google and TikTok add this by themselves; for Facebook and Instagram, add URL parameters such
+          as utm_medium=paid to your ads). An ad platform&apos;s own report credits sales differently, so its numbers won&apos;t match these.
+        </p>
       )}
     </Panel>
   );

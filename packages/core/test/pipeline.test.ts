@@ -59,15 +59,15 @@ const gqlOrder = (over: Record<string, unknown> = {}) => ({
 });
 
 describe("query cost (Shopify rejects requested cost > 1000)", () => {
-  it("orders page: 124 per order with customer, 123 without; default page size 7", () => {
+  it("orders page: 127 per order with customer, 126 without; default page size 7", () => {
     expect(PAGE_SIZE.orders).toBe(7);
-    expect(requestedCost(ordersQuery(true), { first: 1 })).toBe(3 + 124);
-    expect(requestedCost(ordersQuery(false), { first: 1 })).toBe(3 + 123);
-    expect(requestedCost(ordersQuery(true), { first: PAGE_SIZE.orders })).toBe(871);
-    expect(requestedCost(ordersQuery(false), { first: PAGE_SIZE.orders })).toBe(864);
-    // 8 would still pass (995) but leaves no margin; 9 is rejected.
-    expect(requestedCost(ordersQuery(true), { first: 8 })).toBe(995);
-    expect(requestedCost(ordersQuery(true), { first: 9 })).toBeGreaterThan(MAX_COST);
+    // The customer's journey (where they came from) is 3 of those points.
+    expect(requestedCost(ordersQuery(true), { first: 1 })).toBe(3 + 127);
+    expect(requestedCost(ordersQuery(false), { first: 1 })).toBe(3 + 126);
+    expect(requestedCost(ordersQuery(true), { first: PAGE_SIZE.orders })).toBe(892);
+    expect(requestedCost(ordersQuery(false), { first: PAGE_SIZE.orders })).toBe(885);
+    // 8 is rejected.
+    expect(requestedCost(ordersQuery(true), { first: 8 })).toBeGreaterThan(MAX_COST);
   });
 
   /**
@@ -78,7 +78,7 @@ describe("query cost (Shopify rejects requested cost > 1000)", () => {
    */
   it("walks orders newest-first, at no cost", () => {
     expect(ordersQuery(false)).toContain("reverse: true");
-    expect(requestedCost(ordersQuery(false), { first: PAGE_SIZE.orders })).toBe(864);
+    expect(requestedCost(ordersQuery(false), { first: PAGE_SIZE.orders })).toBe(885);
   });
 
   it("per-order detail queries stay under the cap", () => {

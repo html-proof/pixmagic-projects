@@ -67,7 +67,13 @@ export function liveSyncJobs(storeId: string, idleMs: number): Prisma.SyncJobWhe
  * even when webhooks are missed: re-pull recently updated orders every 5 minutes and the
  * catalog + stock every 30; a store with a sync problem retries its import every 30 minutes.
  */
-export const AUTO_REFRESH = { ordersEverySec: 300, catalogEverySec: 1800, retryEverySec: 1800, orderDays: 2 } as const;
+export const AUTO_REFRESH = { ordersEverySec: 300, catalogEverySec: 1800, retryEverySec: 1800, orderDays: 2, sourcesEverySec: 86_400, sourcesDays: 60 } as const;
+
+/** Whether the store has orders in the import window that were stored without a source. */
+async function missingSources(storeId: string): Promise<boolean> {
+  const since = new Date(Date.now() - AUTO_REFRESH.sourcesDays * 86_400_000);
+  return !!(await systemDb.order.findFirst({ where: { storeId, trafficSource: null, shopifyCreatedAt: { gte: since } }, select: { id: true } }));
+}
 
 /**
  * A running job silent for longer than this is not holding off a refresh. Its chain writes on
@@ -96,7 +102,11 @@ export async function autoRefresh(
     return (await seedResync(deps, store)).map((j) => j.kind);
   }
   const kinds: Array<{ kind: SyncKind; sinceDays?: number }> = [];
-  if (await due("orders", AUTO_REFRESH.ordersEverySec)) kinds.push({ kind: "orders", sinceDays: AUTO_REFRESH.orderDays });
+  // Orders stored before Insights recorded where customers came from: re-read the import window
+  // once (by creation date), which fills their sources in. At most daily, and only while any lack one.
+  if ((await due("sources", AUTO_REFRESH.sourcesEverySec)) && (await missingSources(store.id))) {
+    kinds.push({ kind: "orders", sinceDays: AUTO_REFRESH.sourcesDays });
+  } else if (await due("orders", AUTO_REFRESH.ordersEverySec)) kinds.push({ kind: "orders", sinceDays: AUTO_REFRESH.orderDays });
   if (expandScopes(store.grantedScopes).has("read_products") && (await due("catalog", AUTO_REFRESH.catalogEverySec))) {
     kinds.push({ kind: "products" }, { kind: "variants" });
   }

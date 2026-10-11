@@ -6,7 +6,7 @@ import { ContactsCard } from "./contacts";
 import { FunnelCard, JourneyCard, SECTION_LABEL, STEP_LABEL } from "./funnel";
 import { fmtDuration, fmtRange, hourRange, plural } from "./format";
 import { Icon, type IconName } from "./icons";
-import { CatalogCard, ChannelsCard, DiscountCodesCard, FulfillmentCard, InventoryCard, OrderTimingCard, RecentOrdersCard } from "./modules";
+import { CatalogCard, ChannelsCard, DiscountCodesCard, FulfillmentCard, InventoryCard, OrderTimingCard, RecentOrdersCard, TrafficCard } from "./modules";
 import { AdsDetail } from "./adsPanel";
 import { AdsenseDetail } from "./adsensePanel";
 import { Explained } from "./explain";
@@ -484,6 +484,7 @@ function ChannelsDetail({ ov, currency }: { ov: Overview; currency: string }) {
         )}
       </InShort>
       <ChannelsCard m={ov.modules.channels!} currency={currency} />
+      {ov.modules.traffic && <TrafficCard m={ov.modules.traffic} currency={currency} />}
     </>
   );
 }

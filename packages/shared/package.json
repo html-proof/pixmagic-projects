@@ -13,7 +13,8 @@
     "./journey": "./src/journey.ts",
     "./roles": "./src/roles.ts",
     "./sales": "./src/sales.ts",
-    "./whatsapp": "./src/whatsapp.ts"
+    "./whatsapp": "./src/whatsapp.ts",
+    "./traffic": "./src/traffic.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

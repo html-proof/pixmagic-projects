@@ -10,3 +10,4 @@ export * from "./roles.js";
 export * from "./sales.js";
 export * from "./ads.js";
 export * from "./whatsapp.js";
+export * from "./traffic.js";

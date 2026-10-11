@@ -3,6 +3,7 @@
  * internal shape. Only fields needed for KPIs are kept; customer identity is
  * reduced to an id that is hashed before storage (see persist.ts).
  */
+import { classifyVisit, restVisit, type Traffic } from "@app/shared";
 export interface NormalizedLineItem {
   shopifyId: string;
   productShopifyId: string | null;
@@ -42,6 +43,13 @@ export interface NormalizedOrder {
   /** Earliest fulfillment's createdAt (time-to-ship), null while nothing has shipped. */
   fulfilledAt: Date | null;
   discountCodes: string[];
+  /**
+   * Where the customer came from; null when this source didn't say (persistence keeps what it has).
+   * `trafficFrom`: "journey" is Shopify's processed record of the visit (GraphQL) and wins over
+   * "landing", a webhook's landing_site/referring_site, which only fills a gap.
+   */
+  traffic: Traffic | null;
+  trafficFrom: "journey" | "landing" | null;
   lineItems: NormalizedLineItem[];
   refunds: NormalizedRefund[];
 }
@@ -158,6 +166,7 @@ export function normalizeRestOrder(o: any): NormalizedOrder {
     fulfillmentStatus: restFulfillmentStatus(o.fulfillment_status),
     fulfilledAt: earliest((o.fulfillments ?? []).map((f: any) => f?.created_at)),
     discountCodes: codes((o.discount_codes ?? []).map((d: any) => d?.code)),
+    ...restTraffic(o),
     lineItems: (o.line_items ?? []).map((li: any) => ({
       shopifyId: String(li.id),
       productShopifyId: li.product_id ? String(li.product_id) : null,
@@ -175,6 +184,23 @@ export function normalizeRestOrder(o: any): NormalizedOrder {
 }
 
 const money = (set: any) => num(set?.shopMoney?.amount);
+
+/** A webhook's landing_site / referring_site; nothing when it carries neither (never "unknown"). */
+function restTraffic(o: any): Pick<NormalizedOrder, "traffic" | "trafficFrom"> {
+  const v = restVisit(o);
+  return v ? { traffic: classifyVisit(v, text(o.source_name)), trafficFrom: "landing" } : { traffic: null, trafficFrom: null };
+}
+
+/**
+ * Shopify's journey for the order. Not asked for (detail queries) or not processed yet (`ready:
+ * false`): unknown for now. Processed with no visit (POS, draft orders): that is the answer.
+ */
+function journeyTraffic(o: any): Pick<NormalizedOrder, "traffic" | "trafficFrom"> {
+  if (!("customerJourneySummary" in o)) return { traffic: null, trafficFrom: null };
+  const j = o.customerJourneySummary;
+  if (j && j.ready === false) return { traffic: null, trafficFrom: null };
+  return { traffic: classifyVisit(j?.lastVisit ?? null, text(o.sourceName)), trafficFrom: "journey" };
+}
 
 export function normalizeGraphqlOrder(o: any): NormalizedOrder {
   return {
@@ -196,6 +222,7 @@ export function normalizeGraphqlOrder(o: any): NormalizedOrder {
     fulfillmentStatus: text(o.displayFulfillmentStatus)?.toLowerCase() ?? null,
     fulfilledAt: earliest((o.fulfillments ?? []).map((f: any) => f?.createdAt)),
     discountCodes: codes(o.discountCodes ?? []),
+    ...journeyTraffic(o),
     lineItems: (o.lineItems?.nodes ?? []).map((li: any) => ({
       shopifyId: gidToId(li.id)!,
       productShopifyId: gidToId(li.product?.id),
@@ -309,6 +336,12 @@ export const ORDER_NESTED = { lineItems: 10, refunds: 2, refundLineItems: 5 } as
 /** Page sizes of the per-order detail queries used when an order overflows ORDER_NESTED. */
 export const ORDER_DETAIL = { lineItems: 100, refunds: 10, refundLineItems: 25, refundLineItemsPage: 100 } as const;
 
+/**
+ * The visit that ended in the order (Order.customerJourneySummary.lastVisit; read_orders is enough).
+ * Cost: customerJourneySummary 1 + lastVisit 1 + utmParameters 1 = 3 (the rest are scalars).
+ */
+const VISIT_FIELDS = /* GraphQL */ `source sourceType referrerUrl landingPage utmParameters { source medium campaign }`;
+
 // LineItem node: 1 (LineItem) + variant 1 + product 1 + originalUnitPriceSet 2 + totalDiscountSet 2 = 7
 const LINE_ITEM_FIELDS = /* GraphQL */ `
   id title quantity sku
@@ -320,12 +353,13 @@ const LINE_ITEM_FIELDS = /* GraphQL */ `
 /**
  * Orders page. Cost per Order node:
  *   1 (Order) + 5 MoneyBags × 2 = 10 + customer { id numberOfOrders } 1 (only with read_customers)
+ *   + customerJourneySummary { lastVisit { utmParameters } } 3
  *   + fulfillments(first: 1) = 1 × 1 = 1
  *   + lineItems(first: 10) = 2 + 1 (pageInfo) + 10 × 7 = 73
  *   + refunds(first: 2) = 2 × (1 (Refund) + refundLineItems(first: 5) = 2 + 1 (pageInfo) + 5 × (1 + subtotalSet 2) = 18) = 38
- *   = 124 with customer (123 without).
- * orders(first: $first) = 2 + 1 (pageInfo) + $first × 124:
- *   $first = 7 → 3 + 868 = 871 (864 without customer) ≤ 900;  8 → 995 (too close to 1000);  9 → 1119 (rejected).
+ *   = 127 with customer (126 without).
+ * orders(first: $first) = 2 + 1 (pageInfo) + $first × 127:
+ *   $first = 7 → 3 + 889 = 892 (885 without customer) ≤ 900;  8 → 1019 (rejected).
  * Orders whose line items / refunds don't fit are completed with the detail queries below.
  *
  * `reverse: true` makes the walk newest-first, and it is the single most valuable argument in
@@ -349,6 +383,7 @@ export function ordersQuery(includeCustomer: boolean): string {
         nodes {
           id name createdAt updatedAt cancelledAt currencyCode displayFinancialStatus
           sourceName displayFulfillmentStatus discountCodes
+          customerJourneySummary { ready lastVisit { ${VISIT_FIELDS} } }
           subtotalPriceSet { shopMoney { amount } }
           totalDiscountsSet { shopMoney { amount } }
           totalTaxSet { shopMoney { amount } }
@@ -411,6 +446,7 @@ export function bulkOrdersQuery(includeCustomer: boolean, search: string | null)
           node {
             id name createdAt updatedAt cancelledAt currencyCode displayFinancialStatus
             sourceName displayFulfillmentStatus discountCodes
+            customerJourneySummary { ready lastVisit { ${VISIT_FIELDS} } }
             subtotalPriceSet { shopMoney { amount } }
             totalDiscountsSet { shopMoney { amount } }
             totalTaxSet { shopMoney { amount } }

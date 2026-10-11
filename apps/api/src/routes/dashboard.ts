@@ -11,6 +11,9 @@ import {
   siteTotals,
   eachDay,
   channelLabel,
+  TRAFFIC_LABEL,
+  TRAFFIC_SOURCES,
+  type TrafficSource,
   daysBetweenInclusive,
   delta,
   localDay,
@@ -215,6 +218,62 @@ async function channels(tx: Tx, { ws, storeId }: Scope, r: DateRange) {
       sales: x.sales,
       share: total > 0 ? x.sales / total : null,
     })),
+  };
+}
+
+/**
+ * Where this period's sales came from, by the visit that led to each order (Shopify's own record:
+ * packages/shared/src/traffic.ts), with the same money as sales by channel (after discounts,
+ * before tax and shipping). Other websites are listed by host. Orders stored before sources were
+ * recorded are counted as `pending` (the dashboard's refresh re-reads them).
+ */
+async function traffic(tx: Tx, { ws, storeId }: Scope, r: DateRange) {
+  const rows = await tx.$queryRaw<Array<{ source: string | null; medium: string | null; host: string | null; campaign: string | null; orders: number; sales: string }>>`
+    SELECT o.traffic_source AS source, o.traffic_medium AS medium, o.referrer_host AS host, o.traffic_campaign AS campaign,
+           COUNT(*)::int AS orders, COALESCE(SUM(o.subtotal), 0)::text AS sales
+    FROM orders o
+    WHERE o.workspace_id = ${ws} AND o.store_id = ${storeId}
+      AND o.cancelled_at IS NULL AND o.local_day BETWEEN ${r.from} AND ${r.to}
+    GROUP BY 1, 2, 3, 4`;
+  type Item = { key: string; source: string; label: string; orders: number; sales: number; paidOrders: number; paidSales: number };
+  const items = new Map<string, Item>();
+  const campaigns = new Map<string, { source: string; label: string; campaign: string; orders: number; sales: number }>();
+  let pending = 0;
+  for (const x of rows) {
+    const orders = num(x.orders);
+    const sales = num(x.sales);
+    if (!x.source) {
+      pending += orders;
+      continue;
+    }
+    const source = (TRAFFIC_SOURCES as readonly string[]).includes(x.source) ? (x.source as TrafficSource) : "other";
+    const key = source === "other" && x.host ? `site:${x.host}` : source;
+    const label = source === "other" && x.host ? x.host : TRAFFIC_LABEL[source];
+    const it = items.get(key) ?? { key, source, label, orders: 0, sales: 0, paidOrders: 0, paidSales: 0 };
+    it.orders += orders;
+    it.sales = r2(it.sales + sales);
+    if (x.medium === "paid") {
+      it.paidOrders += orders;
+      it.paidSales = r2(it.paidSales + sales);
+    }
+    items.set(key, it);
+    if (x.campaign) {
+      const ck = `${source}:${x.campaign}`;
+      const c = campaigns.get(ck) ?? { source, label: TRAFFIC_LABEL[source], campaign: x.campaign, orders: 0, sales: 0 };
+      c.orders += orders;
+      c.sales = r2(c.sales + sales);
+      campaigns.set(ck, c);
+    }
+  }
+  const list = [...items.values()].sort((a, b) => b.sales - a.sales || b.orders - a.orders);
+  const total = r2(list.reduce((a, x) => a + x.sales, 0));
+  const paid = list.reduce((a, x) => ({ orders: a.orders + x.paidOrders, sales: r2(a.sales + x.paidSales) }), { orders: 0, sales: 0 });
+  return {
+    items: list.map(({ key, ...x }) => ({ ...x, id: key, share: total > 0 ? x.sales / total : null })),
+    paid: { ...paid, share: total > 0 ? paid.sales / total : null },
+    campaigns: [...campaigns.values()].sort((a, b) => b.sales - a.sales || b.orders - a.orders).slice(0, 10),
+    /** Orders in these dates whose source hasn't been read yet. */
+    pending,
   };
 }
 
@@ -838,7 +897,10 @@ export function dashboardRoutes(app: App, deps: Deps) {
       const configured = adsConfigured();
       if (configured.meta || configured.google || configured.adsense) modules.ad_configured = configured;
 
-      if (enabled.has("channels")) modules.channels = await channels(tx, scope, range);
+      if (enabled.has("channels")) {
+        modules.channels = await channels(tx, scope, range);
+        modules.traffic = await traffic(tx, scope, range);
+      }
       if (enabled.has("order_timing")) modules.order_timing = await orderTiming(tx, scope, range, store.timezone);
       if (enabled.has("fulfillment")) modules.fulfillment = await fulfillment(tx, scope, range, today);
       if (enabled.has("discount_codes")) modules.discount_codes = await discountCodes(tx, scope, range);
