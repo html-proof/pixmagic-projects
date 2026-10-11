@@ -15,19 +15,30 @@ import {
   fromGoogleAdsRow,
   fromMetaInsight,
   fromMetaRangeInsight,
+  fromMetaBreakdownInsight,
   googleCustomerId,
+  googleReportMetrics,
+  googleReportRows,
   isDay,
+  isMetaBreakdown,
+  META_BREAKDOWN_PARAM,
   metaAccountId,
   metaReportMetrics,
   type AdDayRow,
   type AdsenseDayRow,
   type AdsenseReport,
   type GoogleAdsRow,
+  type GoogleReportApiRow,
+  type GoogleReportLevel,
+  type GoogleReportMetrics,
+  type GoogleReportRow,
   type MetaInsightRow,
   type MetaRangeInsight,
+  type MetaReportBreakdown,
   type MetaReportLevel,
   type MetaReportMetrics,
   type MetaReportRow,
+  type MetaReportView,
 } from "@app/shared";
 import type { FetchLike } from "./shopify.js";
 
@@ -40,7 +51,11 @@ export class AdsAuthError extends Error {
 
 /** The platform said no for a reason that a retry may fix (rate limits, outages). */
 export class AdsRetryableError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    /** The platform's own error code, when it gives one (Meta's `error.code`). */
+    public code?: number,
+  ) {
     super(message);
   }
 }
@@ -124,7 +139,20 @@ export function metaAuthorizeUrl(c: MetaConfig, redirectUri: string, state: stri
 
 async function metaGet<T>(c: MetaConfig, path: string, params: Record<string, string>): Promise<T> {
   const url = path.startsWith("https://") ? path : `https://graph.facebook.com/${c.version}/${path}?${new URLSearchParams(params)}`;
-  const res = await (c.fetchImpl ?? fetch)(url, { method: "GET" });
+  return metaCall<T>(c, url, { method: "GET" });
+}
+
+/** POST and DELETE: the parameters go in the form body, so the token never sits in a URL. */
+async function metaSend<T>(c: MetaConfig, method: "POST" | "DELETE", path: string, params: Record<string, string>): Promise<T> {
+  return metaCall<T>(c, `https://graph.facebook.com/${c.version}/${path}`, {
+    method,
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams(params).toString(),
+  });
+}
+
+async function metaCall<T>(c: MetaConfig, url: string, init: RequestInit): Promise<T> {
+  const res = await (c.fetchImpl ?? fetch)(url, init);
   const body = (await res.json().catch(() => ({}))) as T & { error?: { message?: string; code?: number; error_subcode?: number } };
   if (res.ok && !body.error) return body;
   const e = body.error ?? {};
@@ -135,18 +163,24 @@ async function metaGet<T>(c: MetaConfig, path: string, params: Record<string, st
   const code = e.code ?? 0;
   if (code === 190 || code === 102 || res.status === 401) throw new AdsAuthError(msg);
   // 4, 17, 32, 613, 80000-80014: rate limits; 1/2: temporary.
-  if ([1, 2, 4, 17, 32, 613].includes(e.code ?? 0) || (e.code ?? 0) >= 80000 || res.status === 429 || res.status >= 500) throw new AdsRetryableError(msg);
+  if ([1, 2, 4, 17, 32, 613].includes(e.code ?? 0) || (e.code ?? 0) >= 80000 || res.status === 429 || res.status >= 500) throw new AdsRetryableError(msg, e.code);
   throw new AdsApiError(msg, res.status, e.code);
 }
 
 /** The code from the redirect → a long-lived (about 60 days) user token. */
+/**
+ * The code from the redirect → a token that lasts. A user token is swapped for a long-lived one
+ * (about 60 days). A Facebook Login for Business system-user token comes back without an expiry
+ * (it never expires) and isn't swapped: Meta only documents that swap for expiring tokens.
+ */
 export async function metaExchangeCode(c: MetaConfig, code: string, redirectUri: string): Promise<TokenSet> {
-  const short = await metaGet<{ access_token: string }>(c, "oauth/access_token", { client_id: c.appId, client_secret: c.appSecret, redirect_uri: redirectUri, code });
+  const first = await metaGet<{ access_token: string; expires_in?: number }>(c, "oauth/access_token", { client_id: c.appId, client_secret: c.appSecret, redirect_uri: redirectUri, code });
+  if (!first.expires_in) return { accessToken: first.access_token, refreshToken: null, expiresAt: null };
   const long = await metaGet<{ access_token: string; expires_in?: number }>(c, "oauth/access_token", {
     grant_type: "fb_exchange_token",
     client_id: c.appId,
     client_secret: c.appSecret,
-    fb_exchange_token: short.access_token,
+    fb_exchange_token: first.access_token,
   });
   return { accessToken: long.access_token, refreshToken: null, expiresAt: expiry(long.expires_in) };
 }
@@ -155,6 +189,25 @@ export async function metaExchangeCode(c: MetaConfig, code: string, redirectUri:
 export async function metaGrantedPermissions(c: MetaConfig, accessToken: string): Promise<string[]> {
   const res = await metaGet<{ data?: Array<{ permission: string; status: string }> }>(c, "me/permissions", { access_token: accessToken });
   return (res.data ?? []).filter((p) => p.status === "granted").map((p) => p.permission);
+}
+
+/** The person's app-scoped Meta user id, so connections that share their grant can be told apart from others. */
+export async function metaUserId(c: MetaConfig, accessToken: string): Promise<string | null> {
+  const me = await metaGet<{ id?: string }>(c, "me", { fields: "id", access_token: accessToken });
+  return me.id && /^\d{1,30}$/.test(me.id) ? me.id : null;
+}
+
+/**
+ * Take back ads_read only: anything else the person gave Insights' Meta app (WhatsApp) stays. A token
+ * that already stopped working has nothing left to take back.
+ */
+export async function metaRevokeAdsRead(c: MetaConfig, accessToken: string): Promise<void> {
+  try {
+    await metaSend(c, "DELETE", "me/permissions/ads_read", { access_token: accessToken });
+  } catch (err) {
+    if (err instanceof AdsAuthError) return;
+    throw err;
+  }
 }
 
 /** Ad accounts the person can read. */
@@ -176,9 +229,8 @@ export async function metaAdAccounts(c: MetaConfig, accessToken: string): Promis
 }
 
 /** Spend, impressions, clicks, purchases and leads per campaign per day, from `since` to `until`. */
-export async function metaCampaignDays(c: MetaConfig, accessToken: string, accountId: string, since: string, until: string): Promise<AdDayRow[]> {
-  const out: AdDayRow[] = [];
-  let page = await metaGet<{ data: MetaInsightRow[]; paging?: { next?: string } }>(c, `${metaAccountId(accountId)}/insights`, {
+export async function metaCampaignDays(c: MetaConfig, accessToken: string, accountId: string, since: string, until: string, opts: { pollMs?: number } = {}): Promise<AdDayRow[]> {
+  const params = {
     level: "campaign",
     time_increment: "1",
     time_range: JSON.stringify({ since, until }),
@@ -186,10 +238,47 @@ export async function metaCampaignDays(c: MetaConfig, accessToken: string, accou
     // Purchases credited by each ad set's own attribution setting, the way Ads Manager counts them.
     use_unified_attribution_setting: "true",
     limit: "500",
-    access_token: accessToken,
-  });
+  };
+  const act = metaAccountId(accountId);
+  let page: { data: MetaInsightRow[]; paging?: { next?: string } };
+  try {
+    page = await metaGet(c, `${act}/insights`, { ...params, access_token: accessToken });
+  } catch (err) {
+    // Meta answers a big account's long range with a temporary error ("reduce the amount of data");
+    // it wants those run as a report job instead.
+    if (!(err instanceof AdsRetryableError) || (err.code !== 1 && err.code !== 2)) throw err;
+    return (await metaInsightsJob(c, accessToken, act, params, opts.pollMs)).map((r) => fromMetaInsight(act, r));
+  }
+  const out: AdDayRow[] = [];
   for (let i = 0; i < 50; i++) {
-    for (const r of page.data ?? []) out.push(fromMetaInsight(metaAccountId(accountId), r));
+    for (const r of page.data ?? []) out.push(fromMetaInsight(act, r));
+    const next = page.paging?.next;
+    if (!next) break;
+    page = await metaGet(c, next, {});
+  }
+  return out;
+}
+
+/**
+ * An asynchronous Insights report: start the job, wait for it (about a minute at most), then read
+ * its pages. A job that's still running is a temporary failure, so the queue tries again later.
+ */
+export async function metaInsightsJob(c: MetaConfig, accessToken: string, act: string, params: Record<string, string>, pollMs = 2000): Promise<MetaInsightRow[]> {
+  const { limit: pageSize = "500", ...jobParams } = params;
+  const job = await metaSend<{ report_run_id?: string }>(c, "POST", `${act}/insights`, { ...jobParams, access_token: accessToken });
+  const id = job.report_run_id;
+  if (!id || !/^\d{1,30}$/.test(id)) throw new AdsApiError("Meta didn't start the report", 502);
+  for (let i = 0; ; i++) {
+    const s = await metaGet<{ async_status?: string; async_percent_completion?: number }>(c, id, { fields: "async_status,async_percent_completion", access_token: accessToken });
+    if (s.async_status === "Job Completed") break;
+    if (s.async_status === "Job Failed" || s.async_status === "Job Skipped") throw new AdsRetryableError(`Meta's report job ended: ${s.async_status}`);
+    if (i >= 30) throw new AdsRetryableError("Meta's report is taking longer than usual");
+    if (pollMs > 0) await new Promise((r) => setTimeout(r, pollMs));
+  }
+  const out: MetaInsightRow[] = [];
+  let page = await metaGet<{ data: MetaInsightRow[]; paging?: { next?: string } }>(c, `${id}/insights`, { limit: pageSize, access_token: accessToken });
+  for (let i = 0; i < 100; i++) {
+    out.push(...(page.data ?? []));
     const next = page.paging?.next;
     if (!next) break;
     page = await metaGet(c, next, {});
@@ -208,13 +297,24 @@ const LEVEL_FIELDS: Record<MetaReportLevel, string> = {
  * Totals for one whole range, for the account or per campaign / ad set / ad. Results follow each
  * ad set's own attribution setting, as Ads Manager shows them.
  */
-export async function metaRangeInsights(c: MetaConfig, accessToken: string, accountId: string, level: "account" | MetaReportLevel, since: string, until: string, maxRows = 2000): Promise<MetaRangeInsight[]> {
+export async function metaRangeInsights(
+  c: MetaConfig,
+  accessToken: string,
+  accountId: string,
+  level: "account" | MetaReportLevel,
+  since: string,
+  until: string,
+  maxRows = 2000,
+  /** Split the account's numbers by placement, device or country (level "account" only). */
+  breakdown?: MetaReportBreakdown,
+): Promise<MetaRangeInsight[]> {
   if (!isDay(since) || !isDay(until)) throw new AdsApiError(`Invalid date range ${since}..${until}`, 400);
   const out: MetaRangeInsight[] = [];
   let page = await metaGet<{ data: MetaRangeInsight[]; paging?: { next?: string } }>(c, `${metaAccountId(accountId)}/insights`, {
     level,
     time_range: JSON.stringify({ since, until }),
     fields: level === "account" ? RANGE_FIELDS : `${LEVEL_FIELDS[level]},${RANGE_FIELDS}`,
+    ...(breakdown && level === "account" ? { breakdowns: META_BREAKDOWN_PARAM[breakdown] } : {}),
     use_unified_attribution_setting: "true",
     limit: "500",
     access_token: accessToken,
@@ -244,7 +344,7 @@ export async function metaStatuses(c: MetaConfig, accessToken: string, ids: stri
 }
 
 export interface MetaReport {
-  level: MetaReportLevel;
+  level: MetaReportView;
   since: string;
   until: string;
   /** The account's own totals: reach and frequency count each person once over the whole range. */
@@ -257,19 +357,25 @@ export interface MetaReport {
   attribution: string[];
 }
 
-export async function metaReport(c: MetaConfig, accessToken: string, accountId: string, level: MetaReportLevel, since: string, until: string, maxRows = 200): Promise<MetaReport> {
+/** By campaign, ad set or ad (with each one's delivery status), or the whole account split by placement, device or country. */
+export async function metaReport(c: MetaConfig, accessToken: string, accountId: string, level: MetaReportView, since: string, until: string, maxRows = 200): Promise<MetaReport> {
+  const breakdown = isMetaBreakdown(level) ? level : null;
   const [account, raw] = await Promise.all([
     metaRangeInsights(c, accessToken, accountId, "account", since, until),
-    metaRangeInsights(c, accessToken, accountId, level, since, until),
+    breakdown ? metaRangeInsights(c, accessToken, accountId, "account", since, until, 2000, breakdown) : metaRangeInsights(c, accessToken, accountId, level as MetaReportLevel, since, until),
   ]);
-  const all = raw.map((r) => fromMetaRangeInsight(level, r)).sort((a, b) => b.spend - a.spend || b.impressions - a.impressions);
+  const all = raw
+    .map((r) => (breakdown ? fromMetaBreakdownInsight(breakdown, r) : fromMetaRangeInsight(level as MetaReportLevel, r)))
+    .sort((a, b) => b.spend - a.spend || b.impressions - a.impressions);
   const rows = all.slice(0, maxRows);
-  // A status that can't be read (an ad deleted since) leaves the row's status unknown, not the report broken.
-  const statuses = await metaStatuses(c, accessToken, rows.map((r) => r.id)).catch((err: unknown) => {
-    if (err instanceof AdsApiError) return new Map<string, string>();
-    throw err;
-  });
-  for (const r of rows) r.status = statuses.get(r.id) ?? null;
+  if (!breakdown) {
+    // A status that can't be read (an ad deleted since) leaves the row's status unknown, not the report broken.
+    const statuses = await metaStatuses(c, accessToken, rows.map((r) => r.id)).catch((err: unknown) => {
+      if (err instanceof AdsApiError) return new Map<string, string>();
+      throw err;
+    });
+    for (const r of rows) r.status = statuses.get(r.id) ?? null;
+  }
   return {
     level,
     since,
@@ -302,7 +408,11 @@ export interface GoogleConfig extends GoogleOAuthClient {
 
 export const GOOGLE_ADS_SCOPE = REQUIRED_AD_SCOPE.google;
 
-function googleConsentUrl(c: GoogleOAuthClient, scope: string, redirectUri: string, state: string): string {
+/**
+ * Google's consent screen. `codeChallenge` is the PKCE S256 challenge: its verifier stays on the
+ * server and goes with the code exchange.
+ */
+function googleConsentUrl(c: GoogleOAuthClient, scope: string, redirectUri: string, state: string, codeChallenge?: string): string {
   const q = new URLSearchParams({
     client_id: c.clientId,
     redirect_uri: redirectUri,
@@ -313,11 +423,15 @@ function googleConsentUrl(c: GoogleOAuthClient, scope: string, redirectUri: stri
     prompt: "consent",
     state,
   });
+  if (codeChallenge) {
+    q.set("code_challenge", codeChallenge);
+    q.set("code_challenge_method", "S256");
+  }
   return `https://accounts.google.com/o/oauth2/v2/auth?${q}`;
 }
 
-export function googleAuthorizeUrl(c: GoogleConfig, redirectUri: string, state: string): string {
-  return googleConsentUrl(c, GOOGLE_ADS_SCOPE, redirectUri, state);
+export function googleAuthorizeUrl(c: GoogleConfig, redirectUri: string, state: string, codeChallenge?: string): string {
+  return googleConsentUrl(c, GOOGLE_ADS_SCOPE, redirectUri, state, codeChallenge);
 }
 
 async function googleToken(c: GoogleOAuthClient, form: Record<string, string>): Promise<{ access_token: string; expires_in?: number; refresh_token?: string; scope?: string }> {
@@ -334,16 +448,54 @@ async function googleToken(c: GoogleOAuthClient, form: Record<string, string>): 
   throw new AdsApiError(msg, res.status);
 }
 
-export async function googleExchangeCode(c: GoogleOAuthClient, code: string, redirectUri: string): Promise<TokenSet> {
-  const t = await googleToken(c, { code, redirect_uri: redirectUri, grant_type: "authorization_code" });
+export async function googleExchangeCode(c: GoogleOAuthClient, code: string, redirectUri: string, codeVerifier?: string): Promise<TokenSet> {
+  const t = await googleToken(c, { code, redirect_uri: redirectUri, grant_type: "authorization_code", ...(codeVerifier ? { code_verifier: codeVerifier } : {}) });
   // Google lists what was granted, space-separated; with granular consent a scope can be left unticked.
   return { accessToken: t.access_token, refreshToken: t.refresh_token ?? null, expiresAt: expiry(t.expires_in), grantedScopes: t.scope ? t.scope.split(/\s+/).filter(Boolean) : undefined };
 }
 
-/** A fresh one-hour access token from the stored refresh token. */
-export async function googleRefresh(c: GoogleOAuthClient, refreshToken: string): Promise<TokenSet> {
+/**
+ * A fresh one-hour access token from the stored refresh token. If Google hands back a new refresh
+ * token with it, that one replaces the old (`rotated`), so the caller must store it.
+ */
+export async function googleRefresh(c: GoogleOAuthClient, refreshToken: string): Promise<TokenSet & { rotated: boolean }> {
   const t = await googleToken(c, { refresh_token: refreshToken, grant_type: "refresh_token" });
-  return { accessToken: t.access_token, refreshToken, expiresAt: expiry(t.expires_in) };
+  const next = t.refresh_token && t.refresh_token !== refreshToken ? t.refresh_token : refreshToken;
+  return { accessToken: t.access_token, refreshToken: next, expiresAt: expiry(t.expires_in), rotated: next !== refreshToken };
+}
+
+/**
+ * Take back the access a person gave Insights' Google client. Google ends that person's whole grant
+ * to the client (Google Ads and AdSense alike), so callers only do this when nothing else relies on it.
+ * A token Google already considers dead counts as revoked.
+ */
+export async function googleRevoke(c: Pick<GoogleOAuthClient, "fetchImpl">, token: string): Promise<void> {
+  const res = await (c.fetchImpl ?? fetch)("https://oauth2.googleapis.com/revoke", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ token }).toString(),
+  });
+  if (res.ok) return;
+  const body = (await res.json().catch(() => ({}))) as { error?: string; error_description?: string };
+  if (body.error === "invalid_token") return;
+  const msg = body.error_description ?? body.error ?? `Google returned ${res.status}`;
+  if (res.status === 429 || res.status >= 500) throw new AdsRetryableError(msg);
+  throw new AdsApiError(msg, res.status);
+}
+
+/**
+ * The Google account behind an access token (`sub`), checked to be a token issued to Insights'
+ * own client. Null when Google doesn't say: the connection still works, it just can't share a grant.
+ */
+export async function googleUserId(c: GoogleOAuthClient, accessToken: string): Promise<string | null> {
+  const res = await (c.fetchImpl ?? fetch)(`https://oauth2.googleapis.com/tokeninfo?${new URLSearchParams({ access_token: accessToken })}`, { method: "GET" });
+  const body = (await res.json().catch(() => ({}))) as { sub?: string; aud?: string; azp?: string; error?: string; error_description?: string };
+  if (!res.ok) {
+    if (res.status === 400 || res.status === 401) throw new AdsAuthError(body.error_description ?? "Google didn't recognise the access token");
+    throw new AdsRetryableError(`Google returned ${res.status}`);
+  }
+  if ((body.aud ?? body.azp) !== c.clientId) throw new AdsAuthError("The Google token was issued to another app");
+  return body.sub && /^\d{1,40}$/.test(body.sub) ? body.sub : null;
 }
 
 async function googleAds<T>(c: GoogleConfig, accessToken: string, path: string, init: { method: "GET" | "POST"; body?: unknown; loginCustomerId?: string | null }): Promise<T> {
@@ -433,6 +585,86 @@ export async function googleCampaignDays(c: GoogleConfig, accessToken: string, a
   return rows.map((r) => fromGoogleAdsRow(googleCustomerId(account.accountId), r)).filter((r): r is AdDayRow => r !== null);
 }
 
+export interface GoogleReport {
+  level: GoogleReportLevel;
+  since: string;
+  until: string;
+  /** The whole account's totals for the range. */
+  totals: GoogleReportMetrics;
+  /** Biggest spend first. */
+  rows: GoogleReportRow[];
+  /** More rows had spend than are listed. */
+  truncated: boolean;
+}
+
+const GOOGLE_METRICS = "metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.conversions, metrics.conversions_value";
+
+/** The query for each level. Without segments.date in SELECT, Google sums the metrics over the range. */
+function googleReportQuery(level: GoogleReportLevel, since: string, until: string): string {
+  const during = `segments.date BETWEEN '${since}' AND '${until}'`;
+  switch (level) {
+    case "campaign":
+      return `SELECT campaign.id, campaign.name, campaign.status, campaign.advertising_channel_type, campaign_budget.amount_micros, ${GOOGLE_METRICS} FROM campaign WHERE ${during}`;
+    case "ad_group":
+      return `SELECT campaign.name, ad_group.id, ad_group.name, ad_group.status, ${GOOGLE_METRICS} FROM ad_group WHERE ${during}`;
+    case "device":
+      return `SELECT segments.device, ${GOOGLE_METRICS} FROM customer WHERE ${during}`;
+    case "country":
+      // Where the people who saw the ads were (not the places targeted).
+      return `SELECT user_location_view.country_criterion_id, ${GOOGLE_METRICS} FROM user_location_view WHERE ${during}`;
+  }
+}
+
+/** Geo target ids (2840) → ISO country codes (US), so countries can be named. */
+async function googleCountryCodes(c: GoogleConfig, accessToken: string, account: { accountId: string; loginCustomerId?: string | null }, ids: string[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const valid = [...new Set(ids)].filter((id) => /^\d{1,12}$/.test(id));
+  for (let i = 0; i < valid.length; i += 200) {
+    const names = valid.slice(i, i + 200).map((id) => `'geoTargetConstants/${id}'`).join(", ");
+    const rows = await googleSearch<{ geoTargetConstant?: { id?: string | number; countryCode?: string } }>(
+      c,
+      accessToken,
+      account.accountId,
+      `SELECT geo_target_constant.id, geo_target_constant.country_code FROM geo_target_constant WHERE geo_target_constant.resource_name IN (${names})`,
+      account.loginCustomerId,
+    );
+    for (const r of rows) if (r.geoTargetConstant?.id && r.geoTargetConstant.countryCode) out.set(String(r.geoTargetConstant.id), r.geoTargetConstant.countryCode);
+  }
+  return out;
+}
+
+/**
+ * The Google Ads report for one account and range, by campaign, ad group, device or country, plus
+ * the account's own totals. Read-only GAQL; dates are validated before they go into the query.
+ */
+export async function googleReport(
+  c: GoogleConfig,
+  accessToken: string,
+  account: { accountId: string; loginCustomerId?: string | null },
+  level: GoogleReportLevel,
+  since: string,
+  until: string,
+  maxRows = 200,
+): Promise<GoogleReport> {
+  if (!isDay(since) || !isDay(until)) throw new AdsApiError(`Invalid date range ${since}..${until}`, 400);
+  const [totalRows, raw] = await Promise.all([
+    googleSearch<GoogleReportApiRow>(c, accessToken, account.accountId, `SELECT ${GOOGLE_METRICS} FROM customer WHERE segments.date BETWEEN '${since}' AND '${until}'`, account.loginCustomerId),
+    googleSearch<GoogleReportApiRow>(c, accessToken, account.accountId, googleReportQuery(level, since, until), account.loginCustomerId),
+  ]);
+  let countries = new Map<string, string>();
+  if (level === "country") {
+    // A name that can't be looked up leaves the row as "Location <id>", not the report broken.
+    countries = await googleCountryCodes(c, accessToken, account, raw.map((r) => String(r.userLocationView?.countryCriterionId ?? ""))).catch((err: unknown) => {
+      if (err instanceof AdsApiError) return new Map<string, string>();
+      throw err;
+    });
+  }
+  const all = googleReportRows(level, raw, countries);
+  const rows = all.slice(0, maxRows);
+  const totals = googleReportRows("device", totalRows.map((r) => ({ ...r, segments: { device: "ALL" } })))[0];
+  return { level, since, until, totals: totals ?? googleReportMetrics({}), rows, truncated: all.length > rows.length };
+}
+
 // ---------------------------------------------------------------------------
 // AdSense (what the site earns from Google ads shown on it)
 // ---------------------------------------------------------------------------
@@ -442,8 +674,8 @@ export type AdsenseConfig = GoogleOAuthClient;
 
 export const ADSENSE_SCOPE = REQUIRED_AD_SCOPE.adsense;
 
-export function adsenseAuthorizeUrl(c: AdsenseConfig, redirectUri: string, state: string): string {
-  return googleConsentUrl(c, ADSENSE_SCOPE, redirectUri, state);
+export function adsenseAuthorizeUrl(c: AdsenseConfig, redirectUri: string, state: string, codeChallenge?: string): string {
+  return googleConsentUrl(c, ADSENSE_SCOPE, redirectUri, state, codeChallenge);
 }
 
 async function adsenseGet<T>(c: AdsenseConfig, accessToken: string, path: string, params: URLSearchParams): Promise<T> {

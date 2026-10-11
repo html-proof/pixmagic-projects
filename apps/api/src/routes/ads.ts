@@ -21,6 +21,8 @@ import {
   googleAuthorizeUrl,
   googleConfig,
   googleExchangeCode,
+  googleReportForConnection,
+  googleUserId,
   holdPendingAdConnect,
   logger,
   metaAdAccounts,
@@ -29,16 +31,31 @@ import {
   metaExchangeCode,
   metaGrantedPermissions,
   metaReportForConnection,
+  metaUserId,
   peekPendingAdConnect,
   pendingTokens,
   REQUIRED_AD_SCOPE,
+  reusableRefreshToken,
+  revokeAdAccessIfUnused,
   saveAdConnections,
   takePendingAdConnect,
   type AdAccount,
+  type GoogleReport,
   type MetaReport,
   type TokenSet,
 } from "@app/core";
-import { AD_PROVIDERS, daysBetweenInclusive, isDay, MAX_CUSTOM_DAYS, META_REPORT_LEVELS, randomToken, safeEqual, type AdProvider } from "@app/shared";
+import {
+  AD_PROVIDERS,
+  daysBetweenInclusive,
+  GOOGLE_REPORT_LEVELS,
+  isDay,
+  MAX_CUSTOM_DAYS,
+  META_REPORT_VIEWS,
+  pkcePair,
+  randomToken,
+  safeEqual,
+  type AdProvider,
+} from "@app/shared";
 import { body, clientIp, HttpError, loadUser, requireWorkspace, type Deps } from "../context.js";
 import type { App } from "../app.js";
 import { limit, LIMITS } from "../rateLimit.js";
@@ -65,6 +82,8 @@ interface AdsState {
   workspaceId: string;
   storeId: string;
   provider: AdProvider;
+  /** PKCE verifier (Google): kept here on the server; only its challenge went to the browser. */
+  codeVerifier?: string;
 }
 
 const providerSchema = z.enum(AD_PROVIDERS);
@@ -82,6 +101,7 @@ function publicConnection(c: {
   lastError: string | null;
   lastSyncedAt: Date | null;
   accessTokenExpiresAt: Date | null;
+  grantedScopes?: string[];
   createdAt: Date;
 }) {
   return {
@@ -100,6 +120,8 @@ function publicConnection(c: {
     connectedAt: c.createdAt,
     /** The one read-only permission this connection was granted (checked when connecting). */
     permission: REQUIRED_AD_SCOPE[c.provider as AdProvider] ?? null,
+    /** Every permission that was granted, when the platform said. */
+    grantedScopes: c.grantedScopes ?? [],
   };
 }
 
@@ -113,7 +135,7 @@ async function storeInWorkspace(ws: string, storeId: string) {
 async function connectAccounts(
   deps: Deps,
   ip: string | undefined,
-  input: { workspaceId: string; storeId: string; provider: AdProvider; accounts: AdAccount[]; tokens: TokenSet; userId: string },
+  input: { workspaceId: string; storeId: string; provider: AdProvider; accounts: AdAccount[]; tokens: TokenSet; userId: string; externalUserId?: string | null },
 ) {
   const saved = await saveAdConnections(input);
   // New accounts fetch their history; ones connected before just catch up on the re-check window.
@@ -166,14 +188,16 @@ export function adsRoutes(app: App, deps: Deps) {
       throw new HttpError(503, `${AD_PROVIDER_NAME[provider]} isn't set up on this server yet.`, "not_configured");
     }
     const nonce = randomToken(24);
-    const state: AdsState = { userId: user.id, workspaceId: ws, storeId, provider };
+    // Google takes PKCE on top of the client secret: a code intercepted on its way back is useless without the verifier.
+    const pkce = provider === "meta" ? null : pkcePair();
+    const state: AdsState = { userId: user.id, workspaceId: ws, storeId, provider, ...(pkce ? { codeVerifier: pkce.verifier } : {}) };
     await deps.coord.put(`oauth:ads:${nonce}`, JSON.stringify(state), STATE_TTL_S);
     setCookie(c, STATE_COOKIE, nonce, cookieOpts());
     const redirectUri = adsRedirectUri(provider);
     const url =
       provider === "meta" ? metaAuthorizeUrl(meta!, redirectUri, nonce)
-      : provider === "google" ? googleAuthorizeUrl(google!, redirectUri, nonce)
-      : adsenseAuthorizeUrl(adsense!, redirectUri, nonce);
+      : provider === "google" ? googleAuthorizeUrl(google!, redirectUri, nonce, pkce!.challenge)
+      : adsenseAuthorizeUrl(adsense!, redirectUri, nonce, pkce!.challenge);
     return c.json({ url });
   });
 
@@ -207,27 +231,37 @@ export function adsRoutes(app: App, deps: Deps) {
       const redirectUri = adsRedirectUri(provider);
       let tokens: TokenSet;
       let accounts: AdAccount[];
+      let externalUserId: string | null = null;
       // The person can untick the one permission on the platform's screen: then nothing can be read.
       const granted = (t: TokenSet) => !t.grantedScopes || t.grantedScopes.includes(REQUIRED_AD_SCOPE[provider]);
+      // Who signed in, so a later disconnect knows whether anything else still relies on their grant. Never blocks a connect.
+      const whoIs = (p: Promise<string | null>) =>
+        p.catch((err: unknown) => {
+          logger.warn({ err, provider }, "ad platform user id lookup failed");
+          return null;
+        });
       try {
         if (provider === "meta") {
           const cfg = metaConfig(deps.fetchImpl)!;
           tokens = await metaExchangeCode(cfg, q.code, redirectUri);
-          tokens.grantedScopes = await metaGrantedPermissions(cfg, tokens.accessToken);
+          // A Login for Business system-user token may not answer /me/permissions; then the account list below is the test.
+          tokens.grantedScopes = await metaGrantedPermissions(cfg, tokens.accessToken).catch((err: unknown) => {
+            if (err instanceof AdsApiError) return undefined;
+            throw err;
+          });
           if (!granted(tokens)) return back({ error: "permission_missing", provider }, state.storeId);
+          externalUserId = await whoIs(metaUserId(cfg, tokens.accessToken));
           accounts = await metaAdAccounts(cfg, tokens.accessToken);
-        } else if (provider === "google") {
-          const cfg = googleConfig(deps.fetchImpl)!;
-          tokens = await googleExchangeCode(cfg, q.code, redirectUri);
-          if (!granted(tokens)) return back({ error: "permission_missing", provider }, state.storeId);
-          if (!tokens.refreshToken) return back({ error: "no_refresh_token", provider }, state.storeId);
-          accounts = await googleAdAccounts(cfg, tokens.accessToken);
         } else {
-          const cfg = adsenseConfig(deps.fetchImpl)!;
-          tokens = await googleExchangeCode(cfg, q.code, redirectUri);
+          const google = provider === "google" ? googleConfig(deps.fetchImpl)! : null;
+          const cfg = google ?? adsenseConfig(deps.fetchImpl)!;
+          tokens = await googleExchangeCode(cfg, q.code, redirectUri, state.codeVerifier);
           if (!granted(tokens)) return back({ error: "permission_missing", provider }, state.storeId);
+          externalUserId = await whoIs(googleUserId(cfg, tokens.accessToken));
+          // Google sends a refresh token on first consent; a person who gave one before keeps using theirs.
+          if (!tokens.refreshToken) tokens.refreshToken = await reusableRefreshToken(provider, externalUserId);
           if (!tokens.refreshToken) return back({ error: "no_refresh_token", provider }, state.storeId);
-          accounts = await adsenseAccounts(cfg, tokens.accessToken);
+          accounts = google ? await googleAdAccounts(google, tokens.accessToken) : await adsenseAccounts(cfg, tokens.accessToken);
         }
       } catch (err) {
         // A Google login with no AdSense account: AdSense answers 403 rather than an empty list.
@@ -243,11 +277,11 @@ export function adsRoutes(app: App, deps: Deps) {
       const known = await systemDb.adConnection.findMany({ where: { storeId: state.storeId, provider }, select: { accountId: true } });
       const knownIds = new Set(known.map((k) => k.accountId));
       if (accounts.length === 1 || accounts.every((a) => knownIds.has(a.accountId))) {
-        const saved = await connectAccounts(deps, clientIp(c), { workspaceId: state.workspaceId, storeId: state.storeId, provider, accounts, tokens, userId: user.id });
+        const saved = await connectAccounts(deps, clientIp(c), { workspaceId: state.workspaceId, storeId: state.storeId, provider, accounts, tokens, userId: user.id, externalUserId });
         return toDashboard(provider, saved.length, state.storeId);
       }
       const pick = randomToken(24);
-      await holdPendingAdConnect(deps.coord, pick, { userId: user.id, workspaceId: state.workspaceId, storeId: state.storeId, provider, accounts, tokens });
+      await holdPendingAdConnect(deps.coord, pick, { userId: user.id, workspaceId: state.workspaceId, storeId: state.storeId, provider, accounts, tokens, externalUserId });
       return back({ choose: pick, provider }, state.storeId);
     } catch (err) {
       // A browser navigation: land on a page that says what happened, never on raw JSON.
@@ -291,7 +325,15 @@ export function adsRoutes(app: App, deps: Deps) {
     const unticked = taken.accounts.map((a) => a.accountId).filter((id) => !wanted.has(id));
     await systemDb.adConnection.updateMany({ where: { ...scope, accountId: { in: [...wanted] }, enabled: false }, data: { enabled: true } });
     if (unticked.length) await systemDb.adConnection.updateMany({ where: { ...scope, accountId: { in: unticked } }, data: { enabled: false } });
-    const saved = await connectAccounts(deps, clientIp(c), { workspaceId: ws, storeId, provider: taken.provider, accounts: chosen, tokens: pendingTokens(taken), userId: access.user!.id });
+    const saved = await connectAccounts(deps, clientIp(c), {
+      workspaceId: ws,
+      storeId,
+      provider: taken.provider,
+      accounts: chosen,
+      tokens: pendingTokens(taken),
+      userId: access.user!.id,
+      externalUserId: taken.externalUserId ?? null,
+    });
     return c.json({ provider: taken.provider, connected: saved.length });
   });
 
@@ -328,16 +370,18 @@ export function adsRoutes(app: App, deps: Deps) {
       systemDb.adsenseDaily.deleteMany({ where: { connectionId: conn.id } }),
       systemDb.adConnection.delete({ where: { id: conn.id } }),
     ]);
+    // Insights' copy is gone; now the platform access too, unless another connection relies on it.
+    const revoked = await revokeAdAccessIfUnused(conn, deps.fetchImpl);
     await audit({
       workspaceId: ws,
       actorUserId: access.user?.id ?? null,
       action: "ads.disconnected",
       targetType: "store",
       targetId: storeId,
-      metadata: { provider: conn.provider, accountId: conn.accountId },
+      metadata: { provider: conn.provider, accountId: conn.accountId, revoked },
       ip: clientIp(c),
     }).catch(() => {});
-    return c.json({ ok: true });
+    return c.json({ ok: true, revoked });
   });
 
   /**
@@ -352,7 +396,7 @@ export function adsRoutes(app: App, deps: Deps) {
     const q = z
       .object({
         connection: z.string().min(1).max(64),
-        level: z.enum(META_REPORT_LEVELS).default("campaign"),
+        level: z.enum(META_REPORT_VIEWS).default("campaign"),
         from: z.string().refine(isDay, "must be a YYYY-MM-DD day"),
         to: z.string().refine(isDay, "must be a YYYY-MM-DD day"),
       })
@@ -382,6 +426,52 @@ export function adsRoutes(app: App, deps: Deps) {
       throw err;
     }
     // Days that are over change little (Meta still revises purchases for a while); today's keep coming in.
+    await deps.coord.put(key, JSON.stringify(report), q.to >= today ? 600 : 3600);
+    return c.json({ account, today, cached: false, report });
+  });
+
+  /**
+   * The Google Ads report for one connected account and range: campaigns (with status, type and
+   * daily budget), ad groups, devices or countries, asked of Google for exactly those dates.
+   * Read-only, and cached briefly so the dashboard's polling doesn't spend Google's quota.
+   */
+  app.get("/workspaces/:ws/stores/:storeId/ads/google/report", async (c) => {
+    const { ws, storeId } = c.req.param();
+    const access = await requireWorkspace(c, deps, ws, "dashboard:read");
+    await storeInWorkspace(ws, storeId);
+    const q = z
+      .object({
+        connection: z.string().min(1).max(64),
+        level: z.enum(GOOGLE_REPORT_LEVELS).default("campaign"),
+        from: z.string().refine(isDay, "must be a YYYY-MM-DD day"),
+        to: z.string().refine(isDay, "must be a YYYY-MM-DD day"),
+      })
+      .refine((v) => v.from <= v.to, "from is after to")
+      .refine((v) => daysBetweenInclusive(v.from, v.to) <= MAX_CUSTOM_DAYS, "Pick up to a year at a time")
+      .parse(c.req.query());
+    const conn = await withTenant(ws, (tx) => tx.adConnection.findFirst({ where: { id: q.connection, workspaceId: ws, storeId, provider: "google" } }));
+    if (!conn) throw new HttpError(404, "Not found", "not_found");
+    const ended = "Google Ads access for this account has ended. Reconnect it in Settings → Advertising.";
+    if (conn.status === "reconnect") throw new HttpError(409, ended, "reconnect");
+    const account = { id: conn.id, accountId: conn.accountId, name: conn.accountName, currency: conn.currency, timezone: conn.timezone };
+    const today = adToday(conn);
+    const key = `ads-greport:${conn.id}:${q.level}:${q.from}:${q.to}`;
+    const cached = await deps.coord.peek(key);
+    if (cached) return c.json({ account, today, cached: true, report: JSON.parse(cached) as GoogleReport });
+    await limit(deps.coord, `rl:ads-report:${storeId}:${access.user?.id ?? clientIp(c)}`, LIMITS.adsReport);
+    let report: GoogleReport;
+    try {
+      report = await googleReportForConnection(conn, q.level, q.from, q.to, deps.fetchImpl);
+    } catch (err) {
+      if (err instanceof AdsAuthError) throw new HttpError(409, ended, "reconnect");
+      if (err instanceof AdsRetryableError) throw new HttpError(503, "Google Ads is busy right now. Try again in a minute.", "google_busy");
+      if (err instanceof AdsApiError) {
+        logger.warn({ err, connectionId: conn.id }, "google ads report failed");
+        throw new HttpError(502, `Google Ads didn't return the report: ${err.message}`, "google_error");
+      }
+      throw err;
+    }
+    // Google finishes most of a day's numbers within about three hours, and still revises conversions after.
     await deps.coord.put(key, JSON.stringify(report), q.to >= today ? 600 : 3600);
     return c.json({ account, today, cached: false, report });
   });

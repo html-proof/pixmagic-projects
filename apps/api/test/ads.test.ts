@@ -36,7 +36,7 @@ const metaPlatformWith =
 const metaPlatform: FetchLike = async (input) => {
   const u = new URL(String(input));
   if (u.pathname.endsWith("/oauth/access_token")) {
-    return u.searchParams.get("grant_type") === "fb_exchange_token" ? json({ access_token: "META_LONG_SECRET", expires_in: 5_184_000 }) : json({ access_token: "META_SHORT" });
+    return u.searchParams.get("grant_type") === "fb_exchange_token" ? json({ access_token: "META_LONG_SECRET", expires_in: 5_184_000 }) : json({ access_token: "META_SHORT", expires_in: 3600 });
   }
   if (u.pathname.endsWith("/me/permissions")) return json({ data: [{ permission: "ads_read", status: "granted" }] });
   if (u.pathname.endsWith("/me/adaccounts")) {

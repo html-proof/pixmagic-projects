@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { metaAttributionLabel, type MetaReportLevel, type MetaReportMetrics, type MetaReportRow } from "@app/shared/ads";
+import { metaAttributionLabel, type MetaReportMetrics, type MetaReportRow, type MetaReportView } from "@app/shared/ads";
 import { useApp } from "@/components/AppContext";
 import { Alert } from "@/components/ui";
 import { actionError, api, ApiError, fmtMoney, fmtNum, fmtPct } from "@/lib/api";
@@ -10,13 +10,13 @@ import { Badge, Panel, type Tone } from "./primitives";
 import type { AdsModule, Overview } from "./types";
 
 // ---------------------------------------------------------------------------
-// The Meta Ads report: campaigns, ad sets and ads for the dates picked, asked of Meta for exactly
-// those dates (GET .../ads/meta/report). Reach and frequency count each person once over the
+// The Meta Ads report: campaigns, ad sets and ads, or the whole account by placement, device or
+// country, for the dates picked, asked of Meta for exactly those dates (GET .../ads/meta/report). Reach and frequency count each person once over the
 // range, so they're never added up from days. Read-only: there is nothing here that changes an ad.
 // ---------------------------------------------------------------------------
 
 interface Report {
-  level: MetaReportLevel;
+  level: MetaReportView;
   since: string;
   until: string;
   totals: MetaReportMetrics;
@@ -31,10 +31,13 @@ interface Answer {
   report: Report;
 }
 
-const LEVELS: Array<{ id: MetaReportLevel; label: string }> = [
-  { id: "campaign", label: "Campaigns" },
-  { id: "adset", label: "Ad sets" },
-  { id: "ad", label: "Ads" },
+const LEVELS: Array<{ id: MetaReportView; label: string; one: string }> = [
+  { id: "campaign", label: "Campaigns", one: "Campaign" },
+  { id: "adset", label: "Ad sets", one: "Ad set" },
+  { id: "ad", label: "Ads", one: "Ad" },
+  { id: "placement", label: "Placements", one: "Placement" },
+  { id: "device", label: "Devices", one: "Device" },
+  { id: "country", label: "Countries", one: "Country" },
 ];
 
 /** Meta's effective_status in words, and how worried to be about it. */
@@ -95,7 +98,7 @@ export function MetaReportPanel({ ov, accounts }: { ov: Overview; accounts: AdsM
   const { workspace } = useApp();
   const meta = accounts.filter((a) => a.provider === "meta");
   const [connection, setConnection] = useState(meta[0]?.id ?? "");
-  const [level, setLevel] = useState<MetaReportLevel>("campaign");
+  const [level, setLevel] = useState<MetaReportView>("campaign");
   const [answer, setAnswer] = useState<Answer | null>(null);
   const [error, setError] = useState<{ message: string; reconnect: boolean } | null>(null);
   const [loading, setLoading] = useState(false);
@@ -151,7 +154,7 @@ export function MetaReportPanel({ ov, accounts }: { ov: Overview; accounts: AdsM
         )
       }
     >
-      <div role="tablist" aria-label="Report level" className="mb-3 inline-flex rounded-lg border border-border p-0.5">
+      <div role="tablist" aria-label="Report level" className="mb-3 inline-flex flex-wrap rounded-lg border border-border p-0.5">
         {LEVELS.map((l) => (
           <button
             key={l.id}
@@ -187,7 +190,7 @@ export function MetaReportPanel({ ov, accounts }: { ov: Overview; accounts: AdsM
             <table className="w-full min-w-[72rem] text-sm" data-testid="meta-report-table">
               <thead className="text-left text-xs text-muted">
                 <tr>
-                  <th className="px-2 pb-2 font-normal">{LEVELS.find((l) => l.id === r.level)!.label.replace(/s$/, "")}</th>
+                  <th className="px-2 pb-2 font-normal">{LEVELS.find((l) => l.id === r.level)!.one}</th>
                   {HEADINGS.map((h) => (
                     <th key={h} className="px-2 pb-2 text-right font-normal">
                       {h}
@@ -224,6 +227,8 @@ export function MetaReportPanel({ ov, accounts }: { ov: Overview; accounts: AdsM
           {r.truncated && <p className="mt-2 text-xs text-muted">Showing the {r.rows.length} that spent most.</p>}
           <ul className="mt-3 list-disc space-y-1 pl-4 text-xs text-muted">
             <li>Reach counts each person once over the whole period, so the rows don&apos;t add up to the account&apos;s reach. Frequency is impressions per person reached.</li>
+            {r.level === "device" && <li>Devices are the ones the ads were shown on.</li>}
+            {r.level === "country" && <li>Countries are where the people who saw your ads were.</li>}
             <li>
               Purchases and purchase value are Meta&apos;s own count of sales it credits to these ads
               {attribution ? ` (${attribution})` : ""}. They are not your Shopify orders, and they aren&apos;t added into your store&apos;s sales.

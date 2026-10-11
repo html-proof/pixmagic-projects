@@ -59,3 +59,14 @@ export function sha256Hex(input: string): string {
 export function randomToken(bytes = 32): string {
   return randomBytes(bytes).toString("base64url");
 }
+
+/**
+ * PKCE (RFC 7636): the verifier stays on the server with the sign-in's state; only its S256
+ * challenge goes in the authorize URL. A stolen code is then useless without the verifier.
+ */
+export function pkcePair(): { verifier: string; challenge: string } {
+  const verifier = randomBytes(48).toString("base64url");
+  return { verifier, challenge: pkceChallenge(verifier) };
+}
+
+export const pkceChallenge = (verifier: string) => createHash("sha256").update(verifier).digest("base64url");

@@ -42,7 +42,7 @@ describe("Meta", () => {
     expect(url.searchParams.get("state")).toBe("st");
 
     const f = fake((u) =>
-      u.searchParams.get("grant_type") === "fb_exchange_token" ? json({ access_token: "LONG", expires_in: 5_184_000 }) : json({ access_token: "SHORT" }),
+      u.searchParams.get("grant_type") === "fb_exchange_token" ? json({ access_token: "LONG", expires_in: 5_184_000 }) : json({ access_token: "SHORT", expires_in: 3600 }),
     );
     const t = await metaExchangeCode(meta(f.fetchImpl), "CODE", "https://app/cb");
     expect(t.accessToken).toBe("LONG");

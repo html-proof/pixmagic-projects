@@ -194,6 +194,23 @@ export function fromMetaInsight(accountId: string, r: MetaInsightRow): AdDayRow 
 export const META_REPORT_LEVELS = ["campaign", "adset", "ad"] as const;
 export type MetaReportLevel = (typeof META_REPORT_LEVELS)[number];
 
+/** Whole-account splits: where the ads ran (Facebook Feed, Instagram Stories...), on which devices, in which countries. */
+export const META_REPORT_BREAKDOWNS = ["placement", "device", "country"] as const;
+export type MetaReportBreakdown = (typeof META_REPORT_BREAKDOWNS)[number];
+
+/** Every way the Meta Ads report can be cut. */
+export const META_REPORT_VIEWS = [...META_REPORT_LEVELS, ...META_REPORT_BREAKDOWNS] as const;
+export type MetaReportView = (typeof META_REPORT_VIEWS)[number];
+
+export const isMetaBreakdown = (v: MetaReportView): v is MetaReportBreakdown => (META_REPORT_BREAKDOWNS as readonly string[]).includes(v);
+
+/** The Insights API `breakdowns` for each split. */
+export const META_BREAKDOWN_PARAM: Record<MetaReportBreakdown, string> = {
+  placement: "publisher_platform,platform_position",
+  device: "impression_device",
+  country: "country",
+};
+
 /** One row of GET /act_<id>/insights for a whole range (no time_increment). */
 export interface MetaRangeInsight {
   campaign_id?: string;
@@ -202,6 +219,11 @@ export interface MetaRangeInsight {
   adset_name?: string;
   ad_id?: string;
   ad_name?: string;
+  /** Breakdown keys, present only when the report was split by them. */
+  publisher_platform?: string;
+  platform_position?: string;
+  impression_device?: string;
+  country?: string;
   spend?: string;
   impressions?: string;
   reach?: string;
@@ -299,6 +321,53 @@ export function fromMetaRangeInsight(level: MetaReportLevel, r: MetaRangeInsight
   };
 }
 
+const META_PLATFORM: Record<string, string> = { facebook: "Facebook", instagram: "Instagram", messenger: "Messenger", audience_network: "Audience Network", threads: "Threads", whatsapp: "WhatsApp" };
+const META_DEVICE: Record<string, string> = {
+  desktop: "Computers",
+  iphone: "iPhone",
+  ipad: "iPad",
+  ipod: "iPod",
+  android_smartphone: "Android phones",
+  android_tablet: "Android tablets",
+  other: "Other devices",
+  unknown: "Unknown",
+};
+
+/** "instagram_stories" → "Stories", "an_classic" → "Classic": the position without its platform's prefix. */
+const positionLabel = (p: string) => {
+  const words = p.replace(/^(facebook|instagram|messenger|an|threads)_/, "").replace(/_/g, " ").trim();
+  return words ? words[0]!.toUpperCase() + words.slice(1) : p;
+};
+
+/** "US" → "United States" (English, wherever this runs); an unknown code stays as it is. */
+export function countryName(code: string | null | undefined): string {
+  if (!code) return "Unknown";
+  try {
+    return new Intl.DisplayNames(["en"], { type: "region" }).of(code.toUpperCase()) ?? code;
+  } catch {
+    return code;
+  }
+}
+
+/** One placement, device or country of a whole-account split. */
+export function fromMetaBreakdownInsight(breakdown: MetaReportBreakdown, r: MetaRangeInsight): MetaReportRow {
+  let id: string;
+  let name: string;
+  if (breakdown === "placement") {
+    const platform = r.publisher_platform ?? "unknown";
+    id = `${platform}:${r.platform_position ?? ""}`;
+    const p = META_PLATFORM[platform] ?? positionLabel(platform);
+    name = r.platform_position ? `${p} · ${positionLabel(r.platform_position)}` : p;
+  } else if (breakdown === "device") {
+    id = r.impression_device ?? "unknown";
+    name = META_DEVICE[id] ?? positionLabel(id);
+  } else {
+    id = r.country ?? "unknown";
+    name = r.country ? countryName(r.country) : "Unknown";
+  }
+  return { id, name, campaignName: null, adsetName: null, status: null, attribution: r.attribution_setting ?? null, ...metaReportMetrics(r) };
+}
+
 /** "7d_click_1d_view" → "7-day click, 1-day view"; anything unrecognised is shown as Meta wrote it. */
 export function metaAttributionLabel(setting: string | null | undefined): string | null {
   if (!setting) return null;
@@ -335,6 +404,134 @@ export function fromGoogleAdsRow(accountId: string, r: GoogleAdsRow): AdDayRow |
     conversionValue: r2(Number(m.conversionsValue ?? 0)),
     leads: 0,
   };
+}
+
+// ---------------------------------------------------------------------------
+// The Google Ads report: one date range at a time, asked of Google directly, by campaign (with its
+// status, type and budget), ad group, device or country.
+// ---------------------------------------------------------------------------
+
+export const GOOGLE_REPORT_LEVELS = ["campaign", "ad_group", "device", "country"] as const;
+export type GoogleReportLevel = (typeof GOOGLE_REPORT_LEVELS)[number];
+
+export interface GoogleReportMetrics {
+  spend: number;
+  impressions: number;
+  clicks: number;
+  /** Clicks per impression. */
+  ctr: number | null;
+  /** Spend per click (Google's "average CPC"). */
+  cpc: number | null;
+  /** Spend per thousand impressions. */
+  cpm: number | null;
+  /** Google's own count, by each conversion action's own attribution model. */
+  conversions: number;
+  conversionValue: number;
+  costPerConversion: number | null;
+  /** Conversion value per unit of spend. */
+  roas: number | null;
+}
+
+export interface GoogleReportRow extends GoogleReportMetrics {
+  id: string;
+  name: string;
+  /** The campaign an ad group is in (null on other levels). */
+  campaignName: string | null;
+  /** ENABLED, PAUSED or REMOVED, for campaigns and ad groups. */
+  status: string | null;
+  /** SEARCH, SHOPPING, PERFORMANCE_MAX, DISPLAY, VIDEO... (campaigns). */
+  channel: string | null;
+  /** The campaign budget per day, in the account's currency (campaigns). */
+  dailyBudget: number | null;
+}
+
+/** One result of googleAds:searchStream for a report query (JSON field names are camelCase). */
+export interface GoogleReportApiRow {
+  campaign?: { id?: string | number; name?: string; status?: string; advertisingChannelType?: string };
+  campaignBudget?: { amountMicros?: string | number };
+  adGroup?: { id?: string | number; name?: string; status?: string };
+  segments?: { device?: string };
+  userLocationView?: { countryCriterionId?: string | number };
+  metrics?: { costMicros?: string | number; impressions?: string | number; clicks?: string | number; conversions?: string | number; conversionsValue?: string | number };
+}
+
+const GOOGLE_DEVICE: Record<string, string> = { MOBILE: "Phones", DESKTOP: "Computers", TABLET: "Tablets", CONNECTED_TV: "TV screens", OTHER: "Other devices", UNKNOWN: "Unknown" };
+
+const n0 = (v: string | number | undefined) => {
+  const n = Number(v ?? 0);
+  return Number.isFinite(n) ? n : 0;
+};
+
+/** Ratios worked out from the sums, so a row that groups several of Google's rows stays right. */
+export function googleReportMetrics(m: GoogleReportApiRow["metrics"]): GoogleReportMetrics {
+  // Google reports money in millionths of the account's currency.
+  const spend = r2(n0(m?.costMicros) / 1_000_000);
+  const impressions = Math.round(n0(m?.impressions));
+  const clicks = Math.round(n0(m?.clicks));
+  const conversions = Math.round(n0(m?.conversions) * 100) / 100;
+  const conversionValue = r2(n0(m?.conversionsValue));
+  const cpc = ratio(spend, clicks);
+  const cpm = ratio(spend * 1000, impressions);
+  const cpa = ratio(spend, conversions);
+  return {
+    spend,
+    impressions,
+    clicks,
+    ctr: ratio(clicks, impressions),
+    cpc: cpc === null ? null : r2(cpc),
+    cpm: cpm === null ? null : r2(cpm),
+    conversions,
+    conversionValue,
+    costPerConversion: cpa === null ? null : r2(cpa),
+    roas: ratio(conversionValue, spend),
+  };
+}
+
+/**
+ * Google's rows for one level, grouped (a country comes back once per targeting kind, a device
+ * once per campaign...) and biggest spend first. `countries` maps a geo target id to its ISO code.
+ */
+export function googleReportRows(level: GoogleReportLevel, rows: GoogleReportApiRow[], countries: Map<string, string> = new Map()): GoogleReportRow[] {
+  const groups = new Map<string, { row: Omit<GoogleReportRow, keyof GoogleReportMetrics>; sums: Required<NonNullable<GoogleReportApiRow["metrics"]>> }>();
+  for (const r of rows) {
+    let key: string;
+    let head: Omit<GoogleReportRow, keyof GoogleReportMetrics>;
+    const blank = { campaignName: null, status: null, channel: null, dailyBudget: null };
+    if (level === "campaign") {
+      key = String(r.campaign?.id ?? "unknown");
+      const budget = r.campaignBudget?.amountMicros;
+      head = {
+        ...blank,
+        id: key,
+        name: r.campaign?.name ?? key,
+        status: r.campaign?.status ?? null,
+        channel: r.campaign?.advertisingChannelType ?? null,
+        dailyBudget: budget === undefined ? null : r2(n0(budget) / 1_000_000),
+      };
+    } else if (level === "ad_group") {
+      key = String(r.adGroup?.id ?? "unknown");
+      head = { ...blank, id: key, name: r.adGroup?.name ?? key, campaignName: r.campaign?.name ?? null, status: r.adGroup?.status ?? null };
+    } else if (level === "device") {
+      key = r.segments?.device ?? "UNKNOWN";
+      head = { ...blank, id: key, name: GOOGLE_DEVICE[key] ?? key };
+    } else {
+      const geo = String(r.userLocationView?.countryCriterionId ?? "");
+      const code = countries.get(geo) ?? null;
+      key = geo || "unknown";
+      head = { ...blank, id: key, name: code ? countryName(code) : geo ? `Location ${geo}` : "Unknown" };
+    }
+    const g = groups.get(key) ?? { row: head, sums: { costMicros: 0, impressions: 0, clicks: 0, conversions: 0, conversionsValue: 0 } };
+    const m = r.metrics ?? {};
+    g.sums.costMicros = n0(g.sums.costMicros) + n0(m.costMicros);
+    g.sums.impressions = n0(g.sums.impressions) + n0(m.impressions);
+    g.sums.clicks = n0(g.sums.clicks) + n0(m.clicks);
+    g.sums.conversions = n0(g.sums.conversions) + n0(m.conversions);
+    g.sums.conversionsValue = n0(g.sums.conversionsValue) + n0(m.conversionsValue);
+    groups.set(key, g);
+  }
+  return [...groups.values()]
+    .map((g) => ({ ...g.row, ...googleReportMetrics(g.sums) }))
+    .sort((a, b) => b.spend - a.spend || b.impressions - a.impressions || a.name.localeCompare(b.name));
 }
 
 /** Google shows customer ids as 123-456-7890; the API wants the digits. */

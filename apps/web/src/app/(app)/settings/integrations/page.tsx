@@ -2,7 +2,7 @@
 import Link from "next/link";
 import { useEffect, useState, type ReactNode } from "react";
 import { canManage, StoresPending, useApp, type StoreSummary } from "@/components/AppContext";
-import { MetaIcon } from "@/components/BrandIcons";
+import { GoogleIcon, MetaIcon } from "@/components/BrandIcons";
 import { ShopifyIcon } from "@/components/ShopifyIcon";
 import { fmtRelative } from "@/components/dashboard/format";
 import { Badge, type Tone } from "@/components/dashboard/primitives";
@@ -13,10 +13,10 @@ import { quality, tier, type Overview as WaOverview } from "@/components/whatsap
 import { actionError, api, useApi } from "@/lib/api";
 
 // ---------------------------------------------------------------------------
-// "Connect your business": Shopify, WhatsApp and Meta Ads on one page, each with one button that
-// opens the platform's own sign-in, and a plain status. Nothing here asks for an app id, a key or
-// a token: Insights' own Shopify and Meta apps do that part. The detailed pages (Shopify,
-// WhatsApp, Advertising) stay where things are managed in depth.
+// "Connect your business": Shopify, WhatsApp, Google Ads and Meta Ads on one page, each with one
+// button that opens the platform's own sign-in, and a plain status. Nothing here asks for an app id,
+// a key or a token: Insights' own Shopify, Google and Meta apps do that part. The detailed pages
+// (Shopify, WhatsApp, Advertising) stay where things are managed in depth.
 // ---------------------------------------------------------------------------
 
 type State = "not_connected" | "connecting" | "connected" | "action_required" | "permission_expired" | "failed" | "unavailable";
@@ -64,9 +64,11 @@ function whatsappState(o: WaOverview | null): State {
   return "connected";
 }
 
-function metaState(a: AdsState | null): State {
-  const mine = (a?.connections ?? []).filter((c) => c.provider === "meta");
-  if (!mine.length) return a && !a.configured.meta ? "unavailable" : "not_connected";
+type AdPlatform = "google" | "meta";
+
+function adState(a: AdsState | null, p: AdPlatform): State {
+  const mine = (a?.connections ?? []).filter((c) => c.provider === p);
+  if (!mine.length) return a && !a.configured[p] ? "unavailable" : "not_connected";
   const shown = mine.filter((c) => c.enabled);
   if (shown.some((c) => c.status === "reconnect")) return "permission_expired";
   if (shown.some((c) => c.status === "error")) return "failed";
@@ -76,6 +78,32 @@ function metaState(a: AdsState | null): State {
 
 /** "act_1234567890" → "Ad account ••••7890": enough to tell accounts apart without the full id. */
 const adAccountLabel = (id: string) => `Ad account ••••${id.replace(/^act_/, "").slice(-4)}`;
+
+/** What differs between the Google Ads and Meta Ads cards; the rest is the same card. */
+const AD_PLATFORM: Record<AdPlatform, { name: string; sub: string; button: string; opening: string; Icon: (p: { size?: number }) => ReactNode; access: string; features: string[]; how: string; disconnect: string }> = {
+  google: {
+    name: "Google Ads",
+    sub: "Search, Shopping, YouTube and Performance Max: spend, clicks, conversions and the campaigns behind them",
+    button: "Continue with Google Ads",
+    opening: "Opening Google…",
+    Icon: GoogleIcon,
+    access: "Working · Insights only reads reports",
+    features: ["Ad spend next to your sales", "Campaigns, ad groups, devices and countries", "Clicks, conversions and ROAS"],
+    how: "Google asks you to choose your Google account and allow access. If it can reach several ad accounts (an agency or manager account), you pick the ones for this store. Insights only reads reports: it can't create, change or pause ads, or spend money.",
+    disconnect: "Disconnect Google Ads? Insights deletes its access and every number it fetched for your ad accounts. Your ads keep running.",
+  },
+  meta: {
+    name: "Meta Ads",
+    sub: "Facebook and Instagram ads: spend, reach, clicks and the purchases Meta reports",
+    button: "Continue with Meta Ads",
+    opening: "Opening Meta…",
+    Icon: MetaIcon,
+    access: "Working · read-only (ads_read)",
+    features: ["Ad spend next to your sales", "Campaigns, ad sets, ads, placements and devices", "Reach, clicks, purchases and ROAS"],
+    how: "Meta asks you to log in and choose the ad accounts to share. Access is read-only: Insights can't create, change or pause ads, or spend money.",
+    disconnect: "Disconnect Meta Ads? Insights deletes its access and every number it fetched for your ad accounts. Your ads keep running.",
+  },
+};
 
 function Card({
   icon,
@@ -137,59 +165,63 @@ export default function IntegrationsPage() {
   const wa = useApi<WaOverview>(storeBase ? `${storeBase}/whatsapp` : null);
   const ads = useApi<AdsState>(storeBase ? `${storeBase}/ads` : null);
   const [note, setNote] = useState<{ kind: "success" | "error"; text: string } | null>(null);
-  const [leaving, setLeaving] = useState(false);
-  const [busy, setBusy] = useState<null | "wa-off" | "meta-off">(null);
+  const [leaving, setLeaving] = useState<AdPlatform | null>(null);
+  const [busy, setBusy] = useState<null | "wa-off" | "google-off" | "meta-off">(null);
   const { reload: reloadWa } = wa;
   const { reload: reloadAds } = ads;
 
   const waState = whatsappState(wa.data);
-  const adState = metaState(ads.data);
+  const googleState = adState(ads.data, "google");
+  const metaState = adState(ads.data, "meta");
 
   // While something is still being set up, look again until it settles: the page updates by itself.
   useEffect(() => {
-    if (waState !== "connecting" && adState !== "connecting") return;
+    if (waState !== "connecting" && googleState !== "connecting" && metaState !== "connecting") return;
     const t = window.setInterval(() => {
       void reloadWa();
       void reloadAds();
     }, 10_000);
     return () => window.clearInterval(t);
-  }, [waState, adState, reloadWa, reloadAds]);
+  }, [waState, googleState, metaState, reloadWa, reloadAds]);
 
   if (storesStatus !== "ready") return <StoresPending />;
 
-  const connectMeta = async () => {
+  const connectAds = async (p: AdPlatform) => {
     if (!storeBase) return;
-    setLeaving(true);
+    setLeaving(p);
     setNote(null);
     try {
-      const { url } = await api<{ url: string }>(`${storeBase}/ads/meta/connect`, { method: "POST" });
+      const { url } = await api<{ url: string }>(`${storeBase}/ads/${p}/connect`, { method: "POST" });
       window.location.assign(url);
     } catch (e) {
-      setLeaving(false);
-      setNote({ kind: "error", text: actionError(e, "start connecting Meta Ads") });
+      setLeaving(null);
+      setNote({ kind: "error", text: actionError(e, `start connecting ${AD_PLATFORM[p].name}`) });
     }
   };
 
+  const adConns = (p: AdPlatform) => (ads.data?.connections ?? []).filter((c) => c.provider === p);
+
   /** Disconnect: Insights deletes its access (and, for ads, the numbers it fetched). The accounts themselves carry on. */
-  const disconnect = async (what: "wa-off" | "meta-off") => {
+  const disconnect = async (what: "wa-off" | "google-off" | "meta-off") => {
     if (!storeBase) return;
+    const platform: AdPlatform | null = what === "google-off" ? "google" : what === "meta-off" ? "meta" : null;
     const ok = window.confirm(
-      what === "wa-off"
-        ? "Disconnect WhatsApp? Insights deletes its access to your number and stops sending; messages waiting to go out are cancelled. Your number keeps working in WhatsApp."
-        : "Disconnect Meta Ads? Insights deletes its access and every number it fetched for your ad accounts. Your ads keep running.",
+      platform
+        ? AD_PLATFORM[platform].disconnect
+        : "Disconnect WhatsApp? Insights deletes its access to your number and stops sending; messages waiting to go out are cancelled. Your number keeps working in WhatsApp.",
     );
     if (!ok) return;
     setBusy(what);
     setNote(null);
     try {
-      if (what === "wa-off") {
+      if (!platform) {
         await api(`${storeBase}/whatsapp`, { method: "DELETE" });
         await reloadWa();
       } else {
-        for (const c of metaConns) await api(`${storeBase}/ads/connections/${c.id}`, { method: "DELETE" });
+        for (const c of adConns(platform)) await api(`${storeBase}/ads/connections/${c.id}`, { method: "DELETE" });
         await reloadAds();
       }
-      setNote({ kind: "success", text: what === "wa-off" ? "WhatsApp is disconnected." : "Meta Ads is disconnected." });
+      setNote({ kind: "success", text: platform ? `${AD_PLATFORM[platform].name} is disconnected.` : "WhatsApp is disconnected." });
     } catch (e) {
       setNote({ kind: "error", text: actionError(e, "disconnect") });
     } finally {
@@ -197,10 +229,86 @@ export default function IntegrationsPage() {
     }
   };
 
-  const metaConns = (ads.data?.connections ?? []).filter((c) => c.provider === "meta");
   const waConn = wa.data?.connection ?? null;
   const shopState = shopifyState(store);
-  const soonest = metaConns.map((c) => (c.accessExpiresAt ? Math.ceil((Date.parse(c.accessExpiresAt) - Date.now()) / 86_400_000) : null)).filter((d): d is number => d !== null).sort((a, b) => a - b)[0];
+
+  /** One ad platform's card: the same for Google Ads and Meta Ads. */
+  const adCard = (p: AdPlatform, state: State) => {
+    const P = AD_PLATFORM[p];
+    const conns = adConns(p);
+    const soonest = conns
+      .map((c) => (c.accessExpiresAt ? Math.ceil((Date.parse(c.accessExpiresAt) - Date.now()) / 86_400_000) : null))
+      .filter((d): d is number => d !== null)
+      .sort((a, b) => a - b)[0];
+    const off = p === "google" ? "google-off" : "meta-off";
+    return (
+      <Card
+        testid={`int-${p}-ads`}
+        icon={<P.Icon size={22} />}
+        name={P.name}
+        sub={P.sub}
+        state={!store ? "not_connected" : leaving === p && conns.length ? "connecting" : state}
+        actions={
+          store && ads.data ? (
+            <>
+              {manage && ads.data.configured[p] && (
+                <button type="button" className={conns.length ? "btn-secondary" : "btn-primary"} onClick={() => void connectAds(p)} disabled={!!leaving} data-testid={`int-${p}-connect`}>
+                  <P.Icon size={16} /> {leaving === p ? (conns.length ? "Reconnecting…" : P.opening) : conns.length ? "Reconnect or add accounts" : P.button}
+                </button>
+              )}
+              {conns.length > 0 && (
+                <Link className="btn-secondary" href="/settings/ads">
+                  Manage
+                </Link>
+              )}
+              {manage && conns.length > 0 && (
+                <button type="button" className="text-sm text-danger underline-offset-2 hover:underline" onClick={() => void disconnect(off)} disabled={!!busy}>
+                  {busy === off ? "Disconnecting…" : "Disconnect"}
+                </button>
+              )}
+            </>
+          ) : null
+        }
+      >
+        {!store ? (
+          <p className="text-muted">Connect your Shopify store first: ad accounts are connected to a store.</p>
+        ) : ads.error ? (
+          <p className="text-muted">{actionError(ads.error, `check ${P.name}`)}</p>
+        ) : conns.length ? (
+          <>
+            <Facts
+              rows={[
+                ["Ad accounts", conns.map((c) => c.accountName ?? adAccountLabel(c.accountId)).join(", ")],
+                ["Identifiers", conns.map((c) => adAccountLabel(c.accountId)).join(", ")],
+                [
+                  "Last synchronized",
+                  (() => {
+                    const last = conns.map((c) => c.lastSyncedAt).filter((d): d is string => !!d).sort().pop();
+                    return last ? fmtRelative(last) : "Fetching the last 90 days…";
+                  })(),
+                ],
+                [
+                  "Health",
+                  state === "permission_expired"
+                    ? `${P.name} access ended: reconnect`
+                    : state === "failed"
+                      ? (conns.find((c) => c.status === "error")?.lastError ?? "The last update didn't work")
+                      : soonest !== undefined && soonest <= 14
+                        ? `Access ends in ${soonest} day${soonest === 1 ? "" : "s"}: reconnect to keep it`
+                        : P.access,
+                ],
+              ]}
+            />
+            <Features items={P.features} />
+          </>
+        ) : ads.data && !ads.data.configured[p] ? (
+          <p className="text-muted">{P.name} sign-in is being switched on for Insights. It will appear here as one button.</p>
+        ) : (
+          <p className="text-muted">{P.how}</p>
+        )}
+      </Card>
+    );
+  };
 
   return (
     <div className="space-y-4">
@@ -313,70 +421,9 @@ export default function IntegrationsPage() {
           )}
         </Card>
 
-        <Card
-          testid="int-meta-ads"
-          icon={<MetaIcon size={22} />}
-          name="Meta Ads"
-          sub="Facebook and Instagram ads: spend, reach, clicks and the purchases Meta reports"
-          state={!store ? "not_connected" : leaving && metaConns.length ? "connecting" : adState}
-          actions={
-            store && ads.data ? (
-              <>
-                {manage && ads.data.configured.meta && (
-                  <button type="button" className={metaConns.length ? "btn-secondary" : "btn-primary"} onClick={() => void connectMeta()} disabled={leaving} data-testid="int-meta-connect">
-                    <MetaIcon size={16} /> {leaving ? (metaConns.length ? "Reconnecting…" : "Opening Meta…") : metaConns.length ? "Reconnect or add accounts" : "Continue with Meta Ads"}
-                  </button>
-                )}
-                {metaConns.length > 0 && (
-                  <Link className="btn-secondary" href="/settings/ads">
-                    Manage
-                  </Link>
-                )}
-                {manage && metaConns.length > 0 && (
-                  <button type="button" className="text-sm text-danger underline-offset-2 hover:underline" onClick={() => void disconnect("meta-off")} disabled={!!busy}>
-                    {busy === "meta-off" ? "Disconnecting…" : "Disconnect"}
-                  </button>
-                )}
-              </>
-            ) : null
-          }
-        >
-          {!store ? (
-            <p className="text-muted">Connect your Shopify store first: ad accounts are connected to a store.</p>
-          ) : ads.error ? (
-            <p className="text-muted">{actionError(ads.error, "check Meta Ads")}</p>
-          ) : metaConns.length ? (
-            <>
-              <Facts
-                rows={[
-                  ["Ad accounts", metaConns.map((c) => c.accountName ?? adAccountLabel(c.accountId)).join(", ")],
-                  ["Identifiers", metaConns.map((c) => adAccountLabel(c.accountId)).join(", ")],
-                  ["Last synchronized", (() => {
-                    const last = metaConns.map((c) => c.lastSyncedAt).filter((d): d is string => !!d).sort().pop();
-                    return last ? fmtRelative(last) : "Fetching the last 90 days…";
-                  })()],
-                  [
-                    "Health",
-                    adState === "permission_expired"
-                      ? "Meta access ended: reconnect"
-                      : adState === "failed"
-                        ? (metaConns.find((c) => c.status === "error")?.lastError ?? "The last update didn't work")
-                        : soonest !== undefined && soonest <= 14
-                          ? `Access ends in ${soonest} day${soonest === 1 ? "" : "s"}: reconnect to keep it`
-                          : "Working · read-only (ads_read)",
-                  ],
-                ]}
-              />
-              <Features items={["Ad spend next to your sales", "Campaigns, ad sets and ads", "Reach, clicks, purchases and ROAS"]} />
-            </>
-          ) : ads.data && !ads.data.configured.meta ? (
-            <p className="text-muted">Meta Ads sign-in is being switched on for Insights. It will appear here as one button.</p>
-          ) : (
-            <p className="text-muted">
-              Meta asks you to log in and choose the ad accounts to share. Access is read-only: Insights can&apos;t create, change or pause ads, or spend money.
-            </p>
-          )}
-        </Card>
+        {adCard("google", googleState)}
+
+        {adCard("meta", metaState)}
       </div>
     </div>
   );

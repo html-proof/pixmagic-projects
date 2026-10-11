@@ -76,6 +76,8 @@ export async function consume(queue: QueueName, msg: QueueMessage, deps: Consume
   // `{ ...data, ... }` (the next page, a halved page, the next bulk phase), so passing it through
   // would start every follow-up message part-way through an outage it never saw.
   const { dbDeferral, ...job } = (msg.body ?? {}) as { dbDeferral?: DbDeferral };
+  // Ad platforms rate-limit per app: jitter keeps many accounts' retries from landing together.
+  const jitter = queue === "sync" && (job as { kind?: string }).kind === "ads" ? Math.floor(Math.random() * 30) : 0;
   try {
     // Ad account syncs ride the sync queue too (see adsQueue), told apart by their kind.
     const kind = (job as { kind?: string }).kind;
@@ -104,7 +106,7 @@ export async function consume(queue: QueueName, msg: QueueMessage, deps: Consume
       return;
     }
     if (final) msg.ack();
-    else msg.retry({ delaySeconds: backoffSeconds(msg.attempts) });
+    else msg.retry({ delaySeconds: backoffSeconds(msg.attempts) + jitter });
   }
 }
 

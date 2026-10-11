@@ -944,6 +944,8 @@ export async function runAdsSync(data: AdsSyncData, deps: WorkerDeps) {
 /** One recent-days refresh per ad account per hour, and one 30-day re-check a day. */
 const ADS_RECENT_LEASE_MS = 55 * 60_000;
 const ADS_RECHECK_LEASE_MS = 22 * 3600_000;
+/** Spread a tick's ad syncs over a few minutes, so a busy server doesn't hit Google's and Meta's quotas in one burst. */
+const ADS_SPREAD_S = 300;
 
 /**
  * Keep connected ad accounts current. Runs on the 15-minute tick; leases make most ticks a no-op.
@@ -962,7 +964,7 @@ export async function scheduleAdsSync(deps: WorkerDeps) {
     const lease = (await deps.coord.acquire(wide, ADS_RECHECK_LEASE_MS)) ? wide : (await deps.coord.acquire(recent, ADS_RECENT_LEASE_MS)) ? recent : null;
     if (!lease) continue;
     try {
-      await enqueueAdSync(deps.queues, c, lease === wide ? ADS_RECHECK_DAYS : ADS_RECENT_DAYS);
+      await enqueueAdSync(deps.queues, c, lease === wide ? ADS_RECHECK_DAYS : ADS_RECENT_DAYS, { delaySeconds: Math.floor(Math.random() * ADS_SPREAD_S) });
       sent++;
     } catch (err) {
       await deps.coord.release(lease).catch(() => {});

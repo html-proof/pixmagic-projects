@@ -88,7 +88,7 @@ function Onboarding({ hiddenOnly, offer }: { hiddenOnly: boolean; offer: Provide
           <p className="mt-1 text-sm text-muted">
             {hiddenOnly
               ? "Every connected ad account is switched off for the dashboard. Turn on the ones that belong to this store to see their numbers here."
-              : "Connect Meta Ads to see what you spend and what it brings, and Google AdSense to see what your site earns from ads. Access is read-only: Insights never changes your ads."}
+              : "Connect Google Ads and Meta Ads to see what you spend and what it brings, and Google AdSense to see what your site earns from ads. Insights only reads: it never changes your ads."}
           </p>
           {!hiddenOnly && offer.length > 0 && (
             <div className="mt-3 flex flex-wrap gap-2">
@@ -361,8 +361,8 @@ function Comparison({ ov }: { ov: Overview }) {
   );
 }
 
-/** The platforms offered (Google Ads isn't, by the owner's choice) that this server can connect, in order. */
-const offered = (ov: Overview) => (["meta", "adsense"] as Provider[]).filter((p) => ov.modules.ad_configured?.[p]);
+/** The platforms this server can connect, in order. */
+const offered = (ov: Overview) => (["google", "meta", "adsense"] as Provider[]).filter((p) => ov.modules.ad_configured?.[p]);
 
 /** A quiet way to add the platforms that aren't connected yet, without getting in the way. */
 function ConnectMore({ ov }: { ov: Overview }) {

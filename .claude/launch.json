@@ -38,6 +38,14 @@
       "port": 8793
     },
     {
+      "name": "ads-demo",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        ".claude/ads-demo-server.mjs"
+      ],
+      "port": 8789
+    },
+    {
       "name": "demo-nomail",
       "runtimeExecutable": "node",
       "runtimeArgs": [

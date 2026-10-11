@@ -43,13 +43,20 @@ interface Pending {
   accounts: Array<{ accountId: string; name: string | null; currency: string | null; timezone: string | null; connected: boolean }>;
 }
 
-const PROVIDERS: Array<{ id: Provider; name: string; sub: string; button: string; needs: string; access: string; Icon: (p: { size?: number }) => ReactNode }> = [
+const PROVIDERS: Array<{ id: Provider; name: string; sub: string; button: string; access: string; Icon: (p: { size?: number }) => ReactNode }> = [
+  {
+    id: "google",
+    name: "Google Ads",
+    sub: "Search, Shopping, YouTube and Performance Max: spend, clicks, conversions",
+    button: "Continue with Google Ads",
+    access: "Google Ads reporting (Google has no read-only scope; Insights only reads)",
+    Icon: GoogleIcon,
+  },
   {
     id: "meta",
     name: "Meta Ads",
     sub: "Facebook and Instagram ads: spend, impressions, clicks, conversions",
     button: "Continue with Meta Ads",
-    needs: "the app keys from Meta for Developers",
     access: "Read-only access to ads reporting (ads_read)",
     Icon: MetaIcon,
   },
@@ -58,28 +65,15 @@ const PROVIDERS: Array<{ id: Provider; name: string; sub: string; button: string
     name: "Google AdSense",
     sub: "What your site earns from ads shown on it: earnings, page views, impressions, clicks",
     button: "Continue with Google AdSense",
-    needs: "the app keys from Google Cloud",
     access: "Read-only access to AdSense reports (adsense.readonly)",
-    Icon: GoogleIcon,
-  },
-  {
-    id: "google",
-    name: "Google Ads",
-    sub: "Search, Shopping, YouTube and Performance Max: spend, clicks, conversions",
-    button: "Continue with Google Ads",
-    needs: "the app keys from Google Cloud and a Google Ads developer token",
-    access: "Google Ads reporting (Google has no read-only scope; Insights only reads)",
     Icon: GoogleIcon,
   },
 ];
 
 const INFO = Object.fromEntries(PROVIDERS.map((p) => [p.id, p])) as Record<Provider, (typeof PROVIDERS)[number]>;
 
-/**
- * Google Ads isn't offered (the owner's call, 2026-10-10): the integration stays in the code, and its
- * card only shows for a store that already has Google Ads accounts connected, so they can be managed.
- */
-const OFFERED: Provider[] = ["meta", "adsense"];
+/** Every platform has its card. One the server can't connect yet says so instead of offering a button. */
+const OFFERED: Provider[] = ["google", "meta", "adsense"];
 
 /** What the callback's ?error= means, in words. A provider-specific message wins. */
 const ERRORS: Record<string, string> = {
@@ -90,6 +84,7 @@ const ERRORS: Record<string, string> = {
   exchange_failed: "The platform didn't accept the sign-in. Please try again in a moment.",
   no_accounts: "That login can't see any ad accounts. Ask the account's owner to give you access, then connect again.",
   no_accounts_adsense: "That Google login has no AdSense account. Sign in with the Google account that owns your AdSense, or ask its owner to add you as a user.",
+  no_accounts_google: "That Google login can't reach any Google Ads account. Sign in with the Google account you use at ads.google.com, or ask the account's owner to add you as a user.",
   no_refresh_token: "Google didn't grant lasting access. Please try again and allow access on Google's screen.",
   permission_missing: "The permission to read reports wasn't granted, so nothing could be connected. Press the button again and leave it ticked.",
   permission_missing_meta: "Meta's ads_read permission wasn't granted, so Insights can't read your ad reports. Press Continue with Meta Ads again and allow it.",
@@ -104,7 +99,7 @@ function daysUntil(iso: string | null): number | null {
 
 /** One word for where a platform stands, with its colour (never colour alone: the word says it). */
 function platformStatus(configured: boolean, mine: Connection[]): { tone: Tone; label: string } {
-  if (!configured && !mine.length) return { tone: "neutral", label: "Not set up" };
+  if (!configured && !mine.length) return { tone: "neutral", label: "Coming soon" };
   if (!mine.length) return { tone: "neutral", label: "Not connected" };
   if (mine.some((c) => c.enabled && c.status === "reconnect")) return { tone: "danger", label: "Needs reconnecting" };
   if (mine.some((c) => c.enabled && c.status === "error")) return { tone: "warn", label: "Sync problem" };
@@ -303,7 +298,12 @@ export default function AdAccountsPage() {
 
   const disconnect = (c: Connection) =>
     run(`delete-${c.id}`, async () => {
-      if (!window.confirm(`Disconnect ${c.accountName ?? c.accountId}? Its access and every number fetched for it are deleted from Insights. Your ads keep running.`)) return;
+      if (
+        !window.confirm(
+          `Disconnect ${c.accountName ?? c.accountId}? Its access and every number fetched for it are deleted from Insights, and Insights gives up its access at ${INFO[c.provider].name} once no other connected account uses it. Your ads keep running.`,
+        )
+      )
+        return;
       await api(`/workspaces/${workspace.id}/stores/${store.id}/ads/connections/${c.id}`, { method: "DELETE" });
       await reload();
     });
@@ -325,9 +325,9 @@ export default function AdAccountsPage() {
           <div className="min-w-0">
             <h1 className="text-lg font-semibold">Advertising integrations</h1>
             <p className="mt-1 text-sm text-muted">
-              Connect Meta Ads to see what you spend on ads and what it brings, and Google AdSense to see what your site earns from ads. Once
-              connected, the numbers appear on your <Link className="text-accent underline" href="/dashboard">dashboard</Link> and refresh every hour. Access is
-              read-only: Insights can&apos;t create, change or pause your ads.
+              Connect Google Ads and Meta Ads to see what you spend on ads and what it brings, and Google AdSense to see what your site earns from ads.
+              Once connected, the numbers appear on your <Link className="text-accent underline" href="/dashboard">dashboard</Link> and refresh every hour. Insights
+              only reads: it can&apos;t create, change or pause your ads, or spend money.
             </p>
             <p className="mt-2 text-sm">
               For <strong>{storeName}</strong>
@@ -401,8 +401,8 @@ export default function AdAccountsPage() {
 
             {!configured && data && (
               <p className="mt-3 rounded-lg border border-dashed border-border px-3 py-2 text-sm text-muted">
-                {p.name} isn&apos;t set up on this Insights server yet: it needs {p.needs}.
-                {manage ? " The steps are in docs/ads-setup.md." : " Ask a workspace owner or admin."}
+                {p.name} sign-in is being switched on for Insights. Once it&apos;s on, this card shows a &ldquo;{p.button}&rdquo; button: there are no keys or codes
+                to copy.
               </p>
             )}
 

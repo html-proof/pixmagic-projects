@@ -1,9 +1,9 @@
-# Advertising integrations: "Continue with Meta Ads", "Continue with Google AdSense" and "Continue with Google Ads"
+# Advertising integrations: "Continue with Google Ads", "Continue with Meta Ads" and "Continue with Google AdSense"
 
 **How a merchant uses it.**
 1. The dashboard's **Advertising** section offers **Connect advertising accounts** while nothing is connected.
 2. That opens **Settings → Advertising**, the integrations page.
-3. They press **Continue with Meta Ads**, **Continue with Google AdSense** or **Continue with Google Ads**, and approve on the platform's own screen.
+3. They press **Continue with Google Ads**, **Continue with Meta Ads** or **Continue with Google AdSense**, and approve on the platform's own screen.
 4. When the login can see several accounts and some are new, they tick the ones that belong to this store.
    - The sign-in waits on the server, encrypted, for 15 minutes.
    - One account, or a reconnect that sees nothing new, skips this step.
@@ -13,18 +13,26 @@
    - impressions and clicks per platform;
    - a by-platform comparison.
 
-**Google Ads is not offered** (owner's choice, 2026-10-10): the integration stays in the code, and its card
-appears only for a store that already has Google Ads accounts connected. To offer it again, add `"google"` to
-`OFFERED` in `apps/web/src/app/(app)/settings/ads/page.tsx` and to `offered` in
-`apps/web/src/components/dashboard/advertising.tsx`.
+**Google Ads is offered again** (2026-10-11): its card comes first on Settings → Advertising, on
+Settings → Connect your business, and on the dashboard's "Connect more". Until the server has all three Google Ads
+settings (client id, client secret, developer token), the card says "Coming soon" and has no button; merchants are
+never asked for keys.
 
-**Current Google Cloud state (project insights-511119, 2026-10-10):**
-- The app is published (**In production**).
-- Data Access lists only `adsense.readonly`, which is non-sensitive, so no verification is needed and merchants see no "unverified app" screen.
-- The Google Ads scope `adwords` was removed while Google Ads is hidden. To bring Google Ads back, re-add `adwords` under Data Access. It's sensitive, so Google will then require verification, and until it's approved users see the unverified-app warning (capped at 100 users).
+**What still needs a person before Google Ads works in production (checked 2026-10-11):**
+1. **A Google Ads manager account.** sebanceo@gmail.com has no Google Ads account at all ("You do not have any Google
+   Ads accounts"). Create a manager account at <https://ads.google.com/home/tools/manager-accounts/>.
+2. **A developer token** from that manager account (Admin → API Center), then **Basic access** (the form: read-only
+   reporting for the merchants who connect). Put it in `GOOGLE_ADS_DEVELOPER_TOKEN` (secret).
+3. **The `adwords` scope back under Data Access** in project insights-511119 (it lists only `adsense.readonly` now).
+   It's sensitive: publishing it starts Google's verification (privacy policy, a video of the flow, a verified
+   domain). Until approved, merchants see the "Google hasn't verified this app" warning and the app is capped at 100 users.
+
+Verified 2026-10-11 against the real Google: the "Insights web" client accepts the production callback
+(`https://insights.imeseban.workers.dev/api/ads/google/callback`) and `http://localhost:8789/...` with the `adwords`
+scope and a PKCE challenge: Google's own "Sign in to continue to Insights" page opens, with no error.
 
 **The integrations page** is for management only:
-- each platform's status (Connected, Syncing, Needs reconnecting, Sync problem, Not connected, Not set up);
+- each platform's status (Connected, Syncing, Needs reconnecting, Sync problem, Not connected, Coming soon);
 - account details and last sync;
 - the permission granted;
 - Refresh, Reconnect or add accounts, Show on dashboard, and Disconnect.
@@ -43,8 +51,8 @@ Access is **read-only**: Meta's `ads_read` permission, Google's Ads reporting sc
 `adsense.readonly`. Insights never creates, changes or pauses an ad. Tokens are stored encrypted with the same keyring as Shopify's
 (`TOKEN_ENCRYPTION_KEYS`) and deleted when an account is disconnected or the store is removed.
 
-Until the keys below are set, each button says its platform "isn't set up on this server yet".
-Nothing else changes. AdSense needs only the Google OAuth client (id and secret): it has no
+Until the keys below are set, each card says its platform's sign-in is "being switched on" (Coming soon),
+without a button. Nothing else changes. AdSense needs only the Google OAuth client (id and secret): it has no
 developer token, so it can work before Google Ads does.
 
 | Setting | Where it goes | Secret? |
@@ -152,12 +160,55 @@ npx wrangler secret put GOOGLE_ADS_DEVELOPER_TOKEN
 ```
 
 1. Put the two public ids in `wrangler.jsonc` and deploy (see `docs/deployment-cloudflare.md`).
-2. The database needs migration `20261009185831_ad_accounts` (run `pnpm db:migrate` against the owner role **before** deploying).
+2. The database needs migrations `20261009185831_ad_accounts`, `20261010080000_adsense_daily` and `20261011120000_ad_connection_identity` (run `pnpm db:migrate` against the owner role **before** deploying; the last one only adds two columns and an index).
 3. Open **Settings → Advertising** (or press **Connect advertising accounts** on the dashboard).
    - Press **Continue with Meta Ads**, **Continue with Google AdSense** or **Continue with Google Ads**, and approve.
    - If the login sees several accounts, tick the ones for this store.
    - You land on the dashboard. Each new account's last 90 days are fetched in the background.
    - Untick **Show on dashboard** later for any account that isn't this store's.
+
+## Security and the connection lifecycle
+
+- **The sign-in.** One-time `state` in the coordinator (10 minutes), bound to the browser by an HttpOnly cookie, and the
+  callback is only accepted for the signed-in person who started it. Codes are exchanged on the server only.
+- **PKCE (Google Ads and AdSense).** The S256 challenge goes in Google's URL; the verifier stays in the coordinator with the
+  state and goes only with the code exchange, so an intercepted code is useless. Meta documents PKCE only for its OIDC
+  flow (which needs `openid` and doesn't cover Login for Business), so Meta relies on state + cookie + the app secret.
+- **Tokens** are AES-256-GCM encrypted with `TOKEN_ENCRYPTION_KEYS`, bound to their store and platform (AAD
+  `ads:<provider>:<storeId>:<kind>`), never sent to the browser or logged.
+- **Who signed in** is kept per connection (`external_user_id`: Google's `sub` from tokeninfo, checked to be a token issued to
+  Insights' own client; Meta's app-scoped user id), with the permissions granted (`granted_scopes`). Migration
+  `20261011120000_ad_connection_identity`.
+- **Google refresh tokens.** Google sends one on consent (`prompt=consent`); if a sign-in comes back without one, the same
+  person's existing refresh token is reused. If Google replaces a refresh token during a refresh, the new one is stored for
+  every account that shares it.
+- **Meta tokens.** A user token is swapped for a long-lived one (about 60 days; Settings warns from 14 days before). A Login
+  for Business **system-user** token comes back without an expiry and is kept as it is.
+- **Disconnect** deletes the token and every number fetched for that account, then gives the access back to the platform
+  **only when no other connection relies on the same person's grant** (another store, or AdSense next to Google Ads, since
+  Google revokes the person's whole grant to the client). Google: `POST oauth2.googleapis.com/revoke`. Meta:
+  `DELETE /me/permissions/ads_read` (only ads_read: WhatsApp keeps working). The outcome (`revoked`, `still_used`,
+  `unknown_person`, `failed`) is in the response and the audit log.
+- **Sync.** Ad syncs ride the sync queue; each tick's syncs are spread over 5 minutes and retries back off exponentially with
+  jitter. Access that ended marks the account "reconnect"; history is kept.
+- **Meta report jobs.** When Meta answers a big account's long range with "reduce the amount of data", the daily sync runs it
+  as an asynchronous Insights report job (`POST /act_x/insights` → `report_run_id`, polled for about a minute).
+
+## The Google Ads report (dashboard → Ads → "Google Ads report")
+
+`GET /workspaces/:ws/stores/:storeId/ads/google/report?connection=&level=campaign|ad_group|device|country&from=&to=`:
+spent, impressions, clicks, click-through rate, cost per click, cost per 1,000 impressions, conversions, cost per
+conversion, conversion value and return on ad spend, with the account's own totals on top.
+
+- Campaigns show their status (Active, Paused, Removed), type (Search, Shopping, Performance Max, YouTube...) and daily budget.
+- Ad groups name their campaign; Performance Max has no ad groups, which the panel says.
+- Countries are where the people who saw the ads were (`user_location_view`), named from Google's geo targets.
+- Asked of Google for exactly those dates (GAQL, dates validated before they reach the query), in the account's time zone and currency.
+- Cached 10 minutes (ranges including today) or an hour, inside the same 30-per-10-minutes limit as the Meta report.
+- Access Google took back marks the account "reconnect" and the panel says so instead of showing old numbers.
+
+The Meta Ads report also splits the whole account by **placement** (Facebook Feed, Instagram Stories...), **device**
+and **country** (`breakdowns=publisher_platform,platform_position` / `impression_device` / `country`).
 
 ## How numbers are counted
 
@@ -182,4 +233,4 @@ spend, plus each row's delivery status (Active, Paused, In review, Rejected, Has
 - Expired or revoked access (Meta error 190, or `ads_read` taken back) turns the account to "reconnect" at once, and the report says so instead of showing old numbers as current.
 - Read-only: there is no control that edits a campaign, budget or ad, and `ads_management` is never requested.
 
-Merchants manage all three integrations (Shopify, WhatsApp, Meta Ads) from **Settings → Connect your business** (`/settings/integrations`): one button each, a status (Not connected, Connecting, Connected, Action required, Permission expired, Connection failed), the account and identifier, the last sync, and Reconnect / Disconnect.
+Merchants manage Shopify, WhatsApp, Google Ads and Meta Ads from **Settings → Connect your business** (`/settings/integrations`): one button each, a status (Not connected, Connecting, Connected, Action required, Permission expired, Connection failed, Coming soon), the account and identifier, the last sync, and Reconnect / Disconnect.

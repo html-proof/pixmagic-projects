@@ -5,18 +5,22 @@
  * sync job is apps/worker.
  */
 import { systemDb, type AdConnection } from "@app/db";
-import { addDays, decrypt, encrypt, keyVersionOf, localDay, type AdDayRow, type AdProvider, type AdsenseDayRow, type MetaReportLevel } from "@app/shared";
+import { addDays, decrypt, encrypt, keyVersionOf, localDay, type AdDayRow, type AdProvider, type AdsenseDayRow, type GoogleReportLevel, type MetaReportView } from "@app/shared";
 import {
   AdsApiError,
   AdsAuthError,
   adsenseSiteDays,
   googleCampaignDays,
   googleRefresh,
+  googleReport,
+  googleRevoke,
   isMetaPermissionError,
   metaCampaignDays,
   metaGrantedPermissions,
   metaReport,
+  metaRevokeAdsRead,
   type AdAccount,
+  type GoogleReport,
   type MetaReport,
   type AdsenseConfig,
   type GoogleConfig,
@@ -89,6 +93,9 @@ export interface PendingAdConnect {
   accessTokenEnc: string;
   refreshTokenEnc: string | null;
   accessTokenExpiresAt: string | null;
+  /** The permissions granted, and who granted them (both stored with the connection). */
+  grantedScopes?: string[];
+  externalUserId?: string | null;
   /** Epoch ms after which the choice is gone. */
   expiresAt: number;
 }
@@ -98,7 +105,7 @@ const pendingKey = (nonce: string) => `ads-pending:${nonce}`;
 export async function holdPendingAdConnect(
   coord: Coord,
   nonce: string,
-  input: { userId: string; workspaceId: string; storeId: string; provider: AdProvider; accounts: AdAccount[]; tokens: TokenSet },
+  input: { userId: string; workspaceId: string; storeId: string; provider: AdProvider; accounts: AdAccount[]; tokens: TokenSet; externalUserId?: string | null },
 ) {
   const enc = encryptAdTokens(input.storeId, input.provider, input.tokens);
   const pending: PendingAdConnect = {
@@ -110,6 +117,8 @@ export async function holdPendingAdConnect(
     accessTokenEnc: enc.accessTokenEnc,
     refreshTokenEnc: enc.refreshTokenEnc,
     accessTokenExpiresAt: input.tokens.expiresAt ? input.tokens.expiresAt.toISOString() : null,
+    grantedScopes: input.tokens.grantedScopes,
+    externalUserId: input.externalUserId ?? null,
     expiresAt: Date.now() + ADS_PENDING_TTL_S * 1000,
   };
   await coord.put(pendingKey(nonce), JSON.stringify(pending), ADS_PENDING_TTL_S);
@@ -138,6 +147,7 @@ export function pendingTokens(p: PendingAdConnect): TokenSet {
     accessToken: decrypt(p.accessTokenEnc, k, aad(p.storeId, p.provider, "access")),
     refreshToken: p.refreshTokenEnc ? decrypt(p.refreshTokenEnc, k, aad(p.storeId, p.provider, "refresh")) : null,
     expiresAt: p.accessTokenExpiresAt ? new Date(p.accessTokenExpiresAt) : null,
+    grantedScopes: p.grantedScopes,
   };
 }
 
@@ -152,8 +162,14 @@ export async function saveAdConnections(input: {
   accounts: AdAccount[];
   tokens: TokenSet;
   userId: string | null;
+  /** The platform's id for the person who signed in (see externalUserId on the model). */
+  externalUserId?: string | null;
 }): Promise<Array<AdConnection & { isNew: boolean }>> {
-  const tokens = encryptAdTokens(input.storeId, input.provider, input.tokens);
+  const tokens = {
+    ...encryptAdTokens(input.storeId, input.provider, input.tokens),
+    ...(input.externalUserId ? { externalUserId: input.externalUserId } : {}),
+    ...(input.tokens.grantedScopes ? { grantedScopes: input.tokens.grantedScopes.slice(0, 50) } : {}),
+  };
   const out: Array<AdConnection & { isNew: boolean }> = [];
   for (const a of input.accounts) {
     const where = { storeId_provider_accountId: { storeId: input.storeId, provider: input.provider, accountId: a.accountId } };
@@ -209,7 +225,15 @@ export async function adAccessToken(conn: AdConnection, fetchImpl?: FetchLike): 
   if (!conn.refreshTokenEnc) throw new AdsAuthError("Google access has no refresh token");
   const fresh = await googleRefresh(cfg, decrypt(conn.refreshTokenEnc, k, aad(conn.storeId, conn.provider, "refresh")));
   const enc = encryptAdTokens(conn.storeId, provider, fresh);
-  await systemDb.adConnection.update({ where: { id: conn.id }, data: { accessTokenEnc: enc.accessTokenEnc, accessTokenExpiresAt: enc.accessTokenExpiresAt, tokenKeyVersion: enc.tokenKeyVersion } });
+  // Every account connected in the same sign-in shares the token: keep them all on the new one.
+  // A refresh token Google replaced must be stored, or the next refresh fails.
+  const data = {
+    accessTokenEnc: enc.accessTokenEnc,
+    accessTokenExpiresAt: enc.accessTokenExpiresAt,
+    tokenKeyVersion: enc.tokenKeyVersion,
+    ...(fresh.rotated ? { refreshTokenEnc: enc.refreshTokenEnc } : {}),
+  };
+  await systemDb.adConnection.updateMany({ where: fresh.rotated ? { storeId: conn.storeId, provider: conn.provider, refreshTokenEnc: conn.refreshTokenEnc } : { id: conn.id }, data });
   return fresh.accessToken;
 }
 
@@ -325,7 +349,7 @@ export async function syncAdConnection(connectionId: string, since: string, unti
  * (expired, revoked, ads_read taken back) marks the connection "reconnect", as a sync would, so
  * the dashboard stops presenting its numbers as current.
  */
-export async function metaReportForConnection(conn: AdConnection, level: MetaReportLevel, since: string, until: string, fetchImpl?: FetchLike): Promise<MetaReport> {
+export async function metaReportForConnection(conn: AdConnection, level: MetaReportView, since: string, until: string, fetchImpl?: FetchLike): Promise<MetaReport> {
   const cfg = metaConfig(fetchImpl);
   if (!cfg) throw new AdsApiError("Meta isn't set up on this server", 503);
   try {
@@ -344,6 +368,71 @@ export async function metaReportForConnection(conn: AdConnection, level: MetaRep
       await systemDb.adConnection.update({ where: { id: conn.id }, data: { status: "reconnect", lastError: err.message.slice(0, 500) } });
     }
     throw err;
+  }
+}
+
+/**
+ * The Google Ads report for one connected account and range, straight from Google. Lost access
+ * (revoked, expired refresh token) marks the connection "reconnect", as a sync would.
+ */
+export async function googleReportForConnection(conn: AdConnection, level: GoogleReportLevel, since: string, until: string, fetchImpl?: FetchLike): Promise<GoogleReport> {
+  const cfg = googleConfig(fetchImpl);
+  if (!cfg) throw new AdsApiError("Google Ads isn't set up on this server", 503);
+  try {
+    const token = await adAccessToken(conn, fetchImpl);
+    return await googleReport(cfg, token, conn, level, since, until);
+  } catch (err) {
+    if (err instanceof AdsAuthError) {
+      await systemDb.adConnection.update({ where: { id: conn.id }, data: { status: "reconnect", lastError: err.message.slice(0, 500) } });
+    }
+    throw err;
+  }
+}
+
+/** Google Ads and AdSense sign in through one Google client, so one person's grant covers both. */
+const grantFamily = (provider: string): AdProvider[] => (provider === "meta" ? ["meta"] : ["google", "adsense"]);
+
+/**
+ * A refresh token this person already gave Insights, for a sign-in where Google didn't send a new
+ * one (it only does on first consent). Taken from another of their connections on the same platform.
+ */
+export async function reusableRefreshToken(provider: AdProvider, externalUserId: string | null): Promise<string | null> {
+  if (provider === "meta" || !externalUserId) return null;
+  const row = await systemDb.adConnection.findFirst({
+    where: { provider, externalUserId, refreshTokenEnc: { not: null }, status: { not: "reconnect" } },
+    orderBy: { updatedAt: "desc" },
+  });
+  if (!row?.refreshTokenEnc) return null;
+  return decrypt(row.refreshTokenEnc, keyring(), aad(row.storeId, row.provider, "refresh"));
+}
+
+export type RevokeOutcome = "revoked" | "still_used" | "unknown_person" | "not_configured" | "failed";
+
+/**
+ * After a disconnect: take back the platform access too, unless another connection still relies
+ * on the same person's grant (another store, or AdSense next to Google Ads). Google revokes the
+ * person's whole grant to Insights' client; Meta drops only ads_read (WhatsApp keeps working).
+ * Best effort: the connection is already gone whatever the platform answers.
+ */
+export async function revokeAdAccessIfUnused(conn: AdConnection, fetchImpl?: FetchLike): Promise<RevokeOutcome> {
+  if (!conn.externalUserId) return "unknown_person";
+  const others = await systemDb.adConnection.count({ where: { externalUserId: conn.externalUserId, provider: { in: grantFamily(conn.provider) }, NOT: { id: conn.id } } });
+  if (others > 0) return "still_used";
+  const k = keyring();
+  try {
+    if (conn.provider === "meta") {
+      const cfg = metaConfig(fetchImpl);
+      if (!cfg) return "not_configured";
+      await metaRevokeAdsRead(cfg, decrypt(conn.accessTokenEnc, k, aad(conn.storeId, conn.provider, "access")));
+    } else {
+      // Revoking the refresh token ends its access tokens too.
+      const token = conn.refreshTokenEnc ? decrypt(conn.refreshTokenEnc, k, aad(conn.storeId, conn.provider, "refresh")) : decrypt(conn.accessTokenEnc, k, aad(conn.storeId, conn.provider, "access"));
+      await googleRevoke({ fetchImpl }, token);
+    }
+    return "revoked";
+  } catch (err) {
+    logger.warn({ err, connectionId: conn.id, provider: conn.provider }, "ad access revoke failed");
+    return "failed";
   }
 }
 

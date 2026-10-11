@@ -1,0 +1,315 @@
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { systemDb } from "@app/db";
+import { adAccessToken, type FetchLike } from "@app/core";
+import { pkceChallenge } from "@app/shared";
+import { clean, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
+
+/**
+ * "Continue with Google Ads" / "Continue with Meta Ads" beyond the first connect: PKCE, who signed
+ * in, refresh tokens Google doesn't resend or replaces, giving access back on disconnect, and the
+ * live Google Ads report.
+ */
+
+let ctx: TestCtx;
+beforeAll(async () => (ctx = await setup()));
+afterAll(async () => teardown(ctx));
+
+const KEYS = {
+  META_APP_ID: "meta_app",
+  META_APP_SECRET: "meta_secret",
+  GOOGLE_ADS_CLIENT_ID: "g_client",
+  GOOGLE_ADS_CLIENT_SECRET: "g_secret",
+  GOOGLE_ADS_DEVELOPER_TOKEN: "g_dev",
+};
+
+const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+
+interface GoogleSeen {
+  exchanges: URLSearchParams[];
+  refreshes: string[];
+  revoked: string[];
+  reportQueries: string[];
+}
+
+/**
+ * Google's OAuth endpoints, tokeninfo, Google Ads and AdSense. `refreshToken` is what a code
+ * exchange hands out (null: none, as on a repeat consent); `rotateTo` is what a refresh hands back.
+ */
+function googlePlatform(seen: GoogleSeen, opts: { refreshToken?: string | null; rotateTo?: string; sub?: string | null; accounts?: string[]; refreshFails?: boolean } = {}): FetchLike {
+  return async (input, init) => {
+    const u = new URL(String(input));
+    if (u.host === "oauth2.googleapis.com" && u.pathname === "/token") {
+      const form = new URLSearchParams(String(init?.body));
+      if (form.get("grant_type") === "authorization_code") {
+        seen.exchanges.push(form);
+        const refresh = opts.refreshToken === undefined ? "G_REFRESH_1" : opts.refreshToken;
+        const scope = form.get("redirect_uri")!.includes("/adsense/") ? "https://www.googleapis.com/auth/adsense.readonly" : "https://www.googleapis.com/auth/adwords";
+        return json({ access_token: "G_ACCESS", expires_in: 3599, scope, ...(refresh ? { refresh_token: refresh } : {}) });
+      }
+      seen.refreshes.push(form.get("refresh_token")!);
+      if (opts.refreshFails) return json({ error: "invalid_grant", error_description: "Token has been expired or revoked." }, 400);
+      return json({ access_token: "G_ACCESS_2", expires_in: 3599, ...(opts.rotateTo ? { refresh_token: opts.rotateTo } : {}) });
+    }
+    if (u.host === "oauth2.googleapis.com" && u.pathname === "/tokeninfo") {
+      return opts.sub === null ? json({ error: "invalid_token" }, 400) : json({ aud: "g_client", sub: opts.sub ?? "100200300", scope: "x" });
+    }
+    if (u.host === "oauth2.googleapis.com" && u.pathname === "/revoke") {
+      seen.revoked.push(new URLSearchParams(String(init?.body)).get("token")!);
+      return new Response("{}", { status: 200 });
+    }
+    if (u.pathname.endsWith("customers:listAccessibleCustomers")) return json({ resourceNames: (opts.accounts ?? ["111"]).map((a) => `customers/${a}`) });
+    if (u.pathname.endsWith("googleAds:searchStream")) {
+      const id = u.pathname.split("/")[3]!;
+      const query = (JSON.parse(String(init?.body)) as { query: string }).query;
+      if (query.endsWith("FROM customer")) return json([{ results: [{ customer: { id, descriptiveName: `Account ${id}`, currencyCode: "USD", timeZone: "UTC", manager: false } }] }]);
+      seen.reportQueries.push(query);
+      if (query.startsWith("SELECT metrics.")) return json([{ results: [{ metrics: { costMicros: "30000000", impressions: "3000", clicks: "60", conversions: 3, conversionsValue: 150 } }] }]);
+      return json([{ results: [{ campaign: { id: "7", name: "Search - brand", status: "ENABLED", advertisingChannelType: "SEARCH" }, campaignBudget: { amountMicros: "10000000" }, metrics: { costMicros: "30000000", impressions: "3000", clicks: "60", conversions: 3, conversionsValue: 150 } }] }]);
+    }
+    if (u.host === "adsense.googleapis.com" && u.pathname === "/v2/accounts") return json({ accounts: [{ name: "accounts/pub-77", displayName: "Shop site", timeZone: { id: "UTC" }, state: "READY" }] });
+    return json({ error: { message: `unexpected ${u.host}${u.pathname}` } }, 400);
+  };
+}
+
+/** Meta's token endpoints, permissions, /me and two ad accounts; records permission revocations. */
+function metaPlatform(revoked: string[]): FetchLike {
+  return async (input, init) => {
+    const u = new URL(String(input));
+    if (u.pathname.endsWith("/oauth/access_token")) {
+      return u.searchParams.get("grant_type") === "fb_exchange_token" ? json({ access_token: "META_LONG", expires_in: 5_184_000 }) : json({ access_token: "META_SHORT", expires_in: 3600 });
+    }
+    if (u.pathname.endsWith("/me/permissions/ads_read") && init?.method === "DELETE") {
+      revoked.push(new URLSearchParams(String(init.body)).get("access_token")!);
+      return json({ success: true });
+    }
+    if (u.pathname.endsWith("/me/permissions")) return json({ data: [{ permission: "ads_read", status: "granted" }] });
+    if (u.pathname.endsWith("/me")) return json({ id: "5550001" });
+    if (u.pathname.endsWith("/me/adaccounts")) {
+      return json({ data: [{ id: "act_1", name: "Shop ads", currency: "USD", timezone_name: "UTC" }, { id: "act_2", name: "EU ads", currency: "EUR", timezone_name: "Europe/Paris" }] });
+    }
+    return json({ error: { message: `unexpected ${u.pathname}` } }, 400);
+  };
+}
+
+let headers: Record<string, string>;
+let cookie: string;
+let ws: string;
+let storeId: string;
+
+beforeEach(async () => {
+  await clean(ctx);
+  ctx.setEnv(KEYS);
+  const u = await signIn(ctx, "ads-life-owner", "owner@x.com");
+  headers = u.headers;
+  cookie = u.cookie;
+  ws = await createWorkspace(ctx, headers);
+  storeId = (await createStore(ws, "ads-life.myshopify.com", ["read_orders"], { currency: "USD" })).id;
+});
+
+/** Start a connect for `store` and follow the platform back to our callback; when it offers a choice, take every account. */
+async function connect(provider: "meta" | "google" | "adsense", store = storeId) {
+  const start = await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/stores/${store}/ads/${provider}/connect`, headers });
+  expect(start.statusCode).toBe(200);
+  const url = new URL(start.json().url);
+  const state = url.searchParams.get("state")!;
+  const cb = await ctx.app.inject({ method: "GET", url: `/ads/${provider}/callback?${new URLSearchParams({ state, code: "CODE" })}`, headers: { cookie: `${cookie}; ads_oauth_state=${state}` } });
+  expect(cb.statusCode).toBe(302);
+  const location = new URL(cb.headers.location as string);
+  const pick = location.searchParams.get("choose");
+  if (pick) {
+    const pending = `/workspaces/${ws}/stores/${store}/ads/pending/${pick}`;
+    const list = await ctx.app.inject({ method: "GET", url: pending, headers });
+    const ids = (list.json().accounts as Array<{ accountId: string }>).map((a) => a.accountId);
+    expect((await ctx.app.inject({ method: "POST", url: pending, headers, payload: { accountIds: ids } })).statusCode).toBe(200);
+  }
+  return { url, location };
+}
+
+const disconnect = (id: string, store = storeId) => ctx.app.inject({ method: "DELETE", url: `/workspaces/${ws}/stores/${store}/ads/connections/${id}`, headers });
+const fresh = (): GoogleSeen => ({ exchanges: [], refreshes: [], revoked: [], reportQueries: [] });
+const expire = (ids: string[]) => systemDb.adConnection.updateMany({ where: { id: { in: ids } }, data: { accessTokenExpiresAt: new Date(Date.now() - 60_000) } });
+
+describe("Continue with Google Ads: the sign-in", () => {
+  it("PKCE ties the code to this sign-in; who signed in and what they granted are kept; the browser never sees a token", async () => {
+    const seen = fresh();
+    ctx.setFetch(googlePlatform(seen));
+    const { url, location } = await connect("google");
+    expect(url.searchParams.get("code_challenge_method")).toBe("S256");
+    expect(location.pathname).toBe("/dashboard");
+    // The verifier was never in the browser, yet the exchange carried the one that matches the challenge.
+    const verifier = seen.exchanges[0]!.get("code_verifier")!;
+    expect(verifier).toBeTruthy();
+    expect(pkceChallenge(verifier)).toBe(url.searchParams.get("code_challenge"));
+    expect(url.toString()).not.toContain(verifier);
+
+    const row = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, provider: "google" } });
+    expect(row).toMatchObject({ accountId: "111", externalUserId: "100200300", grantedScopes: ["https://www.googleapis.com/auth/adwords"] });
+    const list = await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${storeId}/ads`, headers });
+    expect(list.json().connections[0]).toMatchObject({ provider: "google", status: "active", grantedScopes: ["https://www.googleapis.com/auth/adwords"] });
+    expect(list.body).not.toContain("G_REFRESH_1");
+    expect(list.body).not.toContain("G_ACCESS");
+    expect(list.body).not.toContain("100200300");
+  });
+
+  it("a sign-in where Google sends no new refresh token reuses the one this person already gave; a first-timer is told to try again", async () => {
+    const seen = fresh();
+    ctx.setFetch(googlePlatform(seen));
+    await connect("google");
+    const second = (await createStore(ws, "ads-life-2.myshopify.com", ["read_orders"], { currency: "USD" })).id;
+    const repeat = googlePlatform(seen, { refreshToken: null });
+    ctx.setFetch(repeat);
+    const { location } = await connect("google", second);
+    expect(location.pathname).toBe("/dashboard");
+    const row = await systemDb.adConnection.findFirstOrThrow({ where: { storeId: second, provider: "google" } });
+    await expire([row.id]);
+    await adAccessToken(await systemDb.adConnection.findUniqueOrThrow({ where: { id: row.id } }), repeat);
+    expect(seen.refreshes).toEqual(["G_REFRESH_1"]);
+
+    // Someone Insights has never had a refresh token from.
+    ctx.setFetch(googlePlatform(fresh(), { refreshToken: null, sub: "999" }));
+    const third = (await createStore(ws, "ads-life-3.myshopify.com", ["read_orders"], { currency: "USD" })).id;
+    const start = await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/stores/${third}/ads/google/connect`, headers });
+    const state = new URL(start.json().url).searchParams.get("state")!;
+    const cb = await ctx.app.inject({ method: "GET", url: `/ads/google/callback?state=${state}&code=C`, headers: { cookie: `${cookie}; ads_oauth_state=${state}` } });
+    expect(new URL(cb.headers.location as string).searchParams.get("error")).toBe("no_refresh_token");
+  });
+
+  it("a refresh token Google replaces is stored for every account that shares it", async () => {
+    const seen = fresh();
+    const rotating = googlePlatform(seen, { accounts: ["111", "222"], rotateTo: "G_REFRESH_2" });
+    ctx.setFetch(rotating);
+    await connect("google");
+    const rows = await systemDb.adConnection.findMany({ where: { storeId, provider: "google" }, orderBy: { accountId: "asc" } });
+    expect(rows).toHaveLength(2);
+    await expire(rows.map((r) => r.id));
+    await adAccessToken(await systemDb.adConnection.findUniqueOrThrow({ where: { id: rows[0]!.id } }), rotating);
+    // The other account got the new access token too; once that runs out, it refreshes with the replacement, not the retired token.
+    const second = await systemDb.adConnection.findUniqueOrThrow({ where: { id: rows[1]!.id } });
+    expect(second.accessTokenExpiresAt!.getTime()).toBeGreaterThan(Date.now());
+    await expire([second.id]);
+    await adAccessToken(await systemDb.adConnection.findUniqueOrThrow({ where: { id: second.id } }), googlePlatform(seen));
+    expect(seen.refreshes).toEqual(["G_REFRESH_1", "G_REFRESH_2"]);
+  });
+});
+
+describe("disconnecting gives access back to the platform, only when nothing else relies on it", () => {
+  it("Google: Google Ads and AdSense share one person's grant, so it is revoked with the last of them", async () => {
+    const seen = fresh();
+    ctx.setFetch(googlePlatform(seen));
+    await connect("google");
+    await connect("adsense");
+    const g = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, provider: "google" } });
+    const a = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, provider: "adsense" } });
+    const first = await disconnect(g.id);
+    expect(first.json()).toEqual({ ok: true, revoked: "still_used" });
+    expect(seen.revoked).toEqual([]);
+    const last = await disconnect(a.id);
+    expect(last.json()).toEqual({ ok: true, revoked: "revoked" });
+    expect(seen.revoked).toEqual(["G_REFRESH_1"]);
+    expect(await systemDb.adConnection.count()).toBe(0);
+    const audit = await systemDb.auditLog.findMany({ where: { action: "ads.disconnected" }, orderBy: { createdAt: "asc" } });
+    expect(audit.map((x) => (x.metadata as { revoked: string }).revoked)).toEqual(["still_used", "revoked"]);
+  });
+
+  it("Meta: ads_read is dropped (and nothing else) when the last account from that login goes", async () => {
+    const revoked: string[] = [];
+    ctx.setFetch(metaPlatform(revoked));
+    await connect("meta");
+    const rows = await systemDb.adConnection.findMany({ where: { storeId, provider: "meta" }, orderBy: { accountId: "asc" } });
+    expect(rows.map((r) => r.externalUserId)).toEqual(["5550001", "5550001"]);
+    expect((await disconnect(rows[0]!.id)).json().revoked).toBe("still_used");
+    expect(revoked).toEqual([]);
+    expect((await disconnect(rows[1]!.id)).json().revoked).toBe("revoked");
+    expect(revoked).toEqual(["META_LONG"]);
+  });
+
+  it("when Google wouldn't say who signed in, nothing is revoked (it can't be told whether another connection relies on it)", async () => {
+    const seen = fresh();
+    ctx.setFetch(googlePlatform(seen, { sub: null }));
+    await connect("google");
+    const g = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, provider: "google" } });
+    expect(g.externalUserId).toBeNull();
+    expect((await disconnect(g.id)).json()).toEqual({ ok: true, revoked: "unknown_person" });
+    expect(seen.revoked).toEqual([]);
+  });
+});
+
+describe("the Google Ads report", () => {
+  const reportUrl = (connection: string, q: Record<string, string> = {}) =>
+    `/workspaces/${ws}/stores/${storeId}/ads/google/report?${new URLSearchParams({ connection, from: "2026-09-01", to: "2026-09-30", ...q })}`;
+
+  it("asks Google for exactly those dates: account totals and campaigns with status, type and budget; cached", async () => {
+    const seen = fresh();
+    ctx.setFetch(googlePlatform(seen));
+    await connect("google");
+    const conn = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, provider: "google" } });
+    const res = await ctx.app.inject({ method: "GET", url: reportUrl(conn.id), headers });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.cached).toBe(false);
+    expect(body.account).toMatchObject({ accountId: "111", currency: "USD" });
+    expect(body.report.totals).toMatchObject({ spend: 30, impressions: 3000, clicks: 60, conversions: 3, conversionValue: 150, roas: 5 });
+    expect(body.report.rows).toEqual([expect.objectContaining({ id: "7", name: "Search - brand", status: "ENABLED", channel: "SEARCH", dailyBudget: 10, spend: 30, cpc: 0.5 })]);
+    expect(seen.reportQueries.every((q) => q.includes("BETWEEN '2026-09-01' AND '2026-09-30'"))).toBe(true);
+    expect(res.body).not.toContain("G_ACCESS");
+    const again = await ctx.app.inject({ method: "GET", url: reportUrl(conn.id), headers });
+    expect(again.json().cached).toBe(true);
+    expect(seen.reportQueries).toHaveLength(2);
+  });
+
+  it("is only for the workspace and store the account belongs to, refuses unknown levels and bad dates", async () => {
+    ctx.setFetch(googlePlatform(fresh()));
+    await connect("google");
+    const conn = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, provider: "google" } });
+    const other = await signIn(ctx, "ads-life-other", "other@x.com");
+    const otherWs = await createWorkspace(ctx, other.headers, "Other");
+    const otherStore = (await createStore(otherWs, "ads-life-other.myshopify.com", ["read_orders"])).id;
+    const cross = await ctx.app.inject({ method: "GET", url: `/workspaces/${otherWs}/stores/${otherStore}/ads/google/report?connection=${conn.id}&from=2026-09-01&to=2026-09-30`, headers: other.headers });
+    expect(cross.statusCode).toBe(404);
+    // Someone outside the workspace can't tell it exists.
+    expect((await ctx.app.inject({ method: "GET", url: reportUrl(conn.id), headers: other.headers })).statusCode).toBe(404);
+    const bad: Array<Record<string, string>> = [{ level: "keyword" }, { from: "2026-09-30", to: "2026-09-01" }, { from: "2026-02-31" }];
+    for (const q of bad) {
+      expect((await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, q), headers })).statusCode).toBe(400);
+    }
+    for (const level of ["ad_group", "device", "country"]) {
+      expect((await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, { level }), headers })).statusCode).toBe(200);
+    }
+  });
+
+  it("access Google took back marks the account 'reconnect' and says so, instead of showing old numbers", async () => {
+    ctx.setFetch(googlePlatform(fresh()));
+    await connect("google");
+    const conn = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, provider: "google" } });
+    await expire([conn.id]);
+    ctx.setFetch(googlePlatform(fresh(), { refreshFails: true }));
+    const res = await ctx.app.inject({ method: "GET", url: reportUrl(conn.id), headers });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe("reconnect");
+    expect((await systemDb.adConnection.findUniqueOrThrow({ where: { id: conn.id } })).status).toBe("reconnect");
+  });
+});
+
+describe("the Meta Ads report's splits", () => {
+  it("placement, device and country are accepted views", async () => {
+    const revoked: string[] = [];
+    ctx.setFetch(async (input, init) => {
+      const u = new URL(String(input));
+      if (u.pathname.endsWith("/act_1/insights")) {
+        const b = u.searchParams.get("breakdowns");
+        if (!b) return json({ data: [{ spend: "10", impressions: "100", reach: "50" }] });
+        return json({ data: [{ publisher_platform: "facebook", platform_position: "feed", impression_device: "iphone", country: "AU", spend: "10", impressions: "100", reach: "50" }] });
+      }
+      return metaPlatform(revoked)(input, init);
+    });
+    await connect("meta");
+    const conn = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, accountId: "act_1" } });
+    const names: string[] = [];
+    for (const level of ["placement", "device", "country"]) {
+      const res = await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${storeId}/ads/meta/report?connection=${conn.id}&level=${level}&from=2026-09-01&to=2026-09-30`, headers });
+      expect(res.statusCode).toBe(200);
+      names.push(res.json().report.rows[0].name);
+    }
+    expect(names).toEqual(["Facebook · Feed", "iPhone", "Australia"]);
+  });
+});

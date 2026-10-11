@@ -356,11 +356,16 @@ model AdConnection {
   accessTokenExpiresAt DateTime? @map("access_token_expires_at")
   tokenKeyVersion      Int       @map("token_key_version")
   connectedByUserId    String?   @map("connected_by_user_id")
+  /** The platform's id for the person who granted access (Google `sub`, Meta app-scoped user id). */
+  externalUserId       String?   @map("external_user_id")
+  /** The permissions that person granted (checked when connecting). */
+  grantedScopes        String[]  @default([]) @map("granted_scopes")
   createdAt            DateTime  @default(now()) @map("created_at")
   updatedAt            DateTime  @updatedAt @map("updated_at")
 
   @@unique([storeId, provider, accountId])
   @@index([workspaceId])
+  @@index([externalUserId])
   @@map("ad_connections")
 }
 

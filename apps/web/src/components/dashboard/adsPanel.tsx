@@ -6,6 +6,7 @@ import { GoogleIcon, MetaIcon } from "@/components/BrandIcons";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { fmtDay, fmtLongDay, fmtMoneyCompact, fmtMoneyWhole, fmtRange, fmtRelative, fmtSpan, fmtWeekday, plural } from "./format";
 import { Icon } from "./icons";
+import { GoogleReportPanel } from "./googleReport";
 import { MetaReportPanel } from "./metaReport";
 import { Delta, Panel, Stat } from "./primitives";
 import { ColumnsWithTotal, type Column } from "./salesBreakdown";
@@ -240,6 +241,7 @@ export function AdsDetail({ ov }: { ov: Overview }) {
         )}
       </Panel>
 
+      {a.accounts.some((acc) => acc.provider === "google" && acc.status !== "reconnect") && <GoogleReportPanel ov={ov} accounts={a.accounts.filter((acc) => acc.status !== "reconnect")} />}
       {a.accounts.some((acc) => acc.provider === "meta" && acc.status !== "reconnect") && <MetaReportPanel ov={ov} accounts={a.accounts.filter((acc) => acc.status !== "reconnect")} />}
 
       <Panel id="d-ads-accounts" title="Ad accounts" help="Read-only. Turn accounts on or off, reconnect or disconnect them in Settings." aside={<Link className="text-xs text-accent underline" href="/settings/ads">Manage ad accounts</Link>}>
