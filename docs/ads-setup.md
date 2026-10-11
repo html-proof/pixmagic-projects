@@ -83,7 +83,10 @@ The redirect (callback) addresses, which both platforms must have registered **e
 - Google Ads: `https://insights.imeseban.workers.dev/api/ads/google/callback`
 - Google AdSense: `https://insights.imeseban.workers.dev/api/ads/adsense/callback` (on the same Google OAuth client)
 
-(For local development: `http://localhost:8787/api/ads/<provider>/callback`, with the keys in `apps/cloudflare/.dev.vars`.)
+(Local development: since 2026-10-11 the production client "Insights web" no longer lists `localhost` redirect URIs, because
+Google's OAuth policies want separate clients/projects per deployment tier for verification. To test Google sign-in locally,
+create a separate OAuth client in a separate Cloud project with `http://localhost:8787/api/ads/<provider>/callback` and put
+its id/secret in `apps/cloudflare/.dev.vars`. Paste-ready review material for both platforms: `docs/ads-review-packs.md`.)
 
 ## 1. Meta (Facebook and Instagram ads)
 

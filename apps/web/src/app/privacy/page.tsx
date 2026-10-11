@@ -126,9 +126,15 @@ export default function PrivacyPage() {
           Google AdSense with <code>adsense.readonly</code>. It reads account names, ids, currency and time zone; campaign, ad
           group, ad set and ad names, status, type and budget; and what was spent, shown, reached, clicked and the conversions
           and purchases the platform credits to its ads, per day, by device and by country; and, for AdSense, your site&apos;s
-          estimated earnings, page views and clicks. It keeps those figures so the dashboard can compare periods, and deletes
-          them, with the access token, when you disconnect the account, and gives the access back to Meta or Google. Insights
-          never creates, changes or pauses an ad, never changes a budget or billing, and never spends money.
+          estimated earnings, page views and clicks. It keeps those figures so the dashboard can compare periods. With each
+          connection it also keeps the platform&apos;s id for the person who signed in (Google&apos;s account id, Meta&apos;s
+          app-scoped user id) and the permissions they granted, so that disconnecting gives the access back only when no other
+          account you connected relies on it. When you disconnect an account, Insights deletes its figures and access token at
+          once and then gives the access back to Google or Meta (Google Ads and AdSense share one Google sign-in, so Google&apos;s
+          access is returned with the last of them). If you remove Insights&apos; access in your Google or Meta account instead,
+          Insights stops reading at once, marks the account &ldquo;Needs reconnecting&rdquo; and keeps the figures already
+          fetched until you disconnect it or ask us to delete them (see <a href="/data-deletion">how to delete your data</a>).
+          Insights never creates, changes or pauses an ad, never changes a budget or billing, and never spends money.
         </p>
         <p>
           Insights&apos; use and transfer of information received from Google APIs adheres to the{" "}
