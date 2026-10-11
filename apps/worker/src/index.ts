@@ -221,8 +221,15 @@ export async function runScheduled(cron: string, deps: WorkerDeps) {
   // Shares the */15 trigger rather than adding a schedule: both are cheap sweeps, and a stale
   // job only needs noticing within the window it has already been stuck for.
   if (cron === CRON.refreshTokens) {
-    const refreshed = await refreshExpiringTokens(deps);
-    const staleJobsFailed = await failStaleJobs(deps);
+    // Each sweep fails on its own: one that throws is logged and the rest still run this tick.
+    const refreshed = await refreshExpiringTokens(deps).catch((err: unknown) => {
+      logger.error({ err }, "token refresh sweep failed; the next tick tries again");
+      return null;
+    });
+    const staleJobsFailed = await failStaleJobs(deps).catch((err: unknown) => {
+      logger.error({ err }, "stale job sweep failed; the next tick tries again");
+      return null;
+    });
     // The reconcile rides on every tick too: run once at 03:15, a database that was unreachable
     // then (the PC asleep or offline, as it often is at that hour) skipped the day's safety net
     // with nothing to catch up, and in production it went four days without once getting through.

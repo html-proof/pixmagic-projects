@@ -361,7 +361,7 @@ export function adsRoutes(app: App, deps: Deps) {
     if (!conn) throw new HttpError(404, "Not found", "not_found");
     const updated = await systemDb.adConnection.update({ where: { id: conn.id }, data: { enabled } });
     if (enabled && !conn.enabled) await enqueueAdSync(deps.queues, updated, ADS_RECHECK_DAYS);
-    await audit({ workspaceId: ws, actorUserId: access.user?.id ?? null, action: enabled ? "ads.account_shown" : "ads.account_hidden", targetType: "ad_connection", targetId: conn.id, ip: clientIp(c) }).catch(() => {});
+    await audit({ workspaceId: ws, actorUserId: access.user?.id ?? null, action: enabled ? "ads.account_shown" : "ads.account_hidden", targetType: "ad_connection", targetId: conn.id, ip: clientIp(c) }).catch((err: unknown) => logger.warn({ err }, "audit failed"));
     return c.json({ connection: publicConnection(updated) });
   });
 
@@ -386,7 +386,7 @@ export function adsRoutes(app: App, deps: Deps) {
       targetId: storeId,
       metadata: { provider: conn.provider, accountId: conn.accountId, revoked },
       ip: clientIp(c),
-    }).catch(() => {});
+    }).catch((err: unknown) => logger.warn({ err }, "audit failed"));
     return c.json({ ok: true, revoked });
   });
 

@@ -153,6 +153,11 @@ export default {
       withDb(dbUrls(env), async () => {
         const result = await runScheduled(controller.cron, workerDeps(env));
         logger.info({ cron: controller.cron, ...result }, "scheduled run finished");
+      }).catch((err: unknown) => {
+        // Logged in the structured format the other logs use; rethrown so Cloudflare still
+        // records the run as failed.
+        logger.error({ err, cron: controller.cron }, "scheduled run failed");
+        throw err;
       }),
     );
   },

@@ -10,6 +10,7 @@ import {
   orderValues,
   parseConfig,
   parseRule,
+  NotRetryableError,
   requeueMessage,
   scheduleMessage,
   storeName,
@@ -172,7 +173,9 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
     try {
       await requeueMessage(msg, deps);
     } catch (err) {
-      throw new HttpError(409, (err as Error).message, "not_retryable");
+      // Anything else (database, queue) is a real failure: the global handler logs it.
+      if (err instanceof NotRetryableError) throw new HttpError(409, err.message, "not_retryable");
+      throw err;
     }
     await audit({ workspaceId: ws, actorUserId: access.user!.id, action: "whatsapp.message_retried", targetType: "whatsapp_message", targetId: id, ip: clientIp(c) });
     return c.json({ ok: true });
@@ -393,11 +396,13 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
     await waStore(ws, storeId);
     const q = c.req.query();
     const take = Math.min(100, Math.max(1, Number(q.limit) || 30));
+    // A rating that isn't 1-5 is ignored, like a malformed date in range().
+    const rating = Number(q.rating);
     const scope = { storeId, workspaceId: ws };
     const [rows, byStatus, dist, avg] = await withTenant(ws, (tx) =>
       Promise.all([
         tx.customerReview.findMany({
-          where: { ...scope, ...(q.status ? { status: q.status } : {}), ...(q.rating ? { rating: Number(q.rating) } : {}) },
+          where: { ...scope, ...(q.status ? { status: q.status } : {}), ...(Number.isInteger(rating) && rating >= 1 && rating <= 5 ? { rating } : {}) },
           orderBy: [{ submittedAt: "desc" }, { id: "desc" }],
           take: take + 1,
           ...(q.cursor ? { cursor: { id: q.cursor }, skip: 1 } : {}),
