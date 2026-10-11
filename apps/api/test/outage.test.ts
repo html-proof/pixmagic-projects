@@ -98,6 +98,21 @@ describe("while the database is unreachable", () => {
     expect((await dbDown(() => ctx.app.inject({ method: "GET", url: "/auth/whoami" }))).json()).toEqual({ user: null, workspaces: [] });
   });
 
+  it("any other request says 'try again' (503) instead of a bare 500", async () => {
+    // Production: the dashboard overview and WhatsApp tab answered 500 whenever the tunnel dropped.
+    const overview = () =>
+      ctx.app.inject({ method: "GET", url: "/workspaces/w1/stores/s1/overview", headers: { authorization: "Bearer sk_test" } });
+    const during = await dbDown(overview);
+    expect(during.statusCode).toBe(503);
+    expect(during.json()).toEqual({ error: "db_unavailable", message: expect.stringMatching(/try again/) });
+    expect(during.headers["retry-after"]).toBe("5");
+
+    // While the database answers, an unexpected error is ours: still a 500, never passed off as an outage.
+    const ours = await dropping(systemDb.apiKey, "findUnique", overview);
+    expect(ours.statusCode).toBe(500);
+    expect(ours.json().error).toBe("internal");
+  });
+
   it("sign-out still clears the session cookie", async () => {
     const { headers } = await signIn(ctx, "u1", "a@x.com");
     const res = await dbDown(() => ctx.app.inject({ method: "POST", url: "/auth/logout", headers }));
