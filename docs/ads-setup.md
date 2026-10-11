@@ -160,7 +160,7 @@ npx wrangler secret put GOOGLE_ADS_DEVELOPER_TOKEN
 ```
 
 1. Put the two public ids in `wrangler.jsonc` and deploy (see `docs/deployment-cloudflare.md`).
-2. The database needs migrations `20261009185831_ad_accounts`, `20261010080000_adsense_daily` and `20261011120000_ad_connection_identity` (run `pnpm db:migrate` against the owner role **before** deploying; the last one only adds two columns and an index).
+2. The database needs migrations `20261009185831_ad_accounts`, `20261010080000_adsense_daily` and `20261011130000_ad_connection_identity` (run `pnpm db:migrate` against the owner role **before** deploying; the last one only adds two columns and an index).
 3. Open **Settings → Advertising** (or press **Connect advertising accounts** on the dashboard).
    - Press **Continue with Meta Ads**, **Continue with Google AdSense** or **Continue with Google Ads**, and approve.
    - If the login sees several accounts, tick the ones for this store.
@@ -178,7 +178,7 @@ npx wrangler secret put GOOGLE_ADS_DEVELOPER_TOKEN
   `ads:<provider>:<storeId>:<kind>`), never sent to the browser or logged.
 - **Who signed in** is kept per connection (`external_user_id`: Google's `sub` from tokeninfo, checked to be a token issued to
   Insights' own client; Meta's app-scoped user id), with the permissions granted (`granted_scopes`). Migration
-  `20261011120000_ad_connection_identity`.
+  `20261011130000_ad_connection_identity`.
 - **Google refresh tokens.** Google sends one on consent (`prompt=consent`); if a sign-in comes back without one, the same
   person's existing refresh token is reused. If Google replaces a refresh token during a refresh, the new one is stored for
   every account that shares it.
