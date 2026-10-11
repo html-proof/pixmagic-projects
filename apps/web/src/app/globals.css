@@ -423,7 +423,7 @@ html {
   border-radius: 28px;
   box-shadow: var(--lp-card-shadow);
 }
-/* Primary call to action (Sign up / Start with Insight). */
+/* Primary call to action (Sign up / Start with Insights). */
 @utility lp-btn-primary {
   display: inline-flex;
   align-items: center;

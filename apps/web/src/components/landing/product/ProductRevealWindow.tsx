@@ -25,7 +25,7 @@ import { easeInOut, easeOut, seeded, segment } from "@/lib/motion";
 import { InsightMark } from "../shared/InsightMark";
 
 /**
- * The illustrative Insight application window used by the product reveal. It only shows
+ * The illustrative Insights application window used by the product reveal. It only shows
  * structure (areas, panels, empty values, skeleton bars, abstract shapes), never figures, so
  * nobody mistakes it for their own store. Every part is driven by one 0..1 `progress` value so
  * the scene can play it from scroll, from a timer (mobile) or show it finished (reduced motion).
@@ -202,7 +202,7 @@ function TopBar({ p }: { p: MotionValue<number> }) {
     <Reveal p={p} range={S.topbar} x={0} y={-12} className="flex h-12 shrink-0 items-center gap-3 border-b border-lp-line bg-[#0A0D11]/80 px-3 md:h-[52px] md:px-4 md:[@media(max-height:700px)]:h-11!">
       <span className="flex items-center gap-2 text-lp-text">
         <InsightMark size={20} />
-        <span className="hidden text-[11.5px] font-semibold tracking-[0.16em] sm:inline">INSIGHT</span>
+        <span className="hidden text-[11.5px] font-semibold tracking-[0.16em] sm:inline">INSIGHTS</span>
       </span>
       <span aria-hidden className="h-5 w-px bg-lp-line-strong" />
       <span className="flex h-8 items-center gap-2 rounded-[9px] border border-lp-line bg-white/[0.02] pl-2.5 pr-2 text-[12px] text-lp-text-2">

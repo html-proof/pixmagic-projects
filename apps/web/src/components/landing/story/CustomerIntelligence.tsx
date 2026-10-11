@@ -83,7 +83,7 @@ function Intro() {
       <motion.div {...riseIn(0.25)} className="mt-8 flex flex-col items-start gap-3 md:mt-10">
         <IllustrativeNote />
         <p className="max-w-md text-[14px] leading-relaxed text-lp-muted">
-          Groups and sizes are illustrative. Insight shows new and returning customers, sales by channel and when customers
+          Groups and sizes are illustrative. Insights shows new and returning customers, sales by channel and when customers
           buy.
         </p>
       </motion.div>

@@ -14,12 +14,12 @@ import { IntelligenceCore, type CoreMotion } from "./IntelligenceCore";
 
 /* ---- Copy ------------------------------------------------------------------------------------ */
 
-const SUB = "Insight turns every order, checkout, customer and payment into a clear picture of what your business is doing.";
+const SUB = "Insights turns every order, checkout, customer and payment into a clear picture of what your business is doing.";
 const SUPPORT =
-  "Insight transforms Shopify activity into clear business intelligence, so you can make better decisions without digging through reports.";
+  "Insights transforms Shopify activity into clear business intelligence, so you can make better decisions without digging through reports.";
 const FINAL = ["Know what happened.", "Understand why.", "Know what to do next."];
 const STORY =
-  "Illustration: tiny points standing for orders, customers, products, checkouts, payments, store visits, refunds and inventory drift across the screen, then gather into the Insight core. " +
+  "Illustration: tiny points standing for orders, customers, products, checkouts, payments, store visits, refunds and inventory drift across the screen, then gather into the Insights core. " +
   "The core links them into three paths: product viewed, added to cart, checkout started, purchase, order; channel, visitor, customer, repeat purchase; and gross sales minus discounts minus refunds equals net sales. " +
   "The core then opens into a dashboard with Business health, Sales, Conversion, Customers and Products modules.";
 
@@ -226,7 +226,7 @@ function HeroCinematic({ ready }: { ready: boolean }) {
               <motion.div className={`${COLUMN} will-change-transform`} style={s3}>
                 <p className="lp-eyebrow mb-5">Patterns</p>
                 <p className={STATEMENT}>
-                  Insight connects <span className="lp-gradient-text">the dots.</span>
+                  Insights connects <span className="lp-gradient-text">the dots.</span>
                 </p>
               </motion.div>
 
@@ -252,7 +252,7 @@ function HeroCinematic({ ready }: { ready: boolean }) {
                 <motion.div className="will-change-transform" style={{ opacity: finalCopy, y: finalCopyY }}>
                   <p className="lp-lead mt-4 max-w-[32rem] text-pretty max-md:text-[15.5px] md:mt-7">{SUPPORT}</p>
                   <div className="mt-6 flex flex-col items-start gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-6 sm:gap-y-4 md:mt-9">
-                    <SignupButton size="lg">Start with Insight</SignupButton>
+                    <SignupButton size="lg">Start with Insights</SignupButton>
                     <LoginPrompt />
                   </div>
                 </motion.div>
@@ -341,7 +341,7 @@ function HeroStatic() {
               But data alone <span className="text-lp-muted">isn&rsquo;t insight.</span>
             </p>
             <p className={STATIC_STATEMENT}>
-              Insight connects <span className="lp-gradient-text">the dots.</span>
+              Insights connects <span className="lp-gradient-text">the dots.</span>
             </p>
           </div>
           <div>
@@ -368,7 +368,7 @@ function HeroStatic() {
             ))}
             <p className="lp-lead mt-6 max-w-[32rem] text-pretty md:mt-8">{SUPPORT}</p>
             <div className="mt-8 flex flex-col items-start gap-4 sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-6">
-              <SignupButton size="lg">Start with Insight</SignupButton>
+              <SignupButton size="lg">Start with Insights</SignupButton>
               <LoginPrompt />
             </div>
           </div>
@@ -388,7 +388,7 @@ const isServer = () => false;
 
 /**
  * The first screen after the intro: a scroll-driven story in five stages. A calm field of store
- * events (orders, checkouts, customers, payments…) converges into the Insight core, which links
+ * events (orders, checkouts, customers, payments…) converges into the Insights core, which links
  * them into the relationships the product reports on and then unfolds into the dashboard, ending
  * on the hero's only calls to action. With reduced motion it renders as a static composition.
  *

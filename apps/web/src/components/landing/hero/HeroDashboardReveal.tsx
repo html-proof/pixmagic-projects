@@ -260,7 +260,7 @@ function EmergingCard({
 }
 
 /**
- * Stage 4–5: the core turns into the Insight dashboard. Business health grows out of the core
+ * Stage 4–5: the core turns into the Insights dashboard. Business health grows out of the core
  * first (the sphere shrinks into its emblem), then Sales, Conversion, Customers and Products
  * scale out to their grid slots and the window frame forms around them. Values are "—" and
  * skeleton bars: this shows the shape of the product, never invented numbers.

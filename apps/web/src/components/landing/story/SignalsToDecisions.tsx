@@ -24,7 +24,7 @@ const TITLE_ID = "signals-to-decisions-title";
 /** Stand-in for `rise` on the static sheet, which does not animate. */
 const STILL = motionValue(1);
 const LEAD =
-  "Insight follows the path of your business from first visit to final purchase, then reveals where growth is happening and where revenue is being lost.";
+  "Insights follows the path of your business from first visit to final purchase, then reveals where growth is happening and where revenue is being lost.";
 
 /**
  * Section C. A sheet that rises over the end of the hero runway (the hero shrinks into a

@@ -44,7 +44,7 @@ export function Navbar({ revealed = true, brandVisible = true }: { revealed?: bo
         <nav aria-label="Main" className="flex h-full items-center justify-between pl-4 pr-2 md:pl-6 md:pr-3">
           <Link
             href="/"
-            aria-label="Insight home"
+            aria-label="Insights home"
             className="lp-focus flex items-center gap-2.5 rounded-lg text-lp-text"
             onClick={(e) => {
               // Already home: glide back to the top instead of reloading the page.
@@ -61,7 +61,7 @@ export function Navbar({ revealed = true, brandVisible = true }: { revealed?: bo
               className="lp-enter text-[14px] font-semibold tracking-[0.16em] md:text-[15px]"
               style={{ opacity: brandVisible ? 1 : 0 }}
             >
-              INSIGHT
+              INSIGHTS
             </span>
           </Link>
           <div className="flex items-center gap-1 md:gap-2">

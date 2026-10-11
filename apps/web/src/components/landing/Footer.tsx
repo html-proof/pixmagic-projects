@@ -11,7 +11,7 @@ const LINKS = [
 
 /**
  * A quiet sign-off in two lines: brand and links, then a hairline with the copyright and what
- * Insight is. Phones stack the brand over the links (each still a 44px tap target).
+ * Insights is. Phones stack the brand over the links (each still a 44px tap target).
  * The grid and the oversized wordmark are atmosphere only and fade out before any edge.
  */
 export function Footer() {
@@ -28,12 +28,12 @@ export function Footer() {
         className="lp-grid pointer-events-none absolute inset-x-0 bottom-0 -z-10 h-[70%] [mask-image:radial-gradient(ellipse_60%_100%_at_50%_100%,#000_10%,transparent_70%)] opacity-60"
       />
 
-      {/* Oversized wordmark, rising out of the bottom edge and fading away towards it. */}
+      {/* Oversized wordmark, rising out of the bottom edge and fading away towards it. Sized so the 8 letters span what 7 did. */}
       <span
         aria-hidden
-        className="pointer-events-none absolute inset-x-0 bottom-0 -z-10 translate-y-[34%] select-none text-center text-[clamp(88px,21vw,300px)] font-semibold leading-none tracking-[-0.03em] whitespace-nowrap"
+        className="pointer-events-none absolute inset-x-0 bottom-0 -z-10 translate-y-[34%] select-none text-center text-[clamp(77px,18.4vw,262px)] font-semibold leading-none tracking-[-0.03em] whitespace-nowrap"
       >
-        <span className="bg-[linear-gradient(180deg,rgb(255_255_255/0.07),rgb(255_255_255/0)_70%)] bg-clip-text text-transparent">INSIGHT</span>
+        <span className="bg-[linear-gradient(180deg,rgb(255_255_255/0.07),rgb(255_255_255/0)_70%)] bg-clip-text text-transparent">INSIGHTS</span>
       </span>
 
       <div className="mx-auto max-w-[1380px] px-4 pb-[clamp(96px,14vw,216px)] pt-14 md:px-8 md:pt-20 xl:px-12">
@@ -58,7 +58,7 @@ export function Footer() {
         </div>
 
         <div className="mt-8 flex flex-col gap-2 border-t border-lp-line pt-6 sm:flex-row sm:items-center sm:justify-between md:mt-10">
-          <p className="text-[13px] text-lp-muted">© 2026 Insight</p>
+          <p className="text-[13px] text-lp-muted">© 2026 Insights</p>
           <p className="lp-eyebrow">Shopify Business Intelligence</p>
         </div>
       </div>

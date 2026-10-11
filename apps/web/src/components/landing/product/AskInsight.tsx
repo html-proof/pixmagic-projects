@@ -113,7 +113,7 @@ type RowState = "waiting" | "active" | "done";
 
 /**
  * "Ask the business": a command-palette window whose question types itself once it scrolls into
- * view, then shows the analysis running and the three signals it found. Insight has no question
+ * view, then shows the analysis running and the three signals it found. Insights has no question
  * box; its dashboard highlights answer in plain sentences, which the caption says plainly.
  */
 export function AskInsight() {
@@ -196,8 +196,8 @@ export function AskInsight() {
         <motion.div ref={stageRef} {...riseIn(0.1, 40)} className="relative mx-auto mt-14 max-w-[1120px] md:mt-20">
           <div className="sr-only">
             <p>
-              Illustration of a question window. The question “{QUERY}” is answered after Insight analyzes checkout, products,
-              pages and traffic. Insight found three contributing signals:
+              Illustration of a question window. The question “{QUERY}” is answered after Insights analyzes checkout, products,
+              pages and traffic. Insights found three contributing signals:
             </p>
             <ul>
               {SIGNALS.map((s) => (
@@ -289,7 +289,7 @@ export function AskInsight() {
                       <span className="absolute inset-0 rounded-full bg-lp-violet/25 blur-[6px]" />
                       <span className="relative size-2 rounded-full bg-lp-violet-bright" />
                     </span>
-                    Insight found three contributing signals.
+                    Insights found three contributing signals.
                   </p>
                   <span className="flex items-center gap-4 pl-[34px] font-lp-mono text-[10.5px] uppercase tracking-[0.12em] text-lp-muted sm:pl-0">
                     <span className="flex items-center gap-2">
@@ -315,7 +315,7 @@ export function AskInsight() {
           {/* Same three columns and inner padding as the cards above, so the edges line up. */}
           <div className="mt-8 grid gap-8 md:mt-10 md:px-7 lg:grid-cols-3 lg:gap-4">
             <p className="max-w-[440px] text-[14.5px] leading-relaxed text-lp-muted lg:pr-6">
-              Illustrative. Insight&apos;s highlights answer questions like these in plain sentences on your dashboard.
+              Illustrative. Insights&apos; highlights answer questions like these in plain sentences on your dashboard.
             </p>
             <div className="lg:col-span-2">
               <p id="ask-insight-prompts" className="lp-eyebrow">

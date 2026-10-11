@@ -36,7 +36,7 @@ function useBeat(p: MotionValue<number>, forced: MotionValue<number>, [a, b]: re
 
 /**
  * G2 — the final conversion scene. Thousands of faint data points fill the screen, then gather
- * into the Insight mark at the centre of the screen as the visitor scrolls; the mark resolves,
+ * into the Insights mark at the centre of the screen as the visitor scrolls; the mark resolves,
  * crisp and calm, then rises into place as the closing line and the sign-up action appear
  * beneath it. Reduced motion: the mark, the copy and the actions, still.
  */
@@ -143,7 +143,7 @@ export function FinalCTA() {
           </motion.p>
           <motion.div className="mt-8 flex w-full flex-col items-center gap-5 md:mt-10" style={reduced ? undefined : actions}>
             <SignupButton size="lg" className="max-md:w-full max-md:max-w-[360px]">
-              Create your Insight account
+              Create your Insights account
             </SignupButton>
             <LoginPrompt />
           </motion.div>

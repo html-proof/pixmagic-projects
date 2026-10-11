@@ -85,7 +85,7 @@ function headerShift(el: Element) {
 const centreOf = (r: DOMRect) => ({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
 
 /**
- * Opening sequence: one point of light becomes the Insight mark (core, orbit points, connection
+ * Opening sequence: one point of light becomes the Insights mark (core, orbit points, connection
  * lines, open ring), the wordmark arrives under it, then the overlay dissolves into the hero
  * while the mark and wordmark fly into their slots in the nav and are swapped for the nav's own.
  */
@@ -350,7 +350,7 @@ export function IntroAnimation({ onHandoff, onDone }: { onHandoff: () => void; o
               className="block"
               style={{ opacity: wordOpacity, y: wordY, maskImage: wordMask, WebkitMaskImage: wordMask }}
             >
-              INSIGHT
+              INSIGHTS
             </motion.span>
           </span>
           <motion.p className="lp-eyebrow mr-[-0.16em] mt-2.5 whitespace-nowrap text-lp-text-2 md:mt-3 md:text-[12.5px]" style={{ opacity: tagOpacity, y: tagY }}>

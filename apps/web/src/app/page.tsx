@@ -2,12 +2,12 @@ import type { Metadata } from "next";
 import { LandingPage } from "@/components/landing/LandingPage";
 
 export const metadata: Metadata = {
-  title: "Insight — Shopify Business Intelligence",
+  title: "Insights — Shopify Business Intelligence",
   description:
-    "Insight turns every order, checkout, customer and payment in your Shopify store into a clear picture of what your business is doing, why, and what to do next.",
+    "Insights turns every order, checkout, customer and payment in your Shopify store into a clear picture of what your business is doing, why, and what to do next.",
   openGraph: {
-    title: "Insight — Shopify Business Intelligence",
-    description: "Your store is talking. Insight helps you understand what it's saying.",
+    title: "Insights — Shopify Business Intelligence",
+    description: "Your store is talking. Insights helps you understand what it's saying.",
     type: "website",
   },
 };

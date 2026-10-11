@@ -13,7 +13,7 @@ const VIEWBOX = `${-HALF} ${-HALF} ${HALF * 2} ${HALF * 2}`;
 const rad = (deg: number) => (deg * Math.PI) / 180;
 const pt = (r: number, deg: number) => `${(r * Math.cos(rad(deg))).toFixed(2)} ${(r * Math.sin(rad(deg))).toFixed(2)}`;
 
-/** The open outer ring, with its gap where the Insight mark has it (top right). */
+/** The open outer ring, with its gap where the Insights mark has it (top right). */
 const OUTER = (() => {
   const r = OUTER_RING_R * U;
   return `M ${pt(r, MARK.ringStart)} A ${r} ${r} 0 1 1 ${pt(r, MARK.ringEnd)}`;
@@ -120,8 +120,8 @@ export interface CoreMotion {
 }
 
 /**
- * The Insight intelligence core: a shaded sphere with soft violet/blue energy inside, three
- * tilted orbital rings each carrying one orbit point, and the open outer ring of the Insight mark.
+ * The Insights intelligence core: a shaded sphere with soft violet/blue energy inside, three
+ * tilted orbital rings each carrying one orbit point, and the open outer ring of the Insights mark.
  * Sized as a share of the visual box (`CORE_R`), so the canvas particles can orbit it exactly.
  * Purely decorative; the hero describes the story for screen readers.
  */

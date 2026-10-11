@@ -7,7 +7,7 @@ import { MARK, ORBIT_POINTS } from "../shared/InsightMark";
 
 /**
  * The final scene's data field: a viewport full of faint points that, as `progress` runs, fly
- * into the exact geometry of the Insight mark (core disc first, then the orbit points and their
+ * into the exact geometry of the Insights mark (core disc first, then the orbit points and their
  * connection lines, then the open outer ring). The points land on the DOM mark slot (`slotRef`),
  * shifted by `lift` and scaled by `zoom` exactly as the DOM mark is, so the crisp SVG resolves on
  * top of them wherever it is; a small share never converges and stays behind as ambient depth.

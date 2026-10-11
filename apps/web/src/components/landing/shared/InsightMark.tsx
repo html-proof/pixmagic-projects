@@ -1,7 +1,7 @@
 import { useId } from "react";
 
 /**
- * The Insight mark, on a 32×32 grid: a gradient intelligence core, three orbit points joined to
+ * The Insights mark, on a 32×32 grid: a gradient intelligence core, three orbit points joined to
  * it by fine connection lines, and an outer ring left open at the top right. The intro, the nav
  * and the final scene all draw from these numbers so the mark is identical wherever it lands.
  */
@@ -81,7 +81,7 @@ export function InsightLogo({ size = 28, className = "" }: { size?: number; clas
   return (
     <span className={`inline-flex items-center gap-2.5 text-lp-text ${className}`}>
       <InsightMark size={size} />
-      <span className="text-[15px] font-semibold tracking-[0.16em]">INSIGHT</span>
+      <span className="text-[15px] font-semibold tracking-[0.16em]">INSIGHTS</span>
     </span>
   );
 }

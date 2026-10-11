@@ -17,7 +17,7 @@ import {
 
 /**
  * The questions the journey answers, one per stretch of the camera move. "Which pages lose them?"
- * stands where a device question might go: Insight reports the site section and exit page where
+ * stands where a device question might go: Insights reports the site section and exit page where
  * visits leave, not devices.
  */
 const QUESTIONS = [
@@ -79,7 +79,7 @@ function JourneyRunway() {
                 <Question key={q} progress={progress} index={i} text={q} />
               ))}
               <motion.p style={{ opacity: finalOpacity, y: finalY }} className={`[grid-area:1/1] ${MESSAGE_TYPE}`}>
-                Insight shows you <span className="lp-gradient-text">where to look.</span>
+                Insights shows you <span className="lp-gradient-text">where to look.</span>
               </motion.p>
             </div>
           </div>
@@ -178,7 +178,7 @@ function JourneyStatic() {
           ))}
         </ol>
         <p className="mt-12 text-balance text-[clamp(32px,4.4vw,64px)] font-[550] leading-[1] tracking-[-0.045em] text-lp-text">
-          Insight shows you <span className="lp-gradient-text">where to look.</span>
+          Insights shows you <span className="lp-gradient-text">where to look.</span>
         </p>
       </div>
     </section>
