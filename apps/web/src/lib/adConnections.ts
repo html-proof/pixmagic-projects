@@ -18,6 +18,8 @@ export interface AdConnection {
   accessExpiresAt: string | null;
   connectedAt: string;
   permission: string | null;
+  /** The permissions the person who connected it granted. */
+  grantedScopes: string[];
 }
 
 export interface AdsState {
