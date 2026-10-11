@@ -13,7 +13,7 @@ packages/db    Prisma 7 schema + migrations (incl. Postgres RLS), request-scoped
 packages/core  Shopify client, token encryption/rotation, queue contracts, normalizers, persistence, alerts
 packages/shared Pure logic: HMAC, AES-GCM, OTP, capability registry, KPI formulas, dates, roles
 shopify-app    shopify.app.toml (scopes, webhooks) + web pixel extension
-infra          docker-compose dependencies, Postgres role init (Terraform/Dockerfile: legacy GCP setup)
+infra          Postgres role init (init.sql), Firebase emulator config
 docs           Setup guides, KPI definitions, runbook
 ```
 
@@ -42,5 +42,4 @@ Then follow [docs/local-dev.md](docs/local-dev.md). Progress and verification hi
 | KPI formulas | [docs/kpis.md](docs/kpis.md) |
 | Security model | [docs/security.md](docs/security.md) |
 | Deployment (Cloudflare) | [docs/deployment-cloudflare.md](docs/deployment-cloudflare.md) |
-| Deployment (legacy GCP) | [docs/deployment.md](docs/deployment.md) |
 | Runbook | [docs/RUNBOOK.md](docs/RUNBOOK.md) |

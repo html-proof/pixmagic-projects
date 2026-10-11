@@ -18,8 +18,6 @@ docker compose up -d postgres mailpit firebase-emulator
 | Mailpit | 8025 UI | every email (OTP codes, invites, alerts) lands at http://localhost:8025 (the Worker posts to Mailpit's HTTP API when `MAILPIT_URL` is set) |
 | Firebase Auth emulator | 9099 | optional if you use a real Firebase project; first start takes 1–2 min |
 
-Redis is no longer used (the `redis` compose service can be removed).
-
 ## 2. Configure
 
 ```bash

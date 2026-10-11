@@ -1,4 +1,4 @@
-# Local dev stack: Postgres, Redis, Mailpit (SMTP catcher), Firebase Auth emulator.
+# Local dev stack: Postgres, Mailpit (SMTP catcher), Firebase Auth emulator.
 #
 # Every port is published on the loopback addresses only (IPv4 and IPv6, so `localhost` works
 # either way). A bare "5434:5432" listens on all interfaces, and Docker Desktop's firewall rule
@@ -31,13 +31,6 @@ services:
         exec docker-entrypoint.sh postgres "$$@"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U app"]
-      interval: 5s
-      retries: 10
-  redis:
-    image: redis:7-alpine
-    ports: ["127.0.0.1:${REDIS_PORT:-6380}:6379", "[::1]:${REDIS_PORT:-6380}:6379"]
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       retries: 10
   mailpit:
