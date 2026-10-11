@@ -1,5 +1,5 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { systemDb } from "@app/db";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { systemDb, withDb } from "@app/db";
 import { adAccessToken, syncAdConnection, type AdsSyncData, type FetchLike } from "@app/core";
 import { addDays, localDay } from "@app/shared";
 import { clean, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
@@ -372,6 +372,124 @@ describe("connecting ad accounts", () => {
     expect((await connect("meta")).statusCode).toBe(403);
     expect((await ctx.app.inject({ method: "DELETE", url: `/workspaces/${ws}/stores/${storeId}/ads/connections/${a!.id}`, headers })).statusCode).toBe(403);
     expect((await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${storeId}/ads`, headers })).statusCode).toBe(200);
+  });
+});
+
+describe("the database dropping out while the person comes back from the platform", () => {
+  afterEach(() => {
+    ctx.deps.dbHealthy = undefined;
+    vi.restoreAllMocks();
+  });
+
+  /** Meta with one ad account: a connect with nothing to choose, which lands on the dashboard. */
+  const metaOneAccount: FetchLike = async (input) => {
+    const u = new URL(String(input));
+    if (u.pathname.endsWith("/me/adaccounts")) return json({ data: [{ id: "act_1", name: "Shop ads", currency: "USD", timezone_name: "UTC" }] });
+    return metaPlatform(input);
+  };
+
+  /** Run `fn` with the database unreachable (nothing listens on port 1), as while the tunnel is down. */
+  const dbDown = <T>(fn: () => Promise<T>) => withDb({ system: "postgresql://app:app@127.0.0.1:1/outage_test" }, fn);
+
+  /** Every look finds the database down, and the callback's whole wait passes with each one. */
+  function stayingDown() {
+    let skipped = 0;
+    const now = Date.now.bind(Date);
+    vi.spyOn(Date, "now").mockImplementation(() => now() + skipped);
+    ctx.deps.dbHealthy = async () => {
+      skipped += 30_000;
+      return false;
+    };
+  }
+
+  async function callback(state: string) {
+    return ctx.app.inject({ method: "GET", url: `/ads/meta/callback?state=${state}&code=CODE`, headers: { cookie: `${cookie}; ads_oauth_state=${state}` } });
+  }
+  const stateOf = async () => new URL((await connect("meta")).json().url).searchParams.get("state")!;
+
+  it("a drop of a moment is waited out, and the connect finishes", async () => {
+    ctx.setFetch(metaOneAccount);
+    const state = await stateOf();
+    // The tunnel drops just as the person lands back from Meta, and is back a second later.
+    const users = systemDb.user as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>;
+    const findUnique = users.findUnique!;
+    let calls = 0;
+    users.findUnique = async (...a) => {
+      if (calls++ === 0) throw new Error("Connection terminated unexpectedly");
+      return findUnique(...a);
+    };
+    const looks = [false, true];
+    ctx.deps.dbHealthy = async () => looks.shift() ?? true;
+    try {
+      const cb = await callback(state);
+      expect(cb.headers.location).toBe(`http://localhost:3001/dashboard?adsConnected=meta&accounts=1&store=${storeId}`);
+    } finally {
+      users.findUnique = findUnique;
+    }
+    expect((await systemDb.adConnection.findMany()).map((r) => r.accountId)).toEqual(["act_1"]);
+  });
+
+  it("still down after the wait: the sign-in is held for its person, who finishes it once the database is back", async () => {
+    ctx.setFetch(metaOneAccount);
+    const state = await stateOf();
+    stayingDown();
+    const cb = await dbDown(() => callback(state));
+    vi.restoreAllMocks();
+    ctx.deps.dbHealthy = undefined;
+
+    const location = new URL(cb.headers.location as string);
+    expect(location.pathname).toBe("/settings/ads");
+    expect(location.searchParams.get("provider")).toBe("meta");
+    expect(location.searchParams.get("store")).toBe(storeId);
+    expect(location.searchParams.get("error")).toBeNull();
+    const pick = location.searchParams.get("choose")!;
+    expect(await systemDb.adConnection.count()).toBe(0);
+
+    // Who came back couldn't be checked then, so it is checked now: only the person who started it can finish it.
+    const other = await signIn(ctx, "ads-admin", "admin@x.com");
+    await systemDb.membership.create({ data: { workspaceId: ws, userId: other.user.id, role: "admin" } });
+    expect((await ctx.app.inject({ method: "GET", url: pendingUrl(pick), headers: other.headers })).statusCode).toBe(404);
+    const list = await ctx.app.inject({ method: "GET", url: pendingUrl(pick), headers });
+    expect(list.json().accounts.map((a: { accountId: string }) => a.accountId)).toEqual(["act_1"]);
+    const done = await ctx.app.inject({ method: "POST", url: pendingUrl(pick), headers, payload: { accountIds: ["act_1"] } });
+    expect(done.json()).toEqual({ provider: "meta", connected: 1 });
+  });
+
+  it("down only after the platform answered: the sign-in is held the same way", async () => {
+    ctx.setFetch(metaOneAccount);
+    const state = await stateOf();
+    const conns = systemDb.adConnection as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>;
+    const findMany = conns.findMany!;
+    conns.findMany = async () => {
+      throw new Error("Connection terminated unexpectedly");
+    };
+    stayingDown();
+    try {
+      const cb = await callback(state);
+      expect(pickOf(cb.headers.location as string)).toBeTruthy();
+    } finally {
+      conns.findMany = findMany;
+    }
+    expect(await systemDb.adConnection.count()).toBe(0);
+  });
+
+  it("a failure while the database answers is not waited on", async () => {
+    ctx.setFetch(metaOneAccount);
+    const state = await stateOf();
+    const conns = systemDb.adConnection as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>;
+    const findMany = conns.findMany!;
+    conns.findMany = async () => {
+      throw new Error("a bug of ours");
+    };
+    let looks = 0;
+    ctx.deps.dbHealthy = async () => (looks++, true);
+    try {
+      const cb = await callback(state);
+      expect(cb.headers.location).toBe("http://localhost:3001/settings/ads?error=temporarily_unavailable&provider=meta");
+    } finally {
+      conns.findMany = findMany;
+    }
+    expect(looks).toBe(1);
   });
 });
 

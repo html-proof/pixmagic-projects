@@ -15,6 +15,8 @@ export interface Deps {
   fetchImpl: FetchLike;
   /** Coarse per-IP limiter (Workers Rate Limiting binding). Returns false when over the limit. */
   globalLimit?: (key: string) => Promise<boolean>;
+  /** Whether the database answers right now. Defaults to `dbReachable()`; tests inject an outage. */
+  dbHealthy?: () => Promise<boolean>;
 }
 
 export type AppEnv = { Variables: { user?: User } };

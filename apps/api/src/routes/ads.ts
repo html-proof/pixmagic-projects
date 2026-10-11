@@ -1,6 +1,6 @@
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { z } from "zod";
-import { systemDb, withTenant } from "@app/db";
+import { dbReachable, systemDb, withTenant } from "@app/db";
 import {
   AD_PROVIDER_NAME,
   adsConfigured,
@@ -171,6 +171,37 @@ async function ownPending(deps: Deps, nonce: string, userId: string | undefined,
   return p;
 }
 
+/**
+ * How long a callback waits for the database before giving up on it. Production's Postgres is reached
+ * through a tunnel that drops for 10-20 seconds at a time, and the person has just been through the
+ * platform's sign-in, which is not theirs to repeat because of us.
+ */
+const CALLBACK_DB_WAIT_MS = 20_000;
+const DB_POLL_MS = 1_000;
+
+/** The database didn't answer before the callback's deadline. `cause` is the step's own error. */
+class DbUnavailable extends Error {}
+
+/**
+ * Run one database step of the callback, waiting out an outage: when the step fails and the database
+ * doesn't answer, wait for it to answer again (until `deadline`) and run the step again. A failure while
+ * the database answers is the step's own, and is thrown as it is.
+ */
+async function waitingOutDb<T>(deps: Deps, deadline: number, step: () => Promise<T>): Promise<T> {
+  const answers = deps.dbHealthy ?? (() => dbReachable());
+  for (;;) {
+    try {
+      return await step();
+    } catch (err) {
+      if (await answers()) throw err;
+      do {
+        if (Date.now() + DB_POLL_MS > deadline) throw new DbUnavailable("database unreachable", { cause: err });
+        await new Promise((r) => setTimeout(r, DB_POLL_MS));
+      } while (!(await answers()));
+    }
+  }
+}
+
 export function adsRoutes(app: App, deps: Deps) {
   /** Connected ad accounts for a store, and which platforms this server can connect at all. */
   app.get("/workspaces/:ws/stores/:storeId/ads", async (c) => {
@@ -221,6 +252,8 @@ export function adsRoutes(app: App, deps: Deps) {
     if (!parsed.success) return back({ error: "unknown_provider" });
     const provider = parsed.data;
     const q = c.req.query();
+    const deadline = Date.now() + CALLBACK_DB_WAIT_MS;
+    const db = <T>(step: () => Promise<T>) => waitingOutDb(deps, deadline, step);
 
     try {
       const pending = pendingStates(getCookie(c, STATE_COOKIE));
@@ -237,8 +270,13 @@ export function adsRoutes(app: App, deps: Deps) {
       // They pressed Cancel / "Not now" on the platform's screen.
       if (q.error || !q.code) return back({ error: q.error === "access_denied" || q.error_reason === "user_denied" ? "denied" : "missing_params", provider }, state.storeId);
 
-      const user = await loadUser(c, deps);
-      if (!user || user.id !== state.userId) return back({ error: "session_mismatch", provider }, state.storeId);
+      // Still no database at the deadline: go on with the sign-in and hold it for the person (below).
+      // Then the check that they are who started it happens when they finish (ownPending).
+      const user = await db(() => loadUser(c, deps)).catch((err: unknown) => {
+        if (err instanceof DbUnavailable) return undefined;
+        throw err;
+      });
+      if (user === null || (user && user.id !== state.userId)) return back({ error: "session_mismatch", provider }, state.storeId);
 
       const redirectUri = adsRedirectUri(provider);
       let tokens: TokenSet;
@@ -271,11 +309,13 @@ export function adsRoutes(app: App, deps: Deps) {
           if (!granted(tokens)) return back({ error: "permission_missing", provider }, state.storeId);
           externalUserId = await whoIs(googleUserId(cfg, tokens.accessToken));
           // Google sends a refresh token on first consent; a person who gave one before keeps using theirs.
-          if (!tokens.refreshToken) tokens.refreshToken = await reusableRefreshToken(provider, externalUserId);
+          if (!tokens.refreshToken) tokens.refreshToken = await db(() => reusableRefreshToken(provider, externalUserId));
           if (!tokens.refreshToken) return back({ error: "no_refresh_token", provider }, state.storeId);
           accounts = google ? await googleAdAccounts(google, tokens.accessToken) : await adsenseAccounts(cfg, tokens.accessToken);
         }
       } catch (err) {
+        // Ours, not the platform's.
+        if (err instanceof DbUnavailable) throw err;
         // Insights' Google Cloud project isn't approved for real Google Ads accounts yet: say so, don't blame the account.
         if (err instanceof AdsNotApprovedError) {
           logger.warn({ err, provider, storeId: state.storeId }, "google ads: project not approved for production accounts");
@@ -291,14 +331,25 @@ export function adsRoutes(app: App, deps: Deps) {
       if (!accounts.length) return back({ error: "no_accounts", provider }, state.storeId);
 
       // One account, or a reconnect that sees nothing new: there's nothing to choose.
-      const known = await systemDb.adConnection.findMany({ where: { storeId: state.storeId, provider }, select: { accountId: true } });
-      const knownIds = new Set(known.map((k) => k.accountId));
-      if (accounts.length === 1 || accounts.every((a) => knownIds.has(a.accountId))) {
-        const saved = await connectAccounts(deps, clientIp(c), { workspaceId: state.workspaceId, storeId: state.storeId, provider, accounts, tokens, userId: user.id, externalUserId });
-        return toDashboard(provider, saved.length, state.storeId);
+      // With the database still out of reach, the sign-in waits for the person in the coordinator
+      // (which doesn't need it), and they finish on the integrations page once it answers.
+      let dbDown = !user;
+      if (user) {
+        try {
+          const known = await db(() => systemDb.adConnection.findMany({ where: { storeId: state.storeId, provider }, select: { accountId: true } }));
+          const knownIds = new Set(known.map((k) => k.accountId));
+          if (accounts.length === 1 || accounts.every((a) => knownIds.has(a.accountId))) {
+            const saved = await db(() => connectAccounts(deps, clientIp(c), { workspaceId: state.workspaceId, storeId: state.storeId, provider, accounts, tokens, userId: user.id, externalUserId }));
+            return toDashboard(provider, saved.length, state.storeId);
+          }
+        } catch (err) {
+          if (!(err instanceof DbUnavailable)) throw err;
+          dbDown = true;
+        }
       }
+      if (dbDown) logger.warn({ provider, storeId: state.storeId }, "database unreachable after an ad platform sign-in; holding it for the person to finish");
       const pick = randomToken(24);
-      await holdPendingAdConnect(deps.coord, pick, { userId: user.id, workspaceId: state.workspaceId, storeId: state.storeId, provider, accounts, tokens, externalUserId });
+      await holdPendingAdConnect(deps.coord, pick, { userId: state.userId, workspaceId: state.workspaceId, storeId: state.storeId, provider, accounts, tokens, externalUserId });
       return back({ choose: pick, provider }, state.storeId);
     } catch (err) {
       // A browser navigation: land on a page that says what happened, never on raw JSON.

@@ -157,8 +157,8 @@ function ChooseAccounts({ pick, ws, storeId, storeName, onDone }: { pick: string
         <div>
           <h2 id="choose-h" className="font-semibold">Choose {P.name} accounts for {storeName}</h2>
           <p className="text-xs text-muted">
-            Your login can see {data.accounts.length} accounts. Tick the ones whose numbers belong on this store&apos;s dashboard; an account you untick is
-            hidden from it. You can change this later.
+            Your login can see {data.accounts.length} account{data.accounts.length === 1 ? "" : "s"}. Tick the ones whose numbers belong on this store&apos;s
+            dashboard; an account you untick is hidden from it. You can change this later.
           </p>
         </div>
       </div>
