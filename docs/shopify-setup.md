@@ -63,9 +63,9 @@ Signed-in users can still connect more stores from **Settings → Stores → Con
 
 ## 3b. In-app OAuth flow (signed-in users)
 
-1. `POST /workspaces/:ws/shopify/install {shop}` — user must be signed in, email verified and have `stores:manage`. The shop is normalised to `x.myshopify.com` (custom domains rejected). A random `state` is stored in Redis (10 min, bound to user + workspace + shop) **and** in an httpOnly cookie.
+1. `POST /workspaces/:ws/shopify/install {shop}` — user must be signed in, email verified and have `stores:manage`. The shop is normalised to `x.myshopify.com` (custom domains rejected). A random `state` is stored in the `Coordinator` Durable Object (10 min, bound to user + workspace + shop) **and** in an httpOnly cookie.
 2. Browser goes to `https://{shop}/admin/oauth/authorize?client_id&scope&redirect_uri&state`.
-3. `GET /shopify/callback` verifies, in order: query HMAC (timing-safe), shop format and exact match, timestamp within 10 min, state cookie == state param, state exists in Redis (deleted on read, so single use), same signed-in user, then exchanges the code for a permanent offline token (no `expiring` flag - see "Why not expiring tokens" below).
+3. `GET /shopify/callback` verifies, in order: query HMAC (timing-safe), shop format and exact match, timestamp within 10 min, state cookie == state param, state exists in the Coordinator (taken on read, so single use), same signed-in user, then exchanges the code for a permanent offline token (no `expiring` flag - see "Why not expiring tokens" below).
 4. The access token is AES-256-GCM encrypted (store id as AAD) and saved with the granted scopes. A permanent offline token carries no expiry and no refresh token, so those columns stay null. Initial sync jobs are seeded and the user lands on the onboarding progress screen.
 
 ### Why not expiring tokens

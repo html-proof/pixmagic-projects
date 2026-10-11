@@ -8,7 +8,7 @@ Runs on **Cloudflare Workers**: one Worker serves the UI (static assets), the AP
 apps/cloudflare Worker entry + wrangler.jsonc: routing, Queue/Cron handlers, Coordinator Durable Object
 apps/web       Next.js 16 (App Router) UI, statically exported and served by the Worker
 apps/api       Hono API: sessions, email OTP, Shopify OAuth, webhooks, pixel ingest, dashboard, settings
-apps/worker    Queue consumers: initial sync, webhook processing, daily aggregates, reconcile, token rotation, alerts
+apps/worker    Queue consumers: initial sync, webhook processing, daily aggregates, reconcile, token rotation, alerts; ops/ maintenance tasks
 packages/db    Prisma 7 schema + migrations (incl. Postgres RLS), request-scoped clients, tenant helpers
 packages/core  Shopify client, token encryption/rotation, queue contracts, normalizers, persistence, alerts
 packages/shared Pure logic: HMAC, AES-GCM, OTP, capability registry, KPI formulas, dates, roles
@@ -33,6 +33,7 @@ Then follow [docs/local-dev.md](docs/local-dev.md). Progress and verification hi
 
 | Topic | File |
 | --- | --- |
+| Architecture, where code goes, conventions | [docs/architecture.md](docs/architecture.md) |
 | Local development | [docs/local-dev.md](docs/local-dev.md) |
 | Firebase setup (Google, Apple, email, OTP) | [docs/firebase-setup.md](docs/firebase-setup.md) |
 | Shopify app configuration | [docs/shopify-setup.md](docs/shopify-setup.md) |

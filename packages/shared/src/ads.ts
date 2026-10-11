@@ -7,6 +7,8 @@
  * are the platforms' own attribution, which overlaps between platforms and with Shopify. They are
  * shown as the platforms' claims, never mixed into the store's sales figures.
  */
+// Without the ".js" the rest of the package uses: the web app imports this file directly
+// (@app/shared/ads), and its bundler doesn't map "./dates.js" to dates.ts.
 import { addDays, eachDay, isDay } from "./dates";
 
 /** Everything that can be connected on Settings → Ad accounts. */
