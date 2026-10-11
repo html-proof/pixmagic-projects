@@ -6,10 +6,12 @@ import { refreshAccessToken, type FetchLike, type TokenResponse } from "./shopif
 import { logger } from "./logger.js";
 import type { Coord } from "./coord.js";
 
-let ring: Keyring | undefined;
+let ring: { spec: string; keys: Keyring } | undefined;
 export function keyring(): Keyring {
-  ring ??= parseKeyring(env().TOKEN_ENCRYPTION_KEYS);
-  return ring;
+  // Parsed once per key list (env() is cached, so in a deployment that is once).
+  const spec = env().TOKEN_ENCRYPTION_KEYS;
+  if (ring?.spec !== spec) ring = { spec, keys: parseKeyring(spec) };
+  return ring.keys;
 }
 
 /** AAD binds each ciphertext to its store, so ciphertexts can't be swapped between rows. */
@@ -87,7 +89,11 @@ export async function getAccessToken(
   }
 }
 
-/** Re-encrypt all tokens with the active key (run after adding a new key). */
+/**
+ * Re-encrypt everything stored under this keyring with the active key (run after adding a new
+ * key, and before removing the old one): store tokens, ad tokens and WhatsApp data. Returns the
+ * number of rows rewritten; 0 means nothing still needs an old key.
+ */
 export async function reencryptAllTokens(): Promise<number> {
   const k = keyring();
   const stores = await systemDb.store.findMany({
@@ -105,7 +111,9 @@ export async function reencryptAllTokens(): Promise<number> {
       },
     });
   }
-  // Ad platform tokens use the same keyring (loaded lazily: adConnections imports this module).
+  // Ad platform tokens and WhatsApp data use the same keyring (loaded lazily: both modules import
+  // this one).
   const { reencryptAdTokens } = await import("./adConnections.js");
-  return stores.length + (await reencryptAdTokens());
+  const { reencryptWhatsappData } = await import("./whatsapp/store.js");
+  return stores.length + (await reencryptAdTokens()) + (await reencryptWhatsappData());
 }

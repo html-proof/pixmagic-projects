@@ -271,17 +271,85 @@ export async function syncTemplates(conn: WhatsappConnection, token: string, fet
   return list.length;
 }
 
-/** Re-encrypt connection secrets with the active key (part of key rotation; see docs/RUNBOOK.md). */
-export async function reencryptWhatsappSecrets(): Promise<number> {
-  const k = keyring();
-  const rows = await systemDb.whatsappConnection.findMany({ where: { NOT: { tokenKeyVersion: k.active } } });
-  for (const r of rows) {
-    const re = (kind: WaSecretKind, v: string | null) => (v ? waEncrypt(r.storeId, kind, waDecrypt(r.storeId, kind, v)) : null);
-    const accessTokenEnc = re("access", r.accessTokenEnc)!;
-    await systemDb.whatsappConnection.update({
-      where: { id: r.id },
-      data: { accessTokenEnc, appSecretEnc: re("app_secret", r.appSecretEnc), verifyTokenEnc: re("verify", r.verifyTokenEnc), pinEnc: re("pin", r.pinEnc), tokenKeyVersion: keyVersionOf(accessTokenEnc) },
-    });
+const REENCRYPT_PAGE = 500;
+
+/** Calls `each` on every row `load` pages through by id; returns how many it changed. */
+async function forEachRow<R extends { id: string }>(load: (afterId?: string) => Promise<R[]>, each: (row: R) => Promise<boolean>): Promise<number> {
+  let changed = 0;
+  let after: string | undefined;
+  for (;;) {
+    const rows = await load(after);
+    for (const r of rows) if (await each(r)) changed++;
+    if (rows.length < REENCRYPT_PAGE) return changed;
+    after = rows[rows.length - 1]!.id;
   }
-  return rows.length;
+}
+
+/**
+ * Re-encrypt everything WhatsApp keeps under the token keyring with the active key: connection
+ * secrets, contacts, message parameters and links, tracking and review tokens, abandoned
+ * checkouts. Part of key rotation (reencryptAllTokens, docs/RUNBOOK.md). Values already on the
+ * active key are skipped, so a second run changes nothing. Returns the number of rows rewritten.
+ */
+export async function reencryptWhatsappData(): Promise<number> {
+  const active = keyring().active;
+  /** The value under the active key, or undefined (left as is) when it already is or is empty. */
+  const reseal = (storeId: string, kind: WaSecretKind, v: string | null) =>
+    v && keyVersionOf(v) !== active ? waEncrypt(storeId, kind, waDecrypt(storeId, kind, v)) : undefined;
+  const page = { orderBy: { id: "asc" as const }, take: REENCRYPT_PAGE };
+  const afterId = (id?: string) => (id ? { id: { gt: id } } : {});
+
+  const connections = await forEachRow(
+    (id) => systemDb.whatsappConnection.findMany({ ...page, where: afterId(id) }),
+    async (r) => {
+      const data = {
+        accessTokenEnc: reseal(r.storeId, "access", r.accessTokenEnc),
+        appSecretEnc: reseal(r.storeId, "app_secret", r.appSecretEnc),
+        verifyTokenEnc: reseal(r.storeId, "verify", r.verifyTokenEnc),
+        pinEnc: reseal(r.storeId, "pin", r.pinEnc),
+      };
+      if (Object.values(data).every((v) => v === undefined)) return false;
+      await systemDb.whatsappConnection.update({ where: { id: r.id }, data: { ...data, tokenKeyVersion: active } });
+      return true;
+    },
+  );
+  const contacts = await forEachRow(
+    (id) => systemDb.whatsappContact.findMany({ ...page, where: afterId(id), select: { id: true, storeId: true, phoneEnc: true, firstNameEnc: true } }),
+    async (r) => {
+      const data = { phoneEnc: reseal(r.storeId, "phone", r.phoneEnc), firstNameEnc: reseal(r.storeId, "name", r.firstNameEnc) };
+      if (Object.values(data).every((v) => v === undefined)) return false;
+      await systemDb.whatsappContact.update({ where: { id: r.id }, data });
+      return true;
+    },
+  );
+  const messages = await forEachRow(
+    (id) => systemDb.whatsappMessage.findMany({ ...page, where: afterId(id), select: { id: true, storeId: true, paramsEnc: true, clickUrlEnc: true } }),
+    async (r) => {
+      const data = { paramsEnc: reseal(r.storeId, "params", r.paramsEnc), clickUrlEnc: reseal(r.storeId, "click", r.clickUrlEnc) };
+      if (Object.values(data).every((v) => v === undefined)) return false;
+      await systemDb.whatsappMessage.update({ where: { id: r.id }, data });
+      return true;
+    },
+  );
+  const trackings = await forEachRow(
+    (id) => systemDb.orderTracking.findMany({ ...page, where: afterId(id), select: { id: true, storeId: true, tokenEnc: true, reviewTokenEnc: true } }),
+    async (r) => {
+      const data = { tokenEnc: reseal(r.storeId, "track", r.tokenEnc), reviewTokenEnc: reseal(r.storeId, "review", r.reviewTokenEnc) };
+      if (Object.values(data).every((v) => v === undefined)) return false;
+      await systemDb.orderTracking.update({ where: { id: r.id }, data });
+      return true;
+    },
+  );
+  const checkouts = await forEachRow(
+    (id) => systemDb.abandonedCheckout.findMany({ ...page, where: afterId(id), select: { id: true, storeId: true, customerNameEnc: true, recoveryUrlEnc: true } }),
+    async (r) => {
+      const data = { customerNameEnc: reseal(r.storeId, "name", r.customerNameEnc), recoveryUrlEnc: reseal(r.storeId, "recovery", r.recoveryUrlEnc) };
+      if (Object.values(data).every((v) => v === undefined)) return false;
+      await systemDb.abandonedCheckout.update({ where: { id: r.id }, data });
+      return true;
+    },
+  );
+  const total = connections + contacts + messages + trackings + checkouts;
+  if (total) logger.info({ connections, contacts, messages, trackings, checkouts }, "whatsapp data re-encrypted");
+  return total;
 }
