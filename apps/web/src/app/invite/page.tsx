@@ -3,6 +3,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
 import { actionError, api, isSignedOut } from "@/lib/api";
 import { setReturnTo } from "@/lib/returnTo";
+import { WORKSPACE_KEY, writeLocal } from "@/lib/storage";
 import { Alert, AuthShell } from "@/components/ui";
 
 function Invite() {
@@ -18,11 +19,7 @@ function Invite() {
     try {
       const { workspaceId } = await api<{ workspaceId: string }>("/invitations/accept", { method: "POST", body: { token } });
       // Open the workspace they just joined, not whichever one the app had selected before.
-      try {
-        localStorage.setItem("ws", workspaceId);
-      } catch {
-        /* storage blocked: the dashboard falls back to the first workspace */
-      }
+      writeLocal(WORKSPACE_KEY, workspaceId);
       router.replace("/dashboard");
     } catch (e) {
       // Signed out: come back here after signing in. Sending them to /login alone lost the

@@ -4,11 +4,11 @@ import type { ReactNode } from "react";
 import { weekdayOf } from "@app/shared/sales";
 import { GoogleIcon, MetaIcon } from "@/components/BrandIcons";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
-import { fmtDay, fmtLongDay, fmtMoneyCompact, fmtMoneyWhole, fmtRange, fmtRelative, fmtSpan, fmtWeekday, plural } from "./format";
+import { fmtDay, fmtLongDay, fmtMoneyCompact, fmtMoneyWhole, fmtRange, fmtRelative, fmtSpan, fmtTimes, fmtWeekday, plural } from "./format";
 import { Icon } from "./icons";
 import { GoogleReportPanel } from "./googleReport";
 import { MetaReportPanel } from "./metaReport";
-import { Delta, Panel, Stat } from "./primitives";
+import { Delta, NeutralDelta, Panel, Stat } from "./primitives";
 import { ColumnsWithTotal, type Column } from "./salesBreakdown";
 import type { AdsModule, Overview } from "./types";
 
@@ -22,18 +22,7 @@ const PLATFORM: Record<"meta" | "google", { name: string; Icon: (p: { size?: num
 };
 
 const B = ({ children }: { children: ReactNode }) => <strong className="font-semibold">{children}</strong>;
-const x = (n: number | null) => (n === null ? "—" : `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(n)}×`);
 const changeWords = (d: number | null) => (d === null ? "" : d === 0 ? ", the same as the period before" : `, ${d > 0 ? "up" : "down"} ${fmtPct(Math.abs(d))} on the period before`);
-
-/** A change with no "good" direction (spending more isn't good or bad by itself). */
-function Neutral({ value }: { value: number | null }) {
-  if (value === null) return <span className="text-xs text-muted">nothing to compare with</span>;
-  return (
-    <span className="inline-flex w-fit items-center gap-1 rounded-full bg-border/60 px-2 py-0.5 text-xs text-muted">
-      {value > 0 ? "▲" : value < 0 ? "▼" : "■"} {fmtPct(Math.abs(value))} <span className="opacity-80">vs before</span>
-    </span>
-  );
-}
 
 function SpendChart({ a, ov }: { a: AdsModule; ov: Overview }) {
   const money = (n: number) => fmtMoney(n, a.currency);
@@ -122,7 +111,7 @@ export function AdsDetail({ ov }: { ov: Overview }) {
                 They brought <B>{plural(c.clicks, "click")}</B>{c.cpc !== null ? <>, about {money(c.cpc)} each</> : null}
                 {c.conversions > 0 ? (
                   <>
-                    , and by the platforms&apos; own count <B>{fmtNum(c.conversions)} purchases</B> worth {money(c.conversionValue)}: <B>{x(c.roas)}</B> what you spent.
+                    , and by the platforms&apos; own count <B>{fmtNum(c.conversions)} purchases</B> worth {money(c.conversionValue)}: <B>{fmtTimes(c.roas)}</B> what you spent.
                   </>
                 ) : (
                   <>, and no purchases the platforms could attribute.</>
@@ -146,10 +135,10 @@ export function AdsDetail({ ov }: { ov: Overview }) {
 
       <Panel id="d-ads-glance" title="At a glance" help={`${fmtRange(ov.range.from, ov.range.to)}, against ${fmtRange(ov.previous.from, ov.previous.to)}. In ${a.currency}.`}>
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          <Stat label="Ad spend" value={money(c.spend)} note={<Neutral value={a.deltas.spend} />} />
+          <Stat label="Ad spend" value={money(c.spend)} note={<NeutralDelta value={a.deltas.spend} />} />
           <Stat label="Clicks" value={fmtNum(c.clicks)} note={<Delta value={a.deltas.clicks} label="vs before" />} />
           <Stat label="Purchases (platforms' count)" value={fmtNum(c.conversions)} note={<Delta value={a.deltas.conversions} label="vs before" />} />
-          <Stat label="Return on ad spend" value={x(c.roas)} note={<Delta value={a.deltas.roas} label="vs before" />} />
+          <Stat label="Return on ad spend" value={fmtTimes(c.roas)} note={<Delta value={a.deltas.roas} label="vs before" />} />
           <Stat label="Sales value (platforms' count)" value={money(c.conversionValue)} />
           <Stat label="Cost per purchase" value={c.costPerConversion !== null ? money(c.costPerConversion) : "—"} />
           <Stat label="Cost per click" value={c.cpc !== null ? money(c.cpc) : "—"} />
@@ -193,7 +182,7 @@ export function AdsDetail({ ov }: { ov: Overview }) {
                     <td className="px-1 py-2 text-right tabular-nums">{fmtNum(p.clicks)}</td>
                     <td className="px-1 py-2 text-right tabular-nums">{fmtNum(p.conversions)}</td>
                     <td className="px-1 py-2 text-right tabular-nums">{money(p.conversionValue)}</td>
-                    <td className="px-1 py-2 text-right tabular-nums">{x(p.roas)}</td>
+                    <td className="px-1 py-2 text-right tabular-nums">{fmtTimes(p.roas)}</td>
                     <td className="px-1 py-2 text-right tabular-nums">{p.costPerConversion !== null ? money(p.costPerConversion) : "—"}</td>
                   </tr>
                 );
@@ -231,7 +220,7 @@ export function AdsDetail({ ov }: { ov: Overview }) {
                       <td className="px-1 py-2 text-right tabular-nums">{fmtNum(cmp.clicks)}</td>
                       <td className="px-1 py-2 text-right tabular-nums">{fmtPct(cmp.ctr)}</td>
                       <td className="px-1 py-2 text-right tabular-nums">{fmtNum(cmp.conversions)}</td>
-                      <td className="px-1 py-2 text-right tabular-nums">{x(cmp.roas)}</td>
+                      <td className="px-1 py-2 text-right tabular-nums">{fmtTimes(cmp.roas)}</td>
                     </tr>
                   );
                 })}

@@ -11,32 +11,8 @@ import type {
   InventoryModule,
   OrderTimingModule,
   RecentOrder,
-  SalesOverview,
   TrafficModule,
 } from "./types";
-
-/** Smaller sales figures that sit under the headline metrics. */
-export function SalesExtras({ s, currency }: { s: SalesOverview["current"]; currency: string }) {
-  const items = [
-    { label: "Units sold", value: fmtNum(s.units) },
-    { label: "Discounts given", value: fmtMoney(s.discounts, currency) },
-    { label: "Tax collected", value: fmtMoney(s.tax, currency) },
-    { label: "Shipping charged", value: fmtMoney(s.shipping, currency) },
-  ];
-  return (
-    <div className="card mt-4 py-4" data-testid="sales-extras">
-      <dl className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-        {items.map((i) => (
-          <div key={i.label} className="min-w-0">
-            <dt className="text-xs text-muted">{i.label}</dt>
-            <dd className="mt-0.5 truncate font-semibold tabular-nums">{i.value}</dd>
-          </div>
-        ))}
-      </dl>
-      <p className="mt-3 text-xs text-muted">Tax and shipping are collected on top of your sales, so they aren&apos;t counted in the figures above.</p>
-    </div>
-  );
-}
 
 export function ChannelsCard({ m, currency }: { m: ChannelsModule; currency: string }) {
   return (

@@ -1,5 +1,6 @@
 "use client";
 import { useState } from "react";
+import { addDays, eachDay } from "@app/shared/dates";
 import { Stat } from "@/components/dashboard/primitives";
 import { LineChart } from "@/components/dashboard/lineChart";
 import { LoadError } from "@/components/LoadError";
@@ -29,10 +30,8 @@ const GROUP_LABEL: Record<string, string> = {
 
 /** Every UTC day from `days - 1` days ago to today, so quiet days plot as zero, not as gaps. */
 function dayList(days: number): string[] {
-  const out: string[] = [];
-  const today = new Date();
-  for (let i = days - 1; i >= 0; i--) out.push(new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() - i)).toISOString().slice(0, 10));
-  return out;
+  const today = new Date().toISOString().slice(0, 10);
+  return eachDay(addDays(today, -(days - 1)), today);
 }
 
 const money = (list: Array<{ currency: string; amount?: number; revenue?: number }>) =>

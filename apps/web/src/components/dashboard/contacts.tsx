@@ -4,6 +4,7 @@ import { can } from "@app/shared/roles";
 import { useApp } from "@/components/AppContext";
 import { Alert } from "@/components/ui";
 import { actionError, api, fmtMoney, fmtNum } from "@/lib/api";
+import { readLocal, removeLocal, writeLocal } from "@/lib/storage";
 import { fmtRelative, plural } from "./format";
 import { Icon, type IconName } from "./icons";
 import { Empty, Panel } from "./primitives";
@@ -54,21 +55,12 @@ const SUBJECT: Record<Tab, string> = {
 
 const messageKey = (storeId: string, tab: Tab) => `insights:contact-message:${storeId}:${tab}`;
 
-function readMessage(storeId: string, tab: Tab): string {
-  try {
-    return window.localStorage.getItem(messageKey(storeId, tab)) || DEFAULT_MESSAGE[tab];
-  } catch {
-    return DEFAULT_MESSAGE[tab];
-  }
-}
+const readMessage = (storeId: string, tab: Tab): string => readLocal(messageKey(storeId, tab)) || DEFAULT_MESSAGE[tab];
 
+/** Storage blocked: the edit still applies until the page is closed. */
 function saveMessage(storeId: string, tab: Tab, text: string) {
-  try {
-    if (text === DEFAULT_MESSAGE[tab]) window.localStorage.removeItem(messageKey(storeId, tab));
-    else window.localStorage.setItem(messageKey(storeId, tab), text);
-  } catch {
-    // Storage blocked: the edit still applies until the page is closed.
-  }
+  if (text === DEFAULT_MESSAGE[tab]) removeLocal(messageKey(storeId, tab));
+  else writeLocal(messageKey(storeId, tab), text);
 }
 
 const firstName = (p: ContactPerson) => p.name?.split(/\s+/)[0] ?? "there";

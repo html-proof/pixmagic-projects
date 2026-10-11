@@ -104,7 +104,7 @@ export async function api<T = unknown>(path: string, init: { method?: string; bo
   return json as T;
 }
 
-export function useApi<T>(path: string | null, deps: unknown[] = []) {
+export function useApi<T>(path: string | null) {
   // Each answer and failure is kept with the question (path) it answers, and `data` and `error` are
   // only ever this question's. The settings pages stay mounted across a workspace switch, so
   // otherwise the previous workspace's data, or a late answer to it from a retry still in flight,
@@ -133,8 +133,7 @@ export function useApi<T>(path: string | null, deps: unknown[] = []) {
     } finally {
       if (current.current === path) setLoading(false);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [path, ...deps]);
+  }, [path]);
   /** For optimistic edits; one made to an earlier question's data (an action that finished late) is dropped. */
   const setData = useCallback(
     (value: T) => {

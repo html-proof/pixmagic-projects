@@ -257,9 +257,6 @@ export const NOTIFICATION_KINDS = [
 ] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 
-/** Every kind of message Insights can send, including ones not driven by notification settings. */
-export type MessageKind = NotificationKind | "campaign" | "automation" | "test";
-
 export interface KindInfo {
   kind: NotificationKind;
   label: string;
@@ -532,8 +529,6 @@ export const whatsappConfigSchema = z.object({
 });
 export type WhatsappConfig = z.infer<typeof whatsappConfigSchema>;
 
-export const defaultWhatsappConfig = (): WhatsappConfig => whatsappConfigSchema.parse({});
-
 /** A kind's setting with defaults filled in (library template and its mapping). */
 export function kindSetting(cfg: WhatsappConfig, kind: NotificationKind): KindSetting {
   const s = cfg.notifications[kind];
@@ -756,7 +751,6 @@ export const OCCASIONS = [
   { id: "clearance", label: "Clearance sale", greeting: "Clearance sale" },
   { id: "custom", label: "Custom promotion", greeting: "Special offers" },
 ] as const;
-export type OccasionId = (typeof OCCASIONS)[number]["id"];
 
 export const audienceSchema = z.object({
   /** Every customer below must also have opted in to WhatsApp marketing; this narrows it further. */

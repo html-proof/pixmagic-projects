@@ -3,6 +3,7 @@ import { signInWithCustomToken } from "firebase/auth";
 import { api } from "./api";
 import { firebaseAuth } from "./firebase";
 import { establishSession } from "./session";
+import { readLocal, removeLocal, writeLocal } from "./storage";
 
 /**
  * Email sign-in links: when the API can't email a 6-digit code it asks Firebase to email a
@@ -12,29 +13,10 @@ import { establishSession } from "./session";
  */
 const KEY = "insights:link-email";
 
-export function rememberLinkEmail(email: string) {
-  try {
-    localStorage.setItem(KEY, email);
-  } catch {
-    /* storage blocked: the page asks for the email when the link is opened */
-  }
-}
-
-export function linkEmail(): string {
-  try {
-    return localStorage.getItem(KEY) ?? "";
-  } catch {
-    return "";
-  }
-}
-
-export function forgetLinkEmail() {
-  try {
-    localStorage.removeItem(KEY);
-  } catch {
-    /* nothing stored */
-  }
-}
+/** Storage blocked: the page asks for the email when the link is opened. */
+export const rememberLinkEmail = (email: string) => writeLocal(KEY, email);
+export const linkEmail = (): string => readLocal(KEY) ?? "";
+export const forgetLinkEmail = () => removeLocal(KEY);
 
 /** The sign-in code Firebase appended to this page's address, if it was opened from a link. */
 export function emailLinkCode(search: string): string | null {

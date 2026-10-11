@@ -10,6 +10,7 @@ import { Alert } from "@/components/ui";
 import { EmbeddedSignup } from "@/components/whatsapp/EmbeddedSignup";
 import { WhatsappIcon } from "@/components/whatsapp/common";
 import { quality, tier, type Overview as WaOverview } from "@/components/whatsapp/types";
+import type { AdsState } from "@/lib/adConnections";
 import { actionError, api, ApiError, useApi } from "@/lib/api";
 
 // ---------------------------------------------------------------------------
@@ -30,22 +31,6 @@ const STATE: Record<State, { label: string; tone: Tone }> = {
   failed: { label: "Connection failed", tone: "danger" },
   unavailable: { label: "Coming soon", tone: "neutral" },
 };
-
-interface AdConnection {
-  id: string;
-  provider: "meta" | "google" | "adsense";
-  accountId: string;
-  accountName: string | null;
-  enabled: boolean;
-  status: "active" | "reconnect" | "error";
-  lastError: string | null;
-  lastSyncedAt: string | null;
-  accessExpiresAt: string | null;
-}
-interface AdsState {
-  configured: { meta: boolean; google: boolean; adsense: boolean };
-  connections: AdConnection[];
-}
 
 function shopifyState(s: StoreSummary | null): State {
   if (!s || s.status === "uninstalled") return "not_connected";

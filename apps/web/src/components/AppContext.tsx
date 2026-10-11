@@ -1,13 +1,15 @@
 "use client";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
+import { can, type Role } from "@app/shared/roles";
 import { api, isSignedOut, isTransient, keepRetrying } from "@/lib/api";
 import { LoadError, Unreachable } from "@/components/LoadError";
 import { signInAndReturn } from "@/lib/returnTo";
+import { readLocal, storeKey, WORKSPACE_KEY, writeLocal } from "@/lib/storage";
 
 export interface Me {
   user: { id: string; email: string; emailVerified: boolean; displayName: string | null; timezone: string };
-  workspaces: Array<{ id: string; name: string; role: "owner" | "admin" | "analyst" | "viewer" }>;
+  workspaces: Array<{ id: string; name: string; role: Role }>;
 }
 export interface StoreSummary {
   id: string;
@@ -51,21 +53,6 @@ interface Ctx {
 
 const AppCtx = createContext<Ctx | null>(null);
 
-const read = (k: string) => {
-  try {
-    return localStorage.getItem(k);
-  } catch {
-    return null;
-  }
-};
-const write = (k: string, v: string) => {
-  try {
-    localStorage.setItem(k, v);
-  } catch {
-    /* ignore */
-  }
-};
-
 export function AppProvider({ children }: { children: ReactNode }) {
   const router = useRouter();
   const [me, setMe] = useState<Me | null>(null);
@@ -103,7 +90,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     else {
       setMe(m);
       if (!currentWs.current) {
-        const saved = read("ws");
+        const saved = readLocal(WORKSPACE_KEY);
         currentWs.current = m.workspaces.some((w) => w.id === saved) ? saved : m.workspaces[0]!.id;
       }
       setWsId(currentWs.current);
@@ -122,7 +109,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (currentWs.current !== wsId) return;
     setStores(stores);
     setStoresStatus("ready");
-    const saved = read(`store:${wsId}`);
+    const saved = readLocal(storeKey(wsId));
     setStoreIdState((cur) => (stores.some((s) => s.id === cur) ? cur : stores.some((s) => s.id === saved) ? saved : (stores[0]?.id ?? null)));
   }, [wsId]);
 
@@ -164,7 +151,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       workspace,
       setWorkspaceId: (id) => {
         if (id === currentWs.current) return;
-        write("ws", id);
+        writeLocal(WORKSPACE_KEY, id);
         currentWs.current = id;
         // The new workspace's stores are unknown until they load, which is not the same as none,
         // and none of the previous workspace's may show under it meanwhile.
@@ -179,7 +166,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       retryStores: () => void loadStores(),
       store: stores.find((s) => s.id === storeId) ?? null,
       setStoreId: (id) => {
-        write(`store:${workspace.id}`, id);
+        writeLocal(storeKey(workspace.id), id);
         setStoreIdState(id);
       },
       reloadStores,
@@ -209,4 +196,5 @@ export function StoresPending() {
   return <LoadError what="your stores" error={storesError} onRetry={retryStores} />;
 }
 
-export const canManage = (role: string) => role === "owner" || role === "admin";
+/** Whether this role may connect and manage stores (the shared permission matrix decides). */
+export const canManage = (role: Role) => can(role, "stores:manage");

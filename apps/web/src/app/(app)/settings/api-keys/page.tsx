@@ -1,6 +1,7 @@
 "use client";
 import { useState, type FormEvent } from "react";
-import { canManage, useApp } from "@/components/AppContext";
+import { can } from "@app/shared/roles";
+import { useApp } from "@/components/AppContext";
 import { Alert, EmptyState } from "@/components/ui";
 import { actionError, api, ApiError, useApi } from "@/lib/api";
 
@@ -8,7 +9,7 @@ interface Key { id: string; name: string; prefix: string; createdAt: string; las
 
 export default function ApiKeysPage() {
   const { workspace } = useApp();
-  const allowed = canManage(workspace.role);
+  const allowed = can(workspace.role, "apikeys:manage");
   const { data, reload, error } = useApi<{ keys: Key[] }>(allowed ? `/workspaces/${workspace.id}/api-keys` : null);
   const [name, setName] = useState("");
   const [secret, setSecret] = useState<string | null>(null);

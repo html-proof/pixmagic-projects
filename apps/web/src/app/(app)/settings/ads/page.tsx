@@ -4,6 +4,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { canManage, StoresPending, useApp } from "@/components/AppContext";
 import { GoogleIcon, MetaIcon } from "@/components/BrandIcons";
 import { Alert } from "@/components/ui";
+import type { AdConnection, AdProvider, AdsState } from "@/lib/adConnections";
 import { actionError, api, useApi } from "@/lib/api";
 import { fmtRelative } from "@/components/dashboard/format";
 import { Badge, type Tone } from "@/components/dashboard/primitives";
@@ -14,28 +15,8 @@ import { Badge, type Tone } from "@/components/dashboard/primitives";
 // and disconnected.
 // ---------------------------------------------------------------------------
 
-type Provider = "meta" | "google" | "adsense";
-
-interface Connection {
-  id: string;
-  provider: Provider;
-  accountId: string;
-  accountName: string | null;
-  currency: string | null;
-  timezone: string | null;
-  enabled: boolean;
-  status: "active" | "reconnect" | "error";
-  lastError: string | null;
-  lastSyncedAt: string | null;
-  accessExpiresAt: string | null;
-  connectedAt: string;
-  permission: string | null;
-}
-
-interface AdsState {
-  configured: Record<Provider, boolean>;
-  connections: Connection[];
-}
+type Provider = AdProvider;
+type Connection = AdConnection;
 
 interface Pending {
   provider: Provider;

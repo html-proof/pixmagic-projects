@@ -63,6 +63,10 @@ const STATUS: Record<string, { tone: Tone; label: string }> = {
   skipped: { tone: "warn", label: "Not sent" },
 };
 
+/** A message kind in words: a notification's label, or what sent it (campaign, automation, test). */
+export const kindLabel = (k: string) =>
+  KIND_INFO[k as NotificationKind]?.label ?? ({ automation: "Automation", campaign: "Campaign", test: "Test" } as Record<string, string>)[k] ?? k;
+
 /** A message's status, in words (with the reason as a tooltip when there is one). */
 export function MessageStatus({ status, reason }: { status: string; reason?: string | null }) {
   const s = STATUS[status] ?? { tone: "neutral" as Tone, label: status };
@@ -293,7 +297,8 @@ export function useSettings() {
   return { ...q, save };
 }
 
-const bodyText = (t: WaTemplate | undefined) => t?.components.find((c) => c.type.toUpperCase() === "BODY")?.text ?? "";
+/** A template's body text, with its {{n}} placeholders. */
+export const bodyText = (t: WaTemplate | undefined) => t?.components.find((c) => c.type.toUpperCase() === "BODY")?.text ?? "";
 
 /** Example values for previews, per variable source. */
 export const EXAMPLE: Record<ParamSource, string> = {

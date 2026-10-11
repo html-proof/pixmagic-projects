@@ -1,11 +1,11 @@
 "use client";
 import { useState } from "react";
-import { KIND_INFO, reasonLabel, type NotificationKind } from "@app/shared/whatsapp";
+import { reasonLabel } from "@app/shared/whatsapp";
 import { Badge, Empty, type Tone } from "@/components/dashboard/primitives";
 import { fmtMoney, api, useApi } from "@/lib/api";
 import { useApp } from "@/components/AppContext";
 import { LoadError } from "@/components/LoadError";
-import { fmtWhen, MessageStatus, overlay, Skeleton, useAction, useToast, useWa } from "./common";
+import { fmtWhen, kindLabel, MessageStatus, overlay, Skeleton, useAction, useToast, useWa } from "./common";
 
 export const ORDER_STATUS: Record<string, { tone: Tone; label: string }> = {
   placed: { tone: "neutral", label: "Placed" },
@@ -69,7 +69,6 @@ interface OrderDetail {
   reviews: Array<{ id: string; productTitle: string | null; rating: number; status: string }>;
 }
 
-const kindLabel = (k: string) => KIND_INFO[k as NotificationKind]?.label ?? (k === "automation" ? "Automation" : k === "campaign" ? "Campaign" : k);
 
 function OrderDrawer({ id, onClose }: { id: string; onClose: () => void }) {
   const { base, manage } = useWa();

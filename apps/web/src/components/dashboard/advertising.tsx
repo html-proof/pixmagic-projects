@@ -4,10 +4,10 @@ import type { ReactNode } from "react";
 import { GoogleIcon, MetaIcon } from "@/components/BrandIcons";
 import { Alert } from "@/components/ui";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
-import { fmtMoneyCompact, fmtRange, plural } from "./format";
+import { fmtMoneyCompact, fmtRange, fmtTimes, plural } from "./format";
 import { Icon } from "./icons";
 import { LineChart, type LineSeries } from "./lineChart";
-import { Delta, Stat } from "./primitives";
+import { Delta, NeutralDelta, Stat } from "./primitives";
 import type { Topic } from "./topics";
 import type { AdsenseModule, AdsModule, Overview } from "./types";
 
@@ -30,7 +30,6 @@ const PLATFORM: Record<Provider, { name: string; Icon: (p: { size?: number }) =>
 
 const NA = "N/A";
 const ratio = (a: number, b: number) => (b > 0 ? a / b : null);
-const times = (n: number | null) => (n === null ? NA : `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(n)}×`);
 
 interface Account {
   id: string;
@@ -39,16 +38,6 @@ interface Account {
   name: string | null;
   status: string;
   lastSyncedAt: string | null;
-}
-
-/** A change with no good or bad direction (spending more isn't good or bad by itself). */
-function Neutral({ value }: { value: number | null }) {
-  if (value === null) return <span className="text-xs text-muted">nothing to compare with</span>;
-  return (
-    <span className="inline-flex w-fit items-center gap-1 rounded-full bg-border/60 px-2 py-0.5 text-xs text-muted">
-      {value > 0 ? "▲" : value < 0 ? "▼" : "■"} {fmtPct(Math.abs(value))} <span className="opacity-80">vs before</span>
-    </span>
-  );
 }
 
 function SectionHeading({ manage }: { manage: boolean }) {
@@ -166,14 +155,14 @@ function SpendKpis({ a, onOpen }: { a: AdsModule; onOpen: () => void }) {
   const names = a.byProvider.map((p) => PLATFORM[p.provider].name).join(" and ") || "Meta Ads and Google Ads";
   return (
     <GroupCard title="Ad spend" sub={`Money you paid ${names}, in ${a.currency}`} onOpen={onOpen} testid="ads-spend">
-      <Stat label="Ad spend" value={money(c.spend)} note={<Neutral value={a.deltas.spend} />} />
+      <Stat label="Ad spend" value={money(c.spend)} note={<NeutralDelta value={a.deltas.spend} />} />
       <Stat label="Impressions" value={fmtNum(c.impressions)} note="Times your ads were shown" />
       <Stat label="Clicks" value={fmtNum(c.clicks)} note={<Delta value={a.deltas.clicks} label="vs before" />} />
       <Stat label="Click-through rate" value={c.ctr === null ? NA : fmtPct(c.ctr)} note="Clicks ÷ impressions" />
       <Stat label="Cost per click" value={money(c.cpc)} />
       <Stat label="Cost per 1,000 impressions" value={money(c.cpm)} />
       <Stat label="Conversions" value={fmtNum(c.conversions)} note={<Delta value={a.deltas.conversions} label="vs before" />} />
-      <Stat label="Conversion value" value={money(c.conversionValue)} note={`Return on ad spend ${times(c.roas)}`} />
+      <Stat label="Conversion value" value={money(c.conversionValue)} note={`Return on ad spend ${fmtTimes(c.roas, NA)}`} />
     </GroupCard>
   );
 }

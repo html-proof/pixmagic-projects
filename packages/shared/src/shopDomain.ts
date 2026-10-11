@@ -16,7 +16,3 @@ export function normalizeShopDomain(input: string | null | undefined): string | 
   if (!s.includes(".")) s = `${s}.myshopify.com`;
   return SHOP_RE.test(s) ? s : null;
 }
-
-export function isValidShopDomain(shop: string): boolean {
-  return SHOP_RE.test(shop);
-}

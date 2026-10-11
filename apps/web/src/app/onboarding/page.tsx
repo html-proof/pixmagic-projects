@@ -4,11 +4,12 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { api, fmtNum, friendlyError, isSignedOut, keepRetrying, type ApiError } from "@/lib/api";
 import { Alert } from "@/components/ui";
+import type { Me } from "@/components/AppContext";
 import { ShopifyIcon } from "@/components/ShopifyIcon";
 import { signInAndReturn } from "@/lib/returnTo";
+import { readLocal, storeKey, WORKSPACE_KEY, writeLocal } from "@/lib/storage";
 import { OAUTH_ERRORS } from "@/lib/shopifyErrors";
 
-type Me = { user: { email: string; emailVerified: boolean }; workspaces: Array<{ id: string; name: string; role: string }> };
 type SyncJob = { kind: string; status: string; progress: number; error: string | null };
 type SyncState = { store: { status: string; name: string | null; shopDomain: string }; jobs: SyncJob[] };
 
@@ -44,23 +45,6 @@ function jobStatus(j: SyncJob): string {
   return "Waiting";
 }
 
-/** The workspace the app shell has selected (localStorage "ws"), if storage is readable. */
-function selectedWorkspaceId(): string | null {
-  try {
-    return localStorage.getItem("ws");
-  } catch {
-    return null;
-  }
-}
-
-/** Same keys the app shell reads to pick the current workspace / store. */
-function remember(key: string, value: string) {
-  try {
-    localStorage.setItem(key, value);
-  } catch {
-    /* storage blocked: the dashboard falls back to the first workspace/store */
-  }
-}
 
 /** Used when the store isn't known yet (one-click connect); renamable in Settings. */
 const DEFAULT_WORKSPACE_NAME = "My store";
@@ -127,7 +111,7 @@ function Onboarding() {
   // workspace, and made Reconnect fail with "store taken" for a store living in another one.
   const wantedWs = params.get("ws");
   const ws = me
-    ? (me.workspaces.find((w) => w.id === wantedWs) ?? me.workspaces.find((w) => w.id === selectedWorkspaceId()) ?? me.workspaces[0])
+    ? (me.workspaces.find((w) => w.id === wantedWs) ?? me.workspaces.find((w) => w.id === readLocal(WORKSPACE_KEY)) ?? me.workspaces[0])
     : undefined;
   const step = !me || !me.user.emailVerified ? 0 : ws && storeId ? 2 : 1;
 
@@ -144,8 +128,9 @@ function Onboarding() {
       ),
     ).then((ids) => {
       const id = ids.find(Boolean) ?? me.workspaces[0]!.id;
-      remember("ws", id);
-      remember(`store:${id}`, storeId);
+      // What the app shell opens on (storage blocked: it falls back to the first workspace/store).
+      writeLocal(WORKSPACE_KEY, id);
+      writeLocal(storeKey(id), storeId);
       setSyncWsId(id);
     });
   }, [step, me, storeId, syncWsId]);
@@ -173,7 +158,7 @@ function Onboarding() {
   /** The workspace to connect into; first-time users get one created on their first click. */
   async function ensureWorkspace(name: string): Promise<string> {
     if (ws) return ws.id;
-    const { workspace } = await api<{ workspace: { id: string; name: string; role: string } }>("/workspaces", {
+    const { workspace } = await api<{ workspace: Me["workspaces"][number] }>("/workspaces", {
       method: "POST",
       body: { name },
     });

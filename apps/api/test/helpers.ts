@@ -37,7 +37,6 @@ export function fakeAuth(): AuthProvider & { customTokens: string[]; links: Arra
     async verifySessionCookie(c) {
       return parse(c, "sess");
     },
-    async revokeRefreshTokens() {},
     async upsertVerifiedEmailUser(email) {
       return `otp-${email}`;
     },

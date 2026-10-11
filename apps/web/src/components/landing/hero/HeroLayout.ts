@@ -10,16 +10,6 @@
  */
 import { clamp01, easeInOut, easeOut, lerp, segment } from "@/lib/motion";
 
-/** Scroll windows (fractions of the hero runway). */
-export const STAGE = {
-  chaos: [0, 0.18],
-  converge: [0.18, 0.38],
-  connect: [0.38, 0.6],
-  dashboard: [0.6, 0.8],
-  decide: [0.8, 1],
-  depth: [0.86, 1],
-} as const;
-
 /** Matches Tailwind's `lg` breakpoint, where the hero switches to the side-by-side layout. */
 export const WIDE_QUERY = "(min-width: 64rem)";
 

@@ -1,10 +1,10 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { KIND_INFO, reasonLabel, type NotificationKind } from "@app/shared/whatsapp";
+import { reasonLabel } from "@app/shared/whatsapp";
 import { Empty } from "@/components/dashboard/primitives";
 import { useApp } from "@/components/AppContext";
 import { actionError, api } from "@/lib/api";
-import { fmtWhen, MessageStatus, PageHeader, useAction, useWa } from "@/components/whatsapp/common";
+import { fmtWhen, kindLabel, MessageStatus, PageHeader, useAction, useWa } from "@/components/whatsapp/common";
 
 interface Message {
   id: string;
@@ -51,7 +51,6 @@ const STATUSES = [
   ["skipped,cancelled", "Not sent"],
 ] as const;
 
-const kindLabel = (k: string) => KIND_INFO[k as NotificationKind]?.label ?? ({ automation: "Automation", campaign: "Campaign", test: "Test" } as Record<string, string>)[k] ?? k;
 
 export default function MessageHistory() {
   const { base, contact, manage } = useWa();

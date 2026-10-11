@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import { can } from "@app/shared/roles";
 import { useApp } from "@/components/AppContext";
 import { Alert } from "@/components/ui";
 import { LoadError } from "@/components/LoadError";
@@ -15,7 +16,7 @@ export default function BillingPage() {
   const { workspace, store, storesStatus } = useApp();
   const { data, error: loadError, loading, reload } = useApi<Billing>(`/workspaces/${workspace.id}/billing`);
   const [error, setError] = useState<string | null>(null);
-  const isOwner = workspace.role === "owner";
+  const isOwner = can(workspace.role, "billing:manage");
   // Shopify sends the merchant back here after the approval screen; the plan itself changes when
   // Shopify confirms the charge (a webhook), which can land a few seconds after they arrive.
   const [returned, setReturned] = useState(false);

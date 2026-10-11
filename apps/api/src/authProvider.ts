@@ -6,7 +6,6 @@ export interface AuthProvider {
   verifyIdToken(idToken: string): Promise<{ uid: string; email?: string; emailVerified: boolean; authTime: number; name?: string }>;
   createSessionCookie(idToken: string, expiresInMs: number): Promise<string>;
   verifySessionCookie(cookie: string): Promise<{ uid: string; email?: string; emailVerified: boolean }>;
-  revokeRefreshTokens(uid: string): Promise<void>;
   /**
    * Find/create the Firebase user for a proven email (OTP, Shopify). An existing account that was
    * never verified loses its password and earlier sessions: whoever created it hadn't proven the email.
@@ -290,9 +289,6 @@ export function firebaseAuthProvider(fetchImpl: FetchLike = fetch): AuthProvider
     async verifySessionCookie(cookie) {
       const t = await verify(cookie, "session");
       return { uid: t.sub!, email: t.email, emailVerified: !!t.email_verified };
-    },
-    async revokeRefreshTokens(uid) {
-      await call("/accounts:update", { localId: uid, validSince: String(Math.floor(Date.now() / 1000)) });
     },
     async upsertVerifiedEmailUser(email) {
       const u = await lookup({ email: [email] });

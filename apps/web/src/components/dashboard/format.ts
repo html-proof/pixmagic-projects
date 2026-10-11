@@ -118,3 +118,6 @@ export function humanize(value: string | null | undefined): string {
 }
 
 export const plural = (n: number, one: string, many = `${one}s`) => `${new Intl.NumberFormat().format(n)} ${n === 1 ? one : many}`;
+
+/** A multiple such as return on ad spend: "3.42×", or `empty` when there is nothing to divide by. */
+export const fmtTimes = (n: number | null, empty = "—") => (n === null ? empty : `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(n)}×`);

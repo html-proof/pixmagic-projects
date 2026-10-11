@@ -1,6 +1,7 @@
 "use client";
 import { useState, type FormEvent } from "react";
-import { canManage, useApp } from "@/components/AppContext";
+import { can, ROLES } from "@app/shared/roles";
+import { useApp } from "@/components/AppContext";
 import { Alert } from "@/components/ui";
 import { actionError, api, useApi } from "@/lib/api";
 
@@ -25,7 +26,7 @@ export default function MembersPage() {
   // The invitation link, when we couldn't email it: the inviter has to pass it on themselves.
   const [inviteLink, setInviteLink] = useState<{ email: string; url: string } | null>(null);
   const [inviting, setInviting] = useState(false);
-  const manage = canManage(workspace.role);
+  const manage = can(workspace.role, "members:manage");
 
   const act = (p: Promise<unknown>, what: string) =>
     p.then(
@@ -74,7 +75,7 @@ export default function MembersPage() {
             <span className="flex-1">{m.name ?? m.email} <span className="text-muted">{m.name ? m.email : ""}{m.userId === me.user.id ? " (you)" : ""}</span></span>
             {manage ? (
               <select aria-label={`Role for ${m.email}`} className="input w-auto" value={m.role} onChange={(e) => act(api(`/workspaces/${workspace.id}/members/${m.id}`, { method: "PATCH", body: { role: e.target.value } }), "change the role")}>
-                {["owner", "admin", "analyst", "viewer"].map((r) => <option key={r}>{r}</option>)}
+                {ROLES.map((r) => <option key={r}>{r}</option>)}
               </select>
             ) : (
               <span className="text-muted">{m.role}</span>

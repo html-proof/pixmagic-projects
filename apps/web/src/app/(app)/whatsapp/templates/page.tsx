@@ -5,10 +5,9 @@ import { Badge, Empty } from "@/components/dashboard/primitives";
 import { fmtRelative } from "@/components/dashboard/format";
 import { LoadError } from "@/components/LoadError";
 import { api, useApi } from "@/lib/api";
-import { PageHeader, Skeleton, TEMPLATE_STATUS, useAction, useWa, type WaTemplate } from "@/components/whatsapp/common";
+import { bodyText, PageHeader, Skeleton, TEMPLATE_STATUS, useAction, useWa, type WaTemplate } from "@/components/whatsapp/common";
 import type { Overview } from "@/components/whatsapp/types";
 
-const bodyOf = (t: WaTemplate) => t.components.find((c) => c.type.toUpperCase() === "BODY")?.text ?? "";
 const buttonsOf = (t: WaTemplate) => t.components.find((c) => c.type.toUpperCase() === "BUTTONS")?.buttons ?? [];
 
 function Bubble({ text, buttons }: { text: string; buttons?: Array<{ type: string; text?: string }> }) {
@@ -83,7 +82,7 @@ export default function Templates() {
                         {t.qualityScore && t.qualityScore !== "UNKNOWN" ? <Badge tone={t.qualityScore === "RED" ? "danger" : t.qualityScore === "YELLOW" ? "warn" : "good"}>quality {t.qualityScore.toLowerCase()}</Badge> : null}
                       </p>
                       {t.rejectedReason && <p className="text-xs text-danger">Meta: {t.rejectedReason.toLowerCase().replace(/_/g, " ")}</p>}
-                      <Bubble text={bodyOf(t)} buttons={buttonsOf(t)} />
+                      <Bubble text={bodyText(t)} buttons={buttonsOf(t)} />
                       <p className="text-xs text-muted">
                         {t.shape.bodyVars} variable{t.shape.bodyVars === 1 ? "" : "s"}
                         {t.shape.headerFormat !== "NONE" ? ` · ${t.shape.headerFormat.toLowerCase()} header` : ""} · updated {fmtRelative(t.updatedAt)}

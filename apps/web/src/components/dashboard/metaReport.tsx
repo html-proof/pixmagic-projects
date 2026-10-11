@@ -5,7 +5,7 @@ import { metaAttributionLabel, type MetaReportMetrics, type MetaReportRow, type 
 import { useApp } from "@/components/AppContext";
 import { Alert } from "@/components/ui";
 import { actionError, api, ApiError, fmtMoney, fmtNum, fmtPct } from "@/lib/api";
-import { fmtRange } from "./format";
+import { fmtRange, fmtTimes } from "./format";
 import { Badge, Panel, type Tone } from "./primitives";
 import type { AdsModule, Overview } from "./types";
 
@@ -69,7 +69,6 @@ function statusOf(s: string | null): { label: string; tone: Tone } | null {
 }
 
 const NA = "—";
-const times = (n: number | null) => (n === null ? NA : `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(n)}×`);
 const freq = (n: number | null) => (n === null ? NA : new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(n));
 
 function Cells({ m, money }: { m: MetaReportMetrics; money: (n: number | null) => string }) {
@@ -87,7 +86,7 @@ function Cells({ m, money }: { m: MetaReportMetrics; money: (n: number | null) =
       <td className={td}>{fmtNum(m.purchases)}</td>
       <td className={td}>{money(m.costPerPurchase)}</td>
       <td className={td}>{money(m.purchaseValue)}</td>
-      <td className={td}>{times(m.roas)}</td>
+      <td className={td}>{fmtTimes(m.roas)}</td>
     </>
   );
 }
