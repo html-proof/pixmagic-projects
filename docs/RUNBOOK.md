@@ -1,14 +1,20 @@
 # Runbook
 
-For on-call. Each entry: **symptom → check → fix**. Commands assume `gcloud` is pointed at the project; locally, replace with `docker compose` equivalents.
+For on-call. Each entry: **symptom → check → fix**.
+
+Production is one Cloudflare Worker (`insights`, see [deployment-cloudflare.md](deployment-cloudflare.md)) in front of Postgres. Postgres is the `postgres` compose service on the host machine, reached by Hyperdrive through the `cloudflared` tunnel container. `wrangler` commands run from `apps/cloudflare`. SQL runs as the owner role:
+
+```bash
+docker compose exec postgres psql -U app -d app
+```
 
 ## Health at a glance
 
 | Check | Healthy |
 | --- | --- |
-| `GET https://api.example.com/readyz` | `200 {"ok":true,"checks":{"db":true,"redis":true}}` |
-| Worker `/readyz` (Cloud Run console → insights-worker) | `200` |
-| Queue depth: `redis-cli -h <host> LLEN bull:webhooks:wait` | < 1000 and draining |
+| `GET <APP_URL>/api/readyz` | `200 {"ok":true,"checks":{"db":true,"coord":true}}` |
+| Live logs: `npx wrangler tail` (or the dashboard: Workers → insights → Logs) | no `"level":"error"` bursts |
+| Queue backlog: dashboard → Queues → `insights-sync`, `insights-webhooks`, `insights-aggregate` | draining; `insights-dlq` empty |
 | Failed webhooks: `SELECT count(*) FROM webhook_events WHERE status='failed' AND received_at > now() - interval '1 day';` | ~0 |
 | Stores in error: `SELECT shop_domain FROM stores WHERE status='error';` | none |
 | Open alerts: `SELECT * FROM alerts WHERE resolved_at IS NULL ORDER BY created_at DESC;` | none critical |
@@ -36,47 +42,59 @@ For on-call. Each entry: **symptom → check → fix**. Commands assume `gcloud`
 3. To replay a single event you need the payload, which isn't stored. Re-sync (orders are re-pulled from Shopify) instead.
 
 ### Webhooks returning 401 en masse
-The `SHOPIFY_API_SECRET` doesn't match the app (secret rotated in Partners but not in Secret Manager, or vice-versa). Update the secret, redeploy the API. Shopify retries failed deliveries for 48 h, so nothing is lost if fixed promptly.
+`SHOPIFY_API_SECRET` doesn't match the app (secret rotated in the Partner dashboard but not in the Worker, or vice versa). `npx wrangler secret put SHOPIFY_API_SECRET` (takes effect immediately; it deploys a new version). Shopify retries failed deliveries for 48 h, so nothing is lost if fixed promptly.
 
-### Webhook queue growing
-1. Worker instances running? Check Cloud Run → insights-worker → revisions / logs.
-2. Redis memory: `INFO memory`. If near the limit, scale Memorystore.
-3. Scale the worker: raise `max_instance_count` / `min_instance_count` in Terraform.
+### `/readyz` says `"db":false`, or every API call fails
+Postgres is unreachable from Cloudflare. Queue consumers notice the same thing and park their jobs (see "Failed jobs" in [deployment-cloudflare.md](deployment-cloudflare.md#operations)), so nothing is lost while it is down; the UI is.
+1. Is the host machine awake and online, and is Docker Desktop running? Stopping Docker Desktop stops production.
+2. `docker compose ps`: `postgres` must be `healthy` and `cloudflared` `running`. Start them with `docker compose up -d postgres` and `docker compose --profile tunnel up -d cloudflared`.
+3. `docker compose logs --tail 50 cloudflared`: registered connections should say `protocol=quic`. The tunnel must run `--protocol quic` (see the comment in `docker-compose.yml`): over http2 it reports healthy while Hyperdrive gets `connection_refused`. QUIC needs outbound UDP 7844.
+4. Re-check `/readyz`. Parked jobs resume by themselves.
+
+### Queue backlog growing
+1. Dashboard → Queues → the queue → consumer errors, and `npx wrangler tail` for the failures.
+2. If the errors are database timeouts, see the `"db":false` entry above.
+3. Concurrency is `max_concurrency` under `queues.consumers` in `apps/cloudflare/wrangler.jsonc`; raising it only helps when the consumers are healthy and Shopify is not the bottleneck.
+4. `insights-dlq` has no consumer: messages there were given up on (after a long outage, or a crash). Re-sync the affected stores.
 
 ### API 5xx spike
-1. Logs: `gcloud logging read 'resource.labels.service_name="insights-api" severity>=ERROR' --limit 50`.
-2. `/readyz` failing on `db` → Cloud SQL (connections, CPU, maintenance). On `redis` → Memorystore.
-3. Roll back: `terraform apply -var image_tag=<previous sha>`.
+1. `npx wrangler tail --status error`, or Workers → insights → Logs filtered to errors. Every unhandled error is logged as `"unhandled error"` with the path.
+2. Cloudflare's own error page (1102) instead of ours: CPU limit, see "Cloudflare error 1102" in [deployment-cloudflare.md](deployment-cloudflare.md#troubleshooting).
+3. A bad release: `npx wrangler rollback` (pick the previous version). Do not roll back migrations; ship a forward fix.
 
 ### Users can't sign in
 1. Firebase status page; Authentication → Usage for quota.
 2. `stale_sign_in` errors: client clock skew or a cached old ID token. They should sign in again.
-3. OTP emails not arriving: check SMTP provider dashboard and `SMTP_URL` secret. Rate limits are 3 codes / 15 min per email.
+3. Sign-in codes not arriving: Workers logs for the email send, and that the `EMAIL_FROM` domain is still onboarded to Email Sending. Rate limits are 3 codes / 15 min per email.
 
 ### Dashboard numbers look wrong
 1. Compare with Shopify Analytics for the **same time zone and definitions** (see [kpis.md](kpis.md)). Common causes: Shopify "Total sales" includes tax and shipping; ours excludes them. Refunds are on refund date.
-2. Recompute aggregates for a store and range (idempotent):
+2. Recompute the store's daily aggregates from its orders and refunds (idempotent; see [Maintenance tasks](#maintenance-tasks)):
 
 ```bash
-pnpm --filter @app/worker exec tsx -e "import('@app/core').then(async c=>{const {systemDb}=await import('@app/db');const s=await systemDb.store.findUniqueOrThrow({where:{shopDomain:process.argv[1]}});const days=(await systemDb.order.findMany({where:{storeId:s.id},select:{localDay:true},distinct:['localDay']})).map(d=>d.localDay);await c.recomputeDays(s,days);console.log('recomputed',days.length);process.exit(0)})" shop.myshopify.com
+OPS_SHOP=shop.myshopify.com pnpm --filter @app/worker ops:recompute
 ```
 
 3. Still off: re-sync the store (re-pulls 60 days).
 
+## Maintenance tasks
+
+`pnpm --filter @app/worker ops:<task>` from the repo root runs a task in `apps/worker/ops/` against the database in the repo-root `.env` (or the file named by `OPS_ENV_FILE`). That file needs the **owner-role** `DATABASE_URL` and the **same** `TOKEN_ENCRYPTION_KEYS` as the deployed Worker. In Windows PowerShell set variables first: `$env:OPS_SHOP = "shop.myshopify.com"`, then run the `pnpm` line on its own.
+
+| Task | What it does |
+| --- | --- |
+| `ops:recompute` | Rebuilds `daily_store_metrics` for `OPS_SHOP` from its orders and refunds. |
+| `ops:reencrypt` | Re-encrypts everything stored under `TOKEN_ENCRYPTION_KEYS` with the active key: Shopify and ad-platform tokens, WhatsApp connection secrets, contacts, message parameters and links, tracking and review tokens, abandoned checkouts. |
+
 ## Routine operations
 
 ### Rotate the token encryption key
-1. Generate a key; prepend it: `TOKEN_ENCRYPTION_KEYS=2:<new>,1:<old>`. Deploy API and worker. New writes use v2; v1 still decrypts.
-2. Re-encrypt existing tokens:
-
-```bash
-pnpm --filter @app/worker exec tsx -e "import('@app/core').then(async c=>{console.log('re-encrypted', await c.reencryptAllTokens());process.exit(0)})"
-```
-
-3. Verify: `SELECT token_key_version, count(*) FROM stores GROUP BY 1;` shows only `2`. Remove `1:<old>` and deploy.
+1. Generate a key (`openssl rand -base64 32`) and prepend it: `TOKEN_ENCRYPTION_KEYS=2:<new>,1:<old>`. Set it on the Worker (`npx wrangler secret put TOKEN_ENCRYPTION_KEYS`) and in the `.env` the maintenance tasks use. New writes use v2; v1 still decrypts.
+2. Re-encrypt existing data: `pnpm --filter @app/worker ops:reencrypt` (prints how many rows it rewrote).
+3. Run it again: it must print `re-encrypted 0 rows` (rows written by the Worker between deploy and step 2 are already on v2). Only then remove `1:<old>` from both places. A merchant in the middle of "Continue with Shopify" at that moment has to start it again; nothing else is lost.
 
 ### Rotate the Shopify client secret
-Partners → app → Client credentials → rotate. Shopify accepts both for a grace period. Update `SHOPIFY_API_SECRET` in Secret Manager, redeploy API + worker within that window.
+Partners → app → Client credentials → rotate. Shopify accepts both for a grace period. `npx wrangler secret put SHOPIFY_API_SECRET` within that window.
 
 ### Rotate the OTP pepper
 Changing `OTP_PEPPER` invalidates outstanding codes (fine, they expire in 10 min) **and changes customer hashes** (`customer_key`), which resets returning-customer history. Avoid unless compromised; if you must, re-sync all stores afterwards.
@@ -84,8 +102,14 @@ Changing `OTP_PEPPER` invalidates outstanding codes (fine, they expire in 10 min
 ### Merchant asks for data deletion
 Disconnecting in Settings → Stores deletes synced data immediately. Shopify's `shop/redact` (48 h after uninstall) does the same automatically.
 
-### Restore the database
-Cloud SQL → Backups → point-in-time restore to a **new** instance, verify, then switch `DATABASE_URL`/`APP_DATABASE_URL`. After restore, re-sync stores to catch up on data since the restore point (webhooks during the gap were acked by the old DB).
+### Back up and restore the database
+The data lives in the `pgdata` Docker volume on the host machine; nothing in this repository backs it up. Take a backup:
+
+```bash
+docker compose exec -T postgres pg_dump -U app -Fc app > insights-backup.dump
+```
+
+Restore into a **new** database first (`createdb -U app app_restore`, then `pg_restore -U app -d app_restore` from the dump inside the container), verify it, and only then point the Hyperdrive configs at it. After a restore, re-sync stores to catch up on data since the backup (webhooks during the gap were acked by the old database).
 
 ### Cleanup jobs (monthly)
 ```sql
@@ -100,7 +124,7 @@ DELETE FROM email_otps WHERE created_at < now() - interval '1 day';
 
 | Problem | Fix |
 | --- | --- |
-| Port 5432/6379 in use | Compose uses 5434/6380 by default; override with `PG_PORT`/`REDIS_PORT` |
+| Port 5434 in use | Override with `PG_PORT` |
 | `app_rls` role missing (volume pre-dated init script) | `docker compose exec -T postgres psql -U app -d app < infra/postgres/init.sql` |
-| Emulator not reachable | First boot installs Java (~1–2 min): `docker compose logs -f firebase-emulator` |
-| Fresh start | `docker compose down -v && docker compose up -d && pnpm db:migrate` |
+| Emulator not reachable | First boot downloads firebase-tools (~1–2 min): `docker compose logs -f firebase-emulator` |
+| Fresh start (**local only**: on the production host this deletes production data) | `docker compose down -v && docker compose up -d && pnpm db:migrate` |

@@ -9,8 +9,6 @@ coverage
 .turbo
 playwright-report
 test-results
-.terraform
-*.tfstate*
 
 # Firebase service account keys
 *-firebase-adminsdk-*.json
