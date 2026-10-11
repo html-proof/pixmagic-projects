@@ -75,6 +75,13 @@ import { limit, LIMITS } from "../rateLimit.js";
 
 const STATE_TTL_S = 600;
 const STATE_COOKIE = "ads_oauth_state";
+/**
+ * The sign-ins this browser started that haven't come back yet, newest first. A second press of the
+ * button (or a second tab) mustn't void the first: the platform may still send the person back with
+ * the first one's state. Each is still single-use and bound to this browser.
+ */
+const MAX_PENDING_STATES = 5;
+const pendingStates = (cookie: string | undefined) => (cookie ?? "").split(".").filter((n) => /^[A-Za-z0-9_-]{16,64}$/.test(n));
 
 const cookieOpts = () => ({ path: "/", httpOnly: true, sameSite: "Lax" as const, secure: env().NODE_ENV === "production", maxAge: STATE_TTL_S });
 
@@ -193,7 +200,7 @@ export function adsRoutes(app: App, deps: Deps) {
     const pkce = provider === "meta" ? null : pkcePair();
     const state: AdsState = { userId: user.id, workspaceId: ws, storeId, provider, ...(pkce ? { codeVerifier: pkce.verifier } : {}) };
     await deps.coord.put(`oauth:ads:${nonce}`, JSON.stringify(state), STATE_TTL_S);
-    setCookie(c, STATE_COOKIE, nonce, cookieOpts());
+    setCookie(c, STATE_COOKIE, [nonce, ...pendingStates(getCookie(c, STATE_COOKIE))].slice(0, MAX_PENDING_STATES).join("."), cookieOpts());
     const redirectUri = adsRedirectUri(provider);
     const url =
       provider === "meta" ? metaAuthorizeUrl(meta!, redirectUri, nonce)
@@ -216,9 +223,13 @@ export function adsRoutes(app: App, deps: Deps) {
     const q = c.req.query();
 
     try {
-      const cookieState = getCookie(c, STATE_COOKIE);
-      deleteCookie(c, STATE_COOKIE, { path: "/" });
-      if (!q.state || !cookieState || !safeEqual(cookieState, q.state)) return back({ error: "state_mismatch", provider });
+      const pending = pendingStates(getCookie(c, STATE_COOKIE));
+      const ours = !!q.state && pending.some((n) => safeEqual(n, q.state!));
+      // This one is used up either way; the others this browser started stay usable.
+      const rest = pending.filter((n) => n !== q.state);
+      if (rest.length) setCookie(c, STATE_COOKIE, rest.join("."), cookieOpts());
+      else deleteCookie(c, STATE_COOKIE, { path: "/" });
+      if (!ours) return back({ error: "state_mismatch", provider });
       const raw = await deps.coord.take(`oauth:ads:${q.state}`);
       if (!raw) return back({ error: "state_expired", provider });
       const state = JSON.parse(raw) as AdsState;

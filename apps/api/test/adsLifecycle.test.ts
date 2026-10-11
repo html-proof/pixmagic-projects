@@ -220,6 +220,35 @@ describe("Google Ads before Google approves Insights for real accounts", () => {
   });
 });
 
+describe("the sign-in's state cookie", () => {
+  /** The ads_oauth_state value a response sets, if any. */
+  const stateCookie = (res: { headers: Record<string, string> }) => /ads_oauth_state=([^;]*)/.exec(res.headers["set-cookie"] ?? "")?.[1] ?? null;
+
+  it("pressing the button twice doesn't void the first sign-in: either can come back, once each, only to this browser", async () => {
+    const seen = fresh();
+    ctx.setFetch(googlePlatform(seen));
+    const press = (cookieJar: string | null) =>
+      ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/stores/${storeId}/ads/google/connect`, headers: cookieJar ? { ...headers, cookie: `${cookie}; ads_oauth_state=${cookieJar}` } : headers });
+    const first = await press(null);
+    const jar1 = stateCookie(first)!;
+    const second = await press(jar1);
+    const jar2 = stateCookie(second)!;
+    const s1 = new URL(first.json().url).searchParams.get("state")!;
+    const s2 = new URL(second.json().url).searchParams.get("state")!;
+    expect(jar2.split(".")).toEqual([s2, s1]);
+
+    // The person finishes the FIRST sign-in (the second tab was abandoned).
+    const back = (state: string, jar: string) => ctx.app.inject({ method: "GET", url: `/ads/google/callback?state=${state}&code=C`, headers: { cookie: `${cookie}; ads_oauth_state=${jar}` } });
+    const done = await back(s1, jar2);
+    expect(new URL(done.headers.location as string).pathname).toBe("/dashboard");
+    // The used one is gone; the other is still pending for this browser.
+    expect(stateCookie(done)).toBe(s2);
+    // Replaying the first is refused; a state this browser never started is refused.
+    expect(new URL((await back(s1, s2)).headers.location as string).searchParams.get("error")).toBe("state_mismatch");
+    expect(new URL((await back(s2, "someone-elses-state-0123456789ab")).headers.location as string).searchParams.get("error")).toBe("state_mismatch");
+  });
+});
+
 describe("disconnecting gives access back to the platform, only when nothing else relies on it", () => {
   it("Google: Google Ads and AdSense share one person's grant, so it is revoked with the last of them", async () => {
     const seen = fresh();
