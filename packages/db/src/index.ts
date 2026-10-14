@@ -126,13 +126,23 @@ export async function disconnectDb() {
  * stalled link as nothing at all - hence the timeout. Never throws.
  */
 export async function dbReachable(timeoutMs = 3_000): Promise<boolean> {
+  return (await probeDb(() => systemDb.$queryRaw`SELECT 1`, timeoutMs)).ok;
+}
+
+export type ProbeResult = { ok: true } | { ok: false; error: unknown };
+
+/**
+ * Run a trivial query (`SELECT 1` on the client you pick) bounded by `timeoutMs`, and say why it
+ * failed when it did, for health checks that log the reason. Never throws.
+ */
+export async function probeDb(query: () => Promise<unknown>, timeoutMs = 3_000): Promise<ProbeResult> {
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const probe = (async () => {
-    await systemDb.$queryRaw`SELECT 1`;
-    return true;
-  })().catch(() => false);
-  const timedOut = new Promise<boolean>((resolve) => {
-    timer = setTimeout(() => resolve(false), timeoutMs);
+  const probe = (async (): Promise<ProbeResult> => {
+    await query();
+    return { ok: true };
+  })().catch((error: unknown): ProbeResult => ({ ok: false, error }));
+  const timedOut = new Promise<ProbeResult>((resolve) => {
+    timer = setTimeout(() => resolve({ ok: false, error: new Error(`no answer within ${timeoutMs} ms`) }), timeoutMs);
   });
   try {
     return await Promise.race([probe, timedOut]);

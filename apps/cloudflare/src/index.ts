@@ -1,6 +1,6 @@
 import { buildApp, firebaseAuthProvider, type App, type AuthProvider, type Deps } from "@app/api";
 import { consume, runScheduled, type QueueMessage, type WorkerDeps } from "@app/worker";
-import { cloudflareMailer, logger, mailpitMailer, type BlobStore, type Producer, type QueueName, type Queues } from "@app/core";
+import { cloudflareMailer, logger, mailpitMailer, withLogContext, type BlobStore, type Producer, type QueueName, type Queues } from "@app/core";
 import { withDb, type DbUrls } from "@app/db";
 import { env as bindings } from "cloudflare:workers";
 import { durableCoord, type Coordinator } from "./coordinator.js";
@@ -144,16 +144,19 @@ export default {
     }
     const deps = workerDeps(env);
     await withDb(dbUrls(env), async () => {
-      for (const msg of batch.messages) await consume(name, msg as QueueMessage, deps);
+      // Every log line about a message carries its queue and id, so one job's lines can be found together.
+      for (const msg of batch.messages) await withLogContext({ queue: name, messageId: msg.id }, () => consume(name, msg as QueueMessage, deps));
     });
   },
 
   async scheduled(controller, env, ctx) {
     ctx.waitUntil(
-      withDb(dbUrls(env), async () => {
-        const result = await runScheduled(controller.cron, workerDeps(env));
-        logger.info({ cron: controller.cron, ...result }, "scheduled run finished");
-      }).catch((err: unknown) => {
+      withLogContext({ cron: controller.cron }, () =>
+        withDb(dbUrls(env), async () => {
+          const result = await runScheduled(controller.cron, workerDeps(env));
+          logger.info({ cron: controller.cron, ...result }, "scheduled run finished");
+        }),
+      ).catch((err: unknown) => {
         // Logged in the structured format the other logs use; rethrown so Cloudflare still
         // records the run as failed.
         logger.error({ err, cron: controller.cron }, "scheduled run failed");
