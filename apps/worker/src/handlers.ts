@@ -444,6 +444,9 @@ export async function runSync(data: SyncJobData, deps: WorkerDeps) {
 /** Topics about the app installation itself (not store data). */
 const APP_SCOPED_TOPICS = new Set(["app/uninstalled", "app/scopes_update", "shop/redact", "app_subscriptions/update"]);
 
+/** How long app/scopes_update holds back the import work it queues (see that case below). */
+const SCOPE_FOLLOW_UP_DELAY_S = 60;
+
 /** REST product payloads list at most this many variants; a shorter list is complete. */
 const REST_PRODUCT_VARIANT_LIMIT = 100;
 
@@ -568,13 +571,18 @@ export async function processWebhook(data: WebhookJobData, deps: WorkerDeps) {
         const current = raw.map((s) => s.trim()).filter(Boolean);
         const newlyGranted = current.filter((s) => !store.grantedScopes.includes(s));
         const revoked = store.grantedScopes.filter((s) => !current.includes(s));
-        await systemDb.store.update({ where: { id: store.id }, data: { grantedScopes: current } });
-        await audit({ workspaceId: store.workspaceId, action: "store.scopes_updated", targetId: store.id, metadata: { current, granted: newlyGranted, revoked } });
         // Granting a scope doesn't backfill the data it guards. Queue what the new scopes make
         // possible — and, for read_customers, necessary (see scopeFollowUpKinds). This fires
         // however the grant happened: our own request flow, or a merchant acting in their admin
         // where we never saw it, which is the case nothing else would cover.
-        await seedScopeFollowUp(deps, store, newlyGranted);
+        // Queued *before* the scopes are saved: "newly granted" is worked out against the saved
+        // scopes, so saving first meant a retry after a failed queue send found nothing new and the
+        // backfill was lost for good. This way a retry can at worst queue it twice (idempotent).
+        // Held back a minute, because the jobs read the saved scopes when they run (an orders
+        // import that ran before the save would skip the customer hash read_customers allows).
+        await seedScopeFollowUp(deps, store, newlyGranted, { delaySeconds: SCOPE_FOLLOW_UP_DELAY_S });
+        await systemDb.store.update({ where: { id: store.id }, data: { grantedScopes: current } });
+        await audit({ workspaceId: store.workspaceId, action: "store.scopes_updated", targetId: store.id, metadata: { current, granted: newlyGranted, revoked } });
         break;
       }
       case "app_subscriptions/update": {
@@ -633,30 +641,37 @@ const ENDED_CHARGE = new Set(["cancelled", "declined", "expired"]);
  * Activating the pending one makes it the plan; a pending one that ends just goes away; the one in
  * force ending drops the workspace to free. Statuses for any other charge (one replaced by a later
  * change, delivered late) are ignored, so retries and out-of-order delivery cannot resurrect it.
+ *
+ * Every write is conditional on the charge still being where it was read (`updateMany` with the
+ * charge id in the filter): Shopify sends "new charge active" and "old charge cancelled" together,
+ * and two consumers handling them at once each read the row before the other wrote, so an
+ * unconditional write let the cancellation drop a just-upgraded workspace to free.
  */
 export async function applySubscriptionUpdate(workspaceId: string, chargeId: string | undefined, status: string) {
   if (!chargeId) return;
   const row = await systemDb.subscription.findUnique({ where: { workspaceId } });
   if (!row) return;
   if (chargeId === row.pendingChargeId) {
+    const stillPending = { workspaceId, pendingChargeId: chargeId };
     if (status === "active") {
-      await systemDb.subscription.update({
-        where: { workspaceId },
+      const { count } = await systemDb.subscription.updateMany({
+        where: stillPending,
         data: { plan: row.pendingPlan ?? row.plan, status: "active", shopifyChargeId: chargeId, pendingPlan: null, pendingChargeId: null },
       });
-      await audit({ workspaceId, action: "billing.plan_changed", metadata: { plan: row.pendingPlan, from: row.plan } });
+      if (count) await audit({ workspaceId, action: "billing.plan_changed", metadata: { plan: row.pendingPlan, from: row.plan } });
     } else if (ENDED_CHARGE.has(status)) {
-      await systemDb.subscription.update({ where: { workspaceId }, data: { pendingPlan: null, pendingChargeId: null } });
-      await audit({ workspaceId, action: "billing.plan_change_ended", metadata: { plan: row.pendingPlan, status } });
+      const { count } = await systemDb.subscription.updateMany({ where: stillPending, data: { pendingPlan: null, pendingChargeId: null } });
+      if (count) await audit({ workspaceId, action: "billing.plan_change_ended", metadata: { plan: row.pendingPlan, status } });
     }
     return;
   }
   if (chargeId === row.shopifyChargeId) {
+    const stillCurrent = { workspaceId, shopifyChargeId: chargeId };
     if (ENDED_CHARGE.has(status)) {
-      await systemDb.subscription.update({ where: { workspaceId }, data: { plan: "free", status: "active", shopifyChargeId: null } });
-      await audit({ workspaceId, action: "billing.subscription_ended", metadata: { plan: row.plan, status } });
+      const { count } = await systemDb.subscription.updateMany({ where: stillCurrent, data: { plan: "free", status: "active", shopifyChargeId: null } });
+      if (count) await audit({ workspaceId, action: "billing.subscription_ended", metadata: { plan: row.plan, status } });
     } else {
-      await systemDb.subscription.update({ where: { workspaceId }, data: { status } });
+      await systemDb.subscription.updateMany({ where: stillCurrent, data: { status } });
     }
     return;
   }
@@ -670,6 +685,24 @@ export async function runAggregate(data: AggregateJobData) {
   if (!store) return { skipped: true };
   await recomputeDays(store, data.days);
   return { ok: true, days: data.days.length };
+}
+
+/** Days whose recompute gave up, per store, kept in the Coordinator for the next reconcile. */
+const failedAggregateKey = (storeId: string) => `agg-failed:${storeId}`;
+const FAILED_AGGREGATE_TTL_S = 14 * 86400;
+/** More than a backfill's worth of days is never needed: the oldest are dropped. */
+const FAILED_AGGREGATE_MAX_DAYS = 400;
+
+/**
+ * Remember the days of an aggregate job that has run out of attempts. The reconcile repairs days
+ * with no totals at all (see unaggregatedDays), but a day whose recompute failed keeps its old,
+ * now wrong, totals and would never be looked at again; the next reconcile recomputes these too.
+ */
+export async function rememberFailedAggregate(deps: Pick<WorkerDeps, "coord">, data: AggregateJobData) {
+  const key = failedAggregateKey(data.storeId);
+  const prev = await deps.coord.take(key);
+  const days = [...new Set([...(prev ? (JSON.parse(prev) as string[]) : []), ...data.days])].sort().slice(-FAILED_AGGREGATE_MAX_DAYS);
+  await deps.coord.put(key, JSON.stringify(days), FAILED_AGGREGATE_TTL_S);
 }
 
 // ---------------------------------------------------------------- scheduled
@@ -753,9 +786,13 @@ export async function scheduleReconcile(deps: WorkerDeps) {
   for (const s of stores) {
     const lease = `reconcile:${s.id}`;
     if (!(await deps.coord.acquire(lease, RECONCILE_LEASE_MS))) continue;
+    let failedDays: string | null = null;
     try {
       // Read before anything is sent, so a failure here leaves nothing behind for the retry to duplicate.
-      const missing = await unaggregatedDays(s.id, localDay(new Date(now - BACKFILL_DAYS * 86400_000), s.timezone));
+      const unaggregated = await unaggregatedDays(s.id, localDay(new Date(now - BACKFILL_DAYS * 86400_000), s.timezone));
+      // Plus the days whose recompute ran out of attempts (rememberFailedAggregate).
+      failedDays = await deps.coord.take(failedAggregateKey(s.id));
+      const missing = [...new Set([...unaggregated, ...(failedDays ? (JSON.parse(failedDays) as string[]) : [])])].sort();
       const sinceDays = reconcileOrderDays(s.lastSyncedAt, now);
       if (sinceDays > RECONCILE_ORDER_DAYS) logger.info({ storeId: s.id, sinceDays, lastSyncedAt: s.lastSyncedAt }, "reconcile catching up on a gap");
       const kinds: SyncKind[] = ["orders"];
@@ -772,6 +809,8 @@ export async function scheduleReconcile(deps: WorkerDeps) {
       // Best-effort: the Coordinator does not need Postgres, but a failed release must not hide
       // the error that matters. Unreleased, the store would wait out the lease instead.
       await deps.coord.release(lease).catch(() => {});
+      // Put back the failed days taken above, so the run that retries this store still sees them.
+      if (failedDays) await deps.coord.put(failedAggregateKey(s.id), failedDays, FAILED_AGGREGATE_TTL_S).catch(() => {});
       throw err;
     }
     reconciled++;

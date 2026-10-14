@@ -19,6 +19,7 @@ import {
   failStaleJobs,
   processWebhook,
   refreshExpiringTokens,
+  rememberFailedAggregate,
   runAdsSync,
   runAggregate,
   runWhatsappJob,
@@ -208,6 +209,11 @@ async function onFailure(queue: QueueName, body: unknown, err: Error, final: boo
       );
     }
     if (data.payloadKey) await deps.payloads.delete(data.payloadKey).catch(() => {});
+  } else if (queue === "aggregate" && final) {
+    // Those days keep totals that are now wrong: the next reconcile recomputes them.
+    await rememberFailedAggregate(deps, body as AggregateJobData).catch((e: unknown) =>
+      logger.error({ err: e, storeId: (body as AggregateJobData)?.storeId }, "could not record the days of a failed aggregate"),
+    );
   }
 }
 
