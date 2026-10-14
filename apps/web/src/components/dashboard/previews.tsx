@@ -1,8 +1,8 @@
 "use client";
 import type { ReactNode } from "react";
+import type { Health } from "@app/shared/health";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { fmtDay, fmtMoneyWhole, fmtRelative, fmtWeekday } from "./format";
-import type { Health } from "./overview";
 import type { Topic } from "./topics";
 import type { Overview } from "./types";
 

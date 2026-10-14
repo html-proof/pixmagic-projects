@@ -1,5 +1,6 @@
 "use client";
 import type { ReactNode } from "react";
+import { gradeRefundRate, shippingIsLate } from "@app/shared/health";
 import { dailyBreakdown } from "@app/shared/sales";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { SECTION_LABEL, STEP_LABEL } from "./funnel";
@@ -144,14 +145,14 @@ function nextSteps(topic: Topic, ov: Overview, currency: string): ReactNode[] {
       if (d !== null && d < 0) out.push(<>Sales are down {fmtPct(-d)}. Open <b>Shoppers</b>: if visits fell, fewer people came; if visits held but fewer bought, look at the store itself.</>);
       if (d !== null && d > 0) out.push(<>Sales are up {fmtPct(d)}. <b>Best sellers</b> shows which products drove it; keep those in stock.</>);
       const r = m.refunds?.current;
-      if (r?.refundRate && r.refundRate > 0.05) out.push(<>Refunds are {fmtPct(r.refundRate)} of sales ({money(r.refunds)}). <b>Recent orders</b> links each order to Shopify to see why.</>);
+      if (r?.refundRate && gradeRefundRate(r.refundRate) !== "good") out.push(<>Refunds are {fmtPct(r.refundRate)} of sales ({money(r.refunds)}). <b>Recent orders</b> links each order to Shopify to see why.</>);
       const b = dailyBreakdown(s.series, ov.today, ov.data?.oldestOrderDay ?? null);
       if (b.bestWeekday) out.push(<>{weekdayName(b.bestWeekday.weekday)}s sell best ({money(b.bestWeekday.average)} on average): a good day for emails, posts or new products.</>);
       if (topic === "overview") {
         const inv = m.inventory?.current;
         if (inv && inv.outOfStock > 0) out.push(<>{plural(inv.outOfStock, "variant is", "variants are")} sold out. <b>Stock</b> lists what to reorder first.</>);
         const f = m.fulfillment;
-        if (f && (f.oldestOpenDays ?? 0) > 3) out.push(<>An order has waited {plural(f.oldestOpenDays!, "day")} to ship. <b>Shipping</b> shows what&apos;s still open.</>);
+        if (f && shippingIsLate(f.oldestOpenDays)) out.push(<>An order has waited {plural(f.oldestOpenDays!, "day")} to ship. <b>Shipping</b> shows what&apos;s still open.</>);
       }
       break;
     }

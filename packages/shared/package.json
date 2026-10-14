@@ -10,6 +10,7 @@
     "./ads": "./src/ads.ts",
     "./capabilities": "./src/capabilities.ts",
     "./dates": "./src/dates.ts",
+    "./health": "./src/health.ts",
     "./journey": "./src/journey.ts",
     "./roles": "./src/roles.ts",
     "./sales": "./src/sales.ts",
