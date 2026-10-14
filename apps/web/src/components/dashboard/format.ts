@@ -29,6 +29,15 @@ export function fmtWeekday(day: string): string {
   return new Intl.DateTimeFormat(undefined, { timeZone: "UTC", weekday: "short" }).format(new Date(`${day}T00:00:00Z`));
 }
 
+/** A weekday by its number, Monday = 0 … Sunday = 6 (as `weekdayOf` counts), in the viewer's language: "Monday" / "Mon". */
+export function weekdayName(i: number, style: "long" | "short"): string {
+  // 2026-01-05 is a Monday.
+  return new Intl.DateTimeFormat(undefined, { weekday: style, timeZone: "UTC" }).format(new Date(Date.UTC(2026, 0, 5 + i)));
+}
+
+/** The seven weekday names, Monday first. */
+export const weekdayNames = (style: "long" | "short"): string[] => Array.from({ length: 7 }, (_, i) => weekdayName(i, style));
+
 /** "Wed, 24 Jun 2026". */
 export function fmtLongDay(day: string): string {
   return new Intl.DateTimeFormat(undefined, { timeZone: "UTC", weekday: "short", day: "numeric", month: "short", year: "numeric" }).format(new Date(`${day}T00:00:00Z`));

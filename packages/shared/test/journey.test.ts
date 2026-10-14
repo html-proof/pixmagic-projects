@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cleanPath, foldVisit, sectionBit, summarizeJourney } from "../src/journey.js";
+import { bestEntryPage, biggestDropOff, cleanPath, dropOffSection, foldVisit, sectionBit, summarizeJourney, type FunnelStepSummary, type JourneyPageRow } from "../src/journey.js";
 
 describe("cleanPath", () => {
   it.each([
@@ -128,5 +128,62 @@ describe("summarizeJourney", () => {
     const e = summarizeJourney([], []);
     expect(e).toMatchObject({ visits: 0, purchases: 0, conversionRate: null, pagesPerVisit: null, sections: [] });
     expect(e.steps.every((x) => x.reached === 0 && x.shareOfVisits === null)).toBe(true);
+  });
+});
+
+describe("reading the summary", () => {
+  const step = (step: FunnelStepSummary["step"], left: number, leftFrom: FunnelStepSummary["leftFrom"] = []): FunnelStepSummary => ({
+    step,
+    reached: 0,
+    shareOfVisits: null,
+    continued: null,
+    left,
+    leftRate: null,
+    leftFrom,
+  });
+
+  it("finds the step most visits stopped at, never the purchase", () => {
+    const steps = [step("visited", 10), step("viewed_product", 40), step("added_to_cart", 5), step("started_checkout", 2), step("purchased", 0)];
+    expect(biggestDropOff(steps)?.step).toBe("viewed_product");
+    // The purchase step is left out even if it somehow carried leavers.
+    expect(biggestDropOff([step("visited", 1), step("purchased", 99)])?.step).toBe("visited");
+  });
+
+  it("keeps the earlier step on a tie, including when nobody left", () => {
+    expect(biggestDropOff([step("visited", 7), step("viewed_product", 7), step("purchased", 0)])?.step).toBe("visited");
+    expect(biggestDropOff([step("visited", 0), step("viewed_product", 0), step("purchased", 0)])).toMatchObject({ step: "visited", left: 0 });
+  });
+
+  it("has no drop-off with fewer than two steps", () => {
+    expect(biggestDropOff([])).toBeNull();
+    expect(biggestDropOff([step("visited", 9)])).toBeNull();
+  });
+
+  it("names the first recorded section the leavers were on", () => {
+    expect(dropOffSection(step("viewed_product", 5, [{ section: null, visits: 9 }, { section: "product", visits: 4 }, { section: "cart", visits: 1 }]))).toBe("product");
+    expect(dropOffSection(step("viewed_product", 5, [{ section: null, visits: 5 }]))).toBeUndefined();
+    expect(dropOffSection(step("viewed_product", 0))).toBeUndefined();
+    expect(dropOffSection(null)).toBeUndefined();
+    expect(dropOffSection(undefined)).toBeUndefined();
+  });
+
+  const page = (path: string, visits: number, purchases: number): JourneyPageRow => ({ path, section: "other", visits, purchases });
+
+  it("picks the landing page that bought most often, from 5 visits up", () => {
+    const pages = [page("/", 100, 3), page("/products/mug", 5, 1), page("/collections/all", 4, 4), page("/blogs/news", 20, 2)];
+    expect(bestEntryPage(pages)?.path).toBe("/products/mug");
+    // Under 5 visits is too few to say anything, however well it converted.
+    expect(bestEntryPage([page("/a", 4, 4)])).toBeUndefined();
+    expect(bestEntryPage([])).toBeUndefined();
+  });
+
+  it("keeps the first listed page on a tie and doesn't reorder its input", () => {
+    const pages = [page("/a", 10, 1), page("/b", 20, 2), page("/c", 10, 0)];
+    expect(bestEntryPage(pages)?.path).toBe("/a");
+    expect(pages.map((p) => p.path)).toEqual(["/a", "/b", "/c"]);
+  });
+
+  it("returns a page that nobody bought from when none did (callers check purchases)", () => {
+    expect(bestEntryPage([page("/a", 10, 0), page("/b", 8, 0)])?.path).toBe("/a");
   });
 });

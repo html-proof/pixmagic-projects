@@ -1,13 +1,13 @@
 "use client";
 import Link from "next/link";
-import type { ReactNode } from "react";
-import { weekdayOf } from "@app/shared/sales";
 import { GoogleIcon } from "@/components/BrandIcons";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
-import { fmtDay, fmtLongDay, fmtMoneyCompact, fmtMoneyWhole, fmtRange, fmtRelative, fmtSpan, fmtWeekday, plural } from "./format";
+import { AccountStatus, accountGroups, dailyMoneyColumns } from "./adsCommon";
+import { fmtLongDay, fmtMoneyCompact, fmtMoneyWhole, fmtRange, fmtSpan, plural } from "./format";
 import { Icon } from "./icons";
+import { B, changeWords } from "./narrative";
 import { Delta, Panel, Stat } from "./primitives";
-import { ColumnsWithTotal, type Column } from "./salesBreakdown";
+import { ColumnsWithTotal } from "./salesBreakdown";
 import type { AdsenseModule, Overview } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -15,37 +15,12 @@ import type { AdsenseModule, Overview } from "./types";
 // The opposite of the Ads panel (money spent): the two are never added together.
 // ---------------------------------------------------------------------------
 
-const B = ({ children }: { children: ReactNode }) => <strong className="font-semibold">{children}</strong>;
-const changeWords = (d: number | null) => (d === null ? "" : d === 0 ? ", the same as the period before" : `, ${d > 0 ? "up" : "down"} ${fmtPct(Math.abs(d))} on the period before`);
 /** AdSense says "" when a report isn't split by site. */
 const siteName = (s: string) => s || "All sites";
 
 function EarningsChart({ a, ov }: { a: AdsenseModule; ov: Overview }) {
   const money = (n: number) => fmtMoney(n, a.currency);
-  const n = a.series.length;
-  const max = Math.max(0, ...a.series.map((d) => d.earnings));
-  let running = 0;
-  const columns: Column[] = a.series.map((d) => {
-    running = Math.round((running + d.earnings) * 100) / 100;
-    const weekend = weekdayOf(d.day) >= 5;
-    const today = d.day === ov.today;
-    return {
-      key: d.day,
-      value: d.earnings,
-      fill: d.earnings === max && max > 0 ? "var(--viz-tier-3)" : "var(--viz-tier-2)",
-      faded: today,
-      shaded: weekend,
-      running,
-      tick: {
-        top: n <= 31 ? String(Number(d.day.slice(8))) : fmtDay(d.day, { year: false }),
-        bottom: today ? "Today" : fmtWeekday(d.day),
-        strong: weekend || today,
-        major: n <= 31 || (n <= 120 ? weekdayOf(d.day) === 0 : d.day.endsWith("-01")),
-      },
-      label: d.earnings ? fmtMoneyWhole(d.earnings, a.currency) : undefined,
-      keepLabel: d.earnings === max && max > 0,
-    };
-  });
+  const columns = dailyMoneyColumns(a.series, (d) => d.earnings, ov.today, a.currency);
   return (
     <ColumnsWithTotal
       columns={columns}
@@ -76,10 +51,7 @@ export function AdsenseDetail({ ov }: { ov: Overview }) {
   const a = ov.modules.adsense!;
   const c = a.current;
   const money = (n: number) => fmtMoney(n, a.currency);
-  const left = a.accounts.filter((acc) => !acc.counted);
-  // Never synced: still fetching while the account is fine; stuck if its first sync failed.
-  const waiting = a.accounts.filter((acc) => acc.counted && !acc.lastSyncedAt && acc.status === "active");
-  const failing = a.accounts.filter((acc) => acc.counted && !acc.lastSyncedAt && acc.status !== "active");
+  const { left, waiting, failing } = accountGroups(a.accounts);
   const empty = c.earnings === 0 && c.pageViews === 0;
   const bySite = a.sites.length > 1 || (a.sites.length === 1 && a.sites[0]!.site !== "");
 
@@ -101,7 +73,7 @@ export function AdsenseDetail({ ov }: { ov: Overview }) {
           ) : (
             <>
               <p>
-                Ads shown on your site earned <B>{money(c.earnings)}</B>{changeWords(a.deltas.earnings)}.
+                Ads shown on your site earned <B>{money(c.earnings)}</B>{changeWords(a.deltas.earnings, ", the same as the period before")}.
               </p>
               <p>
                 That came from <B>{plural(c.pageViews, "page view")}</B>
@@ -177,9 +149,7 @@ export function AdsenseDetail({ ov }: { ov: Overview }) {
           {a.accounts.map((acc) => (
             <li key={acc.id} className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
               <span className="inline-flex items-center gap-2"><GoogleIcon size={16} /><span className="font-medium">{acc.name ?? acc.accountId}</span><span className="text-xs text-muted">{acc.accountId}{acc.currency ? ` · ${acc.currency}` : ""}</span></span>
-              <span className={`text-xs ${acc.status === "reconnect" ? "text-danger" : acc.status === "error" ? "text-warn" : "text-muted"}`}>
-                {acc.status === "reconnect" ? "Needs reconnecting" : acc.status === "error" ? "Sync problem" : acc.lastSyncedAt ? `Synced ${fmtRelative(acc.lastSyncedAt)}` : "Fetching history…"}
-              </span>
+              <AccountStatus acc={acc} />
             </li>
           ))}
         </ul>

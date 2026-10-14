@@ -2,7 +2,7 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { dailyBreakdown, weekdayOf, type BreakdownDay, type SalesDay, type SalesMonth, type YearBreakdown } from "@app/shared/sales";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
-import { fmtDay, fmtLongDay, fmtMonth, fmtMoneyCompact, fmtMoneyWhole, fmtSpan, fmtWeekday } from "./format";
+import { fmtDay, fmtLongDay, fmtMonth, fmtMoneyCompact, fmtMoneyWhole, fmtSpan, fmtWeekday, weekdayName } from "./format";
 import { Delta } from "./primitives";
 
 // ---------------------------------------------------------------------------
@@ -486,7 +486,7 @@ export function DailySalesCard({
         {b.bestWeekday ? (
           <Figure
             label="Best weekday"
-            value={new Intl.DateTimeFormat(undefined, { weekday: "long", timeZone: "UTC" }).format(new Date(Date.UTC(2026, 0, 5 + b.bestWeekday.weekday)))}
+            value={weekdayName(b.bestWeekday.weekday, "long")}
             note={`${money(b.bestWeekday.average)} on average`}
           />
         ) : (

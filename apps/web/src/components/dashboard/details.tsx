@@ -1,15 +1,17 @@
 "use client";
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { bestEntryPage, biggestDropOff, dropOffSection } from "@app/shared/journey";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { BarRow, StackedBar } from "./charts";
 import { ContactsCard } from "./contacts";
 import { FunnelCard, JourneyCard, SECTION_LABEL, STEP_LABEL } from "./funnel";
-import { fmtDuration, fmtRange, hourRange, plural } from "./format";
+import { fmtDuration, fmtRange, hourRange, plural, weekdayNames } from "./format";
 import { Icon, type IconName } from "./icons";
 import { CatalogCard, ChannelsCard, DiscountCodesCard, FulfillmentCard, InventoryCard, OrderTimingCard, RecentOrdersCard, TrafficCard } from "./modules";
 import { AdsDetail } from "./adsPanel";
 import { AdsenseDetail } from "./adsensePanel";
 import { Explained } from "./explain";
+import { B, Change, InShort, upDown } from "./narrative";
 import { OverviewDetail } from "./overview";
 import { Delta, Panel, Stat } from "./primitives";
 import { DailySalesCard, MonthlySalesCard } from "./salesBreakdown";
@@ -154,35 +156,6 @@ function DetailSheet({ title, icon, period, onClose, children }: { title: string
     </div>
   );
 }
-
-/** The plain-language answer first, before any table. */
-function InShort({ children }: { children: ReactNode }) {
-  return (
-    <div className="card flex items-start gap-3 border-accent/30 bg-accent/5">
-      <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent/12 text-accent">
-        <Icon name="sparkle" className="h-4 w-4" />
-      </span>
-      <div className="min-w-0 text-sm">
-        <p className="text-xs font-medium uppercase tracking-wide text-muted">In short</p>
-        <div className="mt-1 space-y-1 leading-relaxed">{children}</div>
-      </div>
-    </div>
-  );
-}
-
-const B = ({ children }: { children: ReactNode }) => <strong className="font-semibold">{children}</strong>;
-
-/** A change as words and an arrow, colored by whether it's good news. */
-function Change({ value, invert = false }: { value: number | null; invert?: boolean }) {
-  if (value === null) return <span className="text-muted">—</span>;
-  const good = invert ? value < 0 : value > 0;
-  return (
-    <span className={value === 0 ? "text-muted" : good ? "text-good" : "text-danger"}>
-      {value > 0 ? "▲" : value < 0 ? "▼" : "■"} {fmtPct(Math.abs(value))}
-    </span>
-  );
-}
-const upDown = (d: number | null) => (d === null ? null : d >= 0 ? `up ${fmtPct(d)}` : `down ${fmtPct(-d)}`);
 
 // ---------------------------------------------------------------------------
 // Each topic.
@@ -378,9 +351,9 @@ function ProductsDetail({ ov, currency }: { ov: Overview; currency: string }) {
 
 function ShoppersDetail({ ov }: { ov: Overview }) {
   const f = ov.modules.funnel!;
-  const leak = f.steps.length > 1 ? f.steps.slice(0, -1).reduce((a, b) => (b.left > a.left ? b : a)) : null;
-  const where = leak?.leftFrom.find((x) => x.section)?.section;
-  const bestEntry = [...f.entryPages].filter((p) => p.visits >= 5).sort((a, b) => b.purchases / b.visits - a.purchases / a.visits)[0];
+  const leak = biggestDropOff(f.steps);
+  const where = dropOffSection(leak);
+  const bestEntry = bestEntryPage(f.entryPages);
   const visitsChange = upDown(f.deltas.visits);
   return (
     <>
@@ -415,7 +388,7 @@ function ShoppersDetail({ ov }: { ov: Overview }) {
 function TimingDetail({ ov }: { ov: Overview }) {
   const t = ov.modules.order_timing!;
   const total = t.byWeekday.reduce((a, b) => a + b, 0);
-  const days = Array.from({ length: 7 }, (_, i) => new Intl.DateTimeFormat(undefined, { weekday: "long", timeZone: "UTC" }).format(new Date(Date.UTC(2026, 0, 5 + i))));
+  const days = weekdayNames("long");
   const quietest = total ? t.byWeekday.indexOf(Math.min(...t.byWeekday)) : null;
   const weekend = total ? (t.byWeekday[5]! + t.byWeekday[6]!) / total : null;
   const topHours = t.byHour

@@ -2,7 +2,7 @@
 import { gradeCover, gradeShipping, type Grade } from "@app/shared/health";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { BarRow, ColumnChart, StackedBar } from "./charts";
-import { fmtDateTime, fmtDuration, hourLabel, hourRange, humanize, plural } from "./format";
+import { fmtDateTime, fmtDuration, hourLabel, hourRange, humanize, plural, weekdayNames } from "./format";
 import { Badge, Empty, Panel, Stat, type Tone } from "./primitives";
 import type {
   CatalogModule,
@@ -113,19 +113,9 @@ export function TrafficCard({ m, currency }: { m: TrafficModule; currency: strin
   );
 }
 
-const shortWeekdays = () => {
-  const f = new Intl.DateTimeFormat(undefined, { weekday: "short", timeZone: "UTC" });
-  // 2026-01-05 is a Monday.
-  return Array.from({ length: 7 }, (_, i) => f.format(new Date(Date.UTC(2026, 0, 5 + i))));
-};
-const longWeekdays = () => {
-  const f = new Intl.DateTimeFormat(undefined, { weekday: "long", timeZone: "UTC" });
-  return Array.from({ length: 7 }, (_, i) => f.format(new Date(Date.UTC(2026, 0, 5 + i))));
-};
-
 export function OrderTimingCard({ m, timezone }: { m: OrderTimingModule; timezone: string }) {
   const total = m.byWeekday.reduce((a, b) => a + b, 0);
-  const days = longWeekdays();
+  const days = weekdayNames("long");
   const busiestDay = m.byWeekday.indexOf(Math.max(...m.byWeekday));
   const orders = (n: number) => plural(n, "order");
   return (
@@ -147,7 +137,7 @@ export function OrderTimingCard({ m, timezone }: { m: OrderTimingModule; timezon
         <Empty>Not enough orders in these dates to spot a pattern yet.</Empty>
       ) : (
         <div className="grid gap-6">
-          <ColumnChart label="Orders by day of the week" values={m.byWeekday} labels={days} tickLabels={shortWeekdays()} highlight={total ? busiestDay : null} format={orders} />
+          <ColumnChart label="Orders by day of the week" values={m.byWeekday} labels={days} tickLabels={weekdayNames("short")}highlight={total ? busiestDay : null} format={orders} />
           <ColumnChart
             label="Orders by hour of the day"
             values={m.byHour}
