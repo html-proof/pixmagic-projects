@@ -217,19 +217,23 @@ export function ConfirmDialog({
 }) {
   const id = useId();
   const ref = useRef<HTMLDivElement>(null);
+  // Read the latest onCancel at key time, so focus moves only when the dialog opens and not on every
+  // parent re-render that passes a new callback (pages with a ticking clock re-render each second).
+  const cancel = useRef(onCancel);
+  cancel.current = onCancel;
   useEffect(() => {
     if (!open) return;
     const prev = document.activeElement as HTMLElement | null;
     ref.current?.querySelector<HTMLElement>("button")?.focus();
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onCancel();
+      if (e.key === "Escape") cancel.current();
     };
     document.addEventListener("keydown", onKey);
     return () => {
       document.removeEventListener("keydown", onKey);
       prev?.focus();
     };
-  }, [open, onCancel]);
+  }, [open]);
   if (!open) return null;
   return overlay(
     <div className="fixed inset-0 z-40 flex items-end justify-center bg-black/40 p-4 sm:items-center" onClick={onCancel}>

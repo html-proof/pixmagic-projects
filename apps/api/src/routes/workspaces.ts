@@ -2,6 +2,7 @@ import { z } from "zod";
 import { systemDb, withTenant } from "@app/db";
 import { APP_SUBSCRIPTION_CREATE, audit, env, getAccessToken, logger, purgeStoreData, shopifyGraphql } from "@app/core";
 import { randomToken, ROLES, sha256Hex } from "@app/shared";
+import { STAFF_ROLES } from "@app/shared/staff";
 import { body, clientIp, HttpError, requireUser, requireWorkspace, type Deps } from "../context.js";
 import type { App } from "../app.js";
 import { seedResync } from "../sync.js";
@@ -22,6 +23,7 @@ export const PLANS = [
 ] as const;
 
 const roleSchema = z.enum(ROLES);
+const staffRoleSchema = z.enum(STAFF_ROLES).nullable();
 
 export function workspaceRoutes(app: App, deps: Deps) {
   // ---------------- Workspaces ----------------
@@ -56,8 +58,8 @@ export function workspaceRoutes(app: App, deps: Deps) {
       const members = await tx.membership.findMany({ where: { workspaceId: ws }, include: { user: true }, orderBy: { createdAt: "asc" } });
       const invites = await tx.invitation.findMany({ where: { workspaceId: ws, acceptedAt: null, expiresAt: { gt: new Date() } } });
       return c.json({
-        members: members.map((m) => ({ id: m.id, userId: m.userId, email: m.user.email, name: m.user.displayName, role: m.role })),
-        invitations: invites.map((i) => ({ id: i.id, email: i.email, role: i.role, expiresAt: i.expiresAt })),
+        members: members.map((m) => ({ id: m.id, userId: m.userId, email: m.user.email, name: m.user.displayName, role: m.role, staffRole: m.staffRole })),
+        invitations: invites.map((i) => ({ id: i.id, email: i.email, role: i.role, staffRole: i.staffRole, expiresAt: i.expiresAt })),
       });
     });
   });
@@ -65,13 +67,13 @@ export function workspaceRoutes(app: App, deps: Deps) {
   app.post("/workspaces/:ws/invitations", async (c) => {
     const { ws } = c.req.param();
     const a = await requireWorkspace(c, deps, ws, "members:manage");
-    const input = z.object({ email: z.string().email().max(254), role: roleSchema.exclude(["owner"]) }).parse(await body(c));
+    const input = z.object({ email: z.string().email().max(254), role: roleSchema.exclude(["owner"]), staffRole: staffRoleSchema.optional() }).parse(await body(c));
     // Each invitation sends an email from our domain: don't let one workspace turn it into a spam relay.
     await limit(deps.coord, `rl:invite:${ws}`, LIMITS.invitations);
     const token = randomToken(32);
     await withTenant(ws, (tx) =>
       tx.invitation.create({
-        data: { workspaceId: ws, email: input.email.toLowerCase(), role: input.role, tokenHash: sha256Hex(token), expiresAt: new Date(Date.now() + 7 * 86400_000) },
+        data: { workspaceId: ws, email: input.email.toLowerCase(), role: input.role, staffRole: input.staffRole ?? null, tokenHash: sha256Hex(token), expiresAt: new Date(Date.now() + 7 * 86400_000) },
       }),
     );
     // The invitation is already saved and the link is valid, so a mail failure must not fail
@@ -103,7 +105,7 @@ export function workspaceRoutes(app: App, deps: Deps) {
     await systemDb.$transaction([
       systemDb.membership.upsert({
         where: { workspaceId_userId: { workspaceId: inv.workspaceId, userId: user.id } },
-        create: { workspaceId: inv.workspaceId, userId: user.id, role: inv.role },
+        create: { workspaceId: inv.workspaceId, userId: user.id, role: inv.role, staffRole: inv.staffRole },
         update: {},
       }),
       systemDb.invitation.update({ where: { id: inv.id }, data: { acceptedAt: new Date() } }),
@@ -115,16 +117,21 @@ export function workspaceRoutes(app: App, deps: Deps) {
   app.patch("/workspaces/:ws/members/:memberId", async (c) => {
     const { ws, memberId } = c.req.param();
     const a = await requireWorkspace(c, deps, ws, "members:manage");
-    const { role } = z.object({ role: roleSchema }).parse(await body(c));
+    // `staffRole` (Staff Management: HR manager, payroll manager, supervisor) can change on its own.
+    const input = z
+      .object({ role: roleSchema.optional(), staffRole: staffRoleSchema.optional() })
+      .refine((v) => v.role !== undefined || v.staffRole !== undefined, "Nothing to change")
+      .parse(await body(c));
+    const { role } = input;
     if (role === "owner" && a.role !== "owner") throw new HttpError(403, "Only owners can grant ownership", "forbidden");
     await withTenant(ws, async (tx) => {
       const m = await tx.membership.findFirst({ where: { id: memberId, workspaceId: ws } });
       if (!m) throw new HttpError(404, "Not found", "not_found");
       if (m.role === "owner" && a.role !== "owner") throw new HttpError(403, "Only owners can change an owner", "forbidden");
-      if (m.role === "owner" && role !== "owner") await assertAnotherOwner(tx, ws, m.id);
-      await tx.membership.update({ where: { id: m.id }, data: { role } });
+      if (role && m.role === "owner" && role !== "owner") await assertAnotherOwner(tx, ws, m.id);
+      await tx.membership.update({ where: { id: m.id }, data: { ...(role ? { role } : {}), ...(input.staffRole !== undefined ? { staffRole: input.staffRole } : {}) } });
     });
-    await audit({ workspaceId: ws, actorUserId: a.user?.id, action: "member.role_changed", targetId: memberId, metadata: { role }, ip: clientIp(c) });
+    await audit({ workspaceId: ws, actorUserId: a.user?.id, action: "member.role_changed", targetId: memberId, metadata: { role, staffRole: input.staffRole }, ip: clientIp(c) });
     return c.json({ ok: true });
   });
 

@@ -9,7 +9,13 @@ import type { Deps } from "../src/context.js";
  * Fake Firebase: an "ID token" is `idt|uid|email|verified`, the session cookie
  * is `sess|uid|email|verified`. Lets tests act as any user without the emulator.
  */
-export function fakeAuth(): AuthProvider & { customTokens: string[]; links: Array<{ email: string; continueUrl: string }> } {
+export function fakeAuth(): AuthProvider & {
+  customTokens: string[];
+  links: Array<{ email: string; continueUrl: string }>;
+  /** Accounts created with a password (employee invitations), by email. */
+  passwordUsers: Map<string, { uid: string; password: string; displayName: string; emailVerified: boolean }>;
+  revoked: string[];
+} {
   const parse = (t: string, prefix: string) => {
     const [p, uid, email, verified] = t.split("|");
     if (p !== prefix || !uid) throw new Error("bad token");
@@ -17,9 +23,33 @@ export function fakeAuth(): AuthProvider & { customTokens: string[]; links: Arra
   };
   const customTokens: string[] = [];
   const links: Array<{ email: string; continueUrl: string }> = [];
+  const passwordUsers = new Map<string, { uid: string; password: string; displayName: string; emailVerified: boolean }>();
+  const revoked: string[] = [];
   return {
     customTokens,
     links,
+    passwordUsers,
+    revoked,
+    /** Accounts exist for addresses that signed in before (uid `existing-<email>`) or were created here. */
+    async findUserByEmail(email) {
+      const u = passwordUsers.get(email);
+      if (u) return { uid: u.uid, emailVerified: u.emailVerified };
+      const row = await systemDb.user.findUnique({ where: { email } });
+      return row ? { uid: row.firebaseUid, emailVerified: row.emailVerified } : null;
+    },
+    async createPasswordUser(input) {
+      if (passwordUsers.has(input.email)) {
+        const err = new Error("EMAIL_EXISTS") as Error & { code: string };
+        err.code = "auth/email-already-exists";
+        throw err;
+      }
+      const uid = `pw-${input.email}`;
+      passwordUsers.set(input.email, { uid, password: input.password, displayName: input.displayName, emailVerified: input.emailVerified });
+      return uid;
+    },
+    async revokeSessions(uid) {
+      revoked.push(uid);
+    },
     /** A sent link's code is `link-<email>`; redeeming yields uid `link-<email>`. */
     async sendEmailSignInLink(email, continueUrl) {
       links.push({ email, continueUrl });

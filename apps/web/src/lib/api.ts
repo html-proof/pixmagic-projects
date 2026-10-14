@@ -6,6 +6,8 @@ export class ApiError extends Error {
     public status: number,
     public code: string,
     message: string,
+    /** The rest of the error body (e.g. `detail`, `problems`), for the few callers that use it. */
+    public data: Record<string, unknown> = {},
   ) {
     super(message);
   }
@@ -79,13 +81,13 @@ export function keepRetrying(attempt: () => Promise<boolean>): () => void {
 }
 
 /** All calls go to same-origin /api/* (proxied to the Node API by next.config.ts). */
-export async function api<T = unknown>(path: string, init: { method?: string; body?: unknown } = {}): Promise<T> {
+export async function api<T = unknown>(path: string, init: { method?: string; body?: unknown; headers?: Record<string, string> } = {}): Promise<T> {
   let res: Response;
   try {
     res = await fetch(`/api${path}`, {
       method: init.method ?? "GET",
       credentials: "same-origin",
-      headers: init.body !== undefined ? { "content-type": "application/json" } : undefined,
+      headers: { ...(init.body !== undefined ? { "content-type": "application/json" } : {}), ...init.headers },
       body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
     });
   } catch {
@@ -93,14 +95,14 @@ export async function api<T = unknown>(path: string, init: { method?: string; bo
     throw new ApiError(0, "network", UNREACHABLE);
   }
   const text = await res.text();
-  let json: { error?: string; message?: string } = {};
+  let json: { error?: string; message?: string; [k: string]: unknown } = {};
   try {
     if (text) json = JSON.parse(text);
   } catch {
     // Non-JSON body (e.g. a Cloudflare error page): report the status instead of a parse error.
     if (res.ok) throw new ApiError(res.status, "bad_response", "Unexpected response from the server");
   }
-  if (!res.ok) throw new ApiError(res.status, json.error ?? "error", json.message ?? "Request failed");
+  if (!res.ok) throw new ApiError(res.status, json.error ?? "error", json.message ?? "Request failed", json);
   return json as T;
 }
 

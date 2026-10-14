@@ -2,6 +2,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { can, type Role } from "@app/shared/roles";
+import type { StaffRole } from "@app/shared/staff";
 import { api, isSignedOut, isTransient, keepRetrying } from "@/lib/api";
 import { LoadError, Unreachable } from "@/components/LoadError";
 import { signInAndReturn } from "@/lib/returnTo";
@@ -9,7 +10,9 @@ import { readLocal, storeKey, WORKSPACE_KEY, writeLocal } from "@/lib/storage";
 
 export interface Me {
   user: { id: string; email: string; emailVerified: boolean; displayName: string | null; timezone: string };
-  workspaces: Array<{ id: string; name: string; role: Role }>;
+  workspaces: Array<{ id: string; name: string; role: Role; staffRole?: StaffRole | null }>;
+  /** Organizations this account works for as an employee (the employee portal at /portal). */
+  employments?: Array<{ workspaceId: string; organization: string; employeeId: string; fullName: string; jobTitle: string; status: string }>;
 }
 export interface StoreSummary {
   id: string;
@@ -86,7 +89,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
     setMeError(null);
     if (!m.user.emailVerified) router.replace("/verify-email");
-    else if (!m.workspaces.length) router.replace("/onboarding");
+    // Employees who aren't members of any workspace belong in the employee portal, not onboarding.
+    else if (!m.workspaces.length) router.replace(m.employments?.length ? "/portal" : "/onboarding");
     else {
       setMe(m);
       if (!currentWs.current) {

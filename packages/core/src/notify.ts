@@ -4,12 +4,13 @@ import { logger } from "./logger.js";
 import type { FetchLike } from "./shopify.js";
 
 export interface Mailer {
-  send(to: string, subject: string, text: string): Promise<void>;
+  /** `html` is an optional rich version of `text` (which is always sent, for plain-text clients). */
+  send(to: string, subject: string, text: string, html?: string): Promise<void>;
 }
 
 /** Minimal shape of the Cloudflare Email Sending binding (`send_email`). */
 export interface SendEmailBinding {
-  send(message: { to: string; from: string | { email: string; name: string }; subject: string; text: string }): Promise<unknown>;
+  send(message: { to: string; from: string | { email: string; name: string }; subject: string; text: string; html?: string }): Promise<unknown>;
 }
 
 /** "Name <addr@x>" -> { name, email }; a bare address stays a string. */
@@ -22,8 +23,8 @@ export function parseFrom(from: string): string | { email: string; name: string 
 /** Sends through Cloudflare Email Sending. The From domain must be onboarded. */
 export function cloudflareMailer(binding: SendEmailBinding): Mailer {
   return {
-    async send(to, subject, text) {
-      await binding.send({ to, from: parseFrom(env().EMAIL_FROM), subject, text });
+    async send(to, subject, text, html) {
+      await binding.send({ to, from: parseFrom(env().EMAIL_FROM), subject, text, ...(html ? { html } : {}) });
     },
   };
 }
@@ -35,7 +36,7 @@ export function cloudflareMailer(binding: SendEmailBinding): Mailer {
  */
 export function mailpitMailer(baseUrl: string, fetchImpl: FetchLike = fetch): Mailer {
   return {
-    async send(to, subject, text) {
+    async send(to, subject, text, html) {
       const from = parseFrom(env().EMAIL_FROM);
       const res = await fetchImpl(`${baseUrl.replace(/\/$/, "")}/api/v1/send`, {
         method: "POST",
@@ -45,6 +46,7 @@ export function mailpitMailer(baseUrl: string, fetchImpl: FetchLike = fetch): Ma
           To: [{ Email: to }],
           Subject: subject,
           Text: text,
+          ...(html ? { HTML: html } : {}),
         }),
       });
       if (!res.ok) throw new Error(`Mailpit send failed (${res.status})`);
@@ -53,12 +55,12 @@ export function mailpitMailer(baseUrl: string, fetchImpl: FetchLike = fetch): Ma
 }
 
 /** In-memory mailer for tests. */
-export function memoryMailer(): Mailer & { sent: Array<{ to: string; subject: string; text: string }> } {
-  const sent: Array<{ to: string; subject: string; text: string }> = [];
+export function memoryMailer(): Mailer & { sent: Array<{ to: string; subject: string; text: string; html?: string }> } {
+  const sent: Array<{ to: string; subject: string; text: string; html?: string }> = [];
   return {
     sent,
-    async send(to, subject, text) {
-      sent.push({ to, subject, text });
+    async send(to, subject, text, html) {
+      sent.push({ to, subject, text, ...(html ? { html } : {}) });
     },
   };
 }

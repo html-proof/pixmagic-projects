@@ -1,6 +1,7 @@
 import { dbReachable, systemDb, type StoreStatus } from "@app/db";
 import {
   backoffSeconds,
+  flagStaleSessions,
   logger,
   MAX_ATTEMPTS,
   raiseAlert,
@@ -250,7 +251,12 @@ export async function runScheduled(cron: string, deps: WorkerDeps) {
       logger.error({ err }, "whatsapp sweep failed; the next tick tries again");
       return null;
     });
-    return { refreshed, staleJobsFailed, reconciled, adsSynced, whatsapp };
+    // Staff: shifts left open past the organization's limit ("forgot to clock out?").
+    const staffOpenShifts = await flagStaleSessions(deps.mailer, deps.fetchImpl).catch((err: unknown) => {
+      logger.error({ err }, "open-shift sweep failed; the next tick tries again");
+      return null;
+    });
+    return { refreshed, staleJobsFailed, reconciled, adsSynced, whatsapp, staffOpenShifts };
   }
   logger.warn({ cron }, "unknown cron trigger");
   return {};

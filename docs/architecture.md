@@ -29,7 +29,7 @@ Each package may import only the ones above it in this table, never one below.
 
 | Package | Holds | Must not |
 | --- | --- | --- |
-| `packages/shared` | Pure functions and constants: KPI formulas, dates, roles and permissions, HMAC/AES, WhatsApp template rules, Zod schemas shared by API and UI. Browser-safe subpath exports (`@app/shared/roles`, `/dates`, `/whatsapp`, ...). | Do I/O, read env, import Prisma. The UI imports subpaths only: the root barrel pulls `node:crypto` into the browser. |
+| `packages/shared` | Pure functions and constants: KPI formulas, dates, roles and permissions, HMAC/AES, WhatsApp template rules, Zod schemas shared by API and UI, the staff pay/time engine (`@app/shared/staff`). Browser-safe subpath exports (`@app/shared/roles`, `/dates`, `/whatsapp`, `/staff`, ...). | Do I/O, read env, import Prisma. The UI imports subpaths only: the root barrel pulls `node:crypto` into the browser. |
 | `packages/db` | Prisma schema, migrations (with RLS policies), `systemDb` / `tenantDb` / `withTenant` / `withDb`. | Contain business rules. |
 | `packages/core` | Everything that talks to the database or an outside API on the app's behalf: Shopify client and sync, token encryption, normalizers, persistence and aggregates, alerts and audit, ad platforms, WhatsApp. The config schema (`env.ts`) and logger. | Know about HTTP requests or queues' delivery mechanics. |
 | `apps/api` | HTTP: routing, auth, permission checks, input validation, response shapes. | Hold business logic that a job or another route could need: put it in core. |
@@ -83,6 +83,8 @@ Where a new piece of code goes:
 
 ```
 src/app/            routes (App Router). (app)/ is the signed-in shell: AppProvider + top bar.
+                    portal/ (employee self-service) and join/ (employee invitations) sit outside it:
+                    employees aren't workspace members. Staff Management: docs/staff.md.
 src/components/     UI. dashboard/, whatsapp/, landing/ per area; app-wide pieces at the top.
 src/hooks/          animation hooks for the landing page.
 src/lib/            non-UI modules: the API client and hooks, Firebase/session, storage, types of

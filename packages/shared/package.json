@@ -14,7 +14,8 @@
     "./roles": "./src/roles.ts",
     "./sales": "./src/sales.ts",
     "./whatsapp": "./src/whatsapp.ts",
-    "./traffic": "./src/traffic.ts"
+    "./traffic": "./src/traffic.ts",
+    "./staff": "./src/staff/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

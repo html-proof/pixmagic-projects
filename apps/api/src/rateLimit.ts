@@ -59,6 +59,21 @@ export const LIMITS = {
   /** WhatsApp: "Send reminder" on an abandoned cart, per store. */
   waRemind: { max: 30, windowSec: 600 },
 
+  // ---- Staff Management ----
+  /** Employee invitation page loads, per IP (a token is 256 bits; this only slows scanning). */
+  joinLookupIp: { max: 60, windowSec: 600 },
+  /** Account activations from an invitation, per IP and per invitation. */
+  joinAcceptIp: { max: 10, windowSec: 900 },
+  joinAcceptToken: { max: 5, windowSec: 3600 },
+  /** Clock in/out and breaks, per employee: a person needs a handful an hour, never dozens a minute. */
+  clockActions: { max: 20, windowSec: 60 },
+  /** Correction requests, per employee. */
+  correctionRequests: { max: 20, windowSec: 3600 },
+  /** Report and payslip downloads, per user. */
+  staffExports: { max: 30, windowSec: 600 },
+  /** "Sign out everywhere", per user. */
+  revokeSessions: { max: 5, windowSec: 3600 },
+
   // ---- Public ingest ----
   /** Web pixel, per IP (a storefront sends a batch per page or so). */
   pixelIp: { max: 600, windowSec: 60 },

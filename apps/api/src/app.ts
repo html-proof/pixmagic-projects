@@ -4,7 +4,8 @@ import { bodyLimit } from "hono/body-limit";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { ZodError } from "zod";
 import { systemDb } from "@app/db";
-import { env, logger } from "@app/core";
+import { env, logger, StaffError } from "@app/core";
+import { ReportRangeError } from "@app/shared/staff";
 import { clientIp, HttpError, SESSION_COOKIE, type AppEnv, type Deps } from "./context.js";
 import { authRoutes } from "./routes/auth.js";
 import { shopifyRoutes } from "./routes/shopify.js";
@@ -17,6 +18,11 @@ import { contactRoutes } from "./routes/contacts.js";
 import { adsRoutes } from "./routes/ads.js";
 import { whatsappRoutes } from "./routes/whatsapp.js";
 import { whatsappPublicRoutes } from "./routes/whatsappPublic.js";
+import { staffRoutes } from "./routes/staff.js";
+import { staffAttendanceRoutes } from "./routes/staffAttendance.js";
+import { staffPayrollRoutes } from "./routes/staffPayroll.js";
+import { staffReportRoutes } from "./routes/staffReports.js";
+import { staffPortalRoutes } from "./routes/staffPortal.js";
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 const CSRF_EXEMPT = [/^\/webhooks\//, /^\/pixel\//];
@@ -95,6 +101,11 @@ export function buildApp(deps: Deps): App {
 
   app.onError((err, c) => {
     if (err instanceof HttpError) return c.json({ error: err.code, message: err.message }, err.statusCode as ContentfulStatusCode);
+    // Staff Management's own rule violations: their messages are written for the person using the app.
+    if (err instanceof StaffError) {
+      return c.json({ error: err.code, message: err.message, ...(err.detail !== undefined ? { detail: err.detail } : {}) }, err.status as ContentfulStatusCode);
+    }
+    if (err instanceof ReportRangeError) return c.json({ error: "invalid_range", message: err.message }, 400);
     if (err instanceof ZodError) {
       return c.json({ error: "validation", message: err.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ") }, 400);
     }
@@ -133,5 +144,10 @@ export function buildApp(deps: Deps): App {
   adsRoutes(app, deps);
   whatsappRoutes(app, deps);
   whatsappPublicRoutes(app, deps);
+  staffRoutes(app, deps);
+  staffAttendanceRoutes(app, deps);
+  staffPayrollRoutes(app, deps);
+  staffReportRoutes(app, deps);
+  staffPortalRoutes(app, deps);
   return app;
 }
