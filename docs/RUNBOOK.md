@@ -107,10 +107,18 @@ Rotating `CUSTOMER_HASH_KEY` itself has the consequences above; don't, unless it
 Disconnecting in Settings → Stores deletes synced data immediately. Shopify's `shop/redact` (48 h after uninstall) does the same automatically.
 
 ### Back up and restore the database
-The data lives in the `pgdata` Docker volume on the host machine; nothing in this repository backs it up. Take a backup:
+The data lives in the `pgdata` Docker volume on the host machine, its only copy. Take a backup with the script (it dumps inside the container, checks the dump is readable, saves it as `app-auto-<UTC time>.dump`, and deletes its own dumps older than `--keep-days`; hand-made backups are never touched):
 
 ```bash
-docker compose exec -T postgres pg_dump -U app -Fc app > insights-backup.dump
+node infra/postgres/backup.mjs --out C:\Users\Seban\insights-backups --keep-days 30
+```
+
+Don't use `pg_dump ... > file.dump` from Windows PowerShell 5.1: `>` re-encodes the binary dump as text and the file can't be restored. For a backup that survives the PC, point `--out` at a folder that is synced elsewhere (OneDrive, Google Drive).
+
+To run it every night at 02:30 (Windows Task Scheduler; the PC must be on, as it must for production anyway), from PowerShell in the repository folder:
+
+```powershell
+schtasks /Create /SC DAILY /ST 02:30 /TN "Insights database backup" /TR "node `"$PWD\infra\postgres\backup.mjs`" --out C:\Users\Seban\insights-backups"
 ```
 
 Restore into a **new** database first (`createdb -U app app_restore`, then `pg_restore -U app -d app_restore` from the dump inside the container), verify it, and only then point the Hyperdrive configs at it. After a restore, re-sync stores to catch up on data since the backup (webhooks during the gap were acked by the old database).

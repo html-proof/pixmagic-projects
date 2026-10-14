@@ -45,3 +45,10 @@ Then follow [docs/local-dev.md](docs/local-dev.md). Progress and verification hi
 | Security model | [docs/security.md](docs/security.md) |
 | Deployment (Cloudflare) | [docs/deployment-cloudflare.md](docs/deployment-cloudflare.md) |
 | Runbook | [docs/RUNBOOK.md](docs/RUNBOOK.md) |
+| Every doc by question (start here) | [docs/README.md](docs/README.md) |
+| Adding a feature, endpoint, table, job or integration | [docs/development/adding-a-feature.md](docs/development/adding-a-feature.md) |
+| API: every endpoint, auth, errors, request ids | [docs/api/api-overview.md](docs/api/api-overview.md) |
+| Database schema and migrations | [docs/database/schema.md](docs/database/schema.md), [docs/database/migrations.md](docs/database/migrations.md) |
+| Architecture audit, decisions, restructuring report | [docs/architecture/](docs/architecture/) |
+| Ad accounts (Meta Ads, Google Ads, AdSense), review packs | [docs/ads-setup.md](docs/ads-setup.md), [docs/ads-review-packs.md](docs/ads-review-packs.md) |
+| Security audit, 2026-10-10 | [docs/security-audit-2026-10-10.md](docs/security-audit-2026-10-10.md) |

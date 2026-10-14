@@ -46,9 +46,9 @@ The UI must import `@app/shared` **by subpath** (`/roles`, `/dates`, `/ads`, `/s
 `/traffic`, `/whatsapp`, `/capabilities`): the root barrel re-exports `crypto.ts`, which needs
 `node:crypto`.
 
-Import cycles inside packages (file level): three are type-only (`app.ts` ↔ route files,
-`overview.tsx` ↔ `previews.tsx`, `handlers.ts` ↔ `bulkOrders.ts`); one is real and broken at
-runtime by a dynamic import: `core/tokens.ts` → `adConnections.ts` / `whatsapp/store.ts` →
+Import cycles inside packages (file level): two are type-only (`app.ts` ↔ route files,
+`handlers.ts` ↔ `bulkOrders.ts`; a third, `overview.tsx` ↔ `previews.tsx`, went away when the
+health grades moved to `@app/shared/health`); one is real and broken at runtime by a dynamic import: `core/tokens.ts` → `adConnections.ts` / `whatsapp/store.ts` →
 `tokens.ts` (`tokens.ts:116-117`).
 
 ## 2. Runtime paths
@@ -62,9 +62,9 @@ browser / Shopify / Meta
 Worker fetch (apps/cloudflare/src/index.ts)
    ├─ path not /api/*, /webhooks/*, /pixel/*, /shopify/*, /healthz, /readyz  ──► ASSETS (static UI from apps/web/out)
    └─ otherwise ──► withDb(Hyperdrive URLs) ──► Hono app (apps/api/src/app.ts)
-                       security headers → body limit → global per-IP limit → CSRF (Origin)
+                       request id + access log → security headers → body limit → global per-IP limit → CSRF (Origin)
                        → route: requireUser / requireWorkspace(permission) → Zod parse
-                       → core function or inline query (withTenant = RLS transaction, or systemDb)
+                       → core function (withTenant = RLS transaction, or systemDb); some routes still query inline
                        → JSON  |  HttpError → { error, message }  |  other → onError → 500
 ```
 
@@ -106,8 +106,9 @@ producer (API route, webhook intake, cron sweep, another job)
 | Slack (optional) | alerts | `core/notify.ts` | incoming webhook URL | worker |
 | Shopify web pixel | storefront events | `routes/pixel.ts` | per-store ingest key | inbound |
 
-Failure isolation today: a provider failure becomes a typed error that the route maps to 502/503
-or the queue retries; nothing has a timeout yet (finding H2).
+Failure isolation: a provider failure becomes a typed error that the route maps to 502/503 or the
+queue retries. Every call goes through the injected `fetchImpl`, which the Worker wraps with a
+time limit (`withTimeout`: 30 s, 10 s for Firebase), so a hung provider fails like an unreachable one.
 
 ## 4. Data ownership
 
@@ -128,9 +129,9 @@ Every store-scoped table carries `workspace_id`, and RLS restricts the `app_rls`
 
 | Joint | Why it is risky | Mitigation in place / planned |
 | --- | --- | --- |
-| Postgres on the owner's PC through a tunnel | production stops when the PC, Docker or the network stops | `/readyz`, `deferForDb`, 503s instead of 500s; backups script (planned); moving off the PC (owner decision) |
+| Postgres on the owner's PC through a tunnel | production stops when the PC, Docker or the network stops | `/readyz` (bounded, logs why), `deferForDb`, 503s instead of 500s; `infra/postgres/backup.mjs` (owner schedules it); moving off the PC (owner decision) |
 | `env()` validation | one bad var stops every request | Zod schema + placeholder-secret guard; build at isolate start logs instead of crashing |
-| `TOKEN_ENCRYPTION_KEYS` / `OTP_PEPPER` | losing or rotating them makes stored tokens or hashes unreadable | versioned keyring + `ops:reencrypt`; OTP_PEPPER separation (planned, H3) |
+| `TOKEN_ENCRYPTION_KEYS` / `OTP_PEPPER` / `CUSTOMER_HASH_KEY` | losing or rotating them makes stored tokens or hashes unreadable | versioned keyring + `ops:reencrypt`; customer hashes keyed by `CUSTOMER_HASH_KEY` (defaults to `OTP_PEPPER`), so the pepper can rotate alone (RUNBOOK) |
 | Shopify API version | silently changes behaviour when it falls out of support | owner check (H6) |
 | Shared Worker deploys | several branches deploy to the same Worker | staged versions + smoke tests (`docs/deployment-cloudflare.md`) |
 | Files under concurrent edit | moves cause merge conflicts | see current-state §6 |

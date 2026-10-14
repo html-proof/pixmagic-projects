@@ -34,7 +34,7 @@ Each package may import only the ones above it in this table, never one below.
 | `packages/core` | Everything that talks to the database or an outside API on the app's behalf: Shopify client and sync, token encryption, normalizers, persistence and aggregates, alerts and audit, ad platforms, WhatsApp. The config schema (`env.ts`) and logger. | Know about HTTP requests or queues' delivery mechanics. |
 | `apps/api` | HTTP: routing, auth, permission checks, input validation, response shapes. | Hold business logic that a job or another route could need: put it in core. |
 | `apps/worker` | Queue consumers and cron sweeps: retries, backoff, failure bookkeeping, then a call into core. `ops/` holds one-off maintenance tasks (RUNBOOK.md). | |
-| `apps/cloudflare` | The Worker entry: routes a request to the UI or the API, wires bindings (Hyperdrive, Queues, R2, Durable Object, Email) into `Deps`. | Contain logic beyond that wiring. |
+| `apps/cloudflare` | The Worker entry: routes a request to the UI or the API, wires bindings (Hyperdrive, Queues, Durable Object, Email; R2 when bound) into `Deps`, gives every outbound call its timeout (`withTimeout`) and every queue message and cron run its log context. | Contain logic beyond that wiring. |
 | `apps/web` | The UI (see [Frontend](#frontend-appsweb)). Depends on `@app/shared` only; talks to the API over HTTP. | Import core/db, or compute KPIs the API already returns. |
 
 Where a new piece of code goes:
@@ -105,7 +105,7 @@ of truth and almost every screen is "load, show, edit, save".
 Write a hand-made `api()` call in an effect only when `useApi` can't express it (paging with
 "load more", a request fired by a button), and then guard against late answers: keep the answer
 with the request it belongs to, or ignore any response that isn't the latest (see
-`components/dashboard/contacts.tsx` and `app/(app)/whatsapp/messages/page.tsx`).
+`components/dashboard/Contacts.tsx` and `app/(app)/whatsapp/messages/page.tsx`).
 
 **Loading and errors.** While loading: `Skeleton`. When a load fails: `LoadError` (says what failed,
 treats an outage calmly, offers Try again), including when a *second* load on the page fails. A
@@ -114,9 +114,11 @@ while rendering is caught by `app/(app)/error.tsx` inside the shell, or `app/err
 pages. Unknown paths get `app/not-found.tsx`.
 
 **Business logic.** Pages and components format and arrange what the API returns; rules and
-calculations belong in `@app/shared` (shared with the API) or the API itself. Several dashboard
-components still hold grading rules and derived figures (`overview.tsx`, `explain.tsx`,
-`previews.tsx`); move them when those files are next reworked.
+calculations belong in `@app/shared` (shared with the API) or the API itself. The dashboard's
+health grading lives in `@app/shared/health` and its drop-off and landing-page maths in
+`@app/shared/journey`; the repeated sentence pieces are in `components/dashboard/narrative.tsx`.
+Detail panels load on demand (`components/dashboard/TopicDetail.tsx`): keep code that only a click
+needs out of the page's first load.
 
 ## Configuration
 
@@ -124,24 +126,29 @@ components still hold grading rules and derived figures (`overview.tsx`, `explai
 | --- | --- | --- |
 | Worker vars (public: URLs, app ids, API versions, scopes) | `apps/cloudflare/wrangler.jsonc` `vars`; locally overridden by `apps/cloudflare/.dev.vars` | `env()` in `packages/core/src/env.ts` |
 | Worker secrets (session, encryption keys, client secrets) | `npx wrangler secret put NAME`; locally `.dev.vars` (from `.dev.vars.example`) | `env()` |
-| Bindings (Hyperdrive, Queues, R2, Durable Object, Email) | `wrangler.jsonc` | `apps/cloudflare/src/index.ts`, passed as `Deps` |
+| Bindings (Hyperdrive, Queues, Durable Object, Email; R2 is optional and not bound today) | `wrangler.jsonc` | `apps/cloudflare/src/index.ts`, passed as `Deps` |
 | UI build-time values (`NEXT_PUBLIC_FIREBASE_*`) | `apps/web/.env.local` / `.env.production` / CI (from `apps/web/.env.example`) | `apps/web/src/lib/firebase.ts` |
 | Local tooling (docker compose, Prisma CLI, `ops:*` tasks) | repo-root `.env` (from `.env.example`) | those tools only |
 
 `env()` validates the whole Worker config with Zod on first use and, in production, refuses to
-start with a secret still set to a value published in this repository. New settings go into its
-schema with a default (or as required), then into `wrangler.jsonc` / `.dev.vars.example`. Code reads
-settings through `env()`, not `process.env`. The exceptions are deliberate: the logger
-(`LOG_LEVEL`), the database scope in Node (`DATABASE_URL` for tests and scripts) and per-app
-Shopify secrets whose names are dynamic (`SHOPIFY_APP_SECRET_<KEY>`).
+start with a secret still set to a value published in this repository, or with a development
+setting that turns a safeguard off (the Auth emulator, a Mailpit relay, a local `APP_URL`). New
+settings go into its schema with a default (or as required), then into `wrangler.jsonc` /
+`.dev.vars.example`. Code reads settings through `env()`, not `process.env`. The exceptions are
+deliberate: the logger (`LOG_LEVEL`), the database scope in Node (`DATABASE_URL` /
+`APP_DATABASE_URL` for tests and scripts) and per-app Shopify secrets whose names are dynamic
+(`SHOPIFY_APP_SECRET_<KEY>`).
+
+Local tools and `wrangler dev` use the `app_dev` database; production's `app` is only ever reached
+by pointing `DATABASE_URL` at it on purpose ([ADR-008](architecture/architecture-decisions.md#adr-008-defaults-that-can-only-reach-production-on-purpose)).
 
 ## Naming
 
 - **Files**: React component files are PascalCase (`StoreHeader.tsx`, `LoadError.tsx`); modules of
-  helpers, hooks or types are camelCase (`format.ts`, `storage.ts`). Most of `components/dashboard`
-  and `components/whatsapp` predate this and use camelCase for component files; rename them when no
-  other branch has work in progress on them (a rename under someone's edits turns their merge into
-  a conflict).
+  helpers, hooks or types are camelCase (`format.ts`, `storage.ts`). `components/whatsapp`, and
+  `lineChart.tsx` / `primitives.tsx` in `components/dashboard`, predate this; rename them when no
+  other branch has work in progress on them, as a commit of pure `git mv` renames (git carries
+  other branches' edits across a pure rename; a rename mixed with edits turns them into conflicts).
 - **Exports**: components and helpers are named exports; only Next.js pages, layouts and boundaries
   use default exports.
 - **Errors**: `XxxError extends Error` and sets `this.name`, so logs say which.
@@ -157,20 +164,26 @@ Shopify secrets whose names are dynamic (`SHOPIFY_APP_SECRET_<KEY>`).
 | Unit (pure logic, config files) | `packages/shared/test`, `packages/core/test` | `pnpm test` |
 | Integration (real Postgres, faked Firebase/Shopify/Meta) | `apps/api/test`, `apps/worker/test` | `pnpm test:integration` (database `*_test`; `TEST_PG_PORT` points it at a throwaway server) |
 | End to end (Playwright against `wrangler dev`) | `apps/web/e2e` | `pnpm e2e` |
+| Lint (TypeScript, React hooks) | everywhere | `pnpm lint` (CI fails on any finding) |
 
-A bug fix comes with the test that would have caught it.
+A bug fix comes with the test that would have caught it. CI also checks the dependency audit, that
+the committed Worker binding types match `wrangler.jsonc`, and that the migrations produce exactly
+`schema.prisma`.
 
 ## Known structural debt
 
 Deliberately not moved yet, because the files are under active work elsewhere and a move would turn
-that work into conflicts. Each is safe to do on its own.
+that work into conflicts. Each is safe to do on its own. (Done in the 2026-10-14 restructuring:
+dashboard reporting moved to `packages/core/src/reports/`, one cursor-paging helper, dashboard
+helpers and grading rules de-duplicated, dashboard component files renamed;
+[architecture/refactoring-report.md](architecture/refactoring-report.md).)
 
-- `apps/api/src/routes/dashboard.ts`: ~585 lines of reporting SQL and data shaping inside the route
-  file. Target: `packages/core/src/reports/`, leaving the route to parse, authorize and call.
 - `apps/api/src/routes/whatsappOps.ts` / `whatsapp.ts`: campaign and automation rules, cart
-  eligibility and analytics grouping inline; four copies of cursor pagination. Target: core's
-  `whatsapp/` modules and one pagination helper.
-- Two Meta Graph clients (`core/ads.ts`, `core/whatsapp/graph.ts`) with different auth and error
-  handling.
-- Dashboard components: the camelCase file names above, and small helpers repeated across
-  `overview.tsx`, `details.tsx` and `explain.tsx` (bold wrapper, change wording, drop-off maths).
+  eligibility and analytics grouping inline. Target: core's `whatsapp/` modules.
+- Two Meta Graph clients (`core/ads.ts`, `core/whatsapp/graph.ts`) with different auth, error
+  handling and network-failure handling. Target: one transport (design in
+  [architecture/current-state.md](architecture/current-state.md), M16).
+- Raw provider error text in a few API messages (`routes/ads.ts`, `whatsapp.ts`), and `any` in the
+  parsing of Shopify / Meta payloads (`core/normalize.ts`).
+- Large files that do several jobs: `core/ads.ts`, `core/adConnections.ts`, `core/normalize.ts`,
+  `core/notify.ts`, `worker/handlers.ts`, `core/whatsapp/events.ts`.

@@ -1,6 +1,6 @@
 # Local development
 
-The app runs locally exactly as in production: one Cloudflare Worker (`apps/cloudflare`) under `wrangler dev`, which simulates Queues, Durable Objects, R2, Cron and the rate limiter, and reaches your local Postgres through Hyperdrive's `localConnectionString`.
+The app runs locally exactly as in production: one Cloudflare Worker (`apps/cloudflare`) under `wrangler dev`, which simulates Queues, Durable Objects, Cron and the rate limiter, and reaches your local Postgres through Hyperdrive's `localConnectionString`.
 
 ## Prerequisites
 

@@ -55,7 +55,7 @@ Reference implementation: `packages/shared/src/sales.ts`.
 
 ## Business overview (health check)
 
-Reference implementation: `businessHealth` in `apps/web/src/components/dashboard/overview.tsx`. Each area gets one of four labels, always shown as words beside a colored dot:
+Reference implementation: the grading rules in `packages/shared/src/health.ts` (unit-tested), applied by `businessHealth` in `apps/web/src/components/dashboard/Overview.tsx`. Each area gets one of four labels, always shown as words beside a colored dot:
 
 | Area | Looks good | Keep an eye on | Needs attention |
 | --- | --- | --- | --- |
