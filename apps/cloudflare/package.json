@@ -14,7 +14,6 @@
     "@app/api": "workspace:*",
     "@app/core": "workspace:*",
     "@app/db": "workspace:*",
-    "@app/shared": "workspace:*",
     "@app/worker": "workspace:*"
   },
   "devDependencies": {

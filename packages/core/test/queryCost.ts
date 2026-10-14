@@ -16,7 +16,7 @@ interface Field {
 
 function tokenize(src: string): string[] {
   const tokens: string[] = [];
-  const re = /\s+|,|#[^\n]*|"(?:[^"\\]|\\.)*"|\$?[_A-Za-z][_0-9A-Za-z]*|-?\d+(?:\.\d+)?|[{}():!\[\]=@]/y;
+  const re = /\s+|,|#[^\n]*|"(?:[^"\\]|\\.)*"|\$?[_A-Za-z][_0-9A-Za-z]*|-?\d+(?:\.\d+)?|[{}():![\]=@]/y;
   let pos = 0;
   while (pos < src.length) {
     re.lastIndex = pos;

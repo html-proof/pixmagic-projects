@@ -54,6 +54,7 @@ const reviewSchema = z.object({
 });
 
 /** Strip control characters (keep newlines) from text customers type. */
+// eslint-disable-next-line no-control-regex -- matching control characters is the point
 const clean = (s: string) => s.replace(/[\u0000-\u0009\u000B-\u001F\u007F]/g, "").trim();
 
 /** Edits are accepted this long after a review was first submitted. */

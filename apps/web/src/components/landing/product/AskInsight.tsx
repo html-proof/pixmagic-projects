@@ -1,5 +1,5 @@
 "use client";
-import { AnimatePresence, motion, useInView } from "motion/react";
+import { motion, useInView } from "motion/react";
 import {
   ArrowDownRight,
   ArrowUpRight,
