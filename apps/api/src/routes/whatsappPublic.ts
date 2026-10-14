@@ -114,6 +114,8 @@ export function whatsappPublicRoutes(app: App, deps: Deps) {
       return c.json({ error: "invalid_json" }, 400);
     }
     if (!trusted) {
+      // Anyone can send this: cap how often one address makes us look anything up.
+      await limit(deps.coord, `rl:wa-unsigned:${clientIp(c)}`, LIMITS.waUnsignedIp);
       const ids = [...new Set(((payload as { entry?: Array<{ id?: unknown }> })?.entry ?? []).map((e) => String(e?.id ?? "")).filter(Boolean))].slice(0, 20);
       const conns = ids.length ? await systemDb.whatsappConnection.findMany({ where: { wabaId: { in: ids }, appSecretEnc: { not: null } } }) : [];
       const ok = new Set<string>();
