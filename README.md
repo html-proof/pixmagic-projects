@@ -40,6 +40,7 @@ Then follow [docs/local-dev.md](docs/local-dev.md). Progress and verification hi
 | Single test store, no publishing | [docs/test-store.md](docs/test-store.md) |
 | Webhooks | [docs/webhooks.md](docs/webhooks.md) |
 | WhatsApp (Cloud API): setup, flows, data | [docs/whatsapp.md](docs/whatsapp.md) |
+| Staff Management, attendance and payroll | [docs/staff.md](docs/staff.md) |
 | KPI formulas | [docs/kpis.md](docs/kpis.md) |
 | Security model | [docs/security.md](docs/security.md) |
 | Deployment (Cloudflare) | [docs/deployment-cloudflare.md](docs/deployment-cloudflare.md) |

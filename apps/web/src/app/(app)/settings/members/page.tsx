@@ -1,18 +1,19 @@
 "use client";
 import { useState, type FormEvent } from "react";
 import { can, ROLES } from "@app/shared/roles";
+import { STAFF_ROLE_HELP, STAFF_ROLE_LABEL, STAFF_ROLES, type StaffRole } from "@app/shared/staff";
 import { useApp } from "@/components/AppContext";
 import { Alert } from "@/components/ui";
 import { actionError, api, useApi } from "@/lib/api";
 
 interface Members {
-  members: Array<{ id: string; userId: string; email: string; name: string | null; role: string }>;
-  invitations: Array<{ id: string; email: string; role: string; expiresAt: string }>;
+  members: Array<{ id: string; userId: string; email: string; name: string | null; role: string; staffRole: StaffRole | null }>;
+  invitations: Array<{ id: string; email: string; role: string; staffRole: StaffRole | null; expiresAt: string }>;
 }
 
 const ROLE_HELP: Record<string, string> = {
-  owner: "Everything, including billing and ownership",
-  admin: "Manage stores, members and API keys",
+  owner: "Everything, including billing, ownership and Staff Management",
+  admin: "Manage stores, members, API keys and Staff Management",
   analyst: "View all dashboards",
   viewer: "View all dashboards",
 };
@@ -22,6 +23,7 @@ export default function MembersPage() {
   const { data, reload, error } = useApi<Members>(`/workspaces/${workspace.id}/members`);
   const [email, setEmail] = useState("");
   const [role, setRole] = useState("analyst");
+  const [staffRole, setStaffRole] = useState<StaffRole | "">("");
   const [msg, setMsg] = useState<{ kind: "error" | "success" | "info"; text: string } | null>(null);
   // The invitation link, when we couldn't email it: the inviter has to pass it on themselves.
   const [inviteLink, setInviteLink] = useState<{ email: string; url: string } | null>(null);
@@ -41,7 +43,7 @@ export default function MembersPage() {
     setMsg(null);
     setInviteLink(null);
     try {
-      const r = await api<{ ok: true; emailed: boolean; url?: string }>(`/workspaces/${workspace.id}/invitations`, { method: "POST", body: { email: to, role } });
+      const r = await api<{ ok: true; emailed: boolean; url?: string }>(`/workspaces/${workspace.id}/invitations`, { method: "POST", body: { email: to, role, staffRole: staffRole || null } });
       // Success only says "sent" when it was: the API saves the invitation even when the email
       // fails, and returns the link for exactly that case. It used to say "sent" regardless (also
       // after an error, which it overwrote) and drop the link, leaving no way to get them in.
@@ -80,6 +82,20 @@ export default function MembersPage() {
             ) : (
               <span className="text-muted">{m.role}</span>
             )}
+            {/* Staff Management access on top of the workspace role (owners and admins have it all already). */}
+            {manage && m.role !== "owner" && m.role !== "admin" ? (
+              <select
+                aria-label={`Staff role for ${m.email}`}
+                className="input w-auto"
+                value={m.staffRole ?? ""}
+                onChange={(e) => act(api(`/workspaces/${workspace.id}/members/${m.id}`, { method: "PATCH", body: { staffRole: e.target.value || null } }), "change the staff role")}
+              >
+                <option value="">No staff access</option>
+                {STAFF_ROLES.map((r) => <option key={r} value={r}>{STAFF_ROLE_LABEL[r]}</option>)}
+              </select>
+            ) : m.staffRole ? (
+              <span className="text-muted">{STAFF_ROLE_LABEL[m.staffRole]}</span>
+            ) : null}
             {manage && m.userId !== me.user.id && (
               <button className="text-danger" aria-label={`Remove ${m.email}`} onClick={() => confirm(`Remove ${m.email}?`) && act(api(`/workspaces/${workspace.id}/members/${m.id}`, { method: "DELETE" }), "remove the member")}>Remove</button>
             )}
@@ -88,7 +104,7 @@ export default function MembersPage() {
         {data?.invitations.map((i) => (
           <li key={i.id} className="flex items-center gap-3 py-2 text-sm text-muted">
             <span className="flex-1">{i.email} · invited</span>
-            <span>{i.role}</span>
+            <span>{i.role}{i.staffRole ? ` · ${STAFF_ROLE_LABEL[i.staffRole]}` : ""}</span>
           </li>
         ))}
       </ul>
@@ -98,12 +114,22 @@ export default function MembersPage() {
           <select aria-label="Role" className="input w-auto" value={role} onChange={(e) => setRole(e.target.value)}>
             {["admin", "analyst", "viewer"].map((r) => <option key={r}>{r}</option>)}
           </select>
+          {role !== "admin" && (
+            <select aria-label="Staff role" className="input w-auto" value={staffRole} onChange={(e) => setStaffRole(e.target.value as StaffRole | "")}>
+              <option value="">No staff access</option>
+              {STAFF_ROLES.map((r) => <option key={r} value={r}>{STAFF_ROLE_LABEL[r]}</option>)}
+            </select>
+          )}
           <button className="btn-primary" disabled={inviting}>{inviting ? "Inviting…" : "Invite"}</button>
         </form>
       )}
       <dl className="grid gap-1 text-xs text-muted">
         {Object.entries(ROLE_HELP).map(([r, h]) => (
           <div key={r}><dt className="inline font-medium">{r}:</dt> <dd className="inline">{h}</dd></div>
+        ))}
+        <div className="mt-1 font-medium">Staff roles (Staff Management; owners and admins have full access):</div>
+        {STAFF_ROLES.map((r) => (
+          <div key={r}><dt className="inline font-medium">{STAFF_ROLE_LABEL[r]}:</dt> <dd className="inline">{STAFF_ROLE_HELP[r]}</dd></div>
         ))}
       </dl>
     </section>

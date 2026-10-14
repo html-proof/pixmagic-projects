@@ -22,6 +22,14 @@ enum Role {
   viewer
 }
 
+/// A member's role in Staff Management, on top of their workspace role (owners and admins have
+/// every staff permission already). See packages/shared/src/staff/access.ts.
+enum StaffRole {
+  hr_manager
+  payroll_manager
+  supervisor
+}
+
 enum StoreStatus {
   pending
   syncing
@@ -47,6 +55,10 @@ model User {
   createdAt     DateTime     @default(now()) @map("created_at")
   updatedAt     DateTime     @updatedAt @map("updated_at")
   memberships   Membership[]
+  /// Employee records this account signs in as (employee portal).
+  employments   Employee[]   @relation("EmployeeAccount")
+  /// Employees this person is the assigned manager of.
+  managedStaff  Employee[]   @relation("EmployeeManager")
 
   @@map("users")
 }
@@ -62,6 +74,13 @@ model Workspace {
   alerts       Alert[]
   invitations  Invitation[]
   subscription Subscription?
+  staffSettings      StaffSettings?
+  employees          Employee[]
+  departments        Department[]
+  overtimePolicies   OvertimePolicy[]
+  breakPolicies      BreakPolicy[]
+  staffHolidays      StaffHoliday[]
+  payrollPeriods     PayrollPeriod[]
 
   @@map("workspaces")
 }
@@ -71,6 +90,8 @@ model Membership {
   workspaceId String    @map("workspace_id")
   userId      String    @map("user_id")
   role        Role
+  /// Staff Management role for members who are not owners or admins (null: no staff access).
+  staffRole   StaffRole? @map("staff_role")
   createdAt   DateTime  @default(now()) @map("created_at")
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -85,6 +106,7 @@ model Invitation {
   workspaceId String    @map("workspace_id")
   email       String
   role        Role
+  staffRole   StaffRole? @map("staff_role")
   tokenHash   String    @unique @map("token_hash")
   expiresAt   DateTime  @map("expires_at")
   acceptedAt  DateTime? @map("accepted_at")
@@ -938,4 +960,534 @@ model WhatsappAutomationRun {
   @@index([storeId, createdAt])
   @@index([workspaceId])
   @@map("whatsapp_automation_runs")
+}
+
+// ---------------------------------------------------------------------------------------------
+// Staff Management, Time & Attendance and Payroll (docs/staff.md).
+//
+// Every table carries workspace_id (the organization) and has the tenant_isolation RLS policy.
+// Money is integer minor units (bigint, `*_minor`) in the row's `currency`; rates and multipliers
+// are fixed-point decimals. Instants are UTC timestamps written by the server; "days"
+// (YYYY-MM-DD) are the organization's local calendar days. Partial unique indexes that Prisma
+// cannot express (one open shift per employee, one open break per shift, one live invitation per
+// employee) live in the migration SQL.
+// ---------------------------------------------------------------------------------------------
+
+/// Organization-level payroll settings (organization_payroll_settings). One row per workspace.
+model StaffSettings {
+  workspaceId              String    @id @map("workspace_id")
+  /// IANA zone every "day", "week" and "hour" in staff reports is counted in.
+  timezone                 String    @default("UTC")
+  currency                 String    @default("USD")
+  /// daily | weekly | biweekly | semimonthly | monthly
+  payCycle                 String    @default("weekly") @map("pay_cycle")
+  /// A day that starts a weekly or two-weekly period.
+  payCycleAnchor           String    @default("2026-01-05") @map("pay_cycle_anchor")
+  /// 0 = Sunday ... 6 = Saturday.
+  weekStartsOn             Int       @default(1) @map("week_starts_on")
+  invitationExpiryHours    Int       @default(48) @map("invitation_expiry_hours")
+  /// An open shift older than this is flagged "forgot to clock out?" and stops adding paid time.
+  staleSessionHours        Int       @default(14) @map("stale_session_hours")
+  lateGraceMinutes         Int       @default(5) @map("late_grace_minutes")
+  /// Hours must be approved before payroll can include them.
+  requireApproval          Boolean   @default(true) @map("require_approval")
+  allowEmployeeCorrections Boolean   @default(true) @map("allow_employee_corrections")
+  /// Free-text region label (e.g. "AU-NSW"), shown on payslips. No statutory rules are applied.
+  jurisdiction             String?
+  supportEmail             String?   @map("support_email")
+  defaultOvertimePolicyId  String?   @map("default_overtime_policy_id")
+  defaultBreakPolicyId     String?   @map("default_break_policy_id")
+  nextEmployeeNumber       Int       @default(1) @map("next_employee_number")
+  updatedByUserId          String?   @map("updated_by_user_id")
+  createdAt                DateTime  @default(now()) @map("created_at")
+  updatedAt                DateTime  @updatedAt @map("updated_at")
+  workspace                Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@map("organization_payroll_settings")
+}
+
+model Department {
+  id          String     @id @default(cuid())
+  workspaceId String     @map("workspace_id")
+  name        String
+  createdAt   DateTime   @default(now()) @map("created_at")
+  workspace   Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  employees   Employee[]
+
+  @@unique([workspaceId, name])
+  @@map("departments")
+}
+
+/// Overtime rules. Thresholds in minutes; null switches a rule off. Multipliers like 1.5.
+model OvertimePolicy {
+  id                              String     @id @default(cuid())
+  workspaceId                     String     @map("workspace_id")
+  name                            String
+  dailyThresholdMinutes           Int?       @map("daily_threshold_minutes")
+  weeklyThresholdMinutes          Int?       @map("weekly_threshold_minutes")
+  multiplier                      Decimal    @default(1.5) @db.Decimal(8, 4)
+  doubleTimeDailyThresholdMinutes Int?       @map("double_time_daily_threshold_minutes")
+  doubleTimeMultiplier            Decimal?   @map("double_time_multiplier") @db.Decimal(8, 4)
+  holidayMultiplier               Decimal    @default(1) @map("holiday_multiplier") @db.Decimal(8, 4)
+  createdAt                       DateTime   @default(now()) @map("created_at")
+  updatedAt                       DateTime   @updatedAt @map("updated_at")
+  workspace                       Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  employees                       Employee[]
+
+  @@unique([workspaceId, name])
+  @@map("overtime_policies")
+}
+
+/// Which breaks are paid and what counts as too many or too long (flagged for review, never blocked mid-shift).
+model BreakPolicy {
+  id                String     @id @default(cuid())
+  workspaceId       String     @map("workspace_id")
+  name              String
+  restBreaksPaid    Boolean    @default(true) @map("rest_breaks_paid")
+  mealBreaksPaid    Boolean    @default(false) @map("meal_breaks_paid")
+  maxBreaksPerShift Int?       @map("max_breaks_per_shift")
+  maxBreakMinutes   Int?       @map("max_break_minutes")
+  createdAt         DateTime   @default(now()) @map("created_at")
+  updatedAt         DateTime   @updatedAt @map("updated_at")
+  workspace         Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  employees         Employee[]
+
+  @@unique([workspaceId, name])
+  @@map("break_policies")
+}
+
+/// A public holiday: no one is "absent" on it, and work on it earns the holiday multiplier.
+model StaffHoliday {
+  id          String    @id @default(cuid())
+  workspaceId String    @map("workspace_id")
+  day         String
+  name        String
+  createdAt   DateTime  @default(now()) @map("created_at")
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, day])
+  @@map("staff_holidays")
+}
+
+model Employee {
+  id                    String                @id @default(cuid())
+  workspaceId           String                @map("workspace_id")
+  /// "EMP-0001": generated, unique within the organization.
+  employeeNumber        String                @map("employee_number")
+  fullName              String                @map("full_name")
+  email                 String
+  phone                 String?
+  jobTitle              String                @map("job_title")
+  departmentId          String?               @map("department_id")
+  /// full_time | part_time | casual | contract
+  employmentType        String                @map("employment_type")
+  joinedOn              String                @map("joined_on")
+  currency              String
+  standardWeeklyMinutes Int                   @default(2400) @map("standard_weekly_minutes")
+  /// Regular working days, 0 = Sunday.
+  workingDays           Int[]                 @default([1, 2, 3, 4, 5]) @map("working_days")
+  managerUserId         String?               @map("manager_user_id")
+  overtimePolicyId      String?               @map("overtime_policy_id")
+  breakPolicyId         String?               @map("break_policy_id")
+  timezone              String
+  /// active | on_leave | inactive (deactivated)
+  status                String                @default("active")
+  notes                 String?
+  /// The sign-in account (employee_auth_links): set when the invitation is accepted.
+  userId                String?               @map("user_id")
+  accountLinkedAt       DateTime?             @map("account_linked_at")
+  deactivatedAt         DateTime?             @map("deactivated_at")
+  deactivatedByUserId   String?               @map("deactivated_by_user_id")
+  deactivationReason    String?               @map("deactivation_reason")
+  createdByUserId       String?               @map("created_by_user_id")
+  createdAt             DateTime              @default(now()) @map("created_at")
+  updatedAt             DateTime              @updatedAt @map("updated_at")
+  workspace             Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  department            Department?           @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  user                  User?                 @relation("EmployeeAccount", fields: [userId], references: [id], onDelete: SetNull)
+  manager               User?                 @relation("EmployeeManager", fields: [managerUserId], references: [id], onDelete: SetNull)
+  overtimePolicy        OvertimePolicy?       @relation(fields: [overtimePolicyId], references: [id], onDelete: SetNull)
+  breakPolicy           BreakPolicy?          @relation(fields: [breakPolicyId], references: [id], onDelete: SetNull)
+  invitations           EmployeeInvitation[]
+  payRates              PayRate[]
+  schedules             ShiftSchedule[]
+  sessions              AttendanceSession[]
+  events                AttendanceEvent[]
+  adjustments           TimesheetAdjustment[]
+  payrollItems          PayrollItem[]
+  payrollAdjustments    PayrollAdjustment[]
+  payments              PayrollPayment[]
+
+  @@unique([workspaceId, employeeNumber])
+  @@unique([workspaceId, email])
+  @@unique([workspaceId, userId])
+  @@index([workspaceId, status])
+  @@index([userId])
+  @@index([managerUserId])
+  @@map("employees")
+}
+
+/// A single-use invitation to create the employee's account. Only the token's SHA-256 is stored.
+model EmployeeInvitation {
+  id              String    @id @default(cuid())
+  workspaceId     String    @map("workspace_id")
+  employeeId      String    @map("employee_id")
+  email           String
+  tokenHash       String    @unique @map("token_hash")
+  expiresAt       DateTime  @map("expires_at")
+  /// Sent by email (opening it proves the inbox) vs. a link copied by an admin (the account then
+  /// has to verify its email before it can be used).
+  emailed         Boolean   @default(false)
+  linkRevealed    Boolean   @default(false) @map("link_revealed")
+  emailError      String?   @map("email_error")
+  acceptedAt      DateTime? @map("accepted_at")
+  acceptedUserId  String?   @map("accepted_user_id")
+  revokedAt       DateTime? @map("revoked_at")
+  revokedByUserId String?   @map("revoked_by_user_id")
+  createdByUserId String?   @map("created_by_user_id")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  employee        Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, createdAt])
+  @@index([employeeId])
+  @@map("employee_invitations")
+}
+
+/// Effective-dated hourly rates (pay_rate_history): a rate applies from its local day until the next.
+model PayRate {
+  id              String   @id @default(cuid())
+  workspaceId     String   @map("workspace_id")
+  employeeId      String   @map("employee_id")
+  hourlyRate      Decimal  @map("hourly_rate") @db.Decimal(14, 4)
+  currency        String
+  effectiveFrom   String   @map("effective_from")
+  reason          String?
+  createdByUserId String?  @map("created_by_user_id")
+  createdAt       DateTime @default(now()) @map("created_at")
+  employee        Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@unique([employeeId, effectiveFrom])
+  @@index([workspaceId])
+  @@map("pay_rate_history")
+}
+
+model ShiftSchedule {
+  id              String              @id @default(cuid())
+  workspaceId     String              @map("workspace_id")
+  employeeId      String              @map("employee_id")
+  startsAt        DateTime            @map("starts_at")
+  endsAt          DateTime            @map("ends_at")
+  /// Planned unpaid break, for the schedule's expected hours only.
+  breakMinutes    Int                 @default(0) @map("break_minutes")
+  location        String?
+  note            String?
+  createdByUserId String?             @map("created_by_user_id")
+  createdAt       DateTime            @default(now()) @map("created_at")
+  updatedAt       DateTime            @updatedAt @map("updated_at")
+  employee        Employee            @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  sessions        AttendanceSession[]
+
+  @@index([workspaceId, startsAt])
+  @@index([employeeId, startsAt])
+  @@map("shift_schedules")
+}
+
+/// One shift: clock-in to clock-out. At most one open (clock_out_at IS NULL) per employee.
+model AttendanceSession {
+  id               String                @id @default(cuid())
+  workspaceId      String                @map("workspace_id")
+  employeeId       String                @map("employee_id")
+  scheduleId       String?               @map("schedule_id")
+  clockInAt        DateTime              @map("clock_in_at")
+  clockOutAt       DateTime?             @map("clock_out_at")
+  /// web | mobile | admin | system
+  clockInSource    String                @map("clock_in_source")
+  clockOutSource   String?               @map("clock_out_source")
+  /// The employee's zone at clock-in (display only; pay rules use the organization's zone).
+  timezone         String
+  /// pending | approved | rejected
+  approvalStatus   String                @default("pending") @map("approval_status")
+  approvedAt       DateTime?             @map("approved_at")
+  approvedByUserId String?               @map("approved_by_user_id")
+  rejectedReason   String?               @map("rejected_reason")
+  /// late, early_departure, unscheduled, overnight, stale, long_break, ... (attendance.ts)
+  flags            String[]              @default([])
+  /// Bumped by every correction; the before/after of each is in attendance_events.
+  revision         Int                   @default(0)
+  /// Set once an approved payroll includes this shift: it cannot be changed after that.
+  lockedAt         DateTime?             @map("locked_at")
+  note             String?
+  staleAlertedAt   DateTime?             @map("stale_alerted_at")
+  createdAt        DateTime              @default(now()) @map("created_at")
+  updatedAt        DateTime              @updatedAt @map("updated_at")
+  employee         Employee              @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  schedule         ShiftSchedule?        @relation(fields: [scheduleId], references: [id], onDelete: SetNull)
+  breaks           BreakSession[]
+  events           AttendanceEvent[]
+  adjustments      TimesheetAdjustment[]
+  approvals        TimesheetApproval[]
+
+  @@index([workspaceId, clockInAt])
+  @@index([employeeId, clockInAt])
+  @@index([workspaceId, approvalStatus])
+  @@map("attendance_sessions")
+}
+
+model BreakSession {
+  id          String            @id @default(cuid())
+  workspaceId String            @map("workspace_id")
+  sessionId   String            @map("session_id")
+  employeeId  String            @map("employee_id")
+  startAt     DateTime          @map("start_at")
+  endAt       DateTime?         @map("end_at")
+  /// rest | meal
+  kind        String
+  /// Whether the break policy paid this kind of break when it started.
+  paid        Boolean
+  createdAt   DateTime          @default(now()) @map("created_at")
+  session     AttendanceSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@index([workspaceId])
+  @@map("break_sessions")
+}
+
+/// Append-only record of every clock action and correction, with what the device claimed.
+model AttendanceEvent {
+  id             String             @id @default(cuid())
+  workspaceId    String             @map("workspace_id")
+  employeeId     String             @map("employee_id")
+  sessionId      String?            @map("session_id")
+  /// clock_in | clock_out | break_start | break_end | correction | manual_entry | approval | rejection | reopen | auto_flag | deactivation_close
+  type           String
+  /// Server time of the action (authoritative).
+  at             DateTime
+  /// What the device said the time was (audit only, never used for pay).
+  clientTime     DateTime?          @map("client_time")
+  clientTimezone String?            @map("client_timezone")
+  source         String
+  actorUserId    String?            @map("actor_user_id")
+  /// The client's Idempotency-Key: a retried request finds this row instead of acting twice.
+  idempotencyKey String?            @map("idempotency_key")
+  ip             String?
+  userAgent      String?            @map("user_agent")
+  before         Json?
+  after          Json?
+  note           String?
+  createdAt      DateTime           @default(now()) @map("created_at")
+  employee       Employee           @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  session        AttendanceSession? @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([employeeId, idempotencyKey])
+  @@index([sessionId])
+  @@index([workspaceId, at])
+  @@map("attendance_events")
+}
+
+/// A requested or applied change to a shift (or a missing shift to add).
+model TimesheetAdjustment {
+  id                 String             @id @default(cuid())
+  workspaceId        String             @map("workspace_id")
+  employeeId         String             @map("employee_id")
+  /// Null: add a shift that was never clocked.
+  sessionId          String?            @map("session_id")
+  requestedByUserId  String?            @map("requested_by_user_id")
+  /// The employee asked (else a manager made it directly).
+  byEmployee         Boolean            @default(false) @map("by_employee")
+  proposedClockInAt  DateTime?          @map("proposed_clock_in_at")
+  proposedClockOutAt DateTime?          @map("proposed_clock_out_at")
+  /// [{ startAt, endAt, kind }] replacing the shift's breaks, when given.
+  proposedBreaks     Json?              @map("proposed_breaks")
+  reason             String
+  /// pending | approved | rejected | cancelled
+  status             String             @default("pending")
+  decidedByUserId    String?            @map("decided_by_user_id")
+  decidedAt          DateTime?          @map("decided_at")
+  decisionNote       String?            @map("decision_note")
+  createdAt          DateTime           @default(now()) @map("created_at")
+  employee           Employee           @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  session            AttendanceSession? @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, status])
+  @@index([employeeId])
+  @@map("timesheet_adjustments")
+}
+
+/// Each approve / reject / reopen of a shift's hours.
+model TimesheetApproval {
+  id          String            @id @default(cuid())
+  workspaceId String            @map("workspace_id")
+  sessionId   String            @map("session_id")
+  /// approved | rejected | reopened
+  action      String
+  revision    Int
+  actorUserId String?           @map("actor_user_id")
+  note        String?
+  createdAt   DateTime          @default(now()) @map("created_at")
+  session     AttendanceSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@index([workspaceId])
+  @@map("timesheet_approvals")
+}
+
+model PayrollPeriod {
+  id                 String              @id @default(cuid())
+  workspaceId        String              @map("workspace_id")
+  startDate          String              @map("start_date")
+  endDate            String              @map("end_date")
+  payCycle           String              @map("pay_cycle")
+  payDate            String?             @map("pay_date")
+  /// draft | pending_approval | approved | partially_paid | paid | cancelled | correction_required | payment_failed | reversed
+  status             String              @default("draft")
+  timezone           String
+  /// Bumped by every calculation; approval names the version that was reviewed.
+  version            Int                 @default(0)
+  calculatedAt       DateTime?           @map("calculated_at")
+  calculatedByUserId String?             @map("calculated_by_user_id")
+  submittedAt        DateTime?           @map("submitted_at")
+  submittedByUserId  String?             @map("submitted_by_user_id")
+  approvedAt         DateTime?           @map("approved_at")
+  approvedByUserId   String?             @map("approved_by_user_id")
+  lockedAt           DateTime?           @map("locked_at")
+  cancelledAt        DateTime?           @map("cancelled_at")
+  notes              String?
+  createdByUserId    String?             @map("created_by_user_id")
+  createdAt          DateTime            @default(now()) @map("created_at")
+  updatedAt          DateTime            @updatedAt @map("updated_at")
+  workspace          Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  items              PayrollItem[]
+  adjustments        PayrollAdjustment[]
+  approvals          PayrollApproval[]
+
+  @@index([workspaceId, startDate])
+  @@map("payroll_periods")
+}
+
+/// One employee's pay for one period. Frozen (with its line breakdown) once the period is approved.
+model PayrollItem {
+  id                 String              @id @default(cuid())
+  workspaceId        String              @map("workspace_id")
+  periodId           String              @map("period_id")
+  employeeId         String              @map("employee_id")
+  currency           String
+  regularSeconds     Int                 @default(0) @map("regular_seconds")
+  overtimeSeconds    Int                 @default(0) @map("overtime_seconds")
+  doubleTimeSeconds  Int                 @default(0) @map("double_time_seconds")
+  holidaySeconds     Int                 @default(0) @map("holiday_seconds")
+  paidBreakSeconds   Int                 @default(0) @map("paid_break_seconds")
+  unpaidBreakSeconds Int                 @default(0) @map("unpaid_break_seconds")
+  unpricedSeconds    Int                 @default(0) @map("unpriced_seconds")
+  grossMinor         BigInt              @default(0) @map("gross_minor")
+  otherEarningsMinor BigInt              @default(0) @map("other_earnings_minor")
+  deductionsMinor    BigInt              @default(0) @map("deductions_minor")
+  /// gross + other earnings - deductions. An estimate: no statutory tax is calculated.
+  netMinor           BigInt              @default(0) @map("net_minor")
+  /// Sum of this item's allocations from completed payments (kept in the same transaction).
+  paidMinor          BigInt              @default(0) @map("paid_minor")
+  /// [{ category, hourlyRate, multiplier, seconds, amountMinor }]
+  lines              Json                @default("[]")
+  /// The shifts (and their revisions) the figures were calculated from.
+  sessions           Json                @default("[]")
+  warnings           String[]            @default([])
+  createdAt          DateTime            @default(now()) @map("created_at")
+  updatedAt          DateTime            @updatedAt @map("updated_at")
+  period             PayrollPeriod       @relation(fields: [periodId], references: [id], onDelete: Cascade)
+  employee           Employee            @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  allocations        PaymentAllocation[]
+
+  @@unique([periodId, employeeId])
+  @@index([workspaceId])
+  @@index([employeeId])
+  @@map("payroll_items")
+}
+
+/// An authorized earning (bonus, allowance) or deduction added to an employee's pay for a period.
+model PayrollAdjustment {
+  id              String        @id @default(cuid())
+  workspaceId     String        @map("workspace_id")
+  periodId        String        @map("period_id")
+  employeeId      String        @map("employee_id")
+  /// earning | deduction
+  kind            String
+  label           String
+  amountMinor     BigInt        @map("amount_minor")
+  reason          String?
+  createdByUserId String?       @map("created_by_user_id")
+  createdAt       DateTime      @default(now()) @map("created_at")
+  removedAt       DateTime?     @map("removed_at")
+  removedByUserId String?       @map("removed_by_user_id")
+  period          PayrollPeriod @relation(fields: [periodId], references: [id], onDelete: Cascade)
+  employee        Employee      @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([periodId])
+  @@index([workspaceId])
+  @@map("payroll_adjustments")
+}
+
+/// Every step of a period's approval workflow.
+model PayrollApproval {
+  id          String        @id @default(cuid())
+  workspaceId String        @map("workspace_id")
+  periodId    String        @map("period_id")
+  /// calculated | submitted | approved | rejected | cancelled | reversed
+  action      String
+  version     Int
+  actorUserId String?       @map("actor_user_id")
+  comment     String?
+  createdAt   DateTime      @default(now()) @map("created_at")
+  period      PayrollPeriod @relation(fields: [periodId], references: [id], onDelete: Cascade)
+
+  @@index([periodId])
+  @@index([workspaceId])
+  @@map("payroll_approvals")
+}
+
+/// A record that an employee was paid (bank transfer, cash, ...). Recording is not transferring:
+/// no money moves through Insights.
+model PayrollPayment {
+  id                    String              @id @default(cuid())
+  workspaceId           String              @map("workspace_id")
+  employeeId            String              @map("employee_id")
+  currency              String
+  amountMinor           BigInt              @map("amount_minor")
+  paidOn                String              @map("paid_on")
+  /// bank_transfer | cash | cheque | external_provider | other
+  method                String
+  reference             String?
+  remarks               String?
+  /// completed | failed | reversed
+  status                String              @default("completed")
+  /// The client's Idempotency-Key: the same form submitted twice records one payment.
+  idempotencyKey        String              @map("idempotency_key")
+  recordedByUserId      String?             @map("recorded_by_user_id")
+  failedAt              DateTime?           @map("failed_at")
+  reversedAt            DateTime?           @map("reversed_at")
+  statusChangedByUserId String?             @map("status_changed_by_user_id")
+  statusReason          String?             @map("status_reason")
+  createdAt             DateTime            @default(now()) @map("created_at")
+  employee              Employee            @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  allocations           PaymentAllocation[]
+
+  @@unique([workspaceId, idempotencyKey])
+  @@index([workspaceId, paidOn])
+  @@index([employeeId])
+  @@map("payroll_payments")
+}
+
+/// Which pay item(s) a payment settles, and how much of each.
+model PaymentAllocation {
+  id            String         @id @default(cuid())
+  workspaceId   String         @map("workspace_id")
+  paymentId     String         @map("payment_id")
+  payrollItemId String         @map("payroll_item_id")
+  amountMinor   BigInt         @map("amount_minor")
+  createdAt     DateTime       @default(now()) @map("created_at")
+  payment       PayrollPayment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  item          PayrollItem    @relation(fields: [payrollItemId], references: [id], onDelete: Cascade)
+
+  @@unique([paymentId, payrollItemId])
+  @@index([payrollItemId])
+  @@index([workspaceId])
+  @@map("payment_allocations")
 }

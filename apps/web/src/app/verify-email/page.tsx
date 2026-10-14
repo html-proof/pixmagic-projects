@@ -36,7 +36,8 @@ export default function VerifyEmailPage() {
         return;
       }
       await api("/auth/sync-profile", { method: "POST", body: { idToken: await user.getIdToken(true) } });
-      router.replace(takeReturnTo() ?? "/onboarding");
+      // Through the app shell, which sends a new merchant to onboarding and an employee to their portal.
+      router.replace(takeReturnTo() ?? "/dashboard");
     } catch (e) {
       setMsg({ kind: "error", text: authErrorMessage(e) });
     } finally {
@@ -52,7 +53,7 @@ export default function VerifyEmailPage() {
   }
 
   return (
-    <AuthShell title="Check your email" subtitle={`We sent a verification link to ${user?.email ?? "your inbox"}. Verifying keeps your store data safe.`}>
+    <AuthShell title="Check your email" subtitle={`We sent a verification link to ${user?.email ?? "your inbox"}. Verifying keeps your account safe.`}>
       {msg && <Alert kind={msg.kind}>{msg.text}</Alert>}
       <button className="btn-primary w-full" onClick={check} disabled={busy || !authReady}>I&apos;ve verified my email</button>
       <button className="btn-secondary w-full" onClick={resend} disabled={!authReady}>Resend the email</button>

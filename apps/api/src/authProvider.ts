@@ -22,6 +22,16 @@ export interface AuthProvider {
    * upsertVerifiedEmailUser, an account that was never verified loses its password and sessions.
    */
   redeemEmailSignInLink(email: string, oobCode: string): Promise<string>;
+  /** The Firebase account registered for `email`, if any. */
+  findUserByEmail(email: string): Promise<{ uid: string; emailVerified: boolean } | null>;
+  /**
+   * Create an email/password account (employee invitations). Firebase stores only a salted scrypt
+   * hash of the password. Throws FirebaseAuthError("auth/email-already-exists") when the address
+   * already has an account.
+   */
+  createPasswordUser(input: { email: string; password: string; displayName: string; emailVerified: boolean }): Promise<string>;
+  /** End every session of the account, on every device (refresh tokens and session cookies). */
+  revokeSessions(uid: string): Promise<void>;
 }
 
 /** What jose hands back from importX509 (a CryptoKey on Workers, a KeyObject in Node). */
@@ -319,6 +329,27 @@ export function firebaseAuthProvider(fetchImpl: FetchLike = fetch): AuthProvider
       }
       if (before && !before.emailVerified) await secureProvenAccount(json.localId);
       return json.localId;
+    },
+    async findUserByEmail(email) {
+      const u = await lookup({ email: [email] });
+      return u ? { uid: u.localId, emailVerified: !!u.emailVerified } : null;
+    },
+    async createPasswordUser(input) {
+      try {
+        const created = await call<{ localId: string }>("/accounts", {
+          email: input.email,
+          password: input.password,
+          displayName: input.displayName,
+          emailVerified: input.emailVerified,
+        });
+        return created.localId;
+      } catch (err) {
+        if (err instanceof FirebaseAuthError && /EMAIL_EXISTS/.test(err.message)) throw new FirebaseAuthError("auth/email-already-exists", err.message);
+        throw err;
+      }
+    },
+    async revokeSessions(uid) {
+      await call("/accounts:update", { localId: uid, validSince: String(Math.floor(Date.now() / 1000)) });
     },
     async createCustomToken(uid) {
       const now = Math.floor(Date.now() / 1000);

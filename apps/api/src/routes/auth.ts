@@ -1,7 +1,7 @@
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { z } from "zod";
 import { systemDb } from "@app/db";
-import { env, logger } from "@app/core";
+import { employmentsForUser, env, logger } from "@app/core";
 import { generateOtp, hashOtp, OTP_MAX_ATTEMPTS, OTP_TTL_MS, verifyOtp } from "@app/shared";
 import { body, clientIp, HttpError, loadUser, requireAppOrigin, requireUser, retiredSessionKey, SESSION_COOKIE, type Ctx, type Deps } from "../context.js";
 import { FirebaseUnavailableError } from "../authProvider.js";
@@ -91,7 +91,9 @@ export function authRoutes(app: App, deps: Deps) {
     });
     return c.json({
       user: publicUser(user),
-      workspaces: memberships.map((m) => ({ id: m.workspace.id, name: m.workspace.name, role: m.role })),
+      workspaces: memberships.map((m) => ({ id: m.workspace.id, name: m.workspace.name, role: m.role, staffRole: m.staffRole })),
+      // Organizations this account works for as an employee (the employee portal).
+      employments: await employmentsForUser(user.id),
     });
   }
 
