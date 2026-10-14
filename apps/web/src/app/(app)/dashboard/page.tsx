@@ -143,7 +143,6 @@ function Metric({
       className="card lift animate-rise group relative flex flex-col overflow-hidden text-left"
       style={{ ["--i" as string]: i }}
       data-testid={`metric-${title}`}
-      aria-label={`${title}: open details`}
     >
       <span className="flex w-full items-start justify-between gap-2">
         <span className="text-sm text-muted">{title}</span>
@@ -159,6 +158,8 @@ function Metric({
         <span className="min-w-0 flex-1">{help}</span>
         <Icon name="chevronRight" className="h-4 w-4 shrink-0 transition-transform group-hover:translate-x-0.5" />
       </span>
+      {/* No aria-label: it would replace the figure; screen readers read the tile, then this. */}
+      <span className="sr-only"> – open details</span>
     </button>
   );
 }
