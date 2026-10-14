@@ -3,6 +3,7 @@ import { pkceChallenge, pkcePair } from "@app/shared";
 import {
   adsenseAuthorizeUrl,
   AdsAuthError,
+  AdsNoAccountsError,
   AdsNotApprovedError,
   googleAdAccounts,
   AdsRetryableError,
@@ -155,13 +156,40 @@ describe("Google Ads access level", () => {
       return json([notApproved], 403);
     });
     await expect(googleAdAccounts(google(f.fetchImpl), "AT")).rejects.toBeInstanceOf(AdsNotApprovedError);
-    // A cancelled account is still just skipped.
+    // A cancelled account is still just skipped; when it's the only one, the person is told why nothing connects.
     const cancelled = fake(async (u) =>
       u.pathname.endsWith("customers:listAccessibleCustomers")
         ? json({ resourceNames: ["customers/111"] })
         : json([{ error: { message: "The customer account can't be accessed because it is not yet enabled or has been deactivated.", status: "PERMISSION_DENIED" } }], 403),
     );
-    expect(await googleAdAccounts(google(cancelled.fetchImpl), "AT")).toEqual([]);
+    await expect(googleAdAccounts(google(cancelled.fetchImpl), "AT")).rejects.toMatchObject({ reason: "not_ready" });
+  });
+});
+
+describe("a Google login with nothing to connect says why", () => {
+  it("no Google Ads account at all: NOT_ADS_USER, or an empty list", async () => {
+    const notAdsUser = fake(async () =>
+      json({ error: { code: 401, message: "The user's Google Account isn't associated with any Google Ads accounts.", status: "UNAUTHENTICATED", details: [{ errors: [{ errorCode: { authenticationError: "NOT_ADS_USER" } }] }] } }, 401),
+    );
+    const err = await googleAdAccounts(google(notAdsUser.fetchImpl), "AT").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AdsNoAccountsError);
+    expect(err).toMatchObject({ reason: "no_ads_account" });
+    const empty = fake(async () => json({}));
+    await expect(googleAdAccounts(google(empty.fetchImpl), "AT")).rejects.toMatchObject({ reason: "no_ads_account" });
+  });
+
+  it("a manager account with no active ad account under it", async () => {
+    const f = fake(async (u, init) => {
+      if (u.pathname.endsWith("customers:listAccessibleCustomers")) return json({ resourceNames: ["customers/222"] });
+      if (queryOf(init).endsWith("FROM customer")) return json([{ results: [{ customer: { id: "222", descriptiveName: "My manager", manager: true } }] }]);
+      return json([{ results: [] }]);
+    });
+    await expect(googleAdAccounts(google(f.fetchImpl), "AT")).rejects.toMatchObject({ reason: "manager_only" });
+  });
+
+  it("Google's account chooser is shown every time, so another login can be picked", () => {
+    const url = new URL(googleAuthorizeUrl(google(fetch), "https://app/cb", "st"));
+    expect(url.searchParams.get("prompt")?.split(" ").sort()).toEqual(["consent", "select_account"]);
   });
 });
 

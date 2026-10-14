@@ -64,14 +64,28 @@ const ERRORS: Record<string, string> = {
   session_mismatch: "You were signed in as someone else when you came back. Sign in as yourself and try again.",
   exchange_failed: "The platform didn't accept the sign-in. Please try again in a moment.",
   no_accounts: "That login can't see any ad accounts. Ask the account's owner to give you access, then connect again.",
-  no_accounts_adsense: "That Google login has no AdSense account. Sign in with the Google account that owns your AdSense, or ask its owner to add you as a user.",
+  no_accounts_adsense: "That Google login has no AdSense account. Choose the Google account that owns your AdSense, or ask its owner to add this login as a user.",
   not_approved_google: "Google is still approving Insights for live Google Ads accounts, so nothing was connected. This is on our side, not yours; please try again in a day or two.",
-  no_accounts_google: "That Google login can't reach any Google Ads account. Sign in with the Google account you use at ads.google.com, or ask the account's owner to add you as a user.",
+  no_accounts_google:
+    "That Google login has no Google Ads account, so nothing was connected. Choose the Google account you use at ads.google.com, or ask the Google Ads account's owner to add this login as a user. No Google Ads account yet? Create one at ads.google.com first.",
+  manager_only_google:
+    "That Google login only reaches a Google Ads manager account with no active ad account under it. Choose the Google account that runs your ads, or create or link an ad account in the manager account, then connect again.",
+  account_not_ready_google:
+    "Google Ads won't report on the account that login reaches yet: its setup at ads.google.com isn't finished, or it's cancelled or suspended. Finish setting it up there, or choose another Google account.",
   no_refresh_token: "Google didn't grant lasting access. Please try again and allow access on Google's screen.",
   permission_missing: "The permission to read reports wasn't granted, so nothing could be connected. Press the button again and leave it ticked.",
   permission_missing_meta: "Meta's ads_read permission wasn't granted, so Insights can't read your ad reports. Press Continue with Meta Ads again and allow it.",
   missing_params: "The platform didn't send everything back. Please try again.",
   temporarily_unavailable: "Something went wrong on our side. Please try again in a minute.",
+};
+
+/** Errors that mean "that login was the wrong one": Google can show its account chooser again. */
+const WRONG_LOGIN = new Set(["no_accounts", "manager_only", "account_not_ready"]);
+
+/** Where a Google login without an account can create one. */
+const PLATFORM_HOME: Partial<Record<Provider, { url: string; label: string }>> = {
+  google: { url: "https://ads.google.com/", label: "Open ads.google.com" },
+  adsense: { url: "https://adsense.google.com/", label: "Open AdSense" },
 };
 
 function daysUntil(iso: string | null): number | null {
@@ -212,6 +226,8 @@ export default function AdAccountsPage() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [pick, setPick] = useState<string | null>(null);
+  // A Google sign-in came back with the wrong login: offer Google's account chooser again.
+  const [retry, setRetry] = useState<Provider | null>(null);
 
   // Coming back from Meta or Google: a problem to explain, or accounts to choose, for the store that was connected.
   useEffect(() => {
@@ -222,7 +238,9 @@ export default function AdAccountsPage() {
     if (target && stores.some((s) => s.id === target)) setStoreId(target);
     const code = q.get("error");
     const choose = q.get("choose");
-    if (code) setError(ERRORS[`${code}_${q.get("provider")}`] ?? ERRORS[code] ?? "Connecting didn't work. Please try again.");
+    const provider = q.get("provider");
+    if (code) setError(ERRORS[`${code}_${provider}`] ?? ERRORS[code] ?? "Connecting didn't work. Please try again.");
+    if (code && WRONG_LOGIN.has(code) && (provider === "google" || provider === "adsense")) setRetry(provider);
     if (choose) setPick(choose);
     if (code || choose || target) window.history.replaceState(window.history.state, "", "/settings/ads");
     // Once the store list is known.
@@ -253,6 +271,7 @@ export default function AdAccountsPage() {
   const run = async (key: string, fn: () => Promise<void>) => {
     setBusy(key);
     setError(null);
+    setRetry(null);
     setNotice(null);
     try {
       await fn();
@@ -299,6 +318,7 @@ export default function AdAccountsPage() {
 
   const connections = data?.connections ?? [];
   const storeName = store.name ?? store.shopDomain;
+  const home = retry ? PLATFORM_HOME[retry] : undefined;
 
   return (
     <div className="space-y-4">
@@ -321,7 +341,23 @@ export default function AdAccountsPage() {
       </div>
 
       {notice && <Alert kind="success">{notice}</Alert>}
-      {error && <Alert>{error}</Alert>}
+      {error && (
+        <Alert>
+          {error}
+          {retry && manage && data?.configured[retry] && (
+            <span className="mt-2 flex flex-wrap items-center gap-2" data-testid="ads-retry">
+              <button type="button" className="btn-secondary h-9" onClick={() => void connect(retry)} disabled={!!busy}>
+                {busy === `connect-${retry}` ? "Opening…" : "Choose another Google account"}
+              </button>
+              {home && (
+                <a className="text-accent underline-offset-2 hover:underline" href={home.url} target="_blank" rel="noopener noreferrer">
+                  {home.label}
+                </a>
+              )}
+            </span>
+          )}
+        </Alert>
+      )}
       {loadError && <Alert>{actionError(loadError, "load your ad accounts")}</Alert>}
 
       {pick && manage && (

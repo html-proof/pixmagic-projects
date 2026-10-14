@@ -340,6 +340,26 @@ describe("review fixes: grants nobody can vouch for are never revoked", () => {
     const cb = await ctx.app.inject({ method: "GET", url: `/ads/google/callback?state=${state}&code=C`, headers: { cookie: `${cookie}; ads_oauth_state=${state}` } });
     expect(new URL(cb.headers.location as string).searchParams.get("error")).toBe("no_accounts");
   });
+
+  it("a login that reaches only an empty manager account, or an account Google won't report on yet, is told which", async () => {
+    const base = googlePlatform(fresh());
+    const callbackError = async (searchStream: (query: string) => Response) => {
+      ctx.setFetch(async (input, init) => {
+        const u = new URL(String(input));
+        if (u.pathname.endsWith("googleAds:searchStream")) return searchStream((JSON.parse(String(init?.body)) as { query: string }).query);
+        return base(input, init);
+      });
+      const start = await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/stores/${storeId}/ads/google/connect`, headers });
+      const state = new URL(start.json().url).searchParams.get("state")!;
+      const cb = await ctx.app.inject({ method: "GET", url: `/ads/google/callback?state=${state}&code=C`, headers: { cookie: `${cookie}; ads_oauth_state=${state}` } });
+      return new URL(cb.headers.location as string).searchParams.get("error");
+    };
+    const managerOnly = await callbackError((q) => (q.endsWith("FROM customer") ? json([{ results: [{ customer: { id: "111", descriptiveName: "Manager", manager: true } }] }]) : json([{ results: [] }])));
+    expect(managerOnly).toBe("manager_only");
+    const notReady = await callbackError(() => json([{ error: { message: "The customer account can't be accessed because it is not yet enabled or has been deactivated.", status: "PERMISSION_DENIED" } }], 403));
+    expect(notReady).toBe("account_not_ready");
+    expect(await systemDb.adConnection.count()).toBe(0);
+  });
 });
 
 describe("the Google Ads report", () => {

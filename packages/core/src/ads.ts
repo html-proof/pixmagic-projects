@@ -82,9 +82,19 @@ export class AdsNotApprovedError extends AdsApiError {
   }
 }
 
-/** The Google login has no Google Ads account at all (Google's NOT_ADS_USER). */
+/**
+ * Why a Google login gives nothing to connect: it has no Google Ads account at all (Google's NOT_ADS_USER,
+ * or an empty list), it reaches only manager accounts with no active ad account under them, or the
+ * accounts it reaches can't be reported on (sign-up not finished, cancelled, suspended).
+ */
+export type GoogleNoAccountsReason = "no_ads_account" | "manager_only" | "not_ready";
+
+/** The Google login has no Google Ads account Insights can report on; `reason` says which case it is. */
 export class AdsNoAccountsError extends AdsApiError {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    public reason: GoogleNoAccountsReason = "no_ads_account",
+  ) {
     super(message, 403);
   }
 }
@@ -440,7 +450,9 @@ function googleConsentUrl(c: GoogleOAuthClient, scope: string, redirectUri: stri
     scope,
     // A refresh token, every time: the access token lasts an hour and syncs run for months.
     access_type: "offline",
-    prompt: "consent",
+    // Google's account chooser, every time: otherwise a browser signed in to one Google account goes
+    // straight through with it, and someone whose ads live under another login can never pick that one.
+    prompt: "select_account consent",
     state,
   });
   if (codeChallenge) {
@@ -558,28 +570,31 @@ interface CustomerClientRow {
 
 /**
  * Every ad account the person can report on: the ones they reach directly, and the clients of
- * any manager account they reach (which need the manager's id on every call).
+ * any manager account they reach (which need the manager's id on every call). Never empty: with
+ * nothing to connect it throws AdsNoAccountsError, saying why, so the person is told what to do.
  */
 export async function googleAdAccounts(c: GoogleConfig, accessToken: string): Promise<AdAccount[]> {
-  let list: { resourceNames?: string[] };
-  try {
-    list = await googleAds<{ resourceNames?: string[] }>(c, accessToken, "customers:listAccessibleCustomers", { method: "GET" });
-  } catch (err) {
-    if (err instanceof AdsNoAccountsError) return [];
-    throw err;
-  }
+  const list = await googleAds<{ resourceNames?: string[] }>(c, accessToken, "customers:listAccessibleCustomers", { method: "GET" });
   const ids = (list.resourceNames ?? []).map((r) => r.split("/").pop()!).filter(Boolean);
+  if (!ids.length) throw new AdsNoAccountsError("This Google login has no Google Ads account");
   const out = new Map<string, AdAccount>();
+  const unreadable: string[] = [];
   for (const id of ids) {
     let me: CustomerRow["customer"];
     try {
       me = (await googleSearch<CustomerRow>(c, accessToken, id, "SELECT customer.id, customer.descriptive_name, customer.currency_code, customer.time_zone, customer.manager FROM customer"))[0]?.customer;
     } catch (err) {
-      // A cancelled or suspended account in the list: skip it rather than fail the connection.
-      if (err instanceof AdsApiError && !(err instanceof AdsNotApprovedError)) continue;
+      // A cancelled, suspended or half-set-up account in the list: skip it rather than fail the connection.
+      if (err instanceof AdsApiError && !(err instanceof AdsNotApprovedError)) {
+        unreadable.push(`${id}: ${err.message}`);
+        continue;
+      }
       throw err;
     }
-    if (!me) continue;
+    if (!me) {
+      unreadable.push(`${id}: no account details`);
+      continue;
+    }
     if (!me.manager) {
       out.set(id, { accountId: id, name: me.descriptiveName ?? null, currency: me.currencyCode ?? null, timezone: me.timeZone ?? null, loginCustomerId: null });
       continue;
@@ -600,7 +615,10 @@ export async function googleAdAccounts(c: GoogleConfig, accessToken: string): Pr
       out.set(cid, { accountId: cid, name: cl.customerClient?.descriptiveName ?? null, currency: cl.customerClient?.currencyCode ?? null, timezone: cl.customerClient?.timeZone ?? null, loginCustomerId: id });
     }
   }
-  return [...out.values()];
+  if (out.size) return [...out.values()];
+  // Accounts exist but none can be read: unfinished or closed accounts first, since they're the person's own.
+  if (unreadable.length) throw new AdsNoAccountsError(`Google Ads won't report on ${unreadable.join("; ")}`, "not_ready");
+  throw new AdsNoAccountsError(`Only manager accounts with no active ad account under them: ${ids.join(", ")}`, "manager_only");
 }
 
 /** Cost, impressions, clicks, conversions and their value per campaign per day. */
