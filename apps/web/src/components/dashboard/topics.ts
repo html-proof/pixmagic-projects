@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { hourRange, plural } from "./format";
 import type { IconName } from "./icons";
@@ -25,6 +26,72 @@ const INFO: Record<Topic, { title: string; icon: IconName }> = {
 
 export const topicInfo = (t: Topic) => INFO[t];
 export const isTopic = (s: string | null): s is Topic => s !== null && (TOPICS as readonly string[]).includes(s);
+
+/** The topics this store has data for, in the order the main page's list uses for equal statuses. */
+export function availableTopics(ov: Overview, contactsOn: boolean): Topic[] {
+  const m = ov.modules;
+  const has: Record<Topic, boolean> = {
+    // The overview has its own first row in the list; ads and AdSense have their own Advertising
+    // section on the main page (advertising.tsx), which opens their detail panels.
+    overview: false,
+    ads: false,
+    adsense: false,
+    sales: !!m.sales_overview,
+    products: !!(m.top_products || m.catalog),
+    shoppers: !!m.funnel,
+    timing: !!m.order_timing,
+    channels: !!m.channels,
+    shipping: !!m.fulfillment,
+    stock: !!m.inventory,
+    discounts: !!m.discount_codes,
+    customers: !!m.customers || contactsOn,
+    orders: !!m.recent_orders,
+  };
+  return TOPICS.filter((t) => has[t]);
+}
+
+// ---------------------------------------------------------------------------
+// Which topic is open lives in the address bar (?view=sales), so the phone's back button closes
+// the panel instead of leaving the dashboard, and a link can open straight onto one.
+// ---------------------------------------------------------------------------
+
+export function useDetailView() {
+  const [view, setView] = useState<Topic | null>(null);
+  const pushed = useRef(false);
+  useEffect(() => {
+    const read = () => {
+      const v = new URLSearchParams(window.location.search).get("view");
+      setView(isTopic(v) ? v : null);
+    };
+    read();
+    const onPop = () => {
+      pushed.current = false;
+      read();
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+
+  const open = (t: Topic) => {
+    const url = new URL(window.location.href);
+    url.searchParams.set("view", t);
+    window.history.pushState(window.history.state, "", url.href);
+    pushed.current = true;
+    setView(t);
+  };
+  const close = () => {
+    if (pushed.current) {
+      // Back to the entry before the panel opened; the popstate above clears `view`.
+      window.history.back();
+      return;
+    }
+    const url = new URL(window.location.href);
+    url.searchParams.delete("view");
+    window.history.replaceState(window.history.state, "", url.href);
+    setView(null);
+  };
+  return { view, open, close };
+}
 
 /** One line about a topic: the number that matters most (used when the health check has nothing to say). */
 export function topicSummary(t: Topic, ov: Overview, currency: string): string {

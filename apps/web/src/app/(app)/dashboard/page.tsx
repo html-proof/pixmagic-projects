@@ -5,7 +5,8 @@ import { useApp, canManage, StoresPending } from "@/components/AppContext";
 import { EmptyState, Alert } from "@/components/ui";
 import { StoreHeader, type LiveState } from "@/components/dashboard/StoreHeader";
 import { DateRangeBar, useDateRange } from "@/components/dashboard/DateRange";
-import { availableTopics, TopicDetail, useDetailView } from "@/components/dashboard/details";
+import { TopicDetail } from "@/components/dashboard/TopicDetail";
+import { availableTopics, useDetailView } from "@/components/dashboard/topics";
 import { AreaList, StoreSummary } from "@/components/dashboard/overview";
 import { AdvertisingSection } from "@/components/dashboard/advertising";
 import { fmtRange, fmtRelative } from "@/components/dashboard/format";
@@ -366,7 +367,7 @@ export default function DashboardPage() {
 
       {/* The main page says each thing once: one sentence, four numbers, and one list of every
           area of the store (worst first). Every number and row opens the full details
-          (components/dashboard/details.tsx), so nothing is lost by keeping this page short. */}
+          (components/dashboard/TopicDetail.tsx), so nothing is lost by keeping this page short. */}
       {s && (
         <section aria-labelledby="numbers-h">
           <h2 id="numbers-h" className="mb-1 flex items-center gap-2 font-semibold"><Icon name="chart" className="h-5 w-5 text-accent" />How your store is doing</h2>
