@@ -1,5 +1,5 @@
 // Email integrations and automation (docs/email.md).
-export { appHost, EmailError, recipientHash, safeErrorText, type EmailDeps } from "./common.js";
+export { appHost, emailAudit, EmailError, recipientHash, safeErrorText, type EmailDeps } from "./common.js";
 export * from "./vault.js";
 export * from "./dns.js";
 export * from "./mime.js";

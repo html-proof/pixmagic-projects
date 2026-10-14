@@ -295,7 +295,7 @@ async function deliverClaimed(m: EmailMessage, deps: EmailDeps, content: Rendere
 }
 
 async function onSendError(m: EmailMessage, account: EmailAccount, sender: EmailSenderIdentity, e: EmailSendError, deps: EmailDeps): Promise<EmailSendOutcome> {
-  logger.warn({ messageId: m.id, accountId: account.id, kind: e.kind, code: e.code }, "email send failed");
+  logger.warn({ messageId: m.id, accountId: account.id, kind: e.kind, errorCode: e.code }, "email send failed");
   switch (e.kind) {
     case "uncertain":
       return finish(m, "unknown", e.code, e.message);

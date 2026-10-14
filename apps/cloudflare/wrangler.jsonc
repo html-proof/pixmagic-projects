@@ -20,7 +20,8 @@
   // Non-secret configuration. Secrets (SESSION_SECRET, TOKEN_ENCRYPTION_KEYS, OTP_PEPPER,
   // SHOPIFY_API_SECRET, FIREBASE_SERVICE_ACCOUNT_B64, ALERT_SLACK_WEBHOOK_URL, for ad accounts
   // META_APP_SECRET, GOOGLE_ADS_CLIENT_SECRET, and for WhatsApp
-  // WHATSAPP_APP_SECRET, WHATSAPP_WEBHOOK_VERIFY_TOKEN) are set with
+  // WHATSAPP_APP_SECRET, WHATSAPP_WEBHOOK_VERIFY_TOKEN, and for email integrations
+  // EMAIL_GOOGLE_CLIENT_SECRET, EMAIL_MICROSOFT_CLIENT_SECRET, optionally EMAIL_CREDENTIAL_KEYS) are set with
   // `wrangler secret put`; for local dev put everything in apps/cloudflare/.dev.vars.
   "vars": {
     "NODE_ENV": "production",
@@ -78,7 +79,13 @@
     // WhatsApp's Meta app: "pixmagic" (1799660384680551, portfolio "Testbusiness", the imeseban@gmail.com Facebook account).
     "WHATSAPP_APP_ID": "1799660384680551",
     "WHATSAPP_CONFIG_ID": "",
-    "WHATSAPP_API_VERSION": "v25.0"
+    "WHATSAPP_API_VERSION": "v25.0",
+    // Email integrations (docs/email.md): "Connect Gmail / Google Workspace" and "Connect Outlook /
+    // Microsoft 365". Empty until the OAuth clients exist (the buttons say so; SMTP works regardless).
+    // Their secrets are Worker secrets. "common" accepts work, school and personal Microsoft accounts.
+    "EMAIL_GOOGLE_CLIENT_ID": "",
+    "EMAIL_MICROSOFT_CLIENT_ID": "",
+    "EMAIL_MICROSOFT_AUTHORITY": "common"
   },
 
   // Postgres through Hyperdrive: owner role (migrations/system paths) and the RLS-enforced app_rls role.

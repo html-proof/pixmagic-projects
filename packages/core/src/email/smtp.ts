@@ -80,14 +80,17 @@ export interface SmtpResult {
   response: string;
 }
 
-const TIMEOUTS = { connect: 15_000, command: 30_000, data: 120_000 };
+export const SMTP_TIMEOUTS = { connect: 15_000, command: 30_000, data: 120_000 };
 
 const enc = new TextEncoder();
 
 class Session {
   private buf = "";
   private decoder = new TextDecoder();
-  constructor(public sock: SmtpSocket) {}
+  constructor(
+    public sock: SmtpSocket,
+    private commandMs: number,
+  ) {}
 
   replaceSocket(sock: SmtpSocket) {
     this.sock = sock;
@@ -114,7 +117,7 @@ class Session {
   }
 
   /** One reply, all its lines (`250-...` continue, `250 ...` ends it). */
-  async reply(timeoutMs = TIMEOUTS.command): Promise<SmtpReply & { lines: string[] }> {
+  async reply(timeoutMs = this.commandMs): Promise<SmtpReply & { lines: string[] }> {
     const lines: string[] = [];
     for (;;) {
       const l = await this.line(timeoutMs);
@@ -133,7 +136,7 @@ class Session {
     await this.sock.write(enc.encode(`${line}\r\n`));
   }
 
-  async command(line: string, timeoutMs = TIMEOUTS.command) {
+  async command(line: string, timeoutMs = this.commandMs) {
     await this.send(line);
     return this.reply(timeoutMs);
   }
@@ -195,7 +198,8 @@ export function queueIdFrom(text: string): string | null {
  * Connect and sign in; then, with an envelope, send one message. Without one, it is a connection
  * test (TLS and credentials) that sends nothing.
  */
-export async function smtpSend(connect: SmtpConnect, cfg: SmtpConfig, envelope?: SmtpEnvelope): Promise<SmtpResult> {
+export async function smtpSend(connect: SmtpConnect, cfg: SmtpConfig, envelope?: SmtpEnvelope, timeouts: Partial<typeof SMTP_TIMEOUTS> = {}): Promise<SmtpResult> {
+  const TIMEOUTS = { ...SMTP_TIMEOUTS, ...timeouts };
   let sock: SmtpSocket;
   try {
     sock = await withTimeout(connect({ host: cfg.host, port: cfg.port, implicitTls: cfg.encryption === "tls" }), TIMEOUTS.connect);
@@ -203,7 +207,7 @@ export async function smtpSend(connect: SmtpConnect, cfg: SmtpConfig, envelope?:
     if (err instanceof SmtpError) throw err;
     throw new SmtpError(`Couldn't connect: ${(err as Error).message}`, looksLikeTls(err) ? "tls_failed" : "connect_failed");
   }
-  const s = new Session(sock);
+  const s = new Session(sock, TIMEOUTS.command);
   let dataSent = false;
   try {
     // An implicit-TLS handshake that fails surfaces on the first read.

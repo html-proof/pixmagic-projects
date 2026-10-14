@@ -41,6 +41,7 @@ Then follow [docs/local-dev.md](docs/local-dev.md). Progress and verification hi
 | Webhooks | [docs/webhooks.md](docs/webhooks.md) |
 | WhatsApp (Cloud API): setup, flows, data | [docs/whatsapp.md](docs/whatsapp.md) |
 | Staff Management, attendance and payroll | [docs/staff.md](docs/staff.md) |
+| Email integrations and automation (Gmail, Microsoft 365, SMTP) | [docs/email.md](docs/email.md) · API: [docs/email-api.yaml](docs/email-api.yaml) |
 | KPI formulas | [docs/kpis.md](docs/kpis.md) |
 | Security model | [docs/security.md](docs/security.md) |
 | Deployment (Cloudflare) | [docs/deployment-cloudflare.md](docs/deployment-cloudflare.md) |

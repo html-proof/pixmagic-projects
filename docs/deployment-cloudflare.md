@@ -71,6 +71,12 @@ npx wrangler queues create insights-aggregate
 npx wrangler queues create insights-dlq
 ```
 
+```bash
+npx wrangler queues create insights-email
+```
+
+   `insights-email` carries email sends and automation runs (docs/email.md). It must exist before a Worker that binds it is deployed, or `wrangler deploy` fails.
+
    Optional, and not done today: large webhook payloads (over 100 KB) are kept in the Coordinator Durable Object, in chunks. To use R2 instead, create a bucket, uncomment the `r2_buckets` binding in `wrangler.jsonc`, and add a lifecycle rule deleting `webhooks/` objects after 7 days (processed payloads are deleted immediately; this only catches abandoned ones):
 
 ```bash

@@ -60,9 +60,12 @@ const escapeAttr = (s: string) => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;
 /** Text between tags: `<` never reaches here; a bare `&` that isn't a character reference is escaped. */
 const escapeText = (s: string) => s.replace(/&(?!(#x[0-9a-f]+|#\d+|[a-z][a-z0-9]*);)/gi, "&amp;").replace(/>/g, "&gt;");
 
+/** C0 controls, space, DEL and C1 controls: browsers drop them inside URLs, so a tab inside "javascript:" still means javascript:. */
+const CONTROL_CHARS = new RegExp(`[${String.fromCharCode(0)}-${String.fromCharCode(0x20)}${String.fromCharCode(0x7f)}-${String.fromCharCode(0x9f)}]+`, "g");
+
 /** Whether a URL may stay: http(s), mailto, tel, an in-page anchor, or (in a template) a placeholder. */
 export function safeUrl(value: string, attr: string, allowPlaceholder: boolean): boolean {
-  const v = decodeEntities(value).replace(/[\u0000- \u007f-\u009f]+/g, "").toLowerCase();
+  const v = decodeEntities(value).replace(CONTROL_CHARS, "").toLowerCase();
   if (allowPlaceholder && v.startsWith("{{")) return true;
   if (attr === "src") return /^https?:\/\//.test(v);
   return /^(https?:\/\/|mailto:|tel:|#)/.test(v);
@@ -76,7 +79,7 @@ function safeStyle(value: string): boolean {
   return urls.every((u) => /url\s*\(\s*['"]?https:\/\//.test(u));
 }
 
-const ATTR_RE = /([^\s"'>\/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
+const ATTR_RE = /([^\s"'>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
 
 function cleanAttrs(tag: string, src: string, allowPlaceholder: boolean): string {
   const allowed = TAG_ATTRS[tag];

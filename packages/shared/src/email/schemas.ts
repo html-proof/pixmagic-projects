@@ -121,7 +121,7 @@ export const ruleUpdateSchema = ruleInputSchema.partial();
 /** POST /api/v1/events: one business event from the customer's own systems. */
 export const ingestEventSchema = z.object({
   /** The sender's own id for the event: sending it again is a no-op. */
-  id: z.string().min(1).max(200).regex(/^[A-Za-z0-9_.:\-]+$/, "Use letters, digits and _ . : - only"),
+  id: z.string().min(1).max(200).regex(/^[A-Za-z0-9_.:-]+$/, "Use letters, digits and _ . : - only"),
   type: z.string().min(3).max(130),
   occurred_at: z.string().datetime({ offset: true }).optional(),
   customer: z

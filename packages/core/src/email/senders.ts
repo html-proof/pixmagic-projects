@@ -159,7 +159,7 @@ export async function confirmSender(workspaceId: string, senderId: string, code:
     await systemDb.emailSenderIdentity.update({ where: { id: s.id }, data: { isDefault: true } }).catch(() => undefined);
   }
   await emailAudit({ workspaceId, actorUserId: userId, action: "email.sender.verified", targetType: "email_sender", targetId: s.id, metadata: { method: "smtp_confirmation" } });
-  return verified;
+  return systemDb.emailSenderIdentity.findUniqueOrThrow({ where: { id: verified.id } });
 }
 
 export async function setDefaultSender(workspaceId: string, senderId: string, userId: string) {

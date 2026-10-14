@@ -3,7 +3,7 @@
  * message's history, and the numbers. Every number is counted from email_messages; anything the
  * providers don't report (delivery, opens, clicks) is reported as unavailable, never estimated.
  */
-import { Prisma, systemDb, withTenant } from "@app/db";
+import { Prisma, withTenant } from "@app/db";
 import { accountNeedsAttention, MESSAGE_STATUSES, normalizeEmail, type MessageStatus } from "@app/shared/email";
 import { notFound, recipientHash } from "./common.js";
 import { emailOAuthConfigured } from "./oauth.js";

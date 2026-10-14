@@ -107,6 +107,7 @@ export function renderTemplate(src: string, data: unknown, mode: RenderMode): st
     out += mode === "html" ? escapeHtml(value) : value;
   }
   if (mode === "subject") {
+    // eslint-disable-next-line no-control-regex -- a subject must not carry control characters
     out = out.replace(/[\r\n\t\u0000-\u001f\u007f]+/g, " ").replace(/\s{2,}/g, " ").trim();
     if (out.length > TEMPLATE_LIMITS.subject) out = `${out.slice(0, TEMPLATE_LIMITS.subject - 1)}…`;
   }

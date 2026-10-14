@@ -38,6 +38,16 @@ WHATSAPP_CONFIG_ID=
 WHATSAPP_WEBHOOK_VERIFY_TOKEN=
 
 EMAIL_FROM="Insights <no-reply@localhost>"
+# Email integrations (optional; docs/email.md). Redirect URIs: <APP_URL>/api/email/oauth/google/callback
+# and <APP_URL>/api/email/oauth/microsoft/callback. Empty: the Google / Microsoft buttons say "not set up";
+# custom SMTP works without them. EMAIL_CREDENTIAL_KEYS empty: TOKEN_ENCRYPTION_KEYS wraps email secrets.
+EMAIL_GOOGLE_CLIENT_ID=
+EMAIL_GOOGLE_CLIENT_SECRET=
+EMAIL_MICROSOFT_CLIENT_ID=
+EMAIL_MICROSOFT_CLIENT_SECRET=
+EMAIL_MICROSOFT_AUTHORITY=common
+EMAIL_CREDENTIAL_KEYS=
+EMAIL_DEFAULT_DAILY_LIMIT=500
 # Local only: deliver mail to Mailpit (docker compose) instead of Cloudflare Email Sending.
 MAILPIT_URL=http://localhost:8025
 ALERT_SLACK_WEBHOOK_URL=

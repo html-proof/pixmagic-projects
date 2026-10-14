@@ -9,6 +9,7 @@ const ITEMS = [
   ["integrations", "Connect your business"],
   ["stores", "Shopify"],
   ["ads", "Advertising"],
+  ["email", "Email integrations"],
   ["members", "Members & roles"],
   ["notifications", "Notifications"],
   ["api-keys", "API keys"],
@@ -22,7 +23,9 @@ export default function SettingsLayout({ children }: { children: ReactNode }) {
     <div className="grid gap-6 md:grid-cols-[12rem_1fr]">
       <nav aria-label="Settings" className="flex gap-1 overflow-x-auto md:flex-col">
         {ITEMS.map(([slug, label]) => {
-          const active = path.replace(/\/$/, "") === `/settings/${slug}`;
+          const here = path.replace(/\/$/, "");
+          // Email integrations has pages of its own under it.
+          const active = here === `/settings/${slug}` || (slug === "email" && here.startsWith("/settings/email/"));
           return (
             <Link
               key={slug}
