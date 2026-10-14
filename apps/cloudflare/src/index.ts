@@ -4,6 +4,7 @@ import { cloudflareMailer, logger, mailpitMailer, type BlobStore, type Producer,
 import { withDb, type DbUrls } from "@app/db";
 import { env as bindings } from "cloudflare:workers";
 import { durableCoord, type Coordinator } from "./coordinator.js";
+import { workersSmtpConnect } from "./smtpSocket.js";
 
 export { Coordinator } from "./coordinator.js";
 
@@ -14,6 +15,7 @@ const QUEUES: Record<string, QueueName> = {
   "insights-sync": "sync",
   "insights-webhooks": "webhooks",
   "insights-aggregate": "aggregate",
+  "insights-email": "email",
 };
 
 function producer<T>(q: Queue): Producer<T> {
@@ -75,6 +77,7 @@ function workerDeps(env: Env): WorkerDeps {
     sync: producer(env.SYNC_QUEUE),
     webhooks: producer(env.WEBHOOK_QUEUE),
     aggregate: producer(env.AGGREGATE_QUEUE),
+    email: producer(env.EMAIL_QUEUE),
   };
   return {
     coord: durableCoord(env.COORD),
@@ -83,6 +86,7 @@ function workerDeps(env: Env): WorkerDeps {
     // MAILPIT_URL is a local-dev-only override (.dev.vars); production sends through Email Sending.
     mailer: process.env.MAILPIT_URL ? mailpitMailer(process.env.MAILPIT_URL) : cloudflareMailer(env.EMAIL),
     fetchImpl: (input, init) => fetch(input, init),
+    smtpConnect: workersSmtpConnect,
   };
 }
 

@@ -10,7 +10,15 @@ export type Permission =
   | "apikeys:manage"
   | "billing:manage"
   | "audit:read"
-  | "workspace:delete";
+  | "workspace:delete"
+  /** Email integrations: the overview, connected accounts (never their credentials), domains, templates and rules. */
+  | "email:read"
+  /** Email activity: who was sent what, and what each automation did with each event. */
+  | "email:activity"
+  /** Write email templates and automation rules; dry runs and test sends to oneself. */
+  | "email:automate"
+  /** Connect, reconnect and disconnect sending accounts; domains, sender addresses, suppressions, event API keys. */
+  | "email:manage";
 
 const MATRIX: Record<Role, Permission[]> = {
   owner: [
@@ -22,10 +30,15 @@ const MATRIX: Record<Role, Permission[]> = {
     "billing:manage",
     "audit:read",
     "workspace:delete",
+    "email:read",
+    "email:activity",
+    "email:automate",
+    "email:manage",
   ],
-  admin: ["dashboard:read", "customers:contact", "stores:manage", "members:manage", "apikeys:manage", "audit:read"],
-  analyst: ["dashboard:read", "customers:contact"],
-  viewer: ["dashboard:read"],
+  admin: ["dashboard:read", "customers:contact", "stores:manage", "members:manage", "apikeys:manage", "audit:read", "email:read", "email:activity", "email:automate", "email:manage"],
+  // Analysts already see customers' contact details, so they may see who was emailed; they can't change anything.
+  analyst: ["dashboard:read", "customers:contact", "email:read", "email:activity"],
+  viewer: ["dashboard:read", "email:read"],
 };
 
 export function can(role: Role, perm: Permission): boolean {

@@ -100,7 +100,9 @@
     "producers": [
       { "binding": "SYNC_QUEUE", "queue": "insights-sync" },
       { "binding": "WEBHOOK_QUEUE", "queue": "insights-webhooks" },
-      { "binding": "AGGREGATE_QUEUE", "queue": "insights-aggregate" }
+      { "binding": "AGGREGATE_QUEUE", "queue": "insights-aggregate" },
+      // Email integrations (docs/email.md). Create it once before deploying: npx wrangler queues create insights-email
+      { "binding": "EMAIL_QUEUE", "queue": "insights-email" }
     ],
     // max_retries + 1 must equal MAX_ATTEMPTS in packages/core/src/queues.ts.
     // Shopify limits are per shop and the GraphQL client paces itself, so concurrency stays modest.
@@ -109,7 +111,9 @@
       { "queue": "insights-webhooks", "max_batch_size": 10, "max_batch_timeout": 2, "max_concurrency": 10, "max_retries": 5, "dead_letter_queue": "insights-dlq" },
       // max_batch_timeout 1, not 5: day totals are the last step of an import, so this timeout
       // was up to 5s of an otherwise finished import spent waiting for a batch to fill.
-      { "queue": "insights-aggregate", "max_batch_size": 5, "max_batch_timeout": 1, "max_concurrency": 4, "max_retries": 5, "dead_letter_queue": "insights-dlq" }
+      { "queue": "insights-aggregate", "max_batch_size": 5, "max_batch_timeout": 1, "max_concurrency": 4, "max_retries": 5, "dead_letter_queue": "insights-dlq" },
+      // Sends are short; per-workspace and per-account limits are enforced in the job, not here.
+      { "queue": "insights-email", "max_batch_size": 10, "max_batch_timeout": 2, "max_concurrency": 5, "max_retries": 5, "dead_letter_queue": "insights-dlq" }
     ]
   },
 

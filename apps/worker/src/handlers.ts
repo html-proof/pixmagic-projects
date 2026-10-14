@@ -65,6 +65,13 @@ import {
   sendWhatsappMessage,
   whatsappOnShopifyEvent,
   type WhatsappJob,
+  emailOnShopifyEvent,
+  processBusinessEvent,
+  purgeEmailStoreData,
+  redactEmailCustomer,
+  sendEmailMessage,
+  type EmailJob,
+  type SmtpConnect,
 } from "@app/core";
 import { expandScopes, localDay } from "@app/shared";
 
@@ -74,6 +81,8 @@ export interface WorkerDeps {
   payloads: BlobStore;
   mailer: Mailer;
   fetchImpl: FetchLike;
+  /** Outbound TCP for SMTP email accounts (Workers sockets). Absent: SMTP accounts can't send. */
+  smtpConnect?: SmtpConnect;
 }
 
 /** Thrown when retrying cannot help (store disconnected, access revoked). The job fails immediately. */
@@ -601,11 +610,14 @@ export async function processWebhook(data: WebhookJobData, deps: WorkerDeps) {
           await systemDb.order.updateMany({ where: { storeId: store.id, customerKey: customerKey(store, String(p.customer.id)) }, data: { customerKey: null } });
         }
         const whatsappRecords = await redactWhatsappCustomer(store, p);
-        await audit({ workspaceId: store.workspaceId, action: "gdpr.customer_redacted", metadata: { whatsappRecords } });
+        // Email automations: the customer's events and the messages sent to them from this store.
+        const emailRecords = await redactEmailCustomer(store, p.customer?.email);
+        await audit({ workspaceId: store.workspaceId, action: "gdpr.customer_redacted", metadata: { whatsappRecords, emailRecords } });
         break;
       }
       case "shop/redact":
         await purgeStoreData(store.id);
+        await purgeEmailStoreData(store.id);
         await systemDb.store.update({ where: { id: store.id }, data: { accessTokenEnc: null, refreshTokenEnc: null, status: "uninstalled" } });
         await audit({ workspaceId: store.workspaceId, action: "gdpr.shop_redacted", targetId: store.id });
         break;
@@ -616,6 +628,8 @@ export async function processWebhook(data: WebhookJobData, deps: WorkerDeps) {
     // WhatsApp order updates, delivery updates and cart reminders (a no-op unless the store turned them on).
     // After the analytics write, and idempotent, so a retry of this delivery repeats nothing.
     await whatsappOnShopifyEvent(store, data.topic, p, deps);
+    // Email automations listening to orders and checkouts (a no-op unless one is enabled). Idempotent too.
+    await emailOnShopifyEvent(store, data.topic, p, deps);
   }
   await systemDb.webhookEvent.update({ where: { id: ev.id }, data: { status: "succeeded", processedAt: new Date(), error: null } });
   if (data.payloadKey) await deps.payloads.delete(data.payloadKey).catch(() => {});
@@ -917,6 +931,12 @@ export async function refreshExpiringTokens(deps: WorkerDeps) {
 // ---------------------------------------------------------------------------
 
 /** One WhatsApp message, or a store's due messages in a batch (campaigns, catch-up). */
+/** Email integrations: send one message, or run the automations for one business event. */
+export async function runEmailJob(job: EmailJob, deps: WorkerDeps) {
+  if (job.kind === "email_send") return { outcome: await sendEmailMessage(job.messageId, deps) };
+  return processBusinessEvent(job.eventId, deps);
+}
+
 export async function runWhatsappJob(job: WhatsappJob, deps: WorkerDeps) {
   if (job.kind === "whatsapp") return { outcome: await sendWhatsappMessage(job.messageId, deps) };
   return dispatchStore(job.storeId, deps);

@@ -8,6 +8,7 @@ interface __BaseEnv_Env {
 	SYNC_QUEUE: Queue;
 	WEBHOOK_QUEUE: Queue;
 	AGGREGATE_QUEUE: Queue;
+	EMAIL_QUEUE: Queue;
 	GLOBAL_LIMITER: RateLimit;
 	ASSETS: Fetcher;
 	NODE_ENV: "production";

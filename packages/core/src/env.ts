@@ -67,6 +67,34 @@ const schema = z.object({
   WHATSAPP_API_VERSION: z.string().default("v25.0"),
   WHATSAPP_WEBHOOK_VERIFY_TOKEN: z.string().optional().default(""),
   EMAIL_FROM: z.string().default("Insights <no-reply@localhost>"),
+  /**
+   * Email integrations (docs/email.md). "Connect Gmail / Google Workspace" needs a Google OAuth
+   * client whose consent screen lists gmail.send; "Connect Outlook / Microsoft 365" an Entra app
+   * registration with delegated Mail.Send. Redirect URIs: <APP_URL>/api/email/oauth/google/callback
+   * and <APP_URL>/api/email/oauth/microsoft/callback. Empty: the button says it isn't set up yet.
+   */
+  EMAIL_GOOGLE_CLIENT_ID: z.string().optional().default(""),
+  EMAIL_GOOGLE_CLIENT_SECRET: z.string().optional().default(""),
+  EMAIL_MICROSOFT_CLIENT_ID: z.string().optional().default(""),
+  EMAIL_MICROSOFT_CLIENT_SECRET: z.string().optional().default(""),
+  /** "common" (work, school and personal accounts), "organizations" (work and school only) or one directory's id. */
+  EMAIL_MICROSOFT_AUTHORITY: z
+    .string()
+    .regex(/^(common|organizations|consumers|[0-9a-f-]{36}|[a-z0-9.-]+\.[a-z]{2,})$/i)
+    .default("common"),
+  /**
+   * Key-encryption keys for stored email credentials, in TOKEN_ENCRYPTION_KEYS' format. Empty: the
+   * TOKEN_ENCRYPTION_KEYS keyring is used. Each secret has its own random data key, wrapped by
+   * these keys, so a rotation re-wraps data keys only.
+   */
+  EMAIL_CREDENTIAL_KEYS: z.string().optional().default(""),
+  /** Messages a day per workspace unless the workspace sets a lower one; and the most any workspace may set. */
+  EMAIL_DEFAULT_DAILY_LIMIT: z.coerce.number().int().min(1).default(500),
+  EMAIL_MAX_DAILY_LIMIT: z.coerce.number().int().min(1).default(10_000),
+  /** Messages a minute per workspace, across all its accounts (protects shared sending capacity). */
+  EMAIL_WORKSPACE_PER_MINUTE: z.coerce.number().int().min(1).default(60),
+  /** DNS-over-HTTPS resolver for domain checks and SMTP host checks (JSON API). */
+  EMAIL_DOH_URL: z.string().url().default("https://cloudflare-dns.com/dns-query"),
   ALERT_SLACK_WEBHOOK_URL: z.string().optional().default(""),
 });
 
@@ -89,10 +117,15 @@ const PUBLIC_SECRET_MARKERS = [
   "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=",
 ];
 const SECRET_VARS = ["SESSION_SECRET", "OTP_PEPPER", "TOKEN_ENCRYPTION_KEYS"] as const;
+/** Secrets that may be left empty (then another one is used), but never set to a public value. */
+const OPTIONAL_SECRET_VARS = ["EMAIL_CREDENTIAL_KEYS"] as const;
 
 /** Names (never values) of production secrets still set to a publicly known value. */
-export function publicSecrets(e: Pick<Env, (typeof SECRET_VARS)[number]>): string[] {
-  return SECRET_VARS.filter((name) => PUBLIC_SECRET_MARKERS.some((m) => e[name].toLowerCase().includes(m.toLowerCase())));
+export function publicSecrets(e: Pick<Env, (typeof SECRET_VARS)[number]> & Partial<Pick<Env, (typeof OPTIONAL_SECRET_VARS)[number]>>): string[] {
+  return [...SECRET_VARS, ...OPTIONAL_SECRET_VARS].filter((name) => {
+    const value = e[name];
+    return !!value && PUBLIC_SECRET_MARKERS.some((m) => value.toLowerCase().includes(m.toLowerCase()));
+  });
 }
 
 let cached: Env | undefined;
