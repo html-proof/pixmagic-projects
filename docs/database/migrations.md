@@ -60,7 +60,6 @@ needs a migration:
 4. Deploy the code (staged version, smoke test, promote).
 5. Point `DATABASE_URL` back at `app_dev`.
 
-Pending, not yet applied to production, at the time of writing: `20261014180000_hot_filter_indexes`
-(indexes only, safe before or after the code), plus the migrations on unmerged branches
-(`20261012000000_ads_completeness`, `20261014120000_staff_management`), each to be applied before
-its own deploy.
+Applied to production on 2026-10-14: `20261014120000_staff_management` and
+`20261014180000_hot_filter_indexes`. Still on an unmerged branch: `20261012000000_ads_completeness`
+(apply it before the deploy that brings that code).

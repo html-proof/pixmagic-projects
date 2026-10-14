@@ -2,8 +2,17 @@
 
 The outcome of the restructuring planned in [refactoring-plan.md](refactoring-plan.md), on branch
 `claude/project-audit-restructure-ed93a6`, starting from `4320f54` (GitHub `main`, the code live in
-production). **Nothing was deployed, no migration was applied to production, no credential was
-changed.** Each stage is one or a few commits that can be reverted on their own.
+production). Each stage is one or a few commits that can be reverted on their own.
+
+**Deployed 2026-10-14** (on the owner's request), rebased onto `main` `1935427` (which had merged Staff
+Management), pushed as `main` `3f95d10`: Worker version `c9922ab9-bec6-43cc-bb7f-c03df08cf167` at 100%
+(rollback: `1d132e71-0099-455e-ad9f-2d89f8740901`, the previous version, which runs fine on the new
+schema). Before it: backup `C:UsersSebaninsights-backupsapp-auto-20261014-160531Z.dump` (verified),
+then migrations `20261014120000_staff_management` and `20261014180000_hot_filter_indexes` applied with
+`psql -1` + `prisma migrate resolve`. The combined tree passed lint, typecheck, unit (313) and
+integration (398) tests first; the staged version passed smoke tests through the version-override header
+before promotion. Its first `/readyz` answered `db:false` (a cold first connection through the tunnel
+outlasting the probe's 3 s), every later one `ok`. No credential was changed.
 
 ## Summary
 
