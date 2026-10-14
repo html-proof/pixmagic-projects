@@ -6,7 +6,7 @@ import { Alert } from "@/components/ui";
 import { actionError, api, fmtMoney, fmtNum } from "@/lib/api";
 import { readLocal, removeLocal, writeLocal } from "@/lib/storage";
 import { fmtRelative, plural } from "./format";
-import { Icon, type IconName } from "./icons";
+import { Icon, type IconName } from "./Icons";
 import { Empty, Panel } from "./primitives";
 import type { AbandonedContact, ContactPerson, Contacts, CustomerContact } from "./types";
 

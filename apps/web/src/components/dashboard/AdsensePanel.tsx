@@ -4,10 +4,10 @@ import { GoogleIcon } from "@/components/BrandIcons";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { AccountStatus, accountGroups, dailyMoneyColumns } from "./adsCommon";
 import { fmtLongDay, fmtMoneyCompact, fmtMoneyWhole, fmtRange, fmtSpan, plural } from "./format";
-import { Icon } from "./icons";
+import { Icon } from "./Icons";
 import { B, changeWords } from "./narrative";
 import { Delta, Panel, Stat } from "./primitives";
-import { ColumnsWithTotal } from "./salesBreakdown";
+import { ColumnsWithTotal } from "./SalesBreakdown";
 import type { AdsenseModule, Overview } from "./types";
 
 // ---------------------------------------------------------------------------

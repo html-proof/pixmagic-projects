@@ -2,18 +2,18 @@
 import type { ReactNode } from "react";
 import { bestEntryPage, biggestDropOff, dropOffSection } from "@app/shared/journey";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
-import { BarRow, StackedBar } from "./charts";
-import { ContactsCard } from "./contacts";
-import { FunnelCard, JourneyCard, SECTION_LABEL, STEP_LABEL } from "./funnel";
+import { BarRow, StackedBar } from "./Charts";
+import { ContactsCard } from "./Contacts";
+import { FunnelCard, JourneyCard, SECTION_LABEL, STEP_LABEL } from "./Funnel";
 import { fmtDuration, fmtRange, hourRange, plural, weekdayNames } from "./format";
-import { CatalogCard, ChannelsCard, DiscountCodesCard, FulfillmentCard, InventoryCard, OrderTimingCard, RecentOrdersCard, TrafficCard } from "./modules";
-import { AdsDetail } from "./adsPanel";
-import { AdsenseDetail } from "./adsensePanel";
-import { Explained } from "./explain";
+import { CatalogCard, ChannelsCard, DiscountCodesCard, FulfillmentCard, InventoryCard, OrderTimingCard, RecentOrdersCard, TrafficCard } from "./Modules";
+import { AdsDetail } from "./AdsPanel";
+import { AdsenseDetail } from "./AdsensePanel";
+import { Explained } from "./Explain";
 import { B, Change, InShort, upDown } from "./narrative";
-import { OverviewDetail } from "./overview";
+import { OverviewDetail } from "./Overview";
 import { Delta, Panel, Stat } from "./primitives";
-import { DailySalesCard, MonthlySalesCard } from "./salesBreakdown";
+import { DailySalesCard, MonthlySalesCard } from "./SalesBreakdown";
 import type { Topic } from "./topics";
 import type { Overview } from "./types";
 

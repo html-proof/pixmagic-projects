@@ -1,7 +1,7 @@
 "use client";
 import { gradeCover, gradeShipping, type Grade } from "@app/shared/health";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
-import { BarRow, ColumnChart, StackedBar } from "./charts";
+import { BarRow, ColumnChart, StackedBar } from "./Charts";
 import { fmtDateTime, fmtDuration, hourLabel, hourRange, humanize, plural, weekdayNames } from "./format";
 import { Badge, Empty, Panel, Stat, type Tone } from "./primitives";
 import type {

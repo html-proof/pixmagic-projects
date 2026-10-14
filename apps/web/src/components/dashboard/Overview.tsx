@@ -4,9 +4,9 @@ import { gradeRefundRate, gradeShipping, gradeStock, gradeTrend, type Health } f
 import { biggestDropOff } from "@app/shared/journey";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { fmtDay, fmtMonth, fmtRange, fmtRelative, hourRange, plural } from "./format";
-import { STEP_LABEL } from "./funnel";
-import { AreaPreview } from "./previews";
-import { Icon } from "./icons";
+import { STEP_LABEL } from "./Funnel";
+import { AreaPreview } from "./Previews";
+import { Icon } from "./Icons";
 import { B, Change, changeWords } from "./narrative";
 import { Panel, Stat, type Tone } from "./primitives";
 import { topicInfo, topicSummary, type Topic } from "./topics";

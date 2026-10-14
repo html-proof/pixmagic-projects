@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { hourRange, plural } from "./format";
-import type { IconName } from "./icons";
+import type { IconName } from "./Icons";
 import type { Overview } from "./types";
 
 /** Everything a dashboard card can open, each as its own detail panel (?view=<topic>). */
@@ -32,7 +32,7 @@ export function availableTopics(ov: Overview, contactsOn: boolean): Topic[] {
   const m = ov.modules;
   const has: Record<Topic, boolean> = {
     // The overview has its own first row in the list; ads and AdSense have their own Advertising
-    // section on the main page (advertising.tsx), which opens their detail panels.
+    // section on the main page (Advertising.tsx), which opens their detail panels.
     overview: false,
     ads: false,
     adsense: false,

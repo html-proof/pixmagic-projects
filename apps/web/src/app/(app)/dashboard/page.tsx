@@ -7,11 +7,11 @@ import { StoreHeader, type LiveState } from "@/components/dashboard/StoreHeader"
 import { DateRangeBar, useDateRange } from "@/components/dashboard/DateRange";
 import { TopicDetail } from "@/components/dashboard/TopicDetail";
 import { availableTopics, useDetailView } from "@/components/dashboard/topics";
-import { AreaList, StoreSummary } from "@/components/dashboard/overview";
-import { AdvertisingSection } from "@/components/dashboard/advertising";
+import { AreaList, StoreSummary } from "@/components/dashboard/Overview";
+import { AdvertisingSection } from "@/components/dashboard/Advertising";
 import { fmtRange, fmtRelative } from "@/components/dashboard/format";
-import { Icon, type IconName } from "@/components/dashboard/icons";
-import { AnimatedNumber, Sparkline } from "@/components/dashboard/motion";
+import { Icon, type IconName } from "@/components/dashboard/Icons";
+import { AnimatedNumber, Sparkline } from "@/components/dashboard/Motion";
 import { Delta } from "@/components/dashboard/primitives";
 import type { Capability, Overview } from "@/components/dashboard/types";
 import { api, ApiError, fmtMoney, fmtNum, fmtPct, friendlyError, isTransient, useLiveApi } from "@/lib/api";
@@ -389,7 +389,7 @@ export default function DashboardPage() {
       )}
 
       {/* Ad platforms report about themselves, so they get their own section rather than a row in
-          the store's list: results when connected, one way in when not (components/dashboard/advertising.tsx). */}
+          the store's list: results when connected, one way in when not (components/dashboard/Advertising.tsx). */}
       {ov && <AdvertisingSection ov={ov} manage={canManage(workspace.role)} onOpen={detail.open} />}
 
       {ov && <AreaList ov={ov} currency={cur} topics={topics} onOpen={detail.open} />}

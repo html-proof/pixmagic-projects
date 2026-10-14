@@ -1,7 +1,7 @@
 "use client";
 import type { ReactNode } from "react";
 import { fmtPct } from "@/lib/api";
-import { Icon } from "./icons";
+import { Icon } from "./Icons";
 
 // ---------------------------------------------------------------------------
 // The small pieces the dashboard's sentences are made of, shared by the overview, the detail

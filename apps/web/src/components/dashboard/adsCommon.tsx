@@ -1,7 +1,7 @@
 "use client";
 import { weekdayOf } from "@app/shared/sales";
 import { fmtDay, fmtMoneyWhole, fmtRelative, fmtWeekday } from "./format";
-import type { Column } from "./salesBreakdown";
+import type { Column } from "./SalesBreakdown";
 
 // ---------------------------------------------------------------------------
 // What the Ads panel (money spent) and the Ad earnings panel (money earned) draw the same way:

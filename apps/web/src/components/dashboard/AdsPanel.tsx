@@ -5,12 +5,12 @@ import { GoogleIcon, MetaIcon } from "@/components/BrandIcons";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { AccountStatus, accountGroups, dailyMoneyColumns } from "./adsCommon";
 import { fmtLongDay, fmtMoneyCompact, fmtMoneyWhole, fmtRange, fmtSpan, fmtTimes, plural } from "./format";
-import { Icon } from "./icons";
-import { GoogleReportPanel } from "./googleReport";
-import { MetaReportPanel } from "./metaReport";
+import { Icon } from "./Icons";
+import { GoogleReportPanel } from "./GoogleReport";
+import { MetaReportPanel } from "./MetaReport";
 import { B, changeWords } from "./narrative";
 import { Delta, NeutralDelta, Panel, Stat } from "./primitives";
-import { ColumnsWithTotal } from "./salesBreakdown";
+import { ColumnsWithTotal } from "./SalesBreakdown";
 import type { AdsModule, Overview } from "./types";
 
 // ---------------------------------------------------------------------------

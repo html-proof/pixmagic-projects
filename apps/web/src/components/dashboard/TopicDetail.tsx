@@ -2,14 +2,14 @@
 import dynamic from "next/dynamic";
 import { useEffect, useRef, type ReactNode } from "react";
 import { fmtRange } from "./format";
-import { Icon, type IconName } from "./icons";
+import { Icon, type IconName } from "./Icons";
 import { topicInfo, type Topic } from "./topics";
 import type { Overview } from "./types";
 
 // ---------------------------------------------------------------------------
 // The detail panel: full screen on a phone, a wide side panel on a computer. The frame (title,
 // dates, print, close, keyboard focus) is part of the dashboard page and opens at once; what goes
-// inside it, every topic's tables and charts (./details.tsx), is loaded the first time a panel
+// inside it, every topic's tables and charts (./Details.tsx), is loaded the first time a panel
 // opens, so the page itself starts without it.
 // ---------------------------------------------------------------------------
 
@@ -25,7 +25,7 @@ function ContentsLoading() {
   );
 }
 
-const TopicContents = dynamic(() => import("./details").then((m) => m.TopicContents), { loading: () => <ContentsLoading /> });
+const TopicContents = dynamic(() => import("./Details").then((m) => m.TopicContents), { loading: () => <ContentsLoading /> });
 
 function DetailSheet({ title, icon, period, onClose, children }: { title: string; icon: IconName; period: string; onClose: () => void; children: ReactNode }) {
   const panel = useRef<HTMLDivElement>(null);
