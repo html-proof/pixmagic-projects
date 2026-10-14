@@ -20,7 +20,7 @@ export function toCsv(header: string[], rows: Array<Array<string | number | null
   };
   const lines = [header, ...rows].map((r) => r.map(cell).join(","));
   // BOM so Excel opens UTF-8 names correctly.
-  return enc.encode(`﻿${lines.join("\r\n")}\r\n`);
+  return enc.encode(`\uFEFF${lines.join("\r\n")}\r\n`);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -102,6 +102,7 @@ export function zipStore(files: Array<{ name: string; data: Uint8Array }>): Uint
 
 export type XlsxCell = { t: "text"; v: string } | { t: "number"; v: string } | { t: "empty" };
 
+// eslint-disable-next-line no-control-regex -- removing characters XML can't hold is the point
 const xml = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "");
 
 function colName(i: number): string {
