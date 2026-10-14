@@ -10,7 +10,7 @@ type StoreCtx = Pick<Store, "id" | "workspaceId" | "timezone" | "grantedScopes">
  * when the merchant granted read_customers (the "customers" capability).
  */
 export function customerKey(store: Pick<Store, "id">, customerId: string): string {
-  return hmacSha256Hex(env().OTP_PEPPER, `${store.id}:${customerId}`);
+  return hmacSha256Hex(env().CUSTOMER_HASH_KEY, `${store.id}:${customerId}`);
 }
 
 /**

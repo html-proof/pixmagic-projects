@@ -36,9 +36,21 @@ The repo-root `.env` (from `.env.example`) is only for tools on this machine: do
 
 ## 3. Database
 
+Local development uses its own database, `app_dev` (the default `DATABASE_URL` in `.env.example`
+and the local connection strings `wrangler dev` uses in `wrangler.jsonc`). Create and migrate it,
+then give the tenant role its grants:
+
 ```bash
 pnpm db:migrate
 ```
+
+```bash
+pnpm --filter @app/db test:grants
+```
+
+Never point local tools at `app`: on the machine that hosts production's Postgres (port 5434,
+see [deployment-cloudflare.md](deployment-cloudflare.md)), that is production's data.
+`prisma migrate dev` and `migrate reset` refuse to run on a database named `app`.
 
 ## 4. Run
 

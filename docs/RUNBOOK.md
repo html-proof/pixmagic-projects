@@ -79,7 +79,7 @@ OPS_SHOP=shop.myshopify.com pnpm --filter @app/worker ops:recompute
 
 ## Maintenance tasks
 
-`pnpm --filter @app/worker ops:<task>` from the repo root runs a task in `apps/worker/ops/` against the database in the repo-root `.env` (or the file named by `OPS_ENV_FILE`). That file needs the **owner-role** `DATABASE_URL` and the **same** `TOKEN_ENCRYPTION_KEYS` as the deployed Worker. In Windows PowerShell set variables first: `$env:OPS_SHOP = "shop.myshopify.com"`, then run the `pnpm` line on its own.
+`pnpm --filter @app/worker ops:<task>` from the repo root runs a task in `apps/worker/ops/` against the database in the repo-root `.env` (or the file named by `OPS_ENV_FILE`). That file needs the **owner-role** `DATABASE_URL` and the **same** `TOKEN_ENCRYPTION_KEYS` as the deployed Worker. `.env.example` points `DATABASE_URL` at the development database (`app_dev`); for production, point it at `app` explicitly (a separate `OPS_ENV_FILE` for production keeps the two apart). In Windows PowerShell set variables first: `$env:OPS_SHOP = "shop.myshopify.com"`, then run the `pnpm` line on its own.
 
 | Task | What it does |
 | --- | --- |
@@ -97,7 +97,11 @@ OPS_SHOP=shop.myshopify.com pnpm --filter @app/worker ops:recompute
 Partners → app → Client credentials → rotate. Shopify accepts both for a grace period. `npx wrangler secret put SHOPIFY_API_SECRET` within that window.
 
 ### Rotate the OTP pepper
-Changing `OTP_PEPPER` invalidates outstanding codes (fine, they expire in 10 min) **and changes customer hashes** (`customer_key`), which resets returning-customer history. Avoid unless compromised; if you must, re-sync all stores afterwards.
+`OTP_PEPPER` keys the sign-in codes. Unless `CUSTOMER_HASH_KEY` is set, it also keys the stored customer hashes: orders' `customer_key` (returning-customer history) and WhatsApp contacts' phone hash, which is how a customer's STOP opt-out is found again. Rotating it then would reset that history and **let opted-out customers be messaged again**. So, in this order:
+1. If `CUSTOMER_HASH_KEY` is not set yet, set it to the **current** `OTP_PEPPER` value (`npx wrangler secret put CUSTOMER_HASH_KEY`, from `apps/cloudflare`). Nothing changes: it is the key the hashes already use.
+2. Then set a new `OTP_PEPPER`. Outstanding codes stop working (they expire in 10 minutes anyway); stored hashes are untouched.
+
+Rotating `CUSTOMER_HASH_KEY` itself has the consequences above; don't, unless it leaked.
 
 ### Merchant asks for data deletion
 Disconnecting in Settings → Stores deletes synced data immediately. Shopify's `shop/redact` (48 h after uninstall) does the same automatically.

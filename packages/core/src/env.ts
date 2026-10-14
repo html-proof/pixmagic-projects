@@ -14,6 +14,13 @@ const schema = z.object({
   SESSION_SECRET: z.string().min(16),
   TOKEN_ENCRYPTION_KEYS: z.string(),
   OTP_PEPPER: z.string().min(8),
+  /**
+   * Key of the stored customer hashes (orders' customer_key, WhatsApp contacts' phone hash, which
+   * is how a STOP opt-out is found again). Empty means OTP_PEPPER, which keyed them before this
+   * setting existed, so existing hashes keep matching. Set it to the current OTP_PEPPER value
+   * before rotating OTP_PEPPER, and the rotation no longer touches them (docs/RUNBOOK.md).
+   */
+  CUSTOMER_HASH_KEY: z.string().optional().default(""),
   FIREBASE_PROJECT_ID: z.string().default("demo-insights"),
   FIREBASE_SERVICE_ACCOUNT_B64: z.string().optional().default(""),
   FIREBASE_AUTH_EMULATOR_HOST: z.string().optional().default(""),
@@ -67,6 +74,8 @@ const schema = z.object({
   WHATSAPP_API_VERSION: z.string().default("v25.0"),
   WHATSAPP_WEBHOOK_VERIFY_TOKEN: z.string().optional().default(""),
   EMAIL_FROM: z.string().default("Insights <no-reply@localhost>"),
+  /** Local development only: deliver every email to this Mailpit instead of Email Sending. */
+  MAILPIT_URL: z.string().optional().default(""),
   ALERT_SLACK_WEBHOOK_URL: z.string().optional().default(""),
 });
 
@@ -91,18 +100,51 @@ const PUBLIC_SECRET_MARKERS = [
 const SECRET_VARS = ["SESSION_SECRET", "OTP_PEPPER", "TOKEN_ENCRYPTION_KEYS"] as const;
 
 /** Names (never values) of production secrets still set to a publicly known value. */
-export function publicSecrets(e: Pick<Env, (typeof SECRET_VARS)[number]>): string[] {
-  return SECRET_VARS.filter((name) => PUBLIC_SECRET_MARKERS.some((m) => e[name].toLowerCase().includes(m.toLowerCase())));
+export function publicSecrets(e: Pick<Env, (typeof SECRET_VARS)[number]> & Partial<Pick<Env, "CUSTOMER_HASH_KEY">>): string[] {
+  const known = (v: string) => PUBLIC_SECRET_MARKERS.some((m) => v.toLowerCase().includes(m.toLowerCase()));
+  // CUSTOMER_HASH_KEY falls back to OTP_PEPPER, which is reported under its own name.
+  const hashKey = e.CUSTOMER_HASH_KEY && e.CUSTOMER_HASH_KEY !== e.OTP_PEPPER && known(e.CUSTOMER_HASH_KEY) ? ["CUSTOMER_HASH_KEY"] : [];
+  return [...SECRET_VARS.filter((name) => known(e[name])), ...hashKey];
+}
+
+const isLocalUrl = (url: string) => {
+  try {
+    return /^(localhost|127\.\d+\.\d+\.\d+|\[::1\]|0\.0\.0\.0)$/.test(new URL(url).hostname);
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Names (and why) of development-only settings present in a production configuration: each one
+ * quietly turns a safeguard off. The Auth emulator accepts tokens anyone can mint; a Mailpit
+ * relay reroutes every email, sign-in codes included; a local APP_URL breaks OAuth callbacks and
+ * the Origin check, and is what the emulator bypass keys on.
+ */
+export function developmentSettings(e: Pick<Env, "APP_URL" | "API_URL" | "FIREBASE_AUTH_EMULATOR_HOST" | "MAILPIT_URL">): string[] {
+  const found: string[] = [];
+  if (e.FIREBASE_AUTH_EMULATOR_HOST) found.push("FIREBASE_AUTH_EMULATOR_HOST (the Auth emulator)");
+  if (e.MAILPIT_URL) found.push("MAILPIT_URL (a local mail relay)");
+  if (isLocalUrl(e.APP_URL)) found.push("APP_URL (a local address)");
+  if (isLocalUrl(e.API_URL)) found.push("API_URL (a local address)");
+  return found;
 }
 
 let cached: Env | undefined;
 export function env(): Env {
   if (!cached) {
     const parsed = schema.parse(process.env);
-    // Fail closed: a deployment must not run on secrets published in this repository.
-    const exposed = parsed.NODE_ENV === "production" ? publicSecrets(parsed) : [];
-    if (exposed.length) {
-      throw new Error(`${exposed.join(", ")} still set to a placeholder or test value. Generate new ones (see docs/deployment-cloudflare.md) before running in production.`);
+    // Unset means what keyed the hashes before the setting existed (see CUSTOMER_HASH_KEY).
+    if (!parsed.CUSTOMER_HASH_KEY) parsed.CUSTOMER_HASH_KEY = parsed.OTP_PEPPER;
+    if (parsed.NODE_ENV === "production") {
+      // Fail closed: a deployment must not run on secrets published in this repository...
+      const exposed = publicSecrets(parsed);
+      if (exposed.length) {
+        throw new Error(`${exposed.join(", ")} still set to a placeholder or test value. Generate new ones (see docs/deployment-cloudflare.md) before running in production.`);
+      }
+      // ...nor with a development setting that turns a safeguard off.
+      const dev = developmentSettings(parsed);
+      if (dev.length) throw new Error(`Development settings in a production configuration: ${dev.join(", ")}. Remove them (wrangler secret delete / vars).`);
     }
     cached = parsed;
   }

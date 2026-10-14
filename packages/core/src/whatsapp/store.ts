@@ -35,7 +35,7 @@ export const waEncrypt = (storeId: string, kind: WaSecretKind, plaintext: string
 export const waDecrypt = (storeId: string, kind: WaSecretKind, ciphertext: string) => decrypt(ciphertext, keyring(), aad(storeId, kind));
 
 /** Finds a contact from a webhook's wa_id without decrypting anything. */
-export const phoneHash = (storeId: string, waId: string) => hmacSha256Hex(env().OTP_PEPPER, `wa:${storeId}:${waId}`);
+export const phoneHash = (storeId: string, waId: string) => hmacSha256Hex(env().CUSTOMER_HASH_KEY, `wa:${storeId}:${waId}`);
 
 /** A random link token and the hash it is looked up by. */
 export function newLinkToken(): { token: string; hash: string } {

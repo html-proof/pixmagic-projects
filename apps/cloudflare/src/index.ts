@@ -1,6 +1,17 @@
 import { buildApp, firebaseAuthProvider, type App, type AuthProvider, type Deps } from "@app/api";
 import { consume, runScheduled, type QueueMessage, type WorkerDeps } from "@app/worker";
-import { cloudflareMailer, logger, mailpitMailer, withLogContext, withTimeout, type BlobStore, type Producer, type QueueName, type Queues } from "@app/core";
+import {
+  cloudflareMailer,
+  env as config,
+  logger,
+  mailpitMailer,
+  withLogContext,
+  withTimeout,
+  type BlobStore,
+  type Producer,
+  type QueueName,
+  type Queues,
+} from "@app/core";
 import { withDb, type DbUrls } from "@app/db";
 import { env as bindings } from "cloudflare:workers";
 import { durableCoord, type Coordinator } from "./coordinator.js";
@@ -83,8 +94,9 @@ function workerDeps(env: Env): WorkerDeps {
     coord: durableCoord(env.COORD),
     queues,
     payloads: bucket ? r2Blobs(bucket) : durableBlobs(env.COORD),
-    // MAILPIT_URL is a local-dev-only override (.dev.vars); production sends through Email Sending.
-    mailer: process.env.MAILPIT_URL ? mailpitMailer(process.env.MAILPIT_URL) : cloudflareMailer(env.EMAIL),
+    // MAILPIT_URL is a local-dev-only override (.dev.vars); production sends through Email Sending
+    // (config() refuses to start with it set in production).
+    mailer: config().MAILPIT_URL ? mailpitMailer(config().MAILPIT_URL) : cloudflareMailer(env.EMAIL),
     // Every outbound call the API and the jobs make goes through this, so each gets a time limit.
     fetchImpl: withTimeout((input, init) => fetch(input, init)),
   };
