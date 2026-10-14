@@ -83,17 +83,18 @@ export class AdsNotApprovedError extends AdsApiError {
 }
 
 /**
- * Why a Google login gives nothing to connect: it has no Google Ads account at all (Google's NOT_ADS_USER,
- * or an empty list), it reaches only manager accounts with no active ad account under them, or the
- * accounts it reaches can't be reported on (sign-up not finished, cancelled, suspended).
+ * Why a login gives nothing to connect: it reaches no ad account at all (Google's NOT_ADS_USER, or an
+ * empty list), Google only: it reaches only manager accounts with no active ad account under them, or
+ * the accounts it reaches can't be reported on (sign-up not finished, cancelled, suspended); Meta only:
+ * the person picked which ad accounts to share on Facebook's screen and none of them came through.
  */
-export type GoogleNoAccountsReason = "no_ads_account" | "manager_only" | "not_ready";
+export type NoAdAccountsReason = "no_ads_account" | "manager_only" | "not_ready" | "none_shared";
 
-/** The Google login has no Google Ads account Insights can report on; `reason` says which case it is. */
+/** The login has no ad account Insights can report on; `reason` says which case it is. */
 export class AdsNoAccountsError extends AdsApiError {
   constructor(
     message: string,
-    public reason: GoogleNoAccountsReason = "no_ads_account",
+    public reason: NoAdAccountsReason = "no_ads_account",
   ) {
     super(message, 403);
   }
@@ -237,7 +238,23 @@ export async function metaRevokeAdsRead(c: MetaConfig, accessToken: string): Pro
   }
 }
 
-/** Ad accounts the person can read. */
+/**
+ * The ad accounts a person's Meta grant names, from Meta's token inspector (asked with Insights' app
+ * token, as Meta requires): null when ads_read covers every account the login reaches (Meta then names
+ * none), a list (maybe empty) when the person picked accounts on Facebook's screen.
+ */
+export async function metaAdsReadTargets(c: MetaConfig, accessToken: string): Promise<string[] | null> {
+  const r = await metaGet<{ data?: { granular_scopes?: Array<{ scope?: string; target_ids?: string[] }> } }>(c, "debug_token", {
+    input_token: accessToken,
+    access_token: `${c.appId}|${c.appSecret}`,
+  });
+  return (r.data?.granular_scopes ?? []).find((g) => g.scope === REQUIRED_AD_SCOPE.meta)?.target_ids ?? null;
+}
+
+/**
+ * Ad accounts the person can read. Never empty: with nothing to connect it throws AdsNoAccountsError,
+ * saying whether the login reaches no ad account or the person shared none on Facebook's screen.
+ */
 export async function metaAdAccounts(c: MetaConfig, accessToken: string): Promise<AdAccount[]> {
   const out: AdAccount[] = [];
   let next: string | null = null;
@@ -252,7 +269,11 @@ export async function metaAdAccounts(c: MetaConfig, accessToken: string): Promis
     if (!next) break;
     page = await metaGet(c, next, {});
   }
-  return out;
+  if (out.length) return out;
+  // Only explains the empty list: a failed look-up still ends in "no ad account".
+  const targets = await metaAdsReadTargets(c, accessToken).catch(() => null);
+  if (targets) throw new AdsNoAccountsError(`The ads_read grant names ${targets.length ? targets.join(", ") : "no ad account"} and none can be read`, "none_shared");
+  throw new AdsNoAccountsError("This Facebook login reaches no ad account");
 }
 
 /** Spend, impressions, clicks, purchases and leads per campaign per day, from `since` to `until`. */

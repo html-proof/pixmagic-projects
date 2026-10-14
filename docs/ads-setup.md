@@ -127,6 +127,12 @@ for Advanced Access to ads_read before merchants outside the app's roles can con
 
 **Token lifetime:** Meta user tokens last about **60 days** and can't be renewed silently. Settings shows "Meta access ends in N days" from 14 days before. When it ends, the account shows **Needs reconnecting** and pressing **Continue with Meta** again renews it. History is kept.
 
+**When a Facebook login has nothing to connect:** Insights asks Meta's token inspector (`debug_token`, with the app token) which ad accounts the grant names, and Settings → Advertising says which case it is, with **Connect again**, **Open Ads Manager** and **Open Business settings**:
+- `error=none_shared`: the person picked accounts on Facebook's screen but shared none. They connect again and edit what Insights can access.
+- `error=no_accounts`: the login reaches no ad account. Business-portfolio ad accounts need the person assigned to them in Business settings → Ad accounts (admins too); a different Facebook login means logging out of Facebook in that browser first, since Facebook has no account chooser.
+
+The callback logs `ads: nothing to connect for this login` with the reason and the account ids the grant names.
+
 ## 2. Google Ads
 
 Google needs an **OAuth client** for the "Continue with Google Ads" sign-in, in a Cloud project with **Google Ads API

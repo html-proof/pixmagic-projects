@@ -64,6 +64,10 @@ const ERRORS: Record<string, string> = {
   session_mismatch: "You were signed in as someone else when you came back. Sign in as yourself and try again.",
   exchange_failed: "The platform didn't accept the sign-in. Please try again in a moment.",
   no_accounts: "That login can't see any ad accounts. Ask the account's owner to give you access, then connect again.",
+  no_accounts_meta:
+    "That Facebook login can't reach any ad account, so nothing was connected. If your ads run in a business portfolio, assign this login to the ad account in Meta Business settings → Ad accounts (admins have to assign themselves too). If your ads are on another Facebook login, log out of Facebook in this browser first. No ad account yet? Create one in Meta Ads Manager. Then press Connect again.",
+  none_shared_meta:
+    "No ad account was shared with Insights on Facebook's screen, so nothing was connected. Press Connect again, choose to edit what Insights can access, and tick the ad accounts this store's ads run from.",
   no_accounts_adsense: "That Google login has no AdSense account. Choose the Google account that owns your AdSense, or ask its owner to add this login as a user.",
   not_approved_google: "Google is still approving Insights for live Google Ads accounts, so nothing was connected. This is on our side, not yours; please try again in a day or two.",
   no_accounts_google:
@@ -79,13 +83,23 @@ const ERRORS: Record<string, string> = {
   temporarily_unavailable: "Something went wrong on our side. Please try again in a minute.",
 };
 
-/** Errors that mean "that login was the wrong one": Google can show its account chooser again. */
-const WRONG_LOGIN = new Set(["no_accounts", "manager_only", "account_not_ready"]);
+/**
+ * Errors that mean "that login reaches nothing yet": fixed on the platform's side or with another login,
+ * then a retry. Google shows its account chooser again; Facebook shows its screen again.
+ */
+const WRONG_LOGIN = new Set(["no_accounts", "manager_only", "account_not_ready", "none_shared"]);
 
-/** Where a Google login without an account can create one. */
-const PLATFORM_HOME: Partial<Record<Provider, { url: string; label: string }>> = {
-  google: { url: "https://ads.google.com/", label: "Open ads.google.com" },
-  adsense: { url: "https://adsense.google.com/", label: "Open AdSense" },
+/** What the retry button says. */
+const RETRY_LABEL: Record<Provider, string> = { google: "Choose another Google account", adsense: "Choose another Google account", meta: "Connect again" };
+
+/** Where a login without an account can create one, or be given access to one. */
+const PLATFORM_HOME: Record<Provider, Array<{ url: string; label: string }>> = {
+  google: [{ url: "https://ads.google.com/", label: "Open ads.google.com" }],
+  adsense: [{ url: "https://adsense.google.com/", label: "Open AdSense" }],
+  meta: [
+    { url: "https://adsmanager.facebook.com/", label: "Open Ads Manager" },
+    { url: "https://business.facebook.com/settings/ad-accounts", label: "Open Business settings" },
+  ],
 };
 
 function daysUntil(iso: string | null): number | null {
@@ -226,7 +240,7 @@ export default function AdAccountsPage() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [pick, setPick] = useState<string | null>(null);
-  // A Google sign-in came back with the wrong login: offer Google's account chooser again.
+  // A sign-in came back with a login that reaches nothing: offer the platform's screen again.
   const [retry, setRetry] = useState<Provider | null>(null);
 
   // Coming back from Meta or Google: a problem to explain, or accounts to choose, for the store that was connected.
@@ -240,7 +254,7 @@ export default function AdAccountsPage() {
     const choose = q.get("choose");
     const provider = q.get("provider");
     if (code) setError(ERRORS[`${code}_${provider}`] ?? ERRORS[code] ?? "Connecting didn't work. Please try again.");
-    if (code && WRONG_LOGIN.has(code) && (provider === "google" || provider === "adsense")) setRetry(provider);
+    if (code && WRONG_LOGIN.has(code) && provider && Object.hasOwn(RETRY_LABEL, provider)) setRetry(provider as Provider);
     if (choose) setPick(choose);
     if (code || choose || target) window.history.replaceState(window.history.state, "", "/settings/ads");
     // Once the store list is known.
@@ -318,7 +332,7 @@ export default function AdAccountsPage() {
 
   const connections = data?.connections ?? [];
   const storeName = store.name ?? store.shopDomain;
-  const home = retry ? PLATFORM_HOME[retry] : undefined;
+  const home = retry ? PLATFORM_HOME[retry] : [];
 
   return (
     <div className="space-y-4">
@@ -347,13 +361,13 @@ export default function AdAccountsPage() {
           {retry && manage && data?.configured[retry] && (
             <span className="mt-2 flex flex-wrap items-center gap-2" data-testid="ads-retry">
               <button type="button" className="btn-secondary h-9" onClick={() => void connect(retry)} disabled={!!busy}>
-                {busy === `connect-${retry}` ? "Opening…" : "Choose another Google account"}
+                {busy === `connect-${retry}` ? "Opening…" : RETRY_LABEL[retry]}
               </button>
-              {home && (
-                <a className="text-accent underline-offset-2 hover:underline" href={home.url} target="_blank" rel="noopener noreferrer">
-                  {home.label}
+              {home.map((h) => (
+                <a key={h.url} className="text-accent underline-offset-2 hover:underline" href={h.url} target="_blank" rel="noopener noreferrer">
+                  {h.label}
                 </a>
-              )}
+              ))}
             </span>
           )}
         </Alert>

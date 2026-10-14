@@ -13,6 +13,7 @@ import {
   googleReport,
   googleRevoke,
   googleUserId,
+  metaAdAccounts,
   metaCampaignDays,
   metaExchangeCode,
   metaReport,
@@ -190,6 +191,39 @@ describe("a Google login with nothing to connect says why", () => {
   it("Google's account chooser is shown every time, so another login can be picked", () => {
     const url = new URL(googleAuthorizeUrl(google(fetch), "https://app/cb", "st"));
     expect(url.searchParams.get("prompt")?.split(" ").sort()).toEqual(["consent", "select_account"]);
+  });
+});
+
+describe("a Meta login with nothing to connect says why", () => {
+  /** Meta answering an empty account list, and its token inspector answering `debug`. */
+  const emptyMeta = (debug: () => Response) =>
+    fake((u) => {
+      if (u.pathname.endsWith("/me/adaccounts")) return json({ data: [] });
+      if (u.pathname.endsWith("/debug_token")) return debug();
+      return json({ error: { message: "unexpected" } }, 400);
+    });
+
+  it("a login that reaches no ad account: ads_read covers everything it can reach, which is nothing", async () => {
+    const f = emptyMeta(() => json({ data: { is_valid: true, scopes: ["ads_read"], granular_scopes: [{ scope: "ads_read" }] } }));
+    const err = await metaAdAccounts(meta(f.fetchImpl), "USER_T").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AdsNoAccountsError);
+    expect(err).toMatchObject({ reason: "no_ads_account" });
+    // Meta's inspector is asked with the app's own token about the person's.
+    const inspect = f.calls.find((c) => c.url.pathname.endsWith("/debug_token"))!.url.searchParams;
+    expect(inspect.get("input_token")).toBe("USER_T");
+    expect(inspect.get("access_token")).toBe("app1|sec");
+  });
+
+  it("the person picked accounts on Facebook's screen and none came through", async () => {
+    const none = emptyMeta(() => json({ data: { granular_scopes: [{ scope: "ads_read", target_ids: [] }] } }));
+    await expect(metaAdAccounts(meta(none.fetchImpl), "T")).rejects.toMatchObject({ reason: "none_shared" });
+    const unreadable = emptyMeta(() => json({ data: { granular_scopes: [{ scope: "ads_read", target_ids: ["act_9"] }] } }));
+    await expect(metaAdAccounts(meta(unreadable.fetchImpl), "T")).rejects.toMatchObject({ reason: "none_shared", message: expect.stringContaining("act_9") });
+  });
+
+  it("the inspector failing still says 'no ad account', never 'try again'", async () => {
+    const f = emptyMeta(() => json({ error: { message: "Invalid OAuth access token", code: 190 } }, 400));
+    await expect(metaAdAccounts(meta(f.fetchImpl), "T")).rejects.toMatchObject({ reason: "no_ads_account" });
   });
 });
 

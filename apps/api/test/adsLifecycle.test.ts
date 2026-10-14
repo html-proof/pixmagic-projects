@@ -362,6 +362,32 @@ describe("review fixes: grants nobody can vouch for are never revoked", () => {
   });
 });
 
+describe("Continue with Meta Ads: a login with nothing to connect", () => {
+  /** Follow Meta's sign-in back when /me/adaccounts is empty and Meta's token inspector answers `granular`. */
+  const callbackError = async (granular: Array<{ scope: string; target_ids?: string[] }>) => {
+    const base = metaPlatform([]);
+    ctx.setFetch(async (input, init) => {
+      const u = new URL(String(input));
+      if (u.pathname.endsWith("/me/adaccounts")) return json({ data: [] });
+      if (u.pathname.endsWith("/debug_token")) return json({ data: { is_valid: true, granular_scopes: granular } });
+      return base(input, init);
+    });
+    const start = await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/stores/${storeId}/ads/meta/connect`, headers });
+    const state = new URL(start.json().url).searchParams.get("state")!;
+    const cb = await ctx.app.inject({ method: "GET", url: `/ads/meta/callback?state=${state}&code=C`, headers: { cookie: `${cookie}; ads_oauth_state=${state}` } });
+    const back = new URL(cb.headers.location as string);
+    expect(back.pathname).toBe("/settings/ads");
+    expect(back.searchParams.get("provider")).toBe("meta");
+    return back.searchParams.get("error");
+  };
+
+  it("says whether the login reaches no ad account or shared none on Facebook's screen", async () => {
+    expect(await callbackError([{ scope: "ads_read" }])).toBe("no_accounts");
+    expect(await callbackError([{ scope: "ads_read", target_ids: [] }])).toBe("none_shared");
+    expect(await systemDb.adConnection.count()).toBe(0);
+  });
+});
+
 describe("the Google Ads report", () => {
   const reportUrl = (connection: string, q: Record<string, string> = {}) =>
     `/workspaces/${ws}/stores/${storeId}/ads/google/report?${new URLSearchParams({ connection, from: "2026-09-01", to: "2026-09-30", ...q })}`;

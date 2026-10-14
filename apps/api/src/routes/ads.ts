@@ -42,9 +42,9 @@ import {
   saveAdConnections,
   takePendingAdConnect,
   type AdAccount,
-  type GoogleNoAccountsReason,
   type GoogleReport,
   type MetaReport,
+  type NoAdAccountsReason,
   type TokenSet,
 } from "@app/core";
 import {
@@ -98,11 +98,12 @@ interface AdsState {
 
 const providerSchema = z.enum(AD_PROVIDERS);
 
-/** The callback's ?error= for each way a Google login can have nothing to connect (the settings page words each one). */
-const NO_ACCOUNTS_ERROR: Record<GoogleNoAccountsReason, string> = {
+/** The callback's ?error= for each way a login can have nothing to connect (the settings page words each one, per platform). */
+const NO_ACCOUNTS_ERROR: Record<NoAdAccountsReason, string> = {
   no_ads_account: "no_accounts",
   manager_only: "manager_only",
   not_ready: "account_not_ready",
+  none_shared: "none_shared",
 };
 
 /** What the browser may see of a connection: never a token. */
@@ -330,9 +331,9 @@ export function adsRoutes(app: App, deps: Deps) {
           logger.warn({ err, provider, storeId: state.storeId }, "google ads: project not approved for production accounts");
           return back({ error: "not_approved", provider }, state.storeId);
         }
-        // The Google login reaches nothing that can be connected. Which case it is decides what the person should do.
+        // The login reaches nothing that can be connected. Which case it is decides what the person should do.
         if (err instanceof AdsNoAccountsError) {
-          logger.info({ reason: err.reason, detail: err.message, provider, storeId: state.storeId }, "google ads: nothing to connect for this login");
+          logger.info({ reason: err.reason, detail: err.message, provider, storeId: state.storeId }, "ads: nothing to connect for this login");
           return back({ error: NO_ACCOUNTS_ERROR[err.reason], provider }, state.storeId);
         }
         // A Google login with no AdSense account: AdSense answers 403 rather than an empty list.
