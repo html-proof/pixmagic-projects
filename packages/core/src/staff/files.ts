@@ -13,10 +13,12 @@ function safeText(s: string): string {
 }
 
 export function toCsv(header: string[], rows: Array<Array<string | number | null>>): Uint8Array {
+  // Text is always quoted: Excel in a locale whose list separator is ";" splits an unquoted cell on
+  // it, so `Bob;=HYPERLINK(...)` would become a second, live formula cell despite safeText.
   const cell = (v: string | number | null) => {
     if (v === null || v === undefined) return "";
-    const s = typeof v === "number" ? String(v) : safeText(v);
-    return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    if (typeof v === "number" || /^-?\d+(\.\d+)?$/.test(v)) return String(v);
+    return `"${safeText(v).replace(/"/g, '""')}"`;
   };
   const lines = [header, ...rows].map((r) => r.map(cell).join(","));
   // BOM so Excel opens UTF-8 names correctly.

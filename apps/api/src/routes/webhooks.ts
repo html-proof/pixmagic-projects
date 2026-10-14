@@ -1,5 +1,5 @@
 import { Prisma, systemDb } from "@app/db";
-import { INLINE_PAYLOAD_LIMIT, logger, shopifyApps, type WebhookJobData } from "@app/core";
+import { DEFAULT_APP, INLINE_PAYLOAD_LIMIT, logger, shopifyApps, type WebhookJobData } from "@app/core";
 import { randomToken, verifyShopifyWebhookHmac } from "@app/shared";
 import { clientIp, type Deps } from "../context.js";
 import type { App } from "../app.js";
@@ -60,6 +60,14 @@ function payloadShop(payload: unknown): string | null {
 }
 
 /**
+ * Topics that delete data or tokens. Shopify's payload for each names its shop (`shop_domain`, or
+ * `myshopify_domain` on the shop object app/uninstalled sends), so one that doesn't is not genuine:
+ * the shop and topic headers are unsigned, and without this a signed body of any other topic could
+ * be replayed under one of these names at someone else's store.
+ */
+const SHOP_NAMED_TOPICS = new Set(["app/uninstalled", "shop/redact", "customers/redact", "customers/data_request"]);
+
+/**
  * Shopify webhook intake. Contract:
  *  - HMAC of the *raw* body is verified before anything else (401 otherwise).
  *  - X-Shopify-Webhook-Id is recorded under a unique constraint, so retries
@@ -95,9 +103,17 @@ export function webhookRoutes(app: App, deps: Deps) {
     // the body names its shop - the GDPR topics and app/uninstalled, the ones that delete data or
     // tokens - it must be the shop the headers say, or a signed body could be replayed at another store.
     const claimed = payloadShop(payload);
-    if (claimed !== null && claimed !== shop) {
-      logger.warn({ topic, shop, claimed, ip: clientIp(c) }, "webhook rejected: payload is for another shop");
+    if ((claimed !== null && claimed !== shop) || (claimed === null && SHOP_NAMED_TOPICS.has(topic))) {
+      logger.warn({ topic, shop, claimed, ip: clientIp(c) }, "webhook rejected: payload is for another shop, or names none");
       return c.json({ error: "shop_mismatch" }, 401);
+    }
+    // A client's custom-distribution app installs only on that client's store, so its signature
+    // vouches for nothing else: otherwise whoever holds that one app's secret could aim orders,
+    // product deletions or redactions at any store. (The main app's allowlist only gates new
+    // installs, so stores connected before it changed keep their webhooks.)
+    if (app.key !== DEFAULT_APP && app.shops.length && !app.shops.includes(shop)) {
+      logger.warn({ topic, shop, app: app.key, ip: clientIp(c) }, "webhook rejected: signed by an app that can't be installed on this shop");
+      return c.json({ error: "wrong_app" }, 401);
     }
 
     const store = await systemDb.store.findUnique({ where: { shopDomain: shop }, select: { id: true, workspaceId: true } });

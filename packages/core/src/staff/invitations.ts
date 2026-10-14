@@ -190,6 +190,9 @@ function problemOf(inv: InvitationWithEmployee | null, now: Date): InvitationPro
   if (!inv) return "invalid";
   if (inv.acceptedAt) return "used";
   if (inv.revokedAt) return "revoked";
+  // Sent to an address the employee record no longer has (it was corrected since): whoever reads
+  // the old inbox must not be able to claim this person's record.
+  if (inv.email.toLowerCase() !== inv.employee.email.toLowerCase()) return "revoked";
   if (inv.expiresAt <= now) return "expired";
   if (inv.employee.status === "inactive") return "inactive";
   return null;

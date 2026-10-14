@@ -131,7 +131,7 @@ describe("several Shopify apps", () => {
   });
 
   it("accepts webhooks signed by any of our apps and says which one", async () => {
-    const body = JSON.stringify({ id: 1 });
+    const body = JSON.stringify({ id: 1, myshopify_domain: CLIENT_SHOP });
     const send = (secret: string, id: string) =>
       ctx.app.inject({
         method: "POST",

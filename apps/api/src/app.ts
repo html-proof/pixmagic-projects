@@ -74,12 +74,14 @@ export function buildApp(deps: Deps): App {
     for (const [name, value] of Object.entries(API_HEADERS)) {
       if (!c.res.headers.has(name)) c.res.headers.set(name, value);
     }
+    // Only over https (the Worker redirects everything else outside local development).
+    if (c.req.url.startsWith("https:")) c.res.headers.set("strict-transport-security", "max-age=31536000; includeSubDomains");
   });
 
-  // Webhooks carry up to 5 MB; everything else is small JSON.
+  // Shopify webhooks carry up to 5 MB; everything else (Meta's webhooks included) is small JSON.
   app.use("*", (c, next) =>
     bodyLimit({
-      maxSize: c.req.path.startsWith("/webhooks/") ? 5 * MB : MB,
+      maxSize: c.req.path === "/webhooks/shopify" ? 5 * MB : MB,
       onError: (c) => c.json({ error: "request", message: "Request body too large" }, 413),
     })(c, next),
   );
@@ -87,7 +89,7 @@ export function buildApp(deps: Deps): App {
   app.use("*", async (c, next) => {
     if (deps.globalLimit && !GLOBAL_LIMIT_EXEMPT.some((r) => r.test(c.req.path))) {
       if (!(await deps.globalLimit(clientIp(c)))) {
-        return c.json({ error: "rate_limited", message: "Rate limit exceeded, retry in a minute" }, 429);
+        return c.json({ error: "rate_limited", message: "Rate limit exceeded, retry in a minute" }, 429, { "retry-after": "60" });
       }
     }
     await next();
@@ -115,7 +117,9 @@ export function buildApp(deps: Deps): App {
   });
 
   app.onError(async (err, c) => {
-    if (err instanceof HttpError) return c.json({ error: err.code, message: err.message }, err.statusCode as ContentfulStatusCode);
+    if (err instanceof HttpError) {
+      return c.json({ error: err.code, message: err.message }, err.statusCode as ContentfulStatusCode, err.retryAfterSec ? { "retry-after": String(err.retryAfterSec) } : {});
+    }
     // Staff Management's own rule violations: their messages are written for the person using the app.
     if (err instanceof StaffError) {
       return c.json({ error: err.code, message: err.message, ...(err.detail !== undefined ? { detail: err.detail } : {}) }, err.status as ContentfulStatusCode);

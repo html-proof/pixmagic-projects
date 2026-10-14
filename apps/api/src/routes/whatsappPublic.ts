@@ -99,7 +99,9 @@ export function whatsappPublicRoutes(app: App, deps: Deps) {
   /**
    * Deliveries. The signature (X-Hub-Signature-256, HMAC of the raw body with the app secret) is
    * checked before anything is applied: Insights' own app secret vouches for every account it
-   * connected; a manual connection's secret vouches only for its own account.
+   * connected; a manual connection's secret vouches only for that connection. Not for the whole
+   * account: two stores (two workspaces, even) can share one WhatsApp Business Account, and one of
+   * them holding its own app secret must not be able to forge events for the other's number.
    */
   app.post("/webhooks/whatsapp", async (c) => {
     const raw = await c.req.text();
@@ -107,6 +109,8 @@ export function whatsappPublicRoutes(app: App, deps: Deps) {
     let trusted: Set<string> | "all" | null = null;
     const platformSecret = waPlatformSecret();
     if (platformSecret && verifyMetaSignature(raw, sig, platformSecret)) trusted = "all";
+    // Anyone can send this: cap how often one address makes us parse a body or look anything up.
+    if (!trusted) await limit(deps.coord, `rl:wa-unsigned:${clientIp(c)}`, LIMITS.waUnsignedIp);
     let payload: unknown;
     try {
       payload = JSON.parse(raw);
@@ -115,14 +119,12 @@ export function whatsappPublicRoutes(app: App, deps: Deps) {
       return c.json({ error: "invalid_json" }, 400);
     }
     if (!trusted) {
-      // Anyone can send this: cap how often one address makes us look anything up.
-      await limit(deps.coord, `rl:wa-unsigned:${clientIp(c)}`, LIMITS.waUnsignedIp);
       const ids = [...new Set(((payload as { entry?: Array<{ id?: unknown }> })?.entry ?? []).map((e) => String(e?.id ?? "")).filter(Boolean))].slice(0, 20);
       const conns = ids.length ? await systemDb.whatsappConnection.findMany({ where: { wabaId: { in: ids }, appSecretEnc: { not: null } } }) : [];
       const ok = new Set<string>();
       for (const conn of conns) {
         try {
-          if (verifyMetaSignature(raw, sig, waDecrypt(conn.storeId, "app_secret", conn.appSecretEnc!))) ok.add(conn.wabaId);
+          if (verifyMetaSignature(raw, sig, waDecrypt(conn.storeId, "app_secret", conn.appSecretEnc!))) ok.add(conn.id);
         } catch (err) {
           logger.warn({ err, connectionId: conn.id }, "could not read a whatsapp app secret");
         }
@@ -244,6 +246,8 @@ export function whatsappPublicRoutes(app: App, deps: Deps) {
     const t = await trackingByToken("reviewTokenHash", token);
     if (!t) throw notFound();
     if (t.cancelledAt) throw new HttpError(409, "This order was cancelled, so it can't be reviewed.", "order_cancelled");
+    // Reviews are shown as verified purchases: only once the order has actually been delivered.
+    if (!t.deliveredAt) throw new HttpError(409, "This order hasn't been delivered yet. You can review it once it arrives.", "not_delivered");
     const input = reviewSchema.parse(await body(c));
     const items = (t.items as Array<{ productId: string; title: string }>) ?? [];
     const titleOf = new Map(items.filter((i) => i.productId).map((i) => [i.productId, i.title]));

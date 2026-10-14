@@ -260,8 +260,9 @@ export function staffRoutes(app: App, deps: Deps) {
   app.post(`${BASE}/employees/:id/invitations`, async (c) => {
     const actor = await requireStaff(c, deps, c.req.param("ws"), "staff:manage");
     const { delivery } = z.object({ delivery: z.enum(["email", "link"]).default("email") }).parse(await body(c));
-    // Each one may send an email from our domain: one workspace can't turn it into a spam relay.
+    // Each one may send an email from our domain: one workspace (or one person) can't turn it into a spam relay.
     await limit(deps.coord, `rl:staff-invite:${actor.workspaceId}`, LIMITS.invitations);
+    if (delivery === "email") await limit(deps.coord, `rl:invite-user:${actor.userId}`, LIMITS.invitationsPerUser);
     return c.json(await createInvitation(actor, c.req.param("id"), delivery, deps.mailer));
   });
 

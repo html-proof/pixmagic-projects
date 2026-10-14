@@ -166,6 +166,10 @@ export function metaAuthorizeUrl(c: MetaConfig, redirectUri: string, state: stri
 }
 
 async function metaGet<T>(c: MetaConfig, path: string, params: Record<string, string>): Promise<T> {
+  // A full URL is Meta's own `paging.next`, which carries the access token: only ever to Graph.
+  if (path.startsWith("https://") && new URL(path).hostname !== "graph.facebook.com") {
+    throw new AdsApiError("Meta returned a page link outside graph.facebook.com", 502);
+  }
   const url = path.startsWith("https://") ? path : `https://graph.facebook.com/${c.version}/${path}?${new URLSearchParams(params)}`;
   return metaCall<T>(c, url, { method: "GET" });
 }

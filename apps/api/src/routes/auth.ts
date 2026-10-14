@@ -136,6 +136,8 @@ export function authRoutes(app: App, deps: Deps) {
     const user = await resolveUser(claims, { firebaseUid: opts.firebaseUid, ip: clientIp(c) }).catch(dbOutage(SIGN_IN_UNAVAILABLE));
     const s = newSession({ userId: user.id, sub: claims.sub, username: claims.username, method: claims.method, authTime: claims.authTime, keep: opts.keep });
     setSessionCookies(c, s, tokens.refreshToken);
+    // Security trail: who signed in, how and from where (user id, never the email or a token).
+    logger.info({ event: "session_created", userId: user.id, method: claims.method, ip: clientIp(c) }, "signed in");
     return user;
   }
 

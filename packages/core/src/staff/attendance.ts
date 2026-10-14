@@ -19,7 +19,7 @@ import {
 import { logger } from "../logger.js";
 import type { FetchLike } from "../shopify.js";
 import { audit, raiseAlert, type Mailer } from "../notify.js";
-import { employeeScope, isFrozenViolation, isUniqueViolation, lockEmployee, notFound, scopedEmployee, serverNow, StaffError, type StaffActor } from "./common.js";
+import { assertNotOwnRecord, employeeScope, isFrozenViolation, isUniqueViolation, lockEmployee, notFound, scopedEmployee, serverNow, StaffError, type StaffActor } from "./common.js";
 import { computeWork, loadWork, workedSeconds } from "./calc.js";
 import { ensureStaffSettings } from "./settings.js";
 
@@ -700,8 +700,9 @@ function frozen(err: unknown): never {
 export async function editSession(actor: StaffActor, sessionId: string, input: CorrectionTimes & { note: string }) {
   const settings = await ensureStaffSettings(actor.workspaceId);
   const result = await withTenant(actor.workspaceId, async (tx) => {
-    const s = await tx.attendanceSession.findFirst({ where: { id: sessionId, workspaceId: actor.workspaceId, employee: employeeScope(actor) } });
+    const s = await tx.attendanceSession.findFirst({ where: { id: sessionId, workspaceId: actor.workspaceId, employee: employeeScope(actor) }, include: { employee: { select: { userId: true } } } });
     if (!s) throw notFound("That shift");
+    assertNotOwnRecord(actor, s.employee.userId, "correct shifts");
     await lockEmployee(tx, actor.workspaceId, s.employeeId);
     const updated = await applyTimes(tx, settings, s, input, actor, { note: input.note, approve: !!input.clockOutAt, extraFlags: !s.clockOutAt && input.clockOutAt ? ["closed_by_manager"] : [] });
     await tx.timesheetAdjustment.create({
@@ -739,6 +740,7 @@ export async function addManualSession(actor: StaffActor, employeeId: string, in
   validateTimes(input, now, false);
   const session = await withTenant(actor.workspaceId, async (tx) => {
     const e = await scopedEmployee(tx, actor, employeeId);
+    assertNotOwnRecord(actor, e.userId, "add shifts");
     await lockEmployee(tx, actor.workspaceId, e.id);
     await assertNoOverlap(tx, e.id, input, null);
     await assertNotInLockedPeriod(tx, actor.workspaceId, settings.timezone, input.clockInAt, input.clockOutAt);
@@ -839,8 +841,9 @@ export async function listCorrections(actor: StaffActor, status: "pending" | "al
 export async function decideCorrection(actor: StaffActor, adjustmentId: string, decision: { approve: boolean; note: string | null }) {
   const settings = await ensureStaffSettings(actor.workspaceId);
   const out = await withTenant(actor.workspaceId, async (tx) => {
-    const a = await tx.timesheetAdjustment.findFirst({ where: { id: adjustmentId, workspaceId: actor.workspaceId, employee: employeeScope(actor) } });
+    const a = await tx.timesheetAdjustment.findFirst({ where: { id: adjustmentId, workspaceId: actor.workspaceId, employee: employeeScope(actor) }, include: { employee: { select: { userId: true } } } });
     if (!a) throw notFound("That request");
+    if (decision.approve) assertNotOwnRecord(actor, a.employee.userId, "approve time corrections");
     if (a.status !== "pending") throw new StaffError(409, "already_decided", "Someone has already dealt with this request.");
     await lockEmployee(tx, actor.workspaceId, a.employeeId);
     const now = serverNow();
@@ -906,6 +909,8 @@ export async function approveSessions(actor: StaffActor, sessionIds: string[], n
   const approved = await withTenant(actor.workspaceId, async (tx) => {
     const rows = await tx.attendanceSession.findMany({ where: { id: { in: sessionIds }, workspaceId: actor.workspaceId, employee: employeeScope(actor) } });
     if (rows.length !== sessionIds.length) throw notFound("One of those shifts");
+    const own = await tx.employee.findFirst({ where: { workspaceId: actor.workspaceId, id: { in: [...new Set(rows.map((s) => s.employeeId))] }, userId: actor.userId }, select: { userId: true } });
+    assertNotOwnRecord(actor, own?.userId, "approve hours");
     const open = rows.find((s) => !s.clockOutAt);
     if (open) throw new StaffError(409, "open_shift", "A shift that hasn't ended can't be approved. Set its clock-out time first.");
     const locked = rows.find((s) => s.lockedAt);
@@ -942,16 +947,18 @@ export async function rejectSession(actor: StaffActor, sessionId: string, reason
 export async function reopenSession(actor: StaffActor, sessionId: string) {
   const now = serverNow();
   const settings = await ensureStaffSettings(actor.workspaceId);
-  await withTenant(actor.workspaceId, async (tx) => {
+  const reopened = await withTenant(actor.workspaceId, async (tx) => {
     const s = await tx.attendanceSession.findFirst({ where: { id: sessionId, workspaceId: actor.workspaceId, employee: employeeScope(actor) } });
     if (!s) throw notFound("That shift");
     if (s.lockedAt) throw new StaffError(409, "locked", "This shift is already in approved payroll.");
     await assertNotInLockedPeriod(tx, actor.workspaceId, settings.timezone, s.clockInAt, s.clockOutAt);
-    if (s.approvalStatus === "pending") return;
+    if (s.approvalStatus === "pending") return null;
     await tx.attendanceSession.update({ where: { id: s.id }, data: { approvalStatus: "pending", approvedAt: null, approvedByUserId: null, rejectedReason: null } });
     await tx.timesheetApproval.create({ data: { workspaceId: actor.workspaceId, sessionId: s.id, action: "reopened", revision: s.revision, actorUserId: actor.userId } });
     await tx.attendanceEvent.create({ data: { workspaceId: actor.workspaceId, employeeId: s.employeeId, sessionId: s.id, type: "reopen", at: now, source: "admin", actorUserId: actor.userId } });
+    return s.employeeId;
   }).catch(frozen);
+  if (reopened) await audit({ workspaceId: actor.workspaceId, actorUserId: actor.userId, action: "staff.hours_reopened", targetType: "employee", targetId: reopened, metadata: { sessionId }, ip: actor.ip });
   return { ok: true };
 }
 

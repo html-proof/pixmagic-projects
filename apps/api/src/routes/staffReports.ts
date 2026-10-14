@@ -67,20 +67,25 @@ async function buildFile(actor: StaffActor, request: ExportRequest): Promise<Exp
 
 /** Analytics, reports and every staff download (reports, payslips, statements). */
 export function staffReportRoutes(app: App, deps: Deps) {
+  const analyticsLimit = (userId: string) => limit(deps.coord, `rl:staff-analytics:${userId}`, LIMITS.staffAnalytics, "Too many requests. Wait a minute and try again.");
+
   app.get(`${BASE}/analytics`, async (c) => {
     const actor = await requireStaff(c, deps, c.req.param("ws"), "attendance:view");
+    await analyticsLimit(actor.userId);
     return c.json(await staffKpis(actor, rangeSchema.parse(c.req.query())));
   });
 
   app.get(`${BASE}/analytics/trends`, async (c) => {
     const actor = await requireStaff(c, deps, c.req.param("ws"), "attendance:view");
     const q = rangeSchema.extend({ granularity: z.enum(GRANULARITIES).optional() }).parse(c.req.query());
+    await analyticsLimit(actor.userId);
     return c.json(await staffTrends(actor, q));
   });
 
   app.get(`${BASE}/reports`, async (c) => {
     const q = reportSchema.parse(c.req.query());
     const actor = await requireStaff(c, deps, c.req.param("ws"), q.type === "attendance" ? "attendance:view" : "pay:view");
+    await analyticsLimit(actor.userId);
     return c.json(await buildReport(actor, q));
   });
 

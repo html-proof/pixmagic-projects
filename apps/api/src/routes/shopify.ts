@@ -19,6 +19,7 @@ import { can, expandScopes, normalizeShopDomain, randomToken, safeEqual, verifyS
 import { body, clientIp, HttpError, loadUser, requireWorkspace, type Ctx, type Deps } from "../context.js";
 import type { App } from "../app.js";
 import { attachStore, storeTakenElsewhere, syncPage } from "../connectStore.js";
+import { limit, LIMITS } from "../rateLimit.js";
 
 const STATE_TTL_S = 600;
 /** Shopify-signed redirects (callback, launch) older than this are refused. */
@@ -143,6 +144,8 @@ export function shopifyRoutes(app: App, deps: Deps) {
     const { shop: rawShop, from } = z.object({ shop: z.string().min(1).max(255), from: connectFromSchema }).parse(await body(c));
     const shop = normalizeShopDomain(rawShop);
     if (!shop) throw new HttpError(400, "Enter your store's myshopify.com address", "invalid_shop");
+    // "Already connected elsewhere" tells whether a store uses Insights: bound how fast anyone can ask.
+    await limit(deps.coord, `rl:shopify-install:${user.id}`, LIMITS.shopifyInstall);
 
     if (await storeTakenElsewhere(shop, ws)) {
       throw new HttpError(409, "This store is already connected to another workspace", "store_taken");
@@ -220,6 +223,10 @@ export function shopifyRoutes(app: App, deps: Deps) {
         throw err;
       }
       if (!user || user.id !== state.userId) return fail("session_mismatch");
+      // Re-checked here, not only at /install: the approval can take minutes, and someone removed
+      // from the workspace (or demoted) in between must not still attach a store to it.
+      const member = await systemDb.membership.findUnique({ where: { workspaceId_userId: { workspaceId: state.workspaceId, userId: user.id } } });
+      if (!member || !can(member.role, "stores:manage")) return fail("not_allowed");
 
       let token;
       try {
@@ -263,8 +270,10 @@ export function shopifyRoutes(app: App, deps: Deps) {
     // a browser entry point, and a dead end here looks to them like the product is broken.
     const app = appForSignedQuery(q);
     const shop = app ? normalizeShopDomain(q.shop ?? "") : null;
-    if (!app || !shop) {
-      logger.warn({ event: "shopify_launch_rejected", reason: app ? "invalid_shop" : "invalid_hmac" }, "unverified app launch");
+    // Shopify signs a fresh link on every launch, so an old one is a replay (or a bookmark).
+    const stale = !!app && !freshTimestamp(q.timestamp);
+    if (!app || !shop || stale) {
+      logger.warn({ event: "shopify_launch_rejected", reason: !app ? "invalid_hmac" : stale ? "stale" : "invalid_shop" }, "unverified app launch");
       return c.redirect(`${appUrl}/onboarding?error=launch_unverified`);
     }
     logReturn("launch", shop, app);

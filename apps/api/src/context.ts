@@ -36,6 +36,8 @@ export class HttpError extends Error {
     public statusCode: number,
     message: string,
     public code = "error",
+    /** Sent as Retry-After (seconds) with a 429 or 503. */
+    public retryAfterSec?: number,
   ) {
     super(message);
     this.name = "HttpError";
@@ -208,7 +210,13 @@ export async function requireWorkspace(c: Ctx, deps: Deps, workspaceId: string, 
   return { workspaceId, role: m.role, user };
 }
 
-/** Client IP as seen by Cloudflare's edge. */
+/**
+ * Client IP as seen by Cloudflare's edge. Cloudflare sets cf-connecting-ip on every request and a
+ * client can't forge it; x-real-ip can be sent by anyone, so it only counts outside production
+ * (local tools and tests), where it can't be used to dodge a per-IP limit.
+ */
 export function clientIp(c: Ctx): string {
-  return c.req.header("cf-connecting-ip") ?? c.req.header("x-real-ip") ?? "unknown";
+  const edge = c.req.header("cf-connecting-ip");
+  if (edge) return edge;
+  return (env().NODE_ENV !== "production" && c.req.header("x-real-ip")) || "unknown";
 }

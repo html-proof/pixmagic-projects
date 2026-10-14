@@ -18,6 +18,7 @@ import {
   waDecrypt,
   contactFirstName,
   money,
+  numberOptedOut,
   trackingUrl,
   type AutomationSubject,
 } from "@app/core";
@@ -558,6 +559,8 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
     const { ws, storeId } = c.req.param();
     await requireWorkspace(c, deps, ws, "dashboard:read");
     await waStore(ws, storeId);
+    // Counts up to every contact of the store: an API key (read access) mustn't be able to loop it.
+    await limit(deps.coord, `rl:wa-estimate:${storeId}`, LIMITS.waEstimate);
     const { audience } = z.object({ audience: audienceSchema.default({}) }).parse(await body(c));
     const settings = await systemDb.whatsappSettings.findUnique({ where: { storeId } });
     return c.json({ recipients: await estimateAudience(storeId, audience, parseConfig(settings?.config)) });
@@ -865,6 +868,7 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
     if (input.phone && parsed && (parsed.action.type === "send_template" || parsed.action.type === "schedule_reminder")) {
       const phone = normalizePhone(input.phone, null);
       if (!phone) throw new HttpError(400, "Enter the number in international format, starting with + and the country code.", "invalid_phone");
+      if (await numberOptedOut(storeId, phone.waId)) throw new HttpError(409, "That number replied STOP to this store, so nothing (not even a test) can be sent to it.", "opted_out");
       await limit(deps.coord, `rl:wa-test:${storeId}`, LIMITS.waTest);
       const { message } = await scheduleMessage(
         {

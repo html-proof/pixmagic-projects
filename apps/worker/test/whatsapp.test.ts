@@ -471,15 +471,83 @@ describe("opt-outs and callbacks", () => {
     expect(r.retry).toBe(true);
   });
 
+  const preference = (phoneNumberId: string | null, value: "stop" | "resume", at = Math.floor(Date.now() / 1000)) => ({
+    field: "user_preferences",
+    value: { ...(phoneNumberId ? { metadata: { phone_number_id: phoneNumberId } } : {}), user_preferences: [{ wa_id: "919876543210", category: "marketing_messages", value, timestamp: at }] },
+  });
+
   it("Meta's marketing preference and template reviews are applied", async () => {
     const store = await setupStore();
+    await applyMetaWebhook(inbound(store, "919876543210", "hi"), "all", deps); // the customer wrote to the store: a contact
     await applyMetaWebhook(
-      { object: "whatsapp_business_account", entry: [{ id: "1111111111", changes: [{ field: "user_preferences", value: { user_preferences: [{ wa_id: "919876543210", category: "marketing_messages", value: "resume", timestamp: 1 }] } }, { field: "message_template_status_update", value: { event: "REJECTED", message_template_id: "m-insights_order_shipped", message_template_name: "insights_order_shipped", message_template_language: "en", reason: "INCORRECT_CATEGORY" } }] }] },
+      { object: "whatsapp_business_account", entry: [{ id: "1111111111", changes: [preference("2222222222", "resume"), { field: "message_template_status_update", value: { event: "REJECTED", message_template_id: "m-insights_order_shipped", message_template_name: "insights_order_shipped", message_template_language: "en", reason: "INCORRECT_CATEGORY" } }] }] },
       "all",
       deps,
     );
     expect((await systemDb.whatsappContact.findFirstOrThrow({ where: { storeId: store.id } })).marketingStatus).toBe("opted_in");
     expect((await systemDb.whatsappTemplate.findFirstOrThrow({ where: { storeId: store.id, name: "insights_order_shipped" } })).status).toBe("REJECTED");
+  });
+
+  /** A second store, in another workspace, on the same WhatsApp Business Account with its own number and app. */
+  async function neighbour() {
+    const other = await setupStore({ connected: false });
+    const conn = await systemDb.whatsappConnection.create({
+      data: {
+        workspaceId: other.workspaceId,
+        storeId: other.id,
+        mode: "manual",
+        wabaId: "1111111111",
+        phoneNumberId: "3333333333",
+        registered: true,
+        status: "active",
+        accessTokenEnc: waEncrypt(other.id, "access", "EAAother"),
+        appSecretEnc: waEncrypt(other.id, "app_secret", "neighbour-secret"),
+        tokenKeyVersion: 1,
+        webhookVerifiedAt: new Date(),
+      },
+    });
+    return { other, conn };
+  }
+
+  it("a manual connection's own secret vouches for that connection only, not for others on the same account", async () => {
+    const victim = await setupStore({ kinds: ["order_confirmation"] });
+    const { conn } = await neighbour();
+    // Signed with the neighbour's secret, but naming the victim's number.
+    const r = await applyMetaWebhook(inbound(victim, "919876543210", "STOP"), new Set([conn.id]), deps);
+    expect(r.applied).toBe(0);
+    expect(await systemDb.whatsappContact.count({ where: { storeId: victim.id } })).toBe(0);
+    const victimConn = await systemDb.whatsappConnection.findFirstOrThrow({ where: { storeId: victim.id } });
+    expect(victimConn.lastWebhookAt).toBeNull();
+  });
+
+  it("a marketing preference reaches only the store whose number it names, and 'resume' creates nobody", async () => {
+    const store = await setupStore();
+    const { other } = await neighbour();
+    await applyMetaWebhook(inbound(store, "919876543210", "hi"), "all", deps); // the customer wrote to the first store only
+    // The neighbour's number: the customer resumes marketing there. They are not the neighbour's contact.
+    await applyMetaWebhook({ object: "whatsapp_business_account", entry: [{ id: "1111111111", changes: [preference("3333333333", "resume")] }] }, "all", deps);
+    expect(await systemDb.whatsappContact.count({ where: { storeId: other.id } })).toBe(0);
+    expect((await systemDb.whatsappContact.findFirstOrThrow({ where: { storeId: store.id } })).marketingStatus).not.toBe("opted_in");
+    // No number named: a "stop" still reaches the contact the store has, a "resume" opts nobody in.
+    await applyMetaWebhook({ object: "whatsapp_business_account", entry: [{ id: "1111111111", changes: [preference(null, "stop")] }] }, "all", deps);
+    expect((await systemDb.whatsappContact.findFirstOrThrow({ where: { storeId: store.id } })).marketingStatus).toBe("opted_out");
+    await applyMetaWebhook({ object: "whatsapp_business_account", entry: [{ id: "1111111111", changes: [preference(null, "resume", Math.floor(Date.now() / 1000) + 5)] }] }, "all", deps);
+    expect((await systemDb.whatsappContact.findFirstOrThrow({ where: { storeId: store.id } })).marketingStatus).toBe("opted_out");
+    expect(await systemDb.whatsappContact.count({ where: { storeId: other.id } })).toBe(0);
+  });
+
+  it("a START older than the customer's STOP (a late redelivery) doesn't opt them back in", async () => {
+    const store = await setupStore();
+    const at = (secondsAgo: number) => String(Math.floor(Date.now() / 1000) - secondsAgo);
+    const msg = (text: string, ts: string) => ({
+      object: "whatsapp_business_account",
+      entry: [{ id: "1111111111", changes: [{ field: "messages", value: { metadata: { phone_number_id: "2222222222" }, messages: [{ from: "919876543210", id: `in.${Math.random()}`, timestamp: ts, type: "text", text: { body: text } }] } }] }],
+    });
+    await applyMetaWebhook(msg("STOP", at(10)), "all", deps);
+    await applyMetaWebhook(msg("START", at(60)), "all", deps); // sent before the STOP, delivered after
+    expect(await systemDb.whatsappContact.findFirstOrThrow({ where: { storeId: store.id } })).toMatchObject({ optedOut: true, marketingStatus: "opted_out" });
+    await applyMetaWebhook(msg("START", at(0)), "all", deps); // a real, newer START
+    expect(await systemDb.whatsappContact.findFirstOrThrow({ where: { storeId: store.id } })).toMatchObject({ optedOut: false, marketingStatus: "opted_in" });
   });
 });
 

@@ -65,6 +65,7 @@ const ERRORS: Record<string, string> = {
   state_mismatch: "That sign-in started in another browser or tab. Please press the button again here.",
   state_expired: "That took a little too long. Please press the button again.",
   session_mismatch: "You were signed in as someone else when you came back. Sign in as yourself and try again.",
+  not_allowed: "You no longer have permission to connect ad accounts to this store. Ask an owner or admin.",
   exchange_failed: "The platform didn't accept the sign-in. Please try again in a moment.",
   no_accounts: "That login can't see any ad accounts. Ask the account's owner to give you access, then connect again.",
   no_accounts_meta:
@@ -137,7 +138,7 @@ function StatusLine({ c }: { c: Connection }) {
 
 /** After a sign-in that sees several accounts: tick the ones that belong to this store. */
 function ChooseAccounts({ pick, ws, storeId, storeName, onDone }: { pick: string; ws: string; storeId: string; storeName: string; onDone: (error?: string) => void }) {
-  const path = `/workspaces/${ws}/stores/${storeId}/ads/pending/${pick}`;
+  const path = `/workspaces/${ws}/stores/${storeId}/ads/pending/${encodeURIComponent(pick)}`;
   const { data, error } = useApi<Pending>(path);
   const [chosen, setChosen] = useState<Set<string> | null>(null);
   const [busy, setBusy] = useState(false);
@@ -260,7 +261,8 @@ export default function AdAccountsPage() {
     const provider = q.get("provider");
     if (code) setError(ERRORS[`${code}_${provider}`] ?? ERRORS[code] ?? "Connecting didn't work. Please try again.");
     if (code && WRONG_LOGIN.has(code) && provider && Object.hasOwn(RETRY_LABEL, provider)) setRetry(provider as Provider);
-    if (choose) setPick(choose);
+    // It becomes part of an API path: only ever the nonce the callback put there.
+    if (choose && /^[A-Za-z0-9_-]{16,64}$/.test(choose)) setPick(choose);
     if (code || choose) signInFinished();
     if (code || choose || target) window.history.replaceState(window.history.state, "", "/settings/ads");
     // Once the store list is known.

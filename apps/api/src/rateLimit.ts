@@ -34,10 +34,17 @@ export const LIMITS = {
   contacts: { max: 20, windowSec: 60 },
   /** Invitations, per workspace: each one sends an email from our domain. */
   invitations: { max: 20, windowSec: 3600 },
+  /**
+   * Invitations (workspace and employee) sent by one person a day, across every workspace they
+   * run: anyone can make several workspaces, so the per-workspace cap alone doesn't stop a spammer.
+   */
+  invitationsPerUser: { max: 60, windowSec: 86_400 },
   /** New workspaces, per user. */
   workspaceCreate: { max: 10, windowSec: 3600 },
   /** New API keys, per workspace. */
   apiKeyCreate: { max: 10, windowSec: 3600 },
+  /** Starting a store connection, per user ("already connected elsewhere" must not become a lookup service). */
+  shopifyInstall: { max: 20, windowSec: 600 },
   /** "Refresh data", per store (keeps Shopify's rate limit for real work). */
   resync: { max: 1, windowSec: 300 },
   /** Optional-scope refresh/revoke, per store: one Shopify call each. */
@@ -54,6 +61,8 @@ export const LIMITS = {
   waTemplateCreate: { max: 30, windowSec: 3600 },
   /** WhatsApp: test messages to the merchant's own phone, per store. */
   waTest: { max: 10, windowSec: 600 },
+  /** WhatsApp: campaign audience estimates (the builder asks as filters change), per store. */
+  waEstimate: { max: 120, windowSec: 600 },
   /** WhatsApp: "Send reminder" on an abandoned cart, per store. */
   waRemind: { max: 30, windowSec: 600 },
 
@@ -69,6 +78,12 @@ export const LIMITS = {
   correctionRequests: { max: 20, windowSec: 3600 },
   /** Report and payslip downloads, per user. */
   staffExports: { max: 30, windowSec: 600 },
+  /**
+   * Staff analytics, trends and on-screen reports, per user. Each one loads every shift in a range
+   * of up to a few years; the dashboard refreshes twice a minute, so this leaves room for several
+   * open tabs while stopping a script from hammering the shared database.
+   */
+  staffAnalytics: { max: 180, windowSec: 600 },
   /** "Sign out everywhere", per user. */
   revokeSessions: { max: 5, windowSec: 3600 },
 
@@ -117,5 +132,6 @@ export const LIMITS = {
 /** Fixed-window limiter. Throws 429 once more than `max` hits occur within `windowSec`. */
 export async function limit(coord: Coord, key: string, policy: Limit, message = "Too many attempts. Please wait and try again.", code = "rate_limited") {
   const n = await coord.hit(key, policy.windowSec);
-  if (n > policy.max) throw new HttpError(429, message, code);
+  // Fixed windows: the wait is at most one window, so that is what Retry-After promises.
+  if (n > policy.max) throw new HttpError(429, message, code, policy.windowSec);
 }

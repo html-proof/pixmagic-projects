@@ -53,13 +53,18 @@ export async function liveBoard(actor: StaffActor, f: LiveFilters) {
   const dayStart = new Date(startOfLocalDay(today, tz));
   const dayEnd = new Date(endOfLocalDay(today, tz));
   const pay = staffCan(actor.access, "pay:view");
+  // Scope ANDed with the filters: a supervisor's `managerUserId` scope must not be replaceable by the filter.
   const where: Prisma.EmployeeWhereInput = {
-    ...employeeScope(actor),
-    status: { not: "inactive" },
-    ...(f.departmentId ? { departmentId: f.departmentId } : {}),
-    ...(f.jobTitle ? { jobTitle: { equals: f.jobTitle, mode: "insensitive" as const } } : {}),
-    ...(f.managerUserId ? { managerUserId: f.managerUserId } : {}),
-    ...(f.q ? { OR: [{ fullName: { contains: f.q, mode: "insensitive" as const } }, { employeeNumber: { contains: f.q, mode: "insensitive" as const } }] } : {}),
+    AND: [
+      employeeScope(actor),
+      {
+        status: { not: "inactive" },
+        ...(f.departmentId ? { departmentId: f.departmentId } : {}),
+        ...(f.jobTitle ? { jobTitle: { equals: f.jobTitle, mode: "insensitive" as const } } : {}),
+        ...(f.managerUserId ? { managerUserId: f.managerUserId } : {}),
+        ...(f.q ? { OR: [{ fullName: { contains: f.q, mode: "insensitive" as const } }, { employeeNumber: { contains: f.q, mode: "insensitive" as const } }] } : {}),
+      },
+    ],
   };
   return withTenant(actor.workspaceId, async (tx) => {
     const [employees, sessions, schedules, corrections, holiday, data] = await Promise.all([

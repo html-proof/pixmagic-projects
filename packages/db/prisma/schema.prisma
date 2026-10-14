@@ -502,6 +502,7 @@ model PixelEventSeen {
   seenAt   DateTime @default(now()) @map("seen_at")
 
   @@id([storeId, eventId])
+  @@index([seenAt])
   @@map("pixel_events_seen")
 }
 

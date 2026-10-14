@@ -275,8 +275,11 @@ export const manualVerifyToken = (conn: Pick<WhatsappConnection, "storeId" | "ve
 
 /** Disconnect: the token and templates are deleted, waiting messages cancelled; history stays. */
 export async function disconnectWhatsapp(conn: WhatsappConnection, fetchImpl: FetchLike): Promise<void> {
-  // Best effort: stop Meta sending this account's webhooks to the app that was subscribed.
-  await graph(fetchImpl, connectionToken(conn), "DELETE", `${conn.wabaId}/subscribed_apps`).catch(() => undefined);
+  // Best effort: stop Meta sending this account's webhooks to the app that was subscribed, unless
+  // another store still relies on that subscription (stores can share one account): unsubscribing
+  // then would silently cut off its STOP replies and delivery statuses.
+  const others = await systemDb.whatsappConnection.count({ where: { wabaId: conn.wabaId, mode: conn.mode, id: { not: conn.id } } });
+  if (!others) await graph(fetchImpl, connectionToken(conn), "DELETE", `${conn.wabaId}/subscribed_apps`).catch(() => undefined);
   await systemDb.$transaction([
     systemDb.whatsappTemplate.deleteMany({ where: { connectionId: conn.id } }),
     systemDb.whatsappConnection.delete({ where: { id: conn.id } }),

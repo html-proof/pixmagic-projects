@@ -23,4 +23,12 @@ BEGIN
       EXECUTE format('REVOKE ALL ON %I FROM app_rls', t);
     END IF;
   END LOOP;
+  -- Read-only or append-only for tenant requests (also in migration 20261016100000_security_hardening,
+  -- repeated here because the blanket GRANT above would otherwise hand the rights back).
+  IF to_regclass('public.audit_logs') IS NOT NULL THEN
+    REVOKE UPDATE, DELETE, TRUNCATE ON audit_logs FROM app_rls;
+  END IF;
+  IF to_regclass('public.users') IS NOT NULL THEN
+    REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON users FROM app_rls;
+  END IF;
 END $$;

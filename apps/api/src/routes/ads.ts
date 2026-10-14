@@ -56,6 +56,7 @@ import {
   MAX_CUSTOM_DAYS,
   META_REPORT_VIEWS,
   pkcePair,
+  can,
   randomToken,
   safeEqual,
   type AdProvider,
@@ -148,6 +149,17 @@ async function storeInWorkspace(ws: string, storeId: string) {
   const store = await withTenant(ws, (tx) => tx.store.findFirst({ where: { id: storeId, workspaceId: ws }, select: { id: true, status: true } }));
   if (!store || store.status === "uninstalled") throw new HttpError(404, "Not found", "not_found");
   return store;
+}
+
+/**
+ * Whether this person may still connect ad accounts to this store: checked when the platform sends
+ * them back, not only when they pressed the button. The sign-in can take minutes, and someone
+ * removed or demoted in between (or a store disconnected or moved) must not get accounts attached.
+ */
+async function mayStillConnect(ws: string, storeId: string, userId: string): Promise<boolean> {
+  const m = await systemDb.membership.findUnique({ where: { workspaceId_userId: { workspaceId: ws, userId } } });
+  if (!m || !can(m.role, "stores:manage")) return false;
+  return !!(await systemDb.store.findFirst({ where: { id: storeId, workspaceId: ws, status: { not: "uninstalled" } }, select: { id: true } }));
 }
 
 /** Save the chosen accounts, fetch their history, and record who connected them. */
@@ -352,6 +364,7 @@ export function adsRoutes(app: App, deps: Deps) {
       let dbDown = !user;
       if (user) {
         try {
+          if (!(await db(() => mayStillConnect(state.workspaceId, state.storeId, user.id)))) return back({ error: "not_allowed", provider }, state.storeId);
           const known = await db(() => systemDb.adConnection.findMany({ where: { storeId: state.storeId, provider }, select: { accountId: true } }));
           const knownIds = new Set(known.map((k) => k.accountId));
           if (accounts.length === 1 || accounts.every((a) => knownIds.has(a.accountId))) {

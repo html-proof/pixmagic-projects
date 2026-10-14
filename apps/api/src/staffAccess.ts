@@ -17,7 +17,7 @@ export async function requireStaff(c: Ctx, deps: Deps, workspaceId: string, perm
   const access = staffAccess(m.role, m.staffRole);
   if (!access.permissions.length) throw new HttpError(403, "You don't have access to Staff Management in this workspace. Ask an owner or admin.", "forbidden");
   if (!staffCan(access, perm)) throw new HttpError(403, "You don't have permission to do that", "forbidden");
-  return { workspaceId, userId: user.id, access, ip: clientIp(c) };
+  return { workspaceId, userId: user.id, access, memberRole: m.role, ip: clientIp(c) };
 }
 
 /** An employee acting on their own records. Deactivated employees can still read their history. */

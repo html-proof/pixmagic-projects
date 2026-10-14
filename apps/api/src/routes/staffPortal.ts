@@ -2,6 +2,7 @@ import { z } from "zod";
 import { systemDb } from "@app/db";
 import {
   attendanceState,
+  audit,
   claimInvitation,
   clockIn,
   clockOut,
@@ -208,6 +209,7 @@ export function staffPortalRoutes(app: App, deps: Deps) {
     if (ctx.employee.status === "inactive") throw new HttpError(403, "Your employee account has been deactivated.", "deactivated");
     const { phone } = z.object({ phone: z.string().trim().max(40).regex(/^[+0-9 ().-]*$/, "Use digits, spaces and + ( ) - only").nullable() }).parse(await body(c));
     await systemDb.employee.update({ where: { id: ctx.employee.id }, data: { phone: phone || null } });
+    await audit({ workspaceId: ctx.workspaceId, actorUserId: ctx.userId, action: "staff.employee_phone_changed", targetType: "employee", targetId: ctx.employee.id, ip: ctx.ip });
     return c.json({ ok: true });
   });
 }
