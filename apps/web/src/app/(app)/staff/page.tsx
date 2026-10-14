@@ -2,7 +2,7 @@
 import Link from "next/link";
 import { useState, type ReactNode } from "react";
 import { shiftDay, type LiveStatus, type PayrollStatus } from "@app/shared/staff";
-import { Icon, type IconName } from "@/components/dashboard/icons";
+import { Icon, type IconName } from "@/components/dashboard/Icons";
 import { Badge, Stat, type Tone } from "@/components/dashboard/primitives";
 import { LoadError } from "@/components/LoadError";
 import { EstimateNote, KpiCard, type KpiData } from "@/components/staff/ui";

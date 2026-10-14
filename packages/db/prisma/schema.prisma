@@ -263,6 +263,8 @@ model Order {
 
   @@unique([storeId, shopifyId])
   @@index([storeId, localDay])
+  // A customer's earlier orders (returning-customer flag, redaction, campaign audiences).
+  @@index([storeId, customerKey, shopifyCreatedAt])
   @@index([workspaceId])
   @@map("orders")
 }
@@ -474,6 +476,8 @@ model SyncJob {
   createdAt      DateTime  @default(now()) @map("created_at")
 
   @@index([storeId, kind])
+  // The 15-minute sweep for stalled jobs reads the few that are queued or running.
+  @@index([status])
   @@index([workspaceId])
   @@map("sync_jobs")
 }

@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { recomputeDays } from "@app/core";
 import { systemDb } from "@app/db";
 import { addDays, localDay } from "@app/shared";
-import { syncProblem } from "../src/routes/dashboard.js";
+import { syncProblem } from "@app/core/reports";
 import { clean, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
 
 let ctx: TestCtx;

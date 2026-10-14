@@ -11,7 +11,7 @@ Everything runs as **one Worker** (`apps/cloudflare`, name `insights`):
 | Daily reconcile, token refresh | Cron Triggers | BullMQ job schedulers |
 | Rate limits, OAuth state, refresh locks | Durable Object `Coordinator` + Rate Limiting binding | Redis |
 | Postgres access | Hyperdrive (two configs: owner `app`, RLS `app_rls`) | direct connections |
-| Large webhook payloads | R2 bucket | Redis (BullMQ payloads) |
+| Large webhook payloads | Durable Object storage, chunked (an R2 bucket instead when one is bound; none is today) | Redis (BullMQ payloads) |
 | Email (OTP codes, invites, alerts) | Email Sending (`send_email` binding) | SMTP / nodemailer |
 | Firebase Admin | Identity Toolkit REST + `jose` | `firebase-admin` |
 
@@ -71,11 +71,11 @@ npx wrangler queues create insights-aggregate
 npx wrangler queues create insights-dlq
 ```
 
+   Optional, and not done today: large webhook payloads (over 100 KB) are kept in the Coordinator Durable Object, in chunks. To use R2 instead, create a bucket, uncomment the `r2_buckets` binding in `wrangler.jsonc`, and add a lifecycle rule deleting `webhooks/` objects after 7 days (processed payloads are deleted immediately; this only catches abandoned ones):
+
 ```bash
 npx wrangler r2 bucket create insights-webhook-payloads
 ```
-
-   Optional: add an R2 lifecycle rule deleting `webhooks/` objects after 7 days (processed payloads are deleted immediately; this only catches abandoned ones).
 
 5. **Email Sending:** onboard the domain used in `EMAIL_FROM`:
 
@@ -90,7 +90,7 @@ npx wrangler email sending enable example.com
 npx wrangler secret put SESSION_SECRET
 ```
 
-   Repeat for `TOKEN_ENCRYPTION_KEYS` (`1:<openssl rand -base64 32>`), `OTP_PEPPER`, `SHOPIFY_API_SECRET`, `FIREBASE_SERVICE_ACCOUNT_B64` (base64 of the service-account JSON) and, optionally, `ALERT_SLACK_WEBHOOK_URL`.
+   Repeat for `TOKEN_ENCRYPTION_KEYS` (`1:<openssl rand -base64 32>`), `OTP_PEPPER`, `SHOPIFY_API_SECRET`, `FIREBASE_SERVICE_ACCOUNT_B64` (base64 of the service-account JSON) and, when those features are used, `META_APP_SECRET` and `GOOGLE_ADS_CLIENT_SECRET` (ad accounts, [ads-setup.md](ads-setup.md)), `WHATSAPP_APP_SECRET` and `WHATSAPP_WEBHOOK_VERIFY_TOKEN` ([whatsapp.md](whatsapp.md)), `SHOPIFY_APP_SECRET_<KEY>` for each app in `SHOPIFY_EXTRA_APPS`, `CUSTOMER_HASH_KEY` (see RUNBOOK, "Rotate the OTP pepper") and `ALERT_SLACK_WEBHOOK_URL`. Never set `FIREBASE_AUTH_EMULATOR_HOST` or `MAILPIT_URL` here: production refuses to start with them.
 
 8. **Web build variables:** `NEXT_PUBLIC_FIREBASE_*` are baked into the static UI at build time. Put them in `apps/web/.env.production` (or export them in CI) before deploying.
 9. **Deploy** (builds the static UI, then uploads Worker + assets):
@@ -99,7 +99,7 @@ npx wrangler secret put SESSION_SECRET
 pnpm --filter @app/cloudflare run deploy
 ```
 
-10. **Shopify:** in `shopify-app/shopify.app.toml` replace `app.example.com` with your domain (launch URL `/api/shopify/launch`, redirect `/api/shopify/callback`, webhooks `/api/webhooks/shopify`), then `shopify app deploy`.
+10. **Shopify:** in `shopify-app/shopify.app.toml` set your domain (it holds `insights.imeseban.workers.dev` today; launch URL `/api/shopify/launch`, redirect `/api/shopify/callback`, webhooks `/api/webhooks/shopify`), then `shopify app deploy`.
 11. **Firebase:** add your domain to Authentication > Settings > Authorized domains.
 
 ### Email

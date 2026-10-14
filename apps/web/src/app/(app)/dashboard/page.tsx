@@ -5,12 +5,13 @@ import { useApp, canManage, StoresPending } from "@/components/AppContext";
 import { EmptyState, Alert } from "@/components/ui";
 import { StoreHeader, type LiveState } from "@/components/dashboard/StoreHeader";
 import { DateRangeBar, useDateRange } from "@/components/dashboard/DateRange";
-import { availableTopics, TopicDetail, useDetailView } from "@/components/dashboard/details";
-import { AreaList, StoreSummary } from "@/components/dashboard/overview";
-import { AdvertisingSection } from "@/components/dashboard/advertising";
+import { TopicDetail } from "@/components/dashboard/TopicDetail";
+import { availableTopics, useDetailView } from "@/components/dashboard/topics";
+import { AreaList, StoreSummary } from "@/components/dashboard/Overview";
+import { AdvertisingSection } from "@/components/dashboard/Advertising";
 import { fmtRange, fmtRelative } from "@/components/dashboard/format";
-import { Icon, type IconName } from "@/components/dashboard/icons";
-import { AnimatedNumber, Sparkline } from "@/components/dashboard/motion";
+import { Icon, type IconName } from "@/components/dashboard/Icons";
+import { AnimatedNumber, Sparkline } from "@/components/dashboard/Motion";
 import { Delta } from "@/components/dashboard/primitives";
 import type { Capability, Overview } from "@/components/dashboard/types";
 import { api, ApiError, fmtMoney, fmtNum, fmtPct, friendlyError, isTransient, useLiveApi } from "@/lib/api";
@@ -142,7 +143,6 @@ function Metric({
       className="card lift animate-rise group relative flex flex-col overflow-hidden text-left"
       style={{ ["--i" as string]: i }}
       data-testid={`metric-${title}`}
-      aria-label={`${title}: open details`}
     >
       <span className="flex w-full items-start justify-between gap-2">
         <span className="text-sm text-muted">{title}</span>
@@ -158,6 +158,8 @@ function Metric({
         <span className="min-w-0 flex-1">{help}</span>
         <Icon name="chevronRight" className="h-4 w-4 shrink-0 transition-transform group-hover:translate-x-0.5" />
       </span>
+      {/* No aria-label: it would replace the figure; screen readers read the tile, then this. */}
+      <span className="sr-only"> – open details</span>
     </button>
   );
 }
@@ -366,7 +368,7 @@ export default function DashboardPage() {
 
       {/* The main page says each thing once: one sentence, four numbers, and one list of every
           area of the store (worst first). Every number and row opens the full details
-          (components/dashboard/details.tsx), so nothing is lost by keeping this page short. */}
+          (components/dashboard/TopicDetail.tsx), so nothing is lost by keeping this page short. */}
       {s && (
         <section aria-labelledby="numbers-h">
           <h2 id="numbers-h" className="mb-1 flex items-center gap-2 font-semibold"><Icon name="chart" className="h-5 w-5 text-accent" />How your store is doing</h2>
@@ -387,7 +389,7 @@ export default function DashboardPage() {
       )}
 
       {/* Ad platforms report about themselves, so they get their own section rather than a row in
-          the store's list: results when connected, one way in when not (components/dashboard/advertising.tsx). */}
+          the store's list: results when connected, one way in when not (components/dashboard/Advertising.tsx). */}
       {ov && <AdvertisingSection ov={ov} manage={canManage(workspace.role)} onOpen={detail.open} />}
 
       {ov && <AreaList ov={ov} currency={cur} topics={topics} onOpen={detail.open} />}

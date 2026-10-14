@@ -1,188 +1,30 @@
 "use client";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
+import { bestEntryPage, biggestDropOff, dropOffSection } from "@app/shared/journey";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
-import { BarRow, StackedBar } from "./charts";
-import { ContactsCard } from "./contacts";
-import { FunnelCard, JourneyCard, SECTION_LABEL, STEP_LABEL } from "./funnel";
-import { fmtDuration, fmtRange, hourRange, plural } from "./format";
-import { Icon, type IconName } from "./icons";
-import { CatalogCard, ChannelsCard, DiscountCodesCard, FulfillmentCard, InventoryCard, OrderTimingCard, RecentOrdersCard, TrafficCard } from "./modules";
-import { AdsDetail } from "./adsPanel";
-import { AdsenseDetail } from "./adsensePanel";
-import { Explained } from "./explain";
-import { OverviewDetail } from "./overview";
+import { BarRow, StackedBar } from "./Charts";
+import { ContactsCard } from "./Contacts";
+import { FunnelCard, JourneyCard, SECTION_LABEL, STEP_LABEL } from "./Funnel";
+import { fmtDuration, fmtRange, hourRange, plural, weekdayNames } from "./format";
+import { CatalogCard, ChannelsCard, DiscountCodesCard, FulfillmentCard, InventoryCard, OrderTimingCard, RecentOrdersCard, TrafficCard } from "./Modules";
+import { AdsDetail } from "./AdsPanel";
+import { AdsenseDetail } from "./AdsensePanel";
+import { Explained } from "./Explain";
+import { B, Change, InShort, upDown } from "./narrative";
+import { OverviewDetail } from "./Overview";
 import { Delta, Panel, Stat } from "./primitives";
-import { DailySalesCard, MonthlySalesCard } from "./salesBreakdown";
-import { isTopic, topicInfo, TOPICS, type Topic } from "./topics";
+import { DailySalesCard, MonthlySalesCard } from "./SalesBreakdown";
+import type { Topic } from "./topics";
 import type { Overview } from "./types";
 
 export type { Topic } from "./topics";
 
 // ---------------------------------------------------------------------------
 // Topics (./topics.ts): everything the dashboard knows, one tap away from its summary card.
+// This is what goes inside the detail panel (./TopicDetail.tsx), loaded when a panel first opens.
 // ---------------------------------------------------------------------------
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
-
-/** The topics this store has data for, in the order the main page's list uses for equal statuses. */
-export function availableTopics(ov: Overview, contactsOn: boolean): Topic[] {
-  const m = ov.modules;
-  const has: Record<Topic, boolean> = {
-    // The overview has its own first row in the list; ads and AdSense have their own Advertising
-    // section on the main page (advertising.tsx), which opens their detail panels.
-    overview: false,
-    ads: false,
-    adsense: false,
-    sales: !!m.sales_overview,
-    products: !!(m.top_products || m.catalog),
-    shoppers: !!m.funnel,
-    timing: !!m.order_timing,
-    channels: !!m.channels,
-    shipping: !!m.fulfillment,
-    stock: !!m.inventory,
-    discounts: !!m.discount_codes,
-    customers: !!m.customers || contactsOn,
-    orders: !!m.recent_orders,
-  };
-  return TOPICS.filter((t) => has[t]);
-}
-
-// ---------------------------------------------------------------------------
-// Which topic is open lives in the address bar (?view=sales), so the phone's back button closes
-// the panel instead of leaving the dashboard, and a link can open straight onto one.
-// ---------------------------------------------------------------------------
-
-export function useDetailView() {
-  const [view, setView] = useState<Topic | null>(null);
-  const pushed = useRef(false);
-  useEffect(() => {
-    const read = () => {
-      const v = new URLSearchParams(window.location.search).get("view");
-      setView(isTopic(v) ? v : null);
-    };
-    read();
-    const onPop = () => {
-      pushed.current = false;
-      read();
-    };
-    window.addEventListener("popstate", onPop);
-    return () => window.removeEventListener("popstate", onPop);
-  }, []);
-
-  const open = (t: Topic) => {
-    const url = new URL(window.location.href);
-    url.searchParams.set("view", t);
-    window.history.pushState(window.history.state, "", url.href);
-    pushed.current = true;
-    setView(t);
-  };
-  const close = () => {
-    if (pushed.current) {
-      // Back to the entry before the panel opened; the popstate above clears `view`.
-      window.history.back();
-      return;
-    }
-    const url = new URL(window.location.href);
-    url.searchParams.delete("view");
-    window.history.replaceState(window.history.state, "", url.href);
-    setView(null);
-  };
-  return { view, open, close };
-}
-
-// ---------------------------------------------------------------------------
-// The panel: full screen on a phone, a wide side panel on a computer.
-// ---------------------------------------------------------------------------
-
-function DetailSheet({ title, icon, period, onClose, children }: { title: string; icon: IconName; period: string; onClose: () => void; children: ReactNode }) {
-  const panel = useRef<HTMLDivElement>(null);
-  const closeBtn = useRef<HTMLButtonElement>(null);
-  const onCloseRef = useRef(onClose);
-  onCloseRef.current = onClose;
-
-  useEffect(() => {
-    const before = document.activeElement as HTMLElement | null;
-    closeBtn.current?.focus();
-    const overflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onCloseRef.current();
-      if (e.key !== "Tab" || !panel.current) return;
-      // Keep keyboard focus inside the panel while it's open.
-      const focusable = panel.current.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), input, select, textarea, [tabindex]:not([tabindex="-1"])');
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (!first || !last) return;
-      if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault();
-        last.focus();
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault();
-        first.focus();
-      }
-    };
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("keydown", onKey);
-      document.body.style.overflow = overflow;
-      before?.focus?.();
-    };
-  }, []);
-
-  return (
-    <div className="fixed inset-0 z-50 flex justify-end" role="dialog" aria-modal="true" aria-labelledby="detail-title" data-testid="detail-panel" data-print-root>
-      <div className="animate-fade absolute inset-0 bg-black/45" onClick={onClose} aria-hidden data-print-hide />
-      <div ref={panel} className="animate-sheet relative flex h-full w-full max-w-4xl flex-col bg-bg shadow-2xl sm:border-l sm:border-border" data-print-panel>
-        <header className="flex items-center gap-3 border-b border-border bg-surface px-4 py-3 sm:px-6">
-          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent/12 text-accent">
-            <Icon name={icon} />
-          </span>
-          <div className="min-w-0">
-            <h2 id="detail-title" className="truncate text-lg font-semibold">{title}</h2>
-            <p className="truncate text-xs text-muted">{period}</p>
-          </div>
-          <button onClick={() => window.print()} className="ml-auto hidden h-10 shrink-0 items-center gap-2 rounded-full border border-border bg-surface px-3 text-sm text-muted transition hover:text-text sm:flex" data-print-hide>
-            <Icon name="printer" className="h-4 w-4" />
-            Print or save as PDF
-          </button>
-          <button ref={closeBtn} onClick={onClose} className="ml-auto flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-border bg-surface text-muted transition hover:text-text sm:ml-0" aria-label="Close details" data-print-hide>
-            <Icon name="close" />
-          </button>
-        </header>
-        <div className="flex-1 space-y-4 overflow-y-auto overscroll-contain px-4 py-4 sm:px-6 sm:py-6" data-print-scroll>{children}</div>
-      </div>
-    </div>
-  );
-}
-
-/** The plain-language answer first, before any table. */
-function InShort({ children }: { children: ReactNode }) {
-  return (
-    <div className="card flex items-start gap-3 border-accent/30 bg-accent/5">
-      <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent/12 text-accent">
-        <Icon name="sparkle" className="h-4 w-4" />
-      </span>
-      <div className="min-w-0 text-sm">
-        <p className="text-xs font-medium uppercase tracking-wide text-muted">In short</p>
-        <div className="mt-1 space-y-1 leading-relaxed">{children}</div>
-      </div>
-    </div>
-  );
-}
-
-const B = ({ children }: { children: ReactNode }) => <strong className="font-semibold">{children}</strong>;
-
-/** A change as words and an arrow, colored by whether it's good news. */
-function Change({ value, invert = false }: { value: number | null; invert?: boolean }) {
-  if (value === null) return <span className="text-muted">—</span>;
-  const good = invert ? value < 0 : value > 0;
-  return (
-    <span className={value === 0 ? "text-muted" : good ? "text-good" : "text-danger"}>
-      {value > 0 ? "▲" : value < 0 ? "▼" : "■"} {fmtPct(Math.abs(value))}
-    </span>
-  );
-}
-const upDown = (d: number | null) => (d === null ? null : d >= 0 ? `up ${fmtPct(d)}` : `down ${fmtPct(-d)}`);
 
 // ---------------------------------------------------------------------------
 // Each topic.
@@ -378,9 +220,9 @@ function ProductsDetail({ ov, currency }: { ov: Overview; currency: string }) {
 
 function ShoppersDetail({ ov }: { ov: Overview }) {
   const f = ov.modules.funnel!;
-  const leak = f.steps.length > 1 ? f.steps.slice(0, -1).reduce((a, b) => (b.left > a.left ? b : a)) : null;
-  const where = leak?.leftFrom.find((x) => x.section)?.section;
-  const bestEntry = [...f.entryPages].filter((p) => p.visits >= 5).sort((a, b) => b.purchases / b.visits - a.purchases / a.visits)[0];
+  const leak = biggestDropOff(f.steps);
+  const where = dropOffSection(leak);
+  const bestEntry = bestEntryPage(f.entryPages);
   const visitsChange = upDown(f.deltas.visits);
   return (
     <>
@@ -415,7 +257,7 @@ function ShoppersDetail({ ov }: { ov: Overview }) {
 function TimingDetail({ ov }: { ov: Overview }) {
   const t = ov.modules.order_timing!;
   const total = t.byWeekday.reduce((a, b) => a + b, 0);
-  const days = Array.from({ length: 7 }, (_, i) => new Intl.DateTimeFormat(undefined, { weekday: "long", timeZone: "UTC" }).format(new Date(Date.UTC(2026, 0, 5 + i))));
+  const days = weekdayNames("long");
   const quietest = total ? t.byWeekday.indexOf(Math.min(...t.byWeekday)) : null;
   const weekend = total ? (t.byWeekday[5]! + t.byWeekday[6]!) / total : null;
   const topHours = t.byHour
@@ -647,38 +489,21 @@ function OrdersDetail({ ov, currency }: { ov: Overview; currency: string }) {
   );
 }
 
-export function TopicDetail({
+/** Everything inside the detail panel for one topic: its own figures, then what to do about them and what they mean. */
+export function TopicContents({
   topic,
   ov,
   currency,
   contactsOn,
-  onClose,
   onOpen,
 }: {
   topic: Topic;
   ov: Overview;
   currency: string;
   contactsOn: boolean;
-  onClose: () => void;
   /** Open another topic from inside this one (the overview's rows). */
   onOpen: (t: Topic) => void;
 }) {
-  const range = fmtRange(ov.range.from, ov.range.to);
-  const period: Record<Topic, string> = {
-    overview: `${range} · ${ov.store.name ?? ov.store.shopDomain}`,
-    sales: range,
-    ads: `${range} · each ad account's own days`,
-    adsense: `${range} · the AdSense account's own days`,
-    products: range,
-    shoppers: range,
-    timing: range,
-    channels: range,
-    shipping: `${range} · waiting orders from any date`,
-    stock: "Right now · sales speed from the last 30 days",
-    discounts: range,
-    customers: range,
-    orders: "The 10 latest orders, any date",
-  };
   const m = ov.modules;
   // A topic whose module isn't there (scopes changed, another store) shows nothing rather than crash.
   const body: ReactNode =
@@ -697,11 +522,10 @@ export function TopicDetail({
     : topic === "orders" && m.recent_orders ? <OrdersDetail ov={ov} currency={currency} />
     : <p className="text-sm text-muted">There&apos;s nothing to show here for this store yet.</p>;
   return (
-    // Keyed by topic so moving from the overview to another topic starts at the top of the panel.
-    <DetailSheet key={topic} title={topicInfo(topic).title} icon={topicInfo(topic).icon} period={period[topic]} onClose={onClose}>
+    <>
       {body}
       {/* Then, under every topic: what to do about it, and what each number means. */}
       <Explained topic={topic} ov={ov} currency={currency} />
-    </DetailSheet>
+    </>
   );
 }

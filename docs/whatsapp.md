@@ -52,7 +52,7 @@ Audit events use the existing `audit_logs`; "notify the team" uses the existing 
 
 Analytics still store no customer personal data. WhatsApp, once connected, keeps what messaging needs:
 
-- Customers' WhatsApp numbers and first names, encrypted; a keyed hash (`HMAC(OTP_PEPPER, "wa:<store>:<number>")`)
+- Customers' WhatsApp numbers and first names, encrypted; a keyed hash (`HMAC(CUSTOMER_HASH_KEY, "wa:<store>:<number>")`; that key defaults to `OTP_PEPPER`, see RUNBOOK "Rotate the OTP pepper")
   finds a contact from Meta's webhooks; the dashboard only ever shows masked numbers (`+91 ••••••• 210`).
 - A message's details (name, delivery address, links) are encrypted in the row and deleted once it is sent.
   Failed/skipped messages keep them 7 days (so they can be retried), then lose them.

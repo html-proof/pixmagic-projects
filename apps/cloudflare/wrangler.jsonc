@@ -83,16 +83,18 @@
 
   // Postgres through Hyperdrive: owner role (migrations/system paths) and the RLS-enforced app_rls role.
   // Create with `wrangler hyperdrive create ...` (see docs/deployment-cloudflare.md) and paste the ids.
+  // `wrangler dev` uses the local strings: database app_dev, never `app`, which on the machine that
+  // hosts production's Postgres (port 5434) is production's own data (docs/local-dev.md).
   "hyperdrive": [
     {
       "binding": "HYPERDRIVE",
       "id": "eec0593e76144cbcb0c4bb653a0cb647",
-      "localConnectionString": "postgresql://app:app@localhost:5434/app"
+      "localConnectionString": "postgresql://app:app@localhost:5434/app_dev"
     },
     {
       "binding": "HYPERDRIVE_RLS",
       "id": "5646bc5ea5424144bf2f12167be10dec",
-      "localConnectionString": "postgresql://app_rls:app_rls@localhost:5434/app"
+      "localConnectionString": "postgresql://app_rls:app_rls@localhost:5434/app_dev"
     }
   ],
 

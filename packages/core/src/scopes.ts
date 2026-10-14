@@ -251,13 +251,15 @@ export async function seedScopeFollowUp(
   deps: { queues: Pick<Queues, "sync"> },
   store: Pick<Store, "id" | "workspaceId">,
   newlyGranted: string[],
+  /** Hold the jobs back this long: for a caller that saves the new scopes *after* seeding. */
+  opts: { delaySeconds?: number } = {},
 ) {
   const jobs = [];
   for (const kind of scopeFollowUpKinds(newlyGranted)) {
     const job = await systemDb.syncJob.create({ data: { workspaceId: store.workspaceId, storeId: store.id, kind } });
     // Deliberately no `sinceDays`: a scope that changes what the orders query asks for leaves a
     // gap the whole way back, not just in recent days (see scopeFollowUpKinds).
-    await deps.queues.sync.send({ storeId: store.id, kind, syncJobId: job.id });
+    await deps.queues.sync.send({ storeId: store.id, kind, syncJobId: job.id }, opts.delaySeconds ? { delaySeconds: opts.delaySeconds } : undefined);
     jobs.push(job);
   }
   return jobs;

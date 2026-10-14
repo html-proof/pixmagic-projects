@@ -1,8 +1,8 @@
 "use client";
 import type { ReactNode } from "react";
+import type { Health } from "@app/shared/health";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
-import { fmtDay, fmtMoneyWhole, fmtRelative, fmtWeekday } from "./format";
-import type { Health } from "./overview";
+import { fmtDay, fmtMoneyWhole, fmtRelative, fmtWeekday, weekdayNames } from "./format";
 import type { Topic } from "./topics";
 import type { Overview } from "./types";
 
@@ -226,8 +226,7 @@ export function AreaPreview({ topic, ov, currency, health }: { topic: Topic; ov:
       const t = m.order_timing;
       if (!t || !t.byWeekday.some((n) => n > 0)) return null;
       const busiest = t.byWeekday.indexOf(Math.max(...t.byWeekday));
-      // 2026-01-05 is a Monday.
-      const labels = Array.from({ length: 7 }, (_, i) => fmtWeekday(`2026-01-${String(5 + i).padStart(2, "0")}`).slice(0, 2));
+      const labels = weekdayNames("short").map((d) => d.slice(0, 2));
       return (
         <>
           <MiniColumns values={t.byWeekday} emphasis={busiest} labels={labels} />

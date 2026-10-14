@@ -1,10 +1,13 @@
 "use client";
 import type { ReactNode } from "react";
+import { gradeRefundRate, gradeShipping, gradeStock, gradeTrend, type Health } from "@app/shared/health";
+import { biggestDropOff } from "@app/shared/journey";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { fmtDay, fmtMonth, fmtRange, fmtRelative, hourRange, plural } from "./format";
-import { STEP_LABEL } from "./funnel";
-import { AreaPreview } from "./previews";
-import { Icon } from "./icons";
+import { STEP_LABEL } from "./Funnel";
+import { AreaPreview } from "./Previews";
+import { Icon } from "./Icons";
+import { B, Change, changeWords } from "./narrative";
 import { Panel, Stat, type Tone } from "./primitives";
 import { topicInfo, topicSummary, type Topic } from "./topics";
 import type { Overview } from "./types";
@@ -13,8 +16,6 @@ import type { Overview } from "./types";
 // The whole business at a glance: one health check per area, worked out from the numbers the
 // page already has, each opening the area's own details.
 // ---------------------------------------------------------------------------
-
-export type Health = "attention" | "watch" | "good" | "info";
 
 export interface Check {
   id: string;
@@ -31,18 +32,11 @@ const HEALTH: Record<Health, { label: string; tone: Tone; order: number }> = {
   info: { label: "For your info", tone: "neutral", order: 3 },
 };
 
-/**
- * Rules, kept deliberately plain so a merchant can predict them (also in docs/kpis.md):
- * - a number that should grow: up or level is good, down by less than 10% is one to watch,
- *   down by 10% or more needs attention; nothing to compare with is information only;
- * - refunds: up to 5% of sales is good, up to 10% to watch, more needs attention;
- * - stock: anything sold out needs attention, anything running low is one to watch;
- * - shipping: an order waiting over 3 days needs attention, any waiting is one to watch.
- * While the only day picked is today, it isn't over, so it isn't graded against a whole day.
- */
-const trend = (d: number | null, running: boolean): Health => (running || d === null ? "info" : d >= 0 ? "good" : d > -0.1 ? "watch" : "attention");
+// The grading rules (trends, refunds, stock, shipping) live in @app/shared/health and are listed in
+// docs/kpis.md. While the only day picked is today, it isn't over, so trends aren't graded.
 
-const changeWords = (d: number | null) => (d === null ? "" : d === 0 ? ", level with the period before" : `, ${d > 0 ? "up" : "down"} ${fmtPct(Math.abs(d))} on the period before`);
+/** How this page says a change of exactly 0 (the ads panels say ", the same as the period before"). */
+const LEVEL = ", level with the period before";
 
 export function businessHealth(ov: Overview, currency: string): Check[] {
   const m = ov.modules;
@@ -54,37 +48,37 @@ export function businessHealth(ov: Overview, currency: string): Check[] {
   const s = m.sales_overview;
   if (s) {
     const c = s.current;
-    out.push({ id: "net", topic: "sales", area: "Sales", health: trend(s.deltas.netSales, running), text: `${money(c.netSales)} in net sales${changeWords(s.deltas.netSales)}.${still}` });
-    out.push({ id: "orders", topic: "sales", area: "Orders", health: trend(s.deltas.orders, running), text: `${plural(c.orders, "order")}${changeWords(s.deltas.orders)}.${still}` });
+    out.push({ id: "net", topic: "sales", area: "Sales", health: gradeTrend(s.deltas.netSales, running), text: `${money(c.netSales)} in net sales${changeWords(s.deltas.netSales, LEVEL)}.${still}` });
+    out.push({ id: "orders", topic: "sales", area: "Orders", health: gradeTrend(s.deltas.orders, running), text: `${plural(c.orders, "order")}${changeWords(s.deltas.orders, LEVEL)}.${still}` });
     if (c.averageOrderValue !== null) {
-      out.push({ id: "aov", topic: "sales", area: "Average order", health: trend(s.deltas.averageOrderValue, running), text: `${money(c.averageOrderValue)} per order${changeWords(s.deltas.averageOrderValue)}.` });
+      out.push({ id: "aov", topic: "sales", area: "Average order", health: gradeTrend(s.deltas.averageOrderValue, running), text: `${money(c.averageOrderValue)} per order${changeWords(s.deltas.averageOrderValue, LEVEL)}.` });
     }
   }
   const r = m.refunds?.current;
   if (r && r.refundRate !== null) {
-    const health: Health = r.refundRate <= 0.05 ? "good" : r.refundRate <= 0.1 ? "watch" : "attention";
+    const health: Health = gradeRefundRate(r.refundRate);
     out.push({ id: "refunds", topic: "sales", area: "Refunds", health, text: `${fmtPct(r.refundRate)} of sales refunded (${money(r.refunds)} on ${plural(r.refundedOrders, "order")}).` });
   }
   const f = m.funnel;
   if (f && f.visits > 0) {
-    out.push({ id: "conversion", topic: "shoppers", area: "Visitors who bought", health: trend(f.deltas.conversionRate, running), text: `${fmtPct(f.conversionRate)} of ${plural(f.visits, "visit")} ended in a purchase${changeWords(f.deltas.conversionRate)}.` });
+    out.push({ id: "conversion", topic: "shoppers", area: "Visitors who bought", health: gradeTrend(f.deltas.conversionRate, running), text: `${fmtPct(f.conversionRate)} of ${plural(f.visits, "visit")} ended in a purchase${changeWords(f.deltas.conversionRate, LEVEL)}.` });
   }
   const cu = m.customers;
   if (cu && cu.current.returningCustomerRate !== null) {
     const now = cu.current.returningCustomerRate;
     const before = cu.previous.returningCustomerRate;
     const d = before !== null && before > 0 ? (now - before) / before : null;
-    out.push({ id: "returning", topic: "customers", area: "Returning customers", health: trend(d, running), text: `${fmtPct(now)} of orders came from returning customers${before !== null ? ` (${fmtPct(before)} before)` : ""}.` });
+    out.push({ id: "returning", topic: "customers", area: "Returning customers", health: gradeTrend(d, running), text: `${fmtPct(now)} of orders came from returning customers${before !== null ? ` (${fmtPct(before)} before)` : ""}.` });
   }
   const inv = m.inventory?.current;
   if (inv && inv.trackedVariants > 0) {
-    const health: Health = inv.outOfStock > 0 ? "attention" : inv.lowStock > 0 ? "watch" : "good";
+    const health: Health = gradeStock(inv.outOfStock, inv.lowStock);
     const text = inv.outOfStock + inv.lowStock === 0 ? "Nothing is running low." : `${fmtNum(inv.outOfStock)} sold out and ${fmtNum(inv.lowStock)} running low.`;
     out.push({ id: "stock", topic: "stock", area: "Stock", health, text });
   }
   const ful = m.fulfillment;
   if (ful) {
-    const health: Health = ful.openNow === 0 ? "good" : (ful.oldestOpenDays ?? 0) > 3 ? "attention" : "watch";
+    const health: Health = gradeShipping(ful.openNow, ful.oldestOpenDays);
     const text = ful.openNow === 0 ? "Every order has shipped." : `${plural(ful.openNow, "order")} waiting to ship${ful.oldestOpenDays !== null ? `, the oldest for ${plural(ful.oldestOpenDays, "day")}` : ""}.`;
     out.push({ id: "shipping", topic: "shipping", area: "Shipping", health, text });
   }
@@ -124,8 +118,6 @@ function countsOf(checks: Check[]) {
   return { attention: n("attention"), watch: n("watch"), good: n("good"), graded: checks.filter((c) => c.health !== "info").length };
 }
 
-const B = ({ children }: { children: ReactNode }) => <strong className="font-semibold">{children}</strong>;
-
 const worst = (hs: Health[]): Health => hs.reduce<Health>((a, h) => (HEALTH[h].order < HEALTH[a].order ? h : a), "info");
 
 interface AreaRow {
@@ -149,7 +141,7 @@ export function areaRows(ov: Overview, currency: string, topics: Topic[]): AreaR
     if (t === "sales") text = own.find((c) => c.id === "net")?.text ?? text;
     if (t === "shoppers" && m.funnel && m.funnel.visits > 0) {
       const f = m.funnel;
-      const leak = f.steps.length > 1 ? f.steps.slice(0, -1).reduce((a, b) => (b.left > a.left ? b : a)) : null;
+      const leak = biggestDropOff(f.steps);
       text = `${fmtPct(f.conversionRate)} of ${plural(f.visits, "visit")} bought.${leak && leak.left > 0 ? ` Most who left stopped at “${STEP_LABEL[leak.step].toLowerCase()}” (${fmtNum(leak.left)}).` : ""}`;
     }
     return { topic: t, health, text };
@@ -167,7 +159,7 @@ export function StoreSummary({ ov, currency }: { ov: Overview; currency: string 
     <p className="text-sm leading-relaxed">
       From {fmtDay(ov.range.from, { year: false })} to {fmtDay(ov.range.to, { year: false })} you made <B>{fmtMoney(s.current.netSales, currency)}</B> from{" "}
       <B>{plural(s.current.orders, "order")}</B>
-      {changeWords(s.deltas.netSales)}.{" "}
+      {changeWords(s.deltas.netSales, LEVEL)}.{" "}
       {attention > 0 ? (
         <>
           <B>{plural(attention, "thing needs", "things need")} your attention</B>; they&apos;re at the top of the list below.
@@ -285,12 +277,6 @@ function Row({ label, now, before, change }: { label: string; now: string; befor
   );
 }
 
-function Change({ value, invert = false }: { value: number | null | undefined; invert?: boolean }) {
-  if (value === null || value === undefined) return <span className="text-muted">—</span>;
-  const good = invert ? value < 0 : value > 0;
-  return <span className={value === 0 ? "text-muted" : good ? "text-good" : "text-danger"}>{value > 0 ? "▲" : value < 0 ? "▼" : "■"} {fmtPct(Math.abs(value))}</span>;
-}
-
 function Fact({ label, value, note }: { label: string; value: ReactNode; note?: ReactNode }) {
   return (
     <div className="min-w-0">
@@ -331,7 +317,7 @@ export function OverviewDetail({ ov, currency, onOpen }: { ov: Overview; currenc
             <p>
               From {range} you made <B>{money(s.current.netSales)}</B> from <B>{plural(s.current.orders, "order")}</B>
               {s.current.averageOrderValue !== null ? <>, about {money(s.current.averageOrderValue)} each</> : null}
-              {changeWords(s.deltas.netSales)}.
+              {changeWords(s.deltas.netSales, LEVEL)}.
             </p>
           )}
           {f && f.visits > 0 && (

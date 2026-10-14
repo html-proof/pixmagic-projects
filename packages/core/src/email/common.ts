@@ -47,7 +47,7 @@ export const notFound = (what = "Not found") => new EmailError(what, 404, "not_f
  */
 export function recipientHash(workspaceId: string, email: string): string {
   const normalized = normalizeEmail(email) ?? email.trim().toLowerCase();
-  return createHmac("sha256", env().OTP_PEPPER).update(`email:${workspaceId}:${normalized}`).digest("hex");
+  return createHmac("sha256", env().CUSTOMER_HASH_KEY).update(`email:${workspaceId}:${normalized}`).digest("hex");
 }
 
 /** The host part of APP_URL: our EHLO name and the right-hand side of our Message-IDs. */

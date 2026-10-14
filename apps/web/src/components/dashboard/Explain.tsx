@@ -1,10 +1,12 @@
 "use client";
 import type { ReactNode } from "react";
+import { gradeRefundRate, shippingIsLate } from "@app/shared/health";
+import { bestEntryPage, biggestDropOff, dropOffSection } from "@app/shared/journey";
 import { dailyBreakdown } from "@app/shared/sales";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
-import { SECTION_LABEL, STEP_LABEL } from "./funnel";
-import { hourRange, plural } from "./format";
-import { Icon } from "./icons";
+import { SECTION_LABEL, STEP_LABEL } from "./Funnel";
+import { hourRange, plural, weekdayName } from "./format";
+import { Icon } from "./Icons";
 import { Panel } from "./primitives";
 import type { Topic } from "./topics";
 import type { Overview } from "./types";
@@ -16,8 +18,6 @@ import type { Overview } from "./types";
 // ---------------------------------------------------------------------------
 
 type Terms = Array<[string, ReactNode]>;
-
-const weekdayName = (w: number) => new Intl.DateTimeFormat(undefined, { weekday: "long", timeZone: "UTC" }).format(new Date(Date.UTC(2026, 0, 5 + w)));
 
 const TERMS: Record<Topic, Terms> = {
   overview: [
@@ -144,14 +144,14 @@ function nextSteps(topic: Topic, ov: Overview, currency: string): ReactNode[] {
       if (d !== null && d < 0) out.push(<>Sales are down {fmtPct(-d)}. Open <b>Shoppers</b>: if visits fell, fewer people came; if visits held but fewer bought, look at the store itself.</>);
       if (d !== null && d > 0) out.push(<>Sales are up {fmtPct(d)}. <b>Best sellers</b> shows which products drove it; keep those in stock.</>);
       const r = m.refunds?.current;
-      if (r?.refundRate && r.refundRate > 0.05) out.push(<>Refunds are {fmtPct(r.refundRate)} of sales ({money(r.refunds)}). <b>Recent orders</b> links each order to Shopify to see why.</>);
+      if (r?.refundRate && gradeRefundRate(r.refundRate) !== "good") out.push(<>Refunds are {fmtPct(r.refundRate)} of sales ({money(r.refunds)}). <b>Recent orders</b> links each order to Shopify to see why.</>);
       const b = dailyBreakdown(s.series, ov.today, ov.data?.oldestOrderDay ?? null);
-      if (b.bestWeekday) out.push(<>{weekdayName(b.bestWeekday.weekday)}s sell best ({money(b.bestWeekday.average)} on average): a good day for emails, posts or new products.</>);
+      if (b.bestWeekday) out.push(<>{weekdayName(b.bestWeekday.weekday, "long")}s sell best ({money(b.bestWeekday.average)} on average): a good day for emails, posts or new products.</>);
       if (topic === "overview") {
         const inv = m.inventory?.current;
         if (inv && inv.outOfStock > 0) out.push(<>{plural(inv.outOfStock, "variant is", "variants are")} sold out. <b>Stock</b> lists what to reorder first.</>);
         const f = m.fulfillment;
-        if (f && (f.oldestOpenDays ?? 0) > 3) out.push(<>An order has waited {plural(f.oldestOpenDays!, "day")} to ship. <b>Shipping</b> shows what&apos;s still open.</>);
+        if (f && shippingIsLate(f.oldestOpenDays)) out.push(<>An order has waited {plural(f.oldestOpenDays!, "day")} to ship. <b>Shipping</b> shows what&apos;s still open.</>);
       }
       break;
     }
@@ -190,9 +190,9 @@ function nextSteps(topic: Topic, ov: Overview, currency: string): ReactNode[] {
     case "shoppers": {
       const f = m.funnel;
       if (!f || f.visits === 0) break;
-      const leak = f.steps.length > 1 ? f.steps.slice(0, -1).reduce((a, b) => (b.left > a.left ? b : a)) : null;
+      const leak = biggestDropOff(f.steps);
       if (leak && leak.left > 0) {
-        const where = leak.leftFrom.find((x) => x.section)?.section;
+        const where = dropOffSection(leak);
         const hint: Record<string, string> = {
           visited: "make products easier to find from the pages people land on",
           viewed_product: "check product photos, descriptions, price and the shipping cost shown",
@@ -205,7 +205,7 @@ function nextSteps(topic: Topic, ov: Overview, currency: string): ReactNode[] {
           </>,
         );
       }
-      const bestEntry = [...f.entryPages].filter((p) => p.visits >= 5).sort((a, b) => b.purchases / b.visits - a.purchases / a.visits)[0];
+      const bestEntry = bestEntryPage(f.entryPages);
       if (bestEntry && bestEntry.purchases > 0) out.push(<>Visits that start on {bestEntry.path === "/" ? "your home page" : bestEntry.path} buy most often ({fmtPct(bestEntry.purchases / bestEntry.visits)}): it&apos;s a good page to link to from ads and emails.</>);
       break;
     }
@@ -214,7 +214,7 @@ function nextSteps(topic: Topic, ov: Overview, currency: string): ReactNode[] {
       if (!t?.busiestDay || t.busiestHour === null) break;
       out.push(<>Most orders come on {t.busiestDay}s around {hourRange(t.busiestHour)}. Send emails or post a little before then to reach people when they buy.</>);
       const total = t.byWeekday.reduce((a, b) => a + b, 0);
-      if (total) out.push(<>{weekdayName(t.byWeekday.indexOf(Math.min(...t.byWeekday)))} is your quietest day: a good day for restocking and admin.</>);
+      if (total) out.push(<>{weekdayName(t.byWeekday.indexOf(Math.min(...t.byWeekday)), "long")} is your quietest day: a good day for restocking and admin.</>);
       break;
     }
     case "channels": {

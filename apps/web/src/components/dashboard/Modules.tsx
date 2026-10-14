@@ -1,7 +1,8 @@
 "use client";
+import { gradeCover, gradeShipping, type Grade } from "@app/shared/health";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
-import { BarRow, ColumnChart, StackedBar } from "./charts";
-import { fmtDateTime, fmtDuration, hourLabel, hourRange, humanize, plural } from "./format";
+import { BarRow, ColumnChart, StackedBar } from "./Charts";
+import { fmtDateTime, fmtDuration, hourLabel, hourRange, humanize, plural, weekdayNames } from "./format";
 import { Badge, Empty, Panel, Stat, type Tone } from "./primitives";
 import type {
   CatalogModule,
@@ -13,6 +14,9 @@ import type {
   RecentOrder,
   TrafficModule,
 } from "./types";
+
+/** How a grade (@app/shared/health) is colored. */
+const GRADE_TONE: Record<Grade, Tone> = { good: "good", watch: "warn", attention: "danger" };
 
 export function ChannelsCard({ m, currency }: { m: ChannelsModule; currency: string }) {
   return (
@@ -109,19 +113,9 @@ export function TrafficCard({ m, currency }: { m: TrafficModule; currency: strin
   );
 }
 
-const shortWeekdays = () => {
-  const f = new Intl.DateTimeFormat(undefined, { weekday: "short", timeZone: "UTC" });
-  // 2026-01-05 is a Monday.
-  return Array.from({ length: 7 }, (_, i) => f.format(new Date(Date.UTC(2026, 0, 5 + i))));
-};
-const longWeekdays = () => {
-  const f = new Intl.DateTimeFormat(undefined, { weekday: "long", timeZone: "UTC" });
-  return Array.from({ length: 7 }, (_, i) => f.format(new Date(Date.UTC(2026, 0, 5 + i))));
-};
-
 export function OrderTimingCard({ m, timezone }: { m: OrderTimingModule; timezone: string }) {
   const total = m.byWeekday.reduce((a, b) => a + b, 0);
-  const days = longWeekdays();
+  const days = weekdayNames("long");
   const busiestDay = m.byWeekday.indexOf(Math.max(...m.byWeekday));
   const orders = (n: number) => plural(n, "order");
   return (
@@ -143,7 +137,7 @@ export function OrderTimingCard({ m, timezone }: { m: OrderTimingModule; timezon
         <Empty>Not enough orders in these dates to spot a pattern yet.</Empty>
       ) : (
         <div className="grid gap-6">
-          <ColumnChart label="Orders by day of the week" values={m.byWeekday} labels={days} tickLabels={shortWeekdays()} highlight={total ? busiestDay : null} format={orders} />
+          <ColumnChart label="Orders by day of the week" values={m.byWeekday} labels={days} tickLabels={weekdayNames("short")}highlight={total ? busiestDay : null} format={orders} />
           <ColumnChart
             label="Orders by hour of the day"
             values={m.byHour}
@@ -161,7 +155,7 @@ export function OrderTimingCard({ m, timezone }: { m: OrderTimingModule; timezon
 export function FulfillmentCard({ m }: { m: FulfillmentModule }) {
   const c = m.current;
   const other = Math.max(0, c.orders - c.fulfilled - c.partiallyFulfilled - c.unfulfilled);
-  const waitingTone: Tone = m.openNow === 0 ? "good" : (m.oldestOpenDays ?? 0) > 3 ? "danger" : "warn";
+  const waitingTone: Tone = GRADE_TONE[gradeShipping(m.openNow, m.oldestOpenDays)];
   return (
     <Panel id="fulfillment" title="Fulfillment" help="How quickly orders ship, and what's still waiting.">
       <div className="grid gap-3 sm:grid-cols-3">
@@ -310,7 +304,7 @@ export function RecentOrdersCard({ items, currency, timezone, shopDomain }: { it
 }
 
 const coverLabel = (d: number | null) => (d === null ? "No recent sales" : d < 1 ? "Under a day" : `About ${plural(Math.round(d), "day")}`);
-const coverTone = (d: number | null, qty: number): Tone => (d !== null && d < 7) || qty <= 2 ? "danger" : "warn";
+const coverTone = (d: number | null, qty: number): Tone => GRADE_TONE[gradeCover(d, qty)];
 
 export function InventoryCard({ m, currency }: { m: InventoryModule; currency: string }) {
   const c = m.current;

@@ -2,7 +2,7 @@ import type { Context } from "hono";
 import { getCookie } from "hono/cookie";
 import { systemDb, type User } from "@app/db";
 import { can, sha256Hex, type Permission, type Role } from "@app/shared";
-import { env, logger, type BlobStore, type Coord, type FetchLike, type Mailer, type Queues } from "@app/core";
+import { addLogContext, env, logger, type BlobStore, type Coord, type FetchLike, type Mailer, type Queues } from "@app/core";
 import { FirebaseUnavailableError, type AuthProvider } from "./authProvider.js";
 
 export interface Deps {
@@ -38,6 +38,7 @@ export class HttpError extends Error {
     public code = "error",
   ) {
     super(message);
+    this.name = "HttpError";
   }
 }
 
@@ -103,6 +104,7 @@ export async function loadUser(c: Ctx, deps: Deps): Promise<User | null> {
       user = await systemDb.user.update({ where: { id: user.id }, data: { emailVerified: true } });
     }
     c.set("user", user);
+    addLogContext({ userId: user.id });
     return user;
   } catch (err) {
     logger.error({ err, path: c.req.path }, "session user lookup failed");
@@ -134,6 +136,7 @@ export async function requireWorkspace(c: Ctx, deps: Deps, workspaceId: string, 
     if (!key || key.revokedAt || key.workspaceId !== workspaceId) throw new HttpError(404, "Not found", "not_found");
     if (!can("viewer", perm)) throw new HttpError(403, "API keys are read-only", "forbidden");
     await systemDb.apiKey.update({ where: { id: key.id }, data: { lastUsedAt: new Date() } }).catch(() => {});
+    addLogContext({ workspaceId, apiKeyId: key.id });
     return { workspaceId, role: "viewer", user: null };
   }
   const user = await requireUser(c, deps);
@@ -142,6 +145,7 @@ export async function requireWorkspace(c: Ctx, deps: Deps, workspaceId: string, 
   });
   if (!m) throw new HttpError(404, "Not found", "not_found");
   if (!can(m.role, perm)) throw new HttpError(403, "You don't have permission to do that", "forbidden");
+  addLogContext({ workspaceId });
   return { workspaceId, role: m.role, user };
 }
 

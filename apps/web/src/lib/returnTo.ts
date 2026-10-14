@@ -12,6 +12,7 @@ const TTL_MS = 60 * 60_000;
  * "/\t/evil.com" is too. Neither belongs in a path of ours.
  */
 export const isSafePath = (path: unknown): path is string =>
+  // eslint-disable-next-line no-control-regex -- rejecting control characters is the point
   typeof path === "string" && path.startsWith("/") && !path.startsWith("//") && !/[\\\u0000-\u001f\u007f]/.test(path);
 const safe = isSafePath;
 

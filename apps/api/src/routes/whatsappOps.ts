@@ -42,6 +42,7 @@ import {
 import { body, clientIp, HttpError, requireWorkspace, type Deps } from "../context.js";
 import type { App } from "../app.js";
 import { limit, LIMITS } from "../rateLimit.js";
+import { cursorPage } from "../pagination.js";
 import { base, sampleValues, waStore } from "./whatsappCommon.js";
 
 /** Day boundaries from ?from=YYYY-MM-DD&to=YYYY-MM-DD (UTC), each optional. */
@@ -110,7 +111,7 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
     await requireWorkspace(c, deps, ws, "customers:contact");
     await waStore(ws, storeId);
     const q = c.req.query();
-    const take = Math.min(100, Math.max(1, Number(q.limit) || 50));
+    const paging = cursorPage(q, 50);
     const created = range(q);
     const where: Prisma.WhatsappMessageWhereInput = {
       storeId,
@@ -123,9 +124,9 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
       ...(Object.keys(created).length ? { createdAt: created } : {}),
     };
     const rows = await withTenant(ws, (tx) =>
-      tx.whatsappMessage.findMany({ where, orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: take + 1, ...(q.cursor ? { cursor: { id: q.cursor }, skip: 1 } : {}) }),
+      tx.whatsappMessage.findMany({ where, orderBy: [{ createdAt: "desc" }, { id: "desc" }], ...paging.args }),
     );
-    const page = rows.slice(0, take);
+    const { items: page, nextCursor } = paging.split(rows);
     const campaignIds = [...new Set(page.map((m) => m.campaignId).filter((x): x is string => !!x))];
     const campaigns = campaignIds.length ? await withTenant(ws, (tx) => tx.whatsappCampaign.findMany({ where: { id: { in: campaignIds }, workspaceId: ws }, select: { id: true, name: true } })) : [];
     return c.json({
@@ -160,7 +161,7 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
         canRetry: !!m.paramsEnc && ["failed", "skipped", "cancelled"].includes(m.status),
         canCancel: m.status === "scheduled",
       })),
-      nextCursor: rows.length > take ? page[page.length - 1]!.id : null,
+      nextCursor,
     });
   });
 
@@ -201,16 +202,15 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
     await requireWorkspace(c, deps, ws, "customers:contact");
     await waStore(ws, storeId);
     const q = c.req.query();
-    const take = Math.min(100, Math.max(1, Number(q.limit) || 30));
+    const paging = cursorPage(q, 30);
     const rows = await withTenant(ws, (tx) =>
       tx.orderTracking.findMany({
         where: { storeId, workspaceId: ws, ...(q.status ? { status: q.status } : {}), ...(q.q ? { orderName: { contains: q.q.slice(0, 40), mode: "insensitive" } } : {}) },
         orderBy: [{ orderCreatedAt: "desc" }, { id: "desc" }],
-        take: take + 1,
-        ...(q.cursor ? { cursor: { id: q.cursor }, skip: 1 } : {}),
+        ...paging.args,
       }),
     );
-    const page = rows.slice(0, take);
+    const { items: page, nextCursor } = paging.split(rows);
     const ids = page.map((t) => t.id);
     const contactIds = page.map((t) => t.contactId).filter((x): x is string => !!x);
     const [contacts, msgs] = await withTenant(ws, (tx) =>
@@ -231,7 +231,7 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
         liveTracking: t.carrierEvents,
         messages: Object.fromEntries(msgs.filter((m) => m.trackingId === t.id).map((m) => [m.status, m._count._all])),
       })),
-      nextCursor: rows.length > take ? page[page.length - 1]!.id : null,
+      nextCursor,
     });
   });
 
@@ -295,19 +295,18 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
     await requireWorkspace(c, deps, ws, "customers:contact");
     await waStore(ws, storeId);
     const q = c.req.query();
-    const take = Math.min(100, Math.max(1, Number(q.limit) || 30));
+    const paging = cursorPage(q, 30);
     const [rows, counts] = await withTenant(ws, (tx) =>
       Promise.all([
         tx.abandonedCheckout.findMany({
           where: { storeId, workspaceId: ws, ...(q.status ? { status: { in: q.status.split(",").slice(0, 6) } } : {}) },
           orderBy: [{ lastActivityAt: "desc" }, { id: "desc" }],
-          take: take + 1,
-          ...(q.cursor ? { cursor: { id: q.cursor }, skip: 1 } : {}),
+          ...paging.args,
         }),
         tx.abandonedCheckout.groupBy({ by: ["status"], where: { storeId, workspaceId: ws }, _count: { _all: true } }),
       ]),
     );
-    const page = rows.slice(0, take);
+    const { items: page, nextCursor } = paging.split(rows);
     const reminders = await withTenant(ws, (tx) =>
       tx.whatsappMessage.findMany({
         where: { checkoutId: { in: page.map((r) => r.id) }, workspaceId: ws },
@@ -334,7 +333,7 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
         completedAt: r.completedAt,
         reminders: reminders.filter((m) => m.checkoutId === r.id).map(({ checkoutId: _x, ...m }) => m),
       })),
-      nextCursor: rows.length > take ? page[page.length - 1]!.id : null,
+      nextCursor,
     });
   });
 
@@ -395,7 +394,7 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
     await requireWorkspace(c, deps, ws, "customers:contact");
     await waStore(ws, storeId);
     const q = c.req.query();
-    const take = Math.min(100, Math.max(1, Number(q.limit) || 30));
+    const paging = cursorPage(q, 30);
     // A rating that isn't 1-5 is ignored, like a malformed date in range().
     const rating = Number(q.rating);
     const scope = { storeId, workspaceId: ws };
@@ -404,15 +403,14 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
         tx.customerReview.findMany({
           where: { ...scope, ...(q.status ? { status: q.status } : {}), ...(Number.isInteger(rating) && rating >= 1 && rating <= 5 ? { rating } : {}) },
           orderBy: [{ submittedAt: "desc" }, { id: "desc" }],
-          take: take + 1,
-          ...(q.cursor ? { cursor: { id: q.cursor }, skip: 1 } : {}),
+          ...paging.args,
         }),
         tx.customerReview.groupBy({ by: ["status"], where: scope, _count: { _all: true } }),
         tx.customerReview.groupBy({ by: ["rating", "status"], where: scope, _count: { _all: true } }),
         tx.customerReview.aggregate({ where: { ...scope, status: { in: ["published", "pending"] } }, _avg: { rating: true }, _count: { _all: true } }),
       ]),
     );
-    const page = rows.slice(0, take);
+    const { items: page, nextCursor } = paging.split(rows);
     return c.json({
       summary: {
         // Rejected reviews are left out of the average, and counted below so suppression stays visible.
@@ -435,7 +433,7 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
         editedAt: r.editedAt,
         moderatedAt: r.moderatedAt,
       })),
-      nextCursor: rows.length > take ? page[page.length - 1]!.id : null,
+      nextCursor,
     });
   });
 
@@ -476,22 +474,33 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
         tx.whatsappMessage.groupBy({ by: ["campaignId"], where: { campaignId: { in: ids }, workspaceId: ws, attributedOrderId: { not: null } }, _count: { _all: true }, _sum: { attributedRevenue: true } }),
       ]),
     );
+    // Orders that used each campaign's discount code while it ran (and its attribution days after),
+    // for every campaign with a code at once: one query, not one per campaign.
+    const now = Date.now();
+    const windows = campaigns.flatMap((camp) =>
+      camp.discountCode && camp.startedAt
+        ? [{ id: camp.id, code: camp.discountCode, since: camp.startedAt.toISOString(), until: new Date((camp.endAt?.getTime() ?? now) + attributionDays * 86_400_000).toISOString() }]
+        : [],
+    );
+    const codeRows = windows.length
+      ? await withTenant(ws, (tx) =>
+          tx.$queryRaw<Array<{ id: string; orders: number; revenue: string }>>`
+            SELECT w.id, COUNT(o.id)::int AS orders, COALESCE(SUM(o.total_price), 0)::text AS revenue
+            FROM jsonb_to_recordset(${JSON.stringify(windows)}::jsonb) AS w(id text, code text, since text, until text)
+            LEFT JOIN orders o
+              ON o.store_id = ${storeId} AND o.workspace_id = ${ws} AND o.cancelled_at IS NULL
+             AND o.shopify_created_at >= (w.since)::timestamptz AT TIME ZONE 'UTC'
+             AND o.shopify_created_at < (w.until)::timestamptz AT TIME ZONE 'UTC'
+             AND EXISTS (SELECT 1 FROM unnest(o.discount_codes) code WHERE lower(code) = lower(w.code))
+            GROUP BY w.id`,
+        )
+      : [];
     const out = new Map<string, Record<string, unknown>>();
     for (const camp of campaigns) {
       const n = (s: string[]) => byStatus.filter((b) => b.campaignId === camp.id && s.includes(b.status)).reduce((sum, b) => sum + b._count._all, 0);
       const a = attributed.find((x) => x.campaignId === camp.id);
-      let codeOrders: { orders: number; revenue: number } | null = null;
-      if (camp.discountCode && camp.startedAt) {
-        const until = new Date((camp.endAt ?? new Date()).getTime() + attributionDays * 86_400_000);
-        const [r] = await withTenant(ws, (tx) =>
-          tx.$queryRaw<Array<{ orders: number; revenue: string }>>`
-            SELECT COUNT(*)::int AS orders, COALESCE(SUM(total_price), 0)::text AS revenue FROM orders
-            WHERE store_id = ${storeId} AND workspace_id = ${ws} AND cancelled_at IS NULL
-              AND shopify_created_at >= ${camp.startedAt} AND shopify_created_at < ${until}
-              AND EXISTS (SELECT 1 FROM unnest(discount_codes) code WHERE lower(code) = lower(${camp.discountCode}))`,
-        );
-        codeOrders = { orders: r?.orders ?? 0, revenue: Number(r?.revenue ?? 0) };
-      }
+      const r = codeRows.find((x) => x.id === camp.id);
+      const codeOrders = r ? { orders: r.orders, revenue: Number(r.revenue) } : null;
       out.set(camp.id, {
         recipients: n(["scheduled", "sending", "sent", "delivered", "read", "failed", "skipped", "cancelled"]),
         waiting: n(["scheduled", "sending"]),

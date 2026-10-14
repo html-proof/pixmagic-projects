@@ -20,7 +20,6 @@
     "test:prepare": "prisma migrate deploy && pnpm run test:grants"
   },
   "dependencies": {
-    "@app/shared": "workspace:*",
     "@prisma/adapter-pg": "^7.10.0",
     "@prisma/client": "^7.10.0",
     "pg": "^8.16.0"

@@ -133,6 +133,12 @@ export async function resolveAlerts(storeId: string, codes: string[]): Promise<n
   return count;
 }
 
+/**
+ * Record a change in the workspace's audit log. Best effort, and never throws: every caller runs
+ * it after the change it records has been committed, so failing here would turn that success into
+ * an error (a 500 the client retries, repeating the change; a queue job retried for work already
+ * done). A failure is logged, with what was being recorded, instead.
+ */
 export async function audit(input: {
   workspaceId: string;
   actorUserId?: string | null;
@@ -142,15 +148,19 @@ export async function audit(input: {
   metadata?: Record<string, unknown>;
   ip?: string;
 }) {
-  await systemDb.auditLog.create({
-    data: {
-      workspaceId: input.workspaceId,
-      actorUserId: input.actorUserId ?? null,
-      action: input.action,
-      targetType: input.targetType,
-      targetId: input.targetId,
-      metadata: (input.metadata ?? undefined) as never,
-      ip: input.ip,
-    },
-  });
+  try {
+    await systemDb.auditLog.create({
+      data: {
+        workspaceId: input.workspaceId,
+        actorUserId: input.actorUserId ?? null,
+        action: input.action,
+        targetType: input.targetType,
+        targetId: input.targetId,
+        metadata: (input.metadata ?? undefined) as never,
+        ip: input.ip,
+      },
+    });
+  } catch (err) {
+    logger.error({ err, workspaceId: input.workspaceId, action: input.action, targetType: input.targetType, targetId: input.targetId }, "audit log write failed");
+  }
 }

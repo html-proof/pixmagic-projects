@@ -197,4 +197,18 @@ describe("app_subscriptions/update", () => {
     await applySubscriptionUpdate(ws, CURRENT, "cancelled");
     expect(await sub()).toMatchObject({ plan: "free", status: "active", shopifyChargeId: null, pendingPlan: "scale" });
   });
+
+  it("keeps the new plan when the old charge's cancellation is processed at the same time as the activation", async () => {
+    // Shopify sends both together when a plan change is approved. Processed concurrently, each
+    // read the row before the other wrote; the cancellation's unconditional write then set the
+    // workspace back to free after the new plan had been applied.
+    for (let i = 0; i < 10; i++) {
+      await systemDb.subscription.update({
+        where: { workspaceId: ws },
+        data: { plan: "growth", status: "active", shopifyChargeId: CURRENT, pendingPlan: "scale", pendingChargeId: NEXT },
+      });
+      await Promise.all([applySubscriptionUpdate(ws, NEXT, "active"), applySubscriptionUpdate(ws, CURRENT, "cancelled")]);
+      expect(await sub()).toMatchObject({ plan: "scale", status: "active", shopifyChargeId: NEXT, pendingPlan: null, pendingChargeId: null });
+    }
+  });
 });

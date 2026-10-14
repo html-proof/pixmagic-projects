@@ -86,6 +86,12 @@ export const LIMITS = {
   clickIp: { max: 300, windowSec: 60 },
   /** Meta's webhook verification handshake (GET), per IP. */
   waVerifyIp: { max: 30, windowSec: 60 },
+  /**
+   * WhatsApp webhook deliveries not signed by Insights' own app, per IP: each one costs a database
+   * read to find the connection whose secret might sign it. Same ceiling as the global API limit,
+   * which webhooks are exempt from.
+   */
+  waUnsignedIp: { max: 300, windowSec: 60 },
 } as const satisfies Record<string, Limit>;
 
 /** Fixed-window limiter. Throws 429 once more than `max` hits occur within `windowSec`. */

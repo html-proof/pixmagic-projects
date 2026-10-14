@@ -242,3 +242,26 @@ export function summarizeJourney(stepRows: StepExitRow[], sectionRows: SectionRo
     exits: visits - purchases,
   };
 }
+
+// ---- Reading the summary (the dashboard's sentences) ---------------------------------------
+
+/**
+ * The step most visits stopped at without going further: the biggest drop-off. The last step
+ * (a purchase) isn't a drop-off; on a tie the earlier step wins. Null with fewer than two steps.
+ */
+export function biggestDropOff(steps: FunnelStepSummary[]): FunnelStepSummary | null {
+  return steps.length > 1 ? steps.slice(0, -1).reduce((a, b) => (b.left > a.left ? b : a)) : null;
+}
+
+/** The part of the site most of a step's leavers were last on, when it was recorded. */
+export function dropOffSection(step: FunnelStepSummary | null | undefined): SiteSection | null | undefined {
+  return step?.leftFrom.find((x) => x.section)?.section;
+}
+
+/** An entry page needs this many visits before its share of buyers says anything. */
+const MIN_ENTRY_VISITS = 5;
+
+/** The landing page whose visits bought most often (of those with at least 5 visits); on a tie the first listed. */
+export function bestEntryPage(pages: JourneyPageRow[]): JourneyPageRow | undefined {
+  return pages.filter((p) => p.visits >= MIN_ENTRY_VISITS).sort((a, b) => b.purchases / b.visits - a.purchases / a.visits)[0];
+}

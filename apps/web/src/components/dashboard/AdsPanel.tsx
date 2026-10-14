@@ -1,15 +1,16 @@
 "use client";
 import Link from "next/link";
 import type { ReactNode } from "react";
-import { weekdayOf } from "@app/shared/sales";
 import { GoogleIcon, MetaIcon } from "@/components/BrandIcons";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
-import { fmtDay, fmtLongDay, fmtMoneyCompact, fmtMoneyWhole, fmtRange, fmtRelative, fmtSpan, fmtTimes, fmtWeekday, plural } from "./format";
-import { Icon } from "./icons";
-import { GoogleReportPanel } from "./googleReport";
-import { MetaReportPanel } from "./metaReport";
+import { AccountStatus, accountGroups, dailyMoneyColumns } from "./adsCommon";
+import { fmtLongDay, fmtMoneyCompact, fmtMoneyWhole, fmtRange, fmtSpan, fmtTimes, plural } from "./format";
+import { Icon } from "./Icons";
+import { GoogleReportPanel } from "./GoogleReport";
+import { MetaReportPanel } from "./MetaReport";
+import { B, changeWords } from "./narrative";
 import { Delta, NeutralDelta, Panel, Stat } from "./primitives";
-import { ColumnsWithTotal, type Column } from "./salesBreakdown";
+import { ColumnsWithTotal } from "./SalesBreakdown";
 import type { AdsModule, Overview } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -21,35 +22,9 @@ const PLATFORM: Record<"meta" | "google", { name: string; Icon: (p: { size?: num
   google: { name: "Google Ads", Icon: GoogleIcon },
 };
 
-const B = ({ children }: { children: ReactNode }) => <strong className="font-semibold">{children}</strong>;
-const changeWords = (d: number | null) => (d === null ? "" : d === 0 ? ", the same as the period before" : `, ${d > 0 ? "up" : "down"} ${fmtPct(Math.abs(d))} on the period before`);
-
 function SpendChart({ a, ov }: { a: AdsModule; ov: Overview }) {
   const money = (n: number) => fmtMoney(n, a.currency);
-  const n = a.series.length;
-  const max = Math.max(0, ...a.series.map((d) => d.spend));
-  let running = 0;
-  const columns: Column[] = a.series.map((d) => {
-    running = Math.round((running + d.spend) * 100) / 100;
-    const weekend = weekdayOf(d.day) >= 5;
-    const today = d.day === ov.today;
-    return {
-      key: d.day,
-      value: d.spend,
-      fill: d.spend === max && max > 0 ? "var(--viz-tier-3)" : "var(--viz-tier-2)",
-      faded: today,
-      shaded: weekend,
-      running,
-      tick: {
-        top: n <= 31 ? String(Number(d.day.slice(8))) : fmtDay(d.day, { year: false }),
-        bottom: today ? "Today" : fmtWeekday(d.day),
-        strong: weekend || today,
-        major: n <= 31 || (n <= 120 ? weekdayOf(d.day) === 0 : d.day.endsWith("-01")),
-      },
-      label: d.spend ? fmtMoneyWhole(d.spend, a.currency) : undefined,
-      keepLabel: d.spend === max && max > 0,
-    };
-  });
+  const columns = dailyMoneyColumns(a.series, (d) => d.spend, ov.today, a.currency);
   return (
     <ColumnsWithTotal
       columns={columns}
@@ -81,10 +56,7 @@ export function AdsDetail({ ov }: { ov: Overview }) {
   const a = ov.modules.ads!;
   const c = a.current;
   const money = (n: number) => fmtMoney(n, a.currency);
-  const left = a.accounts.filter((acc) => !acc.counted);
-  // Never synced: still fetching while the account is fine; stuck if its first sync failed.
-  const waiting = a.accounts.filter((acc) => acc.counted && !acc.lastSyncedAt && acc.status === "active");
-  const failing = a.accounts.filter((acc) => acc.counted && !acc.lastSyncedAt && acc.status !== "active");
+  const { left, waiting, failing } = accountGroups(a.accounts);
   const split = a.byProvider.length > 1 ? a.byProvider.map((p) => `${PLATFORM[p.provider].name} ${money(p.spend)}`).join(", ") : null;
 
   return (
@@ -105,7 +77,7 @@ export function AdsDetail({ ov }: { ov: Overview }) {
           ) : (
             <>
               <p>
-                You spent <B>{money(c.spend)}</B> on ads{split ? <> ({split})</> : null}{changeWords(a.deltas.spend)}.
+                You spent <B>{money(c.spend)}</B> on ads{split ? <> ({split})</> : null}{changeWords(a.deltas.spend, ", the same as the period before")}.
               </p>
               <p>
                 They brought <B>{plural(c.clicks, "click")}</B>{c.cpc !== null ? <>, about {money(c.cpc)} each</> : null}
@@ -240,9 +212,7 @@ export function AdsDetail({ ov }: { ov: Overview }) {
             return (
               <li key={acc.id} className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
                 <span className="inline-flex items-center gap-2"><P.Icon size={16} /><span className="font-medium">{acc.name ?? acc.accountId}</span><span className="text-xs text-muted">{acc.accountId}{acc.currency ? ` · ${acc.currency}` : ""}</span></span>
-                <span className={`text-xs ${acc.status === "reconnect" ? "text-danger" : acc.status === "error" ? "text-warn" : "text-muted"}`}>
-                  {acc.status === "reconnect" ? "Needs reconnecting" : acc.status === "error" ? "Sync problem" : acc.lastSyncedAt ? `Synced ${fmtRelative(acc.lastSyncedAt)}` : "Fetching history…"}
-                </span>
+                <AccountStatus acc={acc} />
               </li>
             );
           })}

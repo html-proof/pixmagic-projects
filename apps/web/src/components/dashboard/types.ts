@@ -1,4 +1,4 @@
-/** Response of GET /workspaces/:ws/stores/:storeId/overview (see apps/api/src/routes/dashboard.ts). */
+/** Response of GET /workspaces/:ws/stores/:storeId/overview (built by packages/core/src/reports/overview.ts, served by apps/api/src/routes/dashboard.ts). */
 import type { JourneyPageRow, JourneySummary } from "@app/shared/journey";
 import type { SalesDay, YearBreakdown } from "@app/shared/sales";
 

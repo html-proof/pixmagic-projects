@@ -1,9 +1,9 @@
 "use client";
 import type { FunnelStep, FunnelStepSummary, JourneyPageRow, SectionSummary, SiteSection } from "@app/shared/journey";
 import { fmtNum, fmtPct } from "@/lib/api";
-import { BarRow } from "./charts";
+import { BarRow } from "./Charts";
 import { plural } from "./format";
-import { AnimatedNumber } from "./motion";
+import { AnimatedNumber } from "./Motion";
 import { Badge, Delta, Empty, Panel, Stat } from "./primitives";
 import type { FunnelModule } from "./types";
 

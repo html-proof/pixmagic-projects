@@ -112,6 +112,20 @@ describe("webhook processing", () => {
     expect(o.customerKey).toMatch(/^[0-9a-f]{64}$/);
   });
 
+  it("keeps the newer copy when two deliveries of one order are processed at the same time", async () => {
+    await makeStore();
+    const newer = order({ updated_at: "2026-03-01T16:00:00Z", cancelled_at: "2026-03-01T16:00:00Z" });
+    const older = order({ updated_at: "2026-03-01T15:30:00Z", cancelled_at: null });
+    for (let i = 0; i < 8; i++) {
+      await systemDb.order.deleteMany();
+      await Promise.all(i % 2 ? [webhook("orders/updated", newer), webhook("orders/updated", older)] : [webhook("orders/updated", older), webhook("orders/updated", newer)]);
+      const o = await systemDb.order.findFirstOrThrow();
+      expect(o.shopifyUpdatedAt.toISOString()).toBe("2026-03-01T16:00:00.000Z");
+      expect(o.cancelledAt).not.toBeNull();
+      expect(await systemDb.orderLineItem.count()).toBe(1);
+    }
+  });
+
   it("ignores stale (out-of-order) updates", async () => {
     await makeStore();
     await webhook("orders/updated", order({ updated_at: "2026-03-01T16:00:00Z", cancelled_at: "2026-03-01T16:00:00Z" }));
@@ -169,6 +183,29 @@ describe("webhook processing", () => {
     expect(kinds).toContain("install_pixel");
     // A full re-import: the missing customer hash goes back as far as the history does.
     expect(queues.sent.sync.find((j) => j.kind === "orders")?.sinceDays).toBeUndefined();
+  });
+
+  it("app/scopes_update still queues the import when its first attempt failed to", async () => {
+    // Before: the new scopes were saved first, so the retry found nothing newly granted and the
+    // backfill was never queued.
+    const store = await makeStore(["read_orders"]);
+    const payload = { current: ["read_orders", "read_products"] };
+    const ev = await systemDb.webhookEvent.create({ data: { webhookId: `w${++seq}`, topic: "app/scopes_update", shopDomain: "s.myshopify.com" } });
+    const send = queues.sync.send;
+    queues.sync.send = async () => {
+      throw new Error("queue unavailable");
+    };
+    try {
+      await expect(processWebhook({ eventId: ev.id, topic: "app/scopes_update", shop: "s.myshopify.com", payload }, deps)).rejects.toThrow(/queue unavailable/);
+    } finally {
+      queues.sync.send = send;
+    }
+    // The queue redelivers the same event.
+    await processWebhook({ eventId: ev.id, topic: "app/scopes_update", shop: "s.myshopify.com", payload }, deps);
+    expect(queues.sent.sync.map((j) => j.kind).sort()).toEqual(["products", "variants"]);
+    expect((await systemDb.store.findUniqueOrThrow({ where: { id: store.id } })).grantedScopes).toEqual(["read_orders", "read_products"]);
+    // Held back, so the jobs read the scopes saved after they were queued.
+    expect(queues.sentOpts.sync.every((o) => (o?.delaySeconds ?? 0) >= 30)).toBe(true);
   });
 
   it("app/scopes_update queues nothing when a scope is only revoked", async () => {
@@ -572,6 +609,25 @@ describe("queue consumer", () => {
     const ok = message({ storeId: store.id, days: ["2026-01-01"] }, 1);
     await consume("aggregate", ok.msg, deps);
     expect(ok.m.acked).toBe(true);
+  });
+
+  it("has the next reconcile recompute the days of an aggregate job that gave up", async () => {
+    // Before: the message was acked after a log line, and the reconcile only repairs days with no
+    // totals at all, so days that already had (now wrong) totals stayed wrong for good.
+    const store = await systemDb.store.update({ where: { id: (await makeStore(["read_orders"], "UTC")).id }, data: { status: "active" } });
+    // A day Postgres refuses (a NUL byte) makes the recompute fail every time.
+    const days = ["2026-03-01", "2026-03-02\u0000"];
+    const last = message({ storeId: store.id, days }, MAX_ATTEMPTS);
+    await consume("aggregate", last.msg, deps);
+    expect(last.m.acked).toBe(true);
+
+    await scheduleReconcile(deps);
+    expect(queues.sent.aggregate.filter((a) => a.storeId === store.id).flatMap((a) => a.days).sort()).toEqual([...days].sort());
+    // Handed over once: a later reconcile doesn't repeat them.
+    queues.clear();
+    coord.release(`reconcile:${store.id}`);
+    await scheduleReconcile(deps);
+    expect(queues.sent.aggregate).toEqual([]);
   });
 
   it("reads large webhook payloads from blob storage and deletes them after processing", async () => {
@@ -1054,6 +1110,21 @@ describe("catalog and stock pipeline", () => {
     await webhook("products/delete", { id: 8 });
     expect(await systemDb.product.count()).toBe(0);
     expect(await systemDb.productVariant.count()).toBe(0);
+  });
+
+  it("keeps the newer copy when two deliveries of one product are processed at the same time", async () => {
+    // Before: each write checked staleness first and wrote second, so the older copy could commit last.
+    await makeStore();
+    const [v70] = restProduct().variants;
+    const newer = restProduct({ title: "New", updated_at: "2026-03-05T00:00:00Z", variants: [{ ...v70, inventory_quantity: 9, updated_at: "2026-03-05T00:00:00Z" }] });
+    const older = restProduct({ title: "Old", updated_at: "2026-03-04T00:00:00Z", variants: [{ ...v70, inventory_quantity: 1, updated_at: "2026-03-04T00:00:00Z" }] });
+    for (let i = 0; i < 8; i++) {
+      await systemDb.product.deleteMany();
+      await systemDb.productVariant.deleteMany();
+      await Promise.all(i % 2 ? [webhook("products/update", newer), webhook("products/update", older)] : [webhook("products/update", older), webhook("products/update", newer)]);
+      expect((await systemDb.product.findFirstOrThrow()).title).toBe("New");
+      expect((await systemDb.productVariant.findFirstOrThrow({ where: { shopifyId: "70" } })).inventoryQuantity).toBe(9);
+    }
   });
 
   it("keeps untracked variants untracked when a webhook (API 2024-07+) doesn't say", async () => {

@@ -1,12 +1,12 @@
 # Firebase setup
 
-Firebase Auth handles identity for **our SaaS** (not for Shopify). The API never trusts the client: it verifies ID tokens with the Admin SDK and issues its own httpOnly session cookie (Firebase session cookies, 5-day expiry, revocation checked on every request).
+Firebase Auth handles identity for **our SaaS** (not for Shopify). The API never trusts the client: it verifies ID tokens itself (Identity Toolkit REST API and Google's public keys through `jose`, `apps/api/src/authProvider.ts`; no Admin SDK) and issues its own httpOnly session cookie (Firebase session cookies, 5-day expiry, revocation checked on every request).
 
 ## 1. Project
 
-1. Create a Firebase project (it is also a GCP project; Terraform deploys into it).
+1. Create a Firebase project (it is also a Google Cloud project).
 2. Authentication → Sign-in method, enable:
-   - **Email/Password** (leave "Email link" off; we use our own OTP).
+   - **Email/Password**, with **Email link (passwordless sign-in)** turned on too: sign-in codes are our own (OTP), but when the code email can't be sent, the app falls back to Firebase's email link ([deployment-cloudflare.md](deployment-cloudflare.md)).
    - **Google**.
    - **Apple**: needs an Apple Developer account. Create a Services ID, a Sign in with Apple key, and register the Firebase handler `https://<project>.firebaseapp.com/__/auth/handler` as the return URL. Paste Services ID, Team ID, Key ID and private key into Firebase.
 3. Authentication → Settings → Authorized domains: add your web domain.
@@ -17,9 +17,9 @@ Firebase Auth handles identity for **our SaaS** (not for Shopify). The API never
 | Where | Value |
 | --- | --- |
 | Web (`NEXT_PUBLIC_FIREBASE_API_KEY`, `..._AUTH_DOMAIN`, `..._PROJECT_ID`) | Project settings → Your apps → Web app config. These are public identifiers, not secrets. |
-| API (`FIREBASE_SERVICE_ACCOUNT_B64`) | Project settings → Service accounts → Generate key, then `base64 -w0 key.json`. On Cloud Run, leave empty and grant the runtime service account `roles/firebaseauth.admin` (Terraform does this); the Admin SDK uses workload identity. |
+| API (`FIREBASE_SERVICE_ACCOUNT_B64`, a Worker secret) | Project settings → Service accounts → Generate key, then `base64 -w0 key.json`. Required on Workers (there is no workload identity): the Worker signs its own tokens with this key. |
 
-Custom tokens (used by email OTP) need the `iam.serviceAccounts.signBlob` permission when running without a key file: grant the runtime service account **Service Account Token Creator** on itself.
+Custom tokens (used by email OTP) are signed with that same service-account key.
 
 ## 3. Flows implemented
 

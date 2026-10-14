@@ -8,6 +8,9 @@ SESSION_SECRET=change-me-32-bytes-minimum-random-string
 # Format: "<version>:<base64 32-byte key>[,...]"; first is active. openssl rand -base64 32
 TOKEN_ENCRYPTION_KEYS=1:REPLACE_WITH_openssl_rand_base64_32
 OTP_PEPPER=change-me-otp-pepper
+# Key of stored customer and WhatsApp-number hashes; empty means OTP_PEPPER (see docs/RUNBOOK.md
+# before rotating OTP_PEPPER).
+CUSTOMER_HASH_KEY=
 
 # Firebase: either the emulator (docker compose) or a real project's service account (base64 JSON).
 FIREBASE_PROJECT_ID=demo-insights

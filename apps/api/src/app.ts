@@ -7,6 +7,8 @@ import { systemDb } from "@app/db";
 import { env, logger, StaffError } from "@app/core";
 import { ReportRangeError } from "@app/shared/staff";
 import { clientIp, HttpError, SESSION_COOKIE, type AppEnv, type Deps } from "./context.js";
+import { probeDb, tenantDb, type ProbeResult } from "@app/db";
+import { requestContext } from "./requestContext.js";
 import { authRoutes } from "./routes/auth.js";
 import { shopifyRoutes } from "./routes/shopify.js";
 import { webhookRoutes } from "./routes/webhooks.js";
@@ -53,6 +55,9 @@ const API_HEADERS: Record<string, string> = {
 
 export function buildApp(deps: Deps): App {
   const app = new Hono<AppEnv>();
+
+  // First, so every response carries the request id and every log line below can be matched to it.
+  app.use("*", requestContext());
 
   app.use("*", async (c, next) => {
     await next();
@@ -116,20 +121,28 @@ export function buildApp(deps: Deps): App {
   app.notFound((c) => c.json({ error: "not_found", message: "Not found" }, 404));
 
   app.get("/healthz", (c) => c.json({ ok: true }));
+  /**
+   * Ready to serve: both database connections (the owner role, and `app_rls`, which every tenant
+   * read uses) and the coordinator answer. Each probe is bounded, so a stalled tunnel makes this
+   * say "not ready" in seconds instead of hanging, and a failed probe is logged with its reason.
+   */
   app.get("/readyz", async (c) => {
-    const checks = { db: false, coord: false };
-    try {
-      await systemDb.$queryRaw`SELECT 1`;
-      checks.db = true;
-    } catch {
-      /* not ready */
+    const [system, tenant, coord] = await Promise.all([
+      deps.dbHealthy
+        ? deps.dbHealthy().then((up): ProbeResult => (up ? { ok: true } : { ok: false, error: "database health check failed" }))
+        : probeDb(() => systemDb.$queryRaw`SELECT 1`),
+      probeDb(() => tenantDb.$queryRaw`SELECT 1`),
+      deps.coord.ping().then(
+        (up): ProbeResult => (up ? { ok: true } : { ok: false, error: "coordinator did not answer" }),
+        (error: unknown): ProbeResult => ({ ok: false, error }),
+      ),
+    ]);
+    const checks = { db: system.ok, coord: coord.ok, tenantDb: tenant.ok };
+    const ok = checks.db && checks.coord && checks.tenantDb;
+    if (!ok) {
+      const reason = (r: ProbeResult) => (r.ok ? undefined : r.error);
+      logger.error({ checks, db: reason(system), tenantDb: reason(tenant), coord: reason(coord) }, "not ready");
     }
-    try {
-      checks.coord = await deps.coord.ping();
-    } catch {
-      /* not ready */
-    }
-    const ok = checks.db && checks.coord;
     return c.json({ ok, checks }, ok ? 200 : 503);
   });
 

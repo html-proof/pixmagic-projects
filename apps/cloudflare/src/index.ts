@@ -1,6 +1,17 @@
 import { buildApp, firebaseAuthProvider, type App, type AuthProvider, type Deps } from "@app/api";
 import { consume, runScheduled, type QueueMessage, type WorkerDeps } from "@app/worker";
-import { cloudflareMailer, logger, mailpitMailer, type BlobStore, type Producer, type QueueName, type Queues } from "@app/core";
+import {
+  cloudflareMailer,
+  env as config,
+  logger,
+  mailpitMailer,
+  withLogContext,
+  withTimeout,
+  type BlobStore,
+  type Producer,
+  type QueueName,
+  type Queues,
+} from "@app/core";
 import { withDb, type DbUrls } from "@app/db";
 import { env as bindings } from "cloudflare:workers";
 import { durableCoord, type Coordinator } from "./coordinator.js";
@@ -40,6 +51,9 @@ function r2Blobs(bucket: R2Bucket): BlobStore {
     },
   };
 }
+
+/** Time limit for calls to Firebase (session keys, token exchange, sign-in links). */
+const FIREBASE_TIMEOUT_MS = 10_000;
 
 /** Payloads kept without R2 expire after a week (processed ones are deleted right away). */
 const BLOB_TTL_S = 7 * 86400;
@@ -83,15 +97,18 @@ function workerDeps(env: Env): WorkerDeps {
     coord: durableCoord(env.COORD),
     queues,
     payloads: bucket ? r2Blobs(bucket) : durableBlobs(env.COORD),
-    // MAILPIT_URL is a local-dev-only override (.dev.vars); production sends through Email Sending.
-    mailer: process.env.MAILPIT_URL ? mailpitMailer(process.env.MAILPIT_URL) : cloudflareMailer(env.EMAIL),
-    fetchImpl: (input, init) => fetch(input, init),
+    // MAILPIT_URL is a local-dev-only override (.dev.vars); production sends through Email Sending
+    // (config() refuses to start with it set in production).
+    mailer: config().MAILPIT_URL ? mailpitMailer(config().MAILPIT_URL) : cloudflareMailer(env.EMAIL),
+    // Every outbound call the API and the jobs make goes through this, so each gets a time limit.
+    fetchImpl: withTimeout((input, init) => fetch(input, init)),
     smtpConnect: workersSmtpConnect,
   };
 }
 
 function apiDeps(env: Env): Deps {
-  auth ??= firebaseAuthProvider();
+  // Firebase sits on the sign-in path of every request: a shorter limit than other providers.
+  auth ??= firebaseAuthProvider(withTimeout((input, init) => fetch(input, init), FIREBASE_TIMEOUT_MS));
   return {
     ...workerDeps(env),
     auth,
@@ -148,16 +165,19 @@ export default {
     }
     const deps = workerDeps(env);
     await withDb(dbUrls(env), async () => {
-      for (const msg of batch.messages) await consume(name, msg as QueueMessage, deps);
+      // Every log line about a message carries its queue and id, so one job's lines can be found together.
+      for (const msg of batch.messages) await withLogContext({ queue: name, messageId: msg.id }, () => consume(name, msg as QueueMessage, deps));
     });
   },
 
   async scheduled(controller, env, ctx) {
     ctx.waitUntil(
-      withDb(dbUrls(env), async () => {
-        const result = await runScheduled(controller.cron, workerDeps(env));
-        logger.info({ cron: controller.cron, ...result }, "scheduled run finished");
-      }).catch((err: unknown) => {
+      withLogContext({ cron: controller.cron }, () =>
+        withDb(dbUrls(env), async () => {
+          const result = await runScheduled(controller.cron, workerDeps(env));
+          logger.info({ cron: controller.cron, ...result }, "scheduled run finished");
+        }),
+      ).catch((err: unknown) => {
         // Logged in the structured format the other logs use; rethrown so Cloudflare still
         // records the run as failed.
         logger.error({ err, cron: controller.cron }, "scheduled run failed");

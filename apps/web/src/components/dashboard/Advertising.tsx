@@ -5,7 +5,7 @@ import { GoogleIcon, MetaIcon } from "@/components/BrandIcons";
 import { Alert } from "@/components/ui";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { fmtMoneyCompact, fmtRange, fmtTimes, plural } from "./format";
-import { Icon } from "./icons";
+import { Icon } from "./Icons";
 import { LineChart, type LineSeries } from "./lineChart";
 import { Delta, NeutralDelta, Stat } from "./primitives";
 import type { Topic } from "./topics";

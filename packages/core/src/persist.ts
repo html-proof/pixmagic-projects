@@ -10,7 +10,7 @@ type StoreCtx = Pick<Store, "id" | "workspaceId" | "timezone" | "grantedScopes">
  * when the merchant granted read_customers (the "customers" capability).
  */
 export function customerKey(store: Pick<Store, "id">, customerId: string): string {
-  return hmacSha256Hex(env().OTP_PEPPER, `${store.id}:${customerId}`);
+  return hmacSha256Hex(env().CUSTOMER_HASH_KEY, `${store.id}:${customerId}`);
 }
 
 /**
@@ -72,7 +72,21 @@ export async function upsertOrder(store: StoreCtx, o: NormalizedOrder): Promise<
     ...traffic,
   };
 
+  let stale = false;
   await systemDb.$transaction(async (tx) => {
+    // The check above runs before the write. Two deliveries of one order processed at once both
+    // passed it, and the older one could commit last. So: one writer per order at a time (a
+    // transaction-scoped advisory lock, which also covers an order that doesn't exist yet), and
+    // the check again under it.
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`order:${store.id}:${o.shopifyId}`}))`;
+    const current = await tx.order.findUnique({
+      where: { storeId_shopifyId: { storeId: store.id, shopifyId: o.shopifyId } },
+      select: { shopifyUpdatedAt: true },
+    });
+    if (current && current.shopifyUpdatedAt > o.updatedAt) {
+      stale = true;
+      return;
+    }
     const order = await tx.order.upsert({
       where: { storeId_shopifyId: { storeId: store.id, shopifyId: o.shopifyId } },
       create: { ...base, workspaceId: store.workspaceId, storeId: store.id, shopifyId: o.shopifyId },
@@ -102,6 +116,7 @@ export async function upsertOrder(store: StoreCtx, o: NormalizedOrder): Promise<
       days.add(rd);
     }
   });
+  if (stale) return days;
 
   days.add(day);
   if (existing && existing.localDay !== day) days.add(existing.localDay);
@@ -318,12 +333,29 @@ export async function upsertProduct(
     ...(p.productType !== undefined ? { productType: p.productType } : {}),
     ...(p.createdAt !== undefined ? { shopifyCreatedAt: p.createdAt } : {}),
   };
-  await systemDb.product.upsert({
-    where,
-    create: { ...data, workspaceId: store.workspaceId, storeId: store.id, shopifyId: p.shopifyId },
-    update: data,
-  });
-  return true;
+  return writeIfNotNewer(
+    () => systemDb.product.updateMany({ where: { storeId: store.id, shopifyId: p.shopifyId, shopifyUpdatedAt: { lte: p.updatedAt } }, data }),
+    () => systemDb.product.create({ data: { ...data, workspaceId: store.workspaceId, storeId: store.id, shopifyId: p.shopifyId } }),
+    !!existing,
+  );
+}
+
+/**
+ * The write half of a staleness-guarded upsert, safe against a concurrent delivery of the same
+ * item: the update only matches a row that is not newer than the payload, in one statement, so a
+ * newer copy written between the caller's check and this write is never overwritten. A row that
+ * didn't exist is created; if another delivery created it first (unique violation), the guarded
+ * update decides. True when this payload was written.
+ */
+async function writeIfNotNewer(update: () => Promise<{ count: number }>, create: () => Promise<unknown>, existed: boolean): Promise<boolean> {
+  if (existed) return (await update()).count > 0;
+  try {
+    await create();
+    return true;
+  } catch (err) {
+    if ((err as { code?: unknown }).code !== "P2002") throw err;
+    return (await update()).count > 0;
+  }
 }
 
 /**
@@ -347,12 +379,11 @@ export async function upsertVariant(store: Pick<Store, "id" | "workspaceId">, v:
     ...(v.inventoryQuantity !== undefined && !keepUntracked ? { inventoryQuantity: v.inventoryQuantity } : {}),
     ...(v.unitCost !== undefined ? { unitCost: v.unitCost } : {}),
   };
-  await systemDb.productVariant.upsert({
-    where,
-    create: { ...data, workspaceId: store.workspaceId, storeId: store.id, shopifyId: v.shopifyId },
-    update: data,
-  });
-  return true;
+  return writeIfNotNewer(
+    () => systemDb.productVariant.updateMany({ where: { storeId: store.id, shopifyId: v.shopifyId, shopifyUpdatedAt: { lte: v.updatedAt } }, data }),
+    () => systemDb.productVariant.create({ data: { ...data, workspaceId: store.workspaceId, storeId: store.id, shopifyId: v.shopifyId } }),
+    !!existing,
+  );
 }
 
 /**
