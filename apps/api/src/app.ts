@@ -4,7 +4,7 @@ import { bodyLimit } from "hono/body-limit";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { ZodError } from "zod";
 import { systemDb } from "@app/db";
-import { env, logger, StaffError } from "@app/core";
+import { EmailError, env, logger, StaffError } from "@app/core";
 import { ReportRangeError } from "@app/shared/staff";
 import { clientIp, HttpError, SESSION_COOKIE, type AppEnv, type Deps } from "./context.js";
 import { probeDb, tenantDb, type ProbeResult } from "@app/db";
@@ -25,9 +25,18 @@ import { staffAttendanceRoutes } from "./routes/staffAttendance.js";
 import { staffPayrollRoutes } from "./routes/staffPayroll.js";
 import { staffReportRoutes } from "./routes/staffReports.js";
 import { staffPortalRoutes } from "./routes/staffPortal.js";
+import { emailAccountRoutes } from "./routes/emailAccounts.js";
+import { emailContentRoutes } from "./routes/emailContent.js";
+import { emailActivityRoutes } from "./routes/emailActivity.js";
+import { emailPublicRoutes } from "./routes/emailPublic.js";
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
-const CSRF_EXEMPT = [/^\/webhooks\//, /^\/pixel\//];
+/**
+ * Machine endpoints with their own authentication: webhooks (HMAC), the pixel (ingest key), the
+ * event API (event key, no cookie) and one-click unsubscribe (a signed token; mail providers POST
+ * it from their own servers, RFC 8058).
+ */
+const CSRF_EXEMPT = [/^\/webhooks\//, /^\/pixel\//, /^\/v1\/events/, /^\/email\/unsubscribe\//];
 /**
  * Not subject to the global per-IP limit. Shopify delivers every store's webhooks from a small
  * pool of addresses, so a per-IP cap meant one busy merchant (or a backfill burst) could get
@@ -111,6 +120,10 @@ export function buildApp(deps: Deps): App {
       return c.json({ error: err.code, message: err.message, ...(err.detail !== undefined ? { detail: err.detail } : {}) }, err.status as ContentfulStatusCode);
     }
     if (err instanceof ReportRangeError) return c.json({ error: "invalid_range", message: err.message }, 400);
+    // The email module's own rule violations, written for the person using the app.
+    if (err instanceof EmailError) {
+      return c.json({ error: err.code, message: err.message, ...(err.detail !== undefined ? { detail: err.detail } : {}) }, err.status as ContentfulStatusCode);
+    }
     if (err instanceof ZodError) {
       return c.json({ error: "validation", message: err.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ") }, 400);
     }
@@ -162,5 +175,9 @@ export function buildApp(deps: Deps): App {
   staffPayrollRoutes(app, deps);
   staffReportRoutes(app, deps);
   staffPortalRoutes(app, deps);
+  emailAccountRoutes(app, deps);
+  emailContentRoutes(app, deps);
+  emailActivityRoutes(app, deps);
+  emailPublicRoutes(app, deps);
   return app;
 }

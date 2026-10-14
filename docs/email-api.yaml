@@ -1,0 +1,711 @@
+openapi: 3.1.0
+info:
+  title: Insights Email Integrations API
+  version: 1.0.0
+  description: |
+    Email accounts, domains, templates, automations and activity for one workspace (docs/email.md).
+
+    Workspace routes need a signed-in member's session cookie (`__session`) and, for anything but
+    GET, an `Origin` header from the app (CSRF). Workspace API keys (`sk_live_`) are refused.
+    Non-members get 404. Permissions: `email:read`, `email:activity`, `email:automate`,
+    `email:manage` (see docs/email.md, "API").
+
+    Errors are `{ "error": "<code>", "message": "<text>", "detail"?: {...} }`. Validation errors
+    use code `validation`. Lists page with `limit` (1-100) and `cursor`.
+servers:
+  - url: https://insights.imeseban.workers.dev/api
+security:
+  - session: []
+components:
+  securitySchemes:
+    session:
+      type: apiKey
+      in: cookie
+      name: __session
+    eventKey:
+      type: http
+      scheme: bearer
+      description: An event API key, `ek_live_…`, created in Settings → Email integrations → Settings.
+  parameters:
+    ws:
+      name: ws
+      in: path
+      required: true
+      schema: { type: string }
+      description: Workspace id. Selects the workspace; membership is checked on every request.
+    id:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+    limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100 }
+    cursor:
+      name: cursor
+      in: query
+      schema: { type: string }
+    from:
+      name: from
+      in: query
+      schema: { type: string }
+      description: YYYY-MM-DD (UTC day) or an ISO timestamp. Default 30 days before `to`.
+    to:
+      name: to
+      in: query
+      schema: { type: string }
+      description: YYYY-MM-DD (inclusive) or an ISO timestamp (exclusive). Default now.
+  responses:
+    Error:
+      description: Error
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+  schemas:
+    Error:
+      type: object
+      required: [error, message]
+      properties:
+        error: { type: string, examples: [not_found, forbidden, validation, invalid_template, sender_not_found] }
+        message: { type: string }
+        detail: {}
+    Sender:
+      type: object
+      properties:
+        id: { type: string }
+        accountId: { type: string }
+        email: { type: string, format: email }
+        name: { type: [string, "null"] }
+        status: { enum: [pending, verified, revoked] }
+        method: { enum: [provider_oauth, smtp_confirmation, domain_ownership, null] }
+        verifiedAt: { type: [string, "null"], format: date-time }
+        isDefault: { type: boolean }
+        codeSentAt: { type: [string, "null"], format: date-time }
+    Account:
+      type: object
+      description: Never contains a token, password or ciphertext.
+      properties:
+        id: { type: string }
+        provider: { enum: [gmail, google_workspace, outlook, microsoft_365, smtp] }
+        connectionMethod: { enum: [oauth_google, oauth_microsoft, smtp] }
+        email: { type: string, format: email }
+        displayName: { type: [string, "null"] }
+        replyTo: { type: [string, "null"] }
+        status: { enum: [pending, connected, testing, degraded, reauthorization_required, disabled, revoked, failed] }
+        statusReason: { type: [string, "null"] }
+        canSend: { type: boolean }
+        grantedScopes: { type: array, items: { type: string } }
+        dailyLimit: { type: integer }
+        providerDailyLimit: { type: integer }
+        perMinuteLimit: { type: integer }
+        lastVerifiedAt: { type: [string, "null"], format: date-time }
+        lastSuccessfulSendAt: { type: [string, "null"], format: date-time }
+        lastErrorCode: { type: [string, "null"] }
+        smtp:
+          type: [object, "null"]
+          properties:
+            host: { type: string }
+            port: { enum: [465, 587, 2525] }
+            encryption: { enum: [tls, starttls] }
+            username: { type: string }
+        senders: { type: array, items: { $ref: "#/components/schemas/Sender" } }
+        isDefault: { type: boolean }
+    SmtpConnection:
+      type: object
+      required: [emailAddress, host, port, encryption, username, password]
+      properties:
+        emailAddress: { type: string, format: email }
+        displayName: { type: string, maxLength: 100 }
+        host: { type: string, description: "Public DNS name or public IP; private, loopback, link-local and metadata destinations are refused." }
+        port: { enum: [465, 587, 2525] }
+        encryption: { enum: [tls, starttls], description: "465 = tls, 587/2525 = starttls. There is no unencrypted mode." }
+        username: { type: string }
+        password: { type: string, writeOnly: true }
+        replyTo: { type: [string, "null"], format: email }
+    ConnectionTest:
+      oneOf:
+        - type: object
+          properties: { ok: { const: true } }
+        - type: object
+          properties:
+            ok: { const: false }
+            code: { type: string, examples: [auth_failed, tls_failed, starttls_unavailable, connect_failed, timeout, blocked_destination] }
+            message: { type: string }
+    CheckResult:
+      type: object
+      properties:
+        status: { enum: [pass, warn, fail, missing, unknown] }
+        records: { type: array, items: { type: string } }
+        explanation: { type: string }
+    DnsRecord:
+      type: object
+      properties:
+        type: { enum: [TXT, CNAME] }
+        host: { type: string }
+        relativeHost: { type: string }
+        value: { type: string }
+        purpose: { type: string }
+    Domain:
+      type: object
+      properties:
+        id: { type: string }
+        domain: { type: string }
+        status: { enum: [unverified, pending, verified, failed, expired, recheck_required] }
+        verifiedAt: { type: [string, "null"], format: date-time }
+        challengeExpiresAt: { type: string, format: date-time }
+        sendingService: { enum: [google, microsoft, other] }
+        dkimSelectors: { type: array, items: { type: string } }
+        spf: { enum: [pass, warn, fail, missing, unknown, null] }
+        dkim: { enum: [pass, warn, fail, missing, unknown, null] }
+        dmarc: { enum: [pass, warn, fail, missing, unknown, null] }
+        lastCheckedAt: { type: [string, "null"], format: date-time }
+        results:
+          type: [object, "null"]
+          properties:
+            checkedAt: { type: string }
+            error: { type: string }
+            ownership: { $ref: "#/components/schemas/CheckResult" }
+            spf: { $ref: "#/components/schemas/CheckResult" }
+            dkim: { $ref: "#/components/schemas/CheckResult" }
+            dmarc: { $ref: "#/components/schemas/CheckResult" }
+        records:
+          type: object
+          properties:
+            ownership: { $ref: "#/components/schemas/DnsRecord" }
+            spf: { $ref: "#/components/schemas/DnsRecord" }
+            dkim: { type: array, items: { $ref: "#/components/schemas/DnsRecord" } }
+            dmarc: { $ref: "#/components/schemas/DnsRecord" }
+    TemplateInput:
+      type: object
+      required: [name, subject]
+      properties:
+        name: { type: string, maxLength: 100 }
+        description: { type: [string, "null"] }
+        category: { enum: [transactional, marketing], default: transactional }
+        eventType: { type: [string, "null"], description: "The event whose variables it may use; null = customer and business variables only." }
+        subject: { type: string, maxLength: 250 }
+        html: { type: string, maxLength: 200000, description: "Sanitized with an allowlist on save. Placeholders: {{ path }} or {{ path | default: \"text\" }}." }
+        text: { type: string, maxLength: 100000, description: "Empty: generated from the HTML." }
+        replyTo: { type: [string, "null"], format: email }
+        status: { enum: [draft, active] }
+    Template:
+      allOf:
+        - $ref: "#/components/schemas/TemplateInput"
+        - type: object
+          properties:
+            id: { type: string }
+            variables: { type: array, items: { type: string } }
+            version: { type: integer }
+            status: { enum: [draft, active, archived] }
+            createdAt: { type: string, format: date-time }
+            updatedAt: { type: string, format: date-time }
+    Rendered:
+      type: object
+      properties:
+        subject: { type: string }
+        html: { type: string }
+        text: { type: string }
+    Condition:
+      description: A comparison or an and/or group. Depth ≤ 4, ≤ 40 conditions; fields from the event's catalog (custom events also `data.*`).
+      oneOf:
+        - type: object
+          required: [op, conditions]
+          properties:
+            op: { enum: [and, or] }
+            conditions: { type: array, items: { $ref: "#/components/schemas/Condition" } }
+        - type: object
+          required: [op, field]
+          properties:
+            op: { enum: [equals, not_equals, greater_than, greater_or_equal, less_than, less_or_equal, contains, not_contains, in, not_in, exists, not_exists] }
+            field: { type: string, examples: [order.total, customer.email, data.plan] }
+            value:
+              oneOf:
+                - { type: [string, number, boolean] }
+                - { type: array, items: { type: [string, number, boolean] }, maxItems: 100 }
+    RuleInput:
+      type: object
+      required: [name, eventType, senderIdentityId, templateId]
+      properties:
+        name: { type: string }
+        description: { type: [string, "null"] }
+        eventType: { type: string, examples: [order.paid, checkout.abandoned, appointment.booked] }
+        storeId: { type: [string, "null"], description: "Shopify events only: one store." }
+        conditions: { oneOf: [{ $ref: "#/components/schemas/Condition" }, { type: "null" }] }
+        senderIdentityId: { type: string, description: "A sender identity of this workspace." }
+        templateId: { type: string, description: "A template of this workspace." }
+        recipient:
+          oneOf:
+            - { type: object, properties: { type: { const: customer } } }
+            - { type: object, properties: { type: { const: fixed }, address: { type: string, format: email } } }
+        delayMinutes: { type: integer, minimum: 0, maximum: 43200 }
+        frequency:
+          oneOf:
+            - { type: object, properties: { type: { const: once_per_event } } }
+            - { type: object, properties: { type: { const: once_per_recipient }, windowHours: { type: integer } } }
+            - { type: object, properties: { type: { const: max_per_recipient }, max: { type: integer }, windowHours: { type: integer } } }
+        maxAttempts: { type: integer, minimum: 1, maximum: 8, default: 5 }
+        priority: { type: integer, minimum: 0, maximum: 1000, default: 100 }
+    Rule:
+      allOf:
+        - $ref: "#/components/schemas/RuleInput"
+        - type: object
+          properties:
+            id: { type: string }
+            eventLabel: { type: string }
+            conditionsText: { type: string }
+            enabled: { type: boolean }
+            valid: { type: boolean }
+            sender: { type: [object, "null"] }
+            template: { type: [object, "null"] }
+            lastTriggeredAt: { type: [string, "null"], format: date-time }
+    DryRun:
+      type: object
+      properties:
+        wouldSend: { type: boolean }
+        steps:
+          type: array
+          items:
+            type: object
+            properties:
+              step: { enum: [event, conditions, recipient, sender, template, consent, suppression, frequency, timing] }
+              ok: { type: boolean }
+              detail: { type: string }
+        conditions: { type: array, items: { type: object } }
+        preview: { oneOf: [{ $ref: "#/components/schemas/Rendered" }, { type: "null" }] }
+    MessageStatus:
+      enum: [queued, processing, accepted_by_provider, delivered, bounced, deferred, failed, suppressed, cancelled, unknown]
+    Message:
+      type: object
+      properties:
+        id: { type: string }
+        createdAt: { type: string, format: date-time }
+        scheduledAt: { type: string, format: date-time }
+        recipient: { type: string, format: email }
+        sender: { type: string, format: email }
+        account: { type: [string, "null"] }
+        provider: { type: string }
+        kind: { enum: [automation, test, verification] }
+        category: { enum: [transactional, marketing] }
+        rule: { type: [string, "null"] }
+        subject: { type: string }
+        status: { $ref: "#/components/schemas/MessageStatus" }
+        attempts: { type: integer }
+        providerAcceptedAt: { type: [string, "null"], format: date-time }
+        errorCode: { type: [string, "null"] }
+        errorMessage: { type: [string, "null"] }
+    Event:
+      type: object
+      required: [id, type]
+      properties:
+        id: { type: string, maxLength: 200, pattern: "^[A-Za-z0-9_.:-]+$", description: "Your id for the event; the same id is accepted once." }
+        type: { type: string, examples: [appointment.booked, invoice.overdue], description: "2-4 lowercase dotted parts; order.*, checkout.*, refund.*, email.*, insights.* are reserved." }
+        occurred_at: { type: string, format: date-time }
+        customer:
+          type: object
+          properties:
+            email: { type: string, format: email }
+            first_name: { type: string }
+            last_name: { type: string }
+            accepts_marketing: { type: boolean }
+        data: { type: object, description: "Up to 50 fields, 3 levels, lowercase keys; strings ≤ 1000 characters." }
+paths:
+  /workspaces/{ws}/email/overview:
+    get:
+      summary: Overview numbers for a period (email:read)
+      parameters: [{ $ref: "#/components/parameters/ws" }, { $ref: "#/components/parameters/from" }, { $ref: "#/components/parameters/to" }]
+      responses: { "200": { description: Counts of accounts, domains, automations and messages; delivered is null when not reported }, default: { $ref: "#/components/responses/Error" } }
+  /workspaces/{ws}/email/analytics:
+    get:
+      summary: Message counts by status, day, account and automation (email:read)
+      parameters: [{ $ref: "#/components/parameters/ws" }, { $ref: "#/components/parameters/from" }, { $ref: "#/components/parameters/to" }]
+      responses: { "200": { description: Analytics }, default: { $ref: "#/components/responses/Error" } }
+  /workspaces/{ws}/email/catalog:
+    get:
+      summary: Events, fields, operators and variables for the builder (email:read)
+      parameters: [{ $ref: "#/components/parameters/ws" }]
+      responses: { "200": { description: Catalog } }
+  /workspaces/{ws}/email/accounts:
+    get:
+      summary: Connected accounts (email:read)
+      parameters: [{ $ref: "#/components/parameters/ws" }]
+      responses:
+        "200":
+          description: Accounts and which providers this server can connect
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accounts: { type: array, items: { $ref: "#/components/schemas/Account" } }
+                  configured: { type: object, properties: { google: { type: boolean }, microsoft: { type: boolean } } }
+                  smtpAvailable: { type: boolean }
+  /workspaces/{ws}/email/accounts/{id}:
+    get:
+      summary: One account and its connection health (email:read)
+      parameters: [{ $ref: "#/components/parameters/ws" }, { $ref: "#/components/parameters/id" }]
+      responses: { "200": { description: Account }, default: { $ref: "#/components/responses/Error" } }
+    patch:
+      summary: Display name, reply-to, daily limit, enable/disable, make default (email:manage)
+      parameters: [{ $ref: "#/components/parameters/ws" }, { $ref: "#/components/parameters/id" }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                displayName: { type: string }
+                replyTo: { type: [string, "null"] }
+                enabled: { type: boolean }
+                isDefault: { const: true }
+                dailyLimit: { type: [integer, "null"] }
+      responses: { "200": { description: Account }, default: { $ref: "#/components/responses/Error" } }
+    delete:
+      summary: Disconnect (revoke where possible, delete credentials, retire senders, cancel pending mail, turn off its automations) (email:manage)
+      parameters: [{ $ref: "#/components/parameters/ws" }, { $ref: "#/components/parameters/id" }]
+      responses:
+        "200":
+          description: Done
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  revocation: { enum: [revoked, deleted_only, failed] }
+                  rulesDisabled: { type: integer }
+                  messagesCancelled: { type: integer }
+  /workspaces/{ws}/email/oauth/{provider}/start:
+    post:
+      summary: Where to send the browser to connect Google or Microsoft (email:manage, verified email)
+      parameters: [{ $ref: "#/components/parameters/ws" }, { name: provider, in: path, required: true, schema: { enum: [google, microsoft] } }]
+      responses:
+        "200": { description: "Authorization URL (PKCE S256, single-use state bound to this browser)", content: { application/json: { schema: { type: object, properties: { url: { type: string } } } } } }
+        "503": { $ref: "#/components/responses/Error" }
+  /email/oauth/{provider}/callback:
+    get:
+      summary: The provider's redirect. Always redirects to /settings/email/accounts with `connected` or `error`.
+      security: []
+      parameters:
+        - { name: provider, in: path, required: true, schema: { enum: [google, microsoft] } }
+        - { name: state, in: query, schema: { type: string } }
+        - { name: code, in: query, schema: { type: string } }
+        - { name: error, in: query, schema: { type: string } }
+      responses: { "302": { description: Back to Settings } }
+  /workspaces/{ws}/email/accounts/{id}/reauthorize:
+    post:
+      summary: Reconnect an OAuth account; the same mailbox must sign in (email:manage)
+      parameters: [{ $ref: "#/components/parameters/ws" }, { $ref: "#/components/parameters/id" }]
+      responses: { "200": { description: Authorization URL }, default: { $ref: "#/components/responses/Error" } }
+  /workspaces/{ws}/email/smtp/connections:
+    post:
+      summary: Connect an SMTP account and test it (signs in, sends nothing) (email:manage)
+      parameters: [{ $ref: "#/components/parameters/ws" }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SmtpConnection" } } } }
+      responses:
+        "200":
+          description: Saved, with the test result
+          content: { application/json: { schema: { type: object, properties: { account: { $ref: "#/components/schemas/Account" }, test: { $ref: "#/components/schemas/ConnectionTest" } } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /workspaces/{ws}/email/smtp/connections/{id}:
+    patch:
+      summary: Change SMTP settings (password only when it changes) and test again (email:manage)
+      parameters: [{ $ref: "#/components/parameters/ws" }, { $ref: "#/components/parameters/id" }]
+      responses: { "200": { description: Account and test }, default: { $ref: "#/components/responses/Error" } }
+  /workspaces/{ws}/email/accounts/{id}/test:
+    post:
+      summary: Check the connection (token refresh or SMTP sign-in); sends nothing (email:manage)
+      parameters: [{ $ref: "#/components/parameters/ws" }, { $ref: "#/components/parameters/id" }]
+      responses: { "200": { description: Account and test } }
+  /workspaces/{ws}/email/accounts/{id}/test-send:
+    post:
+      summary: Send a test email to the signed-in person's own address only (email:manage)
+      parameters: [{ $ref: "#/components/parameters/ws" }, { $ref: "#/components/parameters/id" }]
+      requestBody: { content: { application/json: { schema: { type: object, properties: { senderId: { type: string }, templateId: { type: string } } } } } }
+      responses: { "200": { description: "Result: status, code, message" } }
+  /workspaces/{ws}/email/senders:
+    get:
+      summary: Sender identities (email:read)
+      parameters: [{ $ref: "#/components/parameters/ws" }]
+      responses: { "200": { description: Senders } }
+  /workspaces/{ws}/email/accounts/{id}/senders:
+    post:
+      summary: Add a From address to an SMTP account (pending until verified) (email:manage)
+      parameters: [{ $ref: "#/components/parameters/ws" }, { $ref: "#/components/parameters/id" }]
+      requestBody: { content: { application/json: { schema: { type: object, required: [senderEmail], properties: { senderEmail: { type: string }, senderName: { type: string } } } } } }
+      responses: { "200": { description: Sender } }
+  /workspaces/{ws}/email/senders/{id}/send-code:
+    post:
+      summary: Email a 6-digit code through the account to the sender address (email:manage)
+      parameters: [{ $ref: "#/components/parameters/ws" }, { $ref: "#/components/parameters/id" }]
+      responses: { "200": { description: Sent }, "422": { $ref: "#/components/responses/Error" } }
+  /workspaces/{ws}/email/senders/{id}/confirm:
+    post:
+      summary: Enter the code (5 tries, 30 minutes) (email:manage)
+      parameters: [{ $ref: "#/components/parameters/ws" }, { $ref: "#/components/parameters/id" }]
+      requestBody: { content: { application/json: { schema: { type: object, required: [code], properties: { code: { type: string } } } } } }
+      responses: { "200": { description: Verified sender }, "400": { $ref: "#/components/responses/Error" }, "410": { $ref: "#/components/responses/Error" } }
+  /workspaces/{ws}/email/senders/{id}/default:
+    post:
+      summary: Make the workspace's default sender (email:manage)
+      parameters: [{ $ref: "#/components/parameters/ws" }, { $ref: "#/components/parameters/id" }]
+      responses: { "200": { description: Done } }
+  /workspaces/{ws}/email/senders/{id}:
+    delete:
+      summary: Remove an extra sender address (email:manage)
+      parameters: [{ $ref: "#/components/parameters/ws" }, { $ref: "#/components/parameters/id" }]
+      responses: { "200": { description: Done }, "409": { $ref: "#/components/responses/Error" } }
+  /workspaces/{ws}/email/domains:
+    get:
+      summary: Domains with records to publish and the last check (email:read)
+      parameters: [{ $ref: "#/components/parameters/ws" }]
+      responses: { "200": { description: Domains, content: { application/json: { schema: { type: object, properties: { domains: { type: array, items: { $ref: "#/components/schemas/Domain" } } } } } } } }
+    post:
+      summary: Add a domain; issues a unique ownership challenge (email:manage)
+      parameters: [{ $ref: "#/components/parameters/ws" }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [domain]
+              properties:
+                domain: { type: string }
+                sendingService: { enum: [google, microsoft, other] }
+                dkimSelectors: { type: array, items: { type: string }, maxItems: 5 }
+      responses: { "200": { description: Domain }, "400": { $ref: "#/components/responses/Error" }, "409": { $ref: "#/components/responses/Error" } }
+  /workspaces/{ws}/email/domains/{id}:
+    get:
+      summary: One domain (email:read)
+      parameters: [{ $ref: "#/components/parameters/ws" }, { $ref: "#/components/parameters/id" }]
+      responses: { "200": { description: Domain } }
+    patch:
+      summary: Change the sending service or DKIM selectors (email:manage)
+      parameters: [{ $ref: "#/components/parameters/ws" }, { $ref: "#/components/parameters/id" }]
+      responses: { "200": { description: Domain } }
+    delete:
+      summary: Remove (senders authorized by it become pending) (email:manage)
+      parameters: [{ $ref: "#/components/parameters/ws" }, { $ref: "#/components/parameters/id" }]
+      responses: { "200": { description: Done } }
+  /workspaces/{ws}/email/domains/{id}/dns-status:
+    get:
+      summary: Same as GET /domains/{id} (email:read)
+      parameters: [{ $ref: "#/components/parameters/ws" }, { $ref: "#/components/parameters/id" }]
+      responses: { "200": { description: Domain } }
+  /workspaces/{ws}/email/domains/{id}/verify:
+    post:
+      summary: Check public DNS now (rate-limited) (email:manage)
+      parameters: [{ $ref: "#/components/parameters/ws" }, { $ref: "#/components/parameters/id" }]
+      responses: { "200": { description: Domain }, "409": { $ref: "#/components/responses/Error" }, "429": { $ref: "#/components/responses/Error" } }
+  /workspaces/{ws}/email/domains/{id}/regenerate:
+    post:
+      summary: New challenge (after expiry or exposure) (email:manage)
+      parameters: [{ $ref: "#/components/parameters/ws" }, { $ref: "#/components/parameters/id" }]
+      responses: { "200": { description: Domain } }
+  /workspaces/{ws}/email/templates:
+    get:
+      summary: Templates (email:read)
+      parameters: [{ $ref: "#/components/parameters/ws" }]
+      responses: { "200": { description: Templates } }
+    post:
+      summary: Create (sanitized; variables checked against the event) (email:automate)
+      parameters: [{ $ref: "#/components/parameters/ws" }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/TemplateInput" } } } }
+      responses: { "200": { description: Template }, "400": { $ref: "#/components/responses/Error" } }
+  /workspaces/{ws}/email/templates/preview:
+    post:
+      summary: Render an unsaved template with example data (email:automate)
+      parameters: [{ $ref: "#/components/parameters/ws" }]
+      responses: { "200": { description: Rendered, content: { application/json: { schema: { type: object, properties: { preview: { $ref: "#/components/schemas/Rendered" } } } } } } }
+  /workspaces/{ws}/email/templates/{id}:
+    get:
+      summary: Template and its version history (email:read)
+      parameters: [{ $ref: "#/components/parameters/ws" }, { $ref: "#/components/parameters/id" }]
+      responses: { "200": { description: Template and versions } }
+    patch:
+      summary: Edit; content changes make a new version (email:automate)
+      parameters: [{ $ref: "#/components/parameters/ws" }, { $ref: "#/components/parameters/id" }]
+      responses: { "200": { description: Template }, "409": { $ref: "#/components/responses/Error" } }
+    delete:
+      summary: Delete (refused while an automation uses it) (email:automate)
+      parameters: [{ $ref: "#/components/parameters/ws" }, { $ref: "#/components/parameters/id" }]
+      responses: { "200": { description: Done }, "409": { $ref: "#/components/responses/Error" } }
+  /workspaces/{ws}/email/templates/{id}/duplicate:
+    post:
+      summary: Copy as a draft (email:automate)
+      parameters: [{ $ref: "#/components/parameters/ws" }, { $ref: "#/components/parameters/id" }]
+      responses: { "200": { description: Template } }
+  /workspaces/{ws}/email/templates/{id}/preview:
+    post:
+      summary: Render with example data, optionally overridden in `data` (email:read)
+      parameters: [{ $ref: "#/components/parameters/ws" }, { $ref: "#/components/parameters/id" }]
+      responses: { "200": { description: Rendered } }
+  /workspaces/{ws}/email/templates/{id}/test:
+    post:
+      summary: Send with example data to the signed-in person's own address (email:automate)
+      parameters: [{ $ref: "#/components/parameters/ws" }, { $ref: "#/components/parameters/id" }]
+      responses: { "200": { description: Result } }
+  /workspaces/{ws}/email/templates/{id}/versions/{version}/restore:
+    post:
+      summary: Restore an old version as a new version (email:automate)
+      parameters: [{ $ref: "#/components/parameters/ws" }, { $ref: "#/components/parameters/id" }, { name: version, in: path, required: true, schema: { type: integer } }]
+      responses: { "200": { description: Template } }
+  /workspaces/{ws}/email/automations:
+    get:
+      summary: Automations (email:read)
+      parameters: [{ $ref: "#/components/parameters/ws" }]
+      responses: { "200": { description: Automations } }
+    post:
+      summary: Create (off); `blocking` lists what stops it being enabled (email:automate)
+      parameters: [{ $ref: "#/components/parameters/ws" }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/RuleInput" } } } }
+      responses: { "200": { description: Rule and blocking reasons }, "400": { $ref: "#/components/responses/Error" } }
+  /workspaces/{ws}/email/automations/dry-run:
+    post:
+      summary: What an unsaved rule would do with example data; sends nothing (email:automate)
+      parameters: [{ $ref: "#/components/parameters/ws" }]
+      responses: { "200": { description: Dry run, content: { application/json: { schema: { $ref: "#/components/schemas/DryRun" } } } } }
+  /workspaces/{ws}/email/automations/{id}:
+    get:
+      summary: One automation (email:read)
+      parameters: [{ $ref: "#/components/parameters/ws" }, { $ref: "#/components/parameters/id" }]
+      responses: { "200": { description: Rule } }
+    patch:
+      summary: Edit (email:automate)
+      parameters: [{ $ref: "#/components/parameters/ws" }, { $ref: "#/components/parameters/id" }]
+      responses: { "200": { description: Rule }, "409": { $ref: "#/components/responses/Error" } }
+    delete:
+      summary: Delete; pending messages are cancelled (email:automate)
+      parameters: [{ $ref: "#/components/parameters/ws" }, { $ref: "#/components/parameters/id" }]
+      responses: { "200": { description: Done } }
+  /workspaces/{ws}/email/automations/{id}/enable:
+    post:
+      summary: Turn on (sender verified, account usable, template active) (email:automate)
+      parameters: [{ $ref: "#/components/parameters/ws" }, { $ref: "#/components/parameters/id" }]
+      responses: { "200": { description: Rule }, "409": { $ref: "#/components/responses/Error" } }
+  /workspaces/{ws}/email/automations/{id}/disable:
+    post:
+      summary: Turn off; pending messages are cancelled (email:automate)
+      parameters: [{ $ref: "#/components/parameters/ws" }, { $ref: "#/components/parameters/id" }]
+      responses: { "200": { description: Rule and cancelled count } }
+  /workspaces/{ws}/email/automations/{id}/dry-run:
+    post:
+      summary: Dry run of a saved rule (email:automate)
+      parameters: [{ $ref: "#/components/parameters/ws" }, { $ref: "#/components/parameters/id" }]
+      responses: { "200": { description: Dry run } }
+  /workspaces/{ws}/email/automations/{id}/executions:
+    get:
+      summary: What the rule did with each event (email:activity)
+      parameters: [{ $ref: "#/components/parameters/ws" }, { $ref: "#/components/parameters/id" }, { $ref: "#/components/parameters/limit" }, { $ref: "#/components/parameters/cursor" }]
+      responses: { "200": { description: Executions and nextCursor } }
+  /workspaces/{ws}/email/messages:
+    get:
+      summary: Activity log, filtered and paged on the server (email:activity)
+      parameters:
+        - { $ref: "#/components/parameters/ws" }
+        - { $ref: "#/components/parameters/from" }
+        - { $ref: "#/components/parameters/to" }
+        - { $ref: "#/components/parameters/limit" }
+        - { $ref: "#/components/parameters/cursor" }
+        - { name: status, in: query, schema: { type: string }, description: Comma-separated statuses }
+        - { name: accountId, in: query, schema: { type: string } }
+        - { name: provider, in: query, schema: { type: string } }
+        - { name: ruleId, in: query, schema: { type: string } }
+        - { name: kind, in: query, schema: { enum: [automation, test, verification] } }
+        - { name: recipient, in: query, schema: { type: string }, description: Exact address (matched by keyed hash) }
+      responses:
+        "200":
+          description: Messages
+          content: { application/json: { schema: { type: object, properties: { messages: { type: array, items: { $ref: "#/components/schemas/Message" } }, nextCursor: { type: [string, "null"] } } } } }
+  /workspaces/{ws}/email/messages/{id}:
+    get:
+      summary: One message with its lifecycle events (email:activity)
+      parameters: [{ $ref: "#/components/parameters/ws" }, { $ref: "#/components/parameters/id" }]
+      responses: { "200": { description: Message detail } }
+  /workspaces/{ws}/email/messages/{id}/retry:
+    post:
+      summary: Send a failed or unknown automation message again (a person's decision) (email:automate)
+      parameters: [{ $ref: "#/components/parameters/ws" }, { $ref: "#/components/parameters/id" }]
+      responses: { "200": { description: Message detail }, "409": { $ref: "#/components/responses/Error" } }
+  /workspaces/{ws}/email/messages/{id}/cancel:
+    post:
+      summary: Cancel a message still waiting (email:automate)
+      parameters: [{ $ref: "#/components/parameters/ws" }, { $ref: "#/components/parameters/id" }]
+      responses: { "200": { description: Message detail }, "409": { $ref: "#/components/responses/Error" } }
+  /workspaces/{ws}/email/settings:
+    get:
+      summary: Business details, limits, pause, suspension (email:read)
+      parameters: [{ $ref: "#/components/parameters/ws" }]
+      responses: { "200": { description: Settings } }
+    patch:
+      summary: Change them (email:manage)
+      parameters: [{ $ref: "#/components/parameters/ws" }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                businessName: { type: [string, "null"] }
+                businessAddress: { type: [string, "null"] }
+                dailyLimit: { type: [integer, "null"] }
+                sendingPaused: { type: boolean }
+      responses: { "200": { description: Settings } }
+  /workspaces/{ws}/email/suppressions:
+    get:
+      summary: Suppression list (masked addresses) (email:activity)
+      parameters: [{ $ref: "#/components/parameters/ws" }, { $ref: "#/components/parameters/limit" }, { $ref: "#/components/parameters/cursor" }]
+      responses: { "200": { description: Suppressions } }
+    post:
+      summary: Add an address (email:manage)
+      parameters: [{ $ref: "#/components/parameters/ws" }]
+      requestBody: { content: { application/json: { schema: { type: object, required: [email], properties: { email: { type: string }, reason: { enum: [unsubscribed, bounced, complained, manual, invalid] }, scope: { enum: [marketing, all] } } } } } }
+      responses: { "200": { description: "{ created }" } }
+  /workspaces/{ws}/email/suppressions/{id}:
+    delete:
+      summary: Remove (email:manage)
+      parameters: [{ $ref: "#/components/parameters/ws" }, { $ref: "#/components/parameters/id" }]
+      responses: { "200": { description: Done } }
+  /workspaces/{ws}/email/ingest-keys:
+    get:
+      summary: Event API keys (email:manage)
+      parameters: [{ $ref: "#/components/parameters/ws" }]
+      responses: { "200": { description: Keys (prefix only) } }
+    post:
+      summary: Create; the secret is returned once (email:manage)
+      parameters: [{ $ref: "#/components/parameters/ws" }]
+      requestBody: { content: { application/json: { schema: { type: object, required: [name], properties: { name: { type: string } } } } } }
+      responses: { "200": { description: "{ key, secret }" } }
+  /workspaces/{ws}/email/ingest-keys/{id}:
+    delete:
+      summary: Revoke (email:manage)
+      parameters: [{ $ref: "#/components/parameters/ws" }, { $ref: "#/components/parameters/id" }]
+      responses: { "200": { description: Done } }
+  /workspaces/{ws}/email/audit-logs:
+    get:
+      summary: The workspace audit log, email actions only (audit:read)
+      parameters: [{ $ref: "#/components/parameters/ws" }, { $ref: "#/components/parameters/limit" }, { $ref: "#/components/parameters/cursor" }]
+      responses: { "200": { description: Entries } }
+  /v1/events:
+    post:
+      summary: Send a custom business event (event API key). Alias /v1/events/ingest.
+      security: [{ eventKey: [] }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/Event" } } } }
+      responses:
+        "202": { description: "Accepted: { id, accepted: true, duplicate: false, automations }" }
+        "200": { description: "Already received: { duplicate: true }" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+  /email/unsubscribe/{token}:
+    get:
+      summary: What an unsubscribe link is about (masked address, business, already done?)
+      security: []
+      parameters: [{ name: token, in: path, required: true, schema: { type: string } }]
+      responses: { "200": { description: Details }, "404": { $ref: "#/components/responses/Error" } }
+    post:
+      summary: Unsubscribe from marketing (the page's button, or RFC 8058 one-click with `List-Unsubscribe=One-Click`)
+      security: []
+      parameters: [{ name: token, in: path, required: true, schema: { type: string } }]
+      responses: { "200": { description: "{ ok, already, email, business }" }, "404": { $ref: "#/components/responses/Error" } }

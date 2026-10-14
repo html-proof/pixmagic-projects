@@ -2,7 +2,7 @@ import type { Context } from "hono";
 import { getCookie } from "hono/cookie";
 import { systemDb, type User } from "@app/db";
 import { can, sha256Hex, type Permission, type Role } from "@app/shared";
-import { addLogContext, env, logger, type BlobStore, type Coord, type FetchLike, type Mailer, type Queues } from "@app/core";
+import { addLogContext, env, logger, type BlobStore, type Coord, type FetchLike, type Mailer, type Queues, type SmtpConnect } from "@app/core";
 import { FirebaseUnavailableError, type AuthProvider } from "./authProvider.js";
 
 export interface Deps {
@@ -13,6 +13,8 @@ export interface Deps {
   payloads: BlobStore;
   mailer: Mailer;
   fetchImpl: FetchLike;
+  /** Outbound TCP for SMTP email accounts (Workers sockets). Absent: SMTP accounts can't connect. */
+  smtpConnect?: SmtpConnect;
   /** Coarse per-IP limiter (Workers Rate Limiting binding). Returns false when over the limit. */
   globalLimit?: (key: string) => Promise<boolean>;
   /** Whether the database answers right now. Defaults to `dbReachable()`; tests inject an outage. */

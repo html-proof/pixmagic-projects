@@ -20,7 +20,8 @@
   // Non-secret configuration. Secrets (SESSION_SECRET, TOKEN_ENCRYPTION_KEYS, OTP_PEPPER,
   // SHOPIFY_API_SECRET, FIREBASE_SERVICE_ACCOUNT_B64, ALERT_SLACK_WEBHOOK_URL, for ad accounts
   // META_APP_SECRET, GOOGLE_ADS_CLIENT_SECRET, and for WhatsApp
-  // WHATSAPP_APP_SECRET, WHATSAPP_WEBHOOK_VERIFY_TOKEN) are set with
+  // WHATSAPP_APP_SECRET, WHATSAPP_WEBHOOK_VERIFY_TOKEN, and for email integrations
+  // EMAIL_GOOGLE_CLIENT_SECRET, EMAIL_MICROSOFT_CLIENT_SECRET, optionally EMAIL_CREDENTIAL_KEYS) are set with
   // `wrangler secret put`; for local dev put everything in apps/cloudflare/.dev.vars.
   "vars": {
     "NODE_ENV": "production",
@@ -78,7 +79,13 @@
     // WhatsApp's Meta app: "pixmagic" (1799660384680551, portfolio "Testbusiness", the imeseban@gmail.com Facebook account).
     "WHATSAPP_APP_ID": "1799660384680551",
     "WHATSAPP_CONFIG_ID": "",
-    "WHATSAPP_API_VERSION": "v25.0"
+    "WHATSAPP_API_VERSION": "v25.0",
+    // Email integrations (docs/email.md): "Connect Gmail / Google Workspace" and "Connect Outlook /
+    // Microsoft 365". Empty until the OAuth clients exist (the buttons say so; SMTP works regardless).
+    // Their secrets are Worker secrets. "common" accepts work, school and personal Microsoft accounts.
+    "EMAIL_GOOGLE_CLIENT_ID": "",
+    "EMAIL_MICROSOFT_CLIENT_ID": "",
+    "EMAIL_MICROSOFT_AUTHORITY": "common"
   },
 
   // Postgres through Hyperdrive: owner role (migrations/system paths) and the RLS-enforced app_rls role.
@@ -102,7 +109,9 @@
     "producers": [
       { "binding": "SYNC_QUEUE", "queue": "insights-sync" },
       { "binding": "WEBHOOK_QUEUE", "queue": "insights-webhooks" },
-      { "binding": "AGGREGATE_QUEUE", "queue": "insights-aggregate" }
+      { "binding": "AGGREGATE_QUEUE", "queue": "insights-aggregate" },
+      // Email integrations (docs/email.md). Create it once before deploying: npx wrangler queues create insights-email
+      { "binding": "EMAIL_QUEUE", "queue": "insights-email" }
     ],
     // max_retries + 1 must equal MAX_ATTEMPTS in packages/core/src/queues.ts.
     // Shopify limits are per shop and the GraphQL client paces itself, so concurrency stays modest.
@@ -111,7 +120,9 @@
       { "queue": "insights-webhooks", "max_batch_size": 10, "max_batch_timeout": 2, "max_concurrency": 10, "max_retries": 5, "dead_letter_queue": "insights-dlq" },
       // max_batch_timeout 1, not 5: day totals are the last step of an import, so this timeout
       // was up to 5s of an otherwise finished import spent waiting for a batch to fill.
-      { "queue": "insights-aggregate", "max_batch_size": 5, "max_batch_timeout": 1, "max_concurrency": 4, "max_retries": 5, "dead_letter_queue": "insights-dlq" }
+      { "queue": "insights-aggregate", "max_batch_size": 5, "max_batch_timeout": 1, "max_concurrency": 4, "max_retries": 5, "dead_letter_queue": "insights-dlq" },
+      // Sends are short; per-workspace and per-account limits are enforced in the job, not here.
+      { "queue": "insights-email", "max_batch_size": 10, "max_batch_timeout": 2, "max_concurrency": 5, "max_retries": 5, "dead_letter_queue": "insights-dlq" }
     ]
   },
 

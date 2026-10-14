@@ -10,6 +10,8 @@ import {
   type Producer,
   type QueueName,
   sweepWhatsapp,
+  sweepEmail,
+  type EmailJob,
   type SyncJobData,
   type WebhookJobData,
   type WhatsappJob,
@@ -22,6 +24,7 @@ import {
   rememberFailedAggregate,
   runAdsSync,
   runAggregate,
+  runEmailJob,
   runWhatsappJob,
   runSync,
   scheduleAdsSync,
@@ -88,6 +91,7 @@ export async function consume(queue: QueueName, msg: QueueMessage, deps: Consume
     else if (queue === "sync" && (kind === "whatsapp" || kind === "whatsapp_dispatch")) await runWhatsappJob(job as WhatsappJob, deps);
     else if (queue === "sync") await runSync(job as SyncJobData, deps);
     else if (queue === "webhooks") await processWebhook(job as WebhookJobData, deps);
+    else if (queue === "email") await runEmailJob(job as EmailJob, deps);
     else await runAggregate(job as AggregateJobData);
     msg.ack();
   } catch (e) {
@@ -148,6 +152,11 @@ async function deferForDb(queue: QueueName, msg: QueueMessage, job: object, prev
 async function onFailure(queue: QueueName, body: unknown, err: Error, final: boolean, deps: WorkerDeps) {
   const error = err.message.slice(0, 500);
   const kind = (body as { kind?: string })?.kind;
+  if (queue === "email") {
+    // The message and event rows are the record: a send that keeps failing for infrastructure
+    // reasons is put back by sendEmailMessage itself, and the sweep re-queues anything left waiting.
+    return;
+  }
   if (queue === "sync" && (kind === "whatsapp" || kind === "whatsapp_dispatch")) {
     // The message row is the record (scheduled / failed with its reason), and the sweeper picks up
     // anything still due. A dispatch chain that gave up lets the next tick start a new one.
@@ -262,7 +271,12 @@ export async function runScheduled(cron: string, deps: WorkerDeps) {
       logger.error({ err }, "open-shift sweep failed; the next tick tries again");
       return null;
     });
-    return { refreshed, staleJobsFailed, reconciled, adsSynced, whatsapp, staffOpenShifts };
+    // Email integrations: due and lost sends, abandoned checkouts, domain checks, token upkeep, retention.
+    const email = await sweepEmail(deps).catch((err: unknown) => {
+      logger.error({ err }, "email sweep failed; the next tick tries again");
+      return null;
+    });
+    return { refreshed, staleJobsFailed, reconciled, adsSynced, whatsapp, staffOpenShifts, email };
   }
   logger.warn({ cron }, "unknown cron trigger");
   return {};

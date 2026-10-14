@@ -137,10 +137,25 @@ export default function PrivacyPage() {
           Insights never creates, changes or pauses an ad, never changes a budget or billing, and never spends money.
         </p>
         <p>
+          <strong>Email sending (only if you connect an email account).</strong> To send the emails your automations and
+          tests ask for, Insights connects to the mailbox you choose. With Gmail or Google Workspace it asks Google only for
+          permission to send email as you (<code>gmail.send</code>) and your email address; with Outlook or Microsoft 365
+          only for <code>Mail.Send</code> and your basic profile; with another provider it uses the SMTP server, user name
+          and password you enter. It never reads, searches or deletes the mail in your mailbox. The tokens and passwords are
+          encrypted with AES-256-GCM, never shown again, and deleted when you disconnect the account (Google&apos;s access is
+          also revoked then). For each email it keeps who it went to (encrypted, with a one-way keyed hash and a masked form
+          for the activity log), the subject, the sender, and what the provider answered; never the body, which is filled
+          in from your template when it is sent. The details of the order or event an automation sends about are kept
+          encrypted for up to 35 days, so a delayed email can still be written; the activity log is kept for 180 days.
+          Addresses that unsubscribe or bounce are kept as a keyed hash so they aren&apos;t emailed again. When Shopify asks
+          us to erase a customer or your store, their email events and messages are deleted.
+        </p>
+        <p>
           Insights&apos; use and transfer of information received from Google APIs adheres to the{" "}
           <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>,
-          including the Limited Use requirements: the data is used only to show you your own reports, it is not sold, not used
-          for advertising and not read by people, except with your permission, for security, or where the law requires it.
+          including the Limited Use requirements: the data is used only to show you your own reports and to send the emails
+          you set up, it is not sold, not used for advertising and not read by people, except with your permission, for
+          security, or where the law requires it.
         </p>
       </Section>
 
@@ -157,7 +172,9 @@ export default function PrivacyPage() {
           The access token Shopify issues for your store is encrypted with AES-256-GCM before it is written down, with
           each ciphertext cryptographically bound to the store it belongs to. Tokens are never returned by our API, are
           never shown in the dashboard, and are destroyed when you uninstall the app. The tokens Meta and Google issue
-          when you connect WhatsApp or an ad account are kept the same way, and destroyed when you disconnect it.
+          when you connect WhatsApp or an ad account are kept the same way, and destroyed when you disconnect it. Email
+          account tokens and SMTP passwords are encrypted too, each with its own key, and destroyed when you disconnect the
+          account.
         </p>
       </Section>
 
@@ -187,6 +204,10 @@ export default function PrivacyPage() {
           <li>
             <strong>Meta (Marketing API) and Google (Google Ads API, AdSense)</strong> — the source of advertising reports, only
             for stores that connect an ad account.
+          </li>
+          <li>
+            <strong>Google (Gmail API), Microsoft (Microsoft Graph) or your own SMTP provider</strong> — send the emails you set
+            up, from the account you connect, only for workspaces that connect one.
           </li>
         </ul>
         <p>Other members of your workspace see your store&apos;s figures, according to the role you gave them.</p>

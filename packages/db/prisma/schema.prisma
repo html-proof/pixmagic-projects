@@ -81,6 +81,14 @@ model Workspace {
   breakPolicies      BreakPolicy[]
   staffHolidays      StaffHoliday[]
   payrollPeriods     PayrollPeriod[]
+  emailSettings      EmailSettings?
+  emailAccounts      EmailAccount[]
+  emailDomains       EmailDomain[]
+  emailTemplates     EmailTemplate[]
+  emailRules         EmailAutomationRule[]
+  emailEvents        EmailBusinessEvent[]
+  emailSuppressions  EmailSuppression[]
+  emailIngestKeys    EmailIngestKey[]
 
   @@map("workspaces")
 }
@@ -1494,4 +1502,467 @@ model PaymentAllocation {
   @@index([payrollItemId])
   @@index([workspaceId])
   @@map("payment_allocations")
+}
+
+// ---------------------------------------------------------------------------------------------
+// Email integrations and automation (docs/email.md).
+//
+// A workspace is the organization (tenant): every table carries workspace_id and the
+// tenant_isolation RLS policy, and every reference between email tables is a composite
+// (id, workspace_id) foreign key, so a rule can't point at another workspace's sender or template
+// even through a bug in the code. OAuth tokens and SMTP passwords are envelope encrypted
+// (packages/core/src/email/vault.ts) and never leave the server. Recipients' addresses are kept
+// encrypted, with a keyed hash for lookups (suppressions, frequency limits, redaction) and a
+// masked form for lists. Partial unique indexes Prisma can't express live in the migration SQL.
+// ---------------------------------------------------------------------------------------------
+
+/// Organization-level email settings (email_settings). One row per workspace, created on first save.
+model EmailSettings {
+  workspaceId     String    @id @map("workspace_id")
+  /// Shown as {{business.name}} (the workspace name when empty).
+  businessName    String?   @map("business_name")
+  /// Printed in marketing footers: anti-spam laws require a postal address.
+  businessAddress String?   @map("business_address")
+  /// Messages a day for the whole workspace (null: EMAIL_DEFAULT_DAILY_LIMIT).
+  dailyLimit      Int?      @map("daily_limit")
+  /// Paused by the workspace's own admins: queued mail waits, nothing is lost.
+  sendingPaused   Boolean   @default(false) @map("sending_paused")
+  /// Suspended by the platform operator (abuse, complaints). Set by an ops task, never by the API.
+  suspendedAt     DateTime? @map("suspended_at")
+  suspendedReason String?   @map("suspended_reason")
+  updatedByUserId String?   @map("updated_by_user_id")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+  workspace       Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@map("email_settings")
+}
+
+/// A mailbox the workspace sends from. Disconnecting deletes its credentials and keeps the row
+/// (deleted_at) so the activity history still says who sent what.
+model EmailAccount {
+  id                   String                @id @default(cuid())
+  workspaceId          String                @map("workspace_id")
+  /// gmail | google_workspace | outlook | microsoft_365 | smtp
+  provider             String
+  /// oauth_google | oauth_microsoft | smtp
+  connectionMethod     String                @map("connection_method")
+  /// Lowercased. For OAuth accounts: the address the provider signed in as, never typed in.
+  emailAddress         String                @map("email_address")
+  displayName          String?               @map("display_name")
+  replyToAddress       String?               @map("reply_to_address")
+  /// Google `sub` / Microsoft `oid`: the same mailbox reconnecting updates this row.
+  providerAccountId    String?               @map("provider_account_id")
+  /// Microsoft `tid` (directory) / Google `hd` (Workspace domain).
+  providerTenantId     String?               @map("provider_tenant_id")
+  /// pending | connected | testing | degraded | reauthorization_required | disabled | revoked | failed
+  status               String                @default("pending")
+  /// Why it is in that status (an error code from ERROR_LABEL).
+  statusReason         String?               @map("status_reason")
+  grantedScopes        String[]              @default([]) @map("granted_scopes")
+  /// Messages a day from this account (null: the provider's default in PROVIDER_LIMITS).
+  dailyLimit           Int?                  @map("daily_limit")
+  connectedByUserId    String?               @map("connected_by_user_id")
+  lastVerifiedAt       DateTime?             @map("last_verified_at")
+  lastSuccessfulSendAt DateTime?             @map("last_successful_send_at")
+  lastErrorCode        String?               @map("last_error_code")
+  lastErrorAt          DateTime?             @map("last_error_at")
+  createdAt            DateTime              @default(now()) @map("created_at")
+  updatedAt            DateTime              @updatedAt @map("updated_at")
+  deletedAt            DateTime?             @map("deleted_at")
+  workspace            Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  oauthCredential      EmailOAuthCredential?
+  smtpCredential       EmailSmtpCredential?
+  senders              EmailSenderIdentity[]
+  messages             EmailMessage[]
+
+  @@unique([id, workspaceId])
+  @@index([workspaceId, status])
+  @@map("email_accounts")
+}
+
+/// An OAuth account's tokens (oauth_credentials). `credential_version` changes with every refresh,
+/// so two refreshes racing can't overwrite each other's rotated refresh token.
+model EmailOAuthCredential {
+  id                   String       @id @default(cuid())
+  workspaceId          String       @map("workspace_id")
+  emailAccountId       String       @map("email_account_id")
+  refreshTokenEnc      String       @map("refresh_token_enc")
+  accessTokenEnc       String?      @map("access_token_enc")
+  tokenExpiresAt       DateTime?    @map("token_expires_at")
+  encryptionKeyVersion Int          @map("encryption_key_version")
+  credentialVersion    Int          @default(1) @map("credential_version")
+  lastRefreshedAt      DateTime?    @map("last_refreshed_at")
+  createdAt            DateTime     @default(now()) @map("created_at")
+  updatedAt            DateTime     @updatedAt @map("updated_at")
+  account              EmailAccount @relation(fields: [emailAccountId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
+
+  @@unique([emailAccountId, workspaceId])
+  @@index([workspaceId])
+  @@map("email_oauth_credentials")
+}
+
+/// An SMTP account's server and password (smtp_credentials). The password is write-only.
+model EmailSmtpCredential {
+  id                   String       @id @default(cuid())
+  workspaceId          String       @map("workspace_id")
+  emailAccountId       String       @map("email_account_id")
+  host                 String
+  port                 Int
+  /// tls (implicit, 465) | starttls (587, 2525). There is no unencrypted mode.
+  encryptionMode       String       @map("encryption_mode")
+  username             String
+  secretEnc            String       @map("secret_enc")
+  encryptionKeyVersion Int          @map("encryption_key_version")
+  createdAt            DateTime     @default(now()) @map("created_at")
+  updatedAt            DateTime     @updatedAt @map("updated_at")
+  account              EmailAccount @relation(fields: [emailAccountId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
+
+  @@unique([emailAccountId, workspaceId])
+  @@index([workspaceId])
+  @@map("email_smtp_credentials")
+}
+
+/// A sending domain and its DNS checks (verified_domains). Several workspaces may each prove the
+/// same domain; each has its own challenge.
+model EmailDomain {
+  id                    String    @id @default(cuid())
+  workspaceId           String    @map("workspace_id")
+  domain                String
+  /// dns_txt
+  verificationMethod    String    @default("dns_txt") @map("verification_method")
+  /// The challenge is compared by hash; the encrypted copy is only for showing the record again.
+  verificationTokenHash String    @map("verification_token_hash")
+  verificationTokenEnc  String    @map("verification_token_enc")
+  /// unverified | pending | verified | failed | expired | recheck_required
+  verificationStatus    String    @default("unverified") @map("verification_status")
+  ownershipVerifiedAt   DateTime? @map("ownership_verified_at")
+  verificationExpiresAt DateTime  @map("verification_expires_at")
+  /// google | microsoft | other: which SPF include and DKIM selectors to look for.
+  sendingService        String    @default("other") @map("sending_service")
+  dkimSelectors         String[]  @default([]) @map("dkim_selectors")
+  /// pass | warn | fail | missing | unknown (null: not checked yet)
+  spfStatus             String?   @map("spf_status")
+  dkimStatus            String?   @map("dkim_status")
+  dmarcStatus           String?   @map("dmarc_status")
+  /// What the last check found, record by record, with explanations.
+  dnsResults            Json?     @map("dns_results")
+  consecutiveFailures   Int       @default(0) @map("consecutive_failures")
+  lastCheckedAt         DateTime? @map("last_checked_at")
+  nextCheckAt           DateTime? @map("next_check_at")
+  createdByUserId       String?   @map("created_by_user_id")
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+  workspace             Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, domain])
+  @@unique([id, workspaceId])
+  @@index([verificationStatus, nextCheckAt])
+  @@map("email_domains")
+}
+
+/// A From address an account may send as (sender_identities). Only `verified` ones send.
+model EmailSenderIdentity {
+  id                        String                @id @default(cuid())
+  workspaceId               String                @map("workspace_id")
+  emailAccountId            String                @map("email_account_id")
+  /// The verified domain that authorized it (domain_ownership), if any.
+  domainId                  String?               @map("domain_id")
+  senderEmail               String                @map("sender_email")
+  senderName                String?               @map("sender_name")
+  /// pending | verified | revoked
+  authorizationStatus       String                @default("pending") @map("authorization_status")
+  /// provider_oauth | smtp_confirmation | domain_ownership
+  verificationMethod        String?               @map("verification_method")
+  verificationCodeHash      String?               @map("verification_code_hash")
+  verificationCodeExpiresAt DateTime?             @map("verification_code_expires_at")
+  verificationAttempts      Int                   @default(0) @map("verification_attempts")
+  verifiedAt                DateTime?             @map("verified_at")
+  /// The workspace's default sender (at most one: a partial unique index).
+  isDefault                 Boolean               @default(false) @map("is_default")
+  createdAt                 DateTime              @default(now()) @map("created_at")
+  updatedAt                 DateTime              @updatedAt @map("updated_at")
+  account                   EmailAccount          @relation(fields: [emailAccountId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
+  rules                     EmailAutomationRule[]
+
+  @@unique([emailAccountId, senderEmail])
+  @@unique([id, workspaceId])
+  @@index([workspaceId])
+  @@map("email_sender_identities")
+}
+
+/// An email template. Saving an active template's content makes a new version; the old ones stay
+/// in email_template_versions (history, restore).
+model EmailTemplate {
+  id               String                 @id @default(cuid())
+  workspaceId      String                 @map("workspace_id")
+  name             String
+  description      String?
+  /// transactional | marketing
+  category         String                 @default("transactional")
+  /// The event whose variables it uses (null: customer and business variables only).
+  eventType        String?                @map("event_type")
+  subjectTemplate  String                 @map("subject_template")
+  /// Sanitized on save (sanitizeHtml), and again after rendering.
+  htmlTemplate     String                 @map("html_template")
+  textTemplate     String                 @map("text_template")
+  /// The variables it uses, checked against the event on save.
+  allowedVariables String[]               @default([]) @map("allowed_variables")
+  version          Int                    @default(1)
+  /// draft | active | archived
+  status           String                 @default("draft")
+  replyToAddress   String?                @map("reply_to_address")
+  createdByUserId  String?                @map("created_by_user_id")
+  updatedByUserId  String?                @map("updated_by_user_id")
+  createdAt        DateTime               @default(now()) @map("created_at")
+  updatedAt        DateTime               @updatedAt @map("updated_at")
+  deletedAt        DateTime?              @map("deleted_at")
+  workspace        Workspace              @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  versions         EmailTemplateVersion[]
+  rules            EmailAutomationRule[]
+
+  @@unique([id, workspaceId])
+  @@index([workspaceId, status])
+  @@map("email_templates")
+}
+
+model EmailTemplateVersion {
+  id              String        @id @default(cuid())
+  workspaceId     String        @map("workspace_id")
+  templateId      String        @map("template_id")
+  version         Int
+  category        String
+  eventType       String?       @map("event_type")
+  subjectTemplate String        @map("subject_template")
+  htmlTemplate    String        @map("html_template")
+  textTemplate    String        @map("text_template")
+  createdByUserId String?       @map("created_by_user_id")
+  createdAt       DateTime      @default(now()) @map("created_at")
+  template        EmailTemplate @relation(fields: [templateId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
+
+  @@unique([templateId, version])
+  @@index([workspaceId])
+  @@map("email_template_versions")
+}
+
+/// Event → conditions → send this template from this sender to this recipient, after a delay.
+model EmailAutomationRule {
+  id               String                     @id @default(cuid())
+  workspaceId      String                     @map("workspace_id")
+  name             String
+  description      String?
+  eventType        String                     @map("event_type")
+  /// Only events from this Shopify store (null: any).
+  storeId          String?                    @map("store_id")
+  /// The condition tree (conditionNodeSchema); null runs for every event.
+  conditionJson    Json?                      @map("condition_json")
+  /// { type: "send_email", recipient: { type: "customer" } | { type: "fixed", address } }
+  actionJson       Json                       @map("action_json")
+  senderIdentityId String                     @map("sender_identity_id")
+  templateId       String                     @map("template_id")
+  delayMinutes     Int                        @default(0) @map("delay_minutes")
+  /// frequencySchema
+  frequencyPolicy  Json                       @map("frequency_policy")
+  maxAttempts      Int                        @default(5) @map("max_attempts")
+  enabled          Boolean                    @default(false)
+  /// Lower runs first when several rules match one event.
+  priority         Int                        @default(100)
+  lastTriggeredAt  DateTime?                  @map("last_triggered_at")
+  createdByUserId  String?                    @map("created_by_user_id")
+  updatedByUserId  String?                    @map("updated_by_user_id")
+  createdAt        DateTime                   @default(now()) @map("created_at")
+  updatedAt        DateTime                   @updatedAt @map("updated_at")
+  deletedAt        DateTime?                  @map("deleted_at")
+  workspace        Workspace                  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  sender           EmailSenderIdentity        @relation(fields: [senderIdentityId, workspaceId], references: [id, workspaceId], onDelete: NoAction)
+  template         EmailTemplate              @relation(fields: [templateId, workspaceId], references: [id, workspaceId], onDelete: NoAction)
+  executions       EmailAutomationExecution[]
+
+  @@unique([id, workspaceId])
+  @@index([workspaceId, eventType, enabled])
+  @@map("email_automation_rules")
+}
+
+/// A business event (from Shopify or the event API), normalized. Its data is encrypted and kept
+/// only as long as automations may still need it (retention clears it).
+model EmailBusinessEvent {
+  id            String                     @id @default(cuid())
+  workspaceId   String                     @map("workspace_id")
+  storeId       String?                    @map("store_id")
+  /// shopify | api
+  source        String
+  eventType     String                     @map("event_type")
+  /// The source's own id for it: the same event arriving twice is stored once.
+  externalId    String                     @map("external_id")
+  occurredAt    DateTime                   @map("occurred_at")
+  /// Keyed hash of the customer's email (finds their events for GDPR redaction).
+  recipientHash String?                    @map("recipient_hash")
+  payloadEnc    String?                    @map("payload_enc")
+  /// pending_detection (an abandoned checkout still being watched) | received | processed | cancelled | failed
+  status        String                     @default("received")
+  /// pending_detection: when it counts as abandoned if nothing else happens.
+  detectAfter   DateTime?                  @map("detect_after")
+  rulesMatched  Int                        @default(0) @map("rules_matched")
+  processedAt   DateTime?                  @map("processed_at")
+  error         String?
+  createdAt     DateTime                   @default(now()) @map("created_at")
+  updatedAt     DateTime                   @updatedAt @map("updated_at")
+  workspace     Workspace                  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  executions    EmailAutomationExecution[]
+
+  @@unique([workspaceId, source, externalId])
+  @@unique([id, workspaceId])
+  @@index([status, detectAfter])
+  @@index([workspaceId, createdAt])
+  @@index([storeId, recipientHash])
+  @@map("email_business_events")
+}
+
+/// One rule evaluated against one event (automation_executions). The idempotency key makes a
+/// redelivered event or a retried job evaluate each rule once.
+model EmailAutomationExecution {
+  id             String              @id @default(cuid())
+  workspaceId    String              @map("workspace_id")
+  ruleId         String              @map("rule_id")
+  eventId        String              @map("event_id")
+  recipientHash  String?             @map("recipient_hash")
+  /// rule:<ruleId>:event:<eventId>
+  idempotencyKey String              @map("idempotency_key")
+  /// pending | skipped | scheduled | suppressed | failed | cancelled
+  status         String              @default("pending")
+  /// What happened, in words.
+  detail         String?
+  /// An ERROR_LABEL code, when it didn't send.
+  failureReason  String?             @map("failure_reason")
+  messageId      String?             @map("message_id")
+  evaluatedAt    DateTime            @default(now()) @map("evaluated_at")
+  scheduledAt    DateTime?           @map("scheduled_at")
+  completedAt    DateTime?           @map("completed_at")
+  createdAt      DateTime            @default(now()) @map("created_at")
+  rule           EmailAutomationRule @relation(fields: [ruleId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
+  event          EmailBusinessEvent  @relation(fields: [eventId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
+
+  @@unique([workspaceId, idempotencyKey])
+  @@index([ruleId, createdAt])
+  @@index([ruleId, recipientHash, createdAt])
+  @@index([eventId])
+  @@map("email_automation_executions")
+}
+
+/// Every email: the queue (queued → processing → accepted_by_provider, or deferred / failed /
+/// suppressed / cancelled / unknown) and the history. The body is never stored: it is rendered from
+/// the template and the event when sent.
+model EmailMessage {
+  id                  String              @id @default(cuid())
+  workspaceId         String              @map("workspace_id")
+  emailAccountId      String              @map("email_account_id")
+  senderIdentityId    String?             @map("sender_identity_id")
+  ruleId              String?             @map("rule_id")
+  executionId         String?             @map("execution_id")
+  eventId             String?             @map("event_id")
+  templateId          String?             @map("template_id")
+  templateVersion     Int?                @map("template_version")
+  storeId             String?             @map("store_id")
+  /// automation | test | verification
+  kind                String
+  /// transactional | marketing
+  category            String              @default("transactional")
+  provider            String
+  senderAddress       String              @map("sender_address")
+  recipientEnc        String              @map("recipient_enc")
+  recipientHash       String              @map("recipient_hash")
+  recipientMasked     String              @map("recipient_masked")
+  subject             String
+  /// One message per purpose (automation: the execution's key; tests: random).
+  idempotencyKey      String              @map("idempotency_key")
+  /// Our Message-ID header (without angle brackets).
+  internetMessageId   String              @map("internet_message_id")
+  /// Gmail's message id, or the SMTP server's queue id. Microsoft's sendMail returns none.
+  providerMessageId   String?             @map("provider_message_id")
+  /// queued | processing | accepted_by_provider | delivered | bounced | deferred | failed | suppressed | cancelled | unknown
+  status              String              @default("queued")
+  attempts            Int                 @default(0)
+  maxAttempts         Int                 @default(5) @map("max_attempts")
+  scheduledAt         DateTime            @map("scheduled_at")
+  enqueuedAt          DateTime?           @map("enqueued_at")
+  processingStartedAt DateTime?           @map("processing_started_at")
+  providerAcceptedAt  DateTime?           @map("provider_accepted_at")
+  deliveredAt         DateTime?           @map("delivered_at")
+  failedAt            DateTime?           @map("failed_at")
+  cancelledAt         DateTime?           @map("cancelled_at")
+  lastErrorCode       String?             @map("last_error_code")
+  /// Sanitized: never a token, password or the provider's raw response.
+  lastErrorMessage    String?             @map("last_error_message")
+  createdAt           DateTime            @default(now()) @map("created_at")
+  updatedAt           DateTime            @updatedAt @map("updated_at")
+  account             EmailAccount        @relation(fields: [emailAccountId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
+  events              EmailMessageEvent[]
+
+  @@unique([workspaceId, idempotencyKey])
+  @@unique([id, workspaceId])
+  @@index([status, scheduledAt])
+  @@index([workspaceId, createdAt])
+  @@index([emailAccountId, createdAt])
+  @@index([ruleId, createdAt])
+  @@index([workspaceId, recipientHash])
+  @@index([storeId])
+  @@map("email_messages")
+}
+
+/// What happened to a message, in order (email_events). Insert-only: a trigger refuses updates.
+model EmailMessageEvent {
+  id              String       @id @default(cuid())
+  workspaceId     String       @map("workspace_id")
+  messageId       String       @map("message_id")
+  /// queued | processing | accepted | retry_scheduled | failed | bounced | suppressed | cancelled | unknown | delivered
+  eventType       String       @map("event_type")
+  providerEventId String?      @map("provider_event_id")
+  eventTimestamp  DateTime     @default(now()) @map("event_timestamp")
+  /// Sanitized details (error code, attempt, retry time). Never message content or credentials.
+  metadata        Json?
+  createdAt       DateTime     @default(now()) @map("created_at")
+  message         EmailMessage @relation(fields: [messageId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
+
+  @@index([messageId, eventTimestamp])
+  @@index([workspaceId])
+  @@map("email_message_events")
+}
+
+/// Addresses not to email (suppression_entries), by keyed hash: the list itself holds no address.
+model EmailSuppression {
+  id              String    @id @default(cuid())
+  workspaceId     String    @map("workspace_id")
+  emailHash       String    @map("email_hash")
+  emailMasked     String    @map("email_masked")
+  /// unsubscribed | bounced | complained | manual | invalid
+  reason          String
+  /// marketing | all
+  scope           String    @default("all")
+  /// unsubscribe_link | one_click | manual | smtp_rejection | api
+  source          String
+  createdByUserId String?   @map("created_by_user_id")
+  messageId       String?   @map("message_id")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  workspace       Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, emailHash, scope])
+  @@index([workspaceId, createdAt])
+  @@map("email_suppressions")
+}
+
+/// Keys for POST /api/v1/events (custom business events). Only the hash is stored.
+model EmailIngestKey {
+  id              String    @id @default(cuid())
+  workspaceId     String    @map("workspace_id")
+  name            String
+  prefix          String
+  keyHash         String    @unique @map("key_hash")
+  createdByUserId String    @map("created_by_user_id")
+  lastUsedAt      DateTime? @map("last_used_at")
+  revokedAt       DateTime? @map("revoked_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  workspace       Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@map("email_ingest_keys")
 }

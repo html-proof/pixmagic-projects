@@ -7,6 +7,7 @@ export const QUEUE = {
   sync: "sync",
   webhooks: "webhooks",
   aggregate: "aggregate",
+  email: "email",
 } as const;
 export type QueueName = keyof typeof QUEUE;
 
@@ -86,6 +87,12 @@ export interface AggregateJobData {
   days: string[];
 }
 
+/**
+ * Email integrations (packages/core/src/email): send one message, or run the automations for one
+ * business event. The rows carry the state; a message only says which one to look at.
+ */
+export type EmailJob = { kind: "email_send"; messageId: string } | { kind: "email_event"; eventId: string };
+
 export interface Producer<T> {
   send(body: T, opts?: { delaySeconds?: number }): Promise<void>;
 }
@@ -94,6 +101,7 @@ export interface Queues {
   sync: Producer<SyncJobData>;
   webhooks: Producer<WebhookJobData>;
   aggregate: Producer<AggregateJobData>;
+  email: Producer<EmailJob>;
 }
 
 /** Large payload storage (R2 in production). */
@@ -121,8 +129,13 @@ export type MemoryQueues = Queues & {
 };
 
 export function memoryQueues(): MemoryQueues {
-  const sent = { sync: [] as SyncJobData[], webhooks: [] as WebhookJobData[], aggregate: [] as AggregateJobData[] };
-  const sentOpts = { sync: [] as Array<SendOptions | undefined>, webhooks: [] as Array<SendOptions | undefined>, aggregate: [] as Array<SendOptions | undefined> };
+  const sent = { sync: [] as SyncJobData[], webhooks: [] as WebhookJobData[], aggregate: [] as AggregateJobData[], email: [] as EmailJob[] };
+  const sentOpts = {
+    sync: [] as Array<SendOptions | undefined>,
+    webhooks: [] as Array<SendOptions | undefined>,
+    aggregate: [] as Array<SendOptions | undefined>,
+    email: [] as Array<SendOptions | undefined>,
+  };
   const producer = <T>(list: T[], opts: Array<SendOptions | undefined>): Producer<T> => ({
     async send(body, o) {
       list.push(structuredClone(body));
@@ -135,8 +148,9 @@ export function memoryQueues(): MemoryQueues {
     sync: producer(sent.sync, sentOpts.sync),
     webhooks: producer(sent.webhooks, sentOpts.webhooks),
     aggregate: producer(sent.aggregate, sentOpts.aggregate),
+    email: producer(sent.email, sentOpts.email),
     clear() {
-      for (const k of ["sync", "webhooks", "aggregate"] as const) {
+      for (const k of ["sync", "webhooks", "aggregate", "email"] as const) {
         sent[k].length = 0;
         sentOpts[k].length = 0;
       }

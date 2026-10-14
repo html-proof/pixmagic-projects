@@ -115,5 +115,8 @@ export async function reencryptAllTokens(): Promise<number> {
   // this one).
   const { reencryptAdTokens } = await import("./adConnections.js");
   const { reencryptWhatsappData } = await import("./whatsapp/store.js");
-  return stores.length + (await reencryptAdTokens()) + (await reencryptWhatsappData());
+  // Email credentials are envelope encrypted under EMAIL_CREDENTIAL_KEYS (TOKEN_ENCRYPTION_KEYS when
+  // that is empty): their data keys are re-wrapped with its active key.
+  const { reencryptEmailCredentials } = await import("./email/tokens.js");
+  return stores.length + (await reencryptAdTokens()) + (await reencryptWhatsappData()) + (await reencryptEmailCredentials());
 }

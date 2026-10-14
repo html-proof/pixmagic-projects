@@ -84,7 +84,7 @@ OPS_SHOP=shop.myshopify.com pnpm --filter @app/worker ops:recompute
 | Task | What it does |
 | --- | --- |
 | `ops:recompute` | Rebuilds `daily_store_metrics` for `OPS_SHOP` from its orders and refunds. |
-| `ops:reencrypt` | Re-encrypts everything stored under `TOKEN_ENCRYPTION_KEYS` with the active key: Shopify and ad-platform tokens, WhatsApp connection secrets, contacts, message parameters and links, tracking and review tokens, abandoned checkouts. |
+| `ops:reencrypt` | Re-encrypts everything stored under `TOKEN_ENCRYPTION_KEYS` with the active key: Shopify and ad-platform tokens, WhatsApp connection secrets, contacts, message parameters and links, tracking and review tokens, abandoned checkouts. Also re-wraps the email module's data keys (OAuth tokens, SMTP passwords, domain challenges, event data, recipients) under the active `EMAIL_CREDENTIAL_KEYS` key (or `TOKEN_ENCRYPTION_KEYS` when that is unset). |
 
 ## Routine operations
 
@@ -92,6 +92,24 @@ OPS_SHOP=shop.myshopify.com pnpm --filter @app/worker ops:recompute
 1. Generate a key (`openssl rand -base64 32`) and prepend it: `TOKEN_ENCRYPTION_KEYS=2:<new>,1:<old>`. Set it on the Worker (`npx wrangler secret put TOKEN_ENCRYPTION_KEYS`) and in the `.env` the maintenance tasks use. New writes use v2; v1 still decrypts.
 2. Re-encrypt existing data: `pnpm --filter @app/worker ops:reencrypt` (prints how many rows it rewrote).
 3. Run it again: it must print `re-encrypted 0 rows` (rows written by the Worker between deploy and step 2 are already on v2). Only then remove `1:<old>` from both places. Someone in the middle of choosing which ad accounts to connect at that moment has to sign in to the platform again; nothing else is lost.
+
+### Rotate the email credential key
+Same steps as above with `EMAIL_CREDENTIAL_KEYS` (when it is set; otherwise the email module uses `TOKEN_ENCRYPTION_KEYS` and the steps above cover it). Each email secret has its own data key; `ops:reencrypt` only re-wraps those data keys, so it is quick. Set the same value in the maintenance `.env`.
+
+### Email: an account needs reconnecting (`email_account_reauth:*` alert)
+Google or Microsoft rejected the stored authorization (revoked in the user's account, password change, consent withdrawn, an organization policy). The account shows "Reconnect needed"; its emails wait up to 24 hours, then fail with `account_reauthorization_required`. A workspace admin presses **Reconnect** (Settings → Email integrations → Accounts) and signs in as the same mailbox; held mail goes out at once. Nothing to do on our side unless every account fails at once: then suspect our OAuth client (`EMAIL_GOOGLE_CLIENT_SECRET` / `EMAIL_MICROSOFT_CLIENT_SECRET` expired or rotated). Those failures are deliberately not treated as the merchant's fault (accounts go `degraded`, not "reconnect").
+
+### Email: messages with an unknown outcome
+`unknown` means the provider may have received the message but never answered (or the Worker died mid-send). Insights never resends these on its own. The merchant can review them in Activity and press **Send again**.
+
+### Email: suspend a workspace's sending (abuse, complaints)
+Not available in the app on purpose. With the owner-role connection:
+```sql
+INSERT INTO email_settings (workspace_id, suspended_at, suspended_reason, updated_at)
+VALUES ('<workspace id>', now(), '<reason shown to the workspace>', now())
+ON CONFLICT (workspace_id) DO UPDATE SET suspended_at = now(), suspended_reason = EXCLUDED.suspended_reason, updated_at = now();
+```
+Queued mail is held (cancelled after 72 hours); the dashboard shows the reason. Lift it with `UPDATE email_settings SET suspended_at = NULL, suspended_reason = NULL WHERE workspace_id = '<id>'`.
 
 ### Rotate the Shopify client secret
 Partners → app → Client credentials → rotate. Shopify accepts both for a grace period. `npx wrangler secret put SHOPIFY_API_SECRET` within that window.

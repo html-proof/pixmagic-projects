@@ -74,6 +74,28 @@ export const LIMITS = {
   /** "Sign out everywhere", per user. */
   revokeSessions: { max: 5, windowSec: 3600 },
 
+  // ---- Email integrations (per workspace unless named otherwise) ----
+  /** Connecting accounts: OAuth sign-ins started and SMTP connections saved. */
+  emailConnect: { max: 20, windowSec: 3600 },
+  /** "Test connection": a token refresh or an SMTP sign-in each. */
+  emailTest: { max: 20, windowSec: 600 },
+  /** Test emails to oneself. */
+  emailTestSend: { max: 10, windowSec: 600 },
+  /** "Check DNS now", per domain. */
+  emailDomainCheck: { max: 6, windowSec: 300 },
+  /** Sender verification codes sent, and guesses at them, per sender. */
+  emailSenderCode: { max: 5, windowSec: 3600 },
+  emailSenderConfirm: { max: 10, windowSec: 900 },
+  /** Template previews and automation dry runs, per user. */
+  emailPreview: { max: 120, windowSec: 600 },
+  /** Manual retries of failed messages. */
+  emailRetry: { max: 60, windowSec: 600 },
+  /** POST /v1/events, per key and per IP. */
+  emailIngestKey: { max: 600, windowSec: 60 },
+  emailIngestIp: { max: 1200, windowSec: 60 },
+  /** Unsubscribe page loads and clicks, per IP. */
+  emailUnsubscribeIp: { max: 60, windowSec: 600 },
+
   // ---- Public ingest ----
   /** Web pixel, per IP (a storefront sends a batch per page or so). */
   pixelIp: { max: 600, windowSec: 60 },

@@ -18,6 +18,7 @@ Living log of what is built, verified, and outstanding.
 | CI (GitHub Actions), Dockerfile, Terraform (GCP) | done | CI not yet run (no remote); `terraform validate` not run locally |
 | Docs + runbook | done | |
 | Staff Management, time & attendance, payroll (docs/staff.md) | done (not deployed; migration `20261014120000_staff_management` first) | 29 + 4 unit, 16 integration, 1 e2e journey (2026-10-14) |
+| Email integrations & automation: Gmail/Workspace + Microsoft 365 OAuth, SMTP, domains, templates, rules, delivery (docs/email.md) | done (not deployed; queue `insights-email` and migration `20261015090000_email_integrations` first; OAuth clients need admin setup) | 30 + 14 unit, 31 API + 19 worker integration, UI exercised in a local Worker (2026-10-14) |
 
 ## Log
 
@@ -61,6 +62,9 @@ Living log of what is built, verified, and outstanding.
   - The privacy policy is **written from the schema, not boilerplate**: no customer personal data is stored at all (no name, email, address or phone), `customerKey` is a store-scoped keyed HMAC and is only ever written when `read_customers` was granted, which it is not. Tokens are AES-256-GCM with per-store AAD. That is a strong PCD Level 1 story and it is now stated accurately on a public page.
   - **Three facts could not be invented** and sit in `apps/web/src/lib/contact.ts`: legal entity, support email, jurisdiction, postal address. A privacy policy is a legal document, so these are placeholders rather than guesses, and both pages render a visible "not set" banner until they are filled - the policy cannot be published unfinished by accident.
   - **Public availability is gated by Shopify app review, which cannot be done from here.** The app is on public distribution and has never been submitted; until review passes it installs only on development stores in the owner's Partner organization. Submission is a human action in the Partner Dashboard and needs: a 1200x1200 icon, a demo screencast (req 4.5.3), reviewer test credentials, an emergency contact email *and* phone, the PCD Level 1 request, and acceptance of Shopify's terms. None of it is reachable through a CLI or this repo. The 9 screenshots in `demo-screenshots/` cover the listing's screenshot requirement.
+
+- **Email integrations and automation (2026-10-14).** Settings → Email integrations: connect Gmail / Google Workspace (`gmail.send`) and Outlook / Microsoft 365 (delegated `Mail.Send`) with OAuth + PKCE, or any provider over SMTP (TLS/STARTTLS only, SSRF-checked host); envelope-encrypted credentials; domain ownership + SPF/DKIM/DMARC checks over DNS-over-HTTPS; sender identities; sanitized, versioned templates; declarative automation rules on Shopify events (order created/paid/cancelled/fulfilled, detected abandoned checkouts) and custom events (`POST /api/v1/events`); a delivery pipeline on a new `insights-email` queue with limits, retries, holds, suppression, one-click unsubscribe and honest statuses (acceptance is not delivery; interrupted sends are `unknown`, never auto-resent). 15 tables with RLS and composite tenant FKs. See docs/email.md for setup, API (docs/email-api.yaml), limitations and the production checklist.
+  - Found by the tests: a confirmed sender came back without its new default flag; fixed. The append-only trigger on `email_message_events` was proven by the demo seed (it refused a rewrite).
 
 ## Outstanding / needs your input
 
