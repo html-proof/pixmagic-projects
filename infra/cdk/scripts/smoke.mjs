@@ -46,7 +46,7 @@ await check("home page loads", async () => {
   expect(/<html/i.test(html) && /_next\/static/.test(html), "not the Next.js export");
   return `${(html.length / 1024).toFixed(0)} KB`;
 });
-for (const page of ["/login", "/signup", "/forgot-password", "/dashboard", "/settings", "/privacy"]) {
+for (const page of ["/login", "/signup", "/forgot-password", "/dashboard", "/settings", "/privacy", "/terms"]) {
   await check(`page ${page}`, async () => {
     const r = await get(`${base}${page}`);
     expect(r.status === 200, `status ${r.status}`);
