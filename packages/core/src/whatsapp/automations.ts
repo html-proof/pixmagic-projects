@@ -7,23 +7,31 @@
  * that would send the same template to the same customer for the same subject send it once
  * (the message's dedupe key is per rule and subject, and the template guard below).
  */
-import { Prisma, systemDb, type AbandonedCheckout, type OrderTracking, type Store, type WhatsappAutomationRule, type WhatsappContact } from "@app/db";
+import { Prisma, systemDb, withTenant, type AbandonedCheckout, type OrderTracking, type Store, type WhatsappAutomationRule, type WhatsappContact } from "@app/db";
 import {
   automationActionSchema,
   conditionSchema,
   evaluateConditions,
+  normalizePhone,
+  ruleConflicts,
+  templateShape,
   TRIGGER_LABEL,
   type AutomationAction,
   type AutomationFacts,
   type AutomationTrigger,
   type Condition,
+  type RuleConflict,
+  type RuleLike,
+  type TemplateComponent,
   type WhatsappConfig,
 } from "@app/shared";
 import { z } from "zod";
 import { audit } from "../notify.js";
 import { logger } from "../logger.js";
-import { cancelScheduled, scheduleMessage, type WaDeps } from "./messages.js";
-import type { Values } from "./values.js";
+import { WhatsappError } from "./errors.js";
+import { cancelScheduled, marketingAllowed, scheduleMessage, type WaDeps } from "./messages.js";
+import { contactFirstName, numberOptedOut, parseConfig } from "./store.js";
+import { orderValues, sampleValues, type Values } from "./values.js";
 
 export interface AutomationSubject {
   /** "order:<shopify id>" | "checkout:<token>" | "contact:<id>" */
@@ -45,6 +53,36 @@ export function parseRule(rule: Pick<WhatsappAutomationRule, "conditions" | "act
   const c = conditionsSchema.safeParse(rule.conditions);
   const a = automationActionSchema.safeParse(rule.action);
   return c.success && a.success ? { conditions: c.data, action: a.data } : null;
+}
+
+/** A stored rule as the conflict checker sees it, or null when its settings aren't valid. */
+export function ruleLike(r: WhatsappAutomationRule): RuleLike | null {
+  const p = parseRule(r);
+  return p ? { id: r.id, name: r.name, enabled: r.enabled, trigger: r.trigger as AutomationTrigger, conditions: p.conditions, action: p.action } : null;
+}
+
+/** A store's rules as the conflict checker sees them (invalid ones left out). */
+export const rulesLike = (rules: WhatsappAutomationRule[]): RuleLike[] => rules.map(ruleLike).filter((r): r is RuleLike => !!r);
+
+/**
+ * Check a new or changed rule before it is saved. A conflict that blocks it, or a template that
+ * isn't in the account or can't be filled, throws; conflicts that only warn come back for the
+ * merchant to see.
+ */
+export async function validateRule(workspaceId: string, storeId: string, candidate: RuleLike): Promise<RuleConflict[]> {
+  const others = rulesLike(await systemDb.whatsappAutomationRule.findMany({ where: { storeId, workspaceId } }));
+  const conflicts = ruleConflicts(candidate, others);
+  const blocking = conflicts.find((x) => x.severity === "block");
+  if (blocking) throw new WhatsappError(blocking.message, 409, "rule_conflict");
+  const a = candidate.action;
+  if (a.type === "send_template" || a.type === "schedule_reminder") {
+    const conn = await systemDb.whatsappConnection.findUnique({ where: { storeId } });
+    const t = conn ? await systemDb.whatsappTemplate.findUnique({ where: { connectionId_name_language: { connectionId: conn.id, name: a.templateName, language: a.language } } }) : null;
+    if (!t) throw new WhatsappError(`"${a.templateName}" (${a.language}) isn't in your WhatsApp account.`, 400, "template_missing");
+    const shape = templateShape(t.components as unknown as TemplateComponent[]);
+    if (a.mapping.body.length < shape.bodyVars) throw new WhatsappError(`The template has ${shape.bodyVars} variables; fill each one.`, 400, "mapping_incomplete");
+  }
+  return conflicts;
 }
 
 /** Status of the last message about this subject, for the "previous message status" condition. */
@@ -179,4 +217,66 @@ export async function dryRunAutomation(rule: WhatsappAutomationRule, subject: Au
     action: describeAction(parsed.action),
     hasPhone: !!subject.contact,
   };
+}
+
+/**
+ * "Test" in the dashboard: evaluate the rule against a recent order (or the one given) without
+ * doing anything. With a phone number, a send action's template also goes to that number with
+ * example values; `beforeSend` runs right before it is queued (the API's rate limit).
+ */
+export async function testAutomation(
+  store: Store,
+  rule: WhatsappAutomationRule,
+  input: { trackingId?: string; phone?: string },
+  deps: Pick<WaDeps, "queues"> & { beforeSend?: () => Promise<void> },
+) {
+  const { id: storeId, workspaceId } = store;
+  const settings = await systemDb.whatsappSettings.findUnique({ where: { storeId } });
+  const cfg = parseConfig(settings?.config);
+  const tracking = await withTenant(workspaceId, (tx) =>
+    tx.orderTracking.findFirst({ where: { storeId, workspaceId, ...(input.trackingId ? { id: input.trackingId } : {}) }, orderBy: { orderCreatedAt: "desc" } }),
+  );
+  const contact = tracking?.contactId ? await systemDb.whatsappContact.findUnique({ where: { id: tracking.contactId } }) : null;
+  const items = (tracking?.items as Array<{ productId: string; title: string }>) ?? [];
+  const subject: AutomationSubject = {
+    key: tracking ? `order:${tracking.shopifyOrderId}` : "example",
+    store,
+    cfg,
+    contact,
+    tracking,
+    facts: tracking
+      ? { orderValue: Number(tracking.totalPrice), productIds: items.map((i) => i.productId), productTitles: items.map((i) => i.title), orderStatus: tracking.status, country: tracking.country, marketingConsent: contact ? marketingAllowed(cfg, contact) : false }
+      : { orderValue: 0, marketingConsent: false },
+    values: tracking ? orderValues(store, cfg, tracking, contact ? contactFirstName(contact) : null) : sampleValues(store, cfg),
+  };
+  const result = await dryRunAutomation(rule, subject);
+  let testMessageId: string | null = null;
+  const parsed = parseRule(rule);
+  if (input.phone && parsed && (parsed.action.type === "send_template" || parsed.action.type === "schedule_reminder")) {
+    const phone = normalizePhone(input.phone, null);
+    if (!phone) throw new WhatsappError("Enter the number in international format, starting with + and the country code.", 400, "invalid_phone");
+    if (await numberOptedOut(storeId, phone.waId)) throw new WhatsappError("That number replied STOP to this store, so nothing (not even a test) can be sent to it.", 409, "opted_out");
+    await deps.beforeSend?.();
+    const { message } = await scheduleMessage(
+      {
+        store,
+        kind: "test",
+        dedupeKey: `test:rule:${rule.id}:${Date.now()}`,
+        contact: null,
+        template: { name: parsed.action.templateName, language: parsed.action.language },
+        mapping: parsed.action.mapping,
+        values: { ...sampleValues(store, cfg), ...subject.values, customer_name: "Test" },
+        scheduledFor: new Date(),
+        ruleId: rule.id,
+        test: { to: phone.waId },
+      },
+      deps,
+    );
+    testMessageId = message.id;
+  }
+  // The rule's history shows the test; failing to record it mustn't fail the test itself.
+  await systemDb.whatsappAutomationRun
+    .create({ data: { workspaceId, storeId, ruleId: rule.id, trigger: rule.trigger, subjectKey: `test:${Date.now()}`, outcome: "test", detail: result.valid ? (result.wouldRun ? "Would run" : "Conditions not met") : result.error, messageId: testMessageId } })
+    .catch((err: unknown) => logger.warn({ err, ruleId: rule.id }, "could not record an automation test run"));
+  return { ...result, order: tracking ? { id: tracking.id, orderName: tracking.orderName } : null, testMessageId };
 }

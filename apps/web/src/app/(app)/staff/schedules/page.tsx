@@ -4,7 +4,7 @@ import { useCallback, useId, useMemo, useState, type FormEvent } from "react";
 import { daysInclusive, isCalendarDay, localDayOf, localTimeOf, shiftDay, startOfWeek, WEEKDAY_SHORT } from "@app/shared/staff";
 import { LoadError } from "@/components/LoadError";
 import { Alert, EmptyState } from "@/components/ui";
-import { PageHeader, Skeleton, useToast } from "@/components/whatsapp/common";
+import { PageHeader, Skeleton, useToast } from "@/components/AppUi";
 import { Field, Modal } from "@/components/staff/ui";
 import { WeekdayPicker } from "@/components/staff/EmployeeForm";
 import { actionError, api, useApi } from "@/lib/api";

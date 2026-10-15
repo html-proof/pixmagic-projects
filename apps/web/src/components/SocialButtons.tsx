@@ -22,8 +22,8 @@ const PROVIDERS: Array<{ id: SocialProvider; name: string; Mark: () => React.JSX
  * "Continue with Google" for both the sign-in and create-account pages: the user pool
  * creates the account the first time, so the same button does both. A full-page redirect through
  * Cognito to the provider and back to /auth/callback; the session is our httpOnly cookie.
- * `row`: the split auth pages' larger size (side by side if another provider is added later).
- * `large` draws them stacked at AuthCard's size.
+ * `row`: the split auth pages' compact buttons, centered under the "or continue with" divider
+ * (side by side if another provider is added later). `large` draws them stacked at AuthCard's size.
  */
 export function SocialButtons({ row = false, large = false }: { row?: boolean; large?: boolean }) {
   const [config, setConfig] = useState<AuthConfig | null>(null);
@@ -43,7 +43,7 @@ export function SocialButtons({ row = false, large = false }: { row?: boolean; l
   const unavailable = PROVIDERS.filter((p) => config && !config.providers[p.id]);
 
   return (
-    <div className={row ? "grid grid-cols-[repeat(auto-fit,minmax(14.5rem,1fr))] gap-3" : large ? "space-y-3" : "space-y-2"}>
+    <div className={row ? "flex flex-wrap justify-center gap-3" : large ? "space-y-3" : "space-y-2"}>
       {PROVIDERS.map(({ id, name, Mark }) => {
         const off = !!config && !config.providers[id];
         return (
@@ -52,7 +52,7 @@ export function SocialButtons({ row = false, large = false }: { row?: boolean; l
             type="button"
             className={
               row
-                ? "btn-secondary h-12 w-full rounded-xl text-[15px] whitespace-nowrap shadow-[var(--shadow)]"
+                ? "btn-secondary h-12 w-full max-w-72 rounded-xl text-[15px] whitespace-nowrap shadow-[var(--shadow)]"
                 : large
                   ? "btn-secondary h-12 w-full gap-3 rounded-xl text-[15px] font-semibold"
                   : "btn-secondary w-full"
@@ -70,7 +70,7 @@ export function SocialButtons({ row = false, large = false }: { row?: boolean; l
         );
       })}
       {unavailable.length > 0 && (
-        <p id="social-unavailable" className={row ? "col-span-full text-center text-xs text-muted" : large ? "text-sm leading-relaxed text-muted" : "text-xs text-muted"}>
+        <p id="social-unavailable" className={row ? "basis-full text-center text-xs text-muted" : large ? "text-sm leading-relaxed text-muted" : "text-xs text-muted"}>
           Sign in with {unavailable.map((p) => p.name).join(" and ")} isn&apos;t available yet. Please use your email address.
         </p>
       )}

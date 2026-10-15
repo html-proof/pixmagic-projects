@@ -2,6 +2,7 @@
 import { useEffect, useId, useRef, type ReactNode } from "react";
 import {
   APPROVAL_STATUS_LABEL,
+  EMPLOYEE_STATUS_LABEL,
   LIVE_STATUS_LABEL,
   PAYMENT_STATUS_LABEL,
   PAYROLL_STATUS_LABEL,
@@ -9,6 +10,7 @@ import {
   RANGE_PRESETS,
   SESSION_FLAG_LABEL,
   type ApprovalStatus,
+  type EmployeeStatus,
   type Granularity,
   type LiveStatus,
   type PaymentStatus,
@@ -16,8 +18,8 @@ import {
   type RangePreset,
   type SessionFlag,
 } from "@app/shared/staff";
-import { Badge, Delta, NeutralDelta, type Tone } from "@/components/dashboard/primitives";
-import { overlay } from "@/components/whatsapp/common";
+import { Badge, Delta, NeutralDelta, type Tone } from "@/components/dashboard/Primitives";
+import { overlay } from "@/components/AppUi";
 import { fmtHours, fmtMoney } from "@/lib/staff";
 
 // ---------------------------------------------------------------------------------------------
@@ -64,12 +66,10 @@ const ACCOUNT: Record<string, { tone: Tone; label: string }> = {
 };
 export const AccountBadge = ({ account }: { account: string }) => <Badge tone={ACCOUNT[account]?.tone ?? "neutral"}>{ACCOUNT[account]?.label ?? account}</Badge>;
 
-const EMP_STATUS: Record<string, { tone: Tone; label: string }> = {
-  active: { tone: "good", label: "Active" },
-  on_leave: { tone: "warn", label: "On leave" },
-  inactive: { tone: "neutral", label: "Deactivated" },
-};
-export const EmployeeStatusBadge = ({ status }: { status: string }) => <Badge tone={EMP_STATUS[status]?.tone ?? "neutral"}>{EMP_STATUS[status]?.label ?? status}</Badge>;
+const EMP_STATUS_TONE: Record<EmployeeStatus, Tone> = { active: "good", on_leave: "warn", inactive: "neutral" };
+export const EmployeeStatusBadge = ({ status }: { status: string }) => (
+  <Badge tone={EMP_STATUS_TONE[status as EmployeeStatus] ?? "neutral"}>{EMPLOYEE_STATUS_LABEL[status as EmployeeStatus] ?? status}</Badge>
+);
 
 /** A shift's flags as small chips. */
 export function Flags({ flags }: { flags: string[] }) {

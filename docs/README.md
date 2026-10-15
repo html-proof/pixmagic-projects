@@ -14,7 +14,7 @@ the code, the code wins and the page is the bug.
 | Run or write tests | [architecture.md](architecture.md#tests), [local-dev.md](local-dev.md#tests) |
 | Call the API | [api/api-overview.md](api/api-overview.md) |
 | Change the database | [database/schema.md](database/schema.md), [database/migrations.md](database/migrations.md) |
-| Deploy | [deployment-cloudflare.md](deployment-cloudflare.md) |
+| Deploy | [aws-deployment.md](aws-deployment.md) (every merge to `main` deploys to AWS); [deployment-cloudflare.md](deployment-cloudflare.md) until the cutover |
 | Fix something in production | [RUNBOOK.md](RUNBOOK.md) |
 | Know the security model | [security.md](security.md), [security-audit-2026-10-10.md](security-audit-2026-10-10.md) |
 

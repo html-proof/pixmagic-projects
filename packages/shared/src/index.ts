@@ -1,7 +1,6 @@
 export * from "./shopDomain.js";
 export * from "./hmac.js";
 export * from "./crypto.js";
-export * from "./otp.js";
 export * from "./capabilities.js";
 export * from "./dates.js";
 export * from "./kpi.js";

@@ -8,7 +8,7 @@ import { EmailPreviewFrame, Note } from "@/components/email/EmailUi";
 import { LoadError } from "@/components/LoadError";
 import { Field } from "@/components/staff/ui";
 import { Alert } from "@/components/ui";
-import { PageHeader, Skeleton, useAction } from "@/components/whatsapp/common";
+import { PageHeader, Skeleton, useAction } from "@/components/AppUi";
 import { api, ApiError, useApi } from "@/lib/api";
 import { useEmail, type AccountsResponse, type CatalogResponse, type RenderedPreview, type RuleView, type TemplateView } from "@/lib/email";
 

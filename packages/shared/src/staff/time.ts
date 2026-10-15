@@ -171,21 +171,11 @@ export function endOfLocalDay(day: string, timeZone: string): number {
   return startOfLocalDay(shiftDay(day, 1), timeZone);
 }
 
-/** Instants [start, end) covering the local days `from`..`to` inclusive. */
-export function localRangeToUtc(from: string, to: string, timeZone: string): { start: number; end: number } {
-  return { start: startOfLocalDay(from, timeZone), end: endOfLocalDay(to, timeZone) };
-}
-
 /** The next local hour boundary strictly after `ms` (zones with :30 and :45 offsets included). */
 export function nextLocalHour(ms: number, timeZone: string): number {
   const w = wallTime(ms, timeZone);
   const into = (w.minute * 60 + w.second) * 1000 + (((ms % 1000) + 1000) % 1000);
   return ms - into + 3_600_000;
-}
-
-/** Local hour (0-23) of instant `ms`. */
-export function localHourOf(ms: number, timeZone: string): number {
-  return wallTime(ms, timeZone).hour;
 }
 
 /** Whole hours and minutes, for people: 7h 45m, 0h 05m. */

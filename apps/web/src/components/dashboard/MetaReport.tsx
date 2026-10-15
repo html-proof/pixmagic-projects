@@ -6,7 +6,7 @@ import { useApp } from "@/components/AppContext";
 import { Alert } from "@/components/ui";
 import { actionError, api, ApiError, fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { fmtRange, fmtTimes } from "./format";
-import { Badge, Panel, type Tone } from "./primitives";
+import { Badge, Panel, type Tone } from "./Primitives";
 import type { AdsModule, Overview } from "./types";
 
 // ---------------------------------------------------------------------------

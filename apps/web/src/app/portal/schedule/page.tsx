@@ -1,10 +1,10 @@
 "use client";
 import { localDayOf } from "@app/shared/staff";
-import { Badge } from "@/components/dashboard/primitives";
+import { Badge } from "@/components/dashboard/Primitives";
 import { LoadError } from "@/components/LoadError";
 import { usePortal, type MySchedule } from "@/components/staff/PortalContext";
 import { EmptyState } from "@/components/ui";
-import { Skeleton } from "@/components/whatsapp/common";
+import { Skeleton } from "@/components/AppUi";
 import { useApi } from "@/lib/api";
 import { fmtDateTime, fmtDay, fmtHours, fmtTime } from "@/lib/staff";
 

@@ -2,12 +2,12 @@
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState, type FormEvent } from "react";
 import { DELIVERY_REPORTING, errorLabel, PROVIDER_LIMITS, SMTP_PORTS, type EmailProvider } from "@app/shared/email";
-import { Badge } from "@/components/dashboard/primitives";
+import { Badge } from "@/components/dashboard/Primitives";
 import { AccountStatusBadge, Note, ProviderMark, providerLabel, relative } from "@/components/email/EmailUi";
 import { LoadError } from "@/components/LoadError";
 import { Field, Modal } from "@/components/staff/ui";
 import { Alert, EmptyState } from "@/components/ui";
-import { ConfirmDialog, PageHeader, Skeleton, useAction, useToast } from "@/components/whatsapp/common";
+import { ConfirmDialog, PageHeader, Skeleton, useAction, useToast } from "@/components/AppUi";
 import { actionError, api, useApi } from "@/lib/api";
 import { useEmail, type AccountsResponse, type AccountView, type SenderView } from "@/lib/email";
 

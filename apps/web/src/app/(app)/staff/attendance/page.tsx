@@ -2,11 +2,11 @@
 import Link from "next/link";
 import { useEffect, useId, useState } from "react";
 import { LIVE_STATUS_LABEL, LIVE_STATUSES, type LiveStatus } from "@app/shared/staff";
-import { Dot, Empty, Stat } from "@/components/dashboard/primitives";
+import { Dot, Empty, Stat } from "@/components/dashboard/Primitives";
 import { LoadError } from "@/components/LoadError";
 import { EstimateNote, LiveBadge, Table, Td, Th } from "@/components/staff/ui";
 import { Alert, EmptyState } from "@/components/ui";
-import { PageHeader, Skeleton } from "@/components/whatsapp/common";
+import { PageHeader, Skeleton } from "@/components/AppUi";
 import { useApi, useLiveApi } from "@/lib/api";
 import { fmtHours, fmtMoney, fmtTime, useStaff, type StaffConfig } from "@/lib/staff";
 

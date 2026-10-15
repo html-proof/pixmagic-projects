@@ -85,6 +85,3 @@ export function staffAccess(role: Role, staffRole: StaffRole | null | undefined)
 export function staffCan(access: Pick<StaffAccess, "permissions">, perm: StaffPermission): boolean {
   return access.permissions.includes(perm);
 }
-
-/** Who may give someone a staff role (the same people who manage workspace members). */
-export const canAssignStaffRoles = (role: Role) => role === "owner" || role === "admin";

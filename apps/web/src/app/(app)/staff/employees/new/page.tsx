@@ -3,7 +3,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { LoadError } from "@/components/LoadError";
 import { Alert } from "@/components/ui";
-import { PageHeader, Skeleton, useAction } from "@/components/whatsapp/common";
+import { PageHeader, Skeleton, useAction } from "@/components/AppUi";
 import { EmployeeForm, InvitationLinkPanel, inviteEmployee, type EmployeePayload, type SharedLink } from "@/components/staff/EmployeeForm";
 import { api, useApi } from "@/lib/api";
 import { fmtDateTime, useStaff, type EmployeeRow, type StaffConfig } from "@/lib/staff";

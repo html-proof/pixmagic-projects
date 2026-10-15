@@ -3,7 +3,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 import type { StaffPermission } from "@app/shared/staff";
-import { ToastProvider } from "@/components/whatsapp/common";
+import { ToastProvider } from "@/components/AppUi";
 import { useStaff } from "@/lib/staff";
 
 /** The Staff Management section: Overview through Settings, each shown only to those who may use it. */

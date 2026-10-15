@@ -3,8 +3,9 @@
 The design for moving the whole of Insights from Cloudflare (and the Postgres container on the
 owner's PC) to AWS, region **ap-southeast-2 (Sydney)**. Phase 1 (sign-in on Cognito, an isolated
 staging environment) is built: [cognito-setup.md](cognito-setup.md), [aws-staging.md](aws-staging.md).
-This document is the plan for everything after it. Nothing here is deployed yet; each phase needs
-the owner's go-ahead (and the costs below).
+This document is the design and its reasoning. It has been built and runs since 2026-10-15; what
+actually runs, under which names, is in [aws-deployment.md](aws-deployment.md), which wins where the
+two differ (for example, the address is still the CloudFront one, not a custom domain).
 
 Principles:
 

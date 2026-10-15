@@ -3,7 +3,7 @@ import { motion, useTransform, type MotionValue } from "motion/react";
 import { useId, useRef, type ReactNode } from "react";
 import { usePauseWhenHidden } from "@/hooks/usePauseWhenHidden";
 import { MARK } from "../shared/InsightMark";
-import { CORE_EXTENT, CORE_R, OUTER_RING_R, RINGS } from "./HeroLayout";
+import { CORE_EXTENT, CORE_R, OUTER_RING_R, RINGS } from "./heroLayout";
 
 /** SVG units per sphere radius. The core's SVGs use a viewBox centred on the sphere. */
 const U = 100;

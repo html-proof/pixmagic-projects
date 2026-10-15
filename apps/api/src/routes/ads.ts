@@ -28,6 +28,7 @@ import {
   googleUserId,
   holdPendingAdConnect,
   logger,
+  providerDetail,
   metaAdAccounts,
   metaAuthorizeUrl,
   metaConfig,
@@ -518,7 +519,7 @@ export function adsRoutes(app: App, deps: Deps) {
       if (err instanceof AdsRetryableError) throw new HttpError(503, "Meta is busy right now. Try again in a minute.", "meta_busy");
       if (err instanceof AdsApiError) {
         logger.warn({ err, connectionId: conn.id }, "meta report failed");
-        throw new HttpError(502, `Meta didn't return the report: ${err.message}`, "meta_error");
+        throw new HttpError(502, `Meta didn't return the report: ${providerDetail(err.message)}`, "meta_error");
       }
       throw err;
     }
@@ -565,7 +566,7 @@ export function adsRoutes(app: App, deps: Deps) {
       if (err instanceof AdsRetryableError) throw new HttpError(503, "Google Ads is busy right now. Try again in a minute.", "google_busy");
       if (err instanceof AdsApiError) {
         logger.warn({ err, connectionId: conn.id }, "google ads report failed");
-        throw new HttpError(502, `Google Ads didn't return the report: ${err.message}`, "google_error");
+        throw new HttpError(502, `Google Ads didn't return the report: ${providerDetail(err.message)}`, "google_error");
       }
       throw err;
     }

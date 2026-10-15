@@ -1,10 +1,10 @@
 "use client";
 import { useCallback, useId, useState, type FormEvent, type ReactNode } from "react";
 import { isCalendarDay, isCurrencyCode, isTimeZone, localDayOf, PAY_CYCLE_LABEL, PAY_CYCLES, periodContaining, WEEKDAY_LABEL, type PayCycle } from "@app/shared/staff";
-import { Panel } from "@/components/dashboard/primitives";
+import { Panel } from "@/components/dashboard/Primitives";
 import { LoadError } from "@/components/LoadError";
 import { Alert } from "@/components/ui";
-import { ConfirmDialog, PageHeader, Skeleton, useAction, useToast } from "@/components/whatsapp/common";
+import { ConfirmDialog, PageHeader, Skeleton, useAction, useToast } from "@/components/AppUi";
 import { Field, Modal } from "@/components/staff/ui";
 import { CurrencySelect, minutesToHours, TimeZoneInput } from "@/components/staff/EmployeeForm";
 import { actionError, api, useApi } from "@/lib/api";

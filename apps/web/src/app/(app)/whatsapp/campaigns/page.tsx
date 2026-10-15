@@ -1,13 +1,14 @@
 "use client";
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { libraryTemplate, OCCASIONS, type Audience, type TemplateMapping } from "@app/shared/whatsapp";
-import { Badge, Empty, type Tone } from "@/components/dashboard/primitives";
+import { campaignCan, campaignEditable, libraryTemplate, OCCASIONS, type Audience, type CampaignStatus, type TemplateMapping } from "@app/shared/whatsapp";
+import { Badge, Empty, type Tone } from "@/components/dashboard/Primitives";
 import { LoadError } from "@/components/LoadError";
 import { ApiError, actionError, api, fmtMoney, fmtNum, fmtPct, useApi } from "@/lib/api";
 import { useApp } from "@/components/AppContext";
 import { Alert } from "@/components/ui";
-import { ConfirmDialog, fmtWhen, PageHeader, Skeleton, TemplateMapper, useAction, useToast, useWa, type SettingsResponse } from "@/components/whatsapp/common";
+import { fmtWhen, TemplateMapper, useWa, type SettingsResponse } from "@/components/whatsapp/WhatsappUi";
+import { ConfirmDialog, PageHeader, Skeleton, useAction, useToast } from "@/components/AppUi";
 import type { Overview } from "@/components/whatsapp/types";
 
 interface Metrics {
@@ -38,7 +39,7 @@ interface Campaign {
   audience: Audience;
   startAt: string;
   endAt: string | null;
-  status: "draft" | "scheduled" | "sending" | "paused" | "completed" | "cancelled";
+  status: CampaignStatus;
   estimatedRecipients: number | null;
   approvedAt: string | null;
   startedAt: string | null;
@@ -378,7 +379,7 @@ export default function Campaigns() {
                   </div>
                   {manage && (
                     <div className="flex flex-wrap gap-2">
-                      {(c.status === "draft" || c.status === "scheduled") && (
+                      {campaignEditable(c.status) && (
                         <button type="button" className="btn-secondary h-8 px-3 text-xs" onClick={() => setEditing({ id: c.id, draft: { ...c, objective: c.objective ?? "", mediaUrl: c.mediaUrl ?? "", linkUrl: c.linkUrl ?? "", discountCode: c.discountCode ?? "" } })}>
                           Edit
                         </button>
@@ -388,13 +389,13 @@ export default function Campaigns() {
                           Schedule…
                         </button>
                       )}
-                      {(c.status === "scheduled" || c.status === "sending") && (
+                      {campaignCan(c.status, "pause") && (
                         <button type="button" className="btn-secondary h-8 px-3 text-xs" disabled={!!busy} onClick={() => void act(c, "pause")}>Pause</button>
                       )}
-                      {c.status === "paused" && (
+                      {campaignCan(c.status, "resume") && (
                         <button type="button" className="btn-primary h-8 px-3 text-xs" disabled={!!busy} onClick={() => void act(c, "resume")}>Resume</button>
                       )}
-                      {["scheduled", "sending", "paused"].includes(c.status) && (
+                      {c.status !== "draft" && campaignCan(c.status, "cancel") && (
                         <button type="button" className="btn-danger h-8 px-3 text-xs" disabled={!!busy} onClick={() => window.confirm(`Cancel "${c.name}"? Messages not yet sent won't be.`) && void act(c, "cancel")}>
                           Cancel campaign
                         </button>

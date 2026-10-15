@@ -10,11 +10,11 @@ import {
   type Granularity,
   type PaymentStatus,
 } from "@app/shared/staff";
-import { Panel } from "@/components/dashboard/primitives";
+import { Panel } from "@/components/dashboard/Primitives";
 import { LoadError } from "@/components/LoadError";
 import { ColumnsChart, RankedBars, VIZ } from "@/components/staff/charts";
 import { EstimateNote, KpiCard, RangeFilter, rangeQuery, rangeReady, Table, Tabs, Td, Th, type KpiData, type RangeValue } from "@/components/staff/ui";
-import { PageHeader, Skeleton, useToast } from "@/components/whatsapp/common";
+import { PageHeader, Skeleton, useToast } from "@/components/AppUi";
 import { actionError, useApi, useLiveApi } from "@/lib/api";
 import { exportFile, fmtDay, fmtHours, fmtMoney, fmtSpan, useStaff } from "@/lib/staff";
 

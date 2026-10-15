@@ -5,7 +5,7 @@ import { useCanvasLoop, type CanvasFrame } from "@/hooks/useCanvasLoop";
 import { useViewportPerformance } from "@/hooks/useViewportPerformance";
 import { RGB, clamp01, easeInOut, lerp, seeded, segment } from "@/lib/motion";
 import { SHAPE, createParticles, rgbOf, type Particles } from "../shared/particles";
-import { CORE_R, RINGS } from "./HeroLayout";
+import { CORE_R, RINGS } from "./heroLayout";
 
 /* ---- The field: precomputed once, deterministic ---------------------------------------------- */
 

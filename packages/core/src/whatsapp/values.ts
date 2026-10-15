@@ -55,3 +55,44 @@ export function addressLine(a: { address1?: string | null; address2?: string | n
   const parts = [a.address1, a.address2, cityLine, a.country].map((x) => (x ? String(x).trim() : "")).filter(Boolean);
   return parts.length ? parts.join(", ") : null;
 }
+
+/** Values for a cart reminder (automatic or sent by hand). */
+export function cartValues(store: Pick<Store, "name" | "shopDomain">, cfg: WhatsappConfig, firstName: string | null, total: number | string | { toString(): string }, currency: string): Values {
+  return {
+    customer_name: firstName || "there",
+    store_name: storeName(store),
+    cart_total: money(total, currency),
+    support_contact: supportContact(cfg),
+  };
+}
+
+/** Example values for test sends and previews. */
+export function sampleValues(store: Pick<Store, "name" | "shopDomain" | "currency">, cfg: WhatsappConfig): Partial<Record<ParamSource, string>> {
+  const app = env().APP_URL;
+  return {
+    customer_name: "Test",
+    store_name: storeName(store),
+    order_number: "#TEST-1001",
+    order_total: money(49.99, store.currency),
+    delivery_address: "1 Example Street, Sample City",
+    tracking_url: `${app}/track?t=test-message-example-link`,
+    tracking_token: "test-message-example-link",
+    courier_name: "Test Courier",
+    tracking_number: "TEST123456",
+    carrier_tracking_url: `${app}/track?t=test-message-example-link`,
+    estimated_delivery: new Date(Date.now() + 2 * 86_400_000).toISOString().slice(0, 10),
+    review_url: `${app}/review?t=test-message-example-link`,
+    review_token: "test-message-example-link",
+    checkout_url: app,
+    checkout_link_code: "testlink00",
+    cart_total: money(49.99, store.currency),
+    refund_amount: money(10, store.currency),
+    campaign_url: app,
+    campaign_link_code: "testlink00",
+    discount_code: "TEST10",
+    discount_percentage: "10",
+    end_date: new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10),
+    occasion: "Special offers",
+    support_contact: supportContact(cfg) ?? "the store",
+  };
+}

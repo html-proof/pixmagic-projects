@@ -118,22 +118,6 @@ export function earningsMinor(seconds: number, rate: bigint, multiplier: bigint,
   return roundDiv(numerator, denominator);
 }
 
-/** Sum of bigints. */
-export const sumMinor = (values: Iterable<bigint>): bigint => {
-  let total = 0n;
-  for (const v of values) total += v;
-  return total;
-};
-
-/**
- * A bigint that must fit in a JavaScript number without losing precision (seconds, counts).
- * Amounts stay bigint; this is for figures that are never money.
- */
-export function safeNumber(v: bigint): number {
-  if (v > BigInt(Number.MAX_SAFE_INTEGER) || v < BigInt(Number.MIN_SAFE_INTEGER)) throw new MoneyError("value out of range");
-  return Number(v);
-}
-
 /** Format a major-unit decimal string for display. Display only: the string is never used for arithmetic. */
 export function formatMoney(amount: string | null | undefined, currency: string, locale?: string): string {
   if (amount === null || amount === undefined) return "—";

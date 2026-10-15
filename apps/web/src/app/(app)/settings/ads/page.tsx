@@ -10,7 +10,7 @@ import type { AdConnection, AdProvider, AdsState } from "@/lib/adConnections";
 import { leavingForSignIn, signInFinished, useBackFromSignIn } from "@/lib/adSignIn";
 import { actionError, api, useApi } from "@/lib/api";
 import { fmtRelative } from "@/components/dashboard/format";
-import { Badge, type Tone } from "@/components/dashboard/primitives";
+import { Badge, type Tone } from "@/components/dashboard/Primitives";
 
 // ---------------------------------------------------------------------------
 // Advertising integrations: connect and manage. The numbers themselves live on the dashboard's
