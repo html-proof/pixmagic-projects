@@ -1,5 +1,5 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": { "types": ["node"], "lib": ["ES2023"] },
-  "include": ["src", "worker-configuration.d.ts"]
+  "include": ["src", "moved", "worker-configuration.d.ts"]
 }

@@ -619,6 +619,18 @@ export const WEB_PIXEL_CREATE = /* GraphQL */ `
     }
   }`;
 
+/** This app's web pixel on the store (one per app), with the settings it was created with. */
+export const WEB_PIXEL_QUERY = /* GraphQL */ `
+  query WebPixel { webPixel { id settings } }`;
+
+export const WEB_PIXEL_UPDATE = /* GraphQL */ `
+  mutation WebPixelUpdate($id: ID!, $settings: JSON!) {
+    webPixelUpdate(id: $id, webPixel: { settings: $settings }) {
+      userErrors { field message code }
+      webPixel { id }
+    }
+  }`;
+
 export const APP_SUBSCRIPTION_CREATE = /* GraphQL */ `
   mutation AppSubscriptionCreate($name: String!, $returnUrl: URL!, $amount: Decimal!, $currency: CurrencyCode!, $test: Boolean) {
     appSubscriptionCreate(

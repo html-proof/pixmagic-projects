@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { Hono } from "hono";
 import { handle } from "hono/aws-lambda";
 import { buildApp, cognitoAuth, cognitoConfig, firebasePasswordCheck, unconfiguredCognito, type App, type Deps } from "@app/api";
-import { consume, runScheduled, type WorkerDeps } from "@app/worker";
+import { consume, runScheduled, seedAfterMove, type WorkerDeps } from "@app/worker";
 import { env as config, logger, memoryBlobs, memoryCoord, withLogContext, withTimeout, type Coord, type Mailer, type Queues } from "@app/core";
 import { roleCredentials } from "./awsClient.js";
 import { consumeSqs, isSqsEvent } from "./consumer.js";
@@ -26,7 +26,7 @@ import { staticSite } from "./staticSite.js";
  *           session cookie stays first-party.
  *   - jobs: SQS event source mappings (sync, webhooks, aggregate, email) → the worker's consume().
  *   - cron: EventBridge Scheduler ({ "cron": "..." }) → runScheduled(), plus maintenance actions
- *           invoked directly ({ "action": "migrate" | "counts" }).
+ *           invoked directly ({ "action": "migrate" | "counts" | "after-move" }).
  * Platform pieces: RDS PostgreSQL (process-wide pools; Lambda has no per-request scope), DynamoDB
  * for the coordinator, S3 for large webhook bodies, SES for app email, Secrets Manager + SSM for
  * configuration (secrets.ts).
@@ -199,7 +199,7 @@ const http = handle(root);
 
 /** Direct invocations (not through the URL): maintenance actions for the deploy scripts. */
 interface Action {
-  action: "migrate" | "counts";
+  action: "migrate" | "counts" | "after-move";
 }
 interface CronEvent {
   cron: string;
@@ -231,6 +231,12 @@ export const handler = async (event: unknown, context: unknown) => {
   }
 
   const action = event && typeof event === "object" ? (event as Partial<Action>).action : undefined;
+  if (action === "after-move") {
+    // Once, after the database is copied in from another deployment (docs/aws-deployment.md, Cutover).
+    const result = await seedAfterMove(await jobs());
+    logger.info(result, "after-move repair queued");
+    return result;
+  }
   if (action === "migrate" || action === "counts") {
     await ensureSecrets();
     if (!process.env.DATABASE_URL) throw new Error("DB_SECRET_ARN / DB_HOST / DB_NAME are not set");
