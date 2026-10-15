@@ -81,3 +81,22 @@ else execFileSync("zip", ["-qr", zip, "."], { cwd: out, stdio: "inherit" });
 
 const size = readFileSync(zip).length;
 console.log(`built ${zip} (${(size / 1024 / 1024).toFixed(1)} MB)`);
+
+// One file to upload to CloudShell: the package, both templates and the deploy script (LF line
+// endings: bash on Linux reads them), plus the commit they were built from.
+const bundleDir = resolve(pkg, "dist/staging-bundle");
+mkdirSync(bundleDir, { recursive: true });
+cpSync(zip, resolve(bundleDir, "function.zip"));
+for (const f of ["staging.yaml", "cognito.yaml", "deploy-staging.sh"]) {
+  writeFileSync(resolve(bundleDir, f), readFileSync(resolve(root, "infra/aws", f), "utf8").replace(/
+/g, "
+"));
+}
+const sha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+const dirty = execFileSync("git", ["status", "--porcelain"], { cwd: root, encoding: "utf8" }).trim() ? "-dirty" : "";
+writeFileSync(resolve(bundleDir, "COMMIT"), `${sha}${dirty}
+`);
+const bundle = resolve(pkg, "dist/insights-staging-bundle.zip");
+if (tar && existsSync(tar)) execFileSync(tar, ["-a", "-c", "-f", bundle, "-C", bundleDir, "."], { stdio: "inherit" });
+else execFileSync("zip", ["-qr", bundle, "."], { cwd: bundleDir, stdio: "inherit" });
+console.log(`built ${bundle} (commit ${sha}${dirty})`);

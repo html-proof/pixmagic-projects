@@ -12,7 +12,7 @@ set -euo pipefail
 
 REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-ap-southeast-2}}"
 ENVIRONMENT="${ENVIRONMENT:-staging}"
-COMMIT="${COMMIT:-unknown}"
+COMMIT="${COMMIT:-$( [ -f COMMIT ] && cat COMMIT || echo unknown )}"
 ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
 APP_STACK="insights-${ENVIRONMENT}"
 AUTH_STACK="insights-auth-${ENVIRONMENT}"
