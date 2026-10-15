@@ -196,6 +196,14 @@ describe("IAM", () => {
       },
     });
   });
+
+  it("lets the deploy role read everything the workflow's smoke tests check", () => {
+    type Policy = { Properties: { PolicyDocument: { Statement: Array<{ Action: string | string[] }> } } };
+    const actions = Object.values(t.ci.findResources("AWS::IAM::Policy")).flatMap((p) => (p as Policy).Properties.PolicyDocument.Statement.flatMap((s) => [s.Action].flat()));
+    for (const needed of ["rds:DescribeDBInstances", "s3:GetBucketPublicAccessBlock", "sqs:GetQueueUrl", "sqs:GetQueueAttributes", "logs:DescribeLogStreams", "cloudwatch:GetMetricStatistics", "lambda:GetAlias"]) {
+      expect(actions).toContain(needed);
+    }
+  });
 });
 
 describe("config", () => {

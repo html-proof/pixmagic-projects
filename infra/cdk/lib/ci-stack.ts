@@ -7,8 +7,8 @@ import type { EnvConfig } from "./config.js";
  * Deploys from GitHub Actions (.github/workflows/aws-deploy.yml) with short-lived credentials:
  * GitHub's OIDC token is exchanged for this role, no AWS access keys are stored in GitHub. Only
  * the `production` environment of the one repository may assume it, and it can do little itself:
- * hand off to the CDK bootstrap roles (which deploy the stacks), run the migrate action, and move
- * the `live` aliases back for a rollback.
+ * hand off to the CDK bootstrap roles (which deploy the stacks), run the migrate action, read what
+ * the smoke tests check, and move the `live` aliases back for a rollback.
  */
 export class CiStack extends Stack {
   constructor(scope: Construct, id: string, cfg: EnvConfig, props: StackProps) {
@@ -35,6 +35,20 @@ export class CiStack extends Stack {
       }),
     );
     role.addToPolicy(new iam.PolicyStatement({ actions: ["cloudformation:DescribeStacks"], resources: [`arn:aws:cloudformation:*:${cfg.account}:stack/Insights*-${cfg.name}/*`] }));
-    new CfnOutput(this, "DeployRoleArn", { value: role.roleArn, description: "GitHub secret AWS_DEPLOY_ROLE_ARN (environment production)" });
+    // Read-only facts the workflow's smoke tests check (scripts/smoke.mjs, "AWS side"). Without them
+    // those checks fail and the workflow rolls every release back.
+    const prefix = `insights-${cfg.name}`;
+    role.addToPolicy(new iam.PolicyStatement({ actions: ["rds:DescribeDBInstances"], resources: [`arn:aws:rds:${cfg.region}:${cfg.account}:db:${prefix}`] }));
+    role.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ["s3:GetBucketPublicAccessBlock"],
+        resources: ["payloads", "artifacts", "site"].map((kind) => `arn:aws:s3:::${prefix}-${kind}-${cfg.account}`),
+      }),
+    );
+    role.addToPolicy(new iam.PolicyStatement({ actions: ["sqs:GetQueueUrl", "sqs:GetQueueAttributes"], resources: [`arn:aws:sqs:${cfg.region}:${cfg.account}:${prefix}-dlq`] }));
+    role.addToPolicy(new iam.PolicyStatement({ actions: ["logs:DescribeLogStreams"], resources: [`arn:aws:logs:${cfg.region}:${cfg.account}:log-group:/aws/lambda/${prefix}-api:*`] }));
+    // CloudWatch metric reads have no resource-level permissions.
+    role.addToPolicy(new iam.PolicyStatement({ actions: ["cloudwatch:GetMetricStatistics"], resources: ["*"] }));
+    new CfnOutput(this, "DeployRoleArn", { value: role.roleArn, description: "GitHub variable AWS_DEPLOY_ROLE_ARN (environment production)" });
   }
 }
