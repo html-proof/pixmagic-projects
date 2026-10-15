@@ -20,8 +20,11 @@ apps/api and apps/worker ──► packages/core (Shopify, Meta, Google, WhatsAp
 everything               ──► packages/shared (pure logic, no I/O)
 ```
 
-Every API request and queue batch runs inside `withDb()` (packages/db): database clients live for
-that one invocation, which Workers requires.
+Every API request and queue batch runs inside `withDb()` (packages/db): database connections live
+for that one invocation, which Workers requires. The two Prisma clients do not: they are built once
+per isolate (building one costs ~25 ms of CPU, more than the Free plan's whole request budget) and
+run each statement on the current invocation's connections, batching queries only within one
+invocation (`scopedAdapter`, `scopedQueues`).
 
 ## Packages: what goes where
 

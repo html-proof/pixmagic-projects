@@ -8,7 +8,7 @@ Firebase Auth handles identity for **our SaaS** (not for Shopify). The API never
 2. Authentication → Sign-in method, enable:
    - **Email/Password**, with **Email link (passwordless sign-in)** turned on too: sign-in codes are our own (OTP), but when the code email can't be sent, the app falls back to Firebase's email link ([deployment-cloudflare.md](deployment-cloudflare.md)).
    - **Google**.
-   - **Apple**: needs an Apple Developer account. Create a Services ID, a Sign in with Apple key, and register the Firebase handler `https://<project>.firebaseapp.com/__/auth/handler` as the return URL. Paste Services ID, Team ID, Key ID and private key into Firebase.
+   - **Apple**: needs an Apple Developer account. Create a Services ID, a Sign in with Apple key, and register the Firebase handler `https://<project>.firebaseapp.com/__/auth/handler` as the return URL (and `https://<your web domain>/__/auth/handler` too, see [section 5](#5-google--apple-sign-in-without-a-popup)). Paste Services ID, Team ID, Key ID and private key into Firebase.
 3. Authentication → Settings → Authorized domains: add your web domain.
 4. Authentication → Templates: customise the verification and password reset emails, and set the action URL to your domain if you host the action handler.
 
@@ -27,7 +27,7 @@ Custom tokens (used by email OTP) are signed with that same service-account key.
 | --- | --- |
 | Email/password sign-up + verification email | `apps/web/src/app/signup`, `verify-email` |
 | Password reset | `apps/web/src/app/reset` (same response whether or not the account exists) |
-| Google / Apple | `apps/web/src/components/SocialButtons.tsx` (popup) |
+| Google / Apple | `apps/web/src/components/SocialButtons.tsx`: a redirect through our own `/__/auth/handler` when the build's auth domain is the web host ([section 5](#5-google--apple-sign-in-without-a-popup)), otherwise a popup |
 | Session cookie | `POST /auth/session` — requires a sign-in within the last 5 minutes |
 | Verification refresh | `POST /auth/sync-profile` — fresh ID token, same uid |
 | **6-digit email OTP** | see below |
@@ -41,3 +41,15 @@ Custom tokens (used by email OTP) are signed with that same service-account key.
 ## 4. Local emulator
 
 `docker compose up -d firebase-emulator` runs the Auth emulator on 9099. Set `FIREBASE_AUTH_EMULATOR_HOST=localhost:9099` (API) and `NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR=http://localhost:9099` (web). Google/Apple popups show the emulator's fake account picker.
+
+## 5. Google / Apple sign-in without a popup
+
+With `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=<project>.firebaseapp.com`, "Continue with Google / Apple" opens a popup. It works, but Firebase checks `popup.closed` every 2 seconds while Google's sign-in page is open in it, and Google's Cross-Origin-Opener-Policy makes Chrome log `Cross-Origin-Opener-Policy policy would block the window.closed call` (and `window.close`) for every check. Those lines are harmless and only a popup causes them.
+
+The Worker therefore serves Firebase's sign-in helper on our own origin: `/__/auth/*` is proxied to `<project>.firebaseapp.com` (`firebaseHelper` in `apps/cloudflare/src/index.ts`, Firebase's [option 3](https://firebase.google.com/docs/auth/web/redirect-best-practices)). When the web build's auth domain is the web host itself, the buttons redirect the whole page instead of opening a popup. To switch a deployment over, in this order:
+
+1. Google Cloud console, the Firebase project → APIs & Services → Credentials → **Web client (auto created by Google Service)** → Authorized redirect URIs: add `https://<your web domain>/__/auth/handler` (production: `https://insights.imeseban.workers.dev/__/auth/handler`). Until it is there, Google answers `redirect_uri_mismatch`.
+2. Apple, if enabled: add the same URL to the Services ID's return URLs.
+3. Build the web UI with `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=<your web domain>` (no `https://`) and deploy.
+
+Switching back is step 3 with `<project>.firebaseapp.com` again. Local builds keep the popup: their auth domain is never the dev host.

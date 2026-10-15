@@ -65,6 +65,20 @@ function tokenFetch() {
 const lastCookie = (setCookie: string | undefined, name: string) =>
   [...(setCookie ?? "").matchAll(new RegExp(`(?:^|, )${name}=([^;]*)`, "g"))].at(-1)?.[1];
 
+describe("queries from concurrent scopes", () => {
+  // Every request shares the same two Prisma clients, but each must still run its queries on its
+  // own connections: on Workers another request's connections can be gone before they answer.
+  it("never run on another scope's connections, even when Prisma would batch them", async () => {
+    const live = { system: process.env.DATABASE_URL!, tenant: process.env.APP_DATABASE_URL };
+    const lookup = () => systemDb.user.findUnique({ where: { firebaseUid: "nobody" } });
+    // Queued in the same tick with the same shape, the outage's first. Sharing one queue, Prisma
+    // sent both as one query on the outage's connection, and the healthy request failed too.
+    const [down, up] = await Promise.allSettled([dbDown(lookup), withDb(live, lookup)]);
+    expect(down.status).toBe("rejected");
+    expect(up).toEqual({ status: "fulfilled", value: null });
+  });
+});
+
 describe("while the database is unreachable", () => {
   it("/me says so (503) instead of signing the user out (401)", async () => {
     const { cookie } = await signIn(ctx, "u1", "a@x.com");

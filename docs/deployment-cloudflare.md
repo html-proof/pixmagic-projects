@@ -146,11 +146,17 @@ cd apps/cloudflare && npx wrangler deploy --assets ../web/out-deploy
 The browser gets Cloudflare's 1102 page instead of ours, on any route - `/api/shopify/launch`
 after an install is the one merchants notice, because it is the first thing Shopify opens.
 
-It is the CPU limit, not a bug in the route. The **Free plan allows 10 ms of CPU per request**,
-and a signed-in request here costs more than that: verifying the Firebase session cookie (RSA)
-plus a few Prisma queries measures ~14-17 ms, and a single Prisma query alone is already ~14 ms.
-Requests that fit survive; the rest are killed mid-flight, which is why it looks intermittent and
-why it bites hardest right after a deploy, when every isolate is cold.
+It is the CPU limit, not a bug in the route. The **Free plan allows 10 ms of CPU per request**.
+Until 2026-10-15 every request built two fresh Prisma clients, ~25 ms of CPU each (the
+constructor decodes the schema's parameterization tables, and connecting parses the whole schema
+again in the WASM query compiler) - so even `/api/readyz` died at 10 ms, before sending a
+statement. That was the "a single Prisma query alone is ~14 ms" measured earlier. The clients are
+now built once per isolate, at startup (`sharedClient()` / `warmDb()` in `packages/db`), which
+took a request from ~69 ms to ~12 ms of CPU locally. What is left (the session cookie's RSA check,
+the queries, mapping their results) still crosses 10 ms on the heavier pages, so requests that fit
+survive and the rest are killed mid-flight: intermittent, and worst right after a deploy, when
+every isolate is cold. If a change brings 1102s back on every route, look for something built
+per request again.
 
 Confirm it before changing anything - the invocation analytics say so outright:
 
@@ -164,4 +170,5 @@ cap being hit. `status: "success"` rows show what normal requests cost.
 **Fix:** move the account to **Workers Paid** ($5/month). The per-request CPU limit becomes 30 s,
 and `limits.cpu_ms` in `wrangler.jsonc` can be uncommented for the long sync pages. Paid is what
 this deployment assumes anyway (Queues and Durable Objects are listed under Requirements above).
-Nothing in the app can be trimmed into a 10 ms budget while it uses Prisma on Workers.
+The dashboard's pages, with their many queries, cannot be trimmed into a 10 ms budget while they
+use Prisma on Workers.

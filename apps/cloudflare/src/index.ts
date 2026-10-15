@@ -12,7 +12,7 @@ import {
   type QueueName,
   type Queues,
 } from "@app/core";
-import { withDb, type DbUrls } from "@app/db";
+import { warmDb, withDb, type DbUrls } from "@app/db";
 import { env as bindings } from "cloudflare:workers";
 import { durableCoord, type Coordinator } from "./coordinator.js";
 import { workersSmtpConnect } from "./smtpSocket.js";
@@ -21,6 +21,32 @@ export { Coordinator } from "./coordinator.js";
 
 /** API paths served without the /api prefix (for a dedicated API hostname, e.g. Shopify webhooks). */
 const BARE_API = /^\/(webhooks|pixel|shopify)\/|^\/(healthz|readyz)$/;
+
+/** Firebase's sign-in helper: its pages and scripts, and the config they read. */
+const FIREBASE_HELPER = /^\/__\/(auth\/[\w.-]+|firebase\/init\.json)$/;
+
+/**
+ * Firebase's sign-in helper (/__/auth/handler, /__/auth/iframe and their scripts), served from
+ * this origin by proxying <project>.firebaseapp.com: Firebase's "option 3" in
+ * https://firebase.google.com/docs/auth/web/redirect-best-practices. With the web build's
+ * NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN set to this host, "Continue with Google / Apple" is a
+ * same-origin redirect instead of a popup (SocialButtons.tsx). It must be a transparent proxy, not
+ * a 302: the helper keeps the sign-in in this origin's storage.
+ */
+async function firebaseHelper(request: Request, url: URL, projectId: string): Promise<Response> {
+  // GET for the pages and scripts; POST is how Apple returns to the handler (form_post).
+  if (!["GET", "HEAD", "POST"].includes(request.method)) return new Response(null, { status: 405 });
+  const headers = new Headers(request.headers);
+  // Our session cookie is no business of Firebase's.
+  headers.delete("cookie");
+  headers.delete("host");
+  return fetch(new URL(url.pathname + url.search, `https://${projectId}.firebaseapp.com`), {
+    method: request.method,
+    headers,
+    body: request.method === "POST" ? request.body : null,
+    redirect: "manual",
+  });
+}
 
 const QUEUES: Record<string, QueueName> = {
   "insights-sync": "sync",
@@ -137,12 +163,15 @@ try {
 } catch (err) {
   logger.error({ err }, "building the API at startup failed; retrying on the first request");
 }
+// The Prisma clients too, the costliest of all (~25 ms of CPU each); see sharedClient() in @app/db.
+warmDb();
 
 const dbUrls = (env: Env): DbUrls => ({ system: env.HYPERDRIVE.connectionString, tenant: env.HYPERDRIVE_RLS.connectionString });
 
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+    if (FIREBASE_HELPER.test(url.pathname)) return firebaseHelper(request, url, env.FIREBASE_PROJECT_ID);
     let apiPath: string | null = null;
     if (url.pathname === "/api" || url.pathname.startsWith("/api/")) apiPath = url.pathname.slice(4) || "/";
     else if (BARE_API.test(url.pathname)) apiPath = url.pathname;
