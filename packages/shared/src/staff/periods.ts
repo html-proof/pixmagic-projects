@@ -55,12 +55,6 @@ export function previousPeriod(period: DayRange, cycle: PayCycle, anchor: string
   return periodContaining(shiftDay(period.from, -1), cycle, anchor);
 }
 
-/** Whether `range` is exactly one period of `cycle`. */
-export function isWholePeriod(range: DayRange, cycle: PayCycle, anchor: string): boolean {
-  const p = periodContaining(range.from, cycle, anchor);
-  return p.from === range.from && p.to === range.to;
-}
-
 // ---------------------------------------------------------------------------------------------
 // Reporting ranges
 // ---------------------------------------------------------------------------------------------

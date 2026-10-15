@@ -1,5 +1,5 @@
 import { Prisma, type Tx } from "@app/db";
-import { formatScaled, minorToString, RATE_SCALE, type StaffAccess } from "@app/shared/staff";
+import { minorToString, RATE_SCALE, type StaffAccess } from "@app/shared/staff";
 import type { Role } from "@app/shared/roles";
 import { AppError } from "../errors.js";
 
@@ -78,8 +78,6 @@ export function displayRate(rate: string, currency: string): string {
   const places = Math.max(minPlaces, trimmed.length);
   return places ? `${whole}.${frac.padEnd(places, "0").slice(0, places)}` : whole!;
 }
-
-export const multiplierString = (scaled: bigint) => formatScaled(scaled, 4);
 
 /** `new Date()` for every server timestamp in one place, so tests can see where time comes from. */
 export const serverNow = () => new Date();

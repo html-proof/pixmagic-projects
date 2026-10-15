@@ -44,15 +44,6 @@ export const TRAFFIC_LABEL: Record<TrafficSource, string> = {
   unknown: "Not recorded",
 };
 
-export const MEDIUM_LABEL: Record<TrafficMedium, string> = {
-  paid: "Paid ads",
-  unpaid: "Not tagged as an ad",
-  email: "Email",
-  direct: "Direct",
-  referral: "Link from another site",
-  unknown: "Not recorded",
-};
-
 /** What Shopify's GraphQL CustomerVisit carries (the fields asked for in ordersQuery). */
 export interface ShopifyVisit {
   source?: string | null;
