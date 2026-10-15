@@ -139,81 +139,9 @@ body {
 
 /* ---- Sign-in pages (/login, /signup, password reset: AuthSplitShell) -----------------------
  * A card split in two: a deep-green showcase on the left (wide screens only) and the form on the
- * right, which follows the app's light/dark tokens. Nothing here loops: only one-off entrances.
+ * right, which follows the app's light/dark tokens and uses the account card's fields and button
+ * (AuthField, AuthSubmit, below). Nothing here loops: only one-off entrances.
  */
-@utility auth-field {
-  display: block;
-  width: 100%;
-  height: 3.25rem;
-  border: 1px solid var(--border);
-  border-radius: 0.75rem;
-  background: color-mix(in oklab, var(--bg) 55%, var(--surface));
-  /* Room for an icon or button inside an edge: set by the field's wrapper (IconField, PasswordField). */
-  padding-left: var(--auth-field-pl, 1rem);
-  padding-right: var(--auth-field-pr, 1rem);
-  font-size: 0.9375rem;
-  color: var(--text);
-  outline: none;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
-  &::placeholder {
-    color: var(--muted);
-  }
-  &:hover {
-    border-color: color-mix(in oklab, var(--accent) 30%, var(--border));
-  }
-  &:focus {
-    border-color: var(--accent);
-    background: var(--surface);
-    box-shadow: 0 0 0 4px color-mix(in oklab, var(--accent) 16%, transparent);
-  }
-}
-/* The main action: a deep green gradient with a soft glow beneath. */
-@utility auth-cta {
-  display: inline-flex;
-  width: 100%;
-  height: 3.25rem;
-  align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
-  border-radius: 0.75rem;
-  background: linear-gradient(100deg, var(--auth-cta-from), var(--auth-cta-to));
-  color: var(--auth-cta-ink);
-  font-size: 1rem;
-  font-weight: 600;
-  box-shadow: 0 10px 24px -12px color-mix(in oklab, var(--auth-cta-to) 80%, transparent), inset 0 1px 0 rgb(255 255 255 / 0.12);
-  transition: filter 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
-  &:hover:not(:disabled) {
-    filter: brightness(1.07);
-  }
-  &:active:not(:disabled) {
-    transform: translateY(1px);
-  }
-  &:focus-visible {
-    outline: none;
-    box-shadow: 0 0 0 4px color-mix(in oklab, var(--accent) 28%, transparent);
-  }
-  &:disabled {
-    opacity: 0.6;
-  }
-  & svg {
-    transition: transform 0.2s ease;
-  }
-  &:hover:not(:disabled) svg {
-    transform: translateX(3px);
-  }
-}
-:root {
-  --auth-cta-from: #2f8f5f;
-  --auth-cta-to: #1b5a3c;
-  --auth-cta-ink: #ffffff;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --auth-cta-from: #7fd0a3;
-    --auth-cta-to: #4fa97b;
-    --auth-cta-ink: #0d1f15;
-  }
-}
 /* The showcase: always dark green, whatever the colour scheme. */
 @utility auth-showcase {
   background:
@@ -226,6 +154,8 @@ body {
   border: 1px solid rgb(255 255 255 / 0.09);
   background: linear-gradient(160deg, rgb(255 255 255 / 0.075), rgb(255 255 255 / 0.03));
   border-radius: 0.875rem;
+}
+
 /* ---- Account card (AuthCard) ---------------------------------------------------------------- */
 /* Two broad, soft curves sweeping in from the sides behind the card: brand green on the left,
    green into a cool blue at the bottom right. Plain gradients, no blur, so it costs nothing. */

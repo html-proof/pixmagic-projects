@@ -11,8 +11,7 @@ const RESEND_WAIT_S = 30;
 /**
  * "Enter the 6-digit code we emailed you": sign-up confirmation, email verification, an email
  * change, a sign-in code. The caller says what a code does (`onSubmit`) and how to get another.
- * `large`: the split sign-in pages' field and button (AuthSplitShell).
- * `large` draws it at AuthCard's size.
+ * `large` draws it at the account pages' size (AuthCard, AuthSplitShell).
  */
 export function CodeStep({
   email,
@@ -113,8 +112,6 @@ export function CodeStep({
   }
 
   return (
-    <form onSubmit={submit} className={large ? "space-y-4" : "space-y-3"} noValidate>
-      <p className="text-sm">{intro ?? <>We emailed a 6-digit code to <strong>{email}</strong>. It expires in a few minutes; check your spam folder if it isn&apos;t there.</>}</p>
     <form onSubmit={submit} className="space-y-3" noValidate>
       <p className="text-sm">{introText}</p>
       {error && <Alert>{error}</Alert>}
@@ -125,7 +122,7 @@ export function CodeStep({
         </label>
         <input
           id="code"
-          className={large ? "auth-field text-lg tracking-[0.5em]" : "input tracking-[0.5em]"}
+          className="input tracking-[0.5em]"
           inputMode="numeric"
           autoComplete="one-time-code"
           pattern="\d{6}"
@@ -137,7 +134,7 @@ export function CodeStep({
         />
       </div>
       {children}
-      <button className={large ? "auth-cta" : "btn-primary w-full"} disabled={busy || code.length !== 6 || !extraValid}>
+      <button className="btn-primary w-full" disabled={busy || code.length !== 6 || !extraValid}>
         {busy ? busyLabel : submitLabel}
       </button>
       {resendButton}
