@@ -4,12 +4,14 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useReducedMotion } from "@/hooks/useReducedMotion";
+import { useSmoothScroll } from "@/hooks/useSmoothScroll";
 import { GeistMono, GeistSans } from "./shared/fonts";
 import { Cursor } from "./shared/Cursor";
 import { Navbar } from "./navigation/Navbar";
 import { IntroAnimation } from "./intro/IntroAnimation";
 import { InsightHero } from "./hero/InsightHero";
 import { Deferred, releaseWhenIdle } from "./shared/Deferred";
+import { allowGpuParticles } from "./shared/particles";
 
 // Everything below the hero is split into its own chunks. They still render into the static
 // HTML (SEO, no layout jump), but their JavaScript doesn't hold up the first screen, and each one
@@ -50,6 +52,15 @@ export function LandingPage() {
   useEffect(() => releaseWhenIdle(250), []);
   useEffect(() => {
     if (phase === "done") introPlayed = true;
+  }, [phase]);
+  // Eased wheel scrolling, from the moment the intro gives the page back (it locks scrolling until then).
+  useSmoothScroll(!reduced && phase !== "intro");
+  // The particle scenes switch to WebGL once the opening has settled: setting a context up stalls
+  // the GPU for a moment, which must not land in the intro or the hero's entrance.
+  useEffect(() => {
+    if (phase !== "done") return;
+    const id = window.setTimeout(allowGpuParticles, 1200);
+    return () => window.clearTimeout(id);
   }, [phase]);
 
   // `/` is still where sign-in sends people: a signed-in merchant goes straight on to the app.

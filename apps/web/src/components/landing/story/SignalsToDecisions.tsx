@@ -3,7 +3,6 @@ import {
   motion,
   motionValue,
   useScroll,
-  useSpring,
   useTransform,
   type MotionValue,
 } from "motion/react";
@@ -74,13 +73,13 @@ function Sheet({
         >
           <div className="absolute inset-x-0 top-0 h-[460px] overflow-hidden rounded-t-[inherit]">
             <motion.div
-              className="absolute inset-0 bg-[radial-gradient(55%_100%_at_50%_0%,rgb(140_123_255/0.13),transparent_70%)]"
+              className="lp-layer absolute inset-0 bg-[radial-gradient(55%_100%_at_50%_0%,rgb(140_123_255/0.13),transparent_70%)]"
               style={{ opacity: glow }}
             />
             <div className="lp-grid absolute inset-0 [mask-image:radial-gradient(60%_85%_at_50%_0%,black,transparent_80%)]" />
           </div>
           <motion.div
-            className="absolute left-1/2 top-0 h-px w-[min(900px,80%)] -translate-x-1/2 bg-[linear-gradient(90deg,transparent,rgb(140_123_255/0.75)_30%,rgb(94_166_255/0.85)_50%,rgb(101_216_208/0.7)_70%,transparent)]"
+            className="lp-layer absolute left-1/2 top-0 h-px w-[min(900px,80%)] -translate-x-1/2 bg-[linear-gradient(90deg,transparent,rgb(140_123_255/0.75)_30%,rgb(94_166_255/0.85)_50%,rgb(101_216_208/0.7)_70%,transparent)]"
             style={{ scaleX: light, opacity: light }}
           />
         </motion.div>
@@ -130,7 +129,7 @@ function ProgressItem({
   return (
     <li className="relative flex items-center gap-4 border-t border-lp-line py-3 last:border-b">
       <motion.span
-        className="absolute inset-x-0 -top-px h-px origin-left"
+        className="lp-layer absolute inset-x-0 -top-px h-px origin-left"
         style={{
           scaleX: active,
           opacity: active,
@@ -151,7 +150,7 @@ function ProgressItem({
       </motion.span>
       <span className="ml-auto h-[2px] w-14 overflow-hidden rounded-full bg-lp-line">
         <motion.span
-          className="block h-full origin-left rounded-full"
+          className="lp-layer block h-full origin-left rounded-full"
           style={{ scaleX: fill, background: card.accent }}
         />
       </span>
@@ -189,14 +188,9 @@ function ProgressRail({
 
 function SignalsRunway() {
   const runway = useRef<HTMLDivElement>(null);
-  const pinned = useScrollProgress(runway);
-  // A light spring gives the stack a little physical inertia without lagging the scroll.
-  const progress = useSpring(pinned, {
-    stiffness: 260,
-    damping: 42,
-    mass: 0.5,
-    restDelta: 0.0005,
-  });
+  // Follows the scroll exactly: the wheel itself is eased (useSmoothScroll), so a spring here only
+  // added lag, and kept repainting the cards for half a second after every stop.
+  const progress = useScrollProgress(runway);
   const { scrollYProgress: arrival } = useScroll({
     target: runway,
     offset: ["start end", "start start"],

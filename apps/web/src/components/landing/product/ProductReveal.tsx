@@ -1,5 +1,5 @@
 "use client";
-import { animate, motion, useInView, useMotionValue, useSpring, useTransform } from "motion/react";
+import { animate, motion, useInView, useMotionValue, useTransform } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 import { useReducedMotion } from "@/hooks/useReducedMotion";
 import { useScrollProgress } from "@/hooks/useScrollProgress";
@@ -40,11 +40,9 @@ export function ProductReveal() {
 
   // Starts while the runway is still entering, so the sidebar is arriving as the window pins.
   const scroll = useScrollProgress(runway, ["start 0.55", "end end"]);
-  // A little inertia on scroll so the window settles rather than snapping with each wheel tick.
-  const smooth = useSpring(scroll, { stiffness: 140, damping: 30, mass: 0.5 });
   const timed = useMotionValue(0);
   const mode = useMotionValue<number>(MODE.scroll);
-  const progress = useTransform([smooth, timed, mode], ([s, t, m]: number[]) => (m === MODE.still ? 1 : m === MODE.timed ? t * BUILT : s));
+  const progress = useTransform([scroll, timed, mode], ([s, t, m]: number[]) => (m === MODE.still ? 1 : m === MODE.timed ? t * BUILT : s));
 
   useEffect(() => {
     mode.set(reduced ? MODE.still : wide ? MODE.scroll : MODE.timed);
@@ -95,7 +93,7 @@ export function ProductReveal() {
           <div className="relative w-full max-w-[1220px]" style={{ perspective: 1800 }}>
             <motion.div
               aria-hidden
-              className="pointer-events-none absolute -inset-x-[8%] -bottom-[14%] top-[30%] rounded-[50%] bg-[radial-gradient(closest-side,rgb(140_123_255/0.16),rgb(94_166_255/0.06)_55%,transparent)]"
+              className="lp-layer pointer-events-none absolute -inset-x-[8%] -bottom-[14%] top-[30%] rounded-[50%] bg-[radial-gradient(closest-side,rgb(140_123_255/0.16),rgb(94_166_255/0.06)_55%,transparent)]"
               style={{ opacity: glow }}
             />
             <motion.div
@@ -103,7 +101,7 @@ export function ProductReveal() {
               role="img"
               aria-label={WINDOW_LABEL}
               data-cursor="VIEW"
-              className={`relative max-md:[transform:none]! ${reduced ? "md:h-[660px]" : "md:h-[clamp(440px,calc(100svh-160px),700px)]"}`}
+              className={`relative max-md:[transform:none]! ${reduced ? "md:h-[660px]" : "md:h-[clamp(440px,calc(100svh-160px),700px)] md:lp-layer"}`}
               style={{ rotateX, scale, y, transformOrigin: "50% 60%" }}
             >
               <ProductRevealWindow progress={progress} />

@@ -1,9 +1,10 @@
 "use client";
 import type { MotionValue } from "motion/react";
-import { useRef, type RefObject } from "react";
+import { useEffect, useRef, type RefObject } from "react";
 import { useCanvasLoop, type CanvasFrame } from "@/hooks/useCanvasLoop";
 import { useViewportPerformance } from "@/hooks/useViewportPerformance";
 import { RGB, clamp01, easeInOut, lerp, seeded, segment } from "@/lib/motion";
+import { SHAPE, createParticles, rgbOf, type Particles } from "../shared/particles";
 import { CORE_R, RINGS } from "./HeroLayout";
 
 /* ---- The field: precomputed once, deterministic ---------------------------------------------- */
@@ -16,7 +17,7 @@ const DIAMOND = 2;
 const DASH = 3;
 
 const COLORS = [`rgb(${RGB.violet})`, `rgb(${RGB.violetBright})`, `rgb(${RGB.blue})`, `rgb(${RGB.cyan})`, `rgb(${RGB.text})`];
-const SPRITE_RGB = [RGB.violet, RGB.violetBright, RGB.blue, RGB.cyan, RGB.text];
+const COLOR_RGB = [RGB.violet, RGB.violetBright, RGB.blue, RGB.cyan, RGB.text].map(rgbOf);
 const LABEL_FILL = "rgb(168, 176, 188)";
 
 /**
@@ -207,6 +208,8 @@ interface LoopState {
    */
   ctxFont: string;
   sprites: HTMLCanvasElement[] | null;
+  /** Something was drawn on the 2D canvas last frame (so it needs clearing). */
+  drawn: boolean;
   /** Lane guide stroke, rebuilt when the focus point or the size changes. */
   guide: CanvasGradient | null;
   guideKey: number;
@@ -226,6 +229,7 @@ function newLoopState(): LoopState {
     labelFont: "",
     ctxFont: "",
     sprites: null,
+    drawn: true,
     guide: null,
     guideKey: -1,
   };
@@ -301,11 +305,18 @@ export interface DataParticlesProps {
  */
 export function DataParticles({ progress, enter, coreX, coreY, coreScale, wide, boxRef, still = false, className = "" }: DataParticlesProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const glRef = useRef<HTMLCanvasElement>(null);
   const perf = useViewportPerformance();
   const count = Math.round(N_MAX * perf.particleScale);
   const glow = !perf.lowPower && perf.tier !== "mobile";
   // Created lazily in the first frame, so re-renders don't allocate throwaway typed arrays.
   const state = useRef<LoopState | null>(null);
+  // The points themselves, batched (WebGL on the canvas under this one; one still frame draws in 2D).
+  // Created on mount so its WebGL setup can wait for an idle moment (see particles.ts).
+  const particles = useRef<Particles | null>(null);
+  useEffect(() => {
+    if (!still) particles.current ??= createParticles(glRef.current);
+  }, [still]);
 
   const draw = (ctx: CanvasRenderingContext2D, { width: w, height: h, time: t, resized }: CanvasFrame) => {
     const canvas = canvasRef.current;
@@ -323,7 +334,9 @@ export function DataParticles({ progress, enter, coreX, coreY, coreScale, wide, 
         s.labelFont = `500 10.5px ${family}`;
       }
     }
-    if (!s.sprites) s.sprites = SPRITE_RGB.map(makeSprite);
+    if (!s.sprites) s.sprites = [makeSprite(RGB.violet)];
+    const pts = (particles.current ??= createParticles(still ? null : glRef.current));
+    pts.begin(w, h, canvas.width / w);
     if (s.n !== count) {
       s.n = count;
       buildOrder(f, count, s.order);
@@ -335,7 +348,10 @@ export function DataParticles({ progress, enter, coreX, coreY, coreScale, wide, 
       }
     }
 
-    ctx.clearRect(0, 0, w, h);
+    // With the points on the WebGL canvas, this one only carries the stage-1 guides and labels:
+    // left alone once they are gone, it costs nothing per frame.
+    if (s.drawn || !pts.gpu) ctx.clearRect(0, 0, w, h);
+    s.drawn = !pts.gpu;
     const fade = enter.get();
     if (fade <= 0.001) return;
 
@@ -362,6 +378,7 @@ export function DataParticles({ progress, enter, coreX, coreY, coreScale, wide, 
     // Lane guides and the focus glow: the structure the events travel along (stage 1 only).
     const structure = fade * (1 - segment(p, 0.12, 0.26));
     if (structure > 0.01) {
+      s.drawn = true;
       const key = Math.round(fx) * 10000 + Math.round(w);
       if (!s.guide || s.guideKey !== key) {
         const g = ctx.createLinearGradient(0, 0, w, 0);
@@ -395,7 +412,6 @@ export function DataParticles({ progress, enter, coreX, coreY, coreScale, wide, 
       }
     }
 
-    let color = -1;
     for (let o = 0; o < count; o++) {
       const i = s.order[o];
       const L = f.layer[i];
@@ -439,48 +455,35 @@ export function DataParticles({ progress, enter, coreX, coreY, coreScale, wide, 
       if (a < 0.01 || x < -40 || x > w + 12 || y < -12 || y > h + 12) continue;
 
       const ty = TYPES[f.type[i]];
-      if (glow && L === 2 && sprites) {
-        const g = sz * 5;
-        ctx.globalAlpha = a * 0.45;
-        ctx.drawImage(sprites[ty.color], x - g, y - g, g * 2, g * 2);
-      }
-      if (ty.color !== color) {
-        color = ty.color;
-        ctx.fillStyle = COLORS[color];
-      }
+      const [cr, cg, cb] = COLOR_RGB[ty.color];
+      if (glow && L === 2) pts.add(x, y, sz * 10, sz * 10, SHAPE.glow, cr, cg, cb, a * 0.45);
       // A short wake behind points travelling in a stream, so direction reads even when still.
       if (lane !== NO_LANE && m < 0.5) {
         const trail = (L === 2 ? 26 : 14) * (1 - m * 2);
-        ctx.globalAlpha = a * 0.22;
-        ctx.fillRect(x - trail, y - 0.5, trail, 1);
+        pts.add(x - trail / 2, y, trail, 1, SHAPE.rect, cr, cg, cb, a * 0.22);
       }
-      ctx.globalAlpha = a;
       switch (ty.shape) {
         case SQUARE:
-          ctx.fillRect(x - sz * 0.8, y - sz * 0.8, sz * 1.6, sz * 1.6);
+          pts.add(x, y, sz * 1.6, sz * 1.6, SHAPE.rect, cr, cg, cb, a);
           break;
         case CIRCLE:
-          ctx.beginPath();
-          ctx.arc(x, y, sz, 0, Math.PI * 2);
-          ctx.fill();
+          pts.add(x, y, sz * 2, sz * 2, SHAPE.circle, cr, cg, cb, a);
           break;
         case DIAMOND:
-          ctx.beginPath();
-          ctx.moveTo(x, y - sz * 1.15);
-          ctx.lineTo(x + sz * 1.15, y);
-          ctx.lineTo(x, y + sz * 1.15);
-          ctx.lineTo(x - sz * 1.15, y);
-          ctx.closePath();
-          ctx.fill();
+          pts.add(x, y, sz * 2.3, sz * 2.3, SHAPE.diamond, cr, cg, cb, a);
           break;
-        default:
-          ctx.fillRect(x - sz * 2.2, y - 0.5, sz * 4.4, Math.max(0.9, sz * 0.5));
+        default: {
+          const dh = Math.max(0.9, sz * 0.5);
+          pts.add(x, y - 0.5 + dh / 2, sz * 4.4, dh, SHAPE.rect, cr, cg, cb, a);
+        }
       }
     }
+    pts.flush(ctx, "normal");
 
     // Stage 1: now and then an event names itself next to its point, like a log line in passing.
     const eventLabels = fade * (1 - segment(p, 0.1, 0.17));
     if (eventLabels > 0.01) {
+      s.drawn = true;
       if (s.ctxFont !== s.font) ctx.font = s.ctxFont = s.font;
       ctx.textAlign = "left";
       ctx.textBaseline = "middle";
@@ -513,6 +516,7 @@ export function DataParticles({ progress, enter, coreX, coreY, coreScale, wide, 
 
     // Stage 2: the domains of a store drift inward and dissolve as they reach the core.
     if (s2 > 0 && s2 < 1 && R > 0) {
+      s.drawn = true;
       if (s.ctxFont !== s.labelFont) ctx.font = s.ctxFont = s.labelFont;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
@@ -538,5 +542,10 @@ export function DataParticles({ progress, enter, coreX, coreY, coreScale, wide, 
 
   useCanvasLoop(canvasRef, draw, { still, maxDpr: perf.maxDpr });
 
-  return <canvas ref={canvasRef} aria-hidden className={`pointer-events-none absolute inset-0 size-full font-lp-mono ${className}`} />;
+  return (
+    <>
+      {!still && <canvas ref={glRef} aria-hidden className={`pointer-events-none absolute inset-0 size-full ${className}`} />}
+      <canvas ref={canvasRef} aria-hidden className={`pointer-events-none absolute inset-0 size-full font-lp-mono ${className}`} />
+    </>
+  );
 }

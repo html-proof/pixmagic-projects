@@ -135,7 +135,7 @@ function LensTab({ name, index, progress }: { name: string; index: number; progr
         {name}
       </motion.span>
       <span className="absolute inset-x-0 bottom-0 h-px overflow-hidden bg-lp-line">
-        <motion.span className="absolute inset-0 origin-left bg-lp-violet-bright/80" style={{ scaleX: fill }} />
+        <motion.span className="lp-layer absolute inset-0 origin-left bg-lp-violet-bright/80" style={{ scaleX: fill }} />
       </span>
     </div>
   );

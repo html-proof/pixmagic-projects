@@ -45,19 +45,16 @@ function useWideValue() {
 }
 
 /**
- * Crossfade for one stage statement: rises in from below with a light blur, leaves upwards.
- * Windows are chosen so only one statement is ever readable.
+ * Crossfade for one stage statement: rises in from below, leaves upwards. Windows are chosen so
+ * only one statement is ever readable. Opacity and movement only (no blur): each statement is its
+ * own layer (lp-layer), so the GPU just moves and fades it.
  */
 function useStatement(progress: MotionValue<number>, enter: readonly [number, number] | null, exit: readonly [number, number] | null) {
   const inOf = (p: number) => (enter ? easeOut(segment(p, enter[0], enter[1])) : 1);
   const outOf = (p: number) => (exit ? easeInOut(segment(p, exit[0], exit[1])) : 0);
   const opacity = useTransform(progress, (p) => (enter ? segment(p, enter[0], enter[1]) : 1) * (1 - (exit ? segment(p, exit[0], exit[1]) : 0)));
   const y = useTransform(progress, (p) => (1 - inOf(p)) * 28 - outOf(p) * 28);
-  const filter = useTransform(progress, (p) => {
-    const b = Math.max(1 - inOf(p), outOf(p)) * 6;
-    return b < 0.15 ? "none" : `blur(${b.toFixed(2)}px)`;
-  });
-  return { opacity, y, filter };
+  return { opacity, y };
 }
 
 /** One headline line rising out of its own mask when the intro hands over. */
@@ -76,7 +73,7 @@ function FinalLine({ progress, index, children }: { progress: MotionValue<number
   const opacity = useTransform(progress, (p) => segment(p, a, a + 0.016));
   const y = useTransform(progress, (p) => (1 - easeOut(segment(p, a, a + 0.02))) * 22);
   return (
-    <motion.p className={`will-change-transform ${HEADLINE_FINAL} ${index === 2 ? "lp-gradient-text" : "text-lp-text"}`} style={{ opacity, y }}>
+    <motion.p className={`lp-layer ${HEADLINE_FINAL} ${index === 2 ? "lp-gradient-text" : "text-lp-text"}`} style={{ opacity, y }}>
       {children}
     </motion.p>
   );
@@ -153,19 +150,22 @@ function HeroCinematic({ ready }: { ready: boolean }) {
   return (
     <section ref={sectionRef} aria-labelledby="hero-title" className="relative h-[300vh] bg-lp-bg md:h-[350vh] xl:h-[450vh]">
       <div className="sticky top-0 h-svh overflow-hidden bg-[#06080a]">
+        {/* Rounded at its final radius from the start: under the stage it only shows once the
+            stage has shrunk, and animating a 140px soft shadow's radius re-rendered it every frame. */}
         <motion.div
           aria-hidden
-          className="absolute inset-0 shadow-[0_50px_140px_-40px_rgb(0_0_0/0.95),0_0_80px_-20px_rgb(140_123_255/0.12)] will-change-transform"
-          style={{ scale: stageScale, borderRadius: stageRadius, opacity: windowEdge, transformOrigin: stageOrigin }}
+          className="lp-layer absolute inset-0 rounded-[36px] shadow-[0_50px_140px_-40px_rgb(0_0_0/0.95),0_0_80px_-20px_rgb(140_123_255/0.12)]"
+          style={{ scale: stageScale, opacity: windowEdge, transformOrigin: stageOrigin }}
         />
         {/* Layers (will-change) for everything the scroll moves, so moving it never repaints it. */}
         <motion.div className="absolute inset-0 overflow-hidden bg-lp-bg will-change-transform" style={{ scale: stageScale, borderRadius: stageRadius, transformOrigin: stageOrigin }}>
           <DataParticles progress={progress} enter={enter} coreX={cx} coreY={cy} coreScale={cs} wide={wide} boxRef={boxRef} />
 
-          {/* Quiet the field behind the copy so text always reads first. */}
+          {/* Quiet the field behind the copy so text always reads first. Its own layer, so the stage's
+              corners rounding at the end of the runway repaint only the stage, not this gradient. */}
           <div
             aria-hidden
-            className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_110%_46%_at_50%_42%,rgb(8_10_13/0.74),rgb(8_10_13/0)_75%)] lg:bg-[radial-gradient(ellipse_62%_60%_at_24%_52%,rgb(8_10_13/0.78),rgb(8_10_13/0)_72%)]"
+            className="pointer-events-none absolute inset-0 will-change-transform bg-[radial-gradient(ellipse_110%_46%_at_50%_42%,rgb(8_10_13/0.74),rgb(8_10_13/0)_75%)] lg:bg-[radial-gradient(ellipse_62%_60%_at_24%_52%,rgb(8_10_13/0.78),rgb(8_10_13/0)_72%)]"
           />
 
           {/* The visual box: core, flows and dashboard share its coordinates (HeroLayout). */}
@@ -179,7 +179,7 @@ function HeroCinematic({ ready }: { ready: boolean }) {
                 style={{ opacity: boxOpacity, y: boxY, pointerEvents: boxEvents, maskImage: boxMask, WebkitMaskImage: boxMask }}
               >
                 <motion.div
-                  className="lp-grid absolute -inset-[8%] [mask-image:radial-gradient(closest-side,black_15%,transparent)]"
+                  className="lp-layer lp-grid absolute -inset-[8%] [mask-image:radial-gradient(closest-side,black_15%,transparent)]"
                   style={{ opacity: grid }}
                 />
                 <div className="hidden lg:block">
@@ -197,7 +197,7 @@ function HeroCinematic({ ready }: { ready: boolean }) {
           {/* Statements: all in the DOM in reading order; one visible at a time. */}
           <div className="pointer-events-none absolute inset-0 px-4 pb-[5svh] pt-[104px] md:px-8 lg:pb-[9svh] lg:pt-[96px] xl:px-12">
             <div className="mx-auto grid h-full w-full max-w-[1380px] grid-cols-1 grid-rows-1">
-              <motion.div className="col-start-1 row-start-1 self-center will-change-transform" style={s1}>
+              <motion.div className="lp-layer col-start-1 row-start-1 self-center" style={s1}>
                 <h1 id="hero-title" className="lp-display text-balance">
                   <RiseLine show={ready} delay={0.05}>
                     Your store
@@ -216,21 +216,21 @@ function HeroCinematic({ ready }: { ready: boolean }) {
                 </motion.p>
               </motion.div>
 
-              <motion.div className={`${COLUMN} will-change-transform`} style={s2}>
+              <motion.div className={`${COLUMN} lp-layer`} style={s2}>
                 <p className="lp-eyebrow mb-5">Thousands of events</p>
                 <p className={STATEMENT}>
                   But data alone <span className="text-lp-muted">isn&rsquo;t insight.</span>
                 </p>
               </motion.div>
 
-              <motion.div className={`${COLUMN} will-change-transform`} style={s3}>
+              <motion.div className={`${COLUMN} lp-layer`} style={s3}>
                 <p className="lp-eyebrow mb-5">Patterns</p>
                 <p className={STATEMENT}>
                   Insights connects <span className="lp-gradient-text">the dots.</span>
                 </p>
               </motion.div>
 
-              <motion.div className={`${COLUMN} will-change-transform`} style={s4}>
+              <motion.div className={`${COLUMN} lp-layer`} style={s4}>
                 <p className="lp-eyebrow mb-5">Business intelligence</p>
                 <p className={STATEMENT}>See what matters.</p>
               </motion.div>
@@ -249,7 +249,7 @@ function HeroCinematic({ ready }: { ready: boolean }) {
                     </FinalLine>
                   ))}
                 </div>
-                <motion.div className="will-change-transform" style={{ opacity: finalCopy, y: finalCopyY }}>
+                <motion.div className="lp-layer" style={{ opacity: finalCopy, y: finalCopyY }}>
                   <p className="lp-lead mt-4 max-w-[32rem] text-pretty max-md:text-[15.5px] md:mt-7">{SUPPORT}</p>
                   <div className="mt-6 flex flex-col items-start gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-6 sm:gap-y-4 md:mt-9">
                     <SignupButton size="lg">Start with Insights</SignupButton>

@@ -454,6 +454,15 @@ html {
     background: rgb(255 255 255 / 0.06);
   }
 }
+/*
+ * Its own compositor layer, for anything whose transform or opacity follows the scroll every frame:
+ * the GPU moves and fades the layer as it is, instead of the browser repainting it each frame
+ * (on integrated graphics those repaints, not the JavaScript, were what dropped frames).
+ * Only for elements that really move; every layer costs GPU memory.
+ */
+@utility lp-layer {
+  will-change: transform, opacity;
+}
 /* Visible keyboard focus on the dark canvas. */
 @utility lp-focus {
   &:focus-visible {
@@ -530,14 +539,35 @@ html {
 @utility lp-scroll-cue {
   animation: lp-scroll-cue 2.8s infinite;
 }
-/* A short bright dash running along a hero flow line (stroke units are fractions of the path). */
-@keyframes lp-flow-pulse {
-  from {
-    stroke-dashoffset: 0.05px;
+/*
+ * A short bright dash running along a hero flow line. It is its own small layer riding an
+ * `offset-path`, so moving it never repaints the diagram (an animated SVG stroke-dashoffset
+ * repainted the whole hero visual every frame).
+ */
+@keyframes lp-flow-dash {
+  0% {
+    offset-distance: 0%;
+    opacity: 0;
   }
-  to {
-    stroke-dashoffset: -1px;
+  6% {
+    opacity: 1;
   }
+  94% {
+    opacity: 1;
+  }
+  100% {
+    offset-distance: 100%;
+    opacity: 0;
+  }
+}
+
+/* Eased wheel scrolling on the landing page (useSmoothScroll): the parts of lenis/dist/lenis.css it needs. */
+html.lenis,
+html.lenis body {
+  height: auto;
+}
+.lenis.lenis-smooth iframe {
+  pointer-events: none;
 }
 
 /* The custom cursor replaces the system one only while it is active (fine pointers). */

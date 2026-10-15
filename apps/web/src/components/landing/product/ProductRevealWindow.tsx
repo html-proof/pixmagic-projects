@@ -54,7 +54,11 @@ function useStage(p: MotionValue<number>, [a, b]: Range, ease: (t: number) => nu
   return useTransform(p, (v) => ease(segment(v, a, b)));
 }
 
-/** A block that fades in (and slides from x/y) while its stage plays. */
+/**
+ * A block that fades in (and slides from x/y) while its stage plays. Each is its own layer: some
+ * stage is always playing while the window builds, and the fades would otherwise repaint the
+ * whole window on every scroll frame.
+ */
 function Reveal({
   p,
   range,
@@ -74,7 +78,7 @@ function Reveal({
   const tx = useTransform(s, (k) => (1 - k) * x);
   const ty = useTransform(s, (k) => (1 - k) * y);
   return (
-    <motion.div className={className} style={{ opacity: s, x: tx, y: ty }}>
+    <motion.div className={`lp-layer ${className ?? ""}`} style={{ opacity: s, x: tx, y: ty }}>
       {children}
     </motion.div>
   );
@@ -391,7 +395,7 @@ function SalesChart({ p }: { p: MotionValue<number> }) {
           <span key={k} className="border-t border-dashed border-white/[0.05]" />
         ))}
       </div>
-      <motion.div className="absolute inset-0" style={{ clipPath: clip }}>
+      <motion.div className="lp-layer absolute inset-0" style={{ clipPath: clip }}>
         <svg aria-hidden viewBox={`0 0 ${CHART_W} ${CHART_H}`} preserveAspectRatio="none" className="absolute inset-0 size-full overflow-visible">
           <defs>
             <linearGradient id={`pr-line-${uid}`} x1="0" x2="1" y1="0" y2="0">
@@ -410,7 +414,7 @@ function SalesChart({ p }: { p: MotionValue<number> }) {
         </svg>
       </motion.div>
       {/* The drawing tip: a full-size layer translated by fractions of its own size. */}
-      <motion.div aria-hidden className="pointer-events-none absolute inset-0" style={{ x: tipX, y: tipY, opacity: tipOpacity }}>
+      <motion.div aria-hidden className="lp-layer pointer-events-none absolute inset-0" style={{ x: tipX, y: tipY, opacity: tipOpacity }}>
         <span className="absolute -left-[9px] -top-[9px] size-[18px] rounded-full bg-lp-cyan/20" />
         <span className="absolute -left-[3.5px] -top-[3.5px] size-[7px] rounded-full bg-lp-text shadow-[0_0_12px_rgb(101_216_208/0.8)]" />
       </motion.div>
@@ -438,9 +442,9 @@ function BusinessHealth({ p }: { p: MotionValue<number> }) {
       >
         <div className="flex h-full flex-col gap-2">
           <div aria-hidden className="flex h-1.5 shrink-0 gap-1 overflow-hidden rounded-full">
-            <motion.span className="h-full flex-[5] origin-left rounded-full bg-lp-positive/80" style={{ scaleX: bar }} />
-            <motion.span className="h-full flex-[2] origin-left rounded-full bg-lp-warning/80" style={{ scaleX: bar }} />
-            <motion.span className="h-full flex-[3] origin-left rounded-full bg-white/10" style={{ scaleX: bar }} />
+            <motion.span className="lp-layer h-full flex-[5] origin-left rounded-full bg-lp-positive/80" style={{ scaleX: bar }} />
+            <motion.span className="lp-layer h-full flex-[2] origin-left rounded-full bg-lp-warning/80" style={{ scaleX: bar }} />
+            <motion.span className="lp-layer h-full flex-[3] origin-left rounded-full bg-white/10" style={{ scaleX: bar }} />
           </div>
           <ul className="flex min-h-0 flex-1 flex-col justify-around">
             {HEALTH.map((row, i) => (
@@ -474,7 +478,7 @@ function FunnelBar({ p, i, width }: { p: MotionValue<number>; i: number; width: 
   return (
     <span className="relative block h-[7px] flex-1 overflow-hidden rounded-full bg-white/[0.04]">
       <motion.span
-        className="absolute inset-y-0 left-0 origin-left rounded-full"
+        className="lp-layer absolute inset-y-0 left-0 origin-left rounded-full"
         style={{
           width: `${width * 100}%`,
           scaleX: grow,
@@ -592,7 +596,7 @@ export function ProductRevealWindow({ progress: p }: { progress: MotionValue<num
     <div className="relative flex h-full flex-col overflow-hidden rounded-[18px] border border-lp-line-strong bg-lp-bg-2 shadow-[0_50px_140px_-40px_rgb(0_0_0/0.9),0_0_0_1px_rgb(0_0_0/0.4)] md:rounded-[22px]">
       <span aria-hidden className="pointer-events-none absolute inset-x-12 top-0 z-10 h-px bg-gradient-to-r from-transparent via-white/25 to-transparent" />
       {/* Empty-window state before anything has assembled: the mark, waiting. */}
-      <motion.div aria-hidden className="pointer-events-none absolute inset-0 grid place-items-center text-lp-text" style={{ opacity: boot }}>
+      <motion.div aria-hidden className="lp-layer pointer-events-none absolute inset-0 grid place-items-center text-lp-text" style={{ opacity: boot }}>
         <InsightMark size={44} className="opacity-40" />
       </motion.div>
       <TopBar p={p} />

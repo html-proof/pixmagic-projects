@@ -145,11 +145,11 @@ export function IntelligenceCore({ motion: m, still = false }: { motion: CoreMot
       <motion.div
         ref={coreRef}
         {...paused}
-        className="absolute left-1/2 top-1/2 aspect-square -translate-x-1/2 -translate-y-1/2 will-change-transform"
+        className="lp-layer absolute left-1/2 top-1/2 aspect-square -translate-x-1/2 -translate-y-1/2"
         style={{ width: size, scale: m.scale, opacity: m.opacity }}
       >
         <motion.div
-          className="absolute inset-[12%] rounded-full"
+          className="lp-layer absolute inset-[12%] rounded-full"
           style={{
             opacity: halo,
             background:
@@ -157,7 +157,7 @@ export function IntelligenceCore({ motion: m, still = false }: { motion: CoreMot
           }}
         />
 
-        <motion.div ref={backRef} {...paused} className="absolute inset-0" style={{ opacity: m.rings }}>
+        <motion.div ref={backRef} {...paused} className="lp-layer absolute inset-0" style={{ opacity: m.rings }}>
           <svg viewBox={VIEWBOX} className={`absolute inset-0 size-full overflow-visible ${spin}`} style={still ? undefined : { animationDuration: "160s" }} fill="none">
             <path d={OUTER} stroke="rgb(255 255 255 / 0.17)" strokeWidth={1} strokeLinecap="round" vectorEffect="non-scaling-stroke" />
           </svg>
@@ -189,7 +189,7 @@ export function IntelligenceCore({ motion: m, still = false }: { motion: CoreMot
           />
         </div>
 
-        <motion.div ref={frontRef} {...paused} className="absolute inset-0" style={{ opacity: m.rings }}>
+        <motion.div ref={frontRef} {...paused} className="lp-layer absolute inset-0" style={{ opacity: m.rings }}>
           <svg viewBox={VIEWBOX} className="absolute inset-0 size-full overflow-visible" fill="none">
             <defs>
               <linearGradient id={gradient} x1="-250" y1="0" x2="250" y2="0" gradientUnits="userSpaceOnUse">
