@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { disconnectDb, systemDb, type EmailAccount, type Store } from "@app/db";
 import { resetDb } from "@app/db/testing";
 import {
@@ -364,6 +364,61 @@ describe("Shopify events", () => {
     expect((await systemDb.emailBusinessEvent.findFirstOrThrow({ where: { externalId: { contains: "ck-1" } } })).status).toBe("cancelled");
     await processBusinessEvent(abandoned.id, deps);
     expect((await systemDb.emailMessage.findFirstOrThrow({})).subject).toBe("You left 2 items");
+  });
+
+  describe("payloads that don't fit", () => {
+    // Checked against core's automation schemas once an automation listens: what doesn't fit is
+    // logged by field (never by value) and skipped, since a retry would read the same payload.
+    let warnings: Array<Record<string, unknown>>;
+    let prevLevel: string | undefined;
+    beforeEach(() => {
+      warnings = [];
+      prevLevel = process.env.LOG_LEVEL;
+      process.env.LOG_LEVEL = "warn";
+      vi.spyOn(console, "warn").mockImplementation((line: unknown) => {
+        if (String(line).startsWith("{")) warnings.push(JSON.parse(String(line)) as Record<string, unknown>);
+      });
+    });
+    afterEach(() => {
+      vi.restoreAllMocks();
+      process.env.LOG_LEVEL = prevLevel;
+    });
+
+    it("an order nothing listens to isn't read; one a rule listens to but can't read is skipped, not failed", async () => {
+      const unreadable = { ...order, updated_at: "later" };
+      await emailOnShopifyEvent(store, "orders/paid", unreadable, deps);
+      expect(warnings).toEqual([]);
+
+      await rule({ conditions: null });
+      // Before the schema this became an Invalid Date, which the database refused: the webhook failed and retried.
+      await emailOnShopifyEvent(store, "orders/paid", unreadable, deps);
+      expect(await systemDb.emailBusinessEvent.count()).toBe(0);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toMatchObject({ payload: "orders/paid", module: "email", storeId: store.id, problems: ["updated_at: not a timestamp"] });
+      expect(JSON.stringify(warnings)).not.toContain("Buyer");
+
+      await emailOnShopifyEvent(store, "orders/paid", order, deps);
+      expect(await systemDb.emailBusinessEvent.count()).toBe(1);
+    });
+
+    it("an order or a completed checkout ends the watch for abandonment even when the rest can't be read", async () => {
+      const tpl = await createTemplate(ws, userId, { name: "Cart", category: "transactional", eventType: "checkout.abandoned", subject: "Cart", html: "<p>x</p>", text: "", status: "active" });
+      await rule({ eventType: "checkout.abandoned", templateId: tpl.id, conditions: null });
+      const checkout = (token: string, over: Record<string, unknown> = {}) => ({ token, email: "cart@example.com", total_price: "40.00", line_items: [{ title: "Mug", quantity: 2 }], updated_at: new Date().toISOString(), ...over });
+      await emailOnShopifyEvent(store, "checkouts/update", checkout("ck-1"), deps);
+      await emailOnShopifyEvent(store, "checkouts/update", checkout("ck-2"), deps);
+      expect(await systemDb.emailBusinessEvent.count({ where: { status: "pending_detection" } })).toBe(2);
+
+      await emailOnShopifyEvent(store, "checkouts/update", checkout("ck-1", { completed_at: new Date().toISOString(), total_price: "a lot" }), deps);
+      await emailOnShopifyEvent(store, "orders/create", { ...order, checkout_token: "ck-2", line_items: "lots" }, deps);
+      expect(await systemDb.emailBusinessEvent.count({ where: { status: "cancelled" } })).toBe(2);
+      expect(warnings).toEqual([]);
+
+      // A checkout still open that can't be read is skipped, with a warning.
+      await emailOnShopifyEvent(store, "checkouts/update", checkout("ck-3", { total_price: "a lot" }), deps);
+      expect(await systemDb.emailBusinessEvent.count({ where: { status: "pending_detection" } })).toBe(0);
+      expect(warnings.map((w) => w.problems)).toEqual([["total_price: not an amount"]]);
+    });
   });
 });
 

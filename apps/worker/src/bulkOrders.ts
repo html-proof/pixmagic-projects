@@ -4,6 +4,7 @@ import {
   BULK_OPERATION_CANCEL,
   BULK_OPERATION_NODE,
   BULK_OPERATION_RUN_QUERY,
+  bulkInlineRefundsSchema,
   bulkOrdersQuery,
   CURRENT_BULK_OPERATION,
   graphqlOrderSchema,
@@ -72,8 +73,14 @@ export interface BulkApi {
 
 const lockKey = (storeId: string) => `bulk:orders:${storeId}`;
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
-type Line = Record<string, any>;
+/**
+ * One JSONL line: an order, or a child naming its parent in `__parentId`. Only what reassembly
+ * needs is read from it; the rest is checked once the order is whole (graphqlOrderSchema).
+ */
+type Line = Record<string, unknown>;
+
+/** A line that isn't a JSON object reads as an empty one: an order without an id, which the order schema skips (logged). */
+const asLine = (v: unknown): Line => (typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Line) : {});
 
 /**
  * Rebuild the order node `ordersQuery` would have returned from a run of JSONL lines.
@@ -90,32 +97,31 @@ type Line = Record<string, any>;
  */
 export function reassembleOrders(lines: Line[]): Line[] {
   const orders: Line[] = [];
-  const byId = new Map<string, Line>();
-  // Which refund a refund-line-item belongs to, since those name the refund as their parent.
-  const refundById = new Map<string, Line>();
+  // Each order's line items, and each refund's (those name the refund as their parent), by id.
+  const lineItemsOf = new Map<string, unknown[]>();
+  const refundLineItemsOf = new Map<string, unknown[]>();
 
   for (const line of lines) {
     if (!line.__parentId) {
-      const order: Line = { ...line, lineItems: { nodes: [] } };
-      order.refunds = (line.refunds ?? []).map((r: Line) => ({
-        ...r,
-        // Inlined by Shopify when that nesting is allowed; filled from child lines when not.
-        refundLineItems: { nodes: r.refundLineItems?.edges?.map((e: Line) => e.node) ?? r.refundLineItems?.nodes ?? [] },
-      }));
-      orders.push(order);
-      byId.set(String(line.id), order);
-      for (const r of order.refunds) refundById.set(String(r.id), r);
+      const lineItems: unknown[] = [];
+      const inline = bulkInlineRefundsSchema.safeParse(line.refunds);
+      // Refunds that can't be read stay as they came, for the order schema to turn the order away.
+      const refunds = inline.success
+        ? (inline.data ?? []).map((r) => {
+            // Inlined by Shopify when that nesting is allowed; filled from child lines when not.
+            const nodes = r.refundLineItems?.edges?.map((e) => e.node) ?? r.refundLineItems?.nodes ?? [];
+            refundLineItemsOf.set(r.id, nodes);
+            return { ...r, refundLineItems: { nodes } };
+          })
+        : line.refunds;
+      orders.push({ ...line, lineItems: { nodes: lineItems }, refunds });
+      lineItemsOf.set(String(line.id), lineItems);
       continue;
     }
     const parentId = String(line.__parentId);
-    const order = byId.get(parentId);
-    if (order) {
-      order.lineItems.nodes.push(line);
-      continue;
-    }
-    const refund = refundById.get(parentId);
-    if (refund) {
-      refund.refundLineItems.nodes.push(line);
+    const siblings = lineItemsOf.get(parentId) ?? refundLineItemsOf.get(parentId);
+    if (siblings) {
+      siblings.push(line);
       continue;
     }
     // Chunks are cut at parent boundaries precisely so this cannot happen. Dropping a line item
@@ -130,7 +136,7 @@ function parseLines(text: string, atEnd: boolean): { lines: Line[]; raw: string[
   const parts = text.split("\n");
   if (!atEnd) parts.pop(); // the range request may have cut mid-line
   const raw = parts.filter((l) => l.trim().length > 0);
-  return { lines: raw.map((l) => JSON.parse(l) as Line), raw };
+  return { lines: raw.map((l) => asLine(JSON.parse(l))), raw };
 }
 
 /**

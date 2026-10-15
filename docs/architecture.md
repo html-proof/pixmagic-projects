@@ -93,10 +93,14 @@ Where a new piece of code goes:
   `MAX_ATTEMPTS` (which must equal `max_retries + 1` in `wrangler.jsonc`), then recorded as failed
   and alerted. A failure while Postgres is unreachable spends no attempts (`deferForDb`).
 - Handlers must be idempotent: Shopify and Queues both deliver at least once.
-- What Shopify sends (webhook payloads, GraphQL pages, bulk JSONL) is checked once where it enters,
-  against the Zod schemas in `core/shopifyPayloads.ts` (`parseShopify`, `parseShopifyList` for a
-  page), before it is normalized. What doesn't fit is logged (field paths, never values) and
-  skipped, not thrown: a retry would only meet the same payload again.
+- What Shopify and Meta send (webhook payloads, GraphQL pages, bulk JSONL, Meta's WhatsApp
+  webhooks) is checked once where it enters, against Zod schemas: `core/shopifyPayloads.ts`
+  (`parseShopify`, `parseShopifyList` for a page) and `core/whatsapp/metaPayloads.ts` (`parseMeta`).
+  What doesn't fit is logged (field paths, never values) and skipped, not thrown: a retry would only
+  meet the same payload again. The WhatsApp and email automations read an order or checkout only
+  once they are about to act on it, so a store that doesn't use them logs nothing about it. The
+  exception is the GDPR topics: a `customers/redact` or `customers/data_request` that can't be read
+  fails at once (`UnrecoverableError`: recorded as failed and alerted), never marked as done.
 - Each cron sweep runs on its own: one that throws is logged and the rest of the tick still runs.
 - `UnrecoverableError` ends retries at once (revoked access, a store that is gone).
 
@@ -227,16 +231,14 @@ helpers and grading rules de-duplicated, dashboard component files renamed;
 WhatsApp campaign, automation and cart-reminder rules moved from `routes/whatsappOps.ts` into core,
 `AppError` for rule violations, provider text only through `providerDetail()`, the remaining file
 renames, app-wide UI out of `components/whatsapp`, dead code removed, and Zod schemas at the
-Shopify boundary (`core/shopifyPayloads.ts`) instead of `any` in `core/normalize.ts`.)
+Shopify and Meta boundaries (`core/shopifyPayloads.ts`, `core/whatsapp/metaPayloads.ts`) instead
+of `any` in every payload reader: the normalizers, the WhatsApp and email automations, Meta's
+WhatsApp webhooks, the app and GDPR topics, and the worker's order detail pages and bulk JSONL;
+no `any` is left in the hand-written source.)
 
 - Two Meta Graph clients (`core/ads.ts`, `core/whatsapp/graph.ts`) with different auth, error
   handling and network-failure handling. Target: one transport (design in
   [architecture/current-state.md](architecture/current-state.md), M16). Waits for the
   `claude/ads-ws-*` branches, which change `core/ads.ts` and `core/adConnections.ts`.
-- `any` in the payload readers that don't go through schemas yet: the Shopify order, checkout and
-  fulfillment payloads of the automations (`core/whatsapp/events.ts`, `core/email/events.ts`), Meta's
-  WhatsApp webhooks (`core/whatsapp/webhook.ts`), and the raw detail-query nodes and JSONL lines in
-  `worker/handlers.ts` / `worker/bulkOrders.ts` before they reach `graphqlOrderSchema`. Target:
-  schemas beside `core/shopifyPayloads.ts`, parsed with `parseShopify`.
 - Large files that do several jobs: `core/ads.ts`, `core/adConnections.ts`, `core/normalize.ts`,
   `core/notify.ts`, `worker/handlers.ts`, `core/whatsapp/events.ts`.

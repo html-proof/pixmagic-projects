@@ -3,6 +3,7 @@ import { disconnectDb, systemDb, toNumber } from "@app/db";
 import { resetDb } from "@app/db/testing";
 import { encryptTokenFields, memoryBlobs, memoryCoord, memoryMailer, memoryQueues, type FetchLike } from "@app/core";
 import { processWebhook, runSync, type WorkerDeps } from "../src/handlers.js";
+import { consume } from "../src/index.js";
 
 /**
  * Shopify data that doesn't fit the schemas in core's shopifyPayloads.ts. It is logged and skipped:
@@ -247,5 +248,128 @@ describe("sync pages with nodes that don't fit", () => {
     expect(await systemDb.syncJob.findUniqueOrThrow({ where: { id: j.id } })).toMatchObject({ status: "succeeded", progress: 1 });
     expect(warnings[0]).toMatchObject({ payload: "bulk order", bulkId, skipped: 1, of: 2 });
     expect(problems()).toEqual(["createdAt: not a timestamp"]);
+  });
+});
+
+describe("order detail pages and bulk lines that don't fit", () => {
+  const line = (id: number, over: Record<string, unknown> = {}) => ({ id: `gid://shopify/LineItem/${id}`, title: "X", quantity: 1, originalUnitPriceSet: money("10"), totalDiscountSet: money("0"), ...over });
+
+  it("an order whose extra line items don't fit is skipped, never stored with lines missing", async () => {
+    const store = await makeStore();
+    const j = await systemDb.syncJob.create({ data: { workspaceId: store.workspaceId, storeId: store.id, kind: "orders" } });
+    fetchImpl = async (_url, init) => {
+      const { query } = JSON.parse(String(init?.body)) as { query: string };
+      if (query.includes("OrderLineItems")) {
+        return gqlJson({ order: { lineItems: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [line(11), line(12, { quantity: "lots" })] } } });
+      }
+      return page("orders", [gqlOrder("gid://shopify/Order/1", { lineItems: { pageInfo: { hasNextPage: true }, nodes: [line(11)] } }), gqlOrder("gid://shopify/Order/2")]);
+    };
+    await runSync({ storeId: store.id, kind: "orders", syncJobId: j.id, pagedOnly: true, sinceDays: 3 }, deps);
+    expect((await systemDb.order.findMany()).map((o) => o.shopifyId)).toEqual(["2"]);
+    expect(await systemDb.syncJob.findUniqueOrThrow({ where: { id: j.id } })).toMatchObject({ status: "succeeded", progress: 1 });
+    expect(warnings[0]).toMatchObject({ payload: "GraphQL order", storeId: store.id });
+    expect(problems()).toEqual(["lineItems.nodes.1.quantity: Expected number, received string"]);
+  });
+
+  it("bulk import: unreadable inline refunds, or a line that isn't an object, cost only that order", async () => {
+    const store = await makeStore();
+    const j = await systemDb.syncJob.create({ data: { workspaceId: store.workspaceId, storeId: store.id, kind: "orders" } });
+    const bulkId = "gid://shopify/BulkOperation/2";
+    const body = [
+      JSON.stringify({ ...gqlOrder("gid://shopify/Order/1"), lineItems: undefined, refunds: { nodes: [] } }),
+      JSON.stringify({ ...line(11), __parentId: "gid://shopify/Order/1" }),
+      "null",
+      JSON.stringify({
+        ...gqlOrder("gid://shopify/Order/3"),
+        lineItems: undefined,
+        refunds: [{ id: "gid://shopify/Refund/9", createdAt: "2026-03-02T00:00:00Z", refundLineItems: { edges: [{ node: { subtotalSet: money("10") } }] } }],
+      }),
+      JSON.stringify({ ...line(31), __parentId: "gid://shopify/Order/3" }),
+    ].join("\n");
+    fetchImpl = async (url) => {
+      if (String(url).startsWith("https://files.example/")) return new Response(`${body}\n`, { status: 200 });
+      return gqlJson({ node: { id: bulkId, status: "COMPLETED", objectCount: "5", url: "https://files.example/result.jsonl", partialDataUrl: null, createdAt: new Date().toISOString() } });
+    };
+    await runSync({ storeId: store.id, kind: "orders", syncJobId: j.id, bulk: { phase: "ingest", id: bulkId, byteOffset: 0 } }, deps);
+    expect((await systemDb.order.findMany()).map((o) => o.shopifyId)).toEqual(["3"]);
+    expect(await systemDb.orderLineItem.count()).toBe(1);
+    expect(await systemDb.refund.count()).toBe(1);
+    expect(await systemDb.syncJob.findUniqueOrThrow({ where: { id: j.id } })).toMatchObject({ status: "succeeded", progress: 1 });
+    expect(warnings[0]).toMatchObject({ payload: "bulk order", skipped: 2, of: 3 });
+    expect(problems()).toEqual(["refunds: Expected array, received object"]);
+  });
+});
+
+describe("app and GDPR topics that don't fit", () => {
+  /** Through the real queue consumer, as production runs it: what counts is what it records. */
+  async function consumeWebhook(store: { id: string; workspaceId: string }, topic: string, payload: unknown) {
+    const ev = await systemDb.webhookEvent.create({ data: { webhookId: `g${++seq}`, topic, shopDomain: "s.myshopify.com", storeId: store.id, workspaceId: store.workspaceId } });
+    const outcome = { acked: false, retried: false };
+    const msg = { id: ev.id, body: { eventId: ev.id, topic, shop: "s.myshopify.com", payload }, attempts: 1, ack: () => void (outcome.acked = true), retry: () => void (outcome.retried = true) };
+    await consume("webhooks", msg, deps);
+    return { ...outcome, ev: await systemDb.webhookEvent.findUniqueOrThrow({ where: { id: ev.id } }) };
+  }
+
+  async function storeWithCustomers() {
+    const store = await makeStore();
+    return systemDb.store.update({ where: { id: store.id }, data: { grantedScopes: ["read_orders", "read_products", "read_customers"] } });
+  }
+
+  it("a customers/redact that names nobody fails loudly: recorded as failed and alerted, never marked done", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const store = await storeWithCustomers();
+    await webhook("orders/create", order());
+    const r = await consumeWebhook(store, "customers/redact", { shop_domain: "s.myshopify.com", customer: {}, orders_to_redact: [] });
+    // Final at once (no retries: they would read the same payload), and acknowledged.
+    expect(r).toMatchObject({ acked: true, retried: false, ev: { status: "failed" } });
+    expect(r.ev.error).toContain("customers/redact payload couldn't be read");
+    expect(await systemDb.alert.findFirst({ where: { storeId: store.id, code: "webhook_failed" } })).toMatchObject({ message: expect.stringContaining("customers/redact") });
+    expect(await systemDb.auditLog.count({ where: { action: "gdpr.customer_redacted" } })).toBe(0);
+    expect(problems()).toEqual(["(payload): names no customer and no orders"]);
+  });
+
+  it("a customers/redact read only in part redacts nothing rather than half, and a readable copy then does it all", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const store = await storeWithCustomers();
+    await webhook("orders/create", order());
+    expect((await systemDb.order.findFirstOrThrow()).customerKey).not.toBeNull();
+    const bad = await consumeWebhook(store, "customers/redact", { customer: { id: 7, email: "pii@example.com" }, orders_to_redact: "1001" });
+    expect(bad.ev.status).toBe("failed");
+    expect((await systemDb.order.findFirstOrThrow()).customerKey).not.toBeNull();
+    expect(JSON.stringify(warnings)).not.toContain("pii");
+
+    const good = await consumeWebhook(store, "customers/redact", { customer: { id: 7, email: "pii@example.com" }, orders_to_redact: [1001] });
+    expect(good.ev.status).toBe("succeeded");
+    expect((await systemDb.order.findFirstOrThrow()).customerKey).toBeNull();
+    expect(await systemDb.auditLog.count({ where: { action: "gdpr.customer_redacted" } })).toBe(1);
+  });
+
+  it("a customers/data_request that can't be read fails loudly too", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const store = await makeStore();
+    const r = await consumeWebhook(store, "customers/data_request", { customer: { id: { nested: 7 } }, orders_requested: [1] });
+    expect(r).toMatchObject({ acked: true, retried: false, ev: { status: "failed" } });
+    expect(await systemDb.auditLog.count({ where: { action: "gdpr.customer_data_request" } })).toBe(0);
+    expect(problems()).toEqual(["customer.id: Expected number, received object"]);
+  });
+
+  it("app/scopes_update without `current` keeps the store's scopes instead of revoking them all", async () => {
+    const store = await makeStore();
+    const { r, ev } = await webhook("app/scopes_update", { previous: ["read_orders"] });
+    expect(r).toEqual({ ok: true });
+    expect(ev.status).toBe("succeeded");
+    expect((await systemDb.store.findUniqueOrThrow({ where: { id: store.id } })).grantedScopes).toEqual(["read_orders", "read_products"]);
+    expect(problems()).toEqual(["current: Required"]);
+    // A readable one still applies.
+    await webhook("app/scopes_update", { current: ["read_orders"] });
+    expect((await systemDb.store.findUniqueOrThrow({ where: { id: store.id } })).grantedScopes).toEqual(["read_orders"]);
+  });
+
+  it("app_subscriptions/update without the charge is skipped with a warning", async () => {
+    await makeStore();
+    const { r, ev } = await webhook("app_subscriptions/update", { app_subscription: { status: "ACTIVE" } });
+    expect(r).toEqual({ ok: true });
+    expect(ev.status).toBe("succeeded");
+    expect(problems()).toEqual(["app_subscription.admin_graphql_api_id: Required"]);
   });
 });
