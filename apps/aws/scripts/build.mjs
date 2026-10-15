@@ -88,14 +88,11 @@ const bundleDir = resolve(pkg, "dist/staging-bundle");
 mkdirSync(bundleDir, { recursive: true });
 cpSync(zip, resolve(bundleDir, "function.zip"));
 for (const f of ["staging.yaml", "cognito.yaml", "deploy-staging.sh"]) {
-  writeFileSync(resolve(bundleDir, f), readFileSync(resolve(root, "infra/aws", f), "utf8").replace(/
-/g, "
-"));
+  writeFileSync(resolve(bundleDir, f), readFileSync(resolve(root, "infra/aws", f), "utf8").replace(/\r\n/g, "\n"));
 }
 const sha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
 const dirty = execFileSync("git", ["status", "--porcelain"], { cwd: root, encoding: "utf8" }).trim() ? "-dirty" : "";
-writeFileSync(resolve(bundleDir, "COMMIT"), `${sha}${dirty}
-`);
+writeFileSync(resolve(bundleDir, "COMMIT"), `${sha}${dirty}\n`);
 const bundle = resolve(pkg, "dist/insights-staging-bundle.zip");
 if (tar && existsSync(tar)) execFileSync(tar, ["-a", "-c", "-f", bundle, "-C", bundleDir, "."], { stdio: "inherit" });
 else execFileSync("zip", ["-qr", bundle, "."], { cwd: bundleDir, stdio: "inherit" });
