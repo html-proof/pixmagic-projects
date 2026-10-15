@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { App } from "aws-cdk-lib";
@@ -8,6 +8,8 @@ import { beforeAll, describe, expect, it } from "vitest";
 // A stand-in Lambda package, so the stacks synthesize without building the real one.
 const fnDir = mkdtempSync(join(tmpdir(), "insights-fn-"));
 writeFileSync(join(fnDir, "index.mjs"), "export const handler = async () => ({});\n");
+mkdirSync(join(fnDir, "public/_next/static/chunks"), { recursive: true });
+writeFileSync(join(fnDir, "public/_next/static/chunks/main.js"), "void 0;\n");
 process.env.INSIGHTS_FUNCTION_DIR = fnDir;
 
 const { envConfig, stripJsonComments, appVars } = await import("../lib/config.js");
@@ -97,7 +99,8 @@ describe("the app stack", () => {
   });
 
   it("runs the functions in the VPC, with secrets only by reference", () => {
-    const fns = Object.values(t.app.findResources("AWS::Lambda::Function")).filter((f) => f.Properties.Handler === "index.handler");
+    // The app's three (CDK's own upload helper for the build files is a Python function).
+    const fns = Object.values(t.app.findResources("AWS::Lambda::Function")).filter((f) => f.Properties.Handler === "index.handler" && String(f.Properties.Runtime).startsWith("nodejs"));
     expect(fns).toHaveLength(3);
     for (const f of fns) {
       expect(f.Properties.VpcConfig).toBeDefined();
@@ -113,10 +116,34 @@ describe("the app stack", () => {
     t.app.hasResourceProperties("AWS::CloudFront::Distribution", {
       DistributionConfig: Match.objectLike({
         DefaultCacheBehavior: Match.objectLike({ ViewerProtocolPolicy: "redirect-to-https" }),
-        Origins: [Match.objectLike({ OriginCustomHeaders: [Match.objectLike({ HeaderName: "x-origin-verify" })] })],
+        Origins: Match.arrayWith([Match.objectLike({ OriginCustomHeaders: [Match.objectLike({ HeaderName: "x-origin-verify" })] })]),
       }),
     });
     expect(JSON.stringify(t.app.toJSON())).toMatch(/resolve:secretsmanager:.*ORIGIN_VERIFY/);
+  });
+
+  it("serves Next's build files from a private bucket, never through the function", () => {
+    const dist = Object.values(t.app.findResources("AWS::CloudFront::Distribution"))[0]!.Properties.DistributionConfig;
+    const byId = Object.fromEntries((dist.Origins as Array<{ Id: string }>).map((o) => [o.Id, o])) as Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
+    const assets = (dist.CacheBehaviors as Array<{ PathPattern: string; TargetOriginId: string }>).find((b) => b.PathPattern === "/_next/static/*")!;
+    expect(byId[assets.TargetOriginId].S3OriginConfig).toBeDefined();
+    expect(byId[assets.TargetOriginId].OriginAccessControlId).toBeDefined();
+    expect(byId[assets.TargetOriginId].OriginCustomHeaders).toBeUndefined();
+    expect(byId[dist.DefaultCacheBehavior.TargetOriginId].OriginCustomHeaders).toBeDefined();
+
+    const site = Object.values(t.app.findResources("AWS::S3::Bucket"));
+    expect(site).toHaveLength(1);
+    expect(site[0]!.Properties.PublicAccessBlockConfiguration).toEqual({ BlockPublicAcls: true, BlockPublicPolicy: true, IgnorePublicAcls: true, RestrictPublicBuckets: true });
+    t.app.hasResourceProperties("AWS::S3::BucketPolicy", {
+      PolicyDocument: { Statement: Match.arrayWith([Match.objectLike({ Effect: "Allow", Principal: { Service: "cloudfront.amazonaws.com" }, Action: ["s3:GetObject", "s3:ListBucket"] })]) },
+    });
+    // Old builds' chunks stay for pages still open; the bucket and the API wait for the upload.
+    t.app.hasResourceProperties("Custom::CDKBucketDeployment", { Prune: false, DestinationBucketKeyPrefix: "_next/static/", SystemMetadata: { "cache-control": "public, max-age=31536000, immutable" } });
+    const resources = t.app.toJSON().Resources as Record<string, { Type: string; DependsOn?: string[] }>;
+    const upload = Object.keys(resources).find((id) => resources[id]!.Type === "Custom::CDKBucketDeployment")!;
+    const waiting = (type: string) => Object.values(resources).filter((r) => r.Type === type && r.DependsOn?.includes(upload)).length;
+    expect(waiting("AWS::CloudFront::Distribution")).toBe(1);
+    expect(waiting("AWS::Lambda::Alias")).toBe(1);
   });
 });
 

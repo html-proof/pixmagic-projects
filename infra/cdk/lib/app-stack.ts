@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { CfnOutput, Duration, RemovalPolicy, SecretValue, Stack, type StackProps } from "aws-cdk-lib";
 import * as budgets from "aws-cdk-lib/aws-budgets";
 import * as cloudfront from "aws-cdk-lib/aws-cloudfront";
@@ -11,6 +12,8 @@ import * as iam from "aws-cdk-lib/aws-iam";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import { SqsEventSource } from "aws-cdk-lib/aws-lambda-event-sources";
 import * as logs from "aws-cdk-lib/aws-logs";
+import * as s3 from "aws-cdk-lib/aws-s3";
+import * as s3deploy from "aws-cdk-lib/aws-s3-deployment";
 import * as scheduler from "aws-cdk-lib/aws-scheduler";
 import * as sns from "aws-cdk-lib/aws-sns";
 import * as subs from "aws-cdk-lib/aws-sns-subscriptions";
@@ -25,9 +28,9 @@ type QueueName = "sync" | "webhooks" | "aggregate" | "email";
  * The application: queues, the three functions (one package), CloudFront, schedules, alarms,
  * the dashboard and the budget. Redeployed on every release.
  *
- * Traffic: viewer → CloudFront (+ WAF) → the `api` function URL. Everything goes to the function,
- * which serves the UI files and the API on one origin (first-party session cookie, the same
- * routing as the Worker); `/_next/static/*` (hashed, immutable) is cached at the edge for a year.
+ * Traffic: viewer → CloudFront (+ WAF) → the `api` function URL, which serves the pages and the API
+ * on one origin (first-party session cookie, the same routing as the Worker). Next's hashed build
+ * files, `/_next/static/*`, come from an S3 bucket instead and are cached at the edge for a year.
  * CloudFront adds a secret header the function checks, so the function URL can't be used to go
  * around WAF, and a viewer-request function passes on the viewer's real address and host.
  */
@@ -157,6 +160,33 @@ export class AppStack extends Stack {
       keepaliveTimeout: Duration.seconds(60),
       connectionAttempts: 3,
     });
+
+    // --- Next's hashed build files from S3, not the function. A first page load asks for dozens
+    // of chunks at once; through the function each one took a Lambda slot, and past the account's
+    // concurrency Lambda answered 429 with a JSON body, which the browser refused to run as a script.
+    // Files of earlier builds stay (prune: false), so a page opened before a release, or served
+    // again after a rollback of the `live` alias, still finds its chunks.
+    const buildFiles = join(FUNCTION_DIR, "public/_next/static");
+    if (!existsSync(buildFiles)) throw new Error(`No UI build files at ${buildFiles}: build the package without --skip-web`);
+    const site = new s3.Bucket(this, "Site", {
+      bucketName: `${prefix}-site-${cfg.account}`,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      enforceSSL: true,
+      objectOwnership: s3.ObjectOwnership.BUCKET_OWNER_ENFORCED,
+      removalPolicy: RemovalPolicy.RETAIN,
+    });
+    const siteFiles = new s3deploy.BucketDeployment(this, "SiteFiles", {
+      sources: [s3deploy.Source.asset(buildFiles)],
+      destinationBucket: site,
+      destinationKeyPrefix: "_next/static/",
+      prune: false,
+      cacheControl: [s3deploy.CacheControl.fromString("public, max-age=31536000, immutable")],
+      memoryLimit: 512,
+    });
+    // LIST as well as READ: a missing file is then a 404, not S3's 403.
+    const siteOrigin = origins.S3BucketOrigin.withOriginAccessControl(site, { originAccessLevels: [cloudfront.AccessLevel.READ, cloudfront.AccessLevel.LIST] });
+
     const viewer = new cloudfront.Function(this, "ViewerRequest", {
       functionName: `${prefix}-viewer-request`,
       comment: "Pass the viewer's address and host to the origin (overwriting anything the client sent)",
@@ -196,7 +226,7 @@ export class AppStack extends Stack {
       },
       additionalBehaviors: {
         "/_next/static/*": {
-          origin,
+          origin: siteOrigin,
           viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
           allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD,
           cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
@@ -208,6 +238,10 @@ export class AppStack extends Stack {
       httpVersion: cloudfront.HttpVersion.HTTP2_AND_3,
       webAclId: webAclArn,
     });
+    // A release's chunks are in the bucket before CloudFront reads from it, and before the API
+    // serves pages that name them.
+    this.distribution.node.addDependency(siteFiles);
+    api.alias.node.addDependency(siteFiles);
 
     // --- Schedules (Cron Triggers "*/15 * * * *" and "15 3 * * *", UTC). Off until cutover (config.ts).
     const schedulerRole = new iam.Role(this, "SchedulerRole", { roleName: `${prefix}-scheduler`, assumedBy: new iam.ServicePrincipal("scheduler.amazonaws.com") });

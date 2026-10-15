@@ -68,6 +68,17 @@ await check("static assets cached at the edge", async () => {
   expect(/immutable/.test(r.headers.get("cache-control") ?? ""), `cache-control ${r.headers.get("cache-control")}`);
   return r.headers.get("x-cache");
 });
+// What a first visit does: every script of the page at once. Served by the function, a burst like
+// this ran past the account's Lambda concurrency and came back 429 with a JSON body.
+await check("all of a page's scripts load at once, as JavaScript, from S3", async () => {
+  const html = await (await get(`${base}/dashboard`)).text();
+  const assets = [...new Set(html.match(/\/_next\/static\/[^"'\s)]+\.js/g) ?? [])];
+  expect(assets.length, "no scripts in the page");
+  const rs = await Promise.all(assets.map((a) => get(`${base}${a}`)));
+  const bad = rs.map((r, i) => [assets[i], r]).filter(([, r]) => r.status !== 200 || !/javascript/.test(r.headers.get("content-type") ?? "") || r.headers.get("server") !== "AmazonS3");
+  expect(!bad.length, bad.map(([a, r]) => `${a}: ${r.status} ${r.headers.get("content-type")} ${r.headers.get("server")}`).join("; "));
+  return `${assets.length} scripts`;
+});
 await check("security headers on pages", async () => {
   const r = await get(`${base}/login`);
   for (const h of ["strict-transport-security", "x-content-type-options", "x-frame-options", "content-security-policy", "referrer-policy"]) expect(r.headers.get(h), `missing ${h}`);
@@ -154,7 +165,7 @@ await check("database is private (no public address, not reachable)", async () =
   return `${db.DBInstanceClass}, backups ${db.BackupRetentionPeriod} days, deletion protection ${db.DeletionProtection}`;
 });
 await check("buckets are private", async () => {
-  for (const kind of ["payloads", "artifacts"]) {
+  for (const kind of ["payloads", "artifacts", "site"]) {
     const name = `insights-${envName}-${kind}-605411278365`;
     const pab = aws(["s3api", "get-public-access-block", "--bucket", name]).PublicAccessBlockConfiguration;
     expect(Object.values(pab).every(Boolean), `${name} public access block`);
