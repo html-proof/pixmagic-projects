@@ -286,7 +286,7 @@ test("opening the app from the Shopify admin without an account: sign up, then t
   await stubShopify(page);
   await page.goto(signedLaunchUrl("e2e-launch.myshopify.com"));
   await expect(page).toHaveURL(/\/login/);
-  await page.getByRole("link", { name: "Create Account" }).click();
+  await page.getByRole("link", { name: "Create Account" }).first().click();
   const email = uniqueEmail("launch");
   await fillSignUp(page, email);
   // Confirming the code verifies the address and signs in: back to the connect page for that

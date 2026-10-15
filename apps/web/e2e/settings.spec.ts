@@ -16,7 +16,7 @@ test.afterAll(() => db.end());
 
 /** A newcomer creates their account from the sign-in page (the code they confirm proves the email). */
 async function createAccountFromLogin(page: Page, email: string) {
-  await page.getByRole("link", { name: "Create Account" }).click();
+  await page.getByRole("link", { name: "Create Account" }).first().click();
   await fillSignUp(page, email);
   await confirmSignUp(page, email);
 }
