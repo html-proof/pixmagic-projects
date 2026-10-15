@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { CONTACT, orUnset } from "@/lib/contact";
+import { ContactCard, LegalPage, LegalSection, SupportEmail, sectionsOf } from "@/components/legal/LegalPage";
 
 export const metadata: Metadata = {
   title: "Delete your data — Insights",
@@ -17,75 +17,90 @@ export const metadata: Metadata = {
  * revokeAdAccessIfUnused; packages/core/src/whatsapp/connect.ts disconnectWhatsapp), and access the
  * person removes at Google or Meta turns the connection to "reconnect" at its next use.
  */
+const UPDATED = "2026-10-16";
+
+const TOC = [
+  { id: "disconnect", title: "Disconnect in Insights" },
+  { id: "remove-access", title: "Remove access at Google or Meta" },
+  { id: "ask-us", title: "Ask us to delete everything" },
+] as const;
+const section = sectionsOf(TOC);
+
 export default function DataDeletionPage() {
   return (
-    <main className="mx-auto max-w-3xl px-6 py-12">
-      <h1 className="text-2xl font-semibold">Delete your data</h1>
-      <p className="mt-2 text-sm text-muted">
-        How to take back the access you gave Insights through Google (Google Ads, Google AdSense) or Meta (WhatsApp Business, Facebook and Instagram ads), and have the
-        data that came with it deleted.
-      </p>
-
-      <Section title="1. Disconnect in Insights (immediate)">
+    <LegalPage
+      current="/data-deletion"
+      eyebrow="Legal"
+      title="Delete your data"
+      updated={UPDATED}
+      toc={TOC}
+      intro={
         <p>
-          Sign in to Insights and open <strong>Settings → Connect your business</strong> (or <strong>Settings → Advertising</strong>). Press{" "}
-          <strong>Disconnect</strong> next to Google Ads, Google AdSense, Meta Ads or WhatsApp.
+          How to withdraw the access you gave Insights through Google (Google Ads, Google AdSense) or Meta (WhatsApp Business, Facebook
+          and Instagram ads), and have the data that came with it deleted.
+        </p>
+      }
+    >
+      <LegalSection {...section("disconnect")}>
+        <p>
+          <strong>Takes effect immediately.</strong> Sign in to Insights and open <strong>Settings → Connect your business</strong> (or{" "}
+          <strong>Settings → Advertising</strong>), then select <strong>Disconnect</strong> next to Google Ads, Google AdSense, Meta Ads
+          or WhatsApp.
         </p>
         <ul>
           <li>
-            <strong>Google Ads and Google AdSense:</strong> the access token and every number Insights fetched for those accounts (spend, impressions, clicks,
-            conversions, campaign names; AdSense earnings and page views) are deleted straight away, and Insights gives the access back to Google once no other
-            account you connected with the same Google login still uses it (Google Ads and AdSense share one Google sign-in). Your ads and your site keep running.
+            <strong>Google Ads and Google AdSense</strong> — the access token and every figure Insights fetched for those accounts (spend,
+            impressions, clicks, conversions and campaign names; AdSense earnings and page views) are deleted immediately. Insights then
+            returns the access to Google once no other account you connected with the same Google login still uses it (Google Ads and
+            AdSense share one Google sign-in). Your ads and your site keep running.
           </li>
           <li>
-            <strong>Meta Ads:</strong> the access token and every number Insights fetched for those ad accounts (spend, impressions, reach, clicks, purchases, campaign and ad
-            names) are deleted straight away, and Insights withdraws its ads_read permission at Meta once no other ad account you connected with the same Facebook login
-            still uses it. Your ads keep running.
+            <strong>Meta Ads</strong> — the access token and every figure Insights fetched for those ad accounts (spend, impressions,
+            reach, clicks, purchases, and campaign and ad names) are deleted immediately. Insights then withdraws its{" "}
+            <code>ads_read</code> permission at Meta once no other ad account you connected with the same Facebook login still uses it.
+            Your ads keep running.
           </li>
           <li>
-            <strong>WhatsApp:</strong> the access token, your number&apos;s registration PIN and its message templates are deleted, and messages waiting to go out are
-            cancelled. Message history is kept for your records for 180 days and then deleted (or straight away, on request, see 3).
+            <strong>WhatsApp</strong> — the access token, your number&apos;s registration PIN and its message templates are deleted, and
+            messages waiting to be sent are cancelled. Message history is kept for your records for 180 days and then deleted, or
+            immediately on request (see step 3).
           </li>
         </ul>
-      </Section>
+      </LegalSection>
 
-      <Section title="2. Remove Insights in your Google or Meta account (optional)">
+      <LegalSection {...section("remove-access")}>
         <p>
-          <strong>Google:</strong> open <strong>myaccount.google.com → Security → Your connections to third-party apps &amp; services</strong>, choose Insights and remove
-          its access. Google then withdraws Insights&apos; access to Google Ads and AdSense; Insights shows those accounts as &ldquo;Needs reconnecting&rdquo; and stops
-          reading from them.
+          <strong>Optional.</strong> You can also withdraw Insights&apos; access from your Google or Meta account.
         </p>
-        <p>
-          <strong>Meta:</strong>
-          In Facebook, go to <strong>Settings &amp; privacy → Settings → Business integrations</strong> (or, for a business portfolio,{" "}
-          <strong>Meta Business Suite → Settings → Integrations → Connected apps</strong>), find Insights and remove it. Meta then withdraws Insights&apos; access; Insights
-          shows the connection as &ldquo;Permission expired&rdquo; and stops reading from it.
-        </p>
-        <p>
-          Removing access at Google or Meta alone doesn&apos;t delete what Insights already holds: use step 1 or 3 for that.
-        </p>
-      </Section>
+        <ul>
+          <li>
+            <strong>Google</strong> — open <strong>myaccount.google.com → Security → Your connections to third-party apps &amp; services</strong>,
+            choose Insights and remove its access. Google then withdraws Insights&apos; access to Google Ads and AdSense; Insights shows
+            those accounts as &ldquo;Needs reconnecting&rdquo; and stops reading from them.
+          </li>
+          <li>
+            <strong>Meta</strong> — in Facebook, go to <strong>Settings &amp; privacy → Settings → Business integrations</strong> (or, for a
+            business portfolio, <strong>Meta Business Suite → Settings → Integrations → Connected apps</strong>), find Insights and remove
+            it. Meta then withdraws Insights&apos; access; Insights shows the connection as &ldquo;Permission expired&rdquo; and stops
+            reading from it.
+          </li>
+        </ul>
+        <p>Removing access at Google or Meta does not by itself delete what Insights already holds. Use step 1 or step 3 for that.</p>
+      </LegalSection>
 
-      <Section title="3. Ask us to delete everything">
+      <LegalSection {...section("ask-us")}>
         <p>
-          Write to {orUnset(CONTACT.supportEmail)} from the email address you sign in with, and say which workspace or store. We delete your Meta connections, the data
-          fetched with them and, if you ask, your Insights account and workspace, and confirm by email within 30 days. The same goes for your Google Ads and AdSense
-          connections.
+          Email <SupportEmail subject="Delete my data" /> from the address you sign in with, and tell us which workspace or store the
+          request concerns. We will delete your Google and Meta connections and the data fetched with them and, if you ask, your Insights
+          account and workspace, and confirm by email within 30 days.
         </p>
-      </Section>
-
-      <p className="mt-10 text-sm text-muted">
-        What Insights keeps, and why, is in the <Link className="underline" href="/privacy">privacy policy</Link>.
-      </p>
-    </main>
-  );
-}
-
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <section className="mt-8">
-      <h2 className="text-lg font-medium">{title}</h2>
-      <div className="mt-2 space-y-3 text-sm [&_li]:ml-4 [&_li]:list-disc [&_ul]:space-y-1">{children}</div>
-    </section>
+        <ContactCard title="Request deletion" subject="Delete my data">
+          Send the request from the email address you sign in with.
+        </ContactCard>
+        <p>
+          What Insights keeps, and why, is set out in our <Link href="/privacy">privacy policy</Link>.
+        </p>
+      </LegalSection>
+    </LegalPage>
   );
 }

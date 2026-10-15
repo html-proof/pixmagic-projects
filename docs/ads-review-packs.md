@@ -10,7 +10,7 @@ Where things stand (2026-10-11):
 - Google: Explorer access granted; `adwords` added under Data Access with a justification; Search Console
   ownership of `https://insights.imeseban.workers.dev/` verified (HTML tag in `apps/web/src/app/layout.tsx`).
   Branding verification failed twice for: ownership (now fixed, re-check after 24 hours) and the privacy policy
-  (the business details in `apps/web/src/lib/contact.ts` are still blank).
+  (the business details in `apps/web/src/lib/contact.ts` were blank then; filled in 2026-10-16, so re-request it).
 - Meta: app "Insights" (971575545351940) set up with icon, domain, privacy policy, data deletion page, Facebook
   Login for Business configuration and the app secret. No business portfolio yet, so no Business Verification.
 
@@ -264,7 +264,7 @@ Privacy policy and Limited Use disclosure: https://<new-custom-domain>/privacy. 
 - Optional but recommended: a reviewer workspace that already has a Meta ad account connected, because Meta has temporarily stopped new test-user creation and reviewers' test accounts may own no ad account.
 - Ongoing Review (required by Facebook Login for Business for apps with Advanced Access) and the yearly Data Use Checkup or Data Access Renewal after approval.
 - A data handling answer for Q2 (the processor list), which was missing.
-- Owner-only inputs that are still blank: legalName, supportEmail, jurisdiction and postalAddress in apps/web/src/lib/contact.ts. Checked live on 2026-10-11: /privacy shows 'This policy is incomplete' and '[not set' markers, and /data-deletion step 3 shows '[not set'. Also a Terms of Service page (/terms returns 404), a 1024x1024 app icon, a Meta business portfolio, and Business Verification.
+- contact.ts was filled in on 2026-10-16 (Insight, sales@ikorex.com.au, Victoria, Australia); only postalAddress is still blank, and the policy leaves it out. Still missing: a Terms of Service page (/terms returns 404), a 1024x1024 app icon, a Meta business portfolio, and Business Verification.
 
 ### Before you submit
 
