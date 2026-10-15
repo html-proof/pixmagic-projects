@@ -3,7 +3,7 @@ import { getCookie } from "hono/cookie";
 import { bodyLimit } from "hono/body-limit";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { ZodError } from "zod";
-import { systemDb } from "@app/db";
+import { dbReachable, systemDb } from "@app/db";
 import { EmailError, env, logger, StaffError } from "@app/core";
 import { ReportRangeError } from "@app/shared/staff";
 import { clientIp, HttpError, SESSION_COOKIE, type AppEnv, type Deps } from "./context.js";
@@ -114,7 +114,7 @@ export function buildApp(deps: Deps): App {
     await next();
   });
 
-  app.onError((err, c) => {
+  app.onError(async (err, c) => {
     if (err instanceof HttpError) return c.json({ error: err.code, message: err.message }, err.statusCode as ContentfulStatusCode);
     // Staff Management's own rule violations: their messages are written for the person using the app.
     if (err instanceof StaffError) {
@@ -127,6 +127,14 @@ export function buildApp(deps: Deps): App {
     }
     if (err instanceof ZodError) {
       return c.json({ error: "validation", message: err.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ") }, 400);
+    }
+    // A query that died because Postgres went away is an outage, not a bug: answer "try again"
+    // (503) as loadUser does. The driver's error can't say so reliably (see dbReachable), so ask
+    // the database itself. While it answers, the error is ours and stays a 500.
+    if (!(await (deps.dbHealthy ?? (() => dbReachable(2_000)))())) {
+      logger.warn({ err, path: c.req.path }, "database unreachable");
+      c.header("retry-after", "5");
+      return c.json({ error: "db_unavailable", message: "We can't reach your data right now. Please try again in a moment." }, 503);
     }
     logger.error({ err, path: c.req.path }, "unhandled error");
     return c.json({ error: "internal", message: "Something went wrong" }, 500);
