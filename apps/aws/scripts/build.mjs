@@ -6,7 +6,9 @@
 //   migrations/, init.sql   applied by the function itself ({ "action": "migrate" })
 //   rds-ca.pem       Amazon RDS's CA bundle (NODE_EXTRA_CA_CERTS: TLS to the database is verified)
 //
-//   node apps/aws/scripts/build.mjs [--skip-web]
+//   node apps/aws/scripts/build.mjs [--skip-web] [--no-staging-bundle]
+//
+// infra/cdk deploys dist/function; the staging bundle is the Phase 1 CloudShell path (docs/aws-staging.md).
 import { execFileSync, spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
@@ -81,6 +83,8 @@ else execFileSync("zip", ["-qr", zip, "."], { cwd: out, stdio: "inherit" });
 
 const size = readFileSync(zip).length;
 console.log(`built ${zip} (${(size / 1024 / 1024).toFixed(1)} MB)`);
+
+if (process.argv.includes("--no-staging-bundle")) process.exit(0);
 
 // One file to upload to CloudShell: the package, both templates and the deploy script (LF line
 // endings: bash on Linux reads them), plus the commit they were built from.

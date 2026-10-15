@@ -34,7 +34,7 @@ function fakeDynamo() {
         return json(body.ReturnValues === "ALL_OLD" && old ? { Attributes: old } : {});
       }
       case "UpdateItem": {
-        const cur = items.get(k) ?? { k: { S: k } };
+        const cur: Record<string, { S?: string; N?: string }> = items.get(k) ?? { k: { S: k } };
         const n = Number(cur.n?.N ?? 0) + 1;
         const v = body.ExpressionAttributeValues;
         items.set(k, { ...cur, n: { N: String(n) }, until: cur.until ?? v[":until"], exp: cur.exp ?? v[":exp"] });

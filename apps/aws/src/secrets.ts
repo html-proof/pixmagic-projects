@@ -7,7 +7,8 @@ import type { FetchLike } from "@app/core";
  *
  *  - APP_SECRET_ARN: SESSION_SECRET, TOKEN_ENCRYPTION_KEYS, OTP_PEPPER, APP_RLS_PASSWORD
  *  - COGNITO_WORKER_SECRET_ARN: COGNITO_CLIENT_SECRET, COGNITO_ADMIN_* (infra/aws/cognito.yaml)
- *  - DB_SECRET_ARN: the RDS-managed master user secret ({ username, password })
+ *  - DB_SECRET_ARN: the database owner's secret ({ username, password })
+ *  - RUNTIME_PARAM: an SSM parameter (JSON, not secret) with APP_URL and the Cognito ids
  *
  * Each JSON key becomes a process.env entry, then the database URLs are built from the pieces
  * (verify-full TLS against the RDS CA bundled as NODE_EXTRA_CA_CERTS). Nothing is logged.
@@ -33,6 +34,22 @@ export async function loadSecrets(env: NodeJS.ProcessEnv = process.env, fetchImp
     const id = env[name];
     if (!id) continue;
     for (const [k, v] of Object.entries(await get(id))) if (typeof v === "string" && !env[k]) env[k] = v;
+  }
+  // Settings that aren't secret but are only known after the stack that owns them is deployed
+  // (APP_URL, the Cognito pool and client): an SSM parameter holding JSON, written by the CDK app.
+  if (env.RUNTIME_PARAM) {
+    const ssm = new AwsClient({ ...creds, service: "ssm", region });
+    const signed = await ssm.sign(`https://ssm.${region}.amazonaws.com/`, {
+      method: "POST",
+      headers: { "content-type": "application/x-amz-json-1.1", "x-amz-target": "AmazonSSM.GetParameter" },
+      body: JSON.stringify({ Name: env.RUNTIME_PARAM }),
+    });
+    const res = await fetchImpl(signed.url, { method: "POST", headers: signed.headers, body: await signed.text() });
+    const json = (await res.json().catch(() => ({}))) as { Parameter?: { Value?: string }; __type?: string };
+    if (!res.ok || !json.Parameter?.Value) throw new Error(`Reading parameter ${env.RUNTIME_PARAM} failed (${res.status} ${json.__type ?? ""})`);
+    for (const [k, v] of Object.entries(JSON.parse(json.Parameter.Value) as Record<string, unknown>)) {
+      if (typeof v === "string" && !env[k]) env[k] = v;
+    }
   }
   if (env.DB_SECRET_ARN && env.DB_HOST && env.DB_NAME) {
     const master = await get(env.DB_SECRET_ARN);

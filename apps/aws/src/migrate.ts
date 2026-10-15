@@ -68,3 +68,23 @@ export async function migrate(input: { databaseUrl: string; migrationsDir: strin
     await client.end();
   }
 }
+
+/**
+ * Exact row counts of every table in the public schema, for checking a data move (the same query
+ * runs against the old database, and the two results are compared table by table). Read-only.
+ */
+export async function tableCounts(databaseUrl: string): Promise<Record<string, number>> {
+  const client = new pg.Client({ connectionString: databaseUrl });
+  await client.connect();
+  try {
+    const tables = (await client.query<{ name: string }>(`SELECT tablename AS name FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename`)).rows;
+    const counts: Record<string, number> = {};
+    for (const { name } of tables) {
+      const r = await client.query<{ n: string }>(`SELECT count(*)::text AS n FROM public."${name.replace(/"/g, '""')}"`);
+      counts[name] = Number(r.rows[0]!.n);
+    }
+    return counts;
+  } finally {
+    await client.end();
+  }
+}
