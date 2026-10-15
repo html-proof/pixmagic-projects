@@ -1,13 +1,16 @@
 #!/usr/bin/env node
 // Fill the app secret (insights/<env>/app, created by the Data stack) without printing any value.
 //
-//   node infra/cdk/scripts/put-secrets.mjs [--env production] [--from <file>]... [--set NAME]...
+//   node infra/cdk/scripts/put-secrets.mjs [--env production] [--from <file>]... [--set NAME]... [--dry-run]
 //
 // --from <file>  a dotenv file (e.g. the main checkout's .env) to copy the values below from; the
 //                ones that must match production's Cloudflare secrets (TOKEN_ENCRYPTION_KEYS decrypts
 //                every stored store/ad token, OTP_PEPPER keys stored customer hashes) come from here.
 // --set NAME     read NAME's value from the clipboard (Windows: Get-Clipboard), for a secret only
 //                its owner has (META_APP_SECRET, GOOGLE_ADS_CLIENT_SECRET, ...). Copy it, run this.
+//                When the clipboard has no usable value (taking a screenshot replaces copied text),
+//                it asks for it instead: paste or type it, only a * per character is shown.
+// --dry-run      everything but the write: says what would change.
 //
 // Values already in the secret are kept unless a source provides a new one; SESSION_SECRET,
 // APP_RLS_PASSWORD are generated when missing; ORIGIN_VERIFY (CloudFront's) is never touched.
@@ -26,7 +29,13 @@ const opt = (name) => {
 };
 const envName = opt("--env")[0] ?? "production";
 const region = opt("--region")[0] ?? "ap-southeast-2";
+const dryRun = args.includes("--dry-run");
 const secretId = `insights/${envName}/app`;
+
+/** Values with a known shape, so a wrong paste (the client ID, a URL) is refused, not stored. */
+const SHAPES = {
+  GOOGLE_SIGNIN_CLIENT_SECRET: [/^GOCSPX-[A-Za-z0-9_-]{20,}$/, "a Google OAuth client secret (it starts with GOCSPX-)"],
+};
 
 /** Copied from --from files when present there. */
 const COPY = [
@@ -62,6 +71,62 @@ function parseDotenv(text) {
   return out;
 }
 
+function clipboardText() {
+  try {
+    return execFileSync("powershell", ["-NoProfile", "-Command", "Get-Clipboard -Raw"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  } catch {
+    return "";
+  }
+}
+
+/** Asks in the terminal; prints a * per character, never the value. Piped input is read as is. */
+async function ask(question) {
+  const stdin = process.stdin;
+  if (!stdin.isTTY) {
+    let piped = "";
+    for await (const chunk of stdin) piped += chunk;
+    return piped.trim();
+  }
+  process.stdout.write(question);
+  stdin.setRawMode(true);
+  stdin.setEncoding("utf8");
+  stdin.resume();
+  return new Promise((resolve) => {
+    let value = "";
+    const finish = () => {
+      stdin.off("data", onData);
+      stdin.setRawMode(false);
+      stdin.pause();
+      process.stdout.write("\n");
+      resolve(value.trim());
+    };
+    const onData = (chunk) => {
+      // Arrow and function keys arrive as escape sequences: not part of the value.
+      // eslint-disable-next-line no-control-regex -- ESC is exactly what these sequences start with
+      for (const ch of chunk.replace(/\u001b(\[[0-9;?]*[ -/]*[@-~]|O.)?/g, "")) {
+        if (ch === "\r" || ch === "\n") return finish();
+        if (ch === "\u0003") {
+          finish();
+          console.error("Cancelled: nothing was saved.");
+          process.exit(1);
+        }
+        if (ch === "\b" || ch === "\u007f") {
+          if (value) {
+            value = value.slice(0, -1);
+            process.stdout.write("\b \b");
+          }
+          continue;
+        }
+        // Ctrl+V reaching us as a key (a console that doesn't paste by itself): paste the clipboard.
+        const add = ch === "\u0016" ? clipboardText() : ch >= " " ? ch : "";
+        value += add;
+        process.stdout.write("*".repeat(add.length));
+      }
+    };
+    stdin.on("data", onData);
+  });
+}
+
 const current = JSON.parse(JSON.parse(aws(["secretsmanager", "get-secret-value", "--secret-id", secretId])).SecretString);
 const next = { ...current };
 const report = [];
@@ -81,10 +146,20 @@ for (const file of opt("--from")) {
 
 for (const name of opt("--set")) {
   if (!/^[A-Z][A-Z0-9_]+$/.test(name) || name === "ORIGIN_VERIFY") throw new Error(`Not a settable secret name: ${name}`);
-  const value = execFileSync("powershell", ["-NoProfile", "-Command", "Get-Clipboard -Raw"], { encoding: "utf8" }).trim();
-  if (!value) throw new Error("The clipboard is empty");
+  const [shape, what] = SHAPES[name] ?? [/./, "a value"];
+  let value = clipboardText();
+  let source = "the clipboard";
+  if (!shape.test(value)) {
+    console.log(value ? `The clipboard doesn't hold ${what}.` : "The clipboard has no text (a screenshot replaces copied text).");
+    value = await ask(`Paste or type ${name}, then press Enter: `);
+    source = "what you entered";
+  }
+  if (!shape.test(value)) {
+    console.error(`That isn't ${what} (${value.length} characters): nothing was saved.`);
+    process.exit(1);
+  }
+  if (next[name] !== value) report.push(`${name}: ${next[name] ? "replaced" : "set"} from ${source}`);
   next[name] = value;
-  report.push(`${name}: set from the clipboard`);
 }
 
 const generate = { SESSION_SECRET: () => randomBytes(48).toString("base64url"), APP_RLS_PASSWORD: () => randomBytes(24).toString("hex") };
@@ -105,7 +180,8 @@ for (const name of opt("--generate")) {
 if (!next.ORIGIN_VERIFY) throw new Error("ORIGIN_VERIFY is missing from the secret: it is created by the Data stack, deploy that first");
 
 const missing = ["TOKEN_ENCRYPTION_KEYS", "OTP_PEPPER", "SHOPIFY_API_SECRET"].filter((k) => !next[k]);
-if (JSON.stringify(next) !== JSON.stringify(current)) {
+if (dryRun) report.push("(dry run: nothing was written)");
+else if (JSON.stringify(next) !== JSON.stringify(current)) {
   const dir = mkdtempSync(join(tmpdir(), "insights-secret-"));
   const file = join(dir, "value.json");
   try {
