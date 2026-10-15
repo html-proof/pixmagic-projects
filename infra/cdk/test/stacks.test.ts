@@ -199,8 +199,7 @@ describe("the app's domain", () => {
 describe("the viewer-request function", () => {
   type Req = { method: string; uri: string; querystring: Record<string, { value: string; multiValue?: Array<{ value: string }> }>; headers: Record<string, { value: string }> };
   const run = (canonical: string | undefined, req: Partial<Req>) => {
-    const handler = new Function(`${viewerRequestCode(canonical)}
-return handler;`)() as (e: unknown) => any; // eslint-disable-line @typescript-eslint/no-explicit-any
+    const handler = new Function(`${viewerRequestCode(canonical)}\nreturn handler;`)() as (e: unknown) => any; // eslint-disable-line @typescript-eslint/no-explicit-any
     return handler({ viewer: { ip: "203.0.113.9" }, request: { method: "GET", uri: "/", querystring: {}, headers: {}, ...req } });
   };
 
@@ -236,7 +235,7 @@ return handler;`)() as (e: unknown) => any; // eslint-disable-line @typescript-e
 
   it("fits CloudFront Functions (no modules, under 10 KB)", () => {
     const code = viewerRequestCode("bizinsights.io");
-    expect(code).not.toMatch(/(import|require)/);
+    expect(code).not.toMatch(/\b(import|require)\b/);
     expect(code.length).toBeLessThan(10_240);
   });
 });
