@@ -18,6 +18,7 @@ import {
   useRedirectIfSignedIn,
 } from "@/lib/auth";
 import { Alert, Divider } from "@/components/ui";
+import { emailProblem, useFieldErrors } from "@/components/auth/AuthCard";
 import { AuthSplitShell } from "@/components/auth/AuthSplitShell";
 import { CodeStep } from "@/components/auth/CodeStep";
 import { EmailField } from "@/components/auth/IconField";
@@ -33,6 +34,7 @@ const NOTICES: Record<string, { kind: "info" | "success"; text: string }> = {
 };
 
 const CREATE_ACCOUNT = { href: "/signup", label: "Create Account" };
+type CodeSignIn = "off" | "available" | "email" | "code";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -43,10 +45,17 @@ export default function LoginPage() {
   // The account exists but its sign-up code was never entered: confirm, then finish signing in.
   const [confirming, setConfirming] = useState(false);
   // Passwordless: a code Cognito emails (only where the deployment switched it on).
-  const [codeSignIn, setCodeSignIn] = useState<"off" | "available" | "email" | "code">("off");
+  const [codeSignIn, setCodeSignIn] = useState<CodeSignIn>("off");
   const [error, setError] = useState<{ text: string; hint?: string; reset?: boolean } | null>(null);
   const [notice, setNotice] = useState<{ kind: "info" | "success"; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  const fields = useFieldErrors(
+    codeSignIn === "email"
+      ? { "otp-email": emailProblem(email) }
+      : codeSignIn === "code"
+        ? {}
+        : { email: emailProblem(email), password: password ? null : "Enter your password." },
+  );
 
   useRedirectIfSignedIn(router);
 
@@ -60,8 +69,16 @@ export default function LoginPage() {
       .catch(() => {});
   }, []);
 
+  /** Swap between the password form and the emailed-code one, starting the new one clean. */
+  function switchTo(mode: CodeSignIn) {
+    fields.reset();
+    setError(null);
+    setCodeSignIn(mode);
+  }
+
   async function onPassword(e: FormEvent) {
     e.preventDefault();
+    if (!fields.submit()) return;
     setBusy(true);
     setError(null);
     setNotice(null);
@@ -134,13 +151,15 @@ export default function LoginPage() {
         codeSignIn === "email" ? (
           <form
             className="space-y-4"
+            noValidate
             onSubmit={async (e) => {
               e.preventDefault();
+              if (!fields.submit()) return;
               setBusy(true);
               setError(null);
               try {
                 await startEmailCodeSignIn(email.trim());
-                setCodeSignIn("code");
+                switchTo("code");
               } catch (err) {
                 setError({ text: authErrorMessage(err) });
               } finally {
@@ -148,12 +167,12 @@ export default function LoginPage() {
               }
             }}
           >
-            <EmailField id="otp-email" value={email} onChange={setEmail} />
+            <EmailField id="otp-email" value={email} onChange={setEmail} onBlur={fields.leave} error={fields.error("otp-email")} />
             {keepSignedIn}
             <button className="auth-cta" disabled={busy}>
               {busy ? "Sending…" : "Email me a sign-in code"}
             </button>
-            <button type="button" className="text-sm text-muted underline" onClick={() => setCodeSignIn("available")}>
+            <button type="button" className="text-sm text-muted underline" onClick={() => switchTo("available")}>
               Sign in with a password instead
             </button>
           </form>
@@ -170,8 +189,8 @@ export default function LoginPage() {
           />
         )
       ) : (
-        <form onSubmit={onPassword} className="space-y-4">
-          <EmailField id="email" value={email} onChange={setEmail} />
+        <form onSubmit={onPassword} className="space-y-4" noValidate>
+          <EmailField id="email" value={email} onChange={setEmail} onBlur={fields.leave} error={fields.error("email")} />
           <PasswordField
             id="password"
             label="Password"
@@ -180,6 +199,8 @@ export default function LoginPage() {
             onChange={setPassword}
             icon={<Lock size={18} aria-hidden />}
             inputClassName="auth-field"
+            onBlur={fields.leave}
+            error={fields.error("password")}
           />
           <div className="flex flex-wrap items-center justify-between gap-3">
             {keepSignedIn}
@@ -197,7 +218,7 @@ export default function LoginPage() {
             )}
           </button>
           {codeSignIn === "available" && (
-            <button type="button" className="text-sm text-muted underline" onClick={() => setCodeSignIn("email")}>
+            <button type="button" className="text-sm text-muted underline" onClick={() => switchTo("email")}>
               Email me a sign-in code instead
             </button>
           )}

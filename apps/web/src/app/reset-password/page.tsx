@@ -3,13 +3,15 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, type FormEvent } from "react";
 import { ArrowLeft, ArrowRight, Lock } from "lucide-react";
-import { accountPasswordProblem, ACCOUNT_PASSWORD_MIN, isEmailAddress } from "@app/shared/auth";
+import { accountPasswordProblem, ACCOUNT_PASSWORD_MIN } from "@app/shared/auth";
 import { forgotPassword, recallEmail, rememberEmail, resetPassword } from "@/lib/auth";
-import { Alert } from "@/components/ui";
+import { emailProblem, useFieldErrors } from "@/components/auth/AuthCard";
 import { AuthSplitShell } from "@/components/auth/AuthSplitShell";
 import { CodeStep } from "@/components/auth/CodeStep";
 import { EmailField } from "@/components/auth/IconField";
 import { PasswordField } from "@/components/auth/PasswordField";
+
+const MISMATCH = "The two passwords don't match.";
 
 const SIGN_IN = { href: "/login", label: "Sign In" };
 
@@ -29,20 +31,26 @@ export default function ResetPasswordPage() {
 
   const weak = password ? accountPasswordProblem(password) : null;
   const mismatch = !!confirm && password !== confirm;
+  const emailFields = useFieldErrors({ email: emailProblem(email) });
+  const passwordFields = useFieldErrors({ "new-password": weak, "confirm-password": mismatch ? MISMATCH : null });
+  // The reset button stays off until both are right, so say why without waiting for the field to
+  // be left: a confirmation as long as the password that still differs is a real mismatch.
+  const confirmError = passwordFields.error("confirm-password") ?? (mismatch && confirm.length >= password.length ? MISMATCH : undefined);
 
   if (!emailConfirmed) {
     return (
       <AuthSplitShell title="Reset your password" subtitle="Which email address did we send the code to?" action={SIGN_IN}>
         <form
           className="space-y-4"
+          noValidate
           onSubmit={(e: FormEvent) => {
             e.preventDefault();
-            if (!isEmailAddress(email)) return;
+            if (!emailFields.submit()) return;
             rememberEmail(email);
             setEmailConfirmed(true);
           }}
         >
-          <EmailField id="email" value={email} onChange={setEmail} />
+          <EmailField id="email" value={email} onChange={setEmail} onBlur={emailFields.leave} error={emailFields.error("email")} />
           <button className="auth-cta">
             Continue <ArrowRight size={18} aria-hidden />
           </button>
@@ -83,6 +91,8 @@ export default function ResetPasswordPage() {
           hint={`At least ${ACCOUNT_PASSWORD_MIN} characters.`}
           icon={<Lock size={18} aria-hidden />}
           inputClassName="auth-field"
+          onBlur={passwordFields.leave}
+          error={passwordFields.error("new-password")}
         />
         <PasswordField
           id="confirm-password"
@@ -92,9 +102,9 @@ export default function ResetPasswordPage() {
           onChange={setConfirm}
           icon={<Lock size={18} aria-hidden />}
           inputClassName="auth-field"
+          onBlur={passwordFields.leave}
+          error={confirmError}
         />
-        {weak && <Alert kind="info">{weak}</Alert>}
-        {mismatch && <Alert kind="info">The two passwords don&apos;t match yet.</Alert>}
       </CodeStep>
       <button type="button" className="text-sm text-muted underline" onClick={() => setEmailConfirmed(false)}>
         Use a different email address

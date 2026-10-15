@@ -3,9 +3,9 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, type FormEvent } from "react";
 import { ArrowLeft, ArrowRight } from "lucide-react";
-import { isEmailAddress } from "@app/shared/auth";
 import { authErrorMessage, forgotPassword, recallEmail, rememberEmail } from "@/lib/auth";
 import { Alert } from "@/components/ui";
+import { emailProblem, useFieldErrors } from "@/components/auth/AuthCard";
 import { AuthSplitShell } from "@/components/auth/AuthSplitShell";
 import { EmailField } from "@/components/auth/IconField";
 
@@ -15,12 +15,13 @@ export default function ForgotPasswordPage() {
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const fields = useFieldErrors({ email: emailProblem(email) });
 
   useEffect(() => setEmail(recallEmail()), []);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
-    if (!isEmailAddress(email)) return setError("Enter a valid email address.");
+    if (!fields.submit()) return;
     setBusy(true);
     setError(null);
     try {
@@ -43,7 +44,7 @@ export default function ForgotPasswordPage() {
     >
       {error && <Alert onDismiss={() => setError(null)}>{error}</Alert>}
       <form onSubmit={onSubmit} className="space-y-4" noValidate>
-        <EmailField id="email" value={email} onChange={setEmail} />
+        <EmailField id="email" value={email} onChange={setEmail} onBlur={fields.leave} error={fields.error("email")} />
         <button className="auth-cta" disabled={busy}>
           {busy ? (
             "Sending…"
