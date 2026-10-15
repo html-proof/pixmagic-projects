@@ -111,6 +111,9 @@ export class AppStack extends Stack {
         securityGroups: [data.appSg],
         logGroup,
         tracing: lambda.Tracing.ACTIVE,
+        // Each release publishes a version; keeping the old ones is what scripts/rollback.mjs moves
+        // the `live` alias back to (CloudFormation would otherwise delete them on the next deploy).
+        currentVersionOptions: { removalPolicy: RemovalPolicy.RETAIN },
       });
       data.appSecret.grantRead(f);
       data.dbSecret.grantRead(f);

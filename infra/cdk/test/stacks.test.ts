@@ -98,6 +98,12 @@ describe("the app stack", () => {
     t.app.allResourcesProperties("AWS::Lambda::EventSourceMapping", { FunctionResponseTypes: ["ReportBatchItemFailures"] });
   });
 
+  it("keeps earlier function versions, so a rollback has something to go back to", () => {
+    const versions = Object.values(t.app.findResources("AWS::Lambda::Version"));
+    expect(versions).toHaveLength(3);
+    for (const v of versions) expect(v.DeletionPolicy).toBe("Retain");
+  });
+
   it("runs the functions in the VPC, with secrets only by reference", () => {
     // The app's three (CDK's own upload helper for the build files is a Python function).
     const fns = Object.values(t.app.findResources("AWS::Lambda::Function")).filter((f) => f.Properties.Handler === "index.handler" && String(f.Properties.Runtime).startsWith("nodejs"));
