@@ -7,7 +7,7 @@ import { Unreachable } from "@/components/LoadError";
 import { PORTAL_WS_KEY, PortalProvider, portalSignOut, type PortalCtx } from "@/components/staff/PortalContext";
 import { Alert } from "@/components/ui";
 import { ToastProvider } from "@/components/whatsapp/common";
-import { api, isSignedOut, isTransient, keepRetrying } from "@/lib/api";
+import { api, isSignedOut, isTransient, keepRetrying, onSessionGone } from "@/lib/api";
 import { setReturnTo, signInAndReturn } from "@/lib/returnTo";
 import { readLocal, writeLocal } from "@/lib/storage";
 
@@ -62,6 +62,8 @@ export default function PortalLayout({ children }: { children: ReactNode }) {
   }, [router]);
 
   useEffect(() => void loadMe(), [loadMe]);
+  // Any call finding the session gone (account deleted, signed out elsewhere), not just /me.
+  useEffect(() => onSessionGone(() => signInAndReturn(router)), [router]);
   const retrying = meError !== null && isTransient(meError);
   useEffect(() => (retrying ? keepRetrying(loadMe) : undefined), [retrying, loadMe]);
 

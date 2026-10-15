@@ -19,6 +19,20 @@ const UNREACHABLE = "We can't reach Insights right now. We'll keep trying.";
 export const isSignedOut = (e: unknown) => e instanceof ApiError && e.status === 401;
 
 /**
+ * Dispatched on window whenever any call finds the session gone (the account was deleted or
+ * disabled, or signed out elsewhere), so the signed-in shells can send the person to sign in
+ * instead of leaving them on a page whose background checks quietly keep the last data up.
+ * Only `unauthenticated`: a 401 for a wrong password or a re-authentication is not "signed out".
+ */
+export const SIGNED_OUT_EVENT = "insights:signed-out";
+
+/** Calls `onSignedOut` whenever a call finds the session gone; returns the unsubscribe (an effect's cleanup). */
+export function onSessionGone(onSignedOut: () => void): () => void {
+  window.addEventListener(SIGNED_OUT_EVENT, onSignedOut);
+  return () => window.removeEventListener(SIGNED_OUT_EVENT, onSignedOut);
+}
+
+/**
  * Outage-shaped failures that go away on their own: no response (status 0), a 5xx (the API or its
  * database is unreachable), or a rate limit. Callers retry these instead of showing a dead end.
  */
@@ -102,7 +116,11 @@ export async function api<T = unknown>(path: string, init: { method?: string; bo
     // Non-JSON body (e.g. a Cloudflare error page): report the status instead of a parse error.
     if (res.ok) throw new ApiError(res.status, "bad_response", "Unexpected response from the server");
   }
-  if (!res.ok) throw new ApiError(res.status, json.error ?? "error", json.message ?? "Request failed", json);
+  if (!res.ok) {
+    const err = new ApiError(res.status, json.error ?? "error", json.message ?? "Request failed", json);
+    if (res.status === 401 && err.code === "unauthenticated") window.dispatchEvent(new Event(SIGNED_OUT_EVENT));
+    throw err;
+  }
   return json as T;
 }
 
