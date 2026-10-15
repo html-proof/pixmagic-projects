@@ -82,9 +82,9 @@ export type MigrationStatus =
   | "on_cognito"
   /** Firebase password account: moves at the first sign-in with that password (or by "Forgot password?"). */
   | "moves_at_password_sign_in"
-  /** Google/Apple account: links at the first sign-in with that provider, by its verified email. */
+  /** Google account: links at the first Google sign-in, by its verified email. */
   | "links_at_social_sign_in"
-  /** Signed in with emailed codes or links only: "Forgot password?" (or a social sign-in) moves it. */
+  /** Signed in with emailed codes or links (or Apple, no longer offered) only: "Forgot password?" (or a Google sign-in) moves it. */
   | "needs_password_reset"
   /** Its Firebase account is gone or disabled: only "Forgot password?" brings it back, to the same user. */
   | "firebase_account_missing"
@@ -154,12 +154,12 @@ export async function planMigration(input: { firebase?: FirebaseAccount[] | null
     else if (input.firebase && (!fb || fb.disabled)) status = "firebase_account_missing";
     else if (!fb) status = "moves_at_password_sign_in"; // unknown providers: password is the common case, reset covers the rest
     else if (fb.providers.includes("password")) status = "moves_at_password_sign_in";
-    else if (fb.providers.some((p) => p === "google.com" || p === "apple.com")) status = "links_at_social_sign_in";
+    else if (fb.providers.includes("google.com")) status = "links_at_social_sign_in";
     else status = "needs_password_reset";
 
     if (fb && fb.email && fb.email !== u.email) notes.push(`Firebase has another address for this account (${fb.email}); the move follows the Firebase uid, not the address.`);
     if (!u.emailVerified) notes.push("Email not verified: after the move a code to the address verifies it.");
-    if (fb?.providers.includes("apple.com")) notes.push("Signs in with Apple: needs Sign in with Apple set up in the user pool.");
+    if (fb?.providers.includes("apple.com")) notes.push("Signed in with Apple, which Insights no longer offers: \"Forgot password?\" moves it.");
     if (status === "links_at_social_sign_in" && !u.emailVerified) notes.push("Unverified address: a social sign-in can't link to it; use Forgot password.");
     if (cognitoPasswordUser && status !== "on_cognito") {
       notes.push("A Cognito password user already exists for this address: its password, not Firebase's, will be the one that works.");

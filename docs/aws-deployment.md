@@ -135,7 +135,7 @@ PixMagic store's webhooks, `GOOGLE_ADS_CLIENT_SECRET` for AdSense refreshes) set
    `CUSTOMER_HASH_KEY` instead.
 7. Smoke tests, the owner signs in (a Cognito account links to the copied user by its verified
    email; Firebase password accounts move on first sign-in), stop the admin host. Other integrations
-   (Meta, WhatsApp webhook, email providers, Cognito's Google/Apple) when they are in use
+   (Meta, WhatsApp webhook, email providers, Cognito's Google) when they are in use
    (aws-architecture.md section 7).
 8. Watch the dashboard and alarms; keep Cloudflare as the rollback for two quiet weeks, then retire it.
 
@@ -151,7 +151,6 @@ PixMagic store's webhooks, `GOOGLE_ADS_CLIENT_SECRET` for AdSense refreshes) set
 - **Google sign-in**: add `https://insights-605411278365.auth.ap-southeast-2.amazoncognito.com/oauth2/idpresponse`
   to a Google OAuth client, put its secret with `put-secrets.mjs --set GOOGLE_SIGNIN_CLIENT_SECRET`,
   deploy with `-c googleClientId=<client id>`.
-- **Apple sign-in**: needs an Apple Developer Program membership (Services ID, key).
 - **Provider secrets** not on this PC: META_APP_SECRET, GOOGLE_ADS_CLIENT_SECRET, WHATSAPP_APP_SECRET,
   WHATSAPP_WEBHOOK_VERIFY_TOKEN, SHOPIFY_APP_SECRET_PIXMAGIC (`put-secrets.mjs --set`).
 - **Custom domain** (optional): Route 53 or Cloudflare DNS + an ACM certificate in us-east-1.

@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >-
-  Insights sign-in: an Amazon Cognito user pool (email + password, Google, Apple), its OAuth domain,
+  Insights sign-in: an Amazon Cognito user pool (email + password, Google), its OAuth domain,
   the Worker's confidential app client, and an IAM user that may make only the pool's admin calls.
   One stack per environment. docs/cognito-setup.md walks through deploying it and wiring the outputs
   into the Worker.
@@ -16,7 +16,7 @@ Parameters:
     AllowedPattern: "^https?://[^/]+$"
   ExtraCallbackUrls:
     Type: CommaDelimitedList
-    Description: More origins allowed to finish a Google/Apple sign-in (e.g. http://localhost:8787 for a staging pool). Empty for production.
+    Description: More origins allowed to finish a Google sign-in (e.g. http://localhost:8787 for a staging pool). Empty for production.
     Default: ""
   DomainPrefix:
     Type: String
@@ -30,21 +30,6 @@ Parameters:
     Type: String
     Default: ""
     NoEcho: true
-  AppleServicesId:
-    Type: String
-    Default: ""
-    Description: Apple Services ID (the "client id" for Sign in with Apple on the web). Empty = no Apple sign-in yet.
-  AppleTeamId:
-    Type: String
-    Default: ""
-  AppleKeyId:
-    Type: String
-    Default: ""
-  ApplePrivateKey:
-    Type: String
-    Default: ""
-    NoEcho: true
-    Description: The .p8 key's contents (-----BEGIN PRIVATE KEY----- ...).
   SesFromEmail:
     Type: String
     Default: ""
@@ -72,7 +57,6 @@ Parameters:
 
 Conditions:
   HasGoogle: !Not [!Equals [!Ref GoogleClientId, ""]]
-  HasApple: !Not [!Equals [!Ref AppleServicesId, ""]]
   HasSes: !Not [!Equals [!Ref SesFromEmail, ""]]
   HasExtraCallbacks: !Not [!Equals [!Join ["", !Ref ExtraCallbackUrls], ""]]
   IsProduction: !Equals [!Ref Environment, production]
@@ -162,27 +146,6 @@ Resources:
         given_name: given_name
         family_name: family_name
 
-  AppleProvider:
-    Type: AWS::Cognito::UserPoolIdentityProvider
-    Condition: HasApple
-    Properties:
-      UserPoolId: !Ref UserPool
-      ProviderName: SignInWithApple
-      ProviderType: SignInWithApple
-      ProviderDetails:
-        client_id: !Ref AppleServicesId
-        team_id: !Ref AppleTeamId
-        key_id: !Ref AppleKeyId
-        private_key: !Ref ApplePrivateKey
-        authorize_scopes: email name
-      AttributeMapping:
-        email: email
-        email_verified: email_verified
-        # Apple sends the name only on the first authorization; the pool keeps it after that.
-        name: name
-        given_name: firstName
-        family_name: lastName
-
   WebClient:
     Type: AWS::Cognito::UserPoolClient
     DependsOn:
@@ -224,7 +187,6 @@ Resources:
       SupportedIdentityProviders:
         - COGNITO
         - !If [HasGoogle, !Ref GoogleProvider, !Ref AWS::NoValue]
-        - !If [HasApple, !Ref AppleProvider, !Ref AWS::NoValue]
 
   # The default look for the few user-pool pages a person can see (sign-out, errors).
   WebClientBranding:
@@ -293,13 +255,13 @@ Outputs:
     Value: !Sub https://${DomainPrefix}.auth.${AWS::Region}.amazoncognito.com
     Description: COGNITO_DOMAIN
   IdentityProviders:
-    Value: !Join [",", [!If [HasGoogle, Google, !Ref AWS::NoValue], !If [HasApple, SignInWithApple, !Ref AWS::NoValue]]]
+    Value: !Join [",", [!If [HasGoogle, Google, !Ref AWS::NoValue]]]
     Description: COGNITO_IDENTITY_PROVIDERS
   Issuer:
     Value: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}
   ProviderRedirectUri:
     Value: !Sub https://${DomainPrefix}.auth.${AWS::Region}.amazoncognito.com/oauth2/idpresponse
-    Description: Add this as an authorized redirect URI on the Google OAuth client, and as the Return URL of the Apple Services ID.
+    Description: Add this as an authorized redirect URI on the Google OAuth client.
   WorkerSecretsArn:
     Value: !Ref WorkerSecrets
   UserPoolArn:

@@ -18,11 +18,11 @@ export interface SignedInUser {
 
 /** Which "Continue with ..." options this deployment offers. */
 export interface AuthConfig {
-  providers: { google: boolean; apple: boolean };
+  providers: { google: boolean };
   emailOtp: boolean;
 }
 
-export type SocialProvider = "google" | "apple";
+export type SocialProvider = "google";
 
 export const authConfig = () => api<AuthConfig>("/auth/config");
 
@@ -48,7 +48,7 @@ export const finishEmailCodeSignIn = (email: string, code: string, keep = true) 
   api<{ user: SignedInUser }>("/auth/otp/verify", { method: "POST", body: { email, code, keep } });
 
 /**
- * "Continue with Google / Apple": a full-page trip through the user pool to the provider and back
+ * "Continue with Google": a full-page trip through the user pool to the provider and back
  * to /auth/callback. No popup, so no Cross-Origin-Opener-Policy warnings and nothing for a popup
  * blocker to stop.
  */
@@ -62,7 +62,7 @@ export const finishOAuth = (params: { state: string; code?: string; error?: stri
   api<{ user: SignedInUser; redirect: string | null }>("/auth/oauth/callback", { method: "POST", body: params });
 
 /**
- * Sign this browser out. After Google or Apple the user pool's own session in this browser is
+ * Sign this browser out. After Google the user pool's own session in this browser is
  * ended too (a trip to its logout page, which comes back to /login).
  */
 export async function signOut(): Promise<string> {
@@ -85,10 +85,10 @@ export function leaveTo(href: string, router: { replace(href: string): void }) {
 
 export interface AccountInfo {
   user: SignedInUser & { timezone: string };
-  signedInWith: "password" | "google" | "apple";
+  signedInWith: "password" | "google";
   signedInAt: number;
   sessionExpiresAt: number;
-  methods: Array<{ method: "password" | "google" | "apple"; email: string | null; linkedAt: string; lastUsedAt: string | null }>;
+  methods: Array<{ method: "password" | "google"; email: string | null; linkedAt: string; lastUsedAt: string | null }>;
   canChangePassword: boolean;
   canChangeEmail: boolean;
 }

@@ -276,7 +276,7 @@ export default function PrivacyPage() {
         <p>
           We store your email address and whether it has been verified, your workspace and role, your notification preferences, and an
           audit log of actions taken in your workspace. Sign-in is handled by Amazon Cognito, which keeps your password only as a
-          salted hash. We never store your password, and we never see your Shopify, Google or Apple password.
+          salted hash. We never store your password, and we never see your Shopify or Google password.
         </p>
       </LegalSection>
 

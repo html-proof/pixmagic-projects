@@ -1,16 +1,16 @@
 # Sign-in: Amazon Cognito
 
 Insights signs people in with an Amazon Cognito user pool: email and password (with emailed codes
-for sign-up and password resets), Continue with Google, Continue with Apple, and optionally a
-passwordless emailed code. It replaced Firebase Authentication; this page covers how it works, how
-to set it up, and how existing accounts move over.
+for sign-up and password resets), Continue with Google, and optionally a passwordless emailed
+code (Sign in with Apple was removed on 2026-10-16). It replaced Firebase Authentication; this page
+covers how it works, how to set it up, and how existing accounts move over.
 
 ## How it works
 
 ```
 browser ──► /api/auth/* (Worker) ──► Cognito user-pool API          (sign-up, sign-in, codes, passwords)
-   │                         └─────► <domain>/oauth2/token          (Google / Apple: code + PKCE)
-   └──► <domain>/oauth2/authorize ──► Google / Apple ──► /auth/callback (page) ──► /api/auth/oauth/callback
+   │                         └─────► <domain>/oauth2/token          (Google: code + PKCE)
+   └──► <domain>/oauth2/authorize ──► Google ──► /auth/callback (page) ──► /api/auth/oauth/callback
 ```
 
 - **The Worker does all of it** (`apps/api/src/cognito.ts`, plain HTTPS: the AWS SDK costs more CPU
@@ -23,7 +23,7 @@ browser ──► /api/auth/* (Worker) ──► Cognito user-pool API          
   to `/api` only). Each request costs one HMAC; every 10 minutes the refresh token is spent with
   Cognito, so a user disabled or deleted there, or signed out everywhere, loses the session.
   `apps/api/src/session.ts`.
-- **Accounts**: `users.id` never changes. Each Cognito user (password, Google, Apple) is linked to
+- **Accounts**: `users.id` never changes. Each Cognito user (password, Google) is linked to
   it in `auth_identities` (provider, Cognito `sub`, user name, method). Several identities can point
   at one user: a Google sign-in links to the existing account with the same address only when Google
   has verified it (`apps/api/src/identity.ts`). Never on an unverified address.
@@ -45,7 +45,7 @@ browser ──► /api/auth/* (Worker) ──► Cognito user-pool API          
 | `POST /api/auth/login` | email + password (moves a Firebase account on its first sign-in) |
 | `POST /api/auth/password/forgot`, `/password/reset` | reset code by email; new password |
 | `POST /api/auth/otp/start`, `/otp/verify` | passwordless code (only with `COGNITO_EMAIL_OTP=1`) |
-| `GET /api/auth/oauth/{google,apple}/start` | to the provider, with state, PKCE and a nonce |
+| `GET /api/auth/oauth/google/start` | to Google, with state, PKCE and a nonce |
 | `POST /api/auth/oauth/callback` | what the provider sent back (from the `/auth/callback` page) |
 | `POST /api/auth/logout`, `/logout-all` | this browser; every device |
 | `GET /api/auth/session`, `/api/auth/whoami`, `/api/me` | the session |
@@ -59,8 +59,7 @@ sign-up.
 ## 1. The AWS side
 
 Everything is in [`infra/aws/cognito.yaml`](../infra/aws/cognito.yaml): the user pool (Essentials
-plan: 10,000 monthly active users free), its OAuth domain, Google and Apple when their credentials
-are given, the app client, the IAM user and its access key, and a Secrets Manager secret holding the
+plan: 10,000 monthly active users free), its OAuth domain, Google when its credentials are given, the app client, the IAM user and its access key, and a Secrets Manager secret holding the
 three Worker secrets. One stack per environment.
 
 Choose a region close to the database and the people using it, and a domain prefix nobody has taken
@@ -75,7 +74,7 @@ aws cloudformation describe-stacks --stack-name insights-auth-production --regio
 ```
 
 The outputs map one to one onto the Worker's settings (`Region` → `COGNITO_REGION`, `UserPoolId`,
-`ClientId`, `Domain`, `IdentityProviders`). `ProviderRedirectUri` is what Google and Apple need below.
+`ClientId`, `Domain`, `IdentityProviders`). `ProviderRedirectUri` is what Google needs below.
 
 Emails: by default Cognito sends codes from `no-reply@verificationemail.com`, limited to 50 a day.
 That is enough to start. For more, and for the passwordless code, verify a domain in SES in the same
@@ -93,26 +92,11 @@ client works as well):
 3. Redeploy the stack with `GoogleClientId=...` and `GoogleClientSecret=...` (the secret is a NoEcho
    parameter: CloudFormation never shows it back).
 
-## 3. Apple
-
-Needs an Apple Developer Program membership.
-
-1. Certificates, Identifiers & Profiles → Identifiers: an App ID with "Sign in with Apple", then a
-   **Services ID** (this is the client id) with Sign in with Apple configured: domain
-   `<prefix>.auth.<region>.amazoncognito.com`, return URL = the stack's `ProviderRedirectUri`.
-2. Keys: a key with Sign in with Apple; download the `.p8` once, note its Key ID and your Team ID.
-3. Redeploy the stack with `AppleServicesId`, `AppleTeamId`, `AppleKeyId` and `ApplePrivateKey`
-   (the `.p8` contents).
-
-Apple sends a person's name only the first time they authorize the app; the pool keeps it. Someone
-who chooses "Hide My Email" signs in as a `privaterelay.appleid.com` address: a separate account
-from one under their real address, since nothing proves the two are the same person.
-
-## 4. The Worker
+## 3. The Worker
 
 `apps/cloudflare/wrangler.jsonc` `vars`: `COGNITO_REGION`, `COGNITO_USER_POOL_ID`,
-`COGNITO_CLIENT_ID`, `COGNITO_DOMAIN`, `COGNITO_IDENTITY_PROVIDERS` (`Google,SignInWithApple`, only
-those set up), and `COGNITO_EMAIL_OTP=1` only once SES is set up. Secrets, from the stack's Secrets
+`COGNITO_CLIENT_ID`, `COGNITO_DOMAIN`, `COGNITO_IDENTITY_PROVIDERS` (`Google` once it is
+set up), and `COGNITO_EMAIL_OTP=1` only once SES is set up. Secrets, from the stack's Secrets
 Manager entry without printing them:
 
 ```bash
@@ -123,7 +107,7 @@ That sets `COGNITO_CLIENT_SECRET`, `COGNITO_ADMIN_ACCESS_KEY_ID` and `COGNITO_AD
 (each `wrangler secret put` makes a "Secret Change" version; the code running before the switch ignores
 them). The web build needs nothing: every environment uses the same UI build.
 
-## 5. Moving existing accounts from Firebase
+## 4. Moving existing accounts from Firebase
 
 Firebase stores passwords with its own modified scrypt, which Cognito's password-hash import does
 not accept (it takes standard scrypt, bcrypt, Argon2id and PBKDF2). So passwords move one person at a
@@ -141,7 +125,8 @@ time, and nobody has to do anything:
 - **Accounts that only used emailed codes or links**, and anyone who never signs in during the
   window: "Forgot password?" creates their Cognito user (no email to them, random password) and
   Cognito emails a reset code. Proving the inbox gets them back into the same `users.id`.
-- **Apple accounts**: Apple was never switched on in production Firebase, so there are none.
+- **Apple accounts**: Apple was never switched on in production Firebase, so there are none (and
+  Insights no longer offers Apple sign-in; "Forgot password?" would move one).
 
 Nothing is merged on an unverified address, a Firebase account is asked about only while it has no
 Cognito user, and every step is recorded in `auth_events`.
@@ -200,7 +185,7 @@ then on Firebase is never asked anything; those who hadn't moved use "Forgot pas
 Firebase project's Authentication can be switched off (keep it a while for rollback). `users.firebase_uid`
 can stay: it is what "Forgot password?" recognises an old account by.
 
-## 6. Local development and tests
+## 5. Local development and tests
 
 The Worker talks to a Cognito emulator with the app's pool already in it: see
 [infra/cognito-local/README.md](../infra/cognito-local/README.md). Integration tests use an
@@ -208,7 +193,7 @@ in-memory Cognito (`apps/api/test/fakeCognito.ts`); `apps/api/test/cognito.test.
 client's requests, SigV4, and ID-token verification with real keys; `apps/api/test/cognito.live.test.ts`
 runs the real client against the emulator or a real pool (`COGNITO_LIVE=1`). The e2e suite starts its
 own emulator and a stand-in for the user pool's managed login (`apps/web/e2e/fake-managed-login.mjs`),
-so Continue with Google / Apple runs end to end in a browser.
+so Continue with Google runs end to end in a browser.
 
 ## Troubleshooting
 
@@ -217,8 +202,8 @@ so Continue with Google / Apple runs end to end in a browser.
 - **"That email and password don't match" for a Firebase account**: `LEGACY_FIREBASE_API_KEY`
   unset or wrong, or a Cognito user already exists for that address (then Cognito's password is the
   one; "Forgot password?").
-- **Google/Apple: `redirect_mismatch` / `invalid_request` at Cognito**: the app client's callback URL
-  must be exactly `<APP_URL>/auth/callback`; Google's/Apple's must be the stack's `ProviderRedirectUri`.
+- **Google: `redirect_mismatch` / `invalid_request` at Cognito**: the app client's callback URL
+  must be exactly `<APP_URL>/auth/callback`; Google's must be the stack's `ProviderRedirectUri`.
 - **"This sign-in didn't start in this browser"**: the state cookie (`__oauth`, 10 minutes) is gone:
   third-party cookie blocking doesn't affect it (it's first-party), but a different browser or an
   expired attempt does. Start again.

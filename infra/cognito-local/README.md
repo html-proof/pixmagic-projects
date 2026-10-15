@@ -31,7 +31,7 @@ Where the emulator differs from Cognito (none of it changes how the app behaves 
   verify its address once signed in (`/verify-email`). Cognito marks it verified on confirmation.
 - A wrong password is `InvalidPasswordException` there (the client maps it to Cognito's
   `NotAuthorizedException`).
-- No managed login: "Continue with Google / Apple" can't be tried locally. Its server side is
-  covered by `apps/api/test/auth.test.ts`; against Google and Apple it needs the real pool.
+- No managed login: "Continue with Google" can't be tried locally. Its server side is
+  covered by `apps/api/test/auth.test.ts`; against Google it needs the real pool.
 - No `GlobalSignOut` / `AdminUserGlobalSignOut` / refresh-token rotation: "Sign out everywhere"
   still ends every session (our own record), and logs that Cognito's part failed.

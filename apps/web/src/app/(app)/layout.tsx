@@ -12,7 +12,7 @@ function TopBar() {
   const path = usePathname();
 
   async function logout() {
-    // Lands on /login?signedOut=1 (or, after Google/Apple, the user pool's logout page first), which
+    // Lands on /login?signedOut=1 (or, after Google, the user pool's logout page first), which
     // won't send a session that survived an unreachable logout call straight back in.
     leaveTo(await signOut(), router);
   }

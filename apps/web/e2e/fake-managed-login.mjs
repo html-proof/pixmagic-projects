@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// E2E only: a stand-in for the user pool's managed login (its OAuth domain) in front of Google and
-// Apple, which can't run in a test. It implements what the app uses of it:
+// E2E only: a stand-in for the user pool's managed login (its OAuth domain) in front of Google,
+// which can't run in a test. It implements what the app uses of it:
 //
 //   GET  /oauth2/authorize  remembers the PKCE challenge and nonce, "signs in" a made-up person and
 //                           sends the browser back to redirect_uri with a code (or ?deny=1: access_denied)
@@ -89,7 +89,7 @@ createServer(async (req, res) => {
     if (!p || !verifierOk || form.get("redirect_uri") !== p.redirectUri) return send(res, 400, { error: "invalid_grant" });
     const now = Math.floor(Date.now() / 1000);
     const userId = createHash("sha256").update(p.email).digest("hex").slice(0, 16);
-    const prefix = p.provider === "Google" ? "google" : "signinwithapple";
+    const prefix = p.provider.toLowerCase();
     const sub = randomUUID();
     return send(res, 200, {
       id_token: jwt({

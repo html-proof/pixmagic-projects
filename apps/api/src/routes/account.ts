@@ -19,7 +19,7 @@ const isUniqueViolation = (err: unknown) => (err as { code?: string })?.code ===
 export function accountRoutes(app: App, deps: Deps) {
   /**
    * The person proves it's them again: their password when they signed in with one, else a
-   * Google/Apple sign-in in the last few minutes.
+   * Google sign-in in the last few minutes.
    */
   async function reauthenticate(c: Ctx, email: string, password: string | undefined) {
     const s = sessionOf(c);
@@ -32,7 +32,7 @@ export function accountRoutes(app: App, deps: Deps) {
       return;
     }
     if (Date.now() / 1000 - s.at > RECENT_SIGN_IN_S) {
-      throw new HttpError(401, `Sign out and sign in again with ${s.m === "google" ? "Google" : "Apple"}, then try again within ${RECENT_SIGN_IN_S / 60} minutes.`, "reauth_required");
+      throw new HttpError(401, `Sign out and sign in again with Google, then try again within ${RECENT_SIGN_IN_S / 60} minutes.`, "reauth_required");
     }
   }
 
@@ -48,7 +48,7 @@ export function accountRoutes(app: App, deps: Deps) {
       methods: identities.map((i) => ({ method: i.method, email: i.email, linkedAt: i.createdAt, lastUsedAt: i.lastUsedAt })),
       // A password belongs to the email-and-password Cognito user, which this session must be.
       canChangePassword: s.m === "password",
-      // Google's and Apple's addresses come from them on every sign-in.
+      // A Google account's address comes from Google on every sign-in.
       canChangeEmail: s.m === "password",
     });
   });
@@ -58,7 +58,7 @@ export function accountRoutes(app: App, deps: Deps) {
     const s = sessionOf(c);
     const input = z.object({ currentPassword: z.string().min(1, "Enter your current password.").max(256), password: z.string().max(256), confirmPassword: z.string().max(256) }).parse(await body(c));
     await limit(deps.coord, `rl:account:${user.id}`, LIMITS.accountChange);
-    if (s.m !== "password") throw new HttpError(400, "You signed in with Google or Apple, which has no password here. Use \"Forgot password?\" on the sign-in page to add one.", "no_password");
+    if (s.m !== "password") throw new HttpError(400, "You signed in with Google, which has no password here. Use \"Forgot password?\" on the sign-in page to add one.", "no_password");
     const weak = accountPasswordProblem(input.password);
     if (weak) throw new HttpError(400, weak, "weak_password");
     if (input.password !== input.confirmPassword) throw new HttpError(400, "The two new passwords don't match.", "password_mismatch");
@@ -91,7 +91,7 @@ export function accountRoutes(app: App, deps: Deps) {
     const s = sessionOf(c);
     const input = z.object({ email: z.string().trim().email("Enter a valid email address.").max(254).transform((e) => e.toLowerCase()), password: z.string().max(256).optional() }).parse(await body(c));
     await limit(deps.coord, `rl:account:${user.id}`, LIMITS.accountChange);
-    if (s.m !== "password") throw new HttpError(400, "Your email address comes from Google or Apple. Change it there.", "email_managed_elsewhere");
+    if (s.m !== "password") throw new HttpError(400, "Your email address comes from Google. Change it there.", "email_managed_elsewhere");
     if (input.email === user.email) throw new HttpError(400, "That's already your email address.", "same_email");
     await reauthenticate(c, user.email, input.password);
     if (await systemDb.user.findUnique({ where: { email: input.email } })) {

@@ -124,13 +124,13 @@ describe("the user-pool API", () => {
 
 describe("managed login (OAuth)", () => {
   it("sends the browser straight to the provider with PKCE and a nonce", () => {
-    const url = new URL(cognitoAuth(CFG).authorizeUrl({ provider: "SignInWithApple", redirectUri: "https://app.example.com/auth/callback", state: "st", codeChallenge: "ch", nonce: "no" }));
+    const url = new URL(cognitoAuth(CFG).authorizeUrl({ provider: "Google", redirectUri: "https://app.example.com/auth/callback", state: "st", codeChallenge: "ch", nonce: "no" }));
     expect(url.origin + url.pathname).toBe("https://auth.example.com/oauth2/authorize");
     expect(Object.fromEntries(url.searchParams)).toEqual({
       response_type: "code",
       client_id: "client123",
       redirect_uri: "https://app.example.com/auth/callback",
-      identity_provider: "SignInWithApple",
+      identity_provider: "Google",
       scope: "openid email profile",
       state: "st",
       code_challenge: "ch",

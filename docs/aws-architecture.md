@@ -69,7 +69,7 @@ Gmail/Microsoft Graph, Slack); only the URLs they call back on change (section 7
    SQS queues ───► event source mappings      DynamoDB "coord" (rate limits, OAuth state, locks)
    (+ DLQs)                                   S3 "payloads" (large webhook bodies)
    EventBridge Scheduler ─► Lambda scheduled  Secrets Manager + KMS
-   Cognito user pool (Google, Apple, email) ─► SES (verified domain) ─► people's inboxes
+   Cognito user pool (Google, email) ─► SES (verified domain) ─► people's inboxes
    CloudWatch Logs / metrics / alarms ─► SNS ─► email (+ Slack via Amazon Q Developer in chat apps)
 ```
 
@@ -182,7 +182,6 @@ EventBridge Scheduler invokes the `scheduled` function at `cron(0/15 * * * ? *)`
 | Meta (Ads login, WhatsApp) | OAuth redirect URIs; WhatsApp webhook callback URL and verify token | Meta app dashboards |
 | Google (Ads, AdSense) | OAuth redirect URIs; domain verification for the consent screen (fixes "unverified app") | Google Cloud console, Search Console (Route 53 TXT record) |
 | Google sign-in (Cognito) | Redirect URI `https://auth.<domain>/oauth2/idpresponse` | Google Cloud OAuth client |
-| Apple sign-in | Services ID domain and return URL | Apple Developer |
 | Microsoft (email integrations) | Redirect URI | Microsoft Entra app registration |
 | Cognito app client | Callback `https://app.<domain>/auth/callback`, logout `…/login?signedOut=1` | `infra/aws/cognito.yaml` (`AppUrl`) |
 | Slack alerts | none | — |

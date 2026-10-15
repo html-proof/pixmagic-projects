@@ -37,9 +37,9 @@ export class CognitoUnavailableError extends Error {
   }
 }
 
-export type SignInMethod = "password" | "google" | "apple";
+export type SignInMethod = "password" | "google";
 /** Cognito's names for the identity providers ("Continue with ..."). */
-export type FederatedProvider = "Google" | "SignInWithApple";
+export type FederatedProvider = "Google";
 
 export interface CognitoTokens {
   idToken: string;
@@ -54,7 +54,7 @@ export type SignInResult = { tokens: CognitoTokens } | { challenge: string; sess
 /** What a verified Cognito ID token says about the person. */
 export interface IdentityClaims {
   sub: string;
-  /** The Cognito user name: the sub for password users, "google_<id>" / "signinwithapple_<id>" for federated ones. */
+  /** The Cognito user name: the sub for password users, "google_<id>" for Google ones. */
   username: string;
   email: string | null;
   emailVerified: boolean;
@@ -84,7 +84,7 @@ export interface CognitoConfig {
   endpoint: string;
   issuer: string;
   jwksUrl: string;
-  /** The user pool's OAuth domain (https://...), for Google and Apple. Empty: no social sign-in. */
+  /** The user pool's OAuth domain (https://...), for Google. Empty: no social sign-in. */
   domain: string;
   /** Credentials for the admin calls: an IAM user's keys, or (on AWS) the function role's temporary ones. */
   admin: { accessKeyId: string; secretAccessKey: string; sessionToken?: string } | null;
@@ -146,10 +146,10 @@ export interface CognitoAuth {
   globalSignOut(accessToken: string): Promise<void>;
   revokeRefreshToken(refreshToken: string): Promise<void>;
 
-  // ---- Managed login (OAuth 2.0 authorization code + PKCE): Google and Apple ----
+  // ---- Managed login (OAuth 2.0 authorization code + PKCE): Google ----
   authorizeUrl(input: { provider: FederatedProvider; redirectUri: string; state: string; codeChallenge: string; nonce: string }): string;
   exchangeCode(input: { code: string; redirectUri: string; codeVerifier: string }): Promise<CognitoTokens>;
-  /** Ends the user pool's own browser session (after Google/Apple), then returns to `logoutUri`. */
+  /** Ends the user pool's own browser session (after Google), then returns to `logoutUri`. */
   logoutUrl(logoutUri: string): string | null;
 
   // ---- Administrator (IAM-signed) ----
@@ -179,7 +179,6 @@ function methodOf(claims: JWTPayload & { identities?: unknown }): SignInMethod {
   const ids = Array.isArray(claims.identities) ? (claims.identities as Array<{ providerName?: string; providerType?: string }>) : [];
   const p = ids[0]?.providerType ?? ids[0]?.providerName;
   if (p === "Google") return "google";
-  if (p === "SignInWithApple") return "apple";
   return "password";
 }
 
@@ -406,7 +405,7 @@ export function cognitoAuth(cfg: CognitoConfig, fetchImpl: FetchLike = fetch): C
         response_type: "code",
         client_id: cfg.clientId,
         redirect_uri: redirectUri,
-        // Straight to Google / Apple: no Cognito page in between.
+        // Straight to Google: no Cognito page in between.
         identity_provider: provider,
         scope: "openid email profile",
         state,

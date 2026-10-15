@@ -69,7 +69,7 @@ model User {
   @@map("users")
 }
 
-/// A sign-in identity of a user: one Cognito user (password, Google or Apple). Several can point at
+/// A sign-in identity of a user: one Cognito user (password or Google). Several can point at
 /// the same user, which is how an account is linked across sign-in methods; users.id never changes.
 model AuthIdentity {
   id                String    @id @default(cuid())
@@ -80,7 +80,7 @@ model AuthIdentity {
   subject           String
   /// The Cognito user name (what refresh and admin calls address it by).
   username          String
-  /// How this Cognito user signs in: "password", "google" or "apple".
+  /// How this Cognito user signs in: "password" or "google".
   method            String
   email             String?
   /// Set when this identity was created by moving a Firebase account over (audit trail).

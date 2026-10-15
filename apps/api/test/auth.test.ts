@@ -280,10 +280,10 @@ describe("moving accounts over from Firebase", () => {
   });
 });
 
-describe("Continue with Google / Apple", () => {
+describe("Continue with Google", () => {
   let restore: () => void;
   beforeEach(() => {
-    restore = withEnv({ COGNITO_DOMAIN: "https://auth.example.test", COGNITO_IDENTITY_PROVIDERS: "Google,SignInWithApple" });
+    restore = withEnv({ COGNITO_DOMAIN: "https://auth.example.test", COGNITO_IDENTITY_PROVIDERS: "Google" });
   });
   afterEach(() => restore());
 
@@ -334,18 +334,17 @@ describe("Continue with Google / Apple", () => {
 
   it("never links on an address the provider hasn't verified", async () => {
     await signIn(ctx, "pw-sub", "merchant@x.com");
-    const res = await (await federated({ id: "a-1", email: "merchant@x.com", emailVerified: false }, "apple")).finish();
+    const res = await (await federated({ id: "g-5", email: "merchant@x.com", emailVerified: false })).finish();
     expect(res.statusCode).toBe(409);
     expect(res.json().error).toBe("email_in_use");
     expect(await systemDb.authIdentity.count()).toBe(1);
   });
 
-  it("handles Apple's private relay address, and the name Apple sends only the first time", async () => {
-    const relay = "x7g2k9@privaterelay.appleid.com";
-    const first = await (await federated({ id: "a-2", email: relay, name: "Grace Hopper" }, "apple")).finish();
-    expect(first.json().user).toMatchObject({ email: relay, displayName: "Grace Hopper" });
-    ctx.auth.users.get("signinwithapple_a-2")!.name = null;
-    const second = await (await federated({ id: "a-2", email: relay }, "apple")).finish();
+  it("keeps the name from the first sign-in when the provider later sends none", async () => {
+    const first = await (await federated({ id: "g-6", email: "grace@gmail.com", name: "Grace Hopper" })).finish();
+    expect(first.json().user).toMatchObject({ email: "grace@gmail.com", displayName: "Grace Hopper" });
+    ctx.auth.users.get("google_g-6")!.name = null;
+    const second = await (await federated({ id: "g-6", email: "grace@gmail.com" })).finish();
     expect(second.json().user).toMatchObject({ id: first.json().user.id, displayName: "Grace Hopper" });
     expect(await systemDb.user.count()).toBe(1);
   });
@@ -368,16 +367,17 @@ describe("Continue with Google / Apple", () => {
   });
 
   it("needs an email address from the provider", async () => {
-    const res = await (await federated({ id: "a-3", email: null }, "apple")).finish();
+    const res = await (await federated({ id: "g-7", email: null })).finish();
     expect(res.json().error).toBe("email_required");
   });
 
   it("sends a provider that isn't switched on to the sign-in error page", async () => {
     restore();
-    restore = withEnv({ COGNITO_DOMAIN: "https://auth.example.test", COGNITO_IDENTITY_PROVIDERS: "Google" });
-    const res = await get("/auth/oauth/apple/start");
-    expect(res.headers.location).toBe("http://localhost:3001/auth/error?reason=provider_unavailable&provider=apple");
-    expect((await get("/auth/config")).json()).toEqual({ providers: { google: true, apple: false }, emailOtp: false });
+    // An old setting that still names Apple: Apple sign-in is gone, and Google isn't listed.
+    restore = withEnv({ COGNITO_DOMAIN: "https://auth.example.test", COGNITO_IDENTITY_PROVIDERS: "SignInWithApple" });
+    expect((await get("/auth/oauth/google/start")).headers.location).toBe("http://localhost:3001/auth/error?reason=provider_unavailable&provider=google");
+    expect((await get("/auth/oauth/apple/start")).headers.location).toBe("http://localhost:3001/auth/error?reason=provider_unavailable&provider=apple");
+    expect((await get("/auth/config")).json()).toEqual({ providers: { google: false }, emailOtp: false });
   });
 
   it("signs out of the user pool's own session too after a federated sign-in", async () => {

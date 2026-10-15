@@ -22,7 +22,7 @@ import {
   type AccountInfo,
 } from "@/lib/auth";
 
-const METHOD_NAMES = { password: "Email and password", google: "Google", apple: "Apple" } as const;
+const METHOD_NAMES = { password: "Email and password", google: "Google" } as const;
 const when = (t: string | number | null) => (t ? new Date(t).toLocaleString() : "never");
 
 type Msg = { kind: "error" | "success" | "info"; text: string } | null;
@@ -39,7 +39,7 @@ export function AccountSecurity() {
 
   if (q.error && !a) return <LoadError what="your account" error={q.error} onRetry={() => void q.reload()} busy={q.loading} />;
   if (!a) return <Skeleton lines={5} />;
-  const provider = a.signedInWith === "google" ? "Google" : a.signedInWith === "apple" ? "Apple" : null;
+  const provider = a.signedInWith === "google" ? "Google" : null;
 
   return (
     <div className="space-y-4">
@@ -61,7 +61,7 @@ export function AccountSecurity() {
           ))}
         </ul>
         <p className="mt-3 text-xs text-muted">
-          Signing in with Google or Apple using this email address adds it here. Two-step verification isn&apos;t available yet: use a strong password you don&apos;t use anywhere else.
+          Signing in with Google using this email address adds it here. Two-step verification isn&apos;t available yet: use a strong password you don&apos;t use anywhere else.
         </p>
       </section>
       <SessionSection account={a} router={router} />

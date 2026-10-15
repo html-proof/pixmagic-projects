@@ -29,12 +29,12 @@ test("unauthenticated users are sent to sign in, and come back to the page they 
   await expect(page).toHaveURL(/\/login/);
   await expect(page.getByRole("heading", { name: "Welcome Back" })).toBeVisible();
   await expect(page.getByText("Sign in to your account to continue to your dashboard.")).toBeVisible();
-  // Email and password, Google, Apple, and a way to create an account. Shopify is connected from inside the app only.
+  // Email and password, Google, and a way to create an account. Shopify is connected from inside the app only.
   await expect(page.getByLabel("Email Address")).toBeVisible();
   await expect(page.getByLabel("Password", { exact: true })).toBeVisible();
   await expect(page.getByRole("link", { name: "Forgot Password?" })).toHaveAttribute("href", "/forgot-password");
   await expect(page.getByRole("button", { name: "Continue with Google" })).toBeEnabled();
-  await expect(page.getByRole("button", { name: "Continue with Apple" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Continue with Apple" })).toHaveCount(0);
   await expect(page.getByLabel("Keep me signed in")).toBeChecked();
   // In the top bar and under the form.
   const createAccount = page.getByRole("link", { name: "Create Account" });
@@ -208,28 +208,26 @@ test("forgot password: a code by email, a new password, then signing in with it"
   await expect(page).toHaveURL(/onboarding/);
 });
 
-test.describe("Continue with Google / Apple (through the user pool's managed login)", () => {
-  for (const provider of ["Google", "Apple"] as const) {
-    test(`Continue with ${provider} signs a new person in, and the session survives a refresh`, async ({ page }) => {
-      await page.goto("/login");
-      await page.getByRole("button", { name: `Continue with ${provider}` }).click();
-      // The provider's own screen (here: the stand-in), reached with PKCE and a nonce.
-      await expect(page.getByRole("heading", { name: `Sign in with ${provider === "Google" ? "Google" : "SignInWithApple"} (test)` })).toBeVisible();
-      const authorize = new URL(page.url());
-      expect(authorize.searchParams.get("code_challenge_method")).toBe("S256");
-      expect(authorize.searchParams.get("nonce")).toBeTruthy();
-      const email = uniqueEmail(provider.toLowerCase());
-      await page.getByLabel("Email").fill(email);
-      await page.getByRole("button", { name: "Continue" }).click();
-      // Back on /auth/callback, which finishes the sign-in: a brand-new account goes to connect a store.
-      await expect(page).toHaveURL(/\/onboarding/, { timeout: 20_000 });
-      await expect(page.getByRole("button", { name: "Continue with Shopify" })).toBeVisible();
-      await page.reload();
-      await expect(page).toHaveURL(/\/onboarding/);
-      const rows = await db.query("SELECT i.method FROM users u JOIN auth_identities i ON i.user_id = u.id WHERE u.email = $1", [email]);
-      expect(rows.rows).toEqual([{ method: provider.toLowerCase() }]);
-    });
-  }
+test.describe("Continue with Google (through the user pool's managed login)", () => {
+  test("Continue with Google signs a new person in, and the session survives a refresh", async ({ page }) => {
+    await page.goto("/login");
+    await page.getByRole("button", { name: "Continue with Google" }).click();
+    // The provider's own screen (here: the stand-in), reached with PKCE and a nonce.
+    await expect(page.getByRole("heading", { name: "Sign in with Google (test)" })).toBeVisible();
+    const authorize = new URL(page.url());
+    expect(authorize.searchParams.get("code_challenge_method")).toBe("S256");
+    expect(authorize.searchParams.get("nonce")).toBeTruthy();
+    const email = uniqueEmail("google");
+    await page.getByLabel("Email").fill(email);
+    await page.getByRole("button", { name: "Continue" }).click();
+    // Back on /auth/callback, which finishes the sign-in: a brand-new account goes to connect a store.
+    await expect(page).toHaveURL(/\/onboarding/, { timeout: 20_000 });
+    await expect(page.getByRole("button", { name: "Continue with Shopify" })).toBeVisible();
+    await page.reload();
+    await expect(page).toHaveURL(/\/onboarding/);
+    const rows = await db.query("SELECT i.method FROM users u JOIN auth_identities i ON i.user_id = u.id WHERE u.email = $1", [email]);
+    expect(rows.rows).toEqual([{ method: "google" }]);
+  });
 
   test("links Google to an existing password account with the same address, and handles a cancelled sign-in", async ({ page }) => {
     const email = uniqueEmail("linked");

@@ -27,7 +27,7 @@ export const emailTaken = () =>
  * 2. It was just created from a Firebase account (`firebaseUid`): the user that Firebase account
  *    belonged to, whatever its email says.
  * 3. A user with the same email exists: linked only when Cognito vouches for the address
- *    (email_verified: a confirmed sign-up code, Google, Apple). Otherwise anyone could register
+ *    (email_verified: a confirmed sign-up code, Google). Otherwise anyone could register
  *    someone else's address and walk into their workspaces; they are told it's taken instead.
  * 4. Nobody: a new user.
  *
@@ -36,7 +36,7 @@ export const emailTaken = () =>
  */
 export async function resolveUser(claims: IdentityClaims, opts: { firebaseUid?: string; ip?: string | null } = {}): Promise<User> {
   const email = claims.email?.toLowerCase() ?? null;
-  if (!email) throw new HttpError(400, "An email address is required to sign in. Share your email with us when you sign in with Google or Apple.", "email_required");
+  if (!email) throw new HttpError(400, "An email address is required to sign in. Share your email with us when you sign in with Google.", "email_required");
   const where = { provider_subject: { provider: "cognito", subject: claims.sub } };
 
   const linked = await systemDb.authIdentity.findUnique({ where, include: { user: true } });

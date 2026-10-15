@@ -68,6 +68,6 @@ export class AuthStack extends Stack {
         COGNITO_IDENTITY_PROVIDERS: props.googleClientId ? "Google" : "",
       }),
     });
-    // Outputs: cognito.yaml's own (UserPoolId, ClientId, Domain, ProviderRedirectUri for Google/Apple).
+    // Outputs: cognito.yaml's own (UserPoolId, ClientId, Domain, ProviderRedirectUri for Google).
   }
 }

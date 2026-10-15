@@ -31,7 +31,7 @@ export function fakeCognito() {
   const codes = new Map<string, string>();
   const refreshTokens = new Map<string, string>();
   const accessTokens = new Map<string, string>();
-  /** Federated codes handed back by the fake "Google/Apple": code -> user, PKCE challenge, nonce. */
+  /** Federated codes handed back by the fake "Google": code -> user, PKCE challenge, nonce. */
   const oauthCodes = new Map<string, { username: string; challenge: string; nonce: string; redirectUri: string }>();
   const calls: string[] = [];
   let seq = 0;
@@ -309,13 +309,14 @@ export function fakeCognito() {
       return u;
     },
     /**
-     * The person finishes at Google/Apple (the URL our start route redirected to): their federated
+     * The person finishes at Google (the URL our start route redirected to): their federated
      * Cognito user exists from now on, and the code Cognito would send back is returned.
      */
     federatedSignIn(authorizeUrl: string, person: { id: string; email: string | null; emailVerified?: boolean; name?: string }) {
       const q = new URL(authorizeUrl).searchParams;
       const provider = q.get("identity_provider") as FederatedProvider;
-      const username = `${provider === "Google" ? "google" : "signinwithapple"}_${person.id}`;
+      if (provider !== "Google") throw new Error(`unexpected identity provider ${provider}`);
+      const username = `google_${person.id}`;
       if (!users.has(username)) {
         users.set(username, {
           sub: randomUUID(),
@@ -326,7 +327,7 @@ export function fakeCognito() {
           password: null,
           status: "CONFIRMED",
           enabled: true,
-          method: provider === "Google" ? "google" : "apple",
+          method: "google",
         });
       }
       const code = `code-${++seq}`;

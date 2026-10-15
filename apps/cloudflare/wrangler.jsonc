@@ -35,7 +35,7 @@
     "COGNITO_CLIENT_ID": "",
     // https://<prefix>.auth.<region>.amazoncognito.com (or a custom auth domain).
     "COGNITO_DOMAIN": "",
-    // "Continue with ..." buttons that work: Google, SignInWithApple (once each provider is set up in the pool).
+    // "Continue with ..." buttons that work: Google (once it is set up in the pool).
     "COGNITO_IDENTITY_PROVIDERS": "",
     // "1" once the pool sends email through SES (passwordless sign-in codes need it).
     "COGNITO_EMAIL_OTP": "",
