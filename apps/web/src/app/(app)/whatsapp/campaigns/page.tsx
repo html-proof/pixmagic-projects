@@ -2,12 +2,13 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { campaignCan, campaignEditable, libraryTemplate, OCCASIONS, type Audience, type CampaignStatus, type TemplateMapping } from "@app/shared/whatsapp";
-import { Badge, Empty, type Tone } from "@/components/dashboard/primitives";
+import { Badge, Empty, type Tone } from "@/components/dashboard/Primitives";
 import { LoadError } from "@/components/LoadError";
 import { ApiError, actionError, api, fmtMoney, fmtNum, fmtPct, useApi } from "@/lib/api";
 import { useApp } from "@/components/AppContext";
 import { Alert } from "@/components/ui";
-import { ConfirmDialog, fmtWhen, PageHeader, Skeleton, TemplateMapper, useAction, useToast, useWa, type SettingsResponse } from "@/components/whatsapp/common";
+import { fmtWhen, TemplateMapper, useWa, type SettingsResponse } from "@/components/whatsapp/WhatsappUi";
+import { ConfirmDialog, PageHeader, Skeleton, useAction, useToast } from "@/components/AppUi";
 import type { Overview } from "@/components/whatsapp/types";
 
 interface Metrics {

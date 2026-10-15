@@ -1,12 +1,13 @@
 "use client";
 import { useEffect, useState } from "react";
 import type { TransactionalBasis } from "@app/shared/whatsapp";
-import { Stat } from "@/components/dashboard/primitives";
+import { Stat } from "@/components/dashboard/Primitives";
 import { hourLabel } from "@/components/dashboard/format";
 import { useApp } from "@/components/AppContext";
 import { LoadError } from "@/components/LoadError";
 import { actionError, api, fmtNum, useApi } from "@/lib/api";
-import { PageHeader, Skeleton, useAction, useSettings, useToast, useWa, type SettingsResponse } from "@/components/whatsapp/common";
+import { useSettings, useWa, type SettingsResponse } from "@/components/whatsapp/WhatsappUi";
+import { PageHeader, Skeleton, useAction, useToast } from "@/components/AppUi";
 
 const BASES: Array<{ id: TransactionalBasis; title: string; body: string }> = [
   { id: "none", title: "Not chosen yet", body: "No order or delivery updates are sent." },

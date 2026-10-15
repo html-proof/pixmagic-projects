@@ -1,11 +1,12 @@
 "use client";
 import Link from "next/link";
 import { KIND_INFO, type NotificationKind } from "@app/shared/whatsapp";
-import { Badge, Stat } from "@/components/dashboard/primitives";
+import { Badge, Stat } from "@/components/dashboard/Primitives";
 import { fmtRelative } from "@/components/dashboard/format";
 import { fmtNum, fmtPct, useApi } from "@/lib/api";
 import { LoadError } from "@/components/LoadError";
-import { fmtWhen, Skeleton, useWa, WhatsappIcon } from "@/components/whatsapp/common";
+import { fmtWhen, useWa, WhatsappIcon } from "@/components/whatsapp/WhatsappUi";
+import { Skeleton } from "@/components/AppUi";
 import { connectionStatus, quality, tier, type Overview } from "@/components/whatsapp/types";
 
 function Step({ done, children, href }: { done: boolean; children: React.ReactNode; href?: string }) {

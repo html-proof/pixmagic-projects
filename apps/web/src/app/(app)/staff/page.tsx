@@ -3,11 +3,11 @@ import Link from "next/link";
 import { useState, type ReactNode } from "react";
 import { shiftDay, type LiveStatus, type PayrollStatus } from "@app/shared/staff";
 import { Icon, type IconName } from "@/components/dashboard/Icons";
-import { Badge, Stat, type Tone } from "@/components/dashboard/primitives";
+import { Badge, Stat, type Tone } from "@/components/dashboard/Primitives";
 import { LoadError } from "@/components/LoadError";
 import { EstimateNote, KpiCard, type KpiData } from "@/components/staff/ui";
 import { EmptyState } from "@/components/ui";
-import { PageHeader, Skeleton } from "@/components/whatsapp/common";
+import { PageHeader, Skeleton } from "@/components/AppUi";
 import { useApi, useLiveApi } from "@/lib/api";
 import { fmtSpan, fmtMoney, useStaff } from "@/lib/staff";
 

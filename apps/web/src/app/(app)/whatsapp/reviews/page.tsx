@@ -1,10 +1,11 @@
 "use client";
 import { useState } from "react";
 import { kindsOf, MODERATION_LABEL, MODERATION_REASONS, type ModerationReason } from "@app/shared/whatsapp";
-import { Badge, Empty, Stat, type Tone } from "@/components/dashboard/primitives";
+import { Badge, Empty, Stat, type Tone } from "@/components/dashboard/Primitives";
 import { useApp } from "@/components/AppContext";
 import { api, fmtNum, useApi } from "@/lib/api";
-import { fmtWhen, KindsSection, PageHeader, useAction, useWa } from "@/components/whatsapp/common";
+import { fmtWhen, KindsSection, useWa } from "@/components/whatsapp/WhatsappUi";
+import { PageHeader, useAction } from "@/components/AppUi";
 
 interface Review {
   id: string;

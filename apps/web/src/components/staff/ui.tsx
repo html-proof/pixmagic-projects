@@ -16,8 +16,8 @@ import {
   type RangePreset,
   type SessionFlag,
 } from "@app/shared/staff";
-import { Badge, Delta, NeutralDelta, type Tone } from "@/components/dashboard/primitives";
-import { overlay } from "@/components/whatsapp/common";
+import { Badge, Delta, NeutralDelta, type Tone } from "@/components/dashboard/Primitives";
+import { overlay } from "@/components/AppUi";
 import { fmtHours, fmtMoney } from "@/lib/staff";
 
 // ---------------------------------------------------------------------------------------------

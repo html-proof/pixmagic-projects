@@ -1,7 +1,7 @@
 "use client";
 import { fmtNum } from "@/lib/api";
 import { fmtDay, fmtRelative } from "./format";
-import { Dot, type Tone } from "./primitives";
+import { Dot, type Tone } from "./Primitives";
 import type { ImportedData, OverviewStore } from "./types";
 
 const STATUS: Record<string, { tone: Tone; label: string }> = {

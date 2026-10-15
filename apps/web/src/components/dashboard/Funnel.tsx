@@ -4,7 +4,7 @@ import { fmtNum, fmtPct } from "@/lib/api";
 import { BarRow } from "./Charts";
 import { plural } from "./format";
 import { AnimatedNumber } from "./Motion";
-import { Badge, Delta, Empty, Panel, Stat } from "./primitives";
+import { Badge, Delta, Empty, Panel, Stat } from "./Primitives";
 import type { FunnelModule } from "./types";
 
 export const STEP_LABEL: Record<FunnelStep, string> = {

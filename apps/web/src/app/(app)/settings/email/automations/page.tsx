@@ -2,11 +2,11 @@
 import Link from "next/link";
 import { useState } from "react";
 import { errorLabel } from "@app/shared/email";
-import { Badge } from "@/components/dashboard/primitives";
+import { Badge } from "@/components/dashboard/Primitives";
 import { MessageStatusBadge, relative } from "@/components/email/EmailUi";
 import { LoadError } from "@/components/LoadError";
 import { Alert, EmptyState } from "@/components/ui";
-import { ConfirmDialog, PageHeader, Skeleton, useAction } from "@/components/whatsapp/common";
+import { ConfirmDialog, PageHeader, Skeleton, useAction } from "@/components/AppUi";
 import { api, useApi } from "@/lib/api";
 import { fmtDateTime, useEmail, type RuleView } from "@/lib/email";
 

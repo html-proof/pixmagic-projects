@@ -6,7 +6,7 @@ import type { Me } from "@/components/AppContext";
 import { Unreachable } from "@/components/LoadError";
 import { PORTAL_WS_KEY, PortalProvider, portalSignOut, type PortalCtx } from "@/components/staff/PortalContext";
 import { Alert } from "@/components/ui";
-import { ToastProvider } from "@/components/whatsapp/common";
+import { ToastProvider } from "@/components/AppUi";
 import { api, isSignedOut, isTransient, keepRetrying, onSessionGone } from "@/lib/api";
 import { setReturnTo, signInAndReturn } from "@/lib/returnTo";
 import { readLocal, writeLocal } from "@/lib/storage";

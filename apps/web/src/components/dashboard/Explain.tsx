@@ -7,7 +7,7 @@ import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { SECTION_LABEL, STEP_LABEL } from "./Funnel";
 import { hourRange, plural, weekdayName } from "./format";
 import { Icon } from "./Icons";
-import { Panel } from "./primitives";
+import { Panel } from "./Primitives";
 import type { Topic } from "./topics";
 import type { Overview } from "./types";
 

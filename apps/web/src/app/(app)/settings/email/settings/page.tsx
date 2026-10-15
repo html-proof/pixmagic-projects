@@ -1,12 +1,12 @@
 "use client";
 import { useEffect, useState, type FormEvent } from "react";
 import { SUPPRESSION_REASON_LABEL, type SuppressionReason } from "@app/shared/email";
-import { Badge } from "@/components/dashboard/primitives";
+import { Badge } from "@/components/dashboard/Primitives";
 import { CopyValue, Note, relative } from "@/components/email/EmailUi";
 import { LoadError } from "@/components/LoadError";
 import { Field } from "@/components/staff/ui";
 import { Alert } from "@/components/ui";
-import { PageHeader, Skeleton, useAction } from "@/components/whatsapp/common";
+import { PageHeader, Skeleton, useAction } from "@/components/AppUi";
 import { api, useApi } from "@/lib/api";
 import { fmtDateTime, useEmail } from "@/lib/email";
 

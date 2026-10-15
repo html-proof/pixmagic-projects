@@ -1,12 +1,12 @@
 "use client";
 import Link from "next/link";
 import { eventLabel } from "@app/shared/email";
-import { Badge } from "@/components/dashboard/primitives";
+import { Badge } from "@/components/dashboard/Primitives";
 import { relative } from "@/components/email/EmailUi";
 import { LoadError } from "@/components/LoadError";
 import { Table, Td, Th } from "@/components/staff/ui";
 import { EmptyState } from "@/components/ui";
-import { PageHeader, Skeleton } from "@/components/whatsapp/common";
+import { PageHeader, Skeleton } from "@/components/AppUi";
 import { useApi } from "@/lib/api";
 import { useEmail, type TemplateView } from "@/lib/email";
 

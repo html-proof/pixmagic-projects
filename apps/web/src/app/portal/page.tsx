@@ -7,7 +7,7 @@ import { LoadError } from "@/components/LoadError";
 import { usePortal, useLiveRetry, type ClockResult, type ClockState, type EmployeeDashboard, type ShiftSummary } from "@/components/staff/PortalContext";
 import { ApprovalBadge, EstimateNote, Figure, Flags, PaymentBadge } from "@/components/staff/ui";
 import { Alert } from "@/components/ui";
-import { ConfirmDialog, Skeleton, useToast } from "@/components/whatsapp/common";
+import { ConfirmDialog, Skeleton, useToast } from "@/components/AppUi";
 import { actionError, api, ApiError, isSignedOut, isTransient } from "@/lib/api";
 import { signInAndReturn } from "@/lib/returnTo";
 import { fmtDateTime, fmtDay, fmtHours, fmtMoney, fmtSpan, fmtTime, newKey, postIdempotent } from "@/lib/staff";

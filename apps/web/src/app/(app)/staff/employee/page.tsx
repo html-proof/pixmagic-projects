@@ -22,10 +22,10 @@ import {
   type PaymentStatus,
   type RangePreset,
 } from "@app/shared/staff";
-import { Panel } from "@/components/dashboard/primitives";
+import { Panel } from "@/components/dashboard/Primitives";
 import { LoadError } from "@/components/LoadError";
 import { Alert, EmptyState } from "@/components/ui";
-import { ConfirmDialog, Skeleton, useAction, useToast } from "@/components/whatsapp/common";
+import { ConfirmDialog, Skeleton, useAction, useToast } from "@/components/AppUi";
 import {
   AccountBadge,
   ApprovalBadge,

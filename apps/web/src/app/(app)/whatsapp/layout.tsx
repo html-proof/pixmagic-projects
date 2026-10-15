@@ -3,7 +3,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 import { canManage, StoresPending, useApp } from "@/components/AppContext";
-import { ToastProvider, WhatsappIcon } from "@/components/whatsapp/common";
+import { WhatsappIcon } from "@/components/whatsapp/WhatsappUi";
+import { ToastProvider } from "@/components/AppUi";
 
 const ITEMS = [
   ["", "Overview"],

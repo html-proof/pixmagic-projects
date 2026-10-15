@@ -5,7 +5,7 @@ import { CheckBadge, CopyValue, DomainStatusBadge, Note, relative } from "@/comp
 import { LoadError } from "@/components/LoadError";
 import { Field } from "@/components/staff/ui";
 import { Alert, EmptyState } from "@/components/ui";
-import { ConfirmDialog, PageHeader, Skeleton, useAction } from "@/components/whatsapp/common";
+import { ConfirmDialog, PageHeader, Skeleton, useAction } from "@/components/AppUi";
 import { actionError, api, useApi } from "@/lib/api";
 import { fmtDateTime, useEmail, type DomainView } from "@/lib/email";
 

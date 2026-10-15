@@ -12,7 +12,7 @@ import { AdvertisingSection } from "@/components/dashboard/Advertising";
 import { fmtRange, fmtRelative } from "@/components/dashboard/format";
 import { Icon, type IconName } from "@/components/dashboard/Icons";
 import { AnimatedNumber, Sparkline } from "@/components/dashboard/Motion";
-import { Delta } from "@/components/dashboard/primitives";
+import { Delta } from "@/components/dashboard/Primitives";
 import type { Capability, Overview } from "@/components/dashboard/types";
 import { signInFinished } from "@/lib/adSignIn";
 import { api, ApiError, fmtMoney, fmtNum, fmtPct, friendlyError, isTransient, useLiveApi } from "@/lib/api";

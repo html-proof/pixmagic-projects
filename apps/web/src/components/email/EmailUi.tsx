@@ -13,7 +13,7 @@ import {
   type EmailProvider,
   type MessageStatus,
 } from "@app/shared/email";
-import { Badge, type Tone } from "@/components/dashboard/primitives";
+import { Badge, type Tone } from "@/components/dashboard/Primitives";
 
 // ---------------------------------------------------------------------------------------------
 // Pieces shared by the Email integrations pages. Built on the app's primitives; no rules here.

@@ -1,5 +1,5 @@
 import type { NotificationKind } from "@app/shared/whatsapp";
-import type { Tone } from "@/components/dashboard/primitives";
+import type { Tone } from "@/components/dashboard/Primitives";
 
 /** Shapes the WhatsApp API returns, and small helpers for showing them. */
 

@@ -3,11 +3,11 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useId, useState, type FormEvent } from "react";
 import { dayDiff, PAY_CYCLE_LABEL, PAYROLL_STATUS_LABEL, PAYROLL_STATUSES, type DayRange, type PayCycle, type PayrollStatus } from "@app/shared/staff";
-import { Empty } from "@/components/dashboard/primitives";
+import { Empty } from "@/components/dashboard/Primitives";
 import { LoadError } from "@/components/LoadError";
 import { EstimateNote, Field, Pagination, PayrollBadge, Table, Td, Th } from "@/components/staff/ui";
 import { Alert, EmptyState } from "@/components/ui";
-import { PageHeader, Skeleton } from "@/components/whatsapp/common";
+import { PageHeader, Skeleton } from "@/components/AppUi";
 import { actionError, api, ApiError, useApi } from "@/lib/api";
 import { fmtDay, fmtHoursDec, fmtMoney, fmtSpan, useStaff } from "@/lib/staff";
 

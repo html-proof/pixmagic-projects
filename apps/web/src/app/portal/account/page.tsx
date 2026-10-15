@@ -4,7 +4,7 @@ import { AccountSecurity } from "@/components/auth/AccountSecurity";
 import { LoadError } from "@/components/LoadError";
 import { usePortal, type EmployeeDashboard } from "@/components/staff/PortalContext";
 import { Field } from "@/components/staff/ui";
-import { Skeleton, useToast } from "@/components/whatsapp/common";
+import { Skeleton, useToast } from "@/components/AppUi";
 import { actionError, api, useApi } from "@/lib/api";
 
 // ---------------------------------------------------------------------------------------------

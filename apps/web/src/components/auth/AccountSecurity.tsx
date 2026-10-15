@@ -5,7 +5,7 @@ import { useCallback, useState, type FormEvent } from "react";
 import { accountPasswordProblem, ACCOUNT_PASSWORD_MIN, isEmailAddress } from "@app/shared/auth";
 import { LoadError } from "@/components/LoadError";
 import { Alert } from "@/components/ui";
-import { ConfirmDialog, Skeleton } from "@/components/whatsapp/common";
+import { ConfirmDialog, Skeleton } from "@/components/AppUi";
 import { CodeStep } from "@/components/auth/CodeStep";
 import { PasswordField } from "@/components/auth/PasswordField";
 import { useApi } from "@/lib/api";

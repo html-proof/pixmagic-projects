@@ -2,11 +2,12 @@
 import { useState } from "react";
 import Link from "next/link";
 import { kindsOf, reasonLabel } from "@app/shared/whatsapp";
-import { Badge, Empty, Stat, type Tone } from "@/components/dashboard/primitives";
+import { Badge, Empty, Stat, type Tone } from "@/components/dashboard/Primitives";
 import { fmtRelative } from "@/components/dashboard/format";
 import { useApp } from "@/components/AppContext";
 import { api, fmtMoney, fmtNum, useApi } from "@/lib/api";
-import { fmtWhen, KindsSection, MessageStatus, PageHeader, useAction, useWa } from "@/components/whatsapp/common";
+import { fmtWhen, KindsSection, MessageStatus, useWa } from "@/components/whatsapp/WhatsappUi";
+import { PageHeader, useAction } from "@/components/AppUi";
 
 interface Cart {
   id: string;

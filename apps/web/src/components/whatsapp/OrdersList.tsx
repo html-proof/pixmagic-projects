@@ -1,11 +1,12 @@
 "use client";
 import { useState } from "react";
 import { reasonLabel } from "@app/shared/whatsapp";
-import { Badge, Empty, type Tone } from "@/components/dashboard/primitives";
+import { Badge, Empty, type Tone } from "@/components/dashboard/Primitives";
 import { fmtMoney, api, useApi } from "@/lib/api";
 import { useApp } from "@/components/AppContext";
 import { LoadError } from "@/components/LoadError";
-import { fmtWhen, kindLabel, MessageStatus, overlay, Skeleton, useAction, useToast, useWa } from "./common";
+import { fmtWhen, kindLabel, MessageStatus, useWa } from "./WhatsappUi";
+import { overlay, Skeleton, useAction, useToast } from "@/components/AppUi";
 
 export const ORDER_STATUS: Record<string, { tone: Tone; label: string }> = {
   placed: { tone: "neutral", label: "Placed" },

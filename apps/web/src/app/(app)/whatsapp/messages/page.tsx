@@ -1,10 +1,11 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { reasonLabel } from "@app/shared/whatsapp";
-import { Empty } from "@/components/dashboard/primitives";
+import { Empty } from "@/components/dashboard/Primitives";
 import { useApp } from "@/components/AppContext";
 import { actionError, api } from "@/lib/api";
-import { fmtWhen, kindLabel, MessageStatus, PageHeader, useAction, useWa } from "@/components/whatsapp/common";
+import { fmtWhen, kindLabel, MessageStatus, useWa } from "@/components/whatsapp/WhatsappUi";
+import { PageHeader, useAction } from "@/components/AppUi";
 
 interface Message {
   id: string;

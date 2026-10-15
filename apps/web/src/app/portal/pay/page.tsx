@@ -5,7 +5,7 @@ import { LoadError } from "@/components/LoadError";
 import { usePortal, type MyPayItem } from "@/components/staff/PortalContext";
 import { EstimateNote, PaymentBadge, PayrollBadge } from "@/components/staff/ui";
 import { EmptyState } from "@/components/ui";
-import { Skeleton, useToast } from "@/components/whatsapp/common";
+import { Skeleton, useToast } from "@/components/AppUi";
 import { actionError, api, useApi } from "@/lib/api";
 import { downloadFrom, fmtDay, fmtHours, fmtMoney, fmtSpan } from "@/lib/staff";
 

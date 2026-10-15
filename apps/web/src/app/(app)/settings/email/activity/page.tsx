@@ -6,7 +6,7 @@ import { MessageStatusBadge, providerLabel } from "@/components/email/EmailUi";
 import { LoadError } from "@/components/LoadError";
 import { Modal, Table, Td, Th } from "@/components/staff/ui";
 import { Alert, EmptyState } from "@/components/ui";
-import { PageHeader, Skeleton, useAction } from "@/components/whatsapp/common";
+import { PageHeader, Skeleton, useAction } from "@/components/AppUi";
 import { api, useApi, type ApiError } from "@/lib/api";
 import { fmtDateTime, isoDay, useEmail, type AccountsResponse, type MessageDetail, type MessageRow, type RuleView } from "@/lib/email";
 

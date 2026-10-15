@@ -3,11 +3,11 @@ import { Lock } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useId, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { BREAK_KIND_LABEL, BREAK_KINDS, localDayOf, shiftDay, startOfWeek, type BreakKind } from "@app/shared/staff";
-import { Badge, Empty } from "@/components/dashboard/primitives";
+import { Badge, Empty } from "@/components/dashboard/Primitives";
 import { LoadError } from "@/components/LoadError";
 import { ApprovalBadge, Field, Flags, Modal, Pagination, Table, Tabs, Td, Th } from "@/components/staff/ui";
 import { Alert, EmptyState } from "@/components/ui";
-import { PageHeader, Skeleton, useAction, useToast } from "@/components/whatsapp/common";
+import { PageHeader, Skeleton, useAction, useToast } from "@/components/AppUi";
 import { actionError, api, useApi } from "@/lib/api";
 import { fmtDateTime, fmtDay, fmtHours, fmtTime, fromLocalInput, toLocalInput, useStaff, type EmployeeRow, type SessionRow, type StaffConfig } from "@/lib/staff";
 

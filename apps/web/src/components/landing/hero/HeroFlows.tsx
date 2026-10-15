@@ -16,7 +16,7 @@ import {
   wideFlowDraw,
   type FlowDef,
   type FlowGeometry,
-} from "./HeroLayout";
+} from "./heroLayout";
 
 type Box = (typeof BOX)[keyof typeof BOX];
 

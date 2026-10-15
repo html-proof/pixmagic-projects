@@ -5,7 +5,7 @@ import { useEffect, useId, useState } from "react";
 import { EMPLOYMENT_TYPE_LABEL, EMPLOYMENT_TYPES, type EmploymentType } from "@app/shared/staff";
 import { LoadError } from "@/components/LoadError";
 import { EmptyState } from "@/components/ui";
-import { PageHeader, Skeleton } from "@/components/whatsapp/common";
+import { PageHeader, Skeleton } from "@/components/AppUi";
 import { AccountBadge, EmployeeStatusBadge, Pagination, Table, Td, Th } from "@/components/staff/ui";
 import { fmtRate } from "@/components/staff/EmployeeForm";
 import { useApi } from "@/lib/api";
