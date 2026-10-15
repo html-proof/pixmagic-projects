@@ -8,7 +8,7 @@ import { fmtMoney, fmtSpan, newKey, postIdempotent, type StaffConfig } from "@/l
 import { Field, Modal } from "./ui";
 
 // ---------------------------------------------------------------------------------------------
-// "Record payment": says money was paid outside Insights (bank, cash, a payroll provider) against
+// "Record payment": says money was paid outside bizinsights (bank, cash, a payroll provider) against
 // one employee's approved pay for one period. One Idempotency-Key per opening of the form, so a
 // double click or a retry after a lost answer records one payment, never two.
 // ---------------------------------------------------------------------------------------------

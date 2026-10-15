@@ -1,6 +1,6 @@
 # One test store, no public listing
 
-How to run Insights against your own Shopify test store without publishing anything, and how
+How to run bizinsights against your own Shopify test store without publishing anything, and how
 to compare its numbers against third-party analytics apps installed on that same store.
 
 Related: [shopify-setup.md](shopify-setup.md) (full app configuration), [kpis.md](kpis.md)
@@ -94,7 +94,7 @@ npx shopify app webhook trigger --topic orders/create --address https://d2mr8m2p
 ## 4. Comparing against third-party apps
 
 Install the apps you want to compare **on the same development store, from the Shopify admin,
-as ordinary apps**. Do not try to run or embed them inside Insights: their data is not
+as ordinary apps**. Do not try to run or embed them inside bizinsights: their data is not
 reachable through our access token, and an app's own numbers are only visible in its own UI.
 Comparison means reading two dashboards side by side over the same date range, nothing more.
 
@@ -106,7 +106,7 @@ trusting most), plus any two analytics apps from the App Store.
 Pick one date range, confirm both tools use the **store's** time zone, and expect these to
 differ for reasons that are not bugs:
 
-| Axis | What Insights does | Where |
+| Axis | What bizinsights does | Where |
 | --- | --- | --- |
 | Day boundaries | Buckets by `localDay(createdAt, store.timezone)`, the store's IANA zone as reported by Shopify | `packages/core/src/persist.ts:23` |
 | History depth | **Last 60 days only.** `read_orders` is capped there; all history needs `read_all_orders`, which needs Shopify approval | `apps/worker/src/handlers.ts:65` |

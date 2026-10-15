@@ -6,8 +6,8 @@ import { refreshPeriodStatus } from "./payroll.js";
 import { ensureStaffSettings } from "./settings.js";
 
 /**
- * Payment records. Recording a payment says money was paid outside Insights (a bank transfer, cash,
- * a cheque, a payroll provider); Insights moves no money and connects to no payment provider.
+ * Payment records. Recording a payment says money was paid outside bizinsights (a bank transfer, cash,
+ * a cheque, a payroll provider); bizinsights moves no money and connects to no payment provider.
  *
  * Duplicates are stopped three ways: the form's Idempotency-Key (the same submission twice records
  * one payment), the outstanding balance (an item can't be paid past what it owes, checked with the

@@ -30,7 +30,7 @@ export type OAuthProvider = (typeof OAUTH_PROVIDERS)[number];
  *  - degraded: the provider failed temporarily (outage, rate limit); sending carries on and retries
  *  - reauthorization_required: the provider rejected the stored authorization (revoked, expired,
  *    password changed, consent withdrawn): someone must reconnect it
- *  - disabled: turned off in Insights; nothing is sent until it is turned back on
+ *  - disabled: turned off in bizinsights; nothing is sent until it is turned back on
  *  - revoked: disconnected; credentials deleted
  *  - failed: the account can't send at all (wrong SMTP settings, mailbox not enabled)
  */
@@ -152,7 +152,7 @@ export const SUPPRESSION_REASON_LABEL: Record<SuppressionReason, string> = {
 
 /**
  * Sending limits per account, under each provider's own published limits so a busy shop is slowed
- * down by Insights rather than suspended by the provider. An account can be set lower; the
+ * down by bizinsights rather than suspended by the provider. An account can be set lower; the
  * workspace has its own daily limit on top (EMAIL_DEFAULT_DAILY_LIMIT).
  */
 export const PROVIDER_LIMITS: Record<EmailProvider, { perMinute: number; perDay: number; note: string }> = {
@@ -165,13 +165,13 @@ export const PROVIDER_LIMITS: Record<EmailProvider, { perMinute: number; perDay:
 
 /**
  * What each connection can tell us after a message is accepted. Send-only permissions can't read
- * the mailbox, so bounce notices that arrive there afterwards are invisible to Insights.
+ * the mailbox, so bounce notices that arrive there afterwards are invisible to bizinsights.
  */
 export const DELIVERY_REPORTING: Record<EmailProvider, string> = {
-  gmail: "Gmail confirms it accepted the message. Delivery and bounce reports go to the mailbox, which Insights can't read with send-only access.",
-  google_workspace: "Google confirms it accepted the message. Delivery and bounce reports go to the mailbox, which Insights can't read with send-only access.",
-  outlook: "Microsoft confirms it accepted the message (HTTP 202). Delivery and bounce reports go to the mailbox, which Insights can't read with send-only access.",
-  microsoft_365: "Microsoft confirms it accepted the message (HTTP 202). Delivery and bounce reports go to the mailbox, which Insights can't read with send-only access.",
+  gmail: "Gmail confirms it accepted the message. Delivery and bounce reports go to the mailbox, which bizinsights can't read with send-only access.",
+  google_workspace: "Google confirms it accepted the message. Delivery and bounce reports go to the mailbox, which bizinsights can't read with send-only access.",
+  outlook: "Microsoft confirms it accepted the message (HTTP 202). Delivery and bounce reports go to the mailbox, which bizinsights can't read with send-only access.",
+  microsoft_365: "Microsoft confirms it accepted the message (HTTP 202). Delivery and bounce reports go to the mailbox, which bizinsights can't read with send-only access.",
   smtp: "The SMTP server confirms it accepted the message, or refuses the recipient outright (shown as Bounced). Later bounces go to the mailbox.",
 };
 
@@ -183,7 +183,7 @@ export const ERROR_LABEL: Record<string, string> = {
   account_failed: "The sending account isn't working.",
   auth_failed: "The provider rejected the sign-in or password.",
   permission_missing: "The account didn't grant permission to send email.",
-  consent_required: "An administrator of the Microsoft organization must approve Insights first.",
+  consent_required: "An administrator of the Microsoft organization must approve bizinsights first.",
   conditional_access: "The organization's sign-in policy blocked access. Reconnect to satisfy it.",
   account_disabled_by_provider: "The provider has disabled this account.",
   sender_rejected: "The provider refused to send from this address.",

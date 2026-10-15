@@ -93,7 +93,7 @@ const EVENT_LABEL: Record<string, string> = {
   auto_flag: "Flagged automatically",
   deactivation_close: "Closed when the employee was deactivated",
 };
-const SOURCE_LABEL: Record<string, string> = { web: "Web", mobile: "Phone", admin: "Manager", system: "Insights", employee: "Employee" };
+const SOURCE_LABEL: Record<string, string> = { web: "Web", mobile: "Phone", admin: "Manager", system: "bizinsights", employee: "Employee" };
 const REQUEST_STATUS: Record<string, { tone: "warn" | "good" | "danger" | "neutral"; label: string }> = {
   pending: { tone: "warn", label: "Waiting for review" },
   approved: { tone: "good", label: "Approved" },

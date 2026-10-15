@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("@app/core", async (orig) => ({ ...(await orig<typeof import("@app/core")>()), env: () => ({ EMAIL_FROM: "Insights <no-reply@example.test>" }) }));
+vi.mock("@app/core", async (orig) => ({ ...(await orig<typeof import("@app/core")>()), env: () => ({ EMAIL_FROM: "bizinsights <no-reply@example.test>" }) }));
 
 const { sesMailer } = await import("../src/sesMailer.js");
 
@@ -17,7 +17,7 @@ describe("the SES mailer", () => {
     expect(seen[0]!.url).toBe("https://email.ap-southeast-2.amazonaws.com/v2/email/outbound-emails");
     expect(seen[0]!.auth).toMatch(/^AWS4-HMAC-SHA256 .*\/ap-southeast-2\/ses\/aws4_request/);
     expect(seen[0]!.body).toEqual({
-      FromEmailAddress: "Insights <no-reply@example.test>",
+      FromEmailAddress: "bizinsights <no-reply@example.test>",
       Destination: { ToAddresses: ["someone@example.test"] },
       Content: { Simple: { Subject: { Data: "Hi", Charset: "UTF-8" }, Body: { Text: { Data: "plain", Charset: "UTF-8" }, Html: { Data: "<p>rich</p>", Charset: "UTF-8" } } } },
       ConfigurationSetName: "cs",

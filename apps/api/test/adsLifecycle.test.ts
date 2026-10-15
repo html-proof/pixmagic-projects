@@ -165,7 +165,7 @@ describe("Continue with Google Ads: the sign-in", () => {
     await adAccessToken(await systemDb.adConnection.findUniqueOrThrow({ where: { id: row.id } }), repeat);
     expect(seen.refreshes).toEqual(["G_REFRESH_1"]);
 
-    // Someone Insights has never had a refresh token from.
+    // Someone bizinsights has never had a refresh token from.
     ctx.setFetch(googlePlatform(fresh(), { refreshToken: null, sub: "999" }));
     const third = (await createStore(ws, "ads-life-3.myshopify.com", ["read_orders"], { currency: "USD" })).id;
     const start = await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/stores/${third}/ads/google/connect`, headers });
@@ -192,7 +192,7 @@ describe("Continue with Google Ads: the sign-in", () => {
   });
 });
 
-describe("Google Ads before Google approves Insights for real accounts", () => {
+describe("Google Ads before Google approves bizinsights for real accounts", () => {
   it("is 'Coming soon' until switched on, and a Test-access project is named as the reason, not 'no accounts'", async () => {
     ctx.setEnv({ ...KEYS, GOOGLE_ADS_ENABLED: "" });
     const list = await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${storeId}/ads`, headers });

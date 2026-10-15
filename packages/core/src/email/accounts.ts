@@ -85,7 +85,7 @@ export async function connectOAuthAccount(input: {
   retried?: boolean;
 }): Promise<{ account: EmailAccount; created: boolean }> {
   const email = normalizeEmail(input.identity.email);
-  if (!email) throw new EmailError("The provider returned an address Insights can't send from", 422, "account_failed");
+  if (!email) throw new EmailError("The provider returned an address bizinsights can't send from", 422, "account_failed");
   const live = await systemDb.emailAccount.findFirst({
     where: { workspaceId: input.workspaceId, connectionMethod: input.method, deletedAt: null, OR: [{ providerAccountId: input.identity.providerAccountId }, { emailAddress: email }] },
     include: { oauthCredential: true },
@@ -101,7 +101,7 @@ export async function connectOAuthAccount(input: {
   if (!input.tokens.refreshToken && !live?.oauthCredential) {
     throw new EmailError(
       input.method === "oauth_google"
-        ? "Google didn't grant offline access. Remove Insights at myaccount.google.com/permissions, then connect again."
+        ? "Google didn't grant offline access. Remove bizinsights at myaccount.google.com/permissions, then connect again."
         : "Microsoft didn't grant offline access (offline_access). Connect again and accept every permission.",
       422,
       "no_refresh_token",

@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Insights for Shopify",
+  title: "bizinsights for Shopify",
   description: "Plain-language store analytics.",
   // Google Search Console ownership (account sebanceo@gmail.com) of the app's earlier address,
   // insights.imeseban.workers.dev, which Google's OAuth branding verification required. Keep it while

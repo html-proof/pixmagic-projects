@@ -4,6 +4,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { api, fmtNum, friendlyError, isSignedOut, keepRetrying, type ApiError } from "@/lib/api";
 import { Alert } from "@/components/ui";
+import { BrandLogo } from "@/components/Brand";
 import type { Me } from "@/components/AppContext";
 import { ShopifyIcon } from "@/components/ShopifyIcon";
 import { signInAndReturn } from "@/lib/returnTo";
@@ -220,7 +221,9 @@ function Onboarding() {
 
   return (
     <main className="mx-auto max-w-xl px-4 py-12">
-      <p className="text-sm font-semibold text-accent">Insights</p>
+      <p>
+        <BrandLogo size={24} className="text-[15px] text-text" />
+      </p>
       <h1 className="mt-2 text-2xl font-semibold">{step === 2 ? "Importing your store" : "Let’s get your store set up"}</h1>
       <ol className="mt-6 flex flex-wrap gap-2 text-xs" aria-label="Progress">
         {STEP_LABELS.map((l, i) => (
@@ -289,7 +292,7 @@ function Onboarding() {
                 {ready
                   ? "All set. Your numbers are ready."
                   : sync?.store.status === "error"
-                    ? "We hit a problem importing your store. Open your dashboard: Insights retries the import from there, and shows whatever has arrived so far."
+                    ? "We hit a problem importing your store. Open your dashboard: bizinsights retries the import from there, and shows whatever has arrived so far."
                     : "We're importing your orders, products and inventory. This usually takes a minute or two, and it's fine to leave this page."}
               </p>
             </div>

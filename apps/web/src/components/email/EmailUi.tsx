@@ -109,7 +109,7 @@ export function CopyValue({ value, label }: { value: string; label: string }) {
 /**
  * An email's HTML, shown in a sandboxed frame: no scripts, no same-origin access, no forms, no
  * navigation. Templates are sanitized on the server too; this keeps a sanitizer bug from ever
- * running code inside Insights.
+ * running code inside bizinsights.
  */
 export function EmailPreviewFrame({ html, title = "Email preview", height = 420 }: { html: string; title?: string; height?: number }) {
   const doc = `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src https: data:; style-src 'unsafe-inline'"><base target="_blank"><style>body{font-family:Arial,Helvetica,sans-serif;margin:16px;color:#111;background:#fff}</style></head><body>${html}</body></html>`;

@@ -139,7 +139,7 @@ export const SCOPE_LABELS: Record<string, { title: string; description: string }
   },
   write_pixels: {
     title: "Visit tracking",
-    description: "Lets Insights install the tracker that records those storefront visits.",
+    description: "Lets bizinsights install the tracker that records those storefront visits.",
   },
 };
 

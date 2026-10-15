@@ -318,7 +318,7 @@ export default function Campaigns() {
   if (loadError) return <LoadError what="your campaigns" error={loadError} onRetry={() => void Promise.all([reload(), overview.reload(), settings.reload()])} />;
   if (!data || !overview.data || !settings.data) return <Skeleton lines={5} />;
   const conn = overview.data.connection;
-  const locked = !conn ? "Connect WhatsApp first." : !conn.registered ? "Register your number first (Connect WhatsApp)." : !conn.webhookVerifiedAt ? "Finish the webhook step on Connect WhatsApp first: without it, opt-out replies couldn't reach Insights." : null;
+  const locked = !conn ? "Connect WhatsApp first." : !conn.registered ? "Register your number first (Connect WhatsApp)." : !conn.webhookVerifiedAt ? "Finish the webhook step on Connect WhatsApp first: without it, opt-out replies couldn't reach bizinsights." : null;
   const marketingTemplates = settings.data.templates.filter((t) => t.category === "MARKETING" && t.status === "APPROVED");
   const act = (c: Campaign, action: "pause" | "resume" | "cancel" | "delete") =>
     run(`${c.id}-${action}`, `${action} the campaign`, async () => {

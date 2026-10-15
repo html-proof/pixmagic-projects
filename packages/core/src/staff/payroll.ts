@@ -311,7 +311,7 @@ export async function getPeriod(actor: StaffActor, periodId: string) {
     const issues = isEditable(p.status) || p.status === "pending_approval" ? await periodIssues(tx, settings, p) : [];
     const userIds = [...new Set([...p.approvals.map((a) => a.actorUserId), ...p.adjustments.map((a) => a.createdByUserId)].filter(Boolean))] as string[];
     const users = await systemDb.user.findMany({ where: { id: { in: userIds } }, select: { id: true, displayName: true, email: true } });
-    const name = (id: string | null) => (id ? (users.find((u) => u.id === id)?.displayName ?? users.find((u) => u.id === id)?.email ?? "Someone") : "Insights");
+    const name = (id: string | null) => (id ? (users.find((u) => u.id === id)?.displayName ?? users.find((u) => u.id === id)?.email ?? "Someone") : "bizinsights");
     const failed = await tx.payrollPayment.findMany({ where: { workspaceId: actor.workspaceId, status: "failed", allocations: { some: { item: { periodId: p.id } } } }, select: { employeeId: true } });
     const failedFor = new Set(failed.map((f) => f.employeeId));
     return {
@@ -355,7 +355,7 @@ export async function getPeriod(actor: StaffActor, periodId: string) {
         return { id: a.id, employeeId: a.employeeId, kind: a.kind, label: a.label, amount: minorToString(a.amountMinor, currency), currency, reason: a.reason, createdBy: name(a.createdByUserId), createdAt: a.createdAt };
       }),
       history: p.approvals.map((a) => ({ id: a.id, action: a.action, version: a.version, by: name(a.actorUserId), comment: a.comment, at: a.createdAt })),
-      estimateNotice: "Gross pay is calculated from approved hours and pay rates. Insights doesn't calculate tax or statutory deductions; net pay is gross plus the earnings and deductions you add.",
+      estimateNotice: "Gross pay is calculated from approved hours and pay rates. bizinsights doesn't calculate tax or statutory deductions; net pay is gross plus the earnings and deductions you add.",
     };
   });
 }

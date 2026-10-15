@@ -249,7 +249,7 @@ refresh token keeps the stored one; a new account without one is refused with in
    then deploy (merge to `main`).
 5. Organizations that block user consent need an admin to grant consent once (Enterprise
    applications → the app → Permissions → Grant admin consent). Merchants see "An administrator of
-   your Microsoft organization must approve Insights" until then.
+   your Microsoft organization must approve bizinsights" until then.
 6. Publisher verification (Microsoft Partner Network) is recommended for multi-tenant apps; without
    it many tenants show an "unverified" warning or block consent.
 
@@ -293,7 +293,7 @@ signed in.
 ## 8. Domain verification
 
 Settings → Email integrations → Domains → add `example.com` and choose who sends its mail (Google,
-Microsoft, other). Insights shows:
+Microsoft, other). bizinsights shows:
 
 | Record | Host (relative / full) | Value |
 | --- | --- | --- |
@@ -308,9 +308,9 @@ after 7 days without verification (a new challenge can be generated); a verified
 record disappears goes to `recheck_required` and, after 3 consecutive failed daily rechecks, to
 `failed` (senders authorized by it go back to pending). A DNS outage changes nothing but the error
 shown. SPF follows nested includes within SPF's 10-lookup limit; more than one SPF record or `+all`
-fails. DKIM passes only when a real public key is published at a known selector (Insights never
+fails. DKIM passes only when a real public key is published at a known selector (bizinsights never
 invents DKIM records or claims signing happened). DMARC `p=none` is reported as "needs attention".
-Insights never writes DNS records. Pending domains are rechecked every 15 minutes, verified ones
+bizinsights never writes DNS records. Pending domains are rechecked every 15 minutes, verified ones
 daily, and on demand ("Check now", rate-limited).
 
 ## 9. Configuration
@@ -431,7 +431,7 @@ outage (no Redis), real Node sockets against a real SMTP server.
 - **Delivery evidence:** send-only access can't read bounce notices, so `delivered` never appears
   and late bounces aren't seen; only synchronous SMTP refusals become `bounced`. A provider with
   delivery webhooks (Postmark, SES…) would be a new adapter with its own verified webhook endpoint.
-- **No provider reconciliation:** with `gmail.send` / `Mail.Send` Insights can't list sent mail, so
+- **No provider reconciliation:** with `gmail.send` / `Mail.Send` bizinsights can't list sent mail, so
   `unknown` messages can't be checked automatically; a person decides whether to resend.
 - **Gmail send-as aliases and Microsoft shared mailboxes** aren't supported (they need broader
   scopes); each mailbox connects as itself.

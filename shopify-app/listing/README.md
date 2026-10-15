@@ -7,22 +7,23 @@ The listing form itself is Dashboard-only — see "What is left" below.
 | --- | --- |
 | `app-icon-1200.png` | The app icon. Upload this one. |
 | `app-icon-1200-sizes.png` | The icon at 160/96/64/48/32 px, to check legibility. Not uploaded. |
-| `make-icon.py` | Regenerates the icon. `python make-icon.py app-icon-1200.png` (needs Pillow). |
+| `../../apps/web/scripts/make-icons.py` | Regenerates the icon (and the web app's favicons) from the mark in `apps/web/src/components/Brand.tsx`. `python apps/web/scripts/make-icons.py` from the repository root (needs Pillow). |
 | `listing-copy.md` | Paste-ready listing text, pricing, and the reviewer instructions. Read its last section before editing any of it: two features in the codebase cannot work under the declared scopes and must stay out of the listing. |
 
 ## The icon
 
-1200 x 1200 PNG. Three ascending pills that brighten as they rise, on `--accent` (`#2f6f4f`)
-with `--bg` (`#f7f7f5`), so it matches the web app.
+1200 x 1200 PNG. The bizinsights mark: three rising bars in a green gradient (`#7be3a8` to
+`#23935c`), the tallest tipping upward, on the dark tile (`#1b1c19`). The same mark is the web
+app's logo and favicon.
 
 It is built to Shopify's published spec:
 
-- the mark is 750 x 750, which is the floor of Shopify's 750-900 px band
-- it is centred, leaving a 225 px clear margin on all four sides (Shopify asks for >= 75 px)
+- the mark is 820 px across, inside Shopify's 750-900 px band
+- it is centred, leaving a 190 px clear margin on the sides and more above and below (Shopify asks for >= 75 px)
 - no text, no screenshot, no Shopify trademark, no pricing - all four are explicit rejections
 - shipped as a full square: Shopify rounds the corners itself, so don't pre-round it
 
-If you change it, keep it inside that band. Re-run `make-icon.py` rather than editing the PNG.
+If you change it, keep it inside that band. Re-run `make-icons.py` rather than editing the PNG.
 
 ## What is already pushed
 

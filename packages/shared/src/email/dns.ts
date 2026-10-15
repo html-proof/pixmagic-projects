@@ -51,7 +51,7 @@ export const SENDING_SERVICE_INFO: Record<SendingService, { label: string; spfIn
     spfInclude: null,
     dkimSelectors: [],
     spfHelp: "Your SPF record should include the value your email service gives you (for example include:spf.yourprovider.com).",
-    dkimHelp: "Your email service gives you a DKIM selector and a record to publish. Enter the selector here so Insights can check it.",
+    dkimHelp: "Your email service gives you a DKIM selector and a record to publish. Enter the selector here so bizinsights can check it.",
   },
 };
 
@@ -116,7 +116,7 @@ export function evaluateSpf(txts: string[], service: SendingService, includesSee
     return {
       status: "unknown",
       records: spf.records,
-      explanation: "An SPF record exists. Insights can't tell which entry is your email service's, so check that it includes the value your provider gives you.",
+      explanation: "An SPF record exists. bizinsights can't tell which entry is your email service's, so check that it includes the value your provider gives you.",
     };
   }
   if (includesSeen.map((i) => i.toLowerCase()).includes(expected)) {
@@ -152,7 +152,7 @@ export function parseDkim(selector: string, txts: string[]): DkimKey {
 export function evaluateDkim(keys: DkimKey[], service: SendingService): CheckResult {
   const help = SENDING_SERVICE_INFO[service].dkimHelp;
   if (keys.length === 0) {
-    return { status: "unknown", records: [], explanation: `Insights needs your DKIM selector to check it. ${help}` };
+    return { status: "unknown", records: [], explanation: `bizinsights needs your DKIM selector to check it. ${help}` };
   }
   const shown = keys.filter((k) => k.record).map((k) => `${k.selector}: ${k.record!.slice(0, 120)}${k.record!.length > 120 ? "…" : ""}`);
   const good = keys.filter((k) => k.state === "key");

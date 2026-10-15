@@ -173,7 +173,7 @@ export function whatsappRoutes(app: App, deps: Deps) {
       .refine((v) => !!v.wabaId === !!v.phoneNumberId, "wabaId and phoneNumberId go together")
       .parse(await body(c));
     const cfg = waPlatformConfig();
-    if (!cfg) throw new HttpError(503, "Connect WhatsApp Business isn't set up on this Insights server yet.", "not_configured");
+    if (!cfg) throw new HttpError(503, "Connect WhatsApp Business isn't set up on this bizinsights server yet.", "not_configured");
     let token: string;
     try {
       token = await waExchangeCode(cfg, input.code, deps.fetchImpl);
@@ -183,7 +183,7 @@ export function whatsappRoutes(app: App, deps: Deps) {
     }
     let ids = input.wabaId && input.phoneNumberId ? { wabaId: input.wabaId, phoneNumberId: input.phoneNumberId } : null;
     if (ids) {
-      // The ids came from the browser: the account must be one this sign-up granted to Insights' app.
+      // The ids came from the browser: the account must be one this sign-up granted to bizinsights' app.
       // (connectWhatsapp then checks the number is in that account, with the business's own token.)
       const info = await waTokenInfo(token, deps.fetchImpl, `${cfg.appId}|${cfg.appSecret}`).catch((err: unknown) => {
         logger.warn({ err, storeId }, "whatsapp embedded signup: couldn't inspect the token; relying on the account checks");
@@ -191,7 +191,7 @@ export function whatsappRoutes(app: App, deps: Deps) {
       });
       if (info?.appId && info.appId !== cfg.appId) throw new HttpError(400, "That sign-in was for a different Meta app. Please press Continue with WhatsApp again.", "wrong_app");
       if (info?.wabaIds && !info.wabaIds.includes(ids.wabaId)) {
-        throw new HttpError(400, "Meta didn't give Insights access to that WhatsApp Business Account. Please press Continue with WhatsApp again and share it.", "waba_not_granted");
+        throw new HttpError(400, "Meta didn't give bizinsights access to that WhatsApp Business Account. Please press Continue with WhatsApp again and share it.", "waba_not_granted");
       }
     }
     if (!ids) {
@@ -235,7 +235,7 @@ export function whatsappRoutes(app: App, deps: Deps) {
 
   /**
    * The merchant's own Meta app: WABA id, phone number id, a system-user token and the app secret.
-   * The secret is checked against the token's app, and the app's webhook is pointed at Insights,
+   * The secret is checked against the token's app, and the app's webhook is pointed at bizinsights,
    * so there's nothing to paste into Meta's dashboard (unless Meta wouldn't let us).
    */
   app.post(`${base}/manual`, async (c) => {
@@ -248,7 +248,7 @@ export function whatsappRoutes(app: App, deps: Deps) {
         wabaId: idSchema,
         phoneNumberId: idSchema,
         accessToken: accessTokenSchema,
-        // Without it, Insights can't verify Meta's deliveries, so it would never hear STOP replies.
+        // Without it, bizinsights can't verify Meta's deliveries, so it would never hear STOP replies.
         appSecret: z.string().trim().regex(/^[a-f0-9]{32}$/i, "must be the 32-character app secret from your Meta app's Basic settings"),
       })
       .parse(await body(c));
@@ -276,7 +276,7 @@ export function whatsappRoutes(app: App, deps: Deps) {
 
   /**
    * The number's two-step verification PIN, for an owner or admin who needs it (to move the number
-   * to another provider, say). Only known when Insights registered the number or the merchant typed it.
+   * to another provider, say). Only known when bizinsights registered the number or the merchant typed it.
    */
   app.post(`${base}/pin`, async (c) => {
     const { ws, storeId } = c.req.param();
@@ -286,7 +286,7 @@ export function whatsappRoutes(app: App, deps: Deps) {
     const conn = await systemDb.whatsappConnection.findUnique({ where: { storeId } });
     if (!conn || conn.workspaceId !== ws) throw new HttpError(404, "Connect WhatsApp first.", "not_connected");
     const pin = connectionPin(conn);
-    if (!pin) throw new HttpError(404, "Insights doesn't know this number's PIN. You can set a new one in WhatsApp Manager → Phone numbers → Two-step verification.", "pin_unknown");
+    if (!pin) throw new HttpError(404, "bizinsights doesn't know this number's PIN. You can set a new one in WhatsApp Manager → Phone numbers → Two-step verification.", "pin_unknown");
     await audit({ workspaceId: ws, actorUserId: access.user!.id, action: "whatsapp.pin_viewed", targetType: "store", targetId: storeId, ip: clientIp(c) });
     c.header("cache-control", "no-store");
     return c.json({ pin });
@@ -391,7 +391,7 @@ export function whatsappRoutes(app: App, deps: Deps) {
     return c.json({ templates: templates.map(publicTemplate) });
   });
 
-  /** Submit one of Insights' templates to Meta's review, in the merchant's account. */
+  /** Submit one of bizinsights' templates to Meta's review, in the merchant's account. */
   app.post(`${base}/templates`, async (c) => {
     const { ws, storeId } = c.req.param();
     const access = await requireWorkspace(c, deps, ws, "stores:manage");

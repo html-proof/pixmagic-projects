@@ -23,8 +23,10 @@ export const BOX = {
 export const CORE_R = 0.085;
 /** The core element spans ±CORE_EXTENT sphere radii (outer ring, glow) around its centre. */
 export const CORE_EXTENT = 3.2;
-/** The open outer ring, echoing the Insights mark, in sphere radii. */
+/** The open outer ring, in sphere radii. */
 export const OUTER_RING_R = 2.95;
+/** Its gap at the top right, in degrees: the ring runs clockwise from `start` round to `end`. */
+export const OUTER_RING_GAP = { start: -15, end: -75 } as const;
 
 /**
  * Orbital rings, in sphere radii: `squash` is the ellipse's minor/major ratio, `tilt` its angle in
@@ -107,7 +109,7 @@ export interface FlowDef {
 }
 
 /**
- * The three relationships Insights actually builds: the shopping funnel it reports, how a channel
+ * The three relationships bizinsights actually builds: the shopping funnel it reports, how a channel
  * turns into new and returning customers, and the net sales arithmetic on the dashboard.
  */
 export const FLOWS: readonly FlowDef[] = [

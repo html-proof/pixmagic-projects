@@ -1,6 +1,6 @@
 openapi: 3.1.0
 info:
-  title: Insights Email Integrations API
+  title: bizinsights Email Integrations API
   version: 1.0.0
   description: |
     Email accounts, domains, templates, automations and activity for one workspace (docs/email.md).

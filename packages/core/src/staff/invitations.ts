@@ -21,11 +21,11 @@ const escapeHtml = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", 
 
 export function invitationEmail(input: { organization: string; employeeName: string; position: string; url: string; expiresAt: Date; hours: number; timezone: string; support: string }) {
   const expires = new Intl.DateTimeFormat("en", { dateStyle: "full", timeStyle: "short", timeZone: input.timezone }).format(input.expiresAt);
-  const subject = `${input.organization} invited you to Insights`;
+  const subject = `${input.organization} invited you to bizinsights`;
   const text = [
     `Hi ${input.employeeName},`,
     "",
-    `${input.organization} has added you as ${input.position}. In Insights you'll clock in and out, take breaks, and see your hours and pay.`,
+    `${input.organization} has added you as ${input.position}. In bizinsights you'll clock in and out, take breaks, and see your hours and pay.`,
     "",
     "Set up your account here:",
     input.url,
@@ -42,9 +42,9 @@ export function invitationEmail(input: { organization: string; employeeName: str
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;background:#ffffff;border:1px solid #e4e4e0;border-radius:12px;padding:28px">
 <tr><td>
 <p style="margin:0 0 4px;font-size:13px;font-weight:600;color:#2f6f4f">${e(input.organization)}</p>
-<h1 style="margin:0 0 16px;font-size:20px">You're invited to Insights</h1>
+<h1 style="margin:0 0 16px;font-size:20px">You're invited to bizinsights</h1>
 <p style="margin:0 0 12px;font-size:15px;line-height:1.5">Hi ${e(input.employeeName)},</p>
-<p style="margin:0 0 20px;font-size:15px;line-height:1.5">${e(input.organization)} has added you as <strong>${e(input.position)}</strong>. In Insights you'll clock in and out, take breaks, and see your hours and pay.</p>
+<p style="margin:0 0 20px;font-size:15px;line-height:1.5">${e(input.organization)} has added you as <strong>${e(input.position)}</strong>. In bizinsights you'll clock in and out, take breaks, and see your hours and pay.</p>
 <p style="margin:0 0 24px"><a href="${e(input.url)}" style="display:inline-block;background:#2f6f4f;color:#ffffff;text-decoration:none;font-weight:600;font-size:15px;padding:12px 20px;border-radius:8px">Set up my account</a></p>
 <p style="margin:0 0 12px;font-size:13px;line-height:1.5;color:#6b6b63">This link works once and expires on ${e(expires)} (${input.hours} hours after it was sent). Don't forward it: anyone with the link could set up your account.</p>
 <p style="margin:0 0 12px;font-size:13px;line-height:1.5;color:#6b6b63">Button not working? Paste this into your browser:<br><span style="word-break:break-all">${e(input.url)}</span></p>

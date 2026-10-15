@@ -1,6 +1,6 @@
 # Current state (audit, 2026-10-14)
 
-> Historical record (2026-10-14): written when Insights ran on one Cloudflare Worker
+> Historical record (2026-10-14): written when bizinsights ran on one Cloudflare Worker
 > (`apps/cloudflare`, removed after commit `a861bd9`). It now runs on AWS: see
 > [aws-architecture.md](../aws-architecture.md), and [dependency-map.md](dependency-map.md) for how
 > the parts fit together today.

@@ -47,7 +47,7 @@ export interface ConnectInput {
  */
 export async function connectWhatsapp(input: ConnectInput, fetchImpl: FetchLike): Promise<WhatsappConnection> {
   const taken = await systemDb.whatsappConnection.findFirst({ where: { phoneNumberId: input.phoneNumberId, NOT: { storeId: input.store.id } }, select: { id: true } });
-  if (taken) throw new WhatsappConnectError("This WhatsApp number is already connected to another store in Insights. Disconnect it there first.", "number_in_use");
+  if (taken) throw new WhatsappConnectError("This WhatsApp number is already connected to another store in bizinsights. Disconnect it there first.", "number_in_use");
   let phone;
   let account;
   try {
@@ -122,7 +122,7 @@ export interface DiscoveredNumber {
   id: string;
   displayPhoneNumber: string | null;
   verifiedName: string | null;
-  /** On the Cloud API already; otherwise Insights asks for a PIN after connecting. */
+  /** On the Cloud API already; otherwise bizinsights asks for a PIN after connecting. */
   registered: boolean;
 }
 
@@ -193,7 +193,7 @@ export async function checkManualApp(accessToken: string, appSecret: string, fet
 }
 
 /**
- * Point the merchant's app's webhook at Insights. "verified": Meta completed the handshake;
+ * Point the merchant's app's webhook at bizinsights. "verified": Meta completed the handshake;
  * "in_use": the app's WhatsApp webhook already goes elsewhere (left alone); "failed": do it by hand.
  */
 export async function setupManualWebhook(conn: WhatsappConnection, appId: string, appSecret: string, fetchImpl: FetchLike): Promise<"verified" | "in_use" | "failed"> {
@@ -216,14 +216,14 @@ export async function setupManualWebhook(conn: WhatsappConnection, appId: string
 }
 
 /**
- * Insights' own Meta app (Continue with WhatsApp): keep its WhatsApp webhook pointed at Insights,
+ * bizinsights' own Meta app (Continue with WhatsApp): keep its WhatsApp webhook pointed at bizinsights,
  * so the owner never pastes a callback URL into Meta. Needs the app id, secret and verify token.
  */
 export async function ensurePlatformWebhook(fetchImpl: FetchLike): Promise<"unconfigured" | "set" | "already" | "in_use"> {
   const cfg = waPlatformConfig();
   if (!cfg?.verifyToken) return "unconfigured";
   const r = await waSetAppWebhook({ appId: cfg.appId, appSecret: cfg.appSecret }, `${env().API_URL}/webhooks/whatsapp`, cfg.verifyToken, fetchImpl);
-  if (r === "in_use") logger.warn({ appId: cfg.appId }, "Insights' Meta app sends WhatsApp webhooks to another URL; left alone");
+  if (r === "in_use") logger.warn({ appId: cfg.appId }, "bizinsights' Meta app sends WhatsApp webhooks to another URL; left alone");
   return r;
 }
 
@@ -252,7 +252,7 @@ function randomPin(): string {
 /**
  * Right after Embedded Signup's Cloud API flow: register the new number so it can send, without
  * asking the merchant for anything. Meta's registration takes a PIN, which becomes the number's
- * two-step verification PIN when it has none; Insights picks one and keeps it (encrypted) so the
+ * two-step verification PIN when it has none; bizinsights picks one and keeps it (encrypted) so the
  * merchant can see it later. A number that already has a PIN refuses ours and stays "pending":
  * the merchant then types their own. Numbers kept on the WhatsApp Business app (coexistence) are
  * never registered here, since that would move them off the app.
@@ -268,7 +268,7 @@ export async function autoRegisterWhatsapp(conn: WhatsappConnection, fetchImpl: 
   }
 }
 
-/** The number's two-step verification PIN, when Insights knows it. */
+/** The number's two-step verification PIN, when bizinsights knows it. */
 export const connectionPin = (conn: Pick<WhatsappConnection, "storeId" | "pinEnc">) => (conn.pinEnc ? waDecrypt(conn.storeId, "pin", conn.pinEnc) : null);
 
 /** The verify token a manual connection's Meta app is given (shown to the store's admins). */

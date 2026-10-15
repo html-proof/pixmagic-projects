@@ -231,7 +231,7 @@ function GeneralSection({ config, onSaved }: { config: StaffConfig; onSaved: (c:
               label="Region label (optional)"
               htmlFor={id("jurisdiction")}
               error={errors.jurisdiction}
-              hint="For your records, like NSW, Australia. Insights doesn't apply any region's employment laws, awards or tax rules: you set the overtime and break rules below."
+              hint="For your records, like NSW, Australia. bizinsights doesn't apply any region's employment laws, awards or tax rules: you set the overtime and break rules below."
             >
               <input id={id("jurisdiction")} className="input" maxLength={40} value={d.jurisdiction} onChange={(e) => set("jurisdiction", e.target.value)} aria-invalid={!!errors.jurisdiction} />
             </Field>
@@ -529,7 +529,7 @@ function OvertimeSection({ config, onChanged }: { config: StaffConfig; onChanged
       }
     >
       {!editable && <ReadOnlyNote>Only owners, admins and payroll managers can change overtime policies.</ReadOnlyNote>}
-      <p className="mb-3 text-xs text-muted">Overtime rules differ by country, state and industry agreement. Insights doesn&apos;t choose them for you: set up the rules that apply to your business.</p>
+      <p className="mb-3 text-xs text-muted">Overtime rules differ by country, state and industry agreement. bizinsights doesn&apos;t choose them for you: set up the rules that apply to your business.</p>
       {config.overtimePolicies.length === 0 ? (
         <p className="text-sm text-muted">No overtime policies yet, so all hours are paid at the normal rate.</p>
       ) : (
@@ -655,7 +655,7 @@ function OvertimeForm({ policy, onSaved, onCancel }: { policy: OvertimePolicy | 
           ))}
         </div>
         <Alert kind="info">
-          These only fill in the form. Overtime rules differ by country, state and industry agreement, so check which rules apply to your business before you save. Insights uses exactly what you set here.
+          These only fill in the form. Overtime rules differ by country, state and industry agreement, so check which rules apply to your business before you save. bizinsights uses exactly what you set here.
         </Alert>
       </div>
       <Field label="Policy name" htmlFor={id("name")} error={errors.name} required>
@@ -935,7 +935,7 @@ function HolidaysSection({ config, onChanged }: { config: StaffConfig; onChanged
     <Panel id="staff-holidays" title="Public holidays" help="On these days nobody is marked absent, and hours are paid at the holiday rate of the employee's overtime policy (if it has one).">
       {!editable && <ReadOnlyNote>Only owners and admins can change public holidays.</ReadOnlyNote>}
       {config.holidays.length === 0 ? (
-        <p className="text-sm text-muted">No public holidays added. Add the ones your business observes; Insights doesn&apos;t add any by itself.</p>
+        <p className="text-sm text-muted">No public holidays added. Add the ones your business observes; bizinsights doesn&apos;t add any by itself.</p>
       ) : (
         <div className="space-y-4">
           <div>

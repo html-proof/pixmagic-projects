@@ -43,7 +43,7 @@ export function publicTemplate(t: EmailTemplate) {
 
 /** Check and clean a template's content. Throws with every problem at once. */
 function prepare(input: Pick<TemplateInput, "subject" | "html" | "text" | "eventType" | "category">) {
-  if (input.eventType !== null && !isEventType(input.eventType)) throw new EmailError(`"${input.eventType}" isn't an event Insights knows.`, 400, "invalid_event");
+  if (input.eventType !== null && !isEventType(input.eventType)) throw new EmailError(`"${input.eventType}" isn't an event bizinsights knows.`, 400, "invalid_event");
   const html = sanitizeHtml(input.html, { allowPlaceholders: true });
   const problems = templateProblems({ subject: input.subject, html, text: input.text }, (p) => isAllowedVariable(input.eventType, input.category, p));
   if (problems.length) throw new EmailError(problems[0]!, 400, "invalid_template", { problems });

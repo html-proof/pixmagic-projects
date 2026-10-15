@@ -159,7 +159,7 @@ export async function planMigration(input: { firebase?: FirebaseAccount[] | null
 
     if (fb && fb.email && fb.email !== u.email) notes.push(`Firebase has another address for this account (${fb.email}); the move follows the Firebase uid, not the address.`);
     if (!u.emailVerified) notes.push("Email not verified: after the move a code to the address verifies it.");
-    if (fb?.providers.includes("apple.com")) notes.push("Signed in with Apple, which Insights no longer offers: \"Forgot password?\" moves it.");
+    if (fb?.providers.includes("apple.com")) notes.push("Signed in with Apple, which bizinsights no longer offers: \"Forgot password?\" moves it.");
     if (status === "links_at_social_sign_in" && !u.emailVerified) notes.push("Unverified address: a social sign-in can't link to it; use Forgot password.");
     if (cognitoPasswordUser && status !== "on_cognito") {
       notes.push("A Cognito password user already exists for this address: its password, not Firebase's, will be the one that works.");

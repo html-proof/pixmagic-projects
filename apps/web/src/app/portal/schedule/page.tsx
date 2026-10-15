@@ -38,7 +38,7 @@ export default function PortalSchedule() {
     <>
       <section className="card animate-rise">
         <h1 className="text-xl font-semibold">Schedule</h1>
-        <p className="mt-1 text-sm text-muted">Your shifts for the next four weeks{d ? ` (times in ${d.timezone})` : ""}. Your manager plans them in Insights.</p>
+        <p className="mt-1 text-sm text-muted">Your shifts for the next four weeks{d ? ` (times in ${d.timezone})` : ""}. Your manager plans them in bizinsights.</p>
       </section>
 
       {q.error && !d ? (

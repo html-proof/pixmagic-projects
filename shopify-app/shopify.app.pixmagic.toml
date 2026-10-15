@@ -10,7 +10,7 @@
 # Deploy with: cd shopify-app && shopify app deploy --config pixmagic
 # Then set SHOPIFY_EXTRA_APPS (apps/aws/src/settings.ts) + SHOPIFY_APP_SECRET_PIXMAGIC (put-secrets.mjs), as in 3c.
 client_id = "bb0ea9e4ad8939a6a1513e4dbf8cbbf1"
-name = "Insights"
+name = "bizinsights"
 application_url = "https://d2mr8m2p1qkh58.cloudfront.net/api/shopify/launch"
 embedded = false
 

@@ -114,7 +114,7 @@ export default function WhatsappOverview() {
               Register the number with WhatsApp&apos;s Cloud API
             </Step>
             <Step done={data.setup.webhookVerified} href="/whatsapp/connect">
-              Let Meta reach Insights (webhook), so delivery reports and STOP replies arrive
+              Let Meta reach bizinsights (webhook), so delivery reports and STOP replies arrive
             </Step>
             <Step done={data.setup.consentBasis !== "none"} href="/whatsapp/settings">
               Choose how customers agree to WhatsApp order updates

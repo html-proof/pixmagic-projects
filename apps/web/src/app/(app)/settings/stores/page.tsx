@@ -61,9 +61,9 @@ export default function StoresPage() {
   async function disconnect(id: string, domain: string) {
     // Disconnecting is ours alone: the app stays installed in the merchant's Shopify admin until
     // they uninstall it there, so say so rather than imply Shopify access ends here.
-    if (!confirm(`Disconnect ${domain}? Its synced data will be deleted from Insights. You can reconnect later.
+    if (!confirm(`Disconnect ${domain}? Its synced data will be deleted from bizinsights. You can reconnect later.
 
-To stop Insights' access in Shopify too, uninstall the app from your Shopify admin.`)) return;
+To stop bizinsights' access in Shopify too, uninstall the app from your Shopify admin.`)) return;
     setError(null);
     try {
       await api(`/workspaces/${workspace.id}/stores/${id}`, { method: "DELETE" });
@@ -85,7 +85,7 @@ To stop Insights' access in Shopify too, uninstall the app from your Shopify adm
     const consequence = affected.length
       ? `${affected.join(", ")} will stop working until you grant it again.`
       : "Nothing on your dashboard uses it today.";
-    if (!confirm(`Stop letting Insights read ${scopeLabel(scope).toLowerCase()} for ${domain}?\n\n${consequence}`)) return;
+    if (!confirm(`Stop letting bizinsights read ${scopeLabel(scope).toLowerCase()} for ${domain}?\n\n${consequence}`)) return;
     setRevoking(`${id}:${scope}`);
     setError(null);
     try {
@@ -148,7 +148,7 @@ To stop Insights' access in Shopify too, uninstall the app from your Shopify adm
             {/* What the app can read. Lead with what the data *is*, because the scope string is
                 the one part of this page a merchant has no way to interpret. */}
             <div className="space-y-2">
-              <h2 className="text-sm font-medium">What Insights can read from this store</h2>
+              <h2 className="text-sm font-medium">What bizinsights can read from this store</h2>
               {s.grantedScopes.length === 0 ? (
                 <p className="text-sm text-muted">Nothing yet — reconnect the store to grant access.</p>
               ) : (
@@ -234,7 +234,7 @@ To stop Insights' access in Shopify too, uninstall the app from your Shopify adm
                 // hover — in the *store's* zone, not the viewer's: the line above this card states
                 // the store's time zone, so a timestamp in another one reads as a contradiction.
                 <p className="text-xs text-muted" title={`${fmtDateTime(s.lastSyncedAt, s.timezone)} (${s.timezone})`}>
-                  Last updated {fmtRelative(s.lastSyncedAt) ?? "just now"} · Insights keeps this current on its own
+                  Last updated {fmtRelative(s.lastSyncedAt) ?? "just now"} · bizinsights keeps this current on its own
                 </p>
               ) : (
                 <span />

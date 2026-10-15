@@ -49,7 +49,7 @@ export default function EmailOverviewPage() {
         }
       />
 
-      {data.sending.suspended && <Alert>Sending is suspended for this workspace by Insights. Contact support.</Alert>}
+      {data.sending.suspended && <Alert>Sending is suspended for this workspace by bizinsights. Contact support.</Alert>}
       {data.sending.paused && !data.sending.suspended && (
         <Alert kind="info">
           Sending is paused. Automations still run and queue their emails; they go out when you <Link className="underline" href="/settings/email/settings">resume sending</Link>.
@@ -79,7 +79,7 @@ export default function EmailOverviewPage() {
         <Stat label="Templates" value={fmtNum(data.templates)} />
       </div>
 
-      <Panel id="email-sent" title="Emails in this period" help="Counted from Insights' own records. Providers confirm they accepted a message, not that it reached the inbox.">
+      <Panel id="email-sent" title="Emails in this period" help="Counted from bizinsights' own records. Providers confirm they accepted a message, not that it reached the inbox.">
         <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
           <Stat label="Waiting to send" value={fmtNum(m.queued)} />
           <Stat label="Accepted by provider" value={fmtNum(m.accepted)} tone={m.accepted ? "good" : undefined} />

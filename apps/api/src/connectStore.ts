@@ -8,7 +8,7 @@ import { seedInitialSync } from "./sync.js";
 export const syncPage = (storeId: string) => `/onboarding?step=sync&store=${storeId}`;
 
 export const storeTaken = () =>
-  new HttpError(409, "This store is already connected to another Insights account. Ask its owner to invite you.", "store_taken");
+  new HttpError(409, "This store is already connected to another bizinsights account. Ask its owner to invite you.", "store_taken");
 
 /** True when `shop` is live (not uninstalled) in some workspace other than `workspaceId`. */
 export async function storeTakenElsewhere(shop: string, workspaceId: string): Promise<boolean> {
