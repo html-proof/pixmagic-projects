@@ -6,8 +6,8 @@
 generator client {
   provider     = "prisma-client"
   output       = "../src/generated"
-  // Same generated client runs on Workers (via Hyperdrive) and in Node (tests, scripts).
-  runtime      = "workerd"
+  // Node everywhere: the Lambda functions, the local server, tests and scripts.
+  runtime      = "nodejs"
   moduleFormat = "esm"
 }
 

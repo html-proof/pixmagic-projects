@@ -1,5 +1,8 @@
 # Refactoring report (2026-10-14)
 
+> Historical record (2026-10-14): written when Insights ran on Cloudflare Workers. It now runs on
+> AWS: see [aws-architecture.md](../aws-architecture.md).
+
 The outcome of the restructuring planned in [refactoring-plan.md](refactoring-plan.md), on branch
 `claude/project-audit-restructure-ed93a6`, starting from `4320f54` (GitHub `main`, the code live in
 production). Each stage is one or a few commits that can be reverted on their own.

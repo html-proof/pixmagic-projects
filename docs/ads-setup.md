@@ -37,9 +37,10 @@ Overview ("Access levels → Manage"):
    (YouTube link) and a scope justification. AdSense sign-ins don't ask for `adwords`, so they stay unaffected.
 3. ~~`"GOOGLE_ADS_ENABLED": "1"`~~ (done).
 
-Verified 2026-10-11 against the real Google: the "Insights web" client accepts the production callback
-(`https://insights.imeseban.workers.dev/api/ads/google/callback`) and `http://localhost:8789/...` with the `adwords`
-scope and a PKCE challenge: Google's own "Sign in to continue to Insights" page opens, with no error.
+Verified 2026-10-11 against the real Google: the "Insights web" client accepted the production callback of the
+time (the old deployment's address) and `http://localhost:8789/...` with the `adwords` scope and a PKCE challenge:
+Google's own "Sign in to continue to Insights" page opens, with no error. The AWS callbacks below must be on the
+client too before Google sign-in works there.
 
 **The integrations page** is for management only:
 - each platform's status (Connected, Syncing, Needs reconnecting, Sync problem, Not connected, Coming soon);
@@ -67,34 +68,35 @@ without Google Ads API access.
 
 | Setting | Where it goes | Secret? |
 | --- | --- | --- |
-| `META_APP_ID` | `apps/cloudflare/wrangler.jsonc` → `vars` | no |
-| `META_APP_SECRET` | `npx wrangler secret put META_APP_SECRET` | **yes** |
-| `META_CONFIG_ID` | `wrangler.jsonc` → `vars` (optional: Facebook Login for Business configuration) | no |
-| `META_ADS_ADVANCED_ACCESS` | `wrangler.jsonc` → `vars`: `"1"` once Meta grants Advanced Access to `ads_read` (empty: Settings says only the app's testers can connect) | no |
-| `GOOGLE_ADS_CLIENT_ID` | `wrangler.jsonc` → `vars` (Google Ads **and** AdSense) | no |
-| `GOOGLE_ADS_CLIENT_SECRET` | `npx wrangler secret put GOOGLE_ADS_CLIENT_SECRET` (Google Ads **and** AdSense) | **yes** |
-| `GOOGLE_ADS_ENABLED` | `wrangler.jsonc` → `vars`: `"1"` once the Cloud project has Explorer access or above | no |
-| `META_API_VERSION`, `GOOGLE_ADS_API_VERSION` | `wrangler.jsonc` (`v25.0`, `v25`) | no |
+| `META_APP_ID` | `apps/aws/src/settings.ts` (`APP_SETTINGS`) | no |
+| `META_APP_SECRET` | `node infra/cdk/scripts/put-secrets.mjs --set META_APP_SECRET` | **yes** |
+| `META_CONFIG_ID` | `settings.ts` (optional: Facebook Login for Business configuration) | no |
+| `META_ADS_ADVANCED_ACCESS` | `settings.ts`: `"1"` once Meta grants Advanced Access to `ads_read` (empty: Settings says only the app's testers can connect) | no |
+| `GOOGLE_ADS_CLIENT_ID` | `settings.ts` (Google Ads **and** AdSense) | no |
+| `GOOGLE_ADS_CLIENT_SECRET` | `node infra/cdk/scripts/put-secrets.mjs --set GOOGLE_ADS_CLIENT_SECRET` (Google Ads **and** AdSense) | **yes** |
+| `GOOGLE_ADS_ENABLED` | `settings.ts`: `"1"` once the Cloud project has Explorer access or above | no |
+| `META_API_VERSION`, `GOOGLE_ADS_API_VERSION` | `settings.ts` (`v25.0`, `v25`) | no |
 
-Run the `wrangler secret put` commands from `apps/cloudflare`, then deploy.
+Settings ship by merging to `main` (Deploy to AWS). Secrets go to Secrets Manager with `put-secrets.mjs`; the
+functions read them when an instance starts.
 
 The redirect (callback) addresses, which both platforms must have registered **exactly**:
 
-- Meta: `https://insights.imeseban.workers.dev/api/ads/meta/callback`
-- Google Ads: `https://insights.imeseban.workers.dev/api/ads/google/callback`
-- Google AdSense: `https://insights.imeseban.workers.dev/api/ads/adsense/callback` (on the same Google OAuth client)
+- Meta: `https://d2mr8m2p1qkh58.cloudfront.net/api/ads/meta/callback`
+- Google Ads: `https://d2mr8m2p1qkh58.cloudfront.net/api/ads/google/callback`
+- Google AdSense: `https://d2mr8m2p1qkh58.cloudfront.net/api/ads/adsense/callback` (on the same Google OAuth client)
 
 (Local development: since 2026-10-11 the production client "Insights web" no longer lists `localhost` redirect URIs, because
 Google's OAuth policies want separate clients/projects per deployment tier for verification. To test Google sign-in locally,
 create a separate OAuth client in a separate Cloud project with `http://localhost:8787/api/ads/<provider>/callback` and put
-its id/secret in `apps/cloudflare/.dev.vars`. Paste-ready review material for both platforms: `docs/ads-review-packs.md`.)
+its id/secret in `apps/aws/.env`. Paste-ready review material for both platforms: `docs/ads-review-packs.md`.)
 
 ## 1. Meta (Facebook and Instagram ads)
 
 **Insights' Meta Ads app (set up 2026-10-11):** "Insights", App ID `971575545351940`, owned by the Facebook account
 sebanceo@gmail.com, Development mode, no business portfolio yet. Use case "Measure ad performance data with Marketing
 API" (ads_read ready for testing). Facebook Login for Business: redirect URI
-`https://insights.imeseban.workers.dev/api/ads/meta/callback` (strict mode, HTTPS); configuration "Insights ads reporting"
+registered for the old deployment's address (strict mode, HTTPS; add the AWS Meta callback above); configuration "Insights ads reporting"
 `1521935306664882` (General, user access token, ads_read only) = `META_CONFIG_ID`. Basic settings: app domain, privacy policy
 `/privacy`, data deletion instructions `/data-deletion`, category Business and pages, Website platform. Still to do: the
 app secret (`META_APP_SECRET`, pasted by the owner), an app icon, then a business portfolio + verification and App Review
@@ -116,7 +118,7 @@ for Advanced Access to ads_read before merchants outside the app's roles can con
 4. In **App settings → Basic**:
    - copy the **App ID** into `META_APP_ID`;
    - copy the **App secret** into `META_APP_SECRET`.
-   - Fill in the privacy policy URL (`https://insights.imeseban.workers.dev/privacy`) and an app icon. Both are needed before the app can go live.
+   - Fill in the privacy policy URL (`https://d2mr8m2p1qkh58.cloudfront.net/privacy`) and an app icon. Both are needed before the app can go live.
 5. **Who can connect.** While the app is in **Development** mode, only people with a role on the app (and their ad accounts) can connect. Add yourself and your test users under **App roles**.
 
    To let any merchant connect their own ad accounts, the app needs **Advanced Access to `ads_read`** through **App Review**, and Meta **Business Verification**. Meta asks for:
@@ -170,8 +172,8 @@ access for real accounts** (Explorer or above). Developer tokens are gone (2026-
 1. At <https://console.cloud.google.com/>, create or pick a project and enable the **Google Ads API** (APIs & Services → Library).
 2. **OAuth consent screen**:
    - User type: **External**. App name: Insights.
-   - Support email; app domain and privacy policy `https://insights.imeseban.workers.dev/privacy`.
-   - Authorized domain: `insights.imeseban.workers.dev`.
+   - Support email; app domain and privacy policy `https://d2mr8m2p1qkh58.cloudfront.net/privacy`.
+   - Authorized domain: `d2mr8m2p1qkh58.cloudfront.net`.
    - Add the scope `https://www.googleapis.com/auth/adwords`.
 3. **Credentials → Create credentials → OAuth client ID**, application type **Web application**:
    - add the Google callback address above under **Authorized redirect URIs**;
@@ -210,15 +212,18 @@ read as daily totals for the whole account, shown as "All sites".
 
 ## 4. Turn it on
 
-From `apps/cloudflare`:
+Copy each secret to the clipboard and run its line (one at a time: it reads the clipboard):
 
 ```bash
-npx wrangler secret put META_APP_SECRET
-npx wrangler secret put GOOGLE_ADS_CLIENT_SECRET
+node infra/cdk/scripts/put-secrets.mjs --set META_APP_SECRET
 ```
 
-1. Put the public ids (and `GOOGLE_ADS_ENABLED` once Google has granted Explorer) in `wrangler.jsonc` and deploy (see `docs/deployment-cloudflare.md`).
-2. The database needs migrations `20261009185831_ad_accounts`, `20261010080000_adsense_daily` and `20261011130000_ad_connection_identity` (run `pnpm db:migrate` against the owner role **before** deploying; the last one only adds two columns and an index).
+```bash
+node infra/cdk/scripts/put-secrets.mjs --set GOOGLE_ADS_CLIENT_SECRET
+```
+
+1. Put the public ids (and `GOOGLE_ADS_ENABLED` once Google has granted Explorer) in `apps/aws/src/settings.ts` and merge to `main` (see `docs/aws-deployment.md`).
+2. The database needs migrations `20261009185831_ad_accounts`, `20261010080000_adsense_daily` and `20261011130000_ad_connection_identity` (the **Deploy to AWS** workflow applies them, like every migration; the last one only adds two columns and an index).
 3. Open **Settings → Advertising** (or press **Connect advertising accounts** on the dashboard).
    - Press **Continue with Meta Ads**, **Continue with Google AdSense** or **Continue with Google Ads**, and approve.
    - If the login sees several accounts, tick the ones for this store.

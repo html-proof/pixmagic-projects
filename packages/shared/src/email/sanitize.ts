@@ -6,7 +6,7 @@
 // http(s), mailto or tel are dropped too. The output is re-serialized from what was parsed (every
 // attribute value quoted and escaped), so malformed input can't reopen a tag.
 //
-// It has to run without a DOM (Workers and the browser alike), hence the hand-written tokenizer.
+// It has to run without a DOM (the server and the browser alike), hence the hand-written tokenizer.
 // The dashboard additionally shows previews in a sandboxed iframe, so a sanitizer bug can't run
 // script in Insights itself.
 

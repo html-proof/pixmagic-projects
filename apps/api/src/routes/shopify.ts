@@ -108,7 +108,7 @@ export function installApp(shop: string): ShopifyApp {
  * ("This installation link can't be used") it never calls us back, so nothing else marks the
  * attempt: a handoff with no matching `shopify_install_return` for the same shop means Shopify
  * turned that merchant away, and `app`/`clientId` say which app to check in the Dev Dashboard.
- * Grep Workers logs for `shopify_install_handoff` to see who tried and never arrived.
+ * Search the API's logs (CloudWatch) for `shopify_install_handoff` to see who tried and never arrived.
  */
 export function logHandoff(flow: string, shop: string | null, app: ShopifyApp, scopes: string) {
   logger.info(

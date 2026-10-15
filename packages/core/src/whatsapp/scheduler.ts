@@ -13,7 +13,7 @@ import { refreshConnection } from "./store.js";
 import { pollShipments } from "./events.js";
 import { enqueueSend, waQueue, type WaDeps } from "./messages.js";
 
-/** Messages stuck in "sending" this long were cut off mid-send (the Worker was killed). */
+/** Messages stuck in "sending" this long were cut off mid-send (the process was killed). */
 const STUCK_SENDING_MS = 10 * 60_000;
 const DISPATCH_LEASE_MS = 10 * 60_000;
 const SHIPMENT_POLL_LEASE_MS = 2 * 3600_000;

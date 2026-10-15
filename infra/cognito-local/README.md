@@ -1,14 +1,14 @@
 # Local Cognito (emulator)
 
 Sign-in runs on Amazon Cognito (`docs/cognito-setup.md`). For local development and the e2e suite the
-Worker talks to [cognito-local](https://github.com/jagregory/cognito-local) instead, with the app's
+local server talks to [cognito-local](https://github.com/jagregory/cognito-local) instead, with the app's
 pool and client already in it:
 
 ```
 node infra/cognito-local/start.mjs          # or: docker compose up -d cognito
 ```
 
-`apps/cloudflare/.dev.vars` (from `.dev.vars.example`) then needs:
+`apps/aws/.env` (from `apps/aws/.env.example`, which already has these) then needs:
 
 ```
 COGNITO_ENDPOINT=http://127.0.0.1:9229

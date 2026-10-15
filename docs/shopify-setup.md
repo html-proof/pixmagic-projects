@@ -8,12 +8,12 @@ The integration is a **public, unlisted** app (installable by any merchant who h
 
 1. Shopify Partners → Apps → Create app → *Create app manually*. Name it "Insights".
 2. Distribution → **Public distribution**, then choose **Unlisted** when submitting.
-3. Copy the **Client ID** → `SHOPIFY_API_KEY`, **Client secret** → `SHOPIFY_API_SECRET` (server only; stored in Secret Manager in prod).
+3. Copy the **Client ID** → `SHOPIFY_API_KEY`, **Client secret** → `SHOPIFY_API_SECRET` (server only; in production in AWS Secrets Manager, `node infra/cdk/scripts/put-secrets.mjs --set SHOPIFY_API_SECRET`).
 4. Submit for review and get it approved — step [3f](#3f-getting-approved-so-live-stores-can-install). Everything else works on a development store before this; nothing works on a client's store until it is done.
 
 ## 2. Configure with the CLI (recommended)
 
-Edit `shopify-app/shopify.app.toml`: set `client_id`, replace `app.example.com` / `api.example.com` with your domains. Then:
+Edit `shopify-app/shopify.app.toml`: set `client_id` and the app's address (`APP_DOMAIN` below; production: `d2mr8m2p1qkh58.cloudfront.net`). Then:
 
 ```bash
 cd shopify-app && npx shopify app deploy
@@ -52,9 +52,9 @@ The public "Continue with Shopify" sign-up (`/auth/shopify/start`, per-user gran
 
 ## 3b. In-app OAuth flow (signed-in users)
 
-1. `POST /workspaces/:ws/shopify/install {shop}` — user must be signed in, email verified and have `stores:manage`. The shop is normalised to `x.myshopify.com` (custom domains rejected). A random `state` is stored in the `Coordinator` Durable Object (10 min, bound to user + workspace + shop) **and** in an httpOnly cookie.
+1. `POST /workspaces/:ws/shopify/install {shop}` — user must be signed in, email verified and have `stores:manage`. The shop is normalised to `x.myshopify.com` (custom domains rejected). A random `state` is stored in the coordinator (DynamoDB on AWS; 10 min, bound to user + workspace + shop) **and** in an httpOnly cookie.
 2. Browser goes to `https://{shop}/admin/oauth/authorize?client_id&scope&redirect_uri&state`.
-3. `GET /shopify/callback` verifies, in order: query HMAC (timing-safe), shop format and exact match, timestamp within 10 min, state cookie == state param, state exists in the Coordinator (taken on read, so single use), same signed-in user, then exchanges the code for a permanent offline token (no `expiring` flag - see "Why not expiring tokens" below).
+3. `GET /shopify/callback` verifies, in order: query HMAC (timing-safe), shop format and exact match, timestamp within 10 min, state cookie == state param, state exists in the coordinator (taken on read, so single use), same signed-in user, then exchanges the code for a permanent offline token (no `expiring` flag - see "Why not expiring tokens" below).
 4. The access token is AES-256-GCM encrypted (store id as AAD) and saved with the granted scopes. A permanent offline token carries no expiry and no refresh token, so those columns stay null. Initial sync jobs are seeded and the user lands on the onboarding progress screen.
 
 ### Why not expiring tokens
@@ -75,7 +75,7 @@ A permanent offline token has no expiry and no refresh token, so there is nothin
 nothing for a later authorize to invalidate. It stays valid until the merchant uninstalls.
 
 Token rotation: `packages/core/src/tokens.ts` still refreshes 5 minutes before expiry under a
-Durable Object lock, and the worker still rotates tokens expiring within the hour every 15
+coordinator lock, and the `*/15` cron still rotates tokens expiring within the hour every 15
 minutes. Both paths are now **dormant for new connections** - `accessTokenExpiresAt` is null, so
 `getAccessToken` returns the stored token without ever calling Shopify. They are kept for store
 rows connected while `expiring: 1` was in force, which still carry an expiry and a refresh token.
@@ -91,7 +91,7 @@ token and clears both expiry columns.
 | Products | `products` (100 per page) | title, status, vendor, type |
 | Variants | `productVariants` (100 per page) | price, stock on hand, unit cost |
 
-Every query's requested cost is kept under Shopify's 1000-point limit (worked out in `packages/core/src/normalize.ts`, checked by `packages/core/test/queryCost.ts`). If Shopify still answers `MAX_COST_EXCEEDED`, the worker halves the page size and retries the same page. Webhooks keep orders, refunds and products current; a daily reconcile re-pulls recent orders, products and stock.
+Every query's requested cost is kept under Shopify's 1000-point limit (worked out in `packages/core/src/normalize.ts`, checked by `packages/core/test/queryCost.ts`). If Shopify still answers `MAX_COST_EXCEEDED`, the sync job halves the page size and retries the same page. Webhooks keep orders, refunds and products current; a daily reconcile re-pulls recent orders, products and stock.
 
 ### Protected customer data
 
@@ -108,7 +108,7 @@ Until the main app passes Shopify's review, Shopify only lets it be installed on
 1. Shopify Dev Dashboard → **Create app** (e.g. "Insights for PixMagic"). Copy its **Client ID**.
 2. The app's **Distribution** → **Custom distribution** → enter the client's `*.myshopify.com` domain → **Generate link** → copy the install link. (Custom distribution installs on one store, or on several stores in the same Plus organization.)
 3. Put the Client ID in `shopify-app/shopify.app.pixmagic.toml`, then push URLs, scopes and webhooks: `cd shopify-app && shopify app deploy --config pixmagic`.
-4. Tell the Worker about it. In `apps/cloudflare/wrangler.jsonc` `vars`: `"SHOPIFY_EXTRA_APPS": "[{\"key\":\"pixmagic\",\"clientId\":\"<client id>\",\"shops\":[\"pixmagic.myshopify.com\"]}]"`, and the secret (prompted, never written to a file): `npx wrangler secret put SHOPIFY_APP_SECRET_PIXMAGIC`. Deploy.
+4. Tell the app about it. In `apps/aws/src/settings.ts` (`APP_SETTINGS`): `"SHOPIFY_EXTRA_APPS": "[{\"key\":\"pixmagic\",\"clientId\":\"<client id>\",\"shops\":[\"pixmagic.myshopify.com\"]}]"`, and the secret (from the clipboard or prompted, never written to a file): `node infra/cdk/scripts/put-secrets.mjs --set SHOPIFY_APP_SECRET_PIXMAGIC`. Merge to `main` (Deploy to AWS).
 5. The store owner opens the install link from step 2, approves, and lands on the connect page (after logging in or signing up) to finish. Typing the store address in **Settings → Shopify** also picks that store's app automatically.
 
 A misconfigured extra app is logged and skipped; the main app keeps working.
@@ -131,7 +131,7 @@ This app runs **Shopify managed installation** (`use_legacy_install_flow = false
 
 > Merchants are asked to grant exactly the scopes declared in `shopify.app*.toml`. The `scope` parameter our authorize URL carries is **ignored**.
 
-So `SHOPIFY_SCOPES` and `SHOPIFY_OPTIONAL_SCOPES` in the Worker env describe what we *believe* we asked for. They cannot widen, narrow or correct what Shopify actually grants — **only `shopify app deploy` can**. `packages/core/test/appConfig.test.ts` fails the build if the toml and the env default drift apart, because that drift has already caused an outage (see below).
+So `SHOPIFY_SCOPES` and `SHOPIFY_OPTIONAL_SCOPES` in the app's settings (`apps/aws/src/settings.ts`) describe what we *believe* we asked for. They cannot widen, narrow or correct what Shopify actually grants — **only `shopify app deploy` can**. `packages/core/test/appConfig.test.ts` fails the build if the toml and the env default drift apart, because that drift has already caused an outage (see below).
 
 `optional_scopes` is a second trap. Optional scopes are never granted during installation; the app has to ask for them **after** install through a dynamic scope request. A scope listed there is declared to Shopify (and subject to protected customer data review) whether or not we ever ask for it, so declaring one we are not approved for breaks installs on live stores while granting nothing.
 
@@ -159,7 +159,7 @@ stores are exempt). That is accepted deliberately, because today it costs nothin
 
 **Re-check this when the main app is submitted for review.** If PCD approval has not landed by
 then, comment `optional_scopes` back out of both tomls, clear `SHOPIFY_OPTIONAL_SCOPES` in
-`apps/cloudflare/wrangler.jsonc`, and redeploy both apps and the Worker —
+`apps/aws/src/settings.ts`, and redeploy both Shopify apps (`shopify app deploy`) and the app (merge to `main`) —
 otherwise approval of the *app* will be gated behind installs that Shopify is refusing.
 
 ### The dynamic scope request flow
@@ -207,9 +207,9 @@ What a revoke does *not* do: it does not delete data the scope let us import, an
 **Current state (2026-10-06): turned on.** `optional_scopes` is declared in both tomls and mirrored in `SHOPIFY_OPTIONAL_SCOPES`, so the dashboard offers **Enable** and Settings → Stores offers **Remove** (see "What is declared optional, and why it is on"). The steps below are how it was switched on, and in reverse how to switch it off again before app review if protected customer data approval has not landed. With `SHOPIFY_OPTIONAL_SCOPES` empty the flow is dormant: `declaredOptionalScopes()` finds nothing, no module offers a button, and `request` and `revoke` both answer `scope_unavailable`. In this order:
 
 1. Get **API access → Protected customer data access** granted for `read_customers`, `write_pixels`, `read_customer_events`.
-2. Uncomment `optional_scopes` in **both** tomls, mirror it into `SHOPIFY_OPTIONAL_SCOPES` in `apps/cloudflare/wrangler.jsonc`, then `shopify app deploy` and `npx wrangler deploy`.
+2. Uncomment `optional_scopes` in **both** tomls, mirror it into `SHOPIFY_OPTIONAL_SCOPES` in `apps/aws/src/settings.ts`, then `shopify app deploy` and merge to `main` (Deploy to AWS).
 
-`packages/core/test/appConfig.test.ts` fails the build if the tomls and `wrangler.jsonc` disagree about the optional scopes. Note the env var can only ever *narrow* what we ask for: a scope in `SHOPIFY_OPTIONAL_SCOPES` that the deployed toml does not declare gives merchants an "Enable" button that lands them on a Shopify error.
+`packages/core/test/appConfig.test.ts` fails the build if the tomls and `settings.ts` disagree about the optional scopes. Note the env var can only ever *narrow* what we ask for: a scope in `SHOPIFY_OPTIONAL_SCOPES` that the deployed toml does not declare gives merchants an "Enable" button that lands them on a Shopify error.
 
 Giving scopes back follows the same switch: see [Giving a scope back](#giving-a-scope-back) above.
 
@@ -217,7 +217,7 @@ Giving scopes back follows the same switch: see [Giving a scope back](#giving-a-
 
 **"This installation link can't be used — It may have expired, or the app may not be available for this store."**
 
-Shopify's own page, shown at `admin.shopify.com/store/<store>/app/grant?...`. Shopify never calls back when it refuses, so no error reaches the app. What *is* recorded is the handoff: every redirect we hand a merchant logs `shopify_install_handoff` with the shop, app key and client id, and a successful return logs `shopify_install_return`. **A handoff with no matching return is a merchant Shopify turned away** — search the Worker logs for those two events to see exactly who tried and with which app.
+Shopify's own page, shown at `admin.shopify.com/store/<store>/app/grant?...`. Shopify never calls back when it refuses, so no error reaches the app. What *is* recorded is the handoff: every redirect we hand a merchant logs `shopify_install_handoff` with the shop, app key and client id, and a successful return logs `shopify_install_return`. **A handoff with no matching return is a merchant Shopify turned away** — search the API's logs (CloudWatch Logs `/aws/lambda/insights-production-api`) for those two events to see exactly who tried and with which app.
 
 **"Works on our development store, fails on the client's live store" does not narrow this down.** Every cause below behaves that way, because development stores are exempt from both app review and protected customer data review. An earlier version of this document claimed the symptom pointed at protected customer data specifically; it does not, and acting on that reading cost a round of changes that could never have fixed it. Rule out the causes in order instead.
 
@@ -230,12 +230,12 @@ Check, in order:
 
    Request it anyway, and **before** submitting: "Applying for protected customer data isn't possible while the app is under review", so submitting first forces a withdraw-and-resubmit and loses queue position.
 3. **The released version matches the toml.** Editing a toml changes nothing until `cd shopify-app && shopify app deploy`. Dev Dashboard → **Versions** → the active version shows the scopes and URLs merchants are actually being asked for. Compare them with `shopify-app/shopify.app.toml`.
-4. **The right `client_id`.** The one in the failing URL must be the app that store is allowed to install. For a store with its own app ([3c](#3c-a-clients-store-with-its-own-app-custom-distribution--not-the-product-strategy)) this is the check that has actually failed in production, so verify it against the deployed Worker rather than the repo: signed in, open **Settings → Shopify → Enter store address instead**, enter the store and press Connect. The `client_id` in the Shopify address the browser opens (also in the response to `POST /api/workspaces/<ws>/shopify/install`, DevTools → Network) is the app that store is really being sent to. If it is the main app's, the store's own app is not in the registry — and the cause is almost always that **the configuration never reached production**: `SHOPIFY_EXTRA_APPS` lives in `apps/cloudflare/wrangler.jsonc`, and editing that file changes nothing until `npx wrangler deploy`. `wrangler secret put` does deploy a new version, which makes it look as though the var went out too; it does not — it carries over the *previous* version's vars. Confirm with `npx wrangler versions view <id>`, which lists the bindings the live version actually has. A missing secret (`SHOPIFY_APP_SECRET_<KEY>`) does the same thing for the same reason. Either way the store is now refused by us with `app_unavailable` instead of being handed to Shopify's dead end (`packages/core/src/apps.ts`, `blocked`), so the merchant gets a message that names the problem — but the install is still broken until the Worker is redeployed.
+4. **The right `client_id`.** The one in the failing URL must be the app that store is allowed to install. For a store with its own app ([3c](#3c-a-clients-store-with-its-own-app-custom-distribution--not-the-product-strategy)) this is the check that has actually failed in production, so verify it against the deployed app rather than the repo: signed in, open **Settings → Shopify → Enter store address instead**, enter the store and press Connect. The `client_id` in the Shopify address the browser opens (also in the response to `POST /api/workspaces/<ws>/shopify/install`, DevTools → Network) is the app that store is really being sent to. If it is the main app's, the store's own app is not in the registry — and the cause is almost always that **the configuration never reached production**: `SHOPIFY_EXTRA_APPS` lives in `apps/aws/src/settings.ts`, and editing that file changes nothing until it is merged to `main` and its **Deploy to AWS** run has succeeded. Confirm with `aws lambda get-function-configuration --function-name insights-production-api --qualifier live --query Environment.Variables.SHOPIFY_EXTRA_APPS`, which shows what the live version actually has. A missing secret (`SHOPIFY_APP_SECRET_<KEY>`, set with `put-secrets.mjs --set` and read by the functions only when an instance starts) does the same thing. Either way the store is now refused by us with `app_unavailable` instead of being handed to Shopify's dead end (`packages/core/src/apps.ts`, `blocked`), so the merchant gets a message that names the problem — but the install is still broken until the configuration is deployed.
 5. **A stale link.** `access_change_uuid` is single use and short lived, and it is bound to the install attempt that created it — so a grant URL copied out of one person's address bar and sent to someone else *always* lands on this page. Send merchants to `/signup` (then Settings → Shopify), never to an `admin.shopify.com/.../app/grant?...` URL.
 
 While the app is unapproved, set `SHOPIFY_DEFAULT_APP_SHOPS` to our development stores. Merchants we cannot serve then get `app_unavailable` ("This store can't install our app yet…") from us, instead of being handed to a Shopify page that cannot work. Clear it again the day the app is approved, or the store picker stays disabled — see "Which app a store is sent to" above.
 
-**"Unauthorized access"** on the grant screen: the released app version asks for protected customer data scopes it has not been approved for. Fix it in the toml and redeploy — clearing `SHOPIFY_OPTIONAL_SCOPES` in the Worker env does **not** change what Shopify asks for (see 3e).
+**"Unauthorized access"** on the grant screen: the released app version asks for protected customer data scopes it has not been approved for. Fix it in the toml and redeploy — clearing `SHOPIFY_OPTIONAL_SCOPES` in the app's settings does **not** change what Shopify asks for (see 3e).
 
 **A merchant reports a blank page or raw JSON after clicking the app in their admin:** they reached `/shopify/launch` with a link Shopify didn't sign (usually a bookmark or a hand-edited URL). They are now redirected to `/onboarding?error=launch_unverified` with an explanation; the event is logged as `shopify_launch_rejected`.
 

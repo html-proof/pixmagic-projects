@@ -64,8 +64,9 @@ Anything that may outlast a request, must retry, or runs on a schedule:
   field names to `REDACT` in `packages/core/src/logger.ts`).
 - OAuth: single-use state in the Coordinator plus a cookie, PKCE where the provider supports it
   (`apps/api/src/routes/ads.ts`). Webhooks: verify the signature on the raw body before parsing.
-- Settings go in the config schema (`packages/core/src/env.ts`), then `wrangler.jsonc` (public
-  values) or `wrangler secret put` (secrets), and `.dev.vars.example`.
+- Settings go in the config schema (`packages/core/src/env.ts`), then `APP_SETTINGS` in
+  `apps/aws/src/settings.ts` (public values) or Secrets Manager with
+  `node infra/cdk/scripts/put-secrets.mjs --set NAME` (secrets), and `apps/aws/.env.example`.
 - A provider failure must not break unrelated pages: map it to a typed error and to 502/503.
 
 ## A screen
@@ -84,8 +85,9 @@ Anything that may outlast a request, must retry, or runs on a schedule:
 
 1. Get the request id: every API response has `x-request-id` (the browser's network tab, or ask
    the merchant to copy it from an error).
-2. Search Workers Logs (or `npx wrangler tail --format json` from `apps/cloudflare`) for that id:
-   every line written for the request carries it, with `userId` / `workspaceId` once known; queue
-   jobs carry `queue` and `messageId`, cron runs `cron`.
+2. Search CloudWatch Logs for that id (Logs Insights over the log groups
+   `/aws/lambda/insights-production-api`, `-jobs` and `-cron`): every line written for the request
+   carries it, with `userId` / `workspaceId` once known; queue jobs carry `queue` and `messageId`,
+   cron runs `cron`.
 3. `/api/readyz` says whether the database (both roles) and the Coordinator answer, and logs why
    not ([../RUNBOOK.md](../RUNBOOK.md)).

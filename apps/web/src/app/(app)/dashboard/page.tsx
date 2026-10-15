@@ -198,7 +198,7 @@ export default function DashboardPage() {
     setEverySec(syncState && IMPORTING.has(syncState) ? IMPORTING_EVERY_SEC : adsFetching ? ADS_FETCHING_EVERY_SEC : LIVE_EVERY_SEC);
   }, [syncState, adsFetching]);
   // "Live" while the last successful check is recent (a missed check or two is fine: the odd
-  // request fails even when all is well, e.g. a Worker CPU-limit 1102); "checking" until the first
+  // request fails even when all is well, e.g. a slow cold start); "checking" until the first
   // answer for this question arrives, or "Reconnecting…" straight away if that check failed
   // (otherwise an outage on arrival, or on picking new dates, reads "Checking…" for good).
   const [now, setNow] = useState(() => Date.now());

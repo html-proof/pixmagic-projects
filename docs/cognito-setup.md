@@ -8,15 +8,14 @@ covers how it works, how to set it up, and how existing accounts move over.
 ## How it works
 
 ```
-browser ──► /api/auth/* (Worker) ──► Cognito user-pool API          (sign-up, sign-in, codes, passwords)
+browser ──► /api/auth/* (API)    ──► Cognito user-pool API          (sign-up, sign-in, codes, passwords)
    │                         └─────► <domain>/oauth2/token          (Google: code + PKCE)
    └──► <domain>/oauth2/authorize ──► Google ──► /auth/callback (page) ──► /api/auth/oauth/callback
 ```
 
-- **The Worker does all of it** (`apps/api/src/cognito.ts`, plain HTTPS: the AWS SDK costs more CPU
-  to load than a Free-plan request may spend). The browser never talks to Cognito and never holds a
-  Cognito token.
-- **Our session**: once the Worker has verified Cognito's ID token (RS256 signature against the
+- **The API does all of it** (`apps/api/src/cognito.ts`, plain HTTPS, no AWS SDK). The browser
+  never talks to Cognito and never holds a Cognito token.
+- **Our session**: once the API has verified Cognito's ID token (RS256 signature against the
   pool's JWKS, issuer, audience = our app client, `token_use`, expiry, and the nonce for OAuth), it
   sets `__session` (an HMAC-signed, httpOnly, SameSite=Lax, Secure cookie, 5 days) and
   `__session_rt` (the Cognito refresh token, AES-GCM encrypted with `TOKEN_ENCRYPTION_KEYS`, sent
@@ -29,9 +28,9 @@ browser ──► /api/auth/* (Worker) ──► Cognito user-pool API          
   has verified it (`apps/api/src/identity.ts`). Never on an unverified address.
 - **Tenancy is unchanged**: a sign-in says who someone is; workspaces, roles and permissions stay in
   our database (`requireWorkspace`, Postgres RLS).
-- **The confidential app client's secret** signs every user-pool call (`SECRET_HASH`). An IAM user
-  that may make only five admin calls on this pool (create, get, set password, delete, sign out
-  everywhere) signs the admin calls with SigV4.
+- **The confidential app client's secret** signs every user-pool call (`SECRET_HASH`). The API
+  function's own role, which may make only five admin calls on this pool (create, get, set password,
+  delete, sign out everywhere), signs the admin calls with SigV4. No access keys anywhere.
 - **Audit**: `auth_events` records account-level changes (account created, identity linked, account
   moved from Firebase, password reset/changed, email changed or verified, signed out everywhere,
   account deleted).
@@ -59,26 +58,25 @@ sign-up.
 ## 1. The AWS side
 
 Everything is in [`infra/aws/cognito.yaml`](../infra/aws/cognito.yaml): the user pool (Essentials
-plan: 10,000 monthly active users free), its OAuth domain, Google when its credentials are given, the app client, the IAM user and its access key, and a Secrets Manager secret holding the
-three Worker secrets. One stack per environment.
-
-Choose a region close to the database and the people using it, and a domain prefix nobody has taken
-in that region, then (AWS CLI signed in):
+plan: 10,000 monthly active users free), its OAuth domain, Google when its credentials are given, the
+app client, and a Secrets Manager secret holding the app client's secret. The CDK app includes it as
+the `InsightsAuth-<env>` stack ([`infra/cdk/lib/auth-stack.ts`](../infra/cdk/lib/auth-stack.ts)),
+deployed with everything else ([aws-deployment.md](aws-deployment.md)), with the app's address
+(CloudFront's) and the domain prefix (`cognitoDomainPrefix` in `infra/cdk/lib/config.ts`). The same
+stack lets the API function's role make the pool's admin calls, and writes the runtime parameter
+(`/insights/<env>/runtime`) that gives the functions `COGNITO_REGION`, `COGNITO_USER_POOL_ID`,
+`COGNITO_CLIENT_ID`, `COGNITO_DOMAIN` and `COGNITO_IDENTITY_PROVIDERS`.
 
 ```bash
-aws cloudformation deploy --stack-name insights-auth-production --template-file infra/aws/cognito.yaml --capabilities CAPABILITY_NAMED_IAM --region ap-southeast-2 --parameter-overrides Environment=production AppUrl=https://insights.imeseban.workers.dev DomainPrefix=insights-signin
+aws cloudformation describe-stacks --stack-name InsightsAuth-production --region ap-southeast-2 --query "Stacks[0].Outputs"
 ```
 
-```bash
-aws cloudformation describe-stacks --stack-name insights-auth-production --region ap-southeast-2 --query "Stacks[0].Outputs"
-```
-
-The outputs map one to one onto the Worker's settings (`Region` → `COGNITO_REGION`, `UserPoolId`,
-`ClientId`, `Domain`, `IdentityProviders`). `ProviderRedirectUri` is what Google needs below.
+`ProviderRedirectUri` among the outputs is what Google needs below.
 
 Emails: by default Cognito sends codes from `no-reply@verificationemail.com`, limited to 50 a day.
 That is enough to start. For more, and for the passwordless code, verify a domain in SES in the same
-region, request production access, and redeploy with `SesFromEmail` and `SesIdentityArn`.
+region, request production access, and pass `SesFromEmail` and `SesIdentityArn` to the template
+(`parameters` in `infra/cdk/lib/auth-stack.ts`).
 
 ## 2. Google
 
@@ -89,23 +87,19 @@ client works as well):
    `ProviderRedirectUri` (`https://<prefix>.auth.<region>.amazoncognito.com/oauth2/idpresponse`).
    **Authorized JavaScript origins**: add `https://<prefix>.auth.<region>.amazoncognito.com`.
 2. OAuth consent screen: add `amazoncognito.com` to Authorized domains.
-3. Redeploy the stack with `GoogleClientId=...` and `GoogleClientSecret=...` (the secret is a NoEcho
-   parameter: CloudFormation never shows it back).
+3. Put the client secret in the app secret: `node infra/cdk/scripts/put-secrets.mjs --set
+   GOOGLE_SIGNIN_CLIENT_SECRET` (CloudFormation reads it from there at deploy time; it is never in
+   the template). Set the client id as the GitHub variable `GOOGLE_SIGNIN_CLIENT_ID` (Settings →
+   Environments → `production`) and deploy: the Deploy to AWS workflow passes it as
+   `-c googleClientId=...`, and `COGNITO_IDENTITY_PROVIDERS` becomes `Google`.
 
-## 3. The Worker
+## 3. The app
 
-`apps/cloudflare/wrangler.jsonc` `vars`: `COGNITO_REGION`, `COGNITO_USER_POOL_ID`,
-`COGNITO_CLIENT_ID`, `COGNITO_DOMAIN`, `COGNITO_IDENTITY_PROVIDERS` (`Google` once it is
-set up), and `COGNITO_EMAIL_OTP=1` only once SES is set up. Secrets, from the stack's Secrets
-Manager entry without printing them:
-
-```bash
-node infra/aws/worker-secrets.mjs insights/production/worker-cognito --region ap-southeast-2
-```
-
-That sets `COGNITO_CLIENT_SECRET`, `COGNITO_ADMIN_ACCESS_KEY_ID` and `COGNITO_ADMIN_SECRET_ACCESS_KEY`
-(each `wrangler secret put` makes a "Secret Change" version; the code running before the switch ignores
-them). The web build needs nothing: every environment uses the same UI build.
+Nothing to set by hand: the runtime parameter carries the pool's ids and domain, the API function
+reads `COGNITO_CLIENT_SECRET` from the stack's Secrets Manager secret at cold start, and its role
+signs the admin calls (`apps/aws/src/secrets.ts`, `apps/aws/src/index.ts`). `COGNITO_EMAIL_OTP=1`
+goes in `APP_SETTINGS` (`apps/aws/src/settings.ts`) only once SES is set up. The web build needs
+nothing: every environment uses the same UI build.
 
 ## 4. Moving existing accounts from Firebase
 
@@ -114,13 +108,13 @@ not accept (it takes standard scrypt, bcrypt, Argon2id and PBKDF2). So passwords
 time, and nobody has to do anything:
 
 - **Password accounts**: the first sign-in after the switch fails in Cognito (no such user), so the
-  Worker asks Firebase once whether that email and password are right (`accounts:signInWithPassword`
+  API asks Firebase once whether that email and password are right (`accounts:signInWithPassword`
   with the project's public web API key, `LEGACY_FIREBASE_API_KEY`). If they are, it creates the
   Cognito user with that same password and signs them in. Their `users.id`, workspaces and stores are
   untouched: the new identity is linked through the Firebase uid. Firebase allowed 6-character
   passwords; for those, Cognito can't take the password, so a reset code is emailed instead and the
   sign-in page says so.
-- **Google accounts**: "Continue with Google" creates a Google user in the pool, and the Worker links
+- **Google accounts**: "Continue with Google" creates a Google user in the pool, and the API links
   it to the existing account by its Google-verified address.
 - **Accounts that only used emailed codes or links**, and anyone who never signs in during the
   window: "Forgot password?" creates their Cognito user (no email to them, random password) and
@@ -146,14 +140,15 @@ employee link). It only reads. Keep the snapshot.
 
 ### The switch
 
-1. Back up the production database (`node infra/postgres/backup.mjs`).
-2. Apply the migration `20261016000000_cognito_identities` (additive: the running version keeps
-   working on it), then `prisma migrate resolve --applied 20261016000000_cognito_identities`.
-3. Set the vars and secrets (sections 1-4), with `LEGACY_FIREBASE_API_KEY` set.
-4. Deploy as usual (upload, stage at 0%, smoke-test with the version-override header, promote).
-   Everyone signed in before is signed out once (the Firebase session cookie isn't ours any more) and
+It happens at the cutover to AWS ([aws-deployment.md](aws-deployment.md), "Cutover"), which signs in
+with Cognito only:
+
+1. The data is copied in with `infra/cdk/scripts/migrate-data.mjs`, which backs the source up first
+   and applies the migrations, `20261016000000_cognito_identities` included.
+2. `LEGACY_FIREBASE_API_KEY` is set (`apps/aws/src/settings.ts`), and sections 1-3 are done.
+3. Everyone signed in before is signed out once (the Firebase session cookie isn't ours any more) and
    signs in again, which is what moves their account.
-5. Smoke-test: create an account, confirm the code, sign out, sign in; sign in with an existing
+4. Smoke-test: create an account, confirm the code, sign out, sign in; sign in with an existing
    (Firebase) account's password; Continue with Google; Forgot password.
 
 ### After the switch: the proof
@@ -172,22 +167,22 @@ accounts have moved.
 
 ### Rollback
 
-Promote the previous Worker version (`npx wrangler versions deploy <previous>@100% -y --config
-apps/cloudflare/wrangler.jsonc`). Firebase still has every account and `users.firebase_uid` still
+Rolling back the cutover returns sign-in to the old deployment, which still uses Firebase, until it
+is retired ([aws-deployment.md](aws-deployment.md#retiring-the-old-cloudflare-deployment)). Firebase still has every account and `users.firebase_uid` still
 points at it, so everyone can sign in the old way again (accounts created on Cognito in between have
 no Firebase account: they would need to sign up again on Firebase). The migration needs no undo:
 the old version ignores the new tables and columns.
 
 ### Ending the migration window
 
-When the plan shows (nearly) everyone `on_cognito`, clear `LEGACY_FIREBASE_API_KEY` and deploy. From
+When the plan shows (nearly) everyone `on_cognito`, clear `LEGACY_FIREBASE_API_KEY` in `apps/aws/src/settings.ts` and merge to `main`. From
 then on Firebase is never asked anything; those who hadn't moved use "Forgot password?". Then the
 Firebase project's Authentication can be switched off (keep it a while for rollback). `users.firebase_uid`
 can stay: it is what "Forgot password?" recognises an old account by.
 
 ## 5. Local development and tests
 
-The Worker talks to a Cognito emulator with the app's pool already in it: see
+The local server (`pnpm --filter @app/aws dev`) talks to a Cognito emulator with the app's pool already in it: see
 [infra/cognito-local/README.md](../infra/cognito-local/README.md). Integration tests use an
 in-memory Cognito (`apps/api/test/fakeCognito.ts`); `apps/api/test/cognito.test.ts` checks the real
 client's requests, SigV4, and ID-token verification with real keys; `apps/api/test/cognito.live.test.ts`
@@ -198,7 +193,8 @@ so Continue with Google runs end to end in a browser.
 ## Troubleshooting
 
 - **Every sign-in says "We can't reach the sign-in service"**: `COGNITO_USER_POOL_ID` /
-  `COGNITO_CLIENT_ID` unset (the Worker logs it at startup), or Cognito unreachable. `wrangler tail`.
+  `COGNITO_CLIENT_ID` unset (the API logs it at startup), or Cognito unreachable. CloudWatch Logs
+  `/aws/lambda/insights-production-api`.
 - **"That email and password don't match" for a Firebase account**: `LEGACY_FIREBASE_API_KEY`
   unset or wrong, or a Cognito user already exists for that address (then Cognito's password is the
   one; "Forgot password?").

@@ -3,10 +3,9 @@ import { env, type FetchLike, type Mailer } from "@app/core";
 import type { AwsCredentials } from "./awsClient.js";
 
 /**
- * App email (invitations, alerts, staff notices) through Amazon SES v2, in place of Cloudflare
- * Email Sending. EMAIL_FROM must be an SES-verified address or domain in this region; while the
- * account is in the SES sandbox, recipients must be verified too (SES answers 400 otherwise, and
- * the caller logs it, as it did for an un-onboarded domain on Cloudflare).
+ * App email (invitations, alerts, staff notices) through Amazon SES v2. EMAIL_FROM must be an
+ * SES-verified address or domain in this region; while the account is in the SES sandbox,
+ * recipients must be verified too (SES answers 400 otherwise, and the caller logs it).
  * Merchants' own connected accounts (Gmail, Microsoft 365, SMTP) don't come through here.
  */
 export interface SesOptions {

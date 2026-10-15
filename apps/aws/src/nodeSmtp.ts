@@ -4,11 +4,10 @@ import { connect as tlsConnect, type TLSSocket } from "node:tls";
 import type { SmtpConnect, SmtpSocket } from "@app/core";
 
 /**
- * Outbound TCP for merchants' SMTP accounts (packages/core/src/email/smtp.ts) on Node, in place of
- * Workers' `cloudflare:sockets` (apps/cloudflare/src/smtpSocket.ts). Implicit TLS on 465, STARTTLS
+ * Outbound TCP for merchants' SMTP accounts (packages/core/src/email/smtp.ts). Implicit TLS on 465, STARTTLS
  * otherwise; certificates are always verified (Node's default, never turned off here). The caller
  * has vetted the host and applies its own timeouts. Lambda leaves the VPC through the NAT gateway;
- * port 25 is blocked there, as on Workers.
+ * port 25 is blocked there.
  */
 export const nodeSmtpConnect: SmtpConnect = async ({ host, port, implicitTls }) => {
   const socket = implicitTls ? tlsConnect({ host, port, servername: host }) : netConnect({ host, port });

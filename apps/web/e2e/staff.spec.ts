@@ -3,7 +3,7 @@ import { E2E_MAILPIT_URL } from "../playwright.config";
 import { signUp, uniqueEmail } from "./helpers";
 
 /**
- * Staff Management in a real browser against the real Worker: an owner adds an employee and
+ * Staff Management in a real browser against the real app: an owner adds an employee and
  * invites them; the invitation arrives by email; the employee sets a password and lands in the
  * portal; clocks in, survives a refresh, takes a break, clocks out; the owner approves the hours.
  * Payroll maths, permissions and isolation are covered in depth by apps/api/test/staff.test.ts.

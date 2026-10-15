@@ -138,8 +138,7 @@ function parseLines(text: string, atEnd: boolean): { lines: Line[]; raw: string[
  *
  * A chunk always starts at a parent (the previous one guaranteed it), so this keeps every
  * order whole within a single invocation and means no state has to be carried between them.
- * That matters here: R2 is not enabled and a Durable Object value caps at 2 MB, so there is
- * nowhere good to park a half-assembled order.
+ * That matters here: there is nowhere good to park a half-assembled order between invocations.
  */
 function cutAtLastParent(lines: Line[], raw: string[]): { lines: Line[]; raw: string[] } | null {
   for (let i = lines.length - 1; i > 0; i--) {
@@ -209,7 +208,7 @@ async function startBulk(data: SyncJobData, store: Store, deps: WorkerDeps, api:
     // The retry is this same job, and with the lock still held it would take itself for a
     // competing backfill. Freed, it re-acquires and adopts the export this attempt may already
     // have submitted. Best-effort: the Coordinator does not need Postgres, so this works through a
-    // tunnel outage, but a failed release must not hide the error that matters.
+    // database outage, but a failed release must not hide the error that matters.
     await deps.coord.release(lockKey(store.id)).catch(() => {});
     throw err;
   }

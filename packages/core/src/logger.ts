@@ -1,6 +1,6 @@
 /**
  * Structured JSON logger (one line per entry) with a pino-like call shape:
- * `logger.info({ ...fields }, "message")`. Workers Logs indexes the JSON fields.
+ * `logger.info({ ...fields }, "message")`. CloudWatch Logs Insights reads the JSON fields.
  * Sensitive keys are redacted at any depth.
  *
  * Fields set with `withLogContext` (the API's request id, a queue job's id) are added to every

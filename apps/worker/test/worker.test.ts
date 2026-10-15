@@ -720,7 +720,7 @@ describe("queue consumer", () => {
       expect(queues.sentOpts.sync).toEqual([{ delaySeconds: 60 }]);
       queues.clear();
 
-      // Waited a day already: retried normally, so Cloudflare moves it to insights-dlq in the end.
+      // Waited a day already: retried normally, so it ends up in the dead-letter queue.
       const stale = message({ ...body, dbDeferral: { count: 290, since: Date.now() - 25 * 3600_000 } }, 1);
       await db.run(() => consume("sync", stale.msg, deps));
       expect(stale.m).toMatchObject({ acked: false, retried: { delaySeconds: 5 } });
@@ -768,7 +768,7 @@ describe("queue consumer", () => {
     } finally {
       await db.close();
     }
-    // Past max_retries Cloudflare moves it to insights-dlq; acking would have dropped it.
+    // Past maxReceiveCount SQS moves it to the dead-letter queue; acking would have dropped it.
     expect(last.m.acked).toBe(false);
     expect(last.m.retried).toBeDefined();
     expect(queues.sent.sync).toEqual([]);
@@ -1995,7 +1995,7 @@ describe("moving to a new address", () => {
 
   it("points a pixel made for the old host at this one", async () => {
     // Before: TAKEN was taken as done, so the pixel kept posting to the old host for good.
-    const calls = pixelShop("https://insights.imeseban.workers.dev/api/pixel/pk-s.myshopify.com");
+    const calls = pixelShop("https://old-host.example/api/pixel/pk-s.myshopify.com");
     await installPixel();
     const update = calls.find((c) => c.query.includes("webPixelUpdate"));
     expect(update?.variables).toEqual({ id: "gid://shopify/WebPixel/1", settings: JSON.stringify({ ingestUrl: here }) });

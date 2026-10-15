@@ -14,13 +14,13 @@ export * from "./generated/client.js";
  *  - tenantDb: non-owner role `app_rls`. RLS policies apply, so a query that
  *    forgets a workspace filter still cannot read another tenant's rows.
  *
- * On Workers a database connection must not outlive the request (or queue
- * batch) that opened it, so connections are opened per invocation by `withDb()`
- * (connection strings come from the Hyperdrive bindings) and found through
- * AsyncLocalStorage. The Prisma clients themselves are NOT per invocation: see
- * `sharedClient()`. `systemDb` / `tenantDb` are those clients, so application
- * code keeps using them as plain module imports.
- * In Node (tests, scripts) with no scope, process-wide connections are used.
+ * Connections come from DATABASE_URL (owner) and APP_DATABASE_URL (app_rls) and are
+ * process-wide: the Lambda functions, the local server, scripts. `withDb()` runs code
+ * on its own connections instead (other URLs, closed afterwards), found through
+ * AsyncLocalStorage; tests use it to point one call at a database that is down. The
+ * Prisma clients themselves are shared either way: see `sharedClient()`.
+ * `systemDb` / `tenantDb` are those clients, so application code keeps using them as
+ * plain module imports.
  */
 export interface DbUrls {
   system: string;
@@ -49,35 +49,30 @@ interface Queue {
 const als = new AsyncLocalStorage<Scope>();
 let nodeScope: Scope | undefined;
 
-const isWorkers = typeof navigator !== "undefined" && navigator.userAgent === "Cloudflare-Workers";
-
 /**
  * How long a transaction may run before Prisma expires it, for every client and every
  * `$transaction` (interactive and batch).
  *
- * Prisma's default is 5s, which is wrong for this deployment. Postgres is not local to the
- * Worker: it is reached over a Cloudflare Tunnel, so every statement pays real network latency
- * (35-961ms observed on the hotspot). The dashboard overview crossed 5s and the whole request
- * 500'd with "A query cannot be executed on an expired transaction" - it had already spent
- * 5608ms - and the worker's order writes fail the same way ("7247 ms passed since the start of
- * the transaction"), spending a queue attempt each time on work that would have committed.
+ * Prisma's default is 5s, which proved too tight: when Postgres was reached over a slow link
+ * (35-961ms a statement), the dashboard overview crossed 5s and the whole request 500'd with
+ * "A query cannot be executed on an expired transaction" - it had already spent 5608ms - and
+ * the worker's order writes failed the same way ("7247 ms passed since the start of the
+ * transaction"), spending a queue attempt each time on work that would have committed.
  *
  * This raises the ceiling; it does not make anything faster, and it does not make an outage
- * slower to notice: the timer never interrupts a statement in flight, and a dead tunnel fails the
- * statement itself in about a second.
+ * slower to notice: the timer never interrupts a statement in flight, and an unreachable
+ * database fails the statement itself in about a second.
  */
 const TX_TIMEOUT_MS = 20_000;
 /**
  * How long to wait for a pooled connection plus BEGIN. Prisma's 2s default tripped on the worker
- * ("Unable to start a transaction in the given time") while Hyperdrive was re-establishing its
- * connections through the tunnel.
+ * ("Unable to start a transaction in the given time") while connections were being re-established.
  */
 const TX_MAX_WAIT_MS = 5_000;
 
 function scope(): Scope {
   const s = als.getStore();
   if (s) return s;
-  if (isWorkers) throw new Error("Database used outside withDb(): wrap the handler so connections stay request-scoped");
   nodeScope ??= {
     urls: { system: process.env.DATABASE_URL ?? "", tenant: process.env.APP_DATABASE_URL ?? process.env.DATABASE_URL },
   };
@@ -88,7 +83,8 @@ function scope(): Scope {
 function connection(role: Role): Promise<Adapter> {
   const s = scope();
   const url = role === "system" ? s.urls.system : (s.urls.tenant ?? s.urls.system);
-  // Workers allow 6 concurrent outbound connections per invocation; two pools x 3 stays under it.
+  // A function instance serves one request at a time: three connections per role cover a
+  // request's parallel queries without crowding RDS's connection limit across many instances.
   return (s[role] ??= new PrismaPg({ connectionString: url, max: 3 }).connect());
 }
 
@@ -123,14 +119,13 @@ function scopedAdapter(role: Role): AdapterFactory {
 const shared: Partial<Record<Role, PrismaClient>> = {};
 
 /**
- * One Prisma client per role for the whole isolate (or Node process), never one per request.
+ * One Prisma client per role for the whole process, never one per request.
  *
  * Building a client is expensive in CPU, not I/O: the constructor decodes the schema's
  * parameterization tables (~15 ms measured) and connecting builds the WASM query compiler, which
  * parses the whole schema again (~11 ms), and each client starts with an empty query plan cache.
  * Made fresh for every request - twice, one per role - that was ~50 ms of CPU before the first
- * statement was sent, five times the Workers Free plan's 10 ms limit, and every request died with
- * "Worker exceeded CPU time limit" (Cloudflare error 1102, a 503), /readyz included.
+ * statement was sent.
  *
  * Shared clients pay that once. They stay connected for good: their adapter (scopedAdapter) has
  * no connection to close, and the request's own pools are closed by withDb().
@@ -148,9 +143,9 @@ function sharedClient(role: Role): PrismaClient {
 /**
  * Prisma queues every findUnique, and every query of a transaction, in one queue per client (its
  * DataLoader), sent on a timer that the first queued call sets. On a client shared by concurrent
- * requests, one request's query could wait in that queue and then be sent from another request's
- * timer: on that request's connections, in that request's I/O context, which Workers tears down
- * when it finishes, leaving the query hanging. So every scope gets its own queue, built with the
+ * scopes, one scope's query could wait in that queue and then be sent from another scope's timer:
+ * on that scope's connections, which it closes when it finishes, leaving the query hanging. So
+ * every scope gets its own queue, built with the
  * shared one's options (same batching, same handlers), and the shared client's queue only hands
  * each call to the current scope's.
  *
@@ -190,22 +185,6 @@ export const tenantDb: PrismaClient = new Proxy({} as PrismaClient, {
 });
 
 /**
- * Build both clients and their query compilers now. The Worker calls this at module top level,
- * where CPU counts against the startup budget instead of the first request's 10 ms; connecting
- * opens nothing (scopedAdapter connects lazily), so it does no I/O. Never throws: a failure here
- * just leaves the work to the first query, as without it.
- */
-export function warmDb(): void {
-  for (const role of ["system", "tenant"] as const) {
-    try {
-      void sharedClient(role).$connect().catch(() => {});
-    } catch {
-      /* the first query builds it */
-    }
-  }
-}
-
-/**
  * Run `fn` with request-scoped database connections (opened lazily, on first use)
  * and close them afterwards.
  */
@@ -231,10 +210,9 @@ export async function disconnectDb() {
 /**
  * Whether the database answers right now: `SELECT 1`, bounded by `timeoutMs`.
  *
- * This is how the queue consumer tells "the tunnel to Postgres is down" from a job's own failure.
- * Matching driver errors cannot do that here: through Hyperdrive an unreachable origin arrives as
- * an ordinary Postgres error response, a dropped socket as a plain Error with no code, and a
- * stalled link as nothing at all - hence the timeout. Never throws.
+ * This is how the queue consumer tells "the database is down" from a job's own failure. Matching
+ * driver errors cannot do that reliably: a dropped socket arrives as a plain Error with no code,
+ * and a stalled link as nothing at all - hence the timeout. Never throws.
  */
 export async function dbReachable(timeoutMs = 3_000): Promise<boolean> {
   return (await probeDb(() => systemDb.$queryRaw`SELECT 1`, timeoutMs)).ok;

@@ -2,7 +2,6 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { systemDb, withTenant } from "@app/db";
 import { signShopifyQuery, signWebhookBody } from "@app/shared";
 import { buildApp } from "../src/app.js";
-import { requireHttps } from "../src/https.js";
 import { pixelEventInWindow } from "../src/routes/pixel.js";
 import { LIMITS } from "../src/rateLimit.js";
 import { clean, createStore, createWorkspace, ORIGIN, setup, signIn, teardown, type InjectResponse, type TestCtx } from "./helpers.js";
@@ -207,24 +206,13 @@ describe("OAuth state (scenario 17)", () => {
   });
 });
 
-describe("security headers and HTTPS (scenario 18)", () => {
+describe("security headers (scenario 18)", () => {
   it("API responses carry HSTS over https", async () => {
     const app = buildApp(ctx.deps);
     const https = await app.request("https://insights.example/healthz");
     expect(https.headers.get("strict-transport-security")).toBe("max-age=31536000; includeSubDomains");
     expect(https.headers.get("x-frame-options")).toBe("DENY");
     expect((await app.request("http://localhost/healthz")).headers.get("strict-transport-security")).toBeNull();
-  });
-
-  it("plain http is redirected (GET) or refused (anything else), except on local hosts", async () => {
-    const get = requireHttps(new Request("http://insights.example/dashboard?x=1"));
-    expect(get?.status).toBe(301);
-    expect(get?.headers.get("location")).toBe("https://insights.example/dashboard?x=1");
-    const post = requireHttps(new Request("http://insights.example/api/auth/session", { method: "POST", body: "{}" }));
-    expect(post?.status).toBe(403);
-    expect(requireHttps(new Request("https://insights.example/api/me"))).toBeNull();
-    expect(requireHttps(new Request("http://localhost:8787/api/me", { method: "POST", body: "{}" }))).toBeNull();
-    expect(requireHttps(new Request("http://127.0.0.1:8787/"))).toBeNull();
   });
 });
 

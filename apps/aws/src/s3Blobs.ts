@@ -3,7 +3,7 @@ import type { BlobStore, FetchLike } from "@app/core";
 import type { AwsCredentials } from "./awsClient.js";
 
 /**
- * Webhook bodies too large for a queue message (R2 on Cloudflare): a private S3 bucket whose
+ * Webhook bodies too large for a queue message: a private S3 bucket whose
  * lifecycle rule deletes leftovers after 7 days; processed ones are deleted right away. Reached
  * through the VPC's S3 gateway endpoint, so this traffic never crosses the NAT gateway.
  */

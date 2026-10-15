@@ -1,5 +1,5 @@
 // Fakes for the email integration tests: an SMTP server spoken to through the same socket
-// interface Workers' TCP sockets implement, DNS-over-HTTPS answers, and OAuth providers' ID tokens.
+// interface the app's SMTP sockets implement, DNS-over-HTTPS answers, and OAuth providers' ID tokens.
 // Type-only imports: this folder has no link to the workspace packages at runtime.
 import type { SmtpConnect, SmtpSocket } from "../packages/core/src/email/smtp.js";
 

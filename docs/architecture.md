@@ -2,38 +2,38 @@
 
 How the code is organised, where new code goes, and the conventions it follows. For running it see
 [local-dev.md](local-dev.md); for production see [aws-deployment.md](aws-deployment.md) (AWS, where
-every merge to `main` deploys), [deployment-cloudflare.md](deployment-cloudflare.md) (the Cloudflare
-Worker, until the cutover) and [RUNBOOK.md](RUNBOOK.md).
+every merge to `main` deploys) and [RUNBOOK.md](RUNBOOK.md).
 
 ## The shape of the system
 
-The application code is the same on both platforms; only the thin entry package that wires it to
-the platform differs.
+The application code runs on AWS (`apps/aws`, `infra/cdk`) and, for development, the demos and
+e2e, as one local Node process (`apps/aws/src/local.ts`). Only the thin entry that wires it to its
+surroundings differs.
 
 ```
-                      AWS (apps/aws, infra/cdk)                Cloudflare (apps/cloudflare)
-browser ──► CloudFront + WAF ──► Lambda "api"          or  Worker fetch
+                        AWS                                   local server
+browser ──► CloudFront + WAF ──► Lambda "api"           or  Node HTTP server
               /api/*, /webhooks/*, /pixel/*, /shopify/*  ──► Hono app (apps/api)
               everything else                            ──► static UI (apps/web, Next.js static export)
 
-jobs   SQS (sync, webhooks, aggregate, email) ──► Lambda "jobs"   or  Queues ──► consume()       (apps/worker)
-cron   EventBridge Scheduler (*/15, 03:15)    ──► Lambda "cron"   or  Cron   ──► runScheduled()  (apps/worker)
+jobs   SQS (sync, webhooks, aggregate, email) ──► Lambda "jobs"   or  in-process queues ──► consume()       (apps/worker)
+cron   EventBridge Scheduler (*/15, 03:15)    ──► Lambda "cron"   or  POST /__scheduled ──► runScheduled()  (apps/worker)
 
 apps/api and apps/worker ──► packages/core (Shopify, Meta, Google, WhatsApp, email, staff, persistence)
-                         ──► packages/db   (Prisma; RDS PostgreSQL on AWS, Postgres via Hyperdrive on Cloudflare)
+                         ──► packages/db   (Prisma; RDS PostgreSQL on AWS, a local Postgres in development)
 everything               ──► packages/shared (pure logic, no I/O)
 ```
 
 Platform services sit behind interfaces in `Deps`, so the code never names a vendor: the
-coordinator (`Coord`: rate limits, OAuth state, locks) is DynamoDB on AWS and a Durable Object on
-Cloudflare; large webhook bodies (`Blobs`) are S3 or Durable Object chunks; mail (`Mailer`) is SES
-or Cloudflare Email; queues (`Queues`) are SQS or Cloudflare Queues.
+coordinator (`Coord`: rate limits, OAuth state, locks) is DynamoDB on AWS and memory locally; large
+webhook bodies (`Blobs`) are S3 or memory; mail (`Mailer`) is SES or Mailpit; queues (`Queues`) are
+SQS or in-process.
 
-Every API request and queue batch runs inside `withDb()` (packages/db): database connections live
-for that one invocation, which Workers requires (on Lambda the pools are per process instead). The two Prisma clients do not: they are built once
-per isolate (building one costs ~25 ms of CPU, more than the Free plan's whole request budget) and
-run each statement on the current invocation's connections, batching queries only within one
-invocation (`scopedAdapter`, `scopedQueues`).
+Database connections are process-wide pools (`DATABASE_URL`, `APP_DATABASE_URL`); `withDb()`
+(packages/db) runs a call on connections of its own, which tests use to simulate an outage. The two
+Prisma clients are built once per process (building one costs ~25 ms of CPU) and run each statement
+on the current scope's connections, batching queries only within one scope (`scopedAdapter`,
+`scopedQueues`).
 
 ## Packages: what goes where
 
@@ -46,8 +46,7 @@ Each package may import only the ones above it in this table, never one below.
 | `packages/core` | Everything that talks to the database or an outside API on the app's behalf: Shopify client and sync, token encryption, normalizers, persistence and aggregates, alerts and audit, ad platforms, WhatsApp, email integrations (`email/`: OAuth, SMTP, delivery, rules; docs/email.md). The config schema (`env.ts`) and logger. | Know about HTTP requests or queues' delivery mechanics. |
 | `apps/api` | HTTP: routing, auth, permission checks, input validation, response shapes. | Hold business logic that a job or another route could need: put it in core. |
 | `apps/worker` | Queue consumers and cron sweeps: retries, backoff, failure bookkeeping, then a call into core. `ops/` holds one-off maintenance tasks (RUNBOOK.md). | |
-| `apps/aws` | The Lambda entry (one build, three functions: api, jobs, cron): loads secrets at cold start, wires DynamoDB, SQS, S3 and SES into `Deps`, serves the UI and the API on one origin, runs migrations on request. | Contain logic beyond that wiring. |
-| `apps/cloudflare` | The Worker entry: routes a request to the UI or the API, wires bindings (Hyperdrive, Queues, Durable Object, Email; R2 when bound) into `Deps`, gives every outbound call its timeout (`withTimeout`) and every queue message and cron run its log context. | Contain logic beyond that wiring. |
+| `apps/aws` | The Lambda entry (one build, three functions: api, jobs, cron): loads secrets at cold start, wires DynamoDB, SQS, S3 and SES into `Deps`, serves the UI and the API on one origin, gives every outbound call its timeout (`withTimeout`), runs migrations on request. The app's shared settings (`settings.ts`) and the local server (`local.ts`, `dev.ts`, `localQueues.ts`), which wires the same app to in-process stand-ins. | Contain logic beyond that wiring. |
 | `infra/cdk` | The AWS infrastructure as code (edge, data, app, auth and CI stacks) and the deploy, data-copy, smoke-test and rollback scripts. | Hold application code. |
 | `apps/web` | The UI (see [Frontend](#frontend-appsweb)). Depends on `@app/shared` only; talks to the API over HTTP. | Import core/db, or compute KPIs the API already returns. |
 
@@ -90,9 +89,9 @@ Where a new piece of code goes:
 ## Worker conventions (`apps/worker`)
 
 - A queue message is processed by `consume()`; a job that throws is retried with backoff up to
-  `MAX_ATTEMPTS` (which must equal `max_retries + 1` in `wrangler.jsonc`), then recorded as failed
+  `MAX_ATTEMPTS` (the SQS queues' `maxReceiveCount` in infra/cdk stays above it), then recorded as failed
   and alerted. A failure while Postgres is unreachable spends no attempts (`deferForDb`).
-- Handlers must be idempotent: Shopify and Queues both deliver at least once.
+- Handlers must be idempotent: Shopify and SQS both deliver at least once.
 - What Shopify sends (webhook payloads, GraphQL pages, bulk JSONL) is checked once where it enters,
   against the Zod schemas in `core/shopifyPayloads.ts` (`parseShopify`, `parseShopifyList` for a
   page), before it is normalized. What doesn't fit is logged (field paths, never values) and
@@ -165,26 +164,25 @@ so every effect has to be cheap for the GPU process:
 
 | Setting | Lives in | Read by |
 | --- | --- | --- |
-| Worker vars (public: URLs, app ids, API versions, scopes) | `apps/cloudflare/wrangler.jsonc` `vars`; locally overridden by `apps/cloudflare/.dev.vars` | `env()` in `packages/core/src/env.ts` |
-| Worker secrets (session, encryption keys, client secrets) | `npx wrangler secret put NAME`; locally `.dev.vars` (from `.dev.vars.example`) | `env()` |
-| Bindings (Hyperdrive, Queues, Durable Object, Email; R2 is optional and not bound today) | `wrangler.jsonc` | `apps/cloudflare/src/index.ts`, passed as `Deps` |
-| Sign-in (Amazon Cognito: pool, client, domain; client secret and admin keys as secrets) | `wrangler.jsonc` `vars` + secrets, from `infra/aws/cognito.yaml`'s outputs ([cognito-setup.md](cognito-setup.md)) | `cognitoConfig()` in `apps/api/src/cognito.ts` |
-| AWS secrets (the same names as the Worker's) | Secrets Manager `insights/production/*`, set with `infra/cdk/scripts/put-secrets.mjs` ([aws-deployment.md](aws-deployment.md)) | `apps/aws/src/secrets.ts` at cold start, into `process.env`, then `env()` |
+| App settings (public: app ids, API versions, scopes, flags) | `apps/aws/src/settings.ts` (the CDK puts them in the functions' environment); locally overridden by `apps/aws/.env` | `env()` in `packages/core/src/env.ts` |
+| Secrets (session, encryption keys, client secrets) | Secrets Manager `insights/production/*`, set with `infra/cdk/scripts/put-secrets.mjs` ([aws-deployment.md](aws-deployment.md)); locally `apps/aws/.env` (from `.env.example`) | `apps/aws/src/secrets.ts` at cold start, into `process.env`, then `env()` |
+| Services (queues, coordinator, payload store, mail) | infra/cdk (queue URLs, table, bucket, SES region in the functions' environment) | `apps/aws/src/index.ts` (AWS) or `local.ts` (local), passed as `Deps` |
+| Sign-in (Amazon Cognito: pool, client, domain; the client secret) | the Auth stack (`infra/aws/cognito.yaml` via infra/cdk), into the runtime parameter and a secret ([cognito-setup.md](cognito-setup.md)) | `cognitoConfig()` in `apps/api/src/cognito.ts` |
 | AWS settings (URLs, ids, flags) and infrastructure choices | SSM parameter `/insights/production/runtime`; CDK context (`infra/cdk/lib/config.ts`, `cdk.json`, the deploy workflow's `-c` flags) | `apps/aws` at cold start; `infra/cdk` at deploy |
 | Feature flags for unfinished work | `apps/web/src/lib/features.ts` | the UI |
 | Local tooling (docker compose, Prisma CLI, `ops:*` tasks) | repo-root `.env` (from `.env.example`) | those tools only |
 
-`env()` validates the whole Worker config with Zod on first use and, in production, refuses to
+`env()` validates the whole app config with Zod on first use and, in production, refuses to
 start with a secret still set to a value published in this repository, or with a development
 setting that turns a safeguard off (the Auth emulator, a Mailpit relay, a local `APP_URL`). New
-settings go into its schema with a default (or as required), then into `wrangler.jsonc` /
-`.dev.vars.example`. Code reads settings through `env()`, not `process.env`. The exceptions are
-deliberate: the logger (`LOG_LEVEL`), the database scope in Node (`DATABASE_URL` /
-`APP_DATABASE_URL` for tests and scripts), per-app Shopify secrets whose names are dynamic
+settings go into its schema with a default (or as required), then into `apps/aws/src/settings.ts`
+(or, for a secret, `put-secrets.mjs`) and `apps/aws/.env.example`. Code reads settings through
+`env()`, not `process.env`. The exceptions are deliberate: the logger (`LOG_LEVEL`), the database
+connections (`DATABASE_URL` / `APP_DATABASE_URL`), per-app Shopify secrets whose names are dynamic
 (`SHOPIFY_APP_SECRET_<KEY>`), and `apps/aws`, which puts the secrets into `process.env` at cold start
 and reads the Lambda's own settings (queue URLs, bucket, table, region) before `env()` can run.
 
-Local tools and `wrangler dev` use the `app_dev` database; production's `app` is only ever reached
+Local tools and the local server use the `app_dev` database; production's `app` is only ever reached
 by pointing `DATABASE_URL` at it on purpose ([ADR-008](architecture/architecture-decisions.md#adr-008-defaults-that-can-only-reach-production-on-purpose)).
 
 ## Naming
@@ -208,14 +206,14 @@ by pointing `DATABASE_URL` at it on purpose ([ADR-008](architecture/architecture
 
 | Kind | Where | Runs with |
 | --- | --- | --- |
-| Unit (pure logic, config files) | `packages/shared/test`, `packages/core/test` | `pnpm test` |
+| Unit (pure logic, config files, AWS adapters, the local server) | `packages/shared/test`, `packages/core/test`, `apps/aws/test` | `pnpm test` |
+| Infrastructure (synthesized stacks) | `infra/cdk/test` | `pnpm --filter @infra/cdk test` |
 | Integration (real Postgres, faked Cognito/Shopify/Meta) | `apps/api/test`, `apps/worker/test` | `pnpm test:integration` (database `*_test`; `TEST_PG_PORT` points it at a throwaway server) |
-| End to end (Playwright against `wrangler dev`) | `apps/web/e2e` | `pnpm e2e` |
+| End to end (Playwright against the local server) | `apps/web/e2e` | `pnpm e2e` |
 | Lint (TypeScript, React hooks) | everywhere | `pnpm lint` (CI fails on any finding) |
 
 A bug fix comes with the test that would have caught it. CI also checks the dependency audit, that
-the committed Worker binding types match `wrangler.jsonc`, and that the migrations produce exactly
-`schema.prisma`.
+the migrations produce exactly `schema.prisma`, and that the Lambda package builds.
 
 ## Known structural debt
 

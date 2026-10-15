@@ -1,13 +1,12 @@
 /**
  * A small SMTP client (RFC 5321) for "Connect custom SMTP": connect, EHLO, STARTTLS or implicit TLS,
- * AUTH PLAIN/LOGIN, MAIL FROM, RCPT TO, DATA, QUIT. Nodemailer needs Node's net/tls, which Workers
- * don't have, so this speaks the protocol over whatever socket `SmtpConnect` gives it: Workers' TCP
- * sockets in production (apps/cloudflare/src/smtpSocket.ts), a Node socket in tests.
+ * AUTH PLAIN/LOGIN, MAIL FROM, RCPT TO, DATA, QUIT, over whatever socket `SmtpConnect` gives it:
+ * a Node socket (apps/aws/src/nodeSmtp.ts) in the app, a fake one in tests.
  *
  * Encryption is never optional. Port 465 is TLS from the first byte; on 587/2525 the server must
  * offer STARTTLS and the upgrade must succeed before AUTH, or the connection is abandoned. There is
- * no fall back to plaintext and no option to skip certificate checks (the Workers runtime verifies
- * certificates and offers no way to turn that off).
+ * no fall back to plaintext and no option to skip certificate checks (nodeSmtp.ts keeps Node's
+ * certificate verification on).
  *
  * The caller has already vetted the host's addresses (smtpTarget in accounts.ts): this file only
  * talks to what it is given.
