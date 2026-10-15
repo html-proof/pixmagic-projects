@@ -7,7 +7,7 @@ import type { Construct } from "constructs";
 import { COGNITO_TEMPLATE, type EnvConfig } from "./config.js";
 
 export interface AuthStackProps extends StackProps {
-  /** https://<distribution>.cloudfront.net (or the custom domain later). */
+  /** The app's origin: https://<domain>, or https://<distribution>.cloudfront.net without one. */
   appUrl: string;
   /** The API function's role: it makes the pool's admin calls (no access keys anywhere). */
   apiRole: iam.IRole;

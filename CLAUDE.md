@@ -6,7 +6,7 @@ Conventions and layout: [docs/architecture.md](docs/architecture.md). AWS runboo
 ## Every finished change goes live on AWS
 
 The owner wants every change made to this project live on AWS
-(https://d2mr8m2p1qkh58.cloudfront.net). The one road there is GitHub `main`:
+(https://bizinsights.io, CloudFront `d2mr8m2p1qkh58.cloudfront.net`). The one road there is GitHub `main`:
 
 1. Commit the change on your branch, push it and open a pull request to `main`.
 2. Once CI is green, merge it. **Deploy to AWS** (`.github/workflows/aws-deploy.yml`) then runs by

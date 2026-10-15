@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { CfnOutput, Duration, RemovalPolicy, SecretValue, Stack, type StackProps } from "aws-cdk-lib";
 import * as budgets from "aws-cdk-lib/aws-budgets";
+import * as acm from "aws-cdk-lib/aws-certificatemanager";
 import * as cloudfront from "aws-cdk-lib/aws-cloudfront";
 import * as origins from "aws-cdk-lib/aws-cloudfront-origins";
 import * as cloudwatch from "aws-cdk-lib/aws-cloudwatch";
@@ -21,6 +22,7 @@ import * as sqs from "aws-cdk-lib/aws-sqs";
 import type { Construct } from "constructs";
 import { appVars, FUNCTION_DIR, REPO_ROOT, type EnvConfig } from "./config.js";
 import type { DataStack } from "./data-stack.js";
+import { viewerRequestCode } from "./viewer-request.js";
 
 type QueueName = "sync" | "webhooks" | "aggregate" | "email";
 
@@ -32,10 +34,14 @@ type QueueName = "sync" | "webhooks" | "aggregate" | "email";
  * on one origin (first-party session cookie, the same routing as the local server). Next's hashed build
  * files, `/_next/static/*`, come from an S3 bucket instead and are cached at the edge for a year.
  * CloudFront adds a secret header the function checks, so the function URL can't be used to go
- * around WAF, and a viewer-request function passes on the viewer's real address and host.
+ * around WAF, and a viewer-request function passes on the viewer's real address and host. With a
+ * domain of its own (config.ts `domain`), CloudFront answers on it with the ACM certificate and the
+ * viewer-request function sends page requests on its other names there.
  */
 export class AppStack extends Stack {
   readonly distribution: cloudfront.Distribution;
+  /** The app's origin (APP_URL): https://<domain>, or https://<distribution>.cloudfront.net. */
+  readonly appUrl: string;
   readonly apiRole: iam.IRole;
   readonly runtimeParam: string;
 
@@ -88,6 +94,10 @@ export class AppStack extends Stack {
       PAYLOADS_BUCKET: data.payloads.bucketName,
       QUEUE_URLS: Stack.of(this).toJsonString(Object.fromEntries(Object.entries(queues).map(([k, q]) => [k, q.queueUrl]))),
       SES_REGION: cfg.region,
+      // A domain is known before the deploy, so the functions get it with the release (no window in
+      // which a fresh instance reads the previous address from the runtime parameter). Without one,
+      // the address is CloudFront's, which the runtime parameter carries.
+      ...(cfg.domain ? { APP_URL: `https://${cfg.domain.name}`, API_URL: `https://${cfg.domain.name}/api` } : {}),
     };
     // Lambda caps a function's environment at 4 KB; leave room for what AWS adds.
     const envBytes = Object.entries(environment).reduce((n, [k, v]) => n + k.length + (v.startsWith("${Token") ? 200 : v.length), 0);
@@ -196,18 +206,11 @@ export class AppStack extends Stack {
 
     const viewer = new cloudfront.Function(this, "ViewerRequest", {
       functionName: `${prefix}-viewer-request`,
-      comment: "Pass the viewer's address and host to the origin (overwriting anything the client sent)",
+      comment: cfg.domain
+        ? `Pass the viewer's address and host to the origin; page requests on other names go to ${cfg.domain.name}`
+        : "Pass the viewer's address and host to the origin (overwriting anything the client sent)",
       runtime: cloudfront.FunctionRuntime.JS_2_0,
-      code: cloudfront.FunctionCode.fromInline(
-        [
-          "function handler(event) {",
-          "  var r = event.request;",
-          "  r.headers['x-insights-viewer-ip'] = { value: event.viewer.ip };",
-          "  r.headers['x-insights-viewer-host'] = { value: r.headers.host ? r.headers.host.value : '' };",
-          "  return r;",
-          "}",
-        ].join("\n"),
-      ),
+      code: cloudfront.FunctionCode.fromInline(viewerRequestCode(cfg.domain?.name)),
     });
     const securityHeaders = new cloudfront.ResponseHeadersPolicy(this, "SecurityHeaders", {
       responseHeadersPolicyName: `${prefix}-security`,
@@ -241,6 +244,13 @@ export class AppStack extends Stack {
           compress: true,
         },
       },
+      ...(cfg.domain
+        ? {
+            domainNames: [cfg.domain.name, ...cfg.domain.redirects],
+            certificate: acm.Certificate.fromCertificateArn(this, "Certificate", cfg.domain.certificateArn),
+            minimumProtocolVersion: cloudfront.SecurityPolicyProtocol.TLS_V1_2_2021,
+          }
+        : {}),
       priceClass: cloudfront.PriceClass.PRICE_CLASS_ALL,
       httpVersion: cloudfront.HttpVersion.HTTP2_AND_3,
       webAclId: webAclArn,
@@ -249,6 +259,7 @@ export class AppStack extends Stack {
     // serves pages that name them.
     this.distribution.node.addDependency(...siteFiles);
     api.alias.node.addDependency(...siteFiles);
+    this.appUrl = cfg.domain ? `https://${cfg.domain.name}` : `https://${this.distribution.distributionDomainName}`;
 
     // --- Schedules (Cron Triggers "*/15 * * * *" and "15 3 * * *", UTC). Off until cutover (config.ts).
     const schedulerRole = new iam.Role(this, "SchedulerRole", { roleName: `${prefix}-scheduler`, assumedBy: new iam.ServicePrincipal("scheduler.amazonaws.com") });
@@ -339,7 +350,11 @@ export class AppStack extends Stack {
         : undefined,
     });
 
-    new CfnOutput(this, "AppUrl", { value: `https://${this.distribution.distributionDomainName}`, description: "The app (CloudFront)" });
+    new CfnOutput(this, "AppUrl", { value: this.appUrl, description: "The app" });
+    new CfnOutput(this, "CloudFrontDomain", { value: this.distribution.distributionDomainName, description: "CloudFront's own name: the DNS target of the app's domain" });
+    // The Auth stack imported this until the app had a domain; CloudFormation refuses to drop an export
+    // another stack still uses, and this stack deploys first. Remove once Auth no longer imports it.
+    this.exportValue(this.distribution.distributionDomainName);
     new CfnOutput(this, "ApiFunctionUrl", { value: url.url, description: "Direct function URL (answers 403 to anything not from CloudFront)" });
     new CfnOutput(this, "CronFunction", { value: cron.alias.functionArn, description: "Invoke with {\"action\":\"migrate\"} or {\"action\":\"counts\"}" });
     new CfnOutput(this, "AlarmTopic", { value: topic.topicArn });

@@ -87,6 +87,17 @@ await check("http redirects to https", async () => {
   const r = await get(base.replace("https://", "http://") + "/");
   expect([301, 302, 307, 308].includes(r.status) && (r.headers.get("location") ?? "").startsWith("https://"), `status ${r.status}`);
 });
+// With a domain of its own (config.ts `domain`), CloudFront's name and www send pages there.
+const host = new URL(base).host;
+if (app.CloudFrontDomain && app.CloudFrontDomain !== host) {
+  for (const other of [app.CloudFrontDomain, `www.${host}`]) {
+    await check(`${other} sends pages to ${host}`, async () => {
+      const r = await get(`https://${other}/login?next=%2Fdashboard&x`);
+      const location = r.headers.get("location");
+      expect(r.status === 301 && location === `${base}/login?next=%2Fdashboard&x`, `status ${r.status}, location ${location}`);
+    });
+  }
+}
 
 // --- Backend
 await check("API health", async () => {

@@ -2,8 +2,8 @@
 
 bizinsights runs entirely on AWS, region **ap-southeast-2 (Sydney)**. This document is the design and
 its reasoning; it has been built and runs since 2026-10-15. What actually runs, under which names, is
-in [aws-deployment.md](aws-deployment.md), which wins where the two differ (for example, the address
-is still the CloudFront one, not a custom domain; pages come from the `api` function and only the
+in [aws-deployment.md](aws-deployment.md), which wins where the two differ (for example, the domain
+bizinsights.io has its DNS at Cloudflare, not Route 53; pages come from the `api` function and only the
 build files from S3; there is no RDS Proxy or CodeDeploy canary yet). Sign-in:
 [cognito-setup.md](cognito-setup.md); the isolated Phase 1 staging environment: [aws-staging.md](aws-staging.md).
 

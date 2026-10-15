@@ -12,6 +12,7 @@ Account `605411278365`, region `ap-southeast-2` (Sydney); the WAF web ACL lives 
 
 | Piece | AWS | Code |
 | --- | --- | --- |
+| Address | **https://bizinsights.io** (DNS at Cloudflare, below); CloudFront's own name `d2mr8m2p1qkh58.cloudfront.net` and `www` redirect pages there | `infra/cdk/lib/config.ts` `domain` |
 | UI + API | Lambda `insights-production-api` (function URL, alias `live`) behind CloudFront + WAF | `apps/aws/src/index.ts` |
 | UI build files | `/_next/static/*` from S3 `insights-production-site-605411278365` (CloudFront OAC, uploaded by `cdk deploy`, old builds kept) | `infra/cdk/lib/app-stack.ts` |
 | Background jobs | SQS `insights-production-{sync,webhooks,aggregate,email}` + `-dlq` → Lambda `insights-production-jobs` | `apps/aws/src/consumer.ts`, `sqsQueues.ts` |
@@ -100,6 +101,45 @@ CSRF, CORS, Shopify HMAC refusal, that the function URL refuses requests that sk
 on the AWS side: database private and encrypted, buckets private, functions healthy, DLQ empty.
 Sign-up and sign-in with a real address are the owner's to try (they need a mailbox).
 
+## Domain: bizinsights.io
+
+Registered at **GoDaddy**; DNS is at **Cloudflare** (account Tangoenery2004@gmail.com, zone
+`bizinsights.io`, Free plan, nameservers `noel.ns.cloudflare.com` + `rosalyn.ns.cloudflare.com`,
+set at GoDaddy). Route 53 is not used: the account has no hosted zone and no registered domain, and
+a hosted zone that isn't the registrar's nameservers would only be a second, ignored copy.
+
+| Name | Type | Value | Proxy |
+| --- | --- | --- | --- |
+| `bizinsights.io` | CNAME (flattened) | `d2mr8m2p1qkh58.cloudfront.net` | DNS only |
+| `www` | CNAME | `d2mr8m2p1qkh58.cloudfront.net` | DNS only |
+| `_629bb4707c1bf383a6f9ecec0cb165bf` | CNAME | `_70137766a706c2c3a6f74580a42334a6.wzccmgtwzk.acm-validations.aws` | DNS only |
+| `_66e52976e7c4c9a179bf51623272d845.www` | CNAME | `_4a5b10a140cad564c7f3420dc090c8dd.wzccmgtwzk.acm-validations.aws` | DNS only |
+| `_dmarc` | TXT | `v=DMARC1; p=quarantine; adkim=r; aspf=r; rua=mailto:dmarc_rua@onsecureserver.net;` (from GoDaddy, kept) | DNS only |
+| `_domainconnect` | CNAME | `_domainconnect.gd.domaincontrol.com` (from GoDaddy, kept) | as imported |
+
+- **Certificate**: ACM in us-east-1 (CloudFront's region), `bizinsights.io` + `www.bizinsights.io`,
+  `arn:aws:acm:us-east-1:605411278365:certificate/776966d7-d73c-4896-bd30-1568c9f7b3f7`, DNS-validated
+  by the two `acm-validations.aws` records. ACM renews it by itself while they stay: never delete them.
+- **DNS only, not proxied**: CloudFront already does TLS, caching, compression, HTTP/3 and AWS WAF
+  (rate limit per client IP, managed rules), and the app's own per-IP limits and audit read the
+  address CloudFront sees. Behind Cloudflare's proxy that would be a Cloudflare edge address for
+  everyone, so one busy edge could trip the 300/min API limit for all its users. Turning the proxy on
+  needs the viewer-request function and the WAF to trust `CF-Connecting-IP` from Cloudflare's ranges
+  first; with Bot Fight Mode off and a cache bypass for `/api/*`, or Shopify's webhooks get challenged.
+- **One origin**: the session cookie, the CSRF check and every OAuth callback use APP_URL
+  (`https://bizinsights.io`, set on the functions by the App stack). CloudFront answers on
+  `bizinsights.io`, `www` and its own name; the viewer-request function sends GET/HEAD on the other two
+  to `https://bizinsights.io` with a 301 (path and query unchanged) and serves other methods where they
+  arrive (webhooks and pixel events don't follow redirects).
+- **HSTS**: CloudFront's security headers send `max-age=31536000; includeSubDomains`, so every name
+  under bizinsights.io must serve HTTPS.
+- **Email**: the domain has no MX (no mailbox); SES sending from it needs its DKIM CNAMEs added here.
+
+Records before the switch (GoDaddy's parking page, imported by Cloudflare on 2026-10-15), for a
+rollback: `A bizinsights.io 15.197.148.33` and `A bizinsights.io 3.33.130.190` (both proxied),
+`CNAME www → bizinsights.io` (proxied). Putting them back (and `domain` out of config.ts) returns the
+app to `d2mr8m2p1qkh58.cloudfront.net`.
+
 ## Roll back
 
 `node infra/cdk/scripts/rollback.mjs` moves the `live` aliases of api, jobs and cron to the previous
@@ -124,9 +164,10 @@ PixMagic store's webhooks, `GOOGLE_ADS_CLIENT_SECRET` for AdSense refreshes) set
 3. **Schedules on:** GitHub variable `AWS_SCHEDULES=on`, then the next Deploy to AWS (the merge of the
    Shopify URL change in step 4) turns them on.
 4. **Shopify:** `application_url`, `redirect_urls` and webhook `uri` in `shopify-app/shopify.app.toml`
-   and `shopify.app.pixmagic.toml` → the AWS address, merged, then `shopify app deploy` and
-   `shopify app deploy --config pixmagic` (owner's Shopify login).
-5. **Old address forwards:** the same stand-in with `--var MOVE_PHASE:forward`, deployed at 100%:
+   and `shopify.app.pixmagic.toml` already name `https://bizinsights.io`: `shopify app deploy` and
+   `shopify app deploy --config pixmagic` (owner's Shopify login) make them live.
+5. **Old address forwards:** the same stand-in with `--var MOVE_PHASE:forward --var
+   MOVED_TO:https://bizinsights.io`, deployed at 100%:
    pages and launches redirect to AWS; webhooks and pixel events are passed through unchanged.
 6. **Repair:** `aws lambda invoke --function-name insights-production-cron:live --cli-binary-format
    raw-in-base64-out --payload '{"action":"after-move"}' out.json`. Every store's web pixel is pointed
@@ -201,7 +242,9 @@ Retiring it, on the owner's go-ahead, once AWS has been production for two quiet
   deploy with `-c googleClientId=<client id>`.
 - **Provider secrets** not on this PC: META_APP_SECRET, GOOGLE_ADS_CLIENT_SECRET, WHATSAPP_APP_SECRET,
   WHATSAPP_WEBHOOK_VERIFY_TOKEN, SHOPIFY_APP_SECRET_PIXMAGIC (`put-secrets.mjs --set`).
-- **Custom domain** (optional): Route 53 or Cloudflare DNS + an ACM certificate in us-east-1.
+- **Custom domain**: done, bizinsights.io (above). Provider consoles still list the old addresses:
+  Google/Meta OAuth redirect URIs and Shopify's app URLs move to `https://bizinsights.io/api/...` with
+  the cutover (`shopify app deploy`, both configs).
 
 ## Cost (lean tier, US$/month, on-demand, approximate)
 

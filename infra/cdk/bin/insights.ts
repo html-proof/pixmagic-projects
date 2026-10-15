@@ -28,7 +28,7 @@ const appStack = new AppStack(app, name("App"), cfg, data, edge.webAclArn, { env
 new AuthStack(app, name("Auth"), cfg, {
   env,
   description: "Insights: Cognito sign-in and runtime settings",
-  appUrl: `https://${appStack.distribution.distributionDomainName}`,
+  appUrl: appStack.appUrl,
   apiRole: appStack.apiRole,
   runtimeParam: appStack.runtimeParam,
   googleClientId: String(app.node.tryGetContext("googleClientId") ?? "") || undefined,

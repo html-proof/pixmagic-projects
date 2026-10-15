@@ -28,6 +28,14 @@ export interface EnvConfig {
    * would be synced twice and their customers emailed twice. Turn on at cutover: `-c schedules=on`.
    */
   schedulesEnabled: boolean;
+  /**
+   * The app's own address instead of CloudFront's. DNS for it is at Cloudflare (records DNS only,
+   * pointing at the distribution); the certificate is in ACM in us-east-1 (CloudFront's region),
+   * validated by a CNAME there (docs/aws-deployment.md, "Domain: bizinsights.io"). Page requests on any
+   * other name (`redirects`, the cloudfront.net address) are redirected to `name`.
+   * Unset: the app lives on the cloudfront.net address.
+   */
+  domain?: { name: string; redirects: string[]; certificateArn: string };
   /** Prefix of the Cognito domain, <prefix>.auth.<region>.amazoncognito.com (unique in the region). */
   cognitoDomainPrefix: string;
   /** Where alarm and budget emails go (empty: the topic and budget exist without subscribers). */
@@ -59,6 +67,11 @@ const ENVIRONMENTS: Record<EnvConfig["name"], Omit<EnvConfig, "schedulesEnabled"
     dbBackupDays: 14,
     natGateways: 1,
     logRetentionDays: 90,
+    domain: {
+      name: "bizinsights.io",
+      redirects: ["www.bizinsights.io"],
+      certificateArn: "arn:aws:acm:us-east-1:605411278365:certificate/776966d7-d73c-4896-bd30-1568c9f7b3f7",
+    },
     cognitoDomainPrefix: "insights-605411278365",
     monthlyBudgetUsd: 150,
     githubRepo: "html-proof/pixmagic-projects",
