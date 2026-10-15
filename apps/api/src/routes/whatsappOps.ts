@@ -1,50 +1,48 @@
 import { z } from "zod";
-import { Prisma, systemDb, withTenant, type WhatsappAutomationRule, type WhatsappCampaign } from "@app/db";
+import { Prisma, systemDb, withTenant, type WhatsappCampaign } from "@app/db";
 import {
   audit,
-  dryRunAutomation,
+  campaignMetrics,
+  canRequeue,
+  cancelScheduled,
+  changeCampaignState,
   estimateAudience,
   marketingAllowed,
   merchantOrderStep,
   optOutContact,
-  orderValues,
   parseConfig,
   parseRule,
-  NotRetryableError,
+  remindCart,
   requeueMessage,
-  scheduleMessage,
-  storeName,
+  rulesLike,
+  scheduleCampaign,
+  testAutomation,
   upsertContact,
+  validateRule,
   waDecrypt,
-  contactFirstName,
-  money,
-  numberOptedOut,
   trackingUrl,
-  type AutomationSubject,
+  type CampaignMetrics,
 } from "@app/core";
 import {
   audienceSchema,
   automationActionSchema,
   AUTOMATION_TRIGGERS,
+  campaignEditable,
   conditionSchema,
   errorExplanation,
-  kindSetting,
   libraryTemplate,
+  messageKinds,
   MODERATION_REASONS,
   normalizePhone,
   OCCASIONS,
   ruleConflicts,
   templateMappingSchema,
-  templateShape,
-  type AutomationTrigger,
-  type RuleLike,
-  type TemplateComponent,
 } from "@app/shared";
 import { body, clientIp, HttpError, requireWorkspace, type Deps } from "../context.js";
 import type { App } from "../app.js";
 import { limit, LIMITS } from "../rateLimit.js";
 import { cursorPage } from "../pagination.js";
-import { base, sampleValues, waStore } from "./whatsappCommon.js";
+import { base, waStore } from "./whatsappCommon.js";
 
 /** Day boundaries from ?from=YYYY-MM-DD&to=YYYY-MM-DD (UTC), each optional. */
 function range(q: Record<string, string>) {
@@ -54,18 +52,6 @@ function range(q: Record<string, string>) {
     ...(q.to && day.test(q.to) ? { lt: new Date(new Date(`${q.to}T00:00:00Z`).getTime() + 86_400_000) } : {}),
   };
 }
-
-const ORDER_KINDS = ["order_confirmation", "payment_confirmed", "order_processing", "order_packed", "order_cancelled", "refund_processed"];
-const DELIVERY_KINDS = ["order_shipped", "out_for_delivery", "order_delivered", "delivery_failed"];
-const GROUP_KINDS: Record<string, string[]> = {
-  orders: ORDER_KINDS,
-  delivery: DELIVERY_KINDS,
-  carts: ["abandoned_cart_1", "abandoned_cart_2"],
-  reviews: ["review_request", "review_reminder"],
-  campaign: ["campaign"],
-  automation: ["automation"],
-  test: ["test"],
-};
 
 const httpsUrl = z.string().trim().url().max(2000).refine((u) => u.startsWith("https://"), "must start with https://");
 
@@ -99,11 +85,6 @@ const ruleInput = z.object({
   action: automationActionSchema,
 });
 
-const asRule = (r: WhatsappAutomationRule): RuleLike | null => {
-  const p = parseRule(r);
-  return p ? { id: r.id, name: r.name, enabled: r.enabled, trigger: r.trigger as AutomationTrigger, conditions: p.conditions, action: p.action } : null;
-};
-
 export function whatsappOpsRoutes(app: App, deps: Deps) {
   // ---------------------------------------------------------------- message history
 
@@ -114,11 +95,12 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
     const q = c.req.query();
     const paging = cursorPage(q, 50);
     const created = range(q);
+    const groupKinds = q.group ? messageKinds(q.group) : null;
     const where: Prisma.WhatsappMessageWhereInput = {
       storeId,
       workspaceId: ws,
       ...(q.status ? { status: { in: q.status.split(",").slice(0, 8) } } : {}),
-      ...(q.kind ? { kind: q.kind } : q.group && GROUP_KINDS[q.group] ? { kind: { in: GROUP_KINDS[q.group] } } : {}),
+      ...(q.kind ? { kind: q.kind } : groupKinds ? { kind: { in: groupKinds } } : {}),
       ...(q.campaignId ? { campaignId: q.campaignId } : {}),
       ...(q.trackingId ? { trackingId: q.trackingId } : {}),
       ...(q.q ? { OR: [{ orderName: { contains: q.q.slice(0, 40), mode: "insensitive" as const } }, { providerMessageId: q.q.slice(0, 200) }, { phoneMasked: { endsWith: q.q.replace(/\D/g, "").slice(-3) || "~" } }] } : {}),
@@ -159,7 +141,7 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
         attributedOrderId: m.attributedOrderId,
         test: m.test,
         createdAt: m.createdAt,
-        canRetry: !!m.paramsEnc && ["failed", "skipped", "cancelled"].includes(m.status),
+        canRetry: canRequeue(m),
         canCancel: m.status === "scheduled",
       })),
       nextCursor,
@@ -172,13 +154,7 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
     await waStore(ws, storeId);
     const msg = await withTenant(ws, (tx) => tx.whatsappMessage.findFirst({ where: { id, storeId, workspaceId: ws } }));
     if (!msg) throw new HttpError(404, "Not found", "not_found");
-    try {
-      await requeueMessage(msg, deps);
-    } catch (err) {
-      // Anything else (database, queue) is a real failure: the global handler logs it.
-      if (err instanceof NotRetryableError) throw new HttpError(409, err.message, "not_retryable");
-      throw err;
-    }
+    await requeueMessage(msg, deps);
     await audit({ workspaceId: ws, actorUserId: access.user!.id, action: "whatsapp.message_retried", targetType: "whatsapp_message", targetId: id, ip: clientIp(c) });
     return c.json({ ok: true });
   });
@@ -187,10 +163,7 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
     const { ws, storeId, id } = c.req.param();
     const access = await requireWorkspace(c, deps, ws, "stores:manage");
     await waStore(ws, storeId);
-    const { count } = await systemDb.whatsappMessage.updateMany({
-      where: { id, storeId, workspaceId: ws, status: "scheduled" },
-      data: { status: "cancelled", cancelledAt: new Date(), reason: "cancelled_by_merchant", paramsEnc: null },
-    });
+    const count = await cancelScheduled({ id, storeId, workspaceId: ws }, "cancelled_by_merchant");
     if (!count) throw new HttpError(409, "Only a message that hasn't gone out yet can be cancelled.", "not_cancellable");
     await audit({ workspaceId: ws, actorUserId: access.user!.id, action: "whatsapp.message_cancelled", targetType: "whatsapp_message", targetId: id, ip: clientIp(c) });
     return c.json({ ok: true });
@@ -346,44 +319,7 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
     await limit(deps.coord, `rl:wa-remind:${storeId}`, LIMITS.waRemind);
     const checkout = await withTenant(ws, (tx) => tx.abandonedCheckout.findFirst({ where: { id, storeId, workspaceId: ws } }));
     if (!checkout) throw new HttpError(404, "Not found", "not_found");
-    if (!["open", "reminded", "ineligible"].includes(checkout.status)) throw new HttpError(409, "This checkout has been completed or has expired.", "checkout_closed");
-    if (!checkout.recoveryUrlEnc) throw new HttpError(409, "Shopify didn't provide a link back to this checkout.", "no_checkout_link");
-    const [settings, conn, contact] = await Promise.all([
-      systemDb.whatsappSettings.findUnique({ where: { storeId } }),
-      systemDb.whatsappConnection.findUnique({ where: { storeId } }),
-      checkout.contactId ? systemDb.whatsappContact.findUnique({ where: { id: checkout.contactId } }) : null,
-    ]);
-    if (!conn) throw new HttpError(409, "Connect WhatsApp first.", "not_connected");
-    if (!contact) throw new HttpError(409, "There's no WhatsApp number for this checkout.", "no_phone");
-    const cfg = parseConfig(settings?.config);
-    const s = kindSetting(cfg, "abandoned_cart_1");
-    if (!s.templateName) throw new HttpError(409, "Choose a cart reminder template on Abandoned carts first.", "template_required");
-    const template = await systemDb.whatsappTemplate.findUnique({ where: { connectionId_name_language: { connectionId: conn.id, name: s.templateName, language: s.language } } });
-    if (!template || template.status !== "APPROVED") throw new HttpError(409, "The cart reminder template isn't approved yet.", "template_not_approved");
-    if (template.category === "MARKETING" && !marketingAllowed(cfg, contact)) {
-      throw new HttpError(409, "This customer hasn't agreed to WhatsApp marketing, so a cart reminder can't be sent.", "no_marketing_consent");
-    }
-    const { message, created } = await scheduleMessage(
-      {
-        store,
-        kind: "abandoned_cart_1",
-        dedupeKey: `cart:${checkout.checkoutToken}:manual`,
-        contact,
-        template: { name: s.templateName, language: s.language },
-        mapping: s.mapping,
-        values: {
-          customer_name: contactFirstName(contact) || "there",
-          store_name: storeName(store),
-          cart_total: money(checkout.totalPrice, checkout.currency),
-          support_contact: cfg.supportPhone || cfg.supportEmail || null,
-        },
-        scheduledFor: new Date(),
-        checkoutId: checkout.id,
-        clickUrl: waDecrypt(storeId, "recovery", checkout.recoveryUrlEnc),
-      },
-      deps,
-    );
-    if (!created) throw new HttpError(409, "A reminder was already sent from here for this checkout.", "already_reminded");
+    const message = await remindCart(store, checkout, deps);
     await audit({ workspaceId: ws, actorUserId: access.user!.id, action: "whatsapp.cart_reminder_sent", targetType: "abandoned_checkout", targetId: checkout.id, ip: clientIp(c) });
     return c.json({ messageId: message.id, status: message.status });
   });
@@ -465,61 +401,7 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
 
   // ---------------------------------------------------------------- campaigns
 
-  async function campaignMetrics(ws: string, campaigns: WhatsappCampaign[], storeId: string, attributionDays: number) {
-    const ids = campaigns.map((x) => x.id);
-    if (!ids.length) return new Map<string, Record<string, unknown>>();
-    const [byStatus, clicks, attributed] = await withTenant(ws, (tx) =>
-      Promise.all([
-        tx.whatsappMessage.groupBy({ by: ["campaignId", "status"], where: { campaignId: { in: ids }, workspaceId: ws }, _count: { _all: true } }),
-        tx.whatsappMessage.groupBy({ by: ["campaignId"], where: { campaignId: { in: ids }, workspaceId: ws, clickedAt: { not: null } }, _count: { _all: true } }),
-        tx.whatsappMessage.groupBy({ by: ["campaignId"], where: { campaignId: { in: ids }, workspaceId: ws, attributedOrderId: { not: null } }, _count: { _all: true }, _sum: { attributedRevenue: true } }),
-      ]),
-    );
-    // Orders that used each campaign's discount code while it ran (and its attribution days after),
-    // for every campaign with a code at once: one query, not one per campaign.
-    const now = Date.now();
-    const windows = campaigns.flatMap((camp) =>
-      camp.discountCode && camp.startedAt
-        ? [{ id: camp.id, code: camp.discountCode, since: camp.startedAt.toISOString(), until: new Date((camp.endAt?.getTime() ?? now) + attributionDays * 86_400_000).toISOString() }]
-        : [],
-    );
-    const codeRows = windows.length
-      ? await withTenant(ws, (tx) =>
-          tx.$queryRaw<Array<{ id: string; orders: number; revenue: string }>>`
-            SELECT w.id, COUNT(o.id)::int AS orders, COALESCE(SUM(o.total_price), 0)::text AS revenue
-            FROM jsonb_to_recordset(${JSON.stringify(windows)}::jsonb) AS w(id text, code text, since text, until text)
-            LEFT JOIN orders o
-              ON o.store_id = ${storeId} AND o.workspace_id = ${ws} AND o.cancelled_at IS NULL
-             AND o.shopify_created_at >= (w.since)::timestamptz AT TIME ZONE 'UTC'
-             AND o.shopify_created_at < (w.until)::timestamptz AT TIME ZONE 'UTC'
-             AND EXISTS (SELECT 1 FROM unnest(o.discount_codes) code WHERE lower(code) = lower(w.code))
-            GROUP BY w.id`,
-        )
-      : [];
-    const out = new Map<string, Record<string, unknown>>();
-    for (const camp of campaigns) {
-      const n = (s: string[]) => byStatus.filter((b) => b.campaignId === camp.id && s.includes(b.status)).reduce((sum, b) => sum + b._count._all, 0);
-      const a = attributed.find((x) => x.campaignId === camp.id);
-      const r = codeRows.find((x) => x.id === camp.id);
-      const codeOrders = r ? { orders: r.orders, revenue: Number(r.revenue) } : null;
-      out.set(camp.id, {
-        recipients: n(["scheduled", "sending", "sent", "delivered", "read", "failed", "skipped", "cancelled"]),
-        waiting: n(["scheduled", "sending"]),
-        sent: n(["sent", "delivered", "read"]),
-        delivered: n(["delivered", "read"]),
-        read: n(["read"]),
-        failed: n(["failed"]),
-        skipped: n(["skipped", "cancelled"]),
-        clicks: clicks.find((x) => x.campaignId === camp.id)?._count._all ?? 0,
-        conversions: a?._count._all ?? 0,
-        revenue: Number(a?._sum.attributedRevenue ?? 0),
-        codeOrders,
-      });
-    }
-    return out;
-  }
-
-  const publicCampaign = (camp: WhatsappCampaign, metrics?: Record<string, unknown>) => ({
+  const publicCampaign = (camp: WhatsappCampaign, metrics?: CampaignMetrics) => ({
     id: camp.id,
     name: camp.name,
     occasion: camp.occasion,
@@ -550,7 +432,7 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
     const [rows, settings] = await withTenant(ws, (tx) =>
       Promise.all([tx.whatsappCampaign.findMany({ where: { storeId, workspaceId: ws }, orderBy: { createdAt: "desc" }, take: 100 }), tx.whatsappSettings.findUnique({ where: { storeId } })]),
     );
-    const metrics = await campaignMetrics(ws, rows, storeId, parseConfig(settings?.config).attributionDays);
+    const metrics = await campaignMetrics(ws, storeId, rows, parseConfig(settings?.config).attributionDays);
     return c.json({ campaigns: rows.map((r) => publicCampaign(r, metrics.get(r.id))) });
   });
 
@@ -609,7 +491,7 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
     const camp = await ownCampaign(ws, storeId, id);
     const settings = await systemDb.whatsappSettings.findUnique({ where: { storeId } });
     const cfg = parseConfig(settings?.config);
-    const metrics = await campaignMetrics(ws, [camp], storeId, cfg.attributionDays);
+    const metrics = await campaignMetrics(ws, storeId, [camp], cfg.attributionDays);
     const estimate = ["draft", "scheduled"].includes(camp.status) ? await estimateAudience(storeId, camp.audience, cfg) : null;
     return c.json({ campaign: publicCampaign(camp, metrics.get(camp.id)), estimate });
   });
@@ -620,7 +502,7 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
     const access = await requireWorkspace(c, deps, ws, "stores:manage");
     await waStore(ws, storeId);
     const camp = await ownCampaign(ws, storeId, id);
-    if (!["draft", "scheduled"].includes(camp.status)) throw new HttpError(409, "Only a campaign that hasn't started can be edited.", "not_editable");
+    if (!campaignEditable(camp.status)) throw new HttpError(409, "Only a campaign that hasn't started can be edited.", "not_editable");
     const input = campaignInput.partial().parse(await body(c));
     const startAt = input.startAt ?? camp.startAt;
     const endAt = input.endAt === undefined ? camp.endAt : input.endAt;
@@ -661,49 +543,27 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
     return c.json({ ok: true });
   });
 
-  /**
-   * Schedule (authorize) a campaign. The merchant confirms the recipient count they were shown;
-   * if it changed since, they're shown the new one first. Needs an approved marketing template, a
-   * registered number and verified webhooks (otherwise STOP replies couldn't reach us).
-   */
+  /** Schedule (authorize) a campaign: the merchant confirms the recipient count they were shown (scheduleCampaign). */
   app.post(`${base}/campaigns/:id/schedule`, async (c) => {
     const { ws, storeId, id } = c.req.param();
     const access = await requireWorkspace(c, deps, ws, "stores:manage");
     await waStore(ws, storeId);
     const { confirmRecipients } = z.object({ confirmRecipients: z.number().int().min(0) }).parse(await body(c));
     const camp = await ownCampaign(ws, storeId, id);
-    if (camp.status !== "draft") throw new HttpError(409, "This campaign is already scheduled or has run.", "not_draft");
-    const [conn, settings] = await Promise.all([systemDb.whatsappConnection.findUnique({ where: { storeId } }), systemDb.whatsappSettings.findUnique({ where: { storeId } })]);
-    if (!conn || conn.status !== "active" || !conn.registered) throw new HttpError(409, "Connect and register your WhatsApp number first.", "not_connected");
-    if (!conn.webhookVerifiedAt) throw new HttpError(409, "Meta hasn't reached Insights' webhook yet, so opt-out replies couldn't be received. Finish the webhook step on Connect WhatsApp first.", "webhook_unverified");
-    const template = await systemDb.whatsappTemplate.findUnique({ where: { connectionId_name_language: { connectionId: conn.id, name: camp.templateName, language: camp.templateLanguage } } });
-    if (!template || template.status !== "APPROVED") throw new HttpError(409, "The campaign's template isn't approved by Meta yet.", "template_not_approved");
-    if (template.category !== "MARKETING") throw new HttpError(409, "Campaigns must use a template Meta approved as Marketing.", "not_marketing_template");
-    const shape = templateShape(template.components as unknown as TemplateComponent[]);
-    const mapping = templateMappingSchema.parse(camp.mapping ?? {});
-    if (mapping.body.length < shape.bodyVars) throw new HttpError(400, `The template has ${shape.bodyVars} variables; fill each one.`, "mapping_incomplete");
-    if (shape.headerFormat === "IMAGE" && !camp.mediaUrl) throw new HttpError(400, "This template needs an image: add the image's https link.", "media_required");
-    if (shape.dynamicUrlButtons.length && !camp.linkUrl) throw new HttpError(400, "This template has a link button: add where it should go.", "link_required");
-    if (camp.endAt && camp.endAt <= new Date()) throw new HttpError(400, "The campaign's end has already passed.", "ended");
-    const estimate = await estimateAudience(storeId, camp.audience, parseConfig(settings?.config));
-    if (estimate !== confirmRecipients) {
-      return c.json({ error: "recipients_changed", message: `The audience is now ${estimate} customers. Please confirm again.`, recipients: estimate }, 409);
+    const result = await scheduleCampaign(camp, confirmRecipients, access.user!.id);
+    if ("recipientsChanged" in result) {
+      return c.json({ error: "recipients_changed", message: `The audience is now ${result.recipientsChanged} customers. Please confirm again.`, recipients: result.recipientsChanged }, 409);
     }
-    if (estimate === 0) throw new HttpError(409, "No customers in this audience have opted in to WhatsApp marketing.", "no_recipients");
-    const updated = await systemDb.whatsappCampaign.update({
-      where: { id: camp.id },
-      data: { status: "scheduled", estimatedRecipients: estimate, approvedByUserId: access.user!.id, approvedAt: new Date() },
-    });
     await audit({
       workspaceId: ws,
       actorUserId: access.user!.id,
       action: "whatsapp.campaign_scheduled",
       targetType: "whatsapp_campaign",
       targetId: camp.id,
-      metadata: { recipients: estimate, startAt: camp.startAt, template: camp.templateName },
+      metadata: { recipients: result.recipients, startAt: camp.startAt, template: camp.templateName },
       ip: clientIp(c),
     });
-    return c.json({ campaign: publicCampaign(updated) });
+    return c.json({ campaign: publicCampaign(result.campaign) });
   });
 
   for (const action of ["pause", "resume", "cancel"] as const) {
@@ -712,16 +572,7 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
       const access = await requireWorkspace(c, deps, ws, "stores:manage");
       await waStore(ws, storeId);
       const camp = await ownCampaign(ws, storeId, id);
-      const from = action === "pause" ? ["scheduled", "sending"] : action === "resume" ? ["paused"] : ["draft", "scheduled", "sending", "paused"];
-      if (!from.includes(camp.status)) throw new HttpError(409, `A ${camp.status} campaign can't be ${action === "cancel" ? "cancelled" : action + "d"}.`, "invalid_state");
-      const status = action === "pause" ? "paused" : action === "resume" ? (camp.startedAt ? "sending" : "scheduled") : "cancelled";
-      await systemDb.whatsappCampaign.update({ where: { id: camp.id }, data: { status, ...(action === "cancel" ? { completedAt: new Date() } : {}) } });
-      if (action === "cancel") {
-        await systemDb.whatsappMessage.updateMany({
-          where: { campaignId: camp.id, status: "scheduled" },
-          data: { status: "cancelled", cancelledAt: new Date(), reason: "campaign_cancelled", paramsEnc: null },
-        });
-      }
+      const status = await changeCampaignState(camp, action);
       const done = { pause: "paused", resume: "resumed", cancel: "cancelled" }[action];
       await audit({ workspaceId: ws, actorUserId: access.user!.id, action: `whatsapp.campaign_${done}`, targetType: "whatsapp_campaign", targetId: camp.id, ip: clientIp(c) });
       return c.json({ ok: true, status });
@@ -740,7 +591,7 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
         tx.whatsappAutomationRun.groupBy({ by: ["ruleId", "outcome"], where: { storeId, workspaceId: ws, createdAt: { gte: new Date(Date.now() - 30 * 86_400_000) } }, _count: { _all: true }, _max: { createdAt: true } }),
       ]),
     );
-    const all = rules.map(asRule).filter((r): r is RuleLike => !!r);
+    const all = rulesLike(rules);
     return c.json({
       automations: rules.map((r) => {
         const like = all.find((x) => x.id === r.id);
@@ -761,28 +612,12 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
     });
   });
 
-  async function checkRule(ws: string, storeId: string, candidate: RuleLike) {
-    const others = (await systemDb.whatsappAutomationRule.findMany({ where: { storeId, workspaceId: ws } })).map(asRule).filter((r): r is RuleLike => !!r);
-    const conflicts = ruleConflicts(candidate, others);
-    const blocking = conflicts.find((x) => x.severity === "block");
-    if (blocking) throw new HttpError(409, blocking.message, "rule_conflict");
-    const a = candidate.action;
-    if (a.type === "send_template" || a.type === "schedule_reminder") {
-      const conn = await systemDb.whatsappConnection.findUnique({ where: { storeId } });
-      const t = conn ? await systemDb.whatsappTemplate.findUnique({ where: { connectionId_name_language: { connectionId: conn.id, name: a.templateName, language: a.language } } }) : null;
-      if (!t) throw new HttpError(400, `"${a.templateName}" (${a.language}) isn't in your WhatsApp account.`, "template_missing");
-      const shape = templateShape(t.components as unknown as TemplateComponent[]);
-      if (a.mapping.body.length < shape.bodyVars) throw new HttpError(400, `The template has ${shape.bodyVars} variables; fill each one.`, "mapping_incomplete");
-    }
-    return conflicts;
-  }
-
   app.post(`${base}/automations`, async (c) => {
     const { ws, storeId } = c.req.param();
     const access = await requireWorkspace(c, deps, ws, "stores:manage");
     await waStore(ws, storeId);
     const input = ruleInput.parse(await body(c));
-    const conflicts = await checkRule(ws, storeId, { id: "new", ...input });
+    const conflicts = await validateRule(ws, storeId, { id: "new", ...input });
     const rule = await systemDb.whatsappAutomationRule.create({
       data: { workspaceId: ws, storeId, name: input.name, enabled: input.enabled, trigger: input.trigger, conditions: input.conditions as Prisma.InputJsonValue, action: input.action as Prisma.InputJsonValue, createdByUserId: access.user!.id },
     });
@@ -805,7 +640,7 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
       conditions: patch.conditions ?? current?.conditions ?? [],
       action: patch.action ?? current?.action,
     });
-    const conflicts = await checkRule(ws, storeId, { id: rule.id, ...merged });
+    const conflicts = await validateRule(ws, storeId, { id: rule.id, ...merged });
     await systemDb.whatsappAutomationRule.update({
       where: { id: rule.id },
       data: { name: merged.name, enabled: merged.enabled, trigger: merged.trigger, conditions: merged.conditions as Prisma.InputJsonValue, action: merged.action as Prisma.InputJsonValue },
@@ -820,7 +655,7 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
     await waStore(ws, storeId);
     const { count } = await systemDb.whatsappAutomationRule.deleteMany({ where: { id, storeId, workspaceId: ws } });
     if (!count) throw new HttpError(404, "Not found", "not_found");
-    await systemDb.whatsappMessage.updateMany({ where: { ruleId: id, status: "scheduled" }, data: { status: "cancelled", cancelledAt: new Date(), reason: "rule_deleted", paramsEnc: null } });
+    await cancelScheduled({ ruleId: id }, "rule_deleted");
     await audit({ workspaceId: ws, actorUserId: access.user!.id, action: "whatsapp.automation_deleted", targetType: "whatsapp_automation_rule", targetId: id, ip: clientIp(c) });
     return c.json({ ok: true });
   });
@@ -844,54 +679,9 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
     const input = z.object({ trackingId: z.string().max(40).optional(), phone: z.string().max(30).optional() }).parse(await body(c));
     const rule = await withTenant(ws, (tx) => tx.whatsappAutomationRule.findFirst({ where: { id, storeId, workspaceId: ws } }));
     if (!rule) throw new HttpError(404, "Not found", "not_found");
-    const settings = await systemDb.whatsappSettings.findUnique({ where: { storeId } });
-    const cfg = parseConfig(settings?.config);
-    const tracking = await withTenant(ws, (tx) =>
-      tx.orderTracking.findFirst({ where: { storeId, workspaceId: ws, ...(input.trackingId ? { id: input.trackingId } : {}) }, orderBy: { orderCreatedAt: "desc" } }),
-    );
-    const contact = tracking?.contactId ? await systemDb.whatsappContact.findUnique({ where: { id: tracking.contactId } }) : null;
-    const items = ((tracking?.items as Array<{ productId: string; title: string }>) ?? []);
-    const subject: AutomationSubject = {
-      key: tracking ? `order:${tracking.shopifyOrderId}` : "example",
-      store,
-      cfg,
-      contact,
-      tracking,
-      facts: tracking
-        ? { orderValue: Number(tracking.totalPrice), productIds: items.map((i) => i.productId), productTitles: items.map((i) => i.title), orderStatus: tracking.status, country: tracking.country, marketingConsent: contact ? marketingAllowed(cfg, contact) : false }
-        : { orderValue: 0, marketingConsent: false },
-      values: tracking ? orderValues(store, cfg, tracking, contact ? contactFirstName(contact) : null) : sampleValues(store, cfg),
-    };
-    const result = await dryRunAutomation(rule, subject);
-    let testMessageId: string | null = null;
-    const parsed = parseRule(rule);
-    if (input.phone && parsed && (parsed.action.type === "send_template" || parsed.action.type === "schedule_reminder")) {
-      const phone = normalizePhone(input.phone, null);
-      if (!phone) throw new HttpError(400, "Enter the number in international format, starting with + and the country code.", "invalid_phone");
-      if (await numberOptedOut(storeId, phone.waId)) throw new HttpError(409, "That number replied STOP to this store, so nothing (not even a test) can be sent to it.", "opted_out");
-      await limit(deps.coord, `rl:wa-test:${storeId}`, LIMITS.waTest);
-      const { message } = await scheduleMessage(
-        {
-          store,
-          kind: "test",
-          dedupeKey: `test:rule:${rule.id}:${Date.now()}`,
-          contact: null,
-          template: { name: parsed.action.templateName, language: parsed.action.language },
-          mapping: parsed.action.mapping,
-          values: { ...sampleValues(store, cfg), ...subject.values, customer_name: "Test" },
-          scheduledFor: new Date(),
-          ruleId: rule.id,
-          test: { to: phone.waId },
-        },
-        deps,
-      );
-      testMessageId = message.id;
-    }
-    await systemDb.whatsappAutomationRun
-      .create({ data: { workspaceId: ws, storeId, ruleId: rule.id, trigger: rule.trigger, subjectKey: `test:${Date.now()}`, outcome: "test", detail: result.valid ? (result.wouldRun ? "Would run" : "Conditions not met") : result.error, messageId: testMessageId } })
-      .catch(() => undefined);
+    const result = await testAutomation(store, rule, input, { ...deps, beforeSend: () => limit(deps.coord, `rl:wa-test:${storeId}`, LIMITS.waTest) });
     await audit({ workspaceId: ws, actorUserId: access.user!.id, action: "whatsapp.automation_tested", targetType: "whatsapp_automation_rule", targetId: rule.id, ip: clientIp(c) });
-    return c.json({ ...result, order: tracking ? { id: tracking.id, orderName: tracking.orderName } : null, testMessageId });
+    return c.json(result);
   });
 
   // ---------------------------------------------------------------- consent
@@ -911,7 +701,7 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
     const sum = (f: (x: (typeof byStatus)[number]) => boolean) => byStatus.filter(f).reduce((s, x) => s + x._count._all, 0);
     return c.json({
       contacts: sum(() => true) + optedOut,
-      marketingEligible: sum((x) => x.marketingStatus === "opted_in" && (x.marketingSource !== "shopify_sms" || cfg.smsConsentCountsForMarketing)),
+      marketingEligible: sum((x) => marketingAllowed(cfg, { ...x, optedOut: false })),
       optedInViaShopifySms: sum((x) => x.marketingStatus === "opted_in" && x.marketingSource === "shopify_sms"),
       marketingOptedOut: sum((x) => x.marketingStatus === "opted_out"),
       optedOutOfEverything: optedOut,

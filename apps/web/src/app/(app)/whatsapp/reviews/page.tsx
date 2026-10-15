@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { MODERATION_LABEL, MODERATION_REASONS, type ModerationReason } from "@app/shared/whatsapp";
+import { kindsOf, MODERATION_LABEL, MODERATION_REASONS, type ModerationReason } from "@app/shared/whatsapp";
 import { Badge, Empty, Stat, type Tone } from "@/components/dashboard/primitives";
 import { useApp } from "@/components/AppContext";
 import { api, fmtNum, useApi } from "@/lib/api";
@@ -96,7 +96,7 @@ export default function Reviews() {
 
       <KindsSection
         title="Review requests"
-        kinds={["review_request", "review_reminder"]}
+        kinds={kindsOf("reviews")}
         extra={(cfg, set) => (
           <div className="mt-3 grid gap-3 border-t border-border pt-3 sm:grid-cols-3">
             <div>

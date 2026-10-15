@@ -22,7 +22,8 @@ import {
   waPlatformConfig,
   waTokenInfo,
   WhatsappApiError,
-  WhatsappConnectError,
+  providerDetail,
+  sampleValues,
   connectionToken,
   numberOptedOut,
   syncTemplates,
@@ -43,7 +44,7 @@ import { body, clientIp, HttpError, requireWorkspace, type Deps } from "../conte
 import type { App } from "../app.js";
 import { limit, LIMITS } from "../rateLimit.js";
 import { whatsappOpsRoutes } from "./whatsappOps.js";
-import { base, publicConnection, publicTemplate, sampleValues, waStore } from "./whatsappCommon.js";
+import { base, publicConnection, publicTemplate, waStore } from "./whatsappCommon.js";
 
 /**
  * WhatsApp for a store, for the signed-in merchant: connect the number (Meta's Embedded Signup,
@@ -68,9 +69,9 @@ function templateCheck(templates: WhatsappTemplate[], s: KindSetting): { state: 
   return { state: "ready", problem: null, category: t.category };
 }
 
+/** Meta refused a connect step: say so with Meta's reason (WhatsappConnectError answers itself, as a 400). */
 const connectError = (err: unknown): never => {
-  if (err instanceof WhatsappConnectError) throw new HttpError(400, err.message, err.code);
-  if (err instanceof WhatsappApiError) throw new HttpError(502, `Meta didn't accept the request: ${err.details ?? err.title}`, "meta_error");
+  if (err instanceof WhatsappApiError) throw new HttpError(502, `Meta didn't accept the request: ${providerDetail(err.details ?? err.title)}`, "meta_error");
   throw err;
 };
 
@@ -303,7 +304,7 @@ export function whatsappRoutes(app: App, deps: Deps) {
       const updated = await refreshConnection(conn, deps.fetchImpl);
       return c.json({ connection: publicConnection(updated, true) });
     } catch (err) {
-      if (err instanceof WhatsappApiError) throw new HttpError(502, `Meta didn't answer as expected: ${err.details ?? err.title}`, "meta_error");
+      if (err instanceof WhatsappApiError) throw new HttpError(502, `Meta didn't answer as expected: ${providerDetail(err.details ?? err.title)}`, "meta_error");
       throw err;
     }
   });
@@ -423,7 +424,7 @@ export function whatsappRoutes(app: App, deps: Deps) {
           await syncTemplates(conn, connectionToken(conn), deps.fetchImpl);
           return c.json({ status: "EXISTS" });
         }
-        throw new HttpError(502, `Meta didn't accept the template: ${err.details ?? err.title}`, "meta_error");
+        throw new HttpError(502, `Meta didn't accept the template: ${providerDetail(err.details ?? err.title)}`, "meta_error");
       }
       throw err;
     }

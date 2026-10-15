@@ -1,21 +1,16 @@
 import { Prisma, type Tx } from "@app/db";
 import { formatScaled, minorToString, RATE_SCALE, type StaffAccess } from "@app/shared/staff";
 import type { Role } from "@app/shared/roles";
+import { AppError } from "../errors.js";
 
 /**
  * A Staff Management rule the caller broke, with the HTTP status the API answers it with and a
  * message written for the person using the app. Anything else thrown from here is a bug or an
  * outage and becomes a generic 500.
  */
-export class StaffError extends Error {
-  constructor(
-    public status: 400 | 403 | 404 | 409 | 422 | 429,
-    public code: string,
-    message: string,
-    /** Extra machine-readable detail (e.g. the blocking issues of a payroll). */
-    public detail?: unknown,
-  ) {
-    super(message);
+export class StaffError extends AppError {
+  constructor(status: 400 | 403 | 404 | 409 | 422 | 429, code: string, message: string, detail?: unknown) {
+    super(message, status, code, detail);
     this.name = "StaffError";
   }
 }

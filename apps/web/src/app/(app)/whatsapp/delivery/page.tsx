@@ -1,4 +1,5 @@
 "use client";
+import { kindsOf } from "@app/shared/whatsapp";
 import { KindsSection, PageHeader } from "@/components/whatsapp/common";
 import { OrdersList } from "@/components/whatsapp/orders";
 
@@ -11,7 +12,7 @@ export default function DeliveryUpdates() {
       />
       <KindsSection
         title="What customers are told"
-        kinds={["order_shipped", "out_for_delivery", "order_delivered", "delivery_failed"]}
+        kinds={kindsOf("delivery")}
         help={
           <ul className="mt-1 list-disc space-y-1 pl-5">
             <li>

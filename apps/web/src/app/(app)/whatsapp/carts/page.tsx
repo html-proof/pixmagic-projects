@@ -1,7 +1,7 @@
 "use client";
 import { useState } from "react";
 import Link from "next/link";
-import { reasonLabel } from "@app/shared/whatsapp";
+import { kindsOf, reasonLabel } from "@app/shared/whatsapp";
 import { Badge, Empty, Stat, type Tone } from "@/components/dashboard/primitives";
 import { fmtRelative } from "@/components/dashboard/format";
 import { useApp } from "@/components/AppContext";
@@ -68,7 +68,7 @@ export default function AbandonedCarts() {
 
       <KindsSection
         title="Reminders"
-        kinds={["abandoned_cart_1", "abandoned_cart_2"]}
+        kinds={kindsOf("carts")}
         extra={(cfg, set) => (
           <div className="mt-3 grid gap-3 border-t border-border pt-3 sm:grid-cols-2">
             <div>

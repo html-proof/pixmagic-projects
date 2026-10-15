@@ -2,6 +2,7 @@
 import { systemDb, type WhatsappConnection } from "@app/db";
 import { keyVersionOf, randomToken, sha256Hex } from "@app/shared";
 import { env } from "../env.js";
+import { providerDetail } from "../errors.js";
 import { logger } from "../logger.js";
 import type { FetchLike } from "../shopify.js";
 import {
@@ -17,14 +18,14 @@ import {
   waTokenInfo,
   WhatsappApiError,
 } from "./graph.js";
+import { WhatsappError } from "./errors.js";
 import { connectionToken, ensureSettings, syncTemplates, waDecrypt, waEncrypt } from "./store.js";
 
-export class WhatsappConnectError extends Error {
-  constructor(
-    message: string,
-    readonly code: string,
-  ) {
-    super(message);
+/** Connecting can't go ahead until the merchant fixes what the message says (a 400). */
+export class WhatsappConnectError extends WhatsappError {
+  constructor(message: string, code: string) {
+    super(message, 400, code);
+    this.name = "WhatsappConnectError";
   }
 }
 
@@ -60,7 +61,7 @@ export async function connectWhatsapp(input: ConnectInput, fetchImpl: FetchLike)
       if (err.action === "reconnect" || err.httpStatus === 401 || err.httpStatus === 403) {
         throw new WhatsappConnectError("Meta didn't accept that access token for this account. Check it has whatsapp_business_messaging and whatsapp_business_management permissions.", "token_rejected");
       }
-      if (err.httpStatus === 400 || err.httpStatus === 404) throw new WhatsappConnectError(`Meta couldn't find that account or number: ${err.details ?? err.title}`, "not_found");
+      if (err.httpStatus === 400 || err.httpStatus === 404) throw new WhatsappConnectError(`Meta couldn't find that account or number: ${providerDetail(err.details ?? err.title)}`, "not_found");
     }
     throw err;
   }

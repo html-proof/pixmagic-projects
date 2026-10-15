@@ -284,6 +284,17 @@ export const KIND_INFO: Record<NotificationKind, KindInfo> = {
   review_reminder: { kind: "review_reminder", label: "Review reminder (optional)", when: "Once, if no review came in after the request", group: "reviews", libraryTemplate: "insights_review_request" },
 };
 
+export type KindGroup = KindInfo["group"];
+
+/** The notification kinds of one group (a page of the WhatsApp area), in NOTIFICATION_KINDS order. */
+export const kindsOf = (group: KindGroup): NotificationKind[] => NOTIFICATION_KINDS.filter((k) => KIND_INFO[k].group === group);
+
+/** The message kinds the message history shows for one filter (?group=): a notification group, or another sender. */
+export function messageKinds(group: string): string[] | null {
+  if (group === "orders" || group === "delivery" || group === "carts" || group === "reviews") return kindsOf(group);
+  return group === "campaign" || group === "automation" || group === "test" ? [group] : null;
+}
+
 /**
  * How far an order has got with its parcel. Webhooks arrive late, twice, and out of order:
  * a notification only goes out for a status further along than the order's furthest one.
@@ -763,6 +774,29 @@ export const audienceSchema = z.object({
   countries: z.array(z.string().length(2).toUpperCase()).max(50).default([]),
 });
 export type Audience = z.infer<typeof audienceSchema>;
+
+export const CAMPAIGN_STATUSES = ["draft", "scheduled", "sending", "paused", "completed", "cancelled"] as const;
+export type CampaignStatus = (typeof CAMPAIGN_STATUSES)[number];
+export type CampaignAction = "pause" | "resume" | "cancel";
+
+const CAMPAIGN_ACTION_FROM: Record<CampaignAction, readonly string[]> = {
+  pause: ["scheduled", "sending"],
+  resume: ["paused"],
+  cancel: ["draft", "scheduled", "sending", "paused"],
+};
+
+/** Whether a campaign in this status can be paused, resumed or cancelled. */
+export const campaignCan = (status: string, action: CampaignAction) => CAMPAIGN_ACTION_FROM[action].includes(status);
+
+/** The status a campaign moves to: resuming one that never started schedules it again. */
+export function campaignStatusAfter(action: CampaignAction, started: boolean): CampaignStatus {
+  if (action === "pause") return "paused";
+  if (action === "resume") return started ? "sending" : "scheduled";
+  return "cancelled";
+}
+
+/** A campaign that hasn't started can still be edited; editing a scheduled one takes it back to draft. */
+export const campaignEditable = (status: string) => status === "draft" || status === "scheduled";
 
 // ---------------------------------------------------------------------------
 // Automation rules: trigger → conditions → action
