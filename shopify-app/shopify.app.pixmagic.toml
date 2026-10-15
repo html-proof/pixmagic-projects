@@ -11,7 +11,7 @@
 # Then set SHOPIFY_EXTRA_APPS + SHOPIFY_APP_SECRET_PIXMAGIC on the Worker, as in 3c.
 client_id = "bb0ea9e4ad8939a6a1513e4dbf8cbbf1"
 name = "Insights"
-application_url = "https://insights.imeseban.workers.dev/api/shopify/launch"
+application_url = "https://d2mr8m2p1qkh58.cloudfront.net/api/shopify/launch"
 embedded = false
 
 [access_scopes]
@@ -38,7 +38,7 @@ optional_scopes = ["read_customers", "write_pixels", "read_customer_events"]
 use_legacy_install_flow = false
 
 [auth]
-redirect_urls = ["https://insights.imeseban.workers.dev/api/shopify/callback"]
+redirect_urls = ["https://d2mr8m2p1qkh58.cloudfront.net/api/shopify/callback"]
 
 [webhooks]
 api_version = "2025-10"
@@ -64,12 +64,12 @@ api_version = "2025-10"
     "checkouts/create",
     "checkouts/update"
   ]
-  uri = "https://insights.imeseban.workers.dev/api/webhooks/shopify"
+  uri = "https://d2mr8m2p1qkh58.cloudfront.net/api/webhooks/shopify"
 
   # Mandatory GDPR compliance webhooks
   [[webhooks.subscriptions]]
   compliance_topics = ["customers/data_request", "customers/redact", "shop/redact"]
-  uri = "https://insights.imeseban.workers.dev/api/webhooks/shopify"
+  uri = "https://d2mr8m2p1qkh58.cloudfront.net/api/webhooks/shopify"
 
 [pos]
 embedded = false
