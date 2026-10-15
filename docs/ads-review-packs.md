@@ -11,6 +11,9 @@ Where things stand (2026-10-11):
   ownership of `https://insights.imeseban.workers.dev/` verified (HTML tag in `apps/web/src/app/layout.tsx`).
   Branding verification failed twice for: ownership (now fixed, re-check after 24 hours) and the privacy policy
   (the business details in `apps/web/src/lib/contact.ts` were blank then; filled in 2026-10-16, so re-request it).
+  `/terms` exists since 2026-10-16 (step 5a). The homepage section of step 5c (`#google-data`) was not added: a
+  scope disclosure doesn't fit the landing page, and `/privacy#google-user-data` already carries the Limited Use
+  statement, so use that as documentation link 1. Add the section only if Google's review asks for it.
 - Meta: app "Insights" (971575545351940) set up with icon, domain, privacy policy, data deletion page, Facebook
   Login for Business configuration and the app secret. No business portfolio yet, so no Business Verification.
 

@@ -3,9 +3,10 @@
  * is, how a merchant reaches support, and which law governs the policy.
  *
  * Shopify app store requirement 4.1 requires a reachable support contact, and the listing requires a
- * privacy policy URL. `/privacy`, `/data-deletion` and `/support` render straight from this file, and
- * so does the Meta Ads "email us" link. `postalAddress` is optional: the policy leaves the address out
- * while it is blank. The other three must stay filled in; Google and Meta reject a policy without them.
+ * privacy policy URL. `/privacy`, `/terms`, `/data-deletion` and `/support` render straight from this
+ * file, and so does the Meta Ads "email us" link. `postalAddress` is optional: the policy and terms
+ * leave the address out while it is blank. The other three must stay filled in; Google and Meta
+ * reject a policy without them.
  */
 export const CONTACT: Readonly<{
   /** Entity that controls merchant data, as registered. Appears as the controller and in the copyright. */

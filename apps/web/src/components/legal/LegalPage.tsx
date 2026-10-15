@@ -6,7 +6,7 @@ import { AuthLogo } from "@/components/auth/AuthBrand";
 import { CONTACT } from "@/lib/contact";
 
 /**
- * The frame of the public legal and help pages (/privacy, /data-deletion, /support), which Shopify,
+ * The frame of the public legal and help pages (/privacy, /terms, /data-deletion, /support), which Shopify,
  * Google and Meta reviewers open from the app listings: a top bar back to the site, the page title
  * with its revision date, a numbered contents list beside the text on wide screens (folded above it
  * on phones), and a footer with the controller's name.
@@ -14,6 +14,7 @@ import { CONTACT } from "@/lib/contact";
 
 const PAGES = [
   { href: "/privacy", label: "Privacy policy" },
+  { href: "/terms", label: "Terms of service" },
   { href: "/data-deletion", label: "Data deletion" },
   { href: "/support", label: "Support" },
 ] as const;

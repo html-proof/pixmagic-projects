@@ -5,6 +5,7 @@ import { InsightLogo } from "./shared/InsightMark";
 /** The only pages the footer points to; Security is the token section of the privacy page. */
 const LINKS = [
   { href: "/privacy", label: "Privacy" },
+  { href: "/terms", label: "Terms" },
   { href: "/privacy#access-tokens", label: "Security" },
   { href: "/support", label: "Support" },
 ] as const;

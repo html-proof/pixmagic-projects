@@ -167,7 +167,11 @@ export default function SignupPage() {
               aria-describedby={termsError ? "terms-error" : undefined}
             />
             <label htmlFor="terms" className="cursor-pointer">
-              I agree to the Terms of Service and the{" "}
+              I agree to the{" "}
+              <Link href="/terms" className="font-medium text-accent underline underline-offset-2" target="_blank">
+                Terms of Service
+              </Link>{" "}
+              and the{" "}
               <Link href="/privacy" className="font-medium text-accent underline underline-offset-2" target="_blank">
                 Privacy Policy
               </Link>
