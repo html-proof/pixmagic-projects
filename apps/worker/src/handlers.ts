@@ -21,12 +21,21 @@ import {
   ORDER_REFUNDS_QUERY,
   ordersQuery,
   PAGE_SIZE,
+  parseShopify,
+  parseShopifyList,
   PRODUCTS_QUERY,
   pruneVariants,
   purgeStoreData,
   raiseAlert,
   resolveAlerts,
   REFUND_LINE_ITEMS_QUERY,
+  graphqlOrderSchema,
+  graphqlProductSchema,
+  graphqlVariantSchema,
+  restOrderSchema,
+  restProductDeleteSchema,
+  restProductSchema,
+  restRefundWebhookSchema,
   SHOP_QUERY,
   shopifyGraphqlWithCost,
   ShopifyGraphqlError,
@@ -57,6 +66,7 @@ import {
   syncAdConnection,
   type AdsSyncData,
   type FetchLike,
+  type GraphqlOrder,
   type Mailer,
   type Queues,
   type SyncJobData,
@@ -276,12 +286,13 @@ async function fetchOrderRefunds(deps: WorkerDeps, store: Store, pace: Pace, ord
 /**
  * Orders pages carry at most 10 line items and 2 refunds (5 lines each) per order to stay
  * under Shopify's cost cap. Re-fetch whatever was truncated so the order is complete
- * before it is stored (upsertOrder replaces line items wholesale).
+ * before it is stored (upsertOrder replaces line items wholesale). Null when what the detail
+ * queries returned doesn't fit the schema (logged): an order missing lines must not be stored.
  */
-async function completeOrder(deps: WorkerDeps, store: Store, pace: Pace, node: Node): Promise<Node> {
+async function completeOrder(deps: WorkerDeps, store: Store, pace: Pace, node: GraphqlOrder): Promise<GraphqlOrder | null> {
   const over = graphqlOrderOverflow(node);
   if (!over.lineItems && !over.refunds) return node;
-  const full = { ...node };
+  const full: Node = { ...node };
   if (over.lineItems) {
     const nodes = await fetchOrderLineItems(deps, store, pace, node.id);
     if (nodes) full.lineItems = { nodes };
@@ -290,7 +301,7 @@ async function completeOrder(deps: WorkerDeps, store: Store, pace: Pace, node: N
     const refunds = await fetchOrderRefunds(deps, store, pace, node.id);
     if (refunds) full.refunds = refunds;
   }
-  return full;
+  return parseShopify(graphqlOrderSchema, full, "GraphQL order", { storeId: store.id });
 }
 
 /**
@@ -351,9 +362,10 @@ export async function runSync(data: SyncJobData, deps: WorkerDeps) {
       break;
     }
     case "products": {
-      const d = await fetchPage<{ products: Page<Node> }>(deps, store, pace, data, PRODUCTS_QUERY, PAGE_SIZE.products);
+      const d = await fetchPage<{ products: Page<unknown> }>(deps, store, pace, data, PRODUCTS_QUERY, PAGE_SIZE.products);
       if (!d) return halved;
-      await bulkUpsertProducts(store, d.products.nodes.map(normalizeGraphqlProduct));
+      const products = parseShopifyList(graphqlProductSchema, d.products.nodes, "GraphQL product", { storeId: store.id });
+      await bulkUpsertProducts(store, products.map(normalizeGraphqlProduct));
       const n = (data.progress ?? 0) + d.products.nodes.length;
       await systemDb.syncJob.update({ where: { id: data.syncJobId }, data: { progress: n, lastActivityAt: new Date() } });
       if (d.products.pageInfo.hasNextPage && d.products.pageInfo.endCursor) {
@@ -363,9 +375,10 @@ export async function runSync(data: SyncJobData, deps: WorkerDeps) {
       break;
     }
     case "variants": {
-      const d = await fetchPage<{ productVariants: Page<Node> }>(deps, store, pace, data, VARIANTS_QUERY, PAGE_SIZE.variants);
+      const d = await fetchPage<{ productVariants: Page<unknown> }>(deps, store, pace, data, VARIANTS_QUERY, PAGE_SIZE.variants);
       if (!d) return halved;
-      await bulkUpsertVariants(store, d.productVariants.nodes.map(normalizeGraphqlVariant));
+      const variants = parseShopifyList(graphqlVariantSchema, d.productVariants.nodes, "GraphQL variant", { storeId: store.id });
+      await bulkUpsertVariants(store, variants.map(normalizeGraphqlVariant));
       const n = (data.progress ?? 0) + d.productVariants.nodes.length;
       await systemDb.syncJob.update({ where: { id: data.syncJobId }, data: { progress: n, lastActivityAt: new Date() } });
       if (d.productVariants.pageInfo.hasNextPage && d.productVariants.pageInfo.endCursor) {
@@ -407,14 +420,15 @@ export async function runSync(data: SyncJobData, deps: WorkerDeps) {
       }
 
       const includeCustomer = expandScopes(store.grantedScopes).has("read_customers");
-      const d = await fetchPage<{ orders: Page<Node> }>(deps, store, pace, data, ordersQuery(includeCustomer), PAGE_SIZE.orders, {
+      const d = await fetchPage<{ orders: Page<unknown> }>(deps, store, pace, data, ordersQuery(includeCustomer), PAGE_SIZE.orders, {
         query: ordersSearch(data, store.grantedScopes),
       });
       if (!d) return halved;
       let n = data.progress ?? 0;
       const days = new Set<string>();
-      for (const node of d.orders.nodes) {
+      for (const node of parseShopifyList(graphqlOrderSchema, d.orders.nodes, "GraphQL order", { storeId: store.id })) {
         const full = await completeOrder(deps, store, pace, node);
+        if (!full) continue;
         for (const day of await upsertOrder(store, normalizeGraphqlOrder(full))) days.add(day);
         n++;
       }
@@ -522,6 +536,7 @@ export async function processWebhook(data: WebhookJobData, deps: WorkerDeps) {
   } else if (otherApp) {
     logger.info({ topic: data.topic, shop: data.shop, app: data.app, storeApp: store.shopifyAppKey }, "webhook from another of our apps; ignored");
   } else {
+    const logIds = { storeId: store.id, eventId: ev.id };
     switch (data.topic) {
       case "orders/create":
       case "orders/updated":
@@ -533,44 +548,54 @@ export async function processWebhook(data: WebhookJobData, deps: WorkerDeps) {
         if (store.status === "uninstalled") break;
         // orders/edited sends {order_edit: {...}}: refetching would need the order; reconcile job covers it.
         if (data.topic === "orders/edited") break;
-        const days = await upsertOrder(store, normalizeRestOrder(p));
+        // A payload that doesn't fit is logged and skipped, not retried: a retry gets the same payload.
+        const order = parseShopify(restOrderSchema, p, data.topic, logIds);
+        if (!order) break;
+        const days = await upsertOrder(store, normalizeRestOrder(order));
         await enqueueAggregate(deps, store.id, days);
         break;
       }
       case "refunds/create": {
         if (store.status === "uninstalled") break;
-        const days = await upsertRefund(store, String(p.order_id), normalizeRestRefund(p));
+        const refund = parseShopify(restRefundWebhookSchema, p, data.topic, logIds);
+        if (!refund) break;
+        const days = await upsertRefund(store, String(refund.order_id), normalizeRestRefund(refund));
         // Order not synced yet: retry later (queue backoff); reconcile also catches it.
-        if (!days) throw new Error(`Order ${p.order_id} not found for refund ${p.id}`);
+        if (!days) throw new Error(`Order ${refund.order_id} not found for refund ${refund.id}`);
         await enqueueAggregate(deps, store.id, days);
         break;
       }
       case "products/create":
       case "products/update": {
         if (store.status === "uninstalled") break;
-        const product = normalizeRestProduct(p);
+        const payload = parseShopify(restProductSchema, p, data.topic, logIds);
+        if (!payload) break;
+        const product = normalizeRestProduct(payload);
         // Product ids are never reused, so anything arriving after products/delete (a late or
         // retried update) is stale and must not bring the product and its stock back.
         if (await deletedRecently(deps, store.id, product.shopifyId)) break;
         // A stale product payload carries stale variants too (it could resurrect a deleted one): skip it.
         if (!(await upsertProduct(store, product))) break;
         // Each variant also has its own updated_at guard; stock levels come with them, cost doesn't.
-        const variants = normalizeRestProductVariants(p);
+        const variants = normalizeRestProductVariants(payload);
         for (const v of variants) await upsertVariant(store, v);
         // Which variants still exist: `variant_gids` lists all of them (variants[] stops at 100);
         // without it, only a variants[] list shorter than that limit is known to be complete.
-        const keep = Array.isArray(p.variant_gids)
-          ? (p.variant_gids as Array<{ admin_graphql_api_id?: string }>).map((g) => gidToId(g?.admin_graphql_api_id)).filter((id): id is string => !!id)
+        const keep = payload.variant_gids
+          ? payload.variant_gids.map((g) => gidToId(g.admin_graphql_api_id)).filter((id): id is string => !!id)
           : variants.length > 0 && variants.length < REST_PRODUCT_VARIANT_LIMIT
             ? variants.map((v) => v.shopifyId)
             : [];
         if (keep.length) await pruneVariants(store, product.shopifyId, keep, product.updatedAt);
         break;
       }
-      case "products/delete":
-        await deleteProduct(store, String(p.id));
-        await deps.coord.put(tombstoneKey(store.id, String(p.id)), "1", TOMBSTONE_TTL_S);
+      case "products/delete": {
+        const gone = parseShopify(restProductDeleteSchema, p, data.topic, logIds);
+        if (!gone) break;
+        await deleteProduct(store, String(gone.id));
+        await deps.coord.put(tombstoneKey(store.id, String(gone.id)), "1", TOMBSTONE_TTL_S);
         break;
+      }
       case "app/uninstalled": {
         // Shopify retries a failed delivery for up to 48 hours, and the merchant may well have
         // reinstalled in the meantime (that is the usual fix for an accidental uninstall). Applying

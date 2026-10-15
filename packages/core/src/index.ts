@@ -7,6 +7,7 @@ export * from "./shopify.js";
 export * from "./scopes.js";
 export * from "./tokens.js";
 export * from "./queues.js";
+export * from "./shopifyPayloads.js";
 export * from "./normalize.js";
 export * from "./persist.js";
 export * from "./notify.js";

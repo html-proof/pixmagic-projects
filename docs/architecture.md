@@ -93,6 +93,10 @@ Where a new piece of code goes:
   `MAX_ATTEMPTS` (which must equal `max_retries + 1` in `wrangler.jsonc`), then recorded as failed
   and alerted. A failure while Postgres is unreachable spends no attempts (`deferForDb`).
 - Handlers must be idempotent: Shopify and Queues both deliver at least once.
+- What Shopify sends (webhook payloads, GraphQL pages, bulk JSONL) is checked once where it enters,
+  against the Zod schemas in `core/shopifyPayloads.ts` (`parseShopify`, `parseShopifyList` for a
+  page), before it is normalized. What doesn't fit is logged (field paths, never values) and
+  skipped, not thrown: a retry would only meet the same payload again.
 - Each cron sweep runs on its own: one that throws is logged and the rest of the tick still runs.
 - `UnrecoverableError` ends retries at once (revoked access, a store that is gone).
 
@@ -222,12 +226,17 @@ helpers and grading rules de-duplicated, dashboard component files renamed;
 [architecture/refactoring-report.md](architecture/refactoring-report.md). Done 2026-10-16: the
 WhatsApp campaign, automation and cart-reminder rules moved from `routes/whatsappOps.ts` into core,
 `AppError` for rule violations, provider text only through `providerDetail()`, the remaining file
-renames, app-wide UI out of `components/whatsapp`, and dead code removed.)
+renames, app-wide UI out of `components/whatsapp`, dead code removed, and Zod schemas at the
+Shopify boundary (`core/shopifyPayloads.ts`) instead of `any` in `core/normalize.ts`.)
 
 - Two Meta Graph clients (`core/ads.ts`, `core/whatsapp/graph.ts`) with different auth, error
   handling and network-failure handling. Target: one transport (design in
   [architecture/current-state.md](architecture/current-state.md), M16). Waits for the
   `claude/ads-ws-*` branches, which change `core/ads.ts` and `core/adConnections.ts`.
-- `any` in the parsing of Shopify / Meta payloads (`core/normalize.ts`).
+- `any` in the payload readers that don't go through schemas yet: the Shopify order, checkout and
+  fulfillment payloads of the automations (`core/whatsapp/events.ts`, `core/email/events.ts`), Meta's
+  WhatsApp webhooks (`core/whatsapp/webhook.ts`), and the raw detail-query nodes and JSONL lines in
+  `worker/handlers.ts` / `worker/bulkOrders.ts` before they reach `graphqlOrderSchema`. Target:
+  schemas beside `core/shopifyPayloads.ts`, parsed with `parseShopify`.
 - Large files that do several jobs: `core/ads.ts`, `core/adConnections.ts`, `core/normalize.ts`,
   `core/notify.ts`, `worker/handlers.ts`, `core/whatsapp/events.ts`.
