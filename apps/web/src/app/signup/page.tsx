@@ -2,6 +2,14 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
+import { ArrowRight, Lock, UserRound } from "lucide-react";
+import { accountPasswordProblem, ACCOUNT_PASSWORD_MIN, DISPLAY_NAME_MAX, isEmailAddress } from "@app/shared/auth";
+import { afterSignIn, authErrorMessage, confirmSignUp, errorCode, resendSignUpCode, signIn, signUp, useRedirectIfSignedIn } from "@/lib/auth";
+import { Alert, Divider } from "@/components/ui";
+import { AuthSplitShell } from "@/components/auth/AuthSplitShell";
+import { CodeStep } from "@/components/auth/CodeStep";
+import { EmailField, IconField } from "@/components/auth/IconField";
+import { PasswordField } from "@/components/auth/PasswordField";
 import { Lock, Mail, UserRound } from "lucide-react";
 import { accountPasswordProblem, ACCOUNT_PASSWORD_MIN, DISPLAY_NAME_MAX } from "@app/shared/auth";
 import { afterSignIn, authErrorMessage, confirmSignUp, errorCode, resendSignUpCode, signIn, signUp, useRedirectIfSignedIn } from "@/lib/auth";
@@ -20,6 +28,8 @@ function problems(f: { name: string; email: string; password: string; confirm: s
     terms: f.terms ? null : "Accept the Terms of Service and Privacy Policy to create an account.",
   };
 }
+
+const SIGN_IN = { href: "/login", label: "Sign In" };
 
 export default function SignupPage() {
   const router = useRouter();
@@ -60,12 +70,14 @@ export default function SignupPage() {
 
   if (sentTo) {
     return (
+      <AuthSplitShell title="Verify your email" subtitle="Enter the code we sent you to finish creating your account." action={SIGN_IN}>
       <AuthCard title="Verify your email" subtitle="Enter the code we sent you to finish creating your account.">
         <CodeStep
           large
           email={sentTo}
           submitLabel="Verify and continue"
           busyLabel="Verifying…"
+          large
           onSubmit={async (code) => {
             await confirmSignUp(sentTo, code);
             await signIn(sentTo, password);
@@ -74,6 +86,10 @@ export default function SignupPage() {
           }}
           onResend={() => resendSignUpCode(sentTo)}
         />
+        <button type="button" className="text-sm text-muted underline" onClick={() => setSentTo(null)}>
+          Use a different email address
+        </button>
+      </AuthSplitShell>
         <p className="text-center">
           <button type="button" className="auth-link" onClick={() => setSentTo(null)}>
             Use a different email address
@@ -85,6 +101,11 @@ export default function SignupPage() {
 
   const termsError = fields.error("terms");
   return (
+    <AuthSplitShell title="Create your account" subtitle="Free to start. You'll connect your Shopify store from your dashboard." action={SIGN_IN}>
+      <SocialButtons row />
+      <Divider label="OR SIGN UP WITH YOUR EMAIL" />
+      {error && (
+        <Alert onDismiss={() => setError(null)}>
     <AuthCard title="Create your account" subtitle="Free to start. Connect your store and turn data into actionable insights.">
       {error ? (
         <Alert>
@@ -105,6 +126,11 @@ export default function SignupPage() {
       ) : (
         fields.invalid && <Alert>Please review the highlighted fields before continuing.</Alert>
       )}
+      <form onSubmit={onSubmit} className="space-y-4" noValidate>
+        <IconField
+          id="name"
+          label="Full name"
+          icon={<UserRound size={18} aria-hidden />}
       <SocialButtons large />
       <Divider label="OR SIGN UP WITH YOUR EMAIL" />
       <form onSubmit={onSubmit} className="flex flex-col gap-4" noValidate>
@@ -118,6 +144,65 @@ export default function SignupPage() {
           maxLength={DISPLAY_NAME_MAX}
           value={name}
           onChange={(e) => setName(e.target.value)}
+        />
+        <EmailField id="email" value={email} onChange={setEmail} />
+        {/* Side by side where both fit, stacked otherwise. */}
+        <div className="grid grid-cols-[repeat(auto-fit,minmax(13rem,1fr))] items-start gap-4">
+          <PasswordField
+            id="password"
+            label="Password"
+            autoComplete="new-password"
+            minLength={ACCOUNT_PASSWORD_MIN}
+            value={password}
+            onChange={setPassword}
+            hint={`At least ${ACCOUNT_PASSWORD_MIN} characters.`}
+            icon={<Lock size={18} aria-hidden />}
+            inputClassName="auth-field"
+          />
+          <PasswordField
+            id="confirm-password"
+            label="Confirm password"
+            autoComplete="new-password"
+            value={confirm}
+            onChange={setConfirm}
+            icon={<Lock size={18} aria-hidden />}
+            inputClassName="auth-field"
+          />
+        </div>
+        <div className="flex items-start gap-2.5 text-sm text-muted">
+          <input
+            id="terms"
+            type="checkbox"
+            className="mt-0.5 size-[18px] shrink-0 cursor-pointer rounded accent-[var(--accent)]"
+            checked={terms}
+            onChange={(e) => setTerms(e.target.checked)}
+            required
+          />
+          <label htmlFor="terms" className="cursor-pointer">
+            I agree to the Terms of Service and the{" "}
+            <Link href="/privacy" className="font-medium text-accent underline underline-offset-2" target="_blank">
+              Privacy Policy
+            </Link>
+            .
+          </label>
+        </div>
+        <button className="auth-cta" disabled={busy}>
+          {busy ? (
+            "Creating your account…"
+          ) : (
+            <>
+              Create Account <ArrowRight size={18} aria-hidden />
+            </>
+          )}
+        </button>
+      </form>
+      <p className="pt-1 text-center text-[15px] text-muted">
+        Already have an account?{" "}
+        <Link href="/login" className="font-semibold text-accent hover:underline">
+          Sign In
+        </Link>
+      </p>
+    </AuthSplitShell>
           onBlur={fields.leave}
           error={fields.error("name")}
         />

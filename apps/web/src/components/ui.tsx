@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
+import { X } from "lucide-react";
 
 export function AuthShell({ title, subtitle, children }: { title: string; subtitle?: string; children: ReactNode }) {
   return (
@@ -42,7 +43,8 @@ const alertGlyph: Record<AlertKind, ReactNode> = {
   success: <path d="M6.5 10.25l2.4 2.4 4.6-4.9" />,
 };
 
-export function Alert({ kind = "error", children }: { kind?: AlertKind; children: ReactNode }) {
+/** `onDismiss` adds a close button (for messages the person can act on and then clear). */
+export function Alert({ kind = "error", children, onDismiss }: { kind?: AlertKind; children: ReactNode; onDismiss?: () => void }) {
   return (
     <div role={kind === "error" ? "alert" : "status"} className={`alert ${alertTone[kind]}`}>
       <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" focusable="false" className="mt-px shrink-0" style={{ color: "var(--tone)" }}>
@@ -52,6 +54,16 @@ export function Alert({ kind = "error", children }: { kind?: AlertKind; children
         </g>
       </svg>
       <div className="min-w-0 flex-1">{children}</div>
+      {onDismiss && (
+        <button
+          type="button"
+          onClick={onDismiss}
+          aria-label="Dismiss"
+          className="-my-1 -mr-1.5 grid size-7 shrink-0 place-items-center rounded-md opacity-80 transition hover:bg-[color-mix(in_oklab,var(--tone)_12%,transparent)] hover:opacity-100 focus-visible:ring-2 focus-visible:ring-[var(--tone)] focus-visible:outline-none"
+        >
+          <X size={16} aria-hidden />
+        </button>
+      )}
     </div>
   );
 }

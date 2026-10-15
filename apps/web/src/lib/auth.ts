@@ -26,8 +26,9 @@ export type SocialProvider = "google" | "apple";
 
 export const authConfig = () => api<AuthConfig>("/auth/config");
 
-export const signIn = (email: string, password: string) =>
-  api<{ user: SignedInUser }>("/auth/login", { method: "POST", body: { email, password } });
+/** `keep` false: "Keep me signed in" unticked, so the session ends when the browser closes. */
+export const signIn = (email: string, password: string, keep = true) =>
+  api<{ user: SignedInUser }>("/auth/login", { method: "POST", body: { email, password, keep } });
 
 export const signUp = (input: { name: string; email: string; password: string; confirmPassword: string; acceptTerms: boolean }) =>
   api<{ ok: true; next: "confirm"; email: string }>("/auth/signup", { method: "POST", body: input });
@@ -43,8 +44,8 @@ export const resetPassword = (input: { email: string; code: string; password: st
 
 export const startEmailCodeSignIn = (email: string) => api<{ ok: true; message: string }>("/auth/otp/start", { method: "POST", body: { email } });
 
-export const finishEmailCodeSignIn = (email: string, code: string) =>
-  api<{ user: SignedInUser }>("/auth/otp/verify", { method: "POST", body: { email, code } });
+export const finishEmailCodeSignIn = (email: string, code: string, keep = true) =>
+  api<{ user: SignedInUser }>("/auth/otp/verify", { method: "POST", body: { email, code, keep } });
 
 /**
  * "Continue with Google / Apple": a full-page trip through the user pool to the provider and back

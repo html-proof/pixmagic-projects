@@ -2,6 +2,12 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, type FormEvent } from "react";
+import { ArrowLeft, ArrowRight } from "lucide-react";
+import { isEmailAddress } from "@app/shared/auth";
+import { authErrorMessage, forgotPassword, recallEmail, rememberEmail } from "@/lib/auth";
+import { Alert } from "@/components/ui";
+import { AuthSplitShell } from "@/components/auth/AuthSplitShell";
+import { EmailField } from "@/components/auth/IconField";
 import { ArrowLeft, Mail } from "lucide-react";
 import { authErrorMessage, forgotPassword, recallEmail, rememberEmail } from "@/lib/auth";
 import { Alert } from "@/components/ui";
@@ -35,6 +41,29 @@ export default function ForgotPasswordPage() {
   }
 
   return (
+    <AuthSplitShell
+      title="Forgot your password?"
+      subtitle="Enter your email address and we'll send you a code to choose a new one."
+      action={{ href: "/login", label: "Sign In" }}
+    >
+      {error && <Alert onDismiss={() => setError(null)}>{error}</Alert>}
+      <form onSubmit={onSubmit} className="space-y-4" noValidate>
+        <EmailField id="email" value={email} onChange={setEmail} />
+        <button className="auth-cta" disabled={busy}>
+          {busy ? (
+            "Sending…"
+          ) : (
+            <>
+              Send reset code <ArrowRight size={18} aria-hidden />
+            </>
+          )}
+        </button>
+      </form>
+      <Link href="/login" className="inline-flex items-center gap-1.5 text-sm font-medium text-muted hover:text-text">
+        <ArrowLeft size={16} aria-hidden />
+        Back to sign in
+      </Link>
+    </AuthSplitShell>
     <AuthCard title="Forgot your password?" subtitle="Enter your email address and we'll send you a code to choose a new one.">
       {error && <Alert>{error}</Alert>}
       <form onSubmit={onSubmit} className="flex flex-col gap-4" noValidate>
