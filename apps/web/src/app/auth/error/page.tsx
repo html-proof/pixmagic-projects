@@ -1,7 +1,9 @@
 "use client";
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { AuthShell, Alert } from "@/components/ui";
+import { ArrowRight } from "lucide-react";
+import { Alert } from "@/components/ui";
+import { AuthCard } from "@/components/auth/AuthCard";
 
 /** Why a sign-in couldn't start (the API sends the browser here instead of to Google or Apple). */
 const REASONS: Record<string, (provider: string) => string> = {
@@ -23,14 +25,17 @@ export default function AuthErrorPage() {
   }, []);
 
   return (
-    <AuthShell title="We couldn't sign you in" subtitle="Nothing was changed.">
+    <AuthCard title="We couldn't sign you in" subtitle="Nothing was changed.">
       {text && <Alert>{text}</Alert>}
-      <Link href="/login" className="btn-primary w-full">
+      <Link href="/login" className="btn-cta group">
         Back to sign in
+        <ArrowRight aria-hidden className="size-5 transition-transform group-hover:translate-x-0.5" strokeWidth={2.2} />
       </Link>
-      <Link href="/support" className="block text-sm text-muted underline">
-        Contact support
-      </Link>
-    </AuthShell>
+      <p className="text-center">
+        <Link href="/support" className="auth-link">
+          Contact support
+        </Link>
+      </p>
+    </AuthCard>
   );
 }

@@ -2,11 +2,13 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, type FormEvent } from "react";
-import { accountPasswordProblem, ACCOUNT_PASSWORD_MIN, isEmailAddress } from "@app/shared/auth";
+import { Lock, Mail } from "lucide-react";
+import { accountPasswordProblem, ACCOUNT_PASSWORD_MIN } from "@app/shared/auth";
 import { forgotPassword, recallEmail, rememberEmail, resetPassword } from "@/lib/auth";
-import { Alert, AuthShell } from "@/components/ui";
+import { AuthCard, AuthField, AuthSubmit, emailProblem, useFieldErrors } from "@/components/auth/AuthCard";
 import { CodeStep } from "@/components/auth/CodeStep";
-import { PasswordField } from "@/components/auth/PasswordField";
+
+const MISMATCH = "The two passwords don't match.";
 
 /** Step 2 of a password reset: the emailed code and the new password, then back to sign in. */
 export default function ResetPasswordPage() {
@@ -24,37 +26,54 @@ export default function ResetPasswordPage() {
 
   const weak = password ? accountPasswordProblem(password) : null;
   const mismatch = !!confirm && password !== confirm;
+  const emailFields = useFieldErrors({ email: emailProblem(email) });
+  const passwordFields = useFieldErrors({ "new-password": weak, "confirm-password": mismatch ? MISMATCH : null });
+  // The reset button stays off until both are right, so say why without waiting for the field to
+  // be left: a confirmation as long as the password that still differs is a real mismatch.
+  const confirmError = passwordFields.error("confirm-password") ?? (mismatch && confirm.length >= password.length ? MISMATCH : undefined);
 
   if (!emailConfirmed) {
     return (
-      <AuthShell title="Reset your password" subtitle="Which email address did we send the code to?">
+      <AuthCard title="Reset your password" subtitle="Which email address did we send the code to?">
         <form
-          className="space-y-3"
+          className="flex flex-col gap-4"
+          noValidate
           onSubmit={(e: FormEvent) => {
             e.preventDefault();
-            if (!isEmailAddress(email)) return;
+            if (!emailFields.submit()) return;
             rememberEmail(email);
             setEmailConfirmed(true);
           }}
         >
-          <div>
-            <label className="label" htmlFor="email">
-              Email Address
-            </label>
-            <input id="email" className="input" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
-          </div>
-          <button className="btn-primary w-full">Continue</button>
+          <AuthField
+            id="email"
+            label="Email Address"
+            icon={Mail}
+            type="email"
+            placeholder="Enter your email address"
+            autoComplete="email"
+            spellCheck={false}
+            required
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            onBlur={emailFields.leave}
+            error={emailFields.error("email")}
+          />
+          <AuthSubmit className="mt-2">Continue</AuthSubmit>
         </form>
-        <Link href="/forgot-password" className="block text-sm text-muted underline">
-          I need a code
-        </Link>
-      </AuthShell>
+        <p className="text-center">
+          <Link href="/forgot-password" className="auth-link">
+            I need a code
+          </Link>
+        </p>
+      </AuthCard>
     );
   }
 
   return (
-    <AuthShell title="Choose a new password" subtitle="Enter the code from the email, then your new password.">
+    <AuthCard title="Choose a new password" subtitle="Enter the code from the email, then your new password.">
       <CodeStep
+        large
         email={email}
         intro={
           <>
@@ -70,14 +89,42 @@ export default function ResetPasswordPage() {
         }}
         onResend={() => forgotPassword(email)}
       >
-        <PasswordField id="new-password" label="New password" autoComplete="new-password" minLength={ACCOUNT_PASSWORD_MIN} value={password} onChange={setPassword} hint={`At least ${ACCOUNT_PASSWORD_MIN} characters.`} />
-        <PasswordField id="confirm-password" label="Confirm new password" autoComplete="new-password" value={confirm} onChange={setConfirm} />
-        {weak && <Alert kind="info">{weak}</Alert>}
-        {mismatch && <Alert kind="info">The two passwords don&apos;t match yet.</Alert>}
+        <AuthField
+          id="new-password"
+          label="New password"
+          icon={Lock}
+          reveal
+          placeholder="Enter a new password"
+          autoComplete="new-password"
+          required
+          minLength={ACCOUNT_PASSWORD_MIN}
+          maxLength={256}
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          onBlur={passwordFields.leave}
+          error={passwordFields.error("new-password")}
+          hint={`Use at least ${ACCOUNT_PASSWORD_MIN} characters.`}
+        />
+        <AuthField
+          id="confirm-password"
+          label="Confirm new password"
+          icon={Lock}
+          reveal
+          placeholder="Confirm your new password"
+          autoComplete="new-password"
+          required
+          maxLength={256}
+          value={confirm}
+          onChange={(e) => setConfirm(e.target.value)}
+          onBlur={passwordFields.leave}
+          error={confirmError}
+        />
       </CodeStep>
-      <button type="button" className="text-sm text-muted underline" onClick={() => setEmailConfirmed(false)}>
-        Use a different email address
-      </button>
-    </AuthShell>
+      <p className="text-center">
+        <button type="button" className="auth-link" onClick={() => setEmailConfirmed(false)}>
+          Use a different email address
+        </button>
+      </p>
+    </AuthCard>
   );
 }
