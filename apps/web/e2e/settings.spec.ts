@@ -90,7 +90,7 @@ test("invitations: emailed, handed over as a link when email fails, and kept acr
   const invitee = uniqueEmail("invitee");
   await page.getByLabel("Email to invite").fill(invitee);
   await page.getByLabel("Role", { exact: true }).selectOption("analyst");
-  await page.getByRole("button", { name: "Invite" }).click();
+  await page.getByRole("button", { name: "Invite", exact: true }).click();
   await expect(page.getByRole("status")).toContainText(`Invitation sent to ${invitee}`);
   await expect(page.getByText(`${invitee} · invited`)).toBeVisible();
 
@@ -101,7 +101,7 @@ test("invitations: emailed, handed over as a link when email fails, and kept acr
   );
   const unmailable = uniqueEmail("unmailable");
   await page.getByLabel("Email to invite").fill(unmailable);
-  await page.getByRole("button", { name: "Invite" }).click();
+  await page.getByRole("button", { name: "Invite", exact: true }).click();
   await expect(page.getByTestId("invite-link")).toHaveValue("http://localhost/invite?token=handed-over-token");
   await expect(page.getByText(`Invitation sent to ${unmailable}`)).toHaveCount(0);
   await page.unroute("**/api/workspaces/*/invitations");
