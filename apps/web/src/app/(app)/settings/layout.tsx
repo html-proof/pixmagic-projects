@@ -2,7 +2,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
-import { BILLING_ENABLED } from "@/lib/features";
+import { API_KEYS_ENABLED, BILLING_ENABLED } from "@/lib/features";
 
 const ITEMS = [
   ["profile", "Profile"],
@@ -13,7 +13,7 @@ const ITEMS = [
   ["email", "Email integrations"],
   ["members", "Members & roles"],
   ["notifications", "Notifications"],
-  ["api-keys", "API keys"],
+  ...(API_KEYS_ENABLED ? [["api-keys", "API keys"] as const] : []),
   ...(BILLING_ENABLED ? [["billing", "Billing"] as const] : []),
   ["audit", "Audit log"],
 ] as const;

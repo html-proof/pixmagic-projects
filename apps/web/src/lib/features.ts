@@ -5,3 +5,9 @@
 
 /** Settings → Billing (plans charged through Shopify). Hidden 2026-10-15 until paid plans launch. */
 export const BILLING_ENABLED: boolean = false;
+
+/**
+ * Settings → API keys (read-only `sk_live_` keys for other tools). Hidden 2026-10-15; keys that
+ * already exist keep working, since the API still accepts them.
+ */
+export const API_KEYS_ENABLED: boolean = false;

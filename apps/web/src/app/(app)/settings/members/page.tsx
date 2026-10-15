@@ -5,6 +5,7 @@ import { STAFF_ROLE_HELP, STAFF_ROLE_LABEL, STAFF_ROLES, type StaffRole } from "
 import { useApp } from "@/components/AppContext";
 import { Alert } from "@/components/ui";
 import { actionError, api, useApi } from "@/lib/api";
+import { API_KEYS_ENABLED } from "@/lib/features";
 
 interface Members {
   members: Array<{ id: string; userId: string; email: string; name: string | null; role: string; staffRole: StaffRole | null }>;
@@ -13,7 +14,7 @@ interface Members {
 
 const ROLE_HELP: Record<string, string> = {
   owner: "Everything, including billing, ownership and Staff Management",
-  admin: "Manage stores, members, API keys and Staff Management",
+  admin: `Manage stores, members${API_KEYS_ENABLED ? ", API keys" : ""} and Staff Management`,
   analyst: "View all dashboards",
   viewer: "View all dashboards",
 };
