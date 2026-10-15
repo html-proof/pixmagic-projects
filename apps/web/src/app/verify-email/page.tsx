@@ -5,7 +5,8 @@ import { useEffect, useState } from "react";
 import { api, isTransient, keepRetrying } from "@/lib/api";
 import { authErrorMessage, sendVerificationCode, verifyEmailCode } from "@/lib/auth";
 import { takeReturnTo } from "@/lib/returnTo";
-import { Alert, AuthShell } from "@/components/ui";
+import { Alert } from "@/components/ui";
+import { AuthCard, AuthSubmit } from "@/components/auth/AuthCard";
 import { CodeStep } from "@/components/auth/CodeStep";
 
 /**
@@ -59,15 +60,16 @@ export default function VerifyEmailPage() {
   }
 
   return (
-    <AuthShell title="Verify your email" subtitle={email ? `Confirm that ${email} is yours. Verifying keeps your account safe.` : "Checking your account…"}>
+    <AuthCard title="Verify your email" subtitle={email ? `Confirm that ${email} is yours. Verifying keeps your account safe.` : "Checking your account…"}>
       {error && <Alert>{error}</Alert>}
       {email && !sent && (
-        <button className="btn-primary w-full" onClick={() => void send()} disabled={busy}>
-          {busy ? "Sending…" : "Email me a verification code"}
-        </button>
+        <AuthSubmit type="button" onClick={() => void send()} busy={busy} busyLabel="Sending…">
+          Email me a verification code
+        </AuthSubmit>
       )}
       {email && sent && (
         <CodeStep
+          large
           email={email}
           submitLabel="Verify email"
           busyLabel="Verifying…"
@@ -79,9 +81,11 @@ export default function VerifyEmailPage() {
           onResend={sendVerificationCode}
         />
       )}
-      <Link href="/login?signedOut=1" className="block text-sm text-muted underline">
-        Sign in with a different account
-      </Link>
-    </AuthShell>
+      <p className="text-center">
+        <Link href="/login?signedOut=1" className="auth-link">
+          Sign in with a different account
+        </Link>
+      </p>
+    </AuthCard>
   );
 }

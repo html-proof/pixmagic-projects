@@ -86,20 +86,30 @@ test("the homepage introduces Insights, and Log in and Sign up open their own pa
 test("signing up checks the form, confirms the emailed code, refuses a taken email, and the session survives a refresh", async ({ page }) => {
   await page.goto("/signup");
   await expect(page.getByText("Continue with Shopify")).toHaveCount(0);
+  // Nothing filled in: every field says what it needs, and focus goes to the first.
+  await page.getByRole("button", { name: "Create Account" }).click();
+  await expect(alert(page)).toContainText("review the highlighted fields");
+  await expect(page.getByLabel("Full name")).toBeFocused();
+  await expect(page.getByLabel("Full name")).toHaveAccessibleDescription("Enter your full name.");
+  // Each problem is on its own field, and goes away as soon as it's fixed.
   await fillSignUp(page, "not-an-email");
   await page.getByRole("button", { name: "Create Account" }).click();
-  await expect(alert(page)).toContainText("valid email");
+  await expect(page.getByLabel("Email Address")).toHaveAttribute("aria-invalid", "true");
+  await expect(page.getByLabel("Email Address")).toHaveAccessibleDescription(/valid email/);
+  await expect(page.getByLabel("Full name")).not.toHaveAttribute("aria-invalid");
   await fillSignUp(page, uniqueEmail("short"), "short");
   await page.getByRole("button", { name: "Create Account" }).click();
-  await expect(alert(page)).toContainText("at least 8 characters");
+  await expect(page.getByLabel("Email Address")).not.toHaveAttribute("aria-invalid");
+  await expect(page.getByLabel("Password", { exact: true })).toHaveAccessibleDescription(/at least 8 characters/);
   await fillSignUp(page, uniqueEmail("mismatch"));
   await page.getByLabel("Confirm password", { exact: true }).fill("something-else-1");
   await page.getByRole("button", { name: "Create Account" }).click();
-  await expect(alert(page)).toContainText("don't match");
+  await expect(page.getByLabel("Confirm password", { exact: true })).toHaveAccessibleDescription(/don't match/);
   await fillSignUp(page, uniqueEmail("terms"));
   await page.getByLabel(/I agree to the Terms/).uncheck();
   await page.getByRole("button", { name: "Create Account" }).click();
-  await expect(alert(page)).toContainText("Terms of Service");
+  await expect(page.getByLabel(/I agree to the Terms/)).toHaveAccessibleDescription(/Terms of Service/);
+  await expect(alert(page)).toContainText("review the highlighted fields");
 
   // A wrong code is refused; the right one signs the new account in.
   const email = uniqueEmail("persist");
