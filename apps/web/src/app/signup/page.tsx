@@ -176,7 +176,8 @@ export default function SignupPage() {
           </div>
           {termsError && <FieldError id="terms">{termsError}</FieldError>}
         </div>
-        <button className="auth-cta" disabled={busy}>
+        {/* Locked until the terms are accepted. */}
+        <button className="auth-cta" disabled={busy || !terms}>
           {busy ? (
             "Creating your account…"
           ) : (

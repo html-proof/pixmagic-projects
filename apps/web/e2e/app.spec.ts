@@ -91,7 +91,10 @@ test("the homepage introduces Insights, and Log in and Sign up open their own pa
 test("signing up checks the form, confirms the emailed code, refuses a taken email, and the session survives a refresh", async ({ page }) => {
   await page.goto("/signup");
   await expect(page.getByText("Continue with Shopify")).toHaveCount(0);
-  // Nothing filled in: every field says what it needs, and focus goes to the first.
+  // Create Account stays locked until the terms are accepted.
+  await expect(page.getByRole("button", { name: "Create Account" })).toBeDisabled();
+  await page.getByLabel(/I agree to the Terms/).check();
+  // Nothing else filled in: every field says what it needs, and focus goes to the first.
   await page.getByRole("button", { name: "Create Account" }).click();
   await expect(alert(page)).toContainText("review the highlighted fields");
   await expect(page.getByLabel("Full name")).toBeFocused();
@@ -111,8 +114,9 @@ test("signing up checks the form, confirms the emailed code, refuses a taken ema
   await page.getByRole("button", { name: "Create Account" }).click();
   await expect(page.getByLabel("Confirm password", { exact: true })).toHaveAccessibleDescription(/don't match/);
   await fillSignUp(page, uniqueEmail("terms"));
+  // Un-ticking the terms locks the button again and says why.
   await page.getByLabel(/I agree to the Terms/).uncheck();
-  await page.getByRole("button", { name: "Create Account" }).click();
+  await expect(page.getByRole("button", { name: "Create Account" })).toBeDisabled();
   await expect(page.getByLabel(/I agree to the Terms/)).toHaveAccessibleDescription(/Terms of Service/);
   await expect(alert(page)).toContainText("review the highlighted fields");
 

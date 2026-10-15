@@ -194,6 +194,8 @@ body {
   }
   &:disabled {
     opacity: 0.6;
+    box-shadow: none;
+    cursor: not-allowed;
   }
   & svg {
     transition: transform 0.2s ease;
