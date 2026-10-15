@@ -106,6 +106,9 @@ export default function MembersPage() {
           <li key={i.id} className="flex items-center gap-3 py-2 text-sm text-muted">
             <span className="flex-1">{i.email} · invited</span>
             <span>{i.role}{i.staffRole ? ` · ${STAFF_ROLE_LABEL[i.staffRole]}` : ""}</span>
+            {manage && (
+              <button className="text-danger" aria-label={`Cancel the invitation for ${i.email}`} onClick={() => confirm(`Cancel the invitation for ${i.email}? The link they were sent stops working.`) && act(api(`/workspaces/${workspace.id}/invitations/${i.id}`, { method: "DELETE" }), "cancel the invitation")}>Cancel</button>
+            )}
           </li>
         ))}
       </ul>

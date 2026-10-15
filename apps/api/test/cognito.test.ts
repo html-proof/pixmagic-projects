@@ -210,10 +210,13 @@ describe("ID token verification", () => {
     await expect(auth.verifyIdToken("not.a.jwt")).rejects.toMatchObject({ code: "InvalidToken" });
   });
 
-  it("rejects a token signed with a key that isn't the pool's", async () => {
+  it("rejects a token signed with a key that isn't the pool's, or not signed at all", async () => {
     const other = await generateKeyPair("RS256");
     const forged = await new SignJWT(good).setProtectedHeader({ alg: "RS256", kid: "k1" }).setIssuer(CFG.issuer).setAudience(CFG.clientId).setExpirationTime(now + 60).sign(other.privateKey);
     await expect(auth.verifyIdToken(forged)).rejects.toMatchObject({ code: "InvalidToken" });
+    const enc = (o: object) => Buffer.from(JSON.stringify(o)).toString("base64url");
+    const unsigned = `${enc({ alg: "none", kid: "k1" })}.${enc({ ...good, iss: CFG.issuer, aud: CFG.clientId, exp: now + 60 })}.`;
+    await expect(auth.verifyIdToken(unsigned)).rejects.toMatchObject({ code: "InvalidToken" });
   });
 
   it("calls unreachable signing keys an outage, not a bad token", async () => {

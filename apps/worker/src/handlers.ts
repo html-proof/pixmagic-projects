@@ -624,7 +624,7 @@ export async function processWebhook(data: WebhookJobData, deps: WorkerDeps) {
         break;
       }
       case "shop/redact":
-        await purgeStoreData(store.id);
+        await purgeStoreData(store.id, deps.fetchImpl);
         await purgeEmailStoreData(store.id);
         await systemDb.store.update({ where: { id: store.id }, data: { accessTokenEnc: null, refreshTokenEnc: null, status: "uninstalled" } });
         await audit({ workspaceId: store.workspaceId, action: "gdpr.shop_redacted", targetId: store.id });
@@ -1012,10 +1012,16 @@ const ADS_SPREAD_S = 300;
  * 30 days are fetched again. Accounts waiting for a reconnect are left alone.
  */
 export async function scheduleAdsSync(deps: WorkerDeps) {
-  const conns = await systemDb.adConnection.findMany({
+  const all = await systemDb.adConnection.findMany({
     where: { enabled: true, status: { in: ["active", "error"] } },
-    select: { id: true, timezone: true },
+    select: { id: true, timezone: true, storeId: true },
   });
+  // A store that uninstalled the app stops pulling ad data with the tokens it left behind; they are
+  // revoked when its data is purged (shop/redact), or used again if it reinstalls before that.
+  const gone = new Set(
+    (await systemDb.store.findMany({ where: { id: { in: [...new Set(all.map((c) => c.storeId))] }, status: "uninstalled" }, select: { id: true } })).map((s) => s.id),
+  );
+  const conns = all.filter((c) => !gone.has(c.storeId));
   let sent = 0;
   for (const c of conns) {
     const wide = `ads-recheck:${c.id}`;

@@ -24,6 +24,7 @@ import {
   WhatsappApiError,
   WhatsappConnectError,
   connectionToken,
+  numberOptedOut,
   syncTemplates,
 } from "@app/core";
 import {
@@ -447,6 +448,8 @@ export function whatsappRoutes(app: App, deps: Deps) {
       .parse(await body(c));
     const phone = normalizePhone(input.phone, null);
     if (!phone) throw new HttpError(400, "Enter the number in international format, starting with + and the country code.", "invalid_phone");
+    // A test skips the consent checks a real send makes, so it must at least respect a STOP.
+    if (await numberOptedOut(storeId, phone.waId)) throw new HttpError(409, "That number replied STOP to this store, so nothing (not even a test) can be sent to it.", "opted_out");
     const conn = await systemDb.whatsappConnection.findUnique({ where: { storeId } });
     if (!conn || conn.workspaceId !== ws) throw new HttpError(409, "Connect WhatsApp first.", "not_connected");
     const settings = await ensureSettings(store);

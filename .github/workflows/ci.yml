@@ -34,6 +34,7 @@ jobs:
       - uses: actions/setup-node@v7
         with: { node-version: 24, cache: pnpm }
       - run: pnpm install --frozen-lockfile
+      # Known vulnerabilities in any dependency (direct or transitive) fail the build.
       - name: Dependency audit (high and critical advisories)
         run: pnpm audit --audit-level high
       - run: pnpm lint

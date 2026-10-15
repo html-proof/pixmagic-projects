@@ -34,7 +34,7 @@ export interface AttachInput {
  * the shop is live in another workspace. Callers have already checked who may connect to
  * `workspaceId`.
  */
-export async function attachStore(deps: Pick<Deps, "queues">, input: AttachInput): Promise<Store> {
+export async function attachStore(deps: Pick<Deps, "queues" | "fetchImpl">, input: AttachInput): Promise<Store> {
   const { workspaceId, shop, token } = input;
   const existing = await systemDb.store.findUnique({ where: { shopDomain: shop } });
   if (existing && existing.workspaceId !== workspaceId && existing.status !== "uninstalled") throw storeTaken();
@@ -43,7 +43,7 @@ export async function attachStore(deps: Pick<Deps, "queues">, input: AttachInput
   // workspace_id (and RLS hides them from the new one), so start from a clean slate.
   const moving = !!existing && existing.workspaceId !== workspaceId;
   if (moving) {
-    await purgeStoreData(existing.id);
+    await purgeStoreData(existing.id, deps.fetchImpl);
     await systemDb.syncJob.deleteMany({ where: { storeId: existing.id } });
   }
   let store: Store;

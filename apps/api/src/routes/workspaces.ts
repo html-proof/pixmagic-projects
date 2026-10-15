@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { systemDb, withTenant } from "@app/db";
 import { APP_SUBSCRIPTION_CREATE, audit, env, getAccessToken, logger, purgeStoreData, shopifyGraphql } from "@app/core";
-import { randomToken, ROLES, sha256Hex } from "@app/shared";
+import { can, randomToken, ROLES, sha256Hex } from "@app/shared";
 import { STAFF_ROLES } from "@app/shared/staff";
 import { body, clientIp, HttpError, requireUser, requireWorkspace, type Deps } from "../context.js";
 import type { App } from "../app.js";
@@ -68,8 +68,10 @@ export function workspaceRoutes(app: App, deps: Deps) {
     const { ws } = c.req.param();
     const a = await requireWorkspace(c, deps, ws, "members:manage");
     const input = z.object({ email: z.string().email().max(254), role: roleSchema.exclude(["owner"]), staffRole: staffRoleSchema.optional() }).parse(await body(c));
-    // Each invitation sends an email from our domain: don't let one workspace turn it into a spam relay.
+    // Each invitation sends an email from our domain: don't let one workspace turn it into a spam
+    // relay, nor one person with many workspaces.
     await limit(deps.coord, `rl:invite:${ws}`, LIMITS.invitations);
+    if (a.user) await limit(deps.coord, `rl:invite-user:${a.user.id}`, LIMITS.invitationsPerUser);
     const token = randomToken(32);
     await withTenant(ws, (tx) =>
       tx.invitation.create({
@@ -124,21 +126,25 @@ export function workspaceRoutes(app: App, deps: Deps) {
       .parse(await body(c));
     const { role } = input;
     if (role === "owner" && a.role !== "owner") throw new HttpError(403, "Only owners can grant ownership", "forbidden");
-    await withTenant(ws, async (tx) => {
+    const keysRevoked = await withTenant(ws, async (tx) => {
+      await lockOwners(tx, ws);
       const m = await tx.membership.findFirst({ where: { id: memberId, workspaceId: ws } });
       if (!m) throw new HttpError(404, "Not found", "not_found");
       if (m.role === "owner" && a.role !== "owner") throw new HttpError(403, "Only owners can change an owner", "forbidden");
       if (role && m.role === "owner" && role !== "owner") await assertAnotherOwner(tx, ws, m.id);
       await tx.membership.update({ where: { id: m.id }, data: { ...(role ? { role } : {}), ...(input.staffRole !== undefined ? { staffRole: input.staffRole } : {}) } });
+      // Keys they made keep working after they can no longer manage keys: retire them with the role.
+      return role && !can(role, "apikeys:manage") ? revokeKeysOf(tx, ws, m.userId) : 0;
     });
-    await audit({ workspaceId: ws, actorUserId: a.user?.id, action: "member.role_changed", targetId: memberId, metadata: { role, staffRole: input.staffRole }, ip: clientIp(c) });
+    await audit({ workspaceId: ws, actorUserId: a.user?.id, action: "member.role_changed", targetId: memberId, metadata: { role, staffRole: input.staffRole, keysRevoked }, ip: clientIp(c) });
     return c.json({ ok: true });
   });
 
   app.delete("/workspaces/:ws/members/:memberId", async (c) => {
     const { ws, memberId } = c.req.param();
     const a = await requireWorkspace(c, deps, ws, "members:manage");
-    await withTenant(ws, async (tx) => {
+    const keysRevoked = await withTenant(ws, async (tx) => {
+      await lockOwners(tx, ws);
       const m = await tx.membership.findFirst({ where: { id: memberId, workspaceId: ws } });
       if (!m) throw new HttpError(404, "Not found", "not_found");
       if (m.role === "owner") {
@@ -146,8 +152,20 @@ export function workspaceRoutes(app: App, deps: Deps) {
         await assertAnotherOwner(tx, ws, m.id);
       }
       await tx.membership.delete({ where: { id: m.id } });
+      // An API key outlives its creator's membership otherwise (keys never expire).
+      return revokeKeysOf(tx, ws, m.userId);
     });
-    await audit({ workspaceId: ws, actorUserId: a.user?.id, action: "member.removed", targetId: memberId, ip: clientIp(c) });
+    await audit({ workspaceId: ws, actorUserId: a.user?.id, action: "member.removed", targetId: memberId, metadata: { keysRevoked }, ip: clientIp(c) });
+    return c.json({ ok: true });
+  });
+
+  /** Withdraw an invitation that hasn't been accepted (one sent to the wrong address, or by someone since removed). */
+  app.delete("/workspaces/:ws/invitations/:invitationId", async (c) => {
+    const { ws, invitationId } = c.req.param();
+    const a = await requireWorkspace(c, deps, ws, "members:manage");
+    const res = await withTenant(ws, (tx) => tx.invitation.deleteMany({ where: { id: invitationId, workspaceId: ws, acceptedAt: null } }));
+    if (res.count === 0) throw new HttpError(404, "Not found", "not_found");
+    await audit({ workspaceId: ws, actorUserId: a.user?.id, action: "member.invitation_revoked", targetId: invitationId, ip: clientIp(c) });
     return c.json({ ok: true });
   });
 
@@ -173,7 +191,7 @@ export function workspaceRoutes(app: App, deps: Deps) {
       where: { id: store.id },
       data: { status: "uninstalled", uninstalledAt: new Date(), accessTokenEnc: null, refreshTokenEnc: null, grantedScopes: [] },
     });
-    await purgeStoreData(store.id);
+    await purgeStoreData(store.id, deps.fetchImpl);
     await audit({ workspaceId: ws, actorUserId: a.user?.id, action: "store.disconnected", targetId: storeId, ip: clientIp(c) });
     return c.json({ ok: true });
   });
@@ -209,7 +227,11 @@ export function workspaceRoutes(app: App, deps: Deps) {
     const { ws } = c.req.param();
     await requireWorkspace(c, deps, ws, "apikeys:manage");
     const keys = await withTenant(ws, (tx) => tx.apiKey.findMany({ where: { workspaceId: ws }, orderBy: { createdAt: "desc" } }));
-    return c.json({ keys: keys.map((k) => ({ id: k.id, name: k.name, prefix: k.prefix, createdAt: k.createdAt, lastUsedAt: k.lastUsedAt, revokedAt: k.revokedAt })) });
+    const creators = await systemDb.user.findMany({ where: { id: { in: [...new Set(keys.map((k) => k.createdById).filter((id): id is string => !!id))] } }, select: { id: true, email: true } });
+    const emailOf = new Map(creators.map((u) => [u.id, u.email]));
+    return c.json({
+      keys: keys.map((k) => ({ id: k.id, name: k.name, prefix: k.prefix, createdBy: (k.createdById && emailOf.get(k.createdById)) ?? null, createdAt: k.createdAt, lastUsedAt: k.lastUsedAt, revokedAt: k.revokedAt })),
+    });
   });
 
   app.post("/workspaces/:ws/api-keys", async (c) => {
@@ -311,6 +333,21 @@ export function workspaceRoutes(app: App, deps: Deps) {
     const alerts = await withTenant(ws, (tx) => tx.alert.findMany({ where: { workspaceId: ws, resolvedAt: null }, orderBy: { createdAt: "desc" }, take: 20 }));
     return c.json({ alerts });
   });
+}
+
+type Tx = Parameters<Parameters<typeof withTenant>[1]>[0];
+
+/**
+ * Serialize changes to a workspace's members: without it two owners demoting or removing each
+ * other at the same moment both see "another owner remains" and leave the workspace with none.
+ */
+async function lockOwners(tx: Tx, ws: string) {
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`owners:${ws}`}))`;
+}
+
+async function revokeKeysOf(tx: Tx, ws: string, userId: string): Promise<number> {
+  const r = await tx.apiKey.updateMany({ where: { workspaceId: ws, createdById: userId, revokedAt: null }, data: { revokedAt: new Date() } });
+  return r.count;
 }
 
 async function assertAnotherOwner(tx: Parameters<Parameters<typeof withTenant>[1]>[0], ws: string, excludingMemberId: string) {

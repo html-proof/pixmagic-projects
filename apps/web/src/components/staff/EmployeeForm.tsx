@@ -243,6 +243,9 @@ export function EmployeeForm({
   const { can } = useStaff();
   const editing = !!employee;
   const withRate = !editing && can("pay:manage");
+  // Overtime/break policies and the currency decide pay: the API refuses them from anyone without pay:manage (HR managers).
+  const payLocked = !can("pay:manage");
+  const payLockedHint = "Only payroll managers, admins and owners can change this.";
   const [draft, setDraft] = useState<Draft>(() => initialDraft(config, employee));
   const [errors, setErrors] = useState<Errors>({});
   const [problem, setProblem] = useState<string | null>(null);
@@ -411,8 +414,8 @@ export function EmployeeForm({
             Hourly rates are kept as a dated history. Change them with <span className="font-medium text-text">Change pay rate</span> on the employee&apos;s Overview.
           </div>
         )}
-        <Field label="Currency" htmlFor={id("currency")} error={errors.currency} hint={editing ? "Can't change once they've been included in a payroll." : "The currency they're paid in."}>
-          <CurrencySelect id={id("currency")} value={draft.currency} onChange={(v) => set("currency", v)} />
+        <Field label="Currency" htmlFor={id("currency")} error={errors.currency} hint={payLocked ? payLockedHint : editing ? "Can't change once they've been included in a payroll." : "The currency they're paid in."}>
+          <CurrencySelect id={id("currency")} value={draft.currency} onChange={(v) => set("currency", v)} disabled={payLocked} />
         </Field>
         <Field label="Standard weekly hours" htmlFor={id("weeklyHours")} error={errors.weeklyHours} hint="Their usual hours a week, like 38 or 37.5. Leave empty if it varies.">
           <input
@@ -439,8 +442,8 @@ export function EmployeeForm({
             error={errors.workingDays}
           />
         </div>
-        <Field label="Overtime policy" htmlFor={id("overtimePolicyId")} hint={config.overtimePolicies.length ? "How hours beyond the usual are paid." : "No overtime policies yet: add them in Staff settings."}>
-          <select id={id("overtimePolicyId")} className="input" value={draft.overtimePolicyId} onChange={(e) => set("overtimePolicyId", e.target.value)}>
+        <Field label="Overtime policy" htmlFor={id("overtimePolicyId")} hint={payLocked ? payLockedHint : config.overtimePolicies.length ? "How hours beyond the usual are paid." : "No overtime policies yet: add them in Staff settings."}>
+          <select id={id("overtimePolicyId")} className="input" value={draft.overtimePolicyId} disabled={payLocked} onChange={(e) => set("overtimePolicyId", e.target.value)}>
             <option value="">No overtime</option>
             {config.overtimePolicies.map((p) => (
               <option key={p.id} value={p.id}>
@@ -449,8 +452,8 @@ export function EmployeeForm({
             ))}
           </select>
         </Field>
-        <Field label="Break policy" htmlFor={id("breakPolicyId")} hint="Which breaks are paid, and how many and how long they can be.">
-          <select id={id("breakPolicyId")} className="input" value={draft.breakPolicyId} onChange={(e) => set("breakPolicyId", e.target.value)}>
+        <Field label="Break policy" htmlFor={id("breakPolicyId")} hint={payLocked ? payLockedHint : "Which breaks are paid, and how many and how long they can be."}>
+          <select id={id("breakPolicyId")} className="input" value={draft.breakPolicyId} disabled={payLocked} onChange={(e) => set("breakPolicyId", e.target.value)}>
             <option value="">None (short breaks paid, meal breaks unpaid)</option>
             {config.breakPolicies.map((p) => (
               <option key={p.id} value={p.id}>

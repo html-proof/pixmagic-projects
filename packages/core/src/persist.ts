@@ -2,6 +2,8 @@ import { systemDb, type Store } from "@app/db";
 import { expandScopes, hmacSha256Hex, localDay } from "@app/shared";
 import { env } from "./env.js";
 import type { NormalizedOrder, NormalizedProduct, NormalizedRefund, NormalizedVariant } from "./normalize.js";
+import { revokeAdAccessIfUnused } from "./adConnections.js";
+import type { FetchLike } from "./shopify.js";
 
 type StoreCtx = Pick<Store, "id" | "workspaceId" | "timezone" | "grantedScopes">;
 
@@ -594,7 +596,10 @@ export async function recomputeReturningCustomers(storeId: string) {
 }
 
 /** shop/redact & uninstall cleanup: remove all synced commerce data for a store. */
-export async function purgeStoreData(storeId: string) {
+export async function purgeStoreData(storeId: string, fetchImpl?: FetchLike) {
+  // Read first: the ad platforms' grants are revoked once the rows are gone (so the store's own
+  // connections no longer count as "still using" the grant). Best effort, never blocks the purge.
+  const adConnections = await systemDb.adConnection.findMany({ where: { storeId } });
   await systemDb.$transaction([
     systemDb.orderLineItem.deleteMany({ where: { storeId } }),
     systemDb.refund.deleteMany({ where: { storeId } }),
@@ -624,4 +629,6 @@ export async function purgeStoreData(storeId: string) {
     systemDb.whatsappConnection.deleteMany({ where: { storeId } }),
     systemDb.whatsappSettings.deleteMany({ where: { storeId } }),
   ]);
+  // Deleting our copy of a token leaves the access it grants alive at Google or Meta.
+  for (const conn of adConnections) await revokeAdAccessIfUnused(conn, fetchImpl);
 }

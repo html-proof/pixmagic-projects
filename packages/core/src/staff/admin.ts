@@ -71,7 +71,7 @@ export async function updateStaffSettings(actor: StaffActor, patch: SettingsPatc
     }
     await tx.staffSettings.update({ where: { workspaceId: actor.workspaceId }, data: { ...patch, updatedByUserId: actor.userId } });
   });
-  await audit({ workspaceId: actor.workspaceId, actorUserId: actor.userId, action: "staff.settings_updated", metadata: { fields: Object.keys(patch) }, ip: actor.ip });
+  await audit({ workspaceId: actor.workspaceId, actorUserId: actor.userId, action: "staff.settings_updated", metadata: { fields: Object.keys(patch), values: { ...patch } }, ip: actor.ip });
   return getStaffConfig(actor);
 }
 
@@ -82,6 +82,7 @@ export async function updateStaffSettings(actor: StaffActor, patch: SettingsPatc
 export async function createDepartment(actor: StaffActor, name: string) {
   try {
     const d = await withTenant(actor.workspaceId, (tx) => tx.department.create({ data: { workspaceId: actor.workspaceId, name: name.trim() } }));
+    await audit({ workspaceId: actor.workspaceId, actorUserId: actor.userId, action: "staff.department_created", targetType: "department", targetId: d.id, metadata: { name: d.name }, ip: actor.ip });
     return { id: d.id, name: d.name, employees: 0 };
   } catch (err) {
     if (isUniqueViolation(err)) throw new StaffError(409, "exists", "There's already a department with that name.");
@@ -93,6 +94,7 @@ export async function renameDepartment(actor: StaffActor, id: string, name: stri
   try {
     const n = await withTenant(actor.workspaceId, (tx) => tx.department.updateMany({ where: { id, workspaceId: actor.workspaceId }, data: { name: name.trim() } }));
     if (!n.count) throw notFound("That department");
+    await audit({ workspaceId: actor.workspaceId, actorUserId: actor.userId, action: "staff.department_renamed", targetType: "department", targetId: id, metadata: { name: name.trim() }, ip: actor.ip });
   } catch (err) {
     if (isUniqueViolation(err)) throw new StaffError(409, "exists", "There's already a department with that name.");
     throw err;
@@ -103,6 +105,7 @@ export async function renameDepartment(actor: StaffActor, id: string, name: stri
 export async function deleteDepartment(actor: StaffActor, id: string) {
   const n = await withTenant(actor.workspaceId, (tx) => tx.department.deleteMany({ where: { id, workspaceId: actor.workspaceId } }));
   if (!n.count) throw notFound("That department");
+  await audit({ workspaceId: actor.workspaceId, actorUserId: actor.userId, action: "staff.department_deleted", targetType: "department", targetId: id, ip: actor.ip });
   return { ok: true };
 }
 
@@ -204,6 +207,7 @@ export async function deleteBreakPolicy(actor: StaffActor, id: string) {
     if (!n.count) throw notFound("That break policy");
     await tx.staffSettings.updateMany({ where: { workspaceId: actor.workspaceId, defaultBreakPolicyId: id }, data: { defaultBreakPolicyId: null } });
   });
+  await audit({ workspaceId: actor.workspaceId, actorUserId: actor.userId, action: "staff.break_policy_deleted", targetType: "break_policy", targetId: id, ip: actor.ip });
   return { ok: true };
 }
 
@@ -228,13 +232,15 @@ export async function addHoliday(actor: StaffActor, day: string, name: string) {
 }
 
 export async function deleteHoliday(actor: StaffActor, id: string) {
-  await withTenant(actor.workspaceId, async (tx) => {
+  const removed = await withTenant(actor.workspaceId, async (tx) => {
     const h = await tx.staffHoliday.findFirst({ where: { id, workspaceId: actor.workspaceId } });
     if (!h) throw notFound("That holiday");
     const locked = await tx.payrollPeriod.findFirst({ where: { workspaceId: actor.workspaceId, lockedAt: { not: null }, startDate: { lte: h.day }, endDate: { gte: h.day } } });
     if (locked) throw new StaffError(409, "period_locked", "Payroll for that day is already approved, so its holiday pay can't change.");
     await tx.staffHoliday.delete({ where: { id } });
+    return h;
   });
+  await audit({ workspaceId: actor.workspaceId, actorUserId: actor.userId, action: "staff.holiday_deleted", metadata: { day: removed.day, name: removed.name }, ip: actor.ip });
   return { ok: true };
 }
 
@@ -344,12 +350,14 @@ export async function updateSchedule(actor: StaffActor, id: string, input: Omit<
     await assertNoScheduleOverlap(tx, existing.employeeId, t.startsAt, t.endsAt, id);
     return tx.shiftSchedule.update({ where: { id }, data: { ...t, breakMinutes: input.breakMinutes, location: input.location ?? null, note: input.note ?? null } });
   });
+  await audit({ workspaceId: actor.workspaceId, actorUserId: actor.userId, action: "staff.schedule_updated", targetType: "employee", targetId: row.employeeId, metadata: { scheduleId: id }, ip: actor.ip });
   return scheduleView(row, s.timezone);
 }
 
 export async function deleteSchedule(actor: StaffActor, id: string) {
   const n = await withTenant(actor.workspaceId, (tx) => tx.shiftSchedule.deleteMany({ where: { id, workspaceId: actor.workspaceId, employee: employeeScope(actor) } }));
   if (!n.count) throw notFound("That shift");
+  await audit({ workspaceId: actor.workspaceId, actorUserId: actor.userId, action: "staff.schedule_deleted", metadata: { scheduleId: id }, ip: actor.ip });
   return { ok: true };
 }
 

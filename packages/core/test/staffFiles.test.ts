@@ -30,7 +30,13 @@ describe("staff export files", () => {
     const csv = text(bytes);
     expect(csv).toContain(`"'=HYPERLINK(""http://x"")",160.00`);
     expect(csv).toContain(`"O'Brien, Pat",-12.50`); // a negative number stays a number
-    expect(csv).toContain("'@cmd,");
+    expect(csv).toContain(`"'@cmd",`);
+  });
+
+  it("quotes every text cell, so a ';' list separator can't split one into a formula", () => {
+    const csv = text(toCsv(["Name"], [['Bob;=HYPERLINK("https://evil","Open")'], ["Plain"]]));
+    expect(csv).toContain(`"Bob;=HYPERLINK(""https://evil"",""Open"")"`);
+    expect(csv).toContain(`"Plain"`);
   });
 
   it("writes a valid .xlsx (zip) with numbers as numbers", () => {

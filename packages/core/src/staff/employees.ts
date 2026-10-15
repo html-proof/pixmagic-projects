@@ -11,7 +11,7 @@ import {
   type EmploymentType,
 } from "@app/shared/staff";
 import { audit } from "../notify.js";
-import { decimalString, displayRate, employeeScope, isUniqueViolation, notFound, scopedEmployee, serverNow, StaffError, type StaffActor } from "./common.js";
+import { assertNotOwnRecord, decimalString, displayRate, employeeScope, isUniqueViolation, notFound, scopedEmployee, serverNow, StaffError, type StaffActor } from "./common.js";
 import { ensureStaffSettings } from "./settings.js";
 
 export interface EmployeeInput {
@@ -123,7 +123,7 @@ export interface EmployeeFilters {
 export async function listEmployees(actor: StaffActor, f: EmployeeFilters) {
   const settings = await ensureStaffSettings(actor.workspaceId);
   const today = localDayOf(Date.now(), settings.timezone);
-  const where: Prisma.EmployeeWhereInput = { ...employeeScope(actor) };
+  const where: Prisma.EmployeeWhereInput = {};
   if (f.status && f.status !== "all") where.status = f.status;
   else if (!f.status) where.status = { not: "inactive" };
   if (f.departmentId) where.departmentId = f.departmentId;
@@ -144,12 +144,15 @@ export async function listEmployees(actor: StaffActor, f: EmployeeFilters) {
   }
   const orderBy: Prisma.EmployeeOrderByWithRelationInput =
     f.sort === "number" ? { employeeNumber: "asc" } : f.sort === "joined" ? { joinedOn: "desc" } : f.sort === "created" ? { createdAt: "desc" } : { fullName: "asc" };
+  // The actor's scope is ANDed with the filters, never merged into them: a supervisor's scope is
+  // `managerUserId: <themselves>`, which a `managerUserId` filter would otherwise replace.
+  const scoped: Prisma.EmployeeWhereInput = { AND: [employeeScope(actor), where] };
   const pay = staffCan(actor.access, "pay:view");
   return withTenant(actor.workspaceId, async (tx) => {
     const [total, rows] = await Promise.all([
-      tx.employee.count({ where }),
+      tx.employee.count({ where: scoped }),
       tx.employee.findMany({
-        where,
+        where: scoped,
         orderBy: [orderBy, { id: "asc" }],
         skip: (f.page - 1) * f.pageSize,
         take: f.pageSize,
@@ -223,12 +226,35 @@ async function departmentFor(tx: Tx, ws: string, input: Partial<EmployeeInput>):
   return input.departmentId;
 }
 
+/**
+ * Overtime and break policies and the pay currency decide what someone is paid, so setting them to
+ * anything but what they already are (or, for a new employee, the organization's defaults) needs
+ * `pay:manage`. HR managers have `staff:manage` only: they edit people, not pay.
+ */
+function assertPayFieldsAllowed(
+  actor: StaffActor,
+  input: Partial<Pick<EmployeeInput, "overtimePolicyId" | "breakPolicyId" | "currency">>,
+  current: { overtimePolicyId: string | null; breakPolicyId: string | null; currency: string },
+) {
+  if (staffCan(actor.access, "pay:manage")) return;
+  const changes =
+    (input.overtimePolicyId !== undefined && (input.overtimePolicyId ?? null) !== current.overtimePolicyId) ||
+    (input.breakPolicyId !== undefined && (input.breakPolicyId ?? null) !== current.breakPolicyId) ||
+    (!!input.currency && input.currency !== current.currency);
+  if (changes) throw new StaffError(403, "forbidden", "Only payroll managers, admins and owners can change overtime, break policies or the pay currency.");
+}
+
 export async function createEmployee(actor: StaffActor, input: EmployeeInput) {
   const settings = await ensureStaffSettings(actor.workspaceId);
   const ws = actor.workspaceId;
   if (input.hourlyRate && !staffCan(actor.access, "pay:manage")) {
     throw new StaffError(403, "forbidden", "Only payroll managers, admins and owners can set pay rates.");
   }
+  assertPayFieldsAllowed(actor, input, {
+    overtimePolicyId: settings.defaultOvertimePolicyId ?? null,
+    breakPolicyId: settings.defaultBreakPolicyId ?? null,
+    currency: settings.currency,
+  });
   const currency = input.currency ?? settings.currency;
   if (input.hourlyRate) {
     try {
@@ -297,6 +323,9 @@ export async function updateEmployee(actor: StaffActor, id: string, patch: Parti
   const changed = await withTenant(ws, async (tx) => {
     const e = await scopedEmployee(tx, actor, id);
     if (e.status === "inactive" && patch.status) throw new StaffError(409, "inactive", "Reactivate this employee before changing their status.");
+    assertPayFieldsAllowed(actor, patch, e);
+    if (patch.overtimePolicyId !== undefined || patch.breakPolicyId !== undefined) assertNotOwnRecord(actor, e.userId, "change overtime or break policies");
+    if (patch.managerUserId && patch.managerUserId === e.userId) throw new StaffError(400, "own_manager", "An employee can't be their own manager: their hours would be approved by themselves.");
     await validateRefs(tx, ws, patch);
     if (patch.email && patch.email.toLowerCase() !== e.email && e.userId) {
       throw new StaffError(409, "email_locked", "This employee already has an account. They sign in with the email address they registered with.");
@@ -328,6 +357,10 @@ export async function updateEmployee(actor: StaffActor, id: string, patch: Parti
     } catch (err) {
       if (isUniqueViolation(err, "email")) throw new StaffError(409, "email_taken", "An employee with that email address already exists in this organization.");
       throw err;
+    }
+    // Invitations already sent went to the old address: withdraw them, so only the new inbox can claim the record.
+    if (data.email !== undefined && data.email !== e.email) {
+      await tx.employeeInvitation.updateMany({ where: { workspaceId: ws, employeeId: id, acceptedAt: null, revokedAt: null }, data: { revokedAt: serverNow() } });
     }
     return Object.keys(data);
   });
@@ -392,6 +425,7 @@ export async function setPayRate(actor: StaffActor, employeeId: string, input: {
   if (!isCalendarDay(input.effectiveFrom)) throw new StaffError(400, "invalid_date", "Choose the day the rate starts.");
   const created = await withTenant(ws, async (tx) => {
     const e = await scopedEmployee(tx, actor, employeeId);
+    assertNotOwnRecord(actor, e.userId, "set the pay rate");
     const locked = await tx.payrollItem.findFirst({
       where: { workspaceId: ws, employeeId, period: { lockedAt: { not: null }, endDate: { gte: input.effectiveFrom } } },
       include: { period: { select: { startDate: true, endDate: true } } },
@@ -418,7 +452,7 @@ export async function setPayRate(actor: StaffActor, employeeId: string, input: {
     action: "staff.pay_rate_set",
     targetType: "employee",
     targetId: employeeId,
-    metadata: { effectiveFrom: created.effectiveFrom },
+    metadata: { effectiveFrom: created.effectiveFrom, hourlyRate: created.hourlyRate.toFixed(RATE_SCALE), currency: created.currency },
     ip: actor.ip,
   });
   return getEmployee(actor, employeeId);
@@ -427,15 +461,26 @@ export async function setPayRate(actor: StaffActor, employeeId: string, input: {
 /** Delete a rate that hasn't started paying anything approved yet (a typo). */
 export async function deletePayRate(actor: StaffActor, employeeId: string, rateId: string) {
   const ws = actor.workspaceId;
-  await withTenant(ws, async (tx) => {
-    await scopedEmployee(tx, actor, employeeId);
+  const removed = await withTenant(ws, async (tx) => {
+    const e = await scopedEmployee(tx, actor, employeeId);
+    assertNotOwnRecord(actor, e.userId, "change the pay rate");
     const r = await tx.payRate.findFirst({ where: { id: rateId, employeeId, workspaceId: ws } });
     if (!r) throw notFound("That rate");
     const locked = await tx.payrollItem.count({ where: { workspaceId: ws, employeeId, period: { lockedAt: { not: null }, endDate: { gte: r.effectiveFrom } } } });
     if (locked) throw new StaffError(409, "period_locked", "Approved payroll already used this rate, so it stays in the history.");
     await tx.payRate.delete({ where: { id: r.id } });
+    return r;
   });
-  await audit({ workspaceId: ws, actorUserId: actor.userId, action: "staff.pay_rate_deleted", targetType: "employee", targetId: employeeId, ip: actor.ip });
+  // The row is gone, so this entry is the only record of what was deleted.
+  await audit({
+    workspaceId: ws,
+    actorUserId: actor.userId,
+    action: "staff.pay_rate_deleted",
+    targetType: "employee",
+    targetId: employeeId,
+    metadata: { effectiveFrom: removed.effectiveFrom, hourlyRate: removed.hourlyRate.toFixed(RATE_SCALE), currency: removed.currency },
+    ip: actor.ip,
+  });
   return getEmployee(actor, employeeId);
 }
 

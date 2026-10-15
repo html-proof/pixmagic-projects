@@ -18,7 +18,7 @@ import {
   type PayrollStatus,
 } from "@app/shared/staff";
 import { audit } from "../notify.js";
-import { advisoryLock, displayRate, notFound, serverNow, StaffError, type StaffActor } from "./common.js";
+import { advisoryLock, assertNotOwnRecord, displayRate, notFound, serverNow, StaffError, type StaffActor } from "./common.js";
 import { computeWork, loadWork } from "./calc.js";
 import { ensureStaffSettings } from "./settings.js";
 
@@ -444,6 +444,10 @@ export async function approvePeriod(actor: StaffActor, periodId: string, version
     await advisoryLock(tx, `payroll:${actor.workspaceId}`);
     const p = await loadPeriod(tx, actor, periodId);
     if (p.status !== "pending_approval") throw new StaffError(409, "not_pending", "Only a payroll waiting for approval can be approved. Send it for approval first.");
+    // Four eyes: whoever sent it for approval doesn't approve it too (the owner may: nobody is above them).
+    if (p.submittedByUserId === actor.userId && actor.memberRole !== "owner") {
+      throw new StaffError(403, "own_submission", "You sent this payroll for approval, so someone else has to approve it: another payroll manager, an admin or the owner.");
+    }
     if (p.version !== version) throw new StaffError(409, "stale_version", "The payroll was recalculated after you opened it. Review the new figures, then approve.");
     const issues = await periodIssues(tx, settings, p);
     if (issues.length) throw new StaffError(409, "blocking_issues", "Hours changed after this payroll was submitted. Sort these out first.", { issues });
@@ -528,6 +532,7 @@ export async function addAdjustment(actor: StaffActor, periodId: string, input: 
     if (!isEditable(p.status)) throw new StaffError(409, "not_editable", "Adjustments can only be added while the payroll is a draft.");
     const e = await tx.employee.findFirst({ where: { id: input.employeeId, workspaceId: actor.workspaceId } });
     if (!e) throw notFound("That employee");
+    assertNotOwnRecord(actor, e.userId, "add pay adjustments");
     let amountMinor: bigint;
     try {
       amountMinor = toMinor(input.amount, e.currency);
@@ -551,8 +556,9 @@ export async function removeAdjustment(actor: StaffActor, periodId: string, adju
     await advisoryLock(tx, `payroll:${actor.workspaceId}`);
     const p = await loadPeriod(tx, actor, periodId);
     if (!isEditable(p.status)) throw new StaffError(409, "not_editable", "Adjustments can only be removed while the payroll is a draft.");
-    const a = await tx.payrollAdjustment.findFirst({ where: { id: adjustmentId, periodId, removedAt: null } });
+    const a = await tx.payrollAdjustment.findFirst({ where: { id: adjustmentId, periodId, removedAt: null }, include: { employee: { select: { userId: true } } } });
     if (!a) throw notFound("That adjustment");
+    assertNotOwnRecord(actor, a.employee.userId, "remove pay adjustments");
     employeeId = a.employeeId;
     await tx.payrollAdjustment.update({ where: { id: a.id }, data: { removedAt: serverNow(), removedByUserId: actor.userId } });
     await recalc(tx, settings, p, actor);

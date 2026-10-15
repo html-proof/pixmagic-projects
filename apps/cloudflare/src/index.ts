@@ -1,4 +1,4 @@
-import { buildApp, cognitoAuth, cognitoConfig, firebasePasswordCheck, unconfiguredCognito, type App, type CognitoAuth, type Deps } from "@app/api";
+import { buildApp, cognitoAuth, cognitoConfig, firebasePasswordCheck, requireHttps, unconfiguredCognito, type App, type CognitoAuth, type Deps } from "@app/api";
 import { consume, runScheduled, type QueueMessage, type WorkerDeps } from "@app/worker";
 import {
   cloudflareMailer,
@@ -149,6 +149,8 @@ const dbUrls = (env: Env): DbUrls => ({ system: env.HYPERDRIVE.connectionString,
 
 export default {
   async fetch(request, env, ctx) {
+    const insecure = requireHttps(request);
+    if (insecure) return insecure;
     const url = new URL(request.url);
     let apiPath: string | null = null;
     if (url.pathname === "/api" || url.pathname.startsWith("/api/")) apiPath = url.pathname.slice(4) || "/";

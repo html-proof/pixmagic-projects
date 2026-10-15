@@ -7,6 +7,7 @@ export const OAUTH_ERRORS: Record<string, string> = {
   state_mismatch: "The connection was started in a different browser or tab. Please start again here.",
   state_expired: "That connection link expired. Please start again.",
   session_mismatch: "You were signed out during the connection. Sign in and try again.",
+  not_allowed: "You no longer have permission to connect stores to this workspace. Ask an owner or admin.",
   missing_required_scopes: "We need permission to read orders to show any metrics. Please approve access.",
   store_taken: "That store is already connected to another workspace.",
   exchange_failed: "Shopify didn't complete the connection. Please try again.",

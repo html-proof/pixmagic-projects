@@ -232,6 +232,18 @@ export const CRON = {
   refreshTokens: "*/15 * * * *",
 } as const;
 
+/**
+ * The pixel's dedupe ids only matter while an event could still be accepted (production refuses
+ * events older than two days), so older ones go, a bounded batch per tick. Without this the table
+ * grew with every storefront event forever.
+ */
+const PIXEL_DEDUPE_KEEP_MS = 3 * 86_400_000;
+export async function prunePixelDedupe(batch = 20_000): Promise<number> {
+  const cutoff = new Date(Date.now() - PIXEL_DEDUPE_KEEP_MS);
+  return systemDb.$executeRaw`
+    DELETE FROM pixel_events_seen WHERE ctid IN (SELECT ctid FROM pixel_events_seen WHERE seen_at < ${cutoff} LIMIT ${batch})`;
+}
+
 export async function runScheduled(cron: string, deps: WorkerDeps) {
   if (cron === CRON.reconcile) return { reconciled: await scheduleReconcile(deps) };
   // Shares the */15 trigger rather than adding a schedule: both are cheap sweeps, and a stale
@@ -276,7 +288,11 @@ export async function runScheduled(cron: string, deps: WorkerDeps) {
       logger.error({ err }, "email sweep failed; the next tick tries again");
       return null;
     });
-    return { refreshed, staleJobsFailed, reconciled, adsSynced, whatsapp, staffOpenShifts, email };
+    const pixelDedupePruned = await prunePixelDedupe().catch((err: unknown) => {
+      logger.error({ err }, "pixel dedupe prune failed; the next tick tries again");
+      return null;
+    });
+    return { refreshed, staleJobsFailed, reconciled, adsSynced, whatsapp, staffOpenShifts, email, pixelDedupePruned };
   }
   logger.warn({ cron }, "unknown cron trigger");
   return {};

@@ -94,6 +94,8 @@ async function applyInbound(conn: WhatsappConnection, store: Store, m: Value, de
   } else if (isStopKeyword(text)) {
     await optOutContact(contact, "whatsapp_keyword", at);
   } else if (isStartKeyword(text)) {
+    // Meta redelivers: a START older than the last change (a STOP sent after it) must not undo it.
+    if (contact.marketingUpdatedAt && at <= contact.marketingUpdatedAt) return;
     const before = contact.marketingStatus;
     const updated = await optInContact(contact, "whatsapp_keyword", at);
     if (before !== "opted_in") await customerOptedIn(store, updated, deps);
@@ -117,18 +119,25 @@ async function customerOptedIn(store: Store, contact: Awaited<ReturnType<typeof 
   );
 }
 
-/** Meta's own "stop/resume marketing messages" setting in WhatsApp. */
-async function applyPreference(store: Store, p: Value, deps: Pick<WaDeps, "queues">) {
+/**
+ * Meta's own "stop/resume marketing messages" setting in WhatsApp. `named` is whether the change
+ * named this store's number: only then may it create a contact (to remember a "stop") or opt one in.
+ * A "resume" never creates a contact: someone who never was this store's customer doesn't become one.
+ */
+async function applyPreference(store: Store, p: Value, deps: Pick<WaDeps, "queues">, named: boolean) {
   if (String(p?.category ?? "") !== "marketing_messages") return;
   const phone = normalizePhone(p?.wa_id ? `+${p.wa_id}` : null, null);
   if (!phone) return;
   const at = tsDate(p.timestamp);
   const existing = await systemDb.whatsappContact.findUnique({ where: { storeId_phoneHash: { storeId: store.id, phoneHash: phoneHash(store.id, phone.waId) } } });
-  const contact = existing ?? (await upsertContact(store, phone));
-  if (String(p.value) === "stop") await applyMarketing(contact, { status: "opted_out", source: "meta_preferences" }, at);
-  else if (String(p.value) === "resume") {
-    const updated = await applyMarketing(contact, { status: "opted_in", source: "meta_preferences" }, at);
-    if (contact.marketingStatus !== "opted_in") await customerOptedIn(store, updated, deps);
+  if (String(p.value) === "stop") {
+    const contact = existing ?? (named ? await upsertContact(store, phone) : null);
+    if (contact) await applyMarketing(contact, { status: "opted_out", source: "meta_preferences" }, at);
+  } else if (String(p.value) === "resume" && named && existing) {
+    // A redelivered "resume" older than the last change must not undo a later "stop".
+    if (existing.marketingUpdatedAt && at <= existing.marketingUpdatedAt) return;
+    const updated = await applyMarketing(existing, { status: "opted_in", source: "meta_preferences" }, at);
+    if (existing.marketingStatus !== "opted_in") await customerOptedIn(store, updated, deps);
   }
 }
 
@@ -161,8 +170,9 @@ async function applyAccountUpdate(conns: WhatsappConnection[], v: Value, field: 
 }
 
 /**
- * Apply one signed webhook body. `trusted` is the set of accounts (WABA ids) whose signature
- * matched, or "all" when Insights' own app secret signed it.
+ * Apply one signed webhook body. `trusted` is the set of connections (ids) whose own app secret
+ * signed it, or "all" when Insights' own app secret did (Meta only signs with it what it delivers
+ * to Insights' app, so it is genuine for every connection on the account).
  */
 export async function applyMetaWebhook(payload: unknown, trusted: Set<string> | "all", deps: Pick<WaDeps, "queues">): Promise<MetaWebhookResult> {
   const body = (payload ?? {}) as Value;
@@ -170,11 +180,13 @@ export async function applyMetaWebhook(payload: unknown, trusted: Set<string> | 
   if (body.object !== "whatsapp_business_account" || !Array.isArray(body.entry)) return result;
   for (const entry of body.entry) {
     const wabaId = String(entry?.id ?? "");
-    if (!wabaId || (trusted !== "all" && !trusted.has(wabaId))) continue;
-    const conns = await systemDb.whatsappConnection.findMany({ where: { wabaId } });
+    if (!wabaId) continue;
+    const onAccount = await systemDb.whatsappConnection.findMany({ where: { wabaId } });
+    // A manual connection's secret speaks for that connection only, never for others on the account.
+    const conns = trusted === "all" ? onAccount : onAccount.filter((c) => trusted.has(c.id));
     if (!conns.length) continue;
     const now = new Date();
-    await systemDb.whatsappConnection.updateMany({ where: { wabaId }, data: { lastWebhookAt: now, webhookVerifiedAt: now } });
+    await systemDb.whatsappConnection.updateMany({ where: { id: { in: conns.map((c) => c.id) } }, data: { lastWebhookAt: now, webhookVerifiedAt: now } });
     for (const change of Array.isArray(entry.changes) ? entry.changes : []) {
       const field = String(change?.field ?? "");
       const v = (change?.value ?? {}) as Value;
@@ -195,10 +207,14 @@ export async function applyMetaWebhook(payload: unknown, trusted: Set<string> | 
             result.applied++;
           }
         } else if (field === "user_preferences") {
-          for (const conn of conns) {
+          // The change names the number it was made on: that store's contact changes. Without a
+          // number, a "stop" still reaches contacts the other stores already have (the safe way
+          // round), and nothing is opted in or created anywhere.
+          const named = conns.find((c) => c.phoneNumberId === String(v.metadata?.phone_number_id ?? ""));
+          for (const conn of named ? [named] : conns) {
             const store = await systemDb.store.findUnique({ where: { id: conn.storeId } });
             if (!store) continue;
-            for (const p of Array.isArray(v.user_preferences) ? v.user_preferences : []) await applyPreference(store, p, deps);
+            for (const p of Array.isArray(v.user_preferences) ? v.user_preferences : []) await applyPreference(store, p, deps, !!named);
           }
           result.applied++;
         } else if (field.startsWith("message_template") || field === "template_category_update") {

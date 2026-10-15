@@ -146,6 +146,12 @@ export async function applyMarketing(contact: WhatsappContact, signal: Marketing
   });
 }
 
+/** Whether this number sent the store STOP: then nothing goes to it, test messages included. */
+export async function numberOptedOut(storeId: string, waId: string): Promise<boolean> {
+  const c = await systemDb.whatsappContact.findUnique({ where: { storeId_phoneHash: { storeId, phoneHash: phoneHash(storeId, waId) } }, select: { optedOut: true } });
+  return !!c?.optedOut;
+}
+
 /** STOP: nothing at all goes to this number any more (order updates included). */
 export async function optOutContact(contact: WhatsappContact, source: string, at = new Date()) {
   if (contact.optedOut && contact.marketingStatus === "opted_out") return contact;

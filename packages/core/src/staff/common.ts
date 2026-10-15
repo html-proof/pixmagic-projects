@@ -1,5 +1,6 @@
 import { Prisma, type Tx } from "@app/db";
 import { formatScaled, minorToString, RATE_SCALE, type StaffAccess } from "@app/shared/staff";
+import type { Role } from "@app/shared/roles";
 
 /**
  * A Staff Management rule the caller broke, with the HTTP status the API answers it with and a
@@ -26,7 +27,20 @@ export interface StaffActor {
   workspaceId: string;
   userId: string;
   access: StaffAccess;
+  /** The actor's workspace role; only "owner" relaxes the own-record rule below. */
+  memberRole?: Role;
   ip?: string;
+}
+
+/**
+ * Separation of duties: nobody approves, edits or sets the pay of their own employee record (a
+ * payroll manager or HR manager can also be an employee). The workspace owner is the exception:
+ * there is no one above them to ask.
+ */
+export function assertNotOwnRecord(actor: StaffActor, employeeUserId: string | null | undefined, what: string) {
+  if (employeeUserId && employeeUserId === actor.userId && actor.memberRole !== "owner") {
+    throw new StaffError(403, "own_record", `You can't ${what} on your own employee record. Ask another manager, an admin or the owner.`);
+  }
 }
 
 /** The employees an actor may see: everyone, or (supervisors) those assigned to them. */
