@@ -757,7 +757,7 @@ describe("connection health", () => {
     expect(await checkConnections(deps)).toBe(0);
     expect(calls).toHaveLength(before);
 
-    // Hours later the business has removed Insights' access.
+    // Hours later the business has removed bizinsights' access.
     await systemDb.whatsappConnection.update({ where: { id: conn.id }, data: { lastSyncedAt: new Date(Date.now() - 7 * 3600_000) } });
     coord.clear();
     revoked = true;

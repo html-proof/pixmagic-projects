@@ -99,7 +99,7 @@ Same steps as above with `EMAIL_CREDENTIAL_KEYS` (when it is set; otherwise the 
 Google or Microsoft rejected the stored authorization (revoked in the user's account, password change, consent withdrawn, an organization policy). The account shows "Reconnect needed"; its emails wait up to 24 hours, then fail with `account_reauthorization_required`. A workspace admin presses **Reconnect** (Settings → Email integrations → Accounts) and signs in as the same mailbox; held mail goes out at once. Nothing to do on our side unless every account fails at once: then suspect our OAuth client (`EMAIL_GOOGLE_CLIENT_SECRET` / `EMAIL_MICROSOFT_CLIENT_SECRET` expired or rotated). Those failures are deliberately not treated as the merchant's fault (accounts go `degraded`, not "reconnect").
 
 ### Email: messages with an unknown outcome
-`unknown` means the provider may have received the message but never answered (or the jobs function died mid-send). Insights never resends these on its own. The merchant can review them in Activity and press **Send again**.
+`unknown` means the provider may have received the message but never answered (or the jobs function died mid-send). bizinsights never resends these on its own. The merchant can review them in Activity and press **Send again**.
 
 ### Email: suspend a workspace's sending (abuse, complaints)
 Not available in the app on purpose. With the owner-role connection:

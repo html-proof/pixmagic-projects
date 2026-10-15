@@ -1,6 +1,6 @@
-# Insights on AWS: architecture
+# bizinsights on AWS: architecture
 
-Insights runs entirely on AWS, region **ap-southeast-2 (Sydney)**. This document is the design and
+bizinsights runs entirely on AWS, region **ap-southeast-2 (Sydney)**. This document is the design and
 its reasoning; it has been built and runs since 2026-10-15. What actually runs, under which names, is
 in [aws-deployment.md](aws-deployment.md), which wins where the two differ (for example, the address
 is still the CloudFront one, not a custom domain; pages come from the `api` function and only the

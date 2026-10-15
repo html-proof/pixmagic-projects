@@ -504,6 +504,6 @@ export async function employeeAudit(actor: StaffActor, employeeId: string) {
     const pay = staffCan(actor.access, "pay:view");
     return rows
       .filter((r) => pay || !/pay_rate|payroll|payment/.test(r.action))
-      .map((r) => ({ id: r.id, action: r.action, actor: r.actorUserId ? (byId.get(r.actorUserId) ?? "A former member") : "Insights", metadata: r.metadata, at: r.createdAt }));
+      .map((r) => ({ id: r.id, action: r.action, actor: r.actorUserId ? (byId.get(r.actorUserId) ?? "A former member") : "bizinsights", metadata: r.metadata, at: r.createdAt }));
   });
 }

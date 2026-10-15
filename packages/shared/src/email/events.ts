@@ -62,7 +62,7 @@ const CHECKOUT_FIELDS: EventField[] = [
   { path: "checkout.recovery_url", label: "Link back to the checkout", type: "string", pii: true, example: "https://rivera-goods.myshopify.com/checkouts/recover/abc" },
 ];
 
-/** Events Insights produces from Shopify. Their names are reserved: the event API can't send them. */
+/** Events bizinsights produces from Shopify. Their names are reserved: the event API can't send them. */
 export const SHOPIFY_EVENT_TYPES = ["order.created", "order.paid", "order.cancelled", "order.fulfilled", "checkout.abandoned"] as const;
 export type ShopifyEventType = (typeof SHOPIFY_EVENT_TYPES)[number];
 

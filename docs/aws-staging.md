@@ -1,6 +1,6 @@
 # AWS Phase 1 environment (staging)
 
-An isolated copy of Insights on AWS, for checking sign-in on Amazon Cognito. It is separate from
+An isolated copy of bizinsights on AWS, for checking sign-in on Amazon Cognito. It is separate from
 production (`infra/cdk`, [aws-deployment.md](aws-deployment.md)); nothing here touches it.
 
 ```

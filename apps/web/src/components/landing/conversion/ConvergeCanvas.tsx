@@ -3,13 +3,13 @@ import type { MotionValue } from "motion/react";
 import { useEffect, useMemo, useRef, type RefObject } from "react";
 import { useCanvasLoop, type CanvasFrame } from "@/hooks/useCanvasLoop";
 import { RGB, seeded, segment } from "@/lib/motion";
-import { MARK, ORBIT_POINTS } from "../shared/InsightMark";
+import { MARK, barTop } from "@/components/Brand";
 import { SHAPE, createParticles, rgbOf, type Particles } from "../shared/particles";
 
 /**
  * The final scene's data field: a viewport full of faint points that, as `progress` runs, fly
- * into the exact geometry of the Insights mark (core disc first, then the orbit points and their
- * connection lines, then the open outer ring). The points land on the DOM mark slot (`slotRef`),
+ * into the exact geometry of the bizinsights mark (its three bars, shortest first, each filling up
+ * from the baseline). The points land on the DOM mark slot (`slotRef`),
  * shifted by `lift` and scaled by `zoom` exactly as the DOM mark is, so the crisp SVG resolves on
  * top of them wherever it is; a small share never converges and stays behind as ambient depth.
  */
@@ -25,12 +25,13 @@ export const CONVERGE = {
 } as const;
 
 /** Fill colours, one per bucket; particles are stored sorted by bucket so each frame sets fillStyle 5 times. */
-const BUCKETS = [RGB.text, RGB.muted, RGB.violetBright, RGB.blue, RGB.cyan].map(rgbOf);
+const BUCKETS = [RGB.text, RGB.muted, "123, 227, 168", "79, 187, 129", "35, 147, 92"].map(rgbOf);
 const B_TEXT = 0;
 const B_MUTED = 1;
-const B_VIOLET = 2;
-const B_BLUE = 3;
-const B_CYAN = 4;
+/** The bars' gradient, top to foot (MARK.stops and the colour between them). */
+const B_LIGHT = 2;
+const B_MID = 3;
+const B_DEEP = 4;
 
 /** Share of points that stay in the field as ambient depth. */
 const AMBIENT = 0.14;
@@ -42,7 +43,7 @@ interface Field {
   /** Start position as a fraction of the canvas (0..1). */
   sx: Float32Array;
   sy: Float32Array;
-  /** Target offset from the mark centre, in mark units (the 32-unit grid). */
+  /** Target offset from the mark centre, in mark units (the 28-unit grid). */
   tx: Float32Array;
   ty: Float32Array;
   /** Per-point start offset inside the travel window (0..1-JOURNEY). Negative = ambient, never travels. */
@@ -59,19 +60,21 @@ interface Field {
 
 type Raw = { sx: number; sy: number; tx: number; ty: number; delay: number; bend: number; size: number; a0: number; a1: number; phase: number; bucket: number };
 
-const rad = (deg: number) => (deg * Math.PI) / 180;
-
-/** Core gradient runs diagonally like CORE_STOPS: violet top-left, blue, cyan bottom-right. */
-function coreBucket(x: number, y: number) {
-  const k = ((x + y) / (2 * MARK.coreR) + 1) / 2;
-  return k < 0.42 ? B_VIOLET : k < 0.76 ? B_BLUE : B_CYAN;
-}
+/** Each bar's share of the converging points: its height, so the mark fills evenly. */
+const SHARE = (() => {
+  const heights = MARK.bars.map((b) => MARK.baseline - b.top);
+  const total = heights.reduce((a, h) => a + h, 0);
+  let sum = 0;
+  return heights.map((h) => (sum += h / total));
+})();
+/** When each bar starts gathering, as a share of the travel window: shortest first. */
+const BAR_DELAY = [0, 0.08, 0.16];
 
 function buildField(count: number): Field {
   const rnd = seeded(2026);
-  const c = MARK.center;
+  const c = MARK.size / 2;
+  const inset = 0.3;
   const raw: Raw[] = [];
-  const sweep = (MARK.ringEnd - MARK.ringStart + 360) % 360; // 300° clockwise
 
   for (let i = 0; i < count; i++) {
     const base = {
@@ -88,54 +91,20 @@ function buildField(count: number): Field {
       continue;
     }
     const k = (part - AMBIENT) / (1 - AMBIENT);
-    let tx: number;
-    let ty: number;
-    let delay: number;
-    let a1: number;
-    let bucket: number;
-    if (k < 0.22) {
-      // Core disc: forms first, the intelligence at the centre.
-      const r = MARK.coreR * Math.sqrt(rnd());
-      const a = rnd() * Math.PI * 2;
-      tx = r * Math.cos(a);
-      ty = r * Math.sin(a);
-      delay = rnd() * 0.12;
-      a1 = 0.95;
-      bucket = coreBucket(tx, ty);
-    } else if (k < 0.43) {
-      // Orbit points.
-      const o = ORBIT_POINTS[Math.floor(rnd() * 3) % 3];
-      const r = MARK.dotR * Math.sqrt(rnd());
-      const a = rnd() * Math.PI * 2;
-      tx = o.x - c + r * Math.cos(a);
-      ty = o.y - c + r * Math.sin(a);
-      delay = 0.08 + rnd() * 0.14;
-      a1 = 0.95;
-      bucket = B_TEXT;
-    } else if (k < 0.58) {
-      // Connection lines from the core out to each orbit point.
-      const o = ORBIT_POINTS[Math.floor(rnd() * 3) % 3];
-      const dx = o.x - c;
-      const dy = o.y - c;
-      const len = Math.hypot(dx, dy);
-      const along = MARK.coreR + rnd() * (len - MARK.coreR - MARK.dotR);
-      const jitter = (rnd() - 0.5) * 0.35;
-      tx = (dx / len) * along - (dy / len) * jitter;
-      ty = (dy / len) * along + (dx / len) * jitter;
-      delay = 0.14 + rnd() * 0.14;
-      a1 = 0.5;
-      bucket = B_MUTED;
-    } else {
-      // The open outer ring, swept clockwise from ringStart, in a band barely wider than the
-      // stroke so the resolved mark stays crisp.
-      const a = rad(MARK.ringStart + rnd() * sweep);
-      const r = MARK.ringR + (rnd() - 0.5) * 1.3;
-      tx = r * Math.cos(a);
-      ty = r * Math.sin(a);
-      delay = 0.2 + rnd() * 0.2;
-      a1 = 0.85;
-      bucket = B_TEXT;
-    }
+    const found = SHARE.findIndex((edge) => k < edge);
+    // Rounding can leave k a hair past the last edge: that point belongs to the last bar.
+    const index = found === -1 ? SHARE.length - 1 : found;
+    const bar = MARK.bars[index];
+    const x = bar.x + inset + rnd() * (MARK.barWidth - 2 * inset);
+    const top = barTop(index, x) + inset;
+    const y = top + rnd() * (MARK.baseline - inset - top);
+    // 0 at the bar's top, 1 at its foot: the foot gathers first and the gradient follows the height.
+    const depth = (y - top) / (MARK.baseline - inset - top);
+    const tx = x - c;
+    const ty = y - c;
+    const delay = BAR_DELAY[index] + (1 - depth) * 0.12 + rnd() * 0.06;
+    const a1 = 0.95 * bar.opacity;
+    const bucket = depth < 0.36 ? B_LIGHT : depth < 0.7 ? B_MID : B_DEEP;
     raw.push({ ...base, tx, ty, delay, a1, bucket });
   }
 

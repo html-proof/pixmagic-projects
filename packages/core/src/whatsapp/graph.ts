@@ -9,7 +9,7 @@ import type { FetchLike } from "../shopify.js";
 
 const GRAPH = "https://graph.facebook.com";
 
-/** Insights' own Meta app, for Embedded Signup. Null until it is configured (the button then says so). */
+/** bizinsights' own Meta app, for Embedded Signup. Null until it is configured (the button then says so). */
 export interface WaPlatformConfig {
   appId: string;
   appSecret: string;
@@ -168,7 +168,7 @@ export interface WaTokenInfo {
 /** What a token can reach: its app, its permissions and the WhatsApp accounts it was given. */
 /**
  * What Meta says about a token: its app, permissions and the WhatsApp accounts it was given.
- * `inspector` is the token that asks (Insights' app token `<id>|<secret>` for Embedded Signup
+ * `inspector` is the token that asks (bizinsights' app token `<id>|<secret>` for Embedded Signup
  * tokens); by default the token inspects itself.
  */
 export async function waTokenInfo(token: string, fetchImpl: FetchLike, inspector = token): Promise<WaTokenInfo> {
@@ -197,7 +197,7 @@ export async function waAccountNumbers(wabaId: string, token: string, fetchImpl:
   return r.data ?? [];
 }
 
-/** The webhook fields Insights reads (webhook.ts). */
+/** The webhook fields bizinsights reads (webhook.ts). */
 export const WA_WEBHOOK_FIELDS = [
   "messages",
   "user_preferences",
@@ -209,7 +209,7 @@ export const WA_WEBHOOK_FIELDS = [
 ];
 
 /**
- * Point a merchant's own Meta app's WhatsApp webhook at Insights, so they don't have to paste a
+ * Point a merchant's own Meta app's WhatsApp webhook at bizinsights, so they don't have to paste a
  * callback URL and verify token into Meta's dashboard. Meta checks the URL straight away (the
  * verify-token handshake), so the connection has to be saved first. An app whose WhatsApp webhook
  * already goes somewhere else is left alone ("in_use"): it may be feeding another tool.

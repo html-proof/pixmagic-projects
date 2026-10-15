@@ -22,10 +22,10 @@ import {
 } from "lucide-react";
 import { useId, type ReactNode } from "react";
 import { easeInOut, easeOut, seeded, segment } from "@/lib/motion";
-import { InsightMark } from "../shared/InsightMark";
+import { BrandMark } from "@/components/Brand";
 
 /**
- * The illustrative Insights application window used by the product reveal. It only shows
+ * The illustrative bizinsights application window used by the product reveal. It only shows
  * structure (areas, panels, empty values, skeleton bars, abstract shapes), never figures, so
  * nobody mistakes it for their own store. Every part is driven by one 0..1 `progress` value so
  * the scene can play it from scroll, from a timer (mobile) or show it finished (reduced motion).
@@ -205,8 +205,8 @@ function TopBar({ p }: { p: MotionValue<number> }) {
   return (
     <Reveal p={p} range={S.topbar} x={0} y={-12} className="flex h-12 shrink-0 items-center gap-3 border-b border-lp-line bg-[#0A0D11]/80 px-3 md:h-[52px] md:px-4 md:[@media(max-height:700px)]:h-11!">
       <span className="flex items-center gap-2 text-lp-text">
-        <InsightMark size={20} />
-        <span className="hidden text-[11.5px] font-semibold tracking-[0.16em] sm:inline">INSIGHTS</span>
+        <BrandMark size={20} />
+        <span className="hidden text-[12.5px] font-semibold tracking-[-0.01em] sm:inline">bizinsights</span>
       </span>
       <span aria-hidden className="h-5 w-px bg-lp-line-strong" />
       <span className="flex h-8 items-center gap-2 rounded-[9px] border border-lp-line bg-white/[0.02] pl-2.5 pr-2 text-[12px] text-lp-text-2">
@@ -597,7 +597,7 @@ export function ProductRevealWindow({ progress: p }: { progress: MotionValue<num
       <span aria-hidden className="pointer-events-none absolute inset-x-12 top-0 z-10 h-px bg-gradient-to-r from-transparent via-white/25 to-transparent" />
       {/* Empty-window state before anything has assembled: the mark, waiting. */}
       <motion.div aria-hidden className="lp-layer pointer-events-none absolute inset-0 grid place-items-center text-lp-text" style={{ opacity: boot }}>
-        <InsightMark size={44} className="opacity-40" />
+        <BrandMark size={44} className="opacity-40" />
       </motion.div>
       <TopBar p={p} />
       <TabStrip p={p} />

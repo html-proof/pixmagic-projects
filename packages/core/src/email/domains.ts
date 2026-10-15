@@ -2,7 +2,7 @@
  * Custom sending domains: proving the workspace controls a domain (a TXT challenge only it was
  * given), and reporting how the domain's email authentication (SPF, DKIM, DMARC) looks.
  *
- * The checks read public DNS and nothing else: Insights never writes DNS records, and reports only
+ * The checks read public DNS and nothing else: bizinsights never writes DNS records, and reports only
  * what the records show. Ownership doesn't authorize anyone to send as Gmail or Microsoft addresses
  * at that domain; it lets an SMTP account's address at that domain become a verified sender (see
  * senders.ts), and it is the place to see whether mail from the domain will authenticate.
@@ -190,7 +190,7 @@ export async function checkDomain(d: EmailDomain, deps: Pick<EmailDeps, "fetchIm
     const prev = (d.dnsResults ?? {}) as unknown as DnsResults;
     return systemDb.emailDomain.update({
       where: { id: d.id },
-      data: { lastCheckedAt: now, nextCheckAt: new Date(now.getTime() + RECHECK_PENDING_MS), dnsResults: { ...prev, checkedAt: now.toISOString(), error: "DNS couldn't be read right now. Insights will try again shortly." } as never },
+      data: { lastCheckedAt: now, nextCheckAt: new Date(now.getTime() + RECHECK_PENDING_MS), dnsResults: { ...prev, checkedAt: now.toISOString(), error: "DNS couldn't be read right now. bizinsights will try again shortly." } as never },
     });
   }
 

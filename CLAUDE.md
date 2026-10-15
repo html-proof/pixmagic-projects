@@ -1,4 +1,4 @@
-# Insights: notes for coding sessions
+# bizinsights: notes for coding sessions
 
 Conventions and layout: [docs/architecture.md](docs/architecture.md). AWS runbook:
 [docs/aws-deployment.md](docs/aws-deployment.md).

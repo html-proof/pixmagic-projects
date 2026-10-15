@@ -105,7 +105,7 @@ function Activity() {
 
   return (
     <div className="space-y-4">
-      <PageHeader title="Email activity" sub="Every email Insights sent or tried to send, newest first. Providers confirm acceptance; delivery to the inbox isn't reported to Insights." />
+      <PageHeader title="Email activity" sub="Every email bizinsights sent or tried to send, newest first. Providers confirm acceptance; delivery to the inbox isn't reported to bizinsights." />
       <section className="card grid gap-2 sm:grid-cols-3 lg:grid-cols-6">
         <label>
           <span className="label text-xs text-muted">Period</span>

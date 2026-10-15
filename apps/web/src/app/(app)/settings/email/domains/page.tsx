@@ -43,7 +43,7 @@ export default function EmailDomainsPage() {
     <div className="space-y-4">
       <PageHeader
         title="Sending domains"
-        sub="Verify the domains you send from, and check that their SPF, DKIM and DMARC records let mail from them reach inboxes. Insights only reads your DNS; it never changes it."
+        sub="Verify the domains you send from, and check that their SPF, DKIM and DMARC records let mail from them reach inboxes. bizinsights only reads your DNS; it never changes it."
       />
       {manage && (
         <form onSubmit={add} className="card grid gap-3 sm:grid-cols-[1fr_16rem_auto] sm:items-end">
@@ -118,7 +118,7 @@ function DomainCard({ domain: d, manage, expanded, onToggle, onChange, onRemoved
             <DnsRow rec={d.records.spf} hint="If the domain already has an SPF record, add the include to it instead of making a second record." />
           </Record>
           <Record title="3. DKIM" status={r?.dkim?.status ?? null} explanation={r?.dkim?.explanation ?? SENDING_SERVICE_INFO[d.sendingService].dkimHelp} found={r?.dkim?.records}>
-            {d.records.dkim.length > 0 ? d.records.dkim.map((rec) => <DnsRow key={rec.host} rec={rec} />) : <p className="text-xs text-muted">Enter your provider&apos;s DKIM selector below so Insights can check it.</p>}
+            {d.records.dkim.length > 0 ? d.records.dkim.map((rec) => <DnsRow key={rec.host} rec={rec} />) : <p className="text-xs text-muted">Enter your provider&apos;s DKIM selector below so bizinsights can check it.</p>}
             {manage && (
               <form
                 className="flex flex-wrap gap-2"
@@ -199,7 +199,7 @@ function Record({ title, status, explanation, found, children }: { title: string
       <p className="text-sm text-muted">{explanation}</p>
       {found && found.length > 0 && (
         <details className="text-xs text-muted">
-          <summary className="cursor-pointer">What Insights found</summary>
+          <summary className="cursor-pointer">What bizinsights found</summary>
           <ul className="mt-1 space-y-1">
             {found.map((f) => (
               <li key={f}>

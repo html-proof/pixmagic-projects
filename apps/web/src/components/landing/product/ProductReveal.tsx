@@ -14,12 +14,12 @@ const MODE = { scroll: 0, timed: 1, still: 2 } as const;
 const BUILT = REVEAL_STAGES.health[1] + 0.02;
 
 const WINDOW_LABEL =
-  "Illustrative Insights dashboard. A top bar with a store selector and search; a sidebar with Overview, Sales, Orders, Customers, Funnel, Products, Inventory, Fulfillment and Settings; " +
+  "Illustrative bizinsights dashboard. A top bar with a store selector and search; a sidebar with Overview, Sales, Orders, Customers, Funnel, Products, Inventory, Fulfillment and Settings; " +
   "empty key figures for sales, orders, conversion and net sales; a sales-over-time chart compared with the previous period; a business health panel; the shopping funnel from visit to purchase; " +
   "new versus returning customers; and product activity. No real figures are shown.";
 
 /**
- * G1 — the product reveal. The Insights application assembles itself part by part as the visitor
+ * G1 — the product reveal. The bizinsights application assembles itself part by part as the visitor
  * scrolls (sidebar, top bar, key figures, chart, customers, funnel, health), then the tilted
  * window settles flat, as if it had physically landed. Phones play the same build once on a timer
  * without the 3D; reduced motion shows the finished window.
@@ -74,7 +74,7 @@ export function ProductReveal() {
         <SectionIntro
           id="product-reveal-title"
           align="center"
-          eyebrow="The Insights dashboard"
+          eyebrow="The bizinsights dashboard"
           title="Everything comes together here."
           lead="Sales, orders, customers, the funnel, products and stock, read from your Shopify store and laid out in one calm overview."
         />
@@ -109,7 +109,7 @@ export function ProductReveal() {
           </div>
           <div className="relative mt-5 flex flex-wrap items-center justify-center gap-x-3 gap-y-2 text-center md:mt-4 md:[@media(max-height:700px)]:mt-3!">
             <IllustrativeNote>Illustrative interface</IllustrativeNote>
-            <span className="text-[13px] text-lp-muted">Shows how Insights is laid out, not real figures.</span>
+            <span className="text-[13px] text-lp-muted">Shows how bizinsights is laid out, not real figures.</span>
           </div>
         </div>
       </div>

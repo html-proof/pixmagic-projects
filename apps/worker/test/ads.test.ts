@@ -74,7 +74,7 @@ describe("ad account sync", () => {
     fetchImpl = async (input, init) => {
       const u = new URL(String(input));
       calls.push(u.host + u.pathname.replace(/\/v\d+\/.*/, ""));
-      // A connection made before Insights kept who granted it learns that after its refresh.
+      // A connection made before bizinsights kept who granted it learns that after its refresh.
       if (u.host === "oauth2.googleapis.com" && u.pathname === "/tokeninfo") return json({ aud: "c", sub: "777000" });
       if (u.host === "oauth2.googleapis.com") {
         expect(new URLSearchParams(String(init?.body)).get("refresh_token")).toBe("REFRESH");

@@ -3,6 +3,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import type { ReactNode } from "react";
 import { AppProvider, useApp } from "@/components/AppContext";
+import { BrandMark } from "@/components/Brand";
 import { leaveTo, signOut } from "@/lib/auth";
 import { staffAccess } from "@app/shared/staff";
 
@@ -21,10 +22,8 @@ function TopBar() {
     <header className="border-b border-border bg-surface/85 backdrop-blur-md">
       <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-3 px-4 py-3">
         <Link href="/dashboard" className="group flex items-center gap-2 font-semibold">
-          <span aria-hidden className="brand-gradient animate-pan flex h-7 w-7 items-center justify-center rounded-lg text-white shadow-sm transition-transform group-hover:rotate-6">
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M4 17l5-5 4 3 7-8" /></svg>
-          </span>
-          <span className="text-text">Insights</span>
+          <BrandMark size={28} className="transition-transform group-hover:-translate-y-0.5" />
+          <span className="text-text">bizinsights</span>
         </Link>
         {me.workspaces.length > 1 && (
           <select aria-label="Workspace" className="input w-auto" value={workspace.id} onChange={(e) => setWorkspaceId(e.target.value)}>

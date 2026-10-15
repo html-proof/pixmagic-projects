@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import Link from "next/link";
 import { GeistSans } from "geist/font/sans";
 import { ChevronDown, Mail } from "lucide-react";
-import { AuthLogo } from "@/components/auth/AuthBrand";
+import { BrandLogo } from "@/components/Brand";
 import { CONTACT } from "@/lib/contact";
 
 /**
@@ -54,8 +54,8 @@ export function LegalPage({
     <div className={`${GeistSans.className} legal-page flex min-h-svh flex-col`}>
       <header className="sticky top-0 z-20 border-b border-border bg-[color-mix(in_oklab,var(--surface)_84%,transparent)] backdrop-blur-md">
         <div className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-4 px-4 sm:px-6">
-          <Link href="/" aria-label="Insights home" className="rounded-lg focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none">
-            <AuthLogo />
+          <Link href="/" aria-label="bizinsights home" className="rounded-lg focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none">
+            <BrandLogo className="text-[19px]" />
           </Link>
           <nav aria-label="Legal and help" className="hidden sm:block">
             <ul className="flex items-center gap-1">

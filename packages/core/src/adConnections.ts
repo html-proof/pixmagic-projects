@@ -62,7 +62,7 @@ export function adsenseConfig(fetchImpl?: FetchLike): AdsenseConfig | null {
 export const adsConfigured = (): Record<AdProvider, boolean> => ({ meta: metaConfig() !== null, google: googleConfig() !== null, adsense: adsenseConfig() !== null });
 
 /**
- * Platforms whose sign-in only lets in the people added to Insights' own app: Meta, until ads_read
+ * Platforms whose sign-in only lets in the people added to bizinsights' own app: Meta, until ads_read
  * has Advanced Access (META_ADS_ADVANCED_ACCESS). Facebook turns everyone else away on its own page.
  */
 export const adsRestricted = (): Record<AdProvider, boolean> => ({
@@ -251,7 +251,7 @@ export async function adAccessToken(conn: AdConnection, fetchImpl?: FetchLike): 
     ...(fresh.rotated ? { refreshTokenEnc: enc.refreshTokenEnc } : {}),
   };
   await systemDb.adConnection.updateMany({ where: fresh.rotated ? { storeId: conn.storeId, provider: conn.provider, refreshTokenEnc: conn.refreshTokenEnc } : { id: conn.id }, data });
-  // Connected before Insights kept who granted access: learn it now, so a later disconnect can tell
+  // Connected before bizinsights kept who granted access: learn it now, so a later disconnect can tell
   // whether this grant is shared. Never fails the refresh.
   if (!conn.externalUserId) {
     const sub = await googleUserId(cfg, fresh.accessToken).catch(() => null);
@@ -416,7 +416,7 @@ export async function googleReportForConnection(conn: AdConnection, level: Googl
 const grantFamily = (provider: string): AdProvider[] => (provider === "meta" ? ["meta"] : ["google", "adsense"]);
 
 /**
- * A refresh token this person already gave Insights, for a sign-in where Google didn't send a new
+ * A refresh token this person already gave bizinsights, for a sign-in where Google didn't send a new
  * one (it only does on first consent). Taken from another of their connections on the same platform.
  */
 export async function reusableRefreshToken(provider: AdProvider, externalUserId: string | null): Promise<string | null> {
@@ -434,7 +434,7 @@ export type RevokeOutcome = "revoked" | "still_used" | "unknown_person" | "not_c
 /**
  * After a disconnect: take back the platform access too, unless another connection still relies
  * on the same person's grant (another store, or AdSense next to Google Ads). Google revokes the
- * person's whole grant to Insights' client; Meta drops only ads_read (WhatsApp keeps working).
+ * person's whole grant to bizinsights' client; Meta drops only ads_read (WhatsApp keeps working).
  * Best effort: the connection is already gone whatever the platform answers.
  */
 export async function revokeAdAccessIfUnused(conn: AdConnection, fetchImpl?: FetchLike): Promise<RevokeOutcome> {
@@ -442,7 +442,7 @@ export async function revokeAdAccessIfUnused(conn: AdConnection, fetchImpl?: Fet
   const k = keyring();
   try {
     // Any connection on the same grant (Google Ads and AdSense share one), anywhere, by this person, or by
-    // a person Insights doesn't know yet (connected before identities were kept, or their lookup failed),
+    // a person bizinsights doesn't know yet (connected before identities were kept, or their lookup failed),
     // keeps it. Those unknown rows learn their person at their next token refresh.
     const others = await systemDb.adConnection.count({
       where: { provider: { in: grantFamily(conn.provider) }, NOT: { id: conn.id }, OR: [{ externalUserId: conn.externalUserId }, { externalUserId: null }] },

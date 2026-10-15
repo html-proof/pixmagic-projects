@@ -33,7 +33,7 @@ export const APP_SETTINGS = {
   "SHOPIFY_EXTRA_APPS": "[{\"key\":\"pixmagic\",\"clientId\":\"bb0ea9e4ad8939a6a1513e4dbf8cbbf1\",\"shops\":[\"pixmagic.myshopify.com\"]}]",
   // App email (invitations, alerts), sent through Amazon SES: an address on a domain verified
   // there. Sign-in emails (codes) are Cognito's own, not this.
-  "EMAIL_FROM": "Insights <no-reply@example.com>",
+  "EMAIL_FROM": "bizinsights <no-reply@example.com>",
   // Ad accounts ("Continue with Meta" / "Continue with Google Ads" / "Continue with Google AdSense"
   // on Settings → Ad accounts). Empty until the apps exist: the buttons then say the platform isn't
   // set up. GOOGLE_ADS_CLIENT_ID is the Google Cloud OAuth client "Insights web" (project

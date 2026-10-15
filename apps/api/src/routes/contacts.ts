@@ -120,7 +120,7 @@ export function contactRoutes(app: App, deps: Deps) {
     const store = await withTenant(ws, (tx) => tx.store.findFirst({ where: { id: storeId, workspaceId: ws } }));
     if (!store || store.status === "uninstalled") throw new HttpError(404, "Not found", "not_found");
     if (!hasCapability(store.grantedScopes, "contacts")) {
-      throw new HttpError(403, "Insights needs access to your customers first.", "missing_scopes");
+      throw new HttpError(403, "bizinsights needs access to your customers first.", "missing_scopes");
     }
 
     let data: GqlContacts;

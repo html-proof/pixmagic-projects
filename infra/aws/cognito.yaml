@@ -33,7 +33,7 @@ Parameters:
     Type: String
     Default: ""
     Description: >-
-      Verified SES sender for Cognito's emails, e.g. Insights <no-reply@example.com>. Empty = Cognito's
+      Verified SES sender for Cognito's emails, e.g. bizinsights <no-reply@example.com>. Empty = Cognito's
       own sender (no-reply@verificationemail.com, 50 emails a day per account: fine to start, not to grow on).
   SesIdentityArn:
     Type: String
@@ -105,8 +105,8 @@ Resources:
         - EmailSendingAccount: COGNITO_DEFAULT
       VerificationMessageTemplate:
         DefaultEmailOption: CONFIRM_WITH_CODE
-        EmailSubject: Your Insights verification code
-        EmailMessage: "Your Insights verification code is {####}. It expires in 24 hours. If you didn't ask for it, you can ignore this email."
+        EmailSubject: Your bizinsights verification code
+        EmailMessage: "Your bizinsights verification code is {####}. It expires in 24 hours. If you didn't ask for it, you can ignore this email."
       UserPoolTags:
         app: insights
         environment: !Ref Environment

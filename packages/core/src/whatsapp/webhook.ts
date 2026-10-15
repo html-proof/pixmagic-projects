@@ -189,6 +189,8 @@ async function applyAccountUpdate(conns: WhatsappConnection[], v: MetaAccountVal
  * signed it, or "all" when Insights' own app secret did (Meta only signs with it what it delivers
  * to Insights' app, so it is genuine for every connection on the account). A part of the body that
  * doesn't fit its schema (metaPayloads.ts) is logged and skipped; the rest is applied.
+ * signed it, or "all" when bizinsights' own app secret did (Meta only signs with it what it delivers
+ * to bizinsights' app, so it is genuine for every connection on the account).
  */
 export async function applyMetaWebhook(payload: unknown, trusted: Set<string> | "all", deps: Pick<WaDeps, "queues">): Promise<MetaWebhookResult> {
   const result: MetaWebhookResult = { retry: false, applied: 0 };

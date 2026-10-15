@@ -13,7 +13,7 @@ import { APP_SETTINGS } from "./settings.js";
 import { staticSite } from "./staticSite.js";
 
 /**
- * Insights on one machine, for development, the demos and the end-to-end tests: the same UI, API
+ * bizinsights on one machine, for development, the demos and the end-to-end tests: the same UI, API
  * and job handlers as the AWS functions (index.ts), in one Node process. In place of the AWS
  * services: jobs run in-process (localQueues.ts), coordination and large webhook bodies stay in
  * memory, email goes to Mailpit when MAILPIT_URL is set (else it is only logged), and Postgres is

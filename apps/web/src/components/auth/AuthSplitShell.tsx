@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { GeistSans } from "geist/font/sans";
-import { AuthLogo } from "./AuthBrand";
+import { BrandLogo } from "@/components/Brand";
 import { AuthShowcase } from "./AuthShowcase";
 
 /**
@@ -27,7 +27,7 @@ export function AuthSplitShell({
         <section className="flex flex-col px-6 py-7 sm:px-12 sm:py-10 xl:px-16">
           <div className="mx-auto flex w-full max-w-[520px] flex-1 flex-col">
             <header className="flex items-center justify-between gap-4">
-              <AuthLogo />
+              <BrandLogo className="text-[19px]" />
               {action && (
                 <Link
                   href={action.href}

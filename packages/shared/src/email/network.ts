@@ -1,5 +1,5 @@
 // Where an SMTP account may connect: the outbound policy that keeps "Connect custom SMTP" from
-// becoming a way to make Insights' servers talk to private networks, cloud metadata services or
+// becoming a way to make bizinsights' servers talk to private networks, cloud metadata services or
 // itself (SSRF). packages/core resolves the host and checks every address with isBlockedAddress
 // before connecting; the ports and TLS modes are fixed here.
 

@@ -1,6 +1,6 @@
 # Security audit, 2026-10-14
 
-> Historical record (2026-10-14): written when Insights ran on Cloudflare Workers. It now runs on
+> Historical record (2026-10-14): written when bizinsights ran on Cloudflare Workers. It now runs on
 > AWS: see [aws-architecture.md](../aws-architecture.md) and, for the current model, [security.md](../security.md).
 
 > **Ported 2026-10-16.** Written on the Firebase tree; the fixes reached `main` (and AWS) in
@@ -82,7 +82,7 @@ Status: **Fixed** means the code changed and a test covers it. Every fix is on t
 | 12 | LOW | Unsigned topic header on destructive webhooks | `routes/webhooks.ts` | A captured signed body without a shop field, replayed as `shop/redact` | Purge of a victim store | Destructive topics must name the shop in the body | Fixed, tested |
 | 13 | LOW | Custom app's signature accepted for any shop | `routes/webhooks.ts` | Holder of one client app's secret | Forged orders/deletions/redactions for other stores | Custom app vouches only for its `shops` | Fixed, tested |
 | 14 | LOW | OAuth callbacks didn't re-check membership | `routes/shopify.ts`, `routes/ads.ts` | Member removed or demoted during the ≤10-min flow | Attaches a store or ad account anyway | Re-check `stores:manage` (and store) on return | Fixed, tested (Shopify) |
-| 15 | LOW | Store enumeration via install | `routes/shopify.ts` | Any verified user | Learns which shops use Insights (409 `store_taken`) | Per-user limit (`shopifyInstall`) | Mitigated |
+| 15 | LOW | Store enumeration via install | `routes/shopify.ts` | Any verified user | Learns which shops use bizinsights (409 `store_taken`) | Per-user limit (`shopifyInstall`) | Mitigated |
 | 16 | LOW | `/shopify/launch` replayable | `routes/shopify.ts` | An old signed launch link | Starts an authorize Shopify still gates | Same 10-min freshness as the callback | Fixed |
 | 17 | LOW | Ad tokens outlived uninstall | `apps/worker/src/handlers.ts`, `core/persist.ts` | Store uninstalls | Ad data kept being pulled; grants stayed live at Google/Meta after purge | Syncs pause while uninstalled; grant revoked on purge unless another store relies on it | Fixed, tested |
 | 18 | LOW | Meta `paging.next` followed to any host | `core/ads.ts` `metaGet` | Only if Meta's response were compromised | Access token sent elsewhere | Host pinned to graph.facebook.com | Fixed |

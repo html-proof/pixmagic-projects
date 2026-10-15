@@ -14,6 +14,6 @@ type = "object"
 
 [settings.fields.ingestUrl]
 name = "Ingest URL"
-description = "Set automatically by Insights when the store connects."
+description = "Set automatically by bizinsights when the store connects."
 type = "single_line_text_field"
 validations = [{ name = "min", value = "10" }]

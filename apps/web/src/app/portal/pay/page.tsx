@@ -56,7 +56,7 @@ export default function PortalPay() {
             ))}
           </ul>
           <EstimateNote>
-            Net pay is your gross pay plus other earnings, minus the deductions your employer added. Insights doesn&apos;t calculate tax or statutory deductions, so your
+            Net pay is your gross pay plus other earnings, minus the deductions your employer added. bizinsights doesn&apos;t calculate tax or statutory deductions, so your
             employer&apos;s final figures may differ.
           </EstimateNote>
         </>

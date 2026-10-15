@@ -1,6 +1,6 @@
-# Insights on AWS: deployment runbook
+# bizinsights on AWS: deployment runbook
 
-How Insights on AWS is built, deployed, filled with data, tested, rolled back and, at cutover,
+How bizinsights on AWS is built, deployed, filled with data, tested, rolled back and, at cutover,
 made the only production (the old Cloudflare deployment still serves merchants until then, see
 [Retiring the old Cloudflare deployment](#retiring-the-old-cloudflare-deployment)). The design and its reasoning are in
 [aws-architecture.md](aws-architecture.md); sign-in in [cognito-setup.md](cognito-setup.md).

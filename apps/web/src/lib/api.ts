@@ -13,7 +13,7 @@ export class ApiError extends Error {
   }
 }
 
-const UNREACHABLE = "We can't reach Insights right now. We'll keep trying.";
+const UNREACHABLE = "We can't reach bizinsights right now. We'll keep trying.";
 
 /** Only a 401 means the session is gone. Anything else must never sign the user out. */
 export const isSignedOut = (e: unknown) => e instanceof ApiError && e.status === 401;
@@ -50,7 +50,7 @@ export function friendlyError(e: unknown): string {
  * own, so an outage has to say "try again" rather than friendlyError's "we'll keep trying".
  */
 export function actionError(e: unknown, what: string): string {
-  if (isTransient(e)) return `We couldn't reach Insights to ${what}. Please try again in a moment.`;
+  if (isTransient(e)) return `We couldn't reach bizinsights to ${what}. Please try again in a moment.`;
   return (e as Error).message;
 }
 

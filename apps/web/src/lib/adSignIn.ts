@@ -4,7 +4,7 @@ import type { AdProvider } from "./adConnections";
 /**
  * Leaving for an ad platform's sign-in, and noticing when the browser comes back without finishing
  * it: the Back button, or the page restored from the back/forward cache. Facebook's own error pages
- * ("Feature Unavailable") never send anyone back to Insights, so this is the one moment to explain
+ * ("Feature Unavailable") never send anyone back to bizinsights, so this is the one moment to explain
  * them; and a restored page would otherwise keep its button stuck on "Opening…".
  */
 
@@ -22,7 +22,7 @@ export function leavingForSignIn(provider: AdProvider): void {
   }
 }
 
-/** The platform sent the browser back to Insights (the callback): nothing to explain. */
+/** The platform sent the browser back to bizinsights (the callback): nothing to explain. */
 export function signInFinished(): void {
   try {
     sessionStorage.removeItem(KEY);

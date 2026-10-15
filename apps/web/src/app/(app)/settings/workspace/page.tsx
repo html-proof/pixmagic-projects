@@ -40,8 +40,8 @@ export default function WorkspacePage() {
     setNewName("");
     // Switch only once `me` lists the new workspace: a `me` from before would pair its id with another
     // workspace's name and role, and the pages would act on that one. Say it was created either way,
-    // so it isn't created twice; the /me retry adds it to the workspace menu once Insights is back.
-    if (!(await reloadMe())) return setMsg(`Created ${newName}. It will appear in the workspace menu as soon as we can reach Insights again.`);
+    // so it isn't created twice; the /me retry adds it to the workspace menu once bizinsights is back.
+    if (!(await reloadMe())) return setMsg(`Created ${newName}. It will appear in the workspace menu as soon as we can reach bizinsights again.`);
     setWorkspaceId(ws.id);
     setMsg(`Created ${newName} and switched to it.`);
   }

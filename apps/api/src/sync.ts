@@ -102,7 +102,7 @@ export async function autoRefresh(
     return (await seedResync(deps, store)).map((j) => j.kind);
   }
   const kinds: Array<{ kind: SyncKind; sinceDays?: number }> = [];
-  // Orders stored before Insights recorded where customers came from: re-read the import window
+  // Orders stored before bizinsights recorded where customers came from: re-read the import window
   // once (by creation date), which fills their sources in. At most daily, and only while any lack one.
   if ((await due("sources", AUTO_REFRESH.sourcesEverySec)) && (await missingSources(store.id))) {
     kinds.push({ kind: "orders", sinceDays: AUTO_REFRESH.sourcesDays });

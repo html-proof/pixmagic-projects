@@ -211,7 +211,7 @@ export default function WhatsappSettings() {
       </section>
 
       <section className="card text-sm text-muted">
-        <h2 className="font-semibold text-text">Data Insights keeps for WhatsApp</h2>
+        <h2 className="font-semibold text-text">Data bizinsights keeps for WhatsApp</h2>
         <ul className="mt-1 list-disc space-y-1 pl-5">
           <li>Customers&apos; WhatsApp numbers and first names, encrypted, to send their messages and honour opt-outs. The dashboard only shows masked numbers.</li>
           <li>Message history for 180 days; the details used to write a message are deleted once it&apos;s sent.</li>
