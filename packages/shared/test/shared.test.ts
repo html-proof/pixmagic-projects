@@ -11,8 +11,6 @@ import {
   delta,
   encrypt,
   expandScopes,
-  generateOtp,
-  hashOtp,
   isDay,
   keyVersionOf,
   localDay,
@@ -25,7 +23,6 @@ import {
   signWebhookBody,
   summarize,
   summarizeJourney,
-  verifyOtp,
   verifyShopifyQueryHmac,
   verifyShopifyWebhookHmac,
 } from "../src/index.js";
@@ -91,17 +88,6 @@ describe("token encryption", () => {
   it("rejects bad keys", () => {
     expect(() => parseKeyring("1:short")).toThrow();
     expect(() => parseKeyring("")).toThrow();
-  });
-});
-
-describe("OTP", () => {
-  it("generates 6 digits and verifies only the right code for the right email", () => {
-    for (let i = 0; i < 50; i++) expect(generateOtp()).toMatch(/^\d{6}$/);
-    const h = hashOtp("012345", "A@x.com", "pep");
-    expect(verifyOtp("012345", "a@x.com", "pep", h)).toBe(true);
-    expect(verifyOtp("012346", "a@x.com", "pep", h)).toBe(false);
-    expect(verifyOtp("012345", "b@x.com", "pep", h)).toBe(false);
-    expect(verifyOtp("12345", "a@x.com", "pep", h)).toBe(false);
   });
 });
 

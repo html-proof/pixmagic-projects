@@ -7,8 +7,8 @@ import { fmtDay, fmtMonth, fmtRange, fmtRelative, hourRange, plural } from "./fo
 import { STEP_LABEL } from "./Funnel";
 import { AreaPreview } from "./Previews";
 import { Icon } from "./Icons";
-import { B, Change, changeWords } from "./narrative";
-import { Panel, Stat, type Tone } from "./primitives";
+import { B, Change, changeWords } from "./Narrative";
+import { Panel, Stat, type Tone } from "./Primitives";
 import { topicInfo, topicSummary, type Topic } from "./topics";
 import type { Overview } from "./types";
 

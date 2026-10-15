@@ -11,7 +11,6 @@ import {
   startOfLocalDay,
   startOfMonth,
   startOfWeek,
-  staffCan,
   type BreakKind,
   type PayCycle,
   type SessionFlag,
@@ -1002,6 +1001,3 @@ export async function flagStaleSessions(mailer: Mailer, fetchImpl?: FetchLike): 
   }
   return rows.length;
 }
-
-/** Whether the actor may see estimated pay (the live board and timesheets hide it otherwise). */
-export const canSeePay = (actor: StaffActor) => staffCan(actor.access, "pay:view");

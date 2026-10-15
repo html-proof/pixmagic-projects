@@ -2,11 +2,11 @@
 import Link from "next/link";
 import { useState } from "react";
 import { errorLabel, MESSAGE_STATUS_LABEL } from "@app/shared/email";
-import { Empty, Panel, Stat } from "@/components/dashboard/primitives";
+import { Empty, Panel, Stat } from "@/components/dashboard/Primitives";
 import { AccountStatusBadge, Note, ProviderMark, providerLabel } from "@/components/email/EmailUi";
 import { LoadError } from "@/components/LoadError";
 import { Alert } from "@/components/ui";
-import { PageHeader, Skeleton } from "@/components/whatsapp/common";
+import { PageHeader, Skeleton } from "@/components/AppUi";
 import { fmtNum, useApi } from "@/lib/api";
 import { isoDay, useEmail, type OverviewResponse } from "@/lib/email";
 

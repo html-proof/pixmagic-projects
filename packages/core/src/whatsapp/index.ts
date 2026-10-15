@@ -1,3 +1,4 @@
+export * from "./errors.js";
 export * from "./graph.js";
 export * from "./store.js";
 export * from "./messages.js";
@@ -6,5 +7,6 @@ export * from "./automations.js";
 export * from "./events.js";
 export * from "./webhook.js";
 export * from "./campaigns.js";
+export * from "./carts.js";
 export * from "./scheduler.js";
 export * from "./connect.js";

@@ -104,9 +104,6 @@ export const MESSAGE_STATUS_HELP: Record<MessageStatus, string> = {
   unknown: "Sending was interrupted after the provider may have received it. It was not retried automatically, to avoid a duplicate.",
 };
 
-/** Waiting to be sent (counted as "queued" on the dashboard). */
-export const PENDING_MESSAGE_STATUSES = ["queued", "processing", "deferred"] as const satisfies readonly MessageStatus[];
-
 /** What an automation's evaluation of one event ended in (the message carries the rest). */
 export const EXECUTION_STATUSES = ["pending", "skipped", "scheduled", "suppressed", "failed", "cancelled"] as const;
 export type ExecutionStatus = (typeof EXECUTION_STATUSES)[number];

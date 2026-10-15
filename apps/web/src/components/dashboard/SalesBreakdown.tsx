@@ -4,7 +4,7 @@ import { dailyBreakdown, weekdayOf, type BreakdownDay, type SalesDay, type Sales
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { niceTicks, useWidth } from "./chartUtils";
 import { fmtDay, fmtLongDay, fmtMonth, fmtMoneyCompact, fmtMoneyWhole, fmtSpan, fmtWeekday, weekdayName } from "./format";
-import { Delta } from "./primitives";
+import { Delta } from "./Primitives";
 
 // ---------------------------------------------------------------------------
 // The chart: columns over a running-total strip that shares their x positions.

@@ -9,7 +9,7 @@ import { LoginPrompt, SignupButton, SrOnly } from "../shared/ui";
 import { DataParticles } from "./DataParticles";
 import { HeroDashboardReveal } from "./HeroDashboardReveal";
 import { HeroFlowLists, HeroFlowsStacked, HeroFlowsWide } from "./HeroFlows";
-import { ORB_POINT, WIDE_QUERY, coreGlow, coreOpacity, coreScale, coreX, coreY, ringOpacity } from "./HeroLayout";
+import { ORB_POINT, WIDE_QUERY, coreGlow, coreOpacity, coreScale, coreX, coreY, ringOpacity } from "./heroLayout";
 import { IntelligenceCore, type CoreMotion } from "./IntelligenceCore";
 
 /* ---- Copy ------------------------------------------------------------------------------------ */

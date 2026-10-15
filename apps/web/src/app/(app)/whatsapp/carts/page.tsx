@@ -1,12 +1,13 @@
 "use client";
 import { useState } from "react";
 import Link from "next/link";
-import { reasonLabel } from "@app/shared/whatsapp";
-import { Badge, Empty, Stat, type Tone } from "@/components/dashboard/primitives";
+import { kindsOf, reasonLabel } from "@app/shared/whatsapp";
+import { Badge, Empty, Stat, type Tone } from "@/components/dashboard/Primitives";
 import { fmtRelative } from "@/components/dashboard/format";
 import { useApp } from "@/components/AppContext";
 import { api, fmtMoney, fmtNum, useApi } from "@/lib/api";
-import { fmtWhen, KindsSection, MessageStatus, PageHeader, useAction, useWa } from "@/components/whatsapp/common";
+import { fmtWhen, KindsSection, MessageStatus, useWa } from "@/components/whatsapp/WhatsappUi";
+import { PageHeader, useAction } from "@/components/AppUi";
 
 interface Cart {
   id: string;
@@ -68,7 +69,7 @@ export default function AbandonedCarts() {
 
       <KindsSection
         title="Reminders"
-        kinds={["abandoned_cart_1", "abandoned_cart_2"]}
+        kinds={kindsOf("carts")}
         extra={(cfg, set) => (
           <div className="mt-3 grid gap-3 border-t border-border pt-3 sm:grid-cols-2">
             <div>

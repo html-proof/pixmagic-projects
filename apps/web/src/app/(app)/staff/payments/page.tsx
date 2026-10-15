@@ -2,12 +2,12 @@
 import Link from "next/link";
 import { useCallback, useEffect, useId, useState, type FormEvent } from "react";
 import { PAYMENT_METHOD_LABEL, PAYMENT_METHODS, PAYMENT_STATUS_LABEL, PAYMENT_STATUSES, type PaymentMethod, type PaymentStatus } from "@app/shared/staff";
-import { Empty } from "@/components/dashboard/primitives";
+import { Empty } from "@/components/dashboard/Primitives";
 import { LoadError } from "@/components/LoadError";
 import { RecordPaymentModal, type PaymentView } from "@/components/staff/RecordPayment";
 import { Field, Modal, Pagination, PaymentBadge, Table, Td, Th } from "@/components/staff/ui";
 import { Alert, EmptyState } from "@/components/ui";
-import { PageHeader, Skeleton, useToast } from "@/components/whatsapp/common";
+import { PageHeader, Skeleton, useToast } from "@/components/AppUi";
 import { actionError, api, useApi } from "@/lib/api";
 import { fmtDateTime, fmtDay, fmtMoney, fmtSpan, useStaff, type EmployeeRow, type StaffConfig } from "@/lib/staff";
 

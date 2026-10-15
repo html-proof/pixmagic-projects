@@ -3,7 +3,7 @@ import { motion, useTransform, type MotionValue } from "motion/react";
 import { useId, type ReactNode } from "react";
 import { easeOut, lerp, segment } from "@/lib/motion";
 import { InsightMark } from "../shared/InsightMark";
-import { EMBLEM_IN, ORB, ORB_POINT, SLOTS, type SlotId } from "./HeroLayout";
+import { EMBLEM_IN, ORB, ORB_POINT, SLOTS, type SlotId } from "./heroLayout";
 
 /**
  * When each card forms, as windows of stage 4 (p 0.60–0.80). Business health grows out of the

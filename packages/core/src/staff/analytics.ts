@@ -28,7 +28,7 @@ import {
   type RangePreset,
   type WorkChunk,
 } from "@app/shared/staff";
-import { decimalString, displayRate, employeeScope, type StaffActor } from "./common.js";
+import { displayRate, employeeScope, type StaffActor } from "./common.js";
 import { computeWork, loadWork, priceByBucket, splitByHour, workedSeconds, type EmployeeWork } from "./calc.js";
 import { ensureStaffSettings } from "./settings.js";
 
@@ -460,10 +460,4 @@ export async function staffTrends(actor: StaffActor, input: { preset: RangePrese
       notes: pay ? ["Costs are estimated gross wages from recorded hours at each day's pay rate, in " + cur + "."] : [],
     };
   });
-}
-
-/** Current base rate per employee (for the employee list and reports). */
-export function rateString(rates: Array<{ effectiveFrom: string; hourlyRate: Prisma.Decimal; currency: string }>, day: string) {
-  const r = [...rates].filter((x) => x.effectiveFrom <= day).sort((a, b) => b.effectiveFrom.localeCompare(a.effectiveFrom))[0];
-  return r ? displayRate(decimalString(r.hourlyRate)!, r.currency) : null;
 }

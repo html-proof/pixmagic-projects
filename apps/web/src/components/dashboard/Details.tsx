@@ -10,9 +10,9 @@ import { CatalogCard, ChannelsCard, DiscountCodesCard, FulfillmentCard, Inventor
 import { AdsDetail } from "./AdsPanel";
 import { AdsenseDetail } from "./AdsensePanel";
 import { Explained } from "./Explain";
-import { B, Change, InShort, upDown } from "./narrative";
+import { B, Change, InShort, upDown } from "./Narrative";
 import { OverviewDetail } from "./Overview";
-import { Delta, Panel, Stat } from "./primitives";
+import { Delta, Panel, Stat } from "./Primitives";
 import { DailySalesCard, MonthlySalesCard } from "./SalesBreakdown";
 import type { Topic } from "./topics";
 import type { Overview } from "./types";

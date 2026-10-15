@@ -2,10 +2,10 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useId, useState } from "react";
-import { EMPLOYMENT_TYPE_LABEL, EMPLOYMENT_TYPES, type EmploymentType } from "@app/shared/staff";
+import { EMPLOYEE_STATUS_LABEL, EMPLOYEE_STATUSES, EMPLOYMENT_TYPE_LABEL, EMPLOYMENT_TYPES, type EmploymentType } from "@app/shared/staff";
 import { LoadError } from "@/components/LoadError";
 import { EmptyState } from "@/components/ui";
-import { PageHeader, Skeleton } from "@/components/whatsapp/common";
+import { PageHeader, Skeleton } from "@/components/AppUi";
 import { AccountBadge, EmployeeStatusBadge, Pagination, Table, Td, Th } from "@/components/staff/ui";
 import { fmtRate } from "@/components/staff/EmployeeForm";
 import { useApi } from "@/lib/api";
@@ -24,13 +24,7 @@ type StatusFilter = "" | "active" | "on_leave" | "inactive" | "all";
 type AccountFilter = "" | "active" | "invited" | "not_invited";
 type Sort = "name" | "number" | "joined";
 
-const STATUS_OPTIONS: Array<[StatusFilter, string]> = [
-  ["", "Active and on leave"],
-  ["active", "Active"],
-  ["on_leave", "On leave"],
-  ["inactive", "Deactivated"],
-  ["all", "Everyone"],
-];
+const STATUS_OPTIONS: Array<[StatusFilter, string]> = [["", "Active and on leave"], ...EMPLOYEE_STATUSES.map((s): [StatusFilter, string] => [s, EMPLOYEE_STATUS_LABEL[s]]), ["all", "Everyone"]];
 const ACCOUNT_OPTIONS: Array<[AccountFilter, string]> = [
   ["", "Any account status"],
   ["active", "Account active"],

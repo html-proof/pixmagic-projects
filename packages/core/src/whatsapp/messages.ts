@@ -27,6 +27,7 @@ import { env } from "../env.js";
 import { logger } from "../logger.js";
 import type { Producer, Queues } from "../queues.js";
 import type { FetchLike } from "../shopify.js";
+import { WhatsappError } from "./errors.js";
 import { waSendTemplate, WhatsappApiError } from "./graph.js";
 import { applyMarketing, connectionToken, contactWaId, markReconnect, parseConfig, tierLimit, waDecrypt, waEncrypt } from "./store.js";
 
@@ -158,11 +159,23 @@ export async function enqueueSend(message: Pick<WhatsappMessage, "id" | "schedul
   }
 }
 
-/** Cancel what's still waiting for an order or a checkout (purpose kinds optional). */
-export async function cancelScheduled(where: { trackingId?: string; checkoutId?: string; campaignId?: string; kinds?: string[]; exceptKinds?: string[] }, reason: string) {
+/**
+ * Cancel what's still waiting: one message, or everything for an order, a checkout, a campaign or
+ * a rule (purpose kinds optional). `storeId` / `workspaceId` narrow it further.
+ */
+export async function cancelScheduled(
+  where: { id?: string; storeId?: string; workspaceId?: string; trackingId?: string; checkoutId?: string; campaignId?: string; ruleId?: string; kinds?: string[]; exceptKinds?: string[] },
+  reason: string,
+) {
+  // Without one of these it would cancel every store's waiting messages.
+  if (!where.id && !where.trackingId && !where.checkoutId && !where.campaignId && !where.ruleId) throw new Error("cancelScheduled needs a message, order, checkout, campaign or rule");
   const { count } = await systemDb.whatsappMessage.updateMany({
     where: {
       status: "scheduled",
+      ...(where.id ? { id: where.id } : {}),
+      ...(where.storeId ? { storeId: where.storeId } : {}),
+      ...(where.workspaceId ? { workspaceId: where.workspaceId } : {}),
+      ...(where.ruleId ? { ruleId: where.ruleId } : {}),
       ...(where.trackingId ? { trackingId: where.trackingId } : {}),
       ...(where.checkoutId ? { checkoutId: where.checkoutId } : {}),
       ...(where.campaignId ? { campaignId: where.campaignId } : {}),
@@ -426,16 +439,21 @@ async function deliver(msg: WhatsappMessage, deps: WaDeps): Promise<SendOutcome>
 }
 
 /** The message is in a state a retry can't start from (the reason is safe to show the merchant). */
-export class NotRetryableError extends Error {
+export class NotRetryableError extends WhatsappError {
   constructor(message: string) {
-    super(message);
+    super(message, 409, "not_retryable");
     this.name = "NotRetryableError";
   }
 }
 
+const RETRYABLE = ["failed", "skipped", "cancelled"];
+
+/** Whether the merchant can send this message again by hand (what requeueMessage accepts). */
+export const canRequeue = (msg: Pick<WhatsappMessage, "status" | "paramsEnc">) => !!msg.paramsEnc && RETRYABLE.includes(msg.status);
+
 /** Retry a failed or skipped message by hand (the merchant fixed the template, the customer opted in). */
 export async function requeueMessage(msg: WhatsappMessage, deps: WaDeps) {
-  if (!["failed", "skipped", "cancelled"].includes(msg.status)) throw new NotRetryableError("Only failed, skipped or cancelled messages can be retried");
+  if (!RETRYABLE.includes(msg.status)) throw new NotRetryableError("Only failed, skipped or cancelled messages can be retried");
   if (!msg.paramsEnc) throw new NotRetryableError("This message's details have been cleared; it can't be sent again");
   const updated = await systemDb.whatsappMessage.update({
     where: { id: msg.id },

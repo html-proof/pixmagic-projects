@@ -1,10 +1,10 @@
 "use client";
 import Link from "next/link";
 import { useCallback, useState } from "react";
-import { Badge, type Tone } from "@/components/dashboard/primitives";
+import { Badge, type Tone } from "@/components/dashboard/Primitives";
 import { LoadError } from "@/components/LoadError";
 import { EmptyState } from "@/components/ui";
-import { ConfirmDialog, PageHeader, Skeleton, useAction } from "@/components/whatsapp/common";
+import { ConfirmDialog, PageHeader, Skeleton, useAction } from "@/components/AppUi";
 import { Table, Td, Th } from "@/components/staff/ui";
 import { InvitationLinkPanel, inviteEmployee, type SharedLink } from "@/components/staff/EmployeeForm";
 import { api, useApi } from "@/lib/api";

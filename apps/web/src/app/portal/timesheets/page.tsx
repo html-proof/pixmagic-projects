@@ -4,9 +4,9 @@ import { BREAK_KIND_LABEL, localDayOf, shiftDay } from "@app/shared/staff";
 import { LoadError } from "@/components/LoadError";
 import { usePortal, type MyShift, type MyTimesheet } from "@/components/staff/PortalContext";
 import { ApprovalBadge, Field, Flags, Modal } from "@/components/staff/ui";
-import { Badge, Empty } from "@/components/dashboard/primitives";
+import { Badge, Empty } from "@/components/dashboard/Primitives";
 import { Alert } from "@/components/ui";
-import { Skeleton, useToast } from "@/components/whatsapp/common";
+import { Skeleton, useToast } from "@/components/AppUi";
 import { actionError, api, useApi } from "@/lib/api";
 import { fmtDateTime, fmtDay, fmtHours, fmtTime, fromLocalInput, toLocalInput } from "@/lib/staff";
 

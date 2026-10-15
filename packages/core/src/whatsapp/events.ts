@@ -29,9 +29,10 @@ import { env } from "../env.js";
 import { logger } from "../logger.js";
 import { shopifyGraphql } from "../shopify.js";
 import { runAutomations, type AutomationSubject } from "./automations.js";
+import { OPEN_CHECKOUT } from "./carts.js";
 import { cancelScheduled, marketingAllowed, scheduleMessage, type WaDeps } from "./messages.js";
 import { contactFirstName, newLinkToken, phoneHash, storeWhatsapp, upsertContact, waEncrypt, type MarketingSignal } from "./store.js";
-import { addressLine, money, orderValues, storeName, type Values } from "./values.js";
+import { addressLine, cartValues, money, orderValues, type Values } from "./values.js";
 import type { WhatsappConnection } from "@app/db";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -545,8 +546,6 @@ async function onRefund(ctx: Ctx, p: Payload) {
 // Checkouts (abandoned cart recovery)
 // ---------------------------------------------------------------------------
 
-const OPEN_CHECKOUT = ["open", "reminded", "ineligible"];
-
 async function onCheckout(ctx: Ctx, p: Payload) {
   const token = p.token ? String(p.token) : null;
   if (!token) return;
@@ -593,12 +592,7 @@ async function onCheckout(ctx: Ctx, p: Payload) {
   }
   if (!ctx.connection) return;
 
-  const values: Values = {
-    customer_name: firstName?.split(/\s+/)[0] || "there",
-    store_name: storeName(ctx.store),
-    cart_total: money(data.totalPrice, data.currency),
-    support_contact: ctx.cfg.supportPhone || ctx.cfg.supportEmail || null,
-  };
+  const values = cartValues(ctx.store, ctx.cfg, firstName?.split(/\s+/)[0] ?? null, data.totalPrice, data.currency);
   const recoveryUrl = p.abandoned_checkout_url ? String(p.abandoned_checkout_url) : null;
   let ineligible: string | null = null;
   for (const n of [1, 2] as const) {

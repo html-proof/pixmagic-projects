@@ -4,7 +4,7 @@ import { bodyLimit } from "hono/body-limit";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { ZodError } from "zod";
 import { dbReachable, systemDb } from "@app/db";
-import { EmailError, env, logger, StaffError } from "@app/core";
+import { AppError, env, logger } from "@app/core";
 import { ReportRangeError } from "@app/shared/staff";
 import { clientIp, HttpError, SESSION_COOKIE, type AppEnv, type Deps } from "./context.js";
 import { probeDb, tenantDb, type ProbeResult } from "@app/db";
@@ -120,15 +120,12 @@ export function buildApp(deps: Deps): App {
     if (err instanceof HttpError) {
       return c.json({ error: err.code, message: err.message }, err.statusCode as ContentfulStatusCode, err.retryAfterSec ? { "retry-after": String(err.retryAfterSec) } : {});
     }
-    // Staff Management's own rule violations: their messages are written for the person using the app.
-    if (err instanceof StaffError) {
+    // A rule the person broke or a step they must take first (StaffError, EmailError, WhatsappError):
+    // its message is written for them.
+    if (err instanceof AppError) {
       return c.json({ error: err.code, message: err.message, ...(err.detail !== undefined ? { detail: err.detail } : {}) }, err.status as ContentfulStatusCode);
     }
     if (err instanceof ReportRangeError) return c.json({ error: "invalid_range", message: err.message }, 400);
-    // The email module's own rule violations, written for the person using the app.
-    if (err instanceof EmailError) {
-      return c.json({ error: err.code, message: err.message, ...(err.detail !== undefined ? { detail: err.detail } : {}) }, err.status as ContentfulStatusCode);
-    }
     if (err instanceof ZodError) {
       return c.json({ error: "validation", message: err.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ") }, 400);
     }

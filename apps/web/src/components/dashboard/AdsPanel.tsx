@@ -3,13 +3,13 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 import { GoogleIcon, MetaIcon } from "@/components/BrandIcons";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
-import { AccountStatus, accountGroups, dailyMoneyColumns } from "./adsCommon";
+import { AccountStatus, accountGroups, dailyMoneyColumns } from "./AdsCommon";
 import { fmtLongDay, fmtMoneyCompact, fmtMoneyWhole, fmtRange, fmtSpan, fmtTimes, plural } from "./format";
 import { Icon } from "./Icons";
 import { GoogleReportPanel } from "./GoogleReport";
 import { MetaReportPanel } from "./MetaReport";
-import { B, changeWords } from "./narrative";
-import { Delta, NeutralDelta, Panel, Stat } from "./primitives";
+import { B, changeWords } from "./Narrative";
+import { Delta, NeutralDelta, Panel, Stat } from "./Primitives";
 import { ColumnsWithTotal } from "./SalesBreakdown";
 import type { AdsModule, Overview } from "./types";
 

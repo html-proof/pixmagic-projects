@@ -13,12 +13,12 @@ import {
   type PayCycle,
   type PayrollStatus,
 } from "@app/shared/staff";
-import { Badge, type Tone } from "@/components/dashboard/primitives";
+import { Badge, type Tone } from "@/components/dashboard/Primitives";
 import { LoadError } from "@/components/LoadError";
 import { RecordPaymentModal } from "@/components/staff/RecordPayment";
 import { EstimateNote, Field, Figure, Modal, PayrollBadge, Table, Td, Th } from "@/components/staff/ui";
 import { Alert, EmptyState } from "@/components/ui";
-import { ConfirmDialog, PageHeader, Skeleton, useAction, useToast } from "@/components/whatsapp/common";
+import { ConfirmDialog, PageHeader, Skeleton, useAction, useToast } from "@/components/AppUi";
 import { actionError, api, ApiError, useApi } from "@/lib/api";
 import { exportFile, fmtDateTime, fmtDay, fmtHoursDec, fmtMoney, fmtSpan, useStaff, type EmployeeRow } from "@/lib/staff";
 

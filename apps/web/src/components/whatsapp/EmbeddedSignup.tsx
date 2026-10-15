@@ -1,7 +1,7 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { actionError, api } from "@/lib/api";
-import { WhatsappIcon } from "./common";
+import { WhatsappIcon } from "./WhatsappUi";
 import type { Overview } from "./types";
 
 // ---------------------------------------------------------------------------

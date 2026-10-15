@@ -1,11 +1,12 @@
 "use client";
 import { useState, type FormEvent, type ReactNode } from "react";
-import { Badge } from "@/components/dashboard/primitives";
+import { Badge } from "@/components/dashboard/Primitives";
 import { fmtRelative } from "@/components/dashboard/format";
 import { LoadError } from "@/components/LoadError";
 import { Alert } from "@/components/ui";
 import { actionError, api, useApi } from "@/lib/api";
-import { ConfirmDialog, PageHeader, Skeleton, useAction, useToast, useWa, WhatsappIcon } from "@/components/whatsapp/common";
+import { useWa, WhatsappIcon } from "@/components/whatsapp/WhatsappUi";
+import { ConfirmDialog, PageHeader, Skeleton, useAction, useToast } from "@/components/AppUi";
 import { EmbeddedSignup } from "@/components/whatsapp/EmbeddedSignup";
 import { connectionStatus, quality, tier, type Overview } from "@/components/whatsapp/types";
 

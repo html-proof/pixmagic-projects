@@ -7,7 +7,7 @@ import { EmailPreviewFrame, Note } from "@/components/email/EmailUi";
 import { LoadError } from "@/components/LoadError";
 import { Field, Tabs } from "@/components/staff/ui";
 import { Alert } from "@/components/ui";
-import { ConfirmDialog, PageHeader, Skeleton, useAction } from "@/components/whatsapp/common";
+import { ConfirmDialog, PageHeader, Skeleton, useAction } from "@/components/AppUi";
 import { actionError, api, ApiError, useApi } from "@/lib/api";
 import { fmtDateTime, useEmail, type CatalogResponse, type RenderedPreview, type TemplateView } from "@/lib/email";
 

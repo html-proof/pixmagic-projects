@@ -279,8 +279,3 @@ export function sessionWork(
   const span = end - start;
   return { intervals, spanSeconds: span, paidBreakSeconds: paidBreak, unpaidBreakSeconds: unpaidBreak, workedSeconds: span - unpaidBreak };
 }
-
-/** Totals of a payroll line set (regular + overtime + ... = gross). */
-export function linesTotal(lines: readonly { amountMinor: bigint }[]): bigint {
-  return lines.reduce((a, l) => a + l.amountMinor, 0n);
-}

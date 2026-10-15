@@ -6,6 +6,7 @@ import { createHmac } from "node:crypto";
 import { normalizeEmail } from "@app/shared/email";
 import type { Coord } from "../coord.js";
 import { env } from "../env.js";
+import { AppError } from "../errors.js";
 import { logger } from "../logger.js";
 import { audit } from "../notify.js";
 import type { Mailer } from "../notify.js";
@@ -27,14 +28,9 @@ export interface EmailDeps {
  * A rule of the email module the person using the app broke, or a state they must fix. The API
  * answers it with its status and code; the message is written for them.
  */
-export class EmailError extends Error {
-  constructor(
-    message: string,
-    public status: number,
-    public code: string,
-    public detail?: unknown,
-  ) {
-    super(message);
+export class EmailError extends AppError {
+  constructor(message: string, status: number, code: string, detail?: unknown) {
+    super(message, status, code, detail);
     this.name = "EmailError";
   }
 }

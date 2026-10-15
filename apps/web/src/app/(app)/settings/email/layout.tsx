@@ -3,7 +3,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 import { Alert } from "@/components/ui";
-import { ToastProvider } from "@/components/whatsapp/common";
+import { ToastProvider } from "@/components/AppUi";
 import { useEmail } from "@/lib/email";
 
 const TABS = [
