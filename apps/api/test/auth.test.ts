@@ -119,6 +119,25 @@ describe("signing in with email and password", () => {
     expect((await get("/me", { cookie })).statusCode).toBe(200);
   });
 
+  it("\"Keep me signed in\" unticked: cookies that end with the browser, re-checks included", async () => {
+    const u = ctx.auth.addUser({ sub: "u1", email: "a@x.com" });
+    const kept = await post("/auth/login", { email: "a@x.com", password: u.password });
+    expect(kept.headers["set-cookie"]).toMatch(/__session=[^;]+;[^,]*Max-Age=\d+/);
+
+    const brief = await post("/auth/login", { email: "a@x.com", password: u.password, keep: false });
+    expect(brief.statusCode).toBe(200);
+    expect(brief.headers["set-cookie"]).toMatch(/__session=[^;]+/);
+    expect(brief.headers["set-cookie"]).not.toMatch(/Max-Age/);
+
+    // The minute's re-check with Cognito re-issues the cookies: still without a lifetime.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + REVALIDATE_MS + 1_000);
+    const rechecked = await get("/me", { cookie: cookiesFrom(brief) });
+    expect(rechecked.statusCode).toBe(200);
+    expect(rechecked.headers["set-cookie"]).toMatch(/__session=[^;]+/);
+    expect(rechecked.headers["set-cookie"]).not.toMatch(/Max-Age/);
+  });
+
   it("/auth/whoami answers /me for a session and a plain 200 for visitors", async () => {
     const { cookie } = await signIn(ctx, "u1", "a@x.com");
     const signedIn = await get("/auth/whoami", { cookie });

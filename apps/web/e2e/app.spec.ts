@@ -28,14 +28,18 @@ test("unauthenticated users are sent to sign in, and come back to the page they 
   await page.goto("/settings/members");
   await expect(page).toHaveURL(/\/login/);
   await expect(page.getByRole("heading", { name: "Welcome Back" })).toBeVisible();
-  await expect(page.getByText("Sign in to access your dashboard.")).toBeVisible();
+  await expect(page.getByText("Sign in to your account to continue to your dashboard.")).toBeVisible();
   // Email and password, Google, Apple, and a way to create an account. Shopify is connected from inside the app only.
   await expect(page.getByLabel("Email Address")).toBeVisible();
   await expect(page.getByLabel("Password", { exact: true })).toBeVisible();
   await expect(page.getByRole("link", { name: "Forgot Password?" })).toHaveAttribute("href", "/forgot-password");
   await expect(page.getByRole("button", { name: "Continue with Google" })).toBeEnabled();
   await expect(page.getByRole("button", { name: "Continue with Apple" })).toBeEnabled();
-  await expect(page.getByRole("link", { name: "Create Account" })).toHaveAttribute("href", "/signup");
+  await expect(page.getByLabel("Keep me signed in")).toBeChecked();
+  // In the top bar and under the form.
+  const createAccount = page.getByRole("link", { name: "Create Account" });
+  await expect(createAccount).toHaveCount(2);
+  for (const link of await createAccount.all()) await expect(link).toHaveAttribute("href", "/signup");
   await expect(page.getByText("Continue with Shopify")).toHaveCount(0);
 
   // The password field shows and hides what's typed.
@@ -76,10 +80,11 @@ test("the homepage introduces Insights, and Log in and Sign up open their own pa
   await expect(page.getByRole("heading", { name: "Welcome Back" })).toBeVisible();
   await expect(page.getByLabel("Full name")).toHaveCount(0);
 
-  // And each page leads to the other.
-  await page.getByRole("link", { name: "Create Account" }).click();
+  // And each page leads to the other (from the top bar and from under the form).
+  await page.getByRole("link", { name: "Create Account" }).first().click();
   await expect(page.getByRole("heading", { name: "Create your account" })).toBeVisible();
-  await page.getByRole("link", { name: "Sign in", exact: true }).click();
+  await expect(page.getByRole("link", { name: "Sign In", exact: true })).toHaveCount(2);
+  await page.getByRole("link", { name: "Sign In", exact: true }).last().click();
   await expect(page.getByRole("heading", { name: "Welcome Back" })).toBeVisible();
 });
 

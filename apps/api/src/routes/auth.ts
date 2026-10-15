@@ -19,6 +19,8 @@ const emailSchema = z
   .transform((e) => e.toLowerCase());
 const codeSchema = z.string().trim().regex(EMAIL_CODE_RE, "Enter the 6-digit code from the email.");
 const passwordSchema = z.string().min(1, "Enter your password.").max(256);
+/** "Keep me signed in" on the sign-in page; left out (older pages, scripts) means yes. */
+const keepSchema = z.boolean().optional();
 
 /** "Continue with ..." in our URLs, and Cognito's name for each provider. */
 const PROVIDERS: Record<string, FederatedProvider> = { google: "Google", apple: "SignInWithApple" };
@@ -127,12 +129,12 @@ export function authRoutes(app: App, deps: Deps) {
    * keys, issuer, audience = our app client, token_use, expiry, and the nonce for OAuth); only
    * then is the person looked up, linked or created, and the session cookie set.
    */
-  async function finishSignIn(c: Ctx, tokens: CognitoTokens, opts: { nonce?: string; firebaseUid?: string } = {}) {
+  async function finishSignIn(c: Ctx, tokens: CognitoTokens, opts: { nonce?: string; firebaseUid?: string; keep?: boolean } = {}) {
     const claims = await deps.auth.verifyIdToken(tokens.idToken, { nonce: opts.nonce }).catch((err) => {
       throw cognitoFailure(err, "verify ID token");
     });
     const user = await resolveUser(claims, { firebaseUid: opts.firebaseUid, ip: clientIp(c) }).catch(dbOutage(SIGN_IN_UNAVAILABLE));
-    const s = newSession({ userId: user.id, sub: claims.sub, username: claims.username, method: claims.method, authTime: claims.authTime });
+    const s = newSession({ userId: user.id, sub: claims.sub, username: claims.username, method: claims.method, authTime: claims.authTime, keep: opts.keep });
     setSessionCookies(c, s, tokens.refreshToken);
     return user;
   }
@@ -207,7 +209,7 @@ export function authRoutes(app: App, deps: Deps) {
 
   app.post("/auth/login", async (c) => {
     requireAppOrigin(c);
-    const input = z.object({ email: emailSchema, password: passwordSchema }).parse(await body(c));
+    const input = z.object({ email: emailSchema, password: passwordSchema, keep: keepSchema }).parse(await body(c));
     const ip = clientIp(c);
     await limit(deps.coord, `rl:login:ip:${ip}`, LIMITS.loginIp);
     await limit(deps.coord, `rl:login:email:${sha256Hex(input.email)}`, LIMITS.loginEmail);
@@ -223,7 +225,7 @@ export function authRoutes(app: App, deps: Deps) {
       if (!moved) throw cognitoFailure(err, "login");
       ({ result, firebaseUid } = moved);
     }
-    const user = await finishSignIn(c, tokensOrChallenge(result), { firebaseUid });
+    const user = await finishSignIn(c, tokensOrChallenge(result), { firebaseUid, keep: input.keep });
     return c.json({ user: publicUser(user) });
   });
 
@@ -347,7 +349,7 @@ export function authRoutes(app: App, deps: Deps) {
   app.post("/auth/otp/verify", async (c) => {
     requireAppOrigin(c);
     otpEnabled();
-    const input = z.object({ email: emailSchema, code: codeSchema }).parse(await body(c));
+    const input = z.object({ email: emailSchema, code: codeSchema, keep: keepSchema }).parse(await body(c));
     await limit(deps.coord, `rl:code:verify:${clientIp(c)}`, LIMITS.codeVerifyIp);
     const session = getCookie(c, OTP_COOKIE);
     if (!session) throw new HttpError(400, "That code has expired. Ask for a new one.", "expired_code");
@@ -355,7 +357,7 @@ export function authRoutes(app: App, deps: Deps) {
       throw cognitoFailure(isCognito(err, "NotAuthorizedException") ? new CognitoError("ExpiredCodeException", "") : err, "email code verify");
     });
     deleteCookie(c, OTP_COOKIE, { ...cookieBase(), path: otpCookiePath() });
-    const user = await finishSignIn(c, tokensOrChallenge(result));
+    const user = await finishSignIn(c, tokensOrChallenge(result), { keep: input.keep });
     return c.json({ user: publicUser(user) });
   });
 

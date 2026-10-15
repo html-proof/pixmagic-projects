@@ -46,6 +46,11 @@ export interface SessionClaims {
   at: number;
   /** Last checked with Cognito (ms). */
   ck: number;
+  /**
+   * false: "Keep me signed in" was unticked, so the cookies end when the browser closes (and at
+   * exp, whichever comes first). Absent: they last until exp, as every session did before.
+   */
+  keep?: false;
 }
 
 const signingKey = () => createHmac("sha256", env().SESSION_SECRET).update("session-cookie-v1").digest();
@@ -73,7 +78,10 @@ export function readSession(cookie: string | undefined, now = Date.now()): Sessi
   return claims;
 }
 
-export function newSession(input: { userId: string; sub: string; username: string; method: SignInMethod; authTime: number }, now = Date.now()): SessionClaims {
+export function newSession(
+  input: { userId: string; sub: string; username: string; method: SignInMethod; authTime: number; keep?: boolean },
+  now = Date.now(),
+): SessionClaims {
   return {
     v: 1,
     sid: randomBytes(18).toString("base64url"),
@@ -85,6 +93,7 @@ export function newSession(input: { userId: string; sub: string; username: strin
     exp: now + SESSION_TTL_MS,
     at: input.authTime,
     ck: now,
+    ...(input.keep === false && { keep: false as const }),
   };
 }
 
@@ -99,9 +108,12 @@ export const apiPath = () => {
 };
 const RT_AAD = "session-refresh-token-v1";
 
-/** Set (or re-set) the session cookie, and the refresh-token cookie when a token is given. */
+/**
+ * Set (or re-set) the session cookie, and the refresh-token cookie when a token is given. A
+ * session that isn't kept gets browser-session cookies (no Max-Age); exp still ends it.
+ */
 export function setSessionCookies(c: Context, claims: SessionClaims, refreshToken?: string) {
-  const maxAge = Math.max(0, Math.floor((claims.exp - Date.now()) / 1000));
+  const maxAge = claims.keep === false ? undefined : Math.max(0, Math.floor((claims.exp - Date.now()) / 1000));
   setCookie(c, SESSION_COOKIE, signSession(claims), { path: "/", httpOnly: true, sameSite: "Lax", secure: secure(), maxAge });
   if (refreshToken) {
     setCookie(c, REFRESH_COOKIE, encrypt(refreshToken, keyring(), `${RT_AAD}:${claims.sub}`), {

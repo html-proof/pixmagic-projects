@@ -31,8 +31,10 @@ const PROVIDERS: Array<{ id: SocialProvider; name: string; Mark: () => React.JSX
  * "Continue with Google / Apple" for both the sign-in and create-account pages: the user pool
  * creates the account the first time, so the same button does both. A full-page redirect through
  * Cognito to the provider and back to /auth/callback; the session is our httpOnly cookie.
+ * `row`: side by side wherever both labels fit on one line (stacked otherwise), in the split
+ * auth pages' larger size.
  */
-export function SocialButtons() {
+export function SocialButtons({ row = false }: { row?: boolean }) {
   const [config, setConfig] = useState<AuthConfig | null>(null);
   const [leaving, setLeaving] = useState<SocialProvider | null>(null);
 
@@ -50,14 +52,14 @@ export function SocialButtons() {
   const unavailable = PROVIDERS.filter((p) => config && !config.providers[p.id]);
 
   return (
-    <div className="space-y-2">
+    <div className={row ? "grid grid-cols-[repeat(auto-fit,minmax(14.5rem,1fr))] gap-3" : "space-y-2"}>
       {PROVIDERS.map(({ id, name, Mark }) => {
         const off = !!config && !config.providers[id];
         return (
           <button
             key={id}
             type="button"
-            className="btn-secondary w-full"
+            className={row ? "btn-secondary h-12 w-full rounded-xl text-[15px] whitespace-nowrap shadow-[var(--shadow)]" : "btn-secondary w-full"}
             disabled={off || leaving !== null}
             aria-describedby={off ? "social-unavailable" : undefined}
             onClick={() => {
@@ -71,7 +73,7 @@ export function SocialButtons() {
         );
       })}
       {unavailable.length > 0 && (
-        <p id="social-unavailable" className="text-xs text-muted">
+        <p id="social-unavailable" className={row ? "col-span-full text-center text-xs text-muted" : "text-xs text-muted"}>
           Sign in with {unavailable.map((p) => p.name).join(" and ")} isn&apos;t available yet. Please use your email address.
         </p>
       )}
