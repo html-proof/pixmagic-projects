@@ -2,8 +2,24 @@
  * Converts Shopify REST webhook payloads and Admin GraphQL nodes into one
  * internal shape. Only fields needed for KPIs are kept; customer identity is
  * reduced to an id that is hashed before storage (see persist.ts).
+ *
+ * The inputs have been checked against the schemas in shopifyPayloads.ts where they entered
+ * (`parseShopify`), so the ids and timestamps a row needs are there and valid.
  */
 import { classifyVisit, restVisit, type Traffic } from "@app/shared";
+import {
+  journeySummarySchema,
+  parseShopify,
+  type GraphqlMoney,
+  type GraphqlOrder,
+  type GraphqlProduct,
+  type GraphqlVariant,
+  type RestOrder,
+  type RestProduct,
+  type RestRefund,
+  type RestVariant,
+} from "./shopifyPayloads.js";
+
 export interface NormalizedLineItem {
   shopifyId: string;
   productShopifyId: string | null;
@@ -93,63 +109,63 @@ export const gidToId = (gid: string | number | null | undefined): string | null 
   return s.includes("/") ? (s.split("/").pop() ?? null) : s;
 };
 
-const num = (v: unknown): number => {
+const num = (v: string | number | null | undefined): number => {
   const n = typeof v === "number" ? v : Number.parseFloat(String(v ?? "0"));
   return Number.isFinite(n) ? n : 0;
 };
 
-const date = (v: unknown): Date => {
-  const d = new Date(String(v));
-  if (Number.isNaN(d.getTime())) throw new Error(`Invalid date ${String(v)}`);
+/** The schemas only let valid timestamps through; this throw is the backstop. */
+const date = (v: string): Date => {
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) throw new Error(`Invalid date ${v}`);
   return d;
 };
 
 /** Trimmed non-empty string, else null. */
-const text = (v: unknown): string | null => {
+const text = (v: string | null | undefined): string | null => {
   if (v === null || v === undefined) return null;
-  const s = String(v).trim();
+  const s = v.trim();
   return s ? s : null;
 };
 
 /** Earliest valid timestamp among `values`, else null. */
-const earliest = (values: unknown[]): Date | null => {
+const earliest = (values: Array<string | null | undefined>): Date | null => {
   let min: Date | null = null;
   for (const v of values) {
     if (!v) continue;
-    const d = new Date(String(v));
+    const d = new Date(v);
     if (Number.isNaN(d.getTime())) continue;
     if (!min || d < min) min = d;
   }
   return min;
 };
 
-const codes = (list: unknown[]): string[] => list.map(text).filter((c): c is string => c !== null);
+const codes = (list: Array<string | null | undefined>): string[] => list.map(text).filter((c): c is string => c !== null);
 
 /**
  * REST `fulfillment_status` (null | fulfilled | partial | restocked) mapped onto the
  * GraphQL displayFulfillmentStatus vocabulary used everywhere else.
  */
-export function restFulfillmentStatus(v: unknown): string {
+export function restFulfillmentStatus(v: string | null | undefined): string {
   const s = text(v)?.toLowerCase();
   if (!s) return "unfulfilled";
   if (s === "partial") return "partially_fulfilled";
   return s;
 }
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
-export function normalizeRestRefund(r: any): NormalizedRefund {
+export function normalizeRestRefund(r: RestRefund): NormalizedRefund {
   return {
     shopifyId: String(r.id),
     createdAt: date(r.created_at),
-    lineSubtotal: (r.refund_line_items ?? []).reduce((a: number, li: any) => a + num(li.subtotal), 0),
+    lineSubtotal: (r.refund_line_items ?? []).reduce((a, li) => a + num(li.subtotal), 0),
   };
 }
 
-export function normalizeRestOrder(o: any): NormalizedOrder {
+export function normalizeRestOrder(o: RestOrder): NormalizedOrder {
   return {
     shopifyId: String(o.id),
     name: String(o.name ?? o.id),
-    currency: String(o.currency ?? "USD"),
+    currency: o.currency ?? "USD",
     createdAt: date(o.created_at),
     updatedAt: date(o.updated_at ?? o.created_at),
     cancelledAt: o.cancelled_at ? date(o.cancelled_at) : null,
@@ -160,33 +176,32 @@ export function normalizeRestOrder(o: any): NormalizedOrder {
     totalShipping: num(o.total_shipping_price_set?.shop_money?.amount),
     totalPrice: num(o.total_price),
     customerId: o.customer?.id ? String(o.customer.id) : null,
-    customerOrderCount:
-      typeof o.customer?.orders_count === "number" ? o.customer.orders_count : null,
+    customerOrderCount: o.customer?.orders_count ?? null,
     sourceName: text(o.source_name),
     fulfillmentStatus: restFulfillmentStatus(o.fulfillment_status),
-    fulfilledAt: earliest((o.fulfillments ?? []).map((f: any) => f?.created_at)),
-    discountCodes: codes((o.discount_codes ?? []).map((d: any) => d?.code)),
+    fulfilledAt: earliest((o.fulfillments ?? []).map((f) => f.created_at)),
+    discountCodes: codes((o.discount_codes ?? []).map((d) => d.code)),
     ...restTraffic(o),
-    lineItems: (o.line_items ?? []).map((li: any) => ({
+    lineItems: (o.line_items ?? []).map((li) => ({
       shopifyId: String(li.id),
       productShopifyId: li.product_id ? String(li.product_id) : null,
       variantShopifyId: li.variant_id ? String(li.variant_id) : null,
       sku: text(li.sku),
-      title: String(li.title ?? ""),
-      quantity: Number(li.quantity ?? 0),
+      title: li.title ?? "",
+      quantity: li.quantity ?? 0,
       price: num(li.price),
-      discount: Array.isArray(li.discount_allocations) && li.discount_allocations.length
-        ? li.discount_allocations.reduce((a: number, d: any) => a + num(d.amount), 0)
+      discount: li.discount_allocations?.length
+        ? li.discount_allocations.reduce((a, d) => a + num(d.amount), 0)
         : num(li.total_discount),
     })),
     refunds: (o.refunds ?? []).map(normalizeRestRefund),
   };
 }
 
-const money = (set: any) => num(set?.shopMoney?.amount);
+const money = (set: GraphqlMoney) => num(set?.shopMoney?.amount);
 
 /** A webhook's landing_site / referring_site; nothing when it carries neither (never "unknown"). */
-function restTraffic(o: any): Pick<NormalizedOrder, "traffic" | "trafficFrom"> {
+function restTraffic(o: RestOrder): Pick<NormalizedOrder, "traffic" | "trafficFrom"> {
   const v = restVisit(o);
   return v ? { traffic: classifyVisit(v, text(o.source_name)), trafficFrom: "landing" } : { traffic: null, trafficFrom: null };
 }
@@ -195,18 +210,22 @@ function restTraffic(o: any): Pick<NormalizedOrder, "traffic" | "trafficFrom"> {
  * Shopify's journey for the order. Not asked for (detail queries) or not processed yet (`ready:
  * false`): unknown for now. Processed with no visit (POS, draft orders): that is the answer.
  */
-function journeyTraffic(o: any): Pick<NormalizedOrder, "traffic" | "trafficFrom"> {
-  if (!("customerJourneySummary" in o)) return { traffic: null, trafficFrom: null };
-  const j = o.customerJourneySummary;
-  if (j && j.ready === false) return { traffic: null, trafficFrom: null };
-  return { traffic: classifyVisit(j?.lastVisit ?? null, text(o.sourceName)), trafficFrom: "journey" };
+function journeyTraffic(o: GraphqlOrder): Pick<NormalizedOrder, "traffic" | "trafficFrom"> {
+  const notYet = { traffic: null, trafficFrom: null };
+  if (!("customerJourneySummary" in o)) return notYet;
+  const raw = o.customerJourneySummary;
+  if (raw === null || raw === undefined) return { traffic: classifyVisit(null, text(o.sourceName)), trafficFrom: "journey" };
+  // A journey that doesn't fit (logged) is treated like one not processed yet.
+  const j = parseShopify(journeySummarySchema, raw, "GraphQL customer journey", { order: o.id });
+  if (!j || j.ready === false) return notYet;
+  return { traffic: classifyVisit(j.lastVisit ?? null, text(o.sourceName)), trafficFrom: "journey" };
 }
 
-export function normalizeGraphqlOrder(o: any): NormalizedOrder {
+export function normalizeGraphqlOrder(o: GraphqlOrder): NormalizedOrder {
   return {
     shopifyId: gidToId(o.id)!,
-    name: String(o.name),
-    currency: String(o.currencyCode ?? "USD"),
+    name: o.name,
+    currency: o.currencyCode ?? "USD",
     createdAt: date(o.createdAt),
     updatedAt: date(o.updatedAt ?? o.createdAt),
     cancelledAt: o.cancelledAt ? date(o.cancelledAt) : null,
@@ -220,47 +239,44 @@ export function normalizeGraphqlOrder(o: any): NormalizedOrder {
     customerOrderCount: o.customer?.numberOfOrders != null ? Number(o.customer.numberOfOrders) : null,
     sourceName: text(o.sourceName),
     fulfillmentStatus: text(o.displayFulfillmentStatus)?.toLowerCase() ?? null,
-    fulfilledAt: earliest((o.fulfillments ?? []).map((f: any) => f?.createdAt)),
+    fulfilledAt: earliest((o.fulfillments ?? []).map((f) => f.createdAt)),
     discountCodes: codes(o.discountCodes ?? []),
     ...journeyTraffic(o),
-    lineItems: (o.lineItems?.nodes ?? []).map((li: any) => ({
+    lineItems: (o.lineItems?.nodes ?? []).map((li) => ({
       shopifyId: gidToId(li.id)!,
       productShopifyId: gidToId(li.product?.id),
       variantShopifyId: gidToId(li.variant?.id),
       sku: text(li.sku),
-      title: String(li.title ?? ""),
-      quantity: Number(li.quantity ?? 0),
+      title: li.title ?? "",
+      quantity: li.quantity ?? 0,
       price: money(li.originalUnitPriceSet),
       discount: money(li.totalDiscountSet),
     })),
-    refunds: (o.refunds ?? []).map((r: any) => ({
+    refunds: (o.refunds ?? []).map((r) => ({
       shopifyId: gidToId(r.id)!,
       createdAt: date(r.createdAt),
-      lineSubtotal: (r.refundLineItems?.nodes ?? []).reduce(
-        (a: number, li: any) => a + money(li.subtotalSet),
-        0,
-      ),
+      lineSubtotal: (r.refundLineItems?.nodes ?? []).reduce((a, li) => a + money(li.subtotalSet), 0),
     })),
   };
 }
 
-export function normalizeGraphqlProduct(p: any): NormalizedProduct {
+export function normalizeGraphqlProduct(p: GraphqlProduct): NormalizedProduct {
   return {
     shopifyId: gidToId(p.id)!,
-    title: String(p.title ?? ""),
+    title: p.title ?? "",
     status: text(p.status)?.toLowerCase() ?? null,
     vendor: text(p.vendor),
     productType: text(p.productType),
     createdAt: p.createdAt ? date(p.createdAt) : null,
-    updatedAt: date(p.updatedAt ?? p.createdAt),
+    updatedAt: date(p.updatedAt),
   };
 }
 
-/** products/create|update webhook payload (also used for products/delete, which only carries `id`). */
-export function normalizeRestProduct(p: any): NormalizedProduct {
+/** products/create|update webhook payload. */
+export function normalizeRestProduct(p: RestProduct): NormalizedProduct {
   return {
     shopifyId: String(p.id),
-    title: String(p.title ?? ""),
+    title: p.title ?? "",
     status: text(p.status)?.toLowerCase() ?? null,
     vendor: text(p.vendor),
     productType: text(p.product_type),
@@ -269,21 +285,20 @@ export function normalizeRestProduct(p: any): NormalizedProduct {
   };
 }
 
-export function normalizeGraphqlVariant(v: any): NormalizedVariant {
+export function normalizeGraphqlVariant(v: GraphqlVariant): NormalizedVariant {
+  // inventoryItem withheld (null) or not requested (undefined): we know nothing about cost/tracking.
   const item = v.inventoryItem;
-  // inventoryItem withheld (null) or not requested: we know nothing about cost/tracking.
-  const known = item !== null && item !== undefined && typeof item === "object";
-  const qty = v.inventoryQuantity === null || v.inventoryQuantity === undefined ? null : Number(v.inventoryQuantity);
-  const productShopifyId = gidToId(v.product?.id);
-  if (!productShopifyId) throw new Error(`Variant ${String(v.id)} has no product id`);
+  const qty = v.inventoryQuantity ?? null;
+  const productShopifyId = gidToId(v.product.id);
+  if (!productShopifyId) throw new Error(`Variant ${v.id} has no product id`);
   return {
     shopifyId: gidToId(v.id)!,
     productShopifyId,
-    title: String(v.title ?? ""),
+    title: v.title ?? "",
     sku: text(v.sku),
     price: num(v.price),
-    inventoryQuantity: known && item.tracked === false ? null : qty,
-    unitCost: known ? (item.unitCost?.amount != null ? num(item.unitCost.amount) : null) : undefined,
+    inventoryQuantity: item?.tracked === false ? null : qty,
+    unitCost: item ? (item.unitCost?.amount != null ? num(item.unitCost.amount) : null) : undefined,
     updatedAt: date(v.updatedAt),
   };
 }
@@ -292,10 +307,10 @@ export function normalizeGraphqlVariant(v: any): NormalizedVariant {
  * One entry of a REST product payload's `variants[]`. REST payloads carry no cost, so
  * `unitCost` stays undefined (persistence keeps the cost the GraphQL sync stored).
  */
-export function normalizeRestVariant(v: any, product?: any): NormalizedVariant {
+export function normalizeRestVariant(v: RestVariant, product?: RestProduct): NormalizedVariant {
   const productId = v.product_id ?? product?.id;
-  if (productId === null || productId === undefined) throw new Error(`Variant ${String(v.id)} has no product id`);
-  const qty = typeof v.inventory_quantity === "number" ? v.inventory_quantity : undefined;
+  if (productId === null || productId === undefined) throw new Error(`Variant ${v.id} has no product id`);
+  const qty = v.inventory_quantity ?? undefined;
   // Older payloads say whether stock is tracked (inventory_management: "shopify" | null). Newer
   // ones (API 2024-07+) usually leave the field out, so tracking is then unknown.
   const hasTracking = "inventory_management" in v;
@@ -304,7 +319,7 @@ export function normalizeRestVariant(v: any, product?: any): NormalizedVariant {
   return {
     shopifyId: String(v.id),
     productShopifyId: String(productId),
-    title: String(v.title ?? ""),
+    title: v.title ?? "",
     sku: text(v.sku),
     price: num(v.price),
     inventoryQuantity: untracked ? null : qty,
@@ -314,8 +329,8 @@ export function normalizeRestVariant(v: any, product?: any): NormalizedVariant {
   };
 }
 
-export function normalizeRestProductVariants(p: any): NormalizedVariant[] {
-  return (Array.isArray(p.variants) ? p.variants : []).map((v: any) => normalizeRestVariant(v, p));
+export function normalizeRestProductVariants(p: RestProduct): NormalizedVariant[] {
+  return (p.variants ?? []).map((v) => normalizeRestVariant(v, p));
 }
 
 // ---------------------------------------------------------------- queries
@@ -522,13 +537,13 @@ export interface BulkOperationStatus {
  * refund with more refund line items than fit, or as many refunds as requested (there
  * may be more; Order.refunds is a plain list without pageInfo).
  */
-export function graphqlOrderOverflow(o: any): { lineItems: boolean; refunds: boolean } {
-  const refunds: any[] = Array.isArray(o.refunds) ? o.refunds : [];
+export function graphqlOrderOverflow(o: Pick<GraphqlOrder, "lineItems" | "refunds">): { lineItems: boolean; refunds: boolean } {
+  const refunds = o.refunds ?? [];
   return {
     lineItems: o.lineItems?.pageInfo?.hasNextPage === true,
     refunds:
       refunds.length >= ORDER_NESTED.refunds ||
-      refunds.some((r) => r?.refundLineItems?.pageInfo?.hasNextPage === true),
+      refunds.some((r) => r.refundLineItems?.pageInfo?.hasNextPage === true),
   };
 }
 

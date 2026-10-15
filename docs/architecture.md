@@ -79,6 +79,10 @@ Where a new piece of code goes:
   `MAX_ATTEMPTS` (which must equal `max_retries + 1` in `wrangler.jsonc`), then recorded as failed
   and alerted. A failure while Postgres is unreachable spends no attempts (`deferForDb`).
 - Handlers must be idempotent: Shopify and Queues both deliver at least once.
+- What Shopify sends (webhook payloads, GraphQL pages, bulk JSONL) is checked once where it enters,
+  against the Zod schemas in `core/shopifyPayloads.ts` (`parseShopify`, `parseShopifyList` for a
+  page), before it is normalized. What doesn't fit is logged (field paths, never values) and
+  skipped, not thrown: a retry would only meet the same payload again.
 - Each cron sweep runs on its own: one that throws is logged and the rest of the tick still runs.
 - `UnrecoverableError` ends retries at once (revoked access, a store that is gone).
 
@@ -201,7 +205,12 @@ helpers and grading rules de-duplicated, dashboard component files renamed;
 - Two Meta Graph clients (`core/ads.ts`, `core/whatsapp/graph.ts`) with different auth, error
   handling and network-failure handling. Target: one transport (design in
   [architecture/current-state.md](architecture/current-state.md), M16).
-- Raw provider error text in a few API messages (`routes/ads.ts`, `whatsapp.ts`), and `any` in the
-  parsing of Shopify / Meta payloads (`core/normalize.ts`).
+- Raw provider error text in a few API messages (`routes/ads.ts`, `whatsapp.ts`).
+- `any` in the payload readers that don't go through schemas yet: the Shopify order, checkout and
+  fulfillment payloads of the automations (`core/whatsapp/events.ts`, `core/email/events.ts`), Meta's
+  WhatsApp webhooks (`core/whatsapp/webhook.ts`), and the raw detail-query nodes and JSONL lines in
+  `worker/handlers.ts` / `worker/bulkOrders.ts` before they reach `graphqlOrderSchema`. Target:
+  schemas beside `core/shopifyPayloads.ts`, parsed with `parseShopify`. (`core/normalize.ts` was
+  done 2026-10-16.)
 - Large files that do several jobs: `core/ads.ts`, `core/adConnections.ts`, `core/normalize.ts`,
   `core/notify.ts`, `worker/handlers.ts`, `core/whatsapp/events.ts`.

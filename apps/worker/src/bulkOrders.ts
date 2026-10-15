@@ -6,8 +6,10 @@ import {
   BULK_OPERATION_RUN_QUERY,
   bulkOrdersQuery,
   CURRENT_BULK_OPERATION,
+  graphqlOrderSchema,
   logger,
   normalizeGraphqlOrder,
+  parseShopifyList,
   writeOrderBatch,
   type BulkOperationStatus,
   type SyncJobData,
@@ -326,7 +328,9 @@ async function ingestBulk(data: SyncJobData, store: Store, deps: WorkerDeps, api
   }
   if (!applied) return fallbackToPaged(data, deps, `one order exceeds ${MAX_CHUNK_BYTES} bytes of JSONL`);
 
-  const orders = reassembleOrders(applied.lines).map(normalizeGraphqlOrder);
+  const orders = parseShopifyList(graphqlOrderSchema, reassembleOrders(applied.lines), "bulk order", { storeId: store.id, bulkId: id }).map(
+    normalizeGraphqlOrder,
+  );
   const days = new Set<string>();
   for (let i = 0; i < orders.length; i += WRITE_BATCH) {
     for (const d of await writeOrderBatch(store, orders.slice(i, i + WRITE_BATCH))) days.add(d);
