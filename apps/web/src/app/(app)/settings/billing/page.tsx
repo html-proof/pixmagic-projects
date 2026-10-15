@@ -1,10 +1,12 @@
 "use client";
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { can } from "@app/shared/roles";
 import { useApp } from "@/components/AppContext";
 import { Alert } from "@/components/ui";
 import { LoadError } from "@/components/LoadError";
 import { actionError, api, useApi } from "@/lib/api";
+import { BILLING_ENABLED } from "@/lib/features";
 
 interface Billing {
   /** `plan` is the plan in force; `pendingPlan` a change still awaiting approval in Shopify. */
@@ -13,6 +15,17 @@ interface Billing {
 }
 
 export default function BillingPage() {
+  return BILLING_ENABLED ? <BillingPlans /> : <BillingHidden />;
+}
+
+/** Billing is switched off (see `lib/features.ts`): an old link or bookmark lands on Settings instead. */
+function BillingHidden() {
+  const router = useRouter();
+  useEffect(() => router.replace("/settings/profile"), [router]);
+  return null;
+}
+
+function BillingPlans() {
   const { workspace, store, storesStatus } = useApp();
   const { data, error: loadError, loading, reload } = useApi<Billing>(`/workspaces/${workspace.id}/billing`);
   const [error, setError] = useState<string | null>(null);
