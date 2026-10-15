@@ -72,6 +72,10 @@ signs in with GitHub OIDC (role in the `InsightsCi-production` stack), no AWS ke
 One-time setup in the repository's Settings → Environments → `production`: variable
 `AWS_DEPLOY_ROLE_ARN` (the stack's `DeployRoleArn` output), optional `AWS_ALERT_EMAIL`,
 `GOOGLE_SIGNIN_CLIENT_ID`, `AWS_SCHEDULES` (`on` after cutover), and required reviewers.
+The role trusts the token's `sub` exactly as this repository sends it: the immutable form
+`repo:html-proof@68529971/pixmagic-projects@1413246051:environment:production` (`githubOidcSubject`
+in `infra/cdk/lib/config.ts`). "Not authorized to perform sts:AssumeRoleWithWebIdentity" in the
+workflow means the two differ: compare with CloudTrail's AssumeRoleWithWebIdentity events.
 
 ## Database
 

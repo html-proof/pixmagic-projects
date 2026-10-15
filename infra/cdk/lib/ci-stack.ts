@@ -23,7 +23,7 @@ export class CiStack extends Stack {
       assumedBy: new iam.WebIdentityPrincipal(provider.oidcProviderArn, {
         StringEquals: {
           "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-          "token.actions.githubusercontent.com:sub": `repo:${cfg.githubRepo}:environment:${cfg.name}`,
+          "token.actions.githubusercontent.com:sub": `${cfg.githubOidcSubject}:environment:${cfg.name}`,
         },
       }),
     });

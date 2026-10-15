@@ -35,6 +35,13 @@ export interface EnvConfig {
   monthlyBudgetUsd: number;
   /** GitHub repository allowed to deploy through OIDC. */
   githubRepo: string;
+  /**
+   * How GitHub names that repository in its OIDC token's `sub` claim. The repository sends the
+   * immutable form, owner@ownerId/repo@repoId (Settings → Actions → OIDC subject, or
+   * GET /repos/{repo}/actions/oidc/customization/sub), so a renamed or re-created repository
+   * with the same name can't deploy.
+   */
+  githubOidcSubject: string;
 }
 
 const ACCOUNT = "605411278365";
@@ -55,6 +62,7 @@ const ENVIRONMENTS: Record<EnvConfig["name"], Omit<EnvConfig, "schedulesEnabled"
     cognitoDomainPrefix: "insights-605411278365",
     monthlyBudgetUsd: 150,
     githubRepo: "html-proof/pixmagic-projects",
+    githubOidcSubject: "repo:html-proof@68529971/pixmagic-projects@1413246051",
   },
   staging: {
     name: "staging",
@@ -70,6 +78,7 @@ const ENVIRONMENTS: Record<EnvConfig["name"], Omit<EnvConfig, "schedulesEnabled"
     cognitoDomainPrefix: "insights-staging-605411278365",
     monthlyBudgetUsd: 40,
     githubRepo: "html-proof/pixmagic-projects",
+    githubOidcSubject: "repo:html-proof@68529971/pixmagic-projects@1413246051",
   },
 };
 
