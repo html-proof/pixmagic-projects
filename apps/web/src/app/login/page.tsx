@@ -2,7 +2,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, type FormEvent } from "react";
-import { Lock, Mail } from "lucide-react";
+import { ArrowRight, Lock } from "lucide-react";
 import {
   afterSignIn,
   authConfig,
@@ -18,9 +18,11 @@ import {
   useRedirectIfSignedIn,
 } from "@/lib/auth";
 import { Alert, Divider } from "@/components/ui";
-import { AuthField, AuthSubmit, emailProblem, useFieldErrors } from "@/components/auth/AuthCard";
+import { emailProblem, useFieldErrors } from "@/components/auth/AuthCard";
 import { AuthSplitShell } from "@/components/auth/AuthSplitShell";
 import { CodeStep } from "@/components/auth/CodeStep";
+import { EmailField } from "@/components/auth/IconField";
+import { PasswordField } from "@/components/auth/PasswordField";
 import { SocialButtons } from "@/components/SocialButtons";
 
 /** What a redirect to this page came to say. */
@@ -102,21 +104,6 @@ export default function LoginPage() {
     }
   }
 
-  async function onCodeEmail(e: FormEvent) {
-    e.preventDefault();
-    if (!fields.submit()) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await startEmailCodeSignIn(email.trim());
-      switchTo("code");
-    } catch (err) {
-      setError({ text: authErrorMessage(err) });
-    } finally {
-      setBusy(false);
-    }
-  }
-
   if (confirming) {
     return (
       <AuthSplitShell title="Confirm your email" subtitle="One more step before you can sign in." action={CREATE_ACCOUNT}>
@@ -131,11 +118,9 @@ export default function LoginPage() {
           }}
           onResend={() => resendSignUpCode(email.trim())}
         />
-        <p className="text-center">
-          <button type="button" className="auth-link" onClick={() => setConfirming(false)}>
-            Back to sign in
-          </button>
-        </p>
+        <button type="button" className="text-sm text-muted underline" onClick={() => setConfirming(false)}>
+          Back to sign in
+        </button>
       </AuthSplitShell>
     );
   }
@@ -162,8 +147,36 @@ export default function LoginPage() {
         </Alert>
       )}
 
-      {codeSignIn === "code" ? (
-        <>
+      {codeSignIn === "email" || codeSignIn === "code" ? (
+        codeSignIn === "email" ? (
+          <form
+            className="space-y-4"
+            noValidate
+            onSubmit={async (e) => {
+              e.preventDefault();
+              if (!fields.submit()) return;
+              setBusy(true);
+              setError(null);
+              try {
+                await startEmailCodeSignIn(email.trim());
+                switchTo("code");
+              } catch (err) {
+                setError({ text: authErrorMessage(err) });
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            <EmailField id="otp-email" value={email} onChange={setEmail} onBlur={fields.leave} error={fields.error("otp-email")} />
+            {keepSignedIn}
+            <button className="auth-cta" disabled={busy}>
+              {busy ? "Sending…" : "Email me a sign-in code"}
+            </button>
+            <button type="button" className="text-sm text-muted underline" onClick={() => switchTo("available")}>
+              Sign in with a password instead
+            </button>
+          </form>
+        ) : (
           <CodeStep
             email={email.trim()}
             submitLabel="Sign In"
@@ -174,92 +187,46 @@ export default function LoginPage() {
             }}
             onResend={() => startEmailCodeSignIn(email.trim())}
           />
-          <p className="text-center">
-            <button type="button" className="auth-link" onClick={() => switchTo("email")}>
-              Use a different email address
-            </button>
-          </p>
-        </>
+        )
       ) : (
-        <>
-          {codeSignIn === "email" ? (
-            <form className="flex flex-col gap-4" onSubmit={onCodeEmail} noValidate>
-              <AuthField
-                id="otp-email"
-                label="Email Address"
-                icon={Mail}
-                type="email"
-                placeholder="Enter your email address"
-                autoComplete="email"
-                spellCheck={false}
-                required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                onBlur={fields.leave}
-                error={fields.error("otp-email")}
-              />
-              {keepSignedIn}
-              <AuthSubmit className="mt-2" busy={busy} busyLabel="Sending…">
-                Email me a sign-in code
-              </AuthSubmit>
-              <p className="text-center">
-                <button type="button" className="auth-link" onClick={() => switchTo("available")}>
-                  Sign in with a password instead
-                </button>
-              </p>
-            </form>
-          ) : (
-            <form onSubmit={onPassword} className="flex flex-col gap-4" noValidate>
-              <AuthField
-                id="email"
-                label="Email Address"
-                icon={Mail}
-                type="email"
-                placeholder="Enter your email address"
-                autoComplete="email"
-                spellCheck={false}
-                required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                onBlur={fields.leave}
-                error={fields.error("email")}
-              />
-              <AuthField
-                id="password"
-                label="Password"
-                icon={Lock}
-                reveal
-                placeholder="Enter your password"
-                autoComplete="current-password"
-                required
-                maxLength={256}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                onBlur={fields.leave}
-                error={fields.error("password")}
-              />
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                {keepSignedIn}
-                <Link href="/forgot-password" className="auth-link" onClick={() => rememberEmail(email)}>
-                  Forgot Password?
-                </Link>
-              </div>
-              <AuthSubmit className="mt-2" busy={busy} busyLabel="Signing in…">
-                Sign In
-              </AuthSubmit>
-              {codeSignIn === "available" && (
-                <p className="text-center">
-                  <button type="button" className="auth-link" onClick={() => switchTo("email")}>
-                    Email me a sign-in code instead
-                  </button>
-                </p>
-              )}
-            </form>
+        <form onSubmit={onPassword} className="space-y-4" noValidate>
+          <EmailField id="email" value={email} onChange={setEmail} onBlur={fields.leave} error={fields.error("email")} />
+          <PasswordField
+            id="password"
+            label="Password"
+            autoComplete="current-password"
+            value={password}
+            onChange={setPassword}
+            icon={<Lock size={18} aria-hidden />}
+            inputClassName="auth-field"
+            onBlur={fields.leave}
+            error={fields.error("password")}
+          />
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            {keepSignedIn}
+            <Link href="/forgot-password" className="text-sm font-medium text-accent underline underline-offset-2" onClick={() => rememberEmail(email)}>
+              Forgot Password?
+            </Link>
+          </div>
+          <button className="auth-cta" disabled={busy}>
+            {busy ? (
+              "Signing in…"
+            ) : (
+              <>
+                Sign In <ArrowRight size={18} aria-hidden />
+              </>
+            )}
+          </button>
+          {codeSignIn === "available" && (
+            <button type="button" className="text-sm text-muted underline" onClick={() => switchTo("email")}>
+              Email me a sign-in code instead
+            </button>
           )}
-          <Divider label="OR CONTINUE WITH" />
-          <SocialButtons row />
-        </>
+        </form>
       )}
+
+      <Divider label="OR CONTINUE WITH" />
+      <SocialButtons row />
 
       <p className="pt-1 text-center text-[15px] text-muted">
         Don&apos;t have an account?{" "}

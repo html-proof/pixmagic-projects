@@ -2,13 +2,15 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
-import { Lock, Mail, UserRound } from "lucide-react";
+import { ArrowRight, Lock, UserRound } from "lucide-react";
 import { accountPasswordProblem, ACCOUNT_PASSWORD_MIN, DISPLAY_NAME_MAX } from "@app/shared/auth";
 import { afterSignIn, authErrorMessage, confirmSignUp, errorCode, resendSignUpCode, signIn, signUp, useRedirectIfSignedIn } from "@/lib/auth";
 import { Alert, Divider } from "@/components/ui";
-import { AuthField, AuthSubmit, emailProblem, useFieldErrors } from "@/components/auth/AuthCard";
+import { emailProblem, useFieldErrors } from "@/components/auth/AuthCard";
 import { AuthSplitShell } from "@/components/auth/AuthSplitShell";
 import { CodeStep } from "@/components/auth/CodeStep";
+import { EmailField, FieldError, IconField } from "@/components/auth/IconField";
+import { PasswordField } from "@/components/auth/PasswordField";
 import { SocialButtons } from "@/components/SocialButtons";
 
 /** What's wrong with each field (by input id, in form order), in plain words, before anything is sent. */
@@ -77,11 +79,9 @@ export default function SignupPage() {
           }}
           onResend={() => resendSignUpCode(sentTo)}
         />
-        <p className="text-center">
-          <button type="button" className="auth-link" onClick={() => setSentTo(null)}>
-            Use a different email address
-          </button>
-        </p>
+        <button type="button" className="text-sm text-muted underline" onClick={() => setSentTo(null)}>
+          Use a different email address
+        </button>
       </AuthSplitShell>
     );
   }
@@ -110,12 +110,11 @@ export default function SignupPage() {
       ) : (
         fields.invalid && <Alert>Please review the highlighted fields before continuing.</Alert>
       )}
-      <form onSubmit={onSubmit} className="flex flex-col gap-4" noValidate>
-        <AuthField
+      <form onSubmit={onSubmit} className="space-y-4" noValidate>
+        <IconField
           id="name"
           label="Full name"
-          icon={UserRound}
-          placeholder="Enter your full name"
+          icon={<UserRound size={18} aria-hidden />}
           autoComplete="name"
           required
           maxLength={DISPLAY_NAME_MAX}
@@ -124,59 +123,40 @@ export default function SignupPage() {
           onBlur={fields.leave}
           error={fields.error("name")}
         />
-        <AuthField
-          id="email"
-          label="Email Address"
-          icon={Mail}
-          type="email"
-          placeholder="Enter your email address"
-          autoComplete="email"
-          spellCheck={false}
-          required
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          onBlur={fields.leave}
-          error={fields.error("email")}
-        />
+        <EmailField id="email" value={email} onChange={setEmail} onBlur={fields.leave} error={fields.error("email")} />
         {/* Side by side where both fit, stacked otherwise. */}
         <div className="grid grid-cols-[repeat(auto-fit,minmax(13rem,1fr))] items-start gap-4">
-          <AuthField
+          <PasswordField
             id="password"
             label="Password"
-            icon={Lock}
-            reveal
-            placeholder="Enter your password"
             autoComplete="new-password"
-            required
             minLength={ACCOUNT_PASSWORD_MIN}
-            maxLength={256}
             value={password}
-            onChange={(e) => setPassword(e.target.value)}
+            onChange={setPassword}
+            hint={`At least ${ACCOUNT_PASSWORD_MIN} characters.`}
+            icon={<Lock size={18} aria-hidden />}
+            inputClassName="auth-field"
             onBlur={fields.leave}
             error={fields.error("password")}
-            hint={`Use at least ${ACCOUNT_PASSWORD_MIN} characters.`}
           />
-          <AuthField
+          <PasswordField
             id="confirm-password"
             label="Confirm password"
-            icon={Lock}
-            reveal
-            placeholder="Confirm your password"
             autoComplete="new-password"
-            required
-            maxLength={256}
             value={confirm}
-            onChange={(e) => setConfirm(e.target.value)}
+            onChange={setConfirm}
+            icon={<Lock size={18} aria-hidden />}
+            inputClassName="auth-field"
             onBlur={fields.leave}
             error={fields.error("confirm-password")}
           />
         </div>
         <div>
-          <div className="flex items-start gap-3">
+          <div className="flex items-start gap-2.5 text-sm text-muted">
             <input
               id="terms"
               type="checkbox"
-              className={`mt-0.5 size-[18px] shrink-0 cursor-pointer accent-accent ${termsError ? "rounded outline-2 outline-offset-2 outline-danger" : ""}`}
+              className={`mt-0.5 size-[18px] shrink-0 cursor-pointer rounded accent-[var(--accent)] ${termsError ? "outline-2 outline-offset-2 outline-danger" : ""}`}
               checked={terms}
               onChange={(e) => {
                 setTerms(e.target.checked);
@@ -186,23 +166,25 @@ export default function SignupPage() {
               aria-invalid={termsError ? true : undefined}
               aria-describedby={termsError ? "terms-error" : undefined}
             />
-            <label htmlFor="terms" className="text-[15px] leading-snug text-text">
-              I agree to the <span className="font-medium">Terms of Service</span> and the{" "}
-              <Link href="/privacy" className="font-medium text-accent underline underline-offset-2 hover:opacity-80" target="_blank">
+            <label htmlFor="terms" className="cursor-pointer">
+              I agree to the Terms of Service and the{" "}
+              <Link href="/privacy" className="font-medium text-accent underline underline-offset-2" target="_blank">
                 Privacy Policy
               </Link>
               .
             </label>
           </div>
-          {termsError && (
-            <p id="terms-error" className="mt-2 pl-[30px] text-sm text-danger">
-              {termsError}
-            </p>
-          )}
+          {termsError && <FieldError id="terms">{termsError}</FieldError>}
         </div>
-        <AuthSubmit className="mt-2" busy={busy} busyLabel="Creating your account…">
-          Create Account
-        </AuthSubmit>
+        <button className="auth-cta" disabled={busy}>
+          {busy ? (
+            "Creating your account…"
+          ) : (
+            <>
+              Create Account <ArrowRight size={18} aria-hidden />
+            </>
+          )}
+        </button>
       </form>
       <p className="pt-1 text-center text-[15px] text-muted">
         Already have an account?{" "}

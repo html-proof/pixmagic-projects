@@ -2,12 +2,14 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, type FormEvent } from "react";
-import { Lock, Mail } from "lucide-react";
+import { ArrowLeft, ArrowRight, Lock } from "lucide-react";
 import { accountPasswordProblem, ACCOUNT_PASSWORD_MIN } from "@app/shared/auth";
 import { forgotPassword, recallEmail, rememberEmail, resetPassword } from "@/lib/auth";
-import { AuthField, AuthSubmit, emailProblem, useFieldErrors } from "@/components/auth/AuthCard";
+import { emailProblem, useFieldErrors } from "@/components/auth/AuthCard";
 import { AuthSplitShell } from "@/components/auth/AuthSplitShell";
 import { CodeStep } from "@/components/auth/CodeStep";
+import { EmailField } from "@/components/auth/IconField";
+import { PasswordField } from "@/components/auth/PasswordField";
 
 const MISMATCH = "The two passwords don't match.";
 
@@ -39,7 +41,7 @@ export default function ResetPasswordPage() {
     return (
       <AuthSplitShell title="Reset your password" subtitle="Which email address did we send the code to?" action={SIGN_IN}>
         <form
-          className="flex flex-col gap-4"
+          className="space-y-4"
           noValidate
           onSubmit={(e: FormEvent) => {
             e.preventDefault();
@@ -48,27 +50,14 @@ export default function ResetPasswordPage() {
             setEmailConfirmed(true);
           }}
         >
-          <AuthField
-            id="email"
-            label="Email Address"
-            icon={Mail}
-            type="email"
-            placeholder="Enter your email address"
-            autoComplete="email"
-            spellCheck={false}
-            required
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            onBlur={emailFields.leave}
-            error={emailFields.error("email")}
-          />
-          <AuthSubmit className="mt-2">Continue</AuthSubmit>
+          <EmailField id="email" value={email} onChange={setEmail} onBlur={emailFields.leave} error={emailFields.error("email")} />
+          <button className="auth-cta">
+            Continue <ArrowRight size={18} aria-hidden />
+          </button>
         </form>
-        <p className="text-center">
-          <Link href="/forgot-password" className="auth-link">
-            I need a code
-          </Link>
-        </p>
+        <Link href="/forgot-password" className="inline-flex items-center gap-1.5 text-sm font-medium text-muted hover:text-text">
+          <ArrowLeft size={16} aria-hidden />I need a code
+        </Link>
       </AuthSplitShell>
     );
   }
@@ -92,42 +81,34 @@ export default function ResetPasswordPage() {
         }}
         onResend={() => forgotPassword(email)}
       >
-        <AuthField
+        <PasswordField
           id="new-password"
           label="New password"
-          icon={Lock}
-          reveal
-          placeholder="Enter a new password"
           autoComplete="new-password"
-          required
           minLength={ACCOUNT_PASSWORD_MIN}
-          maxLength={256}
           value={password}
-          onChange={(e) => setPassword(e.target.value)}
+          onChange={setPassword}
+          hint={`At least ${ACCOUNT_PASSWORD_MIN} characters.`}
+          icon={<Lock size={18} aria-hidden />}
+          inputClassName="auth-field"
           onBlur={passwordFields.leave}
           error={passwordFields.error("new-password")}
-          hint={`Use at least ${ACCOUNT_PASSWORD_MIN} characters.`}
         />
-        <AuthField
+        <PasswordField
           id="confirm-password"
           label="Confirm new password"
-          icon={Lock}
-          reveal
-          placeholder="Confirm your new password"
           autoComplete="new-password"
-          required
-          maxLength={256}
           value={confirm}
-          onChange={(e) => setConfirm(e.target.value)}
+          onChange={setConfirm}
+          icon={<Lock size={18} aria-hidden />}
+          inputClassName="auth-field"
           onBlur={passwordFields.leave}
           error={confirmError}
         />
       </CodeStep>
-      <p className="text-center">
-        <button type="button" className="auth-link" onClick={() => setEmailConfirmed(false)}>
-          Use a different email address
-        </button>
-      </p>
+      <button type="button" className="text-sm text-muted underline" onClick={() => setEmailConfirmed(false)}>
+        Use a different email address
+      </button>
     </AuthSplitShell>
   );
 }

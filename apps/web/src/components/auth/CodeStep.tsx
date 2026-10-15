@@ -11,7 +11,8 @@ const RESEND_WAIT_S = 30;
 /**
  * "Enter the 6-digit code we emailed you": sign-up confirmation, email verification, an email
  * change, a sign-in code. The caller says what a code does (`onSubmit`) and how to get another.
- * `large` draws it at the account pages' size (AuthCard, AuthSplitShell).
+ * `large`: the split sign-in pages' field and button (AuthSplitShell). `card`: AuthCard's field and
+ * button (the raised-card pages).
  */
 export function CodeStep({
   email,
@@ -23,6 +24,7 @@ export function CodeStep({
   children,
   extraValid = true,
   large = false,
+  card = false,
 }: {
   email: string;
   intro?: ReactNode;
@@ -34,6 +36,7 @@ export function CodeStep({
   children?: ReactNode;
   extraValid?: boolean;
   large?: boolean;
+  card?: boolean;
 }) {
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
@@ -76,12 +79,12 @@ export function CodeStep({
 
   const introText = intro ?? <>We emailed a 6-digit code to <strong>{email}</strong>. It expires in a few minutes; check your spam folder if it isn&apos;t there.</>;
   const resendButton = onResend && (
-    <button type="button" className={large ? "auth-link" : "text-sm text-muted underline disabled:no-underline disabled:opacity-60"} onClick={() => void resend()} disabled={busy || wait > 0}>
+    <button type="button" className={card ? "auth-link" : "text-sm text-muted underline disabled:no-underline disabled:opacity-60"} onClick={() => void resend()} disabled={busy || wait > 0}>
       {wait > 0 ? `Send a new code (${wait}s)` : "Send a new code"}
     </button>
   );
 
-  if (large) {
+  if (card) {
     return (
       <form onSubmit={submit} className="flex flex-col gap-4" noValidate>
         <p className="text-[15px] leading-relaxed text-muted [&_strong]:font-semibold [&_strong]:text-text">{introText}</p>
@@ -112,7 +115,7 @@ export function CodeStep({
   }
 
   return (
-    <form onSubmit={submit} className="space-y-3" noValidate>
+    <form onSubmit={submit} className={large ? "space-y-4" : "space-y-3"} noValidate>
       <p className="text-sm">{introText}</p>
       {error && <Alert>{error}</Alert>}
       {info && <Alert kind="info">{info}</Alert>}
@@ -122,7 +125,7 @@ export function CodeStep({
         </label>
         <input
           id="code"
-          className="input tracking-[0.5em]"
+          className={large ? "auth-field text-lg tracking-[0.5em]" : "input tracking-[0.5em]"}
           inputMode="numeric"
           autoComplete="one-time-code"
           pattern="\d{6}"
@@ -134,7 +137,7 @@ export function CodeStep({
         />
       </div>
       {children}
-      <button className="btn-primary w-full" disabled={busy || code.length !== 6 || !extraValid}>
+      <button className={large ? "auth-cta" : "btn-primary w-full"} disabled={busy || code.length !== 6 || !extraValid}>
         {busy ? busyLabel : submitLabel}
       </button>
       {resendButton}
