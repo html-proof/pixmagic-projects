@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { AuthShell } from "@/components/ui";
 
-/** Exported as 404.html, which the Worker serves for any path with no page (not_found_handling). */
+/** Exported as 404.html, which the server serves for any path with no page (apps/aws/src/staticSite.ts). */
 export default function NotFound() {
   return (
     <AuthShell title="Page not found" subtitle="That address doesn't match any page in Insights.">

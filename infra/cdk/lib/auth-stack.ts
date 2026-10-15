@@ -18,7 +18,7 @@ export interface AuthStackProps extends StackProps {
 
 /**
  * Sign-in: the Cognito user pool from infra/aws/cognito.yaml (Phase 1, the single source of truth
- * for the pool, its domain and app client), included as is with CreateWorkerUser=false, and the
+ * for the pool, its domain and app client), included as is, and the
  * runtime parameter that tells the functions where they live and which pool to use. Deployed
  * after the App stack because the app client's callback URL is CloudFront's address.
  */
@@ -30,7 +30,6 @@ export class AuthStack extends Stack {
       Environment: cfg.name,
       AppUrl: props.appUrl,
       DomainPrefix: cfg.cognitoDomainPrefix,
-      CreateWorkerUser: "false",
     };
     if (props.googleClientId) {
       parameters.GoogleClientId = props.googleClientId;

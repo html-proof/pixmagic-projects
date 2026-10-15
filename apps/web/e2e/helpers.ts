@@ -54,11 +54,11 @@ export async function verifyEmail(page: Page, email: string) {
 /**
  * Every test runs from 127.0.0.1, and sign-up and sign-in are rate limited per IP (rateLimit.ts),
  * so a whole suite of new accounts would trip the limit. Each visitor gets its own address in the
- * header Cloudflare's edge sets (locally nothing sets it; in production the edge overwrites it).
+ * header the API reads it from (the local server passes it on; on AWS the front overwrites it).
  */
 export async function asNewVisitor(page: Page) {
   const n = () => Math.floor(Math.random() * 250) + 1;
-  await page.setExtraHTTPHeaders({ "cf-connecting-ip": `10.${n()}.${n()}.${n()}` });
+  await page.setExtraHTTPHeaders({ "x-insights-client-ip": `10.${n()}.${n()}.${n()}` });
 }
 
 /** Fill in the create-account form (without sending it). */

@@ -2,12 +2,11 @@ import type { FetchLike, Producer, QueueName, Queues } from "@app/core";
 import { jsonApi, type AwsCredentials } from "./awsClient.js";
 
 /**
- * Background jobs on Amazon SQS (one standard queue per job type, as Cloudflare Queues were):
- * producers here, the consumer in consumer.ts. Same at-least-once model, so the handlers (already
- * idempotent) are unchanged.
+ * Background jobs on Amazon SQS (one standard queue per job type): producers here, the consumer in
+ * consumer.ts. Delivery is at-least-once, and the handlers are idempotent.
  *
- * SQS delays a message by at most 15 minutes; Cloudflare allowed 12 hours, and scheduled email and
- * WhatsApp sends ask for longer. A longer delay is carried in the body (NOT_BEFORE) and the
+ * SQS delays a message by at most 15 minutes; scheduled email and WhatsApp sends ask for up to
+ * 12 hours. A longer delay is carried in the body (NOT_BEFORE) and the
  * consumer re-sends the message in 15-minute hops until it is due, without spending an attempt.
  */
 export const SQS_MAX_DELAY_S = 900;

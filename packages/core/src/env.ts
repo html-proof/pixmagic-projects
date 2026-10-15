@@ -1,10 +1,10 @@
 import { z } from "zod";
 
 /**
- * Plain-string configuration. On Cloudflare, Worker vars and secrets are
- * exposed on `process.env` (nodejs_compat + compatibility_date >= 2025-04-01).
- * Bindings (Hyperdrive, Queues, Durable Objects, Email) are NOT read here; they
- * are passed explicitly from the Worker entry point.
+ * Plain-string configuration from `process.env`: on AWS the functions' environment plus the
+ * secrets and runtime parameter loaded at cold start (apps/aws/src/secrets.ts), locally the
+ * local server's settings (apps/aws/src/local.ts). Services (queues, coordinator, mail) are NOT
+ * read here; they are passed explicitly from the entry points.
  */
 const schema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
@@ -28,7 +28,7 @@ const schema = z.object({
   COGNITO_REGION: z.string().optional().default(""),
   COGNITO_USER_POOL_ID: z.string().optional().default(""),
   COGNITO_CLIENT_ID: z.string().optional().default(""),
-  /** The confidential app client's secret (Worker secret). */
+  /** The confidential app client's secret (a secret). */
   COGNITO_CLIENT_SECRET: z.string().optional().default(""),
   /** The user pool's OAuth domain, https://... (managed login). Needed for Google. */
   COGNITO_DOMAIN: z.string().optional().default(""),
@@ -38,7 +38,7 @@ const schema = z.object({
   COGNITO_EMAIL_OTP: z.string().optional().default(""),
   /** "1" when the app client has refresh-token rotation on. */
   COGNITO_REFRESH_ROTATION: z.string().optional().default(""),
-  /** IAM user allowed only the user pool's admin calls (Worker secrets). */
+  /** Credentials for the user pool's admin calls (on AWS: the function's own role, set at cold start). */
   COGNITO_ADMIN_ACCESS_KEY_ID: z.string().optional().default(""),
   COGNITO_ADMIN_SECRET_ACCESS_KEY: z.string().optional().default(""),
   /** With temporary credentials (an AWS role, e.g. the Lambda function's on AWS hosting). */
@@ -72,7 +72,7 @@ const schema = z.object({
   /**
    * Ad platforms ("Continue with Meta" / "Continue with Google" on Settings → Ad accounts). Empty
    * means not set up: the buttons say so instead of sending people to an error page. The app ids
-   * are public; the secrets are Worker secrets.
+   * are public; the secrets are in Secrets Manager.
    */
   META_APP_ID: z.string().optional().default(""),
   META_APP_SECRET: z.string().optional().default(""),
@@ -137,7 +137,7 @@ const schema = z.object({
   EMAIL_WORKSPACE_PER_MINUTE: z.coerce.number().int().min(1).default(60),
   /** DNS-over-HTTPS resolver for domain checks and SMTP host checks (JSON API). */
   EMAIL_DOH_URL: z.string().url().default("https://cloudflare-dns.com/dns-query"),
-  /** Local development only: deliver every email to this Mailpit instead of Email Sending. */
+  /** Local development only: deliver every email to this Mailpit instead of Amazon SES. */
   MAILPIT_URL: z.string().optional().default(""),
   ALERT_SLACK_WEBHOOK_URL: z.string().optional().default(""),
 });
@@ -208,11 +208,11 @@ export function env(): Env {
       // Fail closed: a deployment must not run on secrets published in this repository...
       const exposed = publicSecrets(parsed);
       if (exposed.length) {
-        throw new Error(`${exposed.join(", ")} still set to a placeholder or test value. Generate new ones (see docs/deployment-cloudflare.md) before running in production.`);
+        throw new Error(`${exposed.join(", ")} still set to a placeholder or test value. Generate new ones (infra/cdk/scripts/put-secrets.mjs) before running in production.`);
       }
       // ...nor with a development setting that turns a safeguard off.
       const dev = developmentSettings(parsed);
-      if (dev.length) throw new Error(`Development settings in a production configuration: ${dev.join(", ")}. Remove them (wrangler secret delete / vars).`);
+      if (dev.length) throw new Error(`Development settings in a production configuration: ${dev.join(", ")}. Remove them from the environment's settings and secrets.`);
     }
     cached = parsed;
   }

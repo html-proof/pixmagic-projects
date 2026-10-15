@@ -1,7 +1,7 @@
 /**
  * Small, strongly consistent coordination primitives (rate-limit counters,
- * one-time OAuth state, short locks). On Cloudflare each key is backed by its
- * own Durable Object (see apps/cloudflare/src/coordinator.ts); tests use the
+ * one-time OAuth state, short locks). On AWS each key is an item in a DynamoDB
+ * table (apps/aws/src/dynamoCoord.ts); the local server and tests use the
  * in-memory implementation below.
  */
 export interface Coord {

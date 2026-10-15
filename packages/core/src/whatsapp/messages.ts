@@ -50,7 +50,7 @@ export interface WaDeps {
   fetchImpl: FetchLike;
 }
 
-/** Cloudflare Queues delays a message by at most 12 hours; later sends are picked up by the sweeper. */
+/** The longest a queued send waits in the queue; sends due later are picked up by the sweeper. */
 const MAX_QUEUE_DELAY_S = 12 * 3600;
 /** Messages per second per number. Meta allows 80; staying well under leaves room for retries and other tools. */
 export const WA_SENDS_PER_SECOND = 20;

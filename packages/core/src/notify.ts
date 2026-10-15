@@ -8,25 +8,11 @@ export interface Mailer {
   send(to: string, subject: string, text: string, html?: string): Promise<void>;
 }
 
-/** Minimal shape of the Cloudflare Email Sending binding (`send_email`). */
-export interface SendEmailBinding {
-  send(message: { to: string; from: string | { email: string; name: string }; subject: string; text: string; html?: string }): Promise<unknown>;
-}
-
 /** "Name <addr@x>" -> { name, email }; a bare address stays a string. */
 export function parseFrom(from: string): string | { email: string; name: string } {
   const m = /^\s*(.*?)\s*<([^>]+)>\s*$/.exec(from);
   if (!m) return from.trim();
   return m[1] ? { email: m[2]!, name: m[1].replace(/^"|"$/g, "") } : m[2]!;
-}
-
-/** Sends through Cloudflare Email Sending. The From domain must be onboarded. */
-export function cloudflareMailer(binding: SendEmailBinding): Mailer {
-  return {
-    async send(to, subject, text, html) {
-      await binding.send({ to, from: parseFrom(env().EMAIL_FROM), subject, text, ...(html ? { html } : {}) });
-    },
-  };
 }
 
 /**

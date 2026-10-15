@@ -17,8 +17,8 @@ existing sign-in (Amazon Cognito), data lives in the same Postgres behind the sa
 
 ## Installing
 
-1. Apply the migration **before** deploying the code: `pnpm db:migrate` (production: `DATABASE_URL=<prod> pnpm --filter @app/db migrate:deploy`). It only adds tables, two nullable columns (`memberships.staff_role`, `invitations.staff_role`) and one enum, so the running version keeps working while it applies.
-2. Deploy as usual (docs/deployment-cloudflare.md). No new secrets or bindings are needed: invitations use the existing mailer (`EMAIL_FROM` on a domain onboarded to Cloudflare Email Sending; locally Mailpit), accounts use the existing Firebase project.
+1. Apply the migration: locally `pnpm db:migrate`; in production the **Deploy to AWS** workflow applies it after the deploy (docs/aws-deployment.md). It only adds tables, two nullable columns (`memberships.staff_role`, `invitations.staff_role`) and one enum, so the running version keeps working while it applies.
+2. Deploy as usual (merge to `main`). No new secrets or settings are needed: invitations use the existing mailer (`EMAIL_FROM` on a domain verified in Amazon SES; locally Mailpit), accounts use the existing sign-in (Cognito).
 3. In the app: **Staff → Settings** — set the organization's time zone, currency, pay cycle, week start, overtime and break policies, holidays. Give non-admin members a staff role in **Settings → Members & roles**.
 
 Nothing else is required. What is *not* set up, and why, is under [Not included](#not-included).
@@ -213,8 +213,8 @@ locked shifts and their breaks.
 - Tokens: invitations 256-bit random, SHA-256 at rest; download links 192-bit, one use, 5 min,
   bound to the requesting user, SHA-256 as the coordinator key.
 - Passwords never touch our database or logs; the policy is enforced server-side.
-- Encryption in transit: HTTPS (Cloudflare) to the Worker, Hyperdrive/Tunnel to Postgres. Encryption
-  at rest is the database volume's: staff records are not additionally encrypted per field (names,
+- Encryption in transit: HTTPS (CloudFront) to the API, TLS to the database. Encryption
+  at rest is the database's (RDS storage encryption): staff records are not additionally encrypted per field (names,
   emails, phone numbers and pay are visible to authorized roles only).
 - Retention: staff records are kept while the organization exists (payroll records usually have a
   statutory retention period; deleting them is deliberately not offered in the UI). Deleting the

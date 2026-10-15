@@ -20,9 +20,9 @@ export interface Deps {
   payloads: BlobStore;
   mailer: Mailer;
   fetchImpl: FetchLike;
-  /** Outbound TCP for SMTP email accounts (Workers sockets). Absent: SMTP accounts can't connect. */
+  /** Outbound TCP for SMTP email accounts (apps/aws/src/nodeSmtp.ts). Absent: SMTP accounts can't connect. */
   smtpConnect?: SmtpConnect;
-  /** Coarse per-IP limiter (Workers Rate Limiting binding). Returns false when over the limit. */
+  /** Coarse per-IP limiter (apps/aws/src/app.ts, on the coordinator). Returns false when over the limit. */
   globalLimit?: (key: string) => Promise<boolean>;
   /** Whether the database answers right now. Defaults to `dbReachable()`; tests inject an outage. */
   dbHealthy?: () => Promise<boolean>;
@@ -211,12 +211,16 @@ export async function requireWorkspace(c: Ctx, deps: Deps, workspaceId: string, 
 }
 
 /**
- * Client IP as seen by Cloudflare's edge. Cloudflare sets cf-connecting-ip on every request and a
- * client can't forge it; x-real-ip can be sent by anyone, so it only counts outside production
- * (local tools and tests), where it can't be used to dodge a per-IP limit.
+ * The client's address, as the host in front of the API passes it on. On AWS that is the address
+ * CloudFront saw (apps/aws/src/index.ts drops whatever the client sent under this name and sets
+ * it), so a client can't forge it; the local server passes on what it is given (tests use that to
+ * be many visitors). x-real-ip can be sent by anyone, so it only counts outside production (local
+ * tools and tests), where it can't be used to dodge a per-IP limit.
  */
+export const CLIENT_IP_HEADER = "x-insights-client-ip";
+
 export function clientIp(c: Ctx): string {
-  const edge = c.req.header("cf-connecting-ip");
+  const edge = c.req.header(CLIENT_IP_HEADER);
   if (edge) return edge;
   return (env().NODE_ENV !== "production" && c.req.header("x-real-ip")) || "unknown";
 }

@@ -3,8 +3,7 @@ import type { Coord, FetchLike } from "@app/core";
 
 /**
  * The coordinator (rate-limit counters, one-time OAuth state, signed-out sessions, locks) on a
- * DynamoDB table, for AWS hosting: on Cloudflare a Durable Object does this job. Lambda runs many
- * instances at once, so this state has to live outside them. One item per key:
+ * DynamoDB table. Lambda runs many instances at once, so this state has to live outside them. One item per key:
  *   k (string key), v (value), n (counter), until (ms epoch: when it stops counting),
  *   exp (seconds epoch: DynamoDB's TTL attribute, which deletes it some time after).
  * TTL deletion is lazy (up to a few days), so every read checks `until` itself.

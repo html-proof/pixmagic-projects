@@ -1,5 +1,8 @@
 # Refactoring plan
 
+> Historical record (2026-10-14): written when Insights ran on Cloudflare Workers. It now runs on
+> AWS: see [aws-architecture.md](../aws-architecture.md).
+
 What changes, in which order, and what deliberately does not. Built from
 [current-state.md](current-state.md) (finding ids H*, M*, W*, T* refer to it). The outcome of each
 stage is recorded in [refactoring-report.md](refactoring-report.md).

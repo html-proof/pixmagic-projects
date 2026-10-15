@@ -301,8 +301,8 @@ describe("webhook security & idempotency", () => {
     expect(ctx.deps.queues.sent.webhooks).toHaveLength(1);
   });
 
-  // The row is committed before the queue send. A tunnel drop after the commit (500), or Shopify
-  // giving up at 5s and the Worker being cancelled, leaves it queued and untouched with no message.
+  // The row is committed before the queue send. A connection drop after the commit (500), or the
+  // request being cut off before the send, leaves it queued and untouched with no message.
   const recorded = (id: string, extra: { status?: "queued" | "running" | "succeeded" | "failed"; attempts?: number; ageMs?: number } = {}) =>
     systemDb.webhookEvent.create({
       data: {

@@ -12,7 +12,7 @@ mkdirSync(join(fnDir, "public/_next/static/chunks"), { recursive: true });
 writeFileSync(join(fnDir, "public/_next/static/chunks/main.js"), "void 0;\n");
 process.env.INSIGHTS_FUNCTION_DIR = fnDir;
 
-const { envConfig, stripJsonComments, appVars } = await import("../lib/config.js");
+const { envConfig, appVars } = await import("../lib/config.js");
 const { EdgeStack } = await import("../lib/edge-stack.js");
 const { DataStack } = await import("../lib/data-stack.js");
 const { AppStack } = await import("../lib/app-stack.js");
@@ -81,7 +81,7 @@ describe("the data stack", () => {
 });
 
 describe("the app stack", () => {
-  it("leaves the schedules off unless asked (no double syncs while Cloudflare still runs)", () => {
+  it("leaves the schedules off unless asked (no double syncs while the old deployment still runs)", () => {
     const states = (tpl: Template) => Object.values(tpl.findResources("AWS::Scheduler::Schedule")).map((s) => s.Properties.State);
     expect(states(t.app)).toEqual(["DISABLED", "DISABLED"]);
     expect(states(synth({ schedules: "on" }).app)).toEqual(["ENABLED", "ENABLED"]);
@@ -173,16 +173,10 @@ describe("the edge stack", () => {
 
 describe("IAM", () => {
   it("has no IAM user or access key anywhere (roles only)", () => {
-    for (const tpl of [t.ci, t.app, t.data]) {
+    for (const tpl of [t.ci, t.app, t.data, t.auth]) {
       tpl.resourceCountIs("AWS::IAM::User", 0);
       tpl.resourceCountIs("AWS::IAM::AccessKey", 0);
     }
-    // cognito.yaml keeps the Cloudflare Worker's IAM user behind a condition, false on AWS.
-    const auth = t.auth.toJSON() as { Resources: Record<string, { Type: string; Condition?: string }>; Conditions: Record<string, unknown> };
-    for (const r of Object.values(auth.Resources).filter((r) => r.Type === "AWS::IAM::User" || r.Type === "AWS::IAM::AccessKey")) {
-      expect(r.Condition).toBe("HasWorkerUser");
-    }
-    expect(auth.Conditions.HasWorkerUser).toEqual({ "Fn::Equals": ["false", "true"] });
   });
 
   it("lets only this repository's production environment deploy from GitHub", () => {
@@ -213,15 +207,13 @@ describe("IAM", () => {
 });
 
 describe("config", () => {
-  it("reads wrangler.jsonc's vars, without the addresses or Cognito ids", () => {
+  it("carries the app's settings, without the addresses, Cognito ids or NODE_ENV", () => {
     const vars = appVars();
     expect(vars.SHOPIFY_API_KEY).toMatch(/^[0-9a-f]{32}$/);
     expect(vars.APP_URL).toBeUndefined();
+    expect(vars.API_URL).toBeUndefined();
+    expect(vars.NODE_ENV).toBeUndefined();
     expect(Object.keys(vars).some((k) => k.startsWith("COGNITO_"))).toBe(false);
     expect(JSON.parse(vars.SHOPIFY_EXTRA_APPS!)).toBeInstanceOf(Array);
-  });
-
-  it("strips comments but not // inside strings", () => {
-    expect(JSON.parse(stripJsonComments('{ "a": "https://x" /* c */, // d\n "b": 1, }'))).toEqual({ a: "https://x", b: 1 });
   });
 });
