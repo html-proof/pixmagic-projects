@@ -3,9 +3,10 @@
  * data controller is, how a merchant reaches support, and which law governs the policy.
  *
  * Shopify app store requirement 4.1 requires a reachable support contact, and the listing
- * requires a privacy policy URL. `/privacy` and `/support` render straight from this file, and
- * both show a visible "not set" marker while a value is still a placeholder, so an unfinished
- * policy cannot be published by accident.
+ * requires a privacy policy URL. `/privacy` and `/support` render straight from this file.
+ * `/privacy` shows a visible "not set" marker while a value is still a placeholder, so an
+ * unfinished policy cannot be published by accident; `/support` leaves out the email line
+ * until `supportEmail` is set.
  *
  * Set all four, then redeploy.
  */
