@@ -92,7 +92,7 @@ describe("production secrets", () => {
       resetEnvCache();
       expect(() => env(), name).toThrow(new RegExp(`Development settings in a production configuration: ${name}`));
     }
-    // Development (wrangler dev, e2e, demos) keeps all of them.
+    // Development (the local server, e2e, demos) keeps all of them.
     process.env = { ...saved, ...strong, ...dev, NODE_ENV: "development" };
     resetEnvCache();
     expect(env().MAILPIT_URL).toBe("http://localhost:8025");

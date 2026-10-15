@@ -9,8 +9,8 @@ export interface Limit {
 
 /**
  * Every per-key limit in one place, so they can be reviewed and tuned together. The coarse
- * per-IP limit on all API traffic is the Workers Rate Limiting binding (GLOBAL_LIMITER in
- * apps/cloudflare/wrangler.jsonc); these sit underneath it for the endpoints worth abusing.
+ * per-IP limit on all API traffic is `globalLimit` (apps/aws/src/app.ts, behind AWS WAF's rate
+ * rule at CloudFront); these sit underneath it for the endpoints worth abusing.
  */
 export const LIMITS = {
   // ---- Sign-in (per IP unless named otherwise). Cognito throttles and locks out on top. ----

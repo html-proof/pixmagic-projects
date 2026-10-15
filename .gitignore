@@ -14,7 +14,7 @@ test-results
 *-firebase-adminsdk-*.json
 serviceAccountKey*.json
 
-# Local Postgres TLS cert (generated; used by the Cloudflare Tunnel / Hyperdrive path)
+# Local Postgres TLS cert (generated; see docker-compose.yml)
 infra/postgres/certs/
 
 # Static export output (default and NEXT_EXPORT_DIR alternates for deploys/demos)
@@ -30,6 +30,9 @@ ops-reports/
 
 # AWS Lambda package (pnpm --filter @app/aws build)
 apps/aws/dist/
+
+# E2E's Cognito emulator data (apps/web/playwright.config.ts)
+apps/web/.e2e/
 
 # AWS CDK synth output
 cdk.out

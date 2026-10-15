@@ -111,7 +111,7 @@ describe("the static UI", () => {
     return { status: r.status, text: await r.text(), headers: r.headers };
   };
 
-  it("serves pages the way Workers Static Assets does", async () => {
+  it("serves pages by their clean URLs, with a 404 page for the rest", async () => {
     expect(await get("/")).toMatchObject({ status: 200, text: "home" });
     expect(await get("/login")).toMatchObject({ status: 200, text: "login" });
     expect(await get("/login/")).toMatchObject({ status: 200, text: "login" });

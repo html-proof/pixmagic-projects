@@ -51,7 +51,7 @@ export type App = Hono<AppEnv>;
 
 /**
  * On every API response, including errors and early 413/429s. public/_headers covers the static
- * UI, but Workers Static Assets never applies it to responses the Worker generates. API responses
+ * UI files only (apps/aws/src/staticSite.ts), never responses the API generates. API responses
  * are JSON or redirects, never a page: nothing may sniff them into HTML, render them, frame them,
  * or keep a copy (they carry account and customer data).
  */
@@ -74,7 +74,7 @@ export function buildApp(deps: Deps): App {
     for (const [name, value] of Object.entries(API_HEADERS)) {
       if (!c.res.headers.has(name)) c.res.headers.set(name, value);
     }
-    // Only over https (the Worker redirects everything else outside local development).
+    // Only over https (CloudFront redirects everything else; local development is plain http).
     if (c.req.url.startsWith("https:")) c.res.headers.set("strict-transport-security", "max-age=31536000; includeSubDomains");
   });
 

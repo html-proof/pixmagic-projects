@@ -84,7 +84,7 @@ echo "app URL: ${APP_URL}"
 echo "deploying ${AUTH_STACK}..."
 aws cloudformation deploy --stack-name "$AUTH_STACK" --template-file cognito.yaml --capabilities CAPABILITY_NAMED_IAM \
   --no-fail-on-empty-changeset --tags app=insights "environment=${ENVIRONMENT}" \
-  --parameter-overrides "Environment=${ENVIRONMENT}" "AppUrl=${APP_URL}" "DomainPrefix=${DOMAIN_PREFIX}" CreateWorkerUser=false
+  --parameter-overrides "Environment=${ENVIRONMENT}" "AppUrl=${APP_URL}" "DomainPrefix=${DOMAIN_PREFIX}"
 POOL="$(out "$AUTH_STACK" UserPoolId)"
 CLIENT="$(out "$AUTH_STACK" ClientId)"
 DOMAIN="$(out "$AUTH_STACK" Domain)"

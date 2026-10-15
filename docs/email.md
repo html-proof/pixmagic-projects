@@ -39,17 +39,17 @@ original specification:
 | NestJS API | Hono routes in `apps/api/src/routes/email*.ts` |
 | Next.js dashboard | `apps/web/src/app/(app)/settings/email/*` (static export) |
 | PostgreSQL + Prisma | Same database; 15 new tables, Postgres RLS on each |
-| Redis + BullMQ | Cloudflare Queues (`insights-email`) + the Coordinator Durable Object (locks, counters, one-time OAuth state) + the 15-minute cron sweep |
-| Worker processes | The same Worker's queue consumer (`apps/worker`) |
-| KMS envelope encryption | Per-secret data keys wrapped by Worker-secret key-encryption keys (`EMAIL_CREDENTIAL_KEYS`), rotatable; one function to swap for a managed KMS |
-| Nodemailer | A small SMTP client over Workers TCP sockets (`cloudflare:sockets`): Nodemailer needs Node's `net`/`tls` |
+| Redis + BullMQ | Amazon SQS (`insights-production-email`) + the coordinator (DynamoDB: locks, counters, one-time OAuth state) + the 15-minute cron sweep |
+| Worker processes | The jobs function's queue consumer (`apps/worker`, run by `apps/aws`) |
+| KMS envelope encryption | Per-secret data keys wrapped by key-encryption keys kept in the app secret (`EMAIL_CREDENTIAL_KEYS`, Secrets Manager), rotatable; one function to swap for a managed KMS |
+| Nodemailer | A small SMTP client (`smtp.ts`) over Node's `net`/`tls` (`apps/aws/src/nodeSmtp.ts`) |
 | `/api/v1/email/...` routes | `/api/workspaces/{ws}/email/...` (the app's existing convention: the path selects the workspace, membership is checked on every request); the public event API is `/api/v1/events` |
 
 ```
  Browser (Settings → Email integrations)
      │  session cookie, CSRF Origin check
      ▼
- Worker fetch ──► Hono API (apps/api/src/routes/email*.ts)
+ api function ──► Hono API (apps/api/src/routes/email*.ts)
      │              requireEmail(): signed-in member + role permission → 404 for non-members
      │              withTenant(): RLS-scoped reads
      ▼
@@ -62,9 +62,9 @@ original specification:
    providers: Gmail API │ Microsoft Graph │ SMTP (smtp.ts over sockets, vetted host)   │
    activity / analytics / suppressions / sweep                                         │
      │                                                                                 │
-     ├─► Postgres (Hyperdrive): email_* tables, RLS, composite tenant FKs ◄────────────┘
-     ├─► Queue insights-email: {email_event, eventId} │ {email_send, messageId}
-     └─► Coordinator DO: token-refresh locks, rate-limit windows, OAuth state, leases
+     ├─► Postgres (RDS): email_* tables, RLS, composite tenant FKs ◄───────────────────┘
+     ├─► SQS email queue: {email_event, eventId} │ {email_send, messageId}
+     └─► Coordinator (DynamoDB): token-refresh locks, rate-limit windows, OAuth state, leases
 
  Shopify webhooks ─► webhook queue ─► processWebhook ─► emailOnShopifyEvent ─► email_business_events
  POST /api/v1/events (ek_live_ key) ─► ingestCustomEvent ─────────────────────► email_business_events
@@ -123,7 +123,7 @@ apps/api/src/routes/emailActivity.ts    overview, analytics, messages, settings,
 apps/api/src/routes/emailPublic.ts      POST /v1/events, unsubscribe
 apps/worker/src/handlers.ts             runEmailJob; Shopify webhook and GDPR hooks
 apps/worker/src/index.ts                queue "email"; sweepEmail on the */15 cron
-apps/cloudflare/src/smtpSocket.ts       SmtpConnect over cloudflare:sockets
+apps/aws/src/nodeSmtp.ts                SmtpConnect over Node net/tls
 apps/web/src/app/(app)/settings/email/  Overview, Accounts, Domains, Templates (+editor),
                                         Automations (+7-step builder), Activity, Settings
 apps/web/src/app/unsubscribe/           public unsubscribe page
@@ -217,10 +217,11 @@ reserved. `data` holds up to 50 fields, three levels deep; templates and conditi
    ("send the emails the merchant's automations and tests produce, from their own mailbox; nothing is
    read").
 3. **Credentials → OAuth client (Web application)**: authorized redirect URI exactly
-   `https://<APP_URL host>/api/email/oauth/google/callback`. The existing "Insights web" client can
+   `https://<APP_URL host>/api/email/oauth/google/callback` (production:
+   `https://d2mr8m2p1qkh58.cloudfront.net/api/email/oauth/google/callback`). The existing "Insights web" client can
    be reused (add the URI) or a separate one created.
-4. Set `EMAIL_GOOGLE_CLIENT_ID` in `wrangler.jsonc` `vars` and
-   `npx wrangler secret put EMAIL_GOOGLE_CLIENT_SECRET` (from `apps/cloudflare`), then deploy.
+4. Set `EMAIL_GOOGLE_CLIENT_ID` in `apps/aws/src/settings.ts` and
+   `node infra/cdk/scripts/put-secrets.mjs --set EMAIL_GOOGLE_CLIENT_SECRET`, then deploy (merge to `main`).
 5. Workspace admins of a Google Workspace domain that restricts third-party apps must allow the
    client ID in Admin console → Security → API controls.
 
@@ -235,15 +236,17 @@ refresh token keeps the stored one; a new account without one is refused with in
 1. Microsoft Entra admin center → **App registrations → New registration**. Supported account
    types: "Accounts in any organizational directory and personal Microsoft accounts" for `common`
    (or organizations only, with `EMAIL_MICROSOFT_AUTHORITY=organizations`). Redirect URI (Web):
-   `https://<APP_URL host>/api/email/oauth/microsoft/callback`.
+   `https://<APP_URL host>/api/email/oauth/microsoft/callback` (production:
+   `https://d2mr8m2p1qkh58.cloudfront.net/api/email/oauth/microsoft/callback`).
 2. **API permissions → Microsoft Graph → Delegated**: `Mail.Send`, `User.Read`, `offline_access`,
    `openid`, `email`, `profile`. No application permissions (the code only ever acts as the signed-in
    user, `/me`).
 3. **Certificates & secrets → New client secret**; note its expiry (renew before it lapses; an
    expired client secret makes refreshes fail, which the code treats as our problem: accounts go
    `degraded`, not "reconnect").
-4. Set `EMAIL_MICROSOFT_CLIENT_ID` (vars), `EMAIL_MICROSOFT_AUTHORITY` (`common` default) and
-   `npx wrangler secret put EMAIL_MICROSOFT_CLIENT_SECRET`, then deploy.
+4. Set `EMAIL_MICROSOFT_CLIENT_ID` and `EMAIL_MICROSOFT_AUTHORITY` (`common` default) in
+   `apps/aws/src/settings.ts` and `node infra/cdk/scripts/put-secrets.mjs --set EMAIL_MICROSOFT_CLIENT_SECRET`,
+   then deploy (merge to `main`).
 5. Organizations that block user consent need an admin to grant consent once (Enterprise
    applications → the app → Permissions → Grant admin consent). Merchants see "An administrator of
    your Microsoft organization must approve Insights" until then.
@@ -258,18 +261,19 @@ enabled for REST, `ErrorSendAsDenied`.
 ## 7. Custom SMTP
 
 Form fields: address, display name, host, port (465 TLS, 587 STARTTLS, 2525 STARTTLS — port 25 is
-blocked on Cloudflare Workers), username, password or app password, reply-to. The password is
+blocked for outbound traffic from AWS), username, password or app password, reply-to. The password is
 sealed and never returned.
 
 Before every connection the host must be a public DNS name or public IP, and every address it
 resolves to (DNS over HTTPS, A and AAAA) must be public unicast: loopback, private (RFC 1918),
 carrier-grade NAT, link-local and cloud metadata (169.254.0.0/16, fd00::/8…), multicast,
 documentation and other special ranges are refused, as are `localhost`, `*.local`, `*.internal` and
-similar names. Cloudflare's network is a second boundary: Workers can't reach private networks.
+similar names. The functions run inside the app's VPC, so the network itself doesn't refuse private
+addresses: this check and the fixed ports are the boundary.
 
 The connection is encrypted before any credential is sent: implicit TLS on 465, or STARTTLS that the
-server must offer and that must succeed (no fallback). Certificate validation is done by the Workers
-runtime and can't be turned off. AUTH PLAIN or LOGIN. Diagnostics map to plain messages: wrong
+server must offer and that must succeed (no fallback). Certificate validation is Node's default
+(`apps/aws/src/nodeSmtp.ts`) and is never turned off. AUTH PLAIN or LOGIN. Diagnostics map to plain messages: wrong
 password (535), password sign-in not offered, app-specific password required (534), TLS failure,
 STARTTLS unavailable, connection refused, timeout, invalid host, blocked destination, sender
 refused (553/550 on MAIL FROM), recipient refused (550 5.1.1 → bounced + suppressed), rate limited
@@ -313,20 +317,22 @@ daily, and on demand ("Check now", rate-limited).
 
 | Setting | Where | Default | Notes |
 | --- | --- | --- | --- |
-| `EMAIL_GOOGLE_CLIENT_ID` | `wrangler.jsonc` vars | empty | empty: Google button says "not set up" |
-| `EMAIL_GOOGLE_CLIENT_SECRET` | Worker secret | empty | |
-| `EMAIL_MICROSOFT_CLIENT_ID` | vars | empty | |
-| `EMAIL_MICROSOFT_CLIENT_SECRET` | Worker secret | empty | |
-| `EMAIL_MICROSOFT_AUTHORITY` | vars | `common` | `organizations`, `consumers` or a tenant id |
-| `EMAIL_CREDENTIAL_KEYS` | Worker secret | empty → `TOKEN_ENCRYPTION_KEYS` | same format as `TOKEN_ENCRYPTION_KEYS`; refused in production if set to a public test value |
-| `EMAIL_DEFAULT_DAILY_LIMIT` | vars | 500 | per workspace unless the workspace sets lower |
-| `EMAIL_MAX_DAILY_LIMIT` | vars | 10000 | the most a workspace may set |
-| `EMAIL_WORKSPACE_PER_MINUTE` | vars | 60 | per workspace across its accounts |
-| `EMAIL_DOH_URL` | vars | Cloudflare DNS JSON | Google's is the fallback |
+| `EMAIL_GOOGLE_CLIENT_ID` | `settings.ts` | empty | empty: Google button says "not set up" |
+| `EMAIL_GOOGLE_CLIENT_SECRET` | app secret | empty | |
+| `EMAIL_MICROSOFT_CLIENT_ID` | `settings.ts` | empty | |
+| `EMAIL_MICROSOFT_CLIENT_SECRET` | app secret | empty | |
+| `EMAIL_MICROSOFT_AUTHORITY` | `settings.ts` | `common` | `organizations`, `consumers` or a tenant id |
+| `EMAIL_CREDENTIAL_KEYS` | app secret | empty → `TOKEN_ENCRYPTION_KEYS` | same format as `TOKEN_ENCRYPTION_KEYS`; refused in production if set to a public test value |
+| `EMAIL_DEFAULT_DAILY_LIMIT` | `settings.ts` | 500 | per workspace unless the workspace sets lower |
+| `EMAIL_MAX_DAILY_LIMIT` | `settings.ts` | 10000 | the most a workspace may set |
+| `EMAIL_WORKSPACE_PER_MINUTE` | `settings.ts` | 60 | per workspace across its accounts |
+| `EMAIL_DOH_URL` | `settings.ts` | Cloudflare DNS JSON | Google's is the fallback |
 | `CUSTOMER_HASH_KEY` | secret (existing) | `OTP_PEPPER` | also keys recipient hashes (suppressions); see RUNBOOK before rotating |
-| `EMAIL_QUEUE` binding | `wrangler.jsonc` queues | `insights-email` | must exist before deploy |
+| Email queue | `infra/cdk/lib/app-stack.ts` | `insights-production-email` | created by the deploy |
 
-Redirect URIs are derived from `APP_URL` (never from the request). Per-account limits default to
+`settings.ts` is `APP_SETTINGS` in `apps/aws/src/settings.ts` (shipped by merging to `main`); the app secret is
+Secrets Manager `insights/<env>/app` (`node infra/cdk/scripts/put-secrets.mjs --set NAME`); locally both are
+`apps/aws/.env`. Redirect URIs are derived from `APP_URL` (never from the request). Per-account limits default to
 under each provider's own published limits (`PROVIDER_LIMITS` in `constants.ts`): Gmail 400/day and
 20/min, Google Workspace 1,800/day and 30/min, Outlook.com 250/day, Microsoft 365 9,000/day and
 30/min, SMTP 1,000/day and 30/min (lower per account in the UI). Staging should use its own OAuth
@@ -334,8 +340,8 @@ clients and redirect URIs.
 
 ## 10. Queues, cron and deployment
 
-- **Queue** `insights-email` (consumer: batch 10, timeout 2s, concurrency 5, 5 retries, DLQ
-  `insights-dlq`). Jobs: `{kind:"email_event", eventId}` (run automations) and
+- **Queue** `insights-production-email` (the jobs function: batch 10, batching window 2 s, max
+  concurrency 2; a message received 10 times goes to `insights-production-dlq`). Jobs: `{kind:"email_event", eventId}` (run automations) and
   `{kind:"email_send", messageId}` (send one). Delays up to 12 hours ride the queue's
   `delaySeconds`; anything later is picked up by the sweep. Message rows are the source of truth, so
   a lost job only delays a send by one sweep.
@@ -348,22 +354,22 @@ clients and redirect URIs.
   `processing` over 10 minutes `unknown`, promotes abandoned checkouts, checks due domains, refreshes
   OAuth tokens unused for a week (keeps Microsoft's 90-day sliding refresh tokens alive and finds
   revoked grants early), and applies retention once a day.
-- **Deploy order:** (1) `npx wrangler queues create insights-email`; (2) apply migration
-  `20261015090000_email_integrations` to production (additive); (3) set the OAuth vars/secrets
-  (optional — SMTP works without them); (4) the usual staged deploy.
+- **Deploy:** merge to `main`. The queue is part of the CDK app, and the **Deploy to AWS** workflow
+  applies migration `20261015090000_email_integrations` (additive). The OAuth settings and secrets are
+  optional (SMTP works without them).
 
 ## 11. Security controls
 
 - Tenant isolation: membership check on every request (404 for non-members, no API keys), RLS on all
   15 tables, workspace filters in every query, composite tenant foreign keys, jobs re-load rows by
   `(id, workspace_id)`, tenant isolation tests.
-- OAuth: PKCE S256, single-use state in the Coordinator bound to a browser cookie and to the user,
+- OAuth: PKCE S256, single-use state in the coordinator bound to a browser cookie and to the user,
   membership and permission re-checked in the callback, fixed redirect URIs and fixed post-callback
   destination, granted scopes verified, ID token audience/issuer/expiry checked, reconnect bound to
   the same mailbox, concurrent callbacks for one mailbox resolved by a unique index + retry.
 - Credentials: envelope encryption with per-row/per-purpose AAD; never returned, logged or stored
   in the browser; key rotation by re-wrapping (`ops:reencrypt`); revocation at Google on disconnect.
-- Token lifecycle: refresh under a Coordinator lock with compare-and-set on `credential_version`;
+- Token lifecycle: refresh under a coordinator lock with compare-and-set on `credential_version`;
   empty refresh tokens never overwrite stored ones; permanent errors mark the account once, audit and
   alert; our own client misconfiguration is treated as transient.
 - SMTP: TLS only, SSRF policy with DNS re-check before each connection, timeouts on every step.
@@ -411,14 +417,14 @@ Open and click rates are not tracked and are shown as unavailable, never estimat
 
 Run: `pnpm test` (unit) and `TEST_PG_PORT=<throwaway port> pnpm test:integration`. Results at
 completion (2026-10-14): unit 230 shared + 127 core passing; integration 294 API + 154 worker
-passing (all suites, not only email); `pnpm lint` clean; typecheck clean. The UI was exercised in a
-local Worker (`.claude/email-demo-server.mjs`, seed `apps/worker/demo/email-demo.seed.ts`):
+passing (all suites, not only email); `pnpm lint` clean; typecheck clean. The UI was exercised
+locally (`.claude/email-demo-server.mjs`, seed `apps/worker/demo/email-demo.seed.ts`):
 overview, accounts (connect dialog, SMTP form refusing 169.254.169.254), domains, template editor
 with live sandboxed preview, automation builder and dry run, activity filters and message detail,
 settings, unsubscribe page, phone width.
 
 Not run: load tests (thousands of concurrent jobs), live Google/Microsoft/SMTP providers, Redis
-outage (no Redis), real Workers TCP sockets against a real SMTP server.
+outage (no Redis), real Node sockets against a real SMTP server.
 
 ## 14. Known limitations
 
@@ -434,23 +440,23 @@ outage (no Redis), real Workers TCP sockets against a real SMTP server.
 - **Google verification:** until the OAuth app is verified for `gmail.send`, only listed test users
   can connect and their refresh tokens expire after 7 days.
 - **SMTP DNS rebinding:** the host is resolved and checked, then the runtime resolves it again to
-  connect; a rebinding attacker could race that window. Workers can't reach private networks, which
-  closes the practical impact; there's no way to pin the checked address while keeping TLS name
-  validation.
-- **No SMTP connection pooling** (each send is its own connection: Workers invocations don't share
-  sockets).
+  connect; a rebinding attacker could race that window. The functions run inside the app's VPC, which
+  doesn't refuse private addresses by itself; the fixed ports (465, 587, 2525) limit what a race could
+  reach (the database accepts only 5432). There's no way to pin the checked address while keeping TLS
+  name validation.
+- **No SMTP connection pooling** (each send is its own connection).
 - **Events:** Shopify customer-created/updated events aren't offered (those webhook topics aren't
   subscribed); refunds aren't an email event yet. Abandoned checkouts need the checkout to carry an
   email and are detected 60–75 minutes after the last change.
 - **Conditions UI** edits one level of all/any; deeper trees are edited as JSON.
 - **Timezones:** delays are absolute; "send at 9am the customer's time" isn't supported.
-- **Per-tenant concurrency** is enforced as per-minute throughput (Coordinator counters), not a
+- **Per-tenant concurrency** is enforced as per-minute throughput (coordinator counters), not a
   hard concurrent-connection cap.
 
 ## 15. Production checklist
 
-1. `npx wrangler queues create insights-email` (from `apps/cloudflare`).
-2. Apply migration `20261015090000_email_integrations` to production before deploying.
+1. Queue: `insights-production-email` is created by the CDK app; nothing to do.
+2. Migration `20261015090000_email_integrations`: applied by the **Deploy to AWS** workflow.
 3. (Gmail) Enable Gmail API, add `gmail.send` to the consent screen, add the redirect URI, set
    `EMAIL_GOOGLE_CLIENT_ID` + `EMAIL_GOOGLE_CLIENT_SECRET`; start Google's verification for the
    sensitive scope.
@@ -460,10 +466,10 @@ outage (no Redis), real Workers TCP sockets against a real SMTP server.
 5. Optional: `EMAIL_CREDENTIAL_KEYS` (separate key-encryption keys for email credentials); put the
    same value in the maintenance `.env`.
 6. Review limits (`EMAIL_DEFAULT_DAILY_LIMIT`, `EMAIL_MAX_DAILY_LIMIT`, `EMAIL_WORKSPACE_PER_MINUTE`).
-7. Deploy (UI and Worker together: the UI calls the new routes).
+7. Deploy: merge to `main` (the UI and the API ship in one package; the UI calls the new routes).
 8. Smoke test: connect an SMTP or Google test account, send a test to yourself, create a rule on a
    test event via the event API, watch Activity.
-9. Watch logs for `email send failed` and alerts `email_account_reauth:*` in the first days.
+9. Watch the logs (CloudWatch, `/aws/lambda/insights-production-jobs`) for `email send failed` and alerts `email_account_reauth:*` in the first days.
 
 ## 16. Status
 
@@ -474,14 +480,13 @@ and SSRF policy (against a fake server); domain verification and SPF/DKIM/DMARC 
 faked DNS); sender verification; templates (sanitizer, renderer, versions, preview); rule engine and
 dry run; Shopify event normalization and abandoned-checkout detection; custom event API; delivery
 (limits, retries, holds, suppression, unknown outcomes); unsubscribe; activity, analytics; sweep and
-retention; RBAC and tenant isolation; all API routes; the dashboard (verified in a local Worker).
+retention; RBAC and tenant isolation; all API routes; the dashboard (verified locally).
 
 **Implemented but not live-provider tested:** real Gmail API sends, real Microsoft Graph sends and
-token refreshes, real SMTP over Workers TCP sockets (TLS/STARTTLS handshakes by the runtime), real
+token refreshes, real SMTP over Node sockets against a real server (TLS/STARTTLS handshakes), real
 DNS over HTTPS answers, Google/Microsoft consent screens.
 
-**Requires administrator configuration:** the `insights-email` queue, the production migration,
-Google OAuth client + Gmail API + consent screen + verification, Microsoft Entra app registration +
+**Requires administrator configuration:** Google OAuth client + Gmail API + consent screen + verification, Microsoft Entra app registration +
 secret (+ admin consent per customer tenant where required), optional `EMAIL_CREDENTIAL_KEYS`.
 
 **Not implemented:** provider delivery webhooks / bounce processing beyond synchronous SMTP

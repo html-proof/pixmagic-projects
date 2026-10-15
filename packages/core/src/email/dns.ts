@@ -1,5 +1,5 @@
 /**
- * DNS lookups over HTTPS (the resolvers' JSON API), the only way a Worker can ask DNS. Used for the
+ * DNS lookups over HTTPS (the resolvers' JSON API), the same from any network. Used for the
  * domain checks and to vet an SMTP host's addresses before connecting to it.
  */
 import { joinTxt, parseSpf } from "@app/shared/email";

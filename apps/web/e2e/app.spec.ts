@@ -431,7 +431,7 @@ test("dashboard shows webhook-driven metrics and only granted modules", async ({
 });
 
 /**
- * The dynamic optional-scope request flow, end to end through the real Worker.
+ * The dynamic optional-scope request flow, end to end through the real app.
  *
  * The e2e env declares exactly one optional scope (`SHOPIFY_OPTIONAL_SCOPES=read_customers`), so
  * one dashboard shows all three reasons a module can be locked — and, importantly, that each one

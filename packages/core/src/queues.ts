@@ -1,7 +1,8 @@
 /**
- * Job contracts for Cloudflare Queues. Producers are thin wrappers over Queue
- * bindings (apps/cloudflare); tests use memoryQueues(). Delivery is
- * at-least-once, so every consumer is idempotent.
+ * Job contracts for the background queues. Producers are thin wrappers over
+ * SQS on AWS (apps/aws/src/sqsQueues.ts) and in-process queues locally
+ * (localQueues.ts); tests use memoryQueues(). Delivery is at-least-once, so
+ * every consumer is idempotent.
  */
 export const QUEUE = {
   sync: "sync",
@@ -11,7 +12,7 @@ export const QUEUE = {
 } as const;
 export type QueueName = keyof typeof QUEUE;
 
-/** Attempts before a job is marked failed (first delivery + retries). Keep in sync with wrangler max_retries + 1. */
+/** Attempts before a job is marked failed (first delivery + retries). The SQS queues' maxReceiveCount stays above it (infra/cdk). */
 export const MAX_ATTEMPTS = 6;
 /** Exponential backoff: 5s, 10s, 20s, ... capped at 15 minutes. */
 export const backoffSeconds = (attempt: number) => Math.min(900, 5 * 2 ** Math.max(0, attempt - 1));
@@ -111,7 +112,7 @@ export interface BlobStore {
   delete(key: string): Promise<void>;
 }
 
-/** Cloudflare Queues messages are limited to 128 KB; leave headroom for the envelope. */
+/** Bodies above this go to the BlobStore instead of the queue message (well under SQS's message size limit). */
 export const INLINE_PAYLOAD_LIMIT = 100 * 1024;
 
 export type SendOptions = { delaySeconds?: number };

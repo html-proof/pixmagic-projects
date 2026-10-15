@@ -40,10 +40,6 @@ jobs:
       - run: pnpm lint
       - name: Create tenant DB role
         run: PGPASSWORD=app psql -h localhost -p 5434 -U app -d app -f infra/postgres/init.sql
-      # The committed binding types must match wrangler.jsonc (typecheck below regenerates them,
-      # so it would never notice).
-      - name: Worker binding types are up to date
-        run: pnpm --filter @app/cloudflare exec wrangler types --check
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm test:integration
@@ -53,9 +49,9 @@ jobs:
         run: pnpm --filter @app/db exec prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --exit-code
         env:
           DATABASE_URL: postgresql://app:app@localhost:5434/app_test
-      - run: pnpm --filter @app/web build
-      - name: Bundle the Worker (wrangler dry run)
-        run: pnpm --filter @app/cloudflare build
+      # What Deploy to AWS ships: the UI (Next.js export) and the bundled function.
+      - name: Build the Lambda package (UI + function)
+        run: pnpm --filter @app/aws build -- --no-staging-bundle
 
   e2e:
     name: End-to-end (Playwright)

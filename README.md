@@ -2,18 +2,18 @@
 
 A multi-tenant SaaS that gives Shopify merchants plain-language analytics. Merchants sign up or log in with Google or an email and password (Amazon Cognito; existing Firebase accounts move over at their first sign-in), then connect their store from inside the app (**Settings → Shopify**, or the first-run connect page) through Shopify's own OAuth screen. Insights imports orders, products and inventory into the dashboard (public, unlisted app, authorization-code grant, permanent offline tokens kept encrypted on the server; see [docs/shopify-setup.md](docs/shopify-setup.md)).
 
-Runs on **Cloudflare Workers**: one Worker serves the UI (static assets), the API (`/api/*`), Queue consumers and Cron Triggers, with Postgres via Hyperdrive.
+Runs on **AWS** (https://d2mr8m2p1qkh58.cloudfront.net): CloudFront and WAF in front of one Lambda package deployed as three functions (the UI and the API, the queue jobs, the schedules), with RDS PostgreSQL, SQS, DynamoDB, S3 and SES. Every merge to `main` deploys it. Locally the same code runs as one Node process.
 
 ```
-apps/cloudflare Worker entry + wrangler.jsonc: routing, Queue/Cron handlers, Coordinator Durable Object
-apps/web       Next.js 16 (App Router) UI, statically exported and served by the Worker
+apps/aws       The host: Lambda entry, AWS adapters (SQS, DynamoDB, S3, SES), app settings, and the local server
+apps/web       Next.js 16 (App Router) UI, statically exported and served beside the API
 apps/api       Hono API: sessions, email OTP, Shopify OAuth, webhooks, pixel ingest, dashboard, settings
 apps/worker    Queue consumers: initial sync, webhook processing, daily aggregates, reconcile, token rotation, alerts; ops/ maintenance tasks
-packages/db    Prisma 7 schema + migrations (incl. Postgres RLS), request-scoped clients, tenant helpers
+packages/db    Prisma 7 schema + migrations (incl. Postgres RLS), shared clients, tenant helpers
 packages/core  Shopify client, token encryption/rotation, queue contracts, normalizers, persistence, alerts
 packages/shared Pure logic: HMAC, AES-GCM, OTP, capability registry, KPI formulas, dates, roles
 shopify-app    shopify.app.toml (scopes, webhooks) + web pixel extension
-infra          Postgres role init (init.sql), the Cognito stack (aws/), the local Cognito emulator (cognito-local/)
+infra          AWS infrastructure (cdk/), the Cognito stack (aws/), Postgres role init (postgres/), the local Cognito emulator (cognito-local/)
 docs           Setup guides, KPI definitions, runbook
 ```
 
@@ -24,7 +24,7 @@ docker compose up -d postgres mailpit cognito
 ```
 
 ```bash
-pnpm install && cp .env.example .env && cp apps/cloudflare/.dev.vars.example apps/cloudflare/.dev.vars && cp apps/web/.env.example apps/web/.env.local
+pnpm install && cp .env.example .env && cp apps/aws/.env.example apps/aws/.env && cp apps/web/.env.example apps/web/.env.local
 ```
 
 Then follow [docs/local-dev.md](docs/local-dev.md). Progress and verification history: [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md).
@@ -45,7 +45,7 @@ Then follow [docs/local-dev.md](docs/local-dev.md). Progress and verification hi
 | KPI formulas | [docs/kpis.md](docs/kpis.md) |
 | Security model | [docs/security.md](docs/security.md) |
 | Deployment (AWS: every merge to `main`) | [docs/aws-deployment.md](docs/aws-deployment.md) |
-| Deployment (Cloudflare, until the cutover) | [docs/deployment-cloudflare.md](docs/deployment-cloudflare.md) |
+| The old Cloudflare deployment (still live until retired) | [docs/aws-deployment.md](docs/aws-deployment.md#retiring-the-old-cloudflare-deployment) |
 | Runbook | [docs/RUNBOOK.md](docs/RUNBOOK.md) |
 | Every doc by question (start here) | [docs/README.md](docs/README.md) |
 | Adding a feature, endpoint, table, job or integration | [docs/development/adding-a-feature.md](docs/development/adding-a-feature.md) |

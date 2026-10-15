@@ -4,16 +4,17 @@ Short records of decisions about the structure of Insights: what was decided, wh
 make us revisit it. Newest last. The restructuring brief of 2026-10-14 proposed a reference
 architecture; where this codebase deliberately differs from it, the reason is here.
 
-## ADR-001: One modular monolith on one Cloudflare Worker
+## ADR-001: One modular monolith, one deployable
 
-**Decision.** Keep a single deployable (`apps/cloudflare`) that hosts the static UI, the API, the
-queue consumers and the cron sweeps, built from workspace packages with enforced layering
-(`shared → db → core → api / worker → cloudflare`).
+**Decision.** Keep a single deployable (`apps/aws`) that hosts the static UI, the API, the queue
+consumers and the cron sweeps, built from workspace packages with enforced layering
+(`shared → db → core → api / worker → aws`). On AWS it is one Lambda package deployed as three
+functions (`api`, `jobs`, `cron`) that differ only in memory, timeout and trigger, so every part
+always runs the same build.
 
-**Why.** One team, one database, one release cadence; Workers bill per request, so splitting the
-API from the jobs saves nothing; every split adds a deploy, a version skew and a network hop. The
-packages already give the separation that matters: the API and the jobs share `core`, not each
-other.
+**Why.** One team, one database, one release cadence; every separately built deployable adds a
+deploy, a version skew and a network hop. The packages already give the separation that matters:
+the API and the jobs share `core`, not each other.
 
 **Revisit when** a part needs its own scaling or release cadence (e.g. the pixel ingest at very
 high volume), or a second team owns a part.
@@ -37,8 +38,8 @@ per kind helps (do it inside that area's folder).
 
 **Decision.** Keep the API's paths unversioned (`/api/workspaces/...`).
 
-**Why.** The only client of the JSON API is our own UI, shipped atomically in the same Worker
-version, so there is never an old client to keep compatible. The paths outside callers know
+**Why.** The only client of the JSON API is our own UI, shipped atomically in the same release (it
+is in the API function's package), so there is never an old client to keep compatible. The paths outside callers know
 (Shopify and Meta webhooks, OAuth callbacks, the pixel endpoint, tracking links) are registered
 with those providers or printed in messages already sent; renaming them would break them.
 
@@ -84,25 +85,30 @@ from `routes/dashboard.ts` to `core/reports/`, and its health grading from compo
 ## ADR-007: Configuration stays per consumer, not per environment file
 
 **Decision.** No `.env.development` / `.env.test` / `.env.production` set. Configuration is split by
-*who reads it*: the Worker (`wrangler.jsonc` vars + `wrangler secret`, locally `.dev.vars`), the
-UI build (`apps/web/.env.local`, `NEXT_PUBLIC_*` only), and local tools (repo-root `.env`). The test
-values live in `test-support/env.ts` and `apps/web/e2e/worker.env`. Everything the Worker reads is
-validated by one Zod schema (`env()`), which refuses known placeholder secrets, emulators and
-local URLs in production.
+*who reads it*: the app (non-secret settings in `apps/aws/src/settings.ts`, which the CDK puts in
+the functions' environment; the address and Cognito ids in an SSM parameter; secrets in Secrets
+Manager, set with `infra/cdk/scripts/put-secrets.mjs`; locally `apps/aws/.env`), and local tools
+(repo-root `.env`). The UI build has no settings: the same build works everywhere. The test values
+live in `test-support/env.ts` and `apps/web/e2e/server.env`. Everything the app reads is validated
+by one Zod schema (`env()`), which refuses known placeholder secrets, emulators and local URLs in
+production.
 
 **Why.** Each consumer has a different loader; an environment file per stage would duplicate every
 setting three times, and production secrets must never be in a file at all.
 
 ## ADR-008: Defaults that can only reach production on purpose
 
-**Decision.** Local tools and `wrangler dev` default to the `app_dev` database; production's `app`
-is reached only by setting `DATABASE_URL` to it explicitly (maintenance tasks, migrations before a
-deploy).
+**Decision.** Local tools and the local server default to the `app_dev` database; `app` is reached
+only by setting `DATABASE_URL` to it explicitly.
 
-**Why.** On the owner's machine the local Postgres *is* production's (through the tunnel), so a
-default of `app` made every local run read and write production data.
+**Why.** On the owner's machine the local Postgres's `app` database held production's data (the
+deployment before AWS reached it through a tunnel), so a default of `app` made every local run read
+and write production data. Production on AWS is RDS in isolated subnets, which local runs can't
+reach.
 
-**Revisit when** production Postgres moves off the PC (then the default can't reach it anyway).
+**Revisit when** the old deployment's database on the owner's PC is retired
+([../aws-deployment.md](../aws-deployment.md#retiring-the-old-cloudflare-deployment)): from then on,
+`app` on a local server holds nothing that matters.
 
 ## ADR-009: Refactor around work in progress, not through it
 

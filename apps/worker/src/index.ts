@@ -35,7 +35,7 @@ import {
 
 export * from "./handlers.js";
 
-/** The subset of a Cloudflare Queues `Message` the consumer needs (lets tests drive it). */
+/** A queue message as the consumer sees it: SQS's (apps/aws/src/consumer.ts), the local queues', or a test's. */
 export interface QueueMessage<T = unknown> {
   readonly id: string;
   readonly body: T;
@@ -51,7 +51,7 @@ export interface ConsumeDeps extends WorkerDeps {
 
 /**
  * Carried in the body of a message that was re-sent because the database was unreachable
- * (see deferForDb). It has to travel in the body: the re-send is a new message, so Cloudflare's
+ * (see deferForDb). It has to travel in the body: the re-send is a new message, so its
  * `attempts` starts again at 1.
  */
 interface DbDeferral {
@@ -106,7 +106,7 @@ export async function consume(queue: QueueName, msg: QueueMessage, deps: Consume
       await onFailure(queue, job, err, final, deps);
     } catch (hookErr) {
       // Acking now would drop the message with nothing recorded: no failed row, no alert. Retry
-      // instead - past max_retries Cloudflare moves it to insights-dlq rather than deleting it.
+      // instead - past the queue's maxReceiveCount SQS moves it to the dead-letter queue rather than deleting it.
       logger.error({ err: hookErr, queue }, "failure bookkeeping failed");
       msg.retry({ delaySeconds: backoffSeconds(msg.attempts) });
       return;
@@ -118,14 +118,13 @@ export async function consume(queue: QueueName, msg: QueueMessage, deps: Consume
 
 /**
  * A job failed while the database was unreachable, so the failure says nothing about the job:
- * every handler starts with a database read, and the tunnel to Postgres drops for minutes at a
- * time. Counted against MAX_ATTEMPTS, a 5-minute outage spent the whole budget (5+10+20+40+80s
+ * every handler starts with a database read, and a database outage can last minutes. Counted against MAX_ATTEMPTS, a 5-minute outage spent the whole budget (5+10+20+40+80s
  * of backoff) and onFailure could not record anything either, so the message was acked and lost.
  *
- * Instead the job is re-sent as a new message (Queues does not depend on the tunnel), backing
+ * Instead the job is re-sent as a new message (the queue does not depend on the database), backing
  * off to every 5 minutes, and the original is acked only once the copy is enqueued. onFailure is
  * skipped: it could not write anyway. Past DB_DEFER_MAX_MS the message is retried normally
- * instead, so it ends up in insights-dlq rather than circling forever.
+ * instead, so it ends up in the dead-letter queue rather than circling forever.
  */
 async function deferForDb(queue: QueueName, msg: QueueMessage, job: object, prev: DbDeferral | undefined, err: Error, deps: WorkerDeps) {
   const now = Date.now();
@@ -226,7 +225,7 @@ async function onFailure(queue: QueueName, body: unknown, err: Error, final: boo
   }
 }
 
-/** Cron schedules (keep in sync with `triggers.crons` in apps/cloudflare/wrangler.jsonc). */
+/** Cron schedules (keep in sync with the EventBridge schedules in infra/cdk/lib/app-stack.ts). */
 export const CRON = {
   reconcile: "15 3 * * *",
   refreshTokens: "*/15 * * * *",

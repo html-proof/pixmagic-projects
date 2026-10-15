@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { audit } from "@app/core";
 import { systemDb } from "@app/db";
+import { CLIENT_IP_HEADER } from "../src/context.js";
 import { clean, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
 
 let ctx: TestCtx;
@@ -30,7 +31,7 @@ describe("WhatsApp webhook", () => {
       ctx.app.inject({
         method: "POST",
         url: "/webhooks/whatsapp",
-        headers: { "content-type": "application/json", "x-hub-signature-256": "sha256=00", "cf-connecting-ip": "203.0.113.9" },
+        headers: { "content-type": "application/json", "x-hub-signature-256": "sha256=00", [CLIENT_IP_HEADER]: "203.0.113.9" },
         payload: JSON.stringify({ object: "whatsapp_business_account", entry: [{ id: "waba-unknown" }] }),
       });
     const statuses: number[] = [];
@@ -41,7 +42,7 @@ describe("WhatsApp webhook", () => {
     const other = await ctx.app.inject({
       method: "POST",
       url: "/webhooks/whatsapp",
-      headers: { "content-type": "application/json", "x-hub-signature-256": "sha256=00", "cf-connecting-ip": "203.0.113.10" },
+      headers: { "content-type": "application/json", "x-hub-signature-256": "sha256=00", [CLIENT_IP_HEADER]: "203.0.113.10" },
       payload: JSON.stringify({ entry: [] }),
     });
     expect(other.statusCode).toBe(401);
