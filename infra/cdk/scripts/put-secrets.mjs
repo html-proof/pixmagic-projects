@@ -32,9 +32,16 @@ const region = opt("--region")[0] ?? "ap-southeast-2";
 const dryRun = args.includes("--dry-run");
 const secretId = `insights/${envName}/app`;
 
-/** Values with a known shape, so a wrong paste (the client ID, a URL) is refused, not stored. */
+/**
+ * Values with a known shape, so a wrong paste (the client ID, a URL) or whatever was left on the
+ * clipboard is refused, not stored.
+ */
+const GOOGLE_SECRET = [/^GOCSPX-[A-Za-z0-9_-]{20,}$/, "a Google OAuth client secret (it starts with GOCSPX-)"];
+const SHOPIFY_SECRET = [/^(shpss_)?[0-9a-f]{32}$/i, "a Shopify app client secret (shpss_ and 32 letters and digits)"];
 const SHAPES = {
-  GOOGLE_SIGNIN_CLIENT_SECRET: [/^GOCSPX-[A-Za-z0-9_-]{20,}$/, "a Google OAuth client secret (it starts with GOCSPX-)"],
+  GOOGLE_SIGNIN_CLIENT_SECRET: GOOGLE_SECRET,
+  GOOGLE_ADS_CLIENT_SECRET: GOOGLE_SECRET,
+  SHOPIFY_API_SECRET: SHOPIFY_SECRET,
 };
 
 /** Copied from --from files when present there. */
@@ -146,7 +153,7 @@ for (const file of opt("--from")) {
 
 for (const name of opt("--set")) {
   if (!/^[A-Z][A-Z0-9_]+$/.test(name) || name === "ORIGIN_VERIFY") throw new Error(`Not a settable secret name: ${name}`);
-  const [shape, what] = SHAPES[name] ?? [/./, "a value"];
+  const [shape, what] = SHAPES[name] ?? (COPY_PREFIX.test(name) ? SHOPIFY_SECRET : [/./, "a value"]);
   let value = clipboardText();
   let source = "the clipboard";
   if (!shape.test(value)) {
