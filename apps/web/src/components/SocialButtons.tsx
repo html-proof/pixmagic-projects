@@ -35,6 +35,9 @@ const PROVIDERS: Array<{ id: SocialProvider; name: string; Mark: () => React.JSX
  * auth pages' larger size.
  */
 export function SocialButtons({ row = false }: { row?: boolean }) {
+ * `large` draws them at AuthCard's size.
+ */
+export function SocialButtons({ large = false }: { large?: boolean }) {
   const [config, setConfig] = useState<AuthConfig | null>(null);
   const [leaving, setLeaving] = useState<SocialProvider | null>(null);
 
@@ -53,6 +56,7 @@ export function SocialButtons({ row = false }: { row?: boolean }) {
 
   return (
     <div className={row ? "grid grid-cols-[repeat(auto-fit,minmax(14.5rem,1fr))] gap-3" : "space-y-2"}>
+    <div className={large ? "space-y-3" : "space-y-2"}>
       {PROVIDERS.map(({ id, name, Mark }) => {
         const off = !!config && !config.providers[id];
         return (
@@ -60,6 +64,7 @@ export function SocialButtons({ row = false }: { row?: boolean }) {
             key={id}
             type="button"
             className={row ? "btn-secondary h-12 w-full rounded-xl text-[15px] whitespace-nowrap shadow-[var(--shadow)]" : "btn-secondary w-full"}
+            className={large ? "btn-secondary h-12 w-full gap-3 rounded-xl text-[15px] font-semibold" : "btn-secondary w-full"}
             disabled={off || leaving !== null}
             aria-describedby={off ? "social-unavailable" : undefined}
             onClick={() => {
@@ -74,6 +79,7 @@ export function SocialButtons({ row = false }: { row?: boolean }) {
       })}
       {unavailable.length > 0 && (
         <p id="social-unavailable" className={row ? "col-span-full text-center text-xs text-muted" : "text-xs text-muted"}>
+        <p id="social-unavailable" className={large ? "text-sm leading-relaxed text-muted" : "text-xs text-muted"}>
           Sign in with {unavailable.map((p) => p.name).join(" and ")} isn&apos;t available yet. Please use your email address.
         </p>
       )}

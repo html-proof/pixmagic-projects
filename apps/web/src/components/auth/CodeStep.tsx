@@ -1,7 +1,9 @@
 "use client";
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { KeyRound } from "lucide-react";
 import { Alert } from "@/components/ui";
 import { authErrorMessage } from "@/lib/auth";
+import { AuthField, AuthSubmit } from "./AuthCard";
 
 /** Seconds before "Send a new code" works again (Cognito also limits how often codes go out). */
 const RESEND_WAIT_S = 30;
@@ -10,6 +12,7 @@ const RESEND_WAIT_S = 30;
  * "Enter the 6-digit code we emailed you": sign-up confirmation, email verification, an email
  * change, a sign-in code. The caller says what a code does (`onSubmit`) and how to get another.
  * `large`: the split sign-in pages' field and button (AuthSplitShell).
+ * `large` draws it at AuthCard's size.
  */
 export function CodeStep({
   email,
@@ -72,9 +75,48 @@ export function CodeStep({
     }
   }
 
+  const introText = intro ?? <>We emailed a 6-digit code to <strong>{email}</strong>. It expires in a few minutes; check your spam folder if it isn&apos;t there.</>;
+  const resendButton = onResend && (
+    <button type="button" className={large ? "auth-link" : "text-sm text-muted underline disabled:no-underline disabled:opacity-60"} onClick={() => void resend()} disabled={busy || wait > 0}>
+      {wait > 0 ? `Send a new code (${wait}s)` : "Send a new code"}
+    </button>
+  );
+
+  if (large) {
+    return (
+      <form onSubmit={submit} className="flex flex-col gap-4" noValidate>
+        <p className="text-[15px] leading-relaxed text-muted [&_strong]:font-semibold [&_strong]:text-text">{introText}</p>
+        {error && <Alert>{error}</Alert>}
+        {info && <Alert kind="info">{info}</Alert>}
+        <AuthField
+          id="code"
+          label="Verification code"
+          icon={KeyRound}
+          className="font-medium tracking-[0.5em]"
+          placeholder="••••••"
+          inputMode="numeric"
+          autoComplete="one-time-code"
+          pattern="\d{6}"
+          maxLength={6}
+          required
+          autoFocus
+          value={code}
+          onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
+        />
+        {children}
+        <AuthSubmit className="mt-2" busy={busy} busyLabel={busyLabel} disabled={code.length !== 6 || !extraValid}>
+          {submitLabel}
+        </AuthSubmit>
+        {resendButton && <p className="text-center">{resendButton}</p>}
+      </form>
+    );
+  }
+
   return (
     <form onSubmit={submit} className={large ? "space-y-4" : "space-y-3"} noValidate>
       <p className="text-sm">{intro ?? <>We emailed a 6-digit code to <strong>{email}</strong>. It expires in a few minutes; check your spam folder if it isn&apos;t there.</>}</p>
+    <form onSubmit={submit} className="space-y-3" noValidate>
+      <p className="text-sm">{introText}</p>
       {error && <Alert>{error}</Alert>}
       {info && <Alert kind="info">{info}</Alert>}
       <div>
@@ -98,11 +140,7 @@ export function CodeStep({
       <button className={large ? "auth-cta" : "btn-primary w-full"} disabled={busy || code.length !== 6 || !extraValid}>
         {busy ? busyLabel : submitLabel}
       </button>
-      {onResend && (
-        <button type="button" className="text-sm text-muted underline disabled:no-underline disabled:opacity-60" onClick={() => void resend()} disabled={busy || wait > 0}>
-          {wait > 0 ? `Send a new code (${wait}s)` : "Send a new code"}
-        </button>
-      )}
+      {resendButton}
     </form>
   );
 }

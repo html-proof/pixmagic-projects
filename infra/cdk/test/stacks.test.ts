@@ -186,11 +186,17 @@ describe("IAM", () => {
   });
 
   it("lets only this repository's production environment deploy from GitHub", () => {
+    // The immutable subject GitHub sends for this repository (owner and repository ids), not the bare name.
     t.ci.hasResourceProperties("AWS::IAM::Role", {
       AssumeRolePolicyDocument: {
         Statement: [
           Match.objectLike({
-            Condition: { StringEquals: { "token.actions.githubusercontent.com:sub": "repo:html-proof/pixmagic-projects:environment:production", "token.actions.githubusercontent.com:aud": "sts.amazonaws.com" } },
+            Condition: {
+              StringEquals: {
+                "token.actions.githubusercontent.com:sub": "repo:html-proof@68529971/pixmagic-projects@1413246051:environment:production",
+                "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+              },
+            },
           }),
         ],
       },

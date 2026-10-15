@@ -4,7 +4,8 @@ import { Suspense, useState } from "react";
 import { actionError, api, isSignedOut } from "@/lib/api";
 import { setReturnTo } from "@/lib/returnTo";
 import { WORKSPACE_KEY, writeLocal } from "@/lib/storage";
-import { Alert, AuthShell } from "@/components/ui";
+import { Alert } from "@/components/ui";
+import { AuthCard, AuthSubmit } from "@/components/auth/AuthCard";
 
 function Invite() {
   const token = useSearchParams().get("token") ?? "";
@@ -35,10 +36,12 @@ function Invite() {
   }
 
   return (
-    <AuthShell title="Join workspace" subtitle="Sign in with the email address the invitation was sent to, then accept.">
+    <AuthCard title="Join workspace" subtitle="Sign in with the email address the invitation was sent to, then accept.">
       {error && <Alert>{error}</Alert>}
-      <button className="btn-primary w-full" onClick={accept} disabled={busy || !token}>{busy ? "Joining…" : "Accept invitation"}</button>
-    </AuthShell>
+      <AuthSubmit type="button" onClick={accept} busy={busy} busyLabel="Joining…" disabled={!token}>
+        Accept invitation
+      </AuthSubmit>
+    </AuthCard>
   );
 }
 

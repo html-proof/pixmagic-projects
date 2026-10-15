@@ -226,6 +226,94 @@ body {
   border: 1px solid rgb(255 255 255 / 0.09);
   background: linear-gradient(160deg, rgb(255 255 255 / 0.075), rgb(255 255 255 / 0.03));
   border-radius: 0.875rem;
+/* ---- Account card (AuthCard) ---------------------------------------------------------------- */
+/* Two broad, soft curves sweeping in from the sides behind the card: brand green on the left,
+   green into a cool blue at the bottom right. Plain gradients, no blur, so it costs nothing. */
+@utility auth-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  pointer-events: none;
+  &::before,
+  &::after {
+    content: "";
+    position: absolute;
+    border-radius: 9999px;
+  }
+  &::before {
+    width: 52rem;
+    height: 52rem;
+    left: -40rem;
+    top: 18%;
+    background: linear-gradient(150deg, color-mix(in oklab, var(--accent) 17%, transparent), color-mix(in oklab, var(--accent) 5%, transparent) 70%);
+  }
+  &::after {
+    width: 60rem;
+    height: 60rem;
+    right: -46rem;
+    bottom: -22rem;
+    background: linear-gradient(200deg, color-mix(in oklab, var(--accent) 16%, transparent) 15%, color-mix(in oklab, var(--info) 11%, transparent) 70%);
+  }
+}
+@utility auth-card {
+  border: 1px solid color-mix(in oklab, var(--border) 70%, transparent);
+  border-radius: 1.75rem;
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgb(20 28 22 / 0.04), 0 30px 70px -32px rgb(20 28 22 / 0.22);
+  animation: rise 0.45s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  @media (prefers-color-scheme: dark) {
+    box-shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 30px 70px -30px rgb(0 0 0 / 0.8);
+  }
+}
+/* AuthField's input: taller than `input`, with room on the left for the field's icon. An invalid
+   one (aria-invalid) is outlined and faintly tinted in the danger colour. */
+@utility auth-input {
+  display: block;
+  width: 100%;
+  height: 2.875rem;
+  padding-left: 2.875rem;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.9375rem;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
+  &::placeholder {
+    color: color-mix(in oklab, var(--muted) 80%, transparent);
+  }
+  &:hover {
+    border-color: color-mix(in oklab, var(--muted) 45%, var(--border));
+  }
+  &:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 4px color-mix(in oklab, var(--accent) 16%, transparent);
+  }
+  &[aria-invalid="true"] {
+    border-color: var(--danger);
+    background: color-mix(in oklab, var(--danger) 6%, var(--surface));
+  }
+  &[aria-invalid="true"]:focus {
+    box-shadow: 0 0 0 4px color-mix(in oklab, var(--danger) 16%, transparent);
+  }
+}
+/* A text link on the card (Forgot Password?, Back to sign in): the brand colour, underlined on hover. */
+@utility auth-link {
+  @apply rounded text-sm font-medium text-accent underline-offset-4 hover:underline focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none disabled:no-underline disabled:opacity-60;
+}
+/* The card's main button: taller than btn-primary, a slight top-to-bottom shade and a soft glow. */
+@utility btn-cta {
+  @apply btn h-14 w-full rounded-xl text-[17px] font-semibold text-accent-ink;
+  background: linear-gradient(180deg, color-mix(in oklab, var(--accent) 84%, white), var(--accent));
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.16), 0 12px 24px -14px color-mix(in oklab, var(--accent) 80%, transparent);
+  &:hover:not(:disabled) {
+    filter: brightness(1.06);
+  }
+  &:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+  }
 }
 
 /* ---- Motion ------------------------------------------------------------------------------

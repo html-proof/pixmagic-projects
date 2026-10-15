@@ -4,7 +4,8 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { afterSignIn, authErrorMessage, errorCode, finishOAuth } from "@/lib/auth";
 import { takeReturnTo } from "@/lib/returnTo";
-import { Alert, AuthShell } from "@/components/ui";
+import { Alert } from "@/components/ui";
+import { AuthCard } from "@/components/auth/AuthCard";
 import { SocialButtons } from "@/components/SocialButtons";
 
 /**
@@ -40,17 +41,17 @@ export default function OAuthCallbackPage() {
 
   if (!error) {
     return (
-      <AuthShell title="Signing you in…" subtitle="Just a moment while we finish signing you in.">
-        <div role="status" aria-live="polite" className="flex items-center gap-3 text-sm text-muted">
-          <span aria-hidden className="h-4 w-4 animate-spin rounded-full border-2 border-border border-t-accent" />
+      <AuthCard title="Signing you in…" subtitle="Just a moment while we finish signing you in.">
+        <div role="status" aria-live="polite" className="flex items-center gap-3 text-[15px] text-muted">
+          <span aria-hidden className="h-5 w-5 animate-spin rounded-full border-2 border-border border-t-accent" />
           Checking your sign-in…
         </div>
-      </AuthShell>
+      </AuthCard>
     );
   }
 
   return (
-    <AuthShell title={error.code === "cancelled" ? "Sign-in cancelled" : "We couldn't sign you in"} subtitle="Nothing was changed. You can try again below.">
+    <AuthCard title={error.code === "cancelled" ? "Sign-in cancelled" : "We couldn't sign you in"} subtitle="Nothing was changed. You can try again below.">
       <Alert>
         {error.text}
         {error.code === "email_in_use" && (
@@ -62,10 +63,12 @@ export default function OAuthCallbackPage() {
           </>
         )}
       </Alert>
-      <SocialButtons />
-      <Link href="/login" className="block text-sm text-muted underline">
-        Back to sign in
-      </Link>
-    </AuthShell>
+      <SocialButtons large />
+      <p className="text-center">
+        <Link href="/login" className="auth-link">
+          Back to sign in
+        </Link>
+      </p>
+    </AuthCard>
   );
 }
