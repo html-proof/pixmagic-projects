@@ -60,7 +60,7 @@ Pay fields are left out of responses for people without `pay:view`. Unknown or f
    password (twice). The API checks the password policy (12+ characters, three of four character
    types, not common, not their name or email), uses the invitation up atomically (two requests
    with one link: one wins), creates the Cognito user with that password — Cognito stores a salted
-   hash; Insights never stores or logs it — and signs the employee in.
+   hash; bizinsights never stores or logs it — and signs the employee in.
 4. **Email ownership.** An emailed link that was never shown to the admin proves the inbox, so the
    account starts verified and the portal opens at once. An account created from a *copied* link
    starts unverified and must enter the code /verify-email sends before the portal answers
@@ -119,7 +119,7 @@ estimate, analytics, and the payroll run.
    zero **once per line** (category × rate × multiplier), so a payslip's lines add up exactly.
    Currencies keep their own precision (JPY 0, USD 2, KWD 3). No floating point touches money.
 
-**Estimates.** Insights doesn't implement any jurisdiction's tax, social security, superannuation,
+**Estimates.** bizinsights doesn't implement any jurisdiction's tax, social security, superannuation,
 leave accrual or award/penalty rules. Gross pay follows the configured policies; "net" is gross plus
 the earnings and minus the deductions an authorized person adds. Every screen and document says
 so. The `jurisdiction` setting is a label only.
@@ -141,7 +141,7 @@ so. The `jurisdiction` setting is a label only.
 
 ## Payments
 
-Recording a payment says money was paid outside Insights — **Insights moves no money** and has no
+Recording a payment says money was paid outside bizinsights — **bizinsights moves no money** and has no
 payment-provider integration. "Payment provider" is a method label for transfers made through
 one. A payment needs approved payroll, an `Idempotency-Key` (one per form), and can't exceed the
 item's outstanding balance (checked with the item row locked). The same amount on the same day

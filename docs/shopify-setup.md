@@ -6,7 +6,7 @@ The integration is a **public, unlisted** app (installable by any merchant who h
 
 ## 1. Create the app
 
-1. Shopify Partners → Apps → Create app → *Create app manually*. Name it "Insights".
+1. Shopify Partners → Apps → Create app → *Create app manually*. Name it "bizinsights".
 2. Distribution → **Public distribution**, then choose **Unlisted** when submitting.
 3. Copy the **Client ID** → `SHOPIFY_API_KEY`, **Client secret** → `SHOPIFY_API_SECRET` (server only; stored in Secret Manager in prod).
 4. Submit for review and get it approved — step [3f](#3f-getting-approved-so-live-stores-can-install). Everything else works on a development store before this; nothing works on a client's store until it is done.
@@ -101,11 +101,11 @@ To import more than 60 days of history, request **Read all orders** in the same 
 
 ## 3c. A client's store with its own app (custom distribution) — not the product strategy
 
-> **This is not how Insights is distributed.** Insights is a public app that merchants sign up for themselves and that is billed outside Shopify, so one app per client does not scale and is not an acceptable answer to "the install failed". The route to a client's live store is **getting the main app approved** ([3f](#3f-getting-approved-so-live-stores-can-install)). Keep this section for the multi-app machinery it documents, and reach for a per-client app only as a deliberate, temporary exception.
+> **This is not how bizinsights is distributed.** bizinsights is a public app that merchants sign up for themselves and that is billed outside Shopify, so one app per client does not scale and is not an acceptable answer to "the install failed". The route to a client's live store is **getting the main app approved** ([3f](#3f-getting-approved-so-live-stores-can-install)). Keep this section for the multi-app machinery it documents, and reach for a per-client app only as a deliberate, temporary exception.
 
 Until the main app passes Shopify's review, Shopify only lets it be installed on stores in your own developer organization. For a client's live store that cannot wait, a second app distributed only to that store will work. The backend serves any number of apps; every store remembers which one it connected through (`stores.shopify_app_key`) and uses that app's credentials for OAuth, webhooks and token refreshes.
 
-1. Shopify Dev Dashboard → **Create app** (e.g. "Insights for PixMagic"). Copy its **Client ID**.
+1. Shopify Dev Dashboard → **Create app** (e.g. "bizinsights for PixMagic"). Copy its **Client ID**.
 2. The app's **Distribution** → **Custom distribution** → enter the client's `*.myshopify.com` domain → **Generate link** → copy the install link. (Custom distribution installs on one store, or on several stores in the same Plus organization.)
 3. Put the Client ID in `shopify-app/shopify.app.pixmagic.toml`, then push URLs, scopes and webhooks: `cd shopify-app && shopify app deploy --config pixmagic`.
 4. Tell the Worker about it. In `apps/cloudflare/wrangler.jsonc` `vars`: `"SHOPIFY_EXTRA_APPS": "[{\"key\":\"pixmagic\",\"clientId\":\"<client id>\",\"shops\":[\"pixmagic.myshopify.com\"]}]"`, and the secret (prompted, never written to a file): `npx wrangler secret put SHOPIFY_APP_SECRET_PIXMAGIC`. Deploy.
@@ -260,5 +260,5 @@ Public apps must charge through the **Shopify Billing API**. `POST /workspaces/:
 
 1. Partners → Stores → Add store → Development store.
 2. Expose your local web app over HTTPS (see [local-dev.md](local-dev.md)), set the tunnel URL in the toml and `APP_URL`, run `shopify app deploy`.
-3. Sign in to Insights, onboarding → enter the dev store → approve.
+3. Sign in to bizinsights, onboarding → enter the dev store → approve.
 4. Trigger webhooks: `npx shopify app webhook trigger --topic orders/create --address https://API_DOMAIN/webhooks/shopify` (uses your app secret for the HMAC).

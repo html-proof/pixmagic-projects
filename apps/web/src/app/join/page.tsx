@@ -12,7 +12,7 @@ import { signOut } from "@/lib/auth";
 import { writeLocal } from "@/lib/storage";
 
 // ---------------------------------------------------------------------------------------------
-// /join?token=…: an employee accepts their invitation. New to Insights: choose a password and the
+// /join?token=…: an employee accepts their invitation. New to bizinsights: choose a password and the
 // account is created and signed in (the API checks the password rules again; Cognito stores only a hash).
 // Already have an account with that email: sign in, then join. The password only ever travels in
 // the body of the one request that creates the account.
@@ -34,7 +34,7 @@ const STRENGTH: Array<{ label: string; tone: string }> = [
 
 const GUIDANCE: Record<Extract<Lookup, { ok: false }>["problem"], string> = {
   invalid: "Copy the whole link from your invitation email, or ask your manager to send a new invitation.",
-  expired: "Invitations only work for a limited time. Your manager can send you a new one from Insights.",
+  expired: "Invitations only work for a limited time. Your manager can send you a new one from bizinsights.",
   used: "If you already set up your account, sign in with the email address the invitation was sent to.",
   revoked: "Look for a newer invitation email, or ask your manager to send you one.",
   inactive: "Your employer has deactivated this employee record. Contact them if you think that's a mistake.",
@@ -219,7 +219,7 @@ function SignInToJoin({ inv, who, joinPath }: { inv: Extract<Lookup, { ok: true 
   return (
     <div className="space-y-3">
       <p className="text-sm">
-        You already have an Insights account with <span className="font-medium">{inv.email}</span>. Sign in with it, and you&apos;ll come back here to join {inv.organization}.
+        You already have a bizinsights account with <span className="font-medium">{inv.email}</span>. Sign in with it, and you&apos;ll come back here to join {inv.organization}.
       </p>
       {who && (
         <Alert kind="info">
@@ -236,7 +236,7 @@ function SignInToJoin({ inv, who, joinPath }: { inv: Extract<Lookup, { ok: true 
   );
 }
 
-/** New to Insights: choose a password, and the account is created and signed in. */
+/** New to bizinsights: choose a password, and the account is created and signed in. */
 function CreateAccount({
   token,
   inv,

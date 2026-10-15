@@ -171,8 +171,8 @@ async function applyAccountUpdate(conns: WhatsappConnection[], v: Value, field: 
 
 /**
  * Apply one signed webhook body. `trusted` is the set of connections (ids) whose own app secret
- * signed it, or "all" when Insights' own app secret did (Meta only signs with it what it delivers
- * to Insights' app, so it is genuine for every connection on the account).
+ * signed it, or "all" when bizinsights' own app secret did (Meta only signs with it what it delivers
+ * to bizinsights' app, so it is genuine for every connection on the account).
  */
 export async function applyMetaWebhook(payload: unknown, trusted: Set<string> | "all", deps: Pick<WaDeps, "queues">): Promise<MetaWebhookResult> {
   const body = (payload ?? {}) as Value;

@@ -1,4 +1,4 @@
-// The old Cloudflare address once Insights has moved to AWS (docs/aws-deployment.md, "Cutover").
+// The old Cloudflare address once bizinsights has moved to AWS (docs/aws-deployment.md, "Cutover").
 // Uploaded as a version of the `insights` Worker and deployed in place of the app, in two phases:
 //
 //   maintenance  while the database is copied: pages say "moving, back in a few minutes" and the API
@@ -58,7 +58,7 @@ const MAINTENANCE_PAGE = `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="refresh" content="60">
-<title>Insights is moving</title>
+<title>bizinsights is moving</title>
 <style>
   :root { color-scheme: light dark; --bg: #f7f6f3; --card: #fff; --text: #1d1d1b; --muted: #5f5e5a; }
   @media (prefers-color-scheme: dark) { :root { --bg: #161615; --card: #20201e; --text: #ecebe7; --muted: #a3a29c; } }
@@ -71,7 +71,7 @@ const MAINTENANCE_PAGE = `<!doctype html>
 </head>
 <body>
 <main>
-  <h1>Insights is moving to a new home</h1>
+  <h1>bizinsights is moving to a new home</h1>
   <p>We're moving your data to faster servers. This takes a few minutes; this page reloads by itself and takes you there when it's done.</p>
 </main>
 </body>
@@ -84,7 +84,7 @@ export function handle(request: Request, env: Env): Response | Promise<Response>
   if (phase(env) === "maintenance") {
     const headers = { "retry-after": String(RETRY_AFTER_S), "cache-control": "no-store" };
     if (api !== null) {
-      return Response.json({ error: "maintenance", message: "Insights is moving to a new address. Please try again in a few minutes." }, { status: 503, headers });
+      return Response.json({ error: "maintenance", message: "bizinsights is moving to a new address. Please try again in a few minutes." }, { status: 503, headers });
     }
     return new Response(MAINTENANCE_PAGE, { status: 503, headers: { ...headers, "content-type": "text/html; charset=utf-8" } });
   }

@@ -1,6 +1,6 @@
 /**
  * WhatsApp Business Platform (Cloud API): the pure parts. Phone numbers, which notification goes
- * out for which store event, the template library Insights can create for a merchant, how a Graph
+ * out for which store event, the template library bizinsights can create for a merchant, how a Graph
  * API error should be handled, quiet hours, and the automation rules' conditions. Everything that
  * touches the network or the database is in packages/core/src/whatsapp.
  */
@@ -270,8 +270,8 @@ export interface KindInfo {
 export const KIND_INFO: Record<NotificationKind, KindInfo> = {
   order_confirmation: { kind: "order_confirmation", label: "Order confirmed", when: "When Shopify reports a new order (never for abandoned checkouts or orders that fail at payment)", group: "orders", libraryTemplate: "insights_order_confirmation" },
   payment_confirmed: { kind: "payment_confirmed", label: "Payment confirmed", when: "When an order that wasn't paid at checkout (cash on delivery, bank transfer) is marked paid", group: "orders", libraryTemplate: "insights_payment_confirmed" },
-  order_processing: { kind: "order_processing", label: "Order processing", when: "When you mark the order processing: add the processing tag in Shopify, or press the button in Insights", group: "orders", libraryTemplate: "insights_order_processing" },
-  order_packed: { kind: "order_packed", label: "Order packed", when: "When you mark the order packed: add the packed tag in Shopify, or press the button in Insights", group: "orders", libraryTemplate: "insights_order_packed" },
+  order_processing: { kind: "order_processing", label: "Order processing", when: "When you mark the order processing: add the processing tag in Shopify, or press the button in bizinsights", group: "orders", libraryTemplate: "insights_order_processing" },
+  order_packed: { kind: "order_packed", label: "Order packed", when: "When you mark the order packed: add the packed tag in Shopify, or press the button in bizinsights", group: "orders", libraryTemplate: "insights_order_packed" },
   order_cancelled: { kind: "order_cancelled", label: "Order cancelled", when: "When the order is cancelled in Shopify", group: "orders", libraryTemplate: "insights_order_cancelled" },
   refund_processed: { kind: "refund_processed", label: "Refund processed", when: "When Shopify records a refund on the order", group: "orders", libraryTemplate: "insights_refund_processed" },
   order_shipped: { kind: "order_shipped", label: "Order shipped", when: "When the order is fulfilled in Shopify (with the courier and tracking number when there is one)", group: "delivery", libraryTemplate: "insights_order_shipped" },
@@ -348,7 +348,7 @@ export const TRACKING_STATUSES = [
 export type TrackingStatus = (typeof TRACKING_STATUSES)[number];
 
 // ---------------------------------------------------------------------------
-// Template library: what Insights can create in the merchant's WhatsApp account for review
+// Template library: what bizinsights can create in the merchant's WhatsApp account for review
 // ---------------------------------------------------------------------------
 
 export interface LibraryTemplate {
@@ -702,7 +702,7 @@ export function errorExplanation(code: string | number | null | undefined, fallb
     case 130429:
       return "WhatsApp's rate limit was reached; it will be retried.";
     case 190:
-      return "Meta no longer accepts Insights' access: reconnect WhatsApp.";
+      return "Meta no longer accepts bizinsights' access: reconnect WhatsApp.";
     case 368:
       return "Your WhatsApp account is temporarily blocked for policy violations.";
     default:

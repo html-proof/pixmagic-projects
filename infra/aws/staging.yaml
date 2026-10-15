@@ -223,7 +223,7 @@ Resources:
           COGNITO_DOMAIN: !Ref CognitoDomain
           COGNITO_IDENTITY_PROVIDERS: !Ref CognitoIdentityProviders
           # App emails (invitations, alerts) aren't sent from here (apps/aws/src/index.ts).
-          EMAIL_FROM: Insights <no-reply@example.com>
+          EMAIL_FROM: bizinsights <no-reply@example.com>
       Tags:
         - { Key: app, Value: insights }
         - { Key: environment, Value: !Ref Environment }

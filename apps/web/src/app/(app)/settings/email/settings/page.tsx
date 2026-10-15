@@ -54,7 +54,7 @@ function SendingSettings() {
   return (
     <section className="card space-y-3">
       <h2 className="font-semibold">Sending and limits</h2>
-      {s.suspended && <Alert>Sending is suspended by Insights{s.suspended.reason ? `: ${s.suspended.reason}` : ""}. Contact support.</Alert>}
+      {s.suspended && <Alert>Sending is suspended by bizinsights{s.suspended.reason ? `: ${s.suspended.reason}` : ""}. Contact support.</Alert>}
       <div className="flex flex-wrap items-center gap-3">
         <Badge tone={s.sendingPaused ? "warn" : "good"}>{s.sendingPaused ? "Paused" : "Sending"}</Badge>
         <span className="text-sm text-muted">{s.sendingPaused ? "Automations still queue emails; nothing goes out until you resume (queued emails wait up to 3 days)." : "Automations send as events happen."}</span>
@@ -102,7 +102,7 @@ function Suppressions() {
   return (
     <section className="card space-y-3">
       <h2 className="font-semibold">Suppression list</h2>
-      <p className="text-sm text-muted">Addresses Insights won&apos;t email. Unsubscribes stop marketing email; bounces and entries you add stop everything. Only a masked form of each address is kept.</p>
+      <p className="text-sm text-muted">Addresses bizinsights won&apos;t email. Unsubscribes stop marketing email; bounces and entries you add stop everything. Only a masked form of each address is kept.</p>
       {manage && (
         <form
           className="flex flex-wrap gap-2"
@@ -255,7 +255,7 @@ function EmailAudit() {
             <li key={a.id} className="flex flex-wrap gap-2 py-1.5">
               <span className="w-40 shrink-0 text-xs text-muted">{fmtDateTime(a.createdAt)}</span>
               <span className="flex-1">{a.action.replace(/^email\./, "").replace(/[._]/g, " ")}</span>
-              <span className="text-xs text-muted">{a.actor ?? "Insights"}</span>
+              <span className="text-xs text-muted">{a.actor ?? "bizinsights"}</span>
             </li>
           ))}
         </ul>

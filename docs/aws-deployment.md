@@ -1,6 +1,6 @@
-# Insights on AWS: deployment runbook
+# bizinsights on AWS: deployment runbook
 
-How the AWS copy of Insights is built, deployed, filled with data, tested, rolled back and, at
+How the AWS copy of bizinsights is built, deployed, filled with data, tested, rolled back and, at
 cutover, made the real production. The design and its reasoning are in
 [aws-architecture.md](aws-architecture.md); sign-in in [cognito-setup.md](cognito-setup.md).
 

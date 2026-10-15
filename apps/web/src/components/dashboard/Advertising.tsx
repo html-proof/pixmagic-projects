@@ -77,7 +77,7 @@ function Onboarding({ hiddenOnly, offer }: { hiddenOnly: boolean; offer: Provide
           <p className="mt-1 text-sm text-muted">
             {hiddenOnly
               ? "Every connected ad account is switched off for the dashboard. Turn on the ones that belong to this store to see their numbers here."
-              : "Connect Google Ads and Meta Ads to see what you spend and what it brings, and Google AdSense to see what your site earns from ads. Insights only reads: it never changes your ads."}
+              : "Connect Google Ads and Meta Ads to see what you spend and what it brings, and Google AdSense to see what your site earns from ads. bizinsights only reads: it never changes your ads."}
           </p>
           {!hiddenOnly && offer.length > 0 && (
             <div className="mt-3 flex flex-wrap gap-2">

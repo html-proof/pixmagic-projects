@@ -153,7 +153,7 @@ export async function markDegraded(account: AccountRef, reason: string) {
 }
 
 /**
- * Take back the access Insights was given, as far as the provider allows: Google revokes the grant;
+ * Take back the access bizinsights was given, as far as the provider allows: Google revokes the grant;
  * Microsoft has no endpoint for one app's delegated grant (the person removes it at
  * myaccount.microsoft.com → Apps), so the tokens are only deleted here. Never throws: the caller
  * deletes the stored credentials either way.

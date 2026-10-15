@@ -73,7 +73,7 @@ export class AdsApiError extends Error {
 }
 
 /**
- * Google hasn't approved Insights' Cloud project for real (production) Google Ads accounts yet: it has
+ * Google hasn't approved bizinsights' Cloud project for real (production) Google Ads accounts yet: it has
  * Test access only. Nothing the merchant does fixes it, so it's never mistaken for "no accounts".
  */
 export class AdsNotApprovedError extends AdsApiError {
@@ -90,7 +90,7 @@ export class AdsNotApprovedError extends AdsApiError {
  */
 export type NoAdAccountsReason = "no_ads_account" | "manager_only" | "not_ready" | "none_shared";
 
-/** The login has no ad account Insights can report on; `reason` says which case it is. */
+/** The login has no ad account bizinsights can report on; `reason` says which case it is. */
 export class AdsNoAccountsError extends AdsApiError {
   constructor(
     message: string,
@@ -230,7 +230,7 @@ export async function metaUserId(c: MetaConfig, accessToken: string): Promise<st
 }
 
 /**
- * Take back ads_read only: anything else the person gave Insights' Meta app (WhatsApp) stays. A token
+ * Take back ads_read only: anything else the person gave bizinsights' Meta app (WhatsApp) stays. A token
  * that already stopped working has nothing left to take back.
  */
 export async function metaRevokeAdsRead(c: MetaConfig, accessToken: string): Promise<void> {
@@ -243,7 +243,7 @@ export async function metaRevokeAdsRead(c: MetaConfig, accessToken: string): Pro
 }
 
 /**
- * The ad accounts a person's Meta grant names, from Meta's token inspector (asked with Insights' app
+ * The ad accounts a person's Meta grant names, from Meta's token inspector (asked with bizinsights' app
  * token, as Meta requires): null when ads_read covers every account the login reaches (Meta then names
  * none), a list (maybe empty) when the person picked accounts on Facebook's screen.
  */
@@ -522,7 +522,7 @@ export async function googleRefresh(c: GoogleOAuthClient, refreshToken: string):
 }
 
 /**
- * Take back the access a person gave Insights' Google client. Google ends that person's whole grant
+ * Take back the access a person gave bizinsights' Google client. Google ends that person's whole grant
  * to the client (Google Ads and AdSense alike), so callers only do this when nothing else relies on it.
  * A token Google already considers dead counts as revoked.
  */
@@ -541,7 +541,7 @@ export async function googleRevoke(c: Pick<GoogleOAuthClient, "fetchImpl">, toke
 }
 
 /**
- * The Google account behind an access token (`sub`), checked to be a token issued to Insights'
+ * The Google account behind an access token (`sub`), checked to be a token issued to bizinsights'
  * own client. Null when Google doesn't say: the connection still works, it just can't share a grant.
  */
 export async function googleUserId(c: GoogleOAuthClient, accessToken: string): Promise<string | null> {
@@ -573,7 +573,7 @@ async function googleAds<T>(c: GoogleConfig, accessToken: string, path: string, 
   if (/NOT_ADS_USER/.test(JSON.stringify(err?.details ?? ""))) throw new AdsNoAccountsError(msg);
   if (res.status === 401 || err?.status === "UNAUTHENTICATED") throw new AdsAuthError(msg);
   // The project's access level doesn't cover production accounts (CLOUD_PROJECT_NOT_APPROVED_FOR_PRODUCTION
-  // and its kin): Insights' own approval, not the merchant's account.
+  // and its kin): bizinsights' own approval, not the merchant's account.
   if (/NOT_APPROVED/.test(JSON.stringify(err?.details ?? "")) || /not approved for production/i.test(msg)) throw new AdsNotApprovedError(msg);
   if (res.status === 429 || res.status >= 500 || err?.status === "RESOURCE_EXHAUSTED" || err?.status === "UNAVAILABLE") throw new AdsRetryableError(msg);
   throw new AdsApiError(msg, res.status);

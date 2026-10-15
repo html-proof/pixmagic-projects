@@ -18,7 +18,7 @@ import { actionError, api, ApiError, useApi } from "@/lib/api";
 // ---------------------------------------------------------------------------
 // "Connect your business": Shopify, WhatsApp, Google Ads and Meta Ads on one page, each with one
 // button that opens the platform's own sign-in, and a plain status. Nothing here asks for an app id,
-// a key or a token: Insights' own Shopify, Google and Meta apps do that part. The detailed pages
+// a key or a token: bizinsights' own Shopify, Google and Meta apps do that part. The detailed pages
 // (Shopify, WhatsApp, Advertising) stay where things are managed in depth.
 // ---------------------------------------------------------------------------
 
@@ -74,10 +74,10 @@ const AD_PLATFORM: Record<AdPlatform, { name: string; sub: string; button: strin
     button: "Continue with Google Ads",
     opening: "Opening Google…",
     Icon: GoogleIcon,
-    access: "Working · Insights only reads reports",
+    access: "Working · bizinsights only reads reports",
     features: ["Ad spend next to your sales", "Campaigns, ad groups, devices and countries", "Clicks, conversions and ROAS"],
-    how: "Google asks you to choose your Google account and allow access. If it can reach several ad accounts (an agency or manager account), you pick the ones for this store. Insights only reads reports: it can't create, change or pause ads, or spend money.",
-    disconnect: "Disconnect Google Ads? Insights deletes its access and every number it fetched for your ad accounts. Your ads keep running.",
+    how: "Google asks you to choose your Google account and allow access. If it can reach several ad accounts (an agency or manager account), you pick the ones for this store. bizinsights only reads reports: it can't create, change or pause ads, or spend money.",
+    disconnect: "Disconnect Google Ads? bizinsights deletes its access and every number it fetched for your ad accounts. Your ads keep running.",
   },
   meta: {
     name: "Meta Ads",
@@ -87,8 +87,8 @@ const AD_PLATFORM: Record<AdPlatform, { name: string; sub: string; button: strin
     Icon: MetaIcon,
     access: "Working · read-only (ads_read)",
     features: ["Ad spend next to your sales", "Campaigns, ad sets, ads, placements and devices", "Reach, clicks, purchases and ROAS"],
-    how: "Meta asks you to log in and choose the ad accounts to share. Access is read-only: Insights can't create, change or pause ads, or spend money.",
-    disconnect: "Disconnect Meta Ads? Insights deletes its access and every number it fetched for your ad accounts. Your ads keep running.",
+    how: "Meta asks you to log in and choose the ad accounts to share. Access is read-only: bizinsights can't create, change or pause ads, or spend money.",
+    disconnect: "Disconnect Meta Ads? bizinsights deletes its access and every number it fetched for your ad accounts. Your ads keep running.",
   },
 };
 
@@ -153,7 +153,7 @@ export default function IntegrationsPage() {
   const ads = useApi<AdsState>(storeBase ? `${storeBase}/ads` : null);
   const [note, setNote] = useState<{ kind: "success" | "error"; text: string } | null>(null);
   const [leaving, setLeaving] = useState<AdPlatform | null>(null);
-  // Back from Facebook's own page without connecting: Facebook never says why to Insights, so this does.
+  // Back from Facebook's own page without connecting: Facebook never says why to bizinsights, so this does.
   const [backFromMeta, setBackFromMeta] = useState(false);
   const [busy, setBusy] = useState<null | "wa-off" | "google-off" | "meta-off">(null);
   const { reload: reloadWa } = wa;
@@ -197,14 +197,14 @@ export default function IntegrationsPage() {
 
   const adConns = (p: AdPlatform) => (ads.data?.connections ?? []).filter((c) => c.provider === p);
 
-  /** Disconnect: Insights deletes its access (and, for ads, the numbers it fetched). The accounts themselves carry on. */
+  /** Disconnect: bizinsights deletes its access (and, for ads, the numbers it fetched). The accounts themselves carry on. */
   const disconnect = async (what: "wa-off" | "google-off" | "meta-off") => {
     if (!storeBase) return;
     const platform: AdPlatform | null = what === "google-off" ? "google" : what === "meta-off" ? "meta" : null;
     const ok = window.confirm(
       platform
         ? AD_PLATFORM[platform].disconnect
-        : "Disconnect WhatsApp? Insights deletes its access to your number and stops sending; messages waiting to go out are cancelled. Your number keeps working in WhatsApp.",
+        : "Disconnect WhatsApp? bizinsights deletes its access to your number and stops sending; messages waiting to go out are cancelled. Your number keeps working in WhatsApp.",
     );
     if (!ok) return;
     setBusy(what);
@@ -307,11 +307,11 @@ export default function IntegrationsPage() {
             <Features items={P.features} />
           </>
         ) : ads.data && !ads.data.configured[p] ? (
-          <p className="text-muted">{P.name} sign-in is being switched on for Insights. It will appear here as one button.</p>
+          <p className="text-muted">{P.name} sign-in is being switched on for bizinsights. It will appear here as one button.</p>
         ) : (
           <>
             <p className="text-muted">{P.how}</p>
-            {/* Facebook turns away anyone not added to Insights' Meta app on its own page: say so before sending them there (once). */}
+            {/* Facebook turns away anyone not added to bizinsights' Meta app on its own page: say so before sending them there (once). */}
             {manage && p === "meta" && ads.data?.restricted.meta && !backFromMeta && (
               <div className="mt-3">
                 <MetaTestersOnly />
@@ -328,7 +328,7 @@ export default function IntegrationsPage() {
       <div className="card">
         <h1 className="text-lg font-semibold">Connect your business</h1>
         <p className="mt-1 text-sm text-muted">
-          Press a button, sign in on the platform&apos;s own page and choose what to share. Insights finds your accounts and fills in the dashboard by itself: there are no keys or
+          Press a button, sign in on the platform&apos;s own page and choose what to share. bizinsights finds your accounts and fills in the dashboard by itself: there are no keys or
           codes to copy.
         </p>
         {!manage && <p className="mt-2 text-sm text-muted">Only a workspace owner or admin can connect or disconnect accounts.</p>}

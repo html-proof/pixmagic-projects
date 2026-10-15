@@ -6,6 +6,7 @@ import type { Me } from "@/components/AppContext";
 import { Unreachable } from "@/components/LoadError";
 import { PORTAL_WS_KEY, PortalProvider, portalSignOut, type PortalCtx } from "@/components/staff/PortalContext";
 import { Alert } from "@/components/ui";
+import { BrandLogo, BrandMark } from "@/components/Brand";
 import { ToastProvider } from "@/components/AppUi";
 import { api, isSignedOut, isTransient, keepRetrying, onSessionGone } from "@/lib/api";
 import { setReturnTo, signInAndReturn } from "@/lib/returnTo";
@@ -91,7 +92,9 @@ export default function PortalLayout({ children }: { children: ReactNode }) {
   if (!value) {
     return (
       <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-4 py-12">
-        <p className="mb-6 text-sm font-semibold tracking-wide text-accent">Insights</p>
+        <p className="mb-6">
+          <BrandLogo size={24} className="text-[15px] text-text" />
+        </p>
         <h1 className="text-2xl font-semibold">Your account isn&apos;t linked to an employer yet</h1>
         <p className="mt-2 text-sm text-muted">
           You&apos;re signed in as {me.user.email}. To see your hours and pay here, open the invitation link your employer emailed you. If it has expired, ask your manager to send a new
@@ -120,12 +123,7 @@ export default function PortalLayout({ children }: { children: ReactNode }) {
         <header className="sticky top-0 z-30 border-b border-border bg-surface/90 backdrop-blur-md">
           <div className="mx-auto max-w-4xl px-4 pt-3">
             <div className="flex items-center gap-3">
-              <span aria-hidden className="brand-gradient flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-white shadow-sm">
-                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="12" cy="12" r="9" />
-                  <path d="M12 7v5l3 2" />
-                </svg>
-              </span>
+              <BrandMark size={36} tile className="shrink-0" />
               <div className="min-w-0 flex-1">
                 {employments.length > 1 ? (
                   <select aria-label="Organization" className="input w-full max-w-[16rem] py-1 font-semibold" value={employment.workspaceId} onChange={(e) => value.setWs(e.target.value)}>

@@ -1,6 +1,6 @@
-# Insights for Shopify
+# bizinsights for Shopify
 
-A multi-tenant SaaS that gives Shopify merchants plain-language analytics. Merchants sign up or log in with Google or an email and password (Amazon Cognito; existing Firebase accounts move over at their first sign-in), then connect their store from inside the app (**Settings → Shopify**, or the first-run connect page) through Shopify's own OAuth screen. Insights imports orders, products and inventory into the dashboard (public, unlisted app, authorization-code grant, permanent offline tokens kept encrypted on the server; see [docs/shopify-setup.md](docs/shopify-setup.md)).
+A multi-tenant SaaS that gives Shopify merchants plain-language analytics. Merchants sign up or log in with Google or an email and password (Amazon Cognito; existing Firebase accounts move over at their first sign-in), then connect their store from inside the app (**Settings → Shopify**, or the first-run connect page) through Shopify's own OAuth screen. bizinsights imports orders, products and inventory into the dashboard (public, unlisted app, authorization-code grant, permanent offline tokens kept encrypted on the server; see [docs/shopify-setup.md](docs/shopify-setup.md)).
 
 Runs on **Cloudflare Workers**: one Worker serves the UI (static assets), the API (`/api/*`), Queue consumers and Cron Triggers, with Postgres via Hyperdrive.
 

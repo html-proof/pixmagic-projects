@@ -98,7 +98,7 @@ export function whatsappPublicRoutes(app: App, deps: Deps) {
 
   /**
    * Deliveries. The signature (X-Hub-Signature-256, HMAC of the raw body with the app secret) is
-   * checked before anything is applied: Insights' own app secret vouches for every account it
+   * checked before anything is applied: bizinsights' own app secret vouches for every account it
    * connected; a manual connection's secret vouches only for that connection. Not for the whole
    * account: two stores (two workspaces, even) can share one WhatsApp Business Account, and one of
    * them holding its own app secret must not be able to forge events for the other's number.

@@ -120,7 +120,7 @@ describe("connecting WhatsApp", () => {
   /**
    * Meta as the guided flow sees it: the token's app and accounts (debug_token), the account's
    * numbers, and the app's webhook settings, whose POST runs the verify handshake against
-   * Insights the way Meta does.
+   * bizinsights the way Meta does.
    */
   function guidedMeta(opts: { scopes?: string[]; otherWebhook?: string; listAccounts?: boolean } = {}) {
     const subscribed: Array<Record<string, string>> = [];
@@ -177,7 +177,7 @@ describe("connecting WhatsApp", () => {
     expect(unlisted.json()).toEqual({ appId: "777", accounts: [] });
   });
 
-  it("points the merchant's app's webhook at Insights, so there's nothing to paste into Meta", async () => {
+  it("points the merchant's app's webhook at bizinsights, so there's nothing to paste into Meta", async () => {
     const o = await owner();
     const meta = guidedMeta();
     ctx.setFetch(meta.fetch);
@@ -218,7 +218,7 @@ describe("connecting WhatsApp", () => {
     const exchanged: string[] = [];
     const fetch: FetchLike = async (input, init) => {
       const u = new URL(String(input));
-      // Insights' own app inspecting the business token Embedded Signup returned.
+      // bizinsights' own app inspecting the business token Embedded Signup returned.
       if (u.pathname.endsWith("/debug_token") && (init?.headers as Record<string, string> | undefined)?.authorization === "Bearer 123|platform_secret") {
         const scopes = ["whatsapp_business_management", "whatsapp_business_messaging"];
         return json({ data: { app_id: token.appId ?? "123", is_valid: true, scopes, granular_scopes: scopes.map((scope) => ({ scope, target_ids: token.granted ?? ["1111111111"] })) } });
@@ -253,7 +253,7 @@ describe("connecting WhatsApp", () => {
     expect(expired.json().error).toBe("exchange_failed");
   });
 
-  it("won't take the browser's word for the account: it must be one this sign-up granted to Insights' app", async () => {
+  it("won't take the browser's word for the account: it must be one this sign-up granted to bizinsights' app", async () => {
     const o = await owner();
     ctx.setFetch(embeddedMeta(1, { granted: ["3333333333"] }).fetch);
     const other = await ctx.app.inject({ method: "POST", url: `${o.base}/embedded`, headers: o.headers, payload: { code: "es-code-123456", wabaId: "1111111111", phoneNumberId: "2222222222" } });
@@ -349,7 +349,7 @@ describe("connecting WhatsApp", () => {
     expect((await ctx.app.inject({ method: "POST", url: `${o.base}/pin`, headers: o.headers })).json().error).toBe("pin_unknown");
   });
 
-  it("points Insights' own Meta app's webhook here by itself, once", async () => {
+  it("points bizinsights' own Meta app's webhook here by itself, once", async () => {
     const subs: Array<{ object: string; callback_url: string; active: boolean; fields: Array<{ name: string }> }> = [];
     const posts: Array<Record<string, string>> = [];
     ctx.setFetch(async (input, init) => {
@@ -464,7 +464,7 @@ describe("Meta's webhook", () => {
     expect(await systemDb.whatsappContact.count()).toBe(0);
   });
 
-  it("applies a delivery signed by the store's own app secret, or by Insights' app", async () => {
+  it("applies a delivery signed by the store's own app secret, or by bizinsights' app", async () => {
     const o = await owner();
     await connectManual(o);
     const raw = stop();

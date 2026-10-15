@@ -115,7 +115,7 @@ const TERMS: Record<Topic, Terms> = {
   customers: [
     ["Returning customer", "Someone Shopify says has more than one order, or who ordered from you before."],
     ["First order", "An order from someone buying from you for the first time."],
-    ["Customers to follow up", "People who left items in checkout, or signed up for emails, with their details straight from Shopify. Nothing is stored by Insights."],
+    ["Customers to follow up", "People who left items in checkout, or signed up for emails, with their details straight from Shopify. Nothing is stored by bizinsights."],
     ["Link back to their cart", "Shopify's own link for an unfinished checkout. Opening it takes the shopper straight back to checkout with everything still in their cart, so they can pay and finish."],
     ["WhatsApp, Email, Text message", "Each opens that app on your phone or computer with the message and link already written. Check it, then press send yourself. Other apps opens your phone's share menu for anything else you use."],
     ["Your message", "The words every button sends, with each person's name, items and link filled in. Change it once and it's kept for this store in this browser."],

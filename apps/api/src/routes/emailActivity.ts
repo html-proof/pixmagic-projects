@@ -76,7 +76,7 @@ export function emailActivityRoutes(app: App, deps: Deps) {
 
   /**
    * Send a failed or unknown message again. A person's decision, since an "unknown" one may already
-   * have arrived: Insights never does this on its own.
+   * have arrived: bizinsights never does this on its own.
    */
   app.post(`${base}/messages/:id/retry`, async (c) => {
     const { ws, id } = c.req.param();

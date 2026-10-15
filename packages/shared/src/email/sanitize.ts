@@ -8,7 +8,7 @@
 //
 // It has to run without a DOM (Workers and the browser alike), hence the hand-written tokenizer.
 // The dashboard additionally shows previews in a sandboxed iframe, so a sanitizer bug can't run
-// script in Insights itself.
+// script in bizinsights itself.
 
 const ALLOWED_TAGS = new Set([
   "a", "abbr", "address", "b", "blockquote", "body", "br", "caption", "center", "cite", "code", "col", "colgroup",

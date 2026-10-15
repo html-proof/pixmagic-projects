@@ -7,7 +7,7 @@ import { actionError, api, useApi } from "@/lib/api";
 
 type Prefs = { syncFailures: boolean; weeklyDigest: boolean; productNews: boolean };
 /**
- * Only emails Insights actually sends. The preferences API also stores `weeklyDigest` and
+ * Only emails bizinsights actually sends. The preferences API also stores `weeklyDigest` and
  * `productNews`, but nothing sends either yet, so offering them promised a Monday email that never
  * came. List them here once their senders exist.
  */

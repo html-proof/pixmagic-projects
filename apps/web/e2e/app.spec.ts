@@ -60,7 +60,7 @@ test("unauthenticated users are sent to sign in, and come back to the page they 
   await expect(page).toHaveURL(/\/settings\/members/);
 });
 
-test("the homepage introduces Insights, and Log in and Sign up open their own pages", async ({ page }) => {
+test("the homepage introduces bizinsights, and Log in and Sign up open their own pages", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("heading", { level: 1, name: /Your store is talking/ })).toBeVisible();
   const nav = page.getByRole("navigation", { name: "Main" });

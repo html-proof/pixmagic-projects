@@ -422,7 +422,7 @@ export function OverviewDetail({ ov, currency, onOpen }: { ov: Overview; currenc
         </Panel>
       )}
 
-      <Panel id="d-store" title="Your store" help="What Insights holds for this store right now.">
+      <Panel id="d-store" title="Your store" help="What bizinsights holds for this store right now.">
         <dl className="grid grid-cols-2 gap-x-4 gap-y-4 sm:grid-cols-3">
           {cat && <Fact label="Products" value={fmtNum(cat.products.total)} note={`${fmtNum(cat.products.active)} active · ${fmtNum(cat.products.draft)} draft · ${fmtNum(cat.products.archived)} archived`} />}
           {cat && <Fact label="Variants" value={fmtNum(cat.variants)} />}

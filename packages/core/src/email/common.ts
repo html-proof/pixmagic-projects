@@ -18,7 +18,7 @@ export interface EmailDeps {
   coord: Coord;
   queues: Queues;
   fetchImpl: FetchLike;
-  /** Insights' own mailer: alerts to the workspace's admins (an account needs reconnecting). */
+  /** bizinsights' own mailer: alerts to the workspace's admins (an account needs reconnecting). */
   mailer: Mailer;
   /** Outbound TCP for SMTP accounts (cloudflare:sockets on Workers). Absent: SMTP can't connect. */
   smtpConnect?: SmtpConnect;

@@ -1,6 +1,6 @@
-# Insights on AWS: complete target architecture
+# bizinsights on AWS: complete target architecture
 
-The design for moving the whole of Insights from Cloudflare (and the Postgres container on the
+The design for moving the whole of bizinsights from Cloudflare (and the Postgres container on the
 owner's PC) to AWS, region **ap-southeast-2 (Sydney)**. Phase 1 (sign-in on Cognito, an isolated
 staging environment) is built: [cognito-setup.md](cognito-setup.md), [aws-staging.md](aws-staging.md).
 This document is the design and its reasoning. It has been built and runs since 2026-10-15; what
@@ -134,7 +134,7 @@ EventBridge Scheduler invokes the `scheduled` function at `cron(0/15 * * * ? *)`
 ## 4. Data
 
 - **RDS PostgreSQL 17**, gp3 storage with autoscaling, encrypted, deletion protection, 14-day
-  automated backups with point-in-time restore, Performance Insights (free tier), parameter group
+  automated backups with point-in-time restore, Performance bizinsights (free tier), parameter group
   with `rds.force_ssl=1`. Single-AZ (lean) or Multi-AZ (high availability, automatic failover).
 - **Connections**: two logins in Secrets Manager, `app` (owner: migrations, system paths, jobs) and
   `app_rls` (tenant reads under RLS), as the two Hyperdrive configs today; passwords rotate through
@@ -167,7 +167,7 @@ EventBridge Scheduler invokes the `scheduled` function at `cron(0/15 * * * ? *)`
 ## 6. Observability
 
 - CloudWatch log group per function (JSON lines from the existing logger, 30 days staging / 90 days
-  production), Logs Insights saved queries (sign-in failures, job failures, slow requests).
+  production), Logs bizinsights saved queries (sign-in failures, job failures, slow requests).
 - Metric filters and alarms: Lambda errors and throttles, 5xx at CloudFront, sign-in service
   unavailable, DLQ depth > 0, queue age > 15 min, RDS CPU / free storage / connections (and, with RDS
   Proxy, pinned connections and borrow latency), NAT errors. All → one SNS topic → email (and Slack).

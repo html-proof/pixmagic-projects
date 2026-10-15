@@ -1,6 +1,6 @@
 # AWS Phase 1 environment (staging)
 
-An isolated copy of Insights on AWS, for checking sign-in on Amazon Cognito before the production
+An isolated copy of bizinsights on AWS, for checking sign-in on Amazon Cognito before the production
 switch. Production keeps running on Cloudflare and its own database; nothing here touches it.
 
 ```

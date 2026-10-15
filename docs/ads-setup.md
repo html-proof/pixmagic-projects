@@ -22,8 +22,8 @@ owns the OAuth client (insights-511119): there is no token and no manager accoun
 (<https://developers.google.com/google-ads/api/docs/api-policy/developer-token>). Access levels
 (<https://developers.google.com/google-ads/api/docs/api-policy/access-levels>), set on Cloud console → Google Ads API →
 Overview ("Access levels → Manage"):
-- **Test**: test accounts only. Real accounts answer `CLOUD_PROJECT_NOT_APPROVED_FOR_PRODUCTION`, which Insights shows as
-  "Google is still approving Insights for live Google Ads accounts" (`not_approved`), never as "no accounts".
+- **Test**: test accounts only. Real accounts answer `CLOUD_PROJECT_NOT_APPROVED_FOR_PRODUCTION`, which bizinsights shows as
+  "Google is still approving bizinsights for live Google Ads accounts" (`not_approved`), never as "no accounts".
 - **Explorer**: real accounts, 2,880 operations a day (roughly 60 connected accounts at the hourly sync). Applied for with
   one button; Google may grant it within minutes.
 - **Basic**: 15,000 a day; needs Explorer plus **brand verification** of the Cloud project.
@@ -39,7 +39,7 @@ Overview ("Access levels → Manage"):
 
 Verified 2026-10-11 against the real Google: the "Insights web" client accepts the production callback
 (`https://insights.imeseban.workers.dev/api/ads/google/callback`) and `http://localhost:8789/...` with the `adwords`
-scope and a PKCE challenge: Google's own "Sign in to continue to Insights" page opens, with no error.
+scope and a PKCE challenge: Google's own "Sign in to continue to bizinsights" page opens, with no error.
 
 **The integrations page** is for management only:
 - each platform's status (Connected, Syncing, Needs reconnecting, Sync problem, Not connected, Coming soon);
@@ -49,7 +49,7 @@ scope and a PKCE challenge: Google's own "Sign in to continue to Insights" page 
 
 If the person unticks or declines the one permission on the platform's screen, they're told so (`permission_missing`) and nothing is connected.
 
-Merchants connect their ad accounts on **Settings → Ad accounts**. Insights then reads, every hour,
+Merchants connect their ad accounts on **Settings → Ad accounts**. bizinsights then reads, every hour,
 what each campaign spent and what it brought (views, clicks, purchases, leads, sales value) and
 shows it on the dashboard's **Ads** card next to the store's own sales.
 
@@ -58,7 +58,7 @@ it. Its estimated earnings, page views, ads shown and clicks, per site and day, 
 **Ad earnings** card, and are never added to ad spend.
 
 Access is **read-only**: Meta's `ads_read` permission, Google's Ads reporting scope, and
-`adsense.readonly`. Insights never creates, changes or pauses an ad. Tokens are stored encrypted with the same keyring as Shopify's
+`adsense.readonly`. bizinsights never creates, changes or pauses an ad. Tokens are stored encrypted with the same keyring as Shopify's
 (`TOKEN_ENCRYPTION_KEYS`) and deleted when an account is disconnected or the store is removed.
 
 Until the keys below are set, each card says its platform's sign-in is "being switched on" (Coming soon),
@@ -91,7 +91,7 @@ its id/secret in `apps/cloudflare/.dev.vars`. Paste-ready review material for bo
 
 ## 1. Meta (Facebook and Instagram ads)
 
-**Insights' Meta Ads app (set up 2026-10-11):** "Insights", App ID `971575545351940`, owned by the Facebook account
+**bizinsights' Meta Ads app (set up 2026-10-11):** "Insights", App ID `971575545351940`, owned by the Facebook account
 sebanceo@gmail.com, Development mode, no business portfolio yet. Use case "Measure ad performance data with Marketing
 API" (ads_read ready for testing). Facebook Login for Business: redirect URI
 `https://insights.imeseban.workers.dev/api/ads/meta/callback` (strict mode, HTTPS); configuration "Insights ads reporting"
@@ -111,7 +111,7 @@ for Advanced Access to ads_read before merchants outside the app's roles can con
      - assets: **Ad accounts**;
      - permission: **ads_read** only.
    - Copy its **Configuration ID** into `META_CONFIG_ID`. Meta recommends it over the `scope` parameter.
-   - Leave `META_CONFIG_ID` empty if the app uses classic Facebook Login instead. Insights then asks for `scope=ads_read`, with `auth_type=rerequest` so a declined permission is asked again.
+   - Leave `META_CONFIG_ID` empty if the app uses classic Facebook Login instead. bizinsights then asks for `scope=ads_read`, with `auth_type=rerequest` so a declined permission is asked again.
 3. Add the **Marketing API** product.
 4. In **App settings → Basic**:
    - copy the **App ID** into `META_APP_ID`;
@@ -129,8 +129,8 @@ for Advanced Access to ads_read before merchants outside the app's roles can con
 
 **Token lifetime:** Meta user tokens last about **60 days** and can't be renewed silently. Settings shows "Meta access ends in N days" from 14 days before. When it ends, the account shows **Needs reconnecting** and pressing **Continue with Meta** again renews it. History is kept.
 
-**When a Facebook login has nothing to connect:** Insights asks Meta's token inspector (`debug_token`, with the app token) which ad accounts the grant names, and Settings → Advertising says which case it is, with **Connect again**, **Open Ads Manager** and **Open Business settings**:
-- `error=none_shared`: the person picked accounts on Facebook's screen but shared none. They connect again and edit what Insights can access.
+**When a Facebook login has nothing to connect:** bizinsights asks Meta's token inspector (`debug_token`, with the app token) which ad accounts the grant names, and Settings → Advertising says which case it is, with **Connect again**, **Open Ads Manager** and **Open Business settings**:
+- `error=none_shared`: the person picked accounts on Facebook's screen but shared none. They connect again and edit what bizinsights can access.
 - `error=no_accounts`: the login reaches no ad account. Business-portfolio ad accounts need the person assigned to them in Business settings → Ad accounts (admins too); a different Facebook login means logging out of Facebook in that browser first, since Facebook has no account chooser.
 
 The callback logs `ads: nothing to connect for this login` with the reason and the account ids the grant names.
@@ -138,7 +138,7 @@ The callback logs `ads: nothing to connect for this login` with the reason and t
 ### Facebook says "Feature Unavailable"
 
 "Facebook Login is currently unavailable for this app, since we are updating additional details for this app. Please try
-again later." is Facebook's own page, shown instead of its login. Facebook never sends the person back to Insights, so
+again later." is Facebook's own page, shown instead of its login. Facebook never sends the person back to bizinsights, so
 nothing reaches our logs. Two causes, both fixed in Meta, not in code:
 
 1. **The Facebook account has no role on the app** (the usual one, for anyone other than the app's admin). While
@@ -154,7 +154,7 @@ nothing reaches our logs. Two causes, both fixed in Meta, not in code:
    app manageable while one account is blocked. Keep browser automation off developers.facebook.com: it is the likely
    trigger.
 
-What Insights does about it:
+What bizinsights does about it:
 - While `META_ADS_ADVANCED_ACCESS` isn't `"1"`, the Meta Ads card on Settings → Advertising and on Connect your business
   says, before the button sends anyone to Facebook, that only testers can connect and how to ask to be added. The link
   goes to the support email from `apps/web/src/lib/contact.ts`, or to `/support` while that's blank.
@@ -169,7 +169,7 @@ access for real accounts** (Explorer or above). Developer tokens are gone (2026-
 
 1. At <https://console.cloud.google.com/>, create or pick a project and enable the **Google Ads API** (APIs & Services → Library).
 2. **OAuth consent screen**:
-   - User type: **External**. App name: Insights.
+   - User type: **External**. App name: bizinsights.
    - Support email; app domain and privacy policy `https://insights.imeseban.workers.dev/privacy`.
    - Authorized domain: `insights.imeseban.workers.dev`.
    - Add the scope `https://www.googleapis.com/auth/adwords`.
@@ -191,7 +191,7 @@ access for real accounts** (Explorer or above). Developer tokens are gone (2026-
    Center), then apply for **Basic** the same way.
 4. Set `"GOOGLE_ADS_ENABLED": "1"` and deploy.
 
-**Manager accounts:** a merchant who signs in with a Google account that reaches ad accounts through a manager account (an agency, say) gets each client account listed. Insights reaches them through the manager automatically (`login-customer-id`).
+**Manager accounts:** a merchant who signs in with a Google account that reaches ad accounts through a manager account (an agency, say) gets each client account listed. bizinsights reaches them through the manager automatically (`login-customer-id`).
 
 ## 3. Google AdSense
 
@@ -235,7 +235,7 @@ npx wrangler secret put GOOGLE_ADS_CLIENT_SECRET
 - **Tokens** are AES-256-GCM encrypted with `TOKEN_ENCRYPTION_KEYS`, bound to their store and platform (AAD
   `ads:<provider>:<storeId>:<kind>`), never sent to the browser or logged.
 - **Who signed in** is kept per connection (`external_user_id`: Google's `sub` from tokeninfo, checked to be a token issued to
-  Insights' own client; Meta's app-scoped user id), with the permissions granted (`granted_scopes`). Migration
+  bizinsights' own client; Meta's app-scoped user id), with the permissions granted (`granted_scopes`). Migration
   `20261011130000_ad_connection_identity`.
 - **Google refresh tokens.** Google sends one on consent (`prompt=consent`); if a sign-in comes back without one, the same
   person's existing refresh token is reused. If Google replaces a refresh token during a refresh, the new one is stored for

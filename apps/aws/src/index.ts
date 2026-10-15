@@ -19,7 +19,7 @@ import { parseQueueUrls, sqsApi, sqsQueues } from "./sqsQueues.js";
 import { staticSite } from "./staticSite.js";
 
 /**
- * Insights on AWS (infra/cdk). One package, deployed as three functions that differ only in
+ * bizinsights on AWS (infra/cdk). One package, deployed as three functions that differ only in
  * memory, timeout and trigger, so the UI, the API and the jobs always run the same build:
  *   - api:  the Lambda function URL behind CloudFront. The static UI (the Next.js export) and the
  *           API on one origin, as on the Cloudflare Worker (apps/cloudflare/src/index.ts), so the

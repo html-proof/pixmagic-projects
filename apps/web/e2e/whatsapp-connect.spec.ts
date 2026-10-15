@@ -8,10 +8,10 @@ import { signUp, uniqueEmail } from "./helpers";
  *
  * Meta's SDK (connect.facebook.net) is replaced by a small script that behaves like FB.login, and
  * Meta's own page by one on www.facebook.com that posts Embedded Signup's WA_EMBEDDED_SIGNUP message
- * to the window, as Meta's does. What runs for real is Insights: the button, the states it shows,
+ * to the window, as Meta's does. What runs for real is bizinsights: the button, the states it shows,
  * the origin check on Meta's message, and what it sends the server. The server's side of the
  * exchange (code, token, ids, registration) is covered by apps/api/test/whatsapp.test.ts against a
- * fake Graph API; a real Meta sign-in can only be checked by hand with Insights' Meta app.
+ * fake Graph API; a real Meta sign-in can only be checked by hand with bizinsights' Meta app.
  */
 
 const db = new pg.Pool({ connectionString: E2E_ENV.DATABASE_URL });
@@ -80,7 +80,7 @@ test("a blocked Meta window, or one closed part-way, says so and connects nothin
   await button.click();
   await expect(status).toContainText("Meta's window didn't open. Allow pop-ups");
   await expect(button).toHaveText(/Try again/);
-  // The SDK was started with Insights' app and the Embedded Signup configuration, asking for a code.
+  // The SDK was started with bizinsights' app and the Embedded Signup configuration, asking for a code.
   expect(await page.evaluate(() => (window as unknown as { __fbInit: { appId: string } }).__fbInit.appId)).toBe("e2e_meta_app");
   expect(await page.evaluate(() => (window as unknown as { __fbLoginOpts: Record<string, unknown> }).__fbLoginOpts)).toMatchObject({ config_id: "e2e_config", response_type: "code", override_default_response_type: true });
 

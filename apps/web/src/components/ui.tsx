@@ -1,11 +1,14 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { X } from "lucide-react";
+import { BrandLogo } from "@/components/Brand";
 
 export function AuthShell({ title, subtitle, children }: { title: string; subtitle?: string; children: ReactNode }) {
   return (
     <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-4 py-12">
-      <p className="mb-6 text-sm font-semibold tracking-wide text-accent">Insights</p>
+      <p className="mb-6">
+        <BrandLogo size={24} className="text-[15px] text-text" />
+      </p>
       <h1 className="text-2xl font-semibold">{title}</h1>
       {subtitle && <p className="mt-1 text-sm text-muted">{subtitle}</p>}
       <div className="mt-6 space-y-4">{children}</div>

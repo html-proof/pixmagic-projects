@@ -122,7 +122,7 @@ export const LIMITS = {
   /** Meta's webhook verification handshake (GET), per IP. */
   waVerifyIp: { max: 30, windowSec: 60 },
   /**
-   * WhatsApp webhook deliveries not signed by Insights' own app, per IP: each one costs a database
+   * WhatsApp webhook deliveries not signed by bizinsights' own app, per IP: each one costs a database
    * read to find the connection whose secret might sign it. Same ceiling as the global API limit,
    * which webhooks are exempt from.
    */

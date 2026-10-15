@@ -1,6 +1,6 @@
 # Architecture decisions
 
-Short records of decisions about the structure of Insights: what was decided, why, and what would
+Short records of decisions about the structure of bizinsights: what was decided, why, and what would
 make us revisit it. Newest last. The restructuring brief of 2026-10-14 proposed a reference
 architecture; where this codebase deliberately differs from it, the reason is here.
 

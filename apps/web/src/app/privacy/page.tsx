@@ -2,11 +2,12 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { EyeOff, Lock, ShieldCheck, Trash2 } from "lucide-react";
 import { ContactCard, LegalPage, LegalSection, SupportEmail, sectionsOf } from "@/components/legal/LegalPage";
+import { BRAND_NAME } from "@/components/Brand";
 import { CONTACT } from "@/lib/contact";
 
 export const metadata: Metadata = {
-  title: "Privacy policy — Insights",
-  description: "What Insights collects from a connected Shopify store, why, how it is protected, and how to have it deleted.",
+  title: "Privacy policy — bizinsights",
+  description: "What bizinsights collects from a connected Shopify store, why, how it is protected, and how to have it deleted.",
 };
 
 /**
@@ -105,7 +106,7 @@ export default function PrivacyPage() {
       toc={TOC}
       intro={
         <p>
-          Insights is an analytics dashboard for Shopify merchants. This policy explains what we collect when you connect a store and
+          bizinsights is an analytics dashboard for Shopify merchants. This policy explains what we collect when you connect a store and
           the services you choose to link to it, why we collect it, how we protect it, and how to have it deleted.
         </p>
       }
@@ -126,8 +127,15 @@ export default function PrivacyPage() {
 
       <LegalSection {...section("who-we-are")}>
         <p>
-          Insights is provided by {CONTACT.legalName} (&ldquo;we&rdquo;, &ldquo;us&rdquo;, &ldquo;our&rdquo;), the controller of the
-          personal data described in this policy. You can contact us at <SupportEmail subject="Privacy" />
+          {CONTACT.legalName === BRAND_NAME ? (
+            <>bizinsights (&ldquo;we&rdquo;, &ldquo;us&rdquo;, &ldquo;our&rdquo;) is the controller of the personal data described in this policy.</>
+          ) : (
+            <>
+              bizinsights is provided by {CONTACT.legalName} (&ldquo;we&rdquo;, &ldquo;us&rdquo;, &ldquo;our&rdquo;), the controller of the
+              personal data described in this policy.
+            </>
+          )}{" "}
+          You can contact us at <SupportEmail subject="Privacy" />
           {CONTACT.postalAddress && <> or by post at {CONTACT.postalAddress}</>}.
         </p>
       </LegalSection>
@@ -186,14 +194,14 @@ export default function PrivacyPage() {
         <p>
           To help you get back in touch, the dashboard shows the name, email address and phone number of shoppers who left a checkout
           unfinished, signed up for your newsletter or recently became customers, together with whether they agreed to receive
-          marketing emails. Insights reads this information from Shopify each time you open that card, and shows it only to workspace
+          marketing emails. bizinsights reads this information from Shopify each time you open that card, and shows it only to workspace
           members with the Owner, Admin or Analyst role. It is not saved in our database; we record only that the card was viewed, and
           by whom, in your workspace&apos;s audit log.
         </p>
 
         <h3>WhatsApp messaging</h3>
         <p>
-          To send the order updates, delivery updates, cart reminders, review requests and campaigns you switch on, Insights keeps each
+          To send the order updates, delivery updates, cart reminders, review requests and campaigns you switch on, bizinsights keeps each
           customer&apos;s WhatsApp number and first name, encrypted with AES-256-GCM, together with a one-way keyed hash of the number
           used to recognise replies. The dashboard shows numbers masked. We keep a record of what each customer agreed to and of every
           opt-out, so that nobody who replied STOP is messaged again. Delivery addresses are used only to write the order confirmation
@@ -201,15 +209,15 @@ export default function PrivacyPage() {
         </p>
         <p>
           Message history is kept for 180 days, unfinished-checkout links and names for 30 days, and order timelines for one year.
-          Customer reviews are kept until you delete your store from Insights. When Shopify asks us to erase a customer or your store,
+          Customer reviews are kept until you delete your store from bizinsights. When Shopify asks us to erase a customer or your store,
           all of it is deleted.
         </p>
 
         <h3>Advertising accounts</h3>
         <p>
-          With your permission, given on Meta&apos;s or Google&apos;s own consent screen, Insights reads your advertising reports: Meta
+          With your permission, given on Meta&apos;s or Google&apos;s own consent screen, bizinsights reads your advertising reports: Meta
           Ads with <code>ads_read</code>, Google Ads with Google&apos;s <code>adwords</code> permission (Google offers no read-only
-          Google Ads permission; Insights uses it only to read), and Google AdSense with <code>adsense.readonly</code>. We read:
+          Google Ads permission; bizinsights uses it only to read), and Google AdSense with <code>adsense.readonly</code>. We read:
         </p>
         <ul>
           <li>account names, IDs, currency and time zone;</li>
@@ -226,16 +234,16 @@ export default function PrivacyPage() {
           disconnecting returns access only when no other account you connected relies on it.
         </p>
         <p>
-          When you disconnect an account, Insights deletes its figures and access token immediately and then returns the access to
+          When you disconnect an account, bizinsights deletes its figures and access token immediately and then returns the access to
           Google or Meta (Google Ads and AdSense share one Google sign-in, so Google&apos;s access is returned with the last of them). If
-          you instead remove Insights&apos; access in your Google or Meta account, Insights stops reading immediately, marks the account
+          you instead remove bizinsights&apos; access in your Google or Meta account, bizinsights stops reading immediately, marks the account
           &ldquo;Needs reconnecting&rdquo; and keeps the figures already fetched until you disconnect it or ask us to delete them (see{" "}
-          <Link href="/data-deletion">Delete your data</Link>). Insights never creates, changes or pauses an ad, never changes a budget
+          <Link href="/data-deletion">Delete your data</Link>). bizinsights never creates, changes or pauses an ad, never changes a budget
           or billing setting, and never spends money.
         </p>
 
         <h3>Email sending</h3>
-        <p>To send the emails your automations and tests request, Insights connects to the mailbox you choose:</p>
+        <p>To send the emails your automations and tests request, bizinsights connects to the mailbox you choose:</p>
         <ul>
           <li>
             <strong>Gmail or Google Workspace</strong> — permission only to send email as you (<code>gmail.send</code>) and your email
@@ -249,7 +257,7 @@ export default function PrivacyPage() {
           </li>
         </ul>
         <p>
-          Insights never reads, searches or deletes the mail in your mailbox. Tokens and passwords are encrypted with AES-256-GCM,
+          bizinsights never reads, searches or deletes the mail in your mailbox. Tokens and passwords are encrypted with AES-256-GCM,
           never shown again, and deleted when you disconnect the account (Google&apos;s access is also revoked at that point).
         </p>
         <p>
@@ -264,7 +272,7 @@ export default function PrivacyPage() {
 
       <LegalSection {...section("google-user-data")}>
         <p>
-          Insights&apos; use and transfer of information received from Google APIs adheres to the{" "}
+          bizinsights&apos; use and transfer of information received from Google APIs adheres to the{" "}
           <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>,
           including the Limited Use requirements. Google user data is used only to show you your own reports and to send the emails
           you set up. It is not sold, not used for advertising, and not read by people, except with your permission, for security
@@ -301,7 +309,7 @@ export default function PrivacyPage() {
       </LegalSection>
 
       <LegalSection {...section("service-providers")}>
-        <p>We share information only with the service providers needed to run Insights:</p>
+        <p>We share information only with the service providers needed to run bizinsights:</p>
         <dl className="divide-y divide-border overflow-hidden rounded-xl border border-border">
           {PROVIDERS.map((p) => (
             <div key={p.name} className="grid gap-1 px-4 py-3 sm:grid-cols-[minmax(0,15rem)_minmax(0,1fr)] sm:gap-6">
@@ -317,7 +325,7 @@ export default function PrivacyPage() {
         <p>
           We keep store data for as long as the app is installed. Uninstalling the app from Shopify immediately destroys the stored
           access tokens, and we act on Shopify&apos;s mandatory customer data request, customer redact and shop redact webhooks.
-          Disconnecting a store in Settings → Stores deletes its orders and metrics from Insights.
+          Disconnecting a store in Settings → Stores deletes its orders and metrics from bizinsights.
         </p>
         <p>
           To have your entire workspace and account deleted, email <SupportEmail subject="Delete my account" />. How to remove the data
@@ -338,7 +346,7 @@ export default function PrivacyPage() {
 
       <LegalSection {...section("shoppers")}>
         <p>
-          If you bought from a store that uses Insights, we process your information on behalf of that merchant. To access or delete
+          If you bought from a store that uses bizinsights, we process your information on behalf of that merchant. To access or delete
           it, please contact the merchant: when they ask Shopify to erase your data, Shopify instructs us to erase it too.
         </p>
       </LegalSection>

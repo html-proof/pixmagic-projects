@@ -237,7 +237,7 @@ export async function scheduleCampaign(
   const [conn, settings] = await Promise.all([systemDb.whatsappConnection.findUnique({ where: { storeId } }), systemDb.whatsappSettings.findUnique({ where: { storeId } })]);
   if (!conn || conn.status !== "active" || !conn.registered) throw new WhatsappError("Connect and register your WhatsApp number first.", 409, "not_connected");
   if (!conn.webhookVerifiedAt) {
-    throw new WhatsappError("Meta hasn't reached Insights' webhook yet, so opt-out replies couldn't be received. Finish the webhook step on Connect WhatsApp first.", 409, "webhook_unverified");
+    throw new WhatsappError("Meta hasn't reached bizinsights' webhook yet, so opt-out replies couldn't be received. Finish the webhook step on Connect WhatsApp first.", 409, "webhook_unverified");
   }
   const template = await systemDb.whatsappTemplate.findUnique({ where: { connectionId_name_language: { connectionId: conn.id, name: camp.templateName, language: camp.templateLanguage } } });
   if (!template || template.status !== "APPROVED") throw new WhatsappError("The campaign's template isn't approved by Meta yet.", 409, "template_not_approved");

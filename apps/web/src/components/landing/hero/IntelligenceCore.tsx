@@ -2,8 +2,7 @@
 import { motion, useTransform, type MotionValue } from "motion/react";
 import { useId, useRef, type ReactNode } from "react";
 import { usePauseWhenHidden } from "@/hooks/usePauseWhenHidden";
-import { MARK } from "../shared/InsightMark";
-import { CORE_EXTENT, CORE_R, OUTER_RING_R, RINGS } from "./heroLayout";
+import { CORE_EXTENT, CORE_R, OUTER_RING_GAP, OUTER_RING_R, RINGS } from "./heroLayout";
 
 /** SVG units per sphere radius. The core's SVGs use a viewBox centred on the sphere. */
 const U = 100;
@@ -13,10 +12,10 @@ const VIEWBOX = `${-HALF} ${-HALF} ${HALF * 2} ${HALF * 2}`;
 const rad = (deg: number) => (deg * Math.PI) / 180;
 const pt = (r: number, deg: number) => `${(r * Math.cos(rad(deg))).toFixed(2)} ${(r * Math.sin(rad(deg))).toFixed(2)}`;
 
-/** The open outer ring, with its gap where the Insights mark has it (top right). */
+/** The open outer ring, with its gap at the top right. */
 const OUTER = (() => {
   const r = OUTER_RING_R * U;
-  return `M ${pt(r, MARK.ringStart)} A ${r} ${r} 0 1 1 ${pt(r, MARK.ringEnd)}`;
+  return `M ${pt(r, OUTER_RING_GAP.start)} A ${r} ${r} 0 1 1 ${pt(r, OUTER_RING_GAP.end)}`;
 })();
 
 /**
@@ -120,8 +119,8 @@ export interface CoreMotion {
 }
 
 /**
- * The Insights intelligence core: a shaded sphere with soft violet/blue energy inside, three
- * tilted orbital rings each carrying one orbit point, and the open outer ring of the Insights mark.
+ * The bizinsights intelligence core: a shaded sphere with soft violet/blue energy inside, three
+ * tilted orbital rings each carrying one orbit point, and an open outer ring.
  * Sized as a share of the visual box (`CORE_R`), so the canvas particles can orbit it exactly.
  * Purely decorative; the hero describes the story for screen readers.
  */

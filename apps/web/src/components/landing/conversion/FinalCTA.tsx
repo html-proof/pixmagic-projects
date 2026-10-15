@@ -5,7 +5,7 @@ import { useReducedMotion } from "@/hooks/useReducedMotion";
 import { useScrollProgress } from "@/hooks/useScrollProgress";
 import { useViewportPerformance } from "@/hooks/useViewportPerformance";
 import { easeInOut, easeOut, segment } from "@/lib/motion";
-import { InsightMark } from "../shared/InsightMark";
+import { BrandMark } from "@/components/Brand";
 import { LoginPrompt, SignupButton } from "../shared/ui";
 import { CONVERGE, ConvergeCanvas } from "./ConvergeCanvas";
 
@@ -36,7 +36,7 @@ function useBeat(p: MotionValue<number>, forced: MotionValue<number>, [a, b]: re
 
 /**
  * G2 — the final conversion scene. Thousands of faint data points fill the screen, then gather
- * into the Insights mark at the centre of the screen as the visitor scrolls; the mark resolves,
+ * into the bizinsights mark at the centre of the screen as the visitor scrolls; the mark resolves,
  * crisp and calm, then rises into place as the closing line and the sign-up action appear
  * beneath it. Reduced motion: the mark, the copy and the actions, still.
  */
@@ -122,11 +122,11 @@ export function FinalCTA() {
             <motion.div className={`absolute inset-0 ${reduced ? "" : "lp-layer"}`} style={reduced ? undefined : { y: lift, scale: zoom }}>
               <motion.div
                 aria-hidden
-                className="lp-layer pointer-events-none absolute -inset-[70%] rounded-full bg-[radial-gradient(closest-side,rgb(140_123_255/0.22),rgb(94_166_255/0.08)_45%,transparent_75%)]"
+                className="lp-layer pointer-events-none absolute -inset-[70%] rounded-full bg-[radial-gradient(closest-side,rgb(63_207_138/0.2),rgb(35_147_92/0.08)_45%,transparent_75%)]"
                 style={reduced ? undefined : { opacity: glow }}
               />
               <motion.div className={`relative size-full ${reduced ? "" : "lp-layer"}`} style={reduced ? undefined : { opacity: markIn, scale: markScale }}>
-                <InsightMark size={216} className="size-full" />
+                <BrandMark size={216} className="size-full" />
               </motion.div>
             </motion.div>
           </div>
@@ -143,7 +143,7 @@ export function FinalCTA() {
           </motion.p>
           <motion.div className={`mt-8 flex w-full flex-col items-center gap-5 md:mt-10 ${reduced ? "" : "lp-layer"}`} style={reduced ? undefined : actions}>
             <SignupButton size="lg" className="max-md:w-full max-md:max-w-[360px]">
-              Create your Insights account
+              Create your bizinsights account
             </SignupButton>
             <LoginPrompt />
           </motion.div>

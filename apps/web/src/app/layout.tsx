@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Insights for Shopify",
+  title: "bizinsights for Shopify",
   description: "Plain-language store analytics.",
   // Google Search Console ownership of https://insights.imeseban.workers.dev/ (account sebanceo@gmail.com), which
   // Google's OAuth branding verification requires. Keep it: removing it un-verifies the site.

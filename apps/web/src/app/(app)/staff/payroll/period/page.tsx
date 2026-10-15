@@ -113,7 +113,7 @@ const FLOW: Record<Flow, { title: string; confirm: string; body: string; comment
   submit: {
     title: "Send for approval?",
     confirm: "Send for approval",
-    body: "Insights recalculates the figures with the latest hours first. Someone who may approve payroll then checks and approves them.",
+    body: "bizinsights recalculates the figures with the latest hours first. Someone who may approve payroll then checks and approves them.",
     comment: "Note for the approver (optional)",
     required: false,
     danger: false,

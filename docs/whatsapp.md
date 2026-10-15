@@ -1,6 +1,6 @@
 # WhatsApp (Cloud API)
 
-Insights sends a store's customers WhatsApp messages from the store's own WhatsApp Business number, through Meta's
+bizinsights sends a store's customers WhatsApp messages from the store's own WhatsApp Business number, through Meta's
 official **WhatsApp Business Platform (Cloud API)**: order and delivery updates, abandoned-cart reminders, review
 requests, merchant-written campaigns and merchant-written automations. There is no WhatsApp Web automation, no
 browser session, and no credential in the code.
@@ -91,7 +91,7 @@ Analytics still store no customer personal data. WhatsApp, once connected, keeps
 - **Marketing** (cart reminders, campaigns, anything Meta approved as *marketing*): only customers who opted in on
   WhatsApp (START, Meta's own preference) or, if the merchant says their wording covers WhatsApp, Shopify's
   text-message marketing consent.
-- The category Meta actually gave a template decides which rule applies, not the category Insights asked for.
+- The category Meta actually gave a template decides which rule applies, not the category bizinsights asked for.
 - **STOP** (and similar words) stops everything; the marketing templates' **Stop promotions** button and Meta's
   `user_preferences` webhook stop marketing only. Merchants can record an opt-out given another way.
 
@@ -166,7 +166,7 @@ evaluates a rule against a recent order without doing anything (and can send the
 - **Campaign conversions**: an order is credited once (a unique index), to the last campaign message its customer
   received within `attributionDays` (default 3) before buying. This is "followed", not "caused", and the dashboard
   says so. Orders using the campaign's discount code are shown separately (from anyone).
-- **Costs**: Meta reports which messages are billable and their category, not prices, so Insights shows counts and
+- **Costs**: Meta reports which messages are billable and their category, not prices, so bizinsights shows counts and
   points to WhatsApp Manager for amounts.
 
 ### Connecting with "Continue with WhatsApp" (Embedded Signup)
@@ -180,11 +180,11 @@ number connects nothing. Every failure offers Try again.
 
 Meta's `WA_EMBEDDED_SIGNUP` message is only read from `facebook.com`. The server then (`POST …/whatsapp/embedded`):
 
-1. exchanges the 30-second code for the business's token (Insights' app id and secret);
-2. asks Meta, with Insights' app token, what that token is (`debug_token`): it must belong to Insights' app, and the
+1. exchanges the 30-second code for the business's token (bizinsights' app id and secret);
+2. asks Meta, with bizinsights' app token, what that token is (`debug_token`): it must belong to bizinsights' app, and the
    WhatsApp Business Account the browser reported must be one this sign-up granted (`waba_not_granted` otherwise).
    Without ids from the browser, it uses the one number the token can reach;
-3. checks the number is in that account and reads both with the business's token, subscribes Insights to the
+3. checks the number is in that account and reads both with the business's token, subscribes bizinsights to the
    account's webhooks (`POST /{waba}/subscribed_apps`), stores the token encrypted, fetches the templates;
 4. registers a new number (Meta's `FINISH`) with a PIN it keeps encrypted (see "First use" below).
 
@@ -200,9 +200,9 @@ just waits for the next turn. Connections already waiting to be reconnected aren
 ### Security
 
 - Meta webhooks: `X-Hub-Signature-256` (HMAC-SHA256 of the raw body, app secret) is verified before anything is
-  applied. Insights' own app secret vouches for every number connected through Embedded Signup; a manual connection's
+  applied. bizinsights' own app secret vouches for every number connected through Embedded Signup; a manual connection's
   own app secret vouches only for its own WABA, and a change about any other account is ignored. The GET handshake
-  answers only Insights' verify token or a connection's own (stored hashed). A status for a message we're still
+  answers only bizinsights' verify token or a connection's own (stored hashed). A status for a message we're still
   recording gets a 503 so Meta retries it.
 - Shopify webhooks keep their existing HMAC check, dedupe and shop binding; WhatsApp runs after the analytics write,
   idempotently, inside the same job.
@@ -216,14 +216,14 @@ just waits for the next turn. Connections already waiting to be reconnected aren
 
 ### 1. Meta (owner, in a browser; none of this can be done from code)
 
-**Where Insights stands (2026-10-11).** Insights' Meta app is **"pixmagic", App ID `1799660384680551`**, in the
+**Where bizinsights stands (2026-10-11).** bizinsights' Meta app is **"pixmagic", App ID `1799660384680551`**, in the
 business portfolio "Testbusiness" (`1754818672920174`). It has the WhatsApp use case and Facebook Login for
 Business, but no login configuration yet, no app domain, redirect URI or JS SDK domain, and it is in Development
 mode. The portfolio's business verification and Tech Provider onboarding haven't started. Until the configuration
 id and app secret are on the server, `/api/whatsapp/platform` answers `{"embeddedSignup":false}` and the button
 shows "coming soon". The steps below are what's left, in order.
 
-1. A **Meta Business portfolio** for Insights, **business verification** done (Security Center).
+1. A **Meta Business portfolio** for bizinsights, **business verification** done (Security Center).
 2. A **Meta app** (type Business). The ad accounts' app can be reused: then `WHATSAPP_APP_ID`/`WHATSAPP_APP_SECRET`
    may stay empty and `META_APP_ID`/`META_APP_SECRET` are used. **Since 2026-10-11 they are separate apps:** Meta Ads
    runs on "Insights" (`971575545351940`), WhatsApp stays on "pixmagic" (`WHATSAPP_APP_ID` = `1799660384680551`), so
@@ -246,13 +246,13 @@ shows "coming soon". The steps below are what's left, in order.
 7. Each merchant adds a **payment method** in WhatsApp Manager and gets their **display name** approved; Meta's
    messaging limit grows with quality.
 
-**Without an Insights Meta app** a merchant can still connect their own, in three steps on Connect WhatsApp:
+**Without a bizinsights Meta app** a merchant can still connect their own, in three steps on Connect WhatsApp:
 
-1. Paste a system-user token (permanent, with the two permissions above, assigned to the WABA). Insights asks Meta
+1. Paste a system-user token (permanent, with the two permissions above, assigned to the WABA). bizinsights asks Meta
    (`debug_token`) which app it belongs to and which WABAs it was given, and lists their numbers
    (`POST …/whatsapp/manual/discover`; nothing is saved).
 2. Pick the number. If Meta doesn't list the token's accounts, the page asks for the WABA id and phone number id.
-3. Paste the app secret (the page links straight to that app's Basic settings). Insights checks it belongs to the
+3. Paste the app secret (the page links straight to that app's Basic settings). bizinsights checks it belongs to the
    token's app (an app access token call), saves the connection, then points the app's WhatsApp webhook at itself
    (`POST /{app-id}/subscriptions` with the connection's own verify token; Meta runs the handshake there and then).
 
@@ -293,9 +293,9 @@ PIN. The PIN is stored encrypted (`whatsapp_connections.pin_enc`, AAD `wa:<store
 `whatsapp.pin_viewed`), which they only need to move the number elsewhere. A number that already has a
 PIN refuses ours (Meta error 133005) and the merchant is asked for theirs, as before. A WhatsApp
 Business app number (`FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING`, coexistence), or a finish Meta didn't
-describe, is never registered by Insights: registering would take it off the app.
+describe, is never registered by bizinsights: registering would take it off the app.
 
-Connect WhatsApp → register the number (6-digit PIN) if asked → Message templates: submit Insights' templates (or
+Connect WhatsApp → register the number (6-digit PIN) if asked → Message templates: submit bizinsights' templates (or
 create your own) and wait for approval → Settings: choose the consent basis → turn notifications on and pick each
 template → send yourself a test.
 

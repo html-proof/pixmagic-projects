@@ -283,7 +283,7 @@ export function workspaceRoutes(app: App, deps: Deps) {
       apiVersion: env().SHOPIFY_API_VERSION,
       query: APP_SUBSCRIPTION_CREATE,
       variables: {
-        name: `Insights ${plan.name}`,
+        name: `bizinsights ${plan.name}`,
         returnUrl: `${env().APP_URL}/settings/billing?confirmed=1`,
         amount: plan.priceUsd,
         currency: "USD",

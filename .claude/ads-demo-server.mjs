@@ -2,7 +2,7 @@
 // own database `ads_demo` in a throwaway Postgres (127.0.0.1:5451), never `app` or `app_demo`.
 // Uses the Cognito emulator (docker compose up -d cognito) and Mailpit from docker compose. Build its UI first:
 //   NEXT_EXPORT_DIR=out-adsdemo pnpm --filter @app/web build   (the UI needs no sign-in settings)
-// Google Ads and Meta Ads are switched on with Insights' real PUBLIC ids (so the buttons open the real
+// Google Ads and Meta Ads are switched on with bizinsights' real PUBLIC ids (so the buttons open the real
 // Google and Meta screens; 8789 is a registered redirect on the Google client) and placeholder secrets,
 // so no sign-in can complete here. Nothing secret is in this file.
 import { spawn } from "node:child_process";

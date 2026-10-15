@@ -3,17 +3,7 @@ import Link from "next/link";
 import { ArrowRight, Eye, EyeOff, Loader2, type LucideIcon } from "lucide-react";
 import { useState, type ButtonHTMLAttributes, type FocusEvent, type InputHTMLAttributes, type ReactNode } from "react";
 import { isEmailAddress } from "@app/shared/auth";
-
-/** Three rising bars, the mark drawn beside the wordmark at the top of the card. */
-function BarsMark() {
-  return (
-    <svg viewBox="0 0 28 28" width="28" height="28" aria-hidden="true" focusable="false" className="text-accent">
-      <rect x="2" y="15" width="7" height="11" rx="2" fill="currentColor" opacity="0.7" />
-      <rect x="10.5" y="9" width="7" height="17" rx="2" fill="currentColor" opacity="0.85" />
-      <rect x="19" y="2" width="7" height="24" rx="2" fill="currentColor" />
-    </svg>
-  );
-}
+import { BrandMark } from "@/components/Brand";
 
 /**
  * The account pages' card: brand, heading and the form on a raised white card over soft curves of
@@ -25,8 +15,8 @@ export function AuthCard({ title, subtitle, children }: { title: string; subtitl
       <div aria-hidden className="auth-backdrop" />
       <div className="auth-card w-full max-w-[32rem] px-6 py-8 sm:px-12 sm:py-10">
         <Link href="/" className="inline-flex items-center gap-2.5 rounded-md text-xl font-semibold text-text focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none">
-          <BarsMark />
-          Insights
+          <BrandMark />
+          bizinsights
         </Link>
         <h1 className="mt-7 text-[1.75rem] leading-tight font-bold tracking-tight text-text sm:text-[2rem]">{title}</h1>
         {subtitle && <p className="mt-2 text-base leading-relaxed text-muted">{subtitle}</p>}

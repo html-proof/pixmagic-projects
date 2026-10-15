@@ -13,7 +13,7 @@ Dashboard: https://dev.shopify.com/dashboard/238480582/apps/430680145921
 **App name**
 
 ```
-Insights
+bizinsights
 ```
 
 **Tagline** (short description, shown under the name)
@@ -25,7 +25,7 @@ Your store's numbers in plain language — sales, orders, products and stock.
 **Full description**
 
 ```
-Insights turns your Shopify data into numbers you can act on, without a spreadsheet and
+bizinsights turns your Shopify data into numbers you can act on, without a spreadsheet and
 without a setup project. Connect your store and the first import starts immediately; the
 dashboard is ready in minutes.
 
@@ -46,7 +46,7 @@ whether "sales" means before or after refunds.
 
 Built to stay out of your way
 
-• Read-only. Insights never writes to your store, never edits an order and never changes a
+• Read-only. bizinsights never writes to your store, never edits an order and never changes a
   product.
 • We ask for two permissions and no more: your orders and your products.
 • We keep no customer personal data — no names, no emails, no addresses.
@@ -99,7 +99,7 @@ upscaled. One feature per image, no browser chrome, no desktop background:
 ## Reviewer instructions
 
 ```
-Insights is a read-only analytics app. It requests read_orders and read_products and writes
+bizinsights is a read-only analytics app. It requests read_orders and read_products and writes
 nothing back to the store.
 
 Install and first run

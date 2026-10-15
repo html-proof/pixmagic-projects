@@ -340,7 +340,7 @@ export function adsRoutes(app: App, deps: Deps) {
       } catch (err) {
         // Ours, not the platform's.
         if (err instanceof DbUnavailable) throw err;
-        // Insights' Google Cloud project isn't approved for real Google Ads accounts yet: say so, don't blame the account.
+        // bizinsights' Google Cloud project isn't approved for real Google Ads accounts yet: say so, don't blame the account.
         if (err instanceof AdsNotApprovedError) {
           logger.warn({ err, provider, storeId: state.storeId }, "google ads: project not approved for production accounts");
           return back({ error: "not_approved", provider }, state.storeId);
@@ -468,7 +468,7 @@ export function adsRoutes(app: App, deps: Deps) {
       systemDb.adsenseDaily.deleteMany({ where: { connectionId: conn.id } }),
       systemDb.adConnection.delete({ where: { id: conn.id } }),
     ]);
-    // Insights' copy is gone; now the platform access too, unless another connection relies on it.
+    // bizinsights' copy is gone; now the platform access too, unless another connection relies on it.
     const revoked = await revokeAdAccessIfUnused(conn, deps.fetchImpl);
     await audit({
       workspaceId: ws,
@@ -562,7 +562,7 @@ export function adsRoutes(app: App, deps: Deps) {
       report = await googleReportForConnection(conn, q.level, q.from, q.to, deps.fetchImpl);
     } catch (err) {
       if (err instanceof AdsAuthError) throw new HttpError(409, ended, "reconnect");
-      if (err instanceof AdsNotApprovedError) throw new HttpError(503, "Google is still approving Insights for live Google Ads accounts. The report will work once that's done.", "google_not_approved");
+      if (err instanceof AdsNotApprovedError) throw new HttpError(503, "Google is still approving bizinsights for live Google Ads accounts. The report will work once that's done.", "google_not_approved");
       if (err instanceof AdsRetryableError) throw new HttpError(503, "Google Ads is busy right now. Try again in a minute.", "google_busy");
       if (err instanceof AdsApiError) {
         logger.warn({ err, connectionId: conn.id }, "google ads report failed");

@@ -83,7 +83,7 @@ const schema = z.object({
    * "1" once Meta has granted the app Advanced Access to ads_read (App Review, which needs Business
    * Verification). Until then Facebook lets only people with a role on the app (administrators,
    * developers, testers) grant it; anyone else gets Facebook's own "Feature Unavailable" page, which
-   * never comes back to Insights. Off, Settings says so before sending people to Facebook.
+   * never comes back to bizinsights. Off, Settings says so before sending people to Facebook.
    */
   META_ADS_ADVANCED_ACCESS: z.string().optional().default(""),
   GOOGLE_ADS_CLIENT_ID: z.string().optional().default(""),
@@ -108,7 +108,7 @@ const schema = z.object({
   WHATSAPP_CONFIG_ID: z.string().optional().default(""),
   WHATSAPP_API_VERSION: z.string().default("v25.0"),
   WHATSAPP_WEBHOOK_VERIFY_TOKEN: z.string().optional().default(""),
-  EMAIL_FROM: z.string().default("Insights <no-reply@localhost>"),
+  EMAIL_FROM: z.string().default("bizinsights <no-reply@localhost>"),
   /**
    * Email integrations (docs/email.md). "Connect Gmail / Google Workspace" needs a Google OAuth
    * client whose consent screen lists gmail.send; "Connect Outlook / Microsoft 365" an Entra app

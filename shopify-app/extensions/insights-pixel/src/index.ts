@@ -2,7 +2,7 @@ import { register } from "@shopify/web-pixels-extension";
 
 /**
  * Sends funnel step events (no PII: only event id, name, anonymous clientId,
- * timestamp and the page's pathname) to the Insights ingest endpoint, which
+ * timestamp and the page's pathname) to the bizinsights ingest endpoint, which
  * turns them into where each visit landed, how far it got and where it left.
  * The pathname carries no query string; the API also strips checkout, order and
  * account tokens before storing it. Runs only with analytics consent (see

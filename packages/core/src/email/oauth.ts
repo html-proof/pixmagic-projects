@@ -132,7 +132,7 @@ export function googleEmailAuthorizeUrl(c: OAuthClientConfig, input: { state: st
     // on a reconnect, which it otherwise only does the first time.
     access_type: "offline",
     prompt: "consent",
-    // Only what is asked for here, never the scopes this person granted Insights' other features.
+    // Only what is asked for here, never the scopes this person granted bizinsights' other features.
     include_granted_scopes: "false",
     state: input.state,
     code_challenge: input.codeChallenge,
@@ -147,7 +147,7 @@ function googleError(status: number, body: Record<string, unknown>): OAuthError 
   const desc = String(body.error_description ?? error ?? `Google returned ${status}`);
   // Our own client id or secret is wrong: every account would fail the same way, so no account is
   // marked for reconnecting over it.
-  if (error === "invalid_client" || error === "unauthorized_client") return new OAuthError(`Google rejected Insights' OAuth client: ${desc}`, "transient", "provider_unavailable");
+  if (error === "invalid_client" || error === "unauthorized_client") return new OAuthError(`Google rejected bizinsights' OAuth client: ${desc}`, "transient", "provider_unavailable");
   if (error === "invalid_grant") return new OAuthError(`Google no longer accepts this authorization: ${desc}`, "permanent", "auth_failed");
   if (status === 429 || status >= 500) return new OAuthError(`Google is unavailable: ${desc}`, "transient", "provider_unavailable");
   return new OAuthError(`Google refused: ${desc}`, "permanent", "auth_failed");
@@ -315,6 +315,6 @@ export async function microsoftIdentity(c: MicrosoftConfig, tokens: OAuthTokens)
     throw new OAuthError(`Microsoft Graph refused: ${me.error?.message ?? res.status}`, "permanent", me.error?.code === "MailboxNotEnabledForRESTAPI" ? "account_failed" : "auth_failed");
   }
   const email = (me.mail || me.userPrincipalName || "").toLowerCase();
-  if (!email || !email.includes("@") || email.includes("#ext#")) throw new OAuthError("This Microsoft account has no mailbox address Insights can send from", "permanent", "account_failed");
+  if (!email || !email.includes("@") || email.includes("#ext#")) throw new OAuthError("This Microsoft account has no mailbox address bizinsights can send from", "permanent", "account_failed");
   return { provider: tid === MSA_TENANT_ID ? "outlook" : "microsoft_365", providerAccountId: oid, providerTenantId: tid, email, displayName: me.displayName?.slice(0, 100) ?? null };
 }

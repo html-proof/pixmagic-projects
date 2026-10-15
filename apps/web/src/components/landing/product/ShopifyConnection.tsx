@@ -24,31 +24,31 @@ import { useEffect, useRef, useState } from "react";
 import { useReducedMotion } from "@/hooks/useReducedMotion";
 import { useScrollProgress } from "@/hooks/useScrollProgress";
 import { EASE, clamp01, riseIn, segment } from "@/lib/motion";
-import { InsightMark } from "../shared/InsightMark";
+import { BrandMark } from "@/components/Brand";
 import { SectionIntro } from "../shared/ui";
 
 const STEPS: { title: string; text: string; icon: LucideIcon }[] = [
   { title: "OAuth authorization", text: "You approve read-only access on Shopify.", icon: KeyRound },
   { title: "Secure connection", text: "Credentials are encrypted.", icon: LockKeyhole },
   { title: "Data synchronization", text: "Your order history is imported.", icon: RefreshCw },
-  { title: "Webhook events", text: "Shopify tells Insights the moment something changes.", icon: Webhook },
+  { title: "Webhook events", text: "Shopify tells bizinsights the moment something changes.", icon: Webhook },
   { title: "Analytics processing", text: "Your dashboard updates.", icon: ChartLine },
 ];
 
 const SECURITY: { title: string; text: string; icon: LucideIcon }[] = [
-  { title: "Secure Shopify OAuth", text: "You approve access on Shopify. Insights never sees your password.", icon: ShieldCheck },
+  { title: "Secure Shopify OAuth", text: "You approve access on Shopify. bizinsights never sees your password.", icon: ShieldCheck },
   { title: "Encrypted credentials", text: "Store access tokens are encrypted at rest.", icon: LockKeyhole },
   { title: "Permission-aware access", text: "Read-only. Optional permissions can be skipped.", icon: ScanEye },
-  { title: "Disconnect anytime", text: "Remove access from Insights or your Shopify admin at any time.", icon: Unplug },
+  { title: "Disconnect anytime", text: "Remove access from bizinsights or your Shopify admin at any time.", icon: Unplug },
 ];
 
-/** What a webhook packet carries, in plain words (Insights listens for these changes). */
+/** What a webhook packet carries, in plain words (bizinsights listens for these changes). */
 const PACKETS = ["Order", "Refund", "Product", "Inventory"] as const;
 
 /*
  * Scroll choreography (progress of the diagram passing through the viewport, 0..1):
  *   step i lights at 0.10 + 0.16·i (over 0.06), the connection line fills in step with them
- *   (it reaches station i exactly as it lights), the Insights node wakes at 0.80–0.90, and the
+ *   (it reaches station i exactly as it lights), the bizinsights node wakes at 0.80–0.90, and the
  *   connection counts as live from 0.92, when webhook packets start to flow.
  */
 const stepStart = (i: number) => 0.1 + 0.16 * i;
@@ -56,9 +56,9 @@ const lineFill = (p: number) => clamp01(1.25 * p - 0.025);
 const LIVE_AT = 0.92;
 
 /**
- * "Connect once. Insights keeps listening.": your store and Insights joined by the five things
+ * "Connect once. bizinsights keeps listening.": your store and bizinsights joined by the five things
  * that happen when you connect, lighting up as the diagram scrolls through, then small webhook
- * packets flowing from the store to Insights. Horizontal from 1400px, vertical below.
+ * packets flowing from the store to bizinsights. Horizontal from 1400px, vertical below.
  */
 export function ShopifyConnection() {
   const reduced = useReducedMotion();
@@ -81,7 +81,7 @@ export function ShopifyConnection() {
 
   return (
     <section aria-labelledby="shopify-connection-title" className="relative overflow-clip bg-lp-bg-2 py-28 md:py-36 xl:py-44">
-      {/* Blend in from Ask Insights above. The bottom edge stays lp-bg-2: the product reveal below fades from it. */}
+      {/* Blend in from Ask bizinsights above. The bottom edge stays lp-bg-2: the product reveal below fades from it. */}
       <div aria-hidden className="pointer-events-none absolute inset-x-0 top-0 h-56 bg-gradient-to-b from-lp-bg to-transparent" />
       <div
         aria-hidden
@@ -92,8 +92,8 @@ export function ShopifyConnection() {
         <SectionIntro
           id="shopify-connection-title"
           eyebrow="Shopify connection"
-          title="Connect once. Insights keeps listening."
-          lead="Connect your Shopify store securely through Shopify. Insights organizes the information your store makes available and keeps your dashboard updated as the business changes."
+          title="Connect once. bizinsights keeps listening."
+          lead="Connect your Shopify store securely through Shopify. bizinsights organizes the information your store makes available and keeps your dashboard updated as the business changes."
         />
 
         {/*
@@ -104,7 +104,7 @@ export function ShopifyConnection() {
         <div className="mt-14 grid gap-12 md:mt-20 min-[62.0625rem]:grid-cols-[minmax(0,1.05fr)_minmax(0,1fr)] min-[62.0625rem]:gap-14 min-[87.5rem]:grid-cols-1 min-[87.5rem]:gap-16">
           <motion.figure {...riseIn(0.1, 32)} className="m-0">
             <figcaption className="sr-only">
-              How your Shopify store connects to Insights, in five steps. Once connected, Shopify sends Insights each change as it
+              How your Shopify store connects to bizinsights, in five steps. Once connected, Shopify sends bizinsights each change as it
               happens.
             </figcaption>
             <div ref={diagramRef} data-cursor="VIEW">
@@ -147,7 +147,7 @@ interface DiagramProps {
   instant: boolean;
 }
 
-/** ≥1400px: store on the left, Insights on the right, the five stations along the line between. */
+/** ≥1400px: store on the left, bizinsights on the right, the five stations along the line between. */
 function HorizontalDiagram({ progress, flowing, live, instant }: DiagramProps) {
   const fill = useTransform(progress, lineFill);
   const headX = useTransform(fill, (f) => `${f * 100}%`);
@@ -192,7 +192,7 @@ function HorizontalDiagram({ progress, flowing, live, instant }: DiagramProps) {
   );
 }
 
-/** <1400px: store on top, the stations down a vertical line, Insights underneath. */
+/** <1400px: store on top, the stations down a vertical line, bizinsights underneath. */
 function VerticalDiagram({ progress, flowing, live, instant }: DiagramProps) {
   const fill = useTransform(progress, lineFill);
   const headY = useTransform(fill, (f) => `${f * 100}%`);
@@ -362,10 +362,10 @@ function InsightNode({
       />
       <div className="relative flex items-center gap-4">
         <span className="relative grid size-11 shrink-0 place-items-center rounded-xl border border-lp-line-strong bg-lp-bg-2">
-          <InsightMark size={30} className="text-lp-text" />
+          <BrandMark size={30} />
         </span>
         <span className="min-w-0">
-          <span className="block text-[16px] font-semibold tracking-[0.14em] text-lp-text">INSIGHTS</span>
+          <span className="block text-[17px] font-semibold tracking-[-0.01em] text-lp-text">bizinsights</span>
           <span className="block text-[13.5px] text-lp-muted">Your dashboard</span>
         </span>
       </div>
@@ -400,7 +400,7 @@ function Packets({ flowing, axis }: { flowing: boolean; axis: "x" | "y" }) {
 }
 
 /**
- * One webhook notification travelling from the store to Insights. The wrapper spans the whole
+ * One webhook notification travelling from the store to bizinsights. The wrapper spans the whole
  * line, so translating it by 100% of its own size carries the dot from one end to the other. It is
  * its own layer: the loop runs for as long as the diagram is on screen, and must not repaint it.
  */
