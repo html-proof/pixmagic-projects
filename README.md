@@ -44,7 +44,8 @@ Then follow [docs/local-dev.md](docs/local-dev.md). Progress and verification hi
 | Email integrations and automation (Gmail, Microsoft 365, SMTP) | [docs/email.md](docs/email.md) · API: [docs/email-api.yaml](docs/email-api.yaml) |
 | KPI formulas | [docs/kpis.md](docs/kpis.md) |
 | Security model | [docs/security.md](docs/security.md) |
-| Deployment (Cloudflare) | [docs/deployment-cloudflare.md](docs/deployment-cloudflare.md) |
+| Deployment (AWS: every merge to `main`) | [docs/aws-deployment.md](docs/aws-deployment.md) |
+| Deployment (Cloudflare, until the cutover) | [docs/deployment-cloudflare.md](docs/deployment-cloudflare.md) |
 | Runbook | [docs/RUNBOOK.md](docs/RUNBOOK.md) |
 | Every doc by question (start here) | [docs/README.md](docs/README.md) |
 | Adding a feature, endpoint, table, job or integration | [docs/development/adding-a-feature.md](docs/development/adding-a-feature.md) |
