@@ -4,8 +4,9 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "bizinsights for Shopify",
   description: "Plain-language store analytics.",
-  // Google Search Console ownership of https://insights.imeseban.workers.dev/ (account sebanceo@gmail.com), which
-  // Google's OAuth branding verification requires. Keep it: removing it un-verifies the site.
+  // Google Search Console ownership (account sebanceo@gmail.com) of the app's earlier address,
+  // insights.imeseban.workers.dev, which Google's OAuth branding verification required. Keep it while
+  // that verification stands: removing it un-verifies the site.
   verification: { google: "s7xwK411UchDkBKH6KSUy1m8_qG8EQHbw0A2fp2Zuro" },
 };
 

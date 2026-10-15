@@ -8,7 +8,7 @@
  * binds the ciphertext to its row and purpose: a ciphertext copied into another row or another
  * workspace doesn't decrypt.
  *
- * The KEKs live in Worker secrets, never in the database. Rotating them re-wraps data keys only
+ * The KEKs live in the app's secrets, never in the database. Rotating them re-wraps data keys only
  * (rewrap), without touching the secrets. To move the KEKs into a managed KMS, replace wrapKey /
  * unwrapKey: nothing else sees a KEK.
  *

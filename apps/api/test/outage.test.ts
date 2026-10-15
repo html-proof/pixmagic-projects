@@ -66,7 +66,7 @@ const lastCookie = (setCookie: string | undefined, name: string) =>
 
 describe("queries from concurrent scopes", () => {
   // Every request shares the same two Prisma clients, but each must still run its queries on its
-  // own connections: on Workers another request's connections can be gone before they answer.
+  // own connections: another scope's connections can be closed before they answer.
   it("never run on another scope's connections, even when Prisma would batch them", async () => {
     const live = { system: process.env.DATABASE_URL!, tenant: process.env.APP_DATABASE_URL };
     const lookup = () => systemDb.user.findUnique({ where: { email: "nobody@x.com" } });

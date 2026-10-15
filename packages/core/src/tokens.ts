@@ -36,7 +36,7 @@ const REFRESH_SKEW_MS = 5 * 60 * 1000;
 
 /**
  * Returns a valid access token for the store, rotating it first when it is
- * about to expire. A Durable Object lock ensures only one process rotates at a time
+ * about to expire. A coordinator lock ensures only one process rotates at a time
  * (Shopify invalidates the old refresh token on use).
  */
 export async function getAccessToken(

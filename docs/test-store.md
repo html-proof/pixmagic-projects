@@ -29,13 +29,14 @@ A live store, or a development store in somebody else's organization, gets Shopi
 The app can currently be offered to *any* store, because `SHOPIFY_DEFAULT_APP_SHOPS` is empty
 and empty means "no restriction". While only your test store should connect, name it.
 
-In `apps/cloudflare/wrangler.jsonc`, under `vars`:
+In `apps/aws/src/settings.ts`, in `APP_SETTINGS`:
 
-```jsonc
+```ts
 "SHOPIFY_DEFAULT_APP_SHOPS": "your-dev-store.myshopify.com",
 ```
 
-Then `npx wrangler deploy` from `apps/cloudflare`. Two effects:
+Then merge it to `main`: the **Deploy to AWS** workflow puts it in the functions' environment
+([aws-deployment.md](aws-deployment.md)). Two effects:
 
 - Any other store is refused by our own backend with the `app_unavailable` message
   (`installApp` in [`apps/api/src/routes/shopify.ts`](../apps/api/src/routes/shopify.ts))
@@ -53,17 +54,17 @@ first.
 
 ## 3. Connect it
 
-The deployed Worker already holds the callback URL, so no toml edit and no
-`shopify app deploy` are needed for this path. `shopify.app.toml` registers:
+No toml edit is needed for this path: `shopify.app.toml` already registers the app's URLs (they
+take effect at Shopify with `shopify app deploy`):
 
 | | |
 | --- | --- |
-| App URL | `https://insights.imeseban.workers.dev/api/shopify/launch` |
-| Redirect URL | `https://insights.imeseban.workers.dev/api/shopify/callback` |
+| App URL | `https://d2mr8m2p1qkh58.cloudfront.net/api/shopify/launch` |
+| Redirect URL | `https://d2mr8m2p1qkh58.cloudfront.net/api/shopify/callback` |
 | Scopes | `read_orders,read_products` |
 | Embedded | `false` (this is an external dashboard, not an admin-embedded app) |
 
-1. Open `https://insights.imeseban.workers.dev/signup`, create an account and confirm your email.
+1. Open `https://d2mr8m2p1qkh58.cloudfront.net/signup`, create an account and confirm your email.
 2. On the connect page, **Continue with Shopify** (or enter the store address) and approve on
    Shopify. The workspace and store are created and the first import starts (see
    [shopify-setup.md](shopify-setup.md) section 3).
@@ -87,7 +88,7 @@ that covers a missed delivery, so a dropped webhook costs freshness, never corre
 Fire one by hand:
 
 ```bash
-npx shopify app webhook trigger --topic orders/create --address https://insights.imeseban.workers.dev/api/webhooks/shopify
+npx shopify app webhook trigger --topic orders/create --address https://d2mr8m2p1qkh58.cloudfront.net/api/webhooks/shopify
 ```
 
 ## 4. Comparing against third-party apps

@@ -1,5 +1,5 @@
-// File writers for staff exports: CSV, Excel (.xlsx) and PDF. No dependencies, no Node APIs, so
-// they run on Workers; each builds the whole file in memory (reports are bounded in size).
+// File writers for staff exports: CSV, Excel (.xlsx) and PDF. No dependencies and no Node APIs;
+// each builds the whole file in memory (reports are bounded in size).
 
 const enc = new TextEncoder();
 

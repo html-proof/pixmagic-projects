@@ -297,7 +297,7 @@ async function forEachRow<R extends { id: string }>(load: (afterId?: string) => 
  * checkouts. Part of key rotation (reencryptAllTokens, docs/RUNBOOK.md). Values already on the
  * active key are skipped, so a second run changes nothing. Returns the number of rows rewritten.
  *
- * It runs while the Worker keeps writing these rows, so each write applies only if the row's
+ * It runs while the app keeps writing these rows, so each write applies only if the row's
  * encrypted values are still the ones read (a message sent meanwhile has had its parameters
  * cleared, and must not get them back); a row changed in between is left for the next run. And it
  * keeps `updatedAt`, which the retention sweeps measure from.

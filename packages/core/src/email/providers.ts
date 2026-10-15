@@ -229,7 +229,6 @@ export const graphAdapter: EmailProviderAdapter = {
  * Whether bizinsights may connect to this SMTP host: a public name whose every address is a public
  * unicast address (no loopback, private, link-local, metadata or other special ranges). Checked
  * when the account is saved and again before every connection, since DNS can change in between.
- * Cloudflare's network adds its own egress boundary: Workers can't reach private networks at all.
  */
 export async function vetSmtpHost(host: string, fetchImpl: EmailDeps["fetchImpl"]): Promise<void> {
   const problem = smtpHostProblem(host);

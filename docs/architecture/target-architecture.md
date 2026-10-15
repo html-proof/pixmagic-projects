@@ -1,8 +1,8 @@
 # Target architecture
 
 Where the structure of bizinsights is heading, how far it is, and what is left. The shape doesn't
-change: a modular monolith in one pnpm workspace, deployed as one Cloudflare Worker
-([ADR-001](architecture-decisions.md#adr-001-one-modular-monolith-on-one-cloudflare-worker)). What
+change: a modular monolith in one pnpm workspace, deployed as one package (three Lambda functions on
+AWS; [ADR-001](architecture-decisions.md#adr-001-one-modular-monolith-one-deployable)). What
 the target adds is that every piece sits in the layer that owns it.
 
 ## Layers and ownership
@@ -11,7 +11,7 @@ the target adds is that every piece sits in the layer that owns it.
 apps/web          screens: render, interact, load/empty/error states.            @app/shared/<subpath> only
 apps/api          HTTP: authenticate → authorize → validate → call core → respond  no SQL, no provider calls
 apps/worker       queue jobs and cron sweeps: retry, backoff, failure records       calls core
-apps/cloudflare   composition root: bindings → Deps, timeouts, log context          no logic
+apps/aws          composition root: AWS services → Deps, secrets, timeouts, log context  no logic
 packages/core     use cases and data access: reports, persistence, integrations      no HTTP, no queue mechanics
   ├─ reports/        dashboard read side                                  ✔ done (2026-10-14)
   ├─ shopify, persist, normalize, tokens, scopes                          ✔ (normalize: `any` to remove)
@@ -40,7 +40,7 @@ request → requestContext (id, access log) → security headers → body limit 
 | Configuration | One validated schema; production refuses placeholder secrets and development settings; local tools default to `app_dev`; customer-hash key separate from the OTP pepper |
 | Layering | Dashboard reports in core; WhatsApp lists on one paging helper; campaign metrics without N+1 |
 | Frontend | Health rules and journey maths in `@app/shared` with tests; one set of narrative helpers; detail panels load on demand; dashboard files PascalCase |
-| Tooling | ESLint (TypeScript + hooks) in CI; dependency audit; binding-types check; migration drift check; job timeouts |
+| Tooling | ESLint (TypeScript + hooks) in CI; dependency audit; migration drift check; job timeouts |
 | Operations | Verified backup script with retention; runbook for scheduling and restore |
 | 2026-10-16 | WhatsApp campaign, automation and cart-reminder rules in `core/whatsapp/` (routes keep HTTP only); `AppError` for rule violations; provider text only through `providerDetail()`; remaining component renames; app-wide UI in `components/AppUi.tsx`; dead code removed |
 

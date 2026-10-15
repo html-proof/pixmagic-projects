@@ -10,7 +10,7 @@ statement (191 source files): there are **no cycles between packages**.
 
 ```
                        ┌──────────────────┐
-                       │ apps/cloudflare  │  the one deployable (Worker entry, Durable Object)
+                       │     apps/aws     │  the one deployable (Lambda entry, local server)
                        └──┬───────┬───────┘
                           │       │
               ┌───────────▼─┐   ┌─▼───────────┐
@@ -35,12 +35,12 @@ statement (191 source files): there are **no cycles between packages**.
 | Package | Imports | Imported by |
 | --- | --- | --- |
 | `packages/shared` | `zod` | everything |
-| `packages/db` | Prisma 7, `@prisma/adapter-pg`, `pg` | core, api, worker, cloudflare |
-| `packages/core` | db, shared, `zod` | api, worker, cloudflare |
-| `apps/api` | core, db, shared, `hono`, `jose`, `zod` | cloudflare |
-| `apps/worker` | core, db, shared | cloudflare |
-| `apps/cloudflare` | api, worker, core, db (+ Workers runtime) | — (deployed) |
-| `apps/web` | `@app/shared/*` subpaths, `next`, `react`, `firebase`, `motion`, `lucide-react` | — (built to static files the Worker serves) |
+| `packages/db` | Prisma 7, `@prisma/adapter-pg`, `pg` | core, api, worker, aws |
+| `packages/core` | db, shared, `zod` | api, worker, aws |
+| `apps/api` | core, db, shared, `hono`, `jose`, `aws4fetch`, `zod` | aws |
+| `apps/worker` | core, db, shared | aws |
+| `apps/aws` | api, worker, core, db, `hono`, `pg`, `aws4fetch` | — (deployed as the Lambda functions `api`, `jobs`, `cron`) |
+| `apps/web` | `@app/shared/*` subpaths, `next`, `react`, `motion`, `lenis`, `lucide-react` | — (static files: pages from the `api` function, `/_next/static/*` from S3) |
 
 The UI must import `@app/shared` **by subpath** (`/roles`, `/dates`, `/ads`, `/sales`, `/journey`,
 `/traffic`, `/whatsapp`, `/capabilities`): the root barrel re-exports `crypto.ts`, which needs
@@ -59,35 +59,45 @@ health grades moved to `@app/shared/health`); one is real and broken at runtime 
 browser / Shopify / Meta
    │
    ▼
-Worker fetch (apps/cloudflare/src/index.ts)
-   ├─ path not /api/*, /webhooks/*, /pixel/*, /shopify/*, /healthz, /readyz  ──► ASSETS (static UI from apps/web/out)
-   └─ otherwise ──► withDb(Hyperdrive URLs) ──► Hono app (apps/api/src/app.ts)
+CloudFront + WAF (per-IP rate rule on /api/*, managed rules)
+   ├─ /_next/static/*  ──► S3 (hashed UI build files, cached for a year)
+   └─ everything else  ──► Lambda "api" function URL (apps/aws/src/index.ts)
+        ├─ path not /api/*, /webhooks/*, /pixel/*, /shopify/*, /healthz, /readyz  ──► static UI (the export in the package)
+        └─ otherwise ──► origin secret checked, client IP from CloudFront ──► Hono app (apps/api/src/app.ts)
                        request id + access log → security headers → body limit → global per-IP limit → CSRF (Origin)
                        → route: requireUser / requireWorkspace(permission) → Zod parse
                        → core function (withTenant = RLS transaction, or systemDb); some routes still query inline
                        → JSON  |  HttpError → { error, message }  |  other → onError → 500
 ```
 
+The local server (`apps/aws/src/local.ts`, `pnpm --filter @app/aws dev`) routes the same way in
+one Node process, without CloudFront: the UI from `apps/web/out`, the rest to the same Hono app.
+
 ### Queue message
 
 ```
 producer (API route, webhook intake, cron sweep, another job)
-   ──► Cloudflare Queue (insights-sync | insights-webhooks | insights-aggregate)
-   ──► Worker queue() ──► withDb ──► consume(name, msg, deps)  (apps/worker/src/index.ts)
+   ──► SQS queue (sync | webhooks | aggregate | email); a webhook body too big for a message goes to S3
+   ──► Lambda "jobs" (event source mapping) ──► consume(name, msg, deps)  (apps/worker/src/index.ts)
           ├─ success → ack
           ├─ Postgres unreachable → retry later, no attempt spent (deferForDb)
           ├─ UnrecoverableError → record failure, alert, ack
-          └─ other error → retry with exponential backoff up to MAX_ATTEMPTS (6 = max_retries 5 + 1),
-                           then record failure + alert  (dead-letter queue insights-dlq: no consumer)
+          └─ other error → retry with exponential backoff (message visibility) up to MAX_ATTEMPTS (6),
+                           then record failure + alert  (a message never settled reaches the dead-letter
+                           queue after 10 receives; an alarm fires when it isn't empty)
 ```
+
+Locally the queues run in-process (`apps/aws/src/localQueues.ts`).
 
 ### Cron
 
 ```
-*/15 * * * *  and  15 3 * * *  ──► Worker scheduled() ──► runScheduled()
+EventBridge Scheduler (*/15 and 03:15 UTC; off until the cutover) ──► Lambda "cron" ──► runScheduled()
    each sweep isolated (one failing doesn't stop the others): stale jobs, token refresh, reconcile
    scheduling, ads sync scheduling, WhatsApp scheduler (campaigns, sends, retention, health)
 ```
+
+Locally nothing runs on a schedule: `POST /__scheduled?cron=<expression>` runs one sweep.
 
 ## 3. External services
 
@@ -101,14 +111,15 @@ producer (API route, webhook intake, cron sweep, another job)
 | AdSense Management API | ad earnings | `core/ads.ts` | OAuth | worker, api |
 | WhatsApp Cloud API (Meta Graph) | messages, templates, Embedded Signup | `core/whatsapp/graph.ts` | Bearer system/business token, app token | worker, api |
 | WhatsApp webhooks | message status, inbound | `routes/whatsappPublic.ts` | `X-Hub-Signature-256` | inbound |
-| Firebase Identity Toolkit | ID tokens, session cookies, custom tokens, email links | `apps/api/src/authProvider.ts` | service account (JWT), web API key | api |
-| Cloudflare Email Sending | OTP codes, invitations, alerts | `core/notify.ts` | binding | api, worker |
+| Amazon Cognito | sign-in, sign-up, emailed codes, Google federation, admin calls | `apps/api/src/cognito.ts` | app client secret; admin calls signed with the `api` function's role | api |
+| Firebase (migration window only) | a first sign-in with a password Cognito doesn't know yet | `apps/api/src/legacyFirebase.ts` | public web API key | api |
+| Amazon SES | invitations, alerts, staff emails (Mailpit locally) | `apps/aws/src/sesMailer.ts` (core's `Mailer`) | function role | api, worker |
 | Slack (optional) | alerts | `core/notify.ts` | incoming webhook URL | worker |
 | Shopify web pixel | storefront events | `routes/pixel.ts` | per-store ingest key | inbound |
 
 Failure isolation: a provider failure becomes a typed error that the route maps to 502/503 or the
-queue retries. Every call goes through the injected `fetchImpl`, which the Worker wraps with a
-time limit (`withTimeout`: 30 s, 10 s for Firebase), so a hung provider fails like an unreachable one.
+queue retries. Every call goes through the injected `fetchImpl`, which `apps/aws` wraps with a
+time limit (`withTimeout`: 30 s, 10 s for Cognito), so a hung provider fails like an unreachable one.
 
 ## 4. Data ownership
 
@@ -129,9 +140,10 @@ Every store-scoped table carries `workspace_id`, and RLS restricts the `app_rls`
 
 | Joint | Why it is risky | Mitigation in place / planned |
 | --- | --- | --- |
-| Postgres on the owner's PC through a tunnel | production stops when the PC, Docker or the network stops | `/readyz` (bounded, logs why), `deferForDb`, 503s instead of 500s; `infra/postgres/backup.mjs` (owner schedules it); moving off the PC (owner decision) |
-| `env()` validation | one bad var stops every request | Zod schema + placeholder-secret guard; build at isolate start logs instead of crashing |
+| One RDS instance (single AZ) | production stops while the database is down | `/readyz` (bounded, logs why), `deferForDb`, 503s instead of 500s; 14-day point-in-time restore; Multi-AZ is a setting (`dbMultiAz`, `infra/cdk/lib/config.ts`) |
+| The account's Lambda concurrency (10) | requests past it are throttled (429) | hashed UI files from S3, not the function; small per-queue concurrency for jobs; `api-throttles` alarm; raise the quota |
+| `env()` validation | one bad var stops every request | Zod schema + placeholder-secret guard; the smoke tests after each deploy fail and the functions roll back |
 | `TOKEN_ENCRYPTION_KEYS` / `OTP_PEPPER` / `CUSTOMER_HASH_KEY` | losing or rotating them makes stored tokens or hashes unreadable | versioned keyring + `ops:reencrypt`; customer hashes keyed by `CUSTOMER_HASH_KEY` (defaults to `OTP_PEPPER`), so the pepper can rotate alone (RUNBOOK) |
 | Shopify API version | silently changes behaviour when it falls out of support | owner check (H6) |
-| Shared Worker deploys | several branches deploy to the same Worker | staged versions + smoke tests (`docs/deployment-cloudflare.md`) |
+| Every merge to `main` deploys | a broken change goes live on merge | CI must pass first; Deploy to AWS runs the migrations and smoke tests and moves the functions back to the previous versions if either fails ([../aws-deployment.md](../aws-deployment.md)) |
 | Files under concurrent edit | moves cause merge conflicts | see current-state §6 |

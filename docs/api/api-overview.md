@@ -1,6 +1,6 @@
 # API overview
 
-The JSON API the web app uses, served by the same Worker as the UI. Behind it: `apps/api`
+The JSON API the web app uses, served by the same Lambda function as the UI. Behind it: `apps/api`
 (Hono). How to add an endpoint: [../development/adding-a-feature.md](../development/adding-a-feature.md).
 
 ## Addressing
@@ -8,7 +8,7 @@ The JSON API the web app uses, served by the same Worker as the UI. Behind it: `
 - Browser and UI: `https://<host>/api/<path>`. Webhooks, the pixel, Shopify's callbacks and the
   health checks are also answered without the `/api` prefix (`/webhooks/*`, `/pixel/*`,
   `/shopify/*`, `/healthz`, `/readyz`), for URLs registered with providers.
-- Not versioned: the UI ships with the API in one Worker version
+- Not versioned: the UI ships with the API in one release
   ([ADR-003](../architecture/architecture-decisions.md#adr-003-no-apiv1-prefix)).
 
 ## Authentication and authorization
@@ -40,18 +40,19 @@ the permission in the table below (`@app/shared/roles`):
   `not_found`, 409, 413, 429 `rate_limited`, 502 when a provider failed, 503 when the database or
   Cognito is unreachable, 500 `internal` for anything unexpected; the cause is only in the logs).
   Machine endpoints (webhooks, pixel) answer `{ "error": "<code>" }`.
-- **Every response** carries `x-request-id` (Cloudflare's `cf-ray` when present). Quote it when
+- **Every response** carries `x-request-id` (a random UUID). Quote it when
   reporting a problem: every log line written for that request carries the same id.
 - **Lists**: capped (100 by default). WhatsApp messages, orders, carts and reviews page with
   `?limit=&cursor=` and answer `{ <items>, nextCursor }` (`apps/api/src/pagination.ts`).
-- **Rate limits**: 300 requests a minute per IP overall, tighter per-key limits on sign-in,
+- **Rate limits**: 300 requests a minute per IP overall (AWS WAF at CloudFront, and the app behind
+  it; webhooks and the pixel exempt), tighter per-key limits on sign-in,
   codes, invitations, provider calls and public pages (`apps/api/src/rateLimit.ts`).
 
 ## Health
 
 | Path | Answers |
 | --- | --- |
-| `GET /healthz` | `{ "ok": true }` while the Worker runs (liveness). |
+| `GET /healthz` | `{ "ok": true }` while the API runs (liveness). |
 | `GET /readyz` | `{ "ok", "checks": { "db", "coord", "tenantDb" } }`, 503 when any is false; each probe is bounded (3 s) and a failure is logged with its reason. |
 
 ## Endpoints

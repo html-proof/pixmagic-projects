@@ -78,7 +78,10 @@ const PROVIDERS = [
     name: "Amazon Web Services",
     purpose: "Hosting, storage and background jobs; accounts, sign-in and sign-in emails through Amazon Cognito.",
   },
-  { name: "Cloudflare", purpose: "Hosting, request routing and background jobs." },
+  {
+    name: "Cloudflare",
+    purpose: "Our previous hosting provider. It keeps serving our old address, and the data of stores connected there, until everything has moved to Amazon Web Services.",
+  },
   {
     name: "Google Firebase",
     purpose:

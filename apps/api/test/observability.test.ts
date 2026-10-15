@@ -32,11 +32,10 @@ describe("request id", () => {
     }
   });
 
-  it("is Cloudflare's ray id when the request has one, and a fresh id when it looks wrong", async () => {
-    const ray = await ctx.app.inject({ method: "GET", url: "/healthz", headers: { "cf-ray": "8f1c2d3e4f5a6b7c-SJC" } });
-    expect(ray.headers["x-request-id"]).toBe("8f1c2d3e4f5a6b7c-SJC");
-    const junk = await ctx.app.inject({ method: "GET", url: "/healthz", headers: { "cf-ray": "<script>" } });
-    expect(junk.headers["x-request-id"]).toMatch(/^[0-9a-f-]{36}$/);
+  it("is a fresh id for every request", async () => {
+    const a = await ctx.app.inject({ method: "GET", url: "/healthz" });
+    const b = await ctx.app.inject({ method: "GET", url: "/healthz" });
+    expect(a.headers["x-request-id"]).not.toBe(b.headers["x-request-id"]);
   });
 
   it("is on every log line written for the request, with who made it", async () => {
@@ -95,7 +94,7 @@ describe("readiness", () => {
   it("says not ready when the coordinator fails", async () => {
     const ping = ctx.deps.coord.ping;
     ctx.deps.coord.ping = async () => {
-      throw new Error("Durable Object reset");
+      throw new Error("coordinator table unavailable");
     };
     try {
       const r = await ctx.app.inject({ method: "GET", url: "/readyz" });

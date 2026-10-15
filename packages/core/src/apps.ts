@@ -87,7 +87,7 @@ interface Registry {
    * main one may not be installed on it, so the fallback hands the merchant a Shopify install
    * link their store is refused: the dead-end "This installation link can't be used" page,
    * which Shopify never calls back from, so nothing on our side records the failure either.
-   * It has happened: `SHOPIFY_EXTRA_APPS` was edited into wrangler.jsonc but never deployed,
+   * It has happened: `SHOPIFY_EXTRA_APPS` was edited into the app's settings but never deployed,
    * so the client's store was offered the unapproved main app and the only trace was one log
    * line nobody was looking for. Fail closed instead - `appForShop` returns null for these
    * stores, so the merchant gets our own `app_unavailable` message, which names the problem.

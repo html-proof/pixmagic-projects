@@ -93,7 +93,7 @@ export interface WorkerDeps {
   payloads: BlobStore;
   mailer: Mailer;
   fetchImpl: FetchLike;
-  /** Outbound TCP for SMTP email accounts (Workers sockets). Absent: SMTP accounts can't send. */
+  /** Outbound TCP for SMTP email accounts (apps/aws/src/nodeSmtp.ts). Absent: SMTP accounts can't send. */
   smtpConnect?: SmtpConnect;
 }
 
@@ -460,7 +460,7 @@ export async function runSync(data: SyncJobData, deps: WorkerDeps) {
       const errs = d.webPixelCreate.userErrors.filter((e) => e.code !== "TAKEN");
       if (errs.length) throw new Error(`webPixelCreate: ${errs.map((e) => e.message).join("; ")}`);
       // TAKEN: the store already has our pixel, posting wherever it was told when it was made. After
-      // a move to a new address (Cloudflare to AWS, or a custom domain) that is the old host, which
+      // a move to a new address (a new deployment, or a custom domain) that is the old host, which
       // would keep receiving the storefront's events for good: point it here instead.
       if (d.webPixelCreate.userErrors.length) {
         const { webPixel } = await gql<{ webPixel: { id: string; settings: unknown } | null }>(deps, store, pace, WEB_PIXEL_QUERY);
@@ -826,13 +826,13 @@ async function unaggregatedDays(storeId: string, fromDay: string): Promise<strin
 }
 
 /**
- * Run once after the app moves to a new address with a copy of the database (Cloudflare to AWS;
- * later a custom domain), for every connected store:
+ * Run once after the app moves to a new address with a copy of the database (a new deployment,
+ * or a custom domain), for every connected store:
  *
  * - `install_pixel`: a web pixel posts to the URL it was given when it was made, so every existing
  *   pixel still sends the storefront's events to the old host. The job points it here (runSync).
  * - A full orders re-import: customer hashes are keyed with CUSTOMER_HASH_KEY, which a move can't
- *   always carry over (a Cloudflare secret can't be read back). The import upserts customer_key
+ *   always carry over (a secret that can't be read back). The import upserts customer_key
  *   with this deployment's key and recomputes "returning", so repeat customers are recognised again.
  *
  * Safe to repeat (everything upserts), but it costs Shopify rate limit, so it is a maintenance
@@ -932,8 +932,8 @@ const STALE_UNSTARTED_MS = 6 * 60 * 60 * 1000;
  * Fail jobs whose chain died without reporting, and unstick their store.
  *
  * `runSync` marks a job `running` and relies on `consume` to record the outcome. That holds for a
- * thrown error, but not for an invocation the runtime *kills* - Cloudflare error 1102 (CPU limit)
- * being the case seen in production - nor for a final attempt whose bookkeeping could not reach
+ * thrown error, but not for an invocation the runtime *kills* - a CPU or time limit, as seen in
+ * production - nor for a final attempt whose bookkeeping could not reach
  * the database either. The job stays unfinished, and because a store only leaves `syncing` when a
  * backfill job finishes, the store stays `syncing` forever and the merchant is told their import
  * is still in progress indefinitely. Two pixmagic.myshopify.com jobs sat that way for 7+ hours.

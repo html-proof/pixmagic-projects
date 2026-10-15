@@ -1,5 +1,10 @@
 # Current state (audit, 2026-10-14)
 
+> Historical record (2026-10-14): written when bizinsights ran on one Cloudflare Worker
+> (`apps/cloudflare`, removed after commit `a861bd9`). It now runs on AWS: see
+> [aws-architecture.md](../aws-architecture.md), and [dependency-map.md](dependency-map.md) for how
+> the parts fit together today.
+
 An audit of the repository as of commit `4320f54` (GitHub `main`, the code live in production).
 Nothing here was changed to produce it. The changes that followed are in
 [refactoring-report.md](refactoring-report.md); the plan is in

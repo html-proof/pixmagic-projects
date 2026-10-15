@@ -5,10 +5,12 @@ Paste-ready material for the two reviews that open Google Ads and Meta Ads to ev
 developers.google.com / support.google.com and developers.facebook.com. Requirements change: re-read the linked
 sources before submitting. Anything marked "(unverified)" could not be confirmed from an official page.
 
+The app now runs on AWS at https://d2mr8m2p1qkh58.cloudfront.net, and the URLs below use that address: the owner must update every URL registered with Google and Meta (redirect URIs, domains, homepage, privacy, terms, data deletion) that still says workers.dev.
+
 Where things stand (2026-10-11):
 
 - Google: Explorer access granted; `adwords` added under Data Access with a justification; Search Console
-  ownership of `https://insights.imeseban.workers.dev/` verified (HTML tag in `apps/web/src/app/layout.tsx`).
+  ownership of the old deployment's address verified (HTML tag in `apps/web/src/app/layout.tsx`; the AWS address is not verified).
   Branding verification failed twice for: ownership (now fixed, re-check after 24 hours) and the privacy policy
   (the business details in `apps/web/src/lib/contact.ts` were blank then; filled in 2026-10-16, so re-request it).
   `/terms` exists since 2026-10-16 (step 5a). The homepage section of step 5c (`#google-data`) was not added: a
@@ -22,11 +24,11 @@ Where things stand (2026-10-11):
 ### Gaps the review found (fix before submitting)
 
 - OAuth 2.0 Policies: you 'must' use separate Cloud projects for each deployment tier, and delete OAuth clients that are not ready for production (sensitive-scope page and FAQ). Move the localhost redirect out of insights-511119.
-- Branding order: add the authorized domain first (Cloud Branding help). Remove the workers.dev and localhost redirect URIs and any JS origins from 'Insights web' before Verify Branding, because every authorized domain, including those of redirect URIs, must be verified.
+- Branding order: add the authorized domain first (Cloud Branding help). Remove the redirect URIs on other hosts (the old address, cloudfront.net) and localhost, and any JS origins, from 'Insights web' before Verify Branding, because every authorized domain, including those of redirect URIs, must be verified.
 - Privacy policy must disclose the stored Google account ID ('sub' from tokeninfo) and granted scopes per connection, the conditional revoke, and what happens when access is removed at Google (history kept until Disconnect).
 - A Google-specific data deletion page. /data-deletion covers Meta only.
 - Reviewer and demo setup: a bizinsights login with the owner or admin role on an active (not frozen) Shopify store, a real Google Ads account with spend, and an AdSense account.
-- Video: disconnect AdSense before Google Ads so the revoke narration is true. Do not record the Firebase 'Continue with Google' sign-in (project saas-89329).
+- Video: disconnect AdSense before Google Ads so the revoke narration is true. Do not record bizinsights' own 'Continue with Google' sign-in (Amazon Cognito); it is not part of this review.
 - Owner decision on the unverified period: production already requests adwords, and each new merchant uses one of the 100 lifetime user slots, which cannot be reset.
 - Finalise branding before submitting: changes are not permitted while verification is in progress.
 - /support must show a real support address (it currently shows 'No support address is set'), because it is a documentation link and on the end card.
@@ -35,14 +37,14 @@ Where things stand (2026-10-11):
 
 ### Before you submit
 
-1. BLOCKER, read first: a domain you control is required. Google verifies authorized domains only as a Search Console DOMAIN property (DNS-level), and the verification must be done by a Google account that is currently a Project Owner. A 'URL prefix' or 'Site' property, or an HTML file or tag, does not count (support.google.com/cloud/answer/13804266). Google checks the top private domain, 'the domain component available for registration on a public suffix' (developers.google.com brand-verification). workers.dev is on the Public Suffix List, so for insights.imeseban.workers.dev that domain is imeseban.workers.dev. Its DNS is run by Cloudflare's workers.dev zone, so no TXT record can be added there (inference). It exists in DNS but has no address records (checked 2026-10-11). Google's App Homepage page also says the homepage and privacy policy should not be on a third-party platform where you can't verify that you own your subdomain. Cloudflare says workers.dev 'is intended for personal or hobby projects that aren't business-critical'.
+1. BLOCKER, read first: a domain you control is required. Google verifies authorized domains only as a Search Console DOMAIN property (DNS-level), and the verification must be done by a Google account that is currently a Project Owner. A 'URL prefix' or 'Site' property, or an HTML file or tag, does not count (support.google.com/cloud/answer/13804266). Google checks the top private domain, 'the domain component available for registration on a public suffix' (developers.google.com brand-verification). cloudfront.net is on the Public Suffix List (its Amazon CloudFront entry), so for d2mr8m2p1qkh58.cloudfront.net that domain is d2mr8m2p1qkh58.cloudfront.net itself. Its DNS is run by Amazon's cloudfront.net zone, so no TXT record can be added there (inference). Google's App Homepage page also says the homepage and privacy policy should not be on a third-party platform where you can't verify that you own your subdomain.
 2. 1. OWNER ONLY: legal and contact facts. Provide the legal entity name, a monitored support email, the governing jurisdiction and the postal address for apps/web/src/lib/contact.ts. Today /privacy shows the 'This policy is incomplete' banner and '[not set - see apps/web/src/lib/contact.ts]' in six places (legal name, postal address, jurisdiction, support email x3), and /support shows 'No support address is set'. Google: 'Do not submit a template, example, or sample privacy policy.' After the owner provides the values, Claude sets them and redeploys.
-3. 2. OWNER ONLY: a domain, either one you buy (a purchase only the owner can make) or a subdomain of a domain you already own, such as insights.<your-domain>. Either way the zone must be active on Cloudflare: Workers Custom Domains need an active zone. If you move an existing domain's DNS to Cloudflare, keep its MX and other records; that is the owner's call.
-4. 3. CLAUDE (after 2): in apps/cloudflare/wrangler.jsonc add routes [{ "pattern": "<domain>", "custom_domain": true }] and set "workers_dev": true explicitly, because Wrangler infers false once routes exist. Set APP_URL and API_URL to the new host, so sign-in cookies, the host-bound OAuth state cookie and the Google callback all use one host. Then deploy. Recommended: redirect app pages on the workers.dev host to the new domain. The new homepage itself must never redirect. OWNER (inference, not Google requirements): add the domain to Firebase Auth authorized domains (project saas-89329), and update the Shopify app URLs and the Meta redirect, privacy and data-deletion URLs.
-5. 4. OWNER ONLY: Search Console, signed in with the Google account that is Project OWNER of insights-511119. Google's pages differ (Owner, or Owner or Editor), so use Owner. Add a Domain property for the root domain, add the TXT record in Cloudflare DNS, press Verify, and never remove the record: Search Console keeps re-checking it.
+3. 2. OWNER ONLY: a domain, either one you buy (a purchase only the owner can make) or a subdomain of a domain you already own, such as insights.<your-domain>. Its DNS can stay where it is (Route 53, or Cloudflare DNS as for ikorex.com.au): CloudFront needs an ACM certificate in us-east-1, validated by a DNS record, and a CNAME to the distribution. Keep the domain's MX and other records; that is the owner's call.
+4. 3. CLAUDE (after 2): add the domain to the CloudFront distribution (an alternate domain name with its ACM certificate, infra/cdk/lib/app-stack.ts) and make it the app's address (the appUrl that infra/cdk/bin/insights.ts passes to the Auth stack, which becomes APP_URL, API_URL and Cognito's callback), so sign-in cookies, the host-bound OAuth state cookie and the Google callback all use one host. Then merge (Deploy to AWS). Recommended: redirect app pages on the cloudfront.net host to the new domain. The new homepage itself must never redirect. OWNER (inference, not Google requirements): update the Shopify app URLs and the Meta redirect, privacy and data-deletion URLs.
+5. 4. OWNER ONLY: Search Console, signed in with the Google account that is Project OWNER of insights-511119. Google's pages differ (Owner, or Owner or Editor), so use Owner. Add a Domain property for the root domain, add the TXT record at the domain's DNS host, press Verify, and never remove the record: Search Console keeps re-checking it.
 6. 5. CLAUDE (after 3; the owner approves any legal text): (a) Create a public /terms page; it is 404 today. Cloud 'Manage OAuth App Branding' says homepage, privacy and terms links 'are required for all external production apps' and you 'will not be able to submit' without them; the developers.google.com page calls terms optional, so follow the stricter rule. The owner supplies the entity and jurisdiction. (b) Rename the homepage brand from 'Insight' to 'bizinsights' everywhere: about 58 strings in apps/web/src/components/landing, the nav and footer wordmark 'INSIGHT', '© 2026 Insight', and the metadata and OpenGraph title and description ('Insight — Shopify Business Intelligence'). Google requires the homepage to 'Accurately represent and identify' the app, and the consent-screen name must match the submission. (c) Add the homepage section 'Google Ads and Google AdSense' (text in formAnswers) with id="google-data", the Limited Use sentence and a link to /privacy. (d) Add the paragraphs for /privacy in formAnswers (Google account ID, conditional revoke, revoke at Google, Limited Use wording). (e) Add the Google section to /data-deletion (text in formAnswers). (f) Check the homepage loads with no redirect and no login, and that its privacy link is exactly the consent-screen privacy URL.
-7. 6. OWNER ONLY: development project. Google's OAuth 2.0 Policies say 'you must create separate projects in the Google Cloud Console for each deployment tier'. Create a dev project with its own OAuth client for http://localhost:8789/api/ads/<provider>/callback and point apps/cloudflare/.dev.vars at it; Claude can update the docs. Its Google Ads API access level starts at Test, which works with test accounts only. In insights-511119, delete every OAuth client except 'Insights web': 'Delete any OAuth clients not ready for production'.
-8. 7. OWNER ONLY, Google Auth Platform, in this order: (i) Branding -> Authorized domains: add the new root domain first. Google: 'Add your Authorized Domains before you add your redirect or origin URIs, your homepage URL...'. (ii) Clients -> 'Insights web' (534794119904-9esdp8dhskcupf6ekbb0iej2dr10gomf.apps.googleusercontent.com): add https://<domain>/api/ads/google/callback and https://<domain>/api/ads/adsense/callback. Once step 3 is live, remove both https://insights.imeseban.workers.dev/... URIs, the localhost URI and any JavaScript origins (the flow is server-side, so none are needed). (iii) Branding: app name 'bizinsights', support email, logo, homepage, privacy and terms URLs on the new domain, and the developer contact. Remove the workers.dev authorized-domain entry. (iv) Press Verify Branding: the automated check takes minutes, and a manual review usually takes 2-3 business days. (v) Press Publish branding within 7 days; after that the status becomes 'Need to re-verify'. The app name shows on the consent screen only after verification, and data-access verification needs published branding, so finish this before recording.
+7. 6. OWNER ONLY: development project. Google's OAuth 2.0 Policies say 'you must create separate projects in the Google Cloud Console for each deployment tier'. Create a dev project with its own OAuth client for http://localhost:8789/api/ads/<provider>/callback and point apps/aws/.env at it; Claude can update the docs. Its Google Ads API access level starts at Test, which works with test accounts only. In insights-511119, delete every OAuth client except 'Insights web': 'Delete any OAuth clients not ready for production'.
+8. 7. OWNER ONLY, Google Auth Platform, in this order: (i) Branding -> Authorized domains: add the new root domain first. Google: 'Add your Authorized Domains before you add your redirect or origin URIs, your homepage URL...'. (ii) Clients -> 'Insights web' (534794119904-9esdp8dhskcupf6ekbb0iej2dr10gomf.apps.googleusercontent.com): add https://<domain>/api/ads/google/callback and https://<domain>/api/ads/adsense/callback. Once step 3 is live, remove the URIs on other hosts (the old address, cloudfront.net), the localhost URI and any JavaScript origins (the flow is server-side, so none are needed). (iii) Branding: app name 'bizinsights', support email, logo, homepage, privacy and terms URLs on the new domain, and the developer contact. Remove any authorized-domain entry for another host. (iv) Press Verify Branding: the automated check takes minutes, and a manual review usually takes 2-3 business days. (v) Press Publish branding within 7 days; after that the status becomes 'Need to re-verify'. The app name shows on the consent screen only after verification, and data-access verification needs published branding, so finish this before recording.
 9. 8. OWNER ONLY: Data Access. Scopes must be exactly https://www.googleapis.com/auth/adwords (sensitive) and https://www.googleapis.com/auth/adsense.readonly (non-sensitive). The Google Ads API page 'Secure your credentials' (updated 2026-09-30) says the scope 'is classified as a restricted scope'. If the console lists it as Restricted, an annual third-party (CASA) security assessment applies and the timeline is weeks. The console's category is what counts.
 10. 9. OWNER DECISION: the unverified period. Production already requests adwords (GOOGLE_ADS_ENABLED "1"), so merchants see 'Google hasn't verified this app', and each new user counts toward the 100-user cap, which 'applies over the entire lifetime of the project, and it cannot be reset or changed'. Keep the flow on, because reviewers test the live flow, and watch cap usage in the console.
 11. 10. OWNER ONLY: security. Confirm the 2026-10-10 audit fixes for the production database (firewall, and recreated or rotated non-default credentials) before attesting secure handling. Google's User Data Policy: 'We expect all user data is secure in transit and at rest.' The current status is unverified.
@@ -84,7 +86,7 @@ Where things stand (2026-10-11):
 
 **Branding -> Authorized domains**
 
-> <new-custom-domain root, e.g. example.com>, added FIRST and verified as a Search Console DOMAIN property by the Project Owner. Remove imeseban.workers.dev / insights.imeseban.workers.dev once no redirect URI uses them.
+> <new-custom-domain root, e.g. example.com>, added FIRST and verified as a Search Console DOMAIN property by the Project Owner. Remove any other authorized domain once no redirect URI uses it.
 
 **Branding -> Developer contact information**
 
@@ -94,7 +96,7 @@ Where things stand (2026-10-11):
 
 > https://<new-custom-domain>/api/ads/google/callback
 > https://<new-custom-domain>/api/ads/adsense/callback
-> (remove https://insights.imeseban.workers.dev/api/ads/google/callback, https://insights.imeseban.workers.dev/api/ads/adsense/callback and every http://localhost URI)
+> (remove the callbacks on other hosts, the old address and https://d2mr8m2p1qkh58.cloudfront.net, and every http://localhost URI)
 
 **Clients -> Insights web -> Authorized JavaScript origins**
 
@@ -136,7 +138,7 @@ Where things stand (2026-10-11):
 
 **Verification Center -> Additional information for the reviewer (use a free-text field if one is shown, otherwise the email reply; the exact field name is unverified)**
 
-> OAuth client: 'Insights web', 534794119904-9esdp8dhskcupf6ekbb0iej2dr10gomf.apps.googleusercontent.com, the only OAuth client in project insights-511119 (confirm in Clients before sending). Development uses a separate project. Two consent flows use this client, and both appear in the video: (1) 'Continue with Google Ads' (Settings > Connect your business or Settings > Advertising) requests only https://www.googleapis.com/auth/adwords, with access_type=offline, prompt=consent and PKCE S256; (2) 'Continue with Google AdSense' (Settings > Advertising) requests only https://www.googleapis.com/auth/adsense.readonly. Signing in to bizinsights itself is a separate Firebase Authentication project and does not use this client. Access is read-only: bizinsights calls only customers:listAccessibleCustomers and googleAds:searchStream (GAQL SELECT) and never makes a mutate call. Disconnect deletes the token and data, and bizinsights revokes its grant at https://oauth2.googleapis.com/revoke once no other connection uses the same Google sign-in. Google Ads API access level: Explorer (granted 2026-10-11).
+> OAuth client: 'Insights web', 534794119904-9esdp8dhskcupf6ekbb0iej2dr10gomf.apps.googleusercontent.com, the only OAuth client in project insights-511119 (confirm in Clients before sending). Development uses a separate project. Two consent flows use this client, and both appear in the video: (1) 'Continue with Google Ads' (Settings > Connect your business or Settings > Advertising) requests only https://www.googleapis.com/auth/adwords, with access_type=offline, prompt=consent and PKCE S256; (2) 'Continue with Google AdSense' (Settings > Advertising) requests only https://www.googleapis.com/auth/adsense.readonly. Signing in to bizinsights itself goes through Amazon Cognito and does not use this client. Access is read-only: bizinsights calls only customers:listAccessibleCustomers and googleAds:searchStream (GAQL SELECT) and never makes a mutate call. Disconnect deletes the token and data, and bizinsights revokes its grant at https://oauth2.googleapis.com/revoke once no other connection uses the same Google sign-in. Google Ads API access level: Explorer (granted 2026-10-11).
 
 **Homepage -> new section 'Google Ads and Google AdSense' (id="google-data"; paste into the landing page)**
 
@@ -170,7 +172,7 @@ Where things stand (2026-10-11):
 
 ### Screen recording script
 
-1. 0. Setup (not recorded). Branding is published, so the consent screen shows 'bizinsights'. The Google account and browser language are English. Use a clean browser profile, signed in to Google with only the demo Google account. The bizinsights demo user is an owner or admin of a workspace with an active Shopify store, and there is no existing Google Ads or AdSense connection. Sign in to bizinsights with EMAIL before or during the recording. Do NOT use bizinsights' 'Continue with Google' sign-in, because it belongs to Firebase project saas-89329, a different OAuth client. Record at 1080p, full screen, with the address bar visible and nothing cropped. Narrate in English by voice or captions; Google says narration 'can greatly help'. Never show the client secret, tokens, passwords or the reviewer login. Aim for 3-5 minutes; Google publishes no limit, so this length is unverified guidance.
+1. 0. Setup (not recorded). Branding is published, so the consent screen shows 'bizinsights'. The Google account and browser language are English. Use a clean browser profile, signed in to Google with only the demo Google account. The bizinsights demo user is an owner or admin of a workspace with an active Shopify store, and there is no existing Google Ads or AdSense connection. Sign in to bizinsights with EMAIL before or during the recording. Do NOT use bizinsights' 'Continue with Google' sign-in: it is bizinsights' own sign-in (Amazon Cognito), not this client. Record at 1080p, full screen, with the address bar visible and nothing cropped. Narrate in English by voice or captions; Google says narration 'can greatly help'. Never show the client secret, tokens, passwords or the reviewer login. Aim for 3-5 minutes; Google publishes no limit, so this length is unverified guidance.
 2. 1. Title card (5 s). VISIBLE: 'bizinsights - OAuth verification demo - Google Cloud project insights-511119 - OAuth client Insights web 534794119904-9esdp8dhskcupf6ekbb0iej2dr10gomf.apps.googleusercontent.com - Scopes: https://www.googleapis.com/auth/adwords (sensitive), https://www.googleapis.com/auth/adsense.readonly (non-sensitive)'.
 3. 2. Homepage. Type https://<new-custom-domain>/ into the address bar. VISIBLE: the URL, the name 'bizinsights', what the app does, the 'Google Ads and Google AdSense' section with the Limited Use sentence, and the Privacy link. Click Privacy. VISIBLE: https://<new-custom-domain>/privacy, the 'Advertising accounts' paragraphs (adwords used only to read; what is stored, including the Google account ID; delete and revoke on disconnect) and the Limited Use paragraph. NARRATE: 'This is the same privacy policy linked on our OAuth consent screen.'
 4. 3. Optional; it helps reviewers match IDs but is not an official requirement. Google Cloud console -> Google Auth Platform -> Clients. VISIBLE: the single client 'Insights web' and its client ID. Then Data Access, listing adwords and adsense.readonly. Do NOT open or show the client secret.
@@ -205,8 +207,8 @@ Privacy policy and Limited Use disclosure: https://<new-custom-domain>/privacy. 
 
 ### Common reasons for rejection
 
-- The authorized domain is not verified as a Search Console DOMAIN property (DNS TXT) by a Project Owner. URL-prefix or 'Site' properties, or verification by another account, are not recognised. This is impossible on workers.dev, so a domain the owner controls is required.
-- The workers.dev or localhost redirect URIs are still on 'Insights web'. Authorized domains must cover every redirect URI's domain and each must be verified. Dev URIs also break the rule that each deployment tier must be a separate project.
+- The authorized domain is not verified as a Search Console DOMAIN property (DNS TXT) by a Project Owner. URL-prefix or 'Site' properties, or verification by another account, are not recognised. This is impossible on cloudfront.net, so a domain the owner controls is required.
+- Redirect URIs on other hosts (the old address, cloudfront.net) or localhost are still on 'Insights web'. Authorized domains must cover every redirect URI's domain and each must be verified. Dev URIs also break the rule that each deployment tier must be a separate project.
 - Another OAuth client in insights-511119 is not ready for production. The video must cover all clients in the project; delete unused ones.
 - The homepage or privacy policy is on a third-party platform where you can't verify you own the subdomain (support.google.com/cloud/answer/13807376).
 - The homepage brand doesn't match the consent-screen app name. The live site says 'Insight' (title, wordmark, footer); the app is 'Insights'.
@@ -215,7 +217,7 @@ Privacy policy and Limited Use disclosure: https://<new-custom-domain>/privacy. 
 - The privacy link on the homepage differs from the consent-screen link, or the privacy URL equals the homepage URL.
 - The terms of service link is missing or broken (/terms is 404 today). Cloud Branding help says you can't submit without the homepage, privacy and terms links.
 - Demo video problems. The consent screen isn't in English. The app name isn't shown because branding wasn't published before recording. The full scope list isn't visible. client_id isn't readable in the address bar. The features behind each scope aren't shown. The AdSense consent flow is missing. The video is Private instead of Unlisted.
-- The video contradicts the app. It narrates that the grant is revoked while AdSense still uses the same Google sign-in, or it shows the Firebase 'Continue with Google' sign-in from another project with a different client_id.
+- The video contradicts the app. It narrates that the grant is revoked while AdSense still uses the same Google sign-in, or it shows bizinsights' own 'Continue with Google' sign-in (Amazon Cognito), which is not this client.
 - Documentation links that don't cover Google: /data-deletion is Meta-only until its Google section is added.
 - The scope justification doesn't explain why a narrower scope won't work, or the app requests scopes for features not yet built.
 - The scopes in the submission, on Data Access and in the app's OAuth requests don't match.
@@ -253,15 +255,13 @@ Privacy policy and Limited Use disclosure: https://<new-custom-domain>/privacy. 
 - https://developers.google.com/google-ads/api/docs/api-policy/access-levels
 - https://support.google.com/webmasters/answer/9008080?hl=en
 - https://publicsuffix.org/list/public_suffix_list.dat
-- https://developers.cloudflare.com/workers/configuration/routing/workers-dev/
-- https://developers.cloudflare.com/workers/configuration/routing/custom-domains/
 
 ## Meta: Meta App Review pack for bizinsights (App ID 971575545351940): Advanced Access to ads_read and public_profile, with Business Verification, Access Verification and the Marketing API Access Tier (checked against developers.facebook.com and the code on 2026-10-11)
 
 ### Gaps the review found (fix before submitting)
 
 - Reviewer account conditions taken from the code: the email is verified (otherwise 'Verify your email first'), and the role is Owner or Admin of the workspace (otherwise there is no connect button).
-- Keep production reachable for the whole review window: up to a week for App Review and about 5 days for Access Verification. Prod Postgres runs in Docker on the owner's PC behind Cloudflare Tunnel, so Docker Desktop and cloudflared (--protocol quic) must stay running. A reviewer who can't reach the app is a stated rejection reason.
+- Keep production reachable for the whole review window: up to a week for App Review and about 5 days for Access Verification. Production runs on AWS (docs/aws-deployment.md): keep it deployed and its alarms quiet. A reviewer who can't reach the app is a stated rejection reason.
 - Before you answer the data handling questions or later security questions, close the database exposure found in the 2026-10-10 security audit if it is still open (it was reachable on the LAN with default credentials): firewall or recreate the container, and rotate the credentials.
 - Reconnect every Meta connection belonging to the owner after removing bizinsights from Facebook Business integrations for the recording. This keeps the hourly sync counting toward the Marketing API Access Tier call threshold.
 - Optional but recommended: a reviewer workspace that already has a Meta ad account connected, because Meta has temporarily stopped new test-user creation and reviewers' test accounts may own no ad account.
@@ -277,11 +277,11 @@ Privacy policy and Limited Use disclosure: https://<new-custom-domain>/privacy. 
 4. 3. [OWNER ONLY] Upload a 1024x1024 app icon under Settings > Basic > App Icon (size from Meta's submission guide). It must contain no Meta trademarks or logos, and must not include 'Facebook' or 'FB'.
 5. 4. [OWNER ONLY] Create a Meta business portfolio for the same legal entity as CONTACT.legalName. Using the same entity is advice, not a stated Meta rule. Its legal name, address, phone and website should match your registration documents. Make the Facebook account that owns the app an Admin of the portfolio: only a business Admin can complete Business Verification and Access Verification.
 6. 5. [OWNER ONLY: app Admin] Connect the app to the portfolio. In the App Dashboard, go to Settings > Basic > Verification > Start Verification and pick the portfolio.
-7. 6. [OWNER ONLY: business Admin] Complete Business Verification in Business Manager or Business Suite. Meta's developer docs send you to the Business Help Center for the document list. Those pages don't render outside a browser, so these points come from search summaries and are (unverified): the legal name, address, phone and an HTTPS website must match your documents; a registration or incorporation document is needed if Meta can't find the business; confirmation is by email, phone or domain; an email domain that matches the website helps. Also (unverified): whether a workers.dev subdomain is accepted as the business website or for domain confirmation. A custom domain with a matching email address is the safer choice. Verification isn't required to go Live, but the app can't access data you don't own until it is complete.
+7. 6. [OWNER ONLY: business Admin] Complete Business Verification in Business Manager or Business Suite. Meta's developer docs send you to the Business Help Center for the document list. Those pages don't render outside a browser, so these points come from search summaries and are (unverified): the legal name, address, phone and an HTTPS website must match your documents; a registration or incorporation document is needed if Meta can't find the business; confirmation is by email, phone or domain; an email domain that matches the website helps. Also (unverified): whether a cloudfront.net address is accepted as the business website or for domain confirmation. A custom domain with a matching email address is the safer choice. Verification isn't required to go Live, but the app can't access data you don't own until it is complete.
 8. 7. [OWNER] Finish Settings > Basic using the values in formAnswers: Display name, Contact email (an inbox you read, because App Review notices go there), Privacy Policy URL, Terms of Service URL, User data deletion instructions URL, App icon, Category, App Purpose 'Clients', App Domains and the Website platform Site URL. Do this before submitting. Changing basic or advanced settings after submitting may need a new review.
 9. 8. [OWNER] Create the bizinsights reviewer account in production. It uses email and password, is not your personal account, and is not a Meta account. It must meet three conditions, or the reviewer can't connect. (a) Its email is verified: otherwise connecting fails with 'Verify your email first'. (b) It is Owner or Admin of its workspace: other roles see 'Only a workspace owner or admin can connect or disconnect accounts.' and no button. (c) The workspace has a Shopify development store connected: otherwise the Meta Ads card on Settings > Connect your business only says 'Connect your Shopify store first: ad accounts are connected to a store.' Don't use the frozen store 9kdgux-gq (402). A few test orders make the dashboard less empty. Put the credentials only in the App Verification instructions. Meta says never to give your personal Meta login, because reviewers use their own test accounts.
 10. 9. [OWNER] Within the 30 days before you submit, make at least one successful call for each permission requested. In production, while the app is still in Development mode, connect Meta Ads with your own Facebook account (an app Admin) in your own workspace, on an ad account that delivered ads recently. Connecting calls GET /me/permissions and GET /me?fields=id (public_profile), then GET /me/adaccounts, and the sync calls GET /act_{id}/insights (ads_read). Leave it connected: its hourly sync also counts toward the 500-call threshold of the Marketing API Access Tier. One account makes about 25 calls a day by the sync schedule (estimate), so connect two or more ad accounts, or open the Meta Ads report now and then, to pass 500 in 15 days.
-11. 10. [OWNER] Keep production up for the whole review: App Review takes up to a week, and Access Verification about 5 days. The production database runs in Docker on your PC behind Cloudflare Tunnel, so Docker Desktop and cloudflared (--protocol quic) must keep running. If the database exposure from the 2026-10-10 security audit is still open (reachable on the LAN with default credentials), close it and rotate the credentials before you answer Meta's data-handling questions.
+11. 10. [OWNER] Keep production up for the whole review: App Review takes up to a week, and Access Verification about 5 days. Production runs on AWS, so nothing on your PC has to stay on. While the old deployment's database still runs on your PC ([aws-deployment.md](aws-deployment.md#retiring-the-old-cloudflare-deployment)), close the exposure from the 2026-10-10 security audit if it is still open (reachable on the LAN with default credentials) before you answer Meta's data-handling questions.
 12. 11. [OWNER] Record and edit the screencast with screencastScript. Removing bizinsights under Facebook Business integrations for the recording ends the token behind the connection from step 9 and any other Meta connection you made. Reconnect them afterwards.
 13. 12. [OWNER, optional, recommended] After recording, connect your own ad account again, this time in the reviewer workspace. Then reviewers see real numbers even if their Facebook test account owns no ad account. Meta has temporarily stopped new test-user creation, so this is likely. The card then shows 'Reconnect or add accounts', which runs the same Facebook Login. A login with no ad accounts leaves the existing data in place.
 14. 13. [OWNER] In App Review > Permissions and Features, request Advanced Access for ads_read and public_profile only. Leave everything else in the 'Measure ad performance data with Marketing API' use case at Standard Access: ads_management, business_management, pages_show_list, pages_read_engagement, email, and the Marketing API Access Tier feature until it is eligible. Unneeded permissions are a common reason for rejection. If the dashboard asks for Business Verification at this point (Step 1.5), finish it first.
@@ -289,7 +289,7 @@ Privacy policy and Limited Use disclosure: https://<new-custom-domain>/privacy. 
 16. 15. [OWNER] For each permission: paste its own usage description (never copy one to the other), upload the recording, fill in App Verification with reviewerTestInstructions, click Submit for Review and accept the Platform Onboarding Terms. Meta aims to decide within a week.
 17. 16. [OWNER ONLY: business Admin] Complete Access Verification (Tech Provider) under App Dashboard > Basics > Verifications > Access verification. It needs Business Verification and a business account with no restrictions, and can run while App Review is in progress. Meta decides in about 5 days. If it is denied, calls that need ads_read fail for anyone without a role on the app, even after App Review passes.
 18. 17. [OWNER] After approval: complete the Data Use Checkup, which a Development-mode app must finish before switching to Live. Then switch the app to Live; only approved permissions work in Live mode. After that, watch Required Actions in the App Dashboard for Ongoing Review, the yearly Data Use Checkup, or Data Access Renewal, which Meta is rolling out in phases to merge these checks.
-19. 18. [OWNER, as soon as eligible] Upgrade the Marketing API Access Tier from Limited to Full with the Upgrade button on that feature. You need 500 or more Marketing API calls in the last 15 days and errors under 15% in the last 500. No screen recording is needed. Limited's Ads bizinsights quota per ad account per hour is 600, plus 400 for each active ad. Full's base is 190,000.
+19. 18. [OWNER, as soon as eligible] Upgrade the Marketing API Access Tier from Limited to Full with the Upgrade button on that feature. You need 500 or more Marketing API calls in the last 15 days and errors under 15% in the last 500. No screen recording is needed. Limited's Ads Insights quota per ad account per hour is 600, plus 400 for each active ad. Full's base is 190,000.
 
 ### Form answers (paste as written)
 
@@ -299,7 +299,7 @@ Privacy policy and Limited Use disclosure: https://<new-custom-domain>/privacy. 
 
 **Settings > Basic > App domains**
 
-> insights.imeseban.workers.dev
+> d2mr8m2p1qkh58.cloudfront.net
 
 **Settings > Basic > Contact email**
 
@@ -307,15 +307,15 @@ Privacy policy and Limited Use disclosure: https://<new-custom-domain>/privacy. 
 
 **Settings > Basic > Privacy Policy URL**
 
-> https://insights.imeseban.workers.dev/privacy
+> https://d2mr8m2p1qkh58.cloudfront.net/privacy
 
 **Settings > Basic > Terms of Service URL (required for Live mode)**
 
-> [OWNER: publish the page first, e.g. https://insights.imeseban.workers.dev/terms (404 today)]
+> https://d2mr8m2p1qkh58.cloudfront.net/terms
 
 **Settings > Basic > User data deletion > Data deletion instructions URL**
 
-> https://insights.imeseban.workers.dev/data-deletion
+> https://d2mr8m2p1qkh58.cloudfront.net/data-deletion
 
 **Settings > Basic > App icon**
 
@@ -331,11 +331,11 @@ Privacy policy and Limited Use disclosure: https://<new-custom-domain>/privacy. 
 
 **Settings > Basic > Website platform > Site URL**
 
-> https://insights.imeseban.workers.dev/
+> https://d2mr8m2p1qkh58.cloudfront.net/
 
 **Facebook Login for Business > Settings > Valid OAuth Redirect URIs**
 
-> https://insights.imeseban.workers.dev/api/ads/meta/callback
+> https://d2mr8m2p1qkh58.cloudfront.net/api/ads/meta/callback
 
 **Facebook Login for Business > Configuration in use (reference only, not a form field)**
 
@@ -347,7 +347,7 @@ Privacy policy and Limited Use disclosure: https://<new-custom-domain>/privacy. 
 
 **Requested Permissions and Features > ads_read > usage description (exact label and character limit unverified)**
 
-> bizinsights (https://insights.imeseban.workers.dev) is a web analytics dashboard for Shopify merchants. Each merchant is a separate business. It signs in to bizinsights with its own bizinsights account and connects its own Meta ad accounts, so it can see what its Facebook and Instagram ads cost and returned next to its store's sales. ads_read is the only Marketing API permission bizinsights asks people to grant. We don't request ads_management, and bizinsights has no feature that creates, edits, pauses or deletes campaigns, ad sets, ads, audiences, budgets, billing or users.
+> bizinsights (https://d2mr8m2p1qkh58.cloudfront.net) is a web analytics dashboard for Shopify merchants. Each merchant is a separate business. It signs in to bizinsights with its own bizinsights account and connects its own Meta ad accounts, so it can see what its Facebook and Instagram ads cost and returned next to its store's sales. ads_read is the only Marketing API permission bizinsights asks people to grant. We don't request ads_management, and bizinsights has no feature that creates, edits, pauses or deletes campaigns, ad sets, ads, audiences, budgets, billing or users.
 >
 > How a business grants it: in bizinsights, Settings > Connect your business > "Continue with Meta Ads" opens Facebook Login for Business. Our configuration uses a user access token and asks for ads_read only. The person grants ads_read and chooses the ad accounts to share. Our server exchanges the code server-side, checks with GET /me/permissions that ads_read was granted, and calls GET /me/adaccounts (id, name, currency, timezone_name, account_status). If the login can see several ad accounts, the merchant ticks the ones that belong to this store. The token is encrypted with AES-256-GCM on our server and is never sent to the browser.
 >
@@ -373,19 +373,19 @@ Privacy policy and Limited Use disclosure: https://<new-custom-domain>/privacy. 
 
 **Data handling Q1: data processors or service providers (including your own companies) with access to Platform Data from Meta (OWNER must confirm)**
 
-> Draft: Yes. Cloudflare, Inc. hosts the application, background jobs and report cache (Workers, Durable Objects, Queues, Hyperdrive, Tunnel). The code sends Meta data to no other third party; Google Firebase handles bizinsights sign-in only and never receives Meta data. The Postgres database is run by the responsible entity itself, on a machine it controls.
+> Draft: Yes. Amazon Web Services hosts the application, background jobs, report cache and the Postgres database (CloudFront, Lambda, SQS, DynamoDB, RDS, S3; region ap-southeast-2, Sydney). The code sends Meta data to no other third party; Amazon Cognito (part of AWS) handles bizinsights sign-in only and never receives Meta data.
 
 **Data handling Q2: list all processors and service providers**
 
-> Cloudflare, Inc.
+> Amazon Web Services [OWNER: the AWS entity your account contracts with, as named in your AWS agreement (unverified)]
 
 **Data handling Q3: service category for each processor**
 
-> Cloudflare, Inc.: IT solutions and services, including cloud storage and processing
+> Amazon Web Services: IT solutions and services, including cloud storage and processing
 
 **Data handling Q4: countries where each processor processes Platform Data**
 
-> [OWNER: Cloudflare runs a global network. Take the list from Cloudflare's data processing addendum or your plan's data-localisation settings (unverified how Meta expects a global CDN to be listed). The database machine is not a processor, so it doesn't go here.]
+> [OWNER: the functions and the database run in Australia (AWS ap-southeast-2, Sydney); CloudFront delivers pages and API responses from edge locations worldwide (unverified how Meta expects a CDN to be listed).]
 
 **Data handling Q5: responsible entity**
 
@@ -393,7 +393,7 @@ Privacy policy and Limited Use disclosure: https://<new-custom-domain>/privacy. 
 
 **Data handling Q6: country of the responsible entity**
 
-> [OWNER: that entity's country. If the production database machine is in a different country, tell your adviser.]
+> [OWNER: that entity's country. The production database is in Australia (AWS Sydney); if the entity is elsewhere, tell your adviser.]
 
 **Data handling Q7: personal data given to public authorities for national-security requests in the past 12 months**
 
@@ -410,7 +410,7 @@ Privacy policy and Limited Use disclosure: https://<new-custom-domain>/privacy. 
 ### Screen recording script
 
 1. 0. Setup (Meta's screen-recording guidance). Record at 1080p or better, with the screen or browser width at 1440 or less. Use English UI and an enlarged cursor. No audio; reviewers don't listen. Record only the browser window, and use the mouse rather than the keyboard where possible. Add captions, annotations and zooms in an editor (OBS or QuickTime plus iMovie, or Camtasia or Snagit). Before recording: (a) sign in to bizinsights as the reviewer account and make sure Meta Ads is not connected in its workspace; (b) in Facebook, open Settings & privacy > Settings > Business integrations and remove bizinsights, so the full consent screen appears (this ends your other Meta connections; reconnect them afterwards); (c) sign out of bizinsights and Facebook. Use your own Facebook account (an app Admin) with an ad account that delivered ads recently.
-2. 1. Open https://insights.imeseban.workers.dev while signed out. Caption: 'bizinsights: analytics dashboard for Shopify merchants'.
+2. 1. Open https://d2mr8m2p1qkh58.cloudfront.net while signed out. Caption: 'bizinsights: analytics dashboard for Shopify merchants'.
 3. 2. Click sign in. Sign in with the reviewer email and password, keeping the password field masked. You land on /dashboard. Caption: 'Merchants sign in with a bizinsights account; Facebook is used only to connect ad accounts'. This covers Meta's request to show the whole path from logged out to logged in.
 4. 3. Scroll to the dashboard's Advertising section. With nothing connected, it shows the 'Connect advertising accounts' button.
 5. 4. Open Settings > Connect your business from the Settings menu. Zoom on the Meta Ads card: 'Facebook and Instagram ads: spend, reach, clicks and the purchases Meta reports', the text 'Meta asks you to log in and choose the ad accounts to share. Access is read-only: bizinsights can't create, change or pause ads, or spend money.', and the 'Continue with Meta Ads' button. Caption: 'bizinsights asks Meta for ads_read only'.
@@ -427,9 +427,9 @@ Privacy policy and Limited Use disclosure: https://<new-custom-domain>/privacy. 
 
 ### Instructions for the reviewer
 
-bizinsights is a web app for Shopify merchants at https://insights.imeseban.workers.dev. Merchants sign in to bizinsights with a bizinsights email and password. Facebook Login for Business is used only to connect a merchant's own Meta ad accounts, with the ads_read permission only.
+bizinsights is a web app for Shopify merchants at https://d2mr8m2p1qkh58.cloudfront.net. Merchants sign in to bizinsights with a bizinsights email and password. Facebook Login for Business is used only to connect a merchant's own Meta ad accounts, with the ads_read permission only.
 
-1. Open https://insights.imeseban.workers.dev/login and sign in with this bizinsights-only test account. It is not a Meta account. Its email is verified, it is the workspace Owner, and its workspace has a Shopify development store connected.
+1. Open https://d2mr8m2p1qkh58.cloudfront.net/login and sign in with this bizinsights-only test account. It is not a Meta account. Its email is verified, it is the workspace Owner, and its workspace has a Shopify development store connected.
    Email: [OWNER: reviewer email]
    Password: [OWNER: reviewer password]
 2. Open Settings > Connect your business. On the "Meta Ads" card, click "Continue with Meta Ads". [OWNER: if you pre-connected an ad account (prerequisite 12), replace this with: the button reads "Reconnect or add accounts" because a Meta ad account is already connected so you can see real data; it runs the same Facebook Login.]
@@ -438,9 +438,9 @@ bizinsights is a web app for Shopify merchants at https://insights.imeseban.work
 5. On the Dashboard, the Advertising section shows ad spend, impressions, clicks, CTR, CPC, CPM, conversions, conversion value and ROAS, with daily charts. A newly connected account's first fetch takes a few minutes, and the page updates by itself. Click "See details" on the Ad spend card to open the Meta Ads report: campaigns, ad sets and ads with reach, frequency, link clicks, purchases and purchase value, plus splits by placement, device and country.
 6. bizinsights is read-only. Nothing in it can create, edit, pause or delete campaigns, ads, budgets or billing, and ads_management is never requested. Settings > Advertising > Disconnect deletes the encrypted token and every number fetched for that account. bizinsights then withdraws ads_read from Meta (DELETE /me/permissions/ads_read) once no other connection relies on the same person's grant.
 
-Privacy policy: https://insights.imeseban.workers.dev/privacy
-Data deletion instructions: https://insights.imeseban.workers.dev/data-deletion
-Support: https://insights.imeseban.workers.dev/support
+Privacy policy: https://d2mr8m2p1qkh58.cloudfront.net/privacy
+Data deletion instructions: https://d2mr8m2p1qkh58.cloudfront.net/data-deletion
+Support: https://d2mr8m2p1qkh58.cloudfront.net/support
 
 ### Common reasons for rejection
 

@@ -77,8 +77,8 @@ describe("Shopify app registry: which stores the main app is offered to", () => 
  * app: that hands the merchant a Shopify install link their store is refused — the dead-end
  * "This installation link can't be used" page, which Shopify never calls back from.
  *
- * This is not hypothetical. `SHOPIFY_EXTRA_APPS` was added to wrangler.jsonc and the Worker was
- * never redeployed, so in production the var was absent, the client's store resolved to the
+ * This is not hypothetical. `SHOPIFY_EXTRA_APPS` was added to the app's settings and the app was
+ * never redeployed, so in production the setting was absent, the client's store resolved to the
  * unapproved main app, and the merchant hit that page with nothing recorded but one log line.
  */
 describe("Shopify app registry: a client store with its own app", () => {

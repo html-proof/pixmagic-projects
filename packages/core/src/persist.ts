@@ -410,8 +410,7 @@ function dedupe<T extends { shopifyId: string }>(rows: T[]): T[] {
  * Catalog pages, one statement instead of one round trip per row.
  *
  * A 100-product page used to be ~200 sequential round trips (a staleness pre-read plus an
- * upsert each), and Hyperdrive is deliberately created with query caching off, so each of
- * those is a real network hop. The pre-read is gone: `WHERE … shopify_updated_at <= excluded…`
+ * upsert each), and each of those is a real network hop to the database. The pre-read is gone: `WHERE … shopify_updated_at <= excluded…`
  * is the same staleness guard expressed as part of the upsert, and it has to stay - without it
  * a slow catalog page could overwrite a newer `products/update` webhook.
  *

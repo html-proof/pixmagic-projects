@@ -7,11 +7,11 @@ import { describe, expect, it } from "vitest";
  *
  * With `use_legacy_install_flow = false` (Shopify managed installation) the merchant is asked
  * to grant exactly the scopes declared in `shopify.app*.toml`. The `scope` parameter our
- * authorize URL carries is IGNORED, so SHOPIFY_SCOPES in the Worker env cannot widen, narrow
+ * authorize URL carries is IGNORED, so SHOPIFY_SCOPES in the app's settings cannot widen, narrow
  * or correct what is actually granted — it only decides what we believe we asked for.
  *
  * That asymmetry has already cost a production outage: the optional protected-customer-data
- * scopes were cleared from the Worker env to stop Shopify refusing installs, but stayed
+ * scopes were cleared from the app's settings to stop Shopify refusing installs, but stayed
  * declared in the toml, so every live merchant store kept being refused while development
  * stores (exempt from protected customer data review) kept working. These tests fail the
  * build when the toml and the env defaults drift apart again.
@@ -32,7 +32,7 @@ function tomlArray(toml: string, key: string): string[] | null {
   return [...m[1]!.matchAll(/"([^"]*)"/g)].map((x) => x[1]!);
 }
 
-/** `KEY=value` from a dotenv file, or `"KEY": "value"` from wrangler's jsonc vars. */
+/** `KEY=value` from a dotenv file, or `"KEY": "value",` from the settings module. */
 function envValue(text: string, key: string): string | null {
   for (const raw of text.split("\n")) {
     const line = raw.trim();
@@ -104,8 +104,8 @@ describe("Shopify app configuration", () => {
 
   /**
    * The checks above compare the tomls with ENV_SCOPES, a constant, which left the config we
-   * actually ship unchecked — and it drifted. The Worker env (and the old root `.env.example`,
-   * which no longer carries Worker settings: local dev inherits these vars) kept declaring
+   * actually ship unchecked — and it drifted. The app's settings (and the old root `.env.example`,
+   * which no longer carries app settings: local dev inherits these) kept declaring
    * the protected-customer-data optional scopes long after they were removed from the tomls.
    * Under managed installation that drift cannot change what Shopify grants, which is exactly
    * why nothing surfaced it: it only made our logs and authorize URLs claim scopes the app
@@ -113,7 +113,7 @@ describe("Shopify app configuration", () => {
    * that had already been fixed. Check the files themselves, not a constant describing them.
    */
   describe("the shipped configuration matches the tomls", () => {
-    for (const path of ["apps/cloudflare/wrangler.jsonc"]) {
+    for (const path of ["apps/aws/src/settings.ts"]) {
       const text = read(path);
 
       it(`${path} asks for the scopes the main app declares`, () => {
@@ -137,7 +137,7 @@ describe("Shopify app configuration", () => {
      * (docs/aws-deployment.md), whose APP_URL is its CloudFront address, set from the distribution
      * at deploy time, so it can't be read from a file here; moving to another address means
      * changing it in both tomls and running `shopify app deploy`. What can be checked: https, and
-     * not the retired Cloudflare Worker, whose stand-in only forwards (apps/cloudflare/moved).
+     * not the retired Cloudflare address (workers.dev).
      */
     it("registers the production address with Shopify", () => {
       const registered = new URL(tomlString(read(APP_CONFIGS[0]!), "application_url")!);

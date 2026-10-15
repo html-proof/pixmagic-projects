@@ -4,9 +4,10 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Hono } from "hono";
 import { handle } from "hono/aws-lambda";
-import { buildApp, cognitoAuth, cognitoConfig, firebasePasswordCheck, unconfiguredCognito, type App, type Deps } from "@app/api";
+import { buildApp, CLIENT_IP_HEADER, type App } from "@app/api";
 import { consume, runScheduled, seedAfterMove, type WorkerDeps } from "@app/worker";
-import { env as config, logger, memoryBlobs, memoryCoord, withLogContext, withTimeout, type Coord, type Mailer, type Queues } from "@app/core";
+import { logger, memoryBlobs, memoryCoord, withLogContext, withTimeout, type Coord, type Mailer, type Queues } from "@app/core";
+import { apiDeps, apiPath } from "./app.js";
 import { roleCredentials } from "./awsClient.js";
 import { consumeSqs, isSqsEvent } from "./consumer.js";
 import { dynamoCoord } from "./dynamoCoord.js";
@@ -22,19 +23,15 @@ import { staticSite } from "./staticSite.js";
  * bizinsights on AWS (infra/cdk). One package, deployed as three functions that differ only in
  * memory, timeout and trigger, so the UI, the API and the jobs always run the same build:
  *   - api:  the Lambda function URL behind CloudFront. The static UI (the Next.js export) and the
- *           API on one origin, as on the Cloudflare Worker (apps/cloudflare/src/index.ts), so the
- *           session cookie stays first-party.
+ *           API on one origin, so the session cookie stays first-party.
  *   - jobs: SQS event source mappings (sync, webhooks, aggregate, email) → the worker's consume().
  *   - cron: EventBridge Scheduler ({ "cron": "..." }) → runScheduled(), plus maintenance actions
  *           invoked directly ({ "action": "migrate" | "counts" | "after-move" }).
  * Platform pieces: RDS PostgreSQL (process-wide pools; Lambda has no per-request scope), DynamoDB
  * for the coordinator, S3 for large webhook bodies, SES for app email, Secrets Manager + SSM for
- * configuration (secrets.ts).
+ * configuration (secrets.ts). local.ts runs the same app on one machine, without any of them.
  */
 const here = dirname(fileURLToPath(import.meta.url));
-const API_PREFIX = /^\/api(\/|$)/;
-/** API paths served without the /api prefix (webhooks, pixel, Shopify), as on the Worker. */
-const BARE_API = /^\/(webhooks|pixel|shopify)\/|^\/(healthz|readyz)$/;
 
 /** Set by the CloudFront viewer-request function from what CloudFront itself saw (infra/cdk). */
 const VIEWER_IP = "x-insights-viewer-ip";
@@ -117,20 +114,7 @@ function apiApp(origin: string | null): Promise<App> {
       process.env.APP_URL = origin;
       process.env.API_URL = `${origin}/api`;
     }
-    const authFetch = withTimeout((input, init) => fetch(input, init), 10_000);
-    const cognito = cognitoConfig();
-    if (!cognito) logger.error({}, "COGNITO_USER_POOL_ID / COGNITO_CLIENT_ID are not set: every sign-in will answer 503");
-    const legacyKey = config().LEGACY_FIREBASE_API_KEY;
-    const jobs = workerDeps();
-    const deps: Deps = {
-      ...jobs,
-      auth: cognito ? cognitoAuth(cognito, authFetch) : unconfiguredCognito(),
-      legacy: legacyKey ? firebasePasswordCheck(legacyKey, authFetch) : null,
-      // The Worker's GLOBAL_LIMITER binding (300 a minute per IP), on the coordinator. AWS WAF's
-      // rate rule at CloudFront stops floods before they reach the function.
-      globalLimit: async (ip) => (await jobs.coord.hit(`rl:global:${ip}`, 60)) <= 300,
-    };
-    return buildApp(deps);
+    return buildApp(apiDeps(workerDeps()));
   })().catch((err: unknown) => {
     api = undefined;
     throw err;
@@ -165,10 +149,8 @@ root.all("*", async (c) => {
   const event = (c.env as { event?: UrlEvent } | undefined)?.event;
   const request = c.req.raw;
   const url = new URL(request.url);
-  let apiPath: string | null = null;
-  if (API_PREFIX.test(url.pathname)) apiPath = url.pathname.slice(4) || "/";
-  else if (BARE_API.test(url.pathname)) apiPath = url.pathname;
-  if (apiPath === null) {
+  const path = apiPath(url.pathname);
+  if (path === null) {
     // Public files: served without waiting for the secrets (a cold start shows the page sooner).
     const files = staticFiles();
     return files ? files(request) : new Response("Not found", { status: 404 });
@@ -184,15 +166,15 @@ root.all("*", async (c) => {
   const origin = viewerHost ? `https://${viewerHost}` : event?.requestContext?.domainName ? `https://${event.requestContext.domainName}` : null;
   const app = await apiApp(origin);
 
-  url.pathname = apiPath;
-  // The API reads the client's address from cf-connecting-ip (rate limits, audit). Nothing a
+  url.pathname = path;
+  // The API reads the client's address from CLIENT_IP_HEADER (rate limits, audit). Nothing a
   // client sends is trusted for it: behind CloudFront it is the address CloudFront saw (set by the
   // viewer-request function, and only believed on requests that carry the origin secret), and on a
   // bare function URL the address Lambda saw.
   const headers = new Headers(request.headers);
   const clientIp = viaCloudFront ? request.headers.get(VIEWER_IP) : (event?.requestContext?.http?.sourceIp ?? null);
-  for (const h of ["x-real-ip", "cf-connecting-ip", VIEWER_IP, VIEWER_HOST, ORIGIN_VERIFY]) headers.delete(h);
-  if (clientIp) headers.set("cf-connecting-ip", clientIp);
+  for (const h of ["x-real-ip", CLIENT_IP_HEADER, VIEWER_IP, VIEWER_HOST, ORIGIN_VERIFY]) headers.delete(h);
+  if (clientIp) headers.set(CLIENT_IP_HEADER, clientIp);
   return app.fetch(new Request(url, { method: request.method, headers, body: request.body, duplex: "half" } as RequestInit));
 });
 const http = handle(root);

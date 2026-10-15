@@ -11,16 +11,23 @@ Living log of what is built, verified, and outstanding.
 | Shared lib (HMAC, AES-GCM, OTP, capabilities, KPIs, dates, roles) | done | 25 unit tests |
 | Core (Shopify OAuth/GraphQL client, token rotation, queues, normalizers, persistence, alerts) | done | 8 unit tests + integration |
 | API (sessions, OTP, OAuth, webhooks, pixel, dashboard, settings, health, rate limits, CSRF) | done | 26 integration tests |
-| Worker (sync, webhooks, aggregates, reconcile, token refresh, alerts, health) | done | 10 integration tests |
+| Background jobs, `apps/worker` (sync, webhooks, aggregates, reconcile, token refresh, alerts, health) | done | 10 integration tests |
 | Web UI (auth, onboarding, dashboard, 8 settings pages) | done | `next build` + typecheck; e2e see below |
 | Web pixel extension + `shopify.app.toml` | done | not executable locally (needs Shopify CLI + store) |
 | E2E (Playwright) | written | see log |
-| CI (GitHub Actions), Dockerfile, Terraform (GCP) | done | CI not yet run (no remote); `terraform validate` not run locally |
+| CI (GitHub Actions: lint, audit, typecheck, unit, integration, migration drift, Lambda package build, e2e) | done | runs on every pull request and push to `main` |
+| Hosting on AWS (`apps/aws`, `infra/cdk`: CloudFront + WAF, Lambda, RDS, SQS, DynamoDB, S3, SES, Cognito) | live at https://d2mr8m2p1qkh58.cloudfront.net, deployed by Deploy to AWS on every merge to `main`; merchants move to it at the cutover (owner's go-ahead, not done yet) | smoke tests in every deploy (`infra/cdk/scripts/smoke.mjs`) |
+| Old Cloudflare deployment | removed from the repository (last in commit `a861bd9`); still running outside it until retired ([docs/aws-deployment.md](docs/aws-deployment.md#retiring-the-old-cloudflare-deployment)) | |
 | Docs + runbook | done | |
-| Staff Management, time & attendance, payroll (docs/staff.md) | done (not deployed; migration `20261014120000_staff_management` first) | 29 + 4 unit, 16 integration, 1 e2e journey (2026-10-14) |
-| Email integrations & automation: Gmail/Workspace + Microsoft 365 OAuth, SMTP, domains, templates, rules, delivery (docs/email.md) | done (not deployed; queue `insights-email` and migration `20261015090000_email_integrations` first; OAuth clients need admin setup) | 30 + 14 unit, 31 API + 19 worker integration, UI exercised in a local Worker (2026-10-14) |
+| Staff Management, time & attendance, payroll (docs/staff.md) | done (deployed) | 29 + 4 unit, 16 integration, 1 e2e journey (2026-10-14) |
+| Email integrations & automation: Gmail/Workspace + Microsoft 365 OAuth, SMTP, domains, templates, rules, delivery (docs/email.md) | done (deployed; OAuth clients need admin setup) | 30 + 14 unit, 31 API + 19 worker integration, UI exercised locally (2026-10-14) |
 
 ## Log
+
+> The entries below are history: paths and commands in them refer to the code of their day. From
+> Step 10 to the 2026-10-14 entries, Insights ran on a Cloudflare Worker (`apps/cloudflare`), removed
+> from the repository after commit `a861bd9`; it now runs on AWS (see "AWS, and Cloudflare removed"
+> below).
 
 - **Step 1 – scaffold.** pnpm workspace, `docker-compose.yml` (Postgres 17, Redis 7, Mailpit, Firebase Auth emulator). Local ports 5434/6380 because a native Postgres and another project's Redis already used 5432/6379 on this machine.
 - **Step 2 – data model.** `packages/db/prisma/schema.prisma`; migrations `init` + `rls`. RLS on all tenant tables for the non-owner `app_rls` role (`infra/postgres/init.sql`).
@@ -66,9 +73,14 @@ Living log of what is built, verified, and outstanding.
 - **Email integrations and automation (2026-10-14).** Settings → Email integrations: connect Gmail / Google Workspace (`gmail.send`) and Outlook / Microsoft 365 (delegated `Mail.Send`) with OAuth + PKCE, or any provider over SMTP (TLS/STARTTLS only, SSRF-checked host); envelope-encrypted credentials; domain ownership + SPF/DKIM/DMARC checks over DNS-over-HTTPS; sender identities; sanitized, versioned templates; declarative automation rules on Shopify events (order created/paid/cancelled/fulfilled, detected abandoned checkouts) and custom events (`POST /api/v1/events`); a delivery pipeline on a new `insights-email` queue with limits, retries, holds, suppression, one-click unsubscribe and honest statuses (acceptance is not delivery; interrupted sends are `unknown`, never auto-resent). 15 tables with RLS and composite tenant FKs. See docs/email.md for setup, API (docs/email-api.yaml), limitations and the production checklist.
   - Found by the tests: a confirmed sender came back without its new default flag; fixed. The append-only trigger on `email_message_events` was proven by the demo seed (it refused a rewrite).
 
+- **AWS, and Cloudflare removed (2026-10-15 to 2026-10-16).** Insights runs on AWS in ap-southeast-2 ([docs/aws-deployment.md](docs/aws-deployment.md); design in [docs/aws-architecture.md](docs/aws-architecture.md)): CloudFront + WAF in front of one Lambda package deployed as three functions (`api`: UI + API; `jobs`: the SQS consumers; `cron`: EventBridge Scheduler sweeps and maintenance actions such as `migrate`), RDS PostgreSQL 17, SQS with a dead-letter queue, DynamoDB for the coordinator, S3 for large webhook bodies and the hashed UI files, SES for app email, Secrets Manager + an SSM parameter for configuration, and Cognito for sign-in. It ships only through GitHub `main`: CI, then Deploy to AWS (build, `cdk deploy`, migrations, smoke tests, and a rollback of the Lambda aliases if any of that fails). Live at https://d2mr8m2p1qkh58.cloudfront.net since 2026-10-15; its schedules stay off and merchants stay on the old deployment until the cutover.
+  - Cloudflare removed from the repository: `apps/cloudflare` (wrangler config, Worker entry, Durable Object coordinator, SMTP socket, the stand-in Worker for the move), the Cloudflare deployment guide, the `cloudflared` compose service, and wrangler in CI (which now builds the Lambda package). The last commit that has them is `a861bd9`. Local development and the e2e suite use the local server, `pnpm --filter @app/aws dev` (http://localhost:8787: UI, API and jobs in one Node process, settings in `apps/aws/.env`). Prisma's client is generated for Node (`runtime = "nodejs"`).
+  - Still running outside the repository until the owner retires it: the old Worker at https://insights.imeseban.workers.dev and its database on the owner's PC ([docs/aws-deployment.md](docs/aws-deployment.md#retiring-the-old-cloudflare-deployment)).
+
 ## Outstanding / needs your input
 
-- Real credentials: Shopify Partner app (client id/secret), Firebase project + Apple Sign In configuration, SMTP provider. See `docs/shopify-setup.md`, `docs/firebase-setup.md`.
+- The cutover to AWS, then retiring the old Cloudflare deployment and the database on the owner's PC: the owner's go-ahead ([docs/aws-deployment.md](docs/aws-deployment.md)).
+- Owner-only AWS steps: an alert email, a verified SES sending domain (app email fails until then), the Google sign-in OAuth client, and the provider secrets not on this PC ([docs/aws-deployment.md](docs/aws-deployment.md#owner-only-steps)).
 - Live OAuth against a dev store, `shopify app deploy`, and pixel delivery can only be verified with those credentials and a public HTTPS URL.
 - Weekly digest emails: preference is stored, sender job not implemented yet.
 - **Step 9 – local run.** Port 3000 is used by another app on this machine, so the web dev server now runs on **3001** (`APP_URL=http://localhost:3001`). Found the Firebase emulator's UI also binds 4000 (clashing with the API); disabled it in `infra/firebase/firebase.json`. Stack verified up: web 3001, API 4000 (`/readyz` ok), worker 4100, Postgres, Redis, Mailpit. Web now uses the real Firebase project from `.env`; restarting the web server is required after changing any `NEXT_PUBLIC_*` value.
@@ -161,5 +173,5 @@ Living log of what is built, verified, and outstanding.
   - Not included (stated in docs/staff.md): statutory tax/deductions for any jurisdiction (all pay labelled estimated), money transfers or payment-provider webhooks, receipt uploads, MFA (needs Firebase Identity Platform), push updates (live views poll).
 
 - **Renamed to bizinsights, with one logo everywhere (2026-10-16).** Every user-facing "Insights" (UI copy, page titles, emails, WhatsApp and email error text, legal pages, the Cognito verification email, the Shopify app name in both `shopify.app*.toml`, the listing copy) now reads "bizinsights", and `CONTACT.legalName` is "bizinsights". The four different marks in use (the landing page's orbit mark, two bar marks on the auth pages, the trend-line square in the top bar) are replaced by one: three rising green bars, `BrandMark`/`BrandLogo` in `apps/web/src/components/Brand.tsx`. The landing intro now builds that mark bar by bar and the final scene gathers its points into it. New favicon (`app/icon.svg`, `app/favicon.ico`), Apple touch icon and Shopify listing icon, all rendered by `apps/web/scripts/make-icons.py`.
-  - **Kept on purpose:** identifiers that production depends on (AWS stack, secret and SSM names, the `insights` Worker and its queues, `insights:*` browser storage keys, WhatsApp template names `insights_*` already in merchants' Meta accounts, the `_insights-verify` DNS records, the `insights-pixel` extension handle), Meta's own "Insights API", and history in this file.
+  - **Kept on purpose:** identifiers that production depends on (AWS stack, secret and SSM names, SQS queue names, `insights:*` browser storage keys, WhatsApp template names `insights_*` already in merchants' Meta accounts, the `_insights-verify` DNS records, the `insights-pixel` extension handle), Meta's own "Insights API", and history in this file.
   - **Owner to rename outside the code:** the Google OAuth consent screen app name and client "Insights web" (Google compares it with the homepage brand), the Meta app "Insights" (971575545351940) and its "Insights ads reporting" configuration, and the Shopify app name (`shopify app deploy` pushes the new `name`). Production `EMAIL_FROM` is set outside the repo, so its display name changes where it is set.

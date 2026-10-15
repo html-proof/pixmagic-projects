@@ -6,15 +6,15 @@ import type { App } from "../app.js";
 
 /**
  * Once a delivery has been recorded (or re-armed) this long, the request that did it is over:
- * Shopify gives up at 5s and the Worker is cancelled with it. Shopify's first retry can come about
- * a second later, so a retry inside this window is answered 503, never 200 (see redelivery).
+ * Shopify gives up waiting at 5s. Shopify's first retry can come about a second later, so a retry
+ * inside this window is answered 503, never 200 (see redelivery).
  */
 const REARM_AFTER_MS = 30_000;
 
 /**
  * A retry of a delivery we already recorded. The row is committed before the queue send, so it can
- * exist with nothing behind it: the DB tunnel dropped after the INSERT committed (we answered 500),
- * or Shopify gave up at 5s and the Worker was cancelled before the send. A 200 ends Shopify's
+ * exist with nothing behind it: the database connection dropped after the INSERT committed (we
+ * answered 500), or the request was cut off before the send. A 200 ends Shopify's
  * retries, so answering one for such a row loses the event for good (uninstall, redact,
  * products/delete: the payload was never stored). Only a consumer touching the row proves it was
  * queued, so:

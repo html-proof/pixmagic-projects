@@ -3,25 +3,32 @@
 # Every port is published on the loopback addresses only (IPv4 and IPv6, so `localhost` works
 # either way). A bare "5434:5432" listens on all interfaces, and Docker Desktop's firewall rule
 # admits it on every network profile: anyone on the same Wi-Fi could log in to Postgres as the
-# superuser. The cloudflared tunnel reaches Postgres over the compose network, not these ports.
+# superuser.
+#
+# On the owner's PC this Postgres is still the old Cloudflare deployment's production database,
+# reached through a cloudflared container that is no longer defined here (docs/aws-deployment.md,
+# "Retiring the old Cloudflare deployment"). Until that is retired, leave the postgres service's
+# TLS and restart settings as they are, and never run `docker compose down` or `--remove-orphans`
+# in that checkout.
 services:
   postgres:
     image: postgres:17-alpine
     environment:
       POSTGRES_USER: app
-      # Only read when the data volume is first created. Anything reachable from elsewhere (the
-      # tunnel to Hyperdrive) needs a real password: see docs/security.md, "Database credentials".
+      # Only read when the data volume is first created. Anything reachable from elsewhere needs a
+      # real password: see docs/security.md, "Database credentials".
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-app}
       POSTGRES_DB: app
     ports: ["127.0.0.1:${PG_PORT:-5434}:5432", "[::1]:${PG_PORT:-5434}:5432"]
-    # Production runs on this container (through the tunnel below): come back after a Docker or PC restart.
+    # The old deployment's production runs on this container: come back after a Docker or PC restart.
     restart: unless-stopped
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/01-roles.sql:ro
       - ./infra/postgres/certs:/certs:ro
-    # Hyperdrive requires TLS. If infra/postgres/certs/server.{crt,key} exist, enable SSL (optional
-    # for clients); the key is copied so Postgres sees the ownership/permissions it insists on.
+    # If infra/postgres/certs/server.{crt,key} exist, enable SSL (optional for clients; the old
+    # deployment's connection requires it); the key is copied so Postgres sees the
+    # ownership/permissions it insists on.
     entrypoint: ["sh", "-c"]
     command:
       - |
@@ -42,39 +49,13 @@ services:
   cognito:
     image: node:24-alpine
     working_dir: /data
-    # Its tokens name http://127.0.0.1:9229 as their issuer, which is where the Worker reaches it.
+    # Its tokens name http://127.0.0.1:9229 as their issuer, which is where the local server reaches it.
     command: >-
       sh -c "[ -f .cognito/db/local_insights.json ] || cp -r /seed/.cognito .;
       printf '{\"TokenConfig\":{\"IssuerDomain\":\"http://127.0.0.1:9229\"}}' > .cognito/config.json;
       HOST=0.0.0.0 PORT=9229 exec npx -y cognito-local@5.3.0"
     volumes: ["./infra/cognito-local/seed:/seed:ro", "cognito-data:/data"]
     ports: ["127.0.0.1:9229:9229", "[::1]:9229:9229"]
-  # Connects this Postgres to Cloudflare (Workers VPC -> Hyperdrive) for the deployed Worker.
-  # Needs CLOUDFLARE_TUNNEL_TOKEN in .env; start with `docker compose --profile tunnel up -d cloudflared`.
-  cloudflared:
-    image: cloudflare/cloudflared:latest
-    profiles: ["tunnel"]
-    # --protocol quic is REQUIRED, not optional: Workers VPC (how Hyperdrive reaches this
-    # Postgres) only works over QUIC. Cloudflare: "Workers VPC requires Cloudflare Tunnel to
-    # connect using the QUIC transport protocol"; HTTP/2 "works for Cloudflare Zero Trust
-    # traffic but prevents DNS resolution from Workers VPC"
-    # (developers.cloudflare.com/workers-vpc/reference/troubleshooting/).
-    # This was previously pinned to http2 because QUIC died on a UDP-throttled network, but that
-    # trades one failure for another: the connector registers and reports healthy while Hyperdrive
-    # gets `connection_refused` (error 2015) and /readyz reports {"db":false}.
-    # QUIC needs outbound UDP/7844. If it is blocked, fix the network - do not pin http2.
-    # --retries 1 caps the reconnect backoff at 20s instead of the default 320s (5 retries). The host
-    # is on a mobile hotspot whose link drops for seconds-to-minutes; with the default, cloudflared
-    # kept sleeping ~2.5 min after the link was already back (2026-10-06: last failure 06:07:05, no
-    # dial attempt until 06:09:40), stretching every DB outage. It cannot cause an http2 fallback:
-    # an explicit --protocol quic disables protocol fallback. --retries is a `tunnel` flag, before `run`.
-    command: tunnel --no-autoupdate --protocol quic --retries 1 run
-    environment:
-      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
-    restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
 volumes:
   pgdata: {}
   cognito-data: {}

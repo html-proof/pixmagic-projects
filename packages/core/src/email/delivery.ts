@@ -23,7 +23,7 @@ import { isSuppressed, addSuppression, unsubscribeOneClickUrl, unsubscribePageUr
 import { markDegraded, markReauthorizationRequired } from "./tokens.js";
 import { AAD, open, seal } from "./vault.js";
 
-/** Cloudflare Queues delays a message by at most 12 hours; later sends are picked up by the sweep. */
+/** The longest a queued send waits in the queue; sends due later are picked up by the sweep. */
 export const MAX_QUEUE_DELAY_S = 12 * 3600;
 /** A held message (account disabled or awaiting reconnection, sending paused) looks again after this. */
 const HOLD_MS = 60 * 60_000;

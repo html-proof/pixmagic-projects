@@ -1,5 +1,8 @@
 # Security implementation, 2026-10-14
 
+> Historical record (2026-10-14): written when bizinsights ran on Cloudflare Workers. It now runs on
+> AWS: see [aws-architecture.md](../aws-architecture.md) and, for the current model, [security.md](../security.md).
+
 > **Ported 2026-10-16.** Written on the Firebase tree; the fixes reached `main` (and AWS) in
 > branch `claude/security-hardening-aws`, ported onto the Cognito/AWS tree. Differences: the optional
 > Turnstile check on "Email me a code" was left out (it needs redoing for Cognito's

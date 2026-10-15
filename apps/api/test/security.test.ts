@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { systemDb } from "@app/db";
+import { CLIENT_IP_HEADER } from "../src/context.js";
 import { signWebhookBody } from "@app/shared";
 import { buildApp } from "../src/app.js";
 import { LIMITS } from "../src/rateLimit.js";
@@ -81,7 +82,7 @@ describe("emailed code guessing and sending", () => {
     ctx.app.inject({
       method: "POST",
       url: "/auth/password/reset",
-      headers: { ...ORIGIN, "cf-connecting-ip": ip },
+      headers: { ...ORIGIN, [CLIENT_IP_HEADER]: ip },
       payload: { email: "victim@x.com", code, password: "a-new-password", confirmPassword: "a-new-password" },
     });
 
@@ -99,10 +100,10 @@ describe("emailed code guessing and sending", () => {
   it("caps the codes sent to one address, whichever IP asks", async () => {
     ctx.auth.addUser({ sub: "v", email: "victim@x.com" });
     for (let i = 0; i < LIMITS.codeEmail.max; i++) {
-      const res = await ctx.app.inject({ method: "POST", url: "/auth/password/forgot", headers: { ...ORIGIN, "cf-connecting-ip": `10.0.0.${i}` }, payload: { email: "victim@x.com" } });
+      const res = await ctx.app.inject({ method: "POST", url: "/auth/password/forgot", headers: { ...ORIGIN, [CLIENT_IP_HEADER]: `10.0.0.${i}` }, payload: { email: "victim@x.com" } });
       expect(res.statusCode).toBe(200);
     }
-    const more = await ctx.app.inject({ method: "POST", url: "/auth/password/forgot", headers: { ...ORIGIN, "cf-connecting-ip": "10.0.1.1" }, payload: { email: "victim@x.com" } });
+    const more = await ctx.app.inject({ method: "POST", url: "/auth/password/forgot", headers: { ...ORIGIN, [CLIENT_IP_HEADER]: "10.0.1.1" }, payload: { email: "victim@x.com" } });
     expect(more.statusCode).toBe(429);
     expect(ctx.auth.sent.filter((s) => s.email === "victim@x.com")).toHaveLength(LIMITS.codeEmail.max);
   });

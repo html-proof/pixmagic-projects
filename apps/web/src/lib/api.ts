@@ -113,7 +113,7 @@ export async function api<T = unknown>(path: string, init: { method?: string; bo
   try {
     if (text) json = JSON.parse(text);
   } catch {
-    // Non-JSON body (e.g. a Cloudflare error page): report the status instead of a parse error.
+    // Non-JSON body (e.g. a CDN error page): report the status instead of a parse error.
     if (res.ok) throw new ApiError(res.status, "bad_response", "Unexpected response from the server");
   }
   if (!res.ok) {

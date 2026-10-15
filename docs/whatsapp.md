@@ -21,7 +21,7 @@ Everything is off until a merchant turns it on. A store has WhatsApp "on" once i
 | Campaigns, automations, the sweeper and retention | `campaigns.ts`, `automations.ts`, `scheduler.ts` (same folder) |
 | Merchant API | `apps/api/src/routes/whatsapp.ts`, `whatsappOps.ts`, `whatsappCommon.ts` |
 | Public routes: Meta webhook, tracking page, review form, tracked links | `apps/api/src/routes/whatsappPublic.ts` |
-| Worker wiring (queue consumer, Shopify webhooks, cron) | `apps/worker/src/handlers.ts`, `apps/worker/src/index.ts` |
+| Background jobs (queue consumer, Shopify webhooks, cron) | `apps/worker/src/handlers.ts`, `apps/worker/src/index.ts` |
 | Dashboard | `apps/web/src/app/(app)/whatsapp/*`, `apps/web/src/components/whatsapp/*` |
 | Customer pages | `apps/web/src/app/track`, `apps/web/src/app/review` |
 | Tests | `packages/shared/test/whatsapp.test.ts`, `apps/worker/test/whatsapp.test.ts`, `apps/api/test/whatsapp.test.ts` |
@@ -30,7 +30,7 @@ Everything is off until a merchant turns it on. A store has WhatsApp "on" once i
 
 Every table carries `workspace_id` and has the same row-level-security policy as the rest of the schema
 (`tenant_isolation`). The merchant API reads through `withTenant` *and* filters by workspace and store; the public
-routes and the worker use the owner role and are scoped by token, signature or store id.
+routes and the background jobs use the owner role and are scoped by token, signature or store id.
 
 | Table | Holds | Notes |
 | --- | --- | --- |
@@ -80,7 +80,7 @@ Analytics still store no customer personal data. WhatsApp, once connected, keeps
    (30 s, 2 min, 10 min, 30 min, 2 h, then failed); an expired or revoked token marks the connection "reconnect" and
    holds messages (cancelled after 48 h); a customer who stopped marketing is recorded; anything else fails with a
    readable reason.
-5. A message cut off mid-send (the Worker killed) is marked failed, never re-sent on its own: Meta may have it, and a
+5. A message cut off mid-send (the jobs function killed) is marked failed, never re-sent on its own: Meta may have it, and a
    duplicate is worse than a retry the merchant chooses.
 
 ### Consent
@@ -235,11 +235,11 @@ shows "coming soon". The steps below are what's left, in order.
    product WhatsApp Cloud API, asset WhatsApp accounts, permissions `whatsapp_business_management` and
    `whatsapp_business_messaging`, token expiration **Never**. Its id is `WHATSAPP_CONFIG_ID`.
 4. Permissions `whatsapp_business_messaging` and `whatsapp_business_management` with **Advanced Access** (App Review).
-5. App settings: add `insights.imeseban.workers.dev` to **App domains**, **Allowed domains for the JavaScript SDK**
+5. App settings: add `d2mr8m2p1qkh58.cloudfront.net` to **App domains**, **Allowed domains for the JavaScript SDK**
    and **Valid OAuth redirect URIs** (Embedded Signup only returns ids to listed HTTPS domains).
 6. The app's WhatsApp **webhook** needs no clicking: once `WHATSAPP_APP_SECRET` (or `META_APP_SECRET`) and
    `WHATSAPP_WEBHOOK_VERIFY_TOKEN` are set, the */15 cron (`ensurePlatformWebhook`, at most every 6 hours) points it
-   at `https://insights.imeseban.workers.dev/api/webhooks/whatsapp` with `messages`, `message_template_status_update`,
+   at `https://d2mr8m2p1qkh58.cloudfront.net/api/webhooks/whatsapp` with `messages`, `message_template_status_update`,
    `template_category_update`, `message_template_quality_update`, `phone_number_quality_update`, `account_update` and
    `user_preferences`. A webhook already pointing at another URL is left alone (logged); set it by hand in WhatsApp →
    Configuration → Webhook then.
@@ -261,10 +261,10 @@ verify token to set by hand, as it does if Meta refuses the subscription.
 
 ### 2. Server (owner)
 
-Public ids in `apps/cloudflare/wrangler.jsonc` `vars` (`WHATSAPP_APP_ID`, `WHATSAPP_CONFIG_ID`,
-`WHATSAPP_API_VERSION`), secrets with `npx wrangler secret put WHATSAPP_APP_SECRET` and
-`npx wrangler secret put WHATSAPP_WEBHOOK_VERIFY_TOKEN`. Example placeholders are in
-`apps/cloudflare/.dev.vars.example`. Without them the dashboard says Meta's sign-up isn't set up (and offers the
+Public ids in `apps/aws/src/settings.ts` (`APP_SETTINGS`: `WHATSAPP_APP_ID`, `WHATSAPP_CONFIG_ID`,
+`WHATSAPP_API_VERSION`), secrets with `node infra/cdk/scripts/put-secrets.mjs --set WHATSAPP_APP_SECRET` and
+`node infra/cdk/scripts/put-secrets.mjs --set WHATSAPP_WEBHOOK_VERIFY_TOKEN`. Placeholders for the local server
+are in `apps/aws/.env.example`. Without them the dashboard says Meta's sign-up isn't set up (and offers the
 manual route); nothing pretends to be connected.
 
 ### 3. Shopify
@@ -279,9 +279,9 @@ manual route); nothing pretends to be connected.
 
 ### 4. Deploy
 
-Run the migration against production **before** deploying (as for every schema change; back up first):
-`DATABASE_URL=... pnpm db:migrate`. Then deploy the Worker as usual. The new cron work rides the existing `*/15`
-trigger and queue; nothing else to provision.
+Merge to `main` as usual: the **Deploy to AWS** workflow applies the migration after the deploy, as for every
+schema change ([aws-deployment.md](aws-deployment.md); RDS keeps point-in-time backups). The new cron work rides the
+existing `*/15` schedule and queue; nothing else to provision.
 
 ### 5. First use (merchant)
 
@@ -316,7 +316,7 @@ TEST_PG_PORT=5447 TEST_DB=wa_test pnpm --filter @app/api exec vitest run test/wh
 Use a throwaway Postgres for `TEST_PG_PORT`, not the one that hosts production. Meta is faked in tests; no message
 leaves the machine.
 
-The button itself, in a real browser against the real Worker, with Meta's SDK and Meta's page stubbed (blocked
+The button itself, in a real browser against the real local server, with Meta's SDK and Meta's page stubbed (blocked
 window, closed part-way, a look-alike message from another site, the server refusing, success, a number with its
 own PIN, Meta finishing without a number):
 
@@ -324,7 +324,7 @@ own PIN, Meta finishing without a number):
 cd apps/web && TEST_PG_PORT=5447 npx playwright test e2e/whatsapp-connect.spec.ts
 ```
 
-`e2e/worker.env` switches Embedded Signup on with test values (`e2e_meta_app`, `e2e_config`) for this.
+`e2e/server.env` switches Embedded Signup on with test values (`e2e_meta_app`, `e2e_config`) for this.
 
 A local demo with sample data: start the `wa-demo` launch configuration (`.claude/wa-demo-server.mjs`, port 8793,
 database `wa_demo` on that throwaway Postgres), sign in with an emailed code from Mailpit, then

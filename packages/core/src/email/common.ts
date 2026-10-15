@@ -20,7 +20,7 @@ export interface EmailDeps {
   fetchImpl: FetchLike;
   /** bizinsights' own mailer: alerts to the workspace's admins (an account needs reconnecting). */
   mailer: Mailer;
-  /** Outbound TCP for SMTP accounts (cloudflare:sockets on Workers). Absent: SMTP can't connect. */
+  /** Outbound TCP for SMTP accounts (apps/aws/src/nodeSmtp.ts). Absent: SMTP can't connect. */
   smtpConnect?: SmtpConnect;
 }
 

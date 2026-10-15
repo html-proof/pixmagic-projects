@@ -68,19 +68,17 @@ All charges run through Shopify's Billing API (`appSubscriptionCreate`).
 **Privacy policy URL**
 
 ```
-https://insights.imeseban.workers.dev/privacy
+https://d2mr8m2p1qkh58.cloudfront.net/privacy
 ```
 
 **Support URL / contact**
 
 ```
-https://insights.imeseban.workers.dev/support
+https://d2mr8m2p1qkh58.cloudfront.net/support
 ```
 
-> Both pages render from `apps/web/src/lib/contact.ts`, which is still **blank**. They show a
-> visible "[not set]" marker until it is filled and the Worker is redeployed. Submitting
-> before then fails review on requirement 4.1 (reachable support contact) and on the privacy
-> policy URL.
+> Both pages render from `apps/web/src/lib/contact.ts` (filled in). Keep it filled: review
+> checks requirement 4.1 (reachable support contact) and the privacy policy URL.
 
 **Screenshots** — `../../demo-screenshots/`. Shopify wants at least 1600 x 900; the current
 captures are 800 x 600 to 1200 x 900, so they must be retaken at that size rather than
@@ -104,7 +102,7 @@ nothing back to the store.
 
 Install and first run
 
-1. Go to https://insights.imeseban.workers.dev/signup and create an account with an email
+1. Go to https://d2mr8m2p1qkh58.cloudfront.net/signup and create an account with an email
    address you can receive mail at.
 2. Confirm the address with the link we email you.
 3. On "Let's get your store set up", click "Continue with Shopify" and approve the two

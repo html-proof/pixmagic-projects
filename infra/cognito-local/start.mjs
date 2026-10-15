@@ -7,7 +7,7 @@
 //
 // --fresh starts from the seed again (no users). It listens on 127.0.0.1 only, and its tokens'
 // issuer is http://127.0.0.1:<port>/local_insights, which is what COGNITO_ENDPOINT points the
-// Worker at. Codes it would email are printed in its log and kept in <data>/.cognito/db/local_insights.json.
+// local server at. Codes it would email are printed in its log and kept in <data>/.cognito/db/local_insights.json.
 import { spawn } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
