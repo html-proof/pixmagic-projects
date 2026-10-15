@@ -5,7 +5,6 @@ import {
   useInView,
   useMotionValue,
   useMotionValueEvent,
-  useSpring,
   useTransform,
   type MotionValue,
 } from "motion/react";
@@ -65,17 +64,16 @@ export function ShopifyConnection() {
   const reduced = useReducedMotion();
   const diagramRef = useRef<HTMLDivElement>(null);
   const raw = useScrollProgress(diagramRef, ["start 0.85", "end 0.6"]);
-  const smooth = useSpring(raw, { stiffness: 140, damping: 32, mass: 0.6 });
   const full = useMotionValue(1);
-  const progress = reduced ? full : smooth;
+  const progress = reduced ? full : raw;
 
   const [connected, setConnected] = useState(false);
   // One React update when the line completes (or un-completes), not one per scroll frame.
   // React bails out when the boolean is unchanged, so this is one render per crossing.
-  useMotionValueEvent(smooth, "change", (v) => setConnected(v >= LIVE_AT));
+  useMotionValueEvent(raw, "change", (v) => setConnected(v >= LIVE_AT));
   useEffect(() => {
-    setConnected(smooth.get() >= LIVE_AT);
-  }, [smooth]);
+    setConnected(raw.get() >= LIVE_AT);
+  }, [raw]);
 
   const onScreen = useInView(diagramRef, { amount: 0.15 });
   const live = reduced || connected;
@@ -164,9 +162,9 @@ function HorizontalDiagram({ progress, flowing, live, instant }: DiagramProps) {
           <motion.div
             aria-hidden
             style={{ scaleX: fill }}
-            className="absolute inset-x-0 top-1/2 h-[2px] origin-left -translate-y-1/2 [background:var(--lp-gradient)]"
+            className="lp-layer absolute inset-x-0 top-1/2 h-[2px] origin-left -translate-y-1/2 [background:var(--lp-gradient)]"
           />
-          <motion.div aria-hidden style={{ x: headX, opacity: headOpacity }} className="pointer-events-none absolute inset-0">
+          <motion.div aria-hidden style={{ x: headX, opacity: headOpacity }} className="lp-layer pointer-events-none absolute inset-0">
             <span className="absolute left-0 top-1/2 size-2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-lp-cyan shadow-[0_0_14px_3px_rgb(101_216_208/0.45)]" />
           </motion.div>
           <Packets flowing={flowing} axis="x" />
@@ -209,9 +207,9 @@ function VerticalDiagram({ progress, flowing, live, instant }: DiagramProps) {
         <motion.div
           aria-hidden
           style={{ scaleY: fill }}
-          className="absolute inset-y-0 left-[37px] w-[2px] origin-top [background:linear-gradient(180deg,var(--lp-primary),var(--lp-blue)_55%,var(--lp-cyan))]"
+          className="lp-layer absolute inset-y-0 left-[37px] w-[2px] origin-top [background:linear-gradient(180deg,var(--lp-primary),var(--lp-blue)_55%,var(--lp-cyan))]"
         />
-        <motion.div aria-hidden style={{ y: headY, opacity: headOpacity }} className="pointer-events-none absolute inset-0">
+        <motion.div aria-hidden style={{ y: headY, opacity: headOpacity }} className="lp-layer pointer-events-none absolute inset-0">
           <span className="absolute left-[38px] top-0 size-2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-lp-cyan shadow-[0_0_14px_3px_rgb(101_216_208/0.45)]" />
         </motion.div>
         <Packets flowing={flowing} axis="y" />
@@ -240,7 +238,7 @@ function Station({ index, icon: Icon, progress }: { index: number; icon: LucideI
       <Icon className="size-[18px] text-lp-muted" strokeWidth={1.8} />
       <motion.span
         style={{ opacity: a, scale }}
-        className="absolute inset-[-1px] grid place-items-center rounded-full border border-lp-violet-bright/60 bg-[radial-gradient(circle_at_50%_40%,rgb(140_123_255/0.35),rgb(18_22_28)_75%)] shadow-[0_0_24px_-4px_rgb(140_123_255/0.55)]"
+        className="lp-layer absolute inset-[-1px] grid place-items-center rounded-full border border-lp-violet-bright/60 bg-[radial-gradient(circle_at_50%_40%,rgb(140_123_255/0.35),rgb(18_22_28)_75%)] shadow-[0_0_24px_-4px_rgb(140_123_255/0.55)]"
       >
         <Icon className="size-[18px] text-lp-text" strokeWidth={1.8} />
       </motion.span>
@@ -273,7 +271,7 @@ function StepText({
   const numberColor = useTransform(a, (v) => (v > 0.5 ? "rgb(167, 152, 255)" : "rgb(125, 134, 147)"));
   const Tag = as === "li" ? motion.li : motion.div;
   return (
-    <Tag style={{ opacity, y }} className={`min-w-0 ${className}`}>
+    <Tag style={{ opacity, y }} className={`lp-layer min-w-0 ${className}`}>
       <p className={`font-medium tracking-[-0.01em] text-lp-text ${stacked ? "text-[15px] leading-snug" : "text-[15.5px]"}`}>
         <motion.span
           style={{ color: numberColor }}
@@ -360,7 +358,7 @@ function InsightNode({
       <motion.span
         aria-hidden
         style={{ opacity: wake }}
-        className="pointer-events-none absolute inset-0 rounded-[22px] border border-lp-violet/40 [background:radial-gradient(120%_90%_at_15%_20%,rgb(140_123_255/0.14),transparent_60%)]"
+        className="lp-layer pointer-events-none absolute inset-0 rounded-[22px] border border-lp-violet/40 [background:radial-gradient(120%_90%_at_15%_20%,rgb(140_123_255/0.14),transparent_60%)]"
       />
       <div className="relative flex items-center gap-4">
         <span className="relative grid size-11 shrink-0 place-items-center rounded-xl border border-lp-line-strong bg-lp-bg-2">
@@ -403,14 +401,15 @@ function Packets({ flowing, axis }: { flowing: boolean; axis: "x" | "y" }) {
 
 /**
  * One webhook notification travelling from the store to Insights. The wrapper spans the whole
- * line, so translating it by 100% of its own size carries the dot from one end to the other.
+ * line, so translating it by 100% of its own size carries the dot from one end to the other. It is
+ * its own layer: the loop runs for as long as the diagram is on screen, and must not repaint it.
  */
 function Packet({ label, index, axis }: { label: string; index: number; axis: "x" | "y" }) {
   const loop = { duration: 2.6, repeat: Infinity, repeatDelay: 2.2, delay: 0.4 + index * 1.2 };
   const travel = axis === "x" ? { x: ["0%", "100%"] } : { y: ["0%", "100%"] };
   return (
     <motion.div
-      className="absolute inset-0"
+      className="lp-layer absolute inset-0"
       initial={{ opacity: 0 }}
       animate={{ ...travel, opacity: [0, 1, 1, 0] }}
       transition={{
@@ -427,7 +426,7 @@ function Packet({ label, index, axis }: { label: string; index: number; axis: "x
             initial={{ opacity: 0 }}
             animate={{ opacity: [0, 0, 1, 1, 0, 0] }}
             transition={{ ...loop, ease: "linear", times: [0, 0.18, 0.3, 0.66, 0.78, 1] }}
-            className="absolute bottom-full left-1/2 mb-[26px] -translate-x-1/2 whitespace-nowrap font-lp-mono text-[10px] uppercase tracking-[0.14em] text-lp-muted"
+            className="lp-layer absolute bottom-full left-1/2 mb-[26px] -translate-x-1/2 whitespace-nowrap font-lp-mono text-[10px] uppercase tracking-[0.14em] text-lp-muted"
           >
             {label}
           </motion.span>

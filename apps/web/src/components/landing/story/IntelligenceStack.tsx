@@ -224,7 +224,7 @@ function IntelligenceCard({
             className="h-px flex-1 bg-linear-to-r from-lp-line-strong to-transparent"
           />
         </div>
-        <motion.div className="flex flex-1 flex-col" style={{ opacity: dim }}>
+        <motion.div className={`flex flex-1 flex-col ${dim ? "lp-layer" : ""}`} style={{ opacity: dim }}>
           <h3
             id={titleId}
             className={`lp-title text-balance ${stack ? "mt-3 md:mt-7 lg:mt-4 xl:mt-9" : "mt-3.5 md:mt-6"}`}
@@ -256,7 +256,7 @@ function IntelligenceCard({
       </div>
 
       <motion.div
-        className={`relative min-h-0 px-2.5 pb-2.5 md:py-3 md:pl-0 md:pr-3 ${stack ? STACK_VISUAL : "h-[300px] md:h-auto"}`}
+        className={`relative min-h-0 px-2.5 pb-2.5 md:py-3 md:pl-0 md:pr-3 ${stack ? STACK_VISUAL : "h-[300px] md:h-auto"} ${dim ? "lp-layer" : ""}`}
         style={{ opacity: dim }}
       >
         <div
@@ -278,7 +278,7 @@ function IntelligenceCard({
       {shade && (
         <motion.div
           aria-hidden
-          className="pointer-events-none absolute inset-0 bg-lp-bg"
+          className="lp-layer pointer-events-none absolute inset-0 bg-lp-bg"
           style={{ opacity: shade }}
         />
       )}

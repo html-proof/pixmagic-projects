@@ -1,9 +1,10 @@
 "use client";
 import type { MotionValue } from "motion/react";
-import { useMemo, useRef, type RefObject } from "react";
+import { useEffect, useMemo, useRef, type RefObject } from "react";
 import { useCanvasLoop, type CanvasFrame } from "@/hooks/useCanvasLoop";
 import { RGB, seeded, segment } from "@/lib/motion";
 import { MARK, ORBIT_POINTS } from "../shared/InsightMark";
+import { SHAPE, createParticles, rgbOf, type Particles } from "../shared/particles";
 
 /**
  * The final scene's data field: a viewport full of faint points that, as `progress` runs, fly
@@ -24,7 +25,7 @@ export const CONVERGE = {
 } as const;
 
 /** Fill colours, one per bucket; particles are stored sorted by bucket so each frame sets fillStyle 5 times. */
-const BUCKETS = [`rgb(${RGB.text})`, `rgb(${RGB.muted})`, `rgb(${RGB.violetBright})`, `rgb(${RGB.blue})`, `rgb(${RGB.cyan})`] as const;
+const BUCKETS = [RGB.text, RGB.muted, RGB.violetBright, RGB.blue, RGB.cyan].map(rgbOf);
 const B_TEXT = 0;
 const B_MUTED = 1;
 const B_VIOLET = 2;
@@ -194,8 +195,14 @@ export function ConvergeCanvas({
   className?: string;
 }) {
   const canvas = useRef<HTMLCanvasElement>(null);
+  const glCanvas = useRef<HTMLCanvasElement>(null);
+  const particles = useRef<Particles | null>(null);
+  // Created on mount so its WebGL setup can wait for an idle moment (see particles.ts).
+  useEffect(() => {
+    particles.current ??= createParticles(glCanvas.current);
+  }, []);
   const field = useMemo(() => buildField(Math.max(240, Math.round(count))), [count]);
-  const target = useRef({ cx: 0, cy: 0, scale: 6, frames: 0 });
+  const target = useRef({ cx: 0, cy: 0, scale: 6, frames: 0, drawn2d: true });
 
   const draw = (ctx: CanvasRenderingContext2D, { width, height, time, resized }: CanvasFrame) => {
     const t = target.current;
@@ -224,12 +231,17 @@ export function ConvergeCanvas({
     const scale = t.scale * zoom.get();
     const drift = time * 0.00022;
 
-    ctx.clearRect(0, 0, width, height);
+    const pts = (particles.current ??= createParticles(glCanvas.current));
+    pts.begin(width, height, (canvas.current?.width ?? width) / width);
+    // The points go to the WebGL canvas; this one stays empty (only the 2D fallback draws here,
+    // e.g. while the WebGL program is still compiling).
+    if (t.drawn2d || !pts.gpu) ctx.clearRect(0, 0, width, height);
+    t.drawn2d = !pts.gpu;
     const { sx, sy, tx, ty, delay, bend, size, alpha0, alpha1, phase, bucketStart } = field;
     for (let b = 0; b < BUCKETS.length; b++) {
       const end = bucketStart[b + 1];
       if (bucketStart[b] === end) continue;
-      ctx.fillStyle = BUCKETS[b];
+      const [cr, cg, cb] = BUCKETS[b];
       for (let i = bucketStart[b]; i < end; i++) {
         const ph = phase[i];
         // Slow drift in the field, so the data is alive before it gathers.
@@ -238,8 +250,7 @@ export function ConvergeCanvas({
         const s = size[i];
         const d = delay[i];
         if (d < 0) {
-          ctx.globalAlpha = alpha0[i] * ambientFade;
-          ctx.fillRect(ax - s / 2, ay - s / 2, s, s);
+          pts.add(ax, ay, s, s, SHAPE.rect, cr, cg, cb, alpha0[i] * ambientFade);
           continue;
         }
         // Each point's own eased journey (in-out cubic, inlined: this loop runs ~1600× a frame).
@@ -255,14 +266,18 @@ export function ConvergeCanvas({
         const y = ay + dy * e + dx * bow;
         // A calm shimmer once landed; none while travelling.
         const shimmer = 1 - e * 0.18 * (0.5 + 0.5 * Math.sin(time * 0.0016 + ph * 3));
-        ctx.globalAlpha = (alpha0[i] + (alpha1[i] - alpha0[i]) * e) * (1 - e + e * settleDim) * shimmer;
-        ctx.fillRect(x - s / 2, y - s / 2, s, s);
+        pts.add(x, y, s, s, SHAPE.rect, cr, cg, cb, (alpha0[i] + (alpha1[i] - alpha0[i]) * e) * (1 - e + e * settleDim) * shimmer);
       }
     }
-    ctx.globalAlpha = 1;
+    pts.flush(ctx, "normal");
   };
 
   useCanvasLoop(canvas, draw, { maxDpr });
 
-  return <canvas ref={canvas} aria-hidden className={`pointer-events-none ${className}`} />;
+  return (
+    <>
+      <canvas ref={glCanvas} aria-hidden className={`pointer-events-none ${className}`} />
+      <canvas ref={canvas} aria-hidden className={`pointer-events-none ${className}`} />
+    </>
+  );
 }

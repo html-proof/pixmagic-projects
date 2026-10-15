@@ -1,5 +1,5 @@
 "use client";
-import { motion, useMotionValue, useSpring, useTransform, type MotionValue } from "motion/react";
+import { motion, useMotionValue, useTransform, type MotionValue } from "motion/react";
 import { useRef, type CSSProperties } from "react";
 import { useReducedMotion } from "@/hooks/useReducedMotion";
 import { useScrollProgress } from "@/hooks/useScrollProgress";
@@ -119,7 +119,7 @@ function UncutBar({ progress, orientation }: { progress: MotionValue<number>; or
   const h = orientation === "h";
   return (
     <motion.div
-      className={`absolute ${h ? "rounded-[18px]" : "rounded-[16px]"}`}
+      className={`lp-layer absolute ${h ? "rounded-[18px]" : "rounded-[16px]"}`}
       style={{
         ...(h ? { left: 0, right: 0, top: "var(--ann)", height: "var(--bar)" } : { left: 0, top: 0, height: "100%", width: "var(--bw)" }),
         ...sliceFill(0, 1, orientation),
@@ -148,10 +148,9 @@ export function ProfitIntelligence() {
   const reduced = useReducedMotion();
   const runway = useRef<HTMLDivElement>(null);
   const scroll = useScrollProgress(runway);
-  // A soft spring gives the slices a little inertia without lagging behind the scroll.
-  const smooth = useSpring(scroll, { stiffness: 140, damping: 32, mass: 0.6, restDelta: 0.0005 });
+  // Follows the scroll exactly; the wheel itself is eased (useSmoothScroll).
   const finished = useMotionValue(1);
-  const progress = reduced ? finished : smooth;
+  const progress = reduced ? finished : scroll;
 
   return (
     <section aria-labelledby={TITLE_ID} className="relative isolate bg-[#06080A]">
@@ -202,7 +201,7 @@ export function ProfitIntelligence() {
 
             {/* No bottom margin on the in-view check: pinned near the foot of the screen, the shared
                 -12% margin would keep it hidden for the whole scene on tall tablets. */}
-            <motion.div {...riseIn(0.1, 12)} viewport={{ once: true }} className="mt-6 flex flex-col items-start gap-3 md:mt-8 lg:mt-[clamp(20px,4.5svh,48px)] lg:flex-row lg:items-center lg:gap-5">
+            <motion.div {...riseIn(0.1, 12)} viewport={{ once: true }} className="lp-layer mt-6 flex flex-col items-start gap-3 md:mt-8 lg:mt-[clamp(20px,4.5svh,48px)] lg:flex-row lg:items-center lg:gap-5">
               <IllustrativeNote />
               <p className="max-w-2xl text-[13px] leading-relaxed text-lp-muted md:text-[14px]">
                 Discounts and refunds come from your Shopify orders. Fees, ad spend, shipping and product costs live outside
@@ -218,7 +217,7 @@ export function ProfitIntelligence() {
 
 function SceneHeader() {
   return (
-    <motion.div {...riseIn(0, 12)} aria-hidden className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
+    <motion.div {...riseIn(0, 12)} aria-hidden className="lp-layer flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
       <p className="lp-eyebrow">From revenue to what remains</p>
       <div className="flex items-center gap-5 text-[12.5px] text-lp-text-2">
         <span className="flex items-center gap-2">
@@ -278,36 +277,36 @@ function HorizontalBar({ progress }: { progress: MotionValue<number> }) {
     >
       {/* Annotation row: Revenue spans the whole bar; estimated profit only what remains. */}
       <motion.p
-        className="absolute left-0 top-0 flex items-end pb-5 text-[clamp(30px,min(3.4vw,6.2svh),54px)] font-[550] leading-none tracking-[-0.04em]"
+        className="lp-layer absolute left-0 top-0 flex items-end pb-5 text-[clamp(30px,min(3.4vw,6.2svh),54px)] font-[550] leading-none tracking-[-0.04em]"
         style={{ height: "var(--ann)", color: revenueColor }}
       >
         Revenue
       </motion.p>
-      <motion.div className="absolute inset-x-0 h-px bg-white/20" style={{ top: "calc(var(--ann) - 10px)", opacity: revenueRule }}>
+      <motion.div className="lp-layer absolute inset-x-0 h-px bg-white/20" style={{ top: "calc(var(--ann) - 10px)", opacity: revenueRule }}>
         <span className="absolute -top-1 left-0 h-2 w-px bg-white/40" />
         <span className="absolute -top-1 right-0 h-2 w-px bg-white/40" />
       </motion.div>
       <motion.p
-        className="absolute right-0 top-0 flex items-end justify-end pb-5 text-[clamp(30px,min(3.4vw,6.2svh),54px)] font-[550] leading-none tracking-[-0.04em] text-lp-text"
+        className="lp-layer absolute right-0 top-0 flex items-end justify-end pb-5 text-[clamp(30px,min(3.4vw,6.2svh),54px)] font-[550] leading-none tracking-[-0.04em] text-lp-text"
         style={{ height: "var(--ann)", opacity: profitIn, y: profitShift }}
       >
         Estimated profit
       </motion.p>
       <motion.div
-        className="absolute right-0 h-px origin-right bg-gradient-to-r from-lp-positive to-lp-cyan"
+        className="lp-layer absolute right-0 h-px origin-right bg-gradient-to-r from-lp-positive to-lp-cyan"
         style={{ left: `${COSTS_TOTAL * 100}%`, top: "calc(var(--ann) - 10px)", scaleX: profitIn }}
       />
 
       {/* The original extent stays as a dashed ghost, so what was taken away stays legible. */}
       <motion.div
-        className="absolute inset-x-0 rounded-[18px] border border-dashed border-white/12"
+        className="lp-layer absolute inset-x-0 rounded-[18px] border border-dashed border-white/12"
         style={{ top: "var(--ann)", height: "var(--bar)", opacity: ghost }}
       />
 
       <UncutBar progress={progress} orientation="h" />
       <ProfitBlock orientation="h" progress={profitIn} />
       <motion.p
-        className="lp-eyebrow absolute pl-1"
+        className="lp-layer lp-eyebrow absolute pl-1"
         style={{ left: `${COSTS_TOTAL * 100}%`, top: "calc(var(--ann) + var(--bar) + 18px)", opacity: profitIn }}
       >
         What remains after the costs
@@ -333,27 +332,27 @@ function SliceH({ cost, index, progress }: { cost: Cost; index: number; progress
   return (
     <>
       <motion.div
-        className="absolute"
+        className="lp-layer absolute"
         style={{ left: `${start * 100}%`, width: `${cost.w * 100}%`, top: "var(--ann)", height: "var(--bar)", y }}
       >
         <motion.div
-          className={`absolute inset-0 origin-top ${index === 0 ? "rounded-l-[18px]" : ""}`}
+          className={`lp-layer absolute inset-0 origin-top ${index === 0 ? "rounded-l-[18px]" : ""}`}
           style={{ ...sliceFill(start, cost.w, "h"), opacity: m.fillOpacity, scaleY: m.fillScale }}
         />
         <motion.div
-          className={`absolute inset-x-[3px] top-0 h-[58%] rounded-[8px] ${SOURCE_CHIP[cost.source]}`}
+          className={`lp-layer absolute inset-x-[3px] top-0 h-[58%] rounded-[8px] ${SOURCE_CHIP[cost.source]}`}
           style={{ opacity: m.chipOpacity }}
         />
       </motion.div>
 
       {/* The cut: a thin bright line flashes where the slice is about to separate. */}
       <motion.div
-        className="absolute w-[2px] -translate-x-1/2 rounded-full bg-lp-text"
+        className="lp-layer absolute w-[2px] -translate-x-1/2 rounded-full bg-lp-text"
         style={{ left: `${(start + cost.w) * 100}%`, top: "calc(var(--ann) - 10px)", height: "calc(var(--bar) + 20px)", opacity: m.cut }}
       />
 
       <motion.svg
-        className="absolute inset-x-0 w-full overflow-visible"
+        className="lp-layer absolute inset-x-0 w-full overflow-visible"
         style={{ top: H_LANE_BOTTOM, height: "var(--lead)", clipPath: draw, opacity: m.reveal }}
         viewBox="0 0 1000 100"
         preserveAspectRatio="none"
@@ -368,7 +367,7 @@ function SliceH({ cost, index, progress }: { cost: Cost; index: number; progress
       </motion.svg>
 
       <motion.div
-        className="absolute flex flex-col items-center gap-1.5 whitespace-nowrap text-center"
+        className="lp-layer absolute flex flex-col items-center gap-1.5 whitespace-nowrap text-center"
         style={{
           left: `${(LABEL_AT[index] - LABEL_SLOT / 2) * 100}%`,
           width: `${LABEL_SLOT * 100}%`,
@@ -394,22 +393,22 @@ function VerticalBar({ progress }: { progress: MotionValue<number> }) {
   return (
     <div className="flex h-full flex-col [--bw:60px] sm:[--bw:72px] md:[--bw:128px]">
       <div className="relative pb-4">
-        <motion.p className="text-[30px] font-[550] leading-none tracking-[-0.04em] md:text-[40px]" style={{ color: revenueColor }}>
+        <motion.p className="lp-layer text-[30px] font-[550] leading-none tracking-[-0.04em] md:text-[40px]" style={{ color: revenueColor }}>
           Revenue
         </motion.p>
-        <motion.span className="absolute bottom-1.5 left-0 h-px bg-white/25" style={{ width: "var(--bw)", opacity: revenueRule }} />
+        <motion.span className="lp-layer absolute bottom-1.5 left-0 h-px bg-white/25" style={{ width: "var(--bw)", opacity: revenueRule }} />
       </div>
 
       <div className="relative min-h-0 flex-1">
         <motion.div
-          className="absolute left-0 top-0 h-full rounded-[16px] border border-dashed border-white/12"
+          className="lp-layer absolute left-0 top-0 h-full rounded-[16px] border border-dashed border-white/12"
           style={{ width: "var(--bw)", opacity: ghost }}
         />
 
         <UncutBar progress={progress} orientation="v" />
         <ProfitBlock orientation="v" progress={profitIn} />
         <motion.div
-          className="absolute -translate-y-1/2"
+          className="lp-layer absolute -translate-y-1/2"
           style={{ left: "calc(var(--bw) + 18px)", top: `${(COSTS_TOTAL + PROFIT_W / 2) * 100}%`, opacity: profitIn, y: profitShift }}
         >
           <p className="text-[24px] font-[550] leading-none tracking-[-0.035em] text-lp-text md:text-[34px]">Estimated profit</p>
@@ -437,26 +436,26 @@ function SliceV({ cost, index, progress }: { cost: Cost; index: number; progress
   return (
     <>
       <motion.div
-        className="absolute left-0"
+        className="lp-layer absolute left-0"
         style={{ top: `${start * 100}%`, height: `${cost.w * 100}%`, width: "var(--bw)", x }}
       >
         <motion.div
-          className={`absolute inset-0 origin-left ${index === 0 ? "rounded-t-[16px]" : ""}`}
+          className={`lp-layer absolute inset-0 origin-left ${index === 0 ? "rounded-t-[16px]" : ""}`}
           style={{ ...sliceFill(start, cost.w, "v"), opacity: m.fillOpacity, scaleX: m.fillScale }}
         />
         <motion.div
-          className={`absolute inset-y-[2px] left-0 w-[58%] rounded-[6px] ${SOURCE_CHIP[cost.source]}`}
+          className={`lp-layer absolute inset-y-[2px] left-0 w-[58%] rounded-[6px] ${SOURCE_CHIP[cost.source]}`}
           style={{ opacity: m.chipOpacity }}
         />
       </motion.div>
 
       <motion.div
-        className="absolute h-[2px] -translate-y-1/2 rounded-full bg-lp-text"
+        className="lp-layer absolute h-[2px] -translate-y-1/2 rounded-full bg-lp-text"
         style={{ top: `${(start + cost.w) * 100}%`, left: "-6px", width: "calc(var(--bw) + 12px)", opacity: m.cut }}
       />
 
       <motion.svg
-        className="absolute top-0 h-full w-[26px] overflow-visible"
+        className="lp-layer absolute top-0 h-full w-[26px] overflow-visible"
         style={{ left: V_LEADER_LEFT, clipPath: draw, opacity: m.reveal }}
         viewBox="0 0 100 1000"
         preserveAspectRatio="none"
@@ -471,7 +470,7 @@ function SliceV({ cost, index, progress }: { cost: Cost; index: number; progress
       </motion.svg>
 
       <motion.div
-        className="absolute right-0 flex -translate-y-1/2 flex-wrap items-center gap-x-2.5 gap-y-0.5"
+        className="lp-layer absolute right-0 flex -translate-y-1/2 flex-wrap items-center gap-x-2.5 gap-y-0.5"
         style={{ left: V_LABEL_LEFT, top: `${labelAt * 100}%`, opacity: m.reveal, x: m.labelShift }}
       >
         <span className="text-[13.5px] font-medium leading-tight text-lp-text md:text-[17px]">{cost.name}</span>
@@ -493,11 +492,11 @@ function ProfitBlock({ orientation, progress }: { orientation: Orientation; prog
   return (
     <div className="absolute" style={place}>
       <motion.div
-        className={`pointer-events-none absolute -z-10 ${h ? "-inset-x-10 -inset-y-14" : "-inset-x-8 -inset-y-10"}`}
+        className={`lp-layer pointer-events-none absolute -z-10 ${h ? "-inset-x-10 -inset-y-14" : "-inset-x-8 -inset-y-10"}`}
         style={{ backgroundImage: GLOW, opacity: progress }}
       />
       <motion.div
-        className={`absolute inset-0 border border-lp-positive/50 ${radius}`}
+        className={`lp-layer absolute inset-0 border border-lp-positive/50 ${radius}`}
         style={{ backgroundImage: `${h ? SHEEN_H : SHEEN_V}, ${h ? PROFIT_H : PROFIT_V}`, opacity: progress }}
       />
     </div>

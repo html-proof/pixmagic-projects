@@ -123,6 +123,21 @@ health grading lives in `@app/shared/health` and its drop-off and landing-page m
 Detail panels load on demand (`components/dashboard/TopicDetail.tsx`): keep code that only a click
 needs out of the page's first load.
 
+**Landing page motion.** On integrated graphics the page drops frames on GPU work, not JavaScript,
+so every effect has to be cheap for the GPU process:
+
+- Anything whose transform or opacity follows the scroll gets its own layer (`lp-layer`), so the
+  GPU moves it instead of the browser repainting the area around it. Avoid animating `filter`,
+  `backdrop-filter`, `mask-image`, `border-radius`, `clip-path` or colours on large elements:
+  each frame of those is a repaint.
+- Particles go through `components/landing/shared/particles.ts`: one batched WebGL draw per frame
+  (2D fallback included), set up in idle time after the intro. Don't stamp hundreds of shapes with
+  the 2D canvas API.
+- Ambient loops are composited CSS animations (`lp-loop`, paused off screen by `usePauseWhenHidden`);
+  no SVG `stroke-dashoffset`/SMIL loops and no motion `repeat: Infinity` on unpromoted elements.
+- Wheel scrolling is eased by `hooks/useSmoothScroll.ts` (Lenis), so scroll-driven scenes follow the
+  scroll directly: don't add `useSpring` on top of scroll progress.
+
 ## Configuration
 
 | Setting | Lives in | Read by |
