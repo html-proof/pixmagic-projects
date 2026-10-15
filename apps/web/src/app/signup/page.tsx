@@ -39,7 +39,10 @@ export default function SignupPage() {
   const [busy, setBusy] = useState(false);
   /** Created: the address the confirmation code went to. */
   const [sentTo, setSentTo] = useState<string | null>(null);
-  const fields = useFieldErrors(problems({ name, email, password, confirm, terms }));
+  const formProblems = problems({ name, email, password, confirm, terms });
+  const fields = useFieldErrors(formProblems);
+  /** Every field filled in correctly and the terms accepted: only then can the account be created. */
+  const complete = !Object.values(formProblems).some(Boolean);
 
   // Already signed in (and verified): there is nothing to sign up for, go into the app.
   useRedirectIfSignedIn(router, !sentTo);
@@ -180,8 +183,8 @@ export default function SignupPage() {
           </div>
           {termsError && <FieldError id="terms">{termsError}</FieldError>}
         </div>
-        {/* Locked until the terms are accepted. */}
-        <button className="auth-cta" disabled={busy || !terms}>
+        {/* Locked until the whole form is filled in and the terms are accepted. */}
+        <button className="auth-cta" disabled={busy || !complete} aria-describedby={complete ? undefined : "signup-incomplete"}>
           {busy ? (
             "Creating your account…"
           ) : (
@@ -190,6 +193,11 @@ export default function SignupPage() {
             </>
           )}
         </button>
+        {!complete && (
+          <p id="signup-incomplete" className="text-center text-sm text-muted">
+            Fill in every field and accept the terms to create your account.
+          </p>
+        )}
       </form>
       <p className="pt-1 text-center text-[15px] text-muted">
         Already have an account?{" "}
