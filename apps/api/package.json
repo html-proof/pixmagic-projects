@@ -7,12 +7,15 @@
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit",
     "test": "vitest run",
-    "test:integration": "vitest run"
+    "test:integration": "vitest run",
+    "ops:cognito-plan": "vitest run --config ops/vitest.config.ts cognito-plan",
+    "ops:cognito-verify": "vitest run --config ops/vitest.config.ts cognito-verify"
   },
   "dependencies": {
     "@app/core": "workspace:*",
     "@app/db": "workspace:*",
     "@app/shared": "workspace:*",
+    "aws4fetch": "^1.0.20",
     "hono": "^4.9.0",
     "jose": "^6.1.0",
     "zod": "^3.25.0"

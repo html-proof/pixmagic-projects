@@ -1,6 +1,6 @@
 // Password rules for employee accounts, checked by the API (authoritative) and by the form (as
-// you type). The password itself goes to Firebase Authentication, which stores only a salted
-// scrypt hash; Insights never stores or logs it.
+// you type). The password itself goes to the Amazon Cognito user pool, which stores only a salted
+// hash of it; Insights never stores or logs it.
 //
 // Imported by the UI through `@app/shared/staff`: relative imports stay extensionless.
 

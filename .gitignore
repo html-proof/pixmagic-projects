@@ -25,3 +25,5 @@ apps/web/out-*
 # Shopify CLI build output
 shopify-app/.shopify/
 shopify-app/extensions/*/dist/
+infra/cognito-local/data/
+ops-reports/

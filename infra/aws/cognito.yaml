@@ -1,0 +1,288 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Insights sign-in: an Amazon Cognito user pool (email + password, Google, Apple), its OAuth domain,
+  the Worker's confidential app client, and an IAM user that may make only the pool's admin calls.
+  One stack per environment. docs/cognito-setup.md walks through deploying it and wiring the outputs
+  into the Worker.
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [production, staging, development]
+    Default: production
+  AppUrl:
+    Type: String
+    Description: The web app's origin, no trailing slash (APP_URL), e.g. https://insights.imeseban.workers.dev
+    AllowedPattern: "^https?://[^/]+$"
+  ExtraCallbackUrls:
+    Type: CommaDelimitedList
+    Description: More origins allowed to finish a Google/Apple sign-in (e.g. http://localhost:8787 for a staging pool). Empty for production.
+    Default: ""
+  DomainPrefix:
+    Type: String
+    Description: Prefix of the pool's OAuth domain, <prefix>.auth.<region>.amazoncognito.com (unique in the region).
+    AllowedPattern: "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+  GoogleClientId:
+    Type: String
+    Default: ""
+    Description: Google OAuth web client id. Empty = no Google sign-in yet.
+  GoogleClientSecret:
+    Type: String
+    Default: ""
+    NoEcho: true
+  AppleServicesId:
+    Type: String
+    Default: ""
+    Description: Apple Services ID (the "client id" for Sign in with Apple on the web). Empty = no Apple sign-in yet.
+  AppleTeamId:
+    Type: String
+    Default: ""
+  AppleKeyId:
+    Type: String
+    Default: ""
+  ApplePrivateKey:
+    Type: String
+    Default: ""
+    NoEcho: true
+    Description: The .p8 key's contents (-----BEGIN PRIVATE KEY----- ...).
+  SesFromEmail:
+    Type: String
+    Default: ""
+    Description: >-
+      Verified SES sender for Cognito's emails, e.g. Insights <no-reply@example.com>. Empty = Cognito's
+      own sender (no-reply@verificationemail.com, 50 emails a day per account: fine to start, not to grow on).
+  SesIdentityArn:
+    Type: String
+    Default: ""
+    Description: ARN of the SES identity (domain or address) SesFromEmail belongs to, in this region.
+  RefreshTokenRotation:
+    Type: String
+    AllowedValues: [ENABLED, DISABLED]
+    Default: DISABLED
+    Description: >-
+      ENABLED issues a new refresh token on every refresh (then set COGNITO_REFRESH_ROTATION=1 on the
+      Worker). Off by default: a response lost in transit then signs the person out.
+
+Conditions:
+  HasGoogle: !Not [!Equals [!Ref GoogleClientId, ""]]
+  HasApple: !Not [!Equals [!Ref AppleServicesId, ""]]
+  HasSes: !Not [!Equals [!Ref SesFromEmail, ""]]
+  HasExtraCallbacks: !Not [!Equals [!Join ["", !Ref ExtraCallbackUrls], ""]]
+  IsProduction: !Equals [!Ref Environment, production]
+
+Resources:
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      UserPoolName: !Sub insights-${Environment}
+      # Essentials: passwordless email codes, refresh-token rotation, managed login. 10,000 monthly active users free.
+      UserPoolTier: ESSENTIALS
+      DeletionProtection: !If [IsProduction, ACTIVE, INACTIVE]
+      UsernameAttributes: [email]
+      UsernameConfiguration:
+        CaseSensitive: false
+      AutoVerifiedAttributes: [email]
+      # A changed email stays the old one until the code sent to the new one is entered.
+      UserAttributeUpdateSettings:
+        AttributesRequireVerificationBeforeUpdate: [email]
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: false
+      Schema:
+        - Name: email
+          AttributeDataType: String
+          Required: true
+          Mutable: true
+        - Name: name
+          AttributeDataType: String
+          Required: false
+          Mutable: true
+      Policies:
+        # The same rule the app checks (packages/shared/src/auth.ts); employees' stricter rules are the app's.
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireLowercase: false
+          RequireUppercase: false
+          RequireNumbers: false
+          RequireSymbols: false
+          TemporaryPasswordValidityDays: 7
+        SignInPolicy:
+          AllowedFirstAuthFactors: !If [HasSes, [PASSWORD, EMAIL_OTP], [PASSWORD]]
+      MfaConfiguration: "OFF"
+      EmailConfiguration: !If
+        - HasSes
+        - EmailSendingAccount: DEVELOPER
+          From: !Ref SesFromEmail
+          SourceArn: !Ref SesIdentityArn
+        - EmailSendingAccount: COGNITO_DEFAULT
+      VerificationMessageTemplate:
+        DefaultEmailOption: CONFIRM_WITH_CODE
+        EmailSubject: Your Insights verification code
+        EmailMessage: "Your Insights verification code is {####}. It expires in 24 hours. If you didn't ask for it, you can ignore this email."
+      UserPoolTags:
+        app: insights
+        environment: !Ref Environment
+
+  UserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      UserPoolId: !Ref UserPool
+      Domain: !Ref DomainPrefix
+      ManagedLoginVersion: 2
+
+  GoogleProvider:
+    Type: AWS::Cognito::UserPoolIdentityProvider
+    Condition: HasGoogle
+    Properties:
+      UserPoolId: !Ref UserPool
+      ProviderName: Google
+      ProviderType: Google
+      ProviderDetails:
+        client_id: !Ref GoogleClientId
+        client_secret: !Ref GoogleClientSecret
+        authorize_scopes: openid email profile
+      AttributeMapping:
+        email: email
+        # Without this a Google user's address counts as unverified, and the app won't link it to an existing account.
+        email_verified: email_verified
+        name: name
+        given_name: given_name
+        family_name: family_name
+
+  AppleProvider:
+    Type: AWS::Cognito::UserPoolIdentityProvider
+    Condition: HasApple
+    Properties:
+      UserPoolId: !Ref UserPool
+      ProviderName: SignInWithApple
+      ProviderType: SignInWithApple
+      ProviderDetails:
+        client_id: !Ref AppleServicesId
+        team_id: !Ref AppleTeamId
+        key_id: !Ref AppleKeyId
+        private_key: !Ref ApplePrivateKey
+        authorize_scopes: email name
+      AttributeMapping:
+        email: email
+        email_verified: email_verified
+        # Apple sends the name only on the first authorization; the pool keeps it after that.
+        name: name
+        given_name: firstName
+        family_name: lastName
+
+  WebClient:
+    Type: AWS::Cognito::UserPoolClient
+    DependsOn:
+      - UserPoolDomain
+    Properties:
+      UserPoolId: !Ref UserPool
+      ClientName: !Sub insights-web-${Environment}
+      # Confidential: the secret lives on the Worker only, and signs every call (SECRET_HASH).
+      GenerateSecret: true
+      ExplicitAuthFlows:
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+        - ALLOW_USER_AUTH
+      # Unknown users get the same answers as wrong passwords; password resets don't say whether an account exists.
+      PreventUserExistenceErrors: ENABLED
+      EnableTokenRevocation: true
+      AuthSessionValidity: 3
+      AccessTokenValidity: 60
+      IdTokenValidity: 60
+      RefreshTokenValidity: 30
+      TokenValidityUnits:
+        AccessToken: minutes
+        IdToken: minutes
+        RefreshToken: days
+      RefreshTokenRotation:
+        Feature: !Ref RefreshTokenRotation
+        RetryGracePeriodSeconds: 60
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows: [code]
+      AllowedOAuthScopes: [openid, email, profile]
+      CallbackURLs: !If
+        - HasExtraCallbacks
+        - !Split [",", !Join ["", [!Sub "${AppUrl}/auth/callback", ",", !Join ["/auth/callback,", !Ref ExtraCallbackUrls], "/auth/callback"]]]
+        - [!Sub "${AppUrl}/auth/callback"]
+      LogoutURLs: !If
+        - HasExtraCallbacks
+        - !Split [",", !Join ["", [!Sub "${AppUrl}/login?signedOut=1", ",", !Join ["/login?signedOut=1,", !Ref ExtraCallbackUrls], "/login?signedOut=1"]]]
+        - [!Sub "${AppUrl}/login?signedOut=1"]
+      SupportedIdentityProviders:
+        - COGNITO
+        - !If [HasGoogle, !Ref GoogleProvider, !Ref AWS::NoValue]
+        - !If [HasApple, !Ref AppleProvider, !Ref AWS::NoValue]
+
+  # The default look for the few user-pool pages a person can see (sign-out, errors).
+  WebClientBranding:
+    Type: AWS::Cognito::ManagedLoginBranding
+    Properties:
+      UserPoolId: !Ref UserPool
+      ClientId: !Ref WebClient
+      UseCognitoProvidedValues: true
+
+  # What the Worker signs its admin calls with: creating users moved from Firebase or invited as
+  # employees, checking whether one exists, deleting accounts, signing out everywhere. Nothing else.
+  WorkerUser:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: !Sub insights-worker-cognito-${Environment}
+      Policies:
+        - PolicyName: cognito-admin-calls
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cognito-idp:AdminGetUser
+                  - cognito-idp:AdminCreateUser
+                  - cognito-idp:AdminSetUserPassword
+                  - cognito-idp:AdminDeleteUser
+                  - cognito-idp:AdminUserGlobalSignOut
+                Resource: !GetAtt UserPool.Arn
+
+  WorkerAccessKey:
+    Type: AWS::IAM::AccessKey
+    Properties:
+      UserName: !Ref WorkerUser
+
+  # Everything the Worker needs as a secret, in one place it can be read from once
+  # (infra/aws/worker-secrets.mjs pipes it into `wrangler secret put` without printing it).
+  WorkerSecrets:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub insights/${Environment}/worker-cognito
+      Description: Insights Worker secrets for Cognito (app client secret, admin access key)
+      SecretString: !Sub
+        - '{"COGNITO_CLIENT_SECRET":"${ClientSecret}","COGNITO_ADMIN_ACCESS_KEY_ID":"${WorkerAccessKey}","COGNITO_ADMIN_SECRET_ACCESS_KEY":"${AdminSecret}"}'
+        - ClientSecret: !GetAtt WebClient.ClientSecret
+          AdminSecret: !GetAtt WorkerAccessKey.SecretAccessKey
+
+Outputs:
+  Region:
+    Value: !Ref AWS::Region
+    Description: COGNITO_REGION
+  UserPoolId:
+    Value: !Ref UserPool
+    Description: COGNITO_USER_POOL_ID
+  ClientId:
+    Value: !Ref WebClient
+    Description: COGNITO_CLIENT_ID
+  Domain:
+    Value: !Sub https://${DomainPrefix}.auth.${AWS::Region}.amazoncognito.com
+    Description: COGNITO_DOMAIN
+  IdentityProviders:
+    Value: !Join [",", [!If [HasGoogle, Google, !Ref AWS::NoValue], !If [HasApple, SignInWithApple, !Ref AWS::NoValue]]]
+    Description: COGNITO_IDENTITY_PROVIDERS
+  Issuer:
+    Value: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}
+  ProviderRedirectUri:
+    Value: !Sub https://${DomainPrefix}.auth.${AWS::Region}.amazoncognito.com/oauth2/idpresponse
+    Description: Add this as an authorized redirect URI on the Google OAuth client, and as the Return URL of the Apple Services ID.
+  WorkerSecretsArn:
+    Value: !Ref WorkerSecrets

@@ -1,4 +1,4 @@
-# Local dev stack: Postgres, Mailpit (SMTP catcher), Firebase Auth emulator.
+# Local dev stack: Postgres, Mailpit (SMTP catcher), a Cognito emulator.
 #
 # Every port is published on the loopback addresses only (IPv4 and IPv6, so `localhost` works
 # either way). A bare "5434:5432" listens on all interfaces, and Docker Desktop's firewall rule
@@ -38,12 +38,17 @@ services:
   mailpit:
     image: axllent/mailpit:latest
     ports: ["127.0.0.1:1025:1025", "[::1]:1025:1025", "127.0.0.1:8025:8025", "[::1]:8025:8025"]
-  firebase-emulator:
+  # Amazon Cognito emulator with the app's user pool in it (infra/cognito-local/README.md).
+  cognito:
     image: node:24-alpine
-    working_dir: /emu
-    command: npx -y firebase-tools@14 emulators:start --only auth --project demo-insights
-    volumes: ["./infra/firebase:/emu"]
-    ports: ["127.0.0.1:9099:9099", "[::1]:9099:9099"]
+    working_dir: /data
+    # Its tokens name http://127.0.0.1:9229 as their issuer, which is where the Worker reaches it.
+    command: >-
+      sh -c "[ -f .cognito/db/local_insights.json ] || cp -r /seed/.cognito .;
+      printf '{\"TokenConfig\":{\"IssuerDomain\":\"http://127.0.0.1:9229\"}}' > .cognito/config.json;
+      HOST=0.0.0.0 PORT=9229 exec npx -y cognito-local@5.3.0"
+    volumes: ["./infra/cognito-local/seed:/seed:ro", "cognito-data:/data"]
+    ports: ["127.0.0.1:9229:9229", "[::1]:9229:9229"]
   # Connects this Postgres to Cloudflare (Workers VPC -> Hyperdrive) for the deployed Worker.
   # Needs CLOUDFLARE_TUNNEL_TOKEN in .env; start with `docker compose --profile tunnel up -d cloudflared`.
   cloudflared:
@@ -72,3 +77,4 @@ services:
         condition: service_healthy
 volumes:
   pgdata: {}
+  cognito-data: {}

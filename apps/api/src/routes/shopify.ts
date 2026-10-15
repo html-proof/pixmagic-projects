@@ -212,7 +212,7 @@ export function shopifyRoutes(app: App, deps: Deps) {
       try {
         user = await loadUser(c, deps);
       } catch (err) {
-        // We couldn't tell who this is (database or Firebase down), which isn't "signed out". The
+        // We couldn't tell who this is (database or session store down), which isn't "signed out". The
         // code hasn't been exchanged yet, so hand the state back rather than spend it on a blip:
         // this approval can still complete once we're reachable again.
         await deps.coord.put(stateKey, raw, STATE_TTL_S).catch(() => {});

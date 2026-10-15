@@ -2,86 +2,473 @@ import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { z } from "zod";
 import { systemDb } from "@app/db";
 import { employmentsForUser, env, logger } from "@app/core";
-import { generateOtp, hashOtp, OTP_MAX_ATTEMPTS, OTP_TTL_MS, verifyOtp } from "@app/shared";
-import { body, clientIp, HttpError, loadUser, requireAppOrigin, requireUser, retiredSessionKey, SESSION_COOKIE, type Ctx, type Deps } from "../context.js";
-import { FirebaseUnavailableError } from "../authProvider.js";
+import { accountPasswordProblem, DISPLAY_NAME_MAX, EMAIL_CODE_RE, pkcePair, randomToken, safeEqual, sha256Hex } from "@app/shared";
+import { body, clientIp, HttpError, loadUser, requireAppOrigin, requireUser, sessionOf, SESSION_COOKIE, type Ctx, type Deps } from "../context.js";
+import { CognitoError, CognitoUnavailableError, type CognitoTokens, type FederatedProvider, type SignInResult } from "../cognito.js";
+import { LegacyUnavailableError } from "../legacyFirebase.js";
+import { recordAuthEvent, resolveUser } from "../identity.js";
+import { apiPath, clearSessionCookies, newSession, readRefreshToken, readSession, retiredSessionKey, setSessionCookies } from "../session.js";
 import type { App } from "../app.js";
 import { limit, LIMITS } from "../rateLimit.js";
 
-const SESSION_TTL_MS = 5 * 24 * 3600 * 1000;
-const RECENT_SIGN_IN_S = 5 * 60;
+const emailSchema = z
+  .string()
+  .trim()
+  .email("Enter a valid email address.")
+  .max(254)
+  .transform((e) => e.toLowerCase());
+const codeSchema = z.string().trim().regex(EMAIL_CODE_RE, "Enter the 6-digit code from the email.");
+const passwordSchema = z.string().min(1, "Enter your password.").max(256);
+
+/** "Continue with ..." in our URLs, and Cognito's name for each provider. */
+const PROVIDERS: Record<string, FederatedProvider> = { google: "Google", apple: "SignInWithApple" };
+const OAUTH_STATE_TTL_S = 600;
+const MAX_PENDING_STATES = 5;
+const OAUTH_COOKIE = "__oauth";
+const OTP_COOKIE = "__otp";
+const pendingStates = (cookie: string | undefined) => (cookie ?? "").split(".").filter((n) => /^[A-Za-z0-9_-]{16,64}$/.test(n));
+
+const UNAVAILABLE = "We can't reach the sign-in service right now. Please try again in a moment.";
+const CODE_SENT = "If that address can receive email, a code is on its way. It expires in a few minutes.";
+
+/** Federated providers switched on for this deployment (COGNITO_IDENTITY_PROVIDERS, plus a domain). */
+export function enabledProviders(): Set<FederatedProvider> {
+  const e = env();
+  if (!e.COGNITO_DOMAIN) return new Set();
+  return new Set(
+    e.COGNITO_IDENTITY_PROVIDERS.split(",")
+      .map((p) => p.trim())
+      .filter((p): p is FederatedProvider => p === "Google" || p === "SignInWithApple"),
+  );
+}
+
+/** Same-origin paths only (the web app's isSafePath). */
+// eslint-disable-next-line no-control-regex -- rejecting control characters is the point
+const safePath = (p: unknown): p is string => typeof p === "string" && p.startsWith("/") && !p.startsWith("//") && !/[\\\u0000-\u001f\u007f]/.test(p) && p.length < 1000;
+
+/**
+ * Turn a Cognito failure into what the person is told. Cognito's own messages are written for
+ * developers ("Password did not conform with policy: ...") and can say whether an account exists,
+ * so none of them reaches the browser.
+ */
+export function cognitoFailure(err: unknown, at: string): HttpError {
+  if (err instanceof HttpError) return err;
+  if (err instanceof CognitoUnavailableError || err instanceof LegacyUnavailableError) {
+    logger.error({ err, at }, "sign-in service unavailable");
+    return new HttpError(503, UNAVAILABLE, "auth_unavailable");
+  }
+  if (!(err instanceof CognitoError)) {
+    logger.error({ err, at }, "unexpected sign-in failure");
+    return new HttpError(500, "Something went wrong. Please try again.", "internal");
+  }
+  logger.warn({ cognitoError: err.code, at }, "Cognito refused");
+  switch (err.code) {
+    case "NotAuthorizedException":
+    case "UserNotFoundException":
+      return new HttpError(401, "That email and password don't match.", "invalid_credentials");
+    case "UserNotConfirmedException":
+      return new HttpError(403, "Confirm your email address first: enter the code we emailed you.", "unconfirmed");
+    case "PasswordResetRequiredException":
+      return new HttpError(403, "You need to choose a new password. We've emailed you a code to do it.", "reset_required");
+    case "UsernameExistsException":
+    case "AliasExistsException":
+      return new HttpError(409, "An account with that email already exists. Log in instead, or reset your password if you've forgotten it.", "account_exists");
+    case "InvalidPasswordException":
+      return new HttpError(400, "Choose a stronger password: at least 8 characters, with no spaces at the start or end.", "weak_password");
+    case "CodeMismatchException":
+      return new HttpError(400, "That code isn't right. Check the email and try again.", "invalid_code");
+    case "ExpiredCodeException":
+      return new HttpError(400, "That code has expired or was already used. Ask for a new one.", "expired_code");
+    case "LimitExceededException":
+    case "TooManyRequestsException":
+    case "TooManyFailedAttemptsException":
+      return new HttpError(429, "Too many attempts. Please wait a few minutes and try again.", "rate_limited");
+    case "CodeDeliveryFailureException":
+      return new HttpError(503, "We couldn't send you an email right now. Please try again in a moment.", "email_unavailable");
+    case "UserLambdaValidationException":
+    case "InvalidParameterException":
+      return new HttpError(400, "We couldn't do that with the details given. Please check them and try again.", "invalid_request");
+    case "NotConfigured":
+      return new HttpError(503, "This sign-in option isn't set up yet.", "not_configured");
+    case "InvalidToken":
+      return new HttpError(401, "We couldn't verify that sign-in. Please try again.", "invalid_token");
+  }
+  return new HttpError(400, "We couldn't complete that. Please try again.", "auth_failed");
+}
+
+const isCognito = (err: unknown, ...codes: string[]) => err instanceof CognitoError && codes.includes(err.code);
+
+/**
+ * `.catch` for a database call on the sign-in path. The database is reachable only through a
+ * tunnel that drops, so a failure there is our outage: say "try again" (503), not a bare 500.
+ * HttpErrors (e.g. "that email belongs to another account") pass through.
+ */
+function dbOutage(message: string) {
+  return (err: unknown): never => {
+    if (err instanceof HttpError) throw err;
+    logger.error({ err }, "database unreachable during sign-in");
+    throw new HttpError(503, message, "db_unavailable");
+  };
+}
+const SIGN_IN_UNAVAILABLE = "We can't finish signing you in right now. Please try again in a moment.";
+
+export function publicUser(u: { id: string; email: string; emailVerified: boolean; displayName: string | null; timezone: string }) {
+  return { id: u.id, email: u.email, emailVerified: u.emailVerified, displayName: u.displayName, timezone: u.timezone };
+}
 
 export function authRoutes(app: App, deps: Deps) {
-  const cookieOpts = {
-    path: "/",
-    httpOnly: true,
-    sameSite: "Lax" as const,
-    secure: env().NODE_ENV === "production",
-  };
+  const oauthCookiePath = () => `${apiPath() === "/" ? "" : apiPath()}/auth/oauth`;
+  const otpCookiePath = () => `${apiPath() === "/" ? "" : apiPath()}/auth/otp`;
+  const cookieBase = () => ({ httpOnly: true, sameSite: "Lax" as const, secure: env().NODE_ENV === "production" });
+  const redirectUri = () => `${env().APP_URL}/auth/callback`;
 
-  /** Exchange a fresh Firebase ID token for an httpOnly session cookie. */
-  app.post("/auth/session", async (c) => {
-    requireAppOrigin(c);
-    const { idToken } = z.object({ idToken: z.string().min(10) }).parse(await body(c));
-    await limit(deps.coord, `rl:session:${clientIp(c)}`, LIMITS.session);
-    const claims = await deps.auth.verifyIdToken(idToken).catch((err) => {
-      throw signInFailure(err, idToken, "POST /auth/session");
+  /**
+   * Cognito's tokens → our session. The ID token is verified here (signature against the pool's
+   * keys, issuer, audience = our app client, token_use, expiry, and the nonce for OAuth); only
+   * then is the person looked up, linked or created, and the session cookie set.
+   */
+  async function finishSignIn(c: Ctx, tokens: CognitoTokens, opts: { nonce?: string; firebaseUid?: string } = {}) {
+    const claims = await deps.auth.verifyIdToken(tokens.idToken, { nonce: opts.nonce }).catch((err) => {
+      throw cognitoFailure(err, "verify ID token");
     });
-    if (!claims.email) throw new HttpError(400, "An email address is required", "email_required");
-    // Only mint sessions from recent sign-ins (Firebase best practice).
-    if (Date.now() / 1000 - claims.authTime > RECENT_SIGN_IN_S) {
-      logger.warn({ authTime: claims.authTime, now: Math.floor(Date.now() / 1000) }, "stale sign-in");
-      // "Sign in again" can't get further than this route while our database is unreachable, and
-      // for a "Continue with Shopify" signup it means proving the email by code, which an outage
-      // can't issue either (each failed request still spends the address's small code budget).
-      // So until the database answers, say "try again" rather than send them there.
-      await systemDb.$queryRaw`SELECT 1`.catch(dbOutage(SIGN_IN_UNAVAILABLE));
-      throw new HttpError(401, "Please sign in again", "stale_sign_in");
+    const user = await resolveUser(claims, { firebaseUid: opts.firebaseUid, ip: clientIp(c) }).catch(dbOutage(SIGN_IN_UNAVAILABLE));
+    const s = newSession({ userId: user.id, sub: claims.sub, username: claims.username, method: claims.method, authTime: claims.authTime });
+    setSessionCookies(c, s, tokens.refreshToken);
+    return user;
+  }
+
+  function tokensOrChallenge(r: SignInResult): CognitoTokens {
+    if ("tokens" in r) return r.tokens;
+    logger.warn({ challenge: r.challenge }, "unsupported sign-in challenge");
+    if (r.challenge === "NEW_PASSWORD_REQUIRED") {
+      throw new HttpError(403, "You need to choose a new password. Use \"Forgot password?\" to get a code.", "reset_required");
     }
-    const email = claims.email.toLowerCase();
-    // The token is genuine from here on, so a failure to store its user is our outage.
-    const user = await sessionUser({ uid: claims.uid, email, emailVerified: claims.emailVerified, name: claims.name }).catch(
-      dbOutage(SIGN_IN_UNAVAILABLE),
-    );
-    const cookie = await deps.auth.createSessionCookie(idToken, SESSION_TTL_MS).catch((err) => {
-      throw signInFailure(err, idToken, "POST /auth/session createSessionCookie");
+    throw new HttpError(403, "Your account needs a sign-in step this app doesn't support yet. Please contact support.", "challenge_unsupported");
+  }
+
+  /**
+   * Someone signed in on Firebase before the move (users.firebase_uid) but has no Cognito user
+   * yet: create one, without emailing them, so Cognito can send them a reset or sign-in code.
+   * Their password stays unknown (random), so this grants nobody access by itself.
+   */
+  async function provisionMovedAccount(email: string, ip: string) {
+    const row = await systemDb.user.findUnique({ where: { email }, include: { identities: { where: { method: "password" } } } }).catch(() => null);
+    if (!row?.firebaseUid || row.identities.length) return;
+    if (await deps.auth.adminGetUser(email)) return;
+    try {
+      // The address is the one the code goes to, so marking it verified lets Cognito send it;
+      // the code itself is the proof.
+      const created = await deps.auth.adminCreateUser({ email, emailVerified: true, name: row.displayName });
+      await recordAuthEvent("firebase_account_provisioned", row.id, ip, { firebaseUid: row.firebaseUid, cognitoSub: created.sub });
+    } catch (err) {
+      if (!isCognito(err, "UsernameExistsException")) throw err;
+    }
+  }
+
+  /**
+   * First Cognito sign-in of a Firebase password account (see legacyFirebase.ts). Returns null when
+   * this isn't one: Cognito already has the person (its "wrong password" stands), migration is
+   * off, or Firebase doesn't accept the password either.
+   */
+  async function moveFromFirebase(email: string, password: string, ip: string): Promise<{ result: SignInResult; firebaseUid: string } | null> {
+    if (!deps.legacy) return null;
+    if (await deps.auth.adminGetUser(email)) return null;
+    const legacy = await deps.legacy.verifyPassword(email, password);
+    if (!legacy) return null;
+    try {
+      const created = await deps.auth.adminCreateUser({ email, emailVerified: legacy.emailVerified, name: legacy.displayName, password });
+      logger.info({ cognitoSub: created.sub }, "moved a Firebase password account to Cognito");
+    } catch (err) {
+      if (isCognito(err, "InvalidPasswordException")) {
+        // Firebase accepted 6-character passwords; Cognito's policy doesn't. Move the account and
+        // have them choose a new password with a code sent to the same inbox.
+        await deps.auth.adminCreateUser({ email, emailVerified: true, name: legacy.displayName });
+        await deps.auth.forgotPassword(email);
+        await recordAuthEvent("firebase_account_needs_new_password", null, ip, { firebaseUid: legacy.uid });
+        throw new HttpError(403, "We've upgraded our sign-in system and your password needs to be longer. We've emailed you a code to choose a new one.", "reset_required");
+      }
+      // A concurrent first sign-in created it a moment ago: sign in normally.
+      if (!isCognito(err, "UsernameExistsException")) throw err;
+    }
+    return { result: await deps.auth.passwordSignIn(email, password), firebaseUid: legacy.uid };
+  }
+
+  // ---------------- What the sign-in pages offer ----------------
+
+  app.get("/auth/config", (c) => {
+    const providers = enabledProviders();
+    return c.json({
+      providers: { google: providers.has("Google"), apple: providers.has("SignInWithApple") },
+      emailOtp: env().COGNITO_EMAIL_OTP === "1",
     });
-    setCookie(c, SESSION_COOKIE, cookie, { ...cookieOpts, maxAge: SESSION_TTL_MS / 1000 });
+  });
+
+  // ---------------- Email and password ----------------
+
+  app.post("/auth/login", async (c) => {
+    requireAppOrigin(c);
+    const input = z.object({ email: emailSchema, password: passwordSchema }).parse(await body(c));
+    const ip = clientIp(c);
+    await limit(deps.coord, `rl:login:ip:${ip}`, LIMITS.loginIp);
+    await limit(deps.coord, `rl:login:email:${sha256Hex(input.email)}`, LIMITS.loginEmail);
+    let firebaseUid: string | undefined;
+    let result: SignInResult;
+    try {
+      result = await deps.auth.passwordSignIn(input.email, input.password);
+    } catch (err) {
+      if (!isCognito(err, "NotAuthorizedException", "UserNotFoundException")) throw cognitoFailure(err, "login");
+      const moved = await moveFromFirebase(input.email, input.password, ip).catch((e: unknown) => {
+        throw cognitoFailure(e, "login (moving from Firebase)");
+      });
+      if (!moved) throw cognitoFailure(err, "login");
+      ({ result, firebaseUid } = moved);
+    }
+    const user = await finishSignIn(c, tokensOrChallenge(result), { firebaseUid });
     return c.json({ user: publicUser(user) });
   });
 
-  /**
-   * After the user clicks the Firebase verification link, the session cookie's
-   * claims are stale. The client sends a fresh ID token for the SAME uid and we
-   * update the stored verification flag (no new session is minted).
-   */
-  app.post("/auth/sync-profile", async (c) => {
-    const user = await requireUser(c, deps);
-    const { idToken } = z.object({ idToken: z.string().min(10) }).parse(await body(c));
-    const claims = await deps.auth.verifyIdToken(idToken).catch((err) => {
-      throw signInFailure(err, idToken, "POST /auth/sync-profile");
-    });
-    if (claims.uid !== user.firebaseUid) throw new HttpError(403, "Token does not match session", "forbidden");
-    const u = await systemDb.user.update({ where: { id: user.id }, data: { emailVerified: claims.emailVerified || user.emailVerified } });
-    return c.json({ user: publicUser(u) });
+  app.post("/auth/signup", async (c) => {
+    requireAppOrigin(c);
+    const input = z
+      .object({
+        name: z.string().trim().min(1, "Enter your name.").max(DISPLAY_NAME_MAX),
+        email: emailSchema,
+        password: z.string().max(256),
+        confirmPassword: z.string().max(256),
+        acceptTerms: z.literal(true, { errorMap: () => ({ message: "Accept the terms and privacy policy to create an account." }) }),
+      })
+      .parse(await body(c));
+    await limit(deps.coord, `rl:signup:ip:${clientIp(c)}`, LIMITS.signupIp);
+    const weak = accountPasswordProblem(input.password);
+    if (weak) throw new HttpError(400, weak, "weak_password");
+    if (input.password !== input.confirmPassword) throw new HttpError(400, "The two passwords don't match.", "password_mismatch");
+    try {
+      await deps.auth.signUp({ email: input.email, password: input.password, name: input.name });
+    } catch (err) {
+      if (!isCognito(err, "UsernameExistsException")) throw cognitoFailure(err, "signup");
+      // Signed up before but never entered the code (or pressed the button twice): send a fresh
+      // code and carry on to the code screen rather than calling the account taken.
+      const existing = await deps.auth.adminGetUser(input.email).catch(() => null);
+      if (existing?.status !== "UNCONFIRMED") throw cognitoFailure(err, "signup");
+      await deps.auth.resendSignUpCode(input.email).catch((e: unknown) => logger.warn({ err: e }, "resending a sign-up code failed"));
+    }
+    return c.json({ ok: true, next: "confirm", email: input.email });
   });
 
-  app.post("/auth/logout", async (c) => {
-    // Sign out this browser, not the account. Revoking the account's Firebase tokens (as this
-    // did) ended every session it had, so signing out on one device or browser logged the person
-    // out everywhere else on their next refresh. Instead the cookie itself is retired until it
-    // would have expired, so a copy of it can't be replayed. Only a genuine cookie is recorded,
-    // and Firebase alone vouches for that, so signing out works while our database is down.
-    // Best effort throughout: signing out must always clear the cookie below.
-    const cookie = getCookie(c, SESSION_COOKIE);
-    if (cookie && (await deps.auth.verifySessionCookie(cookie).then(() => true, () => false))) {
-      await deps.coord
-        .put(retiredSessionKey(cookie), "1", SESSION_TTL_MS / 1000)
-        .catch((err: unknown) => logger.error({ err }, "could not retire the signed-out session cookie"));
+  app.post("/auth/signup/confirm", async (c) => {
+    requireAppOrigin(c);
+    const input = z.object({ email: emailSchema, code: codeSchema }).parse(await body(c));
+    await limit(deps.coord, `rl:code:verify:${clientIp(c)}`, LIMITS.codeVerifyIp);
+    try {
+      await deps.auth.confirmSignUp(input.email, input.code);
+    } catch (err) {
+      // Already confirmed (a second tab, a double press): nothing left to do.
+      if (isCognito(err, "NotAuthorizedException") && /CONFIRMED/i.test((err as Error).message)) return c.json({ ok: true });
+      throw cognitoFailure(err, "confirm signup");
     }
-    deleteCookie(c, SESSION_COOKIE, cookieOpts);
     return c.json({ ok: true });
   });
+
+  app.post("/auth/signup/resend", async (c) => {
+    requireAppOrigin(c);
+    const { email } = z.object({ email: emailSchema }).parse(await body(c));
+    await limit(deps.coord, `rl:code:ip:${clientIp(c)}`, LIMITS.codeIp);
+    await limit(deps.coord, `rl:code:email:${sha256Hex(email)}`, LIMITS.codeEmail);
+    await deps.auth.resendSignUpCode(email).catch((err: unknown) => {
+      // Unknown or already confirmed: the same answer, so this can't be used to find accounts.
+      if (isCognito(err, "UserNotFoundException", "InvalidParameterException", "NotAuthorizedException")) return;
+      throw cognitoFailure(err, "resend signup code");
+    });
+    return c.json({ ok: true, message: CODE_SENT });
+  });
+
+  app.post("/auth/password/forgot", async (c) => {
+    requireAppOrigin(c);
+    const { email } = z.object({ email: emailSchema }).parse(await body(c));
+    const ip = clientIp(c);
+    await limit(deps.coord, `rl:code:ip:${ip}`, LIMITS.codeIp);
+    await limit(deps.coord, `rl:code:email:${sha256Hex(email)}`, LIMITS.codeEmail);
+    try {
+      await provisionMovedAccount(email, ip);
+      await deps.auth.forgotPassword(email);
+    } catch (err) {
+      // No account, or none that can get a code: the same answer as success (no enumeration).
+      if (!isCognito(err, "UserNotFoundException", "InvalidParameterException", "NotAuthorizedException")) throw cognitoFailure(err, "forgot password");
+    }
+    return c.json({ ok: true, message: CODE_SENT });
+  });
+
+  app.post("/auth/password/reset", async (c) => {
+    requireAppOrigin(c);
+    const input = z.object({ email: emailSchema, code: codeSchema, password: z.string().max(256), confirmPassword: z.string().max(256) }).parse(await body(c));
+    await limit(deps.coord, `rl:code:verify:${clientIp(c)}`, LIMITS.codeVerifyIp);
+    const weak = accountPasswordProblem(input.password);
+    if (weak) throw new HttpError(400, weak, "weak_password");
+    if (input.password !== input.confirmPassword) throw new HttpError(400, "The two passwords don't match.", "password_mismatch");
+    await deps.auth.confirmForgotPassword(input.email, input.code, input.password).catch((err: unknown) => {
+      // Cognito answers an unknown address like a wrong code once user-existence errors are hidden.
+      throw cognitoFailure(isCognito(err, "UserNotFoundException") ? new CognitoError("CodeMismatchException", "") : err, "reset password");
+    });
+    // A new password ends every other session, everywhere: whoever knew the old one is out.
+    const user = await systemDb.user.findUnique({ where: { email: input.email }, include: { identities: true } }).catch(() => null);
+    if (user) {
+      await systemDb.user.update({ where: { id: user.id }, data: { sessionsValidAfter: new Date() } }).catch((err: unknown) => logger.error({ err }, "could not end sessions after a password reset"));
+      for (const id of user.identities.filter((i) => i.method === "password")) {
+        await deps.auth.adminGlobalSignOut(id.username).catch((err: unknown) => logger.warn({ err }, "Cognito sign-out after a password reset failed"));
+      }
+      await recordAuthEvent("password_reset", user.id, clientIp(c));
+    }
+    return c.json({ ok: true });
+  });
+
+  // ---------------- Passwordless: a code Cognito emails (when switched on) ----------------
+
+  const otpEnabled = () => {
+    if (env().COGNITO_EMAIL_OTP !== "1") throw new HttpError(404, "Signing in with an emailed code isn't available.", "not_enabled");
+  };
+
+  app.post("/auth/otp/start", async (c) => {
+    requireAppOrigin(c);
+    otpEnabled();
+    const { email } = z.object({ email: emailSchema }).parse(await body(c));
+    const ip = clientIp(c);
+    await limit(deps.coord, `rl:code:ip:${ip}`, LIMITS.codeIp);
+    await limit(deps.coord, `rl:code:email:${sha256Hex(email)}`, LIMITS.codeEmail);
+    try {
+      await provisionMovedAccount(email, ip);
+      const { session } = await deps.auth.startEmailOtp(email);
+      setCookie(c, OTP_COOKIE, session, { ...cookieBase(), path: otpCookiePath(), maxAge: 180 });
+    } catch (err) {
+      if (!isCognito(err, "UserNotFoundException", "NotAuthorizedException", "InvalidParameterException")) throw cognitoFailure(err, "email code sign-in");
+    }
+    return c.json({ ok: true, message: CODE_SENT });
+  });
+
+  app.post("/auth/otp/verify", async (c) => {
+    requireAppOrigin(c);
+    otpEnabled();
+    const input = z.object({ email: emailSchema, code: codeSchema }).parse(await body(c));
+    await limit(deps.coord, `rl:code:verify:${clientIp(c)}`, LIMITS.codeVerifyIp);
+    const session = getCookie(c, OTP_COOKIE);
+    if (!session) throw new HttpError(400, "That code has expired. Ask for a new one.", "expired_code");
+    const result = await deps.auth.answerEmailOtp(input.email, session, input.code).catch((err: unknown) => {
+      throw cognitoFailure(isCognito(err, "NotAuthorizedException") ? new CognitoError("ExpiredCodeException", "") : err, "email code verify");
+    });
+    deleteCookie(c, OTP_COOKIE, { ...cookieBase(), path: otpCookiePath() });
+    const user = await finishSignIn(c, tokensOrChallenge(result));
+    return c.json({ user: publicUser(user) });
+  });
+
+  // ---------------- Continue with Google / Apple (Cognito managed login, code + PKCE) ----------------
+
+  /** Leaves for Google or Apple, by way of the user pool. Errors land on the sign-in error page. */
+  app.get("/auth/oauth/:provider/start", async (c) => {
+    const appUrl = env().APP_URL;
+    const fail = (reason: string) => c.redirect(`${appUrl}/auth/error?${new URLSearchParams({ reason, provider: c.req.param("provider") })}`);
+    const provider = PROVIDERS[c.req.param("provider")];
+    if (!provider || !enabledProviders().has(provider)) return fail("provider_unavailable");
+    try {
+      await limit(deps.coord, `rl:oauth:${clientIp(c)}`, LIMITS.oauthIp);
+    } catch {
+      return fail("rate_limited");
+    }
+    const returnTo = c.req.query("returnTo");
+    const state = randomToken(24);
+    const nonce = randomToken(24);
+    const pkce = pkcePair();
+    try {
+      await deps.coord.put(
+        `oauth:signin:${state}`,
+        JSON.stringify({ provider, verifier: pkce.verifier, nonce, returnTo: safePath(returnTo) ? returnTo : null }),
+        OAUTH_STATE_TTL_S,
+      );
+    } catch (err) {
+      logger.error({ err }, "could not store a sign-in's state");
+      return fail("unavailable");
+    }
+    // Only this browser can finish this sign-in (no login CSRF): the state must come back with this cookie.
+    setCookie(c, OAUTH_COOKIE, [state, ...pendingStates(getCookie(c, OAUTH_COOKIE))].slice(0, MAX_PENDING_STATES).join("."), {
+      ...cookieBase(),
+      path: oauthCookiePath(),
+      maxAge: OAUTH_STATE_TTL_S,
+    });
+    return c.redirect(deps.auth.authorizeUrl({ provider, redirectUri: redirectUri(), state, codeChallenge: pkce.challenge, nonce }));
+  });
+
+  /**
+   * The callback page (/auth/callback) posts what came back. The code is exchanged here with the
+   * client secret and the PKCE verifier, so a code seen anywhere along the way is useless.
+   */
+  app.post("/auth/oauth/callback", async (c) => {
+    requireAppOrigin(c);
+    const q = z
+      .object({ state: z.string().max(200).default(""), code: z.string().max(2000).optional(), error: z.string().max(200).optional(), error_description: z.string().max(1000).optional() })
+      .parse(await body(c));
+    await limit(deps.coord, `rl:oauth:${clientIp(c)}`, LIMITS.oauthIp);
+    const pending = pendingStates(getCookie(c, OAUTH_COOKIE));
+    const ours = !!q.state && pending.some((n) => safeEqual(n, q.state));
+    const rest = pending.filter((n) => n !== q.state);
+    if (rest.length) setCookie(c, OAUTH_COOKIE, rest.join("."), { ...cookieBase(), path: oauthCookiePath(), maxAge: OAUTH_STATE_TTL_S });
+    else deleteCookie(c, OAUTH_COOKIE, { ...cookieBase(), path: oauthCookiePath() });
+    if (!ours) throw new HttpError(400, "This sign-in didn't start in this browser, or was already used. Please try again.", "state_mismatch");
+    const raw = await deps.coord.take(`oauth:signin:${q.state}`).catch(() => {
+      throw new HttpError(503, UNAVAILABLE, "auth_unavailable");
+    });
+    if (!raw) throw new HttpError(400, "This sign-in took too long. Please try again.", "state_expired");
+    const pendingSignIn = JSON.parse(raw) as { provider: FederatedProvider; verifier: string; nonce: string; returnTo: string | null };
+    if (q.error || !q.code) {
+      logger.info({ error: q.error, description: q.error_description?.slice(0, 200) }, "federated sign-in did not complete");
+      // Cognito passes the provider's "no" on as access_denied (or as an invalid_request naming it).
+      const cancelled = q.error === "access_denied" || /cancel|denied|user_cancelled/i.test(q.error_description ?? "");
+      throw cancelled
+        ? new HttpError(400, "Sign-in was cancelled.", "cancelled")
+        : new HttpError(400, "We couldn't sign you in with that account. Please try again, or use your email address.", "provider_error");
+    }
+    const tokens = await deps.auth.exchangeCode({ code: q.code, redirectUri: redirectUri(), codeVerifier: pendingSignIn.verifier }).catch((err: unknown) => {
+      if (isCognito(err, "invalid_grant")) throw new HttpError(400, "This sign-in link has expired. Please try again.", "code_invalid");
+      throw cognitoFailure(err, "oauth token exchange");
+    });
+    const user = await finishSignIn(c, tokens, { nonce: pendingSignIn.nonce });
+    return c.json({ user: publicUser(user), redirect: pendingSignIn.returnTo });
+  });
+
+  // ---------------- Session ----------------
+
+  /** Sign out this browser (and, after Google/Apple, the user pool's own session in it). */
+  app.post("/auth/logout", async (c) => {
+    // Best effort throughout: signing out must always clear the cookies below.
+    const s = readSession(getCookie(c, SESSION_COOKIE));
+    let redirect: string | null = null;
+    if (s) {
+      await deps.coord
+        .put(retiredSessionKey(s.sid), "1", Math.max(60, Math.ceil((s.exp - Date.now()) / 1000)))
+        .catch((err: unknown) => logger.error({ err }, "could not retire the signed-out session"));
+      const rt = readRefreshToken(c, s);
+      // This device's refresh token (and the access tokens from it) end in Cognito too.
+      if (rt) await deps.auth.revokeRefreshToken(rt).catch((err: unknown) => logger.warn({ err }, "could not revoke the refresh token"));
+      if (s.m !== "password") redirect = deps.auth.logoutUrl(`${env().APP_URL}/login?signedOut=1`);
+    }
+    clearSessionCookies(c);
+    return c.json({ ok: true, redirect });
+  });
+
+  /** Sign out of every device: every session of this account, and every Cognito refresh token. */
+  const signOutEverywhere = async (c: Ctx) => {
+    const user = await requireUser(c, deps);
+    await limit(deps.coord, `rl:revoke:${user.id}`, LIMITS.revokeSessions);
+    await systemDb.user.update({ where: { id: user.id }, data: { sessionsValidAfter: new Date() } }).catch(dbOutage("We can't sign you out everywhere right now. Please try again in a moment."));
+    const identities = await systemDb.authIdentity.findMany({ where: { userId: user.id } }).catch(() => []);
+    for (const id of identities) {
+      await deps.auth.adminGlobalSignOut(id.username).catch((err: unknown) => logger.warn({ err }, "Cognito global sign-out failed"));
+    }
+    await recordAuthEvent("signed_out_everywhere", user.id, clientIp(c));
+    const s = sessionOf(c);
+    clearSessionCookies(c);
+    return c.json({ ok: true, redirect: s.m !== "password" ? deps.auth.logoutUrl(`${env().APP_URL}/login?signedOut=1`) : null });
+  };
+  app.post("/auth/logout-all", signOutEverywhere);
+  // The employee portal's name for it.
+  app.post("/auth/sessions/revoke", signOutEverywhere);
 
   async function me(c: Ctx, user: Awaited<ReturnType<typeof requireUser>>) {
     const memberships = await systemDb.membership.findMany({
@@ -109,204 +496,25 @@ export function authRoutes(app: App, deps: Deps) {
     return user ? me(c, user) : c.json({ user: null, workspaces: [] });
   });
 
+  /** This session: who, how they signed in, and until when. */
+  app.get("/auth/session", async (c) => {
+    const user = await loadUser(c, deps);
+    if (!user) return c.json({ authenticated: false });
+    const s = sessionOf(c);
+    return c.json({ authenticated: true, user: publicUser(user), method: s.m, signedInAt: s.at * 1000, expiresAt: s.exp });
+  });
+
   app.patch("/me", async (c) => {
     const user = await requireUser(c, deps);
     const patch = z
       .object({
-        displayName: z.string().trim().max(80).optional(),
+        displayName: z.string().trim().max(DISPLAY_NAME_MAX).optional(),
         timezone: z.string().refine(validTz, "Unknown time zone").optional(),
       })
       .parse(await body(c));
     const u = await systemDb.user.update({ where: { id: user.id }, data: patch });
     return c.json({ user: publicUser(u) });
   });
-
-  // ---------------- Email OTP (custom; Firebase has no native 6-digit email OTP) -------------
-
-  app.post("/auth/otp/request", async (c) => {
-    requireAppOrigin(c);
-    const { email: raw } = z.object({ email: z.string().email().max(254) }).parse(await body(c));
-    const email = raw.toLowerCase();
-    const ip = clientIp(c);
-    await limit(deps.coord, `rl:otp:ip:${ip}`, LIMITS.otpRequestIp);
-    await limit(deps.coord, `rl:otp:email:${email}`, LIMITS.otpRequestEmail);
-
-    const code = generateOtp();
-    await systemDb.$transaction([
-      // Only the newest code is valid.
-      systemDb.emailOtp.updateMany({ where: { email, consumedAt: null }, data: { consumedAt: new Date() } }),
-      systemDb.emailOtp.create({
-        data: { email, codeHash: hashOtp(code, email, env().OTP_PEPPER), expiresAt: new Date(Date.now() + OTP_TTL_MS), ip },
-      }),
-    ]).catch(dbOutage("We can't send you a code right now. Please try again in a moment."));
-    try {
-      await deps.mailer.send(
-        email,
-        `Your sign-in code: ${code}`,
-        `Your sign-in code is ${code}. It expires in 10 minutes. If you didn't request it, ignore this email.`,
-      );
-      // Same response whether or not an account exists (no enumeration).
-      return c.json({ ok: true, method: "code" });
-    } catch (err) {
-      // No working email sender (e.g. no sending domain set up yet): fall back to a one-click
-      // sign-in link that Firebase emails from its own address.
-      logger.warn({ err: (err as Error).message }, "sign-in code email failed; sending a Firebase sign-in link instead");
-    }
-    // Back to /login, which finishes the sign-in.
-    try {
-      await deps.auth.sendEmailSignInLink(email, `${env().APP_URL}/login?emailLink=1`);
-    } catch (err) {
-      logger.error({ err }, "firebase sign-in link email failed");
-      throw new HttpError(503, "We couldn't send you an email right now. Please sign in another way.", "email_unavailable");
-    }
-    return c.json({ ok: true, method: "link" });
-  });
-
-  /** The page opened from a sign-in link sends its code here; same outcome as /auth/otp/verify. */
-  app.post("/auth/email-link/verify", async (c) => {
-    requireAppOrigin(c);
-    const input = z.object({ email: z.string().email().max(254), oobCode: z.string().min(10).max(2000) }).parse(await body(c));
-    await limit(deps.coord, `rl:emaillink:verify:${clientIp(c)}`, LIMITS.emailLinkVerifyIp);
-    const uid = await deps.auth.redeemEmailSignInLink(input.email.toLowerCase(), input.oobCode).catch((err) => {
-      if (err instanceof FirebaseUnavailableError) {
-        logger.error({ msg: err.message }, "email sign-in link could not be checked");
-        throw new HttpError(503, "We can't check that link right now. Please try again in a moment.", "auth_unavailable");
-      }
-      logger.warn({ msg: (err as Error).message }, "email sign-in link rejected");
-      throw new HttpError(400, "That sign-in link is invalid, already used or expired. Request a new one.", "invalid_link");
-    });
-    const customToken = await deps.auth.createCustomToken(uid);
-    // Client calls signInWithCustomToken(customToken) then POST /auth/session.
-    return c.json({ customToken });
-  });
-
-  app.post("/auth/otp/verify", async (c) => {
-    requireAppOrigin(c);
-    const input = z.object({ email: z.string().email(), code: z.string().regex(/^\d{6}$/) }).parse(await body(c));
-    const email = input.email.toLowerCase();
-    await limit(deps.coord, `rl:otp:verify:${clientIp(c)}`, LIMITS.otpVerifyIp);
-    const outage = dbOutage("We can't check your code right now. Please try again in a moment.");
-    // The per-IP limit does nothing against guesses spread over many addresses: cap the guesses
-    // at this address's codes too (see LIMITS.otpGuessesPerEmail).
-    const guesses = await systemDb.emailOtp
-      .aggregate({
-        where: { email, createdAt: { gt: new Date(Date.now() - LIMITS.otpGuessesPerEmail.windowSec * 1000) } },
-        _sum: { attempts: true },
-      })
-      .catch(outage);
-    if ((guesses._sum.attempts ?? 0) >= LIMITS.otpGuessesPerEmail.max) {
-      throw new HttpError(429, "Too many attempts for this email address. Please sign in another way or try again tomorrow.", "rate_limited");
-    }
-
-    const otp = await systemDb.emailOtp
-      .findFirst({ where: { email, consumedAt: null, expiresAt: { gt: new Date() } }, orderBy: { createdAt: "desc" } })
-      .catch(outage);
-    const invalid = new HttpError(400, "That code is invalid or has expired", "invalid_code");
-    if (!otp) throw invalid;
-    // Atomically count the attempt; refuse once the budget is exhausted.
-    const bumped = await systemDb.emailOtp
-      .updateMany({ where: { id: otp.id, attempts: { lt: OTP_MAX_ATTEMPTS }, consumedAt: null }, data: { attempts: { increment: 1 } } })
-      .catch(outage);
-    if (bumped.count === 0) throw invalid;
-    if (!verifyOtp(input.code, email, env().OTP_PEPPER, otp.codeHash)) throw invalid;
-    // Single use: only one concurrent verifier can consume it.
-    const consumed = await systemDb.emailOtp
-      .updateMany({ where: { id: otp.id, consumedAt: null }, data: { consumedAt: new Date() } })
-      .catch(outage);
-    if (consumed.count === 0) throw invalid;
-
-    const uid = await deps.auth.upsertVerifiedEmailUser(email);
-    const customToken = await deps.auth.createCustomToken(uid);
-    // Client calls signInWithCustomToken(customToken) then POST /auth/session.
-    return c.json({ customToken });
-  });
-}
-
-/**
- * Three different problems used to leave here as one 401 "Invalid sign-in token": a token we
- * should reject, an account that is gone/disabled/revoked, and Firebase being unreachable. Tell
- * them apart — retrying a 503 is the right move, while re-running sign-in against an outage only
- * loops, and "invalid token" sends the user hunting for a fault that isn't theirs.
- */
-const isUniqueViolation = (err: unknown) => (err as { code?: string })?.code === "P2002";
-
-const SIGN_IN_UNAVAILABLE = "We can't finish signing you in right now. Please try again in a moment.";
-
-/**
- * `.catch` for a database call on the sign-in path. The database is reachable only through a
- * tunnel that drops, so a failure there is our outage: say "try again" (503) as loadUser does,
- * not a bare 500 "Something went wrong" that leaves the merchant nowhere to go. HttpErrors pass.
- */
-function dbOutage(message: string) {
-  return (err: unknown): never => {
-    if (err instanceof HttpError) throw err;
-    logger.error({ err }, "database unreachable during sign-in");
-    throw new HttpError(503, message, "db_unavailable");
-  };
-}
-
-/**
- * The user row for a verified Firebase sign-in.
- *
- * Rows are keyed by Firebase uid, but `email` is unique too, and the two can disagree: an account
- * deleted and re-created in Firebase (or an Auth emulator restart) comes back with a new uid for
- * the same address. A plain upsert-by-uid then tried to *create* a second row for that email,
- * hit the unique constraint, and every sign-in for that person was a 500 from then on.
- *
- * The existing row is re-linked to the new uid only when Firebase vouches for the address
- * (`emailVerified`) - otherwise anyone could register an unverified Firebase account under
- * someone else's email and inherit their workspaces. An unverified newcomer is told the address
- * is taken; proving it by email code (which verifies it) then signs them in to the old row.
- */
-async function sessionUser(claims: { uid: string; email: string; emailVerified: boolean; name?: string | null }) {
-  const { uid, email, emailVerified } = claims;
-  const taken = () => new HttpError(409, "That email address belongs to another account. Sign in with an email code to prove it's yours.", "email_in_use");
-  const known = await systemDb.user.findUnique({ where: { firebaseUid: uid } });
-  if (known) {
-    return systemDb.user.update({ where: { id: known.id }, data: { email, emailVerified } }).catch((err: unknown) => {
-      if (isUniqueViolation(err)) throw taken();
-      throw err;
-    });
-  }
-  const sameEmail = await systemDb.user.findUnique({ where: { email } });
-  if (sameEmail) {
-    if (!emailVerified) throw taken();
-    logger.warn({ userId: sameEmail.id }, "re-linking user to a new Firebase account for the same verified email");
-    return systemDb.user.update({ where: { id: sameEmail.id }, data: { firebaseUid: uid, emailVerified: true } });
-  }
-  try {
-    return await systemDb.user.create({ data: { firebaseUid: uid, email, emailVerified, displayName: claims.name } });
-  } catch (err) {
-    // Two first sign-ins racing: the other request created the row.
-    if (!isUniqueViolation(err)) throw err;
-    const raced = await systemDb.user.findUnique({ where: { firebaseUid: uid } });
-    if (!raced) throw taken();
-    return raced;
-  }
-}
-
-function signInFailure(err: unknown, idToken: string, at: string): HttpError {
-  const [h, p] = idToken.split(".").map((s) => { try { return JSON.parse(Buffer.from(s, "base64url").toString()); } catch { return null; } });
-  const code = (err as { code?: string }).code;
-  logger.warn(
-    { at, code, msg: (err as Error).message, alg: h?.alg, kid: h?.kid, iss: p?.iss, aud: p?.aud },
-    "verifyIdToken failed",
-  );
-  if (err instanceof FirebaseUnavailableError) {
-    return new HttpError(503, "We can't verify your sign-in right now. Please try again in a moment.", "auth_unavailable");
-  }
-  switch (code) {
-    case "auth/user-disabled":
-      return new HttpError(403, "This account has been disabled", "account_disabled");
-    case "auth/user-not-found":
-      return new HttpError(401, "This account no longer exists", "account_not_found");
-    // Both mean the token predates something that invalidated it (a password reset, an email
-    // proof, a logout): the credential was real, it just has to be re-minted.
-    case "auth/id-token-revoked":
-    case "auth/id-token-expired":
-      return new HttpError(401, "Please sign in again", "stale_sign_in");
-  }
-  return new HttpError(401, "Invalid sign-in token", "invalid_token");
 }
 
 function validTz(tz: string) {
@@ -316,8 +524,4 @@ function validTz(tz: string) {
   } catch {
     return false;
   }
-}
-
-export function publicUser(u: { id: string; email: string; emailVerified: boolean; displayName: string | null; timezone: string }) {
-  return { id: u.id, email: u.email, emailVerified: u.emailVerified, displayName: u.displayName, timezone: u.timezone };
 }

@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import pg from "pg";
 import { E2E_ENV } from "../playwright.config";
-import { signUp, uniqueEmail, verifyEmailInEmulator } from "./helpers";
+import { signUp, uniqueEmail } from "./helpers";
 
 /**
  * "Continue with WhatsApp" in the browser: the real page and Worker, with Meta's side stubbed.
@@ -55,9 +55,6 @@ const scenario = (page: Page, s: Scenario) => page.evaluate((x) => ((window as u
 async function onConnectPage(page: Page) {
   const email = uniqueEmail("wa");
   await signUp(page, email);
-  await verifyEmailInEmulator(email);
-  await page.getByRole("button", { name: /verified my email/ }).click();
-  await expect(page).toHaveURL(/onboarding/);
   const ws = await page.evaluate(async () => {
     const r = await fetch("/api/workspaces", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "WA Co" }) });
     return ((await r.json()) as { workspace: { id: string } }).workspace.id;

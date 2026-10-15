@@ -2,20 +2,18 @@
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState, type FormEvent } from "react";
-import { sendEmailVerification, signInWithCustomToken } from "firebase/auth";
 import { passwordProblems, passwordStrength } from "@app/shared/staff";
 import { LoadError } from "@/components/LoadError";
 import { PORTAL_WS_KEY } from "@/components/staff/PortalContext";
 import { Alert, AuthShell } from "@/components/ui";
 import { actionError, api, ApiError, isTransient, useApi } from "@/lib/api";
-import { firebaseAuth } from "@/lib/firebase";
 import { setReturnTo } from "@/lib/returnTo";
-import { establishSession } from "@/lib/session";
+import { signOut } from "@/lib/auth";
 import { writeLocal } from "@/lib/storage";
 
 // ---------------------------------------------------------------------------------------------
 // /join?token=…: an employee accepts their invitation. New to Insights: choose a password and the
-// account is created (the API checks the password rules again and Firebase stores only a hash).
+// account is created and signed in (the API checks the password rules again; Cognito stores only a hash).
 // Already have an account with that email: sign in, then join. The password only ever travels in
 // the body of the one request that creates the account.
 // ---------------------------------------------------------------------------------------------
@@ -211,10 +209,7 @@ function SignInToJoin({ inv, who, joinPath }: { inv: Extract<Lookup, { ok: true 
     setReturnTo(joinPath);
     if (who) {
       // Signed in as someone else: sign that account out first, on this browser only.
-      await api("/auth/logout", { method: "POST" }).catch(() => {});
-      await firebaseAuth()
-        .signOut()
-        .catch(() => {});
+      await signOut();
       router.push("/login?signedOut=1");
       return;
     }
@@ -234,7 +229,7 @@ function SignInToJoin({ inv, who, joinPath }: { inv: Extract<Lookup, { ok: true 
       <button type="button" className="btn-primary min-h-12 w-full" onClick={() => void go()} disabled={busy}>
         Sign in to join
       </button>
-      <Link href="/reset" className="block text-sm text-muted underline">
+      <Link href="/forgot-password" className="block text-sm text-muted underline">
         Forgot your password?
       </Link>
     </div>
@@ -261,8 +256,6 @@ function CreateAccount({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [serverProblems, setServerProblems] = useState<string[]>([]);
-  // Created, but signing in afterwards failed: the account is there, so send them to sign in.
-  const [created, setCreated] = useState(false);
 
   const ctx = useMemo(() => ({ email: inv.email, name: inv.employeeName }), [inv.email, inv.employeeName]);
   const problems = passwordProblems(pw, ctx);
@@ -286,7 +279,7 @@ function CreateAccount({
     setBusy(true);
     setError(null);
     setServerProblems([]);
-    let res: { customToken: string; emailVerified: boolean; workspaceId: string };
+    let res: { emailVerified: boolean; workspaceId: string };
     try {
       res = await api("/staff/invitations/accept", { method: "POST", body: { token, password: pw, confirmPassword: pw2 } });
     } catch (err) {
@@ -303,33 +296,17 @@ function CreateAccount({
       return;
     }
     writeLocal(PORTAL_WS_KEY, res.workspaceId);
-    try {
-      const cred = await signInWithCustomToken(firebaseAuth(), res.customToken);
-      await establishSession(cred.user);
-      if (res.emailVerified) {
-        router.replace("/portal");
-        return;
-      }
-      await sendEmailVerification(cred.user, { url: `${window.location.origin}/verify-email` }).catch(() => {});
-      setReturnTo("/portal");
-      router.replace("/verify-email");
-    } catch {
-      setReturnTo("/portal");
-      setCreated(true);
-      setBusy(false);
+    // Accepting signed this browser in already (the API set the session cookie).
+    if (res.emailVerified) {
+      router.replace("/portal");
+      return;
     }
+    // A copied link doesn't prove the inbox: verify it with a code first (/verify-email sends it).
+    setReturnTo("/portal");
+    router.replace("/verify-email");
   }
 
-  if (created) {
-    return (
-      <div className="space-y-3">
-        <Alert kind="success">Your account is ready. Sign in with {inv.email} and the password you just chose.</Alert>
-        <Link href="/login" className="btn-primary w-full">
-          Sign in
-        </Link>
-      </div>
-    );
-  }
+
 
   const shown = serverProblems.length ? serverProblems : null;
   return (

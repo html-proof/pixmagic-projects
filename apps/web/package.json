@@ -12,7 +12,6 @@
   },
   "dependencies": {
     "@app/shared": "workspace:*",
-    "firebase": "^12.3.0",
     "geist": "^1.7.2",
     "lucide-react": "^1.52.0",
     "motion": "^14.0.0",

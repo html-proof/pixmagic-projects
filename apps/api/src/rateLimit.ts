@@ -13,23 +13,21 @@ export interface Limit {
  * apps/cloudflare/wrangler.jsonc); these sit underneath it for the endpoints worth abusing.
  */
 export const LIMITS = {
-  // ---- Sign-in (per IP unless named otherwise) ----
-  /** POST /auth/session: exchanging a Firebase ID token for a session cookie. */
-  session: { max: 30, windowSec: 300 },
-  /** POST /auth/otp/request, per IP and per address: each one sends an email. */
-  otpRequestIp: { max: 10, windowSec: 3600 },
-  otpRequestEmail: { max: 3, windowSec: 900 },
-  /** POST /auth/otp/verify, per IP. */
-  otpVerifyIp: { max: 20, windowSec: 900 },
-  /**
-   * Guesses at the codes sent to one address in a day, from any number of IPs. Each code allows
-   * OTP_MAX_ATTEMPTS, but a new code can be requested every few minutes, so without this a
-   * distributed guesser got ~1,400 tries a day at a 1-in-a-million code. Counted from the codes'
-   * own attempt counters, so nobody can use up a victim's budget without codes being emailed to them.
-   */
-  otpGuessesPerEmail: { max: 30, windowSec: 86_400 },
-  /** POST /auth/email-link/verify. */
-  emailLinkVerifyIp: { max: 20, windowSec: 900 },
+  // ---- Sign-in (per IP unless named otherwise). Cognito throttles and locks out on top. ----
+  /** POST /auth/login, per IP and per address (a password guesser spreads over neither). */
+  loginIp: { max: 30, windowSec: 300 },
+  loginEmail: { max: 10, windowSec: 900 },
+  /** POST /auth/signup: each one emails a code. */
+  signupIp: { max: 10, windowSec: 3600 },
+  /** Codes Cognito emails on request (sign-up, password reset, sign-in), per address and per IP. */
+  codeEmail: { max: 3, windowSec: 900 },
+  codeIp: { max: 10, windowSec: 3600 },
+  /** Guesses at emailed codes (sign-up confirmation, password reset, sign-in), per IP. */
+  codeVerifyIp: { max: 20, windowSec: 900 },
+  /** "Continue with Google / Apple" started and finished, per IP. */
+  oauthIp: { max: 30, windowSec: 300 },
+  /** Password, email and account changes, per user. */
+  accountChange: { max: 10, windowSec: 3600 },
 
   // ---- Signed-in actions ----
   /** Customer contact details, fetched live from Shopify (per workspace and user). */

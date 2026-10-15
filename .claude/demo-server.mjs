@@ -1,7 +1,8 @@
 // Local demo: the real Worker (UI + API + queue consumers) on http://localhost:8789, using the
-// Firebase Auth emulator, Mailpit and a separate `app_demo` database (never the production `app` DB).
+// Cognito emulator (docker compose up -d cognito, or node infra/cognito-local/start.mjs), Mailpit and a
+// separate `app_demo` database (never the production `app` DB).
 // Build its UI first:
-//   NEXT_EXPORT_DIR=out-demo NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR=http://127.0.0.1:9099 //   NEXT_PUBLIC_FIREBASE_PROJECT_ID=demo-insights NEXT_PUBLIC_FIREBASE_API_KEY=demo-key pnpm --filter @app/web build
+//   NEXT_EXPORT_DIR=out-demo pnpm --filter @app/web build   (the UI needs no sign-in settings)
 // then start it from the Browser pane's "demo" launch configuration ("demo-nomail" simulates a
 // production without an email sending domain).
 import { spawn } from "node:child_process";
@@ -26,11 +27,13 @@ const child = spawn(
     resolve(root, "apps/web/e2e/worker.env"),
     "--persist-to",
     ".wrangler/demo",
-    // The demo UI is built separately (NEXT_EXPORT_DIR=out-demo, emulator settings) so it never
+    "--var",
+    "COGNITO_ENDPOINT:http://127.0.0.1:9229",
+    // The demo UI is built separately (NEXT_EXPORT_DIR=out-demo) so it never
     // fights a regular `wrangler dev` over apps/web/out.
     "--assets",
     resolve(root, "apps/web/out-demo"),
-    // --no-mail: make email sending fail like production without a sending domain (tests the sign-in link fallback).
+    // --no-mail: make email sending fail like production without a sending domain.
     ...(process.argv.includes("--no-mail") ? ["--var", "MAILPIT_URL:http://127.0.0.1:9"] : []),
   ],
   { cwd, env, stdio: "inherit" },

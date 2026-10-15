@@ -8,6 +8,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./ads": "./src/ads.ts",
+    "./auth": "./src/auth.ts",
     "./capabilities": "./src/capabilities.ts",
     "./dates": "./src/dates.ts",
     "./health": "./src/health.ts",

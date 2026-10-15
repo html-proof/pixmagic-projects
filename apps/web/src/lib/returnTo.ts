@@ -46,3 +46,15 @@ export function takeReturnTo(): string | null {
     return null;
   }
 }
+
+/** The pending path, left in place (a sign-in that leaves the site may come back without finishing). */
+export function peekReturnTo(): string | null {
+  try {
+    const raw = localStorage.getItem(KEY);
+    if (!raw) return null;
+    const { path, at } = JSON.parse(raw) as { path?: unknown; at?: number };
+    return safe(path) && typeof at === "number" && Date.now() - at < TTL_MS ? path : null;
+  } catch {
+    return null;
+  }
+}

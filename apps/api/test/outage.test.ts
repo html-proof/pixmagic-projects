@@ -2,7 +2,6 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { systemDb, withDb } from "@app/db";
 import { signShopifyQuery } from "@app/shared";
 import { clean, createWorkspace, ORIGIN, setup, signIn, teardown, testBrowser, type TestCtx } from "./helpers.js";
-import { FirebaseUnavailableError } from "../src/authProvider.js";
 
 /**
  * The production database sits behind a tunnel that drops for seconds to minutes at a time. A
@@ -70,7 +69,7 @@ describe("queries from concurrent scopes", () => {
   // own connections: on Workers another request's connections can be gone before they answer.
   it("never run on another scope's connections, even when Prisma would batch them", async () => {
     const live = { system: process.env.DATABASE_URL!, tenant: process.env.APP_DATABASE_URL };
-    const lookup = () => systemDb.user.findUnique({ where: { firebaseUid: "nobody" } });
+    const lookup = () => systemDb.user.findUnique({ where: { email: "nobody@x.com" } });
     // Queued in the same tick with the same shape, the outage's first. Sharing one queue, Prisma
     // sent both as one query on the outage's connection, and the healthy request failed too.
     const [down, up] = await Promise.allSettled([dbDown(lookup), withDb(live, lookup)]);
@@ -108,73 +107,35 @@ describe("while the database is unreachable", () => {
 
   it("a fresh sign-in says 'try again' (503) instead of a bare 500, and signs in once the database is back", async () => {
     // Production hit exactly this: Docker on the database host stopped, and every sign-in was a 500.
-    const session = () => ctx.app.inject({ method: "POST", url: "/auth/session", headers: ORIGIN, payload: { idToken: "idt|u1|a@x.com|1" } });
-    const during = await dbDown(session);
+    const u = ctx.auth.addUser({ sub: "u1", email: "a@x.com" });
+    const login = () => ctx.app.inject({ method: "POST", url: "/auth/login", headers: ORIGIN, payload: { email: "a@x.com", password: u.password } });
+    const during = await dbDown(login);
     expect(during.statusCode).toBe(503);
     expect(during.json().error).toBe("db_unavailable");
     expect(during.headers["set-cookie"]).toBeUndefined();
 
-    const after = await session();
+    const after = await login();
     expect(after.statusCode).toBe(200);
     expect(after.json().user.email).toBe("a@x.com");
   });
 
-  it("asking for a sign-in code says 'try again' (503) instead of a bare 500, and sends nothing", async () => {
-    // Production hit this on /start's "Confirm your email" panel during a tunnel drop.
-    const request = () =>
-      ctx.app.inject({ method: "POST", url: "/auth/otp/request", headers: ORIGIN, payload: { email: "a@x.com" } });
-    const before = ctx.mailer.sent.length;
-    const during = await dbDown(request);
-    expect(during.statusCode).toBe(503);
-    expect(during.json().error).toBe("db_unavailable");
-    expect(ctx.mailer.sent).toHaveLength(before);
-
-    expect((await request()).statusCode).toBe(200);
-    expect(ctx.mailer.sent).toHaveLength(before + 1);
+  it("asking for a password-reset code still works: Cognito sends it, not our database", async () => {
+    ctx.auth.addUser({ sub: "u1", email: "a@x.com" });
+    const during = await dbDown(() => ctx.app.inject({ method: "POST", url: "/auth/password/forgot", headers: ORIGIN, payload: { email: "a@x.com" } }));
+    expect(during.statusCode).toBe(200);
+    expect(ctx.auth.code("reset", "a@x.com")).toMatch(/^\d{6}$/);
   });
 
-  it("checking a sign-in code says 'try again' (503) and leaves the code usable", async () => {
-    await ctx.app.inject({ method: "POST", url: "/auth/otp/request", headers: ORIGIN, payload: { email: "a@x.com" } });
-    const code = /(\d{6})/.exec(ctx.mailer.sent.at(-1)!.subject)![1]!;
-    const verify = () => ctx.app.inject({ method: "POST", url: "/auth/otp/verify", headers: ORIGIN, payload: { email: "a@x.com", code } });
-    const during = await dbDown(verify);
-    expect(during.statusCode).toBe(503);
-    expect(during.json().error).toBe("db_unavailable");
-
-    expect((await verify()).statusCode).toBe(200);
-  });
-
-  it("a fresh sign-in says 'try again' when Firebase can't mint the session cookie", async () => {
-    const create = ctx.auth.createSessionCookie;
-    ctx.auth.createSessionCookie = async () => {
-      throw new FirebaseUnavailableError("Identity Toolkit :createSessionCookie unreachable: fetch failed");
-    };
+  it("a fresh sign-in says 'try again' when Cognito is unreachable, not 'wrong password'", async () => {
+    const u = ctx.auth.addUser({ sub: "u1", email: "a@x.com" });
+    ctx.auth.state.unavailable = true;
     try {
-      const res = await ctx.app.inject({ method: "POST", url: "/auth/session", headers: ORIGIN, payload: { idToken: "idt|u1|a@x.com|1" } });
+      const res = await ctx.app.inject({ method: "POST", url: "/auth/login", headers: ORIGIN, payload: { email: "a@x.com", password: u.password } });
       expect(res.statusCode).toBe(503);
       expect(res.json().error).toBe("auth_unavailable");
+      expect(res.headers["set-cookie"]).toBeUndefined();
     } finally {
-      ctx.auth.createSessionCookie = create;
-    }
-  });
-
-  it("a sign-in too old for a session says 'try again', not 'sign in again', until the database is back", async () => {
-    // "Continue with Shopify" signed in to Firebase, then /auth/session failed for over 5 minutes.
-    // "Sign in again" would send the merchant to prove their email by code, which can't be
-    // issued during the outage either (and each failed request spends their code budget).
-    const verify = ctx.auth.verifyIdToken;
-    ctx.auth.verifyIdToken = async (t) => ({ ...(await verify(t)), authTime: Math.floor(Date.now() / 1000) - 6 * 60 });
-    const session = () => ctx.app.inject({ method: "POST", url: "/auth/session", headers: ORIGIN, payload: { idToken: "idt|u1|a@x.com|1" } });
-    try {
-      const during = await dbDown(session);
-      expect(during.statusCode).toBe(503);
-      expect(during.json().error).toBe("db_unavailable");
-
-      const after = await session();
-      expect(after.statusCode).toBe(401);
-      expect(after.json().error).toBe("stale_sign_in");
-    } finally {
-      ctx.auth.verifyIdToken = verify;
+      ctx.auth.state.unavailable = false;
     }
   });
 
@@ -186,17 +147,17 @@ describe("while the database is unreachable", () => {
     expect(res.headers.location).toBe(RETRY_ONBOARDING);
   });
 
-  it("launch treats Firebase being unreachable the same way", async () => {
+  it("launch treats the signed-out check being unreachable the same way", async () => {
     const { cookie } = await signIn(ctx, "owner", "owner@x.com");
-    const verify = ctx.auth.verifySessionCookie;
-    ctx.auth.verifySessionCookie = async () => {
-      throw new FirebaseUnavailableError("Could not fetch Google's token signing keys: fetch failed");
+    const peek = ctx.deps.coord.peek;
+    ctx.deps.coord.peek = async () => {
+      throw new Error("coordinator unreachable");
     };
     try {
       const res = await ctx.app.inject({ method: "GET", url: launchUrl(), headers: { cookie } });
       expect(res.headers.location).toBe(RETRY_ONBOARDING);
     } finally {
-      ctx.auth.verifySessionCookie = verify;
+      ctx.deps.coord.peek = peek;
     }
   });
 

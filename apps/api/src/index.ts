@@ -1,3 +1,4 @@
 export { buildApp, type App } from "./app.js";
-export { firebaseAuthProvider, type AuthProvider } from "./authProvider.js";
+export { cognitoAuth, cognitoConfig, unconfiguredCognito, type CognitoAuth } from "./cognito.js";
+export { firebasePasswordCheck, type LegacyPasswordCheck } from "./legacyFirebase.js";
 export type { Deps } from "./context.js";

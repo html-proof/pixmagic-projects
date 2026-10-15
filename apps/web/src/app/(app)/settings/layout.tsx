@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 
 const ITEMS = [
   ["profile", "Profile"],
+  ["security", "Security"],
   ["workspace", "Workspace"],
   ["integrations", "Connect your business"],
   ["stores", "Shopify"],

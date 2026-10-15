@@ -13,7 +13,7 @@ Everything runs as **one Worker** (`apps/cloudflare`, name `insights`):
 | Postgres access | Hyperdrive (two configs: owner `app`, RLS `app_rls`) | direct connections |
 | Large webhook payloads | Durable Object storage, chunked (an R2 bucket instead when one is bound; none is today) | Redis (BullMQ payloads) |
 | Email (OTP codes, invites, alerts) | Email Sending (`send_email` binding) | SMTP / nodemailer |
-| Firebase Admin | Identity Toolkit REST + `jose` | `firebase-admin` |
+| Sign-in | Amazon Cognito over HTTPS + `jose` (ID tokens) + `aws4fetch` (SigV4 for admin calls) | the AWS SDK (too much CPU to load on the Free plan) |
 
 Postgres stays where it is (your provider). Redis is no longer used.
 
@@ -89,16 +89,16 @@ npx wrangler r2 bucket create insights-webhook-payloads
 npx wrangler email sending enable example.com
 ```
 
-6. **Config:** edit `vars` in `wrangler.jsonc` (`APP_URL`, `API_URL` = `APP_URL` + `/api`, `FIREBASE_PROJECT_ID`, `SHOPIFY_API_KEY`, `EMAIL_FROM`) and uncomment `routes` for your custom domain.
+6. **Config:** edit `vars` in `wrangler.jsonc` (`APP_URL`, `API_URL` = `APP_URL` + `/api`, the `COGNITO_*` settings from the Cognito stack ([cognito-setup.md](cognito-setup.md)), `SHOPIFY_API_KEY`, `EMAIL_FROM`) and uncomment `routes` for your custom domain.
 7. **Secrets** (each prompts for the value):
 
 ```bash
 npx wrangler secret put SESSION_SECRET
 ```
 
-   Repeat for `TOKEN_ENCRYPTION_KEYS` (`1:<openssl rand -base64 32>`), `OTP_PEPPER`, `SHOPIFY_API_SECRET`, `FIREBASE_SERVICE_ACCOUNT_B64` (base64 of the service-account JSON) and, when those features are used, `META_APP_SECRET` and `GOOGLE_ADS_CLIENT_SECRET` (ad accounts, [ads-setup.md](ads-setup.md)), `WHATSAPP_APP_SECRET` and `WHATSAPP_WEBHOOK_VERIFY_TOKEN` ([whatsapp.md](whatsapp.md)), `SHOPIFY_APP_SECRET_<KEY>` for each app in `SHOPIFY_EXTRA_APPS`, `CUSTOMER_HASH_KEY` (see RUNBOOK, "Rotate the OTP pepper") and `ALERT_SLACK_WEBHOOK_URL`. Never set `FIREBASE_AUTH_EMULATOR_HOST` or `MAILPIT_URL` here: production refuses to start with them.
+   Repeat for `TOKEN_ENCRYPTION_KEYS` (`1:<openssl rand -base64 32>`), `OTP_PEPPER`, `SHOPIFY_API_SECRET`, the three Cognito secrets (`node infra/aws/worker-secrets.mjs`, [cognito-setup.md](cognito-setup.md)) and, when those features are used, `META_APP_SECRET` and `GOOGLE_ADS_CLIENT_SECRET` (ad accounts, [ads-setup.md](ads-setup.md)), `WHATSAPP_APP_SECRET` and `WHATSAPP_WEBHOOK_VERIFY_TOKEN` ([whatsapp.md](whatsapp.md)), `SHOPIFY_APP_SECRET_<KEY>` for each app in `SHOPIFY_EXTRA_APPS`, `CUSTOMER_HASH_KEY` (see RUNBOOK, "Rotate the OTP pepper") and `ALERT_SLACK_WEBHOOK_URL`. Never set `COGNITO_ENDPOINT` or `MAILPIT_URL` here: production refuses to start with them.
 
-8. **Web build variables:** `NEXT_PUBLIC_FIREBASE_*` are baked into the static UI at build time. Put them in `apps/web/.env.production` (or export them in CI) before deploying.
+8. **Web build:** no variables: the UI asks the API which sign-in options exist.
 9. **Deploy** (builds the static UI, then uploads Worker + assets):
 
 ```bash
@@ -106,11 +106,11 @@ pnpm --filter @app/cloudflare run deploy
 ```
 
 10. **Shopify:** in `shopify-app/shopify.app.toml` set your domain (it holds `insights.imeseban.workers.dev` today; launch URL `/api/shopify/launch`, redirect `/api/shopify/callback`, webhooks `/api/webhooks/shopify`), then `shopify app deploy`.
-11. **Firebase:** add your domain to Authentication > Settings > Authorized domains.
+11. **Cognito:** add `<your domain>/auth/callback` and `<your domain>/login?signedOut=1` to the app client (the stack's `AppUrl` / `ExtraCallbackUrls`).
 
 ### Email
 
-Sign-in codes, invitations and alerts are sent with Cloudflare Email Sending from `EMAIL_FROM`, which must be on a domain onboarded to your Cloudflare account. Until one is set up, "Email me a code" automatically falls back to a one-click sign-in link that Firebase emails from its own address (needs `FIREBASE_WEB_API_KEY`, the public web API key, in `vars`, and the Email link sign-in method enabled in Firebase, which it is by default with Email/Password).
+Invitations and alerts are sent with Cloudflare Email Sending from `EMAIL_FROM`, which must be on a domain onboarded to your Cloudflare account. Sign-in emails (sign-up, reset and verification codes) are Cognito's own ([cognito-setup.md](cognito-setup.md), section 1).
 
 ### Deploying while `wrangler dev` is running
 

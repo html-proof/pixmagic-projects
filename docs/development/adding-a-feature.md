@@ -30,7 +30,7 @@ barrel in the UI. Example: `packages/shared/src/health.ts`.
    - an endpoint worth abusing gets a limit in `apps/api/src/rateLimit.ts` (`LIMITS`);
    - a list is capped or paged (`apps/api/src/pagination.ts`).
 3. Register it in `apps/api/src/app.ts` if it is a new route file.
-4. Integration test in `apps/api/test/` (real Postgres, faked Firebase and providers): the
+4. Integration test in `apps/api/test/` (real Postgres, faked Cognito and providers): the
    success path, the permission check (another workspace gets 404), and the failure you handle.
 5. Add the row to [../api/api-overview.md](../api/api-overview.md).
 

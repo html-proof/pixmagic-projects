@@ -63,7 +63,7 @@ Postgres is unreachable from Cloudflare. Queue consumers notice the same thing a
 3. A bad release: `npx wrangler rollback` (pick the previous version). Do not roll back migrations; ship a forward fix.
 
 ### Users can't sign in
-1. Firebase status page; Authentication → Usage for quota.
+1. AWS Health Dashboard (Cognito in the pool's region); CloudWatch → Cognito metrics for throttling. Codes not arriving: Cognito's default sender allows 50 emails a day (cognito-setup.md, section 1).
 2. `stale_sign_in` errors: client clock skew or a cached old ID token. They should sign in again.
 3. Sign-in codes not arriving: Workers logs for the email send, and that the `EMAIL_FROM` domain is still onboarded to Email Sending. Rate limits are 3 codes / 15 min per email.
 
@@ -156,5 +156,5 @@ DELETE FROM email_otps WHERE created_at < now() - interval '1 day';
 | --- | --- |
 | Port 5434 in use | Override with `PG_PORT` |
 | `app_rls` role missing (volume pre-dated init script) | `docker compose exec -T postgres psql -U app -d app < infra/postgres/init.sql` |
-| Emulator not reachable | First boot downloads firebase-tools (~1–2 min): `docker compose logs -f firebase-emulator` |
+| Cognito emulator not reachable | First boot downloads cognito-local (~1 min): `docker compose logs -f cognito` |
 | Fresh start (**local only**: on the production host this deletes production data) | `docker compose down -v && docker compose up -d && pnpm db:migrate` |

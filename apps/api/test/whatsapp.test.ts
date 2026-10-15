@@ -397,7 +397,7 @@ describe("tenant isolation", () => {
     const put = await ctx.app.inject({ method: "PUT", url: `${a.base}/settings`, headers: b.headers, payload: {} });
     expect(put.statusCode).toBe(404);
     // Their own workspace id with A's store id: still nothing.
-    const bWs = (await systemDb.membership.findFirstOrThrow({ where: { user: { firebaseUid: "b" } } })).workspaceId;
+    const bWs = (await systemDb.membership.findFirstOrThrow({ where: { user: { identities: { some: { subject: "b" } } } } })).workspaceId;
     const cross = await ctx.app.inject({ method: "GET", url: `/workspaces/${bWs}/stores/${a.store.id}/whatsapp`, headers: b.headers });
     expect(cross.statusCode).toBe(404);
   });

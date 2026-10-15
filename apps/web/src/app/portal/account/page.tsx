@@ -1,25 +1,21 @@
 "use client";
-import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { sendPasswordResetEmail } from "firebase/auth";
+import { useEffect, useState, type FormEvent } from "react";
+import { AccountSecurity } from "@/components/auth/AccountSecurity";
 import { LoadError } from "@/components/LoadError";
-import { portalSignOut, usePortal, type EmployeeDashboard } from "@/components/staff/PortalContext";
+import { usePortal, type EmployeeDashboard } from "@/components/staff/PortalContext";
 import { Field } from "@/components/staff/ui";
-import { Alert } from "@/components/ui";
-import { ConfirmDialog, Skeleton, useToast } from "@/components/whatsapp/common";
+import { Skeleton, useToast } from "@/components/whatsapp/common";
 import { actionError, api, useApi } from "@/lib/api";
-import { firebaseAuth } from "@/lib/firebase";
 
 // ---------------------------------------------------------------------------------------------
-// The employee's account: their details (HR keeps all but the phone number up to date), their
-// password, and signing out here or everywhere.
+// The employee's account: their details (HR keeps all but the phone number up to date), and
+// account security (password, email, signing out here or everywhere, deletion).
 // ---------------------------------------------------------------------------------------------
 
 const PHONE_RE = /^[+0-9 ().-]*$/;
 
 export default function PortalAccount() {
-  const { ws, me, employment } = usePortal();
-  const router = useRouter();
+  const { ws, employment } = usePortal();
   const toast = useToast();
   // The portal has no separate profile endpoint: the dashboard answer carries the employee's details.
   const q = useApi<EmployeeDashboard>(`/employee/${ws}/dashboard`);
@@ -32,11 +28,6 @@ export default function PortalAccount() {
     if (emp) setPhone(emp.phone ?? "");
   }, [emp]);
 
-  const [resetSent, setResetSent] = useState(false);
-  const [resetBusy, setResetBusy] = useState(false);
-  const [confirmAll, setConfirmAll] = useState(false);
-  const [allBusy, setAllBusy] = useState(false);
-  const cancelAll = useCallback(() => setConfirmAll(false), []);
 
   const inactive = employment.status === "inactive";
   const dirty = !!emp && phone.trim() !== (emp.phone ?? "");
@@ -59,30 +50,6 @@ export default function PortalAccount() {
     } finally {
       setSaving(false);
     }
-  }
-
-  async function sendReset() {
-    setResetBusy(true);
-    // Same message whatever happens (like /reset), so this can't be used to probe accounts.
-    await sendPasswordResetEmail(firebaseAuth(), me.user.email, { url: `${window.location.origin}/login` }).catch(() => {});
-    setResetSent(true);
-    setResetBusy(false);
-  }
-
-  async function signOutEverywhere() {
-    setAllBusy(true);
-    try {
-      await api("/auth/sessions/revoke", { method: "POST" });
-    } catch (err) {
-      toast("error", actionError(err, "sign you out everywhere"));
-      setAllBusy(false);
-      setConfirmAll(false);
-      return;
-    }
-    await firebaseAuth()
-      .signOut()
-      .catch(() => {});
-    router.replace("/login?signedOut=1");
   }
 
   return (
@@ -148,41 +115,7 @@ export default function PortalAccount() {
         )}
       </section>
 
-      <section className="card" aria-labelledby="password-h">
-        <h2 id="password-h" className="font-semibold">
-          Password
-        </h2>
-        <p className="mt-1 text-sm text-muted">We&apos;ll email you a link to choose a new password.</p>
-        {resetSent ? (
-          <div className="mt-3">
-            <Alert kind="success">If you sign in with a password, a link to change it is on its way to {me.user.email}. Check your inbox (and spam folder).</Alert>
-          </div>
-        ) : (
-          <button type="button" className="btn-secondary mt-3 min-h-11" onClick={() => void sendReset()} disabled={resetBusy}>
-            {resetBusy ? "Sending…" : "Change password"}
-          </button>
-        )}
-        <p className="mt-3 text-xs text-muted">Two-step verification isn&apos;t available yet. Use a strong password you don&apos;t use anywhere else.</p>
-      </section>
-
-      <section className="card" aria-labelledby="signout-h">
-        <h2 id="signout-h" className="font-semibold">
-          Signing out
-        </h2>
-        <p className="mt-1 text-sm text-muted">Signed in on a shared or lost device? Sign out of all devices to end every session, including this one.</p>
-        <div className="mt-3 flex flex-wrap gap-3">
-          <button type="button" className="btn-secondary min-h-11" onClick={() => void portalSignOut(router)}>
-            Sign out
-          </button>
-          <button type="button" className="btn-danger min-h-11" onClick={() => setConfirmAll(true)}>
-            Sign out of all devices
-          </button>
-        </div>
-      </section>
-
-      <ConfirmDialog open={confirmAll} title="Sign out of all devices?" confirmLabel="Sign out everywhere" danger busy={allBusy} onCancel={cancelAll} onConfirm={() => void signOutEverywhere()}>
-        <p>Every browser and phone signed in to your account will be signed out, including this one. You&apos;ll need your password to sign in again.</p>
-      </ConfirmDialog>
+      <AccountSecurity />
     </>
   );
 }

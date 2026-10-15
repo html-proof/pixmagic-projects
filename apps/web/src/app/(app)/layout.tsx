@@ -3,8 +3,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import type { ReactNode } from "react";
 import { AppProvider, useApp } from "@/components/AppContext";
-import { api } from "@/lib/api";
-import { firebaseAuth } from "@/lib/firebase";
+import { leaveTo, signOut } from "@/lib/auth";
 import { staffAccess } from "@app/shared/staff";
 
 function TopBar() {
@@ -13,11 +12,9 @@ function TopBar() {
   const path = usePathname();
 
   async function logout() {
-    await api("/auth/logout", { method: "POST" }).catch(() => {});
-    await firebaseAuth().signOut().catch(() => {});
-    // Tells /login not to send a still-valid session straight back in: if the logout call above
-    // never reached us, the cookie survives, and signing out must not look like it did nothing.
-    router.replace("/login?signedOut=1");
+    // Lands on /login?signedOut=1 (or, after Google/Apple, the user pool's logout page first), which
+    // won't send a session that survived an unreachable logout call straight back in.
+    leaveTo(await signOut(), router);
   }
 
   return (

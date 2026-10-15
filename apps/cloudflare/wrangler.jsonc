@@ -14,12 +14,12 @@
     "binding": "ASSETS",
     "html_handling": "auto-trailing-slash",
     "not_found_handling": "404-page",
-    // /__/* is Firebase's sign-in helper, proxied from <project>.firebaseapp.com (src/index.ts).
-    "run_worker_first": ["/api/*", "/webhooks/*", "/pixel/*", "/shopify/*", "/healthz", "/readyz", "/__/*"]
+    "run_worker_first": ["/api/*", "/webhooks/*", "/pixel/*", "/shopify/*", "/healthz", "/readyz"]
   },
 
   // Non-secret configuration. Secrets (SESSION_SECRET, TOKEN_ENCRYPTION_KEYS, OTP_PEPPER,
-  // SHOPIFY_API_SECRET, FIREBASE_SERVICE_ACCOUNT_B64, ALERT_SLACK_WEBHOOK_URL, for ad accounts
+  // SHOPIFY_API_SECRET, ALERT_SLACK_WEBHOOK_URL, for sign-in COGNITO_CLIENT_SECRET,
+  // COGNITO_ADMIN_ACCESS_KEY_ID and COGNITO_ADMIN_SECRET_ACCESS_KEY, for ad accounts
   // META_APP_SECRET, GOOGLE_ADS_CLIENT_SECRET, and for WhatsApp
   // WHATSAPP_APP_SECRET, WHATSAPP_WEBHOOK_VERIFY_TOKEN, and for email integrations
   // EMAIL_GOOGLE_CLIENT_SECRET, EMAIL_MICROSOFT_CLIENT_SECRET, optionally EMAIL_CREDENTIAL_KEYS) are set with
@@ -28,9 +28,22 @@
     "NODE_ENV": "production",
     "APP_URL": "https://insights.imeseban.workers.dev",
     "API_URL": "https://insights.imeseban.workers.dev/api",
-    "FIREBASE_PROJECT_ID": "saas-89329",
-    // Public web API key (same as NEXT_PUBLIC_FIREBASE_API_KEY): redeems emailed sign-in links.
-    "FIREBASE_WEB_API_KEY": "AIzaSyDsrFIOe52bv3ZD0PM_h_l6_Tm9q7Uzq4s",
+    // Sign-in: the Amazon Cognito user pool (infra/aws/cognito.yaml, docs/cognito-setup.md). Fill
+    // these in from the stack's outputs; until then every sign-in answers "unavailable".
+    "COGNITO_REGION": "",
+    "COGNITO_USER_POOL_ID": "",
+    "COGNITO_CLIENT_ID": "",
+    // https://<prefix>.auth.<region>.amazoncognito.com (or a custom auth domain).
+    "COGNITO_DOMAIN": "",
+    // "Continue with ..." buttons that work: Google, SignInWithApple (once each provider is set up in the pool).
+    "COGNITO_IDENTITY_PROVIDERS": "",
+    // "1" once the pool sends email through SES (passwordless sign-in codes need it).
+    "COGNITO_EMAIL_OTP": "",
+    "COGNITO_REFRESH_ROTATION": "",
+    // The move from Firebase: the old project's public web API key (saas-89329). A first sign-in with a
+    // password Cognito doesn't know yet is checked against Firebase once and moved over. Clear it to end
+    // the migration window (docs/cognito-setup.md, "Ending the migration").
+    "LEGACY_FIREBASE_API_KEY": "AIzaSyDsrFIOe52bv3ZD0PM_h_l6_Tm9q7Uzq4s",
     "SHOPIFY_API_KEY": "57e9ef75435db908617fdd46099afe0e",
     "SHOPIFY_SCOPES": "read_orders,read_products",
     // NOTE: under Shopify managed installation (use_legacy_install_flow = false) these two vars do
@@ -50,8 +63,8 @@
     // store with its own app"). Fill in the client id from the Dev Dashboard and set the secret
     // with `npx wrangler secret put SHOPIFY_APP_SECRET_PIXMAGIC`, then deploy.
     "SHOPIFY_EXTRA_APPS": "[{\"key\":\"pixmagic\",\"clientId\":\"bb0ea9e4ad8939a6a1513e4dbf8cbbf1\",\"shops\":[\"pixmagic.myshopify.com\"]}]",
-    // Must be an address on a domain onboarded to Cloudflare Email Sending. Until then, sign-in
-    // codes fall back to one-click links that Firebase emails (see docs/shopify-setup.md).
+    // Must be an address on a domain onboarded to Cloudflare Email Sending (app email: invitations,
+    // alerts). Sign-in emails (codes) are Cognito's own, not this.
     "EMAIL_FROM": "Insights <no-reply@example.com>",
     // Ad accounts ("Continue with Meta" / "Continue with Google Ads" / "Continue with Google AdSense"
     // on Settings → Ad accounts). Empty until the apps exist: the buttons then say the platform isn't
@@ -142,14 +155,14 @@
   // Coarse per-IP API limit (replaces the 300/min global limiter).
   "ratelimits": [{ "name": "GLOBAL_LIMITER", "namespace_id": "1001", "simple": { "limit": 300, "period": 60 } }],
 
-  // Transactional email (OTP codes, invitations, alerts). The EMAIL_FROM domain must be onboarded.
+  // Transactional email (invitations, alerts). The EMAIL_FROM domain must be onboarded.
   "send_email": [{ "name": "EMAIL" }],
 
   // Keep in sync with CRON in apps/worker/src/index.ts.
   "triggers": { "crons": ["15 3 * * *", "*/15 * * * *"] },
 
   // The Free plan caps a request at 10 ms of CPU, and this app needs ~15 ms for a signed-in
-  // request (Firebase session verify + a few Prisma queries), so a share of them is killed with
+  // request (session check + a few Prisma queries), so a share of them is killed with
   // "Worker exceeded resource limits" (Cloudflare error 1102) - see docs/deployment-cloudflare.md.
   // On the Workers Paid plan the default becomes 30 s; uncomment this for the long sync pages,
   // which wait on Shopify's rate limiter.
