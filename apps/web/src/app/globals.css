@@ -13,6 +13,7 @@
   --danger: #b42318;
   --warn: #a15c07;
   --good: #1f7a46;
+  --info: #2f62a3;
   --chart: #2f6f4f;
   /* Sales breakdown charts: one blue ramp for ordinary → strong → best days (validated as an
      ordinal ramp against the surface, light and dark), and orange for the running total. */
@@ -45,6 +46,7 @@
     --danger: #f97066;
     --warn: #f0b048;
     --good: #6fcf97;
+    --info: #7aa7e6;
     --chart: #6fbf94;
     --viz-tier-1: #1c5cab;
     --viz-tier-2: #3987e5;
@@ -70,6 +72,7 @@
   --color-danger: var(--danger);
   --color-warn: var(--warn);
   --color-good: var(--good);
+  --color-info: var(--info);
 }
 
 body {
@@ -104,6 +107,34 @@ body {
 }
 @utility label {
   @apply mb-1 block text-sm font-medium;
+}
+/* Inline messages (Alert): a softly tinted panel with a status icon. `--tone` is the status colour;
+   the text is a deep shade of it, so it reads as an error (or a success) without shouting. */
+@utility alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.625rem;
+  border: 1px solid color-mix(in oklab, var(--tone) 26%, var(--border));
+  border-radius: 0.625rem;
+  background: color-mix(in oklab, var(--tone) 7%, var(--surface));
+  color: color-mix(in oklab, var(--tone) 62%, var(--text));
+  padding: 0.75rem 0.875rem;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  animation: alert-in 0.22s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+@utility alert-error {
+  --tone: var(--danger);
+}
+@utility alert-success {
+  --tone: var(--good);
+}
+@utility alert-info {
+  --tone: var(--info);
+}
+@keyframes alert-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: none; }
 }
 
 /* ---- Motion ------------------------------------------------------------------------------
@@ -229,6 +260,7 @@ body {
     --danger: #b42318;
     --warn: #a15c07;
     --good: #1f7a46;
+    --info: #2f62a3;
     --viz-tier-1: #6da7ec;
     --viz-tier-2: #2a78d6;
     --viz-tier-3: #184f95;

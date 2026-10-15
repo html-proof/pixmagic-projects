@@ -21,11 +21,37 @@ export function AuthShell({ title, subtitle, children }: { title: string; subtit
   );
 }
 
-export function Alert({ kind = "error", children }: { kind?: "error" | "info" | "success"; children: ReactNode }) {
-  const color = kind === "error" ? "border-danger text-danger" : kind === "success" ? "border-good text-good" : "border-border text-muted";
+type AlertKind = "error" | "info" | "success";
+
+const alertTone: Record<AlertKind, string> = { error: "alert-error", info: "alert-info", success: "alert-success" };
+
+/** The glyph drawn on the alert's status disc, in the surface colour. */
+const alertGlyph: Record<AlertKind, ReactNode> = {
+  error: (
+    <>
+      <path d="M10 5.75v5" />
+      <path d="M10 14.25h.01" />
+    </>
+  ),
+  info: (
+    <>
+      <path d="M10 9.25v5" />
+      <path d="M10 5.75h.01" />
+    </>
+  ),
+  success: <path d="M6.5 10.25l2.4 2.4 4.6-4.9" />,
+};
+
+export function Alert({ kind = "error", children }: { kind?: AlertKind; children: ReactNode }) {
   return (
-    <div role={kind === "error" ? "alert" : "status"} className={`rounded-lg border px-3 py-2 text-sm ${color}`}>
-      {children}
+    <div role={kind === "error" ? "alert" : "status"} className={`alert ${alertTone[kind]}`}>
+      <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" focusable="false" className="mt-px shrink-0" style={{ color: "var(--tone)" }}>
+        <circle cx="10" cy="10" r="9" fill="currentColor" />
+        <g fill="none" stroke="var(--surface)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          {alertGlyph[kind]}
+        </g>
+      </svg>
+      <div className="min-w-0 flex-1">{children}</div>
     </div>
   );
 }
