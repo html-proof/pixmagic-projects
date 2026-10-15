@@ -25,7 +25,7 @@ import {
   type SyncJobData,
 } from "@app/core";
 import { aggregateDaily, localDay, summarize } from "@app/shared";
-import { BACKFILL_DAYS, failStaleJobs, ordersSearch, processWebhook, RECONCILE_ORDER_DAYS, reconcileOrderDays, runAggregate, runSync, scheduleReconcile, type WorkerDeps } from "../src/handlers.js";
+import { BACKFILL_DAYS, failStaleJobs, ordersSearch, pixelIngestUrl, processWebhook, RECONCILE_ORDER_DAYS, reconcileOrderDays, runAggregate, runSync, scheduleReconcile, seedAfterMove, type WorkerDeps } from "../src/handlers.js";
 import { consume, CRON, runScheduled, type QueueMessage } from "../src/index.js";
 
 const queues = memoryQueues();
@@ -1960,5 +1960,89 @@ describe("bulk order backfill", () => {
       };
     };
     expect(await read(bulkStore.id)).toEqual(await read(pagedStore.id));
+  });
+});
+
+describe("moving to a new address", () => {
+  const gqlJson = (data: unknown) => new Response(JSON.stringify({ data }), { status: 200, headers: { "content-type": "application/json" } });
+  const here = "http://localhost:4000/pixel/pk-s.myshopify.com";
+
+  /** Shopify with our pixel already on the store, created with `existingUrl`; records what was sent. */
+  function pixelShop(existingUrl: string | null) {
+    const calls: Array<{ query: string; variables: Record<string, unknown> }> = [];
+    fetchImpl = async (_url, init) => {
+      const { query, variables } = JSON.parse(String(init?.body));
+      calls.push({ query, variables });
+      if (query.includes("webPixelCreate")) {
+        return existingUrl === null
+          ? gqlJson({ webPixelCreate: { userErrors: [], webPixel: { id: "gid://shopify/WebPixel/1" } } })
+          : gqlJson({ webPixelCreate: { userErrors: [{ field: null, message: "Web pixel is taken.", code: "TAKEN" }], webPixel: null } });
+      }
+      if (query.includes("webPixelUpdate")) return gqlJson({ webPixelUpdate: { userErrors: [], webPixel: { id: variables.id } } });
+      if (query.includes("webPixel")) return gqlJson({ webPixel: { id: "gid://shopify/WebPixel/1", settings: JSON.stringify({ ingestUrl: existingUrl }) } });
+      throw new Error(`unexpected query ${query}`);
+    };
+    return calls;
+  }
+
+  async function installPixel() {
+    const store = await makeStore(["read_orders", "write_pixels"]);
+    const job = await systemDb.syncJob.create({ data: { workspaceId: store.workspaceId, storeId: store.id, kind: "install_pixel" } });
+    await runSync({ storeId: store.id, kind: "install_pixel", syncJobId: job.id }, deps);
+    expect((await systemDb.store.findUniqueOrThrow({ where: { id: store.id } })).pixelInstalled).toBe(true);
+    expect((await systemDb.syncJob.findUniqueOrThrow({ where: { id: job.id } })).status).toBe("succeeded");
+  }
+
+  it("points a pixel made for the old host at this one", async () => {
+    // Before: TAKEN was taken as done, so the pixel kept posting to the old host for good.
+    const calls = pixelShop("https://insights.imeseban.workers.dev/api/pixel/pk-s.myshopify.com");
+    await installPixel();
+    const update = calls.find((c) => c.query.includes("webPixelUpdate"));
+    expect(update?.variables).toEqual({ id: "gid://shopify/WebPixel/1", settings: JSON.stringify({ ingestUrl: here }) });
+  });
+
+  it("leaves a pixel that already posts here alone, and asks nothing after a fresh create", async () => {
+    const same = pixelShop(here);
+    await installPixel();
+    expect(same.some((c) => c.query.includes("webPixelUpdate"))).toBe(false);
+
+    await resetDb();
+    const fresh = pixelShop(null);
+    await installPixel();
+    expect(fresh.map((c) => (c.query.includes("webPixelCreate") ? "create" : "other"))).toEqual(["create"]);
+  });
+
+  it("fails the job when Shopify refuses the update", async () => {
+    pixelShop("https://old.example/api/pixel/pk-s.myshopify.com");
+    const refuse = fetchImpl;
+    fetchImpl = async (url, init) =>
+      String(init?.body).includes("webPixelUpdate")
+        ? gqlJson({ webPixelUpdate: { userErrors: [{ field: ["settings"], message: "Settings are invalid.", code: "INVALID_SETTINGS" }], webPixel: null } })
+        : refuse(url, init);
+    const store = await makeStore(["read_orders", "write_pixels"]);
+    const job = await systemDb.syncJob.create({ data: { workspaceId: store.workspaceId, storeId: store.id, kind: "install_pixel" } });
+    await expect(runSync({ storeId: store.id, kind: "install_pixel", syncJobId: job.id }, deps)).rejects.toThrow(/webPixelUpdate: Settings are invalid/);
+  });
+
+  it("reads the ingest URL from settings as Shopify returns them", () => {
+    expect(pixelIngestUrl(JSON.stringify({ ingestUrl: here }))).toBe(here);
+    expect(pixelIngestUrl({ ingestUrl: here })).toBe(here);
+    expect(pixelIngestUrl("not json")).toBeNull();
+    expect(pixelIngestUrl(null)).toBeNull();
+  });
+
+  it("after-move queues a full re-import everywhere and a pixel re-point where there is a pixel", async () => {
+    const withPixel = await makeStore(["read_orders", "read_customers", "write_pixels"], "UTC", "a.myshopify.com");
+    await systemDb.store.update({ where: { id: withPixel.id }, data: { status: "active", pixelInstalled: true } });
+    const noPixel = await makeStore(["read_orders"], "UTC", "b.myshopify.com");
+    await systemDb.store.update({ where: { id: noPixel.id }, data: { status: "error" } });
+    const gone = await makeStore(["read_orders", "write_pixels"], "UTC", "c.myshopify.com");
+    await systemDb.store.update({ where: { id: gone.id }, data: { status: "uninstalled", pixelInstalled: true } });
+
+    expect(await seedAfterMove(deps)).toEqual({ stores: 2, jobs: 3 });
+    const sent = queues.sent.sync.map((m) => `${m.storeId === withPixel.id ? "a" : m.storeId === noPixel.id ? "b" : "c"}:${m.kind}:${m.sinceDays ?? "all"}`).sort();
+    expect(sent).toEqual(["a:install_pixel:all", "a:orders:all", "b:orders:all"]);
+    // Each message has its job row, so onboarding/settings show the work and failStaleJobs can see it.
+    expect(await systemDb.syncJob.count({ where: { id: { in: queues.sent.sync.map((m) => m.syncJobId) } } })).toBe(3);
   });
 });

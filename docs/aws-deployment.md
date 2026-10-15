@@ -107,19 +107,40 @@ Infrastructure: `cdk deploy` of the previous commit. Data: point-in-time restore
 
 ## Cutover (owner's go-ahead needed; not done yet)
 
-0. **Customer hashes.** Production's OTP_PEPPER is a Cloudflare secret that can't be read back, and
-   the copy on this PC is a placeholder, so the AWS copy runs with its own (`put-secrets.mjs
-   --generate OTP_PEPPER`). Stored customer hashes (orders' `customer_key`, WhatsApp contacts'
-   phone hash, which is how a STOP opt-out is found) were made with production's. Before cutover,
-   either put production's value in as `CUSTOMER_HASH_KEY` (`put-secrets.mjs --set CUSTOMER_HASH_KEY`
-   if the owner has it), or re-key the hashes from the stored (encrypted) values. Until then, repeat
-   customers would be counted as new and an opted-out number would not be recognised.
-1. Final copy: pause writes on Cloudflare (or accept a short gap), `migrate-data.mjs --replace`.
-2. Turn the schedules on: `npx cdk deploy InsightsApp-production -c schedules=on`.
-3. Point every integration at the AWS address (aws-architecture.md section 7): Shopify app URLs and
-   webhooks (`shopify app deploy`), Meta and Google redirect URIs, WhatsApp webhook, Cognito's
-   Google/Apple identity providers.
-4. Watch the dashboard and alarms; keep Cloudflare as the rollback for two quiet weeks, then retire it.
+Before the window: provider secrets the stores in use need (`SHOPIFY_APP_SECRET_PIXMAGIC` for the
+PixMagic store's webhooks, `GOOGLE_ADS_CLIENT_SECRET` for AdSense refreshes) set with `put-secrets.mjs
+--set`, and the AWS redirect URIs added at Google. Cloudflare commands below run from `apps/cloudflare`.
+
+1. **Freeze the old site.** Remove its cron triggers (Cloudflare API `PUT
+   /accounts/<account>/workers/scripts/insights/schedules` with `[]`; put back with
+   `[{"cron":"15 3 * * *"},{"cron":"*/15 * * * *"}]`), let its queues drain, then deploy the stand-in
+   Worker ([moved/index.ts](../apps/cloudflare/moved/index.ts)) in maintenance: `npx wrangler versions
+   upload --config moved/wrangler.jsonc --var MOVE_PHASE:maintenance`, then `npx wrangler versions
+   deploy <that version>@100% -y`. Pages say "moving", the API answers 503 + Retry-After, so Shopify
+   holds webhooks. From here the PC database no longer changes.
+2. **Final copy:** `node infra/cdk/scripts/migrate-data.mjs --replace` (wipes the AWS copy first).
+3. **Schedules on:** GitHub variable `AWS_SCHEDULES=on`, then the next Deploy to AWS (the merge of the
+   Shopify URL change in step 4) turns them on.
+4. **Shopify:** `application_url`, `redirect_urls` and webhook `uri` in `shopify-app/shopify.app.toml`
+   and `shopify.app.pixmagic.toml` → the AWS address, merged, then `shopify app deploy` and
+   `shopify app deploy --config pixmagic` (owner's Shopify login).
+5. **Old address forwards:** the same stand-in with `--var MOVE_PHASE:forward`, deployed at 100%:
+   pages and launches redirect to AWS; webhooks and pixel events are passed through unchanged.
+6. **Repair:** `aws lambda invoke --function-name insights-production-cron:live --cli-binary-format
+   raw-in-base64-out --payload '{"action":"after-move"}' out.json`. Every store's web pixel is pointed
+   at the new address (its URL was fixed when it was made), and every store's orders are re-imported,
+   which re-keys customer hashes with this deployment's CUSTOMER_HASH_KEY (production's OTP_PEPPER is
+   a Cloudflare secret that can't be read back) and recomputes repeat customers. WhatsApp contacts'
+   phone hashes are not re-keyed by this: with contacts present, carry production's value over as
+   `CUSTOMER_HASH_KEY` instead.
+7. Smoke tests, the owner signs in (a Cognito account links to the copied user by its verified
+   email; Firebase password accounts move on first sign-in), stop the admin host. Other integrations
+   (Meta, WhatsApp webhook, email providers, Cognito's Google/Apple) when they are in use
+   (aws-architecture.md section 7).
+8. Watch the dashboard and alarms; keep Cloudflare as the rollback for two quiet weeks, then retire it.
+
+**Rollback:** `npx wrangler versions deploy <the app's version>@100% -y`, put its crons back, and
+`shopify app deploy` with the old URLs; copy back anything written on AWS in between.
 
 ## Owner-only steps
 

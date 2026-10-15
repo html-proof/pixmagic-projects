@@ -38,6 +38,8 @@ import {
   upsertVariant,
   VARIANTS_QUERY,
   WEB_PIXEL_CREATE,
+  WEB_PIXEL_QUERY,
+  WEB_PIXEL_UPDATE,
   recomputeDays,
   bulkUpsertProducts,
   bulkUpsertVariants,
@@ -143,6 +145,19 @@ interface Pace {
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+type PixelUserError = { code: string; message: string };
+
+/** The ingest URL in a web pixel's settings: Shopify returns them as a JSON string (or, defensively, an object). */
+export function pixelIngestUrl(settings: unknown): string | null {
+  try {
+    const s = typeof settings === "string" ? (JSON.parse(settings) as unknown) : settings;
+    const url = s && typeof s === "object" ? (s as { ingestUrl?: unknown }).ingestUrl : null;
+    return typeof url === "string" ? url : null;
+  } catch {
+    return null;
+  }
+}
 
 async function gql<T>(deps: WorkerDeps, store: Store, pace: Pace, query: string, variables?: Record<string, unknown>) {
   try {
@@ -425,15 +440,22 @@ export async function runSync(data: SyncJobData, deps: WorkerDeps) {
       break;
     }
     case "install_pixel": {
-      const d = await gql<{ webPixelCreate: { userErrors: Array<{ code: string; message: string }>; webPixel: { id: string } | null } }>(
-        deps,
-        store,
-        pace,
-        WEB_PIXEL_CREATE,
-        { settings: JSON.stringify({ ingestUrl: `${env().API_URL}/pixel/${store.pixelIngestKey}` }) },
-      );
+      const ingestUrl = `${env().API_URL}/pixel/${store.pixelIngestKey}`;
+      const settings = JSON.stringify({ ingestUrl });
+      const d = await gql<{ webPixelCreate: { userErrors: PixelUserError[]; webPixel: { id: string } | null } }>(deps, store, pace, WEB_PIXEL_CREATE, { settings });
       const errs = d.webPixelCreate.userErrors.filter((e) => e.code !== "TAKEN");
       if (errs.length) throw new Error(`webPixelCreate: ${errs.map((e) => e.message).join("; ")}`);
+      // TAKEN: the store already has our pixel, posting wherever it was told when it was made. After
+      // a move to a new address (Cloudflare to AWS, or a custom domain) that is the old host, which
+      // would keep receiving the storefront's events for good: point it here instead.
+      if (d.webPixelCreate.userErrors.length) {
+        const { webPixel } = await gql<{ webPixel: { id: string; settings: unknown } | null }>(deps, store, pace, WEB_PIXEL_QUERY);
+        if (webPixel && pixelIngestUrl(webPixel.settings) !== ingestUrl) {
+          const u = await gql<{ webPixelUpdate: { userErrors: PixelUserError[] } }>(deps, store, pace, WEB_PIXEL_UPDATE, { id: webPixel.id, settings });
+          if (u.webPixelUpdate.userErrors.length) throw new Error(`webPixelUpdate: ${u.webPixelUpdate.userErrors.map((e) => e.message).join("; ")}`);
+          logger.info({ storeId: store.id }, "pointed the store's web pixel at this address");
+        }
+      }
       await systemDb.store.update({ where: { id: store.id }, data: { pixelInstalled: true } });
       break;
     }
@@ -776,6 +798,39 @@ async function unaggregatedDays(storeId: string, fromDay: string): Promise<strin
     ) d
     WHERE NOT EXISTS (SELECT 1 FROM daily_store_metrics m WHERE m.store_id = ${storeId} AND m.day = d.day)`;
   return rows.map((r) => r.day);
+}
+
+/**
+ * Run once after the app moves to a new address with a copy of the database (Cloudflare to AWS;
+ * later a custom domain), for every connected store:
+ *
+ * - `install_pixel`: a web pixel posts to the URL it was given when it was made, so every existing
+ *   pixel still sends the storefront's events to the old host. The job points it here (runSync).
+ * - A full orders re-import: customer hashes are keyed with CUSTOMER_HASH_KEY, which a move can't
+ *   always carry over (a Cloudflare secret can't be read back). The import upserts customer_key
+ *   with this deployment's key and recomputes "returning", so repeat customers are recognised again.
+ *
+ * Safe to repeat (everything upserts), but it costs Shopify rate limit, so it is a maintenance
+ * action (`{ "action": "after-move" }` on AWS), never scheduled. Returns what it queued.
+ */
+export async function seedAfterMove(deps: Pick<WorkerDeps, "queues">) {
+  const stores = await systemDb.store.findMany({
+    where: { status: { in: ["active", "syncing", "error"] } },
+    select: { id: true, workspaceId: true, grantedScopes: true, pixelInstalled: true },
+  });
+  let jobs = 0;
+  for (const s of stores) {
+    const kinds: SyncKind[] = ["orders"];
+    if (s.pixelInstalled || expandScopes(s.grantedScopes).has("write_pixels")) kinds.push("install_pixel");
+    for (const kind of kinds) {
+      const job = await systemDb.syncJob.create({ data: { workspaceId: s.workspaceId, storeId: s.id, kind } });
+      // No sinceDays: the whole history carries hashes made with the old key.
+      await deps.queues.sync.send({ storeId: s.id, kind, syncJobId: job.id });
+      jobs++;
+    }
+  }
+  logger.info({ stores: stores.length, jobs }, "queued the after-move repair");
+  return { stores: stores.length, jobs };
 }
 
 /**
