@@ -25,3 +25,11 @@ apps/web/out-*
 # Shopify CLI build output
 shopify-app/.shopify/
 shopify-app/extensions/*/dist/
+infra/cognito-local/data/
+ops-reports/
+
+# AWS Lambda package (pnpm --filter @app/aws build)
+apps/aws/dist/
+
+# AWS CDK synth output
+cdk.out

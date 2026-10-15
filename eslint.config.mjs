@@ -13,6 +13,7 @@ export default tseslint.config(
       "**/.next/**",
       "**/.wrangler/**",
       "**/coverage/**",
+      "**/cdk.out/**",
       "apps/web/out/**",
       "apps/web/out-*/**",
       "apps/web/next-env.d.ts",

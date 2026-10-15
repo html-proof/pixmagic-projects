@@ -1,4 +1,4 @@
-import { buildApp, firebaseAuthProvider, type App, type AuthProvider, type Deps } from "@app/api";
+import { buildApp, cognitoAuth, cognitoConfig, firebasePasswordCheck, unconfiguredCognito, type App, type CognitoAuth, type Deps } from "@app/api";
 import { consume, runScheduled, type QueueMessage, type WorkerDeps } from "@app/worker";
 import {
   cloudflareMailer,
@@ -21,32 +21,6 @@ export { Coordinator } from "./coordinator.js";
 
 /** API paths served without the /api prefix (for a dedicated API hostname, e.g. Shopify webhooks). */
 const BARE_API = /^\/(webhooks|pixel|shopify)\/|^\/(healthz|readyz)$/;
-
-/** Firebase's sign-in helper: its pages and scripts, and the config they read. */
-const FIREBASE_HELPER = /^\/__\/(auth\/[\w.-]+|firebase\/init\.json)$/;
-
-/**
- * Firebase's sign-in helper (/__/auth/handler, /__/auth/iframe and their scripts), served from
- * this origin by proxying <project>.firebaseapp.com: Firebase's "option 3" in
- * https://firebase.google.com/docs/auth/web/redirect-best-practices. With the web build's
- * NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN set to this host, "Continue with Google / Apple" is a
- * same-origin redirect instead of a popup (SocialButtons.tsx). It must be a transparent proxy, not
- * a 302: the helper keeps the sign-in in this origin's storage.
- */
-async function firebaseHelper(request: Request, url: URL, projectId: string): Promise<Response> {
-  // GET for the pages and scripts; POST is how Apple returns to the handler (form_post).
-  if (!["GET", "HEAD", "POST"].includes(request.method)) return new Response(null, { status: 405 });
-  const headers = new Headers(request.headers);
-  // Our session cookie is no business of Firebase's.
-  headers.delete("cookie");
-  headers.delete("host");
-  return fetch(new URL(url.pathname + url.search, `https://${projectId}.firebaseapp.com`), {
-    method: request.method,
-    headers,
-    body: request.method === "POST" ? request.body : null,
-    redirect: "manual",
-  });
-}
 
 const QUEUES: Record<string, QueueName> = {
   "insights-sync": "sync",
@@ -78,8 +52,8 @@ function r2Blobs(bucket: R2Bucket): BlobStore {
   };
 }
 
-/** Time limit for calls to Firebase (session keys, token exchange, sign-in links). */
-const FIREBASE_TIMEOUT_MS = 10_000;
+/** Time limit for calls to Cognito (sign-in, token exchange, session re-checks). */
+const AUTH_TIMEOUT_MS = 10_000;
 
 /** Payloads kept without R2 expire after a week (processed ones are deleted right away). */
 const BLOB_TTL_S = 7 * 86400;
@@ -106,9 +80,9 @@ function durableBlobs(ns: DurableObjectNamespace<Coordinator>): BlobStore {
   };
 }
 
-// The auth provider only caches plain data (Google keys, an OAuth access token),
-// so one instance per isolate is safe and saves a key fetch per request.
-let auth: AuthProvider | undefined;
+// The Cognito client only caches plain data (the pool's signing keys, a SigV4 signer), so one
+// instance per isolate is safe and saves a key fetch per request.
+let auth: CognitoAuth | undefined;
 
 function workerDeps(env: Env): WorkerDeps {
   // Optional binding: absent from the generated Env type while R2 is commented out in wrangler.jsonc.
@@ -133,11 +107,16 @@ function workerDeps(env: Env): WorkerDeps {
 }
 
 function apiDeps(env: Env): Deps {
-  // Firebase sits on the sign-in path of every request: a shorter limit than other providers.
-  auth ??= firebaseAuthProvider(withTimeout((input, init) => fetch(input, init), FIREBASE_TIMEOUT_MS));
+  // Cognito sits on the sign-in path: a shorter limit than other providers.
+  const authFetch = withTimeout((input, init) => fetch(input, init), AUTH_TIMEOUT_MS);
+  const cognito = cognitoConfig();
+  if (!cognito) logger.error({}, "COGNITO_USER_POOL_ID / COGNITO_CLIENT_ID are not set: every sign-in will answer 503");
+  auth ??= cognito ? cognitoAuth(cognito, authFetch) : unconfiguredCognito();
+  const legacyKey = config().LEGACY_FIREBASE_API_KEY;
   return {
     ...workerDeps(env),
     auth,
+    legacy: legacyKey ? firebasePasswordCheck(legacyKey, authFetch) : null,
     globalLimit: async (ip) => (await env.GLOBAL_LIMITER.limit({ key: ip })).success,
   };
 }
@@ -152,7 +131,7 @@ function app(env: Env): App {
  * Build it now, while the isolate starts, instead of inside whichever request arrives first.
  * Workers charge module top-level work to the startup CPU budget, but everything done inside
  * fetch() comes out of that one request's budget - so parsing the env, registering the routes
- * and decoding the service account used to land on a cold request that was already doing real
+ * and building the auth client used to land on a cold request that was already doing real
  * work, and it died with "Worker exceeded resource limits" (Cloudflare error 1102).
  *
  * A failure here must not take the Worker down (static assets are served from the same script),
@@ -171,7 +150,6 @@ const dbUrls = (env: Env): DbUrls => ({ system: env.HYPERDRIVE.connectionString,
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
-    if (FIREBASE_HELPER.test(url.pathname)) return firebaseHelper(request, url, env.FIREBASE_PROJECT_ID);
     let apiPath: string | null = null;
     if (url.pathname === "/api" || url.pathname.startsWith("/api/")) apiPath = url.pathname.slice(4) || "/";
     else if (BARE_API.test(url.pathname)) apiPath = url.pathname;

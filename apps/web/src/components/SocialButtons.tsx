@@ -1,132 +1,80 @@
 "use client";
-import { getRedirectResult, GoogleAuthProvider, OAuthProvider, signInWithPopup, signInWithRedirect, type UserCredential } from "firebase/auth";
-import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
-import { firebaseAuth } from "@/lib/firebase";
-import { afterSignIn, authErrorMessage, establishSession } from "@/lib/session";
-import { Alert } from "./ui";
+import { useEffect, useState } from "react";
+import { authConfig, continueWith, type AuthConfig, type SocialProvider } from "@/lib/auth";
+import { peekReturnTo } from "@/lib/returnTo";
 
-/** Firebase's answers when a provider isn't switched on, or isn't set up, for this project. */
-const NOT_CONFIGURED = new Set([
-  "auth/operation-not-allowed",
-  "auth/configuration-not-found",
-  "auth/invalid-oauth-client-id",
-  "auth/unauthorized-domain",
-  // The build has no NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: popups have nowhere to sign in.
-  "auth/auth-domain-config-required",
-]);
+function GoogleMark() {
+  return (
+    <svg aria-hidden width="18" height="18" viewBox="0 0 48 48">
+      <path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z" />
+      <path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z" />
+      <path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-8l-6.5 5C9.5 39.6 16.2 44 24 44z" />
+      <path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z" />
+    </svg>
+  );
+}
 
-type ProviderName = "Google" | "Apple";
-type Provider = { name: ProviderName; make: () => GoogleAuthProvider | OAuthProvider };
+function AppleMark() {
+  return (
+    <svg aria-hidden width="16" height="18" viewBox="0 0 814 1000" fill="currentColor">
+      <path d="M788.1 340.9c-5.8 4.5-108.2 62.2-108.2 190.5 0 148.4 130.3 200.9 134.2 202.2-.6 3.2-20.7 71.9-68.7 141.9-42.8 61.6-87.5 123.1-155.5 123.1s-85.5-39.5-164-39.5c-76.5 0-103.7 40.8-165.9 40.8s-105.6-57-155.5-127C46.7 790.7 0 663 0 541.8c0-194.4 126.4-297.5 250.8-297.5 66.1 0 121.2 43.4 162.7 43.4 39.5 0 101.1-46 176.3-46 28.5 0 130.9 2.6 198.3 99.2zm-234-181.5c31.1-36.9 53.1-88.1 53.1-139.3 0-7.1-.6-14.3-1.9-20.1-50.6 1.9-110.8 33.7-147.1 75.8-28.5 32.4-55.1 83.6-55.1 135.5 0 7.8 1.3 15.6 1.9 18.1 3.2.6 8.4 1.3 13.6 1.3 45.4 0 102.5-30.4 135.5-71.3z" />
+    </svg>
+  );
+}
 
-const PROVIDERS: Provider[] = [
-  { name: "Google", make: () => new GoogleAuthProvider() },
-  {
-    name: "Apple",
-    make: () => {
-      const p = new OAuthProvider("apple.com");
-      p.addScope("email");
-      p.addScope("name");
-      return p;
-    },
-  },
+const PROVIDERS: Array<{ id: SocialProvider; name: string; Mark: () => React.JSX.Element }> = [
+  { id: "google", name: "Google", Mark: GoogleMark },
+  { id: "apple", name: "Apple", Mark: AppleMark },
 ];
 
-/** Which provider a redirect sign-in left for, so its failure can be named on the way back. */
-const PENDING_KEY = "insights:socialSignIn";
-
 /**
- * Whether Firebase's sign-in helper (/__/auth/*) is on this site: the Worker proxies it from
- * <project>.firebaseapp.com, and the build names this host as NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN.
- * Then sign-in is a full-page redirect. Otherwise (local dev, or a build still on firebaseapp.com)
- * it is a popup, since a redirect through another site's helper fails wherever third-party storage
- * is blocked. The popup works, but Firebase polls `popup.closed` while Google's page is open in it,
- * and Google's Cross-Origin-Opener-Policy makes Chrome log "Cross-Origin-Opener-Policy policy would
- * block the window.closed call" for each poll. With no popup there is nothing to poll.
- */
-const redirects = () => process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN === window.location.host;
-
-/**
- * "Continue with Google / Apple" for both the log-in and sign-up pages: Firebase creates the
- * account the first time, so the same button does both. The session is our httpOnly cookie
- * (POST /auth/session), not anything kept in the page.
+ * "Continue with Google / Apple" for both the sign-in and create-account pages: the user pool
+ * creates the account the first time, so the same button does both. A full-page redirect through
+ * Cognito to the provider and back to /auth/callback; the session is our httpOnly cookie.
  */
 export function SocialButtons() {
-  const router = useRouter();
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const collected = useRef(false);
+  const [config, setConfig] = useState<AuthConfig | null>(null);
+  const [leaving, setLeaving] = useState<SocialProvider | null>(null);
 
-  function failed(e: unknown, provider: ProviderName | null) {
-    const code = (e as { code?: string }).code ?? "";
-    if (NOT_CONFIGURED.has(code)) {
-      // Nothing the person can fix: say which option is unavailable, and leave the setting to
-      // fix where whoever deploys this will look (Firebase console → Authentication).
-      console.error(`[auth] ${provider ?? "Social"} sign-in is not set up for this Firebase project (${code}): Authentication → Sign-in method / Settings → Authorized domains, and NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN in the web build`);
-      setError(
-        provider
-          ? `Sign in with ${provider} isn't available yet. Please use ${provider === "Google" ? "Apple" : "Google"} or your email address.`
-          : "That sign-in option isn't available yet. Please use your email address.",
-      );
-    } else {
-      setError(authErrorMessage(e));
-    }
-  }
-
-  async function finish(cred: UserCredential) {
-    await establishSession(cred.user);
-    router.replace(afterSignIn());
-  }
-
-  // Back from a redirect sign-in: finish it here (this page is where it started).
   useEffect(() => {
-    if (collected.current || !redirects()) return;
-    collected.current = true;
-    let provider: ProviderName | null = null;
-    try {
-      provider = sessionStorage.getItem(PENDING_KEY) as ProviderName | null;
-      sessionStorage.removeItem(PENDING_KEY);
-    } catch {
-      /* storage blocked: errors just don't name the provider */
-    }
-    if (provider) setBusy(true);
-    getRedirectResult(firebaseAuth())
-      .then((cred) => (cred ? finish(cred) : undefined))
-      .catch((e: unknown) => failed(e, provider))
-      .finally(() => setBusy(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    authConfig()
+      .then(setConfig)
+      // Unknown: leave the buttons on; the server says on its own page if one isn't set up.
+      .catch(() => setConfig(null));
+    // Back from the provider with the browser's Back button (a page restored from cache): usable again.
+    const reset = () => setLeaving(null);
+    window.addEventListener("pageshow", reset);
+    return () => window.removeEventListener("pageshow", reset);
   }, []);
 
-  async function go(provider: Provider) {
-    setBusy(true);
-    setError(null);
-    try {
-      if (redirects()) {
-        try {
-          sessionStorage.setItem(PENDING_KEY, provider.name);
-        } catch {
-          /* see above */
-        }
-        // Leaves the page (it never resolves); the effect above finishes the sign-in on the way back.
-        await signInWithRedirect(firebaseAuth(), provider.make());
-      } else {
-        await finish(await signInWithPopup(firebaseAuth(), provider.make()));
-      }
-    } catch (e) {
-      failed(e, provider.name);
-    } finally {
-      setBusy(false);
-    }
-  }
+  const unavailable = PROVIDERS.filter((p) => config && !config.providers[p.id]);
 
   return (
     <div className="space-y-2">
-      {error && <Alert>{error}</Alert>}
-      {PROVIDERS.map((p) => (
-        <button key={p.name} type="button" className="btn-secondary w-full" disabled={busy} onClick={() => go(p)}>
-          Continue with {p.name}
-        </button>
-      ))}
+      {PROVIDERS.map(({ id, name, Mark }) => {
+        const off = !!config && !config.providers[id];
+        return (
+          <button
+            key={id}
+            type="button"
+            className="btn-secondary w-full"
+            disabled={off || leaving !== null}
+            aria-describedby={off ? "social-unavailable" : undefined}
+            onClick={() => {
+              setLeaving(id);
+              continueWith(id, peekReturnTo());
+            }}
+          >
+            <Mark />
+            {leaving === id ? `Opening ${name}…` : `Continue with ${name}`}
+          </button>
+        );
+      })}
+      {unavailable.length > 0 && (
+        <p id="social-unavailable" className="text-xs text-muted">
+          Sign in with {unavailable.map((p) => p.name).join(" and ")} isn&apos;t available yet. Please use your email address.
+        </p>
+      )}
     </div>
   );
 }

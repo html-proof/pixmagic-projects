@@ -2,8 +2,8 @@
 import { createContext, useContext, useState } from "react";
 import type { BreakKind, PaymentMethod, PaymentStatus, PayrollStatus } from "@app/shared/staff";
 import type { Me } from "@/components/AppContext";
-import { api, useLiveApi } from "@/lib/api";
-import { firebaseAuth } from "@/lib/firebase";
+import { useLiveApi } from "@/lib/api";
+import { leaveTo, signOut } from "@/lib/auth";
 import type { SessionRow } from "@/lib/staff";
 
 // ---------------------------------------------------------------------------------------------
@@ -37,12 +37,7 @@ export function usePortal(): PortalCtx {
 
 /** Sign this browser out (not the account's other devices) and go to the sign-in page. */
 export async function portalSignOut(router: { replace(href: string): void }) {
-  await api("/auth/logout", { method: "POST" }).catch(() => {});
-  await firebaseAuth()
-    .signOut()
-    .catch(() => {});
-  // ?signedOut=1 keeps /login from sending a cookie that survived (logout unreachable) straight back in.
-  router.replace("/login?signedOut=1");
+  leaveTo(await signOut(), router);
 }
 
 /**

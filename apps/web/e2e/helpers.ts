@@ -1,40 +1,103 @@
 import { createHmac } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { expect, type Page } from "@playwright/test";
-import { E2E_AUTH_EMULATOR_HOST, E2E_BASE_URL, E2E_MAILPIT_URL } from "../playwright.config";
+import { E2E_BASE_URL, E2E_COGNITO_DATA, E2E_COGNITO_PORT } from "../playwright.config";
 
 export const uniqueEmail = (p: string) => `${p}-${Date.now()}-${Math.floor(Math.random() * 1e6)}@example.com`;
 
-/** Follow the email-verification link the Firebase emulator "sent". */
-export async function verifyEmailInEmulator(email: string) {
-  const res = await fetch(`http://${E2E_AUTH_EMULATOR_HOST}/emulator/v1/projects/demo-insights/oobCodes`);
-  const { oobCodes } = (await res.json()) as { oobCodes: Array<{ email: string; requestType: string; oobLink: string }> };
-  const code = oobCodes.reverse().find((c) => c.email === email && c.requestType === "VERIFY_EMAIL");
-  expect(code, "verification email").toBeTruthy();
-  // The emulator writes links with the port it listens on inside its container (9099); when it is
-  // published on another host port (E2E_AUTH_EMULATOR_HOST), follow the link there instead.
-  const link = new URL(code!.oobLink);
-  link.host = E2E_AUTH_EMULATOR_HOST;
-  await fetch(link);
-}
+/** The password `signUp` gives every account it creates. */
+export const PASSWORD = "correct-horse-battery";
 
-export async function latestOtp(email: string): Promise<string> {
-  for (let i = 0; i < 20; i++) {
-    const r = await fetch(`${E2E_MAILPIT_URL}/api/v1/search?query=${encodeURIComponent(`to:${email}`)}`);
-    const j = (await r.json()) as { messages?: Array<{ Subject: string }> };
-    const m = j.messages?.[0]?.Subject.match(/(\d{6})/);
-    if (m) return m[1]!;
-    await new Promise((r) => setTimeout(r, 500));
+/**
+ * The newest code the Cognito emulator "emailed" to an address (sign-up, password reset, email
+ * verification): it keeps them in its database, and writes that a moment after answering.
+ */
+export async function latestCode(email: string, kind: "confirm" | "verify" = "confirm"): Promise<string> {
+  for (let i = 0; i < 60; i++) {
+    try {
+      const pool = JSON.parse(readFileSync(join(E2E_COGNITO_DATA, ".cognito/db/local_insights.json"), "utf8")) as {
+        Users: Record<string, { Attributes: Array<{ Name: string; Value: string }>; ConfirmationCode?: string; AttributeVerificationCode?: string }>;
+      };
+      const u = Object.values(pool.Users).find((x) => x.Attributes.some((a) => a.Name === "email" && a.Value === email.toLowerCase()));
+      const code = kind === "verify" ? u?.AttributeVerificationCode : u?.ConfirmationCode;
+      if (code) return code;
+    } catch {
+      /* mid-write: try again */
+    }
+    await new Promise((r) => setTimeout(r, 100));
   }
-  throw new Error("OTP email not received");
+  throw new Error(`no ${kind} code for ${email}`);
 }
 
-export async function signUp(page: Page, email: string) {
-  await page.goto("/signup");
-  await page.getByLabel("Your name").fill("E2E User");
-  await page.getByLabel("Email").fill(email);
-  await page.getByLabel("Password").fill("correct-horse-battery");
-  await page.getByRole("button", { name: "Create account" }).click();
+/**
+ * Cognito marks a sign-up's address verified when its emailed code is confirmed; the emulator
+ * doesn't. Mark it verified in the emulator first, so confirming leaves the account as Cognito would.
+ */
+export async function verifiedOnConfirm(email: string) {
+  const res = await fetch(`http://127.0.0.1:${E2E_COGNITO_PORT}/`, {
+    method: "POST",
+    headers: { "content-type": "application/x-amz-json-1.1", "x-amz-target": "AWSCognitoIdentityProviderService.AdminUpdateUserAttributes" },
+    body: JSON.stringify({ UserPoolId: "local_insights", Username: email, UserAttributes: [{ Name: "email", Value: email.toLowerCase() }, { Name: "email_verified", Value: "true" }] }),
+  });
+  expect(res.ok, await res.text()).toBe(true);
+}
+
+/** A signed-in account whose email isn't verified sits on /verify-email: send the code and enter it. */
+export async function verifyEmail(page: Page, email: string) {
   await expect(page).toHaveURL(/verify-email/);
+  await page.getByRole("button", { name: "Email me a verification code" }).click();
+  await page.getByLabel("Verification code").fill(await latestCode(email, "verify"));
+  await page.getByRole("button", { name: "Verify email" }).click();
+}
+
+/**
+ * Every test runs from 127.0.0.1, and sign-up and sign-in are rate limited per IP (rateLimit.ts),
+ * so a whole suite of new accounts would trip the limit. Each visitor gets its own address in the
+ * header Cloudflare's edge sets (locally nothing sets it; in production the edge overwrites it).
+ */
+export async function asNewVisitor(page: Page) {
+  const n = () => Math.floor(Math.random() * 250) + 1;
+  await page.setExtraHTTPHeaders({ "cf-connecting-ip": `10.${n()}.${n()}.${n()}` });
+}
+
+/** Fill in the create-account form (without sending it). */
+export async function fillSignUp(page: Page, email: string, password = PASSWORD, name = "E2E User") {
+  await asNewVisitor(page);
+  await page.getByLabel("Full name").fill(name);
+  await page.getByLabel("Email Address").fill(email);
+  await page.getByLabel("Password", { exact: true }).fill(password);
+  await page.getByLabel("Confirm password", { exact: true }).fill(password);
+  await page.getByLabel(/I agree to the Terms/).check();
+}
+
+/** Send the create-account form already filled in, and confirm the code Cognito "emailed". */
+export async function confirmSignUp(page: Page, email: string) {
+  await page.getByRole("button", { name: "Create Account" }).click();
+  await expect(page.getByRole("heading", { name: "Verify your email" })).toBeVisible();
+  await verifiedOnConfirm(email);
+  await page.getByLabel("Verification code").fill(await latestCode(email));
+  await page.getByRole("button", { name: "Verify and continue" }).click();
+}
+
+/**
+ * Create an account with email and password and confirm the code Cognito sent, which signs it in:
+ * a new account lands on onboarding (connect a store), verified.
+ */
+export async function signUp(page: Page, email: string) {
+  await asNewVisitor(page);
+  await page.goto("/signup");
+  await fillSignUp(page, email);
+  await confirmSignUp(page, email);
+  await expect(page).toHaveURL(/onboarding/);
+}
+
+/** Sign in on /login with email and password. */
+export async function logIn(page: Page, email: string, password = PASSWORD) {
+  await asNewVisitor(page);
+  await page.getByLabel("Email Address").fill(email);
+  await page.getByLabel("Password", { exact: true }).fill(password);
+  await page.getByRole("button", { name: "Sign In", exact: true }).click();
 }
 
 /** Our App URL as Shopify opens it (after a managed install, or from the admin): signed query string. */

@@ -3,7 +3,7 @@ import { expect, test, type Page } from "@playwright/test";
 import pg from "pg";
 import { E2E_ENV, E2E_MAILPIT_URL } from "../playwright.config";
 import { BILLING_ENABLED } from "../src/lib/features";
-import { latestOtp, signedWebhook, signUp, uniqueEmail, verifyEmailInEmulator } from "./helpers";
+import { confirmSignUp, fillSignUp, signedWebhook, signUp, uniqueEmail } from "./helpers";
 
 /**
  * Settings, invitations, billing and the public pages, driven through the real Worker.
@@ -14,15 +14,11 @@ import { latestOtp, signedWebhook, signUp, uniqueEmail, verifyEmailInEmulator } 
 const db = new pg.Pool({ connectionString: E2E_ENV.DATABASE_URL });
 test.afterAll(() => db.end());
 
-/** Sign in with an emailed one-time code (creates the account; the code proves the email). */
-async function signInWithCode(page: Page, email: string) {
-  await page.goto("/login");
-  await page.getByRole("tab", { name: "Email me a code" }).click();
-  await page.getByLabel("Email").fill(email);
-  await page.getByRole("button", { name: "Send me a code" }).click();
-  await expect(page.getByRole("status")).toContainText("6-digit code");
-  await page.getByLabel("6-digit code").fill(await latestOtp(email));
-  await page.getByRole("button", { name: "Verify and sign in" }).click();
+/** A newcomer creates their account from the sign-in page (the code they confirm proves the email). */
+async function createAccountFromLogin(page: Page, email: string) {
+  await page.getByRole("link", { name: "Create Account" }).click();
+  await fillSignUp(page, email);
+  await confirmSignUp(page, email);
 }
 
 async function createWorkspace(page: Page, name: string): Promise<string> {
@@ -33,16 +29,10 @@ async function createWorkspace(page: Page, name: string): Promise<string> {
   }, name);
 }
 
-/**
- * A signed-in, verified owner with one workspace. Password sign-up, not a code: codes are limited
- * to 10 an hour per IP, and every test here comes from the same one.
- */
+/** A signed-in, verified owner with one workspace. */
 async function owner(page: Page, prefix: string, workspace = "Acme") {
   const email = uniqueEmail(prefix);
   await signUp(page, email);
-  await verifyEmailInEmulator(email);
-  await page.getByRole("button", { name: /verified my email/ }).click();
-  await expect(page).toHaveURL(/onboarding/);
   const ws = await createWorkspace(page, workspace);
   return { email, ws };
 }
@@ -123,7 +113,7 @@ test("invitations: emailed, handed over as a link when email fails, and kept acr
   await guest.goto(link);
   await guest.getByRole("button", { name: "Accept invitation" }).click();
   await expect(guest).toHaveURL(/\/login/);
-  await signInWithCode(guest, invitee);
+  await createAccountFromLogin(guest, invitee);
   await expect(guest).toHaveURL(/\/invite\?token=/);
   await guest.getByRole("button", { name: "Accept invitation" }).click();
   await expect(guest).toHaveURL(/\/dashboard/);

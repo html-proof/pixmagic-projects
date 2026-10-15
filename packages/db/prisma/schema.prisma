@@ -47,20 +47,66 @@ enum JobStatus {
 
 model User {
   id            String       @id @default(cuid())
-  firebaseUid   String       @unique @map("firebase_uid")
+  /// The Firebase Authentication account this user signed in with before the move to Cognito.
+  /// Kept (never reused) so a password can be checked against Firebase once, at the first
+  /// Cognito sign-in, and so a rollback finds every account again. New accounts have none.
+  firebaseUid   String?      @unique @map("firebase_uid")
   email         String       @unique
   emailVerified Boolean      @default(false) @map("email_verified")
   displayName   String?      @map("display_name")
   timezone      String       @default("UTC")
+  /// "Sign out everywhere": sessions issued before this instant are no longer accepted.
+  sessionsValidAfter DateTime? @map("sessions_valid_after")
   createdAt     DateTime     @default(now()) @map("created_at")
   updatedAt     DateTime     @updatedAt @map("updated_at")
   memberships   Membership[]
+  identities    AuthIdentity[]
   /// Employee records this account signs in as (employee portal).
   employments   Employee[]   @relation("EmployeeAccount")
   /// Employees this person is the assigned manager of.
   managedStaff  Employee[]   @relation("EmployeeManager")
 
   @@map("users")
+}
+
+/// A sign-in identity of a user: one Cognito user (password, Google or Apple). Several can point at
+/// the same user, which is how an account is linked across sign-in methods; users.id never changes.
+model AuthIdentity {
+  id                String    @id @default(cuid())
+  userId            String    @map("user_id")
+  /// "cognito".
+  provider          String
+  /// The Cognito user's `sub`.
+  subject           String
+  /// The Cognito user name (what refresh and admin calls address it by).
+  username          String
+  /// How this Cognito user signs in: "password", "google" or "apple".
+  method            String
+  email             String?
+  /// Set when this identity was created by moving a Firebase account over (audit trail).
+  migratedFromFirebaseUid String? @map("migrated_from_firebase_uid")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  lastUsedAt        DateTime? @map("last_used_at")
+  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, subject])
+  @@index([userId])
+  @@map("auth_identities")
+}
+
+/// Account-level security events (sign-in identity linked, Firebase account moved, password or
+/// email changed, signed out everywhere, account deleted). Workspace actions go to audit_logs.
+model AuthEvent {
+  id        String   @id @default(cuid())
+  /// Null once the account is deleted (the row stays, with no link to a person).
+  userId    String?  @map("user_id")
+  type      String
+  ip        String?
+  metadata  Json?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([userId, createdAt])
+  @@map("auth_events")
 }
 
 model Workspace {

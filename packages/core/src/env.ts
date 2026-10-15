@@ -21,11 +21,39 @@ const schema = z.object({
    * before rotating OTP_PEPPER, and the rotation no longer touches them (docs/RUNBOOK.md).
    */
   CUSTOMER_HASH_KEY: z.string().optional().default(""),
-  FIREBASE_PROJECT_ID: z.string().default("demo-insights"),
-  FIREBASE_SERVICE_ACCOUNT_B64: z.string().optional().default(""),
-  FIREBASE_AUTH_EMULATOR_HOST: z.string().optional().default(""),
-  /** Firebase web API key (public, same as NEXT_PUBLIC_FIREBASE_API_KEY): redeems email sign-in links. */
-  FIREBASE_WEB_API_KEY: z.string().optional().default(""),
+  /**
+   * Sign-in: an Amazon Cognito user pool (docs/cognito-setup.md, infra/aws/cognito.yaml). Empty pool
+   * or client id: every sign-in answers "unavailable". The region defaults to the pool id's prefix.
+   */
+  COGNITO_REGION: z.string().optional().default(""),
+  COGNITO_USER_POOL_ID: z.string().optional().default(""),
+  COGNITO_CLIENT_ID: z.string().optional().default(""),
+  /** The confidential app client's secret (Worker secret). */
+  COGNITO_CLIENT_SECRET: z.string().optional().default(""),
+  /** The user pool's OAuth domain, https://... (managed login). Needed for Google and Apple. */
+  COGNITO_DOMAIN: z.string().optional().default(""),
+  /** Which "Continue with ..." buttons work: Cognito provider names, comma separated (Google, SignInWithApple). */
+  COGNITO_IDENTITY_PROVIDERS: z.string().optional().default(""),
+  /** "1": passwordless sign-in with a code Cognito emails (needs the Essentials plan and SES email). */
+  COGNITO_EMAIL_OTP: z.string().optional().default(""),
+  /** "1" when the app client has refresh-token rotation on. */
+  COGNITO_REFRESH_ROTATION: z.string().optional().default(""),
+  /** IAM user allowed only the user pool's admin calls (Worker secrets). */
+  COGNITO_ADMIN_ACCESS_KEY_ID: z.string().optional().default(""),
+  COGNITO_ADMIN_SECRET_ACCESS_KEY: z.string().optional().default(""),
+  /** With temporary credentials (an AWS role, e.g. the Lambda function's on AWS hosting). */
+  COGNITO_ADMIN_SESSION_TOKEN: z.string().optional().default(""),
+  /**
+   * Local development only: a Cognito emulator (cognito-local) at this address. Its tokens are
+   * signed with a key published on GitHub, so production refuses to start with it set.
+   */
+  COGNITO_ENDPOINT: z.string().optional().default(""),
+  /**
+   * The Firebase project's public web API key, during the move to Cognito only: someone signing in
+   * with a password Cognito doesn't know yet has it checked against Firebase once, and their
+   * Cognito user is created with it (apps/api/src/legacyFirebase.ts). Empty: no migration.
+   */
+  LEGACY_FIREBASE_API_KEY: z.string().optional().default(""),
   SHOPIFY_API_KEY: z.string().default(""),
   SHOPIFY_API_SECRET: z.string().default(""),
   SHOPIFY_SCOPES: z.string().default("read_orders,read_products"),
@@ -124,6 +152,8 @@ export type Env = z.infer<typeof schema>;
  */
 const PUBLIC_SECRET_MARKERS = [
   "change-me",
+  // The local Cognito emulator's app client (infra/cognito-local/seed).
+  "insights-local-client-secret",
   "REPLACE_WITH",
   "test-session-secret",
   "e2e-session-secret",
@@ -134,7 +164,7 @@ const PUBLIC_SECRET_MARKERS = [
 ];
 const SECRET_VARS = ["SESSION_SECRET", "OTP_PEPPER", "TOKEN_ENCRYPTION_KEYS"] as const;
 /** Secrets that may be left empty (then another one is used), but never set to a public value. */
-const OPTIONAL_SECRET_VARS = ["EMAIL_CREDENTIAL_KEYS"] as const;
+const OPTIONAL_SECRET_VARS = ["EMAIL_CREDENTIAL_KEYS", "COGNITO_CLIENT_SECRET", "COGNITO_ADMIN_SECRET_ACCESS_KEY"] as const;
 
 /** Names (never values) of production secrets still set to a publicly known value. */
 export function publicSecrets(e: Pick<Env, (typeof SECRET_VARS)[number]> & Partial<Pick<Env, "CUSTOMER_HASH_KEY" | (typeof OPTIONAL_SECRET_VARS)[number]>>): string[] {
@@ -155,13 +185,13 @@ const isLocalUrl = (url: string) => {
 
 /**
  * Names (and why) of development-only settings present in a production configuration: each one
- * quietly turns a safeguard off. The Auth emulator accepts tokens anyone can mint; a Mailpit
+ * quietly turns a safeguard off. A Cognito emulator signs tokens with a published key; a Mailpit
  * relay reroutes every email, sign-in codes included; a local APP_URL breaks OAuth callbacks and
  * the Origin check, and is what the emulator bypass keys on.
  */
-export function developmentSettings(e: Pick<Env, "APP_URL" | "API_URL" | "FIREBASE_AUTH_EMULATOR_HOST" | "MAILPIT_URL">): string[] {
+export function developmentSettings(e: Pick<Env, "APP_URL" | "API_URL" | "COGNITO_ENDPOINT" | "MAILPIT_URL">): string[] {
   const found: string[] = [];
-  if (e.FIREBASE_AUTH_EMULATOR_HOST) found.push("FIREBASE_AUTH_EMULATOR_HOST (the Auth emulator)");
+  if (e.COGNITO_ENDPOINT) found.push("COGNITO_ENDPOINT (a local Cognito emulator)");
   if (e.MAILPIT_URL) found.push("MAILPIT_URL (a local mail relay)");
   if (isLocalUrl(e.APP_URL)) found.push("APP_URL (a local address)");
   if (isLocalUrl(e.API_URL)) found.push("API_URL (a local address)");

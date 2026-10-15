@@ -3,7 +3,7 @@
 Employees, invitations, clock-in/out with breaks, timesheets and corrections, shift schedules,
 payroll runs with approvals, payment records, analytics and exports, and an employee
 self-service portal. Built into the existing app: organizations are workspaces, sign-in is the
-existing Firebase Authentication, data lives in the same Postgres behind the same RLS.
+existing sign-in (Amazon Cognito), data lives in the same Postgres behind the same RLS.
 
 | Where | What |
 | --- | --- |
@@ -59,15 +59,15 @@ Pay fields are left out of responses for people without `pay:view`. Unknown or f
 3. The employee opens `/join?token=…`, sees their name, position and organization, and sets a
    password (twice). The API checks the password policy (12+ characters, three of four character
    types, not common, not their name or email), uses the invitation up atomically (two requests
-   with one link: one wins), and creates the Firebase account with that password — Firebase stores
-   a salted scrypt hash; Insights never stores or logs it.
+   with one link: one wins), creates the Cognito user with that password — Cognito stores a salted
+   hash; Insights never stores or logs it — and signs the employee in.
 4. **Email ownership.** An emailed link that was never shown to the admin proves the inbox, so the
    account starts verified and the portal opens at once. An account created from a *copied* link
-   starts unverified and must click Firebase's verification email before the portal answers
+   starts unverified and must enter the code /verify-email sends before the portal answers
    (`email_unverified`). If the address already has an account, the page asks them to sign in and
    joins that account instead (`/staff/invitations/accept-existing`).
 5. Later sign-ins use the normal login (password, Google, email code); forgot password is the
-   existing `/reset`. Logout ends this browser's session; **Sign out of all devices** (portal →
+   existing `/forgot-password`. Logout ends this browser's session; **Sign out of all devices** (portal →
    Account) revokes every session of the account (`POST /auth/sessions/revoke`).
 6. **Deactivate** stops clock-ins and the portal's actions immediately (checked on every request),
    closes any open shift at that moment (flagged for review) and revokes unused invitations.
@@ -229,8 +229,7 @@ Stated plainly, because the request asked for these where possible:
 - **Money transfers / payment-provider integration and webhooks**: none — no provider credentials
   were available, and recording is kept separate from paying.
 - **Receipt attachments** on payments: not implemented (R2 isn't enabled in production).
-- **MFA**: Firebase multi-factor needs the Identity Platform upgrade on the Firebase project; not
-  enabled, so not offered.
+- **MFA**: the Cognito user pool has MFA off (docs/cognito-setup.md); not offered.
 - **WebSockets/SSE**: live views poll (10 s attendance, 30 s dashboards), as the rest of the app does.
 - **Locations / geofencing**: no location data is collected; the live board filters by employee,
   department, position, manager and status.

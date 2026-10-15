@@ -9,14 +9,14 @@ Node 24 (`.nvmrc`), pnpm 9 (`corepack enable`), Docker.
 ## 1. Start dependencies
 
 ```bash
-docker compose up -d postgres mailpit firebase-emulator
+docker compose up -d postgres mailpit cognito
 ```
 
 | Service | Host port | Notes |
 | --- | --- | --- |
 | Postgres 17 | 5434 | owner `app/app`; tenant role `app_rls/app_rls` created by `infra/postgres/init.sql` |
 | Mailpit | 8025 UI | every email (OTP codes, invites, alerts) lands at http://localhost:8025 (the Worker posts to Mailpit's HTTP API when `MAILPIT_URL` is set) |
-| Firebase Auth emulator | 9099 | optional if you use a real Firebase project; first start takes 1–2 min |
+| Cognito emulator | 9229 | the app's user pool, ready to use ([infra/cognito-local](../infra/cognito-local/README.md)); codes it would email are in `docker compose logs cognito`. Without Docker: `node infra/cognito-local/start.mjs` |
 
 ## 2. Configure
 
@@ -30,7 +30,7 @@ Generate an encryption key and paste it into `TOKEN_ENCRYPTION_KEYS=1:<key>`:
 node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
 ```
 
-Copy `apps/web/.env.example` to `apps/web/.env.local` for the `NEXT_PUBLIC_FIREBASE_*` values (baked into the UI at build time). To use the emulator, uncomment `NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR` there (and build with `NEXT_EXPORT_DIR=out-local`: a build into `out`, which is what gets deployed, refuses to run with the emulator set) and keep `FIREBASE_SERVICE_ACCOUNT_B64` empty in `.dev.vars`. To use a real project, set the service account and remove `FIREBASE_AUTH_EMULATOR_HOST`.
+`.dev.vars.example` already points sign-in at the Cognito emulator. To use a real user pool instead (Google and Apple need one), drop `COGNITO_ENDPOINT` and fill in that pool's settings ([cognito-setup.md](cognito-setup.md)). The UI needs no settings of its own.
 
 The repo-root `.env` (from `.env.example`) is only for tools on this machine: docker compose, the Prisma CLI (`DATABASE_URL`, migrations) and the maintenance tasks in [RUNBOOK.md](RUNBOOK.md#maintenance-tasks). Which file configures what: [architecture.md](architecture.md#configuration).
 
@@ -80,10 +80,10 @@ Shopify must reach your callback and webhook URLs over HTTPS. Use a tunnel (e.g.
 | --- | --- | --- |
 | `pnpm test` | unit tests (shared, core) | no |
 | `pnpm test:integration` | API + worker against real Postgres (`app_test` DB) with in-memory queues and coordination | yes |
-| `pnpm e2e` | Playwright against `wrangler dev` (port 8789), Firebase emulator, Mailpit (`app_e2e` DB) | yes |
+| `pnpm e2e` | Playwright against `wrangler dev` (port 8789), its own Cognito emulator and managed-login stand-in, Mailpit (`app_e2e` DB) | yes (Postgres, Mailpit) |
 | `pnpm typecheck` | all packages, including the Worker against generated binding types | no |
 
-Integration tests fake Firebase and Shopify HTTP; they never call the internet.
+Integration tests fake Cognito and Shopify HTTP; they never call the internet.
 
 They also truncate every table between tests, so one run needs the database to itself. The global
 setup takes a Postgres advisory lock for the whole run (`lockTestDatabase`), so a second run waits

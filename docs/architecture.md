@@ -90,7 +90,7 @@ src/app/            routes (App Router). (app)/ is the signed-in shell: AppProvi
                     employees aren't workspace members. Staff Management: docs/staff.md.
 src/components/     UI. dashboard/, whatsapp/, landing/ per area; app-wide pieces at the top.
 src/hooks/          animation hooks for the landing page.
-src/lib/            non-UI modules: the API client and hooks, Firebase/session, storage, types of
+src/lib/            non-UI modules: the API client and hooks, sign-in (auth.ts: every call to /api/auth), storage, types of
                     API responses shared by several pages.
 ```
 
@@ -145,7 +145,7 @@ so every effect has to be cheap for the GPU process:
 | Worker vars (public: URLs, app ids, API versions, scopes) | `apps/cloudflare/wrangler.jsonc` `vars`; locally overridden by `apps/cloudflare/.dev.vars` | `env()` in `packages/core/src/env.ts` |
 | Worker secrets (session, encryption keys, client secrets) | `npx wrangler secret put NAME`; locally `.dev.vars` (from `.dev.vars.example`) | `env()` |
 | Bindings (Hyperdrive, Queues, Durable Object, Email; R2 is optional and not bound today) | `wrangler.jsonc` | `apps/cloudflare/src/index.ts`, passed as `Deps` |
-| UI build-time values (`NEXT_PUBLIC_FIREBASE_*`) | `apps/web/.env.local` / `.env.production` / CI (from `apps/web/.env.example`) | `apps/web/src/lib/firebase.ts` |
+| Sign-in (Amazon Cognito: pool, client, domain; client secret and admin keys as secrets) | `wrangler.jsonc` `vars` + secrets, from `infra/aws/cognito.yaml`'s outputs ([cognito-setup.md](cognito-setup.md)) | `cognitoConfig()` in `apps/api/src/cognito.ts` |
 | Local tooling (docker compose, Prisma CLI, `ops:*` tasks) | repo-root `.env` (from `.env.example`) | those tools only |
 
 `env()` validates the whole Worker config with Zod on first use and, in production, refuses to
@@ -180,7 +180,7 @@ by pointing `DATABASE_URL` at it on purpose ([ADR-008](architecture/architecture
 | Kind | Where | Runs with |
 | --- | --- | --- |
 | Unit (pure logic, config files) | `packages/shared/test`, `packages/core/test` | `pnpm test` |
-| Integration (real Postgres, faked Firebase/Shopify/Meta) | `apps/api/test`, `apps/worker/test` | `pnpm test:integration` (database `*_test`; `TEST_PG_PORT` points it at a throwaway server) |
+| Integration (real Postgres, faked Cognito/Shopify/Meta) | `apps/api/test`, `apps/worker/test` | `pnpm test:integration` (database `*_test`; `TEST_PG_PORT` points it at a throwaway server) |
 | End to end (Playwright against `wrangler dev`) | `apps/web/e2e` | `pnpm e2e` |
 | Lint (TypeScript, React hooks) | everywhere | `pnpm lint` (CI fails on any finding) |
 

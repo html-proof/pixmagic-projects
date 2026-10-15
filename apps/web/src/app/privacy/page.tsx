@@ -162,8 +162,8 @@ export default function PrivacyPage() {
       <Section title="What we store about you">
         <p>
           Your email address, whether it has been verified, your workspace and role, your notification preferences, and
-          an audit log of actions taken in your workspace. Sign-in is handled by Google Firebase Authentication; we
-          never see or store your Shopify password.
+          an audit log of actions taken in your workspace. Sign-in is handled by Amazon Cognito, which keeps your password
+          only as a salted hash; we never store your password, and never see your Shopify, Google or Apple password.
         </p>
       </Section>
 
@@ -192,7 +192,11 @@ export default function PrivacyPage() {
             <strong>Cloudflare</strong> — hosting, request routing and background jobs.
           </li>
           <li>
-            <strong>Google Firebase</strong> — authentication and sign-in emails.
+            <strong>Amazon Web Services (Amazon Cognito)</strong> — accounts, sign-in and sign-in emails.
+          </li>
+          <li>
+            <strong>Google Firebase</strong> — our previous sign-in service. If your account was created before we moved
+            to Amazon Cognito, your first sign-in afterwards is checked against it once, so you can keep your password.
           </li>
           <li>
             <strong>Shopify</strong> — the source of the store data.

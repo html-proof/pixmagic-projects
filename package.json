@@ -10,7 +10,7 @@
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "lint": "eslint . --max-warnings=0",
-    "test": "pnpm --filter @app/shared --filter @app/core test",
+    "test": "pnpm --filter @app/shared --filter @app/core --filter @app/aws test",
     "test:integration": "pnpm --workspace-concurrency=1 --filter @app/api --filter @app/worker test",
     "e2e": "pnpm --filter @app/web e2e",
     "db:generate": "pnpm --filter @app/db generate",

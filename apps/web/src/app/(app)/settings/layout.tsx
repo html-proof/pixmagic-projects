@@ -6,6 +6,7 @@ import { API_KEYS_ENABLED, BILLING_ENABLED } from "@/lib/features";
 
 const ITEMS = [
   ["profile", "Profile"],
+  ["security", "Security"],
   ["workspace", "Workspace"],
   ["integrations", "Connect your business"],
   ["stores", "Shopify"],

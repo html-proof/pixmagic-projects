@@ -3,10 +3,17 @@ import { getCookie } from "hono/cookie";
 import { systemDb, type User } from "@app/db";
 import { can, sha256Hex, type Permission, type Role } from "@app/shared";
 import { addLogContext, env, logger, type BlobStore, type Coord, type FetchLike, type Mailer, type Queues, type SmtpConnect } from "@app/core";
-import { FirebaseUnavailableError, type AuthProvider } from "./authProvider.js";
+import { CognitoError, CognitoUnavailableError, type CognitoAuth } from "./cognito.js";
+import type { LegacyPasswordCheck } from "./legacyFirebase.js";
+import { clearSessionCookies, readRefreshToken, readSession, retiredSessionKey, REVALIDATE_MS, SESSION_COOKIE, setSessionCookies, type SessionClaims } from "./session.js";
+
+export { retiredSessionKey, SESSION_COOKIE };
 
 export interface Deps {
-  auth: AuthProvider;
+  /** Amazon Cognito: every sign-in, sign-up and password operation. */
+  auth: CognitoAuth;
+  /** While accounts move over from Firebase: checks a password Cognito doesn't know yet (legacyFirebase.ts). */
+  legacy?: LegacyPasswordCheck | null;
   coord: Coord;
   queues: Queues;
   /** Webhook payloads too large for a queue message. */
@@ -21,17 +28,8 @@ export interface Deps {
   dbHealthy?: () => Promise<boolean>;
 }
 
-export type AppEnv = { Variables: { user?: User } };
+export type AppEnv = { Variables: { user?: User; session?: SessionClaims } };
 export type Ctx = Context<AppEnv>;
-
-export const SESSION_COOKIE = "__session";
-
-/**
- * Coordinator key that retires one session cookie after it is signed out (POST /auth/logout).
- * Firebase can only revoke every session of an account at once, so a single browser's sign-out
- * is recorded here instead, by the cookie's hash, until the cookie would have expired anyway.
- */
-export const retiredSessionKey = (cookie: string) => `session:retired:${sha256Hex(cookie)}`;
 
 export class HttpError extends Error {
   constructor(
@@ -71,46 +69,105 @@ export async function body(c: Ctx): Promise<unknown> {
   }
 }
 
-/** Resolve the signed-in user from the Firebase session cookie. */
+const UNAVAILABLE = "We can't verify your session right now. Please try again in a moment.";
+
+/** Cognito's answers to a refresh that mean the session must end (disabled, deleted, signed out everywhere). */
+const SESSION_REVOKED = new Set(["NotAuthorizedException", "UserNotFoundException", "InvalidToken"]);
+
+/**
+ * Re-check a session with Cognito by spending its refresh token (at most every REVALIDATE_MS, and
+ * by one request at a time). Cognito unreachable is not a verdict: the session carries on and is
+ * checked again on a later request.
+ */
+async function revalidate(c: Ctx, deps: Deps, s: SessionClaims): Promise<"ok" | "verified" | "revoked" | "skipped"> {
+  const rt = readRefreshToken(c, s);
+  if (rt === undefined) return "skipped";
+  if (rt === null) return "revoked";
+  if (!(await deps.coord.acquire(`session:check:${s.sid}`, 30_000).catch(() => false))) return "skipped";
+  try {
+    const tokens = await deps.auth.refresh(rt, s.un);
+    const id = await deps.auth.verifyIdToken(tokens.idToken);
+    if (id.sub !== s.sub) return "revoked";
+    const next = { ...s, ck: Date.now() };
+    setSessionCookies(c, next, tokens.refreshToken);
+    c.set("session", next);
+    return id.emailVerified ? "verified" : "ok";
+  } catch (err) {
+    if (err instanceof CognitoError && SESSION_REVOKED.has(err.code)) {
+      logger.info({ cognitoError: err.code }, "session ended by Cognito");
+      return "revoked";
+    }
+    logger.warn({ err }, "could not re-check a session with Cognito; carrying on");
+    return "skipped";
+  } finally {
+    await deps.coord.release(`session:check:${s.sid}`).catch(() => {});
+  }
+}
+
+/** Resolve the signed-in user from our session cookie (session.ts). */
 export async function loadUser(c: Ctx, deps: Deps): Promise<User | null> {
   const cached = c.get("user");
   if (cached) return cached;
-  const cookie = getCookie(c, SESSION_COOKIE);
-  if (!cookie) return null;
-  let claims: Awaited<ReturnType<AuthProvider["verifySessionCookie"]>>;
-  try {
-    claims = await deps.auth.verifySessionCookie(cookie);
-  } catch (err) {
-    // An unverifiable session cookie means "signed out" — unless the reason is that Firebase is
-    // unreachable, which would otherwise sign every logged-in user out for the length of an outage.
-    if (err instanceof FirebaseUnavailableError) {
-      throw new HttpError(503, "We can't verify your session right now. Please try again in a moment.", "auth_unavailable");
-    }
-    return null;
-  }
-  // Signed out in this browser: Firebase would still accept the cookie, so check our own record.
-  // Not being able to look is an outage, never "signed out" (see above).
-  const retired = await deps.coord.peek(retiredSessionKey(cookie)).catch((err: unknown) => {
+  const s = readSession(getCookie(c, SESSION_COOKIE));
+  if (!s) return null;
+  // Signed out in this browser: check our own record. Not being able to look is an outage, never
+  // "signed out": that would send every logged-in user round a sign-in loop for its length.
+  const retired = await deps.coord.peek(retiredSessionKey(s.sid)).catch((err: unknown) => {
     logger.error({ err, path: c.req.path }, "signed-out session check failed");
-    throw new HttpError(503, "We can't verify your session right now. Please try again in a moment.", "auth_unavailable");
+    throw new HttpError(503, UNAVAILABLE, "auth_unavailable");
   });
   if (retired) return null;
   // The session is genuine from here on, so failing to load its user is our outage (the database
-  // is reachable only through a tunnel that drops), never "signed out": a 401 would send a
-  // signed-in merchant to sign in, or into sign-up, for the length of the blip. A missing row
-  // isn't an error (null above), so every failure here is one — no need to classify it.
+  // is reachable only through a tunnel that drops), never "signed out".
+  let user: User | null;
   try {
-    let user = await systemDb.user.findUnique({ where: { firebaseUid: claims.uid } });
-    if (!user) return null;
-    if (claims.emailVerified && !user.emailVerified) {
-      user = await systemDb.user.update({ where: { id: user.id }, data: { emailVerified: true } });
-    }
-    c.set("user", user);
-    addLogContext({ userId: user.id });
-    return user;
+    user = await systemDb.user.findUnique({ where: { id: s.uid } });
   } catch (err) {
     logger.error({ err, path: c.req.path }, "session user lookup failed");
     throw new HttpError(503, "We can't reach your account right now. Please try again in a moment.", "db_unavailable");
+  }
+  if (!user) return null;
+  // "Sign out everywhere" since this session started.
+  if (user.sessionsValidAfter && s.iat < user.sessionsValidAfter.getTime()) return null;
+  c.set("session", s);
+  if (Date.now() - s.ck > REVALIDATE_MS) {
+    const checked = await revalidate(c, deps, s);
+    if (checked === "revoked") {
+      clearSessionCookies(c);
+      return null;
+    }
+    if (checked === "verified" && !user.emailVerified) {
+      user = await systemDb.user.update({ where: { id: user.id }, data: { emailVerified: true } }).catch(() => user!);
+    }
+  }
+  c.set("user", user);
+  addLogContext({ userId: user.id });
+  return user;
+}
+
+/** The signed-in session's claims (after requireUser). */
+export function sessionOf(c: Ctx): SessionClaims {
+  const s = c.get("session");
+  if (!s) throw new HttpError(401, "Sign in required", "unauthenticated");
+  return s;
+}
+
+/**
+ * A Cognito access token for the signed-in person, for changes to their own Cognito user
+ * (password, email, sign-out everywhere). Spends the session's refresh token.
+ */
+export async function accessTokenFor(c: Ctx, deps: Deps): Promise<string> {
+  const s = sessionOf(c);
+  const rt = readRefreshToken(c, s);
+  if (!rt) throw new HttpError(401, "Please sign in again to change this.", "reauth_required");
+  try {
+    const tokens = await deps.auth.refresh(rt, s.un);
+    if (tokens.refreshToken) setSessionCookies(c, s, tokens.refreshToken);
+    return tokens.accessToken;
+  } catch (err) {
+    if (err instanceof CognitoUnavailableError) throw new HttpError(503, UNAVAILABLE, "auth_unavailable");
+    if (err instanceof CognitoError && SESSION_REVOKED.has(err.code)) throw new HttpError(401, "Please sign in again to change this.", "reauth_required");
+    throw err;
   }
 }
 

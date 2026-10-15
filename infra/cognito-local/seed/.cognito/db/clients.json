@@ -1,0 +1,21 @@
+{
+  "Clients": {
+    "insightslocalwebclient00": {
+      "ClientId": "insightslocalwebclient00",
+      "ClientName": "insights-web",
+      "ClientSecret": "insights-local-client-secret",
+      "CreationDate": "2026-10-15T00:00:00.000Z",
+      "ExplicitAuthFlows": [
+        "ALLOW_USER_PASSWORD_AUTH",
+        "ALLOW_REFRESH_TOKEN_AUTH"
+      ],
+      "LastModifiedDate": "2026-10-15T00:00:00.000Z",
+      "TokenValidityUnits": {
+        "AccessToken": "hours",
+        "IdToken": "minutes",
+        "RefreshToken": "days"
+      },
+      "UserPoolId": "local_insights"
+    }
+  }
+}

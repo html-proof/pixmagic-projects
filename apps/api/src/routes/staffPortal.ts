@@ -1,4 +1,3 @@
-import { deleteCookie, getCookie } from "hono/cookie";
 import { z } from "zod";
 import { systemDb } from "@app/db";
 import {
@@ -9,7 +8,6 @@ import {
   employeeDashboard,
   employmentsForUser,
   endBreak,
-  env,
   INVITATION_PROBLEM_MESSAGE,
   linkEmployeeAccount,
   logger,
@@ -24,14 +22,16 @@ import {
 } from "@app/core";
 import { sha256Hex } from "@app/shared";
 import { BREAK_KINDS, localDayOf, passwordProblems, shiftDay } from "@app/shared/staff";
-import { body, clientIp, HttpError, requireAppOrigin, requireUser, retiredSessionKey, SESSION_COOKIE, type Ctx, type Deps } from "../context.js";
-import { FirebaseAuthError, FirebaseUnavailableError } from "../authProvider.js";
+import { body, clientIp, HttpError, requireAppOrigin, requireUser, type Ctx, type Deps } from "../context.js";
+import { CognitoError, CognitoUnavailableError } from "../cognito.js";
+import { resolveUser } from "../identity.js";
+import { newSession, setSessionCookies } from "../session.js";
+import { cognitoFailure } from "./auth.js";
 import type { App } from "../app.js";
 import { limit, LIMITS } from "../rateLimit.js";
 import { daySchema, idempotencyKey, idSchema, instantSchema, requireEmployee } from "../staffAccess.js";
 
 const EMP = "/employee/:ws";
-const SESSION_TTL_S = 5 * 24 * 3600;
 
 const clockBody = z.object({
   /** The device's clock, for the audit trail only. */
@@ -41,21 +41,11 @@ const clockBody = z.object({
   kind: z.enum(BREAK_KINDS).optional(),
 });
 
-/** The account row for a Firebase account this invitation just created (or an existing row for its email). */
-async function userForNewAccount(uid: string, email: string, emailVerified: boolean, displayName: string) {
-  const byUid = await systemDb.user.findUnique({ where: { firebaseUid: uid } });
-  if (byUid) return byUid;
-  const byEmail = await systemDb.user.findUnique({ where: { email } });
-  // An old row for the same address (its Firebase account was deleted): only a proven inbox may take it over.
-  if (byEmail) {
-    if (!emailVerified) throw new StaffError(409, "account_exists", "An account with this email address already exists. Sign in, then open your invitation again.");
-    return systemDb.user.update({ where: { id: byEmail.id }, data: { firebaseUid: uid, emailVerified: true } });
-  }
-  return systemDb.user.create({ data: { firebaseUid: uid, email, emailVerified, displayName } });
-}
-
-/** Employee self-service, invitation sign-up, and "sign out everywhere". */
+/** Employee self-service and invitation sign-up. */
 export function staffPortalRoutes(app: App, deps: Deps) {
+  /** Someone can already sign in with this address: a Cognito user, or an account from before the move to Cognito. */
+  const accountExists = async (email: string) => !!(await systemDb.user.findUnique({ where: { email }, select: { id: true } })) || !!(await deps.auth.adminGetUser(email));
+
   // ---------------- Invitations (public) ----------------
 
   /** What the join page shows for a link: who it's for and where, or why it can't be used. */
@@ -64,8 +54,8 @@ export function staffPortalRoutes(app: App, deps: Deps) {
     const { token } = z.object({ token: z.string().min(10).max(200) }).parse(c.req.query());
     const r = await lookupInvitation(token);
     if (!r.ok) return c.json({ ok: false, problem: r.problem, message: r.message });
-    const account = await deps.auth.findUserByEmail(r.email).catch((err: unknown) => {
-      if (err instanceof FirebaseUnavailableError) throw new HttpError(503, "We can't check your invitation right now. Please try again in a moment.", "auth_unavailable");
+    const account = await accountExists(r.email).catch((err: unknown) => {
+      if (err instanceof CognitoUnavailableError) throw new HttpError(503, "We can't check your invitation right now. Please try again in a moment.", "auth_unavailable");
       throw err;
     });
     return c.json({
@@ -81,7 +71,7 @@ export function staffPortalRoutes(app: App, deps: Deps) {
 
   /**
    * Create the employee's account from an invitation: password + confirmation, checked here
-   * against the password rules. Firebase stores the password (salted scrypt); the invitation is
+   * against the password rules. Cognito stores the password (only a salted hash); the invitation is
    * used up atomically first, so two requests with the same link can't both create an account.
    */
   app.post("/staff/invitations/accept", async (c) => {
@@ -94,8 +84,8 @@ export function staffPortalRoutes(app: App, deps: Deps) {
     if (!look.ok) throw new HttpError(400, look.message, `invitation_${look.problem}`);
     const problems = passwordProblems(input.password, { email: look.email, name: look.employeeName });
     if (problems.length) return c.json({ error: "weak_password", message: problems[0], problems }, 400);
-    const existing = await deps.auth.findUserByEmail(look.email).catch((err: unknown) => {
-      if (err instanceof FirebaseUnavailableError) throw new HttpError(503, "We can't create your account right now. Please try again in a moment.", "auth_unavailable");
+    const existing = await accountExists(look.email).catch((err: unknown) => {
+      if (err instanceof CognitoUnavailableError) throw new HttpError(503, "We can't create your account right now. Please try again in a moment.", "auth_unavailable");
       throw err;
     });
     if (existing) {
@@ -103,20 +93,29 @@ export function staffPortalRoutes(app: App, deps: Deps) {
     }
     const inv = await claimInvitation(input.token);
     if (!inv) throw new HttpError(400, INVITATION_PROBLEM_MESSAGE.used, "invitation_used");
-    let uid: string;
+    const release = () => releaseInvitation(inv.id).catch((e: unknown) => logger.error({ err: e }, "could not release an invitation after a failed sign-up"));
+    let user;
     try {
-      uid = await deps.auth.createPasswordUser({ email: look.email, password: input.password, displayName: look.employeeName, emailVerified: look.provesEmail });
+      // The invitation was emailed to this address, so opening it can prove the inbox (provesEmail).
+      await deps.auth.adminCreateUser({ email: look.email, emailVerified: look.provesEmail, name: look.employeeName, password: input.password });
+      const signedIn = await deps.auth.passwordSignIn(look.email, input.password);
+      if (!("tokens" in signedIn)) throw new CognitoError("UnexpectedChallenge", signedIn.challenge);
+      const claims = await deps.auth.verifyIdToken(signedIn.tokens.idToken);
+      user = await resolveUser(claims, { ip: clientIp(c) });
+      setSessionCookies(c, newSession({ userId: user.id, sub: claims.sub, username: claims.username, method: claims.method, authTime: claims.authTime }), signedIn.tokens.refreshToken);
     } catch (err) {
-      await releaseInvitation(inv.id).catch((e: unknown) => logger.error({ err: e }, "could not release an invitation after a failed sign-up"));
-      if (err instanceof FirebaseUnavailableError) throw new HttpError(503, "We can't create your account right now. Please try again in a moment.", "auth_unavailable");
-      if ((err as FirebaseAuthError).code === "auth/email-already-exists") throw new HttpError(409, `You already have an account with ${look.email}. Sign in, then open this invitation again.`, "account_exists");
-      throw err;
+      await release();
+      if (err instanceof CognitoError && err.code === "UsernameExistsException") {
+        throw new HttpError(409, `You already have an account with ${look.email}. Sign in, then open this invitation again.`, "account_exists");
+      }
+      if (err instanceof HttpError && err.code === "email_in_use") {
+        throw new StaffError(409, "account_exists", "An account with this email address already exists. Sign in, then open your invitation again.");
+      }
+      throw cognitoFailure(err, "invitation sign-up");
     }
-    const user = await userForNewAccount(uid, look.email, look.provesEmail, look.employeeName);
     const linked = await linkEmployeeAccount(inv.id, user.id);
-    const customToken = await deps.auth.createCustomToken(uid);
-    // The client signs in with the custom token and exchanges it for a session (POST /auth/session).
-    return c.json({ customToken, emailVerified: look.provesEmail, workspaceId: linked.workspaceId });
+    // Signed in already (the session cookie is set): the page goes straight on.
+    return c.json({ emailVerified: look.provesEmail, workspaceId: linked.workspaceId });
   });
 
   /** Someone who already has an account (signed in, email verified) joins with the invitation. */
@@ -137,20 +136,6 @@ export function staffPortalRoutes(app: App, deps: Deps) {
       await releaseInvitation(inv.id).catch(() => {});
       throw err;
     }
-  });
-
-  /** Sign out of every device: ends all of this account's sessions, then this one. */
-  app.post("/auth/sessions/revoke", async (c) => {
-    const user = await requireUser(c, deps);
-    await limit(deps.coord, `rl:revoke:${user.id}`, LIMITS.revokeSessions);
-    await deps.auth.revokeSessions(user.firebaseUid).catch((err: unknown) => {
-      if (err instanceof FirebaseUnavailableError) throw new HttpError(503, "We can't sign you out everywhere right now. Please try again in a moment.", "auth_unavailable");
-      throw err;
-    });
-    const cookie = getCookie(c, SESSION_COOKIE);
-    if (cookie) await deps.coord.put(retiredSessionKey(cookie), "1", SESSION_TTL_S).catch(() => {});
-    deleteCookie(c, SESSION_COOKIE, { path: "/", httpOnly: true, sameSite: "Lax", secure: env().NODE_ENV === "production" });
-    return c.json({ ok: true });
   });
 
   // ---------------- Employee portal ----------------

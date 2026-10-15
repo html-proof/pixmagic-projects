@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { E2E_MAILPIT_URL } from "../playwright.config";
-import { signUp, uniqueEmail, verifyEmailInEmulator } from "./helpers";
+import { signUp, uniqueEmail } from "./helpers";
 
 /**
  * Staff Management in a real browser against the real Worker: an owner adds an employee and
@@ -20,9 +20,6 @@ async function createWorkspace(page: Page, name: string): Promise<string> {
 async function owner(page: Page) {
   const email = uniqueEmail("staff-owner");
   await signUp(page, email);
-  await verifyEmailInEmulator(email);
-  await page.getByRole("button", { name: /verified my email/ }).click();
-  await expect(page).toHaveURL(/onboarding/);
   const ws = await createWorkspace(page, "Corner Cafe");
   return { email, ws };
 }

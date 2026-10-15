@@ -53,9 +53,6 @@ jobs:
         env:
           DATABASE_URL: postgresql://app:app@localhost:5434/app_test
       - run: pnpm --filter @app/web build
-        env:
-          NEXT_PUBLIC_FIREBASE_API_KEY: ci
-          NEXT_PUBLIC_FIREBASE_PROJECT_ID: demo-insights
       - name: Bundle the Worker (wrangler dry run)
         run: pnpm --filter @app/cloudflare build
 
@@ -70,10 +67,9 @@ jobs:
       - uses: actions/setup-node@v7
         with: { node-version: 24, cache: pnpm }
       - run: pnpm install --frozen-lockfile
-      - name: Start dev stack (Postgres, Mailpit, Firebase emulator)
-        run: docker compose up -d --wait postgres mailpit && docker compose up -d firebase-emulator
-      - name: Wait for Firebase emulator
-        run: timeout 240 bash -c 'until curl -s http://127.0.0.1:9099 >/dev/null; do sleep 3; done'
+      # The suite starts its own Cognito emulator and managed-login stand-in (playwright.config.ts).
+      - name: Start dev stack (Postgres, Mailpit)
+        run: docker compose up -d --wait postgres mailpit
       - run: pnpm --filter @app/web exec playwright install --with-deps chromium
       - run: pnpm e2e
       - if: failure()

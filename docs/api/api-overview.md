@@ -15,7 +15,7 @@ The JSON API the web app uses, served by the same Worker as the UI. Behind it: `
 
 | Caller | How | Notes |
 | --- | --- | --- |
-| Signed-in user | `__session` cookie (Firebase session cookie, httpOnly, SameSite=Lax) | Mutations must come from the app's Origin (CSRF). Sign-in endpoints check Origin even without a cookie. |
+| Signed-in user | `__session` cookie (our signed session, httpOnly, SameSite=Lax; `__session_rt` holds the encrypted Cognito refresh token, sent to `/api` only) | Mutations must come from the app's Origin (CSRF). Sign-in endpoints check Origin even without a cookie. |
 | API key | `Authorization: Bearer sk_live_...` | Read-only (acts as `viewer`), one workspace. |
 | Providers | Shopify HMAC, Meta `X-Hub-Signature-256`, OAuth state + PKCE | Verified before anything is read or written. |
 
@@ -38,7 +38,7 @@ the permission in the table below (`@app/shared/roles`):
 - **Errors**: `{ "error": "<code>", "message": "<text for people>" }` with the status that fits
   (400 `validation` / `invalid_range`, 401 `unauthenticated`, 403 `forbidden` / `csrf`, 404
   `not_found`, 409, 413, 429 `rate_limited`, 502 when a provider failed, 503 when the database or
-  Firebase is unreachable, 500 `internal` for anything unexpected; the cause is only in the logs).
+  Cognito is unreachable, 500 `internal` for anything unexpected; the cause is only in the logs).
   Machine endpoints (webhooks, pixel) answer `{ "error": "<code>" }`.
 - **Every response** carries `x-request-id` (Cloudflare's `cf-ray` when present). Quote it when
   reporting a problem: every log line written for that request carries the same id.

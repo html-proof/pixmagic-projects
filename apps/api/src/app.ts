@@ -10,6 +10,7 @@ import { clientIp, HttpError, SESSION_COOKIE, type AppEnv, type Deps } from "./c
 import { probeDb, tenantDb, type ProbeResult } from "@app/db";
 import { requestContext } from "./requestContext.js";
 import { authRoutes } from "./routes/auth.js";
+import { accountRoutes } from "./routes/account.js";
 import { shopifyRoutes } from "./routes/shopify.js";
 import { webhookRoutes } from "./routes/webhooks.js";
 import { pixelRoutes } from "./routes/pixel.js";
@@ -160,6 +161,7 @@ export function buildApp(deps: Deps): App {
   });
 
   authRoutes(app, deps);
+  accountRoutes(app, deps);
   shopifyRoutes(app, deps);
   webhookRoutes(app, deps);
   pixelRoutes(app, deps);

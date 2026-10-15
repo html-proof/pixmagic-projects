@@ -1,8 +1,7 @@
 // Local WhatsApp demo: the real Worker (UI + API + queue consumers) on http://localhost:8793, on its
 // own database `wa_demo` in a throwaway Postgres (127.0.0.1:5447), never `app` or `app_demo`.
-// Uses the Firebase Auth emulator and Mailpit from docker compose. Build its UI first:
-//   NEXT_EXPORT_DIR=out-wademo NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR=http://127.0.0.1:9099 \
-//   NEXT_PUBLIC_FIREBASE_PROJECT_ID=demo-insights NEXT_PUBLIC_FIREBASE_API_KEY=demo-key pnpm --filter @app/web build
+// Uses the Cognito emulator (docker compose up -d cognito) and Mailpit from docker compose. Build its UI first:
+//   NEXT_EXPORT_DIR=out-wademo pnpm --filter @app/web build   (the UI needs no sign-in settings)
 // Fill it with sample data: apps/worker/demo/README (vitest seed, test values only).
 import { spawn } from "node:child_process";
 import { dirname, resolve } from "node:path";
@@ -30,6 +29,8 @@ const child = spawn(
     `APP_URL:http://localhost:${PORT}`,
     "--var",
     `API_URL:http://localhost:${PORT}/api`,
+    "--var",
+    "COGNITO_ENDPOINT:http://127.0.0.1:9229",
     "--persist-to",
     ".wrangler/wademo",
     "--assets",

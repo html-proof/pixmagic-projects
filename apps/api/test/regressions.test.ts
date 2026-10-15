@@ -1,8 +1,7 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { encryptTokenFields, resetEnvCache, type FetchLike } from "@app/core";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { encryptTokenFields, type FetchLike } from "@app/core";
 import { systemDb } from "@app/db";
 import { buildApp } from "../src/app.js";
-import { firebaseAuthProvider, isLocalUrl } from "../src/authProvider.js";
 import { clean, createStore, createWorkspace, ORIGIN, setup, signIn, teardown, type TestCtx } from "./helpers.js";
 
 /**
@@ -35,85 +34,32 @@ describe("global per-IP limit", () => {
 });
 
 describe("sign-in requests must come from the app (login CSRF)", () => {
-  it("refuses a cross-site POST to /auth/session even without a session cookie", async () => {
+  it("refuses every cross-site sign-in, sign-up and code request, even without a session cookie", async () => {
     // A text/plain form from another site parses as JSON too, so without this an attacker could
     // sign a visitor's browser in to the attacker's account.
+    ctx.auth.addUser({ sub: "attacker", email: "evil@x.com", password: "attacker-password" });
+    const calls = [
+      { url: "/auth/login", payload: { email: "evil@x.com", password: "attacker-password" } },
+      { url: "/auth/signup", payload: { name: "E", email: "e@x.com", password: "long-enough", confirmPassword: "long-enough", acceptTerms: true } },
+      { url: "/auth/signup/confirm", payload: { email: "e@x.com", code: "123456" } },
+      { url: "/auth/signup/resend", payload: { email: "e@x.com" } },
+      { url: "/auth/password/forgot", payload: { email: "evil@x.com" } },
+      { url: "/auth/password/reset", payload: { email: "evil@x.com", code: "123456", password: "new-password", confirmPassword: "new-password" } },
+      { url: "/auth/oauth/callback", payload: { state: "s", code: "c" } },
+    ];
     const crossSite: Array<Record<string, string>> = [{}, { origin: "https://evil.example" }, { referer: "https://evil.example/page" }];
-    for (const headers of crossSite) {
-      const res = await ctx.app.inject({ method: "POST", url: "/auth/session", headers: { "content-type": "text/plain", ...headers }, payload: JSON.stringify({ idToken: "idt|attacker|evil@x.com|1" }) });
-      expect(res.statusCode).toBe(403);
-      expect(res.json().error).toBe("csrf");
+    for (const { url, payload } of calls) {
+      for (const headers of crossSite) {
+        const res = await ctx.app.inject({ method: "POST", url, headers: { "content-type": "text/plain", ...headers }, payload: JSON.stringify(payload) });
+        expect(res.statusCode, url).toBe(403);
+        expect(res.json().error).toBe("csrf");
+        expect(res.headers["set-cookie"]).toBeUndefined();
+      }
     }
     expect(await systemDb.user.count()).toBe(0);
-  });
-
-  it("refuses cross-site code and link sign-ins, and accepts them from the app", async () => {
-    const calls = [
-      { url: "/auth/otp/request", payload: { email: "a@x.com" } },
-      { url: "/auth/otp/verify", payload: { email: "a@x.com", code: "123456" } },
-      { url: "/auth/email-link/verify", payload: { email: "a@x.com", oobCode: "link-a@x.com" } },
-    ];
-    for (const { url, payload } of calls) {
-      const res = await ctx.app.inject({ method: "POST", url, headers: { origin: "https://evil.example" }, payload });
-      expect(res.statusCode, url).toBe(403);
-    }
-    expect(ctx.mailer.sent).toHaveLength(0);
-    const ok = await ctx.app.inject({ method: "POST", url: "/auth/otp/request", headers: ORIGIN, payload: { email: "a@x.com" } });
+    expect(ctx.auth.sent).toHaveLength(0);
+    const ok = await ctx.app.inject({ method: "POST", url: "/auth/login", headers: ORIGIN, payload: { email: "evil@x.com", password: "attacker-password" } });
     expect(ok.statusCode).toBe(200);
-    expect(ctx.mailer.sent).toHaveLength(1);
-  });
-});
-
-describe("a Firebase account re-created for an existing email", () => {
-  const session = (uid: string, email: string, verified: boolean) =>
-    ctx.app.inject({ method: "POST", url: "/auth/session", headers: ORIGIN, payload: { idToken: `idt|${uid}|${email}|${verified ? 1 : 0}` } });
-
-  it("signs in to the same user when Firebase has verified the address", async () => {
-    const { user, headers } = await signIn(ctx, "old-uid", "owner@x.com");
-    const ws = await createWorkspace(ctx, headers);
-    // Deleted and re-created in Firebase (or an emulator restart): same email, new uid. This was a
-    // unique-constraint 500 on every sign-in.
-    const res = await session("new-uid", "Owner@X.com", true);
-    expect(res.statusCode).toBe(200);
-    expect(res.json().user.id).toBe(user.id);
-    const after = await systemDb.user.findUniqueOrThrow({ where: { id: user.id } });
-    expect(after.firebaseUid).toBe("new-uid");
-    expect(await systemDb.user.count()).toBe(1);
-    // Still the owner of everything they had.
-    const me = await ctx.app.inject({ method: "GET", url: "/me", headers: { cookie: "__session=sess|new-uid|owner@x.com|1" } });
-    expect(me.json().workspaces.map((w: { id: string }) => w.id)).toEqual([ws]);
-  });
-
-  it("does not hand the account to an unverified newcomer", async () => {
-    const { user } = await signIn(ctx, "old-uid", "owner@x.com");
-    const res = await session("squatter", "owner@x.com", false);
-    expect(res.statusCode).toBe(409);
-    expect(res.json().error).toBe("email_in_use");
-    expect((await systemDb.user.findUniqueOrThrow({ where: { id: user.id } })).firebaseUid).toBe("old-uid");
-  });
-});
-
-describe("Firebase Auth emulator setting", () => {
-  afterEach(() => {
-    delete process.env.FIREBASE_AUTH_EMULATOR_HOST;
-    process.env.APP_URL = "http://localhost:3001";
-    resetEnvCache();
-  });
-
-  it("recognises local app URLs only", () => {
-    for (const url of ["http://localhost:3001", "http://127.0.0.1:8789", "http://[::1]:8787", "http://app.localhost", "http://insights.test"]) expect(isLocalUrl(url), url).toBe(true);
-    for (const url of ["https://insights.imeseban.workers.dev", "https://localhost.evil.com", "not a url"]) expect(isLocalUrl(url), url).toBe(false);
-  });
-
-  it("refuses to run against the emulator on a deployed app URL", () => {
-    // The emulator accepts unsigned tokens: carried to production, it would be an auth bypass.
-    process.env.FIREBASE_AUTH_EMULATOR_HOST = "127.0.0.1:9099";
-    process.env.APP_URL = "https://insights.imeseban.workers.dev";
-    resetEnvCache();
-    expect(() => firebaseAuthProvider()).toThrow(/must never be configured on a deployed app/);
-    process.env.APP_URL = "http://localhost:8787";
-    resetEnvCache();
-    expect(() => firebaseAuthProvider()).not.toThrow();
   });
 });
 

@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { systemDb, withTenant } from "@app/db";
 import { sha256Hex } from "@app/shared";
-import { clean, createWorkspace, ORIGIN, setup, signIn, teardown, type InjectResponse, type TestCtx } from "./helpers.js";
+import { clean, cookiesFrom, createWorkspace, ORIGIN, setup, signIn, teardown, type InjectResponse, type TestCtx } from "./helpers.js";
 
 /**
  * Staff Management, Time & Attendance and Payroll, end to end through the API against a real
@@ -17,7 +17,6 @@ afterAll(async () => teardown(ctx));
 beforeEach(async () => {
   await clean(ctx);
   ctx.mailer.sent.length = 0;
-  ctx.auth.passwordUsers.clear();
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -67,10 +66,12 @@ const tokenFromMail = (to: string) => {
 async function join(h: Headers, ws: string, employeeId: string, email: string) {
   ok(await call("POST", `/workspaces/${ws}/staff/employees/${employeeId}/invitations`, h, { delivery: "email" }));
   const token = tokenFromMail(email);
-  const res = ok(await call("POST", "/staff/invitations/accept", ORIGIN, { token, password: "Correct-Horse-42", confirmPassword: "Correct-Horse-42" }));
-  expect(res.customToken).toBeTruthy();
-  const session = await signIn(ctx, `pw-${email}`, email, res.emailVerified);
-  return session.headers;
+  const accepted = await call("POST", "/staff/invitations/accept", ORIGIN, { token, password: "Correct-Horse-42", confirmPassword: "Correct-Horse-42" });
+  ok(accepted);
+  // Accepting signs the employee in (the response sets the session cookies).
+  const cookie = cookiesFrom(accepted);
+  expect(cookie).toMatch(/__session=/);
+  return { cookie, ...ORIGIN };
 }
 
 const key = () => `k-${Math.random().toString(36).slice(2)}-${Date.now()}`;
@@ -121,7 +122,7 @@ describe("employee onboarding and invitations", () => {
 
     const accepted = ok(await call("POST", "/staff/invitations/accept", ORIGIN, { token, password: "Correct-Horse-42", confirmPassword: "Correct-Horse-42" }));
     expect(accepted.emailVerified).toBe(true);
-    expect(ctx.auth.passwordUsers.get("jane@example.com")?.password).toBe("Correct-Horse-42"); // handed to the identity provider only
+    expect([...ctx.auth.users.values()].find((u) => u.email === "jane@example.com")?.password).toBe("Correct-Horse-42"); // handed to the identity provider only
     expect(await systemDb.user.count({ where: { email: "jane@example.com" } })).toBe(1);
 
     // Single use: the same link can't create a second account (replay).
@@ -129,7 +130,7 @@ describe("employee onboarding and invitations", () => {
     expect(again.statusCode).toBe(400);
     expect(again.json().error).toMatch(/invitation_/);
 
-    // Sign in through the normal login (Firebase session) and land in the portal.
+    // Sign in through the normal login (Cognito) and land in the portal.
     const jane = await signIn(ctx, "pw-jane@example.com", "jane@example.com");
     const me = ok(await call("GET", "/me", jane.headers));
     expect(me.workspaces).toEqual([]);
@@ -325,7 +326,11 @@ describe("payroll", () => {
     await shift("2026-10-12T09:00:00Z", "2026-10-12T19:00:00Z"); // 10 h: 8 regular + 2 overtime
     await shift("2026-10-13T09:00:00Z", "2026-10-13T17:00:00Z"); // 8 h
     at("2026-10-20T09:00:00Z");
-    return { ...o, e, eh };
+    // A week on: sessions last five days, so both sign in again, as they would.
+    const owner = await signIn(ctx, "owner-Acme", "owner-Acme@example.com");
+    const again = await call("POST", "/auth/login", ORIGIN, { email: "jane@example.com", password: "Correct-Horse-42" });
+    ok(again);
+    return { ...o, owner, h: owner.headers, e, eh: { cookie: cookiesFrom(again), ...ORIGIN } };
   }
 
   it("calculates overtime, needs approved hours, approves, locks and keeps history when wages change", async () => {
