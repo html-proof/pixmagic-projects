@@ -18,6 +18,7 @@ const { DataStack } = await import("../lib/data-stack.js");
 const { AppStack } = await import("../lib/app-stack.js");
 const { AuthStack } = await import("../lib/auth-stack.js");
 const { CiStack } = await import("../lib/ci-stack.js");
+const { viewerRequestCode } = await import("../lib/viewer-request.js");
 
 function synth(context: Record<string, string> = {}) {
   const app = new App({ context });
@@ -26,7 +27,7 @@ function synth(context: Record<string, string> = {}) {
   const edge = new EdgeStack(app, "E", cfg, { env: { account: cfg.account, region: "us-east-1" }, crossRegionReferences: true });
   const data = new DataStack(app, "D", cfg, { env });
   const appStack = new AppStack(app, "A", cfg, data, edge.webAclArn, { env, crossRegionReferences: true });
-  const auth = new AuthStack(app, "U", cfg, { env, appUrl: "https://example.cloudfront.net", apiRole: appStack.apiRole, runtimeParam: appStack.runtimeParam });
+  const auth = new AuthStack(app, "U", cfg, { env, appUrl: appStack.appUrl, apiRole: appStack.apiRole, runtimeParam: appStack.runtimeParam });
   const ci = new CiStack(app, "C", cfg, { env });
   return { edge: Template.fromStack(edge), data: Template.fromStack(data), app: Template.fromStack(appStack), auth: Template.fromStack(auth), ci: Template.fromStack(ci) };
 }
@@ -157,6 +158,86 @@ describe("the app stack", () => {
     const waiting = (type: string) => Object.values(resources).filter((r) => r.Type === type && ids.every((id) => r.DependsOn?.includes(id))).length;
     expect(waiting("AWS::CloudFront::Distribution")).toBe(1);
     expect(waiting("AWS::Lambda::Alias")).toBe(1);
+  });
+});
+
+describe("the app's domain", () => {
+  it("answers on bizinsights.io and www with the ACM certificate, TLS 1.2 or newer", () => {
+    t.app.hasResourceProperties("AWS::CloudFront::Distribution", {
+      DistributionConfig: Match.objectLike({
+        Aliases: ["bizinsights.io", "www.bizinsights.io"],
+        ViewerCertificate: {
+          AcmCertificateArn: Match.stringLikeRegexp("^arn:aws:acm:us-east-1:605411278365:certificate/"),
+          MinimumProtocolVersion: "TLSv1.2_2021",
+          SslSupportMethod: "sni-only",
+        },
+      }),
+    });
+  });
+
+  it("is every function's address (with the release) and Cognito's callback", () => {
+    const fns = Object.values(t.app.findResources("AWS::Lambda::Function")).filter((f) => f.Properties.Handler === "index.handler" && String(f.Properties.Runtime).startsWith("nodejs"));
+    expect(fns).toHaveLength(3);
+    for (const f of fns) expect(f.Properties.Environment.Variables).toMatchObject({ APP_URL: "https://bizinsights.io", API_URL: "https://bizinsights.io/api" });
+    const auth = JSON.stringify(t.auth.toJSON());
+    expect(auth).toContain("https://bizinsights.io/auth/callback");
+    expect(auth).toContain('\\"APP_URL\\":\\"https://bizinsights.io\\"');
+    expect(auth).not.toContain("cloudfront.net");
+  });
+
+  it("leaves an environment without one on CloudFront's address", () => {
+    const staging = synth({ env: "staging" });
+    const dist = Object.values(staging.app.findResources("AWS::CloudFront::Distribution"))[0]!.Properties.DistributionConfig;
+    expect(dist.Aliases).toBeUndefined();
+    expect(dist.ViewerCertificate).toBeUndefined();
+    for (const f of Object.values(staging.app.findResources("AWS::Lambda::Function")).filter((f) => f.Properties.Handler === "index.handler" && String(f.Properties.Runtime).startsWith("nodejs"))) {
+      expect(f.Properties.Environment.Variables.APP_URL).toBeUndefined();
+    }
+  });
+});
+
+describe("the viewer-request function", () => {
+  type Req = { method: string; uri: string; querystring: Record<string, { value: string; multiValue?: Array<{ value: string }> }>; headers: Record<string, { value: string }> };
+  const run = (canonical: string | undefined, req: Partial<Req>) => {
+    const handler = new Function(`${viewerRequestCode(canonical)}
+return handler;`)() as (e: unknown) => any; // eslint-disable-line @typescript-eslint/no-explicit-any
+    return handler({ viewer: { ip: "203.0.113.9" }, request: { method: "GET", uri: "/", querystring: {}, headers: {}, ...req } });
+  };
+
+  it("passes the viewer's address and host on, over anything the client sent", () => {
+    const r = run("bizinsights.io", { headers: { host: { value: "bizinsights.io" }, "x-insights-viewer-ip": { value: "1.2.3.4" } } });
+    expect(r.headers["x-insights-viewer-ip"]).toEqual({ value: "203.0.113.9" });
+    expect(r.headers["x-insights-viewer-host"]).toEqual({ value: "bizinsights.io" });
+    expect(r.statusCode).toBeUndefined();
+  });
+
+  it("sends page requests on other names to the domain, path and query exactly as received", () => {
+    const querystring = { shop: { value: "a.myshopify.com" }, hmac: { value: "ab%2Bc" }, embedded: { value: "" }, id: { value: "1", multiValue: [{ value: "1" }, { value: "2" }] } };
+    for (const host of ["d2mr8m2p1qkh58.cloudfront.net", "www.bizinsights.io", "WWW.BizInsights.io"]) {
+      const r = run("bizinsights.io", { uri: "/api/shopify/launch", querystring, headers: { host: { value: host } } });
+      expect(r.statusCode).toBe(301);
+      expect(r.headers.location.value).toBe("https://bizinsights.io/api/shopify/launch?shop=a.myshopify.com&hmac=ab%2Bc&embedded&id=1&id=2");
+    }
+    expect(run("bizinsights.io", { method: "HEAD", uri: "/login", headers: { host: { value: "www.bizinsights.io" } } }).headers.location.value).toBe("https://bizinsights.io/login");
+    expect(run("bizinsights.io", { headers: { host: { value: "BizInsights.io" } } }).statusCode).toBeUndefined();
+  });
+
+  it("serves other methods where they arrive (webhooks and pixel events don't follow redirects)", () => {
+    for (const method of ["POST", "PUT", "DELETE", "OPTIONS"]) {
+      const r = run("bizinsights.io", { method, uri: "/api/webhooks/shopify", headers: { host: { value: "d2mr8m2p1qkh58.cloudfront.net" } } });
+      expect(r.statusCode).toBeUndefined();
+      expect(r.headers["x-insights-viewer-host"]).toEqual({ value: "d2mr8m2p1qkh58.cloudfront.net" });
+    }
+  });
+
+  it("redirects nothing without a domain", () => {
+    expect(run(undefined, { headers: { host: { value: "d2mr8m2p1qkh58.cloudfront.net" } } }).statusCode).toBeUndefined();
+  });
+
+  it("fits CloudFront Functions (no modules, under 10 KB)", () => {
+    const code = viewerRequestCode("bizinsights.io");
+    expect(code).not.toMatch(/(import|require)/);
+    expect(code.length).toBeLessThan(10_240);
   });
 });
 

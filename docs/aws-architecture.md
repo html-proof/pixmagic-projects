@@ -5,7 +5,7 @@ owner's PC) to AWS, region **ap-southeast-2 (Sydney)**. Phase 1 (sign-in on Cogn
 staging environment) is built: [cognito-setup.md](cognito-setup.md), [aws-staging.md](aws-staging.md).
 This document is the design and its reasoning. It has been built and runs since 2026-10-15; what
 actually runs, under which names, is in [aws-deployment.md](aws-deployment.md), which wins where the
-two differ (for example, the address is still the CloudFront one, not a custom domain).
+two differ (for example, the domain's DNS is at Cloudflare, not Route 53).
 
 Principles:
 
