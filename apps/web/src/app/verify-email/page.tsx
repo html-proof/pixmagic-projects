@@ -69,7 +69,7 @@ export default function VerifyEmailPage() {
       )}
       {email && sent && (
         <CodeStep
-          large
+          card
           email={email}
           submitLabel="Verify email"
           busyLabel="Verifying…"
