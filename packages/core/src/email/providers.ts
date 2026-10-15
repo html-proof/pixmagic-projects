@@ -226,7 +226,7 @@ export const graphAdapter: EmailProviderAdapter = {
 // ---------------------------------------------------------------------------
 
 /**
- * Whether Insights may connect to this SMTP host: a public name whose every address is a public
+ * Whether bizinsights may connect to this SMTP host: a public name whose every address is a public
  * unicast address (no loopback, private, link-local, metadata or other special ranges). Checked
  * when the account is saved and again before every connection, since DNS can change in between.
  */

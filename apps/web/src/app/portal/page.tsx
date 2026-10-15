@@ -40,7 +40,7 @@ interface Attempt {
   action: Action;
   key: string;
   kind?: BreakKind;
-  /** Why the last try failed to reach Insights (then "Try again" is offered with the same key). */
+  /** Why the last try failed to reach bizinsights (then "Try again" is offered with the same key). */
   failed: string | null;
 }
 
@@ -273,10 +273,10 @@ export default function PortalHome() {
                 </button>
               </div>
             )}
-            <p className="text-center text-xs text-muted">Times are recorded by Insights when you press a button, not by this device&apos;s clock.</p>
+            <p className="text-center text-xs text-muted">Times are recorded by bizinsights when you press a button, not by this device&apos;s clock.</p>
           </div>
         )}
-        {dash.failing && <p className="mt-3 text-center text-xs text-muted">Can&apos;t reach Insights right now. Showing your last update; we&apos;ll keep trying.</p>}
+        {dash.failing && <p className="mt-3 text-center text-xs text-muted">Can&apos;t reach bizinsights right now. Showing your last update; we&apos;ll keep trying.</p>}
       </section>
 
       {summary && <SummaryCard s={summary} tz={tz} onClose={() => setSummary(null)} />}
@@ -361,7 +361,7 @@ export default function PortalHome() {
               ))}
             </ul>
           ) : (
-            <p className="mt-2 text-sm text-muted">No shifts scheduled. Your manager adds them in Insights; they&apos;ll show up here.</p>
+            <p className="mt-2 text-sm text-muted">No shifts scheduled. Your manager adds them in bizinsights; they&apos;ll show up here.</p>
           )}
           <Link href="/portal/schedule" className="mt-3 inline-block text-sm text-accent hover:underline">
             Full schedule

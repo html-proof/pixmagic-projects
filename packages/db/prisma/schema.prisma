@@ -296,7 +296,7 @@ model Order {
   fulfilledAt         DateTime?       @map("fulfilled_at")
   discountCodes       String[]        @default([]) @map("discount_codes")
   /// Where the customer came from (packages/shared/src/traffic.ts): facebook | instagram | google | ... | direct | other | unknown.
-  /// Null on orders stored before Insights recorded it (the dashboard re-reads those once).
+  /// Null on orders stored before bizinsights recorded it (the dashboard re-reads those once).
   trafficSource       String?         @map("traffic_source")
   /// paid | unpaid | email | direct | referral | unknown
   trafficMedium       String?         @map("traffic_medium")
@@ -618,7 +618,7 @@ model WhatsappConnection {
   id                 String    @id @default(cuid())
   workspaceId        String    @map("workspace_id")
   storeId            String    @unique @map("store_id")
-  /** "embedded" (Embedded Signup through Insights' Meta app) | "manual" (the merchant's own app and system-user token). */
+  /** "embedded" (Embedded Signup through bizinsights' Meta app) | "manual" (the merchant's own app and system-user token). */
   mode               String
   businessId         String?   @map("business_id")
   wabaId             String    @map("waba_id")
@@ -641,7 +641,7 @@ model WhatsappConnection {
   /** Manual mode: the verify token the merchant enters in their Meta app's webhook settings. */
   verifyTokenEnc     String?   @map("verify_token_enc")
   verifyTokenHash    String?   @unique @map("verify_token_hash")
-  /** The number's two-step verification PIN, encrypted: the one Insights set when registering it, or the one the merchant entered. */
+  /** The number's two-step verification PIN, encrypted: the one bizinsights set when registering it, or the one the merchant entered. */
   pinEnc             String?   @map("pin_enc")
   tokenKeyVersion    Int       @map("token_key_version")
   /** When Meta last proved it can reach our webhook for this number (challenge or signed delivery). */
@@ -1503,7 +1503,7 @@ model PayrollApproval {
 }
 
 /// A record that an employee was paid (bank transfer, cash, ...). Recording is not transferring:
-/// no money moves through Insights.
+/// no money moves through bizinsights.
 model PayrollPayment {
   id                    String              @id @default(cuid())
   workspaceId           String              @map("workspace_id")

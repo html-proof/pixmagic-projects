@@ -144,7 +144,7 @@ export function shopifyRoutes(app: App, deps: Deps) {
     const { shop: rawShop, from } = z.object({ shop: z.string().min(1).max(255), from: connectFromSchema }).parse(await body(c));
     const shop = normalizeShopDomain(rawShop);
     if (!shop) throw new HttpError(400, "Enter your store's myshopify.com address", "invalid_shop");
-    // "Already connected elsewhere" tells whether a store uses Insights: bound how fast anyone can ask.
+    // "Already connected elsewhere" tells whether a store uses bizinsights: bound how fast anyone can ask.
     await limit(deps.coord, `rl:shopify-install:${user.id}`, LIMITS.shopifyInstall);
 
     if (await storeTakenElsewhere(shop, ws)) {

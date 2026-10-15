@@ -53,7 +53,7 @@ function LockedModule({ c, onRequest, pending }: { c: Capability; onRequest: (c:
         {c.missingScopes.length === 0
           ? "Setting up storefront tracking. This page will update by itself."
           : reconnect
-            ? `Insights needs access to ${scopeList(c.missingScopes)}. Reconnect the store to grant it.`
+            ? `bizinsights needs access to ${scopeList(c.missingScopes)}. Reconnect the store to grant it.`
             : requestable
               ? `Needs your permission in Shopify to read ${scopeList(c.missingScopes)}. We'll take you there to approve it.`
               : `Needs access to ${scopeList(c.missingScopes)}. We're waiting on Shopify to approve our access to that data — it isn't something you can turn on.`}
@@ -353,7 +353,7 @@ export default function DashboardPage() {
               </p>
               <p className="mt-1 text-xs">
                 {ov.syncProblem === "access"
-                  ? "Shopify stopped accepting Insights' access. Reconnecting grants it again and restarts the import straight away."
+                  ? "Shopify stopped accepting bizinsights' access. Reconnecting grants it again and restarts the import straight away."
                   : "If it keeps coming back, Shopify has most likely stopped accepting our access. Reconnecting grants it again and restarts the import straight away."}
               </p>
               {canManage(workspace.role) && (

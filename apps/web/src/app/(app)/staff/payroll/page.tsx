@@ -51,7 +51,7 @@ const PAGE_SIZE = 20;
 const MAX_PERIOD_DAYS = 62;
 
 const STEPS: ReadonlyArray<readonly [string, string]> = [
-  ["Draft", "Insights adds up approved hours at each person's pay rate. Add bonuses or deductions and recalculate as often as you like."],
+  ["Draft", "bizinsights adds up approved hours at each person's pay rate. Add bonuses or deductions and recalculate as often as you like."],
   ["Waiting for approval", "When the figures look right, send them for approval. Someone who may approve payroll checks them."],
   ["Approved", "Approving locks the hours and figures, so nothing changes underneath you. Payslips are ready to download."],
   ["Partly paid / Paid", "Pay people through your bank or provider as usual, then record each payment here to keep track of what's owed."],
@@ -289,7 +289,7 @@ export default function PayrollPage() {
             ) : (
               <EmptyState
                 title="No pay runs yet"
-                body={manage ? "Start your first pay run above. Insights adds up the approved hours for the period and prices them at each person's pay rate." : "When someone starts a pay run, it shows up here."}
+                body={manage ? "Start your first pay run above. bizinsights adds up the approved hours for the period and prices them at each person's pay rate." : "When someone starts a pay run, it shows up here."}
               />
             )
           ) : (

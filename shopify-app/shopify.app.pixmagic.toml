@@ -12,6 +12,8 @@
 client_id = "bb0ea9e4ad8939a6a1513e4dbf8cbbf1"
 name = "Insights"
 application_url = "https://bizinsights.io/api/shopify/launch"
+name = "bizinsights"
+application_url = "https://d2mr8m2p1qkh58.cloudfront.net/api/shopify/launch"
 embedded = false
 
 [access_scopes]

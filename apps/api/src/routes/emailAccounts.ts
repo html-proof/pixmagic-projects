@@ -55,7 +55,7 @@ import { limit, LIMITS } from "../rateLimit.js";
  * coordinator (never in the URL beyond its random id), bound to this browser by a cookie and to the
  * person who started it, a PKCE verifier that never leaves the server, and a fixed redirect URI.
  * The callback re-checks that person's membership and permission before saving anything, and only
- * ever redirects to Insights' own settings page.
+ * ever redirects to bizinsights' own settings page.
  */
 
 const STATE_TTL_S = 600;
@@ -239,9 +239,9 @@ export function emailAccountRoutes(app: App, deps: Deps) {
           return previewTemplate(ws, { subject: t.subjectTemplate, html: t.htmlTemplate, text: t.textTemplate, category: t.category, eventType: t.eventType }, undefined, user.email);
         })()
       : {
-          subject: "Insights test email",
-          text: `This is a test from Insights, sent through ${account.emailAddress}. If you can read it, the connection works.`,
-          html: `<p>This is a test from Insights, sent through <b>${account.emailAddress}</b>.</p><p>If you can read it, the connection works.</p>`,
+          subject: "bizinsights test email",
+          text: `This is a test from bizinsights, sent through ${account.emailAddress}. If you can read it, the connection works.`,
+          html: `<p>This is a test from bizinsights, sent through <b>${account.emailAddress}</b>.</p><p>If you can read it, the connection works.</p>`,
         };
     const result = await sendNow({ workspaceId: ws, account, sender, to: user.email, content: { ...content, subject: `[Test] ${content.subject}` }, kind: "test" }, deps);
     return c.json({ result, account: publicAccount(await getEmailAccount(ws, id)) });

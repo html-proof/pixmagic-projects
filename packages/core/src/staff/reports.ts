@@ -261,7 +261,7 @@ export async function buildReport(actor: StaffActor, input: ReportInput): Promis
             }
           : null,
         notes: [
-          "Net pay is gross pay plus other earnings minus the deductions you added. Insights doesn't calculate tax or statutory deductions.",
+          "Net pay is gross pay plus other earnings minus the deductions you added. bizinsights doesn't calculate tax or statutory deductions.",
           "Draft payroll is included and marked; only approved payroll is final.",
         ],
       };
@@ -312,7 +312,7 @@ export async function buildReport(actor: StaffActor, input: ReportInput): Promis
       ],
       rows: rows.map((a) => ({ group: a.label, currency: a.currency, count: a.count, amount: minorToString(a.amount, a.currency) })),
       totals: one ? { group: "Total", currency: one, count: rows.reduce((t, a) => t + a.count, 0), amount: minorToString(rows.reduce((t, a) => t + a.amount, 0n), one) } : null,
-      notes: ["Recorded payments only: Insights doesn't move money. Failed and reversed payments are included unless you filter them out."],
+      notes: ["Recorded payments only: bizinsights doesn't move money. Failed and reversed payments are included unless you filter them out."],
     };
   });
 }
@@ -483,7 +483,7 @@ export async function payslip(workspaceId: string, itemId: string, opts: { emplo
   }
   doc.paragraph(
     `Hours worked: ${formatDuration(item.regularSeconds + item.overtimeSeconds + item.doubleTimeSeconds + item.holidaySeconds)} (unpaid breaks ${formatDuration(item.unpaidBreakSeconds)} not included). ` +
-      "Gross pay is calculated from approved clock-in records at the pay rate in force on each day. No income tax, social security or other statutory deductions have been calculated by Insights; check your final pay with your employer.",
+      "Gross pay is calculated from approved clock-in records at the pay rate in force on each day. No income tax, social security or other statutory deductions have been calculated by bizinsights; check your final pay with your employer.",
     { size: 8, color: [0.42, 0.42, 0.39] },
   );
   const name = item.employee.fullName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
@@ -561,7 +561,7 @@ export async function employeeStatement(actor: StaffActor, employeeId: string, i
     data.payments.map((p) => [p.paidOn, PAYMENT_METHOD_LABEL[p.method as PaymentMethod] ?? p.method, p.reference ?? "", PAYMENT_STATUS_LABEL[p.status as PaymentStatus] ?? p.status, minorToString(p.amountMinor, p.currency)]),
   );
   doc.y -= 8;
-  doc.paragraph("Net pay is an estimate: gross pay from approved hours plus the earnings and deductions your employer added. Insights doesn't calculate tax.", { size: 8, color: [0.42, 0.42, 0.39] });
+  doc.paragraph("Net pay is an estimate: gross pay from approved hours plus the earnings and deductions your employer added. bizinsights doesn't calculate tax.", { size: 8, color: [0.42, 0.42, 0.39] });
   const name = data.e.fullName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
   return { filename: `statement_${name}_${range.from}_${range.to}.pdf`, contentType: CONTENT_TYPE.pdf, body: doc.toBytes({ title: `Payment statement — ${data.e.fullName}` }) };
 }

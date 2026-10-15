@@ -1,6 +1,6 @@
 # Sign-in: Amazon Cognito
 
-Insights signs people in with an Amazon Cognito user pool: email and password (with emailed codes
+bizinsights signs people in with an Amazon Cognito user pool: email and password (with emailed codes
 for sign-up and password resets), Continue with Google, and optionally a passwordless emailed
 code (Sign in with Apple was removed on 2026-10-16). It replaced Firebase Authentication; this page
 covers how it works, how to set it up, and how existing accounts move over.
@@ -120,7 +120,7 @@ time, and nobody has to do anything:
   window: "Forgot password?" creates their Cognito user (no email to them, random password) and
   Cognito emails a reset code. Proving the inbox gets them back into the same `users.id`.
 - **Apple accounts**: Apple was never switched on in production Firebase, so there are none (and
-  Insights no longer offers Apple sign-in; "Forgot password?" would move one).
+  bizinsights no longer offers Apple sign-in; "Forgot password?" would move one).
 
 Nothing is merged on an unverified address, a Firebase account is asked about only while it has no
 Cognito user, and every step is recorded in `auth_events`.

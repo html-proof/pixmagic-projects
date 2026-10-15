@@ -2,8 +2,8 @@ import Link from "next/link";
 import { CONTACT } from "@/lib/contact";
 
 /**
- * Facebook's "Feature Unavailable" page, explained on Insights' side. Facebook shows it instead of
- * its login when it won't let that Facebook account use Insights' Meta app, and never sends the
+ * Facebook's "Feature Unavailable" page, explained on bizinsights' side. Facebook shows it instead of
+ * its login when it won't let that Facebook account use bizinsights' Meta app, and never sends the
  * person back. Two causes:
  * - Meta hasn't given the app Advanced Access to ads_read yet (App Review): only the people added to
  *   the app (testers) can connect. The API says so as `restricted.meta`.
@@ -45,7 +45,7 @@ function HowToBeAdded() {
 export function MetaTestersOnly() {
   return (
     <p className="rounded-lg border border-dashed border-border px-3 py-2 text-sm text-muted" data-testid="meta-testers-only">
-      <strong className="text-text">Meta hasn&apos;t approved Insights for every Facebook account yet.</strong> Until it does, only accounts we&apos;ve added as testers can connect;
+      <strong className="text-text">Meta hasn&apos;t approved bizinsights for every Facebook account yet.</strong> Until it does, only accounts we&apos;ve added as testers can connect;
       any other Facebook account gets Facebook&apos;s &ldquo;Feature Unavailable&rdquo; page. <HowToBeAdded />
     </p>
   );
@@ -58,12 +58,12 @@ export function BackFromFacebook({ restricted }: { restricted: boolean }) {
       Back from Facebook without connecting? Nothing was connected.{" "}
       {restricted ? (
         <>
-          If Facebook said &ldquo;Feature Unavailable&rdquo;, it turned that Facebook account away: Meta hasn&apos;t approved Insights for every account yet, only for the testers
-          we&apos;ve added. <HowToBeAdded /> Already a tester and still seeing it? Then Meta has paused Insights&apos; Facebook login, which is on our side: please try again later.
+          If Facebook said &ldquo;Feature Unavailable&rdquo;, it turned that Facebook account away: Meta hasn&apos;t approved bizinsights for every account yet, only for the testers
+          we&apos;ve added. <HowToBeAdded /> Already a tester and still seeing it? Then Meta has paused bizinsights&apos; Facebook login, which is on our side: please try again later.
         </>
       ) : (
         <>
-          If Facebook said &ldquo;Feature Unavailable&rdquo;, Meta has paused Insights&apos; Facebook login. That&apos;s on our side, not your account&apos;s: please try again later,
+          If Facebook said &ldquo;Feature Unavailable&rdquo;, Meta has paused bizinsights&apos; Facebook login. That&apos;s on our side, not your account&apos;s: please try again later,
           or <AskUs subject="Meta Ads: Feature Unavailable" />.
         </>
       )}

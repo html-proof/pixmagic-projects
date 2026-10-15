@@ -1,6 +1,6 @@
 # Dependency map
 
-How the parts of Insights depend on each other: packages, runtime paths, external services, and
+How the parts of bizinsights depend on each other: packages, runtime paths, external services, and
 the high-risk joints. Companion to [current-state.md](current-state.md).
 
 ## 1. Package graph

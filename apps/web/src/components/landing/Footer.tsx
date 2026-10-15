@@ -1,6 +1,6 @@
 "use client";
 import Link from "next/link";
-import { InsightLogo } from "./shared/InsightMark";
+import { BrandLogo } from "@/components/Brand";
 
 /** The only pages the footer points to; Security is the token section of the privacy page. */
 const LINKS = [
@@ -12,7 +12,7 @@ const LINKS = [
 
 /**
  * A quiet sign-off in two lines: brand and links, then a hairline with the copyright and what
- * Insights is. Phones stack the brand over the links (each still a 44px tap target).
+ * bizinsights is. Phones stack the brand over the links (each still a 44px tap target).
  * The grid and the oversized wordmark are atmosphere only and fade out before any edge.
  */
 export function Footer() {
@@ -29,17 +29,17 @@ export function Footer() {
         className="lp-grid pointer-events-none absolute inset-x-0 bottom-0 -z-10 h-[70%] [mask-image:radial-gradient(ellipse_60%_100%_at_50%_100%,#000_10%,transparent_70%)] opacity-60"
       />
 
-      {/* Oversized wordmark, rising out of the bottom edge and fading away towards it. Sized so the 8 letters span what 7 did. */}
+      {/* Oversized wordmark, rising out of the bottom edge and fading away towards it. Sized so the 11 letters fit the width the old 8-letter wordmark took. */}
       <span
         aria-hidden
-        className="pointer-events-none absolute inset-x-0 bottom-0 -z-10 translate-y-[34%] select-none text-center text-[clamp(77px,18.4vw,262px)] font-semibold leading-none tracking-[-0.03em] whitespace-nowrap"
+        className="pointer-events-none absolute inset-x-0 bottom-0 -z-10 translate-y-[34%] select-none text-center text-[clamp(56px,13.6vw,196px)] font-semibold leading-none tracking-[-0.03em] whitespace-nowrap"
       >
-        <span className="bg-[linear-gradient(180deg,rgb(255_255_255/0.07),rgb(255_255_255/0)_70%)] bg-clip-text text-transparent">INSIGHTS</span>
+        <span className="bg-[linear-gradient(180deg,rgb(255_255_255/0.07),rgb(255_255_255/0)_70%)] bg-clip-text text-transparent">bizinsights</span>
       </span>
 
       <div className="mx-auto max-w-[1380px] px-4 pb-[clamp(96px,14vw,216px)] pt-14 md:px-8 md:pt-20 xl:px-12">
         <div className="flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
-          <InsightLogo size={26} className="self-start md:self-auto" />
+          <BrandLogo size={26} className="self-start text-[16px] text-lp-text md:self-auto" />
 
           <nav aria-label="Footer">
             <ul className="-ml-3 flex flex-wrap items-center md:-mr-3 md:ml-0">
@@ -59,7 +59,7 @@ export function Footer() {
         </div>
 
         <div className="mt-8 flex flex-col gap-2 border-t border-lp-line pt-6 sm:flex-row sm:items-center sm:justify-between md:mt-10">
-          <p className="text-[13px] text-lp-muted">© 2026 Insights</p>
+          <p className="text-[13px] text-lp-muted">© 2026 bizinsights</p>
           <p className="lp-eyebrow">Shopify Business Intelligence</p>
         </div>
       </div>

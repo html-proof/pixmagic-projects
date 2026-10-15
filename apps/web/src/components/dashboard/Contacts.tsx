@@ -381,7 +381,7 @@ const Note = ({ children }: { children: ReactNode }) => (
  * link back to an unfinished checkout by WhatsApp, email, text message or any other app.
  * Loaded when the card appears and on "Refresh" (not on the dashboard's 15-second poll): it's a
  * live call to Shopify, and the data is personal, so we fetch it only when someone is looking.
- * Messages are sent from the merchant's own apps; Insights never sends or stores them.
+ * Messages are sent from the merchant's own apps; bizinsights never sends or stores them.
  */
 export function ContactsCard({ storeId, storeName, shopDomain }: { storeId: string; storeName: string; shopDomain: string }) {
   const { workspace } = useApp();
@@ -420,7 +420,7 @@ export function ContactsCard({ storeId, storeName, shopDomain }: { storeId: stri
     setTemplates({ abandoned: readMessage(storeId, "abandoned"), subscribers: readMessage(storeId, "subscribers"), recent: readMessage(storeId, "recent") });
   }, [storeId]);
 
-  const help = "People who gave your store a way to reach them, so you can get back in touch. Fetched from Shopify each time; Insights doesn't keep a copy, and messages go from your own apps.";
+  const help = "People who gave your store a way to reach them, so you can get back in touch. Fetched from Shopify each time; bizinsights doesn't keep a copy, and messages go from your own apps.";
   if (!allowed) {
     return (
       <Panel id="contacts" title="Customers to follow up" help={help}>
@@ -479,7 +479,7 @@ export function ContactsCard({ storeId, storeName, shopDomain }: { storeId: stri
       {data?.restricted && (
         <div className="mt-3">
           <Alert kind="info">
-            Shopify hasn&apos;t approved Insights to show customers&apos; names, emails and phone numbers for this store yet. You can still see them in{" "}
+            Shopify hasn&apos;t approved bizinsights to show customers&apos; names, emails and phone numbers for this store yet. You can still see them in{" "}
             <a className="underline" href={`https://${shopDomain}/admin/${tab === "abandoned" ? "checkouts" : "customers"}`} target="_blank" rel="noopener noreferrer">your Shopify admin</a>.
           </Alert>
         </div>

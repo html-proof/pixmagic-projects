@@ -511,7 +511,7 @@ export async function getSession(actor: StaffActor, sessionId: string) {
     if (!s) throw notFound("That shift");
     const userIds = [...new Set([...s.events.map((e) => e.actorUserId), ...s.adjustments.flatMap((a) => [a.requestedByUserId, a.decidedByUserId]), ...s.approvals.map((a) => a.actorUserId)].filter(Boolean))] as string[];
     const users = await systemDb.user.findMany({ where: { id: { in: userIds } }, select: { id: true, displayName: true, email: true } });
-    const name = (id: string | null) => (id ? (users.find((u) => u.id === id)?.displayName ?? users.find((u) => u.id === id)?.email ?? "Someone") : "Insights");
+    const name = (id: string | null) => (id ? (users.find((u) => u.id === id)?.displayName ?? users.find((u) => u.id === id)?.email ?? "Someone") : "bizinsights");
     return sessionView(s, Date.now(), {
       employee: s.employee,
       schedule: s.schedule ? { id: s.schedule.id, startsAt: s.schedule.startsAt, endsAt: s.schedule.endsAt } : null,

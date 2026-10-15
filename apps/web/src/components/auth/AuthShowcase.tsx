@@ -1,7 +1,7 @@
 "use client";
 import { ArrowUp, ChartColumn, Check, FileText, LayoutDashboard, Package, Settings, Users } from "lucide-react";
 import { useEffect, useState } from "react";
-import { AuthLogo, AuthMark } from "./AuthBrand";
+import { BrandLogo, BrandMark } from "@/components/Brand";
 
 /** What the showcase says, one message at a time (each headline is exactly two lines). */
 const SLIDES: Array<{ headline: [string, string]; body: string }> = [
@@ -42,7 +42,7 @@ export function AuthShowcase() {
 
   return (
     <aside
-      aria-label="About Insights"
+      aria-label="About bizinsights"
       className="auth-showcase relative isolate hidden flex-col overflow-hidden px-11 pt-10 pb-8 lg:flex xl:px-14"
       onMouseEnter={() => setHeld(true)}
       onMouseLeave={() => setHeld(false)}
@@ -50,7 +50,7 @@ export function AuthShowcase() {
       onBlur={() => setHeld(false)}
     >
       <Backdrop />
-      <AuthLogo className="text-white" />
+      <BrandLogo className="text-[19px] text-white" />
 
       <div className="mt-[clamp(1.5rem,4vh,3rem)] grid">
         {SLIDES.map((s, i) => (
@@ -164,8 +164,8 @@ function DashboardPreview() {
         >
           <div className="auth-glass hidden w-[128px] shrink-0 flex-col gap-1 p-3 text-[11px] text-white/65 xl:flex">
             <span className="mb-2 flex items-center gap-1.5 text-[13px] font-semibold text-white">
-              <AuthMark size={18} />
-              Insights
+              <BrandMark size={18} />
+              bizinsights
             </span>
             {NAV.map(({ label, Icon }, i) => (
               <span key={label} className={`flex items-center gap-2 rounded-md px-2 py-1.5 ${i === 0 ? "bg-[#2f9b66] text-white" : ""}`}>

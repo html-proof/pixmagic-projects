@@ -229,7 +229,7 @@ export default function StaffReports() {
             <>
               {RANGE_LABEL[range.preset]} · {fmtSpan(k.range.from, k.range.to)} · times in {k.timezone} · updated{" "}
               {new Date(k.asOf).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}
-              {kpis.failing && " · can't reach Insights, showing the last update"}
+              {kpis.failing && " · can't reach bizinsights, showing the last update"}
             </>
           ) : (
             "Hours, attendance and pay over any period, with tables you can download."

@@ -1,6 +1,6 @@
 # Refactoring report (2026-10-14)
 
-> Historical record (2026-10-14): written when Insights ran on Cloudflare Workers. It now runs on
+> Historical record (2026-10-14): written when bizinsights ran on Cloudflare Workers. It now runs on
 > AWS: see [aws-architecture.md](../aws-architecture.md).
 
 The outcome of the restructuring planned in [refactoring-plan.md](refactoring-plan.md), on branch

@@ -166,7 +166,7 @@ export function ProfitIntelligence() {
             id={TITLE_ID}
             eyebrow="Profit"
             title="Revenue is only half the story."
-            lead="Insights combines the data available to your business to help you understand what remains after the costs."
+            lead="bizinsights combines the data available to your business to help you understand what remains after the costs."
           />
         </div>
 

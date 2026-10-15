@@ -2,7 +2,7 @@
  * Sender identities: the From addresses each account may use. Never a typed-in address on its own:
  *
  *  - Google and Microsoft accounts send as the address they signed in as (provider_oauth). Aliases
- *    would need permission to read Gmail's send-as settings, which Insights doesn't ask for.
+ *    would need permission to read Gmail's send-as settings, which bizinsights doesn't ask for.
  *  - SMTP accounts send as an address once there is evidence the service lets them: either a code
  *    sent through the account to that address comes back (smtp_confirmation: the server relayed
  *    mail from it, and someone reads that mailbox), or the account signs in successfully and the
@@ -122,7 +122,7 @@ export async function sendSenderCode(workspaceId: string, senderId: string, user
     data: { verificationCodeHash: codeHash(s.id, code), verificationCodeExpiresAt: new Date(Date.now() + CODE_TTL_MS), verificationAttempts: 0 },
   });
   const business = await businessInfo(workspaceId);
-  const text = `Your Insights verification code for sending as ${s.senderEmail} is ${code}.\n\nEnter it in ${business.name}'s Insights settings within 30 minutes. If you didn't expect this, you can ignore it.`;
+  const text = `Your bizinsights verification code for sending as ${s.senderEmail} is ${code}.\n\nEnter it in ${business.name}'s bizinsights settings within 30 minutes. If you didn't expect this, you can ignore it.`;
   const result = await sendNow(
     {
       workspaceId,
@@ -130,7 +130,7 @@ export async function sendSenderCode(workspaceId: string, senderId: string, user
       sender: s,
       to: s.senderEmail,
       kind: "verification",
-      content: { subject: `Verification code: ${code}`, text, html: `<p>Your Insights verification code for sending as <b>${escapeHtml(s.senderEmail)}</b> is:</p><p style="font-size:24px;letter-spacing:4px"><b>${code}</b></p><p>Enter it within 30 minutes. If you didn't expect this, you can ignore it.</p>` },
+      content: { subject: `Verification code: ${code}`, text, html: `<p>Your bizinsights verification code for sending as <b>${escapeHtml(s.senderEmail)}</b> is:</p><p style="font-size:24px;letter-spacing:4px"><b>${code}</b></p><p>Enter it within 30 minutes. If you didn't expect this, you can ignore it.</p>` },
     },
     deps,
   );

@@ -107,10 +107,10 @@ export async function sweepWhatsapp(deps: WaDeps) {
 
   out.checked = await checkConnections(deps);
 
-  // Insights' own Meta app: its webhook points here (checked a few times a day; a failure retries next tick).
+  // bizinsights' own Meta app: its webhook points here (checked a few times a day; a failure retries next tick).
   if (await deps.coord.acquire("wa-platform-webhook", PLATFORM_WEBHOOK_LEASE_MS)) {
     out.platformWebhook = await ensurePlatformWebhook(deps.fetchImpl).catch(async (err: unknown) => {
-      logger.warn({ err }, "couldn't check Insights' WhatsApp webhook with Meta; the next tick tries again");
+      logger.warn({ err }, "couldn't check bizinsights' WhatsApp webhook with Meta; the next tick tries again");
       await deps.coord.release("wa-platform-webhook").catch(() => {});
       return "failed" as const;
     });

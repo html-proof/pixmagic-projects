@@ -328,7 +328,7 @@ export function Modal({ open, title, onClose, children, wide = false }: { open: 
 export function EstimateNote({ children }: { children?: ReactNode }) {
   return (
     <p className="rounded-lg border border-border bg-bg px-3 py-2 text-xs text-muted">
-      {children ?? "Pay figures are estimated gross wages from recorded hours and pay rates. Insights doesn't calculate tax or statutory deductions."}
+      {children ?? "Pay figures are estimated gross wages from recorded hours and pay rates. bizinsights doesn't calculate tax or statutory deductions."}
     </p>
   );
 }

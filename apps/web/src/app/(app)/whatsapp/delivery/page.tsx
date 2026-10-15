@@ -24,7 +24,7 @@ export default function DeliveryUpdates() {
               Many couriers don&apos;t report progress to Shopify. For those, customers get &ldquo;Shipped&rdquo; with the tracking number and link, and their tracking page says live
               delivery status isn&apos;t available, rather than inventing one.
             </li>
-            <li>Insights also asks Shopify every two hours where parcels in transit are, so updates arrive even when a webhook doesn&apos;t.</li>
+            <li>bizinsights also asks Shopify every two hours where parcels in transit are, so updates arrive even when a webhook doesn&apos;t.</li>
           </ul>
         }
       />

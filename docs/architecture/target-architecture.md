@@ -1,6 +1,6 @@
 # Target architecture
 
-Where the structure of Insights is heading, how far it is, and what is left. The shape doesn't
+Where the structure of bizinsights is heading, how far it is, and what is left. The shape doesn't
 change: a modular monolith in one pnpm workspace, deployed as one package (three Lambda functions on
 AWS; [ADR-001](architecture-decisions.md#adr-001-one-modular-monolith-one-deployable)). What
 the target adds is that every piece sits in the layer that owns it.

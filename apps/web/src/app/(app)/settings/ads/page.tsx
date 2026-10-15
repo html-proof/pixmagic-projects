@@ -33,7 +33,7 @@ const PROVIDERS: Array<{ id: Provider; name: string; sub: string; button: string
     name: "Google Ads",
     sub: "Search, Shopping, YouTube and Performance Max: spend, clicks, conversions",
     button: "Continue with Google Ads",
-    access: "Google Ads reporting (Google has no read-only scope; Insights only reads)",
+    access: "Google Ads reporting (Google has no read-only scope; bizinsights only reads)",
     Icon: GoogleIcon,
   },
   {
@@ -61,7 +61,7 @@ const OFFERED: Provider[] = ["google", "meta", "adsense"];
 
 /** What the callback's ?error= means, in words. A provider-specific message wins. */
 const ERRORS: Record<string, string> = {
-  denied: "You chose not to give Insights access, so nothing was connected.",
+  denied: "You chose not to give bizinsights access, so nothing was connected.",
   state_mismatch: "That sign-in started in another browser or tab. Please press the button again here.",
   state_expired: "That took a little too long. Please press the button again.",
   session_mismatch: "You were signed in as someone else when you came back. Sign in as yourself and try again.",
@@ -71,9 +71,9 @@ const ERRORS: Record<string, string> = {
   no_accounts_meta:
     "That Facebook login can't reach any ad account, so nothing was connected. If your ads run in a business portfolio, assign this login to the ad account in Meta Business settings → Ad accounts (admins have to assign themselves too). If your ads are on another Facebook login, log out of Facebook in this browser first. No ad account yet? Create one in Meta Ads Manager. Then press Connect again.",
   none_shared_meta:
-    "No ad account was shared with Insights on Facebook's screen, so nothing was connected. Press Connect again, choose to edit what Insights can access, and tick the ad accounts this store's ads run from.",
+    "No ad account was shared with bizinsights on Facebook's screen, so nothing was connected. Press Connect again, choose to edit what bizinsights can access, and tick the ad accounts this store's ads run from.",
   no_accounts_adsense: "That Google login has no AdSense account. Choose the Google account that owns your AdSense, or ask its owner to add this login as a user.",
-  not_approved_google: "Google is still approving Insights for live Google Ads accounts, so nothing was connected. This is on our side, not yours; please try again in a day or two.",
+  not_approved_google: "Google is still approving bizinsights for live Google Ads accounts, so nothing was connected. This is on our side, not yours; please try again in a day or two.",
   no_accounts_google:
     "That Google login has no Google Ads account, so nothing was connected. Choose the Google account you use at ads.google.com, or ask the Google Ads account's owner to add this login as a user. No Google Ads account yet? Create one at ads.google.com first.",
   manager_only_google:
@@ -82,7 +82,7 @@ const ERRORS: Record<string, string> = {
     "Google Ads won't report on the account that login reaches yet: its setup at ads.google.com isn't finished, or it's cancelled or suspended. Finish setting it up there, or choose another Google account.",
   no_refresh_token: "Google didn't grant lasting access. Please try again and allow access on Google's screen.",
   permission_missing: "The permission to read reports wasn't granted, so nothing could be connected. Press the button again and leave it ticked.",
-  permission_missing_meta: "Meta's ads_read permission wasn't granted, so Insights can't read your ad reports. Press Continue with Meta Ads again and allow it.",
+  permission_missing_meta: "Meta's ads_read permission wasn't granted, so bizinsights can't read your ad reports. Press Continue with Meta Ads again and allow it.",
   missing_params: "The platform didn't send everything back. Please try again.",
   temporarily_unavailable: "Something went wrong on our side. Please try again in a minute.",
 };
@@ -246,7 +246,7 @@ export default function AdAccountsPage() {
   const [pick, setPick] = useState<string | null>(null);
   // A sign-in came back with a login that reaches nothing: offer the platform's screen again.
   const [retry, setRetry] = useState<Provider | null>(null);
-  // Back from Facebook's own page without connecting: Facebook never says why to Insights, so this does.
+  // Back from Facebook's own page without connecting: Facebook never says why to bizinsights, so this does.
   const [backFromMeta, setBackFromMeta] = useState(false);
 
   // Coming back from Meta or Google: a problem to explain, or accounts to choose, for the store that was connected.
@@ -330,7 +330,7 @@ export default function AdAccountsPage() {
     run(`delete-${c.id}`, async () => {
       if (
         !window.confirm(
-          `Disconnect ${c.accountName ?? c.accountId}? Its access and every number fetched for it are deleted from Insights, and Insights gives up its access at ${INFO[c.provider].name} once no other connected account uses it. Your ads keep running.`,
+          `Disconnect ${c.accountName ?? c.accountId}? Its access and every number fetched for it are deleted from bizinsights, and bizinsights gives up its access at ${INFO[c.provider].name} once no other connected account uses it. Your ads keep running.`,
         )
       )
         return;
@@ -357,7 +357,7 @@ export default function AdAccountsPage() {
             <h1 className="text-lg font-semibold">Advertising integrations</h1>
             <p className="mt-1 text-sm text-muted">
               Connect Google Ads and Meta Ads to see what you spend on ads and what it brings, and Google AdSense to see what your site earns from ads.
-              Once connected, the numbers appear on your <Link className="text-accent underline" href="/dashboard">dashboard</Link> and refresh every hour. Insights
+              Once connected, the numbers appear on your <Link className="text-accent underline" href="/dashboard">dashboard</Link> and refresh every hour. bizinsights
               only reads: it can&apos;t create, change or pause your ads, or spend money.
             </p>
             <p className="mt-2 text-sm">
@@ -453,7 +453,7 @@ export default function AdAccountsPage() {
               )}
             </div>
 
-            {/* Facebook turns away anyone not added to Insights' Meta app on its own page: say so before sending them there (once). */}
+            {/* Facebook turns away anyone not added to bizinsights' Meta app on its own page: say so before sending them there (once). */}
             {manage && configured && !mine.length && p.id === "meta" && data?.restricted.meta && !backFromMeta && (
               <div className="mt-3">
                 <MetaTestersOnly />
@@ -462,7 +462,7 @@ export default function AdAccountsPage() {
 
             {!configured && data && (
               <p className="mt-3 rounded-lg border border-dashed border-border px-3 py-2 text-sm text-muted">
-                {p.name} sign-in is being switched on for Insights. Once it&apos;s on, this card shows a &ldquo;{p.button}&rdquo; button: there are no keys or codes
+                {p.name} sign-in is being switched on for bizinsights. Once it&apos;s on, this card shows a &ldquo;{p.button}&rdquo; button: there are no keys or codes
                 to copy.
               </p>
             )}
@@ -514,7 +514,7 @@ export default function AdAccountsPage() {
       )}
 
       <div className="card text-sm text-muted">
-        <h2 className="font-semibold text-text">What Insights reads</h2>
+        <h2 className="font-semibold text-text">What bizinsights reads</h2>
         <ul className="mt-2 list-disc space-y-1 pl-5">
           <li>For each ad campaign and day: what was spent, impressions, clicks, and the conversions and their value the platform counts.</li>
           <li>From AdSense, for each site and day: estimated earnings, page views, impressions and clicks.</li>

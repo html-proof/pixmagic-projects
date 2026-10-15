@@ -176,7 +176,7 @@ export default function LiveAttendancePage() {
       {header}
 
       {live.failing && data && (
-        <Alert kind="info">We can&apos;t reach Insights at the moment, so these figures may be a little behind{updated ? ` (last updated ${updated})` : ""}. We&apos;ll keep trying.</Alert>
+        <Alert kind="info">We can&apos;t reach bizinsights at the moment, so these figures may be a little behind{updated ? ` (last updated ${updated})` : ""}. We&apos;ll keep trying.</Alert>
       )}
 
       {data?.holiday && (

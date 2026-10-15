@@ -134,7 +134,7 @@ Shopify HMAC of the raw body ||||||||||| GET | `/workspaces/:ws/stores/:storeId/
 | GET | `/workspaces/:ws/stores/:storeId/whatsapp/contacts/summary` | dashboard:read | whatsappOps.ts |
 | POST | `/workspaces/:ws/stores/:storeId/whatsapp/contacts/opt-out` | customers:contact | whatsappOps.ts |
 | GET | `/webhooks/whatsapp` | Meta verify token | whatsappPublic.ts |
-| POST | `/webhooks/whatsapp` | `X-Hub-Signature-256` (rate-limited when not Insights' own app) | whatsappPublic.ts |
+| POST | `/webhooks/whatsapp` | `X-Hub-Signature-256` (rate-limited when not bizinsights' own app) | whatsappPublic.ts |
 | GET | `/public/track/:token` | public (unguessable token / rate-limited) | whatsappPublic.ts |
 | GET | `/public/review/:token` | public (unguessable token / rate-limited) | whatsappPublic.ts |
 | POST | `/public/review/:token` | public (unguessable token / rate-limited) | whatsappPublic.ts |

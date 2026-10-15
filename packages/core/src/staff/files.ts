@@ -307,7 +307,7 @@ export class PdfDoc {
     });
     objs[catalog - 1] = `<< /Type /Catalog /Pages ${pagesObj} 0 R >>`;
     objs[pagesObj - 1] = `<< /Type /Pages /Kids [${pageIds.map((p) => `${p} 0 R`).join(" ")}] /Count ${pageIds.length} >>`;
-    const info = add(`<< /Title (${pdfText(meta.title)}) /Producer (Insights) >>`);
+    const info = add(`<< /Title (${pdfText(meta.title)}) /Producer (bizinsights) >>`);
     // Byte offsets: every string here is ASCII after pdfText escaping, so length = bytes.
     let body = "%PDF-1.4\n%\xE2\xE3\xCF\xD3\n";
     const offsets: number[] = [];

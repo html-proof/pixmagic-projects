@@ -2,7 +2,7 @@
 import { motion, useTransform, type MotionValue } from "motion/react";
 import { useId, type ReactNode } from "react";
 import { easeOut, lerp, segment } from "@/lib/motion";
-import { InsightMark } from "../shared/InsightMark";
+import { BrandMark } from "@/components/Brand";
 import { EMBLEM_IN, ORB, ORB_POINT, SLOTS, type SlotId } from "./heroLayout";
 
 /**
@@ -260,7 +260,7 @@ function EmergingCard({
 }
 
 /**
- * Stage 4–5: the core turns into the Insights dashboard. Business health grows out of the core
+ * Stage 4–5: the core turns into the bizinsights dashboard. Business health grows out of the core
  * first (the sphere shrinks into its emblem), then Sales, Conversion, Customers and Products
  * scale out to their grid slots and the window frame forms around them. Values are "—" and
  * skeleton bars: this shows the shape of the product, never invented numbers.
@@ -286,7 +286,7 @@ export function HeroDashboardReveal({
       >
         <div className="flex h-[9%] items-center justify-between px-[3%]">
           <span className="flex items-center gap-2 text-[11.5px] font-medium text-lp-text-2 md:text-[12.5px]">
-            <InsightMark size={16} className="text-lp-text" />
+            <BrandMark size={16} />
             Overview
           </span>
           <span className="lp-eyebrow rounded-full border border-lp-line px-2.5 py-1 text-[9.5px] md:text-[10.5px]">vs previous period</span>

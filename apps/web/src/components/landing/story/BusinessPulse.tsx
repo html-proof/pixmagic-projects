@@ -72,7 +72,7 @@ const PHASE_LABEL: Record<Phase, string> = { wait: "Listening", stream: "Receivi
 
 /**
  * Business Pulse: the hinge between the conceptual opening and the product. Shopify signals arrive
- * one at a time, Insights gathers related ones into sales and customer activity, then concludes.
+ * one at a time, bizinsights gathers related ones into sales and customer activity, then concludes.
  * The sequence plays once when the timeline scrolls into view, then the view rests (only the live
  * dot breathes). Under reduced motion it renders the grouped, concluded state directly.
  */
@@ -114,7 +114,7 @@ export function BusinessPulse() {
           id="pulse-title"
           eyebrow="Business pulse"
           title="Your business. One pulse."
-          lead="Insights brings the most important signals from your Shopify business into one continuously updated view."
+          lead="bizinsights brings the most important signals from your Shopify business into one continuously updated view."
         />
 
         <motion.div
@@ -256,7 +256,7 @@ export function BusinessPulse() {
               </div>
               <SrOnly>
                 Signals arrive one at a time: order received, checkout completed, refund processed, returning customer, product gaining
-                momentum. Insights groups the order, refund and product signals as sales activity, and the checkout and returning
+                momentum. bizinsights groups the order, refund and product signals as sales activity, and the checkout and returning
                 customer signals as customer activity.
               </SrOnly>
             </div>
@@ -296,7 +296,7 @@ function LiveDot({ reduced }: { reduced: boolean }) {
 
 /**
  * The timeline's left gutter: while signals stream it is a single spine with a node per signal;
- * when Insights groups them the spine gives way to two brackets that gather each group under its label.
+ * when bizinsights groups them the spine gives way to two brackets that gather each group under its label.
  */
 function TimelineGuides({ arrived, grouped, reduced, at }: { arrived: boolean; grouped: boolean; reduced: boolean; at: At }) {
   const spineTop = streamY(0) + ROW / 2;

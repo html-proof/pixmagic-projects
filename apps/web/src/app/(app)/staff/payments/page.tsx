@@ -14,7 +14,7 @@ import { fmtDateTime, fmtDay, fmtMoney, fmtSpan, useStaff, type EmployeeRow, typ
 // ---------------------------------------------------------------------------------------------
 // Payment history: every payment recorded against approved payroll, with totals, and marking a
 // payment as failed or reversed. Recording a payment moves no money; it keeps track of what was
-// paid outside Insights.
+// paid outside bizinsights.
 // ---------------------------------------------------------------------------------------------
 
 interface PaymentList {

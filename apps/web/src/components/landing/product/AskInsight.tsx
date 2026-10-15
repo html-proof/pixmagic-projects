@@ -15,7 +15,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { usePauseWhenHidden } from "@/hooks/usePauseWhenHidden";
 import { useReducedMotion } from "@/hooks/useReducedMotion";
 import { EASE, riseIn, seeded } from "@/lib/motion";
-import { InsightMark } from "../shared/InsightMark";
+import { BrandMark } from "@/components/Brand";
 import { IllustrativeNote, SectionIntro } from "../shared/ui";
 
 const QUERY = "Why did conversion fall this week?";
@@ -113,7 +113,7 @@ type RowState = "waiting" | "active" | "done";
 
 /**
  * "Ask the business": a command-palette window whose question types itself once it scrolls into
- * view, then shows the analysis running and the three signals it found. Insights has no question
+ * view, then shows the analysis running and the three signals it found. bizinsights has no question
  * box; its dashboard highlights answer in plain sentences, which the caption says plainly.
  */
 export function AskInsight() {
@@ -196,8 +196,8 @@ export function AskInsight() {
         <motion.div ref={stageRef} {...riseIn(0.1, 40)} className="relative mx-auto mt-14 max-w-[1120px] md:mt-20">
           <div className="sr-only">
             <p>
-              Illustration of a question window. The question “{QUERY}” is answered after Insights analyzes checkout, products,
-              pages and traffic. Insights found three contributing signals:
+              Illustration of a question window. The question “{QUERY}” is answered after bizinsights analyzes checkout, products,
+              pages and traffic. bizinsights found three contributing signals:
             </p>
             <ul>
               {SIGNALS.map((s) => (
@@ -219,8 +219,8 @@ export function AskInsight() {
 
             {/* Query bar */}
             <div className="flex items-center gap-3 border-b border-lp-line px-4 py-4 md:gap-4 md:px-7 md:py-6">
-              <InsightMark size={26} className="shrink-0 text-lp-text md:hidden" />
-              <InsightMark size={32} className="hidden shrink-0 text-lp-text md:block" />
+              <BrandMark size={26} className="shrink-0 md:hidden" />
+              <BrandMark size={32} className="hidden shrink-0 md:block" />
               <QueryText run={phase === PHASE.typing} complete={phase >= PHASE.submitted} onDone={onTyped} />
               <motion.span
                 initial={false}
@@ -289,7 +289,7 @@ export function AskInsight() {
                       <span className="absolute inset-0 rounded-full bg-lp-violet/25 blur-[6px]" />
                       <span className="relative size-2 rounded-full bg-lp-violet-bright" />
                     </span>
-                    Insights found three contributing signals.
+                    bizinsights found three contributing signals.
                   </p>
                   <span className="flex items-center gap-4 pl-[34px] font-lp-mono text-[10.5px] uppercase tracking-[0.12em] text-lp-muted sm:pl-0">
                     <span className="flex items-center gap-2">
@@ -315,7 +315,7 @@ export function AskInsight() {
           {/* Same three columns and inner padding as the cards above, so the edges line up. */}
           <div className="mt-8 grid gap-8 md:mt-10 md:px-7 lg:grid-cols-3 lg:gap-4">
             <p className="max-w-[440px] text-[14.5px] leading-relaxed text-lp-muted lg:pr-6">
-              Illustrative. Insights&apos; highlights answer questions like these in plain sentences on your dashboard.
+              Illustrative. bizinsights&apos; highlights answer questions like these in plain sentences on your dashboard.
             </p>
             <div className="lg:col-span-2">
               <p id="ask-insight-prompts" className="lp-eyebrow">

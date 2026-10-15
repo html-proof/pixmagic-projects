@@ -2,11 +2,12 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { BellRing, Eye, LogOut, ShieldCheck } from "lucide-react";
 import { ContactCard, LegalPage, LegalSection, SupportEmail, sectionsOf } from "@/components/legal/LegalPage";
+import { BRAND_NAME } from "@/components/Brand";
 import { CONTACT } from "@/lib/contact";
 
 export const metadata: Metadata = {
-  title: "Terms of service — Insights",
-  description: "The terms on which Insights provides its analytics dashboard for Shopify merchants.",
+  title: "Terms of service — bizinsights",
+  description: "The terms on which bizinsights provides its analytics dashboard for Shopify merchants.",
 };
 
 /**
@@ -23,7 +24,7 @@ const UPDATED = "2026-10-16";
 
 const TOC = [
   { id: "who-we-are", title: "Who we are" },
-  { id: "the-service", title: "What Insights does" },
+  { id: "the-service", title: "What bizinsights does" },
   { id: "your-account", title: "Your account and workspace" },
   { id: "acceptable-use", title: "Acceptable use" },
   { id: "messages", title: "Messages you send" },
@@ -43,12 +44,12 @@ const HIGHLIGHTS = [
   {
     icon: Eye,
     title: "Read-only on your ad accounts",
-    text: "Insights never creates, changes or pauses an ad, never touches a budget or billing, and never spends money.",
+    text: "bizinsights never creates, changes or pauses an ad, never touches a budget or billing, and never spends money.",
   },
   {
     icon: ShieldCheck,
     title: "Your data stays yours",
-    text: "We use it only to run Insights for you. We do not sell it or use it for advertising or to train models.",
+    text: "We use it only to run bizinsights for you. We do not sell it or use it for advertising or to train models.",
   },
   {
     icon: LogOut,
@@ -72,7 +73,7 @@ export default function TermsPage() {
       toc={TOC}
       intro={
         <p>
-          These terms apply when you use Insights, the analytics dashboard for Shopify merchants. Please read them together with our{" "}
+          These terms apply when you use bizinsights, the analytics dashboard for Shopify merchants. Please read them together with our{" "}
           <Link className="underline" href="/privacy">
             privacy policy
           </Link>
@@ -96,23 +97,24 @@ export default function TermsPage() {
 
       <LegalSection {...section("who-we-are")}>
         <p>
-          Insights is provided by {CONTACT.legalName} (&ldquo;we&rdquo;, &ldquo;us&rdquo;, &ldquo;our&rdquo;)
+          {CONTACT.legalName === BRAND_NAME ? "These terms are between you and bizinsights" : <>bizinsights is provided by {CONTACT.legalName}</>}{" "}
+          (&ldquo;we&rdquo;, &ldquo;us&rdquo;, &ldquo;our&rdquo;)
           {CONTACT.postalAddress && <>, {CONTACT.postalAddress}</>}. You can reach us at <SupportEmail subject="Terms of service" />.
         </p>
         <p>
           By creating an account or connecting a store you agree to these terms, on behalf of yourself and of the business you connect.
-          If you do not agree, please do not use Insights.
+          If you do not agree, please do not use bizinsights.
         </p>
       </LegalSection>
 
       <LegalSection {...section("the-service")}>
         <p>
-          Insights reads the data you choose to connect and shows it to you as reports in your own workspace: your Shopify store and,
-          only if you connect them, your Google Ads, Google AdSense and Meta Ads accounts. If you turn them on, Insights also sends the
+          bizinsights reads the data you choose to connect and shows it to you as reports in your own workspace: your Shopify store and,
+          only if you connect them, your Google Ads, Google AdSense and Meta Ads accounts. If you turn them on, bizinsights also sends the
           WhatsApp messages and emails you set up (see section 5).
         </p>
         <p>
-          Insights only reads from Google Ads, AdSense and Meta Ads. It never creates, changes or pauses an ad, never changes a budget or
+          bizinsights only reads from Google Ads, AdSense and Meta Ads. It never creates, changes or pauses an ad, never changes a budget or
           billing setting, and never spends money on your behalf. What we read, keep and delete is set out in the{" "}
           <Link href="/privacy">privacy policy</Link>, which forms part of these terms.
         </p>
@@ -130,56 +132,56 @@ export default function TermsPage() {
       </LegalSection>
 
       <LegalSection {...section("acceptable-use")}>
-        <p>Please don&apos;t misuse Insights. In particular, do not:</p>
+        <p>Please don&apos;t misuse bizinsights. In particular, do not:</p>
         <ul>
           <li>try to reach another workspace&apos;s data, or get around the roles and limits of your own;</li>
           <li>disrupt, overload or probe the service, or reverse-engineer it except where the law allows;</li>
-          <li>use Insights to send unlawful, misleading or unsolicited messages;</li>
-          <li>resell or share access to Insights without our written agreement.</li>
+          <li>use bizinsights to send unlawful, misleading or unsolicited messages;</li>
+          <li>resell or share access to bizinsights without our written agreement.</li>
         </ul>
       </LegalSection>
 
       <LegalSection {...section("messages")}>
         <p>
-          If you turn on WhatsApp messaging or connect an email account, Insights sends the messages you set up, in your business&apos;s
+          If you turn on WhatsApp messaging or connect an email account, bizinsights sends the messages you set up, in your business&apos;s
           name and from the accounts you connect. You are responsible for their content, for having each recipient&apos;s consent where
           the law requires it, and for following the anti-spam and privacy laws that apply to you and the policies of WhatsApp and your
           email provider.
         </p>
         <p>
-          Insights records opt-outs and does not message anyone again who replied STOP on WhatsApp or unsubscribed from your emails.
+          bizinsights records opt-outs and does not message anyone again who replied STOP on WhatsApp or unsubscribed from your emails.
         </p>
       </LegalSection>
 
       <LegalSection {...section("your-data")}>
         <p>
-          The data you connect stays yours. You allow us to process it only to provide Insights to you. We do not sell it, we do not use
+          The data you connect stays yours. You allow us to process it only to provide bizinsights to you. We do not sell it, we do not use
           it for advertising, and we do not use it to train machine-learning models.
         </p>
         <p>
-          You can disconnect any store or account at any time in Settings, which deletes what Insights fetched from it. How to remove
+          You can disconnect any store or account at any time in Settings, which deletes what bizinsights fetched from it. How to remove
           the data that came from Google and Meta is explained on <Link href="/data-deletion">Delete your data</Link>.
         </p>
       </LegalSection>
 
       <LegalSection {...section("other-platforms")}>
         <p>
-          Shopify, Google and Meta provide the data Insights shows, and deliver the messages it sends, under their own terms, which you
-          accept with them. If one of them changes or withdraws access, the parts of Insights that depend on it may stop working until
+          Shopify, Google and Meta provide the data bizinsights shows, and deliver the messages it sends, under their own terms, which you
+          accept with them. If one of them changes or withdraws access, the parts of bizinsights that depend on it may stop working until
           it is restored.
         </p>
       </LegalSection>
 
       <LegalSection {...section("fees")}>
         <p>
-          Where Insights offers a paid plan, its price is shown before you choose it, and nothing is charged until you approve the plan in
+          Where bizinsights offers a paid plan, its price is shown before you choose it, and nothing is charged until you approve the plan in
           Shopify. Shopify bills the charge with your store&apos;s Shopify invoice.
         </p>
       </LegalSection>
 
       <LegalSection {...section("availability")}>
         <p>
-          We work to keep Insights running and its figures accurate, but we provide it &ldquo;as is&rdquo; and cannot promise it will
+          We work to keep bizinsights running and its figures accurate, but we provide it &ldquo;as is&rdquo; and cannot promise it will
           always be available or free of errors. Figures come from the connected platforms and can be delayed or later corrected by them;
           ad platforms, for example, credit conversions late. Please check important decisions against the source platform.
         </p>
@@ -188,7 +190,7 @@ export default function TermsPage() {
       <LegalSection {...section("liability")}>
         <p>
           To the extent the law allows, we are not liable for indirect or consequential loss, or for loss of profit, revenue or data,
-          arising from your use of Insights.
+          arising from your use of bizinsights.
         </p>
         <p>
           Nothing in these terms excludes or limits rights you have under consumer law that cannot be excluded, including under the
@@ -198,7 +200,7 @@ export default function TermsPage() {
 
       <LegalSection {...section("ending")}>
         <p>
-          You can stop using Insights at any time: uninstall the app in Shopify and disconnect your accounts, or ask us at{" "}
+          You can stop using bizinsights at any time: uninstall the app in Shopify and disconnect your accounts, or ask us at{" "}
           <SupportEmail subject="Delete my account" /> to delete your workspace and account.
         </p>
         <p>We may suspend a workspace that breaks these terms, and will tell you why.</p>

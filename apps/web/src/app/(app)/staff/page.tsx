@@ -114,7 +114,7 @@ export default function StaffOverview() {
         k ? (
           <>
             This month so far ({fmtSpan(k.range.from, k.range.to)}) · updated {new Date(k.asOf).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}
-            {kpis.failing && " · can't reach Insights, showing the last update"}
+            {kpis.failing && " · can't reach bizinsights, showing the last update"}
           </>
         ) : (
           "Your team's hours, attendance and pay at a glance."

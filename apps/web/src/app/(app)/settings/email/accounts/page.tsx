@@ -14,19 +14,19 @@ import { useEmail, type AccountsResponse, type AccountView, type SenderView } fr
 /** What a callback's `?error=` means, in words. */
 const OAUTH_ERRORS: Record<string, string> = {
   denied: "You cancelled on the provider's screen. Nothing was connected.",
-  consent_required: "An administrator of your Microsoft organization must approve Insights before mailboxes can connect. Ask them to grant admin consent, then try again.",
+  consent_required: "An administrator of your Microsoft organization must approve bizinsights before mailboxes can connect. Ask them to grant admin consent, then try again.",
   permission_missing: "The permission to send email wasn't granted. Connect again and leave “Send email on your behalf” ticked.",
-  no_refresh_token: "The provider didn't grant offline access, so Insights couldn't send while you're away. Remove Insights from your account's connected apps, then connect again.",
+  no_refresh_token: "The provider didn't grant offline access, so bizinsights couldn't send while you're away. Remove bizinsights from your account's connected apps, then connect again.",
   different_account: "You signed in as a different mailbox than the one you were reconnecting.",
   state_mismatch: "That sign-in wasn't started from this browser. Start again from this page.",
   state_expired: "That sign-in took too long or was already used. Start again.",
-  session_mismatch: "You're signed in to Insights as someone else than the person who started this connection.",
+  session_mismatch: "You're signed in to bizinsights as someone else than the person who started this connection.",
   forbidden: "Your role no longer allows connecting email accounts.",
   not_configured: "This provider isn't set up on this server yet.",
   conditional_access: "Your organization's sign-in policy blocked the connection (for example multi-factor authentication or a trusted device). Try again from a compliant device.",
   account_disabled_by_provider: "The provider says this account is disabled.",
   auth_failed: "The provider refused the sign-in.",
-  account_failed: "This account has no mailbox Insights can send from.",
+  account_failed: "This account has no mailbox bizinsights can send from.",
   provider_unavailable: "The provider couldn't be reached. Try again in a moment.",
   temporarily_unavailable: "Something went wrong on our side. Try again in a moment.",
 };
@@ -67,7 +67,7 @@ function AccountsInner() {
     <div className="space-y-4">
       <PageHeader
         title="Email accounts"
-        sub="The mailboxes Insights sends from. Credentials stay encrypted on Insights' servers and are never shown again."
+        sub="The mailboxes bizinsights sends from. Credentials stay encrypted on bizinsights' servers and are never shown again."
         actions={
           manage && (
             <button className="btn-primary" onClick={() => setAdding(true)}>
@@ -232,7 +232,7 @@ function AccountCard({ account: a, manage, onChange }: { account: AccountView; m
         onConfirm={async () => {
           await act("disconnect", "disconnect the account", async () => {
             const r = await api<{ revocation: string; rulesDisabled: number; messagesCancelled: number }>(`${base}/accounts/${a.id}`, { method: "DELETE" });
-            const parts = [r.revocation === "revoked" ? "Access revoked at the provider." : oauth ? "Stored tokens deleted. Remove Insights from your Microsoft account's apps to revoke it there too." : "Stored password deleted."];
+            const parts = [r.revocation === "revoked" ? "Access revoked at the provider." : oauth ? "Stored tokens deleted. Remove bizinsights from your Microsoft account's apps to revoke it there too." : "Stored password deleted."];
             if (r.rulesDisabled) parts.push(`${r.rulesDisabled} automation${r.rulesDisabled === 1 ? " was" : "s were"} turned off.`);
             if (r.messagesCancelled) parts.push(`${r.messagesCancelled} waiting email${r.messagesCancelled === 1 ? " was" : "s were"} cancelled.`);
             return parts.join(" ");
@@ -240,7 +240,7 @@ function AccountCard({ account: a, manage, onChange }: { account: AccountView; m
           setConfirm(null);
         }}
       >
-        <p>Insights deletes the stored credentials, stops sending from this address, cancels emails waiting for it and turns off automations that send from it. Sent-email history stays.</p>
+        <p>bizinsights deletes the stored credentials, stops sending from this address, cancels emails waiting for it and turns off automations that send from it. Sent-email history stays.</p>
       </ConfirmDialog>
       <EditAccountModal open={editing} account={a} onClose={() => setEditing(false)} onSaved={onChange} />
     </section>
@@ -324,7 +324,7 @@ function Senders({ account: a, manage, onChange }: { account: AccountView; manag
       )}
       {a.connectionMethod === "smtp" && a.senders.some((s) => s.status === "pending") && (
         <p className="border-t border-border px-3 py-2 text-xs text-muted">
-          An SMTP address sends only once it's proven: enter the code Insights sends to it through this account, or verify the address's domain under Domains.
+          An SMTP address sends only once it's proven: enter the code bizinsights sends to it through this account, or verify the address's domain under Domains.
         </p>
       )}
     </div>
@@ -389,7 +389,7 @@ function AddAccountModal({ open, onClose, configured, smtpAvailable, onAdded }: 
             );
           })}
           <Note>
-            Insights asks Google and Microsoft only for permission to send email as you. It can&apos;t read, delete or search your mailbox. You can disconnect at any time.
+            bizinsights asks Google and Microsoft only for permission to send email as you. It can&apos;t read, delete or search your mailbox. You can disconnect at any time.
           </Note>
         </div>
       ) : (
@@ -438,7 +438,7 @@ function SmtpForm({ onCancel, onDone, existing }: { onCancel: () => void; onDone
       const r = existing
         ? await api<{ test: { ok: boolean; code?: string; message?: string } }>(`${base}/smtp/connections/${existing.id}`, { method: "PATCH", body: { ...body, emailAddress: undefined } })
         : await api<{ test: { ok: boolean; code?: string; message?: string } }>(`${base}/smtp/connections`, { method: "POST", body });
-      await onDone(r.test.ok ? "Connected: Insights signed in to the SMTP server. Verify the sender address to start sending." : `Saved, but the connection test failed: ${errorLabel(r.test.code) ?? r.test.message}`, r.test.ok);
+      await onDone(r.test.ok ? "Connected: bizinsights signed in to the SMTP server. Verify the sender address to start sending." : `Saved, but the connection test failed: ${errorLabel(r.test.code) ?? r.test.message}`, r.test.ok);
     } catch (e2) {
       setErr(actionError(e2, "save the SMTP connection"));
     } finally {

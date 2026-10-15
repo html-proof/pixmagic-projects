@@ -3,8 +3,8 @@ import Link from "next/link";
 import { ContactCard, LegalPage, LegalSection } from "@/components/legal/LegalPage";
 
 export const metadata: Metadata = {
-  title: "Support — Insights",
-  description: "How to get help with Insights, and answers to the questions merchants ask first.",
+  title: "Support — bizinsights",
+  description: "How to get help with bizinsights, and answers to the questions merchants ask first.",
 };
 
 /**
@@ -21,7 +21,7 @@ export default function SupportPage() {
       intro={<p>How to reach us, and answers to the questions merchants ask most often.</p>}
     >
       <LegalSection id="contact" title="Contact us">
-        <ContactCard title="Email our support team" subject="Insights support">
+        <ContactCard title="Email our support team" subject="bizinsights support">
           We reply within one business day. Please include your <strong>store&apos;s .myshopify.com address</strong> and, where it
           applies, the dates the figures look wrong for.
         </ContactCard>
@@ -43,7 +43,7 @@ export default function SupportPage() {
           </Faq>
 
           <Faq q="Why can't I see sessions, conversion rate or new versus returning customers?">
-            Those need extra permissions — storefront tracking and customer records — that Insights does not request when you install
+            Those need extra permissions — storefront tracking and customer records — that bizinsights does not request when you install
             it. Each card that needs one has an Enable button on your dashboard that asks Shopify for it, and you can withdraw it at any
             time from Settings → Stores. Until then we hide what we cannot calculate rather than show an empty chart.
           </Faq>
@@ -54,7 +54,7 @@ export default function SupportPage() {
           </Faq>
 
           <Faq q="How do I disconnect?">
-            Uninstall Insights from your Shopify admin under Settings → Apps and sales channels. Your access tokens are destroyed as soon
+            Uninstall bizinsights from your Shopify admin under Settings → Apps and sales channels. Your access tokens are destroyed as soon
             as Shopify notifies us. To remove the imported history as well, disconnect the store in Settings → Stores, or write to us and
             we will delete your whole workspace and account.
           </Faq>

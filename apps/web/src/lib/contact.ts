@@ -1,5 +1,5 @@
 /**
- * The facts about the business behind Insights that the code cannot know: who the data controller
+ * The facts about the business behind bizinsights that the code cannot know: who the data controller
  * is, how a merchant reaches support, and which law governs the policy.
  *
  * Shopify app store requirement 4.1 requires a reachable support contact, and the listing requires a
@@ -18,7 +18,7 @@ export const CONTACT: Readonly<{
   /** Postal address of the controller. Required by GDPR art. 13 where it applies. */
   postalAddress: string;
 }> = {
-  legalName: "Insight",
+  legalName: "bizinsights",
   supportEmail: "sales@ikorex.com.au",
   jurisdiction: "Victoria, Australia",
   postalAddress: "",

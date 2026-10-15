@@ -6,7 +6,7 @@
  * may have changed since it was scheduled (account, workspace, automation, sender, suppression,
  * sending limits), renders it, hands it to the provider, and records exactly what the provider
  * said. Email is an outside side effect, so exactly-once isn't promised: what is promised is that
- * nothing is sent twice by Insights' own retries. A send that may have reached the provider without
+ * nothing is sent twice by bizinsights' own retries. A send that may have reached the provider without
  * an answer becomes `unknown` and is never retried on its own.
  */
 import { randomBytes } from "node:crypto";

@@ -1,6 +1,6 @@
 # Security audit, 2026-10-10
 
-> Historical record (2026-10-10): written when Insights ran on Cloudflare Workers. It now runs on
+> Historical record (2026-10-10): written when bizinsights ran on Cloudflare Workers. It now runs on
 > AWS: see [aws-architecture.md](aws-architecture.md) and, for the current model, [security.md](security.md).
 
 **Scope:** this repository at `1e77f3a` (main): the Worker (`apps/cloudflare`), API (`apps/api`),
