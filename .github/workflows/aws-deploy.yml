@@ -39,7 +39,7 @@ jobs:
         env: { DATABASE_URL: "postgresql://build:build@localhost:5432/build" }
       - name: Unit tests (AWS adapters, CDK)
         run: pnpm --filter @app/aws --filter @infra/cdk test
-      - uses: aws-actions/configure-aws-credentials@v5
+      - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ap-southeast-2
