@@ -4,6 +4,7 @@ import { dbReachable, systemDb, withTenant } from "@app/db";
 import {
   AD_PROVIDER_NAME,
   adsConfigured,
+  adsRestricted,
   adsenseAccounts,
   adsenseAuthorizeUrl,
   adsenseConfig,
@@ -213,13 +214,13 @@ async function waitingOutDb<T>(deps: Deps, deadline: number, step: () => Promise
 }
 
 export function adsRoutes(app: App, deps: Deps) {
-  /** Connected ad accounts for a store, and which platforms this server can connect at all. */
+  /** Connected ad accounts for a store, which platforms this server can connect at all, and which only for the people added to its app. */
   app.get("/workspaces/:ws/stores/:storeId/ads", async (c) => {
     const { ws, storeId } = c.req.param();
     await requireWorkspace(c, deps, ws, "dashboard:read");
     await storeInWorkspace(ws, storeId);
     const rows = await withTenant(ws, (tx) => tx.adConnection.findMany({ where: { workspaceId: ws, storeId }, orderBy: [{ provider: "asc" }, { createdAt: "asc" }] }));
-    return c.json({ configured: adsConfigured(), connections: rows.map(publicConnection) });
+    return c.json({ configured: adsConfigured(), restricted: adsRestricted(), connections: rows.map(publicConnection) });
   });
 
   /** Step 1: where to send the browser to approve read access to ads. */

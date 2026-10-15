@@ -27,6 +27,8 @@ SHOPIFY_API_SECRET=
 META_APP_ID=
 META_APP_SECRET=
 META_CONFIG_ID=
+# "1" once the Meta app has Advanced Access to ads_read; empty: Settings says only the app's testers can connect.
+META_ADS_ADVANCED_ACCESS=
 GOOGLE_ADS_CLIENT_ID=
 GOOGLE_ADS_CLIENT_SECRET=
 GOOGLE_ADS_ENABLED=

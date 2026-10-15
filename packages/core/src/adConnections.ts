@@ -61,6 +61,16 @@ export function adsenseConfig(fetchImpl?: FetchLike): AdsenseConfig | null {
 
 export const adsConfigured = (): Record<AdProvider, boolean> => ({ meta: metaConfig() !== null, google: googleConfig() !== null, adsense: adsenseConfig() !== null });
 
+/**
+ * Platforms whose sign-in only lets in the people added to Insights' own app: Meta, until ads_read
+ * has Advanced Access (META_ADS_ADVANCED_ACCESS). Facebook turns everyone else away on its own page.
+ */
+export const adsRestricted = (): Record<AdProvider, boolean> => ({
+  meta: metaConfig() !== null && !switchedOn(env().META_ADS_ADVANCED_ACCESS),
+  google: false,
+  adsense: false,
+});
+
 /** The platform's name in messages. */
 export const AD_PROVIDER_NAME: Record<AdProvider, string> = { meta: "Meta", google: "Google Ads", adsense: "Google AdSense" };
 

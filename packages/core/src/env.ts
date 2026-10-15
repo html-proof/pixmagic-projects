@@ -51,6 +51,13 @@ const schema = z.object({
   META_API_VERSION: z.string().default("v25.0"),
   /** Facebook Login for Business configuration id (public). Empty: classic `scope=ads_read`. */
   META_CONFIG_ID: z.string().optional().default(""),
+  /**
+   * "1" once Meta has granted the app Advanced Access to ads_read (App Review, which needs Business
+   * Verification). Until then Facebook lets only people with a role on the app (administrators,
+   * developers, testers) grant it; anyone else gets Facebook's own "Feature Unavailable" page, which
+   * never comes back to Insights. Off, Settings says so before sending people to Facebook.
+   */
+  META_ADS_ADVANCED_ACCESS: z.string().optional().default(""),
   GOOGLE_ADS_CLIENT_ID: z.string().optional().default(""),
   GOOGLE_ADS_CLIENT_SECRET: z.string().optional().default(""),
   /**

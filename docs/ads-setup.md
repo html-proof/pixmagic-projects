@@ -70,6 +70,7 @@ without Google Ads API access.
 | `META_APP_ID` | `apps/cloudflare/wrangler.jsonc` → `vars` | no |
 | `META_APP_SECRET` | `npx wrangler secret put META_APP_SECRET` | **yes** |
 | `META_CONFIG_ID` | `wrangler.jsonc` → `vars` (optional: Facebook Login for Business configuration) | no |
+| `META_ADS_ADVANCED_ACCESS` | `wrangler.jsonc` → `vars`: `"1"` once Meta grants Advanced Access to `ads_read` (empty: Settings says only the app's testers can connect) | no |
 | `GOOGLE_ADS_CLIENT_ID` | `wrangler.jsonc` → `vars` (Google Ads **and** AdSense) | no |
 | `GOOGLE_ADS_CLIENT_SECRET` | `npx wrangler secret put GOOGLE_ADS_CLIENT_SECRET` (Google Ads **and** AdSense) | **yes** |
 | `GOOGLE_ADS_ENABLED` | `wrangler.jsonc` → `vars`: `"1"` once the Cloud project has Explorer access or above | no |
@@ -122,7 +123,8 @@ for Advanced Access to ads_read before merchants outside the app's roles can con
    - a screen recording of the connect flow and the Ads card;
    - an explanation that the data is shown read-only to the advertiser who connected it.
 
-   Expect a few days to a few weeks.
+   Expect a few days to a few weeks. Once Meta grants it, set `META_ADS_ADVANCED_ACCESS` to `"1"` and deploy: the
+   "only testers can connect" note on the Meta Ads cards goes away.
 6. Switch the app to **Live**.
 
 **Token lifetime:** Meta user tokens last about **60 days** and can't be renewed silently. Settings shows "Meta access ends in N days" from 14 days before. When it ends, the account shows **Needs reconnecting** and pressing **Continue with Meta** again renews it. History is kept.
@@ -132,6 +134,31 @@ for Advanced Access to ads_read before merchants outside the app's roles can con
 - `error=no_accounts`: the login reaches no ad account. Business-portfolio ad accounts need the person assigned to them in Business settings → Ad accounts (admins too); a different Facebook login means logging out of Facebook in that browser first, since Facebook has no account chooser.
 
 The callback logs `ads: nothing to connect for this login` with the reason and the account ids the grant names.
+
+### Facebook says "Feature Unavailable"
+
+"Facebook Login is currently unavailable for this app, since we are updating additional details for this app. Please try
+again later." is Facebook's own page, shown instead of its login. Facebook never sends the person back to Insights, so
+nothing reaches our logs. Two causes, both fixed in Meta, not in code:
+
+1. **The Facebook account has no role on the app** (the usual one, for anyone other than the app's admin). While
+   `ads_read` has only Standard Access ("Ready for testing"), Meta lets only the app's administrators, developers and
+   testers grant it.
+   - Now: add the person under App roles → Roles → **Testers** (by name, Facebook ID or username). They accept at
+     <https://developers.facebook.com/requests/>, then press Continue with Meta Ads again.
+   - For everyone: Advanced Access to `ads_read` (step 5 above), which needs Business Verification of a registered business.
+2. **Meta has paused the app's login for everyone, admin included.** Open <https://developers.facebook.com/apps> with the
+   admin's Facebook account. If it shows "Account confirmation needed: We've noticed unusual activity on this developer
+   account", press **Confirm Account** and finish Meta's steps. Also look for required actions on the app dashboard.
+   Seen on 2026-10-14 and again on 2026-10-15. A second administrator (another Facebook account of the owner's) keeps the
+   app manageable while one account is blocked. Keep browser automation off developers.facebook.com: it is the likely
+   trigger.
+
+What Insights does about it:
+- While `META_ADS_ADVANCED_ACCESS` isn't `"1"`, the Meta Ads card on Settings → Advertising and on Connect your business
+  says, before the button sends anyone to Facebook, that only testers can connect and how to ask to be added. The link
+  goes to the support email from `apps/web/src/lib/contact.ts`, or to `/support` while that's blank.
+- Someone who presses Back from Facebook's page sees what it meant. The button doesn't stay on "Opening…" either.
 
 ## 2. Google Ads
 

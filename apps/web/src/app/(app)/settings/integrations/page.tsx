@@ -3,6 +3,7 @@ import Link from "next/link";
 import { useEffect, useState, type ReactNode } from "react";
 import { canManage, StoresPending, useApp, type StoreSummary } from "@/components/AppContext";
 import { GoogleIcon, MetaIcon } from "@/components/BrandIcons";
+import { BackFromFacebook, MetaTestersOnly } from "@/components/MetaAdsAccess";
 import { ShopifyIcon } from "@/components/ShopifyIcon";
 import { fmtRelative } from "@/components/dashboard/format";
 import { Badge, type Tone } from "@/components/dashboard/primitives";
@@ -11,6 +12,7 @@ import { EmbeddedSignup } from "@/components/whatsapp/EmbeddedSignup";
 import { WhatsappIcon } from "@/components/whatsapp/common";
 import { quality, tier, type Overview as WaOverview } from "@/components/whatsapp/types";
 import type { AdsState } from "@/lib/adConnections";
+import { leavingForSignIn, useBackFromSignIn } from "@/lib/adSignIn";
 import { actionError, api, ApiError, useApi } from "@/lib/api";
 
 // ---------------------------------------------------------------------------
@@ -151,6 +153,8 @@ export default function IntegrationsPage() {
   const ads = useApi<AdsState>(storeBase ? `${storeBase}/ads` : null);
   const [note, setNote] = useState<{ kind: "success" | "error"; text: string } | null>(null);
   const [leaving, setLeaving] = useState<AdPlatform | null>(null);
+  // Back from Facebook's own page without connecting: Facebook never says why to Insights, so this does.
+  const [backFromMeta, setBackFromMeta] = useState(false);
   const [busy, setBusy] = useState<null | "wa-off" | "google-off" | "meta-off">(null);
   const { reload: reloadWa } = wa;
   const { reload: reloadAds } = ads;
@@ -169,14 +173,21 @@ export default function IntegrationsPage() {
     return () => window.clearInterval(t);
   }, [waState, googleState, metaState, reloadWa, reloadAds]);
 
+  useBackFromSignIn((provider) => {
+    setLeaving(null);
+    if (provider === "meta") setBackFromMeta(true);
+  });
+
   if (storesStatus !== "ready") return <StoresPending />;
 
   const connectAds = async (p: AdPlatform) => {
     if (!storeBase) return;
     setLeaving(p);
     setNote(null);
+    setBackFromMeta(false);
     try {
       const { url } = await api<{ url: string }>(`${storeBase}/ads/${p}/connect`, { method: "POST" });
+      leavingForSignIn(p);
       window.location.assign(url);
     } catch (e) {
       setLeaving(null);
@@ -298,7 +309,15 @@ export default function IntegrationsPage() {
         ) : ads.data && !ads.data.configured[p] ? (
           <p className="text-muted">{P.name} sign-in is being switched on for Insights. It will appear here as one button.</p>
         ) : (
-          <p className="text-muted">{P.how}</p>
+          <>
+            <p className="text-muted">{P.how}</p>
+            {/* Facebook turns away anyone not added to Insights' Meta app on its own page: say so before sending them there (once). */}
+            {manage && p === "meta" && ads.data?.restricted.meta && !backFromMeta && (
+              <div className="mt-3">
+                <MetaTestersOnly />
+              </div>
+            )}
+          </>
         )}
       </Card>
     );
@@ -316,6 +335,11 @@ export default function IntegrationsPage() {
       </div>
 
       {note && <Alert kind={note.kind}>{note.text}</Alert>}
+      {backFromMeta && (
+        <Alert kind="info">
+          <BackFromFacebook restricted={ads.data?.restricted.meta ?? false} />
+        </Alert>
+      )}
 
       <div className="grid gap-4">
         <Card

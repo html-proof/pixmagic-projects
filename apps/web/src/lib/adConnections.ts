@@ -24,5 +24,10 @@ export interface AdConnection {
 
 export interface AdsState {
   configured: Record<AdProvider, boolean>;
+  /**
+   * The platform only lets in the people added to Insights' own app (Meta, until Meta approves the
+   * app for everyone): anyone else is turned away on the platform's page and never comes back.
+   */
+  restricted: Record<AdProvider, boolean>;
   connections: AdConnection[];
 }

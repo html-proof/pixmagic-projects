@@ -19,6 +19,8 @@ const KEYS = {
   GOOGLE_ADS_CLIENT_ID: "g_client",
   GOOGLE_ADS_CLIENT_SECRET: "g_secret",
   GOOGLE_ADS_ENABLED: "1",
+  // Meta hasn't granted Advanced Access to ads_read: only the app's testers can connect (reset for every test).
+  META_ADS_ADVANCED_ACCESS: "",
 };
 const NO_KEYS = Object.fromEntries(Object.keys(KEYS).map((k) => [k, ""]));
 
@@ -118,10 +120,19 @@ describe("connecting ad accounts", () => {
   it("says when a platform isn't set up, instead of sending people to an error page", async () => {
     ctx.setEnv(NO_KEYS);
     const list = await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${storeId}/ads`, headers });
-    expect(list.json()).toEqual({ configured: { meta: false, google: false, adsense: false }, connections: [] });
+    expect(list.json()).toEqual({ configured: { meta: false, google: false, adsense: false }, restricted: { meta: false, google: false, adsense: false }, connections: [] });
     const res = await connect("meta");
     expect(res.statusCode).toBe(503);
     expect(res.json().error).toBe("not_configured");
+  });
+
+  it("says Meta only lets the app's testers in until Meta grants Advanced Access to ads_read, and still offers the button", async () => {
+    const restricted = async () => (await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${storeId}/ads`, headers })).json().restricted;
+    // Facebook shows everyone else "Feature Unavailable" and never comes back, so the page has to say so first.
+    expect(await restricted()).toEqual({ meta: true, google: false, adsense: false });
+    expect((await connect("meta")).statusCode).toBe(200);
+    ctx.setEnv({ ...KEYS, META_ADS_ADVANCED_ACCESS: "1" });
+    expect(await restricted()).toEqual({ meta: false, google: false, adsense: false });
   });
 
   it("Continue with Meta Ads: read-only access, the person chooses accounts, each saved with an encrypted token, history fetched", async () => {

@@ -65,6 +65,10 @@
     "META_API_VERSION": "v25.0",
     // Facebook Login for Business configuration "Insights ads reporting": user access token, ads_read only.
     "META_CONFIG_ID": "1521935306664882",
+    // "1" once Meta grants the app Advanced Access to ads_read (App Review, after Business Verification).
+    // Until then only people with a role on the app (admins, developers, testers: App roles → Roles) can
+    // connect; Facebook shows everyone else "Feature Unavailable", so Settings warns before sending them.
+    "META_ADS_ADVANCED_ACCESS": "",
     "GOOGLE_ADS_CLIENT_ID": "534794119904-9esdp8dhskcupf6ekbb0iej2dr10gomf.apps.googleusercontent.com",
     "GOOGLE_ADS_API_VERSION": "v25",
     // "1" once project insights-511119 has Google Ads API access for real accounts (Explorer or above,

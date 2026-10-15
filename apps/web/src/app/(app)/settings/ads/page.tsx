@@ -4,8 +4,10 @@ import { useEffect, useState, type ReactNode } from "react";
 import { canManage, StoresPending, useApp } from "@/components/AppContext";
 import { GoogleIcon, MetaIcon } from "@/components/BrandIcons";
 import { LoadError } from "@/components/LoadError";
+import { BackFromFacebook, MetaTestersOnly } from "@/components/MetaAdsAccess";
 import { Alert } from "@/components/ui";
 import type { AdConnection, AdProvider, AdsState } from "@/lib/adConnections";
+import { leavingForSignIn, signInFinished, useBackFromSignIn } from "@/lib/adSignIn";
 import { actionError, api, useApi } from "@/lib/api";
 import { fmtRelative } from "@/components/dashboard/format";
 import { Badge, type Tone } from "@/components/dashboard/primitives";
@@ -243,6 +245,8 @@ export default function AdAccountsPage() {
   const [pick, setPick] = useState<string | null>(null);
   // A sign-in came back with a login that reaches nothing: offer the platform's screen again.
   const [retry, setRetry] = useState<Provider | null>(null);
+  // Back from Facebook's own page without connecting: Facebook never says why to Insights, so this does.
+  const [backFromMeta, setBackFromMeta] = useState(false);
 
   // Coming back from Meta or Google: a problem to explain, or accounts to choose, for the store that was connected.
   useEffect(() => {
@@ -257,10 +261,16 @@ export default function AdAccountsPage() {
     if (code) setError(ERRORS[`${code}_${provider}`] ?? ERRORS[code] ?? "Connecting didn't work. Please try again.");
     if (code && WRONG_LOGIN.has(code) && provider && Object.hasOwn(RETRY_LABEL, provider)) setRetry(provider as Provider);
     if (choose) setPick(choose);
+    if (code || choose) signInFinished();
     if (code || choose || target) window.history.replaceState(window.history.state, "", "/settings/ads");
     // Once the store list is known.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storesStatus]);
+
+  useBackFromSignIn((provider) => {
+    setBusy(null);
+    if (provider === "meta") setBackFromMeta(true);
+  });
 
   const path = store ? `/workspaces/${workspace.id}/stores/${store.id}/ads` : null;
   const { data, error: loadError, reload } = useApi<AdsState>(path);
@@ -287,6 +297,7 @@ export default function AdAccountsPage() {
     setBusy(key);
     setError(null);
     setRetry(null);
+    setBackFromMeta(false);
     setNotice(null);
     try {
       await fn();
@@ -301,6 +312,7 @@ export default function AdAccountsPage() {
   const connect = (p: Provider) =>
     run(`connect-${p}`, async () => {
       const { url } = await api<{ url: string }>(`/workspaces/${workspace.id}/stores/${store.id}/ads/${p}/connect`, { method: "POST" });
+      leavingForSignIn(p);
       window.location.assign(url);
       // Keep the button busy while the browser leaves.
       await new Promise(() => undefined);
@@ -356,6 +368,11 @@ export default function AdAccountsPage() {
       </div>
 
       {notice && <Alert kind="success">{notice}</Alert>}
+      {backFromMeta && (
+        <Alert kind="info">
+          <BackFromFacebook restricted={data?.restricted.meta ?? false} />
+        </Alert>
+      )}
       {error && (
         <Alert>
           {error}
@@ -433,6 +450,13 @@ export default function AdAccountsPage() {
                 </div>
               )}
             </div>
+
+            {/* Facebook turns away anyone not added to Insights' Meta app on its own page: say so before sending them there (once). */}
+            {manage && configured && !mine.length && p.id === "meta" && data?.restricted.meta && !backFromMeta && (
+              <div className="mt-3">
+                <MetaTestersOnly />
+              </div>
+            )}
 
             {!configured && data && (
               <p className="mt-3 rounded-lg border border-dashed border-border px-3 py-2 text-sm text-muted">

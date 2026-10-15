@@ -14,6 +14,7 @@ import { Icon, type IconName } from "@/components/dashboard/Icons";
 import { AnimatedNumber, Sparkline } from "@/components/dashboard/Motion";
 import { Delta } from "@/components/dashboard/primitives";
 import type { Capability, Overview } from "@/components/dashboard/types";
+import { signInFinished } from "@/lib/adSignIn";
 import { api, ApiError, fmtMoney, fmtNum, fmtPct, friendlyError, isTransient, useLiveApi } from "@/lib/api";
 import { scopeList } from "@app/shared/capabilities";
 
@@ -100,6 +101,7 @@ function useAdsConnectedNotice(): string | null {
     const url = new URL(window.location.href);
     const provider = url.searchParams.get("adsConnected");
     if (!provider) return;
+    signInFinished();
     const target = url.searchParams.get("store");
     if (target && stores.some((s) => s.id === target)) setStoreId(target);
     const n = Number(url.searchParams.get("accounts") ?? 0);
