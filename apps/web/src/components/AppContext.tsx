@@ -3,7 +3,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { useRouter } from "next/navigation";
 import { can, type Role } from "@app/shared/roles";
 import type { StaffRole } from "@app/shared/staff";
-import { api, isSignedOut, isTransient, keepRetrying } from "@/lib/api";
+import { api, isSignedOut, isTransient, keepRetrying, onSessionGone } from "@/lib/api";
 import { LoadError, Unreachable } from "@/components/LoadError";
 import { signInAndReturn } from "@/lib/returnTo";
 import { readLocal, storeKey, WORKSPACE_KEY, writeLocal } from "@/lib/storage";
@@ -118,6 +118,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [wsId]);
 
   useEffect(() => void loadMe(), [loadMe]);
+  // Any call, not just /me: the dashboard's live checks keep the last numbers up on a failure, so
+  // without this a deleted or signed-out account would stay on the page until the next reload.
+  useEffect(() => onSessionGone(() => signInAndReturn(router)), [router]);
   const meFailing = meError !== null;
   useEffect(() => (meFailing ? keepRetrying(loadMe) : undefined), [meFailing, loadMe]);
 

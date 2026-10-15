@@ -3,7 +3,7 @@ import { resetEnvCache } from "@app/core";
 import { systemDb } from "@app/db";
 import { buildApp } from "../src/app.js";
 import { unconfiguredCognito } from "../src/cognito.js";
-import { signSession, readSession } from "../src/session.js";
+import { signSession, readSession, REVALIDATE_MS } from "../src/session.js";
 import { clean, cookiesFrom, createWorkspace, ORIGIN, setup, signIn, teardown, testBrowser, userOf, type TestCtx } from "./helpers.js";
 
 /**
@@ -389,6 +389,20 @@ describe("sessions over time", () => {
     expect(gone.statusCode).toBe(401);
     expect(gone.headers["set-cookie"]).toMatch(/__session=;.*Max-Age=0/);
     expect(user.id).toBeTruthy();
+  });
+
+  it("signs out an account deleted in Cognito itself (console, CLI) within a minute, though its user is still here", async () => {
+    const { headers } = await signIn(ctx, "u1", "a@x.com");
+    vi.useFakeTimers({ toFake: ["Date"] });
+    ctx.auth.users.delete("u1");
+    vi.setSystemTime(Date.now() + REVALIDATE_MS / 2);
+    // Between checks the session is only our signed cookie: no call to Cognito on every request.
+    expect((await get("/me", headers)).statusCode).toBe(200);
+    vi.setSystemTime(Date.now() + REVALIDATE_MS / 2 + 1_000);
+    const gone = await get("/me", headers);
+    expect(gone.statusCode).toBe(401);
+    expect(gone.headers["set-cookie"]).toMatch(/__session=;.*Max-Age=0/);
+    expect(REVALIDATE_MS).toBeLessThanOrEqual(60_000);
   });
 
   it("signs out everywhere: every session of the account and every Cognito refresh token", async () => {

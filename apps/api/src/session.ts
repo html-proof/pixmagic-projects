@@ -21,8 +21,12 @@ export const SESSION_COOKIE = "__session";
 export const REFRESH_COOKIE = "__session_rt";
 /** A session lasts this long from sign-in, however active (sign in again after). */
 export const SESSION_TTL_MS = 5 * 24 * 3600 * 1000;
-/** How often a session is re-checked with Cognito. */
-export const REVALIDATE_MS = 10 * 60 * 1000;
+/**
+ * How often a session is re-checked with Cognito: also the longest an account deleted or disabled
+ * in Cognito itself (the console, the CLI) can stay signed in. One refresh per active session per
+ * minute; Cognito bills by monthly active user, not by refresh.
+ */
+export const REVALIDATE_MS = 60 * 1000;
 
 export interface SessionClaims {
   v: 1;
