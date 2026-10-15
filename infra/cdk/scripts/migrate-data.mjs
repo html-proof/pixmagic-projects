@@ -133,7 +133,8 @@ step("Comparing row counts");
 let mismatches = 0;
 for (const [table, rows] of Object.entries(sourceCounts)) {
   const got = after[table];
-  const ok = got === rows && restored[table] === rows;
+  // The migrations ledger gains a row per migration applied after the restore: compare it as restored.
+  const ok = table === "_prisma_migrations" ? restored[table] === rows && got >= rows : got === rows && restored[table] === rows;
   if (!ok) mismatches++;
   console.log(`${ok ? "ok  " : "DIFF"} ${table.padEnd(34)} source ${String(rows).padStart(8)}  aws ${String(got ?? "missing").padStart(8)}`);
 }

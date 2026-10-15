@@ -76,7 +76,6 @@ export class AppStack extends Stack {
       // Database TLS is verified against Amazon's RDS CA (bundled with the package).
       NODE_EXTRA_CA_CERTS: "/var/task/rds-ca.pem",
       APP_SECRET_ARN: data.appSecret.secretArn,
-      COGNITO_WORKER_SECRET_ARN: `insights/${cfg.name}/worker-cognito`,
       RUNTIME_PARAM: this.runtimeParam,
       DB_SECRET_ARN: data.dbSecret.secretArn,
       DB_HOST: data.db.dbInstanceEndpointAddress,
@@ -90,6 +89,8 @@ export class AppStack extends Stack {
     // Lambda caps a function's environment at 4 KB; leave room for what AWS adds.
     const envBytes = Object.entries(environment).reduce((n, [k, v]) => n + k.length + (v.startsWith("${Token") ? 200 : v.length), 0);
     if (envBytes > 3600) throw new Error(`The functions' environment is ~${envBytes} bytes; Lambda allows 4 KB`);
+    // Only the API signs people in: the Cognito app client secret is read by that function alone.
+    const cognitoSecret = `insights/${cfg.name}/worker-cognito`;
     const fn = (name: "api" | "jobs" | "cron", memory: number, timeout: Duration, description: string) => {
       const logGroup = new logs.LogGroup(this, `Logs-${name}`, { logGroupName: `/aws/lambda/${prefix}-${name}`, retention: cfg.logRetentionDays as logs.RetentionDays, removalPolicy: RemovalPolicy.RETAIN });
       const f = new lambda.Function(this, `Fn-${name}`, {
@@ -101,7 +102,7 @@ export class AppStack extends Stack {
         code,
         memorySize: memory,
         timeout,
-        environment,
+        environment: name === "api" ? { ...environment, COGNITO_WORKER_SECRET_ARN: cognitoSecret } : environment,
         vpc: data.vpc,
         vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
         securityGroups: [data.appSg],
@@ -113,12 +114,9 @@ export class AppStack extends Stack {
       data.coordTable.grantReadWriteData(f);
       data.payloads.grantReadWrite(f);
       for (const q of Object.values(queues)) q.grantSendMessages(f);
-      f.addToRolePolicy(
-        new iam.PolicyStatement({
-          actions: ["secretsmanager:GetSecretValue"],
-          resources: [`arn:aws:secretsmanager:${cfg.region}:${cfg.account}:secret:insights/${cfg.name}/worker-cognito-*`],
-        }),
-      );
+      if (name === "api") {
+        f.addToRolePolicy(new iam.PolicyStatement({ actions: ["secretsmanager:GetSecretValue"], resources: [`arn:aws:secretsmanager:${cfg.region}:${cfg.account}:secret:${cognitoSecret}-*`] }));
+      }
       f.addToRolePolicy(new iam.PolicyStatement({ actions: ["ssm:GetParameter"], resources: [`arn:aws:ssm:${cfg.region}:${cfg.account}:parameter${this.runtimeParam}`] }));
       f.addToRolePolicy(new iam.PolicyStatement({ actions: ["ses:SendEmail", "ses:SendRawEmail"], resources: [`arn:aws:ses:${cfg.region}:${cfg.account}:identity/*`, `arn:aws:ses:${cfg.region}:${cfg.account}:configuration-set/*`] }));
       // Releases move the `live` alias; rolling back moves it to the previous version (scripts/rollback.mjs).

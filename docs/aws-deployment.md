@@ -132,7 +132,11 @@ Infrastructure: `cdk deploy` of the previous commit. Data: point-in-time restore
 
 ## Cost (lean tier, US$/month, on-demand, approximate)
 
-NAT gateway ~45, RDS db.t4g.small + 20 GB gp3 + backups ~40, WAF ~10, CloudWatch/X-Ray ~5-10,
-Secrets Manager/KMS/SSM ~2, Lambda/SQS/DynamoDB/S3/CloudFront at today's traffic ~0-10, admin host
-stopped ~1: **~US$100-120**, within the approved US$120-145. Budget alarm at US$150 (80% actual,
-100% forecast). Biggest levers: the NAT gateway and the database size.
+Prices from the AWS Price List API on 2026-10-15: NAT gateway $0.059/hour + $0.059/GB (~45 with
+its public IPv4), RDS db.t4g.small $0.051/hour (~37) + 20 GB gp3 (~3), WAF (web ACL + 4 rules) ~10,
+CloudWatch alarms/dashboard/logs/X-Ray ~6-10, Secrets Manager ~1.2, GuardDuty ~1-4 (free for the
+first 30 days), admin host stopped ~1, Lambda/SQS/DynamoDB/S3/CloudFront/Cognito at today's traffic
+~0-5 (free tiers): **~US$105-120**, within the approved US$120-145. Budget alarm at US$150 (80%
+actual, 100% forecast, once an alert email is set). Biggest levers: the NAT gateway and the
+database size. Cost allocation tags `app` and `environment` can be activated in Billing once AWS
+has seen them (up to 24 hours after the first deploy).
