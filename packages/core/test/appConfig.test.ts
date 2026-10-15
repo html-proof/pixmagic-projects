@@ -133,19 +133,16 @@ describe("Shopify app configuration", () => {
     /**
      * Shopify matches `redirect_uri` against its allowlist exactly, and we build that URI at
      * runtime as `${APP_URL}/api/shopify/callback` (apps/api/src/routes/shopify.ts). So the
-     * deployed APP_URL has to be the same origin the toml registered — moving the Worker to a
-     * custom domain by editing APP_URL alone would make Shopify reject every callback, and
-     * until now nothing here would have caught it: the scope checks above read wrangler.jsonc,
-     * but the URL checks only ever compared each toml against itself.
-     *
-     * Only the deployed config is checked. `.dev.vars.example` points at localhost on purpose.
+     * deployed APP_URL has to be the origin the tomls register. Production is the AWS deployment
+     * (docs/aws-deployment.md), whose APP_URL is its CloudFront address, set from the distribution
+     * at deploy time, so it can't be read from a file here; moving to another address means
+     * changing it in both tomls and running `shopify app deploy`. What can be checked: https, and
+     * not the retired Cloudflare Worker, whose stand-in only forwards (apps/cloudflare/moved).
      */
-    it("the deployed APP_URL is the origin the main app registered with Shopify", () => {
-      const appUrl = envValue(read("apps/cloudflare/wrangler.jsonc"), "APP_URL")!;
-      const registered = new URL(tomlString(read(APP_CONFIGS[0]!), "application_url")!).origin;
-      expect(appUrl).toBe(registered);
-      // A trailing slash would build `…//api/shopify/callback`, which Shopify would not match.
-      expect(appUrl.endsWith("/")).toBe(false);
+    it("registers the production address with Shopify", () => {
+      const registered = new URL(tomlString(read(APP_CONFIGS[0]!), "application_url")!);
+      expect(registered.protocol).toBe("https:");
+      expect(registered.hostname.endsWith(".workers.dev")).toBe(false);
     });
   });
 
