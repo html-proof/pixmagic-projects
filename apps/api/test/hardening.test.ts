@@ -189,7 +189,7 @@ describe("CORS and CSRF (scenario 13)", () => {
 describe("errors and debug output (scenario 14)", () => {
   it("an unexpected failure answers a generic 500 without the internals", async () => {
     const broken = buildApp({ ...ctx.deps, coord: { ...ctx.deps.coord, hit: async () => { throw new Error("internal detail: password=hunter2 at db.internal:5432"); } } });
-    const res = await broken.request("/auth/session", { method: "POST", headers: { ...ORIGIN, "content-type": "application/json" }, body: JSON.stringify({ idToken: "idt|u|u@x.com|1" }) });
+    const res = await broken.request("/auth/login", { method: "POST", headers: { ...ORIGIN, "content-type": "application/json" }, body: JSON.stringify({ email: "u@x.com", password: "correct-horse-battery" }) });
     expect(res.status).toBe(500);
     const text = await res.text();
     expect(text).not.toMatch(/hunter2|db\.internal|stack|Error:/);
