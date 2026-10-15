@@ -3,6 +3,7 @@ import Link from "next/link";
 import { useEffect, useState, type ReactNode } from "react";
 import { canManage, StoresPending, useApp } from "@/components/AppContext";
 import { GoogleIcon, MetaIcon } from "@/components/BrandIcons";
+import { LoadError } from "@/components/LoadError";
 import { Alert } from "@/components/ui";
 import type { AdConnection, AdProvider, AdsState } from "@/lib/adConnections";
 import { actionError, api, useApi } from "@/lib/api";
@@ -358,7 +359,8 @@ export default function AdAccountsPage() {
       {error && (
         <Alert>
           {error}
-          {retry && manage && data?.configured[retry] && (
+          {/* They just came back from this platform's sign-in, so it is set up: the button stays even while the list below can't load. */}
+          {retry && manage && data?.configured[retry] !== false && (
             <span className="mt-2 flex flex-wrap items-center gap-2" data-testid="ads-retry">
               <button type="button" className="btn-secondary h-9" onClick={() => void connect(retry)} disabled={!!busy}>
                 {busy === `connect-${retry}` ? "Opening…" : RETRY_LABEL[retry]}
@@ -372,7 +374,8 @@ export default function AdAccountsPage() {
           )}
         </Alert>
       )}
-      {loadError && <Alert>{actionError(loadError, "load your ad accounts")}</Alert>}
+      {/* A load that hit an outage retries by itself (useApi), so this says so instead of asking for a retry. */}
+      {loadError && <LoadError what="your ad accounts" error={loadError} onRetry={() => void reload()} />}
 
       {pick && manage && (
         <ChooseAccounts
