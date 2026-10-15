@@ -176,14 +176,18 @@ export class AppStack extends Stack {
       objectOwnership: s3.ObjectOwnership.BUCKET_OWNER_ENFORCED,
       removalPolicy: RemovalPolicy.RETAIN,
     });
-    const siteFiles = new s3deploy.BucketDeployment(this, "SiteFiles", {
-      sources: [s3deploy.Source.asset(buildFiles)],
-      destinationBucket: site,
-      destinationKeyPrefix: "_next/static/",
-      prune: false,
-      cacheControl: [s3deploy.CacheControl.fromString("public, max-age=31536000, immutable")],
-      memoryLimit: 512,
-    });
+    const upload = (id: string, files: Pick<s3deploy.BucketDeploymentProps, "include" | "exclude" | "contentType">) =>
+      new s3deploy.BucketDeployment(this, id, {
+        sources: [s3deploy.Source.asset(buildFiles)],
+        destinationBucket: site,
+        destinationKeyPrefix: "_next/static/",
+        prune: false,
+        cacheControl: [s3deploy.CacheControl.fromString("public, max-age=31536000, immutable")],
+        memoryLimit: 512,
+        ...files,
+      });
+    // The upload's CLI types files by name and doesn't know .woff2 (binary/octet-stream otherwise).
+    const siteFiles = [upload("SiteFiles", { exclude: ["*.woff2"] }), upload("SiteFonts", { exclude: ["*"], include: ["*.woff2"], contentType: "font/woff2" })];
     // LIST as well as READ: a missing file is then a 404, not S3's 403.
     const siteOrigin = origins.S3BucketOrigin.withOriginAccessControl(site, { originAccessLevels: [cloudfront.AccessLevel.READ, cloudfront.AccessLevel.LIST] });
 
@@ -240,8 +244,8 @@ export class AppStack extends Stack {
     });
     // A release's chunks are in the bucket before CloudFront reads from it, and before the API
     // serves pages that name them.
-    this.distribution.node.addDependency(siteFiles);
-    api.alias.node.addDependency(siteFiles);
+    this.distribution.node.addDependency(...siteFiles);
+    api.alias.node.addDependency(...siteFiles);
 
     // --- Schedules (Cron Triggers "*/15 * * * *" and "15 3 * * *", UTC). Off until cutover (config.ts).
     const schedulerRole = new iam.Role(this, "SchedulerRole", { roleName: `${prefix}-scheduler`, assumedBy: new iam.ServicePrincipal("scheduler.amazonaws.com") });

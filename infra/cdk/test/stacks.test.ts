@@ -137,11 +137,18 @@ describe("the app stack", () => {
     t.app.hasResourceProperties("AWS::S3::BucketPolicy", {
       PolicyDocument: { Statement: Match.arrayWith([Match.objectLike({ Effect: "Allow", Principal: { Service: "cloudfront.amazonaws.com" }, Action: ["s3:GetObject", "s3:ListBucket"] })]) },
     });
-    // Old builds' chunks stay for pages still open; the bucket and the API wait for the upload.
-    t.app.hasResourceProperties("Custom::CDKBucketDeployment", { Prune: false, DestinationBucketKeyPrefix: "_next/static/", SystemMetadata: { "cache-control": "public, max-age=31536000, immutable" } });
+    // Old builds' chunks stay for pages still open; fonts get their type (the upload's CLI can't tell).
+    const uploads = Object.values(t.app.findResources("Custom::CDKBucketDeployment")).map((r) => r.Properties);
+    expect(uploads).toHaveLength(2);
+    for (const u of uploads) {
+      expect(u).toMatchObject({ Prune: false, DestinationBucketKeyPrefix: "_next/static/", SystemMetadata: { "cache-control": "public, max-age=31536000, immutable" } });
+    }
+    expect(uploads.find((u) => u.Include)).toMatchObject({ Include: ["*.woff2"], SystemMetadata: { "content-type": "font/woff2" } });
+    expect(uploads.find((u) => !u.Include)).toMatchObject({ Exclude: ["*.woff2"] });
+    // CloudFront and the API's live alias wait for both uploads.
     const resources = t.app.toJSON().Resources as Record<string, { Type: string; DependsOn?: string[] }>;
-    const upload = Object.keys(resources).find((id) => resources[id]!.Type === "Custom::CDKBucketDeployment")!;
-    const waiting = (type: string) => Object.values(resources).filter((r) => r.Type === type && r.DependsOn?.includes(upload)).length;
+    const ids = Object.keys(resources).filter((id) => resources[id]!.Type === "Custom::CDKBucketDeployment");
+    const waiting = (type: string) => Object.values(resources).filter((r) => r.Type === type && ids.every((id) => r.DependsOn?.includes(id))).length;
     expect(waiting("AWS::CloudFront::Distribution")).toBe(1);
     expect(waiting("AWS::Lambda::Alias")).toBe(1);
   });
