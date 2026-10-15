@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { CONTACT, contactReady, orUnset } from "@/lib/contact";
+import { CONTACT } from "@/lib/contact";
 
 export const metadata: Metadata = {
   title: "Support — Insights",
@@ -18,27 +18,17 @@ export default function SupportPage() {
     <main className="mx-auto max-w-3xl px-6 py-12">
       <h1 className="text-2xl font-semibold">Support</h1>
 
-      {!contactReady && (
-        <div className="card mt-6 border-amber-500/40 bg-amber-500/5">
-          <p className="text-sm">
-            <strong>No support address is set.</strong> Fill in <code>apps/web/src/lib/contact.ts</code> and redeploy —
-            Shopify&apos;s review checks that this contact works.
-          </p>
-        </div>
-      )}
-
-      <p className="mt-4 text-sm">
-        Email{" "}
-        {mail ? (
+      {mail && (
+        <p className="mt-4 text-sm">
+          Email{" "}
           <a className="underline" href={`mailto:${mail}`}>
             {mail}
-          </a>
-        ) : (
-          orUnset(mail)
-        )}{" "}
-        and we will come back to you within one business day. It helps a lot if you include your{" "}
-        <strong>store&apos;s .myshopify.com address</strong> and, where it applies, the date the numbers look wrong for.
-      </p>
+          </a>{" "}
+          and we will come back to you within one business day. It helps a lot if you include your{" "}
+          <strong>store&apos;s .myshopify.com address</strong> and, where it applies, the date the numbers look wrong
+          for.
+        </p>
+      )}
 
       <h2 className="mt-10 text-lg font-medium">Questions we get first</h2>
       <dl className="mt-3 space-y-6 text-sm">
