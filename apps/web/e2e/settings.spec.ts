@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { expect, test, type Page } from "@playwright/test";
 import pg from "pg";
 import { E2E_ENV, E2E_MAILPIT_URL } from "../playwright.config";
+import { BILLING_ENABLED } from "../src/lib/features";
 import { confirmSignUp, fillSignUp, signedWebhook, signUp, uniqueEmail } from "./helpers";
 
 /**
@@ -162,6 +163,7 @@ test("store permissions say which are optional for every role, and Disconnect re
 });
 
 test("billing shows the plan in force, and a change awaiting Shopify as pending", async ({ page }) => {
+  test.skip(!BILLING_ENABLED, "Billing is switched off in src/lib/features.ts");
   const { ws } = await owner(page, "billing");
   await page.goto("/settings/billing");
   await expect(page.getByText(/Current plan:\s*Free\./)).toBeVisible();

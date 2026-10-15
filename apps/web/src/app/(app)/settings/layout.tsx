@@ -2,6 +2,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
+import { BILLING_ENABLED } from "@/lib/features";
 
 const ITEMS = [
   ["profile", "Profile"],
@@ -14,7 +15,7 @@ const ITEMS = [
   ["members", "Members & roles"],
   ["notifications", "Notifications"],
   ["api-keys", "API keys"],
-  ["billing", "Billing"],
+  ...(BILLING_ENABLED ? [["billing", "Billing"] as const] : []),
   ["audit", "Audit log"],
 ] as const;
 
