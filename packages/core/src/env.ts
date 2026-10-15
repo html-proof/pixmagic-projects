@@ -41,6 +41,8 @@ const schema = z.object({
   /** IAM user allowed only the user pool's admin calls (Worker secrets). */
   COGNITO_ADMIN_ACCESS_KEY_ID: z.string().optional().default(""),
   COGNITO_ADMIN_SECRET_ACCESS_KEY: z.string().optional().default(""),
+  /** With temporary credentials (an AWS role, e.g. the Lambda function's on AWS hosting). */
+  COGNITO_ADMIN_SESSION_TOKEN: z.string().optional().default(""),
   /**
    * Local development only: a Cognito emulator (cognito-local) at this address. Its tokens are
    * signed with a key published on GitHub, so production refuses to start with it set.

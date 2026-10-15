@@ -39,7 +39,7 @@ importers:
         specifier: workspace:*
         version: link:../../packages/shared
       aws4fetch:
-        specifier: 1.0.20
+        specifier: ^1.0.20
         version: 1.0.20
       hono:
         specifier: ^4.9.0
@@ -54,6 +54,43 @@ importers:
       '@types/node':
         specifier: ^24.0.0
         version: 24.19.1
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(vite@7.3.6(@types/node@24.19.1)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.15))
+
+  apps/aws:
+    dependencies:
+      '@app/api':
+        specifier: workspace:*
+        version: link:../api
+      '@app/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@app/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      aws4fetch:
+        specifier: ^1.0.20
+        version: 1.0.20
+      hono:
+        specifier: ^4.9.0
+        version: 4.13.12
+      pg:
+        specifier: ^8.16.0
+        version: 8.23.1
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.19.1
+      '@types/pg':
+        specifier: ^8.23.1
+        version: 8.23.1
+      esbuild:
+        specifier: ^0.28.2
+        version: 0.28.2
       typescript:
         specifier: ^5.9.0
         version: 5.9.3

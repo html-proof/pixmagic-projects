@@ -34,6 +34,7 @@ the code, the code wins and the page is the bug.
 | --- | --- |
 | Shopify app, scopes, installs, billing | [shopify-setup.md](shopify-setup.md), [test-store.md](test-store.md), [webhooks.md](webhooks.md) |
 | Sign-in (Amazon Cognito: email and password, Google, Apple; moving accounts from Firebase) | [cognito-setup.md](cognito-setup.md) |
+| The AWS Phase 1 (staging) environment: Lambda, RDS, Cognito | [aws-staging.md](aws-staging.md) |
 | Dashboard numbers | [kpis.md](kpis.md) |
 | Meta Ads, Google Ads, AdSense | [ads-setup.md](ads-setup.md), [ads-review-packs.md](ads-review-packs.md) |
 | WhatsApp | [whatsapp.md](whatsapp.md) |

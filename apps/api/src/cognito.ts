@@ -86,7 +86,8 @@ export interface CognitoConfig {
   jwksUrl: string;
   /** The user pool's OAuth domain (https://...), for Google and Apple. Empty: no social sign-in. */
   domain: string;
-  admin: { accessKeyId: string; secretAccessKey: string } | null;
+  /** Credentials for the admin calls: an IAM user's keys, or (on AWS) the function role's temporary ones. */
+  admin: { accessKeyId: string; secretAccessKey: string; sessionToken?: string } | null;
   /** Refresh-token rotation is on for the app client (GetTokensFromRefreshToken). */
   refreshRotation: boolean;
 }
@@ -111,7 +112,7 @@ export function cognitoConfig(): CognitoConfig | null {
     domain: e.COGNITO_DOMAIN.replace(/\/+$/, ""),
     admin:
       e.COGNITO_ADMIN_ACCESS_KEY_ID && e.COGNITO_ADMIN_SECRET_ACCESS_KEY
-        ? { accessKeyId: e.COGNITO_ADMIN_ACCESS_KEY_ID, secretAccessKey: e.COGNITO_ADMIN_SECRET_ACCESS_KEY }
+        ? { accessKeyId: e.COGNITO_ADMIN_ACCESS_KEY_ID, secretAccessKey: e.COGNITO_ADMIN_SECRET_ACCESS_KEY, sessionToken: e.COGNITO_ADMIN_SESSION_TOKEN || undefined }
         : null,
     refreshRotation: e.COGNITO_REFRESH_ROTATION === "1",
   };
