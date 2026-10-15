@@ -4,7 +4,7 @@ import { defineConfig } from "@playwright/test";
 /**
  * E2E runs the real Worker (`wrangler dev`: static UI + API + queue consumers) against its own
  * Cognito emulator (started here, empty every run), a stand-in for the user pool's managed login
- * (e2e/fake-managed-login.mjs: "Continue with Google / Apple"), Mailpit and a dedicated app_e2e
+ * (e2e/fake-managed-login.mjs: "Continue with Google"), Mailpit and a dedicated app_e2e
  * database (docker compose up -d postgres mailpit first).
  *
  * Ports default to the docker compose stack. Override them to run e2e beside a local demo, which
@@ -57,7 +57,7 @@ export default defineConfig({
       timeout: 180_000,
     },
     {
-      // Google and Apple, as far as the app can tell (the user pool's managed login domain).
+      // Google, as far as the app can tell (the user pool's managed login domain).
       command: `node e2e/fake-managed-login.mjs ${E2E_LOGIN_PORT} ${COGNITO_ENDPOINT}/local_insights ${CLIENT.id} ${CLIENT.secret}`,
       port: E2E_LOGIN_PORT,
       reuseExistingServer: false,
@@ -73,7 +73,7 @@ export default defineConfig({
         `node -e "require('fs').rmSync('../cloudflare/.wrangler/e2e',{recursive:true,force:true})" && ` +
         `pnpm --filter @app/web build && pnpm --filter @app/cloudflare exec wrangler dev --port ${E2E_PORT} --env-file ../web/e2e/worker.env ` +
         `--var APP_URL:${E2E_BASE_URL} --var API_URL:${E2E_BASE_URL}/api --var MAILPIT_URL:${E2E_MAILPIT_URL} --var COGNITO_ENDPOINT:${COGNITO_ENDPOINT} ` +
-        `--var COGNITO_DOMAIN:http://127.0.0.1:${E2E_LOGIN_PORT} --var COGNITO_IDENTITY_PROVIDERS:Google,SignInWithApple ` +
+        `--var COGNITO_DOMAIN:http://127.0.0.1:${E2E_LOGIN_PORT} --var COGNITO_IDENTITY_PROVIDERS:Google ` +
         `--persist-to .wrangler/e2e --assets ../web/out-e2e`,
       url: `${E2E_BASE_URL}/api/healthz`,
       env,

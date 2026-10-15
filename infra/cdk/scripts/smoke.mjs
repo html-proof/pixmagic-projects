@@ -120,7 +120,7 @@ await check("auth config served", async () => {
   const r = await get(`${base}/api/auth/config`);
   const body = await r.json();
   expect(r.status === 200 && "providers" in body, `status ${r.status}`);
-  return `google ${body.providers.google}, apple ${body.providers.apple}`;
+  return `google ${body.providers.google}`;
 });
 await check("cross-site POST with a session cookie is refused (CSRF)", async () => {
   const r = await get(`${base}/api/auth/logout`, { method: "POST", headers: { origin: "https://evil.example", cookie: "__session=x" } });

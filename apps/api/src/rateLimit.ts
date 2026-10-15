@@ -24,7 +24,7 @@ export const LIMITS = {
   codeIp: { max: 10, windowSec: 3600 },
   /** Guesses at emailed codes (sign-up confirmation, password reset, sign-in), per IP. */
   codeVerifyIp: { max: 20, windowSec: 900 },
-  /** "Continue with Google / Apple" started and finished, per IP. */
+  /** "Continue with Google" started and finished, per IP. */
   oauthIp: { max: 30, windowSec: 300 },
   /** Password, email and account changes, per user. */
   accountChange: { max: 10, windowSec: 3600 },

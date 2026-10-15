@@ -5,14 +5,14 @@ import { ArrowRight } from "lucide-react";
 import { Alert } from "@/components/ui";
 import { AuthCard } from "@/components/auth/AuthCard";
 
-/** Why a sign-in couldn't start (the API sends the browser here instead of to Google or Apple). */
+/** Why a sign-in couldn't start (the API sends the browser here instead of to Google). */
 const REASONS: Record<string, (provider: string) => string> = {
   provider_unavailable: (p) => `Sign in with ${p} isn't available yet. Please use your email address, or another option.`,
   rate_limited: () => "Too many sign-in attempts from your network. Wait a few minutes, then try again.",
   unavailable: () => "We can't reach the sign-in service right now. Please try again in a moment.",
 };
 
-const PROVIDER_NAMES: Record<string, string> = { google: "Google", apple: "Apple" };
+const PROVIDER_NAMES: Record<string, string> = { google: "Google" };
 
 export default function AuthErrorPage() {
   const [text, setText] = useState<string | null>(null);

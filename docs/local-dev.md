@@ -30,7 +30,7 @@ Generate an encryption key and paste it into `TOKEN_ENCRYPTION_KEYS=1:<key>`:
 node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
 ```
 
-`.dev.vars.example` already points sign-in at the Cognito emulator. To use a real user pool instead (Google and Apple need one), drop `COGNITO_ENDPOINT` and fill in that pool's settings ([cognito-setup.md](cognito-setup.md)). The UI needs no settings of its own.
+`.dev.vars.example` already points sign-in at the Cognito emulator. To use a real user pool instead (Google needs one), drop `COGNITO_ENDPOINT` and fill in that pool's settings ([cognito-setup.md](cognito-setup.md)). The UI needs no settings of its own.
 
 The repo-root `.env` (from `.env.example`) is only for tools on this machine: docker compose, the Prisma CLI (`DATABASE_URL`, migrations) and the maintenance tasks in [RUNBOOK.md](RUNBOOK.md#maintenance-tasks). Which file configures what: [architecture.md](architecture.md#configuration).
 

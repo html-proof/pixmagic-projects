@@ -30,9 +30,9 @@ const schema = z.object({
   COGNITO_CLIENT_ID: z.string().optional().default(""),
   /** The confidential app client's secret (Worker secret). */
   COGNITO_CLIENT_SECRET: z.string().optional().default(""),
-  /** The user pool's OAuth domain, https://... (managed login). Needed for Google and Apple. */
+  /** The user pool's OAuth domain, https://... (managed login). Needed for Google. */
   COGNITO_DOMAIN: z.string().optional().default(""),
-  /** Which "Continue with ..." buttons work: Cognito provider names, comma separated (Google, SignInWithApple). */
+  /** Which "Continue with ..." buttons work: Cognito provider names, comma separated (Google). */
   COGNITO_IDENTITY_PROVIDERS: z.string().optional().default(""),
   /** "1": passwordless sign-in with a code Cognito emails (needs the Essentials plan and SES email). */
   COGNITO_EMAIL_OTP: z.string().optional().default(""),

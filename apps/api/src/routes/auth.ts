@@ -23,7 +23,7 @@ const passwordSchema = z.string().min(1, "Enter your password.").max(256);
 const keepSchema = z.boolean().optional();
 
 /** "Continue with ..." in our URLs, and Cognito's name for each provider. */
-const PROVIDERS: Record<string, FederatedProvider> = { google: "Google", apple: "SignInWithApple" };
+const PROVIDERS: Record<string, FederatedProvider> = { google: "Google" };
 const OAUTH_STATE_TTL_S = 600;
 const MAX_PENDING_STATES = 5;
 const OAUTH_COOKIE = "__oauth";
@@ -40,7 +40,7 @@ export function enabledProviders(): Set<FederatedProvider> {
   return new Set(
     e.COGNITO_IDENTITY_PROVIDERS.split(",")
       .map((p) => p.trim())
-      .filter((p): p is FederatedProvider => p === "Google" || p === "SignInWithApple"),
+      .filter((p): p is FederatedProvider => p === "Google"),
   );
 }
 
@@ -202,7 +202,7 @@ export function authRoutes(app: App, deps: Deps) {
   app.get("/auth/config", (c) => {
     const providers = enabledProviders();
     return c.json({
-      providers: { google: providers.has("Google"), apple: providers.has("SignInWithApple") },
+      providers: { google: providers.has("Google") },
       emailOtp: env().COGNITO_EMAIL_OTP === "1",
     });
   });
@@ -363,9 +363,9 @@ export function authRoutes(app: App, deps: Deps) {
     return c.json({ user: publicUser(user) });
   });
 
-  // ---------------- Continue with Google / Apple (Cognito managed login, code + PKCE) ----------------
+  // ---------------- Continue with Google (Cognito managed login, code + PKCE) ----------------
 
-  /** Leaves for Google or Apple, by way of the user pool. Errors land on the sign-in error page. */
+  /** Leaves for Google, by way of the user pool. Errors land on the sign-in error page. */
   app.get("/auth/oauth/:provider/start", async (c) => {
     const appUrl = env().APP_URL;
     const fail = (reason: string) => c.redirect(`${appUrl}/auth/error?${new URLSearchParams({ reason, provider: c.req.param("provider") })}`);
@@ -438,7 +438,7 @@ export function authRoutes(app: App, deps: Deps) {
 
   // ---------------- Session ----------------
 
-  /** Sign out this browser (and, after Google/Apple, the user pool's own session in it). */
+  /** Sign out this browser (and, after Google, the user pool's own session in it). */
   app.post("/auth/logout", async (c) => {
     // Best effort throughout: signing out must always clear the cookies below.
     const s = readSession(getCookie(c, SESSION_COOKIE));

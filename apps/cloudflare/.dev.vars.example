@@ -21,7 +21,7 @@ COGNITO_CLIENT_ID=insightslocalwebclient00
 COGNITO_CLIENT_SECRET=insights-local-client-secret
 COGNITO_ADMIN_ACCESS_KEY_ID=local
 COGNITO_ADMIN_SECRET_ACCESS_KEY=local
-# Google / Apple need a real pool's domain (the emulator has no managed login).
+# Google needs a real pool's domain (the emulator has no managed login).
 COGNITO_DOMAIN=
 COGNITO_IDENTITY_PROVIDERS=
 # Empty locally: no Firebase accounts to move over.

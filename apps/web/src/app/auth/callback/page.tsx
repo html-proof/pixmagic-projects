@@ -9,7 +9,7 @@ import { AuthCard } from "@/components/auth/AuthCard";
 import { SocialButtons } from "@/components/SocialButtons";
 
 /**
- * Where the user pool sends the browser back after Google or Apple (the app client's callback
+ * Where the user pool sends the browser back after Google (the app client's callback
  * URL). The code in the address is useless on its own: the API exchanges it with the client
  * secret and the PKCE verifier only it holds, and only for the browser that started the sign-in.
  */
