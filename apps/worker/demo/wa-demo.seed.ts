@@ -83,8 +83,9 @@ it("seeds the WhatsApp demo", async () => {
   const config = whatsappConfigSchema.parse({
     transactionalBasis: "checkout_notice",
     smsConsentCountsForMarketing: true,
+    // Equal ends: marketing may go out at any hour (0..23 would close 23:00-24:00, and tests run then too).
     sendWindowStart: 0,
-    sendWindowEnd: 23,
+    sendWindowEnd: 0,
     supportPhone: "+91 484 290 1234",
     supportEmail: "care@greenleaf.example",
     notifications: {
