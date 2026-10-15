@@ -132,7 +132,7 @@ export type SenderVerificationMethod = (typeof SENDER_VERIFICATION_METHODS)[numb
 export const SMTP_ENCRYPTION_MODES = ["tls", "starttls"] as const;
 export type SmtpEncryption = (typeof SMTP_ENCRYPTION_MODES)[number];
 
-/** Ports an SMTP account may use, and the encryption each one speaks. Port 25 is blocked on Cloudflare Workers. */
+/** Ports an SMTP account may use, and the encryption each one speaks. Port 25 is blocked for outbound mail on AWS. */
 export const SMTP_PORTS: Record<number, SmtpEncryption> = { 465: "tls", 587: "starttls", 2525: "starttls" };
 
 export const SUPPRESSION_REASONS = ["unsubscribed", "bounced", "complained", "manual", "invalid"] as const;

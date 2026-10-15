@@ -8,7 +8,7 @@
 # link can't be used" page (docs/shopify-setup.md, "Troubleshooting installs").
 #
 # Deploy with: cd shopify-app && shopify app deploy --config pixmagic
-# Then set SHOPIFY_EXTRA_APPS + SHOPIFY_APP_SECRET_PIXMAGIC on the Worker, as in 3c.
+# Then set SHOPIFY_EXTRA_APPS (apps/aws/src/settings.ts) + SHOPIFY_APP_SECRET_PIXMAGIC (put-secrets.mjs), as in 3c.
 client_id = "bb0ea9e4ad8939a6a1513e4dbf8cbbf1"
 name = "Insights"
 application_url = "https://bizinsights.io/api/shopify/launch"
@@ -17,8 +17,8 @@ embedded = false
 [access_scopes]
 # Least privilege. THIS is what merchants are asked to grant: with
 # use_legacy_install_flow = false (Shopify managed installation) the scopes come from this
-# file, NOT from the `scope` parameter our authorize URL sends. SHOPIFY_SCOPES in the Worker
-# env must mirror this list exactly - packages/core/test/appConfig.test.ts enforces that.
+# file, NOT from the `scope` parameter our authorize URL sends. SHOPIFY_SCOPES in the app's
+# settings must mirror this list exactly - packages/core/test/appConfig.test.ts enforces that.
 scopes = "read_orders,read_products"
 # Optional (dynamic) scopes: NOT part of the install grant. The install screen asks only for
 # `scopes` above; these are requested afterwards, one feature at a time, when the merchant

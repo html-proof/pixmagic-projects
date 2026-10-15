@@ -5,8 +5,8 @@ import { NOT_BEFORE, SQS_MAX_DELAY_S, type SqsCall } from "./sqsQueues.js";
 type Outcome = { kind: "ack" } | { kind: "retry"; delaySeconds: number };
 
 /**
- * SQS → the worker's `consume()` (apps/worker), which was written against Cloudflare Queues'
- * message API. The mapping:
+ * SQS → the worker's `consume()` (apps/worker), through its small message API (QueueMessage).
+ * The mapping:
  *   - attempts      = ApproximateReceiveCount (1 on the first delivery)
  *   - ack()         = report success; Lambda's event source mapping deletes the message
  *   - retry(delay)  = ChangeMessageVisibility(delay) and report the message as failed, so it comes

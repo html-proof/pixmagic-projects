@@ -4,7 +4,7 @@
 //   node infra/cdk/scripts/put-secrets.mjs [--env production] [--from <file>]... [--set NAME]... [--dry-run]
 //
 // --from <file>  a dotenv file (e.g. the main checkout's .env) to copy the values below from; the
-//                ones that must match production's Cloudflare secrets (TOKEN_ENCRYPTION_KEYS decrypts
+//                ones that must match the old deployment's secrets (TOKEN_ENCRYPTION_KEYS decrypts
 //                every stored store/ad token, OTP_PEPPER keys stored customer hashes) come from here.
 // --set NAME     read NAME's value from the clipboard (Windows: Get-Clipboard), for a secret only
 //                its owner has (META_APP_SECRET, GOOGLE_ADS_CLIENT_SECRET, ...). Copy it, run this.
@@ -177,7 +177,7 @@ for (const [k, make] of Object.entries(generate)) {
   }
 }
 // --generate NAME: a new random value on purpose, for a secret that should match production's but
-// can't be read back from Cloudflare (OTP_PEPPER: then stored customer hashes need re-keying, or
+// can't be read back from the old deployment (OTP_PEPPER: then stored customer hashes need re-keying, or
 // production's value as CUSTOMER_HASH_KEY, before this environment takes over).
 for (const name of opt("--generate")) {
   if (!["OTP_PEPPER", "SESSION_SECRET", "APP_RLS_PASSWORD", "WHATSAPP_WEBHOOK_VERIFY_TOKEN"].includes(name)) throw new Error(`Won't generate ${name}`);

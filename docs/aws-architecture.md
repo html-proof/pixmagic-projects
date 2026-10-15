@@ -1,48 +1,49 @@
-# Insights on AWS: complete target architecture
+# Insights on AWS: architecture
 
-The design for moving the whole of Insights from Cloudflare (and the Postgres container on the
-owner's PC) to AWS, region **ap-southeast-2 (Sydney)**. Phase 1 (sign-in on Cognito, an isolated
-staging environment) is built: [cognito-setup.md](cognito-setup.md), [aws-staging.md](aws-staging.md).
-This document is the design and its reasoning. It has been built and runs since 2026-10-15; what
-actually runs, under which names, is in [aws-deployment.md](aws-deployment.md), which wins where the
-two differ (for example, the domain's DNS is at Cloudflare, not Route 53).
+Insights runs entirely on AWS, region **ap-southeast-2 (Sydney)**. This document is the design and
+its reasoning; it has been built and runs since 2026-10-15. What actually runs, under which names, is
+in [aws-deployment.md](aws-deployment.md), which wins where the two differ (for example, the domain
+bizinsights.io has its DNS at Cloudflare, not Route 53; pages come from the `api` function and only the
+build files from S3; there is no RDS Proxy or CodeDeploy canary yet). Sign-in:
+[cognito-setup.md](cognito-setup.md); the isolated Phase 1 staging environment: [aws-staging.md](aws-staging.md).
 
 Principles:
 
 - **Same application code.** The API (Hono), the jobs (`apps/worker`), the domain logic
-  (`packages/core`), the database layer (`packages/db`, Prisma) and the UI stay as they are. Only
-  the platform adapters change, in `apps/aws`, the way `apps/cloudflare` wires them today.
+  (`packages/core`), the database layer (`packages/db`, Prisma) and the UI know nothing of AWS. Only
+  the platform adapters do, in `apps/aws`; `apps/aws/src/local.ts` runs the same app on one machine
+  for development, with in-process queues and an in-memory coordinator.
 - **Managed services, no servers to patch.** Lambda, RDS, SQS, DynamoDB, S3, CloudFront.
 - **Private by default.** The database sits in isolated subnets; functions reach it through RDS
   Proxy; the API is reachable only through CloudFront and WAF.
 - **Everything as code.** One AWS CDK app (TypeScript, like the rest of the repo), one copy per
   environment, deployed from GitHub Actions with short-lived credentials (OIDC).
 
-## 1. What runs where today, and where it goes
+## 1. What runs where
 
-| Today (Cloudflare / owner's PC) | Used for | On AWS | Why this service |
-| --- | --- | --- | --- |
-| Workers Static Assets | The web UI (Next.js static export) | **S3** (private) + **CloudFront** (Origin Access Control) | Static files at the edge, cached; no compute. |
-| Worker `fetch` (Hono API) | `/api/*`, `/webhooks/*`, `/pixel/*`, `/shopify/*`, health | **Lambda** (Node 22, arm64) behind **CloudFront** (function URL origin) | Same per-request code shape; scales to zero. Only requests carrying CloudFront's secret origin header are served (section 2). |
-| `*.workers.dev` hostname, Cloudflare TLS | The app's address | **Route 53** (custom domain) + **ACM** certificate | A real domain is required on AWS anyway, and it is what Google's OAuth app verification asks for. |
-| Workers Rate Limiting (`GLOBAL_LIMITER`, 300/min/IP) | Coarse API flood protection | **AWS WAF** rate-based rule on CloudFront, plus AWS managed rule groups | Blocks floods before they cost a Lambda invocation. |
-| Durable Object `Coordinator` | Per-key rate limits, one-time OAuth state, locks, signed-out sessions, export grants | **DynamoDB** table (on-demand, TTL) | Already built and tested (`apps/aws/src/dynamoCoord.ts`). |
-| Durable Object blob chunks / R2 (`PAYLOADS`) | Webhook bodies too big for a queue message | **S3** bucket `payloads` (7-day lifecycle) | SQS takes messages up to 1 MiB (Cloudflare: 128 KB), so S3 is only for the rare larger body. |
-| Cloudflare Queues `insights-sync`, `-webhooks`, `-aggregate`, `-email` + `insights-dlq` | Background jobs, retries with backoff | **SQS** standard queues + one DLQ each; **Lambda** consumers (event source mappings) | Same at-least-once model; batch size and concurrency carried over (below). |
-| Cron Triggers `*/15 * * * *`, `15 3 * * *` | Token refresh, stale jobs, reconcile, ads sync, WhatsApp, open shifts, email sweeps; nightly reconcile | **EventBridge Scheduler** → the `scheduled` Lambda | Managed cron with retries; UTC like today. |
-| Hyperdrive (two configs: `app`, `app_rls`) | Connection pooling to Postgres | Capped Lambda concurrency first; **RDS Proxy** (two logins: owner role and the RLS role) when traffic needs it | Pools Lambda's many short connections; see section 4 for the pinning check it needs first. |
-| Postgres 17 in Docker on the owner's PC, via Cloudflare Tunnel + Workers VPC | All data | **RDS for PostgreSQL 17** (encrypted, automated backups, point-in-time restore) | Removes the PC as a single point of failure (production went down when Docker Desktop stopped). |
-| Cloudflare Email Sending (`EMAIL`) | Invitations, alerts, staff emails | **Amazon SES** (domain identity with DKIM/SPF/DMARC) | Also Cognito's sender (raises the 50/day limit) and enables passwordless codes. |
-| Workers TCP sockets (`workersSmtpConnect`) | Merchants' own SMTP accounts (email integrations) | Node `net`/`tls` from Lambda through the NAT gateway | Plain outbound TCP; ports 465/587/2525 as today. |
-| Workers Logs and Traces | Logs, traces | **CloudWatch Logs**, metric filters, alarms, **X-Ray** (sampled) | One place for logs, metrics and alarms. |
-| Firebase Authentication | Sign-in (being replaced) | **Cognito** (Phase 1) | Done in code; Firebase is asked only during the migration window. |
-| Worker secrets (`wrangler secret`) | Session, encryption, OAuth client secrets | **Secrets Manager** (+ **KMS** key) | Read at cold start; rotation for database passwords. |
-| `wrangler versions` staged rollouts | Safe deploys, instant rollback | **Lambda versions + aliases** with **CodeDeploy** canary | 10% for 5 minutes, automatic rollback on alarms. |
-| `infra/postgres/backup.mjs` on the PC | Backups | RDS automated backups (14 days) + **AWS Backup** monthly copy | Point-in-time restore to any second. |
-| LiveChannel Durable Object (push updates; on an unmerged branch) | Live dashboards | **AppSync Events** (managed WebSocket pub/sub), or keep polling | Decide when that branch lands; polling works meanwhile. |
+| Used for | On AWS | Why this service |
+| --- | --- | --- |
+| The web UI (Next.js static export) | **S3** (private) + **CloudFront** (Origin Access Control) | Static files at the edge, cached; no compute. |
+| `/api/*`, `/webhooks/*`, `/pixel/*`, `/shopify/*`, health (the Hono API) | **Lambda** (Node 22, arm64) behind **CloudFront** (function URL origin) | Per-request code; scales to zero. Only requests carrying CloudFront's secret origin header are served (section 2). |
+| The app's address | **Route 53** (custom domain) + **ACM** certificate; today the CloudFront address | A custom domain is what Google's OAuth app verification asks for. |
+| Coarse API flood protection (300 requests/min/IP) | **AWS WAF** rate-based rule on CloudFront, plus AWS managed rule groups | Blocks floods before they cost a Lambda invocation. |
+| Per-key rate limits, one-time OAuth state, locks, signed-out sessions, export grants (the coordinator) | **DynamoDB** table (on-demand, TTL) | `apps/aws/src/dynamoCoord.ts`; the local server keeps it in memory. |
+| Webhook bodies too big for a queue message (over 100 KB) | **S3** bucket `payloads` (7-day lifecycle) | Only the rare large body; the message carries its key. |
+| Background jobs (sync, webhooks, aggregate, email), retries with backoff | **SQS** standard queues + a DLQ; **Lambda** consumers (event source mappings) | At-least-once delivery; the handlers are idempotent (below). |
+| `*/15 * * * *`: token refresh, stale jobs, ads sync, WhatsApp, open shifts, email sweeps; `15 3 * * *`: nightly reconcile | **EventBridge Scheduler** → the `scheduled` Lambda | Managed cron, UTC. |
+| Connection pooling to Postgres (two logins: the owner role and the RLS role) | Capped Lambda concurrency first; **RDS Proxy** when traffic needs it | Pools Lambda's many short connections; see section 4 for the pinning check it needs first. |
+| All data | **RDS for PostgreSQL 17** (encrypted, automated backups, point-in-time restore) | No single machine to keep running (the old deployment's database on the owner's PC went down when Docker Desktop stopped). |
+| Invitations, alerts, staff emails | **Amazon SES** (domain identity with DKIM/SPF/DMARC) | Also Cognito's sender (raises the 50/day limit) and enables passwordless codes. |
+| Merchants' own SMTP accounts (email integrations) | Node `net`/`tls` from Lambda through the NAT gateway | Plain outbound TCP; ports 465/587/2525. |
+| Logs, traces | **CloudWatch Logs**, metric filters, alarms, **X-Ray** (sampled) | One place for logs, metrics and alarms. |
+| Sign-in | **Cognito** (Phase 1) | Replaced Firebase Authentication; Firebase is asked only during the migration window. |
+| Session, encryption, OAuth client secrets | **Secrets Manager** (+ **KMS** key) | Read at cold start; rotation for database passwords. |
+| Safe deploys, instant rollback | **Lambda versions + aliases** with **CodeDeploy** canary | 10% for 5 minutes, automatic rollback on alarms. |
+| Backups | RDS automated backups (14 days) + **AWS Backup** monthly copy | Point-in-time restore to any second. |
+| Live dashboards (push updates; on an unmerged branch) | **AppSync Events** (managed WebSocket pub/sub), or keep polling | Decide when that branch lands; polling works meanwhile. |
 
-Third parties stay where they are (Shopify, Meta Graph/WhatsApp Cloud API, Google Ads/AdSense,
-Gmail/Microsoft Graph, Slack); only the URLs they call back on change (section 7).
+Third parties (Shopify, Meta Graph/WhatsApp Cloud API, Google Ads/AdSense, Gmail/Microsoft Graph,
+Slack) call back on the app's address (section 7).
 
 ## 2. Target architecture
 
@@ -77,19 +78,20 @@ Gmail/Microsoft Graph, Slack); only the URLs they call back on change (section 7
 ### Request paths
 
 - **Pages**: browser → CloudFront → S3. Hashed `/_next/static/*` cached for a year; HTML not cached.
-  Security headers (today's `public/_headers`) from a CloudFront response headers policy.
+  Security headers (the ones in `public/_headers`) from a CloudFront response headers policy.
 - **API**: browser → CloudFront (+WAF) → Lambda `api` function URL. CloudFront adds a secret
   `x-origin-verify` header (value in Secrets Manager, rotated) and the app answers 403 without it, so
   the function URL can't be used to go around WAF. (CloudFront's origin access control for function
   URLs is not used: it requires every POST to carry a SHA-256 of its body in `x-amz-content-sha256`,
   which Shopify, Meta and browsers don't send.) Forwarded: all viewer headers except `Host`
   (`AllViewerExceptHostHeader`), cookies and query strings; nothing cached. Same origin as the UI, so
-  sessions stay first-party. The client IP comes from `CloudFront-Viewer-Address`, trusted only on
-  requests that carry the origin secret.
-- **Shopify webhooks**: Shopify → `/api/webhooks/shopify` (HMAC-checked, as today) → SQS `webhooks`.
+  sessions stay first-party. The client IP is the address CloudFront saw (a viewer-request function
+  passes it on; the API reads it as `x-insights-client-ip`), trusted only on requests that carry the
+  origin secret.
+- **Shopify webhooks**: Shopify → `/api/webhooks/shopify` (HMAC-checked) → SQS `webhooks`.
   Later option: Shopify's native **Amazon EventBridge** delivery (no public endpoint, no HMAC).
 - **Web pixel**: storefront → `/api/pixel/*`. The WAF rate rule leaves `/pixel/*`, `/webhooks/*` and the
-  health checks out of the per-IP limit, exactly as `GLOBAL_LIMIT_EXEMPT` does today.
+  health checks out of the per-IP limit, exactly as `GLOBAL_LIMIT_EXEMPT` does in the app.
 - **Sign-in**: as built in Phase 1, with Cognito's managed login on `auth.<domain>` (custom domain)
   and SES as its email sender.
 
@@ -102,10 +104,14 @@ Gmail/Microsoft Graph, Slack); only the URLs they call back on change (section 7
 | aggregate | 5 (1 s) | 4 | 5 min | 6 |
 | email | 10 (2 s) | 5 | 2 min | 6 |
 
-The worker's `retry({ delaySeconds })` becomes `ChangeMessageVisibility` (up to 12 h, so the 15-minute
+What is built is smaller while the account's Lambda concurrency is 10 (`sources` in
+`infra/cdk/lib/app-stack.ts`; a message goes to the DLQ after 10 receives).
+
+A job's `retry({ delaySeconds })` is `ChangeMessageVisibility` (up to 12 h, so the 15-minute
 backoff cap fits), `ack()` a successful batch item, `attempts` the message's `ApproximateReceiveCount`
-(partial batch failures reported with `ReportBatchItemFailures`). The "database unreachable: don't
-spend an attempt" logic (`deferForDb`) works unchanged by re-sending.
+(partial batch failures reported with `ReportBatchItemFailures`). A job that fails while the database
+is unreachable spends no attempt (`deferForDb`): it is re-sent as a new message, backing off to every
+5 minutes, for up to 24 hours.
 
 EventBridge Scheduler invokes the `scheduled` function at `cron(0/15 * * * ? *)` and
 `cron(15 3 * * ? *)` (UTC) with the cron name, which `runScheduled()` already dispatches on.
@@ -137,8 +143,8 @@ EventBridge Scheduler invokes the `scheduled` function at `cron(0/15 * * * ? *)`
   automated backups with point-in-time restore, Performance Insights (free tier), parameter group
   with `rds.force_ssl=1`. Single-AZ (lean) or Multi-AZ (high availability, automatic failover).
 - **Connections**: two logins in Secrets Manager, `app` (owner: migrations, system paths, jobs) and
-  `app_rls` (tenant reads under RLS), as the two Hyperdrive configs today; passwords rotate through
-  Secrets Manager. Each function instance keeps one small pool per role (as now), and Lambda
+  `app_rls` (tenant reads under RLS); passwords rotate through Secrets Manager. Each function
+  instance keeps one small pool per role, and Lambda
   concurrency is capped per function (reserved concurrency) so the total stays under the database's
   connection limit (about 200 on db.t4g.small).
 - **RDS Proxy**, added when concurrency outgrows those caps: tenant queries run
@@ -171,10 +177,13 @@ EventBridge Scheduler invokes the `scheduled` function at `cron(0/15 * * * ? *)`
 - Metric filters and alarms: Lambda errors and throttles, 5xx at CloudFront, sign-in service
   unavailable, DLQ depth > 0, queue age > 15 min, RDS CPU / free storage / connections (and, with RDS
   Proxy, pinned connections and borrow latency), NAT errors. All → one SNS topic → email (and Slack).
-- One CloudWatch dashboard per environment; X-Ray tracing at 10% sampling (as Workers traces today).
+- One CloudWatch dashboard per environment; X-Ray tracing at 10% sampling.
 - A CloudWatch Synthetics canary loading the sign-in page and `/api/readyz` every 5 minutes.
 
 ## 7. Integrations to re-point at cutover
+
+The app's address is `https://d2mr8m2p1qkh58.cloudfront.net` until there is a custom domain
+(`app.<domain>` below); the Shopify tomls already use it.
 
 | Integration | What changes | Where |
 | --- | --- | --- |
@@ -207,8 +216,8 @@ EventBridge Scheduler invokes the `scheduled` function at `cron(0/15 * * * ? *)`
   `consumer` (SQS → `consume()`), `scheduled` (EventBridge → `runScheduled()`), `migrate`; adapters
   `sqsQueues` (Producer → SendMessage, payloads over 1 MiB to S3 via the existing BlobStore),
   `originVerify` (the 403 check above),
-  `s3Blobs`, `sesMailer` (SES v2), `nodeSmtpConnect` (net/tls), client IP from
-  `CloudFront-Viewer-Address`. After cutover, `apps/cloudflare` and `wrangler` are removed.
+  `s3Blobs`, `sesMailer` (SES v2), `nodeSmtpConnect` (net/tls), client IP from the viewer-request
+  function's header.
 - **Pipeline** (GitHub Actions, OIDC): checks as today → build → `cdk deploy` staging → `migrate` →
   Playwright smoke against staging → manual approval (GitHub environment) → production: `migrate`,
   then the new Lambda versions shift traffic 10% → 100% over 5 minutes, rolled back automatically if
@@ -216,17 +225,13 @@ EventBridge Scheduler invokes the `scheduled` function at `cron(0/15 * * * ? *)`
 
 ## 9. Migration plan
 
-| Phase | Work | Customer impact |
-| --- | --- | --- |
-| 1 (built) | Cognito; isolated staging on Lambda + RDS | none |
-| 2 Foundation | Domain in Route 53, ACM, Organization/accounts, CDK `Network`, `Data`, `Messaging`, SES verification and production access | none |
-| 3 App on AWS | Adapters above; `App` stack; full staging run of every feature (Shopify test store, webhooks, sync, ads, WhatsApp, email, staff) | none (staging) |
-| 4 Data move | Rehearse: dump the PC's Postgres → restore to RDS → compare row counts per table; then the real one in a short maintenance window (writes paused, final dump/restore, verify) | ~15-30 min read-only window |
-| 5 Cutover | Point Route 53 at CloudFront; re-point every integration (section 7); watch alarms; Cognito Firebase-migration window runs here | sign-in once more (new domain) |
-| 6 Wind-down | After two quiet weeks: retire the Worker, tunnel, PC database and Firebase Auth; keep the last PC dump archived in S3 | none |
-
-**Rollback** until phase 6: switch Route 53 back to Cloudflare and the integrations back to the old
-URLs; data written on AWS in between is copied back with a dump/restore of the changed tables.
+Phase 1 (Cognito, isolated staging) and the AWS deployment itself are built. What is left is moving
+production's data and traffic over: the final data copy in a short maintenance window
+(`infra/cdk/scripts/migrate-data.mjs`: dump, restore to RDS, compare row counts per table),
+re-pointing every integration (section 7), turning the schedules on, and after two quiet weeks
+retiring the old deployment and Firebase Auth. The steps, their order and the rollback are in
+[aws-deployment.md](aws-deployment.md) ("Cutover" and
+[retiring the old deployment](aws-deployment.md#retiring-the-old-cloudflare-deployment)).
 
 ## 10. Cost (approximate, ap-southeast-2 on-demand, US$/month; confirm in the AWS Pricing Calculator)
 
@@ -247,7 +252,8 @@ instead of two.
 
 ## 11. Decisions for the owner
 
-1. **The domain** (e.g. `app.<company domain>`): required before phase 2.
+1. **The domain** (e.g. `app.<company domain>`): the app runs without one, but Google's OAuth app
+   verification needs it ([ads-review-packs.md](ads-review-packs.md)).
 2. **Lean or high availability** for production (the table above).
 3. **One AWS account or an Organization** with production/staging accounts (recommended).
 4. **Live updates**: AppSync Events now, or keep polling until the push-updates branch merges.

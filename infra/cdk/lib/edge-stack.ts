@@ -8,7 +8,7 @@ import type { EnvConfig } from "./config.js";
  * stack there; the App stack in Sydney references it (crossRegionReferences).
  *
  * Rules, in order:
- *  1. Per-IP rate limit on the API: 300 requests a minute, the Worker's GLOBAL_LIMITER. Webhooks,
+ *  1. Per-IP rate limit on the API: 300 requests a minute, as the app's own globalLimit. Webhooks,
  *     the storefront pixel and health checks are exempt, as in the app (GLOBAL_LIMIT_EXEMPT).
  *  2. Amazon's IP reputation list: known bad sources, blocked.
  *  3. Known bad inputs (Log4Shell, bad Host headers, ...): blocked.

@@ -98,8 +98,11 @@ async function setupStore(opts: { basis?: string; smsCounts?: boolean; kinds?: N
   const config = whatsappConfigSchema.parse({
     transactionalBasis: opts.basis ?? "checkout_notice",
     smsConsentCountsForMarketing: opts.smsCounts ?? false,
+    // Equal ends: always open. (0 to 23 closed the window from 23:00 UTC, and the suite failed for that hour.)
+    // Equal hours: no sending window, so these tests pass at any hour (0–23 held marketing during
+    // 23:00 UTC). The API won't save this; "holds marketing outside the store's sending hours" sets a real one.
     sendWindowStart: 0,
-    sendWindowEnd: 23,
+    sendWindowEnd: 0,
     notifications: Object.fromEntries(
       kinds.map((k) => {
         const t = TEMPLATE_LIBRARY.find((x) => x.name === KIND_TEMPLATE[k])!;

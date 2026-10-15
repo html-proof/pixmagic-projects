@@ -79,7 +79,7 @@ export function workspaceRoutes(app: App, deps: Deps) {
       }),
     );
     // The invitation is already saved and the link is valid, so a mail failure must not fail
-    // the request: EMAIL_FROM has to be on a domain onboarded to Cloudflare Email Sending, and
+    // the request: EMAIL_FROM has to be on a domain verified in Amazon SES (out of the sandbox), and
     // when it isn't, every send throws. Losing the whole call there would leave an orphaned
     // invitation, skip the audit entry, and take away the only way to get someone into a
     // workspace. Hand the link back instead so the inviter can pass it on themselves.

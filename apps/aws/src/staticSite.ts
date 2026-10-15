@@ -2,9 +2,9 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { extname, join, relative, sep } from "node:path";
 
 /**
- * The static UI (the Next.js export) served from the function's own package, the way Workers
- * Static Assets serves it on Cloudflare: /login is login.html, unknown paths get 404.html with a
- * 404, and the rules in public/_headers (security headers) apply to every file.
+ * The static UI (the Next.js export) served from the function's own package (and by the local
+ * server): /login is login.html, unknown paths get 404.html with a 404, and the rules in
+ * public/_headers (security headers) apply to every file.
  */
 const TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -26,7 +26,7 @@ const TYPES: Record<string, string> = {
   ".webmanifest": "application/manifest+json",
 };
 
-/** The "/*" block of a Cloudflare-style _headers file. */
+/** The "/*" block of a _headers file (`/*` on its own line, then indented `Name: value` lines). */
 export function parseHeaders(text: string): Record<string, string> {
   const out: Record<string, string> = {};
   let inAll = false;

@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 // Build the AWS Lambda package (infra/aws/staging.yaml): dist/function.zip with
 //   index.mjs        the function (API + static UI), bundled with esbuild
-//   *.wasm           Prisma's query compiler
 //   public/          the web UI (Next.js export, built into apps/web/out-aws)
 //   migrations/, init.sql   applied by the function itself ({ "action": "migrate" })
 //   rds-ca.pem       Amazon RDS's CA bundle (NODE_EXTRA_CA_CERTS: TLS to the database is verified)
@@ -11,7 +10,7 @@
 // infra/cdk deploys dist/function; the staging bundle is the Phase 1 CloudShell path (docs/aws-staging.md).
 import { execFileSync, spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { basename, dirname, resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 
@@ -30,23 +29,6 @@ if (!process.argv.includes("--skip-web")) {
 }
 cpSync(resolve(root, "apps/web/out-aws"), resolve(out, "public"), { recursive: true });
 
-/** Prisma's generated client imports its query compiler as `*.wasm?module` (a compiled module, as on workerd). */
-const wasmModule = {
-  name: "wasm-module",
-  setup(b) {
-    b.onResolve({ filter: /\.wasm\?module$/ }, (args) => ({ path: resolve(args.resolveDir, args.path.slice(0, -"?module".length)), namespace: "wasm-module" }));
-    b.onLoad({ filter: /.*/, namespace: "wasm-module" }, (args) => {
-      const name = basename(args.path);
-      cpSync(args.path, resolve(out, name));
-      return {
-        contents: `import { readFileSync } from "node:fs";\nexport default new WebAssembly.Module(readFileSync(new URL("./${name}", import.meta.url)));\n`,
-        loader: "js",
-        resolveDir: out,
-      };
-    });
-  },
-};
-
 await build({
   entryPoints: [resolve(pkg, "src/index.ts")],
   outfile: resolve(out, "index.mjs"),
@@ -57,10 +39,9 @@ await build({
   minify: true,
   sourcemap: false,
   legalComments: "none",
-  plugins: [wasmModule],
   // CommonJS dependencies (pg) call require() for Node's own modules.
   banner: { js: 'import { createRequire as __cr } from "node:module"; const require = __cr(import.meta.url);' },
-  // Optional native/cloud extras some dependencies probe for; never used here.
+  // Optional extras pg probes for (native bindings; sockets on other runtimes); never used here.
   external: ["pg-native", "cloudflare:sockets"],
   logLevel: "warning",
 });

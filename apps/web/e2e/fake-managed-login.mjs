@@ -9,7 +9,7 @@
 //   GET  /logout            back to logout_uri
 //
 // The ID token is signed with the Cognito emulator's key (published with cognito-local, which is why
-// production refuses an emulator), so the Worker verifies it against the emulator's JWKS exactly as
+// production refuses an emulator), so the app verifies it against the emulator's JWKS exactly as
 // it verifies Cognito's. Usage: node fake-managed-login.mjs <port> <issuer> <clientId> <clientSecret>
 import { createHash, createSign, randomUUID } from "node:crypto";
 import { execSync } from "node:child_process";

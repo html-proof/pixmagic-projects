@@ -1,6 +1,6 @@
-import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { APP_SETTINGS } from "../../../apps/aws/src/settings.js";
 
 /**
  * Per-environment settings for the CDK app. One AWS account (605411278365), Sydney; each
@@ -23,15 +23,15 @@ export interface EnvConfig {
   logRetentionDays: number;
   /**
    * The EventBridge schedules (token refresh, reconcile, ad syncs, email and WhatsApp sweeps).
-   * OFF until this environment takes over from Cloudflare: with production's data copied in and
-   * both sides running them, merchants' stores would be synced twice and their customers emailed
-   * twice. Turn on at cutover: `-c schedules=on`.
+   * OFF until this environment takes over from the old deployment (docs/aws-deployment.md,
+   * Cutover): with production's data copied in and both sides running them, merchants' stores
+   * would be synced twice and their customers emailed twice. Turn on at cutover: `-c schedules=on`.
    */
   schedulesEnabled: boolean;
   /**
    * The app's own address instead of CloudFront's. DNS for it is at Cloudflare (records DNS only,
    * pointing at the distribution); the certificate is in ACM in us-east-1 (CloudFront's region),
-   * validated by a CNAME there (docs/aws-deployment.md, "Custom domain"). Page requests on any
+   * validated by a CNAME there (docs/aws-deployment.md, "Domain: bizinsights.io"). Page requests on any
    * other name (`redirects`, the cloudfront.net address) are redirected to `name`.
    * Unset: the app lives on the cloudfront.net address.
    */
@@ -109,51 +109,12 @@ export function envConfig(context: (key: string) => unknown): EnvConfig {
 const here = dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = resolve(here, "../../..");
 
-/** JSONC → JSON: drops // and /* *\/ comments outside strings, and trailing commas. */
-export function stripJsonComments(text: string): string {
-  let out = "";
-  let inString = false;
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i]!;
-    const next = text[i + 1];
-    if (inString) {
-      out += ch;
-      if (ch === "\\") {
-        out += next ?? "";
-        i++;
-      } else if (ch === '"') inString = false;
-      continue;
-    }
-    if (ch === '"') {
-      inString = true;
-      out += ch;
-    } else if (ch === "/" && next === "/") {
-      while (i < text.length && text[i] !== "\n") i++;
-      out += "\n";
-    } else if (ch === "/" && next === "*") {
-      i += 2;
-      while (i < text.length && !(text[i] === "*" && text[i + 1] === "/")) i++;
-      i++;
-    } else out += ch;
-  }
-  return out.replace(/,(\s*[}\]])/g, "$1");
-}
-
 /**
- * The app's non-secret settings: the same `vars` the Cloudflare Worker runs with
- * (apps/cloudflare/wrangler.jsonc), so both hosts behave alike while they run side by side.
- * Left out: the addresses (this environment has its own, from the runtime parameter) and the
- * Cognito ids (from the Auth stack). Once Cloudflare is retired, move these here.
+ * The app's non-secret settings (apps/aws/src/settings.ts). The addresses and Cognito ids are not
+ * among them: this environment gets those from its own stacks (the runtime parameter).
  */
 export function appVars(): Record<string, string> {
-  const raw = readFileSync(resolve(REPO_ROOT, "apps/cloudflare/wrangler.jsonc"), "utf8");
-  const vars = (JSON.parse(stripJsonComments(raw)) as { vars: Record<string, string> }).vars;
-  const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(vars)) {
-    if (/^(APP_URL|API_URL)$/.test(k) || k.startsWith("COGNITO_")) continue;
-    out[k] = String(v);
-  }
-  return out;
+  return { ...APP_SETTINGS };
 }
 
 /** The Lambda package built by apps/aws/scripts/build.mjs. */

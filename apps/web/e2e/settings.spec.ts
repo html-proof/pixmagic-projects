@@ -6,7 +6,7 @@ import { BILLING_ENABLED } from "../src/lib/features";
 import { confirmSignUp, fillSignUp, signedWebhook, signUp, uniqueEmail } from "./helpers";
 
 /**
- * Settings, invitations, billing and the public pages, driven through the real Worker.
+ * Settings, invitations, billing and the public pages, driven through the real app.
  * Added by the full test pass (2026-10-06): none of these pages had e2e coverage, and each case
  * below pins a defect that pass fixed.
  */
@@ -132,7 +132,7 @@ test("store permissions say which are optional for every role, and Disconnect re
   const shop = `perms-${Date.now()}.myshopify.com`;
   const storeId = await insertStore(ws, shop, ["read_orders", "read_customers"]);
   await page.goto("/settings/stores");
-  // e2e declares read_customers optional (SHOPIFY_OPTIONAL_SCOPES in worker.env).
+  // e2e declares read_customers optional (SHOPIFY_OPTIONAL_SCOPES in server.env).
   const optionalRow = page.getByRole("listitem").filter({ has: page.getByTestId("revoke-read_customers") });
   await expect(optionalRow).toContainText("Optional");
   // Named for the permission and the store, not a bare "Remove" repeated down the page.
@@ -188,12 +188,12 @@ test("the privacy and support pages describe what the product actually does", as
   await expect(page.locator("main")).toContainText("Enable button");
 });
 
-test("a webhook bigger than one Durable Object value is stored and processed", async ({ page }) => {
+test("a webhook too big for a queue message is stored and processed", async ({ page }) => {
   const { ws } = await owner(page, "bigwebhook");
   const shop = `big-${Date.now()}.myshopify.com`;
   const storeId = await insertStore(ws, shop, ["read_orders", "read_products"]);
-  // R2 is not bound locally, so a payload over the inline limit goes to Durable Object storage,
-  // which caps a value at 2 MB. Webhook bodies may be 5 MB; this one is ~3 MB.
+  // A payload over the inline limit goes to the payload store (S3 on AWS, memory locally).
+  // Webhook bodies may be 5 MB; this one is ~3 MB.
   const filler = createHash("sha256").update("x").digest("hex").repeat(3 * 1024 * 1024 / 64);
   const now = new Date().toISOString();
   const id = `e2e-big-${Date.now()}`;

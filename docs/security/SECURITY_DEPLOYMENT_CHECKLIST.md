@@ -16,14 +16,6 @@ migrated database. It:
 
 CloudFront already redirects http to https and sends HSTS; the API adds HSTS itself too.
 
-## Cloudflare (when it is next deployed from `main`)
-
-- [ ] **Migration first**, after a `pg_dump` backup: `psql -1 -f` the migration on production
-      `app`, then `prisma migrate resolve --applied 20261016100000_security_hardening`.
-- [ ] **Worker secrets.** `npx wrangler secret list --config apps/cloudflare/wrangler.jsonc` must
-      not show `COGNITO_ENDPOINT` or `MAILPIT_URL`: production refuses to start with either.
-- [ ] **Re-run grants on any database rebuilt from scratch** (`infra/postgres/init.sql`).
-
 ## Not ported: Turnstile
 
 The Firebase-era branch had an optional Cloudflare Turnstile check on "Email me a code". `main`
@@ -32,14 +24,10 @@ Redoing it: serve the site key from `/auth/config`, render the widget on the cod
 token in `/auth/otp/start` before the per-address limit, and set the secret only after that UI is
 live (the reverse order refuses every code request).
 
-## Right after deploying to Cloudflare (smoke tests; AWS runs infra/cdk/scripts/smoke.mjs itself)
+## Right after deploying (Deploy to AWS runs `infra/cdk/scripts/smoke.mjs` itself: HTTPS redirect, HSTS, CSRF, `/api/readyz`)
 
-- [ ] `curl -sI http://insights.imeseban.workers.dev/login` → `301` to `https://…/login`.
-- [ ] `curl -s -o /dev/null -w "%{http_code}" -X POST http://insights.imeseban.workers.dev/api/auth/session` → `403`.
-- [ ] `curl -sI https://insights.imeseban.workers.dev/api/healthz` shows `strict-transport-security`.
-- [ ] `/api/readyz` → `{"ok":true,…}`.
 - [ ] Sign in with Google in a real browser, open DevTools → Console, and look for
-      `[Report Only]` CSP messages while signing in with Google, Apple, and connecting Meta Ads /
+      `[Report Only]` CSP messages while signing in with Google and connecting Meta Ads /
       WhatsApp. If there are none after a few days of real use, promote the Report-Only policy in
       `apps/web/public/_headers` to `Content-Security-Policy` (merge it with the enforced one).
 - [ ] Settings → Members: the pending invitations show a Cancel button.
@@ -48,18 +36,18 @@ live (the reverse order refuses every code request).
 
 | Priority | Action | Why |
 | --- | --- | --- |
-| High | Rotate the `app` and `app_rls` database passwords and update both Hyperdrive configs (`docs/security.md`) | Still the defaults; they were LAN-reachable before 2026-10-11 (audit 2026-10-10, A2) |
-| High | On the PC that hosts production: bind or firewall the native PostgreSQL on `0.0.0.0:5432` and the `shopping-cart` containers on `0.0.0.0:5433`/`:6379` | They listen on every interface on the machine that holds production's data (finding #11; reachability from another device not tested) |
-| Medium | Move runtime off the Postgres superuser (`insights_owner` role) | Audit 2026-10-10, B1 |
+| High | Until the old deployment is retired, its database on the owner's PC keeps the passwords it was created with: rotate them there, or retire it ([aws-deployment.md](../aws-deployment.md#retiring-the-old-cloudflare-deployment)) | Defaults that were LAN-reachable before 2026-10-11 (audit 2026-10-10, A2). On AWS both passwords are generated (Secrets Manager) |
+| High | On the owner's PC: bind or firewall the native PostgreSQL on `0.0.0.0:5432` and the `shopping-cart` containers on `0.0.0.0:5433`/`:6379` | They listen on every interface on the machine that holds the old deployment's data (finding #11; reachability from another device not tested) |
+| Medium | Run the system paths as a narrower owner than the master user `app` (an `insights_owner` role) | Audit 2026-10-10, B1 |
 | Medium | Bot check on sign-up, password reset and "Email me a code" (Turnstile, see above, or AWS WAF Bot Control on those paths) | Only rate limits stand in front of the emails these send |
-| Medium | Confirm both Hyperdrive configs have caching disabled (`wrangler hyperdrive get <id>`) | A cached tenant read must never be served to another session |
-| Medium | Move production Postgres off the home PC | Availability, plus physical and network exposure (see `insights-production-db-on-local-tunnel` notes) |
-| Low | Pin GitHub Actions by commit SHA; pin `cloudflared` and `mailpit` image tags | Supply chain |
-| Low | Custom domain later: Cloudflare SSL/TLS "Full (strict)" is moot for a Worker, but turn on "Always Use HTTPS", HSTS and minimum TLS 1.2 on the zone | Defence in depth |
+| Medium | Cut over to AWS, then retire the old deployment and the database on the home PC ([aws-deployment.md](../aws-deployment.md)) | Availability, plus physical and network exposure (see `insights-production-db-on-local-tunnel` notes) |
+| Low | Pin GitHub Actions by commit SHA; pin the `mailpit` image tag | Supply chain |
+| Low | Custom domain later: an ACM certificate in us-east-1, and a minimum of TLS 1.2 on the CloudFront distribution | Defence in depth |
 
 ## Rollback
 
 All code changes are backward-compatible with the migrated database, and the migration is
-compatible with the current production code. Rolling the Worker back
-(`wrangler versions deploy <previous>@100% -y --config apps/cloudflare/wrangler.jsonc`) is safe
-without touching the database. That command switches production immediately.
+compatible with the code before it. Rolling the functions back (`node infra/cdk/scripts/rollback.mjs`,
+which moves the `live` aliases of api, jobs and cron to the previous versions; Deploy to AWS does it
+by itself when the migration or the smoke tests fail) is safe without touching the database. That
+command switches production immediately.

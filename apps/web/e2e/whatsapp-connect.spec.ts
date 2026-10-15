@@ -4,7 +4,7 @@ import { E2E_ENV } from "../playwright.config";
 import { signUp, uniqueEmail } from "./helpers";
 
 /**
- * "Continue with WhatsApp" in the browser: the real page and Worker, with Meta's side stubbed.
+ * "Continue with WhatsApp" in the browser: the real page and app, with Meta's side stubbed.
  *
  * Meta's SDK (connect.facebook.net) is replaced by a small script that behaves like FB.login, and
  * Meta's own page by one on www.facebook.com that posts Embedded Signup's WA_EMBEDDED_SIGNUP message

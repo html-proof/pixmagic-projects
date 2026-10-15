@@ -28,38 +28,38 @@ committed with the code that needs it. Nobody edits a production schema by hand.
 ## Rules for a migration production can take
 
 - **Additive first.** Add columns as nullable or with a default, add tables and indexes. The code
-  that was live before the deploy must keep working on the new schema, because the migration is
-  applied *before* the new code goes live and stays if the code is rolled back.
+  that was live before the deploy must keep working on the new schema, because the migration stays
+  if the code is rolled back; and the new code briefly runs on the old schema, between the deploy
+  and the migration step (below).
 - **Removing or renaming** takes two releases: stop using it (deploy), then drop it (next migration).
 - **Data changes** (backfills) go in the migration only when they are quick and idempotent;
   anything long is a maintenance task (`apps/worker/ops/`) run separately.
 - **Never reset or drop** production data to make a migration apply.
 - **Large tables**: `CREATE INDEX` locks writes to that table while it builds. Today's tables are
   small enough for that to take seconds; once `orders` is large, create the index
-  `CONCURRENTLY` by hand first (it can't run inside a migration's transaction), then mark the
-  migration applied.
+  `CONCURRENTLY` by hand first (psql through the admin host, [../aws-deployment.md](../aws-deployment.md#database);
+  it can't run inside a migration's transaction), then mark the migration applied.
 
 ## Applying to production
 
-Production's database is `app` on the Docker Postgres behind the tunnel
-([../deployment-cloudflare.md](../deployment-cloudflare.md)). Before uploading a version that
-needs a migration:
+Production's database is `app` on RDS PostgreSQL ([../aws-deployment.md](../aws-deployment.md)).
+The deploy applies migrations, not a person: merging to `main` runs Deploy to AWS
+(`.github/workflows/aws-deploy.yml`), which
 
-1. Back up: `node infra/postgres/backup.mjs` (RUNBOOK, "Back up and restore the database").
-2. See what is pending (from a checkout of the version being deployed, with `DATABASE_URL`
-   pointing at `app`, the owner role):
+1. deploys the new code (`cdk deploy`);
+2. invokes the cron function's `migrate` action (`apps/aws/src/migrate.ts`): every pending
+   migration in order, each in its own transaction and recorded in `_prisma_migrations` exactly
+   as `prisma migrate deploy` does, then the grants in `infra/postgres/init.sql`;
+3. runs the smoke tests.
 
-   ```bash
-   pnpm --filter @app/db exec prisma migrate status
-   ```
+If step 2 or 3 fails, the functions go back to the previous versions; an applied migration stays.
+To rerun the action (it is idempotent):
 
-3. Apply: `pnpm db:migrate` (that is `prisma migrate deploy`), or run each pending
-   `migration.sql` in one transaction with `psql -1 -f` and then record it with
-   `prisma migrate resolve --applied <folder name>` (the route used so far, which shows any error
-   before anything is committed).
-4. Deploy the code (staged version, smoke test, promote).
-5. Point `DATABASE_URL` back at `app_dev`.
+```bash
+aws lambda invoke --function-name insights-production-cron:live --cli-binary-format raw-in-base64-out --payload '{"action":"migrate"}' out.json
+```
 
-Applied to production on 2026-10-14: `20261014120000_staff_management` and
-`20261014180000_hot_filter_indexes`. Still on an unmerged branch: `20261012000000_ads_completeness`
-(apply it before the deploy that brings that code).
+RDS keeps 14 days of point-in-time restore, so there is no separate backup step.
+
+Still on an unmerged branch: `20261012000000_ads_completeness`; it ships with the merge that
+brings that code.

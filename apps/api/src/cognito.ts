@@ -4,7 +4,7 @@ import { createRemoteJWKSet, customFetch, jwtVerify, type JWTPayload } from "jos
 import { env, type FetchLike } from "@app/core";
 
 /**
- * Amazon Cognito user pools, spoken to directly over HTTPS from the Worker.
+ * Amazon Cognito user pools, spoken to directly over HTTPS from the API.
  *
  * The browser never talks to Cognito and never holds a Cognito token: every call is made here
  * (backend-for-frontend), the tokens Cognito issues are checked here, and the browser gets our

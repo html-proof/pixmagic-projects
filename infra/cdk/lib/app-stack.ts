@@ -31,7 +31,7 @@ type QueueName = "sync" | "webhooks" | "aggregate" | "email";
  * the dashboard and the budget. Redeployed on every release.
  *
  * Traffic: viewer → CloudFront (+ WAF) → the `api` function URL, which serves the pages and the API
- * on one origin (first-party session cookie, the same routing as the Worker). Next's hashed build
+ * on one origin (first-party session cookie, the same routing as the local server). Next's hashed build
  * files, `/_next/static/*`, come from an S3 bucket instead and are cached at the edge for a year.
  * CloudFront adds a secret header the function checks, so the function URL can't be used to go
  * around WAF, and a viewer-request function passes on the viewer's real address and host. With a
@@ -59,7 +59,7 @@ export class AppStack extends Stack {
       }
     })();
 
-    // --- Queues (Cloudflare Queues insights-sync, -webhooks, -aggregate, -email + insights-dlq).
+    // --- Queues (sync, webhooks, aggregate, email + a dead-letter queue).
     // Visibility timeout covers the jobs function's 15 minutes. consume() settles every message
     // within MAX_ATTEMPTS (6); maxReceiveCount 10 only catches what it never settles (crashes).
     const dlq = new sqs.Queue(this, "Dlq", { queueName: `${prefix}-dlq`, retentionPeriod: Duration.days(14), encryption: sqs.QueueEncryption.SQS_MANAGED, enforceSSL: true });
@@ -144,8 +144,8 @@ export class AppStack extends Stack {
     const cron = fn("cron", 1024, Duration.seconds(900), "Insights scheduled sweeps + maintenance actions");
     this.apiRole = api.fn.role!;
 
-    // The jobs function's queues. Concurrency per queue as on Cloudflare, but at least 2 (SQS's
-    // minimum) and small while the account's Lambda concurrency is 10.
+    // The jobs function's queues. Concurrency per queue at least 2 (SQS's minimum) and small
+    // while the account's Lambda concurrency is 10.
     const sources: Array<[QueueName, number, number, number]> = [
       ["sync", 1, 0, 2],
       ["webhooks", 10, 2, 2],

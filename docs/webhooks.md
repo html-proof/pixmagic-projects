@@ -1,17 +1,17 @@
 # Webhooks
 
-Webhooks drive all updates after the initial backfill. Endpoint: `POST https://APP_DOMAIN/api/webhooks/shopify` (`apps/api/src/routes/webhooks.ts`, served by the Worker in `apps/cloudflare`). The endpoint is exempt from the global per-IP rate limit: Shopify sends every store's webhooks from a small pool of addresses, and each delivery is HMAC-verified instead.
+Webhooks drive all updates after the initial backfill. Endpoint: `POST <APP_URL>/api/webhooks/shopify`, in production `https://d2mr8m2p1qkh58.cloudfront.net/api/webhooks/shopify` (`apps/api/src/routes/webhooks.ts`, served by the `api` Lambda function built from `apps/aws`). The endpoint is exempt from the global per-IP rate limit: Shopify sends every store's webhooks from a small pool of addresses, and each delivery is HMAC-verified instead.
 
 ## Intake contract
 
 1. **Verify first.** HMAC-SHA256 of the *raw* body with the app secret, compared in constant time to `X-Shopify-Hmac-Sha256`. Failure → `401`, nothing stored.
-2. **Deduplicate.** `X-Shopify-Webhook-Id` is inserted into `webhook_events` under a unique constraint. The row is written before the queue send, so it alone does not prove the delivery was queued: the DB tunnel can drop after the insert committed, or Shopify can give up at 5 s and the request be cancelled before the send. A `200` ends Shopify's retries, so a repeated delivery is answered by the state of its row:
+2. **Deduplicate.** `X-Shopify-Webhook-Id` is inserted into `webhook_events` under a unique constraint. The row is written before the queue send, so it alone does not prove the delivery was queued: the database connection can drop after the insert committed, or Shopify can give up at 5 s and the request be cancelled before the send. A `200` ends Shopify's retries, so a repeated delivery is answered by the state of its row:
    - a consumer has picked it up (`running`, `succeeded`, `failed`, or `attempts > 0`) → `200 {duplicate:true}`, not re-queued;
    - still `queued` with `attempts=0` more than 30 s after it was recorded → nothing can still be sending it, so the retry takes a lease on it (re-stamps `received_at`) and queues it again with the retry's payload. Rarely this queues a second copy of a message that was only waiting out a DB outage; processing is idempotent (below) and each copy has its own payload blob, which a copy that finds the event already processed deletes, so that is harmless;
    - still `queued` with `attempts=0` and younger than that (Shopify's first retry can come about a second after it gave up), or a lease another request holds → `503 {error:"in_progress"}`, so Shopify retries again later.
 
    If the queue send fails, a row this request inserted is removed again (when the DB allows) so the retry starts afresh; a re-armed row is kept for any earlier message still behind it. Either way the API answers `500` so Shopify retries.
-3. **Queue, then ack.** The payload goes to the `webhooks` Cloudflare Queue (the message carries the event id); the API replies `200` in milliseconds. Payloads over 100 KB are kept in R2, or, while R2 is not bound, in Durable Object storage split into chunks (a stored value is capped at 2 MB, a webhook body at 5 MB). Payloads are never written to Postgres.
+3. **Queue, then ack.** The payload goes to the `webhooks` SQS queue (the message carries the event id); the API replies `200` in milliseconds. Payloads over 100 KB are kept in the S3 payloads bucket (deleted after 7 days) and the message carries their key. Payloads are never written to Postgres.
 
 ## Processing (worker, `apps/worker/src/handlers.ts`)
 
@@ -19,7 +19,7 @@ Webhooks drive all updates after the initial backfill. Endpoint: `POST https://A
 | --- | --- |
 | `orders/create`, `orders/updated`, `orders/paid`, `orders/cancelled`, `orders/fulfilled`, `orders/partially_fulfilled` | Upsert order + line items + embedded refunds; enqueue re-aggregation of affected days. With WhatsApp on: order timeline, tracking link, notifications (docs/whatsapp.md) |
 | `checkouts/create`, `checkouts/update` | WhatsApp only: abandoned-checkout rows (only with a phone number) and cart reminders; `completed_at` cancels them |
-| `fulfillments/create`, `fulfillments/update`, `fulfillment_events/create` | WhatsApp only: parcel stages. Need `read_fulfillments`, which isn't requested today, so they aren't subscribed; the worker reads shipment status from order payloads and a GraphQL poll instead |
+| `fulfillments/create`, `fulfillments/update`, `fulfillment_events/create` | WhatsApp only: parcel stages. Need `read_fulfillments`, which isn't requested today, so they aren't subscribed; the jobs read shipment status from order payloads and a GraphQL poll instead |
 | `refunds/create` | Upsert refund (booked on refund date). If the order isn't known yet the job throws and retries with backoff |
 | `products/create`, `products/update`, `products/delete` | Upsert / delete product |
 | `app/uninstalled` | Store → `uninstalled`, tokens wiped. Data kept until `shop/redact` |
