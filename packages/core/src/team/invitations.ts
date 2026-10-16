@@ -86,7 +86,8 @@ async function deliver(invitation: Invitation, token: string, mailer: Mailer): P
       expiresAt: invitation.expiresAt,
       timezone: inviter?.timezone ?? "UTC",
     });
-    await mailer.send(invitation.email, mail.subject, mail.text, mail.html);
+    // Replies reach the person who invited them (EMAIL_FROM is a no-reply address).
+    await mailer.send(invitation.email, mail.subject, mail.text, mail.html, inviter ? { replyTo: inviter.email } : undefined);
     emailed = true;
   } catch (err) {
     // The invitation is saved and its link works, so a mail failure (EMAIL_FROM not verified in SES,

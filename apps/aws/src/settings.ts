@@ -36,8 +36,10 @@ export const APP_SETTINGS = {
   // apps/web/src/lib/features.ts (docs/shopify-app-store-compliance.md, "Billing").
   "BILLING_ENABLED": "",
   // App email (invitations, alerts), sent through Amazon SES: an address on a domain verified
-  // there. Sign-in emails (codes) are Cognito's own, not this.
-  "EMAIL_FROM": "bizinsights <no-reply@example.com>",
+  // there (bizinsights.io: Easy DKIM, records in Cloudflare DNS). The domain has no mailbox, so
+  // replies go where a message names (an invitation: its sender). Sign-in emails (codes) are
+  // Cognito's own, not this.
+  "EMAIL_FROM": "bizinsights <no-reply@bizinsights.io>",
   // Ad accounts ("Continue with Meta" / "Continue with Google Ads" / "Continue with Google AdSense"
   // on Settings → Ad accounts). Empty until the apps exist: the buttons then say the platform isn't
   // set up. GOOGLE_ADS_CLIENT_ID is the Google Cloud OAuth client "Insights web" (project

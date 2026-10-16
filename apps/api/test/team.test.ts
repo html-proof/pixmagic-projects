@@ -129,6 +129,9 @@ describe("inviting someone with Customers access only (scenarios 1-6)", () => {
     expect(mail.text).toContain("Here's the customer view we talked about.");
     expect(mail.text).toContain("If you weren't expecting this invitation, you can safely ignore this email.");
     expect(mail.html).toContain("Accept Invitation");
+    // Replies reach the owner who sent it (the sender address has no mailbox).
+    expect(mail.replyTo).toBe(b.owner.user.email);
+    expect(mail.text).toContain("Questions? Reply to this email to reach");
     const token = tokenFrom(mail.text)!;
     expect(mail.text).toContain(`/invite#token=${token}`);
     // Only the token's hash is stored, and the invitation is scoped to the workspace.
