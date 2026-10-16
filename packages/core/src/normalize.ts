@@ -646,16 +646,48 @@ export const WEB_PIXEL_UPDATE = /* GraphQL */ `
     }
   }`;
 
+/**
+ * A recurring charge for a plan. APPLY_IMMEDIATELY: once approved it replaces the subscription in
+ * force at once (Shopify cancels the old one, with a prorated credit), so a plan change never
+ * leaves two charges running and the plan the app gives is the one being paid for.
+ */
 export const APP_SUBSCRIPTION_CREATE = /* GraphQL */ `
   mutation AppSubscriptionCreate($name: String!, $returnUrl: URL!, $amount: Decimal!, $currency: CurrencyCode!, $test: Boolean) {
     appSubscriptionCreate(
       name: $name
       returnUrl: $returnUrl
       test: $test
+      replacementBehavior: APPLY_IMMEDIATELY
       lineItems: [{ plan: { appRecurringPricingDetails: { price: { amount: $amount, currencyCode: $currency } } } }]
     ) {
       userErrors { field message }
       confirmationUrl
       appSubscription { id status }
+    }
+  }`;
+
+/** Whether the shop is a development store, where Shopify accepts only test charges. */
+export const SHOP_PARTNER_DEVELOPMENT = /* GraphQL */ `
+  query ShopPartnerDevelopment {
+    shop { plan { partnerDevelopment } }
+  }`;
+
+/** Ends a charge now (a downgrade to Free). `prorate` credits the merchant for the unused days. */
+export const APP_SUBSCRIPTION_CANCEL = /* GraphQL */ `
+  mutation AppSubscriptionCancel($id: ID!, $prorate: Boolean) {
+    appSubscriptionCancel(id: $id, prorate: $prorate) {
+      userErrors { field message }
+      appSubscription { id status }
+    }
+  }`;
+
+/**
+ * Where Shopify says the given charges stand. A charge this installation can't see comes back null:
+ * one made for an earlier installation of the app, which uninstalling cancelled.
+ */
+export const APP_SUBSCRIPTION_STATUSES = /* GraphQL */ `
+  query AppSubscriptionStatuses($ids: [ID!]!) {
+    nodes(ids: $ids) {
+      ... on AppSubscription { id status }
     }
   }`;

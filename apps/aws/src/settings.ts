@@ -31,6 +31,10 @@ export const APP_SETTINGS = {
   // store with its own app"). Fill in the client id from the Dev Dashboard and set the secret
   // with `node infra/cdk/scripts/put-secrets.mjs --set SHOPIFY_APP_SECRET_PIXMAGIC`, then deploy.
   "SHOPIFY_EXTRA_APPS": "[{\"key\":\"pixmagic\",\"clientId\":\"bb0ea9e4ad8939a6a1513e4dbf8cbbf1\",\"shops\":[\"pixmagic.myshopify.com\"]}]",
+  // Paid plans (packages/core/src/billing.ts): "1" lets merchants start one and applies each plan's
+  // store limit. Off until they launch; turn it on together with BILLING_ENABLED in
+  // apps/web/src/lib/features.ts (docs/shopify-app-store-compliance.md, "Billing").
+  "BILLING_ENABLED": "",
   // App email (invitations, alerts), sent through Amazon SES: an address on a domain verified
   // there. Sign-in emails (codes) are Cognito's own, not this.
   "EMAIL_FROM": "bizinsights <no-reply@example.com>",

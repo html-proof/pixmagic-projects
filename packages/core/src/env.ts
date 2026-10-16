@@ -70,6 +70,13 @@ const schema = z.object({
    */
   SHOPIFY_DEFAULT_APP_SHOPS: z.string().optional().default(""),
   /**
+   * "1" when paid plans are on sale (packages/core/src/billing.ts): merchants can start one, and
+   * each plan's store limit applies. Turn it on together with `BILLING_ENABLED` in
+   * apps/web/src/lib/features.ts, which shows Settings → Billing. Off, no charge can be started
+   * and nobody is limited; a charge already in force can still be cancelled.
+   */
+  BILLING_ENABLED: z.string().optional().default(""),
+  /**
    * Ad platforms ("Continue with Meta" / "Continue with Google" on Settings → Ad accounts). Empty
    * means not set up: the buttons say so instead of sending people to an error page. The app ids
    * are public; the secrets are in Secrets Manager.
@@ -197,6 +204,9 @@ export function developmentSettings(e: Pick<Env, "APP_URL" | "API_URL" | "COGNIT
   if (isLocalUrl(e.API_URL)) found.push("API_URL (a local address)");
   return found;
 }
+
+/** An on/off setting: "1", "true", "yes" or "on". */
+export const switchedOn = (v: string) => /^(1|true|yes|on)$/i.test(v.trim());
 
 let cached: Env | undefined;
 export function env(): Env {
