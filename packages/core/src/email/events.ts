@@ -13,6 +13,7 @@
  * normalized to the fields in EVENT_CATALOG, and encrypted. Nothing is stored for an event no
  * enabled automation listens to, beyond the id that makes a retry a no-op.
  */
+import { z } from "zod";
 import { systemDb, type Store } from "@app/db";
 import {
   CHECKOUT_ABANDON_MINUTES,
@@ -24,27 +25,27 @@ import {
   type IngestEvent,
 } from "@app/shared/email";
 import { logger } from "../logger.js";
+import { automationCheckoutSchema, automationOrderSchema, parseShopify, type AutomationCheckout, type AutomationOrder } from "../shopifyPayloads.js";
 import { EmailError, isUniqueViolation, recipientHash, type EmailDeps } from "./common.js";
 import { AAD, seal } from "./vault.js";
-
-type Payload = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
 
 const num = (v: unknown): number | null => {
   const n = typeof v === "number" ? v : typeof v === "string" && v.trim() ? Number(v) : NaN;
   return Number.isFinite(n) ? n : null;
 };
 const str = (v: unknown, max = 200): string | null => (typeof v === "string" && v.trim() ? v.trim().slice(0, max) : null);
-const titles = (items: unknown): string[] => (Array.isArray(items) ? items.map((i: Payload) => str(i?.title)).filter((t): t is string => !!t).slice(0, 50) : []);
-const itemCount = (items: unknown): number => (Array.isArray(items) ? items.reduce((n: number, i: Payload) => n + (num(i?.quantity) ?? 1), 0) : 0);
+type LineItems = AutomationOrder["line_items"];
+const titles = (items: LineItems): string[] => (items ?? []).map((i) => str(i.title)).filter((t): t is string => !!t).slice(0, 50);
+const itemCount = (items: LineItems): number => (items ?? []).reduce((n, i) => n + (num(i.quantity) ?? 1), 0);
 
 /** Shopify's marketing consent for email: the customer's current consent, else the checkbox at checkout. */
-function acceptsMarketing(p: Payload): boolean {
+function acceptsMarketing(p: AutomationOrder | AutomationCheckout): boolean {
   const state = p.customer?.email_marketing_consent?.state;
   if (typeof state === "string") return state === "subscribed";
   return p.buyer_accepts_marketing === true || p.customer?.accepts_marketing === true;
 }
 
-function customer(p: Payload): EventData["customer"] {
+function customer(p: AutomationOrder | AutomationCheckout): EventData["customer"] {
   const email = normalizeEmail(p.email ?? p.contact_email ?? p.customer?.email);
   return {
     ...(email ? { email } : {}),
@@ -57,7 +58,7 @@ function customer(p: Payload): EventData["customer"] {
 const storeFields = (store: Pick<Store, "name" | "shopDomain">) => ({ name: store.name ?? store.shopDomain, domain: store.shopDomain });
 
 /** An order webhook as event data (EVENT_CATALOG's order fields). */
-export function normalizeShopifyOrder(store: Pick<Store, "name" | "shopDomain">, p: Payload): EventData {
+export function normalizeShopifyOrder(store: Pick<Store, "name" | "shopDomain">, p: AutomationOrder): EventData {
   return {
     customer: customer(p),
     order: {
@@ -70,7 +71,7 @@ export function normalizeShopifyOrder(store: Pick<Store, "name" | "shopDomain">,
       fulfillment_status: str(p.fulfillment_status, 40) ?? "unfulfilled",
       item_count: itemCount(p.line_items),
       product_titles: titles(p.line_items),
-      discount_codes: Array.isArray(p.discount_codes) ? p.discount_codes.map((d: Payload) => str(d?.code, 60)).filter(Boolean).slice(0, 20) : [],
+      discount_codes: (p.discount_codes ?? []).map((d) => str(d.code, 60)).filter(Boolean).slice(0, 20),
       shipping_country: str(p.shipping_address?.country_code, 2),
       status_url: typeof p.order_status_url === "string" && /^https:\/\//.test(p.order_status_url) ? p.order_status_url.slice(0, 500) : null,
     },
@@ -79,7 +80,7 @@ export function normalizeShopifyOrder(store: Pick<Store, "name" | "shopDomain">,
 }
 
 /** A checkout webhook as event data (EVENT_CATALOG's checkout fields). */
-export function normalizeShopifyCheckout(store: Pick<Store, "name" | "shopDomain">, p: Payload): EventData {
+export function normalizeShopifyCheckout(store: Pick<Store, "name" | "shopDomain">, p: AutomationCheckout): EventData {
   return {
     customer: customer(p),
     checkout: {
@@ -159,9 +160,19 @@ const ORDER_TOPICS: Record<string, string> = {
 
 const checkoutKey = (storeId: string, token: string) => `checkout:${storeId}:${token}`;
 
+/**
+ * The checkout an order or checkout webhook is about, and whether it completed: read first, before
+ * anything is known to listen, because either one ends the watch for abandonment whatever else the
+ * payload holds. Never fails and never logs: what isn't readable here is simply absent, and the
+ * full schema checks (and logs) the payload once an automation acts on it.
+ */
+const checkoutRefSchema = z
+  .object({ token: z.string().optional().catch(undefined), checkout_token: z.string().optional().catch(undefined), completed_at: z.unknown() })
+  .catch({});
+
 /** A checkout that turned into an order (or completed) is no longer a candidate for abandonment. */
-async function stopWatchingCheckout(store: Pick<Store, "id" | "workspaceId">, token: unknown) {
-  if (typeof token !== "string" || !token) return;
+async function stopWatchingCheckout(store: Pick<Store, "id" | "workspaceId">, token: string | undefined) {
+  if (!token) return;
   await systemDb.emailBusinessEvent.updateMany({
     where: { workspaceId: store.workspaceId, source: "shopify", externalId: checkoutKey(store.id, token), status: "pending_detection" },
     data: { status: "cancelled", detectAfter: null, payloadEnc: null, processedAt: new Date() },
@@ -171,11 +182,14 @@ async function stopWatchingCheckout(store: Pick<Store, "id" | "workspaceId">, to
 /** Apply a verified Shopify webhook to email automations. A no-op unless an automation listens. */
 export async function emailOnShopifyEvent(store: Store, topic: string, payload: unknown, deps: Pick<EmailDeps, "queues">): Promise<void> {
   if (store.status === "uninstalled") return;
-  const p = (payload ?? {}) as Payload;
+  const ref = checkoutRefSchema.parse(payload);
+  const logIds = { storeId: store.id, module: "email" };
   const orderEvent = ORDER_TOPICS[topic];
   if (orderEvent) {
-    if (topic === "orders/create") await stopWatchingCheckout(store, p.checkout_token);
-    if (!p.id || !(await listening(store.workspaceId, orderEvent, store.id))) return;
+    if (topic === "orders/create") await stopWatchingCheckout(store, ref.checkout_token);
+    if (!(await listening(store.workspaceId, orderEvent, store.id))) return;
+    const p = parseShopify(automationOrderSchema, payload, topic, logIds);
+    if (!p) return;
     await recordEvent(
       {
         workspaceId: store.workspaceId,
@@ -191,10 +205,12 @@ export async function emailOnShopifyEvent(store: Store, topic: string, payload: 
     return;
   }
   if (topic !== "checkouts/create" && topic !== "checkouts/update") return;
-  const token = typeof p.token === "string" ? p.token : null;
+  const token = ref.token;
   if (!token) return;
-  if (p.completed_at) return stopWatchingCheckout(store, token);
+  if (ref.completed_at) return stopWatchingCheckout(store, token);
   if (!(await listening(store.workspaceId, "checkout.abandoned", store.id))) return;
+  const p = parseShopify(automationCheckoutSchema, payload, topic, logIds);
+  if (!p) return;
   const data = normalizeShopifyCheckout(store, p);
   const lastActivity = new Date(p.updated_at ?? p.created_at ?? Date.now());
   const detectAfter = new Date(Math.max(lastActivity.getTime(), Date.now() - 5 * 60_000) + CHECKOUT_ABANDON_MINUTES * 60_000);

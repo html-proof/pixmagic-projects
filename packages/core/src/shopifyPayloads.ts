@@ -1,6 +1,8 @@
 /**
  * What Shopify sends us, as Zod schemas: REST webhook payloads (orders, refunds, products and their
- * variants) and Admin GraphQL nodes (orders, products, variants). normalize.ts works on these types.
+ * variants for analytics; orders, checkouts, refunds and parcels as the automations read them; the
+ * app and GDPR topics) and Admin GraphQL nodes (orders, products, variants, parcels). normalize.ts
+ * works on these types, and so do the WhatsApp and email automations and the webhook consumer.
  *
  * This is the boundary. A payload is checked once, where it enters (`parseShopify` in the webhook
  * consumer, the sync pages and the bulk import), before anything is normalized or stored. One that
@@ -13,7 +15,7 @@
  * through: Shopify adds fields with every API version, and they are not ours to reject.
  */
 import { z } from "zod";
-import { logger } from "./logger.js";
+import { parsePayload, parsePayloadList } from "./payloads.js";
 
 const obj = <T extends z.ZodRawShape>(shape: T) => z.object(shape).passthrough();
 
@@ -116,6 +118,159 @@ export type RestOrder = z.output<typeof restOrderSchema>;
 export type RestVariant = z.output<typeof restVariantSchema>;
 export type RestProduct = z.output<typeof restProductSchema>;
 
+// ---------------------------------------------------------------- REST webhooks, as the automations read them
+
+/*
+ * The WhatsApp and email automations (whatsapp/events.ts, email/events.ts) read more of an order
+ * or checkout than analytics does: who the customer is and how to reach them. They have schemas of
+ * their own, so a field only they read can't cost analytics an order, nor the other way round.
+ * Each module parses a payload only once it is about to act on it, so a store that doesn't use it
+ * logs nothing.
+ */
+
+const address = obj({
+  first_name: str,
+  last_name: str,
+  phone: str,
+  country_code: str,
+  address1: str,
+  address2: str,
+  city: str,
+  province: str,
+  zip: str,
+  country: str,
+}).nullish();
+
+/** A total the automations store as a Decimal: text that isn't a number can't be one, so it doesn't fit. */
+const decimal = z.union([z.number().finite(), z.string().regex(/^-?\d+(\.\d+)?$/, "not an amount")]);
+
+const automationLineItem = obj({ product_id: restId.nullish(), title: str, variant_title: str, quantity: z.number().nullish(), price: amount.nullish() });
+
+/** Who is buying, how to reach them and what they agreed to: the same fields on orders and checkouts. */
+const buyer = {
+  email: str,
+  phone: str,
+  sms_marketing_phone: str,
+  buyer_accepts_marketing: z.boolean().nullish(),
+  buyer_accepts_sms_marketing: z.boolean().nullish(),
+  customer: obj({
+    id: restId.nullish(),
+    first_name: str,
+    last_name: str,
+    email: str,
+    phone: str,
+    accepts_marketing: z.boolean().nullish(),
+    email_marketing_consent: obj({ state: str }).nullish(),
+    sms_marketing_consent: obj({ state: str }).nullish(),
+    default_address: address,
+  }).nullish(),
+  shipping_address: address,
+  billing_address: address,
+  line_items: z.array(automationLineItem).nullish(),
+  total_price: decimal.nullish(),
+  currency: str,
+  presentment_currency: str,
+  created_at: timestamp.nullish(),
+  updated_at: timestamp.nullish(),
+};
+
+/** A parcel: an item of an order's `fulfillments`. */
+export const fulfillmentSchema = obj({
+  id: restId,
+  status: str,
+  shipment_status: str,
+  tracking_company: str,
+  tracking_number: str,
+  tracking_numbers: z.array(z.string()).nullish(),
+  tracking_url: str,
+  tracking_urls: z.array(z.string()).nullish(),
+  created_at: timestamp.nullish(),
+  updated_at: timestamp.nullish(),
+});
+
+/** fulfillments/create and /update: a parcel, naming its order. */
+export const fulfillmentWebhookSchema = fulfillmentSchema.extend({ order_id: restId });
+
+/** orders/* (create, updated, paid, cancelled, fulfilled, partially_fulfilled). */
+export const automationOrderSchema = obj({
+  ...buyer,
+  id: restId,
+  name: str,
+  order_number: z.union([z.number(), z.string()]).nullish(),
+  contact_email: str,
+  subtotal_price: amount.nullish(),
+  financial_status: str,
+  fulfillment_status: str,
+  checkout_token: str,
+  processed_at: timestamp.nullish(),
+  cancelled_at: timestamp.nullish(),
+  /** A comma-separated string; a list is read the same way. */
+  tags: z.union([z.string(), z.array(z.string())]).nullish(),
+  /** Cart attributes, set by the merchant's theme and apps: values arrive as strings, but needn't. */
+  note_attributes: z.array(obj({ name: str, value: z.union([z.string(), z.number(), z.boolean()]).nullish() })).nullish(),
+  discount_codes: z.array(obj({ code: str })).nullish(),
+  order_status_url: str,
+  /** Each parcel is checked on its own (fulfillmentSchema): one that doesn't fit costs only itself. */
+  fulfillments: z.array(z.unknown()).nullish(),
+});
+
+/** checkouts/create and /update. */
+export const automationCheckoutSchema = obj({
+  ...buyer,
+  token: z.string().min(1),
+  completed_at: timestamp.nullish(),
+  abandoned_checkout_url: str,
+});
+
+/** refunds/create, for what was paid back. */
+export const automationRefundSchema = obj({
+  id: restId,
+  order_id: restId,
+  created_at: timestamp.nullish(),
+  transactions: z.array(obj({ kind: str, status: str, amount: amount.nullish() })).nullish(),
+});
+
+/** fulfillment_events/create: a courier's progress report on one parcel. */
+export const fulfillmentEventSchema = obj({
+  order_id: restId,
+  fulfillment_id: restId,
+  status: str,
+  happened_at: timestamp.nullish(),
+  created_at: timestamp.nullish(),
+  estimated_delivery_at: timestamp.nullish(),
+});
+
+export type ShopifyFulfillment = z.output<typeof fulfillmentSchema>;
+export type AutomationOrder = z.output<typeof automationOrderSchema>;
+export type AutomationCheckout = z.output<typeof automationCheckoutSchema>;
+export type AutomationRefund = z.output<typeof automationRefundSchema>;
+
+// ---------------------------------------------------------------- REST webhooks: the app and GDPR topics
+
+/**
+ * app/scopes_update. `current` is a list (or, from older payloads, a comma-separated string), and
+ * required: read as missing, every scope the store has would count as revoked.
+ */
+export const scopesUpdateSchema = obj({ current: z.union([z.array(z.string()), z.string()]) });
+
+/** app_subscriptions/update: which charge, and its status now. */
+export const subscriptionUpdateSchema = obj({ app_subscription: obj({ admin_graphql_api_id: z.string().min(1), status: str }) });
+
+/** customers/data_request. */
+export const customersDataRequestSchema = obj({ customer: obj({ id: restId.nullish() }).nullish(), orders_requested: z.array(restId).nullish() });
+
+/**
+ * customers/redact: whose data goes. It has to name someone, the customer or their orders: one
+ * that names nobody can't be carried out, and the webhook consumer fails it rather than record a
+ * redaction that didn't happen.
+ */
+export const customersRedactSchema = obj({
+  customer: obj({ id: restId.nullish(), email: str, phone: str }).nullish(),
+  orders_to_redact: z.array(restId).nullish(),
+}).refine((p) => p.customer?.id != null || !!p.customer?.email || !!p.customer?.phone || !!p.orders_to_redact?.length, "names no customer and no orders");
+
+export type CustomersRedact = z.output<typeof customersRedactSchema>;
+
 // ---------------------------------------------------------------- Admin GraphQL nodes
 
 const moneyBag = obj({ shopMoney: obj({ amount: amount.nullish() }).nullish() }).nullish();
@@ -203,6 +358,31 @@ export const graphqlVariantSchema = obj({
   inventoryItem: obj({ tracked: z.boolean().nullish(), unitCost: obj({ amount: amount.nullish() }).nullish() }).nullish(),
 });
 
+/**
+ * The refunds a bulk export inlines on an order's JSONL line, as the reassembly in
+ * worker/bulkOrders.ts reads them: their ids, and their line items when Shopify could inline those
+ * too (`edges` or `nodes`; otherwise they arrive as child lines). The rest is checked once the order
+ * is whole, with graphqlOrderSchema.
+ */
+export const bulkInlineRefundsSchema = z
+  .array(obj({ id: gid, refundLineItems: obj({ edges: z.array(obj({ node: z.unknown() })).nullish(), nodes: z.array(z.unknown()).nullish() }).nullish() }))
+  .nullish();
+
+/** Order.fulfillments as the WhatsApp shipment poll asks for them (SHIPMENTS_QUERY in whatsapp/events.ts). */
+export const graphqlShipmentSchema = obj({
+  id: gid,
+  status: str,
+  displayStatus: str,
+  updatedAt: timestamp.nullish(),
+  inTransitAt: timestamp.nullish(),
+  deliveredAt: timestamp.nullish(),
+  estimatedDeliveryAt: timestamp.nullish(),
+  trackingInfo: z.array(obj({ company: str, number: str, url: str })).nullish(),
+});
+
+/** An order of the shipment poll. Each parcel is checked on its own (graphqlShipmentSchema). */
+export const graphqlShipmentOrderSchema = obj({ id: gid, fulfillments: z.array(z.unknown()).nullish() });
+
 export type GraphqlMoney = z.output<typeof moneyBag>;
 export type GraphqlLineItem = z.output<typeof graphqlLineItemSchema>;
 export type GraphqlRefund = z.output<typeof graphqlRefundSchema>;
@@ -210,30 +390,18 @@ export type GraphqlOrder = z.output<typeof graphqlOrderSchema>;
 export type GraphqlProduct = z.output<typeof graphqlProductSchema>;
 export type GraphqlVariant = z.output<typeof graphqlVariantSchema>;
 
+export type GraphqlShipment = z.output<typeof graphqlShipmentSchema>;
+
 // ---------------------------------------------------------------- parsing
 
 /**
- * Where a payload didn't fit, e.g. `line_items.0.price: Expected string, received object`. Paths
- * and Zod's messages only, never the values: a payload can carry a customer's details.
- */
-function problems(error: z.ZodError): string[] {
-  return error.issues.slice(0, 5).map((i) => {
-    // A union's own message is "Invalid input"; its first alternative's says what was wrong.
-    const message = (i.code === "invalid_union" ? i.unionErrors[0]?.issues[0]?.message : undefined) ?? i.message;
-    return `${i.path.join(".") || "(payload)"}: ${message}`;
-  });
-}
-
-/**
- * `raw` checked against `schema`. When it doesn't fit: one warning naming the fields that didn't,
- * and null, which the caller treats as "skip it" (retrying would get the same payload again).
- * `what` names the payload in the log (a webhook topic, "GraphQL order"); `context` adds ids.
+ * `raw` checked against `schema`. When it doesn't fit: one warning naming the fields that didn't
+ * (paths, never values), and null, which the caller treats as "skip it" (retrying would get the
+ * same payload again). `what` names the payload in the log (a webhook topic, "GraphQL order");
+ * `context` adds ids.
  */
 export function parseShopify<S extends z.ZodTypeAny>(schema: S, raw: unknown, what: string, context: Record<string, unknown> = {}): z.output<S> | null {
-  const r = schema.safeParse(raw);
-  if (r.success) return r.data;
-  logger.warn({ ...context, payload: what, problems: problems(r.error) }, "Shopify payload doesn't fit its schema; skipped");
-  return null;
+  return parsePayload("Shopify", schema, raw, what, context);
 }
 
 /** The items of a page that fit `schema`, in order. The rest are skipped, with one warning for the page. */
@@ -243,15 +411,5 @@ export function parseShopifyList<S extends z.ZodTypeAny>(
   what: string,
   context: Record<string, unknown> = {},
 ): Array<z.output<S>> {
-  const out: Array<z.output<S>> = [];
-  let first: string[] | null = null;
-  for (const item of raw) {
-    const r = schema.safeParse(item);
-    if (r.success) out.push(r.data);
-    else first ??= problems(r.error);
-  }
-  if (first) {
-    logger.warn({ ...context, payload: what, skipped: raw.length - out.length, of: raw.length, problems: first }, "Shopify payload doesn't fit its schema; skipped");
-  }
-  return out;
+  return parsePayloadList("Shopify", schema, raw, what, context);
 }

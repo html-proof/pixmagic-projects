@@ -29,6 +29,8 @@ import {
   raiseAlert,
   resolveAlerts,
   REFUND_LINE_ITEMS_QUERY,
+  customersDataRequestSchema,
+  customersRedactSchema,
   graphqlOrderSchema,
   graphqlProductSchema,
   graphqlVariantSchema,
@@ -36,11 +38,13 @@ import {
   restProductDeleteSchema,
   restProductSchema,
   restRefundWebhookSchema,
+  scopesUpdateSchema,
   SHOP_QUERY,
   shopifyGraphqlWithCost,
   ShopifyGraphqlError,
   ShopifyHttpError,
   StoreDisconnectedError,
+  subscriptionUpdateSchema,
   upsertOrder,
   upsertProduct,
   upsertRefund,
@@ -202,8 +206,11 @@ interface Page<N> {
   pageInfo: { hasNextPage: boolean; endCursor?: string | null };
   nodes: N[];
 }
-/* eslint-disable @typescript-eslint/no-explicit-any */
-type Node = Record<string, any>;
+/**
+ * A refund as ORDER_REFUNDS_QUERY returns it. The detail queries' nodes stay unread here: they are
+ * checked with the whole order (graphqlOrderSchema in completeOrder) once every page is in.
+ */
+type RawRefund = Record<string, unknown> & { id: string; refundLineItems?: Page<unknown> | null };
 
 /**
  * Fetch one page of a paginated kind with `$first` = the message's page size. When
@@ -244,11 +251,11 @@ async function fetchPage<T>(
 }
 
 /** All line items of one order (ORDER_LINE_ITEMS_QUERY, 100 per page); null if the order is gone. */
-async function fetchOrderLineItems(deps: WorkerDeps, store: Store, pace: Pace, orderId: string): Promise<Node[] | null> {
-  const nodes: Node[] = [];
+async function fetchOrderLineItems(deps: WorkerDeps, store: Store, pace: Pace, orderId: string): Promise<unknown[] | null> {
+  const nodes: unknown[] = [];
   let cursor: string | null = null;
   for (;;) {
-    const d: { order: { lineItems: Page<Node> } | null } = await gql(deps, store, pace, ORDER_LINE_ITEMS_QUERY, { id: orderId, cursor });
+    const d: { order: { lineItems: Page<unknown> } | null } = await gql(deps, store, pace, ORDER_LINE_ITEMS_QUERY, { id: orderId, cursor });
     if (!d.order) return null;
     nodes.push(...d.order.lineItems.nodes);
     const { hasNextPage, endCursor } = d.order.lineItems.pageInfo;
@@ -261,19 +268,19 @@ async function fetchOrderLineItems(deps: WorkerDeps, store: Store, pace: Pace, o
  * Refunds of one order with all of their refund line items (ORDER_REFUNDS_QUERY, then
  * REFUND_LINE_ITEMS_QUERY for refunds with more than 25 lines); null if the order is gone.
  */
-async function fetchOrderRefunds(deps: WorkerDeps, store: Store, pace: Pace, orderId: string): Promise<Node[] | null> {
-  const d: { order: { refunds: Node[] } | null } = await gql(deps, store, pace, ORDER_REFUNDS_QUERY, { id: orderId });
+async function fetchOrderRefunds(deps: WorkerDeps, store: Store, pace: Pace, orderId: string): Promise<unknown[] | null> {
+  const d: { order: { refunds: RawRefund[] } | null } = await gql(deps, store, pace, ORDER_REFUNDS_QUERY, { id: orderId });
   if (!d.order) return null;
   if (d.order.refunds.length >= ORDER_DETAIL.refunds) {
     // Order.refunds is a plain list (no pagination): later refunds only arrive via refunds/create webhooks.
     logger.warn({ storeId: store.id, orderId, imported: d.order.refunds.length }, "order may have more refunds than one query returns");
   }
-  const refunds: Node[] = [];
+  const refunds: unknown[] = [];
   for (const r of d.order.refunds) {
-    const items: Node[] = [...(r.refundLineItems?.nodes ?? [])];
-    let info: Page<Node>["pageInfo"] | undefined = r.refundLineItems?.pageInfo;
+    const items: unknown[] = [...(r.refundLineItems?.nodes ?? [])];
+    let info: Page<unknown>["pageInfo"] | undefined = r.refundLineItems?.pageInfo;
     while (info?.hasNextPage && info.endCursor) {
-      const p: { refund: { refundLineItems: Page<Node> } | null } = await gql(deps, store, pace, REFUND_LINE_ITEMS_QUERY, { id: r.id, cursor: info.endCursor });
+      const p: { refund: { refundLineItems: Page<unknown> } | null } = await gql(deps, store, pace, REFUND_LINE_ITEMS_QUERY, { id: r.id, cursor: info.endCursor });
       if (!p.refund) break;
       items.push(...p.refund.refundLineItems.nodes);
       info = p.refund.refundLineItems.pageInfo;
@@ -292,7 +299,7 @@ async function fetchOrderRefunds(deps: WorkerDeps, store: Store, pace: Pace, ord
 async function completeOrder(deps: WorkerDeps, store: Store, pace: Pace, node: GraphqlOrder): Promise<GraphqlOrder | null> {
   const over = graphqlOrderOverflow(node);
   if (!over.lineItems && !over.refunds) return node;
-  const full: Node = { ...node };
+  const full: Record<string, unknown> = { ...node };
   if (over.lineItems) {
     const nodes = await fetchOrderLineItems(deps, store, pace, node.id);
     if (nodes) full.lineItems = { nodes };
@@ -509,6 +516,9 @@ async function deletedRecently(deps: WorkerDeps, storeId: string, productId: str
   return true;
 }
 
+/** A GDPR request whose payload doesn't fit its schema: the fields that didn't are in the warning logged with it. */
+const unreadableGdprRequest = (topic: string) => new UnrecoverableError(`Shopify's ${topic} payload couldn't be read, so the request was not carried out`);
+
 export async function processWebhook(data: WebhookJobData, deps: WorkerDeps) {
   const ev = await systemDb.webhookEvent.findUnique({ where: { id: data.eventId } });
   if (!ev || ev.status === "succeeded") {
@@ -520,7 +530,7 @@ export async function processWebhook(data: WebhookJobData, deps: WorkerDeps) {
   await systemDb.webhookEvent.update({ where: { id: ev.id }, data: { status: "running", attempts: { increment: 1 } } });
 
   const store = await systemDb.store.findUnique({ where: { shopDomain: data.shop } });
-  let p = data.payload as any;
+  let p: unknown = data.payload;
   if (data.payloadKey) {
     const raw = await deps.payloads.get(data.payloadKey);
     if (raw === null) throw new UnrecoverableError(`Webhook payload ${data.payloadKey} is missing`);
@@ -623,7 +633,10 @@ export async function processWebhook(data: WebhookJobData, deps: WorkerDeps) {
         break;
       }
       case "app/scopes_update": {
-        const raw: string[] = Array.isArray(p.current) ? p.current : String(p.current ?? "").split(",");
+        // Without a readable `current`, every scope would count as revoked: skipped instead.
+        const update = parseShopify(scopesUpdateSchema, p, data.topic, logIds);
+        if (!update) break;
+        const raw = Array.isArray(update.current) ? update.current : update.current.split(",");
         const current = raw.map((s) => s.trim()).filter(Boolean);
         const newlyGranted = current.filter((s) => !store.grantedScopes.includes(s));
         const revoked = store.grantedScopes.filter((s) => !current.includes(s));
@@ -642,31 +655,41 @@ export async function processWebhook(data: WebhookJobData, deps: WorkerDeps) {
         break;
       }
       case "app_subscriptions/update": {
-        const sub = p.app_subscription ?? {};
-        await applySubscriptionUpdate(store.workspaceId, sub.admin_graphql_api_id, String(sub.status ?? "unknown").toLowerCase());
+        const update = parseShopify(subscriptionUpdateSchema, p, data.topic, logIds);
+        if (!update) break;
+        const sub = update.app_subscription;
+        await applySubscriptionUpdate(store.workspaceId, sub.admin_graphql_api_id, (sub.status ?? "unknown").toLowerCase());
         break;
       }
       // ---- Mandatory GDPR compliance topics ----
+      // Never skipped: one that can't be read fails at once (UnrecoverableError: a retry would read
+      // the same payload), so the delivery is recorded as failed and the store's webhook alert is
+      // raised, instead of a request that wasn't carried out being marked as done.
       case "customers/data_request": {
+        const request = parseShopify(customersDataRequestSchema, p, data.topic, logIds);
+        if (!request) throw unreadableGdprRequest(data.topic);
         // Analytics keep no customer PII (only a keyed hash). WhatsApp messaging, when the store
         // uses it, holds the customer's number and first name (encrypted): the audit entry says
         // so, and the merchant can see those records in the WhatsApp message history.
-        const ck = p.customer?.id ? customerKey(store, String(p.customer.id)) : null;
+        const ck = request.customer?.id ? customerKey(store, String(request.customer.id)) : null;
         const whatsappContacts = ck ? await systemDb.whatsappContact.count({ where: { storeId: store.id, customerKey: ck } }) : 0;
         await audit({
           workspaceId: store.workspaceId,
           action: "gdpr.customer_data_request",
-          metadata: { customerId: p.customer?.id, ordersRequested: (p.orders_requested ?? []).length, whatsappContacts },
+          metadata: { customerId: request.customer?.id, ordersRequested: (request.orders_requested ?? []).length, whatsappContacts },
         });
         break;
       }
       case "customers/redact": {
-        if (p.customer?.id) {
-          await systemDb.order.updateMany({ where: { storeId: store.id, customerKey: customerKey(store, String(p.customer.id)) }, data: { customerKey: null } });
+        // It must name the customer or their orders (customersRedactSchema): who else to redact?
+        const redact = parseShopify(customersRedactSchema, p, data.topic, logIds);
+        if (!redact) throw unreadableGdprRequest(data.topic);
+        if (redact.customer?.id) {
+          await systemDb.order.updateMany({ where: { storeId: store.id, customerKey: customerKey(store, String(redact.customer.id)) }, data: { customerKey: null } });
         }
-        const whatsappRecords = await redactWhatsappCustomer(store, p);
+        const whatsappRecords = await redactWhatsappCustomer(store, redact);
         // Email automations: the customer's events and the messages sent to them from this store.
-        const emailRecords = await redactEmailCustomer(store, p.customer?.email);
+        const emailRecords = await redactEmailCustomer(store, redact.customer?.email);
         await audit({ workspaceId: store.workspaceId, action: "gdpr.customer_redacted", metadata: { whatsappRecords, emailRecords } });
         break;
       }

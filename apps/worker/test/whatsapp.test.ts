@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { disconnectDb, systemDb, type Prisma, type Store } from "@app/db";
 import { resetDb } from "@app/db/testing";
 import {
@@ -9,6 +9,7 @@ import {
   memoryCoord,
   memoryMailer,
   memoryQueues,
+  pollShipments,
   sendWhatsappMessage,
   sweepWhatsapp,
   waEncrypt,
@@ -767,5 +768,148 @@ describe("connection health", () => {
     const after = calls.length;
     expect(await checkConnections(deps)).toBe(0);
     expect(calls).toHaveLength(after);
+  });
+});
+
+describe("payloads that don't fit", () => {
+  // Shopify's and Meta's bodies are checked against schemas (core's shopifyPayloads.ts and
+  // whatsapp/metaPayloads.ts): what doesn't fit is logged by field, never by value, and skipped.
+  let warnings: Array<Record<string, unknown>>;
+  let prevLevel: string | undefined;
+  beforeEach(() => {
+    warnings = [];
+    prevLevel = process.env.LOG_LEVEL;
+    process.env.LOG_LEVEL = "warn";
+    vi.spyOn(console, "warn").mockImplementation((line: unknown) => {
+      if (String(line).startsWith("{")) warnings.push(JSON.parse(String(line)) as Record<string, unknown>);
+    });
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    process.env.LOG_LEVEL = prevLevel;
+  });
+  const problems = () => warnings.flatMap((w) => (w.problems as string[] | undefined) ?? []);
+
+  it("an order WhatsApp can't read is skipped, not retried; analytics still takes it, and a readable copy is confirmed", async () => {
+    const store = await setupStore({ kinds: ["order_confirmation"] });
+    const o = order({ total_price: "free" });
+    const ev = await systemDb.webhookEvent.create({ data: { webhookId: "bad-total", topic: "orders/create", shopDomain: store.shopDomain, storeId: store.id, workspaceId: store.workspaceId } });
+    // Before the schema, the total went straight into a Decimal, which threw and failed the whole delivery.
+    expect(await processWebhook({ eventId: ev.id, topic: "orders/create", shop: store.shopDomain, payload: o }, deps)).toEqual({ ok: true });
+    expect((await systemDb.webhookEvent.findUniqueOrThrow({ where: { id: ev.id } })).status).toBe("succeeded");
+    expect(await systemDb.order.count({ where: { storeId: store.id } })).toBe(1);
+    expect(await systemDb.orderTracking.count({ where: { storeId: store.id } })).toBe(0);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatchObject({ payload: "orders/create", module: "whatsapp", storeId: store.id, problems: ["total_price: not an amount"] });
+    expect(JSON.stringify(warnings)).not.toContain("98765");
+
+    await event(store, "orders/create", { ...o, total_price: "1499.00" });
+    await drain();
+    expect(sent.map((s) => s.template)).toEqual(["insights_order_confirmation"]);
+  });
+
+  it("a parcel that can't be read costs only itself", async () => {
+    const store = await setupStore({ kinds: ["order_shipped"] });
+    const o = order();
+    await event(store, "orders/create", o);
+    const now = new Date().toISOString();
+    await event(store, "orders/updated", {
+      ...o,
+      fulfillments: [{ id: 91, status: "success", created_at: now }, { status: "success", created_at: now }, { id: 93, status: "success", created_at: "a while ago" }],
+    });
+    await drain();
+    const shipped = await systemDb.orderTrackingEvent.findMany({ where: { type: "shipped" } });
+    expect(shipped.map((e) => e.fulfillmentId)).toEqual(["91"]);
+    expect(sent.map((s) => s.template)).toEqual(["insights_order_shipped"]);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatchObject({ payload: "order fulfillment", skipped: 2, of: 3, problems: ["id: Required"] });
+  });
+
+  it("parcel and courier webhooks that don't name their parcel or order, and a checkout without a token, are skipped", async () => {
+    const store = await setupStore({ kinds: ["order_shipped", "out_for_delivery", "abandoned_cart_1"] });
+    const o = order();
+    await event(store, "orders/create", o);
+    const now = new Date().toISOString();
+    await event(store, "fulfillments/create", { id: 91, status: "success", created_at: now });
+    await event(store, "fulfillment_events/create", { id: 1, order_id: o.id, status: "out_for_delivery", happened_at: now });
+    await event(store, "checkouts/create", { token: 12345, phone: "+91 98765 43210", total_price: "10.00" });
+    expect(await systemDb.orderTrackingEvent.count({ where: { type: { in: ["shipped", "out_for_delivery"] } } })).toBe(0);
+    expect(await systemDb.abandonedCheckout.count()).toBe(0);
+    expect(problems()).toEqual(["order_id: Required", "fulfillment_id: Required", "token: Expected string, received number"]);
+  });
+
+  it("the shipment poll applies each parcel Shopify reports, skipping one it can't read", async () => {
+    const store = await setupStore({ kinds: ["order_shipped", "out_for_delivery"] });
+    const o = order();
+    const now = new Date().toISOString();
+    await event(store, "orders/create", o);
+    await event(store, "orders/updated", { ...o, fulfillments: [{ id: 91, status: "success", created_at: now }, { id: 92, status: "success", created_at: now }] });
+    const meta = fetchImpl;
+    fetchImpl = async (input, init) => {
+      if (!new URL(String(input)).hostname.endsWith(".myshopify.com")) return meta(input, init);
+      return json({
+        data: {
+          nodes: [
+            {
+              id: `gid://shopify/Order/${o.id}`,
+              fulfillments: [
+                { id: "gid://shopify/Fulfillment/91", status: "SUCCESS", displayStatus: "OUT_FOR_DELIVERY", updatedAt: now, trackingInfo: [{ company: "Blue Dart", number: "BD1", url: null }] },
+                { id: "gid://shopify/Fulfillment/92", status: "SUCCESS", displayStatus: "OUT_FOR_DELIVERY", updatedAt: "soon" },
+              ],
+            },
+            null,
+          ],
+        },
+      });
+    };
+    expect(await pollShipments(store, deps)).toBe(1);
+    const out = await systemDb.orderTrackingEvent.findMany({ where: { type: "out_for_delivery" } });
+    expect(out.map((e) => [e.fulfillmentId, e.courier, e.trackingNumber])).toEqual([["91", "Blue Dart", "BD1"]]);
+    expect(warnings[0]).toMatchObject({ payload: "GraphQL fulfillment", skipped: 1, of: 2, problems: ["updatedAt: not a timestamp"] });
+  });
+
+  it("Meta: the parts of a body that fit are applied, the rest logged by field without the numbers in them", async () => {
+    const store = await setupStore({ kinds: ["order_confirmation"] });
+    await event(store, "orders/create", order());
+    await drain();
+    const ts = String(Math.floor(Date.now() / 1000));
+    const r = await applyMetaWebhook(
+      {
+        object: "whatsapp_business_account",
+        entry: [
+          { changes: [] }, // no account id
+          {
+            id: "1111111111",
+            changes: [
+              {
+                field: "messages",
+                value: {
+                  metadata: { phone_number_id: "2222222222" },
+                  statuses: [{ status: "read", timestamp: ts, recipient_id: "919876543210" }, { id: "wamid.1", status: "delivered", timestamp: ts, recipient_id: "919876543210" }],
+                  messages: [{ from: 919876543210, id: "in.1", timestamp: ts, type: "text", text: { body: "STOP" } }],
+                },
+              },
+              { field: "message_template_status_update" }, // no value
+              { value: { event: "APPROVED" } }, // no field
+            ],
+          },
+        ],
+      },
+      "all",
+      deps,
+    );
+    expect(r).toEqual({ retry: false, applied: 1 });
+    expect((await systemDb.whatsappMessage.findFirstOrThrow({ where: { storeId: store.id } })).status).toBe("delivered");
+    // The STOP that couldn't be read opted nobody out.
+    expect(await systemDb.whatsappContact.count({ where: { storeId: store.id, optedOut: true } })).toBe(0);
+    expect(warnings.map((w) => [w.msg, w.payload])).toEqual([
+      ["Meta payload doesn't fit its schema; skipped", "webhook entry"],
+      ["Meta payload doesn't fit its schema; skipped", "webhook change"],
+      ["Meta payload doesn't fit its schema; skipped", "status"],
+      ["Meta payload doesn't fit its schema; skipped", "message"],
+      ["Meta payload doesn't fit its schema; skipped", "message_template_status_update"],
+    ]);
+    expect(problems()).toEqual(["id: Required", "field: Required", "id: Required", "from: Expected string, received number", "(payload): Required"]);
+    expect(JSON.stringify(warnings)).not.toContain("919876543210");
   });
 });

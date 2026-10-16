@@ -28,15 +28,29 @@ import { getAccessToken } from "../tokens.js";
 import { env } from "../env.js";
 import { logger } from "../logger.js";
 import { shopifyGraphql } from "../shopify.js";
+import {
+  automationCheckoutSchema,
+  automationOrderSchema,
+  automationRefundSchema,
+  fulfillmentEventSchema,
+  fulfillmentSchema,
+  fulfillmentWebhookSchema,
+  graphqlShipmentOrderSchema,
+  graphqlShipmentSchema,
+  parseShopify,
+  parseShopifyList,
+  type AutomationCheckout,
+  type AutomationOrder,
+  type AutomationRefund,
+  type CustomersRedact,
+  type ShopifyFulfillment,
+} from "../shopifyPayloads.js";
 import { runAutomations, type AutomationSubject } from "./automations.js";
 import { OPEN_CHECKOUT } from "./carts.js";
 import { cancelScheduled, marketingAllowed, scheduleMessage, type WaDeps } from "./messages.js";
 import { contactFirstName, newLinkToken, phoneHash, storeWhatsapp, upsertContact, waEncrypt, type MarketingSignal } from "./store.js";
 import { addressLine, cartValues, money, orderValues, type Values } from "./values.js";
 import type { WhatsappConnection } from "@app/db";
-
-/* eslint-disable @typescript-eslint/no-explicit-any */
-type Payload = Record<string, any>;
 
 /** Events older than this are put on the timeline but never sent to the customer. */
 export const STALE_NOTIFY_MS = 48 * 3600_000;
@@ -62,7 +76,10 @@ const date = (v: unknown, fallback = new Date()) => {
 // What Shopify's payloads say about the customer
 // ---------------------------------------------------------------------------
 
-function phoneOf(p: Payload) {
+/** An order or a checkout: who is buying and how to reach them read the same on both. */
+type Purchase = AutomationOrder | AutomationCheckout;
+
+function phoneOf(p: Purchase) {
   const country = p.shipping_address?.country_code ?? p.billing_address?.country_code ?? p.customer?.default_address?.country_code ?? null;
   const candidates = [p.phone, p.shipping_address?.phone, p.billing_address?.phone, p.customer?.phone, p.customer?.default_address?.phone, p.sms_marketing_phone];
   for (const c of candidates) {
@@ -72,9 +89,9 @@ function phoneOf(p: Payload) {
   return null;
 }
 
-const firstNameOf = (p: Payload): string | null => p.shipping_address?.first_name || p.billing_address?.first_name || p.customer?.first_name || null;
+const firstNameOf = (p: Purchase): string | null => p.shipping_address?.first_name || p.billing_address?.first_name || p.customer?.first_name || null;
 
-function smsSignal(p: Payload): MarketingSignal | null {
+function smsSignal(p: Purchase): MarketingSignal | null {
   const state = String(p.customer?.sms_marketing_consent?.state ?? "").toLowerCase();
   if (state === "subscribed" || p.buyer_accepts_sms_marketing === true) return { status: "opted_in", source: "shopify_sms" };
   if (state === "unsubscribed") return { status: "opted_out", source: "shopify_sms" };
@@ -82,19 +99,18 @@ function smsSignal(p: Payload): MarketingSignal | null {
 }
 
 /** The `whatsapp_opt_in` cart attribute (a checkbox the merchant adds to their cart page; docs/whatsapp.md). */
-export function cartOptIn(p: Payload): boolean {
-  const attrs: Array<{ name?: unknown; value?: unknown }> = Array.isArray(p.note_attributes) ? p.note_attributes : [];
-  return attrs.some((a) => /^whatsapp[ _-]?(opt[ _-]?in|updates)$/i.test(String(a?.name ?? "")) && /^(yes|true|on|1|y)$/i.test(String(a?.value ?? "").trim()));
+export function cartOptIn(p: Pick<AutomationOrder, "note_attributes">): boolean {
+  return (p.note_attributes ?? []).some((a) => /^whatsapp[ _-]?(opt[ _-]?in|updates)$/i.test(String(a.name ?? "")) && /^(yes|true|on|1|y)$/i.test(String(a.value ?? "").trim()));
 }
 
-const tagsOf = (p: Payload): string[] =>
-  String(p.tags ?? "")
+const tagsOf = (p: AutomationOrder): string[] =>
+  (Array.isArray(p.tags) ? p.tags.join(",") : (p.tags ?? ""))
     .split(",")
     .map((t) => t.trim().toLowerCase())
     .filter(Boolean);
 
-function itemsOf(p: Payload) {
-  return (Array.isArray(p.line_items) ? p.line_items : []).slice(0, 50).map((li: Payload) => ({
+function itemsOf(p: Purchase) {
+  return (p.line_items ?? []).slice(0, 50).map((li) => ({
     productId: li.product_id ? String(li.product_id) : "",
     title: [li.title, li.variant_title].filter((x) => x && String(x).trim() && x !== "Default Title").join(" – ") || "Item",
     quantity: Number(li.quantity ?? 1),
@@ -250,7 +266,7 @@ const valuesFor = (ctx: Ctx, t: OrderTracking, contact: WhatsappContact | null, 
 // Orders
 // ---------------------------------------------------------------------------
 
-async function upsertTracking(ctx: Ctx, p: Payload, contact: WhatsappContact | null): Promise<{ tracking: OrderTracking; isNew: boolean }> {
+async function upsertTracking(ctx: Ctx, p: AutomationOrder, contact: WhatsappContact | null): Promise<{ tracking: OrderTracking; isNew: boolean }> {
   const shopifyOrderId = String(p.id);
   const where = { storeId_shopifyOrderId: { storeId: ctx.store.id, shopifyOrderId } };
   const country = p.shipping_address?.country_code ?? p.billing_address?.country_code ?? contact?.country ?? null;
@@ -310,8 +326,7 @@ async function upsertTracking(ctx: Ctx, p: Payload, contact: WhatsappContact | n
   }
 }
 
-async function onOrder(ctx: Ctx, p: Payload) {
-  if (!p?.id) return;
+async function onOrder(ctx: Ctx, p: AutomationOrder) {
   const phone = phoneOf(p);
   const ck = p.customer?.id ? customerKey(ctx.store, String(p.customer.id)) : null;
   const contact = phone ? await upsertContact(ctx.store, phone, { firstName: firstNameOf(p), customerKey: ck, marketing: smsSignal(p) }) : null;
@@ -363,7 +378,7 @@ async function onOrder(ctx: Ctx, p: Payload) {
 
   // Every parcel's "shipped" first, then what couriers say: judged one parcel at a time, a
   // delivered first parcel would make a two-parcel order look delivered before the second was seen.
-  const parcels: Payload[] = Array.isArray(p.fulfillments) ? p.fulfillments : [];
+  const parcels = parseShopifyList(fulfillmentSchema, p.fulfillments ?? [], "order fulfillment", { storeId: ctx.store.id, module: "whatsapp", orderId: id });
   for (const f of parcels) await applyFulfillment(ctx, tracking, contact, f, "shipped");
   for (const f of parcels) await applyFulfillment(ctx, tracking, contact, f, "carrier");
   await refreshTrackingStatus(tracking.id);
@@ -396,16 +411,15 @@ interface StageInput {
 }
 
 /** A Shopify fulfillment: its "shipped", then (unless only that phase is asked for) what its courier last said. */
-async function applyFulfillment(ctx: Ctx, t: OrderTracking, contact: WhatsappContact | null, f: Payload, phase: "shipped" | "carrier" | "both" = "both") {
-  if (!f?.id) return;
+async function applyFulfillment(ctx: Ctx, t: OrderTracking, contact: WhatsappContact | null, f: ShopifyFulfillment, phase: "shipped" | "carrier" | "both" = "both") {
   // Pending (with a fulfillment service) or cancelled: nothing has shipped.
   const status = String(f.status ?? "success").toLowerCase();
   if (status !== "success") return;
   const common = {
     fulfillmentId: String(f.id),
     courier: f.tracking_company ? String(f.tracking_company) : null,
-    trackingNumber: f.tracking_number ? String(f.tracking_number) : Array.isArray(f.tracking_numbers) && f.tracking_numbers[0] ? String(f.tracking_numbers[0]) : null,
-    trackingUrl: f.tracking_url ? String(f.tracking_url) : Array.isArray(f.tracking_urls) && f.tracking_urls[0] ? String(f.tracking_urls[0]) : null,
+    trackingNumber: f.tracking_number || f.tracking_numbers?.[0] || null,
+    trackingUrl: f.tracking_url || f.tracking_urls?.[0] || null,
   };
   if (phase !== "carrier") await applyStage(ctx, t, contact, { ...common, stage: "shipped", at: date(f.created_at), source: "shopify" });
   const stage = shipmentStage(f.shipment_status);
@@ -528,12 +542,12 @@ export async function merchantOrderStep(store: Store, trackingId: string, step: 
 // Refunds
 // ---------------------------------------------------------------------------
 
-async function onRefund(ctx: Ctx, p: Payload) {
-  const t = await systemDb.orderTracking.findUnique({ where: { storeId_shopifyOrderId: { storeId: ctx.store.id, shopifyOrderId: String(p.order_id) } } });
-  if (!t || !p.id) return;
-  const amount = (Array.isArray(p.transactions) ? p.transactions : [])
-    .filter((tx: Payload) => tx?.kind === "refund" && (tx?.status ?? "success") === "success")
-    .reduce((sum: number, tx: Payload) => sum + Number(tx.amount ?? 0), 0);
+async function onRefund(ctx: Ctx, p: AutomationRefund) {
+  const t = await trackingOf(ctx.store, p.order_id);
+  if (!t) return;
+  const amount = (p.transactions ?? [])
+    .filter((tx) => tx.kind === "refund" && (tx.status ?? "success") === "success")
+    .reduce((sum, tx) => sum + Number(tx.amount ?? 0), 0);
   const at = date(p.created_at);
   if (!(await addEvent(t, { type: "refunded", occurredAt: at, source: "shopify", dedupeKey: `refund:${p.id}` }))) return;
   const contact = await contactOf(t);
@@ -546,9 +560,8 @@ async function onRefund(ctx: Ctx, p: Payload) {
 // Checkouts (abandoned cart recovery)
 // ---------------------------------------------------------------------------
 
-async function onCheckout(ctx: Ctx, p: Payload) {
-  const token = p.token ? String(p.token) : null;
-  if (!token) return;
+async function onCheckout(ctx: Ctx, p: AutomationCheckout) {
+  const token = p.token;
   const existing = await systemDb.abandonedCheckout.findUnique({ where: { storeId_checkoutToken: { storeId: ctx.store.id, checkoutToken: token } } });
   if (p.completed_at) {
     if (existing && OPEN_CHECKOUT.includes(existing.status)) {
@@ -567,7 +580,7 @@ async function onCheckout(ctx: Ctx, p: Payload) {
   const firstName = firstNameOf(p);
   const contact = await upsertContact(ctx.store, phone, { firstName, customerKey: ck, marketing: smsSignal(p) });
   const consent = marketingAllowed(ctx.cfg, contact);
-  const items = itemsOf(p).map(({ title, quantity, price }: { title: string; quantity: number; price: number }) => ({ title, quantity, price }));
+  const items = itemsOf(p).map(({ title, quantity, price }) => ({ title, quantity, price }));
   const data = {
     contactId: contact.id,
     customerNameEnc: firstName ? waEncrypt(ctx.store.id, "name", firstName) : null,
@@ -639,7 +652,7 @@ async function onCheckout(ctx: Ctx, p: Payload) {
         cfg: ctx.cfg,
         contact,
         checkout,
-        facts: { orderValue: Number(data.totalPrice), productTitles: items.map((i: { title: string }) => i.title), country: contact.country, marketingConsent: consent },
+        facts: { orderValue: Number(data.totalPrice), productTitles: items.map((i) => i.title), country: contact.country, marketingConsent: consent },
         values: { ...values, checkout_url: recoveryUrl },
         delayMinutes: ctx.cfg.cartFirstDelayMinutes,
       },
@@ -706,30 +719,56 @@ async function attributeOrder(ctx: Ctx, contact: WhatsappContact | null, t: Orde
 const ORDER_TOPICS = new Set(["orders/create", "orders/updated", "orders/paid", "orders/cancelled", "orders/fulfilled", "orders/partially_fulfilled"]);
 export const WHATSAPP_TOPICS = new Set([...ORDER_TOPICS, "refunds/create", "checkouts/create", "checkouts/update", "fulfillments/create", "fulfillments/update", "fulfillment_events/create"]);
 
-/** Apply a verified Shopify webhook to WhatsApp. A no-op for stores that haven't turned WhatsApp on. */
+/** The order a refund or parcel names, if it is on the timeline. */
+const trackingOf = (store: Pick<Store, "id">, orderId: string | number) =>
+  systemDb.orderTracking.findUnique({ where: { storeId_shopifyOrderId: { storeId: store.id, shopifyOrderId: String(orderId) } } });
+
+/**
+ * Apply a verified Shopify webhook to WhatsApp. A no-op for stores that haven't turned WhatsApp on.
+ * The payload is checked only past that point, so a store without WhatsApp logs nothing about it;
+ * one that doesn't fit is logged and skipped, since a retry would meet the same payload.
+ */
 export async function whatsappOnShopifyEvent(store: Store, topic: string, payload: unknown, deps: WaDeps): Promise<void> {
   if (!WHATSAPP_TOPICS.has(topic) || store.status === "uninstalled") return;
   const wa = await storeWhatsapp(store.id);
   if (!wa) return;
   const ctx: Ctx = { store, cfg: wa.config, connection: wa.connection, deps };
-  const p = (payload ?? {}) as Payload;
-  if (ORDER_TOPICS.has(topic)) return onOrder(ctx, p);
-  if (topic === "refunds/create") return onRefund(ctx, p);
-  if (topic === "checkouts/create" || topic === "checkouts/update") return onCheckout(ctx, p);
+  const logIds = { storeId: store.id, module: "whatsapp" };
+  if (ORDER_TOPICS.has(topic)) {
+    const order = parseShopify(automationOrderSchema, payload, topic, logIds);
+    if (order) await onOrder(ctx, order);
+    return;
+  }
+  if (topic === "refunds/create") {
+    const refund = parseShopify(automationRefundSchema, payload, topic, logIds);
+    if (refund) await onRefund(ctx, refund);
+    return;
+  }
+  if (topic === "checkouts/create" || topic === "checkouts/update") {
+    const checkout = parseShopify(automationCheckoutSchema, payload, topic, logIds);
+    if (checkout) await onCheckout(ctx, checkout);
+    return;
+  }
   // Fulfillment payloads name their order; only orders already on the timeline are followed.
-  const t = await systemDb.orderTracking.findUnique({ where: { storeId_shopifyOrderId: { storeId: store.id, shopifyOrderId: String(p.order_id) } } });
-  if (!t) return;
-  const contact = await contactOf(t);
-  if (topic === "fulfillments/create" || topic === "fulfillments/update") return applyFulfillment(ctx, t, contact, p);
+  if (topic === "fulfillments/create" || topic === "fulfillments/update") {
+    const f = parseShopify(fulfillmentWebhookSchema, payload, topic, logIds);
+    const t = f && (await trackingOf(store, f.order_id));
+    if (f && t) await applyFulfillment(ctx, t, await contactOf(t), f);
+    return;
+  }
   // fulfillment_events/create: the courier's own progress report.
-  const stage = shipmentStage(p.status);
-  if (!stage || !p.fulfillment_id) return;
+  const e = parseShopify(fulfillmentEventSchema, payload, topic, logIds);
+  const t = e && (await trackingOf(store, e.order_id));
+  if (!e || !t) return;
+  const contact = await contactOf(t);
+  const stage = shipmentStage(e.status);
+  if (!stage) return;
   await applyStage(ctx, t, contact, {
-    fulfillmentId: String(p.fulfillment_id),
+    fulfillmentId: String(e.fulfillment_id),
     stage,
-    at: date(p.happened_at ?? p.created_at),
+    at: date(e.happened_at ?? e.created_at),
     source: stage === "shipped" ? "shopify" : "carrier",
-    estimatedDeliveryAt: p.estimated_delivery_at ? date(p.estimated_delivery_at) : null,
+    estimatedDeliveryAt: e.estimated_delivery_at ? date(e.estimated_delivery_at) : null,
   });
 }
 
@@ -772,7 +811,7 @@ export async function pollShipments(store: Store, deps: WaDeps): Promise<number>
   });
   if (!open.length) return 0;
   const token = await getAccessToken(store, deps.coord, deps.fetchImpl);
-  const data = await shopifyGraphql<{ nodes: Array<{ id: string; fulfillments: Payload[] } | null> }>({
+  const data = await shopifyGraphql<{ nodes: unknown[] | null }>({
     shop: store.shopDomain,
     accessToken: token,
     apiVersion: env().SHOPIFY_API_VERSION,
@@ -781,16 +820,17 @@ export async function pollShipments(store: Store, deps: WaDeps): Promise<number>
     fetchImpl: deps.fetchImpl,
     maxRetries: 1,
   });
-  for (const node of data.nodes ?? []) {
-    if (!node) continue;
+  // A deleted order comes back as null: nothing to follow.
+  const orders = parseShopifyList(graphqlShipmentOrderSchema, (data.nodes ?? []).filter((n) => n !== null), "GraphQL shipments", { storeId: store.id });
+  for (const node of orders) {
     const t = open.find((o) => o.shopifyOrderId === gidId(node.id));
     if (!t) continue;
     const contact = await contactOf(t);
-    for (const f of node.fulfillments ?? []) {
+    for (const f of parseShopifyList(graphqlShipmentSchema, node.fulfillments ?? [], "GraphQL fulfillment", { storeId: store.id, orderId: t.shopifyOrderId })) {
       if (String(f.status).toUpperCase() !== "SUCCESS") continue;
       const stage = shipmentStage(f.displayStatus);
       if (!stage || stage === "shipped") continue;
-      const info = f.trackingInfo?.[0] ?? {};
+      const info = f.trackingInfo?.[0];
       const at = stage === "delivered" && f.deliveredAt ? date(f.deliveredAt) : stage === "in_transit" && f.inTransitAt ? date(f.inTransitAt) : date(f.updatedAt);
       const current = await systemDb.orderTracking.findUniqueOrThrow({ where: { id: t.id } });
       await applyStage(ctx, current, contact, {
@@ -798,9 +838,9 @@ export async function pollShipments(store: Store, deps: WaDeps): Promise<number>
         stage,
         at,
         source: "carrier",
-        courier: info.company ?? null,
-        trackingNumber: info.number ?? null,
-        trackingUrl: info.url ?? null,
+        courier: info?.company ?? null,
+        trackingNumber: info?.number ?? null,
+        trackingUrl: info?.url ?? null,
         estimatedDeliveryAt: f.estimatedDeliveryAt ? date(f.estimatedDeliveryAt) : null,
       });
     }
@@ -813,7 +853,7 @@ export async function pollShipments(store: Store, deps: WaDeps): Promise<number>
 // ---------------------------------------------------------------------------
 
 /** customers/redact: everything WhatsApp holds about this customer goes. */
-export async function redactWhatsappCustomer(store: Pick<Store, "id">, p: Payload): Promise<number> {
+export async function redactWhatsappCustomer(store: Pick<Store, "id">, p: CustomersRedact): Promise<number> {
   const ck = p.customer?.id ? customerKey(store, String(p.customer.id)) : null;
   const phone = normalizePhone(p.customer?.phone ?? null, null);
   const contacts = await systemDb.whatsappContact.findMany({
@@ -821,7 +861,7 @@ export async function redactWhatsappCustomer(store: Pick<Store, "id">, p: Payloa
     select: { id: true },
   });
   const contactIds = contacts.map((c) => c.id);
-  const orderIds: string[] = (Array.isArray(p.orders_to_redact) ? p.orders_to_redact : []).map(String);
+  const orderIds = (p.orders_to_redact ?? []).map(String);
   if (!contactIds.length && !orderIds.length) return 0;
   const trackings = await systemDb.orderTracking.findMany({
     where: { storeId: store.id, OR: [{ contactId: { in: contactIds } }, { shopifyOrderId: { in: orderIds } }] },
