@@ -67,10 +67,24 @@ async function assertNotMember(tx: Tx, workspaceId: string, email: string) {
   throw new TeamError(409, "already_member", `${email} is already in this workspace. Change their access from the team list instead.`);
 }
 
+/**
+ * Why an invitation email didn't go out, in a word the invite panel can explain: `not_allowed` when
+ * the mail service refused the sender or the recipient (Amazon SES answers "Email address is not
+ * verified" while the account is in its sandbox, which sends only to addresses verified in SES),
+ * `failed` for anything else (an outage, a bad address).
+ */
+export type EmailProblem = "not_allowed" | "failed";
+
+export function emailProblemOf(err: unknown): EmailProblem {
+  const message = err instanceof Error ? err.message : String(err);
+  return /not verified|not authorized|sandbox|MessageRejected|AccessDenied/i.test(message) ? "not_allowed" : "failed";
+}
+
 /** The email for an invitation, with a fresh link. Records whether it went out; never throws for a mail failure. */
-async function deliver(invitation: Invitation, token: string, mailer: Mailer): Promise<{ emailed: boolean; url: string }> {
+async function deliver(invitation: Invitation, token: string, mailer: Mailer): Promise<{ emailed: boolean; url: string; problem?: EmailProblem }> {
   const url = teamInvitationUrl(token);
   let emailed = false;
+  let problem: EmailProblem | undefined;
   try {
     const [workspace, inviter] = await Promise.all([
       systemDb.workspace.findUnique({ where: { id: invitation.workspaceId }, select: { name: true } }),
@@ -92,13 +106,14 @@ async function deliver(invitation: Invitation, token: string, mailer: Mailer): P
   } catch (err) {
     // The invitation is saved and its link works, so a mail failure (EMAIL_FROM not verified in SES,
     // SES in its sandbox, a refused address) must not lose it: the inviter gets the link to pass on.
-    logger.error({ err, workspaceId: invitation.workspaceId, invitationId: invitation.id }, "invitation email failed; returning the link to the inviter");
+    problem = emailProblemOf(err);
+    logger.error({ err, problem, workspaceId: invitation.workspaceId, invitationId: invitation.id }, "invitation email failed; returning the link to the inviter");
   }
   const now = new Date();
   await systemDb.invitation
     .update({ where: { id: invitation.id }, data: emailed ? { sentAt: now, sendCount: { increment: 1 } } : { sendFailedAt: now } })
     .catch((err: unknown) => logger.warn({ err, invitationId: invitation.id }, "could not record the invitation email's outcome"));
-  return { emailed, url };
+  return { emailed, url, problem };
 }
 
 /**
@@ -138,7 +153,7 @@ export async function createTeamInvitation(actor: TeamActor, input: InviteInput,
     return { invitation, replaced: old.count };
   });
   const sent = await deliver(invitation, token, mailer);
-  return { invitationId: invitation.id, emailed: sent.emailed, url: sent.emailed ? undefined : sent.url, replaced, expiresAt };
+  return { invitationId: invitation.id, emailed: sent.emailed, url: sent.emailed ? undefined : sent.url, emailProblem: sent.problem, replaced, expiresAt };
 }
 
 async function pendingInvitation(tx: Tx, actor: TeamActor, id: string) {
@@ -169,7 +184,7 @@ export async function resendTeamInvitation(actor: TeamActor, id: string, mailer:
     return updated;
   });
   const sent = await deliver(invitation, token, mailer);
-  return { emailed: sent.emailed, url: sent.emailed ? undefined : sent.url, expiresAt: invitation.expiresAt };
+  return { emailed: sent.emailed, url: sent.emailed ? undefined : sent.url, emailProblem: sent.problem, expiresAt: invitation.expiresAt };
 }
 
 /** Cancel an invitation not yet accepted: its link stops working at once. Cancelling one already cancelled is a no-op. */

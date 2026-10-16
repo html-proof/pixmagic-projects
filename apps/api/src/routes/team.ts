@@ -221,7 +221,14 @@ export function teamRoutes(app: App, deps: Deps) {
       await inviteLimits(deps, ws, a.user!.id);
       const out = await createTeamInvitation(teamActor(c, a), input, deps.mailer);
       // The link only to the owner or admin who just made it, and only when the email didn't go out.
-      return { ok: true, invitationId: out.invitationId, emailed: out.emailed, ...(out.url ? { url: out.url } : {}), replaced: out.replaced, expiresAt: out.expiresAt.toISOString() };
+      return {
+        ok: true,
+        invitationId: out.invitationId,
+        emailed: out.emailed,
+        ...(out.url ? { url: out.url, emailProblem: out.emailProblem } : {}),
+        replaced: out.replaced,
+        expiresAt: out.expiresAt.toISOString(),
+      };
     });
     return c.json(r);
   });
@@ -241,7 +248,7 @@ export function teamRoutes(app: App, deps: Deps) {
       await limit(deps.coord, `rl:invite-resend:${invitationId}`, LIMITS.invitationResend, "This invitation was sent several times in the last hour. Please wait before sending it again.");
       await inviteLimits(deps, ws, a.user!.id);
       const out = await resendTeamInvitation(teamActor(c, a), invitationId, deps.mailer);
-      return { ok: true, emailed: out.emailed, ...(out.url ? { url: out.url } : {}), expiresAt: out.expiresAt.toISOString() };
+      return { ok: true, emailed: out.emailed, ...(out.url ? { url: out.url, emailProblem: out.emailProblem } : {}), expiresAt: out.expiresAt.toISOString() };
     });
     return c.json(r);
   });

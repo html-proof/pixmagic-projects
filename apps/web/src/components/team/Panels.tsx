@@ -52,12 +52,22 @@ export function SidePanel({ title, sub, onClose, children, footer, testId }: { t
   );
 }
 
+/** Why the email didn't go out, for the inviter (the API's `emailProblem`). */
+export function emailProblemText(problem: string | undefined): string {
+  return problem === "not_allowed"
+    ? "Our email service isn't allowed to send to this address yet: Amazon is still reviewing bizinsights' sending, and until it approves, email reaches only addresses it has verified."
+    : "Sending the email failed just now.";
+}
+
 /** The link to hand over when the invitation email couldn't be sent. */
-function HandOverLink({ email, url }: { email: string; url: string }) {
+function HandOverLink({ email, url, problem }: { email: string; url: string; problem?: string }) {
   const toast = useToast();
   return (
     <Alert kind="info">
-      <span className="block">We saved the invitation for {email} but couldn&apos;t email it. Send them this link yourself. It works once, until the invitation expires:</span>
+      <span className="block" data-testid="email-problem">
+        The invitation for {email} is saved, but it wasn&apos;t emailed. {emailProblemText(problem)}
+      </span>
+      <span className="mt-1 block">Send them this link yourself (by chat or your own email). It works once, until the invitation expires:</span>
       <span className="mt-2 flex gap-2">
         <input aria-label={`Invitation link for ${email}`} className="input w-full font-mono text-xs" readOnly value={url} onFocus={(e) => e.currentTarget.select()} data-testid="invite-link" />
         <button
@@ -92,7 +102,7 @@ export function InvitePanel({ ws, catalog, onClose, onSent }: { ws: string; cata
   const [days, setDays] = useState(catalog.limits.expiryDaysDefault);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [handOver, setHandOver] = useState<{ email: string; url: string } | null>(null);
+  const [handOver, setHandOver] = useState<{ email: string; url: string; problem?: string } | null>(null);
   // One key per panel: a double click or a retried request sends one email.
   const idem = useMemo(() => (typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `inv-${Date.now()}-${Math.random().toString(36).slice(2)}`), []);
   const formId = useId();
@@ -102,7 +112,7 @@ export function InvitePanel({ ws, catalog, onClose, onSent }: { ws: string; cata
     setBusy(true);
     setError(null);
     try {
-      const r = await api<{ emailed: boolean; url?: string; replaced: number }>(`/workspaces/${ws}/team/invitations`, {
+      const r = await api<{ emailed: boolean; url?: string; emailProblem?: string; replaced: number }>(`/workspaces/${ws}/team/invitations`, {
         method: "POST",
         headers: { "idempotency-key": idem },
         body: { email: email.trim(), role: draft.role, permissions: [...draft.permissions], staffRole: draft.staffRole, message: message.trim() || null, expiresInDays: days },
@@ -112,7 +122,7 @@ export function InvitePanel({ ws, catalog, onClose, onSent }: { ws: string; cata
         toast("success", `Invitation sent to ${email.trim()}.${r.replaced ? " The earlier invitation's link no longer works." : ""}`);
         onClose();
       } else if (r.url) {
-        setHandOver({ email: email.trim(), url: r.url });
+        setHandOver({ email: email.trim(), url: r.url, problem: r.emailProblem });
       }
     } catch (err) {
       setError(actionError(err, "send the invitation"));

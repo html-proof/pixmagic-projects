@@ -436,6 +436,7 @@ describe("email problems and existing users (scenarios 17-18)", () => {
     try {
       const r = ok(await call("POST", `/workspaces/${b.ws}/team/invitations`, b.owner.headers, { email: "bounce@example.com", role: "viewer", permissions: ["analytics.sales"] }));
       expect(r.emailed).toBe(false);
+      expect(r.emailProblem).toBe("failed");
       expect(r.url).toMatch(/\/invite#token=[A-Za-z0-9_-]+$/);
       const row = await systemDb.invitation.findFirstOrThrow({ where: { email: "bounce@example.com" } });
       expect(row.sendFailedAt).not.toBeNull();
@@ -443,6 +444,12 @@ describe("email problems and existing users (scenarios 17-18)", () => {
       // The handed-over link works.
       const token = tokenFrom(r.url)!;
       expect(ok(await call("POST", "/invitations/preview", {}, { token })).status).toBe("pending");
+      // SES refusing the address (its sandbox) is told apart, so the panel can say why.
+      ctx.mailer.send = async () => {
+        throw new Error("SES send failed (400): Email address is not verified. The following identities failed the check in region AP-SOUTHEAST-2: x***@gmail.com");
+      };
+      const sandboxed = ok(await call("POST", `/workspaces/${b.ws}/team/invitations`, b.owner.headers, { email: "sandboxed@example.com", role: "viewer", permissions: ["analytics.sales"] }));
+      expect(sandboxed).toMatchObject({ emailed: false, emailProblem: "not_allowed" });
     } finally {
       ctx.mailer.send = send;
     }

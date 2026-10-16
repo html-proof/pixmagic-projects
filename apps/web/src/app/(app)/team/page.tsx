@@ -8,7 +8,7 @@ import { ConfirmDialog, ToastProvider, useAction } from "@/components/AppUi";
 import { LoadError } from "@/components/LoadError";
 import { Badge, type Tone } from "@/components/dashboard/Primitives";
 import { fmtRelative } from "@/components/dashboard/format";
-import { AccessPanel, InvitePanel } from "@/components/team/Panels";
+import { AccessPanel, emailProblemText, InvitePanel } from "@/components/team/Panels";
 import { api, useApi } from "@/lib/api";
 import { STATUS_LABEL, type Catalog, type TeamPage, type TeamRow, type TeamRowStatus } from "@/lib/team";
 
@@ -167,11 +167,11 @@ function TeamAccess() {
       });
     if (a === "resend")
       return run(`resend:${row.id}`, "resend the invitation", async () => {
-        const r = await api<{ emailed: boolean; url?: string }>(`/workspaces/${ws}/team/invitations/${row.id}/resend`, { method: "POST", headers: { "idempotency-key": `resend-${row.id}-${Date.now()}` } });
+        const r = await api<{ emailed: boolean; url?: string; emailProblem?: string }>(`/workspaces/${ws}/team/invitations/${row.id}/resend`, { method: "POST", headers: { "idempotency-key": `resend-${row.id}-${Date.now()}` } });
         reload();
         if (!r.emailed && r.url) {
           await navigator.clipboard?.writeText(r.url).catch(() => {});
-          return `We couldn't email ${row.email}, so the new link is on your clipboard: send it to them yourself.`;
+          return `${row.email} wasn't emailed. ${emailProblemText(r.emailProblem)} The new link is on your clipboard: send it to them yourself.`;
         }
         return `Invitation sent to ${row.email} again. The earlier link no longer works.`;
       });
