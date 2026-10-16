@@ -101,7 +101,7 @@ test("invitations: emailed, handed over as a link when email fails, and kept acr
   const panel = await invite(unmailable);
   await expect(panel.getByTestId("invite-link")).toHaveValue("http://localhost/invite#token=handed-over-token");
   // Says why, so a refusal by the mail service doesn't read as a broken feature.
-  await expect(panel.getByTestId("email-problem")).toContainText("isn't allowed to send to this address yet");
+  await expect(panel.getByTestId("email-problem")).toContainText("can't send to this address yet");
   await expect(page.getByText(`Invitation sent to ${unmailable}`)).toHaveCount(0);
   await page.unroute("**/api/workspaces/*/team/invitations");
   await panel.getByRole("button", { name: "Done" }).click();
