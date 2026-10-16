@@ -518,6 +518,7 @@ describe("a store whose sync stopped", () => {
     expect(syncProblem("Shopify 404: Not Found")).toBe("shop_gone");
     expect(syncProblem("Shopify 423: Locked")).toBe("shop_locked");
     expect(syncProblem("Shopify auth error 403")).toBe("access");
+    expect(syncProblem("Shopify rejected our access (403); merchant must reconnect")).toBe("access");
     expect(syncProblem("Store x.myshopify.com is not connected")).toBe("access");
     expect(syncProblem("Shopify 4020 something")).toBe("other");
     expect(syncProblem(null)).toBe("other");

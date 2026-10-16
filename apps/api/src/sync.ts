@@ -136,6 +136,7 @@ export const REFRESH_ORDER_DAYS = 7;
 export async function seedResync(
   deps: Pick<Deps, "queues">,
   store: Pick<Store, "id" | "workspaceId" | "grantedScopes" | "lastSyncedAt">,
+  orderDays: number = REFRESH_ORDER_DAYS,
 ) {
   if (!store.lastSyncedAt) return seedInitialSync(deps, store);
   const scopes = expandScopes(store.grantedScopes);
@@ -148,7 +149,7 @@ export async function seedResync(
       storeId: store.id,
       kind,
       syncJobId: job.id,
-      ...(kind === "orders" ? { sinceDays: REFRESH_ORDER_DAYS } : {}),
+      ...(kind === "orders" ? { sinceDays: orderDays } : {}),
     });
     jobs.push(job);
   }

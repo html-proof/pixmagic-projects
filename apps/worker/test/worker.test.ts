@@ -28,7 +28,7 @@ import {
   type SyncJobData,
 } from "@app/core";
 import { aggregateDaily, localDay, summarize } from "@app/shared";
-import { BACKFILL_DAYS, failStaleJobs, ordersSearch, pixelIngestUrl, processWebhook, RECONCILE_ORDER_DAYS, reconcileOrderDays, runAggregate, runSync, scheduleReconcile, seedAfterMove, type WorkerDeps } from "../src/handlers.js";
+import { BACKFILL_DAYS, failStaleJobs, ordersSearch, pixelIngestUrl, processWebhook, RECONCILE_ORDER_DAYS, reconcileOrderDays, runAggregate, runSync, scheduleReconcile, seedAfterMove, seedSalesRereads, type WorkerDeps } from "../src/handlers.js";
 import { consume, CRON, runScheduled, type QueueMessage } from "../src/index.js";
 import { agreement, sale, saleMoney, salesAnswer, shopifySales } from "./shopifySales.js";
 
@@ -2346,3 +2346,51 @@ describe("moving to a new address", () => {
     expect(await systemDb.syncJob.count({ where: { id: { in: queues.sent.sync.map((m) => m.syncJobId) } } })).toBe(3);
   });
 });
+
+describe("sales records a release left missing", () => {
+  /** An order stored `daysAgo` days ago, with or without its sales records read. */
+  async function storedOrder(store: { id: string; workspaceId: string }, n: number, daysAgo: number, salesRead: boolean) {
+    const at = new Date(Date.now() - daysAgo * 86_400_000);
+    await systemDb.order.create({
+      data: {
+        workspaceId: store.workspaceId, storeId: store.id, shopifyId: `gid://shopify/Order/${n}`, name: `#${n}`, currency: "AUD",
+        localDay: at.toISOString().slice(0, 10), shopifyCreatedAt: at, shopifyUpdatedAt: at, subtotal: 10, totalDiscounts: 0, totalTax: 0,
+        totalShipping: 0, totalPrice: 10, trafficSource: "direct", salesUpdatedAt: salesRead ? at : null,
+      },
+    });
+  }
+
+  it("queues a re-read of the import window for each active store missing them, once a day", async () => {
+    const missing = await makeStore(["read_orders"], "UTC", "a.myshopify.com");
+    await systemDb.store.update({ where: { id: missing.id }, data: { status: "active" } });
+    await storedOrder(missing, 1, 3, true);
+    await storedOrder(missing, 2, 10, false);
+    const complete = await makeStore(["read_orders"], "UTC", "b.myshopify.com");
+    await systemDb.store.update({ where: { id: complete.id }, data: { status: "active" } });
+    await storedOrder(complete, 3, 3, true);
+    // Older than the window Shopify lets us read: nothing a re-read could fill in.
+    const old = await makeStore(["read_orders"], "UTC", "c.myshopify.com");
+    await systemDb.store.update({ where: { id: old.id }, data: { status: "active" } });
+    await storedOrder(old, 4, BACKFILL_DAYS + 5, false);
+
+    expect(await seedSalesRereads(deps)).toBe(1);
+    expect(queues.sent.sync.map((m) => [m.storeId, m.kind, m.sinceDays])).toEqual([[missing.id, "orders", BACKFILL_DAYS]]);
+    expect(await systemDb.syncJob.count({ where: { storeId: missing.id, kind: "orders" } })).toBe(1);
+    // The same day again (or the dashboard's own daily re-read): nothing more.
+    expect(await seedSalesRereads(deps)).toBe(0);
+  });
+
+  it("leaves alone a store already importing orders, and one that is not active", async () => {
+    const busy = await makeStore(["read_orders"], "UTC", "a.myshopify.com");
+    await systemDb.store.update({ where: { id: busy.id }, data: { status: "active" } });
+    await storedOrder(busy, 1, 2, false);
+    await systemDb.syncJob.create({ data: { workspaceId: busy.workspaceId, storeId: busy.id, kind: "orders", status: "running" } });
+    const broken = await makeStore(["read_orders"], "UTC", "b.myshopify.com");
+    await systemDb.store.update({ where: { id: broken.id }, data: { status: "error" } });
+    await storedOrder(broken, 2, 2, false);
+
+    expect(await seedSalesRereads(deps)).toBe(0);
+    expect(queues.sent.sync).toHaveLength(0);
+  });
+});
+

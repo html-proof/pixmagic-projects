@@ -198,6 +198,7 @@ async function gql<T>(deps: WorkerDeps, store: Store, pace: Pace, query: string,
     // Not connected / auth revoked: retrying won't help.
     if (err instanceof StoreDisconnectedError) throw new AccessRevokedError(err.message);
     if (err instanceof ShopifyHttpError && (err.status === 401 || err.status === 403)) {
+      logger.warn({ shop: store.shopDomain, app: store.shopifyAppKey, status: err.status, reason: err.message }, "Shopify refused the store's token");
       throw new AccessRevokedError(`Shopify rejected our access (${err.status}); merchant must reconnect`);
     }
     throw err;
@@ -966,6 +967,48 @@ export async function seedAfterMove(deps: Pick<WorkerDeps, "queues">) {
   }
   logger.info({ stores: stores.length, jobs }, "queued the after-move repair");
   return { stores: stores.length, jobs };
+}
+
+/** How often one store's sales records may be re-read without anyone asking (shared with the dashboard's). */
+const SALES_REREAD_EVERY_S = 86_400;
+
+/**
+ * Re-read the import window (by creation date) for every store holding orders whose sales records
+ * were never read: stored before bizinsights read them, or known only from a webhook whose read
+ * failed. Daily totals are made from the sales records alone, so such an order adds nothing to
+ * sales, and every webhook that re-aggregates its day makes that day look worse.
+ *
+ * The dashboard queues the same re-read, but only while someone has that store open: a store
+ * nobody opened (a client's, say) kept understated sales indefinitely. This runs after every
+ * deploy's migrations and on the scheduled tick. The lease is the dashboard's (`auto:reread`), so
+ * between them a store is re-read at most once a day; a store already importing orders is left
+ * to finish. Returns the number of stores queued.
+ */
+export async function seedSalesRereads(deps: Pick<WorkerDeps, "queues" | "coord">) {
+  const since = new Date(Date.now() - BACKFILL_DAYS * 86_400_000);
+  const lacking = await systemDb.order.findMany({
+    where: { shopifyCreatedAt: { gte: since }, salesUpdatedAt: null },
+    distinct: ["storeId"],
+    select: { storeId: true },
+  });
+  if (!lacking.length) return 0;
+  const stores = await systemDb.store.findMany({
+    where: { id: { in: lacking.map((o) => o.storeId) }, status: "active", accessTokenEnc: { not: null } },
+    select: { id: true, workspaceId: true },
+  });
+  let queued = 0;
+  for (const s of stores) {
+    const importing = await systemDb.syncJob.count({
+      where: { storeId: s.id, kind: "orders", status: { in: ["queued", "running"] }, createdAt: { gt: new Date(Date.now() - 30 * 60_000) } },
+    });
+    if (importing) continue;
+    if ((await deps.coord.hit(`auto:reread:${s.id}`, SALES_REREAD_EVERY_S)) !== 1) continue;
+    const job = await systemDb.syncJob.create({ data: { workspaceId: s.workspaceId, storeId: s.id, kind: "orders" } });
+    await deps.queues.sync.send({ storeId: s.id, kind: "orders", syncJobId: job.id, sinceDays: BACKFILL_DAYS });
+    queued++;
+  }
+  logger.info({ stores: stores.length, queued }, "queued sales record re-reads");
+  return queued;
 }
 
 /**
