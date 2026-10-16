@@ -80,6 +80,30 @@ The role trusts the token's `sub` exactly as this repository sends it: the immut
 in `infra/cdk/lib/config.ts`). "Not authorized to perform sts:AssumeRoleWithWebIdentity" in the
 workflow means the two differ: compare with CloudTrail's AssumeRoleWithWebIdentity events.
 
+### Keeping within GitHub's included minutes
+
+GitHub Free includes 2,000 hosted minutes a month for private repositories; a pull request costs
+about 13 (checks ~8, browser tests ~5, each job billed in whole minutes), its merge to `main` as
+much again, and a deploy ~5. CI (`.github/workflows/ci.yml`) therefore runs only what a change can
+affect:
+
+- Only Markdown files or `docs/` changed: no CI run, and so no deploy (nothing to ship).
+- A pull request runs the browser tests only when it changes `apps/web`, `apps/aws`,
+  `packages/shared`, the e2e stand-ins (`infra/cognito-local`, `infra/postgres`,
+  `docker-compose.yml`), the dependencies or `ci.yml`, or has the label `e2e` (labels are read per
+  push: add it, then push). A push to `main` always needs them before Deploy to AWS.
+- Each pull-request job that passes records the tree it tested (an artifact `passed-<job>-<tree>`,
+  14 days). The push to `main` that merges it looks these up first (job "Already passed on a pull
+  request?", about a minute) and skips each job that already passed on exactly its tree. That holds
+  when `main` hasn't moved since the pull request's last run: of several pull requests merged back to
+  back, only the first saves anything.
+- A newer push cancels the older run on the same pull request or on `main` (only the newest run on
+  `main` gets deployed anyway); re-run a failed job only when it is flaky, not to retry a real
+  failure.
+
+Minutes used so far this month: GitHub → Settings → Billing and licensing → Usage, or
+`gh api users/html-proof/settings/billing/usage/summary` (after `gh auth refresh -s user` once).
+
 ### When GitHub-hosted jobs can't start: the PC's own runner
 
 "The job was not started because recent account payments have failed or your spending limit needs
