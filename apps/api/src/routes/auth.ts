@@ -515,8 +515,15 @@ export function authRoutes(app: App, deps: Deps) {
       // Organizations this account works for as an employee (the employee portal).
       employments: shared ? [] : await employmentsForUser(user.id),
       // Set for a session opened from an invitation link: the app shows that workspace only,
-      // view-only, and offers to sign in for anything account-wide.
-      shared: shared ? { workspaceId: shared, readOnly: true, expiresAt: new Date(sessionOf(c).exp).toISOString() } : null,
+      // view-only, and offers to sign in for anything account-wide. `expiresAt`: when the shared
+      // access ends (its end date; this session's own end when it has none).
+      shared: shared
+        ? {
+            workspaceId: shared,
+            readOnly: true,
+            expiresAt: (memberships.find((m) => m.workspaceId === shared)?.accessExpiresAt ?? new Date(sessionOf(c).exp)).toISOString(),
+          }
+        : null,
     });
   }
 

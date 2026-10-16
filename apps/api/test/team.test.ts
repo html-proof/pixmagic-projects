@@ -604,6 +604,8 @@ describe("opening the dashboard straight from the invitation link", () => {
     const me = ok(await call("GET", "/me", session));
     expect(me.user.email).toBe("newcomer@example.com");
     expect(me.shared).toMatchObject({ workspaceId: b.ws, readOnly: true });
+    // The shared access's own end date (60 days), not this session's (5 days).
+    expect(Math.round((Date.parse(me.shared.expiresAt) - Date.now()) / 86_400_000)).toBe(60);
     expect(me.workspaces.map((w: { id: string }) => w.id)).toEqual([b.ws]);
     expect(ok(await call("GET", `/workspaces/${b.ws}/access`, session))).toMatchObject({ role: "viewer", modules: ["analytics", "products"] });
     expect(Object.keys(ok(await overview(b, session)).modules).sort()).toEqual(["catalog", "sales_overview"]);
