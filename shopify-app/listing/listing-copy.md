@@ -1,169 +1,188 @@
 # Listing copy and reviewer instructions
 
-Paste-ready text for the App Store listing form and the review submission. Written against the
-scopes the released version actually declares (`read_orders,read_products`) — see
-"What must not be claimed" at the bottom before editing any of it.
+Paste-ready text for the App Store listing form and the review submission, written against what
+the released app actually does: install grant `read_orders,read_products`, three optional scopes
+(`read_customers`, `write_pixels`, `read_customer_events`) asked for one feature at a time, and no
+paid plans (billing is switched off, `apps/web/src/lib/features.ts`). Read "What must not be
+claimed" before editing any of it, and [README.md](README.md) for what is still Dashboard-only.
 
-Dashboard: https://dev.shopify.com/dashboard/238480582/apps/430680145921
+Dev Dashboard: https://dev.shopify.com/dashboard/238480582/apps/430680145921
+
+Items marked **OWNER** are business or legal statements the owner must confirm before submitting.
 
 ---
 
 ## Listing
 
-**App name**
+**App name** (30 characters max; must match `name` in `../shopify.app.toml`)
 
 ```
 bizinsights
 ```
 
-**Tagline** (short description, shown under the name)
+**App introduction** (100 characters max)
 
 ```
-Your store's numbers in plain language — sales, orders, products and stock.
+Your store's sales, orders, products and stock, explained in plain language.
 ```
 
-**Full description**
+**App details** (500 characters max)
 
 ```
-bizinsights turns your Shopify data into numbers you can act on, without a spreadsheet and
-without a setup project. Connect your store and the first import starts immediately; the
-dashboard is ready in minutes.
-
-What you get
-
-• Net sales that mean something. Gross sales, discounts and refunds are separated, so you
-  see what you actually kept rather than a headline number that quietly includes money you
-  gave back.
-• Orders, units and average order value, each against the previous period, so a good week
-  is visible as a good week.
-• Refund rate, tracked as a share of sales rather than a raw total.
-• Top products by revenue, after discounts.
-• Inventory on hand, so a product that is about to sell out is visible before it does.
-• Recent orders, with the detail you need to answer a customer without opening the admin.
-
-Every metric is written out in plain language next to the figure, so nobody has to guess
-whether "sales" means before or after refunds.
-
-Built to stay out of your way
-
-• Read-only. bizinsights never writes to your store, never edits an order and never changes a
-  product.
-• We ask for two permissions and no more: your orders and your products.
-• We keep no customer personal data — no names, no emails, no addresses.
-• Uninstall and your store is disconnected at once; its records are erased.
-
-Free to start. Paid plans add more stores and support.
+bizinsights turns your Shopify orders and products into a dashboard anyone on your team can read.
+Net sales separate gross sales, discounts and refunds, so you see what you kept. Every figure is
+compared with the previous period and explained in a sentence. Top products, stock on hand and
+recent orders sit on the same page. Install from Shopify and the first import starts at once. The
+app only reads your data: it never changes an order or a product.
 ```
 
-**Pricing** (must match `PLANS` in `apps/api/src/routes/workspaces.ts`)
+**Feature list** (80 characters max each)
+
+```
+Net sales with discounts and refunds shown apart, against the previous period
+Orders, units and average order value for any date range you pick
+Top products by revenue after discounts, and the stock left for each
+Every number explained in a plain sentence, so nobody has to guess what it means
+Read-only access: bizinsights never edits an order, a product or a setting
+```
+
+**Pricing** — **OWNER**: confirm before submitting.
 
 | Plan | Price | Includes |
 | --- | --- | --- |
-| Free | $0/month | 1 store, 30 days of history, core metrics |
-| Growth | $29/month | 3 stores, email alerts, API access |
-| Scale | $99/month | Unlimited stores, priority support, audit log export |
+| Free | $0 | Everything in the app |
 
-All charges run through Shopify's Billing API (`appSubscriptionCreate`).
+Billing is switched off in the app (`BILLING_ENABLED = false`), so nothing can be charged and the
+listing must say Free. `PLANS` in `apps/api/src/routes/workspaces.ts` still lists Growth and Scale,
+but nothing enforces their limits and there is no way to downgrade or cancel yet: see
+`docs/shopify-app-store-compliance.md` ("Billing") before switching paid plans on.
+
+**Category** — Store management → Analytics (or Reporting). Tags: analytics, reports, sales.
+
+**Languages** — English only (the UI has no other language).
 
 **Privacy policy URL**
 
 ```
-https://d2mr8m2p1qkh58.cloudfront.net/privacy
+https://bizinsights.io/privacy
 ```
 
-**Support URL / contact**
+**Support** — email `sales@ikorex.com.au` (from `apps/web/src/lib/contact.ts`), support page:
 
 ```
-https://d2mr8m2p1qkh58.cloudfront.net/support
+https://bizinsights.io/support
 ```
 
-> Both pages render from `apps/web/src/lib/contact.ts` (filled in). Keep it filled: review
-> checks requirement 4.1 (reachable support contact) and the privacy policy URL.
+**Terms of service** — `https://bizinsights.io/terms`
 
-**Screenshots** — `../../demo-screenshots/`. Shopify wants at least 1600 x 900; the current
-captures are 800 x 600 to 1200 x 900, so they must be retaken at that size rather than
-upscaled. One feature per image, no browser chrome, no desktop background:
+**Demo store URL** — optional; leave empty unless a development store with the app is opened to the public.
 
-| Image | Shows |
-| --- | --- |
-| `03-dashboard-sales` | Net sales, orders, AOV with period comparison |
-| `05-fulfillment-discounts-products` | Top products by revenue after discounts |
-| `06-inventory` | Inventory on hand |
-| `07-recent-orders` | Recent orders |
-| `10-live-dashboard` | The dashboard against a real store |
+**Integrations** (optional, up to six) — only list ones a reviewer can complete. WhatsApp, Meta Ads
+and Google Ads need the merchant's own accounts and, for Meta and Google, platform approvals that
+are still pending (see the compliance doc), so leave them out of the first submission.
+
+**Screenshots** (3 to 6, 1600 x 900, desktop, alt text on each): the real production UI at
+`https://bizinsights.io` on a development store with demo data — never a mock-up, a logo, browser
+chrome, pricing, reviews or a customer's personal data. One feature per image:
+
+| # | Shows | Alt text |
+| --- | --- | --- |
+| 1 | Dashboard: net sales, orders, average order value, with the period comparison | Dashboard with net sales, orders and average order value compared with the previous period |
+| 2 | Sales breakdown: gross sales, discounts, refunds, net sales | Breakdown of gross sales, discounts and refunds into net sales |
+| 3 | Top products by revenue | Top products by revenue after discounts |
+| 4 | Inventory on hand | Stock left for each product variant |
+| 5 | Recent orders | The most recent orders with totals and status |
+
+`../../demo-screenshots/` no longer exists; take new captures (see README, "Screenshots").
 
 ---
 
-## Reviewer instructions
+## Reviewer instructions (the "Testing instructions" field)
 
 ```
-bizinsights is a read-only analytics app. It requests read_orders and read_products and writes
-nothing back to the store.
+bizinsights is a read-only analytics dashboard. It is not embedded in the Shopify admin: it opens
+at https://bizinsights.io, with its own login.
 
-Install and first run
-
-1. Go to https://d2mr8m2p1qkh58.cloudfront.net/signup and create an account with an email
-   address you can receive mail at.
-2. Confirm the address with the link we email you.
-3. On "Let's get your store set up", click "Continue with Shopify" and approve the two
-   permissions.
-4. You are returned to the app and the first import starts automatically. It takes under a
-   minute on a store with a normal order history.
-5. The dashboard opens on net sales, orders and average order value for the last 30 days.
-   Each figure carries a plain-language explanation and a comparison with the previous
-   period. Use the date range control to change the window.
+Install
+1. Install the app from the listing. Shopify asks you to approve read access to orders and
+   products; approve it.
+2. The app authorizes at once and opens on "<your store> is connected". The first import has
+   already started.
+3. Sign in with the test account below (or choose "Create account" and confirm your email with
+   the 6-digit code we send), then click "Add store and open dashboard".
+4. The import progress page shows orders, products and inventory arriving; it takes a minute or
+   two on a store with demo data. Then open the dashboard.
 
 What to look at
+- Dashboard: net sales, orders and average order value for the last 30 days, each compared with
+  the previous period and explained in a sentence. Change the date range at the top.
+- Sales: gross sales, discounts, refunds and net sales.
+- Top products, inventory on hand, recent orders.
+- "More insights you can unlock": optional features that need extra Shopify permissions. Clicking
+  Enable asks Shopify for that one permission.
 
-• Sales — gross sales, discounts, refunds and net sales, separated.
-• Products — top products by revenue after discounts.
-• Inventory — units on hand per variant.
-• Orders — the most recent orders with their totals and status.
+Reinstall and uninstall
+- Opening the app again from the Shopify admin goes straight to the dashboard.
+- Uninstalling deletes our access token immediately. Reinstalling authorizes again and re-imports.
+- 48 hours after an uninstall Shopify sends shop/redact and we erase everything about the store.
 
 Billing
+- The app is free; there is nothing to buy.
 
-Billing runs through Shopify's Billing API (appSubscriptionCreate). To see the charge flow:
-Settings → Billing → choose Growth or Scale. Outside production this creates a test charge, so
-the confirmation page appears and no money moves. The Free plan needs no charge, so the app
-is fully usable without going through billing.
+Test account (OWNER: create it on bizinsights.io and fill in before submitting)
+- Email: <reviewer account email>
+- Password: <password>
 
 Data handling
-
-• read_orders is used for the sales, refund and order figures. read_products is used for
-  product names and inventory.
-• We store the order, line item, refund and product records needed to compute the metrics
-  above. No customer personal data is stored: a customer is held only as a keyed hash, which
-  is what lets us count orders per customer without keeping names, emails or addresses.
-• Shopify access tokens are encrypted at rest.
-• Uninstalling triggers app/uninstalled, which immediately marks the store disconnected and
-  erases its access tokens, so no further API call is possible. The store's records are
-  deleted when Shopify sends shop/redact 48 hours later.
-• The mandatory GDPR webhooks (customers/data_request, customers/redact, shop/redact) are
-  subscribed and handled: customers/redact clears the keyed hash from that customer's orders,
-  and shop/redact deletes every order, line item, refund, product, variant and metric row for
+- read_orders: sales, refunds and order figures. read_products: product names and stock.
+- We store order, line item, refund and product records. No customer name, email or address is
+  stored with them: a customer is kept only as a keyed hash, which lets us tell new customers from
+  returning ones.
+- Shopify access tokens are encrypted at rest (AES-256-GCM).
+- customers/data_request: the store owner downloads that customer's data from Settings, Privacy
+  requests. customers/redact: we delete what we hold about the customer. shop/redact: we erase
   the store.
 
-Support: <support email from contact.ts>
-Emergency contact: <name, email and phone — Dashboard field, not in the repo>
+Support: sales@ikorex.com.au
 ```
+
+**Emergency developer contact** (Dashboard field) — **OWNER**: a name, email and phone that are
+answered.
+
+---
+
+## Protected customer data request (Dashboard → API access)
+
+Level 1 is required for `read_orders`. Suggested answers:
+
+- **Why the app needs it**: to compute sales, refunds, orders and average order value for the
+  merchant's own dashboard.
+- **Data minimisation**: no customer name, email, phone or address is stored with the orders; the
+  customer id is kept only as a keyed HMAC so new and returning customers can be counted.
+- **Retention**: kept while the app is installed; tokens destroyed at uninstall; everything erased
+  on shop/redact; customers/redact and customers/data_request handled as described above.
+- **Encryption**: tokens and the few personal fields the optional WhatsApp feature keeps are
+  encrypted with AES-256-GCM; data in transit uses TLS; the database is encrypted at rest (RDS).
+- **Access**: workspace members only, by role; Postgres row-level security isolates each merchant.
+
+Level 2 (name, email, phone) is only needed for the optional "Customers to follow up" card,
+which reads them from Shopify on demand and never stores them. Request it only if that card is
+part of the submission; otherwise leave it out of the listing.
 
 ---
 
 ## What must not be claimed
 
-The released version declares `read_orders,read_products` and nothing else. Two features
-exist in the codebase but **cannot work on a merchant store under those scopes**, so they
-must stay out of the listing, the screenshots and the reviewer instructions — a listing that
-describes functionality the app does not deliver is a rejection:
-
 - **Conversion rate, add-to-cart rate, checkout completion** (`docs/kpis.md`, "Funnel"). These
-  come from the web pixel, which needs `write_pixels` and `read_customer_events`.
-- **Returning customer rate**. Needs `read_customers`.
+  come from the web pixel, which needs the optional `write_pixels` and `read_customer_events`
+  scopes and protected customer data approval. They may be described only as optional, after
+  that approval.
+- **Returning customer rate** needs the optional `read_customers`; same rule.
+- **Paid plans, email alerts, API access**: billing is off and the API keys page is hidden.
+- **WhatsApp, Meta Ads, Google Ads, email automations, staff and payroll**: they exist in the app,
+  but a reviewer cannot complete them without third-party accounts and approvals the app does not
+  have yet. Keep them out of the listing until each one works end to end for any merchant.
+- No statistics, guarantees or superlatives ("the best", "increase sales by").
 
-All three are protected customer data and are deliberately not declared
-(`../shopify.app.toml`). `PLANS` in `apps/api/src/routes/workspaces.ts` advertised "Funnel
-insights" on the Growth plan, which the billing page renders and a reviewer would see; that
-string has been removed. Re-add it only alongside the scopes.
-
-`read_orders` also exposes only 60 days of history; longer ranges fill in from the install
-date onward unless `read_all_orders` is approved.
+`read_orders` exposes the last 60 days of orders only; longer ranges fill in from the install date
+onward unless `read_all_orders` is approved.

@@ -32,7 +32,7 @@ const jane = {
   numberOfOrders: "2",
   amountSpent: { amount: "120.50", currencyCode: "AUD" },
   defaultEmailAddress: { emailAddress: "jane@example.com", marketingState: "SUBSCRIBED" },
-  defaultPhoneNumber: { phoneNumber: "+61400000000", marketingState: "SUBSCRIBED" },
+  defaultPhoneNumber: { phoneNumber: "+61400000000", smsMarketingConsent: { state: "SUBSCRIBED" } },
 };
 const bob = {
   ...jane,

@@ -257,7 +257,12 @@ export const scopesUpdateSchema = obj({ current: z.union([z.array(z.string()), z
 export const subscriptionUpdateSchema = obj({ app_subscription: obj({ admin_graphql_api_id: z.string().min(1), status: str }) });
 
 /** customers/data_request. */
-export const customersDataRequestSchema = obj({ customer: obj({ id: restId.nullish() }).nullish(), orders_requested: z.array(restId).nullish() });
+/** customers/data_request: who asked, and Shopify's id for the request (one row per request). */
+export const customersDataRequestSchema = obj({
+  customer: obj({ id: restId.nullish(), email: str, phone: str }).nullish(),
+  orders_requested: z.array(restId).nullish(),
+  data_request: obj({ id: restId }).nullish(),
+});
 
 /**
  * customers/redact: whose data goes. It has to name someone, the customer or their orders: one

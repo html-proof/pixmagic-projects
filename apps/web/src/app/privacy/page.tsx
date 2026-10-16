@@ -327,8 +327,13 @@ export default function PrivacyPage() {
       <LegalSection {...section("retention")}>
         <p>
           We keep store data for as long as the app is installed. Uninstalling the app from Shopify immediately destroys the stored
-          access tokens, and we act on Shopify&apos;s mandatory customer data request, customer redact and shop redact webhooks.
-          Disconnecting a store in Settings → Stores deletes its orders and metrics from bizinsights.
+          access tokens. Shopify then asks us, 48 hours later, to erase the store, and we delete everything we hold about it,
+          including the store itself. Disconnecting a store in Settings → Stores deletes its orders and metrics from bizinsights.
+        </p>
+        <p>
+          When one of your customers asks your store what data it holds about them, Shopify tells us, and the store&apos;s owners and
+          admins can download what bizinsights holds about that customer from Settings → Privacy requests, to send it to them. When a
+          customer asks to be erased, Shopify tells us and we delete what we hold about them.
         </p>
         <p>
           To have your entire workspace and account deleted, email <SupportEmail subject="Delete my account" />. How to remove the data
@@ -350,7 +355,8 @@ export default function PrivacyPage() {
       <LegalSection {...section("shoppers")}>
         <p>
           If you bought from a store that uses bizinsights, we process your information on behalf of that merchant. To access or delete
-          it, please contact the merchant: when they ask Shopify to erase your data, Shopify instructs us to erase it too.
+          it, please contact the merchant: when they pass your request on through Shopify, we give them a copy of what we hold about
+          you, or erase it.
         </p>
       </LegalSection>
 
