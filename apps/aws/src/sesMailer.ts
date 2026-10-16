@@ -1,5 +1,5 @@
 import { AwsClient } from "aws4fetch";
-import { env, MailError, withoutAddresses, type FetchLike, type Mailer } from "@app/core";
+import { env, MailError, withoutAddresses, type FetchLike, type Mailer } from "@app/core/mailer";
 import type { AwsCredentials } from "./awsClient.js";
 
 /**

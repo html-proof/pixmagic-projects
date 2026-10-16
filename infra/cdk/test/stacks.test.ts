@@ -8,6 +8,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 // A stand-in Lambda package, so the stacks synthesize without building the real one.
 const fnDir = mkdtempSync(join(tmpdir(), "insights-fn-"));
 writeFileSync(join(fnDir, "index.mjs"), "export const handler = async () => ({});\n");
+writeFileSync(join(fnDir, "cognito-email.mjs"), "export const handler = async () => ({});\n");
 mkdirSync(join(fnDir, "public/_next/static/chunks"), { recursive: true });
 writeFileSync(join(fnDir, "public/_next/static/chunks/main.js"), "void 0;\n");
 process.env.INSIGHTS_FUNCTION_DIR = fnDir;
@@ -300,6 +301,89 @@ describe("the edge stack behind Cloudflare", () => {
 
   it("doesn't judge Cloudflare's own addresses by Amazon's reputation list", () => {
     expect(JSON.stringify(rule("aws-ip-reputation").Statement.ManagedRuleGroupStatement.ScopeDownStatement)).toMatch(/^\{"NotStatement".*IPSetReferenceStatement/);
+  });
+});
+
+describe("Cognito's emails", () => {
+  type Resource = { Properties: Record<string, any> }; // eslint-disable-line @typescript-eslint/no-explicit-any
+  const only = (tpl: Template, type: string) => {
+    const found = Object.entries(tpl.findResources(type)) as Array<[string, Resource]>;
+    expect(found, type).toHaveLength(1);
+    return found[0]!;
+  };
+
+  it("go to the custom email sender, with codes encrypted under this stack's KMS key", () => {
+    const [fnId] = only(t.auth, "AWS::Lambda::Function");
+    const [keyId] = only(t.auth, "AWS::KMS::Key");
+    const [, pool] = only(t.auth, "AWS::Cognito::UserPool");
+    // cognito.yaml's switch, given both values: on.
+    expect(pool.Properties.LambdaConfig).toEqual({
+      "Fn::If": ["HasCustomEmailSender", { CustomEmailSender: { LambdaArn: { "Fn::GetAtt": [fnId, "Arn"] }, LambdaVersion: "V1_0" }, KMSKeyID: { "Fn::GetAtt": [keyId, "Arn"] } }, { Ref: "AWS::NoValue" }],
+    });
+    const tpl = t.auth.toJSON();
+    expect(tpl.Conditions.HasCustomEmailSender).toEqual({ "Fn::Equals": ["ENABLED", "ENABLED"] });
+    expect(tpl.Parameters?.CustomEmailSenderArn).toBeUndefined();
+    // Cognito sends nothing itself, but its own sender stays configured underneath.
+    expect(pool.Properties.EmailConfiguration["Fn::If"][2]).toEqual({ EmailSendingAccount: "COGNITO_DEFAULT" });
+    t.auth.hasResourceProperties("AWS::KMS::Alias", { AliasName: "alias/insights-production-cognito-email" });
+  });
+
+  it("lets only this pool invoke the sender, and the sender only decrypt with its key and read the app secret", () => {
+    const [fnId] = only(t.auth, "AWS::Lambda::Function");
+    const [keyId] = only(t.auth, "AWS::KMS::Key");
+    const [poolId] = only(t.auth, "AWS::Cognito::UserPool");
+    t.auth.hasResourceProperties("AWS::Lambda::Permission", {
+      Action: "lambda:InvokeFunction",
+      Principal: "cognito-idp.amazonaws.com",
+      FunctionName: { "Fn::GetAtt": [fnId, "Arn"] },
+      SourceArn: { "Fn::GetAtt": [poolId, "Arn"] },
+      SourceAccount: "605411278365",
+    });
+    t.auth.resourceCountIs("AWS::Lambda::Permission", 1);
+    const statements = Object.values(t.auth.findResources("AWS::IAM::Policy"))
+      .filter((p) => JSON.stringify(p.Properties.Roles).includes("CognitoEmail"))
+      .flatMap((p) => p.Properties.PolicyDocument.Statement as Array<{ Action: string | string[]; Resource: unknown }>);
+    expect(statements).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ Action: "kms:Decrypt", Resource: { "Fn::GetAtt": [keyId, "Arn"] } }),
+        expect.objectContaining({ Action: "secretsmanager:GetSecretValue", Resource: "arn:aws:secretsmanager:ap-southeast-2:605411278365:secret:insights/production/app-*" }),
+      ]),
+    );
+    expect(statements.flatMap((s) => [s.Action].flat()).sort()).toEqual(["kms:Decrypt", "secretsmanager:GetSecretValue"]);
+  });
+
+  it("runs the package's own entry outside the VPC, retried by Lambda, with an alarm on failures", () => {
+    const [, fn] = only(t.auth, "AWS::Lambda::Function");
+    const [keyId] = only(t.auth, "AWS::KMS::Key");
+    expect(fn.Properties).toMatchObject({ FunctionName: "insights-production-cognito-email", Handler: "cognito-email.handler", Architectures: ["arm64"] });
+    expect(fn.Properties.VpcConfig).toBeUndefined();
+    expect(fn.Properties.Environment.Variables).toMatchObject({
+      NODE_ENV: "production",
+      APP_URL: "https://bizinsights.io",
+      API_URL: "https://bizinsights.io/api",
+      EMAIL_FROM: "bizinsights <no-reply@bizinsights.io>",
+      APP_SECRET_ARN: "insights/production/app",
+      COGNITO_EMAIL_KEY_ARN: { "Fn::GetAtt": [keyId, "Arn"] },
+    });
+    for (const name of ["RESEND_API_KEY", "SESSION_SECRET", "COGNITO_CLIENT_SECRET"]) expect(fn.Properties.Environment.Variables[name]).toBeUndefined();
+    t.auth.hasResourceProperties("AWS::Lambda::EventInvokeConfig", { MaximumRetryAttempts: 2, MaximumEventAgeInSeconds: 3600 });
+    t.auth.hasResourceProperties("AWS::CloudWatch::Alarm", {
+      AlarmName: "insights-production-cognito-email-errors",
+      MetricName: "Errors",
+      Threshold: 1,
+      AlarmActions: ["arn:aws:sns:ap-southeast-2:605411278365:insights-production-alarms"],
+    });
+  });
+
+  it("stay with Cognito's own sender when switched off, and in staging", () => {
+    for (const auth of [synth({ cognitoEmail: "off" }).auth, synth({ env: "staging" }).auth]) {
+      auth.resourceCountIs("AWS::KMS::Key", 0);
+      auth.resourceCountIs("AWS::Lambda::Function", 0);
+      auth.resourceCountIs("AWS::Lambda::Permission", 0);
+      // The template's switch stays at its default, so HasCustomEmailSender is false.
+      expect(auth.toJSON().Parameters.CustomEmailSenderState).toMatchObject({ Type: "String", Default: "DISABLED" });
+    }
+    synth({ env: "staging", cognitoEmail: "on" }).auth.resourceCountIs("AWS::Lambda::Function", 1);
   });
 });
 

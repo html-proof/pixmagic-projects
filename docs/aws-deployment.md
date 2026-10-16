@@ -21,7 +21,7 @@ Account `605411278365`, region `ap-southeast-2` (Sydney); the WAF web ACL lives 
 | Coordinator | DynamoDB `insights-production-coord` | `apps/aws/src/dynamoCoord.ts` |
 | Large webhook bodies | S3 `insights-production-payloads-605411278365` (7-day lifecycle) | `apps/aws/src/s3Blobs.ts` |
 | Dumps, artifacts | S3 `insights-production-artifacts-605411278365` (30 days, versioned) | `infra/cdk/scripts/migrate-data.mjs` |
-| Sign-in | Cognito pool `insights-production` (from `infra/aws/cognito.yaml`) | `apps/api/src/cognito.ts` |
+| Sign-in | Cognito pool `insights-production` (from `infra/aws/cognito.yaml`); its emails (codes) through Lambda `insights-production-cognito-email` and Resend, "Sign-in emails" below | `apps/api/src/cognito.ts`, `apps/aws/src/cognitoEmail.ts` |
 | App email | Resend once its key is in the app secret, else SES (sandbox: verified recipients only); "App email" below | `packages/core/src/mail/`, `apps/aws/src/mailers.ts`, `apps/aws/src/sesMailer.ts` |
 | Secrets | Secrets Manager `insights/production/{app,db-owner,worker-cognito}`; settings in SSM `/insights/production/runtime` | `apps/aws/src/secrets.ts` |
 | Logs, alarms | CloudWatch (90 days), dashboard `insights-production`, SNS `insights-production-alarms`, budget US$150/month | `infra/cdk/lib/app-stack.ts` |
@@ -162,7 +162,9 @@ app to `d2mr8m2p1qkh58.cloudfront.net`.
 
 `node infra/cdk/scripts/rollback.mjs` moves the `live` aliases of api, jobs and cron to the previous
 version (UI included, it ships in the api package). The next deploy moves them forward again.
-Infrastructure: `cdk deploy` of the previous commit. Data: point-in-time restore.
+Infrastructure: `cdk deploy` of the previous commit. Data: point-in-time restore. Cognito's email
+function has no alias (rollback.mjs leaves it): to have Cognito send its own emails again, deploy
+the Auth stack with `-c cognitoEmail=off` ("Sign-in emails" below).
 
 ## Cutover (owner's go-ahead needed; not done yet)
 
@@ -287,6 +289,31 @@ retried twice while the owner waits, then from the `email` queue after 1, 5 and 
   6. Check: invite an address you own that isn't verified in SES; the team list says "Email sent",
      then "Email delivered" once Resend's event arrives (CloudWatch: `mail delivery event`).
   To go back to SES, set `EMAIL_PROVIDER=ses` (settings) or remove the key.
+
+## Sign-in emails (Cognito's codes)
+
+Cognito doesn't send its own emails in production: sign-up and email-change codes, password-reset
+codes, sign-in codes and temporary passwords go to the pool's **Custom Email Sender** trigger, the
+Lambda `insights-production-cognito-email` (Auth stack; `apps/aws/src/cognitoEmail.ts`, its own
+`cognito-email.mjs` in the same package). Cognito encrypts each code with the KMS key
+`alias/insights-production-cognito-email`; the function decrypts it (AWS Encryption SDK), words the
+email for its trigger (`packages/core/src/mail/authEmails.ts`) and sends it through the app's mail
+provider (Resend, `RESEND_API_KEY` from `insights/production/app`) from `no-reply@bizinsights.io`.
+So these emails aren't held to Cognito's own 50 a day from `no-reply@verificationemail.com`; they
+share Resend's limits with the app's email (free tier: 100 a day, 3,000 a month).
+
+- Cognito invokes the function asynchronously: a failure is retried twice by Lambda (same
+  `Idempotency-Key`, so never two copies) and counted in the alarm `insights-production-cognito-email-errors`.
+  The log (`/aws/lambda/insights-production-cognito-email`) has the trigger and Resend's message id,
+  never the address or the code. Resend's own events for these messages are ignored (no delivery record).
+- **Off switch**: `-c cognitoEmail=off` on a deploy of the Auth stack puts Cognito's own sender back
+  (template parameter `CustomEmailSenderState`), for as long as the next deploy without it. Off in
+  staging (`cognitoCustomEmail` in `infra/cdk/lib/config.ts`).
+- **Cost**: the KMS key US$1/month (no rotation: nothing stays encrypted under it), the alarm
+  US$0.10/month; the KMS requests and invocations fit the free tiers at this volume.
+- Passwordless sign-in (`COGNITO_EMAIL_OTP`, `EMAIL_OTP` as a first factor) is unchanged, still off:
+  Cognito's documentation lists SES email configuration as its requirement (not tried with the
+  custom sender). The trigger already words the code (`CustomEmailSender_Authentication`).
 
 ## Owner-only steps
 

@@ -1,4 +1,4 @@
-import { logger, resendMailer, withTimeout, type FetchLike, type Mailer } from "@app/core";
+import { logger, resendMailer, withTimeout, type FetchLike, type Mailer } from "@app/core/mailer";
 import type { AwsCredentials } from "./awsClient.js";
 import { sesMailer } from "./sesMailer.js";
 

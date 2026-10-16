@@ -45,10 +45,10 @@ export const APP_SETTINGS = {
   // store limit. Off until they launch; turn it on together with BILLING_ENABLED in
   // apps/web/src/lib/features.ts (docs/shopify-app-store-compliance.md, "Billing").
   "BILLING_ENABLED": "",
-  // App email (invitations, alerts), sent through Amazon SES: an address on a domain verified
-  // there (bizinsights.io: Easy DKIM, records in Cloudflare DNS). The domain has no mailbox, so
-  // replies go where a message names (an invitation: its sender). Sign-in emails (codes) are
-  // Cognito's own, not this.
+  // App email (invitations, alerts) and Cognito's sign-in emails (codes, through the pool's custom
+  // email sender, infra/cdk auth-stack.ts), sent by the mail provider (Resend, else SES): an
+  // address on a domain verified there (bizinsights.io, records in Cloudflare DNS). The domain has
+  // no mailbox, so replies go where a message names (an invitation: its sender).
   "EMAIL_FROM": "bizinsights <no-reply@bizinsights.io>",
   // Ad accounts ("Continue with Meta" / "Continue with Google Ads" / "Continue with Google AdSense"
   // on Settings → Ad accounts). Empty until the apps exist: the buttons then say the platform isn't

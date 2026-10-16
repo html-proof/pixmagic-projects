@@ -73,10 +73,13 @@ aws cloudformation describe-stacks --stack-name InsightsAuth-production --region
 
 `ProviderRedirectUri` among the outputs is what Google needs below.
 
-Emails: by default Cognito sends codes from `no-reply@verificationemail.com`, limited to 50 a day.
-That is enough to start. For more, and for the passwordless code, verify a domain in SES in the same
-region, request production access, and pass `SesFromEmail` and `SesIdentityArn` to the template
-(`parameters` in `infra/cdk/lib/auth-stack.ts`).
+Emails: left to itself Cognito sends codes from `no-reply@verificationemail.com`, limited to 50 a
+day. Production doesn't: the Auth stack gives the pool a Custom Email Sender trigger (template
+parameters `CustomEmailSenderState`, `CustomEmailSenderArn`, `CustomEmailKmsKeyArn`), a function
+that sends every code through the app's mail provider (Resend) from `no-reply@bizinsights.io`
+([aws-deployment.md](aws-deployment.md), "Sign-in emails"). For the passwordless code (`EMAIL_OTP`)
+Cognito's documentation asks for SES: verify a domain in SES in the same region, get production access, and pass
+`SesFromEmail` and `SesIdentityArn` to the template (`parameters` in `infra/cdk/lib/auth-stack.ts`).
 
 ## 2. Google
 
@@ -203,5 +206,7 @@ so Continue with Google runs end to end in a browser.
 - **"This sign-in didn't start in this browser"**: the state cookie (`__oauth`, 10 minutes) is gone:
   third-party cookie blocking doesn't affect it (it's first-party), but a different browser or an
   expired attempt does. Start again.
-- **Codes don't arrive**: Cognito's default sender allows 50 emails a day per account; check the spam
-  folder, then set up SES (section 1).
+- **Codes don't arrive**: production sends them through Resend (the `cognito-email` function): check
+  the spam folder, the alarm `insights-production-cognito-email-errors` and the function's log (its
+  trigger and Resend's message id), then Resend's dashboard for that message and its daily quota.
+  Without the trigger (`-c cognitoEmail=off`, staging) Cognito's own sender allows 50 emails a day.
