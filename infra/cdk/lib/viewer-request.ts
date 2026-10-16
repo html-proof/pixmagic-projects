@@ -6,9 +6,10 @@
  *
  * With an address of its own (`canonicalHost`), page requests (GET, HEAD) that arrive on any other
  * name CloudFront answers on (www, the *.cloudfront.net address) are sent there with a 301: sessions,
- * the CSRF check and OAuth callbacks all expect one origin (APP_URL). The path and the query
- * parameters go along with their encoding as received (CloudFront may reorder them), so a Shopify
- * launch's HMAC, computed over the sorted parameters, still verifies. Other methods (webhooks,
+ * the CSRF check and OAuth callbacks all expect one origin (APP_URL). The path and every query
+ * parameter go along unchanged. Their order may not: CloudFront hands the function the query as an
+ * object, not as text. A Shopify launch's HMAC still verifies, since it is computed over the
+ * parameters sorted by name (verifyShopifyQueryHmac). Other methods (webhooks,
  * pixel events, API-key clients) are served where they arrive: they don't follow redirects.
  */
 export function viewerRequestCode(canonicalHost?: string): string {
