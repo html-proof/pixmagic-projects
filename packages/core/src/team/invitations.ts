@@ -8,16 +8,24 @@ import { teamInvitationEmail, teamInvitationUrl } from "./email.js";
 
 /**
  * Invitations to a workspace (Team & Access). The link carries a random 256-bit token; only its
- * SHA-256 is stored, so a copy of the database can't be turned into working links. A link works
- * once and expires (7 days unless the inviter chose otherwise); a resend issues a new link and the
- * old one stops working; inviting the same address again replaces the invitation not yet accepted.
- * Accepting needs a signed-in account whose verified email is the invited address.
+ * SHA-256 is stored, so a copy of the database can't be turned into working links. A link must be
+ * first opened before it expires (7 days unless the inviter chose otherwise); a resend issues a new
+ * link and the old one stops working; inviting the same address again replaces the invitation not
+ * yet accepted. Opening the link is the way in (no account or password needed: POST
+ * /invitations/open), and it keeps opening the shared dashboard for LINK_REOPEN_DAYS after that,
+ * while the member's access lasts. Revoking or removing the member ends it at once.
  */
 
 export const INVITE_DAYS_DEFAULT = 7;
 export const INVITE_DAYS_MAX = 30;
 export const INVITE_MESSAGE_MAX = 500;
 const DAY_MS = 86_400_000;
+/**
+ * How long an invitation link keeps opening the dashboard after it was first used (on another
+ * device, or once the shared session has ended). Under ENDED_INVITATION_KEEP_DAYS, after which the
+ * accepted invitation itself is deleted.
+ */
+export const LINK_REOPEN_DAYS = 60;
 
 export type InvitationStatus = "pending" | "accepted" | "revoked" | "expired";
 
@@ -242,6 +250,8 @@ export interface InvitationPreview {
   expiresAt?: string;
   /** The invited address, partly hidden: anyone holding the link sees this page. */
   email?: string;
+  /** Accepted already, and the link still opens the dashboard (LINK_REOPEN_DAYS). */
+  reopens?: boolean;
 }
 
 /**
@@ -257,19 +267,36 @@ export async function previewTeamInvitation(token: string): Promise<InvitationPr
   if (!inv) return { status: "invalid" };
   const status = invitationStatus(inv);
   const inviter = inv.invitedBy ? (inv.invitedBy.displayName ?? inv.invitedBy.email) : null;
-  if (status !== "pending") return { status, workspace: inv.workspace.name, inviter };
+  // Used already, and still opening the dashboard: what the member has now, which an owner may have changed since.
+  const member = status === "accepted" ? await reopenableMember(inv) : null;
+  if (status !== "pending" && !member) return { status, workspace: inv.workspace.name, inviter };
+  const access = member ?? inv;
   return {
     status,
+    reopens: !!member,
     workspace: inv.workspace.name,
     inviter,
-    role: inv.role,
-    roleLabel: ROLE_INFO[inv.role].label,
-    modules: hasFullAccess(inv.role) ? ["Everything in the workspace"] : modulesOf(inv).map((m) => ACCESS_MODULE_INFO[m].label),
-    permissionCount: inv.permissions.length,
+    role: access.role,
+    roleLabel: ROLE_INFO[access.role].label,
+    modules: hasFullAccess(access.role) ? ["Everything in the workspace"] : modulesOf(access).map((m) => ACCESS_MODULE_INFO[m].label),
+    permissionCount: access.permissions.length,
     message: inv.message,
-    expiresAt: inv.expiresAt.toISOString(),
+    expiresAt: member ? undefined : inv.expiresAt.toISOString(),
     email: maskEmail(inv.email),
   };
+}
+
+/**
+ * For an accepted invitation: the membership its link still opens (accepted under
+ * LINK_REOPEN_DAYS ago, by someone whose access is neither revoked nor removed), else null.
+ */
+async function reopenableMember(inv: Pick<Invitation, "acceptedAt" | "acceptedById" | "workspaceId">, now = new Date()) {
+  if (!inv.acceptedAt || !inv.acceptedById || now.getTime() - inv.acceptedAt.getTime() > LINK_REOPEN_DAYS * DAY_MS) return null;
+  const m = await systemDb.membership.findUnique({
+    where: { workspaceId_userId: { workspaceId: inv.workspaceId, userId: inv.acceptedById } },
+    select: { userId: true, role: true, permissions: true, revokedAt: true },
+  });
+  return m && !m.revokedAt ? m : null;
 }
 
 const ENDED: Record<Exclude<InvitationStatus, "pending">, string> = {
@@ -286,12 +313,19 @@ const ENDED: Record<Exclude<InvitationStatus, "pending">, string> = {
  * keeps what they have.
  */
 /**
- * The invitation a link carries, for the invitation page's "Open dashboard": who it's for and
- * whether it can still be used. Null for a link that isn't one.
+ * The invitation a link carries, for POST /invitations/open: who it's for, its status, and for one
+ * accepted already, the member it still signs in (`reopenUserId`, null once it no longer does).
+ * Null for a link that isn't one.
  */
 export async function invitationForLink(token: string) {
-  const inv = await systemDb.invitation.findUnique({ where: { tokenHash: sha256Hex(token) }, select: { id: true, email: true, workspaceId: true, acceptedAt: true, revokedAt: true, expiresAt: true } });
-  return inv ? { ...inv, status: invitationStatus(inv) } : null;
+  const inv = await systemDb.invitation.findUnique({
+    where: { tokenHash: sha256Hex(token) },
+    select: { id: true, email: true, workspaceId: true, acceptedAt: true, acceptedById: true, revokedAt: true, expiresAt: true },
+  });
+  if (!inv) return null;
+  const status = invitationStatus(inv);
+  const member = status === "accepted" ? await reopenableMember(inv) : null;
+  return { ...inv, status, reopenUserId: member?.userId ?? null };
 }
 
 /**

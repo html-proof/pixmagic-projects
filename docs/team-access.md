@@ -50,16 +50,28 @@ Who can open a workspace's dashboard, and what of it they see. Owners and admins
 - A random 256-bit token; only its SHA-256 is stored. The link is `/invite#token=…`: the fragment
   never reaches a server, so the token stays out of CloudFront and API logs. Links sent before
   (`?token=`) still work.
-- Single use (one conditional update claims it), expires (1–30 days, 7 by default), replaced when the
-  same address is invited again, rotated on resend.
-- **The link is the way in** (`POST /invitations/open`, the page's one "Open dashboard" tap). Someone
-  new to bizinsights gets an account made for them in Cognito (a random password nobody knows) and is
-  signed in on that device: no sign-up form, no password. Later they sign in with an emailed code,
-  or set a password with "Forgot password". An address that already has an account is added to the
-  workspace but not signed in by the link (it may hold other workspaces; a forwarded link must not
-  open them): it signs in once as usual. Signed in as the invited address, it just joins; signed in
-  as anyone else, it's refused. Only from our own pages (login CSRF). One tap rather than on arrival:
-  email security scanners open links themselves and would use up the invitation.
+- Accepted once (one conditional update claims it), must first be opened before it expires (1–30
+  days, 7 by default), replaced when the same address is invited again, rotated on resend.
+- **The link is the way in** (`POST /invitations/open`, called as soon as `/invite` loads): no
+  account, sign-up or password. The browser gets a *shared-link session* (`session.ts`
+  `newLinkSession`, `m: "link"`, `ws: <workspace>`) that opens that workspace only:
+  - `requireUser` refuses it (403 `shared_link`) unless the route passes `{ shared: true }`:
+    `GET /me` (which then lists that workspace only and returns `shared`), whoami, and the
+    workspace checks `requireWorkspace` / `requireStaff`, which answer 404 for any other workspace.
+    `loadUser` treats it as signed out elsewhere (OAuth callbacks, Shopify installs).
+  - So a forwarded link exposes no more than the invitation did: never the person's own account
+    (profile, password, sessions), their other workspaces, or connecting stores.
+  - No Cognito identity behind it. The membership is checked on every request, as for anyone.
+  - Someone new gets a user record with no sign-in of its own. Signing up later with that address
+    (verified) links to it (`identity.ts`).
+- After the first opening the link keeps opening the dashboard (another device, a session that
+  ended) for `LINK_REOPEN_DAYS` (60), while the member's access lasts: revoking or removing them ends
+  it at once. Signed in already as the invited person, it just joins in their own session. Signed in
+  as someone else, the page says who and offers to open it as the invited person (`switch`: that
+  browser is signed out of the other account). Only from our own pages (login CSRF). Opening on
+  arrival is safe with email scanners because the link isn't used up.
+- The web app (`Me.shared`) hides the account's own pages (profile, sign-in and security), shows
+  "Opened from your invitation link" on the member badge, and offers "Sign in to your account".
 - The optional message is plain text, at most 500 characters, without links (every invitation is an
   email from our domain).
 - If the email can't be sent, the invitation is kept and the inviter gets the link to pass on.

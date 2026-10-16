@@ -147,7 +147,12 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
     ...(me.employments?.length ? [area("/portal", "My work", Briefcase)] : []),
     ...(!full && allowed("integrations.status") ? [area("/settings/integrations", "Integrations", Plug)] : []),
     ...(allowed("members:manage") ? [area("/team", "Team & Access", ShieldCheck)] : []),
-    full ? { ...area("/settings", "Settings", Settings), href: "/settings/profile" } : { ...area("/settings/profile", "My Account", UserCog), active: path.startsWith("/settings/profile") || path.startsWith("/settings/security") || path.startsWith("/settings/notifications") },
+    // Opened from a shared link: no account to manage, only their notifications for this workspace.
+    me.shared
+      ? area("/settings/notifications", "Notifications", Bell)
+      : full
+        ? { ...area("/settings", "Settings", Settings), href: "/settings/profile" }
+        : { ...area("/settings/profile", "My Account", UserCog), active: path.startsWith("/settings/profile") || path.startsWith("/settings/security") || path.startsWith("/settings/notifications") },
   ];
 
   return (
@@ -157,6 +162,7 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
         <div className="rounded-xl border border-border bg-bg/60 px-3 py-2.5" data-testid="member-badge">
           <p className="truncate text-sm font-semibold">{workspace.name}</p>
           <p className="text-xs text-muted">Shared with you · {ROLE_INFO[access.role].label}</p>
+          {me.shared && <p className="mt-1 text-xs text-muted">Opened from your invitation link: no sign-in needed.</p>}
         </div>
       )}
       <NavGroup items={main} onNavigate={onNavigate} />
@@ -275,18 +281,30 @@ function AccountMenu() {
             <p className="truncate text-xs text-muted">{me.user.email}</p>
           </div>
           <div className="my-1 border-t border-border" />
-          <Link href="/settings/profile" className={menuItem}>
-            <UserRound aria-hidden className="h-4 w-4 text-muted" />
-            Your profile
-          </Link>
-          <Link href="/settings/security" className={menuItem}>
-            <ShieldCheck aria-hidden className="h-4 w-4 text-muted" />
-            Sign-in &amp; security
-          </Link>
+          {me.shared ? (
+            <>
+              <p className="px-3 py-1.5 text-xs text-muted">You opened this shared dashboard from an invitation link. Your own account isn&apos;t signed in here.</p>
+              <button type="button" onClick={logout} className={menuItem}>
+                <UserRound aria-hidden className="h-4 w-4 text-muted" />
+                Sign in to your account
+              </button>
+            </>
+          ) : (
+            <>
+              <Link href="/settings/profile" className={menuItem}>
+                <UserRound aria-hidden className="h-4 w-4 text-muted" />
+                Your profile
+              </Link>
+              <Link href="/settings/security" className={menuItem}>
+                <ShieldCheck aria-hidden className="h-4 w-4 text-muted" />
+                Sign-in &amp; security
+              </Link>
+            </>
+          )}
           <div className="my-1 border-t border-border" />
           <button type="button" onClick={logout} className={menuItem}>
             <LogOut aria-hidden className="h-4 w-4 text-muted" />
-            Sign out
+            {me.shared ? "Close the shared dashboard" : "Sign out"}
           </button>
         </div>
       )}
@@ -527,11 +545,11 @@ function TopBar({ onMenu, onSearch }: { onMenu: () => void; onSearch: () => void
  * either way; this keeps them off a page that could only show refusals.
  */
 function useAccessGuard(): boolean {
-  const { access, workspace, setAccessNotice } = useApp();
+  const { me, access, workspace, setAccessNotice } = useApp();
   const router = useRouter();
   const path = usePathname();
   const view = useCurrentView();
-  const pageOk = canOpenPage(path, access, workspace.staffRole ?? null);
+  const pageOk = canOpenPage(path, access, workspace.staffRole ?? null, !!me.shared);
   const topicOk = !(isDashboard(path) && view && !seesTopic(access, view));
   const ok = pageOk && topicOk;
   useEffect(() => {
@@ -584,7 +602,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const items = useMemo<PaletteItem[]>(() => {
     const go = (href: string) => () => router.push(href);
     const staff = staffAccess(workspace.role, workspace.staffRole, workspace.permissions).permissions.length > 0;
-    const page = (href: string) => canOpenPage(href, access, workspace.staffRole ?? null);
+    const page = (href: string) => canOpenPage(href, access, workspace.staffRole ?? null, !!me.shared);
     return [
       ...(showsDashboardHome(access) ? [{ id: "dashboard", label: "Dashboard", group: "Insights", icon: LayoutDashboard, keywords: "home", go: go(DASHBOARD) }] : []),
       ...TOPICS.filter((t) => seesTopic(access, t)).map(
@@ -597,7 +615,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       ...SETTINGS_PAGES.filter((s) => !s.href && page(`/settings/${s.slug}`)).map((s): PaletteItem => ({ id: `settings-${s.slug}`, label: s.label, group: "Settings", icon: s.icon, keywords: s.keywords, go: go(`/settings/${s.slug}`) })),
       { id: "help", label: "Help centre", group: "Help", icon: Headset, keywords: "support contact faq", go: go("/support") },
     ];
-  }, [router, workspace.role, workspace.staffRole, workspace.permissions, me.employments, access, allowed]);
+  }, [router, workspace.role, workspace.staffRole, workspace.permissions, me.employments, me.shared, access, allowed]);
 
   return (
     <div className="min-h-dvh">

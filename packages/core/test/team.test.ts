@@ -18,7 +18,7 @@ describe("the invitation email", () => {
     expect(m.subject).toBe("You've been invited to access a business dashboard: Acme <Goods>");
     expect(m.text).toContain("Sam Owner (sam@acme.test) has invited you to access the Acme <Goods> business dashboard on bizinsights, as Custom.");
     expect(m.text).toContain("Customer details, Product details and Marketing");
-    expect(m.text).toContain("expires on October 23, 2026 at 3:00 PM GMT+11");
+    expect(m.text).toContain("Open it for the first time by October 23, 2026 at 3:00 PM GMT+11");
     expect(m.text).toContain(base.url);
     expect(m.text).toContain("you can safely ignore this email");
     // The owner's own text is escaped in the HTML.
