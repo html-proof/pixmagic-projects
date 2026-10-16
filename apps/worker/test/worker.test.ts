@@ -10,6 +10,7 @@ import {
   upsertOrder,
   writeOrderBatch,
   encryptTokenFields,
+  env,
   memoryBlobs,
   memoryCoord,
   memoryMailer,
@@ -381,7 +382,9 @@ describe("webhook processing", () => {
     expect(rows[0]!.phoneHash).toMatch(/^[0-9a-f]{64}$/);
     expect(JSON.stringify(rows[0])).not.toMatch(/pii@example\.com|61412345678|\+61/i);
     expect(await systemDb.alert.count({ where: { storeId: store.id, code: "privacy_request", resolvedAt: null } })).toBe(1);
-    expect(mailer.sent.filter((m) => m.to === owner.email && m.subject.includes("privacy_request"))).toHaveLength(1);
+    const told = mailer.sent.filter((m) => m.to === owner.email && m.subject === "A customer asked for their data");
+    expect(told).toHaveLength(1);
+    expect(told[0]!.text).toContain(`${env().APP_URL}/settings/privacy`);
     expect(await systemDb.auditLog.count({ where: { action: "gdpr.customer_data_request" } })).toBe(1);
 
     await webhook("customers/redact", { customer: { id: 7 } });

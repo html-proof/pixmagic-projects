@@ -406,7 +406,9 @@ export function workspaceRoutes(app: App, deps: Deps) {
       stores: await tx.store.findMany({ where: { workspaceId: ws, status: { not: "uninstalled" } }, select: { id: true, name: true, shopDomain: true } }),
     }));
     const storeById = new Map(stores.map((s) => [s.id, { id: s.id, name: s.name ?? s.shopDomain }]));
-    const mayFix = (area: AlertArea) => (area === "staff" ? staffCan(staff, "attendance:view") : area === "email" ? can(a.role, "email:read") : true);
+    // Settings → Privacy requests needs audit:read (routes/privacy.ts).
+    const mayFix = (area: AlertArea) =>
+      area === "staff" ? staffCan(staff, "attendance:view") : area === "email" ? can(a.role, "email:read") : area === "privacy" ? can(a.role, "audit:read") : true;
     const alerts: AlertView[] = [];
     for (const row of [...problems, ...notes].sort((x, y) => y.createdAt.getTime() - x.createdAt.getTime())) {
       // A store that has since been uninstalled or removed has nothing left to fix.
