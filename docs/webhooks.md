@@ -46,5 +46,5 @@ Jobs get 6 attempts with exponential backoff (5 s base). After the final attempt
 - Manual against a running API:
 
 ```bash
-npx shopify app webhook trigger --topic orders/create --api-version 2025-10 --delivery-method http --address http://localhost:8787/api/webhooks/shopify
+npx shopify app webhook trigger --topic orders/create --api-version 2026-10 --delivery-method http --address http://localhost:8787/api/webhooks/shopify
 ```

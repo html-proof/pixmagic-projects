@@ -20,7 +20,7 @@ export const APP_SETTINGS = {
   // removing it from the toml and redeploying does. Keep both in step: the build fails otherwise
   // (packages/core/test/appConfig.test.ts). See docs/shopify-setup.md section 3e.
   "SHOPIFY_OPTIONAL_SCOPES": "read_customers,write_pixels,read_customer_events",
-  "SHOPIFY_API_VERSION": "2025-10",
+  "SHOPIFY_API_VERSION": "2026-10",
   // Stores the main app may be installed on. Empty means any store, which only holds once
   // Shopify has approved it for public distribution: until then it installs only on stores in
   // our developer organization, and anyone else gets "This installation link can't be used".

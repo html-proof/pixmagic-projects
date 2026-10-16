@@ -33,7 +33,7 @@ use_legacy_install_flow = false
 redirect_urls = ["https://bizinsights.io/api/shopify/callback"]
 
 [webhooks]
-api_version = "2025-10"
+api_version = "2026-10"
 
   [[webhooks.subscriptions]]
   topics = [
