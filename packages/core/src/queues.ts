@@ -90,9 +90,10 @@ export interface AggregateJobData {
 
 /**
  * Email integrations (packages/core/src/email): send one message, or run the automations for one
- * business event. The rows carry the state; a message only says which one to look at.
+ * business event. And the app's own invitation emails (core/mail): another attempt at one that hit
+ * a transient failure. The rows carry the state; a message only says which one to look at.
  */
-export type EmailJob = { kind: "email_send"; messageId: string } | { kind: "email_event"; eventId: string };
+export type EmailJob = { kind: "email_send"; messageId: string } | { kind: "email_event"; eventId: string } | { kind: "team_invitation"; deliveryId: string };
 
 export interface Producer<T> {
   send(body: T, opts?: { delaySeconds?: number }): Promise<void>;

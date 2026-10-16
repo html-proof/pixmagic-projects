@@ -1,5 +1,5 @@
 import { AwsClient } from "aws4fetch";
-import { env, type FetchLike, type Mailer } from "@app/core";
+import { env, MailError, withoutAddresses, type FetchLike, type Mailer } from "@app/core";
 import type { AwsCredentials } from "./awsClient.js";
 
 /**
@@ -35,12 +35,23 @@ export function sesMailer(o: SesOptions): Mailer {
         ...(o.configurationSet ? { ConfigurationSetName: o.configurationSet } : {}),
       };
       const signed = await signer.sign(endpoint, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-      const res = await fetchImpl(signed.url, { method: "POST", headers: signed.headers, body: await signed.text() });
-      if (!res.ok) {
-        const err = (await res.json().catch(() => ({}))) as { message?: string };
-        // The recipient's address is not repeated here (logs); SES's own message names the problem.
-        throw new Error(`SES send failed (${res.status}): ${err.message ?? "unknown error"}`);
+      let res: Response;
+      try {
+        res = await fetchImpl(signed.url, { method: "POST", headers: signed.headers, body: await signed.text() });
+      } catch (err) {
+        throw new MailError(`SES unreachable: ${withoutAddresses(err instanceof Error ? err.message : String(err))}`, "ses", "transient", "network");
       }
+      const json = (await res.json().catch(() => ({}))) as { message?: string; MessageId?: string };
+      if (!res.ok) {
+        // The recipient's address is never repeated (logs, delivery records); SES's own message names the problem.
+        const message = withoutAddresses(json.message ?? "unknown error");
+        const name = res.headers.get("x-amzn-errortype")?.split(":")[0] ?? `http_${res.status}`;
+        // In the sandbox SES answers 400 MessageRejected "Email address is not verified": the account,
+        // not the message, is the problem until production access is granted.
+        const failure = res.status === 429 || res.status >= 500 || /Throttling|TooManyRequests|LimitExceeded/i.test(name) ? "transient" : /not verified|sandbox|MessageRejected|AccessDenied|SendingPaused|MailFromDomainNotVerified/i.test(`${name} ${message}`) ? "not_allowed" : "permanent";
+        throw new MailError(`SES send failed (${res.status} ${name}): ${message}`, "ses", failure, name);
+      }
+      return { provider: "ses", messageId: json.MessageId ?? null };
     },
   };
 }

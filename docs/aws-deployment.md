@@ -22,7 +22,7 @@ Account `605411278365`, region `ap-southeast-2` (Sydney); the WAF web ACL lives 
 | Large webhook bodies | S3 `insights-production-payloads-605411278365` (7-day lifecycle) | `apps/aws/src/s3Blobs.ts` |
 | Dumps, artifacts | S3 `insights-production-artifacts-605411278365` (30 days, versioned) | `infra/cdk/scripts/migrate-data.mjs` |
 | Sign-in | Cognito pool `insights-production` (from `infra/aws/cognito.yaml`) | `apps/api/src/cognito.ts` |
-| App email | SES (needs a verified sender, below) | `apps/aws/src/sesMailer.ts` |
+| App email | Resend once its key is in the app secret, else SES (sandbox: verified recipients only); "App email" below | `packages/core/src/mail/`, `apps/aws/src/mailers.ts`, `apps/aws/src/sesMailer.ts` |
 | Secrets | Secrets Manager `insights/production/{app,db-owner,worker-cognito}`; settings in SSM `/insights/production/runtime` | `apps/aws/src/secrets.ts` |
 | Logs, alarms | CloudWatch (90 days), dashboard `insights-production`, SNS `insights-production-alarms`, budget US$150/month | `infra/cdk/lib/app-stack.ts` |
 | DB admin | EC2 `insights-production-admin` (t4g.nano, Systems Manager only, normally **stopped**) | `infra/cdk/lib/data-stack.ts` |
@@ -256,13 +256,45 @@ Retiring it, on the owner's go-ahead, once AWS has been production for two quiet
    `apps/web/src/app/layout.tsx`: verify the new address before removing it.
 5. `git worktree remove ..\insights-cloudflare`.
 
+## App email (invitations, alerts)
+
+The app's own email goes through a provider chosen by configuration, never in code
+(`apps/aws/src/mailers.ts` `chooseMailer`): `EMAIL_PROVIDER` (`resend` or `ses`) when set, else
+**Resend** when `RESEND_API_KEY` is in the app secret, else **SES**. Every invitation email is
+recorded in `email_deliveries` (provider, its message id, status, attempts, the provider's error
+without addresses); the team page shows that status. A transient failure (rate limit, outage) is
+retried twice while the owner waits, then from the `email` queue after 1, 5 and 15 minutes (job
+`team_invitation`), five attempts in all, each with the same `Idempotency-Key`.
+
+- **SES**: identity `bizinsights.io` (Easy DKIM, above) works, but the account's request for
+  production access was **DENIED** (2026-10-16, case 179215020600103), so SES sends only to the
+  addresses verified in SES (sandbox, 200 a day). No code can get round that.
+- **Resend** (resend.com; free tier 3,000 emails a month, 100 a day) sends to any address once the
+  domain is verified there. Owner steps (they need an account the owner opens and DNS access):
+  1. Sign up at resend.com, **Domains → Add domain** `bizinsights.io`, region `ap-northeast-1` (Tokyo,
+     nearest to Sydney) or the default.
+  2. Add the records Resend lists to the Cloudflare zone, **DNS only** (grey cloud): the DKIM TXT
+     `resend._domainkey`, and for the bounce subdomain `send` an MX (`feedback-smtp.<region>.amazonses.com`,
+     priority 10) and an SPF TXT (`v=spf1 include:amazonses.com ~all`). They don't touch the apex,
+     `www`, the SES DKIM CNAMEs or `_dmarc`, so the site and SES keep working. Press **Verify**.
+  3. **API Keys → Create** a key with *Sending access* for `bizinsights.io` only.
+  4. **Webhooks → Add** `https://bizinsights.io/api/webhooks/email/resend`, events `email.sent`,
+     `email.delivered`, `email.delivery_delayed`, `email.bounced`, `email.complained`, `email.failed`,
+     `email.suppressed`; copy its signing secret (`whsec_...`).
+  5. Store both: `node infra/cdk/scripts/put-secrets.mjs --env production --set RESEND_API_KEY` and
+     `--set RESEND_WEBHOOK_SECRET` (each read from the clipboard, else a hidden prompt; merges into `insights/production/app`), then give the
+     functions a cold start (the next deploy does; or publish a new version of api/jobs).
+  6. Check: invite an address you own that isn't verified in SES; the team list says "Email sent",
+     then "Email delivered" once Resend's event arrives (CloudWatch: `mail delivery event`).
+  To go back to SES, set `EMAIL_PROVIDER=ses` (settings) or remove the key.
+
 ## Owner-only steps
 
 - **Alerts**: an email address for alarms and the budget (`-c alertEmail=...`; confirm the SNS email).
-- **SES**: the sending domain bizinsights.io is set up (above); **production access is still to be
-  requested** (SES console → Account dashboard → Request production access, or
-  `aws sesv2 put-account-details`). Until then SES sends only to addresses verified in SES: an
-  invitation to anyone else fails to send and the inviter gets the link to pass on.
+- **App email to any address**: SES production access was denied (above). Either set up Resend
+  ("App email" above, about 15 minutes plus DNS time) or appeal the SES decision in the support
+  case. Until one of them is done, invitations reach only SES-verified addresses; every other
+  invitation is saved and its link can be copied from the team list and sent another way.
 - **Google sign-in**: add `https://insights-605411278365.auth.ap-southeast-2.amazoncognito.com/oauth2/idpresponse`
   to a Google OAuth client, put its secret with `put-secrets.mjs --set GOOGLE_SIGNIN_CLIENT_SECRET`,
   deploy with `-c googleClientId=<client id>`.

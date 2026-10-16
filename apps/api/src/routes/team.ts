@@ -2,26 +2,31 @@ import { z } from "zod";
 import { withTenant } from "@app/db";
 import {
   acceptTeamInvitation,
-  accessFingerprint,
   ASSIGNABLE_ROLES,
   createTeamInvitation,
+  INVITE_DAYS_DEFAULT,
   INVITE_DAYS_MAX,
   INVITE_MESSAGE_MAX,
   invitationForLink,
-  normalizeEmail,
+  invitationLink,
   loadMember,
   logger,
   loadTeam,
   previewTeamInvitation,
   queryTeam,
+  recordLinkOpened,
   removeMember,
+  renewTeamAccess,
+  replaceInvitationLink,
   resendTeamInvitation,
   restoreMember,
   revokeMember,
   revokeTeamInvitation,
   TEAM_SORTS,
+  teamHistory,
   updateMemberAccess,
   updateTeamInvitation,
+  type InviteMail,
   type TeamActor,
 } from "@app/core";
 import {
@@ -42,9 +47,8 @@ import {
 } from "@app/shared";
 import { STAFF_ROLE_HELP, STAFF_ROLE_LABEL, STAFF_ROLES, staffAccess } from "@app/shared/staff";
 import { systemDb, type User } from "@app/db";
-import { getCookie } from "hono/cookie";
-import { body, clientIp, loadUser, requireAppOrigin, requireUser, requireWorkspace, retiredSessionKey, sharedWorkspace, type Ctx, type Deps, type WorkspaceAccess } from "../context.js";
-import { newLinkSession, readSession, SESSION_COOKIE, setSessionCookies } from "../session.js";
+import { body, clientIp, requireAppOrigin, requireUser, requireWorkspace, type Ctx, type Deps, type WorkspaceAccess } from "../context.js";
+import { newLinkSession, setShareCookie } from "../session.js";
 import type { App } from "../app.js";
 import { limit, LIMITS } from "../rateLimit.js";
 
@@ -66,6 +70,11 @@ const accessSchema = z.object({
 });
 
 export const teamActor = (c: Ctx, a: WorkspaceAccess): TeamActor => ({ workspaceId: a.workspaceId, userId: a.user!.id, role: a.role, ip: clientIp(c) });
+
+/** The mail provider, and the email queue that retries an invitation email after a transient failure. */
+const inviteMail = (deps: Deps): InviteMail => ({ mailer: deps.mailer, queues: deps.queues });
+
+const daysSchema = z.object({ days: z.number().int().min(1).max(INVITE_DAYS_MAX).optional() });
 
 /**
  * Each invitation sends an email from our domain: don't let one workspace turn it into a spam
@@ -111,11 +120,12 @@ export function teamRoutes(app: App, deps: Deps) {
   app.get("/workspaces/:ws/access", async (c) => {
     const { ws } = c.req.param();
     const a = await requireWorkspace(c, deps, ws, "dashboard:read");
-    const fingerprint = accessFingerprint({ role: a.access.role, permissions: a.access.permissions, staffRole: a.staffRole, revokedAt: null });
+    // The same fingerprint every response's x-access-fp carries (a link session's is its read-only access's).
+    const fingerprint = a.fingerprint!;
     const etag = `"${fingerprint}"`;
     c.header("etag", etag);
     if (c.req.header("if-none-match") === etag) return c.body(null, 304);
-    const staff = staffAccess(a.access.role, a.staffRole, a.access.permissions);
+    const staff = a.staff ?? staffAccess(a.access.role, a.staffRole, a.access.permissions);
     return c.json({
       workspaceId: ws,
       role: a.access.role,
@@ -125,6 +135,8 @@ export function teamRoutes(app: App, deps: Deps) {
       staffRole: a.staffRole,
       staff: { permissions: staff.permissions, scope: staff.scope },
       fingerprint,
+      // Opened from a shared link: view-only, whatever the membership allows.
+      readOnly: !!a.link,
     });
   });
 
@@ -172,7 +184,7 @@ export function teamRoutes(app: App, deps: Deps) {
         ...RESTRICTED_ROLES.map((r) => ({ id: r, ...ROLE_INFO[r], template: ROLE_TEMPLATES[r], restricted: true, canManage: roleAllowsKind(r, "manage") })),
       ],
       staffRoles: STAFF_ROLES.map((r) => ({ id: r, label: STAFF_ROLE_LABEL[r], description: STAFF_ROLE_HELP[r] })),
-      limits: { messageMax: INVITE_MESSAGE_MAX, expiryDaysMax: INVITE_DAYS_MAX, expiryDaysDefault: 7 },
+      limits: { messageMax: INVITE_MESSAGE_MAX, expiryDaysMax: INVITE_DAYS_MAX, expiryDaysDefault: INVITE_DAYS_DEFAULT },
       hasStore: stores.length > 0,
     });
   });
@@ -211,6 +223,23 @@ export function teamRoutes(app: App, deps: Deps) {
     return c.json({ ok: true, ...(await removeMember(teamActor(c, a), idSchema.parse(id))) });
   });
 
+  /** Renew the access an invitation gave a member, and their link, for `days` (default 60) from now. */
+  app.post(`${BASE}/members/:id/renew`, async (c) => {
+    const { ws, id } = c.req.param();
+    const a = await requireTeamManager(c, deps, ws);
+    const { days } = daysSchema.parse(await body(c));
+    const r = await renewTeamAccess(teamActor(c, a), { memberId: idSchema.parse(id) }, days);
+    return c.json({ ok: true, expiresAt: r.expiresAt.toISOString() });
+  });
+
+  /** One person's access history (audit entries for their membership and invitations, link openings included). */
+  app.get(`${BASE}/history`, async (c) => {
+    const { ws } = c.req.param();
+    await requireWorkspace(c, deps, ws, "members:manage");
+    const q = z.object({ invitationId: idSchema.optional(), memberId: idSchema.optional() }).refine((v) => v.invitationId || v.memberId, "Say whose history").parse(c.req.query());
+    return c.json({ entries: await teamHistory(ws, q) });
+  });
+
   // ---------------- Invitations ----------------
 
   app.post(`${BASE}/invitations`, async (c) => {
@@ -225,12 +254,13 @@ export function teamRoutes(app: App, deps: Deps) {
       .parse(await body(c));
     const r = await once(c, deps, `invite:${ws}:${a.user!.id}`, async () => {
       await inviteLimits(deps, ws, a.user!.id);
-      const out = await createTeamInvitation(teamActor(c, a), input, deps.mailer);
+      const out = await createTeamInvitation(teamActor(c, a), input, inviteMail(deps));
       // The link only to the owner or admin who just made it, and only when the email didn't go out.
       return {
         ok: true,
         invitationId: out.invitationId,
         emailed: out.emailed,
+        delivery: out.delivery,
         ...(out.url ? { url: out.url, emailProblem: out.emailProblem } : {}),
         replaced: out.replaced,
         expiresAt: out.expiresAt.toISOString(),
@@ -253,8 +283,8 @@ export function teamRoutes(app: App, deps: Deps) {
     const r = await once(c, deps, `resend:${ws}:${invitationId}`, async () => {
       await limit(deps.coord, `rl:invite-resend:${invitationId}`, LIMITS.invitationResend, "This invitation was sent several times in the last hour. Please wait before sending it again.");
       await inviteLimits(deps, ws, a.user!.id);
-      const out = await resendTeamInvitation(teamActor(c, a), invitationId, deps.mailer);
-      return { ok: true, emailed: out.emailed, ...(out.url ? { url: out.url, emailProblem: out.emailProblem } : {}), expiresAt: out.expiresAt.toISOString() };
+      const out = await resendTeamInvitation(teamActor(c, a), invitationId, inviteMail(deps));
+      return { ok: true, emailed: out.emailed, delivery: out.delivery, ...(out.url ? { url: out.url, emailProblem: out.emailProblem } : {}), expiresAt: out.expiresAt.toISOString() };
     });
     return c.json(r);
   });
@@ -264,6 +294,34 @@ export function teamRoutes(app: App, deps: Deps) {
     const a = await requireTeamManager(c, deps, ws);
     await revokeTeamInvitation(teamActor(c, a), idSchema.parse(id));
     return c.json({ ok: true });
+  });
+
+  /**
+   * The invitation's link, to copy and pass on (a POST, so nothing caches or prefetches it). The
+   * same link the email carried: copying it doesn't stop the one already sent from working.
+   */
+  app.post(`${BASE}/invitations/:id/link`, async (c) => {
+    const { ws, id } = c.req.param();
+    const a = await requireTeamManager(c, deps, ws);
+    const r = await invitationLink(teamActor(c, a), idSchema.parse(id));
+    return c.json({ ok: true, url: r.url, expiresAt: r.expiresAt.toISOString() });
+  });
+
+  /** A new link for the invitation: the old one stops opening the dashboard at once. */
+  app.post(`${BASE}/invitations/:id/replace-link`, async (c) => {
+    const { ws, id } = c.req.param();
+    const a = await requireTeamManager(c, deps, ws);
+    const r = await replaceInvitationLink(teamActor(c, a), idSchema.parse(id));
+    return c.json({ ok: true, url: r.url, expiresAt: r.expiresAt.toISOString() });
+  });
+
+  /** Renew an invitation not yet opened (pending or expired) for `days` (default 60) from now. Its link stays the same. */
+  app.post(`${BASE}/invitations/:id/renew`, async (c) => {
+    const { ws, id } = c.req.param();
+    const a = await requireTeamManager(c, deps, ws);
+    const { days } = daysSchema.parse(await body(c));
+    const r = await renewTeamAccess(teamActor(c, a), { invitationId: idSchema.parse(id) }, days);
+    return c.json({ ok: true, expiresAt: r.expiresAt.toISOString() });
   });
 
   // ---------------- The invitee's side ----------------
@@ -281,24 +339,22 @@ export function teamRoutes(app: App, deps: Deps) {
    * Opening an invitation link: the link is the invitee's way in, with no account, password or
    * sign-up. The invitation page calls this as soon as it opens.
    *
-   * - Not signed in: this browser gets a session for the shared workspace only (session.ts
-   *   newLinkSession). It opens what the owner shared and nothing else: not the person's own
-   *   account, not their other workspaces, so a forwarded link exposes no more than the invitation
-   *   itself. The first opening accepts the invitation; a user record is made for an address new to
-   *   us (signing up later with that address links to it).
-   * - Signed in already as the invited person: accepted, and they carry on in their own session.
-   * - Signed in as someone else: refused (409 `signed_in_as_other`), and the page offers to open it
-   *   as the invited person instead (`switch`), which signs this browser out of the other account.
+   * This browser gets a shared-link session (session.ts newLinkSession) in a cookie of its own
+   * (__share): that workspace only, view-only, ending with the link. It never replaces or touches
+   * an account signed in on the same browser, and never borrows anything from it: a forwarded link
+   * exposes no more than the invitation itself, and someone with a bizinsights account of their
+   * own keeps it, signed in, in their other tabs. The first opening accepts the invitation; a user
+   * record is made for an address new to us (signing up later with that address links to it).
    *
-   * After the first opening the link keeps working (another device, a session that ended) for
-   * LINK_REOPEN_DAYS, while the member's access lasts. Opening it makes a session, so only from
-   * our own pages (login CSRF).
+   * The link keeps working (another device, a session that ended) until the invitation's end date,
+   * while the member's access lasts. Opening it makes a session, so only from our own pages (login
+   * CSRF). Email scanners that open links don't use it up: nothing about it is single-use.
    */
   const openSchema = tokenSchema.extend({ switch: z.boolean().optional() });
   app.post("/invitations/open", async (c) => {
     requireAppOrigin(c);
     await limit(deps.coord, `rl:invite-open:${clientIp(c)}`, LIMITS.inviteAcceptIp);
-    const { token, switch: switchAccount } = openSchema.parse(await body(c));
+    const { token } = openSchema.parse(await body(c));
     const inv = await invitationForLink(token);
     if (!inv) return c.json({ error: "invalid_invite", message: "This invitation link isn't valid. Check you opened the whole link, or ask for a new invitation." }, 400);
     if (inv.status !== "pending" && !inv.reopenUserId) {
@@ -306,24 +362,14 @@ export function teamRoutes(app: App, deps: Deps) {
     }
     await limit(deps.coord, `rl:invite-open:${inv.id}`, LIMITS.inviteAcceptUser);
 
-    const current = await loadUser(c, deps, { shared: true });
-    const isInvitee = (u: User) => (inv.reopenUserId ? u.id === inv.reopenUserId : normalizeEmail(u.email) === inv.email);
-    if (current && isInvitee(current)) {
-      if (inv.status === "pending") await acceptTeamInvitation(current, token, clientIp(c), { viaLink: true });
-      // A link session for another workspace becomes one for this workspace; a full sign-in stays as it is.
-      if (sharedWorkspace(c) && sharedWorkspace(c) !== inv.workspaceId) setSessionCookies(c, newLinkSession({ userId: current.id, workspaceId: inv.workspaceId }));
-      return c.json({ workspaceId: inv.workspaceId, signedIn: true });
-    }
-    if (current && !switchAccount) {
-      return c.json({ error: "signed_in_as_other", message: `You're signed in as ${current.email}. This invitation is for someone else.`, detail: { signedInAs: current.email } }, 409);
-    }
-    if (current) await retireSession(c, deps);
-
     const user = inv.reopenUserId ? await systemDb.user.findUniqueOrThrow({ where: { id: inv.reopenUserId } }) : await userForInvitee(inv.email);
     if (inv.status === "pending") await acceptTeamInvitation(user, token, clientIp(c), { viaLink: true });
-    setSessionCookies(c, newLinkSession({ userId: user.id, workspaceId: inv.workspaceId }));
+    const m = await systemDb.membership.findUnique({ where: { workspaceId_userId: { workspaceId: inv.workspaceId, userId: user.id } }, select: { accessExpiresAt: true } });
+    const ends = [inv.expiresAt, m?.accessExpiresAt].filter((d): d is Date => !!d).sort((x, y) => x.getTime() - y.getTime())[0] ?? null;
+    setShareCookie(c, newLinkSession({ userId: user.id, workspaceId: inv.workspaceId, until: ends }));
+    await recordLinkOpened(inv, user.id, clientIp(c));
     logger.info({ event: "session_created", userId: user.id, workspaceId: inv.workspaceId, method: "invitation_link", reopened: inv.status !== "pending", ip: clientIp(c) }, "opened from an invitation link");
-    return c.json({ workspaceId: inv.workspaceId, signedIn: true });
+    return c.json({ workspaceId: inv.workspaceId, signedIn: true, shared: true, expiresAt: ends?.toISOString() ?? null });
   });
 
   app.post("/invitations/accept", async (c) => {
@@ -350,13 +396,4 @@ async function userForInvitee(email: string): Promise<User> {
     if ((err as { code?: string })?.code === "P2002") return systemDb.user.findUniqueOrThrow({ where: { email } });
     throw err;
   }
-}
-
-/** Sign this browser's current session out (switching to the invited person), as POST /auth/logout does. */
-async function retireSession(c: Ctx, deps: Deps) {
-  const s = readSession(getCookie(c, SESSION_COOKIE));
-  if (!s) return;
-  await deps.coord.put(retiredSessionKey(s.sid), "1", Math.max(60, Math.ceil((s.exp - Date.now()) / 1000))).catch((err: unknown) => logger.error({ err }, "could not retire the session being switched from"));
-  c.set("user", undefined);
-  c.set("session", undefined);
 }

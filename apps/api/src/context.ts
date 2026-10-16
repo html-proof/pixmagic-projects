@@ -2,13 +2,13 @@ import type { Context } from "hono";
 import { getCookie } from "hono/cookie";
 import { systemDb, type User } from "@app/db";
 import { allows, hasFullAccess, LEGACY_GRANTS, sha256Hex, type AccessNeed, type MemberAccess, type Role } from "@app/shared";
-import type { StaffRole } from "@app/shared/staff";
-import { accessFingerprint, addLogContext, env, logger, type BlobStore, type Coord, type FetchLike, type Mailer, type Queues, type SmtpConnect } from "@app/core";
+import type { StaffAccess, StaffRole } from "@app/shared/staff";
+import { addLogContext, env, logger, memberState, sessionAccess, type BlobStore, type Coord, type FetchLike, type Mailer, type Queues, type SmtpConnect } from "@app/core";
 import { CognitoError, CognitoUnavailableError, type CognitoAuth } from "./cognito.js";
 import type { LegacyPasswordCheck } from "./legacyFirebase.js";
-import { clearSessionCookies, readRefreshToken, readSession, retiredSessionKey, REVALIDATE_MS, SESSION_COOKIE, setSessionCookies, type SessionClaims } from "./session.js";
+import { clearSessionCookies, readRefreshToken, readSession, retiredSessionKey, REVALIDATE_MS, SESSION_CONTEXT_HEADER, SESSION_COOKIE, setSessionCookies, SHARE_COOKIE, type SessionClaims } from "./session.js";
 
-export { retiredSessionKey, SESSION_COOKIE };
+export { retiredSessionKey, SESSION_COOKIE, SHARE_COOKIE };
 
 export interface Deps {
   /** Amazon Cognito: every sign-in, sign-up and password operation. */
@@ -29,7 +29,7 @@ export interface Deps {
   dbHealthy?: () => Promise<boolean>;
 }
 
-export type AppEnv = { Variables: { user?: User; session?: SessionClaims } };
+export type AppEnv = { Variables: { user?: User; session?: SessionClaims; sessionCookie?: "own" | "share" } };
 export type Ctx = Context<AppEnv>;
 
 export class HttpError extends Error {
@@ -124,11 +124,38 @@ export function sharedWorkspace(c: Ctx): string | null {
   return c.get("session")?.ws ?? null;
 }
 
+/** Whether this request's session was opened from a shared link (read-only, one workspace). */
+export const isLinkSession = (c: Ctx) => c.get("session")?.m === "link";
+
+/** The tab asked for its shared-dashboard session (header, or `?ctx=shared` on a plain GET such as a download). */
+const wantsShared = (c: Ctx) => c.req.header(SESSION_CONTEXT_HEADER) === "shared" || (c.req.method === "GET" && c.req.query("ctx") === "shared");
+
+/**
+ * Which of this browser's sessions a request uses. A tab showing a shared dashboard asks for the
+ * shared-link one (__share) and gets only that, never an account signed in alongside. Any other
+ * request uses the account's session (__session); with none, the shared-link one, so a new tab
+ * opened by someone who only has the link still works. The two are never combined: each grants
+ * exactly what it grants. (A link session from before __share existed sits in __session and is
+ * read as one wherever it is found.)
+ */
+export function pickSession(c: Ctx, now = Date.now()): { claims: SessionClaims; cookie: "own" | "share" } | null {
+  const own = readSession(getCookie(c, SESSION_COOKIE), now);
+  const shareRaw = readSession(getCookie(c, SHARE_COOKIE), now);
+  const share = shareRaw?.m === "link" && shareRaw.ws ? shareRaw : null;
+  if (wantsShared(c)) {
+    if (share) return { claims: share, cookie: "share" };
+    return own?.m === "link" ? { claims: own, cookie: "own" } : null;
+  }
+  if (own) return { claims: own, cookie: "own" };
+  return share ? { claims: share, cookie: "share" } : null;
+}
+
 async function loadSessionUser(c: Ctx, deps: Deps): Promise<User | null> {
   const cached = c.get("user");
   if (cached) return cached;
-  const s = readSession(getCookie(c, SESSION_COOKIE));
-  if (!s) return null;
+  const picked = pickSession(c);
+  if (!picked) return null;
+  const s = picked.claims;
   // Signed out in this browser: check our own record. Not being able to look is an outage, never
   // "signed out": that would send every logged-in user round a sign-in loop for its length.
   const retired = await deps.coord.peek(retiredSessionKey(s.sid)).catch((err: unknown) => {
@@ -149,6 +176,7 @@ async function loadSessionUser(c: Ctx, deps: Deps): Promise<User | null> {
   // "Sign out everywhere" since this session started.
   if (user.sessionsValidAfter && s.iat < user.sessionsValidAfter.getTime()) return null;
   c.set("session", s);
+  c.set("sessionCookie", picked.cookie);
   if (Date.now() - s.ck > REVALIDATE_MS) {
     const checked = await revalidate(c, deps, s);
     if (checked === "revoked") {
@@ -224,10 +252,20 @@ export interface WorkspaceAccess {
   workspaceId: string;
   role: Role;
   user: User | null;
-  /** What this member (or API key) may see and do: their role and granted permissions (Team & Access). */
+  /**
+   * What this member (or API key) may see and do: their role and granted permissions (Team &
+   * Access). For a session opened from a shared link, the read-only part of it (an owner's or
+   * admin's link session is a viewer with every view and export permission).
+   */
   access: MemberAccess;
   /** The member's Staff Management role (null for API keys and members without one). */
   staffRole: StaffRole | null;
+  /** The fingerprint of `access` (x-access-fp; GET .../access answers with the same). */
+  fingerprint?: string;
+  /** Opened from a shared link: read-only, whatever the membership allows. */
+  link?: boolean;
+  /** Their Staff Management rights in this session (read-only through a shared link). */
+  staff?: StaffAccess;
 }
 
 /** What workspace API keys may read: what viewers could before Team & Access (read-only, no customers' personal data). */
@@ -243,6 +281,8 @@ export const ACCESS_FP_HEADER = "x-access-fp";
 
 /** Refused because the member's access to this workspace was revoked (the web app shows a page saying so). */
 export const ACCESS_REVOKED = "access_revoked";
+/** Refused because the access an invitation gave has reached its end date and wasn't renewed. */
+export const ACCESS_EXPIRED = "access_expired";
 
 /**
  * Authorize access to a workspace either by session membership or by API key (read-only). `need`
@@ -266,21 +306,30 @@ export async function requireWorkspace(c: Ctx, deps: Deps, workspaceId: string, 
     where: { workspaceId_userId: { workspaceId, userId: user.id } },
   });
   if (!m) throw new HttpError(404, "Not found", "not_found");
+  const link = isLinkSession(c);
+  const eff = sessionAccess(m, { link });
   // Before the verdict, so a refusal also tells the browser its permissions changed.
-  c.header(ACCESS_FP_HEADER, `${workspaceId}:${accessFingerprint(m)}`);
-  if (m.revokedAt) throw new HttpError(403, "Your access to this workspace has been revoked. Ask an owner or admin if you still need it.", ACCESS_REVOKED);
-  const access: MemberAccess = { role: m.role, permissions: m.permissions };
-  if (!allows(access, need)) throw new HttpError(403, "You don't have permission to do that", "forbidden");
+  c.header(ACCESS_FP_HEADER, `${workspaceId}:${eff.fingerprint}`);
+  assertActive(eff.state);
+  if (!allows(eff.access, need)) {
+    throw new HttpError(403, link ? "The shared dashboard is view-only, and shows only what the owner chose to share." : "You don't have permission to do that", "forbidden");
+  }
   addLogContext({ workspaceId });
-  return { workspaceId, role: m.role, user, access, staffRole: m.staffRole };
+  return { workspaceId, role: eff.access.role, user, access: eff.access, staffRole: m.staffRole, staff: eff.staff, fingerprint: eff.fingerprint, link };
+}
+
+/** A revoked membership, or one whose end date has passed, grants nothing (403 with the reason, which the web app explains). */
+export function assertActive(state: "active" | "revoked" | "expired") {
+  if (state === "revoked") throw new HttpError(403, "Your access to this workspace has been revoked. Ask an owner or admin if you still need it.", ACCESS_REVOKED);
+  if (state === "expired") throw new HttpError(403, "Your access to this shared dashboard has ended. Ask the person who shared it to renew it.", ACCESS_EXPIRED);
 }
 
 /**
  * Whether a membership allows `need`, for the checks made outside a request's own workspace check
  * (an OAuth callback re-checking the person who started it). A revoked membership allows nothing.
  */
-export function memberAllows(m: { role: Role; permissions: string[]; revokedAt: Date | null } | null, need: AccessNeed): boolean {
-  return !!m && !m.revokedAt && allows({ role: m.role, permissions: m.permissions }, need);
+export function memberAllows(m: { role: Role; permissions: string[]; revokedAt: Date | null; accessExpiresAt?: Date | null } | null, need: AccessNeed): boolean {
+  return !!m && memberState(m) === "active" && allows({ role: m.role, permissions: m.permissions }, need);
 }
 
 /** Owners and admins only (pages of the workspace itself: billing, members, stores). */

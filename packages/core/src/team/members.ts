@@ -1,7 +1,9 @@
 import { systemDb, withTenant, type Tx } from "@app/db";
 import { ACCESS_KEYS, can, hasFullAccess, modulesOf, type AccessModule, type Role } from "@app/shared";
 import type { StaffRole } from "@app/shared/staff";
-import { accessFingerprint, checkAssignment, lockTeam, TeamError, teamNotFound, type AssignableRole, type TeamActor } from "./common.js";
+import { latestDeliveries } from "../mail/deliveries.js";
+import type { DeliveryStatus } from "../mail/types.js";
+import { accessFingerprint, checkAssignment, lockTeam, memberState, TeamError, teamNotFound, type AssignableRole, type TeamActor } from "./common.js";
 import { invitationStatus } from "./invitations.js";
 
 // ---------------------------------------------------------------------------
@@ -34,6 +36,30 @@ export interface TeamRow {
   sentAt?: string | null;
   sendFailedAt?: string | null;
   sendCount?: number;
+  /** Members who joined from an invitation: when their access ends (null: no end date). */
+  accessExpiresAt?: string | null;
+  /**
+   * The invitation link behind the row (an invitation's own, or the one a member joined from): its
+   * id for the link actions, until when it opens the dashboard, how often and when it last did, and
+   * whether the same link can be copied again (false for links from before they were kept).
+   */
+  link?: { invitationId: string; expiresAt: string; openCount: number; lastOpenedAt: string | null; copyable: boolean } | null;
+  /** The latest invitation email as the mail provider reported it (core/mail). */
+  delivery?: { status: DeliveryStatus; provider: string; at: string; error: string | null; attempts: number } | null;
+}
+
+/** The invitation counts the team page leads with. */
+export interface InvitationSummary {
+  /** Every invitation on record (the retention sweep removes ended ones after 90 days). */
+  total: number;
+  /** Accepted, and the member's access still active. */
+  active: number;
+  /** Sent, not opened yet, not expired. */
+  pending: number;
+  /** Not opened in time, or the access it gave has ended. */
+  expired: number;
+  /** Cancelled before opening, or the member's access revoked. */
+  revoked: number;
 }
 
 export interface TeamSummary {
@@ -44,6 +70,7 @@ export interface TeamSummary {
   endedInvitations: number;
   /** Each count as it stood at the end of each of the last TREND_DAYS days (oldest first, today last). */
   trend: Record<"totalMembers" | "activeMembers" | "pendingInvitations" | "endedInvitations", number[]>;
+  invitations: InvitationSummary;
 }
 
 export const TREND_DAYS = 30;
@@ -66,9 +93,25 @@ export async function loadTeam(workspaceId: string, now = new Date()): Promise<{
     ? await systemDb.authIdentity.groupBy({ by: ["userId"], where: { userId: { in: members.map((m) => m.userId) } }, _max: { lastUsedAt: true } })
     : [];
   const lastSignIn = new Map(signIns.map((g) => [g.userId, g._max.lastUsedAt]));
+  const deliveries = await latestDeliveries(allInvitations.map((i) => i.id));
+  const deliveryOf = (invitationId: string): TeamRow["delivery"] => {
+    const d = deliveries.get(invitationId);
+    return d ? { status: d.status as DeliveryStatus, provider: d.provider, at: (d.lastEventAt ?? d.sentAt ?? d.updatedAt).toISOString(), error: d.errorMessage, attempts: d.attempts } : null;
+  };
+  const linkOf = (i: (typeof allInvitations)[number]): TeamRow["link"] => ({
+    invitationId: i.id,
+    expiresAt: i.expiresAt.toISOString(),
+    openCount: i.openCount,
+    lastOpenedAt: i.lastOpenedAt?.toISOString() ?? null,
+    copyable: !!i.tokenSealed,
+  });
+  // The invitation each member joined from (the latest, if several).
+  const joinedFrom = new Map<string, (typeof allInvitations)[number]>();
+  for (const i of allInvitations) if (i.acceptedById && !i.revokedAt && !joinedFrom.has(i.acceptedById)) joinedFrom.set(i.acceptedById, i);
   const invitations = allInvitations.filter((i) => !i.acceptedAt);
   const rows: TeamRow[] = [];
   for (const m of members) {
+    const from = joinedFrom.get(m.userId);
     rows.push({
       kind: "member",
       id: m.id,
@@ -79,12 +122,15 @@ export async function loadTeam(workspaceId: string, now = new Date()): Promise<{
       permissions: hasFullAccess(m.role) ? [...ACCESS_KEYS] : m.permissions,
       modules: modulesOf(m),
       staffRole: m.staffRole,
-      status: m.revokedAt ? "revoked" : "active",
+      status: memberState(m, now),
       since: m.createdAt.toISOString(),
       invitedBy: m.invitedBy?.email ?? null,
       lastSignInAt: lastSignIn.get(m.userId)?.toISOString() ?? null,
       accessChangedAt: m.accessChangedAt?.toISOString() ?? null,
       fingerprint: accessFingerprint(m),
+      accessExpiresAt: m.accessExpiresAt?.toISOString() ?? null,
+      link: from ? linkOf(from) : null,
+      delivery: from ? deliveryOf(from.id) : null,
     });
   }
   for (const i of invitations) {
@@ -106,14 +152,24 @@ export async function loadTeam(workspaceId: string, now = new Date()): Promise<{
       sentAt: i.sentAt?.toISOString() ?? null,
       sendFailedAt: i.sendFailedAt?.toISOString() ?? null,
       sendCount: i.sendCount,
+      link: linkOf(i),
+      delivery: deliveryOf(i.id),
     });
   }
+  const shared = rows.filter((r) => r.kind === "member" && r.link);
   const summary: TeamSummary = {
     totalMembers: members.length,
-    activeMembers: members.filter((m) => !m.revokedAt).length,
+    activeMembers: members.filter((m) => memberState(m, now) === "active").length,
     pendingInvitations: rows.filter((r) => r.kind === "invitation" && r.status === "pending").length,
     endedInvitations: rows.filter((r) => r.kind === "invitation" && r.status !== "pending").length,
     trend: teamTrend(members, allInvitations, now),
+    invitations: {
+      total: allInvitations.length,
+      active: shared.filter((r) => r.status === "active").length,
+      pending: rows.filter((r) => r.kind === "invitation" && r.status === "pending").length,
+      expired: rows.filter((r) => r.status === "expired").length,
+      revoked: rows.filter((r) => r.status === "cancelled").length + shared.filter((r) => r.status === "revoked").length,
+    },
   };
   return { rows, summary };
 }
@@ -202,8 +258,9 @@ export async function loadMember(workspaceId: string, memberId: string) {
     permissions: hasFullAccess(m.role) ? [...ACCESS_KEYS] : m.permissions,
     modules: modulesOf(m),
     staffRole: m.staffRole,
-    status: m.revokedAt ? ("revoked" as const) : ("active" as const),
+    status: memberState(m),
     revokedAt: m.revokedAt?.toISOString() ?? null,
+    accessExpiresAt: m.accessExpiresAt?.toISOString() ?? null,
     since: m.createdAt.toISOString(),
     accessChangedAt: m.accessChangedAt?.toISOString() ?? null,
     invitedBy: m.invitedBy?.email ?? null,

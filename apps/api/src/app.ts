@@ -6,13 +6,14 @@ import { ZodError } from "zod";
 import { dbReachable, systemDb } from "@app/db";
 import { AppError, env, logger } from "@app/core";
 import { ReportRangeError } from "@app/shared/staff";
-import { clientIp, HttpError, SESSION_COOKIE, type AppEnv, type Deps } from "./context.js";
+import { clientIp, HttpError, SESSION_COOKIE, SHARE_COOKIE, type AppEnv, type Deps } from "./context.js";
 import { probeDb, tenantDb, type ProbeResult } from "@app/db";
 import { requestContext } from "./requestContext.js";
 import { authRoutes } from "./routes/auth.js";
 import { accountRoutes } from "./routes/account.js";
 import { shopifyRoutes } from "./routes/shopify.js";
 import { webhookRoutes } from "./routes/webhooks.js";
+import { mailEventRoutes } from "./routes/mailEvents.js";
 import { pixelRoutes } from "./routes/pixel.js";
 import { dashboardRoutes } from "./routes/dashboard.js";
 import { workspaceRoutes } from "./routes/workspaces.js";
@@ -107,7 +108,7 @@ export function buildApp(deps: Deps): App {
    * belt to that pair of braces.) API-key requests carry no cookie.
    */
   app.use("*", async (c, next) => {
-    if (SAFE_METHODS.has(c.req.method) || CSRF_EXEMPT.some((r) => r.test(c.req.path)) || !getCookie(c, SESSION_COOKIE)) {
+    if (SAFE_METHODS.has(c.req.method) || CSRF_EXEMPT.some((r) => r.test(c.req.path)) || (!getCookie(c, SESSION_COOKIE) && !getCookie(c, SHARE_COOKIE))) {
       return next();
     }
     const origin = c.req.header("origin") ?? c.req.header("referer");
@@ -179,6 +180,7 @@ export function buildApp(deps: Deps): App {
   accountRoutes(app, deps);
   shopifyRoutes(app, deps);
   webhookRoutes(app, deps);
+  mailEventRoutes(app, deps);
   pixelRoutes(app, deps);
   dashboardRoutes(app, deps);
   workspaceRoutes(app, deps);
