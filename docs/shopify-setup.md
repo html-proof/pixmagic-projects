@@ -1,6 +1,6 @@
 # Shopify app configuration
 
-The integration is a **public, unlisted** app (installable by any merchant who has the link, not listed in the App Store), using the **authorization code grant** with **permanent offline access tokens**. It is **not embedded**: merchants use our own web app. Non-embedded is still allowed for public apps — `embedded = false` in the toml turns off the App Bridge and session-token review checks that only apply to embedded apps.
+The integration is a **public** app using the **authorization code grant** with **permanent offline access tokens**. It is **not embedded**: merchants use our own web app at https://bizinsights.io. Non-embedded is still allowed for public apps: a Shopify staff answer of 2026-08-24 says "fully non-embedded public apps are still allowed in the Shopify App Store" and that App Bridge and requirements 2.2.2/2.2.3 don't apply while `embedded = false` ([forum thread](https://community.shopify.dev/t/non-embedded-shopify-apps-still-allowed/27111)). Everything else in the [App Store requirements](https://shopify.dev/docs/apps/launch/shopify-app-store/app-store-requirements) applies; [shopify-app-store-compliance.md](shopify-app-store-compliance.md) checks each one.
 
 > **Unlisted still means reviewed.** "Unlisted" controls *visibility* in the App Store, not *eligibility*. Both listed and unlisted public apps go through Shopify's app review, and **until that review passes the app installs only on development stores in our own Partner organization.** No install link, scope change or code change gets a live merchant store past that gate — see [3d](#3d-troubleshooting-installs).
 
@@ -13,7 +13,7 @@ The integration is a **public, unlisted** app (installable by any merchant who h
 
 ## 2. Configure with the CLI (recommended)
 
-Edit `shopify-app/shopify.app.toml`: set `client_id` and the app's address (`APP_DOMAIN` below; production: `d2mr8m2p1qkh58.cloudfront.net`). Then:
+Edit `shopify-app/shopify.app.toml`: set `client_id` and the app's address (`APP_DOMAIN` below; production: `bizinsights.io`). Then:
 
 ```bash
 cd shopify-app && npx shopify app deploy
@@ -23,7 +23,7 @@ This pushes, as one versioned config:
 
 | Setting | Value |
 | --- | --- |
-| App URL | `https://APP_DOMAIN/api/shopify/launch` (HMAC-verified, sends merchant to onboarding) |
+| App URL | `https://APP_DOMAIN/api/shopify/launch` (HMAC-verified: authorizes a store we hold no working token for, otherwise opens it) |
 | Redirect URL | `https://APP_DOMAIN/api/shopify/callback` |
 | Scopes | `read_orders,read_products` (required) |
 | Optional scopes | `read_customers`, `write_pixels`, `read_customer_events` — declared in both tomls and mirrored in `SHOPIFY_OPTIONAL_SCOPES` since 2026-10-04; merchants grant them per module with **Enable**, see [3e](#3e-optional-scopes-and-why-the-env-var-cant-fix-an-install) |
@@ -44,9 +44,13 @@ This pushes, as one versioned config:
 
 The dashboard reads the scopes **actually granted** (from the token response and `app/scopes_update`) and hides any module whose scopes are missing.
 
-## 3. Connecting a store (inside the app)
+## 3. Connecting a store
 
-Since 2026-10-10 a store is connected only by a signed-in user: from **Settings → Shopify** (`/settings/stores`) or the first-run connect page (`/onboarding`), through Shopify's own OAuth screen. `POST /workspaces/:ws/shopify/install {shop, from?}` returns the authorize URL with single-use state bound to the browser; `/api/shopify/callback` exchanges the code server-side, stores the token encrypted, and sends the merchant back where they started (`from: "settings"` → `/settings/stores?connected=<id>`, otherwise the first-sync page). When Shopify opens the app (`/api/shopify/launch`) for someone who isn't signed in, they go to `/onboarding?shop=…`, which asks them to log in or sign up and then carries on with that store. The old public entry `/start` now forwards there (or to `/signup`).
+There are two ways in, and both end in Shopify's own OAuth screen; merchants are never asked to type their store's address (App Store requirement 2.3.1).
+
+**Installing from Shopify** (the App Store listing, an install link, or a reinstall). Shopify opens the app URL, `/api/shopify/launch`, signed. A store we hold no working token for (new, uninstalled, or one whose token Shopify refuses) is sent to Shopify's authorize URL at once, whoever is or isn't signed in (requirements 2.3.2 and 2.3.4). The callback stores the token on the store's own workspace: the one it had before an uninstall, or, for a store we have never seen, a new workspace named after it with **no members**, starts the first import and opens `/claim` (requirement 2.3.3). That page says the store is connected and adds it to a bizinsights account: create one or sign in (both come back to `/claim`), then "Add store and open dashboard" (`POST /api/shopify/claim`) makes that person the workspace's owner. The right to claim is a single-use `shopify_claim` cookie in the browser that installed it (24 h, `GET /api/shopify/claim` says which store); opening the app from the Shopify admin offers it again while nobody has claimed the store. A store installed by someone already signed in who manages exactly one workspace goes straight to that workspace instead, as it always has. A workspace nobody claims is erased with its store on `shop/redact`.
+
+**From inside the app** (Settings → Shopify, or the first-run page `/onboarding`). "Continue with Shopify" sends a signed-in user to Shopify's managed install link, where they pick the store and approve; Shopify then opens `/api/shopify/launch`, which finishes the connection for the workspace remembered in this browser (`shopify_pending` cookie). The store address field appears only when the API answers `shop_required`, i.e. the main app is limited to named stores (`SHOPIFY_DEFAULT_APP_SHOPS`). Connecting a store that sits unclaimed in a workspace of its own moves it into the connecting workspace (Shopify's approval proves as much as a claim) and drops the empty workspace; a store another account has claimed is refused (`store_taken`).
 
 The public "Continue with Shopify" sign-up (`/auth/shopify/start`, per-user grant, claim) was retired from the UI on 2026-10-10 and removed from the API on 2026-10-11; see git history before then for how it worked.
 
@@ -247,7 +251,7 @@ This is the only thing that makes a client's store installable, and it is entire
 2. **Check what the app actually asks for.** `cd shopify-app && shopify app deploy`, then Dev Dashboard → **Versions** → confirm the active version declares `read_orders,read_products`, no optional scopes, and our URLs. `packages/core/test/appConfig.test.ts` keeps the repo side honest; only a deploy changes Shopify's side.
 3. **Billing through Shopify.** A public app that charges merchants has to bill through the Billing API — section 4. This is implemented; it has to be *demonstrable* to the reviewer.
 4. **The listing.** App name, icon, description, pricing, a privacy policy URL, and support contact. Unlisted apps still need a complete listing: choose **Unlisted / limited visibility** at submission so it is reachable by link without appearing in search.
-5. **Reviewer access.** Give test credentials and step-by-step instructions for a reviewer who has never seen the app: sign up at `/signup`, verify the email, connect the store (Settings → Shopify), approve on Shopify, wait for the first import, see the dashboard.
+5. **Reviewer access.** Give test credentials and step-by-step instructions for a reviewer who has never seen the app (`shopify-app/listing/listing-copy.md`): install from the listing, approve, sign in on the "is connected" page, "Add store and open dashboard", wait for the first import, see the dashboard.
 6. **Submit for review**, then answer Shopify's feedback. Approval flips the gate for every live store at once.
 
 Once approved: clear `SHOPIFY_DEFAULT_APP_SHOPS` so Shopify's store picker and one-click connect work again for everyone, and give clients the app's install link or `/signup` — never a copied `app/grant` URL.
