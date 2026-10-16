@@ -38,13 +38,13 @@ beforeAll(() => {
 });
 
 describe("the data stack", () => {
-  it("keeps the database private, encrypted, backed up, protected and with a standby in a second AZ", () => {
+  it("keeps the database private, encrypted, backed up and protected (single AZ, the lean tier)", () => {
     t.data.hasResourceProperties("AWS::RDS::DBInstance", {
       PubliclyAccessible: false,
       StorageEncrypted: true,
       DeletionProtection: true,
       BackupRetentionPeriod: 14,
-      MultiAZ: true,
+      MultiAZ: false,
       DBInstanceClass: "db.t4g.small",
       Engine: "postgres",
     });
@@ -81,16 +81,8 @@ describe("the data stack", () => {
     });
   });
 
-  it("sends each AZ's traffic out through its own NAT gateway in production, one NAT in staging", () => {
-    const natsInUse = (tpl: Template) => new Set(Object.values(tpl.findResources("AWS::EC2::Route")).flatMap((r) => (r.Properties.NatGatewayId ? [r.Properties.NatGatewayId.Ref] : [])));
-    t.data.resourceCountIs("AWS::EC2::NatGateway", 2);
-    expect(natsInUse(t.data).size).toBe(2);
-    const staging = synth({ env: "staging" }).data;
-    staging.resourceCountIs("AWS::EC2::NatGateway", 1);
-    expect(natsInUse(staging).size).toBe(1);
-  });
-
-  it("has no SSH key anywhere", () => {
+  it("has one NAT gateway (the lean tier) and no SSH key anywhere", () => {
+    t.data.resourceCountIs("AWS::EC2::NatGateway", 1);
     t.data.hasResourceProperties("AWS::EC2::Instance", { KeyName: Match.absent() });
   });
 });

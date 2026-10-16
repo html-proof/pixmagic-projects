@@ -13,7 +13,11 @@ export interface EnvConfig {
   region: string;
   /** RDS instance class, e.g. "t4g.small". */
   dbInstanceType: string;
-  /** Two Availability Zones with automatic failover (the "high availability" option). */
+  /**
+   * Two Availability Zones with automatic failover (the "high availability" option, ~US$40/month
+   * more). Off in production by the owner's choice (cost, 2026-10-16), so Trusted Advisor's "RDS
+   * Multi-AZ" warning is expected.
+   */
   dbMultiAz: boolean;
   dbAllocatedStorageGb: number;
   dbMaxStorageGb: number;
@@ -22,6 +26,7 @@ export interface EnvConfig {
    * One NAT gateway (lean) or one per AZ (high availability). With one, both AZs' functions reach
    * the internet through the NAT in the first AZ, so an outage there cuts every function off from
    * Shopify, Cognito, Google, Meta and SMTP (Trusted Advisor's "Single AZ Application Check").
+   * One in production by the owner's choice (cost, 2026-10-16): a second NAT is ~US$47/month.
    */
   natGateways: number;
   logRetentionDays: number;
@@ -65,11 +70,11 @@ const ENVIRONMENTS: Record<EnvConfig["name"], Omit<EnvConfig, "schedulesEnabled"
     account: ACCOUNT,
     region: REGION,
     dbInstanceType: "t4g.small",
-    dbMultiAz: true,
+    dbMultiAz: false,
     dbAllocatedStorageGb: 20,
     dbMaxStorageGb: 100,
     dbBackupDays: 14,
-    natGateways: 2,
+    natGateways: 1,
     logRetentionDays: 90,
     domain: {
       name: "bizinsights.io",
@@ -77,7 +82,7 @@ const ENVIRONMENTS: Record<EnvConfig["name"], Omit<EnvConfig, "schedulesEnabled"
       certificateArn: "arn:aws:acm:us-east-1:605411278365:certificate/776966d7-d73c-4896-bd30-1568c9f7b3f7",
     },
     cognitoDomainPrefix: "insights-605411278365",
-    monthlyBudgetUsd: 235,
+    monthlyBudgetUsd: 150,
     githubRepo: "html-proof/pixmagic-projects",
     githubOidcSubject: "repo:html-proof@68529971/pixmagic-projects@1413246051",
   },
