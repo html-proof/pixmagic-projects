@@ -165,7 +165,7 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
           <p className="text-xs text-muted">Shared with you · {me.shared ? "View only" : ROLE_INFO[access.role].label}</p>
           {me.shared && (
             <p className="mt-1 text-xs text-muted" data-testid="shared-badge">
-              Opened from your invitation link: no sign-in needed{me.shared.expiresAt ? `. Link works until ${new Date(me.shared.expiresAt).toLocaleDateString(undefined, { dateStyle: "medium" })}.` : "."}
+              Opened from your invitation link: no sign-in needed{me.shared.expiresAt ? `. Access until ${new Date(me.shared.expiresAt).toLocaleDateString(undefined, { dateStyle: "medium" })}.` : "."}
             </p>
           )}
         </div>

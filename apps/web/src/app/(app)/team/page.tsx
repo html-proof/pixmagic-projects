@@ -181,6 +181,12 @@ const DELIVERY_TONE: Record<DeliveryStatus, string> = {
 };
 
 /**
+ * "2 minutes ago" for something that has happened. The server's clock can be a few seconds ahead
+ * of the browser's, which would otherwise read "in 1 second".
+ */
+const ago = (iso: string) => fmtRelative(new Date(Math.min(Date.parse(iso), Date.now())).toISOString()) ?? "";
+
+/**
  * How the invitation's email went, as the mail provider reported it ("Email delivered" only when
  * the provider said the recipient's server took it), and whether the link has been opened.
  */
@@ -193,21 +199,21 @@ function DeliveryLine({ row }: { row: TeamRow }) {
       {d && (
         <span className={`block ${DELIVERY_TONE[d.status]}`} title={`${DELIVERY_HELP[d.status]}${d.error ? ` (${d.error})` : ""}`} data-delivery={d.status}>
           {DELIVERY_LABEL[d.status]}
-          {d.status !== "queued" ? ` · ${fmtRelative(d.at) ?? ""}` : ""}
+          {d.status !== "queued" ? ` · ${ago(d.at)}` : ""}
         </span>
       )}
       {opened && (
         <span className="block text-muted">
           Link opened {row.link!.openCount > 1 ? `${row.link!.openCount} times, last ` : ""}
-          {fmtRelative(opened) ?? ""}
+          {ago(opened)}
         </span>
       )}
     </span>
   );
 }
 
-/** Whole days from now until `iso` (negative once passed). */
-const daysUntil = (iso: string) => Math.ceil((Date.parse(iso) - Date.now()) / 86_400_000);
+/** Days from now until `iso`, to the nearest day (a 60-day invitation made a minute ago has 60 left); negative once passed. */
+const daysUntil = (iso: string) => (Date.parse(iso) - Date.now()) / 86_400_000;
 
 /** When the shared access (or, before it's opened, the invitation) ends. */
 function AccessUntil({ row }: { row: TeamRow }) {
@@ -216,9 +222,10 @@ function AccessUntil({ row }: { row: TeamRow }) {
   const left = daysUntil(until);
   const date = new Date(until).toLocaleDateString(undefined, { dateStyle: "medium" });
   if (left <= 0) return <span className="text-muted">Ended {date}</span>;
+  const days = Math.round(left);
   return (
     <span className={left <= 7 ? "text-warn" : ""} title={new Date(until).toLocaleString()}>
-      {left === 1 ? "1 day left" : `${left} days left`}
+      {days < 1 ? "Ends today" : days === 1 ? "1 day left" : `${days} days left`}
       <span className="block text-xs text-muted">{date}</span>
     </span>
   );
