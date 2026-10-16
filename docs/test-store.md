@@ -54,17 +54,17 @@ first.
 
 ## 3. Connect it
 
-No toml edit is needed for this path: `shopify.app.toml` already registers the app's URLs (they
-take effect at Shopify with `shopify app deploy`):
+No toml edit is needed for this path: `shopify.app.toml` already registers the app's URLs, and
+they are live at Shopify (version `insights-13`, `shopify app deploy`, 2026-10-16):
 
 | | |
 | --- | --- |
-| App URL | `https://d2mr8m2p1qkh58.cloudfront.net/api/shopify/launch` |
-| Redirect URL | `https://d2mr8m2p1qkh58.cloudfront.net/api/shopify/callback` |
+| App URL | `https://bizinsights.io/api/shopify/launch` |
+| Redirect URL | `https://bizinsights.io/api/shopify/callback` |
 | Scopes | `read_orders,read_products` |
 | Embedded | `false` (this is an external dashboard, not an admin-embedded app) |
 
-1. Open `https://d2mr8m2p1qkh58.cloudfront.net/signup`, create an account and confirm your email.
+1. Open `https://bizinsights.io/signup`, create an account and confirm your email.
 2. On the connect page, **Continue with Shopify** (or enter the store address) and approve on
    Shopify. The workspace and store are created and the first import starts (see
    [shopify-setup.md](shopify-setup.md) section 3).

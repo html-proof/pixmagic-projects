@@ -59,6 +59,16 @@ describe("Shopify app configuration", () => {
     describe(path, () => {
       const toml = read(path);
 
+      it("sets each top-level key once", () => {
+        // TOML forbids a repeated key, so `shopify app deploy` refuses the file outright, and the
+        // single-match readers below only ever see the first copy. Two merged branches once left
+        // both an old and a new `name`/`application_url` here, and the address change silently
+        // never reached Shopify: "Continue with Shopify" kept landing on the retired host.
+        const top = toml.split(/^\s*\[/m)[0]!;
+        const keys = [...top.matchAll(/^([A-Za-z0-9_-]+)\s*=/gm)].map((m) => m[1]!);
+        expect(keys.filter((k, i) => keys.indexOf(k) !== i)).toEqual([]);
+      });
+
       it("uses Shopify managed installation", () => {
         // If this is ever flipped to true, the scope parameter in buildAuthorizeUrl becomes
         // authoritative and the assertions below stop describing what merchants are granted.

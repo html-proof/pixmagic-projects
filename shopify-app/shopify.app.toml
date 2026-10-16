@@ -2,10 +2,8 @@
 # Deploy with: cd shopify-app && shopify app deploy
 # URLs: production on AWS (docs/aws-deployment.md); keep shopify.app.pixmagic.toml on the same host.
 client_id = "57e9ef75435db908617fdd46099afe0e"
-name = "Insights"
-application_url = "https://bizinsights.io/api/shopify/launch"
 name = "bizinsights"
-application_url = "https://d2mr8m2p1qkh58.cloudfront.net/api/shopify/launch"
+application_url = "https://bizinsights.io/api/shopify/launch"
 embedded = false
 
 [access_scopes]
