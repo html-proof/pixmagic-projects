@@ -66,7 +66,7 @@ export function AboutThisData({ store, data, everySec }: { store: OverviewStore;
         <div className="mt-2 space-y-1">
           {data ? (
             <p data-testid="imported-summary" className="text-text">
-              Imported <Count n={data.orders} one="order" /> · <Count n={data.products} one="product" /> · <Count n={data.variants} one="variant" />
+              Imported <Count n={data.orders ?? 0} one="order" /> · <Count n={data.products ?? 0} one="product" /> · <Count n={data.variants ?? 0} one="variant" />
             </p>
           ) : (
             <p>Counting what&apos;s been imported…</p>

@@ -20,7 +20,7 @@ import {
 } from "@app/core";
 import { syncProblem } from "@app/core/reports";
 import { can, expandScopes, normalizeShopDomain, randomToken, safeEqual, verifyShopifyQueryHmac } from "@app/shared";
-import { body, clientIp, HttpError, loadUser, requireUser, requireWorkspace, type Ctx, type Deps } from "../context.js";
+import { body, clientIp, HttpError, loadUser, memberAllows, requireUser, requireWorkspace, type Ctx, type Deps } from "../context.js";
 import type { App } from "../app.js";
 import { SESSION_COOKIE } from "../session.js";
 import { attachStore, createShopWorkspace, dropEmptyShopWorkspace, lockWorkspace, storeTakenElsewhere, syncPage, unclaimed } from "../connectStore.js";
@@ -223,7 +223,7 @@ async function finishInstall(
     const m = user?.emailVerified
       ? await systemDb.membership.findUnique({ where: { workspaceId_userId: { workspaceId: existing.workspaceId, userId: user.id } } })
       : null;
-    if (!m || !can(m.role, "stores:manage")) target = null;
+    if (!memberAllows(m, "stores:manage")) target = null;
   }
   const created = target ? null : await createShopWorkspace(shop);
   let store: Store;
@@ -356,7 +356,7 @@ export function shopifyRoutes(app: App, deps: Deps) {
       // Re-checked here, not only at /install: the approval can take minutes, and someone removed
       // from the workspace (or demoted) in between must not still attach a store to it.
       const member = await systemDb.membership.findUnique({ where: { workspaceId_userId: { workspaceId: state.workspaceId, userId: user.id } } });
-      if (!member || !can(member.role, "stores:manage")) return fail("not_allowed");
+      if (!memberAllows(member, "stores:manage")) return fail("not_allowed");
 
       const token = await exchangeOrFail(app, shop, q.code, deps);
       if (typeof token === "string") return fail(token);
@@ -418,7 +418,7 @@ export function shopifyRoutes(app: App, deps: Deps) {
       const manageable = async (workspaceId: string) => {
         if (!verified) return null;
         const m = await systemDb.membership.findUnique({ where: { workspaceId_userId: { workspaceId, userId: verified.id } } });
-        return m && can(m.role, "stores:manage") ? workspaceId : null;
+        return memberAllows(m, "stores:manage") ? workspaceId : null;
       };
 
       // 1. A one-click connect this browser started from inside the app: finish it there.
@@ -446,7 +446,7 @@ export function shopifyRoutes(app: App, deps: Deps) {
       //    workspace: connect it there, as opening the app from the admin always has.
       if ((!store || store.status === "uninstalled") && verified) {
         const managed = await systemDb.membership.findMany({
-          where: { userId: verified.id, role: { in: ["owner", "admin"] } },
+          where: { userId: verified.id, role: { in: ["owner", "admin"] }, revokedAt: null },
           select: { workspaceId: true, role: true },
         });
         const only = managed.length === 1 && can(managed[0]!.role, "stores:manage") ? managed[0]!.workspaceId : null;

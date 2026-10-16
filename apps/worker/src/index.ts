@@ -4,6 +4,7 @@ import {
   flagStaleSessions,
   logger,
   MAX_ATTEMPTS,
+  pruneTeamRecords,
   raiseAlert,
   type AdsSyncData,
   type AggregateJobData,
@@ -243,6 +244,22 @@ export async function prunePixelDedupe(batch = 20_000): Promise<number> {
     DELETE FROM pixel_events_seen WHERE ctid IN (SELECT ctid FROM pixel_events_seen WHERE seen_at < ${cutoff} LIMIT ${batch})`;
 }
 
+/**
+ * Team & Access retention (core's pruneTeamRecords) once a day, on whichever tick first gets the
+ * day's lease: it scans the audit log, which no tick needs to do more often. A failed run gives the
+ * lease back, so the next tick tries again.
+ */
+const TEAM_RETENTION_LEASE_MS = 23 * 3_600_000;
+export async function pruneTeamDaily(deps: Pick<WorkerDeps, "coord">) {
+  if (!(await deps.coord.acquire("sweep:team-retention", TEAM_RETENTION_LEASE_MS))) return null;
+  try {
+    return await pruneTeamRecords();
+  } catch (err) {
+    await deps.coord.release("sweep:team-retention").catch(() => {});
+    throw err;
+  }
+}
+
 export async function runScheduled(cron: string, deps: WorkerDeps) {
   if (cron === CRON.reconcile) return { reconciled: await scheduleReconcile(deps) };
   // Shares the */15 trigger rather than adding a schedule: both are cheap sweeps, and a stale
@@ -291,7 +308,11 @@ export async function runScheduled(cron: string, deps: WorkerDeps) {
       logger.error({ err }, "pixel dedupe prune failed; the next tick tries again");
       return null;
     });
-    return { refreshed, staleJobsFailed, reconciled, adsSynced, whatsapp, staffOpenShifts, email, pixelDedupePruned };
+    const teamPruned = await pruneTeamDaily(deps).catch((err: unknown) => {
+      logger.error({ err }, "team retention sweep failed; the next tick tries again");
+      return null;
+    });
+    return { refreshed, staleJobsFailed, reconciled, adsSynced, whatsapp, staffOpenShifts, email, pixelDedupePruned, teamPruned };
   }
   logger.warn({ cron }, "unknown cron trigger");
   return {};

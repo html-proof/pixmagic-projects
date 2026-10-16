@@ -11,6 +11,7 @@ import { Icon } from "./Icons";
 import { B, Change, changeWords } from "./Narrative";
 import { Panel, Stat, type Tone } from "./Primitives";
 import { topicInfo, topicSummary, type Topic } from "./topics";
+import { breakdownOf } from "./redacted";
 import type { Overview } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -328,7 +329,9 @@ export function OverviewDetail({ ov, currency, onOpen }: { ov: Overview; currenc
   const y = s?.year;
   const range = fmtRange(ov.range.from, ov.range.to);
   const before = fmtRange(ov.previous.from, ov.previous.to);
-  const refunds = s ? Math.round((s.current.grossSales - s.current.discounts - s.current.netSales) * 100) / 100 : 0;
+  // Gross sales, discounts, tax and shipping only for someone who may see them (Team & Access).
+  const bd = s ? breakdownOf(s.current) : null;
+  const refunds = s && bd ? Math.round((bd.grossSales - bd.discounts - s.current.netSales) * 100) / 100 : null;
   const finishedMonths = y?.months.filter((x) => !x.current && x.coverage === "full") ?? [];
   const bestMonth = y?.months.filter((x) => x.coverage !== "none" && x.netSales > 0).reduce<(typeof y.months)[number] | null>((a, x) => (!a || x.netSales > a.netSales ? x : a), null);
   const thisMonth = y?.months.at(-1);
@@ -405,14 +408,14 @@ export function OverviewDetail({ ov, currency, onOpen }: { ov: Overview; currenc
               </thead>
               <tbody>
                 <Row label="Net sales" now={money(s.current.netSales)} before={money(s.previous.netSales)} change={<Change value={s.deltas.netSales} />} />
-                <Row label="Gross sales" now={money(s.current.grossSales)} before={money(s.previous.grossSales)} change={<Change value={s.deltas.grossSales} />} />
-                <Row label="Discounts" now={money(s.current.discounts)} />
-                <Row label="Refunds" now={money(refunds)} change={m.refunds ? <Change value={m.refunds.deltas.refunds} invert /> : undefined} />
+                {bd && <Row label="Gross sales" now={money(bd.grossSales)} before={s.previous.grossSales !== undefined ? money(s.previous.grossSales) : null} change={<Change value={s.deltas.grossSales ?? null} />} />}
+                {bd && <Row label="Discounts" now={money(bd.discounts)} />}
+                {refunds !== null && <Row label="Refunds" now={money(refunds)} change={m.refunds ? <Change value={m.refunds.deltas.refunds} invert /> : undefined} />}
                 <Row label="Orders" now={fmtNum(s.current.orders)} before={fmtNum(s.previous.orders)} change={<Change value={s.deltas.orders} />} />
                 <Row label="Average order" now={s.current.averageOrderValue !== null ? money(s.current.averageOrderValue) : "—"} before={s.previous.averageOrderValue !== null ? money(s.previous.averageOrderValue) : null} change={<Change value={s.deltas.averageOrderValue} />} />
                 <Row label="Items sold" now={fmtNum(s.current.units)} />
-                <Row label="Tax collected" now={money(s.current.tax)} />
-                <Row label="Shipping charged" now={money(s.current.shipping)} />
+                {bd?.tax != null && <Row label="Tax collected" now={money(bd.tax)} />}
+                {bd?.shipping != null && <Row label="Shipping charged" now={money(bd.shipping)} />}
                 {f && <Row label="Store visits" now={fmtNum(f.visits)} before={fmtNum(f.previous.visits)} change={<Change value={f.deltas.visits} />} />}
                 {f && <Row label="Visitors who bought" now={fmtPct(f.conversionRate)} before={f.previous.conversionRate !== null ? fmtPct(f.previous.conversionRate) : null} change={<Change value={f.deltas.conversionRate} />} />}
                 {m.ads && <Row label={`Ad spend (${m.ads.currency})`} now={fmtMoney(m.ads.current.spend, m.ads.currency)} before={fmtMoney(m.ads.previous.spend, m.ads.currency)} change={<Change value={m.ads.deltas.spend} invert />} />}
@@ -456,8 +459,8 @@ export function OverviewDetail({ ov, currency, onOpen }: { ov: Overview; currenc
         <dl className="grid grid-cols-2 gap-x-4 gap-y-4 sm:grid-cols-3">
           {cat && <Fact label="Products" value={fmtNum(cat.products.total)} note={`${fmtNum(cat.products.active)} active · ${fmtNum(cat.products.draft)} draft · ${fmtNum(cat.products.archived)} archived`} />}
           {cat && <Fact label="Variants" value={fmtNum(cat.variants)} />}
-          {inv && inv.trackedVariants > 0 && <Fact label="Units in stock" value={fmtNum(inv.unitsInStock)} note={`${money(inv.retailValue)} at today's prices`} />}
-          {inv && inv.stockValueAtCost !== null && <Fact label="Stock value at cost" value={money(inv.stockValueAtCost)} />}
+          {inv && inv.trackedVariants > 0 && <Fact label="Units in stock" value={fmtNum(inv.unitsInStock)} note={inv.retailValue !== undefined ? `${money(inv.retailValue)} at today's prices` : undefined} />}
+          {inv && inv.stockValueAtCost != null && <Fact label="Stock value at cost" value={money(inv.stockValueAtCost)} />}
           {ov.data && (
             <Fact
               label="Orders imported"

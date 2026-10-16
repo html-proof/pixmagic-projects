@@ -57,7 +57,7 @@ export function TrafficCard({ m, currency }: { m: TrafficModule; currency: strin
       id="traffic"
       title="Where your sales come from"
       help="The visit Shopify recorded before each order: an ad, a post, a search, an email or a typed address. Sales after discounts, before tax and shipping."
-      aside={m.paid.sales > 0 ? <span className="text-xs text-muted">From tagged ads: <strong className="text-text">{fmtMoney(m.paid.sales, currency)}</strong> ({fmtPct(m.paid.share)})</span> : undefined}
+      aside={m.paid && m.paid.sales > 0 ? <span className="text-xs text-muted">From tagged ads: <strong className="text-text">{fmtMoney(m.paid.sales, currency)}</strong> ({fmtPct(m.paid.share)})</span> : undefined}
     >
       {m.pending > 0 && (
         <p className="mb-3 text-xs text-muted">
@@ -77,15 +77,15 @@ export function TrafficCard({ m, currency }: { m: TrafficModule; currency: strin
               sub={
                 <>
                   {plural(x.orders, "order")} · {fmtPct(x.share)} of sales
-                  {x.paidOrders > 0 && x.paidOrders < x.orders && <> · {fmtMoney(x.paidSales, currency)} from tagged ads</>}
-                  {x.paidOrders > 0 && x.paidOrders === x.orders && <> · all from tagged ads</>}
+                  {x.paidOrders !== undefined && x.paidOrders > 0 && x.paidOrders < x.orders && <> · {fmtMoney(x.paidSales, currency)} from tagged ads</>}
+                  {x.paidOrders !== undefined && x.paidOrders > 0 && x.paidOrders === x.orders && <> · all from tagged ads</>}
                 </>
               }
             />
           ))}
         </ul>
       )}
-      {m.campaigns.length > 0 && (
+      {m.campaigns && m.campaigns.length > 0 && (
         <div className="mt-5">
           <h3 className="text-sm font-medium">Campaigns</h3>
           <p className="text-xs text-muted">From the campaign name in your ad and email links (utm_campaign).</p>
@@ -188,6 +188,8 @@ export function FulfillmentCard({ m }: { m: FulfillmentModule }) {
 }
 
 export function DiscountCodesCard({ m, currency }: { m: DiscountCodesModule; currency: string }) {
+  // Amounts per code need "View discount performance" (Team & Access).
+  const money = m.items.some((d) => d.sales !== undefined);
   return (
     <Panel id="discount_codes" title="Discount codes" help="Codes customers used most in these dates. Amounts are the total discounts on the orders that used each code (including automatic discounts), so an order with several codes counts toward each.">
       {m.items.length === 0 ? (
@@ -199,8 +201,8 @@ export function DiscountCodesCard({ m, currency }: { m: DiscountCodesModule; cur
               <tr>
                 <th className="px-1 pb-2 font-normal">Code</th>
                 <th className="px-1 pb-2 text-right font-normal">Orders</th>
-                <th className="px-1 pb-2 text-right font-normal">Discounts on these orders</th>
-                <th className="px-1 pb-2 text-right font-normal">Sales</th>
+                {money && <th className="px-1 pb-2 text-right font-normal">Discounts on these orders</th>}
+                {money && <th className="px-1 pb-2 text-right font-normal">Sales</th>}
               </tr>
             </thead>
             <tbody>
@@ -210,8 +212,8 @@ export function DiscountCodesCard({ m, currency }: { m: DiscountCodesModule; cur
                     <span className="rounded border border-border bg-bg px-1.5 py-0.5 font-mono text-xs">{d.code}</span>
                   </td>
                   <td className="px-1 py-2 text-right tabular-nums">{fmtNum(d.orders)}</td>
-                  <td className="px-1 py-2 text-right tabular-nums">{fmtMoney(d.discount, currency)}</td>
-                  <td className="px-1 py-2 text-right tabular-nums">{fmtMoney(d.sales, currency)}</td>
+                  {money && <td className="px-1 py-2 text-right tabular-nums">{fmtMoney(d.discount, currency)}</td>}
+                  {money && <td className="px-1 py-2 text-right tabular-nums">{fmtMoney(d.sales, currency)}</td>}
                 </tr>
               ))}
             </tbody>
@@ -222,9 +224,9 @@ export function DiscountCodesCard({ m, currency }: { m: DiscountCodesModule; cur
   );
 }
 
-const financialTone = (s: string | null): Tone =>
+const financialTone = (s: string | null | undefined): Tone =>
   s === "paid" ? "good" : s === "pending" || s === "authorized" || s === "partially_paid" || s === "expired" ? "warn" : "neutral";
-const fulfillmentTone = (s: string | null): Tone =>
+const fulfillmentTone = (s: string | null | undefined): Tone =>
   s === "fulfilled" ? "good" : s === "restocked" || s === "request_declined" || s === null ? "neutral" : "warn";
 
 /** Order number, linking to the order in the merchant's Shopify admin when we know its id. */
@@ -238,13 +240,20 @@ function OrderName({ o, shopDomain }: { o: RecentOrder; shopDomain: string }) {
   );
 }
 
+// Payment, fulfillment and cancellation each need their own permission (Team & Access): a field
+// that isn't in the answer gets no badge, rather than a guess.
 const PaymentBadge = ({ o }: { o: RecentOrder }) =>
-  o.cancelled ? <Badge tone="danger">Cancelled</Badge> : <Badge tone={financialTone(o.financialStatus)}>{humanize(o.financialStatus)}</Badge>;
-const FulfillmentBadge = ({ o }: { o: RecentOrder }) => (
-  <Badge tone={fulfillmentTone(o.fulfillmentStatus)}>{o.fulfillmentStatus ? humanize(o.fulfillmentStatus) : "Not synced yet"}</Badge>
-);
+  o.cancelled ? (
+    <Badge tone="danger">Cancelled</Badge>
+  ) : o.financialStatus !== undefined ? (
+    <Badge tone={financialTone(o.financialStatus)}>{humanize(o.financialStatus)}</Badge>
+  ) : null;
+const FulfillmentBadge = ({ o }: { o: RecentOrder }) =>
+  o.fulfillmentStatus !== undefined ? <Badge tone={fulfillmentTone(o.fulfillmentStatus)}>{o.fulfillmentStatus ? humanize(o.fulfillmentStatus) : "Not synced yet"}</Badge> : null;
 
 export function RecentOrdersCard({ items, currency, timezone, shopDomain }: { items: RecentOrder[]; currency: string; timezone: string; shopDomain: string }) {
+  const showPayment = items.some((o) => o.financialStatus !== undefined || o.cancelled !== undefined);
+  const showFulfillment = items.some((o) => o.fulfillmentStatus !== undefined);
   return (
     <Panel id="recent_orders" title="Recent orders" help={`The 10 latest orders, whatever dates are selected. Times are in the store's time zone (${timezone}).`}>
       {items.length === 0 ? (
@@ -277,8 +286,8 @@ export function RecentOrdersCard({ items, currency, timezone, shopDomain }: { it
                 <th className="px-1 pb-2 font-normal">Placed</th>
                 <th className="px-1 pb-2 font-normal">Channel</th>
                 <th className="px-1 pb-2 text-right font-normal">Items</th>
-                <th className="px-1 pb-2 font-normal">Payment</th>
-                <th className="px-1 pb-2 font-normal">Fulfillment</th>
+                {showPayment && <th className="px-1 pb-2 font-normal">Payment</th>}
+                {showFulfillment && <th className="px-1 pb-2 font-normal">Fulfillment</th>}
                 <th className="px-1 pb-2 text-right font-normal">Total</th>
               </tr>
             </thead>
@@ -289,8 +298,8 @@ export function RecentOrdersCard({ items, currency, timezone, shopDomain }: { it
                   <td className="whitespace-nowrap px-1 py-2">{fmtDateTime(o.createdAt, timezone)}</td>
                   <td className="px-1 py-2">{o.channel}</td>
                   <td className="px-1 py-2 text-right tabular-nums">{fmtNum(o.units)}</td>
-                  <td className="px-1 py-2"><PaymentBadge o={o} /></td>
-                  <td className="px-1 py-2"><FulfillmentBadge o={o} /></td>
+                  {showPayment && <td className="px-1 py-2"><PaymentBadge o={o} /></td>}
+                  {showFulfillment && <td className="px-1 py-2"><FulfillmentBadge o={o} /></td>}
                   <td className="whitespace-nowrap px-1 py-2 text-right tabular-nums">{fmtMoney(o.total, currency)}</td>
                 </tr>
               ))}
@@ -315,6 +324,8 @@ export function InventoryCard({ m, currency }: { m: InventoryModule; currency: s
       </Panel>
     );
   }
+  // What the stock is worth needs "View stock value and prices" (Team & Access).
+  const valued = c.retailValue !== undefined;
   const costNote =
     c.stockValueAtCost === null
       ? "Add a cost per item in Shopify to see this."
@@ -323,10 +334,10 @@ export function InventoryCard({ m, currency }: { m: InventoryModule; currency: s
         : "What you paid for the stock you hold.";
   return (
     <Panel id="inventory" title="Inventory" help="Stock on hand across all locations for active and draft products. “Running low” uses the last 30 days of sales.">
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+      <div className={`grid grid-cols-2 gap-3 ${valued ? "lg:grid-cols-5" : "lg:grid-cols-3"}`}>
         <Stat label="Units in stock" value={fmtNum(c.unitsInStock)} note={`Across ${plural(c.trackedVariants, "tracked variant")}.`} />
-        <Stat label="Stock value at cost" value={fmtMoney(c.stockValueAtCost, currency)} note={costNote} />
-        <Stat label="Retail value" value={fmtMoney(c.retailValue, currency)} note="If everything sold at today's prices." />
+        {valued && <Stat label="Stock value at cost" value={fmtMoney(c.stockValueAtCost, currency)} note={costNote} />}
+        {valued && <Stat label="Retail value" value={fmtMoney(c.retailValue, currency)} note="If everything sold at today's prices." />}
         <Stat label="Out of stock" value={fmtNum(c.outOfStock)} tone={c.outOfStock > 0 ? "danger" : "good"} note="Variants with nothing left to sell." />
         <Stat className="col-span-2 lg:col-span-1" label="Running low" value={fmtNum(c.lowStock)} tone={c.lowStock > 0 ? "warn" : "good"} note="5 or fewer left, or under 2 weeks of sales." />
       </div>

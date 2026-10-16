@@ -1,8 +1,9 @@
 import type { Context } from "hono";
 import { getCookie } from "hono/cookie";
 import { systemDb, type User } from "@app/db";
-import { can, sha256Hex, type Permission, type Role } from "@app/shared";
-import { addLogContext, env, logger, type BlobStore, type Coord, type FetchLike, type Mailer, type Queues, type SmtpConnect } from "@app/core";
+import { allows, hasFullAccess, LEGACY_GRANTS, sha256Hex, type AccessNeed, type MemberAccess, type Role } from "@app/shared";
+import type { StaffRole } from "@app/shared/staff";
+import { accessFingerprint, addLogContext, env, logger, type BlobStore, type Coord, type FetchLike, type Mailer, type Queues, type SmtpConnect } from "@app/core";
 import { CognitoError, CognitoUnavailableError, type CognitoAuth } from "./cognito.js";
 import type { LegacyPasswordCheck } from "./legacyFirebase.js";
 import { clearSessionCookies, readRefreshToken, readSession, retiredSessionKey, REVALIDATE_MS, SESSION_COOKIE, setSessionCookies, type SessionClaims } from "./session.js";
@@ -183,31 +184,68 @@ export interface WorkspaceAccess {
   workspaceId: string;
   role: Role;
   user: User | null;
+  /** What this member (or API key) may see and do: their role and granted permissions (Team & Access). */
+  access: MemberAccess;
+  /** The member's Staff Management role (null for API keys and members without one). */
+  staffRole: StaffRole | null;
 }
 
+/** What workspace API keys may read: what viewers could before Team & Access (read-only, no customers' personal data). */
+const API_KEY_ACCESS: MemberAccess = { role: "viewer", permissions: LEGACY_GRANTS.viewer };
+
 /**
- * Authorize access to a workspace either by session membership or by API key
- * (API keys are read-only: they act as "viewer"). Non-members get 404, not 403,
- * so workspace ids can't be probed.
+ * Sent with every response to a member's workspace request: `<workspace id>:<fingerprint>` of
+ * their access. The web app keeps the fingerprint it last saw and reloads the member's permissions
+ * the moment one differs, so a change an owner makes shows in the member's sidebar within one
+ * request. Enforcement never depends on it: every request is checked against the database.
  */
-export async function requireWorkspace(c: Ctx, deps: Deps, workspaceId: string, perm: Permission): Promise<WorkspaceAccess> {
+export const ACCESS_FP_HEADER = "x-access-fp";
+
+/** Refused because the member's access to this workspace was revoked (the web app shows a page saying so). */
+export const ACCESS_REVOKED = "access_revoked";
+
+/**
+ * Authorize access to a workspace either by session membership or by API key (read-only). `need`
+ * is a workspace permission (roles.ts) or one or more of Team & Access's (access.ts: any of them
+ * will do); owners and admins hold every one of the latter, other members only what was granted to
+ * them. Read from the database on every request, so a change or a revocation applies to the very
+ * next one. Non-members get 404, not 403, so workspace ids can't be probed.
+ */
+export async function requireWorkspace(c: Ctx, deps: Deps, workspaceId: string, need: AccessNeed): Promise<WorkspaceAccess> {
   const authz = c.req.header("authorization");
   if (authz?.startsWith("Bearer sk_")) {
     const key = await systemDb.apiKey.findUnique({ where: { keyHash: sha256Hex(authz.slice(7)) } });
     if (!key || key.revokedAt || key.workspaceId !== workspaceId) throw new HttpError(404, "Not found", "not_found");
-    if (!can("viewer", perm)) throw new HttpError(403, "API keys are read-only", "forbidden");
+    if (!allows(API_KEY_ACCESS, need)) throw new HttpError(403, "API keys are read-only", "forbidden");
     await systemDb.apiKey.update({ where: { id: key.id }, data: { lastUsedAt: new Date() } }).catch(() => {});
     addLogContext({ workspaceId, apiKeyId: key.id });
-    return { workspaceId, role: "viewer", user: null };
+    return { workspaceId, role: "viewer", user: null, access: API_KEY_ACCESS, staffRole: null };
   }
   const user = await requireUser(c, deps);
   const m = await systemDb.membership.findUnique({
     where: { workspaceId_userId: { workspaceId, userId: user.id } },
   });
   if (!m) throw new HttpError(404, "Not found", "not_found");
-  if (!can(m.role, perm)) throw new HttpError(403, "You don't have permission to do that", "forbidden");
+  // Before the verdict, so a refusal also tells the browser its permissions changed.
+  c.header(ACCESS_FP_HEADER, `${workspaceId}:${accessFingerprint(m)}`);
+  if (m.revokedAt) throw new HttpError(403, "Your access to this workspace has been revoked. Ask an owner or admin if you still need it.", ACCESS_REVOKED);
+  const access: MemberAccess = { role: m.role, permissions: m.permissions };
+  if (!allows(access, need)) throw new HttpError(403, "You don't have permission to do that", "forbidden");
   addLogContext({ workspaceId });
-  return { workspaceId, role: m.role, user };
+  return { workspaceId, role: m.role, user, access, staffRole: m.staffRole };
+}
+
+/**
+ * Whether a membership allows `need`, for the checks made outside a request's own workspace check
+ * (an OAuth callback re-checking the person who started it). A revoked membership allows nothing.
+ */
+export function memberAllows(m: { role: Role; permissions: string[]; revokedAt: Date | null } | null, need: AccessNeed): boolean {
+  return !!m && !m.revokedAt && allows({ role: m.role, permissions: m.permissions }, need);
+}
+
+/** Owners and admins only (pages of the workspace itself: billing, members, stores). */
+export function requireFullAccess(a: WorkspaceAccess) {
+  if (!hasFullAccess(a.access.role)) throw new HttpError(403, "You don't have permission to do that", "forbidden");
 }
 
 /**

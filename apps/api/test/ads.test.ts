@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { systemDb, withDb } from "@app/db";
 import { adAccessToken, syncAdConnection, type AdsSyncData, type FetchLike } from "@app/core";
-import { addDays, localDay } from "@app/shared";
+import { addDays, LEGACY_GRANTS, localDay } from "@app/shared";
 import { clean, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
 
 /**
@@ -379,7 +379,7 @@ describe("connecting ad accounts", () => {
     expect(await systemDb.adConnection.count()).toBe(1);
 
     const me = await systemDb.user.findFirstOrThrow({ where: { email: "owner@x.com" } });
-    await systemDb.membership.update({ where: { workspaceId_userId: { workspaceId: ws, userId: me.id } }, data: { role: "analyst" } });
+    await systemDb.membership.update({ where: { workspaceId_userId: { workspaceId: ws, userId: me.id } }, data: { role: "analyst", permissions: [...LEGACY_GRANTS.analyst] } });
     expect((await connect("meta")).statusCode).toBe(403);
     expect((await ctx.app.inject({ method: "DELETE", url: `/workspaces/${ws}/stores/${storeId}/ads/connections/${a!.id}`, headers })).statusCode).toBe(403);
     expect((await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${storeId}/ads`, headers })).statusCode).toBe(200);

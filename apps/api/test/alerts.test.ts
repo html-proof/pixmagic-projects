@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { systemDb } from "@app/db";
 import { clean, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
+import { LEGACY_GRANTS } from "@app/shared";
 
 let ctx: TestCtx;
 beforeAll(async () => (ctx = await setup()));
@@ -57,7 +58,7 @@ describe("GET /workspaces/:ws/alerts", () => {
   it("lists privacy requests only to members who see Settings → Privacy requests", async () => {
     const { ws } = await seed();
     const analyst = await signIn(ctx, "analyst", "analyst@acme.test");
-    await systemDb.membership.create({ data: { workspaceId: ws, userId: analyst.user.id, role: "analyst" } });
+    await systemDb.membership.create({ data: { workspaceId: ws, userId: analyst.user.id, role: "analyst", permissions: [...LEGACY_GRANTS.analyst] } });
     const res = await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/alerts`, headers: analyst.headers });
     expect(res.statusCode).toBe(200);
     expect((res.json().alerts as Array<{ area: string }>).map((a) => a.area)).not.toContain("privacy");
@@ -66,7 +67,7 @@ describe("GET /workspaces/:ws/alerts", () => {
   it("lists staff alerts only to members who see timesheets", async () => {
     const { ws } = await seed();
     const viewer = await signIn(ctx, "viewer", "viewer@acme.test");
-    await systemDb.membership.create({ data: { workspaceId: ws, userId: viewer.user.id, role: "viewer" } });
+    await systemDb.membership.create({ data: { workspaceId: ws, userId: viewer.user.id, role: "viewer", permissions: [...LEGACY_GRANTS.viewer] } });
     const areas = async () => {
       const res = await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/alerts`, headers: viewer.headers });
       expect(res.statusCode).toBe(200);

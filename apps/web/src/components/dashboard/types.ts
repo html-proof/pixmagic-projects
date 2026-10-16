@@ -27,24 +27,29 @@ export interface OverviewStore {
   installedAt?: string | null;
 }
 
+/**
+ * Fields marked "Team & Access" are left out for a member without the permission they need
+ * (`redactOverview` in @app/shared/access): the page shows what's there and says nothing of the rest.
+ */
 export interface SalesOverview {
   current: {
-    grossSales: number;
-    discounts: number;
+    /** Team & Access: "View gross sales, discounts, tax and shipping" (also discounts, tax, shipping). */
+    grossSales?: number;
+    discounts?: number;
     netSales: number;
     orders: number;
     units: number;
     averageOrderValue: number | null;
-    tax: number;
-    shipping: number;
+    tax?: number;
+    shipping?: number;
   };
   /** The same figures for the period before (as many days, immediately before). */
-  previous: { grossSales: number; netSales: number; orders: number; units: number; averageOrderValue: number | null };
-  deltas: { netSales: number | null; orders: number | null; averageOrderValue: number | null; grossSales: number | null; units: number | null };
-  /** Every day of the range, quiet days as zero. */
-  series: SalesDay[];
-  /** This calendar year by month, whatever the range. */
-  year: YearBreakdown;
+  previous: { grossSales?: number; netSales: number; orders: number; units: number; averageOrderValue: number | null };
+  deltas: { netSales: number | null; orders: number | null; averageOrderValue: number | null; grossSales?: number | null; units: number | null };
+  /** Every day of the range, quiet days as zero. Each day's `refunds`: Team & Access "View refunds". */
+  series: Array<Omit<SalesDay, "refunds"> & { refunds?: number }>;
+  /** This calendar year by month, whatever the range. Team & Access: "View financial reports". */
+  year?: YearBreakdown;
 }
 
 export interface AdTotals {
@@ -73,7 +78,8 @@ export interface AdsModule {
   byProvider: Array<AdTotals & { provider: "meta" | "google" }>;
   /** Each platform's own days (same shape as series). */
   seriesByProvider: Array<{ provider: "meta" | "google"; series: Array<{ day: string; spend: number; clicks: number; impressions: number; conversions: number; conversionValue: number }> }>;
-  campaigns: Array<AdTotals & { provider: "meta" | "google"; accountId: string; campaignId: string; name: string }>;
+  /** Team & Access: "View campaigns and their performance". */
+  campaigns?: Array<AdTotals & { provider: "meta" | "google"; accountId: string; campaignId: string; name: string }>;
   /** Ad spend divided by the store's net sales (same currency only). */
   shareOfSales: number | null;
 }
@@ -108,9 +114,10 @@ export interface ChannelsModule {
 
 /** Where this period's sales came from (Shopify's record of the visit behind each order). */
 export interface TrafficModule {
-  items: Array<{ id: string; source: string; label: string; orders: number; sales: number; paidOrders: number; paidSales: number; share: number | null }>;
-  paid: { orders: number; sales: number; share: number | null };
-  campaigns: Array<{ source: string; label: string; campaign: string; orders: number; sales: number }>;
+  /** `paidOrders`, `paidSales`, `paid` and `campaigns`: Team & Access "View conversion attribution". */
+  items: Array<{ id: string; source: string; label: string; orders: number; sales: number; paidOrders?: number; paidSales?: number; share: number | null }>;
+  paid?: { orders: number; sales: number; share: number | null };
+  campaigns?: Array<{ source: string; label: string; campaign: string; orders: number; sales: number }>;
   /** Orders whose source hasn't been read from Shopify yet. */
   pending: number;
 }
@@ -131,7 +138,8 @@ export interface FulfillmentModule {
 }
 
 export interface DiscountCodesModule {
-  items: Array<{ code: string; orders: number; discount: number; sales: number }>;
+  /** `discount` and `sales`: Team & Access "View discount performance". */
+  items: Array<{ code: string; orders: number; discount?: number; sales?: number }>;
 }
 
 export interface RecentOrder {
@@ -140,20 +148,22 @@ export interface RecentOrder {
   name: string;
   createdAt: string;
   total: number;
-  financialStatus: string | null;
-  fulfillmentStatus: string | null;
+  /** Team & Access: "View payment status", "View fulfillment status", "View cancellations". */
+  financialStatus?: string | null;
+  fulfillmentStatus?: string | null;
   channel: string;
   units: number;
-  cancelled: boolean;
+  cancelled?: boolean;
 }
 
 export interface InventoryModule {
   current: {
     trackedVariants: number;
     unitsInStock: number;
-    stockValueAtCost: number | null;
+    /** Stock value: Team & Access "View stock value and prices". */
+    stockValueAtCost?: number | null;
     variantsWithCost?: number;
-    retailValue: number;
+    retailValue?: number;
     outOfStock: number;
     lowStock: number;
   };
@@ -174,7 +184,7 @@ export interface FunnelModule extends JourneySummary {
   deltas: { visits: number | null; conversionRate: number | null };
 }
 
-/** GET .../contacts: read live from Shopify, never stored (see apps/api/src/routes/contacts.ts). */
+/** GET .../contacts: read live from Shopify, never stored (see apps/api/src/routes/contacts.ts). Names, contact details and order history can each be withheld (Team & Access). */
 export interface ContactPerson {
   customerId: string | null;
   name: string | null;
@@ -198,8 +208,9 @@ export interface AbandonedContact extends ContactPerson {
 
 export interface CustomerContact extends ContactPerson {
   createdAt: string;
-  orders: number;
-  spent: number;
+  /** Null when this member may not see order history. */
+  orders: number | null;
+  spent: number | null;
   currency: string | null;
 }
 
@@ -207,17 +218,20 @@ export interface Contacts {
   fetchedAt: string;
   /** Shopify withheld names and emails: the app isn't approved for protected customer data on this store. */
   restricted: boolean;
+  /** What this member may see (Team & Access); absent from older answers, which meant everything. */
+  shown?: { abandoned: boolean; customers: boolean; names: boolean; contact: boolean; orders: boolean };
   abandoned: AbandonedContact[];
   subscribers: CustomerContact[];
   recent: CustomerContact[];
 }
 
+/** Order figures need "View sales and revenue" or "View order list", product figures a product permission (Team & Access). */
 export interface ImportedData {
-  orders: number;
-  products: number;
-  variants: number;
-  oldestOrderDay: string | null;
-  newestOrderDay: string | null;
+  orders?: number;
+  products?: number;
+  variants?: number;
+  oldestOrderDay?: string | null;
+  newestOrderDay?: string | null;
 }
 
 export interface Overview {

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { withTenant } from "@app/db";
-import { DATE_PRESETS, resolvePreset } from "@app/shared";
+import { DATE_PRESETS, redactOverview, resolvePreset, seesModule } from "@app/shared";
 import { logger, revocableScopes } from "@app/core";
 import { recentSyncJobs, storeOverview, workspaceStores } from "@app/core/reports";
 import { HttpError, requireWorkspace, type Deps } from "../context.js";
@@ -53,9 +53,10 @@ export function dashboardRoutes(app: App, deps: Deps) {
     return c.json({ stores: stores.map(({ store, imported }) => ({ ...publicStore(store), imported })) });
   });
 
+  // The import's progress and its failures: the Shopify connection's status page.
   app.get("/workspaces/:ws/stores/:storeId/sync", async (c) => {
     const { ws, storeId } = c.req.param();
-    await requireWorkspace(c, deps, ws, "dashboard:read");
+    await requireWorkspace(c, deps, ws, "integrations.status");
     return c.json(await withTenant(ws, async (tx) => {
       const store = await tx.store.findFirst({ where: { id: storeId, workspaceId: ws } });
       if (!store) throw new HttpError(404, "Not found", "not_found");
@@ -65,11 +66,13 @@ export function dashboardRoutes(app: App, deps: Deps) {
 
   /**
    * One call returns everything the dashboard needs (packages/core/src/reports): modules the
-   * store's scopes enable, and for the others what's missing, never placeholder numbers.
+   * store's scopes enable, and for the others what's missing, never placeholder numbers. A member
+   * gets only the modules and fields their permissions cover (Team & Access): the rest is neither
+   * computed nor sent.
    */
   app.get("/workspaces/:ws/stores/:storeId/overview", async (c) => {
     const { ws, storeId } = c.req.param();
-    await requireWorkspace(c, deps, ws, "dashboard:read");
+    const { access } = await requireWorkspace(c, deps, ws, "dashboard:read");
     const q = querySchema.parse(c.req.query());
 
     let polled: Parameters<typeof autoRefresh>[1] | null = null;
@@ -84,7 +87,7 @@ export function dashboardRoutes(app: App, deps: Deps) {
       } catch (e) {
         throw new HttpError(400, (e as Error).message, "invalid_range");
       }
-      const report = await storeOverview(tx, store, dates, now);
+      const report = redactOverview(await storeOverview(tx, store, dates, now, (m) => seesModule(access, m)), access);
       return {
         store: publicStore(store),
         syncProblem: report.syncProblem,

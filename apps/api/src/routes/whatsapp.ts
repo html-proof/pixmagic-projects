@@ -29,6 +29,7 @@ import {
   syncTemplates,
 } from "@app/core";
 import {
+  allows,
   KIND_INFO,
   kindSetting,
   libraryTemplate,
@@ -82,9 +83,10 @@ export function whatsappRoutes(app: App, deps: Deps) {
   /** Everything the WhatsApp overview needs, in one call. */
   app.get(base, async (c) => {
     const { ws, storeId } = c.req.param();
-    const access = await requireWorkspace(c, deps, ws, "dashboard:read");
+    const access = await requireWorkspace(c, deps, ws, ["marketing.campaigns", "integrations.status"]);
     const store = await waStore(ws, storeId);
-    const manage = access.role === "owner" || access.role === "admin";
+    // The manual connection's verify token: for whoever may manage the connection.
+    const manage = allows(access.access, "integrations.manage");
     const weekAgo = new Date(Date.now() - 7 * 86_400_000);
     const data = await withTenant(ws, async (tx) => {
       const [settings, conn, templates, byStatus, failed, rules, openCarts, pendingReviews, campaigns, scheduled] = await Promise.all([
@@ -157,7 +159,7 @@ export function whatsappRoutes(app: App, deps: Deps) {
    */
   app.post(`${base}/embedded`, async (c) => {
     const { ws, storeId } = c.req.param();
-    const access = await requireWorkspace(c, deps, ws, "stores:manage");
+    const access = await requireWorkspace(c, deps, ws, "integrations.manage");
     const store = await waStore(ws, storeId);
     await limit(deps.coord, `rl:wa-connect:${storeId}`, LIMITS.waConnect);
     // The ids come from Meta's message to the page; when that never arrived, they're asked of Meta below.
@@ -225,7 +227,7 @@ export function whatsappRoutes(app: App, deps: Deps) {
    */
   app.post(`${base}/manual/discover`, async (c) => {
     const { ws, storeId } = c.req.param();
-    await requireWorkspace(c, deps, ws, "stores:manage");
+    await requireWorkspace(c, deps, ws, "integrations.manage");
     await waStore(ws, storeId);
     await limit(deps.coord, `rl:wa-connect:${storeId}`, LIMITS.waConnect);
     const { accessToken } = z.object({ accessToken: accessTokenSchema }).parse(await body(c));
@@ -240,7 +242,7 @@ export function whatsappRoutes(app: App, deps: Deps) {
    */
   app.post(`${base}/manual`, async (c) => {
     const { ws, storeId } = c.req.param();
-    const access = await requireWorkspace(c, deps, ws, "stores:manage");
+    const access = await requireWorkspace(c, deps, ws, "integrations.manage");
     const store = await waStore(ws, storeId);
     await limit(deps.coord, `rl:wa-connect:${storeId}`, LIMITS.waConnect);
     const input = z
@@ -263,7 +265,7 @@ export function whatsappRoutes(app: App, deps: Deps) {
   /** Register the number with the Cloud API (it can't send until it is). */
   app.post(`${base}/register`, async (c) => {
     const { ws, storeId } = c.req.param();
-    const access = await requireWorkspace(c, deps, ws, "stores:manage");
+    const access = await requireWorkspace(c, deps, ws, "integrations.manage");
     await waStore(ws, storeId);
     await limit(deps.coord, `rl:wa-connect:${storeId}`, LIMITS.waConnect);
     const { pin } = z.object({ pin: z.string().regex(/^\d{6}$/, "must be 6 digits") }).parse(await body(c));
@@ -280,7 +282,7 @@ export function whatsappRoutes(app: App, deps: Deps) {
    */
   app.post(`${base}/pin`, async (c) => {
     const { ws, storeId } = c.req.param();
-    const access = await requireWorkspace(c, deps, ws, "stores:manage");
+    const access = await requireWorkspace(c, deps, ws, "integrations.manage");
     await waStore(ws, storeId);
     await limit(deps.coord, `rl:wa-pin:${storeId}`, LIMITS.waRefresh);
     const conn = await systemDb.whatsappConnection.findUnique({ where: { storeId } });
@@ -295,7 +297,7 @@ export function whatsappRoutes(app: App, deps: Deps) {
   /** Read the number's status and the templates from Meta again. */
   app.post(`${base}/refresh`, async (c) => {
     const { ws, storeId } = c.req.param();
-    await requireWorkspace(c, deps, ws, "stores:manage");
+    await requireWorkspace(c, deps, ws, "integrations.manage");
     await waStore(ws, storeId);
     await limit(deps.coord, `rl:wa-refresh:${storeId}`, LIMITS.waRefresh);
     const conn = await systemDb.whatsappConnection.findUnique({ where: { storeId } });
@@ -311,7 +313,7 @@ export function whatsappRoutes(app: App, deps: Deps) {
 
   app.delete(base, async (c) => {
     const { ws, storeId } = c.req.param();
-    const access = await requireWorkspace(c, deps, ws, "stores:manage");
+    const access = await requireWorkspace(c, deps, ws, "integrations.manage");
     await waStore(ws, storeId);
     const conn = await systemDb.whatsappConnection.findUnique({ where: { storeId } });
     if (!conn || conn.workspaceId !== ws) throw new HttpError(404, "Not connected", "not_connected");
@@ -324,7 +326,7 @@ export function whatsappRoutes(app: App, deps: Deps) {
 
   app.get(`${base}/settings`, async (c) => {
     const { ws, storeId } = c.req.param();
-    await requireWorkspace(c, deps, ws, "dashboard:read");
+    await requireWorkspace(c, deps, ws, "marketing.campaigns");
     await waStore(ws, storeId);
     const [settings, templates] = await withTenant(ws, (tx) =>
       Promise.all([tx.whatsappSettings.findUnique({ where: { storeId } }), tx.whatsappTemplate.findMany({ where: { storeId }, orderBy: [{ name: "asc" }, { language: "asc" }] })]),
@@ -385,7 +387,7 @@ export function whatsappRoutes(app: App, deps: Deps) {
 
   app.get(`${base}/templates`, async (c) => {
     const { ws, storeId } = c.req.param();
-    await requireWorkspace(c, deps, ws, "dashboard:read");
+    await requireWorkspace(c, deps, ws, "marketing.campaigns");
     await waStore(ws, storeId);
     const templates = await withTenant(ws, (tx) => tx.whatsappTemplate.findMany({ where: { storeId, workspaceId: ws }, orderBy: [{ name: "asc" }, { language: "asc" }] }));
     return c.json({ templates: templates.map(publicTemplate) });
@@ -485,7 +487,7 @@ export function whatsappRoutes(app: App, deps: Deps) {
 
   app.get(`${base}/analytics`, async (c) => {
     const { ws, storeId } = c.req.param();
-    await requireWorkspace(c, deps, ws, "dashboard:read");
+    await requireWorkspace(c, deps, ws, "marketing.campaigns");
     const store = await waStore(ws, storeId);
     const days = z.coerce.number().int().min(1).max(180).default(30).parse(c.req.query("days") ?? undefined);
     const since = new Date(Date.now() - days * 86_400_000);

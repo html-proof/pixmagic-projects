@@ -1,9 +1,19 @@
 import { withTenant, type Store, type WhatsappConnection, type WhatsappTemplate } from "@app/db";
 import { manualVerifyToken } from "@app/core";
-import { templateShape, type TemplateComponent } from "@app/shared";
-import { HttpError } from "../context.js";
+import { allows, templateShape, type TemplateComponent } from "@app/shared";
+import { HttpError, requireWorkspace, type Ctx, type Deps } from "../context.js";
 
 /** Helpers shared by the merchant WhatsApp routes (whatsapp.ts, whatsappOps.ts). */
+
+/**
+ * WhatsApp's conversations, orders, carts and reviews carry customers' names and phone numbers:
+ * besides seeing WhatsApp (campaigns) they need "View contact information".
+ */
+export async function requireWaContacts(c: Ctx, deps: Deps, ws: string) {
+  const a = await requireWorkspace(c, deps, ws, "marketing.campaigns");
+  if (!allows(a.access, "customers.contact")) throw new HttpError(403, "You don't have permission to see customers' contact details", "forbidden");
+  return a;
+}
 
 export async function waStore(ws: string, storeId: string): Promise<Store> {
   const store = await withTenant(ws, (tx) => tx.store.findFirst({ where: { id: storeId, workspaceId: ws } }));

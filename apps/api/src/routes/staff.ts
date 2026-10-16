@@ -31,7 +31,7 @@ import {
   updateStaffSettings,
 } from "@app/core";
 import { EMPLOYEE_STATUSES, EMPLOYMENT_TYPES, PAY_CYCLES, staffAccess } from "@app/shared/staff";
-import { body, HttpError, requireUser, type Deps } from "../context.js";
+import { ACCESS_REVOKED, body, HttpError, requireUser, type Deps } from "../context.js";
 import type { App } from "../app.js";
 import { limit, LIMITS } from "../rateLimit.js";
 import { daySchema, idSchema, pageSchema, requireStaff } from "../staffAccess.js";
@@ -125,7 +125,8 @@ export function staffRoutes(app: App, deps: Deps) {
     const user = await requireUser(c, deps);
     const m = await systemDb.membership.findUnique({ where: { workspaceId_userId: { workspaceId: ws, userId: user.id } } });
     if (!m) throw new HttpError(404, "Not found", "not_found");
-    const a = staffAccess(m.role, m.staffRole);
+    if (m.revokedAt) throw new HttpError(403, "Your access to this workspace has been revoked.", ACCESS_REVOKED);
+    const a = staffAccess(m.role, m.staffRole, m.permissions);
     return c.json({ permissions: a.permissions, scope: a.scope, staffRole: a.staffRole, role: m.role });
   });
 

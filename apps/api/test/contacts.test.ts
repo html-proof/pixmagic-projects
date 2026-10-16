@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { encryptTokenFields, type FetchLike } from "@app/core";
 import { systemDb } from "@app/db";
 import { clean, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
+import { LEGACY_GRANTS } from "@app/shared";
 
 /**
  * GET .../contacts: shoppers' contact details, read live from Shopify and never stored.
@@ -171,7 +172,7 @@ describe("customer contacts", () => {
 
     // Viewers see the dashboard but not shoppers' personal details.
     const me = await systemDb.user.findFirstOrThrow({ where: { email: "owner@x.com" } });
-    await systemDb.membership.update({ where: { workspaceId_userId: { workspaceId: ws, userId: me.id } }, data: { role: "viewer" } });
+    await systemDb.membership.update({ where: { workspaceId_userId: { workspaceId: ws, userId: me.id } }, data: { role: "viewer", permissions: [...LEGACY_GRANTS.viewer] } });
     expect((await get(store.id)).statusCode).toBe(403);
   });
 });

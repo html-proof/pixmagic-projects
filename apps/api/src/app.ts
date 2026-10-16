@@ -31,6 +31,8 @@ import { emailContentRoutes } from "./routes/emailContent.js";
 import { emailActivityRoutes } from "./routes/emailActivity.js";
 import { emailPublicRoutes } from "./routes/emailPublic.js";
 import { privacyRoutes } from "./routes/privacy.js";
+import { teamRoutes } from "./routes/team.js";
+import { exportRoutes } from "./routes/exports.js";
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 /**
@@ -192,5 +194,7 @@ export function buildApp(deps: Deps): App {
   emailActivityRoutes(app, deps);
   emailPublicRoutes(app, deps);
   privacyRoutes(app, deps);
+  teamRoutes(app, deps);
+  exportRoutes(app, deps);
   return app;
 }

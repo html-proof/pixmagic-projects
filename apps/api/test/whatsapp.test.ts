@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { systemDb, type Prisma } from "@app/db";
 import { cancelScheduled, ensurePlatformWebhook, newLinkToken, waEncrypt, type FetchLike } from "@app/core";
-import { sha256Hex, signMetaBody, TEMPLATE_LIBRARY, whatsappConfigSchema } from "@app/shared";
+import { LEGACY_GRANTS, sha256Hex, signMetaBody, TEMPLATE_LIBRARY, whatsappConfigSchema } from "@app/shared";
 import { clean, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
 
 /**
@@ -324,7 +324,7 @@ describe("connecting WhatsApp", () => {
     expect(await systemDb.auditLog.count({ where: { action: "whatsapp.pin_viewed" } })).toBe(1);
 
     const me = await systemDb.user.findFirstOrThrow({ where: { email: "o@shop.test" } });
-    await systemDb.membership.update({ where: { workspaceId_userId: { workspaceId: o.ws, userId: me.id } }, data: { role: "analyst" } });
+    await systemDb.membership.update({ where: { workspaceId_userId: { workspaceId: o.ws, userId: me.id } }, data: { role: "analyst", permissions: [...LEGACY_GRANTS.analyst] } });
     expect((await ctx.app.inject({ method: "POST", url: `${o.base}/pin`, headers: o.headers })).statusCode).toBe(403);
   });
 
@@ -405,7 +405,7 @@ describe("tenant isolation", () => {
   it("viewers can look but not change, and API keys are read-only", async () => {
     const o = await owner();
     const v = await signIn(ctx, "v", "v@shop.test");
-    await systemDb.membership.create({ data: { workspaceId: o.ws, userId: v.user.id, role: "viewer" } });
+    await systemDb.membership.create({ data: { workspaceId: o.ws, userId: v.user.id, role: "viewer", permissions: [...LEGACY_GRANTS.viewer] } });
     expect((await ctx.app.inject({ method: "GET", url: o.base, headers: v.headers })).statusCode).toBe(200);
     expect((await ctx.app.inject({ method: "GET", url: `${o.base}/messages`, headers: v.headers })).statusCode).toBe(403);
     expect((await ctx.app.inject({ method: "PUT", url: `${o.base}/settings`, headers: v.headers, payload: {} })).statusCode).toBe(403);

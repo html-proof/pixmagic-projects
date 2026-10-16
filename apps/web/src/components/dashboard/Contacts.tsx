@@ -251,12 +251,12 @@ function ContactRow({
             {abandoned && abandoned.items.length > 0 && (
               <p className="truncate text-xs text-muted">{abandoned.items.map((it) => `${it.title}${it.quantity > 1 ? ` ×${it.quantity}` : ""}`).join(" · ")}</p>
             )}
-            {customer && <p className="text-xs text-muted">{customer.orders > 0 ? `${plural(customer.orders, "order")} so far` : "No orders yet"}</p>}
+            {customer && customer.orders !== null && <p className="text-xs text-muted">{customer.orders > 0 ? `${plural(customer.orders, "order")} so far` : "No orders yet"}</p>}
           </div>
         </div>
         <div className="text-right">
           {abandoned && <p className="font-semibold tabular-nums">{fmtMoney(abandoned.total, abandoned.currency)}</p>}
-          {customer && customer.orders > 0 && <p className="font-semibold tabular-nums">{fmtMoney(customer.spent, customer.currency ?? undefined)}</p>}
+          {customer && customer.orders !== null && customer.orders > 0 && <p className="font-semibold tabular-nums">{fmtMoney(customer.spent, customer.currency ?? undefined)}</p>}
           <p className="text-xs text-muted">{abandoned ? `left ${when ?? ""}` : `joined ${when ?? ""}`}</p>
         </div>
       </div>

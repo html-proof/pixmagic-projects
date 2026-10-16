@@ -3,6 +3,7 @@ import { systemDb } from "@app/db";
 import { createMessage, unsubscribeToken, type FetchLike } from "@app/core";
 import { clean, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
 import { dohResponse, fakeSmtp, idToken, isDoh, json, type FakeSmtp } from "../../../test-support/emailFakes.js";
+import { LEGACY_GRANTS } from "@app/shared";
 
 /**
  * Email integrations through the API: who may do what (tenant isolation, roles), connecting Google,
@@ -123,7 +124,7 @@ describe("tenant isolation and roles", () => {
   it("lets analysts read activity but not change anything; viewers see neither activity nor credentials controls", async () => {
     const analyst = await signIn(ctx, "email-analyst", "analyst@shopmail.com");
     const viewer = await signIn(ctx, "email-viewer", "viewer@shopmail.com");
-    await systemDb.membership.createMany({ data: [{ workspaceId: ws, userId: analyst.user.id, role: "analyst" }, { workspaceId: ws, userId: viewer.user.id, role: "viewer" }] });
+    await systemDb.membership.createMany({ data: [{ workspaceId: ws, userId: analyst.user.id, role: "analyst", permissions: [...LEGACY_GRANTS.analyst] }, { workspaceId: ws, userId: viewer.user.id, role: "viewer", permissions: [...LEGACY_GRANTS.viewer] }] });
     expect((await api("GET", "/messages", undefined, analyst.headers)).statusCode).toBe(200);
     expect((await api("POST", "/templates", { name: "x", subject: "x" }, analyst.headers)).statusCode).toBe(403);
     expect((await api("POST", "/smtp/connections", {}, analyst.headers)).statusCode).toBe(403);
