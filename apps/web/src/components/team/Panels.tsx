@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useId, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { Copy, X } from "lucide-react";
+import { Copy, Mail, MessageCircle, X } from "lucide-react";
 import { isAccessKey, isRestrictedRole } from "@app/shared/access";
 import type { Role } from "@app/shared/roles";
 import { overlay, useToast } from "@/components/AppUi";
@@ -55,7 +55,7 @@ export function SidePanel({ title, sub, onClose, children, footer, testId }: { t
 /** Why the email didn't go out, for the inviter (the API's `emailProblem`). */
 export function emailProblemText(problem: string | undefined): string {
   return problem === "not_allowed"
-    ? "Our email service isn't allowed to send to this address yet: Amazon is still reviewing bizinsights' sending, and until it approves, email reaches only addresses it has verified."
+    ? "Our email service can't send to this address yet: until Amazon enables bizinsights' sending for every address, email reaches only addresses verified with it."
     : "Sending the email failed just now.";
 }
 
@@ -67,7 +67,7 @@ function HandOverLink({ email, url, problem }: { email: string; url: string; pro
       <span className="block" data-testid="email-problem">
         The invitation for {email} is saved, but it wasn&apos;t emailed. {emailProblemText(problem)}
       </span>
-      <span className="mt-1 block">Send them this link yourself (by chat or your own email). It works once, until the invitation expires:</span>
+      <span className="mt-1 block">Send them this link yourself. Opening it shows them the shared dashboard straight away, with no sign-up or password:</span>
       <span className="mt-2 flex gap-2">
         <input aria-label={`Invitation link for ${email}`} className="input w-full font-mono text-xs" readOnly value={url} onFocus={(e) => e.currentTarget.select()} data-testid="invite-link" />
         <button
@@ -83,6 +83,19 @@ function HandOverLink({ email, url, problem }: { email: string; url: string; pro
         >
           <Copy aria-hidden className="h-4 w-4" />
         </button>
+      </span>
+      <span className="mt-2 flex flex-wrap gap-2">
+        <a className="btn-secondary px-3 text-xs" href={`https://wa.me/?text=${encodeURIComponent(`Here's the dashboard I've shared with you: ${url}`)}`} target="_blank" rel="noopener noreferrer">
+          <MessageCircle aria-hidden className="h-4 w-4" />
+          Send on WhatsApp
+        </a>
+        <a
+          className="btn-secondary px-3 text-xs"
+          href={`mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent("A dashboard I've shared with you")}&body=${encodeURIComponent(`Open this link to see it, no sign-up needed:\n\n${url}`)}`}
+        >
+          <Mail aria-hidden className="h-4 w-4" />
+          Send from my email
+        </a>
       </span>
     </Alert>
   );

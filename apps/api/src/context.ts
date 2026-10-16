@@ -83,6 +83,7 @@ const SESSION_REVOKED = new Set(["NotAuthorizedException", "UserNotFoundExceptio
  * checked again on a later request.
  */
 async function revalidate(c: Ctx, deps: Deps, s: SessionClaims): Promise<"ok" | "verified" | "revoked" | "skipped"> {
+  if (s.m === "link") return "skipped";
   const rt = readRefreshToken(c, s);
   if (rt === undefined) return "skipped";
   if (rt === null) return "revoked";
@@ -107,8 +108,23 @@ async function revalidate(c: Ctx, deps: Deps, s: SessionClaims): Promise<"ok" | 
   }
 }
 
-/** Resolve the signed-in user from our session cookie (session.ts). */
-export async function loadUser(c: Ctx, deps: Deps): Promise<User | null> {
+/**
+ * Resolve the signed-in user from our session cookie (session.ts). A session opened from an
+ * invitation link counts only where the caller says it may (`shared`): elsewhere it is no
+ * sign-in at all, so nothing account-wide (connecting a store, an OAuth callback) acts on it.
+ */
+export async function loadUser(c: Ctx, deps: Deps, opts: { shared?: boolean } = {}): Promise<User | null> {
+  const user = await loadSessionUser(c, deps);
+  if (user && sharedWorkspace(c) && !opts.shared) return null;
+  return user;
+}
+
+/** The one workspace this request's session may open, when it was opened from an invitation link. */
+export function sharedWorkspace(c: Ctx): string | null {
+  return c.get("session")?.ws ?? null;
+}
+
+async function loadSessionUser(c: Ctx, deps: Deps): Promise<User | null> {
   const cached = c.get("user");
   if (cached) return cached;
   const s = readSession(getCookie(c, SESSION_COOKIE));
@@ -174,9 +190,33 @@ export async function accessTokenFor(c: Ctx, deps: Deps): Promise<string> {
   }
 }
 
-export async function requireUser(c: Ctx, deps: Deps): Promise<User> {
-  const user = await loadUser(c, deps);
+/**
+ * The signed-in user. A session opened from an invitation link is refused (403 `shared_link`)
+ * unless `shared` is passed: it opens the shared workspace's pages, not the account (profile,
+ * password, other workspaces, connecting stores). requireWorkspace and requireStaff pass it, and
+ * also check the workspace is the shared one.
+ */
+export async function requireUser(c: Ctx, deps: Deps, opts: { shared?: boolean } = {}): Promise<User> {
+  const user = await loadUser(c, deps, { shared: true });
   if (!user) throw new HttpError(401, "Sign in required", "unauthenticated");
+  if (sharedWorkspace(c) && !opts.shared) {
+    throw new HttpError(403, "You opened bizinsights from a shared link, which opens only the dashboard shared with you. Sign in to your own account to do this.", SHARED_LINK);
+  }
+  return user;
+}
+
+/** Refused because the session was opened from an invitation link, which can't do this (the web app offers to sign in). */
+export const SHARED_LINK = "shared_link";
+
+/**
+ * The signed-in member for a request about `workspaceId`: any session, including one opened from
+ * an invitation link as long as it is for this workspace (another one answers 404, like any
+ * workspace someone doesn't belong to).
+ */
+export async function requireMemberUser(c: Ctx, deps: Deps, workspaceId: string): Promise<User> {
+  const user = await requireUser(c, deps, { shared: true });
+  const ws = sharedWorkspace(c);
+  if (ws && ws !== workspaceId) throw new HttpError(404, "Not found", "not_found");
   return user;
 }
 
@@ -221,7 +261,7 @@ export async function requireWorkspace(c: Ctx, deps: Deps, workspaceId: string, 
     addLogContext({ workspaceId, apiKeyId: key.id });
     return { workspaceId, role: "viewer", user: null, access: API_KEY_ACCESS, staffRole: null };
   }
-  const user = await requireUser(c, deps);
+  const user = await requireMemberUser(c, deps, workspaceId);
   const m = await systemDb.membership.findUnique({
     where: { workspaceId_userId: { workspaceId, userId: user.id } },
   });

@@ -8,6 +8,7 @@ import {
   INVITE_DAYS_MAX,
   INVITE_MESSAGE_MAX,
   invitationForLink,
+  normalizeEmail,
   loadMember,
   logger,
   loadTeam,
@@ -20,7 +21,6 @@ import {
   revokeTeamInvitation,
   TEAM_SORTS,
   updateMemberAccess,
-  TeamError,
   updateTeamInvitation,
   type TeamActor,
 } from "@app/core";
@@ -41,12 +41,10 @@ import {
   roleAllowsKind,
 } from "@app/shared";
 import { STAFF_ROLE_HELP, STAFF_ROLE_LABEL, STAFF_ROLES, staffAccess } from "@app/shared/staff";
-import { systemDb } from "@app/db";
-import { body, clientIp, HttpError, loadUser, requireAppOrigin, requireUser, requireWorkspace, type Ctx, type Deps, type WorkspaceAccess } from "../context.js";
-import { CognitoError, CognitoUnavailableError, unguessablePassword } from "../cognito.js";
-import { resolveUser } from "../identity.js";
-import { newSession, setSessionCookies } from "../session.js";
-import { cognitoFailure } from "./auth.js";
+import { systemDb, type User } from "@app/db";
+import { getCookie } from "hono/cookie";
+import { body, clientIp, loadUser, requireAppOrigin, requireUser, requireWorkspace, retiredSessionKey, sharedWorkspace, type Ctx, type Deps, type WorkspaceAccess } from "../context.js";
+import { newLinkSession, readSession, SESSION_COOKIE, setSessionCookies } from "../session.js";
 import type { App } from "../app.js";
 import { limit, LIMITS } from "../rateLimit.js";
 
@@ -280,68 +278,52 @@ export function teamRoutes(app: App, deps: Deps) {
   });
 
   /**
-   * "Open dashboard" on the invitation page: the link is the invitee's way in.
+   * Opening an invitation link: the link is the invitee's way in, with no account, password or
+   * sign-up. The invitation page calls this as soon as it opens.
    *
-   * - Someone new (no bizinsights account for the invited address): an account is made for them in
-   *   Cognito (a random password nobody knows; later they sign in with an emailed code, or set a
-   *   password with "Forgot password"), they are signed in on this device, and the invitation is
-   *   accepted. No sign-up form, no password.
-   * - Signed in already as the invited address: accepted, as /invitations/accept.
-   * - An existing account for the address, not signed in: the invitation is accepted for that
-   *   account, but the link does NOT sign it in. That account may hold other workspaces, and a
-   *   link that was forwarded or intercepted must not open them; they sign in once as usual.
-   * - Signed in as someone else: refused, so the page can offer to switch.
+   * - Not signed in: this browser gets a session for the shared workspace only (session.ts
+   *   newLinkSession). It opens what the owner shared and nothing else: not the person's own
+   *   account, not their other workspaces, so a forwarded link exposes no more than the invitation
+   *   itself. The first opening accepts the invitation; a user record is made for an address new to
+   *   us (signing up later with that address links to it).
+   * - Signed in already as the invited person: accepted, and they carry on in their own session.
+   * - Signed in as someone else: refused (409 `signed_in_as_other`), and the page offers to open it
+   *   as the invited person instead (`switch`), which signs this browser out of the other account.
    *
-   * Single use like any invitation. A sign-in, so only from our own pages (login CSRF).
+   * After the first opening the link keeps working (another device, a session that ended) for
+   * LINK_REOPEN_DAYS, while the member's access lasts. Opening it makes a session, so only from
+   * our own pages (login CSRF).
    */
+  const openSchema = tokenSchema.extend({ switch: z.boolean().optional() });
   app.post("/invitations/open", async (c) => {
     requireAppOrigin(c);
     await limit(deps.coord, `rl:invite-open:${clientIp(c)}`, LIMITS.inviteAcceptIp);
-    const { token } = tokenSchema.parse(await body(c));
+    const { token, switch: switchAccount } = openSchema.parse(await body(c));
     const inv = await invitationForLink(token);
     if (!inv) return c.json({ error: "invalid_invite", message: "This invitation link isn't valid. Check you opened the whole link, or ask for a new invitation." }, 400);
-    if (inv.status !== "pending") return c.json({ error: "invalid_invite", message: "This invitation can no longer be used.", detail: { status: inv.status } }, 400);
+    if (inv.status !== "pending" && !inv.reopenUserId) {
+      return c.json({ error: "invalid_invite", message: "This invitation can no longer be used.", detail: { status: inv.status } }, 400);
+    }
     await limit(deps.coord, `rl:invite-open:${inv.id}`, LIMITS.inviteAcceptUser);
 
-    const current = await loadUser(c, deps);
-    if (current) {
-      if (current.email.toLowerCase() !== inv.email) {
-        throw new HttpError(409, `You're signed in as ${current.email}, but this invitation is for another address. Sign out, then open the link again.`, "signed_in_as_other");
-      }
-      return c.json({ ...(await acceptTeamInvitation(current, token, clientIp(c), { viaLink: true })), signedIn: true });
+    const current = await loadUser(c, deps, { shared: true });
+    const isInvitee = (u: User) => (inv.reopenUserId ? u.id === inv.reopenUserId : normalizeEmail(u.email) === inv.email);
+    if (current && isInvitee(current)) {
+      if (inv.status === "pending") await acceptTeamInvitation(current, token, clientIp(c), { viaLink: true });
+      // A link session for another workspace becomes one for this workspace; a full sign-in stays as it is.
+      if (sharedWorkspace(c) && sharedWorkspace(c) !== inv.workspaceId) setSessionCookies(c, newLinkSession({ userId: current.id, workspaceId: inv.workspaceId }));
+      return c.json({ workspaceId: inv.workspaceId, signedIn: true });
     }
+    if (current && !switchAccount) {
+      return c.json({ error: "signed_in_as_other", message: `You're signed in as ${current.email}. This invitation is for someone else.`, detail: { signedInAs: current.email } }, 409);
+    }
+    if (current) await retireSession(c, deps);
 
-    const existing = await systemDb.user.findUnique({ where: { email: inv.email } });
-    const inCognito = existing ? null : await deps.auth.adminGetUser(inv.email).catch((err: unknown) => {
-      if (err instanceof CognitoUnavailableError) throw new HttpError(503, "We can't open your invitation right now. Please try again in a moment.", "auth_unavailable");
-      throw err;
-    });
-    if (existing || inCognito) {
-      // Accepted for their account; they sign in to it once, as usual.
-      const workspaceId = existing ? (await acceptTeamInvitation(existing, token, clientIp(c), { viaLink: true })).workspaceId : inv.workspaceId;
-      return c.json({ workspaceId, joined: !!existing, signedIn: false, accountExists: true });
-    }
-
-    // Someone new: an account, a session on this device, and the invitation accepted.
-    const password = unguessablePassword();
-    let user;
-    try {
-      await deps.auth.adminCreateUser({ email: inv.email, emailVerified: true, password });
-      const signedIn = await deps.auth.passwordSignIn(inv.email, password);
-      if (!("tokens" in signedIn)) throw new CognitoError("UnexpectedChallenge", signedIn.challenge);
-      const claims = await deps.auth.verifyIdToken(signedIn.tokens.idToken);
-      user = await resolveUser(claims, { ip: clientIp(c) });
-      const accepted = await acceptTeamInvitation(user, token, clientIp(c), { viaLink: true });
-      setSessionCookies(c, newSession({ userId: user.id, sub: claims.sub, username: claims.username, method: claims.method, authTime: claims.authTime }), signedIn.tokens.refreshToken);
-      logger.info({ event: "session_created", userId: user.id, method: "invitation_link", ip: clientIp(c) }, "signed in from an invitation link");
-      return c.json({ ...accepted, signedIn: true });
-    } catch (err) {
-      if (err instanceof CognitoError && err.code === "UsernameExistsException") {
-        throw new HttpError(409, "An account with this email address already exists. Sign in, then open the invitation again.", "account_exists");
-      }
-      if (err instanceof HttpError || err instanceof TeamError) throw err;
-      throw cognitoFailure(err, "invitation link sign-in");
-    }
+    const user = inv.reopenUserId ? await systemDb.user.findUniqueOrThrow({ where: { id: inv.reopenUserId } }) : await userForInvitee(inv.email);
+    if (inv.status === "pending") await acceptTeamInvitation(user, token, clientIp(c), { viaLink: true });
+    setSessionCookies(c, newLinkSession({ userId: user.id, workspaceId: inv.workspaceId }));
+    logger.info({ event: "session_created", userId: user.id, workspaceId: inv.workspaceId, method: "invitation_link", reopened: inv.status !== "pending", ip: clientIp(c) }, "opened from an invitation link");
+    return c.json({ workspaceId: inv.workspaceId, signedIn: true });
   });
 
   app.post("/invitations/accept", async (c) => {
@@ -351,4 +333,30 @@ export function teamRoutes(app: App, deps: Deps) {
     const { token } = tokenSchema.parse(await body(c));
     return c.json(await acceptTeamInvitation(user, token, clientIp(c)));
   });
+}
+
+/**
+ * The user an invitation link signs in for an address: theirs if we know it, else a new one with no
+ * sign-in of its own yet (signing up or in with Google later, with this address verified, links to
+ * it: identity.ts resolveUser).
+ */
+async function userForInvitee(email: string): Promise<User> {
+  const known = await systemDb.user.findUnique({ where: { email } });
+  if (known) return known;
+  try {
+    return await systemDb.user.create({ data: { email, emailVerified: false } });
+  } catch (err) {
+    // Opened twice at once: the other request made it.
+    if ((err as { code?: string })?.code === "P2002") return systemDb.user.findUniqueOrThrow({ where: { email } });
+    throw err;
+  }
+}
+
+/** Sign this browser's current session out (switching to the invited person), as POST /auth/logout does. */
+async function retireSession(c: Ctx, deps: Deps) {
+  const s = readSession(getCookie(c, SESSION_COOKIE));
+  if (!s) return;
+  await deps.coord.put(retiredSessionKey(s.sid), "1", Math.max(60, Math.ceil((s.exp - Date.now()) / 1000))).catch((err: unknown) => logger.error({ err }, "could not retire the session being switched from"));
+  c.set("user", undefined);
+  c.set("session", undefined);
 }

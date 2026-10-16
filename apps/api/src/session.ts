@@ -38,7 +38,8 @@ export interface SessionClaims {
   sub: string;
   /** Its Cognito user name (refreshes and admin calls address it by that). */
   un: string;
-  m: SignInMethod;
+  /** "link": opened from a Team & Access invitation link (no Cognito sign-in; see `ws`). */
+  m: SignInMethod | "link";
   /** Issued at / expires (ms). */
   iat: number;
   exp: number;
@@ -51,6 +52,12 @@ export interface SessionClaims {
    * exp, whichever comes first). Absent: they last until exp, as every session did before.
    */
   keep?: false;
+  /**
+   * Set on a session opened from an invitation link: the one workspace it opens. Nothing else of
+   * the account is reachable with it (context.ts: requireUser refuses it unless a route allows a
+   * shared session, requireWorkspace answers 404 for any other workspace).
+   */
+  ws?: string;
 }
 
 const signingKey = () => createHmac("sha256", env().SESSION_SECRET).update("session-cookie-v1").digest();
@@ -94,6 +101,27 @@ export function newSession(
     at: input.authTime,
     ck: now,
     ...(input.keep === false && { keep: false as const }),
+  };
+}
+
+/**
+ * A session for someone who opened an invitation link (POST /invitations/open): this workspace
+ * only, no Cognito identity behind it (so nothing to re-check there; the membership is checked on
+ * every request instead). Opening the link again starts a new one.
+ */
+export function newLinkSession(input: { userId: string; workspaceId: string }, now = Date.now()): SessionClaims {
+  return {
+    v: 1,
+    sid: randomBytes(18).toString("base64url"),
+    uid: input.userId,
+    sub: "",
+    un: "",
+    m: "link",
+    iat: now,
+    exp: now + SESSION_TTL_MS,
+    at: Math.floor(now / 1000),
+    ck: now,
+    ws: input.workspaceId,
   };
 }
 

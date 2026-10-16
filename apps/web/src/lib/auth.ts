@@ -145,10 +145,11 @@ export function useRedirectIfSignedIn(router: { replace(href: string): void }, e
     const check = async () => {
       try {
         // /auth/whoami: a visitor is `user: null`, not a 401 the browser would log as an error.
-        const me = await api<{ user: { emailVerified: boolean } | null }>("/auth/whoami");
+        const me = await api<{ user: { emailVerified: boolean } | null; shared?: unknown }>("/auth/whoami");
         // Verified only: /verify-email sends an unverified session here, and sending it back into
-        // the app would bounce it straight back.
-        if (me.user?.emailVerified && !stopped) router.replace(afterSignIn());
+        // the app would bounce it straight back. Nor a dashboard opened from a shared link: signing
+        // in to the account is what they came here to do.
+        if (me.user?.emailVerified && !me.shared && !stopped) router.replace(afterSignIn());
         return true;
       } catch (e) {
         return !isTransient(e);
