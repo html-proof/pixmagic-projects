@@ -19,6 +19,8 @@ export interface TeamRow {
   since: string;
   invitedBy: string | null;
   userId?: string;
+  /** Members: when they last signed in (null: never, or before sign-ins were recorded). */
+  lastSignInAt?: string | null;
   accessChangedAt?: string | null;
   fingerprint?: string;
   expiresAt?: string;
@@ -33,6 +35,8 @@ export interface TeamSummary {
   activeMembers: number;
   pendingInvitations: number;
   endedInvitations: number;
+  /** Each count at the end of each of the last 30 days, oldest first. */
+  trend?: Record<"totalMembers" | "activeMembers" | "pendingInvitations" | "endedInvitations", number[]>;
 }
 
 export interface TeamPage {

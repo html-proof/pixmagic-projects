@@ -46,8 +46,8 @@ export function AnimatedNumber({ value, format, duration = 900 }: { value: numbe
   );
 }
 
-/** A tiny trend line with a soft fill under it, drawn in when it appears. */
-export function Sparkline({ values, className = "", tone = "accent" }: { values: number[]; className?: string; tone?: "accent" | "accent-2" }) {
+/** A tiny trend line with a soft fill under it, drawn in when it appears. `color` (any CSS colour) overrides `tone`. */
+export function Sparkline({ values, className = "", tone = "accent", color: stroke }: { values: number[]; className?: string; tone?: "accent" | "accent-2"; color?: string }) {
   const gid = useId().replace(/:/g, "");
   if (values.length < 2) return null;
   const W = 120;
@@ -57,7 +57,7 @@ export function Sparkline({ values, className = "", tone = "accent" }: { values:
   const x = (i: number) => (i / (values.length - 1)) * W;
   const y = (v: number) => 3 + (1 - (v - min) / (max - min || 1)) * (H - 6);
   const line = values.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join("");
-  const color = tone === "accent" ? "var(--accent)" : "var(--accent-2)";
+  const color = stroke ?? (tone === "accent" ? "var(--accent)" : "var(--accent-2)");
   return (
     <svg viewBox={`0 0 ${W} ${H}`} className={className} preserveAspectRatio="none" aria-hidden="true">
       <defs>

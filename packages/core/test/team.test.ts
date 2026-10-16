@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { accessFingerprint, accessSummary, checkAssignment, cleanInviteMessage, maskEmail, queryTeam, teamInvitationEmail, TeamError, type TeamRow } from "../src/team/index.js";
+import { accessFingerprint, accessSummary, checkAssignment, cleanInviteMessage, maskEmail, queryTeam, teamInvitationEmail, TeamError, teamTrend, TREND_DAYS, type TeamRow } from "../src/team/index.js";
 
 describe("the invitation email", () => {
   const base = {
@@ -110,5 +110,38 @@ describe("helpers", () => {
     expect(paged).toMatchObject({ total: 4, pages: 2, page: 2 });
     expect(paged.rows).toHaveLength(1);
     expect(queryTeam(rows, { pageSize: 3, page: 9 }).page).toBe(2);
+  });
+});
+
+describe("the team page's trend lines", () => {
+  const now = new Date("2026-10-16T12:00:00Z");
+  const daysAgo = (n: number) => new Date(now.getTime() - n * 86_400_000);
+
+  it("rebuilds each count, day by day, from the dates on record", () => {
+    const t = teamTrend(
+      [
+        { createdAt: daysAgo(100), revokedAt: null },
+        { createdAt: daysAgo(10), revokedAt: daysAgo(3) },
+      ],
+      [
+        { createdAt: daysAgo(8), acceptedAt: daysAgo(6), revokedAt: null, expiresAt: daysAgo(1) },
+        { createdAt: daysAgo(5), acceptedAt: null, revokedAt: null, expiresAt: daysAgo(2) },
+        { createdAt: daysAgo(1), acceptedAt: null, revokedAt: null, expiresAt: daysAgo(-6) },
+      ],
+      now,
+    );
+    for (const series of Object.values(t)) expect(series).toHaveLength(TREND_DAYS);
+    const at = (n: number) => TREND_DAYS - 1 - n;
+    expect(t.totalMembers[at(29)]).toBe(1);
+    expect(t.totalMembers[at(0)]).toBe(2);
+    expect(t.activeMembers[at(4)]).toBe(2);
+    expect(t.activeMembers[at(0)]).toBe(1);
+    // Day 7: the first invitation is waiting; day 4: it was accepted, the second one waits.
+    expect(t.pendingInvitations[at(7)]).toBe(1);
+    expect(t.pendingInvitations[at(4)]).toBe(1);
+    expect(t.endedInvitations[at(4)]).toBe(0);
+    // Today: the second one has expired, the third waits.
+    expect(t.pendingInvitations[at(0)]).toBe(1);
+    expect(t.endedInvitations[at(0)]).toBe(1);
   });
 });
