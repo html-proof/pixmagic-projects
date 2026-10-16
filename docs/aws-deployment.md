@@ -164,8 +164,10 @@ PixMagic store's webhooks, `GOOGLE_ADS_CLIENT_SECRET` for AdSense refreshes) set
 3. **Schedules on:** GitHub variable `AWS_SCHEDULES=on`, then the next Deploy to AWS (the merge of the
    Shopify URL change in step 4) turns them on.
 4. **Shopify:** `application_url`, `redirect_urls` and webhook `uri` in `shopify-app/shopify.app.toml`
-   and `shopify.app.pixmagic.toml` already name `https://bizinsights.io`: `shopify app deploy` and
-   `shopify app deploy --config pixmagic` (owner's Shopify login) make them live.
+   and `shopify.app.pixmagic.toml` already name `https://bizinsights.io`. The main app is already
+   live there (version `insights-13`, 2026-10-16; until then its "Continue with Shopify" finished on
+   the old workers.dev site). Left for the window: `shopify app deploy --config pixmagic` (needs
+   `SHOPIFY_APP_SECRET_PIXMAGIC` on AWS first, or its webhooks fail the signature check).
 5. **Old address forwards:** the same stand-in with `--var MOVE_PHASE:forward --var
    MOVED_TO:https://bizinsights.io`, deployed at 100%:
    pages and launches redirect to AWS; webhooks and pixel events are passed through unchanged.
@@ -243,8 +245,9 @@ Retiring it, on the owner's go-ahead, once AWS has been production for two quiet
 - **Provider secrets** not on this PC: META_APP_SECRET, GOOGLE_ADS_CLIENT_SECRET, WHATSAPP_APP_SECRET,
   WHATSAPP_WEBHOOK_VERIFY_TOKEN, SHOPIFY_APP_SECRET_PIXMAGIC (`put-secrets.mjs --set`).
 - **Custom domain**: done, bizinsights.io (above). Provider consoles still list the old addresses:
-  Google/Meta OAuth redirect URIs and Shopify's app URLs move to `https://bizinsights.io/api/...` with
-  the cutover (`shopify app deploy`, both configs).
+  Google/Meta OAuth redirect URIs and the PixMagic Shopify app's URLs move to
+  `https://bizinsights.io/api/...` with the cutover. The main Shopify app is already there
+  (`insights-13`); to undo that: `shopify app release --version insights-12 --config shopify.app.toml`.
 
 ## Cost (lean tier, US$/month, on-demand, approximate)
 
