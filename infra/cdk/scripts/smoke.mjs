@@ -93,8 +93,11 @@ if (app.CloudFrontDomain && app.CloudFrontDomain !== host) {
   for (const other of [app.CloudFrontDomain, `www.${host}`]) {
     await check(`${other} sends pages to ${host}`, async () => {
       const r = await get(`https://${other}/login?next=%2Fdashboard&x`);
-      const location = r.headers.get("location");
-      expect(r.status === 301 && location === `${base}/login?next=%2Fdashboard&x`, `status ${r.status}, location ${location}`);
+      const location = r.headers.get("location") ?? "";
+      // CloudFront hands the function the query as an object: values keep their encoding, not their order.
+      const params = (u) => [...new URL(u).searchParams].map((p) => p.join("=")).sort().join("&");
+      const same = location.startsWith(`${base}/login?`) && location.includes("next=%2Fdashboard") && params(location) === params(`${base}/login?next=%2Fdashboard&x`);
+      expect(r.status === 301 && same, `status ${r.status}, location ${location}`);
     });
   }
 }

@@ -210,7 +210,7 @@ describe("the viewer-request function", () => {
     expect(r.statusCode).toBeUndefined();
   });
 
-  it("sends page requests on other names to the domain, path and query exactly as received", () => {
+  it("sends page requests on other names to the domain, path and query parameters as received", () => {
     const querystring = { shop: { value: "a.myshopify.com" }, hmac: { value: "ab%2Bc" }, embedded: { value: "" }, id: { value: "1", multiValue: [{ value: "1" }, { value: "2" }] } };
     for (const host of ["d2mr8m2p1qkh58.cloudfront.net", "www.bizinsights.io", "WWW.BizInsights.io"]) {
       const r = run("bizinsights.io", { uri: "/api/shopify/launch", querystring, headers: { host: { value: host } } });

@@ -129,7 +129,7 @@ a hosted zone that isn't the registrar's nameservers would only be a second, ign
 - **One origin**: the session cookie, the CSRF check and every OAuth callback use APP_URL
   (`https://bizinsights.io`, set on the functions by the App stack). CloudFront answers on
   `bizinsights.io`, `www` and its own name; the viewer-request function sends GET/HEAD on the other two
-  to `https://bizinsights.io` with a 301 (path and query unchanged) and serves other methods where they
+  to `https://bizinsights.io` with a 301 (path and query parameters kept, order may change) and serves other methods where they
   arrive (webhooks and pixel events don't follow redirects).
 - **HSTS**: CloudFront's security headers send `max-age=31536000; includeSubDomains`, so every name
   under bizinsights.io must serve HTTPS.
