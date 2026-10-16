@@ -134,6 +134,7 @@ model Workspace {
   emailRules         EmailAutomationRule[]
   emailEvents        EmailBusinessEvent[]
   emailSuppressions  EmailSuppression[]
+  dataRequests       DataRequest[]
   emailIngestKeys    EmailIngestKey[]
 
   @@map("workspaces")
@@ -2012,4 +2013,35 @@ model EmailIngestKey {
 
   @@index([workspaceId])
   @@map("email_ingest_keys")
+}
+
+/// A customer's request, through Shopify, for the data bizinsights holds about them (the mandatory
+/// customers/data_request webhook). Shopify asks the app to give that data to the store owner, so
+/// the owner downloads it from Settings → Privacy requests: the export is compiled from the live
+/// records when they do (packages/core/src/privacy.ts), and this row keeps only what identifies
+/// the customer, as the same keyed hashes the records carry, never their email or number.
+model DataRequest {
+  id               String    @id @default(cuid())
+  workspaceId      String    @map("workspace_id")
+  storeId          String    @map("store_id")
+  /// Shopify's id for the request (data_request.id); a redelivery records nothing new.
+  shopifyRequestId String    @map("shopify_request_id")
+  /// The Shopify customer id, as Shopify sent it.
+  customerId       String?   @map("customer_id")
+  /// orders.customer_key / whatsapp_contacts.customer_key for this customer.
+  customerKey      String?   @map("customer_key")
+  /// whatsapp_contacts.phone_hash for the number Shopify sent.
+  phoneHash        String?   @map("phone_hash")
+  /// email_messages.recipient_hash for the address Shopify sent.
+  emailHash        String?   @map("email_hash")
+  /// Shopify order ids the request names.
+  ordersRequested  String[]  @default([]) @map("orders_requested")
+  receivedAt       DateTime  @default(now()) @map("received_at")
+  /// When someone in the workspace last downloaded the export.
+  downloadedAt     DateTime? @map("downloaded_at")
+  workspace        Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, shopifyRequestId])
+  @@index([workspaceId, receivedAt])
+  @@map("data_requests")
 }

@@ -282,15 +282,86 @@ describe("webhook processing", () => {
     expect((await systemDb.store.findUniqueOrThrow({ where: { id: store.id } })).status).toBe("uninstalled");
   });
 
+  /** The workspace gets an owner, as one a merchant has claimed. */
+  async function claim(workspaceId: string) {
+    const user = await systemDb.user.create({ data: { email: `owner-${workspaceId}@x.com`, emailVerified: true } });
+    await systemDb.membership.create({ data: { workspaceId, userId: user.id, role: "owner" } });
+    return user;
+  }
+
   it("GDPR: customers/redact unlinks the customer, shop/redact purges data", async () => {
-    await makeStore();
+    const store = await makeStore();
+    await claim(store.workspaceId);
     await webhook("orders/create", order());
     await webhook("customers/redact", { customer: { id: 7 } });
     expect((await systemDb.order.findFirstOrThrow()).customerKey).toBeNull();
+    // Shopify sends shop/redact 48 hours after the app is uninstalled.
+    await webhook("app/uninstalled", {});
     await webhook("shop/redact", { shop_domain: "s.myshopify.com" });
     expect(await systemDb.order.count()).toBe(0);
     expect(await systemDb.orderLineItem.count()).toBe(0);
     expect(await systemDb.auditLog.count({ where: { action: { startsWith: "gdpr." } } })).toBe(2);
+  });
+
+  it("GDPR: shop/redact erases the store itself, so a later install can't join the old account", async () => {
+    const store = await makeStore();
+    await claim(store.workspaceId);
+    await webhook("orders/create", order());
+    await systemDb.syncJob.create({ data: { workspaceId: store.workspaceId, storeId: store.id, kind: "orders" } });
+    await systemDb.alert.create({ data: { workspaceId: store.workspaceId, storeId: store.id, severity: "warning", code: "x", message: "x" } });
+    await webhook("app/uninstalled", {});
+    await webhook("shop/redact", { shop_domain: "s.myshopify.com" });
+    expect(await systemDb.store.findUnique({ where: { id: store.id } })).toBeNull();
+    expect(await systemDb.syncJob.count({ where: { storeId: store.id } })).toBe(0);
+    expect(await systemDb.alert.count({ where: { storeId: store.id } })).toBe(0);
+    expect(await systemDb.webhookEvent.count({ where: { storeId: store.id } })).toBe(0);
+    // The account keeps its workspace and its record of what happened.
+    expect(await systemDb.workspace.findUnique({ where: { id: store.workspaceId } })).not.toBeNull();
+    expect(await systemDb.auditLog.count({ where: { workspaceId: store.workspaceId, action: "gdpr.shop_redacted" } })).toBe(1);
+  });
+
+  it("GDPR: shop/redact for a store nobody claimed removes its workspace too", async () => {
+    const store = await makeStore();
+    await webhook("app/uninstalled", {});
+    await webhook("shop/redact", { shop_domain: "s.myshopify.com" });
+    expect(await systemDb.store.count()).toBe(0);
+    expect(await systemDb.workspace.findUnique({ where: { id: store.workspaceId } })).toBeNull();
+  });
+
+  it("GDPR: shop/redact for a store installed again since erases nothing", async () => {
+    const store = await makeStore();
+    await claim(store.workspaceId);
+    await webhook("orders/create", order());
+    // Uninstalled, then installed again before Shopify's 48-hour shop/redact arrived.
+    await webhook("shop/redact", { shop_domain: "s.myshopify.com" });
+    const after = await systemDb.store.findUniqueOrThrow({ where: { id: store.id } });
+    expect(after.accessTokenEnc).toBeTruthy();
+    expect(await systemDb.order.count()).toBe(1);
+    expect(await systemDb.auditLog.count({ where: { action: "gdpr.shop_redact_skipped" } })).toBe(1);
+  });
+
+  it("GDPR: customers/data_request is recorded once, owners are told, and redaction removes it", async () => {
+    const store = await makeStore();
+    const owner = await claim(store.workspaceId);
+    await webhook("orders/create", order());
+    const request = { shop_domain: "s.myshopify.com", customer: { id: 7, email: "Pii@Example.com", phone: "+61 412 345 678" }, orders_requested: [1001], data_request: { id: 9999 } };
+    await webhook("customers/data_request", request);
+    // Shopify delivers at least once: a redelivery (another webhook id) records nothing new.
+    await webhook("customers/data_request", request);
+    const rows = await systemDb.dataRequest.findMany();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ workspaceId: store.workspaceId, storeId: store.id, shopifyRequestId: "9999", customerId: "7", ordersRequested: ["1001"] });
+    // Only keyed hashes are kept, never the address or the number.
+    expect(rows[0]!.customerKey).toBe((await systemDb.order.findFirstOrThrow()).customerKey);
+    expect(rows[0]!.emailHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(rows[0]!.phoneHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(JSON.stringify(rows[0])).not.toMatch(/pii@example\.com|61412345678|\+61/i);
+    expect(await systemDb.alert.count({ where: { storeId: store.id, code: "privacy_request", resolvedAt: null } })).toBe(1);
+    expect(mailer.sent.filter((m) => m.to === owner.email && m.subject.includes("privacy_request"))).toHaveLength(1);
+    expect(await systemDb.auditLog.count({ where: { action: "gdpr.customer_data_request" } })).toBe(1);
+
+    await webhook("customers/redact", { customer: { id: 7 } });
+    expect(await systemDb.dataRequest.count()).toBe(0);
   });
 });
 
@@ -1181,6 +1252,7 @@ describe("catalog and stock pipeline", () => {
     await webhook("products/create", restProduct());
     await webhook("orders/create", order());
     expect(await systemDb.productVariant.count()).toBe(2);
+    await webhook("app/uninstalled", {});
     await webhook("shop/redact", { shop_domain: "s.myshopify.com" });
     expect(await systemDb.productVariant.count()).toBe(0);
     expect(await systemDb.product.count()).toBe(0);
