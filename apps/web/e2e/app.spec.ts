@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import pg from "pg";
 import { E2E_ENV } from "../playwright.config";
-import { confirmSignUp, fillSignUp, latestCode, logIn, PASSWORD, signedLaunchUrl, signedWebhook, signUp, stubShopify, uniqueEmail, verifyEmail } from "./helpers";
+import { confirmSignUp, fillSignUp, latestCode, logIn, PASSWORD, signedLaunchUrl, signedWebhook, signOutFromMenu, signUp, stubShopify, uniqueEmail, verifyEmail } from "./helpers";
 
 /** The app's own alerts (Next.js also renders an empty role="alert" route announcer). */
 const alert = (page: import("@playwright/test").Page) => page.locator('[role="alert"]:not(#__next-route-announcer__)');
@@ -140,7 +140,7 @@ test("signing up checks the form, confirms the emailed code, refuses a taken ema
   await page.goto("/dashboard");
   await page.reload();
   await expect(page).toHaveURL(/\/dashboard/);
-  await expect(page.getByRole("button", { name: /sign out/i })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Account menu" })).toBeVisible();
   const user = await db.query("SELECT u.firebase_uid, i.method FROM users u JOIN auth_identities i ON i.user_id = u.id WHERE u.email = $1", [email]);
   expect(user.rows).toEqual([{ firebase_uid: null, method: "password" }]);
 
@@ -158,7 +158,7 @@ test("signing in with a password survives a refresh; signing out ends it", async
   await signUp(page, email);
   await createWorkspace(page, "Login Co");
   await page.goto("/dashboard");
-  await page.getByRole("button", { name: /sign out/i }).click();
+  await signOutFromMenu(page);
   await expect(page).toHaveURL(/\/login/);
   await expect(page.getByText("You've been signed out.")).toBeVisible();
 
@@ -180,7 +180,7 @@ test("signing in with a password survives a refresh; signing out ends it", async
   await expect(page).toHaveURL(/\/settings\/profile/);
 
   // Signing out ends this session; the dashboard is closed to it afterwards.
-  await page.getByRole("button", { name: /sign out/i }).click();
+  await signOutFromMenu(page);
   await expect(page).toHaveURL(/\/login/);
   await page.goto("/dashboard");
   await expect(page).toHaveURL(/\/login/);

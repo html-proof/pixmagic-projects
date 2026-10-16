@@ -6,7 +6,7 @@
   --border: #e4e4e0;
   --text: #1b1b18;
   --muted: #6b6b63;
-  --accent: #2f6f4f;
+  --accent: #18794e;
   --accent-ink: #ffffff;
   /* Warm partner to the green: highlights, gradients, the second series. */
   --accent-2: #c9662a;
@@ -14,7 +14,12 @@
   --warn: #a15c07;
   --good: #1f7a46;
   --info: #2f62a3;
-  --chart: #2f6f4f;
+  --chart: #18794e;
+  /* Status as a filled shape (health bars, stock bars, status dots): brighter than the text
+     colours above, which have to stay readable as text. Always next to a label. */
+  --fill-danger: #e5484d;
+  --fill-warn: #f5b40a;
+  --fill-good: #22a05b;
   /* Sales breakdown charts: one blue ramp for ordinary → strong → best days (validated as an
      ordinal ramp against the surface, light and dark), and orange for the running total. */
   --viz-tier-1: #6da7ec;
@@ -48,6 +53,9 @@
     --good: #6fcf97;
     --info: #7aa7e6;
     --chart: #6fbf94;
+    --fill-danger: #f2555a;
+    --fill-warn: #f0b429;
+    --fill-good: #3dbb77;
     --viz-tier-1: #1c5cab;
     --viz-tier-2: #3987e5;
     --viz-tier-3: #86b6ef;
@@ -73,6 +81,9 @@
   --color-warn: var(--warn);
   --color-good: var(--good);
   --color-info: var(--info);
+  --color-fill-danger: var(--fill-danger);
+  --color-fill-warn: var(--fill-warn);
+  --color-fill-good: var(--fill-good);
 }
 
 body {
@@ -460,6 +471,14 @@ body {
     animation-name: sheet-in-side;
   }
 }
+/* The navigation drawer on phones: slides in from the left edge. */
+@keyframes drawer-in {
+  from { opacity: 0; transform: translateX(-32px); }
+  to { opacity: 1; transform: none; }
+}
+@utility animate-drawer {
+  animation: drawer-in 0.24s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
 @utility animate-ping-soft {
   animation: ping-soft 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
 }
@@ -503,12 +522,15 @@ body {
     --border: #d9d9d4;
     --text: #1b1b18;
     --muted: #55554e;
-    --accent: #2f6f4f;
+    --accent: #18794e;
     --accent-2: #c9662a;
     --danger: #b42318;
     --warn: #a15c07;
     --good: #1f7a46;
     --info: #2f62a3;
+    --fill-danger: #e5484d;
+    --fill-warn: #f5b40a;
+    --fill-good: #22a05b;
     --viz-tier-1: #6da7ec;
     --viz-tier-2: #2a78d6;
     --viz-tier-3: #184f95;

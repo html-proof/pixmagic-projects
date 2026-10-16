@@ -1,7 +1,8 @@
 "use client";
 import { useEffect, useState } from "react";
+import { CalendarDays, ChevronDown } from "lucide-react";
 import { customRangeProblem, isDay, localDay, MIN_CUSTOM_DAY, type CustomRangeProblem, type DateRange } from "@app/shared/dates";
-import { fmtRange, fmtSpan } from "./format";
+import { fmtDay, fmtRange, fmtSpan } from "./format";
 
 export const PRESETS = [
   { id: "today", label: "Today" },
@@ -125,48 +126,88 @@ export function useDateRange(timeZone: string) {
 
 export type DateRangeState = ReturnType<typeof useDateRange>;
 
+/** What the numbers on the page are for, once they have loaded. */
+export type Shown = { range: DateRange; previous: DateRange; timezone: string } | null;
+
+/** "Compared with 18 Aug – 16 Sep" for a tooltip, once the numbers have loaded. */
+export const comparedWith = (shown: Shown) => (shown ? `Compared with ${fmtSpan(shown.previous.from, shown.previous.to)}` : undefined);
+
 /**
- * One "Dates" menu rather than a row of seven buttons: fewer things to read before the numbers.
- * "Pick dates…" shows the two date boxes.
+ * The dates menu: a pill naming the dates, with the native select laid over it, so it opens the
+ * system's own list and keyboards and screen readers get a real select. `label` names it for them;
+ * the page has one "Dates" menu, and the summary card repeats it as "Period".
  */
-export function DateRangeBar({
+export function DateRangeSelect({
   r,
   shown,
+  id,
+  label,
+  size = "md",
 }: {
   r: DateRangeState;
-  /** What the numbers on the page are for, once they have loaded. */
-  shown: { range: DateRange; previous: DateRange; timezone: string } | null;
+  shown: Shown;
+  id: string;
+  label: string;
+  size?: "sm" | "md";
 }) {
+  const text =
+    r.preset !== "custom" ? PRESETS.find((p) => p.id === r.preset)!.label : r.from && r.to && !r.problem ? fmtRange(r.from, r.to) : "Pick dates";
   return (
-    <div className="space-y-1.5">
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        <label htmlFor="date-range" className="text-sm font-medium">Dates</label>
-        <select
-          id="date-range"
-          className="input w-auto cursor-pointer py-1.5 font-medium"
-          value={r.preset}
-          onChange={(e) => r.choose(e.target.value as PresetId, shown?.range)}
-        >
-          {PRESETS.map((p) => (
-            <option key={p.id} value={p.id}>{p.id === "custom" ? "Pick dates…" : p.label}</option>
-          ))}
-        </select>
-        {r.preset === "custom" && (
-          <span className="flex flex-wrap items-center gap-2 text-sm">
-            <input aria-label="From" type="date" min={MIN_CUSTOM_DAY} max={r.today} className="input w-auto py-1.5" value={r.from} onChange={(e) => r.setFrom(e.target.value)} />
-            to
-            <input aria-label="To" type="date" min={MIN_CUSTOM_DAY} max={r.today} className="input w-auto py-1.5" value={r.to} onChange={(e) => r.setTo(e.target.value)} />
-          </span>
-        )}
-      </div>
+    <div
+      className={`relative inline-flex min-w-0 items-center gap-2 rounded-xl border border-border bg-surface font-medium shadow-[var(--shadow)] transition-colors focus-within:ring-2 focus-within:ring-accent hover:border-accent/40 ${
+        size === "sm" ? "h-9 pl-3 pr-8 text-xs" : "h-10 pl-3.5 pr-10 text-sm"
+      }`}
+      title={shown ? `${fmtSpan(shown.range.from, shown.range.to)}. ${comparedWith(shown)}. Days follow the store's time zone (${shown.timezone}).` : undefined}
+    >
+      {size === "md" && <CalendarDays aria-hidden className="h-4 w-4 shrink-0 text-muted" strokeWidth={1.8} />}
+      <span aria-hidden className="truncate">{text}</span>
+      <ChevronDown aria-hidden className={`pointer-events-none absolute h-4 w-4 text-muted ${size === "sm" ? "right-2.5" : "right-3.5"}`} />
+      <label htmlFor={id} className="sr-only">{label}</label>
+      <select
+        id={id}
+        className="absolute inset-0 h-full w-full cursor-pointer appearance-none opacity-0"
+        value={r.preset}
+        onChange={(e) => r.choose(e.target.value as PresetId, shown?.range)}
+      >
+        {PRESETS.map((p) => (
+          <option key={p.id} value={p.id}>{p.id === "custom" ? "Pick dates…" : p.label}</option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+/** With "Pick dates…" chosen: the two date boxes, and what is wrong with them while they don't make a range yet. */
+export function CustomDates({ r }: { r: DateRangeState }) {
+  if (r.preset !== "custom") return null;
+  return (
+    <div className="flex flex-col items-end gap-1.5">
+      <span className="flex flex-wrap items-center justify-end gap-2 text-sm">
+        <input aria-label="From" type="date" min={MIN_CUSTOM_DAY} max={r.today} className="input w-auto py-1.5" value={r.from} onChange={(e) => r.setFrom(e.target.value)} />
+        to
+        <input aria-label="To" type="date" min={MIN_CUSTOM_DAY} max={r.today} className="input w-auto py-1.5" value={r.to} onChange={(e) => r.setTo(e.target.value)} />
+      </span>
       {r.problem && (
         <p className={`text-xs ${r.problem === "incomplete" ? "text-muted" : "text-warn"}`} role="status">{CUSTOM_HINT[r.problem]}</p>
       )}
-      {shown && (
-        <p className="text-xs text-muted" title={`Days follow the store's time zone (${shown.timezone}).`}>
-          Showing {fmtSpan(shown.range.from, shown.range.to)}, compared with {fmtSpan(shown.previous.from, shown.previous.to)}.
-        </p>
-      )}
     </div>
   );
+}
+
+/** "in the last 30 days", "today", "between 1 Mar and 8 Mar 2026": the dates, for the end of a sentence. */
+export function periodWords(r: DateRangeState, shown: Shown): string {
+  switch (r.preset) {
+    case "today":
+      return "today";
+    case "yesterday":
+      return "yesterday";
+    case "mtd":
+      return "this month";
+    case "lastmonth":
+      return "last month";
+    case "custom":
+      return shown ? (shown.range.from === shown.range.to ? `on ${fmtDay(shown.range.from)}` : `from ${fmtSpan(shown.range.from, shown.range.to)}`) : "in the dates you picked";
+    default:
+      return `in the ${PRESETS.find((p) => p.id === r.preset)!.label.toLowerCase()}`;
+  }
 }

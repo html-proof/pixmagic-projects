@@ -106,7 +106,7 @@ Where a new piece of code goes:
 ## Frontend (`apps/web`)
 
 ```
-src/app/            routes (App Router). (app)/ is the signed-in shell: AppProvider + top bar.
+src/app/            routes (App Router). (app)/ is the signed-in shell: AppProvider + AppShell (top bar, sidebar).
                     portal/ (employee self-service) and join/ (employee invitations) sit outside it:
                     employees aren't workspace members. Staff Management: docs/staff.md.
 src/components/     UI. dashboard/, whatsapp/, email/, staff/, landing/ per area; app-wide pieces at the

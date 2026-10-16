@@ -39,8 +39,8 @@ export interface SalesOverview {
     shipping: number;
   };
   /** The same figures for the period before (as many days, immediately before). */
-  previous: { grossSales: number; netSales: number; orders: number; averageOrderValue: number | null };
-  deltas: { netSales: number | null; orders: number | null; averageOrderValue: number | null; grossSales: number | null };
+  previous: { grossSales: number; netSales: number; orders: number; units: number; averageOrderValue: number | null };
+  deltas: { netSales: number | null; orders: number | null; averageOrderValue: number | null; grossSales: number | null; units: number | null };
   /** Every day of the range, quiet days as zero. */
   series: SalesDay[];
   /** This calendar year by month, whatever the range. */

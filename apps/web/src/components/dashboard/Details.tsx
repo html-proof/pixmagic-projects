@@ -1,4 +1,5 @@
 "use client";
+import Link from "next/link";
 import type { ReactNode } from "react";
 import { bestEntryPage, biggestDropOff, dropOffSection } from "@app/shared/journey";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
@@ -520,6 +521,13 @@ export function TopicContents({
     : topic === "discounts" && m.discount_codes ? <DiscountsDetail ov={ov} currency={currency} />
     : topic === "customers" && (m.customers || contactsOn) ? <CustomersDetail ov={ov} contactsOn={contactsOn} />
     : topic === "orders" && m.recent_orders ? <OrdersDetail ov={ov} currency={currency} />
+    // The sidebar's Marketing opens this before any ad account is connected: say where that's done.
+    : topic === "ads" ? (
+      <p className="text-sm text-muted">
+        No ad accounts are connected to this store yet. Connect Meta Ads or Google Ads in{" "}
+        <Link href="/settings/ads" className="font-medium text-accent underline">Settings → Advertising</Link> and their results show up here.
+      </p>
+    )
     : <p className="text-sm text-muted">There&apos;s nothing to show here for this store yet.</p>;
   return (
     <>
