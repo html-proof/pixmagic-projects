@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   ACCESS_KEYS,
   ACCESS_PERMISSIONS,
+  addPermission,
   allows,
   checkGrants,
   grantedKeys,
@@ -11,6 +12,7 @@ import {
   modulesOf,
   redactContact,
   redactOverview,
+  removePermission,
   RESTRICTED_ROLES,
   ROLE_TEMPLATES,
   seesModule,
@@ -69,6 +71,16 @@ describe("checkGrants", () => {
     expect(checkGrants("manager", ["integrations.status", "integrations.manage"]).ok).toBe(true);
     expect(checkGrants("admin", ["analytics.sales"])).toMatchObject({ ok: false, problem: { code: "not_restricted" } });
     expect(checkGrants("admin", [])).toEqual({ ok: true, keys: [] });
+  });
+
+  it("the editor ticks what a permission sits inside, and unticks what sits inside it", () => {
+    expect([...addPermission([], "customers.contact")].sort()).toEqual(["customers.contact", "customers.list"]);
+    expect([...addPermission(["analytics.sales"], "finance.refunds")].sort()).toEqual(["analytics.sales", "finance.refunds"]);
+    expect([...addPermission([], "staff.manage")].sort()).toEqual(["staff.manage", "staff.team", "staff.timesheets"]);
+    expect([...removePermission(["customers.list", "customers.contact", "customers.orders", "products.view"], "customers.list")]).toEqual(["products.view"]);
+    expect([...removePermission(["staff.team", "staff.timesheets", "staff.manage"], "staff.timesheets")]).toEqual(["staff.team"]);
+    // Whatever the editor makes, checkGrants accepts.
+    expect(checkGrants("custom", [...addPermission(addPermission([], "marketing.attribution"), "products.prices")]).ok).toBe(true);
   });
 
   it("returns the keys sorted in catalog order, without duplicates, and adds nothing", () => {

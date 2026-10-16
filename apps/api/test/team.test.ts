@@ -368,7 +368,8 @@ describe("exports and sensitive fields (scenarios 15-16)", () => {
     expect(res.statusCode).toBe(200);
     expect(res.headers["content-type"]).toContain("text/csv");
     expect(res.headers["content-disposition"]).toMatch(/attachment; filename="bizinsights-acme-sales-/);
-    const header = res.body.replace(/^﻿/, "").split("\r\n")[0];
+    const noBom = (text: string) => (text.charCodeAt(0) === 0xfeff ? text.slice(1) : text);
+    const header = noBom(res.body).split("\r\n")[0];
     // Refunds per day need "View refunds".
     expect(header).toBe('"Day","Orders","Net sales","Average order value"');
     expect(res.body).toContain(`"${today}",1,100`);
@@ -377,7 +378,7 @@ describe("exports and sensitive fields (scenarios 15-16)", () => {
     expect(await systemDb.auditLog.count({ where: { workspaceId: b.ws, action: "report.exported" } })).toBe(1);
     // The owner's has the refunds column.
     const owners = await call("GET", url, b.owner.headers);
-    expect(owners.body.replace(/^﻿/, "").split("\r\n")[0]).toBe('"Day","Orders","Net sales","Average order value","Refunds"');
+    expect(noBom(owners.body).split("\r\n")[0]).toBe('"Day","Orders","Net sales","Average order value","Refunds"');
   });
 
   it("leaves out financial detail, stock value and customers' personal data until each is granted", async () => {

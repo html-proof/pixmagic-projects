@@ -14,7 +14,7 @@ import { api, ApiError } from "./api";
 export function useStaff() {
   const { workspace, me } = useApp();
   return useMemo(() => {
-    const access = staffAccess(workspace.role, workspace.staffRole ?? null);
+    const access = staffAccess(workspace.role, workspace.staffRole ?? null, workspace.permissions);
     return {
       ws: workspace.id,
       workspaceName: workspace.name,

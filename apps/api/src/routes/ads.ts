@@ -57,7 +57,6 @@ import {
   MAX_CUSTOM_DAYS,
   META_REPORT_VIEWS,
   pkcePair,
-  can,
   randomToken,
   safeEqual,
   type AdProvider,

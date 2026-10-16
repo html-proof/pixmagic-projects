@@ -243,7 +243,8 @@ export function AreaList({ ov, currency, topics, onOpen }: { ov: Overview; curre
  * Every graded check at once: one bar split by status, and the count of each. Opens the full
  * report (the overview panel), which lists every check worst first.
  */
-export function HealthOverview({ ov, currency, onOpen }: { ov: Overview; currency: string; onOpen: (t: Topic) => void }) {
+/** `report`: whether the detailed report (the overview panel) is shared with this member ("View reports"). */
+export function HealthOverview({ ov, currency, onOpen, report = true }: { ov: Overview; currency: string; onOpen: (t: Topic) => void; report?: boolean }) {
   const c = countsOf(businessHealth(ov, currency));
   const parts = [
     { label: HEALTH.attention.label, n: c.attention, fill: "bg-fill-danger" },
@@ -262,10 +263,12 @@ export function HealthOverview({ ov, currency, onOpen }: { ov: Overview; currenc
             <p className="mt-0.5 text-sm text-muted">All key metrics at a glance.</p>
           </div>
         </div>
-        <button type="button" onClick={() => onOpen("overview")} className="btn-secondary h-9 shrink-0 px-3 text-xs shadow-[var(--shadow)]" data-testid="area-overview">
-          View detailed report
-          <ArrowRight aria-hidden className="h-3.5 w-3.5" />
-        </button>
+        {report && (
+          <button type="button" onClick={() => onOpen("overview")} className="btn-secondary h-9 shrink-0 px-3 text-xs shadow-[var(--shadow)]" data-testid="area-overview">
+            View detailed report
+            <ArrowRight aria-hidden className="h-3.5 w-3.5" />
+          </button>
+        )}
       </div>
       {c.graded > 0 ? (
         <>

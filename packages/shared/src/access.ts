@@ -353,6 +353,32 @@ export function checkGrants(role: Role, keys: readonly string[]): { ok: true; ke
   return { ok: true, keys: ACCESS_KEYS.filter((k) => set.has(k)) };
 }
 
+/**
+ * Ticking a permission in the editor: it comes with the ones it sits inside (ticking "View contact
+ * information" ticks "View customer list"), so what is shown is always a set `checkGrants` accepts.
+ */
+export function addPermission(keys: Iterable<string>, key: AccessKey): Set<AccessKey> {
+  const out = new Set<AccessKey>([...keys].filter(isAccessKey));
+  const add = (k: AccessKey) => {
+    if (out.has(k)) return;
+    out.add(k);
+    for (const r of accessPermission(k).requires ?? []) add(r);
+  };
+  add(key);
+  return out;
+}
+
+/** Unticking one: whatever sits inside it goes too (unticking "View customer list" unticks contact details). */
+export function removePermission(keys: Iterable<string>, key: AccessKey): Set<AccessKey> {
+  const out = new Set<AccessKey>([...keys].filter(isAccessKey));
+  const drop = (k: AccessKey) => {
+    if (!out.delete(k)) return;
+    for (const p of ACCESS_PERMISSIONS) if (p.requires?.includes(k)) drop(p.key);
+  };
+  drop(key);
+  return out;
+}
+
 export function describeGrantProblem(p: GrantProblem): string {
   switch (p.code) {
     case "unknown_permission":

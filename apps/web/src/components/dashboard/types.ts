@@ -203,7 +203,8 @@ export interface AbandonedContact extends ContactPerson {
   total: number;
   currency: string;
   items: Array<{ title: string; quantity: number }>;
-  recoveryUrl: string;
+  /** Null when this member may not see contact information (the link opens the shopper's own checkout). */
+  recoveryUrl: string | null;
 }
 
 export interface CustomerContact extends ContactPerson {

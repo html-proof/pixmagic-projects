@@ -27,7 +27,7 @@ import { actionError, api, useApi } from "@/lib/api";
 
 /** The current store's WhatsApp API base, and what this member may do. */
 export function useWa() {
-  const { workspace, store } = useApp();
+  const { workspace, store, allowed } = useApp();
   const role = workspace.role;
   return {
     ws: workspace.id,
@@ -36,7 +36,7 @@ export function useWa() {
     /** Change what customers receive: connect, settings, campaigns, automations, moderation. */
     manage: can(role, "stores:manage"),
     /** See customers' masked numbers, names and their messages. */
-    contact: can(role, "customers:contact"),
+    contact: allowed("customers.contact"),
   };
 }
 
