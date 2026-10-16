@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-vi.mock("@app/core", async (orig) => ({ ...(await orig<typeof import("@app/core")>()), env: () => ({ EMAIL_FROM: "bizinsights <no-reply@example.test>" }) }));
+vi.mock("@app/core/mailer", async (orig) => ({ ...(await orig<typeof import("@app/core/mailer")>()), env: () => ({ EMAIL_FROM: "bizinsights <no-reply@example.test>" }) }));
 
 const { sesMailer } = await import("../src/sesMailer.js");
 const { chooseMailer } = await import("../src/mailers.js");

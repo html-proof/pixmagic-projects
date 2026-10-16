@@ -39,6 +39,24 @@ Parameters:
     Type: String
     Default: ""
     Description: ARN of the SES identity (domain or address) SesFromEmail belongs to, in this region.
+  CustomEmailSenderState:
+    Type: String
+    AllowedValues: [ENABLED, DISABLED]
+    Default: DISABLED
+    Description: >-
+      ENABLED: Cognito hands its emails (codes, temporary passwords) to the Lambda function
+      CustomEmailSenderArn, which sends them through the app's own mail provider (Custom Email
+      Sender trigger; infra/cdk auth-stack.ts). DISABLED: Cognito sends them itself, as
+      EmailConfiguration says. A switch of its own because a condition can't read the ARNs when
+      they come from other resources.
+  CustomEmailSenderArn:
+    Type: String
+    Default: ""
+    Description: ARN of that Lambda function.
+  CustomEmailKmsKeyArn:
+    Type: String
+    Default: ""
+    Description: ARN of the symmetric KMS key Cognito encrypts the codes with for that function.
   RefreshTokenRotation:
     Type: String
     AllowedValues: [ENABLED, DISABLED]
@@ -50,6 +68,7 @@ Parameters:
 Conditions:
   HasGoogle: !Not [!Equals [!Ref GoogleClientId, ""]]
   HasSes: !Not [!Equals [!Ref SesFromEmail, ""]]
+  HasCustomEmailSender: !Equals [!Ref CustomEmailSenderState, ENABLED]
   HasExtraCallbacks: !Not [!Equals [!Join ["", !Ref ExtraCallbackUrls], ""]]
   IsProduction: !Equals [!Ref Environment, production]
 
@@ -97,12 +116,21 @@ Resources:
         SignInPolicy:
           AllowedFirstAuthFactors: !If [HasSes, [PASSWORD, EMAIL_OTP], [PASSWORD]]
       MfaConfiguration: "OFF"
+      # With the custom email sender below, Cognito sends no email itself: this, and the message
+      # template, only apply without it.
       EmailConfiguration: !If
         - HasSes
         - EmailSendingAccount: DEVELOPER
           From: !Ref SesFromEmail
           SourceArn: !Ref SesIdentityArn
         - EmailSendingAccount: COGNITO_DEFAULT
+      LambdaConfig: !If
+        - HasCustomEmailSender
+        - CustomEmailSender:
+            LambdaArn: !Ref CustomEmailSenderArn
+            LambdaVersion: V1_0
+          KMSKeyID: !Ref CustomEmailKmsKeyArn
+        - !Ref AWS::NoValue
       VerificationMessageTemplate:
         DefaultEmailOption: CONFIRM_WITH_CODE
         EmailSubject: Your bizinsights verification code

@@ -62,7 +62,7 @@ The database is unreachable from the functions. Queue consumers notice the same 
 3. A bad release: `node infra/cdk/scripts/rollback.mjs` (moves the `live` aliases back to the previous version, UI included). Do not roll back migrations; ship a forward fix.
 
 ### Users can't sign in
-1. AWS Health Dashboard (Cognito in the pool's region); CloudWatch → Cognito metrics for throttling. Codes not arriving: Cognito's default sender allows 50 emails a day (cognito-setup.md, section 1).
+1. AWS Health Dashboard (Cognito in the pool's region); CloudWatch → Cognito metrics for throttling. Codes not arriving: they go through the `cognito-email` function and Resend (aws-deployment.md, "Sign-in emails"; cognito-setup.md, "Codes don't arrive").
 2. `stale_sign_in` errors: client clock skew or a cached old ID token. They should sign in again.
 3. Sign-in codes are Cognito's emails (item 1), not ours: `EMAIL_FROM` and SES only carry invitations and alerts. Our rate limit is 3 codes / 15 min per email.
 

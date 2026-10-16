@@ -49,6 +49,14 @@ export interface EnvConfig {
   domain?: { name: string; redirects: string[]; certificateArn: string };
   /** Prefix of the Cognito domain, <prefix>.auth.<region>.amazoncognito.com (unique in the region). */
   cognitoDomainPrefix: string;
+  /**
+   * Cognito's own emails (sign-up and email-change codes, password resets, sign-in codes, temporary
+   * passwords) sent by the app's mail provider (Resend) from EMAIL_FROM, through the user pool's
+   * Custom Email Sender trigger (auth-stack.ts; its KMS key is ~US$1/month). Off: Cognito sends
+   * them itself (COGNITO_DEFAULT: from no-reply@verificationemail.com, 50 a day for the account).
+   * `-c cognitoEmail=off` (or `on`) overrides it for one deploy, e.g. while the provider is down.
+   */
+  cognitoCustomEmail: boolean;
   /** Where alarm and budget emails go (empty: the topic and budget exist without subscribers). */
   alertEmail: string;
   monthlyBudgetUsd: number;
@@ -84,6 +92,7 @@ const ENVIRONMENTS: Record<EnvConfig["name"], Omit<EnvConfig, "schedulesEnabled"
       certificateArn: "arn:aws:acm:us-east-1:605411278365:certificate/776966d7-d73c-4896-bd30-1568c9f7b3f7",
     },
     cognitoDomainPrefix: "insights-605411278365",
+    cognitoCustomEmail: true,
     monthlyBudgetUsd: 150,
     githubRepo: "html-proof/pixmagic-projects",
     githubOidcSubject: "repo:html-proof@68529971/pixmagic-projects@1413246051",
@@ -100,6 +109,8 @@ const ENVIRONMENTS: Record<EnvConfig["name"], Omit<EnvConfig, "schedulesEnabled"
     natGateways: 1,
     logRetentionDays: 30,
     cognitoDomainPrefix: "insights-staging-605411278365",
+    // A few test emails a day fit Cognito's own sender, without a second KMS key.
+    cognitoCustomEmail: false,
     monthlyBudgetUsd: 40,
     githubRepo: "html-proof/pixmagic-projects",
     githubOidcSubject: "repo:html-proof@68529971/pixmagic-projects@1413246051",
@@ -110,10 +121,12 @@ export function envConfig(context: (key: string) => unknown): EnvConfig {
   const name = String(context("env") ?? "production") as EnvConfig["name"];
   const base = ENVIRONMENTS[name];
   if (!base) throw new Error(`Unknown environment "${name}" (production or staging)`);
+  const cognitoEmail = context("cognitoEmail");
   return {
     ...base,
     schedulesEnabled: String(context("schedules") ?? "off") === "on",
     alertEmail: String(context("alertEmail") ?? ""),
+    cognitoCustomEmail: cognitoEmail === undefined || cognitoEmail === "" ? base.cognitoCustomEmail : String(cognitoEmail) === "on",
   };
 }
 
