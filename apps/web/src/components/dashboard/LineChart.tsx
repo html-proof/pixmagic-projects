@@ -1,13 +1,14 @@
 "use client";
 import { useId, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { fmtDay, fmtLongDay } from "./format";
-import { niceTicks, useWidth } from "./chartUtils";
+import { columnPath, columnWidth, niceTicks, useWidth } from "./chartUtils";
 
 // ---------------------------------------------------------------------------
 // A small multi-series line chart: one shared y-axis (never two), one line per series, a crosshair
 // that reads every series at the hovered day, arrow keys for the same, and a table for screen
 // readers. Identity is never colour alone: a legend names each line and short labels sit at the
-// line ends.
+// line ends. With `bars`, each day is a column instead (series side by side), and the hovered day
+// stays solid while the rest dim.
 // ---------------------------------------------------------------------------
 
 export interface LineSeries {
@@ -33,6 +34,7 @@ export function LineChart({
   area = false,
   grid = false,
   floor = 0,
+  bars = false,
 }: {
   days: string[];
   series: LineSeries[];
@@ -52,6 +54,8 @@ export function LineChart({
   grid?: boolean;
   /** The y-axis reaches at least this high, so an all-zero chart still has a scale. */
   floor?: number;
+  /** A column per day instead of a line (`area` is ignored). Today's column is lighter: the day isn't over. */
+  bars?: boolean;
 }) {
   const [ref, width] = useWidth();
   const [hover, setAt] = useState<number | null>(null);
@@ -67,18 +71,25 @@ export function LineChart({
   const top = ticks[ticks.length - 1] || 1;
   const plotW = Math.max(0, width - MARGIN.left - MARGIN.right - END_LABEL_W);
   const plotH = height - MARGIN.top - MARGIN.bottom;
-  const x = (i: number) => MARGIN.left + (n <= 1 ? plotW / 2 : (i / (n - 1)) * plotW);
+  // Bars sit in the middle of equal slots; line points run edge to edge.
+  const slot = n ? plotW / n : 0;
+  const barW = columnWidth(slot);
+  const x = (i: number) => MARGIN.left + (bars ? slot * (i + 0.5) : n <= 1 ? plotW / 2 : (i / (n - 1)) * plotW);
   const y = (v: number) => MARGIN.top + plotH - (v / top) * plotH;
 
   // About one date label per 70px, always including the first and last day.
   const every = Math.max(1, Math.ceil(n / Math.max(2, Math.floor(plotW / 70))));
   const xTicks = days.map((d, i) => ({ d, i })).filter(({ i }) => i % every === 0 || i === n - 1);
   if (xTicks.length > 1 && xTicks[xTicks.length - 1]!.i - xTicks[xTicks.length - 2]!.i < every / 2) xTicks.splice(xTicks.length - 2, 1);
+  // The first and last labels line up with the plot's edges: a line's ends, the outer bars' sides.
+  const tickX = (i: number) => x(i) + (bars && n > 1 ? (i === 0 ? -barW / 2 : i === n - 1 ? barW / 2 : 0) : 0);
 
   const pick = (e: PointerEvent<SVGRectElement>) => {
     const box = e.currentTarget.getBoundingClientRect();
     const px = e.clientX - box.left;
-    setAt(n <= 1 ? 0 : Math.max(0, Math.min(n - 1, Math.round((px / box.width) * (n - 1)))));
+    if (n <= 1) setAt(0);
+    else if (bars) setAt(Math.max(0, Math.min(n - 1, Math.floor((px / box.width) * n))));
+    else setAt(Math.max(0, Math.min(n - 1, Math.round((px / box.width) * (n - 1)))));
   };
   const keys = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
@@ -96,7 +107,7 @@ export function LineChart({
         <div className="mb-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
           {series.map((s) => (
             <span key={s.key} className="inline-flex items-center gap-1.5">
-              <span aria-hidden className="inline-block h-0.5 w-4 rounded" style={{ background: s.color }} />
+              <span aria-hidden className={bars ? "inline-block h-2.5 w-2.5 rounded-sm" : "inline-block h-0.5 w-4 rounded"} style={{ background: s.color }} />
               {s.label}
             </span>
           ))}
@@ -113,7 +124,7 @@ export function LineChart({
       >
         {width > 0 && (
           <svg width={width} height={height} aria-hidden="true" className="block touch-pan-y overflow-visible">
-            {area && (
+            {area && !bars && (
               <defs>
                 {series.map((s) => (
                   <linearGradient key={s.key} id={`${fillId}-${s.key}`} x1="0" x2="0" y1="0" y2="1">
@@ -136,11 +147,25 @@ export function LineChart({
               </g>
             ))}
             {xTicks.map(({ d, i }) => (
-              <text key={d} x={x(i)} y={height - 6} textAnchor={n <= 1 ? "middle" : i === 0 ? "start" : i === n - 1 ? "end" : "middle"} fontSize={11} fill="var(--muted)">
+              <text key={d} x={tickX(i)} y={height - 6} textAnchor={n <= 1 ? "middle" : i === 0 ? "start" : i === n - 1 ? "end" : "middle"} fontSize={11} fill="var(--muted)">
                 {d === today ? "Today" : fmtDay(d, { year: false })}
               </text>
             ))}
-            {area &&
+            {bars &&
+              series.map((s, j) => (
+                <g key={s.key} fill={s.color} className="animate-fade">
+                  {s.values.map((v, i) => {
+                    if (!v) return null;
+                    const w = barW / series.length;
+                    // A day with very little still shows a sliver, so it never reads as nothing.
+                    const yTop = Math.abs(y(v) - y(0)) < 2 ? y(0) - Math.sign(v) * 2 : y(v);
+                    const dim = (at !== null && at !== i ? 0.45 : 1) * (days[i] === today ? 0.45 : 1);
+                    return <path key={i} d={columnPath(x(i) - barW / 2 + j * w, w, y(0), yTop)} opacity={dim} style={{ transition: "opacity 120ms" }} />;
+                  })}
+                </g>
+              ))}
+            {!bars &&
+              area &&
               n > 1 &&
               series.map((s) => (
                 <path
@@ -150,22 +175,23 @@ export function LineChart({
                   className="animate-fade"
                 />
               ))}
-            {series.map((s) =>
-              n <= 1 ? (
-                <circle key={s.key} cx={x(0)} cy={y(s.values[0] ?? 0)} r={4} fill={s.color} stroke="var(--surface)" strokeWidth={2} />
-              ) : (
-                <polyline
-                  key={s.key}
-                  points={s.values.map((v, i) => `${x(i)},${y(v)}`).join(" ")}
-                  fill="none"
-                  stroke={s.color}
-                  strokeWidth={2}
-                  strokeLinejoin="round"
-                  strokeLinecap="round"
-                />
-              ),
-            )}
-            {at !== null && (
+            {!bars &&
+              series.map((s) =>
+                n <= 1 ? (
+                  <circle key={s.key} cx={x(0)} cy={y(s.values[0] ?? 0)} r={4} fill={s.color} stroke="var(--surface)" strokeWidth={2} />
+                ) : (
+                  <polyline
+                    key={s.key}
+                    points={s.values.map((v, i) => `${x(i)},${y(v)}`).join(" ")}
+                    fill="none"
+                    stroke={s.color}
+                    strokeWidth={2}
+                    strokeLinejoin="round"
+                    strokeLinecap="round"
+                  />
+                ),
+              )}
+            {at !== null && !bars && (
               <g>
                 <line x1={x(at)} x2={x(at)} y1={MARGIN.top} y2={MARGIN.top + plotH} stroke="var(--muted)" strokeWidth={1} strokeDasharray="3 3" />
                 {series.map((s) => (
@@ -193,7 +219,7 @@ export function LineChart({
             <div className="text-muted">{fmtLongDay(days[at]!)}{days[at] === today ? " · today so far" : ""}</div>
             {series.map((s) => (
               <div key={s.key} className="mt-1 flex items-center gap-2">
-                <span aria-hidden className="inline-block h-0.5 w-3 shrink-0 rounded" style={{ background: s.color }} />
+                <span aria-hidden className={bars ? "inline-block h-2.5 w-2.5 shrink-0 rounded-sm" : "inline-block h-0.5 w-3 shrink-0 rounded"} style={{ background: s.color }} />
                 <span className="font-semibold tabular-nums text-text">{format(s.values[at] ?? 0)}</span>
                 <span className="truncate text-muted">{s.label}</span>
               </div>

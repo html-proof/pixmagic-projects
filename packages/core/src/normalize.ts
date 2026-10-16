@@ -559,11 +559,11 @@ export function ordersQuery(includeCustomer: boolean): string {
  * busy store therefore takes hours however carefully it is paced. Shopify runs this query
  * server-side instead and hands back one JSONL file, which turns the same import into minutes.
  *
- * Three rules shape the text, all of them Shopify's:
+ * Four rules shape the text, all of them Shopify's:
  *
- *  - **No pagination arguments.** `first`/`after` are rejected, which is also why the nested
- *    truncation the paged path has to repair (`graphqlOrderOverflow`, `completeOrder`) simply
- *    does not arise here: every connection is returned whole.
+ *  - **No pagination arguments.** `first`/`after` are rejected, which is also why the line-item
+ *    truncation the paged path has to repair simply does not arise here: every connection is
+ *    returned whole.
  *  - **No GraphQL variables**, so the order filter is interpolated into the query string. It
  *    comes from the same `ordersSearch()` as the paged path, so both see the same window, and
  *    it is JSON-escaped on the way in.

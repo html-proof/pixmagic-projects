@@ -25,7 +25,7 @@ const workspaceCount = async (email: string) =>
   );
 
 test("unauthenticated users are sent to sign in, and come back to the page they opened", async ({ page }) => {
-  await page.goto("/settings/members");
+  await page.goto("/settings/notifications");
   await expect(page).toHaveURL(/\/login/);
   await expect(page.getByRole("heading", { name: "Welcome Back" })).toBeVisible();
   await expect(page.getByText("Sign in to your account to continue to your dashboard.")).toBeVisible();
@@ -54,10 +54,10 @@ test("unauthenticated users are sent to sign in, and come back to the page they 
   await signUp(page, email);
   await createWorkspace(page, "Deep Co");
   await page.context().clearCookies();
-  await page.goto("/settings/members");
+  await page.goto("/settings/notifications");
   await expect(page).toHaveURL(/\/login/);
   await logIn(page, email);
-  await expect(page).toHaveURL(/\/settings\/members/);
+  await expect(page).toHaveURL(/\/settings\/notifications/);
 });
 
 test("the homepage introduces bizinsights, and Log in and Sign up open their own pages", async ({ page }) => {

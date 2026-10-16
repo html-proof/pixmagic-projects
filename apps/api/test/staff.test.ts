@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { systemDb, withTenant } from "@app/db";
-import { sha256Hex } from "@app/shared";
+import { LEGACY_GRANTS, sha256Hex } from "@app/shared";
 import { clean, cookiesFrom, createWorkspace, ORIGIN, setup, signIn, teardown, type InjectResponse, type TestCtx } from "./helpers.js";
 
 /**
@@ -559,7 +559,7 @@ describe("access control and tenant isolation", () => {
     const { ws, h } = await org("Acme");
     const mk = async (uid: string, role: string, staffRole: string) => {
       const u = await signIn(ctx, uid, `${uid}@example.com`);
-      await systemDb.membership.create({ data: { workspaceId: ws, userId: u.user.id, role: role as "viewer", staffRole: staffRole as "hr_manager" } });
+      await systemDb.membership.create({ data: { workspaceId: ws, userId: u.user.id, role: role as "viewer", staffRole: staffRole as "hr_manager", permissions: role === "viewer" || role === "analyst" ? [...LEGACY_GRANTS[role as "viewer"]] : [] } });
       return u;
     };
     const hr = await mk("hr", "viewer", "hr_manager");
@@ -585,7 +585,7 @@ describe("access control and tenant isolation", () => {
 
     // A member with no staff role has no access at all.
     const viewer = await signIn(ctx, "viewer", "viewer@example.com");
-    await systemDb.membership.create({ data: { workspaceId: ws, userId: viewer.user.id, role: "viewer" } });
+    await systemDb.membership.create({ data: { workspaceId: ws, userId: viewer.user.id, role: "viewer", permissions: [...LEGACY_GRANTS.viewer] } });
     expect((await call("GET", `/workspaces/${ws}/staff/employees`, viewer.headers)).statusCode).toBe(403);
   });
 

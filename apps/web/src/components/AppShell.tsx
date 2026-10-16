@@ -23,10 +23,12 @@ import {
   MessageCircleMore,
   OctagonAlert,
   Package,
+  Plug,
   ReceiptText,
   Search,
   Settings,
   ShieldCheck,
+  UserCog,
   ShoppingBag,
   Store,
   TriangleAlert,
@@ -49,7 +51,10 @@ import { CONTACT } from "@/lib/contact";
 import { SETTINGS_PAGES } from "@/lib/settingsNav";
 import { notesSeenKey, readLocal, writeLocal } from "@/lib/storage";
 import { ALERT_PATH, type AlertSeverity, type AlertView } from "@app/shared/alerts";
+import { hasFullAccess, ROLE_INFO } from "@app/shared/access";
 import { staffAccess } from "@app/shared/staff";
+import { Alert } from "@/components/ui";
+import { canOpenPage, landingPath, seesTopic, showsDashboardHome } from "@/lib/access";
 
 // ---------------------------------------------------------------------------
 // The signed-in frame: a top bar (store, search, notifications, account) over a sidebar that
@@ -118,34 +123,45 @@ function NavGroup({ title, items, onNavigate }: { title?: string; items: NavItem
 function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const path = usePathname().replace(/\/$/, "");
   const view = useCurrentView();
-  const { me, workspace } = useApp();
+  const { me, workspace, access, allowed } = useApp();
   const onDash = isDashboard(path);
-  const topic = (t: Topic, label: string, icon: LucideIcon): NavItem => ({ label, icon, href: `${DASHBOARD}?view=${t}`, topic: t, active: onDash && view === t });
+  const full = hasFullAccess(access.role);
+  // Only what this member was granted (Team & Access); the API refuses the rest whatever the menu shows.
+  const topic = (t: Topic, label: string, icon: LucideIcon): NavItem[] => (seesTopic(access, t) ? [{ label, icon, href: `${DASHBOARD}?view=${t}`, topic: t, active: onDash && view === t }] : []);
   const area = (href: string, label: string, icon: LucideIcon): NavItem => ({ label, icon, href, active: path === href || path.startsWith(`${href}/`) });
 
   const main: NavItem[] = [
-    { label: "Dashboard", icon: LayoutDashboard, href: DASHBOARD, active: onDash && view === null },
-    topic("overview", "Business Overview", Gauge),
-    topic("sales", "Sales & Orders", ShoppingBag),
-    topic("products", "Products", Package),
-    topic("customers", "Customers", UsersRound),
-    topic("ads", "Marketing", Megaphone),
-    topic("discounts", "Discounts", BadgePercent),
-    topic("shoppers", "Analytics", ChartColumn),
+    ...(showsDashboardHome(access) ? [{ label: full ? "Dashboard" : "Overview", icon: LayoutDashboard, href: DASHBOARD, active: onDash && view === null }] : []),
+    ...topic("overview", "Business Overview", Gauge),
+    ...topic("sales", "Sales & Orders", ShoppingBag),
+    ...topic("products", "Products", Package),
+    ...topic("customers", "Customers", UsersRound),
+    ...topic("ads", "Marketing", Megaphone),
+    ...topic("discounts", "Discounts", BadgePercent),
+    ...topic("shoppers", "Analytics", ChartColumn),
   ];
-  const store: NavItem[] = [topic("stock", "Stock", Boxes), topic("shipping", "Shipping", Truck), topic("channels", "Sales channels", Store)];
+  const store: NavItem[] = [...topic("orders", "Orders", ReceiptText), ...topic("stock", "Stock", Boxes), ...topic("shipping", "Shipping", Truck), ...topic("channels", "Sales channels", Store)];
   const apps: NavItem[] = [
-    area("/whatsapp", "WhatsApp", MessageCircle),
-    ...(staffAccess(workspace.role, workspace.staffRole).permissions.length > 0 ? [area("/staff", "Staff", Users)] : []),
+    ...(allowed("marketing.campaigns") ? [area("/whatsapp", "WhatsApp", MessageCircle)] : []),
+    ...(staffAccess(workspace.role, workspace.staffRole, workspace.permissions).permissions.length > 0 ? [area("/staff", "Staff", Users)] : []),
     ...(me.employments?.length ? [area("/portal", "My work", Briefcase)] : []),
-    { ...area("/settings", "Settings", Settings), href: "/settings/profile" },
+    ...(!full && allowed("integrations.status") ? [area("/settings/integrations", "Integrations", Plug)] : []),
+    ...(allowed("members:manage") ? [area("/team", "Team & Access", ShieldCheck)] : []),
+    full ? { ...area("/settings", "Settings", Settings), href: "/settings/profile" } : { ...area("/settings/profile", "My Account", UserCog), active: path.startsWith("/settings/profile") || path.startsWith("/settings/security") || path.startsWith("/settings/notifications") },
   ];
 
   return (
     <nav aria-label="App" className="flex h-full flex-col gap-4 px-3 py-5">
+      {!full && (
+        // Whose dashboard this is, and as what: someone from outside the business sees it at a glance.
+        <div className="rounded-xl border border-border bg-bg/60 px-3 py-2.5" data-testid="member-badge">
+          <p className="truncate text-sm font-semibold">{workspace.name}</p>
+          <p className="text-xs text-muted">Shared with you · {ROLE_INFO[access.role].label}</p>
+        </div>
+      )}
       <NavGroup items={main} onNavigate={onNavigate} />
       <NavGroup title="Store" items={store} onNavigate={onNavigate} />
-      <NavGroup title="Apps & integrations" items={apps} onNavigate={onNavigate} />
+      <NavGroup title={full ? "Apps & integrations" : "More"} items={apps} onNavigate={onNavigate} />
       <div className="mt-auto rounded-2xl border border-border bg-gradient-to-br from-accent/[0.07] to-transparent p-4">
         <span aria-hidden className="flex h-9 w-9 items-center justify-center rounded-full bg-accent/12 text-accent">
           <LifeBuoy className="h-[18px] w-[18px]" strokeWidth={1.8} />
@@ -462,7 +478,7 @@ function useMac() {
 }
 
 function TopBar({ onMenu, onSearch }: { onMenu: () => void; onSearch: () => void }) {
-  const { me, workspace, setWorkspaceId } = useApp();
+  const { workspaces, workspace, setWorkspaceId } = useApp();
   const mac = useMac();
   return (
     <header className="sticky top-0 z-30 border-b border-border bg-surface/85 backdrop-blur-md print:hidden">
@@ -476,9 +492,9 @@ function TopBar({ onMenu, onSearch }: { onMenu: () => void; onSearch: () => void
           </Link>
         </div>
         <StoreSwitcher />
-        {me.workspaces.length > 1 && (
+        {workspaces.length > 1 && (
           <select aria-label="Workspace" className="input hidden h-11 w-auto max-w-[12rem] rounded-xl md:block" value={workspace.id} onChange={(e) => setWorkspaceId(e.target.value)}>
-            {me.workspaces.map((w) => (
+            {workspaces.map((w) => (
               <option key={w.id} value={w.id}>{w.name}</option>
             ))}
           </select>
@@ -504,10 +520,44 @@ function TopBar({ onMenu, onSearch }: { onMenu: () => void; onSearch: () => void
   );
 }
 
-export function AppShell({ children }: { children: ReactNode }) {
-  const { me, workspace, setWorkspaceId } = useApp();
+/**
+ * Route guard: a page or dashboard panel this member may not open (typed in, bookmarked, or just
+ * taken away by an owner) sends them to where they can go, and says why. The API refuses its data
+ * either way; this keeps them off a page that could only show refusals.
+ */
+function useAccessGuard(): boolean {
+  const { access, workspace, setAccessNotice } = useApp();
   const router = useRouter();
   const path = usePathname();
+  const view = useCurrentView();
+  const pageOk = canOpenPage(path, access, workspace.staffRole ?? null);
+  const topicOk = !(isDashboard(path) && view && !seesTopic(access, view));
+  const ok = pageOk && topicOk;
+  useEffect(() => {
+    if (ok) return;
+    setAccessNotice(pageOk ? "That part of the dashboard isn't shared with you." : "You don't have access to that page.");
+    router.replace(landingPath(access, workspace.staffRole ?? null));
+  }, [ok, pageOk, access, workspace.staffRole, router, setAccessNotice]);
+  return ok;
+}
+
+function AccessNotice() {
+  const { accessNotice, setAccessNotice } = useApp();
+  if (!accessNotice) return null;
+  return (
+    <div className="mb-4" data-testid="access-notice">
+      <Alert kind="info" onDismiss={() => setAccessNotice(null)}>
+        {accessNotice}
+      </Alert>
+    </div>
+  );
+}
+
+export function AppShell({ children }: { children: ReactNode }) {
+  const { me, workspace, workspaces, setWorkspaceId, access, allowed } = useApp();
+  const router = useRouter();
+  const path = usePathname();
+  const allowedHere = useAccessGuard();
   const [drawer, setDrawer] = useState(false);
   const [palette, setPalette] = useState(false);
   useEffect(() => setDrawer(false), [path]);
@@ -532,17 +582,21 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   const items = useMemo<PaletteItem[]>(() => {
     const go = (href: string) => () => router.push(href);
-    const staff = staffAccess(workspace.role, workspace.staffRole).permissions.length > 0;
+    const staff = staffAccess(workspace.role, workspace.staffRole, workspace.permissions).permissions.length > 0;
+    const page = (href: string) => canOpenPage(href, access, workspace.staffRole ?? null);
     return [
-      { id: "dashboard", label: "Dashboard", group: "Insights", icon: LayoutDashboard, keywords: "home", go: go(DASHBOARD) },
-      ...TOPICS.map((t): PaletteItem => ({ id: `topic-${t}`, label: topicInfo(t).title, group: "Insights", icon: TOPIC_ICON[t], keywords: TOPIC_WORDS[t], go: () => goToTopic(t, window.location.pathname, (href) => router.push(href)) })),
-      { id: "whatsapp", label: "WhatsApp", group: "Apps", icon: MessageCircle, keywords: "messages campaigns", go: go("/whatsapp") },
+      ...(showsDashboardHome(access) ? [{ id: "dashboard", label: "Dashboard", group: "Insights", icon: LayoutDashboard, keywords: "home", go: go(DASHBOARD) }] : []),
+      ...TOPICS.filter((t) => seesTopic(access, t)).map(
+        (t): PaletteItem => ({ id: `topic-${t}`, label: topicInfo(t).title, group: "Insights", icon: TOPIC_ICON[t], keywords: TOPIC_WORDS[t], go: () => goToTopic(t, window.location.pathname, (href) => router.push(href)) }),
+      ),
+      ...(allowed("marketing.campaigns") ? [{ id: "whatsapp", label: "WhatsApp", group: "Apps", icon: MessageCircle, keywords: "messages campaigns", go: go("/whatsapp") }] : []),
       ...(staff ? [{ id: "staff", label: "Staff", group: "Apps", icon: Users, keywords: "employees payroll timesheets roster", go: go("/staff") }] : []),
       ...(me.employments?.length ? [{ id: "portal", label: "My work", group: "Apps", icon: Briefcase, go: go("/portal") }] : []),
-      ...SETTINGS_PAGES.map((s): PaletteItem => ({ id: `settings-${s.slug}`, label: s.label, group: "Settings", icon: s.icon, keywords: s.keywords, go: go(`/settings/${s.slug}`) })),
+      ...(allowed("members:manage") ? [{ id: "team", label: "Team & Access", group: "Settings", icon: ShieldCheck, keywords: "members invite users roles permissions share", go: go("/team") }] : []),
+      ...SETTINGS_PAGES.filter((s) => !s.href && page(`/settings/${s.slug}`)).map((s): PaletteItem => ({ id: `settings-${s.slug}`, label: s.label, group: "Settings", icon: s.icon, keywords: s.keywords, go: go(`/settings/${s.slug}`) })),
       { id: "help", label: "Help centre", group: "Help", icon: Headset, keywords: "support contact faq", go: go("/support") },
     ];
-  }, [router, workspace.role, workspace.staffRole, me.employments]);
+  }, [router, workspace.role, workspace.staffRole, workspace.permissions, me.employments, access, allowed]);
 
   return (
     <div className="min-h-dvh">
@@ -562,11 +616,11 @@ export function AppShell({ children }: { children: ReactNode }) {
                 </button>
               </div>
               {/* The top bar has no room for the workspace picker on a phone. */}
-              {me.workspaces.length > 1 && (
+              {workspaces.length > 1 && (
                 <div className="px-6 pt-4 md:hidden">
                   <label htmlFor="drawer-workspace" className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-muted">Workspace</label>
                   <select id="drawer-workspace" className="input" value={workspace.id} onChange={(e) => setWorkspaceId(e.target.value)}>
-                    {me.workspaces.map((w) => (
+                    {workspaces.map((w) => (
                       <option key={w.id} value={w.id}>{w.name}</option>
                     ))}
                   </select>
@@ -577,7 +631,10 @@ export function AppShell({ children }: { children: ReactNode }) {
           </div>
         )}
         <main className="min-w-0 flex-1 px-4 pb-24 pt-6 sm:px-6 lg:px-8">
-          <div className="mx-auto max-w-[90rem]">{children}</div>
+          <div className="mx-auto max-w-[90rem]">
+            <AccessNotice />
+            {allowedHere ? children : <p className="text-muted">Loading…</p>}
+          </div>
         </main>
       </div>
       <HelpBubble />

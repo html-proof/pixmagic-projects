@@ -8,6 +8,7 @@ import { SECTION_LABEL, STEP_LABEL } from "./Funnel";
 import { hourRange, plural, weekdayName } from "./format";
 import { Icon } from "./Icons";
 import { Panel } from "./Primitives";
+import { asSalesDays } from "./redacted";
 import type { Topic } from "./topics";
 import type { Overview } from "./types";
 
@@ -147,7 +148,7 @@ function nextSteps(topic: Topic, ov: Overview, currency: string): ReactNode[] {
       if (d !== null && d > 0) out.push(<>Sales are up {fmtPct(d)}. <b>Best sellers</b> shows which products drove it; keep those in stock.</>);
       const r = m.refunds?.current;
       if (r?.refundRate && gradeRefundRate(r.refundRate) !== "good") out.push(<>Refunds are {fmtPct(r.refundRate)} of sales ({money(r.refunds)}). <b>Recent orders</b> links each order to Shopify to see why.</>);
-      const b = dailyBreakdown(s.series, ov.today, ov.data?.oldestOrderDay ?? null);
+      const b = dailyBreakdown(asSalesDays(s.series), ov.today, ov.data?.oldestOrderDay ?? null);
       if (b.bestWeekday) out.push(<>{weekdayName(b.bestWeekday.weekday, "long")}s sell best ({money(b.bestWeekday.average)} on average): a good day for emails, posts or new products.</>);
       if (topic === "overview") {
         const inv = m.inventory?.current;
@@ -165,7 +166,7 @@ function nextSteps(topic: Topic, ov: Overview, currency: string): ReactNode[] {
         const name = (p: typeof p1) => (p.provider === "meta" ? "Meta" : "Google Ads");
         out.push(<>{name(p1)} gets a purchase for {fmtMoney(p1.costPerConversion!, a.currency)} against {fmtMoney(p2.costPerConversion!, a.currency)} on {name(p2)}, by their own counts.</>);
       }
-      const worst = a.campaigns.find((c) => c.spend > 0 && c.conversions === 0);
+      const worst = a.campaigns?.find((c) => c.spend > 0 && c.conversions === 0);
       if (worst) out.push(<>&ldquo;{worst.name}&rdquo; spent {fmtMoney(worst.spend, a.currency)} with no purchase counted. Check whether it&apos;s meant to bring sales, or something else such as awareness.</>);
       if (a.shareOfSales !== null) out.push(<>Ads cost {fmtPct(a.shareOfSales)} of your net sales. Compare that with your profit margin: if ads cost more than you make on a sale, they lose money even when they bring sales.</>);
       break;
@@ -182,9 +183,11 @@ function nextSteps(topic: Topic, ov: Overview, currency: string): ReactNode[] {
     case "products": {
       const top = m.top_products?.items[0];
       const c = m.sales_overview?.current;
-      if (top && c && c.grossSales - c.discounts > 0) {
+      // Product sales are each product's net sales: together they make the store's net sales.
+      const base = c?.netSales ?? null;
+      if (top && base !== null && base > 0) {
         const low = m.inventory?.lowStockItems.some((i) => i.productTitle === top.title);
-        out.push(<>{top.title} brings in {fmtPct(top.revenue / (c.grossSales - c.discounts))} of your sales{low ? <>, and it&apos;s running low: reorder it first</> : <>: keep it in stock</>}.</>);
+        out.push(<>{top.title} brings in {fmtPct(top.revenue / base)} of your sales{low ? <>, and it&apos;s running low: reorder it first</> : <>: keep it in stock</>}.</>);
       }
       if (m.catalog && m.catalog.products.draft > 0) out.push(<>{plural(m.catalog.products.draft, "product is", "products are")} still a draft, hidden from customers.</>);
       break;
@@ -243,7 +246,7 @@ function nextSteps(topic: Topic, ov: Overview, currency: string): ReactNode[] {
     }
     case "discounts": {
       const c = m.sales_overview?.current;
-      if (c && c.grossSales > 0 && c.discounts > 0) out.push(<>Discounts took {money(c.discounts)} off full price, {fmtPct(c.discounts / c.grossSales)} of it. Compare that with the sales the codes brought in, in the table above.</>);
+      if (c && c.grossSales !== undefined && c.discounts !== undefined && c.grossSales > 0 && c.discounts > 0) out.push(<>Discounts took {money(c.discounts)} off full price, {fmtPct(c.discounts / c.grossSales)} of it. Compare that with the sales the codes brought in, in the table above.</>);
       break;
     }
     case "customers": {

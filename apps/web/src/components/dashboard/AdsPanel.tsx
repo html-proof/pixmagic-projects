@@ -164,6 +164,7 @@ export function AdsDetail({ ov }: { ov: Overview }) {
         </div>
       </Panel>
 
+      {a.campaigns && (
       <Panel id="d-ads-campaigns" title="Campaigns" help="The campaigns that spent most in these dates.">
         {a.campaigns.length === 0 ? (
           <p className="text-sm text-muted">No campaign spent anything in these dates.</p>
@@ -201,6 +202,7 @@ export function AdsDetail({ ov }: { ov: Overview }) {
           </div>
         )}
       </Panel>
+      )}
 
       {a.accounts.some((acc) => acc.provider === "google" && acc.status !== "reconnect") && <GoogleReportPanel ov={ov} accounts={a.accounts.filter((acc) => acc.status !== "reconnect")} />}
       {a.accounts.some((acc) => acc.provider === "meta" && acc.status !== "reconnect") && <MetaReportPanel ov={ov} accounts={a.accounts.filter((acc) => acc.status !== "reconnect")} />}

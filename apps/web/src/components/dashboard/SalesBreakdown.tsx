@@ -2,9 +2,10 @@
 import { useId, useState, type KeyboardEvent, type ReactNode } from "react";
 import { dailyBreakdown, weekdayOf, type BreakdownDay, type SalesDay, type SalesMonth, type YearBreakdown } from "@app/shared/sales";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
-import { niceTicks, useWidth } from "./chartUtils";
+import { columnPath, columnWidth, niceTicks, useWidth } from "./chartUtils";
 import { fmtDay, fmtLongDay, fmtMonth, fmtMoneyCompact, fmtMoneyWhole, fmtSpan, fmtWeekday, weekdayName } from "./format";
 import { Delta } from "./Primitives";
+import { asSalesDays, showsRefunds } from "./redacted";
 
 // ---------------------------------------------------------------------------
 // The chart: columns over a running-total strip that shares their x positions.
@@ -41,17 +42,6 @@ const FONT = 11;
 /** Rough width of a label at 11px, for deciding what fits without measuring the DOM. */
 const textWidth = (s: string) => s.length * 6.3 + 6;
 
-/** A column with a 4px rounded data end and a square foot on the baseline. */
-function columnPath(x: number, w: number, y0: number, y1: number): string {
-  const up = y1 <= y0;
-  const h = Math.abs(y0 - y1);
-  const r = Math.min(4, w / 2, h);
-  if (up) {
-    return `M${x},${y0}V${y1 + r}Q${x},${y1} ${x + r},${y1}H${x + w - r}Q${x + w},${y1} ${x + w},${y1 + r}V${y0}Z`;
-  }
-  return `M${x},${y0}V${y1 - r}Q${x},${y1} ${x + r},${y1}H${x + w - r}Q${x + w},${y1} ${x + w},${y1 - r}V${y0}Z`;
-}
-
 export function ColumnsWithTotal({
   columns,
   label,
@@ -81,7 +71,7 @@ export function ColumnsWithTotal({
   const n = columns.length;
   const plotW = Math.max(0, width - MARGIN.left - MARGIN.right);
   const slot = n ? plotW / n : 0;
-  const barW = slot >= 6 ? Math.min(24, slot - 2) : Math.max(1, slot - 1);
+  const barW = columnWidth(slot);
   const cx = (i: number) => MARGIN.left + slot * (i + 0.5);
 
   // Labels on every cap only when each fits its slot; otherwise just the ones that matter.
@@ -366,14 +356,16 @@ export function DailySalesCard({
   historyFrom,
   currency,
 }: {
-  series: SalesDay[];
+  /** Days without `refunds` (Team & Access: "View refunds") show no refunds column. */
+  series: Array<Omit<SalesDay, "refunds" | "totalSales"> & { refunds?: number; totalSales?: number }>;
   range: { from: string; to: string };
   today: string;
   historyFrom: string | null;
   currency: string;
 }) {
   const [table, setTable] = useState(false);
-  const b = dailyBreakdown(series, today, historyFrom);
+  const showRefunds = showsRefunds(series);
+  const b = dailyBreakdown(asSalesDays(series), today, historyFrom);
   const money = (n: number) => fmtMoney(n, currency);
   const whole = (n: number) => fmtMoneyWhole(n, currency);
   const hasToday = b.days.some((d) => d.status === "today");
@@ -419,7 +411,7 @@ export function DailySalesCard({
         <div className="text-muted">{fmtLongDay(d.day)}{d.status === "today" ? " · today so far" : ""}</div>
         <div className="mt-0.5 text-sm font-semibold tabular-nums">{money(d.netSales)}</div>
         <TipRow>{d.orders === 1 ? "1 order" : `${fmtNum(d.orders)} orders`}{d.averageOrderValue !== null ? ` · ${money(d.averageOrderValue)} average` : ""}</TipRow>
-        {d.refunds > 0 && <TipRow>Refunds {money(d.refunds)}</TipRow>}
+        {showRefunds && d.refunds > 0 && <TipRow>Refunds {money(d.refunds)}</TipRow>}
         {vsAvg !== null && <TipRow>{vsAvg >= 0 ? "▲" : "▼"} {fmtPct(Math.abs(vsAvg))} {vsAvg >= 0 ? "above" : "below"} an average day</TipRow>}
         {d.cumulative !== null && (
           <div className="mt-1 flex items-center gap-1.5 text-muted">
@@ -478,7 +470,7 @@ export function DailySalesCard({
                 <th className="py-1 text-right font-normal">Net sales</th>
                 <th className="py-1 text-right font-normal">Orders</th>
                 <th className="py-1 text-right font-normal">Average order</th>
-                <th className="py-1 text-right font-normal">Refunds</th>
+                {showRefunds && <th className="py-1 text-right font-normal">Refunds</th>}
                 <th className="py-1 text-right font-normal">So far</th>
               </tr>
             </thead>
@@ -487,13 +479,13 @@ export function DailySalesCard({
                 <tr key={d.day} className="border-t border-border">
                   <td className="py-1">{fmtLongDay(d.day)}{d.status === "today" ? " (so far)" : ""}</td>
                   {d.status === "not_imported" ? (
-                    <td colSpan={5} className="py-1 text-right text-muted">Not imported</td>
+                    <td colSpan={showRefunds ? 5 : 4} className="py-1 text-right text-muted">Not imported</td>
                   ) : (
                     <>
                       <td className="py-1 text-right tabular-nums">{money(d.netSales)}</td>
                       <td className="py-1 text-right tabular-nums">{fmtNum(d.orders)}</td>
                       <td className="py-1 text-right tabular-nums">{d.averageOrderValue !== null ? money(d.averageOrderValue) : "—"}</td>
-                      <td className="py-1 text-right tabular-nums">{d.refunds ? money(d.refunds) : "—"}</td>
+                      {showRefunds && <td className="py-1 text-right tabular-nums">{d.refunds ? money(d.refunds) : "—"}</td>}
                       <td className="py-1 text-right tabular-nums">{money(d.cumulative ?? 0)}</td>
                     </>
                   )}

@@ -17,6 +17,7 @@ import { Delta, Panel, Stat } from "./Primitives";
 import { DailySalesCard, MonthlySalesCard } from "./SalesBreakdown";
 import type { Topic } from "./topics";
 import type { Overview } from "./types";
+import { breakdownOf } from "./redacted";
 
 export type { Topic } from "./topics";
 
@@ -36,95 +37,124 @@ function SalesDetail({ ov, currency }: { ov: Overview; currency: string }) {
   const c = s.current;
   const p = s.previous;
   const money = (n: number) => fmtMoney(n, currency);
-  const refunds = c.returns;
-  // Duties and fees: what total sales holds besides net sales, shipping and taxes.
-  const otherCharges = r2(c.totalSales - c.netSales - c.shipping - c.tax);
+  // Gross sales, discounts, tax, shipping and total sales, and returns, each only for someone who
+  // may see them (Team & Access leaves them out of the answer otherwise). Returns follow from the
+  // breakdown, so whoever sees it sees them too.
+  const bd = breakdownOf(c);
+  const refunds = c.returns ?? (bd ? r2(bd.grossSales - bd.discounts - c.netSales) : null);
+  const total = c.totalSales ?? null;
   const r = ov.modules.refunds;
   const prevPeriod = fmtRange(ov.previous.from, ov.previous.to);
-  const change = upDown(s.deltas.totalSales);
+  const change = upDown(total !== null ? (s.deltas.totalSales ?? null) : s.deltas.netSales);
   const rows: Array<{ label: string; now: string; before: string; delta: number | null }> = [
-    { label: "Total sales", now: money(c.totalSales), before: money(p.totalSales), delta: s.deltas.totalSales },
+    ...(total !== null && p.totalSales !== undefined ? [{ label: "Total sales", now: money(total), before: money(p.totalSales), delta: s.deltas.totalSales ?? null }] : []),
     { label: "Net sales", now: money(c.netSales), before: money(p.netSales), delta: s.deltas.netSales },
-    { label: "Gross sales", now: money(c.grossSales), before: money(p.grossSales), delta: s.deltas.grossSales },
+    ...(bd && p.grossSales !== undefined ? [{ label: "Gross sales", now: money(bd.grossSales), before: money(p.grossSales), delta: s.deltas.grossSales ?? null }] : []),
     { label: "Orders", now: fmtNum(c.orders), before: fmtNum(p.orders), delta: s.deltas.orders },
     { label: "Average order", now: money(c.averageOrderValue ?? 0), before: p.averageOrderValue !== null ? money(p.averageOrderValue) : "—", delta: s.deltas.averageOrderValue },
   ];
   // Shopify's "Total sales breakdown", in its order.
-  const lines: Array<{ label: string; note: string; amount: number; sign: "" | "−" }> = [
-    { label: "Gross sales", note: "Every item sold at its listed price, before tax.", amount: c.grossSales, sign: "" },
-    { label: "Discounts", note: "Codes and automatic discounts taken off.", amount: c.discounts, sign: "−" },
-    { label: "Returns", note: "What refunds, cancellations and order edits took back, on the day they were made.", amount: refunds, sign: "−" },
-  ];
-  const charges: Array<{ label: string; note: string; amount: number }> = [
-    { label: "Shipping charges", note: "What customers paid for shipping, after shipping discounts and refunds.", amount: c.shipping },
-    { label: "Taxes", note: "Collected on items and on shipping.", amount: c.tax },
-    ...(otherCharges !== 0 ? [{ label: "Duties and fees", note: "Import duties and other charges on orders.", amount: otherCharges }] : []),
-  ];
+  const lines: Array<{ label: string; note: string; amount: number; sign: "" | "−" }> = bd
+    ? [
+        { label: "Gross sales", note: "Every item sold at its listed price, before tax.", amount: bd.grossSales, sign: "" },
+        { label: "Discounts", note: "Codes and automatic discounts taken off.", amount: bd.discounts, sign: "−" },
+        { label: "Returns", note: "What refunds, cancellations and order edits took back, on the day they were made.", amount: refunds ?? 0, sign: "−" },
+      ]
+    : [];
+  // Duties and fees: what total sales holds besides net sales, shipping and taxes.
+  const otherCharges = bd && total !== null ? r2(total - c.netSales - (bd.shipping ?? 0) - (bd.tax ?? 0)) : 0;
+  const charges: Array<{ label: string; note: string; amount: number }> = bd
+    ? [
+        ...(bd.shipping !== null ? [{ label: "Shipping charges", note: "What customers paid for shipping, after shipping discounts and refunds.", amount: bd.shipping }] : []),
+        ...(bd.tax !== null ? [{ label: "Taxes", note: "Collected on items and on shipping.", amount: bd.tax }] : []),
+        ...(otherCharges !== 0 ? [{ label: "Duties and fees", note: "Import duties and other charges on orders.", amount: otherCharges }] : []),
+      ]
+    : [];
 
   return (
     <>
       <InShort>
         <p>
-          Your total sales were <B>{money(c.totalSales)}</B> from <B>{plural(c.orders, "order")}</B> ({plural(c.units, "item")} sold)
-          {change ? <>, <B>{change}</B> on {prevPeriod}</> : null}. Before shipping and taxes, that&apos;s <B>{money(c.netSales)}</B> in net sales.
+          {total !== null ? (
+            <>
+              Your total sales were <B>{money(total)}</B> from <B>{plural(c.orders, "order")}</B> ({plural(c.units, "item")} sold)
+              {change ? <>, <B>{change}</B> on {prevPeriod}</> : null}. Before shipping and taxes, that&apos;s <B>{money(c.netSales)}</B> in net sales.
+            </>
+          ) : (
+            <>
+              You made <B>{money(c.netSales)}</B> in net sales from <B>{plural(c.orders, "order")}</B> ({plural(c.units, "item")} sold)
+              {change ? <>, <B>{change}</B> on {prevPeriod}</> : null}.
+            </>
+          )}
         </p>
         {c.orders > 0 && (
           <p>
-            A typical order was <B>{money(c.averageOrderValue ?? 0)}</B>. Discounts took off {money(c.discounts)}
-            {refunds > 0 ? <> and refunds {money(refunds)}</> : null}.
+            A typical order was <B>{money(c.averageOrderValue ?? 0)}</B>.
+            {bd ? (
+              <>
+                {" "}Discounts took off {money(bd.discounts)}
+                {refunds !== null && refunds > 0 ? <> and returns {money(refunds)}</> : null}.
+              </>
+            ) : null}
           </p>
         )}
       </InShort>
 
       <Panel id="d-sales-glance" title="At a glance" help={`Compared with ${prevPeriod}, the same number of days just before.`}>
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
-          <Stat label="Total sales" value={money(c.totalSales)} note={<Delta value={s.deltas.totalSales} />} />
+          {total !== null && <Stat label="Total sales" value={money(total)} note={<Delta value={s.deltas.totalSales ?? null} />} />}
           <Stat label="Net sales" value={money(c.netSales)} note={<Delta value={s.deltas.netSales} />} />
           <Stat label="Orders" value={fmtNum(c.orders)} note={<Delta value={s.deltas.orders} />} />
           <Stat label="Average order" value={money(c.averageOrderValue ?? 0)} note={<Delta value={s.deltas.averageOrderValue} />} />
+          {total === null && bd && <Stat label="Gross sales" value={money(bd.grossSales)} note={<Delta value={s.deltas.grossSales ?? null} />} />}
           <Stat label="Items sold" value={fmtNum(c.units)} note={c.orders ? `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(c.units / c.orders)} per order` : undefined} />
           {r ? (
             <Stat label="Returns" value={money(r.current.refunds)} note={<Delta value={r.deltas.refunds} invert />} />
-          ) : (
+          ) : refunds !== null ? (
             <Stat label="Returns" value={money(refunds)} />
-          )}
+          ) : null}
         </div>
       </Panel>
 
-      <Panel
-        id="d-sales-adds-up"
-        title="How your total sales add up"
-        help="The same lines as Shopify's total sales breakdown, from Shopify's own sales records. Test orders aren't counted."
-      >
-        <ul className="divide-y divide-border text-sm">
-          {lines.map((l) => (
-            <li key={l.label} className="flex items-start justify-between gap-4 py-2.5">
-              <div className="min-w-0">
-                <p className="font-medium">{l.label}</p>
-                <p className="text-xs text-muted">{l.note}</p>
-              </div>
-              <p className="shrink-0 tabular-nums">{l.sign && l.amount > 0 ? `${l.sign} ` : ""}{money(l.amount)}</p>
+      {bd && (
+        <Panel
+          id="d-sales-adds-up"
+          title={total !== null ? "How your total sales add up" : "How your net sales add up"}
+          help="The same lines as Shopify's total sales breakdown, from Shopify's own sales records. Test orders aren't counted."
+        >
+          <ul className="divide-y divide-border text-sm">
+            {lines.map((l) => (
+              <li key={l.label} className="flex items-start justify-between gap-4 py-2.5">
+                <div className="min-w-0">
+                  <p className="font-medium">{l.label}</p>
+                  <p className="text-xs text-muted">{l.note}</p>
+                </div>
+                <p className="shrink-0 tabular-nums">{l.sign && l.amount > 0 ? `${l.sign} ` : ""}{money(l.amount)}</p>
+              </li>
+            ))}
+            <li className="flex items-center justify-between gap-4 py-2.5">
+              <p className="font-semibold">= Net sales</p>
+              <p className="font-semibold tabular-nums">{money(c.netSales)}</p>
             </li>
-          ))}
-          <li className="flex items-center justify-between gap-4 py-2.5">
-            <p className="font-semibold">= Net sales</p>
-            <p className="font-semibold tabular-nums">{money(c.netSales)}</p>
-          </li>
-          {charges.map((l) => (
-            <li key={l.label} className="flex items-start justify-between gap-4 py-2.5">
-              <div className="min-w-0">
-                <p className="font-medium">{l.label}</p>
-                <p className="text-xs text-muted">{l.note}</p>
-              </div>
-              <p className="shrink-0 tabular-nums">{l.amount !== 0 ? `${l.amount > 0 ? "+" : "−"} ` : ""}{money(Math.abs(l.amount))}</p>
-            </li>
-          ))}
-          <li className="flex items-center justify-between gap-4 py-2.5 text-base">
-            <p className="font-semibold">= Total sales</p>
-            <p className="font-semibold tabular-nums">{money(c.totalSales)}</p>
-          </li>
-        </ul>
-      </Panel>
+            {total !== null &&
+              charges.map((l) => (
+                <li key={l.label} className="flex items-start justify-between gap-4 py-2.5">
+                  <div className="min-w-0">
+                    <p className="font-medium">{l.label}</p>
+                    <p className="text-xs text-muted">{l.note}</p>
+                  </div>
+                  <p className="shrink-0 tabular-nums">{l.amount !== 0 ? `${l.amount > 0 ? "+" : "−"} ` : ""}{money(Math.abs(l.amount))}</p>
+                </li>
+              ))}
+            {total !== null && (
+              <li className="flex items-center justify-between gap-4 py-2.5 text-base">
+                <p className="font-semibold">= Total sales</p>
+                <p className="font-semibold tabular-nums">{money(total)}</p>
+              </li>
+            )}
+          </ul>
+        </Panel>
+      )}
 
       <Panel id="d-sales-compare" title="This period and the one before" help={`${fmtRange(ov.range.from, ov.range.to)} against ${prevPeriod}.`}>
         <div className="-mx-1 overflow-x-auto">
@@ -165,7 +195,7 @@ function SalesDetail({ ov, currency }: { ov: Overview; currency: string }) {
       {ov.hasData && s.series.length > 1 && (
         <DailySalesCard series={s.series} range={ov.range} today={ov.today} historyFrom={ov.data?.oldestOrderDay ?? null} currency={currency} />
       )}
-      {s.year?.orders > 0 && <MonthlySalesCard year={s.year} historyFrom={ov.data?.oldestOrderDay ?? null} currency={currency} />}
+      {s.year && s.year.orders > 0 && <MonthlySalesCard year={s.year} historyFrom={ov.data?.oldestOrderDay ?? null} currency={currency} />}
     </>
   );
 }
@@ -415,7 +445,7 @@ function DiscountsDetail({ ov, currency }: { ov: Overview; currency: string }) {
         {top ? (
           <p>
             Customers used <B>{plural(items.length, "code")}</B>; <B>{top.code}</B> was used most, on {plural(top.orders, "order")}.
-            {c && c.grossSales > 0 ? <> All discounts together took {fmtMoney(c.discounts, currency)} off, {fmtPct(c.discounts / c.grossSales)} of full price.</> : null}
+            {c && c.grossSales !== undefined && c.discounts !== undefined && c.grossSales > 0 ? <> All discounts together took {fmtMoney(c.discounts, currency)} off, {fmtPct(c.discounts / c.grossSales)} of full price.</> : null}
           </p>
         ) : (
           <p>No discount codes were used in these dates.</p>
@@ -430,7 +460,7 @@ function DiscountsDetail({ ov, currency }: { ov: Overview; currency: string }) {
                 label={<span className="font-mono">{d.code}</span>}
                 value={plural(d.orders, "order")}
                 fraction={items[0]!.orders > 0 ? d.orders / items[0]!.orders : 0}
-                sub={`${fmtMoney(d.sales, currency)} in sales · ${fmtMoney(d.discount, currency)} in discounts`}
+                sub={d.sales !== undefined && d.discount !== undefined ? `${fmtMoney(d.sales, currency)} in sales · ${fmtMoney(d.discount, currency)} in discounts` : undefined}
               />
             ))}
           </ul>

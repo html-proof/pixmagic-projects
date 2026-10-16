@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  bulkOrdersQuery,
   graphqlOrderOverflow,
   normalizeGraphqlOrder,
   normalizeGraphqlProduct,
@@ -129,6 +130,32 @@ describe("query cost (Shopify rejects requested cost > 1000)", () => {
       nodes { id lineItems(first: 100) { nodes { id product { id } originalUnitPriceSet { shopMoney { amount } } } }
         refunds(first: 20) { id refundLineItems(first: 100) { nodes { subtotalSet { shopMoney { amount } } } } } } } }`;
     expect(requestedCost(old)).toBeGreaterThan(10 * MAX_COST);
+  });
+});
+
+describe("bulk orders query (Shopify's bulk operation rules)", () => {
+  /** Field path of every connection (`edges`) in a query, arguments stripped. */
+  const connections = (q: string) => {
+    const stack: string[] = [];
+    const paths: string[] = [];
+    let last = "";
+    for (const tok of q.replace(/\([^)]*\)/g, "").match(/[A-Za-z_]\w*|[{}]/g) ?? []) {
+      if (tok === "{") stack.push(last);
+      else if (tok === "}") stack.pop();
+      else if ((last = tok) === "edges") paths.push(stack.filter((f) => f !== "edges" && f !== "node" && f).join("."));
+    }
+    return paths;
+  };
+
+  it("nests no connection inside a list field, and none deeper than two", () => {
+    for (const q of [bulkOrdersQuery(true, null), bulkOrdersQuery(false, "created_at:>='2026-08-17T00:00:00.000Z'")]) {
+      // Shopify turned the export away on every store while `refunds` (a list) carried the
+      // `refundLineItems` connection. The sales records nest connections instead: an order's
+      // agreements, each agreement's sales (two levels below orders, the most Shopify allows).
+      expect(connections(q)).toEqual(["orders", "orders.lineItems", "orders.agreements", "orders.agreements.sales"]);
+      expect(q).not.toMatch(/\brefunds\b/);
+      expect(q).not.toMatch(/\b(first|after):/);
+    }
   });
 });
 

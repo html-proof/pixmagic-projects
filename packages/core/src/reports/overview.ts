@@ -30,9 +30,13 @@ export function syncProblem(error: string | null | undefined): "shop_unavailable
  * them; disabled modules come back in `capabilities` with the missing scopes so the UI can
  * explain, never with placeholder numbers.
  *
+ * `sees` says which modules the member asking may see (Team & Access, `seesModule` in
+ * @app/shared/access): the others are not even computed. The route still passes the answer through
+ * `redactOverview`, which also takes out the fields inside a module that need their own permission.
+ *
  * The caller has checked that `store` belongs to the workspace and resolved the dates.
  */
-export async function storeOverview(tx: Tx, store: Store, dates: { range: DateRange; previous: DateRange }, now = new Date()) {
+export async function storeOverview(tx: Tx, store: Store, dates: { range: DateRange; previous: DateRange }, now = new Date(), sees: (module: string) => boolean = () => true) {
   const { range, previous } = dates;
   const ws = store.workspaceId;
   const storeId = store.id;
@@ -47,7 +51,7 @@ export async function storeOverview(tx: Tx, store: Store, dates: { range: DateRa
     optionalScopes: declaredOptionalScopes(),
     declaredScopes: declaredScopes(),
   });
-  const enabled = new Set(capabilities.filter((c) => c.enabled).map((c) => c.id));
+  const enabled = new Set(capabilities.filter((c) => c.enabled && sees(c.id)).map((c) => c.id));
   const modules: Record<string, unknown> = {};
   const data = await importedData(tx, scope);
 
@@ -115,27 +119,33 @@ export async function storeOverview(tx: Tx, store: Store, dates: { range: DateRa
 
   // Not a Shopify capability: present once an ad account is connected to the store.
   const netSales = (modules.sales_overview as { current?: { netSales?: number } } | undefined)?.current?.netSales ?? null;
-  const ads = await adsModule(tx, scope, range, previous, store.currency, netSales);
-  if (ads) modules.ads = ads;
-  const adsense = await adsenseModule(tx, scope, range, previous, store.currency, netSales);
-  if (adsense) modules.adsense = adsense;
-  // Which platforms are connected at all, hidden accounts included: the Advertising section
-  // offers the ones that aren't, and says so when every account is hidden. Counts only, and
-  // only for a store with ad accounts (absent means none).
-  const adCounts = await tx.adConnection.groupBy({ by: ["provider", "enabled"], where: { workspaceId: ws, storeId: store.id }, _count: { _all: true } });
-  const connected = { meta: 0, google: 0, adsense: 0, hidden: 0 };
-  for (const g of adCounts) {
-    if (g.provider === "meta" || g.provider === "google" || g.provider === "adsense") connected[g.provider] += g._count._all;
-    if (!g.enabled) connected.hidden += g._count._all;
+  if (sees("ads")) {
+    const ads = await adsModule(tx, scope, range, previous, store.currency, netSales);
+    if (ads) modules.ads = ads;
   }
-  if (adCounts.length) modules.ad_connections = connected;
+  if (sees("adsense")) {
+    const adsense = await adsenseModule(tx, scope, range, previous, store.currency, netSales);
+    if (adsense) modules.adsense = adsense;
+  }
+  if (sees("ad_connections")) {
+    // Which platforms are connected at all, hidden accounts included: the Advertising section
+    // offers the ones that aren't, and says so when every account is hidden. Counts only, and
+    // only for a store with ad accounts (absent means none).
+    const adCounts = await tx.adConnection.groupBy({ by: ["provider", "enabled"], where: { workspaceId: ws, storeId: store.id }, _count: { _all: true } });
+    const connected = { meta: 0, google: 0, adsense: 0, hidden: 0 };
+    for (const g of adCounts) {
+      if (g.provider === "meta" || g.provider === "google" || g.provider === "adsense") connected[g.provider] += g._count._all;
+      if (!g.enabled) connected.hidden += g._count._all;
+    }
+    if (adCounts.length) modules.ad_connections = connected;
+  }
   // Which platforms this server can connect at all: the dashboard only offers those.
   const configured = adsConfigured();
-  if (configured.meta || configured.google || configured.adsense) modules.ad_configured = configured;
+  if (sees("ad_configured") && (configured.meta || configured.google || configured.adsense)) modules.ad_configured = configured;
 
   if (enabled.has("channels")) {
     modules.channels = await channels(tx, scope, range);
-    modules.traffic = await traffic(tx, scope, range);
+    if (sees("traffic")) modules.traffic = await traffic(tx, scope, range);
   }
   if (enabled.has("order_timing")) modules.order_timing = await orderTiming(tx, scope, range, store.timezone);
   if (enabled.has("fulfillment")) modules.fulfillment = await fulfillment(tx, scope, range, today);

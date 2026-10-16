@@ -97,11 +97,11 @@ token and clears both expiry columns.
 | Data | Query | Notes |
 | --- | --- | --- |
 | Store details | `shop` | name, currency, time zone |
-| Orders | `orders` (7 per page) | totals, tax, shipping, discounts + codes, sales channel, fulfillment status and time, line items (product, variant, SKU), refunds. Orders with more lines/refunds than fit in a page are completed with per-order queries. Last 60 days, or all history once `read_all_orders` is granted |
+| Orders | `orders` (5 per page) | totals, tax, shipping, discounts + codes, sales channel, fulfillment status and time, line items (product, variant, SKU), test flag, and Shopify's sales records (`agreements` → `sales`: what was sold, returned, cancelled or edited, and when), which the sales figures are built from (docs/kpis.md). Orders with more lines/sales than fit in a page are completed with per-order queries. Last 60 days, or all history once `read_all_orders` is granted |
 | Products | `products` (100 per page) | title, status, vendor, type |
 | Variants | `productVariants` (100 per page) | price, stock on hand, unit cost |
 
-Every query's requested cost is kept under Shopify's 1000-point limit (worked out in `packages/core/src/normalize.ts`, checked by `packages/core/test/queryCost.ts`). If Shopify still answers `MAX_COST_EXCEEDED`, the sync job halves the page size and retries the same page. Webhooks keep orders, refunds and products current; a daily reconcile re-pulls recent orders, products and stock.
+Every query's requested cost is kept under Shopify's 1000-point limit (worked out in `packages/core/src/normalize.ts`, checked by `packages/core/test/queryCost.ts`). If Shopify still answers `MAX_COST_EXCEEDED`, the sync job halves the page size and retries the same page. Webhooks keep orders, refunds and products current (an order or refund webhook whose money changed reads that order's sales records); a daily reconcile re-pulls recent orders, products and stock.
 
 ### Protected customer data
 
@@ -118,7 +118,7 @@ Until the main app passes Shopify's review, Shopify only lets it be installed on
 1. Shopify Dev Dashboard → **Create app** (e.g. "bizinsights for PixMagic"). Copy its **Client ID**.
 2. The app's **Distribution** → **Custom distribution** → enter the client's `*.myshopify.com` domain → **Generate link** → copy the install link. (Custom distribution installs on one store, or on several stores in the same Plus organization.)
 3. Put the Client ID in `shopify-app/shopify.app.pixmagic.toml`, then push URLs, scopes and webhooks: `cd shopify-app && shopify app deploy --config pixmagic`.
-4. Tell the app about it. In `apps/aws/src/settings.ts` (`APP_SETTINGS`): `"SHOPIFY_EXTRA_APPS": "[{\"key\":\"pixmagic\",\"clientId\":\"<client id>\",\"shops\":[\"pixmagic.myshopify.com\"]}]"`, and the secret (from the clipboard or prompted, never written to a file): `node infra/cdk/scripts/put-secrets.mjs --set SHOPIFY_APP_SECRET_PIXMAGIC`. Merge to `main` (Deploy to AWS).
+4. Tell the app about it. In `apps/aws/src/settings.ts` (`APP_SETTINGS`): `"SHOPIFY_EXTRA_APPS": "[{\"key\":\"pixmagic\",\"clientId\":\"<client id>\",\"shops\":[\"pixmagic.myshopify.com\"]}]"`, and the secret (from the clipboard or prompted, never written to a file): `node infra/cdk/scripts/put-secrets.mjs --set SHOPIFY_APP_SECRET_PIXMAGIC`. Merge to `main` (Deploy to AWS). The functions read secrets when they start, so a secret set on its own needs a **Deploy to AWS** run too (Actions → Run workflow). Until then a store on that app gets `invalid_hmac` on every webhook and launch, so do this before pointing the app at the new address.
 5. The store owner opens the install link from step 2, approves, and lands on the connect page (after logging in or signing up) to finish. Typing the store address in **Settings → Shopify** also picks that store's app automatically.
 
 A misconfigured extra app is logged and skipped; the main app keeps working.

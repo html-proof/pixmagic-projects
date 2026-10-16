@@ -39,6 +39,17 @@ export const LIMITS = {
    * run: anyone can make several workspaces, so the per-workspace cap alone doesn't stop a spammer.
    */
   invitationsPerUser: { max: 60, windowSec: 86_400 },
+  /** Resending one invitation (each is an email to the same person), per invitation. */
+  invitationResend: { max: 5, windowSec: 3600 },
+  /** Opening an invitation link before signing in, per IP (a token is 256 bits; this only slows scanning). */
+  invitePreviewIp: { max: 60, windowSec: 600 },
+  /** Accepting invitations, per IP and per user. */
+  inviteAcceptIp: { max: 20, windowSec: 900 },
+  inviteAcceptUser: { max: 10, windowSec: 900 },
+  /** Changes to members' access, revocations and removals, per person making them. */
+  teamChanges: { max: 120, windowSec: 600 },
+  /** Dashboard CSV downloads, per user (each one reads a whole report). */
+  dashboardExports: { max: 30, windowSec: 600 },
   /** New workspaces, per user. */
   workspaceCreate: { max: 10, windowSec: 3600 },
   /** New API keys, per workspace. */

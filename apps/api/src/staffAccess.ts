@@ -2,7 +2,8 @@ import { z } from "zod";
 import { systemDb } from "@app/db";
 import { employeeForUser, type EmployeeCtx, type StaffActor } from "@app/core";
 import { RANGE_PRESETS, staffAccess, staffCan, type StaffPermission } from "@app/shared/staff";
-import { clientIp, HttpError, requireUser, type Ctx, type Deps } from "./context.js";
+import { accessFingerprint } from "@app/core";
+import { ACCESS_FP_HEADER, ACCESS_REVOKED, clientIp, HttpError, requireUser, type Ctx, type Deps } from "./context.js";
 
 /**
  * Staff Management authorization. Every staff route calls one of these first; nothing relies on the
@@ -14,7 +15,10 @@ export async function requireStaff(c: Ctx, deps: Deps, workspaceId: string, perm
   if (!user.emailVerified) throw new HttpError(403, "Verify your email address first.", "email_unverified");
   const m = await systemDb.membership.findUnique({ where: { workspaceId_userId: { workspaceId, userId: user.id } } });
   if (!m) throw new HttpError(404, "Not found", "not_found");
-  const access = staffAccess(m.role, m.staffRole);
+  c.header(ACCESS_FP_HEADER, `${workspaceId}:${accessFingerprint(m)}`);
+  if (m.revokedAt) throw new HttpError(403, "Your access to this workspace has been revoked. Ask an owner or admin if you still need it.", ACCESS_REVOKED);
+  // A staff role and the Team & Access staff permissions together (shared staffAccess).
+  const access = staffAccess(m.role, m.staffRole, m.permissions);
   if (!access.permissions.length) throw new HttpError(403, "You don't have access to Staff Management in this workspace. Ask an owner or admin.", "forbidden");
   if (!staffCan(access, perm)) throw new HttpError(403, "You don't have permission to do that", "forbidden");
   return { workspaceId, userId: user.id, access, memberRole: m.role, ip: clientIp(c) };

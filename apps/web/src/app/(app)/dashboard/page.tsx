@@ -17,6 +17,9 @@ import type { Capability, Overview } from "@/components/dashboard/types";
 import { signInFinished } from "@/lib/adSignIn";
 import { api, ApiError, fmtMoney, fmtNum, friendlyError, isTransient, useLiveApi } from "@/lib/api";
 import { scopeList } from "@app/shared/capabilities";
+import { hasFullAccess, ROLE_INFO } from "@app/shared/access";
+import { NoAccessAssigned } from "@/components/team/AccessStates";
+import { hasDashboardAccess, seesTopic, TOPIC_EXPORT } from "@/lib/access";
 
 /**
  * Set just before we hand the browser to Shopify's optional-scope screen, and read when the
@@ -137,7 +140,9 @@ function DashboardSkeleton() {
 const firstName = (name: string | null) => name?.trim().split(/\s+/)[0] || null;
 
 export default function DashboardPage() {
-  const { me, workspace, stores, storesStatus, store } = useApp();
+  const { me, workspace, stores, storesStatus, store, access, allowed } = useApp();
+  // Team & Access: a member with nothing shared yet asks for no numbers at all.
+  const sharesData = hasDashboardAccess(access);
   const adsNotice = useAdsConnectedNotice();
   const dates = useDateRange(store?.timezone ?? "UTC");
   const detail = useDetailView();
@@ -145,7 +150,7 @@ export default function DashboardPage() {
   // Driven by the answer the poll itself brings back, so the page speeds up the moment it sees
   // an import running and relaxes again as soon as that import reports it is done.
   const [everySec, setEverySec] = useState(LIVE_EVERY_SEC);
-  const path = store && asking ? `/workspaces/${workspace.id}/stores/${store.id}/overview?${asking.qs}` : null;
+  const path = store && asking && sharesData ? `/workspaces/${workspace.id}/stores/${store.id}/overview?${asking.qs}` : null;
   const { data, dataPath, error, loading, checkedAt, failing } = useLiveApi<Overview>(path, everySec * 1000);
   const syncState = data?.store?.status;
   const adsFetching = !!data && [...(data.modules.ads?.accounts ?? []), ...(data.modules.adsense?.accounts ?? [])].some((a) => a.status === "active" && !a.lastSyncedAt);
@@ -231,6 +236,7 @@ export default function DashboardPage() {
   // fails they would sit under the new dates' button as if they answered it, so say what they are.
   const olderAnswer = ov !== null && dataPath !== path;
 
+  if (!sharesData) return <NoAccessAssigned workspace={workspace.name} role={ROLE_INFO[access.role].label} />;
   // "No stores" only once the list has actually loaded: until then it means "not known yet".
   if (storesStatus !== "ready") return <StoresPending />;
   if (!stores.length) {
@@ -245,7 +251,10 @@ export default function DashboardPage() {
 
   const cur = ov?.store.currency ?? store?.currency ?? "USD";
   const m = ov?.modules;
-  const disabled = ov?.capabilities.filter((c) => !c.enabled) ?? [];
+  // Unlocking more data is the store's owners' and admins' business, not a shared member's.
+  const disabled = hasFullAccess(access.role) ? (ov?.capabilities.filter((c) => !c.enabled) ?? []) : [];
+  const exportSection = detail.view && allowed("reports.export") && seesTopic(access, detail.view) ? TOPIC_EXPORT[detail.view] : undefined;
+  const exportHref = exportSection && store && asking ? `/api/workspaces/${workspace.id}/stores/${store.id}/export?section=${exportSection}&${asking.qs}` : null;
   const headerStore = ov?.store ?? store;
   const contactsOn = ov?.capabilities.some((c) => c.id === "contacts" && c.enabled) ?? false;
   const topics = ov ? availableTopics(ov, contactsOn) : [];
@@ -262,7 +271,9 @@ export default function DashboardPage() {
           <h1 className="text-2xl font-bold tracking-tight sm:text-[1.75rem]">
             Welcome back{name ? `, ${name}` : ""}! <span aria-hidden>👋</span>
           </h1>
-          <p className="mt-1 text-sm text-muted sm:text-base">Here&apos;s what&apos;s happening with your store {periodWords(dates, shown)}.</p>
+          <p className="mt-1 text-sm text-muted sm:text-base">
+            Here&apos;s what&apos;s happening with {hasFullAccess(access.role) ? "your store" : workspace.name} {periodWords(dates, shown)}.
+          </p>
         </div>
         <div className="flex flex-wrap items-center gap-2.5">
           {headerStore && <StoreStatus key={headerStore.id} store={headerStore} live={live} everySec={everySec} />}
@@ -342,8 +353,13 @@ export default function DashboardPage() {
           this page short. */}
       {s && (
         <section aria-label="Headline numbers" className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
-          {/* Total sales, as Shopify's home page headlines it: the same figure for the same dates. */}
-          <KpiCard i={0} icon={CircleDollarSign} tint="green" title="Total sales" value={<AnimatedNumber value={s.current.totalSales} format={(n) => fmtMoney(n, cur)} />} delta={s.deltas.totalSales} compared={compared} onClick={() => detail.open("sales")} />
+          {/* Total sales, as Shopify's home page headlines it: the same figure for the same dates. It
+              holds tax and shipping, so a member who may not see those (Team & Access) gets net sales. */}
+          {s.current.totalSales !== undefined ? (
+            <KpiCard i={0} icon={CircleDollarSign} tint="green" title="Total sales" value={<AnimatedNumber value={s.current.totalSales} format={(n) => fmtMoney(n, cur)} />} delta={s.deltas.totalSales ?? null} compared={compared} onClick={() => detail.open("sales")} />
+          ) : (
+            <KpiCard i={0} icon={CircleDollarSign} tint="green" title="Net sales" value={<AnimatedNumber value={s.current.netSales} format={(n) => fmtMoney(n, cur)} />} delta={s.deltas.netSales} compared={compared} onClick={() => detail.open("sales")} />
+          )}
           <KpiCard i={1} icon={ShoppingCart} tint="blue" title="Orders" value={<AnimatedNumber value={s.current.orders} format={fmtNum} />} delta={s.deltas.orders} compared={compared} onClick={() => detail.open("sales")} />
           <KpiCard i={2} icon={Gem} tint="violet" title="Average order value" value={<AnimatedNumber value={s.current.averageOrderValue} format={(n) => fmtMoney(n, cur)} />} delta={s.deltas.averageOrderValue} compared={compared} onClick={() => detail.open("sales")} />
           <KpiCard i={3} icon={Package} tint="amber" title="Total products sold" value={<AnimatedNumber value={s.current.units} format={fmtNum} />} delta={s.deltas.units} compared={compared} onClick={() => detail.open("products")} />
@@ -355,7 +371,7 @@ export default function DashboardPage() {
       {ov && (
         <div className="grid gap-4 lg:grid-cols-5">
           <div className={s ? "lg:col-span-3" : "lg:col-span-5"}>
-            <HealthOverview ov={ov} currency={cur} onOpen={detail.open} />
+            <HealthOverview ov={ov} currency={cur} onOpen={detail.open} report={seesTopic(access, "overview")} />
           </div>
           {s && (
             <div className="lg:col-span-2">
@@ -371,7 +387,7 @@ export default function DashboardPage() {
 
       {/* Ad platforms report about themselves, so they get their own section rather than a card in
           the store's list: results when connected, one way in when not (components/dashboard/Advertising.tsx). */}
-      {ov && <AdvertisingSection ov={ov} manage={canManage(workspace.role)} onOpen={detail.open} />}
+      {ov && <AdvertisingSection ov={ov} manage={allowed("integrations.manage")} onOpen={detail.open} />}
 
       {disabled.length > 0 && (
         <section aria-labelledby="more-h">
@@ -394,7 +410,9 @@ export default function DashboardPage() {
 
       {ov && <AboutThisData store={ov.store} data={ov.data} everySec={everySec} />}
 
-      {ov && detail.view && <TopicDetail topic={detail.view} ov={ov} currency={cur} contactsOn={contactsOn} onClose={detail.close} onOpen={detail.open} />}
+      {ov && detail.view && (
+        <TopicDetail topic={detail.view} ov={ov} currency={cur} contactsOn={contactsOn} onClose={detail.close} onOpen={detail.open} exportHref={exportHref} canPrint={hasFullAccess(access.role) || allowed("reports.export")} />
+      )}
     </div>
   );
 }

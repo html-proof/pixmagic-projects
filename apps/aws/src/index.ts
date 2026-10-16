@@ -168,9 +168,9 @@ root.all("*", async (c) => {
 
   url.pathname = path;
   // The API reads the client's address from CLIENT_IP_HEADER (rate limits, audit). Nothing a
-  // client sends is trusted for it: behind CloudFront it is the address CloudFront saw (set by the
-  // viewer-request function, and only believed on requests that carry the origin secret), and on a
-  // bare function URL the address Lambda saw.
+  // client sends is trusted for it: behind CloudFront it is the address CloudFront saw, or the client
+  // Cloudflare's proxy forwarded for (set by the viewer-request function, and only believed on
+  // requests that carry the origin secret), and on a bare function URL the address Lambda saw.
   const headers = new Headers(request.headers);
   const clientIp = viaCloudFront ? request.headers.get(VIEWER_IP) : (event?.requestContext?.http?.sourceIp ?? null);
   for (const h of ["x-real-ip", CLIENT_IP_HEADER, VIEWER_IP, VIEWER_HOST, ORIGIN_VERIFY]) headers.delete(h);

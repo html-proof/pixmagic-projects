@@ -5,6 +5,7 @@ import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { fmtMoneyCompact } from "./format";
 import { LineChart } from "./LineChart";
 import type { Overview } from "./types";
+import { showsRefunds, showsTotalSales } from "./redacted";
 
 // ---------------------------------------------------------------------------
 // The top of the dashboard: four headline numbers, the sales and orders trends, and the summary
@@ -151,14 +152,18 @@ export function TrendCharts({ ov, currency }: { ov: Overview; currency: string }
   const count = (v: number) => fmtNum(v);
 
   const net = s.series.map((d) => d.netSales);
+  // Refunds and total sales per day only for someone who may see them (Team & Access).
+  const refundsShown = showsRefunds(s.series);
+  const totalShown = showsTotalSales(s.series);
+  const view: SalesView = (salesView === "refunds" && !refundsShown) || (salesView === "sales" && !totalShown) ? "net" : salesView;
   const salesValues =
-    salesView === "refunds" ? s.series.map((d) => d.refunds) : salesView === "running" ? running(net) : salesView === "sales" ? s.series.map((d) => d.totalSales) : net;
+    view === "refunds" ? s.series.map((d) => d.refunds ?? 0) : view === "running" ? running(net) : view === "sales" ? s.series.map((d) => d.totalSales ?? 0) : net;
   const salesEmpty = salesValues.every((v) => v === 0);
   const orders = s.series.map((d) => d.orders);
   const orderValues = ordersView === "total" ? running(orders) : orders;
   const ordersEmpty = orderValues.every((v) => v === 0);
 
-  const salesLabel = { sales: "Total sales per day", net: "Net sales per day", running: "Net sales, running total", refunds: "Returns per day" }[salesView];
+  const salesLabel = { sales: "Total sales per day", net: "Net sales per day", running: "Net sales, running total", refunds: "Returns per day" }[view];
   const ordersLabel = ordersView === "total" ? "Orders, running total" : "Orders per day";
 
   return (
@@ -172,13 +177,13 @@ export function TrendCharts({ ov, currency }: { ov: Overview; currency: string }
           aside={
             <ChartChoice<SalesView>
               label="Sales chart shows"
-              value={salesView}
+              value={view}
               onChange={setSalesView}
               options={[
-                ["sales", "Total sales"],
+                ...(totalShown ? [["sales", "Total sales"] as [SalesView, string]] : []),
                 ["net", "Net sales"],
                 ["running", "Running total"],
-                ["refunds", "Returns"],
+                ...(refundsShown ? [["refunds", "Returns"] as [SalesView, string]] : []),
               ]}
             />
           }
@@ -186,15 +191,14 @@ export function TrendCharts({ ov, currency }: { ov: Overview; currency: string }
         <div className="relative mt-5">
           <LineChart
             days={days}
-            series={salesEmpty ? [] : [{ key: salesView, label: salesLabel, color: salesView === "refunds" ? "var(--danger)" : "var(--accent)", values: salesValues }]}
+            series={salesEmpty ? [] : [{ key: view, label: salesLabel, color: view === "refunds" ? "var(--danger)" : "var(--accent)", values: salesValues }]}
             format={money}
             fmtAxis={axis}
             label={`${salesLabel}, ${days.length} days`}
             today={ov.today}
             height={220}
             floor={salesEmpty ? 4 : 0}
-            area
-            grid
+            bars
           />
           {salesEmpty &&
             (salesView === "refunds" ? (
@@ -233,8 +237,7 @@ export function TrendCharts({ ov, currency }: { ov: Overview; currency: string }
             today={ov.today}
             height={220}
             integer
-            area
-            grid
+            bars
           />
           {ordersEmpty && <EmptyChart icon={ShoppingCart} title="No orders in this period" body="Orders show up here within a minute of being placed." />}
         </div>

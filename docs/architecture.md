@@ -66,8 +66,11 @@ Where a new piece of code goes:
   registered in `src/app.ts`. `deps` (`context.ts`) carries everything with side effects (auth
   provider, queues, coordinator, mailer, fetch), so tests substitute fakes.
 - **Auth and tenancy**: `requireUser(c, deps)` for the signed-in user; `requireWorkspace(c, deps,
-  ws, permission)` for anything in a workspace. Permissions come from `@app/shared/roles`; the UI
-  asks `can(role, permission)` for the same permission to decide what to show.
+  ws, need)` for anything in a workspace. `need` is a workspace permission (`@app/shared/roles`) or
+  one or more Team & Access permissions (`@app/shared/access`); owners and admins hold all of the
+  latter, other members only what was granted to them ([team-access.md](team-access.md)). The UI asks
+  `allowed(need)` (`useApp()`) for the same thing to decide what to show; `can(role, …)` is for owner
+  and admin rights only and is false for every other role.
 - **Reads** go through `withTenant(workspaceId, tx => ...)` (Postgres RLS as a second guard);
   `systemDb` bypasses RLS and is for auth bootstrap, webhooks, jobs and writes that already scoped
   by workspace and store.

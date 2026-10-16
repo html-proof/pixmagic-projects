@@ -110,8 +110,8 @@ a hosted zone that isn't the registrar's nameservers would only be a second, ign
 
 | Name | Type | Value | Proxy |
 | --- | --- | --- | --- |
-| `bizinsights.io` | CNAME (flattened) | `d2mr8m2p1qkh58.cloudfront.net` | DNS only |
-| `www` | CNAME | `d2mr8m2p1qkh58.cloudfront.net` | DNS only |
+| `bizinsights.io` | CNAME (flattened) | `d2mr8m2p1qkh58.cloudfront.net` | Proxied |
+| `www` | CNAME | `d2mr8m2p1qkh58.cloudfront.net` | Proxied |
 | `_629bb4707c1bf383a6f9ecec0cb165bf` | CNAME | `_70137766a706c2c3a6f74580a42334a6.wzccmgtwzk.acm-validations.aws` | DNS only |
 | `_66e52976e7c4c9a179bf51623272d845.www` | CNAME | `_4a5b10a140cad564c7f3420dc090c8dd.wzccmgtwzk.acm-validations.aws` | DNS only |
 | `_dmarc` | TXT | `v=DMARC1; p=quarantine; adkim=r; aspf=r; rua=mailto:dmarc_rua@onsecureserver.net;` (from GoDaddy, kept) | DNS only |
@@ -120,12 +120,27 @@ a hosted zone that isn't the registrar's nameservers would only be a second, ign
 - **Certificate**: ACM in us-east-1 (CloudFront's region), `bizinsights.io` + `www.bizinsights.io`,
   `arn:aws:acm:us-east-1:605411278365:certificate/776966d7-d73c-4896-bd30-1568c9f7b3f7`, DNS-validated
   by the two `acm-validations.aws` records. ACM renews it by itself while they stay: never delete them.
-- **DNS only, not proxied**: CloudFront already does TLS, caching, compression, HTTP/3 and AWS WAF
-  (rate limit per client IP, managed rules), and the app's own per-IP limits and audit read the
-  address CloudFront sees. Behind Cloudflare's proxy that would be a Cloudflare edge address for
-  everyone, so one busy edge could trip the 300/min API limit for all its users. Turning the proxy on
-  needs the viewer-request function and the WAF to trust `CF-Connecting-IP` from Cloudflare's ranges
-  first; with Bot Fight Mode off and a cache bypass for `/api/*`, or Shopify's webhooks get challenged.
+- **Proxied through Cloudflare** (since 2026-10-16), in front of CloudFront, which still does TLS
+  to the origin, caching, AWS WAF and the redirects. CloudFront then sees a Cloudflare edge address
+  as the viewer, so the viewer-request function and the WAF's second rate rule take the client's
+  address from `CF-Connecting-IP`, believed only from Cloudflare's published ranges
+  (`infra/cdk/lib/cloudflare.ts`; add any range Cloudflare adds). The app's per-IP limits and audit
+  get it through `x-insights-viewer-ip` as before. Zone settings this relies on:
+  - SSL/TLS **Full (strict)** (CloudFront has a valid certificate for both names; Flexible would loop
+    on CloudFront's HTTPS redirect), **Always Use HTTPS** on (the smoke test checks http → https),
+    minimum TLS 1.2.
+  - **Email Address Obfuscation** and **Rocket Loader** off: both rewrite the HTML, and the static
+    pages (the contact address on /privacy, /terms, /support) must match what React hydrates.
+  - Cache Rule **"API: bypass cache"**: URI path starts with `/api/` → bypass. Cloudflare caches by file
+    extension, so an API path ending in `.csv` could otherwise be cached across accounts.
+  - **Bot Fight Mode off.** On the Free plan it covers the whole zone and no rule can skip it, so it
+    challenges Shopify's and Meta's webhooks and the deploy's smoke tests from GitHub (a failed smoke
+    test rolls the deploy back). Bot traffic is handled by AWS WAF's rate limits and managed rules.
+  - **AI Labyrinth** on; **Security.txt** set with the same lines as
+    `apps/web/public/.well-known/security.txt` (Cloudflare answers that path at its edge). Both
+    expire 2027-10-15: renew the `Expires` line in both before then.
+  - Rollback: switch the two records back to **DNS only**. Nothing in AWS has to change: from
+    anywhere but Cloudflare's ranges `CF-Connecting-IP` is ignored.
 - **One origin**: the session cookie, the CSRF check and every OAuth callback use APP_URL
   (`https://bizinsights.io`, set on the functions by the App stack). CloudFront answers on
   `bizinsights.io`, `www` and its own name; the viewer-request function sends GET/HEAD on the other two
@@ -133,7 +148,10 @@ a hosted zone that isn't the registrar's nameservers would only be a second, ign
   serves other methods where they arrive (webhooks and pixel events don't follow redirects).
 - **HSTS**: CloudFront's security headers send `max-age=31536000; includeSubDomains`, so every name
   under bizinsights.io must serve HTTPS.
-- **Email**: the domain has no MX (no mailbox); SES sending from it needs its DKIM CNAMEs added here.
+- **Email**: the domain has no MX (no mailbox). SES sends from it (`no-reply@bizinsights.io`):
+  identity `bizinsights.io` in ap-southeast-2 with Easy DKIM, its three `<token>._domainkey` CNAMEs
+  → `<token>.dkim.amazonses.com` in this zone, DNS only (added 2026-10-16). The existing `_dmarc`
+  record (p=quarantine, relaxed) passes on the DKIM signature. Replies go to a message's Reply-To.
 
 Records before the switch (GoDaddy's parking page, imported by Cloudflare on 2026-10-15), for a
 rollback: `A bizinsights.io 15.197.148.33` and `A bizinsights.io 3.33.130.190` (both proxied),
@@ -148,9 +166,16 @@ Infrastructure: `cdk deploy` of the previous commit. Data: point-in-time restore
 
 ## Cutover (owner's go-ahead needed; not done yet)
 
-Before the window: provider secrets the stores in use need (`SHOPIFY_APP_SECRET_PIXMAGIC` for the
-PixMagic store's webhooks, `GOOGLE_ADS_CLIENT_SECRET` for AdSense refreshes) set with `put-secrets.mjs
---set`, and the AWS redirect URIs added at Google. The Cloudflare commands below run from
+> **Overtaken in part (2026-10-16).** Both Shopify apps already point at bizinsights.io (step 4), and
+> stores now reconnect on AWS directly: PixMagic did at 09:32 UTC, with its pixel re-pointed and its
+> orders re-imported. Step 2's `--replace` wipes the AWS database first, so it would now erase those
+> stores and the accounts that claimed them. Don't run step 2 as written: decide first what to copy
+> from the PC database (old pixel/funnel history, users who haven't come back) and merge it in.
+
+Before the window: provider secrets the stores in use need (`GOOGLE_ADS_CLIENT_SECRET` for AdSense
+refreshes; `SHOPIFY_APP_SECRET_PIXMAGIC` is set) with `put-secrets.mjs --set`, and the AWS redirect
+URIs added at Google. A new secret reaches the functions only when they start, so run **Deploy to
+AWS** (Actions → Run workflow) after setting one. The Cloudflare commands below run from
 `apps/cloudflare` in a checkout of the old code ([below](#retiring-the-old-cloudflare-deployment)).
 
 1. **Freeze the old site.** Remove its cron triggers (Cloudflare API `PUT
@@ -163,11 +188,9 @@ PixMagic store's webhooks, `GOOGLE_ADS_CLIENT_SECRET` for AdSense refreshes) set
 2. **Final copy:** `node infra/cdk/scripts/migrate-data.mjs --replace` (wipes the AWS copy first).
 3. **Schedules on:** GitHub variable `AWS_SCHEDULES=on`, then the next Deploy to AWS (the merge of the
    Shopify URL change in step 4) turns them on.
-4. **Shopify:** `application_url`, `redirect_urls` and webhook `uri` in `shopify-app/shopify.app.toml`
-   and `shopify.app.pixmagic.toml` already name `https://bizinsights.io`. The main app is already
-   live there (version `insights-13`, 2026-10-16; until then its "Continue with Shopify" finished on
-   the old workers.dev site). Left for the window: `shopify app deploy --config pixmagic` (needs
-   `SHOPIFY_APP_SECRET_PIXMAGIC` on AWS first, or its webhooks fail the signature check).
+4. **Shopify:** done. Both apps are live on `https://bizinsights.io`: the main app since version
+   `insights-13` (now `insights-14`), the PixMagic app since version `pixmagic-7` (2026-10-16, webhooks
+   API 2026-10).
 5. **Old address forwards:** the same stand-in with `--var MOVE_PHASE:forward --var
    MOVED_TO:https://bizinsights.io`, deployed at 100%:
    pages and launches redirect to AWS; webhooks and pixel events are passed through unchanged.
@@ -236,18 +259,21 @@ Retiring it, on the owner's go-ahead, once AWS has been production for two quiet
 ## Owner-only steps
 
 - **Alerts**: an email address for alarms and the budget (`-c alertEmail=...`; confirm the SNS email).
-- **SES**: verify a sending domain (DKIM records at its DNS host, Cloudflare DNS for ikorex.com.au)
-  and request production access; until then SES only sends to verified addresses and app emails
-  fail (EMAIL_FROM in `apps/aws/src/settings.ts` is a placeholder).
+- **SES**: the sending domain bizinsights.io is set up (above); **production access is still to be
+  requested** (SES console → Account dashboard → Request production access, or
+  `aws sesv2 put-account-details`). Until then SES sends only to addresses verified in SES: an
+  invitation to anyone else fails to send and the inviter gets the link to pass on.
 - **Google sign-in**: add `https://insights-605411278365.auth.ap-southeast-2.amazoncognito.com/oauth2/idpresponse`
   to a Google OAuth client, put its secret with `put-secrets.mjs --set GOOGLE_SIGNIN_CLIENT_SECRET`,
   deploy with `-c googleClientId=<client id>`.
 - **Provider secrets** not on this PC: META_APP_SECRET, GOOGLE_ADS_CLIENT_SECRET, WHATSAPP_APP_SECRET,
-  WHATSAPP_WEBHOOK_VERIFY_TOKEN, SHOPIFY_APP_SECRET_PIXMAGIC (`put-secrets.mjs --set`).
+  WHATSAPP_WEBHOOK_VERIFY_TOKEN (`put-secrets.mjs --set`, then a Deploy to AWS run).
 - **Custom domain**: done, bizinsights.io (above). Provider consoles still list the old addresses:
-  Google/Meta OAuth redirect URIs and the PixMagic Shopify app's URLs move to
-  `https://bizinsights.io/api/...` with the cutover. The main Shopify app is already there
-  (`insights-13`); to undo that: `shopify app release --version insights-12 --config shopify.app.toml`.
+  Google/Meta OAuth redirect URIs move to `https://bizinsights.io/api/...` with the cutover. Both
+  Shopify apps are already there (main `insights-14`, PixMagic `pixmagic-7`). To go back to an
+  earlier Shopify version, use the Dev Dashboard (the app → **Versions** → that version →
+  **Release**): `shopify app release --version <tag>` answers "could not be found" for every version
+  of both apps (CLI 3.94.3, 2026-10-16). Shipping still works: `shopify app deploy --version <new tag>`.
 
 ## Cost (lean tier, US$/month, on-demand, approximate)
 

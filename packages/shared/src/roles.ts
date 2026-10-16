@@ -1,4 +1,9 @@
-export const ROLES = ["owner", "admin", "analyst", "viewer"] as const;
+/**
+ * Owners and admins run the workspace. Everyone else (managers, analysts, viewers, custom) sees and
+ * does only what an owner or admin granted them: their access lives in access.ts (`allows`), and
+ * their role is just the template it was picked from.
+ */
+export const ROLES = ["owner", "admin", "manager", "analyst", "viewer", "custom"] as const;
 export type Role = (typeof ROLES)[number];
 
 export type Permission =
@@ -36,11 +41,15 @@ const MATRIX: Record<Role, Permission[]> = {
     "email:manage",
   ],
   admin: ["dashboard:read", "customers:contact", "stores:manage", "members:manage", "apikeys:manage", "audit:read", "email:read", "email:activity", "email:automate", "email:manage"],
-  // Analysts already see customers' contact details, so they may see who was emailed; they can't change anything.
-  analyst: ["dashboard:read", "customers:contact", "email:read", "email:activity"],
-  viewer: ["dashboard:read", "email:read"],
+  // Their access is the permissions granted to them (access.ts), never a fixed list: nothing here,
+  // so a check that forgets to ask `allows` fails closed for them.
+  manager: [],
+  analyst: [],
+  viewer: [],
+  custom: [],
 };
 
+/** What an owner or admin may do. For anyone else ask `allows` (access.ts), which reads their permissions. */
 export function can(role: Role, perm: Permission): boolean {
   return MATRIX[role].includes(perm);
 }

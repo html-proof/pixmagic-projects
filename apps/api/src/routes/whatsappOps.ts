@@ -42,7 +42,7 @@ import { body, clientIp, HttpError, requireWorkspace, type Deps } from "../conte
 import type { App } from "../app.js";
 import { limit, LIMITS } from "../rateLimit.js";
 import { cursorPage } from "../pagination.js";
-import { base, waStore } from "./whatsappCommon.js";
+import { base, requireWaContacts, waStore } from "./whatsappCommon.js";
 
 /** Day boundaries from ?from=YYYY-MM-DD&to=YYYY-MM-DD (UTC), each optional. */
 function range(q: Record<string, string>) {
@@ -90,7 +90,7 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
 
   app.get(`${base}/messages`, async (c) => {
     const { ws, storeId } = c.req.param();
-    await requireWorkspace(c, deps, ws, "customers:contact");
+    await requireWaContacts(c, deps, ws);
     await waStore(ws, storeId);
     const q = c.req.query();
     const paging = cursorPage(q, 50);
@@ -173,7 +173,7 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
 
   app.get(`${base}/orders`, async (c) => {
     const { ws, storeId } = c.req.param();
-    await requireWorkspace(c, deps, ws, "customers:contact");
+    await requireWaContacts(c, deps, ws);
     await waStore(ws, storeId);
     const q = c.req.query();
     const paging = cursorPage(q, 30);
@@ -211,7 +211,7 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
 
   app.get(`${base}/orders/:id`, async (c) => {
     const { ws, storeId, id } = c.req.param();
-    await requireWorkspace(c, deps, ws, "customers:contact");
+    await requireWaContacts(c, deps, ws);
     await waStore(ws, storeId);
     const t = await withTenant(ws, (tx) => tx.orderTracking.findFirst({ where: { id, storeId, workspaceId: ws } }));
     if (!t) throw new HttpError(404, "Not found", "not_found");
@@ -266,7 +266,7 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
 
   app.get(`${base}/carts`, async (c) => {
     const { ws, storeId } = c.req.param();
-    await requireWorkspace(c, deps, ws, "customers:contact");
+    await requireWaContacts(c, deps, ws);
     await waStore(ws, storeId);
     const q = c.req.query();
     const paging = cursorPage(q, 30);
@@ -328,7 +328,7 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
 
   app.get(`${base}/reviews`, async (c) => {
     const { ws, storeId } = c.req.param();
-    await requireWorkspace(c, deps, ws, "customers:contact");
+    await requireWaContacts(c, deps, ws);
     await waStore(ws, storeId);
     const q = c.req.query();
     const paging = cursorPage(q, 30);
@@ -427,7 +427,7 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
 
   app.get(`${base}/campaigns`, async (c) => {
     const { ws, storeId } = c.req.param();
-    await requireWorkspace(c, deps, ws, "dashboard:read");
+    await requireWorkspace(c, deps, ws, "marketing.campaigns");
     await waStore(ws, storeId);
     const [rows, settings] = await withTenant(ws, (tx) =>
       Promise.all([tx.whatsappCampaign.findMany({ where: { storeId, workspaceId: ws }, orderBy: { createdAt: "desc" }, take: 100 }), tx.whatsappSettings.findUnique({ where: { storeId } })]),
@@ -439,7 +439,7 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
   /** How many customers an audience reaches right now (opted in, not opted out). */
   app.post(`${base}/campaigns/estimate`, async (c) => {
     const { ws, storeId } = c.req.param();
-    await requireWorkspace(c, deps, ws, "dashboard:read");
+    await requireWorkspace(c, deps, ws, "marketing.campaigns");
     await waStore(ws, storeId);
     // Counts up to every contact of the store: an API key (read access) mustn't be able to loop it.
     await limit(deps.coord, `rl:wa-estimate:${storeId}`, LIMITS.waEstimate);
@@ -486,7 +486,7 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
 
   app.get(`${base}/campaigns/:id`, async (c) => {
     const { ws, storeId, id } = c.req.param();
-    await requireWorkspace(c, deps, ws, "dashboard:read");
+    await requireWorkspace(c, deps, ws, "marketing.campaigns");
     await waStore(ws, storeId);
     const camp = await ownCampaign(ws, storeId, id);
     const settings = await systemDb.whatsappSettings.findUnique({ where: { storeId } });
@@ -583,7 +583,7 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
 
   app.get(`${base}/automations`, async (c) => {
     const { ws, storeId } = c.req.param();
-    await requireWorkspace(c, deps, ws, "dashboard:read");
+    await requireWorkspace(c, deps, ws, "marketing.campaigns");
     await waStore(ws, storeId);
     const [rules, runs] = await withTenant(ws, (tx) =>
       Promise.all([
@@ -662,7 +662,7 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
 
   app.get(`${base}/automations/:id/runs`, async (c) => {
     const { ws, storeId, id } = c.req.param();
-    await requireWorkspace(c, deps, ws, "dashboard:read");
+    await requireWorkspace(c, deps, ws, "marketing.campaigns");
     await waStore(ws, storeId);
     const runs = await withTenant(ws, (tx) => tx.whatsappAutomationRun.findMany({ where: { ruleId: id, storeId, workspaceId: ws }, orderBy: { createdAt: "desc" }, take: 50 }));
     return c.json({ runs: runs.map((r) => ({ id: r.id, trigger: r.trigger, subject: r.subjectKey, outcome: r.outcome, detail: r.detail, messageId: r.messageId, at: r.createdAt })) });
@@ -688,7 +688,7 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
 
   app.get(`${base}/contacts/summary`, async (c) => {
     const { ws, storeId } = c.req.param();
-    await requireWorkspace(c, deps, ws, "dashboard:read");
+    await requireWorkspace(c, deps, ws, "marketing.campaigns");
     await waStore(ws, storeId);
     const [byStatus, optedOut, settings] = await withTenant(ws, (tx) =>
       Promise.all([
@@ -711,7 +711,7 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
   /** Record an opt-out the customer gave another way (email, phone call): nothing more is sent to them. */
   app.post(`${base}/contacts/opt-out`, async (c) => {
     const { ws, storeId } = c.req.param();
-    const access = await requireWorkspace(c, deps, ws, "customers:contact");
+    const access = await requireWaContacts(c, deps, ws);
     const store = await waStore(ws, storeId);
     const { phone: raw } = z.object({ phone: z.string().min(6).max(30) }).parse(await body(c));
     const phone = normalizePhone(raw, null);

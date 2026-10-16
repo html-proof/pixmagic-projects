@@ -5,9 +5,14 @@ import { env } from "./env.js";
 import { logger } from "./logger.js";
 import type { FetchLike } from "./shopify.js";
 
+export interface MailOptions {
+  /** Where replies go instead of EMAIL_FROM (whose mailbox doesn't exist): an invitation's replies reach the person who sent it. */
+  replyTo?: string;
+}
+
 export interface Mailer {
   /** `html` is an optional rich version of `text` (which is always sent, for plain-text clients). */
-  send(to: string, subject: string, text: string, html?: string): Promise<void>;
+  send(to: string, subject: string, text: string, html?: string, opts?: MailOptions): Promise<void>;
 }
 
 /** "Name <addr@x>" -> { name, email }; a bare address stays a string. */
@@ -24,7 +29,7 @@ export function parseFrom(from: string): string | { email: string; name: string 
  */
 export function mailpitMailer(baseUrl: string, fetchImpl: FetchLike = fetch): Mailer {
   return {
-    async send(to, subject, text, html) {
+    async send(to, subject, text, html, opts) {
       const from = parseFrom(env().EMAIL_FROM);
       const res = await fetchImpl(`${baseUrl.replace(/\/$/, "")}/api/v1/send`, {
         method: "POST",
@@ -35,6 +40,7 @@ export function mailpitMailer(baseUrl: string, fetchImpl: FetchLike = fetch): Ma
           Subject: subject,
           Text: text,
           ...(html ? { HTML: html } : {}),
+          ...(opts?.replyTo ? { ReplyTo: [{ Email: opts.replyTo }] } : {}),
         }),
       });
       if (!res.ok) throw new Error(`Mailpit send failed (${res.status})`);
@@ -43,12 +49,12 @@ export function mailpitMailer(baseUrl: string, fetchImpl: FetchLike = fetch): Ma
 }
 
 /** In-memory mailer for tests. */
-export function memoryMailer(): Mailer & { sent: Array<{ to: string; subject: string; text: string; html?: string }> } {
-  const sent: Array<{ to: string; subject: string; text: string; html?: string }> = [];
+export function memoryMailer(): Mailer & { sent: Array<{ to: string; subject: string; text: string; html?: string; replyTo?: string }> } {
+  const sent: Array<{ to: string; subject: string; text: string; html?: string; replyTo?: string }> = [];
   return {
     sent,
-    async send(to, subject, text, html) {
-      sent.push({ to, subject, text, ...(html ? { html } : {}) });
+    async send(to, subject, text, html, opts) {
+      sent.push({ to, subject, text, ...(html ? { html } : {}), ...(opts?.replyTo ? { replyTo: opts.replyTo } : {}) });
     },
   };
 }
@@ -121,7 +127,7 @@ export async function raiseAlert(
   try {
     const email = alertEmail(alert, { workspace: workspace?.name ?? null, store: store ? (store.name ?? store.shopDomain) : null });
     const recipients = await systemDb.membership.findMany({
-      where: { workspaceId: input.workspaceId, role: { in: ["owner", "admin"] } },
+      where: { workspaceId: input.workspaceId, role: { in: ["owner", "admin"] }, revokedAt: null },
       include: { user: true },
     });
     const prefs = await systemDb.notificationPreference.findMany({

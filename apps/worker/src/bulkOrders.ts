@@ -33,6 +33,9 @@ import type { WorkerDeps } from "./handlers.js";
  *   poll    re-enqueue with `delaySeconds` until Shopify says COMPLETED
  *   ingest  read the JSONL a chunk at a time, each chunk its own message
  *
+ * The export carries every order whole, its sales records included (see `bulkOrdersQuery`), so
+ * the ingest needs no call per order.
+ *
  * Every failure falls back to the paged path instead of failing the job. The merchant should
  * see a slow import, never a broken one, and the paged path is already correct and tested.
  */
@@ -305,26 +308,27 @@ async function ingestBulk(data: SyncJobData, store: Store, deps: WorkerDeps, api
 
   const byteOffset = data.bulk?.byteOffset ?? 0;
   let chunk = CHUNK_BYTES;
-  let applied: { lines: Line[]; bytes: number; atEnd: boolean } | null = null;
+  let applied: { lines: Line[]; raw: string[]; atEnd: boolean } | null = null;
 
   while (chunk <= MAX_CHUNK_BYTES) {
     const res = await deps.fetchImpl(url, { headers: { Range: `bytes=${byteOffset}-${byteOffset + chunk - 1}` } });
     if (res.status !== 206 && res.status !== 200) return fallbackToPaged(data, deps, `bulk result fetch returned ${res.status}`);
-    const text = await res.text();
+    const body = new Uint8Array(await res.arrayBuffer());
+    // A 200 means the server ignored Range and sent the whole file, which is still correct -
+    // this chunk is simply the rest of it, once what earlier chunks read is skipped.
+    const text = new TextDecoder().decode(res.status === 200 ? body.subarray(byteOffset) : body);
     const range = res.headers.get("content-range");
     const total = range ? Number(range.split("/")[1]) : NaN;
-    // A 200 means the server ignored Range and sent the whole file, which is still correct -
-    // this chunk is simply the last one.
-    const atEnd = res.status === 200 || !Number.isFinite(total) || byteOffset + byteLength(text) >= total;
+    const atEnd = res.status === 200 || !Number.isFinite(total) || byteOffset + body.length >= total;
 
     const { lines, raw } = parseLines(text, atEnd);
     if (atEnd) {
-      applied = { lines, bytes: 0, atEnd: true };
+      applied = { lines, raw, atEnd: true };
       break;
     }
     const cut = cutAtLastParent(lines, raw);
     if (cut) {
-      applied = { lines: cut.lines, bytes: cut.raw.reduce((a, l) => a + byteLength(l) + 1, 0), atEnd: false };
+      applied = { ...cut, atEnd: false };
       break;
     }
     // One order's children filled the entire chunk: widen rather than split the order.
@@ -353,7 +357,8 @@ async function ingestBulk(data: SyncJobData, store: Store, deps: WorkerDeps, api
   // Aggregate what has landed so the dashboard fills while the rest streams in; the final pass
   // at the end of the backfill recomputes every day once anyway.
   await enqueueDays(deps, store.id, days);
-  await deps.queues.sync.send({ ...data, progress, bulk: { phase: "ingest", id, byteOffset: byteOffset + applied.bytes } });
+  const bytes = applied.raw.reduce((a, l) => a + byteLength(l) + 1, 0);
+  await deps.queues.sync.send({ ...data, progress, bulk: { phase: "ingest", id, byteOffset: byteOffset + bytes } });
   return { done: false };
 }
 

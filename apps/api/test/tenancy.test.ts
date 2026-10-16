@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { systemDb, withTenant } from "@app/db";
 import { normalizeRestOrder, recomputeDays, upsertOrder } from "@app/core";
 import { clean, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
+import { LEGACY_GRANTS } from "@app/shared";
 
 let ctx: TestCtx;
 beforeAll(async () => (ctx = await setup()));
@@ -81,7 +82,7 @@ describe("tenant isolation", () => {
   it("enforces roles: viewers cannot manage stores", async () => {
     const { a, wsA, storeA } = await twoTenants();
     const v = await signIn(ctx, "uv", "v@x.com");
-    await systemDb.membership.create({ data: { workspaceId: wsA, userId: v.user.id, role: "viewer" } });
+    await systemDb.membership.create({ data: { workspaceId: wsA, userId: v.user.id, role: "viewer", permissions: [...LEGACY_GRANTS.viewer] } });
     expect((await ctx.app.inject({ method: "GET", url: `/workspaces/${wsA}/stores`, headers: v.headers })).statusCode).toBe(200);
     expect((await ctx.app.inject({ method: "DELETE", url: `/workspaces/${wsA}/stores/${storeA.id}`, headers: v.headers })).statusCode).toBe(403);
     expect((await ctx.app.inject({ method: "GET", url: `/workspaces/${wsA}/audit-logs`, headers: v.headers })).statusCode).toBe(403);

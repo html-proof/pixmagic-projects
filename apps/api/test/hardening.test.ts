@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { systemDb, withTenant } from "@app/db";
-import { signShopifyQuery, signWebhookBody } from "@app/shared";
+import { LEGACY_GRANTS, signShopifyQuery, signWebhookBody } from "@app/shared";
 import { buildApp } from "../src/app.js";
 import { pixelEventInWindow } from "../src/routes/pixel.js";
 import { LIMITS } from "../src/rateLimit.js";
@@ -31,7 +31,7 @@ async function team(role: "admin" | "analyst" | "viewer", staffRole: "hr_manager
   const owner = await signIn(ctx, "owner", "owner@x.com");
   const ws = await createWorkspace(ctx, owner.headers);
   const member = await signIn(ctx, "member", "member@x.com");
-  await systemDb.membership.create({ data: { workspaceId: ws, userId: member.user.id, role, staffRole } });
+  await systemDb.membership.create({ data: { workspaceId: ws, userId: member.user.id, role, staffRole, permissions: role === "admin" ? [] : [...LEGACY_GRANTS[role]] } });
   return { owner, ws, member };
 }
 
@@ -337,7 +337,7 @@ describe("Shopify OAuth callback", () => {
     const started = ok(await call("POST", `/workspaces/${ws}/shopify/install`, member.headers, { shop: "new-shop.myshopify.com" }));
     const state = new URL(started.url).searchParams.get("state")!;
     // Demoted while on Shopify's screen.
-    await systemDb.membership.update({ where: { workspaceId_userId: { workspaceId: ws, userId: member.user.id } }, data: { role: "viewer" } });
+    await systemDb.membership.update({ where: { workspaceId_userId: { workspaceId: ws, userId: member.user.id } }, data: { role: "viewer", permissions: [...LEGACY_GRANTS.viewer] } });
     const params = { code: "c", shop: "new-shop.myshopify.com", state, timestamp: String(Math.floor(Date.now() / 1000)) };
     const q = new URLSearchParams({ ...params, hmac: signShopifyQuery(params, "test_secret") });
     const res = await call("GET", `/shopify/callback?${q}`, { ...member.headers, cookie: `${member.cookie}; shopify_oauth_state=${state}` });

@@ -21,10 +21,11 @@ export function sesMailer(o: SesOptions): Mailer {
   const endpoint = `https://email.${o.region}.amazonaws.com/v2/email/outbound-emails`;
   const fetchImpl = o.fetchImpl ?? fetch;
   return {
-    async send(to, subject, text, html) {
+    async send(to, subject, text, html, opts) {
       const body = {
         FromEmailAddress: env().EMAIL_FROM,
         Destination: { ToAddresses: [to] },
+        ...(opts?.replyTo ? { ReplyToAddresses: [opts.replyTo] } : {}),
         Content: {
           Simple: {
             Subject: { Data: subject, Charset: "UTF-8" },

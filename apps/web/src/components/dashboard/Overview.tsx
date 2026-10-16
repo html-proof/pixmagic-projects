@@ -11,6 +11,7 @@ import { Icon } from "./Icons";
 import { B, Change, changeWords } from "./Narrative";
 import { Panel, Stat, type Tone } from "./Primitives";
 import { topicInfo, topicSummary, type Topic } from "./topics";
+import { breakdownOf } from "./redacted";
 import type { Overview } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -242,7 +243,8 @@ export function AreaList({ ov, currency, topics, onOpen }: { ov: Overview; curre
  * Every graded check at once: one bar split by status, and the count of each. Opens the full
  * report (the overview panel), which lists every check worst first.
  */
-export function HealthOverview({ ov, currency, onOpen }: { ov: Overview; currency: string; onOpen: (t: Topic) => void }) {
+/** `report`: whether the detailed report (the overview panel) is shared with this member ("View reports"). */
+export function HealthOverview({ ov, currency, onOpen, report = true }: { ov: Overview; currency: string; onOpen: (t: Topic) => void; report?: boolean }) {
   const c = countsOf(businessHealth(ov, currency));
   const parts = [
     { label: HEALTH.attention.label, n: c.attention, fill: "bg-fill-danger" },
@@ -261,10 +263,12 @@ export function HealthOverview({ ov, currency, onOpen }: { ov: Overview; currenc
             <p className="mt-0.5 text-sm text-muted">All key metrics at a glance.</p>
           </div>
         </div>
-        <button type="button" onClick={() => onOpen("overview")} className="btn-secondary h-9 shrink-0 px-3 text-xs shadow-[var(--shadow)]" data-testid="area-overview">
-          View detailed report
-          <ArrowRight aria-hidden className="h-3.5 w-3.5" />
-        </button>
+        {report && (
+          <button type="button" onClick={() => onOpen("overview")} className="btn-secondary h-9 shrink-0 px-3 text-xs shadow-[var(--shadow)]" data-testid="area-overview">
+            View detailed report
+            <ArrowRight aria-hidden className="h-3.5 w-3.5" />
+          </button>
+        )}
       </div>
       {c.graded > 0 ? (
         <>
@@ -328,6 +332,10 @@ export function OverviewDetail({ ov, currency, onOpen }: { ov: Overview; currenc
   const y = s?.year;
   const range = fmtRange(ov.range.from, ov.range.to);
   const before = fmtRange(ov.previous.from, ov.previous.to);
+  // Gross sales, discounts, tax, shipping and total sales, and returns, only for someone who may
+  // see them (Team & Access).
+  const bd = s ? breakdownOf(s.current) : null;
+  const returns = s?.current.returns ?? null;
   const finishedMonths = y?.months.filter((x) => !x.current && x.coverage === "full") ?? [];
   const bestMonth = y?.months.filter((x) => x.coverage !== "none" && x.netSales > 0).reduce<(typeof y.months)[number] | null>((a, x) => (!a || x.netSales > a.netSales ? x : a), null);
   const thisMonth = y?.months.at(-1);
@@ -404,13 +412,20 @@ export function OverviewDetail({ ov, currency, onOpen }: { ov: Overview; currenc
               </thead>
               <tbody>
                 {/* Shopify's "Total sales breakdown", line for line and in its order. */}
-                <Row label="Gross sales" now={money(s.current.grossSales)} before={money(s.previous.grossSales)} change={<Change value={s.deltas.grossSales} />} />
-                <Row label="Discounts" now={money(-s.current.discounts)} />
-                <Row label="Returns" now={money(-s.current.returns)} change={m.refunds ? <Change value={m.refunds.deltas.refunds} invert /> : undefined} />
+                {bd && <Row label="Gross sales" now={money(bd.grossSales)} before={s.previous.grossSales !== undefined ? money(s.previous.grossSales) : null} change={<Change value={s.deltas.grossSales ?? null} />} />}
+                {bd && <Row label="Discounts" now={money(-bd.discounts)} />}
+                {returns !== null && <Row label="Returns" now={money(-returns)} change={m.refunds ? <Change value={m.refunds.deltas.refunds} invert /> : undefined} />}
                 <Row label="Net sales" now={money(s.current.netSales)} before={money(s.previous.netSales)} change={<Change value={s.deltas.netSales} />} />
-                <Row label="Shipping charges" now={money(s.current.shipping)} />
-                <Row label="Taxes" now={money(s.current.tax)} />
-                <Row label="Total sales" now={money(s.current.totalSales)} before={money(s.previous.totalSales)} change={<Change value={s.deltas.totalSales} />} />
+                {bd?.shipping != null && <Row label="Shipping charges" now={money(bd.shipping)} />}
+                {bd?.tax != null && <Row label="Taxes" now={money(bd.tax)} />}
+                {s.current.totalSales !== undefined && (
+                  <Row
+                    label="Total sales"
+                    now={money(s.current.totalSales)}
+                    before={s.previous.totalSales !== undefined ? money(s.previous.totalSales) : null}
+                    change={<Change value={s.deltas.totalSales ?? null} />}
+                  />
+                )}
                 <Row label="Orders" now={fmtNum(s.current.orders)} before={fmtNum(s.previous.orders)} change={<Change value={s.deltas.orders} />} />
                 <Row label="Average order" now={s.current.averageOrderValue !== null ? money(s.current.averageOrderValue) : "—"} before={s.previous.averageOrderValue !== null ? money(s.previous.averageOrderValue) : null} change={<Change value={s.deltas.averageOrderValue} />} />
                 <Row label="Items sold" now={fmtNum(s.current.units)} />
@@ -460,8 +475,8 @@ export function OverviewDetail({ ov, currency, onOpen }: { ov: Overview; currenc
         <dl className="grid grid-cols-2 gap-x-4 gap-y-4 sm:grid-cols-3">
           {cat && <Fact label="Products" value={fmtNum(cat.products.total)} note={`${fmtNum(cat.products.active)} active · ${fmtNum(cat.products.draft)} draft · ${fmtNum(cat.products.archived)} archived`} />}
           {cat && <Fact label="Variants" value={fmtNum(cat.variants)} />}
-          {inv && inv.trackedVariants > 0 && <Fact label="Units in stock" value={fmtNum(inv.unitsInStock)} note={`${money(inv.retailValue)} at today's prices`} />}
-          {inv && inv.stockValueAtCost !== null && <Fact label="Stock value at cost" value={money(inv.stockValueAtCost)} />}
+          {inv && inv.trackedVariants > 0 && <Fact label="Units in stock" value={fmtNum(inv.unitsInStock)} note={inv.retailValue !== undefined ? `${money(inv.retailValue)} at today's prices` : undefined} />}
+          {inv && inv.stockValueAtCost != null && <Fact label="Stock value at cost" value={money(inv.stockValueAtCost)} />}
           {ov.data && (
             <Fact
               label="Orders imported"

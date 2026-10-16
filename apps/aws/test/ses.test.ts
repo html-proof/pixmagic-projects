@@ -24,6 +24,19 @@ describe("the SES mailer", () => {
     });
   });
 
+  it("sends replies where the message says (an invitation: to whoever sent it)", async () => {
+    let body: Record<string, unknown> = {};
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+      body = JSON.parse(await new Request(input, init).text());
+      return new Response(JSON.stringify({ MessageId: "1" }));
+    }) as typeof fetch;
+    const mailer = sesMailer({ region: "ap-southeast-2", credentials: { accessKeyId: "a", secretAccessKey: "b" }, fetchImpl });
+    await mailer.send("client@example.test", "Hi", "plain", undefined, { replyTo: "owner@example.test" });
+    expect(body.ReplyToAddresses).toEqual(["owner@example.test"]);
+    await mailer.send("client@example.test", "Hi", "plain");
+    expect(body).not.toHaveProperty("ReplyToAddresses");
+  });
+
   it("throws with SES's reason (not the recipient) when SES refuses", async () => {
     const fetchImpl = (async () => new Response(JSON.stringify({ message: "Email address is not verified." }), { status: 400 })) as unknown as typeof fetch;
     const mailer = sesMailer({ region: "ap-southeast-2", credentials: { accessKeyId: "a", secretAccessKey: "b" }, fetchImpl });
