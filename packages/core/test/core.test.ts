@@ -96,6 +96,13 @@ describe("shopifyGraphql", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps Shopify's reason for a 403", async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ errors: "[API] This app is not approved to access this shop" }), { status: 403 }));
+    const call = shopifyGraphql({ shop: "s.myshopify.com", accessToken: "t", apiVersion: "x", query: "{}", fetchImpl: fetchImpl as typeof fetch });
+    await expect(call).rejects.toThrow("Shopify auth error 403: [API] This app is not approved to access this shop");
+    await expect(call).rejects.toMatchObject({ status: 403 });
+  });
+
   it("reports a frozen store's 402 plainly and does not retry it", async () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ errors: "Unavailable Shop" }), { status: 402 }));
     const call = shopifyGraphql({ shop: "s.myshopify.com", accessToken: "t", apiVersion: "x", query: "{}", fetchImpl: fetchImpl as typeof fetch });

@@ -142,6 +142,14 @@ export class ShopifyHttpError extends Error {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** `: <Shopify's errors text>` from a failed response, at most 200 characters; empty when it has none. */
+async function errorDetail(res: Response): Promise<string> {
+  const body = (await res.json().catch(() => null)) as { errors?: unknown } | null;
+  const errors = body?.errors;
+  const text = typeof errors === "string" ? errors : Array.isArray(errors) || (errors && typeof errors === "object") ? JSON.stringify(errors) : "";
+  return text ? `: ${text.slice(0, 200)}` : "";
+}
+
 /** The cost accounting Shopify returns on every Admin GraphQL response, in `extensions.cost`. */
 export interface ShopifyCost {
   requestedQueryCost: number;
@@ -187,7 +195,9 @@ export async function shopifyGraphqlWithCost<T>(opts: ShopifyCallOptions): Promi
       body: JSON.stringify({ query: opts.query, variables: opts.variables ?? {} }),
     });
     if (res.status === 401 || res.status === 403) {
-      throw new ShopifyHttpError(`Shopify auth error ${res.status}`, res.status);
+      // Shopify says why ("[API] Invalid API key or access token", a missing scope, an app it
+      // won't serve on this shop): without it a 403 can't be told apart from a revoked token.
+      throw new ShopifyHttpError(`Shopify auth error ${res.status}${await errorDetail(res)}`, res.status);
     }
     if (res.status === 429 || res.status >= 500) {
       if (attempt >= maxRetries) throw new ShopifyHttpError(`Shopify ${res.status}`, res.status);
@@ -198,11 +208,7 @@ export async function shopifyGraphqlWithCost<T>(opts: ShopifyCallOptions): Promi
     // Any other failure (402 for a frozen or unpaid store, 404 for one that is gone, 423 for a
     // locked one) answers `{"errors": "<text>"}`, a string rather than GraphQL's array, and asking
     // again won't change it.
-    if (!res.ok) {
-      const body = (await res.json().catch(() => null)) as { errors?: unknown } | null;
-      const detail = typeof body?.errors === "string" ? `: ${body.errors}` : "";
-      throw new ShopifyHttpError(`Shopify ${res.status}${detail}`, res.status);
-    }
+    if (!res.ok) throw new ShopifyHttpError(`Shopify ${res.status}${await errorDetail(res)}`, res.status);
     const json = (await res.json()) as {
       data?: T;
       errors?: Array<{ message: string; extensions?: { code?: string } }>;

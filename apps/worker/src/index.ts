@@ -30,6 +30,7 @@ import {
   runSync,
   scheduleAdsSync,
   scheduleReconcile,
+  seedSalesRereads,
   UnrecoverableError,
   type WorkerDeps,
 } from "./handlers.js";
@@ -284,6 +285,11 @@ export async function runScheduled(cron: string, deps: WorkerDeps) {
       logger.error({ err }, "reconcile failed; the next tick picks up the stores it did not reach");
       return null;
     });
+    // Orders whose sales records were never read (see seedSalesRereads); daily per store.
+    const salesRereads = await seedSalesRereads(deps).catch((err: unknown) => {
+      logger.error({ err }, "sales re-read sweep failed; the next tick tries again");
+      return null;
+    });
     // Ad accounts on their own leases, after everything the store itself depends on.
     const adsSynced = await scheduleAdsSync(deps).catch((err: unknown) => {
       logger.error({ err }, "ad sync scheduling failed; the next tick tries again");
@@ -312,7 +318,7 @@ export async function runScheduled(cron: string, deps: WorkerDeps) {
       logger.error({ err }, "team retention sweep failed; the next tick tries again");
       return null;
     });
-    return { refreshed, staleJobsFailed, reconciled, adsSynced, whatsapp, staffOpenShifts, email, pixelDedupePruned, teamPruned };
+    return { refreshed, staleJobsFailed, reconciled, salesRereads, adsSynced, whatsapp, staffOpenShifts, email, pixelDedupePruned, teamPruned };
   }
   logger.warn({ cron }, "unknown cron trigger");
   return {};

@@ -59,6 +59,14 @@ jobs:
             --payload '{"action":"migrate"}' out.json > meta.json
           cat out.json
           if grep -q FunctionError meta.json; then exit 1; fi
+      - name: Re-read sales records a release left missing
+        # Queues work only (seedSalesRereads in apps/worker); its failure is no reason to roll back.
+        continue-on-error: true
+        run: |
+          aws lambda invoke --function-name insights-production-cron:live --cli-binary-format raw-in-base64-out \
+            --payload '{"action":"reread"}' reread.json > reread-meta.json
+          cat reread.json
+          if grep -q FunctionError reread-meta.json; then exit 1; fi
       - name: Smoke tests
         id: smoke
         run: node infra/cdk/scripts/smoke.mjs --env production

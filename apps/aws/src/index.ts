@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { Hono } from "hono";
 import { handle } from "hono/aws-lambda";
 import { buildApp, CLIENT_IP_HEADER, type App } from "@app/api";
-import { consume, runScheduled, seedAfterMove, type WorkerDeps } from "@app/worker";
+import { consume, runScheduled, seedAfterMove, seedSalesRereads, type WorkerDeps } from "@app/worker";
 import { logger, memoryBlobs, memoryCoord, withLogContext, withTimeout, type Coord, type Mailer, type Queues } from "@app/core";
 import { apiDeps, apiPath } from "./app.js";
 import { roleCredentials } from "./awsClient.js";
@@ -26,7 +26,7 @@ import { staticSite } from "./staticSite.js";
  *           API on one origin, so the session cookie stays first-party.
  *   - jobs: SQS event source mappings (sync, webhooks, aggregate, email) → the worker's consume().
  *   - cron: EventBridge Scheduler ({ "cron": "..." }) → runScheduled(), plus maintenance actions
- *           invoked directly ({ "action": "migrate" | "counts" | "after-move" }).
+ *           invoked directly ({ "action": "migrate" | "counts" | "after-move" | "reread" }).
  * Platform pieces: RDS PostgreSQL (process-wide pools; Lambda has no per-request scope), DynamoDB
  * for the coordinator, S3 for large webhook bodies, SES for app email, Secrets Manager + SSM for
  * configuration (secrets.ts). local.ts runs the same app on one machine, without any of them.
@@ -181,7 +181,7 @@ const http = handle(root);
 
 /** Direct invocations (not through the URL): maintenance actions for the deploy scripts. */
 interface Action {
-  action: "migrate" | "counts" | "after-move";
+  action: "migrate" | "counts" | "after-move" | "reread";
 }
 interface CronEvent {
   cron: string;
@@ -218,6 +218,11 @@ export const handler = async (event: unknown, context: unknown) => {
     const result = await seedAfterMove(await jobs());
     logger.info(result, "after-move repair queued");
     return result;
+  }
+  if (action === "reread") {
+    // After each deploy's migrations: stores whose orders lack their sales records (seedSalesRereads).
+    const queued = await seedSalesRereads(await jobs());
+    return { queued };
   }
   if (action === "migrate" || action === "counts") {
     await ensureSecrets();

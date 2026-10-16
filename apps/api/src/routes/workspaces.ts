@@ -26,7 +26,7 @@ import { STAFF_ROLES, staffAccess, staffCan } from "@app/shared/staff";
 import { body, clientIp, HttpError, requireFullAccess, requireUser, requireWorkspace, type Deps } from "../context.js";
 import { inviteLimits, teamActor } from "./team.js";
 import type { App } from "../app.js";
-import { seedResync } from "../sync.js";
+import { AUTO_REFRESH, seedResync } from "../sync.js";
 import { limit, LIMITS } from "../rateLimit.js";
 
 const roleSchema = z.enum(ROLES);
@@ -122,7 +122,9 @@ export function workspaceRoutes(app: App, deps: Deps) {
     if (!store) throw new HttpError(404, "Not found", "not_found");
     // One refresh per store every 5 minutes is plenty (and keeps Shopify's rate limit for real work).
     await limit(deps.coord, `rl:resync:${store.id}`, LIMITS.resync, "A refresh is already under way. Try again in a few minutes.", "too_soon");
-    const jobs = await seedResync(deps, store);
+    // A merchant asking means something looks missing: read the whole import window again (by
+    // creation date), which also fills in sales records, not just the last week's changes.
+    const jobs = await seedResync(deps, store, AUTO_REFRESH.sourcesDays);
     await audit({ workspaceId: ws, actorUserId: a.user?.id, action: "store.resync", targetId: storeId, ip: clientIp(c) });
     return c.json({ ok: true, jobs: jobs.length });
   });
