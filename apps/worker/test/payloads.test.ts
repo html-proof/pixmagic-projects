@@ -4,6 +4,7 @@ import { resetDb } from "@app/db/testing";
 import { encryptTokenFields, memoryBlobs, memoryCoord, memoryMailer, memoryQueues, type FetchLike } from "@app/core";
 import { processWebhook, runSync, type WorkerDeps } from "../src/handlers.js";
 import { consume } from "../src/index.js";
+import { salesAnswer } from "./shopifySales.js";
 
 /**
  * Shopify data that doesn't fit the schemas in core's shopifyPayloads.ts. It is logged and skipped:
@@ -27,7 +28,9 @@ beforeEach(async () => {
   await resetDb();
   queues.clear();
   coord.clear();
-  fetchImpl = async () => {
+  fetchImpl = async (url, init) => {
+    const sales = salesAnswer(url, init);
+    if (sales) return sales;
     throw new Error("unexpected fetch");
   };
   warnings = [];
@@ -139,7 +142,7 @@ describe("webhooks that don't fit", () => {
     await webhook("orders/create", order());
     const { r } = await webhook("refunds/create", { id: 9, created_at: "2026-03-05T12:00:00Z", refund_line_items: [{ subtotal: "45.00" }] });
     expect(r).toEqual({ ok: true });
-    expect(await systemDb.refund.count()).toBe(0);
+    expect(await systemDb.orderSale.count()).toBe(1);
     expect(problems()).toEqual(["order_id: Required"]);
   });
 
@@ -271,20 +274,31 @@ describe("order detail pages and bulk lines that don't fit", () => {
     expect(problems()).toEqual(["lineItems.nodes.1.quantity: Expected number, received string"]);
   });
 
-  it("bulk import: unreadable inline refunds, or a line that isn't an object, cost only that order", async () => {
+  it("bulk import: an unreadable sale, or a line that isn't an object, cost only that order", async () => {
     const store = await makeStore();
     const j = await systemDb.syncJob.create({ data: { workspaceId: store.workspaceId, storeId: store.id, kind: "orders" } });
     const bulkId = "gid://shopify/BulkOperation/2";
+    const sale = (id: number, parent: string, over: Record<string, unknown> = {}) => ({
+      id: `gid://shopify/Sale/${id}`,
+      actionType: "ORDER",
+      lineType: "PRODUCT",
+      quantity: 1,
+      totalAmount: money("10"),
+      totalDiscountAmountBeforeTaxes: money("0"),
+      totalTaxAmount: money("0"),
+      __parentId: parent,
+      ...over,
+    });
     const body = [
-      JSON.stringify({ ...gqlOrder("gid://shopify/Order/1"), lineItems: undefined, refunds: { nodes: [] } }),
+      JSON.stringify({ ...gqlOrder("gid://shopify/Order/1"), lineItems: undefined, agreements: undefined }),
       JSON.stringify({ ...line(11), __parentId: "gid://shopify/Order/1" }),
+      JSON.stringify({ id: "gid://shopify/SalesAgreement/1", happenedAt: "2026-03-01T15:00:00Z", __parentId: "gid://shopify/Order/1" }),
+      JSON.stringify(sale(1, "gid://shopify/SalesAgreement/1", { quantity: "one" })),
       "null",
-      JSON.stringify({
-        ...gqlOrder("gid://shopify/Order/3"),
-        lineItems: undefined,
-        refunds: [{ id: "gid://shopify/Refund/9", createdAt: "2026-03-02T00:00:00Z", refundLineItems: { edges: [{ node: { subtotalSet: money("10") } }] } }],
-      }),
+      JSON.stringify({ ...gqlOrder("gid://shopify/Order/3"), lineItems: undefined, agreements: undefined }),
       JSON.stringify({ ...line(31), __parentId: "gid://shopify/Order/3" }),
+      JSON.stringify({ id: "gid://shopify/SalesAgreement/3", happenedAt: "2026-03-02T00:00:00Z", __parentId: "gid://shopify/Order/3" }),
+      JSON.stringify(sale(3, "gid://shopify/SalesAgreement/3")),
     ].join("\n");
     fetchImpl = async (url) => {
       if (String(url).startsWith("https://files.example/")) return new Response(`${body}\n`, { status: 200 });
@@ -293,10 +307,10 @@ describe("order detail pages and bulk lines that don't fit", () => {
     await runSync({ storeId: store.id, kind: "orders", syncJobId: j.id, bulk: { phase: "ingest", id: bulkId, byteOffset: 0 } }, deps);
     expect((await systemDb.order.findMany()).map((o) => o.shopifyId)).toEqual(["3"]);
     expect(await systemDb.orderLineItem.count()).toBe(1);
-    expect(await systemDb.refund.count()).toBe(1);
+    expect(await systemDb.orderSale.count()).toBe(1);
     expect(await systemDb.syncJob.findUniqueOrThrow({ where: { id: j.id } })).toMatchObject({ status: "succeeded", progress: 1 });
     expect(warnings[0]).toMatchObject({ payload: "bulk order", skipped: 2, of: 3 });
-    expect(problems()).toEqual(["refunds: Expected array, received object"]);
+    expect(problems()).toEqual(["agreements.nodes.0.sales.nodes.0.quantity: Expected number, received string"]);
   });
 });
 

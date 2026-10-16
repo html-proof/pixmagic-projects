@@ -7,7 +7,7 @@ import { catalog, importedData, inventory } from "./catalog.js";
 import type { Scope } from "./common.js";
 import { funnel } from "./funnel.js";
 import { channels, discountCodes, fulfillment, orderTiming, recentOrders, traffic } from "./orders.js";
-import { dailyRows, dailySeries, taxAndShipping, topProducts } from "./sales.js";
+import { dailyRows, dailySeries, topProducts } from "./sales.js";
 
 /**
  * Why a store's sync stopped, in a word the dashboard can explain: Shopify's own answer to the
@@ -58,21 +58,32 @@ export async function storeOverview(tx: Tx, store: Store, dates: { range: DateRa
     const p = summarize(prev);
     hasData = cur.some((r) => r.orders > 0 || r.refunds > 0);
     if (enabled.has("sales_overview")) {
-      const { tax, shipping } = await taxAndShipping(tx, scope, range);
+      // Shopify's "Total sales breakdown", line for line: gross − discounts − returns = net sales,
+      // + shipping + taxes (+ duties and fees) = total sales.
       modules.sales_overview = {
         current: {
           grossSales: c.grossSales,
           discounts: c.discounts,
+          returns: c.refunds,
           netSales: c.netSales,
+          totalSales: c.totalSales,
           orders: c.orders,
           units: c.units,
           averageOrderValue: c.averageOrderValue,
-          tax,
-          shipping,
+          tax: c.taxes,
+          shipping: c.shipping,
         },
-        previous: { grossSales: p.grossSales, netSales: p.netSales, orders: p.orders, units: p.units, averageOrderValue: p.averageOrderValue },
+        previous: {
+          grossSales: p.grossSales,
+          netSales: p.netSales,
+          totalSales: p.totalSales,
+          orders: p.orders,
+          units: p.units,
+          averageOrderValue: p.averageOrderValue,
+        },
         deltas: {
           netSales: delta(c.netSales, p.netSales),
+          totalSales: delta(c.totalSales, p.totalSales),
           orders: delta(c.orders, p.orders),
           averageOrderValue: delta(c.averageOrderValue, p.averageOrderValue),
           grossSales: delta(c.grossSales, p.grossSales),

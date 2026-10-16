@@ -10,7 +10,6 @@ import {
   normalizeRestOrder,
   normalizeRestProduct,
   normalizeRestProductVariants,
-  normalizeRestRefund,
   parseShopify,
   parseShopifyList,
   restOrderSchema,
@@ -120,7 +119,30 @@ const gqlOrder = (over: Record<string, unknown> = {}) => ({
       },
     ],
   },
-  refunds: [{ id: "gid://shopify/Refund/5", createdAt: "2026-01-04T00:00:00Z", refundLineItems: { pageInfo: { hasNextPage: false }, nodes: [{ subtotalSet: m("3.0") }] } }],
+  agreements: {
+    pageInfo: { hasNextPage: false },
+    nodes: [
+      {
+        id: "gid://shopify/SalesAgreement/5",
+        happenedAt: "2026-01-04T00:00:00Z",
+        sales: {
+          pageInfo: { hasNextPage: false },
+          nodes: [
+            {
+              id: "gid://shopify/Sale/6",
+              actionType: "RETURN",
+              lineType: "PRODUCT",
+              quantity: 1,
+              totalAmount: m("-3.0"),
+              totalDiscountAmountBeforeTaxes: m("0"),
+              totalTaxAmount: m("0"),
+              lineItem: { id: "gid://shopify/LineItem/7" },
+            },
+          ],
+        },
+      },
+    ],
+  },
   ...over,
 });
 
@@ -159,11 +181,11 @@ describe("payloads Shopify really sends", () => {
     const rest = restOrder();
     expect(normalizeRestOrder(parsed(restOrderSchema, rest))).toEqual(normalizeRestOrder(rest));
     const refund = { id: 9, order_id: 1001, created_at: "2026-03-05T12:00:00Z", refund_line_items: [{ subtotal: "45.00", quantity: 1 }] };
-    expect(normalizeRestRefund(parsed(restRefundWebhookSchema, refund))).toEqual(normalizeRestRefund(refund));
+    expect(parsed(restRefundWebhookSchema, refund)).toMatchObject({ id: 9, order_id: 1001 });
     const product = restProduct();
     expect(normalizeRestProduct(parsed(restProductSchema, product))).toEqual(normalizeRestProduct(product));
     expect(normalizeRestProductVariants(parsed(restProductSchema, product))).toEqual(normalizeRestProductVariants(product));
-    for (const o of [gqlOrder(), gqlOrder({ customerJourneySummary: null, customer: null, refunds: [] }), gqlOrder({ customerJourneySummary: { ready: false, lastVisit: null } })]) {
+    for (const o of [gqlOrder(), gqlOrder({ customerJourneySummary: null, customer: null, agreements: { nodes: [] } }), gqlOrder({ customerJourneySummary: { ready: false, lastVisit: null } })]) {
       expect(normalizeGraphqlOrder(parsed(graphqlOrderSchema, o))).toEqual(normalizeGraphqlOrder(o));
     }
     expect(normalizeGraphqlProduct(parsed(graphqlProductSchema, gqlProduct()))).toEqual(normalizeGraphqlProduct(gqlProduct()));
@@ -208,7 +230,8 @@ describe("payloads that don't fit", () => {
     ["GraphQL order whose gid ends in nothing", graphqlOrderSchema, gqlOrder({ id: "gid://shopify/Order/" }), "id"],
     ["GraphQL order without a name", graphqlOrderSchema, gqlOrder({ name: null }), "name"],
     ["GraphQL line item without an id", graphqlOrderSchema, gqlOrder({ lineItems: { nodes: [{ title: "A", quantity: 1 }] } }), "lineItems.nodes.0.id"],
-    ["GraphQL refund with an unreadable date", graphqlOrderSchema, gqlOrder({ refunds: [{ id: "gid://shopify/Refund/5", createdAt: "never" }] }), "refunds.0.createdAt"],
+    ["GraphQL agreement with an unreadable date", graphqlOrderSchema, gqlOrder({ agreements: { nodes: [{ id: "gid://shopify/SalesAgreement/5", happenedAt: "never" }] } }), "agreements.nodes.0.happenedAt"],
+    ["GraphQL sale without an id", graphqlOrderSchema, gqlOrder({ agreements: { nodes: [{ id: "gid://shopify/SalesAgreement/5", happenedAt: "2026-01-04T00:00:00Z", sales: { nodes: [{ actionType: "ORDER" }] } }] } }), "agreements.nodes.0.sales.nodes.0.id"],
     ["GraphQL customer with a count that isn't one", graphqlOrderSchema, gqlOrder({ customer: { id: "gid://shopify/Customer/3", numberOfOrders: "lots" } }), "customer.numberOfOrders"],
     ["GraphQL money that isn't an amount", graphqlOrderSchema, gqlOrder({ totalPriceSet: { shopMoney: { amount: [12] } } }), "totalPriceSet.shopMoney.amount"],
     ["GraphQL product without updatedAt", graphqlProductSchema, gqlProduct({ updatedAt: undefined }), "updatedAt"],

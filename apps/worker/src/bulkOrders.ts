@@ -4,7 +4,6 @@ import {
   BULK_OPERATION_CANCEL,
   BULK_OPERATION_NODE,
   BULK_OPERATION_RUN_QUERY,
-  bulkInlineRefundsSchema,
   bulkOrdersQuery,
   CURRENT_BULK_OPERATION,
   graphqlOrderSchema,
@@ -86,42 +85,42 @@ const asLine = (v: unknown): Line => (typeof v === "object" && v !== null && !Ar
  * Rebuild the order node `ordersQuery` would have returned from a run of JSONL lines.
  *
  * Shopify emits one line per object: a parent order with no `__parentId`, then its connection
- * children, each naming its parent. Plain list fields (`fulfillments`, `refunds`) are inlined
- * on the parent instead, so a refund's own line items name the *refund* as their parent.
+ * children, each naming its parent: line items and agreements name the order, a sale names its
+ * *agreement*. Plain list fields (`fulfillments`) are inlined on the parent instead.
  *
  * Children are matched by `__parentId`, never by position, so the only ordering this relies on
- * is Shopify's guarantee that a child follows its parent.
+ * is Shopify's guarantee that a child follows its parent. Under an order, an agreement is the child
+ * with a `happenedAt`; any other child is a line item.
  *
  * The result goes to the unchanged `normalizeGraphqlOrder`: one normalizer for both paths, so
  * money parsing, gid handling and time zones cannot drift apart between them.
  */
 export function reassembleOrders(lines: Line[]): Line[] {
   const orders: Line[] = [];
-  // Each order's line items, and each refund's (those name the refund as their parent), by id.
-  const lineItemsOf = new Map<string, unknown[]>();
-  const refundLineItemsOf = new Map<string, unknown[]>();
+  // Each order's line items and agreements, and each agreement's sales, by the parent's id.
+  const childrenOf = new Map<string, { lineItems: unknown[]; agreements: unknown[] }>();
+  const salesOf = new Map<string, unknown[]>();
 
   for (const line of lines) {
     if (!line.__parentId) {
-      const lineItems: unknown[] = [];
-      const inline = bulkInlineRefundsSchema.safeParse(line.refunds);
-      // Refunds that can't be read stay as they came, for the order schema to turn the order away.
-      const refunds = inline.success
-        ? (inline.data ?? []).map((r) => {
-            // Inlined by Shopify when that nesting is allowed; filled from child lines when not.
-            const nodes = r.refundLineItems?.edges?.map((e) => e.node) ?? r.refundLineItems?.nodes ?? [];
-            refundLineItemsOf.set(r.id, nodes);
-            return { ...r, refundLineItems: { nodes } };
-          })
-        : line.refunds;
-      orders.push({ ...line, lineItems: { nodes: lineItems }, refunds });
-      lineItemsOf.set(String(line.id), lineItems);
+      const children = { lineItems: [] as unknown[], agreements: [] as unknown[] };
+      orders.push({ ...line, lineItems: { nodes: children.lineItems }, agreements: { nodes: children.agreements } });
+      childrenOf.set(String(line.id), children);
       continue;
     }
     const parentId = String(line.__parentId);
-    const siblings = lineItemsOf.get(parentId) ?? refundLineItemsOf.get(parentId);
-    if (siblings) {
-      siblings.push(line);
+    const order = childrenOf.get(parentId);
+    if (order) {
+      if ("happenedAt" in line) {
+        const sales: unknown[] = [];
+        salesOf.set(String(line.id), sales);
+        order.agreements.push({ ...line, sales: { nodes: sales } });
+      } else order.lineItems.push(line);
+      continue;
+    }
+    const sales = salesOf.get(parentId);
+    if (sales) {
+      sales.push(line);
       continue;
     }
     // Chunks are cut at parent boundaries precisely so this cannot happen. Dropping a line item

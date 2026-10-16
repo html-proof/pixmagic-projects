@@ -36,28 +36,37 @@ function SalesDetail({ ov, currency }: { ov: Overview; currency: string }) {
   const c = s.current;
   const p = s.previous;
   const money = (n: number) => fmtMoney(n, currency);
-  const refunds = r2(c.grossSales - c.discounts - c.netSales);
+  const refunds = c.returns;
+  // Duties and fees: what total sales holds besides net sales, shipping and taxes.
+  const otherCharges = r2(c.totalSales - c.netSales - c.shipping - c.tax);
   const r = ov.modules.refunds;
   const prevPeriod = fmtRange(ov.previous.from, ov.previous.to);
-  const change = upDown(s.deltas.netSales);
+  const change = upDown(s.deltas.totalSales);
   const rows: Array<{ label: string; now: string; before: string; delta: number | null }> = [
+    { label: "Total sales", now: money(c.totalSales), before: money(p.totalSales), delta: s.deltas.totalSales },
     { label: "Net sales", now: money(c.netSales), before: money(p.netSales), delta: s.deltas.netSales },
     { label: "Gross sales", now: money(c.grossSales), before: money(p.grossSales), delta: s.deltas.grossSales },
     { label: "Orders", now: fmtNum(c.orders), before: fmtNum(p.orders), delta: s.deltas.orders },
     { label: "Average order", now: money(c.averageOrderValue ?? 0), before: p.averageOrderValue !== null ? money(p.averageOrderValue) : "—", delta: s.deltas.averageOrderValue },
   ];
+  // Shopify's "Total sales breakdown", in its order.
   const lines: Array<{ label: string; note: string; amount: number; sign: "" | "−" }> = [
-    { label: "Full price of items sold", note: "Gross sales: every item at its listed price.", amount: c.grossSales, sign: "" },
+    { label: "Gross sales", note: "Every item sold at its listed price, before tax.", amount: c.grossSales, sign: "" },
     { label: "Discounts", note: "Codes and automatic discounts taken off.", amount: c.discounts, sign: "−" },
-    { label: "Refunds", note: "Money given back in these dates (on the day it was refunded).", amount: refunds, sign: "−" },
+    { label: "Returns", note: "What refunds, cancellations and order edits took back, on the day they were made.", amount: refunds, sign: "−" },
+  ];
+  const charges: Array<{ label: string; note: string; amount: number }> = [
+    { label: "Shipping charges", note: "What customers paid for shipping, after shipping discounts and refunds.", amount: c.shipping },
+    { label: "Taxes", note: "Collected on items and on shipping.", amount: c.tax },
+    ...(otherCharges !== 0 ? [{ label: "Duties and fees", note: "Import duties and other charges on orders.", amount: otherCharges }] : []),
   ];
 
   return (
     <>
       <InShort>
         <p>
-          You made <B>{money(c.netSales)}</B> in net sales from <B>{plural(c.orders, "order")}</B> ({plural(c.units, "item")} sold)
-          {change ? <>, <B>{change}</B> on {prevPeriod}</> : null}.
+          Your total sales were <B>{money(c.totalSales)}</B> from <B>{plural(c.orders, "order")}</B> ({plural(c.units, "item")} sold)
+          {change ? <>, <B>{change}</B> on {prevPeriod}</> : null}. Before shipping and taxes, that&apos;s <B>{money(c.netSales)}</B> in net sales.
         </p>
         {c.orders > 0 && (
           <p>
@@ -69,20 +78,24 @@ function SalesDetail({ ov, currency }: { ov: Overview; currency: string }) {
 
       <Panel id="d-sales-glance" title="At a glance" help={`Compared with ${prevPeriod}, the same number of days just before.`}>
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
+          <Stat label="Total sales" value={money(c.totalSales)} note={<Delta value={s.deltas.totalSales} />} />
           <Stat label="Net sales" value={money(c.netSales)} note={<Delta value={s.deltas.netSales} />} />
           <Stat label="Orders" value={fmtNum(c.orders)} note={<Delta value={s.deltas.orders} />} />
           <Stat label="Average order" value={money(c.averageOrderValue ?? 0)} note={<Delta value={s.deltas.averageOrderValue} />} />
-          <Stat label="Gross sales" value={money(c.grossSales)} note={<Delta value={s.deltas.grossSales} />} />
           <Stat label="Items sold" value={fmtNum(c.units)} note={c.orders ? `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(c.units / c.orders)} per order` : undefined} />
           {r ? (
-            <Stat label="Refunded" value={money(r.current.refunds)} note={<Delta value={r.deltas.refunds} invert />} />
+            <Stat label="Returns" value={money(r.current.refunds)} note={<Delta value={r.deltas.refunds} invert />} />
           ) : (
-            <Stat label="Refunded" value={money(refunds)} />
+            <Stat label="Returns" value={money(refunds)} />
           )}
         </div>
       </Panel>
 
-      <Panel id="d-sales-adds-up" title="How your net sales add up" help="Net sales is what you kept from your products, before tax and shipping.">
+      <Panel
+        id="d-sales-adds-up"
+        title="How your total sales add up"
+        help="The same lines as Shopify's total sales breakdown, from Shopify's own sales records. Test orders aren't counted."
+      >
         <ul className="divide-y divide-border text-sm">
           {lines.map((l) => (
             <li key={l.label} className="flex items-start justify-between gap-4 py-2.5">
@@ -93,22 +106,24 @@ function SalesDetail({ ov, currency }: { ov: Overview; currency: string }) {
               <p className="shrink-0 tabular-nums">{l.sign && l.amount > 0 ? `${l.sign} ` : ""}{money(l.amount)}</p>
             </li>
           ))}
-          <li className="flex items-center justify-between gap-4 py-2.5 text-base">
+          <li className="flex items-center justify-between gap-4 py-2.5">
             <p className="font-semibold">= Net sales</p>
             <p className="font-semibold tabular-nums">{money(c.netSales)}</p>
           </li>
+          {charges.map((l) => (
+            <li key={l.label} className="flex items-start justify-between gap-4 py-2.5">
+              <div className="min-w-0">
+                <p className="font-medium">{l.label}</p>
+                <p className="text-xs text-muted">{l.note}</p>
+              </div>
+              <p className="shrink-0 tabular-nums">{l.amount !== 0 ? `${l.amount > 0 ? "+" : "−"} ` : ""}{money(Math.abs(l.amount))}</p>
+            </li>
+          ))}
+          <li className="flex items-center justify-between gap-4 py-2.5 text-base">
+            <p className="font-semibold">= Total sales</p>
+            <p className="font-semibold tabular-nums">{money(c.totalSales)}</p>
+          </li>
         </ul>
-        <div className="mt-3 grid grid-cols-2 gap-3 rounded-lg border border-dashed border-border p-3 text-sm">
-          <div>
-            <p className="text-xs text-muted">Tax collected</p>
-            <p className="font-medium tabular-nums">{money(c.tax)}</p>
-          </div>
-          <div>
-            <p className="text-xs text-muted">Shipping charged</p>
-            <p className="font-medium tabular-nums">{money(c.shipping)}</p>
-          </div>
-          <p className="col-span-2 text-xs text-muted">Collected on top of your sales and passed on or spent on postage, so they aren&apos;t counted above.</p>
-        </div>
       </Panel>
 
       <Panel id="d-sales-compare" title="This period and the one before" help={`${fmtRange(ov.range.from, ov.range.to)} against ${prevPeriod}.`}>
@@ -138,11 +153,11 @@ function SalesDetail({ ov, currency }: { ov: Overview; currency: string }) {
       </Panel>
 
       {r && (
-        <Panel id="d-sales-refunds" title="Refunds" help="Booked on the day the refund was made, not the day of the order.">
+        <Panel id="d-sales-refunds" title="Returns" help="Refunds, cancellations and edits, booked on the day they were made, not the day of the order.">
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
-            <Stat label="Refunded" value={money(r.current.refunds)} note={<Delta value={r.deltas.refunds} invert />} />
-            <Stat label="Refund rate" value={fmtPct(r.current.refundRate)} note="Share of sales (after discounts) given back." />
-            <Stat label="Orders refunded" value={fmtNum(r.current.refundedOrders)} note="Orders with a refund in these dates." />
+            <Stat label="Returned" value={money(r.current.refunds)} note={<Delta value={r.deltas.refunds} invert />} />
+            <Stat label="Return rate" value={fmtPct(r.current.refundRate)} note="Share of sales (after discounts) given back." />
+            <Stat label="Orders with a return" value={fmtNum(r.current.refundedOrders)} note="Orders refunded, cancelled or edited down in these dates." />
           </div>
         </Panel>
       )}
@@ -159,8 +174,8 @@ function ProductsDetail({ ov, currency }: { ov: Overview; currency: string }) {
   const items = ov.modules.top_products?.items ?? [];
   const c = ov.modules.sales_overview?.current;
   const money = (n: number) => fmtMoney(n, currency);
-  // Product sales are line prices less their discounts: the same footing as gross − discounts.
-  const base = c ? r2(c.grossSales - c.discounts) : null;
+  // Product sales are each product's net sales: together they make the store's net sales.
+  const base = c ? c.netSales : null;
   const share = (n: number) => (base && base > 0 ? n / base : null);
   const top = items[0];
   const topTotal = items.reduce((a, i) => a + i.revenue, 0);
@@ -185,7 +200,7 @@ function ProductsDetail({ ov, currency }: { ov: Overview; currency: string }) {
         )}
       </InShort>
       {ov.modules.top_products && (
-        <Panel id="d-top-products" title="Top products" help="Ranked by sales after discounts, in these dates. Refunds aren't taken off here.">
+        <Panel id="d-top-products" title="Top products" help="Ranked by net sales in these dates (after discounts and returns, before tax), as Shopify's sales by product counts them.">
           {items.length === 0 ? (
             <p className="text-sm text-muted">No product sales in these dates yet.</p>
           ) : (

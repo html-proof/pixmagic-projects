@@ -25,6 +25,7 @@ import {
 import { sampleEventData, type RuleInput } from "@app/shared/email";
 import type { WorkerDeps } from "../src/handlers.js";
 import { consume, type QueueMessage } from "../src/index.js";
+import { salesAnswer } from "./shopifySales.js";
 import { json } from "../../../test-support/emailFakes.js";
 
 /**
@@ -69,6 +70,8 @@ beforeEach(async () => {
   refreshMode = "ok";
   msRefreshToken = "MS_REFRESH_2";
   fetchImpl = async (input, init) => {
+    const sales = salesAnswer(input, init);
+    if (sales) return sales;
     const url = new URL(String(input));
     if (url.hostname === "gmail.googleapis.com") {
       if (gmailMode === "throw") throw new Error("Network connection lost");

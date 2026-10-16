@@ -5,7 +5,6 @@ import {
   gidToId,
   normalizeGraphqlOrder,
   normalizeRestOrder,
-  normalizeRestRefund,
   refreshAccessToken,
   shopifyGraphql,
   shopifyGraphqlWithCost,
@@ -177,13 +176,13 @@ describe("normalizers", () => {
     expect(n.shopifyId).toBe("820982911946154500");
     expect(n.totalShipping).toBe(5);
     expect(n.lineItems[0]).toMatchObject({ price: 50, quantity: 2, discount: 10, productShopifyId: "5" });
-    expect(n.refunds[0]!.lineSubtotal).toBe(25);
+    // Returns come from Shopify's sales records, which REST payloads don't carry.
+    expect(n.sales).toBeNull();
     expect(n.customerId).toBe("77");
     expect(JSON.stringify(n)).not.toContain("secret@example.com");
   });
 
-  it("normalizes refunds and GraphQL orders", () => {
-    expect(normalizeRestRefund({ id: 1, created_at: "2026-01-01T00:00:00Z", refund_line_items: [] }).lineSubtotal).toBe(0);
+  it("normalizes GraphQL orders", () => {
     const g = normalizeGraphqlOrder({
       id: "gid://shopify/Order/42",
       name: "#42",
@@ -198,8 +197,9 @@ describe("normalizers", () => {
       totalPriceSet: { shopMoney: { amount: "11.0" } },
       customer: { id: "gid://shopify/Customer/3", numberOfOrders: "4" },
       lineItems: { nodes: [{ id: "gid://shopify/LineItem/7", title: "A", quantity: 1, product: { id: "gid://shopify/Product/8" }, originalUnitPriceSet: { shopMoney: { amount: "10.0" } }, totalDiscountSet: { shopMoney: { amount: "0" } } }] },
-      refunds: [],
+      agreements: { nodes: [] },
     });
+    expect(g.sales).toEqual([]);
     expect(g.shopifyId).toBe("42");
     expect(g.customerOrderCount).toBe(4);
     expect(g.lineItems[0]!.productShopifyId).toBe("8");

@@ -16,7 +16,6 @@ import {
   type GraphqlVariant,
   type RestOrder,
   type RestProduct,
-  type RestRefund,
   type RestVariant,
 } from "./shopifyPayloads.js";
 
@@ -31,10 +30,26 @@ export interface NormalizedLineItem {
   discount: number;
 }
 
-export interface NormalizedRefund {
+/**
+ * One of Shopify's sales records: a line sold, returned or changed, on the day it happened. These
+ * are what Shopify's own reports add up, so the dashboard's sales totals are built from them
+ * (recomputeDays in persist.ts, docs/kpis.md).
+ */
+export interface NormalizedSale {
   shopifyId: string;
-  createdAt: Date;
-  lineSubtotal: number;
+  /** When the agreement it belongs to happened: the order placed, edited, refunded or returned. */
+  happenedAt: Date;
+  /** order | return | update | unknown */
+  actionType: string;
+  /** product | shipping | gift_card | tip | duty | fee | additional_fee | adjustment | unknown */
+  lineType: string;
+  lineItemShopifyId: string | null;
+  quantity: number | null;
+  /** After discounts, taxes included; negative for a return. */
+  amount: number;
+  /** Discounts before taxes. */
+  discount: number;
+  tax: number;
 }
 
 export interface NormalizedOrder {
@@ -44,6 +59,8 @@ export interface NormalizedOrder {
   createdAt: Date;
   updatedAt: Date;
   cancelledAt: Date | null;
+  /** A test order: never stored (Shopify's reports leave test orders out), and removed if it was. */
+  test: boolean;
   financialStatus: string | null;
   subtotal: number;
   totalDiscounts: number;
@@ -67,7 +84,19 @@ export interface NormalizedOrder {
   traffic: Traffic | null;
   trafficFrom: "journey" | "landing" | null;
   lineItems: NormalizedLineItem[];
-  refunds: NormalizedRefund[];
+  /**
+   * Shopify's sales records for the order, all of them. Null when the source doesn't carry them
+   * (REST webhooks): the stored ones are kept, and the webhook consumer reads them separately.
+   */
+  sales: NormalizedSale[] | null;
+  /**
+   * REST only: the order as placed, estimated from the payload in the shape of Shopify's sales
+   * (`restProvisionalSales`). Stored only for an order whose sales were never read, so a new order
+   * counts at once even when reading its sales fails; the read replaces them.
+   */
+  provisionalSales: NormalizedSale[] | null;
+  /** REST only: the money state the payload describes (`restSalesKey`). */
+  salesKey: string | null;
 }
 
 export interface NormalizedProduct {
@@ -153,12 +182,71 @@ export function restFulfillmentStatus(v: string | null | undefined): string {
   return s;
 }
 
-export function normalizeRestRefund(r: RestRefund): NormalizedRefund {
-  return {
-    shopifyId: String(r.id),
-    createdAt: date(r.created_at),
-    lineSubtotal: (r.refund_line_items ?? []).reduce((a, li) => a + num(li.subtotal), 0),
-  };
+/**
+ * A REST order payload's money state: its totals now and as placed, whether it is cancelled, how many
+ * refunds it has and how many items are left. Every sale, return, cancellation and edit moves one of
+ * them, so a webhook whose key matches the one the stored sales were read for needs no new read of
+ * them, and the many deliveries that only change something else (paid, fulfilled, tagged) cost no
+ * call to Shopify.
+ */
+export function restSalesKey(o: RestOrder): string {
+  const money = (v: string | number | null | undefined) => num(v).toFixed(2);
+  const items = (o.line_items ?? []).reduce((a, li) => a + (li.current_quantity ?? li.quantity ?? 0), 0);
+  return [
+    o.cancelled_at ? date(o.cancelled_at).toISOString() : "",
+    money(o.total_price),
+    money(o.current_total_price ?? o.total_price),
+    money(o.current_subtotal_price ?? o.subtotal_price),
+    money(o.current_total_tax ?? o.total_tax),
+    money(o.current_total_discounts ?? o.total_discounts),
+    (o.refunds ?? []).length,
+    items,
+  ].join("|");
+}
+
+/**
+ * The sales Shopify records when an order is placed, estimated from a REST payload: a sale per line
+ * item and per shipping line, valued after discounts, with their tax (added to the amount unless
+ * the prices include it). Nothing for a cancelled order. Only a stand-in until the real sales are
+ * read (ORDER_SALES_QUERY): with prices that include tax, a discount's tax share isn't known here.
+ */
+export function restProvisionalSales(o: RestOrder): NormalizedSale[] {
+  if (o.cancelled_at) return [];
+  const happenedAt = date(o.created_at);
+  const withTax = o.taxes_included !== true;
+  const taxOf = (lines: Array<{ price?: string | number | null }> | null | undefined) => (lines ?? []).reduce((a, t) => a + num(t.price), 0);
+  const items = (o.line_items ?? []).map((li): NormalizedSale => {
+    const quantity = li.quantity ?? 0;
+    const discount = li.discount_allocations?.length ? li.discount_allocations.reduce((a, d) => a + num(d.amount), 0) : num(li.total_discount);
+    const tax = taxOf(li.tax_lines);
+    return {
+      shopifyId: `provisional:line:${li.id}`,
+      happenedAt,
+      actionType: "order",
+      lineType: li.gift_card ? "gift_card" : "product",
+      lineItemShopifyId: String(li.id),
+      quantity,
+      amount: num(li.price) * quantity - discount + (withTax ? tax : 0),
+      discount,
+      tax,
+    };
+  });
+  const shipping = (o.shipping_lines ?? []).map((sl, i): NormalizedSale => {
+    const tax = taxOf(sl.tax_lines);
+    const price = num(sl.discounted_price ?? sl.price);
+    return {
+      shopifyId: `provisional:shipping:${o.id}:${sl.id ?? i}`,
+      happenedAt,
+      actionType: "order",
+      lineType: "shipping",
+      lineItemShopifyId: null,
+      quantity: null,
+      amount: price + (withTax ? tax : 0),
+      discount: num(sl.price) - price,
+      tax,
+    };
+  });
+  return [...items, ...shipping];
 }
 
 export function normalizeRestOrder(o: RestOrder): NormalizedOrder {
@@ -169,6 +257,7 @@ export function normalizeRestOrder(o: RestOrder): NormalizedOrder {
     createdAt: date(o.created_at),
     updatedAt: date(o.updated_at ?? o.created_at),
     cancelledAt: o.cancelled_at ? date(o.cancelled_at) : null,
+    test: o.test === true,
     financialStatus: o.financial_status ?? null,
     subtotal: num(o.subtotal_price),
     totalDiscounts: num(o.total_discounts),
@@ -194,7 +283,9 @@ export function normalizeRestOrder(o: RestOrder): NormalizedOrder {
         ? li.discount_allocations.reduce((a, d) => a + num(d.amount), 0)
         : num(li.total_discount),
     })),
-    refunds: (o.refunds ?? []).map(normalizeRestRefund),
+    sales: null,
+    provisionalSales: restProvisionalSales(o),
+    salesKey: restSalesKey(o),
   };
 }
 
@@ -221,6 +312,26 @@ function journeyTraffic(o: GraphqlOrder): Pick<NormalizedOrder, "traffic" | "tra
   return { traffic: classifyVisit(j.lastVisit ?? null, text(o.sourceName)), trafficFrom: "journey" };
 }
 
+/** Shopify's enum value (PRODUCT, ADDITIONAL_FEE) as stored: lowercase, "unknown" when missing. */
+const saleEnum = (v: string | null | undefined) => text(v)?.toLowerCase() ?? "unknown";
+
+/** The sales of an order's agreements, each dated by its agreement. */
+export function normalizeGraphqlSales(agreements: NonNullable<GraphqlOrder["agreements"]>["nodes"]): NormalizedSale[] {
+  return (agreements ?? []).flatMap((a) =>
+    (a.sales?.nodes ?? []).map((s) => ({
+      shopifyId: gidToId(s.id)!,
+      happenedAt: date(a.happenedAt),
+      actionType: saleEnum(s.actionType),
+      lineType: saleEnum(s.lineType),
+      lineItemShopifyId: gidToId(s.lineItem?.id),
+      quantity: s.quantity ?? null,
+      amount: money(s.totalAmount),
+      discount: money(s.totalDiscountAmountBeforeTaxes),
+      tax: money(s.totalTaxAmount),
+    })),
+  );
+}
+
 export function normalizeGraphqlOrder(o: GraphqlOrder): NormalizedOrder {
   return {
     shopifyId: gidToId(o.id)!,
@@ -229,6 +340,7 @@ export function normalizeGraphqlOrder(o: GraphqlOrder): NormalizedOrder {
     createdAt: date(o.createdAt),
     updatedAt: date(o.updatedAt ?? o.createdAt),
     cancelledAt: o.cancelledAt ? date(o.cancelledAt) : null,
+    test: o.test === true,
     financialStatus: o.displayFinancialStatus?.toLowerCase() ?? null,
     subtotal: money(o.subtotalPriceSet),
     totalDiscounts: money(o.totalDiscountsSet),
@@ -252,11 +364,9 @@ export function normalizeGraphqlOrder(o: GraphqlOrder): NormalizedOrder {
       price: money(li.originalUnitPriceSet),
       discount: money(li.totalDiscountSet),
     })),
-    refunds: (o.refunds ?? []).map((r) => ({
-      shopifyId: gidToId(r.id)!,
-      createdAt: date(r.createdAt),
-      lineSubtotal: (r.refundLineItems?.nodes ?? []).reduce((a, li) => a + money(li.subtotalSet), 0),
-    })),
+    sales: o.agreements ? normalizeGraphqlSales(o.agreements.nodes) : null,
+    provisionalSales: null,
+    salesKey: null,
   };
 }
 
@@ -343,13 +453,16 @@ export function normalizeRestProductVariants(p: RestProduct): NormalizedVariant[
 // packages/core/test/queryCost.ts re-derives every number below from the query text.
 
 /** Default page sizes for the paginated sync kinds (overridable per message via SyncJobData.pageSize). */
-export const PAGE_SIZE = { orders: 7, products: 100, variants: 100 } as const;
+export const PAGE_SIZE = { orders: 5, products: 100, variants: 100 } as const;
 
-/** Truncation limits of the nested selections in ordersQuery(); see graphqlOrderOverflow(). */
-export const ORDER_NESTED = { lineItems: 10, refunds: 2, refundLineItems: 5 } as const;
+/**
+ * Truncation limits of the nested selections in ordersQuery(); see graphqlOrderOverflow(). Most
+ * orders have one agreement (placed) or two (and a refund), with a sale per item plus shipping.
+ */
+export const ORDER_NESTED = { lineItems: 5, agreements: 2, sales: 6 } as const;
 
 /** Page sizes of the per-order detail queries used when an order overflows ORDER_NESTED. */
-export const ORDER_DETAIL = { lineItems: 100, refunds: 10, refundLineItems: 25, refundLineItemsPage: 100 } as const;
+export const ORDER_DETAIL = { lineItems: 100, sales: 100 } as const;
 
 /**
  * The visit that ended in the order (Order.customerJourneySummary.lastVisit; read_orders is enough).
@@ -366,16 +479,27 @@ const LINE_ITEM_FIELDS = /* GraphQL */ `
   totalDiscountSet { shopMoney { amount } }`;
 
 /**
+ * A sale of an agreement (Order.agreements → sales): Shopify's record of a line sold, returned or
+ * changed, which its reports add up. Sale node: 1 (Sale) + 3 MoneyBags × 2 + lineItem 1 = 8.
+ */
+const SALE_FIELDS = /* GraphQL */ `
+  id actionType lineType quantity
+  totalAmount { shopMoney { amount } }
+  totalDiscountAmountBeforeTaxes { shopMoney { amount } }
+  totalTaxAmount { shopMoney { amount } }
+  ... on ProductSale { lineItem { id } }`;
+
+/**
  * Orders page. Cost per Order node:
  *   1 (Order) + 5 MoneyBags × 2 = 10 + customer { id numberOfOrders } 1 (only with read_customers)
  *   + customerJourneySummary { lastVisit { utmParameters } } 3
  *   + fulfillments(first: 1) = 1 × 1 = 1
- *   + lineItems(first: 10) = 2 + 1 (pageInfo) + 10 × 7 = 73
- *   + refunds(first: 2) = 2 × (1 (Refund) + refundLineItems(first: 5) = 2 + 1 (pageInfo) + 5 × (1 + subtotalSet 2) = 18) = 38
- *   = 127 with customer (126 without).
- * orders(first: $first) = 2 + 1 (pageInfo) + $first × 127:
- *   $first = 7 → 3 + 889 = 892 (885 without customer) ≤ 900;  8 → 1019 (rejected).
- * Orders whose line items / refunds don't fit are completed with the detail queries below.
+ *   + lineItems(first: 5) = 2 + 1 (pageInfo) + 5 × 7 = 38
+ *   + agreements(first: 2) = 2 + 1 (pageInfo) + 2 × (1 (agreement) + sales(first: 6) = 2 + 1 (pageInfo) + 6 × 8 = 51) = 107
+ *   = 161 with customer (160 without).
+ * orders(first: $first) = 2 + 1 (pageInfo) + $first × 161:
+ *   $first = 5 → 3 + 805 = 808 (803 without customer) ≤ 900;  6 → 969, too close to the 1000 cap.
+ * Orders whose line items / sales don't fit are completed with the detail queries below.
  *
  * `reverse: true` makes the walk newest-first, and it is the single most valuable argument in
  * this file. Shopify's cost budget caps the backfill at roughly one 7-order page per 8.6s, so a
@@ -396,7 +520,7 @@ export function ordersQuery(includeCustomer: boolean): string {
       orders(first: $first, after: $cursor, query: $query, sortKey: CREATED_AT, reverse: true) {
         pageInfo { hasNextPage endCursor }
         nodes {
-          id name createdAt updatedAt cancelledAt currencyCode displayFinancialStatus
+          id name createdAt updatedAt cancelledAt test currencyCode displayFinancialStatus
           sourceName displayFulfillmentStatus discountCodes
           customerJourneySummary { ready lastVisit { ${VISIT_FIELDS} } }
           subtotalPriceSet { shopMoney { amount } }
@@ -410,11 +534,14 @@ export function ordersQuery(includeCustomer: boolean): string {
             pageInfo { hasNextPage }
             nodes { ${LINE_ITEM_FIELDS} }
           }
-          refunds(first: ${ORDER_NESTED.refunds}) {
-            id createdAt
-            refundLineItems(first: ${ORDER_NESTED.refundLineItems}) {
-              pageInfo { hasNextPage }
-              nodes { subtotalSet { shopMoney { amount } } }
+          agreements(first: ${ORDER_NESTED.agreements}) {
+            pageInfo { hasNextPage }
+            nodes {
+              id happenedAt
+              sales(first: ${ORDER_NESTED.sales}) {
+                pageInfo { hasNextPage }
+                nodes { ${SALE_FIELDS} }
+              }
             }
           }
         }
@@ -426,8 +553,8 @@ export function ordersQuery(includeCustomer: boolean): string {
  * The same orders, as a Shopify **bulk operation** query.
  *
  * Bulk operations are exempt from the query-cost budget, and that budget is the entire reason
- * the paged walk above is capped at 7 orders per request: `lineItems(first: 10)` and
- * `refunds(first: 2)` are 111 of an Order node's 123 points, so a page of 7 costs 864 of the
+ * the paged walk above is capped at 5 orders per request: `lineItems(first: 5)` and
+ * `agreements(first: 2)` are 145 of an Order node's 161 points, so a page of 5 costs 808 of the
  * 1000 Shopify allows in one query, and the bucket refills at 100/s. A 60-day backfill of a
  * busy store therefore takes hours however carefully it is paced. Shopify runs this query
  * server-side instead and hands back one JSONL file, which turns the same import into minutes.
@@ -440,16 +567,16 @@ export function ordersQuery(includeCustomer: boolean): string {
  *  - **No GraphQL variables**, so the order filter is interpolated into the query string. It
  *    comes from the same `ordersSearch()` as the paged path, so both see the same window, and
  *    it is JSON-escaped on the way in.
- *  - **Connections become separate JSONL lines** carrying `__parentId`; plain list fields
- *    (`fulfillments`, `refunds`) stay inlined on the parent. `apps/worker/src/bulkOrders.ts`
- *    reassembles them into the shape `normalizeGraphqlOrder` already expects, so there is one
- *    normalizer, not two.
+ *  - **Connections become separate JSONL lines** carrying `__parentId` (a sale names its
+ *    agreement); plain list fields (`fulfillments`) stay inlined on the parent.
+ *    `apps/worker/src/bulkOrders.ts` reassembles them into the shape `normalizeGraphqlOrder`
+ *    already expects, so there is one normalizer, not two.
  *
- * Unverified against a live shop: `refundLineItems` is a connection inside the inlined
- * `refunds` list, and Shopify's limits on nesting there are not documented precisely enough to
- * be sure it is accepted. If it is not, `bulkOperationRunQuery` answers with `userErrors` and
- * the caller falls back to the paged path, so the cost of being wrong is a slow import rather
- * than a broken one. Confirm it against a development store and remove this note.
+ * Shopify refuses a connection inside a list field ("connection field within a list field"),
+ * which is what the old refunds { refundLineItems } selection was. orders → agreements → sales
+ * nests connections two levels deep, the most a bulk query may. If Shopify turns it down anyway,
+ * `bulkOperationRunQuery` answers with `userErrors` and the caller falls back to the paged path:
+ * a slow import rather than a broken one.
  */
 export function bulkOrdersQuery(includeCustomer: boolean, search: string | null): string {
   const args = ["sortKey: CREATED_AT", "reverse: true"];
@@ -459,7 +586,7 @@ export function bulkOrdersQuery(includeCustomer: boolean, search: string | null)
       orders(${args.join(", ")}) {
         edges {
           node {
-            id name createdAt updatedAt cancelledAt currencyCode displayFinancialStatus
+            id name createdAt updatedAt cancelledAt test currencyCode displayFinancialStatus
             sourceName displayFulfillmentStatus discountCodes
             customerJourneySummary { ready lastVisit { ${VISIT_FIELDS} } }
             subtotalPriceSet { shopMoney { amount } }
@@ -470,10 +597,7 @@ export function bulkOrdersQuery(includeCustomer: boolean, search: string | null)
             ${includeCustomer ? "customer { id numberOfOrders }" : ""}
             fulfillments { createdAt }
             lineItems { edges { node { ${LINE_ITEM_FIELDS} } } }
-            refunds {
-              id createdAt
-              refundLineItems { edges { node { subtotalSet { shopMoney { amount } } } } }
-            }
+            agreements { edges { node { id happenedAt sales { edges { node { ${SALE_FIELDS} } } } } } }
           }
         }
       }
@@ -533,17 +657,15 @@ export interface BulkOperationStatus {
 }
 
 /**
- * Whether an order node from ordersQuery() was truncated: more line items than fit, a
- * refund with more refund line items than fit, or as many refunds as requested (there
- * may be more; Order.refunds is a plain list without pageInfo).
+ * Whether an order node from ordersQuery() was truncated: more line items than fit, more
+ * agreements than fit, or an agreement with more sales than fit.
  */
-export function graphqlOrderOverflow(o: Pick<GraphqlOrder, "lineItems" | "refunds">): { lineItems: boolean; refunds: boolean } {
-  const refunds = o.refunds ?? [];
+export function graphqlOrderOverflow(o: Pick<GraphqlOrder, "lineItems" | "agreements">): { lineItems: boolean; sales: boolean } {
   return {
     lineItems: o.lineItems?.pageInfo?.hasNextPage === true,
-    refunds:
-      refunds.length >= ORDER_NESTED.refunds ||
-      refunds.some((r) => r.refundLineItems?.pageInfo?.hasNextPage === true),
+    sales:
+      o.agreements?.pageInfo?.hasNextPage === true ||
+      (o.agreements?.nodes ?? []).some((a) => a.sales?.pageInfo?.hasNextPage === true),
   };
 }
 
@@ -562,33 +684,25 @@ export const ORDER_LINE_ITEMS_QUERY = /* GraphQL */ `
   }`;
 
 /**
- * Up to 10 refunds of one order with 25 refund line items each.
- * Cost: 1 (Order) + refunds(first: 10) = 10 × (1 (Refund) + refundLineItems(first: 25)
- *   = 2 + 1 (pageInfo) + 25 × (1 + subtotalSet 2) = 78) = 790 → 791.
+ * One order's sales, an agreement at a time: `$cursor` walks the agreements, `$salesCursor` the
+ * sales of the current one when it has more than 100. Used for an order that overflows the page
+ * and for the webhooks, which carry no sales. `updatedAt` dates what was read (the staleness guard).
+ * Cost: 1 (Order) + agreements(first: 1) = 2 + 1 (pageInfo) + 1 × (1 (agreement)
+ *   + sales(first: 100) = 2 + 1 (pageInfo) + 100 × 8 = 803) = 807 → 808.
  */
-export const ORDER_REFUNDS_QUERY = /* GraphQL */ `
-  query OrderRefunds($id: ID!) {
+export const ORDER_SALES_QUERY = /* GraphQL */ `
+  query OrderSales($id: ID!, $cursor: String, $salesCursor: String) {
     order(id: $id) {
-      refunds(first: ${ORDER_DETAIL.refunds}) {
-        id createdAt
-        refundLineItems(first: ${ORDER_DETAIL.refundLineItems}) {
-          pageInfo { hasNextPage endCursor }
-          nodes { subtotalSet { shopMoney { amount } } }
-        }
-      }
-    }
-  }`;
-
-/**
- * Remaining refund line items of one refund (when it has more than 25).
- * Cost: 1 (Refund) + refundLineItems(first: 100) = 2 + 1 (pageInfo) + 100 × 3 = 303 → 304.
- */
-export const REFUND_LINE_ITEMS_QUERY = /* GraphQL */ `
-  query RefundLineItems($id: ID!, $cursor: String) {
-    refund(id: $id) {
-      refundLineItems(first: ${ORDER_DETAIL.refundLineItemsPage}, after: $cursor) {
+      updatedAt
+      agreements(first: 1, after: $cursor) {
         pageInfo { hasNextPage endCursor }
-        nodes { subtotalSet { shopMoney { amount } } }
+        nodes {
+          id happenedAt
+          sales(first: ${ORDER_DETAIL.sales}, after: $salesCursor) {
+            pageInfo { hasNextPage endCursor }
+            nodes { ${SALE_FIELDS} }
+          }
+        }
       }
     }
   }`;

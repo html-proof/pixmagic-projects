@@ -135,13 +135,13 @@ const running = (values: number[]) => {
   return values.map((v) => Math.round((total += v) * 100) / 100);
 };
 
-type SalesView = "net" | "total" | "refunds";
+type SalesView = "sales" | "net" | "running" | "refunds";
 type OrdersView = "daily" | "total";
 
 /** Net sales and orders over the dates picked, side by side (the headline numbers above open their details). */
 export function TrendCharts({ ov, currency }: { ov: Overview; currency: string }) {
   const s = ov.modules.sales_overview;
-  const [salesView, setSalesView] = useState<SalesView>("net");
+  const [salesView, setSalesView] = useState<SalesView>("sales");
   const [ordersView, setOrdersView] = useState<OrdersView>("daily");
   if (!s) return null;
   const days = s.series.map((d) => d.day);
@@ -151,13 +151,14 @@ export function TrendCharts({ ov, currency }: { ov: Overview; currency: string }
   const count = (v: number) => fmtNum(v);
 
   const net = s.series.map((d) => d.netSales);
-  const salesValues = salesView === "refunds" ? s.series.map((d) => d.refunds) : salesView === "total" ? running(net) : net;
+  const salesValues =
+    salesView === "refunds" ? s.series.map((d) => d.refunds) : salesView === "running" ? running(net) : salesView === "sales" ? s.series.map((d) => d.totalSales) : net;
   const salesEmpty = salesValues.every((v) => v === 0);
   const orders = s.series.map((d) => d.orders);
   const orderValues = ordersView === "total" ? running(orders) : orders;
   const ordersEmpty = orderValues.every((v) => v === 0);
 
-  const salesLabel = { net: "Net sales per day", total: "Net sales, running total", refunds: "Refunds per day" }[salesView];
+  const salesLabel = { sales: "Total sales per day", net: "Net sales per day", running: "Net sales, running total", refunds: "Returns per day" }[salesView];
   const ordersLabel = ordersView === "total" ? "Orders, running total" : "Orders per day";
 
   return (
@@ -174,9 +175,10 @@ export function TrendCharts({ ov, currency }: { ov: Overview; currency: string }
               value={salesView}
               onChange={setSalesView}
               options={[
+                ["sales", "Total sales"],
                 ["net", "Net sales"],
-                ["total", "Running total"],
-                ["refunds", "Refunds"],
+                ["running", "Running total"],
+                ["refunds", "Returns"],
               ]}
             />
           }

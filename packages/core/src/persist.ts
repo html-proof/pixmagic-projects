@@ -1,7 +1,7 @@
 import { systemDb, type Store } from "@app/db";
 import { expandScopes, hmacSha256Hex, localDay } from "@app/shared";
 import { env } from "./env.js";
-import type { NormalizedOrder, NormalizedProduct, NormalizedRefund, NormalizedVariant } from "./normalize.js";
+import type { NormalizedOrder, NormalizedProduct, NormalizedSale, NormalizedVariant } from "./normalize.js";
 import { revokeAdAccessIfUnused } from "./adConnections.js";
 import type { FetchLike } from "./shopify.js";
 
@@ -19,8 +19,15 @@ export function customerKey(store: Pick<Store, "id">, customerId: string): strin
  * Idempotent order upsert. Older payloads (by Shopify updated_at) never
  * overwrite newer ones, so webhook redelivery / out-of-order delivery is safe.
  * Returns the set of local days whose aggregates must be recomputed.
+ *
+ * Sales are replaced wholesale when the payload carries them (GraphQL) and kept when it doesn't
+ * (REST webhooks: the consumer reads them separately, `replaceOrderSales`), or when the stored
+ * ones were read at a later state of the order than the payload's; an order whose sales were never
+ * read gets the payload's provisional ones meanwhile. A test order is never stored, and one stored
+ * before is removed: Shopify's reports leave test orders out.
  */
 export async function upsertOrder(store: StoreCtx, o: NormalizedOrder): Promise<Set<string>> {
+  if (o.test) return removeOrders(store, [o.shopifyId]);
   const days = new Set<string>();
   const day = localDay(o.createdAt, store.timezone);
   const existing = await systemDb.order.findUnique({
@@ -83,16 +90,21 @@ export async function upsertOrder(store: StoreCtx, o: NormalizedOrder): Promise<
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`order:${store.id}:${o.shopifyId}`}))`;
     const current = await tx.order.findUnique({
       where: { storeId_shopifyId: { storeId: store.id, shopifyId: o.shopifyId } },
-      select: { shopifyUpdatedAt: true },
+      select: { shopifyUpdatedAt: true, salesUpdatedAt: true },
     });
     if (current && current.shopifyUpdatedAt > o.updatedAt) {
       stale = true;
       return;
     }
+    // The payload's sales, unless the stored ones were read at a later state (a webhook's read
+    // landing while this copy was on its way); else, for an order never read, its estimate.
+    const freshSales = o.sales && !(current?.salesUpdatedAt && current.salesUpdatedAt > o.updatedAt) ? o.sales : null;
+    const sales = freshSales ?? (current?.salesUpdatedAt ? null : o.provisionalSales);
+    const data = { ...base, ...(freshSales ? { salesUpdatedAt: o.updatedAt, salesKey: o.salesKey } : {}) };
     const order = await tx.order.upsert({
       where: { storeId_shopifyId: { storeId: store.id, shopifyId: o.shopifyId } },
-      create: { ...base, workspaceId: store.workspaceId, storeId: store.id, shopifyId: o.shopifyId },
-      update: base,
+      create: { ...data, workspaceId: store.workspaceId, storeId: store.id, shopifyId: o.shopifyId },
+      update: data,
     });
     await tx.orderLineItem.deleteMany({ where: { orderId: order.id } });
     if (o.lineItems.length) {
@@ -113,10 +125,7 @@ export async function upsertOrder(store: StoreCtx, o: NormalizedOrder): Promise<
         skipDuplicates: true,
       });
     }
-    for (const r of o.refunds) {
-      const rd = await upsertRefundTx(tx, store, order.id, r);
-      days.add(rd);
-    }
+    if (sales) for (const d of await writeSalesTx(tx, store, order.id, sales)) days.add(d);
   });
   if (stale) return days;
 
@@ -127,30 +136,89 @@ export async function upsertOrder(store: StoreCtx, o: NormalizedOrder): Promise<
 
 type TxClient = Parameters<Parameters<typeof systemDb.$transaction>[0]>[0];
 
-async function upsertRefundTx(tx: TxClient, store: StoreCtx, orderId: string, r: NormalizedRefund) {
-  const day = localDay(r.createdAt, store.timezone);
-  const data = { localDay: day, shopifyCreatedAt: r.createdAt, lineSubtotal: r.lineSubtotal };
-  await tx.refund.upsert({
-    where: { storeId_shopifyId: { storeId: store.id, shopifyId: r.shopifyId } },
-    create: { ...data, workspaceId: store.workspaceId, storeId: store.id, orderId, shopifyId: r.shopifyId },
-    update: data,
-  });
-  return day;
+/** The rows of `sales` for one order, as order_sales stores them. */
+function saleRows(store: StoreCtx, orderId: string, sales: NormalizedSale[]) {
+  return dedupe(sales).map((x) => ({
+    workspaceId: store.workspaceId,
+    storeId: store.id,
+    orderId,
+    shopifyId: x.shopifyId,
+    localDay: localDay(x.happenedAt, store.timezone),
+    happenedAt: x.happenedAt,
+    actionType: x.actionType,
+    lineType: x.lineType,
+    lineItemShopifyId: x.lineItemShopifyId,
+    quantity: x.quantity,
+    amount: x.amount,
+    discount: x.discount,
+    tax: x.tax,
+  }));
 }
 
-/** refunds/create webhook. Returns affected days, or null if the order is unknown yet. */
-export async function upsertRefund(
+/** Replace an order's sales with `sales`; returns the days they were and are now on. */
+async function writeSalesTx(tx: TxClient, store: StoreCtx, orderId: string, sales: NormalizedSale[]) {
+  const days = new Set<string>();
+  const old = await tx.orderSale.findMany({ where: { orderId }, select: { localDay: true }, distinct: ["localDay"] });
+  for (const r of old) days.add(r.localDay);
+  await tx.orderSale.deleteMany({ where: { orderId } });
+  const rows = saleRows(store, orderId, sales);
+  for (const r of rows) days.add(r.localDay);
+  if (rows.length) await tx.orderSale.createMany({ data: rows });
+  return days;
+}
+
+/**
+ * Store an order's sales read from Shopify after a webhook (REST payloads carry none). `readAt` is
+ * the order's updated_at that Shopify answered with, and the staleness guard: sales already read at
+ * a later state are kept. `salesKey` is the webhook payload's (`restSalesKey`), so the next delivery
+ * in the same money state skips the read; undefined keeps the stored one. Returns the affected
+ * days, or null when the order isn't stored (not synced yet, or a test order).
+ */
+export async function replaceOrderSales(
   store: StoreCtx,
   orderShopifyId: string,
-  r: NormalizedRefund,
+  sales: NormalizedSale[],
+  readAt: Date,
+  salesKey: string | null | undefined,
 ): Promise<Set<string> | null> {
-  const order = await systemDb.order.findUnique({
-    where: { storeId_shopifyId: { storeId: store.id, shopifyId: orderShopifyId } },
-    select: { id: true },
+  return systemDb.$transaction(async (tx) => {
+    // One writer per order, as in upsertOrder (the same lock key).
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`order:${store.id}:${orderShopifyId}`}))`;
+    const order = await tx.order.findUnique({
+      where: { storeId_shopifyId: { storeId: store.id, shopifyId: orderShopifyId } },
+      select: { id: true, localDay: true, salesUpdatedAt: true },
+    });
+    if (!order) return null;
+    if (order.salesUpdatedAt && order.salesUpdatedAt > readAt) return new Set<string>();
+    const days = await writeSalesTx(tx, store, order.id, sales);
+    await tx.order.update({ where: { id: order.id }, data: { salesUpdatedAt: readAt, ...(salesKey !== undefined ? { salesKey } : {}) } });
+    days.add(order.localDay);
+    return days;
   });
-  if (!order) return null;
-  const day = await systemDb.$transaction((tx) => upsertRefundTx(tx, store, order.id, r));
-  return new Set([day]);
+}
+
+/** The money state the stored sales of an order were read for, or undefined when it isn't stored. */
+export async function storedSalesState(store: Pick<Store, "id">, orderShopifyId: string) {
+  const o = await systemDb.order.findUnique({
+    where: { storeId_shopifyId: { storeId: store.id, shopifyId: orderShopifyId } },
+    select: { salesUpdatedAt: true, salesKey: true },
+  });
+  return o ?? undefined;
+}
+
+/** Delete these orders (with their line items and sales); returns the days they were on. */
+async function removeOrders(store: StoreCtx, shopifyIds: string[]): Promise<Set<string>> {
+  const days = new Set<string>();
+  if (!shopifyIds.length) return days;
+  const rows = await systemDb.$queryRaw<Array<{ day: string }>>`
+    SELECT o.local_day AS day FROM orders o WHERE o.store_id = ${store.id} AND o.shopify_id = ANY(${shopifyIds}::text[])
+    UNION
+    SELECT s.local_day AS day FROM order_sales s JOIN orders o ON o.id = s.order_id
+    WHERE o.store_id = ${store.id} AND o.shopify_id = ANY(${shopifyIds}::text[])`;
+  if (!rows.length) return days;
+  await systemDb.order.deleteMany({ where: { storeId: store.id, shopifyId: { in: shopifyIds } } });
+  for (const r of rows) days.add(r.day);
+  return days;
 }
 
 /**
@@ -177,18 +245,21 @@ export async function upsertRefund(
  * arrive oldest-first. Shopify's own count is used when present, and
  * `recomputeReturningCustomers` settles the rest once the import is complete.
  *
+ * Sales and test orders are handled as `upsertOrder` handles them.
+ *
  * Returns the store-local days touched, for the caller to aggregate.
  */
 export async function writeOrderBatch(store: StoreCtx, orders: NormalizedOrder[]): Promise<Set<string>> {
-  const days = new Set<string>();
-  const rows = dedupe(orders);
+  const all = dedupe(orders);
+  const days = await removeOrders(store, all.filter((o) => o.test).map((o) => o.shopifyId));
+  const rows = all.filter((o) => !o.test);
   if (!rows.length) return days;
 
   const withCustomers = expandScopes(store.grantedScopes).has("read_customers");
   const payload = rows.map((o) => {
     const day = localDay(o.createdAt, store.timezone);
     days.add(day);
-    for (const r of o.refunds) days.add(localDay(r.createdAt, store.timezone));
+    for (const x of o.sales ?? []) days.add(localDay(x.happenedAt, store.timezone));
     return {
       shopify_id: o.shopifyId,
       name: o.name,
@@ -213,27 +284,46 @@ export async function writeOrderBatch(store: StoreCtx, orders: NormalizedOrder[]
       traffic_medium: o.traffic?.medium ?? null,
       traffic_campaign: o.traffic?.campaign ?? null,
       referrer_host: o.traffic?.referrerHost ?? null,
+      sales_updated_at: o.sales ? ts(o.updatedAt) : null,
+      sales_key: o.sales ? o.salesKey : null,
     };
   });
 
   await systemDb.$transaction(async (tx) => {
+    // When each order's stored sales were read, before this batch writes: sales read at a later
+    // state than the batch's copy (a webhook's read meanwhile) are kept, as in upsertOrder. Locked,
+    // so no such read lands between this look and the write.
+    const salesReadAt = new Map(
+      (
+        await tx.$queryRaw<Array<{ shopify_id: string; sales_updated_at: Date | null }>>`
+          SELECT shopify_id, sales_updated_at FROM orders
+          WHERE store_id = ${store.id} AND shopify_id = ANY(${rows.map((o) => o.shopifyId)}::text[])
+          FOR UPDATE`
+      ).map((r) => [r.shopify_id, r.sales_updated_at]),
+    );
+    const salesFresh = (o: NormalizedOrder) => {
+      const readAt = salesReadAt.get(o.shopifyId);
+      return !!o.sales && !(readAt && readAt > o.updatedAt);
+    };
     const written = await tx.$queryRaw<Array<{ id: string; shopify_id: string }>>`
       INSERT INTO orders (id, workspace_id, store_id, shopify_id, name, currency, local_day, shopify_created_at, shopify_updated_at,
                           cancelled_at, financial_status, subtotal, total_discounts, total_tax, total_shipping, total_price,
                           customer_key, is_returning_customer, source_name, fulfillment_status, fulfilled_at, discount_codes,
-                          traffic_source, traffic_medium, traffic_campaign, referrer_host)
+                          traffic_source, traffic_medium, traffic_campaign, referrer_host, sales_updated_at, sales_key)
       SELECT gen_random_uuid()::text, ${store.workspaceId}, ${store.id}, s.shopify_id, s.name, s.currency, s.local_day,
              (s.created_at)::timestamptz AT TIME ZONE 'UTC', (s.updated_at)::timestamptz AT TIME ZONE 'UTC',
              (s.cancelled_at)::timestamptz AT TIME ZONE 'UTC', s.financial_status,
              s.subtotal::numeric, s.total_discounts::numeric, s.total_tax::numeric, s.total_shipping::numeric, s.total_price::numeric,
              s.customer_key, s.is_returning_customer, s.source_name, s.fulfillment_status,
              (s.fulfilled_at)::timestamptz AT TIME ZONE 'UTC', s.discount_codes,
-             s.traffic_source, s.traffic_medium, s.traffic_campaign, s.referrer_host
+             s.traffic_source, s.traffic_medium, s.traffic_campaign, s.referrer_host,
+             (s.sales_updated_at)::timestamptz AT TIME ZONE 'UTC', s.sales_key
       FROM jsonb_to_recordset(${JSON.stringify(payload)}::jsonb) AS s(
         shopify_id text, name text, currency text, local_day text, created_at text, updated_at text, cancelled_at text,
         financial_status text, subtotal text, total_discounts text, total_tax text, total_shipping text, total_price text,
         customer_key text, is_returning_customer boolean, source_name text, fulfillment_status text, fulfilled_at text,
-        discount_codes text[], traffic_source text, traffic_medium text, traffic_campaign text, referrer_host text
+        discount_codes text[], traffic_source text, traffic_medium text, traffic_campaign text, referrer_host text,
+        sales_updated_at text, sales_key text
       )
       ON CONFLICT (store_id, shopify_id) DO UPDATE SET
         name = EXCLUDED.name, currency = EXCLUDED.currency, local_day = EXCLUDED.local_day,
@@ -249,7 +339,11 @@ export async function writeOrderBatch(store: StoreCtx, orders: NormalizedOrder[]
         traffic_source = COALESCE(EXCLUDED.traffic_source, orders.traffic_source),
         traffic_medium = CASE WHEN EXCLUDED.traffic_source IS NULL THEN orders.traffic_medium ELSE EXCLUDED.traffic_medium END,
         traffic_campaign = CASE WHEN EXCLUDED.traffic_source IS NULL THEN orders.traffic_campaign ELSE EXCLUDED.traffic_campaign END,
-        referrer_host = CASE WHEN EXCLUDED.traffic_source IS NULL THEN orders.referrer_host ELSE EXCLUDED.referrer_host END
+        referrer_host = CASE WHEN EXCLUDED.traffic_source IS NULL THEN orders.referrer_host ELSE EXCLUDED.referrer_host END,
+        -- Orders without sales in the payload, or whose stored sales were read later, keep theirs.
+        sales_updated_at = GREATEST(EXCLUDED.sales_updated_at, orders.sales_updated_at),
+        sales_key = CASE WHEN EXCLUDED.sales_updated_at IS NOT NULL AND (orders.sales_updated_at IS NULL OR orders.sales_updated_at <= EXCLUDED.sales_updated_at)
+                         THEN EXCLUDED.sales_key ELSE orders.sales_key END
       WHERE orders.shopify_updated_at <= EXCLUDED.shopify_updated_at
       RETURNING id, shopify_id`;
 
@@ -286,29 +380,43 @@ export async function writeOrderBatch(store: StoreCtx, orders: NormalizedOrder[]
         ON CONFLICT (store_id, shopify_id) DO NOTHING`;
     }
 
-    const refunds = rows.flatMap((o) => {
-      const orderId = idFor.get(o.shopifyId);
-      return orderId
-        ? o.refunds.map((r) => ({
-            order_id: orderId,
-            shopify_id: r.shopifyId,
-            local_day: localDay(r.createdAt, store.timezone),
-            created_at: ts(r.createdAt),
-            line_subtotal: String(r.lineSubtotal),
-          }))
-        : [];
-    });
-    if (refunds.length) {
+    // Sales are replaced wholesale too, for the written orders that carry them; the days the old
+    // ones were on need recomputing as well.
+    const withSales = rows.filter((o) => salesFresh(o) && idFor.has(o.shopifyId));
+    if (!withSales.length) return;
+    const old = await tx.$queryRaw<Array<{ day: string }>>`
+      DELETE FROM order_sales WHERE order_id = ANY(${withSales.map((o) => idFor.get(o.shopifyId)!)}::text[]) RETURNING local_day AS day`;
+    for (const r of old) days.add(r.day);
+    const sales = withSales.flatMap((o) =>
+      saleRows(store, idFor.get(o.shopifyId)!, o.sales!).map((x) => ({
+        order_id: x.orderId,
+        shopify_id: x.shopifyId,
+        local_day: x.localDay,
+        happened_at: ts(x.happenedAt),
+        action_type: x.actionType,
+        line_type: x.lineType,
+        line_item_shopify_id: x.lineItemShopifyId,
+        quantity: x.quantity,
+        amount: String(x.amount),
+        discount: String(x.discount),
+        tax: String(x.tax),
+      })),
+    );
+    if (sales.length) {
       await tx.$executeRaw`
-        INSERT INTO refunds (id, workspace_id, store_id, order_id, shopify_id, local_day, shopify_created_at, line_subtotal)
+        INSERT INTO order_sales (id, workspace_id, store_id, order_id, shopify_id, local_day, happened_at, action_type, line_type,
+                                 line_item_shopify_id, quantity, amount, discount, tax)
         SELECT gen_random_uuid()::text, ${store.workspaceId}, ${store.id}, s.order_id, s.shopify_id, s.local_day,
-               (s.created_at)::timestamptz AT TIME ZONE 'UTC', s.line_subtotal::numeric
-        FROM jsonb_to_recordset(${JSON.stringify(refunds)}::jsonb) AS s(
-          order_id text, shopify_id text, local_day text, created_at text, line_subtotal text
+               (s.happened_at)::timestamptz AT TIME ZONE 'UTC', s.action_type, s.line_type, s.line_item_shopify_id, s.quantity,
+               s.amount::numeric, s.discount::numeric, s.tax::numeric
+        FROM jsonb_to_recordset(${JSON.stringify(sales)}::jsonb) AS s(
+          order_id text, shopify_id text, local_day text, happened_at text, action_type text, line_type text,
+          line_item_shopify_id text, quantity int, amount text, discount text, tax text
         )
         ON CONFLICT (store_id, shopify_id) DO UPDATE SET
-          local_day = EXCLUDED.local_day, shopify_created_at = EXCLUDED.shopify_created_at,
-          line_subtotal = EXCLUDED.line_subtotal`;
+          order_id = EXCLUDED.order_id, local_day = EXCLUDED.local_day, happened_at = EXCLUDED.happened_at,
+          action_type = EXCLUDED.action_type, line_type = EXCLUDED.line_type, line_item_shopify_id = EXCLUDED.line_item_shopify_id,
+          quantity = EXCLUDED.quantity, amount = EXCLUDED.amount, discount = EXCLUDED.discount, tax = EXCLUDED.tax`;
     }
   });
   return days;
@@ -498,9 +606,19 @@ export async function deleteProduct(store: Pick<Store, "id">, productShopifyId: 
 }
 
 /**
- * Recompute daily aggregates for the given store-local days from normalized
- * rows. Pure function of the source tables => safe to run any number of times.
- * Mirrors aggregateDaily() in packages/shared/src/kpi.ts (tested for parity).
+ * Recompute daily aggregates for the given store-local days from the stored orders and their
+ * sales. Pure function of the source tables => safe to run any number of times.
+ * Mirrors aggregateDaily() in packages/shared/src/kpi.ts (tested for parity); the definitions
+ * are Shopify's own (docs/kpis.md):
+ *
+ *  - Orders: orders placed that day, cancelled ones included (test orders are never stored).
+ *  - Money comes from the sales that happened that day, whatever day the order was placed: a
+ *    sale's value before tax is its amount less its tax. Product and adjustment lines make net
+ *    sales: an order action adds to gross sales (value + discount) and discounts; any other action
+ *    (a return, a cancellation, an edit) is a return, so net sales = gross − discounts − returns.
+ *    Shipping lines make shipping, duties and fees go to total sales only; gift cards and tips
+ *    count nowhere, as in Shopify's reports.
+ *  - A return is never counted as money in, whichever sign Shopify gave it (`-ABS`).
  */
 export async function recomputeDays(store: Pick<Store, "id" | "workspaceId">, days: string[]) {
   if (!days.length) return;
@@ -512,39 +630,48 @@ export async function recomputeDays(store: Pick<Store, "id" | "workspaceId">, da
              (COUNT(*) FILTER (WHERE customer_key IS NOT NULL))::int AS owc,
              (COUNT(*) FILTER (WHERE customer_key IS NOT NULL AND is_returning_customer))::int AS ret
       FROM orders
-      WHERE store_id = ${store.id} AND cancelled_at IS NULL AND local_day = ANY(${days}::text[])
-      GROUP BY local_day
-    ),
-    li AS (
-      SELECT o.local_day AS day,
-             SUM(li.price * li.quantity) AS gross,
-             SUM(li.discount) AS disc,
-             SUM(li.quantity)::int AS units
-      FROM order_line_items li JOIN orders o ON o.id = li.order_id
-      WHERE o.store_id = ${store.id} AND o.cancelled_at IS NULL AND o.local_day = ANY(${days}::text[])
-      GROUP BY o.local_day
-    ),
-    r AS (
-      SELECT local_day AS day, SUM(line_subtotal) AS refunds, COUNT(DISTINCT order_id)::int AS ro
-      FROM refunds
       WHERE store_id = ${store.id} AND local_day = ANY(${days}::text[])
       GROUP BY local_day
+    ),
+    v AS (
+      SELECT local_day AS day, order_id, action_type, line_type, quantity, discount,
+             CASE WHEN action_type = 'return' THEN -ABS(amount - tax) ELSE amount - tax END AS value,
+             CASE WHEN action_type = 'return' THEN -ABS(tax) ELSE tax END AS tax
+      FROM order_sales
+      WHERE store_id = ${store.id} AND local_day = ANY(${days}::text[]) AND line_type NOT IN ('gift_card', 'tip')
+    ),
+    s AS (
+      SELECT day,
+             SUM(value + discount) FILTER (WHERE line_type IN ('product', 'adjustment') AND action_type = 'order') AS gross,
+             SUM(discount) FILTER (WHERE line_type IN ('product', 'adjustment') AND action_type = 'order') AS disc,
+             -SUM(value) FILTER (WHERE line_type IN ('product', 'adjustment') AND action_type <> 'order') AS returns,
+             SUM(value) FILTER (WHERE line_type = 'shipping') AS shipping,
+             SUM(tax) AS taxes,
+             SUM(value) FILTER (WHERE line_type <> 'shipping' AND line_type NOT IN ('product', 'adjustment')) AS other,
+             (SUM(ABS(COALESCE(quantity, 0))) FILTER (WHERE line_type = 'product' AND action_type = 'order'))::int AS units_in,
+             (SUM(ABS(COALESCE(quantity, 0))) FILTER (WHERE line_type = 'product' AND action_type = 'return'))::int AS units_out,
+             (COUNT(DISTINCT order_id) FILTER (WHERE action_type = 'return'))::int AS ro
+      FROM v
+      GROUP BY day
     )
     INSERT INTO daily_store_metrics
-      (workspace_id, store_id, day, gross_sales, discounts, refunds, orders, units,
+      (workspace_id, store_id, day, gross_sales, discounts, refunds, shipping, taxes, total_sales, orders, units,
        orders_with_customer, returning_customer_orders, refunded_orders)
     SELECT ${store.workspaceId}, ${store.id}, d.day,
-           COALESCE(li.gross, 0), COALESCE(li.disc, 0), COALESCE(r.refunds, 0),
-           COALESCE(o.orders, 0), COALESCE(li.units, 0),
-           COALESCE(o.owc, 0), COALESCE(o.ret, 0), COALESCE(r.ro, 0)
+           COALESCE(s.gross, 0), COALESCE(s.disc, 0), COALESCE(s.returns, 0), COALESCE(s.shipping, 0), COALESCE(s.taxes, 0),
+           COALESCE(s.gross, 0) - COALESCE(s.disc, 0) - COALESCE(s.returns, 0) + COALESCE(s.shipping, 0) + COALESCE(s.taxes, 0) + COALESCE(s.other, 0),
+           COALESCE(o.orders, 0), COALESCE(s.units_in, 0) - COALESCE(s.units_out, 0),
+           COALESCE(o.owc, 0), COALESCE(o.ret, 0), COALESCE(s.ro, 0)
     FROM d
     LEFT JOIN o ON o.day = d.day
-    LEFT JOIN li ON li.day = d.day
-    LEFT JOIN r ON r.day = d.day
+    LEFT JOIN s ON s.day = d.day
     ON CONFLICT (store_id, day) DO UPDATE SET
       gross_sales = EXCLUDED.gross_sales,
       discounts = EXCLUDED.discounts,
       refunds = EXCLUDED.refunds,
+      shipping = EXCLUDED.shipping,
+      taxes = EXCLUDED.taxes,
+      total_sales = EXCLUDED.total_sales,
       orders = EXCLUDED.orders,
       units = EXCLUDED.units,
       orders_with_customer = EXCLUDED.orders_with_customer,
@@ -563,7 +690,7 @@ export async function backfillDays(storeId: string): Promise<string[]> {
   const rows = await systemDb.$queryRaw<Array<{ day: string }>>`
     SELECT local_day AS day FROM orders WHERE store_id = ${storeId}
     UNION
-    SELECT local_day AS day FROM refunds WHERE store_id = ${storeId}`;
+    SELECT local_day AS day FROM order_sales WHERE store_id = ${storeId}`;
   return rows.map((r) => r.day);
 }
 
@@ -601,6 +728,7 @@ export async function purgeStoreData(storeId: string, fetchImpl?: FetchLike) {
   const adConnections = await systemDb.adConnection.findMany({ where: { storeId } });
   await systemDb.$transaction([
     systemDb.orderLineItem.deleteMany({ where: { storeId } }),
+    systemDb.orderSale.deleteMany({ where: { storeId } }),
     systemDb.refund.deleteMany({ where: { storeId } }),
     systemDb.order.deleteMany({ where: { storeId } }),
     systemDb.productVariant.deleteMany({ where: { storeId } }),

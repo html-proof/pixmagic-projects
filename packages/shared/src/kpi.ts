@@ -1,17 +1,23 @@
 /**
  * KPI definitions. See docs/kpis.md for the full write-up. All money is in the
  * store's currency, rounded to 2 dp at the edges only.
+ *
+ * The sales figures are Shopify's own: they add up Shopify's sales records (an order's
+ * agreements → sales), each on the day it happened, the way Shopify's reports do.
  */
 export interface DailyMetricsRow {
   day: string;
-  grossSales: number; // sum(line price * qty) before discounts, excl. tax & shipping
-  discounts: number; // sum(discount allocations) on orders placed that day
-  refunds: number; // sum(refunded line subtotal) on refunds *created* that day
-  orders: number; // orders placed that day (cancelled orders excluded)
-  units: number;
+  grossSales: number; // items sold that day at full price, before discounts, excl. tax & shipping
+  discounts: number; // discounts on the items sold that day, before tax
+  refunds: number; // returns: what refunds, cancellations and edits took back that day, before tax
+  shipping: number; // shipping charged after shipping discounts and refunds, before tax
+  taxes: number;
+  totalSales: number; // net sales + shipping + taxes + duties and fees (Shopify's "Total sales")
+  orders: number; // orders placed that day (cancelled orders included, test orders never stored)
+  units: number; // items sold less items returned that day
   ordersWithCustomer: number;
   returningCustomerOrders: number;
-  refundedOrders: number; // distinct orders with a refund created that day
+  refundedOrders: number; // distinct orders with a return that day
 }
 
 export interface KpiSummary {
@@ -19,6 +25,9 @@ export interface KpiSummary {
   discounts: number;
   refunds: number;
   netSales: number;
+  shipping: number;
+  taxes: number;
+  totalSales: number;
   orders: number;
   units: number;
   averageOrderValue: number | null;
@@ -35,13 +44,16 @@ export function summarize(rows: DailyMetricsRow[]): KpiSummary {
       a.grossSales += r.grossSales;
       a.discounts += r.discounts;
       a.refunds += r.refunds;
+      a.shipping += r.shipping;
+      a.taxes += r.taxes;
+      a.totalSales += r.totalSales;
       a.orders += r.orders;
       a.units += r.units;
       a.ordersWithCustomer += r.ordersWithCustomer;
       a.returning += r.returningCustomerOrders;
       return a;
     },
-    { grossSales: 0, discounts: 0, refunds: 0, orders: 0, units: 0, ordersWithCustomer: 0, returning: 0 },
+    { grossSales: 0, discounts: 0, refunds: 0, shipping: 0, taxes: 0, totalSales: 0, orders: 0, units: 0, ordersWithCustomer: 0, returning: 0 },
   );
   // Money totals are rounded to cents before deriving ratios, so the result does
   // not depend on float summation order (SQL and JS agree exactly).
@@ -55,6 +67,9 @@ export function summarize(rows: DailyMetricsRow[]): KpiSummary {
     discounts,
     refunds,
     netSales: r2(netBeforeRefunds - refunds),
+    shipping: r2(t.shipping),
+    taxes: r2(t.taxes),
+    totalSales: r2(t.totalSales),
     orders: t.orders,
     units: t.units,
     averageOrderValue: aov === null ? null : r2(aov),
@@ -69,20 +84,40 @@ export function delta(current: number | null, previous: number | null): number |
   return (current - previous) / Math.abs(previous);
 }
 
-// ---- Order -> daily contribution (used by the worker aggregator) ----
+// ---- Orders and sales -> daily rows (the reference for recomputeDays in packages/core) ----
 
 export interface OrderInput {
   createdAt: Date;
-  cancelledAt: Date | null;
   customerKey: string | null;
   isReturningCustomer: boolean;
-  lineItems: Array<{ price: number; quantity: number; discount: number }>;
 }
 
-export interface RefundInput {
+/** One of Shopify's sales records, as stored (order_sales). */
+export interface SaleInput {
   orderId: string;
-  createdAt: Date;
-  lineSubtotal: number;
+  happenedAt: Date;
+  /** order | return | update | unknown */
+  actionType: string;
+  /** product | shipping | gift_card | tip | duty | fee | additional_fee | adjustment | unknown */
+  lineType: string;
+  quantity: number | null;
+  /** After discounts, taxes included. */
+  amount: number;
+  /** Discounts before taxes. */
+  discount: number;
+  tax: number;
+}
+
+/** Lines that make net sales. Gift cards and tips count nowhere; the rest only in total sales. */
+export const MERCHANDISE_LINES: ReadonlySet<string> = new Set(["product", "adjustment"]);
+
+/**
+ * A sale's value before tax, and its tax. A return never counts as money in, whatever sign it
+ * came with: Shopify sends returns negative.
+ */
+export function saleValue(x: Pick<SaleInput, "actionType" | "amount" | "tax">): { value: number; tax: number } {
+  const value = x.amount - x.tax;
+  return x.actionType === "return" ? { value: -Math.abs(value), tax: -Math.abs(x.tax) } : { value, tax: x.tax };
 }
 
 export function emptyRow(day: string): DailyMetricsRow {
@@ -91,6 +126,9 @@ export function emptyRow(day: string): DailyMetricsRow {
     grossSales: 0,
     discounts: 0,
     refunds: 0,
+    shipping: 0,
+    taxes: 0,
+    totalSales: 0,
     orders: 0,
     units: 0,
     ordersWithCustomer: 0,
@@ -101,7 +139,7 @@ export function emptyRow(day: string): DailyMetricsRow {
 
 export function aggregateDaily(
   orders: OrderInput[],
-  refunds: RefundInput[],
+  sales: SaleInput[],
   timeZone: string,
   toDay: (d: Date, tz: string) => string,
 ): Map<string, DailyMetricsRow> {
@@ -112,28 +150,36 @@ export function aggregateDaily(
     return r;
   };
   for (const o of orders) {
-    if (o.cancelledAt) continue;
     const r = row(toDay(o.createdAt, timeZone));
     r.orders += 1;
-    for (const li of o.lineItems) {
-      r.grossSales += li.price * li.quantity;
-      r.discounts += li.discount;
-      r.units += li.quantity;
-    }
     if (o.customerKey) {
       r.ordersWithCustomer += 1;
       if (o.isReturningCustomer) r.returningCustomerOrders += 1;
     }
   }
-  const refundedPerDay = new Map<string, Set<string>>();
-  for (const f of refunds) {
-    const day = toDay(f.createdAt, timeZone);
-    row(day).refunds += f.lineSubtotal;
-    const set = refundedPerDay.get(day) ?? new Set<string>();
-    set.add(f.orderId);
-    refundedPerDay.set(day, set);
+  const returnedPerDay = new Map<string, Set<string>>();
+  for (const x of sales) {
+    if (x.lineType === "gift_card" || x.lineType === "tip") continue;
+    const day = toDay(x.happenedAt, timeZone);
+    const r = row(day);
+    const { value, tax } = saleValue(x);
+    r.taxes += tax;
+    r.totalSales += value + tax;
+    if (MERCHANDISE_LINES.has(x.lineType)) {
+      if (x.actionType === "order") {
+        r.grossSales += value + x.discount;
+        r.discounts += x.discount;
+      } else r.refunds -= value;
+    } else if (x.lineType === "shipping") r.shipping += value;
+    if (x.lineType === "product" && x.actionType === "order") r.units += Math.abs(x.quantity ?? 0);
+    if (x.lineType === "product" && x.actionType === "return") r.units -= Math.abs(x.quantity ?? 0);
+    if (x.actionType === "return") {
+      const set = returnedPerDay.get(day) ?? new Set<string>();
+      set.add(x.orderId);
+      returnedPerDay.set(day, set);
+    }
   }
-  for (const [day, set] of refundedPerDay) row(day).refundedOrders = set.size;
+  for (const [day, set] of returnedPerDay) row(day).refundedOrders = set.size;
   return out;
 }
 

@@ -38,7 +38,32 @@ interface SeedOrder {
   traffic?: { source: string; medium: string; campaign?: string; host?: string };
 }
 
-/** Insert an order the way the pipeline stores it (UTC timestamps, store-local day). */
+/**
+ * Shopify's sales records for a seeded order: a sale per line (or one for the subtotal when it has
+ * no lines), its tax on the first, a shipping sale, and for a cancelled order the reversal of all
+ * of it at the moment of cancellation (the order's own here), as Shopify records them.
+ */
+function seedSales(store: Store, o: SeedOrder, created: Date) {
+  const tax = o.tax ?? 0;
+  const shipping = o.shipping ?? 0;
+  const day = localDay(created, store.timezone);
+  const placed = (o.lines?.length ? o.lines : [{ qty: 1, price: o.subtotal ?? 0 }]).map((l: SeedLine, i) => ({
+    lineType: "product",
+    lineItemShopifyId: o.lines?.length ? `${o.id}-${i}` : null,
+    quantity: l.qty,
+    amount: l.qty * l.price - (l.discount ?? 0) + (i === 0 ? tax : 0),
+    discount: l.discount ?? 0,
+    tax: i === 0 ? tax : 0,
+  }));
+  if (shipping) placed.push({ lineType: "shipping", lineItemShopifyId: null, quantity: 0, amount: shipping, discount: 0, tax: 0 });
+  const rows = [
+    ...placed.map((x) => ({ ...x, actionType: "order" })),
+    ...(o.cancelled ? placed.map((x) => ({ ...x, actionType: "return", amount: -x.amount, tax: -x.tax, discount: 0 })) : []),
+  ];
+  return rows.map((x, i) => ({ ...x, workspaceId: store.workspaceId, storeId: store.id, shopifyId: `${o.id}-sale-${i}`, localDay: day, happenedAt: created }));
+}
+
+/** Insert an order the way the pipeline stores it (UTC timestamps, store-local day, Shopify's sales). */
 async function seedOrder(store: Store, o: SeedOrder) {
   const created = new Date(o.createdAt);
   const subtotal = o.subtotal ?? 0;
@@ -82,6 +107,8 @@ async function seedOrder(store: Store, o: SeedOrder) {
           discount: l.discount ?? 0,
         })),
       },
+      salesUpdatedAt: created,
+      sales: { create: seedSales(store, o, created) },
     },
   });
 }
@@ -145,8 +172,10 @@ describe("order modules (store time zone, DST weekend)", () => {
     await seedOrder(store, { id: "D", createdAt: "2026-03-09T03:30:00Z", subtotal: 30, discounts: 3, tax: 2.4, shipping: 3, source: "pos", fulfillment: "unfulfilled", codes: ["SAVE10"], lines: [{ product: "p2", qty: 1, price: 33, discount: 3 }] });
     // E: legacy row with no fulfillment status / channel yet, and a blank code.
     await seedOrder(store, { id: "E", createdAt: "2026-03-09T16:00:00Z", subtotal: 20, source: null, codes: ["  "], lines: [{ product: "zz", qty: 4, price: 5 }] });
-    // F: cancelled — excluded everywhere except recent orders.
+    // F: cancelled the same day: an order of that day (as Shopify counts it) whose sale is reversed,
+    // so it adds nothing to sales; operational modules (timing, shipping, codes, vendors) leave it out.
     await seedOrder(store, { id: "F", createdAt: "2026-03-09T20:00:00Z", cancelled: true, subtotal: 500, tax: 100, source: "web", fulfillment: "unfulfilled", codes: ["SAVE10"], lines: [{ product: "p1", qty: 5, price: 100 }] });
+    await recomputeDays(store, ["2026-03-06", "2026-03-07", "2026-03-08", "2026-03-09"]);
   }
 
   it("computes channels, timing, fulfillment, discount codes, tax/shipping and vendors for the range", async () => {
@@ -157,10 +186,11 @@ describe("order modules (store time zone, DST weekend)", () => {
     const { modules: m, range, data } = res.json();
     expect(range).toEqual({ from: "2026-03-07", to: "2026-03-09" });
 
-    expect(m.sales_overview.current).toMatchObject({ tax: 14.4, shipping: 8 });
+    // B 8 + C 4 + D 2.40 (F's 100 is reversed by its cancellation); B 5 + D 3.
+    expect(m.sales_overview.current).toMatchObject({ tax: 14.4, shipping: 8, netSales: 200, totalSales: 222.4, returns: 500, orders: 5 });
 
     expect(m.channels.items).toEqual([
-      { source: "web", label: "Online Store", orders: 2, sales: 150, share: 0.75 },
+      { source: "web", label: "Online Store", orders: 3, sales: 150, share: 0.75 },
       { source: "pos", label: "Point of Sale", orders: 1, sales: 30, share: 0.15 },
       { source: null, label: "Unknown", orders: 1, sales: 20, share: 0.1 },
     ]);
@@ -236,15 +266,16 @@ describe("date ranges", () => {
     expect(res.statusCode).toBe(200);
     const s = res.json().modules.sales_overview;
     // Only the 6th and 8th have daily rows; the chart used to be just those two points.
-    const quiet = { netSales: 0, orders: 0, refunds: 0, averageOrderValue: null };
+    const quiet = { netSales: 0, totalSales: 0, orders: 0, refunds: 0, averageOrderValue: null };
     expect(s.series).toEqual([
       { day: "2026-03-05", ...quiet },
-      { day: "2026-03-06", netSales: 40, orders: 1, refunds: 0, averageOrderValue: 40 },
+      { day: "2026-03-06", netSales: 40, totalSales: 40, orders: 1, refunds: 0, averageOrderValue: 40 },
       { day: "2026-03-07", ...quiet },
-      { day: "2026-03-08", netSales: 55, orders: 1, refunds: 0, averageOrderValue: 55 },
+      // C was cancelled the same day: an order of the day, and its 99 a return, as in Shopify's reports.
+      { day: "2026-03-08", netSales: 55, totalSales: 55, orders: 2, refunds: 99, averageOrderValue: 77 },
       { day: "2026-03-09", ...quiet },
     ]);
-    expect(s.current).toMatchObject({ netSales: 95, orders: 2 });
+    expect(s.current).toMatchObject({ netSales: 95, totalSales: 95, orders: 3 });
   });
 
   it("breaks this year down by month, whatever dates are picked, from the first imported order on", async () => {
@@ -521,13 +552,14 @@ describe("where sales come from", () => {
     await seedOrder(store, { id: "P1", createdAt: at, subtotal: 40 });
 
     const t = (await overview(a.headers, ws, store.id, "preset=today")).json().modules.traffic;
+    // X1 was cancelled: an order of the day, its sale reversed.
     expect(t.items.map((x: { label: string; sales: number; orders: number; paidSales: number }) => [x.label, x.sales, x.orders, x.paidSales])).toEqual([
       ["Instagram", 200, 1, 200],
-      ["Facebook", 150, 2, 100],
+      ["Facebook", 150, 3, 100],
       ["Google", 30, 1, 0],
       ["blog.example.org", 20, 1, 0],
     ]);
-    expect(t.paid).toMatchObject({ orders: 2, sales: 300 });
+    expect(t.paid).toMatchObject({ orders: 3, sales: 300 });
     expect(t.paid.share).toBeCloseTo(300 / 400);
     expect(t.campaigns).toEqual([
       { source: "instagram", label: "Instagram", campaign: "Diwali", orders: 1, sales: 200 },

@@ -2,32 +2,59 @@
 
 Source of truth: `packages/shared/src/kpi.ts` (reference implementation) and `recomputeDays` in `packages/core/src/persist.ts` (SQL used in production). An integration test asserts they produce identical results.
 
+## Where the sales figures come from
+
+The sales figures are Shopify's own. Shopify's reports are built from its **sales records**: each
+order's agreements (`Order.agreements`, one per event: the order placed, an edit, a refund, a
+return or cancellation), each holding sales (`sales`: one line sold, returned or changed, with its
+amount, discount and tax). bizinsights stores those records as they are (`order_sales`) and adds
+them up the same way, so a range shows the same gross sales, discounts, returns, net sales,
+shipping, taxes and total sales as Shopify's sales reports for the same dates.
+
+- **Read with the order**: the import (bulk and paged), the reconcile and the dashboard's refresh
+  read an order's agreements with it. A webhook carries none, so after an `orders/*` or
+  `refunds/create` delivery the worker reads the order's sales (`ORDER_SALES_QUERY`), but only
+  when the payload's money state changed (`restSalesKey`: totals now and as placed, cancellation,
+  refunds, items left), so paid/fulfilled/tagged deliveries cost no call.
+- **Provisional sales**: until an order's sales have been read (a brand-new order whose read
+  failed, say), the webhook's payload stands in, estimated in the same shape (a sale per line and
+  per shipping line, valued after discounts, with their tax). The first successful read replaces
+  them; `orders.sales_updated_at` stays empty until then, and the dashboard's refresh re-reads any
+  order in the import window that has it empty (at most daily).
+- **Test orders** (`Order.test`) are never stored, and one stored before is removed, as Shopify's
+  reports leave them out.
+
 ## Conventions
 
 - **Currency:** the store's currency (Shopify `shop_money`). Presentment currencies are ignored. Money totals are rounded to cents before ratios are derived.
 - **Day:** calendar day in the **store's IANA time zone** (from `shop.ianaTimezone`), not the viewer's and not UTC. Date presets (`today`, `7d`, `mtd`, …) resolve in that zone too.
 - **Custom ranges** run from 2000-01-01 at the earliest, cover at most 366 days, and are reported only up to the store's today: picking 1–31 Oct on 9 Oct reports 1–9 Oct. A range that starts after today is refused (`400 invalid_range`).
 - **Comparison period:** the same number of days immediately before the selected range (after that clamp).
-- **Daily series** (the net sales chart and sparklines) has one point per day of the range; days without orders or refunds are 0.
-- **Cancelled orders** are excluded entirely.
-- **Refunds** are booked on the day the refund was **created**, not the day of the original order. Last month's numbers can change only if a refund is backdated, which Shopify doesn't allow.
+- **Daily series** (the sales chart and sparklines) has one point per day of the range; days without orders or sales are 0.
+- **A sale counts on the day it happened**: an order's sales on the day it was placed, a refund, return, cancellation or edit on the day it was made (the agreement's `happenedAt`), whatever day the order was placed. Last month's numbers can change only if Shopify backdates a record, which it doesn't.
+- **Cancelled orders** count as orders of the day they were placed, as in Shopify's reports; the cancellation is a return on the day it was made, so a cancelled order adds nothing to net sales once both are in the range. Operational modules (order timing, shipping, discount codes, vendors) still leave cancelled orders out.
+- **Prices that include tax** (GST, VAT) are taken apart as Shopify does: a sale's value is its amount less its tax.
+- **A return is never money in**: a return is counted as negative whatever sign it came with.
 - **Missing denominators** produce `null` (shown as "—"), never a fake 0.
-- Tax and shipping are excluded from sales figures.
+- Tax and shipping are excluded from net sales and included in total sales. Gift card sales and tips are in neither (Shopify counts a gift card when it is spent, not when it is sold).
 
 ## Formulas
 
 | KPI | Formula | Plain language (shown in UI) |
 | --- | --- | --- |
-| Gross sales | Σ line `price × quantity` | Full price of items sold |
-| Discounts | Σ line discount allocations | |
-| Refunds | Σ refunded line subtotals, by refund date | Money returned to customers |
-| **Net sales** | Gross − Discounts − Refunds | What you kept, before tax and shipping |
-| Orders | count of non-cancelled orders | |
-| Units | Σ quantity | |
-| **Average order value** | (Gross − Discounts) ÷ Orders | Typical spend per order, after discounts |
-| **Refund rate** | Refunds ÷ (Gross − Discounts) | Share of sales later refunded |
+| Gross sales | Σ (amount − tax + discount) of the product and adjustment sales of orders placed (action `order`) | Every item sold at its listed price, before tax |
+| Discounts | Σ discount before tax of those sales | |
+| Returns (`refunds`) | − Σ (amount − tax) of the other product and adjustment sales: returns, cancellations, edits | What refunds, cancellations and edits took back |
+| **Net sales** | Gross − Discounts − Returns | What you kept, before tax and shipping |
+| Shipping charges | Σ (amount − tax) of shipping sales | After shipping discounts and refunds |
+| Taxes | Σ tax of every sale (gift cards and tips aside) | |
+| **Total sales** | Net sales + Shipping + Taxes + duties and fees | Shopify's headline figure; the first tile |
+| Orders | count of orders placed (cancelled included, test orders never stored) | |
+| Units (items sold) | Σ quantity sold − Σ quantity returned | |
+| **Average order value** | (Gross − Discounts) ÷ Orders | Typical spend per order, after discounts, before returns |
+| **Refund rate** | Returns ÷ (Gross − Discounts) | Share of sales later taken back |
 | **Returning customer rate** | orders from returning customers ÷ orders with a customer | Requires `read_customers`. A customer is "returning" if Shopify reports more than one order for them, or we have an earlier order from them |
-| Top products | Σ (price × qty − discount) per product, top 5 | Requires `read_products` |
+| Top products | Σ net sales and Σ net items per product (its product sales in the range), top 5 | Requires `read_products`; the products together make net sales |
 | **Conversion rate** | visits that completed checkout ÷ visits | From the web pixel |
 | Funnel step | visits whose furthest step is this one or later | Steps: visited → viewed a product → added to cart → started checkout → purchased |
 | Left at a step | visits whose furthest step is exactly this one | Plus the site section they were last on |
@@ -81,8 +108,9 @@ a webhook's `landing_site` / `referring_site` live (`packages/shared/src/traffic
   click id, or Shopify's `AD`/`DISPLAY`/`RETARGETING` tactic. `fbclid` alone is not an ad: Facebook adds it to
   every outgoing link. Facebook/Instagram ads count as tagged only if their URL parameters say so.
 - **Campaign**: `utm_campaign` (120 characters at most).
-- **Money**: order subtotal (after discounts, before tax and shipping), cancelled orders left out: the same as
-  sales by channel.
+- **Money**: net sales (after discounts and returns, before tax and shipping) from the sales that happened in
+  the range, the same as sales by channel; orders are the orders placed in the range. Every source together
+  makes the range's net sales.
 - Stored per order (`orders.traffic_source`, `traffic_medium`, `traffic_campaign`, `referrer_host`), never the
   URLs (a landing page can carry a customer's email or a cart token). Shopify's journey replaces a webhook's
   guess; a webhook only fills a gap; a journey Shopify hasn't processed yet (`ready: false`) changes nothing.
@@ -156,4 +184,5 @@ Shoppers who decline analytics consent are not tracked, so funnel numbers are be
 ## Known limitations
 
 - `read_orders` exposes 60 days of history. Longer ranges show data only from the install date onward unless `read_all_orders` is approved.
-- `orders/edited` is not re-fetched immediately; the daily reconcile picks up edits.
+- An edit reaches the dashboard through the `orders/updated` delivery it causes (`orders/edited` isn't subscribed): its totals change, so the order's sales are read again.
+- Days before the switch to Shopify's sales records keep their old totals until their orders are read again (the dashboard's refresh re-reads the 60-day import window once); older days than that keep them for good.

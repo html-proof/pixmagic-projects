@@ -1,6 +1,6 @@
 import { Prisma, type Tx } from "@app/db";
 import { channelLabel, daysBetweenInclusive, TRAFFIC_LABEL, TRAFFIC_SOURCES, type DateRange, type TrafficSource } from "@app/shared";
-import { argMax, num, numOrNull, r1, r2, type Scope } from "./common.js";
+import { argMax, MERCHANDISE, num, numOrNull, r1, r2, SALE_VALUE, type Scope } from "./common.js";
 
 const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"] as const;
 
@@ -15,15 +15,32 @@ const OPEN_FULFILLMENT_STATUSES = [
   "scheduled",
 ];
 
-/** Sales by Shopify sales channel (order source_name). Sales = order subtotal (after discounts). */
+/**
+ * Each order's net sales from the sales that happened in the range (before tax, after discounts
+ * and returns), for the orders placed in the range or with sales in it. `placed` says which of
+ * them count as orders of the range. Grouped by the caller, so every grouping adds up to net sales.
+ */
+function salesByOrder(ws: string, storeId: string, r: DateRange) {
+  return Prisma.sql`
+    SELECT o.*, (o.local_day BETWEEN ${r.from} AND ${r.to}) AS placed, COALESCE(v.sales, 0) AS sales
+    FROM orders o
+    LEFT JOIN (
+      SELECT s.order_id, SUM(${SALE_VALUE}) AS sales
+      FROM order_sales s
+      WHERE s.workspace_id = ${ws} AND s.store_id = ${storeId} AND ${MERCHANDISE} AND s.local_day BETWEEN ${r.from} AND ${r.to}
+      GROUP BY s.order_id
+    ) v ON v.order_id = o.id
+    WHERE o.workspace_id = ${ws} AND o.store_id = ${storeId}
+      AND (o.local_day BETWEEN ${r.from} AND ${r.to} OR v.order_id IS NOT NULL)`;
+}
+
+/** Sales by Shopify sales channel (order source_name): net sales, and the orders placed. */
 export async function channels(tx: Tx, { ws, storeId }: Scope, r: DateRange) {
   const rows = await tx.$queryRaw<Array<{ source: string | null; orders: number; sales: string }>>`
-    SELECT NULLIF(TRIM(o.source_name), '') AS source, COUNT(*)::int AS orders, COALESCE(SUM(o.subtotal), 0)::text AS sales
-    FROM orders o
-    WHERE o.workspace_id = ${ws} AND o.store_id = ${storeId}
-      AND o.cancelled_at IS NULL AND o.local_day BETWEEN ${r.from} AND ${r.to}
+    SELECT NULLIF(TRIM(o.source_name), '') AS source, (COUNT(*) FILTER (WHERE o.placed))::int AS orders, COALESCE(SUM(o.sales), 0)::text AS sales
+    FROM (${salesByOrder(ws, storeId, r)}) o
     GROUP BY 1
-    ORDER BY SUM(o.subtotal) DESC, COUNT(*) DESC, 1 NULLS LAST`;
+    ORDER BY SUM(o.sales) DESC, COUNT(*) FILTER (WHERE o.placed) DESC, 1 NULLS LAST`;
   // Several raw sources share one label (web/checkout_next, the two subscription sources, "Web"
   // vs "web"): merge them so each channel is one row. App ids stay separate (one row per app).
   const merged = new Map<string, { source: string | null; label: string; orders: number; sales: number; top: number }>();
@@ -55,17 +72,15 @@ export async function channels(tx: Tx, { ws, storeId }: Scope, r: DateRange) {
 
 /**
  * Where this period's sales came from, by the visit that led to each order (Shopify's own record:
- * packages/shared/src/traffic.ts), with the same money as sales by channel (after discounts,
- * before tax and shipping). Other websites are listed by host. Orders stored before sources were
- * recorded are counted as `pending` (the dashboard's refresh re-reads them).
+ * packages/shared/src/traffic.ts), with the same money as sales by channel (net sales: after
+ * discounts and returns, before tax and shipping). Other websites are listed by host. Orders stored
+ * before sources were recorded are counted as `pending` (the dashboard's refresh re-reads them).
  */
 export async function traffic(tx: Tx, { ws, storeId }: Scope, r: DateRange) {
   const rows = await tx.$queryRaw<Array<{ source: string | null; medium: string | null; host: string | null; campaign: string | null; orders: number; sales: string }>>`
     SELECT o.traffic_source AS source, o.traffic_medium AS medium, o.referrer_host AS host, o.traffic_campaign AS campaign,
-           COUNT(*)::int AS orders, COALESCE(SUM(o.subtotal), 0)::text AS sales
-    FROM orders o
-    WHERE o.workspace_id = ${ws} AND o.store_id = ${storeId}
-      AND o.cancelled_at IS NULL AND o.local_day BETWEEN ${r.from} AND ${r.to}
+           (COUNT(*) FILTER (WHERE o.placed))::int AS orders, COALESCE(SUM(o.sales), 0)::text AS sales
+    FROM (${salesByOrder(ws, storeId, r)}) o
     GROUP BY 1, 2, 3, 4`;
   type Item = { key: string; source: string; label: string; orders: number; sales: number; paidOrders: number; paidSales: number };
   const items = new Map<string, Item>();

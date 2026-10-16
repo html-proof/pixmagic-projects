@@ -27,11 +27,17 @@ export interface OverviewStore {
   installedAt?: string | null;
 }
 
+/** Shopify's own sales figures, from its sales records (docs/kpis.md). */
 export interface SalesOverview {
   current: {
     grossSales: number;
     discounts: number;
+    /** What refunds, cancellations and edits took back (Shopify's "returns" / "sales reversals"). */
+    returns: number;
+    /** Gross − discounts − returns. */
     netSales: number;
+    /** Net sales + shipping + taxes + duties and fees: Shopify's headline "Total sales". */
+    totalSales: number;
     orders: number;
     units: number;
     averageOrderValue: number | null;
@@ -39,8 +45,15 @@ export interface SalesOverview {
     shipping: number;
   };
   /** The same figures for the period before (as many days, immediately before). */
-  previous: { grossSales: number; netSales: number; orders: number; units: number; averageOrderValue: number | null };
-  deltas: { netSales: number | null; orders: number | null; averageOrderValue: number | null; grossSales: number | null; units: number | null };
+  previous: { grossSales: number; netSales: number; totalSales: number; orders: number; units: number; averageOrderValue: number | null };
+  deltas: {
+    netSales: number | null;
+    totalSales: number | null;
+    orders: number | null;
+    averageOrderValue: number | null;
+    grossSales: number | null;
+    units: number | null;
+  };
   /** Every day of the range, quiet days as zero. */
   series: SalesDay[];
   /** This calendar year by month, whatever the range. */

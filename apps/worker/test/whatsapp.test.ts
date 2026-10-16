@@ -19,6 +19,7 @@ import {
 import { TEMPLATE_LIBRARY, WA_MAX_ATTEMPTS, whatsappConfigSchema, type NotificationKind } from "@app/shared";
 import { processWebhook, type WorkerDeps } from "../src/handlers.js";
 import { consume, type QueueMessage } from "../src/index.js";
+import { salesAnswer } from "./shopifySales.js";
 
 /**
  * WhatsApp end to end inside the worker: Shopify events → timeline and messages → the sender
@@ -51,6 +52,8 @@ beforeEach(async () => {
   sent = [];
   metaError = null;
   fetchImpl = async (input, init) => {
+    const sales = salesAnswer(input, init);
+    if (sales) return sales;
     const url = new URL(String(input));
     if (url.hostname === "graph.facebook.com" && url.pathname.endsWith("/messages")) {
       if (metaError) return json({ error: { code: metaError.code, message: metaError.message ?? "error", type: "OAuthException" } }, metaError.status);

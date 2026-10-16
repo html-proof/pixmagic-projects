@@ -1,10 +1,23 @@
 /**
  * Shared pieces of the dashboard's report queries (see ./overview.ts).
  *
- * Every query filters on workspace_id AND store_id (RLS is the backstop, not the filter), uses
- * bound parameters only, and excludes cancelled orders unless the module says otherwise. Money
- * comes back from SQL as text (exact decimals) and is converted with Number at the edge.
+ * Every query filters on workspace_id AND store_id (RLS is the backstop, not the filter) and uses
+ * bound parameters only. Sales money is read from Shopify's sales records (order_sales), dated by
+ * when each sale happened, so it adds up to the sales overview's net sales; order counts are the
+ * orders placed in the range. Money comes back from SQL as text (exact decimals) and is converted
+ * with Number at the edge.
  */
+import { Prisma } from "@app/db";
+
+
+/**
+ * A sale's value before tax, as recomputeDays reads it (`saleValue` in @app/shared): a return is
+ * never money in, whatever its sign. For a query whose order_sales alias is `s`.
+ */
+export const SALE_VALUE = Prisma.sql`CASE WHEN s.action_type = 'return' THEN -ABS(s.amount - s.tax) ELSE s.amount - s.tax END`;
+
+/** Lines whose value is net sales (MERCHANDISE_LINES in @app/shared). */
+export const MERCHANDISE = Prisma.sql`s.line_type IN ('product', 'adjustment')`;
 
 /** Tenant + store being reported on. */
 export interface Scope {

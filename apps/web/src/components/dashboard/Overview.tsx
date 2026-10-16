@@ -58,7 +58,7 @@ export function businessHealth(ov: Overview, currency: string): Check[] {
   const r = m.refunds?.current;
   if (r && r.refundRate !== null) {
     const health: Health = gradeRefundRate(r.refundRate);
-    out.push({ id: "refunds", topic: "sales", area: "Refunds", health, text: `${fmtPct(r.refundRate)} of sales refunded (${money(r.refunds)} on ${plural(r.refundedOrders, "order")}).` });
+    out.push({ id: "refunds", topic: "sales", area: "Returns", health, text: `${fmtPct(r.refundRate)} of sales taken back by refunds and cancellations (${money(r.refunds)} on ${plural(r.refundedOrders, "order")}).` });
   }
   const f = m.funnel;
   if (f && f.visits > 0) {
@@ -328,7 +328,6 @@ export function OverviewDetail({ ov, currency, onOpen }: { ov: Overview; currenc
   const y = s?.year;
   const range = fmtRange(ov.range.from, ov.range.to);
   const before = fmtRange(ov.previous.from, ov.previous.to);
-  const refunds = s ? Math.round((s.current.grossSales - s.current.discounts - s.current.netSales) * 100) / 100 : 0;
   const finishedMonths = y?.months.filter((x) => !x.current && x.coverage === "full") ?? [];
   const bestMonth = y?.months.filter((x) => x.coverage !== "none" && x.netSales > 0).reduce<(typeof y.months)[number] | null>((a, x) => (!a || x.netSales > a.netSales ? x : a), null);
   const thisMonth = y?.months.at(-1);
@@ -404,15 +403,17 @@ export function OverviewDetail({ ov, currency, onOpen }: { ov: Overview; currenc
                 </tr>
               </thead>
               <tbody>
-                <Row label="Net sales" now={money(s.current.netSales)} before={money(s.previous.netSales)} change={<Change value={s.deltas.netSales} />} />
+                {/* Shopify's "Total sales breakdown", line for line and in its order. */}
                 <Row label="Gross sales" now={money(s.current.grossSales)} before={money(s.previous.grossSales)} change={<Change value={s.deltas.grossSales} />} />
-                <Row label="Discounts" now={money(s.current.discounts)} />
-                <Row label="Refunds" now={money(refunds)} change={m.refunds ? <Change value={m.refunds.deltas.refunds} invert /> : undefined} />
+                <Row label="Discounts" now={money(-s.current.discounts)} />
+                <Row label="Returns" now={money(-s.current.returns)} change={m.refunds ? <Change value={m.refunds.deltas.refunds} invert /> : undefined} />
+                <Row label="Net sales" now={money(s.current.netSales)} before={money(s.previous.netSales)} change={<Change value={s.deltas.netSales} />} />
+                <Row label="Shipping charges" now={money(s.current.shipping)} />
+                <Row label="Taxes" now={money(s.current.tax)} />
+                <Row label="Total sales" now={money(s.current.totalSales)} before={money(s.previous.totalSales)} change={<Change value={s.deltas.totalSales} />} />
                 <Row label="Orders" now={fmtNum(s.current.orders)} before={fmtNum(s.previous.orders)} change={<Change value={s.deltas.orders} />} />
                 <Row label="Average order" now={s.current.averageOrderValue !== null ? money(s.current.averageOrderValue) : "—"} before={s.previous.averageOrderValue !== null ? money(s.previous.averageOrderValue) : null} change={<Change value={s.deltas.averageOrderValue} />} />
                 <Row label="Items sold" now={fmtNum(s.current.units)} />
-                <Row label="Tax collected" now={money(s.current.tax)} />
-                <Row label="Shipping charged" now={money(s.current.shipping)} />
                 {f && <Row label="Store visits" now={fmtNum(f.visits)} before={fmtNum(f.previous.visits)} change={<Change value={f.deltas.visits} />} />}
                 {f && <Row label="Visitors who bought" now={fmtPct(f.conversionRate)} before={f.previous.conversionRate !== null ? fmtPct(f.previous.conversionRate) : null} change={<Change value={f.deltas.conversionRate} />} />}
                 {m.ads && <Row label={`Ad spend (${m.ads.currency})`} now={fmtMoney(m.ads.current.spend, m.ads.currency)} before={fmtMoney(m.ads.previous.spend, m.ads.currency)} change={<Change value={m.ads.deltas.spend} invert />} />}
@@ -422,7 +423,10 @@ export function OverviewDetail({ ov, currency, onOpen }: { ov: Overview; currenc
               </tbody>
             </table>
           </div>
-          <p className="mt-2 text-xs text-muted">Refunds are booked on the day they were made. Tax and shipping are collected on top of your sales, so they aren&apos;t part of net sales.</p>
+          <p className="mt-2 text-xs text-muted">
+            The same figures as Shopify&apos;s sales reports, worked out from Shopify&apos;s own sales records: a sale counts on the day the order was placed,
+            and a refund, cancellation or edit on the day it was made. Net sales leave out shipping and taxes; total sales add them back. Test orders aren&apos;t counted.
+          </p>
         </Panel>
       )}
 

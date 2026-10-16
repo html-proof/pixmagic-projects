@@ -20,6 +20,8 @@ const monthEnd = (month: string) => addDays(`${nextMonth(month)}-01`, -1);
 export interface SalesDay {
   day: string;
   netSales: number;
+  /** Net sales + shipping + taxes + duties and fees (Shopify's "Total sales"). */
+  totalSales: number;
   orders: number;
   refunds: number;
   averageOrderValue: number | null;
