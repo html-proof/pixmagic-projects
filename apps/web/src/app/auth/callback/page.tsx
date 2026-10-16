@@ -57,7 +57,7 @@ export default function OAuthCallbackPage() {
         {error.code === "email_in_use" && (
           <>
             {" "}
-            <Link href="/login" className="underline">
+            <Link prefetch={false} href="/login" className="underline">
               Sign in with your password
             </Link>
           </>
@@ -65,7 +65,7 @@ export default function OAuthCallbackPage() {
       </Alert>
       <SocialButtons large />
       <p className="text-center">
-        <Link href="/login" className="auth-link">
+        <Link prefetch={false} href="/login" className="auth-link">
           Back to sign in
         </Link>
       </p>

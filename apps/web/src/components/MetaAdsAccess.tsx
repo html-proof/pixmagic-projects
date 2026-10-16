@@ -22,7 +22,7 @@ function AskUs({ subject }: { subject: string }) {
       email us
     </a>
   ) : (
-    <Link className={link} href="/support">
+    <Link prefetch={false} className={link} href="/support">
       contact us
     </Link>
   );

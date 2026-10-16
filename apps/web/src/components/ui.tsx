@@ -17,9 +17,9 @@ export function AuthShell({ title, subtitle, children }: { title: string; subtit
         listing has to link a privacy policy, so both live on every auth and install screen.
       */}
       <p className="mt-10 text-xs text-muted">
-        <Link className="underline" href="/support">Support</Link>
+        <Link prefetch={false} className="underline" href="/support">Support</Link>
         {" · "}
-        <Link className="underline" href="/privacy">Privacy</Link>
+        <Link prefetch={false} className="underline" href="/privacy">Privacy</Link>
       </p>
     </main>
   );

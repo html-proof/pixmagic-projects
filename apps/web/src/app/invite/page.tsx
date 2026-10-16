@@ -148,7 +148,7 @@ export default function InvitePage() {
       <AuthCard title={e.title} subtitle={preview.workspace ? `${preview.workspace}${preview.inviter ? `, shared by ${preview.inviter}` : ""}` : undefined}>
         <Alert kind="error">{e.body}</Alert>
         {preview.status === "accepted" && (
-          <Link className="btn-secondary w-full" href="/login">
+          <Link prefetch={false} className="btn-secondary w-full" href="/login">
             Sign in to your account
           </Link>
         )}

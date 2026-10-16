@@ -14,7 +14,7 @@ export default function PageError({ error, retry }: { error: Error & { digest?: 
     <AuthShell title="Something went wrong" subtitle="This page ran into a problem. Trying again usually fixes it.">
       <div className="flex items-center gap-4 text-sm">
         <button type="button" className="btn-primary" onClick={() => retry()}>Try again</button>
-        <Link className="text-muted underline" href="/">Go to the home page</Link>
+        <Link prefetch={false} className="text-muted underline" href="/">Go to the home page</Link>
       </div>
     </AuthShell>
   );

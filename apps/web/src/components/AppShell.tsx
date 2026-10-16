@@ -174,7 +174,8 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
         </span>
         <p className="mt-3 text-sm font-semibold">Need help?</p>
         <p className="mt-0.5 text-xs leading-relaxed text-muted">Get support or read answers to common questions.</p>
-        <Link href="/support" onClick={onNavigate} className="btn-primary mt-3 w-full text-xs">
+        {/* Not prefetched: /support is in Geist, and its prefetch preloads fonts this page never uses (docs/architecture.md). */}
+        <Link prefetch={false} href="/support" onClick={onNavigate} className="btn-primary mt-3 w-full text-xs">
           View help centre
           <span aria-hidden>→</span>
         </Link>
@@ -441,7 +442,7 @@ function HelpBubble() {
             <Mail aria-hidden className="h-4 w-4" />
             Email support
           </a>
-          <Link href="/support" className="btn-secondary mt-2 w-full">
+          <Link prefetch={false} href="/support" className="btn-secondary mt-2 w-full">
             <LifeBuoy aria-hidden className="h-4 w-4" />
             Help centre &amp; FAQ
           </Link>
