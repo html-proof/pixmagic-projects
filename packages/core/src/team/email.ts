@@ -53,6 +53,7 @@ export function teamInvitationEmail(input: {
     input.url,
     "",
     `This invitation expires on ${expires} and works once. Sign in (or create an account) with this email address to accept it.`,
+    ...(input.inviter ? ["", `Questions? Reply to this email to reach ${input.inviter.name ?? input.inviter.email}.`] : []),
     "",
     "If you weren't expecting this invitation, you can safely ignore this email.",
   ].join("\n");
@@ -68,7 +69,8 @@ export function teamInvitationEmail(input: {
 <p style="margin:0 0 ${input.message ? "12" : "20"}px;font-size:15px;line-height:1.5">The administrator has granted you access to selected business information: ${e(sees)}.</p>
 ${input.message ? `<blockquote style="margin:0 0 20px;padding:10px 14px;border-left:3px solid #2f6f4f;background:#f4f8f5;font-size:14px;line-height:1.5;white-space:pre-wrap">${e(input.message)}</blockquote>\n` : ""}<p style="margin:0 0 24px"><a href="${e(input.url)}" style="display:inline-block;background:#2f6f4f;color:#ffffff;text-decoration:none;font-weight:600;font-size:15px;padding:12px 20px;border-radius:8px">Accept Invitation</a></p>
 <p style="margin:0 0 12px;font-size:13px;line-height:1.5;color:#6b6b63">This invitation expires on ${e(expires)} and works once. Sign in (or create an account) with this email address to accept it.</p>
-<p style="margin:0;font-size:13px;line-height:1.5;color:#6b6b63">Button not working? Paste this into your browser:<br><span style="word-break:break-all">${e(input.url)}</span></p>
+<p style="margin:0 0 12px;font-size:13px;line-height:1.5;color:#6b6b63">Button not working? Paste this into your browser:<br><span style="word-break:break-all">${e(input.url)}</span></p>
+${input.inviter ? `<p style="margin:0;font-size:13px;line-height:1.5;color:#6b6b63">Questions? Reply to this email to reach ${e(input.inviter.name ?? input.inviter.email)}.</p>` : ""}
 </td></tr></table>
 <p style="font-size:12px;color:#6b6b63">If you weren't expecting this invitation, you can safely ignore this email.</p>
 </td></tr></table></body></html>`;

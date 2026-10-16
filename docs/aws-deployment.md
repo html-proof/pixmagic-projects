@@ -133,7 +133,10 @@ a hosted zone that isn't the registrar's nameservers would only be a second, ign
   serves other methods where they arrive (webhooks and pixel events don't follow redirects).
 - **HSTS**: CloudFront's security headers send `max-age=31536000; includeSubDomains`, so every name
   under bizinsights.io must serve HTTPS.
-- **Email**: the domain has no MX (no mailbox); SES sending from it needs its DKIM CNAMEs added here.
+- **Email**: the domain has no MX (no mailbox). SES sends from it (`no-reply@bizinsights.io`):
+  identity `bizinsights.io` in ap-southeast-2 with Easy DKIM, its three `<token>._domainkey` CNAMEs
+  → `<token>.dkim.amazonses.com` in this zone, DNS only (added 2026-10-16). The existing `_dmarc`
+  record (p=quarantine, relaxed) passes on the DKIM signature. Replies go to a message's Reply-To.
 
 Records before the switch (GoDaddy's parking page, imported by Cloudflare on 2026-10-15), for a
 rollback: `A bizinsights.io 15.197.148.33` and `A bizinsights.io 3.33.130.190` (both proxied),
@@ -241,9 +244,10 @@ Retiring it, on the owner's go-ahead, once AWS has been production for two quiet
 ## Owner-only steps
 
 - **Alerts**: an email address for alarms and the budget (`-c alertEmail=...`; confirm the SNS email).
-- **SES**: verify a sending domain (DKIM records at its DNS host, Cloudflare DNS for ikorex.com.au)
-  and request production access; until then SES only sends to verified addresses and app emails
-  fail (EMAIL_FROM in `apps/aws/src/settings.ts` is a placeholder).
+- **SES**: the sending domain bizinsights.io is set up (above); **production access is still to be
+  requested** (SES console → Account dashboard → Request production access, or
+  `aws sesv2 put-account-details`). Until then SES sends only to addresses verified in SES: an
+  invitation to anyone else fails to send and the inviter gets the link to pass on.
 - **Google sign-in**: add `https://insights-605411278365.auth.ap-southeast-2.amazoncognito.com/oauth2/idpresponse`
   to a Google OAuth client, put its secret with `put-secrets.mjs --set GOOGLE_SIGNIN_CLIENT_SECRET`,
   deploy with `-c googleClientId=<client id>`.

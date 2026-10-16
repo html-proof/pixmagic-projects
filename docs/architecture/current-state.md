@@ -186,7 +186,7 @@ a real defect or risk with limited blast radius, or a rule of the architecture b
   incomplete secrets list, `dashboard.ts` size; `IMPLEMENTATION_STATUS.md` is a 54 KB changelog
   with stale test counts.
 - Personal email addresses in tracked comments (`wrangler.jsonc`, `app/layout.tsx`, `docs/ads-setup.md`).
-- `EMAIL_FROM` in production is `no-reply@example.com`.
+- `EMAIL_FROM` in production is `no-reply@bizinsights.io` (2026-10-16); SES production access is still pending.
 
 ### Checked and found sound
 
