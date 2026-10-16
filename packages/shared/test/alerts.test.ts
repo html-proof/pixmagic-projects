@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describeAlert } from "../src/alerts.js";
+import { ALERT_PATH, describeAlert } from "../src/alerts.js";
 
 const LEAK = "connect ECONNREFUSED 10.0.3.7:5432 (prisma P1001)";
 
@@ -37,6 +37,11 @@ describe("describeAlert", () => {
     expect(describeAlert({ code: "email_sender_rejected:snd1", severity: "warning", message: "x" }).area).toBe("email");
     expect(describeAlert({ code: "staff_open_shifts", severity: "warning", message: "2 shifts have been open" })).toMatchObject({ area: "staff", body: "2 shifts have been open" });
     expect(describeAlert({ code: "wa_rule_r1", severity: "info", message: "VIP order (order #1001)" })).toMatchObject({ area: "whatsapp", severity: "info", body: "VIP order (order #1001)" });
+  });
+
+  it("links every area to an app page", () => {
+    for (const path of Object.values(ALERT_PATH)) expect(path).toMatch(/^\/[a-z]/);
+    expect(ALERT_PATH[describeAlert({ code: "sync_orders_failed", severity: "critical", message: "" }).area]).toBe("/settings/stores");
   });
 
   it("treats an unknown severity as a warning", () => {

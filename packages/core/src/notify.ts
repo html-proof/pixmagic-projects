@@ -1,4 +1,6 @@
 import { systemDb } from "@app/db";
+import { ALERT_PATH, describeAlert } from "@app/shared/alerts";
+import { escapeHtml } from "@app/shared/email";
 import { env } from "./env.js";
 import { logger } from "./logger.js";
 import type { FetchLike } from "./shopify.js";
@@ -51,12 +53,46 @@ export function memoryMailer(): Mailer & { sent: Array<{ to: string; subject: st
   };
 }
 
+type StoredAlert = { id: string; code: string; severity: string; message: string };
+
+/**
+ * The email an owner or admin gets for an alert: the bell's wording (describeAlert) and a link to
+ * the page where it gets fixed. Never the stored message as is: for sync and webhook failures it
+ * ends with the error's own text, which only the logs keep.
+ */
+export function alertEmail(alert: StoredAlert, where: { workspace: string | null; store: string | null }) {
+  const w = describeAlert(alert);
+  const fixUrl = `${env().APP_URL}${ALERT_PATH[w.area]}`;
+  const prefsUrl = `${env().APP_URL}/settings/notifications`;
+  const action = w.area === "general" ? "Get help" : "Open bizinsights";
+  const context = [where.store && `Store: ${where.store}`, where.workspace && `Workspace: ${where.workspace}`].filter(Boolean).join(" · ");
+  const member = where.workspace ? `an owner or admin of ${where.workspace}` : "a workspace owner or admin";
+  const why = `You get this email as ${member}. To stop these emails, turn off "Sync problems" in`;
+  const text = [w.title, "", w.body, ...(context ? ["", context] : []), "", `${action}: ${fixUrl}`, "", `${why} Settings → Notifications: ${prefsUrl}`].join("\n");
+  const e = escapeHtml;
+  const html = `<!doctype html><html><body style="margin:0;background:#f7f7f5;font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;color:#1b1b18">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="padding:32px 12px"><tr><td align="center">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;background:#ffffff;border:1px solid #e4e4e0;border-radius:12px;padding:28px">
+<tr><td>
+${context ? `<p style="margin:0 0 4px;font-size:13px;font-weight:600;color:#2f6f4f">${e(context)}</p>\n` : ""}<h1 style="margin:0 0 16px;font-size:20px">${e(w.title)}</h1>
+<p style="margin:0 0 24px;font-size:15px;line-height:1.5">${e(w.body)}</p>
+<p style="margin:0 0 24px"><a href="${e(fixUrl)}" style="display:inline-block;background:#2f6f4f;color:#ffffff;text-decoration:none;font-weight:600;font-size:15px;padding:12px 20px;border-radius:8px">${action}</a></p>
+<p style="margin:0;font-size:13px;line-height:1.5;color:#6b6b63">Button not working? Paste this into your browser:<br><span style="word-break:break-all">${e(fixUrl)}</span></p>
+</td></tr></table>
+<p style="font-size:12px;color:#6b6b63">${e(why)} <a href="${e(prefsUrl)}" style="color:#6b6b63">Settings → Notifications</a>.</p>
+</td></tr></table></body></html>`;
+  return { subject: w.title, text, html };
+}
+
 /**
  * Raise a workspace alert: persisted (shown in the UI), emailed to members who
  * opted in to sync-failure notifications, and posted to Slack if configured.
  * De-duplicated: an unresolved alert with the same code+store is not repeated, so
  * whatever fixes the problem must resolve it (see resolveAlerts) or the next
  * incident goes unannounced.
+ *
+ * The message is internal: it is logged here and nowhere else. The email and the Slack post are
+ * worded from the code (alertEmail, describeAlert); Slack adds the ids that find this log line.
  */
 export async function raiseAlert(
   input: { workspaceId: string; storeId?: string | null; severity: "info" | "warning" | "critical"; code: string; message: string },
@@ -68,11 +104,22 @@ export async function raiseAlert(
   });
   if (open) return open;
   const alert = await systemDb.alert.create({ data: { ...input, storeId: input.storeId ?? null } });
-  logger.warn({ alert }, "alert raised");
+  // The logger drops any `code` key (it can be an OAuth code), so the alert's goes in as alertCode.
+  logger.warn({ alertId: alert.id, alertCode: alert.code, alert }, "alert raised");
+
+  // Names for the email and Slack. Best effort: without them both still go out.
+  const [workspace, store] = await Promise.all([
+    systemDb.workspace.findUnique({ where: { id: input.workspaceId }, select: { name: true } }),
+    input.storeId ? systemDb.store.findUnique({ where: { id: input.storeId }, select: { name: true, shopDomain: true } }) : null,
+  ]).catch((err: unknown) => {
+    logger.error({ err, alertId: alert.id }, "alert workspace and store names could not be loaded");
+    return [null, null] as const;
+  });
 
   // Each channel and each recipient on its own: one address the sender refuses (or no working
   // sender at all) used to abort the loop, so later members and Slack never heard about it.
   try {
+    const email = alertEmail(alert, { workspace: workspace?.name ?? null, store: store ? (store.name ?? store.shopDomain) : null });
     const recipients = await systemDb.membership.findMany({
       where: { workspaceId: input.workspaceId, role: { in: ["owner", "admin"] } },
       include: { user: true },
@@ -83,20 +130,24 @@ export async function raiseAlert(
     const optedOut = new Set(prefs.map((p) => p.userId));
     for (const m of recipients) {
       if (optedOut.has(m.userId)) continue;
-      await mailer.send(m.user.email, `[${input.severity}] ${input.code}`, input.message).catch((err: unknown) => {
+      await mailer.send(m.user.email, email.subject, email.text, email.html).catch((err: unknown) => {
         logger.error({ err, alertId: alert.id, userId: m.userId }, "alert email failed");
       });
     }
   } catch (err) {
     logger.error({ err, alertId: alert.id }, "alert email recipients could not be loaded");
   }
+  // The team's channel, but a third party's history all the same: the code and ids to look into it
+  // with, not the error's text (in the "alert raised" log line, found by its alertId).
   const hook = env().ALERT_SLACK_WEBHOOK_URL;
   if (hook) {
     try {
+      const where = [store && `store ${store.shopDomain}`, `workspace ${input.workspaceId}`].filter(Boolean).join(", ");
+      const text = `:warning: [${alert.severity}] ${alert.code}: ${describeAlert(alert).title} (${where}). Error details: logs, alertId ${alert.id}`;
       const res = await fetchImpl(hook, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ text: `:warning: ${input.code} (${input.workspaceId}): ${input.message}` }),
+        body: JSON.stringify({ text }),
       });
       if (!res.ok) logger.error({ status: res.status, alertId: alert.id }, "alert Slack post rejected");
     } catch (err) {

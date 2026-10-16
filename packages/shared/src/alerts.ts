@@ -1,17 +1,26 @@
-// What a workspace alert says to a merchant (the bell in the app's top bar).
+// What a workspace alert says to a merchant (the bell in the app's top bar, and the alert email).
 //
 // Alerts are raised with a code and an internal message (core's raiseAlert). That message is for
-// the logs and the admins' alert emails: for sync and webhook failures it ends with the error's own
-// text, which can carry database or provider internals. So the app words every alert from its code,
-// and passes the stored message on only for codes whose message is built from the app's own wording
-// and the merchant's own data (marked where they are raised). An unknown code gets generic wording.
+// the logs only: for sync and webhook failures it ends with the error's own text, which can carry
+// database or provider internals. So the app words every alert from its code, and passes the stored
+// message on only for codes whose message is built from the app's own wording and the merchant's
+// own data (marked where they are raised). An unknown code gets generic wording.
 //
 // Imported by the UI through `@app/shared/alerts`: no I/O, no node: imports.
 
 export type AlertSeverity = "info" | "warning" | "critical";
 
-/** Where the problem gets fixed: the UI links each to its page. */
+/** Where the problem gets fixed: the bell and the alert email link each to its page. */
 export type AlertArea = "shopify" | "email" | "staff" | "whatsapp" | "general";
+
+/** The app page each area's alerts link to (a path: the email puts APP_URL in front of it). */
+export const ALERT_PATH: Record<AlertArea, string> = {
+  shopify: "/settings/stores",
+  email: "/settings/email/accounts",
+  staff: "/staff/timesheets",
+  whatsapp: "/whatsapp/automations",
+  general: "/support",
+};
 
 /** One alert as the app's API sends it: never the raw code or message. */
 export interface AlertView {

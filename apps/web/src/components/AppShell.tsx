@@ -48,7 +48,7 @@ import { leaveTo, signOut } from "@/lib/auth";
 import { CONTACT } from "@/lib/contact";
 import { SETTINGS_PAGES } from "@/lib/settingsNav";
 import { notesSeenKey, readLocal, writeLocal } from "@/lib/storage";
-import type { AlertArea, AlertSeverity, AlertView } from "@app/shared/alerts";
+import { ALERT_PATH, type AlertSeverity, type AlertView } from "@app/shared/alerts";
 import { staffAccess } from "@app/shared/staff";
 
 // ---------------------------------------------------------------------------
@@ -283,15 +283,6 @@ const SEVERITY: Record<AlertSeverity, { icon: LucideIcon; tone: string; label: s
   info: { icon: Info, tone: "bg-accent/10 text-accent", label: "Note" },
 };
 
-/** Where each kind of alert gets fixed. */
-const ALERT_HREF: Record<AlertArea, string> = {
-  shopify: "/settings/stores",
-  email: "/settings/email/accounts",
-  staff: "/staff/timesheets",
-  whatsapp: "/whatsapp/automations",
-  general: "/support",
-};
-
 /**
  * The bell: the workspace's open problems (until whatever fixes them resolves them) and the last
  * week's notes. Its dot shows while a problem is open, or a note has come in since the bell was last
@@ -370,7 +361,7 @@ function Notifications() {
                 const when = fmtRelative(a.createdAt);
                 return (
                   <li key={a.id} className="border-b border-border last:border-b-0">
-                    <Link href={ALERT_HREF[a.area]} onClick={() => setOpen(false)} className="flex gap-3 px-4 py-3 transition-colors hover:bg-text/[0.04]">
+                    <Link href={ALERT_PATH[a.area]} onClick={() => setOpen(false)} className="flex gap-3 px-4 py-3 transition-colors hover:bg-text/[0.04]">
                       <span aria-hidden className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${s.tone}`}>
                         <s.icon className="h-4 w-4" strokeWidth={2} />
                       </span>
