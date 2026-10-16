@@ -14,6 +14,6 @@ export const SETTINGS_PAGES: ReadonlyArray<{ slug: string; label: string; icon: 
   { slug: "notifications", label: "Notifications", icon: Bell, keywords: "alerts emails" },
   ...(API_KEYS_ENABLED ? [{ slug: "api-keys", label: "API keys", icon: KeyRound }] : []),
   ...(BILLING_ENABLED ? [{ slug: "billing", label: "Billing", icon: CreditCard, keywords: "plan subscription" }] : []),
-  { slug: "privacy", label: "Privacy requests", icon: FileLock2, keywords: "gdpr customer data export erase redact" },
+  { slug: "privacy", label: "Privacy requests", icon: FileLock2, keywords: "gdpr customer data redact export" },
   { slug: "audit", label: "Audit log", icon: ScrollText, keywords: "history activity" },
 ];
