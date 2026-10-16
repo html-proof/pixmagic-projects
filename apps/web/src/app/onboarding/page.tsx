@@ -325,9 +325,9 @@ function Onboarding() {
       </div>
       {/* The errors above tell merchants to contact support; this page has no AuthShell, so link it here. */}
       <p className="mt-6 text-center text-xs text-muted">
-        <Link className="underline" href="/support">Support</Link>
+        <Link prefetch={false} className="underline" href="/support">Support</Link>
         {" · "}
-        <Link className="underline" href="/privacy">Privacy</Link>
+        <Link prefetch={false} className="underline" href="/privacy">Privacy</Link>
       </p>
     </main>
   );

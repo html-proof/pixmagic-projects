@@ -148,6 +148,12 @@ failed action (save, delete): `actionError(e, "what you tried")` in a toast or a
 while rendering is caught by `app/(app)/error.tsx` inside the shell, or `app/error.tsx` for public
 pages. Unknown paths get `app/not-found.tsx`.
 
+**Fonts and prefetch.** Only the landing page, the split-card auth pages (`AuthSplitShell`) and the
+legal pages (`LegalPage`: /support, /privacy, /terms, /data-deletion) are in Geist. Prefetching one of
+those routes makes the current page preload Geist and its stylesheet, and Chrome then warns that they
+were "preloaded but not used". So a link from any other page to one of them is
+`<Link prefetch={false}>`.
+
 **Business logic.** Pages and components format and arrange what the API returns; rules and
 calculations belong in `@app/shared` (shared with the API) or the API itself. The dashboard's
 health grading lives in `@app/shared/health` and its drop-off and landing-page maths in

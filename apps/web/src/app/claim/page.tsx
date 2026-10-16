@@ -113,7 +113,7 @@ function Claim() {
               (Apps, then bizinsights) and you&apos;ll come straight back here.
             </p>
             <p className="text-sm">
-              Already set up? <Link className="underline" href="/login">Sign in</Link> to see your dashboard.
+              Already set up? <Link prefetch={false} className="underline" href="/login">Sign in</Link> to see your dashboard.
             </p>
           </>
         )}

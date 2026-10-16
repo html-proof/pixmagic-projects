@@ -27,12 +27,12 @@ export default function AuthErrorPage() {
   return (
     <AuthCard title="We couldn't sign you in" subtitle="Nothing was changed.">
       {text && <Alert>{text}</Alert>}
-      <Link href="/login" className="btn-cta group">
+      <Link prefetch={false} href="/login" className="btn-cta group">
         Back to sign in
         <ArrowRight aria-hidden className="size-5 transition-transform group-hover:translate-x-0.5" strokeWidth={2.2} />
       </Link>
       <p className="text-center">
-        <Link href="/support" className="auth-link">
+        <Link prefetch={false} href="/support" className="auth-link">
           Contact support
         </Link>
       </p>
