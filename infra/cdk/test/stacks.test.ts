@@ -278,6 +278,16 @@ describe("the edge stack behind Cloudflare", () => {
     for (const s of sets) expect(s.Scope).toBe("CLOUDFRONT");
   });
 
+  it("gives WAF only descriptions it accepts (an apostrophe failed the 2026-10-16 deploy)", () => {
+    // AWS WAF's own pattern for `Description`; CloudFormation finds out only at deploy time.
+    const waf = /^[\w+=:#@/\-,.][\w+=:#@/\-,.\s]+[\w+=:#@/\-,.]$/;
+    const resources = [...Object.values(t.edge.findResources("AWS::WAFv2::IPSet")), ...Object.values(t.edge.findResources("AWS::WAFv2::WebACL"))];
+    for (const r of resources) {
+      const d = r.Properties.Description as string | undefined;
+      if (d !== undefined) expect(d, d).toMatch(waf);
+    }
+  });
+
   it("rate-limits requests through Cloudflare by the client's address, everything else by the viewer's", () => {
     const viaCloudflare = rule("api-rate-per-client-via-cloudflare").Statement.RateBasedStatement;
     expect(viaCloudflare.AggregateKeyType).toBe("FORWARDED_IP");
