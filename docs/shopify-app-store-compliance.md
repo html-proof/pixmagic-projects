@@ -41,7 +41,7 @@ project of its own, not needed for review.
 | 2.3.1 | Installed only from Shopify surfaces; never ask for the myshopify.com address | FIXED | The address field used to sit one click under "Continue with Shopify" on onboarding and Settings → Shopify. It now appears only when the API answers `shop_required` (only if `SHOPIFY_DEFAULT_APP_SHOPS` limits the main app to named stores; empty in production) (`apps/web/src/app/onboarding/page.tsx`, `apps/web/src/components/ShopifyConnect.tsx`; e2e "Shopify is connected from Settings…") | |
 | 2.3.2 | OAuth immediately after install, before any other step | FIXED | Before: a merchant installing from Shopify landed on sign-up, and OAuth ran only after they made an account. Now `/api/shopify/launch` sends any store without a working token straight to Shopify's authorize URL (`apps/api/src/routes/shopify.ts`; `apps/api/test/shopifyInstall.test.ts` "authorizes at once, with nobody signed in") | |
 | 2.3.3 | Redirect to the app UI after the merchant approves | FIXED | The callback stores the token, starts the import and opens `/claim` ("<store> is connected"), then the dashboard once the merchant signs in (`shopifyInstall.test.ts` "stores the token… and opens the app") | A bizinsights login is still needed to see data: give the reviewer a test account (4.5.4) |
-| 2.3.4 | OAuth again on reinstall | FIXED | A store that is uninstalled, holds no token, or whose token Shopify refuses (401/403) is authorized again on launch (`shopifyInstall.test.ts` "authorizes again on reinstall…", "…when Shopify refuses the token it holds") | |
+| 2.3.4 | OAuth again on reinstall | FIXED | A store that is uninstalled, holds no token, or whose token Shopify refuses (401/403) is authorized again on launch (`shopifyInstall.test.ts` "authorizes again on reinstall…", "…when Shopify refuses the token it holds"). A store uninstalled from an account goes back to it only when that account's store manager is the one reinstalling; anyone else gets a fresh workspace ("doesn't hand a store back…") | |
 
 ## 3. Security
 
@@ -114,9 +114,9 @@ document was validated against the 2026-10 schema with Shopify's public schema p
 # packages/core/src/normalize.ts, scopes.ts, apps/api/src/routes/contacts.ts, whatsapp/events.ts)
 ```
 
-Result: 22 of 22 valid. Two deprecated fields still served in 2026-10, to replace at the next bump:
-`QueryRoot.currentBulkOperation` (use `bulkOperations` with a status filter) and
-`CustomerPhoneNumber.marketingState` (use `smsMarketingConsent.state`). 2026-10 also returns
+Result: 22 of 22 valid. `CustomerPhoneNumber.marketingState`, deprecated in 2026-10, was replaced by
+`smsMarketingConsent.state`. One deprecated field is still served and left for the next bump:
+`QueryRoot.currentBulkOperation` (use `bulkOperations` with a status filter). 2026-10 also returns
 `FULFILLMENT_NOT_REQUIRED` for orders with nothing to ship; the parser keeps the status as text, so
 it is stored as `fulfillment_not_required`. `packages/core/test/appConfig.test.ts` now fails the
 build 90 days before the configured version stops being served.
