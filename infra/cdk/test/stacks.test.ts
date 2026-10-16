@@ -38,13 +38,13 @@ beforeAll(() => {
 });
 
 describe("the data stack", () => {
-  it("keeps the database private, encrypted, backed up and protected", () => {
+  it("keeps the database private, encrypted, backed up, protected and with a standby in a second AZ", () => {
     t.data.hasResourceProperties("AWS::RDS::DBInstance", {
       PubliclyAccessible: false,
       StorageEncrypted: true,
       DeletionProtection: true,
       BackupRetentionPeriod: 14,
-      MultiAZ: false,
+      MultiAZ: true,
       DBInstanceClass: "db.t4g.small",
       Engine: "postgres",
     });
