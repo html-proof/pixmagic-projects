@@ -142,7 +142,8 @@ async function perform(rule: WhatsappAutomationRule, action: AutomationAction, t
     }
     case "internal_notification": {
       const about = subject.tracking ? ` (order ${subject.tracking.orderName})` : subject.checkout ? " (abandoned checkout)" : "";
-      // An in-app notification, not an email: alerts with severity "info" show on the dashboard.
+      // An in-app notification, not an email: an "info" alert, listed under the top bar's bell for a
+      // week with this message as is (@app/shared/alerts).
       await systemDb.alert.create({
         data: { workspaceId: subject.store.workspaceId, storeId: subject.store.id, severity: "info", code: `wa_rule_${rule.id}`, message: `${action.message}${about}`.slice(0, 500) },
       });

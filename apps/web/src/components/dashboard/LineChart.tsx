@@ -30,6 +30,9 @@ export function LineChart({
   today,
   integer = false,
   height = 180,
+  area = false,
+  grid = false,
+  floor = 0,
 }: {
   days: string[];
   series: LineSeries[];
@@ -43,15 +46,23 @@ export function LineChart({
   label: string;
   today?: string;
   height?: number;
+  /** Shade the area under each line with a fade of its colour. */
+  area?: boolean;
+  /** Faint dashed lines down from each date label. */
+  grid?: boolean;
+  /** The y-axis reaches at least this high, so an all-zero chart still has a scale. */
+  floor?: number;
 }) {
   const [ref, width] = useWidth();
   const [hover, setAt] = useState<number | null>(null);
   const id = useId();
+  // An id that is also safe inside url(#…).
+  const fillId = `fill-${id.replace(/[^\w-]/g, "")}`;
   const n = days.length;
   // The dates can change under a held hover (a shorter range): never read past the new end.
   const at = hover !== null && hover < n ? hover : null;
   const max = Math.max(0, ...series.flatMap((s) => s.values));
-  const ticks = niceTicks(integer ? Math.max(max, 4) : max, 4);
+  const ticks = niceTicks(Math.max(max, floor, integer ? 4 : 0), 4);
   const step = ticks[1] ?? 1;
   const top = ticks[ticks.length - 1] || 1;
   const plotW = Math.max(0, width - MARGIN.left - MARGIN.right - END_LABEL_W);
@@ -102,6 +113,20 @@ export function LineChart({
       >
         {width > 0 && (
           <svg width={width} height={height} aria-hidden="true" className="block touch-pan-y overflow-visible">
+            {area && (
+              <defs>
+                {series.map((s) => (
+                  <linearGradient key={s.key} id={`${fillId}-${s.key}`} x1="0" x2="0" y1="0" y2="1">
+                    <stop offset="0%" stopColor={s.color} stopOpacity="0.22" />
+                    <stop offset="100%" stopColor={s.color} stopOpacity="0" />
+                  </linearGradient>
+                ))}
+              </defs>
+            )}
+            {grid &&
+              xTicks.map(({ d, i }) => (
+                <line key={`v-${d}`} x1={x(i)} x2={x(i)} y1={MARGIN.top} y2={MARGIN.top + plotH} stroke="var(--border)" strokeWidth={1} strokeDasharray="3 4" />
+              ))}
             {ticks.map((t, i) => (
               <g key={i}>
                 <line x1={MARGIN.left} x2={MARGIN.left + plotW} y1={y(t)} y2={y(t)} stroke="var(--border)" strokeWidth={1} />
@@ -115,6 +140,16 @@ export function LineChart({
                 {d === today ? "Today" : fmtDay(d, { year: false })}
               </text>
             ))}
+            {area &&
+              n > 1 &&
+              series.map((s) => (
+                <path
+                  key={`a-${s.key}`}
+                  d={`M${x(0)},${y(0)} ${s.values.map((v, i) => `L${x(i)},${y(v)}`).join(" ")} L${x(n - 1)},${y(0)} Z`}
+                  fill={`url(#${fillId}-${s.key})`}
+                  className="animate-fade"
+                />
+              ))}
             {series.map((s) =>
               n <= 1 ? (
                 <circle key={s.key} cx={x(0)} cy={y(s.values[0] ?? 0)} r={4} fill={s.color} stroke="var(--surface)" strokeWidth={2} />
@@ -169,27 +204,30 @@ export function LineChart({
           {at !== null ? describe(at) : ""}
         </p>
       </div>
-      <table className="sr-only">
-        <caption>{label}</caption>
-        <thead>
-          <tr>
-            <th scope="col">Day</th>
-            {series.map((s) => (
-              <th key={s.key} scope="col">{s.label}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {days.map((d, i) => (
-            <tr key={d}>
-              <th scope="row">{fmtLongDay(d)}</th>
+      {/* The sr-only wrapper (not the table itself) keeps the table from widening the page. */}
+      <div className="sr-only">
+        <table>
+          <caption>{label}</caption>
+          <thead>
+            <tr>
+              <th scope="col">Day</th>
               {series.map((s) => (
-                <td key={s.key}>{format(s.values[i] ?? 0)}</td>
+                <th key={s.key} scope="col">{s.label}</th>
               ))}
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {days.map((d, i) => (
+              <tr key={d}>
+                <th scope="row">{fmtLongDay(d)}</th>
+                {series.map((s) => (
+                  <td key={s.key}>{format(s.values[i] ?? 0)}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

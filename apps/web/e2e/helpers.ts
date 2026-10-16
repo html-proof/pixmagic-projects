@@ -101,6 +101,12 @@ export async function logIn(page: Page, email: string, password = PASSWORD) {
 }
 
 /** Our App URL as Shopify opens it (after a managed install, or from the admin): signed query string. */
+/** Sign out from the account menu in the top bar (the avatar). */
+export async function signOutFromMenu(page: Page) {
+  await page.getByRole("button", { name: "Account menu" }).click();
+  await page.getByRole("button", { name: "Sign out", exact: true }).click();
+}
+
 export function signedLaunchUrl(shop: string) {
   const params: Record<string, string> = { shop, timestamp: String(Math.floor(Date.now() / 1000)) };
   const message = Object.keys(params)

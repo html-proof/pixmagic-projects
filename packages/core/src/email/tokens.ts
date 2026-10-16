@@ -133,6 +133,7 @@ export async function markReauthorizationRequired(account: AccountRef, reason: s
   if (!count) return;
   logger.warn({ accountId: account.id, reason }, "email account needs reauthorization");
   await emailAudit({ workspaceId: account.workspaceId, action: "email.account.reauthorization_required", targetType: "email_account", targetId: account.id, metadata: { reason } });
+  // The app shows this message as is (@app/shared/alerts): keep error text out of it.
   await raiseAlert(
     {
       workspaceId: account.workspaceId,

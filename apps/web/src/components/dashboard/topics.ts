@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useSyncExternalStore } from "react";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { hourRange, plural } from "./format";
 import type { IconName } from "./Icons";
@@ -52,45 +52,61 @@ export function availableTopics(ov: Overview, contactsOn: boolean): Topic[] {
 
 // ---------------------------------------------------------------------------
 // Which topic is open lives in the address bar (?view=sales), so the phone's back button closes
-// the panel instead of leaving the dashboard, and a link can open straight onto one.
+// the panel instead of leaving the dashboard, and a link can open straight onto one. The sidebar
+// (components/AppShell.tsx) opens topics too, so the open one is read from the address itself,
+// shared by everything that asks, rather than kept in one component's state.
 // ---------------------------------------------------------------------------
 
-export function useDetailView() {
-  const [view, setView] = useState<Topic | null>(null);
-  const pushed = useRef(false);
-  useEffect(() => {
-    const read = () => {
-      const v = new URLSearchParams(window.location.search).get("view");
-      setView(isTopic(v) ? v : null);
-    };
-    read();
-    const onPop = () => {
-      pushed.current = false;
-      read();
-    };
-    window.addEventListener("popstate", onPop);
-    return () => window.removeEventListener("popstate", onPop);
-  }, []);
+const VIEW_EVENT = "insights:view";
+/** Whether the open panel's history entry was pushed in this tab, so closing it can go back to the one before. */
+let pushedView = false;
 
-  const open = (t: Topic) => {
-    const url = new URL(window.location.href);
-    url.searchParams.set("view", t);
-    window.history.pushState(window.history.state, "", url.href);
-    pushed.current = true;
-    setView(t);
+function readView(): Topic | null {
+  const v = new URLSearchParams(window.location.search).get("view");
+  return isTopic(v) ? v : null;
+}
+
+function subscribeView(onChange: () => void) {
+  const onPop = () => {
+    pushedView = false;
+    onChange();
   };
-  const close = () => {
-    if (pushed.current) {
-      // Back to the entry before the panel opened; the popstate above clears `view`.
-      window.history.back();
-      return;
-    }
-    const url = new URL(window.location.href);
-    url.searchParams.delete("view");
-    window.history.replaceState(window.history.state, "", url.href);
-    setView(null);
+  window.addEventListener("popstate", onPop);
+  window.addEventListener(VIEW_EVENT, onChange);
+  return () => {
+    window.removeEventListener("popstate", onPop);
+    window.removeEventListener(VIEW_EVENT, onChange);
   };
-  return { view, open, close };
+}
+
+/** The topic open in the address bar (null while prerendering, and with none open). */
+export function useCurrentView(): Topic | null {
+  return useSyncExternalStore(subscribeView, readView, () => null);
+}
+
+/** Open a topic's panel on the dashboard (only call it while the dashboard is the page shown). */
+export function openView(t: Topic) {
+  const url = new URL(window.location.href);
+  url.searchParams.set("view", t);
+  window.history.pushState(window.history.state, "", url.href);
+  pushedView = true;
+  window.dispatchEvent(new Event(VIEW_EVENT));
+}
+
+export function closeView() {
+  if (pushedView) {
+    // Back to the entry before the panel opened; its popstate clears the view.
+    window.history.back();
+    return;
+  }
+  const url = new URL(window.location.href);
+  url.searchParams.delete("view");
+  window.history.replaceState(window.history.state, "", url.href);
+  window.dispatchEvent(new Event(VIEW_EVENT));
+}
+
+export function useDetailView() {
+  return { view: useCurrentView(), open: openView, close: closeView };
 }
 
 /** One line about a topic: the number that matters most (used when the health check has nothing to say). */

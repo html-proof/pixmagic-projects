@@ -1,8 +1,8 @@
 import { z } from "zod";
 import { systemDb, withTenant } from "@app/db";
 import { APP_SUBSCRIPTION_CREATE, audit, env, getAccessToken, logger, purgeStoreData, shopifyGraphql } from "@app/core";
-import { can, randomToken, ROLES, sha256Hex } from "@app/shared";
-import { STAFF_ROLES } from "@app/shared/staff";
+import { can, describeAlert, randomToken, ROLES, sha256Hex, type AlertArea, type AlertView } from "@app/shared";
+import { STAFF_ROLES, staffAccess, staffCan } from "@app/shared/staff";
 import { body, clientIp, HttpError, requireUser, requireWorkspace, type Deps } from "../context.js";
 import type { App } from "../app.js";
 import { seedResync } from "../sync.js";
@@ -24,6 +24,8 @@ export const PLANS = [
 
 const roleSchema = z.enum(ROLES);
 const staffRoleSchema = z.enum(STAFF_ROLES).nullable();
+/** How long the bell keeps listing a note (an info alert), which nothing resolves. */
+const ALERT_NOTE_DAYS = 7;
 
 export function workspaceRoutes(app: App, deps: Deps) {
   // ---------------- Workspaces ----------------
@@ -327,10 +329,35 @@ export function workspaceRoutes(app: App, deps: Deps) {
     });
   });
 
+  // The bell's feed. Each alert is worded from its code (describeAlert): the stored message can end
+  // with an error's own text, so it is never sent as is.
   app.get("/workspaces/:ws/alerts", async (c) => {
     const { ws } = c.req.param();
-    await requireWorkspace(c, deps, ws, "dashboard:read");
-    const alerts = await withTenant(ws, (tx) => tx.alert.findMany({ where: { workspaceId: ws, resolvedAt: null }, orderBy: { createdAt: "desc" }, take: 20 }));
+    const a = await requireWorkspace(c, deps, ws, "dashboard:read");
+    const member = a.user ? await systemDb.membership.findUnique({ where: { workspaceId_userId: { workspaceId: ws, userId: a.user.id } }, select: { staffRole: true } }) : null;
+    const staff = staffAccess(a.role, member?.staffRole);
+    const { problems, notes, stores } = await withTenant(ws, async (tx) => ({
+      // Problems stay until whatever fixes them resolves them. Notes (info) are never resolved, so
+      // only the last week's are listed, and apart, so a busy automation can't push problems out.
+      problems: await tx.alert.findMany({ where: { workspaceId: ws, resolvedAt: null, severity: { not: "info" } }, orderBy: { createdAt: "desc" }, take: 20 }),
+      notes: await tx.alert.findMany({
+        where: { workspaceId: ws, resolvedAt: null, severity: "info", createdAt: { gt: new Date(Date.now() - ALERT_NOTE_DAYS * 86_400_000) } },
+        orderBy: { createdAt: "desc" },
+        take: 20,
+      }),
+      stores: await tx.store.findMany({ where: { workspaceId: ws, status: { not: "uninstalled" } }, select: { id: true, name: true, shopDomain: true } }),
+    }));
+    const storeById = new Map(stores.map((s) => [s.id, { id: s.id, name: s.name ?? s.shopDomain }]));
+    const mayFix = (area: AlertArea) => (area === "staff" ? staffCan(staff, "attendance:view") : area === "email" ? can(a.role, "email:read") : true);
+    const alerts: AlertView[] = [];
+    for (const row of [...problems, ...notes].sort((x, y) => y.createdAt.getTime() - x.createdAt.getTime())) {
+      // A store that has since been uninstalled or removed has nothing left to fix.
+      const store = row.storeId ? storeById.get(row.storeId) : null;
+      if (store === undefined) continue;
+      const w = describeAlert(row);
+      if (!mayFix(w.area)) continue;
+      alerts.push({ id: row.id, ...w, store, createdAt: row.createdAt.toISOString() });
+    }
     return c.json({ alerts });
   });
 }

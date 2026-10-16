@@ -85,6 +85,10 @@ Where a new piece of code goes:
 - **Rate limits**: `limit(deps.coord, key, LIMITS.x)` from `rateLimit.ts`; a global per-IP limit
   runs as middleware.
 - **Audit**: user-visible changes to a workspace call `audit()` (core) after the change.
+- **Alerts**: `raiseAlert()` (core) for something a person must fix, resolved by whatever fixes it
+  (`resolveAlerts`). Its message goes to the logs and the admins' alert email only: the bell in the
+  top bar (`GET /workspaces/:ws/alerts`) words each alert from its code (`@app/shared/alerts`), so a
+  new code needs its wording there.
 
 ## Worker conventions (`apps/worker`)
 
@@ -106,7 +110,7 @@ Where a new piece of code goes:
 ## Frontend (`apps/web`)
 
 ```
-src/app/            routes (App Router). (app)/ is the signed-in shell: AppProvider + top bar.
+src/app/            routes (App Router). (app)/ is the signed-in shell: AppProvider + AppShell (top bar, sidebar).
                     portal/ (employee self-service) and join/ (employee invitations) sit outside it:
                     employees aren't workspace members. Staff Management: docs/staff.md.
 src/components/     UI. dashboard/, whatsapp/, email/, staff/, landing/ per area; app-wide pieces at the

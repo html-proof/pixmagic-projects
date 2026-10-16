@@ -104,9 +104,9 @@ export function AreaPreview({ topic, ov, currency, health }: { topic: Topic; ov:
       return (
         <MiniStack
           segments={[
-            { label: "Needs attention", value: health.attention, color: "var(--danger)" },
-            { label: "Keep an eye on", value: health.watch, color: "var(--warn)" },
-            { label: "Looks good", value: health.good, color: "var(--good)" },
+            { label: "Needs attention", value: health.attention, color: "var(--fill-danger)" },
+            { label: "Keep an eye on", value: health.watch, color: "var(--fill-warn)" },
+            { label: "Looking good", value: health.good, color: "var(--fill-good)" },
           ]}
         />
       );
@@ -168,9 +168,9 @@ export function AreaPreview({ topic, ov, currency, health }: { topic: Topic; ov:
         <>
           <MiniStack
             segments={[
-              { label: "Shipped", value: c.fulfilled, color: "var(--good)" },
-              { label: "Partly shipped", value: c.partiallyFulfilled, color: "var(--warn)" },
-              { label: "Not shipped yet", value: c.unfulfilled, color: "var(--danger)" },
+              { label: "Shipped", value: c.fulfilled, color: "var(--fill-good)" },
+              { label: "Partly shipped", value: c.partiallyFulfilled, color: "var(--fill-warn)" },
+              { label: "Not shipped yet", value: c.unfulfilled, color: "var(--fill-danger)" },
             ]}
           />
           <Caption>Orders placed in these dates, by where they are now</Caption>
@@ -184,9 +184,9 @@ export function AreaPreview({ topic, ov, currency, health }: { topic: Topic; ov:
         <>
           <MiniStack
             segments={[
-              { label: "Plenty", value: Math.max(0, c.trackedVariants - c.lowStock - c.outOfStock), color: "var(--good)" },
-              { label: "Running low", value: c.lowStock, color: "var(--warn)" },
-              { label: "Sold out", value: c.outOfStock, color: "var(--danger)" },
+              { label: "Plenty", value: Math.max(0, c.trackedVariants - c.lowStock - c.outOfStock), color: "var(--fill-good)" },
+              { label: "Running low", value: c.lowStock, color: "var(--fill-warn)" },
+              { label: "Sold out", value: c.outOfStock, color: "var(--fill-danger)" },
             ]}
           />
           <Caption>Your {fmtNum(c.trackedVariants)} tracked variants, by how much stock is left</Caption>

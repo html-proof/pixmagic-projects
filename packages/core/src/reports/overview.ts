@@ -70,12 +70,13 @@ export async function storeOverview(tx: Tx, store: Store, dates: { range: DateRa
           tax,
           shipping,
         },
-        previous: { grossSales: p.grossSales, netSales: p.netSales, orders: p.orders, averageOrderValue: p.averageOrderValue },
+        previous: { grossSales: p.grossSales, netSales: p.netSales, orders: p.orders, units: p.units, averageOrderValue: p.averageOrderValue },
         deltas: {
           netSales: delta(c.netSales, p.netSales),
           orders: delta(c.orders, p.orders),
           averageOrderValue: delta(c.averageOrderValue, p.averageOrderValue),
           grossSales: delta(c.grossSales, p.grossSales),
+          units: delta(c.units, p.units),
         },
         series: dailySeries(cur, range),
         // This calendar year month by month, whatever the dates picked. Reaches back to the

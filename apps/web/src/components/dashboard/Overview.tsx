@@ -1,5 +1,6 @@
 "use client";
 import type { ReactNode } from "react";
+import { ArrowRight, HeartPulse } from "lucide-react";
 import { gradeRefundRate, gradeShipping, gradeStock, gradeTrend, type Health } from "@app/shared/health";
 import { biggestDropOff } from "@app/shared/journey";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
@@ -28,7 +29,7 @@ export interface Check {
 const HEALTH: Record<Health, { label: string; tone: Tone; order: number }> = {
   attention: { label: "Needs attention", tone: "danger", order: 0 },
   watch: { label: "Keep an eye on", tone: "warn", order: 1 },
-  good: { label: "Looks good", tone: "good", order: 2 },
+  good: { label: "Looking good", tone: "good", order: 2 },
   info: { label: "For your info", tone: "neutral", order: 3 },
 };
 
@@ -102,16 +103,32 @@ export function businessHealth(ov: Overview, currency: string): Check[] {
   return out.sort((a, b) => HEALTH[a.health].order - HEALTH[b.health].order);
 }
 
+/** A status as a tinted pill: the label carries the meaning, the colour only reinforces it. */
+const BADGE: Record<Tone, { pill: string; dot: string }> = {
+  danger: { pill: "bg-danger/10 text-danger", dot: "bg-fill-danger" },
+  warn: { pill: "bg-warn/12 text-warn", dot: "bg-fill-warn" },
+  good: { pill: "bg-good/10 text-good", dot: "bg-fill-good" },
+  neutral: { pill: "bg-text/[0.06] text-muted", dot: "bg-muted" },
+};
+
 function HealthBadge({ health }: { health: Health }) {
   const h = HEALTH[health];
-  const dot = { good: "bg-good", warn: "bg-warn", danger: "bg-danger", neutral: "bg-muted" }[h.tone];
+  const b = BADGE[h.tone];
   return (
-    <span className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border border-border px-2 py-0.5 text-xs">
-      <span aria-hidden className={`inline-block h-2 w-2 rounded-full ${dot}`} />
+    <span className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-medium ${b.pill}`}>
+      <span aria-hidden className={`inline-block h-2 w-2 rounded-full ${b.dot}`} />
       {h.label}
     </span>
   );
 }
+
+/** The round icon beside a card's title, tinted by how that area is doing. */
+const TILE: Record<Health, string> = {
+  attention: "bg-danger/10 text-danger",
+  watch: "bg-warn/12 text-warn",
+  good: "bg-accent/10 text-accent",
+  info: "bg-accent/10 text-accent",
+};
 
 function countsOf(checks: Check[]) {
   const n = (h: Health) => checks.filter((c) => c.health === h).length;
@@ -175,93 +192,106 @@ export function StoreSummary({ ov, currency }: { ov: Overview; currency: string 
  * One card. The whole card opens the details (the title's button is stretched over it), so the
  * picture inside can be real markup rather than something squeezed into a <button>.
  */
-function AreaCard({
-  topic,
-  title,
-  icon,
-  health,
-  text,
-  preview,
-  wide,
-  onOpen,
-}: {
-  topic: Topic;
-  title: string;
-  icon: ReactNode;
-  health?: Health;
-  text: string;
-  preview: ReactNode;
-  wide?: boolean;
-  onOpen: () => void;
-}) {
+function AreaCard({ topic, health, text, preview, onOpen }: { topic: Topic; health: Health; text: string; preview: ReactNode; onOpen: () => void }) {
+  const info = topicInfo(topic);
   return (
-    <li className={`card lift group animate-rise relative flex flex-col gap-3 p-4 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-accent ${wide ? "sm:col-span-2" : ""}`}>
-      <div className="flex items-start gap-3">
-        {icon}
+    <li className="card lift group animate-rise relative flex flex-col gap-3 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-accent">
+      <div className="flex items-start gap-4">
+        <span aria-hidden className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full ${TILE[health]}`}>
+          <Icon name={info.icon} className="h-5 w-5" />
+        </span>
         <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <h3 className="font-medium">
+          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+            <h3 className="font-semibold">
               <button onClick={onOpen} className="text-left outline-none after:absolute after:inset-0 after:rounded-xl after:content-['']" data-testid={`area-${topic}`}>
-                {title}
+                {info.title}
                 <span className="sr-only"> – open details</span>
               </button>
             </h3>
-            {health && health !== "info" && <HealthBadge health={health} />}
+            {health !== "info" && <HealthBadge health={health} />}
           </div>
-          <p className="mt-0.5 text-sm text-muted">{text}</p>
+          <p className="mt-1 text-sm text-muted">{text}</p>
         </div>
       </div>
       {preview && <div aria-hidden>{preview}</div>}
-      <p className="mt-auto flex items-center gap-1 text-xs font-medium text-accent">
-        See details
+      <p aria-hidden className="mt-auto flex items-center gap-1 pt-1 text-sm font-semibold text-accent">
+        View details
         <Icon name="chevronRight" className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
       </p>
     </li>
   );
 }
 
-/** Every part of the store, each with a small picture of it: the full overview first, then each area, worst first. */
+/** Every part of the store, each with a small picture of it, worst first. */
 export function AreaList({ ov, currency, topics, onOpen }: { ov: Overview; currency: string; topics: Topic[]; onOpen: (t: Topic) => void }) {
   const rows = areaRows(ov, currency, topics);
-  const counts = countsOf(businessHealth(ov, currency));
+  if (!rows.length) return null;
   return (
     <section aria-labelledby="areas-h">
-      <h2 id="areas-h" className="mb-1 flex items-center gap-2 font-semibold">
-        <Icon name="store" className="h-5 w-5 text-accent" />
-        Your store, area by area
-      </h2>
-      <p className="mb-3 text-xs text-muted">What needs attention comes first. Tap any card to see every detail, explained.</p>
-      <ul className="grid gap-3 sm:grid-cols-2">
-        <AreaCard
-          topic="overview"
-          title="Business overview"
-          wide
-          icon={
-            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-accent to-accent-2 text-white">
-              <Icon name="sparkle" className="h-5 w-5" />
-            </span>
-          }
-          text="Everything on one page: how each area is doing, every key figure and this year so far. You can print it."
-          preview={counts.graded > 0 ? <AreaPreview topic="overview" ov={ov} currency={currency} health={{ attention: counts.attention, watch: counts.watch, good: counts.good, info: 0 }} /> : null}
-          onOpen={() => onOpen("overview")}
-        />
+      <h2 id="areas-h" className="sr-only">Your store, area by area (what needs attention first)</h2>
+      <ul className="grid gap-4 md:grid-cols-2">
         {rows.map((r) => (
-          <AreaCard
-            key={r.topic}
-            topic={r.topic}
-            title={topicInfo(r.topic).title}
-            health={r.health}
-            icon={
-              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent/12 text-accent">
-                <Icon name={topicInfo(r.topic).icon} className="h-5 w-5" />
-              </span>
-            }
-            text={r.text}
-            preview={<AreaPreview topic={r.topic} ov={ov} currency={currency} />}
-            onOpen={() => onOpen(r.topic)}
-          />
+          <AreaCard key={r.topic} topic={r.topic} health={r.health} text={r.text} preview={<AreaPreview topic={r.topic} ov={ov} currency={currency} />} onOpen={() => onOpen(r.topic)} />
         ))}
       </ul>
+    </section>
+  );
+}
+
+/**
+ * Every graded check at once: one bar split by status, and the count of each. Opens the full
+ * report (the overview panel), which lists every check worst first.
+ */
+export function HealthOverview({ ov, currency, onOpen }: { ov: Overview; currency: string; onOpen: (t: Topic) => void }) {
+  const c = countsOf(businessHealth(ov, currency));
+  const parts = [
+    { label: HEALTH.attention.label, n: c.attention, fill: "bg-fill-danger" },
+    { label: HEALTH.watch.label, n: c.watch, fill: "bg-fill-warn" },
+    { label: HEALTH.good.label, n: c.good, fill: "bg-fill-good" },
+  ];
+  return (
+    <section className="card animate-rise flex min-w-0 flex-col" aria-labelledby="health-h" data-testid="health-overview">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="flex min-w-0 items-start gap-3.5">
+          <span aria-hidden className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-accent/10 text-accent">
+            <HeartPulse className="h-5 w-5" strokeWidth={1.8} />
+          </span>
+          <div className="min-w-0">
+            <h2 id="health-h" className="font-semibold">Business health overview</h2>
+            <p className="mt-0.5 text-sm text-muted">All key metrics at a glance.</p>
+          </div>
+        </div>
+        <button type="button" onClick={() => onOpen("overview")} className="btn-secondary h-9 shrink-0 px-3 text-xs shadow-[var(--shadow)]" data-testid="area-overview">
+          View detailed report
+          <ArrowRight aria-hidden className="h-3.5 w-3.5" />
+        </button>
+      </div>
+      {c.graded > 0 ? (
+        <>
+          <div
+            className="animate-grow-x mt-6 flex h-3 gap-1"
+            role="img"
+            aria-label={`${parts.map((p) => `${p.label}: ${fmtNum(p.n)}`).join(", ")}, of ${plural(c.graded, "graded check")}.`}
+          >
+            {parts
+              .filter((p) => p.n > 0)
+              .map((p) => (
+                <span key={p.label} className={`h-full rounded-full ${p.fill}`} style={{ flexGrow: p.n, flexBasis: 0 }} />
+              ))}
+          </div>
+          <ul className="mt-4 flex flex-wrap gap-x-6 gap-y-2 text-sm" aria-hidden>
+            {parts.map((p) => (
+              <li key={p.label} className="inline-flex items-center gap-2">
+                <span className={`h-2.5 w-2.5 rounded-[3px] ${p.fill}`} />
+                <span className="text-text/80">{p.label}</span>
+                <strong className="font-semibold tabular-nums">{fmtNum(p.n)}</strong>
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : (
+        <p className="mt-5 text-sm text-muted">Nothing to grade yet. Each area gets a status here once orders come in.</p>
+      )}
     </section>
   );
 }

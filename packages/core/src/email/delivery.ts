@@ -311,6 +311,7 @@ async function onSendError(m: EmailMessage, account: EmailAccount, sender: Email
     case "sender_rejected":
       // The provider says this address isn't ours to send as: stop using it until someone checks.
       await systemDb.emailSenderIdentity.updateMany({ where: { id: sender.id, workspaceId: sender.workspaceId }, data: { authorizationStatus: "revoked", isDefault: false } });
+      // The app shows this message as is (@app/shared/alerts): keep error text out of it.
       await raiseAlert(
         { workspaceId: m.workspaceId, severity: "warning", code: `email_sender_rejected:${sender.id}`, message: `${account.emailAddress} isn't allowed to send as ${sender.senderEmail}. Automations using it are paused until the sender is verified again.` },
         deps.mailer,
