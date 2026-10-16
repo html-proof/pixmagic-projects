@@ -13,12 +13,21 @@ export interface EnvConfig {
   region: string;
   /** RDS instance class, e.g. "t4g.small". */
   dbInstanceType: string;
-  /** Two Availability Zones with automatic failover (the "high availability" option). */
+  /**
+   * Two Availability Zones with automatic failover (the "high availability" option, ~US$40/month
+   * more). Off in production by the owner's choice (cost, 2026-10-16), so Trusted Advisor's "RDS
+   * Multi-AZ" warning is expected.
+   */
   dbMultiAz: boolean;
   dbAllocatedStorageGb: number;
   dbMaxStorageGb: number;
   dbBackupDays: number;
-  /** One NAT gateway (lean) or one per AZ (high availability). */
+  /**
+   * One NAT gateway (lean) or one per AZ (high availability). With one, both AZs' functions reach
+   * the internet through the NAT in the first AZ, so an outage there cuts every function off from
+   * Shopify, Cognito, Google, Meta and SMTP (Trusted Advisor's "Single AZ Application Check").
+   * One in production by the owner's choice (cost, 2026-10-16): a second NAT is ~US$47/month.
+   */
   natGateways: number;
   logRetentionDays: number;
   /**

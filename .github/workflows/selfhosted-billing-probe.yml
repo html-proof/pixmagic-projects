@@ -1,0 +1,13 @@
+name: Self-hosted billing probe
+# Throwaway: does a job aimed at a self-hosted runner get past the Actions billing block?
+on:
+  push:
+    branches: [claude/selfhosted-billing-probe]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: [self-hosted, billing-probe]
+    timeout-minutes: 5
+    steps:
+      - run: echo "self-hosted job started"

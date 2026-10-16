@@ -38,7 +38,7 @@ beforeAll(() => {
 });
 
 describe("the data stack", () => {
-  it("keeps the database private, encrypted, backed up and protected", () => {
+  it("keeps the database private, encrypted, backed up and protected (single AZ, the lean tier)", () => {
     t.data.hasResourceProperties("AWS::RDS::DBInstance", {
       PubliclyAccessible: false,
       StorageEncrypted: true,

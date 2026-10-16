@@ -307,7 +307,7 @@ retried twice while the owner waits, then from the `email` queue after 1, 5 and 
   **Release**): `shopify app release --version <tag>` answers "could not be found" for every version
   of both apps (CLI 3.94.3, 2026-10-16). Shipping still works: `shopify app deploy --version <new tag>`.
 
-## Cost (lean tier, US$/month, on-demand, approximate)
+## Cost (US$/month, on-demand, approximate)
 
 Prices from the AWS Price List API on 2026-10-15: NAT gateway $0.059/hour + $0.059/GB (~45 with
 its public IPv4), RDS db.t4g.small $0.051/hour (~37) + 20 GB gp3 (~3), WAF (web ACL + 4 rules) ~10,
@@ -317,3 +317,8 @@ first 30 days), admin host stopped ~1, Lambda/SQS/DynamoDB/S3/CloudFront/Cognito
 actual, 100% forecast, once an alert email is set). Biggest levers: the NAT gateway and the
 database size. Cost allocation tags `app` and `environment` can be activated in Billing once AWS
 has seen them (up to 24 hours after the first deploy).
+
+Production stays on the lean tier by the owner's choice (cost, 2026-10-16), so two Trusted Advisor
+warnings are expected: "RDS Multi-AZ" (`dbMultiAz: true` adds a standby with automatic failover,
+~US$40/month) and "Single AZ Application Check" (`natGateways: 2` gives each AZ its own NAT,
+~US$47/month; with one, an outage in ap-southeast-2a cuts every function off from the internet).

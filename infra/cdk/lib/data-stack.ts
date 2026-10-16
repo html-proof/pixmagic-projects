@@ -15,7 +15,7 @@ const PG_VERSION = "17.11";
  * What holds state, and the network around it. Changes rarely; termination protection is on.
  *
  * Network: a VPC over two Availability Zones with
- *   - public subnets: only the NAT gateway lives here
+ *   - public subnets: only the NAT gateway lives here (cfg.natGateways: one, the lean tier)
  *   - private subnets (with egress): the Lambda functions and the admin host; out to the internet
  *     (Cognito, Shopify, Meta, Google, merchants' SMTP servers) through the NAT gateway
  *   - isolated subnets: the database, with no route out at all

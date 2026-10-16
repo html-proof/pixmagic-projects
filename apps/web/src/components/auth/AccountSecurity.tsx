@@ -207,7 +207,7 @@ function PasswordSection({ account: a, provider }: { account: AccountInfo; provi
       ) : (
         <p className="mt-1 text-sm text-muted">
           You signed in with {provider ?? "another provider"}, so there&apos;s no password to change here. To add one, sign out and use{" "}
-          <Link href="/forgot-password" className="underline">
+          <Link prefetch={false} href="/forgot-password" className="underline">
             Forgot Password?
           </Link>{" "}
           with {a.user.email}.
