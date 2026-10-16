@@ -110,8 +110,8 @@ a hosted zone that isn't the registrar's nameservers would only be a second, ign
 
 | Name | Type | Value | Proxy |
 | --- | --- | --- | --- |
-| `bizinsights.io` | CNAME (flattened) | `d2mr8m2p1qkh58.cloudfront.net` | DNS only |
-| `www` | CNAME | `d2mr8m2p1qkh58.cloudfront.net` | DNS only |
+| `bizinsights.io` | CNAME (flattened) | `d2mr8m2p1qkh58.cloudfront.net` | Proxied |
+| `www` | CNAME | `d2mr8m2p1qkh58.cloudfront.net` | Proxied |
 | `_629bb4707c1bf383a6f9ecec0cb165bf` | CNAME | `_70137766a706c2c3a6f74580a42334a6.wzccmgtwzk.acm-validations.aws` | DNS only |
 | `_66e52976e7c4c9a179bf51623272d845.www` | CNAME | `_4a5b10a140cad564c7f3420dc090c8dd.wzccmgtwzk.acm-validations.aws` | DNS only |
 | `_dmarc` | TXT | `v=DMARC1; p=quarantine; adkim=r; aspf=r; rua=mailto:dmarc_rua@onsecureserver.net;` (from GoDaddy, kept) | DNS only |
@@ -120,12 +120,27 @@ a hosted zone that isn't the registrar's nameservers would only be a second, ign
 - **Certificate**: ACM in us-east-1 (CloudFront's region), `bizinsights.io` + `www.bizinsights.io`,
   `arn:aws:acm:us-east-1:605411278365:certificate/776966d7-d73c-4896-bd30-1568c9f7b3f7`, DNS-validated
   by the two `acm-validations.aws` records. ACM renews it by itself while they stay: never delete them.
-- **DNS only, not proxied**: CloudFront already does TLS, caching, compression, HTTP/3 and AWS WAF
-  (rate limit per client IP, managed rules), and the app's own per-IP limits and audit read the
-  address CloudFront sees. Behind Cloudflare's proxy that would be a Cloudflare edge address for
-  everyone, so one busy edge could trip the 300/min API limit for all its users. Turning the proxy on
-  needs the viewer-request function and the WAF to trust `CF-Connecting-IP` from Cloudflare's ranges
-  first; with Bot Fight Mode off and a cache bypass for `/api/*`, or Shopify's webhooks get challenged.
+- **Proxied through Cloudflare** (since 2026-10-16), in front of CloudFront, which still does TLS
+  to the origin, caching, AWS WAF and the redirects. CloudFront then sees a Cloudflare edge address
+  as the viewer, so the viewer-request function and the WAF's second rate rule take the client's
+  address from `CF-Connecting-IP`, believed only from Cloudflare's published ranges
+  (`infra/cdk/lib/cloudflare.ts`; add any range Cloudflare adds). The app's per-IP limits and audit
+  get it through `x-insights-viewer-ip` as before. Zone settings this relies on:
+  - SSL/TLS **Full (strict)** (CloudFront has a valid certificate for both names; Flexible would loop
+    on CloudFront's HTTPS redirect), **Always Use HTTPS** on (the smoke test checks http → https),
+    minimum TLS 1.2.
+  - **Email Address Obfuscation** and **Rocket Loader** off: both rewrite the HTML, and the static
+    pages (the contact address on /privacy, /terms, /support) must match what React hydrates.
+  - Cache Rule **"API: bypass cache"**: URI path starts with `/api/` → bypass. Cloudflare caches by file
+    extension, so an API path ending in `.csv` could otherwise be cached across accounts.
+  - **Bot Fight Mode off.** On the Free plan it covers the whole zone and no rule can skip it, so it
+    challenges Shopify's and Meta's webhooks and the deploy's smoke tests from GitHub (a failed smoke
+    test rolls the deploy back). Bot traffic is handled by AWS WAF's rate limits and managed rules.
+  - **AI Labyrinth** on; **Security.txt** set with the same lines as
+    `apps/web/public/.well-known/security.txt` (Cloudflare answers that path at its edge). Both
+    expire 2027-10-15: renew the `Expires` line in both before then.
+  - Rollback: switch the two records back to **DNS only**. Nothing in AWS has to change: from
+    anywhere but Cloudflare's ranges `CF-Connecting-IP` is ignored.
 - **One origin**: the session cookie, the CSRF check and every OAuth callback use APP_URL
   (`https://bizinsights.io`, set on the functions by the App stack). CloudFront answers on
   `bizinsights.io`, `www` and its own name; the viewer-request function sends GET/HEAD on the other two

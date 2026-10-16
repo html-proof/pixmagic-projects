@@ -198,9 +198,9 @@ describe("the app's domain", () => {
 
 describe("the viewer-request function", () => {
   type Req = { method: string; uri: string; querystring: Record<string, { value: string; multiValue?: Array<{ value: string }> }>; headers: Record<string, { value: string }> };
-  const run = (canonical: string | undefined, req: Partial<Req>) => {
+  const run = (canonical: string | undefined, req: Partial<Req>, viewerIp = "203.0.113.9") => {
     const handler = new Function(`${viewerRequestCode(canonical)}\nreturn handler;`)() as (e: unknown) => any; // eslint-disable-line @typescript-eslint/no-explicit-any
-    return handler({ viewer: { ip: "203.0.113.9" }, request: { method: "GET", uri: "/", querystring: {}, headers: {}, ...req } });
+    return handler({ viewer: { ip: viewerIp }, request: { method: "GET", uri: "/", querystring: {}, headers: {}, ...req } });
   };
 
   it("passes the viewer's address and host on, over anything the client sent", () => {
@@ -208,6 +208,20 @@ describe("the viewer-request function", () => {
     expect(r.headers["x-insights-viewer-ip"]).toEqual({ value: "203.0.113.9" });
     expect(r.headers["x-insights-viewer-host"]).toEqual({ value: "bizinsights.io" });
     expect(r.statusCode).toBeUndefined();
+  });
+
+  it("passes on the client's address from Cloudflare's proxy, and believes that header from nowhere else", () => {
+    const via = (viewerIp: string, client = "198.51.100.7") =>
+      run("bizinsights.io", { method: "POST", headers: { host: { value: "bizinsights.io" }, "cf-connecting-ip": { value: client } } }, viewerIp).headers["x-insights-viewer-ip"].value;
+    for (const edge of ["172.70.1.2", "162.158.0.1", "104.23.255.254", "131.0.75.1", "2400:cb00:2049::1", "2606:4700:10::ac43:1", "2a06:98c7:ffff::1", "2c0f:f248::"]) {
+      expect(via(edge), edge).toBe("198.51.100.7");
+    }
+    expect(via("172.70.1.2", "2001:db8::42")).toBe("2001:db8::42");
+    for (const other of ["203.0.113.9", "172.72.0.1", "104.32.0.1", "2a06:98c8::1", "2606::1", "2001:db8::1", "::1"]) {
+      expect(via(other), other).toBe(other);
+    }
+    // Not an address: the edge's own is kept.
+    expect(via("172.70.1.2", "1.2.3.4, 5.6.7.8")).toBe("172.70.1.2");
   });
 
   it("sends page requests on other names to the domain, path and query parameters as received", () => {
@@ -246,8 +260,36 @@ describe("the edge stack", () => {
     expect(acl.Scope).toBe("CLOUDFRONT");
     const rules = Object.fromEntries((acl.Rules as Array<{ Name: string }>).map((r) => [r.Name, r])) as Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
     expect(rules["api-rate-per-ip"].Statement.RateBasedStatement.Limit).toBe(300);
+    expect(rules["api-rate-per-ip"].Statement.RateBasedStatement.AggregateKeyType).toBe("IP");
     expect(rules["aws-ip-reputation"].OverrideAction).toEqual({ None: {} });
     expect(rules["aws-common-count-only"].OverrideAction).toEqual({ Count: {} });
+  });
+});
+
+describe("the edge stack behind Cloudflare", () => {
+  const acl = () => Object.values(t.edge.findResources("AWS::WAFv2::WebACL"))[0]!.Properties;
+  const rule = (name: string) => (acl().Rules as Array<{ Name: string }>).find((r) => r.Name === name) as any; // eslint-disable-line @typescript-eslint/no-explicit-any
+
+  it("knows Cloudflare's published ranges", () => {
+    const sets = Object.values(t.edge.findResources("AWS::WAFv2::IPSet")).map((s) => s.Properties);
+    expect(sets.map((s) => s.IPAddressVersion).sort()).toEqual(["IPV4", "IPV6"]);
+    expect(sets.find((s) => s.IPAddressVersion === "IPV4").Addresses).toContain("172.64.0.0/13");
+    expect(sets.find((s) => s.IPAddressVersion === "IPV6").Addresses).toContain("2606:4700::/32");
+    for (const s of sets) expect(s.Scope).toBe("CLOUDFRONT");
+  });
+
+  it("rate-limits requests through Cloudflare by the client's address, everything else by the viewer's", () => {
+    const viaCloudflare = rule("api-rate-per-client-via-cloudflare").Statement.RateBasedStatement;
+    expect(viaCloudflare.AggregateKeyType).toBe("FORWARDED_IP");
+    expect(viaCloudflare.ForwardedIPConfig).toEqual({ HeaderName: "cf-connecting-ip", FallbackBehavior: "NO_MATCH" });
+    expect(viaCloudflare.Limit).toBe(300);
+    const scope = (r: { ScopeDownStatement: { AndStatement: { Statements: unknown[] } } }) => JSON.stringify(r.ScopeDownStatement.AndStatement.Statements.at(-1));
+    expect(scope(viaCloudflare)).toMatch(/^\{"OrStatement".*IPSetReferenceStatement/);
+    expect(scope(rule("api-rate-per-ip").Statement.RateBasedStatement)).toMatch(/^\{"NotStatement".*IPSetReferenceStatement/);
+  });
+
+  it("doesn't judge Cloudflare's own addresses by Amazon's reputation list", () => {
+    expect(JSON.stringify(rule("aws-ip-reputation").Statement.ManagedRuleGroupStatement.ScopeDownStatement)).toMatch(/^\{"NotStatement".*IPSetReferenceStatement/);
   });
 });
 

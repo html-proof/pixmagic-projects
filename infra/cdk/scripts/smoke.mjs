@@ -35,6 +35,10 @@ const expect = (cond, msg) => {
   if (!cond) throw new Error(msg);
 };
 const get = (url, init) => fetch(url, { redirect: "manual", ...init });
+// The domain's DNS is at Cloudflare, proxied: it answers as `server: cloudflare` and may serve a file
+// from its own cache, so CloudFront's and S3's marks are looked for in what it passes on.
+const edgeHit = (r) => /hit/i.test(r.headers.get("x-cache") ?? "") || /hit/i.test(r.headers.get("cf-cache-status") ?? "");
+const fromS3 = (r) => r.headers.get("server") === "AmazonS3" || !!r.headers.get("x-amz-server-side-encryption");
 
 console.log(`Checking ${base}\n`);
 
@@ -64,9 +68,9 @@ await check("static assets cached at the edge", async () => {
   await get(`${base}${asset}`);
   const r = await get(`${base}${asset}`);
   expect(r.status === 200, `status ${r.status}`);
-  expect(/hit/i.test(r.headers.get("x-cache") ?? ""), `x-cache ${r.headers.get("x-cache")}`);
+  expect(edgeHit(r), `x-cache ${r.headers.get("x-cache")}, cf-cache-status ${r.headers.get("cf-cache-status")}`);
   expect(/immutable/.test(r.headers.get("cache-control") ?? ""), `cache-control ${r.headers.get("cache-control")}`);
-  return r.headers.get("x-cache");
+  return [r.headers.get("x-cache"), r.headers.get("cf-cache-status") && `cloudflare ${r.headers.get("cf-cache-status")}`].filter(Boolean).join(", ");
 });
 // What a first visit does: every script of the page at once. Served by the function, a burst like
 // this ran past the account's Lambda concurrency and came back 429 with a JSON body.
@@ -75,13 +79,20 @@ await check("all of a page's scripts load at once, as JavaScript, from S3", asyn
   const assets = [...new Set(html.match(/\/_next\/static\/[^"'\s)]+\.js/g) ?? [])];
   expect(assets.length, "no scripts in the page");
   const rs = await Promise.all(assets.map((a) => get(`${base}${a}`)));
-  const bad = rs.map((r, i) => [assets[i], r]).filter(([, r]) => r.status !== 200 || !/javascript/.test(r.headers.get("content-type") ?? "") || r.headers.get("server") !== "AmazonS3");
+  const bad = rs.map((r, i) => [assets[i], r]).filter(([, r]) => r.status !== 200 || !/javascript/.test(r.headers.get("content-type") ?? "") || !fromS3(r));
   expect(!bad.length, bad.map(([a, r]) => `${a}: ${r.status} ${r.headers.get("content-type")} ${r.headers.get("server")}`).join("; "));
   return `${assets.length} scripts`;
 });
 await check("security headers on pages", async () => {
   const r = await get(`${base}/login`);
   for (const h of ["strict-transport-security", "x-content-type-options", "x-frame-options", "content-security-policy", "referrer-policy"]) expect(r.headers.get(h), `missing ${h}`);
+});
+await check("security.txt published", async () => {
+  const r = await get(`${base}/.well-known/security.txt`);
+  const text = await r.text();
+  expect(r.status === 200 && /^Contact: /m.test(text) && /^Expires: /m.test(text), `status ${r.status}`);
+  // Renewed by hand before it expires (apps/web/public/.well-known/security.txt).
+  return /^Expires: (.+)$/m.exec(text)?.[1];
 });
 await check("http redirects to https", async () => {
   const r = await get(base.replace("https://", "http://") + "/");
