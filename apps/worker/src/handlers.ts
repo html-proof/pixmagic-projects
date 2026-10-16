@@ -87,6 +87,7 @@ import {
   type WhatsappJob,
   emailOnShopifyEvent,
   processBusinessEvent,
+  retryInvitationEmail,
   purgeEmailStoreData,
   redactEmailCustomer,
   sendEmailMessage,
@@ -1206,6 +1207,8 @@ export async function refreshExpiringTokens(deps: WorkerDeps) {
 /** Email integrations: send one message, or run the automations for one business event. */
 export async function runEmailJob(job: EmailJob, deps: WorkerDeps) {
   if (job.kind === "email_send") return { outcome: await sendEmailMessage(job.messageId, deps) };
+  // The delivery record counts attempts and queues the next one itself, so this never throws for a mail failure.
+  if (job.kind === "team_invitation") return { outcome: await retryInvitationEmail(job.deliveryId, { mailer: deps.mailer, queues: deps.queues }) };
   return processBusinessEvent(job.eventId, deps);
 }
 

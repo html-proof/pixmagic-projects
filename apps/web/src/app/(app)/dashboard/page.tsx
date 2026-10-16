@@ -15,7 +15,7 @@ import { KpiCard, SummaryCard, TrendCharts } from "@/components/dashboard/HomeCa
 import { AnimatedNumber } from "@/components/dashboard/Motion";
 import type { Capability, Overview } from "@/components/dashboard/types";
 import { signInFinished } from "@/lib/adSignIn";
-import { api, ApiError, fmtMoney, fmtNum, friendlyError, isTransient, useLiveApi } from "@/lib/api";
+import { api, ApiError, apiHref, fmtMoney, fmtNum, friendlyError, isTransient, useLiveApi } from "@/lib/api";
 import { scopeList } from "@app/shared/capabilities";
 import { hasFullAccess, ROLE_INFO } from "@app/shared/access";
 import { NoAccessAssigned } from "@/components/team/AccessStates";
@@ -254,7 +254,7 @@ export default function DashboardPage() {
   // Unlocking more data is the store's owners' and admins' business, not a shared member's.
   const disabled = hasFullAccess(access.role) ? (ov?.capabilities.filter((c) => !c.enabled) ?? []) : [];
   const exportSection = detail.view && allowed("reports.export") && seesTopic(access, detail.view) ? TOPIC_EXPORT[detail.view] : undefined;
-  const exportHref = exportSection && store && asking ? `/api/workspaces/${workspace.id}/stores/${store.id}/export?section=${exportSection}&${asking.qs}` : null;
+  const exportHref = exportSection && store && asking ? apiHref(`/workspaces/${workspace.id}/stores/${store.id}/export?section=${exportSection}&${asking.qs}`) : null;
   const headerStore = ov?.store ?? store;
   const contactsOn = ov?.capabilities.some((c) => c.id === "contacts" && c.enabled) ?? false;
   const topics = ov ? availableTopics(ov, contactsOn) : [];
