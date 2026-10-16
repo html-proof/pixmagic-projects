@@ -147,12 +147,27 @@ function RolePill({ role }: { role: Role }) {
   );
 }
 
-function StatusPill({ status }: { status: TeamRowStatus }) {
-  const look = STATUS_LOOK[status];
+/**
+ * A row's status as the list shows it. An invitation not accepted yet says how its email went:
+ * "Sent" once it went out (the latest attempt succeeded), "Not delivered" when the latest failed;
+ * "Pending" only while neither is known.
+ */
+function statusOf(r: TeamRow): { label: string; look: { pill: string; dot: string } } {
+  if (r.kind === "invitation" && r.status === "pending") {
+    const sent = r.sentAt ? Date.parse(r.sentAt) : 0;
+    const failed = r.sendFailedAt ? Date.parse(r.sendFailedAt) : 0;
+    if (sent && sent >= failed) return { label: "Sent", look: STATUS_LOOK.active };
+    if (failed) return { label: "Not delivered", look: STATUS_LOOK.revoked };
+  }
+  return { label: STATUS_LABEL[r.status], look: STATUS_LOOK[r.status] };
+}
+
+function StatusPill({ row }: { row: TeamRow }) {
+  const { label, look } = statusOf(row);
   return (
     <span className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-medium ${look.pill}`}>
       <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${look.dot}`} />
-      {STATUS_LABEL[status]}
+      {label}
     </span>
   );
 }
@@ -416,7 +431,7 @@ function TeamAccess() {
         </span>
         {r.name && <span className="block truncate text-xs text-muted">{r.email}</span>}
         {r.kind === "invitation" && r.status === "pending" && r.expiresAt && <span className="block text-xs text-muted">Expires {new Date(r.expiresAt).toLocaleDateString()}</span>}
-        {r.kind === "invitation" && r.sendFailedAt && (!r.sentAt || r.sendFailedAt > r.sentAt) && <span className="block text-xs text-warn">Email not delivered: resend or share the link</span>}
+        {r.kind === "invitation" && r.status === "pending" && statusOf(r).label === "Not delivered" && <span className="block text-xs text-warn">Resend it, or share the link another way</span>}
       </span>
     </span>
   );
@@ -469,7 +484,7 @@ function TeamAccess() {
       <section aria-label="Summary" className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <SummaryCard testId="summary-total" icon={UsersRound} tone="green" label="Total Members" value={s?.totalMembers} trend={s?.trend?.totalMembers} note="All team members with access" />
         <SummaryCard testId="summary-active" icon={UserRound} tone="blue" label="Active Members" value={s?.activeMembers} trend={s?.trend?.activeMembers} note="Currently have access" />
-        <SummaryCard testId="summary-pending" icon={Clock} tone="violet" label="Pending Invitations" value={s?.pendingInvitations} trend={s?.trend?.pendingInvitations} note="Sent, not accepted yet" />
+        <SummaryCard testId="summary-pending" icon={Clock} tone="violet" label="Open Invitations" value={s?.pendingInvitations} trend={s?.trend?.pendingInvitations} note="Not accepted yet" />
         <SummaryCard testId="summary-ended" icon={MailX} tone="red" label="Expired or Revoked" value={s?.endedInvitations} trend={s?.trend?.endedInvitations} note="Invitations that no longer work" />
       </section>
 
@@ -531,7 +546,7 @@ function TeamAccess() {
                     {person(r)}
                     <div className="flex flex-wrap items-center gap-2">
                       <RolePill role={r.role} />
-                      <StatusPill status={r.status} />
+                      <StatusPill row={r} />
                     </div>
                     <AccessSummary row={r} />
                     <p className="text-xs text-muted">{lastSeen(r)}</p>
@@ -559,7 +574,7 @@ function TeamAccess() {
                       <td className="max-w-[20rem] px-4 py-3">{person(r)}</td>
                       <td className="px-4 py-3"><RolePill role={r.role} /></td>
                       <td className="max-w-[18rem] px-4 py-3"><AccessSummary row={r} /></td>
-                      <td className="px-4 py-3"><StatusPill status={r.status} /></td>
+                      <td className="px-4 py-3"><StatusPill row={r} /></td>
                       <td className="whitespace-nowrap px-4 py-3 text-muted">{lastSeen(r)}</td>
                       <td className="px-4 py-3 text-right"><RowActions row={r} actions={actionsFor(r)} onAct={(a) => void act(r, a)} /></td>
                     </tr>

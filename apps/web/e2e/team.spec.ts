@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import pg from "pg";
 import { E2E_ENV, E2E_MAILPIT_URL } from "../playwright.config";
-import { confirmSignUp, fillSignUp, signUp, uniqueEmail } from "./helpers";
+import { asNewVisitor, signUp, uniqueEmail } from "./helpers";
 
 /**
  * Team & Access through the real app: an owner shares part of the dashboard with someone outside
@@ -82,7 +82,8 @@ test("an owner shares Customers and Products with a client, changes it while the
   await expect(page.getByText(`Invitation sent to ${client}.`)).toBeVisible();
   await expect(page.getByTestId("summary-pending")).toContainText("1");
   const row = page.getByTestId("team-row").filter({ hasText: client }).filter({ visible: true });
-  await expect(row).toContainText("Pending");
+  // Its email went out, so the list says so.
+  await expect(row).toContainText("Sent");
   await expect(row).toContainText("Custom");
 
   // ---- The email, and its link (the token after #, never sent to a server).
@@ -97,11 +98,10 @@ test("an owner shares Customers and Products with a client, changes it while the
   await guest.goto(link);
   await expect(guest.getByRole("heading", { name: "Join Acme Goods" })).toBeVisible();
   await expect(guest.getByTestId("invite-details")).toContainText("Customer details • Product details");
-  await guest.getByRole("button", { name: "Create an account" }).click();
-  await fillSignUp(guest, client);
-  await confirmSignUp(guest, client);
-  await expect(guest).toHaveURL(/\/invite/);
-  await guest.getByRole("button", { name: "Accept invitation" }).click();
+  // One tap: no sign-up form, no password.
+  await expect(guest.getByLabel("Email Address")).toHaveCount(0);
+  await asNewVisitor(guest);
+  await guest.getByRole("button", { name: "Open dashboard" }).click();
   await expect(guest).toHaveURL(/\/dashboard/);
 
   // ---- Their sidebar: the shared areas and their account, nothing else.

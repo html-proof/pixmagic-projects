@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { expect, test, type Page } from "@playwright/test";
 import pg from "pg";
 import { E2E_ENV, E2E_MAILPIT_URL } from "../playwright.config";
-import { confirmSignUp, fillSignUp, signedWebhook, signUp, uniqueEmail } from "./helpers";
+import { signedWebhook, signUp, uniqueEmail } from "./helpers";
 
 /**
  * Settings, invitations, billing and the public pages, driven through the real app.
@@ -12,13 +12,6 @@ import { confirmSignUp, fillSignUp, signedWebhook, signUp, uniqueEmail } from ".
 
 const db = new pg.Pool({ connectionString: E2E_ENV.DATABASE_URL });
 test.afterAll(() => db.end());
-
-/** A newcomer creates their account from the sign-in page (the code they confirm proves the email). */
-async function createAccountFromLogin(page: Page, email: string) {
-  await page.getByRole("link", { name: "Create Account" }).first().click();
-  await fillSignUp(page, email);
-  await confirmSignUp(page, email);
-}
 
 async function createWorkspace(page: Page, name: string): Promise<string> {
   return page.evaluate(async (n) => {
@@ -97,7 +90,7 @@ test("invitations: emailed, handed over as a link when email fails, and kept acr
   const invitee = uniqueEmail("invitee");
   await invite(invitee);
   await expect(page.getByText(`Invitation sent to ${invitee}.`)).toBeVisible();
-  await expect(page.getByTestId("team-row").filter({ visible: true }).filter({ hasText: invitee })).toContainText("Pending");
+  await expect(page.getByTestId("team-row").filter({ visible: true }).filter({ hasText: invitee })).toContainText("Sent");
 
   // When the email can't be sent the API still saves the invitation and returns its link. The
   // page used to say "sent" anyway and drop the link.
@@ -119,11 +112,8 @@ test("invitations: emailed, handed over as a link when email fails, and kept acr
   const guest = await ctx.newPage();
   await guest.goto(link);
   await expect(guest.getByRole("heading", { name: "Join Team Co" })).toBeVisible();
-  await guest.getByRole("button", { name: "Sign in to accept" }).click();
-  await expect(guest).toHaveURL(/\/login/);
-  await createAccountFromLogin(guest, invitee);
-  await expect(guest).toHaveURL(/\/invite/);
-  await guest.getByRole("button", { name: "Accept invitation" }).click();
+  // Someone new opens the dashboard from the link itself: no sign-in or sign-up.
+  await guest.getByRole("button", { name: "Open dashboard" }).click();
   await expect(guest).toHaveURL(/\/dashboard/);
   // Joined the inviter's workspace, and did not get one of their own on the way.
   const { rows } = await db.query(
