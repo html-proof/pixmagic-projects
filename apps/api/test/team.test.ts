@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { encryptTokenFields, normalizeRestOrder, pruneTeamRecords, recomputeDays, upsertOrder, type FetchLike } from "@app/core";
 import { systemDb } from "@app/db";
 import { LEGACY_GRANTS, sha256Hex } from "@app/shared";
-import { clean, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
+import { clean, cookiesFrom, createStore, createWorkspace, ORIGIN, setup, signIn, teardown, type TestCtx } from "./helpers.js";
 
 /**
  * Team & Access, end to end through the API: inviting someone outside the business with chosen
@@ -128,7 +128,7 @@ describe("inviting someone with Customers access only (scenarios 1-6)", () => {
     expect(mail.text).toContain("Customer details");
     expect(mail.text).toContain("Here's the customer view we talked about.");
     expect(mail.text).toContain("If you weren't expecting this invitation, you can safely ignore this email.");
-    expect(mail.html).toContain("Accept Invitation");
+    expect(mail.html).toContain("Open the dashboard");
     // Replies reach the owner who sent it (the sender address has no mailbox).
     expect(mail.replyTo).toBe(b.owner.user.email);
     expect(mail.text).toContain("Questions? Reply to this email to reach");
@@ -566,5 +566,74 @@ describe("retention", () => {
     expect(await pruneTeamRecords()).toEqual({ invitations: 1, auditEntries: 1 });
     expect((await systemDb.invitation.findMany()).map((i) => i.email)).toEqual(["keep@example.com"]);
     expect(await systemDb.auditLog.count({ where: { action: "store.resync" } })).toBe(1);
+  });
+});
+
+describe("opening the dashboard straight from the invitation link", () => {
+  const sendInvite = async (b: Awaited<ReturnType<typeof business>>, email: string) => {
+    ok(await call("POST", `/workspaces/${b.ws}/team/invitations`, b.owner.headers, { email, role: "viewer", permissions: ["analytics.sales", "products.view"] }));
+    return tokenFrom(lastMailTo(email)!.text)!;
+  };
+  const open = (token: string, headers: Headers = ORIGIN) => call("POST", "/invitations/open", headers, { token });
+
+  it("signs someone new in on this device and opens the shared dashboard, with no sign-up or password", async () => {
+    const b = await business();
+    const token = await sendInvite(b, "newcomer@example.com");
+    const res = await open(token);
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toMatchObject({ workspaceId: b.ws, joined: true, signedIn: true });
+    const session = { cookie: cookiesFrom(res), ...ORIGIN };
+    expect(session.cookie).toContain("__session=");
+    // Signed in as the invited address, verified, with exactly what was shared.
+    const me = ok(await call("GET", "/me", session));
+    expect(me.user).toMatchObject({ email: "newcomer@example.com", emailVerified: true });
+    expect(ok(await call("GET", `/workspaces/${b.ws}/access`, session))).toMatchObject({ role: "viewer", modules: ["analytics", "products"] });
+    expect(Object.keys(ok(await overview(b, session)).modules).sort()).toEqual(["catalog", "sales_overview"]);
+    // A Cognito account was made for them (so they can sign in later with an emailed code).
+    expect(ctx.auth.calls.filter((c) => c === "adminCreateUser")).toHaveLength(1);
+    // The link works once.
+    expect((await open(token)).statusCode).toBe(400);
+    expect((await open(token)).json().detail).toEqual({ status: "accepted" });
+  });
+
+  it("only from our own pages: a cross-site request can't sign a browser in", async () => {
+    const b = await business();
+    const token = await sendInvite(b, "csrf@example.com");
+    expect((await open(token, { origin: "https://evil.example" })).statusCode).toBe(403);
+    expect((await open(token, {})).statusCode).toBe(403);
+    expect(await systemDb.membership.count({ where: { workspaceId: b.ws } })).toBe(1);
+  });
+
+  it("adds an existing account to the workspace but never signs it in from a link", async () => {
+    const b = await business();
+    const existing = await signIn(ctx, "existing", "existing@example.com");
+    const token = await sendInvite(b, "existing@example.com");
+    const res = await open(token);
+    expect(res.json()).toMatchObject({ workspaceId: b.ws, signedIn: false, accountExists: true, joined: true });
+    expect(cookiesFrom(res)).not.toContain("__session=");
+    // Joined: after their usual sign-in the dashboard is there.
+    expect(ok(await call("GET", `/workspaces/${b.ws}/access`, existing.headers)).role).toBe("viewer");
+  });
+
+  it("refuses while signed in as someone else, and accepts for the invited person signed in", async () => {
+    const b = await business();
+    const token = await sendInvite(b, "invited@example.com");
+    const other = await signIn(ctx, "other", "other@example.com");
+    const wrong = await open(token, other.headers);
+    expect(wrong.statusCode).toBe(409);
+    expect(wrong.json().error).toBe("signed_in_as_other");
+    const invited = await signIn(ctx, "invited", "invited@example.com");
+    expect(ok(await open(token, invited.headers))).toMatchObject({ workspaceId: b.ws, signedIn: true });
+  });
+
+  it("says a link that isn't one, or was cancelled, can't be used", async () => {
+    const b = await business();
+    expect((await open("not-a-real-token-123")).statusCode).toBe(400);
+    const token = await sendInvite(b, "gone@example.com");
+    const inv = await systemDb.invitation.findFirstOrThrow({ where: { email: "gone@example.com" } });
+    ok(await call("POST", `/workspaces/${b.ws}/team/invitations/${inv.id}/revoke`, b.owner.headers));
+    const res = await open(token);
+    expect(res.statusCode).toBe(400);
+    expect(res.json().detail).toEqual({ status: "revoked" });
   });
 });

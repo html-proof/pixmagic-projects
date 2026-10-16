@@ -285,7 +285,20 @@ const ENDED: Record<Exclude<InvitationStatus, "pending">, string> = {
  * someone whose access was revoked gets the invitation's access back; someone already in the team
  * keeps what they have.
  */
-export async function acceptTeamInvitation(user: User, token: string, ip?: string): Promise<{ workspaceId: string; joined: boolean }> {
+/**
+ * The invitation a link carries, for the invitation page's "Open dashboard": who it's for and
+ * whether it can still be used. Null for a link that isn't one.
+ */
+export async function invitationForLink(token: string) {
+  const inv = await systemDb.invitation.findUnique({ where: { tokenHash: sha256Hex(token) }, select: { id: true, email: true, workspaceId: true, acceptedAt: true, revokedAt: true, expiresAt: true } });
+  return inv ? { ...inv, status: invitationStatus(inv) } : null;
+}
+
+/**
+ * `viaLink`: accepted by opening the link itself (POST /invitations/open). The link was sent to the
+ * invited address, so it stands in for a verified email.
+ */
+export async function acceptTeamInvitation(user: User, token: string, ip?: string, opts: { viaLink?: boolean } = {}): Promise<{ workspaceId: string; joined: boolean }> {
   const inv = await systemDb.invitation.findUnique({ where: { tokenHash: sha256Hex(token) } });
   if (!inv) throw new TeamError(400, "invalid_invite", "This invitation link isn't valid. Check you opened the whole link, or ask for a new invitation.", { status: "invalid" });
   const status = invitationStatus(inv);
@@ -293,7 +306,7 @@ export async function acceptTeamInvitation(user: User, token: string, ip?: strin
   if (normalizeEmail(user.email) !== inv.email) {
     throw new TeamError(403, "invite_email_mismatch", `This invitation is for ${maskEmail(inv.email)}. Sign in with that email address to accept it.`);
   }
-  if (!user.emailVerified) throw new TeamError(403, "invite_email_mismatch", "Verify your email address first, then accept the invitation.");
+  if (!user.emailVerified && !opts.viaLink) throw new TeamError(403, "invite_email_mismatch", "Verify your email address first, then accept the invitation.");
   const now = new Date();
   const joined = await withTenant(inv.workspaceId, async (tx) => {
     await lockTeam(tx, inv.workspaceId);
