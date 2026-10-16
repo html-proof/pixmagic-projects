@@ -11,7 +11,7 @@
 export type AlertSeverity = "info" | "warning" | "critical";
 
 /** Where the problem gets fixed: the bell and the alert email link each to its page. */
-export type AlertArea = "shopify" | "email" | "staff" | "whatsapp" | "general";
+export type AlertArea = "shopify" | "email" | "staff" | "whatsapp" | "privacy" | "general";
 
 /** The app page each area's alerts link to (a path: the email puts APP_URL in front of it). */
 export const ALERT_PATH: Record<AlertArea, string> = {
@@ -19,6 +19,7 @@ export const ALERT_PATH: Record<AlertArea, string> = {
   email: "/settings/email/accounts",
   staff: "/staff/timesheets",
   whatsapp: "/whatsapp/automations",
+  privacy: "/settings/privacy",
   general: "/support",
 };
 
@@ -86,6 +87,14 @@ export function describeAlert(alert: { code: string; severity: string; message: 
       area: "shopify",
       title: "An update from Shopify couldn't be processed",
       body: "A recent change in your store, such as a new order or a refund, may be missing for now. The daily check with Shopify picks up recent orders it missed.",
+    };
+  }
+  if (code === "privacy_request") {
+    return {
+      severity,
+      area: "privacy",
+      title: "A customer asked for their data",
+      body: "They asked through Shopify for the data bizinsights holds about them. Download it from Settings → Privacy requests and send it to them: Shopify gives 30 days to answer.",
     };
   }
   // These messages are composed from the app's wording and the merchant's own addresses and counts.

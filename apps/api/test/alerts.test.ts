@@ -22,6 +22,7 @@ async function seed() {
   await alert({ severity: "warning", code: "email_account_reauth:acc1", message: "The email account shop@acme.test must be reconnected before it can send again (Settings → Email → Accounts).", createdAt: ago(30) });
   await alert({ severity: "warning", code: "staff_open_shifts", message: "2 shifts have been open longer than expected.", createdAt: ago(90) });
   await alert({ storeId: store.id, severity: "info", code: "wa_rule_r1", message: "Big order (order #1001)", createdAt: ago(10) });
+  await alert({ storeId: store.id, severity: "warning", code: "privacy_request", message: "A customer of acme.myshopify.com asked for their data.", createdAt: ago(120) });
   // Not listed: an old note, a resolved problem, and a problem of a store that has been uninstalled.
   await alert({ storeId: store.id, severity: "info", code: "wa_rule_r1", message: "Old note", createdAt: ago(8 * 24 * 60) });
   await alert({ storeId: store.id, severity: "critical", code: "sync_products_failed", message: LEAK, createdAt: ago(2), resolvedAt: ago(1) });
@@ -45,11 +46,21 @@ describe("GET /workspaces/:ws/alerts", () => {
       { id: expect.any(String), severity: "warning", area: "email", title: "An email account needs reconnecting", body: expect.stringContaining("shop@acme.test"), store: null, createdAt: expect.any(String) },
       { id: expect.any(String), severity: "warning", area: "shopify", title: "An update from Shopify couldn't be processed", body: expect.any(String), store: acme, createdAt: expect.any(String) },
       { id: expect.any(String), severity: "warning", area: "staff", title: "Shifts left open", body: "2 shifts have been open longer than expected.", store: null, createdAt: expect.any(String) },
+      { id: expect.any(String), severity: "warning", area: "privacy", title: "A customer asked for their data", body: expect.stringContaining("Settings → Privacy requests"), store: acme, createdAt: expect.any(String) },
     ]);
     for (const a of alerts) {
       expect(a).not.toHaveProperty("message");
       expect(a).not.toHaveProperty("code");
     }
+  });
+
+  it("lists privacy requests only to members who see Settings → Privacy requests", async () => {
+    const { ws } = await seed();
+    const analyst = await signIn(ctx, "analyst", "analyst@acme.test");
+    await systemDb.membership.create({ data: { workspaceId: ws, userId: analyst.user.id, role: "analyst" } });
+    const res = await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/alerts`, headers: analyst.headers });
+    expect(res.statusCode).toBe(200);
+    expect((res.json().alerts as Array<{ area: string }>).map((a) => a.area)).not.toContain("privacy");
   });
 
   it("lists staff alerts only to members who see timesheets", async () => {

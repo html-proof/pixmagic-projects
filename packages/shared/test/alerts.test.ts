@@ -39,6 +39,16 @@ describe("describeAlert", () => {
     expect(describeAlert({ code: "wa_rule_r1", severity: "info", message: "VIP order (order #1001)" })).toMatchObject({ area: "whatsapp", severity: "info", body: "VIP order (order #1001)" });
   });
 
+  it("sends a customer's data request to Settings → Privacy requests", () => {
+    expect(describeAlert({ code: "privacy_request", severity: "warning", message: "A customer of a.myshopify.com asked" })).toEqual({
+      severity: "warning",
+      area: "privacy",
+      title: "A customer asked for their data",
+      body: expect.stringContaining("Settings → Privacy requests"),
+    });
+    expect(ALERT_PATH.privacy).toBe("/settings/privacy");
+  });
+
   it("links every area to an app page", () => {
     for (const path of Object.values(ALERT_PATH)) expect(path).toMatch(/^\/[a-z]/);
     expect(ALERT_PATH[describeAlert({ code: "sync_orders_failed", severity: "critical", message: "" }).area]).toBe("/settings/stores");
