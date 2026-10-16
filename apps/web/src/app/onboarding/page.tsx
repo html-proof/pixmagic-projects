@@ -258,11 +258,11 @@ function Onboarding() {
               <ShopifyIcon />
               {busy === "oneclick" ? "Opening Shopify…" : "Continue with Shopify"}
             </button>
-            {!manual ? (
-              <button type="button" className="block text-sm text-muted underline" onClick={() => setManual(true)}>
-                Enter store address instead
-              </button>
-            ) : (
+            {/* Shopify's own store picker is the way in (App Store requirement 2.3.1: never ask
+                a merchant to type their store's address). The address form appears only when the
+                API says the picker can't reach this merchant's app (shop_required), or prefilled
+                when Shopify itself named the store (?shop=). */}
+            {manual && (
               <form onSubmit={connect} className="space-y-3 border-t border-border pt-4">
                 <label className="label" htmlFor="shop">Your store address</label>
                 <div className="flex items-center gap-2">

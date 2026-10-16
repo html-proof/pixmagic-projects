@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import pg from "pg";
 import { E2E_ENV } from "../playwright.config";
-import { confirmSignUp, fillSignUp, latestCode, logIn, PASSWORD, signedLaunchUrl, signedWebhook, signUp, stubShopify, uniqueEmail, verifyEmail } from "./helpers";
+import { fillSignUp, latestCode, logIn, PASSWORD, signedLaunchUrl, signedWebhook, signUp, stubShopify, uniqueEmail, verifyEmail } from "./helpers";
 
 /** The app's own alerts (Next.js also renders an empty role="alert" route announcer). */
 const alert = (page: import("@playwright/test").Page) => page.locator('[role="alert"]:not(#__next-route-announcer__)');
@@ -294,22 +294,32 @@ test("/start, the old Shopify sign-up address, forwards into the new flow", asyn
   await expect(page).toHaveURL(/\/login/);
 });
 
-test("opening the app from the Shopify admin without an account: sign up, then the store connects", async ({ page }) => {
+test("installing from Shopify authorizes at once, before any sign-in", async ({ page }) => {
+  // App Store requirements 2.3.2-2.3.4: OAuth first, whoever is (or isn't) signed in. Where the
+  // store goes once Shopify answers is covered by apps/api/test/shopifyInstall.test.ts.
   await stubShopify(page);
-  await page.goto(signedLaunchUrl("e2e-launch.myshopify.com"));
-  await expect(page).toHaveURL(/\/login/);
-  await page.getByRole("link", { name: "Create Account" }).first().click();
-  const email = uniqueEmail("launch");
-  await fillSignUp(page, email);
-  // Confirming the code verifies the address and signs in: back to the connect page for that
-  // store, which goes straight to Shopify's OAuth screen.
   const authorize = page.waitForRequest((r) => r.url().startsWith("https://e2e-launch.myshopify.com/admin/oauth/authorize"));
-  await confirmSignUp(page, email);
+  await page.goto(signedLaunchUrl("e2e-launch.myshopify.com"));
   const url = new URL((await authorize).url());
   expect(url.searchParams.get("client_id")).toBe("e2e_key");
   expect(url.searchParams.get("state")).toBeTruthy();
   expect(url.searchParams.get("redirect_uri")).toContain("/api/shopify/callback");
 });
+
+test("the page that adds an installed store to an account explains an expired link", async ({ page }) => {
+  await page.goto("/claim");
+  await expect(page.getByRole("heading", { name: "Open bizinsights from Shopify" })).toBeVisible();
+  await expect(page.getByText("Shopify admin")).toBeVisible();
+  await page.goto("/claim?error=exchange_failed");
+  await expect(alert(page)).toContainText("Shopify didn't complete the connection");
+});
+
+/** The API's answer when Shopify's store picker can't reach the app serving this merchant. */
+async function requireShopAddress(page: Page) {
+  await page.route(/\/api\/workspaces\/[^/]+\/shopify\/start$/, (route) =>
+    route.fulfill({ status: 400, contentType: "application/json", body: JSON.stringify({ error: "shop_required", message: "Enter your store address" }) }),
+  );
+}
 
 test("Shopify is connected from Settings, through Shopify's OAuth screen", async ({ page }) => {
   await stubShopify(page);
@@ -320,12 +330,20 @@ test("Shopify is connected from Settings, through Shopify's OAuth screen", async
   await expect(page.getByRole("heading", { name: "Shopify stores" })).toBeVisible();
   const card = page.getByTestId("shopify-connect");
 
-  // Like onboarding: "Continue with Shopify" first, the address field one click away.
-  await expect(card.getByRole("button", { name: "Continue with Shopify" })).toBeVisible();
-  const field = card.getByLabel("Store address, store ID or Shopify email");
+  // Shopify picks the store: nobody is asked to type its address (App Store requirement 2.3.1).
+  const field = card.getByLabel("Store address or store ID");
   const connect = card.getByRole("button", { name: "Connect this store" });
   await expect(field).toHaveCount(0);
-  await card.getByRole("button", { name: "Enter store address instead" }).click();
+  await expect(card.getByText("Enter store address instead")).toHaveCount(0);
+  const install = page.waitForRequest((r) => r.url().startsWith("https://admin.shopify.com/oauth/install"));
+  await card.getByRole("button", { name: "Continue with Shopify" }).click();
+  expect(new URL((await install).url()).searchParams.get("client_id")).toBe("e2e_key");
+
+  // Only when the picker can't reach this merchant's app does the address field appear.
+  await page.goto("/settings/stores");
+  await requireShopAddress(page);
+  await card.getByRole("button", { name: "Continue with Shopify" }).click();
+  await expect(field).toBeVisible();
   await field.fill("not a shop!");
   await connect.click();
   await expect(alert(page)).toContainText("myshopify.com");
@@ -338,15 +356,6 @@ test("Shopify is connected from Settings, through Shopify's OAuth screen", async
   expect(url.searchParams.get("client_id")).toBe("e2e_key");
   expect(url.searchParams.get("state")).toBeTruthy();
 
-  // A Shopify login email goes to Shopify's own store picker, like "Continue with Shopify".
-  await page.goto("/settings/stores");
-  const install = page.waitForRequest((r) => r.url().startsWith("https://admin.shopify.com/oauth/install"));
-  await card.getByRole("button", { name: "Enter store address instead" }).click();
-  await field.fill("owner@example.com");
-  await expect(card).toContainText("log in with owner@example.com");
-  await connect.click();
-  expect(new URL((await install).url()).searchParams.get("client_id")).toBe("e2e_key");
-
   // Shopify's errors come back to Settings in plain words.
   await page.goto("/settings/stores?error=state_expired");
   await expect(alert(page)).toContainText("expired");
@@ -357,8 +366,17 @@ test("sign up with a password, verify email, connect from onboarding", async ({ 
   const email = uniqueEmail("signup");
   await signUp(page, email);
 
-  // Invalid domains are rejected with a plain-language message.
-  await page.getByRole("button", { name: "Enter store address instead" }).click();
+  // Shopify's store picker first; no address field.
+  await expect(page.getByLabel("Your store address")).toHaveCount(0);
+  await expect(page.getByText("Enter store address instead")).toHaveCount(0);
+  const install = page.waitForRequest((r) => r.url().startsWith("https://admin.shopify.com/oauth/install"));
+  await page.getByRole("button", { name: "Continue with Shopify" }).click();
+  expect(new URL((await install).url()).searchParams.get("client_id")).toBe("e2e_key");
+
+  // When the picker can't be used, the address form appears. Invalid domains get a plain answer.
+  await page.goto("/onboarding");
+  await requireShopAddress(page);
+  await page.getByRole("button", { name: "Continue with Shopify" }).click();
   await page.getByLabel("Your store address").fill("not a shop!");
   await page.getByRole("button", { name: "Connect this store" }).click();
   await expect(alert(page)).toContainText("myshopify.com");
@@ -372,7 +390,7 @@ test("sign up with a password, verify email, connect from onboarding", async ({ 
   expect(url.searchParams.get("state")).toBeTruthy();
   expect(url.searchParams.get("redirect_uri")).toContain("/api/shopify/callback");
 
-  // The workspace was created on the first click and reused on the retry.
+  // The workspace was created on the first click and reused on the retries.
   expect(await workspaceCount(email)).toBe(1);
 });
 

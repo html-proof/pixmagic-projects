@@ -10,10 +10,49 @@ export const syncPage = (storeId: string) => `/onboarding?step=sync&store=${stor
 export const storeTaken = () =>
   new HttpError(409, "This store is already connected to another bizinsights account. Ask its owner to invite you.", "store_taken");
 
-/** True when `shop` is live (not uninstalled) in some workspace other than `workspaceId`. */
+/** True when nobody has a bizinsights login for the workspace yet (see `createShopWorkspace`). */
+export async function unclaimed(workspaceId: string): Promise<boolean> {
+  return (await systemDb.membership.count({ where: { workspaceId } })) === 0;
+}
+
+/**
+ * True when `shop` is live (not uninstalled) in some workspace other than `workspaceId` that an
+ * account has claimed. A store installed from Shopify that nobody has claimed yet doesn't count:
+ * connecting it goes through Shopify's own approval for that store, which proves as much as a
+ * claim would, so it moves to the workspace it is being connected to.
+ */
 export async function storeTakenElsewhere(shop: string, workspaceId: string): Promise<boolean> {
   const existing = await systemDb.store.findUnique({ where: { shopDomain: shop } });
-  return !!existing && existing.workspaceId !== workspaceId && existing.status !== "uninstalled";
+  return !!existing && existing.workspaceId !== workspaceId && existing.status !== "uninstalled" && !(await unclaimed(existing.workspaceId));
+}
+
+/** "Demo-Shop.myshopify.com" → "Demo Shop": the name a workspace made for a store starts with. */
+export function workspaceNameFor(shop: string): string {
+  const handle = shop.replace(/\.myshopify\.com$/i, "");
+  const words = handle.split("-").filter(Boolean);
+  return words.length ? words.map((w) => w[0]!.toUpperCase() + w.slice(1)).join(" ").slice(0, 80) : "My store";
+}
+
+/**
+ * The workspace a store installed from Shopify lands in when no account is known yet (installing
+ * from the App Store authorizes the app before anyone signs in, App Store requirement 2.3.2). It
+ * has no members until someone claims it (`POST /shopify/claim`), so nobody can see it meanwhile.
+ */
+export async function createShopWorkspace(shop: string) {
+  return systemDb.$transaction(async (tx) => {
+    const w = await tx.workspace.create({ data: { name: workspaceNameFor(shop) } });
+    await tx.subscription.create({ data: { workspaceId: w.id, plan: "free" } });
+    return w;
+  });
+}
+
+/** Remove a workspace made for a store once it holds neither a store nor a member. */
+export async function dropEmptyShopWorkspace(workspaceId: string) {
+  const [members, stores] = await Promise.all([
+    systemDb.membership.count({ where: { workspaceId } }),
+    systemDb.store.count({ where: { workspaceId } }),
+  ]);
+  if (members === 0 && stores === 0) await systemDb.workspace.deleteMany({ where: { id: workspaceId } });
 }
 
 export interface AttachInput {
@@ -22,7 +61,8 @@ export interface AttachInput {
   token: TokenResponse;
   /** The Shopify app the tokens were issued to. */
   appKey: string;
-  actorUserId: string;
+  /** Null when Shopify installed the app before anyone signed in to us. */
+  actorUserId: string | null;
   ip: string;
   /** Recorded in the audit entry when the connection didn't come from the in-app connect flow. */
   via?: string;
@@ -37,10 +77,13 @@ export interface AttachInput {
 export async function attachStore(deps: Pick<Deps, "queues" | "fetchImpl">, input: AttachInput): Promise<Store> {
   const { workspaceId, shop, token } = input;
   const existing = await systemDb.store.findUnique({ where: { shopDomain: shop } });
-  if (existing && existing.workspaceId !== workspaceId && existing.status !== "uninstalled") throw storeTaken();
+  if (existing && existing.workspaceId !== workspaceId && existing.status !== "uninstalled" && !(await unclaimed(existing.workspaceId))) {
+    throw storeTaken();
+  }
 
-  // Reviving a store that was uninstalled from another workspace: its old rows carry the old
-  // workspace_id (and RLS hides them from the new one), so start from a clean slate.
+  // Reviving a store that was uninstalled from another workspace (or moving one nobody claimed):
+  // its old rows carry the old workspace_id (and RLS hides them from the new one), so start from
+  // a clean slate.
   const moving = !!existing && existing.workspaceId !== workspaceId;
   if (moving) {
     await purgeStoreData(existing.id, deps.fetchImpl);
@@ -72,6 +115,7 @@ export async function attachStore(deps: Pick<Deps, "queues" | "fetchImpl">, inpu
     where: { id: store.id },
     data: { ...encryptTokenFields(store.id, token), pixelIngestKey: store.pixelIngestKey ?? randomToken(18) },
   });
+  if (moving) await dropEmptyShopWorkspace(existing.workspaceId);
   await audit({
     workspaceId,
     actorUserId: input.actorUserId,
