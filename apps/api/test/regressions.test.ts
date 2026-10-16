@@ -1,5 +1,4 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { encryptTokenFields, type FetchLike } from "@app/core";
 import { systemDb } from "@app/db";
 import { buildApp } from "../src/app.js";
 import { clean, createStore, createWorkspace, ORIGIN, setup, signIn, teardown, type TestCtx } from "./helpers.js";
@@ -76,31 +75,5 @@ describe("pixel timestamps", () => {
     // Mixed batch: the honest event still counts.
     expect((await post([event("f2", future), event("n1", new Date())])).json().accepted).toBe(1);
     expect(await systemDb.funnelVisit.count({ where: { storeId: store.id, day: future.toISOString().slice(0, 10) } })).toBe(0);
-  });
-});
-
-describe("billing", () => {
-  const gql = (data: unknown) => new Response(JSON.stringify({ data }), { status: 200, headers: { "content-type": "application/json" } });
-  const subscribeOk: FetchLike = async () =>
-    gql({ appSubscriptionCreate: { confirmationUrl: "https://admin.shopify.com/charges/confirm", userErrors: [], appSubscription: { id: "gid://shopify/AppSubscription/1" } } });
-
-  it("keeps the plan in force until Shopify approves the change", async () => {
-    const u = await signIn(ctx, "u1", "a@x.com");
-    const ws = await createWorkspace(ctx, u.headers);
-    const store = await createStore(ws, "b.myshopify.com", ["read_orders"]);
-    await systemDb.store.update({
-      where: { id: store.id },
-      data: encryptTokenFields(store.id, { accessToken: "shpat_x", scopes: ["read_orders"], accessTokenExpiresAt: null, refreshToken: null, refreshTokenExpiresAt: null }),
-    });
-    ctx.setFetch(subscribeOk);
-
-    const res = await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/billing/subscribe`, headers: u.headers, payload: { plan: "growth", storeId: store.id } });
-    expect(res.statusCode).toBe(200);
-    expect(res.json().confirmationUrl).toMatch(/^https:\/\/admin\.shopify\.com\//);
-
-    // Sent to Shopify is not approved: an abandoned or declined approval must not read as Growth.
-    const billing = await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/billing`, headers: u.headers });
-    expect(billing.json().subscription).toEqual({ plan: "free", status: "active", pendingPlan: "growth" });
-    expect(await systemDb.subscription.findUniqueOrThrow({ where: { workspaceId: ws } })).toMatchObject({ pendingChargeId: "gid://shopify/AppSubscription/1", shopifyChargeId: null });
   });
 });

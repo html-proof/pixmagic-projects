@@ -1,9 +1,11 @@
 import { runBulkOrders } from "./bulkOrders.js";
 import { systemDb, type Store } from "@app/db";
 import {
+  applySubscriptionUpdate,
   audit,
   customerKey,
   deleteProduct,
+  endBillingForStore,
   env,
   getAccessToken,
   gidToId,
@@ -46,6 +48,7 @@ import {
   ShopifyHttpError,
   StoreDisconnectedError,
   subscriptionUpdateSchema,
+  syncBillingFromShopify,
   upsertOrder,
   upsertProduct,
   upsertRefund,
@@ -653,9 +656,18 @@ export async function processWebhook(data: WebhookJobData, deps: WorkerDeps) {
             { topic: data.topic, shop: data.shop, storeId: store.id, triggeredAt: data.triggeredAt, installedAt: store.installedAt },
             "stale app/uninstalled predates the current installation; ignored",
           );
+          // The uninstall still cancelled every charge made before it, and the reinstall may have
+          // been handled before Shopify's word on them (or this delivery) arrived: ask Shopify which
+          // still stand. A failure is retried with the delivery.
+          if (store.accessTokenEnc && (await systemDb.subscription.count({ where: { billingStoreId: store.id } }))) {
+            await syncBillingFromShopify(store, await getAccessToken(store, deps.coord, deps.fetchImpl), deps.fetchImpl);
+          }
           break;
         }
         await audit({ workspaceId: store.workspaceId, action: "store.uninstalled", targetType: "store", targetId: store.id });
+        // Shopify cancels an app's charges when it is uninstalled, and its app_subscriptions/update
+        // saying so may never reach an app that is gone: the plan ends here.
+        await endBillingForStore(store.id, "uninstalled");
         break;
       }
       case "app/scopes_update": {
@@ -774,52 +786,6 @@ export async function processWebhook(data: WebhookJobData, deps: WorkerDeps) {
   const storeId = store?.id ?? ev.storeId;
   if (storeId) await resolveAlerts(storeId, ["webhook_failed"]);
   return { ok: true };
-}
-
-/** Shopify charge statuses after which the merchant is no longer paying for that charge. */
-const ENDED_CHARGE = new Set(["cancelled", "declined", "expired"]);
-
-/**
- * Apply a Shopify charge status to the workspace's subscription. Two charges can be in play: the
- * one in force (`shopifyChargeId`) and a plan change awaiting approval (`pendingChargeId`).
- * Activating the pending one makes it the plan; a pending one that ends just goes away; the one in
- * force ending drops the workspace to free. Statuses for any other charge (one replaced by a later
- * change, delivered late) are ignored, so retries and out-of-order delivery cannot resurrect it.
- *
- * Every write is conditional on the charge still being where it was read (`updateMany` with the
- * charge id in the filter): Shopify sends "new charge active" and "old charge cancelled" together,
- * and two consumers handling them at once each read the row before the other wrote, so an
- * unconditional write let the cancellation drop a just-upgraded workspace to free.
- */
-export async function applySubscriptionUpdate(workspaceId: string, chargeId: string | undefined, status: string) {
-  if (!chargeId) return;
-  const row = await systemDb.subscription.findUnique({ where: { workspaceId } });
-  if (!row) return;
-  if (chargeId === row.pendingChargeId) {
-    const stillPending = { workspaceId, pendingChargeId: chargeId };
-    if (status === "active") {
-      const { count } = await systemDb.subscription.updateMany({
-        where: stillPending,
-        data: { plan: row.pendingPlan ?? row.plan, status: "active", shopifyChargeId: chargeId, pendingPlan: null, pendingChargeId: null },
-      });
-      if (count) await audit({ workspaceId, action: "billing.plan_changed", metadata: { plan: row.pendingPlan, from: row.plan } });
-    } else if (ENDED_CHARGE.has(status)) {
-      const { count } = await systemDb.subscription.updateMany({ where: stillPending, data: { pendingPlan: null, pendingChargeId: null } });
-      if (count) await audit({ workspaceId, action: "billing.plan_change_ended", metadata: { plan: row.pendingPlan, status } });
-    }
-    return;
-  }
-  if (chargeId === row.shopifyChargeId) {
-    const stillCurrent = { workspaceId, shopifyChargeId: chargeId };
-    if (ENDED_CHARGE.has(status)) {
-      const { count } = await systemDb.subscription.updateMany({ where: stillCurrent, data: { plan: "free", status: "active", shopifyChargeId: null } });
-      if (count) await audit({ workspaceId, action: "billing.subscription_ended", metadata: { plan: row.plan, status } });
-    } else {
-      await systemDb.subscription.updateMany({ where: stillCurrent, data: { status } });
-    }
-    return;
-  }
-  logger.info({ workspaceId, chargeId, status }, "ignoring a status for a charge that is neither current nor pending");
 }
 
 // ---------------------------------------------------------------- aggregate

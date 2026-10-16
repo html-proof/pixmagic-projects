@@ -23,9 +23,9 @@ project of its own, not needed for review.
 | 1.1.2 | Orders go through Shopify checkout | N/A | The app reads orders; it sells nothing | |
 | 1.1.4 | No falsified data | PASS | Metrics come from the store's own orders; a metric without data shows "—"/"N/A" or a locked module, never a placeholder (`packages/core/src/reports/overview.ts`: modules only when their scopes are granted) | |
 | 1.1.3, 1.1.5-1.1.16 | Themes, duplicates, marketplaces, payments, POS, buyer charges, shipping, browser extensions, desktop apps, product data, agencies, refunds, lending | N/A | None of these features exist | |
-| 1.2.1 | Charges only through Shopify App Pricing / Billing API | PASS | No charges: billing is off (`apps/web/src/lib/features.ts` `BILLING_ENABLED = false`). The only charge path is `appSubscriptionCreate` (`apps/api/src/routes/workspaces.ts`) | |
-| 1.2.2 | Accept/decline, re-approval on reinstall | N/A (free) | See "Billing" below | Required before paid plans |
-| 1.2.3 | Upgrade and downgrade without support | N/A (free) | See "Billing" below | Required before paid plans |
+| 1.2.1 | Charges only through Shopify App Pricing / Billing API | PASS | No charges: billing is off (`BILLING_ENABLED` in `apps/web/src/lib/features.ts`, and the API's own setting, which refuses to start one: `apps/api/test/billing.test.ts` "no charge can be started"). The only charge path is `appSubscriptionCreate` (`apps/api/src/routes/workspaces.ts`) | |
+| 1.2.2 | Accept/decline, re-approval on reinstall | FIXED (billing off) | Every plan change goes through Shopify's approval page and counts only once Shopify reports the charge active. Before: a plan billed on a store could stay in force after the app was uninstalled from it (Shopify needn't send `app_subscriptions/update` to an app that is gone), so a reinstall skipped approval. Now `app/uninstalled` and a store coming back both put it on Free (`apps/worker/test/billing.test.ts`, `apps/api/test/billing.test.ts` "a store back after an uninstall…") | |
+| 1.2.3 | Upgrade and downgrade without support | FIXED (billing off) | Before: no way back to Free, and an upgrade could put a second charge on another store's bill. Now "Switch to Free" (`appSubscriptionCancel`) and plan changes that replace the charge in force (`APPLY_IMMEDIATELY`, same store's bill) from Settings → Billing (`billing.test.ts` "upgrades and downgrades…", "switching to Free"; e2e `settings.spec.ts` "…switches to Free…") | |
 | 1.3.1 | No incentives for reviews | PASS | The app never asks for an App Store review. (The WhatsApp "review request" is the merchant asking *their* customers to review *products*.) | |
 
 ## 2. Functionality
@@ -36,7 +36,7 @@ project of its own, not needed for review.
 | 2.1.4 | Synced data is accurate | REVIEW | Webhooks (orders, refunds, products) keep data current, idempotent and order-safe (`apps/worker/src/handlers.ts`); a daily reconcile re-pulls recent orders. **On AWS the schedules are off** (`AWS_SCHEDULES` GitHub variable unset), so the daily reconcile and the stuck-import reaper don't run | OWNER: turn schedules on (the cutover plan) |
 | 2.2.1 | Uses Shopify APIs | PASS | Admin GraphQL API for every read | |
 | 2.2.2, 2.2.3 | Consistent embedded experience, latest App Bridge | N/A | Non-embedded (see top) | |
-| 2.2.4 | GraphQL Admin API only (new public apps since 2025-04-01) | PASS | One Admin API endpoint in the codebase: `https://${shop}/admin/api/${version}/graphql.json` (`packages/core/src/shopify.ts`). Other Shopify URLs are OAuth (`/admin/oauth/authorize`, `/admin/oauth/access_token`) and install links. All 22 GraphQL documents validate against the 2026-10 schema (script below) | |
+| 2.2.4 | GraphQL Admin API only (new public apps since 2025-04-01) | PASS | One Admin API endpoint in the codebase: `https://${shop}/admin/api/${version}/graphql.json` (`packages/core/src/shopify.ts`). Other Shopify URLs are OAuth (`/admin/oauth/authorize`, `/admin/oauth/access_token`) and install links. All 25 GraphQL documents validate against the 2026-10 schema (script below) | |
 | 2.2.5-2.2.9 | Admin extensions, max modal, Sidekick | N/A | None (the one extension is a web pixel) | |
 | 2.3.1 | Installed only from Shopify surfaces; never ask for the myshopify.com address | FIXED | The address field used to sit one click under "Continue with Shopify" on onboarding and Settings → Shopify. It now appears only when the API answers `shop_required` (only if `SHOPIFY_DEFAULT_APP_SHOPS` limits the main app to named stores; empty in production) (`apps/web/src/app/onboarding/page.tsx`, `apps/web/src/components/ShopifyConnect.tsx`; e2e "Shopify is connected from Settings…") | |
 | 2.3.2 | OAuth immediately after install, before any other step | FIXED | Before: a merchant installing from Shopify landed on sign-up, and OAuth ran only after they made an account. Now `/api/shopify/launch` sends any store without a working token straight to Shopify's authorize URL (`apps/api/src/routes/shopify.ts`; `apps/api/test/shopifyInstall.test.ts` "authorizes at once, with nobody signed in") | |
@@ -93,14 +93,32 @@ invalid HMAC with 401 and a valid request with 2xx, and act within 30 days.
 
 ## Billing (before paid plans are switched on)
 
-Billing is off, and the listing must say Free. Before turning `BILLING_ENABLED` on:
+Billing is off, and the listing must say Free. What is in place for when it goes on
+(`packages/core/src/billing.ts`, the routes in `apps/api/src/routes/workspaces.ts`, the webhooks
+in `apps/worker/src/handlers.ts`; how it works: [shopify-setup.md](shopify-setup.md#4-billing)):
 
-1. A downgrade to Free (cancel the subscription with `appSubscriptionCancel`) and a cancel button (1.2.3).
-2. `replacementBehavior` on plan changes, so an upgrade doesn't stack two charges.
-3. The plan going back to Free when Shopify cancels the subscription on uninstall, and approval
-   asked again on reinstall (1.2.2).
-4. Plan limits enforced by the API ("3 stores", "email alerts", "API access"), or removed from `PLANS`.
-5. Tests for each, on a development store with `test: true` charges.
+| Piece | Evidence |
+| --- | --- |
+| Approval for every charge; the plan changes only when Shopify reports the charge active | `apps/api/test/billing.test.ts` "asks Shopify for a charge…" |
+| Upgrade or downgrade between paid plans replaces the charge in force (`replacementBehavior: APPLY_IMMEDIATELY`), on the same store's bill | "upgrades and downgrades between paid plans…" (one active charge at the end) |
+| Downgrade to Free: "Switch to Free" for owners, `appSubscriptionCancel(prorate: true)`, plan ends at once | "switching to Free" (6 cases), e2e `apps/web/e2e/settings.spec.ts` |
+| Uninstall ends the plan billed on that store; a reinstall starts on Free and asks for approval again | `apps/worker/test/billing.test.ts`, `billing.test.ts` "uninstalling and reinstalling" |
+| Test charges on development stores, also in production (Shopify's reviewers use one) | `shop.plan.partnerDevelopment` in the subscribe route |
+| Plan features are true: the one difference between plans, the store limit (Free 1, Growth 3, Scale any), is enforced; claims with nothing behind them ("30 days of history", "Email alerts", "API access", "Priority support", "Audit log export") were removed from `PLANS` | `billing.test.ts` "store limits" |
+| Nobody can be charged, and nobody is limited, while billing is off | `billing.test.ts` "while paid plans are switched off" |
+
+To launch paid plans (owner):
+
+1. Decide the plans and prices. If a plan should offer more than its store limit, build and
+   enforce that first, then list it in `PLANS`: the billing page is part of what the reviewer reads.
+2. Set `BILLING_ENABLED` to `true` in `apps/web/src/lib/features.ts` and to `"1"` in
+   `apps/aws/src/settings.ts`, in the same pull request.
+3. List the plans in the Dev Dashboard listing (pricing must match `PLANS`).
+4. On a development store, after the deploy: choose Growth and approve it, upgrade to Scale,
+   switch back to Free, uninstall and reinstall (the plan must be Free and ask for approval again).
+
+A store that was in a workspace already never counts as new, so a store that comes back after an
+uninstall may take a workspace past its limit; and a downgrade keeps every store already connected.
 
 ## Shopify API version
 
@@ -114,7 +132,9 @@ document was validated against the 2026-10 schema with Shopify's public schema p
 # packages/core/src/normalize.ts, scopes.ts, apps/api/src/routes/contacts.ts, whatsapp/events.ts)
 ```
 
-Result: 22 of 22 valid. `CustomerPhoneNumber.marketingState`, deprecated in 2026-10, was replaced by
+Result: 22 of 22 valid; the billing documents added since (`APP_SUBSCRIPTION_CANCEL`,
+`APP_SUBSCRIPTION_STATUSES`, `SHOP_PARTNER_DEVELOPMENT`, and `APP_SUBSCRIPTION_CREATE` with
+`replacementBehavior`) were validated the same way on 2026-10-16. `CustomerPhoneNumber.marketingState`, deprecated in 2026-10, was replaced by
 `smsMarketingConsent.state`. One deprecated field is still served and left for the next bump:
 `QueryRoot.currentBulkOperation` (use `bulkOperations` with a status filter). 2026-10 also returns
 `FULFILLMENT_NOT_REQUIRED` for orders with nothing to ship; the parser keeps the status as text, so

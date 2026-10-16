@@ -27,6 +27,7 @@ const DESCRIBE: Record<string, string> = {
   "billing.plan_changed": "Shopify approved a plan change",
   "billing.plan_change_ended": "a plan change was not approved in Shopify",
   "billing.subscription_ended": "the Shopify subscription ended; the workspace is on the free plan",
+  "billing.cancelled": "switched to the Free plan (the Shopify subscription was cancelled)",
   "gdpr.customer_data_request": "received a customer data request from Shopify (Settings, Privacy requests)",
   "gdpr.data_request_downloaded": "downloaded a customer's data for a privacy request",
   "gdpr.shop_redact_skipped": "kept a store's data: it was installed again before Shopify's deletion request arrived",

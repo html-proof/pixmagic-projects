@@ -1,5 +1,5 @@
 import { systemDb, type Store, type Tx } from "@app/db";
-import { audit, encryptTokenFields, logger, purgeStoreData, type TokenResponse } from "@app/core";
+import { audit, encryptTokenFields, endBillingForStore, logger, purgeStoreData, syncBillingFromShopify, type TokenResponse } from "@app/core";
 import { randomToken } from "@app/shared";
 import { HttpError, type Deps } from "./context.js";
 import { seedInitialSync } from "./sync.js";
@@ -136,6 +136,17 @@ export async function attachStore(deps: Pick<Deps, "queues" | "fetchImpl">, inpu
     where: { id: store.id },
     data: { ...encryptTokenFields(store.id, token), pixelIngestKey: store.pixelIngestKey ?? randomToken(18) },
   });
+  // Shopify cancels an app's charges when it is uninstalled, so a store back after an uninstall
+  // (a store only moves workspace after one) brings no plan with it: Free until approved again.
+  // A store authorized again while we took it to be installed may or may not have been
+  // uninstalled meanwhile: Shopify says which of its charges still stand.
+  if (existing && (moving || existing.status === "uninstalled")) {
+    await endBillingForStore(existing.id, moving ? "store_moved" : "uninstalled");
+  } else if (existing) {
+    await syncBillingFromShopify(store, token.accessToken, deps.fetchImpl).catch((err) =>
+      logger.warn({ err, storeId: store.id }, "billing not re-checked with Shopify; the next app_subscriptions/update or app/uninstalled settles it"),
+    );
+  }
   await audit({
     workspaceId,
     actorUserId: input.actorUserId,

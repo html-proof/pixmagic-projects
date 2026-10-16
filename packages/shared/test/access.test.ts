@@ -150,7 +150,7 @@ describe("redactOverview", () => {
 
   it("takes out the fields that need their own permission", () => {
     const out = redactOverview(report(), member(["analytics.sales", "products.inventory", "orders.list", "analytics.traffic", "discounts.codes", "marketing.ads"])) as ReturnType<typeof report>;
-    const s = out.modules.sales_overview as Record<string, Record<string, unknown>> & { series: Array<Record<string, unknown>> };
+    const s = out.modules.sales_overview as unknown as Record<string, Record<string, unknown>> & { series: Array<Record<string, unknown>> };
     expect(s.current).toEqual({ netSales: 100, orders: 3, units: 4, averageOrderValue: 33 });
     expect(s.previous).not.toHaveProperty("grossSales");
     expect(s.deltas).not.toHaveProperty("grossSales");

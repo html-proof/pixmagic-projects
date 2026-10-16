@@ -1,17 +1,24 @@
 import { z } from "zod";
-import { systemDb, withTenant } from "@app/db";
+import { systemDb, withTenant, type Store, type Subscription } from "@app/db";
 import {
+  APP_SUBSCRIPTION_CANCEL,
   APP_SUBSCRIPTION_CREATE,
   audit,
+  billingEnabled,
   createTeamInvitation,
   env,
   getAccessToken,
   loadMember,
   loadTeam,
+  planById,
+  PLANS,
+  PRORATE_ON_CANCEL,
   purgeStoreData,
   removeMember,
   revokeTeamInvitation,
+  SHOP_PARTNER_DEVELOPMENT,
   shopifyGraphql,
+  syncBillingFromShopify,
   updateMemberAccess,
 } from "@app/core";
 import { allows, describeAlert, hasFullAccess, LEGACY_GRANTS, randomToken, ROLES, sha256Hex, type AlertArea, type AlertView } from "@app/shared";
@@ -21,20 +28,6 @@ import { inviteLimits, teamActor } from "./team.js";
 import type { App } from "../app.js";
 import { seedResync } from "../sync.js";
 import { limit, LIMITS } from "../rateLimit.js";
-
-/**
- * Shown on the billing page, which is a page Shopify's reviewer sees — so these strings are
- * part of what the app advertises, and every one of them has to be something the app actually
- * does under the scopes it declares. "Funnel insights" was listed here and is NOT one of them:
- * the funnel needs `write_pixels` and `read_customer_events`, which are protected customer data
- * and deliberately undeclared (shopify-app/shopify.app.toml). Advertising it would fail review.
- * Re-add it only alongside those scopes.
- */
-export const PLANS = [
-  { id: "free", name: "Free", priceUsd: 0, features: ["1 store", "30 days of history", "Core metrics"] },
-  { id: "growth", name: "Growth", priceUsd: 29, features: ["3 stores", "Email alerts", "API access"] },
-  { id: "scale", name: "Scale", priceUsd: 99, features: ["Unlimited stores", "Priority support", "Audit log export"] },
-] as const;
 
 const roleSchema = z.enum(ROLES);
 const staffRoleSchema = z.enum(STAFF_ROLES).nullable();
@@ -210,51 +203,108 @@ export function workspaceRoutes(app: App, deps: Deps) {
     return c.json({ ok: true });
   });
 
-  // ---------------- Billing (Shopify Billing API) ----------------
+  // ---------------- Billing (Shopify Billing API, packages/core/src/billing.ts) ----------------
   app.get("/workspaces/:ws/billing", async (c) => {
     const { ws } = c.req.param();
     requireFullAccess(await requireWorkspace(c, deps, ws, "dashboard:read"));
     const sub = await withTenant(ws, (tx) => tx.subscription.findUnique({ where: { workspaceId: ws } }));
     const { plan, status, pendingPlan } = sub ?? { plan: "free", status: "active", pendingPlan: null };
-    return c.json({ subscription: { plan, status, pendingPlan }, plans: PLANS });
+    // Where the charges appear, while there are any.
+    const billed = sub && (sub.shopifyChargeId || sub.pendingChargeId) ? (await billedStores(ws, sub))[0] : undefined;
+    const billedStore = billed ? { id: billed.id, shopDomain: billed.shopDomain, name: billed.name } : null;
+    return c.json({ subscription: { plan, status, pendingPlan, billedStore }, plans: PLANS });
   });
 
   app.post("/workspaces/:ws/billing/subscribe", async (c) => {
     const { ws } = c.req.param();
     const a = await requireWorkspace(c, deps, ws, "billing:manage");
     const input = z.object({ plan: z.enum(["growth", "scale"]), storeId: z.string() }).parse(await body(c));
-    const plan = PLANS.find((p) => p.id === input.plan)!;
-    const store = await withTenant(ws, (tx) => tx.store.findFirst({ where: { id: input.storeId, workspaceId: ws, status: { not: "uninstalled" } } }));
+    // Until paid plans launch nothing may start a charge, whoever calls this.
+    if (!billingEnabled()) throw new HttpError(403, "Paid plans aren't available yet", "billing_disabled");
+    const plan = planById(input.plan);
+    const sub = await withTenant(ws, (tx) => tx.subscription.findUnique({ where: { workspaceId: ws } }));
+    if (sub?.shopifyChargeId && sub.plan === plan.id) throw new HttpError(409, `This workspace is already on ${plan.name}`, "already_on_plan");
+    // While a charge is in force, the change goes on the same store's bill, where Shopify replaces
+    // that charge once the new one is approved (APPLY_IMMEDIATELY). A charge on another store's
+    // bill would run alongside it. Otherwise, the store the merchant has open.
+    const billed = sub?.shopifyChargeId ? (await billedStores(ws, sub))[0] : undefined;
+    const store = billed ?? (await withTenant(ws, (tx) => tx.store.findFirst({ where: { id: input.storeId, workspaceId: ws, status: { not: "uninstalled" } } })));
     if (!store) throw new HttpError(400, "Connect a store first: plans are billed through Shopify", "store_required");
     const token = await getAccessToken(store, deps.coord, deps.fetchImpl);
-    const data = await shopifyGraphql<{
+    const call = <T>(query: string, variables?: Record<string, unknown>) =>
+      shopifyGraphql<T>({ shop: store.shopDomain, accessToken: token, apiVersion: env().SHOPIFY_API_VERSION, query, variables, fetchImpl: deps.fetchImpl });
+    // Shopify accepts only test charges from a development store (Shopify's reviewers use one), so
+    // those are test charges in production too; nothing is billed for them.
+    const { shop } = await call<{ shop: { plan: { partnerDevelopment: boolean } } }>(SHOP_PARTNER_DEVELOPMENT);
+    const data = await call<{
       appSubscriptionCreate: { confirmationUrl: string | null; userErrors: Array<{ message: string }>; appSubscription: { id: string } | null };
-    }>({
-      shop: store.shopDomain,
-      accessToken: token,
-      apiVersion: env().SHOPIFY_API_VERSION,
-      query: APP_SUBSCRIPTION_CREATE,
-      variables: {
-        name: `bizinsights ${plan.name}`,
-        returnUrl: `${env().APP_URL}/settings/billing?confirmed=1`,
-        amount: plan.priceUsd,
-        currency: "USD",
-        test: env().NODE_ENV !== "production",
-      },
-      fetchImpl: deps.fetchImpl,
+    }>(APP_SUBSCRIPTION_CREATE, {
+      name: `bizinsights ${plan.name}`,
+      returnUrl: `${env().APP_URL}/settings/billing?confirmed=1`,
+      amount: plan.priceUsd,
+      currency: "USD",
+      test: env().NODE_ENV !== "production" || shop.plan.partnerDevelopment,
     });
     const r = data.appSubscriptionCreate;
     if (r.userErrors.length || !r.confirmationUrl) throw new HttpError(400, r.userErrors.map((e) => e.message).join("; ") || "Billing failed", "billing_error");
     // Recorded as pending only: the plan in force changes when Shopify reports this charge active
     // (app_subscriptions/update). Writing it to `plan` here made an abandoned or declined approval
     // look like a plan the merchant had, and hid the button to try again.
-    await systemDb.subscription.upsert({
-      where: { workspaceId: ws },
-      create: { workspaceId: ws, plan: "free", status: "active", pendingPlan: input.plan, pendingChargeId: r.appSubscription?.id ?? null },
-      update: { pendingPlan: input.plan, pendingChargeId: r.appSubscription?.id ?? null },
-    });
-    await audit({ workspaceId: ws, actorUserId: a.user?.id, action: "billing.subscribe_started", metadata: { plan: input.plan }, ip: clientIp(c) });
+    const pending = { pendingPlan: input.plan, pendingChargeId: r.appSubscription?.id ?? null, billingStoreId: store.id };
+    await systemDb.subscription.upsert({ where: { workspaceId: ws }, create: { workspaceId: ws, plan: "free", status: "active", ...pending }, update: pending });
+    await audit({ workspaceId: ws, actorUserId: a.user?.id, action: "billing.subscribe_started", metadata: { plan: input.plan, shop: store.shopDomain }, ip: clientIp(c) });
     return c.json({ confirmationUrl: r.confirmationUrl });
+  });
+
+  /**
+   * Back to Free, from the app and with nobody's help (requirement 1.2.3): the charge in force is
+   * cancelled in Shopify, crediting the unused days (PRORATE_ON_CANCEL), and the plan ends now.
+   * Works whether or not paid plans are on sale. A change still awaiting approval stays: approving
+   * it in Shopify is the merchant choosing that plan, and they then get it.
+   */
+  app.post("/workspaces/:ws/billing/cancel", async (c) => {
+    const { ws } = c.req.param();
+    const a = await requireWorkspace(c, deps, ws, "billing:manage");
+    const sub = await withTenant(ws, (tx) => tx.subscription.findUnique({ where: { workspaceId: ws } }));
+    const chargeId = sub?.shopifyChargeId;
+    if (!sub || !chargeId) return c.json({ plan: "free" });
+    const stores = await billedStores(ws, sub);
+    // No store left to ask: uninstalling the one that paid cancelled the charge.
+    let ended = stores.length === 0;
+    let refused: string | null = null;
+    for (const store of stores) {
+      const token = await getAccessToken(store, deps.coord, deps.fetchImpl);
+      const { appSubscriptionCancel: r } = await shopifyGraphql<{
+        appSubscriptionCancel: { userErrors: Array<{ message: string }>; appSubscription: { id: string; status: string } | null };
+      }>({
+        shop: store.shopDomain,
+        accessToken: token,
+        apiVersion: env().SHOPIFY_API_VERSION,
+        query: APP_SUBSCRIPTION_CANCEL,
+        variables: { id: chargeId, prorate: PRORATE_ON_CANCEL },
+        fetchImpl: deps.fetchImpl,
+      });
+      if (!r.userErrors.length) {
+        // Anything but CANCELLED (Shopify only stopping the renewal) ends with its own webhook.
+        ended = r.appSubscription?.status === "CANCELLED";
+        refused = null;
+        break;
+      }
+      refused = r.userErrors.map((e) => e.message).join("; ");
+      // Over already (an uninstall, or a cancellation we haven't heard of yet)? Shopify says.
+      if (store.id === sub.billingStoreId) {
+        await syncBillingFromShopify(store, token, deps.fetchImpl);
+        const now = await systemDb.subscription.findUnique({ where: { workspaceId: ws } });
+        if (now?.shopifyChargeId !== chargeId) return c.json({ plan: now?.plan ?? "free" });
+      }
+    }
+    if (refused) throw new HttpError(400, refused, "billing_error");
+    if (ended) {
+      const { count } = await systemDb.subscription.updateMany({ where: { workspaceId: ws, shopifyChargeId: chargeId }, data: { plan: "free", status: "active", shopifyChargeId: null } });
+      if (count) await audit({ workspaceId: ws, actorUserId: a.user?.id, action: "billing.cancelled", metadata: { plan: sub.plan, prorate: PRORATE_ON_CANCEL }, ip: clientIp(c) });
+    }
+    const now = await systemDb.subscription.findUnique({ where: { workspaceId: ws } });
+    return c.json({ plan: now?.plan ?? "free" });
   });
 
   // ---------------- Audit log & alerts ----------------
@@ -320,4 +370,17 @@ export function workspaceRoutes(app: App, deps: Deps) {
     }
     return c.json({ alerts });
   });
+}
+
+/**
+ * The live store whose Shopify bill carries the workspace's charges. A charge recorded before that
+ * was tracked has no store: then every live store of the workspace, to be tried in turn.
+ */
+async function billedStores(ws: string, sub: Pick<Subscription, "billingStoreId">): Promise<Store[]> {
+  return withTenant(ws, (tx) =>
+    tx.store.findMany({
+      where: { workspaceId: ws, status: { not: "uninstalled" }, ...(sub.billingStoreId ? { id: sub.billingStoreId } : {}) },
+      orderBy: { createdAt: "asc" },
+    }),
+  );
 }
