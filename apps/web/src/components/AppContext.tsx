@@ -29,6 +29,11 @@ export interface Me {
   workspaces: MeWorkspace[];
   /** Organizations this account works for as an employee (the employee portal at /portal). */
   employments?: Array<{ workspaceId: string; organization: string; employeeId: string; fullName: string; jobTitle: string; status: string }>;
+  /**
+   * Set when this browser opened the app from an invitation link: only that workspace, and none of
+   * the account's own pages (profile, sign-in and security) until they sign in to it.
+   */
+  shared?: { workspaceId: string } | null;
 }
 export interface StoreSummary {
   id: string;
@@ -131,7 +136,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       return true;
     }
     setMeError(null);
-    if (!m.user.emailVerified) router.replace("/verify-email");
+    // A shared link was sent to their address, which stands in for verifying it.
+    if (!m.user.emailVerified && !m.shared) router.replace("/verify-email");
     // Employees who aren't members of any workspace belong in the employee portal, not onboarding.
     // Someone whose only access was revoked stays: the app says so instead of offering a workspace.
     else if (!m.workspaces.length) router.replace(m.employments?.length ? "/portal" : "/onboarding");

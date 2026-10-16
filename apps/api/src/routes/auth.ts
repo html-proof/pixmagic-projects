@@ -3,7 +3,7 @@ import { z } from "zod";
 import { systemDb } from "@app/db";
 import { accessFingerprint, employmentsForUser, env, logger } from "@app/core";
 import { ACCESS_KEYS, accountPasswordProblem, DISPLAY_NAME_MAX, EMAIL_CODE_RE, hasFullAccess, pkcePair, randomToken, safeEqual, sha256Hex } from "@app/shared";
-import { body, clientIp, HttpError, loadUser, requireAppOrigin, requireUser, sessionOf, SESSION_COOKIE, type Ctx, type Deps } from "../context.js";
+import { body, clientIp, HttpError, loadUser, requireAppOrigin, requireUser, sessionOf, SESSION_COOKIE, sharedWorkspace, type Ctx, type Deps } from "../context.js";
 import { CognitoError, CognitoUnavailableError, type CognitoTokens, type FederatedProvider, type SignInResult } from "../cognito.js";
 import { LegacyUnavailableError } from "../legacyFirebase.js";
 import { recordAuthEvent, resolveUser } from "../identity.js";
@@ -450,7 +450,8 @@ export function authRoutes(app: App, deps: Deps) {
       const rt = readRefreshToken(c, s);
       // This device's refresh token (and the access tokens from it) end in Cognito too.
       if (rt) await deps.auth.revokeRefreshToken(rt).catch((err: unknown) => logger.warn({ err }, "could not revoke the refresh token"));
-      if (s.m !== "password") redirect = deps.auth.logoutUrl(`${env().APP_URL}/login?signedOut=1`);
+      // After Google, the user pool's own session in this browser ends too.
+      if (s.m === "google") redirect = deps.auth.logoutUrl(`${env().APP_URL}/login?signedOut=1`);
     }
     clearSessionCookies(c);
     return c.json({ ok: true, redirect });
@@ -468,15 +469,17 @@ export function authRoutes(app: App, deps: Deps) {
     await recordAuthEvent("signed_out_everywhere", user.id, clientIp(c));
     const s = sessionOf(c);
     clearSessionCookies(c);
-    return c.json({ ok: true, redirect: s.m !== "password" ? deps.auth.logoutUrl(`${env().APP_URL}/login?signedOut=1`) : null });
+    return c.json({ ok: true, redirect: s.m === "google" ? deps.auth.logoutUrl(`${env().APP_URL}/login?signedOut=1`) : null });
   };
   app.post("/auth/logout-all", signOutEverywhere);
   // The employee portal's name for it.
   app.post("/auth/sessions/revoke", signOutEverywhere);
 
   async function me(c: Ctx, user: Awaited<ReturnType<typeof requireUser>>) {
+    // Opened from an invitation link: that workspace and nothing else of the account.
+    const shared = sharedWorkspace(c);
     const memberships = await systemDb.membership.findMany({
-      where: { userId: user.id },
+      where: { userId: user.id, ...(shared && { workspaceId: shared }) },
       include: { workspace: { select: { id: true, name: true } } },
       orderBy: { createdAt: "asc" },
     });
@@ -495,11 +498,14 @@ export function authRoutes(app: App, deps: Deps) {
         fingerprint: accessFingerprint(m),
       })),
       // Organizations this account works for as an employee (the employee portal).
-      employments: await employmentsForUser(user.id),
+      employments: shared ? [] : await employmentsForUser(user.id),
+      // Set for a session opened from an invitation link: the app shows that workspace only, and
+      // offers to sign in for anything account-wide.
+      shared: shared ? { workspaceId: shared } : null,
     });
   }
 
-  app.get("/me", async (c) => me(c, await requireUser(c, deps)));
+  app.get("/me", async (c) => me(c, await requireUser(c, deps, { shared: true })));
 
   /**
    * The public homepage's "already signed in?" check: GET /me's answer for a session, and
@@ -507,13 +513,13 @@ export function authRoutes(app: App, deps: Deps) {
    * it as a console error on the page most visitors see. Outages still answer 503 (loadUser).
    */
   app.get("/auth/whoami", async (c) => {
-    const user = await loadUser(c, deps);
+    const user = await loadUser(c, deps, { shared: true });
     return user ? me(c, user) : c.json({ user: null, workspaces: [] });
   });
 
   /** This session: who, how they signed in, and until when. */
   app.get("/auth/session", async (c) => {
-    const user = await loadUser(c, deps);
+    const user = await loadUser(c, deps, { shared: true });
     if (!user) return c.json({ authenticated: false });
     const s = sessionOf(c);
     return c.json({ authenticated: true, user: publicUser(user), method: s.m, signedInAt: s.at * 1000, expiresAt: s.exp });

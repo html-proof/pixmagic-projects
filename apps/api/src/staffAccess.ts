@@ -3,7 +3,7 @@ import { systemDb } from "@app/db";
 import { employeeForUser, type EmployeeCtx, type StaffActor } from "@app/core";
 import { RANGE_PRESETS, staffAccess, staffCan, type StaffPermission } from "@app/shared/staff";
 import { accessFingerprint } from "@app/core";
-import { ACCESS_FP_HEADER, ACCESS_REVOKED, clientIp, HttpError, requireUser, type Ctx, type Deps } from "./context.js";
+import { ACCESS_FP_HEADER, ACCESS_REVOKED, clientIp, HttpError, requireMemberUser, requireUser, sharedWorkspace, type Ctx, type Deps } from "./context.js";
 
 /**
  * Staff Management authorization. Every staff route calls one of these first; nothing relies on the
@@ -11,8 +11,9 @@ import { ACCESS_FP_HEADER, ACCESS_REVOKED, clientIp, HttpError, requireUser, typ
  * workspace someone doesn't belong to answers 404, so ids can't be probed.
  */
 export async function requireStaff(c: Ctx, deps: Deps, workspaceId: string, perm: StaffPermission): Promise<StaffActor> {
-  const user = await requireUser(c, deps);
-  if (!user.emailVerified) throw new HttpError(403, "Verify your email address first.", "email_unverified");
+  const user = await requireMemberUser(c, deps, workspaceId);
+  // Opened from the invitation link, which was sent to their address: that stands in for verifying it.
+  if (!user.emailVerified && !sharedWorkspace(c)) throw new HttpError(403, "Verify your email address first.", "email_unverified");
   const m = await systemDb.membership.findUnique({ where: { workspaceId_userId: { workspaceId, userId: user.id } } });
   if (!m) throw new HttpError(404, "Not found", "not_found");
   c.header(ACCESS_FP_HEADER, `${workspaceId}:${accessFingerprint(m)}`);

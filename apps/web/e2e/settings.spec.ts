@@ -106,14 +106,11 @@ test("invitations: emailed, handed over as a link when email fails, and kept acr
   await page.unroute("**/api/workspaces/*/team/invitations");
   await panel.getByRole("button", { name: "Done" }).click();
 
-  // The invitee opens the emailed link while signed out, signs in, and comes back to accept it.
+  // The invitee opens the emailed link: straight onto the dashboard, no sign-in or sign-up.
   const link = /https?:\/\/\S+\/invite#token=[A-Za-z0-9_-]+/.exec(await latestMailText(invitee))![0];
   const ctx = await browser.newContext();
   const guest = await ctx.newPage();
   await guest.goto(link);
-  await expect(guest.getByRole("heading", { name: "Join Team Co" })).toBeVisible();
-  // Someone new opens the dashboard from the link itself: no sign-in or sign-up.
-  await guest.getByRole("button", { name: "Open dashboard" }).click();
   await expect(guest).toHaveURL(/\/dashboard/);
   // Joined the inviter's workspace, and did not get one of their own on the way.
   const { rows } = await db.query(
