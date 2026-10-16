@@ -195,8 +195,7 @@ export function TrendCharts({ ov, currency }: { ov: Overview; currency: string }
             today={ov.today}
             height={220}
             floor={salesEmpty ? 4 : 0}
-            area
-            grid
+            bars
           />
           {salesEmpty &&
             (salesView === "refunds" ? (
@@ -235,8 +234,7 @@ export function TrendCharts({ ov, currency }: { ov: Overview; currency: string }
             today={ov.today}
             height={220}
             integer
-            area
-            grid
+            bars
           />
           {ordersEmpty && <EmptyChart icon={ShoppingCart} title="No orders in this period" body="Orders show up here within a minute of being placed." />}
         </div>

@@ -2,7 +2,7 @@
 import { useId, useState, type KeyboardEvent, type ReactNode } from "react";
 import { dailyBreakdown, weekdayOf, type BreakdownDay, type SalesDay, type SalesMonth, type YearBreakdown } from "@app/shared/sales";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
-import { niceTicks, useWidth } from "./chartUtils";
+import { columnPath, columnWidth, niceTicks, useWidth } from "./chartUtils";
 import { fmtDay, fmtLongDay, fmtMonth, fmtMoneyCompact, fmtMoneyWhole, fmtSpan, fmtWeekday, weekdayName } from "./format";
 import { Delta } from "./Primitives";
 import { asSalesDays, showsRefunds } from "./redacted";
@@ -42,17 +42,6 @@ const FONT = 11;
 /** Rough width of a label at 11px, for deciding what fits without measuring the DOM. */
 const textWidth = (s: string) => s.length * 6.3 + 6;
 
-/** A column with a 4px rounded data end and a square foot on the baseline. */
-function columnPath(x: number, w: number, y0: number, y1: number): string {
-  const up = y1 <= y0;
-  const h = Math.abs(y0 - y1);
-  const r = Math.min(4, w / 2, h);
-  if (up) {
-    return `M${x},${y0}V${y1 + r}Q${x},${y1} ${x + r},${y1}H${x + w - r}Q${x + w},${y1} ${x + w},${y1 + r}V${y0}Z`;
-  }
-  return `M${x},${y0}V${y1 - r}Q${x},${y1} ${x + r},${y1}H${x + w - r}Q${x + w},${y1} ${x + w},${y1 - r}V${y0}Z`;
-}
-
 export function ColumnsWithTotal({
   columns,
   label,
@@ -82,7 +71,7 @@ export function ColumnsWithTotal({
   const n = columns.length;
   const plotW = Math.max(0, width - MARGIN.left - MARGIN.right);
   const slot = n ? plotW / n : 0;
-  const barW = slot >= 6 ? Math.min(24, slot - 2) : Math.max(1, slot - 1);
+  const barW = columnWidth(slot);
   const cx = (i: number) => MARGIN.left + slot * (i + 0.5);
 
   // Labels on every cap only when each fits its slot; otherwise just the ones that matter.
