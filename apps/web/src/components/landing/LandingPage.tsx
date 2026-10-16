@@ -1,7 +1,6 @@
 "use client";
-import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { lazy, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useReducedMotion } from "@/hooks/useReducedMotion";
 import { useSmoothScroll } from "@/hooks/useSmoothScroll";
@@ -16,16 +15,19 @@ import { allowGpuParticles } from "./shared/particles";
 // Everything below the hero is split into its own chunks. They still render into the static
 // HTML (SEO, no layout jump), but their JavaScript doesn't hold up the first screen, and each one
 // hydrates only as it nears the viewport or once the page is idle (Deferred).
-const SignalsToDecisions = dynamic(() => import("./story/SignalsToDecisions").then((m) => m.SignalsToDecisions));
-const BusinessPulse = dynamic(() => import("./story/BusinessPulse").then((m) => m.BusinessPulse));
-const CustomerJourney = dynamic(() => import("./story/CustomerJourney").then((m) => m.CustomerJourney));
-const CustomerIntelligence = dynamic(() => import("./story/CustomerIntelligence").then((m) => m.CustomerIntelligence));
-const ProfitIntelligence = dynamic(() => import("./story/ProfitIntelligence").then((m) => m.ProfitIntelligence));
-const AskInsight = dynamic(() => import("./product/AskInsight").then((m) => m.AskInsight));
-const ShopifyConnection = dynamic(() => import("./product/ShopifyConnection").then((m) => m.ShopifyConnection));
-const ProductReveal = dynamic(() => import("./product/ProductReveal").then((m) => m.ProductReveal));
-const FinalCTA = dynamic(() => import("./conversion/FinalCTA").then((m) => m.FinalCTA));
-const Footer = dynamic(() => import("./Footer").then((m) => m.Footer));
+// React.lazy, not next/dynamic: next/dynamic also writes a <link rel="preload"> for every chunk
+// into the HTML, and Chrome warns about each one the page hasn't used a few seconds after load,
+// which is exactly what deferring them means. A scene's chunk is fetched when it is released.
+const SignalsToDecisions = lazy(() => import("./story/SignalsToDecisions").then((m) => ({ default: m.SignalsToDecisions })));
+const BusinessPulse = lazy(() => import("./story/BusinessPulse").then((m) => ({ default: m.BusinessPulse })));
+const CustomerJourney = lazy(() => import("./story/CustomerJourney").then((m) => ({ default: m.CustomerJourney })));
+const CustomerIntelligence = lazy(() => import("./story/CustomerIntelligence").then((m) => ({ default: m.CustomerIntelligence })));
+const ProfitIntelligence = lazy(() => import("./story/ProfitIntelligence").then((m) => ({ default: m.ProfitIntelligence })));
+const AskInsight = lazy(() => import("./product/AskInsight").then((m) => ({ default: m.AskInsight })));
+const ShopifyConnection = lazy(() => import("./product/ShopifyConnection").then((m) => ({ default: m.ShopifyConnection })));
+const ProductReveal = lazy(() => import("./product/ProductReveal").then((m) => ({ default: m.ProductReveal })));
+const FinalCTA = lazy(() => import("./conversion/FinalCTA").then((m) => ({ default: m.FinalCTA })));
+const Footer = lazy(() => import("./Footer").then((m) => ({ default: m.Footer })));
 
 type Phase = "intro" | "handoff" | "done";
 
