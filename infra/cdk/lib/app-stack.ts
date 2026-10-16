@@ -352,9 +352,6 @@ export class AppStack extends Stack {
 
     new CfnOutput(this, "AppUrl", { value: this.appUrl, description: "The app" });
     new CfnOutput(this, "CloudFrontDomain", { value: this.distribution.distributionDomainName, description: "CloudFront's own name: the DNS target of the app's domain" });
-    // The Auth stack imported this until the app had a domain; CloudFormation refuses to drop an export
-    // another stack still uses, and this stack deploys first. Remove once Auth no longer imports it.
-    this.exportValue(this.distribution.distributionDomainName);
     new CfnOutput(this, "ApiFunctionUrl", { value: url.url, description: "Direct function URL (answers 403 to anything not from CloudFront)" });
     new CfnOutput(this, "CronFunction", { value: cron.alias.functionArn, description: "Invoke with {\"action\":\"migrate\"} or {\"action\":\"counts\"}" });
     new CfnOutput(this, "AlarmTopic", { value: topic.topicArn });
