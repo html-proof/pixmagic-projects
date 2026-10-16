@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { systemDb } from "@app/db";
 import { compareSnapshots, listFirebaseAccounts, planMigration, snapshotMappings, type FirebaseAccount } from "../src/migration.js";
 import { clean, cookiesFrom, ORIGIN, setup, teardown, testBrowser, type TestCtx } from "./helpers.js";
+import { LEGACY_GRANTS } from "@app/shared";
 
 /**
  * The move from Firebase, as a whole: the dry-run plan, the identity mapping
@@ -26,7 +27,7 @@ async function seed() {
   const codes = await make("fb-codes", "codes@x.com");
   const gone = await make("fb-gone", "gone@x.com");
   // The password merchant's teammate: a second member of the same workspace.
-  await systemDb.membership.create({ data: { workspaceId: pw.ws.id, userId: codes.user.id, role: "analyst" } });
+  await systemDb.membership.create({ data: { workspaceId: pw.ws.id, userId: codes.user.id, role: "analyst", permissions: [...LEGACY_GRANTS.analyst] } });
   const firebase: FirebaseAccount[] = [
     { uid: "fb-pw", email: "pw@x.com", emailVerified: true, disabled: false, providers: ["password"], createdAt: null, lastSignInAt: null },
     { uid: "fb-google", email: "g@gmail.com", emailVerified: true, disabled: false, providers: ["google.com"], createdAt: null, lastSignInAt: null },

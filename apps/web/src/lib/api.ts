@@ -1,5 +1,6 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { ACCESS_CHANGED_EVENT, signalAccess } from "@/lib/access";
 
 export class ApiError extends Error {
   constructor(
@@ -38,6 +39,12 @@ export function onSessionGone(onSignedOut: () => void): () => void {
  */
 export const isTransient = (e: unknown) =>
   !(e instanceof ApiError) || e.status === 0 || e.status === 429 || e.status >= 500;
+
+/**
+ * Refused because of who is asking (Team & Access): no permission for this, or access to the
+ * workspace revoked. What was shown before must not stay on screen.
+ */
+export const isRefused = (e: unknown) => e instanceof ApiError && e.status === 403 && (e.code === "forbidden" || e.code === "access_revoked");
 
 /** Message to show for a failed call: a calm "retrying" line for outages, the API's own text otherwise. */
 export function friendlyError(e: unknown): string {
@@ -108,6 +115,12 @@ export async function api<T = unknown>(path: string, init: { method?: string; bo
     // No response at all (offline, DNS, connection reset): status 0, so callers can tell it from a 401.
     throw new ApiError(0, "network", UNREACHABLE);
   }
+  // Any change to this member's permissions shows in this header (lib/access.ts).
+  const fp = res.headers.get("x-access-fp");
+  if (fp) {
+    const at = fp.lastIndexOf(":");
+    signalAccess({ workspaceId: fp.slice(0, at), fingerprint: fp.slice(at + 1) });
+  }
   const text = await res.text();
   let json: { error?: string; message?: string; [k: string]: unknown } = {};
   try {
@@ -119,6 +132,7 @@ export async function api<T = unknown>(path: string, init: { method?: string; bo
   if (!res.ok) {
     const err = new ApiError(res.status, json.error ?? "error", json.message ?? "Request failed", json);
     if (res.status === 401 && err.code === "unauthenticated") window.dispatchEvent(new Event(SIGNED_OUT_EVENT));
+    if (isRefused(err)) signalAccess({ refused: err.code as "forbidden" | "access_revoked" });
     throw err;
   }
   return json as T;
@@ -149,6 +163,8 @@ export function useApi<T>(path: string | null) {
     } catch (e) {
       if (current.current !== path) return true;
       setFailure({ path, error: e as ApiError });
+      // Access taken away: what was shown goes with it.
+      if (isRefused(e)) setAnswer(null);
       return false;
     } finally {
       if (current.current === path) setLoading(false);
@@ -164,6 +180,13 @@ export function useApi<T>(path: string | null) {
   useEffect(() => {
     current.current = path;
     void load();
+  }, [path, load]);
+  // New permissions: ask again, so what is shown is what they may see now.
+  useEffect(() => {
+    if (!path) return;
+    const again = () => void load();
+    window.addEventListener(ACCESS_CHANGED_EVENT, again);
+    return () => window.removeEventListener(ACCESS_CHANGED_EVENT, again);
   }, [path, load]);
   // A first load that hit an outage fills in by itself once the outage is over, instead of leaving
   // the page empty until the merchant navigates away and back. Only while nothing has loaded: once
@@ -221,6 +244,13 @@ export function useLiveApi<T>(path: string | null, intervalMs: number) {
       } catch (e) {
         if (gen !== generation.current) return;
         setFailing(true);
+        // Refused (permissions changed): the last numbers go, and the refusal shows.
+        if (isRefused(e)) {
+          last.current = null;
+          setAnswer(null);
+          setError(e as ApiError);
+          return;
+        }
         // Only the first load reports errors; later checks keep showing the last good numbers.
         if (initial || last.current === null) setError(e as ApiError);
       } finally {
@@ -256,9 +286,13 @@ export function useLiveApi<T>(path: string | null, intervalMs: number) {
     };
     const timer = window.setInterval(tick, intervalMs);
     document.addEventListener("visibilitychange", tick);
+    // Permissions changed: the answer may hold more or less now, so ask at once.
+    const now = () => void check(false);
+    window.addEventListener(ACCESS_CHANGED_EVENT, now);
     return () => {
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", tick);
+      window.removeEventListener(ACCESS_CHANGED_EVENT, now);
     };
   }, [path, intervalMs, check]);
 

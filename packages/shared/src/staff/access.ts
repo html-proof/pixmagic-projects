@@ -75,11 +75,34 @@ export interface StaffAccess {
   staffRole: StaffRole | null;
 }
 
-/** What a workspace member may do in Staff Management. */
-export function staffAccess(role: Role, staffRole: StaffRole | null | undefined): StaffAccess {
+/**
+ * Staff Management rights that Team & Access permissions (../access.ts) carry, for every employee:
+ * looking at the team, timesheets and payroll, and HR-style management. Running and approving
+ * payroll and recording payments stay with owners, admins and payroll managers.
+ */
+const BY_GRANT: Record<string, StaffPermission[]> = {
+  "staff.team": ["staff:view"],
+  "staff.timesheets": ["staff:view", "attendance:view"],
+  "staff.payroll": ["staff:view", "pay:view"],
+  "staff.manage": ["staff:view", "staff:manage", "attendance:view", "attendance:manage"],
+};
+
+/**
+ * What a workspace member may do in Staff Management: everything for owners and admins; otherwise
+ * what their staff role gives (a supervisor only for the employees assigned to them) together with
+ * what their Team & Access permissions give. Downloads need "Export approved reports" on top of
+ * something to download.
+ */
+export function staffAccess(role: Role, staffRole: StaffRole | null | undefined, grants: readonly string[] = []): StaffAccess {
   if (role === "owner" || role === "admin") return { permissions: [...ALL], scope: "all", staffRole: staffRole ?? null };
-  if (!staffRole) return { permissions: [], scope: "all", staffRole: null };
-  return { permissions: [...BY_STAFF_ROLE[staffRole]], scope: staffRole === "supervisor" ? "assigned" : "all", staffRole };
+  const fromGrants = new Set(grants.flatMap((g) => BY_GRANT[g] ?? []));
+  if (fromGrants.size && grants.includes("reports.export")) fromGrants.add("staff:export");
+  const fromRole = staffRole ? BY_STAFF_ROLE[staffRole] : [];
+  const permissions = ALL.filter((p) => fromGrants.has(p) || fromRole.includes(p));
+  // A supervisor's role covers only the employees assigned to them. Team & Access refuses to mix it
+  // with staff permissions (core's team service); should both ever meet, the narrower scope wins.
+  const scope = staffRole === "supervisor" ? "assigned" : "all";
+  return { permissions, scope, staffRole: staffRole ?? null };
 }
 
 export function staffCan(access: Pick<StaffAccess, "permissions">, perm: StaffPermission): boolean {

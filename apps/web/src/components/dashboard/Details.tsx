@@ -17,6 +17,7 @@ import { Delta, Panel, Stat } from "./Primitives";
 import { DailySalesCard, MonthlySalesCard } from "./SalesBreakdown";
 import type { Topic } from "./topics";
 import type { Overview } from "./types";
+import { beforeRefunds, breakdownOf } from "./redacted";
 
 export type { Topic } from "./topics";
 
@@ -36,21 +37,26 @@ function SalesDetail({ ov, currency }: { ov: Overview; currency: string }) {
   const c = s.current;
   const p = s.previous;
   const money = (n: number) => fmtMoney(n, currency);
-  const refunds = r2(c.grossSales - c.discounts - c.netSales);
+  // Gross sales, discounts, tax and shipping, and refunds, each only for someone who may see them
+  // (Team & Access leaves them out of the answer otherwise).
+  const bd = breakdownOf(c);
+  const refunds = bd ? r2(bd.grossSales - bd.discounts - c.netSales) : null;
   const r = ov.modules.refunds;
   const prevPeriod = fmtRange(ov.previous.from, ov.previous.to);
   const change = upDown(s.deltas.netSales);
   const rows: Array<{ label: string; now: string; before: string; delta: number | null }> = [
     { label: "Net sales", now: money(c.netSales), before: money(p.netSales), delta: s.deltas.netSales },
-    { label: "Gross sales", now: money(c.grossSales), before: money(p.grossSales), delta: s.deltas.grossSales },
+    ...(bd && p.grossSales !== undefined ? [{ label: "Gross sales", now: money(bd.grossSales), before: money(p.grossSales), delta: s.deltas.grossSales ?? null }] : []),
     { label: "Orders", now: fmtNum(c.orders), before: fmtNum(p.orders), delta: s.deltas.orders },
     { label: "Average order", now: money(c.averageOrderValue ?? 0), before: p.averageOrderValue !== null ? money(p.averageOrderValue) : "—", delta: s.deltas.averageOrderValue },
   ];
-  const lines: Array<{ label: string; note: string; amount: number; sign: "" | "−" }> = [
-    { label: "Full price of items sold", note: "Gross sales: every item at its listed price.", amount: c.grossSales, sign: "" },
-    { label: "Discounts", note: "Codes and automatic discounts taken off.", amount: c.discounts, sign: "−" },
-    { label: "Refunds", note: "Money given back in these dates (on the day it was refunded).", amount: refunds, sign: "−" },
-  ];
+  const lines: Array<{ label: string; note: string; amount: number; sign: "" | "−" }> = bd
+    ? [
+        { label: "Full price of items sold", note: "Gross sales: every item at its listed price.", amount: bd.grossSales, sign: "" },
+        { label: "Discounts", note: "Codes and automatic discounts taken off.", amount: bd.discounts, sign: "−" },
+        { label: "Refunds", note: "Money given back in these dates (on the day it was refunded).", amount: refunds ?? 0, sign: "−" },
+      ]
+    : [];
 
   return (
     <>
@@ -61,8 +67,13 @@ function SalesDetail({ ov, currency }: { ov: Overview; currency: string }) {
         </p>
         {c.orders > 0 && (
           <p>
-            A typical order was <B>{money(c.averageOrderValue ?? 0)}</B>. Discounts took off {money(c.discounts)}
-            {refunds > 0 ? <> and refunds {money(refunds)}</> : null}.
+            A typical order was <B>{money(c.averageOrderValue ?? 0)}</B>.
+            {bd ? (
+              <>
+                {" "}Discounts took off {money(bd.discounts)}
+                {refunds !== null && refunds > 0 ? <> and refunds {money(refunds)}</> : null}.
+              </>
+            ) : null}
           </p>
         )}
       </InShort>
@@ -72,44 +83,48 @@ function SalesDetail({ ov, currency }: { ov: Overview; currency: string }) {
           <Stat label="Net sales" value={money(c.netSales)} note={<Delta value={s.deltas.netSales} />} />
           <Stat label="Orders" value={fmtNum(c.orders)} note={<Delta value={s.deltas.orders} />} />
           <Stat label="Average order" value={money(c.averageOrderValue ?? 0)} note={<Delta value={s.deltas.averageOrderValue} />} />
-          <Stat label="Gross sales" value={money(c.grossSales)} note={<Delta value={s.deltas.grossSales} />} />
+          {bd && <Stat label="Gross sales" value={money(bd.grossSales)} note={<Delta value={s.deltas.grossSales ?? null} />} />}
           <Stat label="Items sold" value={fmtNum(c.units)} note={c.orders ? `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(c.units / c.orders)} per order` : undefined} />
           {r ? (
             <Stat label="Refunded" value={money(r.current.refunds)} note={<Delta value={r.deltas.refunds} invert />} />
-          ) : (
+          ) : refunds !== null ? (
             <Stat label="Refunded" value={money(refunds)} />
-          )}
+          ) : null}
         </div>
       </Panel>
 
-      <Panel id="d-sales-adds-up" title="How your net sales add up" help="Net sales is what you kept from your products, before tax and shipping.">
-        <ul className="divide-y divide-border text-sm">
-          {lines.map((l) => (
-            <li key={l.label} className="flex items-start justify-between gap-4 py-2.5">
-              <div className="min-w-0">
-                <p className="font-medium">{l.label}</p>
-                <p className="text-xs text-muted">{l.note}</p>
-              </div>
-              <p className="shrink-0 tabular-nums">{l.sign && l.amount > 0 ? `${l.sign} ` : ""}{money(l.amount)}</p>
+      {bd && (
+        <Panel id="d-sales-adds-up" title="How your net sales add up" help="Net sales is what you kept from your products, before tax and shipping.">
+          <ul className="divide-y divide-border text-sm">
+            {lines.map((l) => (
+              <li key={l.label} className="flex items-start justify-between gap-4 py-2.5">
+                <div className="min-w-0">
+                  <p className="font-medium">{l.label}</p>
+                  <p className="text-xs text-muted">{l.note}</p>
+                </div>
+                <p className="shrink-0 tabular-nums">{l.sign && l.amount > 0 ? `${l.sign} ` : ""}{money(l.amount)}</p>
+              </li>
+            ))}
+            <li className="flex items-center justify-between gap-4 py-2.5 text-base">
+              <p className="font-semibold">= Net sales</p>
+              <p className="font-semibold tabular-nums">{money(c.netSales)}</p>
             </li>
-          ))}
-          <li className="flex items-center justify-between gap-4 py-2.5 text-base">
-            <p className="font-semibold">= Net sales</p>
-            <p className="font-semibold tabular-nums">{money(c.netSales)}</p>
-          </li>
-        </ul>
-        <div className="mt-3 grid grid-cols-2 gap-3 rounded-lg border border-dashed border-border p-3 text-sm">
-          <div>
-            <p className="text-xs text-muted">Tax collected</p>
-            <p className="font-medium tabular-nums">{money(c.tax)}</p>
-          </div>
-          <div>
-            <p className="text-xs text-muted">Shipping charged</p>
-            <p className="font-medium tabular-nums">{money(c.shipping)}</p>
-          </div>
-          <p className="col-span-2 text-xs text-muted">Collected on top of your sales and passed on or spent on postage, so they aren&apos;t counted above.</p>
-        </div>
-      </Panel>
+          </ul>
+          {bd.tax !== null && bd.shipping !== null && (
+            <div className="mt-3 grid grid-cols-2 gap-3 rounded-lg border border-dashed border-border p-3 text-sm">
+              <div>
+                <p className="text-xs text-muted">Tax collected</p>
+                <p className="font-medium tabular-nums">{money(bd.tax)}</p>
+              </div>
+              <div>
+                <p className="text-xs text-muted">Shipping charged</p>
+                <p className="font-medium tabular-nums">{money(bd.shipping)}</p>
+              </div>
+              <p className="col-span-2 text-xs text-muted">Collected on top of your sales and passed on or spent on postage, so they aren&apos;t counted above.</p>
+            </div>
+          )}
+        </Panel>
+      )}
 
       <Panel id="d-sales-compare" title="This period and the one before" help={`${fmtRange(ov.range.from, ov.range.to)} against ${prevPeriod}.`}>
         <div className="-mx-1 overflow-x-auto">
@@ -150,7 +165,7 @@ function SalesDetail({ ov, currency }: { ov: Overview; currency: string }) {
       {ov.hasData && s.series.length > 1 && (
         <DailySalesCard series={s.series} range={ov.range} today={ov.today} historyFrom={ov.data?.oldestOrderDay ?? null} currency={currency} />
       )}
-      {s.year?.orders > 0 && <MonthlySalesCard year={s.year} historyFrom={ov.data?.oldestOrderDay ?? null} currency={currency} />}
+      {s.year && s.year.orders > 0 && <MonthlySalesCard year={s.year} historyFrom={ov.data?.oldestOrderDay ?? null} currency={currency} />}
     </>
   );
 }
@@ -159,8 +174,9 @@ function ProductsDetail({ ov, currency }: { ov: Overview; currency: string }) {
   const items = ov.modules.top_products?.items ?? [];
   const c = ov.modules.sales_overview?.current;
   const money = (n: number) => fmtMoney(n, currency);
-  // Product sales are line prices less their discounts: the same footing as gross − discounts.
-  const base = c ? r2(c.grossSales - c.discounts) : null;
+  // Product sales are line prices less their discounts: the same footing as gross − discounts
+  // (known only to someone who may see the sales breakdown).
+  const base = beforeRefunds(c);
   const share = (n: number) => (base && base > 0 ? n / base : null);
   const top = items[0];
   const topTotal = items.reduce((a, i) => a + i.revenue, 0);
@@ -400,7 +416,7 @@ function DiscountsDetail({ ov, currency }: { ov: Overview; currency: string }) {
         {top ? (
           <p>
             Customers used <B>{plural(items.length, "code")}</B>; <B>{top.code}</B> was used most, on {plural(top.orders, "order")}.
-            {c && c.grossSales > 0 ? <> All discounts together took {fmtMoney(c.discounts, currency)} off, {fmtPct(c.discounts / c.grossSales)} of full price.</> : null}
+            {c && c.grossSales !== undefined && c.discounts !== undefined && c.grossSales > 0 ? <> All discounts together took {fmtMoney(c.discounts, currency)} off, {fmtPct(c.discounts / c.grossSales)} of full price.</> : null}
           </p>
         ) : (
           <p>No discount codes were used in these dates.</p>
@@ -415,7 +431,7 @@ function DiscountsDetail({ ov, currency }: { ov: Overview; currency: string }) {
                 label={<span className="font-mono">{d.code}</span>}
                 value={plural(d.orders, "order")}
                 fraction={items[0]!.orders > 0 ? d.orders / items[0]!.orders : 0}
-                sub={`${fmtMoney(d.sales, currency)} in sales · ${fmtMoney(d.discount, currency)} in discounts`}
+                sub={d.sales !== undefined && d.discount !== undefined ? `${fmtMoney(d.sales, currency)} in sales · ${fmtMoney(d.discount, currency)} in discounts` : undefined}
               />
             ))}
           </ul>

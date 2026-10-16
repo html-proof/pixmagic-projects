@@ -65,9 +65,19 @@ export function AboutThisData({ store, data, everySec }: { store: OverviewStore;
         <summary className="w-fit cursor-pointer underline decoration-border underline-offset-4 hover:text-text">About this data</summary>
         <div className="mt-2 space-y-1">
           {data ? (
-            <p data-testid="imported-summary" className="text-text">
-              Imported <Count n={data.orders} one="order" /> · <Count n={data.products} one="product" /> · <Count n={data.variants} one="variant" />
-            </p>
+            // Only the counts this member may see (Team & Access leaves out the others).
+            (data.orders !== undefined || data.products !== undefined) && (
+              <p data-testid="imported-summary" className="text-text">
+                Imported{" "}
+                {[
+                  data.orders !== undefined && <Count key="o" n={data.orders} one="order" />,
+                  data.products !== undefined && <Count key="p" n={data.products} one="product" />,
+                  data.variants !== undefined && <Count key="v" n={data.variants} one="variant" />,
+                ]
+                  .filter(Boolean)
+                  .flatMap((c, i) => (i ? [" · ", c] : [c]))}
+              </p>
+            )
           ) : (
             <p>Counting what&apos;s been imported…</p>
           )}

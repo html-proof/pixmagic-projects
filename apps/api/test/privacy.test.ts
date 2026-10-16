@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { systemDb } from "@app/db";
 import { customerKey, phoneHash, recordDataRequest, waEncrypt } from "@app/core";
 import { clean, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
+import { LEGACY_GRANTS } from "@app/shared";
 
 /**
  * Settings → Privacy requests: Shopify's customers/data_request, answered by giving the store
@@ -73,7 +74,7 @@ describe("privacy requests", () => {
   it("is only for owners and admins", async () => {
     const { ws, request } = await scenario();
     const analyst = await signIn(ctx, "analyst", "analyst@x.com");
-    await systemDb.membership.create({ data: { workspaceId: ws, userId: analyst.user.id, role: "analyst" } });
+    await systemDb.membership.create({ data: { workspaceId: ws, userId: analyst.user.id, role: "analyst", permissions: [...LEGACY_GRANTS.analyst] } });
     for (const url of [`/workspaces/${ws}/privacy-requests`, `/workspaces/${ws}/privacy-requests/${request.id}/export`]) {
       const res = await ctx.app.inject({ method: "GET", url, headers: analyst.headers });
       expect(res.statusCode, url).toBe(403);

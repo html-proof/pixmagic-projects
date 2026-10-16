@@ -57,12 +57,11 @@ import {
   MAX_CUSTOM_DAYS,
   META_REPORT_VIEWS,
   pkcePair,
-  can,
   randomToken,
   safeEqual,
   type AdProvider,
 } from "@app/shared";
-import { body, clientIp, HttpError, loadUser, requireWorkspace, type Deps } from "../context.js";
+import { body, clientIp, HttpError, loadUser, memberAllows, requireWorkspace, type Deps } from "../context.js";
 import type { App } from "../app.js";
 import { limit, LIMITS } from "../rateLimit.js";
 
@@ -159,7 +158,7 @@ async function storeInWorkspace(ws: string, storeId: string) {
  */
 async function mayStillConnect(ws: string, storeId: string, userId: string): Promise<boolean> {
   const m = await systemDb.membership.findUnique({ where: { workspaceId_userId: { workspaceId: ws, userId } } });
-  if (!m || !can(m.role, "stores:manage")) return false;
+  if (!memberAllows(m, "integrations.manage")) return false;
   return !!(await systemDb.store.findFirst({ where: { id: storeId, workspaceId: ws, status: { not: "uninstalled" } }, select: { id: true } }));
 }
 
@@ -230,7 +229,7 @@ export function adsRoutes(app: App, deps: Deps) {
   /** Connected ad accounts for a store, which platforms this server can connect at all, and which only for the people added to its app. */
   app.get("/workspaces/:ws/stores/:storeId/ads", async (c) => {
     const { ws, storeId } = c.req.param();
-    await requireWorkspace(c, deps, ws, "dashboard:read");
+    await requireWorkspace(c, deps, ws, ["marketing.ads", "integrations.status"]);
     await storeInWorkspace(ws, storeId);
     const rows = await withTenant(ws, (tx) => tx.adConnection.findMany({ where: { workspaceId: ws, storeId }, orderBy: [{ provider: "asc" }, { createdAt: "asc" }] }));
     return c.json({ configured: adsConfigured(), restricted: adsRestricted(), connections: rows.map(publicConnection) });
@@ -240,7 +239,7 @@ export function adsRoutes(app: App, deps: Deps) {
   app.post("/workspaces/:ws/stores/:storeId/ads/:provider/connect", async (c) => {
     const { ws, storeId } = c.req.param();
     const provider = providerSchema.parse(c.req.param("provider"));
-    const access = await requireWorkspace(c, deps, ws, "stores:manage");
+    const access = await requireWorkspace(c, deps, ws, "integrations.manage");
     const user = access.user!;
     if (!user.emailVerified) throw new HttpError(403, "Verify your email first", "email_unverified");
     await storeInWorkspace(ws, storeId);
@@ -391,7 +390,7 @@ export function adsRoutes(app: App, deps: Deps) {
   /** The accounts a sign-in can see, while the person chooses which to connect. No tokens. */
   app.get("/workspaces/:ws/stores/:storeId/ads/pending/:nonce", async (c) => {
     const { ws, storeId, nonce } = c.req.param();
-    const access = await requireWorkspace(c, deps, ws, "stores:manage");
+    const access = await requireWorkspace(c, deps, ws, "integrations.manage");
     await storeInWorkspace(ws, storeId);
     const p = await ownPending(deps, nonce, access.user?.id, ws, storeId);
     const known = await withTenant(ws, (tx) => tx.adConnection.findMany({ where: { workspaceId: ws, storeId, provider: p.provider }, select: { accountId: true } }));
@@ -406,7 +405,7 @@ export function adsRoutes(app: App, deps: Deps) {
   /** Connect the accounts the person ticked. A choice can be used once. */
   app.post("/workspaces/:ws/stores/:storeId/ads/pending/:nonce", async (c) => {
     const { ws, storeId, nonce } = c.req.param();
-    const access = await requireWorkspace(c, deps, ws, "stores:manage");
+    const access = await requireWorkspace(c, deps, ws, "integrations.manage");
     await storeInWorkspace(ws, storeId);
     // Bounded by the accounts the sign-in listed (checked below), not by a small number: agency logins see thousands.
     const { accountIds } = z.object({ accountIds: z.array(z.string().min(1).max(64)).min(1).max(10_000) }).parse(await body(c));
@@ -438,7 +437,7 @@ export function adsRoutes(app: App, deps: Deps) {
   /** "Cancel" on the choice: the sign-in's tokens are dropped and nothing is connected. */
   app.delete("/workspaces/:ws/stores/:storeId/ads/pending/:nonce", async (c) => {
     const { ws, storeId, nonce } = c.req.param();
-    const access = await requireWorkspace(c, deps, ws, "stores:manage");
+    const access = await requireWorkspace(c, deps, ws, "integrations.manage");
     await ownPending(deps, nonce, access.user?.id, ws, storeId);
     await takePendingAdConnect(deps.coord, nonce);
     return c.json({ ok: true });
@@ -447,7 +446,7 @@ export function adsRoutes(app: App, deps: Deps) {
   /** Show an account on the dashboard (and keep syncing it), or not. */
   app.patch("/workspaces/:ws/stores/:storeId/ads/connections/:id", async (c) => {
     const { ws, storeId, id } = c.req.param();
-    const access = await requireWorkspace(c, deps, ws, "stores:manage");
+    const access = await requireWorkspace(c, deps, ws, "integrations.manage");
     const { enabled } = z.object({ enabled: z.boolean() }).parse(await body(c));
     const conn = await withTenant(ws, (tx) => tx.adConnection.findFirst({ where: { id, workspaceId: ws, storeId } }));
     if (!conn) throw new HttpError(404, "Not found", "not_found");
@@ -460,7 +459,7 @@ export function adsRoutes(app: App, deps: Deps) {
   /** Disconnect one ad account: its token and every number fetched for it are deleted. */
   app.delete("/workspaces/:ws/stores/:storeId/ads/connections/:id", async (c) => {
     const { ws, storeId, id } = c.req.param();
-    const access = await requireWorkspace(c, deps, ws, "stores:manage");
+    const access = await requireWorkspace(c, deps, ws, "integrations.manage");
     const conn = await withTenant(ws, (tx) => tx.adConnection.findFirst({ where: { id, workspaceId: ws, storeId } }));
     if (!conn) throw new HttpError(404, "Not found", "not_found");
     await systemDb.$transaction([
@@ -489,7 +488,7 @@ export function adsRoutes(app: App, deps: Deps) {
    */
   app.get("/workspaces/:ws/stores/:storeId/ads/meta/report", async (c) => {
     const { ws, storeId } = c.req.param();
-    const access = await requireWorkspace(c, deps, ws, "dashboard:read");
+    const access = await requireWorkspace(c, deps, ws, "marketing.campaigns");
     await storeInWorkspace(ws, storeId);
     const q = z
       .object({
@@ -535,7 +534,7 @@ export function adsRoutes(app: App, deps: Deps) {
    */
   app.get("/workspaces/:ws/stores/:storeId/ads/google/report", async (c) => {
     const { ws, storeId } = c.req.param();
-    const access = await requireWorkspace(c, deps, ws, "dashboard:read");
+    const access = await requireWorkspace(c, deps, ws, "marketing.campaigns");
     await storeInWorkspace(ws, storeId);
     const q = z
       .object({
@@ -578,7 +577,7 @@ export function adsRoutes(app: App, deps: Deps) {
   /** "Sync now" / "Refresh": fetch the last 30 days of every shown account, or one platform's. */
   app.post("/workspaces/:ws/stores/:storeId/ads/sync", async (c) => {
     const { ws, storeId } = c.req.param();
-    const access = await requireWorkspace(c, deps, ws, "stores:manage");
+    const access = await requireWorkspace(c, deps, ws, "integrations.manage");
     const { provider } = z.object({ provider: providerSchema.optional() }).parse(await body(c));
     await limit(deps.coord, `rl:ads-sync:${storeId}:${access.user?.id ?? clientIp(c)}`, LIMITS.adsSync);
     await storeInWorkspace(ws, storeId);

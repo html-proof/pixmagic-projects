@@ -199,7 +199,7 @@ async function validateRefs(tx: Tx, ws: string, input: Partial<EmployeeInput>) {
   }
   if (input.managerUserId) {
     const m = await systemDb.membership.findUnique({ where: { workspaceId_userId: { workspaceId: ws, userId: input.managerUserId } } });
-    if (!m) throw new StaffError(400, "invalid_manager", "The manager has to be a member of this workspace.");
+    if (!m || m.revokedAt) throw new StaffError(400, "invalid_manager", "The manager has to be a member of this workspace.");
   }
   if (input.overtimePolicyId) {
     const p = await tx.overtimePolicy.findFirst({ where: { id: input.overtimePolicyId, workspaceId: ws } });
@@ -486,7 +486,7 @@ export async function deletePayRate(actor: StaffActor, employeeId: string, rateI
 
 /** Members who can be assigned as an employee's manager. */
 export async function managerOptions(workspaceId: string) {
-  const members = await systemDb.membership.findMany({ where: { workspaceId }, include: { user: { select: { id: true, displayName: true, email: true } } }, orderBy: { createdAt: "asc" } });
+  const members = await systemDb.membership.findMany({ where: { workspaceId, revokedAt: null }, include: { user: { select: { id: true, displayName: true, email: true } } }, orderBy: { createdAt: "asc" } });
   return members.map((m) => ({ userId: m.user.id, name: m.user.displayName ?? m.user.email, email: m.user.email, role: m.role, staffRole: m.staffRole }));
 }
 

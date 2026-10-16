@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { useEffect, useState, type ReactNode } from "react";
-import { canManage, StoresPending, useApp } from "@/components/AppContext";
+import { StoresPending, useApp } from "@/components/AppContext";
 import { GoogleIcon, MetaIcon } from "@/components/BrandIcons";
 import { LoadError } from "@/components/LoadError";
 import { BackFromFacebook, MetaTestersOnly } from "@/components/MetaAdsAccess";
@@ -238,8 +238,9 @@ function ChooseAccounts({ pick, ws, storeId, storeName, onDone }: { pick: string
 }
 
 export default function AdAccountsPage() {
-  const { workspace, stores, storesStatus, store, setStoreId } = useApp();
-  const manage = canManage(workspace.role);
+  const { workspace, stores, storesStatus, store, setStoreId, allowed } = useApp();
+  // Connecting ad accounts: owners, admins and members given "Manage integrations".
+  const manage = allowed("integrations.manage");
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);

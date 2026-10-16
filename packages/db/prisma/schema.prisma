@@ -15,11 +15,15 @@ datasource db {
   provider = "postgresql"
 }
 
+/// Owners and admins run the workspace. Every other role sees exactly the permissions granted to it
+/// (memberships.permissions, packages/shared/src/access.ts); the role is the template they came from.
 enum Role {
   owner
   admin
   analyst
   viewer
+  manager
+  custom
 }
 
 /// A member's role in Staff Management, on top of their workspace role (owners and admins have
@@ -61,6 +65,9 @@ model User {
   updatedAt     DateTime     @updatedAt @map("updated_at")
   memberships   Membership[]
   identities    AuthIdentity[]
+  /// Members and invitations this person brought into a workspace (Team & Access).
+  invitedMembers     Membership[] @relation("MembershipInviter")
+  sentInvitations    Invitation[] @relation("InvitationInviter")
   /// Employee records this account signs in as (employee portal).
   employments   Employee[]   @relation("EmployeeAccount")
   /// Employees this person is the assigned manager of.
@@ -150,28 +157,57 @@ model Membership {
   role        Role
   /// Staff Management role for members who are not owners or admins (null: no staff access).
   staffRole   StaffRole? @map("staff_role")
+  /// Team & Access: the permissions granted to a restricted role (packages/shared/src/access.ts).
+  /// Owners and admins have every permission and keep this empty.
+  permissions String[]  @default([])
+  /// Access revoked by an owner or admin: the membership stays, so it can be restored, but grants
+  /// nothing until then. Every access check refuses a revoked membership.
+  revokedAt   DateTime? @map("revoked_at")
+  /// Who invited them (null for a workspace's creator and members from before Team & Access).
+  invitedById String?   @map("invited_by_id")
+  /// When their role or permissions last changed.
+  accessChangedAt DateTime? @map("access_changed_at")
   createdAt   DateTime  @default(now()) @map("created_at")
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  invitedBy   User?     @relation("MembershipInviter", fields: [invitedById], references: [id], onDelete: SetNull)
 
   @@unique([workspaceId, userId])
   @@index([userId])
+  @@index([invitedById])
   @@map("memberships")
 }
 
+/// An invitation to a workspace (Team & Access). Single use: only the token's hash is stored, and
+/// accepting, revoking or expiry ends it for good. Kept after it ends, for the team page's counts and
+/// the audit trail, until the daily retention sweep removes it (apps/worker, pruneTeamRecords).
 model Invitation {
   id          String    @id @default(cuid())
   workspaceId String    @map("workspace_id")
   email       String
   role        Role
   staffRole   StaffRole? @map("staff_role")
+  /// The permissions the member will have once they accept (restricted roles only).
+  permissions String[]  @default([])
+  /// The inviter's note, shown in the email and on the invitation page.
+  message     String?
   tokenHash   String    @unique @map("token_hash")
   expiresAt   DateTime  @map("expires_at")
   acceptedAt  DateTime? @map("accepted_at")
+  acceptedById String?  @map("accepted_by_id")
+  revokedAt   DateTime? @map("revoked_at")
+  invitedById String?   @map("invited_by_id")
+  /// The last time the email went out, and the last time sending it failed.
+  sentAt      DateTime? @map("sent_at")
+  sendFailedAt DateTime? @map("send_failed_at")
+  sendCount   Int       @default(0) @map("send_count")
   createdAt   DateTime  @default(now()) @map("created_at")
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  invitedBy   User?     @relation("InvitationInviter", fields: [invitedById], references: [id], onDelete: SetNull)
 
   @@index([workspaceId])
+  @@index([workspaceId, email])
+  @@index([invitedById])
   @@map("invitations")
 }
 

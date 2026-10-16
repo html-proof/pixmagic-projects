@@ -1,8 +1,8 @@
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { z } from "zod";
 import { systemDb } from "@app/db";
-import { employmentsForUser, env, logger } from "@app/core";
-import { accountPasswordProblem, DISPLAY_NAME_MAX, EMAIL_CODE_RE, pkcePair, randomToken, safeEqual, sha256Hex } from "@app/shared";
+import { accessFingerprint, employmentsForUser, env, logger } from "@app/core";
+import { ACCESS_KEYS, accountPasswordProblem, DISPLAY_NAME_MAX, EMAIL_CODE_RE, hasFullAccess, pkcePair, randomToken, safeEqual, sha256Hex } from "@app/shared";
 import { body, clientIp, HttpError, loadUser, requireAppOrigin, requireUser, sessionOf, SESSION_COOKIE, type Ctx, type Deps } from "../context.js";
 import { CognitoError, CognitoUnavailableError, type CognitoTokens, type FederatedProvider, type SignInResult } from "../cognito.js";
 import { LegacyUnavailableError } from "../legacyFirebase.js";
@@ -482,7 +482,18 @@ export function authRoutes(app: App, deps: Deps) {
     });
     return c.json({
       user: publicUser(user),
-      workspaces: memberships.map((m) => ({ id: m.workspace.id, name: m.workspace.name, role: m.role, staffRole: m.staffRole })),
+      // Each with what this person may see there (Team & Access). A revoked membership is listed as
+      // such, with nothing granted, so the app can say access was revoked rather than offer to set up
+      // a workspace of their own.
+      workspaces: memberships.map((m) => ({
+        id: m.workspace.id,
+        name: m.workspace.name,
+        role: m.role,
+        staffRole: m.staffRole,
+        permissions: m.revokedAt ? [] : hasFullAccess(m.role) ? [...ACCESS_KEYS] : m.permissions,
+        status: m.revokedAt ? "revoked" : "active",
+        fingerprint: accessFingerprint(m),
+      })),
       // Organizations this account works for as an employee (the employee portal).
       employments: await employmentsForUser(user.id),
     });

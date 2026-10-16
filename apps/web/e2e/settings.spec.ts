@@ -85,35 +85,42 @@ test("renaming after switching workspaces renames the one selected", async ({ pa
 
 test("invitations: emailed, handed over as a link when email fails, and kept across sign-in", async ({ page, browser }) => {
   const { ws } = await owner(page, "inviter", "Team Co");
-  await page.goto("/settings/members");
+  await page.goto("/team");
+  const invite = async (email: string) => {
+    await page.getByRole("button", { name: "Invite Member" }).click();
+    const panel = page.getByTestId("invite-panel");
+    await panel.getByLabel("Email address").fill(email);
+    await panel.getByRole("radio", { name: /^Analyst/ }).check();
+    await panel.getByRole("button", { name: "Send Invitation" }).click();
+    return panel;
+  };
   const invitee = uniqueEmail("invitee");
-  await page.getByLabel("Email to invite").fill(invitee);
-  await page.getByLabel("Role", { exact: true }).selectOption("analyst");
-  await page.getByRole("button", { name: "Invite", exact: true }).click();
-  await expect(page.getByRole("status")).toContainText(`Invitation sent to ${invitee}`);
-  await expect(page.getByText(`${invitee} · invited`)).toBeVisible();
+  await invite(invitee);
+  await expect(page.getByText(`Invitation sent to ${invitee}.`)).toBeVisible();
+  await expect(page.getByTestId("team-row").filter({ visible: true }).filter({ hasText: invitee })).toContainText("Pending");
 
   // When the email can't be sent the API still saves the invitation and returns its link. The
   // page used to say "sent" anyway and drop the link.
-  await page.route("**/api/workspaces/*/invitations", (route) =>
-    route.fulfill({ json: { ok: true, emailed: false, url: "http://localhost/invite?token=handed-over-token" } }),
+  await page.route("**/api/workspaces/*/team/invitations", (route) =>
+    route.fulfill({ json: { ok: true, emailed: false, url: "http://localhost/invite#token=handed-over-token", replaced: 0 } }),
   );
   const unmailable = uniqueEmail("unmailable");
-  await page.getByLabel("Email to invite").fill(unmailable);
-  await page.getByRole("button", { name: "Invite", exact: true }).click();
-  await expect(page.getByTestId("invite-link")).toHaveValue("http://localhost/invite?token=handed-over-token");
+  const panel = await invite(unmailable);
+  await expect(panel.getByTestId("invite-link")).toHaveValue("http://localhost/invite#token=handed-over-token");
   await expect(page.getByText(`Invitation sent to ${unmailable}`)).toHaveCount(0);
-  await page.unroute("**/api/workspaces/*/invitations");
+  await page.unroute("**/api/workspaces/*/team/invitations");
+  await panel.getByRole("button", { name: "Done" }).click();
 
   // The invitee opens the emailed link while signed out, signs in, and comes back to accept it.
-  const link = /\/invite\?token=[^\s]+/.exec(await latestMailText(invitee))![0];
+  const link = /https?:\/\/\S+\/invite#token=[A-Za-z0-9_-]+/.exec(await latestMailText(invitee))![0];
   const ctx = await browser.newContext();
   const guest = await ctx.newPage();
   await guest.goto(link);
-  await guest.getByRole("button", { name: "Accept invitation" }).click();
+  await expect(guest.getByRole("heading", { name: "Join Team Co" })).toBeVisible();
+  await guest.getByRole("button", { name: "Sign in to accept" }).click();
   await expect(guest).toHaveURL(/\/login/);
   await createAccountFromLogin(guest, invitee);
-  await expect(guest).toHaveURL(/\/invite\?token=/);
+  await expect(guest).toHaveURL(/\/invite/);
   await guest.getByRole("button", { name: "Accept invitation" }).click();
   await expect(guest).toHaveURL(/\/dashboard/);
   // Joined the inviter's workspace, and did not get one of their own on the way.
@@ -139,7 +146,7 @@ test("store permissions say which are optional for every role, and Disconnect re
   expect(await page.getByTestId("revoke-read_customers").getAttribute("aria-label")).toContain(shop);
 
   // As an analyst: no Remove button, but the permission is still optional. It used to read "Required".
-  await db.query("UPDATE memberships SET role = 'analyst' WHERE workspace_id = $1 AND user_id = (SELECT id FROM users WHERE email = $2)", [ws, email]);
+  await db.query("UPDATE memberships SET role = 'analyst', permissions = ARRAY['integrations.status'] WHERE workspace_id = $1 AND user_id = (SELECT id FROM users WHERE email = $2)", [ws, email]);
   await page.reload();
   await expect(page.getByTestId("revoke-read_customers")).toHaveCount(0);
   await expect(page.locator("li", { hasText: "Optional" })).toHaveCount(1);

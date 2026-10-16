@@ -121,7 +121,7 @@ export async function raiseAlert(
   try {
     const email = alertEmail(alert, { workspace: workspace?.name ?? null, store: store ? (store.name ?? store.shopDomain) : null });
     const recipients = await systemDb.membership.findMany({
-      where: { workspaceId: input.workspaceId, role: { in: ["owner", "admin"] } },
+      where: { workspaceId: input.workspaceId, role: { in: ["owner", "admin"] }, revokedAt: null },
       include: { user: true },
     });
     const prefs = await systemDb.notificationPreference.findMany({

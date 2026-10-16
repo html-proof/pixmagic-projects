@@ -27,7 +27,24 @@ function ContentsLoading() {
 
 const TopicContents = dynamic(() => import("./Details").then((m) => m.TopicContents), { loading: () => <ContentsLoading /> });
 
-function DetailSheet({ title, icon, period, onClose, children }: { title: string; icon: IconName; period: string; onClose: () => void; children: ReactNode }) {
+function DetailSheet({
+  title,
+  icon,
+  period,
+  onClose,
+  children,
+  exportHref,
+  canPrint,
+}: {
+  title: string;
+  icon: IconName;
+  period: string;
+  onClose: () => void;
+  children: ReactNode;
+  /** This section as CSV, for someone allowed to download it ("Export approved reports"). */
+  exportHref: string | null;
+  canPrint: boolean;
+}) {
   const panel = useRef<HTMLDivElement>(null);
   const closeBtn = useRef<HTMLButtonElement>(null);
   const onCloseRef = useRef(onClose);
@@ -74,11 +91,21 @@ function DetailSheet({ title, icon, period, onClose, children }: { title: string
             <h2 id="detail-title" className="truncate text-lg font-semibold">{title}</h2>
             <p className="truncate text-xs text-muted">{period}</p>
           </div>
-          <button onClick={() => window.print()} className="ml-auto hidden h-10 shrink-0 items-center gap-2 rounded-full border border-border bg-surface px-3 text-sm text-muted transition hover:text-text sm:flex" data-print-hide>
-            <Icon name="printer" className="h-4 w-4" />
-            Print or save as PDF
-          </button>
-          <button ref={closeBtn} onClick={onClose} className="ml-auto flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-border bg-surface text-muted transition hover:text-text sm:ml-0" aria-label="Close details" data-print-hide>
+          <span className="ml-auto flex shrink-0 items-center gap-2" data-print-hide>
+            {exportHref && (
+              <a href={exportHref} download className="hidden h-10 items-center gap-2 rounded-full border border-border bg-surface px-3 text-sm text-muted transition hover:text-text sm:flex" data-testid="export-csv">
+                <Icon name="receipt" className="h-4 w-4" />
+                Download CSV
+              </a>
+            )}
+            {canPrint && (
+              <button onClick={() => window.print()} className="hidden h-10 items-center gap-2 rounded-full border border-border bg-surface px-3 text-sm text-muted transition hover:text-text sm:flex">
+                <Icon name="printer" className="h-4 w-4" />
+                Print or save as PDF
+              </button>
+            )}
+          </span>
+          <button ref={closeBtn} onClick={onClose} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-border bg-surface text-muted transition hover:text-text" aria-label="Close details" data-print-hide>
             <Icon name="close" />
           </button>
         </header>
@@ -95,11 +122,15 @@ export function TopicDetail({
   contactsOn,
   onClose,
   onOpen,
+  exportHref = null,
+  canPrint = true,
 }: {
   topic: Topic;
   ov: Overview;
   currency: string;
   contactsOn: boolean;
+  exportHref?: string | null;
+  canPrint?: boolean;
   onClose: () => void;
   /** Open another topic from inside this one (the overview's rows). */
   onOpen: (t: Topic) => void;
@@ -122,7 +153,7 @@ export function TopicDetail({
   };
   return (
     // Keyed by topic so moving from the overview to another topic starts at the top of the panel.
-    <DetailSheet key={topic} title={topicInfo(topic).title} icon={topicInfo(topic).icon} period={period[topic]} onClose={onClose}>
+    <DetailSheet key={topic} title={topicInfo(topic).title} icon={topicInfo(topic).icon} period={period[topic]} onClose={onClose} exportHref={exportHref} canPrint={canPrint}>
       <TopicContents topic={topic} ov={ov} currency={currency} contactsOn={contactsOn} onOpen={onOpen} />
     </DetailSheet>
   );

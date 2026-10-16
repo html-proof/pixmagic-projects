@@ -1,5 +1,4 @@
 "use client";
-import { can } from "@app/shared/roles";
 import type { CheckResult, ConditionNode, DnsRecordInstruction, EventField, FrequencyPolicy, MessageStatus, RecipientSelection } from "@app/shared/email";
 import { useApp } from "@/components/AppContext";
 
@@ -9,20 +8,20 @@ import { useApp } from "@/components/AppContext";
 
 /** The current workspace's email API base, and what this member may do there. */
 export function useEmail() {
-  const { workspace, me } = useApp();
-  const role = workspace.role;
+  // Read from this member's permissions (Team & Access), as the API does.
+  const { workspace, me, allowed } = useApp();
   return {
     ws: workspace.id,
     base: `/workspaces/${workspace.id}/email`,
     me: me.user,
-    read: can(role, "email:read"),
+    read: allowed("email:read"),
     /** See recipients and what was sent. */
-    activity: can(role, "email:activity"),
+    activity: allowed("email:activity"),
     /** Templates and automations. */
-    automate: can(role, "email:automate"),
+    automate: allowed("email:automate"),
     /** Accounts, credentials, domains, senders, keys. */
-    manage: can(role, "email:manage"),
-    audit: can(role, "audit:read"),
+    manage: allowed("email:manage"),
+    audit: allowed("audit:read"),
   };
 }
 

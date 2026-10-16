@@ -39,9 +39,9 @@ import {
   updateEmailAccount,
   updateSmtpAccount,
 } from "@app/core";
-import { can, pkcePair, randomToken, safeEqual } from "@app/shared";
+import { pkcePair, randomToken, safeEqual } from "@app/shared";
 import { accountCanSend, accountUpdateSchema, OAUTH_PROVIDERS, senderCreateSchema, smtpConnectionSchema, smtpUpdateSchema, type OAuthProvider } from "@app/shared/email";
-import { body, HttpError, loadUser, type Ctx, type Deps } from "../context.js";
+import { body, HttpError, loadUser, memberAllows, type Ctx, type Deps } from "../context.js";
 import type { App } from "../app.js";
 import { requireEmail } from "../emailAccess.js";
 import { limit, LIMITS } from "../rateLimit.js";
@@ -156,7 +156,7 @@ export function emailAccountRoutes(app: App, deps: Deps) {
       const user = await loadUser(c, deps);
       if (!user || user.id !== state.userId) return back({ error: "session_mismatch", provider });
       const m = await systemDb.membership.findUnique({ where: { workspaceId_userId: { workspaceId: state.workspaceId, userId: user.id } } });
-      if (!m || !can(m.role, "email:manage")) return back({ error: "forbidden", provider });
+      if (!memberAllows(m, "email:manage")) return back({ error: "forbidden", provider });
 
       let result;
       try {

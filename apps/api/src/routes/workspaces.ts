@@ -5,20 +5,26 @@ import {
   APP_SUBSCRIPTION_CREATE,
   audit,
   billingEnabled,
+  createTeamInvitation,
   env,
   getAccessToken,
-  logger,
+  loadMember,
+  loadTeam,
   planById,
   PLANS,
   PRORATE_ON_CANCEL,
   purgeStoreData,
+  removeMember,
+  revokeTeamInvitation,
   SHOP_PARTNER_DEVELOPMENT,
   shopifyGraphql,
   syncBillingFromShopify,
+  updateMemberAccess,
 } from "@app/core";
-import { can, describeAlert, randomToken, ROLES, sha256Hex, type AlertArea, type AlertView } from "@app/shared";
+import { allows, describeAlert, hasFullAccess, LEGACY_GRANTS, randomToken, ROLES, sha256Hex, type AlertArea, type AlertView } from "@app/shared";
 import { STAFF_ROLES, staffAccess, staffCan } from "@app/shared/staff";
-import { body, clientIp, HttpError, requireUser, requireWorkspace, type Deps } from "../context.js";
+import { body, clientIp, HttpError, requireFullAccess, requireUser, requireWorkspace, type Deps } from "../context.js";
+import { inviteLimits, teamActor } from "./team.js";
 import type { App } from "../app.js";
 import { seedResync } from "../sync.js";
 import { limit, LIMITS } from "../rateLimit.js";
@@ -53,70 +59,28 @@ export function workspaceRoutes(app: App, deps: Deps) {
     return c.json({ ok: true });
   });
 
-  // ---------------- Members & invitations ----------------
+  // ---------------- Members & invitations (the endpoints from before Team & Access) ----------------
+  // Kept for API clients and older pages; the Team & Access page uses routes/team.ts. They go through
+  // the same core functions, so the same rules apply. Analysts and viewers invited or set here get
+  // what those roles could see before Team & Access (LEGACY_GRANTS).
   app.get("/workspaces/:ws/members", async (c) => {
     const { ws } = c.req.param();
-    await requireWorkspace(c, deps, ws, "dashboard:read");
-    return withTenant(ws, async (tx) => {
-      const members = await tx.membership.findMany({ where: { workspaceId: ws }, include: { user: true }, orderBy: { createdAt: "asc" } });
-      const invites = await tx.invitation.findMany({ where: { workspaceId: ws, acceptedAt: null, expiresAt: { gt: new Date() } } });
-      return c.json({
-        members: members.map((m) => ({ id: m.id, userId: m.userId, email: m.user.email, name: m.user.displayName, role: m.role, staffRole: m.staffRole })),
-        invitations: invites.map((i) => ({ id: i.id, email: i.email, role: i.role, staffRole: i.staffRole, expiresAt: i.expiresAt })),
-      });
+    await requireWorkspace(c, deps, ws, "members:manage");
+    const { rows } = await loadTeam(ws);
+    return c.json({
+      members: rows.filter((r) => r.kind === "member").map((m) => ({ id: m.id, userId: m.userId, email: m.email, name: m.name, role: m.role, staffRole: m.staffRole, status: m.status })),
+      invitations: rows.filter((r) => r.kind === "invitation" && r.status === "pending").map((i) => ({ id: i.id, email: i.email, role: i.role, staffRole: i.staffRole, expiresAt: i.expiresAt })),
     });
   });
 
   app.post("/workspaces/:ws/invitations", async (c) => {
     const { ws } = c.req.param();
     const a = await requireWorkspace(c, deps, ws, "members:manage");
-    const input = z.object({ email: z.string().email().max(254), role: roleSchema.exclude(["owner"]), staffRole: staffRoleSchema.optional() }).parse(await body(c));
-    // Each invitation sends an email from our domain: don't let one workspace turn it into a spam
-    // relay, nor one person with many workspaces.
-    await limit(deps.coord, `rl:invite:${ws}`, LIMITS.invitations);
-    if (a.user) await limit(deps.coord, `rl:invite-user:${a.user.id}`, LIMITS.invitationsPerUser);
-    const token = randomToken(32);
-    await withTenant(ws, (tx) =>
-      tx.invitation.create({
-        data: { workspaceId: ws, email: input.email.toLowerCase(), role: input.role, staffRole: input.staffRole ?? null, tokenHash: sha256Hex(token), expiresAt: new Date(Date.now() + 7 * 86400_000) },
-      }),
-    );
-    // The invitation is already saved and the link is valid, so a mail failure must not fail
-    // the request: EMAIL_FROM has to be on a domain verified in Amazon SES (out of the sandbox), and
-    // when it isn't, every send throws. Losing the whole call there would leave an orphaned
-    // invitation, skip the audit entry, and take away the only way to get someone into a
-    // workspace. Hand the link back instead so the inviter can pass it on themselves.
-    const url = `${env().APP_URL}/invite?token=${token}`;
-    let emailed = true;
-    try {
-      await deps.mailer.send(input.email, "You've been invited", `Join the workspace: ${url}`);
-    } catch (err) {
-      emailed = false;
-      logger.error({ err, workspaceId: ws }, "invitation email failed; returning the link to the inviter");
-    }
-    await audit({ workspaceId: ws, actorUserId: a.user?.id, action: "member.invited", metadata: { email: input.email, role: input.role, emailed }, ip: clientIp(c) });
+    const input = z.object({ email: z.string().email().max(254), role: z.enum(["admin", "analyst", "viewer"]), staffRole: staffRoleSchema.optional() }).parse(await body(c));
+    await inviteLimits(deps, ws, a.user?.id);
+    const r = await createTeamInvitation(teamActor(c, a), { email: input.email, role: input.role, permissions: input.role === "admin" ? [] : LEGACY_GRANTS[input.role], staffRole: input.staffRole ?? null }, deps.mailer);
     // Only ever to the member manager who just created it, and only when we couldn't send it.
-    return c.json(emailed ? { ok: true, emailed } : { ok: true, emailed, url });
-  });
-
-  app.post("/invitations/accept", async (c) => {
-    const user = await requireUser(c, deps);
-    const { token } = z.object({ token: z.string().min(10) }).parse(await body(c));
-    const inv = await systemDb.invitation.findUnique({ where: { tokenHash: sha256Hex(token) } });
-    if (!inv || inv.acceptedAt || inv.expiresAt < new Date()) throw new HttpError(400, "This invitation is no longer valid", "invalid_invite");
-    if (inv.email !== user.email || !user.emailVerified) {
-      throw new HttpError(403, "Sign in with the verified email address this invite was sent to", "invite_email_mismatch");
-    }
-    await systemDb.$transaction([
-      systemDb.membership.upsert({
-        where: { workspaceId_userId: { workspaceId: inv.workspaceId, userId: user.id } },
-        create: { workspaceId: inv.workspaceId, userId: user.id, role: inv.role, staffRole: inv.staffRole },
-        update: {},
-      }),
-      systemDb.invitation.update({ where: { id: inv.id }, data: { acceptedAt: new Date() } }),
-    ]);
-    await audit({ workspaceId: inv.workspaceId, actorUserId: user.id, action: "member.joined", ip: clientIp(c) });
-    return c.json({ workspaceId: inv.workspaceId });
+    return c.json(r.emailed ? { ok: true, emailed: true } : { ok: true, emailed: false, url: r.url });
   });
 
   app.patch("/workspaces/:ws/members/:memberId", async (c) => {
@@ -127,38 +91,18 @@ export function workspaceRoutes(app: App, deps: Deps) {
       .object({ role: roleSchema.optional(), staffRole: staffRoleSchema.optional() })
       .refine((v) => v.role !== undefined || v.staffRole !== undefined, "Nothing to change")
       .parse(await body(c));
-    const { role } = input;
-    if (role === "owner" && a.role !== "owner") throw new HttpError(403, "Only owners can grant ownership", "forbidden");
-    const keysRevoked = await withTenant(ws, async (tx) => {
-      await lockOwners(tx, ws);
-      const m = await tx.membership.findFirst({ where: { id: memberId, workspaceId: ws } });
-      if (!m) throw new HttpError(404, "Not found", "not_found");
-      if (m.role === "owner" && a.role !== "owner") throw new HttpError(403, "Only owners can change an owner", "forbidden");
-      if (role && m.role === "owner" && role !== "owner") await assertAnotherOwner(tx, ws, m.id);
-      await tx.membership.update({ where: { id: m.id }, data: { ...(role ? { role } : {}), ...(input.staffRole !== undefined ? { staffRole: input.staffRole } : {}) } });
-      // Keys they made keep working after they can no longer manage keys: retire them with the role.
-      return role && !can(role, "apikeys:manage") ? revokeKeysOf(tx, ws, m.userId) : 0;
-    });
-    await audit({ workspaceId: ws, actorUserId: a.user?.id, action: "member.role_changed", targetId: memberId, metadata: { role, staffRole: input.staffRole, keysRevoked }, ip: clientIp(c) });
+    const current = await loadMember(ws, memberId);
+    const role = input.role ?? current.role;
+    // A new role brings that role's old access; the same role keeps the permissions it has.
+    const permissions = hasFullAccess(role) ? [] : role === current.role ? (hasFullAccess(current.role) ? [] : current.permissions) : role === "analyst" || role === "viewer" ? LEGACY_GRANTS[role] : [];
+    await updateMemberAccess(teamActor(c, a), memberId, { role, permissions, ...(input.staffRole !== undefined ? { staffRole: input.staffRole } : {}), allowSelf: true });
     return c.json({ ok: true });
   });
 
   app.delete("/workspaces/:ws/members/:memberId", async (c) => {
     const { ws, memberId } = c.req.param();
     const a = await requireWorkspace(c, deps, ws, "members:manage");
-    const keysRevoked = await withTenant(ws, async (tx) => {
-      await lockOwners(tx, ws);
-      const m = await tx.membership.findFirst({ where: { id: memberId, workspaceId: ws } });
-      if (!m) throw new HttpError(404, "Not found", "not_found");
-      if (m.role === "owner") {
-        if (a.role !== "owner") throw new HttpError(403, "Only owners can remove an owner", "forbidden");
-        await assertAnotherOwner(tx, ws, m.id);
-      }
-      await tx.membership.delete({ where: { id: m.id } });
-      // An API key outlives its creator's membership otherwise (keys never expire).
-      return revokeKeysOf(tx, ws, m.userId);
-    });
-    await audit({ workspaceId: ws, actorUserId: a.user?.id, action: "member.removed", targetId: memberId, metadata: { keysRevoked }, ip: clientIp(c) });
+    await removeMember(teamActor(c, a), memberId, { allowSelf: true });
     return c.json({ ok: true });
   });
 
@@ -166,9 +110,7 @@ export function workspaceRoutes(app: App, deps: Deps) {
   app.delete("/workspaces/:ws/invitations/:invitationId", async (c) => {
     const { ws, invitationId } = c.req.param();
     const a = await requireWorkspace(c, deps, ws, "members:manage");
-    const res = await withTenant(ws, (tx) => tx.invitation.deleteMany({ where: { id: invitationId, workspaceId: ws, acceptedAt: null } }));
-    if (res.count === 0) throw new HttpError(404, "Not found", "not_found");
-    await audit({ workspaceId: ws, actorUserId: a.user?.id, action: "member.invitation_revoked", targetId: invitationId, ip: clientIp(c) });
+    await revokeTeamInvitation(teamActor(c, a), invitationId);
     return c.json({ ok: true });
   });
 
@@ -264,7 +206,7 @@ export function workspaceRoutes(app: App, deps: Deps) {
   // ---------------- Billing (Shopify Billing API, packages/core/src/billing.ts) ----------------
   app.get("/workspaces/:ws/billing", async (c) => {
     const { ws } = c.req.param();
-    await requireWorkspace(c, deps, ws, "dashboard:read");
+    requireFullAccess(await requireWorkspace(c, deps, ws, "dashboard:read"));
     const sub = await withTenant(ws, (tx) => tx.subscription.findUnique({ where: { workspaceId: ws } }));
     const { plan, status, pendingPlan } = sub ?? { plan: "free", status: "active", pendingPlan: null };
     // Where the charges appear, while there are any.
@@ -392,8 +334,7 @@ export function workspaceRoutes(app: App, deps: Deps) {
   app.get("/workspaces/:ws/alerts", async (c) => {
     const { ws } = c.req.param();
     const a = await requireWorkspace(c, deps, ws, "dashboard:read");
-    const member = a.user ? await systemDb.membership.findUnique({ where: { workspaceId_userId: { workspaceId: ws, userId: a.user.id } }, select: { staffRole: true } }) : null;
-    const staff = staffAccess(a.role, member?.staffRole);
+    const staff = staffAccess(a.role, a.staffRole, a.access.permissions);
     const { problems, notes, stores } = await withTenant(ws, async (tx) => ({
       // Problems stay until whatever fixes them resolves them. Notes (info) are never resolved, so
       // only the last week's are listed, and apart, so a busy automation can't push problems out.
@@ -406,9 +347,18 @@ export function workspaceRoutes(app: App, deps: Deps) {
       stores: await tx.store.findMany({ where: { workspaceId: ws, status: { not: "uninstalled" } }, select: { id: true, name: true, shopDomain: true } }),
     }));
     const storeById = new Map(stores.map((s) => [s.id, { id: s.id, name: s.name ?? s.shopDomain }]));
-    // Settings → Privacy requests needs audit:read (routes/privacy.ts).
+    // Only what this person can open and fix. Settings → Privacy requests needs audit:read
+    // (routes/privacy.ts); the Shopify connection and the help page's alerts go to owners and admins.
     const mayFix = (area: AlertArea) =>
-      area === "staff" ? staffCan(staff, "attendance:view") : area === "email" ? can(a.role, "email:read") : area === "privacy" ? can(a.role, "audit:read") : true;
+      area === "staff"
+        ? staffCan(staff, "attendance:view")
+        : area === "email"
+          ? allows(a.access, "email:read")
+          : area === "privacy"
+            ? allows(a.access, "audit:read")
+            : area === "whatsapp"
+              ? allows(a.access, "marketing.campaigns")
+              : hasFullAccess(a.access.role);
     const alerts: AlertView[] = [];
     for (const row of [...problems, ...notes].sort((x, y) => y.createdAt.getTime() - x.createdAt.getTime())) {
       // A store that has since been uninstalled or removed has nothing left to fix.
@@ -420,26 +370,6 @@ export function workspaceRoutes(app: App, deps: Deps) {
     }
     return c.json({ alerts });
   });
-}
-
-type Tx = Parameters<Parameters<typeof withTenant>[1]>[0];
-
-/**
- * Serialize changes to a workspace's members: without it two owners demoting or removing each
- * other at the same moment both see "another owner remains" and leave the workspace with none.
- */
-async function lockOwners(tx: Tx, ws: string) {
-  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`owners:${ws}`}))`;
-}
-
-async function revokeKeysOf(tx: Tx, ws: string, userId: string): Promise<number> {
-  const r = await tx.apiKey.updateMany({ where: { workspaceId: ws, createdById: userId, revokedAt: null }, data: { revokedAt: new Date() } });
-  return r.count;
-}
-
-async function assertAnotherOwner(tx: Parameters<Parameters<typeof withTenant>[1]>[0], ws: string, excludingMemberId: string) {
-  const others = await tx.membership.count({ where: { workspaceId: ws, role: "owner", id: { not: excludingMemberId } } });
-  if (others === 0) throw new HttpError(400, "A workspace needs at least one owner", "last_owner");
 }
 
 /**
