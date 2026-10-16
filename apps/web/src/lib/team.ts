@@ -28,6 +28,55 @@ export interface TeamRow {
   sentAt?: string | null;
   sendFailedAt?: string | null;
   sendCount?: number;
+  /** Members who joined from an invitation: when their access ends (null: no end date). */
+  accessExpiresAt?: string | null;
+  /** The invitation link behind the row: until when it opens the dashboard, how often it has, and whether it can be copied again. */
+  link?: { invitationId: string; expiresAt: string; openCount: number; lastOpenedAt: string | null; copyable: boolean } | null;
+  /** The latest invitation email, as the mail provider reported it. */
+  delivery?: { status: DeliveryStatus; provider: string; at: string; error: string | null; attempts: number } | null;
+}
+
+/** What became of an invitation email (apps/api core/mail): "sent" is only "the provider accepted it". */
+export type DeliveryStatus = "queued" | "sent" | "delivered" | "delayed" | "bounced" | "complained" | "failed" | "not_allowed";
+
+export const DELIVERY_LABEL: Record<DeliveryStatus, string> = {
+  queued: "Email queued",
+  sent: "Email sent",
+  delivered: "Email delivered",
+  delayed: "Email delayed",
+  bounced: "Email bounced",
+  complained: "Marked as spam",
+  failed: "Email failed",
+  not_allowed: "Email not sent",
+};
+
+/** What each delivery status means, for the tooltip. */
+export const DELIVERY_HELP: Record<DeliveryStatus, string> = {
+  queued: "The email service was busy. bizinsights tries again automatically.",
+  sent: "Accepted by the email service. Not yet confirmed by their inbox.",
+  delivered: "Their mail server accepted the email.",
+  delayed: "Their mail server is slow to accept it. The email service keeps trying.",
+  bounced: "Their mail server refused it: the address may be wrong. Copy the link and send it another way.",
+  complained: "They marked the email as spam. It won't be emailed to them again.",
+  failed: "The email couldn't be sent. Resend it, or copy the link and send it another way.",
+  not_allowed: "Our email service can't send to this address yet. Copy the link and send it another way.",
+};
+
+export interface InvitationSummary {
+  total: number;
+  active: number;
+  pending: number;
+  expired: number;
+  revoked: number;
+}
+
+export interface HistoryEntry {
+  id: string;
+  action: string;
+  at: string;
+  actor: string | null;
+  ip: string | null;
+  detail: Record<string, unknown>;
 }
 
 export interface TeamSummary {
@@ -37,6 +86,7 @@ export interface TeamSummary {
   endedInvitations: number;
   /** Each count at the end of each of the last 30 days, oldest first. */
   trend?: Record<"totalMembers" | "activeMembers" | "pendingInvitations" | "endedInvitations", number[]>;
+  invitations?: InvitationSummary;
 }
 
 export interface TeamPage {
@@ -77,8 +127,9 @@ export interface MemberDetail {
   permissions: string[];
   modules: AccessModule[];
   staffRole: StaffRole | null;
-  status: "active" | "revoked";
+  status: "active" | "revoked" | "expired";
   revokedAt: string | null;
+  accessExpiresAt?: string | null;
   since: string;
   accessChangedAt: string | null;
   invitedBy: string | null;

@@ -153,6 +153,15 @@ const schema = z.object({
   EMAIL_DOH_URL: z.string().url().default("https://cloudflare-dns.com/dns-query"),
   /** Local development only: deliver every email to this Mailpit instead of Amazon SES. */
   MAILPIT_URL: z.string().optional().default(""),
+  /**
+   * Who sends the app's own email (invitations, alerts): "resend" or "ses". Empty: Resend when its
+   * key is set, else SES where it is configured (core/mail). Changing it needs no code change.
+   */
+  EMAIL_PROVIDER: z.enum(["", "resend", "ses"]).optional().default(""),
+  /** Resend API key (Secrets Manager, APP_SECRET_ARN). Sending-only access is enough. */
+  RESEND_API_KEY: z.string().optional().default(""),
+  /** Signing secret (whsec_...) of the Resend webhook endpoint POST /api/webhooks/email/resend. */
+  RESEND_WEBHOOK_SECRET: z.string().optional().default(""),
   ALERT_SLACK_WEBHOOK_URL: z.string().optional().default(""),
 });
 

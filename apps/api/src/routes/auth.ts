@@ -1,13 +1,13 @@
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { z } from "zod";
 import { systemDb } from "@app/db";
-import { accessFingerprint, employmentsForUser, env, logger } from "@app/core";
+import { employmentsForUser, env, logger, sessionAccess } from "@app/core";
 import { ACCESS_KEYS, accountPasswordProblem, DISPLAY_NAME_MAX, EMAIL_CODE_RE, hasFullAccess, pkcePair, randomToken, safeEqual, sha256Hex } from "@app/shared";
-import { body, clientIp, HttpError, loadUser, requireAppOrigin, requireUser, sessionOf, SESSION_COOKIE, sharedWorkspace, type Ctx, type Deps } from "../context.js";
+import { body, clientIp, HttpError, isLinkSession, loadUser, pickSession, requireAppOrigin, requireUser, sessionOf, SESSION_COOKIE, sharedWorkspace, type Ctx, type Deps } from "../context.js";
 import { CognitoError, CognitoUnavailableError, type CognitoTokens, type FederatedProvider, type SignInResult } from "../cognito.js";
 import { LegacyUnavailableError } from "../legacyFirebase.js";
 import { recordAuthEvent, resolveUser } from "../identity.js";
-import { apiPath, clearSessionCookies, newSession, readRefreshToken, readSession, retiredSessionKey, setSessionCookies } from "../session.js";
+import { apiPath, clearSessionCookies, clearShareCookie, newSession, readRefreshToken, readSession, retiredSessionKey, setSessionCookies } from "../session.js";
 import type { App } from "../app.js";
 import { limit, LIMITS } from "../rateLimit.js";
 
@@ -440,6 +440,16 @@ export function authRoutes(app: App, deps: Deps) {
 
   /** Sign out this browser (and, after Google, the user pool's own session in it). */
   app.post("/auth/logout", async (c) => {
+    // Leaving a shared dashboard: only its shared-link session ends. An account signed in on the
+    // same browser stays signed in (the two sessions are never mixed).
+    const picked = pickSession(c);
+    if (picked?.cookie === "share") {
+      await deps.coord
+        .put(retiredSessionKey(picked.claims.sid), "1", Math.max(60, Math.ceil((picked.claims.exp - Date.now()) / 1000)))
+        .catch((err: unknown) => logger.error({ err }, "could not retire the shared-link session"));
+      clearShareCookie(c);
+      return c.json({ ok: true, redirect: null });
+    }
     // Best effort throughout: signing out must always clear the cookies below.
     const s = readSession(getCookie(c, SESSION_COOKIE));
     let redirect: string | null = null;
@@ -476,8 +486,9 @@ export function authRoutes(app: App, deps: Deps) {
   app.post("/auth/sessions/revoke", signOutEverywhere);
 
   async function me(c: Ctx, user: Awaited<ReturnType<typeof requireUser>>) {
-    // Opened from an invitation link: that workspace and nothing else of the account.
+    // Opened from an invitation link: that workspace and nothing else of the account, read-only.
     const shared = sharedWorkspace(c);
+    const link = isLinkSession(c);
     const memberships = await systemDb.membership.findMany({
       where: { userId: user.id, ...(shared && { workspaceId: shared }) },
       include: { workspace: { select: { id: true, name: true } } },
@@ -485,23 +496,27 @@ export function authRoutes(app: App, deps: Deps) {
     });
     return c.json({
       user: publicUser(user),
-      // Each with what this person may see there (Team & Access). A revoked membership is listed as
-      // such, with nothing granted, so the app can say access was revoked rather than offer to set up
-      // a workspace of their own.
-      workspaces: memberships.map((m) => ({
-        id: m.workspace.id,
-        name: m.workspace.name,
-        role: m.role,
-        staffRole: m.staffRole,
-        permissions: m.revokedAt ? [] : hasFullAccess(m.role) ? [...ACCESS_KEYS] : m.permissions,
-        status: m.revokedAt ? "revoked" : "active",
-        fingerprint: accessFingerprint(m),
-      })),
+      // Each with what this person may see there (Team & Access). A revoked membership, or one whose
+      // end date has passed, is listed as such, with nothing granted, so the app can say so rather
+      // than offer to set up a workspace of their own.
+      workspaces: memberships.map((m) => {
+        const eff = sessionAccess(m, { link });
+        return {
+          id: m.workspace.id,
+          name: m.workspace.name,
+          role: eff.access.role,
+          staffRole: m.staffRole,
+          permissions: eff.state !== "active" ? [] : hasFullAccess(eff.access.role) ? [...ACCESS_KEYS] : [...eff.access.permissions],
+          status: eff.state,
+          fingerprint: eff.fingerprint,
+          accessExpiresAt: m.accessExpiresAt?.toISOString() ?? null,
+        };
+      }),
       // Organizations this account works for as an employee (the employee portal).
       employments: shared ? [] : await employmentsForUser(user.id),
-      // Set for a session opened from an invitation link: the app shows that workspace only, and
-      // offers to sign in for anything account-wide.
-      shared: shared ? { workspaceId: shared } : null,
+      // Set for a session opened from an invitation link: the app shows that workspace only,
+      // view-only, and offers to sign in for anything account-wide.
+      shared: shared ? { workspaceId: shared, readOnly: true, expiresAt: new Date(sessionOf(c).exp).toISOString() } : null,
     });
   }
 

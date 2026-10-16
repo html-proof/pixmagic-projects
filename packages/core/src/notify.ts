@@ -4,15 +4,25 @@ import { escapeHtml } from "@app/shared/email";
 import { env } from "./env.js";
 import { logger } from "./logger.js";
 import type { FetchLike } from "./shopify.js";
+import type { MailReceipt } from "./mail/types.js";
 
 export interface MailOptions {
   /** Where replies go instead of EMAIL_FROM (whose mailbox doesn't exist): an invitation's replies reach the person who sent it. */
   replyTo?: string;
+  /**
+   * The same key for every attempt at one message: a provider that supports it (Resend) sends it
+   * once even if an attempt that timed out had in fact gone through.
+   */
+  idempotencyKey?: string;
 }
 
 export interface Mailer {
-  /** `html` is an optional rich version of `text` (which is always sent, for plain-text clients). */
-  send(to: string, subject: string, text: string, html?: string, opts?: MailOptions): Promise<void>;
+  /**
+   * `html` is an optional rich version of `text` (which is always sent, for plain-text clients).
+   * Resolves with the provider's receipt when it gives one; a failure throws (a MailError from the
+   * providers in core/mail, a plain Error from others: classifyMailError reads both).
+   */
+  send(to: string, subject: string, text: string, html?: string, opts?: MailOptions): Promise<MailReceipt | void>;
 }
 
 /** "Name <addr@x>" -> { name, email }; a bare address stays a string. */
@@ -44,17 +54,31 @@ export function mailpitMailer(baseUrl: string, fetchImpl: FetchLike = fetch): Ma
         }),
       });
       if (!res.ok) throw new Error(`Mailpit send failed (${res.status})`);
+      const json = (await res.json().catch(() => ({}))) as { ID?: string };
+      return { provider: "mailpit", messageId: json.ID ?? null };
     },
   };
 }
 
-/** In-memory mailer for tests. */
-export function memoryMailer(): Mailer & { sent: Array<{ to: string; subject: string; text: string; html?: string; replyTo?: string }> } {
-  const sent: Array<{ to: string; subject: string; text: string; html?: string; replyTo?: string }> = [];
+/**
+ * In-memory mailer for tests. `fail` makes the next sends throw (a provider outage, a refused
+ * recipient), one per entry, until it is empty again.
+ */
+export function memoryMailer(): Mailer & {
+  sent: Array<{ to: string; subject: string; text: string; html?: string; replyTo?: string; idempotencyKey?: string; messageId: string }>;
+  fail: Error[];
+} {
+  const sent: Array<{ to: string; subject: string; text: string; html?: string; replyTo?: string; idempotencyKey?: string; messageId: string }> = [];
+  const fail: Error[] = [];
   return {
     sent,
+    fail,
     async send(to, subject, text, html, opts) {
-      sent.push({ to, subject, text, ...(html ? { html } : {}), ...(opts?.replyTo ? { replyTo: opts.replyTo } : {}) });
+      const err = fail.shift();
+      if (err) throw err;
+      const messageId = `mem-${sent.length + 1}`;
+      sent.push({ to, subject, text, messageId, ...(html ? { html } : {}), ...(opts?.replyTo ? { replyTo: opts.replyTo } : {}), ...(opts?.idempotencyKey ? { idempotencyKey: opts.idempotencyKey } : {}) });
+      return { provider: "memory", messageId };
     },
   };
 }

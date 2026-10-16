@@ -78,7 +78,7 @@ export function workspaceRoutes(app: App, deps: Deps) {
     const a = await requireWorkspace(c, deps, ws, "members:manage");
     const input = z.object({ email: z.string().email().max(254), role: z.enum(["admin", "analyst", "viewer"]), staffRole: staffRoleSchema.optional() }).parse(await body(c));
     await inviteLimits(deps, ws, a.user?.id);
-    const r = await createTeamInvitation(teamActor(c, a), { email: input.email, role: input.role, permissions: input.role === "admin" ? [] : LEGACY_GRANTS[input.role], staffRole: input.staffRole ?? null }, deps.mailer);
+    const r = await createTeamInvitation(teamActor(c, a), { email: input.email, role: input.role, permissions: input.role === "admin" ? [] : LEGACY_GRANTS[input.role], staffRole: input.staffRole ?? null }, { mailer: deps.mailer, queues: deps.queues });
     // Only ever to the member manager who just created it, and only when we couldn't send it.
     return c.json(r.emailed ? { ok: true, emailed: true } : { ok: true, emailed: false, url: r.url });
   });

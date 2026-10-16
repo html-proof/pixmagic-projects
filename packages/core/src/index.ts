@@ -11,6 +11,7 @@ export * from "./shopifyPayloads.js";
 export * from "./normalize.js";
 export * from "./persist.js";
 export * from "./notify.js";
+export * from "./mail/index.js";
 export * from "./privacy.js";
 export * from "./billing.js";
 export * from "./coord.js";

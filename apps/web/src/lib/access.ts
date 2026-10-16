@@ -125,7 +125,7 @@ export interface AccessSignal {
   workspaceId?: string;
   fingerprint?: string;
   /** A request was refused: forbidden, or access revoked. */
-  refused?: "forbidden" | "access_revoked";
+  refused?: "forbidden" | "access_revoked" | "access_expired";
 }
 
 export function signalAccess(detail: AccessSignal) {

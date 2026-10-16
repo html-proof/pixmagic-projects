@@ -3,7 +3,13 @@ import Link from "next/link";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Ban,
+  CalendarPlus,
+  CalendarX2,
   ChartColumnBig,
+  CircleCheck,
+  Copy,
+  History,
+  Link2,
   ChevronLeft,
   ChevronRight,
   Clock,
@@ -14,6 +20,7 @@ import {
   MoreHorizontal,
   Pencil,
   Plus,
+  RefreshCw,
   RotateCcw,
   Search,
   Send,
@@ -35,9 +42,9 @@ import { ConfirmDialog, ToastProvider, useAction } from "@/components/AppUi";
 import { LoadError } from "@/components/LoadError";
 import { Sparkline } from "@/components/dashboard/Motion";
 import { fmtRelative } from "@/components/dashboard/format";
-import { AccessPanel, emailProblemText, InvitePanel } from "@/components/team/Panels";
+import { AccessPanel, emailProblemText, HistoryPanel, InvitePanel, LinkPanel } from "@/components/team/Panels";
 import { api, useApi } from "@/lib/api";
-import { STATUS_LABEL, type Catalog, type TeamPage, type TeamRow, type TeamRowStatus } from "@/lib/team";
+import { DELIVERY_HELP, DELIVERY_LABEL, STATUS_LABEL, type Catalog, type DeliveryStatus, type TeamPage, type TeamRow, type TeamRowStatus } from "@/lib/team";
 
 const STATUS_FILTERS: Array<[value: string, label: string]> = [
   ["", "All statuses"],
@@ -147,18 +154,8 @@ function RolePill({ role }: { role: Role }) {
   );
 }
 
-/**
- * A row's status as the list shows it. An invitation not accepted yet says how its email went:
- * "Sent" once it went out (the latest attempt succeeded), "Not delivered" when the latest failed;
- * "Pending" only while neither is known.
- */
+/** A row's status as the list shows it: the access itself (active, pending, expired, revoked, cancelled). How its email went is a line of its own (DeliveryLine). */
 function statusOf(r: TeamRow): { label: string; look: { pill: string; dot: string } } {
-  if (r.kind === "invitation" && r.status === "pending") {
-    const sent = r.sentAt ? Date.parse(r.sentAt) : 0;
-    const failed = r.sendFailedAt ? Date.parse(r.sendFailedAt) : 0;
-    if (sent && sent >= failed) return { label: "Sent", look: STATUS_LOOK.active };
-    if (failed) return { label: "Not delivered", look: STATUS_LOOK.revoked };
-  }
   return { label: STATUS_LABEL[r.status], look: STATUS_LOOK[r.status] };
 }
 
@@ -168,6 +165,61 @@ function StatusPill({ row }: { row: TeamRow }) {
     <span className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-medium ${look.pill}`}>
       <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${look.dot}`} />
       {label}
+    </span>
+  );
+}
+
+const DELIVERY_TONE: Record<DeliveryStatus, string> = {
+  queued: "text-muted",
+  sent: "text-muted",
+  delivered: "text-emerald-700 dark:text-emerald-300",
+  delayed: "text-warn",
+  bounced: "text-danger",
+  complained: "text-danger",
+  failed: "text-danger",
+  not_allowed: "text-warn",
+};
+
+/**
+ * How the invitation's email went, as the mail provider reported it ("Email delivered" only when
+ * the provider said the recipient's server took it), and whether the link has been opened.
+ */
+function DeliveryLine({ row }: { row: TeamRow }) {
+  const d = row.delivery;
+  const opened = row.link?.lastOpenedAt;
+  if (!d && !opened) return null;
+  return (
+    <span className="mt-1 block space-y-0.5 text-xs" data-testid="delivery-line">
+      {d && (
+        <span className={`block ${DELIVERY_TONE[d.status]}`} title={`${DELIVERY_HELP[d.status]}${d.error ? ` (${d.error})` : ""}`} data-delivery={d.status}>
+          {DELIVERY_LABEL[d.status]}
+          {d.status !== "queued" ? ` · ${fmtRelative(d.at) ?? ""}` : ""}
+        </span>
+      )}
+      {opened && (
+        <span className="block text-muted">
+          Link opened {row.link!.openCount > 1 ? `${row.link!.openCount} times, last ` : ""}
+          {fmtRelative(opened) ?? ""}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/** Whole days from now until `iso` (negative once passed). */
+const daysUntil = (iso: string) => Math.ceil((Date.parse(iso) - Date.now()) / 86_400_000);
+
+/** When the shared access (or, before it's opened, the invitation) ends. */
+function AccessUntil({ row }: { row: TeamRow }) {
+  const until = row.kind === "member" ? row.accessExpiresAt : row.status === "cancelled" ? null : row.expiresAt;
+  if (!until) return <span className="text-muted">{row.kind === "member" ? "No end date" : "—"}</span>;
+  const left = daysUntil(until);
+  const date = new Date(until).toLocaleDateString(undefined, { dateStyle: "medium" });
+  if (left <= 0) return <span className="text-muted">Ended {date}</span>;
+  return (
+    <span className={left <= 7 ? "text-warn" : ""} title={new Date(until).toLocaleString()}>
+      {left === 1 ? "1 day left" : `${left} days left`}
+      <span className="block text-xs text-muted">{date}</span>
     </span>
   );
 }
@@ -194,21 +246,22 @@ function AccessSummary({ row }: { row: TeamRow }) {
   );
 }
 
-/** The last column: when a member last signed in, or how an invitation stands. */
+/** When a member last signed in to their own account, or how an invitation stands. */
 function lastSeen(r: TeamRow): string {
-  if (r.kind === "member") return r.lastSignInAt ? (fmtRelative(r.lastSignInAt) ?? "—") : "Not signed in yet";
-  if (r.status === "pending") return `Invitation sent ${fmtRelative(r.sentAt ?? r.since) ?? ""}`.trim();
+  if (r.kind === "member") return r.lastSignInAt ? `Signed in ${fmtRelative(r.lastSignInAt) ?? ""}`.trim() : r.link ? "Uses the shared link" : "Not signed in yet";
+  if (r.status === "pending") return `Invited ${fmtRelative(r.since) ?? ""}`.trim();
   if (r.status === "expired") return `Expired ${fmtRelative(r.expiresAt) ?? ""}`.trim();
   return "Invitation cancelled";
 }
 
-type CardTone = "green" | "blue" | "violet" | "red";
+type CardTone = "green" | "blue" | "violet" | "red" | "slate";
 
 const CARD_TONE: Record<CardTone, { tile: string; line: string }> = {
   green: { tile: "bg-emerald-50 text-emerald-600 dark:bg-emerald-400/10 dark:text-emerald-300", line: "#10b981" },
   blue: { tile: "bg-sky-50 text-sky-600 dark:bg-sky-400/10 dark:text-sky-300", line: "#3b82f6" },
   violet: { tile: "bg-violet-50 text-violet-600 dark:bg-violet-400/10 dark:text-violet-300", line: "#8b5cf6" },
   red: { tile: "bg-rose-50 text-rose-600 dark:bg-rose-400/10 dark:text-rose-300", line: "#f43f5e" },
+  slate: { tile: "bg-text/[0.06] text-text/70", line: "#94a3b8" },
 };
 
 function SummaryCard({
@@ -315,18 +368,25 @@ function Menu<T extends string>({ label, items, onPick, trigger, className }: { 
   );
 }
 
-type Act = "view" | "edit" | "role" | "resend" | "cancel" | "revoke" | "restore" | "remove";
+type Act = "view" | "edit" | "role" | "copy" | "resend" | "renew" | "history" | "replace" | "cancel" | "revoke" | "restore" | "remove";
 
 const ACT_LOOK: Record<Act, { icon: LucideIcon; danger?: boolean }> = {
   view: { icon: Eye },
   edit: { icon: Pencil },
   role: { icon: UserCog },
+  copy: { icon: Copy },
   resend: { icon: Send },
+  renew: { icon: CalendarPlus },
+  history: { icon: History },
+  replace: { icon: RefreshCw, danger: true },
   cancel: { icon: Trash2, danger: true },
   revoke: { icon: ShieldOff, danger: true },
   restore: { icon: RotateCcw },
   remove: { icon: UserMinus, danger: true },
 };
+
+/** How long a renewal gives, counted from now (the most an invitation can last). */
+const RENEW_DAYS = 60;
 
 function RowActions({ row, actions, onAct }: { row: TeamRow; actions: Array<[Act, string]>; onAct(a: Act): void }) {
   return (
@@ -363,7 +423,9 @@ function TeamAccess() {
   const catalog = useApi<Catalog>(`/workspaces/${ws}/team/catalog`);
   const [inviting, setInviting] = useState(false);
   const [panel, setPanel] = useState<{ row: TeamRow; editing: boolean } | null>(null);
-  const [confirm, setConfirm] = useState<{ act: "revoke" | "remove" | "cancel"; row: TeamRow } | null>(null);
+  const [confirm, setConfirm] = useState<{ act: "revoke" | "remove" | "cancel" | "replace"; row: TeamRow } | null>(null);
+  const [linkShown, setLinkShown] = useState<{ email: string; url: string; expiresAt: string; replaced?: boolean } | null>(null);
+  const [historyOf, setHistoryOf] = useState<TeamRow | null>(null);
   const { busy, run } = useAction();
   const isOwner = workspace.role === "owner";
   const s = team.data?.summary;
@@ -374,46 +436,98 @@ function TeamAccess() {
     const self = row.kind === "member" && row.userId === me.user.id;
     const ownerRow = row.role === "owner";
     const mayEdit = !self && (!ownerRow || isOwner);
+    const A = (...a: Array<[Act, string] | false>) => a.filter((x): x is [Act, string] => !!x);
     if (row.kind === "member") {
-      if (row.status === "revoked") return [["view", "View permissions"], ...(mayEdit ? ([["restore", "Restore access"], ["remove", "Remove member"]] as Array<[Act, string]>) : [])];
-      return [
+      const linked = !!row.link && mayEdit;
+      if (row.status === "revoked") return A(["view", "View permissions"], mayEdit && ["restore", "Restore access"], !!row.link && ["history", "View access history"], mayEdit && ["remove", "Remove member"]);
+      if (row.status === "expired") return A(["view", "View permissions"], mayEdit && ["renew", "Renew access (60 days)"], ["history", "View access history"], mayEdit && ["remove", "Remove member"]);
+      return A(
         ["view", "View permissions"],
-        ...(mayEdit ? ([["edit", "Edit permissions"], ["role", "Change role"]] as Array<[Act, string]>) : []),
-        ...(mayEdit && !ownerRow ? ([["revoke", "Revoke access"]] as Array<[Act, string]>) : []),
-        ...(mayEdit ? ([["remove", "Remove member"]] as Array<[Act, string]>) : []),
-      ];
+        mayEdit && ["edit", "Edit permissions"],
+        mayEdit && ["role", "Change role"],
+        linked && !!row.link?.copyable && ["copy", "Copy link"],
+        linked && ["resend", "Resend email"],
+        mayEdit && (!!row.accessExpiresAt || !!row.link) && ["renew", "Renew access (60 days)"],
+        ["history", "View access history"],
+        linked && ["replace", "Replace link"],
+        mayEdit && !ownerRow && ["revoke", "Revoke access"],
+        mayEdit && ["remove", "Remove member"],
+      );
     }
-    if (row.status === "pending") return [["view", "View permissions"], ["edit", "Edit permissions"], ["resend", "Resend invitation"], ["cancel", "Cancel invitation"]];
-    if (row.status === "expired") return [["view", "View permissions"], ["resend", "Resend invitation"], ["cancel", "Cancel invitation"]];
-    return [["view", "View permissions"]];
+    if (row.status === "pending")
+      return A(
+        ["view", "View permissions"],
+        ["edit", "Edit permissions"],
+        !!row.link?.copyable && ["copy", "Copy link"],
+        ["resend", "Resend email"],
+        ["renew", "Renew (60 days)"],
+        ["history", "View access history"],
+        ["replace", "Replace link"],
+        ["cancel", "Cancel invitation"],
+      );
+    if (row.status === "expired") return A(["view", "View permissions"], ["renew", "Renew (60 days)"], ["resend", "Renew and resend email"], ["history", "View access history"], ["cancel", "Cancel invitation"]);
+    return A(["view", "View permissions"], ["history", "View access history"]);
   }
+
+  /** The invitation behind a row: its own, or the one a member joined from. */
+  const invitationOf = (row: TeamRow) => (row.kind === "invitation" ? row.id : row.link?.invitationId);
 
   async function act(row: TeamRow, a: Act) {
     if (a === "view") return setPanel({ row, editing: false });
     if (a === "edit" || a === "role") return setPanel({ row, editing: true });
-    if (a === "revoke" || a === "remove" || a === "cancel") return setConfirm({ act: a, row });
+    if (a === "history") return setHistoryOf(row);
+    if (a === "revoke" || a === "remove" || a === "cancel" || a === "replace") return setConfirm({ act: a, row });
+    const inv = invitationOf(row);
+    if (a === "copy" && inv)
+      return run(`copy:${row.id}`, "get the link", async () => {
+        const r = await api<{ url: string; expiresAt: string }>(`/workspaces/${ws}/team/invitations/${inv}/link`, { method: "POST" });
+        const copied = await navigator.clipboard?.writeText(r.url).then(
+          () => true,
+          () => false,
+        );
+        setLinkShown({ email: row.email, url: r.url, expiresAt: r.expiresAt });
+        return copied ? `Link for ${row.email} copied.` : `Here is the link for ${row.email}.`;
+      });
+    if (a === "renew")
+      return run(`renew:${row.id}`, "renew the access", async () => {
+        const path = row.kind === "member" ? `/workspaces/${ws}/team/members/${row.id}/renew` : `/workspaces/${ws}/team/invitations/${row.id}/renew`;
+        const r = await api<{ expiresAt: string }>(path, { method: "POST", body: { days: RENEW_DAYS } });
+        reload();
+        return `Access for ${row.email} renewed until ${new Date(r.expiresAt).toLocaleDateString(undefined, { dateStyle: "medium" })}. Their link works again until then.`;
+      });
     if (a === "restore")
       return run(`restore:${row.id}`, "restore their access", async () => {
         await api(`/workspaces/${ws}/team/members/${row.id}/restore`, { method: "POST" });
         reload();
         return `${row.email} has their access back.`;
       });
-    if (a === "resend")
+    if (a === "resend" && inv)
       return run(`resend:${row.id}`, "resend the invitation", async () => {
-        const r = await api<{ emailed: boolean; url?: string; emailProblem?: string }>(`/workspaces/${ws}/team/invitations/${row.id}/resend`, { method: "POST", headers: { "idempotency-key": `resend-${row.id}-${Date.now()}` } });
+        const r = await api<{ emailed: boolean; delivery?: string; url?: string; emailProblem?: string; expiresAt: string }>(`/workspaces/${ws}/team/invitations/${inv}/resend`, {
+          method: "POST",
+          headers: { "idempotency-key": `resend-${inv}-${Date.now()}` },
+        });
         reload();
         if (!r.emailed && r.url) {
-          await navigator.clipboard?.writeText(r.url).catch(() => {});
-          return `${row.email} wasn't emailed. ${emailProblemText(r.emailProblem)} The new link is on your clipboard: send it to them yourself.`;
+          setLinkShown({ email: row.email, url: r.url, expiresAt: r.expiresAt });
+          return `${row.email} wasn't emailed. ${emailProblemText(r.emailProblem)} Send them the link yourself.`;
         }
-        return `Invitation sent to ${row.email} again. The earlier link no longer works.`;
+        if (r.delivery === "queued") return `The email service is busy: the email to ${row.email} goes out automatically in a minute or two.`;
+        return `Invitation emailed to ${row.email} again, with the same link.`;
       });
   }
 
   async function confirmed() {
     if (!confirm) return;
     const { act: a, row } = confirm;
-    const ok = await run(`${a}:${row.id}`, a === "cancel" ? "cancel the invitation" : a === "revoke" ? "revoke their access" : "remove the member", async () => {
+    const what = a === "cancel" ? "cancel the invitation" : a === "revoke" ? "revoke their access" : a === "replace" ? "replace the link" : "remove the member";
+    const ok = await run(`${a}:${row.id}`, what, async () => {
+      if (a === "replace") {
+        const r = await api<{ url: string; expiresAt: string }>(`/workspaces/${ws}/team/invitations/${invitationOf(row)}/replace-link`, { method: "POST" });
+        setLinkShown({ email: row.email, url: r.url, expiresAt: r.expiresAt, replaced: true });
+        reload();
+        return `The old link for ${row.email} no longer works.`;
+      }
       if (a === "cancel") await api(`/workspaces/${ws}/team/invitations/${row.id}/revoke`, { method: "POST" });
       else if (a === "revoke") await api(`/workspaces/${ws}/team/members/${row.id}/revoke`, { method: "POST" });
       else await api(`/workspaces/${ws}/team/members/${row.id}`, { method: "DELETE" });
@@ -435,8 +549,7 @@ function TeamAccess() {
           {you(r) && <span className="shrink-0 rounded-md bg-emerald-50 px-1.5 py-0.5 text-[11px] font-medium text-emerald-700 dark:bg-emerald-400/10 dark:text-emerald-300">You</span>}
         </span>
         {r.name && <span className="block truncate text-xs text-muted">{r.email}</span>}
-        {r.kind === "invitation" && r.status === "pending" && r.expiresAt && <span className="block text-xs text-muted">Expires {new Date(r.expiresAt).toLocaleDateString()}</span>}
-        {r.kind === "invitation" && r.status === "pending" && statusOf(r).label === "Not delivered" && <span className="block text-xs text-warn">Resend it, or share the link another way</span>}
+        <span className="block text-xs text-muted">{lastSeen(r)}</span>
       </span>
     </span>
   );
@@ -486,11 +599,12 @@ function TeamAccess() {
         </div>
       </header>
 
-      <section aria-label="Summary" className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <SummaryCard testId="summary-total" icon={UsersRound} tone="green" label="Total Members" value={s?.totalMembers} trend={s?.trend?.totalMembers} note="All team members with access" />
-        <SummaryCard testId="summary-active" icon={UserRound} tone="blue" label="Active Members" value={s?.activeMembers} trend={s?.trend?.activeMembers} note="Currently have access" />
-        <SummaryCard testId="summary-pending" icon={Clock} tone="violet" label="Open Invitations" value={s?.pendingInvitations} trend={s?.trend?.pendingInvitations} note="Not accepted yet" />
-        <SummaryCard testId="summary-ended" icon={MailX} tone="red" label="Expired or Revoked" value={s?.endedInvitations} trend={s?.trend?.endedInvitations} note="Invitations that no longer work" />
+      <section aria-label="Summary" className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5">
+        <SummaryCard testId="summary-total" icon={UsersRound} tone="green" label="Total Invitations" value={s?.invitations?.total} trend={undefined} note={s ? `${s.totalMembers} ${s.totalMembers === 1 ? "member" : "members"} in the team` : "Every invitation on record"} />
+        <SummaryCard testId="summary-active" icon={CircleCheck} tone="blue" label="Active Shared Access" value={s?.invitations?.active} trend={undefined} note="Opened and still working" />
+        <SummaryCard testId="summary-pending" icon={Clock} tone="violet" label="Pending Invitations" value={s?.invitations?.pending} trend={s?.trend?.pendingInvitations} note="Sent, not opened yet" />
+        <SummaryCard testId="summary-expired" icon={CalendarX2} tone="slate" label="Expired" value={s?.invitations?.expired} trend={undefined} note="Ended: renew to reopen" />
+        <SummaryCard testId="summary-ended" icon={MailX} tone="red" label="Revoked" value={s?.invitations?.revoked} trend={undefined} note="Cancelled or access revoked" />
       </section>
 
       <section className="card space-y-5" aria-labelledby="members-h">
@@ -554,7 +668,11 @@ function TeamAccess() {
                       <StatusPill row={r} />
                     </div>
                     <AccessSummary row={r} />
-                    <p className="text-xs text-muted">{lastSeen(r)}</p>
+                    <DeliveryLine row={r} />
+                    <p className="text-xs">
+                      <span className="text-muted">Access: </span>
+                      <AccessUntil row={r} />
+                    </p>
                   </div>
                   <RowActions row={r} actions={actionsFor(r)} onAct={(a) => void act(r, a)} />
                 </li>
@@ -565,11 +683,11 @@ function TeamAccess() {
               <table className="w-full text-sm" data-testid="team-table">
                 <thead className="bg-text/[0.025] text-left text-[13px] text-muted">
                   <tr>
-                    <th className="px-4 py-3 font-medium">Member</th>
+                    <th className="px-4 py-3 font-medium">Recipient</th>
                     <th className="px-4 py-3 font-medium">Role</th>
                     <th className="px-4 py-3 font-medium">Permissions</th>
                     <th className="px-4 py-3 font-medium">Status</th>
-                    <th className="px-4 py-3 font-medium">Last sign-in</th>
+                    <th className="px-4 py-3 font-medium">Expiration</th>
                     <th className="px-4 py-3 text-right font-medium">Actions</th>
                   </tr>
                 </thead>
@@ -579,8 +697,11 @@ function TeamAccess() {
                       <td className="max-w-[20rem] px-4 py-3">{person(r)}</td>
                       <td className="px-4 py-3"><RolePill role={r.role} /></td>
                       <td className="max-w-[18rem] px-4 py-3"><AccessSummary row={r} /></td>
-                      <td className="px-4 py-3"><StatusPill row={r} /></td>
-                      <td className="whitespace-nowrap px-4 py-3 text-muted">{lastSeen(r)}</td>
+                      <td className="px-4 py-3">
+                        <StatusPill row={r} />
+                        <DeliveryLine row={r} />
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3"><AccessUntil row={r} /></td>
                       <td className="px-4 py-3 text-right"><RowActions row={r} actions={actionsFor(r)} onAct={(a) => void act(r, a)} /></td>
                     </tr>
                   ))}
@@ -636,9 +757,18 @@ function TeamAccess() {
           Changes apply to the person&apos;s very next request: taking a permission away removes that section from their dashboard straight away. Personal customer details, finance,
           payroll, managing integrations or staff, and downloads always have to be ticked one by one.
         </p>
+        <p className="mt-2 flex items-start gap-2 text-xs leading-relaxed text-muted">
+          <Link2 aria-hidden className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>
+            An invitation link opens the dashboard without a sign-in, view-only, for up to 60 days (renewable). Anyone holding it can open it, so it goes only to the address you invite;
+            replace it if it went somewhere it shouldn&apos;t. Managing anything needs the person&apos;s own sign-in.
+          </span>
+        </p>
       </section>
 
       {inviting && catalog.data && <InvitePanel ws={ws} catalog={catalog.data} onClose={() => setInviting(false)} onSent={reload} />}
+      {linkShown && <LinkPanel {...linkShown} onClose={() => setLinkShown(null)} />}
+      {historyOf && <HistoryPanel ws={ws} row={historyOf} onClose={() => setHistoryOf(null)} />}
       {panel && catalog.data && (
         <AccessPanel
           ws={ws}
@@ -653,15 +783,16 @@ function TeamAccess() {
       )}
       <ConfirmDialog
         open={!!confirm}
-        title={confirm?.act === "cancel" ? "Cancel this invitation?" : confirm?.act === "revoke" ? "Revoke access?" : "Remove this member?"}
-        confirmLabel={confirm?.act === "cancel" ? "Cancel invitation" : confirm?.act === "revoke" ? "Revoke access" : "Remove member"}
+        title={confirm?.act === "cancel" ? "Cancel this invitation?" : confirm?.act === "revoke" ? "Revoke access?" : confirm?.act === "replace" ? "Replace the link?" : "Remove this member?"}
+        confirmLabel={confirm?.act === "cancel" ? "Cancel invitation" : confirm?.act === "revoke" ? "Revoke access" : confirm?.act === "replace" ? "Replace link" : "Remove member"}
         danger
         busy={!!busy}
         onConfirm={() => void confirmed()}
         onCancel={() => setConfirm(null)}
       >
         {confirm?.act === "cancel" && <p>The link sent to {confirm.row.email} stops working straight away. You can invite them again later.</p>}
-        {confirm?.act === "revoke" && <p>{confirm.row.email} won&apos;t be able to open anything in this workspace from their next request. Their permissions are kept, so you can restore access later.</p>}
+        {confirm?.act === "revoke" && <p>{confirm.row.email} won&apos;t be able to open anything in this workspace from their next request, on any device, and their link stops working. Their permissions are kept, so you can restore access later.</p>}
+        {confirm?.act === "replace" && <p>The link {confirm.row.email} has now stops opening the dashboard straight away, and you get a new one to send them. Dashboards already open from the old link keep working until you revoke access.</p>}
         {confirm?.act === "remove" && <p>{confirm?.row.email} leaves the workspace and loses all access. To bring them back you&apos;ll need to invite them again. API keys they made stop working.</p>}
       </ConfirmDialog>
     </div>

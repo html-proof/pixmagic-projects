@@ -6,7 +6,7 @@ import { Hono } from "hono";
 import { handle } from "hono/aws-lambda";
 import { buildApp, CLIENT_IP_HEADER, type App } from "@app/api";
 import { consume, runScheduled, seedAfterMove, seedSalesRereads, type WorkerDeps } from "@app/worker";
-import { logger, memoryBlobs, memoryCoord, withLogContext, withTimeout, type Coord, type Mailer, type Queues } from "@app/core";
+import { logger, memoryBlobs, memoryCoord, withLogContext, withTimeout, type Coord, type Queues } from "@app/core";
 import { apiDeps, apiPath } from "./app.js";
 import { roleCredentials } from "./awsClient.js";
 import { consumeSqs, isSqsEvent } from "./consumer.js";
@@ -15,7 +15,7 @@ import { migrate, tableCounts } from "./migrate.js";
 import { nodeSmtpConnect } from "./nodeSmtp.js";
 import { s3Blobs } from "./s3Blobs.js";
 import { loadSecrets } from "./secrets.js";
-import { sesMailer } from "./sesMailer.js";
+import { chooseMailer } from "./mailers.js";
 import { parseQueueUrls, sqsApi, sqsQueues } from "./sqsQueues.js";
 import { staticSite } from "./staticSite.js";
 
@@ -48,13 +48,6 @@ function droppedQueues(): Queues {
   return { sync: drop("sync"), webhooks: drop("webhooks"), aggregate: drop("aggregate"), email: drop("email") };
 }
 
-/** Without SES configured (local runs): say what would have been sent, never the address. */
-const logMailer: Mailer = {
-  async send(to, subject) {
-    logger.info({ subject, to: to.replace(/^(.).*@/, "$1…@") }, "email not sent (no mailer in this environment)");
-  },
-};
-
 function coordinator(): Coord {
   const table = process.env.COORD_TABLE;
   if (table) {
@@ -80,7 +73,7 @@ function workerDeps(): WorkerDeps {
     coord: coordinator(),
     queues: urls ? sqsQueues(urls, { region, credentials, fetchImpl: withTimeout((i, init) => fetch(i, init), 10_000) }) : droppedQueues(),
     payloads: bucket ? s3Blobs({ bucket, region, credentials }) : memoryBlobs(),
-    mailer: process.env.SES_REGION ? sesMailer({ region: process.env.SES_REGION, credentials, configurationSet: process.env.SES_CONFIGURATION_SET }) : logMailer,
+    mailer: chooseMailer(process.env, credentials, fetch),
     // Every outbound call the API and the jobs make goes through this, so each gets a time limit.
     fetchImpl: withTimeout((input, init) => fetch(input, init)),
     smtpConnect: nodeSmtpConnect,

@@ -15,12 +15,21 @@ describe("the invitation email", () => {
 
   it("says who invited them to what, what they'll see, until when, and how to ignore it", () => {
     const m = teamInvitationEmail(base);
-    expect(m.subject).toBe("You've been invited to access a business dashboard: Acme <Goods>");
-    expect(m.text).toContain("Sam Owner (sam@acme.test) has invited you to access the Acme <Goods> business dashboard on bizinsights, as Custom.");
-    expect(m.text).toContain("Customer details, Product details and Marketing");
-    expect(m.text).toContain("Open it for the first time by October 23, 2026 at 3:00 PM GMT+11");
+    expect(m.subject).toBe("You've been invited to view a bizinsights dashboard");
+    expect(m.text).toContain("You've been invited to securely view a shared business dashboard through bizinsights: Acme <Goods>, shared by Sam Owner (sam@acme.test).");
+    expect(m.text).toContain("The dashboard owner has selected the information you are allowed to view.");
+    expect(m.text).toContain("Your access includes:\n  - Customer details\n  - Product details\n  - Marketing");
+    expect(m.text).toContain("No account registration or password is required.");
+    expect(m.text).toContain("This invitation expires on October 23, 2026 at 3:00 PM GMT+11.");
+    expect(m.text).toContain("The dashboard owner can change or revoke access at any time.");
     expect(m.text).toContain(base.url);
-    expect(m.text).toContain("you can safely ignore this email");
+    expect(m.text).toContain("If you were not expecting this invitation, you can ignore this email.");
+    expect(m.text).toContain("bizinsights Team");
+    // One accessible button (white on #2f6f4f, contrast 6.6:1), Outlook-safe (a table cell), no images or tracking.
+    expect(m.html).toContain(">Open Shared Dashboard</a>");
+    expect(m.html).toMatch(/bgcolor="#2f6f4f"/);
+    expect(m.html).not.toMatch(/<img|<style/i);
+    expect(m.html).toContain('name="viewport"');
     // The owner's own text is escaped in the HTML.
     expect(m.html).toContain("Acme &lt;Goods&gt;");
     expect(m.html).toContain("Hi &lt;b&gt;there&lt;/b&gt;");
