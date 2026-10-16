@@ -83,6 +83,20 @@ async function workingFor(store: Store | null, app: ShopifyApp): Promise<boolean
   return syncProblem(failed?.error) !== "access";
 }
 
+/**
+ * The app a launch of `launched` carries on with for `store`: the one the store is connected
+ * through when that is another of ours and it works, else the one launched. A shop can have
+ * several of our apps installed (an App Store app next to the one it first connected through),
+ * and opening one of them must not move a store that works: Shopify may refuse the other app's
+ * token on that shop - an app not yet approved works only on development stores of its own
+ * organization - and the import then fails with 403, as it did on 2026-10-16.
+ */
+async function appToKeep(store: Store | null, launched: ShopifyApp): Promise<ShopifyApp> {
+  if (!store || !store.shopifyAppKey || store.shopifyAppKey === launched.key) return launched;
+  const own = shopifyApp(store.shopifyAppKey);
+  return own.key === store.shopifyAppKey && (await workingFor(store, own)) ? own : launched;
+}
+
 /** Let this browser add `store` to an account (GET/POST /shopify/claim) for the next day. */
 async function offerClaim(c: Ctx, deps: Deps, store: Pick<Store, "id" | "workspaceId" | "shopDomain">) {
   const nonce = randomToken(24);
@@ -476,6 +490,10 @@ export function shopifyRoutes(app: App, deps: Deps) {
         return memberAllows(m, "stores:manage") ? workspaceId : null;
       };
 
+      const store = await systemDb.store.findUnique({ where: { shopDomain: shop } });
+      /** Which of our apps this launch goes on with: see appToKeep. */
+      const via = await appToKeep(store, app);
+
       // 1. A one-click connect this browser started from inside the app: finish it there.
       if (pendingNonce) {
         deleteCookie(c, PENDING_COOKIE, { path: "/" });
@@ -488,14 +506,13 @@ export function shopifyRoutes(app: App, deps: Deps) {
         if (ws && verified && !(await storeLimitReached(ws, shop))) {
           if (await storeTakenElsewhere(shop, ws)) return c.redirect(`${appUrl}/onboarding?error=store_taken`);
           const from = connectFromSchema.catch(undefined).parse(pending?.from);
-          return c.redirect(await beginAuthorize(c, deps, verified.id, ws, shop, app.key, from));
+          return c.redirect(await beginAuthorize(c, deps, verified.id, ws, shop, via.key, from));
         }
       }
 
-      const store = await systemDb.store.findUnique({ where: { shopDomain: shop } });
       // 2. Installed and working: open it. One nobody has claimed yet goes through Shopify's
       //    approval first (it doesn't prompt again): a signed link alone doesn't earn a claim.
-      if (store && (await workingFor(store, app)) && !(await unclaimed(store.workspaceId))) {
+      if (store && (await workingFor(store, via)) && !(await unclaimed(store.workspaceId))) {
         return c.redirect(await landingFor(c, deps, store));
       }
 
@@ -508,11 +525,11 @@ export function shopifyRoutes(app: App, deps: Deps) {
         });
         const only = managed.length === 1 && can(managed[0]!.role, "stores:manage") ? managed[0]!.workspaceId : null;
         // One whose plan has no room for another store doesn't get it: then 4.
-        if (only && !(await storeLimitReached(only, shop))) return c.redirect(await beginAuthorize(c, deps, verified.id, only, shop, app.key));
+        if (only && !(await storeLimitReached(only, shop))) return c.redirect(await beginAuthorize(c, deps, verified.id, only, shop, via.key));
       }
 
       // 4. Everyone else: authorize now, decide where the store lives once Shopify answers.
-      return c.redirect(await authorizeRedirect(c, deps, { mode: "install", shop, app: app.key }));
+      return c.redirect(await authorizeRedirect(c, deps, { mode: "install", shop, app: via.key }));
     } catch (err) {
       // A browser entry point (see the top of this handler): a blip in the database or coordinator
       // must land on a page that says so. Put the one-click choice back so relaunching from the

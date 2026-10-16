@@ -94,6 +94,40 @@ describe("several Shopify apps", () => {
     expect(hook.statusCode).toBe(200);
   });
 
+  describe("a shop with two of our apps installed", () => {
+    const shop = "two-apps.myshopify.com";
+    const launch = (secret: string) => testBrowser(ctx).get(`/shopify/launch?${signedQuery({ shop, host: "aG9zdA", timestamp: now() }, secret)}`);
+    /** A store connected through `app`, in an account (a workspace that isn't waiting for a claim). */
+    async function connected(app: string, extra: Record<string, unknown> = {}, awaitingClaim = false) {
+      const ws = await systemDb.workspace.create({ data: { name: "Acct", awaitingClaim } });
+      return createStore(ws.id, shop, ["read_orders"], { accessTokenEnc: "v1:x", shopifyAppKey: app, ...extra });
+    }
+
+    it("opening the other app doesn't move a store that works through its own", async () => {
+      const store = await connected("default");
+      const res = await launch("public_secret");
+      expect(res.headers.location).toMatch(/\/onboarding\?step=sync&store=/);
+      expect((await systemDb.store.findUniqueOrThrow({ where: { id: store.id } })).shopifyAppKey).toBe("default");
+    });
+
+    it("an unclaimed store is authorized again through the app it works with, not the one opened", async () => {
+      await connected("default", {}, true);
+      const authorize = new URL(String((await launch("public_secret")).headers.location));
+      expect(authorize.pathname).toBe("/admin/oauth/authorize");
+      expect(authorize.searchParams.get("client_id")).toBe("test_key");
+    });
+
+    it("a store whose own app Shopify refuses is authorized through the app opened", async () => {
+      const store = await connected("public", { status: "error" });
+      await systemDb.syncJob.create({
+        data: { workspaceId: store.workspaceId, storeId: store.id, kind: "shop", status: "failed", error: "Shopify rejected our access (403); merchant must reconnect" },
+      });
+      const authorize = new URL(String((await launch("test_secret")).headers.location));
+      expect(authorize.pathname).toBe("/admin/oauth/authorize");
+      expect(authorize.searchParams.get("client_id")).toBe("test_key");
+    });
+  });
+
   it("other stores keep using the default app", async () => {
     const { b, ws, install } = await owner();
     expect(new URL((await install("someone-else")).json().url).searchParams.get("client_id")).toBe("test_key");

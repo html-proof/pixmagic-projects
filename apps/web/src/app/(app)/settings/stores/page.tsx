@@ -37,6 +37,9 @@ export default function StoresPage() {
   /** `${storeId}:${scope}` while that one revoke is in flight, so only its button is busy. */
   const [revoking, setRevoking] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** The store whose "Sync now" is in flight, and the last one that was started. */
+  const [syncing, setSyncing] = useState<string | null>(null);
+  const [synced, setSynced] = useState<string | null>(null);
   /** Just back from Shopify with a store connected (`?connected=<store id>`). */
   const [connected, setConnected] = useState<string | null>(null);
 
@@ -75,6 +78,22 @@ To stop bizinsights' access in Shopify too, uninstall the app from your Shopify 
     await reloadStores().catch(() => {});
   }
 
+  /** Re-read the store from Shopify now: orders of the whole import window, products and stock. */
+  async function syncNow(id: string, domain: string) {
+    setSyncing(id);
+    setError(null);
+    setSynced(null);
+    try {
+      await api(`/workspaces/${workspace.id}/stores/${id}/resync`, { method: "POST" });
+      setSynced(domain);
+      await reloadStores().catch(() => {});
+    } catch (e) {
+      setError(actionError(e, `sync ${domain}`));
+    } finally {
+      setSyncing(null);
+    }
+  }
+
   /**
    * Hand one optional permission back to Shopify. The merchant can grant it again from the
    * locked module on the dashboard, so this is reversible — but the modules it feeds go dark
@@ -108,6 +127,11 @@ To stop bizinsights' access in Shopify too, uninstall the app from your Shopify 
         </Alert>
       )}
       {error && <Alert>{error}</Alert>}
+      {synced && (
+        <Alert kind="success">
+          Syncing {synced} with Shopify: its orders, products and stock are being read again. The dashboard fills in as they land.
+        </Alert>
+      )}
       {manage && <ShopifyConnect workspaceId={workspace.id} />}
       <StoresPending />
       {storesStatus === "ready" && stores.length === 0 && (
@@ -240,7 +264,20 @@ To stop bizinsights' access in Shopify too, uninstall the app from your Shopify 
                 <span />
               )}
               {manage && (
-                <button className="btn-danger" aria-label={`Disconnect ${s.shopDomain}`} onClick={() => disconnect(s.id, s.shopDomain)}>Disconnect</button>
+                <div className="flex flex-wrap gap-2">
+                  {(s.status === "active" || s.status === "error") && (
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      aria-label={`Sync ${s.shopDomain} with Shopify now`}
+                      disabled={syncing === s.id}
+                      onClick={() => syncNow(s.id, s.shopDomain)}
+                    >
+                      {syncing === s.id ? "Starting…" : "Sync now"}
+                    </button>
+                  )}
+                  <button className="btn-danger" aria-label={`Disconnect ${s.shopDomain}`} onClick={() => disconnect(s.id, s.shopDomain)}>Disconnect</button>
+                </div>
               )}
             </div>
           </div>

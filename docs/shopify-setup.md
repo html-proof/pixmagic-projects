@@ -103,6 +103,26 @@ token and clears both expiry columns.
 
 Every query's requested cost is kept under Shopify's 1000-point limit (worked out in `packages/core/src/normalize.ts`, checked by `packages/core/test/queryCost.ts`). If Shopify still answers `MAX_COST_EXCEEDED`, the sync job halves the page size and retries the same page. Webhooks keep orders, refunds and products current (an order or refund webhook whose money changed reads that order's sales records); a daily reconcile re-pulls recent orders, products and stock.
 
+What keeps a store complete, and its limits:
+
+- **Sales records.** Sales totals come only from the sales records, so an order stored without
+  them adds nothing to sales. A re-read of the 60-day window fills them in: queued after every
+  deploy (`{"action":"reread"}` on the cron function, `seedSalesRereads`), on the scheduled tick,
+  and when someone opens the store's dashboard - at most once a day per store between them.
+  2026-10-16: pixmagic.myshopify.com had 176 of 179 orders without them (imported before they
+  were read), which is why its sales looked short.
+- **"Sync now"** (Settings → Shopify stores) re-reads the 60-day window, products and stock, once
+  per 5 minutes per store.
+- **History.** Shopify gives 60 days of orders without `read_all_orders`; that scope has to be
+  requested in the Partner Dashboard (API access requests) and approved for each app before a
+  store can grant it. Ranges reaching further back show only what was imported.
+- **Scheduled jobs** (reconcile, stale import reaper, token refresh) run only with the GitHub
+  variable `AWS_SCHEDULES=on`; without it, missed webhooks are repaired only while a dashboard is
+  open, by "Sync now", or by the re-read above.
+- **Several of our apps on one shop.** Opening one of them doesn't move a store that works
+  through another (`appToKeep` in apps/api/src/routes/shopify.ts): an unapproved app's token is
+  refused (403) on stores outside its organization, which is what broke Insights Test.
+
 ### Protected customer data
 
 Shopify treats order data as customer data. If an import fails with "Shopify withheld orders (access denied)", request access in the Partner Dashboard: **Apps → Insights → API access → Protected customer data access → Request access** (pick the data and reasons). Development stores get access as soon as the request is filled in; production stores need Shopify's review. The optional scopes (`read_customers`, `write_pixels`, `read_customer_events`) also need this approval before they can be requested.

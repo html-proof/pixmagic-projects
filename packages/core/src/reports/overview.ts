@@ -20,7 +20,8 @@ export function syncProblem(error: string | null | undefined): "shop_unavailable
   if (/^Shopify 402\b/.test(error)) return "shop_unavailable";
   if (/^Shopify 404\b/.test(error)) return "shop_gone";
   if (/^Shopify 423\b/.test(error)) return "shop_locked";
-  if (/Shopify auth error|is not connected/.test(error)) return "access";
+  // The worker records a 401/403 as "Shopify rejected our access (403); ..." (AccessRevokedError).
+  if (/Shopify auth error|rejected our access|is not connected/.test(error)) return "access";
   return "other";
 }
 
