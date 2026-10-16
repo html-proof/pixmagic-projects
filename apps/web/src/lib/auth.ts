@@ -24,7 +24,14 @@ export interface AuthConfig {
 
 export type SocialProvider = "google";
 
-export const authConfig = () => api<AuthConfig>("/auth/config");
+let configRequest: Promise<AuthConfig> | null = null;
+
+/** The sign-in page and its "Continue with" buttons both ask: one request, shared (a failure isn't kept). */
+export const authConfig = () =>
+  (configRequest ??= api<AuthConfig>("/auth/config").catch((e: unknown) => {
+    configRequest = null;
+    throw e;
+  }));
 
 /** `keep` false: "Keep me signed in" unticked, so the session ends when the browser closes. */
 export const signIn = (email: string, password: string, keep = true) =>

@@ -146,6 +146,7 @@ model Workspace {
   emailSuppressions  EmailSuppression[]
   dataRequests       DataRequest[]
   emailIngestKeys    EmailIngestKey[]
+  emailDeliveries    EmailDelivery[]
 
   @@map("workspaces")
 }
@@ -167,6 +168,9 @@ model Membership {
   invitedById String?   @map("invited_by_id")
   /// When their role or permissions last changed.
   accessChangedAt DateTime? @map("access_changed_at")
+  /// Access given by an invitation ends here (60 days unless the inviter chose less) until an owner
+  /// or admin renews it; null: no end (owners, and members from before invitations expired).
+  accessExpiresAt DateTime? @map("access_expires_at")
   createdAt   DateTime  @default(now()) @map("created_at")
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -201,14 +205,55 @@ model Invitation {
   sentAt      DateTime? @map("sent_at")
   sendFailedAt DateTime? @map("send_failed_at")
   sendCount   Int       @default(0) @map("send_count")
+  /// The link's token, encrypted with the app's keyring (AES-256-GCM, bound to this invitation), so an
+  /// owner or admin can copy the same link again. Never stored in the clear: a copy of the database
+  /// alone opens nothing. Null for invitations from before (their link can only be replaced).
+  tokenSealed String?   @map("token_sealed")
+  /// The last time the link opened the dashboard, and how many times it has.
+  lastOpenedAt DateTime? @map("last_opened_at")
+  openCount   Int       @default(0) @map("open_count")
   createdAt   DateTime  @default(now()) @map("created_at")
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   invitedBy   User?     @relation("InvitationInviter", fields: [invitedById], references: [id], onDelete: SetNull)
+  deliveries  EmailDelivery[]
 
   @@index([workspaceId])
   @@index([workspaceId, email])
   @@index([invitedById])
   @@map("invitations")
+}
+
+/// One transactional email handed to the mail provider (a Team & Access invitation for now): which
+/// provider took it, its id there, and what the provider has reported since (delivered, bounced,
+/// marked as spam). No address or content is kept here; the invitation holds the address.
+model EmailDelivery {
+  id                String    @id @default(cuid())
+  workspaceId       String    @map("workspace_id")
+  invitationId      String?   @map("invitation_id")
+  /// "team_invitation"
+  kind              String
+  /// "resend", "ses", "mailpit", "log"
+  provider          String
+  providerMessageId String?   @map("provider_message_id")
+  /// queued, sent, delivered, delayed, bounced, complained, failed, not_allowed (packages/core/src/mail)
+  status            String
+  errorCode         String?   @map("error_code")
+  /// What the provider said, without the recipient's address.
+  errorMessage      String?   @map("error_message")
+  attempts          Int       @default(0)
+  sentAt            DateTime? @map("sent_at")
+  deliveredAt       DateTime? @map("delivered_at")
+  /// The provider's last event (delivered, bounced, complained) as it timed it.
+  lastEventAt       DateTime? @map("last_event_at")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+  workspace         Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  invitation        Invitation? @relation(fields: [invitationId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerMessageId])
+  @@index([invitationId, createdAt])
+  @@index([workspaceId])
+  @@map("email_deliveries")
 }
 
 model NotificationPreference {

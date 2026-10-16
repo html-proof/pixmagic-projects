@@ -1,6 +1,6 @@
 import type { Tx } from "@app/db";
-import { checkGrants, describeGrantProblem, hasFullAccess, sha256Hex, type Role } from "@app/shared";
-import type { StaffRole } from "@app/shared/staff";
+import { checkGrants, describeGrantProblem, hasFullAccess, linkSessionAccess, sha256Hex, type MemberAccess, type Role } from "@app/shared";
+import { readOnlyStaffAccess, staffAccess, type StaffAccess, type StaffRole } from "@app/shared/staff";
 import { AppError } from "../errors.js";
 
 /**
@@ -35,13 +35,47 @@ export type StoredAccess = {
 export const ASSIGNABLE_ROLES = ["admin", "manager", "analyst", "viewer", "custom"] as const;
 export type AssignableRole = (typeof ASSIGNABLE_ROLES)[number];
 
+/** Whether a membership grants anything right now: revoked by an owner or admin, or past the end of the access an invitation gave. */
+export type MemberState = "active" | "revoked" | "expired";
+
+export function memberState(m: { revokedAt: Date | null; accessExpiresAt?: Date | null }, now = new Date()): MemberState {
+  if (m.revokedAt) return "revoked";
+  return m.accessExpiresAt && m.accessExpiresAt <= now ? "expired" : "active";
+}
+
 /**
  * A short fingerprint of what a membership allows. Sent with every workspace response
  * (`x-access-fp`), so a browser notices within one request that its permissions changed, and used
- * by an editor to refuse a save made on a stale copy of someone's access.
+ * by an editor to refuse a save made on a stale copy of someone's access. `link`: as a session
+ * opened from a shared link sees it (read-only), which differs from the member's own.
  */
-export function accessFingerprint(m: { role: Role; permissions: readonly string[]; staffRole: StaffRole | null; revokedAt: Date | null }): string {
-  return sha256Hex(`${m.role}|${m.revokedAt ? "revoked" : "active"}|${m.staffRole ?? ""}|${[...m.permissions].sort().join(",")}`).slice(0, 16);
+export function accessFingerprint(
+  m: { role: Role; permissions: readonly string[]; staffRole: StaffRole | null; revokedAt: Date | null; accessExpiresAt?: Date | null },
+  opts: { link?: boolean; now?: Date } = {},
+): string {
+  return sha256Hex(`${m.role}|${memberState(m, opts.now)}|${m.staffRole ?? ""}|${[...m.permissions].sort().join(",")}${opts.link ? "|link" : ""}`).slice(0, 16);
+}
+
+/**
+ * What a membership lets this session do: the member's own access, or for a session opened from a
+ * shared link, the read-only part of it (shared `linkSessionAccess`, `readOnlyStaffAccess`). The
+ * one place the API turns a membership into permissions, so every route, /me and the access check
+ * agree, and so does the fingerprint the browser compares.
+ */
+export function sessionAccess(
+  m: { role: Role; permissions: readonly string[]; staffRole: StaffRole | null; revokedAt: Date | null; accessExpiresAt?: Date | null },
+  opts: { link?: boolean; now?: Date } = {},
+): { access: MemberAccess; staff: StaffAccess; staffRole: StaffRole | null; state: MemberState; fingerprint: string } {
+  const own: MemberAccess = { role: m.role, permissions: m.permissions };
+  const access = opts.link ? linkSessionAccess(own) : own;
+  const staff = staffAccess(m.role, m.staffRole, opts.link ? access.permissions : m.permissions);
+  return {
+    access,
+    staff: opts.link ? readOnlyStaffAccess(staff) : staff,
+    staffRole: m.staffRole,
+    state: memberState(m, opts.now),
+    fingerprint: accessFingerprint(m, opts),
+  };
 }
 
 /**

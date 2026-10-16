@@ -446,6 +446,17 @@ export function allows(access: MemberAccess, need: AccessNeed): boolean {
   return COARSE[need](g);
 }
 
+/**
+ * What a session opened from a shared link may use: the member's access with nothing that changes
+ * anything (no "manage" permission). An owner or admin opening their link gets every view and export
+ * permission, as a viewer: the link is a bearer credential, so managing the team, stores, billing or
+ * integrations always needs a sign-in of their own.
+ */
+export function linkSessionAccess(access: MemberAccess): MemberAccess {
+  const keys = hasFullAccess(access.role) ? ACCESS_KEYS : access.permissions.filter(isAccessKey);
+  return { role: hasFullAccess(access.role) ? "viewer" : access.role, permissions: keys.filter((k) => accessPermission(k).kind !== "manage") };
+}
+
 /** The modules a member has any permission in, in catalog order. */
 export function modulesOf(access: MemberAccess): AccessModule[] {
   const g = grantedKeys(access);

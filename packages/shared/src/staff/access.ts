@@ -105,6 +105,14 @@ export function staffAccess(role: Role, staffRole: StaffRole | null | undefined,
   return { permissions, scope, staffRole: staffRole ?? null };
 }
 
+/** The Staff Management rights that only look or download (what a session opened from a shared link keeps). */
+export const STAFF_READ_ONLY: readonly StaffPermission[] = ["staff:view", "pay:view", "attendance:view", "staff:export"];
+
+/** `access` without anything that changes records: for a session opened from a shared link. */
+export function readOnlyStaffAccess(access: StaffAccess): StaffAccess {
+  return { ...access, permissions: access.permissions.filter((p) => STAFF_READ_ONLY.includes(p)) };
+}
+
 export function staffCan(access: Pick<StaffAccess, "permissions">, perm: StaffPermission): boolean {
   return access.permissions.includes(perm);
 }

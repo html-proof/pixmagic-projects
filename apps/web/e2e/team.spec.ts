@@ -58,7 +58,7 @@ test("an owner shares Customers and Products with a client, changes it while the
   await sidebar(page).getByRole("link", { name: "Team & Access" }).click();
   await expect(page).toHaveURL(/\/team/);
   await expect(page.getByRole("heading", { name: "Team & Access" })).toBeVisible();
-  await expect(page.getByTestId("summary-total")).toContainText("1");
+  await expect(page.getByTestId("summary-total")).toContainText("1 member in the team");
 
   // ---- Invite: Custom, Customers (list only) and Products (select all), with a message.
   const client = uniqueEmail("team-client");
@@ -82,13 +82,15 @@ test("an owner shares Customers and Products with a client, changes it while the
   await expect(page.getByText(`Invitation sent to ${client}.`)).toBeVisible();
   await expect(page.getByTestId("summary-pending")).toContainText("1");
   const row = page.getByTestId("team-row").filter({ hasText: client }).filter({ visible: true });
-  // Its email went out, so the list says so.
-  await expect(row).toContainText("Sent");
+  // Its email went out, so the list says so (sent, not "delivered": only the provider can say that).
+  await expect(row).toContainText("Email sent");
   await expect(row).toContainText("Custom");
+  await expect(row).toContainText("60 days left");
 
   // ---- The email, and its link (the token after #, never sent to a server).
   const mail = await latestMail(client);
-  expect(mail.Subject).toBe("You've been invited to access a business dashboard: Acme Goods");
+  expect(mail.Subject).toBe("You've been invited to view a bizinsights dashboard");
+  expect(mail.Text).toContain("No account registration or password is required.");
   expect(mail.Text).toContain("Here's the dashboard we discussed.");
   const link = /https?:\/\/\S+\/invite#token=[A-Za-z0-9_-]+/.exec(mail.Text)![0];
 
@@ -100,11 +102,13 @@ test("an owner shares Customers and Products with a client, changes it while the
   await guest.goto(link);
   await expect(guest).toHaveURL(/\/dashboard/);
   await expect(guest.getByLabel("Email Address")).toHaveCount(0);
+  // The token left the address bar before anything else on the page ran.
+  expect(guest.url()).not.toContain("token=");
 
   // ---- Their sidebar: the shared areas and their account, nothing else.
   const nav = sidebar(guest);
   await expect(guest.getByTestId("member-badge")).toContainText("Acme Goods");
-  await expect(guest.getByTestId("member-badge")).toContainText("Custom");
+  await expect(guest.getByTestId("member-badge")).toContainText("View only");
   await expect(nav.getByRole("link", { name: "Products" })).toBeVisible();
   await expect(nav.getByRole("link", { name: "Customers" })).toBeVisible();
   await expect(nav.getByRole("link", { name: "Stock" })).toBeVisible();
@@ -214,4 +218,95 @@ test("a member with nothing shared sees No access assigned, and the team page wo
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
     await page.getByTestId("invite-panel").getByRole("button", { name: "Cancel" }).click();
   }
+});
+
+test("a browser signed in to another account opens a shared link: the account stays as it was, the shared tab is view-only, and the link follows expiry and renewal", async ({ page, browser }) => {
+  test.setTimeout(150_000);
+  // ---- An owner shares Products only.
+  const ownerEmail = uniqueEmail("share-owner");
+  await signUp(page, ownerEmail);
+  const ws = await createWorkspace(page, "Shared Co");
+  await insertStore(ws, `share-${Date.now()}.myshopify.com`, ["read_orders", "read_products"]);
+  const client = uniqueEmail("share-client");
+  const sent = await page.evaluate(
+    async ({ w, email }) => {
+      const r = await fetch(`/api/workspaces/${w}/team/invitations`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email, role: "custom", permissions: ["products.view"] }) });
+      return (await r.json()) as { emailed: boolean; invitationId: string };
+    },
+    { w: ws, email: client },
+  );
+  expect(sent.emailed).toBe(true);
+  const link = /https?:\/\/\S+\/invite#token=[A-Za-z0-9_-]+/.exec((await latestMail(client)).Text)![0];
+
+  // ---- The client's browser is signed in to a bizinsights account of their own (another address),
+  // with their own business.
+  const ctx = await browser.newContext();
+  const own = await ctx.newPage();
+  const personal = uniqueEmail("share-personal");
+  await asNewVisitor(own);
+  await signUp(own, personal);
+  const theirs = await createWorkspace(own, "Client's Own Shop");
+
+  // ---- They open the link in another tab of the same browser: the shared dashboard, view-only.
+  const shared = await ctx.newPage();
+  await shared.goto(link);
+  await expect(shared).toHaveURL(/\/dashboard/);
+  await expect(shared.getByTestId("member-badge")).toContainText("Shared Co");
+  await expect(shared.getByTestId("member-badge")).toContainText("View only");
+  const nav = sidebar(shared);
+  await expect(nav.getByRole("link", { name: "Products" })).toBeVisible();
+  for (const hidden of ["Sales & Orders", "Customers", "Marketing", "Team & Access", "Settings"]) await expect(nav.getByRole("link", { name: hidden, exact: true }), hidden).toHaveCount(0);
+  // Nothing can be changed from it, whatever is tried.
+  const tryInvite = await shared.evaluate(async (w) => {
+    const r = await fetch(`/api/workspaces/${w}/team/invitations`, { method: "POST", headers: { "content-type": "application/json", "x-bi-context": "shared" }, body: JSON.stringify({ email: "x@example.com", role: "viewer", permissions: [] }) });
+    return r.status;
+  }, ws);
+  expect(tryInvite).toBe(403);
+
+  // ---- Their own tab is still their own account: not switched, not signed out, nothing merged.
+  await own.goto("/dashboard");
+  await expect(own.getByTestId("member-badge")).toHaveCount(0);
+  const me = await own.evaluate(async () => (await (await fetch("/api/me")).json()) as { user: { email: string }; shared: unknown; workspaces: Array<{ id: string }> });
+  expect(me.user.email).toBe(personal);
+  expect(me.shared).toBeNull();
+  expect(me.workspaces.map((w) => w.id)).toEqual([theirs]);
+
+  // ---- The owner copies the same link again (it doesn't break the one sent).
+  await page.goto("/team");
+  const row = page.getByTestId("team-row").filter({ hasText: client }).filter({ visible: true });
+  await expect(row).toContainText("Link opened");
+  await row.getByRole("button", { name: `Actions for ${client}` }).click();
+  await page.getByRole("menuitem", { name: "Copy link" }).click();
+  await expect(page.getByTestId("link-panel").getByTestId("invite-link")).toHaveValue(link);
+  await page.getByTestId("link-panel").getByRole("button", { name: "Done" }).click();
+
+  // ---- The access reaches its end date: the shared tab says so by itself and shows no data.
+  await db.query("UPDATE memberships SET access_expires_at = (now() at time zone 'utc') - interval '1 minute' WHERE workspace_id = $1 AND user_id = (SELECT id FROM users WHERE email = $2)", [ws, client]);
+  await db.query("UPDATE invitations SET expires_at = (now() at time zone 'utc') - interval '1 minute' WHERE workspace_id = $1 AND email = $2", [ws, client]);
+  // The check runs while the tab is in view (and the moment it comes back into view).
+  await shared.bringToFront();
+  await expect(shared.getByTestId("access-expired")).toBeVisible({ timeout: 15_000 });
+  await expect(shared.getByRole("heading", { name: "Your shared access has ended" })).toBeVisible();
+
+  // ---- Renewed by the owner: the same link opens the dashboard again.
+  await page.reload();
+  const expired = page.getByTestId("team-row").filter({ hasText: client }).filter({ visible: true });
+  await expect(expired).toContainText("Expired");
+  await expired.getByRole("button", { name: `Actions for ${client}` }).click();
+  await page.getByRole("menuitem", { name: "Renew access (60 days)" }).click();
+  await expect(page.getByText(`Access for ${client} renewed`)).toBeVisible();
+  await shared.goto(link);
+  await expect(shared).toHaveURL(/\/dashboard/);
+  await expect(sidebar(shared).getByRole("link", { name: "Products" })).toBeVisible();
+
+  // ---- Closing the shared dashboard leaves their own account signed in.
+  await shared.bringToFront();
+  await shared.getByRole("button", { name: "Account menu" }).focus();
+  await shared.keyboard.press("Enter");
+  await shared.getByRole("button", { name: "Close the shared dashboard" }).focus();
+  await shared.keyboard.press("Enter");
+  await expect(shared).not.toHaveURL(/\/dashboard/);
+  const still = await own.evaluate(async () => (await fetch("/api/me")).status);
+  expect(still).toBe(200);
+  await ctx.close();
 });

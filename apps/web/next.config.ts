@@ -10,6 +10,11 @@ export default function config(phase: string): NextConfig {
   const base: NextConfig = {
     images: { unoptimized: true },
     transpilePackages: ["@app/shared"],
+    // A page preloads every font in its CSS chunks. Turbopack's default chunking put Geist Mono's
+    // few hundred bytes of font CSS in with Geist Sans, so the sign-in and legal pages downloaded
+    // Mono (71 KB), which only the landing page uses. "graph" with no per-request cost gives each
+    // font its own chunk; globals.css stays one file. scripts/check-font-preloads.mjs holds the line.
+    experimental: { cssChunking: { type: "graph", requestCost: 0 } },
   };
   if (phase !== PHASE_DEVELOPMENT_SERVER) {
     // NEXT_EXPORT_DIR builds into another folder than `out` (e.g. while a local server is serving `out`).

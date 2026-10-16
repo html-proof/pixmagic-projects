@@ -849,6 +849,26 @@ describe("queue consumer", () => {
     expect(ok.m.acked).toBe(true);
   });
 
+  it("fails at once when the shop itself is unavailable, keeping Shopify's answer and the store's access", async () => {
+    // A frozen store answered 402 to all six attempts of every job (production logs, 2026-10-15).
+    const answers = [
+      [402, "Unavailable Shop"],
+      [404, "Not Found"],
+      [423, "Locked"],
+    ] as const;
+    for (const [status, answer] of answers) {
+      const store = await systemDb.store.update({ where: { id: (await makeStore(undefined, undefined, `shop-${status}.myshopify.com`)).id }, data: { status: "active" } });
+      const job = await systemDb.syncJob.create({ data: { workspaceId: store.workspaceId, storeId: store.id, kind: "shop" } });
+      const first = message({ storeId: store.id, kind: "shop", syncJobId: job.id }, 1);
+      await consume("sync", first.msg, { ...deps, fetchImpl: async () => new Response(JSON.stringify({ errors: answer }), { status }) });
+      expect(first.m).toMatchObject({ acked: true, retried: undefined });
+      // The dashboard explains the stop from this message (syncProblem).
+      expect(await systemDb.syncJob.findUniqueOrThrow({ where: { id: job.id } })).toMatchObject({ status: "failed", error: `Shopify ${status}: ${answer}` });
+      // Not lost access: the store isn't marked for reconnecting.
+      expect((await systemDb.store.findUniqueOrThrow({ where: { id: store.id } })).status).toBe("active");
+    }
+  });
+
   it("has the next reconcile recompute the days of an aggregate job that gave up", async () => {
     // Before: the message was acked after a log line, and the reconcile only repairs days with no
     // totals at all, so days that already had (now wrong) totals stayed wrong for good.

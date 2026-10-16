@@ -22,7 +22,7 @@ Account `605411278365`, region `ap-southeast-2` (Sydney); the WAF web ACL lives 
 | Large webhook bodies | S3 `insights-production-payloads-605411278365` (7-day lifecycle) | `apps/aws/src/s3Blobs.ts` |
 | Dumps, artifacts | S3 `insights-production-artifacts-605411278365` (30 days, versioned) | `infra/cdk/scripts/migrate-data.mjs` |
 | Sign-in | Cognito pool `insights-production` (from `infra/aws/cognito.yaml`) | `apps/api/src/cognito.ts` |
-| App email | SES (needs a verified sender, below) | `apps/aws/src/sesMailer.ts` |
+| App email | Resend (bizinsights.io verified, live 2026-10-16); SES as fallback (sandbox: verified recipients only); "App email" below | `packages/core/src/mail/`, `apps/aws/src/mailers.ts`, `apps/aws/src/sesMailer.ts` |
 | Secrets | Secrets Manager `insights/production/{app,db-owner,worker-cognito}`; settings in SSM `/insights/production/runtime` | `apps/aws/src/secrets.ts` |
 | Logs, alarms | CloudWatch (90 days), dashboard `insights-production`, SNS `insights-production-alarms`, budget US$150/month | `infra/cdk/lib/app-stack.ts` |
 | DB admin | EC2 `insights-production-admin` (t4g.nano, Systems Manager only, normally **stopped**) | `infra/cdk/lib/data-stack.ts` |
@@ -60,8 +60,9 @@ SESSION_SECRET and APP_RLS_PASSWORD, and prints key names only. A secret only it
 node infra/cdk/scripts/put-secrets.mjs --set META_APP_SECRET
 ```
 
-The functions read secrets at cold start; after changing one, force fresh instances with a deploy
-(or `aws lambda update-function-configuration --function-name insights-production-api --description refresh`).
+The functions read secrets at cold start; after changing one, force fresh instances with a deploy,
+or publish the same code as a new version and move the `live` alias ("App email" below shows how:
+changing `$LATEST` alone restarts nothing live).
 
 If Node's connections time out on this PC's network (IPv6-only hotspot with NAT64), set
 `$env:NODE_OPTIONS = "--network-family-autoselection-attempt-timeout=5000"` first.
@@ -358,13 +359,58 @@ Retiring it, on the owner's go-ahead, once AWS has been production for two quiet
    `apps/web/src/app/layout.tsx`: verify the new address before removing it.
 5. `git worktree remove ..\insights-cloudflare`.
 
+## App email (invitations, alerts)
+
+The app's own email goes through a provider chosen by configuration, never in code
+(`apps/aws/src/mailers.ts` `chooseMailer`): `EMAIL_PROVIDER` (`resend` or `ses`) when set, else
+**Resend** when `RESEND_API_KEY` is in the app secret, else **SES**. Every invitation email is
+recorded in `email_deliveries` (provider, its message id, status, attempts, the provider's error
+without addresses); the team page shows that status. A transient failure (rate limit, outage) is
+retried twice while the owner waits, then from the `email` queue after 1, 5 and 15 minutes (job
+`team_invitation`), five attempts in all, each with the same `Idempotency-Key`.
+
+- **SES**: identity `bizinsights.io` (Easy DKIM, above) works, but the account's request for
+  production access was **DENIED** (2026-10-16, case 179215020600103), so SES sends only to the
+  addresses verified in SES (sandbox, 200 a day). No code can get round that.
+- **Resend** (resend.com; free tier 3,000 emails a month, 100 a day) sends to any address: **live
+  since 2026-10-16**. Account: Resend login `tangoenery2004` (Google sign-in). Domain `bizinsights.io`,
+  region Tokyo (`ap-northeast-1`), **Verified**, click/open tracking off. Its records in the Cloudflare
+  zone, all **DNS only**: TXT `resend._domainkey` (DKIM public key), CNAME `rsend` →
+  `rsend-apne1.forge.rmta.net` and CNAME `send` → `send.forge.rmta.net` (return path / SPF). They
+  don't touch the apex, `www`, the SES DKIM CNAMEs or `_dmarc` (relaxed alignment passes on Resend's
+  DKIM). API key "bizinsights production": *Sending access*, `bizinsights.io` only. Webhook
+  `https://bizinsights.io/api/webhooks/email/resend` with `email.sent`, `email.delivered`,
+  `email.delivery_delayed`, `email.bounced`, `email.complained`, `email.failed`, `email.suppressed`
+  (no opens or clicks). Both values are in `insights/production/app` as `RESEND_API_KEY` and
+  `RESEND_WEBHOOK_SECRET`.
+  - **Replacing a value** (a key rotated in Resend): copy it with Resend's own copy button, run
+    `node infra/cdk/scripts/put-secrets.mjs --env production --set RESEND_API_KEY` (or
+    `RESEND_WEBHOOK_SECRET`) on the same PC: it reads the clipboard, refuses anything not shaped like
+    `re_...` / `whsec_...`, and prints names only. Then restart the functions (below).
+  - **Check**: invite an address you own; the team list says "Email sent", then "Email delivered"
+    once Resend's event arrives (CloudWatch: `mail delivery event`). An unsigned POST to the webhook
+    answers 401 `invalid_signature` (404 `not_configured` means the secret isn't loaded).
+  To go back to SES, set `EMAIL_PROVIDER=ses` (settings) or remove the key.
+
+**Restarting the functions after a secret changes.** They read secrets at a cold start, and the `live`
+aliases point at published versions, so changing `$LATEST` alone restarts nothing live. Publish the
+same code again and move the alias (what was done for v47 on 2026-10-16; the next CDK deploy publishes
+its own version as usual):
+
+```bash
+for f in api jobs cron; do n=insights-production-$f; d=$(aws lambda get-function-configuration --function-name $n --query Description --output text); aws lambda update-function-configuration --function-name $n --description "$d · secrets reloaded" >/dev/null; aws lambda wait function-updated --function-name $n; v=$(aws lambda publish-version --function-name $n --query Version --output text); aws lambda update-alias --function-name $n --name live --function-version $v >/dev/null; done
+```
+
+Check first that `$LATEST` holds the live code (same `CodeSha256` as the alias's version), or this
+would ship whatever `$LATEST` has.
+
 ## Owner-only steps
 
 - **Alerts**: an email address for alarms and the budget (`-c alertEmail=...`; confirm the SNS email).
-- **SES**: the sending domain bizinsights.io is set up (above); **production access is still to be
-  requested** (SES console → Account dashboard → Request production access, or
-  `aws sesv2 put-account-details`). Until then SES sends only to addresses verified in SES: an
-  invitation to anyone else fails to send and the inviter gets the link to pass on.
+- **Sign-up codes and password resets** come from Cognito's own email (`COGNITO_DEFAULT`): any
+  address, but at most 50 a day for the whole pool, from `no-reply@verificationemail.com`. Going past
+  that needs Cognito on SES (production access, denied so far) or a Cognito custom email sender
+  (a Lambda trigger + a KMS key, ~US$1/month) sending through Resend.
 - **Google sign-in**: add `https://insights-605411278365.auth.ap-southeast-2.amazoncognito.com/oauth2/idpresponse`
   to a Google OAuth client, put its secret with `put-secrets.mjs --set GOOGLE_SIGNIN_CLIENT_SECRET`,
   deploy with `-c googleClientId=<client id>`.
@@ -388,7 +434,29 @@ actual, 100% forecast, once an alert email is set). Biggest levers: the NAT gate
 database size. Cost allocation tags `app` and `environment` can be activated in Billing once AWS
 has seen them (up to 24 hours after the first deploy).
 
-Production stays on the lean tier by the owner's choice (cost, 2026-10-16), so two Trusted Advisor
-warnings are expected: "RDS Multi-AZ" (`dbMultiAz: true` adds a standby with automatic failover,
-~US$40/month) and "Single AZ Application Check" (`natGateways: 2` gives each AZ its own NAT,
-~US$47/month; with one, an outage in ap-southeast-2a cuts every function off from the internet).
+## Fault tolerance
+
+Production stays on the lean tier by the owner's choice (cost, 2026-10-16), so three Trusted
+Advisor fault-tolerance findings are expected: "Amazon RDS DB instances not using Multi-AZ
+deployment" and "Single AZ Application Check" (warnings), and "NAT Gateway AZ Independence"
+(error: the app subnet in ap-southeast-2b goes out through the NAT in 2a).
+
+They are one risk, an outage of ap-southeast-2a: the database and the only NAT gateway are both
+there, so the app stops whichever of the two survives. Fixing it takes both changes together:
+`dbMultiAz: true` (a standby in 2b with automatic failover, ~US$40/month) and `natGateways: 2`
+(a NAT per AZ, ~US$47/month), about US$87/month in all. Either one alone buys little. An outage of
+2b is already survivable: the functions run in both AZs and Lambda uses the one that works.
+
+What production does have, at no extra cost:
+- Functions in two AZs; queues with retries, backoff, a dead-letter queue (`insights-production-dlq`)
+  and jobs that wait out a database outage instead of failing (apps/worker `deferForDb`).
+- Database: 14 days of point-in-time restore, kept even if the instance is deleted
+  (`DeleteAutomatedBackups: false`), deletion protection, a final snapshot on delete, storage
+  autoscaling to 100 GB. DynamoDB with point-in-time recovery; versioned artifacts bucket.
+- Scheduled runs: Scheduler retries a hand-over Lambda refuses (10 minutes), Lambda retries a failed
+  run twice; a tick that still didn't run goes to `insights-production-cron-missed` (alarm
+  `cron-missed-ticks`) and the next tick takes over.
+- Alarms on the topic `insights-production-alarms`: function errors, throttles and latency, queue age,
+  the dead-letter queue, database CPU/memory/storage/connections, NAT gateway port allocation and
+  dropped packets, plus RDS's own events (availability, failure, failover, low storage, maintenance,
+  recovery, restoration). **Nobody receives them until an alert email is set** (Owner-only steps).

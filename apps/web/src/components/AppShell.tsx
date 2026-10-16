@@ -45,7 +45,8 @@ import { CommandPalette, type PaletteItem } from "@/components/CommandPalette";
 import { ShopifyIcon } from "@/components/ShopifyIcon";
 import { fmtRelative } from "@/components/dashboard/format";
 import { openView, topicInfo, TOPICS, useCurrentView, type Topic } from "@/components/dashboard/topics";
-import { useApi } from "@/lib/api";
+import { setSharedTab, useApi } from "@/lib/api";
+import { closeSharedDashboard } from "@/components/team/AccessStates";
 import { leaveTo, signOut } from "@/lib/auth";
 import { CONTACT } from "@/lib/contact";
 import { SETTINGS_PAGES } from "@/lib/settingsNav";
@@ -161,8 +162,12 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
         // Whose dashboard this is, and as what: someone from outside the business sees it at a glance.
         <div className="rounded-xl border border-border bg-bg/60 px-3 py-2.5" data-testid="member-badge">
           <p className="truncate text-sm font-semibold">{workspace.name}</p>
-          <p className="text-xs text-muted">Shared with you · {ROLE_INFO[access.role].label}</p>
-          {me.shared && <p className="mt-1 text-xs text-muted">Opened from your invitation link: no sign-in needed.</p>}
+          <p className="text-xs text-muted">Shared with you · {me.shared ? "View only" : ROLE_INFO[access.role].label}</p>
+          {me.shared && (
+            <p className="mt-1 text-xs text-muted" data-testid="shared-badge">
+              Opened from your invitation link: no sign-in needed{me.shared.expiresAt ? `. Link works until ${new Date(me.shared.expiresAt).toLocaleDateString(undefined, { dateStyle: "medium" })}.` : "."}
+            </p>
+          )}
         </div>
       )}
       <NavGroup items={main} onNavigate={onNavigate} />
@@ -255,9 +260,18 @@ function AccountMenu() {
   useEffect(() => setOpen(false), [path]);
 
   async function logout() {
+    // A shared dashboard closes only its own shared-link session: an account signed in on this
+    // browser stays signed in.
+    if (me.shared) return closeSharedDashboard(router);
     // Lands on /login?signedOut=1 (or, after Google, the user pool's logout page first), which
     // won't send a session that survived an unreachable logout call straight back in.
     leaveTo(await signOut(), router);
+  }
+
+  /** From a shared dashboard to the person's own account: this tab leaves the shared session (which stays open for its link). */
+  function ownAccount() {
+    setSharedTab(false);
+    router.replace("/login");
   }
 
   return (
@@ -283,8 +297,8 @@ function AccountMenu() {
           <div className="my-1 border-t border-border" />
           {me.shared ? (
             <>
-              <p className="px-3 py-1.5 text-xs text-muted">You opened this shared dashboard from an invitation link. Your own account isn&apos;t signed in here.</p>
-              <button type="button" onClick={logout} className={menuItem}>
+              <p className="px-3 py-1.5 text-xs text-muted">You opened this shared dashboard from an invitation link. It&apos;s view-only, and your own account isn&apos;t used here.</p>
+              <button type="button" onClick={ownAccount} className={menuItem}>
                 <UserRound aria-hidden className="h-4 w-4 text-muted" />
                 Sign in to your account
               </button>

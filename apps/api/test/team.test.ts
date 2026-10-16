@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { encryptTokenFields, normalizeRestOrder, pruneTeamRecords, recomputeDays, upsertOrder, type FetchLike } from "@app/core";
+import { createHmac } from "node:crypto";
+import { encryptTokenFields, MailError, normalizeRestOrder, pruneTeamRecords, recomputeDays, retryInvitationEmail, upsertOrder, type FetchLike } from "@app/core";
 import { systemDb } from "@app/db";
 import { LEGACY_GRANTS, sha256Hex } from "@app/shared";
 import { clean, cookiesFrom, createStore, createWorkspace, ORIGIN, setup, signIn, teardown, type TestCtx } from "./helpers.js";
@@ -123,12 +124,17 @@ describe("inviting someone with Customers access only (scenarios 1-6)", () => {
 
     // 2. The email: subject, the business, the message, the link (token in the fragment), the expiry.
     const mail = lastMailTo(email)!;
-    expect(mail.subject).toBe("You've been invited to access a business dashboard: Acme");
-    expect(mail.text).toContain("has invited you to access the Acme business dashboard");
+    expect(mail.subject).toBe("You've been invited to view a bizinsights dashboard");
+    expect(mail.text).toContain("You've been invited to securely view a shared business dashboard through bizinsights: Acme");
+    expect(mail.text).toContain("Your access includes:");
     expect(mail.text).toContain("Customer details");
     expect(mail.text).toContain("Here's the customer view we talked about.");
-    expect(mail.text).toContain("If you weren't expecting this invitation, you can safely ignore this email.");
-    expect(mail.html).toContain("Open the dashboard");
+    expect(mail.text).toContain("No account registration or password is required.");
+    expect(mail.text).toMatch(/This invitation expires on \w+ \d+, \d{4}/);
+    expect(mail.text).toContain("If you were not expecting this invitation, you can ignore this email.");
+    expect(mail.html).toContain("Open Shared Dashboard");
+    // No tracking: no images or pixels, and the only links are the invitation's own.
+    expect(mail.html).not.toMatch(/<img/i);
     // Replies reach the owner who sent it (the sender address has no mailbox).
     expect(mail.replyTo).toBe(b.owner.user.email);
     expect(mail.text).toContain("Questions? Reply to this email to reach");
@@ -271,7 +277,7 @@ describe("changing access after they joined (scenarios 7-11)", () => {
 });
 
 describe("invitation links (scenario 12)", () => {
-  it("is accepted once, stops when cancelled, expires, and a resend replaces the old link", async () => {
+  it("is accepted once, stops when cancelled, expires, and a resend sends the same link again", async () => {
     const b = await business();
     const { guest, token } = await inviteAndJoin(b, "once@example.com", "viewer", ["analytics.sales"]);
     const reused = await call("POST", "/invitations/accept", guest.headers, { token });
@@ -290,12 +296,13 @@ describe("invitation links (scenario 12)", () => {
     let team = ok(await call("GET", `/workspaces/${b.ws}/team`, b.owner.headers));
     expect(team.summary).toMatchObject({ pendingInvitations: 0, endedInvitations: 1 });
 
-    // Resent: a new link that works; the old one doesn't.
+    // Resent: renewed, with the same link, which works again; no second invitation.
     const resent = ok(await call("POST", `/workspaces/${b.ws}/team/invitations/${late.id}/resend`, b.owner.headers));
     expect(resent.emailed).toBe(true);
     const freshToken = tokenFrom(lastMailTo("late@example.com")!.text)!;
-    expect(freshToken).not.toBe(lateToken);
-    expect(ok(await call("POST", "/invitations/preview", {}, { token: lateToken })).status).toBe("invalid");
+    expect(freshToken).toBe(lateToken);
+    expect(ok(await call("POST", "/invitations/preview", {}, { token: lateToken })).status).toBe("pending");
+    expect(await systemDb.invitation.count({ where: { email: "late@example.com" } })).toBe(1);
     team = ok(await call("GET", `/workspaces/${b.ws}/team`, b.owner.headers));
     expect(team.summary).toMatchObject({ pendingInvitations: 1, endedInvitations: 0 });
 
@@ -431,7 +438,7 @@ describe("email problems and existing users (scenarios 17-18)", () => {
     expect(bad.json().error).toBe("validation");
     const send = ctx.mailer.send;
     ctx.mailer.send = async () => {
-      throw new Error("SES says no");
+      throw new MailError("Resend send failed (422 validation_error): Invalid `to` field", "resend", "permanent", "validation_error");
     };
     try {
       const r = ok(await call("POST", `/workspaces/${b.ws}/team/invitations`, b.owner.headers, { email: "bounce@example.com", role: "viewer", permissions: ["analytics.sales"] }));
@@ -449,7 +456,11 @@ describe("email problems and existing users (scenarios 17-18)", () => {
         throw new Error("SES send failed (400): Email address is not verified. The following identities failed the check in region AP-SOUTHEAST-2: x***@gmail.com");
       };
       const sandboxed = ok(await call("POST", `/workspaces/${b.ws}/team/invitations`, b.owner.headers, { email: "sandboxed@example.com", role: "viewer", permissions: ["analytics.sales"] }));
-      expect(sandboxed).toMatchObject({ emailed: false, emailProblem: "not_allowed" });
+      expect(sandboxed).toMatchObject({ emailed: false, emailProblem: "not_allowed", delivery: "not_allowed" });
+      // Recorded as the provider said it, with no address kept in the record.
+      const d = await systemDb.emailDelivery.findFirstOrThrow({ where: { invitation: { email: "sandboxed@example.com" } } });
+      expect(d).toMatchObject({ status: "not_allowed", provider: "unknown" });
+      expect(d.errorMessage).not.toContain("@gmail.com");
     } finally {
       ctx.mailer.send = send;
     }
@@ -582,13 +593,17 @@ describe("opening the dashboard straight from the invitation link", () => {
     const token = await sendInvite(b, "newcomer@example.com");
     const res = await open(token);
     expect(res.statusCode, res.body).toBe(200);
-    expect(res.json()).toEqual({ workspaceId: b.ws, signedIn: true });
+    expect(res.json()).toMatchObject({ workspaceId: b.ws, signedIn: true, shared: true });
     const session = sessionOf(res);
-    expect(session.cookie).toContain("__session=");
-    // Exactly what was shared, and the app knows it was opened from a link.
+    // Its own cookie: never the account session's.
+    expect(session.cookie).toContain("__share=");
+    expect(session.cookie).not.toContain("__session=");
+    expect(res.headers["set-cookie"]).toMatch(/__share=[^;]+;.*HttpOnly/i);
+    expect(res.headers["set-cookie"]).toMatch(/SameSite=Lax/i);
+    // Exactly what was shared, and the app knows it was opened from a link (view-only).
     const me = ok(await call("GET", "/me", session));
     expect(me.user.email).toBe("newcomer@example.com");
-    expect(me.shared).toEqual({ workspaceId: b.ws });
+    expect(me.shared).toMatchObject({ workspaceId: b.ws, readOnly: true });
     expect(me.workspaces.map((w: { id: string }) => w.id)).toEqual([b.ws]);
     expect(ok(await call("GET", `/workspaces/${b.ws}/access`, session))).toMatchObject({ role: "viewer", modules: ["analytics", "products"] });
     expect(Object.keys(ok(await overview(b, session)).modules).sort()).toEqual(["catalog", "sales_overview"]);
@@ -618,12 +633,33 @@ describe("opening the dashboard straight from the invitation link", () => {
     expect(ok(await call("POST", "/invitations/preview", {}, { token }))).toEqual({ status: "accepted", workspace: "Acme", inviter: expect.any(String) });
   });
 
-  it("stops reopening the dashboard 60 days after it was first used", async () => {
+  it("works until the invitation's end date (60 days by default), then stops, until an owner renews it", async () => {
     const b = await business();
     const token = await sendInvite(b, "old@example.com");
-    ok(await open(token));
-    await systemDb.invitation.updateMany({ where: { email: "old@example.com" }, data: { acceptedAt: new Date(Date.now() - 61 * 86_400_000) } });
+    const inv = await systemDb.invitation.findFirstOrThrow({ where: { email: "old@example.com" } });
+    expect(Math.round((inv.expiresAt.getTime() - Date.now()) / 86_400_000)).toBe(60);
+    const session = sessionOf(await open(token));
+    const m = await systemDb.membership.findFirstOrThrow({ where: { workspaceId: b.ws, user: { email: "old@example.com" } } });
+    expect(m.accessExpiresAt?.getTime()).toBe(inv.expiresAt.getTime());
+    // The end date passes: the open dashboard stops, and the link no longer opens it.
+    const past = new Date(Date.now() - 1000);
+    await systemDb.membership.update({ where: { id: m.id }, data: { accessExpiresAt: past } });
+    await systemDb.invitation.update({ where: { id: inv.id }, data: { expiresAt: past } });
+    const stopped = await overview(b, session);
+    expect(stopped.statusCode).toBe(403);
+    expect(stopped.json().error).toBe("access_expired");
     expect((await open(token)).statusCode).toBe(400);
+    let team = ok(await call("GET", `/workspaces/${b.ws}/team`, b.owner.headers));
+    expect(team.rows.find((r: { email: string }) => r.email === "old@example.com")).toMatchObject({ kind: "member", status: "expired" });
+    expect(team.summary.invitations).toMatchObject({ expired: 1, active: 0 });
+    // Renewed: the same link opens it again, for another 60 days.
+    const renewed = ok(await call("POST", `/workspaces/${b.ws}/team/members/${m.id}/renew`, b.owner.headers, { days: 60 }));
+    expect(Math.round((Date.parse(renewed.expiresAt) - Date.now()) / 86_400_000)).toBe(60);
+    ok(await overview(b, sessionOf(await open(token))));
+    team = ok(await call("GET", `/workspaces/${b.ws}/team`, b.owner.headers));
+    expect(team.summary.invitations).toMatchObject({ expired: 0, active: 1, total: 1 });
+    // Only up to 60 days at a time.
+    expect((await call("POST", `/workspaces/${b.ws}/team/members/${m.id}/renew`, b.owner.headers, { days: 61 })).statusCode).toBe(400);
   });
 
   it("opens only the shared workspace: not the account, nor its other workspaces", async () => {
@@ -632,7 +668,7 @@ describe("opening the dashboard straight from the invitation link", () => {
     const own = await createWorkspace(ctx, existing.headers, "Their own");
     const token = await sendInvite(b, "existing@example.com");
     const res = await open(token);
-    expect(res.json()).toEqual({ workspaceId: b.ws, signedIn: true });
+    expect(res.json()).toMatchObject({ workspaceId: b.ws, signedIn: true });
     const link = sessionOf(res);
     expect(ok(await call("GET", "/me", link)).workspaces.map((w: { id: string }) => w.id)).toEqual([b.ws]);
     expect((await call("GET", `/workspaces/${own}/stores`, link)).statusCode).toBe(404);
@@ -663,29 +699,52 @@ describe("opening the dashboard straight from the invitation link", () => {
     expect(await systemDb.membership.count({ where: { workspaceId: b.ws } })).toBe(1);
   });
 
-  it("signed in as someone else: says who, and opens it as the invited person when asked", async () => {
+  it("signed in as someone else: opens the shared dashboard alongside, never switching, merging or signing them out", async () => {
     const b = await business();
     const token = await sendInvite(b, "invited@example.com");
     const other = await signIn(ctx, "other", "other@example.com");
-    const wrong = await open(token, other.headers);
-    expect(wrong.statusCode).toBe(409);
-    expect(wrong.json()).toMatchObject({ error: "signed_in_as_other", detail: { signedInAs: "other@example.com" } });
-    expect(await systemDb.membership.count({ where: { workspaceId: b.ws } })).toBe(1);
-    const switched = await open(token, other.headers, { switch: true });
-    expect(switched.statusCode, switched.body).toBe(200);
-    // That browser's own session is signed out; the new one is the invited person's.
-    expect((await call("GET", "/me", other.headers)).statusCode).toBe(401);
-    expect(ok(await call("GET", "/me", sessionOf(switched))).user.email).toBe("invited@example.com");
+    const theirOwn = await createWorkspace(ctx, other.headers, "Other's business");
+    const res = await open(token, other.headers);
+    expect(res.statusCode, res.body).toBe(200);
+    // Only the shared-link cookie is set: the account's session is untouched.
+    expect(cookiesFrom(res)).toContain("__share=");
+    expect(cookiesFrom(res)).not.toContain("__session=");
+    const browser = { ...other.headers, cookie: `${other.headers.cookie}; ${cookiesFrom(res)}` };
+    // The account's tabs: still the account, with its own workspace and nothing of the shared one.
+    const own = ok(await call("GET", "/me", browser));
+    expect(own.user.email).toBe("other@example.com");
+    expect(own.shared).toBeNull();
+    expect(own.workspaces.map((w: { id: string }) => w.id)).toEqual([theirOwn]);
+    expect((await overview(b, browser)).statusCode).toBe(404);
+    // The shared tab: the invited person's view-only access to that workspace only.
+    const sharedTab = { ...browser, "x-bi-context": "shared" };
+    const shared = ok(await call("GET", "/me", sharedTab));
+    expect(shared.user.email).toBe("invited@example.com");
+    expect(shared.workspaces.map((w: { id: string }) => w.id)).toEqual([b.ws]);
+    ok(await overview(b, sharedTab));
+    expect((await call("GET", `/workspaces/${theirOwn}/stores`, sharedTab)).statusCode).toBe(404);
+    // Closing the shared dashboard ends only the shared session.
+    const closed = await call("POST", "/auth/logout", sharedTab);
+    expect(closed.headers["set-cookie"]).toMatch(/__share=;/);
+    expect(closed.headers["set-cookie"]).not.toMatch(/__session=;/);
+    expect(ok(await call("GET", "/me", other.headers)).user.email).toBe("other@example.com");
   });
 
-  it("signed in already as the invited person: accepted, and their own sign-in carries on", async () => {
+  it("signed in already as the invited person: their account keeps its own access; the shared tab is view-only", async () => {
     const b = await business();
-    const token = await sendInvite(b, "invited@example.com");
+    ok(await call("POST", `/workspaces/${b.ws}/team/invitations`, b.owner.headers, { email: "invited@example.com", role: "manager", permissions: ["integrations.status", "integrations.manage"] }));
+    const token = tokenFrom(lastMailTo("invited@example.com")!.text)!;
     const invited = await signIn(ctx, "invited", "invited@example.com");
     const res = await open(token, invited.headers);
-    expect(ok(res)).toEqual({ workspaceId: b.ws, signedIn: true });
+    expect(ok(res)).toMatchObject({ workspaceId: b.ws, signedIn: true });
     expect(cookiesFrom(res)).not.toContain("__session=");
     expect(ok(await call("GET", "/me", invited.headers)).shared).toBeNull();
+    // Through the link: what the invitation shows, never what it lets them change.
+    const sharedTab = { ...ORIGIN, cookie: cookiesFrom(res), "x-bi-context": "shared" };
+    const viaLink = ok(await call("GET", `/workspaces/${b.ws}/access`, sharedTab));
+    expect(viaLink).toMatchObject({ readOnly: true, permissions: ["integrations.status"] });
+    // Signed in to their own account they hold what was granted (the link adds nothing to it either).
+    expect(ok(await call("GET", `/workspaces/${b.ws}/access`, invited.headers))).toMatchObject({ readOnly: false, permissions: ["integrations.status", "integrations.manage"] });
   });
 
   it("says a link that isn't one, or was cancelled, can't be used", async () => {
@@ -697,5 +756,286 @@ describe("opening the dashboard straight from the invitation link", () => {
     const res = await open(token);
     expect(res.statusCode).toBe(400);
     expect(res.json().detail).toEqual({ status: "revoked" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The shared dashboard's security model and the invitation's lifecycle, end to end (the brief's
+// tests 1-20 at the API; the browser side is apps/web/e2e/sharing.spec.ts).
+// ---------------------------------------------------------------------------
+
+describe("shared dashboards: who can see what, and for how long", () => {
+  // The in-memory mailer keeps every email of the run: each test here counts only its own.
+  beforeEach(() => {
+    ctx.mailer.sent.length = 0;
+    ctx.mailer.fail.length = 0;
+  });
+  const invite = async (b: Awaited<ReturnType<typeof business>>, email: string, permissions: string[], role = "custom", extra: Record<string, unknown> = {}) => {
+    const r = ok(await call("POST", `/workspaces/${b.ws}/team/invitations`, b.owner.headers, { email, role, permissions, ...extra }));
+    return { ...r, token: tokenFrom(lastMailTo(email)!.text)! };
+  };
+  /** A browser that opened the link: its shared-link cookie, from our own page, in a shared tab. */
+  const openLink = async (token: string) => {
+    const res = await call("POST", "/invitations/open", ORIGIN, { token });
+    expect(res.statusCode, res.body).toBe(200);
+    return { ...ORIGIN, cookie: cookiesFrom(res), "x-bi-context": "shared" };
+  };
+  const memberOf = (ws: string, email: string) => systemDb.membership.findFirstOrThrow({ where: { workspaceId: ws, user: { email } } });
+
+  it("invites any address (Gmail, Outlook, a business domain): no allowlist, one email each, recorded as sent", async () => {
+    const b = await business();
+    for (const email of ["someone.new@gmail.com", "client@outlook.com", "accounts@acme-agency.com.au"]) {
+      const r = await invite(b, email, ["analytics.sales"]);
+      expect(r).toMatchObject({ emailed: true, delivery: "sent" });
+      expect(r.url).toBeUndefined();
+      const d = await systemDb.emailDelivery.findFirstOrThrow({ where: { invitationId: r.invitationId } });
+      expect(d).toMatchObject({ status: "sent", provider: "memory", attempts: 1 });
+      expect(d.providerMessageId).toMatch(/^mem-/);
+    }
+    expect(ctx.mailer.sent.map((m) => m.to).sort()).toEqual(["accounts@acme-agency.com.au", "client@outlook.com", "someone.new@gmail.com"]);
+    // Each attempt at one delivery carries the same idempotency key (a retried send goes out once).
+    expect(new Set(ctx.mailer.sent.map((m) => m.idempotencyKey)).size).toBe(3);
+    const team = ok(await call("GET", `/workspaces/${b.ws}/team`, b.owner.headers));
+    expect(team.summary.invitations).toEqual({ total: 3, active: 0, pending: 3, expired: 0, revoked: 0 });
+    expect(team.rows.filter((r: { kind: string }) => r.kind === "invitation").every((r: { delivery: { status: string } }) => r.delivery.status === "sent")).toBe(true);
+  });
+
+  it("shows exactly the permitted sections, and every other section's API refuses (Products and Marketing only)", async () => {
+    const b = await business();
+    const { token } = await invite(b, "pm@example.com", ["products.view", "products.performance", "marketing.ads"]);
+    const tab = await openLink(token);
+    const access = ok(await call("GET", `/workspaces/${b.ws}/access`, tab));
+    expect(access.modules).toEqual(["products", "marketing"]);
+    const ov = ok(await overview(b, tab));
+    expect(Object.keys(ov.modules).sort()).toEqual(expect.arrayContaining(["catalog", "top_products"]));
+    for (const hidden of ["sales_overview", "refunds", "customers", "recent_orders", "inventory", "fulfillment", "funnel", "channels", "discount_codes"]) expect(ov.modules[hidden], hidden).toBeUndefined();
+    // Sections not shared: refused at the API, not just hidden in the page.
+    expect((await call("GET", `/workspaces/${b.ws}/stores/${b.store.id}/contacts`, tab)).statusCode).toBe(403);
+    expect((await call("GET", `/workspaces/${b.ws}/stores/${b.store.id}/export?section=sales&preset=last_7_days`, tab)).statusCode).toBe(403);
+    expect((await call("GET", `/workspaces/${b.ws}/team`, tab)).statusCode).toBe(403);
+    expect((await call("GET", `/workspaces/${b.ws}/staff/employees`, tab)).statusCode).toBe(403);
+    // No store credentials or tokens anywhere in what the shared tab receives.
+    for (const body of [JSON.stringify(ov), JSON.stringify(access), JSON.stringify(ok(await call("GET", "/me", tab))), JSON.stringify(ok(await call("GET", `/workspaces/${b.ws}/stores`, tab)))]) {
+      expect(body).not.toMatch(/shpat_|accessToken|access_token|refreshToken|tokenHash|token_sealed|tokenSealed/);
+    }
+  });
+
+  it("an admin's link is view-only: everything to look at, nothing to change", async () => {
+    const b = await business();
+    const { token } = await invite(b, "partner@example.com", [], "admin");
+    const tab = await openLink(token);
+    const access = ok(await call("GET", `/workspaces/${b.ws}/access`, tab));
+    expect(access).toMatchObject({ role: "viewer", fullAccess: false, readOnly: true });
+    expect(access.permissions).not.toContain("integrations.manage");
+    expect(access.permissions).not.toContain("staff.manage");
+    ok(await overview(b, tab));
+    for (const [method, url, payload] of [
+      ["POST", `/workspaces/${b.ws}/team/invitations`, { email: "x@example.com", role: "viewer", permissions: [] }],
+      ["GET", `/workspaces/${b.ws}/team`],
+      ["POST", `/workspaces/${b.ws}/stores/${b.store.id}/resync`],
+      ["GET", `/workspaces/${b.ws}/api-keys`],
+    ] as const) {
+      const r = await call(method, url, tab, payload);
+      expect([403, 404], `${method} ${url}: ${r.body}`).toContain(r.statusCode);
+    }
+  });
+
+  it("permission changes reach an open shared dashboard on its next request, both ways", async () => {
+    const b = await business();
+    const { token } = await invite(b, "live@example.com", ["products.view"]);
+    const tab = await openLink(token);
+    const before = await overview(b, tab);
+    const fp1 = String(before.headers["x-access-fp"]);
+    expect(Object.keys(before.json().modules)).not.toContain("sales_overview");
+    const m = await memberOf(b.ws, "live@example.com");
+    // Added: the next request has it, and says the access changed.
+    ok(await call("PATCH", `/workspaces/${b.ws}/team/members/${m.id}`, b.owner.headers, { role: "custom", permissions: ["products.view", "analytics.sales"] }));
+    const added = await overview(b, tab);
+    expect(Object.keys(added.json().modules)).toContain("sales_overview");
+    expect(String(added.headers["x-access-fp"])).not.toBe(fp1);
+    // The 5-second check answers 304 while nothing changed, and the new access when it did.
+    const etag = `"${String(added.headers["x-access-fp"]).split(":")[1]}"`;
+    expect((await call("GET", `/workspaces/${b.ws}/access`, { ...tab, "if-none-match": etag })).statusCode).toBe(304);
+    // Removed: gone from the very next request.
+    ok(await call("PATCH", `/workspaces/${b.ws}/team/members/${m.id}`, b.owner.headers, { role: "custom", permissions: ["analytics.sales"] }));
+    const removed = ok(await overview(b, tab));
+    expect(removed.modules.catalog).toBeUndefined();
+    expect((await call("GET", `/workspaces/${b.ws}/access`, { ...tab, "if-none-match": etag })).statusCode).toBe(200);
+  });
+
+  it("revoking ends every open tab and the link at once; restoring brings both back", async () => {
+    const b = await business();
+    const { token } = await invite(b, "gone@example.com", ["analytics.sales"]);
+    const phone = await openLink(token);
+    const laptop = await openLink(token);
+    const m = await memberOf(b.ws, "gone@example.com");
+    ok(await call("POST", `/workspaces/${b.ws}/team/members/${m.id}/revoke`, b.owner.headers));
+    for (const tab of [phone, laptop]) {
+      const r = await overview(b, tab);
+      expect(r.statusCode).toBe(403);
+      expect(r.json().error).toBe("access_revoked");
+    }
+    expect((await call("POST", "/invitations/open", ORIGIN, { token })).statusCode).toBe(400);
+    ok(await call("POST", `/workspaces/${b.ws}/team/members/${m.id}/restore`, b.owner.headers));
+    ok(await overview(b, phone));
+  });
+
+  it("keeps tenants apart: one business's link reaches nothing of another's, by any id", async () => {
+    const a = await business("Alpha");
+    const z = await business("Zeta");
+    const { token } = await invite(a, "shared@example.com", ["analytics.sales", "products.view"]);
+    const { invitationId: zInvitation } = await invite(z, "theirs@example.com", ["analytics.sales"]);
+    const tab = await openLink(token);
+    ok(await overview(a, tab));
+    expect((await overview({ ws: z.ws, store: z.store }, tab)).statusCode).toBe(404);
+    expect((await overview({ ws: a.ws, store: z.store }, tab)).statusCode).toBe(404);
+    expect((await call("GET", `/workspaces/${z.ws}/access`, tab)).statusCode).toBe(404);
+    // An owner of one business can't act on the other's invitations by id.
+    for (const path of ["link", "replace-link", "renew", "resend", "revoke"]) {
+      expect((await call("POST", `/workspaces/${a.ws}/team/invitations/${zInvitation}/${path}`, a.owner.headers, {})).statusCode, path).toBe(404);
+    }
+    expect((await call("GET", `/workspaces/${a.ws}/team/history?invitationId=${zInvitation}`, a.owner.headers)).statusCode).toBe(404);
+  });
+
+  it("refuses links that aren't real: forged, malformed, truncated, or another's hash", async () => {
+    const b = await business();
+    const { token } = await invite(b, "real@example.com", ["analytics.sales"]);
+    const inv = await systemDb.invitation.findFirstOrThrow({ where: { email: "real@example.com" } });
+    for (const t of ["x".repeat(43), token.slice(0, -1), `${token}A`, inv.tokenHash, inv.id, "../../etc/passwd-0000"]) {
+      expect(ok(await call("POST", "/invitations/preview", {}, { token: t })).status, t).toBe("invalid");
+      expect((await call("POST", "/invitations/open", ORIGIN, { token: t })).statusCode, t).toBe(400);
+    }
+    expect((await call("POST", "/invitations/open", ORIGIN, { token: "short" })).statusCode).toBe(400);
+    expect((await call("POST", "/invitations/open", ORIGIN, {})).statusCode).toBe(400);
+    // A session cookie made up or altered is no session at all.
+    expect((await call("GET", "/me", { ...ORIGIN, cookie: "__share=eyJ2IjoxfQ.forged", "x-bi-context": "shared" })).statusCode).toBe(401);
+    // And nothing was accepted on the way.
+    expect(await systemDb.membership.count({ where: { workspaceId: b.ws } })).toBe(1);
+  });
+
+  it("a shared-link cookie can't be used cross-site (CSRF), nor reach account endpoints", async () => {
+    const b = await business();
+    const { token } = await invite(b, "csrf2@example.com", ["analytics.sales"]);
+    const tab = await openLink(token);
+    const evil = { ...tab, origin: "https://evil.example" };
+    expect((await call("POST", "/auth/logout", evil)).statusCode).toBe(403);
+    for (const [method, url] of [["GET", "/auth/account"], ["POST", "/workspaces"], ["POST", "/auth/logout-all"]] as const) {
+      const r = await call(method, url, tab, method === "POST" ? { name: "x" } : undefined);
+      expect(r.statusCode, url).toBe(403);
+      expect(r.json().error, url).toBe("shared_link");
+    }
+  });
+
+  it("copies the same link again, replaces it on request, renews, and keeps an access history", async () => {
+    const b = await business();
+    const { token, invitationId } = await invite(b, "copy@example.com", ["analytics.sales"], "custom", { expiresInDays: 7 });
+    // Copy: the very link the email carried, so it doesn't break the one already sent.
+    const copied = ok(await call("POST", `/workspaces/${b.ws}/team/invitations/${invitationId}/link`, b.owner.headers));
+    expect(tokenFrom(copied.url)).toBe(token);
+    // Renew a pending one: same link, new end date.
+    const renewed = ok(await call("POST", `/workspaces/${b.ws}/team/invitations/${invitationId}/renew`, b.owner.headers, {}));
+    expect(Math.round((Date.parse(renewed.expiresAt) - Date.now()) / 86_400_000)).toBe(60);
+    const tab = await openLink(token);
+    // Replace: the old link stops opening it, the new one works; tabs already open carry on.
+    const replaced = ok(await call("POST", `/workspaces/${b.ws}/team/invitations/${invitationId}/replace-link`, b.owner.headers));
+    const fresh = tokenFrom(replaced.url)!;
+    expect(fresh).not.toBe(token);
+    expect((await call("POST", "/invitations/open", ORIGIN, { token })).statusCode).toBe(400);
+    await openLink(fresh);
+    ok(await overview(b, tab));
+    // The history says what happened, and from where the link was opened.
+    const m = await memberOf(b.ws, "copy@example.com");
+    const { entries } = ok(await call("GET", `/workspaces/${b.ws}/team/history?memberId=${m.id}`, b.owner.headers));
+    const actions = entries.map((e: { action: string }) => e.action);
+    for (const a of ["member.invited", "member.invitation_link_copied", "member.invitation_renewed", "member.joined", "member.link_opened", "member.invitation_link_replaced"]) expect(actions, a).toContain(a);
+    expect(entries.find((e: { action: string }) => e.action === "member.link_opened").actor).toBe("copy@example.com");
+    // Only owners and admins see any of it.
+    expect((await call("GET", `/workspaces/${b.ws}/team/history?memberId=${m.id}`, tab)).statusCode).toBe(403);
+    expect((await call("POST", `/workspaces/${b.ws}/team/invitations/${invitationId}/link`, tab)).statusCode).toBe(403);
+  });
+
+  it("a resend creates no second invitation or grant, and a second invite replaces the first", async () => {
+    const b = await business();
+    const first = await invite(b, "twice@example.com", ["analytics.sales"]);
+    ok(await call("POST", `/workspaces/${b.ws}/team/invitations/${first.invitationId}/resend`, b.owner.headers));
+    ok(await call("POST", `/workspaces/${b.ws}/team/invitations/${first.invitationId}/resend`, b.owner.headers));
+    expect(await systemDb.invitation.count({ where: { workspaceId: b.ws, email: "twice@example.com" } })).toBe(1);
+    expect(ctx.mailer.sent.filter((m) => m.to === "twice@example.com").map((m) => tokenFrom(m.text))).toEqual([first.token, first.token, first.token]);
+    const second = await invite(b, "twice@example.com", ["products.view"]);
+    expect(second.replaced).toBe(1);
+    expect((await call("POST", "/invitations/open", ORIGIN, { token: first.token })).statusCode).toBe(400);
+    await openLink(second.token);
+    await openLink(second.token);
+    expect(await systemDb.membership.count({ where: { workspaceId: b.ws, user: { email: "twice@example.com" } } })).toBe(1);
+    expect((await call("POST", `/workspaces/${b.ws}/team/invitations`, b.owner.headers, { email: "twice@example.com", role: "viewer", permissions: [] })).json().error).toBe("already_member");
+  });
+
+  it("reports delivery honestly: a busy provider is retried from the queue, a refusal says why, and the provider's events update it", async () => {
+    const b = await business();
+    // Busy twice (both attempts made while the owner waits), then queued for the email queue.
+    ctx.mailer.fail.push(new MailError("Resend send failed (429 rate_limit_exceeded)", "resend", "transient", "rate_limit_exceeded"), new MailError("Resend unreachable", "resend", "transient", "network"));
+    const r = await invite(b, "busy@example.com", ["analytics.sales"]).catch(() => null);
+    expect(r).toBeNull(); // no email yet, so no token to read from one
+    const inv = await systemDb.invitation.findFirstOrThrow({ where: { email: "busy@example.com" } });
+    let d = await systemDb.emailDelivery.findFirstOrThrow({ where: { invitationId: inv.id } });
+    expect(d).toMatchObject({ status: "queued", attempts: 2, errorCode: "network" });
+    expect(ctx.deps.queues.sent.email).toEqual([{ kind: "team_invitation", deliveryId: d.id }]);
+    let team = ok(await call("GET", `/workspaces/${b.ws}/team`, b.owner.headers));
+    expect(team.rows.find((x: { email: string }) => x.email === "busy@example.com").delivery).toMatchObject({ status: "queued", attempts: 2 });
+    // The queue's attempt goes through: now "sent", with the provider's id, the same link as stored.
+    expect(await retryInvitationEmail(d.id, { mailer: ctx.mailer, queues: ctx.deps.queues })).toBe("sent");
+    d = await systemDb.emailDelivery.findUniqueOrThrow({ where: { id: d.id } });
+    expect(d).toMatchObject({ status: "sent", attempts: 3 });
+    const sent = lastMailTo("busy@example.com")!;
+    expect(sent.idempotencyKey).toBe(`delivery-${d.id}`);
+    expect(sha256Hex(tokenFrom(sent.text)!)).toBe(inv.tokenHash);
+    // "Sent" is not "delivered": only the provider's signed event says that.
+    await systemDb.emailDelivery.update({ where: { id: d.id }, data: { provider: "resend", providerMessageId: "re_123" } });
+    ctx.setEnv({ RESEND_WEBHOOK_SECRET: `whsec_${Buffer.from("test-webhook-secret").toString("base64")}` });
+    const post = (body: unknown, opts: { secret?: string; at?: number } = {}) => {
+      const raw = JSON.stringify(body);
+      const id = `msg_${Math.random().toString(36).slice(2)}`;
+      const ts = String(opts.at ?? Math.floor(Date.now() / 1000));
+      const sig = createHmac("sha256", Buffer.from(opts.secret ?? "test-webhook-secret")).update(`${id}.${ts}.${raw}`).digest("base64");
+      return call("POST", "/webhooks/email/resend", { "content-type": "application/json", "svix-id": id, "svix-timestamp": ts, "svix-signature": `v1,${sig}` }, raw);
+    };
+    expect((await post({ type: "email.delivered", created_at: new Date().toISOString(), data: { email_id: "re_123" } }, { secret: "wrong" })).statusCode).toBe(401);
+    expect((await post({ type: "email.delivered", data: { email_id: "re_123" } }, { at: Math.floor(Date.now() / 1000) - 3600 })).statusCode).toBe(401);
+    expect(ok(await post({ type: "email.delivered", created_at: new Date().toISOString(), data: { email_id: "re_123" } }))).toMatchObject({ matched: true });
+    team = ok(await call("GET", `/workspaces/${b.ws}/team`, b.owner.headers));
+    expect(team.rows.find((x: { email: string }) => x.email === "busy@example.com").delivery.status).toBe("delivered");
+    // A late "sent" changes nothing; a bounce after delivery is recorded, without the address.
+    ok(await post({ type: "email.sent", data: { email_id: "re_123" } }));
+    expect((await systemDb.emailDelivery.findUniqueOrThrow({ where: { id: d.id } })).status).toBe("delivered");
+    ok(await post({ type: "email.bounced", data: { email_id: "re_123", bounce: { type: "Permanent", subType: "General", message: "busy@example.com does not exist" } } }));
+    d = await systemDb.emailDelivery.findUniqueOrThrow({ where: { id: d.id } });
+    expect(d).toMatchObject({ status: "bounced", errorCode: "Permanent:General" });
+    expect(d.errorMessage).not.toContain("busy@example.com");
+    // Opens and clicks aren't tracked; unknown messages are acknowledged.
+    expect(ok(await post({ type: "email.opened", data: { email_id: "re_123" } }))).toMatchObject({ ignored: true });
+    expect(ok(await post({ type: "email.delivered", data: { email_id: "re_other" } }))).toMatchObject({ matched: false });
+  });
+
+  it("an invitation cancelled while its email waits in the queue is never sent", async () => {
+    const b = await business();
+    ctx.mailer.fail.push(new MailError("busy", "resend", "transient", "rate_limit_exceeded"), new MailError("busy", "resend", "transient", "rate_limit_exceeded"));
+    ok(await call("POST", `/workspaces/${b.ws}/team/invitations`, b.owner.headers, { email: "later@example.com", role: "custom", permissions: ["analytics.sales"] }));
+    const inv = await systemDb.invitation.findFirstOrThrow({ where: { email: "later@example.com" } });
+    ok(await call("POST", `/workspaces/${b.ws}/team/invitations/${inv.id}/revoke`, b.owner.headers));
+    const d = await systemDb.emailDelivery.findFirstOrThrow({ where: { invitationId: inv.id } });
+    expect(await retryInvitationEmail(d.id, { mailer: ctx.mailer, queues: ctx.deps.queues })).toBe("failed");
+    expect(ctx.mailer.sent.filter((m) => m.to === "later@example.com")).toHaveLength(0);
+  });
+
+  it("normal sign-in is unchanged: an account's session works as before, and its cookie is never the link's", async () => {
+    const b = await business();
+    const me = ok(await call("GET", "/me", b.owner.headers));
+    expect(me.shared).toBeNull();
+    expect(me.workspaces[0]).toMatchObject({ id: b.ws, role: "owner", status: "active" });
+    expect(b.owner.headers.cookie).toContain("__session=");
+    expect(b.owner.headers.cookie).not.toContain("__share=");
+    ok(await overview(b, b.owner.headers));
+    // Asking for the shared context with only an account session gets no session (never the account's).
+    expect((await call("GET", "/me", { ...b.owner.headers, "x-bi-context": "shared" })).statusCode).toBe(401);
   });
 });

@@ -4,10 +4,10 @@ import { useRouter } from "next/navigation";
 import { allows, type AccessNeed, type MemberAccess } from "@app/shared/access";
 import { can, type Role } from "@app/shared/roles";
 import type { StaffRole } from "@app/shared/staff";
-import { api, isSignedOut, isTransient, keepRetrying, onSessionGone } from "@/lib/api";
+import { api, contextHeaders, isSharedTab, isSignedOut, isTransient, keepRetrying, onSessionGone, setSharedTab } from "@/lib/api";
 import { ACCESS_CHANGED_EVENT, onAccessSignal } from "@/lib/access";
 import { LoadError, Unreachable } from "@/components/LoadError";
-import { AccessRevoked } from "@/components/team/AccessStates";
+import { AccessRevoked, SharedLinkEnded } from "@/components/team/AccessStates";
 import { signInAndReturn } from "@/lib/returnTo";
 import { readLocal, storeKey, WORKSPACE_KEY, writeLocal } from "@/lib/storage";
 
@@ -18,8 +18,13 @@ export interface MeWorkspace {
   staffRole?: StaffRole | null;
   /** What this member may see there (Team & Access): every permission for owners and admins. */
   permissions: string[];
-  /** "revoked": an owner or admin took this member's access away; the workspace grants nothing. */
-  status?: "active" | "revoked";
+  /**
+   * "revoked": an owner or admin took this member's access away; "expired": the access an
+   * invitation gave reached its end date and wasn't renewed. Either way the workspace grants nothing.
+   */
+  status?: "active" | "revoked" | "expired";
+  /** When the access an invitation gave ends (null: no end date). */
+  accessExpiresAt?: string | null;
   /** Fingerprint of this access (the API's `x-access-fp`): a different one means it changed. */
   fingerprint?: string;
 }
@@ -33,7 +38,7 @@ export interface Me {
    * Set when this browser opened the app from an invitation link: only that workspace, and none of
    * the account's own pages (profile, sign-in and security) until they sign in to it.
    */
-  shared?: { workspaceId: string } | null;
+  shared?: { workspaceId: string; readOnly?: boolean; expiresAt?: string } | null;
 }
 export interface StoreSummary {
   id: string;
@@ -86,7 +91,7 @@ interface Ctx {
 
 const AppCtx = createContext<Ctx | null>(null);
 
-const isActive = (w: MeWorkspace) => w.status !== "revoked";
+const isActive = (w: MeWorkspace) => !w.status || w.status === "active";
 
 /**
  * How often the open workspace's permissions are checked while the tab is visible. The check is
@@ -117,6 +122,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [storesError, setStoresError] = useState<unknown>(null);
   const [storeId, setStoreIdState] = useState<string | null>(null);
   const [accessNotice, setAccessNotice] = useState<string | null>(null);
+  /** This tab showed a shared dashboard and its shared-link session has gone (closed elsewhere, or ended with the link). */
+  const [linkEnded, setLinkEnded] = useState(false);
+  /** Signed out: a shared dashboard's tab says its link has ended; an account's goes to sign in. */
+  const sessionGone = useCallback(() => {
+    if (isSharedTab()) setLinkEnded(true);
+    else signInAndReturn(router);
+  }, [router]);
 
   /**
    * One look at /me. Only a 401 means the session is gone. Anything else (the API or its database
@@ -132,10 +144,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setMeError(e);
         return false;
       }
-      signInAndReturn(router);
+      sessionGone();
       return true;
     }
     setMeError(null);
+    // The API answered with the shared-link session (a tab opened without the link, by someone
+    // with no account signed in here): this tab is a shared dashboard's from now on.
+    if (m.shared) setSharedTab(true);
     // A shared link was sent to their address, which stands in for verifying it.
     if (!m.user.emailVerified && !m.shared) router.replace("/verify-email");
     // Employees who aren't members of any workspace belong in the employee portal, not onboarding.
@@ -152,7 +167,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setWsId(currentWs.current);
     }
     return true;
-  }, [router]);
+  }, [router, sessionGone]);
 
   // Settings pages await this after a save: it makes one attempt and never waits out the retries,
   // so a failed /me keeps the current `me` (and the save's "Saved.") while the retry below catches up.
@@ -172,7 +187,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => void loadMe(), [loadMe]);
   // Any call, not just /me: the dashboard's live checks keep the last numbers up on a failure, so
   // without this a deleted or signed-out account would stay on the page until the next reload.
-  useEffect(() => onSessionGone(() => signInAndReturn(router)), [router]);
+  useEffect(() => onSessionGone(sessionGone), [sessionGone]);
   const meFailing = meError !== null;
   useEffect(() => (meFailing ? keepRetrying(loadMe) : undefined), [meFailing, loadMe]);
 
@@ -192,14 +207,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     } catch (e) {
       if (currentWs.current !== wsId) return true;
       if (isSignedOut(e)) {
-        signInAndReturn(router);
+        sessionGone();
         return true;
       }
       setStoresError(e);
       setStoresStatus("error");
       return !isTransient(e);
     }
-  }, [wsId, reloadStores, router]);
+  }, [wsId, reloadStores, sessionGone]);
 
   useEffect(() => {
     if (currentActive) void loadStores();
@@ -224,7 +239,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     try {
       const res = await fetch(`/api/workspaces/${ws}/access`, {
         credentials: "same-origin",
-        headers: fingerprint.current ? { "if-none-match": `"${fingerprint.current}"` } : {},
+        headers: { ...contextHeaders(), ...(fingerprint.current ? { "if-none-match": `"${fingerprint.current}"` } : {}) },
       });
       if (res.status === 304 || currentWs.current !== ws) return;
       if (res.ok) {
@@ -241,15 +256,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
       const body = (await res.json().catch(() => ({}))) as { error?: string };
       if (res.status === 403 && body.error === "access_revoked") patchWorkspace(ws, { status: "revoked", permissions: [] });
+      else if (res.status === 403 && body.error === "access_expired") patchWorkspace(ws, { status: "expired", permissions: [] });
       // Removed from the workspace altogether: /me knows where they can still go.
       else if (res.status === 404) void loadMe();
-      else if (res.status === 401) signInAndReturn(router);
+      else if (res.status === 401) sessionGone();
     } catch {
       // Offline or an outage: the next check tries again; nothing on screen changes meanwhile.
     } finally {
       checking.current = false;
     }
-  }, [patchWorkspace, loadMe, router]);
+  }, [patchWorkspace, loadMe, sessionGone]);
 
   // Whenever a response says the access it was answered with differs from the one held, or a
   // request was refused, look again at once.
@@ -316,9 +332,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     };
   }, [me, wsId, current, setWorkspaceId, accessNotice, stores, storesStatus, storesError, storeId, loadStores, reloadStores, reloadMe]);
 
+  if (linkEnded) return <SharedLinkEnded />;
   if (me && current && !isActive(current)) {
     const others = me.workspaces.filter(isActive);
-    return <AccessRevoked workspace={current.name} others={others} onSwitch={setWorkspaceId} />;
+    return <AccessRevoked workspace={current.name} others={others} onSwitch={setWorkspaceId} reason={current.status === "expired" ? "expired" : "revoked"} shared={!!me.shared} />;
   }
   if (!value) return meFailing ? <Unreachable error={meError} onRetry={() => void loadMe()} /> : <p className="p-8 text-muted">Loading…</p>;
   return <AppCtx.Provider value={value}>{children}</AppCtx.Provider>;

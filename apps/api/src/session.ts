@@ -19,6 +19,19 @@ import type { SignInMethod } from "./cognito.js";
  */
 export const SESSION_COOKIE = "__session";
 export const REFRESH_COOKIE = "__session_rt";
+/**
+ * A session opened from a shared invitation link lives in a cookie of its own, never in
+ * __session: opening a link in a browser that is signed in to an account leaves that account's
+ * session exactly as it was, and the two are never merged. Which one a request uses is the web
+ * app's choice per tab (SESSION_CONTEXT_HEADER); either cookie only ever grants what it grants.
+ */
+export const SHARE_COOKIE = "__share";
+/**
+ * "shared": this request is from a tab showing a shared dashboard, so it uses the __share session
+ * (and nothing of an account signed in alongside). GET requests that can't carry a header (a
+ * download link) say the same with `?ctx=shared`.
+ */
+export const SESSION_CONTEXT_HEADER = "x-bi-context";
 /** A session lasts this long from sign-in, however active (sign in again after). */
 export const SESSION_TTL_MS = 5 * 24 * 3600 * 1000;
 /**
@@ -106,10 +119,13 @@ export function newSession(
 
 /**
  * A session for someone who opened an invitation link (POST /invitations/open): this workspace
- * only, no Cognito identity behind it (so nothing to re-check there; the membership is checked on
- * every request instead). Opening the link again starts a new one.
+ * only, read-only, no Cognito identity behind it (so nothing to re-check there; the membership is
+ * checked on every request instead). It ends with the link (`until`: the invitation's end date or
+ * the access's, whichever is first) if that is sooner than SESSION_TTL_MS. Opening the link again
+ * starts a new one.
  */
-export function newLinkSession(input: { userId: string; workspaceId: string }, now = Date.now()): SessionClaims {
+export function newLinkSession(input: { userId: string; workspaceId: string; until?: Date | null }, now = Date.now()): SessionClaims {
+  const exp = Math.min(now + SESSION_TTL_MS, input.until ? input.until.getTime() : Infinity);
   return {
     v: 1,
     sid: randomBytes(18).toString("base64url"),
@@ -118,7 +134,7 @@ export function newLinkSession(input: { userId: string; workspaceId: string }, n
     un: "",
     m: "link",
     iat: now,
-    exp: now + SESSION_TTL_MS,
+    exp,
     at: Math.floor(now / 1000),
     ck: now,
     ws: input.workspaceId,
@@ -152,6 +168,16 @@ export function setSessionCookies(c: Context, claims: SessionClaims, refreshToke
       maxAge,
     });
   }
+}
+
+/** The shared-link session's cookie (SHARE_COOKIE): httpOnly, first-party, ending with the session. */
+export function setShareCookie(c: Context, claims: SessionClaims) {
+  const maxAge = Math.max(0, Math.floor((claims.exp - Date.now()) / 1000));
+  setCookie(c, SHARE_COOKIE, signSession(claims), { path: "/", httpOnly: true, sameSite: "Lax", secure: secure(), maxAge });
+}
+
+export function clearShareCookie(c: Context) {
+  deleteCookie(c, SHARE_COOKIE, { path: "/", httpOnly: true, sameSite: "Lax", secure: secure() });
 }
 
 export function clearSessionCookies(c: Context) {

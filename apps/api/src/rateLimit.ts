@@ -43,6 +43,8 @@ export const LIMITS = {
   invitationResend: { max: 5, windowSec: 3600 },
   /** Opening an invitation link before signing in, per IP (a token is 256 bits; this only slows scanning). */
   invitePreviewIp: { max: 60, windowSec: 600 },
+  /** The mail provider's delivery events (signed; this only caps a flood), per sending address. */
+  mailEvents: { max: 600, windowSec: 60 },
   /** Accepting invitations, per IP and per user. */
   inviteAcceptIp: { max: 20, windowSec: 900 },
   inviteAcceptUser: { max: 10, windowSec: 900 },

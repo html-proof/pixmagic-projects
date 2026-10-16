@@ -11,8 +11,10 @@ import * as cwActions from "aws-cdk-lib/aws-cloudwatch-actions";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as lambda from "aws-cdk-lib/aws-lambda";
+import * as destinations from "aws-cdk-lib/aws-lambda-destinations";
 import { SqsEventSource } from "aws-cdk-lib/aws-lambda-event-sources";
 import * as logs from "aws-cdk-lib/aws-logs";
+import * as rds from "aws-cdk-lib/aws-rds";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as s3deploy from "aws-cdk-lib/aws-s3-deployment";
 import * as scheduler from "aws-cdk-lib/aws-scheduler";
@@ -262,8 +264,14 @@ export class AppStack extends Stack {
     this.appUrl = cfg.domain ? `https://${cfg.domain.name}` : `https://${this.distribution.distributionDomainName}`;
 
     // --- Schedules (Cron Triggers "*/15 * * * *" and "15 3 * * *", UTC). Off until cutover (config.ts).
+    // A tick that never ran lands in a queue instead of vanishing: one Scheduler couldn't hand to
+    // Lambda (retried for 10 minutes), or one Lambda gave up on (failed three times, or couldn't
+    // start before the next tick was due). The sweeps take over on the next tick either way.
+    const missedTicks = new sqs.Queue(this, "MissedTicks", { queueName: `${prefix}-cron-missed`, retentionPeriod: Duration.days(14), encryption: sqs.QueueEncryption.SQS_MANAGED, enforceSSL: true });
+    cron.alias.configureAsyncInvoke({ onFailure: new destinations.SqsDestination(missedTicks), retryAttempts: 2, maxEventAge: Duration.minutes(15) });
     const schedulerRole = new iam.Role(this, "SchedulerRole", { roleName: `${prefix}-scheduler`, assumedBy: new iam.ServicePrincipal("scheduler.amazonaws.com") });
     cron.alias.grantInvoke(schedulerRole);
+    missedTicks.grantSendMessages(schedulerRole);
     const schedule = (id: string, expression: string, workerCron: string) =>
       new scheduler.CfnSchedule(this, id, {
         name: `${prefix}-${id.toLowerCase()}`,
@@ -272,7 +280,15 @@ export class AppStack extends Stack {
         scheduleExpressionTimezone: "UTC",
         flexibleTimeWindow: { mode: "OFF" },
         state: cfg.schedulesEnabled ? "ENABLED" : "DISABLED",
-        target: { arn: cron.alias.functionArn, roleArn: schedulerRole.roleArn, input: JSON.stringify({ cron: workerCron }), retryPolicy: { maximumRetryAttempts: 0 } },
+        // Scheduler retries only a hand-over Lambda refused (throttled, unavailable), never a run that
+        // failed, so a retry can't run a tick twice.
+        target: {
+          arn: cron.alias.functionArn,
+          roleArn: schedulerRole.roleArn,
+          input: JSON.stringify({ cron: workerCron }),
+          retryPolicy: { maximumRetryAttempts: 5, maximumEventAgeInSeconds: 600 },
+          deadLetterConfig: { arn: missedTicks.queueArn },
+        },
       });
     schedule("Every15Min", "cron(0/15 * * * ? *)", "*/15 * * * *");
     schedule("Nightly", "cron(15 3 * * ? *)", "15 3 * * *");
@@ -310,6 +326,35 @@ export class AppStack extends Stack {
     alarm("db-free-storage", dbMetric("FreeStorageSpace", "Minimum"), 2 * 1024 ** 3, "Database free storage below 2 GB (storage autoscaling should add more)", 1, cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD);
     alarm("db-free-memory", dbMetric("FreeableMemory", "Minimum"), 150 * 1024 ** 2, "Database freeable memory below 150 MB", 3, cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD);
     alarm("db-connections", dbMetric("DatabaseConnections", "Maximum"), 150, "Database connections above 150 (limit ~200 on t4g.small)", 2);
+    alarm("cron-missed-ticks", missedTicks.metricApproximateNumberOfMessagesVisible({ period: five, statistic: "Maximum" }), 1, "A scheduled run never ran (Scheduler couldn't invoke the cron function, or Lambda gave up on it): the message says which");
+    // Every function's way out to the internet (Cognito, Secrets Manager, Shopify, Google, Meta,
+    // SMTP): with one NAT gateway, its trouble is every function's.
+    for (const [i, natId] of data.natGatewayIds.entries()) {
+      const name = i ? `nat${i + 1}` : "nat";
+      const nat = (metricName: string) => new cloudwatch.Metric({ namespace: "AWS/NATGateway", metricName, dimensionsMap: { NatGatewayId: natId }, period: five, statistic: "Sum" });
+      alarm(`${name}-port-allocation`, nat("ErrorPortAllocation"), 1, "NAT gateway out of source ports: the functions' outbound connections are failing");
+      alarm(`${name}-packets-dropped`, nat("PacketsDropCount"), 100, "NAT gateway dropping packets: outbound calls failing or slow", 2);
+    }
+
+    // RDS's own word about the database (stopped, failed, rebooted, out of storage, back again): a
+    // single-AZ instance is the one thing every request needs, so it goes to the same topic. A
+    // topic policy replaces SNS's default one, so it names CloudWatch (the alarms above) as well.
+    topic.addToResourcePolicy(
+      new iam.PolicyStatement({
+        principals: [new iam.ServicePrincipal("cloudwatch.amazonaws.com"), new iam.ServicePrincipal("events.rds.amazonaws.com")],
+        actions: ["sns:Publish"],
+        resources: [topic.topicArn],
+        conditions: { StringEquals: { "aws:SourceAccount": cfg.account } },
+      }),
+    );
+    new rds.CfnEventSubscription(this, "DbEvents", {
+      subscriptionName: `${prefix}-db-events`,
+      snsTopicArn: topic.topicArn,
+      sourceType: "db-instance",
+      sourceIds: [data.db.instanceIdentifier],
+      eventCategories: ["availability", "failure", "failover", "low storage", "maintenance", "recovery", "restoration"],
+      enabled: true,
+    });
     // Error lines from the app's logger (console.error → Lambda's ERROR level).
     for (const [name, f] of [["api", api.fn], ["jobs", jobs.fn], ["cron", cron.fn]] as const) {
       const filter = new logs.MetricFilter(this, `ErrorLines-${name}`, {

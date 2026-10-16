@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "next dev -p 3001",
-    "build": "next build && node scripts/fix-export-prefetch.mjs",
+    "build": "next build && node scripts/fix-export-prefetch.mjs && node scripts/check-font-preloads.mjs",
     "typecheck": "tsc --noEmit",
     "test": "echo 'web: see e2e'",
     "e2e": "playwright test"

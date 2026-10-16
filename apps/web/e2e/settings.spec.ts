@@ -90,7 +90,7 @@ test("invitations: emailed, handed over as a link when email fails, and kept acr
   const invitee = uniqueEmail("invitee");
   await invite(invitee);
   await expect(page.getByText(`Invitation sent to ${invitee}.`)).toBeVisible();
-  await expect(page.getByTestId("team-row").filter({ visible: true }).filter({ hasText: invitee })).toContainText("Sent");
+  await expect(page.getByTestId("team-row").filter({ visible: true }).filter({ hasText: invitee })).toContainText("Email sent");
 
   // When the email can't be sent the API still saves the invitation and returns its link. The
   // page used to say "sent" anyway and drop the link.
@@ -118,7 +118,9 @@ test("invitations: emailed, handed over as a link when email fails, and kept acr
     [invitee],
   );
   expect(rows).toEqual([{ workspace_id: ws, role: "analyst" }]);
-  expect(await guest.evaluate(() => localStorage.getItem("ws"))).toBe(ws);
+  // This tab is the shared dashboard's (its calls use the shared-link session); an account's
+  // saved workspace in this browser is left alone.
+  expect(await guest.evaluate(() => sessionStorage.getItem("bi:context"))).toBe("shared");
   await ctx.close();
 });
 

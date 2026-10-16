@@ -44,7 +44,7 @@ export const isTransient = (e: unknown) =>
  * Refused because of who is asking (Team & Access): no permission for this, or access to the
  * workspace revoked. What was shown before must not stay on screen.
  */
-export const isRefused = (e: unknown) => e instanceof ApiError && e.status === 403 && (e.code === "forbidden" || e.code === "access_revoked");
+export const isRefused = (e: unknown) => e instanceof ApiError && e.status === 403 && (e.code === "forbidden" || e.code === "access_revoked" || e.code === "access_expired");
 
 /** Message to show for a failed call: a calm "retrying" line for outages, the API's own text otherwise. */
 export function friendlyError(e: unknown): string {
@@ -101,6 +101,37 @@ export function keepRetrying(attempt: () => Promise<boolean>): () => void {
   return stop;
 }
 
+/**
+ * Whether this tab shows a shared dashboard opened from an invitation link. Kept per tab
+ * (sessionStorage): such a tab's calls use the shared-link session only (the API's __share cookie,
+ * chosen by the x-bi-context header), while the browser's other tabs stay in the account signed in
+ * there, if any. The two sessions never mix.
+ */
+const CONTEXT_KEY = "bi:context";
+
+export function isSharedTab(): boolean {
+  try {
+    return sessionStorage.getItem(CONTEXT_KEY) === "shared";
+  } catch {
+    return false;
+  }
+}
+
+export function setSharedTab(on: boolean) {
+  try {
+    if (on) sessionStorage.setItem(CONTEXT_KEY, "shared");
+    else sessionStorage.removeItem(CONTEXT_KEY);
+  } catch {
+    /* storage blocked: the API falls back to the shared session when no account is signed in */
+  }
+}
+
+/** The header that says which session a call uses (none for an account's tab). */
+export const contextHeaders = (): Record<string, string> => (isSharedTab() ? { "x-bi-context": "shared" } : {});
+
+/** A same-origin API address for a plain link (a download), saying the same as contextHeaders where no header can be sent. */
+export const apiHref = (path: string) => `/api${path}${isSharedTab() ? `${path.includes("?") ? "&" : "?"}ctx=shared` : ""}`;
+
 /** All calls go to same-origin /api/* (proxied to the Node API by next.config.ts). */
 export async function api<T = unknown>(path: string, init: { method?: string; body?: unknown; headers?: Record<string, string> } = {}): Promise<T> {
   let res: Response;
@@ -108,7 +139,7 @@ export async function api<T = unknown>(path: string, init: { method?: string; bo
     res = await fetch(`/api${path}`, {
       method: init.method ?? "GET",
       credentials: "same-origin",
-      headers: { ...(init.body !== undefined ? { "content-type": "application/json" } : {}), ...init.headers },
+      headers: { ...(init.body !== undefined ? { "content-type": "application/json" } : {}), ...contextHeaders(), ...init.headers },
       body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
     });
   } catch {
@@ -132,7 +163,7 @@ export async function api<T = unknown>(path: string, init: { method?: string; bo
   if (!res.ok) {
     const err = new ApiError(res.status, json.error ?? "error", json.message ?? "Request failed", json);
     if (res.status === 401 && err.code === "unauthenticated") window.dispatchEvent(new Event(SIGNED_OUT_EVENT));
-    if (isRefused(err)) signalAccess({ refused: err.code as "forbidden" | "access_revoked" });
+    if (isRefused(err)) signalAccess({ refused: err.code as "forbidden" | "access_revoked" | "access_expired" });
     throw err;
   }
   return json as T;
