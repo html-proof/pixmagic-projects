@@ -25,11 +25,20 @@ export function setReturnTo(path: string) {
   }
 }
 
+/** A trip to sign in is under way (signInAndReturn). */
+let leaving = false;
+
 /**
  * A protected page found the visitor signed out: remember it (query included, so ?shop= or
  * ?view= survive) for after they sign in, and send them to sign in.
  */
 export function signInAndReturn(router: { replace(href: string): void }) {
+  // One 401 reaches several handlers in the same task (the signed-out event, then the failed
+  // call's own catch): one trip to sign in, not a second fetch of the sign-in page. Cleared once
+  // that task is over, so a later sign-out goes to sign in again.
+  if (leaving) return;
+  leaving = true;
+  window.setTimeout(() => (leaving = false), 0);
   setReturnTo(window.location.pathname + window.location.search);
   router.replace("/login");
 }

@@ -25,9 +25,15 @@ const workspaceCount = async (email: string) =>
   );
 
 test("unauthenticated users are sent to sign in, and come back to the page they opened", async ({ page }) => {
+  // The one 401 from /me reaches two handlers: the sign-in page's data is still fetched only once.
+  let signInFetches = 0;
+  page.on("request", (r) => {
+    if (new URL(r.url()).pathname === "/login.txt") signInFetches++;
+  });
   await page.goto("/settings/notifications");
   await expect(page).toHaveURL(/\/login/);
   await expect(page.getByRole("heading", { name: "Welcome Back" })).toBeVisible();
+  expect(signInFetches).toBeLessThanOrEqual(1);
   await expect(page.getByText("Sign in to your account to continue to your dashboard.")).toBeVisible();
   // Email and password, Google, and a way to create an account. Shopify is connected from inside the app only.
   await expect(page.getByLabel("Email Address")).toBeVisible();
