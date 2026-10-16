@@ -254,37 +254,42 @@ type MenuItem<T extends string> = { id: T; label: string; icon: LucideIcon; dang
 
 /** A button that opens a short list of actions (keyboard: Enter/Space to open, Escape to close). */
 function Menu<T extends string>({ label, items, onPick, trigger, className }: { label: string; items: Array<MenuItem<T>>; onPick(id: T): void; trigger: ReactNode; className: string }) {
-  // Fixed to the viewport, so a scrolling table never clips it; opens upwards near the bottom.
+  // Fixed to the viewport, so a scrolling table never clips it; it follows its button when the page
+  // scrolls, and opens upwards near the bottom of the window.
   const [at, setAt] = useState<{ top: number; right: number } | null>(null);
   const open = at !== null;
   const ref = useRef<HTMLDivElement>(null);
+  const button = useRef<HTMLButtonElement>(null);
+  const place = () => {
+    const r = button.current?.getBoundingClientRect();
+    if (!r) return setAt(null);
+    const height = items.length * 36 + 10;
+    setAt({ top: r.bottom + 4 + height > window.innerHeight ? Math.max(8, r.top - 4 - height) : r.bottom + 4, right: window.innerWidth - r.right });
+  };
+  const placeRef = useRef(place);
+  placeRef.current = place;
   useEffect(() => {
     if (!open) return;
     const close = () => setAt(null);
+    const follow = () => placeRef.current();
     const onDown = (e: MouseEvent) => ref.current && !ref.current.contains(e.target as Node) && close();
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && close();
     document.addEventListener("mousedown", onDown);
     document.addEventListener("keydown", onKey);
-    window.addEventListener("scroll", close, true);
-    window.addEventListener("resize", close);
-    ref.current?.querySelector<HTMLElement>("[role=menuitem]")?.focus();
+    window.addEventListener("scroll", follow, true);
+    window.addEventListener("resize", follow);
+    ref.current?.querySelector<HTMLElement>("[role=menuitem]")?.focus({ preventScroll: true });
     return () => {
       document.removeEventListener("mousedown", onDown);
       document.removeEventListener("keydown", onKey);
-      window.removeEventListener("scroll", close, true);
-      window.removeEventListener("resize", close);
+      window.removeEventListener("scroll", follow, true);
+      window.removeEventListener("resize", follow);
     };
   }, [open]);
-  const toggle = (button: HTMLElement) => {
-    if (open) return setAt(null);
-    const r = button.getBoundingClientRect();
-    const height = items.length * 36 + 10;
-    setAt({ top: r.bottom + 4 + height > window.innerHeight ? Math.max(8, r.top - 4 - height) : r.bottom + 4, right: window.innerWidth - r.right });
-  };
   if (!items.length) return null;
   return (
     <div ref={ref} className="relative inline-block text-left">
-      <button type="button" className={className} aria-haspopup="menu" aria-expanded={open} aria-label={label} onClick={(e) => toggle(e.currentTarget)}>
+      <button ref={button} type="button" className={className} aria-haspopup="menu" aria-expanded={open} aria-label={label} onClick={() => (open ? setAt(null) : place())}>
         {trigger}
       </button>
       {open && (
