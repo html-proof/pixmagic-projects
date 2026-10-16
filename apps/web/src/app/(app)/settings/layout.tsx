@@ -8,9 +8,9 @@ import { SETTINGS_PAGES } from "@/lib/settingsNav";
 
 export default function SettingsLayout({ children }: { children: ReactNode }) {
   const path = usePathname();
-  const { access, workspace } = useApp();
+  const { me, access, workspace } = useApp();
   // Only the pages this member may open (Team & Access): someone from outside the business sees their own account.
-  const pages = SETTINGS_PAGES.map((p) => ({ ...p, to: p.href ?? `/settings/${p.slug}` })).filter((p) => canOpenPage(p.to, access, workspace.staffRole ?? null));
+  const pages = SETTINGS_PAGES.map((p) => ({ ...p, to: p.href ?? `/settings/${p.slug}` })).filter((p) => canOpenPage(p.to, access, workspace.staffRole ?? null, !!me.shared));
   return (
     <div className="grid gap-6 md:grid-cols-[12rem_1fr]">
       <nav aria-label="Settings" className="flex gap-1 overflow-x-auto md:flex-col">

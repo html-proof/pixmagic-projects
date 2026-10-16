@@ -271,7 +271,7 @@ describe("changing access after they joined (scenarios 7-11)", () => {
 });
 
 describe("invitation links (scenario 12)", () => {
-  it("works once, stops when cancelled, expires, and a resend replaces the old link", async () => {
+  it("is accepted once, stops when cancelled, expires, and a resend replaces the old link", async () => {
     const b = await business();
     const { guest, token } = await inviteAndJoin(b, "once@example.com", "viewer", ["analytics.sales"]);
     const reused = await call("POST", "/invitations/accept", guest.headers, { token });
@@ -574,26 +574,85 @@ describe("opening the dashboard straight from the invitation link", () => {
     ok(await call("POST", `/workspaces/${b.ws}/team/invitations`, b.owner.headers, { email, role: "viewer", permissions: ["analytics.sales", "products.view"] }));
     return tokenFrom(lastMailTo(email)!.text)!;
   };
-  const open = (token: string, headers: Headers = ORIGIN) => call("POST", "/invitations/open", headers, { token });
+  const open = (token: string, headers: Headers = ORIGIN, extra: Record<string, unknown> = {}) => call("POST", "/invitations/open", headers, { token, ...extra });
+  const sessionOf = (res: Awaited<ReturnType<typeof call>>) => ({ cookie: cookiesFrom(res), ...ORIGIN });
 
-  it("signs someone new in on this device and opens the shared dashboard, with no sign-up or password", async () => {
+  it("opens the shared dashboard for someone new, with no account, sign-up or password", async () => {
     const b = await business();
     const token = await sendInvite(b, "newcomer@example.com");
     const res = await open(token);
     expect(res.statusCode, res.body).toBe(200);
-    expect(res.json()).toMatchObject({ workspaceId: b.ws, joined: true, signedIn: true });
-    const session = { cookie: cookiesFrom(res), ...ORIGIN };
+    expect(res.json()).toEqual({ workspaceId: b.ws, signedIn: true });
+    const session = sessionOf(res);
     expect(session.cookie).toContain("__session=");
-    // Signed in as the invited address, verified, with exactly what was shared.
+    // Exactly what was shared, and the app knows it was opened from a link.
     const me = ok(await call("GET", "/me", session));
-    expect(me.user).toMatchObject({ email: "newcomer@example.com", emailVerified: true });
+    expect(me.user.email).toBe("newcomer@example.com");
+    expect(me.shared).toEqual({ workspaceId: b.ws });
+    expect(me.workspaces.map((w: { id: string }) => w.id)).toEqual([b.ws]);
     expect(ok(await call("GET", `/workspaces/${b.ws}/access`, session))).toMatchObject({ role: "viewer", modules: ["analytics", "products"] });
     expect(Object.keys(ok(await overview(b, session)).modules).sort()).toEqual(["catalog", "sales_overview"]);
-    // A Cognito account was made for them (so they can sign in later with an emailed code).
-    expect(ctx.auth.calls.filter((c) => c === "adminCreateUser")).toHaveLength(1);
-    // The link works once.
+    ok(await call("GET", `/workspaces/${b.ws}/stores`, session));
+    // No Cognito account was needed.
+    expect(ctx.auth.calls.filter((c) => c === "adminCreateUser")).toHaveLength(0);
+    // Joined, and on the team list.
+    const team = ok(await call("GET", `/workspaces/${b.ws}/team`, b.owner.headers));
+    expect(team.summary).toMatchObject({ totalMembers: 2, pendingInvitations: 0 });
+  });
+
+  it("keeps working after the first time (another device), and stops once their access is revoked", async () => {
+    const b = await business();
+    const token = await sendInvite(b, "again@example.com");
+    const first = sessionOf(await open(token));
+    expect(ok(await call("POST", "/invitations/preview", {}, { token }))).toMatchObject({ status: "accepted", reopens: true, roleLabel: "Viewer" });
+    const second = await open(token);
+    expect(second.statusCode, second.body).toBe(200);
+    ok(await overview(b, sessionOf(second)));
+
+    const m = await systemDb.membership.findFirstOrThrow({ where: { workspaceId: b.ws, user: { email: "again@example.com" } } });
+    ok(await call("POST", `/workspaces/${b.ws}/team/members/${m.id}/revoke`, b.owner.headers));
+    expect((await overview(b, first)).json().error).toBe("access_revoked");
+    const after = await open(token);
+    expect(after.statusCode).toBe(400);
+    expect(after.json().detail).toEqual({ status: "accepted" });
+    expect(ok(await call("POST", "/invitations/preview", {}, { token }))).toEqual({ status: "accepted", workspace: "Acme", inviter: expect.any(String) });
+  });
+
+  it("stops reopening the dashboard 60 days after it was first used", async () => {
+    const b = await business();
+    const token = await sendInvite(b, "old@example.com");
+    ok(await open(token));
+    await systemDb.invitation.updateMany({ where: { email: "old@example.com" }, data: { acceptedAt: new Date(Date.now() - 61 * 86_400_000) } });
     expect((await open(token)).statusCode).toBe(400);
-    expect((await open(token)).json().detail).toEqual({ status: "accepted" });
+  });
+
+  it("opens only the shared workspace: not the account, nor its other workspaces", async () => {
+    const b = await business();
+    const existing = await signIn(ctx, "existing", "existing@example.com");
+    const own = await createWorkspace(ctx, existing.headers, "Their own");
+    const token = await sendInvite(b, "existing@example.com");
+    const res = await open(token);
+    expect(res.json()).toEqual({ workspaceId: b.ws, signedIn: true });
+    const link = sessionOf(res);
+    expect(ok(await call("GET", "/me", link)).workspaces.map((w: { id: string }) => w.id)).toEqual([b.ws]);
+    expect((await call("GET", `/workspaces/${own}/stores`, link)).statusCode).toBe(404);
+    expect((await call("GET", `/workspaces/${own}/access`, link)).statusCode).toBe(404);
+    for (const [method, url, payload] of [
+      ["GET", "/auth/account"],
+      ["PATCH", "/me", { displayName: "Changed" }],
+      ["POST", "/workspaces", { name: "Another" }],
+      ["POST", "/auth/logout-all"],
+      ["GET", "/employee/workspaces"],
+    ] as const) {
+      const r = await call(method, url, link, payload);
+      expect(r.statusCode, url).toBe(403);
+      expect(r.json().error, url).toBe("shared_link");
+    }
+    // Their own sign-in still has everything.
+    expect(ok(await call("GET", "/me", existing.headers)).workspaces).toHaveLength(2);
+    // Signing out of the link session ends it.
+    ok(await call("POST", "/auth/logout", link));
+    expect((await call("GET", "/me", link)).statusCode).toBe(401);
   });
 
   it("only from our own pages: a cross-site request can't sign a browser in", async () => {
@@ -604,26 +663,29 @@ describe("opening the dashboard straight from the invitation link", () => {
     expect(await systemDb.membership.count({ where: { workspaceId: b.ws } })).toBe(1);
   });
 
-  it("adds an existing account to the workspace but never signs it in from a link", async () => {
-    const b = await business();
-    const existing = await signIn(ctx, "existing", "existing@example.com");
-    const token = await sendInvite(b, "existing@example.com");
-    const res = await open(token);
-    expect(res.json()).toMatchObject({ workspaceId: b.ws, signedIn: false, accountExists: true, joined: true });
-    expect(cookiesFrom(res)).not.toContain("__session=");
-    // Joined: after their usual sign-in the dashboard is there.
-    expect(ok(await call("GET", `/workspaces/${b.ws}/access`, existing.headers)).role).toBe("viewer");
-  });
-
-  it("refuses while signed in as someone else, and accepts for the invited person signed in", async () => {
+  it("signed in as someone else: says who, and opens it as the invited person when asked", async () => {
     const b = await business();
     const token = await sendInvite(b, "invited@example.com");
     const other = await signIn(ctx, "other", "other@example.com");
     const wrong = await open(token, other.headers);
     expect(wrong.statusCode).toBe(409);
-    expect(wrong.json().error).toBe("signed_in_as_other");
+    expect(wrong.json()).toMatchObject({ error: "signed_in_as_other", detail: { signedInAs: "other@example.com" } });
+    expect(await systemDb.membership.count({ where: { workspaceId: b.ws } })).toBe(1);
+    const switched = await open(token, other.headers, { switch: true });
+    expect(switched.statusCode, switched.body).toBe(200);
+    // That browser's own session is signed out; the new one is the invited person's.
+    expect((await call("GET", "/me", other.headers)).statusCode).toBe(401);
+    expect(ok(await call("GET", "/me", sessionOf(switched))).user.email).toBe("invited@example.com");
+  });
+
+  it("signed in already as the invited person: accepted, and their own sign-in carries on", async () => {
+    const b = await business();
+    const token = await sendInvite(b, "invited@example.com");
     const invited = await signIn(ctx, "invited", "invited@example.com");
-    expect(ok(await open(token, invited.headers))).toMatchObject({ workspaceId: b.ws, signedIn: true });
+    const res = await open(token, invited.headers);
+    expect(ok(res)).toEqual({ workspaceId: b.ws, signedIn: true });
+    expect(cookiesFrom(res)).not.toContain("__session=");
+    expect(ok(await call("GET", "/me", invited.headers)).shared).toBeNull();
   });
 
   it("says a link that isn't one, or was cancelled, can't be used", async () => {

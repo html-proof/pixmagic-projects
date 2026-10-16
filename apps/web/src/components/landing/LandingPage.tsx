@@ -37,7 +37,7 @@ type Phase = "intro" | "handoff" | "done";
  */
 let introPlayed = false;
 
-type Me = { user: { emailVerified: boolean } | null; workspaces: unknown[] };
+type Me = { user: { emailVerified: boolean } | null; workspaces: unknown[]; shared?: unknown };
 
 export function LandingPage() {
   const router = useRouter();
@@ -72,7 +72,7 @@ export function LandingPage() {
     let cancelled = false;
     api<Me>("/auth/whoami")
       .then((me) => {
-        if (!cancelled && me.user) router.replace(me.user.emailVerified && me.workspaces.length ? "/dashboard" : "/onboarding");
+        if (!cancelled && me.user) router.replace((me.user.emailVerified || me.shared) && me.workspaces.length ? "/dashboard" : "/onboarding");
       })
       .catch(() => {});
     return () => {

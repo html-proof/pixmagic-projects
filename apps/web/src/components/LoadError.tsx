@@ -33,7 +33,7 @@ export function Unreachable({ error, onRetry }: { error: unknown; onRetry: () =>
       <Alert kind={isTransient(error) ? "info" : "error"}>{friendlyError(error)}</Alert>
       <div className="flex items-center gap-4 text-sm">
         <button type="button" className="btn-secondary" onClick={onRetry}>Try again</button>
-        <Link className="text-muted underline" href="/login">Sign in again</Link>
+        <Link prefetch={false} className="text-muted underline" href="/login">Sign in again</Link>
       </div>
     </main>
   );

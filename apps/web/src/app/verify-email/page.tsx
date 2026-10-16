@@ -82,7 +82,7 @@ export default function VerifyEmailPage() {
         />
       )}
       <p className="text-center">
-        <Link href="/login?signedOut=1" className="auth-link">
+        <Link prefetch={false} href="/login?signedOut=1" className="auth-link">
           Sign in with a different account
         </Link>
       </p>

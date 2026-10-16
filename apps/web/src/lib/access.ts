@@ -91,8 +91,13 @@ const PAGE_NEED: Array<[prefix: string, need: AccessNeed | "full" | "staff" | "d
   ["/settings/audit", "audit:read"],
 ];
 
-export function canOpenPage(path: string, access: MemberAccess, staffRole: StaffRole | null): boolean {
+/** The account's own pages, which a dashboard opened from a shared link can't open (it isn't signed in to the account). */
+const ACCOUNT_PAGES = ["/settings/profile", "/settings/security"];
+
+/** `shared`: opened from an invitation link (Me.shared), so the account's own pages are closed. */
+export function canOpenPage(path: string, access: MemberAccess, staffRole: StaffRole | null, shared = false): boolean {
   const p = path.replace(/\/$/, "") || "/";
+  if (shared && ACCOUNT_PAGES.some((a) => p === a || p.startsWith(`${a}/`))) return false;
   let best: (typeof PAGE_NEED)[number] | null = null;
   for (const rule of PAGE_NEED) {
     if ((p === rule[0] || p.startsWith(`${rule[0]}/`)) && (!best || rule[0].length > best[0].length)) best = rule;

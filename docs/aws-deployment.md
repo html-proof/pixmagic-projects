@@ -17,14 +17,14 @@ Account `605411278365`, region `ap-southeast-2` (Sydney); the WAF web ACL lives 
 | UI build files | `/_next/static/*` from S3 `insights-production-site-605411278365` (CloudFront OAC, uploaded by `cdk deploy`, old builds kept) | `infra/cdk/lib/app-stack.ts` |
 | Background jobs | SQS `insights-production-{sync,webhooks,aggregate,email}` + `-dlq` → Lambda `insights-production-jobs` | `apps/aws/src/consumer.ts`, `sqsQueues.ts` |
 | Schedules | EventBridge Scheduler `*/15` and `03:15 UTC` → Lambda `insights-production-cron` (**off until cutover**) | `runScheduled()` in `apps/worker` |
-| Database | RDS PostgreSQL 17 `insights-production` (db.t4g.small, single AZ, private, encrypted, 14-day PITR) | `infra/cdk/lib/data-stack.ts` |
+| Database | RDS PostgreSQL 17 `insights-production` (db.t4g.small, Multi-AZ: a standby in a second AZ with automatic failover; private, encrypted, 14-day PITR) | `infra/cdk/lib/data-stack.ts` |
 | Coordinator | DynamoDB `insights-production-coord` | `apps/aws/src/dynamoCoord.ts` |
 | Large webhook bodies | S3 `insights-production-payloads-605411278365` (7-day lifecycle) | `apps/aws/src/s3Blobs.ts` |
 | Dumps, artifacts | S3 `insights-production-artifacts-605411278365` (30 days, versioned) | `infra/cdk/scripts/migrate-data.mjs` |
 | Sign-in | Cognito pool `insights-production` (from `infra/aws/cognito.yaml`) | `apps/api/src/cognito.ts` |
 | App email | SES (needs a verified sender, below) | `apps/aws/src/sesMailer.ts` |
 | Secrets | Secrets Manager `insights/production/{app,db-owner,worker-cognito}`; settings in SSM `/insights/production/runtime` | `apps/aws/src/secrets.ts` |
-| Logs, alarms | CloudWatch (90 days), dashboard `insights-production`, SNS `insights-production-alarms`, budget US$200/month | `infra/cdk/lib/app-stack.ts` |
+| Logs, alarms | CloudWatch (90 days), dashboard `insights-production`, SNS `insights-production-alarms`, budget US$235/month | `infra/cdk/lib/app-stack.ts` |
 | DB admin | EC2 `insights-production-admin` (t4g.nano, Systems Manager only, normally **stopped**) | `infra/cdk/lib/data-stack.ts` |
 
 Redis/ElastiCache is not used: the app has no Redis; DynamoDB does its coordination. There are no
@@ -278,15 +278,16 @@ Retiring it, on the owner's go-ahead, once AWS has been production for two quiet
 ## Cost (US$/month, on-demand, approximate)
 
 Prices from the AWS Price List API on 2026-10-15: NAT gateways $0.059/hour each + $0.059/GB (~90
-for two with their public IPv4s), RDS db.t4g.small $0.051/hour (~37) + 20 GB gp3 (~3), WAF (web ACL
-+ 4 rules) ~10, CloudWatch alarms/dashboard/logs/X-Ray ~6-10, Secrets Manager ~1.2, GuardDuty ~1-4
-(free for the first 30 days), admin host stopped ~1, Lambda/SQS/DynamoDB/S3/CloudFront/Cognito at
-today's traffic ~0-5 (free tiers): **~US$150-165**. Budget alarm at US$200 (80% actual, 100%
-forecast, once an alert email is set). Biggest levers: the NAT gateways and the database size.
+for two with their public IPv4s), RDS db.t4g.small Multi-AZ 2 × $0.051/hour (~75) + 20 GB gp3
+twice (~6), WAF (web ACL + 4 rules) ~10, CloudWatch alarms/dashboard/logs/X-Ray ~6-10, Secrets
+Manager ~1.2, GuardDuty ~1-4 (free for the first 30 days), admin host stopped ~1,
+Lambda/SQS/DynamoDB/S3/CloudFront/Cognito at today's traffic ~0-5 (free tiers): **~US$190-210**.
+Budget alarm at US$235 (80% actual, 100% forecast, once an alert email is set). Biggest levers: the
+NAT gateways and the database (size, Multi-AZ). Cost allocation tags `app` and `environment` can be
+activated in Billing once AWS has seen them (up to 24 hours after the first deploy).
 
-Since 2026-10-16 production has a NAT gateway in each AZ (`natGateways: 2`), approved by the owner
-for Trusted Advisor's "Single AZ Application Check": with one, both AZs' functions left through
-the NAT in ap-southeast-2a, and an outage there cut them all off from the internet. Going back to
-one (`natGateways: 1`) saves ~US$47/month and brings the warning back. The database is still
-single-AZ (`dbMultiAz`, ~US$40/month more for automatic failover). Cost allocation tags `app` and `environment` can be activated in Billing once AWS
-has seen them (up to 24 hours after the first deploy).
+Both are the high-availability options, approved by the owner on 2026-10-16: the database has a
+standby in the second AZ (`dbMultiAz`), and each AZ has its own NAT gateway (`natGateways: 2`, for
+Trusted Advisor's "Single AZ Application Check"). With one NAT, both AZs' functions left through the
+one in ap-southeast-2a, and an outage there cut them all off from the internet. Going back to one
+saves ~US$47/month and brings the warning back.

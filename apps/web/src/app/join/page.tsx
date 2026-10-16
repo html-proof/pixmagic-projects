@@ -77,6 +77,7 @@ function Problem({ title, message, guidance, signIn = false }: { title: string; 
       <p className="text-sm text-muted">{guidance}</p>
       <Link
         href="/login"
+        prefetch={false}
         className={signIn ? "btn-primary w-full" : "btn-secondary w-full"}
         onClick={() => {
           if (signIn) setReturnTo("/portal");
@@ -229,7 +230,7 @@ function SignInToJoin({ inv, who, joinPath }: { inv: Extract<Lookup, { ok: true 
       <button type="button" className="btn-primary min-h-12 w-full" onClick={() => void go()} disabled={busy}>
         Sign in to join
       </button>
-      <Link href="/forgot-password" className="block text-sm text-muted underline">
+      <Link prefetch={false} href="/forgot-password" className="block text-sm text-muted underline">
         Forgot your password?
       </Link>
     </div>

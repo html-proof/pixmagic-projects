@@ -140,7 +140,8 @@ EventBridge Scheduler invokes the `scheduled` function at `cron(0/15 * * * ? *)`
 ## 4. Data
 
 - **RDS PostgreSQL 17**, gp3 storage with autoscaling, encrypted, deletion protection, 14-day
-  automated backups with point-in-time restore, Performance Insights (free tier), parameter group
+  automated backups with point-in-time restore, Performance Insights (free tier), Enhanced
+  Monitoring every 60 seconds (OS metrics in CloudWatch Logs, `RDSOSMetrics`), parameter group
   with `rds.force_ssl=1`. Single-AZ (lean) or Multi-AZ (high availability, automatic failover).
 - **Connections**: two logins in Secrets Manager, `app` (owner: migrations, system paths, jobs) and
   `app_rls` (tenant reads under RLS); passwords rotate through Secrets Manager. Each function

@@ -12,7 +12,7 @@ export default function AppPageError({ error, retry }: { error: Error & { digest
     <div className="card space-y-3" role="alert">
       <h1 className="text-lg font-semibold">This page ran into a problem</h1>
       <p className="text-sm text-muted">
-        Trying again usually fixes it. If it keeps happening, <Link className="underline" href="/support">contact support</Link>.
+        Trying again usually fixes it. If it keeps happening, <Link prefetch={false} className="underline" href="/support">contact support</Link>.
       </p>
       <div className="flex items-center gap-4 text-sm">
         <button type="button" className="btn-primary" onClick={() => retry()}>Try again</button>
