@@ -148,9 +148,16 @@ Infrastructure: `cdk deploy` of the previous commit. Data: point-in-time restore
 
 ## Cutover (owner's go-ahead needed; not done yet)
 
-Before the window: provider secrets the stores in use need (`SHOPIFY_APP_SECRET_PIXMAGIC` for the
-PixMagic store's webhooks, `GOOGLE_ADS_CLIENT_SECRET` for AdSense refreshes) set with `put-secrets.mjs
---set`, and the AWS redirect URIs added at Google. The Cloudflare commands below run from
+> **Overtaken in part (2026-10-16).** Both Shopify apps already point at bizinsights.io (step 4), and
+> stores now reconnect on AWS directly: PixMagic did at 09:32 UTC, with its pixel re-pointed and its
+> orders re-imported. Step 2's `--replace` wipes the AWS database first, so it would now erase those
+> stores and the accounts that claimed them. Don't run step 2 as written: decide first what to copy
+> from the PC database (old pixel/funnel history, users who haven't come back) and merge it in.
+
+Before the window: provider secrets the stores in use need (`GOOGLE_ADS_CLIENT_SECRET` for AdSense
+refreshes; `SHOPIFY_APP_SECRET_PIXMAGIC` is set) with `put-secrets.mjs --set`, and the AWS redirect
+URIs added at Google. A new secret reaches the functions only when they start, so run **Deploy to
+AWS** (Actions → Run workflow) after setting one. The Cloudflare commands below run from
 `apps/cloudflare` in a checkout of the old code ([below](#retiring-the-old-cloudflare-deployment)).
 
 1. **Freeze the old site.** Remove its cron triggers (Cloudflare API `PUT
@@ -163,11 +170,9 @@ PixMagic store's webhooks, `GOOGLE_ADS_CLIENT_SECRET` for AdSense refreshes) set
 2. **Final copy:** `node infra/cdk/scripts/migrate-data.mjs --replace` (wipes the AWS copy first).
 3. **Schedules on:** GitHub variable `AWS_SCHEDULES=on`, then the next Deploy to AWS (the merge of the
    Shopify URL change in step 4) turns them on.
-4. **Shopify:** `application_url`, `redirect_urls` and webhook `uri` in `shopify-app/shopify.app.toml`
-   and `shopify.app.pixmagic.toml` already name `https://bizinsights.io`. The main app is already
-   live there (version `insights-13`, 2026-10-16; until then its "Continue with Shopify" finished on
-   the old workers.dev site). Left for the window: `shopify app deploy --config pixmagic` (needs
-   `SHOPIFY_APP_SECRET_PIXMAGIC` on AWS first, or its webhooks fail the signature check).
+4. **Shopify:** done. Both apps are live on `https://bizinsights.io`: the main app since version
+   `insights-13` (now `insights-14`), the PixMagic app since version `pixmagic-7` (2026-10-16, webhooks
+   API 2026-10).
 5. **Old address forwards:** the same stand-in with `--var MOVE_PHASE:forward --var
    MOVED_TO:https://bizinsights.io`, deployed at 100%:
    pages and launches redirect to AWS; webhooks and pixel events are passed through unchanged.
@@ -243,11 +248,13 @@ Retiring it, on the owner's go-ahead, once AWS has been production for two quiet
   to a Google OAuth client, put its secret with `put-secrets.mjs --set GOOGLE_SIGNIN_CLIENT_SECRET`,
   deploy with `-c googleClientId=<client id>`.
 - **Provider secrets** not on this PC: META_APP_SECRET, GOOGLE_ADS_CLIENT_SECRET, WHATSAPP_APP_SECRET,
-  WHATSAPP_WEBHOOK_VERIFY_TOKEN, SHOPIFY_APP_SECRET_PIXMAGIC (`put-secrets.mjs --set`).
+  WHATSAPP_WEBHOOK_VERIFY_TOKEN (`put-secrets.mjs --set`, then a Deploy to AWS run).
 - **Custom domain**: done, bizinsights.io (above). Provider consoles still list the old addresses:
-  Google/Meta OAuth redirect URIs and the PixMagic Shopify app's URLs move to
-  `https://bizinsights.io/api/...` with the cutover. The main Shopify app is already there
-  (`insights-13`); to undo that: `shopify app release --version insights-12 --config shopify.app.toml`.
+  Google/Meta OAuth redirect URIs move to `https://bizinsights.io/api/...` with the cutover. Both
+  Shopify apps are already there (main `insights-14`, PixMagic `pixmagic-7`). To go back to an
+  earlier Shopify version, use the Dev Dashboard (the app → **Versions** → that version →
+  **Release**): `shopify app release --version <tag>` answers "could not be found" for every version
+  of both apps (CLI 3.94.3, 2026-10-16). Shipping still works: `shopify app deploy --version <new tag>`.
 
 ## Cost (lean tier, US$/month, on-demand, approximate)
 
