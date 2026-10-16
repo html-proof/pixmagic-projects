@@ -80,6 +80,108 @@ The role trusts the token's `sub` exactly as this repository sends it: the immut
 in `infra/cdk/lib/config.ts`). "Not authorized to perform sts:AssumeRoleWithWebIdentity" in the
 workflow means the two differ: compare with CloudTrail's AssumeRoleWithWebIdentity events.
 
+### When GitHub-hosted jobs can't start: the PC's own runner
+
+"The job was not started because recent account payments have failed or your spending limit needs
+to be increased" (a job failing in seconds with no steps or log; read it with
+`gh api repos/html-proof/pixmagic-projects/check-runs/<job id>/annotations`) means the account's
+included minutes are used up (GitHub Free: 2,000 a month for private repositories, reset on the
+1st at 00:00 UTC) or a payment failed. Self-hosted runners cost nothing, so CI and Deploy can run on
+the owner's PC instead. Every job's `runs-on` reads the repository variable `SELF_HOSTED_RUNNER`;
+while it is unset, everything runs on `ubuntu-latest` exactly as before.
+
+Set up once, in an elevated Windows PowerShell, one command at a time. The runner runs as its own
+local account (not the owner's, whose `aws login` session and Git credentials stay out of reach) in
+a folder only administrators can change:
+
+```powershell
+$ProgressPreference = 'SilentlyContinue'
+```
+
+(Without it, PowerShell 5.1 downloads the ~100 MB zip very slowly.)
+
+```powershell
+New-Item -ItemType Directory -Force C:\actions-runner
+```
+
+```powershell
+icacls C:\actions-runner /inheritance:r /grant:r "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F"
+```
+
+```powershell
+cd C:\actions-runner
+```
+
+```powershell
+Invoke-WebRequest -Uri https://github.com/actions/runner/releases/download/v2.338.0/actions-runner-win-x64-2.338.0.zip -OutFile actions-runner.zip
+```
+
+```powershell
+(Get-FileHash .\actions-runner.zip -Algorithm SHA256).Hash
+```
+
+It must print `F48E0750A21812BCA5F82DE5F7F5AEAE71ABEE647FAB5A582F1742D07EBA455F` (v2.338.0; a newer
+release lists its own hash on github.com/actions/runner/releases).
+
+```powershell
+Expand-Archive .\actions-runner.zip -DestinationPath C:\actions-runner
+```
+
+The runner's account (pick a long password; nothing else uses it):
+
+```powershell
+$pw = Read-Host -AsSecureString "Password for ghrunner"
+```
+
+```powershell
+New-LocalUser ghrunner -Password $pw -PasswordNeverExpires -UserMayNotChangePassword -Description "GitHub Actions runner"
+```
+
+Then GitHub → the repository → Settings → Actions → Runners → New self-hosted runner → Windows,
+copy the token from the `config.cmd` line it shows (valid one hour) and run the line below. It
+asks for the runner group (press Enter) and the ghrunner password:
+
+```powershell
+.\config.cmd --url https://github.com/html-proof/pixmagic-projects --token <TOKEN> --name bizinsights-pc --labels bizinsights-pc --work _work --runasservice --windowslogonaccount .\ghrunner
+```
+
+A service gets the right to impersonate other users, which local exploits turn into SYSTEM (and
+SYSTEM reads every profile). Keep only the two privileges the runner needs:
+
+```powershell
+$svc = (Get-Service "actions.runner.*").Name
+```
+
+```powershell
+sc.exe privs $svc SeChangeNotifyPrivilege/SeIncreaseWorkingSetPrivilege
+```
+
+```powershell
+Restart-Service $svc
+```
+
+(`sc.exe`, not `sc`: in PowerShell `sc` is Set-Content.) Settings → Actions → Runners should now
+show bizinsights-pc as Idle. Finally the switch (Settings → Secrets and variables → Actions →
+Variables): `SELF_HOSTED_RUNNER` = `["self-hosted","bizinsights-pc"]`. The first job run on the
+PC also proves GitHub still starts self-hosted jobs under the billing block.
+
+On the PC there is no Docker: each job starts its own throwaway PostgreSQL 18 from
+`C:\Program Files\PostgreSQL\18\bin` and the e2e job a Mailpit stand-in
+(`apps/web/e2e/mailpit-stub.mjs`), all on free ports; the runner stops them with the job. The deploy
+job signs in only with the OIDC deploy role and checks that it did.
+
+- The PC must be on and awake: queued jobs wait up to 24 hours for the runner, then are cancelled.
+  A busy PC (demos, other test runs) makes the integration tests 2-3 times slower and can time one
+  out: re-run the job.
+- While the runner deploys, nobody deploys by hand: the two don't share a lock.
+- Job code still runs on the owner's PC: it can reach anything listening on localhost there, and
+  what one job leaves in the runner folder the next one (a deploy, with the deploy role) runs with.
+  Only collaborators can start jobs (fork pull requests are off); keep it that way, and never make
+  the repository public while the runner is attached.
+- Back to GitHub's runners: delete `SELF_HOSTED_RUNNER` first, then `Stop-Service "actions.runner.*"`
+  and `.\config.cmd remove` with the token from the runner's page in Settings → Actions → Runners,
+  then `Remove-LocalUser ghrunner`.
+
 ## Database
 
 - Copy production's data in (read-only on the PC; refuses a non-empty target):

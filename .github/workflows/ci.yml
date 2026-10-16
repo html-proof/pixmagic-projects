@@ -16,57 +16,117 @@ permissions:
 env:
   PG_PORT: 5434
 
+# Runners: GitHub's ubuntu-latest, unless the repository variable SELF_HOSTED_RUNNER holds a JSON
+# label list such as ["self-hosted","bizinsights-pc"] (the owner's Windows PC, while GitHub-hosted
+# jobs can't start). That runner has no Docker: Postgres and Mailpit run there as local processes on
+# free ports (5434 on that PC is the old deployment's database), and the runner ends them with the
+# job. Every `run:` is bash: on Windows, Git Bash (each job's first step puts it ahead of
+# C:\Windows\System32\bash.exe, which is WSL). That step is cmd, not PowerShell: a runner service's
+# PowerShell may not run scripts (execution policy).
+defaults:
+  run:
+    shell: bash
+
 jobs:
   checks:
     name: Lint, typecheck, unit & integration tests, build
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    runs-on: ${{ fromJSON(vars.SELF_HOSTED_RUNNER || '"ubuntu-latest"') }}
+    # A busy PC runs the integration tests 2-3 times slower than a GitHub runner.
+    timeout-minutes: ${{ vars.SELF_HOSTED_RUNNER != '' && 45 || 30 }}
     services:
       postgres:
-        image: postgres:17-alpine
+        # An empty image skips the container (service containers need a Linux runner).
+        image: ${{ vars.SELF_HOSTED_RUNNER == '' && 'postgres:17-alpine' || '' }}
         env: { POSTGRES_USER: app, POSTGRES_PASSWORD: app, POSTGRES_DB: app }
         ports: ["5434:5432"]
         options: >-
           --health-cmd "pg_isready -U app" --health-interval 5s --health-retries 10
     steps:
+      # Windows runner: Git Bash for the run steps, and a pnpm store that outlives the job
+      # (pnpm/action-setup deletes its own folder, where the store would be, every run).
+      - name: Git Bash and a lasting pnpm store (Windows runner)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          echo %ProgramFiles%\Git\bin>>"%GITHUB_PATH%"
+          echo npm_config_store_dir=%RUNNER_TOOL_CACHE%\pnpm-store>>"%GITHUB_ENV%"
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
-        with: { node-version: 24, cache: pnpm }
+        with:
+          node-version: 24
+          # A self-hosted runner keeps its pnpm store between runs (first step): no cache to move.
+          cache: ${{ vars.SELF_HOSTED_RUNNER == '' && 'pnpm' || '' }}
+      - name: Throwaway Postgres (self-hosted runner)
+        if: vars.SELF_HOSTED_RUNNER != ''
+        run: |
+          pgbin="${PG_BIN:-C:/Program Files/PostgreSQL/18/bin}"
+          data="$(cygpath -m "$RUNNER_TEMP")/pg"
+          port=$(node -e "const s=require('net').createServer().listen(0,'127.0.0.1',()=>{console.log(s.address().port);s.close()})")
+          rm -rf "$data" && printf app > "$RUNNER_TEMP/pgpw"
+          "$pgbin/initdb" -D "$data" -U app --pwfile="$RUNNER_TEMP/pgpw" --auth=scram-sha-256 -E UTF8 --locale=C --no-instructions >/dev/null
+          "$pgbin/pg_ctl" -D "$data" -l "$data.log" -o "-p $port -c listen_addresses=localhost -c fsync=off" -w start >"$data.ctl.log" 2>&1 </dev/null
+          PGPASSWORD=app "$pgbin/createdb" -h localhost -p "$port" -U app app
+          echo "$pgbin" >> "$GITHUB_PATH"
+          echo "TEST_PG_PORT=$port" >> "$GITHUB_ENV"
       - run: pnpm install --frozen-lockfile
       # Known vulnerabilities in any dependency (direct or transitive) fail the build.
       - name: Dependency audit (high and critical advisories)
         run: pnpm audit --audit-level high
       - run: pnpm lint
       - name: Create tenant DB role
-        run: PGPASSWORD=app psql -h localhost -p 5434 -U app -d app -f infra/postgres/init.sql
+        run: PGPASSWORD=app psql -h localhost -p "${TEST_PG_PORT:-5434}" -U app -d app -f infra/postgres/init.sql
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm test:integration
       # The integration setup migrated app_test from the migrations folder: it must match
       # schema.prisma exactly, or a schema change was committed without its migration.
       - name: Migrations match the schema
-        run: pnpm --filter @app/db exec prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --exit-code
-        env:
-          DATABASE_URL: postgresql://app:app@localhost:5434/app_test
+        run: |
+          DATABASE_URL="postgresql://app:app@localhost:${TEST_PG_PORT:-5434}/app_test" \
+            pnpm --filter @app/db exec prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --exit-code
       # What Deploy to AWS ships: the UI (Next.js export) and the bundled function.
       - name: Build the Lambda package (UI + function)
         run: pnpm --filter @app/aws build -- --no-staging-bundle
 
   e2e:
     name: End-to-end (Playwright)
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.SELF_HOSTED_RUNNER || '"ubuntu-latest"') }}
     needs: checks
     timeout-minutes: 30
     steps:
+      # Windows runner: Git Bash for the run steps, and a pnpm store that outlives the job
+      # (pnpm/action-setup deletes its own folder, where the store would be, every run).
+      - name: Git Bash and a lasting pnpm store (Windows runner)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          echo %ProgramFiles%\Git\bin>>"%GITHUB_PATH%"
+          echo npm_config_store_dir=%RUNNER_TOOL_CACHE%\pnpm-store>>"%GITHUB_ENV%"
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
-        with: { node-version: 24, cache: pnpm }
+        with:
+          node-version: 24
+          cache: ${{ vars.SELF_HOSTED_RUNNER == '' && 'pnpm' || '' }}
       - run: pnpm install --frozen-lockfile
       # The suite starts its own Cognito emulator and managed-login stand-in (playwright.config.ts).
       - name: Start dev stack (Postgres, Mailpit)
+        if: vars.SELF_HOSTED_RUNNER == ''
         run: docker compose up -d --wait postgres mailpit
+      # Without Docker: the same two as local processes, and every e2e port free (8789 and the
+      # emulator ports may be a local demo on that PC).
+      - name: Start dev stack without Docker (self-hosted runner)
+        if: vars.SELF_HOSTED_RUNNER != ''
+        run: |
+          pgbin="${PG_BIN:-C:/Program Files/PostgreSQL/18/bin}"
+          data="$(cygpath -m "$RUNNER_TEMP")/pg"
+          read -r pg mail app cognito login < <(node -e "const n=require('net');Promise.all([1,2,3,4,5].map(()=>new Promise(r=>{const s=n.createServer().listen(0,'127.0.0.1',()=>r(s))}))).then(ss=>{console.log(ss.map(s=>s.address().port).join(' '));ss.forEach(s=>s.close())})")
+          rm -rf "$data" && printf app > "$RUNNER_TEMP/pgpw"
+          "$pgbin/initdb" -D "$data" -U app --pwfile="$RUNNER_TEMP/pgpw" --auth=scram-sha-256 -E UTF8 --locale=C --no-instructions >/dev/null
+          "$pgbin/pg_ctl" -D "$data" -l "$data.log" -o "-p $pg -c listen_addresses=localhost -c fsync=off" -w start >"$data.ctl.log" 2>&1 </dev/null
+          node -e "require('child_process').spawn(process.execPath,['apps/web/e2e/mailpit-stub.mjs',process.argv[1]],{detached:true,stdio:'ignore',windowsHide:true}).unref()" "$mail"
+          { echo "TEST_PG_PORT=$pg"; echo "E2E_MAILPIT_URL=http://127.0.0.1:$mail"; echo "E2E_PORT=$app"; echo "E2E_COGNITO_PORT=$cognito"; echo "E2E_LOGIN_PORT=$login"; } >> "$GITHUB_ENV"
       - run: pnpm --filter @app/web exec playwright install --with-deps chromium
       - run: pnpm e2e
       - if: failure()
