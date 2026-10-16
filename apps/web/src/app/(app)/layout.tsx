@@ -2,10 +2,25 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import type { ReactNode } from "react";
+import { Briefcase, LayoutDashboard, LogOut, MessageCircle, Settings, UsersRound, type LucideIcon } from "lucide-react";
 import { AppProvider, useApp } from "@/components/AppContext";
 import { BrandMark } from "@/components/Brand";
 import { leaveTo, signOut } from "@/lib/auth";
 import { staffAccess } from "@app/shared/staff";
+
+/** A top-bar link: its icon is decorative, the label says where it goes. */
+function NavLink({ href, label, icon: Glyph, active }: { href: string; label: string; icon: LucideIcon; active?: boolean }) {
+  return (
+    <Link
+      aria-current={active ? "page" : undefined}
+      className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 transition ${active ? "bg-accent/12 font-semibold text-accent" : "text-muted hover:text-text"}`}
+      href={href}
+    >
+      <Glyph size={16} strokeWidth={1.8} aria-hidden="true" />
+      {label}
+    </Link>
+  );
+}
 
 function TopBar() {
   const { me, workspace, setWorkspaceId, stores, store, setStoreId } = useApp();
@@ -39,17 +54,18 @@ function TopBar() {
             ))}
           </select>
         )}
-        <nav className="ml-auto flex items-center gap-4 text-sm">
-          <Link aria-current={path.startsWith("/dashboard") ? "page" : undefined} className={`rounded-full px-3 py-1 transition ${path.startsWith("/dashboard") ? "bg-accent/12 font-semibold text-accent" : "text-muted hover:text-text"}`} href="/dashboard">Dashboard</Link>
-          <Link aria-current={path.startsWith("/whatsapp") ? "page" : undefined} className={`rounded-full px-3 py-1 transition ${path.startsWith("/whatsapp") ? "bg-accent/12 font-semibold text-accent" : "text-muted hover:text-text"}`} href="/whatsapp">WhatsApp</Link>
+        <nav aria-label="Main" className="ml-auto flex flex-wrap items-center gap-2 text-sm">
+          <NavLink href="/dashboard" label="Dashboard" icon={LayoutDashboard} active={path.startsWith("/dashboard")} />
+          <NavLink href="/whatsapp" label="WhatsApp" icon={MessageCircle} active={path.startsWith("/whatsapp")} />
           {staffAccess(workspace.role, workspace.staffRole).permissions.length > 0 && (
-            <Link aria-current={path.startsWith("/staff") ? "page" : undefined} className={`rounded-full px-3 py-1 transition ${path.startsWith("/staff") ? "bg-accent/12 font-semibold text-accent" : "text-muted hover:text-text"}`} href="/staff">Staff</Link>
+            <NavLink href="/staff" label="Staff" icon={UsersRound} active={path.startsWith("/staff")} />
           )}
-          {!!me.employments?.length && (
-            <Link className="rounded-full px-3 py-1 text-muted transition hover:text-text" href="/portal">My work</Link>
-          )}
-          <Link aria-current={path.startsWith("/settings") ? "page" : undefined} className={`rounded-full px-3 py-1 transition ${path.startsWith("/settings") ? "bg-accent/12 font-semibold text-accent" : "text-muted hover:text-text"}`} href="/settings/profile">Settings</Link>
-          <button className="text-muted transition hover:text-text" onClick={logout}>Sign out</button>
+          {!!me.employments?.length && <NavLink href="/portal" label="My work" icon={Briefcase} />}
+          <NavLink href="/settings/profile" label="Settings" icon={Settings} active={path.startsWith("/settings")} />
+          <button className="inline-flex items-center gap-1.5 px-3 py-1 text-muted transition hover:text-text" onClick={logout}>
+            <LogOut size={16} strokeWidth={1.8} aria-hidden="true" />
+            Sign out
+          </button>
         </nav>
       </div>
     </header>

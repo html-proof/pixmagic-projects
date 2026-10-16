@@ -5,6 +5,8 @@
 Writes:
   apps/web/src/app/favicon.ico            16, 32 and 48 px, the rounded tile (icon.svg is the vector one)
   apps/web/src/app/apple-icon.png         180 px, full-bleed square (iOS rounds it itself)
+  apps/web/public/icon-192.png, -512.png  the web app manifest's icons (src/app/manifest.ts); full-bleed,
+                                          the mark inside the maskable safe zone, so Android may crop them
   shopify-app/listing/app-icon-1200.png   Shopify App Store icon, plus a -sizes contact sheet
 
 Shopify's listing spec: 1200 x 1200 PNG, the mark 750-900 px across with >= 75 px clear margin,
@@ -135,6 +137,10 @@ def main():
     ico = [mark(s, s * 22 * 0.76 / 28, rounded=True) for s in sizes]
     ico[-1].save(app / "favicon.ico", format="ICO", sizes=[(s, s) for s in sizes], append_images=ico[:-1])
     mark(180, 180 * 0.62, rounded=False).convert("RGB").save(app / "apple-icon.png", optimize=True)
+    public = ROOT / "apps/web/public"
+    for size in (192, 512):
+        # 0.62 keeps the mark inside the 80% circle a maskable icon may be cropped to.
+        mark(size, size * 0.62, rounded=False).convert("RGB").save(public / f"icon-{size}.png", optimize=True)
 
     listing = ROOT / "shopify-app/listing"
     icon = mark(1200, 820, rounded=False).convert("RGB")
@@ -145,7 +151,7 @@ def main():
         sheet.paste(icon.resize((size, size), Image.LANCZOS), (x, 20 + (160 - size) // 2))
         x += size + 24
     sheet.save(listing / "app-icon-1200-sizes.png", optimize=True)
-    print("wrote favicon.ico, apple-icon.png, app-icon-1200.png (+ sizes)")
+    print("wrote favicon.ico, apple-icon.png, icon-192/512.png, app-icon-1200.png (+ sizes)")
 
 
 if __name__ == "__main__":
