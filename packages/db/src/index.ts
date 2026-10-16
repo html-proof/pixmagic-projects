@@ -107,13 +107,36 @@ function scopedAdapter(role: Role): AdapterFactory {
     queryRaw: async (query) => (await connection(role)).queryRaw(query),
     executeRaw: async (query) => (await connection(role)).executeRaw(query),
     executeScript: async (script) => (await connection(role)).executeScript(script),
-    startTransaction: async (isolationLevel) => (await connection(role)).startTransaction(isolationLevel),
+    startTransaction: async (isolationLevel) => oneAtATime(await (await connection(role)).startTransaction(isolationLevel)),
     // What PrismaPg reports without options: the default schema, and joins done in SQL.
     getConnectionInfo: () => ({ schemaName: undefined, supportsRelationJoins: true }),
     // Pools belong to scopes, and withDb()/disconnectDb() close them.
     dispose: async () => {},
   };
   return { provider: adapter.provider, adapterName: adapter.adapterName, connect: async () => adapter };
+}
+
+type Transaction = Awaited<ReturnType<Adapter["startTransaction"]>>;
+
+/**
+ * A transaction's statements, sent one at a time. Prisma batches the findUniques that code issues
+ * in parallel inside a transaction (Promise.all over `tx`) and sent the batch at once, all on the
+ * transaction's one connection: pg queued them, with a DeprecationWarning, and pg@9 refuses them.
+ * They ran in order on that connection either way, so waiting here costs nothing. Savepoints go
+ * through executeRaw, so they wait their turn too; a statement that fails doesn't hold up the rest.
+ */
+function oneAtATime(tx: Transaction): Transaction {
+  let last: Promise<unknown> = Promise.resolve();
+  const inTurn = <T>(run: () => Promise<T>): Promise<T> => {
+    const next = last.then(run);
+    last = next.catch(() => {});
+    return next;
+  };
+  const queryRaw = tx.queryRaw.bind(tx);
+  const executeRaw = tx.executeRaw.bind(tx);
+  tx.queryRaw = (query) => inTurn(() => queryRaw(query));
+  tx.executeRaw = (query) => inTurn(() => executeRaw(query));
+  return tx;
 }
 
 const shared: Partial<Record<Role, PrismaClient>> = {};

@@ -332,7 +332,29 @@ actual, 100% forecast, once an alert email is set). Biggest levers: the NAT gate
 database size. Cost allocation tags `app` and `environment` can be activated in Billing once AWS
 has seen them (up to 24 hours after the first deploy).
 
-Production stays on the lean tier by the owner's choice (cost, 2026-10-16), so two Trusted Advisor
-warnings are expected: "RDS Multi-AZ" (`dbMultiAz: true` adds a standby with automatic failover,
-~US$40/month) and "Single AZ Application Check" (`natGateways: 2` gives each AZ its own NAT,
-~US$47/month; with one, an outage in ap-southeast-2a cuts every function off from the internet).
+## Fault tolerance
+
+Production stays on the lean tier by the owner's choice (cost, 2026-10-16), so three Trusted
+Advisor fault-tolerance findings are expected: "Amazon RDS DB instances not using Multi-AZ
+deployment" and "Single AZ Application Check" (warnings), and "NAT Gateway AZ Independence"
+(error: the app subnet in ap-southeast-2b goes out through the NAT in 2a).
+
+They are one risk, an outage of ap-southeast-2a: the database and the only NAT gateway are both
+there, so the app stops whichever of the two survives. Fixing it takes both changes together:
+`dbMultiAz: true` (a standby in 2b with automatic failover, ~US$40/month) and `natGateways: 2`
+(a NAT per AZ, ~US$47/month), about US$87/month in all. Either one alone buys little. An outage of
+2b is already survivable: the functions run in both AZs and Lambda uses the one that works.
+
+What production does have, at no extra cost:
+- Functions in two AZs; queues with retries, backoff, a dead-letter queue (`insights-production-dlq`)
+  and jobs that wait out a database outage instead of failing (apps/worker `deferForDb`).
+- Database: 14 days of point-in-time restore, kept even if the instance is deleted
+  (`DeleteAutomatedBackups: false`), deletion protection, a final snapshot on delete, storage
+  autoscaling to 100 GB. DynamoDB with point-in-time recovery; versioned artifacts bucket.
+- Scheduled runs: Scheduler retries a hand-over Lambda refuses (10 minutes), Lambda retries a failed
+  run twice; a tick that still didn't run goes to `insights-production-cron-missed` (alarm
+  `cron-missed-ticks`) and the next tick takes over.
+- Alarms on the topic `insights-production-alarms`: function errors, throttles and latency, queue age,
+  the dead-letter queue, database CPU/memory/storage/connections, NAT gateway port allocation and
+  dropped packets, plus RDS's own events (availability, failure, failover, low storage, maintenance,
+  recovery, restoration). **Nobody receives them until an alert email is set** (Owner-only steps).

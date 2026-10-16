@@ -178,6 +178,9 @@ export function pixelIngestUrl(settings: unknown): string | null {
   }
 }
 
+/** Shopify's answers about the shop rather than the request (see gql). */
+const SHOP_UNAVAILABLE = new Set([402, 404, 423]);
+
 async function gql<T>(deps: WorkerDeps, store: Store, pace: Pace, query: string, variables?: Record<string, unknown>) {
   try {
     if (pace.pendingMs > 0) {
@@ -202,6 +205,11 @@ async function gql<T>(deps: WorkerDeps, store: Store, pace: Pace, query: string,
       logger.warn({ shop: store.shopDomain, app: store.shopifyAppKey, status: err.status, reason: err.message }, "Shopify refused the store's token");
       throw new AccessRevokedError(`Shopify rejected our access (${err.status}); merchant must reconnect`);
     }
+    // The shop itself is unavailable: frozen, paused or closed (402), not found (404), locked (423).
+    // That lasts days, not the minutes of the retry budget: six attempts per job only repeated the
+    // same answer. The message stays Shopify's ("Shopify 402: ..."): the dashboard reads it
+    // (syncProblem). Not AccessRevokedError: the store's access is fine and comes back with the shop.
+    if (err instanceof ShopifyHttpError && SHOP_UNAVAILABLE.has(err.status)) throw new UnrecoverableError(err.message);
     throw err;
   }
 }
