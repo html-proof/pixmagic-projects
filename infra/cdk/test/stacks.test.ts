@@ -49,6 +49,12 @@ describe("the data stack", () => {
       Engine: "postgres",
     });
     t.data.hasResource("AWS::RDS::DBInstance", { DeletionPolicy: "Snapshot" });
+    // Enhanced Monitoring every minute, through RDS's own role.
+    t.data.hasResourceProperties("AWS::RDS::DBInstance", { MonitoringInterval: 60, MonitoringRoleArn: { "Fn::GetAtt": [Match.stringLikeRegexp("^DbMonitoringRole"), "Arn"] } });
+    t.data.hasResourceProperties("AWS::IAM::Role", {
+      AssumeRolePolicyDocument: { Statement: [Match.objectLike({ Principal: { Service: "monitoring.rds.amazonaws.com" } })] },
+      ManagedPolicyArns: [{ "Fn::Join": ["", ["arn:", { Ref: "AWS::Partition" }, ":iam::aws:policy/service-role/AmazonRDSEnhancedMonitoringRole"]] }],
+    });
     t.data.hasResourceProperties("AWS::RDS::DBParameterGroup", { Parameters: Match.objectLike({ "rds.force_ssl": "1", log_parameter_max_length: "0" }) });
   });
 
