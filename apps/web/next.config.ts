@@ -14,6 +14,10 @@ export default function config(phase: string): NextConfig {
   if (phase !== PHASE_DEVELOPMENT_SERVER) {
     // NEXT_EXPORT_DIR builds into another folder than `out` (e.g. while a local server is serving `out`).
     const exportDir = process.env.NEXT_EXPORT_DIR;
+    // Shows Settings → Billing while billing is off (src/lib/features.ts): the e2e build's alone.
+    if (process.env.NEXT_PUBLIC_E2E_BILLING && exportDir !== "out-e2e") {
+      throw new Error("NEXT_PUBLIC_E2E_BILLING is for the e2e build (NEXT_EXPORT_DIR=out-e2e) only");
+    }
     return { ...base, output: "export", ...(exportDir ? { distDir: exportDir } : {}) };
   }
   // `next dev` only: proxy /api/* to the local server so the UI can hot-reload against the real API.

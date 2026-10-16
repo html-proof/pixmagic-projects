@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import { expect, test, type Page } from "@playwright/test";
 import pg from "pg";
 import { E2E_ENV, E2E_MAILPIT_URL } from "../playwright.config";
-import { BILLING_ENABLED } from "../src/lib/features";
 import { confirmSignUp, fillSignUp, signedWebhook, signUp, uniqueEmail } from "./helpers";
 
 /**
@@ -162,12 +161,15 @@ test("store permissions say which are optional for every role, and Disconnect re
   expect(dialogText).toContain("uninstall the app from your Shopify admin");
 });
 
+// Settings → Billing is hidden until paid plans launch (src/lib/features.ts), but the e2e build
+// shows it (NEXT_PUBLIC_E2E_BILLING, playwright.config.ts), so these run before launch.
 test("billing shows the plan in force, and a change awaiting Shopify as pending", async ({ page }) => {
-  test.skip(!BILLING_ENABLED, "Billing is switched off in src/lib/features.ts");
   const { ws } = await owner(page, "billing");
   await page.goto("/settings/billing");
   await expect(page.getByText(/Current plan:\s*Free\./)).toBeVisible();
-  await expect(page.getByRole("button", { name: "Choose Growth" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Upgrade to Growth" })).toBeVisible();
+  // Nothing to switch away from on Free.
+  await expect(page.getByRole("button", { name: "Switch to Free" })).toHaveCount(0);
 
   await db.query("UPDATE subscriptions SET pending_plan = 'growth', pending_charge_id = 'gid://shopify/AppSubscription/9' WHERE workspace_id = $1", [ws]);
   await page.reload();
@@ -175,6 +177,28 @@ test("billing shows the plan in force, and a change awaiting Shopify as pending"
   await expect(page.getByRole("status").filter({ hasText: "waiting for approval in Shopify" })).toBeVisible();
   // The pending plan can be reopened; it used to hide its button as though it were already active.
   await expect(page.getByRole("button", { name: "Approve Growth in Shopify" })).toBeVisible();
+});
+
+test("an owner on a paid plan switches to Free from the billing page, without contacting anyone", async ({ page }) => {
+  const { ws } = await owner(page, "downgrade");
+  // Paid through a store the app has since been uninstalled from, so the API settles it without
+  // reaching Shopify (which e2e can't); the cancellation in Shopify is apps/api/test/billing.test.ts.
+  const storeId = await insertStore(ws, `downgrade-${Date.now()}.myshopify.com`, ["read_orders"]);
+  await db.query("UPDATE stores SET status = 'uninstalled' WHERE id = $1", [storeId]);
+  await db.query("UPDATE subscriptions SET plan = 'growth', shopify_charge_id = 'gid://shopify/AppSubscription/7', billing_store_id = $2 WHERE workspace_id = $1", [ws, storeId]);
+
+  await page.goto("/settings/billing");
+  await expect(page.getByText(/Current plan:\s*Growth\./)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Upgrade to Scale" })).toBeVisible();
+  await page.getByRole("button", { name: "Switch to Free" }).click();
+  const dialog = page.getByRole("dialog", { name: "Switch to Free?" });
+  await expect(dialog).toContainText("cancelled in Shopify now");
+  await dialog.getByRole("button", { name: "Switch to Free" }).click();
+
+  await expect(page.getByText(/Current plan:\s*Free\./)).toBeVisible();
+  await expect(page.getByText("You're on the Free plan now.")).toBeVisible();
+  const { rows } = await db.query("SELECT plan, shopify_charge_id FROM subscriptions WHERE workspace_id = $1", [ws]);
+  expect(rows[0]).toEqual({ plan: "free", shopify_charge_id: null });
 });
 
 test("the privacy and support pages describe what the product actually does", async ({ page }) => {

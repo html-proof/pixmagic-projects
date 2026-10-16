@@ -212,6 +212,7 @@ model Store {
   createdAt             DateTime    @default(now()) @map("created_at")
   updatedAt             DateTime    @updatedAt @map("updated_at")
   workspace             Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  billedSubscriptions   Subscription[]
 
   @@index([workspaceId])
   @@map("stores")
@@ -591,8 +592,14 @@ model Subscription {
   /// leaves it untouched.
   pendingPlan      String?   @map("pending_plan")
   pendingChargeId  String?   @map("pending_charge_id")
+  /// The store whose Shopify bill carries the charges above (Shopify bills an app per store, and
+  /// only that store's token can cancel them). Both the charge in force and a pending one live
+  /// there: a plan change is always made through it while a charge is in force.
+  billingStoreId   String?   @map("billing_store_id")
   workspace        Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  billingStore     Store?    @relation(fields: [billingStoreId], references: [id], onDelete: SetNull)
 
+  @@index([billingStoreId])
   @@map("subscriptions")
 }
 

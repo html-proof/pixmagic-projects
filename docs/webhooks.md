@@ -22,9 +22,9 @@ Webhooks drive all updates after the initial backfill. Endpoint: `POST <APP_URL>
 | `fulfillments/create`, `fulfillments/update`, `fulfillment_events/create` | WhatsApp only: parcel stages. Need `read_fulfillments`, which isn't requested today, so they aren't subscribed; the jobs read shipment status from order payloads and a GraphQL poll instead |
 | `refunds/create` | Upsert refund (booked on refund date). If the order isn't known yet the job throws and retries with backoff |
 | `products/create`, `products/update`, `products/delete` | Upsert / delete product |
-| `app/uninstalled` | Store → `uninstalled`, tokens wiped. Data kept until `shop/redact` |
+| `app/uninstalled` | Store → `uninstalled`, tokens wiped; a plan billed on the store ends (Free). Data kept until `shop/redact`. One older than the current installation only re-reads the store's charges from Shopify |
 | `app/scopes_update` | Replace granted scopes → dashboard modules update immediately |
-| `app_subscriptions/update` | Update billing status |
+| `app_subscriptions/update` | The pending charge active → it becomes the plan; the charge in force cancelled, declined or expired → Free (`packages/core/src/billing.ts`) |
 | `customers/data_request` | Audit entry, with how many WhatsApp contacts the store holds for that customer (analytics hold no PII) |
 | `customers/redact` | Null the hashed customer key on that customer's orders; delete the customer's WhatsApp number, messages, timelines and reviews |
 | `shop/redact` | Delete all synced data for the store, WhatsApp included |

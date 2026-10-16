@@ -29,7 +29,7 @@ import {
   type TokenSet,
 } from "./ads.js";
 import type { Coord } from "./coord.js";
-import { env } from "./env.js";
+import { env, switchedOn } from "./env.js";
 import { logger } from "./logger.js";
 import type { Producer, Queues } from "./queues.js";
 import type { FetchLike } from "./shopify.js";
@@ -41,9 +41,6 @@ export function metaConfig(fetchImpl?: FetchLike): MetaConfig | null {
   if (!e.META_APP_ID || !e.META_APP_SECRET) return null;
   return { appId: e.META_APP_ID, appSecret: e.META_APP_SECRET, version: e.META_API_VERSION, configId: e.META_CONFIG_ID || undefined, fetchImpl };
 }
-
-/** "1", "true", "yes" or "on". */
-const switchedOn = (v: string) => /^(1|true|yes|on)$/i.test(v.trim());
 
 /** Google Ads: the same Google OAuth client as AdSense, switched on once its Cloud project may reach real accounts. */
 export function googleConfig(fetchImpl?: FetchLike): GoogleConfig | null {

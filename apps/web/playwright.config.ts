@@ -38,6 +38,8 @@ const env = {
    * `apps/web/out`: the folder a local server serves by default.
    */
   NEXT_EXPORT_DIR: "out-e2e",
+  /** Settings → Billing is tested before paid plans launch (src/lib/features.ts). */
+  NEXT_PUBLIC_E2E_BILLING: "1",
 } as Record<string, string>;
 
 export default defineConfig({

@@ -14,6 +14,8 @@ import {
   servesAnyShop,
   shopifyApp,
   shopifyApps,
+  storeLimitReached,
+  type Plan,
   type ShopifyApp,
   type ShopifyAppConfig,
   type TokenResponse,
@@ -280,6 +282,8 @@ export function shopifyRoutes(app: App, deps: Deps) {
     if (await storeTakenElsewhere(shop, ws)) {
       throw new HttpError(409, "This store is already connected to another workspace", "store_taken");
     }
+    const full = await storeLimitReached(ws, shop);
+    if (full) throw storeLimit(full);
     return c.json({ url: await beginAuthorize(c, deps, user.id, ws, shop, installApp(shop).key, from) });
   });
 
@@ -303,6 +307,10 @@ export function shopifyRoutes(app: App, deps: Deps) {
     if (!servesAnyShop(mainApp)) {
       throw new HttpError(400, "Enter your store's myshopify.com address to connect it", "shop_required");
     }
+    // Asked before Shopify installs anything: the store is picked there, and only one the
+    // workspace has room for may come back to it.
+    const full = await storeLimitReached(ws, null);
+    if (full) throw storeLimit(full);
 
     const nonce = randomToken(24);
     await deps.coord.put(`oauth:pending:${nonce}`, JSON.stringify({ userId: user.id, workspaceId: ws, ...(from ? { from } : {}) }), STATE_TTL_S);
@@ -428,7 +436,9 @@ export function shopifyRoutes(app: App, deps: Deps) {
         const pending = pendingRaw ? (JSON.parse(pendingRaw) as { userId: string; workspaceId: string; from?: unknown }) : null;
         // Re-check permission on the workspace /start remembered (the role may have changed since).
         const ws = pending && pending.userId === verified?.id ? await manageable(pending.workspaceId) : null;
-        if (ws && verified) {
+        // A workspace that filled up since /start checked (a second connect at the same time) can't
+        // take it; the store is installed by now, so it goes on as if nobody was known (4. below).
+        if (ws && verified && !(await storeLimitReached(ws, shop))) {
           if (await storeTakenElsewhere(shop, ws)) return c.redirect(`${appUrl}/onboarding?error=store_taken`);
           const from = connectFromSchema.catch(undefined).parse(pending?.from);
           return c.redirect(await beginAuthorize(c, deps, verified.id, ws, shop, app.key, from));
@@ -450,7 +460,8 @@ export function shopifyRoutes(app: App, deps: Deps) {
           select: { workspaceId: true, role: true },
         });
         const only = managed.length === 1 && can(managed[0]!.role, "stores:manage") ? managed[0]!.workspaceId : null;
-        if (only) return c.redirect(await beginAuthorize(c, deps, verified.id, only, shop, app.key));
+        // One whose plan has no room for another store doesn't get it: then 4.
+        if (only && !(await storeLimitReached(only, shop))) return c.redirect(await beginAuthorize(c, deps, verified.id, only, shop, app.key));
       }
 
       // 4. Everyone else: authorize now, decide where the store lives once Shopify answers.
@@ -534,6 +545,14 @@ export function shopifyRoutes(app: App, deps: Deps) {
     return c.json({ workspace: { ...result.workspace, role: "owner" }, storeId: result.storeId });
   });
 }
+
+/** A workspace whose plan has no room for another store (packages/core/src/billing.ts). */
+const storeLimit = (plan: Plan) =>
+  new HttpError(
+    403,
+    `The ${plan.name} plan includes ${plan.maxStores === 1 ? "1 store" : `${plan.maxStores} stores`}. Choose a bigger plan in Settings → Billing to connect another.`,
+    "store_limit",
+  );
 
 const claimExpired = () =>
   new HttpError(404, "This link has expired. Open bizinsights from your Shopify admin (Apps) to continue.", "claim_expired");
