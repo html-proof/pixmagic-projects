@@ -108,7 +108,8 @@ spam**, **failed**, **not sent** (the provider won't send to this address from o
 SES's sandbox). Delivered/bounced/complained come only from the provider's signed webhook
 (`POST /webhooks/email/resend`, Svix signature, 5-minute replay window); opens and clicks are not
 tracked. No address or message content is kept in the delivery records or the logs. Which provider
-sends is configuration (docs/aws-deployment.md "App email").
+sends is configuration (docs/aws-deployment.md "App email"); in production it is Resend since
+2026-10-16, so invitations reach any address.
 
 ## Live updates
 

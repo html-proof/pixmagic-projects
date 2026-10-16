@@ -22,7 +22,7 @@ Account `605411278365`, region `ap-southeast-2` (Sydney); the WAF web ACL lives 
 | Large webhook bodies | S3 `insights-production-payloads-605411278365` (7-day lifecycle) | `apps/aws/src/s3Blobs.ts` |
 | Dumps, artifacts | S3 `insights-production-artifacts-605411278365` (30 days, versioned) | `infra/cdk/scripts/migrate-data.mjs` |
 | Sign-in | Cognito pool `insights-production` (from `infra/aws/cognito.yaml`) | `apps/api/src/cognito.ts` |
-| App email | Resend once its key is in the app secret, else SES (sandbox: verified recipients only); "App email" below | `packages/core/src/mail/`, `apps/aws/src/mailers.ts`, `apps/aws/src/sesMailer.ts` |
+| App email | Resend (bizinsights.io verified, live 2026-10-16); SES as fallback (sandbox: verified recipients only); "App email" below | `packages/core/src/mail/`, `apps/aws/src/mailers.ts`, `apps/aws/src/sesMailer.ts` |
 | Secrets | Secrets Manager `insights/production/{app,db-owner,worker-cognito}`; settings in SSM `/insights/production/runtime` | `apps/aws/src/secrets.ts` |
 | Logs, alarms | CloudWatch (90 days), dashboard `insights-production`, SNS `insights-production-alarms`, budget US$150/month | `infra/cdk/lib/app-stack.ts` |
 | DB admin | EC2 `insights-production-admin` (t4g.nano, Systems Manager only, normally **stopped**) | `infra/cdk/lib/data-stack.ts` |
@@ -60,8 +60,9 @@ SESSION_SECRET and APP_RLS_PASSWORD, and prints key names only. A secret only it
 node infra/cdk/scripts/put-secrets.mjs --set META_APP_SECRET
 ```
 
-The functions read secrets at cold start; after changing one, force fresh instances with a deploy
-(or `aws lambda update-function-configuration --function-name insights-production-api --description refresh`).
+The functions read secrets at cold start; after changing one, force fresh instances with a deploy,
+or publish the same code as a new version and move the `live` alias ("App email" below shows how:
+changing `$LATEST` alone restarts nothing live).
 
 If Node's connections time out on this PC's network (IPv6-only hotspot with NAT64), set
 `$env:NODE_OPTIONS = "--network-family-autoselection-attempt-timeout=5000"` first.
@@ -269,32 +270,45 @@ retried twice while the owner waits, then from the `email` queue after 1, 5 and 
 - **SES**: identity `bizinsights.io` (Easy DKIM, above) works, but the account's request for
   production access was **DENIED** (2026-10-16, case 179215020600103), so SES sends only to the
   addresses verified in SES (sandbox, 200 a day). No code can get round that.
-- **Resend** (resend.com; free tier 3,000 emails a month, 100 a day) sends to any address once the
-  domain is verified there. Owner steps (they need an account the owner opens and DNS access):
-  1. Sign up at resend.com, **Domains → Add domain** `bizinsights.io`, region `ap-northeast-1` (Tokyo,
-     nearest to Sydney) or the default.
-  2. Add the records Resend lists to the Cloudflare zone, **DNS only** (grey cloud): the DKIM TXT
-     `resend._domainkey`, and for the bounce subdomain `send` an MX (`feedback-smtp.<region>.amazonses.com`,
-     priority 10) and an SPF TXT (`v=spf1 include:amazonses.com ~all`). They don't touch the apex,
-     `www`, the SES DKIM CNAMEs or `_dmarc`, so the site and SES keep working. Press **Verify**.
-  3. **API Keys → Create** a key with *Sending access* for `bizinsights.io` only.
-  4. **Webhooks → Add** `https://bizinsights.io/api/webhooks/email/resend`, events `email.sent`,
-     `email.delivered`, `email.delivery_delayed`, `email.bounced`, `email.complained`, `email.failed`,
-     `email.suppressed`; copy its signing secret (`whsec_...`).
-  5. Store both: `node infra/cdk/scripts/put-secrets.mjs --env production --set RESEND_API_KEY` and
-     `--set RESEND_WEBHOOK_SECRET` (each read from the clipboard, else a hidden prompt; merges into `insights/production/app`), then give the
-     functions a cold start (the next deploy does; or publish a new version of api/jobs).
-  6. Check: invite an address you own that isn't verified in SES; the team list says "Email sent",
-     then "Email delivered" once Resend's event arrives (CloudWatch: `mail delivery event`).
+- **Resend** (resend.com; free tier 3,000 emails a month, 100 a day) sends to any address: **live
+  since 2026-10-16**. Account: Resend login `tangoenery2004` (Google sign-in). Domain `bizinsights.io`,
+  region Tokyo (`ap-northeast-1`), **Verified**, click/open tracking off. Its records in the Cloudflare
+  zone, all **DNS only**: TXT `resend._domainkey` (DKIM public key), CNAME `rsend` →
+  `rsend-apne1.forge.rmta.net` and CNAME `send` → `send.forge.rmta.net` (return path / SPF). They
+  don't touch the apex, `www`, the SES DKIM CNAMEs or `_dmarc` (relaxed alignment passes on Resend's
+  DKIM). API key "bizinsights production": *Sending access*, `bizinsights.io` only. Webhook
+  `https://bizinsights.io/api/webhooks/email/resend` with `email.sent`, `email.delivered`,
+  `email.delivery_delayed`, `email.bounced`, `email.complained`, `email.failed`, `email.suppressed`
+  (no opens or clicks). Both values are in `insights/production/app` as `RESEND_API_KEY` and
+  `RESEND_WEBHOOK_SECRET`.
+  - **Replacing a value** (a key rotated in Resend): copy it with Resend's own copy button, run
+    `node infra/cdk/scripts/put-secrets.mjs --env production --set RESEND_API_KEY` (or
+    `RESEND_WEBHOOK_SECRET`) on the same PC: it reads the clipboard, refuses anything not shaped like
+    `re_...` / `whsec_...`, and prints names only. Then restart the functions (below).
+  - **Check**: invite an address you own; the team list says "Email sent", then "Email delivered"
+    once Resend's event arrives (CloudWatch: `mail delivery event`). An unsigned POST to the webhook
+    answers 401 `invalid_signature` (404 `not_configured` means the secret isn't loaded).
   To go back to SES, set `EMAIL_PROVIDER=ses` (settings) or remove the key.
+
+**Restarting the functions after a secret changes.** They read secrets at a cold start, and the `live`
+aliases point at published versions, so changing `$LATEST` alone restarts nothing live. Publish the
+same code again and move the alias (what was done for v47 on 2026-10-16; the next CDK deploy publishes
+its own version as usual):
+
+```bash
+for f in api jobs cron; do n=insights-production-$f; d=$(aws lambda get-function-configuration --function-name $n --query Description --output text); aws lambda update-function-configuration --function-name $n --description "$d · secrets reloaded" >/dev/null; aws lambda wait function-updated --function-name $n; v=$(aws lambda publish-version --function-name $n --query Version --output text); aws lambda update-alias --function-name $n --name live --function-version $v >/dev/null; done
+```
+
+Check first that `$LATEST` holds the live code (same `CodeSha256` as the alias's version), or this
+would ship whatever `$LATEST` has.
 
 ## Owner-only steps
 
 - **Alerts**: an email address for alarms and the budget (`-c alertEmail=...`; confirm the SNS email).
-- **App email to any address**: SES production access was denied (above). Either set up Resend
-  ("App email" above, about 15 minutes plus DNS time) or appeal the SES decision in the support
-  case. Until one of them is done, invitations reach only SES-verified addresses; every other
-  invitation is saved and its link can be copied from the team list and sent another way.
+- **Sign-up codes and password resets** come from Cognito's own email (`COGNITO_DEFAULT`): any
+  address, but at most 50 a day for the whole pool, from `no-reply@verificationemail.com`. Going past
+  that needs Cognito on SES (production access, denied so far) or a Cognito custom email sender
+  (a Lambda trigger + a KMS key, ~US$1/month) sending through Resend.
 - **Google sign-in**: add `https://insights-605411278365.auth.ap-southeast-2.amazoncognito.com/oauth2/idpresponse`
   to a Google OAuth client, put its secret with `put-secrets.mjs --set GOOGLE_SIGNIN_CLIENT_SECRET`,
   deploy with `-c googleClientId=<client id>`.

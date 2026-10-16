@@ -42,6 +42,9 @@ const SHAPES = {
   GOOGLE_SIGNIN_CLIENT_SECRET: GOOGLE_SECRET,
   GOOGLE_ADS_CLIENT_SECRET: GOOGLE_SECRET,
   SHOPIFY_API_SECRET: SHOPIFY_SECRET,
+  // The app's email provider (packages/core/src/mail; docs/aws-deployment.md "App email").
+  RESEND_API_KEY: [/^re_[A-Za-z0-9_]{20,}$/, "a Resend API key (it starts with re_)"],
+  RESEND_WEBHOOK_SECRET: [/^whsec_[A-Za-z0-9+/=]{20,}$/, "a Resend webhook signing secret (it starts with whsec_)"],
 };
 
 /** Copied from --from files when present there. */
