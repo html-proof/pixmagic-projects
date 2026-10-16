@@ -13,7 +13,8 @@ its own login. Shopify staff confirmed on 2026-08-24 that "fully non-embedded pu
 allowed in the Shopify App Store" and that App Bridge and requirements 2.2.2/2.2.3 don't apply while
 the app stays non-embedded ([thread](https://community.shopify.dev/t/non-embedded-shopify-apps-still-allowed/27111)).
 Embedding it would mean session-token auth for every API route and an App Bridge front end: a
-project of its own, not needed for review.
+project of its own, not needed for review. The admin may still frame the app URL; the launch then reopens itself as the
+whole tab (docs/shopify-setup.md, "refused to connect" inside the admin).
 
 ## 1. Policy
 

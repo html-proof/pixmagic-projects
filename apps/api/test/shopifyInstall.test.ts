@@ -43,6 +43,41 @@ async function install(browser = testBrowser(ctx), shop = SHOP) {
   return { browser, cb };
 }
 
+describe("opened inside Shopify's admin", () => {
+  // The admin frames the app URL (embedded=1) although the app is non-embedded; a redirect there
+  // lands on pages that refuse framing ("bizinsights.io refused to connect").
+  const framed = (url: string) => ctx.app.inject({ method: "GET", url, headers: { "sec-fetch-dest": "iframe" } });
+
+  it("answers a framed launch with a page only that store's admin may frame, reopening the launch as the whole tab", async () => {
+    const url = launchUrl();
+    const res = await framed(url);
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["content-type"]).toContain("text/html");
+    const csp = String(res.headers["content-security-policy"]);
+    expect(csp).toContain(`frame-ancestors https://${SHOP} https://admin.shopify.com`);
+    expect(res.headers["x-frame-options"]).toBeUndefined();
+    expect(res.body).toContain('<meta name="shopify-api-key" content="test_key">');
+    const target = `http://localhost:3001/api${url}`;
+    expect(res.body).toContain(`href="${target.replace(/&/g, "&#38;")}" target="_top"`);
+    expect(res.body).toContain(`open(${JSON.stringify(target)},"_top")`);
+    // Nothing was authorized or stored yet: that happens on the top-level request.
+    expect(await systemDb.store.count()).toBe(0);
+  });
+
+  it("goes on as usual once the same link is opened as the whole tab", async () => {
+    const res = await ctx.app.inject({ method: "GET", url: launchUrl(), headers: { "sec-fetch-dest": "document" } });
+    expect(res.statusCode).toBe(302);
+    expect(new URL(String(res.headers.location)).pathname).toBe("/admin/oauth/authorize");
+  });
+
+  it("still refuses an unsigned framed launch, and every other page still refuses framing", async () => {
+    const res = await framed(`/shopify/launch?shop=${SHOP}&timestamp=${now()}&hmac=bad`);
+    expect(res.statusCode).toBe(302);
+    expect(res.headers["x-frame-options"]).toBe("DENY");
+    expect(String(res.headers["content-security-policy"])).toContain("frame-ancestors 'none'");
+  });
+});
+
 describe("installing from Shopify", () => {
   it("authorizes at once, with nobody signed in, instead of asking for a login first", async () => {
     const res = await testBrowser(ctx).get(launchUrl());

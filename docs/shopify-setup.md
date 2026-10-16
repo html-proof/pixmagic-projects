@@ -249,6 +249,17 @@ While the app is unapproved, set `SHOPIFY_DEFAULT_APP_SHOPS` to our development 
 
 **A merchant reports a blank page or raw JSON after clicking the app in their admin:** they reached `/shopify/launch` with a link Shopify didn't sign (usually a bookmark or a hand-edited URL). They are now redirected to `/onboarding?error=launch_unverified` with an explanation; the event is logged as `shopify_launch_rejected`.
 
+### "bizinsights.io refused to connect" inside the admin
+
+Seen 2026-10-16 on the Insights Test dev store: although both apps' released configuration says
+`embedded = false`, the admin opened the app at `admin.shopify.com/store/<store>/apps/<handle>` with
+the app URL in an iframe (`/api/shopify/launch?embedded=1&id_token=…`). Every API response refuses
+framing (`X-Frame-Options: DENY`, `frame-ancestors 'none'`), so Chrome showed "refused to connect".
+A launch that arrives framed (`Sec-Fetch-Dest: iframe`) now gets a small page that only that store's
+admin may frame (`frame-ancestors https://<shop> https://admin.shopify.com`); it loads App Bridge and
+calls `open(<same signed launch>, "_top")`, with an "Open bizinsights" link as the fallback, so the
+app opens as the whole tab and goes through the usual launch. Nothing else became framable.
+
 ## 3f. Getting approved, so live stores can install
 
 This is the only thing that makes a client's store installable, and it is entirely done in Shopify's Dev Dashboard — there is no code change that substitutes for it. Expect the review itself to take days to weeks, and plan client onboarding around that.

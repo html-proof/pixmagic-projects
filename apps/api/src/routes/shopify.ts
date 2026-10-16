@@ -141,6 +141,43 @@ export function appForSignedQuery(q: Record<string, string>): ShopifyApp | null 
   return shopifyApps().find((a) => verifyShopifyQueryHmac(q, a.clientSecret)) ?? null;
 }
 
+const htmlEscape = (s: string) => s.replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`);
+
+/**
+ * The page a launch framed by Shopify's admin gets: it reopens `target` as the whole tab.
+ * App Bridge does that (a cross-origin frame may not navigate the top window by itself, and
+ * App Bridge turns `open(url, "_top")` into a request to the admin); the link is the fallback a
+ * click always makes work. Only this store's admin may frame it (Shopify's frame-ancestors rule
+ * for embedded apps); every other page still refuses to be framed.
+ */
+function breakOutOfAdmin(c: Ctx, shop: string, apiKey: string, target: string) {
+  const nonce = randomToken(16);
+  const csp = [
+    "default-src 'none'",
+    `script-src 'nonce-${nonce}' https://cdn.shopify.com`,
+    "connect-src https://cdn.shopify.com https://*.shopify.com https://*.myshopify.com",
+    "style-src 'unsafe-inline' https://cdn.shopify.com",
+    "img-src https: data:",
+    "font-src https://cdn.shopify.com",
+    `frame-ancestors https://${shop} https://admin.shopify.com`,
+    "base-uri 'none'",
+    "form-action 'none'",
+  ].join("; ");
+  const href = htmlEscape(target);
+  // JSON inside a script: `<` escaped so the string can never end the element.
+  const js = JSON.stringify(target).replace(/</g, "\\u003c");
+  const html = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="shopify-api-key" content="${htmlEscape(apiKey)}">
+<script src="https://cdn.shopify.com/shopifycloud/app-bridge.js" nonce="${nonce}"></script>
+<title>Opening bizinsights</title>
+<style>body{font:15px/1.5 system-ui,sans-serif;margin:0;display:grid;place-items:center;min-height:100vh;color:#1a1a1a;background:#f6f6f7}a{display:inline-block;margin-top:12px;padding:10px 16px;border-radius:8px;background:#1a1a1a;color:#fff;text-decoration:none}</style>
+</head><body><main style="text-align:center"><p>bizinsights opens in its own window.</p><a href="${href}" target="_top">Open bizinsights</a></main>
+<script nonce="${nonce}">try{open(${js},"_top")}catch(e){}</script>
+</body></html>`;
+  return c.html(html, 200, { "content-security-policy": csp, "cache-control": "no-store" });
+}
+
 /** Authorize redirect for a signed-in user connecting `shop` to `workspaceId`. */
 const beginAuthorize = (c: Ctx, deps: Deps, userId: string, workspaceId: string, shop: string, app: string, from?: ConnectFrom) =>
   authorizeRedirect(c, deps, { mode: "connect", userId, workspaceId, shop, app, ...(from ? { from } : {}) });
@@ -410,6 +447,15 @@ export function shopifyRoutes(app: App, deps: Deps) {
     if (!app || !shop || stale) {
       logger.warn({ event: "shopify_launch_rejected", reason: !app ? "invalid_hmac" : stale ? "stale" : "invalid_shop" }, "unverified app launch");
       return c.redirect(`${appUrl}/onboarding?error=launch_unverified`);
+    }
+    // Shopify's admin opens the app inside its own iframe (embedded=1), though the app is
+    // configured non-embedded. Everything below answers with redirects to pages that refuse to
+    // be framed, which the merchant sees as "bizinsights.io refused to connect". So a framed
+    // launch gets a page only that store's admin may frame, which reopens this same signed link
+    // as the whole tab; that top-level request then goes on below like any other launch.
+    if (c.req.header("sec-fetch-dest") === "iframe") {
+      const query = new URL(c.req.url).search;
+      return breakOutOfAdmin(c, shop, app.clientId, `${appUrl}/api/shopify/launch${query}`);
     }
     logReturn("launch", shop, app);
 

@@ -74,7 +74,10 @@ export function buildApp(deps: Deps): App {
 
   app.use("*", async (c, next) => {
     await next();
+    // A response that names who may frame it (Shopify's admin, routes/shopify.ts) can't also say DENY.
+    const framable = /frame-ancestors (?!'none')/.test(c.res.headers.get("content-security-policy") ?? "");
     for (const [name, value] of Object.entries(API_HEADERS)) {
+      if (framable && name === "x-frame-options") continue;
       if (!c.res.headers.has(name)) c.res.headers.set(name, value);
     }
     // Only over https (CloudFront redirects everything else; local development is plain http).
