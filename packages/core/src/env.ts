@@ -70,6 +70,13 @@ const schema = z.object({
    */
   SHOPIFY_DEFAULT_APP_SHOPS: z.string().optional().default(""),
   /**
+   * Key of the app a store without one of its own is sent to: Shopify's store picker (one-click
+   * connect) and typed-in stores. "default" is the main app; "public" is the App Store app in our
+   * Partner organization (docs/shopify-setup.md, "The App Store app"). An unknown key, or an app
+   * whose allowlist doesn't cover any store, falls back to the main app.
+   */
+  SHOPIFY_INSTALL_APP: z.string().optional().default("default"),
+  /**
    * "1" when paid plans are on sale (packages/core/src/billing.ts): merchants can start one, and
    * each plan's store limit applies. Turn it on together with `BILLING_ENABLED` in
    * apps/web/src/lib/features.ts, which shows Settings → Billing. Off, no charge can be started

@@ -30,7 +30,17 @@ export const APP_SETTINGS = {
   // Client stores with their own custom-distribution app (docs/shopify-setup.md, "A client's
   // store with its own app"). Fill in the client id from the Dev Dashboard and set the secret
   // with `node infra/cdk/scripts/put-secrets.mjs --set SHOPIFY_APP_SECRET_PIXMAGIC`, then deploy.
-  "SHOPIFY_EXTRA_APPS": "[{\"key\":\"pixmagic\",\"clientId\":\"bb0ea9e4ad8939a6a1513e4dbf8cbbf1\",\"shops\":[\"pixmagic.myshopify.com\"]}]",
+  //
+  // "public" is the App Store app (shopify-app/shopify.app.public.toml), in the Pixmagic Partner
+  // organization: the only one of our apps that can be submitted for review (the main app's
+  // organization has no Partner account, and PixMagic's is custom-distributed for good). Its
+  // secret: SHOPIFY_APP_SECRET_PUBLIC. Installs from its listing work through it already; new
+  // stores are sent to it once SHOPIFY_INSTALL_APP below says "public".
+  "SHOPIFY_EXTRA_APPS": "[{\"key\":\"pixmagic\",\"clientId\":\"bb0ea9e4ad8939a6a1513e4dbf8cbbf1\",\"shops\":[\"pixmagic.myshopify.com\"]},{\"key\":\"public\",\"clientId\":\"658431ae6a22c880e0ab2a0e2040a28a\",\"shops\":[]}]",
+  // The app stores without one of their own are sent to (packages/core/src/apps.ts installTarget).
+  // "default" until Shopify approves "public": an unapproved app installs only on development
+  // stores of its own organization, and ours are in the main app's. Approved: set "public".
+  "SHOPIFY_INSTALL_APP": "default",
   // Paid plans (packages/core/src/billing.ts): "1" lets merchants start one and applies each plan's
   // store limit. Off until they launch; turn it on together with BILLING_ENABLED in
   // apps/web/src/lib/features.ts (docs/shopify-app-store-compliance.md, "Billing").

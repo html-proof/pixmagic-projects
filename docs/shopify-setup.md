@@ -260,6 +260,30 @@ admin may frame (`frame-ancestors https://<shop> https://admin.shopify.com`); it
 calls `open(<same signed launch>, "_top")`, with an "Open bizinsights" link as the fallback, so the
 app opens as the whole tab and goes through the usual launch. Nothing else became framable.
 
+## 3g. The App Store app (public distribution, Pixmagic Partner organization)
+
+Only an app in a **Partner organization** can be submitted to the App Store, and a distribution
+choice is permanent. Our three apps, all named "bizinsights" and all served by this backend:
+
+| App | Client ID | Organization | Distribution | Backend key |
+| --- | --- | --- | --- | --- |
+| Main (`shopify.app.toml`) | `57e9ef75…` | "My Store" (Dev Dashboard only, no Partner account) | can't be submitted | `default` |
+| PixMagic (`shopify.app.pixmagic.toml`) | `bb0ea9e4…` | Pixmagic (Partner 5229240) | custom, pixmagic.myshopify.com | `pixmagic` |
+| **App Store** (`shopify.app.public.toml`) | `658431ae…` | Pixmagic (Partner 5229240) | **public** (chosen 2026-10-16) | `public` |
+
+- Secret: `SHOPIFY_APP_SECRET_PUBLIC` in `insights/production/app` (put-secrets.mjs). Installs from
+  its listing are recognised by their signature, so they work without anything else.
+- New stores (one-click connect, typed-in stores) go to `SHOPIFY_INSTALL_APP`
+  (apps/aws/src/settings.ts). It stays `default` until Shopify approves the App Store app: an
+  unapproved app installs only on development stores of its own organization, and ours are in the
+  main app's. Approved: set it to `public` and deploy.
+- Webhooks: as a public app it may not subscribe to order, refund or checkout topics until
+  **Protected customer data access** is granted for it (Partner Dashboard → the app → API access
+  requests). The toml lists what to add back then.
+- 2026-10-16: its first version, made in the Dashboard, was `embedded = true` with a secret the
+  backend didn't have, so opening it from a store's admin showed "bizinsights.io refused to
+  connect". `bizinsights-2` (the toml) made it non-embedded.
+
 ## 3f. Getting approved, so live stores can install
 
 This is the only thing that makes a client's store installable, and it is entirely done in Shopify's Dev Dashboard — there is no code change that substitutes for it. Expect the review itself to take days to weeks, and plan client onboarding around that.

@@ -44,7 +44,7 @@ function envValue(text: string, key: string): string | null {
   return null;
 }
 
-const APP_CONFIGS = ["shopify-app/shopify.app.toml", "shopify-app/shopify.app.pixmagic.toml"];
+const APP_CONFIGS = ["shopify-app/shopify.app.toml", "shopify-app/shopify.app.pixmagic.toml", "shopify-app/shopify.app.public.toml"];
 /** Mirrors the default in packages/core/src/env.ts. */
 const ENV_SCOPES = "read_orders,read_products";
 /**

@@ -61,6 +61,39 @@ describe("several Shopify apps", () => {
     expect(await getAccessToken(store, ctx.deps.coord)).toBe("shpat_CLIENT");
   });
 
+  it("a store installed from the App Store app's listing is authorized and kept on that app", async () => {
+    fakeShopifyFor("public_key", "public_secret");
+    const b = testBrowser(ctx);
+    const shop = "listing-shop.myshopify.com";
+    const launch = await b.get(`/shopify/launch?${signedQuery({ shop, host: "aG9zdA", timestamp: now() }, "public_secret")}`);
+    expect(launch.statusCode).toBe(302);
+    const authorize = new URL(String(launch.headers.location));
+    expect(`${authorize.origin}${authorize.pathname}`).toBe(`https://${shop}/admin/oauth/authorize`);
+    expect(authorize.searchParams.get("client_id")).toBe("public_key");
+
+    const cb = await approve(b, authorize.toString(), "public_secret");
+    expect(cb.statusCode).toBe(302);
+    const store = await systemDb.store.findUniqueOrThrow({ where: { shopDomain: shop } });
+    expect(store.shopifyAppKey).toBe("public");
+    expect(await getAccessToken(store, ctx.deps.coord)).toBe("shpat_CLIENT");
+
+    // Its webhooks are signed with that app's secret, for whichever store installed it.
+    const payload = JSON.stringify({ id: 1 });
+    const hook = await ctx.app.inject({
+      method: "POST",
+      url: "/webhooks/shopify",
+      headers: {
+        "content-type": "application/json",
+        "x-shopify-topic": "products/update",
+        "x-shopify-shop-domain": shop,
+        "x-shopify-webhook-id": "wh-public-1",
+        "x-shopify-hmac-sha256": signWebhookBody(payload, "public_secret"),
+      },
+      payload,
+    });
+    expect(hook.statusCode).toBe(200);
+  });
+
   it("other stores keep using the default app", async () => {
     const { b, ws, install } = await owner();
     expect(new URL((await install("someone-else")).json().url).searchParams.get("client_id")).toBe("test_key");

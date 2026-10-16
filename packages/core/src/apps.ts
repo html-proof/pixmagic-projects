@@ -149,8 +149,19 @@ export function shopifyApp(key: string | null | undefined): ShopifyApp {
 export const servesAnyShop = (app: ShopifyApp): boolean => app.shops.length === 0;
 
 /**
- * The app to install on `shop`: the one distributed to that store, else the main app when it
- * may be installed anywhere. Null when no app of ours can be installed there — the merchant
+ * The app stores without one of their own install (SHOPIFY_INSTALL_APP): the App Store app once
+ * Shopify approves it, the main app until then. Only an app that may go on any store qualifies;
+ * otherwise, or for a key no app has, the main app.
+ */
+export function installTarget(): ShopifyApp {
+  const apps = shopifyApps();
+  const chosen = apps.find((a) => a.key === env().SHOPIFY_INSTALL_APP);
+  return chosen && servesAnyShop(chosen) ? chosen : apps[0]!;
+}
+
+/**
+ * The app to install on `shop`: the one distributed to that store, else the install target
+ * (`installTarget`) when it may be installed anywhere. Null when no app of ours can be installed there — the merchant
  * needs their own app (docs/shopify-setup.md "A client's store with its own app").
  */
 export function appForShop(shop: string): ShopifyApp | null {
@@ -159,7 +170,7 @@ export function appForShop(shop: string): ShopifyApp | null {
   if (own) return own;
   // A store whose own app is misconfigured must not fall through to the main app: see `blocked`.
   if (blocked.has(shop)) return null;
-  const main = apps[0]!;
+  const main = installTarget();
   return servesAnyShop(main) ? main : null;
 }
 
