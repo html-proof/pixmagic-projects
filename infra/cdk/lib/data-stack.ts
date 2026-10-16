@@ -95,6 +95,9 @@ export class DataStack extends Stack {
       removalPolicy: cfg.name === "production" ? RemovalPolicy.SNAPSHOT : RemovalPolicy.DESTROY,
       autoMinorVersionUpgrade: true,
       enablePerformanceInsights: true,
+      // Enhanced Monitoring: the host's CPU, memory, disk and per-process figures every minute
+      // (CloudWatch Logs, RDSOSMetrics). Turning it on or off doesn't restart the database.
+      monitoringInterval: Duration.seconds(60),
       cloudwatchLogsExports: ["postgresql"],
       caCertificate: rds.CaCertificate.RDS_CA_RSA2048_G1,
     });
