@@ -20,21 +20,38 @@ permissions:
   contents: read
   id-token: write
 
+# Every `run:` is bash: on a self-hosted Windows runner, Git Bash (see ci.yml).
+defaults:
+  run:
+    shell: bash
+
 jobs:
   deploy:
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
-    runs-on: ubuntu-latest
+    # By hand only from main: the production environment has no branch rule on this plan, and a
+    # dispatch on any other branch would deploy code that never passed CI.
+    if: (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') || github.event.workflow_run.conclusion == 'success'
+    # GitHub's ubuntu-latest, or the self-hosted runner the repository variable SELF_HOSTED_RUNNER
+    # names (ci.yml).
+    runs-on: ${{ fromJSON(vars.SELF_HOSTED_RUNNER || '"ubuntu-latest"') }}
     timeout-minutes: 60
     environment: production
     env:
       AWS_REGION: ap-southeast-2
     steps:
+      - name: Git Bash and a lasting pnpm store (Windows runner)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          echo %ProgramFiles%\Git\bin>>"%GITHUB_PATH%"
+          echo npm_config_store_dir=%RUNNER_TOOL_CACHE%\pnpm-store>>"%GITHUB_ENV%"
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
-        with: { node-version: 24, cache: pnpm }
+        with:
+          node-version: 24
+          cache: ${{ vars.SELF_HOSTED_RUNNER == '' && 'pnpm' || '' }}
       - run: pnpm install --frozen-lockfile
         env: { DATABASE_URL: "postgresql://build:build@localhost:5432/build" }
       - name: Unit tests (AWS adapters, CDK)
@@ -43,6 +60,13 @@ jobs:
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ap-southeast-2
+      # On a self-hosted machine the SDKs could otherwise find someone's own AWS sign-in.
+      - name: Signed in as the deploy role
+        env: { ROLE: "${{ vars.AWS_DEPLOY_ROLE_ARN }}" }
+        run: |
+          arn=$(aws sts get-caller-identity --query Arn --output text)
+          echo "$arn"
+          [[ -n "$ROLE" && "$arn" == *":assumed-role/${ROLE##*/}/"* ]]
       - name: Build the Lambda package (API + UI)
         run: pnpm --filter @app/aws build -- --no-staging-bundle
       - name: Record the release being replaced

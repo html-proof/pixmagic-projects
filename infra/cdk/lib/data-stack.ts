@@ -24,6 +24,8 @@ const PG_VERSION = "17.11";
  */
 export class DataStack extends Stack {
   readonly vpc: ec2.Vpc;
+  /** The NAT gateways (cfg.natGateways of them): every function's way out to the internet. */
+  readonly natGatewayIds: string[];
   readonly appSg: ec2.SecurityGroup;
   readonly db: rds.DatabaseInstance;
   readonly dbSecret: secretsmanager.ISecret;
@@ -51,6 +53,10 @@ export class DataStack extends Stack {
         s3: { service: ec2.GatewayVpcEndpointAwsService.S3 },
         dynamodb: { service: ec2.GatewayVpcEndpointAwsService.DYNAMODB },
       },
+    });
+    this.natGatewayIds = this.vpc.publicSubnets.flatMap((s) => {
+      const nat = s.node.tryFindChild("NATGateway");
+      return nat instanceof ec2.CfnNatGateway ? [nat.ref] : [];
     });
 
     // Functions: outbound only.
@@ -88,6 +94,9 @@ export class DataStack extends Stack {
       maxAllocatedStorage: cfg.dbMaxStorageGb,
       storageEncrypted: true,
       backupRetention: Duration.days(cfg.dbBackupDays),
+      // The automated backups (point-in-time restore) outlive the instance: deleting it, by
+      // mistake or by a replacement, would otherwise delete them with it.
+      deleteAutomatedBackups: false,
       preferredBackupWindow: "16:00-16:30", // 02:00-02:30 Sydney
       preferredMaintenanceWindow: "sun:17:00-sun:17:30",
       copyTagsToSnapshot: true,

@@ -22,7 +22,7 @@ Account `605411278365`, region `ap-southeast-2` (Sydney); the WAF web ACL lives 
 | Large webhook bodies | S3 `insights-production-payloads-605411278365` (7-day lifecycle) | `apps/aws/src/s3Blobs.ts` |
 | Dumps, artifacts | S3 `insights-production-artifacts-605411278365` (30 days, versioned) | `infra/cdk/scripts/migrate-data.mjs` |
 | Sign-in | Cognito pool `insights-production` (from `infra/aws/cognito.yaml`); its emails (codes) through Lambda `insights-production-cognito-email` and Resend, "Sign-in emails" below | `apps/api/src/cognito.ts`, `apps/aws/src/cognitoEmail.ts` |
-| App email | Resend once its key is in the app secret, else SES (sandbox: verified recipients only); "App email" below | `packages/core/src/mail/`, `apps/aws/src/mailers.ts`, `apps/aws/src/sesMailer.ts` |
+| App email | Resend (bizinsights.io verified, live 2026-10-16); SES as fallback (sandbox: verified recipients only); "App email" below | `packages/core/src/mail/`, `apps/aws/src/mailers.ts`, `apps/aws/src/sesMailer.ts` |
 | Secrets | Secrets Manager `insights/production/{app,db-owner,worker-cognito}`; settings in SSM `/insights/production/runtime` | `apps/aws/src/secrets.ts` |
 | Logs, alarms | CloudWatch (90 days), dashboard `insights-production`, SNS `insights-production-alarms`, budget US$150/month | `infra/cdk/lib/app-stack.ts` |
 | DB admin | EC2 `insights-production-admin` (t4g.nano, Systems Manager only, normally **stopped**) | `infra/cdk/lib/data-stack.ts` |
@@ -60,8 +60,9 @@ SESSION_SECRET and APP_RLS_PASSWORD, and prints key names only. A secret only it
 node infra/cdk/scripts/put-secrets.mjs --set META_APP_SECRET
 ```
 
-The functions read secrets at cold start; after changing one, force fresh instances with a deploy
-(or `aws lambda update-function-configuration --function-name insights-production-api --description refresh`).
+The functions read secrets at cold start; after changing one, force fresh instances with a deploy,
+or publish the same code as a new version and move the `live` alias ("App email" below shows how:
+changing `$LATEST` alone restarts nothing live).
 
 If Node's connections time out on this PC's network (IPv6-only hotspot with NAT64), set
 `$env:NODE_OPTIONS = "--network-family-autoselection-attempt-timeout=5000"` first.
@@ -78,6 +79,108 @@ The role trusts the token's `sub` exactly as this repository sends it: the immut
 `repo:html-proof@68529971/pixmagic-projects@1413246051:environment:production` (`githubOidcSubject`
 in `infra/cdk/lib/config.ts`). "Not authorized to perform sts:AssumeRoleWithWebIdentity" in the
 workflow means the two differ: compare with CloudTrail's AssumeRoleWithWebIdentity events.
+
+### When GitHub-hosted jobs can't start: the PC's own runner
+
+"The job was not started because recent account payments have failed or your spending limit needs
+to be increased" (a job failing in seconds with no steps or log; read it with
+`gh api repos/html-proof/pixmagic-projects/check-runs/<job id>/annotations`) means the account's
+included minutes are used up (GitHub Free: 2,000 a month for private repositories, reset on the
+1st at 00:00 UTC) or a payment failed. Self-hosted runners cost nothing, so CI and Deploy can run on
+the owner's PC instead. Every job's `runs-on` reads the repository variable `SELF_HOSTED_RUNNER`;
+while it is unset, everything runs on `ubuntu-latest` exactly as before.
+
+Set up once, in an elevated Windows PowerShell, one command at a time. The runner runs as its own
+local account (not the owner's, whose `aws login` session and Git credentials stay out of reach) in
+a folder only administrators can change:
+
+```powershell
+$ProgressPreference = 'SilentlyContinue'
+```
+
+(Without it, PowerShell 5.1 downloads the ~100 MB zip very slowly.)
+
+```powershell
+New-Item -ItemType Directory -Force C:\actions-runner
+```
+
+```powershell
+icacls C:\actions-runner /inheritance:r /grant:r "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F"
+```
+
+```powershell
+cd C:\actions-runner
+```
+
+```powershell
+Invoke-WebRequest -Uri https://github.com/actions/runner/releases/download/v2.338.0/actions-runner-win-x64-2.338.0.zip -OutFile actions-runner.zip
+```
+
+```powershell
+(Get-FileHash .\actions-runner.zip -Algorithm SHA256).Hash
+```
+
+It must print `F48E0750A21812BCA5F82DE5F7F5AEAE71ABEE647FAB5A582F1742D07EBA455F` (v2.338.0; a newer
+release lists its own hash on github.com/actions/runner/releases).
+
+```powershell
+Expand-Archive .\actions-runner.zip -DestinationPath C:\actions-runner
+```
+
+The runner's account (pick a long password; nothing else uses it):
+
+```powershell
+$pw = Read-Host -AsSecureString "Password for ghrunner"
+```
+
+```powershell
+New-LocalUser ghrunner -Password $pw -PasswordNeverExpires -UserMayNotChangePassword -Description "GitHub Actions runner"
+```
+
+Then GitHub → the repository → Settings → Actions → Runners → New self-hosted runner → Windows,
+copy the token from the `config.cmd` line it shows (valid one hour) and run the line below. It
+asks for the runner group (press Enter) and the ghrunner password:
+
+```powershell
+.\config.cmd --url https://github.com/html-proof/pixmagic-projects --token <TOKEN> --name bizinsights-pc --labels bizinsights-pc --work _work --runasservice --windowslogonaccount .\ghrunner
+```
+
+A service gets the right to impersonate other users, which local exploits turn into SYSTEM (and
+SYSTEM reads every profile). Keep only the two privileges the runner needs:
+
+```powershell
+$svc = (Get-Service "actions.runner.*").Name
+```
+
+```powershell
+sc.exe privs $svc SeChangeNotifyPrivilege/SeIncreaseWorkingSetPrivilege
+```
+
+```powershell
+Restart-Service $svc
+```
+
+(`sc.exe`, not `sc`: in PowerShell `sc` is Set-Content.) Settings → Actions → Runners should now
+show bizinsights-pc as Idle. Finally the switch (Settings → Secrets and variables → Actions →
+Variables): `SELF_HOSTED_RUNNER` = `["self-hosted","bizinsights-pc"]`. The first job run on the
+PC also proves GitHub still starts self-hosted jobs under the billing block.
+
+On the PC there is no Docker: each job starts its own throwaway PostgreSQL 18 from
+`C:\Program Files\PostgreSQL\18\bin` and the e2e job a Mailpit stand-in
+(`apps/web/e2e/mailpit-stub.mjs`), all on free ports; the runner stops them with the job. The deploy
+job signs in only with the OIDC deploy role and checks that it did.
+
+- The PC must be on and awake: queued jobs wait up to 24 hours for the runner, then are cancelled.
+  A busy PC (demos, other test runs) makes the integration tests 2-3 times slower and can time one
+  out: re-run the job.
+- While the runner deploys, nobody deploys by hand: the two don't share a lock.
+- Job code still runs on the owner's PC: it can reach anything listening on localhost there, and
+  what one job leaves in the runner folder the next one (a deploy, with the deploy role) runs with.
+  Only collaborators can start jobs (fork pull requests are off); keep it that way, and never make
+  the repository public while the runner is attached.
+- Back to GitHub's runners: delete `SELF_HOSTED_RUNNER` first, then `Stop-Service "actions.runner.*"`
+  and `.\config.cmd remove` with the token from the runner's page in Settings → Actions → Runners,
+  then `Remove-LocalUser ghrunner`.
 
 ## Database
 
@@ -271,24 +374,37 @@ retried twice while the owner waits, then from the `email` queue after 1, 5 and 
 - **SES**: identity `bizinsights.io` (Easy DKIM, above) works, but the account's request for
   production access was **DENIED** (2026-10-16, case 179215020600103), so SES sends only to the
   addresses verified in SES (sandbox, 200 a day). No code can get round that.
-- **Resend** (resend.com; free tier 3,000 emails a month, 100 a day) sends to any address once the
-  domain is verified there. Owner steps (they need an account the owner opens and DNS access):
-  1. Sign up at resend.com, **Domains → Add domain** `bizinsights.io`, region `ap-northeast-1` (Tokyo,
-     nearest to Sydney) or the default.
-  2. Add the records Resend lists to the Cloudflare zone, **DNS only** (grey cloud): the DKIM TXT
-     `resend._domainkey`, and for the bounce subdomain `send` an MX (`feedback-smtp.<region>.amazonses.com`,
-     priority 10) and an SPF TXT (`v=spf1 include:amazonses.com ~all`). They don't touch the apex,
-     `www`, the SES DKIM CNAMEs or `_dmarc`, so the site and SES keep working. Press **Verify**.
-  3. **API Keys → Create** a key with *Sending access* for `bizinsights.io` only.
-  4. **Webhooks → Add** `https://bizinsights.io/api/webhooks/email/resend`, events `email.sent`,
-     `email.delivered`, `email.delivery_delayed`, `email.bounced`, `email.complained`, `email.failed`,
-     `email.suppressed`; copy its signing secret (`whsec_...`).
-  5. Store both: `node infra/cdk/scripts/put-secrets.mjs --env production --set RESEND_API_KEY` and
-     `--set RESEND_WEBHOOK_SECRET` (each read from the clipboard, else a hidden prompt; merges into `insights/production/app`), then give the
-     functions a cold start (the next deploy does; or publish a new version of api/jobs).
-  6. Check: invite an address you own that isn't verified in SES; the team list says "Email sent",
-     then "Email delivered" once Resend's event arrives (CloudWatch: `mail delivery event`).
+- **Resend** (resend.com; free tier 3,000 emails a month, 100 a day) sends to any address: **live
+  since 2026-10-16**. Account: Resend login `tangoenery2004` (Google sign-in). Domain `bizinsights.io`,
+  region Tokyo (`ap-northeast-1`), **Verified**, click/open tracking off. Its records in the Cloudflare
+  zone, all **DNS only**: TXT `resend._domainkey` (DKIM public key), CNAME `rsend` →
+  `rsend-apne1.forge.rmta.net` and CNAME `send` → `send.forge.rmta.net` (return path / SPF). They
+  don't touch the apex, `www`, the SES DKIM CNAMEs or `_dmarc` (relaxed alignment passes on Resend's
+  DKIM). API key "bizinsights production": *Sending access*, `bizinsights.io` only. Webhook
+  `https://bizinsights.io/api/webhooks/email/resend` with `email.sent`, `email.delivered`,
+  `email.delivery_delayed`, `email.bounced`, `email.complained`, `email.failed`, `email.suppressed`
+  (no opens or clicks). Both values are in `insights/production/app` as `RESEND_API_KEY` and
+  `RESEND_WEBHOOK_SECRET`.
+  - **Replacing a value** (a key rotated in Resend): copy it with Resend's own copy button, run
+    `node infra/cdk/scripts/put-secrets.mjs --env production --set RESEND_API_KEY` (or
+    `RESEND_WEBHOOK_SECRET`) on the same PC: it reads the clipboard, refuses anything not shaped like
+    `re_...` / `whsec_...`, and prints names only. Then restart the functions (below).
+  - **Check**: invite an address you own; the team list says "Email sent", then "Email delivered"
+    once Resend's event arrives (CloudWatch: `mail delivery event`). An unsigned POST to the webhook
+    answers 401 `invalid_signature` (404 `not_configured` means the secret isn't loaded).
   To go back to SES, set `EMAIL_PROVIDER=ses` (settings) or remove the key.
+
+**Restarting the functions after a secret changes.** They read secrets at a cold start, and the `live`
+aliases point at published versions, so changing `$LATEST` alone restarts nothing live. Publish the
+same code again and move the alias (what was done for v47 on 2026-10-16; the next CDK deploy publishes
+its own version as usual):
+
+```bash
+for f in api jobs cron; do n=insights-production-$f; d=$(aws lambda get-function-configuration --function-name $n --query Description --output text); aws lambda update-function-configuration --function-name $n --description "$d · secrets reloaded" >/dev/null; aws lambda wait function-updated --function-name $n; v=$(aws lambda publish-version --function-name $n --query Version --output text); aws lambda update-alias --function-name $n --name live --function-version $v >/dev/null; done
+```
+
+Check first that `$LATEST` holds the live code (same `CodeSha256` as the alias's version), or this
+would ship whatever `$LATEST` has.
 
 ## Sign-in emails (Cognito's codes)
 
@@ -318,10 +434,10 @@ share Resend's limits with the app's email (free tier: 100 a day, 3,000 a month)
 ## Owner-only steps
 
 - **Alerts**: an email address for alarms and the budget (`-c alertEmail=...`; confirm the SNS email).
-- **App email to any address**: SES production access was denied (above). Either set up Resend
-  ("App email" above, about 15 minutes plus DNS time) or appeal the SES decision in the support
-  case. Until one of them is done, invitations reach only SES-verified addresses; every other
-  invitation is saved and its link can be copied from the team list and sent another way.
+- **Sign-up codes and password resets** come from Cognito's own email (`COGNITO_DEFAULT`): any
+  address, but at most 50 a day for the whole pool, from `no-reply@verificationemail.com`. Going past
+  that needs Cognito on SES (production access, denied so far) or a Cognito custom email sender
+  (a Lambda trigger + a KMS key, ~US$1/month) sending through Resend.
 - **Google sign-in**: add `https://insights-605411278365.auth.ap-southeast-2.amazoncognito.com/oauth2/idpresponse`
   to a Google OAuth client, put its secret with `put-secrets.mjs --set GOOGLE_SIGNIN_CLIENT_SECRET`,
   deploy with `-c googleClientId=<client id>`.
@@ -339,13 +455,35 @@ share Resend's limits with the app's email (free tier: 100 a day, 3,000 a month)
 Prices from the AWS Price List API on 2026-10-15: NAT gateway $0.059/hour + $0.059/GB (~45 with
 its public IPv4), RDS db.t4g.small $0.051/hour (~37) + 20 GB gp3 (~3), WAF (web ACL + 4 rules) ~10,
 CloudWatch alarms/dashboard/logs/X-Ray ~6-10, Secrets Manager ~1.2, GuardDuty ~1-4 (free for the
-first 30 days), admin host stopped ~1, Lambda/SQS/DynamoDB/S3/CloudFront/Cognito at today's traffic
+first 30 days), admin host stopped ~1, KMS key for Cognito's emails 1 (+0.10 its alarm), Lambda/SQS/DynamoDB/S3/CloudFront/Cognito at today's traffic
 ~0-5 (free tiers): **~US$105-120**, within the approved US$120-145. Budget alarm at US$150 (80%
 actual, 100% forecast, once an alert email is set). Biggest levers: the NAT gateway and the
 database size. Cost allocation tags `app` and `environment` can be activated in Billing once AWS
 has seen them (up to 24 hours after the first deploy).
 
-Production stays on the lean tier by the owner's choice (cost, 2026-10-16), so two Trusted Advisor
-warnings are expected: "RDS Multi-AZ" (`dbMultiAz: true` adds a standby with automatic failover,
-~US$40/month) and "Single AZ Application Check" (`natGateways: 2` gives each AZ its own NAT,
-~US$47/month; with one, an outage in ap-southeast-2a cuts every function off from the internet).
+## Fault tolerance
+
+Production stays on the lean tier by the owner's choice (cost, 2026-10-16), so three Trusted
+Advisor fault-tolerance findings are expected: "Amazon RDS DB instances not using Multi-AZ
+deployment" and "Single AZ Application Check" (warnings), and "NAT Gateway AZ Independence"
+(error: the app subnet in ap-southeast-2b goes out through the NAT in 2a).
+
+They are one risk, an outage of ap-southeast-2a: the database and the only NAT gateway are both
+there, so the app stops whichever of the two survives. Fixing it takes both changes together:
+`dbMultiAz: true` (a standby in 2b with automatic failover, ~US$40/month) and `natGateways: 2`
+(a NAT per AZ, ~US$47/month), about US$87/month in all. Either one alone buys little. An outage of
+2b is already survivable: the functions run in both AZs and Lambda uses the one that works.
+
+What production does have, at no extra cost:
+- Functions in two AZs; queues with retries, backoff, a dead-letter queue (`insights-production-dlq`)
+  and jobs that wait out a database outage instead of failing (apps/worker `deferForDb`).
+- Database: 14 days of point-in-time restore, kept even if the instance is deleted
+  (`DeleteAutomatedBackups: false`), deletion protection, a final snapshot on delete, storage
+  autoscaling to 100 GB. DynamoDB with point-in-time recovery; versioned artifacts bucket.
+- Scheduled runs: Scheduler retries a hand-over Lambda refuses (10 minutes), Lambda retries a failed
+  run twice; a tick that still didn't run goes to `insights-production-cron-missed` (alarm
+  `cron-missed-ticks`) and the next tick takes over.
+- Alarms on the topic `insights-production-alarms`: function errors (Cognito's email function too), throttles and latency, queue age,
+  the dead-letter queue, database CPU/memory/storage/connections, NAT gateway port allocation and
+  dropped packets, plus RDS's own events (availability, failure, failover, low storage, maintenance,
+  recovery, restoration). **Nobody receives them until an alert email is set** (Owner-only steps).
