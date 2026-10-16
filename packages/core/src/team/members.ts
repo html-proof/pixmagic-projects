@@ -1,4 +1,4 @@
-import { withTenant, type Tx } from "@app/db";
+import { systemDb, withTenant, type Tx } from "@app/db";
 import { ACCESS_KEYS, can, hasFullAccess, modulesOf, type AccessModule, type Role } from "@app/shared";
 import type { StaffRole } from "@app/shared/staff";
 import { accessFingerprint, checkAssignment, lockTeam, TeamError, teamNotFound, type AssignableRole, type TeamActor } from "./common.js";
@@ -23,8 +23,9 @@ export interface TeamRow {
   /** Joined (members) or invited (invitations). */
   since: string;
   invitedBy: string | null;
-  /** Members: their user id (to mark "you"), when their access last changed, and its fingerprint (for safe edits). */
+  /** Members: their user id (to mark "you"), when they last signed in, when their access last changed, and its fingerprint (for safe edits). */
   userId?: string;
+  lastSignInAt?: string | null;
   accessChangedAt?: string | null;
   fingerprint?: string;
   /** Invitations: until when, the note, and how its email went. */
@@ -41,67 +42,103 @@ export interface TeamSummary {
   pendingInvitations: number;
   /** Expired or cancelled invitations still on record (the retention sweep removes them after 90 days). */
   endedInvitations: number;
+  /** Each count as it stood at the end of each of the last TREND_DAYS days (oldest first, today last). */
+  trend: Record<"totalMembers" | "activeMembers" | "pendingInvitations" | "endedInvitations", number[]>;
 }
+
+export const TREND_DAYS = 30;
 
 /** Every member and every invitation not accepted, as rows, with the page's four counts. */
 export async function loadTeam(workspaceId: string, now = new Date()): Promise<{ rows: TeamRow[]; summary: TeamSummary }> {
-  return withTenant(workspaceId, async (tx) => {
-    const [members, invitations] = await Promise.all([
+  const [members, allInvitations] = await withTenant(workspaceId, (tx) =>
+    Promise.all([
       tx.membership.findMany({
         where: { workspaceId },
         include: { user: { select: { email: true, displayName: true } }, invitedBy: { select: { email: true } } },
         orderBy: { createdAt: "asc" },
       }),
-      tx.invitation.findMany({ where: { workspaceId, acceptedAt: null }, include: { invitedBy: { select: { email: true } } }, orderBy: { createdAt: "desc" } }),
-    ]);
-    const rows: TeamRow[] = [];
-    for (const m of members) {
-      rows.push({
-        kind: "member",
-        id: m.id,
-        userId: m.userId,
-        email: m.user.email,
-        name: m.user.displayName,
-        role: m.role,
-        permissions: hasFullAccess(m.role) ? [...ACCESS_KEYS] : m.permissions,
-        modules: modulesOf(m),
-        staffRole: m.staffRole,
-        status: m.revokedAt ? "revoked" : "active",
-        since: m.createdAt.toISOString(),
-        invitedBy: m.invitedBy?.email ?? null,
-        accessChangedAt: m.accessChangedAt?.toISOString() ?? null,
-        fingerprint: accessFingerprint(m),
-      });
-    }
-    for (const i of invitations) {
-      const st = invitationStatus(i, now);
-      rows.push({
-        kind: "invitation",
-        id: i.id,
-        email: i.email,
-        name: null,
-        role: i.role,
-        permissions: hasFullAccess(i.role) ? [...ACCESS_KEYS] : i.permissions,
-        modules: modulesOf(i),
-        staffRole: i.staffRole,
-        status: st === "revoked" ? "cancelled" : st === "expired" ? "expired" : "pending",
-        since: i.createdAt.toISOString(),
-        invitedBy: i.invitedBy?.email ?? null,
-        expiresAt: i.expiresAt.toISOString(),
-        message: i.message,
-        sentAt: i.sentAt?.toISOString() ?? null,
-        sendFailedAt: i.sendFailedAt?.toISOString() ?? null,
-        sendCount: i.sendCount,
-      });
-    }
-    const summary: TeamSummary = {
-      totalMembers: members.length,
-      activeMembers: members.filter((m) => !m.revokedAt).length,
-      pendingInvitations: rows.filter((r) => r.kind === "invitation" && r.status === "pending").length,
-      endedInvitations: rows.filter((r) => r.kind === "invitation" && r.status !== "pending").length,
-    };
-    return { rows, summary };
-  });
+      // Accepted ones too: they were pending for a while, which the trend lines show.
+      tx.invitation.findMany({ where: { workspaceId }, include: { invitedBy: { select: { email: true } } }, orderBy: { createdAt: "desc" } }),
+    ]),
+  );
+  // Sign-in records are outside the tenant's reach (RLS): read only the latest time, for these members.
+  const signIns = members.length
+    ? await systemDb.authIdentity.groupBy({ by: ["userId"], where: { userId: { in: members.map((m) => m.userId) } }, _max: { lastUsedAt: true } })
+    : [];
+  const lastSignIn = new Map(signIns.map((g) => [g.userId, g._max.lastUsedAt]));
+  const invitations = allInvitations.filter((i) => !i.acceptedAt);
+  const rows: TeamRow[] = [];
+  for (const m of members) {
+    rows.push({
+      kind: "member",
+      id: m.id,
+      userId: m.userId,
+      email: m.user.email,
+      name: m.user.displayName,
+      role: m.role,
+      permissions: hasFullAccess(m.role) ? [...ACCESS_KEYS] : m.permissions,
+      modules: modulesOf(m),
+      staffRole: m.staffRole,
+      status: m.revokedAt ? "revoked" : "active",
+      since: m.createdAt.toISOString(),
+      invitedBy: m.invitedBy?.email ?? null,
+      lastSignInAt: lastSignIn.get(m.userId)?.toISOString() ?? null,
+      accessChangedAt: m.accessChangedAt?.toISOString() ?? null,
+      fingerprint: accessFingerprint(m),
+    });
+  }
+  for (const i of invitations) {
+    const st = invitationStatus(i, now);
+    rows.push({
+      kind: "invitation",
+      id: i.id,
+      email: i.email,
+      name: null,
+      role: i.role,
+      permissions: hasFullAccess(i.role) ? [...ACCESS_KEYS] : i.permissions,
+      modules: modulesOf(i),
+      staffRole: i.staffRole,
+      status: st === "revoked" ? "cancelled" : st === "expired" ? "expired" : "pending",
+      since: i.createdAt.toISOString(),
+      invitedBy: i.invitedBy?.email ?? null,
+      expiresAt: i.expiresAt.toISOString(),
+      message: i.message,
+      sentAt: i.sentAt?.toISOString() ?? null,
+      sendFailedAt: i.sendFailedAt?.toISOString() ?? null,
+      sendCount: i.sendCount,
+    });
+  }
+  const summary: TeamSummary = {
+    totalMembers: members.length,
+    activeMembers: members.filter((m) => !m.revokedAt).length,
+    pendingInvitations: rows.filter((r) => r.kind === "invitation" && r.status === "pending").length,
+    endedInvitations: rows.filter((r) => r.kind === "invitation" && r.status !== "pending").length,
+    trend: teamTrend(members, allInvitations, now),
+  };
+  return { rows, summary };
+}
+
+type TrendMember = { createdAt: Date; revokedAt: Date | null };
+type TrendInvitation = { createdAt: Date; acceptedAt: Date | null; revokedAt: Date | null; expiresAt: Date };
+
+/**
+ * The four counts at the end of each of the last TREND_DAYS days, rebuilt from the dates on record.
+ * Removed members and invitations the retention sweep deleted are gone, so earlier days can read low.
+ */
+export function teamTrend(members: TrendMember[], invitations: TrendInvitation[], now = new Date()): TeamSummary["trend"] {
+  const by = (d: Date | null, t: Date) => !!d && d <= t;
+  const trend: TeamSummary["trend"] = { totalMembers: [], activeMembers: [], pendingInvitations: [], endedInvitations: [] };
+  for (let back = TREND_DAYS - 1; back >= 0; back--) {
+    const t = new Date(now.getTime() - back * 86_400_000);
+    const joined = members.filter((m) => m.createdAt <= t);
+    const open = invitations.filter((i) => i.createdAt <= t && !by(i.acceptedAt, t));
+    const ended = open.filter((i) => by(i.revokedAt, t) || i.expiresAt <= t).length;
+    trend.totalMembers.push(joined.length);
+    trend.activeMembers.push(joined.filter((m) => !by(m.revokedAt, t)).length);
+    trend.pendingInvitations.push(open.length - ended);
+    trend.endedInvitations.push(ended);
+  }
+  return trend;
 }
 
 export const TEAM_SORTS = ["name", "role", "status", "since"] as const;
