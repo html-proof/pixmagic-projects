@@ -9,8 +9,10 @@ import {
   Briefcase,
   ChartColumn,
   ChevronDown,
+  CircleCheck,
   Gauge,
   Headset,
+  Info,
   LayoutDashboard,
   LifeBuoy,
   LogOut,
@@ -19,6 +21,7 @@ import {
   Menu,
   MessageCircle,
   MessageCircleMore,
+  OctagonAlert,
   Package,
   ReceiptText,
   Search,
@@ -26,6 +29,7 @@ import {
   ShieldCheck,
   ShoppingBag,
   Store,
+  TriangleAlert,
   Truck,
   UserRound,
   Users,
@@ -37,10 +41,14 @@ import { useApp } from "@/components/AppContext";
 import { BrandLogo } from "@/components/Brand";
 import { CommandPalette, type PaletteItem } from "@/components/CommandPalette";
 import { ShopifyIcon } from "@/components/ShopifyIcon";
+import { fmtRelative } from "@/components/dashboard/format";
 import { openView, topicInfo, TOPICS, useCurrentView, type Topic } from "@/components/dashboard/topics";
+import { useApi } from "@/lib/api";
 import { leaveTo, signOut } from "@/lib/auth";
 import { CONTACT } from "@/lib/contact";
 import { SETTINGS_PAGES } from "@/lib/settingsNav";
+import { notesSeenKey, readLocal, writeLocal } from "@/lib/storage";
+import type { AlertArea, AlertSeverity, AlertView } from "@app/shared/alerts";
 import { staffAccess } from "@app/shared/staff";
 
 // ---------------------------------------------------------------------------
@@ -269,6 +277,130 @@ function AccountMenu() {
   );
 }
 
+const SEVERITY: Record<AlertSeverity, { icon: LucideIcon; tone: string; label: string }> = {
+  critical: { icon: OctagonAlert, tone: "bg-danger/10 text-danger", label: "Urgent" },
+  warning: { icon: TriangleAlert, tone: "bg-warn/10 text-warn", label: "Needs attention" },
+  info: { icon: Info, tone: "bg-accent/10 text-accent", label: "Note" },
+};
+
+/** Where each kind of alert gets fixed. */
+const ALERT_HREF: Record<AlertArea, string> = {
+  shopify: "/settings/stores",
+  email: "/settings/email/accounts",
+  staff: "/staff/timesheets",
+  whatsapp: "/whatsapp/automations",
+  general: "/support",
+};
+
+/**
+ * The bell: the workspace's open problems (until whatever fixes them resolves them) and the last
+ * week's notes. Its dot shows while a problem is open, or a note has come in since the bell was last
+ * opened on this device.
+ */
+function Notifications() {
+  const { workspace } = useApp();
+  const path = usePathname();
+  const [open, setOpen] = useState(false);
+  const ref = useDismiss(open, () => setOpen(false));
+  useEffect(() => setOpen(false), [path]);
+  const { data, error, reload } = useApi<{ alerts: AlertView[] }>(`/workspaces/${workspace.id}/alerts`);
+  const alerts = data?.alerts ?? [];
+
+  // Something may have been fixed (or broken) while the merchant was in another tab.
+  useEffect(() => {
+    const onFocus = () => void reload();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [reload]);
+
+  const seenKey = notesSeenKey(workspace.id);
+  const [seen, setSeen] = useState<string | null>(null);
+  useEffect(() => setSeen(readLocal(seenKey)), [seenKey]);
+  const newestNote = alerts.find((a) => a.severity === "info")?.createdAt ?? null;
+  useEffect(() => {
+    if (!open || !newestNote) return;
+    writeLocal(seenKey, newestNote);
+    setSeen(newestNote);
+  }, [open, newestNote, seenKey]);
+
+  const problems = alerts.filter((a) => a.severity !== "info").length;
+  const newNote = newestNote !== null && (seen === null || newestNote > seen);
+  const label = problems ? `Notifications: ${problems} to fix` : newNote ? "Notifications: new" : "Notifications";
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => {
+          if (!open) void reload();
+          setOpen((o) => !o);
+        }}
+        aria-expanded={open}
+        aria-controls="notifications"
+        aria-label={label}
+        data-testid="notifications-bell"
+        className="relative flex h-10 w-10 items-center justify-center rounded-full text-muted transition-colors hover:bg-text/[0.05] hover:text-text"
+      >
+        <Bell aria-hidden className="h-5 w-5" strokeWidth={1.8} />
+        {(problems > 0 || newNote) && <span aria-hidden className="absolute right-2 top-2 h-2.5 w-2.5 rounded-full bg-fill-danger ring-2 ring-surface" />}
+      </button>
+      {open && (
+        // Fixed under the top bar on a phone (anchored to the bell it would run off the left edge).
+        <section
+          id="notifications"
+          aria-labelledby="notifications-title"
+          className="animate-rise fixed inset-x-3 top-16 z-40 mt-2 overflow-hidden rounded-xl border border-border bg-surface shadow-[var(--shadow-lift)] sm:absolute sm:inset-x-auto sm:right-0 sm:top-full sm:w-96"
+        >
+          <div className="flex items-baseline justify-between gap-3 px-4 py-3">
+            <h2 id="notifications-title" className="text-sm font-semibold">Notifications</h2>
+            {problems > 0 && <span className="text-xs text-muted">{problems} to fix</span>}
+          </div>
+          {!data ? (
+            <p className="border-t border-border px-4 py-6 text-center text-sm text-muted">{error ? "We couldn't load your notifications. We'll keep trying." : "Loading…"}</p>
+          ) : alerts.length === 0 ? (
+            <div className="border-t border-border px-4 py-8 text-center">
+              <CircleCheck aria-hidden className="mx-auto h-8 w-8 text-accent" strokeWidth={1.8} />
+              <p className="mt-2 text-sm font-semibold">You&apos;re all caught up</p>
+              <p className="mt-0.5 text-xs text-muted">Sync problems and anything else that needs you will show up here.</p>
+            </div>
+          ) : (
+            <ul className="max-h-[min(28rem,calc(100dvh-10rem))] overflow-y-auto border-t border-border">
+              {alerts.map((a) => {
+                const s = SEVERITY[a.severity];
+                const when = fmtRelative(a.createdAt);
+                return (
+                  <li key={a.id} className="border-b border-border last:border-b-0">
+                    <Link href={ALERT_HREF[a.area]} onClick={() => setOpen(false)} className="flex gap-3 px-4 py-3 transition-colors hover:bg-text/[0.04]">
+                      <span aria-hidden className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${s.tone}`}>
+                        <s.icon className="h-4 w-4" strokeWidth={2} />
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="sr-only">{s.label}: </span>
+                        <span className="block text-sm font-semibold leading-snug">{a.title}</span>
+                        <span className="mt-0.5 block text-xs leading-relaxed text-muted">{a.body}</span>
+                        <span className="mt-1 block truncate text-[11px] text-muted">
+                          {a.store && `${a.store.name} · `}
+                          <time dateTime={a.createdAt}>{when}</time>
+                        </span>
+                      </span>
+                    </Link>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+          <div className="border-t border-border p-1.5">
+            <Link href="/settings/notifications" onClick={() => setOpen(false)} className={menuItem}>
+              <Settings aria-hidden className="h-4 w-4 text-muted" />
+              Notification settings
+            </Link>
+          </div>
+        </section>
+      )}
+    </div>
+  );
+}
+
 /** The round button at the bottom right: the two ways to reach a person. */
 function HelpBubble() {
   const [open, setOpen] = useState(false);
@@ -373,9 +505,7 @@ function TopBar({ onMenu, onSearch }: { onMenu: () => void; onSearch: () => void
           <button type="button" onClick={onSearch} aria-label="Search" className="flex h-10 w-10 items-center justify-center rounded-full text-muted hover:bg-text/[0.05] hover:text-text md:hidden">
             <Search aria-hidden className="h-5 w-5" />
           </button>
-          <Link href="/settings/notifications" aria-label="Notification settings" className="flex h-10 w-10 items-center justify-center rounded-full text-muted transition-colors hover:bg-text/[0.05] hover:text-text">
-            <Bell aria-hidden className="h-5 w-5" strokeWidth={1.8} />
-          </Link>
+          <Notifications />
           <AccountMenu />
         </div>
       </div>

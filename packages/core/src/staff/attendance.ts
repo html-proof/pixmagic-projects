@@ -988,6 +988,7 @@ export async function flagStaleSessions(mailer: Mailer, fetchImpl?: FetchLike): 
     if (n.count) byWorkspace.set(r.workspace_id, (byWorkspace.get(r.workspace_id) ?? 0) + 1);
   }
   for (const [workspaceId, count] of byWorkspace) {
+    // The app shows this message as is (@app/shared/alerts): keep error text out of it.
     await raiseAlert(
       {
         workspaceId,
