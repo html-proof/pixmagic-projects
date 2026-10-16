@@ -27,6 +27,7 @@ import {
 } from "@app/core";
 import { aggregateDaily, localDay, summarize } from "@app/shared";
 import { BACKFILL_DAYS, failStaleJobs, ordersSearch, pixelIngestUrl, processWebhook, RECONCILE_ORDER_DAYS, reconcileOrderDays, runAggregate, runSync, scheduleReconcile, seedAfterMove, type WorkerDeps } from "../src/handlers.js";
+import { MAX_REFUND_LOOKUPS } from "../src/bulkOrders.js";
 import { consume, CRON, runScheduled, type QueueMessage } from "../src/index.js";
 
 const queues = memoryQueues();
@@ -1730,9 +1731,8 @@ describe("bulk order backfill", () => {
           totalShippingPriceSet: money("0"),
           totalPriceSet: money("20"),
           fulfillments: [{ createdAt: "2026-03-02T09:30:00Z" }],
-          refunds: o.refund
-            ? [{ id: `gid://shopify/Refund/${o.id}`, createdAt: "2026-03-03T12:00:00Z", refundLineItems: { edges: [{ node: { subtotalSet: money("5") } }] } }]
-            : [],
+          // Without their line items: the export can't nest a connection in the `refunds` list.
+          refunds: o.refund ? [{ id: `gid://shopify/Refund/${o.id}`, createdAt: "2026-03-03T12:00:00Z" }] : [],
         }),
       );
       for (const li of o.items ?? [1]) {
@@ -1754,16 +1754,34 @@ describe("bulk order backfill", () => {
     return lines.join("\n") + "\n";
   };
 
+  /** The paged path's refund of order `id` (one refund, these line subtotals). */
+  const pagedRefund = (id: number, lines: string[]) => ({
+    id: `gid://shopify/Refund/${id}`,
+    createdAt: "2026-03-03T12:00:00Z",
+    refundLineItems: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: lines.map((amount) => ({ subtotalSet: money(amount) })) },
+  });
+
   /**
    * Serves the GraphQL calls and the result file. `body` is the JSONL; range requests are
-   * honoured byte-exactly so the chunking logic is really exercised.
+   * honoured byte-exactly so the chunking logic is really exercised, unless `ignoreRange` makes
+   * the server send the whole file every time. ORDER_REFUNDS_QUERY answers one refund per order
+   * with `refundLines` as its line subtotals.
    */
-  function shopify(opts: { body?: string; status?: string; objectCount?: number; runErrors?: Array<{ message: string }>; current?: unknown }) {
+  function shopify(opts: {
+    body?: string;
+    status?: string;
+    objectCount?: number;
+    runErrors?: Array<{ message: string }>;
+    current?: unknown;
+    refundLines?: string[];
+    ignoreRange?: boolean;
+  }) {
     const body = opts.body ?? "";
     const bytes = new TextEncoder().encode(body);
     const calls: string[] = [];
     fetchImpl = async (url, init) => {
       if (String(url).startsWith("https://files.example/")) {
+        if (opts.ignoreRange) return new Response(bytes, { status: 200 });
         const m = /bytes=(\d+)-(\d+)/.exec(String((init?.headers as Record<string, string>)?.Range ?? ""));
         const start = m ? Number(m[1]) : 0;
         const end = Math.min(bytes.length - 1, m ? Number(m[2]) : bytes.length - 1);
@@ -1787,6 +1805,11 @@ describe("bulk order backfill", () => {
       if (query.includes("bulkOperationCancel")) {
         calls.push("cancel");
         return gqlJson({ bulkOperationCancel: { bulkOperation: { id: BULK_ID, status: "CANCELED" }, userErrors: [] } });
+      }
+      if (query.includes("query OrderRefunds")) {
+        const id = Number(String(variables.id).split("/").pop());
+        calls.push(`refunds:${id}`);
+        return gqlJson({ order: { refunds: [pagedRefund(id, opts.refundLines ?? ["5"])] } });
       }
       calls.push("node");
       return gqlJson({
@@ -1821,9 +1844,11 @@ describe("bulk order backfill", () => {
     await drainAggregates();
 
     expect(calls.filter((c) => c === "run")).toHaveLength(1);
+    // Only the order with a refund pays a detail query for its refund lines.
+    expect(calls.filter((c) => c.startsWith("refunds:"))).toEqual(["refunds:1"]);
     expect(await systemDb.order.count()).toBe(2);
     expect(await systemDb.orderLineItem.count()).toBe(2);
-    expect(await systemDb.refund.count()).toBe(1);
+    expect((await systemDb.refund.findMany()).map((r) => toNumber(r.lineSubtotal))).toEqual([5]);
     expect((await systemDb.store.findUniqueOrThrow({ where: { id: store.id } })).status).toBe("active");
     const done = await systemDb.syncJob.findUniqueOrThrow({ where: { id: job.id } });
     expect(done).toMatchObject({ status: "succeeded", progress: 2 });
@@ -1864,6 +1889,36 @@ describe("bulk order backfill", () => {
     expect(await systemDb.orderLineItem.count()).toBe(9);
     expect((await systemDb.syncJob.findUniqueOrThrow({ where: { id: job.id } })).progress).toBe(3);
   });
+
+  /**
+   * Every order with refunds costs one detail query, so an ingest stops after MAX_REFUND_LOOKUPS
+   * of them and the next message carries on from the order after - also when the result server
+   * ignores Range and sends the whole file each time.
+   */
+  for (const ignoreRange of [false, true]) {
+    it(`completes at most MAX_REFUND_LOOKUPS orders' refunds per ingest${ignoreRange ? " (server ignoring Range)" : ""}`, async () => {
+      const store = await makeStore(["read_orders"]);
+      const job = await makeJob(store, "orders");
+      const n = MAX_REFUND_LOOKUPS + 1;
+      const body = jsonl(Array.from({ length: n }, (_, i) => ({ id: i + 1, refund: true })));
+      const calls = shopify({ body, objectCount: 2 * n, ignoreRange });
+
+      const offsets: number[] = [];
+      let msg: Parameters<typeof runSync>[0] | undefined = { storeId: store.id, kind: "orders", syncJobId: job.id };
+      for (let i = 0; msg && i < 40; i++) {
+        if (msg.bulk?.phase === "ingest") offsets.push(msg.bulk.byteOffset ?? 0);
+        await runSync(msg, deps);
+        msg = queues.sent.sync.shift();
+      }
+      expect(offsets).toHaveLength(2);
+      expect(body.slice(offsets[1])).toMatch(new RegExp(`^\\{"id":"gid://shopify/Order/${n}"`));
+      // Each order's refunds were looked up once: none skipped, none twice.
+      expect(new Set(calls.filter((c) => c.startsWith("refunds:"))).size).toBe(n);
+      expect(calls.filter((c) => c.startsWith("refunds:"))).toHaveLength(n);
+      expect(await systemDb.refund.count()).toBe(n);
+      expect(await systemDb.syncJob.findUniqueOrThrow({ where: { id: job.id } })).toMatchObject({ status: "succeeded", progress: n });
+    });
+  }
 
   it("does not double count when an ingest message is redelivered", async () => {
     const store = await makeStore(["read_orders"]);
@@ -2002,63 +2057,74 @@ describe("bulk order backfill", () => {
     expect((await systemDb.syncJob.findUniqueOrThrow({ where: { id: job.id } })).status).toBe("succeeded");
   });
 
-  it("writes the same rows as the paged path for the same orders", async () => {
+  /**
+   * The paged page carries order 1's refund lines inline; the bulk export can't, so the ingest
+   * fetches them with ORDER_REFUNDS_QUERY. Both must end with the same refund totals.
+   */
+  it("writes the same rows as the paged path for the same orders, refund totals included", async () => {
+    const refundLines = ["5", "2.50", "0.25"];
     const bulkStore = await makeStore(["read_orders"], "America/New_York", "pb.myshopify.com");
     const bulkJob = await makeJob(bulkStore, "orders");
-    shopify({ body: jsonl([{ id: 1, refund: true }]), objectCount: 2 });
+    shopify({ body: jsonl([{ id: 1, refund: true }, { id: 2 }]), objectCount: 4, refundLines });
     await drainSync({ storeId: bulkStore.id, kind: "orders", syncJobId: bulkJob.id });
 
     const pagedStore = await makeStore(["read_orders"], "America/New_York", "pp.myshopify.com");
     const pagedJob = await makeJob(pagedStore, "orders");
-    fetchImpl = async () =>
-      gqlJson(
-        ordersPage([
-          gOrder(1, {
-            createdAt: "2026-03-01T15:00:00Z",
-            updatedAt: "2026-03-01T15:00:00Z",
-            discountCodes: [],
-            subtotalPriceSet: money("20"),
-            totalDiscountsSet: money("0"),
-            totalTaxSet: money("0"),
-            totalShippingPriceSet: money("0"),
-            totalPriceSet: money("20"),
-            fulfillments: [{ createdAt: "2026-03-02T09:30:00Z" }],
-            lineItems: {
-              pageInfo: { hasNextPage: false },
-              nodes: [
-                {
-                  id: "gid://shopify/LineItem/1-1",
-                  title: "X",
-                  quantity: 1,
-                  sku: null,
-                  variant: null,
-                  product: null,
-                  originalUnitPriceSet: money("20"),
-                  totalDiscountSet: money("0"),
-                },
-              ],
+    const pagedOrder = (id: number, refunds: unknown[]) =>
+      gOrder(id, {
+        createdAt: "2026-03-01T15:00:00Z",
+        updatedAt: "2026-03-01T15:00:00Z",
+        discountCodes: [],
+        subtotalPriceSet: money("20"),
+        totalDiscountsSet: money("0"),
+        totalTaxSet: money("0"),
+        totalShippingPriceSet: money("0"),
+        totalPriceSet: money("20"),
+        fulfillments: [{ createdAt: "2026-03-02T09:30:00Z" }],
+        lineItems: {
+          pageInfo: { hasNextPage: false },
+          nodes: [
+            {
+              id: `gid://shopify/LineItem/${id}-1`,
+              title: "X",
+              quantity: 1,
+              sku: null,
+              variant: null,
+              product: null,
+              originalUnitPriceSet: money("20"),
+              totalDiscountSet: money("0"),
             },
-            refunds: [{ id: "gid://shopify/Refund/1", createdAt: "2026-03-03T12:00:00Z", refundLineItems: { pageInfo: { hasNextPage: false }, nodes: [{ subtotalSet: money("5") }] } }],
-          }),
-        ]),
-      );
+          ],
+        },
+        refunds,
+      });
+    const pagedCalls: string[] = [];
+    fetchImpl = async (_u, init) => {
+      pagedCalls.push(gqlBody(init).query.includes("query OrderRefunds") ? "refunds" : "orders");
+      return gqlJson(ordersPage([pagedOrder(1, [pagedRefund(1, refundLines)]), pagedOrder(2, [])]));
+    };
     await runSync({ storeId: pagedStore.id, kind: "orders", syncJobId: pagedJob.id, pagedOnly: true }, deps);
+    expect(pagedCalls).toEqual(["orders"]); // the paged page had the refund lines already
 
     const read = async (storeId: string) => {
-      const o = await systemDb.order.findFirstOrThrow({ where: { storeId }, include: { lineItems: true, refunds: true } });
-      const { id: _i, storeId: _s, workspaceId: _w, ...rest } = o;
-      return {
-        ...rest,
-        lineItems: o.lineItems.map(({ id: _a, orderId: _b, storeId: _c, workspaceId: _d, ...li }) => ({ ...li, price: toNumber(li.price), discount: toNumber(li.discount) })),
-        refunds: o.refunds.map(({ id: _a, orderId: _b, storeId: _c, workspaceId: _d, ...r }) => ({ ...r, lineSubtotal: toNumber(r.lineSubtotal) })),
-        subtotal: toNumber(rest.subtotal),
-        totalDiscounts: toNumber(rest.totalDiscounts),
-        totalTax: toNumber(rest.totalTax),
-        totalShipping: toNumber(rest.totalShipping),
-        totalPrice: toNumber(rest.totalPrice),
-      };
+      const orders = await systemDb.order.findMany({ where: { storeId }, include: { lineItems: true, refunds: true }, orderBy: { shopifyId: "asc" } });
+      return orders.map((o) => {
+        const { id: _i, storeId: _s, workspaceId: _w, ...rest } = o;
+        return {
+          ...rest,
+          lineItems: o.lineItems.map(({ id: _a, orderId: _b, storeId: _c, workspaceId: _d, ...li }) => ({ ...li, price: toNumber(li.price), discount: toNumber(li.discount) })),
+          refunds: o.refunds.map(({ id: _a, orderId: _b, storeId: _c, workspaceId: _d, ...r }) => ({ ...r, lineSubtotal: toNumber(r.lineSubtotal) })),
+          subtotal: toNumber(rest.subtotal),
+          totalDiscounts: toNumber(rest.totalDiscounts),
+          totalTax: toNumber(rest.totalTax),
+          totalShipping: toNumber(rest.totalShipping),
+          totalPrice: toNumber(rest.totalPrice),
+        };
+      });
     };
-    expect(await read(bulkStore.id)).toEqual(await read(pagedStore.id));
+    const bulk = await read(bulkStore.id);
+    expect(bulk.map((o) => o.refunds.map((r) => r.lineSubtotal))).toEqual([[7.75], []]);
+    expect(bulk).toEqual(await read(pagedStore.id));
   });
 });
 

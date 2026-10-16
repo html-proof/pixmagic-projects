@@ -432,11 +432,11 @@ export function ordersQuery(includeCustomer: boolean): string {
  * busy store therefore takes hours however carefully it is paced. Shopify runs this query
  * server-side instead and hands back one JSONL file, which turns the same import into minutes.
  *
- * Three rules shape the text, all of them Shopify's:
+ * Four rules shape the text, all of them Shopify's:
  *
- *  - **No pagination arguments.** `first`/`after` are rejected, which is also why the nested
- *    truncation the paged path has to repair (`graphqlOrderOverflow`, `completeOrder`) simply
- *    does not arise here: every connection is returned whole.
+ *  - **No pagination arguments.** `first`/`after` are rejected, which is also why the line-item
+ *    truncation the paged path has to repair simply does not arise here: every connection is
+ *    returned whole.
  *  - **No GraphQL variables**, so the order filter is interpolated into the query string. It
  *    comes from the same `ordersSearch()` as the paged path, so both see the same window, and
  *    it is JSON-escaped on the way in.
@@ -444,12 +444,13 @@ export function ordersQuery(includeCustomer: boolean): string {
  *    (`fulfillments`, `refunds`) stay inlined on the parent. `apps/worker/src/bulkOrders.ts`
  *    reassembles them into the shape `normalizeGraphqlOrder` already expects, so there is one
  *    normalizer, not two.
- *
- * Unverified against a live shop: `refundLineItems` is a connection inside the inlined
- * `refunds` list, and Shopify's limits on nesting there are not documented precisely enough to
- * be sure it is accepted. If it is not, `bulkOperationRunQuery` answers with `userErrors` and
- * the caller falls back to the paged path, so the cost of being wrong is a slow import rather
- * than a broken one. Confirm it against a development store and remove this note.
+ *  - **No connection inside a list field.** `refunds` is a plain list, so its `refundLineItems`
+ *    connection cannot be asked for here: Shopify turned the export away for it on every store
+ *    ("Queries that contain a connection field within a list field are not currently
+ *    supported"). Refunds come back as `{ id createdAt }` only, and the ingest completes the
+ *    orders that have any with ORDER_REFUNDS_QUERY, as the paged path does for the ones it
+ *    truncates (`graphqlOrderOverflow` treats a refund without its line items as truncated).
+ *    Only those orders pay a detail query.
  */
 export function bulkOrdersQuery(includeCustomer: boolean, search: string | null): string {
   const args = ["sortKey: CREATED_AT", "reverse: true"];
@@ -470,10 +471,7 @@ export function bulkOrdersQuery(includeCustomer: boolean, search: string | null)
             ${includeCustomer ? "customer { id numberOfOrders }" : ""}
             fulfillments { createdAt }
             lineItems { edges { node { ${LINE_ITEM_FIELDS} } } }
-            refunds {
-              id createdAt
-              refundLineItems { edges { node { subtotalSet { shopMoney { amount } } } } }
-            }
+            refunds { id createdAt }
           }
         }
       }
@@ -533,9 +531,10 @@ export interface BulkOperationStatus {
 }
 
 /**
- * Whether an order node from ordersQuery() was truncated: more line items than fit, a
- * refund with more refund line items than fit, or as many refunds as requested (there
- * may be more; Order.refunds is a plain list without pageInfo).
+ * Whether an order node from ordersQuery() or bulkOrdersQuery() was truncated: more line items
+ * than fit, a refund with more refund line items than fit, a refund without its line items at
+ * all (the bulk export can't ask for them), or as many refunds as requested (there may be more;
+ * Order.refunds is a plain list without pageInfo).
  */
 export function graphqlOrderOverflow(o: Pick<GraphqlOrder, "lineItems" | "refunds">): { lineItems: boolean; refunds: boolean } {
   const refunds = o.refunds ?? [];
@@ -543,7 +542,7 @@ export function graphqlOrderOverflow(o: Pick<GraphqlOrder, "lineItems" | "refund
     lineItems: o.lineItems?.pageInfo?.hasNextPage === true,
     refunds:
       refunds.length >= ORDER_NESTED.refunds ||
-      refunds.some((r) => r.refundLineItems?.pageInfo?.hasNextPage === true),
+      refunds.some((r) => !r.refundLineItems || r.refundLineItems.pageInfo?.hasNextPage === true),
   };
 }
 

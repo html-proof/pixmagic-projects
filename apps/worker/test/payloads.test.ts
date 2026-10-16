@@ -282,18 +282,23 @@ describe("order detail pages and bulk lines that don't fit", () => {
       JSON.stringify({
         ...gqlOrder("gid://shopify/Order/3"),
         lineItems: undefined,
-        refunds: [{ id: "gid://shopify/Refund/9", createdAt: "2026-03-02T00:00:00Z", refundLineItems: { edges: [{ node: { subtotalSet: money("10") } }] } }],
+        refunds: [{ id: "gid://shopify/Refund/9", createdAt: "2026-03-02T00:00:00Z" }],
       }),
       JSON.stringify({ ...line(31), __parentId: "gid://shopify/Order/3" }),
     ].join("\n");
-    fetchImpl = async (url) => {
+    fetchImpl = async (url, init) => {
       if (String(url).startsWith("https://files.example/")) return new Response(`${body}\n`, { status: 200 });
+      if (String(init?.body).includes("query OrderRefunds")) {
+        return gqlJson({
+          order: { refunds: [{ id: "gid://shopify/Refund/9", createdAt: "2026-03-02T00:00:00Z", refundLineItems: { pageInfo: { hasNextPage: false }, nodes: [{ subtotalSet: money("10") }] } }] },
+        });
+      }
       return gqlJson({ node: { id: bulkId, status: "COMPLETED", objectCount: "5", url: "https://files.example/result.jsonl", partialDataUrl: null, createdAt: new Date().toISOString() } });
     };
     await runSync({ storeId: store.id, kind: "orders", syncJobId: j.id, bulk: { phase: "ingest", id: bulkId, byteOffset: 0 } }, deps);
     expect((await systemDb.order.findMany()).map((o) => o.shopifyId)).toEqual(["3"]);
     expect(await systemDb.orderLineItem.count()).toBe(1);
-    expect(await systemDb.refund.count()).toBe(1);
+    expect((await systemDb.refund.findMany()).map((r) => toNumber(r.lineSubtotal))).toEqual([10]);
     expect(await systemDb.syncJob.findUniqueOrThrow({ where: { id: j.id } })).toMatchObject({ status: "succeeded", progress: 1 });
     expect(warnings[0]).toMatchObject({ payload: "bulk order", skipped: 2, of: 3 });
     expect(problems()).toEqual(["refunds: Expected array, received object"]);

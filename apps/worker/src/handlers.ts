@@ -296,7 +296,8 @@ async function fetchOrderRefunds(deps: WorkerDeps, store: Store, pace: Pace, ord
 
 /**
  * Orders pages carry at most 10 line items and 2 refunds (5 lines each) per order to stay
- * under Shopify's cost cap. Re-fetch whatever was truncated so the order is complete
+ * under Shopify's cost cap, and the bulk export carries refunds without their lines at all.
+ * Re-fetch whatever was truncated so the order is complete
  * before it is stored (upsertOrder replaces line items wholesale). Null when what the detail
  * queries returned doesn't fit the schema (logged): an order missing lines must not be stored.
  */
@@ -424,6 +425,7 @@ export async function runSync(data: SyncJobData, deps: WorkerDeps) {
         const r = await runBulkOrders(data, store, deps, {
           gql: (query, variables) => gql(deps, store, pace, query, variables),
           ordersSearch: () => ordersSearch(data, store.grantedScopes),
+          completeOrder: (node) => completeOrder(deps, store, pace, node),
         });
         if (!r.done) return { ok: true, continued: true };
         await finishBackfill();

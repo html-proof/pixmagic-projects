@@ -309,6 +309,10 @@ export const graphqlLineItemSchema = obj({
 export const graphqlRefundSchema = obj({
   id: gid,
   createdAt: timestamp,
+  /**
+   * Absent from the bulk export, which can't nest a connection in the `refunds` list: such a
+   * refund counts as truncated (graphqlOrderOverflow) and ORDER_REFUNDS_QUERY fills it in.
+   */
   refundLineItems: obj({ pageInfo, nodes: z.array(obj({ subtotalSet: moneyBag })).nullish() }).nullish(),
 });
 
@@ -362,16 +366,6 @@ export const graphqlVariantSchema = obj({
   /** null when Shopify withholds it (ACCESS_DENIED), undefined when not asked for: cost and tracking unknown. */
   inventoryItem: obj({ tracked: z.boolean().nullish(), unitCost: obj({ amount: amount.nullish() }).nullish() }).nullish(),
 });
-
-/**
- * The refunds a bulk export inlines on an order's JSONL line, as the reassembly in
- * worker/bulkOrders.ts reads them: their ids, and their line items when Shopify could inline those
- * too (`edges` or `nodes`; otherwise they arrive as child lines). The rest is checked once the order
- * is whole, with graphqlOrderSchema.
- */
-export const bulkInlineRefundsSchema = z
-  .array(obj({ id: gid, refundLineItems: obj({ edges: z.array(obj({ node: z.unknown() })).nullish(), nodes: z.array(z.unknown()).nullish() }).nullish() }))
-  .nullish();
 
 /** Order.fulfillments as the WhatsApp shipment poll asks for them (SHIPMENTS_QUERY in whatsapp/events.ts). */
 export const graphqlShipmentSchema = obj({

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  bulkOrdersQuery,
   graphqlOrderOverflow,
   normalizeGraphqlOrder,
   normalizeGraphqlProduct,
@@ -101,6 +102,31 @@ describe("query cost (Shopify rejects requested cost > 1000)", () => {
   });
 });
 
+describe("bulk orders query (Shopify's bulk operation rules)", () => {
+  /** Field path of every connection (`edges`) in a query, arguments stripped. */
+  const connections = (q: string) => {
+    const stack: string[] = [];
+    const paths: string[] = [];
+    let last = "";
+    for (const tok of q.replace(/\([^)]*\)/g, "").match(/[A-Za-z_]\w*|[{}]/g) ?? []) {
+      if (tok === "{") stack.push(last);
+      else if (tok === "}") stack.pop();
+      else if ((last = tok) === "edges") paths.push(stack.filter((f) => f !== "edges" && f !== "node" && f).join("."));
+    }
+    return paths;
+  };
+
+  it("nests no connection inside a list field, and none deeper than two", () => {
+    for (const q of [bulkOrdersQuery(true, null), bulkOrdersQuery(false, "created_at:>='2026-08-17T00:00:00.000Z'")]) {
+      // Shopify turned the export away on every store while `refunds` (a list) carried the
+      // `refundLineItems` connection; the ingest completes refunds with ORDER_REFUNDS_QUERY.
+      expect(connections(q)).toEqual(["orders", "orders.lineItems"]);
+      expect(q).toMatch(/refunds \{ id createdAt \}/);
+      expect(q).not.toMatch(/\b(first|after):/);
+    }
+  });
+});
+
 describe("order normalizers: channel, fulfillment, discount codes, variants", () => {
   it("GraphQL orders carry the new fields", () => {
     const g = normalizeGraphqlOrder(gqlOrder());
@@ -166,6 +192,8 @@ describe("order overflow detection", () => {
     expect(graphqlOrderOverflow(gqlOrder({ refunds: [refund(false)] })).refunds).toBe(false);
     expect(graphqlOrderOverflow(gqlOrder({ refunds: [refund(true)] })).refunds).toBe(true);
     expect(graphqlOrderOverflow(gqlOrder({ refunds: Array.from({ length: ORDER_NESTED.refunds }, () => refund(false)) })).refunds).toBe(true);
+    // A refund without its line items (the bulk export can't ask for them) still needs them.
+    expect(graphqlOrderOverflow(gqlOrder({ refunds: [{ id: "gid://shopify/Refund/1", createdAt: "2026-01-02T00:00:00Z" }] })).refunds).toBe(true);
     // Fixtures without pageInfo (older shape) never overflow.
     expect(graphqlOrderOverflow({ lineItems: { nodes: [] }, refunds: [] })).toEqual({ lineItems: false, refunds: false });
   });
