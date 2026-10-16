@@ -27,6 +27,7 @@ import {
   pruneVariants,
   purgeStoreData,
   raiseAlert,
+  recordDataRequest,
   resolveAlerts,
   REFUND_LINE_ITEMS_QUERY,
   customersDataRequestSchema,
@@ -519,6 +520,31 @@ async function deletedRecently(deps: WorkerDeps, storeId: string, productId: str
 /** A GDPR request whose payload doesn't fit its schema: the fields that didn't are in the warning logged with it. */
 const unreadableGdprRequest = (topic: string) => new UnrecoverableError(`Shopify's ${topic} payload couldn't be read, so the request was not carried out`);
 
+/**
+ * shop/redact: erase the store. Its synced data, its WhatsApp and email records, its import jobs,
+ * alerts and privacy requests go, and so does the store row itself: a later install starts from
+ * nothing (a new workspace and a new claim) instead of being joined to the account that had it
+ * before. A workspace made for the store that nobody ever claimed goes with it.
+ */
+async function eraseStore(store: Store, deps: WorkerDeps) {
+  await purgeStoreData(store.id, deps.fetchImpl);
+  await purgeEmailStoreData(store.id);
+  // One transaction: a retry after a failure finds the store still there and does it all again.
+  await systemDb.$transaction(async (tx) => {
+    // A claim of the workspace takes the same lock (apps/api/src/routes/shopify.ts).
+    await tx.$queryRaw`SELECT id FROM workspaces WHERE id = ${store.workspaceId} FOR UPDATE`;
+    await tx.syncJob.deleteMany({ where: { storeId: store.id } });
+    await tx.alert.deleteMany({ where: { storeId: store.id } });
+    await tx.dataRequest.deleteMany({ where: { storeId: store.id } });
+    await tx.webhookEvent.updateMany({ where: { storeId: store.id }, data: { storeId: null } });
+    await tx.store.delete({ where: { id: store.id } });
+    const ws = await tx.workspace.findUnique({ where: { id: store.workspaceId }, select: { awaitingClaim: true } });
+    const members = await tx.membership.count({ where: { workspaceId: store.workspaceId } });
+    const stores = await tx.store.count({ where: { workspaceId: store.workspaceId } });
+    if (ws?.awaitingClaim && members === 0 && stores === 0) await tx.workspace.delete({ where: { id: store.workspaceId } });
+  });
+}
+
 export async function processWebhook(data: WebhookJobData, deps: WorkerDeps) {
   const ev = await systemDb.webhookEvent.findUnique({ where: { id: data.eventId } });
   if (!ev || ev.status === "succeeded") {
@@ -668,16 +694,42 @@ export async function processWebhook(data: WebhookJobData, deps: WorkerDeps) {
       case "customers/data_request": {
         const request = parseShopify(customersDataRequestSchema, p, data.topic, logIds);
         if (!request) throw unreadableGdprRequest(data.topic);
-        // Analytics keep no customer PII (only a keyed hash). WhatsApp messaging, when the store
-        // uses it, holds the customer's number and first name (encrypted): the audit entry says
-        // so, and the merchant can see those records in the WhatsApp message history.
-        const ck = request.customer?.id ? customerKey(store, String(request.customer.id)) : null;
-        const whatsappContacts = ck ? await systemDb.whatsappContact.count({ where: { storeId: store.id, customerKey: ck } }) : 0;
-        await audit({
-          workspaceId: store.workspaceId,
-          action: "gdpr.customer_data_request",
-          metadata: { customerId: request.customer?.id, ordersRequested: (request.orders_requested ?? []).length, whatsappContacts },
+        // Shopify asks the app to give the store owner what it holds about the customer. The
+        // request is recorded (hashes only) and the owner downloads the export, compiled from the
+        // live records, from Settings → Privacy requests (packages/core/src/privacy.ts).
+        const customerId = request.customer?.id != null ? String(request.customer.id) : null;
+        const { request: recorded, created } = await recordDataRequest(store, {
+          requestId: String(request.data_request?.id ?? ev.webhookId),
+          customerId,
+          email: request.customer?.email,
+          phone: request.customer?.phone,
+          ordersRequested: (request.orders_requested ?? []).map(String),
         });
+        if (created) {
+          await audit({
+            workspaceId: store.workspaceId,
+            action: "gdpr.customer_data_request",
+            targetType: "data_request",
+            targetId: recorded.id,
+            metadata: { customerId, ordersRequested: recorded.ordersRequested.length },
+          });
+        }
+        // Until the owner has downloaded it. A retry after a failed alert raises it then (an open
+        // alert isn't repeated, so a redelivery doesn't email twice).
+        if (recorded.downloadedAt) break;
+        await raiseAlert(
+          {
+            workspaceId: store.workspaceId,
+            storeId: store.id,
+            severity: "warning",
+            code: "privacy_request",
+            message:
+              `A customer of ${store.shopDomain} asked, through Shopify, for the data bizinsights holds about them. ` +
+              `Download it from Settings, Privacy requests, and send it to them: Shopify gives 30 days to answer.`,
+          },
+          deps.mailer,
+          deps.fetchImpl,
+        );
         break;
       }
       case "customers/redact": {
@@ -690,15 +742,23 @@ export async function processWebhook(data: WebhookJobData, deps: WorkerDeps) {
         const whatsappRecords = await redactWhatsappCustomer(store, redact);
         // Email automations: the customer's events and the messages sent to them from this store.
         const emailRecords = await redactEmailCustomer(store, redact.customer?.email);
+        // A data request for the same customer names them too (by hashes): it goes as well.
+        if (redact.customer?.id != null) await systemDb.dataRequest.deleteMany({ where: { storeId: store.id, customerId: String(redact.customer.id) } });
         await audit({ workspaceId: store.workspaceId, action: "gdpr.customer_redacted", metadata: { whatsappRecords, emailRecords } });
         break;
       }
-      case "shop/redact":
-        await purgeStoreData(store.id, deps.fetchImpl);
-        await purgeEmailStoreData(store.id);
-        await systemDb.store.update({ where: { id: store.id }, data: { accessTokenEnc: null, refreshTokenEnc: null, status: "uninstalled" } });
-        await audit({ workspaceId: store.workspaceId, action: "gdpr.shop_redacted", targetId: store.id });
+      case "shop/redact": {
+        // Sent 48 hours after an uninstall. A store installed again since then is in use under
+        // its new installation's grant: erasing it now would wipe a working store.
+        if (store.status !== "uninstalled") {
+          logger.info({ topic: data.topic, shop: data.shop, storeId: store.id, status: store.status }, "shop/redact for a store installed again since; nothing erased");
+          await audit({ workspaceId: store.workspaceId, action: "gdpr.shop_redact_skipped", targetType: "store", targetId: store.id, metadata: { reason: "reinstalled" } });
+          break;
+        }
+        await eraseStore(store, deps);
+        await audit({ workspaceId: store.workspaceId, action: "gdpr.shop_redacted", targetType: "store", targetId: store.id, metadata: { shop: store.shopDomain } });
         break;
+      }
       default:
         // checkouts/* and fulfillments/* are only for WhatsApp (below).
         if (!data.topic.startsWith("checkouts/") && !data.topic.startsWith("fulfillment")) logger.info({ topic: data.topic }, "unhandled webhook topic");

@@ -11,6 +11,7 @@ export * from "./shopifyPayloads.js";
 export * from "./normalize.js";
 export * from "./persist.js";
 export * from "./notify.js";
+export * from "./privacy.js";
 export * from "./coord.js";
 export * from "./ads.js";
 export * from "./adConnections.js";

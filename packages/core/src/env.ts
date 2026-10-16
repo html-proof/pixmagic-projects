@@ -58,7 +58,7 @@ const schema = z.object({
   SHOPIFY_API_SECRET: z.string().default(""),
   SHOPIFY_SCOPES: z.string().default("read_orders,read_products"),
   SHOPIFY_OPTIONAL_SCOPES: z.string().default(""),
-  SHOPIFY_API_VERSION: z.string().default("2025-10"),
+  SHOPIFY_API_VERSION: z.string().default("2026-10"),
   /** Extra Shopify apps as JSON (see apps.ts); each one's secret is in SHOPIFY_APP_SECRET_<KEY>. */
   SHOPIFY_EXTRA_APPS: z.string().optional().default(""),
   /**

@@ -163,18 +163,23 @@ describe("Shopify OAuth", () => {
       expect(res.headers.location).toBe("http://localhost:3001/onboarding?error=launch_unverified");
     });
 
-    it("launch without a session (or signup) sends the visitor to the in-app connect page with the shop", async () => {
-      // Shopify connects only from inside the app: that page signs the visitor in (or up) first.
+    it("launch without a session authorizes the store at once (App Store requirement 2.3.2)", async () => {
+      // The rest of the install-from-Shopify flow is in shopifyInstall.test.ts.
       const res = await ctx.app.inject({ method: "GET", url: launchUrl() });
       expect(res.statusCode).toBe(302);
-      expect(res.headers.location).toMatch(/\/onboarding\?shop=demo-shop\.myshopify\.com$/);
+      expect(new URL(String(res.headers.location)).pathname).toBe("/admin/oauth/authorize");
     });
 
-    it("launch for a signed-in but unverified user still goes to onboarding", async () => {
-      const { cookie } = await signIn(ctx, "unv", "unv@x.com", false);
-      const res = await ctx.app.inject({ method: "GET", url: launchUrl(), headers: { cookie } });
-      expect(res.statusCode).toBe(302);
-      expect(res.headers.location).toMatch(/\/onboarding\?shop=demo-shop\.myshopify\.com$/);
+    it("a one-click connect started by someone else's session doesn't carry over to this one", async () => {
+      const { res } = await start();
+      const pending = cookieValue(res.headers["set-cookie"], "shopify_pending")!;
+      const other = await signIn(ctx, "other", "other@x.com");
+      await createWorkspace(ctx, other.headers, "One");
+      await createWorkspace(ctx, other.headers, "Two");
+      const launch = await ctx.app.inject({ method: "GET", url: launchUrl(), headers: { cookie: `${other.cookie}; shopify_pending=${pending}` } });
+      const state = new URL(String(launch.headers.location)).searchParams.get("state")!;
+      // Authorized as an install: where the store goes is decided by the callback, not the stray choice.
+      expect(JSON.parse((await ctx.deps.coord.take(`oauth:state:${state}`))!)).toMatchObject({ mode: "install", shop: "demo-shop.myshopify.com" });
     });
   });
 
