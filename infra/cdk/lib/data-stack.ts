@@ -15,9 +15,9 @@ const PG_VERSION = "17.11";
  * What holds state, and the network around it. Changes rarely; termination protection is on.
  *
  * Network: a VPC over two Availability Zones with
- *   - public subnets: only the NAT gateways live here (production: one per AZ, cfg.natGateways)
+ *   - public subnets: only the NAT gateway lives here (cfg.natGateways: one, the lean tier)
  *   - private subnets (with egress): the Lambda functions and the admin host; out to the internet
- *     (Cognito, Shopify, Meta, Google, merchants' SMTP servers) through their own AZ's NAT gateway
+ *     (Cognito, Shopify, Meta, Google, merchants' SMTP servers) through the NAT gateway
  *   - isolated subnets: the database, with no route out at all
  * plus free gateway endpoints for S3 and DynamoDB. Nothing in the VPC accepts connections from the
  * internet; the database accepts 5432 only from the functions' and the admin host's security groups.
