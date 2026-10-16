@@ -51,8 +51,15 @@ Who can open a workspace's dashboard, and what of it they see. Owners and admins
   never reaches a server, so the token stays out of CloudFront and API logs. Links sent before
   (`?token=`) still work.
 - Single use (one conditional update claims it), expires (1–30 days, 7 by default), replaced when the
-  same address is invited again, rotated on resend. The account accepting must have the invited
-  address, verified.
+  same address is invited again, rotated on resend.
+- **The link is the way in** (`POST /invitations/open`, the page's one "Open dashboard" tap). Someone
+  new to bizinsights gets an account made for them in Cognito (a random password nobody knows) and is
+  signed in on that device: no sign-up form, no password. Later they sign in with an emailed code,
+  or set a password with "Forgot password". An address that already has an account is added to the
+  workspace but not signed in by the link (it may hold other workspaces; a forwarded link must not
+  open them): it signs in once as usual. Signed in as the invited address, it just joins; signed in
+  as anyone else, it's refused. Only from our own pages (login CSRF). One tap rather than on arrival:
+  email security scanners open links themselves and would use up the invitation.
 - The optional message is plain text, at most 500 characters, without links (every invitation is an
   email from our domain).
 - If the email can't be sent, the invitation is kept and the inviter gets the link to pass on.

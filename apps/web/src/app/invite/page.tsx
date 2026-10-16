@@ -49,6 +49,8 @@ export default function InvitePage() {
   const [error, setError] = useState<string | null>(null);
   const [mismatch, setMismatch] = useState(false);
   const [busy, setBusy] = useState(false);
+  /** Added to the workspace, but their existing account still has to sign in (the link never signs one in). */
+  const [joinedExisting, setJoinedExisting] = useState<string | null>(null);
 
   useEffect(() => {
     const t = readToken();
@@ -68,21 +70,35 @@ export default function InvitePage() {
     router.push(path);
   };
 
-  async function accept() {
+  /** Into the workspace, on the first page this member may see there. */
+  async function goTo(workspaceId: string) {
+    writeLocal(WORKSPACE_KEY, workspaceId);
+    const access = await api<{ role: Role; permissions: string[]; staffRole: null }>(`/workspaces/${workspaceId}/access`).catch(() => null);
+    router.replace(access ? landingPath({ role: access.role, permissions: access.permissions }, access.staffRole) : "/dashboard");
+  }
+
+  /**
+   * "Open dashboard": the link itself is the way in (POST /invitations/open). Someone new is signed
+   * in on this device with no form to fill in; an existing account is added and signs in once.
+   * One tap rather than opening on arrival: email security scanners open links by themselves, and
+   * would otherwise use up the single-use invitation.
+   */
+  async function open() {
     if (!token) return;
     setBusy(true);
     setError(null);
     setMismatch(false);
     try {
-      const { workspaceId } = await api<{ workspaceId: string }>("/invitations/accept", { method: "POST", body: { token } });
-      // Open the workspace they just joined, on the first page they may see there.
-      writeLocal(WORKSPACE_KEY, workspaceId);
-      const access = await api<{ role: Role; permissions: string[]; staffRole: null }>(`/workspaces/${workspaceId}/access`).catch(() => null);
-      router.replace(access ? landingPath({ role: access.role, permissions: access.permissions }, access.staffRole) : "/dashboard");
+      const r = await api<{ workspaceId: string; signedIn: boolean; accountExists?: boolean }>("/invitations/open", { method: "POST", body: { token } });
+      if (r.signedIn) return void (await goTo(r.workspaceId));
+      writeLocal(WORKSPACE_KEY, r.workspaceId);
+      setReturnTo("/dashboard");
+      setJoinedExisting(r.workspaceId);
+      setBusy(false);
     } catch (e) {
-      if (e instanceof ApiError && e.status === 401) return toSignIn("/login");
-      if (e instanceof ApiError && e.code === "invite_email_mismatch") setMismatch(true);
-      setError(actionError(e, "accept the invitation"));
+      if (e instanceof ApiError && (e.code === "signed_in_as_other" || e.code === "invite_email_mismatch")) setMismatch(true);
+      if (e instanceof ApiError && e.code === "account_exists") toSignIn("/login");
+      setError(actionError(e, "open the invitation"));
       setBusy(false);
     }
   }
@@ -96,6 +112,28 @@ export default function InvitePage() {
     return (
       <AuthCard title="Opening your invitation…">
         {error ? <Alert>{error}</Alert> : <p className="text-muted" role="status">Checking the invitation link…</p>}
+      </AuthCard>
+    );
+  }
+
+  // Opened again after accepting, still signed in: straight to the dashboard.
+  if (preview.status === "accepted" && who) {
+    return (
+      <AuthCard title={`Welcome back to ${preview.workspace}`}>
+        <Link className="btn-primary w-full" href="/dashboard">
+          Open the dashboard
+        </Link>
+      </AuthCard>
+    );
+  }
+
+  if (joinedExisting) {
+    return (
+      <AuthCard title={`You've joined ${preview.workspace}`} subtitle="You already have a bizinsights account with this email address.">
+        <Alert kind="success">The shared dashboard has been added to your account. Sign in once to open it: it will be waiting for you.</Alert>
+        <AuthSubmit type="button" onClick={() => router.push("/login")}>
+          Sign in to open it
+        </AuthSubmit>
       </AuthCard>
     );
   }
@@ -144,30 +182,23 @@ export default function InvitePage() {
       {preview.message && <blockquote className="whitespace-pre-wrap rounded-lg border-l-4 border-accent bg-accent/[0.06] px-4 py-3 text-sm">{preview.message}</blockquote>}
       {error && <Alert>{error}</Alert>}
       {who === undefined ? (
-        <p className="text-sm text-muted">Checking whether you&apos;re signed in…</p>
-      ) : who ? (
-        <div className="space-y-3">
-          <p className="text-sm text-muted">
-            Signed in as <span className="font-medium text-text">{who.email}</span>.
-          </p>
-          <AuthSubmit type="button" onClick={accept} busy={busy} busyLabel="Joining…">
-            Accept invitation
-          </AuthSubmit>
-          {mismatch && (
-            <button type="button" className="btn-secondary w-full" onClick={switchAccount}>
-              Sign in with another account
-            </button>
-          )}
-        </div>
+        <p className="text-sm text-muted">One moment…</p>
       ) : (
         <div className="space-y-3">
-          <p className="text-sm text-muted">Sign in, or create an account, with the email address this invitation was sent to. You don&apos;t need a Shopify store of your own.</p>
-          <AuthSubmit type="button" onClick={() => toSignIn("/login")}>
-            Sign in to accept
+          {who && (
+            <p className="text-sm text-muted">
+              Signed in as <span className="font-medium text-text">{who.email}</span>.
+            </p>
+          )}
+          <AuthSubmit type="button" onClick={open} busy={busy} busyLabel="Opening…">
+            Open dashboard
           </AuthSubmit>
-          <button type="button" className="btn-secondary w-full" onClick={() => toSignIn("/signup")}>
-            Create an account
-          </button>
+          {!who && <p className="text-center text-xs text-muted">No password or sign-up needed. You don&apos;t need a Shopify store of your own.</p>}
+          {mismatch && (
+            <button type="button" className="btn-secondary w-full" onClick={switchAccount}>
+              Sign out and open it again
+            </button>
+          )}
         </div>
       )}
       <p className="text-xs text-muted">If you weren&apos;t expecting this invitation, you can safely ignore it.</p>

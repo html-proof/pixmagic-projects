@@ -7,7 +7,9 @@ import {
   createTeamInvitation,
   INVITE_DAYS_MAX,
   INVITE_MESSAGE_MAX,
+  invitationForLink,
   loadMember,
+  logger,
   loadTeam,
   previewTeamInvitation,
   queryTeam,
@@ -18,6 +20,7 @@ import {
   revokeTeamInvitation,
   TEAM_SORTS,
   updateMemberAccess,
+  TeamError,
   updateTeamInvitation,
   type TeamActor,
 } from "@app/core";
@@ -38,7 +41,12 @@ import {
   roleAllowsKind,
 } from "@app/shared";
 import { STAFF_ROLE_HELP, STAFF_ROLE_LABEL, STAFF_ROLES, staffAccess } from "@app/shared/staff";
-import { body, clientIp, requireUser, requireWorkspace, type Ctx, type Deps, type WorkspaceAccess } from "../context.js";
+import { systemDb } from "@app/db";
+import { body, clientIp, HttpError, loadUser, requireAppOrigin, requireUser, requireWorkspace, type Ctx, type Deps, type WorkspaceAccess } from "../context.js";
+import { CognitoError, CognitoUnavailableError, unguessablePassword } from "../cognito.js";
+import { resolveUser } from "../identity.js";
+import { newSession, setSessionCookies } from "../session.js";
+import { cognitoFailure } from "./auth.js";
 import type { App } from "../app.js";
 import { limit, LIMITS } from "../rateLimit.js";
 
@@ -269,6 +277,71 @@ export function teamRoutes(app: App, deps: Deps) {
     await limit(deps.coord, `rl:invite-preview:${clientIp(c)}`, LIMITS.invitePreviewIp);
     const { token } = tokenSchema.parse(await body(c));
     return c.json(await previewTeamInvitation(token));
+  });
+
+  /**
+   * "Open dashboard" on the invitation page: the link is the invitee's way in.
+   *
+   * - Someone new (no bizinsights account for the invited address): an account is made for them in
+   *   Cognito (a random password nobody knows; later they sign in with an emailed code, or set a
+   *   password with "Forgot password"), they are signed in on this device, and the invitation is
+   *   accepted. No sign-up form, no password.
+   * - Signed in already as the invited address: accepted, as /invitations/accept.
+   * - An existing account for the address, not signed in: the invitation is accepted for that
+   *   account, but the link does NOT sign it in. That account may hold other workspaces, and a
+   *   link that was forwarded or intercepted must not open them; they sign in once as usual.
+   * - Signed in as someone else: refused, so the page can offer to switch.
+   *
+   * Single use like any invitation. A sign-in, so only from our own pages (login CSRF).
+   */
+  app.post("/invitations/open", async (c) => {
+    requireAppOrigin(c);
+    await limit(deps.coord, `rl:invite-open:${clientIp(c)}`, LIMITS.inviteAcceptIp);
+    const { token } = tokenSchema.parse(await body(c));
+    const inv = await invitationForLink(token);
+    if (!inv) return c.json({ error: "invalid_invite", message: "This invitation link isn't valid. Check you opened the whole link, or ask for a new invitation." }, 400);
+    if (inv.status !== "pending") return c.json({ error: "invalid_invite", message: "This invitation can no longer be used.", detail: { status: inv.status } }, 400);
+    await limit(deps.coord, `rl:invite-open:${inv.id}`, LIMITS.inviteAcceptUser);
+
+    const current = await loadUser(c, deps);
+    if (current) {
+      if (current.email.toLowerCase() !== inv.email) {
+        throw new HttpError(409, `You're signed in as ${current.email}, but this invitation is for another address. Sign out, then open the link again.`, "signed_in_as_other");
+      }
+      return c.json({ ...(await acceptTeamInvitation(current, token, clientIp(c), { viaLink: true })), signedIn: true });
+    }
+
+    const existing = await systemDb.user.findUnique({ where: { email: inv.email } });
+    const inCognito = existing ? null : await deps.auth.adminGetUser(inv.email).catch((err: unknown) => {
+      if (err instanceof CognitoUnavailableError) throw new HttpError(503, "We can't open your invitation right now. Please try again in a moment.", "auth_unavailable");
+      throw err;
+    });
+    if (existing || inCognito) {
+      // Accepted for their account; they sign in to it once, as usual.
+      const workspaceId = existing ? (await acceptTeamInvitation(existing, token, clientIp(c), { viaLink: true })).workspaceId : inv.workspaceId;
+      return c.json({ workspaceId, joined: !!existing, signedIn: false, accountExists: true });
+    }
+
+    // Someone new: an account, a session on this device, and the invitation accepted.
+    const password = unguessablePassword();
+    let user;
+    try {
+      await deps.auth.adminCreateUser({ email: inv.email, emailVerified: true, password });
+      const signedIn = await deps.auth.passwordSignIn(inv.email, password);
+      if (!("tokens" in signedIn)) throw new CognitoError("UnexpectedChallenge", signedIn.challenge);
+      const claims = await deps.auth.verifyIdToken(signedIn.tokens.idToken);
+      user = await resolveUser(claims, { ip: clientIp(c) });
+      const accepted = await acceptTeamInvitation(user, token, clientIp(c), { viaLink: true });
+      setSessionCookies(c, newSession({ userId: user.id, sub: claims.sub, username: claims.username, method: claims.method, authTime: claims.authTime }), signedIn.tokens.refreshToken);
+      logger.info({ event: "session_created", userId: user.id, method: "invitation_link", ip: clientIp(c) }, "signed in from an invitation link");
+      return c.json({ ...accepted, signedIn: true });
+    } catch (err) {
+      if (err instanceof CognitoError && err.code === "UsernameExistsException") {
+        throw new HttpError(409, "An account with this email address already exists. Sign in, then open the invitation again.", "account_exists");
+      }
+      if (err instanceof HttpError || err instanceof TeamError) throw err;
+      throw cognitoFailure(err, "invitation link sign-in");
+    }
   });
 
   app.post("/invitations/accept", async (c) => {

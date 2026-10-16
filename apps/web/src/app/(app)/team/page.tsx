@@ -14,6 +14,26 @@ import { STATUS_LABEL, type Catalog, type TeamPage, type TeamRow, type TeamRowSt
 
 const STATUS_TONE: Record<TeamRowStatus, Tone> = { active: "good", pending: "warn", expired: "neutral", cancelled: "neutral", revoked: "danger" };
 
+/**
+ * A row's status as the list shows it. An invitation not accepted yet says how its email went:
+ * "Sent" once it went out (the latest attempt succeeded), "Not delivered" when the latest failed;
+ * "Pending" only while neither is known.
+ */
+function statusOf(r: TeamRow): { label: string; tone: Tone } {
+  if (r.kind === "invitation" && r.status === "pending") {
+    const sent = r.sentAt ? Date.parse(r.sentAt) : 0;
+    const failed = r.sendFailedAt ? Date.parse(r.sendFailedAt) : 0;
+    if (sent && sent >= failed) return { label: "Sent", tone: "good" };
+    if (failed) return { label: "Not delivered", tone: "danger" };
+  }
+  return { label: STATUS_LABEL[r.status], tone: STATUS_TONE[r.status] };
+}
+
+function StatusBadge({ r }: { r: TeamRow }) {
+  const s = statusOf(r);
+  return <Badge tone={s.tone}>{s.label}</Badge>;
+}
+
 const STATUS_FILTERS: Array<[value: string, label: string]> = [
   ["", "All statuses"],
   ["members", "Members"],
@@ -199,7 +219,7 @@ function TeamAccess() {
       </span>
       {r.name && <span className="block truncate text-xs text-muted">{r.email}</span>}
       {r.kind === "invitation" && r.status === "pending" && r.expiresAt && <span className="block text-xs text-muted">Expires {new Date(r.expiresAt).toLocaleDateString()}</span>}
-      {r.kind === "invitation" && r.sendFailedAt && (!r.sentAt || r.sendFailedAt > r.sentAt) && <span className="block text-xs text-warn">Email not delivered: resend or share the link</span>}
+      {r.kind === "invitation" && r.status === "pending" && statusOf(r).label === "Not delivered" && <span className="block text-xs text-warn">Resend it, or share the link another way</span>}
     </span>
   );
 
@@ -219,7 +239,7 @@ function TeamAccess() {
       <section aria-label="Summary" className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <SummaryCard testId="summary-total" icon={UsersRound} label="Total members" value={s?.totalMembers} note="Everyone with a membership" />
         <SummaryCard testId="summary-active" icon={UserCheck} label="Active members" value={s?.activeMembers} note="Can open the dashboard now" />
-        <SummaryCard testId="summary-pending" icon={Clock} label="Pending invitations" value={s?.pendingInvitations} note="Sent, not accepted yet" />
+        <SummaryCard testId="summary-pending" icon={Clock} label="Open invitations" value={s?.pendingInvitations} note="Not accepted yet" />
         <SummaryCard testId="summary-ended" icon={MailWarning} label="Expired or revoked" value={s?.endedInvitations} note="Invitations that no longer work" />
       </section>
 
@@ -271,7 +291,7 @@ function TeamAccess() {
                     {name(r)}
                     <div className="flex flex-wrap items-center gap-2 text-sm">
                       <span className="font-medium">{ROLE_INFO[r.role].label}</span>
-                      <Badge tone={STATUS_TONE[r.status]}>{STATUS_LABEL[r.status]}</Badge>
+                      <StatusBadge r={r} />
                     </div>
                     <ModuleChips row={r} />
                   </div>
@@ -298,7 +318,7 @@ function TeamAccess() {
                       <td className="max-w-[18rem] px-2 py-3">{name(r)}</td>
                       <td className="whitespace-nowrap px-2 py-3">{ROLE_INFO[r.role].label}</td>
                       <td className="px-2 py-3"><ModuleChips row={r} /></td>
-                      <td className="px-2 py-3"><Badge tone={STATUS_TONE[r.status]}>{STATUS_LABEL[r.status]}</Badge></td>
+                      <td className="px-2 py-3"><StatusBadge r={r} /></td>
                       <td className="whitespace-nowrap px-2 py-3 text-muted">{fmtRelative(r.since)}</td>
                       <td className="px-2 py-3 text-right"><RowActions row={r} actions={actionsFor(r)} onAct={(a) => void act(r, a)} /></td>
                     </tr>
