@@ -275,7 +275,11 @@ describe("the edge stack behind Cloudflare", () => {
     expect(sets.map((s) => s.IPAddressVersion).sort()).toEqual(["IPV4", "IPV6"]);
     expect(sets.find((s) => s.IPAddressVersion === "IPV4").Addresses).toContain("172.64.0.0/13");
     expect(sets.find((s) => s.IPAddressVersion === "IPV6").Addresses).toContain("2606:4700::/32");
-    for (const s of sets) expect(s.Scope).toBe("CLOUDFRONT");
+    for (const s of sets) {
+      expect(s.Scope).toBe("CLOUDFRONT");
+      // WAF refuses anything else in a description (a quote or a bracket failed a deploy).
+      expect(s.Description).toMatch(/^[\w+=:#@/\-,.][\w+=:#@/\-,.\s]+[\w+=:#@/\-,.]$/);
+    }
   });
 
   it("rate-limits requests through Cloudflare by the client's address, everything else by the viewer's", () => {
