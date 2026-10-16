@@ -26,7 +26,7 @@ const CUSTOMER_FIELDS = `
   numberOfOrders
   amountSpent { amount currencyCode }
   defaultEmailAddress { emailAddress marketingState }
-  defaultPhoneNumber { phoneNumber marketingState }`;
+  defaultPhoneNumber { phoneNumber smsMarketingConsent { state } }`;
 
 const CONTACTS_QUERY = `#graphql
   query Contacts($first: Int!) {
@@ -57,7 +57,7 @@ interface GqlCustomer {
   numberOfOrders: string | number | null;
   amountSpent: { amount: string; currencyCode: string } | null;
   defaultEmailAddress: { emailAddress: string | null; marketingState: string | null } | null;
-  defaultPhoneNumber: { phoneNumber: string | null; marketingState?: string | null } | null;
+  defaultPhoneNumber: { phoneNumber: string | null; smsMarketingConsent?: { state: string | null } | null } | null;
 }
 
 interface GqlAddress {
@@ -94,7 +94,7 @@ function person(c: GqlCustomer | null, shopDomain: string) {
     phone: c?.defaultPhoneNumber?.phoneNumber ?? null,
     subscribed: c?.defaultEmailAddress?.marketingState === "SUBSCRIBED",
     /** Agreed to marketing by text message (Shopify's SMS consent, which also covers WhatsApp here). */
-    smsSubscribed: c?.defaultPhoneNumber?.marketingState === "SUBSCRIBED",
+    smsSubscribed: c?.defaultPhoneNumber?.smsMarketingConsent?.state === "SUBSCRIBED",
     adminUrl: c ? `https://${shopDomain}/admin/customers/${encodeURIComponent(numericId(c.id))}` : null,
   };
 }

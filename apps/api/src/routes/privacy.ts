@@ -1,5 +1,5 @@
 import { withTenant } from "@app/db";
-import { audit, customerDataExport, resolveAlerts } from "@app/core";
+import { audit, customerDataExport } from "@app/core";
 import { clientIp, HttpError, requireWorkspace, type Deps } from "../context.js";
 import type { App } from "../app.js";
 
@@ -36,16 +36,22 @@ export function privacyRoutes(app: App, deps: Deps) {
   app.get("/workspaces/:ws/privacy-requests/:id/export", async (c) => {
     const { ws, id } = c.req.param();
     const access = await requireWorkspace(c, deps, ws, "audit:read");
-    const { request, data, pending } = await withTenant(ws, async (tx) => {
+    const { request, data } = await withTenant(ws, async (tx) => {
       const request = await tx.dataRequest.findFirst({ where: { id, workspaceId: ws } });
       if (!request) throw new HttpError(404, "Not found", "not_found");
       const data = await customerDataExport(tx, request);
       await tx.dataRequest.update({ where: { id: request.id }, data: { downloadedAt: new Date() } });
+      // The owner has what they need: this workspace's "privacy request" alert for the store can
+      // close once none is waiting.
       const pending = await tx.dataRequest.count({ where: { workspaceId: ws, storeId: request.storeId, downloadedAt: null } });
-      return { request, data, pending };
+      if (pending === 0) {
+        await tx.alert.updateMany({
+          where: { workspaceId: ws, storeId: request.storeId, code: "privacy_request", resolvedAt: null },
+          data: { resolvedAt: new Date() },
+        });
+      }
+      return { request, data };
     });
-    // The owner has what they need: the "privacy request" alert can close once none is waiting.
-    if (pending === 0) await resolveAlerts(request.storeId, ["privacy_request"]);
     await audit({
       workspaceId: ws,
       actorUserId: access.user?.id,

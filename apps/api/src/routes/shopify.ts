@@ -1,11 +1,12 @@
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { z } from "zod";
-import { systemDb, type Store } from "@app/db";
+import { systemDb, type Store, type User } from "@app/db";
 import {
   appForShop,
   audit,
   buildAuthorizeUrl,
   DEFAULT_APP,
+  encryptTokenFields,
   env,
   exchangeCodeForToken,
   logger,
@@ -22,7 +23,7 @@ import { can, expandScopes, normalizeShopDomain, randomToken, safeEqual, verifyS
 import { body, clientIp, HttpError, loadUser, requireUser, requireWorkspace, type Ctx, type Deps } from "../context.js";
 import type { App } from "../app.js";
 import { SESSION_COOKIE } from "../session.js";
-import { attachStore, createShopWorkspace, dropEmptyShopWorkspace, storeTakenElsewhere, syncPage, unclaimed } from "../connectStore.js";
+import { attachStore, createShopWorkspace, dropEmptyShopWorkspace, lockWorkspace, storeTakenElsewhere, syncPage, unclaimed } from "../connectStore.js";
 import { limit, LIMITS } from "../rateLimit.js";
 
 const STATE_TTL_S = 600;
@@ -198,23 +199,41 @@ async function exchangeOrFail(app: ShopifyApp, shop: string, code: string, deps:
 async function finishInstall(
   c: Ctx,
   deps: Deps,
-  app: ShopifyApp,
-  shop: string,
-  code: string,
+  { app, shop, code, user }: { app: ShopifyApp; shop: string; code: string; user: User | null },
   fail: (code: string) => Response,
 ): Promise<Response> {
   const token = await exchangeOrFail(app, shop, code, deps);
   if (typeof token === "string") return fail(token);
   const existing = await systemDb.store.findUnique({ where: { shopDomain: shop } });
-  const created = existing ? null : await createShopWorkspace(shop);
+
+  // Opened again before anyone claimed it: the import already ran, this approval only earns the
+  // browser its claim (landingFor), so keep the fresher token and go there.
+  if (existing && (await workingFor(existing, app)) && (await unclaimed(existing.workspaceId))) {
+    await systemDb.store.update({ where: { id: existing.id }, data: encryptTokenFields(existing.id, token) });
+    return c.redirect(await landingFor(c, deps, existing));
+  }
+
+  // The store goes back to its own workspace, except one an account had until the merchant
+  // uninstalled the app: uninstalling is how a merchant cuts an account off, so that account gets
+  // the store back only when someone who manages its stores is the one signed in here. Anyone
+  // else starts afresh in a workspace of the store's own (attachStore moves it and clears the old
+  // copy of its data).
+  let target = existing?.workspaceId ?? null;
+  if (existing && existing.status === "uninstalled" && !(await unclaimed(existing.workspaceId))) {
+    const m = user?.emailVerified
+      ? await systemDb.membership.findUnique({ where: { workspaceId_userId: { workspaceId: existing.workspaceId, userId: user.id } } })
+      : null;
+    if (!m || !can(m.role, "stores:manage")) target = null;
+  }
+  const created = target ? null : await createShopWorkspace(shop);
   let store: Store;
   try {
     store = await attachStore(deps, {
-      workspaceId: existing?.workspaceId ?? created!.id,
+      workspaceId: target ?? created!.id,
       shop,
       token,
       appKey: app.key,
-      actorUserId: null,
+      actorUserId: user?.id ?? null,
       ip: clientIp(c),
       via: "shopify_install",
     });
@@ -321,8 +340,6 @@ export function shopifyRoutes(app: App, deps: Deps) {
       if (state.shop !== shop) return fail("shop_mismatch");
       // The redirect must come back signed by the app the flow was started for.
       if ((state.app ?? DEFAULT_APP) !== app.key) return fail("app_mismatch");
-      if (state.mode === "install") return await finishInstall(c, deps, app, shop, q.code, fail);
-
       let user;
       try {
         user = await loadUser(c, deps);
@@ -334,6 +351,7 @@ export function shopifyRoutes(app: App, deps: Deps) {
         setCookie(c, STATE_COOKIE, q.state, cookieOpts());
         throw err;
       }
+      if (state.mode === "install") return await finishInstall(c, deps, { app, shop, code: q.code, user }, fail);
       if (!user || user.id !== state.userId) return fail("session_mismatch");
       // Re-checked here, not only at /install: the approval can take minutes, and someone removed
       // from the workspace (or demoted) in between must not still attach a store to it.
@@ -418,12 +436,15 @@ export function shopifyRoutes(app: App, deps: Deps) {
       }
 
       const store = await systemDb.store.findUnique({ where: { shopDomain: shop } });
-      // 2. Installed and working: open it.
-      if (store && (await workingFor(store, app))) return c.redirect(await landingFor(c, deps, store));
+      // 2. Installed and working: open it. One nobody has claimed yet goes through Shopify's
+      //    approval first (it doesn't prompt again): a signed link alone doesn't earn a claim.
+      if (store && (await workingFor(store, app)) && !(await unclaimed(store.workspaceId))) {
+        return c.redirect(await landingFor(c, deps, store));
+      }
 
-      // 3. A new store opened by someone signed in who manages exactly one workspace: connect it
-      //    there, as opening the app from the admin always has.
-      if (!store && verified) {
+      // 3. A new or uninstalled store opened by someone signed in who manages exactly one
+      //    workspace: connect it there, as opening the app from the admin always has.
+      if ((!store || store.status === "uninstalled") && verified) {
         const managed = await systemDb.membership.findMany({
           where: { userId: verified.id, role: { in: ["owner", "admin"] } },
           select: { workspaceId: true, role: true },
@@ -461,8 +482,9 @@ export function shopifyRoutes(app: App, deps: Deps) {
     const claim = await readClaim(c, deps);
     if (!claim) throw claimExpired();
     const store = await systemDb.store.findUnique({ where: { id: claim.storeId } });
-    if (!store || store.shopDomain !== claim.shop) throw claimExpired();
-    const claimable = store.workspaceId === claim.workspaceId && (await unclaimed(store.workspaceId));
+    // Gone, or connected to an account another way since: this claim no longer points anywhere.
+    if (!store || store.shopDomain !== claim.shop || store.workspaceId !== claim.workspaceId) throw claimExpired();
+    const claimable = await unclaimed(store.workspaceId);
     return c.json({ shop: store.shopDomain, name: store.name, status: store.status, claimable });
   });
 
@@ -484,14 +506,14 @@ export function shopifyRoutes(app: App, deps: Deps) {
       result = await systemDb.$transaction(async (tx) => {
         // One claim at a time per workspace: two browsers holding a claim for the same store
         // (opened from the admin twice) must not both become owner.
-        await tx.$queryRaw`SELECT id FROM workspaces WHERE id = ${claim.workspaceId} FOR UPDATE`;
+        await lockWorkspace(tx, claim.workspaceId);
         const store = await tx.store.findUnique({ where: { id: claim.storeId } });
         if (!store || store.workspaceId !== claim.workspaceId || store.shopDomain !== claim.shop) throw claimExpired();
-        if ((await tx.membership.count({ where: { workspaceId: claim.workspaceId } })) > 0) {
+        if (!(await unclaimed(claim.workspaceId, tx))) {
           throw new HttpError(409, "This store already belongs to a bizinsights account. Sign in to that account, or ask its owner to invite you.", "already_claimed");
         }
         await tx.membership.create({ data: { workspaceId: claim.workspaceId, userId: user.id, role: "owner" } });
-        const workspace = await tx.workspace.findUniqueOrThrow({ where: { id: claim.workspaceId }, select: { id: true, name: true } });
+        const workspace = await tx.workspace.update({ where: { id: claim.workspaceId }, data: { awaitingClaim: false }, select: { id: true, name: true } });
         return { workspace, storeId: store.id };
       });
     } catch (err) {

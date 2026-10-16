@@ -113,6 +113,9 @@ model Workspace {
   id           String        @id @default(cuid())
   name         String
   createdAt    DateTime      @default(now()) @map("created_at")
+  /// Made for a store installed from Shopify before anyone had a login for it, and not claimed yet
+  /// (apps/api/src/routes/shopify.ts). Only such a workspace can be claimed, or left for another.
+  awaitingClaim Boolean      @default(false) @map("awaiting_claim")
   memberships  Membership[]
   stores       Store[]
   apiKeys      ApiKey[]

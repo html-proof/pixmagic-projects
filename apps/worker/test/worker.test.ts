@@ -322,10 +322,34 @@ describe("webhook processing", () => {
 
   it("GDPR: shop/redact for a store nobody claimed removes its workspace too", async () => {
     const store = await makeStore();
+    await systemDb.workspace.update({ where: { id: store.workspaceId }, data: { awaitingClaim: true } });
     await webhook("app/uninstalled", {});
     await webhook("shop/redact", { shop_domain: "s.myshopify.com" });
     expect(await systemDb.store.count()).toBe(0);
     expect(await systemDb.workspace.findUnique({ where: { id: store.workspaceId } })).toBeNull();
+  });
+
+  it("GDPR: shop/redact keeps a workspace the app didn't make for an install, even without members", async () => {
+    const store = await makeStore();
+    await webhook("app/uninstalled", {});
+    await webhook("shop/redact", { shop_domain: "s.myshopify.com" });
+    expect(await systemDb.store.count()).toBe(0);
+    expect(await systemDb.workspace.findUnique({ where: { id: store.workspaceId } })).not.toBeNull();
+  });
+
+  it("GDPR: a redelivered data request raises the alert a failed first attempt missed", async () => {
+    const store = await makeStore();
+    await claim(store.workspaceId);
+    // Recorded, but the alert never went out (the first attempt failed after the insert).
+    await systemDb.dataRequest.create({ data: { workspaceId: store.workspaceId, storeId: store.id, shopifyRequestId: "77", customerId: "7" } });
+    await webhook("customers/data_request", { customer: { id: 7 }, orders_requested: [], data_request: { id: 77 } });
+    expect(await systemDb.alert.count({ where: { storeId: store.id, code: "privacy_request", resolvedAt: null } })).toBe(1);
+    expect(await systemDb.dataRequest.count()).toBe(1);
+    // Once downloaded, a late redelivery stays quiet.
+    await systemDb.alert.updateMany({ data: { resolvedAt: new Date() } });
+    await systemDb.dataRequest.updateMany({ data: { downloadedAt: new Date() } });
+    await webhook("customers/data_request", { customer: { id: 7 }, orders_requested: [], data_request: { id: 77 } });
+    expect(await systemDb.alert.count({ where: { storeId: store.id, code: "privacy_request", resolvedAt: null } })).toBe(0);
   });
 
   it("GDPR: shop/redact for a store installed again since erases nothing", async () => {

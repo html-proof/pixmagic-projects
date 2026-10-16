@@ -529,18 +529,20 @@ const unreadableGdprRequest = (topic: string) => new UnrecoverableError(`Shopify
 async function eraseStore(store: Store, deps: WorkerDeps) {
   await purgeStoreData(store.id, deps.fetchImpl);
   await purgeEmailStoreData(store.id);
-  await systemDb.$transaction([
-    systemDb.syncJob.deleteMany({ where: { storeId: store.id } }),
-    systemDb.alert.deleteMany({ where: { storeId: store.id } }),
-    systemDb.dataRequest.deleteMany({ where: { storeId: store.id } }),
-    systemDb.webhookEvent.updateMany({ where: { storeId: store.id }, data: { storeId: null } }),
-    systemDb.store.delete({ where: { id: store.id } }),
-  ]);
-  const [members, stores] = await Promise.all([
-    systemDb.membership.count({ where: { workspaceId: store.workspaceId } }),
-    systemDb.store.count({ where: { workspaceId: store.workspaceId } }),
-  ]);
-  if (members === 0 && stores === 0) await systemDb.workspace.deleteMany({ where: { id: store.workspaceId } });
+  // One transaction: a retry after a failure finds the store still there and does it all again.
+  await systemDb.$transaction(async (tx) => {
+    // A claim of the workspace takes the same lock (apps/api/src/routes/shopify.ts).
+    await tx.$queryRaw`SELECT id FROM workspaces WHERE id = ${store.workspaceId} FOR UPDATE`;
+    await tx.syncJob.deleteMany({ where: { storeId: store.id } });
+    await tx.alert.deleteMany({ where: { storeId: store.id } });
+    await tx.dataRequest.deleteMany({ where: { storeId: store.id } });
+    await tx.webhookEvent.updateMany({ where: { storeId: store.id }, data: { storeId: null } });
+    await tx.store.delete({ where: { id: store.id } });
+    const ws = await tx.workspace.findUnique({ where: { id: store.workspaceId }, select: { awaitingClaim: true } });
+    const members = await tx.membership.count({ where: { workspaceId: store.workspaceId } });
+    const stores = await tx.store.count({ where: { workspaceId: store.workspaceId } });
+    if (ws?.awaitingClaim && members === 0 && stores === 0) await tx.workspace.delete({ where: { id: store.workspaceId } });
+  });
 }
 
 export async function processWebhook(data: WebhookJobData, deps: WorkerDeps) {
@@ -703,14 +705,18 @@ export async function processWebhook(data: WebhookJobData, deps: WorkerDeps) {
           phone: request.customer?.phone,
           ordersRequested: (request.orders_requested ?? []).map(String),
         });
-        if (!created) break;
-        await audit({
-          workspaceId: store.workspaceId,
-          action: "gdpr.customer_data_request",
-          targetType: "data_request",
-          targetId: recorded.id,
-          metadata: { customerId, ordersRequested: recorded.ordersRequested.length },
-        });
+        if (created) {
+          await audit({
+            workspaceId: store.workspaceId,
+            action: "gdpr.customer_data_request",
+            targetType: "data_request",
+            targetId: recorded.id,
+            metadata: { customerId, ordersRequested: recorded.ordersRequested.length },
+          });
+        }
+        // Until the owner has downloaded it. A retry after a failed alert raises it then (an open
+        // alert isn't repeated, so a redelivery doesn't email twice).
+        if (recorded.downloadedAt) break;
         await raiseAlert(
           {
             workspaceId: store.workspaceId,

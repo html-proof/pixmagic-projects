@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { systemDb } from "@app/db";
 import { signShopifyQuery } from "@app/shared";
-import { getAccessToken } from "@app/core";
+import { getAccessToken, recordDataRequest } from "@app/core";
 import { clean, createStore, createWorkspace, setup, signIn, teardown, testBrowser, type TestCtx } from "./helpers.js";
 
 /**
@@ -66,6 +66,7 @@ describe("installing from Shopify", () => {
     expect(await getAccessToken(store, ctx.deps.coord)).toBe("shpat_installed");
     const ws = await systemDb.workspace.findUniqueOrThrow({ where: { id: store.workspaceId }, include: { memberships: true, subscription: true } });
     expect(ws.name).toBe("Demo Shop");
+    expect(ws.awaitingClaim).toBe(true);
     // Nobody can see it until it is claimed.
     expect(ws.memberships).toEqual([]);
     expect(ws.subscription?.plan).toBe("free");
@@ -92,6 +93,7 @@ describe("installing from Shopify", () => {
     expect(claimed.json()).toEqual({ workspace: { id: store.workspaceId, name: "Demo Shop", role: "owner" }, storeId: store.id });
     const member = await systemDb.membership.findUniqueOrThrow({ where: { workspaceId_userId: { workspaceId: store.workspaceId, userId: user.id } } });
     expect(member.role).toBe("owner");
+    expect((await systemDb.workspace.findUniqueOrThrow({ where: { id: store.workspaceId } })).awaitingClaim).toBe(false);
     expect(await systemDb.auditLog.count({ where: { action: "workspace.claimed", actorUserId: user.id } })).toBe(1);
 
     // The claim is spent: the cookie is gone and the dashboard is theirs.
@@ -113,9 +115,10 @@ describe("installing from Shopify", () => {
 
   it("never gives a store two owners: a second claim for it is refused", async () => {
     const first = await install();
-    // The same store opened from the admin in another browser gets its own claim cookie.
-    const other = testBrowser(ctx);
-    expect((await other.get(launchUrl())).headers.location).toBe("http://localhost:3001/claim");
+    // The same store opened from the admin in another browser gets its own claim cookie, once
+    // Shopify has approved it there too.
+    const { browser: other, cb } = await install(testBrowser(ctx));
+    expect(cb.headers.location).toBe("http://localhost:3001/claim");
 
     await first.browser.signIn("first", "first@x.com");
     expect((await first.browser.post("/shopify/claim")).statusCode).toBe(200);
@@ -152,17 +155,75 @@ describe("installing from Shopify", () => {
     expect((await testBrowser(ctx).get(launchUrl())).headers.location).toBe(`http://localhost:3001/onboarding?step=sync&store=${store.id}`);
   });
 
-  it("authorizes again on reinstall and keeps the store in its workspace", async () => {
-    const { headers } = await signIn(ctx, "owner", "owner@x.com");
-    const ws = await createWorkspace(ctx, headers);
+  it("authorizes again on reinstall and, for the account's own manager, keeps the store in its workspace", async () => {
+    const browser = testBrowser(ctx);
+    await browser.signIn("owner", "owner@x.com");
+    const ws = (await browser.post("/workspaces", { name: "Acme" })).json().workspace.id as string;
+    await browser.post("/workspaces", { name: "Second" });
     const old = await createStore(ws, SHOP, ["read_orders"], { status: "uninstalled", uninstalledAt: new Date(), shopifyAppKey: "default" });
 
-    const { cb } = await install();
+    const { cb } = await install(browser);
     expect(cb.headers.location).toBe(`http://localhost:3001/onboarding?step=sync&store=${old.id}`);
     const store = await systemDb.store.findUniqueOrThrow({ where: { id: old.id } });
     expect(store).toMatchObject({ workspaceId: ws, status: "syncing", uninstalledAt: null });
     expect(await getAccessToken(store, ctx.deps.coord)).toBe("shpat_installed");
-    expect(await systemDb.workspace.count()).toBe(1);
+    expect(await systemDb.workspace.count()).toBe(2);
+  });
+
+  it("doesn't hand a store back to the account it was uninstalled from when someone else installs it", async () => {
+    // Uninstalling is how a merchant cuts an account (an agency, a former partner) off.
+    const { headers } = await signIn(ctx, "former", "former@x.com");
+    const oldWs = await createWorkspace(ctx, headers, "Former");
+    const old = await createStore(oldWs, SHOP, ["read_orders"], { status: "uninstalled", uninstalledAt: new Date(), shopifyAppKey: "default" });
+    await systemDb.product.create({ data: { workspaceId: oldWs, storeId: old.id, shopifyId: "1", title: "Old tee", shopifyUpdatedAt: new Date() } });
+
+    const { cb, browser } = await install();
+    expect(cb.headers.location).toBe("http://localhost:3001/claim");
+    const store = await systemDb.store.findUniqueOrThrow({ where: { id: old.id } });
+    expect(store.workspaceId).not.toBe(oldWs);
+    expect((await systemDb.workspace.findUniqueOrThrow({ where: { id: store.workspaceId } })).awaitingClaim).toBe(true);
+    // The old account keeps its workspace but not the store, nor its copy of the store's data.
+    expect(await systemDb.store.count({ where: { workspaceId: oldWs } })).toBe(0);
+    expect(await systemDb.product.count({ where: { storeId: old.id } })).toBe(0);
+    expect((await browser.get("/shopify/claim")).json().claimable).toBe(true);
+  });
+
+  it("goes through Shopify again before offering an unclaimed store to another browser", async () => {
+    await install();
+    const jobs = await systemDb.syncJob.count();
+    // A signed launch link alone (it can be replayed for ten minutes) earns no claim.
+    const res = await testBrowser(ctx).get(launchUrl());
+    expect(new URL(String(res.headers.location)).pathname).toBe("/admin/oauth/authorize");
+    expect(res.headers["set-cookie"] ?? "").not.toContain("shopify_claim=");
+    // Approved there: the claim, the fresher token, and no second import.
+    const { cb } = await install(testBrowser(ctx));
+    expect(cb.headers.location).toBe("http://localhost:3001/claim");
+    expect(await systemDb.syncJob.count()).toBe(jobs);
+  });
+
+  it("never offers a workspace that merely has no members", async () => {
+    // A workspace the app didn't make for an install, left without members (an edge case).
+    const ws = await systemDb.workspace.create({ data: { name: "Orphan" } });
+    await createStore(ws.id, SHOP, ["read_orders"], { accessTokenEnc: "v1:x", shopifyAppKey: "default" });
+    const res = await testBrowser(ctx).get(launchUrl());
+    expect(res.headers.location).toMatch(/\/onboarding\?step=sync&store=/);
+    const { headers } = await signIn(ctx, "taker", "taker@x.com");
+    const mine = await createWorkspace(ctx, headers, "Mine");
+    const taken = await ctx.app.inject({ method: "POST", url: `/workspaces/${mine}/shopify/install`, headers, payload: { shop: SHOP } });
+    expect(taken.json().error).toBe("store_taken");
+  });
+
+  it("a claim for a store connected to an account another way since has expired", async () => {
+    const { browser } = await install();
+    const { headers, cookie } = await signIn(ctx, "later", "later@x.com");
+    const ws = await createWorkspace(ctx, headers, "Later");
+    const start = await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/shopify/install`, headers, payload: { shop: SHOP } });
+    const state = new URL(start.json().url).searchParams.get("state")!;
+    tokenFetch();
+    await ctx.app.inject({ method: "GET", url: callbackUrl(state), headers: { cookie: `${cookie}; shopify_oauth_state=${state}` } });
+    expect((await browser.get("/shopify/claim")).statusCode).toBe(404);
+    await browser.signIn("first", "first@x.com");
+    expect((await browser.post("/shopify/claim")).json().error).toBe("claim_expired");
   });
 
   it("authorizes again when Shopify refuses the token it holds", async () => {
@@ -194,7 +255,10 @@ describe("installing from Shopify", () => {
 
   it("lets an account connect a store nobody has claimed, and drops the empty workspace it leaves", async () => {
     await install();
-    const unclaimedWs = (await systemDb.store.findUniqueOrThrow({ where: { shopDomain: SHOP } })).workspaceId;
+    const installed = await systemDb.store.findUniqueOrThrow({ where: { shopDomain: SHOP } });
+    const unclaimedWs = installed.workspaceId;
+    // A customer's data request arrived before anyone claimed the store: it must not be lost.
+    const pending = await recordDataRequest(installed, { requestId: "1", customerId: "7", email: "pat@example.com" });
 
     const { headers, cookie } = await signIn(ctx, "later", "later@x.com");
     const ws = await createWorkspace(ctx, headers, "Later");
@@ -208,6 +272,7 @@ describe("installing from Shopify", () => {
     const store = await systemDb.store.findUniqueOrThrow({ where: { shopDomain: SHOP } });
     expect(store.workspaceId).toBe(ws);
     expect(await systemDb.workspace.findUnique({ where: { id: unclaimedWs } })).toBeNull();
+    expect(await systemDb.dataRequest.findUniqueOrThrow({ where: { id: pending.request.id } })).toMatchObject({ workspaceId: ws, emailHash: null, customerId: "7" });
   });
 
   it("keeps a claimed store out of reach of anyone else's connect", async () => {
