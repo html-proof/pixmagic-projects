@@ -21,7 +21,7 @@ export const testEnv = {
   SHOPIFY_API_SECRET: "test_secret",
   SHOPIFY_SCOPES: "read_orders,read_products",
   SHOPIFY_OPTIONAL_SCOPES: "",
-  SHOPIFY_API_VERSION: "2025-10",
+  SHOPIFY_API_VERSION: "2026-10",
   // A second app, custom-distributed to one client store (multi-app support).
   SHOPIFY_EXTRA_APPS: JSON.stringify([{ key: "client", clientId: "client_key", shops: ["client-shop.myshopify.com"] }]),
   SHOPIFY_APP_SECRET_CLIENT: "client_secret",

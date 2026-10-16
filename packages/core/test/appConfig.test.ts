@@ -154,6 +154,30 @@ describe("Shopify app configuration", () => {
       expect(registered.protocol).toBe("https:");
       expect(registered.hostname.endsWith(".workers.dev")).toBe(false);
     });
+
+    /**
+     * The Admin API calls (SHOPIFY_API_VERSION) and the webhook payloads (the toml's api_version)
+     * must be one version: the worker parses webhooks with the same schemas as API results.
+     */
+    it("calls the Admin API on the version the webhooks are sent in", () => {
+      expect(envValue(read("apps/aws/src/settings.ts"), "SHOPIFY_API_VERSION")).toBe(tomlString(read(APP_CONFIGS[0]!), "api_version"));
+    });
+
+    /**
+     * Shopify serves a stable version for about a year (each one is accessible until the 16th of
+     * the month, twelve months after its release) and then silently answers with a newer one; App
+     * Store review also refuses apps on a version that ends within 90 days. 2025-10 reached that
+     * end unnoticed, so this fails once fewer than 90 days are left: bump the version in
+     * settings.ts and both tomls, check every query against the new schema, run
+     * `shopify app deploy`. https://shopify.dev/docs/api/usage/versioning
+     */
+    it("uses a Shopify API version that stays available for at least 90 more days", () => {
+      const version = envValue(read("apps/aws/src/settings.ts"), "SHOPIFY_API_VERSION")!;
+      const [year, month] = version.split("-").map(Number) as [number, number];
+      const accessibleUntil = Date.UTC(year + 1, month - 1, 16, 15);
+      const daysLeft = (accessibleUntil - Date.now()) / 86_400_000;
+      expect(daysLeft, `Shopify API ${version} stops being served on ${new Date(accessibleUntil).toISOString()}`).toBeGreaterThan(90);
+    });
   });
 
   it("has a real client id for the app we actually deploy", () => {

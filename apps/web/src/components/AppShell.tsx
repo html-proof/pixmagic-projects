@@ -548,7 +548,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       { id: "whatsapp", label: "WhatsApp", group: "Apps", icon: MessageCircle, keywords: "messages campaigns", go: go("/whatsapp") },
       ...(staff ? [{ id: "staff", label: "Staff", group: "Apps", icon: Users, keywords: "employees payroll timesheets roster", go: go("/staff") }] : []),
       ...(me.employments?.length ? [{ id: "portal", label: "My work", group: "Apps", icon: Briefcase, go: go("/portal") }] : []),
-      ...SETTINGS_PAGES.map((s): PaletteItem => ({ id: `settings-${s.slug}`, label: s.label, group: "Settings", icon: Settings, keywords: s.keywords, go: go(`/settings/${s.slug}`) })),
+      ...SETTINGS_PAGES.map((s): PaletteItem => ({ id: `settings-${s.slug}`, label: s.label, group: "Settings", icon: s.icon, keywords: s.keywords, go: go(`/settings/${s.slug}`) })),
       { id: "help", label: "Help centre", group: "Help", icon: Headset, keywords: "support contact faq", go: go("/support") },
     ];
   }, [router, workspace.role, workspace.staffRole, me.employments]);
