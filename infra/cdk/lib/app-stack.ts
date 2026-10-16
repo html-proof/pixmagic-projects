@@ -339,7 +339,7 @@ export class AppStack extends Stack {
       ],
     });
 
-    // --- Budget: the approved lean tier (~US$120-145) plus headroom; alerts at 80% actual, 100% forecast.
+    // --- Budget: the expected spend (production ~US$150-165 with a NAT per AZ) plus headroom; alerts at 80% actual, 100% forecast.
     new budgets.CfnBudget(this, "Budget", {
       budget: { budgetName: `${prefix}-monthly`, budgetType: "COST", timeUnit: "MONTHLY", budgetLimit: { amount: cfg.monthlyBudgetUsd, unit: "USD" } },
       notificationsWithSubscribers: cfg.alertEmail

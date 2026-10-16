@@ -75,8 +75,16 @@ describe("the data stack", () => {
     });
   });
 
-  it("has one NAT gateway (the lean tier) and no SSH key anywhere", () => {
-    t.data.resourceCountIs("AWS::EC2::NatGateway", 1);
+  it("sends each AZ's traffic out through its own NAT gateway in production, one NAT in staging", () => {
+    const natsInUse = (tpl: Template) => new Set(Object.values(tpl.findResources("AWS::EC2::Route")).flatMap((r) => (r.Properties.NatGatewayId ? [r.Properties.NatGatewayId.Ref] : [])));
+    t.data.resourceCountIs("AWS::EC2::NatGateway", 2);
+    expect(natsInUse(t.data).size).toBe(2);
+    const staging = synth({ env: "staging" }).data;
+    staging.resourceCountIs("AWS::EC2::NatGateway", 1);
+    expect(natsInUse(staging).size).toBe(1);
+  });
+
+  it("has no SSH key anywhere", () => {
     t.data.hasResourceProperties("AWS::EC2::Instance", { KeyName: Match.absent() });
   });
 });
