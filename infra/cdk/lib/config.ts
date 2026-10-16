@@ -26,7 +26,9 @@ export interface EnvConfig {
    * One NAT gateway (lean) or one per AZ (high availability). With one, both AZs' functions reach
    * the internet through the NAT in the first AZ, so an outage there cuts every function off from
    * Shopify, Cognito, Google, Meta and SMTP (Trusted Advisor's "Single AZ Application Check").
-   * One in production by the owner's choice (cost, 2026-10-16): a second NAT is ~US$47/month.
+   * One in production by the owner's choice (cost, 2026-10-16): a second NAT is ~US$47/month. Worth
+   * it only with dbMultiAz: the single-AZ database is in that first AZ too, so an outage there stops
+   * the app either way (docs/aws-deployment.md, Fault tolerance).
    */
   natGateways: number;
   logRetentionDays: number;

@@ -49,6 +49,8 @@ describe("the data stack", () => {
       Engine: "postgres",
     });
     t.data.hasResource("AWS::RDS::DBInstance", { DeletionPolicy: "Snapshot" });
+    // Point-in-time backups outlive the instance.
+    t.data.hasResourceProperties("AWS::RDS::DBInstance", { DeleteAutomatedBackups: false });
     // Enhanced Monitoring every minute, through RDS's own role.
     t.data.hasResourceProperties("AWS::RDS::DBInstance", { MonitoringInterval: 60, MonitoringRoleArn: { "Fn::GetAtt": [Match.stringLikeRegexp("^DbMonitoringRole"), "Arn"] } });
     t.data.hasResourceProperties("AWS::IAM::Role", {
@@ -103,6 +105,34 @@ describe("the app stack", () => {
     }
     t.app.resourceCountIs("AWS::Lambda::EventSourceMapping", 4);
     t.app.allResourcesProperties("AWS::Lambda::EventSourceMapping", { FunctionResponseTypes: ["ReportBatchItemFailures"] });
+  });
+
+  it("parks a scheduled run that never ran, instead of dropping it", () => {
+    const missed = { "Fn::GetAtt": [Match.stringLikeRegexp("^MissedTicks"), "Arn"] };
+    t.app.allResourcesProperties("AWS::Scheduler::Schedule", { Target: Match.objectLike({ DeadLetterConfig: { Arn: missed } }) });
+    // Under the 15 minutes between ticks: a late hand-over never runs on top of the next one.
+    for (const s of Object.values(t.app.findResources("AWS::Scheduler::Schedule"))) expect(s.Properties.Target.RetryPolicy.MaximumEventAgeInSeconds).toBeLessThan(900);
+    t.app.hasResourceProperties("AWS::Lambda::EventInvokeConfig", {
+      Qualifier: Match.anyValue(), // the `live` alias, by reference
+      MaximumEventAgeInSeconds: 900,
+      MaximumRetryAttempts: 2,
+      DestinationConfig: { OnFailure: { Destination: missed } },
+    });
+    t.app.hasResourceProperties("AWS::CloudWatch::Alarm", { AlarmName: "insights-production-cron-missed-ticks" });
+  });
+
+  it("tells the alarm topic about the database's events and the NAT gateway's trouble", () => {
+    t.app.hasResourceProperties("AWS::RDS::EventSubscription", {
+      SourceType: "db-instance",
+      SnsTopicArn: { Ref: Match.stringLikeRegexp("^Alarms") },
+      EventCategories: Match.arrayWith(["availability", "failure", "low storage"]),
+    });
+    t.app.hasResourceProperties("AWS::SNS::TopicPolicy", {
+      PolicyDocument: { Statement: [Match.objectLike({ Action: "sns:Publish", Principal: { Service: ["cloudwatch.amazonaws.com", "events.rds.amazonaws.com"] } })] },
+    });
+    for (const name of ["nat-port-allocation", "nat-packets-dropped"]) {
+      t.app.hasResourceProperties("AWS::CloudWatch::Alarm", { AlarmName: `insights-production-${name}`, Namespace: "AWS/NATGateway", AlarmActions: [{ Ref: Match.stringLikeRegexp("^Alarms") }] });
+    }
   });
 
   it("keeps earlier function versions, so a rollback has something to go back to", () => {
