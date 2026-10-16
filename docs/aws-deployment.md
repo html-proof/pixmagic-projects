@@ -24,7 +24,7 @@ Account `605411278365`, region `ap-southeast-2` (Sydney); the WAF web ACL lives 
 | Sign-in | Cognito pool `insights-production` (from `infra/aws/cognito.yaml`) | `apps/api/src/cognito.ts` |
 | App email | SES (needs a verified sender, below) | `apps/aws/src/sesMailer.ts` |
 | Secrets | Secrets Manager `insights/production/{app,db-owner,worker-cognito}`; settings in SSM `/insights/production/runtime` | `apps/aws/src/secrets.ts` |
-| Logs, alarms | CloudWatch (90 days), dashboard `insights-production`, SNS `insights-production-alarms`, budget US$185/month | `infra/cdk/lib/app-stack.ts` |
+| Logs, alarms | CloudWatch (90 days), dashboard `insights-production`, SNS `insights-production-alarms`, budget US$235/month | `infra/cdk/lib/app-stack.ts` |
 | DB admin | EC2 `insights-production-admin` (t4g.nano, Systems Manager only, normally **stopped**) | `infra/cdk/lib/data-stack.ts` |
 
 Redis/ElastiCache is not used: the app has no Redis; DynamoDB does its coordination. There are no
@@ -275,13 +275,19 @@ Retiring it, on the owner's go-ahead, once AWS has been production for two quiet
   **Release**): `shopify app release --version <tag>` answers "could not be found" for every version
   of both apps (CLI 3.94.3, 2026-10-16). Shipping still works: `shopify app deploy --version <new tag>`.
 
-## Cost (lean tier, US$/month, on-demand, approximate)
+## Cost (US$/month, on-demand, approximate)
 
-Prices from the AWS Price List API on 2026-10-15: NAT gateway $0.059/hour + $0.059/GB (~45 with
-its public IPv4), RDS db.t4g.small $0.051/hour (~37) + 20 GB gp3 (~3), WAF (web ACL + 4 rules) ~10,
-CloudWatch alarms/dashboard/logs/X-Ray ~6-10, Secrets Manager ~1.2, GuardDuty ~1-4 (free for the
-first 30 days), admin host stopped ~1, Lambda/SQS/DynamoDB/S3/CloudFront/Cognito at today's traffic
-~0-5 (free tiers): **~US$105-120**, within the approved US$120-145. Budget alarm at US$150 (80%
-actual, 100% forecast, once an alert email is set). Biggest levers: the NAT gateway and the
-database size. Cost allocation tags `app` and `environment` can be activated in Billing once AWS
-has seen them (up to 24 hours after the first deploy).
+Prices from the AWS Price List API on 2026-10-15: NAT gateways $0.059/hour each + $0.059/GB (~90
+for two with their public IPv4s), RDS db.t4g.small Multi-AZ 2 × $0.051/hour (~75) + 20 GB gp3
+twice (~6), WAF (web ACL + 4 rules) ~10, CloudWatch alarms/dashboard/logs/X-Ray ~6-10, Secrets
+Manager ~1.2, GuardDuty ~1-4 (free for the first 30 days), admin host stopped ~1,
+Lambda/SQS/DynamoDB/S3/CloudFront/Cognito at today's traffic ~0-5 (free tiers): **~US$190-210**.
+Budget alarm at US$235 (80% actual, 100% forecast, once an alert email is set). Biggest levers: the
+NAT gateways and the database (size, Multi-AZ). Cost allocation tags `app` and `environment` can be
+activated in Billing once AWS has seen them (up to 24 hours after the first deploy).
+
+Both are the high-availability options, approved by the owner on 2026-10-16: the database has a
+standby in the second AZ (`dbMultiAz`), and each AZ has its own NAT gateway (`natGateways: 2`, for
+Trusted Advisor's "Single AZ Application Check"). With one NAT, both AZs' functions left through the
+one in ap-southeast-2a, and an outage there cut them all off from the internet. Going back to one
+saves ~US$47/month and brings the warning back.

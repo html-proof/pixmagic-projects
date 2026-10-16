@@ -18,7 +18,11 @@ export interface EnvConfig {
   dbAllocatedStorageGb: number;
   dbMaxStorageGb: number;
   dbBackupDays: number;
-  /** One NAT gateway (lean) or one per AZ (high availability). */
+  /**
+   * One NAT gateway (lean) or one per AZ (high availability). With one, both AZs' functions reach
+   * the internet through the NAT in the first AZ, so an outage there cuts every function off from
+   * Shopify, Cognito, Google, Meta and SMTP (Trusted Advisor's "Single AZ Application Check").
+   */
   natGateways: number;
   logRetentionDays: number;
   /**
@@ -65,7 +69,7 @@ const ENVIRONMENTS: Record<EnvConfig["name"], Omit<EnvConfig, "schedulesEnabled"
     dbAllocatedStorageGb: 20,
     dbMaxStorageGb: 100,
     dbBackupDays: 14,
-    natGateways: 1,
+    natGateways: 2,
     logRetentionDays: 90,
     domain: {
       name: "bizinsights.io",
@@ -73,7 +77,7 @@ const ENVIRONMENTS: Record<EnvConfig["name"], Omit<EnvConfig, "schedulesEnabled"
       certificateArn: "arn:aws:acm:us-east-1:605411278365:certificate/776966d7-d73c-4896-bd30-1568c9f7b3f7",
     },
     cognitoDomainPrefix: "insights-605411278365",
-    monthlyBudgetUsd: 185,
+    monthlyBudgetUsd: 235,
     githubRepo: "html-proof/pixmagic-projects",
     githubOidcSubject: "repo:html-proof@68529971/pixmagic-projects@1413246051",
   },
