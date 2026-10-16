@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { appForShop, resetShopifyAppsCache, servesAnyShop, shopifyApp, shopifyApps } from "../src/apps.js";
+import { appForShop, installTarget, resetShopifyAppsCache, servesAnyShop, shopifyApp, shopifyApps } from "../src/apps.js";
 import { resetEnvCache } from "../src/env.js";
 
 const TEST_STORE = "my-test-store.myshopify.com";
@@ -128,5 +128,56 @@ describe("Shopify app registry: a client store with its own app", () => {
       SHOPIFY_EXTRA_APPS: JSON.stringify([{ key: "default", clientId: "pixmagic-client-id", shops: [CLIENT_STORE] }]),
     });
     expect(appForShop(CLIENT_STORE)).toBeNull();
+  });
+});
+
+describe("Shopify app registry: the App Store app new stores are sent to", () => {
+  const CLIENT_STORE = "pixmagic.myshopify.com";
+  const saved = { ...process.env };
+
+  beforeEach(() => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    configure({
+      SESSION_SECRET: "0123456789abcdef",
+      TOKEN_ENCRYPTION_KEYS: "1:" + "a".repeat(44),
+      OTP_PEPPER: "pepper-value",
+      SHOPIFY_API_KEY: "client-id",
+      SHOPIFY_API_SECRET: "client-secret",
+      SHOPIFY_DEFAULT_APP_SHOPS: "",
+      SHOPIFY_APP_SECRET_PIXMAGIC: "pixmagic-secret",
+      SHOPIFY_APP_SECRET_PUBLIC: "public-secret",
+      SHOPIFY_EXTRA_APPS: JSON.stringify([
+        { key: "pixmagic", clientId: "pixmagic-client-id", shops: [CLIENT_STORE] },
+        { key: "public", clientId: "public-client-id", shops: [] },
+      ]),
+      SHOPIFY_INSTALL_APP: "default",
+    });
+  });
+
+  afterEach(() => {
+    process.env = { ...saved };
+    resetEnvCache();
+    resetShopifyAppsCache();
+    vi.restoreAllMocks();
+  });
+
+  it("keeps sending new stores to the main app until the App Store app is chosen", () => {
+    expect(shopifyApps().map((a) => a.key)).toEqual(["default", "pixmagic", "public"]);
+    expect(installTarget().key).toBe("default");
+    expect(appForShop("new-store.myshopify.com")?.key).toBe("default");
+  });
+
+  it("sends new stores to the App Store app once SHOPIFY_INSTALL_APP names it; a store's own app still wins", () => {
+    configure({ SHOPIFY_INSTALL_APP: "public" });
+    expect(installTarget()).toMatchObject({ key: "public", clientId: "public-client-id" });
+    expect(appForShop("new-store.myshopify.com")?.key).toBe("public");
+    expect(appForShop(CLIENT_STORE)?.key).toBe("pixmagic");
+  });
+
+  it("falls back to the main app for an unknown key, or an app limited to some stores", () => {
+    configure({ SHOPIFY_INSTALL_APP: "nope" });
+    expect(installTarget().key).toBe("default");
+    configure({ SHOPIFY_INSTALL_APP: "pixmagic" });
+    expect(installTarget().key).toBe("default");
   });
 });

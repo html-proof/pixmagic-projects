@@ -7,6 +7,7 @@ import {
   buildAuthorizeUrl,
   DEFAULT_APP,
   encryptTokenFields,
+  installTarget,
   env,
   exchangeCodeForToken,
   logger,
@@ -340,7 +341,7 @@ export function shopifyRoutes(app: App, deps: Deps) {
     const user = access.user!;
     if (!user.emailVerified) throw new HttpError(403, "Verify your email before connecting a store", "email_unverified");
     const { from } = z.object({ from: connectFromSchema }).parse(await body(c));
-    const mainApp = shopifyApp(DEFAULT_APP);
+    const mainApp = installTarget();
     if (!servesAnyShop(mainApp)) {
       throw new HttpError(400, "Enter your store's myshopify.com address to connect it", "shop_required");
     }

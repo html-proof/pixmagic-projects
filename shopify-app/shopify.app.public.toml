@@ -1,0 +1,67 @@
+# Shopify CLI configuration for the App Store app: public distribution, in the Pixmagic Partner
+# organization (5229240). The only one of our apps that can be submitted for review: the main app
+# (shopify.app.toml) lives in a Dev Dashboard organization with no Partner account, and PixMagic's
+# (shopify.app.pixmagic.toml) is custom-distributed, which can never change. Same backend, URLs,
+# scopes and webhooks as both; the backend knows it as "public" (SHOPIFY_EXTRA_APPS,
+# SHOPIFY_APP_SECRET_PUBLIC, apps/aws/src/settings.ts). docs/shopify-setup.md, "The App Store app".
+# Deploy with: cd shopify-app && shopify app deploy --config public
+client_id = "658431ae6a22c880e0ab2a0e2040a28a"
+name = "bizinsights"
+application_url = "https://bizinsights.io/api/shopify/launch"
+embedded = false
+
+[access_scopes]
+# Least privilege. THIS is what merchants are asked to grant: with
+# use_legacy_install_flow = false (Shopify managed installation) the scopes come from this
+# file, NOT from the `scope` parameter our authorize URL sends. SHOPIFY_SCOPES in the app's
+# settings must mirror this list exactly - packages/core/test/appConfig.test.ts enforces that.
+scopes = "read_orders,read_products"
+# Optional (dynamic) scopes: NOT part of the install grant. The install screen asks only for
+# `scopes` above; these are requested afterwards, one feature at a time, when the merchant
+# clicks "Enable" on a locked dashboard module (packages/core/src/scopes.ts,
+# apps/api/src/routes/scopes.ts). Declaring them here is what makes them requestable at all -
+# `declaredOptionalScopes` reads SHOPIFY_OPTIONAL_SCOPES, which must mirror this list exactly,
+# and an undeclared scope can never be granted however often we ask.
+#
+# These three are protected customer data. Enabling them before "Protected customer data
+# access" is approved makes Shopify refuse *new installs on live merchant stores*; development
+# stores are exempt. That is accepted deliberately here, because it costs nothing today: the
+# main app is unapproved and so cannot install on a live store at all, and the custom app's one
+# store is already installed (the install screen is not shown again). Re-check this the day the
+# main app is submitted - if PCD approval has not landed by then, comment this back out, clear
+# SHOPIFY_OPTIONAL_SCOPES, and redeploy both. See docs/shopify-setup.md "Optional scopes".
+optional_scopes = ["read_customers", "write_pixels", "read_customer_events"]
+use_legacy_install_flow = false
+
+[auth]
+redirect_urls = ["https://bizinsights.io/api/shopify/callback"]
+
+[webhooks]
+api_version = "2026-10"
+
+  [[webhooks.subscriptions]]
+  # Only topics without protected customer data. As a public app it may not subscribe to the
+  # order, refund and checkout topics (Shopify refuses the version: "not approved to subscribe to
+  # webhook topics containing protected customer data") until Protected customer data access is
+  # granted for it (Partner Dashboard -> API access requests). Then add back, as in
+  # shopify.app.toml: orders/create, orders/updated, orders/paid, orders/cancelled,
+  # orders/fulfilled, orders/partially_fulfilled, refunds/create, checkouts/create,
+  # checkouts/update - and `shopify app deploy --config public`. Until then its stores get orders
+  # from the import and the dashboard's Sync, not live.
+  topics = [
+    "products/create",
+    "products/update",
+    "products/delete",
+    "app/uninstalled",
+    "app/scopes_update",
+    "app_subscriptions/update"
+  ]
+  uri = "https://bizinsights.io/api/webhooks/shopify"
+
+  # Mandatory GDPR compliance webhooks
+  [[webhooks.subscriptions]]
+  compliance_topics = ["customers/data_request", "customers/redact", "shop/redact"]
+  uri = "https://bizinsights.io/api/webhooks/shopify"
+
+[pos]
+embedded = false
