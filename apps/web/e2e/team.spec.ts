@@ -281,8 +281,8 @@ test("a browser signed in to another account opens a shared link: the account st
   await page.getByTestId("link-panel").getByRole("button", { name: "Done" }).click();
 
   // ---- The access reaches its end date: the shared tab says so by itself and shows no data.
-  await db.query("UPDATE memberships SET access_expires_at = now() - interval '1 minute' WHERE workspace_id = $1 AND user_id = (SELECT id FROM users WHERE email = $2)", [ws, client]);
-  await db.query("UPDATE invitations SET expires_at = now() - interval '1 minute' WHERE workspace_id = $1 AND email = $2", [ws, client]);
+  await db.query("UPDATE memberships SET access_expires_at = (now() at time zone 'utc') - interval '1 minute' WHERE workspace_id = $1 AND user_id = (SELECT id FROM users WHERE email = $2)", [ws, client]);
+  await db.query("UPDATE invitations SET expires_at = (now() at time zone 'utc') - interval '1 minute' WHERE workspace_id = $1 AND email = $2", [ws, client]);
   // The check runs while the tab is in view (and the moment it comes back into view).
   await shared.bringToFront();
   await expect(shared.getByTestId("access-expired")).toBeVisible({ timeout: 15_000 });
@@ -300,8 +300,11 @@ test("a browser signed in to another account opens a shared link: the account st
   await expect(sidebar(shared).getByRole("link", { name: "Products" })).toBeVisible();
 
   // ---- Closing the shared dashboard leaves their own account signed in.
-  await shared.getByRole("button", { name: "Account menu" }).click();
-  await shared.getByRole("button", { name: "Close the shared dashboard" }).click();
+  await shared.bringToFront();
+  await shared.getByRole("button", { name: "Account menu" }).focus();
+  await shared.keyboard.press("Enter");
+  await shared.getByRole("button", { name: "Close the shared dashboard" }).focus();
+  await shared.keyboard.press("Enter");
   await expect(shared).not.toHaveURL(/\/dashboard/);
   const still = await own.evaluate(async () => (await fetch("/api/me")).status);
   expect(still).toBe(200);
