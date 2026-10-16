@@ -102,11 +102,13 @@ test("invitations: emailed, handed over as a link when email fails, and kept acr
   // When the email can't be sent the API still saves the invitation and returns its link. The
   // page used to say "sent" anyway and drop the link.
   await page.route("**/api/workspaces/*/team/invitations", (route) =>
-    route.fulfill({ json: { ok: true, emailed: false, url: "http://localhost/invite#token=handed-over-token", replaced: 0 } }),
+    route.fulfill({ json: { ok: true, emailed: false, url: "http://localhost/invite#token=handed-over-token", emailProblem: "not_allowed", replaced: 0 } }),
   );
   const unmailable = uniqueEmail("unmailable");
   const panel = await invite(unmailable);
   await expect(panel.getByTestId("invite-link")).toHaveValue("http://localhost/invite#token=handed-over-token");
+  // Says why, so a refusal by the mail service doesn't read as a broken feature.
+  await expect(panel.getByTestId("email-problem")).toContainText("isn't allowed to send to this address yet");
   await expect(page.getByText(`Invitation sent to ${unmailable}`)).toHaveCount(0);
   await page.unroute("**/api/workspaces/*/team/invitations");
   await panel.getByRole("button", { name: "Done" }).click();
