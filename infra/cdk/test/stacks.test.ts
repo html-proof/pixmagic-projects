@@ -275,16 +275,10 @@ describe("the edge stack behind Cloudflare", () => {
     expect(sets.map((s) => s.IPAddressVersion).sort()).toEqual(["IPV4", "IPV6"]);
     expect(sets.find((s) => s.IPAddressVersion === "IPV4").Addresses).toContain("172.64.0.0/13");
     expect(sets.find((s) => s.IPAddressVersion === "IPV6").Addresses).toContain("2606:4700::/32");
-    for (const s of sets) expect(s.Scope).toBe("CLOUDFRONT");
-  });
-
-  it("gives WAF only descriptions it accepts (an apostrophe failed the 2026-10-16 deploy)", () => {
-    // AWS WAF's own pattern for `Description`; CloudFormation finds out only at deploy time.
-    const waf = /^[\w+=:#@/\-,.][\w+=:#@/\-,.\s]+[\w+=:#@/\-,.]$/;
-    const resources = [...Object.values(t.edge.findResources("AWS::WAFv2::IPSet")), ...Object.values(t.edge.findResources("AWS::WAFv2::WebACL"))];
-    for (const r of resources) {
-      const d = r.Properties.Description as string | undefined;
-      if (d !== undefined) expect(d, d).toMatch(waf);
+    for (const s of sets) {
+      expect(s.Scope).toBe("CLOUDFRONT");
+      // WAF refuses anything else in a description (a quote or a bracket failed a deploy).
+      expect(s.Description).toMatch(/^[\w+=:#@/\-,.][\w+=:#@/\-,.\s]+[\w+=:#@/\-,.]$/);
     }
   });
 

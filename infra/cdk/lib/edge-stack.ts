@@ -47,8 +47,7 @@ export class EdgeStack extends Stack {
     const cloudflare = (version: "IPV4" | "IPV6", addresses: string[]) =>
       new wafv2.CfnIPSet(this, `Cloudflare${version}`, {
         name: `insights-${cfg.name}-cloudflare-${version.toLowerCase()}`,
-        // WAF descriptions allow only letters, digits, spaces and + = : # @ / - , . (no quotes or brackets).
-        description: "Cloudflare proxy addresses, from infra/cdk/lib/cloudflare.ts",
+        description: "Cloudflare proxy addresses, infra/cdk/lib/cloudflare.ts",
         scope: "CLOUDFRONT",
         ipAddressVersion: version,
         addresses,
