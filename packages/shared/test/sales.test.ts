@@ -1,13 +1,23 @@
 import { describe, expect, it } from "vitest";
 import { dailyBreakdown, dayTiers, eachDay, niceRound, tierOf, weekdayOf, yearBreakdown, type DailyMetricsRow, type SalesDay } from "../src/index.js";
 
-const day = (d: string, netSales: number, orders = netSales > 0 ? 1 : 0): SalesDay => ({ day: d, netSales, orders, refunds: 0, averageOrderValue: orders ? netSales / orders : null });
+const day = (d: string, netSales: number, orders = netSales > 0 ? 1 : 0): SalesDay => ({
+  day: d,
+  netSales,
+  totalSales: netSales,
+  orders,
+  refunds: 0,
+  averageOrderValue: orders ? netSales / orders : null,
+});
 
 const row = (d: string, grossSales: number, extra: Partial<DailyMetricsRow> = {}): DailyMetricsRow => ({
   day: d,
   grossSales,
   discounts: 0,
   refunds: 0,
+  shipping: 0,
+  taxes: 0,
+  totalSales: grossSales,
   orders: grossSales > 0 ? 1 : 0,
   units: 0,
   ordersWithCustomer: 0,

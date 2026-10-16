@@ -353,7 +353,13 @@ export default function DashboardPage() {
           this page short. */}
       {s && (
         <section aria-label="Headline numbers" className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
-          <KpiCard i={0} icon={CircleDollarSign} tint="green" title="Net sales" value={<AnimatedNumber value={s.current.netSales} format={(n) => fmtMoney(n, cur)} />} delta={s.deltas.netSales} compared={compared} onClick={() => detail.open("sales")} />
+          {/* Total sales, as Shopify's home page headlines it: the same figure for the same dates. It
+              holds tax and shipping, so a member who may not see those (Team & Access) gets net sales. */}
+          {s.current.totalSales !== undefined ? (
+            <KpiCard i={0} icon={CircleDollarSign} tint="green" title="Total sales" value={<AnimatedNumber value={s.current.totalSales} format={(n) => fmtMoney(n, cur)} />} delta={s.deltas.totalSales ?? null} compared={compared} onClick={() => detail.open("sales")} />
+          ) : (
+            <KpiCard i={0} icon={CircleDollarSign} tint="green" title="Net sales" value={<AnimatedNumber value={s.current.netSales} format={(n) => fmtMoney(n, cur)} />} delta={s.deltas.netSales} compared={compared} onClick={() => detail.open("sales")} />
+          )}
           <KpiCard i={1} icon={ShoppingCart} tint="blue" title="Orders" value={<AnimatedNumber value={s.current.orders} format={fmtNum} />} delta={s.deltas.orders} compared={compared} onClick={() => detail.open("sales")} />
           <KpiCard i={2} icon={Gem} tint="violet" title="Average order value" value={<AnimatedNumber value={s.current.averageOrderValue} format={(n) => fmtMoney(n, cur)} />} delta={s.deltas.averageOrderValue} compared={compared} onClick={() => detail.open("sales")} />
           <KpiCard i={3} icon={Package} tint="amber" title="Total products sold" value={<AnimatedNumber value={s.current.units} format={fmtNum} />} delta={s.deltas.units} compared={compared} onClick={() => detail.open("products")} />

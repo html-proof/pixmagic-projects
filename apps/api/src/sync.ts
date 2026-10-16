@@ -69,10 +69,17 @@ export function liveSyncJobs(storeId: string, idleMs: number): Prisma.SyncJobWhe
  */
 export const AUTO_REFRESH = { ordersEverySec: 300, catalogEverySec: 1800, retryEverySec: 1800, orderDays: 2, sourcesEverySec: 86_400, sourcesDays: 60 } as const;
 
-/** Whether the store has orders in the import window that were stored without a source. */
-async function missingSources(storeId: string): Promise<boolean> {
+/**
+ * Whether the store has orders in the import window that were stored without something only a
+ * full read gives: where the customer came from, or Shopify's sales records (orders stored before
+ * the sales totals were read from them, or known only from a webhook whose read failed).
+ */
+async function needsReread(storeId: string): Promise<boolean> {
   const since = new Date(Date.now() - AUTO_REFRESH.sourcesDays * 86_400_000);
-  return !!(await systemDb.order.findFirst({ where: { storeId, trafficSource: null, shopifyCreatedAt: { gte: since } }, select: { id: true } }));
+  return !!(await systemDb.order.findFirst({
+    where: { storeId, shopifyCreatedAt: { gte: since }, OR: [{ trafficSource: null }, { salesUpdatedAt: null }] },
+    select: { id: true },
+  }));
 }
 
 /**
@@ -102,9 +109,11 @@ export async function autoRefresh(
     return (await seedResync(deps, store)).map((j) => j.kind);
   }
   const kinds: Array<{ kind: SyncKind; sinceDays?: number }> = [];
-  // Orders stored before bizinsights recorded where customers came from: re-read the import window
-  // once (by creation date), which fills their sources in. At most daily, and only while any lack one.
-  if ((await due("sources", AUTO_REFRESH.sourcesEverySec)) && (await missingSources(store.id))) {
+  // Orders stored before bizinsights recorded where customers came from, or before the sales totals
+  // were read from Shopify's sales records: re-read the import window once (by creation date),
+  // which fills them in. At most daily, and only while any lack one. (The key was "sources" before
+  // the sales records: a new one, so every store re-reads on its first dashboard view.)
+  if ((await due("reread", AUTO_REFRESH.sourcesEverySec)) && (await needsReread(store.id))) {
     kinds.push({ kind: "orders", sinceDays: AUTO_REFRESH.sourcesDays });
   } else if (await due("orders", AUTO_REFRESH.ordersEverySec)) kinds.push({ kind: "orders", sinceDays: AUTO_REFRESH.orderDays });
   if (expandScopes(store.grantedScopes).has("read_products") && (await due("catalog", AUTO_REFRESH.catalogEverySec))) {

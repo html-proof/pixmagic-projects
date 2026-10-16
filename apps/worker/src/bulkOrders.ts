@@ -12,8 +12,6 @@ import {
   parseShopifyList,
   writeOrderBatch,
   type BulkOperationStatus,
-  type GraphqlOrder,
-  type NormalizedOrder,
   type SyncJobData,
 } from "@app/core";
 import type { WorkerDeps } from "./handlers.js";
@@ -35,8 +33,8 @@ import type { WorkerDeps } from "./handlers.js";
  *   poll    re-enqueue with `delaySeconds` until Shopify says COMPLETED
  *   ingest  read the JSONL a chunk at a time, each chunk its own message
  *
- * The export can't carry refund line items (see `bulkOrdersQuery`), so the ingest completes the
- * orders that have refunds with the paged path's own detail query, one call per such order.
+ * The export carries every order whole, its sales records included (see `bulkOrdersQuery`), so
+ * the ingest needs no call per order.
  *
  * Every failure falls back to the paged path instead of failing the job. The merchant should
  * see a slow import, never a broken one, and the paged path is already correct and tested.
@@ -48,11 +46,6 @@ const CHUNK_BYTES = 2 * 1024 * 1024;
 const MAX_CHUNK_BYTES = 16 * 1024 * 1024;
 /** Orders per database transaction while ingesting. */
 const WRITE_BATCH = 400;
-/**
- * Orders with refunds one ingest invocation completes, one ORDER_REFUNDS_QUERY each. A chunk
- * dense with them stops early, so the calls stay far inside the function's 15 minutes.
- */
-export const MAX_REFUND_LOOKUPS = 200;
 /** Give up polling after this many attempts (about an hour at the backoff below). */
 const MAX_POLLS = 150;
 /** A RUNNING operation older than this is assumed dead and cancelled. */
@@ -78,11 +71,6 @@ export interface BulkApi {
   gql: <T>(query: string, variables?: Record<string, unknown>) => Promise<T>;
   /** The backfill window, from the same `ordersSearch` the paged path uses. */
   ordersSearch: () => string | null;
-  /**
-   * The paged path's `completeOrder`: fills in what the export left out (refund line items)
-   * with the per-order detail queries. Null when what they returned doesn't fit (logged).
-   */
-  completeOrder: (order: GraphqlOrder) => Promise<GraphqlOrder | null>;
 }
 
 const lockKey = (storeId: string) => `bulk:orders:${storeId}`;
@@ -99,31 +87,43 @@ const asLine = (v: unknown): Line => (typeof v === "object" && v !== null && !Ar
 /**
  * Rebuild the order node `ordersQuery` would have returned from a run of JSONL lines.
  *
- * Shopify emits one line per object: a parent order with no `__parentId`, then its line items,
- * each naming the order as its parent. Plain list fields (`fulfillments`, `refunds`) are inlined
- * on the parent instead; the refunds come without their line items, which the ingest fills in.
+ * Shopify emits one line per object: a parent order with no `__parentId`, then its connection
+ * children, each naming its parent: line items and agreements name the order, a sale names its
+ * *agreement*. Plain list fields (`fulfillments`) are inlined on the parent instead.
  *
  * Children are matched by `__parentId`, never by position, so the only ordering this relies on
- * is Shopify's guarantee that a child follows its parent.
+ * is Shopify's guarantee that a child follows its parent. Under an order, an agreement is the child
+ * with a `happenedAt`; any other child is a line item.
  *
  * The result goes to the unchanged `normalizeGraphqlOrder`: one normalizer for both paths, so
  * money parsing, gid handling and time zones cannot drift apart between them.
  */
 export function reassembleOrders(lines: Line[]): Line[] {
   const orders: Line[] = [];
-  const lineItemsOf = new Map<string, unknown[]>();
+  // Each order's line items and agreements, and each agreement's sales, by the parent's id.
+  const childrenOf = new Map<string, { lineItems: unknown[]; agreements: unknown[] }>();
+  const salesOf = new Map<string, unknown[]>();
 
   for (const line of lines) {
     if (!line.__parentId) {
-      const lineItems: unknown[] = [];
-      orders.push({ ...line, lineItems: { nodes: lineItems } });
-      lineItemsOf.set(String(line.id), lineItems);
+      const children = { lineItems: [] as unknown[], agreements: [] as unknown[] };
+      orders.push({ ...line, lineItems: { nodes: children.lineItems }, agreements: { nodes: children.agreements } });
+      childrenOf.set(String(line.id), children);
       continue;
     }
     const parentId = String(line.__parentId);
-    const siblings = lineItemsOf.get(parentId);
-    if (siblings) {
-      siblings.push(line);
+    const order = childrenOf.get(parentId);
+    if (order) {
+      if ("happenedAt" in line) {
+        const sales: unknown[] = [];
+        salesOf.set(String(line.id), sales);
+        order.agreements.push({ ...line, sales: { nodes: sales } });
+      } else order.lineItems.push(line);
+      continue;
+    }
+    const sales = salesOf.get(parentId);
+    if (sales) {
+      sales.push(line);
       continue;
     }
     // Chunks are cut at parent boundaries precisely so this cannot happen. Dropping a line item
@@ -151,20 +151,6 @@ function parseLines(text: string, atEnd: boolean): { lines: Line[]; raw: string[
 function cutAtLastParent(lines: Line[], raw: string[]): { lines: Line[]; raw: string[] } | null {
   for (let i = lines.length - 1; i > 0; i--) {
     if (!lines[i]!.__parentId) return { lines: lines.slice(0, i), raw: raw.slice(0, i) };
-  }
-  return null;
-}
-
-/**
- * Cut a batch just before the order that would take it past MAX_REFUND_LOOKUPS orders with
- * refunds; null when it is within that already. Like `cutAtLastParent` it cuts only at a parent.
- */
-function capRefundLookups(lines: Line[], raw: string[]): { lines: Line[]; raw: string[] } | null {
-  let refunded = 0;
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]!;
-    if (line.__parentId || !Array.isArray(line.refunds) || line.refunds.length === 0) continue;
-    if (++refunded > MAX_REFUND_LOOKUPS) return { lines: lines.slice(0, i), raw: raw.slice(0, i) };
   }
   return null;
 }
@@ -349,16 +335,10 @@ async function ingestBulk(data: SyncJobData, store: Store, deps: WorkerDeps, api
     chunk *= 2;
   }
   if (!applied) return fallbackToPaged(data, deps, `one order exceeds ${MAX_CHUNK_BYTES} bytes of JSONL`);
-  const capped = capRefundLookups(applied.lines, applied.raw);
-  if (capped) applied = { ...capped, atEnd: false };
 
-  const orders: NormalizedOrder[] = [];
-  for (const node of parseShopifyList(graphqlOrderSchema, reassembleOrders(applied.lines), "bulk order", { storeId: store.id, bulkId: id })) {
-    // Refunds arrive without their line items (see bulkOrdersQuery); an order without refunds
-    // comes back as it was, without a call.
-    const full = await api.completeOrder(node);
-    if (full) orders.push(normalizeGraphqlOrder(full));
-  }
+  const orders = parseShopifyList(graphqlOrderSchema, reassembleOrders(applied.lines), "bulk order", { storeId: store.id, bulkId: id }).map(
+    normalizeGraphqlOrder,
+  );
   const days = new Set<string>();
   for (let i = 0; i < orders.length; i += WRITE_BATCH) {
     for (const d of await writeOrderBatch(store, orders.slice(i, i + WRITE_BATCH))) days.add(d);

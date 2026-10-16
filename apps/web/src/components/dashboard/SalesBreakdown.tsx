@@ -357,7 +357,7 @@ export function DailySalesCard({
   currency,
 }: {
   /** Days without `refunds` (Team & Access: "View refunds") show no refunds column. */
-  series: Array<Omit<SalesDay, "refunds"> & { refunds?: number }>;
+  series: Array<Omit<SalesDay, "refunds" | "totalSales"> & { refunds?: number; totalSales?: number }>;
   range: { from: string; to: string };
   today: string;
   historyFrom: string | null;

@@ -7,6 +7,8 @@ import {
   bulkUpsertProducts,
   bulkUpsertVariants,
   normalizeGraphqlOrder,
+  normalizeGraphqlSales,
+  replaceOrderSales,
   upsertOrder,
   writeOrderBatch,
   encryptTokenFields,
@@ -27,8 +29,8 @@ import {
 } from "@app/core";
 import { aggregateDaily, localDay, summarize } from "@app/shared";
 import { BACKFILL_DAYS, failStaleJobs, ordersSearch, pixelIngestUrl, processWebhook, RECONCILE_ORDER_DAYS, reconcileOrderDays, runAggregate, runSync, scheduleReconcile, seedAfterMove, type WorkerDeps } from "../src/handlers.js";
-import { MAX_REFUND_LOOKUPS } from "../src/bulkOrders.js";
 import { consume, CRON, runScheduled, type QueueMessage } from "../src/index.js";
+import { agreement, sale, saleMoney, salesAnswer, shopifySales } from "./shopifySales.js";
 
 const queues = memoryQueues();
 const coord = memoryCoord();
@@ -49,7 +51,10 @@ beforeEach(async () => {
   coord.clear();
   payloads.data.clear();
   mailer.sent.length = 0;
-  fetchImpl = async () => {
+  shopifySales.clear();
+  fetchImpl = async (url, init) => {
+    const sales = salesAnswer(url, init);
+    if (sales) return sales;
     throw new Error("unexpected fetch");
   };
 });
@@ -136,19 +141,115 @@ describe("webhook processing", () => {
     expect(o.cancelledAt).not.toBeNull();
   });
 
-  it("books refunds on the refund date and reduces net sales there", async () => {
+  it("reads the order's sales from Shopify, and books a refund on the day it was made", async () => {
     const store = await makeStore();
+    // Shopify's records: two tees at 50 less 10 off, with 9 of tax on top...
+    const placed = agreement("2026-03-01T15:00:00Z", [
+      sale({ quantity: 2, totalAmount: saleMoney(99), totalDiscountAmountBeforeTaxes: saleMoney(10), totalTaxAmount: saleMoney(9), lineItem: { id: "gid://shopify/LineItem/1" } }),
+    ]);
+    shopifySales.set("1001", { updatedAt: "2026-03-01T15:00:00Z", agreements: [placed] });
     await webhook("orders/create", order());
-    await webhook("refunds/create", { id: 9, order_id: 1001, created_at: "2026-03-05T12:00:00Z", refund_line_items: [{ subtotal: "45.00" }] });
+    const o = await systemDb.order.findFirstOrThrow({ include: { sales: true } });
+    expect(o.salesUpdatedAt?.toISOString()).toBe("2026-03-01T15:00:00.000Z");
+    expect(o.sales.map((x) => [x.actionType, x.lineType, x.quantity, toNumber(x.amount), toNumber(x.tax), x.localDay])).toEqual([["order", "product", 2, 99, 9, "2026-03-01"]]);
+
+    // ...then one of them refunded on the 5th.
+    shopifySales.set("1001", {
+      updatedAt: "2026-03-05T12:00:00Z",
+      agreements: [placed, agreement("2026-03-05T12:00:00Z", [sale({ actionType: "RETURN", totalAmount: saleMoney(-49.5), totalTaxAmount: saleMoney(-4.5) })])],
+    });
+    await webhook("refunds/create", { id: 9, order_id: 1001, created_at: "2026-03-05T12:00:00Z" });
     await drainAggregates();
+    const day1 = await systemDb.dailyStoreMetrics.findUniqueOrThrow({ where: { storeId_day: { storeId: store.id, day: "2026-03-01" } } });
+    expect([toNumber(day1.grossSales), toNumber(day1.discounts), toNumber(day1.taxes), toNumber(day1.totalSales), day1.orders, day1.units]).toEqual([100, 10, 9, 99, 1, 2]);
     const day5 = await systemDb.dailyStoreMetrics.findUniqueOrThrow({ where: { storeId_day: { storeId: store.id, day: "2026-03-05" } } });
-    expect(toNumber(day5.refunds)).toBe(45);
-    expect(day5.refundedOrders).toBe(1);
+    expect([toNumber(day5.refunds), toNumber(day5.taxes), toNumber(day5.totalSales), day5.orders, day5.refundedOrders, day5.units]).toEqual([45, -4.5, -49.5, 0, 1, -1]);
   });
 
-  it("retries refunds whose order hasn't arrived yet", async () => {
+  it("leaves a refund for an order not stored yet to that order's own delivery", async () => {
     await makeStore();
-    await expect(webhook("refunds/create", { id: 9, order_id: 555, created_at: "2026-03-05T12:00:00Z", refund_line_items: [] })).rejects.toThrow(/not found/);
+    const { r } = await webhook("refunds/create", { id: 9, order_id: 555, created_at: "2026-03-05T12:00:00Z" });
+    expect(r).toEqual({ ok: true });
+    expect(await systemDb.orderSale.count()).toBe(0);
+    expect(queues.sent.aggregate).toEqual([]);
+  });
+
+  it("reads the sales only when a delivery changes the order's money", async () => {
+    await makeStore();
+    shopifySales.set("1001", { updatedAt: "2026-03-01T15:00:00Z", agreements: [agreement("2026-03-01T15:00:00Z", [sale({ totalAmount: saleMoney(90) })])] });
+    let reads = 0;
+    fetchImpl = async (url, init) => {
+      reads++;
+      return salesAnswer(url, init)!;
+    };
+    await webhook("orders/create", order());
+    expect(reads).toBe(1);
+    // Paid, fulfilled, updated with nothing new about money: no call to Shopify.
+    await webhook("orders/paid", order({ updated_at: "2026-03-01T15:05:00Z", financial_status: "paid" }));
+    await webhook("orders/fulfilled", order({ updated_at: "2026-03-01T16:00:00Z", fulfillment_status: "fulfilled" }));
+    await webhook("orders/updated", order({ updated_at: "2026-03-01T16:30:00Z", fulfillment_status: "fulfilled" }));
+    expect(reads).toBe(1);
+    // A refund, a cancellation or an edit moves the totals: read again.
+    await webhook("orders/updated", order({ updated_at: "2026-03-02T10:00:00Z", current_total_price: "45.00", refunds: [{ id: 9, created_at: "2026-03-02T10:00:00Z" }] }));
+    expect(reads).toBe(2);
+    await webhook("orders/cancelled", order({ updated_at: "2026-03-03T10:00:00Z", current_total_price: "45.00", refunds: [{ id: 9, created_at: "2026-03-02T10:00:00Z" }], cancelled_at: "2026-03-03T10:00:00Z" }));
+    expect(reads).toBe(3);
+  });
+
+  it("counts a new order from its webhook at once, and replaces the estimate with Shopify's sales once they can be read", async () => {
+    const store = await makeStore();
+    // Shopify doesn't know the order yet: the payload's own estimate stands meanwhile.
+    await webhook("orders/create", order({ shipping_lines: [{ id: 3, price: "5.00", discounted_price: "5.00", tax_lines: [] }] }));
+    await drainAggregates();
+    let m = await systemDb.dailyStoreMetrics.findUniqueOrThrow({ where: { storeId_day: { storeId: store.id, day: "2026-03-01" } } });
+    expect([toNumber(m.grossSales), toNumber(m.discounts), toNumber(m.shipping), toNumber(m.totalSales), m.orders]).toEqual([100, 10, 5, 95, 1]);
+    expect((await systemDb.order.findFirstOrThrow()).salesUpdatedAt).toBeNull();
+
+    // The next delivery, even one about nothing new, reads them, since they never were.
+    shopifySales.set("1001", {
+      updatedAt: "2026-03-01T15:10:00Z",
+      agreements: [agreement("2026-03-01T15:00:00Z", [sale({ quantity: 2, totalAmount: saleMoney(88), totalDiscountAmountBeforeTaxes: saleMoney(12) })])],
+    });
+    await webhook("orders/paid", order({ updated_at: "2026-03-01T15:10:00Z", shipping_lines: [{ id: 3, price: "5.00", discounted_price: "5.00", tax_lines: [] }] }));
+    await drainAggregates();
+    m = await systemDb.dailyStoreMetrics.findUniqueOrThrow({ where: { storeId_day: { storeId: store.id, day: "2026-03-01" } } });
+    expect([toNumber(m.grossSales), toNumber(m.discounts), toNumber(m.shipping), toNumber(m.totalSales)]).toEqual([100, 12, 0, 88]);
+    expect(await systemDb.orderSale.count({ where: { shopifyId: { startsWith: "provisional:" } } })).toBe(0);
+  });
+
+  it("keeps a delivery's write when Shopify refuses our access, rather than failing it", async () => {
+    const store = await makeStore();
+    fetchImpl = async () => new Response("Unauthorized", { status: 401 });
+    const { r, ev } = await webhook("orders/create", order());
+    expect(r).toEqual({ ok: true });
+    expect((await systemDb.webhookEvent.findUniqueOrThrow({ where: { id: ev.id } })).status).not.toBe("failed");
+    await drainAggregates();
+    const m = await systemDb.dailyStoreMetrics.findUniqueOrThrow({ where: { storeId_day: { storeId: store.id, day: "2026-03-01" } } });
+    expect([toNumber(m.grossSales), m.orders]).toEqual([100, 1]);
+  });
+
+  it("aggregates what a delivery wrote even when reading its sales fails, then retries", async () => {
+    const store = await makeStore();
+    fetchImpl = async () => {
+      throw new Error("network down");
+    };
+    await expect(webhook("orders/create", order())).rejects.toThrow(/network down/);
+    expect(queues.sent.aggregate).toEqual([{ storeId: store.id, days: ["2026-03-01"] }]);
+  });
+
+  it("never stores a test order, and removes one stored before", async () => {
+    const store = await makeStore();
+    await webhook("orders/create", order({ test: true }));
+    expect(await systemDb.order.count()).toBe(0);
+    await webhook("orders/create", order({ id: 1002 }));
+    await drainAggregates();
+    // Marked as a test later (a webhook about an order that turns out to be one): gone, and its day recomputed.
+    await webhook("orders/updated", order({ id: 1002, test: true, updated_at: "2026-03-01T16:00:00Z" }));
+    await drainAggregates();
+    expect(await systemDb.order.count()).toBe(0);
+    expect(await systemDb.orderSale.count()).toBe(0);
+    const m = await systemDb.dailyStoreMetrics.findUniqueOrThrow({ where: { storeId_day: { storeId: store.id, day: "2026-03-01" } } });
+    expect([m.orders, toNumber(m.totalSales)]).toEqual([0, 0]);
   });
 
   it("does not store customer keys without read_customers", async () => {
@@ -499,48 +600,86 @@ describe("initial sync", () => {
 describe("aggregation parity", () => {
   it("SQL aggregation matches the reference TypeScript implementation", async () => {
     const store = await makeStore(["read_orders", "read_customers"], "Asia/Tokyo");
-    const raw = Array.from({ length: 25 }, (_, i) =>
-      order({
-        id: 2000 + i,
-        created_at: new Date(Date.UTC(2026, 0, 1 + (i % 5), (i * 7) % 24)).toISOString(),
-        updated_at: new Date(Date.UTC(2026, 0, 1 + (i % 5), (i * 7) % 24)).toISOString(),
-        cancelled_at: i % 9 === 0 ? "2026-01-10T00:00:00Z" : null,
-        customer: i % 3 === 0 ? null : { id: i % 4 },
-        line_items: [{ id: 5000 + i, product_id: 1, title: "A", quantity: 1 + (i % 3), price: `${10 + i}.25`, total_discount: i % 2 ? "1.10" : "0" }],
-        refunds: i % 4 === 0 ? [{ id: 9000 + i, created_at: "2026-01-06T23:30:00Z", refund_line_items: [{ subtotal: "3.33" }] }] : [],
-      }),
-    );
-    for (const o of raw) await webhook("orders/create", o);
+    const LINES = ["SHIPPING", "GIFT_CARD", "TIP", "DUTY", "ADJUSTMENT", "ADDITIONAL_FEE", "SHIPPING"];
+    for (let i = 0; i < 25; i++) {
+      const placed = new Date(Date.UTC(2026, 0, 1 + (i % 5), (i * 7) % 24)).toISOString();
+      const agreements = [
+        agreement(placed, [
+          sale({
+            quantity: 1 + (i % 3),
+            totalAmount: saleMoney(`${10 + i}.25`),
+            totalDiscountAmountBeforeTaxes: saleMoney(i % 2 ? "1.10" : "0"),
+            totalTaxAmount: saleMoney(i % 3 ? "0.93" : "0"),
+            lineItem: { id: `gid://shopify/LineItem/${5000 + i}` },
+          }),
+          sale({ lineType: LINES[i % LINES.length], quantity: null, totalAmount: saleMoney("4.40"), totalTaxAmount: saleMoney("0.40") }),
+        ]),
+      ];
+      // Refunds late on 6 Jan UTC (7 Jan in Tokyo), one sent with a positive amount; edits; cancellations.
+      if (i % 4 === 0) agreements.push(agreement("2026-01-06T23:30:00Z", [sale({ actionType: "RETURN", totalAmount: saleMoney("-3.33"), totalTaxAmount: saleMoney("-0.30") })]));
+      if (i % 6 === 0) agreements.push(agreement("2026-01-06T23:30:00Z", [sale({ actionType: "RETURN", quantity: 2, totalAmount: saleMoney("2.00") })]));
+      if (i % 7 === 0) agreements.push(agreement("2026-01-08T05:00:00Z", [sale({ actionType: "UPDATE", quantity: null, totalAmount: saleMoney("-1.50") })]));
+      if (i % 9 === 0) agreements.push(agreement("2026-01-10T00:00:00Z", [sale({ actionType: "RETURN", lineType: "SHIPPING", quantity: null, totalAmount: saleMoney("-4.40"), totalTaxAmount: saleMoney("-0.40") })]));
+      await upsertOrder(
+        store,
+        normalizeGraphqlOrder(
+          gOrder(2000 + i, {
+            createdAt: placed,
+            updatedAt: placed,
+            cancelledAt: i % 9 === 0 ? "2026-01-10T00:00:00Z" : null,
+            customer: i % 3 === 0 ? null : { id: `gid://shopify/Customer/${i % 4}`, numberOfOrders: String(1 + (i % 2)) },
+            lineItems: { pageInfo: { hasNextPage: false }, nodes: [gLine(5000 + i)] },
+            agreements: { pageInfo: { hasNextPage: false }, nodes: agreements },
+          }),
+        ),
+      );
+    }
     const days = (await systemDb.order.findMany({ select: { localDay: true } })).map((o) => o.localDay);
-    const refundDays = (await systemDb.refund.findMany({ select: { localDay: true } })).map((r) => r.localDay);
-    await recomputeDays(store, [...new Set([...days, ...refundDays])]);
+    const saleDays = (await systemDb.orderSale.findMany({ select: { localDay: true } })).map((r) => r.localDay);
+    await recomputeDays(store, [...new Set([...days, ...saleDays])]);
 
-    const dbOrders = await systemDb.order.findMany({ include: { lineItems: true, refunds: true } });
+    const dbOrders = await systemDb.order.findMany({ include: { sales: true } });
     const ref = aggregateDaily(
-      dbOrders.map((o) => ({
-        createdAt: o.shopifyCreatedAt,
-        cancelledAt: o.cancelledAt,
-        customerKey: o.customerKey,
-        isReturningCustomer: o.isReturningCustomer,
-        lineItems: o.lineItems.map((li) => ({ price: toNumber(li.price), quantity: li.quantity, discount: toNumber(li.discount) })),
-      })),
-      dbOrders.flatMap((o) => o.refunds.map((r) => ({ orderId: o.id, createdAt: r.shopifyCreatedAt, lineSubtotal: toNumber(r.lineSubtotal) }))),
+      dbOrders.map((o) => ({ createdAt: o.shopifyCreatedAt, customerKey: o.customerKey, isReturningCustomer: o.isReturningCustomer })),
+      dbOrders.flatMap((o) =>
+        o.sales.map((x) => ({
+          orderId: o.id,
+          happenedAt: x.happenedAt,
+          actionType: x.actionType,
+          lineType: x.lineType,
+          quantity: x.quantity,
+          amount: toNumber(x.amount),
+          discount: toNumber(x.discount),
+          tax: toNumber(x.tax),
+        })),
+      ),
       "Asia/Tokyo",
       localDay,
     );
     const sql = await systemDb.dailyStoreMetrics.findMany({ where: { storeId: store.id } });
     const sqlSummary = summarize(
-      sql.map((r) => ({ ...r, grossSales: toNumber(r.grossSales), discounts: toNumber(r.discounts), refunds: toNumber(r.refunds) })),
+      sql.map((r) => ({
+        ...r,
+        grossSales: toNumber(r.grossSales),
+        discounts: toNumber(r.discounts),
+        refunds: toNumber(r.refunds),
+        shipping: toNumber(r.shipping),
+        taxes: toNumber(r.taxes),
+        totalSales: toNumber(r.totalSales),
+      })),
     );
     expect(sqlSummary).toEqual(summarize([...ref.values()]));
+    expect(sql.map((r) => r.day).sort()).toEqual([...ref.keys()].sort());
     for (const r of sql) {
-      const t = ref.get(r.day);
-      if (!t) continue;
+      const t = ref.get(r.day)!;
       expect(r.orders).toBe(t.orders);
-      expect(toNumber(r.grossSales)).toBeCloseTo(t.grossSales, 2);
-      expect(toNumber(r.refunds)).toBeCloseTo(t.refunds, 2);
+      expect(r.units).toBe(t.units);
+      expect(r.refundedOrders).toBe(t.refundedOrders);
       expect(r.returningCustomerOrders).toBe(t.returningCustomerOrders);
+      for (const k of ["grossSales", "discounts", "refunds", "shipping", "taxes", "totalSales"] as const) expect(toNumber(r[k])).toBeCloseTo(t[k], 2);
     }
+    // The cancellations are orders of the days they were placed, with their reversal on the 10th.
+    expect(sql.find((r) => r.day === "2026-01-10")).toMatchObject({ orders: 0 });
   });
 });
 
@@ -909,7 +1048,6 @@ const gLine = (id: number, over: Record<string, unknown> = {}) => ({
   totalDiscountSet: money("0"),
   ...over,
 });
-const gRefundLines = (count: number, amount = "1.00") => Array.from({ length: count }, () => ({ subtotalSet: money(amount) }));
 const gOrder = (id: number, over: Record<string, unknown> = {}) => ({
   id: `gid://shopify/Order/${id}`,
   name: `#${id}`,
@@ -1010,15 +1148,15 @@ describe("orders pipeline", () => {
       const { variables } = gqlBody(init);
       firsts.push(variables.first);
       expect(variables.cursor).toBe("c5");
-      return variables.first > 3 ? costExceeded() : gqlJson(ordersPage([gOrder(1), gOrder(2)]));
+      return variables.first > 2 ? costExceeded() : gqlJson(ordersPage([gOrder(1), gOrder(2)]));
     };
     const msg = { storeId: store.id, kind: "orders" as const, syncJobId: job.id, pagedOnly: true, cursor: "c5", progress: 14 };
     expect(await runSync(msg, deps)).toMatchObject({ ok: true, continued: true });
-    expect(queues.sent.sync).toEqual([{ ...msg, pageSize: 3 }]); // same cursor and progress
+    expect(queues.sent.sync).toEqual([{ ...msg, pageSize: 2 }]); // same cursor and progress
     expect(await systemDb.order.count()).toBe(0);
 
     await runSync(queues.sent.sync.pop()!, deps);
-    expect(firsts).toEqual([7, 3]);
+    expect(firsts).toEqual([5, 2]);
     expect(await systemDb.order.count()).toBe(2);
     const done = await systemDb.syncJob.findUniqueOrThrow({ where: { id: job.id } });
     expect(done).toMatchObject({ status: "succeeded", progress: 16 });
@@ -1049,15 +1187,23 @@ describe("orders pipeline", () => {
     expect(firsts).toEqual([PAGE_SIZE.variants, 1]);
   });
 
-  it("fetches full line items and refunds for orders that overflow the page", async () => {
+  it("fetches full line items and sales for orders that overflow the page", async () => {
     const store = await makeStore(["read_orders"]);
     const job = await makeJob(store, "orders");
+    const sold = (from: number, count: number) => Array.from({ length: count }, (_, i) => sale({ id: `gid://shopify/Sale/${from + i}`, totalAmount: saleMoney(10) }));
+    const placed = (sales: unknown[], more: boolean) => ({
+      id: "gid://shopify/SalesAgreement/71",
+      happenedAt: "2026-03-01T00:00:00Z",
+      sales: { pageInfo: { hasNextPage: more, endCursor: more ? "S1" : null }, nodes: sales },
+    });
+    const refunded = {
+      id: "gid://shopify/SalesAgreement/72",
+      happenedAt: "2026-03-05T00:00:00Z",
+      sales: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [sale({ id: "gid://shopify/Sale/900", actionType: "RETURN", totalAmount: saleMoney(-4) })] },
+    };
     const big = gOrder(1, {
-      lineItems: { pageInfo: { hasNextPage: true }, nodes: Array.from({ length: 10 }, (_, i) => gLine(100 + i)) },
-      refunds: [
-        { id: "gid://shopify/Refund/71", createdAt: "2026-03-05T00:00:00Z", refundLineItems: { pageInfo: { hasNextPage: true }, nodes: gRefundLines(5) } },
-        { id: "gid://shopify/Refund/72", createdAt: "2026-03-06T00:00:00Z", refundLineItems: { pageInfo: { hasNextPage: false }, nodes: gRefundLines(1, "4.00") } },
-      ],
+      lineItems: { pageInfo: { hasNextPage: true }, nodes: Array.from({ length: 5 }, (_, i) => gLine(100 + i)) },
+      agreements: { pageInfo: { hasNextPage: true }, nodes: [placed(sold(1, 3), true)] },
     });
     const small = gOrder(2);
     const seen: string[] = [];
@@ -1069,20 +1215,14 @@ describe("orders pipeline", () => {
           ? gqlJson({ order: { lineItems: { pageInfo: { hasNextPage: true, endCursor: "L1" }, nodes: Array.from({ length: 12 }, (_, i) => gLine(100 + i)) } } })
           : gqlJson({ order: { lineItems: { pageInfo: { hasNextPage: false, endCursor: "L2" }, nodes: [gLine(112), gLine(113), gLine(114)] } } });
       }
-      if (query.includes("query OrderRefunds")) {
-        seen.push(`refunds:${variables.id}`);
-        return gqlJson({
-          order: {
-            refunds: [
-              { id: "gid://shopify/Refund/71", createdAt: "2026-03-05T00:00:00Z", refundLineItems: { pageInfo: { hasNextPage: true, endCursor: "R1" }, nodes: gRefundLines(25) } },
-              { id: "gid://shopify/Refund/72", createdAt: "2026-03-06T00:00:00Z", refundLineItems: { pageInfo: { hasNextPage: false, endCursor: "R9" }, nodes: gRefundLines(1, "4.00") } },
-            ],
-          },
-        });
-      }
-      if (query.includes("query RefundLineItems")) {
-        seen.push(`refundLines:${variables.id}:${variables.cursor}`);
-        return gqlJson({ refund: { refundLineItems: { pageInfo: { hasNextPage: false, endCursor: "R2" }, nodes: gRefundLines(2) } } });
+      if (query.includes("query OrderSales")) {
+        seen.push(`sales:${variables.id}:${variables.cursor}:${variables.salesCursor}`);
+        // One agreement at a time; the first has a second page of sales.
+        const agreements =
+          variables.cursor === "A1"
+            ? { pageInfo: { hasNextPage: false, endCursor: "A2" }, nodes: [refunded] }
+            : { pageInfo: { hasNextPage: true, endCursor: "A1" }, nodes: [variables.salesCursor === "S1" ? placed(sold(4, 2), false) : placed(sold(1, 3), true)] };
+        return gqlJson({ order: { updatedAt: "2026-03-05T00:00:00Z", agreements } });
       }
       seen.push("orders");
       return gqlJson(ordersPage([big, small]));
@@ -1094,13 +1234,14 @@ describe("orders pipeline", () => {
       "orders",
       "lines:gid://shopify/Order/1:null",
       "lines:gid://shopify/Order/1:L1",
-      "refunds:gid://shopify/Order/1",
-      "refundLines:gid://shopify/Refund/71:R1",
+      "sales:gid://shopify/Order/1:null:null",
+      "sales:gid://shopify/Order/1:null:S1",
+      "sales:gid://shopify/Order/1:A1:null",
     ]);
-    const o1 = await systemDb.order.findFirstOrThrow({ where: { shopifyId: "1" }, include: { lineItems: true, refunds: true } });
+    const o1 = await systemDb.order.findFirstOrThrow({ where: { shopifyId: "1" }, include: { lineItems: true, sales: true } });
     expect(o1.lineItems).toHaveLength(15);
-    const refunds = Object.fromEntries(o1.refunds.map((r) => [r.shopifyId, toNumber(r.lineSubtotal)]));
-    expect(refunds).toEqual({ "71": 27, "72": 4 }); // 25 + 2 lines × 1.00; 1 × 4.00
+    expect(o1.sales.map((x) => x.shopifyId).sort()).toEqual(["1", "2", "3", "4", "5", "900"]);
+    expect(o1.sales.reduce((a, x) => a + toNumber(x.amount), 0)).toBe(46); // 5 × 10, less 4 returned
     expect(await systemDb.orderLineItem.count({ where: { order: { shopifyId: "2" } } })).toBe(1);
   });
 });
@@ -1398,7 +1539,7 @@ describe("daily reconcile", () => {
     expect(queues.sent.sync).toEqual([{ storeId: store.id, kind: "orders", syncJobId: expect.any(String), sinceDays: 7 }]);
   });
 
-  it("recomputes days in the backfill window that have orders or refunds but no daily totals", async () => {
+  it("recomputes days in the backfill window that have orders or sales but no daily totals", async () => {
     const store = await activeStore();
     const now = Date.now();
     const at = (daysAgo: number) => new Date(now - daysAgo * 86400_000).toISOString();
@@ -1413,7 +1554,14 @@ describe("daily reconcile", () => {
     // The backfill stored these, then its aggregate messages were lost: no daily totals at all.
     await placed(2, 20);
     await placed(3, 40);
-    await webhook("refunds/create", { id: 9, order_id: 3, created_at: at(30), refund_line_items: [{ subtotal: "45.00" }] });
+    shopifySales.set("3", {
+      updatedAt: at(30),
+      agreements: [
+        agreement(at(40), [sale({ quantity: 2, totalAmount: saleMoney(90), totalDiscountAmountBeforeTaxes: saleMoney(10) })]),
+        agreement(at(30), [sale({ actionType: "RETURN", totalAmount: saleMoney(-45) })]),
+      ],
+    });
+    await webhook("refunds/create", { id: 9, order_id: 3, created_at: at(30) });
     await placed(4, BACKFILL_DAYS + 30);
     queues.clear();
 
@@ -1559,13 +1707,15 @@ describe("writeOrderBatch matches upsertOrder", () => {
         },
       ],
     },
-    refunds: [
-      {
-        id: `gid://shopify/Refund/${id}-1`,
-        createdAt: "2026-03-03T12:00:00Z",
-        refundLineItems: { nodes: [{ subtotalSet: { shopMoney: { amount: "25.00" } } }] },
-      },
-    ],
+    agreements: {
+      nodes: [
+        agreement("2026-03-01T15:00:00Z", [
+          sale({ id: `gid://shopify/Sale/${id}-1`, quantity: 2, totalAmount: saleMoney(95), totalDiscountAmountBeforeTaxes: saleMoney(10), totalTaxAmount: saleMoney(5), lineItem: { id: `gid://shopify/LineItem/${id}-1` } }),
+          sale({ id: `gid://shopify/Sale/${id}-2`, lineType: "SHIPPING", quantity: null, totalAmount: saleMoney(4) }),
+        ]),
+        agreement("2026-03-03T12:00:00Z", [sale({ id: `gid://shopify/Sale/${id}-3`, actionType: "RETURN", totalAmount: saleMoney(-25) })]),
+      ],
+    },
     ...over,
   });
 
@@ -1574,7 +1724,7 @@ describe("writeOrderBatch matches upsertOrder", () => {
     const out = [];
     for (const o of orders) {
       const items = await systemDb.orderLineItem.findMany({ where: { orderId: o.id }, orderBy: { shopifyId: "asc" } });
-      const refunds = await systemDb.refund.findMany({ where: { orderId: o.id }, orderBy: { shopifyId: "asc" } });
+      const sales = await systemDb.orderSale.findMany({ where: { orderId: o.id }, orderBy: { shopifyId: "asc" } });
       out.push({
         shopifyId: o.shopifyId,
         name: o.name,
@@ -1594,6 +1744,7 @@ describe("writeOrderBatch matches upsertOrder", () => {
         fulfillmentStatus: o.fulfillmentStatus,
         fulfilledAt: o.fulfilledAt?.toISOString() ?? null,
         discountCodes: o.discountCodes,
+        salesUpdatedAt: o.salesUpdatedAt?.toISOString() ?? null,
         items: items.map((li) => ({
           shopifyId: li.shopifyId,
           productShopifyId: li.productShopifyId,
@@ -1604,21 +1755,27 @@ describe("writeOrderBatch matches upsertOrder", () => {
           price: toNumber(li.price),
           discount: toNumber(li.discount),
         })),
-        refunds: refunds.map((r) => ({
-          shopifyId: r.shopifyId,
-          localDay: r.localDay,
-          createdAt: r.shopifyCreatedAt.toISOString(),
-          lineSubtotal: toNumber(r.lineSubtotal),
+        sales: sales.map((x) => ({
+          shopifyId: x.shopifyId,
+          localDay: x.localDay,
+          happenedAt: x.happenedAt.toISOString(),
+          actionType: x.actionType,
+          lineType: x.lineType,
+          lineItemShopifyId: x.lineItemShopifyId,
+          quantity: x.quantity,
+          amount: toNumber(x.amount),
+          discount: toNumber(x.discount),
+          tax: toNumber(x.tax),
         })),
       });
     }
     return out;
   };
 
-  it("writes identical orders, line items and refunds, and the same affected days", async () => {
+  it("writes identical orders, line items and sales, and the same affected days", async () => {
     const batch = await makeStore(["read_orders", "read_products"], "America/New_York", "batch.myshopify.com");
     const single = await makeStore(["read_orders", "read_products"], "America/New_York", "single.myshopify.com");
-    const orders = [gqlOrder(1), gqlOrder(2, { cancelledAt: "2026-03-04T00:00:00Z", discountCodes: [], refunds: [] })].map(normalizeGraphqlOrder);
+    const orders = [gqlOrder(1), gqlOrder(2, { cancelledAt: "2026-03-04T00:00:00Z", discountCodes: [] }), gqlOrder(3, { test: true })].map(normalizeGraphqlOrder);
 
     const batchDays = await writeOrderBatch(batch, orders);
     const singleDays = new Set<string>();
@@ -1628,6 +1785,8 @@ describe("writeOrderBatch matches upsertOrder", () => {
     expect([...batchDays].sort()).toEqual([...singleDays].sort());
     // Created 15:00Z on 1 Mar is still 1 Mar in New York; the refund on 3 Mar is its own day.
     expect([...batchDays].sort()).toEqual(["2026-03-01", "2026-03-03"]);
+    // The test order went in neither.
+    expect((await readStore(batch.id)).map((o) => o.shopifyId)).toEqual(["1", "2"]);
   });
 
   it("produces the same daily aggregates as the per-order path", async () => {
@@ -1687,6 +1846,27 @@ describe("writeOrderBatch matches upsertOrder", () => {
     expect(items.map((i) => i.title)).toEqual(["Mug"]);
   });
 
+  it("keeps sales read at a later state than the copy being written, in both paths", async () => {
+    for (const path of ["batch", "single"] as const) {
+      const store = await makeStore(["read_orders"], "America/New_York", `ofresh-${path}.myshopify.com`);
+      const write = (o: ReturnType<typeof normalizeGraphqlOrder>) => (path === "batch" ? writeOrderBatch(store, [o]) : upsertOrder(store, o));
+      await write(normalizeGraphqlOrder(gqlOrder(1)));
+      // A webhook's read of the order on 10 Mar (it has been refunded in full since)...
+      const refunded = normalizeGraphqlSales([
+        agreement("2026-03-01T15:00:00Z", [sale({ id: "gid://shopify/Sale/1-1", totalAmount: saleMoney(95), totalTaxAmount: saleMoney(5) })]),
+        agreement("2026-03-10T00:00:00Z", [sale({ id: "gid://shopify/Sale/1-9", actionType: "RETURN", totalAmount: saleMoney(-95), totalTaxAmount: saleMoney(-5) })]),
+      ]);
+      await replaceOrderSales(store, "1", refunded, new Date("2026-03-10T00:00:00Z"), "key-10-mar");
+      // ...then an import page fetched on 5 Mar: newer than the stored order row, older than those sales.
+      await write(normalizeGraphqlOrder(gqlOrder(1, { name: "#page", updatedAt: "2026-03-05T00:00:00Z" })));
+      const o = await systemDb.order.findFirstOrThrow({ where: { storeId: store.id }, include: { sales: { orderBy: { shopifyId: "asc" } } } });
+      expect(o.name).toBe("#page");
+      expect(o.sales.map((x) => x.shopifyId)).toEqual(["1-1", "1-9"]);
+      expect(o.salesUpdatedAt?.toISOString()).toBe("2026-03-10T00:00:00.000Z");
+      expect(o.salesKey).toBe("key-10-mar");
+    }
+  });
+
   it("is idempotent: writing the same batch twice changes nothing", async () => {
     const store = await makeStore(["read_orders"], "America/New_York", "oidem.myshopify.com");
     const orders = [gqlOrder(1), gqlOrder(2)].map(normalizeGraphqlOrder);
@@ -1695,7 +1875,7 @@ describe("writeOrderBatch matches upsertOrder", () => {
     await writeOrderBatch(store, orders);
     expect(await readStore(store.id)).toEqual(before);
     expect(await systemDb.orderLineItem.count({ where: { storeId: store.id } })).toBe(2);
-    expect(await systemDb.refund.count({ where: { storeId: store.id } })).toBe(2);
+    expect(await systemDb.orderSale.count({ where: { storeId: store.id } })).toBe(6);
   });
 });
 
@@ -1731,10 +1911,25 @@ describe("bulk order backfill", () => {
           totalShippingPriceSet: money("0"),
           totalPriceSet: money("20"),
           fulfillments: [{ createdAt: "2026-03-02T09:30:00Z" }],
-          // Without their line items: the export can't nest a connection in the `refunds` list.
-          refunds: o.refund ? [{ id: `gid://shopify/Refund/${o.id}`, createdAt: "2026-03-03T12:00:00Z" }] : [],
         }),
       );
+      // Agreements are children of the order, sales children of their agreement.
+      const agreementLines = (n: number, happenedAt: string, sale: Record<string, unknown>) => [
+        JSON.stringify({ id: `gid://shopify/SalesAgreement/${o.id}-${n}`, happenedAt, __parentId: gid }),
+        JSON.stringify({
+          id: `gid://shopify/Sale/${o.id}-${n}`,
+          actionType: "ORDER",
+          lineType: "PRODUCT",
+          quantity: 1,
+          totalAmount: money("20"),
+          totalDiscountAmountBeforeTaxes: money("0"),
+          totalTaxAmount: money("0"),
+          ...sale,
+          __parentId: `gid://shopify/SalesAgreement/${o.id}-${n}`,
+        }),
+      ];
+      lines.push(...agreementLines(1, "2026-03-01T15:00:00Z", { lineItem: { id: `gid://shopify/LineItem/${o.id}-1` } }));
+      if (o.refund) lines.push(...agreementLines(2, "2026-03-03T12:00:00Z", { actionType: "RETURN", totalAmount: money("-5") }));
       for (const li of o.items ?? [1]) {
         lines.push(
           JSON.stringify({
@@ -1754,34 +1949,16 @@ describe("bulk order backfill", () => {
     return lines.join("\n") + "\n";
   };
 
-  /** The paged path's refund of order `id` (one refund, these line subtotals). */
-  const pagedRefund = (id: number, lines: string[]) => ({
-    id: `gid://shopify/Refund/${id}`,
-    createdAt: "2026-03-03T12:00:00Z",
-    refundLineItems: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: lines.map((amount) => ({ subtotalSet: money(amount) })) },
-  });
-
   /**
    * Serves the GraphQL calls and the result file. `body` is the JSONL; range requests are
-   * honoured byte-exactly so the chunking logic is really exercised, unless `ignoreRange` makes
-   * the server send the whole file every time. ORDER_REFUNDS_QUERY answers one refund per order
-   * with `refundLines` as its line subtotals.
+   * honoured byte-exactly so the chunking logic is really exercised.
    */
-  function shopify(opts: {
-    body?: string;
-    status?: string;
-    objectCount?: number;
-    runErrors?: Array<{ message: string }>;
-    current?: unknown;
-    refundLines?: string[];
-    ignoreRange?: boolean;
-  }) {
+  function shopify(opts: { body?: string; status?: string; objectCount?: number; runErrors?: Array<{ message: string }>; current?: unknown }) {
     const body = opts.body ?? "";
     const bytes = new TextEncoder().encode(body);
     const calls: string[] = [];
     fetchImpl = async (url, init) => {
       if (String(url).startsWith("https://files.example/")) {
-        if (opts.ignoreRange) return new Response(bytes, { status: 200 });
         const m = /bytes=(\d+)-(\d+)/.exec(String((init?.headers as Record<string, string>)?.Range ?? ""));
         const start = m ? Number(m[1]) : 0;
         const end = Math.min(bytes.length - 1, m ? Number(m[2]) : bytes.length - 1);
@@ -1805,11 +1982,6 @@ describe("bulk order backfill", () => {
       if (query.includes("bulkOperationCancel")) {
         calls.push("cancel");
         return gqlJson({ bulkOperationCancel: { bulkOperation: { id: BULK_ID, status: "CANCELED" }, userErrors: [] } });
-      }
-      if (query.includes("query OrderRefunds")) {
-        const id = Number(String(variables.id).split("/").pop());
-        calls.push(`refunds:${id}`);
-        return gqlJson({ order: { refunds: [pagedRefund(id, opts.refundLines ?? ["5"])] } });
       }
       calls.push("node");
       return gqlJson({
@@ -1844,11 +2016,9 @@ describe("bulk order backfill", () => {
     await drainAggregates();
 
     expect(calls.filter((c) => c === "run")).toHaveLength(1);
-    // Only the order with a refund pays a detail query for its refund lines.
-    expect(calls.filter((c) => c.startsWith("refunds:"))).toEqual(["refunds:1"]);
     expect(await systemDb.order.count()).toBe(2);
     expect(await systemDb.orderLineItem.count()).toBe(2);
-    expect((await systemDb.refund.findMany()).map((r) => toNumber(r.lineSubtotal))).toEqual([5]);
+    expect(await systemDb.orderSale.count()).toBe(3);
     expect((await systemDb.store.findUniqueOrThrow({ where: { id: store.id } })).status).toBe("active");
     const done = await systemDb.syncJob.findUniqueOrThrow({ where: { id: job.id } });
     expect(done).toMatchObject({ status: "succeeded", progress: 2 });
@@ -1889,36 +2059,6 @@ describe("bulk order backfill", () => {
     expect(await systemDb.orderLineItem.count()).toBe(9);
     expect((await systemDb.syncJob.findUniqueOrThrow({ where: { id: job.id } })).progress).toBe(3);
   });
-
-  /**
-   * Every order with refunds costs one detail query, so an ingest stops after MAX_REFUND_LOOKUPS
-   * of them and the next message carries on from the order after - also when the result server
-   * ignores Range and sends the whole file each time.
-   */
-  for (const ignoreRange of [false, true]) {
-    it(`completes at most MAX_REFUND_LOOKUPS orders' refunds per ingest${ignoreRange ? " (server ignoring Range)" : ""}`, async () => {
-      const store = await makeStore(["read_orders"]);
-      const job = await makeJob(store, "orders");
-      const n = MAX_REFUND_LOOKUPS + 1;
-      const body = jsonl(Array.from({ length: n }, (_, i) => ({ id: i + 1, refund: true })));
-      const calls = shopify({ body, objectCount: 2 * n, ignoreRange });
-
-      const offsets: number[] = [];
-      let msg: Parameters<typeof runSync>[0] | undefined = { storeId: store.id, kind: "orders", syncJobId: job.id };
-      for (let i = 0; msg && i < 40; i++) {
-        if (msg.bulk?.phase === "ingest") offsets.push(msg.bulk.byteOffset ?? 0);
-        await runSync(msg, deps);
-        msg = queues.sent.sync.shift();
-      }
-      expect(offsets).toHaveLength(2);
-      expect(body.slice(offsets[1])).toMatch(new RegExp(`^\\{"id":"gid://shopify/Order/${n}"`));
-      // Each order's refunds were looked up once: none skipped, none twice.
-      expect(new Set(calls.filter((c) => c.startsWith("refunds:"))).size).toBe(n);
-      expect(calls.filter((c) => c.startsWith("refunds:"))).toHaveLength(n);
-      expect(await systemDb.refund.count()).toBe(n);
-      expect(await systemDb.syncJob.findUniqueOrThrow({ where: { id: job.id } })).toMatchObject({ status: "succeeded", progress: n });
-    });
-  }
 
   it("does not double count when an ingest message is redelivered", async () => {
     const store = await makeStore(["read_orders"]);
@@ -2057,74 +2197,69 @@ describe("bulk order backfill", () => {
     expect((await systemDb.syncJob.findUniqueOrThrow({ where: { id: job.id } })).status).toBe("succeeded");
   });
 
-  /**
-   * The paged page carries order 1's refund lines inline; the bulk export can't, so the ingest
-   * fetches them with ORDER_REFUNDS_QUERY. Both must end with the same refund totals.
-   */
-  it("writes the same rows as the paged path for the same orders, refund totals included", async () => {
-    const refundLines = ["5", "2.50", "0.25"];
+  it("writes the same rows as the paged path for the same orders", async () => {
     const bulkStore = await makeStore(["read_orders"], "America/New_York", "pb.myshopify.com");
     const bulkJob = await makeJob(bulkStore, "orders");
-    shopify({ body: jsonl([{ id: 1, refund: true }, { id: 2 }]), objectCount: 4, refundLines });
+    shopify({ body: jsonl([{ id: 1, refund: true }]), objectCount: 2 });
     await drainSync({ storeId: bulkStore.id, kind: "orders", syncJobId: bulkJob.id });
 
     const pagedStore = await makeStore(["read_orders"], "America/New_York", "pp.myshopify.com");
     const pagedJob = await makeJob(pagedStore, "orders");
-    const pagedOrder = (id: number, refunds: unknown[]) =>
-      gOrder(id, {
-        createdAt: "2026-03-01T15:00:00Z",
-        updatedAt: "2026-03-01T15:00:00Z",
-        discountCodes: [],
-        subtotalPriceSet: money("20"),
-        totalDiscountsSet: money("0"),
-        totalTaxSet: money("0"),
-        totalShippingPriceSet: money("0"),
-        totalPriceSet: money("20"),
-        fulfillments: [{ createdAt: "2026-03-02T09:30:00Z" }],
-        lineItems: {
-          pageInfo: { hasNextPage: false },
-          nodes: [
-            {
-              id: `gid://shopify/LineItem/${id}-1`,
-              title: "X",
-              quantity: 1,
-              sku: null,
-              variant: null,
-              product: null,
-              originalUnitPriceSet: money("20"),
-              totalDiscountSet: money("0"),
+    fetchImpl = async () =>
+      gqlJson(
+        ordersPage([
+          gOrder(1, {
+            createdAt: "2026-03-01T15:00:00Z",
+            updatedAt: "2026-03-01T15:00:00Z",
+            discountCodes: [],
+            subtotalPriceSet: money("20"),
+            totalDiscountsSet: money("0"),
+            totalTaxSet: money("0"),
+            totalShippingPriceSet: money("0"),
+            totalPriceSet: money("20"),
+            fulfillments: [{ createdAt: "2026-03-02T09:30:00Z" }],
+            lineItems: {
+              pageInfo: { hasNextPage: false },
+              nodes: [
+                {
+                  id: "gid://shopify/LineItem/1-1",
+                  title: "X",
+                  quantity: 1,
+                  sku: null,
+                  variant: null,
+                  product: null,
+                  originalUnitPriceSet: money("20"),
+                  totalDiscountSet: money("0"),
+                },
+              ],
             },
-          ],
-        },
-        refunds,
-      });
-    const pagedCalls: string[] = [];
-    fetchImpl = async (_u, init) => {
-      pagedCalls.push(gqlBody(init).query.includes("query OrderRefunds") ? "refunds" : "orders");
-      return gqlJson(ordersPage([pagedOrder(1, [pagedRefund(1, refundLines)]), pagedOrder(2, [])]));
-    };
+            agreements: {
+              pageInfo: { hasNextPage: false },
+              nodes: [
+                agreement("2026-03-01T15:00:00Z", [sale({ id: "gid://shopify/Sale/1-1", totalAmount: money("20"), lineItem: { id: "gid://shopify/LineItem/1-1" } })]),
+                agreement("2026-03-03T12:00:00Z", [sale({ id: "gid://shopify/Sale/1-2", actionType: "RETURN", totalAmount: money("-5") })]),
+              ],
+            },
+          }),
+        ]),
+      );
     await runSync({ storeId: pagedStore.id, kind: "orders", syncJobId: pagedJob.id, pagedOnly: true }, deps);
-    expect(pagedCalls).toEqual(["orders"]); // the paged page had the refund lines already
 
     const read = async (storeId: string) => {
-      const orders = await systemDb.order.findMany({ where: { storeId }, include: { lineItems: true, refunds: true }, orderBy: { shopifyId: "asc" } });
-      return orders.map((o) => {
-        const { id: _i, storeId: _s, workspaceId: _w, ...rest } = o;
-        return {
-          ...rest,
-          lineItems: o.lineItems.map(({ id: _a, orderId: _b, storeId: _c, workspaceId: _d, ...li }) => ({ ...li, price: toNumber(li.price), discount: toNumber(li.discount) })),
-          refunds: o.refunds.map(({ id: _a, orderId: _b, storeId: _c, workspaceId: _d, ...r }) => ({ ...r, lineSubtotal: toNumber(r.lineSubtotal) })),
-          subtotal: toNumber(rest.subtotal),
-          totalDiscounts: toNumber(rest.totalDiscounts),
-          totalTax: toNumber(rest.totalTax),
-          totalShipping: toNumber(rest.totalShipping),
-          totalPrice: toNumber(rest.totalPrice),
-        };
-      });
+      const o = await systemDb.order.findFirstOrThrow({ where: { storeId }, include: { lineItems: true, sales: { orderBy: { shopifyId: "asc" } } } });
+      const { id: _i, storeId: _s, workspaceId: _w, ...rest } = o;
+      return {
+        ...rest,
+        lineItems: o.lineItems.map(({ id: _a, orderId: _b, storeId: _c, workspaceId: _d, ...li }) => ({ ...li, price: toNumber(li.price), discount: toNumber(li.discount) })),
+        sales: o.sales.map(({ id: _a, orderId: _b, storeId: _c, workspaceId: _d, ...x }) => ({ ...x, amount: toNumber(x.amount), discount: toNumber(x.discount), tax: toNumber(x.tax) })),
+        subtotal: toNumber(rest.subtotal),
+        totalDiscounts: toNumber(rest.totalDiscounts),
+        totalTax: toNumber(rest.totalTax),
+        totalShipping: toNumber(rest.totalShipping),
+        totalPrice: toNumber(rest.totalPrice),
+      };
     };
-    const bulk = await read(bulkStore.id);
-    expect(bulk.map((o) => o.refunds.map((r) => r.lineSubtotal))).toEqual([[7.75], []]);
-    expect(bulk).toEqual(await read(pagedStore.id));
+    expect(await read(bulkStore.id)).toEqual(await read(pagedStore.id));
   });
 });
 

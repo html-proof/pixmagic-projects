@@ -28,15 +28,21 @@ export interface OverviewStore {
 }
 
 /**
- * Fields marked "Team & Access" are left out for a member without the permission they need
- * (`redactOverview` in @app/shared/access): the page shows what's there and says nothing of the rest.
+ * Shopify's own sales figures, from its sales records (docs/kpis.md). Fields marked "Team & Access"
+ * are left out for a member without the permission they need (`redactOverview` in
+ * @app/shared/access): the page shows what's there and says nothing of the rest.
  */
 export interface SalesOverview {
   current: {
-    /** Team & Access: "View gross sales, discounts, tax and shipping" (also discounts, tax, shipping). */
+    /** Team & Access: "View gross sales, discounts, tax and shipping" (also discounts, tax, shipping, totalSales). */
     grossSales?: number;
     discounts?: number;
+    /** What refunds, cancellations and edits took back (Shopify's "returns"). Team & Access: "View refunds". */
+    returns?: number;
+    /** Gross − discounts − returns. */
     netSales: number;
+    /** Net sales + shipping + taxes + duties and fees: Shopify's headline "Total sales". */
+    totalSales?: number;
     orders: number;
     units: number;
     averageOrderValue: number | null;
@@ -44,10 +50,20 @@ export interface SalesOverview {
     shipping?: number;
   };
   /** The same figures for the period before (as many days, immediately before). */
-  previous: { grossSales?: number; netSales: number; orders: number; units: number; averageOrderValue: number | null };
-  deltas: { netSales: number | null; orders: number | null; averageOrderValue: number | null; grossSales?: number | null; units: number | null };
-  /** Every day of the range, quiet days as zero. Each day's `refunds`: Team & Access "View refunds". */
-  series: Array<Omit<SalesDay, "refunds"> & { refunds?: number }>;
+  previous: { grossSales?: number; netSales: number; totalSales?: number; orders: number; units: number; averageOrderValue: number | null };
+  deltas: {
+    netSales: number | null;
+    totalSales?: number | null;
+    orders: number | null;
+    averageOrderValue: number | null;
+    grossSales?: number | null;
+    units: number | null;
+  };
+  /**
+   * Every day of the range, quiet days as zero. Each day's `refunds`: Team & Access "View refunds";
+   * its `totalSales`: "View gross sales, discounts, tax and shipping".
+   */
+  series: Array<Omit<SalesDay, "refunds" | "totalSales"> & { refunds?: number; totalSales?: number }>;
   /** This calendar year by month, whatever the range. Team & Access: "View financial reports". */
   year?: YearBreakdown;
 }

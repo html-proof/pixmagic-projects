@@ -373,15 +373,15 @@ describe("exports and sensitive fields (scenarios 15-16)", () => {
     expect(res.headers["content-disposition"]).toMatch(/attachment; filename="bizinsights-acme-sales-/);
     const noBom = (text: string) => (text.charCodeAt(0) === 0xfeff ? text.slice(1) : text);
     const header = noBom(res.body).split("\r\n")[0];
-    // Refunds per day need "View refunds".
+    // Returns per day need "View refunds", total sales the sales breakdown (it holds tax and shipping).
     expect(header).toBe('"Day","Orders","Net sales","Average order value"');
     expect(res.body).toContain(`"${today}",1,100`);
     // A section they can't see stays closed even with the export permission.
     expect((await call("GET", `/workspaces/${b.ws}/stores/${b.store.id}/export?section=products`, guest.headers)).statusCode).toBe(403);
     expect(await systemDb.auditLog.count({ where: { workspaceId: b.ws, action: "report.exported" } })).toBe(1);
-    // The owner's has the refunds column.
+    // The owner's has the total sales (it holds tax and shipping) and returns columns.
     const owners = await call("GET", url, b.owner.headers);
-    expect(noBom(owners.body).split("\r\n")[0]).toBe('"Day","Orders","Net sales","Average order value","Refunds"');
+    expect(noBom(owners.body).split("\r\n")[0]).toBe('"Day","Orders","Total sales","Net sales","Average order value","Returns"');
   });
 
   it("leaves out financial detail, stock value and customers' personal data until each is granted", async () => {

@@ -32,8 +32,9 @@ Who can open a workspace's dashboard, and what of it they see. Owners and admins
 - `requireWorkspace` reads the membership from the database on every request: a change or a
   revocation applies to the member's next request. A revoked member gets `403 access_revoked`.
 - `GET …/overview` computes only the modules the member may see (`storeOverview(…, sees)`), then
-  `redactOverview` removes fields that need their own permission (gross sales/discounts/tax/shipping,
-  refunds per day, the year report, stock value, order payment/fulfillment/cancellation, paid
+  `redactOverview` removes fields that need their own permission (gross sales/discounts/tax/shipping
+  and total sales, which holds tax and shipping, so such a member's headline is net sales; returns
+  and refunds per day; the year report, stock value, order payment/fulfillment/cancellation, paid
   attribution, ad campaigns, discount amounts, import counts).
 - `GET …/contacts` asks Shopify only for the lists the member may see and blanks names, contact
   details and order history per permission (`redactContact`).

@@ -345,8 +345,16 @@ model Order {
   trafficCampaign     String?         @map("traffic_campaign")
   /// The referring site's host only.
   referrerHost        String?         @map("referrer_host")
+  /// The order's Shopify updated_at when its sales (order_sales) were last read from Shopify; null
+  /// while they never were (an order known only from a webhook, or stored before sales were read).
+  salesUpdatedAt      DateTime?       @map("sales_updated_at")
+  /// The money state of the REST payload the stored sales were read for (`salesKey` in
+  /// packages/core/src/normalize.ts): a webhook whose state matches needs no new read.
+  salesKey            String?         @map("sales_key")
   lineItems           OrderLineItem[]
+  /// No longer written: returns are read from Shopify's sales (order_sales) instead.
   refunds             Refund[]
+  sales               OrderSale[]
 
   @@unique([storeId, shopifyId])
   @@index([storeId, localDay])
@@ -392,13 +400,54 @@ model Refund {
   @@map("refunds")
 }
 
+// One of Shopify's sales records for an order (Order.agreements → sales): what was sold, returned
+// or changed, on the day it happened. Shopify's own reports are built from these, so the dashboard's
+// sales totals are too (docs/kpis.md). Amounts are in the store's currency and signed as Shopify
+// sends them; a return is negative.
+model OrderSale {
+  id                String   @id @default(cuid())
+  workspaceId       String   @map("workspace_id")
+  storeId           String   @map("store_id")
+  orderId           String   @map("order_id")
+  shopifyId         String   @map("shopify_id")
+  /// Store-local day of `happenedAt`.
+  localDay          String   @map("local_day")
+  happenedAt        DateTime @map("happened_at")
+  /// order | return | update | unknown (Shopify's SaleActionType, lowercase).
+  actionType        String   @map("action_type")
+  /// product | shipping | gift_card | tip | duty | fee | additional_fee | adjustment | unknown (SaleLineType).
+  lineType          String   @map("line_type")
+  /// The line item of a product sale (OrderLineItem.shopifyId).
+  lineItemShopifyId String?  @map("line_item_shopify_id")
+  quantity          Int?
+  /// totalAmount: after discounts, taxes included.
+  amount            Decimal  @db.Decimal(18, 2)
+  /// totalDiscountAmountBeforeTaxes.
+  discount          Decimal  @db.Decimal(18, 2)
+  /// totalTaxAmount.
+  tax               Decimal  @db.Decimal(18, 2)
+  order             Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, shopifyId])
+  @@index([storeId, localDay])
+  @@index([orderId])
+  @@index([workspaceId])
+  @@map("order_sales")
+}
+
 model DailyStoreMetrics {
   workspaceId             String  @map("workspace_id")
   storeId                 String  @map("store_id")
   day                     String
   grossSales              Decimal @default(0) @map("gross_sales") @db.Decimal(18, 2)
   discounts               Decimal @default(0) @db.Decimal(18, 2)
+  /// Returns: what refunds, cancellations and edits took back (Shopify's "sales reversals").
   refunds                 Decimal @default(0) @db.Decimal(18, 2)
+  /// Shipping charged after shipping discounts and refunds, before tax.
+  shipping                Decimal @default(0) @db.Decimal(18, 2)
+  taxes                   Decimal @default(0) @db.Decimal(18, 2)
+  /// Net sales + shipping + taxes + duties and fees: Shopify's "Total sales".
+  totalSales              Decimal @default(0) @map("total_sales") @db.Decimal(18, 2)
   orders                  Int     @default(0)
   units                   Int     @default(0)
   ordersWithCustomer      Int     @default(0) @map("orders_with_customer")

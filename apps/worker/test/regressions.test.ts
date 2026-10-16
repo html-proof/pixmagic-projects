@@ -4,6 +4,7 @@ import { resetDb } from "@app/db/testing";
 import { applySubscriptionUpdate, encryptTokenFields, env, MAX_ATTEMPTS, memoryBlobs, memoryCoord, memoryMailer, memoryQueues, resetEnvCache, type FetchLike, type Mailer } from "@app/core";
 import { processWebhook, type WorkerDeps } from "../src/handlers.js";
 import { consume, type QueueMessage } from "../src/index.js";
+import { salesAnswer } from "./shopifySales.js";
 
 /**
  * Regressions found by the full test pass (2026-10-06). Each case failed before its fix.
@@ -33,7 +34,9 @@ beforeEach(async () => {
   coord.clear();
   sent.sent.length = 0;
   mailer = sent;
-  fetchImpl = async () => {
+  fetchImpl = async (url, init) => {
+    const sales = salesAnswer(url, init);
+    if (sales) return sales;
     throw new Error("unexpected fetch");
   };
 });

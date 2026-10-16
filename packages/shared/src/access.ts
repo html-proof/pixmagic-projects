@@ -121,8 +121,8 @@ export const ACCESS_PERMISSIONS: readonly AccessPermissionDef[] = [
   { key: "discounts.codes", module: "discounts", kind: "view", label: "View discount codes and usage", reveals: "Which discount codes were used, and on how many orders." },
   { key: "discounts.performance", module: "discounts", kind: "view", requires: ["discounts.codes"], label: "View discount performance", reveals: "How much each code took off, and the sales it came with." },
   // ---- Finance
-  { key: "finance.breakdown", module: "finance", kind: "view", sensitive: true, requires: ["analytics.sales"], label: "View gross sales, discounts, tax and shipping", reveals: "How net sales add up from gross sales, discounts and refunds, plus tax and shipping collected." },
-  { key: "finance.refunds", module: "finance", kind: "view", sensitive: true, requires: ["analytics.sales"], label: "View refunds", reveals: "Money refunded, the refund rate and how many orders were refunded." },
+  { key: "finance.breakdown", module: "finance", kind: "view", sensitive: true, requires: ["analytics.sales"], label: "View gross sales, discounts, tax, shipping and total sales", reveals: "How total sales add up: gross sales, discounts and returns to net sales, plus shipping and tax. Without it, the headline shows net sales." },
+  { key: "finance.refunds", module: "finance", kind: "view", sensitive: true, requires: ["analytics.sales"], label: "View refunds", reveals: "Returns (money refunded, cancelled or edited out), the return rate and how many orders had one." },
   { key: "finance.reports", module: "finance", kind: "view", sensitive: true, requires: ["analytics.sales"], label: "View financial reports", reveals: "This year's sales month by month, compared with last year." },
   // ---- Integrations
   { key: "integrations.status", module: "integrations", kind: "view", label: "View integration connection status", reveals: "Which store, ad, WhatsApp and email accounts are connected and whether they work. Never passwords, tokens or keys." },
@@ -509,16 +509,21 @@ function redactFields(modules: Obj, g: ReadonlySet<AccessKey>): Obj {
   if (isObj(sales)) {
     let s: Obj = { ...sales };
     if (!g.has("finance.breakdown")) {
+      // Total sales is net sales plus tax and shipping, so it goes with them, every day too.
       s = {
         ...s,
-        current: omit(s.current, ["grossSales", "discounts", "tax", "shipping"]),
-        previous: omit(s.previous, ["grossSales"]),
-        deltas: omit(s.deltas, ["grossSales"]),
+        current: omit(s.current, ["grossSales", "discounts", "tax", "shipping", "totalSales"]),
+        previous: omit(s.previous, ["grossSales", "totalSales"]),
+        deltas: omit(s.deltas, ["grossSales", "totalSales"]),
       };
+      if (Array.isArray(s.series)) s.series = s.series.map((d: unknown) => omit(d, ["totalSales"]));
     }
     if (!g.has("finance.reports")) delete s.year;
-    // Each day carries its refunds too.
-    if (!g.has("finance.refunds") && Array.isArray(s.series)) s.series = s.series.map((d: unknown) => omit(d, ["refunds"]));
+    // Returns are refunds (and cancellations and edits), for the range and each day.
+    if (!g.has("finance.refunds")) {
+      s = { ...s, current: omit(s.current, ["returns"]) };
+      if (Array.isArray(s.series)) s.series = s.series.map((d: unknown) => omit(d, ["refunds"]));
+    }
     out.sales_overview = s;
   }
   const inv = out.inventory;

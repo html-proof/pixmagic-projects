@@ -127,10 +127,10 @@ const report = () => ({
   data: { orders: 10, products: 4, variants: 6, oldestOrderDay: "2026-01-01", newestOrderDay: "2026-10-01" },
   modules: {
     sales_overview: {
-      current: { grossSales: 120, discounts: 10, netSales: 100, orders: 3, units: 4, averageOrderValue: 33, tax: 5, shipping: 7 },
-      previous: { grossSales: 90, netSales: 80, orders: 2, units: 2, averageOrderValue: 40 },
-      deltas: { netSales: 0.25, orders: 0.5, averageOrderValue: -0.1, grossSales: 0.3, units: 1 },
-      series: [{ day: "2026-10-01", netSales: 100, orders: 3, refunds: 10, averageOrderValue: 33 }],
+      current: { grossSales: 120, discounts: 10, returns: 10, netSales: 100, totalSales: 112, orders: 3, units: 4, averageOrderValue: 33, tax: 5, shipping: 7 },
+      previous: { grossSales: 90, netSales: 80, totalSales: 90, orders: 2, units: 2, averageOrderValue: 40 },
+      deltas: { netSales: 0.25, totalSales: 0.24, orders: 0.5, averageOrderValue: -0.1, grossSales: 0.3, units: 1 },
+      series: [{ day: "2026-10-01", netSales: 100, totalSales: 112, orders: 3, refunds: 10, averageOrderValue: 33 }],
       year: { year: 2026, months: [], total: 100, orders: 3 },
     },
     top_products: { items: [{ title: "Hat", revenue: 100, units: 4 }] },
@@ -163,11 +163,14 @@ describe("redactOverview", () => {
   it("takes out the fields that need their own permission", () => {
     const out = redactOverview(report(), member(["analytics.sales", "products.inventory", "orders.list", "analytics.traffic", "discounts.codes", "marketing.ads"])) as ReturnType<typeof report>;
     const s = out.modules.sales_overview as unknown as Record<string, Record<string, unknown>> & { series: Array<Record<string, unknown>> };
+    // Total sales holds tax and shipping, and returns are refunds: both go with them.
     expect(s.current).toEqual({ netSales: 100, orders: 3, units: 4, averageOrderValue: 33 });
     expect(s.previous).not.toHaveProperty("grossSales");
+    expect(s.previous).not.toHaveProperty("totalSales");
     expect(s.deltas).not.toHaveProperty("grossSales");
+    expect(s.deltas).not.toHaveProperty("totalSales");
     expect(s).not.toHaveProperty("year");
-    expect(s.series[0]).not.toHaveProperty("refunds");
+    expect(s.series[0]).toEqual({ day: "2026-10-01", netSales: 100, orders: 3, averageOrderValue: 33 });
     expect(out.modules.inventory.current).not.toHaveProperty("stockValueAtCost");
     expect(out.modules.inventory.current).not.toHaveProperty("retailValue");
     expect(out.modules.recent_orders.items[0]).toEqual({ id: "o", name: "#1", total: 100, units: 1, channel: "web" });
@@ -184,7 +187,9 @@ describe("redactOverview", () => {
   it("keeps them once granted", () => {
     const out = redactOverview(report(), member([...LEGACY_GRANTS.viewer, "reports.export"])) as ReturnType<typeof report>;
     expect(out.modules.sales_overview.current.grossSales).toBe(120);
+    expect(out.modules.sales_overview.current).toMatchObject({ totalSales: 112, returns: 10 });
     expect(out.modules.sales_overview.series[0]!.refunds).toBe(10);
+    expect(out.modules.sales_overview.series[0]!.totalSales).toBe(112);
     expect(out.modules.inventory.current.retailValue).toBe(200);
     expect(out.modules.recent_orders.items[0]!.financialStatus).toBe("paid");
   });

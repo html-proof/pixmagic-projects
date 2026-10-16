@@ -97,11 +97,11 @@ token and clears both expiry columns.
 | Data | Query | Notes |
 | --- | --- | --- |
 | Store details | `shop` | name, currency, time zone |
-| Orders | `orders` (7 per page) | totals, tax, shipping, discounts + codes, sales channel, fulfillment status and time, line items (product, variant, SKU), refunds. Orders with more lines/refunds than fit in a page are completed with per-order queries. Last 60 days, or all history once `read_all_orders` is granted |
+| Orders | `orders` (5 per page) | totals, tax, shipping, discounts + codes, sales channel, fulfillment status and time, line items (product, variant, SKU), test flag, and Shopify's sales records (`agreements` → `sales`: what was sold, returned, cancelled or edited, and when), which the sales figures are built from (docs/kpis.md). Orders with more lines/sales than fit in a page are completed with per-order queries. Last 60 days, or all history once `read_all_orders` is granted |
 | Products | `products` (100 per page) | title, status, vendor, type |
 | Variants | `productVariants` (100 per page) | price, stock on hand, unit cost |
 
-Every query's requested cost is kept under Shopify's 1000-point limit (worked out in `packages/core/src/normalize.ts`, checked by `packages/core/test/queryCost.ts`). If Shopify still answers `MAX_COST_EXCEEDED`, the sync job halves the page size and retries the same page. Webhooks keep orders, refunds and products current; a daily reconcile re-pulls recent orders, products and stock.
+Every query's requested cost is kept under Shopify's 1000-point limit (worked out in `packages/core/src/normalize.ts`, checked by `packages/core/test/queryCost.ts`). If Shopify still answers `MAX_COST_EXCEEDED`, the sync job halves the page size and retries the same page. Webhooks keep orders, refunds and products current (an order or refund webhook whose money changed reads that order's sales records); a daily reconcile re-pulls recent orders, products and stock.
 
 ### Protected customer data
 

@@ -136,10 +136,11 @@ Result: 22 of 22 valid; the billing documents added since (`APP_SUBSCRIPTION_CAN
 `APP_SUBSCRIPTION_STATUSES`, `SHOP_PARTNER_DEVELOPMENT`, and `APP_SUBSCRIPTION_CREATE` with
 `replacementBehavior`) were validated the same way on 2026-10-16. Schema validation does not check
 Shopify's bulk-operation rules: `bulkOrdersQuery` passed it while every live store rejected the
-export for the `refundLineItems` connection inside the `refunds` list. That connection is gone
-(refund lines come from `ORDER_REFUNDS_QUERY` during the ingest), and
-`packages/core/test/pipeline.test.ts` now fails the build on a connection anywhere but `orders`
-and `orders.lineItems`. `CustomerPhoneNumber.marketingState`, deprecated in 2026-10, was replaced by
+export for the `refundLineItems` connection inside the `refunds` list. That connection is gone:
+refunds, cancellations and edits now come from the orders' sales records (`agreements` → `sales`,
+docs/kpis.md), two levels of connections below `orders`, and
+`packages/core/test/pipeline.test.ts` fails the build on a connection anywhere but `orders`,
+`orders.lineItems`, `orders.agreements` and `orders.agreements.sales`. `CustomerPhoneNumber.marketingState`, deprecated in 2026-10, was replaced by
 `smsMarketingConsent.state`. One deprecated field is still served and left for the next bump:
 `QueryRoot.currentBulkOperation` (use `bulkOperations` with a status filter). 2026-10 also returns
 `FULFILLMENT_NOT_REQUIRED` for orders with nothing to ship; the parser keeps the status as text, so

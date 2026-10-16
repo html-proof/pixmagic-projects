@@ -37,10 +37,9 @@ const str = z.string().nullish();
 export const restRefundSchema = obj({
   id: restId,
   created_at: timestamp,
-  refund_line_items: z.array(obj({ subtotal: amount.nullish() })).nullish(),
 });
 
-/** refunds/create also names the order the refund belongs to. */
+/** refunds/create also names the order the refund belongs to (whose sales are then read again). */
 export const restRefundWebhookSchema = restRefundSchema.extend({ order_id: restId });
 
 const restLineItem = obj({
@@ -50,9 +49,20 @@ const restLineItem = obj({
   sku: str,
   title: str,
   quantity: quantity.nullish(),
+  /** What is left of the line after edits and refunds. */
+  current_quantity: quantity.nullish(),
   price: amount.nullish(),
   total_discount: amount.nullish(),
   discount_allocations: z.array(obj({ amount: amount.nullish() })).nullish(),
+  gift_card: z.boolean().nullish(),
+  tax_lines: z.array(obj({ price: amount.nullish() })).nullish(),
+});
+
+const restShippingLine = obj({
+  id: restId.nullish(),
+  price: amount.nullish(),
+  discounted_price: amount.nullish(),
+  tax_lines: z.array(obj({ price: amount.nullish() })).nullish(),
 });
 
 /** orders/create, updated, paid, cancelled, fulfilled, partially_fulfilled. */
@@ -63,6 +73,10 @@ export const restOrderSchema = obj({
   created_at: timestamp,
   updated_at: timestamp.nullish(),
   cancelled_at: timestamp.nullish(),
+  /** A test order (Bogus Gateway, a payment provider's test mode): Shopify's reports leave it out. */
+  test: z.boolean().nullish(),
+  /** Whether the prices include tax (GST/VAT stores). */
+  taxes_included: z.boolean().nullish(),
   financial_status: str,
   fulfillment_status: str,
   source_name: str,
@@ -72,11 +86,17 @@ export const restOrderSchema = obj({
   total_discounts: amount.nullish(),
   total_tax: amount.nullish(),
   total_price: amount.nullish(),
+  /** The totals after edits, returns and refunds: they move whenever the order's sales do (`restSalesKey`). */
+  current_subtotal_price: amount.nullish(),
+  current_total_discounts: amount.nullish(),
+  current_total_tax: amount.nullish(),
+  current_total_price: amount.nullish(),
   total_shipping_price_set: obj({ shop_money: obj({ amount: amount.nullish() }).nullish() }).nullish(),
   customer: obj({ id: restId.nullish(), orders_count: z.number().nullish() }).nullish(),
   fulfillments: z.array(obj({ created_at: str })).nullish(),
   discount_codes: z.array(obj({ code: str })).nullish(),
   line_items: z.array(restLineItem).nullish(),
+  shipping_lines: z.array(restShippingLine).nullish(),
   refunds: z.array(restRefundSchema).nullish(),
 });
 
@@ -113,7 +133,6 @@ export const restProductSchema = obj({
 /** products/delete carries only the id. */
 export const restProductDeleteSchema = obj({ id: restId });
 
-export type RestRefund = z.output<typeof restRefundSchema>;
 export type RestOrder = z.output<typeof restOrderSchema>;
 export type RestVariant = z.output<typeof restVariantSchema>;
 export type RestProduct = z.output<typeof restProductSchema>;
@@ -306,15 +325,28 @@ export const graphqlLineItemSchema = obj({
   totalDiscountSet: moneyBag,
 });
 
-export const graphqlRefundSchema = obj({
+/** One of Shopify's sales records (SALE_FIELDS in normalize.ts). */
+export const graphqlSaleSchema = obj({
   id: gid,
-  createdAt: timestamp,
-  /**
-   * Absent from the bulk export, which can't nest a connection in the `refunds` list: such a
-   * refund counts as truncated (graphqlOrderOverflow) and ORDER_REFUNDS_QUERY fills it in.
-   */
-  refundLineItems: obj({ pageInfo, nodes: z.array(obj({ subtotalSet: moneyBag })).nullish() }).nullish(),
+  actionType: str,
+  lineType: str,
+  quantity: quantity.nullish(),
+  totalAmount: moneyBag,
+  totalDiscountAmountBeforeTaxes: moneyBag,
+  totalTaxAmount: moneyBag,
+  /** Product sales only. */
+  lineItem: ref,
 });
+
+/** A sales agreement: what happened to the order at one moment (placed, edited, refunded, returned). */
+export const graphqlAgreementSchema = obj({
+  id: gid,
+  happenedAt: timestamp,
+  sales: obj({ pageInfo, nodes: z.array(graphqlSaleSchema).nullish() }).nullish(),
+});
+
+/** An order's agreements read on their own (ORDER_SALES_QUERY), checked all together. */
+export const graphqlAgreementListSchema = z.array(graphqlAgreementSchema);
 
 /** One node of ordersQuery() / bulkOrdersQuery(), completed by the per-order detail queries. */
 export const graphqlOrderSchema = obj({
@@ -323,6 +355,7 @@ export const graphqlOrderSchema = obj({
   createdAt: timestamp,
   updatedAt: timestamp.nullish(),
   cancelledAt: timestamp.nullish(),
+  test: z.boolean().nullish(),
   currencyCode: str,
   displayFinancialStatus: str,
   displayFulfillmentStatus: str,
@@ -342,7 +375,8 @@ export const graphqlOrderSchema = obj({
   customer: obj({ id: gid.nullish(), numberOfOrders: count.nullish() }).nullish(),
   fulfillments: z.array(obj({ createdAt: str })).nullish(),
   lineItems: obj({ pageInfo, nodes: z.array(graphqlLineItemSchema).nullish() }).nullish(),
-  refunds: z.array(graphqlRefundSchema).nullish(),
+  /** Absent when the query didn't ask for it (then the stored sales are kept), which is told apart from an empty list. */
+  agreements: obj({ pageInfo, nodes: z.array(graphqlAgreementSchema).nullish() }).nullish(),
 });
 
 export const graphqlProductSchema = obj({
@@ -384,7 +418,8 @@ export const graphqlShipmentOrderSchema = obj({ id: gid, fulfillments: z.array(z
 
 export type GraphqlMoney = z.output<typeof moneyBag>;
 export type GraphqlLineItem = z.output<typeof graphqlLineItemSchema>;
-export type GraphqlRefund = z.output<typeof graphqlRefundSchema>;
+export type GraphqlSale = z.output<typeof graphqlSaleSchema>;
+export type GraphqlAgreement = z.output<typeof graphqlAgreementSchema>;
 export type GraphqlOrder = z.output<typeof graphqlOrderSchema>;
 export type GraphqlProduct = z.output<typeof graphqlProductSchema>;
 export type GraphqlVariant = z.output<typeof graphqlVariantSchema>;

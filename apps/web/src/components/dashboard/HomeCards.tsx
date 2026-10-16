@@ -5,7 +5,7 @@ import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { fmtMoneyCompact } from "./format";
 import { LineChart } from "./LineChart";
 import type { Overview } from "./types";
-import { showsRefunds } from "./redacted";
+import { showsRefunds, showsTotalSales } from "./redacted";
 
 // ---------------------------------------------------------------------------
 // The top of the dashboard: four headline numbers, the sales and orders trends, and the summary
@@ -136,13 +136,13 @@ const running = (values: number[]) => {
   return values.map((v) => Math.round((total += v) * 100) / 100);
 };
 
-type SalesView = "net" | "total" | "refunds";
+type SalesView = "sales" | "net" | "running" | "refunds";
 type OrdersView = "daily" | "total";
 
 /** Net sales and orders over the dates picked, side by side (the headline numbers above open their details). */
 export function TrendCharts({ ov, currency }: { ov: Overview; currency: string }) {
   const s = ov.modules.sales_overview;
-  const [salesView, setSalesView] = useState<SalesView>("net");
+  const [salesView, setSalesView] = useState<SalesView>("sales");
   const [ordersView, setOrdersView] = useState<OrdersView>("daily");
   if (!s) return null;
   const days = s.series.map((d) => d.day);
@@ -152,16 +152,18 @@ export function TrendCharts({ ov, currency }: { ov: Overview; currency: string }
   const count = (v: number) => fmtNum(v);
 
   const net = s.series.map((d) => d.netSales);
-  // Refunds per day only for someone who may see refunds (Team & Access).
+  // Refunds and total sales per day only for someone who may see them (Team & Access).
   const refundsShown = showsRefunds(s.series);
-  const view: SalesView = salesView === "refunds" && !refundsShown ? "net" : salesView;
-  const salesValues = view === "refunds" ? s.series.map((d) => d.refunds ?? 0) : view === "total" ? running(net) : net;
+  const totalShown = showsTotalSales(s.series);
+  const view: SalesView = (salesView === "refunds" && !refundsShown) || (salesView === "sales" && !totalShown) ? "net" : salesView;
+  const salesValues =
+    view === "refunds" ? s.series.map((d) => d.refunds ?? 0) : view === "running" ? running(net) : view === "sales" ? s.series.map((d) => d.totalSales ?? 0) : net;
   const salesEmpty = salesValues.every((v) => v === 0);
   const orders = s.series.map((d) => d.orders);
   const orderValues = ordersView === "total" ? running(orders) : orders;
   const ordersEmpty = orderValues.every((v) => v === 0);
 
-  const salesLabel = { net: "Net sales per day", total: "Net sales, running total", refunds: "Refunds per day" }[view];
+  const salesLabel = { sales: "Total sales per day", net: "Net sales per day", running: "Net sales, running total", refunds: "Returns per day" }[view];
   const ordersLabel = ordersView === "total" ? "Orders, running total" : "Orders per day";
 
   return (
@@ -178,9 +180,10 @@ export function TrendCharts({ ov, currency }: { ov: Overview; currency: string }
               value={view}
               onChange={setSalesView}
               options={[
+                ...(totalShown ? [["sales", "Total sales"] as [SalesView, string]] : []),
                 ["net", "Net sales"],
-                ["total", "Running total"],
-                ...(refundsShown ? [["refunds", "Refunds"] as [SalesView, string]] : []),
+                ["running", "Running total"],
+                ...(refundsShown ? [["refunds", "Returns"] as [SalesView, string]] : []),
               ]}
             />
           }

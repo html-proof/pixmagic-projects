@@ -18,6 +18,7 @@ import {
   parseKeyring,
   resolveCapabilities,
   resolvePreset,
+  saleValue,
   scopesForModule,
   signShopifyQuery,
   signWebhookBody,
@@ -25,6 +26,7 @@ import {
   summarizeJourney,
   verifyShopifyQueryHmac,
   verifyShopifyWebhookHmac,
+  type SaleInput,
 } from "../src/index.js";
 
 const SECRET = "shpss_test_secret";
@@ -271,59 +273,88 @@ describe("dates & time zones", () => {
 describe("KPIs", () => {
   const tz = "America/New_York";
   const orders = [
-    {
-      createdAt: new Date("2026-03-01T15:00:00Z"),
-      cancelledAt: null,
-      customerKey: "c1",
-      isReturningCustomer: false,
-      lineItems: [{ price: 50, quantity: 2, discount: 10 }],
-    },
-    {
-      createdAt: new Date("2026-03-01T16:00:00Z"),
-      cancelledAt: null,
-      customerKey: "c2",
-      isReturningCustomer: true,
-      lineItems: [{ price: 20, quantity: 1, discount: 0 }],
-    },
-    {
-      createdAt: new Date("2026-03-01T17:00:00Z"),
-      cancelledAt: new Date("2026-03-01T18:00:00Z"),
-      customerKey: null,
-      isReturningCustomer: false,
-      lineItems: [{ price: 999, quantity: 1, discount: 0 }],
-    },
-    {
-      // 01:00 UTC on Mar 2 is still Mar 1 in New York
-      createdAt: new Date("2026-03-02T01:00:00Z"),
-      cancelledAt: null,
-      customerKey: null,
-      isReturningCustomer: false,
-      lineItems: [{ price: 30, quantity: 1, discount: 0 }],
-    },
+    { createdAt: new Date("2026-03-01T15:00:00Z"), customerKey: "c1", isReturningCustomer: false },
+    { createdAt: new Date("2026-03-01T16:00:00Z"), customerKey: "c2", isReturningCustomer: true },
+    // Cancelled later: still an order of the day it was placed, as in Shopify's reports.
+    { createdAt: new Date("2026-03-01T17:00:00Z"), customerKey: null, isReturningCustomer: false },
+    // 01:00 UTC on Mar 2 is still Mar 1 in New York
+    { createdAt: new Date("2026-03-02T01:00:00Z"), customerKey: null, isReturningCustomer: false },
   ];
-  const refunds = [
-    { orderId: "o1", createdAt: new Date("2026-03-03T15:00:00Z"), lineSubtotal: 45 },
+  const sale = (over: Partial<SaleInput> & Pick<SaleInput, "orderId" | "happenedAt">): SaleInput => ({
+    actionType: "order",
+    lineType: "product",
+    quantity: 1,
+    amount: 0,
+    discount: 0,
+    tax: 0,
+    ...over,
+  });
+  const placed = new Date("2026-03-01T15:00:00Z");
+  const sales: SaleInput[] = [
+    // o1: two items at 50 less 10 discount, 10% tax on top, plus 5 shipping (tax 0.50).
+    sale({ orderId: "o1", happenedAt: placed, quantity: 2, amount: 99, discount: 10, tax: 9 }),
+    sale({ orderId: "o1", happenedAt: placed, lineType: "shipping", quantity: null, amount: 5.5, tax: 0.5 }),
+    // o2: a 22 item whose price includes 2 of tax (GST-style), and a gift card and a tip, which count nowhere.
+    sale({ orderId: "o2", happenedAt: new Date("2026-03-01T16:00:00Z"), amount: 22, tax: 2 }),
+    sale({ orderId: "o2", happenedAt: new Date("2026-03-01T16:00:00Z"), lineType: "gift_card", amount: 50 }),
+    sale({ orderId: "o2", happenedAt: new Date("2026-03-01T16:00:00Z"), lineType: "tip", amount: 3 }),
+    // o3: 999 sold, then cancelled the same evening (a return on the day of the cancellation).
+    sale({ orderId: "o3", happenedAt: new Date("2026-03-01T17:00:00Z"), amount: 999 }),
+    sale({ orderId: "o3", happenedAt: new Date("2026-03-01T18:00:00Z"), actionType: "return", amount: -999 }),
+    // o4: 30, late in the evening in New York.
+    sale({ orderId: "o4", happenedAt: new Date("2026-03-02T01:00:00Z"), amount: 30 }),
+    // o1 refunds one item on Mar 3 (45 + 4.50 tax). A return sent positive still counts as one.
+    sale({ orderId: "o1", happenedAt: new Date("2026-03-03T15:00:00Z"), actionType: "return", amount: 49.5, tax: 4.5 }),
   ];
 
-  it("aggregates per local day, excludes cancelled orders, books refunds on refund date", () => {
-    const daily = aggregateDaily(orders, refunds, tz, localDay);
+  it("counts orders on the day placed, cancelled ones too; sales on the day they happened", () => {
+    const daily = aggregateDaily(orders, sales, tz, localDay);
     const d1 = daily.get("2026-03-01")!;
-    expect(d1.orders).toBe(3);
-    expect(d1.grossSales).toBe(150);
-    expect(d1.discounts).toBe(10);
+    expect(d1.orders).toBe(4);
     expect(d1.ordersWithCustomer).toBe(2);
     expect(d1.returningCustomerOrders).toBe(1);
-    expect(daily.get("2026-03-03")!.refunds).toBe(45);
-    expect(daily.get("2026-03-03")!.refundedOrders).toBe(1);
+    // 100 (o1) + 20 (o2, its tax taken out) + 999 (o3) + 30 (o4)
+    expect(d1.grossSales).toBeCloseTo(1149, 6);
+    expect(d1.discounts).toBe(10);
+    // The cancellation is a return the same day.
+    expect(d1.refunds).toBe(999);
+    expect(d1.shipping).toBe(5);
+    expect(d1.taxes).toBeCloseTo(11.5, 6);
+    // Net 140 + shipping 5 + taxes 11.50; the gift card and the tip are in neither.
+    expect(d1.totalSales).toBeCloseTo(156.5, 6);
+    expect(d1.units).toBe(5 - 1);
+    expect(d1.refundedOrders).toBe(1);
+
+    const d3 = daily.get("2026-03-03")!;
+    expect(d3.orders).toBe(0);
+    expect(d3.refunds).toBe(45);
+    expect(d3.taxes).toBe(-4.5);
+    expect(d3.totalSales).toBe(-49.5);
+    expect(d3.units).toBe(-1);
+    expect(d3.refundedOrders).toBe(1);
   });
 
   it("summarizes with documented formulas", () => {
-    const s = summarize([...aggregateDaily(orders, refunds, tz, localDay).values()]);
-    expect(s.grossSales).toBe(150);
-    expect(s.netSales).toBe(150 - 10 - 45);
-    expect(s.averageOrderValue).toBe(46.67);
-    expect(s.refundRate).toBeCloseTo(45 / 140);
+    const s = summarize([...aggregateDaily(orders, sales, tz, localDay).values()]);
+    expect(s.grossSales).toBe(1149);
+    expect(s.discounts).toBe(10);
+    expect(s.refunds).toBe(1044);
+    expect(s.netSales).toBe(1149 - 10 - 1044);
+    expect(s.shipping).toBe(5);
+    expect(s.taxes).toBe(7);
+    expect(s.totalSales).toBe(95 + 5 + 7);
+    // (gross − discounts) ÷ orders, before returns, as Shopify's average order value.
+    expect(s.averageOrderValue).toBe(284.75);
+    expect(s.refundRate).toBeCloseTo(1044 / 1139);
     expect(s.returningCustomerRate).toBe(0.5);
+  });
+
+  it("values a sale before tax, and never a return as money in", () => {
+    expect(saleValue({ actionType: "order", amount: 110, tax: 10 })).toEqual({ value: 100, tax: 10 });
+    expect(saleValue({ actionType: "return", amount: -110, tax: -10 })).toEqual({ value: -100, tax: -10 });
+    expect(saleValue({ actionType: "return", amount: 110, tax: 10 })).toEqual({ value: -100, tax: -10 });
+    // An edit can go either way.
+    expect(saleValue({ actionType: "update", amount: -5, tax: 0 })).toEqual({ value: -5, tax: 0 });
   });
 
   it("returns null ratios for empty data instead of fake zeros", () => {

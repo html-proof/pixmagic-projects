@@ -10,13 +10,13 @@ import {
   normalizeRestProductVariants,
   normalizeRestVariant,
   ORDER_LINE_ITEMS_QUERY,
-  ORDER_NESTED,
-  ORDER_REFUNDS_QUERY,
+  ORDER_SALES_QUERY,
   ordersQuery,
   PAGE_SIZE,
   PRODUCTS_QUERY,
-  REFUND_LINE_ITEMS_QUERY,
   restFulfillmentStatus,
+  restProvisionalSales,
+  restSalesKey,
   VARIANTS_QUERY,
 } from "../src/index.js";
 import { requestedCost } from "./queryCost.js";
@@ -55,20 +55,52 @@ const gqlOrder = (over: Record<string, unknown> = {}) => ({
       },
     ],
   },
-  refunds: [],
+  agreements: {
+    pageInfo: { hasNextPage: false },
+    nodes: [
+      {
+        id: "gid://shopify/SalesAgreement/1",
+        happenedAt: "2026-01-01T00:00:00Z",
+        sales: {
+          pageInfo: { hasNextPage: false },
+          nodes: [
+            {
+              id: "gid://shopify/Sale/11",
+              actionType: "ORDER",
+              lineType: "PRODUCT",
+              quantity: 1,
+              totalAmount: m("10.0"),
+              totalDiscountAmountBeforeTaxes: m("1.0"),
+              totalTaxAmount: m("1.0"),
+              lineItem: { id: "gid://shopify/LineItem/7" },
+            },
+            {
+              id: "gid://shopify/Sale/12",
+              actionType: "ORDER",
+              lineType: "SHIPPING",
+              quantity: null,
+              totalAmount: m("2.0"),
+              totalDiscountAmountBeforeTaxes: m("0"),
+              totalTaxAmount: m("0"),
+            },
+          ],
+        },
+      },
+    ],
+  },
   ...over,
 });
 
 describe("query cost (Shopify rejects requested cost > 1000)", () => {
-  it("orders page: 127 per order with customer, 126 without; default page size 7", () => {
-    expect(PAGE_SIZE.orders).toBe(7);
-    // The customer's journey (where they came from) is 3 of those points.
-    expect(requestedCost(ordersQuery(true), { first: 1 })).toBe(3 + 127);
-    expect(requestedCost(ordersQuery(false), { first: 1 })).toBe(3 + 126);
-    expect(requestedCost(ordersQuery(true), { first: PAGE_SIZE.orders })).toBe(892);
-    expect(requestedCost(ordersQuery(false), { first: PAGE_SIZE.orders })).toBe(885);
-    // 8 is rejected.
-    expect(requestedCost(ordersQuery(true), { first: 8 })).toBeGreaterThan(MAX_COST);
+  it("orders page: 161 per order with customer, 160 without; default page size 5", () => {
+    expect(PAGE_SIZE.orders).toBe(5);
+    // The customer's journey (where they came from) is 3 of those points, the sales 107.
+    expect(requestedCost(ordersQuery(true), { first: 1 })).toBe(3 + 161);
+    expect(requestedCost(ordersQuery(false), { first: 1 })).toBe(3 + 160);
+    expect(requestedCost(ordersQuery(true), { first: PAGE_SIZE.orders })).toBe(808);
+    expect(requestedCost(ordersQuery(false), { first: PAGE_SIZE.orders })).toBe(803);
+    // 7 is rejected.
+    expect(requestedCost(ordersQuery(true), { first: 7 })).toBeGreaterThan(MAX_COST);
   });
 
   /**
@@ -79,13 +111,12 @@ describe("query cost (Shopify rejects requested cost > 1000)", () => {
    */
   it("walks orders newest-first, at no cost", () => {
     expect(ordersQuery(false)).toContain("reverse: true");
-    expect(requestedCost(ordersQuery(false), { first: PAGE_SIZE.orders })).toBe(885);
+    expect(requestedCost(ordersQuery(false), { first: PAGE_SIZE.orders })).toBe(803);
   });
 
   it("per-order detail queries stay under the cap", () => {
     expect(requestedCost(ORDER_LINE_ITEMS_QUERY)).toBe(704);
-    expect(requestedCost(ORDER_REFUNDS_QUERY)).toBe(791);
-    expect(requestedCost(REFUND_LINE_ITEMS_QUERY)).toBe(304);
+    expect(requestedCost(ORDER_SALES_QUERY)).toBe(808);
   });
 
   it("products and variants pages", () => {
@@ -119,9 +150,10 @@ describe("bulk orders query (Shopify's bulk operation rules)", () => {
   it("nests no connection inside a list field, and none deeper than two", () => {
     for (const q of [bulkOrdersQuery(true, null), bulkOrdersQuery(false, "created_at:>='2026-08-17T00:00:00.000Z'")]) {
       // Shopify turned the export away on every store while `refunds` (a list) carried the
-      // `refundLineItems` connection; the ingest completes refunds with ORDER_REFUNDS_QUERY.
-      expect(connections(q)).toEqual(["orders", "orders.lineItems"]);
-      expect(q).toMatch(/refunds \{ id createdAt \}/);
+      // `refundLineItems` connection. The sales records nest connections instead: an order's
+      // agreements, each agreement's sales (two levels below orders, the most Shopify allows).
+      expect(connections(q)).toEqual(["orders", "orders.lineItems", "orders.agreements", "orders.agreements.sales"]);
+      expect(q).not.toMatch(/\brefunds\b/);
       expect(q).not.toMatch(/\b(first|after):/);
     }
   });
@@ -185,17 +217,95 @@ describe("order normalizers: channel, fulfillment, discount codes, variants", ()
 });
 
 describe("order overflow detection", () => {
-  it("flags truncated line items, refund lines and a full refunds list", () => {
-    expect(graphqlOrderOverflow(gqlOrder())).toEqual({ lineItems: false, refunds: false });
+  it("flags truncated line items, more agreements than fit, and an agreement with more sales", () => {
+    expect(graphqlOrderOverflow(gqlOrder())).toEqual({ lineItems: false, sales: false });
     expect(graphqlOrderOverflow(gqlOrder({ lineItems: { pageInfo: { hasNextPage: true }, nodes: [] } })).lineItems).toBe(true);
-    const refund = (more: boolean) => ({ id: "gid://shopify/Refund/1", createdAt: "2026-01-02T00:00:00Z", refundLineItems: { pageInfo: { hasNextPage: more }, nodes: [] } });
-    expect(graphqlOrderOverflow(gqlOrder({ refunds: [refund(false)] })).refunds).toBe(false);
-    expect(graphqlOrderOverflow(gqlOrder({ refunds: [refund(true)] })).refunds).toBe(true);
-    expect(graphqlOrderOverflow(gqlOrder({ refunds: Array.from({ length: ORDER_NESTED.refunds }, () => refund(false)) })).refunds).toBe(true);
-    // A refund without its line items (the bulk export can't ask for them) still needs them.
-    expect(graphqlOrderOverflow(gqlOrder({ refunds: [{ id: "gid://shopify/Refund/1", createdAt: "2026-01-02T00:00:00Z" }] })).refunds).toBe(true);
-    // Fixtures without pageInfo (older shape) never overflow.
-    expect(graphqlOrderOverflow({ lineItems: { nodes: [] }, refunds: [] })).toEqual({ lineItems: false, refunds: false });
+    const agreement = (more: boolean) => ({ id: "gid://shopify/SalesAgreement/1", happenedAt: "2026-01-02T00:00:00Z", sales: { pageInfo: { hasNextPage: more }, nodes: [] } });
+    expect(graphqlOrderOverflow(gqlOrder({ agreements: { pageInfo: { hasNextPage: false }, nodes: [agreement(false)] } })).sales).toBe(false);
+    expect(graphqlOrderOverflow(gqlOrder({ agreements: { pageInfo: { hasNextPage: false }, nodes: [agreement(true)] } })).sales).toBe(true);
+    expect(graphqlOrderOverflow(gqlOrder({ agreements: { pageInfo: { hasNextPage: true }, nodes: [agreement(false)] } })).sales).toBe(true);
+    // Fixtures without pageInfo never overflow.
+    expect(graphqlOrderOverflow({ lineItems: { nodes: [] }, agreements: { nodes: [] } })).toEqual({ lineItems: false, sales: false });
+  });
+});
+
+describe("Shopify's sales records", () => {
+  it("are read from the order's agreements, each sale dated by its agreement", () => {
+    const g = normalizeGraphqlOrder(gqlOrder({ test: false }));
+    expect(g.test).toBe(false);
+    expect(g.sales).toEqual([
+      {
+        shopifyId: "11",
+        happenedAt: new Date("2026-01-01T00:00:00Z"),
+        actionType: "order",
+        lineType: "product",
+        lineItemShopifyId: "7",
+        quantity: 1,
+        amount: 10,
+        discount: 1,
+        tax: 1,
+      },
+      {
+        shopifyId: "12",
+        happenedAt: new Date("2026-01-01T00:00:00Z"),
+        actionType: "order",
+        lineType: "shipping",
+        lineItemShopifyId: null,
+        quantity: null,
+        amount: 2,
+        discount: 0,
+        tax: 0,
+      },
+    ]);
+    // A query that didn't ask for them says nothing about them: the stored ones are kept.
+    expect(normalizeGraphqlOrder(gqlOrder({ agreements: undefined })).sales).toBeNull();
+    expect(normalizeGraphqlOrder(gqlOrder({ test: true })).test).toBe(true);
+  });
+
+  it("REST orders carry none, but a provisional estimate of the order as placed", () => {
+    const rest = {
+      id: 9,
+      created_at: "2026-03-01T00:00:00Z",
+      taxes_included: true,
+      line_items: [
+        { id: 1, title: "Tee", quantity: 2, price: "55.00", total_discount: "11.00", tax_lines: [{ price: "9.00" }] },
+        { id: 2, title: "Card", quantity: 1, price: "50.00", gift_card: true },
+      ],
+      shipping_lines: [{ id: 3, price: "10.00", discounted_price: "8.00", tax_lines: [{ price: "0.73" }] }],
+    };
+    const n = normalizeRestOrder(rest);
+    expect(n.sales).toBeNull();
+    expect(n.test).toBe(false);
+    expect(n.provisionalSales).toEqual(restProvisionalSales(rest));
+    expect(n.provisionalSales).toMatchObject([
+      // Prices include tax: the amount is what the customer paid for the line, tax and all.
+      { lineType: "product", lineItemShopifyId: "1", quantity: 2, amount: 99, discount: 11, tax: 9 },
+      { lineType: "gift_card", amount: 50 },
+      { lineType: "shipping", amount: 8, discount: 2, tax: 0.73 },
+    ]);
+    // Tax on top of the prices is added to the amount.
+    expect(restProvisionalSales({ ...rest, taxes_included: false })[0]).toMatchObject({ amount: 108 });
+    // A cancelled order has nothing to estimate.
+    expect(restProvisionalSales({ ...rest, cancelled_at: "2026-03-02T00:00:00Z" })).toEqual([]);
+    expect(normalizeRestOrder({ ...rest, test: true }).test).toBe(true);
+  });
+
+  it("a REST payload's money state changes with every sale, return, cancellation and edit, and nothing else", () => {
+    const base = {
+      id: 9,
+      created_at: "2026-03-01T00:00:00Z",
+      total_price: "100.00",
+      current_total_price: "100.00",
+      line_items: [{ id: 1, quantity: 2, current_quantity: 2, price: "50" }],
+      refunds: [],
+    };
+    const key = restSalesKey(base);
+    expect(restSalesKey({ ...base, financial_status: "paid", fulfillment_status: "fulfilled", updated_at: "2026-03-02T00:00:00Z" })).toBe(key);
+    expect(restSalesKey({ ...base, total_price: "100" })).toBe(key);
+    expect(restSalesKey({ ...base, current_total_price: "50.00" })).not.toBe(key);
+    expect(restSalesKey({ ...base, refunds: [{ id: 5, created_at: "2026-03-02T00:00:00Z" }] })).not.toBe(key);
+    expect(restSalesKey({ ...base, cancelled_at: "2026-03-02T00:00:00Z" })).not.toBe(key);
+    expect(restSalesKey({ ...base, line_items: [{ id: 1, quantity: 2, current_quantity: 1, price: "50" }] })).not.toBe(key);
   });
 });
 

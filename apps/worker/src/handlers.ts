@@ -17,10 +17,9 @@ import {
   normalizeRestOrder,
   normalizeRestProduct,
   normalizeRestProductVariants,
-  normalizeRestRefund,
-  ORDER_DETAIL,
+  normalizeGraphqlSales,
   ORDER_LINE_ITEMS_QUERY,
-  ORDER_REFUNDS_QUERY,
+  ORDER_SALES_QUERY,
   ordersQuery,
   PAGE_SIZE,
   parseShopify,
@@ -31,9 +30,11 @@ import {
   raiseAlert,
   recordDataRequest,
   resolveAlerts,
-  REFUND_LINE_ITEMS_QUERY,
+  replaceOrderSales,
+  storedSalesState,
   customersDataRequestSchema,
   customersRedactSchema,
+  graphqlAgreementListSchema,
   graphqlOrderSchema,
   graphqlProductSchema,
   graphqlVariantSchema,
@@ -51,7 +52,6 @@ import {
   syncBillingFromShopify,
   upsertOrder,
   upsertProduct,
-  upsertRefund,
   upsertVariant,
   VARIANTS_QUERY,
   WEB_PIXEL_CREATE,
@@ -211,10 +211,10 @@ interface Page<N> {
   nodes: N[];
 }
 /**
- * A refund as ORDER_REFUNDS_QUERY returns it. The detail queries' nodes stay unread here: they are
- * checked with the whole order (graphqlOrderSchema in completeOrder) once every page is in.
+ * An agreement as ORDER_SALES_QUERY returns it. Its sales stay unread here: they are checked with
+ * the whole order (graphqlOrderSchema in completeOrder) or the whole list (refreshOrderSales).
  */
-type RawRefund = Record<string, unknown> & { id: string; refundLineItems?: Page<unknown> | null };
+type RawAgreement = Record<string, unknown> & { sales?: Page<unknown> | null };
 
 /**
  * Fetch one page of a paginated kind with `$first` = the message's page size. When
@@ -269,51 +269,107 @@ async function fetchOrderLineItems(deps: WorkerDeps, store: Store, pace: Pace, o
 }
 
 /**
- * Refunds of one order with all of their refund line items (ORDER_REFUNDS_QUERY, then
- * REFUND_LINE_ITEMS_QUERY for refunds with more than 25 lines); null if the order is gone.
+ * All agreements of one order with all of their sales (ORDER_SALES_QUERY, an agreement at a time,
+ * a hundred sales at a time), and the order's updated_at as Shopify answered; null if the order
+ * is gone.
  */
-async function fetchOrderRefunds(deps: WorkerDeps, store: Store, pace: Pace, orderId: string): Promise<unknown[] | null> {
-  const d: { order: { refunds: RawRefund[] } | null } = await gql(deps, store, pace, ORDER_REFUNDS_QUERY, { id: orderId });
-  if (!d.order) return null;
-  if (d.order.refunds.length >= ORDER_DETAIL.refunds) {
-    // Order.refunds is a plain list (no pagination): later refunds only arrive via refunds/create webhooks.
-    logger.warn({ storeId: store.id, orderId, imported: d.order.refunds.length }, "order may have more refunds than one query returns");
-  }
-  const refunds: unknown[] = [];
-  for (const r of d.order.refunds) {
-    const items: unknown[] = [...(r.refundLineItems?.nodes ?? [])];
-    let info: Page<unknown>["pageInfo"] | undefined = r.refundLineItems?.pageInfo;
-    while (info?.hasNextPage && info.endCursor) {
-      const p: { refund: { refundLineItems: Page<unknown> } | null } = await gql(deps, store, pace, REFUND_LINE_ITEMS_QUERY, { id: r.id, cursor: info.endCursor });
-      if (!p.refund) break;
-      items.push(...p.refund.refundLineItems.nodes);
-      info = p.refund.refundLineItems.pageInfo;
+async function fetchOrderAgreements(deps: WorkerDeps, store: Store, pace: Pace, orderId: string): Promise<{ updatedAt: string; agreements: unknown[] } | null> {
+  const agreements: unknown[] = [];
+  let updatedAt: string | null = null;
+  let cursor: string | null = null;
+  for (;;) {
+    let current: RawAgreement | null = null;
+    const sales: unknown[] = [];
+    let salesCursor: string | null = null;
+    let next: Page<unknown>["pageInfo"] | null = null;
+    for (;;) {
+      const d: { order: { updatedAt: string; agreements: Page<RawAgreement> } | null } = await gql(deps, store, pace, ORDER_SALES_QUERY, {
+        id: orderId,
+        cursor,
+        salesCursor,
+      });
+      if (!d.order) return null;
+      updatedAt ??= d.order.updatedAt;
+      next = d.order.agreements.pageInfo;
+      const a = d.order.agreements.nodes[0];
+      if (!a) break;
+      current ??= a;
+      sales.push(...(a.sales?.nodes ?? []));
+      const info = a.sales?.pageInfo;
+      if (!info?.hasNextPage || !info.endCursor) break;
+      salesCursor = info.endCursor;
     }
-    refunds.push({ ...r, refundLineItems: { nodes: items } });
+    if (current) agreements.push({ ...current, sales: { nodes: sales } });
+    if (!next?.hasNextPage || !next.endCursor) return { updatedAt: updatedAt ?? new Date().toISOString(), agreements };
+    cursor = next.endCursor;
   }
-  return refunds;
 }
 
 /**
- * Orders pages carry at most 10 line items and 2 refunds (5 lines each) per order to stay
- * under Shopify's cost cap, and the bulk export carries refunds without their lines at all.
- * Re-fetch whatever was truncated so the order is complete
- * before it is stored (upsertOrder replaces line items wholesale). Null when what the detail
- * queries returned doesn't fit the schema (logged): an order missing lines must not be stored.
+ * Orders pages carry at most 5 line items and 2 agreements (6 sales each) per order to stay
+ * under Shopify's cost cap. Re-fetch whatever was truncated so the order is complete
+ * before it is stored (upsertOrder replaces line items and sales wholesale). Null when what the
+ * detail queries returned doesn't fit the schema (logged): an order missing lines must not be stored.
  */
 async function completeOrder(deps: WorkerDeps, store: Store, pace: Pace, node: GraphqlOrder): Promise<GraphqlOrder | null> {
   const over = graphqlOrderOverflow(node);
-  if (!over.lineItems && !over.refunds) return node;
+  if (!over.lineItems && !over.sales) return node;
   const full: Record<string, unknown> = { ...node };
   if (over.lineItems) {
     const nodes = await fetchOrderLineItems(deps, store, pace, node.id);
     if (nodes) full.lineItems = { nodes };
   }
-  if (over.refunds) {
-    const refunds = await fetchOrderRefunds(deps, store, pace, node.id);
-    if (refunds) full.refunds = refunds;
+  if (over.sales) {
+    const read = await fetchOrderAgreements(deps, store, pace, node.id);
+    if (read) full.agreements = { nodes: read.agreements };
   }
   return parseShopify(graphqlOrderSchema, full, "GraphQL order", { storeId: store.id });
+}
+
+/**
+ * Read an order's sales from Shopify and store them, after a webhook: REST payloads carry none.
+ * Skipped when the order isn't stored (a test order, or one not synced yet: the reconcile reads
+ * it), and when the stored sales were read for the payload's money state already (`salesKey`, see
+ * restSalesKey) unless `force`. `salesKey` undefined keeps the stored key. Returns the days to
+ * recompute.
+ */
+async function refreshOrderSales(deps: WorkerDeps, store: Store, shopifyId: string, salesKey: string | null | undefined, force = false): Promise<Set<string>> {
+  const none = new Set<string>();
+  const state = await storedSalesState(store, shopifyId);
+  if (!state) return none;
+  if (!force && state.salesUpdatedAt && salesKey && state.salesKey === salesKey) return none;
+  const read = await fetchOrderAgreements(deps, store, { pendingMs: 0 }, `gid://shopify/Order/${shopifyId}`);
+  if (!read) return none;
+  // All or nothing: storing some of an order's sales would understate it.
+  const agreements = parseShopify(graphqlAgreementListSchema, read.agreements, "GraphQL order sales", { storeId: store.id, order: shopifyId });
+  if (!agreements) return none;
+  return (await replaceOrderSales(store, shopifyId, normalizeGraphqlSales(agreements), new Date(read.updatedAt), salesKey)) ?? none;
+}
+
+/**
+ * `refreshOrderSales` for a webhook, whose own write (`written`: the days it touched) must reach
+ * the dashboard whatever happens to the read. Shopify refusing our access is not this delivery's
+ * failure: the order keeps what it has (its provisional sales) and the store's sync reports the
+ * access. Any other failure aggregates what was written and throws, for the queue to retry.
+ */
+async function readSalesAfterWebhook(
+  deps: WorkerDeps,
+  store: Store,
+  shopifyId: string,
+  salesKey: string | null | undefined,
+  written: Set<string>,
+  force = false,
+): Promise<Set<string>> {
+  try {
+    return await refreshOrderSales(deps, store, shopifyId, salesKey, force);
+  } catch (err) {
+    if (err instanceof AccessRevokedError) {
+      logger.warn({ storeId: store.id, order: shopifyId, err: err.message }, "couldn't read the order's sales from Shopify; keeping what is stored");
+      return new Set();
+    }
+    await enqueueAggregate(deps, store.id, written);
+    throw err;
+  }
 }
 
 /**
@@ -425,7 +481,6 @@ export async function runSync(data: SyncJobData, deps: WorkerDeps) {
         const r = await runBulkOrders(data, store, deps, {
           gql: (query, variables) => gql(deps, store, pace, query, variables),
           ordersSearch: () => ordersSearch(data, store.grantedScopes),
-          completeOrder: (node) => completeOrder(deps, store, pace, node),
         });
         if (!r.done) return { ok: true, continued: true };
         await finishBackfill();
@@ -592,7 +647,11 @@ export async function processWebhook(data: WebhookJobData, deps: WorkerDeps) {
         // A payload that doesn't fit is logged and skipped, not retried: a retry gets the same payload.
         const order = parseShopify(restOrderSchema, p, data.topic, logIds);
         if (!order) break;
-        const days = await upsertOrder(store, normalizeRestOrder(order));
+        const o = normalizeRestOrder(order);
+        const days = await upsertOrder(store, o);
+        // The payload has no sales: read them when its money state is new (placed, refunded,
+        // cancelled, edited), not on every paid/fulfilled/tagged delivery.
+        for (const d of await readSalesAfterWebhook(deps, store, o.shopifyId, o.salesKey, days)) days.add(d);
         await enqueueAggregate(deps, store.id, days);
         break;
       }
@@ -600,9 +659,9 @@ export async function processWebhook(data: WebhookJobData, deps: WorkerDeps) {
         if (store.status === "uninstalled") break;
         const refund = parseShopify(restRefundWebhookSchema, p, data.topic, logIds);
         if (!refund) break;
-        const days = await upsertRefund(store, String(refund.order_id), normalizeRestRefund(refund));
-        // Order not synced yet: retry later (queue backoff); reconcile also catches it.
-        if (!days) throw new Error(`Order ${refund.order_id} not found for refund ${refund.id}`);
+        // The refund's return is one of the order's sales: read them again. An order not stored
+        // (a test order, or not synced yet) is left to its orders/updated delivery and the reconcile.
+        const days = await readSalesAfterWebhook(deps, store, String(refund.order_id), undefined, new Set(), true);
         await enqueueAggregate(deps, store.id, days);
         break;
       }
@@ -855,7 +914,7 @@ export function reconcileOrderDays(lastSyncedAt: Date | null, now = Date.now()):
 }
 
 /**
- * Days in the backfill window that have orders or refunds but no daily_store_metrics row.
+ * Days in the backfill window that have orders or sales but no daily_store_metrics row.
  *
  * The dashboard's KPIs read only daily_store_metrics, and an aggregate message can still be lost.
  * A backfill's final aggregate is the only one most of its days ever get (a small store's bulk
@@ -870,7 +929,7 @@ async function unaggregatedDays(storeId: string, fromDay: string): Promise<strin
     SELECT d.day FROM (
       SELECT local_day AS day FROM orders WHERE store_id = ${storeId} AND local_day >= ${fromDay}
       UNION
-      SELECT local_day AS day FROM refunds WHERE store_id = ${storeId} AND local_day >= ${fromDay}
+      SELECT local_day AS day FROM order_sales WHERE store_id = ${storeId} AND local_day >= ${fromDay}
     ) d
     WHERE NOT EXISTS (SELECT 1 FROM daily_store_metrics m WHERE m.store_id = ${storeId} AND m.day = d.day)`;
   return rows.map((r) => r.day);

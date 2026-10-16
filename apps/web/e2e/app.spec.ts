@@ -432,14 +432,14 @@ test("dashboard shows webhook-driven metrics and only granted modules", async ({
     await page.reload();
     // Each reload has to get through /me, the store list and the overview before the tile exists;
     // on a loaded machine that chain alone took ~1.6 s, so a 1.5 s wait could never succeed.
-    await expect(page.getByTestId("metric-Net sales")).toContainText("$100.00", { timeout: 5000 });
+    await expect(page.getByTestId("metric-Total sales")).toContainText("$100.00", { timeout: 5000 });
   }).toPass({ timeout: 30_000 });
   await expect(page.getByTestId("metric-Orders")).toContainText("1");
   await expect(page.getByTestId("metric-Average order value")).toContainText("$100.00");
   await expect(page.getByRole("heading", { name: "Top products" })).toHaveCount(0);
 
   await page.getByLabel("Dates").selectOption({ label: "Last 7 days" });
-  await expect(page.getByTestId("metric-Net sales")).toContainText("$100.00");
+  await expect(page.getByTestId("metric-Total sales")).toContainText("$100.00");
 
   await page.goto("/settings/stores");
   // The store card's title (the name also appears in the store switcher and the details line).

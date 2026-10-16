@@ -45,9 +45,10 @@ export function exportTable(section: ExportSection, modules: Obj): { header: str
       return table(list(s.series), [
         ["Day", "day"],
         ["Orders", "orders"],
+        ["Total sales", "totalSales"],
         ["Net sales", "netSales"],
         ["Average order value", "averageOrderValue"],
-        ["Refunds", "refunds"],
+        ["Returns", "refunds"],
       ]);
     }
     case "products": {
