@@ -14,7 +14,7 @@ export function AuthCard({ title, subtitle, children }: { title: string; subtitl
     <main className="relative isolate flex min-h-screen items-start justify-center px-4 py-8 sm:items-center sm:py-12">
       <div aria-hidden className="auth-backdrop" />
       <div className="auth-card w-full max-w-[32rem] px-6 py-8 sm:px-12 sm:py-10">
-        <Link href="/" className="inline-flex items-center gap-2.5 rounded-md text-xl font-semibold text-text focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none">
+        <Link prefetch={false} href="/" className="inline-flex items-center gap-2.5 rounded-md text-xl font-semibold text-text focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none">
           <BrandMark />
           bizinsights
         </Link>
@@ -22,13 +22,13 @@ export function AuthCard({ title, subtitle, children }: { title: string; subtitl
         {subtitle && <p className="mt-2 text-base leading-relaxed text-muted">{subtitle}</p>}
         <div className="mt-6 space-y-6">{children}</div>
         <p className="mt-8 border-t border-border pt-6 text-center text-sm text-muted">
-          <Link className="hover:text-text hover:underline" href="/support">
+          <Link prefetch={false} className="hover:text-text hover:underline" href="/support">
             Support
           </Link>
           <span aria-hidden className="mx-2">
             ·
           </span>
-          <Link className="hover:text-text hover:underline" href="/privacy">
+          <Link prefetch={false} className="hover:text-text hover:underline" href="/privacy">
             Privacy
           </Link>
         </p>
