@@ -2,6 +2,7 @@ import { Duration, RemovalPolicy, Stack, type StackProps } from "aws-cdk-lib";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import * as cloudwatch from "aws-cdk-lib/aws-cloudwatch";
 import * as cwActions from "aws-cdk-lib/aws-cloudwatch-actions";
+import * as dlm from "aws-cdk-lib/aws-dlm";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as rds from "aws-cdk-lib/aws-rds";
@@ -215,5 +216,32 @@ export class DataStack extends Stack {
       blockDevices: [{ deviceName: "/dev/xvda", volume: ec2.BlockDeviceVolume.ebs(8, { encrypted: true, volumeType: ec2.EbsDeviceVolumeType.GP3 }) }],
       userData: ec2.UserData.custom(["#!/bin/bash", ...SWAP_FILE_COMMANDS, "dnf install -y postgresql17 jq || dnf install -y postgresql16 jq", "shutdown -h now", ""].join("\n")),
     });
+
+    // A daily snapshot of every EBS disk (the NAT instances' and the admin host's), kept 7 days
+    // (Trusted Advisor "Amazon EBS Snapshots": red with none, yellow once the newest is 7 days old).
+    // A deploy can rebuild those disks, so this is the quicker way back, at ~US$0.50-1.50/month
+    // (US$0.055/GB-month of used blocks, then only the changes). Data Lifecycle Manager's default
+    // policy covers every volume in the Region without a recent snapshot, so the disk of a replaced
+    // instance is covered without tags. One is allowed per Region: production's covers staging's
+    // disks too. ExtendDeletion: a replaced disk's snapshots expire as well, the last one included
+    // (without it each new Amazon Linux image would leave one snapshot per instance for good).
+    if (cfg.name === "production") {
+      const snapshotRole = new iam.Role(this, "SnapshotRole", {
+        roleName: `${prefix}-ebs-snapshots`,
+        assumedBy: new iam.ServicePrincipal("dlm.amazonaws.com"),
+        managedPolicies: [iam.ManagedPolicy.fromAwsManagedPolicyName("service-role/AWSDataLifecycleManagerServiceRole")],
+      });
+      new dlm.CfnLifecyclePolicy(this, "EbsSnapshots", {
+        // DLM accepts only letters, digits, spaces, _ and - here.
+        description: "Daily snapshot of every EBS volume without a recent one kept 7 days",
+        defaultPolicy: "VOLUME",
+        state: "ENABLED",
+        executionRoleArn: snapshotRole.roleArn,
+        createInterval: 1,
+        retainInterval: 7,
+        copyTags: true,
+        extendDeletion: true,
+      });
+    }
   }
 }

@@ -497,8 +497,9 @@ The owner's ceiling is **US$100-120 a month** (2026-10-17). Prices from the AWS 
 | CloudWatch alarms (~25 × $0.10), dashboard, logs | ~5-8 |
 | GuardDuty (free for the first 30 days) | ~1-4 |
 | Secrets Manager (3 × $0.40), KMS key for Cognito's emails, admin host's disk (stopped) | ~3 |
+| EBS snapshots of the three instance disks, daily, kept 7 days ($0.055/GB of used blocks) | ~0.5-1.5 |
 | Lambda, SQS, DynamoDB, S3, CloudFront, Cognito, Scheduler at today's traffic (free tiers) | ~0-5 |
-| **Total** | **~80-91** (~88-100 with GST) |
+| **Total** | **~81-92** (~89-101 with GST) |
 
 Biggest lever: the database size (`dbInstanceType`). db.t4g.small Multi-AZ is ~US$37 more (~117-128):
 move to it when the database alarms say so (`db-free-memory` below 100 MB, `db-connections` above
@@ -534,6 +535,21 @@ State on 2026-10-17 06:45Z (main 7379a95): RDS db.t4g.micro Multi-AZ (2a + stand
 once; the two NAT checks can't be refreshed on demand (`UNREFRESHABLE_CHECK_ID_ERROR`), so they keep
 their 2026-10-16 result until AWS re-runs them on its own schedule. Measured cost of the switch: the
 class change was one failover, `/api/readyz` answered 503 for under a minute.
+
+Reading a stale "NAT Gateway AZ Independence" export (check `c1dfptbg10`): it names
+`nat-04330c606ef5bce9a` and its Last Updated Time is 2026-10-16. That gateway no longer exists:
+`aws ec2 describe-nat-gateways` returns nothing, and `describe-route-tables` shows appSubnet1 (2a)
+routing `0.0.0.0/0` to nat-a and appSubnet2 (2b) to nat-b. With no NAT gateway left, the check has
+nothing to flag the next time AWS runs it.
+
+**Instance disks** (Trusted Advisor "Amazon EBS Snapshots", check `H7IgTzjTYb`, red on 2026-10-17
+for the NAT instances' and the admin host's disks): Data Lifecycle Manager's default policy
+(`EbsSnapshots` in data-stack.ts, production only, since one is allowed per Region) snapshots every
+volume in the Region that has no recent snapshot, daily, and keeps each 7 days. Snapshots of a
+replaced instance's disk expire too (`ExtendDeletion`). The disks hold nothing a deploy can't
+rebuild, so restoring one is only the quicker way back. To check:
+`aws ec2 describe-snapshots --owner-ids self --filters Name=tag-key,Values=aws:dlm:lifecycle-policy-id`
+(the first ones arrive within a day of the deploy).
 
 What production does have, at no extra cost:
 - Functions in two AZs; queues with retries, backoff, a dead-letter queue (`insights-production-dlq`)
