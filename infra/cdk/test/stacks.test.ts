@@ -46,7 +46,7 @@ describe("the data stack", () => {
       DeletionProtection: true,
       BackupRetentionPeriod: 14,
       MultiAZ: true,
-      DBInstanceClass: "db.t4g.small",
+      DBInstanceClass: "db.t4g.micro",
       Engine: "postgres",
     });
     t.data.hasResource("AWS::RDS::DBInstance", { DeletionPolicy: "Snapshot" });
@@ -172,6 +172,8 @@ describe("the app stack", () => {
       SnsTopicArn: { Ref: Match.stringLikeRegexp("^Alarms") },
       EventCategories: Match.arrayWith(["availability", "failure", "low storage"]),
     });
+    // Sized for the instance class: 75% of a t4g.micro's ~80 connections.
+    t.app.hasResourceProperties("AWS::CloudWatch::Alarm", { AlarmName: "insights-production-db-connections", Threshold: 60 });
     t.app.hasResourceProperties("AWS::SNS::TopicPolicy", {
       PolicyDocument: { Statement: [Match.objectLike({ Action: "sns:Publish", Principal: { Service: ["cloudwatch.amazonaws.com", "events.rds.amazonaws.com"] } })] },
     });

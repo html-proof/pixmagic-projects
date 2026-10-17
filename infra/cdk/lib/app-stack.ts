@@ -23,6 +23,13 @@ import * as subs from "aws-cdk-lib/aws-sns-subscriptions";
 import * as sqs from "aws-cdk-lib/aws-sqs";
 import type { Construct } from "constructs";
 import { appVars, FUNCTION_DIR, REPO_ROOT, type EnvConfig } from "./config.js";
+
+/** Per RDS class: its connection limit (approximate) and the free memory that means "too small". */
+const DB_SIZES: Record<string, { connections: number; lowMemoryMb: number }> = {
+  "t4g.micro": { connections: 80, lowMemoryMb: 100 },
+  "t4g.small": { connections: 200, lowMemoryMb: 150 },
+  "t4g.medium": { connections: 400, lowMemoryMb: 300 },
+};
 import type { DataStack } from "./data-stack.js";
 import { viewerRequestCode } from "./viewer-request.js";
 
@@ -324,8 +331,10 @@ export class AppStack extends Stack {
       new cloudwatch.Metric({ namespace: "AWS/RDS", metricName, dimensionsMap: { DBInstanceIdentifier: data.db.instanceIdentifier }, period: five, statistic });
     alarm("db-cpu", dbMetric("CPUUtilization"), 80, "Database CPU above 80% for 15 minutes", 3);
     alarm("db-free-storage", dbMetric("FreeStorageSpace", "Minimum"), 2 * 1024 ** 3, "Database free storage below 2 GB (storage autoscaling should add more)", 1, cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD);
-    alarm("db-free-memory", dbMetric("FreeableMemory", "Minimum"), 150 * 1024 ** 2, "Database freeable memory below 150 MB", 3, cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD);
-    alarm("db-connections", dbMetric("DatabaseConnections", "Maximum"), 150, "Database connections above 150 (limit ~200 on t4g.small)", 2);
+    // PostgreSQL's default max_connections is about the instance's memory / 9.5 MB.
+    const dbSize = DB_SIZES[cfg.dbInstanceType] ?? DB_SIZES["t4g.small"]!;
+    alarm("db-free-memory", dbMetric("FreeableMemory", "Minimum"), dbSize.lowMemoryMb * 1024 ** 2, `Database freeable memory below ${dbSize.lowMemoryMb} MB: time for a bigger dbInstanceType`, 3, cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD);
+    alarm("db-connections", dbMetric("DatabaseConnections", "Maximum"), Math.round(dbSize.connections * 0.75), `Database connections above 75% of the ~${dbSize.connections} limit on ${cfg.dbInstanceType}`, 2);
     alarm("cron-missed-ticks", missedTicks.metricApproximateNumberOfMessagesVisible({ period: five, statistic: "Maximum" }), 1, "A scheduled run never ran (Scheduler couldn't invoke the cron function, or Lambda gave up on it): the message says which");
     // The NAT instances' alarms (recover, reboot, busy) are in the data stack, beside them.
 

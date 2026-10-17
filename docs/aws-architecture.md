@@ -148,7 +148,7 @@ EventBridge Scheduler invokes the `scheduled` function at `cron(0/15 * * * ? *)`
   `app_rls` (tenant reads under RLS); passwords rotate through Secrets Manager. Each function
   instance keeps one small pool per role, and Lambda
   concurrency is capped per function (reserved concurrency) so the total stays under the database's
-  connection limit (about 200 on db.t4g.small).
+  connection limit (about 80 on db.t4g.micro, 200 on db.t4g.small).
 - **RDS Proxy**, added when concurrency outgrows those caps: tenant queries run
   `set_config('app.workspace_id', …, true)` inside each transaction, and RDS Proxy *pins* a connection
   on `set_config`, which would undo its pooling. The setting is transaction-local, the case AWS

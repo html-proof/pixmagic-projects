@@ -17,7 +17,7 @@ Account `605411278365`, region `ap-southeast-2` (Sydney); the WAF web ACL lives 
 | UI build files | `/_next/static/*` from S3 `insights-production-site-605411278365` (CloudFront OAC, uploaded by `cdk deploy`, old builds kept) | `infra/cdk/lib/app-stack.ts` |
 | Background jobs | SQS `insights-production-{sync,webhooks,aggregate,email}` + `-dlq` → Lambda `insights-production-jobs` | `apps/aws/src/consumer.ts`, `sqsQueues.ts` |
 | Schedules | EventBridge Scheduler `*/15` and `03:15 UTC` → Lambda `insights-production-cron` (**off until cutover**) | `runScheduled()` in `apps/worker` |
-| Database | RDS PostgreSQL 17 `insights-production` (db.t4g.small, Multi-AZ: standby in the other AZ, private, encrypted, 14-day PITR) | `infra/cdk/lib/data-stack.ts` |
+| Database | RDS PostgreSQL 17 `insights-production` (db.t4g.micro, Multi-AZ: standby in the other AZ, private, encrypted, 14-day PITR) | `infra/cdk/lib/data-stack.ts` |
 | Way out to the internet | EC2 NAT instances `insights-production-nat-a` / `-b` (t4g.nano, one per AZ, Systems Manager only) | `infra/cdk/lib/nat-instances.ts` |
 | Coordinator | DynamoDB `insights-production-coord` | `apps/aws/src/dynamoCoord.ts` |
 | Large webhook bodies | S3 `insights-production-payloads-605411278365` (7-day lifecycle) | `apps/aws/src/s3Blobs.ts` |
@@ -491,16 +491,18 @@ The owner's ceiling is **US$100-120 a month** (2026-10-17). Prices from the AWS 
 
 | Item | US$/month |
 | --- | --- |
-| RDS db.t4g.small Multi-AZ $0.102/hour + 20 GB gp3 Multi-AZ $0.276/GB | ~80 |
+| RDS db.t4g.micro Multi-AZ $0.051/hour + 20 GB gp3 Multi-AZ $0.276/GB | ~43 |
 | Two NAT instances: t4g.nano $0.0053/hour + 8 GB gp3 + public IPv4 $0.005/hour, each ~8.3 | ~17 |
 | WAF (web ACL + 5 rules + requests) | ~10-11 |
 | CloudWatch alarms (~25 × $0.10), dashboard, logs | ~5-8 |
 | GuardDuty (free for the first 30 days) | ~1-4 |
 | Secrets Manager (3 × $0.40), KMS key for Cognito's emails, admin host's disk (stopped) | ~3 |
 | Lambda, SQS, DynamoDB, S3, CloudFront, Cognito, Scheduler at today's traffic (free tiers) | ~0-5 |
-| **Total** | **~117-128** (+GST) |
+| **Total** | **~80-91** (~88-100 with GST) |
 
-Biggest lever: the database size (`dbInstanceType`). NAT instances replaced the NAT gateway
+Biggest lever: the database size (`dbInstanceType`). db.t4g.small Multi-AZ is ~US$37 more (~117-128):
+move to it when the database alarms say so (`db-free-memory` below 100 MB, `db-connections` above
+60 of ~80, `db-cpu`). NAT instances replaced the NAT gateway
 ($0.059/hour + $0.059/GB, ~47 with its address) in 2026-10-17: two of them cost a third of one
 gateway. Budget alarm at US$120 (80% actual, 100% forecast, once an alert email is set). Cost
 allocation tags `app` and `environment` can be activated in Billing once AWS has seen them.
