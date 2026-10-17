@@ -1,6 +1,7 @@
 import { toNumber, type Tx } from "@app/db";
-import { eachDay, type DailyMetricsRow, type DateRange } from "@app/shared";
-import { r2, SALE_VALUE, type Scope } from "./common.js";
+import { addDays, eachDay, type Comparison, type DailyMetricsRow, type DateRange } from "@app/shared";
+import { dayTotals } from "../persist.js";
+import { localMoment, r2, SALE_VALUE, type Scope } from "./common.js";
 
 export async function dailyRows(tx: Tx, workspaceId: string, storeId: string, r: DateRange): Promise<DailyMetricsRow[]> {
   const rows = await tx.dailyStoreMetrics.findMany({
@@ -21,6 +22,40 @@ export async function dailyRows(tx: Tx, workspaceId: string, storeId: string, r:
     returningCustomerOrders: x.returningCustomerOrders,
     refundedOrders: x.refundedOrders,
   }));
+}
+
+/**
+ * The day rows of the period a range is compared with. A comparison that stops at a time of day
+ * (`until`: the range picked is still running) has its last day worked out from the orders and
+ * sales placed before that moment, by the same query that fills daily_store_metrics, whose rows
+ * only ever hold whole days.
+ */
+export async function comparisonRows(tx: Tx, workspaceId: string, storeId: string, c: Comparison, timeZone: string): Promise<DailyMetricsRow[]> {
+  if (!c.until) return dailyRows(tx, workspaceId, storeId, c);
+  const whole = c.from < c.to ? await dailyRows(tx, workspaceId, storeId, { from: c.from, to: addDays(c.to, -1) }) : [];
+  type Column = "gross_sales" | "discounts" | "refunds" | "shipping" | "taxes" | "total_sales" | "orders" | "units" | "orders_with_customer" | "returning_customer_orders" | "refunded_orders";
+  const part = await tx.$queryRaw<Array<Record<Column | "day", string>>>`
+    ${dayTotals({ id: storeId, workspaceId }, [c.to], localMoment(c.to, c.until, timeZone))}
+    SELECT day, gross_sales::text, discounts::text, refunds::text, shipping::text, taxes::text, total_sales::text,
+           orders::text, units::text, orders_with_customer::text, returning_customer_orders::text, refunded_orders::text
+    FROM t`;
+  return [
+    ...whole,
+    ...part.map((x) => ({
+      day: x.day,
+      grossSales: Number(x.gross_sales),
+      discounts: Number(x.discounts),
+      refunds: Number(x.refunds),
+      shipping: Number(x.shipping),
+      taxes: Number(x.taxes),
+      totalSales: Number(x.total_sales),
+      orders: Number(x.orders),
+      units: Number(x.units),
+      ordersWithCustomer: Number(x.orders_with_customer),
+      returningCustomerOrders: Number(x.returning_customer_orders),
+      refundedOrders: Number(x.refunded_orders),
+    })),
+  ];
 }
 
 /**

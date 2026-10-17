@@ -26,7 +26,7 @@ const TERMS: Record<Topic, Terms> = {
     ["Keep an eye on", "Down a little (less than 10%), refunds between 5% and 10% of sales, something running low, or orders waiting to ship."],
     ["Looks good", "Up or level on the period before, refunds at 5% of sales or less, nothing low or sold out, nothing waiting to ship."],
     ["For your info", "Facts with no good or bad, like your best seller, or numbers with nothing earlier to compare with."],
-    ["The period before", "The same number of days just before the dates you picked. Last 30 days is compared with the 30 days before that."],
+    ["The period before", "The same number of days just before the dates you picked. Last 30 days is compared with the 30 days before that. While the dates include today, the period before is counted up to the same time of day, as Shopify does: today until 4 pm against yesterday until 4 pm."],
   ],
   sales: [
     ["Same as Shopify", "Every sales figure here is worked out from Shopify's own sales records, the way Shopify's reports do, so the same dates show the same numbers in both. Test orders aren't counted."],
@@ -39,7 +39,7 @@ const TERMS: Record<Topic, Terms> = {
     ["Average order value", "Sales after discounts divided by the number of orders: what a typical order is worth."],
     ["Items sold", "Items sold less items returned. Two mugs in one order count as two."],
     ["Shipping and taxes", "Collected on top of your prices and passed on or spent on postage: part of total sales, not of net sales."],
-    ["▲ ▼ and the period before", "Each number is compared with the same number of days just before. ▲ is up, ▼ is down, and “—” means there was nothing to compare with."],
+    ["▲ ▼ and the period before", "Each number is compared with the same number of days just before; while the dates include today, only up to the same time of day, so a day still running isn't measured against a whole one. ▲ is up, ▼ is down, and “—” means there was nothing to compare with."],
     ["Day-by-day bars", "One bar per day. Darker bars are your stronger days: about 1.5 and 2 times your average day. The orange line underneath adds the days up as you go."],
     ["Month-by-month bars", "One bar per month this year. The change above each compares it with the month before; this month is compared with the same days of last month."],
     ["Not imported", "Shopify shares only the last 60 days of orders with most apps, so earlier days are marked instead of shown as $0."],

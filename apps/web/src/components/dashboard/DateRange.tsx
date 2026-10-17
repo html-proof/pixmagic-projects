@@ -1,8 +1,8 @@
 "use client";
 import { useEffect, useState } from "react";
 import { CalendarDays, ChevronDown } from "lucide-react";
-import { customRangeProblem, isDay, localDay, MIN_CUSTOM_DAY, type CustomRangeProblem, type DateRange } from "@app/shared/dates";
-import { fmtDay, fmtRange, fmtSpan } from "./format";
+import { customRangeProblem, daysBetweenInclusive, isDay, localDay, MIN_CUSTOM_DAY, type Comparison, type CustomRangeProblem, type DateRange } from "@app/shared/dates";
+import { fmtClock, fmtDay, fmtRange, fmtSpan } from "./format";
 
 export const PRESETS = [
   { id: "today", label: "Today" },
@@ -127,10 +127,28 @@ export function useDateRange(timeZone: string) {
 export type DateRangeState = ReturnType<typeof useDateRange>;
 
 /** What the numbers on the page are for, once they have loaded. */
-export type Shown = { range: DateRange; previous: DateRange; timezone: string } | null;
+export type Shown = { range: DateRange; previous: Comparison; timezone: string } | null;
 
-/** "Compared with 18 Aug – 16 Sep" for a tooltip, once the numbers have loaded. */
-export const comparedWith = (shown: Shown) => (shown ? `Compared with ${fmtSpan(shown.previous.from, shown.previous.to)}` : undefined);
+/**
+ * "Compared with 18 Aug – 16 Sep" for a tooltip, once the numbers have loaded; "Compared with
+ * 16 Oct until 4:44 pm, the same time of day" while the dates picked are still running.
+ */
+export const comparedWith = (shown: Shown) =>
+  shown
+    ? `Compared with ${fmtSpan(shown.previous.from, shown.previous.to)}${shown.previous.until ? ` until ${fmtClock(shown.previous.until)}, the same time of day` : ""}`
+    : undefined;
+
+/**
+ * What a change is on, short enough for under a headline number: "vs same time yesterday",
+ * "vs previous 30 days". Last month is compared with the whole month before it, whatever its length.
+ */
+export function versusWords(shown: Shown): string {
+  if (!shown) return "vs previous period";
+  const days = daysBetweenInclusive(shown.range.from, shown.range.to);
+  if (days === 1) return shown.previous.until ? "vs same time yesterday" : "vs the day before";
+  if (daysBetweenInclusive(shown.previous.from, shown.previous.to) !== days) return "vs the month before";
+  return `vs previous ${days} days`;
+}
 
 /**
  * The dates menu: a pill naming the dates, with the native select laid over it, so it opens the

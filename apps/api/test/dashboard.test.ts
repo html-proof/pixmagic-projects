@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { recomputeDays } from "@app/core";
-import { systemDb } from "@app/db";
-import { addDays, localDay } from "@app/shared";
-import { syncProblem } from "@app/core/reports";
+import { systemDb, withTenant } from "@app/db";
+import { addDays, localDay, resolvePreset } from "@app/shared";
+import { storeOverview, syncProblem } from "@app/core/reports";
 import { clean, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
 
 let ctx: TestCtx;
@@ -304,8 +304,55 @@ describe("date ranges", () => {
     expect(res.statusCode).toBe(200);
     const { range, previous, modules } = res.json();
     expect(range).toEqual({ from: addDays(today, -2), to: today });
-    expect(previous).toEqual({ from: addDays(today, -5), to: addDays(today, -3) });
+    // Today is still running: the period before stops at this time of day on its last day.
+    expect(previous).toEqual({ from: addDays(today, -5), to: addDays(today, -3), until: expect.stringMatching(/^\d{2}:\d{2}:\d{2}$/) });
     expect(modules.sales_overview.series.map((x: { day: string }) => x.day)).toEqual([addDays(today, -2), addDays(today, -1), today]);
+  });
+
+  it("compares a day that isn't over with the day before up to the same time of day, as Shopify does", async () => {
+    const a = await signIn(ctx, "ua", "a@x.com");
+    const ws = await createWorkspace(ctx, a.headers, "A");
+    const store = await createStore(ws, "a.myshopify.com", [...ALL_SCOPES, "write_pixels", "read_customer_events"], { timezone: TZ, pixelInstalled: true });
+    // Noon on Sunday 8 Mar 2026, the day US clocks go forward: 12:00 EDT is 16:00Z, and noon on
+    // Saturday (EST) is 17:00Z, so the cut is by the clock, not 24 hours back (that would be 11:00).
+    const now = new Date("2026-03-08T16:00:00Z");
+    await seedOrder(store, { id: "T1", createdAt: "2026-03-08T14:00:00Z", lines: [{ qty: 1, price: 50 }] });
+    await seedOrder(store, { id: "Y1", createdAt: "2026-03-07T15:00:00Z", lines: [{ qty: 1, price: 30 }] }); // 10:00
+    await seedOrder(store, { id: "Y2", createdAt: "2026-03-07T16:30:00Z", lines: [{ qty: 2, price: 20 }] }); // 11:30
+    await seedOrder(store, { id: "Y3", createdAt: "2026-03-07T18:00:00Z", lines: [{ qty: 1, price: 100 }] }); // 13:00, after the cut
+    // Refunds made on Saturday, one before noon and one after: each counts when it was made.
+    const refund = async (order: string, at: string, amount: number) => {
+      const o = await systemDb.order.findFirstOrThrow({ where: { storeId: store.id, shopifyId: order } });
+      await systemDb.orderSale.create({
+        data: { workspaceId: ws, storeId: store.id, orderId: o.id, shopifyId: `${order}-refund`, localDay: "2026-03-07", happenedAt: new Date(at), actionType: "return", lineType: "product", quantity: null, amount: -amount, discount: 0, tax: 0 },
+      });
+    };
+    await refund("Y2", "2026-03-07T16:45:00Z", 10);
+    await refund("Y1", "2026-03-07T20:00:00Z", 30);
+    await recomputeDays(store, ["2026-03-07", "2026-03-08"]);
+    // Store visits on Saturday: two that started before noon (one bought), one after.
+    for (const [visitor, at, step] of [["v1", "2026-03-07T15:30:00Z", 4], ["v2", "2026-03-07T16:50:00Z", 1], ["v3", "2026-03-07T19:00:00Z", 4]] as const) {
+      await systemDb.funnelVisit.create({ data: { workspaceId: ws, storeId: store.id, day: "2026-03-07", visitor, enteredAt: new Date(at), furthestStep: step } });
+    }
+    await systemDb.funnelVisit.create({ data: { workspaceId: ws, storeId: store.id, day: "2026-03-08", visitor: "v4", enteredAt: new Date("2026-03-08T15:00:00Z"), furthestStep: 4 } });
+
+    const report = (preset: "today" | "yesterday") =>
+      withTenant(ws, (tx) => storeOverview(tx, store, resolvePreset(preset, now, TZ), now)) as Promise<{
+        modules: { sales_overview: { current: Record<string, number>; previous: Record<string, number>; deltas: Record<string, number> }; funnel: { visits: number; previous: { visits: number; conversionRate: number } } };
+      }>;
+    expect(resolvePreset("today", now, TZ).previous).toEqual({ from: "2026-03-07", to: "2026-03-07", until: "12:00:00" });
+    const { modules: m } = await report("today");
+    // Saturday until noon: Y1 and Y2 (70), less the 10 refunded at 11:45. Y3 and the 30 refunded later aren't in yet.
+    expect(m.sales_overview.previous).toMatchObject({ grossSales: 70, netSales: 60, totalSales: 60, orders: 2, units: 3, averageOrderValue: 35 });
+    expect(m.sales_overview.current).toMatchObject({ netSales: 50, orders: 1 });
+    expect(m.sales_overview.deltas.orders).toBe(-0.5);
+    expect(m.funnel.previous).toEqual({ visits: 2, conversionRate: 0.5 });
+    expect(m.funnel.visits).toBe(1);
+
+    // Saturday on its own is still the whole day, as daily_store_metrics holds it.
+    const { modules: y } = await report("yesterday");
+    expect(y.sales_overview.current).toMatchObject({ grossSales: 170, returns: 40, netSales: 130, orders: 3 });
+    expect(y.funnel.visits).toBe(3);
   });
 
   it("refuses ranges it can't report on with a 400, never a 500", async () => {

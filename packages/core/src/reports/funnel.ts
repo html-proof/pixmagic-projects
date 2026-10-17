@@ -1,6 +1,6 @@
 import { Prisma, type Tx } from "@app/db";
-import { delta, PURCHASED_STEP, SITE_SECTIONS, summarizeJourney, type DateRange, type JourneyPageRow, type SiteSection } from "@app/shared";
-import type { Scope } from "./common.js";
+import { delta, PURCHASED_STEP, SITE_SECTIONS, summarizeJourney, type Comparison, type DateRange, type JourneyPageRow, type SiteSection } from "@app/shared";
+import { localMoment, type Scope } from "./common.js";
 
 // ---------------------------------------------------------------------------
 // Storefront funnel (web pixel). One row per shopper per store-local day in
@@ -10,8 +10,13 @@ import type { Scope } from "./common.js";
 const TOP_PAGES = 8;
 const isSection = (s: string | null): s is SiteSection => s !== null && (SITE_SECTIONS as readonly string[]).includes(s);
 
-export async function funnel(tx: Tx, { ws, storeId }: Scope, range: DateRange, previous: DateRange) {
+export async function funnel(tx: Tx, { ws, storeId }: Scope, range: DateRange, previous: Comparison, timeZone: string) {
   const inRange = (r: DateRange) => Prisma.sql`workspace_id = ${ws} AND store_id = ${storeId} AND day BETWEEN ${r.from} AND ${r.to}`;
+  // A running comparison's last day: the visits that had started by the same time of day (one
+  // recorded before visits were timed counts, as it always did).
+  const inComparison = previous.until
+    ? Prisma.sql`${inRange(previous)} AND (day < ${previous.to} OR entered_at IS NULL OR entered_at < ${localMoment(previous.to, previous.until, timeZone)})`
+    : inRange(previous);
 
   // How far each visit got, and where the ones that stopped short were last seen.
   const stepRows = await tx.$queryRaw<Array<{ furthest_step: number; exit_section: string | null; visits: number; page_views: number }>>`
@@ -42,7 +47,7 @@ export async function funnel(tx: Tx, { ws, storeId }: Scope, range: DateRange, p
 
   const [prev] = await tx.$queryRaw<Array<{ visits: number; purchases: number }>>`
     SELECT COUNT(*)::int AS visits, COUNT(*) FILTER (WHERE furthest_step = ${PURCHASED_STEP})::int AS purchases
-    FROM funnel_visits WHERE ${inRange(previous)}`;
+    FROM funnel_visits WHERE ${inComparison}`;
 
   const sections = new Map<SiteSection, { section: SiteSection; visits: number; entries: number }>();
   for (const r of sectionRows) {

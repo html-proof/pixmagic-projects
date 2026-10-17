@@ -256,7 +256,8 @@ export interface Overview {
   /** While the store is in error: why Shopify stopped the sync (see syncProblem in the API). */
   syncProblem?: "shop_unavailable" | "shop_gone" | "shop_locked" | "access" | "other" | null;
   range: { from: string; to: string };
-  previous: { from: string; to: string };
+  /** What the range is compared with (`Comparison` in @app/shared): `until` while the range is still running. */
+  previous: { from: string; to: string; until?: string };
   /** The store's today (YYYY-MM-DD). */
   today: string;
   capabilities: Capability[];

@@ -15,8 +15,17 @@ export const B = ({ children }: { children: ReactNode }) => <strong className="f
 /**
  * A change on the period before, to end a sentence: ", up 12% on the period before"; `same`
  * when nothing changed (each page has its own words for it); "" with nothing to compare with.
+ * `on` names what it is compared with, when a page knows better ("yesterday at the same time").
  */
-export const changeWords = (d: number | null, same: string) => (d === null ? "" : d === 0 ? same : `, ${d > 0 ? "up" : "down"} ${fmtPct(Math.abs(d))} on the period before`);
+export const changeWords = (d: number | null, same: string, on = "the period before") =>
+  d === null ? "" : d === 0 ? same : `, ${d > 0 ? "up" : "down"} ${fmtPct(Math.abs(d))} on ${on}`;
+
+/**
+ * What the dashboard's numbers are compared with, for the end of a sentence: "yesterday at the
+ * same time" for today (Shopify's like-for-like), "the period before" otherwise.
+ */
+export const comparedOn = (ov: { range: { from: string; to: string }; previous: { until?: string } }) =>
+  ov.range.from === ov.range.to && ov.previous.until ? "yesterday at the same time" : "the period before";
 
 /** "up 12%" or "down 3%" ("up 0%" when nothing changed), or null with nothing to compare with. */
 export const upDown = (d: number | null) => (d === null ? null : d >= 0 ? `up ${fmtPct(d)}` : `down ${fmtPct(-d)}`);

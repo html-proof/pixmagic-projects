@@ -9,6 +9,11 @@ export function localDay(date: Date, timeZone: string): string {
   }).format(date);
 }
 
+/** The store-local time of day, "HH:MM:SS" on a 24-hour clock. */
+export function localTime(date: Date, timeZone: string): string {
+  return new Intl.DateTimeFormat("en-GB", { timeZone, hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }).format(date);
+}
+
 export function addDays(day: string, n: number): string {
   const d = new Date(`${day}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() + n);
@@ -25,6 +30,17 @@ export type DatePreset = (typeof DATE_PRESETS)[number];
 export interface DateRange {
   from: string;
   to: string;
+}
+
+/**
+ * The dates a range is compared with. While the range picked is still running (it ends on the
+ * store's today), the comparison stops at the same time of day on its last day, as Shopify's
+ * Analytics compares "like for like": today until 4:44 pm against yesterday until 4:44 pm, never
+ * against the whole of yesterday, which made every day look down until it was nearly over.
+ */
+export interface Comparison extends DateRange {
+  /** Store-local "HH:MM:SS" that the comparison's last day is counted up to; absent: whole days. */
+  until?: string;
 }
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -89,7 +105,7 @@ export function resolvePreset(
   now: Date,
   timeZone: string,
   custom?: DateRange,
-): { range: DateRange; previous: DateRange } {
+): { range: DateRange; previous: Comparison } {
   const today = localDay(now, timeZone);
   let range: DateRange;
   switch (preset) {
@@ -129,5 +145,6 @@ export function resolvePreset(
   }
   const len = daysBetweenInclusive(range.from, range.to);
   const previous = { from: addDays(range.from, -len), to: addDays(range.from, -1) };
-  return { range, previous };
+  // Today isn't over: the period before is counted up to this moment of its own last day.
+  return { range, previous: range.to === today ? { ...previous, until: localTime(now, timeZone) } : previous };
 }

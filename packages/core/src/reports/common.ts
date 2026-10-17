@@ -16,6 +16,14 @@ import { Prisma } from "@app/db";
  */
 export const SALE_VALUE = Prisma.sql`CASE WHEN s.action_type = 'return' THEN -ABS(s.amount - s.tax) ELSE s.amount - s.tax END`;
 
+/**
+ * A store-local wall-clock moment (`day` at `time`, "HH:MM:SS", in the store's zone) as the UTC
+ * timestamps the tables hold. Wall-clock, so a comparison across a daylight-saving change still
+ * stops at the same time of day.
+ */
+export const localMoment = (day: string, time: string, timeZone: string) =>
+  Prisma.sql`((${day}::date + ${time}::time) AT TIME ZONE ${timeZone}) AT TIME ZONE 'UTC'`;
+
 /** Lines whose value is net sales (MERCHANDISE_LINES in @app/shared). */
 export const MERCHANDISE = Prisma.sql`s.line_type IN ('product', 'adjustment')`;
 
