@@ -5,16 +5,21 @@ import * as cwActions from "aws-cdk-lib/aws-cloudwatch-actions";
 import * as dlm from "aws-cdk-lib/aws-dlm";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as iam from "aws-cdk-lib/aws-iam";
+import * as logs from "aws-cdk-lib/aws-logs";
 import * as rds from "aws-cdk-lib/aws-rds";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
 import * as sns from "aws-cdk-lib/aws-sns";
+import * as cr from "aws-cdk-lib/custom-resources";
 import type { Construct } from "constructs";
 import type { EnvConfig } from "./config.js";
 import { NatInstancePerAz, SWAP_FILE_COMMANDS } from "./nat-instances.js";
 
 /** PostgreSQL 17, as on the PC (minor upgrades are automatic in the maintenance window). */
 const PG_VERSION = "17.11";
+
+/** Tag on the snapshot taken when an instance is created (value "launch"); the only ones its custom resource may delete. */
+export const LAUNCH_SNAPSHOT_TAG = "insights-snapshot";
 
 /**
  * What holds state, and the network around it. Changes rarely; termination protection is on.
@@ -216,6 +221,46 @@ export class DataStack extends Stack {
       blockDevices: [{ deviceName: "/dev/xvda", volume: ec2.BlockDeviceVolume.ebs(8, { encrypted: true, volumeType: ec2.EbsDeviceVolumeType.GP3 }) }],
       userData: ec2.UserData.custom(["#!/bin/bash", ...SWAP_FILE_COMMANDS, "dnf install -y postgresql17 jq || dnf install -y postgresql16 jq", "shutdown -h now", ""].join("\n")),
     });
+
+    // A snapshot of each instance's disk as soon as the instance exists. The daily policy below
+    // leaves a disk alone for its first 24 hours, then picks a time in a 4-hour window, and a new
+    // Amazon Linux image replaces all three instances: every such deploy left Trusted Advisor's
+    // "Amazon EBS Snapshots" red for a day or two. One per instance: once a replacement has its
+    // own, CloudFormation deletes the previous instance's (the custom resource's delete call).
+    const launchSnapshotLogs = new logs.LogGroup(this, "LaunchSnapshotLogs", { retention: logs.RetentionDays.ONE_MONTH, removalPolicy: RemovalPolicy.DESTROY });
+    const snapshotOnLaunch = (instance: ec2.Instance, name: string) => {
+      const snapshots = `arn:aws:ec2:${cfg.region}::snapshot/*`;
+      const create: cr.AwsSdkCall = {
+        service: "EC2",
+        action: "createSnapshots",
+        parameters: {
+          InstanceSpecification: { InstanceId: instance.instanceId },
+          Description: `${name} disk when the instance was created`,
+          TagSpecifications: [{ ResourceType: "snapshot", Tags: [{ Key: "Name", Value: `${name}-launch` }, { Key: LAUNCH_SNAPSHOT_TAG, Value: "launch" }] }],
+        },
+        physicalResourceId: cr.PhysicalResourceId.fromResponse("Snapshots.0.SnapshotId"),
+        outputPaths: ["Snapshots.0.SnapshotId"],
+      };
+      new cr.AwsCustomResource(instance, "LaunchSnapshot", {
+        onCreate: create,
+        // A replaced instance (new id) gets its own snapshot; the old one goes with the old id.
+        onUpdate: create,
+        onDelete: { service: "EC2", action: "deleteSnapshot", parameters: { SnapshotId: new cr.PhysicalResourceIdReference() }, ignoreErrorCodesMatching: "InvalidSnapshot\\.NotFound" },
+        installLatestAwsSdk: false,
+        logGroup: launchSnapshotLogs,
+        policy: cr.AwsCustomResourcePolicy.fromStatements([
+          new iam.PolicyStatement({
+            actions: ["ec2:CreateSnapshots"],
+            resources: [`arn:aws:ec2:${cfg.region}:${cfg.account}:instance/${instance.instanceId}`, `arn:aws:ec2:${cfg.region}:${cfg.account}:volume/*`, snapshots],
+          }),
+          new iam.PolicyStatement({ actions: ["ec2:CreateTags"], resources: [snapshots], conditions: { StringEquals: { "ec2:CreateAction": "CreateSnapshots" } } }),
+          // Only its own kind: never the daily policy's snapshots or anyone else's.
+          new iam.PolicyStatement({ actions: ["ec2:DeleteSnapshot"], resources: [snapshots], conditions: { StringEquals: { [`ec2:ResourceTag/${LAUNCH_SNAPSHOT_TAG}`]: "launch" } } }),
+        ]),
+      });
+    };
+    for (const instance of this.natInstances) snapshotOnLaunch(instance, `${prefix}-nat-${(instance.instance.availabilityZone ?? "").slice(-1)}`);
+    snapshotOnLaunch(this.adminHost, `${prefix}-admin`);
 
     // A daily snapshot of every EBS disk (the NAT instances' and the admin host's), kept 7 days
     // (Trusted Advisor "Amazon EBS Snapshots": red with none, yellow once the newest is 7 days old).

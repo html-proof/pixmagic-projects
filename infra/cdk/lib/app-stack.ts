@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { CfnOutput, Duration, RemovalPolicy, SecretValue, Stack, type StackProps } from "aws-cdk-lib";
 import * as budgets from "aws-cdk-lib/aws-budgets";
@@ -60,13 +60,25 @@ export class AppStack extends Stack {
     this.runtimeParam = `/insights/${cfg.name}/runtime`;
 
     if (!existsSync(FUNCTION_DIR)) throw new Error(`No Lambda package at ${FUNCTION_DIR}: run \`pnpm --filter @app/aws build\` first`);
-    const commit = (() => {
+    // The commit the package was built from and when (apps/aws/scripts/build.mjs writes build.json);
+    // git's HEAD for a package without one. GET /api/version shows both.
+    const build = (() => {
       try {
-        return execFileSync("git", ["rev-parse", "--short", "HEAD"], { cwd: REPO_ROOT, encoding: "utf8" }).trim();
+        return JSON.parse(readFileSync(join(FUNCTION_DIR, "build.json"), "utf8")) as { commit: string; builtAt: string };
       } catch {
-        return "unknown";
+        return undefined;
       }
     })();
+    const commit =
+      build?.commit ??
+      (() => {
+        try {
+          return execFileSync("git", ["rev-parse", "HEAD"], { cwd: REPO_ROOT, encoding: "utf8" }).trim();
+        } catch {
+          return "unknown";
+        }
+      })();
+    const shortCommit = commit.replace(/^([0-9a-f]{7})[0-9a-f]+/, "$1");
 
     // --- Queues (sync, webhooks, aggregate, email + a dead-letter queue).
     // Visibility timeout covers the jobs function's 15 minutes. consume() settles every message
@@ -90,6 +102,7 @@ export class AppStack extends Stack {
       NODE_ENV: "production",
       LOG_LEVEL: "info",
       APP_COMMIT: commit,
+      ...(build ? { APP_BUILT_AT: build.builtAt } : {}),
       APP_ENVIRONMENT: cfg.name,
       // Database TLS is verified against Amazon's RDS CA (bundled with the package).
       NODE_EXTRA_CA_CERTS: "/var/task/rds-ca.pem",
@@ -117,7 +130,7 @@ export class AppStack extends Stack {
       const logGroup = new logs.LogGroup(this, `Logs-${name}`, { logGroupName: `/aws/lambda/${prefix}-${name}`, retention: cfg.logRetentionDays as logs.RetentionDays, removalPolicy: RemovalPolicy.RETAIN });
       const f = new lambda.Function(this, `Fn-${name}`, {
         functionName: `${prefix}-${name}`,
-        description: `${description} (${commit})`,
+        description: `${description} (${shortCommit})`,
         runtime: lambda.Runtime.NODEJS_22_X,
         architecture: lambda.Architecture.ARM_64,
         handler: "index.handler",

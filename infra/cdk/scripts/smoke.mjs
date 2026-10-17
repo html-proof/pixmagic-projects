@@ -217,6 +217,18 @@ await check("functions healthy (live alias, no errors in the last hour)", async 
   }
   return out.join(", ");
 });
+await check("the public address runs this checkout's commit, on the live release", async () => {
+  // What a visitor reaches (Cloudflare → CloudFront → the function URL) against what was deployed:
+  // the commit checked out here, and the version the api function's live alias points at.
+  const r = await get(`${base}/api/version`);
+  const v = await r.json().catch(() => ({}));
+  expect(r.status === 200, `status ${r.status}`);
+  const head = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  expect(v.commit?.replace(/-dirty$/, "") === head, `serves ${v.commit}, this checkout is ${head}`);
+  const live = aws(["lambda", "get-alias", "--function-name", `insights-${envName}-api`, "--name", "live"]).FunctionVersion;
+  expect(v.release === live, `serves release ${v.release}, the live alias is ${live}`);
+  return `${v.commit.slice(0, 7)}${v.commit.endsWith("-dirty") ? " (built with uncommitted changes)" : ""}, release ${v.release}, built ${v.builtAt}`;
+});
 await check("queues empty of dead letters", async () => {
   const url = aws(["sqs", "get-queue-url", "--queue-name", `insights-${envName}-dlq`]).QueueUrl;
   const n = Number(aws(["sqs", "get-queue-attributes", "--queue-url", url, "--attribute-names", "ApproximateNumberOfMessages"]).Attributes.ApproximateNumberOfMessages);

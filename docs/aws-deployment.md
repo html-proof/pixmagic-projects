@@ -235,8 +235,17 @@ job signs in only with the OIDC deploy role and checks that it did.
 headers, HTTPS redirect, `/api/readyz` (database as owner and tenant role, coordinator), 401 on
 protected routes, the Cognito wiring (a password-reset request for an address that doesn't exist),
 CSRF, CORS, Shopify HMAC refusal, that the function URL refuses requests that skip CloudFront, and
-on the AWS side: database private and encrypted, buckets private, functions healthy, DLQ empty.
+on the AWS side: database private and encrypted, buckets private, functions healthy, DLQ empty,
+and that the public address runs what was deployed: `https://bizinsights.io/api/version` must name
+the commit checked out where smoke.mjs runs, and the api function's `live` alias version as its
+`release`. Run it from the deployed commit (a checkout of another commit fails that one check).
 Sign-up and sign-in with a real address are the owner's to try (they need a mailbox).
+
+**Which release is live:** `curl https://bizinsights.io/api/version` answers
+`{"app":"bizinsights","environment":"production","commit":"<full sha>","builtAt":"<ISO time>","release":"<Lambda version>"}`.
+`commit` comes from `build.json`, which `apps/aws/scripts/build.mjs` writes into the package (with
+`-dirty` if the checkout had uncommitted changes); `release` is the Lambda version serving the request,
+which is what `rollback.mjs` moves the `live` alias between. Nothing in it is secret.
 
 ## Domain: bizinsights.io
 
@@ -497,7 +506,7 @@ The owner's ceiling is **US$100-120 a month** (2026-10-17). Prices from the AWS 
 | CloudWatch alarms (~25 × $0.10), dashboard, logs | ~5-8 |
 | GuardDuty (free for the first 30 days) | ~1-4 |
 | Secrets Manager (3 × $0.40), KMS key for Cognito's emails, admin host's disk (stopped) | ~3 |
-| EBS snapshots of the three instance disks, daily, kept 7 days ($0.055/GB of used blocks) | ~0.5-1.5 |
+| EBS snapshots of the three instance disks, daily, kept 7 days, plus one launch snapshot each ($0.055/GB of used blocks) | ~0.5-2 |
 | Lambda, SQS, DynamoDB, S3, CloudFront, Cognito, Scheduler at today's traffic (free tiers) | ~0-5 |
 | **Total** | **~81-92** (~89-101 with GST) |
 
@@ -549,11 +558,18 @@ volume in the Region that has no recent snapshot, daily, and keeps each 7 days. 
 replaced instance's disk expire too (`ExtendDeletion`). The disks hold nothing a deploy can't
 rebuild, so restoring one is only the quicker way back. A default policy only takes on a volume
 once it is 24 hours old, then snapshots it daily in a four-hour window it picks at random. So a new
-disk (a NAT instance replaced by a new Amazon Linux image, or the admin host) has no snapshot for
-its first one to two days, and the check can show red in that time. To check:
-`aws ec2 describe-snapshots --owner-ids self` and
-`aws dlm get-lifecycle-policies --default-policy-type VOLUME` (State ENABLED). The first snapshots of
-today's disks (created 2026-10-17 ~06:20Z) are due between 2026-10-18 06:20Z and 2026-10-19 ~06:20Z.
+disk (a NAT instance replaced by a new Amazon Linux image, or the admin host) had no snapshot for
+its first one to two days, and the check went red in that time after every such deploy. Since
+2026-10-17 each instance also gets a **launch snapshot** as soon as CloudFormation has created it (a
+`LaunchSnapshot` custom resource per instance in data-stack.ts: EC2 `CreateSnapshots`, tagged
+`insights-snapshot=launch`, named `<instance>-launch`). There is one per instance: when an instance
+is replaced, the new one's is taken and then the old one's deleted (the custom resource may delete
+only snapshots with that tag). To check:
+`aws ec2 describe-snapshots --owner-ids self` (one `-launch` per instance, plus DLM's daily ones) and
+`aws dlm get-lifecycle-policies --default-policy-type VOLUME` (State ENABLED). Trusted Advisor
+re-reads this check on its own about daily, or on demand with
+`aws support refresh-trusted-advisor-check --check-id H7IgTzjTYb --region us-east-1` (at most every
+few hours).
 
 What production does have, at no extra cost:
 - Functions in two AZs; queues with retries, backoff, a dead-letter queue (`insights-production-dlq`)

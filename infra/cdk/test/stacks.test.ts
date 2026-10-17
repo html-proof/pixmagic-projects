@@ -11,6 +11,7 @@ writeFileSync(join(fnDir, "index.mjs"), "export const handler = async () => ({})
 writeFileSync(join(fnDir, "cognito-email.mjs"), "export const handler = async () => ({});\n");
 mkdirSync(join(fnDir, "public/_next/static/chunks"), { recursive: true });
 writeFileSync(join(fnDir, "public/_next/static/chunks/main.js"), "void 0;\n");
+writeFileSync(join(fnDir, "build.json"), `${JSON.stringify({ commit: "0123456789abcdef0123456789abcdef01234567", builtAt: "2026-10-17T09:00:00.000Z" })}\n`);
 process.env.INSIGHTS_FUNCTION_DIR = fnDir;
 
 const { envConfig, appVars } = await import("../lib/config.js");
@@ -163,6 +164,25 @@ describe("the data stack", () => {
     // One default policy per Region: staging's disks are production's policy's.
     synth({ env: "staging" }).data.resourceCountIs("AWS::DLM::LifecyclePolicy", 0);
   });
+
+  it("snapshots each instance's disk as soon as the instance exists, and deletes only those snapshots", () => {
+    // The daily policy waits a day before a new disk's first snapshot; a new image replaces all three.
+    const instances = Object.keys(t.data.findResources("AWS::EC2::Instance"));
+    expect(instances).toHaveLength(3);
+    const launch = Object.values(t.data.findResources("Custom::AWS"));
+    expect(launch).toHaveLength(3);
+    const instanceOf = (r: (typeof launch)[number]) => JSON.stringify(r.Properties.Create).match(/"Ref":"(\w+)"/)?.[1];
+    expect(new Set(launch.map(instanceOf))).toEqual(new Set(instances));
+    for (const r of launch) {
+      expect(JSON.stringify(r.Properties.Create)).toContain('\\"action\\":\\"createSnapshots\\"');
+      // A replaced instance (a new id) gets its own; then the old physical id, its snapshot, is deleted.
+      expect(r.Properties.Update).toEqual(r.Properties.Create);
+      expect(JSON.stringify(r.Properties.Delete)).toContain('\\"action\\":\\"deleteSnapshot\\"');
+    }
+    t.data.hasResourceProperties("AWS::IAM::Policy", {
+      PolicyDocument: { Statement: Match.arrayWith([Match.objectLike({ Action: "ec2:DeleteSnapshot", Condition: { StringEquals: { "ec2:ResourceTag/insights-snapshot": "launch" } } })]) },
+    });
+  });
 });
 
 describe("the app stack", () => {
@@ -208,6 +228,15 @@ describe("the app stack", () => {
     t.app.hasResourceProperties("AWS::SNS::TopicPolicy", {
       PolicyDocument: { Statement: [Match.objectLike({ Action: "sns:Publish", Principal: { Service: ["cloudwatch.amazonaws.com", "events.rds.amazonaws.com"] } })] },
     });
+  });
+
+  it("tells the functions which commit and build they run (GET /api/version shows it)", () => {
+    const fns = Object.values(t.app.findResources("AWS::Lambda::Function", { Properties: { FunctionName: Match.stringLikeRegexp("^insights-production-(api|jobs|cron)$") } }));
+    expect(fns).toHaveLength(3);
+    for (const f of fns) {
+      expect(f.Properties.Environment.Variables).toMatchObject({ APP_COMMIT: "0123456789abcdef0123456789abcdef01234567", APP_BUILT_AT: "2026-10-17T09:00:00.000Z", APP_ENVIRONMENT: "production" });
+      expect(f.Properties.Description).toMatch(/\(0123456\)$/);
+    }
   });
 
   it("keeps earlier function versions, so a rollback has something to go back to", () => {
