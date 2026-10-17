@@ -97,7 +97,7 @@ function SalesDetail({ ov, currency }: { ov: Overview; currency: string }) {
             </>
           ) : (
             <>
-              You made <B>{money(c.netSales)}</B> in net sales from <B>{plural(c.orders, "order")}</B> ({plural(c.units, "item")} sold)
+              You had <B>{money(c.netSales)}</B> in net sales from <B>{plural(c.orders, "order")}</B> ({plural(c.units, "item")} sold)
               {change ? <>, <B>{change}</B> on {prevPeriod}</> : null}.
             </>
           )}
@@ -293,7 +293,7 @@ function ShoppersDetail({ ov }: { ov: Overview }) {
         ) : (
           <>
             <p>
-              Your store had <B>{plural(f.visits, "visit")}</B>{visitsChange ? <> ({visitsChange})</> : null}, and <B>{fmtPct(f.conversionRate)}</B> of them ended in a purchase ({plural(f.purchases, "purchase")}).
+              Your store had <B>{plural(f.visits, "tracked visit")}</B>{visitsChange ? <> ({visitsChange})</> : null}, and <B>{fmtPct(f.conversionRate)}</B> of them ended in a purchase ({plural(f.purchases, "purchase")}).
             </p>
             {leak && leak.left > 0 && (
               <p>
@@ -467,7 +467,7 @@ function DiscountsDetail({ ov, currency }: { ov: Overview; currency: string }) {
         )}
       </InShort>
       {items.length > 0 && (
-        <Panel id="d-codes-bars" title="Codes by orders" help="How often each code was used in these dates, and the sales those orders brought in.">
+        <Panel id="d-codes-bars" title="Codes by orders" help="How often each code was used in these dates, and the net sales those orders brought in.">
           <ul className="space-y-4">
             {items.map((d) => (
               <BarRow
@@ -475,7 +475,7 @@ function DiscountsDetail({ ov, currency }: { ov: Overview; currency: string }) {
                 label={<span className="font-mono">{d.code}</span>}
                 value={plural(d.orders, "order")}
                 fraction={items[0]!.orders > 0 ? d.orders / items[0]!.orders : 0}
-                sub={d.sales !== undefined && d.discount !== undefined ? `${fmtMoney(d.sales, currency)} in sales · ${fmtMoney(d.discount, currency)} in discounts` : undefined}
+                sub={d.sales !== undefined && d.discount !== undefined ? `${fmtMoney(d.sales, currency)} in net sales · ${fmtMoney(d.discount, currency)} in discounts` : undefined}
               />
             ))}
           </ul>

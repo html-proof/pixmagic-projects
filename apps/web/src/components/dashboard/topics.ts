@@ -136,7 +136,7 @@ export function topicSummary(t: Topic, ov: Overview, currency: string): string {
       return m.catalog ? `${plural(m.catalog.products.total, "product")} in your catalog` : "No product sales yet";
     }
     case "shoppers":
-      return m.funnel && m.funnel.visits > 0 ? `${plural(m.funnel.visits, "visit")} · ${fmtPct(m.funnel.conversionRate)} bought` : "No visits recorded yet";
+      return m.funnel && m.funnel.visits > 0 ? `${plural(m.funnel.visits, "tracked visit")} · ${fmtPct(m.funnel.conversionRate)} bought` : "No visits recorded yet";
     case "timing": {
       const o = m.order_timing;
       return o?.busiestDay && o.busiestHour !== null ? `${o.busiestDay}s, around ${hourRange(o.busiestHour)}` : "Not enough orders to spot a pattern";

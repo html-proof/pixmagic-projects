@@ -163,6 +163,7 @@ export async function storeOverview(tx: Tx, store: Store, dates: { range: DateRa
   if (enabled.has("inventory")) modules.inventory = await inventory(tx, scope, today);
   if (enabled.has("catalog")) modules.catalog = await catalog(tx, scope, range);
 
+  const freshness = await dataFreshness(tx, scope, store, now);
   const failed =
     store.status === "error"
       ? await tx.syncJob.findFirst({ where: { storeId, workspaceId: ws, status: "failed" }, orderBy: { createdAt: "desc" }, select: { error: true } })
@@ -170,6 +171,8 @@ export async function storeOverview(tx: Tx, store: Store, dates: { range: DateRa
   return {
     // Only while the store is in error: why, so the page can say what will fix it.
     syncProblem: store.status === "error" ? syncProblem(failed?.error) : null,
+    // How current the numbers are: when they last matched Shopify, and whether changes are waiting.
+    freshness,
     // The store's today, so the page can tell a finished day from one still running.
     today,
     // False: the imported orders don't reach back to the comparison, so no order figure is compared.
@@ -178,6 +181,38 @@ export async function storeOverview(tx: Tx, store: Store, dates: { range: DateRa
     modules,
     hasData,
     data,
+  };
+}
+
+/**
+ * How current this store's numbers are, from what actually brought Shopify's changes in, not from
+ * whether the page is polling (the dashboard used to say "Live" for that):
+ *
+ * - `asOf`: the later of the last finished order import or re-read (`lastSyncedAt`) and the last
+ *   order notification processed. Every change Shopify had told us about by then is counted.
+ * - `waiting` / `waitingSince`: notifications received and not processed yet, and since when. A
+ *   backlog of minutes means the numbers are behind Shopify's by about that much.
+ * - `failed`: notifications that failed for good in the last 24 hours. The nightly reconcile
+ *   re-reads those orders; until then they may be missing or out of date.
+ *
+ * Shopify's own reports can take a few minutes to include a new order too, so a small gap either
+ * way is normal.
+ */
+export async function dataFreshness(tx: Tx, { ws, storeId }: Scope, store: Pick<Store, "lastSyncedAt">, now = new Date()) {
+  const [w] = await tx.$queryRaw<Array<{ last: Date | null; waiting: number; waiting_since: Date | null; failed: number }>>`
+    SELECT MAX(processed_at) FILTER (WHERE status = 'succeeded') AS last,
+           (COUNT(*) FILTER (WHERE status IN ('queued', 'running')))::int AS waiting,
+           MIN(received_at) FILTER (WHERE status IN ('queued', 'running')) AS waiting_since,
+           (COUNT(*) FILTER (WHERE status = 'failed' AND received_at > ${new Date(now.getTime() - 86_400_000)}))::int AS failed
+    FROM webhook_events
+    WHERE workspace_id = ${ws} AND store_id = ${storeId} AND received_at > ${new Date(now.getTime() - 3 * 86_400_000)}
+      AND (topic LIKE 'orders/%' OR topic LIKE 'refunds/%')`;
+  const times = [store.lastSyncedAt, w?.last ?? null].filter((d): d is Date => !!d);
+  return {
+    asOf: times.length ? new Date(Math.max(...times.map((d) => d.getTime()))).toISOString() : null,
+    waiting: w?.waiting ?? 0,
+    waitingSince: w?.waiting_since ? w.waiting_since.toISOString() : null,
+    failed: w?.failed ?? 0,
   };
 }
 

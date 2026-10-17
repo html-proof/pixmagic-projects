@@ -202,7 +202,7 @@ export async function shopifyGraphqlWithCost<T>(opts: ShopifyCallOptions): Promi
     if (res.status === 429 || res.status >= 500) {
       if (attempt >= maxRetries) throw new ShopifyHttpError(`Shopify ${res.status}`, res.status);
       const retryAfter = Number(res.headers.get("retry-after") ?? 0);
-      await sleep(retryAfter > 0 ? retryAfter * 1000 : Math.min(30_000, 500 * 2 ** attempt));
+      await sleep(retryAfter > 0 ? retryAfter * 1000 : backoffMs(attempt));
       continue;
     }
     // Any other failure (402 for a frozen or unpaid store, 404 for one that is gone, 423 for a
@@ -220,7 +220,7 @@ export async function shopifyGraphqlWithCost<T>(opts: ShopifyCallOptions): Promi
       const cost = json.extensions?.cost;
       const wait = cost
         ? Math.ceil(((cost.requestedQueryCost - cost.throttleStatus.currentlyAvailable) / cost.throttleStatus.restoreRate) * 1000)
-        : 1000 * 2 ** attempt;
+        : backoffMs(attempt + 1);
       await sleep(Math.max(250, wait));
       continue;
     }
@@ -236,6 +236,16 @@ export async function shopifyGraphqlWithCost<T>(opts: ShopifyCallOptions): Promi
     }
     return { data: json.data as T, requiredDelayMs: pacingDelayMs(json.extensions?.cost, opts.shop) };
   }
+}
+
+/**
+ * Exponential backoff with jitter: half the step plus a random share of the other half, capped at
+ * 30 s. Without the random part, every job that met the same 429 or 5xx (one store's sync chain,
+ * its webhooks) asked again at the same instants and met it again.
+ */
+function backoffMs(attempt: number): number {
+  const step = Math.min(30_000, 500 * 2 ** attempt);
+  return Math.round(step / 2 + Math.random() * (step / 2));
 }
 
 /**

@@ -2,7 +2,7 @@
 import { fmtNum } from "@/lib/api";
 import { fmtDay, fmtRelative } from "./format";
 import { Dot, type Tone } from "./Primitives";
-import type { ImportedData, OverviewStore } from "./types";
+import type { Freshness, ImportedData, OverviewStore } from "./types";
 
 const STATUS: Record<string, { tone: Tone; label: string }> = {
   active: { tone: "good", label: "Connected" },
@@ -20,46 +20,79 @@ function Count({ n, one }: { n: number; one: string }) {
   );
 }
 
+/** Whether this page reaches bizinsights: its own connection, not how current the data is. */
 export type LiveState = "checking" | "live" | "stale";
 
-const LIVE: Record<LiveState, { tone: Tone; label: string }> = {
-  checking: { tone: "neutral", label: "Checking…" },
-  live: { tone: "good", label: "Live" },
-  stale: { tone: "warn", label: "Reconnecting…" },
-};
+/** Numbers that matched Shopify this recently read as up to date. */
+const FRESH_MS = 15 * 60_000;
+/** Changes from Shopify waiting this long to be counted read as a delay. */
+const WAITING_LATE_MS = 5 * 60_000;
+
+/**
+ * What the second pill says: how current the numbers are, from when they last matched Shopify and
+ * whether Shopify's changes are waiting or failed (Freshness from the API). It used to say "Live"
+ * whenever the page was polling, which said nothing about the data. While the page can't reach
+ * bizinsights, that comes first: the numbers on screen are from its last answer.
+ */
+export function freshnessPill(live: LiveState, f: Freshness | undefined, now: number): { tone: Tone; label: string; title: string } {
+  if (live === "stale") return { tone: "warn", label: "Reconnecting…", title: "This page can't reach bizinsights right now. The numbers are from its last answer." };
+  if (live === "checking" || !f) return { tone: "neutral", label: "Checking…", title: "Asking bizinsights for the latest numbers." };
+  const updated = fmtRelative(f.asOf, now);
+  const since = updated ? `Up to date with Shopify as of ${updated}.` : "Not synced with Shopify yet.";
+  if (f.failed > 0)
+    return {
+      tone: "danger",
+      label: "Some updates failed",
+      title: `${f.failed === 1 ? "1 change" : `${fmtNum(f.failed)} changes`} from Shopify couldn't be counted in the last 24 hours. bizinsights reads those orders again overnight. ${since}`,
+    };
+  if (f.waiting > 0 && f.waitingSince && now - Date.parse(f.waitingSince) > WAITING_LATE_MS)
+    return {
+      tone: "warn",
+      label: "Catching up",
+      title: `${f.waiting === 1 ? "1 change" : `${fmtNum(f.waiting)} changes`} from Shopify since ${fmtRelative(f.waitingSince, now)} are still being counted. ${since}`,
+    };
+  if (!f.asOf) return { tone: "neutral", label: "Not synced yet", title: since };
+  const fresh = now - Date.parse(f.asOf) <= FRESH_MS;
+  return {
+    tone: fresh ? "good" : "neutral",
+    label: `Updated ${updated}`,
+    title: `${since} New orders and refunds usually arrive within a minute, and while this page is open bizinsights also checks Shopify every few minutes. Shopify's own reports can take a few minutes to include them too.`,
+  };
+}
 
 const pill = "inline-flex h-9 items-center gap-2 rounded-full border border-border bg-surface px-3.5 text-sm font-medium shadow-[var(--shadow)]";
 
 /**
- * The store's connection, and whether this page is live. The dashboard keeps itself up to date
- * (it re-checks every few seconds), so there is no refresh button: "Live" says so, and turns to
- * "Reconnecting…" if the last checks couldn't reach the server.
+ * The store's connection, and how current its numbers are. The dashboard keeps itself up to date
+ * (it re-checks every few seconds), so there is no refresh button: the second pill says when the
+ * numbers last matched Shopify (freshnessPill), or "Reconnecting…" if the page lost the server.
  */
-export function StoreStatus({ store, live, everySec }: { store: OverviewStore; live: LiveState; everySec: number }) {
+export function StoreStatus({ store, live, freshness, now }: { store: OverviewStore; live: LiveState; freshness: Freshness | undefined; now: number }) {
   const status = STATUS[store.status] ?? { tone: "neutral" as Tone, label: store.status };
   const synced = fmtRelative(store.lastSyncedAt);
+  const fresh = freshnessPill(live, freshness, now);
   return (
     <>
       <span className={pill} data-testid="store-status" title={synced ? `Synced with Shopify ${synced}` : "Waiting for the first sync with Shopify"}>
         <Dot tone={status.tone} pulse={store.status === "syncing"} />
         {status.label}
       </span>
-      <span className={pill} title={`This page checks for new data every ${everySec} seconds`} data-testid="live-indicator">
-        <Dot tone={LIVE[live].tone} pulse={live === "live"} />
-        {LIVE[live].label}
+      <span className={pill} title={fresh.title} data-testid="live-indicator">
+        <Dot tone={fresh.tone} />
+        {fresh.label}
       </span>
     </>
   );
 }
 
 /** What has been imported and how the numbers are counted, folded away at the foot of the page. */
-export function AboutThisData({ store, data, everySec }: { store: OverviewStore; data: ImportedData | undefined; everySec: number }) {
-  const synced = fmtRelative(store.lastSyncedAt);
+export function AboutThisData({ store, data, freshness, everySec }: { store: OverviewStore; data: ImportedData | undefined; freshness: Freshness | undefined; everySec: number }) {
+  const synced = fmtRelative(freshness?.asOf ?? store.lastSyncedAt);
   const fullHistory = store.grantedScopes.includes("read_all_orders");
   return (
     <section aria-label="About this data" className="text-sm text-muted" data-testid="about-data">
       <p>
-        {synced ? <>Synced with Shopify {synced}</> : <>Waiting for the first sync with Shopify</>} · this page updates by itself
+        {synced ? <>Up to date with Shopify as of {synced}</> : <>Waiting for the first sync with Shopify</>} · this page updates by itself
       </p>
       <details className="mt-1">
         <summary className="w-fit cursor-pointer underline decoration-border underline-offset-4 hover:text-text">About this data</summary>
@@ -89,7 +122,10 @@ export function AboutThisData({ store, data, everySec }: { store: OverviewStore;
           <p>
             Money in {store.currency}. Days and times follow the store&apos;s time zone ({store.timezone}). {store.shopDomain}
           </p>
-          <p>New numbers are checked every {everySec} seconds.</p>
+          <p>
+            New numbers are checked every {everySec} seconds. New orders and refunds usually reach bizinsights within a minute; Shopify&apos;s own reports
+            can take a few minutes to include them too, so the two may briefly differ.
+          </p>
           {!fullHistory && <p>Shopify shares the most recent 60 days of orders with apps, so older history isn&apos;t included.</p>}
         </div>
       </details>

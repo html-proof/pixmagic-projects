@@ -301,7 +301,9 @@ async function ingestBulk(data: SyncJobData, store: Store, deps: WorkerDeps, api
   // Re-resolved every chunk rather than carried in the message: the result link is a
   // short-lived signed URL, and re-reading it makes expiry a non-event instead of a failure.
   const op = await bulkStatus(api, id);
-  const url = op?.url ?? op?.partialDataUrl;
+  // The complete file only: a partial one (`partialDataUrl`, a failed export's) would be ingested
+  // to its end and the store then marked as fully imported with orders missing.
+  const url = op?.status === "COMPLETED" ? op.url : null;
   if (!url) return fallbackToPaged(data, deps, "bulk result url is gone");
   // The only URL we fetch that a response handed us (Shopify's signed result link): HTTPS only.
   if (!isHttpsUrl(url)) return fallbackToPaged(data, deps, "bulk result url is not https");

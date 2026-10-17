@@ -232,12 +232,17 @@ describe("the public pixel", () => {
     expect(pixelEventInWindow(ago(24 * 30), now, false)).toBe(true); // the local demo backfills weeks
   });
 
-  it("refuses over-long page paths", async () => {
+  it("takes paths as long as the pixel sends them, stores them cut short, and refuses longer ones", async () => {
     const { ws } = await team("viewer");
-    await createStore(ws, "p.myshopify.com", ["read_orders"]);
+    const store = await createStore(ws, "p.myshopify.com", ["read_orders"]);
     const ev = (path: string) => JSON.stringify({ events: [{ id: `e${path.length}`, name: "page_viewed", clientId: "c1", timestamp: new Date().toISOString(), path }] });
     expect((await call("POST", "/pixel/pk_p.myshopify.com", {}, ev("/products/a"))).statusCode).toBe(200);
-    expect((await call("POST", "/pixel/pk_p.myshopify.com", {}, ev(`/${"a".repeat(600)}`))).statusCode).toBe(400);
+    // The pixel cuts location.pathname at 2048 characters: those are accepted (and stored cut to
+    // 200), since a refused batch is dropped whole by the pixel.
+    expect((await call("POST", "/pixel/pk_p.myshopify.com", {}, ev(`/${"a".repeat(600)}`))).statusCode).toBe(200);
+    expect((await call("POST", "/pixel/pk_p.myshopify.com", {}, ev(`/${"a".repeat(2100)}`))).statusCode).toBe(400);
+    const visits = await systemDb.funnelVisit.findMany({ where: { storeId: store.id } });
+    for (const v of visits) expect((v.exitPath ?? "").length).toBeLessThanOrEqual(200);
   });
 });
 

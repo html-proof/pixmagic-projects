@@ -109,6 +109,8 @@ export function dashboardRoutes(app: App, deps: Deps) {
         // What the range is compared with, how it was chosen, and whether the imported orders reach back to it.
         previous: { ...dates.previous, compare: q.compare, imported: report.previousImported },
         today: report.today,
+        // When the numbers last matched Shopify, and any changes still waiting (dataFreshness in core).
+        freshness: report.freshness,
         capabilities: report.capabilities,
         modules: report.modules,
         hasData: report.hasData,

@@ -261,6 +261,13 @@ export interface ImportedData {
   historyFrom?: string | null;
 }
 
+export interface Freshness {
+  asOf: string | null;
+  waiting: number;
+  waitingSince: string | null;
+  failed: number;
+}
+
 export interface Overview {
   store: OverviewStore;
   /** While the store is in error: why Shopify stopped the sync (see syncProblem in the API). */
@@ -275,6 +282,12 @@ export interface Overview {
   previous: { from: string; to: string; until?: string; compare?: CompareMode; imported?: boolean };
   /** The store's today (YYYY-MM-DD). */
   today: string;
+  /**
+   * How current the numbers are (dataFreshness in packages/core/src/reports/overview.ts): when they
+   * last matched Shopify, changes from Shopify received and not counted yet, and since when, and
+   * changes that failed for good in the last 24 hours.
+   */
+  freshness?: Freshness;
   capabilities: Capability[];
   hasData: boolean;
   data?: ImportedData;

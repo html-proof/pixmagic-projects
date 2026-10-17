@@ -1,6 +1,6 @@
 import { Prisma, type Store, type Tx } from "@app/db";
 import { addDays, historyStart, type DateRange } from "@app/shared";
-import { num, numOrNull, r1, r2, type Scope } from "./common.js";
+import { num, numOrNull, r1, r2, SALE_VALUE, type Scope } from "./common.js";
 
 /** Stock rules for the inventory module. */
 const VELOCITY_DAYS = 30;
@@ -92,17 +92,21 @@ export async function catalog(tx: Tx, { ws, storeId }: Scope, r: DateRange) {
            (SELECT COUNT(*) FROM product_variants v WHERE v.workspace_id = ${ws} AND v.store_id = ${storeId})::int AS variants
     FROM products p
     WHERE p.workspace_id = ${ws} AND p.store_id = ${storeId}`;
+  // Net sales by vendor, from the product sales that happened in the range (before tax, after
+  // discounts and returns), on the same terms as top products and the sales overview. Line items'
+  // own prices include tax where the store's prices do, and leave order discounts and returns out.
   const vendors = await tx.$queryRaw<Array<{ vendor: string; revenue: string; units: bigint }>>`
-    SELECT TRIM(p.vendor) AS vendor, SUM(li.price * li.quantity - li.discount)::text AS revenue, SUM(li.quantity)::bigint AS units
-    FROM order_line_items li
-    JOIN orders o ON o.id = li.order_id
+    SELECT TRIM(p.vendor) AS vendor, SUM(${SALE_VALUE})::text AS revenue,
+           SUM(CASE s.action_type WHEN 'order' THEN ABS(COALESCE(s.quantity, 0)) WHEN 'return' THEN -ABS(COALESCE(s.quantity, 0)) ELSE 0 END)::bigint AS units
+    FROM order_sales s
+    JOIN order_line_items li ON li.store_id = s.store_id AND li.shopify_id = s.line_item_shopify_id
     JOIN products p ON p.workspace_id = ${ws} AND p.store_id = ${storeId} AND p.shopify_id = li.product_shopify_id
-    WHERE li.workspace_id = ${ws} AND li.store_id = ${storeId}
-      AND o.workspace_id = ${ws} AND o.store_id = ${storeId}
-      AND o.cancelled_at IS NULL AND o.local_day BETWEEN ${r.from} AND ${r.to}
+    WHERE s.workspace_id = ${ws} AND s.store_id = ${storeId} AND li.workspace_id = ${ws}
+      AND s.line_type = 'product' AND s.local_day BETWEEN ${r.from} AND ${r.to}
       AND p.vendor IS NOT NULL AND TRIM(p.vendor) <> ''
     GROUP BY TRIM(p.vendor)
-    ORDER BY SUM(li.price * li.quantity - li.discount) DESC, TRIM(p.vendor)
+    HAVING SUM(${SALE_VALUE}) > 0
+    ORDER BY SUM(${SALE_VALUE}) DESC, TRIM(p.vendor)
     LIMIT 5`;
   return {
     products: { active: num(counts?.active), draft: num(counts?.draft), archived: num(counts?.archived), total: num(counts?.total) },

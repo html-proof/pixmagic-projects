@@ -112,12 +112,14 @@ export interface SaleInput {
 export const MERCHANDISE_LINES: ReadonlySet<string> = new Set(["product", "adjustment"]);
 
 /**
- * A sale's value before tax, and its tax. A return never counts as money in, whatever sign it
- * came with: Shopify sends returns negative.
+ * A sale's value before tax, and its tax, with the sign Shopify gave it, as its reports add them
+ * up. A return's lines are mostly negative, but not all: a refund that differs from the items'
+ * value carries adjustment lines of both signs (+225.10 and −225.10 on one PixMagic refund), and
+ * only their sum is what the refund took back. Forcing every return line negative counted those
+ * pairs twice over.
  */
 export function saleValue(x: Pick<SaleInput, "actionType" | "amount" | "tax">): { value: number; tax: number } {
-  const value = x.amount - x.tax;
-  return x.actionType === "return" ? { value: -Math.abs(value), tax: -Math.abs(x.tax) } : { value, tax: x.tax };
+  return { value: x.amount - x.tax, tax: x.tax };
 }
 
 export function emptyRow(day: string): DailyMetricsRow {
