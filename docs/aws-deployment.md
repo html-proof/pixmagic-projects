@@ -547,9 +547,13 @@ for the NAT instances' and the admin host's disks): Data Lifecycle Manager's def
 (`EbsSnapshots` in data-stack.ts, production only, since one is allowed per Region) snapshots every
 volume in the Region that has no recent snapshot, daily, and keeps each 7 days. Snapshots of a
 replaced instance's disk expire too (`ExtendDeletion`). The disks hold nothing a deploy can't
-rebuild, so restoring one is only the quicker way back. To check:
-`aws ec2 describe-snapshots --owner-ids self --filters Name=tag-key,Values=aws:dlm:lifecycle-policy-id`
-(the first ones arrive within a day of the deploy).
+rebuild, so restoring one is only the quicker way back. A default policy only takes on a volume
+once it is 24 hours old, then snapshots it daily in a four-hour window it picks at random. So a new
+disk (a NAT instance replaced by a new Amazon Linux image, or the admin host) has no snapshot for
+its first one to two days, and the check can show red in that time. To check:
+`aws ec2 describe-snapshots --owner-ids self` and
+`aws dlm get-lifecycle-policies --default-policy-type VOLUME` (State ENABLED). The first snapshots of
+today's disks (created 2026-10-17 ~06:20Z) are due between 2026-10-18 06:20Z and 2026-10-19 ~06:20Z.
 
 What production does have, at no extra cost:
 - Functions in two AZs; queues with retries, backoff, a dead-letter queue (`insights-production-dlq`)
