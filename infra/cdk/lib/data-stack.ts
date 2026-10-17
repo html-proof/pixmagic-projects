@@ -1,12 +1,16 @@
 import { Duration, RemovalPolicy, Stack, type StackProps } from "aws-cdk-lib";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
+import * as cloudwatch from "aws-cdk-lib/aws-cloudwatch";
+import * as cwActions from "aws-cdk-lib/aws-cloudwatch-actions";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as rds from "aws-cdk-lib/aws-rds";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
+import * as sns from "aws-cdk-lib/aws-sns";
 import type { Construct } from "constructs";
 import type { EnvConfig } from "./config.js";
+import { NatInstancePerAz, SWAP_FILE_COMMANDS } from "./nat-instances.js";
 
 /** PostgreSQL 17, as on the PC (minor upgrades are automatic in the maintenance window). */
 const PG_VERSION = "17.11";
@@ -15,17 +19,19 @@ const PG_VERSION = "17.11";
  * What holds state, and the network around it. Changes rarely; termination protection is on.
  *
  * Network: a VPC over two Availability Zones with
- *   - public subnets: only the NAT gateway lives here (cfg.natGateways: one, the lean tier)
+ *   - public subnets: only the NAT instances live here (nat-instances.ts; cfg.natGateways of them,
+ *     one per AZ in production)
  *   - private subnets (with egress): the Lambda functions and the admin host; out to the internet
- *     (Cognito, Shopify, Meta, Google, merchants' SMTP servers) through the NAT gateway
- *   - isolated subnets: the database, with no route out at all
+ *     (Cognito, Shopify, Meta, Google, merchants' SMTP servers) through the NAT instance in their AZ
+ *   - isolated subnets: the database (primary in one AZ, standby in the other with cfg.dbMultiAz),
+ *     with no route out at all
  * plus free gateway endpoints for S3 and DynamoDB. Nothing in the VPC accepts connections from the
  * internet; the database accepts 5432 only from the functions' and the admin host's security groups.
  */
 export class DataStack extends Stack {
   readonly vpc: ec2.Vpc;
-  /** The NAT gateways (cfg.natGateways of them): every function's way out to the internet. */
-  readonly natGatewayIds: string[];
+  /** The NAT instances (cfg.natGateways of them): every function's way out to the internet. */
+  readonly natInstances: ec2.Instance[];
   readonly appSg: ec2.SecurityGroup;
   readonly db: rds.DatabaseInstance;
   readonly dbSecret: secretsmanager.ISecret;
@@ -39,11 +45,13 @@ export class DataStack extends Stack {
     super(scope, id, { ...props, terminationProtection: cfg.name === "production" });
     const prefix = `insights-${cfg.name}`;
 
+    const nat = new NatInstancePerAz({ instanceType: new ec2.InstanceType(cfg.natInstanceType), namePrefix: prefix });
     this.vpc = new ec2.Vpc(this, "Vpc", {
       vpcName: prefix,
       ipAddresses: ec2.IpAddresses.cidr("10.40.0.0/16"),
       maxAzs: 2,
       natGateways: cfg.natGateways,
+      natGatewayProvider: nat,
       subnetConfiguration: [
         { name: "public", subnetType: ec2.SubnetType.PUBLIC, cidrMask: 24 },
         { name: "app", subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS, cidrMask: 22 },
@@ -54,10 +62,43 @@ export class DataStack extends Stack {
         dynamodb: { service: ec2.GatewayVpcEndpointAwsService.DYNAMODB },
       },
     });
-    this.natGatewayIds = this.vpc.publicSubnets.flatMap((s) => {
-      const nat = s.node.tryFindChild("NATGateway");
-      return nat instanceof ec2.CfnNatGateway ? [nat.ref] : [];
-    });
+    this.natInstances = nat.instances;
+
+    // Keep each NAT instance running: the host failing → recover it onto healthy hardware; the
+    // instance itself failing (kernel, network) → reboot it. Either way the instance id and its
+    // addresses stay, so the routes need no change. The alarms live here, beside the instances (an
+    // instance id exported to the app stack would block replacing the instance), and tell the app
+    // stack's topic by name.
+    const topic = sns.Topic.fromTopicArn(this, "AlarmTopic", `arn:aws:sns:${cfg.region}:${cfg.account}:${prefix}-alarms`);
+    for (const instance of this.natInstances) {
+      const az = instance.instance.availabilityZone ?? "";
+      const name = `${prefix}-nat-${az.slice(-1)}`;
+      const check = (metricName: string) =>
+        new cloudwatch.Metric({ namespace: "AWS/EC2", metricName, dimensionsMap: { InstanceId: instance.instanceId }, period: Duration.minutes(1), statistic: "Maximum" });
+      const alarm = (id: string, metric: cloudwatch.IMetric, threshold: number, periods: number, description: string, action?: cwActions.Ec2InstanceAction) => {
+        const a = new cloudwatch.Alarm(instance, id, {
+          alarmName: `${name}-${id}`,
+          alarmDescription: description,
+          metric,
+          threshold,
+          evaluationPeriods: periods,
+          comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+          treatMissingData: cloudwatch.TreatMissingData.MISSING,
+        });
+        if (action) a.addAlarmAction(new cwActions.Ec2Action(action));
+        a.addAlarmAction(new cwActions.SnsAction(topic));
+        a.addOkAction(new cwActions.SnsAction(topic));
+      };
+      alarm("system-check", check("StatusCheckFailed_System"), 1, 2, `NAT instance in ${az}: AWS's host failed; recovering it onto new hardware`, cwActions.Ec2InstanceAction.RECOVER);
+      alarm("instance-check", check("StatusCheckFailed_Instance"), 1, 3, `NAT instance in ${az} not responding; rebooting it`, cwActions.Ec2InstanceAction.REBOOT);
+      alarm(
+        "cpu",
+        new cloudwatch.Metric({ namespace: "AWS/EC2", metricName: "CPUUtilization", dimensionsMap: { InstanceId: instance.instanceId }, period: Duration.minutes(5), statistic: "Average" }),
+        80,
+        3,
+        `NAT instance in ${az} busy for 15 minutes: outbound calls may slow down; a bigger natInstanceType (infra/cdk/lib/config.ts) fixes it`,
+      );
+    }
 
     // Functions: outbound only.
     this.appSg = new ec2.SecurityGroup(this, "AppSg", { vpc: this.vpc, securityGroupName: `${prefix}-app`, description: "Insights Lambda functions (outbound only)", allowAllOutbound: true });
@@ -151,7 +192,9 @@ export class DataStack extends Stack {
     });
 
     // A small host for database administration (restores, psql) reached only through Systems
-    // Manager: no SSH, no inbound rule, no public address. Stopped when not in use.
+    // Manager: no SSH, no inbound rule, no public address. Stopped when not in use: a new Amazon
+    // Linux image replaces it on the next deploy, and the new one stops itself once psql is in
+    // (user data runs on the first boot only, so starting it later leaves it running).
     const adminRole = new iam.Role(this, "AdminRole", {
       roleName: `${prefix}-admin-host`,
       assumedBy: new iam.ServicePrincipal("ec2.amazonaws.com"),
@@ -170,7 +213,7 @@ export class DataStack extends Stack {
       machineImage: ec2.MachineImage.latestAmazonLinux2023({ cpuType: ec2.AmazonLinuxCpuType.ARM_64 }),
       requireImdsv2: true,
       blockDevices: [{ deviceName: "/dev/xvda", volume: ec2.BlockDeviceVolume.ebs(8, { encrypted: true, volumeType: ec2.EbsDeviceVolumeType.GP3 }) }],
-      userData: ec2.UserData.custom("#!/bin/bash\ndnf install -y postgresql17 jq || dnf install -y postgresql16 jq\n"),
+      userData: ec2.UserData.custom(["#!/bin/bash", ...SWAP_FILE_COMMANDS, "dnf install -y postgresql17 jq || dnf install -y postgresql16 jq", "shutdown -h now", ""].join("\n")),
     });
   }
 }

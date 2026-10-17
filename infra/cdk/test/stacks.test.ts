@@ -39,13 +39,13 @@ beforeAll(() => {
 });
 
 describe("the data stack", () => {
-  it("keeps the database private, encrypted, backed up and protected (single AZ, the lean tier)", () => {
+  it("keeps the database private, encrypted, backed up and protected, with a standby in the other AZ", () => {
     t.data.hasResourceProperties("AWS::RDS::DBInstance", {
       PubliclyAccessible: false,
       StorageEncrypted: true,
       DeletionProtection: true,
       BackupRetentionPeriod: 14,
-      MultiAZ: false,
+      MultiAZ: true,
       DBInstanceClass: "db.t4g.small",
       Engine: "postgres",
     });
@@ -84,9 +84,64 @@ describe("the data stack", () => {
     });
   });
 
-  it("has one NAT gateway (the lean tier) and no SSH key anywhere", () => {
-    t.data.resourceCountIs("AWS::EC2::NatGateway", 1);
-    t.data.hasResourceProperties("AWS::EC2::Instance", { KeyName: Match.absent() });
+  it("goes out through a NAT instance in each AZ, not a NAT gateway, and has no SSH key anywhere", () => {
+    t.data.resourceCountIs("AWS::EC2::NatGateway", 0);
+    t.data.resourceCountIs("AWS::EC2::EIP", 0);
+    t.data.allResourcesProperties("AWS::EC2::Instance", { KeyName: Match.absent() });
+    const nats = Object.entries(t.data.findResources("AWS::EC2::Instance", { Properties: { SourceDestCheck: false } }));
+    expect(nats).toHaveLength(2);
+    const azOf = (props: { AvailabilityZone?: string }) => props.AvailabilityZone;
+    expect(new Set(nats.map(([, r]) => azOf(r.Properties))).size).toBe(2);
+    for (const [, r] of nats) {
+      // Routes move to a new instance only once it says NAT is up.
+      expect(r.CreationPolicy).toEqual({ ResourceSignal: { Timeout: "PT15M" } });
+      expect(JSON.stringify(r.Properties.UserData)).toContain("MASQUERADE");
+      expect(JSON.stringify(r.Properties.UserData)).toContain("cfn-signal");
+      // dnf is killed for lack of memory on a t4g.nano without swap.
+      expect(JSON.stringify(r.Properties.UserData)).toContain("swapon /swapfile");
+    }
+    // Each private (app) subnet's default route goes to the NAT instance in its own AZ.
+    const routes = Object.values(t.data.findResources("AWS::EC2::Route", { Properties: { DestinationCidrBlock: "0.0.0.0/0", InstanceId: Match.anyValue() } }));
+    expect(routes).toHaveLength(2);
+    const subnets = t.data.findResources("AWS::EC2::Subnet");
+    const tables = t.data.findResources("AWS::EC2::SubnetRouteTableAssociation");
+    for (const route of routes) {
+      const instanceAz = azOf(Object.fromEntries(nats)[route.Properties.InstanceId.Ref]!.Properties);
+      const assoc = Object.values(tables).find((a) => a.Properties.RouteTableId.Ref === route.Properties.RouteTableId.Ref)!;
+      expect(subnets[assoc.Properties.SubnetId.Ref]!.Properties.AvailabilityZone).toBe(instanceAz);
+    }
+    // IMDSv2 only, set on the instances: no launch templates, whose names would collide.
+    for (const [, r] of nats) expect(r.Properties.MetadataOptions).toEqual({ HttpTokens: "required" });
+    const names = Object.values(t.data.findResources("AWS::EC2::LaunchTemplate")).map((lt) => lt.Properties.LaunchTemplateName);
+    expect(new Set(names).size).toBe(names.length);
+    // EC2 refuses descriptions outside a-zA-Z0-9. _-:/()#,@[]+=&;{}!$* (an apostrophe failed a deploy).
+    const ec2Text = /^[a-zA-Z0-9. _\-:/()#,@[\]+=&;{}!$*]*$/;
+    for (const g of Object.values(t.data.findResources("AWS::EC2::SecurityGroup"))) {
+      expect(g.Properties.GroupDescription).toMatch(ec2Text);
+      for (const rule of [...(g.Properties.SecurityGroupIngress ?? []), ...(g.Properties.SecurityGroupEgress ?? [])] as Array<{ Description?: string }>) expect(rule.Description ?? "").toMatch(ec2Text);
+    }
+    for (const r of Object.values(t.data.findResources("AWS::EC2::SecurityGroupIngress"))) expect(r.Properties.Description ?? "").toMatch(ec2Text);
+    // Inbound only from inside the VPC.
+    t.data.hasResourceProperties("AWS::EC2::SecurityGroup", {
+      GroupName: "insights-production-nat",
+      SecurityGroupIngress: [Match.objectLike({ IpProtocol: "-1", CidrIp: { "Fn::GetAtt": [Match.stringLikeRegexp("^Vpc"), "CidrBlock"] } })],
+    });
+  });
+
+  it("recovers or reboots a failed NAT instance and tells the alarm topic", () => {
+    const topic = `arn:aws:sns:ap-southeast-2:605411278365:insights-production-alarms`;
+    for (const az of ["a", "b"]) {
+      t.data.hasResourceProperties("AWS::CloudWatch::Alarm", {
+        AlarmName: `insights-production-nat-${az}-system-check`,
+        MetricName: "StatusCheckFailed_System",
+        AlarmActions: [{ "Fn::Join": ["", ["arn:", { Ref: "AWS::Partition" }, ":automate:ap-southeast-2:ec2:recover"]] }, topic],
+      });
+      t.data.hasResourceProperties("AWS::CloudWatch::Alarm", {
+        AlarmName: `insights-production-nat-${az}-instance-check`,
+        MetricName: "StatusCheckFailed_Instance",
+        AlarmActions: [{ "Fn::Join": ["", ["arn:", { Ref: "AWS::Partition" }, ":automate:ap-southeast-2:ec2:reboot"]] }, topic],
+      });
+    }
   });
 });
 
@@ -122,7 +177,7 @@ describe("the app stack", () => {
     t.app.hasResourceProperties("AWS::CloudWatch::Alarm", { AlarmName: "insights-production-cron-missed-ticks" });
   });
 
-  it("tells the alarm topic about the database's events and the NAT gateway's trouble", () => {
+  it("tells the alarm topic about the database's events", () => {
     t.app.hasResourceProperties("AWS::RDS::EventSubscription", {
       SourceType: "db-instance",
       SnsTopicArn: { Ref: Match.stringLikeRegexp("^Alarms") },
@@ -131,9 +186,6 @@ describe("the app stack", () => {
     t.app.hasResourceProperties("AWS::SNS::TopicPolicy", {
       PolicyDocument: { Statement: [Match.objectLike({ Action: "sns:Publish", Principal: { Service: ["cloudwatch.amazonaws.com", "events.rds.amazonaws.com"] } })] },
     });
-    for (const name of ["nat-port-allocation", "nat-packets-dropped"]) {
-      t.app.hasResourceProperties("AWS::CloudWatch::Alarm", { AlarmName: `insights-production-${name}`, Namespace: "AWS/NATGateway", AlarmActions: [{ Ref: Match.stringLikeRegexp("^Alarms") }] });
-    }
   });
 
   it("keeps earlier function versions, so a rollback has something to go back to", () => {
