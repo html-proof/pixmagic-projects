@@ -347,7 +347,7 @@ describe("date ranges", () => {
     expect(m.sales_overview.previous).toMatchObject({ grossSales: 70, netSales: 60, totalSales: 60, orders: 2, units: 3, averageOrderValue: 35 });
     expect(m.sales_overview.current).toMatchObject({ netSales: 50, orders: 1 });
     expect(m.sales_overview.deltas.orders).toBe(-0.5);
-    expect(m.funnel.previous).toEqual({ visits: 2, conversionRate: 0.5 });
+    expect(m.funnel.previous).toEqual({ visits: 2, conversionRate: 0.5, imported: true });
     expect(m.funnel.visits).toBe(1);
 
     // Saturday on its own is still the whole day, as daily_store_metrics holds it.
@@ -380,8 +380,9 @@ describe("what the dates are compared with", () => {
 
   /** A Meta ad account and an AdSense account on the store, with what they report for `days`. */
   async function seedAds(store: Store, days: Array<[day: string, spend: number, earnings: number]>) {
+    // Connected long before these dates: their figures reach back further than any comparison here.
     const conn = (provider: string, accountId: string) =>
-      systemDb.adConnection.create({ data: { workspaceId: store.workspaceId, storeId: store.id, provider, accountId, currency: "USD", accessTokenEnc: "x", tokenKeyVersion: 1 } });
+      systemDb.adConnection.create({ data: { workspaceId: store.workspaceId, storeId: store.id, provider, accountId, currency: "USD", accessTokenEnc: "x", tokenKeyVersion: 1, historyFrom: "2020-01-01" } });
     const meta = await conn("meta", "act_1");
     const sense = await conn("adsense", "pub-1");
     for (const [day, spend, earnings] of days) {
@@ -506,6 +507,61 @@ describe("what the dates are compared with", () => {
     expect(before.previous.imported).toBe(false);
     expect(before.modules.sales_overview.previous).toBeNull();
     expect(Object.values(before.modules.sales_overview.deltas).every((x) => x === null)).toBe(true);
+  });
+
+  it("says there is no earlier data for visits before the pixel counted them, and for ad figures before every account's history", async () => {
+    const { a, ws, store } = await owner([...ALL_SCOPES, "write_pixels", "read_customer_events"]);
+    // Every order is in, so sales compare as usual: only visits and ads have a shorter history.
+    // The pixel was added at noon 20 days ago, so visits are counted in full from the day after.
+    await systemDb.store.update({ where: { id: store.id }, data: { ordersHistoryFrom: new Date(0), pixelInstalled: true, pixelInstalledAt: new Date(at(d(-20))) } });
+    const visit = (day: string, visitor: string, step = 0) =>
+      systemDb.funnelVisit.create({ data: { workspaceId: ws, storeId: store.id, day, visitor, enteredAt: new Date(at(day)), furthestStep: step } });
+    await visit(d(-20), "v0");
+    await visit(d(-14), "v1", 4);
+    await visit(d(-5), "v2", 4);
+    await visit(d(-4), "v3");
+    // Two Meta accounts: one connected long ago, one 12 days ago (its first sync brought from then on).
+    const conn = (provider: string, accountId: string, historyFrom: string, currency = "USD") =>
+      systemDb.adConnection.create({ data: { workspaceId: ws, storeId: store.id, provider, accountId, currency, accessTokenEnc: "x", tokenKeyVersion: 1, historyFrom } });
+    const old = await conn("meta", "act_old", d(-100));
+    const recent = await conn("meta", "act_new", d(-12));
+    // In euros, so not added in: its start doesn't count either.
+    await conn("meta", "act_eur", d(-2), "EUR");
+    const sense = await conn("adsense", "pub-1", d(-12));
+    const spend = (c: { id: string; accountId: string }, day: string, amount: number) =>
+      systemDb.adCampaignDaily.create({ data: { workspaceId: ws, storeId: store.id, connectionId: c.id, provider: "meta", accountId: c.accountId, campaignId: "1", campaignName: "Spring", day, spend: amount, clicks: 1 } });
+    await spend(old, d(-14), 50);
+    await spend(old, d(-5), 20);
+    await spend(recent, d(-10), 5);
+    await spend(recent, d(-5), 30);
+    for (const [day, earnings] of [[d(-10), 2], [d(-5), 4]] as const) {
+      await systemDb.adsenseDaily.create({ data: { workspaceId: ws, storeId: store.id, connectionId: sense.id, accountId: "pub-1", site: "", day, earnings, pageViews: 100 } });
+    }
+    const compared = async (cfrom: string, cto: string) =>
+      (await overview(a.headers, ws, store.id, `preset=custom&from=${d(-6)}&to=${d(-4)}&compare=custom&cfrom=${cfrom}&cto=${cto}`)).json();
+    const none = (o: Record<string, unknown>) => Object.values(o).every((x) => x === null);
+
+    // Reaching back to the pixel's first, partly counted day: the visit on it would read as fewer visits before.
+    const early = await compared(d(-21), d(-19));
+    expect(early.previous.imported).toBe(true);
+    expect(early.modules.funnel).toMatchObject({ visits: 2, conversionRate: 0.5, historyFrom: d(-19), previous: { visits: null, conversionRate: null, imported: false } });
+    expect(none(early.modules.funnel.deltas)).toBe(true);
+    expect(early.modules.ads).toMatchObject({ historyFrom: d(-12), current: { spend: 50 }, previous: { spend: null, clicks: null, conversions: null, conversionValue: null, roas: null, imported: false } });
+    expect(none(early.modules.ads.deltas)).toBe(true);
+    expect(early.modules.adsense).toMatchObject({ historyFrom: d(-12), current: { earnings: 4 }, previous: { earnings: null, pageViews: null, imported: false } });
+    expect(none(early.modules.adsense.deltas)).toBe(true);
+
+    // After the pixel was in place, visits compare; the newer Meta account's figures don't reach back yet.
+    const mid = await compared(d(-15), d(-13));
+    expect(mid.modules.funnel.previous).toEqual({ visits: 1, conversionRate: 1, imported: true });
+    expect(mid.modules.funnel.deltas).toEqual({ visits: 1, conversionRate: -0.5 });
+    expect(mid.modules.ads.previous.imported).toBe(false);
+    expect(mid.modules.ads.deltas.spend).toBeNull();
+
+    // From every counted account's start on, ads compare as usual.
+    const late = await compared(d(-11), d(-9));
+    expect(late.modules.ads).toMatchObject({ previous: { spend: 5, imported: true }, deltas: { spend: 9 } });
+    expect(late.modules.adsense).toMatchObject({ previous: { earnings: 2, imported: true }, deltas: { earnings: 1 } });
   });
 
   it("refuses comparison dates it cannot report on with a 400, on the dashboard and its downloads", async () => {

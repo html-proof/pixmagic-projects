@@ -92,7 +92,10 @@ export interface AdsModule {
   currency: string;
   accounts: Array<{ id: string; provider: "meta" | "google"; accountId: string; name: string | null; currency: string | null; status: string; lastSyncedAt: string | null; counted: boolean }>;
   current: AdTotals;
-  previous: { spend: number; clicks: number; conversions: number; conversionValue: number; roas: number | null };
+  /** The first day every counted account has figures from (each account brings the 90 days before it was connected). */
+  historyFrom?: string | null;
+  /** All null, and `imported` false, when the comparison starts before `historyFrom`: "No earlier data". */
+  previous: { spend: number | null; clicks: number | null; conversions: number | null; conversionValue: number | null; roas: number | null; imported?: boolean };
   deltas: { spend: number | null; clicks: number | null; conversions: number | null; roas: number | null };
   series: Array<{ day: string; spend: number; clicks: number; impressions: number; conversions: number; conversionValue: number }>;
   byProvider: Array<AdTotals & { provider: "meta" | "google" }>;
@@ -119,7 +122,10 @@ export interface AdsenseModule {
   currency: string;
   accounts: Array<{ id: string; provider: "adsense"; accountId: string; name: string | null; currency: string | null; status: string; lastSyncedAt: string | null; counted: boolean }>;
   current: AdsenseTotals;
-  previous: { earnings: number; pageViews: number; clicks: number; pageRpm: number | null };
+  /** The first day every counted account has figures from (as for ads). */
+  historyFrom?: string | null;
+  /** All null, and `imported` false, when the comparison starts before `historyFrom`: "No earlier data". */
+  previous: { earnings: number | null; pageViews: number | null; clicks: number | null; pageRpm: number | null; imported?: boolean };
   deltas: { earnings: number | null; pageViews: number | null; clicks: number | null; pageRpm: number | null };
   series: Array<{ day: string; earnings: number; pageViews: number; impressions: number; clicks: number }>;
   /** Per site the ads were shown on; one row with site "" when AdSense didn't split by site. */
@@ -200,7 +206,10 @@ export interface CatalogModule {
 export interface FunnelModule extends JourneySummary {
   entryPages: JourneyPageRow[];
   exitPages: JourneyPageRow[];
-  previous: { visits: number; conversionRate: number | null };
+  /** The first day every visit was counted from: the day after the pixel was put in place. */
+  historyFrom?: string | null;
+  /** Null, and `imported` false, when the comparison starts before `historyFrom`: "No earlier data". */
+  previous: { visits: number | null; conversionRate: number | null; imported?: boolean };
   deltas: { visits: number | null; conversionRate: number | null };
 }
 

@@ -512,6 +512,8 @@ describe("ads on the dashboard", () => {
     const eur = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, accountId: "act_2" } });
     const today = localDay(new Date(), "UTC");
     const day = (n: number) => addDays(today, -n);
+    // What its first sync records: the 90 days it fetched.
+    await systemDb.adConnection.update({ where: { id: usd.id }, data: { historyFrom: day(89) } });
     const base = { workspaceId: ws, storeId, provider: "meta" };
     await systemDb.adCampaignDaily.createMany({
       data: [
@@ -529,7 +531,8 @@ describe("ads on the dashboard", () => {
     const ads = res.json().modules.ads;
     expect(ads.currency).toBe("USD");
     expect(ads.current).toMatchObject({ spend: 40, clicks: 100, impressions: 4000, conversions: 4, conversionValue: 180, cpc: 0.4, costPerConversion: 10, roas: 4.5 });
-    expect(ads.previous).toMatchObject({ spend: 20, conversions: 1 });
+    expect(ads.previous).toMatchObject({ spend: 20, conversions: 1, imported: true });
+    expect(ads.historyFrom).toBe(day(89));
     expect(ads.deltas.spend).toBe(1);
     expect(ads.series).toHaveLength(7);
     expect(ads.series.find((d: { day: string }) => d.day === day(1)).spend).toBe(30);
@@ -574,7 +577,8 @@ describe("AdSense on the dashboard", () => {
     const sense = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, provider: "adsense" } });
     await syncAdConnection(sense.id, day(13), today, ctx.deps.fetchImpl);
     const synced = await systemDb.adConnection.findUniqueOrThrow({ where: { id: sense.id } });
-    expect(synced).toMatchObject({ currency: "USD", status: "active" });
+    // The sync fetched every day from day(13) on: that is where its history starts.
+    expect(synced).toMatchObject({ currency: "USD", status: "active", historyFrom: day(13) });
     expect(await systemDb.adsenseDaily.count({ where: { connectionId: sense.id } })).toBe(3);
     await systemDb.dailyStoreMetrics.create({ data: { workspaceId: ws, storeId, day: day(1), grossSales: 300, orders: 3 } });
 
@@ -585,7 +589,8 @@ describe("AdSense on the dashboard", () => {
     expect(m.ads.accounts.map((a: { provider: string }) => a.provider)).toEqual(["meta", "meta"]);
     expect(m.adsense.currency).toBe("USD");
     expect(m.adsense.current).toMatchObject({ earnings: 15, pageViews: 6000, impressions: 11000, clicks: 25, pageRpm: 2.5 });
-    expect(m.adsense.previous).toMatchObject({ earnings: 5, pageViews: 2500 });
+    expect(m.adsense.previous).toMatchObject({ earnings: 5, pageViews: 2500, imported: true });
+    expect(m.adsense.historyFrom).toBe(day(13));
     expect(m.adsense.deltas.earnings).toBe(2);
     expect(m.adsense.sites.map((s: { site: string; earnings: number }) => [s.site, s.earnings])).toEqual([["ads-shop.example.com", 12.5], ["blog.example.com", 2.5]]);
     expect(m.adsense.series).toHaveLength(7);

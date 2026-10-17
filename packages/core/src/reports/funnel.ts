@@ -1,5 +1,16 @@
-import { Prisma, type Tx } from "@app/db";
-import { delta, PURCHASED_STEP, SITE_SECTIONS, summarizeJourney, type Comparison, type DateRange, type JourneyPageRow, type SiteSection } from "@app/shared";
+import { Prisma, type Store, type Tx } from "@app/db";
+import {
+  comparisonImported,
+  delta,
+  PURCHASED_STEP,
+  SITE_SECTIONS,
+  summarizeJourney,
+  visitsHistoryStart,
+  type Comparison,
+  type DateRange,
+  type JourneyPageRow,
+  type SiteSection,
+} from "@app/shared";
 import { localMoment, type Scope } from "./common.js";
 
 // ---------------------------------------------------------------------------
@@ -10,7 +21,15 @@ import { localMoment, type Scope } from "./common.js";
 const TOP_PAGES = 8;
 const isSection = (s: string | null): s is SiteSection => s !== null && (SITE_SECTIONS as readonly string[]).includes(s);
 
-export async function funnel(tx: Tx, { ws, storeId }: Scope, range: DateRange, previous: Comparison, timeZone: string) {
+/**
+ * The store's funnel for these dates, against its comparison. Visits are counted only from when
+ * the web pixel was put in place (`historyFrom`, see `visitsHistoryStart`): a comparison reaching
+ * back before that would count a period partly unrecorded and show a rise that never happened, so
+ * its figures and changes are left out (null, `previous.imported` false) and the page says there
+ * is no earlier data.
+ */
+export async function funnel(tx: Tx, { ws, storeId }: Scope, range: DateRange, previous: Comparison, store: Pick<Store, "timezone" | "pixelInstalledAt">) {
+  const timeZone = store.timezone;
   const inRange = (r: DateRange) => Prisma.sql`workspace_id = ${ws} AND store_id = ${storeId} AND day BETWEEN ${r.from} AND ${r.to}`;
   // A running comparison's last day: the visits that had started by the same time of day (one
   // recorded before visits were timed counts, as it always did).
@@ -45,9 +64,15 @@ export async function funnel(tx: Tx, { ws, storeId }: Scope, range: DateRange, p
      FROM funnel_visits WHERE ${inRange(range)} AND exit_path IS NOT NULL AND furthest_step < ${PURCHASED_STEP}
      GROUP BY exit_path ORDER BY COUNT(*) DESC, exit_path LIMIT ${TOP_PAGES})`;
 
-  const [prev] = await tx.$queryRaw<Array<{ visits: number; purchases: number }>>`
-    SELECT COUNT(*)::int AS visits, COUNT(*) FILTER (WHERE furthest_step = ${PURCHASED_STEP})::int AS purchases
-    FROM funnel_visits WHERE ${inComparison}`;
+  const [first] = await tx.$queryRaw<Array<{ day: string | null }>>`
+    SELECT MIN(day) AS day FROM funnel_visits WHERE workspace_id = ${ws} AND store_id = ${storeId}`;
+  const historyFrom = visitsHistoryStart(store.pixelInstalledAt, timeZone, first?.day ?? null);
+  const imported = comparisonImported(previous, historyFrom);
+  const [prev] = imported
+    ? await tx.$queryRaw<Array<{ visits: number; purchases: number }>>`
+        SELECT COUNT(*)::int AS visits, COUNT(*) FILTER (WHERE furthest_step = ${PURCHASED_STEP})::int AS purchases
+        FROM funnel_visits WHERE ${inComparison}`
+    : [];
 
   const sections = new Map<SiteSection, { section: SiteSection; visits: number; entries: number }>();
   for (const r of sectionRows) {
@@ -66,13 +91,15 @@ export async function funnel(tx: Tx, { ws, storeId }: Scope, range: DateRange, p
       .filter((r) => r.kind === kind)
       .map((r) => ({ path: r.path, section: isSection(r.section) ? r.section : "other", visits: r.visits, purchases: r.purchases }));
 
-  const prevVisits = prev?.visits ?? 0;
-  const prevConversion = prevVisits > 0 ? (prev?.purchases ?? 0) / prevVisits : null;
+  const prevVisits = imported ? (prev?.visits ?? 0) : null;
+  const prevConversion = prevVisits ? (prev?.purchases ?? 0) / prevVisits : null;
   return {
     ...summary,
     entryPages: pages("entry"),
     exitPages: pages("exit"),
-    previous: { visits: prevVisits, conversionRate: prevConversion },
-    deltas: { visits: delta(summary.visits, prevVisits), conversionRate: delta(summary.conversionRate, prevConversion) },
+    /** The first day every visit was counted from (null: none recorded yet). */
+    historyFrom,
+    previous: { visits: prevVisits, conversionRate: prevConversion, imported },
+    deltas: { visits: imported ? delta(summary.visits, prevVisits) : null, conversionRate: imported ? delta(summary.conversionRate, prevConversion) : null },
   };
 }

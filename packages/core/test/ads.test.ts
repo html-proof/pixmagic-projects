@@ -15,6 +15,9 @@ import {
   metaAuthorizeUrl,
   metaCampaignDays,
   metaExchangeCode,
+  ADS_BACKFILL_DAYS,
+  ADS_RECHECK_DAYS,
+  recheckDays,
   type FetchLike,
 } from "../src/index.js";
 
@@ -203,5 +206,20 @@ describe("AdSense", () => {
     await expect(adsenseSiteDays(adsense(none.fetchImpl), "AT", "pub-1", "2026-10-01' OR 1=1", "2026-10-01")).rejects.toThrow("Invalid date range");
     await expect(adsenseSiteDays(adsense(none.fetchImpl), "AT", "../accounts/pub-1", "2026-10-01", "2026-10-01")).rejects.toBeInstanceOf(AdsApiError);
     expect(none.calls).toHaveLength(1);
+  });
+});
+
+describe("the daily re-check of an ad account", () => {
+  it("fetches the first sync's whole 90 days while the stored history falls short of them", () => {
+    const now = new Date("2026-10-17T12:00:00Z");
+    const conn = (lastSyncedAt: Date | null, historyFrom: string | null) => ({ timezone: "UTC", lastSyncedAt, historyFrom });
+    // 90 days up to 17 Oct start on 20 Jul.
+    expect(recheckDays(conn(now, "2026-07-20"), now)).toBe(ADS_RECHECK_DAYS);
+    expect(recheckDays(conn(now, "2026-05-01"), now)).toBe(ADS_RECHECK_DAYS);
+    // Its first sync failed and a later one worked, or it was connected before its start was recorded.
+    expect(recheckDays(conn(now, "2026-09-18"), now)).toBe(ADS_BACKFILL_DAYS);
+    expect(recheckDays(conn(now, null), now)).toBe(ADS_BACKFILL_DAYS);
+    // Never synced yet: the first sync, queued on connecting, is on its way.
+    expect(recheckDays(conn(null, null), now)).toBe(ADS_RECHECK_DAYS);
   });
 });
