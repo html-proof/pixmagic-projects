@@ -426,8 +426,8 @@ describe("KPIs", () => {
     sale({ orderId: "o3", happenedAt: new Date("2026-03-01T18:00:00Z"), actionType: "return", amount: -999 }),
     // o4: 30, late in the evening in New York.
     sale({ orderId: "o4", happenedAt: new Date("2026-03-02T01:00:00Z"), amount: 30 }),
-    // o1 refunds one item on Mar 3 (45 + 4.50 tax). A return sent positive still counts as one.
-    sale({ orderId: "o1", happenedAt: new Date("2026-03-03T15:00:00Z"), actionType: "return", amount: 49.5, tax: 4.5 }),
+    // o1 refunds one item on Mar 3 (45 + 4.50 tax).
+    sale({ orderId: "o1", happenedAt: new Date("2026-03-03T15:00:00Z"), actionType: "return", amount: -49.5, tax: -4.5 }),
   ];
 
   it("counts orders on the day placed, cancelled ones too; sales on the day they happened", () => {
@@ -472,12 +472,39 @@ describe("KPIs", () => {
     expect(s.returningCustomerRate).toBe(0.5);
   });
 
-  it("values a sale before tax, and never a return as money in", () => {
+  it("values a sale before tax, with the sign Shopify gave it", () => {
     expect(saleValue({ actionType: "order", amount: 110, tax: 10 })).toEqual({ value: 100, tax: 10 });
     expect(saleValue({ actionType: "return", amount: -110, tax: -10 })).toEqual({ value: -100, tax: -10 });
-    expect(saleValue({ actionType: "return", amount: 110, tax: 10 })).toEqual({ value: -100, tax: -10 });
+    // A refund's adjustment lines come with both signs; each keeps its own.
+    expect(saleValue({ actionType: "return", amount: 225.1, tax: 0 })).toEqual({ value: 225.1, tax: 0 });
     // An edit can go either way.
     expect(saleValue({ actionType: "update", amount: -5, tax: 0 })).toEqual({ value: -5, tax: 0 });
+  });
+
+  // Regression: two PixMagic refunds as Shopify recorded them (2026-09). Forcing every return line
+  // negative counted A$586.70 of returns where Shopify counts A$45.50, so net and total sales were
+  // A$541.20 short.
+  it("adds a refund's adjustment lines up with their signs, as Shopify's reports do", () => {
+    const at = new Date("2026-09-11T05:33:05Z");
+    const refunds: SaleInput[] = [
+      // #2727S: the item (206.10 with 18.74 GST, 20.81 of it discount) and its shipping refunded, and
+      // a pair of adjustments that cancel out.
+      sale({ orderId: "a", happenedAt: at, actionType: "return", quantity: -1, amount: -206.1, discount: -20.81, tax: -18.74 }),
+      sale({ orderId: "a", happenedAt: at, actionType: "return", lineType: "shipping", quantity: null, amount: -19, tax: -1.73 }),
+      sale({ orderId: "a", happenedAt: at, actionType: "return", lineType: "adjustment", quantity: null, amount: 225.1 }),
+      sale({ orderId: "a", happenedAt: at, actionType: "return", lineType: "adjustment", quantity: null, amount: -225.1 }),
+      // #2804S: 45.50 given back with no item returned.
+      sale({ orderId: "b", happenedAt: at, actionType: "return", lineType: "adjustment", quantity: null, amount: 45.5 }),
+      sale({ orderId: "b", happenedAt: at, actionType: "return", lineType: "adjustment", quantity: null, amount: -45.5 }),
+      sale({ orderId: "b", happenedAt: at, actionType: "return", lineType: "adjustment", quantity: null, amount: -45.5 }),
+    ];
+    const d = aggregateDaily([], refunds, "Australia/Melbourne", localDay).get("2026-09-11")!;
+    expect(d.refunds).toBeCloseTo(187.36 + 45.5, 6);
+    expect(d.shipping).toBeCloseTo(-17.27, 6);
+    expect(d.taxes).toBeCloseTo(-20.47, 6);
+    expect(d.totalSales).toBeCloseTo(-(206.1 + 19 + 45.5), 6);
+    expect(d.units).toBe(-1);
+    expect(d.refundedOrders).toBe(2);
   });
 
   it("returns null ratios for empty data instead of fake zeros", () => {

@@ -15,7 +15,10 @@ const eventSchema = z.object({
   clientId: z.string().min(1).max(200),
   timestamp: z.string().datetime({ offset: true }),
   // The page it happened on (location.pathname). Optional: pixels deployed before it existed send none.
-  path: z.string().max(512).optional(),
+  // Up to the 2048 characters the pixel sends (shopify-app/extensions/insights-pixel): one longer
+  // path used to fail the whole batch, and the pixel drops a refused batch, so those visits were
+  // lost. What is stored is cut down by cleanPath (MAX_PATH).
+  path: z.string().max(2048).optional(),
 });
 const bodySchema = z.object({ events: z.array(eventSchema).min(1).max(50) });
 /** Clock skew tolerated on a shopper's device. */
@@ -56,7 +59,8 @@ export function pixelRoutes(app: App, deps: Deps) {
     await limit(deps.coord, `rl:pixel:${clientIp(c)}`, LIMITS.pixelIp);
     // navigator.sendBeacon posts text/plain, so parse the raw text whatever the content type.
     const raw = await c.req.text();
-    if (raw.length > 64 * 1024) return c.json({ error: "invalid_body" }, 413);
+    // 50 events (the pixel's largest batch) with 2048-character paths fit.
+    if (raw.length > 128 * 1024) return c.json({ error: "invalid_body" }, 413);
     let json: unknown;
     try {
       json = JSON.parse(raw);

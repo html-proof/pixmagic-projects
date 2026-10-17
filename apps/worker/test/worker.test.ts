@@ -1,4 +1,6 @@
+import { readFileSync } from "node:fs";
 import { createServer, type AddressInfo, type Socket } from "node:net";
+import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { systemDb, toNumber } from "@app/db";
 import { resetDb } from "@app/db/testing";
@@ -616,9 +618,17 @@ describe("aggregation parity", () => {
           sale({ lineType: LINES[i % LINES.length], quantity: null, totalAmount: saleMoney("4.40"), totalTaxAmount: saleMoney("0.40") }),
         ]),
       ];
-      // Refunds late on 6 Jan UTC (7 Jan in Tokyo), one sent with a positive amount; edits; cancellations.
+      // Refunds late on 6 Jan UTC (7 Jan in Tokyo), some with adjustment lines of both signs (a refund
+      // that differs from the items' value); edits; cancellations.
       if (i % 4 === 0) agreements.push(agreement("2026-01-06T23:30:00Z", [sale({ actionType: "RETURN", totalAmount: saleMoney("-3.33"), totalTaxAmount: saleMoney("-0.30") })]));
-      if (i % 6 === 0) agreements.push(agreement("2026-01-06T23:30:00Z", [sale({ actionType: "RETURN", quantity: 2, totalAmount: saleMoney("2.00") })]));
+      if (i % 6 === 0)
+        agreements.push(
+          agreement("2026-01-06T23:30:00Z", [
+            sale({ actionType: "RETURN", lineType: "ADJUSTMENT", quantity: null, totalAmount: saleMoney("2.00") }),
+            sale({ actionType: "RETURN", lineType: "ADJUSTMENT", quantity: null, totalAmount: saleMoney("-2.00") }),
+            sale({ actionType: "RETURN", lineType: "ADJUSTMENT", quantity: null, totalAmount: saleMoney("-2.00") }),
+          ]),
+        );
       if (i % 7 === 0) agreements.push(agreement("2026-01-08T05:00:00Z", [sale({ actionType: "UPDATE", quantity: null, totalAmount: saleMoney("-1.50") })]));
       if (i % 9 === 0) agreements.push(agreement("2026-01-10T00:00:00Z", [sale({ actionType: "RETURN", lineType: "SHIPPING", quantity: null, totalAmount: saleMoney("-4.40"), totalTaxAmount: saleMoney("-0.40") })]));
       await upsertOrder(
@@ -681,6 +691,49 @@ describe("aggregation parity", () => {
     }
     // The cancellations are orders of the days they were placed, with their reversal on the 10th.
     expect(sql.find((r) => r.day === "2026-01-10")).toMatchObject({ orders: 0 });
+  });
+
+  // Regression (2026-10-17 audit): two PixMagic refunds as Shopify recorded them. Every return line
+  // used to be forced negative, so the adjustment pairs counted A$586.70 of returns where Shopify
+  // counts A$45.50. The data migration re-totals the days stored that way.
+  it("adds a refund's adjustment lines up with their signs, and the migration repairs stored days", async () => {
+    const store = await makeStore(["read_orders"], "Australia/Melbourne");
+    const placed = "2026-09-18T03:00:00Z";
+    const refunded = "2026-09-20T22:24:44Z"; // 21 Sep in Melbourne
+    await upsertOrder(
+      store,
+      normalizeGraphqlOrder(
+        gOrder(2804, {
+          createdAt: placed,
+          updatedAt: refunded,
+          agreements: {
+            pageInfo: { hasNextPage: false },
+            nodes: [
+              agreement(placed, [sale({ totalAmount: saleMoney("100.00"), totalTaxAmount: saleMoney("9.09"), lineItem: { id: "gid://shopify/LineItem/28040" } })]),
+              agreement(refunded, [
+                sale({ actionType: "RETURN", lineType: "ADJUSTMENT", quantity: null, totalAmount: saleMoney("45.50") }),
+                sale({ actionType: "RETURN", lineType: "ADJUSTMENT", quantity: null, totalAmount: saleMoney("-45.50") }),
+                sale({ actionType: "RETURN", lineType: "ADJUSTMENT", quantity: null, totalAmount: saleMoney("-45.50") }),
+              ]),
+            ],
+          },
+        }),
+      ),
+    );
+    await recomputeDays(store, ["2026-09-18", "2026-09-21"]);
+    const day = () => systemDb.dailyStoreMetrics.findUniqueOrThrow({ where: { storeId_day: { storeId: store.id, day: "2026-09-21" } } });
+    expect(toNumber((await day()).refunds)).toBe(45.5);
+    expect(toNumber((await day()).totalSales)).toBe(-45.5);
+
+    // As the old rule stored it; the order's own day is set apart to show it is left alone.
+    await systemDb.dailyStoreMetrics.update({ where: { storeId_day: { storeId: store.id, day: "2026-09-21" } }, data: { refunds: 136.5, totalSales: -136.5 } });
+    await systemDb.dailyStoreMetrics.update({ where: { storeId_day: { storeId: store.id, day: "2026-09-18" } }, data: { grossSales: 220 } });
+    const migration = readFileSync(fileURLToPath(new URL("../../../packages/db/prisma/migrations/20261017140100_returns_keep_shopify_sign/migration.sql", import.meta.url)), "utf8");
+    await systemDb.$executeRawUnsafe(migration);
+    expect(toNumber((await day()).refunds)).toBe(45.5);
+    expect(toNumber((await day()).totalSales)).toBe(-45.5);
+    const placedDay = await systemDb.dailyStoreMetrics.findUniqueOrThrow({ where: { storeId_day: { storeId: store.id, day: "2026-09-18" } } });
+    expect(toNumber(placedDay.grossSales)).toBe(220);
   });
 });
 

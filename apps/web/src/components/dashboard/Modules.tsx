@@ -191,7 +191,7 @@ export function DiscountCodesCard({ m, currency }: { m: DiscountCodesModule; cur
   // Amounts per code need "View discount performance" (Team & Access).
   const money = m.items.some((d) => d.sales !== undefined);
   return (
-    <Panel id="discount_codes" title="Discount codes" help="Codes customers used most in these dates. Amounts are the total discounts on the orders that used each code (including automatic discounts), so an order with several codes counts toward each.">
+    <Panel id="discount_codes" title="Discount codes" help="Codes customers used most in these dates. Amounts are the discounts on the items of the orders that used each code, automatic ones included, before tax, as in the Discounts line (shipping discounts are in shipping). An order with several codes counts toward each.">
       {m.items.length === 0 ? (
         <Empty>No discount codes were used in these dates.</Empty>
       ) : (
@@ -202,7 +202,7 @@ export function DiscountCodesCard({ m, currency }: { m: DiscountCodesModule; cur
                 <th className="px-1 pb-2 font-normal">Code</th>
                 <th className="px-1 pb-2 text-right font-normal">Orders</th>
                 {money && <th className="px-1 pb-2 text-right font-normal">Discounts on these orders</th>}
-                {money && <th className="px-1 pb-2 text-right font-normal">Sales</th>}
+                {money && <th className="px-1 pb-2 text-right font-normal">Net sales</th>}
               </tr>
             </thead>
             <tbody>

@@ -192,22 +192,34 @@ export async function fulfillment(tx: Tx, { ws, storeId }: Scope, r: DateRange, 
  * Most used discount codes. Codes are case-insensitive in Shopify, so usage is
  * grouped case-insensitively and shown with its most common spelling. An order
  * that used several codes counts toward each of them.
+ *
+ * The money is the orders' own sales records, on the sales overview's terms, so it reconciles with
+ * its Discounts line: `discount` is what the orders' items were discounted before tax (codes and
+ * automatic discounts; shipping discounts are in shipping, as in Shopify's reports), `sales` the
+ * orders' net sales after their returns, cancellations and edits. Orders placed in the range count,
+ * cancelled ones too, as Shopify's sales by discount counts them; a cancelled order's net sales are 0.
+ * (It used to sum the orders' totalDiscountsSet: tax included, shipping discounts in, as placed.)
  */
 export async function discountCodes(tx: Tx, { ws, storeId }: Scope, r: DateRange) {
   const rows = await tx.$queryRaw<Array<{ code: string; orders: number; discount: string; sales: string }>>`
     SELECT mode() WITHIN GROUP (ORDER BY x.code) AS code, COUNT(*)::int AS orders,
-           SUM(x.total_discounts)::text AS discount, SUM(x.subtotal)::text AS sales
+           SUM(x.discount)::text AS discount, SUM(x.sales)::text AS sales
     FROM (
       SELECT DISTINCT ON (o.id, LOWER(TRIM(c.code))) o.id, LOWER(TRIM(c.code)) AS code_key, TRIM(c.code) AS code,
-             o.total_discounts, o.subtotal
+             COALESCE(m.discount, 0) AS discount, COALESCE(m.sales, 0) AS sales
       FROM orders o
       CROSS JOIN LATERAL unnest(o.discount_codes) AS c(code)
+      LEFT JOIN LATERAL (
+        SELECT SUM(s.discount) FILTER (WHERE s.action_type = 'order') AS discount, SUM(${SALE_VALUE}) AS sales
+        FROM order_sales s
+        WHERE s.workspace_id = ${ws} AND s.store_id = ${storeId} AND s.order_id = o.id AND ${MERCHANDISE}
+      ) m ON TRUE
       WHERE o.workspace_id = ${ws} AND o.store_id = ${storeId}
-        AND o.cancelled_at IS NULL AND o.local_day BETWEEN ${r.from} AND ${r.to}
+        AND o.local_day BETWEEN ${r.from} AND ${r.to}
         AND TRIM(c.code) <> ''
     ) x
     GROUP BY x.code_key
-    ORDER BY COUNT(*) DESC, SUM(x.total_discounts) DESC, x.code_key
+    ORDER BY COUNT(*) DESC, SUM(x.discount) DESC, x.code_key
     LIMIT 10`;
   return { items: rows.map((x) => ({ code: x.code, orders: num(x.orders), discount: num(x.discount), sales: num(x.sales) })) };
 }

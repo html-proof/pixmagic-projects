@@ -81,7 +81,11 @@ shipping, taxes and total sales as Shopify's sales reports for the same dates.
 - **A sale counts on the day it happened**: an order's sales on the day it was placed, a refund, return, cancellation or edit on the day it was made (the agreement's `happenedAt`), whatever day the order was placed. Last month's numbers can change only if Shopify backdates a record, which it doesn't.
 - **Cancelled orders** count as orders of the day they were placed, as in Shopify's reports; the cancellation is a return on the day it was made, so a cancelled order adds nothing to net sales once both are in the range. Operational modules (order timing, shipping, discount codes, vendors) still leave cancelled orders out.
 - **Prices that include tax** (GST, VAT) are taken apart as Shopify does: a sale's value is its amount less its tax.
-- **A return is never money in**: a return is counted as negative whatever sign it came with.
+- **Every sale keeps the sign Shopify gave it**, as Shopify's reports add them up. A return's lines are
+  mostly negative, but a refund that differs from the items' value carries adjustment lines of both
+  signs (+225.10 and −225.10 on one PixMagic refund), and only their sum is what it took back. Until
+  2026-10-17 every return line was forced negative, which counted those pairs twice; migration
+  20261017140100 re-totalled the days stored that way.
 - **Missing denominators** produce `null` (shown as "—"), never a fake 0.
 - Tax and shipping are excluded from net sales and included in total sales. Gift card sales and tips are in neither (Shopify counts a gift card when it is spent, not when it is sold).
 
@@ -102,7 +106,9 @@ shipping, taxes and total sales as Shopify's sales reports for the same dates.
 | **Refund rate** | Returns ÷ (Gross − Discounts) | Share of sales later taken back |
 | **Returning customer rate** | orders from returning customers ÷ orders with a customer | Requires `read_customers`. A customer is "returning" if Shopify reports more than one order for them, or we have an earlier order from them |
 | Top products | Σ net sales and Σ net items per product (its product sales in the range), top 5 | Requires `read_products`; the products together make net sales |
-| **Conversion rate** | visits that completed checkout ÷ visits | From the web pixel |
+| Top vendors | Σ net sales and Σ net items of each vendor's products (their product sales in the range), top 5 | Same terms as top products; used to be line-item prices, tax included |
+| Discount codes | per code, the orders placed with it (cancelled included, as Shopify counts them): Σ discount before tax of their items as sold, and their net sales | Reconciles with the Discounts line: shipping discounts are in shipping; an order with two codes counts for both. Used to be the orders' `totalDiscountsSet` (tax and shipping discounts in) |
+| **Conversion rate** | visits that completed checkout ÷ visits | From the web pixel: shown as "Tracked visits that bought", never as Shopify's conversion rate, which divides by Shopify's sessions |
 | Funnel step | visits whose furthest step is this one or later | Steps: visited → viewed a product → added to cart → started checkout → purchased |
 | Left at a step | visits whose furthest step is exactly this one | Plus the site section they were last on |
 | Section exit rate | visits that left the site from this section without buying ÷ visits that saw this section | |
@@ -227,6 +233,22 @@ Stored paths drop the query string, fragment and market prefix (`/en-au`). Produ
 Shoppers who decline analytics consent are not tracked, so funnel numbers are behavioural trends. Today's numbers include visits still in progress, which count as exits from the page they are on. Revenue KPIs never use pixel data.
 
 `funnel_daily` is no longer written or read. It holds whatever the pre-visit pixel recorded and can be dropped once nothing needs that history.
+
+## How current the numbers are
+
+The pill beside the store's status says when the numbers last matched Shopify (`freshness` in the
+overview, `dataFreshness` in packages/core/src/reports/overview.ts), not whether the page is polling:
+
+- **Updated …**: the later of the last finished order import or re-read and the last order
+  notification processed. Green while that is within 15 minutes.
+- **Catching up**: order notifications received more than 5 minutes ago are still waiting to be
+  counted, so the numbers are behind Shopify's by about that much.
+- **Some updates failed**: order notifications failed for good in the last 24 hours; the nightly
+  reconcile reads those orders again.
+- **Reconnecting…**: the page itself can't reach bizinsights, so it shows its last answer.
+
+Shopify's own reports can take a few minutes to include a new order too, so the two can differ
+briefly in either direction.
 
 ## Known limitations
 

@@ -115,15 +115,15 @@ export function FunnelCard({ m, versus }: { m: FunnelModule; versus?: string }) 
     <Panel
       id="funnel"
       title="Shopping funnel"
-      help="Every visit to your store in these dates: how far shoppers got, and the page they were on when they left. A visit is one shopper on one day. Shoppers who decline tracking aren't counted, so treat these as trends."
+      help="Every visit the bizinsights pixel tracked in these dates: how far shoppers got, and the page they were on when they left. A tracked visit is one shopper on one day, and shoppers who decline tracking aren't counted, so these are trends, not Shopify's sessions or conversion rate (Shopify Analytics counts every session, ending one after 30 minutes idle)."
     >
       {m.visits === 0 ? (
         <Empty>No storefront visits recorded in these dates yet. They show up here within a minute of someone browsing your store.</Empty>
       ) : (
         <>
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-            <Stat label="Visits" value={<AnimatedNumber value={m.visits} format={fmtNum} />} note={<Delta value={m.deltas.visits} label={versus} />} />
-            <Stat label="Conversion rate" value={<AnimatedNumber value={m.conversionRate} format={fmtPct} />} note={<Delta value={m.deltas.conversionRate} label={versus} />} />
+            <Stat label="Tracked visits" value={<AnimatedNumber value={m.visits} format={fmtNum} />} note={<Delta value={m.deltas.visits} label={versus} />} />
+            <Stat label="Tracked visits that bought" value={<AnimatedNumber value={m.conversionRate} format={fmtPct} />} note={<Delta value={m.deltas.conversionRate} label={versus} />} />
             <Stat label="Completed a purchase" value={<AnimatedNumber value={m.purchases} format={fmtNum} />} tone="good" note="Visits that ended in a finished checkout." />
             <Stat label="Left without buying" value={<AnimatedNumber value={m.exits} format={fmtNum} />} note={`${fmtPct(m.visits ? m.exits / m.visits : null)} of visits.`} />
           </div>

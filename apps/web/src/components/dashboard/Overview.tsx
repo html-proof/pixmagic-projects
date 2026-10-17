@@ -72,7 +72,7 @@ export function businessHealth(ov: Overview, currency: string): Check[] {
   }
   const f = m.funnel;
   if (f && f.visits > 0) {
-    out.push({ id: "conversion", topic: "shoppers", area: "Visitors who bought", health: gradeTrend(f.deltas.conversionRate, running), text: `${fmtPct(f.conversionRate)} of ${plural(f.visits, "visit")} ended in a purchase${changeWords(f.deltas.conversionRate, level(on), on)}.` });
+    out.push({ id: "conversion", topic: "shoppers", area: "Tracked visits that bought", health: gradeTrend(f.deltas.conversionRate, running), text: `${fmtPct(f.conversionRate)} of ${plural(f.visits, "visit")} ended in a purchase${changeWords(f.deltas.conversionRate, level(on), on)}.` });
   }
   const cu = m.customers;
   if (cu && cu.current.returningCustomerRate !== null) {
@@ -190,7 +190,7 @@ export function StoreSummary({ ov, currency }: { ov: Overview; currency: string 
         : `On ${fmtDay(ov.range.to, { year: false })}`;
   return (
     <p className="text-sm leading-relaxed">
-      {when} you made <B>{fmtMoney(s.current.netSales, currency)}</B> from{" "}
+      {when} you had <B>{fmtMoney(s.current.netSales, currency)}</B> in net sales from{" "}
       <B>{plural(s.current.orders, "order")}</B>
       {salesChange(ov, s.deltas.netSales)}.{" "}
       {attention > 0 ? (
@@ -366,14 +366,14 @@ export function OverviewDetail({ ov, currency, onOpen }: { ov: Overview; currenc
           <p className="text-xs font-medium uppercase tracking-wide text-muted">In short</p>
           {s && (
             <p>
-              From {range} you made <B>{money(s.current.netSales)}</B> from <B>{plural(s.current.orders, "order")}</B>
+              From {range} you had <B>{money(s.current.netSales)}</B> in net sales from <B>{plural(s.current.orders, "order")}</B>
               {s.current.averageOrderValue !== null ? <>, about {money(s.current.averageOrderValue)} each</> : null}
               {salesChange(ov, s.deltas.netSales)}.
             </p>
           )}
           {f && f.visits > 0 && (
             <p>
-              <B>{plural(f.visits, "visit")}</B> to your store, and <B>{fmtPct(f.conversionRate)}</B> of them bought.
+              <B>{plural(f.visits, "tracked visit")}</B> to your store, and <B>{fmtPct(f.conversionRate)}</B> of them bought.
             </p>
           )}
           {counts.graded > 0 && (
@@ -449,8 +449,8 @@ export function OverviewDetail({ ov, currency, onOpen }: { ov: Overview; currenc
                 <Row label="Orders" now={fmtNum(s.current.orders)} before={s.previous ? fmtNum(s.previous.orders) : null} change={<Change value={s.deltas.orders} />} />
                 <Row label="Average order" now={s.current.averageOrderValue !== null ? money(s.current.averageOrderValue) : "—"} before={s.previous && s.previous.averageOrderValue !== null ? money(s.previous.averageOrderValue) : null} change={<Change value={s.deltas.averageOrderValue} />} />
                 <Row label="Items sold" now={fmtNum(s.current.units)} />
-                {f && <Row label="Store visits" now={fmtNum(f.visits)} before={fmtNum(f.previous.visits)} change={<Change value={f.deltas.visits} />} />}
-                {f && <Row label="Visitors who bought" now={fmtPct(f.conversionRate)} before={f.previous.conversionRate !== null ? fmtPct(f.previous.conversionRate) : null} change={<Change value={f.deltas.conversionRate} />} />}
+                {f && <Row label="Tracked visits (pixel)" now={fmtNum(f.visits)} before={fmtNum(f.previous.visits)} change={<Change value={f.deltas.visits} />} />}
+                {f && <Row label="Tracked visits that bought" now={fmtPct(f.conversionRate)} before={f.previous.conversionRate !== null ? fmtPct(f.previous.conversionRate) : null} change={<Change value={f.deltas.conversionRate} />} />}
                 {m.ads && <Row label={`Ad spend (${m.ads.currency})`} now={fmtMoney(m.ads.current.spend, m.ads.currency)} before={fmtMoney(m.ads.previous.spend, m.ads.currency)} change={<Change value={m.ads.deltas.spend} invert />} />}
                 {m.ads && <Row label="Return on ad spend" now={m.ads.current.roas !== null ? `${m.ads.current.roas.toFixed(2)}×` : "—"} before={m.ads.previous.roas !== null ? `${m.ads.previous.roas.toFixed(2)}×` : null} change={<Change value={m.ads.deltas.roas} />} />}
                 {m.adsense && <Row label={`AdSense earnings (${m.adsense.currency})`} now={fmtMoney(m.adsense.current.earnings, m.adsense.currency)} before={fmtMoney(m.adsense.previous.earnings, m.adsense.currency)} change={<Change value={m.adsense.deltas.earnings} />} />}
@@ -459,8 +459,9 @@ export function OverviewDetail({ ov, currency, onOpen }: { ov: Overview; currenc
             </table>
           </div>
           <p className="mt-2 text-xs text-muted">
-            The same figures as Shopify&apos;s sales reports, worked out from Shopify&apos;s own sales records: a sale counts on the day the order was placed,
+            The sales figures are the same as Shopify&apos;s sales reports, worked out from Shopify&apos;s own sales records: a sale counts on the day the order was placed,
             and a refund, cancellation or edit on the day it was made. Net sales leave out shipping and taxes; total sales add them back. Test orders aren&apos;t counted.
+            Tracked visits come from the bizinsights pixel (one shopper on one day, only those who allow tracking), so they aren&apos;t Shopify&apos;s sessions.
           </p>
         </Panel>
       )}
@@ -507,7 +508,7 @@ export function OverviewDetail({ ov, currency, onOpen }: { ov: Overview; currenc
           {m.channels && <Fact label="Sales channels used" value={fmtNum(m.channels.items.length)} note="In these dates" />}
           {m.discount_codes && <Fact label="Discount codes used" value={fmtNum(m.discount_codes.items.length)} note="In these dates (top 10)" />}
           <Fact label="Currency and time zone" value={ov.store.currency} note={ov.store.timezone} />
-          <Fact label="Last synced with Shopify" value={fmtRelative(ov.store.lastSyncedAt) ?? "Not yet"} note="New orders arrive within a minute" />
+          <Fact label="Up to date with Shopify" value={fmtRelative(ov.freshness?.asOf ?? ov.store.lastSyncedAt) ?? "Not yet"} note="New orders usually arrive within a minute" />
         </dl>
       </Panel>
     </>
