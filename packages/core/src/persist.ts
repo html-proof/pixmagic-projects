@@ -1,4 +1,4 @@
-import { systemDb, type Store } from "@app/db";
+import { Prisma, systemDb, type Store } from "@app/db";
 import { expandScopes, hmacSha256Hex, localDay } from "@app/shared";
 import { env } from "./env.js";
 import type { NormalizedOrder, NormalizedProduct, NormalizedSale, NormalizedVariant } from "./normalize.js";
@@ -623,6 +623,35 @@ export async function deleteProduct(store: Pick<Store, "id">, productShopifyId: 
 export async function recomputeDays(store: Pick<Store, "id" | "workspaceId">, days: string[]) {
   if (!days.length) return;
   await systemDb.$executeRaw`
+    ${dayTotals(store, days)}
+    INSERT INTO daily_store_metrics
+      (workspace_id, store_id, day, gross_sales, discounts, refunds, shipping, taxes, total_sales, orders, units,
+       orders_with_customer, returning_customer_orders, refunded_orders)
+    SELECT ${store.workspaceId}, ${store.id}, day, gross_sales, discounts, refunds, shipping, taxes, total_sales, orders, units,
+           orders_with_customer, returning_customer_orders, refunded_orders
+    FROM t
+    ON CONFLICT (store_id, day) DO UPDATE SET
+      gross_sales = EXCLUDED.gross_sales,
+      discounts = EXCLUDED.discounts,
+      refunds = EXCLUDED.refunds,
+      shipping = EXCLUDED.shipping,
+      taxes = EXCLUDED.taxes,
+      total_sales = EXCLUDED.total_sales,
+      orders = EXCLUDED.orders,
+      units = EXCLUDED.units,
+      orders_with_customer = EXCLUDED.orders_with_customer,
+      returning_customer_orders = EXCLUDED.returning_customer_orders,
+      refunded_orders = EXCLUDED.refunded_orders`;
+}
+
+/**
+ * The query behind `recomputeDays`, as CTEs ending in `t`: one row per day of `days`, with
+ * daily_store_metrics' columns. With `until` (a timestamp expression, UTC like the tables) only
+ * the orders placed and the sales made before that moment count: a part-day, which the dashboard
+ * compares a running day with (`Comparison.until` in @app/shared).
+ */
+export function dayTotals(store: Pick<Store, "id" | "workspaceId">, days: string[], until?: Prisma.Sql) {
+  return Prisma.sql`
     WITH d AS (SELECT unnest(${days}::text[]) AS day),
     o AS (
       SELECT local_day AS day,
@@ -630,7 +659,8 @@ export async function recomputeDays(store: Pick<Store, "id" | "workspaceId">, da
              (COUNT(*) FILTER (WHERE customer_key IS NOT NULL))::int AS owc,
              (COUNT(*) FILTER (WHERE customer_key IS NOT NULL AND is_returning_customer))::int AS ret
       FROM orders
-      WHERE store_id = ${store.id} AND local_day = ANY(${days}::text[])
+      WHERE workspace_id = ${store.workspaceId} AND store_id = ${store.id} AND local_day = ANY(${days}::text[])
+        ${until ? Prisma.sql`AND shopify_created_at < ${until}` : Prisma.empty}
       GROUP BY local_day
     ),
     v AS (
@@ -638,7 +668,9 @@ export async function recomputeDays(store: Pick<Store, "id" | "workspaceId">, da
              CASE WHEN action_type = 'return' THEN -ABS(amount - tax) ELSE amount - tax END AS value,
              CASE WHEN action_type = 'return' THEN -ABS(tax) ELSE tax END AS tax
       FROM order_sales
-      WHERE store_id = ${store.id} AND local_day = ANY(${days}::text[]) AND line_type NOT IN ('gift_card', 'tip')
+      WHERE workspace_id = ${store.workspaceId} AND store_id = ${store.id} AND local_day = ANY(${days}::text[])
+        AND line_type NOT IN ('gift_card', 'tip')
+        ${until ? Prisma.sql`AND happened_at < ${until}` : Prisma.empty}
     ),
     s AS (
       SELECT day,
@@ -653,30 +685,18 @@ export async function recomputeDays(store: Pick<Store, "id" | "workspaceId">, da
              (COUNT(DISTINCT order_id) FILTER (WHERE action_type = 'return'))::int AS ro
       FROM v
       GROUP BY day
-    )
-    INSERT INTO daily_store_metrics
-      (workspace_id, store_id, day, gross_sales, discounts, refunds, shipping, taxes, total_sales, orders, units,
-       orders_with_customer, returning_customer_orders, refunded_orders)
-    SELECT ${store.workspaceId}, ${store.id}, d.day,
-           COALESCE(s.gross, 0), COALESCE(s.disc, 0), COALESCE(s.returns, 0), COALESCE(s.shipping, 0), COALESCE(s.taxes, 0),
-           COALESCE(s.gross, 0) - COALESCE(s.disc, 0) - COALESCE(s.returns, 0) + COALESCE(s.shipping, 0) + COALESCE(s.taxes, 0) + COALESCE(s.other, 0),
-           COALESCE(o.orders, 0), COALESCE(s.units_in, 0) - COALESCE(s.units_out, 0),
-           COALESCE(o.owc, 0), COALESCE(o.ret, 0), COALESCE(s.ro, 0)
-    FROM d
-    LEFT JOIN o ON o.day = d.day
-    LEFT JOIN s ON s.day = d.day
-    ON CONFLICT (store_id, day) DO UPDATE SET
-      gross_sales = EXCLUDED.gross_sales,
-      discounts = EXCLUDED.discounts,
-      refunds = EXCLUDED.refunds,
-      shipping = EXCLUDED.shipping,
-      taxes = EXCLUDED.taxes,
-      total_sales = EXCLUDED.total_sales,
-      orders = EXCLUDED.orders,
-      units = EXCLUDED.units,
-      orders_with_customer = EXCLUDED.orders_with_customer,
-      returning_customer_orders = EXCLUDED.returning_customer_orders,
-      refunded_orders = EXCLUDED.refunded_orders`;
+    ),
+    t AS (
+      SELECT d.day,
+             COALESCE(s.gross, 0) AS gross_sales, COALESCE(s.disc, 0) AS discounts, COALESCE(s.returns, 0) AS refunds,
+             COALESCE(s.shipping, 0) AS shipping, COALESCE(s.taxes, 0) AS taxes,
+             COALESCE(s.gross, 0) - COALESCE(s.disc, 0) - COALESCE(s.returns, 0) + COALESCE(s.shipping, 0) + COALESCE(s.taxes, 0) + COALESCE(s.other, 0) AS total_sales,
+             COALESCE(o.orders, 0) AS orders, COALESCE(s.units_in, 0) - COALESCE(s.units_out, 0) AS units,
+             COALESCE(o.owc, 0) AS orders_with_customer, COALESCE(o.ret, 0) AS returning_customer_orders, COALESCE(s.ro, 0) AS refunded_orders
+      FROM d
+      LEFT JOIN o ON o.day = d.day
+      LEFT JOIN s ON s.day = d.day
+    )`;
 }
 
 /**

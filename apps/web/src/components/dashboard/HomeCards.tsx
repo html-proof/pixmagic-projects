@@ -45,6 +45,7 @@ export function KpiCard({
   icon: IconCmp,
   tint,
   compared,
+  versus = "vs previous period",
   i = 0,
   onClick,
 }: {
@@ -56,6 +57,8 @@ export function KpiCard({
   tint: Tint;
   /** "Compared with 18 Aug – 16 Sep", once known. */
   compared?: string;
+  /** What the change is on, under the number: "vs same time yesterday" (`versusWords`). */
+  versus?: string;
   i?: number;
   onClick: () => void;
 }) {
@@ -77,7 +80,7 @@ export function KpiCard({
           <ChangePill value={delta} invert={invert} />
           {delta !== null && delta !== undefined && (
             <span className="whitespace-nowrap text-[11px] text-muted" title={compared}>
-              vs previous period
+              {versus}
             </span>
           )}
         </span>

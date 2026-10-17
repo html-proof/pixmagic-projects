@@ -6,7 +6,7 @@ import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { BarRow, StackedBar } from "./Charts";
 import { ContactsCard } from "./Contacts";
 import { FunnelCard, JourneyCard, SECTION_LABEL, STEP_LABEL } from "./Funnel";
-import { fmtDuration, fmtRange, hourRange, plural, weekdayNames } from "./format";
+import { fmtComparison, fmtDuration, fmtRange, hourRange, plural, weekdayNames } from "./format";
 import { CatalogCard, ChannelsCard, DiscountCodesCard, FulfillmentCard, InventoryCard, OrderTimingCard, RecentOrdersCard, TrafficCard } from "./Modules";
 import { AdsDetail } from "./AdsPanel";
 import { AdsenseDetail } from "./AdsensePanel";
@@ -44,7 +44,7 @@ function SalesDetail({ ov, currency }: { ov: Overview; currency: string }) {
   const refunds = c.returns ?? (bd ? r2(bd.grossSales - bd.discounts - c.netSales) : null);
   const total = c.totalSales ?? null;
   const r = ov.modules.refunds;
-  const prevPeriod = fmtRange(ov.previous.from, ov.previous.to);
+  const prevPeriod = fmtComparison(ov.previous);
   const change = upDown(total !== null ? (s.deltas.totalSales ?? null) : s.deltas.netSales);
   const rows: Array<{ label: string; now: string; before: string; delta: number | null }> = [
     ...(total !== null && p.totalSales !== undefined ? [{ label: "Total sales", now: money(total), before: money(p.totalSales), delta: s.deltas.totalSales ?? null }] : []),
@@ -100,7 +100,7 @@ function SalesDetail({ ov, currency }: { ov: Overview; currency: string }) {
         )}
       </InShort>
 
-      <Panel id="d-sales-glance" title="At a glance" help={`Compared with ${prevPeriod}, the same number of days just before.`}>
+      <Panel id="d-sales-glance" title="At a glance" help={`Compared with ${prevPeriod}, the same number of days just before${ov.previous.until ? ", up to the same time of day, as Shopify compares" : ""}.`}>
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
           {total !== null && <Stat label="Total sales" value={money(total)} note={<Delta value={s.deltas.totalSales ?? null} />} />}
           <Stat label="Net sales" value={money(c.netSales)} note={<Delta value={s.deltas.netSales} />} />
@@ -492,7 +492,7 @@ function CustomersDetail({ ov, contactsOn }: { ov: Overview; contactsOn: boolean
           <Panel id="d-customers" title="Returning customers" help="A customer counts as returning if Shopify says they have more than one order, or we have an earlier order from them.">
             <div className="grid grid-cols-2 gap-3">
               <Stat label="These dates" value={fmtPct(rate)} note="Orders from returning customers." />
-              <Stat label="The period before" value={fmtPct(before)} note={fmtRange(ov.previous.from, ov.previous.to)} />
+              <Stat label="The period before" value={fmtPct(before)} note={fmtComparison(ov.previous)} />
             </div>
             {rate !== null && (
               <div className="mt-5">

@@ -5,7 +5,7 @@ import { CircleDollarSign, Gem, Package, ShoppingCart } from "lucide-react";
 import { useApp, canManage, StoresPending } from "@/components/AppContext";
 import { EmptyState, Alert } from "@/components/ui";
 import { AboutThisData, EmptyStoreNote, StoreStatus, type LiveState } from "@/components/dashboard/StoreHeader";
-import { comparedWith, CustomDates, DateRangeSelect, periodWords, useDateRange, type Shown } from "@/components/dashboard/DateRange";
+import { comparedWith, CustomDates, DateRangeSelect, periodWords, useDateRange, versusWords, type Shown } from "@/components/dashboard/DateRange";
 import { TopicDetail } from "@/components/dashboard/TopicDetail";
 import { availableTopics, useDetailView } from "@/components/dashboard/topics";
 import { AreaList, HealthOverview, StoreSummary } from "@/components/dashboard/Overview";
@@ -262,6 +262,7 @@ export default function DashboardPage() {
 
   const shown: Shown = ov && { range: ov.range, previous: ov.previous, timezone: ov.store.timezone };
   const compared = comparedWith(shown);
+  const versus = versusWords(shown);
   const name = firstName(me.user.displayName);
 
   return (
@@ -356,13 +357,13 @@ export default function DashboardPage() {
           {/* Total sales, as Shopify's home page headlines it: the same figure for the same dates. It
               holds tax and shipping, so a member who may not see those (Team & Access) gets net sales. */}
           {s.current.totalSales !== undefined ? (
-            <KpiCard i={0} icon={CircleDollarSign} tint="green" title="Total sales" value={<AnimatedNumber value={s.current.totalSales} format={(n) => fmtMoney(n, cur)} />} delta={s.deltas.totalSales ?? null} compared={compared} onClick={() => detail.open("sales")} />
+            <KpiCard i={0} icon={CircleDollarSign} tint="green" title="Total sales" value={<AnimatedNumber value={s.current.totalSales} format={(n) => fmtMoney(n, cur)} />} delta={s.deltas.totalSales ?? null} compared={compared} versus={versus} onClick={() => detail.open("sales")} />
           ) : (
-            <KpiCard i={0} icon={CircleDollarSign} tint="green" title="Net sales" value={<AnimatedNumber value={s.current.netSales} format={(n) => fmtMoney(n, cur)} />} delta={s.deltas.netSales} compared={compared} onClick={() => detail.open("sales")} />
+            <KpiCard i={0} icon={CircleDollarSign} tint="green" title="Net sales" value={<AnimatedNumber value={s.current.netSales} format={(n) => fmtMoney(n, cur)} />} delta={s.deltas.netSales} compared={compared} versus={versus} onClick={() => detail.open("sales")} />
           )}
-          <KpiCard i={1} icon={ShoppingCart} tint="blue" title="Orders" value={<AnimatedNumber value={s.current.orders} format={fmtNum} />} delta={s.deltas.orders} compared={compared} onClick={() => detail.open("sales")} />
-          <KpiCard i={2} icon={Gem} tint="violet" title="Average order value" value={<AnimatedNumber value={s.current.averageOrderValue} format={(n) => fmtMoney(n, cur)} />} delta={s.deltas.averageOrderValue} compared={compared} onClick={() => detail.open("sales")} />
-          <KpiCard i={3} icon={Package} tint="amber" title="Total products sold" value={<AnimatedNumber value={s.current.units} format={fmtNum} />} delta={s.deltas.units} compared={compared} onClick={() => detail.open("products")} />
+          <KpiCard i={1} icon={ShoppingCart} tint="blue" title="Orders" value={<AnimatedNumber value={s.current.orders} format={fmtNum} />} delta={s.deltas.orders} compared={compared} versus={versus} onClick={() => detail.open("sales")} />
+          <KpiCard i={2} icon={Gem} tint="violet" title="Average order value" value={<AnimatedNumber value={s.current.averageOrderValue} format={(n) => fmtMoney(n, cur)} />} delta={s.deltas.averageOrderValue} compared={compared} versus={versus} onClick={() => detail.open("sales")} />
+          <KpiCard i={3} icon={Package} tint="amber" title="Total products sold" value={<AnimatedNumber value={s.current.units} format={fmtNum} />} delta={s.deltas.units} compared={compared} versus={versus} onClick={() => detail.open("products")} />
         </section>
       )}
 

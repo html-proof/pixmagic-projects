@@ -14,6 +14,7 @@ import {
   isDay,
   keyVersionOf,
   localDay,
+  localTime,
   normalizeShopDomain,
   parseKeyring,
   resolveCapabilities,
@@ -188,9 +189,26 @@ describe("dates & time zones", () => {
     const now = new Date("2026-10-02T12:00:00Z");
     const { range, previous } = resolvePreset("7d", now, "UTC");
     expect(range).toEqual({ from: "2026-09-26", to: "2026-10-02" });
-    expect(previous).toEqual({ from: "2026-09-19", to: "2026-09-25" });
+    expect(previous).toEqual({ from: "2026-09-19", to: "2026-09-25", until: "12:00:00" });
     expect(resolvePreset("mtd", now, "UTC").range.from).toBe("2026-10-01");
     expect(() => resolvePreset("custom", now, "UTC", { from: "2026-10-02", to: "2026-10-01" })).toThrow();
+  });
+
+  it("compares a range that is still running up to the same time of day, as Shopify does", () => {
+    // 17 Oct, 4:44:12 pm in Melbourne (AEDT, UTC+11).
+    const now = new Date("2026-10-17T05:44:12Z");
+    const tz = "Australia/Melbourne";
+    expect(localTime(now, tz)).toBe("16:44:12");
+    // Today so far against yesterday until the same moment, not the whole of yesterday.
+    expect(resolvePreset("today", now, tz)).toEqual({ range: { from: "2026-10-17", to: "2026-10-17" }, previous: { from: "2026-10-16", to: "2026-10-16", until: "16:44:12" } });
+    expect(resolvePreset("7d", now, tz).previous).toEqual({ from: "2026-10-04", to: "2026-10-10", until: "16:44:12" });
+    // A custom range ending today runs too; one that ended earlier doesn't.
+    expect(resolvePreset("custom", now, tz, { from: "2026-10-15", to: "2026-10-31" }).previous.until).toBe("16:44:12");
+    expect(resolvePreset("custom", now, tz, { from: "2026-10-01", to: "2026-10-16" }).previous.until).toBeUndefined();
+    // Finished days are compared whole.
+    for (const preset of ["yesterday", "lastmonth"] as const) expect(resolvePreset(preset, now, tz).previous.until, preset).toBeUndefined();
+    // Just after midnight: a few seconds of yesterday, on a 24-hour clock ("00", never "24").
+    expect(resolvePreset("today", new Date("2026-10-16T13:00:05Z"), tz).previous).toEqual({ from: "2026-10-16", to: "2026-10-16", until: "00:00:05" });
   });
 
   it("resolves last month as the whole calendar month, against the whole month before it", () => {
@@ -251,9 +269,10 @@ describe("dates & time zones", () => {
 
     // 1–31 Oct is reported as 1–9 Oct and compared with the 9 days before, not with 31.
     expect(customRangeProblem({ from: "2026-10-01", to: "2026-10-31" }, today)).toBeNull();
+    // The 9th is still running (01:00), so the 30th counts up to 01:00.
     expect(resolvePreset("custom", now, sydney, { from: "2026-10-01", to: "2026-10-31" })).toEqual({
       range: { from: "2026-10-01", to: "2026-10-09" },
-      previous: { from: "2026-09-22", to: "2026-09-30" },
+      previous: { from: "2026-09-22", to: "2026-09-30", until: "01:00:00" },
     });
     expect(clampCustomRange({ from: "2026-10-01", to: "2026-10-05" }, today)).toEqual({ from: "2026-10-01", to: "2026-10-05" });
 

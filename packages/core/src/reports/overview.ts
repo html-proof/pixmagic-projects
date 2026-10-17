@@ -1,5 +1,5 @@
 import type { Store, Tx } from "@app/db";
-import { delta, localDay, resolveCapabilities, summarize, yearBreakdown, type DateRange } from "@app/shared";
+import { delta, localDay, resolveCapabilities, summarize, yearBreakdown, type Comparison, type DateRange } from "@app/shared";
 import { adsConfigured } from "../adConnections.js";
 import { declaredOptionalScopes, declaredScopes } from "../scopes.js";
 import { adsenseModule, adsModule } from "./ads.js";
@@ -7,7 +7,7 @@ import { catalog, importedData, inventory } from "./catalog.js";
 import type { Scope } from "./common.js";
 import { funnel } from "./funnel.js";
 import { channels, discountCodes, fulfillment, orderTiming, recentOrders, traffic } from "./orders.js";
-import { dailyRows, dailySeries, topProducts } from "./sales.js";
+import { comparisonRows, dailyRows, dailySeries, topProducts } from "./sales.js";
 
 /**
  * Why a store's sync stopped, in a word the dashboard can explain: Shopify's own answer to the
@@ -37,7 +37,7 @@ export function syncProblem(error: string | null | undefined): "shop_unavailable
  *
  * The caller has checked that `store` belongs to the workspace and resolved the dates.
  */
-export async function storeOverview(tx: Tx, store: Store, dates: { range: DateRange; previous: DateRange }, now = new Date(), sees: (module: string) => boolean = () => true) {
+export async function storeOverview(tx: Tx, store: Store, dates: { range: DateRange; previous: Comparison }, now = new Date(), sees: (module: string) => boolean = () => true) {
   const { range, previous } = dates;
   const ws = store.workspaceId;
   const storeId = store.id;
@@ -58,7 +58,8 @@ export async function storeOverview(tx: Tx, store: Store, dates: { range: DateRa
 
   let hasData = false;
   if (enabled.has("sales_overview") || enabled.has("refunds") || enabled.has("customers")) {
-    const [cur, prev] = await Promise.all([dailyRows(tx, ws, storeId, range), dailyRows(tx, ws, storeId, previous)]);
+    // While the range is still running, the period before stops at the same time of day (Shopify's like-for-like).
+    const [cur, prev] = await Promise.all([dailyRows(tx, ws, storeId, range), comparisonRows(tx, ws, storeId, previous, store.timezone)]);
     const c = summarize(cur);
     const p = summarize(prev);
     hasData = cur.some((r) => r.orders > 0 || r.refunds > 0);
@@ -116,7 +117,7 @@ export async function storeOverview(tx: Tx, store: Store, dates: { range: DateRa
 
   if (enabled.has("top_products")) modules.top_products = await topProducts(tx, scope, range);
 
-  if (enabled.has("funnel")) modules.funnel = await funnel(tx, scope, range, previous);
+  if (enabled.has("funnel")) modules.funnel = await funnel(tx, scope, range, previous, store.timezone);
 
   // Not a Shopify capability: present once an ad account is connected to the store.
   const netSales = (modules.sales_overview as { current?: { netSales?: number } } | undefined)?.current?.netSales ?? null;

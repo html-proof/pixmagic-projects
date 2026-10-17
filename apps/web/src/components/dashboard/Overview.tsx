@@ -4,11 +4,11 @@ import { ArrowRight, HeartPulse } from "lucide-react";
 import { gradeRefundRate, gradeShipping, gradeStock, gradeTrend, type Health } from "@app/shared/health";
 import { biggestDropOff } from "@app/shared/journey";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
-import { fmtDay, fmtMonth, fmtRange, fmtRelative, hourRange, plural } from "./format";
+import { fmtComparison, fmtDay, fmtMonth, fmtRange, fmtRelative, hourRange, plural } from "./format";
 import { STEP_LABEL } from "./Funnel";
 import { AreaPreview } from "./Previews";
 import { Icon } from "./Icons";
-import { B, Change, changeWords } from "./Narrative";
+import { B, Change, changeWords, comparedOn } from "./Narrative";
 import { Panel, Stat, type Tone } from "./Primitives";
 import { topicInfo, topicSummary, type Topic } from "./topics";
 import { breakdownOf } from "./redacted";
@@ -45,15 +45,16 @@ export function businessHealth(ov: Overview, currency: string): Check[] {
   const money = (n: number) => fmtMoney(n, currency);
   const running = ov.range.from === ov.range.to && ov.range.to === ov.today;
   const still = running ? " Today isn't over yet, so it isn't graded." : "";
+  const on = comparedOn(ov);
   const out: Check[] = [];
 
   const s = m.sales_overview;
   if (s) {
     const c = s.current;
-    out.push({ id: "net", topic: "sales", area: "Sales", health: gradeTrend(s.deltas.netSales, running), text: `${money(c.netSales)} in net sales${changeWords(s.deltas.netSales, LEVEL)}.${still}` });
-    out.push({ id: "orders", topic: "sales", area: "Orders", health: gradeTrend(s.deltas.orders, running), text: `${plural(c.orders, "order")}${changeWords(s.deltas.orders, LEVEL)}.${still}` });
+    out.push({ id: "net", topic: "sales", area: "Sales", health: gradeTrend(s.deltas.netSales, running), text: `${money(c.netSales)} in net sales${changeWords(s.deltas.netSales, LEVEL, on)}.${still}` });
+    out.push({ id: "orders", topic: "sales", area: "Orders", health: gradeTrend(s.deltas.orders, running), text: `${plural(c.orders, "order")}${changeWords(s.deltas.orders, LEVEL, on)}.${still}` });
     if (c.averageOrderValue !== null) {
-      out.push({ id: "aov", topic: "sales", area: "Average order", health: gradeTrend(s.deltas.averageOrderValue, running), text: `${money(c.averageOrderValue)} per order${changeWords(s.deltas.averageOrderValue, LEVEL)}.` });
+      out.push({ id: "aov", topic: "sales", area: "Average order", health: gradeTrend(s.deltas.averageOrderValue, running), text: `${money(c.averageOrderValue)} per order${changeWords(s.deltas.averageOrderValue, LEVEL, on)}.` });
     }
   }
   const r = m.refunds?.current;
@@ -63,7 +64,7 @@ export function businessHealth(ov: Overview, currency: string): Check[] {
   }
   const f = m.funnel;
   if (f && f.visits > 0) {
-    out.push({ id: "conversion", topic: "shoppers", area: "Visitors who bought", health: gradeTrend(f.deltas.conversionRate, running), text: `${fmtPct(f.conversionRate)} of ${plural(f.visits, "visit")} ended in a purchase${changeWords(f.deltas.conversionRate, LEVEL)}.` });
+    out.push({ id: "conversion", topic: "shoppers", area: "Visitors who bought", health: gradeTrend(f.deltas.conversionRate, running), text: `${fmtPct(f.conversionRate)} of ${plural(f.visits, "visit")} ended in a purchase${changeWords(f.deltas.conversionRate, LEVEL, on)}.` });
   }
   const cu = m.customers;
   if (cu && cu.current.returningCustomerRate !== null) {
@@ -173,11 +174,18 @@ export function StoreSummary({ ov, currency }: { ov: Overview; currency: string 
   const s = ov.modules.sales_overview;
   if (!s) return null;
   const attention = businessHealth(ov, currency).filter((c) => c.health === "attention").length;
+  const on = comparedOn(ov);
+  const when =
+    ov.range.from !== ov.range.to
+      ? `From ${fmtDay(ov.range.from, { year: false })} to ${fmtDay(ov.range.to, { year: false })}`
+      : ov.range.to === ov.today
+        ? "So far today"
+        : `On ${fmtDay(ov.range.to, { year: false })}`;
   return (
     <p className="text-sm leading-relaxed">
-      From {fmtDay(ov.range.from, { year: false })} to {fmtDay(ov.range.to, { year: false })} you made <B>{fmtMoney(s.current.netSales, currency)}</B> from{" "}
+      {when} you made <B>{fmtMoney(s.current.netSales, currency)}</B> from{" "}
       <B>{plural(s.current.orders, "order")}</B>
-      {changeWords(s.deltas.netSales, LEVEL)}.{" "}
+      {changeWords(s.deltas.netSales, LEVEL, on)}.{" "}
       {attention > 0 ? (
         <>
           <B>{plural(attention, "thing needs", "things need")} your attention</B>; they&apos;re at the top of the list below.
@@ -331,7 +339,8 @@ export function OverviewDetail({ ov, currency, onOpen }: { ov: Overview; currenc
   const f = m.funnel;
   const y = s?.year;
   const range = fmtRange(ov.range.from, ov.range.to);
-  const before = fmtRange(ov.previous.from, ov.previous.to);
+  const before = fmtComparison(ov.previous);
+  const on = comparedOn(ov);
   // Gross sales, discounts, tax, shipping and total sales, and returns, only for someone who may
   // see them (Team & Access).
   const bd = s ? breakdownOf(s.current) : null;
@@ -354,7 +363,7 @@ export function OverviewDetail({ ov, currency, onOpen }: { ov: Overview; currenc
             <p>
               From {range} you made <B>{money(s.current.netSales)}</B> from <B>{plural(s.current.orders, "order")}</B>
               {s.current.averageOrderValue !== null ? <>, about {money(s.current.averageOrderValue)} each</> : null}
-              {changeWords(s.deltas.netSales, LEVEL)}.
+              {changeWords(s.deltas.netSales, LEVEL, on)}.
             </p>
           )}
           {f && f.visits > 0 && (
@@ -399,7 +408,13 @@ export function OverviewDetail({ ov, currency, onOpen }: { ov: Overview; currenc
       </Panel>
 
       {s && (
-        <Panel id="d-key-figures" title="Every key figure" help={`${range}, against ${before} (the same number of days just before).`}>
+        <Panel
+          id="d-key-figures"
+          title="Every key figure"
+          help={`${range}, against ${before} (the same number of days just before${ov.previous.until ? ", up to the same time of day, as Shopify compares" : ""}).${
+            ov.previous.until && (m.ads || m.adsense) ? " Ad platforms report whole days, so their figures compare whole days." : ""
+          }`}
+        >
           <div className="-mx-1 overflow-x-auto">
             <table className="w-full min-w-[26rem] text-sm">
               <thead className="text-left text-xs text-muted">
