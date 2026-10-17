@@ -1,4 +1,5 @@
 /** Response of GET /workspaces/:ws/stores/:storeId/overview (built by packages/core/src/reports/overview.ts, served by apps/api/src/routes/dashboard.ts). */
+import type { AdsenseTotals, AdTotals } from "@app/shared/ads";
 import type { CompareMode } from "@app/shared/dates";
 import type { JourneyPageRow, JourneySummary } from "@app/shared/journey";
 import type { SalesDay, YearBreakdown } from "@app/shared/sales";
@@ -72,20 +73,6 @@ export interface SalesOverview {
   year?: YearBreakdown;
 }
 
-export interface AdTotals {
-  spend: number;
-  impressions: number;
-  clicks: number;
-  conversions: number;
-  conversionValue: number;
-  leads: number;
-  ctr: number | null;
-  cpc: number | null;
-  cpm: number | null;
-  costPerConversion: number | null;
-  roas: number | null;
-}
-
 /** What connected Meta / Google ad accounts report for the dates (see adsModule in the API). */
 export interface AdsModule {
   /** The one currency everything below is in. */
@@ -102,16 +89,6 @@ export interface AdsModule {
   campaigns?: Array<AdTotals & { provider: "meta" | "google"; accountId: string; campaignId: string; name: string }>;
   /** Ad spend divided by the store's net sales (same currency only). */
   shareOfSales: number | null;
-}
-
-export interface AdsenseTotals {
-  earnings: number;
-  pageViews: number;
-  impressions: number;
-  clicks: number;
-  pageRpm: number | null;
-  perClick: number | null;
-  ctr: number | null;
 }
 
 /** What connected AdSense accounts earned from ads shown on the store's site (see adsenseModule in the API). */

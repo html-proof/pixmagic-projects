@@ -417,14 +417,9 @@ export const graphqlShipmentSchema = obj({
 export const graphqlShipmentOrderSchema = obj({ id: gid, fulfillments: z.array(z.unknown()).nullish() });
 
 export type GraphqlMoney = z.output<typeof moneyBag>;
-export type GraphqlLineItem = z.output<typeof graphqlLineItemSchema>;
-export type GraphqlSale = z.output<typeof graphqlSaleSchema>;
-export type GraphqlAgreement = z.output<typeof graphqlAgreementSchema>;
 export type GraphqlOrder = z.output<typeof graphqlOrderSchema>;
 export type GraphqlProduct = z.output<typeof graphqlProductSchema>;
 export type GraphqlVariant = z.output<typeof graphqlVariantSchema>;
-
-export type GraphqlShipment = z.output<typeof graphqlShipmentSchema>;
 
 // ---------------------------------------------------------------- parsing
 

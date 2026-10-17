@@ -2,7 +2,9 @@
  * What GET /workspaces/:ws/stores/:storeId/ads answers (apps/api/src/routes/ads.ts,
  * publicConnection): the store's connected ad accounts and which platforms are set up.
  */
-export type AdProvider = "meta" | "google" | "adsense";
+import type { AdProvider } from "@app/shared/ads";
+
+export type { AdProvider };
 
 export interface AdConnection {
   id: string;

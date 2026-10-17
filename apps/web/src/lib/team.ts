@@ -1,43 +1,11 @@
 import type { AccessKind, AccessModule } from "@app/shared/access";
 import type { Role } from "@app/shared/roles";
 import type { StaffRole } from "@app/shared/staff";
+import type { DeliveryStatus, TeamRow, TeamRowStatus, TeamSummary } from "@app/shared/team";
 
-// Responses of the Team & Access API (apps/api/src/routes/team.ts), as the team page reads them.
-
-export type TeamRowStatus = "active" | "revoked" | "pending" | "expired" | "cancelled";
-
-export interface TeamRow {
-  kind: "member" | "invitation";
-  id: string;
-  email: string;
-  name: string | null;
-  role: Role;
-  permissions: string[];
-  modules: AccessModule[];
-  staffRole: StaffRole | null;
-  status: TeamRowStatus;
-  since: string;
-  invitedBy: string | null;
-  userId?: string;
-  /** Members: when they last signed in (null: never, or before sign-ins were recorded). */
-  lastSignInAt?: string | null;
-  accessChangedAt?: string | null;
-  fingerprint?: string;
-  expiresAt?: string;
-  message?: string | null;
-  sentAt?: string | null;
-  sendFailedAt?: string | null;
-  sendCount?: number;
-  /** Members who joined from an invitation: when their access ends (null: no end date). */
-  accessExpiresAt?: string | null;
-  /** The invitation link behind the row: until when it opens the dashboard, how often it has, and whether it can be copied again. */
-  link?: { invitationId: string; expiresAt: string; openCount: number; lastOpenedAt: string | null; copyable: boolean } | null;
-  /** The latest invitation email, as the mail provider reported it. */
-  delivery?: { status: DeliveryStatus; provider: string; at: string; error: string | null; attempts: number } | null;
-}
-
-/** What became of an invitation email (apps/api core/mail): "sent" is only "the provider accepted it". */
-export type DeliveryStatus = "queued" | "sent" | "delivered" | "delayed" | "bounced" | "complained" | "failed" | "not_allowed";
+// Responses of the Team & Access API (apps/api/src/routes/team.ts), as the team page reads them. The
+// rows, counts, history and email delivery statuses are @app/shared/team, shared with the API.
+export type { DeliveryStatus, HistoryEntry, InvitationSummary, TeamRow, TeamRowStatus, TeamSummary } from "@app/shared/team";
 
 export const DELIVERY_LABEL: Record<DeliveryStatus, string> = {
   queued: "Email queued",
@@ -61,33 +29,6 @@ export const DELIVERY_HELP: Record<DeliveryStatus, string> = {
   failed: "The email couldn't be sent. Resend it, or copy the link and send it another way.",
   not_allowed: "Our email service can't send to this address yet. Copy the link and send it another way.",
 };
-
-export interface InvitationSummary {
-  total: number;
-  active: number;
-  pending: number;
-  expired: number;
-  revoked: number;
-}
-
-export interface HistoryEntry {
-  id: string;
-  action: string;
-  at: string;
-  actor: string | null;
-  ip: string | null;
-  detail: Record<string, unknown>;
-}
-
-export interface TeamSummary {
-  totalMembers: number;
-  activeMembers: number;
-  pendingInvitations: number;
-  endedInvitations: number;
-  /** Each count at the end of each of the last 30 days, oldest first. */
-  trend?: Record<"totalMembers" | "activeMembers" | "pendingInvitations" | "endedInvitations", number[]>;
-  invitations?: InvitationSummary;
-}
 
 export interface TeamPage {
   summary: TeamSummary;

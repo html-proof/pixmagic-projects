@@ -1,22 +1,14 @@
 import { systemDb, withTenant } from "@app/db";
+import type { HistoryEntry } from "@app/shared/team";
 import { TeamError } from "./common.js";
+
+export type { HistoryEntry } from "@app/shared/team";
 
 /**
  * One person's access history in a workspace (the team page's "Access history"): the audit log's
  * Team & Access entries for their invitations and their membership, newest first. Link openings
  * (`member.link_opened`) say from which address the dashboard was opened.
  */
-export interface HistoryEntry {
-  id: string;
-  action: string;
-  at: string;
-  /** Who did it (an owner or admin, or the person themselves opening their link). */
-  actor: string | null;
-  ip: string | null;
-  /** The parts of the entry worth showing: what changed. */
-  detail: Record<string, unknown>;
-}
-
 const SHOWN = ["role", "added", "removed", "expiresAt", "previous", "newLink", "renewed", "outcome", "keysRevoked", "replaced"] as const;
 
 export async function teamHistory(workspaceId: string, target: { invitationId?: string; memberId?: string }, limit = 100): Promise<HistoryEntry[]> {

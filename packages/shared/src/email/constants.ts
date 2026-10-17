@@ -106,18 +106,14 @@ export const MESSAGE_STATUS_HELP: Record<MessageStatus, string> = {
 
 /** What an automation's evaluation of one event ended in (the message carries the rest). */
 export const EXECUTION_STATUSES = ["pending", "skipped", "scheduled", "suppressed", "failed", "cancelled"] as const;
-export type ExecutionStatus = (typeof EXECUTION_STATUSES)[number];
 
 /** Transactional mail answers something the recipient did; marketing mail needs their consent and an unsubscribe link. */
 export const EMAIL_CATEGORIES = ["transactional", "marketing"] as const;
-export type EmailCategory = (typeof EMAIL_CATEGORIES)[number];
 
 export const TEMPLATE_STATUSES = ["draft", "active", "archived"] as const;
-export type TemplateStatus = (typeof TEMPLATE_STATUSES)[number];
 
 /** A From address's authorization. Only `verified` identities can send. */
 export const SENDER_STATUSES = ["pending", "verified", "revoked"] as const;
-export type SenderStatus = (typeof SENDER_STATUSES)[number];
 
 /**
  * How a From address was proven:
@@ -126,7 +122,6 @@ export type SenderStatus = (typeof SENDER_STATUSES)[number];
  *  - domain_ownership: the SMTP account authenticated and the address's domain is verified here
  */
 export const SENDER_VERIFICATION_METHODS = ["provider_oauth", "smtp_confirmation", "domain_ownership"] as const;
-export type SenderVerificationMethod = (typeof SENDER_VERIFICATION_METHODS)[number];
 
 /** SMTP transport security. There is no plaintext mode: implicit TLS (465) or STARTTLS (587, 2525). */
 export const SMTP_ENCRYPTION_MODES = ["tls", "starttls"] as const;
