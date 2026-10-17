@@ -97,6 +97,15 @@ affect:
   request?", about a minute) and skips each job that already passed on exactly its tree. That holds
   when `main` hasn't moved since the pull request's last run: of several pull requests merged back to
   back, only the first saves anything.
+- The integration tests (`pnpm test:integration` and the migrations check, ~4 of the checks job's
+  ~7.5 minutes) run only when something they read changed since a run where they passed. The checks
+  job hashes the git ids of `apps/api`, `apps/worker`, `packages/`, `test-support/`,
+  `infra/postgres/`, the root `package.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`,
+  `tsconfig.base.json`, `.gitattributes` and `ci.yml`, with the runner's OS and Node version, and
+  looks for an artifact `passed-integration-<key>` (14 days) from a pull request's run or `main`'s.
+  Unlike the tree check above, this also holds when `main` moved, as long as what moved is outside
+  that list (the UI, the CDK app, docs). Tests that start reading a file outside the list need it
+  added there (step "What the integration tests read").
 - A newer push cancels the older run on the same pull request or on `main` (only the newest run on
   `main` gets deployed anyway); re-run a failed job only when it is flaky, not to retry a real
   failure.

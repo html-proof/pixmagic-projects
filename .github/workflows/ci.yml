@@ -8,6 +8,8 @@ name: CI
 #   carry the label "e2e" (checks job, first step). Pushes to main always need them before Deploy.
 # - A push to main whose tree a pull request's run already passed, job by job, skips that job
 #   (tested job below): merging an up-to-date pull request costs about a minute, not twelve.
+# - The integration tests run only when something they read changed since a run (pull request or
+#   main) where they passed (checks job, "What the integration tests read").
 on:
   push:
     branches: [main]
@@ -77,6 +79,11 @@ jobs:
     needs: tested
     if: ${{ !cancelled() && needs.tested.outputs.checks != 'true' }}
     runs-on: ${{ fromJSON(vars.SELF_HOSTED_RUNNER || '"ubuntu-latest"') }}
+    # actions: read for looking up passed-integration-<key> artifacts.
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
     # A busy PC runs the integration tests 2-3 times slower than a GitHub runner.
     timeout-minutes: ${{ vars.SELF_HOSTED_RUNNER != '' && 45 || 30 }}
     outputs:
@@ -154,13 +161,60 @@ jobs:
         run: PGPASSWORD=app psql -h localhost -p "${TEST_PG_PORT:-5434}" -U app -d app -f infra/postgres/init.sql
       - run: pnpm typecheck
       - run: pnpm test
+      # The integration tests and the migrations check after them (about 4 of this job's 7.5 minutes)
+      # read only these: @app/api and @app/worker, the packages they build on (@app/core, @app/db,
+      # @app/shared), the test setup, the role grants, the dependencies, the TypeScript base config,
+      # .gitattributes (line endings on checkout) and this file; .npmrc counts once there is one. Their
+      # git ids, with the runner's OS and Node version, make a content key. A run where the two passed
+      # records it (an artifact named passed-integration-<key>, kept 14 days), and a later run with the
+      # same key skips them. A listed path missing from the commit fails this step: then they run.
+      - name: What the integration tests read (content key)
+        id: integration
+        continue-on-error: true
+        run: |
+          inputs=(apps/api apps/worker packages test-support infra/postgres package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json .gitattributes .github/workflows/ci.yml)
+          listing=$(git ls-tree HEAD -- "${inputs[@]}" .npmrc)
+          for p in "${inputs[@]}"; do
+            grep -qFx -- "$p" < <(cut -f2 <<<"$listing") || { echo "::warning::$p isn't in this commit: the integration tests run."; exit 1; }
+          done
+          printf '%s %s %s\n%s\n' "$RUNNER_OS" "$RUNNER_ARCH" "$(node --version | tr -d '\r')" "$listing" > "$RUNNER_TEMP/passed-integration.txt"
+          key=$(git hash-object --stdin < "$RUNNER_TEMP/passed-integration.txt")
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+      # Only an answer of "yes" skips them: if this step fails, they run.
+      - name: Integration tests already passed on this content?
+        id: integration_passed
+        if: steps.integration.outputs.key != ''
+        continue-on-error: true
+        uses: actions/github-script@v9
+        env:
+          KEY: ${{ steps.integration.outputs.key }}
+        with:
+          script: |
+            const { data } = await github.rest.actions.listArtifactsForRepo({ ...context.repo, name: `passed-integration-${process.env.KEY}`, per_page: 100 });
+            // Only this repository's own branches count, not a fork's pull request.
+            const passed = data.artifacts.some((a) => !a.expired && a.workflow_run && a.workflow_run.head_repository_id === a.workflow_run.repository_id);
+            core.info(passed ? `Passed before with key ${process.env.KEY}: integration tests and migrations check skipped.` : "Integration tests run.");
+            core.setOutput("passed", String(passed));
       - run: pnpm test:integration
+        if: steps.integration_passed.outputs.passed != 'true'
       # The integration setup migrated app_test from the migrations folder: it must match
       # schema.prisma exactly, or a schema change was committed without its migration.
       - name: Migrations match the schema
+        if: steps.integration_passed.outputs.passed != 'true'
         run: |
           DATABASE_URL="postgresql://app:app@localhost:${TEST_PG_PORT:-5434}/app_test" \
             pnpm --filter @app/db exec prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --exit-code
+      # For later runs with the same content key, on a pull request or on main. Only when the two
+      # steps above ran and passed here; failing to record only means the next run tests again.
+      - name: Record the integration tests' pass
+        if: steps.integration.outputs.key != '' && steps.integration_passed.outputs.passed != 'true'
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: passed-integration-${{ steps.integration.outputs.key }}
+          path: ${{ runner.temp }}/passed-integration.txt
+          retention-days: 14
+          overwrite: true
       # What Deploy to AWS ships: the UI (Next.js export) and the bundled function.
       - name: Build the Lambda package (UI + function)
         run: pnpm --filter @app/aws build -- --no-staging-bundle

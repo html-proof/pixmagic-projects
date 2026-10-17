@@ -21,6 +21,9 @@ The owner wants every change made to this project live on AWS
   touches what they drive (`.github/workflows/ci.yml` says what); add the label `e2e` and push
   again to run them anyway. Merge a pull request whose last run is green on top of the current
   `main` and the push to `main` skips the jobs that already passed on that tree.
+- The integration tests run only when one of the paths they read changed (list in `ci.yml`, step
+  "What the integration tests read"). A test of `apps/api`/`apps/worker` that starts reading a file
+  outside that list needs it added there, or a change to that file won't re-run them.
 - Don't `cdk deploy` the App stack by hand from a branch: the next `main` deploy replaces it.
 - A schema change ships with its migration (CI checks they match); the deploy applies it.
 - Not ready for merchants yet? Merge it behind a flag in `apps/web/src/lib/features.ts` rather
