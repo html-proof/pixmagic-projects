@@ -14,23 +14,22 @@ export interface EnvConfig {
   /** RDS instance class, e.g. "t4g.small". */
   dbInstanceType: string;
   /**
-   * Two Availability Zones with automatic failover (the "high availability" option, ~US$40/month
-   * more). Off in production by the owner's choice (cost, 2026-10-16), so Trusted Advisor's "RDS
-   * Multi-AZ" warning is expected.
+   * A standby in the second Availability Zone with automatic failover (about a minute), which
+   * doubles the instance and storage price. On in production since 2026-10-17 (docs/aws-deployment.md,
+   * Fault tolerance).
    */
   dbMultiAz: boolean;
   dbAllocatedStorageGb: number;
   dbMaxStorageGb: number;
   dbBackupDays: number;
   /**
-   * One NAT gateway (lean) or one per AZ (high availability). With one, both AZs' functions reach
-   * the internet through the NAT in the first AZ, so an outage there cuts every function off from
-   * Shopify, Cognito, Google, Meta and SMTP (Trusted Advisor's "Single AZ Application Check").
-   * One in production by the owner's choice (cost, 2026-10-16): a second NAT is ~US$47/month. Worth
-   * it only with dbMultiAz: the single-AZ database is in that first AZ too, so an outage there stops
-   * the app either way (docs/aws-deployment.md, Fault tolerance).
+   * How many NAT instances (nat-instances.ts): 2 = one per AZ, each AZ's functions going out
+   * through their own; 1 = both through the first AZ's, so an outage there cuts every function off
+   * from Shopify, Cognito, Google, Meta and SMTP (Trusted Advisor's "Single AZ Application Check").
    */
   natGateways: number;
+  /** EC2 type of each NAT instance, e.g. "t4g.nano" (~US$8/month with its public IPv4 and disk). */
+  natInstanceType: string;
   logRetentionDays: number;
   /**
    * The EventBridge schedules (token refresh, reconcile, ad syncs, email and WhatsApp sweeps).
@@ -80,11 +79,12 @@ const ENVIRONMENTS: Record<EnvConfig["name"], Omit<EnvConfig, "schedulesEnabled"
     account: ACCOUNT,
     region: REGION,
     dbInstanceType: "t4g.small",
-    dbMultiAz: false,
+    dbMultiAz: true,
     dbAllocatedStorageGb: 20,
     dbMaxStorageGb: 100,
     dbBackupDays: 14,
-    natGateways: 1,
+    natGateways: 2,
+    natInstanceType: "t4g.nano",
     logRetentionDays: 90,
     domain: {
       name: "bizinsights.io",
@@ -93,7 +93,7 @@ const ENVIRONMENTS: Record<EnvConfig["name"], Omit<EnvConfig, "schedulesEnabled"
     },
     cognitoDomainPrefix: "insights-605411278365",
     cognitoCustomEmail: true,
-    monthlyBudgetUsd: 150,
+    monthlyBudgetUsd: 120,
     githubRepo: "html-proof/pixmagic-projects",
     githubOidcSubject: "repo:html-proof@68529971/pixmagic-projects@1413246051",
   },
@@ -107,6 +107,7 @@ const ENVIRONMENTS: Record<EnvConfig["name"], Omit<EnvConfig, "schedulesEnabled"
     dbMaxStorageGb: 30,
     dbBackupDays: 3,
     natGateways: 1,
+    natInstanceType: "t4g.nano",
     logRetentionDays: 30,
     cognitoDomainPrefix: "insights-staging-605411278365",
     // A few test emails a day fit Cognito's own sender, without a second KMS key.

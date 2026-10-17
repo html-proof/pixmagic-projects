@@ -120,8 +120,9 @@ EventBridge Scheduler invokes the `scheduled` function at `cron(0/15 * * * ? *)`
 
 - **VPC** across two Availability Zones: public subnets (NAT gateway), private subnets (Lambdas,
   RDS Proxy), isolated subnets (RDS, no route out). Gateway endpoints for S3 and DynamoDB (free).
-- **NAT gateway**: the functions call the internet (Cognito, Shopify, Meta, Google, SMTP). One NAT
-  for a lean setup, one per AZ for high availability.
+- **NAT**: the functions call the internet (Cognito, Shopify, Meta, Google, SMTP). Built as a NAT
+  instance per AZ (t4g.nano, `infra/cdk/lib/nat-instances.ts`) since 2026-10-17: high availability
+  for a third of one NAT gateway's price (docs/aws-deployment.md, Fault tolerance).
 - **Security groups**: Lambda → RDS (or RDS Proxy) 5432 only; RDS Proxy → RDS 5432 only; nothing inbound
   from the internet to the VPC.
 - **IAM**: one role per function, least privilege (its queue, its table, its secrets). Humans sign
