@@ -152,6 +152,21 @@ export function buildApp(deps: Deps): App {
 
   app.get("/healthz", (c) => c.json({ ok: true }));
   /**
+   * Which release answers at this address, so a deploy can be checked from outside (smoke.mjs):
+   * the package's commit and build time, the environment, and the Lambda version serving it.
+   * Nothing secret: no settings, hosts or account details.
+   */
+  app.get("/version", (c) => {
+    const e = env();
+    return c.json({
+      app: "bizinsights",
+      environment: e.APP_ENVIRONMENT || e.NODE_ENV,
+      commit: e.APP_COMMIT || null,
+      builtAt: e.APP_BUILT_AT || null,
+      release: e.AWS_LAMBDA_FUNCTION_VERSION || null,
+    });
+  });
+  /**
    * Ready to serve: both database connections (the owner role, and `app_rls`, which every tenant
    * read uses) and the coordinator answer. Each probe is bounded, so a stalled tunnel makes this
    * say "not ready" in seconds instead of hanging, and a failed probe is logged with its reason.

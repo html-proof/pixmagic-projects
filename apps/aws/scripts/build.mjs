@@ -5,6 +5,7 @@
 //   public/          the web UI (Next.js export, built into apps/web/out-aws)
 //   migrations/, init.sql   applied by the function itself ({ "action": "migrate" })
 //   rds-ca.pem       Amazon RDS's CA bundle (NODE_EXTRA_CA_CERTS: TLS to the database is verified)
+//   build.json       the commit it was built from and when (infra/cdk's APP_COMMIT, APP_BUILT_AT)
 //
 //   node apps/aws/scripts/build.mjs [--skip-web] [--no-staging-bundle]
 //
@@ -20,6 +21,12 @@ const pkg = resolve(here, "..");
 const root = resolve(pkg, "../..");
 const out = resolve(pkg, "dist/function");
 const zip = resolve(pkg, "dist/function.zip");
+
+// Which commit this package is, read before the build touches anything (it rewrites
+// apps/web/next-env.d.ts): infra/cdk puts it in the functions' environment from build.json, and
+// GET /api/version shows it, so a deploy can be checked at the public address.
+const git = (...a) => execFileSync("git", a, { cwd: root, encoding: "utf8" }).trim();
+const buildInfo = { commit: `${git("rev-parse", "HEAD")}${git("status", "--porcelain") ? "-dirty" : ""}`, builtAt: new Date().toISOString() };
 
 rmSync(resolve(pkg, "dist"), { recursive: true, force: true });
 mkdirSync(out, { recursive: true });
@@ -60,6 +67,7 @@ if (!res.ok) throw new Error(`Downloading the RDS CA bundle failed (${res.status
 const ca = await res.text();
 if (!ca.includes("BEGIN CERTIFICATE")) throw new Error("The RDS CA bundle doesn't look like PEM certificates");
 writeFileSync(caFile, ca);
+writeFileSync(resolve(out, "build.json"), `${JSON.stringify(buildInfo)}\n`);
 
 // Zip the folder's contents (at the root of the archive, as Lambda expects). Windows' bsdtar or zip(1).
 const tar = process.platform === "win32" ? "C:\\Windows\\System32\\tar.exe" : null;
@@ -79,10 +87,8 @@ cpSync(zip, resolve(bundleDir, "function.zip"));
 for (const f of ["staging.yaml", "cognito.yaml", "deploy-staging.sh"]) {
   writeFileSync(resolve(bundleDir, f), readFileSync(resolve(root, "infra/aws", f), "utf8").replace(/\r\n/g, "\n"));
 }
-const sha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
-const dirty = execFileSync("git", ["status", "--porcelain"], { cwd: root, encoding: "utf8" }).trim() ? "-dirty" : "";
-writeFileSync(resolve(bundleDir, "COMMIT"), `${sha}${dirty}\n`);
+writeFileSync(resolve(bundleDir, "COMMIT"), `${buildInfo.commit}\n`);
 const bundle = resolve(pkg, "dist/insights-staging-bundle.zip");
 if (tar && existsSync(tar)) execFileSync(tar, ["-a", "-c", "-f", bundle, "-C", bundleDir, "."], { stdio: "inherit" });
 else execFileSync("zip", ["-qr", bundle, "."], { cwd: bundleDir, stdio: "inherit" });
-console.log(`built ${bundle} (commit ${sha}${dirty})`);
+console.log(`built ${bundle} (commit ${buildInfo.commit})`);

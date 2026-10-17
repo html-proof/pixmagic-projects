@@ -11,6 +11,15 @@ const schema = z.object({
   APP_URL: z.string().url().default("http://localhost:8787"),
   /** Public base URL for the API (the Shopify web pixel posts here). */
   API_URL: z.string().url().default("http://localhost:8787/api"),
+  /**
+   * Which release is running, shown by GET /version: the commit and build time of the package
+   * (apps/aws/scripts/build.mjs, put in the environment by infra/cdk), the environment's name, and
+   * the Lambda version answering (set by Lambda itself). Empty locally.
+   */
+  APP_COMMIT: z.string().optional().default(""),
+  APP_BUILT_AT: z.string().optional().default(""),
+  APP_ENVIRONMENT: z.string().optional().default(""),
+  AWS_LAMBDA_FUNCTION_VERSION: z.string().optional().default(""),
   SESSION_SECRET: z.string().min(16),
   TOKEN_ENCRYPTION_KEYS: z.string(),
   OTP_PEPPER: z.string().min(8),
