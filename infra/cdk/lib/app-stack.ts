@@ -327,17 +327,10 @@ export class AppStack extends Stack {
     alarm("db-free-memory", dbMetric("FreeableMemory", "Minimum"), 150 * 1024 ** 2, "Database freeable memory below 150 MB", 3, cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD);
     alarm("db-connections", dbMetric("DatabaseConnections", "Maximum"), 150, "Database connections above 150 (limit ~200 on t4g.small)", 2);
     alarm("cron-missed-ticks", missedTicks.metricApproximateNumberOfMessagesVisible({ period: five, statistic: "Maximum" }), 1, "A scheduled run never ran (Scheduler couldn't invoke the cron function, or Lambda gave up on it): the message says which");
-    // Every function's way out to the internet (Cognito, Secrets Manager, Shopify, Google, Meta,
-    // SMTP): with one NAT gateway, its trouble is every function's.
-    for (const [i, natId] of data.natGatewayIds.entries()) {
-      const name = i ? `nat${i + 1}` : "nat";
-      const nat = (metricName: string) => new cloudwatch.Metric({ namespace: "AWS/NATGateway", metricName, dimensionsMap: { NatGatewayId: natId }, period: five, statistic: "Sum" });
-      alarm(`${name}-port-allocation`, nat("ErrorPortAllocation"), 1, "NAT gateway out of source ports: the functions' outbound connections are failing");
-      alarm(`${name}-packets-dropped`, nat("PacketsDropCount"), 100, "NAT gateway dropping packets: outbound calls failing or slow", 2);
-    }
+    // The NAT instances' alarms (recover, reboot, busy) are in the data stack, beside them.
 
-    // RDS's own word about the database (stopped, failed, rebooted, out of storage, back again): a
-    // single-AZ instance is the one thing every request needs, so it goes to the same topic. A
+    // RDS's own word about the database (stopped, failed, failed over, out of storage, back again):
+    // the one thing every request needs, so it goes to the same topic. A
     // topic policy replaces SNS's default one, so it names CloudWatch (the alarms above) as well.
     topic.addToResourcePolicy(
       new iam.PolicyStatement({
@@ -384,7 +377,7 @@ export class AppStack extends Stack {
       ],
     });
 
-    // --- Budget: the approved lean tier (~US$120-145) plus headroom; alerts at 80% actual, 100% forecast.
+    // --- Budget: the owner's ceiling (US$100-120/month, 2026-10-17); alerts at 80% actual, 100% forecast.
     new budgets.CfnBudget(this, "Budget", {
       budget: { budgetName: `${prefix}-monthly`, budgetType: "COST", timeUnit: "MONTHLY", budgetLimit: { amount: cfg.monthlyBudgetUsd, unit: "USD" } },
       notificationsWithSubscribers: cfg.alertEmail

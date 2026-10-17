@@ -17,14 +17,15 @@ Account `605411278365`, region `ap-southeast-2` (Sydney); the WAF web ACL lives 
 | UI build files | `/_next/static/*` from S3 `insights-production-site-605411278365` (CloudFront OAC, uploaded by `cdk deploy`, old builds kept) | `infra/cdk/lib/app-stack.ts` |
 | Background jobs | SQS `insights-production-{sync,webhooks,aggregate,email}` + `-dlq` → Lambda `insights-production-jobs` | `apps/aws/src/consumer.ts`, `sqsQueues.ts` |
 | Schedules | EventBridge Scheduler `*/15` and `03:15 UTC` → Lambda `insights-production-cron` (**off until cutover**) | `runScheduled()` in `apps/worker` |
-| Database | RDS PostgreSQL 17 `insights-production` (db.t4g.small, single AZ, private, encrypted, 14-day PITR) | `infra/cdk/lib/data-stack.ts` |
+| Database | RDS PostgreSQL 17 `insights-production` (db.t4g.small, Multi-AZ: standby in the other AZ, private, encrypted, 14-day PITR) | `infra/cdk/lib/data-stack.ts` |
+| Way out to the internet | EC2 NAT instances `insights-production-nat-a` / `-b` (t4g.nano, one per AZ, Systems Manager only) | `infra/cdk/lib/nat-instances.ts` |
 | Coordinator | DynamoDB `insights-production-coord` | `apps/aws/src/dynamoCoord.ts` |
 | Large webhook bodies | S3 `insights-production-payloads-605411278365` (7-day lifecycle) | `apps/aws/src/s3Blobs.ts` |
 | Dumps, artifacts | S3 `insights-production-artifacts-605411278365` (30 days, versioned) | `infra/cdk/scripts/migrate-data.mjs` |
 | Sign-in | Cognito pool `insights-production` (from `infra/aws/cognito.yaml`); its emails (codes) through Lambda `insights-production-cognito-email` and Resend, "Sign-in emails" below | `apps/api/src/cognito.ts`, `apps/aws/src/cognitoEmail.ts` |
 | App email | Resend (bizinsights.io verified, live 2026-10-16); SES as fallback (sandbox: verified recipients only); "App email" below | `packages/core/src/mail/`, `apps/aws/src/mailers.ts`, `apps/aws/src/sesMailer.ts` |
 | Secrets | Secrets Manager `insights/production/{app,db-owner,worker-cognito}`; settings in SSM `/insights/production/runtime` | `apps/aws/src/secrets.ts` |
-| Logs, alarms | CloudWatch (90 days), dashboard `insights-production`, SNS `insights-production-alarms`, budget US$150/month | `infra/cdk/lib/app-stack.ts` |
+| Logs, alarms | CloudWatch (90 days), dashboard `insights-production`, SNS `insights-production-alarms`, budget US$120/month | `infra/cdk/lib/app-stack.ts` |
 | DB admin | EC2 `insights-production-admin` (t4g.nano, Systems Manager only, normally **stopped**) | `infra/cdk/lib/data-stack.ts` |
 
 Redis/ElastiCache is not used: the app has no Redis; DynamoDB does its coordination. There are no
@@ -485,27 +486,49 @@ share Resend's limits with the app's email (free tier: 100 a day, 3,000 a month)
 
 ## Cost (US$/month, on-demand, approximate)
 
-Prices from the AWS Price List API on 2026-10-15: NAT gateway $0.059/hour + $0.059/GB (~45 with
-its public IPv4), RDS db.t4g.small $0.051/hour (~37) + 20 GB gp3 (~3), WAF (web ACL + 4 rules) ~10,
-CloudWatch alarms/dashboard/logs/X-Ray ~6-10, Secrets Manager ~1.2, GuardDuty ~1-4 (free for the
-first 30 days), admin host stopped ~1, KMS key for Cognito's emails 1 (+0.10 its alarm), Lambda/SQS/DynamoDB/S3/CloudFront/Cognito at today's traffic
-~0-5 (free tiers): **~US$105-120**, within the approved US$120-145. Budget alarm at US$150 (80%
-actual, 100% forecast, once an alert email is set). Biggest levers: the NAT gateway and the
-database size. Cost allocation tags `app` and `environment` can be activated in Billing once AWS
-has seen them (up to 24 hours after the first deploy).
+The owner's ceiling is **US$100-120 a month** (2026-10-17). Prices from the AWS Price List API on
+2026-10-17 (Sydney, before the 10% GST that AWS Australia adds):
+
+| Item | US$/month |
+| --- | --- |
+| RDS db.t4g.small Multi-AZ $0.102/hour + 20 GB gp3 Multi-AZ $0.276/GB | ~80 |
+| Two NAT instances: t4g.nano $0.0053/hour + 8 GB gp3 + public IPv4 $0.005/hour, each ~8.3 | ~17 |
+| WAF (web ACL + 5 rules + requests) | ~10-11 |
+| CloudWatch alarms (~25 × $0.10), dashboard, logs | ~5-8 |
+| GuardDuty (free for the first 30 days) | ~1-4 |
+| Secrets Manager (3 × $0.40), KMS key for Cognito's emails, admin host's disk (stopped) | ~3 |
+| Lambda, SQS, DynamoDB, S3, CloudFront, Cognito, Scheduler at today's traffic (free tiers) | ~0-5 |
+| **Total** | **~117-128** (+GST) |
+
+Biggest lever: the database size (`dbInstanceType`). NAT instances replaced the NAT gateway
+($0.059/hour + $0.059/GB, ~47 with its address) in 2026-10-17: two of them cost a third of one
+gateway. Budget alarm at US$120 (80% actual, 100% forecast, once an alert email is set). Cost
+allocation tags `app` and `environment` can be activated in Billing once AWS has seen them.
 
 ## Fault tolerance
 
-Production stays on the lean tier by the owner's choice (cost, 2026-10-16), so three Trusted
-Advisor fault-tolerance findings are expected: "Amazon RDS DB instances not using Multi-AZ
-deployment" and "Single AZ Application Check" (warnings), and "NAT Gateway AZ Independence"
-(error: the app subnet in ap-southeast-2b goes out through the NAT in 2a).
+Trusted Advisor's three fault-tolerance checks ("Amazon RDS DB instances not using Multi-AZ
+deployment", "NAT Gateway AZ Independence", "Single AZ Application Check") were one risk until
+2026-10-17: the database and the only NAT gateway were both in ap-southeast-2a, so an outage there
+stopped the app. Now nothing the app needs is in one AZ only:
 
-They are one risk, an outage of ap-southeast-2a: the database and the only NAT gateway are both
-there, so the app stops whichever of the two survives. Fixing it takes both changes together:
-`dbMultiAz: true` (a standby in 2b with automatic failover, ~US$40/month) and `natGateways: 2`
-(a NAT per AZ, ~US$47/month), about US$87/month in all. Either one alone buys little. An outage of
-2b is already survivable: the functions run in both AZs and Lambda uses the one that works.
+- **Database**: Multi-AZ (`dbMultiAz`). RDS keeps a synchronous standby in the other AZ and fails
+  over by itself (about a minute: the endpoint's DNS moves; the functions' pools reconnect, jobs wait
+  it out with `deferForDb`). Instance class changes and patching go to the standby first, so they
+  cost one failover instead of a reboot.
+- **Way out to the internet**: a NAT instance per AZ (`nat-instances.ts`, `natGateways: 2`); each
+  AZ's app subnet routes through its own, so an outage of one AZ leaves the other's functions able
+  to reach Cognito, Shopify, Google, Meta and SMTP. Each instance is recovered onto new hardware if
+  AWS's host fails (alarm `insights-production-nat-<a|b>-system-check`) and rebooted if it stops
+  answering (`...-instance-check`); its id and addresses survive both, so the routes stay valid.
+  While one is down (a few minutes), only the functions running in its AZ lose the internet, and
+  their work is retried. A new Amazon Linux image replaces both on the next deploy (patched, no gap:
+  CloudFormation moves the route only once the new one signals NAT is up). The public addresses
+  are not fixed (nothing allowlists them); they change only when an instance is replaced.
+- **Functions** run in both AZs and Lambda uses the one that works.
+
+Trusted Advisor re-runs these checks on its own schedule (about weekly); "Refresh all checks" in the
+console runs them sooner.
 
 What production does have, at no extra cost:
 - Functions in two AZs; queues with retries, backoff, a dead-letter queue (`insights-production-dlq`)
@@ -517,6 +540,6 @@ What production does have, at no extra cost:
   run twice; a tick that still didn't run goes to `insights-production-cron-missed` (alarm
   `cron-missed-ticks`) and the next tick takes over.
 - Alarms on the topic `insights-production-alarms`: function errors (Cognito's email function too), throttles and latency, queue age,
-  the dead-letter queue, database CPU/memory/storage/connections, NAT gateway port allocation and
-  dropped packets, plus RDS's own events (availability, failure, failover, low storage, maintenance,
+  the dead-letter queue, database CPU/memory/storage/connections, the NAT instances' status checks
+  and CPU, plus RDS's own events (availability, failure, failover, low storage, maintenance,
   recovery, restoration). **Nobody receives them until an alert email is set** (Owner-only steps).
