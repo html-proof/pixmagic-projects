@@ -529,8 +529,11 @@ stopped the app. Now nothing the app needs is in one AZ only:
   are not fixed (nothing allowlists them); they change only when an instance is replaced.
 - **Functions** run in both AZs and Lambda uses the one that works.
 
-Trusted Advisor re-runs these checks on its own schedule (about weekly); "Refresh all checks" in the
-console runs them sooner.
+State on 2026-10-17 06:45Z (main 7379a95): RDS db.t4g.micro Multi-AZ (2a + standby 2b), NAT instances
+`insights-production-nat-a` (2a) and `-b` (2b), no NAT gateway. Trusted Advisor cleared the RDS finding at
+once; the two NAT checks can't be refreshed on demand (`UNREFRESHABLE_CHECK_ID_ERROR`), so they keep
+their 2026-10-16 result until AWS re-runs them on its own schedule. Measured cost of the switch: the
+class change was one failover, `/api/readyz` answered 503 for under a minute.
 
 What production does have, at no extra cost:
 - Functions in two AZs; queues with retries, backoff, a dead-letter queue (`insights-production-dlq`)
