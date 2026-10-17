@@ -13,9 +13,12 @@ export function fmtDay(day: string | null | undefined, opts: { year?: boolean } 
   }).format(d);
 }
 
-/** "1–9 Mar", "28 Feb – 8 Mar", with the year only when the span crosses one (in the viewer's order). */
-export function fmtSpan(from: string, to: string): string {
-  const year = from.slice(0, 4) !== to.slice(0, 4);
+/**
+ * "1–9 Mar", "28 Feb – 8 Mar", with the year only when the span crosses one (in the viewer's
+ * order), or always with `year`: "14 Mar 2026", "1–7 Mar 2026".
+ */
+export function fmtSpan(from: string, to: string, opts: { year?: boolean } = {}): string {
+  const year = opts.year || from.slice(0, 4) !== to.slice(0, 4);
   const f = new Intl.DateTimeFormat(undefined, { timeZone: "UTC", day: "numeric", month: "short", ...(year ? { year: "numeric" } : {}) });
   try {
     return f.formatRange(new Date(`${from}T00:00:00Z`), new Date(`${to}T00:00:00Z`));

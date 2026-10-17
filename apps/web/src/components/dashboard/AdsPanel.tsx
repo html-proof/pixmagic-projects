@@ -8,7 +8,7 @@ import { fmtLongDay, fmtMoneyCompact, fmtMoneyWhole, fmtRange, fmtSpan, fmtTimes
 import { Icon } from "./Icons";
 import { GoogleReportPanel } from "./GoogleReport";
 import { MetaReportPanel } from "./MetaReport";
-import { B, changeWords } from "./Narrative";
+import { B, changeWords, comparedOnWholeDays } from "./Narrative";
 import { Delta, NeutralDelta, Panel, Stat } from "./Primitives";
 import { ColumnsWithTotal } from "./SalesBreakdown";
 import type { AdsModule, Overview } from "./types";
@@ -77,7 +77,7 @@ export function AdsDetail({ ov }: { ov: Overview }) {
           ) : (
             <>
               <p>
-                You spent <B>{money(c.spend)}</B> on ads{split ? <> ({split})</> : null}{changeWords(a.deltas.spend, ", the same as the period before")}.
+                You spent <B>{money(c.spend)}</B> on ads{split ? <> ({split})</> : null}{changeWords(a.deltas.spend, `, the same as ${comparedOnWholeDays(ov)}`, comparedOnWholeDays(ov))}.
               </p>
               <p>
                 They brought <B>{plural(c.clicks, "click")}</B>{c.cpc !== null ? <>, about {money(c.cpc)} each</> : null}

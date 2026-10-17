@@ -33,7 +33,8 @@ export interface DateRange {
 }
 
 /**
- * The dates a range is compared with. While the range picked is still running (it ends on the
+ * The dates a range is compared with (`COMPARE_MODES`: the period before, the same dates a year
+ * earlier, or dates picked). While the range picked is still running (it ends on the
  * store's today), the comparison stops at the same time of day on its last day, as Shopify's
  * Analytics compares "like for like": today until 4:44 pm against yesterday until 4:44 pm, never
  * against the whole of yesterday, which made every day look down until it was nearly over.
@@ -100,51 +101,107 @@ const CUSTOM_RANGE_ERROR: Record<CustomRangeProblem, string> = {
   too_long: "Range too long",
 };
 
+/**
+ * What the dates picked are compared with, as Shopify Analytics' second date chip offers:
+ * - `previous`: the period just before them (the default): as many days, immediately before; last
+ *   month against the whole month before it.
+ * - `year`: the same dates a year earlier (29 February, which most years lack, becomes the 28th).
+ * - `custom`: dates the merchant picks (`from`/`to`), under the same rules as a custom range.
+ */
+export const COMPARE_MODES = ["previous", "year", "custom"] as const;
+export type CompareMode = (typeof COMPARE_MODES)[number];
+export type CompareChoice = { mode: CompareMode; from?: string; to?: string };
+
+/** The same calendar day a year earlier: "2028-02-29" → "2027-02-28". */
+export function yearEarlier(day: string): string {
+  const year = String(Number(day.slice(0, 4)) - 1).padStart(4, "0");
+  const same = `${year}${day.slice(4)}`;
+  return isDay(same) ? same : `${year}-02-28`;
+}
+
+const CUSTOM_COMPARISON_ERROR: Record<CustomRangeProblem, string> = {
+  incomplete: "Invalid comparison dates",
+  reversed: "Invalid comparison dates",
+  future: "Comparison starts after today",
+  too_long: "Comparison too long",
+};
+
+function presetRange(preset: DatePreset, today: string, custom?: DateRange): DateRange {
+  switch (preset) {
+    case "today":
+      return { from: today, to: today };
+    case "yesterday": {
+      const y = addDays(today, -1);
+      return { from: y, to: y };
+    }
+    case "7d":
+      return { from: addDays(today, -6), to: today };
+    case "30d":
+      return { from: addDays(today, -29), to: today };
+    case "90d":
+      return { from: addDays(today, -89), to: today };
+    case "mtd":
+      return { from: `${today.slice(0, 8)}01`, to: today };
+    case "lastmonth": {
+      // The whole calendar month before this one.
+      const lastDay = addDays(`${today.slice(0, 8)}01`, -1);
+      return { from: `${lastDay.slice(0, 8)}01`, to: lastDay };
+    }
+    case "custom": {
+      const problem = customRangeProblem(custom ?? {}, today);
+      if (problem) throw new Error(CUSTOM_RANGE_ERROR[problem]);
+      return clampCustomRange(custom!, today);
+    }
+  }
+}
+
+/** The whole days `range` is compared with (see COMPARE_MODES); throws on custom dates that can't be. */
+function comparisonDays(range: DateRange, preset: DatePreset, compare: CompareChoice, today: string): DateRange {
+  switch (compare.mode) {
+    case "year":
+      return { from: yearEarlier(range.from), to: yearEarlier(range.to) };
+    case "custom": {
+      const problem = customRangeProblem(compare, today);
+      if (problem) throw new Error(CUSTOM_COMPARISON_ERROR[problem]);
+      return clampCustomRange({ from: compare.from!, to: compare.to! }, today);
+    }
+    case "previous": {
+      if (preset === "lastmonth") {
+        // The whole month before, whatever its length.
+        const prevLast = addDays(range.from, -1);
+        return { from: `${prevLast.slice(0, 8)}01`, to: prevLast };
+      }
+      const len = daysBetweenInclusive(range.from, range.to);
+      return { from: addDays(range.from, -len), to: addDays(range.from, -1) };
+    }
+  }
+}
+
+/**
+ * The dates a preset reports on in the store's zone, and what they are compared with (`compare`,
+ * the period just before when not given). Throws, with a message the API answers 400
+ * `invalid_range` with, on custom dates or comparison dates that can't be reported on.
+ */
 export function resolvePreset(
   preset: DatePreset,
   now: Date,
   timeZone: string,
   custom?: DateRange,
+  compare: CompareChoice = { mode: "previous" },
 ): { range: DateRange; previous: Comparison } {
   const today = localDay(now, timeZone);
-  let range: DateRange;
-  switch (preset) {
-    case "today":
-      range = { from: today, to: today };
-      break;
-    case "yesterday": {
-      const y = addDays(today, -1);
-      range = { from: y, to: y };
-      break;
-    }
-    case "7d":
-      range = { from: addDays(today, -6), to: today };
-      break;
-    case "30d":
-      range = { from: addDays(today, -29), to: today };
-      break;
-    case "90d":
-      range = { from: addDays(today, -89), to: today };
-      break;
-    case "mtd":
-      range = { from: `${today.slice(0, 8)}01`, to: today };
-      break;
-    case "lastmonth": {
-      // The whole calendar month before this one, against the whole month before that.
-      const lastDay = addDays(`${today.slice(0, 8)}01`, -1);
-      range = { from: `${lastDay.slice(0, 8)}01`, to: lastDay };
-      const prevLast = addDays(range.from, -1);
-      return { range, previous: { from: `${prevLast.slice(0, 8)}01`, to: prevLast } };
-    }
-    case "custom": {
-      const problem = customRangeProblem(custom ?? {}, today);
-      if (problem) throw new Error(CUSTOM_RANGE_ERROR[problem]);
-      range = clampCustomRange(custom!, today);
-      break;
-    }
-  }
-  const len = daysBetweenInclusive(range.from, range.to);
-  const previous = { from: addDays(range.from, -len), to: addDays(range.from, -1) };
-  // Today isn't over: the period before is counted up to this moment of its own last day.
+  const range = presetRange(preset, today, custom);
+  const previous = comparisonDays(range, preset, compare, today);
+  // Today isn't over: whatever it is compared with is counted up to this moment of its own last day.
   return { range, previous: range.to === today ? { ...previous, until: localTime(now, timeZone) } : previous };
+}
+
+/**
+ * Whether the store's imported orders cover the whole comparison. Shopify shares 60 days of orders
+ * without read_all_orders, so a comparison reaching back before the first imported order would
+ * count a period mostly missing and show a fake drop (or 0%): its changes are left out instead,
+ * as the month-by-month view does for months not fully imported.
+ */
+export function comparisonImported(previous: DateRange, oldestOrderDay: string | null): boolean {
+  return oldestOrderDay !== null && previous.from >= oldestOrderDay;
 }

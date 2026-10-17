@@ -1,8 +1,18 @@
 "use client";
-import { useEffect, useState } from "react";
-import { CalendarDays, ChevronDown } from "lucide-react";
-import { customRangeProblem, daysBetweenInclusive, isDay, localDay, MIN_CUSTOM_DAY, type Comparison, type CustomRangeProblem, type DateRange } from "@app/shared/dates";
-import { fmtClock, fmtDay, fmtRange, fmtSpan } from "./format";
+import { useEffect, useState, type ReactNode } from "react";
+import { ArrowLeftRight, CalendarDays, ChevronDown, type LucideIcon } from "lucide-react";
+import {
+  customRangeProblem,
+  daysBetweenInclusive,
+  isDay,
+  localDay,
+  MIN_CUSTOM_DAY,
+  type CompareMode,
+  type Comparison,
+  type CustomRangeProblem,
+  type DateRange,
+} from "@app/shared/dates";
+import { fmtClock, fmtComparison, fmtDay, fmtRange, fmtSpan } from "./format";
 
 export const PRESETS = [
   { id: "today", label: "Today" },
@@ -16,6 +26,13 @@ export const PRESETS = [
 ] as const;
 export type PresetId = (typeof PRESETS)[number]["id"];
 
+/** What the changes compare with, as Shopify Analytics' second date chip offers (`COMPARE_MODES` in @app/shared). */
+export const COMPARISONS: ReadonlyArray<{ id: CompareMode; label: string }> = [
+  { id: "previous", label: "Previous period" },
+  { id: "year", label: "Previous year" },
+  { id: "custom", label: "Custom" },
+];
+
 const CUSTOM_HINT: Record<CustomRangeProblem, string> = {
   incomplete: "Pick a start and an end date.",
   reversed: "The start date is after the end date.",
@@ -23,25 +40,44 @@ const CUSTOM_HINT: Record<CustomRangeProblem, string> = {
   too_long: "Pick up to a year at a time.",
 };
 
-/** What a question looks like in the address bar and in the API call: `preset=7d`, `preset=custom&from=…&to=…`. */
+/**
+ * What a question looks like in the address bar and in the API call: `preset=7d`,
+ * `preset=custom&from=…&to=…`, then `&compare=year` or `&compare=custom&cfrom=…&cto=…` when the
+ * changes aren't on the period just before.
+ */
 type Question = { qs: string; label: string };
 const DEFAULT: Question = { qs: "preset=30d", label: "Last 30 days" };
-const PARAMS = ["preset", "from", "to"] as const;
+const PARAMS = ["preset", "from", "to", "compare", "cfrom", "cto"] as const;
 
 /** The last dates looked at in this tab, for coming back to the dashboard from another page. */
 const LAST_RANGE_KEY = "insights:dashboard-range";
 
-type Choice = { preset: PresetId; from: string; to: string };
+type Choice = { preset: PresetId; from: string; to: string; compare: CompareMode; cfrom: string; cto: string };
 
 function parseChoice(search: string | null): Choice | null {
   if (!search) return null;
   const q = new URLSearchParams(search);
   const preset = PRESETS.find((p) => p.id === q.get("preset"))?.id;
   if (!preset) return null;
-  if (preset !== "custom") return { preset, from: "", to: "" };
   const from = q.get("from");
   const to = q.get("to");
-  return isDay(from) && isDay(to) ? { preset, from, to } : null;
+  if (preset === "custom" && !(isDay(from) && isDay(to))) return null;
+  const dates = preset === "custom" ? { preset, from: from!, to: to! } : { preset, from: "", to: "" };
+  // A comparison that can't be read falls back to the period before rather than dropping the dates.
+  const compare = COMPARISONS.find((c) => c.id === q.get("compare"))?.id ?? "previous";
+  const cfrom = q.get("cfrom");
+  const cto = q.get("cto");
+  if (compare === "custom") return isDay(cfrom) && isDay(cto) ? { ...dates, compare, cfrom, cto } : { ...dates, compare: "previous", cfrom: "", cto: "" };
+  return { ...dates, compare, cfrom: "", cto: "" };
+}
+
+/** The question a finished, valid choice asks. */
+function questionOf(c: Choice): Question {
+  const dates = c.preset === "custom" ? `preset=custom&from=${c.from}&to=${c.to}` : `preset=${c.preset}`;
+  const label = c.preset === "custom" ? fmtRange(c.from, c.to) : PRESETS.find((p) => p.id === c.preset)!.label;
+  if (c.compare === "year") return { qs: `${dates}&compare=year`, label: `${label} against the previous year` };
+  if (c.compare === "custom") return { qs: `${dates}&compare=custom&cfrom=${c.cfrom}&cto=${c.cto}`, label: `${label} against ${fmtSpan(c.cfrom, c.cto, { year: true })}` };
+  return { qs: dates, label };
 }
 
 function storeToday(timeZone: string): string {
@@ -62,28 +98,29 @@ function readStored(): string | null {
 }
 
 /**
- * The dates the dashboard reports on.
+ * The dates the dashboard reports on, and what their changes compare with.
  *
- * `asking` is the question to send. A custom range only takes over once it is finished and valid:
- * asking for each half-typed one (a year arrives as 0002, 0020, 0202…) flashed an error per digit.
- * Until then the last good question stays live instead of the page stalling on "Checking".
+ * `asking` is the question to send. Custom dates (to report on or to compare with) only take over
+ * once they are finished and valid: asking for each half-typed one (a year arrives as 0002, 0020,
+ * 0202…) flashed an error per digit. Until then the last good question stays live instead of the
+ * page stalling on "Checking".
  *
  * The choice is kept in the address bar and for the rest of the tab's session, so a reload, the
  * back button, a shared link or a trip to Settings and back no longer drops it to the last 30 days.
  * `asking` stays null until that has been read, so the page doesn't first load the default dates.
  */
 export function useDateRange(timeZone: string) {
-  const [choice, setChoice] = useState<Choice>({ preset: "30d", from: "", to: "" });
+  const [choice, setChoice] = useState<Choice>({ preset: "30d", from: "", to: "", compare: "previous", cfrom: "", cto: "" });
   const [restored, setRestored] = useState(false);
   const [asking, setAsking] = useState<Question>(DEFAULT);
   // The store's today: custom dates can't start after it, and are reported up to it at most.
   const today = storeToday(timeZone);
   const problem = choice.preset === "custom" ? customRangeProblem(choice, today) : null;
+  const compareProblem = choice.compare === "custom" ? customRangeProblem({ from: choice.cfrom, to: choice.cto }, today) : null;
 
-  if (restored && !problem) {
-    const qs = choice.preset === "custom" ? `preset=custom&from=${choice.from}&to=${choice.to}` : `preset=${choice.preset}`;
-    const label = choice.preset === "custom" ? fmtRange(choice.from, choice.to) : PRESETS.find((p) => p.id === choice.preset)!.label;
-    if (qs !== asking.qs) setAsking({ qs, label });
+  if (restored && !problem && !compareProblem) {
+    const q = questionOf(choice);
+    if (q.qs !== asking.qs) setAsking(q);
   }
 
   useEffect(() => {
@@ -111,50 +148,132 @@ export function useDateRange(timeZone: string) {
    * the end being changed has to be picked, instead of two empty boxes beside other dates' numbers.
    */
   const choose = (preset: PresetId, shown?: DateRange) =>
-    setChoice((c) => (preset === "custom" && !c.from && !c.to && shown ? { preset, ...shown } : { ...c, preset }));
+    setChoice((c) => (preset === "custom" && !c.from && !c.to && shown ? { ...c, preset, ...shown } : { ...c, preset }));
+  /** The same for the comparison: custom starts from the dates the numbers are compared with now. */
+  const chooseCompare = (compare: CompareMode, shown?: DateRange) =>
+    setChoice((c) => (compare === "custom" && !c.cfrom && !c.cto && shown ? { ...c, compare, cfrom: shown.from, cto: shown.to } : { ...c, compare }));
 
   return {
     ...choice,
     today,
     problem,
+    compareProblem,
     asking: restored ? asking : null,
     choose,
+    chooseCompare,
     setFrom: (from: string) => setChoice((c) => ({ ...c, from })),
     setTo: (to: string) => setChoice((c) => ({ ...c, to })),
+    setCompareFrom: (cfrom: string) => setChoice((c) => ({ ...c, cfrom })),
+    setCompareTo: (cto: string) => setChoice((c) => ({ ...c, cto })),
   };
 }
 
 export type DateRangeState = ReturnType<typeof useDateRange>;
 
+/**
+ * What the numbers are compared with, as the API answers it: `compare` says how it was chosen, and
+ * `imported` is false when the store's imported orders don't reach back to it (no change is given).
+ */
+export type ShownComparison = Comparison & { compare?: CompareMode; imported?: boolean };
+
 /** What the numbers on the page are for, once they have loaded. */
-export type Shown = { range: DateRange; previous: Comparison; timezone: string } | null;
+export type Shown = { range: DateRange; previous: ShownComparison; timezone: string } | null;
+
+/** The dates compared with, with their year unless they are just before the dates picked. */
+const comparisonDates = (p: ShownComparison) => (p.compare && p.compare !== "previous" ? fmtSpan(p.from, p.to, { year: true }) : fmtSpan(p.from, p.to));
 
 /**
  * "Compared with 18 Aug – 16 Sep" for a tooltip, once the numbers have loaded; "Compared with
  * 16 Oct until 4:44 pm, the same time of day" while the dates picked are still running.
  */
-export const comparedWith = (shown: Shown) =>
-  shown
-    ? `Compared with ${fmtSpan(shown.previous.from, shown.previous.to)}${shown.previous.until ? ` until ${fmtClock(shown.previous.until)}, the same time of day` : ""}`
-    : undefined;
+export const comparedWith = (shown: Shown) => {
+  if (!shown) return undefined;
+  const p = shown.previous;
+  const cut = p.until ? ` until ${fmtClock(p.until)}, the same time of day` : "";
+  const missing = p.imported === false ? ". No orders were imported from that far back, so nothing is compared" : "";
+  return `Compared with ${comparisonDates(p)}${cut}${missing}`;
+};
 
 /**
  * What a change is on, short enough for under a headline number: "vs same time yesterday",
- * "vs previous 30 days". Last month is compared with the whole month before it, whatever its length.
+ * "vs previous 30 days", "vs same day last year", "vs 14 Mar 2026". Last month is compared with the
+ * whole month before it, whatever its length.
  */
-export function versusWords(shown: Shown): string {
+export function versusWords(shown: { range: DateRange; previous: ShownComparison } | null): string {
   if (!shown) return "vs previous period";
-  const days = daysBetweenInclusive(shown.range.from, shown.range.to);
-  if (days === 1) return shown.previous.until ? "vs same time yesterday" : "vs the day before";
-  if (daysBetweenInclusive(shown.previous.from, shown.previous.to) !== days) return "vs the month before";
+  const { range, previous: p } = shown;
+  const days = daysBetweenInclusive(range.from, range.to);
+  if (p.compare === "year") return days === 1 ? "vs same day last year" : "vs same dates last year";
+  if (p.compare === "custom") return `vs ${comparisonDates(p)}`;
+  if (days === 1) return p.until ? "vs same time yesterday" : "vs the day before";
+  if (daysBetweenInclusive(p.from, p.to) !== days) return "vs the month before";
   return `vs previous ${days} days`;
 }
 
 /**
- * The dates menu: a pill naming the dates, with the native select laid over it, so it opens the
- * system's own list and keyboards and screen readers get a real select. `label` names it for them;
- * the page has one "Dates" menu, and the summary card repeats it as "Period".
+ * What the numbers are compared with, for a panel's help line: "17 Oct 2025 until 4:44 pm, the
+ * same dates a year earlier, up to the same time of day, as Shopify compares".
  */
+export function comparisonHelp(p: ShownComparison): string {
+  const how = p.compare === "year" ? ", the same dates a year earlier" : p.compare === "custom" ? "" : ", the same number of days just before";
+  return `${fmtComparison(p)}${how}${p.until ? ", up to the same time of day, as Shopify compares" : ""}`;
+}
+
+/**
+ * Why sales aren't compared when the imported orders don't reach back to the comparison
+ * (`previous.imported` false). `oldestOrderDay` is absent for a member who may not see orders.
+ */
+export function noEarlierData(oldestOrderDay: string | null | undefined): string {
+  const start = oldestOrderDay ? `the orders imported from Shopify start on ${fmtDay(oldestOrderDay)}, so sales aren't compared with dates before that` : "no orders were imported from those dates, so sales aren't compared";
+  return `No earlier data: ${start}. Without access to all orders, Shopify shares only the last 60 days.`;
+}
+
+/**
+ * A pill naming a choice, with the native select laid over it, so it opens the system's own list
+ * and keyboards and screen readers get a real select. `label` names it for them.
+ */
+function PillSelect<T extends string>({
+  id,
+  label,
+  icon: IconCmp,
+  text,
+  title,
+  size,
+  value,
+  options,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  icon: LucideIcon;
+  text: ReactNode;
+  title?: string;
+  size: "sm" | "md";
+  value: T;
+  options: ReadonlyArray<{ id: T; label: string }>;
+  onChange: (value: T) => void;
+}) {
+  return (
+    <div
+      className={`relative inline-flex min-w-0 items-center gap-2 rounded-xl border border-border bg-surface font-medium shadow-[var(--shadow)] transition-colors focus-within:ring-2 focus-within:ring-accent hover:border-accent/40 ${
+        size === "sm" ? "h-9 pl-3 pr-8 text-xs" : "h-10 pl-3.5 pr-10 text-sm"
+      }`}
+      title={title}
+    >
+      {size === "md" && <IconCmp aria-hidden className="h-4 w-4 shrink-0 text-muted" strokeWidth={1.8} />}
+      <span aria-hidden className="truncate">{text}</span>
+      <ChevronDown aria-hidden className={`pointer-events-none absolute h-4 w-4 text-muted ${size === "sm" ? "right-2.5" : "right-3.5"}`} />
+      <label htmlFor={id} className="sr-only">{label}</label>
+      <select id={id} className="absolute inset-0 h-full w-full cursor-pointer appearance-none opacity-0" value={value} onChange={(e) => onChange(e.target.value as T)}>
+        {options.map((o) => (
+          <option key={o.id} value={o.id}>{o.id === "custom" ? "Pick dates…" : o.label}</option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+/** The dates menu. The page has one "Dates" menu, and the summary card repeats it as "Period". */
 export function DateRangeSelect({
   r,
   shown,
@@ -171,43 +290,86 @@ export function DateRangeSelect({
   const text =
     r.preset !== "custom" ? PRESETS.find((p) => p.id === r.preset)!.label : r.from && r.to && !r.problem ? fmtRange(r.from, r.to) : "Pick dates";
   return (
-    <div
-      className={`relative inline-flex min-w-0 items-center gap-2 rounded-xl border border-border bg-surface font-medium shadow-[var(--shadow)] transition-colors focus-within:ring-2 focus-within:ring-accent hover:border-accent/40 ${
-        size === "sm" ? "h-9 pl-3 pr-8 text-xs" : "h-10 pl-3.5 pr-10 text-sm"
-      }`}
+    <PillSelect
+      id={id}
+      label={label}
+      icon={CalendarDays}
+      text={text}
       title={shown ? `${fmtSpan(shown.range.from, shown.range.to)}. ${comparedWith(shown)}. Days follow the store's time zone (${shown.timezone}).` : undefined}
-    >
-      {size === "md" && <CalendarDays aria-hidden className="h-4 w-4 shrink-0 text-muted" strokeWidth={1.8} />}
-      <span aria-hidden className="truncate">{text}</span>
-      <ChevronDown aria-hidden className={`pointer-events-none absolute h-4 w-4 text-muted ${size === "sm" ? "right-2.5" : "right-3.5"}`} />
-      <label htmlFor={id} className="sr-only">{label}</label>
-      <select
-        id={id}
-        className="absolute inset-0 h-full w-full cursor-pointer appearance-none opacity-0"
-        value={r.preset}
-        onChange={(e) => r.choose(e.target.value as PresetId, shown?.range)}
-      >
-        {PRESETS.map((p) => (
-          <option key={p.id} value={p.id}>{p.id === "custom" ? "Pick dates…" : p.label}</option>
-        ))}
-      </select>
+      size={size}
+      value={r.preset}
+      options={PRESETS}
+      onChange={(p) => r.choose(p, shown?.range)}
+    />
+  );
+}
+
+/** The comparison menu beside the dates: what the ▲ ▼ changes are on, as Shopify's second date chip. */
+export function CompareSelect({ r, shown, id, label, size = "md" }: { r: DateRangeState; shown: Shown; id: string; label: string; size?: "sm" | "md" }) {
+  const text =
+    r.compare === "custom"
+      ? r.cfrom && r.cto && !r.compareProblem
+        ? fmtSpan(r.cfrom, r.cto, { year: true })
+        : "Pick dates"
+      : COMPARISONS.find((c) => c.id === r.compare)!.label;
+  return (
+    <PillSelect
+      id={id}
+      label={label}
+      icon={ArrowLeftRight}
+      text={<><span className="font-normal text-muted">vs </span>{text}</>}
+      title={comparedWith(shown)}
+      size={size}
+      value={r.compare}
+      options={COMPARISONS}
+      onChange={(c) => r.chooseCompare(c, shown?.previous)}
+    />
+  );
+}
+
+/** Two date boxes, and what is wrong with them while they don't make a range yet. */
+function DatePair({
+  labels,
+  from,
+  to,
+  max,
+  problem,
+  setFrom,
+  setTo,
+}: {
+  labels: [from: string, to: string];
+  from: string;
+  to: string;
+  max: string;
+  problem: CustomRangeProblem | null;
+  setFrom: (v: string) => void;
+  setTo: (v: string) => void;
+}) {
+  return (
+    <div className="flex flex-col items-end gap-1.5">
+      <span className="flex flex-wrap items-center justify-end gap-2 text-sm">
+        <input aria-label={labels[0]} type="date" min={MIN_CUSTOM_DAY} max={max} className="input w-auto py-1.5" value={from} onChange={(e) => setFrom(e.target.value)} />
+        to
+        <input aria-label={labels[1]} type="date" min={MIN_CUSTOM_DAY} max={max} className="input w-auto py-1.5" value={to} onChange={(e) => setTo(e.target.value)} />
+      </span>
+      {problem && <p className={`text-xs ${problem === "incomplete" ? "text-muted" : "text-warn"}`} role="status">{CUSTOM_HINT[problem]}</p>}
     </div>
   );
 }
 
-/** With "Pick dates…" chosen: the two date boxes, and what is wrong with them while they don't make a range yet. */
+/** With "Pick dates…" chosen: the two date boxes. */
 export function CustomDates({ r }: { r: DateRangeState }) {
   if (r.preset !== "custom") return null;
+  return <DatePair labels={["From", "To"]} from={r.from} to={r.to} max={r.today} problem={r.problem} setFrom={r.setFrom} setTo={r.setTo} />;
+}
+
+/** With "Pick dates…" chosen to compare with: its two date boxes, named so they aren't mistaken for the dates reported on. */
+export function CompareDates({ r }: { r: DateRangeState }) {
+  if (r.compare !== "custom") return null;
   return (
-    <div className="flex flex-col items-end gap-1.5">
-      <span className="flex flex-wrap items-center justify-end gap-2 text-sm">
-        <input aria-label="From" type="date" min={MIN_CUSTOM_DAY} max={r.today} className="input w-auto py-1.5" value={r.from} onChange={(e) => r.setFrom(e.target.value)} />
-        to
-        <input aria-label="To" type="date" min={MIN_CUSTOM_DAY} max={r.today} className="input w-auto py-1.5" value={r.to} onChange={(e) => r.setTo(e.target.value)} />
-      </span>
-      {r.problem && (
-        <p className={`text-xs ${r.problem === "incomplete" ? "text-muted" : "text-warn"}`} role="status">{CUSTOM_HINT[r.problem]}</p>
-      )}
+    <div className="flex flex-wrap items-start justify-end gap-x-2 gap-y-1">
+      <span className="py-1.5 text-sm text-muted">Compare with</span>
+      <DatePair labels={["Compare from", "Compare to"]} from={r.cfrom} to={r.cto} max={r.today} problem={r.compareProblem} setFrom={r.setCompareFrom} setTo={r.setCompareTo} />
     </div>
   );
 }

@@ -5,7 +5,7 @@ import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { AccountStatus, accountGroups, dailyMoneyColumns } from "./AdsCommon";
 import { fmtLongDay, fmtMoneyCompact, fmtMoneyWhole, fmtRange, fmtSpan, plural } from "./format";
 import { Icon } from "./Icons";
-import { B, changeWords } from "./Narrative";
+import { B, changeWords, comparedOnWholeDays } from "./Narrative";
 import { Delta, Panel, Stat } from "./Primitives";
 import { ColumnsWithTotal } from "./SalesBreakdown";
 import type { AdsenseModule, Overview } from "./types";
@@ -73,7 +73,7 @@ export function AdsenseDetail({ ov }: { ov: Overview }) {
           ) : (
             <>
               <p>
-                Ads shown on your site earned <B>{money(c.earnings)}</B>{changeWords(a.deltas.earnings, ", the same as the period before")}.
+                Ads shown on your site earned <B>{money(c.earnings)}</B>{changeWords(a.deltas.earnings, `, the same as ${comparedOnWholeDays(ov)}`, comparedOnWholeDays(ov))}.
               </p>
               <p>
                 That came from <B>{plural(c.pageViews, "page view")}</B>

@@ -1,4 +1,5 @@
 /** Response of GET /workspaces/:ws/stores/:storeId/overview (built by packages/core/src/reports/overview.ts, served by apps/api/src/routes/dashboard.ts). */
+import type { CompareMode } from "@app/shared/dates";
 import type { JourneyPageRow, JourneySummary } from "@app/shared/journey";
 import type { SalesDay, YearBreakdown } from "@app/shared/sales";
 
@@ -49,8 +50,11 @@ export interface SalesOverview {
     tax?: number;
     shipping?: number;
   };
-  /** The same figures for the period before (as many days, immediately before). */
-  previous: { grossSales?: number; netSales: number; totalSales?: number; orders: number; units: number; averageOrderValue: number | null };
+  /**
+   * The same figures for the dates compared with (`Overview.previous`); null when the imported
+   * orders don't reach back to them (`previous.imported` false), and every delta is then null too.
+   */
+  previous: { grossSales?: number; netSales: number; totalSales?: number; orders: number; units: number; averageOrderValue: number | null } | null;
   deltas: {
     netSales: number | null;
     totalSales?: number | null;
@@ -256,8 +260,13 @@ export interface Overview {
   /** While the store is in error: why Shopify stopped the sync (see syncProblem in the API). */
   syncProblem?: "shop_unavailable" | "shop_gone" | "shop_locked" | "access" | "other" | null;
   range: { from: string; to: string };
-  /** What the range is compared with (`Comparison` in @app/shared): `until` while the range is still running. */
-  previous: { from: string; to: string; until?: string };
+  /**
+   * What the range is compared with (`Comparison` in @app/shared): `until` while the range is still
+   * running; `compare`, how it was chosen (the period before, the previous year or dates picked);
+   * `imported` false when the store's imported orders don't reach back to it, so the order figures
+   * aren't compared ("No earlier data").
+   */
+  previous: { from: string; to: string; until?: string; compare?: CompareMode; imported?: boolean };
   /** The store's today (YYYY-MM-DD). */
   today: string;
   capabilities: Capability[];

@@ -29,16 +29,39 @@ shipping, taxes and total sales as Shopify's sales reports for the same dates.
 - **Currency:** the store's currency (Shopify `shop_money`). Presentment currencies are ignored. Money totals are rounded to cents before ratios are derived.
 - **Day:** calendar day in the **store's IANA time zone** (from `shop.ianaTimezone`), not the viewer's and not UTC. Date presets (`today`, `7d`, `mtd`, …) resolve in that zone too.
 - **Custom ranges** run from 2000-01-01 at the earliest, cover at most 366 days, and are reported only up to the store's today: picking 1–31 Oct on 9 Oct reports 1–9 Oct. A range that starts after today is refused (`400 invalid_range`).
-- **Comparison period:** the same number of days immediately before the selected range (after that clamp).
-  **Like for like, as Shopify's Analytics compares:** while the range is still running (it ends on the
-  store's today), the comparison stops at the same time of day on its last day. Today until 4:44:12 pm
-  is compared with yesterday until 4:44:12 pm, and the last 7 days with the 7 before up to the same
+- **Comparison period:** what the % changes compare with, chosen beside the dates as in Shopify
+  Analytics' second date chip (`compare` in the overview and export query; `resolvePreset` in
+  packages/shared/src/dates.ts):
+  - **Previous period** (the default, `compare=previous` or absent): the same number of days
+    immediately before the selected range (after that clamp); last month against the whole month
+    before it, whatever its length.
+  - **Previous year** (`compare=year`): the same dates a year earlier. 29 February, which most years
+    lack, becomes the 28th, so February 2028 is compared with 1–28 February 2027.
+  - **Custom** (`compare=custom&cfrom=…&cto=…`): any dates, under the custom-range rules above (from
+    2000-01-01, at most 366 days, reported up to the store's today, not starting after it). They may
+    have another length than the range, sit after it or overlap it. A pair that breaks a rule is
+    refused with `400 invalid_range`, as a bad custom range is.
+
+  The answer's `previous` holds the dates (`from`, `to`, `until`), `compare`, and `imported`.
+  **Like for like, as Shopify's Analytics compares:** whatever the choice, while the range is still
+  running (it ends on the store's today), the comparison stops at the same time of day on its last
+  day. Today until 4:44:12 pm is compared with yesterday until 4:44:12 pm (or 17 Oct last year until
+  4:44:12 pm, or 14 Mar until then), and the last 7 days with the 7 before up to the same
   moment, never with whole days (that made every day look down until it was nearly over).
   `resolvePreset` returns that time as `previous.until` (store-local "HH:MM:SS", by the clock, so a
   daylight-saving change doesn't shift it). The comparison's last day is then added up from the orders
   placed and the sales made before that moment, by the same query that fills daily_store_metrics
   (`dayTotals` in packages/core/src/persist.ts), and its store visits are the ones that started before
-  it. Ad platforms (Meta, Google, AdSense) report whole days, so their comparisons stay whole days.
+  it. Ad platforms (Meta, Google, AdSense) report whole days, so their comparisons stay whole days;
+  their rows are read for the range and for the comparison separately, wherever the comparison sits.
+
+  **No earlier data:** when the comparison starts before the store's first imported order
+  (`oldestOrderDay`; Shopify shares the last 60 days of orders without `read_all_orders`),
+  `previous.imported` is false: the sales figures of the comparison come back `null`, every sales,
+  refund and returning-customer change is `null`, and the dashboard says "No earlier data" instead of a
+  change. A period mostly missing would otherwise read as a fake drop (or a fake rise, or 0%). It is
+  the same rule as the month-by-month view's "not imported" months. Store visits and ad figures have
+  their own history and are compared as usual.
 - **Daily series** (the sales chart and sparklines) has one point per day of the range; days without orders or sales are 0.
 - **A sale counts on the day it happened**: an order's sales on the day it was placed, a refund, return, cancellation or edit on the day it was made (the agreement's `happenedAt`), whatever day the order was placed. Last month's numbers can change only if Shopify backdates a record, which it doesn't.
 - **Cancelled orders** count as orders of the day they were placed, as in Shopify's reports; the cancellation is a return on the day it was made, so a cancelled order adds nothing to net sales once both are in the range. Operational modules (order timing, shipping, discount codes, vendors) still leave cancelled orders out.
@@ -68,7 +91,7 @@ shipping, taxes and total sales as Shopify's sales reports for the same dates.
 | Funnel step | visits whose furthest step is this one or later | Steps: visited → viewed a product → added to cart → started checkout → purchased |
 | Left at a step | visits whose furthest step is exactly this one | Plus the site section they were last on |
 | Section exit rate | visits that left the site from this section without buying ÷ visits that saw this section | |
-| Δ vs previous | (current − previous) ÷ \|previous\| | `null` when previous is 0; like for like while the range runs (Conventions) |
+| Δ vs previous | (current − previous) ÷ \|previous\| | Against the comparison chosen; `null` when previous is 0 or not imported; like for like while the range runs (Conventions) |
 
 ## Sales breakdown (Sales section)
 
@@ -95,7 +118,7 @@ Reference implementation: the grading rules in `packages/shared/src/health.ts` (
 
 | Area | Looks good | Keep an eye on | Needs attention |
 | --- | --- | --- | --- |
-| Net sales, orders, average order, visitors who bought, returning customers | up or level on the period before | down by less than 10% | down by 10% or more |
+| Net sales, orders, average order, visitors who bought, returning customers | up or level on the comparison | down by less than 10% | down by 10% or more |
 | Refunds | up to 5% of sales | over 5% and up to 10% | over 10% |
 | Stock | nothing sold out or low | something running low | something sold out |
 | Shipping | nothing waiting | orders waiting, none over 3 days | an order waiting over 3 days |

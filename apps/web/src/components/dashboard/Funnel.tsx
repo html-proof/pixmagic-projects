@@ -110,7 +110,7 @@ function StepRow({ s, index, visits, last }: { s: FunnelStepSummary; index: numb
 }
 
 /** The shopping funnel: every visit, how far it got, and how many dropped out where. */
-export function FunnelCard({ m }: { m: FunnelModule }) {
+export function FunnelCard({ m, versus }: { m: FunnelModule; versus?: string }) {
   return (
     <Panel
       id="funnel"
@@ -122,8 +122,8 @@ export function FunnelCard({ m }: { m: FunnelModule }) {
       ) : (
         <>
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-            <Stat label="Visits" value={<AnimatedNumber value={m.visits} format={fmtNum} />} note={<Delta value={m.deltas.visits} />} />
-            <Stat label="Conversion rate" value={<AnimatedNumber value={m.conversionRate} format={fmtPct} />} note={<Delta value={m.deltas.conversionRate} />} />
+            <Stat label="Visits" value={<AnimatedNumber value={m.visits} format={fmtNum} />} note={<Delta value={m.deltas.visits} label={versus} />} />
+            <Stat label="Conversion rate" value={<AnimatedNumber value={m.conversionRate} format={fmtPct} />} note={<Delta value={m.deltas.conversionRate} label={versus} />} />
             <Stat label="Completed a purchase" value={<AnimatedNumber value={m.purchases} format={fmtNum} />} tone="good" note="Visits that ended in a finished checkout." />
             <Stat label="Left without buying" value={<AnimatedNumber value={m.exits} format={fmtNum} />} note={`${fmtPct(m.visits ? m.exits / m.visits : null)} of visits.`} />
           </div>
