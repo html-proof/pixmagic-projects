@@ -59,7 +59,7 @@ function SalesDetail({ ov, currency }: { ov: Overview; currency: string }) {
   const prevPeriod = fmtComparison(ov.previous);
   const versus = versusWords(ov);
   // Null when the imported orders don't reach back to the dates compared with: nothing is compared.
-  const missing = ov.previous.imported === false ? noEarlierData(ov.data?.oldestOrderDay) : null;
+  const missing = ov.previous.imported === false ? noEarlierData(ov.data?.historyFrom) : null;
   const change = upDown(total !== null ? (s.deltas.totalSales ?? null) : s.deltas.netSales);
   const rows: Array<{ label: string; now: string; before: string; delta: number | null }> = [
     ...(total !== null ? [{ label: "Total sales", now: money(total), before: p?.totalSales !== undefined ? money(p.totalSales) : "—", delta: s.deltas.totalSales ?? null }] : []),
@@ -208,9 +208,9 @@ function SalesDetail({ ov, currency }: { ov: Overview; currency: string }) {
       )}
 
       {ov.hasData && s.series.length > 1 && (
-        <DailySalesCard series={s.series} range={ov.range} today={ov.today} historyFrom={ov.data?.oldestOrderDay ?? null} currency={currency} />
+        <DailySalesCard series={s.series} range={ov.range} today={ov.today} historyFrom={ov.data?.historyFrom ?? null} currency={currency} />
       )}
-      {s.year && s.year.orders > 0 && <MonthlySalesCard year={s.year} historyFrom={ov.data?.oldestOrderDay ?? null} currency={currency} />}
+      {s.year && s.year.orders > 0 && <MonthlySalesCard year={s.year} historyFrom={ov.data?.historyFrom ?? null} currency={currency} />}
     </>
   );
 }

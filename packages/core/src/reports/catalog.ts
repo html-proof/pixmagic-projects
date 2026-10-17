@@ -1,5 +1,5 @@
-import { Prisma, type Tx } from "@app/db";
-import { addDays, type DateRange } from "@app/shared";
+import { Prisma, type Store, type Tx } from "@app/db";
+import { addDays, historyStart, type DateRange } from "@app/shared";
 import { num, numOrNull, r1, r2, type Scope } from "./common.js";
 
 /** Stock rules for the inventory module. */
@@ -111,8 +111,12 @@ export async function catalog(tx: Tx, { ws, storeId }: Scope, r: DateRange) {
   };
 }
 
-/** What has been imported so far (all time, cancelled orders included). Not a module: always present. */
-export async function importedData(tx: Tx, { ws, storeId }: Scope) {
+/**
+ * What has been imported so far (all time, cancelled orders included), and from which day every
+ * order is in (`historyFrom`, see `historyStart`): what comparisons and the "not imported" days
+ * go by, while oldest/newestOrderDay are the orders actually held. Not a module: always present.
+ */
+export async function importedData(tx: Tx, { ws, storeId }: Scope, store: Pick<Store, "ordersHistoryFrom" | "timezone">) {
   const [row] = await tx.$queryRaw<Array<{ orders: number; oldest_day: string | null; newest_day: string | null; products: number; variants: number }>>`
     SELECT o.orders, o.oldest_day, o.newest_day,
            (SELECT COUNT(*) FROM products p WHERE p.workspace_id = ${ws} AND p.store_id = ${storeId})::int AS products,
@@ -128,5 +132,6 @@ export async function importedData(tx: Tx, { ws, storeId }: Scope) {
     variants: num(row?.variants),
     oldestOrderDay: row?.oldest_day ?? null,
     newestOrderDay: row?.newest_day ?? null,
+    historyFrom: historyStart(store.ordersHistoryFrom, store.timezone, row?.oldest_day ?? null),
   };
 }

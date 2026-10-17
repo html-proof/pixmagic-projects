@@ -125,7 +125,7 @@ describe("allows", () => {
 const report = () => ({
   store: { id: "s" },
   capabilities: [{ id: "sales_overview" }, { id: "top_products" }, { id: "contacts" }, { id: "inventory" }, { id: "funnel" }],
-  data: { orders: 10, products: 4, variants: 6, oldestOrderDay: "2026-01-01", newestOrderDay: "2026-10-01" },
+  data: { orders: 10, products: 4, variants: 6, oldestOrderDay: "2026-01-01", newestOrderDay: "2026-10-01", historyFrom: "2025-12-28" },
   modules: {
     sales_overview: {
       current: { grossSales: 120, discounts: 10, returns: 10, netSales: 100, totalSales: 112, orders: 3, units: 4, averageOrderValue: 33, tax: 5, shipping: 7 },
@@ -181,6 +181,8 @@ describe("redactOverview", () => {
     expect(out.modules.discount_codes.items[0]).toEqual({ code: "SAVE", orders: 2 });
     expect(out.modules.ads).not.toHaveProperty("campaigns");
     expect(out.modules).toHaveProperty("ad_connections");
+    // Sales figures come with the dates they were imported from (a member without them gets neither, above).
+    expect(out.data).toMatchObject({ orders: 10, oldestOrderDay: "2026-01-01", historyFrom: "2025-12-28" });
     // The original is untouched.
     expect(report().modules.sales_overview.current.grossSales).toBe(120);
   });

@@ -23,12 +23,13 @@ import {
   upsertVariant,
   MAX_ATTEMPTS,
   PAGE_SIZE,
+  purgeStoreData,
   recomputeDays,
   type FetchLike,
   type SyncJobData,
 } from "@app/core";
 import { aggregateDaily, localDay, summarize } from "@app/shared";
-import { BACKFILL_DAYS, failStaleJobs, ordersSearch, pixelIngestUrl, processWebhook, RECONCILE_ORDER_DAYS, reconcileOrderDays, runAggregate, runSync, scheduleReconcile, seedAfterMove, seedSalesRereads, type WorkerDeps } from "../src/handlers.js";
+import { BACKFILL_DAYS, failStaleJobs, importedFrom, ordersSearch, pixelIngestUrl, processWebhook, RECONCILE_ORDER_DAYS, reconcileOrderDays, runAggregate, runSync, scheduleReconcile, seedAfterMove, seedSalesRereads, type WorkerDeps } from "../src/handlers.js";
 import { consume, CRON, runScheduled, type QueueMessage } from "../src/index.js";
 import { agreement, sale, saleMoney, salesAnswer, shopifySales } from "./shopifySales.js";
 
@@ -1157,7 +1158,60 @@ describe("orders pipeline", () => {
     await runSync({ storeId: store.id, kind: "orders", syncJobId: job.id, pagedOnly: true }, deps);
     expect(vars).toMatchObject({ query: null });
     expect((await systemDb.order.findFirstOrThrow()).localDay).toBe("2019-04-30"); // New York
-    expect((await systemDb.store.findUniqueOrThrow({ where: { id: store.id } })).status).toBe("active");
+    const after = await systemDb.store.findUniqueOrThrow({ where: { id: store.id } });
+    expect(after.status).toBe("active");
+    // The whole history is in: no comparison reaches back before it.
+    expect(after.ordersHistoryFrom).toEqual(new Date(0));
+  });
+
+  it("records where the imported order history starts: the window, the earliest one, never a reconcile's", async () => {
+    const now = Date.UTC(2026, 9, 1);
+    const daysBack = (n: number) => new Date(now - n * 86400_000);
+    expect(importedFrom({}, ["read_orders"], now)).toEqual(daysBack(BACKFILL_DAYS));
+    expect(importedFrom({}, ["read_orders", "read_all_orders"], now)).toEqual(new Date(0));
+    // A re-read of the window by creation date covers it too; Shopify still cuts it at 60 days.
+    expect(importedFrom({ sinceDays: BACKFILL_DAYS }, ["read_orders"], now)).toEqual(daysBack(BACKFILL_DAYS));
+    expect(importedFrom({ sinceDays: 90 }, ["read_orders"], now)).toEqual(daysBack(BACKFILL_DAYS));
+    expect(importedFrom({ sinceDays: 90 }, ["read_orders", "read_all_orders"], now)).toEqual(daysBack(90));
+    // Recently updated orders cover no window of creation dates.
+    expect(importedFrom({ sinceDays: RECONCILE_ORDER_DAYS }, ["read_orders", "read_all_orders"], now)).toBeNull();
+
+    // A quiet store: one order in the 60 days, 10 days ago, long after the window starts.
+    const store = await makeStore(["read_orders"]);
+    fetchImpl = async () => gqlJson(ordersPage([gOrder(1, { createdAt: new Date(Date.now() - 10 * 86400_000).toISOString() })]));
+    const historyFrom = async () => (await systemDb.store.findUniqueOrThrow({ where: { id: store.id } })).ordersHistoryFrom;
+    const sync = async (data: Partial<SyncJobData>) => {
+      const job = await makeJob(store, "orders");
+      const start = Date.now();
+      await runSync({ storeId: store.id, kind: "orders", syncJobId: job.id, pagedOnly: true, ...data }, deps);
+      return { start, end: Date.now() };
+    };
+    const t = await sync({});
+    const from = (await historyFrom())!.getTime();
+    // Recorded as the job finished: 60 days back from then, not from the first order.
+    expect(from).toBeGreaterThanOrEqual(t.start - BACKFILL_DAYS * 86400_000);
+    expect(from).toBeLessThanOrEqual(t.end - BACKFILL_DAYS * 86400_000);
+
+    // A reconcile leaves it alone, and so does a later re-read of the window: the earliest stays.
+    await sync({ sinceDays: RECONCILE_ORDER_DAYS });
+    await sync({ sinceDays: BACKFILL_DAYS });
+    expect((await historyFrom())!.getTime()).toBe(from);
+    // A start recorded later than the window (a store imported before the column existed) moves back to it.
+    await systemDb.store.update({ where: { id: store.id }, data: { ordersHistoryFrom: new Date(from + 5 * 86400_000) } });
+    const r = await sync({ sinceDays: BACKFILL_DAYS });
+    expect((await historyFrom())!.getTime()).toBeGreaterThanOrEqual(r.start - BACKFILL_DAYS * 86400_000);
+    expect((await historyFrom())!.getTime()).toBeLessThanOrEqual(r.end - BACKFILL_DAYS * 86400_000);
+
+    // An import that fails part-way records nothing.
+    await systemDb.store.update({ where: { id: store.id }, data: { ordersHistoryFrom: null } });
+    fetchImpl = async () => new Response("boom", { status: 500 });
+    await expect(sync({})).rejects.toThrow();
+    expect(await historyFrom()).toBeNull();
+
+    // Deleting the store's orders forgets the window with them: the next import records its own.
+    await systemDb.store.update({ where: { id: store.id }, data: { ordersHistoryFrom: new Date(from) } });
+    await purgeStoreData(store.id);
+    expect(await historyFrom()).toBeNull();
   });
 
   it("halves the page size and re-enqueues the same page when Shopify reports MAX_COST_EXCEEDED", async () => {

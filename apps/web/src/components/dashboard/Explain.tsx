@@ -28,7 +28,7 @@ const TERMS: Record<Topic, Terms> = {
     ["Looks good", "Up or level on the dates compared with, refunds at 5% of sales or less, nothing low or sold out, nothing waiting to ship."],
     ["For your info", "Facts with no good or bad, like your best seller, or numbers with nothing earlier to compare with."],
     ["What it's compared with", "You choose beside the dates. Previous period: the same number of days just before (last 30 days against the 30 days before that, last month against the whole month before). Previous year: the same dates a year earlier. Or pick dates of your own. While the dates include today, the comparison is counted up to the same time of day, as Shopify does: today until 4 pm against yesterday until 4 pm."],
-    ["No earlier data", "Shown instead of a change when the dates compared with reach back before the first order bizinsights imported: without access to all orders, Shopify shares only the last 60 days, so a change against those dates would read as a drop that never happened."],
+    ["No earlier data", "Shown instead of a change when the dates compared with reach back before the orders Shopify shared with bizinsights: without access to all orders, Shopify shares only the 60 days before the first import, so a change against earlier dates would read as a drop that never happened."],
   ],
   sales: [
     ["Same as Shopify", "Every sales figure here is worked out from Shopify's own sales records, the way Shopify's reports do, so the same dates show the same numbers in both. Test orders aren't counted."],
@@ -150,7 +150,7 @@ function nextSteps(topic: Topic, ov: Overview, currency: string): ReactNode[] {
       if (d !== null && d > 0) out.push(<>Sales are up {fmtPct(d)}. <b>Best sellers</b> shows which products drove it; keep those in stock.</>);
       const r = m.refunds?.current;
       if (r?.refundRate && gradeRefundRate(r.refundRate) !== "good") out.push(<>Refunds are {fmtPct(r.refundRate)} of sales ({money(r.refunds)}). <b>Recent orders</b> links each order to Shopify to see why.</>);
-      const b = dailyBreakdown(asSalesDays(s.series), ov.today, ov.data?.oldestOrderDay ?? null);
+      const b = dailyBreakdown(asSalesDays(s.series), ov.today, ov.data?.historyFrom ?? null);
       if (b.bestWeekday) out.push(<>{weekdayName(b.bestWeekday.weekday, "long")}s sell best ({money(b.bestWeekday.average)} on average): a good day for emails, posts or new products.</>);
       if (topic === "overview") {
         const inv = m.inventory?.current;

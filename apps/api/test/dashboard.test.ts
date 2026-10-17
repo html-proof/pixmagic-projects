@@ -218,7 +218,7 @@ describe("order modules (store time zone, DST weekend)", () => {
     ]);
     expect(m.catalog.products).toEqual({ active: 2, draft: 0, archived: 0, total: 2 });
 
-    expect(data).toEqual({ orders: 6, products: 2, variants: 0, oldestOrderDay: "2026-03-06", newestOrderDay: "2026-03-09" });
+    expect(data).toEqual({ orders: 6, products: 2, variants: 0, oldestOrderDay: "2026-03-06", newestOrderDay: "2026-03-09", historyFrom: "2026-03-06" });
   });
 
   it("lists the latest orders overall, flagging cancelled ones", async () => {
@@ -250,7 +250,7 @@ describe("order modules (store time zone, DST weekend)", () => {
     });
     expect(m.catalog).toEqual({ products: { active: 0, draft: 0, archived: 0, total: 0 }, variants: 0, topVendors: [] });
     expect(m.sales_overview.current).toMatchObject({ tax: 0, shipping: 0 });
-    expect(data).toEqual({ orders: 0, products: 0, variants: 0, oldestOrderDay: null, newestOrderDay: null });
+    expect(data).toEqual({ orders: 0, products: 0, variants: 0, oldestOrderDay: null, newestOrderDay: null, historyFrom: null });
   });
 });
 
@@ -475,6 +475,39 @@ describe("what the dates are compared with", () => {
     expect(ok.modules.sales_overview.deltas.netSales).toBe(-0.5);
   });
 
+  it("compares back to where the import window starts, before a quiet store's first order", async () => {
+    const { a, ws, store } = await owner();
+    // Imported 60 days ago at noon in New York (Shopify's 60 days): that day was only partly
+    // imported, so the history starts the day after.
+    await systemDb.store.update({ where: { id: store.id }, data: { ordersHistoryFrom: new Date(at(d(-60))) } });
+    // A quiet store: its first order came 25 days ago, the 34 days before it imported with none.
+    await seedOrder(store, { id: "O1", createdAt: at(d(-25)), lines: [{ qty: 1, price: 80 }] });
+    await seedOrder(store, { id: "O2", createdAt: at(d(-5)), lines: [{ qty: 1, price: 40 }] });
+    await recomputeDays(store, [d(-25), d(-5)]);
+    const compared = async (cfrom: string, cto: string) =>
+      (await overview(a.headers, ws, store.id, `preset=custom&from=${d(-6)}&to=${d(-4)}&compare=custom&cfrom=${cfrom}&cto=${cto}`)).json();
+
+    // Reaching back past the first order (it used to say "No earlier data"), it compares as usual.
+    const ok = await compared(d(-30), d(-24));
+    expect(ok.data).toMatchObject({ oldestOrderDay: d(-25), historyFrom: d(-59) });
+    expect(ok.previous.imported).toBe(true);
+    expect(ok.modules.sales_overview.previous).toMatchObject({ netSales: 80, orders: 1 });
+    expect(ok.modules.sales_overview.deltas.netSales).toBe(-0.5);
+    // The months go by the same start: before it "none", across it "partial", from it "full".
+    for (const m of ok.modules.sales_overview.year.months as Array<{ from: string; to: string; coverage: string }>) {
+      expect(m.coverage, m.from).toBe(m.to < d(-59) ? "none" : m.from >= d(-59) ? "full" : "partial");
+    }
+    // Days in the window without orders were imported: they compare as $0, not as missing.
+    const quiet = await compared(d(-59), d(-57));
+    expect(quiet.previous.imported).toBe(true);
+    expect(quiet.modules.sales_overview.previous).toMatchObject({ netSales: 0, orders: 0 });
+    // The day the window began on, and anything before it, Shopify didn't share in full.
+    const before = await compared(d(-60), d(-58));
+    expect(before.previous.imported).toBe(false);
+    expect(before.modules.sales_overview.previous).toBeNull();
+    expect(Object.values(before.modules.sales_overview.deltas).every((x) => x === null)).toBe(true);
+  });
+
   it("refuses comparison dates it cannot report on with a 400, on the dashboard and its downloads", async () => {
     const { a, ws, store } = await owner();
     for (const qs of [
@@ -651,7 +684,7 @@ describe("scopes and tenancy", () => {
     const o = (await overview(a.headers, ws, ordersOnly.id)).json();
     expect(Object.keys(o.modules).sort()).toEqual(["channels", "discount_codes", "fulfillment", "order_timing", "recent_orders", "refunds", "sales_overview", "traffic"]);
     expect(o.capabilities.find((c: { id: string }) => c.id === "inventory").missingScopes).toEqual(["read_products"]);
-    expect(o.data).toEqual({ orders: 0, products: 0, variants: 0, oldestOrderDay: null, newestOrderDay: null });
+    expect(o.data).toEqual({ orders: 0, products: 0, variants: 0, oldestOrderDay: null, newestOrderDay: null, historyFrom: null });
 
     const p = (await overview(a.headers, ws, productsOnly.id)).json();
     expect(Object.keys(p.modules).sort()).toEqual(["catalog", "inventory"]);

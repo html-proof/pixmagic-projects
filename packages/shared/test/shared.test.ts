@@ -4,6 +4,7 @@ import {
   aggregateDaily,
   can,
   channelLabel,
+  ALL_HISTORY,
   clampCustomRange,
   comparisonImported,
   customRangeProblem,
@@ -12,6 +13,7 @@ import {
   delta,
   encrypt,
   expandScopes,
+  historyStart,
   isDay,
   keyVersionOf,
   localDay,
@@ -360,6 +362,34 @@ describe("what the dates are compared with", () => {
     expect(comparisonImported({ from: "2026-08-17", to: "2026-09-16" }, "2026-08-18")).toBe(false);
     expect(comparisonImported({ from: "2025-10-17", to: "2025-10-17" }, "2026-08-18")).toBe(false);
     expect(comparisonImported({ from: "2026-10-16", to: "2026-10-16" }, null)).toBe(false);
+  });
+
+  it("starts the imported history where the import window did, not at a quiet store's first order", () => {
+    const tz = "Australia/Melbourne";
+    // Imported 17 Oct 2026 at 10:00 in Melbourne (23:00Z the day before): Shopify's 60 days begin
+    // at 10:00 on 18 Aug, a day only partly imported, so 19 Aug is the first whole day.
+    const window = new Date("2026-08-18T00:00:00Z");
+    // A quiet store: its first order came on 25 Aug, but 19 to 24 Aug were imported too (no orders).
+    expect(historyStart(window, tz, "2026-08-25")).toBe("2026-08-19");
+    const lastThirty = { from: "2026-08-19", to: "2026-09-17" };
+    expect(comparisonImported(lastThirty, historyStart(window, tz, "2026-08-25"))).toBe(true);
+    // What the first order alone used to say about the same comparison.
+    expect(comparisonImported(lastThirty, "2026-08-25")).toBe(false);
+    // Still not before the window: that is what Shopify didn't share.
+    expect(comparisonImported({ from: "2026-08-18", to: "2026-09-16" }, historyStart(window, tz, "2026-08-25"))).toBe(false);
+    // A window from the store's midnight covers that whole day.
+    expect(historyStart(new Date("2026-08-18T14:00:00Z"), tz, null)).toBe("2026-08-19");
+    expect(historyStart(new Date("2026-08-18T14:00:01Z"), tz, null)).toBe("2026-08-20");
+    // Orders older than the window (an earlier import, before the window was recorded) count from the first.
+    expect(historyStart(window, tz, "2026-07-02")).toBe("2026-07-02");
+    // A store whose import predates the record: the first order, as before.
+    expect(historyStart(null, tz, "2026-08-25")).toBe("2026-08-25");
+    expect(historyStart(null, tz, null)).toBeNull();
+    // Imported, no orders at all: the window is still known, and its days hold no sales.
+    expect(historyStart(window, tz, null)).toBe("2026-08-19");
+    // read_all_orders: the whole history, so no comparison is "before the import".
+    expect(historyStart(new Date(0), tz, "2026-08-25")).toBe(ALL_HISTORY);
+    expect(comparisonImported({ from: "2019-01-01", to: "2019-01-31" }, historyStart(new Date(0), tz, "2026-08-25"))).toBe(true);
   });
 });
 

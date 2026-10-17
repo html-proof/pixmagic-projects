@@ -253,6 +253,12 @@ export interface ImportedData {
   variants?: number;
   oldestOrderDay?: string | null;
   newestOrderDay?: string | null;
+  /**
+   * The first day every order was imported from (the start of Shopify's 60-day window, or
+   * 1970-01-01 with the whole history): comparisons and "not imported" days go by this, not by
+   * the first order, which a quiet store has days later.
+   */
+  historyFrom?: string | null;
 }
 
 export interface Overview {

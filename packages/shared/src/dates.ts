@@ -196,12 +196,36 @@ export function resolvePreset(
   return { range, previous: range.to === today ? { ...previous, until: localTime(now, timeZone) } : previous };
 }
 
+/** `historyStart` for a store whose whole order history was imported (read_all_orders). */
+export const ALL_HISTORY = "1970-01-01";
+
 /**
- * Whether the store's imported orders cover the whole comparison. Shopify shares 60 days of orders
- * without read_all_orders, so a comparison reaching back before the first imported order would
- * count a period mostly missing and show a fake drop (or 0%): its changes are left out instead,
- * as the month-by-month view does for months not fully imported.
+ * The first store-local day whose Shopify orders were all imported, or null when none are known to
+ * be. `importedFrom` is where the store's recorded import window starts (stores.orders_history_from;
+ * the epoch for its whole history): the day it falls on was only partly covered, so the day after
+ * is the first whole one, unless the window starts at midnight. A store whose import predates that
+ * record (null), or that holds an order from before the window, starts at its first imported
+ * order's day instead (the earlier of the two). A quiet store's first order can come days after its
+ * window starts: those days were imported too, with no orders in them.
  */
-export function comparisonImported(previous: DateRange, oldestOrderDay: string | null): boolean {
-  return oldestOrderDay !== null && previous.from >= oldestOrderDay;
+export function historyStart(importedFrom: Date | null, timeZone: string, oldestOrderDay: string | null): string | null {
+  let from: string | null = null;
+  if (importedFrom && importedFrom.getTime() <= 0) from = ALL_HISTORY;
+  else if (importedFrom) {
+    const day = localDay(importedFrom, timeZone);
+    from = localTime(importedFrom, timeZone) === "00:00:00" ? day : addDays(day, 1);
+  }
+  if (from === null || oldestOrderDay === null) return from ?? oldestOrderDay;
+  return oldestOrderDay < from ? oldestOrderDay : from;
+}
+
+/**
+ * Whether the store's imported orders cover the whole comparison (`historyFrom` from
+ * `historyStart`). Shopify shares 60 days of orders without read_all_orders, so a comparison
+ * reaching back before the import would count a period mostly missing and show a fake drop (or
+ * 0%): its changes are left out instead, as the month-by-month view does for months not fully
+ * imported.
+ */
+export function comparisonImported(previous: DateRange, historyFrom: string | null): boolean {
+  return historyFrom !== null && previous.from >= historyFrom;
 }
