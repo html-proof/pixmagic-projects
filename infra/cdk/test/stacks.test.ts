@@ -143,6 +143,26 @@ describe("the data stack", () => {
       });
     }
   });
+
+  it("snapshots every EBS disk daily and keeps a week, a replaced disk's snapshots included", () => {
+    t.data.resourceCountIs("AWS::DLM::LifecyclePolicy", 1);
+    t.data.hasResourceProperties("AWS::DLM::LifecyclePolicy", {
+      DefaultPolicy: "VOLUME",
+      State: "ENABLED",
+      CreateInterval: 1,
+      RetainInterval: 7,
+      ExtendDeletion: true,
+      PolicyDetails: Match.absent(),
+      ExecutionRoleArn: { "Fn::GetAtt": [Match.stringLikeRegexp("^SnapshotRole"), "Arn"] },
+      Description: Match.stringLikeRegexp("^[0-9A-Za-z _-]+$"),
+    });
+    t.data.hasResourceProperties("AWS::IAM::Role", {
+      AssumeRolePolicyDocument: { Statement: [Match.objectLike({ Principal: { Service: "dlm.amazonaws.com" } })] },
+      ManagedPolicyArns: [{ "Fn::Join": ["", ["arn:", { Ref: "AWS::Partition" }, ":iam::aws:policy/service-role/AWSDataLifecycleManagerServiceRole"]] }],
+    });
+    // One default policy per Region: staging's disks are production's policy's.
+    synth({ env: "staging" }).data.resourceCountIs("AWS::DLM::LifecyclePolicy", 0);
+  });
 });
 
 describe("the app stack", () => {
