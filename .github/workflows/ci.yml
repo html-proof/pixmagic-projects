@@ -1,17 +1,29 @@
 name: CI
 
+# GitHub-hosted minutes are limited (GitHub Free: 2,000 a month for private repositories), so CI runs
+# only what a change can affect:
+# - A change of only Markdown files or docs/ starts no run at all: nothing to test, and on main
+#   nothing for Deploy to AWS to ship (it starts only when a CI run on main succeeds).
+# - Pull requests run the browser tests (e2e) only when they change what those tests drive, or
+#   carry the label "e2e" (checks job, first step). Pushes to main always need them before Deploy.
+# - A push to main whose tree a pull request's run already passed, job by job, skips that job
+#   (tested job below): merging an up-to-date pull request costs about a minute, not twelve.
 on:
   push:
     branches: [main]
+    paths-ignore: ["**.md", "docs/**"]
   pull_request:
+    paths-ignore: ["**.md", "docs/**"]
 
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-# Checks only read the repository; nothing here should be able to push or edit issues/PRs.
+# Checks only read the repository (and a pull request's list of changed files); nothing here should
+# be able to push or edit issues/PRs.
 permissions:
   contents: read
+  pull-requests: read
 
 env:
   PG_PORT: 5434
@@ -20,19 +32,55 @@ env:
 # label list such as ["self-hosted","bizinsights-pc"] (the owner's Windows PC, while GitHub-hosted
 # jobs can't start). That runner has no Docker: Postgres and Mailpit run there as local processes on
 # free ports (5434 on that PC is the old deployment's database), and the runner ends them with the
-# job. Every `run:` is bash: on Windows, Git Bash (each job's first step puts it ahead of
-# C:\Windows\System32\bash.exe, which is WSL). That step is cmd, not PowerShell: a runner service's
-# PowerShell may not run scripts (execution policy).
+# job. Every `run:` is bash: on Windows, Git Bash (the first step of each job that runs commands
+# puts it ahead of C:\Windows\System32\bash.exe, which is WSL). That step is cmd, not PowerShell: a
+# runner service's PowerShell may not run scripts (execution policy).
 defaults:
   run:
     shell: bash
 
 jobs:
+  # Merging a pull request that is up to date with main leaves main with exactly the tree that the
+  # pull request's last run tested. Each pull-request job that passes records its tree (an artifact
+  # named passed-<job>-<tree>, kept 14 days); on a push to main this looks them up, and a job that
+  # already passed on this exact tree is skipped. Anything it can't confirm runs as usual.
+  tested:
+    name: Already passed on a pull request?
+    if: github.event_name == 'push'
+    runs-on: ${{ fromJSON(vars.SELF_HOSTED_RUNNER || '"ubuntu-latest"') }}
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    outputs:
+      checks: ${{ steps.find.outputs.checks }}
+      e2e: ${{ steps.find.outputs.e2e }}
+    steps:
+      - id: find
+        continue-on-error: true
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const tree = context.payload.head_commit?.tree_id;
+            for (const job of ["checks", "e2e"]) {
+              let passed = false;
+              if (tree) {
+                const { data } = await github.rest.actions.listArtifactsForRepo({ ...context.repo, name: `passed-${job}-${tree}`, per_page: 100 });
+                // Only this repository's own branches count, not a fork's pull request.
+                passed = data.artifacts.some((a) => !a.expired && a.workflow_run && a.workflow_run.head_repository_id === a.workflow_run.repository_id);
+              }
+              core.info(`${job}: ${passed ? "passed on a pull request with this exact tree, skipped" : "runs"}`);
+              core.setOutput(job, String(passed));
+            }
+
   checks:
     name: Lint, typecheck, unit & integration tests, build
+    needs: tested
+    if: ${{ !cancelled() && needs.tested.outputs.checks != 'true' }}
     runs-on: ${{ fromJSON(vars.SELF_HOSTED_RUNNER || '"ubuntu-latest"') }}
     # A busy PC runs the integration tests 2-3 times slower than a GitHub runner.
     timeout-minutes: ${{ vars.SELF_HOSTED_RUNNER != '' && 45 || 30 }}
+    outputs:
+      e2e: ${{ steps.scope.outputs.e2e }}
     services:
       postgres:
         # An empty image skips the container (service containers need a Linux runner).
@@ -50,6 +98,34 @@ jobs:
         run: |
           echo %ProgramFiles%\Git\bin>>"%GITHUB_PATH%"
           echo npm_config_store_dir=%RUNNER_TOOL_CACHE%\pnpm-store>>"%GITHUB_ENV%"
+      # The browser tests drive the UI on the local server (apps/aws) with their own sign-in and mail
+      # stand-ins. A pull request that changes none of that (or the UI's shared package, the
+      # dependencies or this workflow) leaves them to the push to main, unless it has the label
+      # "e2e": add it, then push again (a re-run reuses the old labels). Only an answer of "no" skips
+      # them: if this step fails, they run.
+      - name: Does this pull request need the browser tests?
+        id: scope
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            if (pr.labels.some((l) => l.name === "e2e")) return core.setOutput("e2e", "true");
+            const dirs = ["apps/web/", "apps/aws/", "packages/shared/", "infra/cognito-local/", "infra/postgres/"];
+            const files = ["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "docker-compose.yml", ".github/workflows/ci.yml"];
+            let changed;
+            try {
+              changed = await github.paginate(github.rest.pulls.listFiles, { ...context.repo, pull_number: pr.number, per_page: 100 });
+            } catch (err) {
+              core.warning(`Couldn't list the changed files (${err.message}): running the browser tests.`);
+              return core.setOutput("e2e", "true");
+            }
+            const hit = changed.flatMap((f) => [f.filename, f.previous_filename]).find((p) => p && (files.includes(p) || dirs.some((d) => p.startsWith(d))));
+            // GitHub lists at most 3,000 files: a pull request that size runs them regardless.
+            const run = hit !== undefined || changed.length >= 3000;
+            core.info(run ? `Browser tests run (${hit ?? "3,000+ files"} changed).` : "Browser tests skipped: nothing they drive changed.");
+            core.setOutput("e2e", String(run));
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
@@ -88,11 +164,35 @@ jobs:
       # What Deploy to AWS ships: the UI (Next.js export) and the bundled function.
       - name: Build the Lambda package (UI + function)
         run: pnpm --filter @app/aws build -- --no-staging-bundle
+      # For the push to main that merges this pull request (tested job). Failing to record only
+      # means that push runs this job again.
+      - name: Record the tree that passed
+        id: passed
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        run: |
+          tree=$(git rev-parse 'HEAD^{tree}')
+          echo "$tree" > "$RUNNER_TEMP/passed-tree.txt"
+          echo "tree=$tree" >> "$GITHUB_OUTPUT"
+      - if: steps.passed.outputs.tree != ''
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: passed-checks-${{ steps.passed.outputs.tree }}
+          path: ${{ runner.temp }}/passed-tree.txt
+          retention-days: 14
+          overwrite: true
 
   e2e:
     name: End-to-end (Playwright)
     runs-on: ${{ fromJSON(vars.SELF_HOSTED_RUNNER || '"ubuntu-latest"') }}
-    needs: checks
+    needs: [tested, checks]
+    # After the checks pass (or were skipped because they passed on this tree), unless the browser
+    # tests passed on this tree too, or a pull request doesn't need them (checks job, first step).
+    if: >-
+      ${{ !cancelled() && needs.tested.outputs.e2e != 'true'
+      && (needs.checks.result == 'success' || (needs.checks.result == 'skipped' && needs.tested.outputs.checks == 'true'))
+      && (github.event_name != 'pull_request' || needs.checks.outputs.e2e != 'false') }}
     timeout-minutes: 30
     steps:
       # Windows runner: Git Bash for the run steps, and a pnpm store that outlives the job
@@ -129,6 +229,24 @@ jobs:
           { echo "TEST_PG_PORT=$pg"; echo "E2E_MAILPIT_URL=http://127.0.0.1:$mail"; echo "E2E_PORT=$app"; echo "E2E_COGNITO_PORT=$cognito"; echo "E2E_LOGIN_PORT=$login"; } >> "$GITHUB_ENV"
       - run: pnpm --filter @app/web exec playwright install --with-deps chromium
       - run: pnpm e2e
+      # For the push to main that merges this pull request (tested job). Failing to record only
+      # means that push runs this job again.
+      - name: Record the tree that passed
+        id: passed
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        run: |
+          tree=$(git rev-parse 'HEAD^{tree}')
+          echo "$tree" > "$RUNNER_TEMP/passed-tree.txt"
+          echo "tree=$tree" >> "$GITHUB_OUTPUT"
+      - if: steps.passed.outputs.tree != ''
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: passed-e2e-${{ steps.passed.outputs.tree }}
+          path: ${{ runner.temp }}/passed-tree.txt
+          retention-days: 14
+          overwrite: true
       - if: failure()
         uses: actions/upload-artifact@v7
         with: { name: playwright-report, path: apps/web/test-results }

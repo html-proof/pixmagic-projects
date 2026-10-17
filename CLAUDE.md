@@ -15,6 +15,12 @@ The owner wants every change made to this project live on AWS
 3. The change is live only when that Deploy run succeeded. Check it before saying so.
 
 - Work left on a local branch or uncommitted in a worktree never reaches AWS.
+- A change of only Markdown files or `docs/` starts no CI run and no Deploy: there is nothing to
+  ship, and its merge is done once it is on `main`.
+- GitHub-hosted minutes are scarce (Free plan). A pull request runs the browser tests only when it
+  touches what they drive (`.github/workflows/ci.yml` says what); add the label `e2e` and push
+  again to run them anyway. Merge a pull request whose last run is green on top of the current
+  `main` and the push to `main` skips the jobs that already passed on that tree.
 - Don't `cdk deploy` the App stack by hand from a branch: the next `main` deploy replaces it.
 - A schema change ships with its migration (CI checks they match); the deploy applies it.
 - Not ready for merchants yet? Merge it behind a flag in `apps/web/src/lib/features.ts` rather

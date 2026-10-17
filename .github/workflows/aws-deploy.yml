@@ -28,8 +28,13 @@ defaults:
 jobs:
   deploy:
     # By hand only from main: the production environment has no branch rule on this plan, and a
-    # dispatch on any other branch would deploy code that never passed CI.
-    if: (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') || github.event.workflow_run.conclusion == 'success'
+    # dispatch on any other branch would deploy code that never passed CI. After CI, only its run
+    # for a push to main: `branches: [main]` above also matches a pull request from a branch named
+    # main, whose run may skip the browser tests (ci.yml). A change of only docs starts no CI run,
+    # so it deploys nothing; CI skipping a job it already passed on the same tree still succeeds.
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+      || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
     # GitHub's ubuntu-latest, or the self-hosted runner the repository variable SELF_HOSTED_RUNNER
     # names (ci.yml).
     runs-on: ${{ fromJSON(vars.SELF_HOSTED_RUNNER || '"ubuntu-latest"') }}
