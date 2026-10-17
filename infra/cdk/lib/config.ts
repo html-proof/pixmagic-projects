@@ -11,7 +11,12 @@ export interface EnvConfig {
   name: "production" | "staging";
   account: string;
   region: string;
-  /** RDS instance class, e.g. "t4g.small". */
+  /**
+   * RDS instance class, e.g. "t4g.micro" (1 GB memory, ~80 connections) or "t4g.small" (2 GB,
+   * ~200; with Multi-AZ ~US$37/month more). Production is on t4g.micro to keep the bill within
+   * US$100-120 (2026-10-17); its alarms (db-free-memory, db-connections, db-cpu) say when it's
+   * time for t4g.small. With Multi-AZ, a change costs one failover (about a minute).
+   */
   dbInstanceType: string;
   /**
    * A standby in the second Availability Zone with automatic failover (about a minute), which
@@ -78,7 +83,7 @@ const ENVIRONMENTS: Record<EnvConfig["name"], Omit<EnvConfig, "schedulesEnabled"
     name: "production",
     account: ACCOUNT,
     region: REGION,
-    dbInstanceType: "t4g.small",
+    dbInstanceType: "t4g.micro",
     dbMultiAz: true,
     dbAllocatedStorageGb: 20,
     dbMaxStorageGb: 100,
