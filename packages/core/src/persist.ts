@@ -775,6 +775,8 @@ export async function purgeStoreData(storeId: string, fetchImpl?: FetchLike) {
     systemDb.whatsappTemplate.deleteMany({ where: { storeId } }),
     systemDb.whatsappConnection.deleteMany({ where: { storeId } }),
     systemDb.whatsappSettings.deleteMany({ where: { storeId } }),
+    // The orders are gone, and the import window with them: the next import records its own.
+    systemDb.store.updateMany({ where: { id: storeId }, data: { ordersHistoryFrom: null } }),
   ]);
   // Deleting our copy of a token leaves the access it grants alive at Google or Meta.
   for (const conn of adConnections) await revokeAdAccessIfUnused(conn, fetchImpl);

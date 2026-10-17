@@ -2,9 +2,9 @@
  * The day-by-day and month-by-month sales breakdowns on the dashboard. Pure functions over the
  * daily aggregates, so the API (months) and the web app (days) share one tested definition.
  *
- * Days and months before the store's first imported order are "not imported", never zero:
- * Shopify only shares the last 60 days of orders with most apps, and drawing those days as
- * $0 would read as a store that sold nothing.
+ * Days and months before the store's imported history starts (`historyFrom`, from `historyStart`
+ * in ./dates) are "not imported", never zero: Shopify only shares the last 60 days of orders with
+ * most apps, and drawing those days as $0 would read as a store that sold nothing.
  */
 // Without the ".js" the rest of the package uses: the web app imports this file directly
 // (@app/shared/sales), and its bundler doesn't map "./dates.js" to dates.ts.

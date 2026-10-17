@@ -290,6 +290,10 @@ model Store {
   installedAt           DateTime?   @map("installed_at")
   uninstalledAt         DateTime?   @map("uninstalled_at")
   lastSyncedAt          DateTime?   @map("last_synced_at")
+  // From when every Shopify order of the store is imported: the start of the earliest completed
+  // import window (Shopify shares 60 days without read_all_orders), the epoch when the whole
+  // history was imported, null when no import has recorded it. Set by the worker's orders sync.
+  ordersHistoryFrom     DateTime?   @map("orders_history_from")
   createdAt             DateTime    @default(now()) @map("created_at")
   updatedAt             DateTime    @updatedAt @map("updated_at")
   workspace             Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)

@@ -221,10 +221,11 @@ export function comparisonHelp(p: ShownComparison): string {
 
 /**
  * Why sales aren't compared when the imported orders don't reach back to the comparison
- * (`previous.imported` false). `oldestOrderDay` is absent for a member who may not see orders.
+ * (`previous.imported` false). `historyFrom` is the first day every order was imported from;
+ * absent for a member who may not see orders.
  */
-export function noEarlierData(oldestOrderDay: string | null | undefined): string {
-  const start = oldestOrderDay ? `the orders imported from Shopify start on ${fmtDay(oldestOrderDay)}, so sales aren't compared with dates before that` : "no orders were imported from those dates, so sales aren't compared";
+export function noEarlierData(historyFrom: string | null | undefined): string {
+  const start = historyFrom ? `Shopify shared orders from ${fmtDay(historyFrom)} on, so sales aren't compared with dates before that` : "no orders were imported from those dates, so sales aren't compared";
   return `No earlier data: ${start}. Without access to all orders, Shopify shares only the last 60 days.`;
 }
 

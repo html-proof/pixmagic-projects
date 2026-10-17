@@ -55,13 +55,28 @@ shipping, taxes and total sales as Shopify's sales reports for the same dates.
   it. Ad platforms (Meta, Google, AdSense) report whole days, so their comparisons stay whole days;
   their rows are read for the range and for the comparison separately, wherever the comparison sits.
 
-  **No earlier data:** when the comparison starts before the store's first imported order
-  (`oldestOrderDay`; Shopify shares the last 60 days of orders without `read_all_orders`),
-  `previous.imported` is false: the sales figures of the comparison come back `null`, every sales,
-  refund and returning-customer change is `null`, and the dashboard says "No earlier data" instead of a
-  change. A period mostly missing would otherwise read as a fake drop (or a fake rise, or 0%). It is
-  the same rule as the month-by-month view's "not imported" months. Store visits and ad figures have
-  their own history and are compared as usual.
+  **No earlier data:** when the comparison starts before the store's imported history (`historyFrom`,
+  below), `previous.imported` is false: the sales figures of the comparison come back `null`, every
+  sales, refund and returning-customer change is `null`, and the dashboard says "No earlier data"
+  instead of a change. A period mostly missing would otherwise read as a fake drop (or a fake rise,
+  or 0%). It is the same rule as the month-by-month view's "not imported" months. Store visits and ad
+  figures have their own history and are compared as usual (a comparison before it has 0 visits or
+  spend, so no change is shown).
+
+  **Where the imported history starts (`data.historyFrom`):** the first store-local day whose orders
+  were all imported. Shopify shares the last 60 days of orders without `read_all_orders`, so each
+  import that covers a window of creation dates (the first import, "Refresh data", the 60-day
+  re-read) records where its window began, in `stores.orders_history_from`, keeping the earliest.
+  The day the window begins on was only partly covered, so `historyFrom` is the day after (unless it
+  began at midnight). With `read_all_orders` the whole history is in: the epoch is recorded and
+  `historyFrom` is `1970-01-01`, so nothing counts as not imported. A store holding an order from
+  before its window (imported before the window was recorded) starts at that order's day instead:
+  `historyFrom` is the earlier of the window's first whole day and `oldestOrderDay`. A quiet store's
+  first order can come days after its window starts; those days were imported too, with no orders, so
+  they compare as $0 rather than "No earlier data". Disconnecting a store deletes its orders and
+  forgets the window. Stores imported before the record existed were given 60 days before their last
+  successful orders sweep (a start they surely hold), and their next window import makes it exact.
+  `oldestOrderDay`/`newestOrderDay` stay the orders actually held ("Orders from … to …").
 - **Daily series** (the sales chart and sparklines) has one point per day of the range; days without orders or sales are 0.
 - **A sale counts on the day it happened**: an order's sales on the day it was placed, a refund, return, cancellation or edit on the day it was made (the agreement's `happenedAt`), whatever day the order was placed. Last month's numbers can change only if Shopify backdates a record, which it doesn't.
 - **Cancelled orders** count as orders of the day they were placed, as in Shopify's reports; the cancellation is a return on the day it was made, so a cancelled order adds nothing to net sales once both are in the range. Operational modules (order timing, shipping, discount codes, vendors) still leave cancelled orders out.
@@ -110,7 +125,7 @@ Reference implementation: `packages/shared/src/sales.ts`.
 - **Change**: on the month before (January on December). The current month is compared with the same days of the month before (1–9 Oct with 1–9 Sep), never with the whole month.
 - **Average month**: over finished months that were fully imported.
 
-**Not imported.** Days and months before the store's first imported order are drawn hatched and labelled, never as $0. Shopify shares only the last 60 days of orders without `read_all_orders`. A month that is only partly imported is drawn lighter, and no change is calculated for it or against it.
+**Not imported.** Days and months before the store's imported history (`historyFrom`, see Conventions: the first whole day of Shopify's 60-day window, not the first order) are drawn hatched and labelled, never as $0. Shopify shares only the last 60 days of orders without `read_all_orders`; with it nothing is "not imported". A month that is only partly imported is drawn lighter, and no change is calculated for it or against it.
 
 ## Business overview (health check)
 
@@ -215,6 +230,6 @@ Shoppers who decline analytics consent are not tracked, so funnel numbers are be
 
 ## Known limitations
 
-- `read_orders` exposes 60 days of history. Longer ranges show data only from the install date onward unless `read_all_orders` is approved.
+- `read_orders` exposes 60 days of history. Longer ranges show data only from 60 days before the first import onward unless `read_all_orders` is approved.
 - An edit reaches the dashboard through the `orders/updated` delivery it causes (`orders/edited` isn't subscribed): its totals change, so the order's sales are read again.
 - Days before the switch to Shopify's sales records keep their old totals until their orders are read again (the dashboard's refresh re-reads the 60-day import window once); older days than that keep them for good.

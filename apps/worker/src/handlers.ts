@@ -140,6 +140,22 @@ export function ordersSearch(data: Pick<SyncJobData, "sinceDays">, grantedScopes
   return `${field}:>='${since}'`;
 }
 
+/**
+ * From when an orders job that ran to the end has every order in (stores.orders_history_from):
+ * the epoch for a first backfill with read_all_orders (the whole history), else the start of the
+ * creation-date window `ordersSearch` asked for, which Shopify cuts at BACKFILL_DAYS without
+ * read_all_orders. Null for a reconcile or refresh: it re-pulls recently *updated* orders, which
+ * covers no window of creation dates. Called when the job finishes, so the window it reports
+ * starts a little after the one searched, never before.
+ */
+export function importedFrom(data: Pick<SyncJobData, "sinceDays">, grantedScopes: string[], now = Date.now()): Date | null {
+  const allOrders = expandScopes(grantedScopes).has("read_all_orders");
+  if (!data.sinceDays && allOrders) return new Date(0);
+  if (data.sinceDays && data.sinceDays < BACKFILL_DAYS) return null;
+  const days = allOrders ? (data.sinceDays ?? BACKFILL_DAYS) : Math.min(data.sinceDays ?? BACKFILL_DAYS, BACKFILL_DAYS);
+  return new Date(now - days * 86400_000);
+}
+
 async function enqueueAggregate(deps: WorkerDeps, storeId: string, days: Iterable<string>) {
   const list = [...new Set(days)].sort();
   for (let i = 0; i < list.length; i += 31) {
@@ -474,6 +490,15 @@ export async function runSync(data: SyncJobData, deps: WorkerDeps) {
           // the ~1,400 a per-page backfill would have sent.
           await recomputeReturningCustomers(store.id);
           await enqueueAggregate(deps, store.id, await backfillDays(store.id));
+        }
+        // Where the imported history now starts, for the dashboard's "No earlier data": the
+        // earliest window any import has covered (orders are never deleted short of a purge).
+        const from = importedFrom(data, store.grantedScopes);
+        if (from) {
+          await systemDb.store.updateMany({
+            where: { id: store.id, OR: [{ ordersHistoryFrom: null }, { ordersHistoryFrom: { gt: from } }] },
+            data: { ordersHistoryFrom: from },
+          });
         }
         // Only a full backfill (or a refresh of a store that already had one) means "fully
         // synced". A 3-day reconcile finishing on a store whose backfill failed must not hide

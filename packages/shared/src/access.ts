@@ -581,7 +581,7 @@ export function redactOverview<T extends { modules: Obj; capabilities: Array<{ i
   if (isObj(report.data)) {
     const seesOrders = g.has("analytics.sales") || g.has("orders.list");
     const seesProducts = g.has("products.view") || g.has("products.performance") || g.has("products.inventory");
-    out.data = omit(report.data, [...(seesOrders ? [] : ["orders", "oldestOrderDay", "newestOrderDay"]), ...(seesProducts ? [] : ["products", "variants"])]);
+    out.data = omit(report.data, [...(seesOrders ? [] : ["orders", "oldestOrderDay", "newestOrderDay", "historyFrom"]), ...(seesProducts ? [] : ["products", "variants"])]);
   }
   return out;
 }

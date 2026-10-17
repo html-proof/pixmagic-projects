@@ -416,7 +416,7 @@ export function OverviewDetail({ ov, currency, onOpen }: { ov: Overview; currenc
         <Panel
           id="d-key-figures"
           title="Every key figure"
-          help={`${range}, against ${comparisonHelp(ov.previous)}.${ov.previous.imported === false ? ` ${noEarlierData(ov.data?.oldestOrderDay)}` : ""}${
+          help={`${range}, against ${comparisonHelp(ov.previous)}.${ov.previous.imported === false ? ` ${noEarlierData(ov.data?.historyFrom)}` : ""}${
             ov.previous.until && (m.ads || m.adsense) ? " Ad platforms report whole days, so their figures compare whole days." : ""
           }`}
         >

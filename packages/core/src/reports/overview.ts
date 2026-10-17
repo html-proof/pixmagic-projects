@@ -54,11 +54,11 @@ export async function storeOverview(tx: Tx, store: Store, dates: { range: DateRa
   });
   const enabled = new Set(capabilities.filter((c) => c.enabled && sees(c.id)).map((c) => c.id));
   const modules: Record<string, unknown> = {};
-  const data = await importedData(tx, scope);
-  // A comparison reaching back before the first imported order (Shopify shares 60 days without
+  const data = await importedData(tx, scope, store);
+  // A comparison reaching back before the imported history (Shopify shares 60 days without
   // read_all_orders) would count a period mostly missing: its order figures and changes are left
   // out (null), and the page says there is no earlier data, rather than show a fake drop or 0%.
-  const previousImported = comparisonImported(previous, data.oldestOrderDay);
+  const previousImported = comparisonImported(previous, data.historyFrom);
   const change = (now: number | null, before: number | null) => (previousImported ? delta(now, before) : null);
 
   let hasData = false;
@@ -105,7 +105,7 @@ export async function storeOverview(tx: Tx, store: Store, dates: { range: DateRa
         series: dailySeries(cur, range),
         // This calendar year month by month, whatever the dates picked. Reaches back to the
         // December before so January has something to compare with.
-        year: yearBreakdown(await dailyRows(tx, ws, storeId, { from: `${Number(today.slice(0, 4)) - 1}-12-01`, to: today }), today, data.oldestOrderDay),
+        year: yearBreakdown(await dailyRows(tx, ws, storeId, { from: `${Number(today.slice(0, 4)) - 1}-12-01`, to: today }), today, data.historyFrom),
       };
     }
     if (enabled.has("refunds")) {
