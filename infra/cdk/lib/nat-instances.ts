@@ -71,7 +71,9 @@ export class NatInstancePerAz extends ec2.NatProvider {
         instanceType: this.props.instanceType,
         machineImage: ec2.MachineImage.latestAmazonLinux2023({ cpuType: ec2.AmazonLinuxCpuType.ARM_64 }),
         sourceDestCheck: false,
-        requireImdsv2: true,
+        // IMDSv2 on the instance itself: requireImdsv2 adds a launch template named after the
+        // construct id ("NatInstanceLaunchTemplate"), the same for both, and EC2 refuses the second.
+        httpTokens: ec2.HttpTokens.REQUIRED,
         blockDevices: [{ deviceName: "/dev/xvda", volume: ec2.BlockDeviceVolume.ebs(8, { encrypted: true, volumeType: ec2.EbsDeviceVolumeType.GP3 }) }],
         userData,
         // A changed script runs only on a new instance (cloud-init runs user data once), and a

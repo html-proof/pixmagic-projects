@@ -110,6 +110,10 @@ describe("the data stack", () => {
       const assoc = Object.values(tables).find((a) => a.Properties.RouteTableId.Ref === route.Properties.RouteTableId.Ref)!;
       expect(subnets[assoc.Properties.SubnetId.Ref]!.Properties.AvailabilityZone).toBe(instanceAz);
     }
+    // IMDSv2 only, set on the instances: no launch templates, whose names would collide.
+    for (const [, r] of nats) expect(r.Properties.MetadataOptions).toEqual({ HttpTokens: "required" });
+    const names = Object.values(t.data.findResources("AWS::EC2::LaunchTemplate")).map((lt) => lt.Properties.LaunchTemplateName);
+    expect(new Set(names).size).toBe(names.length);
     // Inbound only from inside the VPC.
     t.data.hasResourceProperties("AWS::EC2::SecurityGroup", {
       GroupName: "insights-production-nat",
