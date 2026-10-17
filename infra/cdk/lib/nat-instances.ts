@@ -53,7 +53,7 @@ export class NatInstancePerAz extends ec2.NatProvider {
       description: "Insights NAT instances: forward outbound traffic from the VPC",
       allowAllOutbound: true,
     });
-    sg.addIngressRule(ec2.Peer.ipv4(vpc.vpcCidrBlock), ec2.Port.allTraffic(), "The VPC's own traffic on its way out");
+    sg.addIngressRule(ec2.Peer.ipv4(vpc.vpcCidrBlock), ec2.Port.allTraffic(), "Traffic from inside the VPC on its way out");
     const role = new iam.Role(vpc, "NatRole", {
       roleName: `${this.props.namePrefix}-nat`,
       assumedBy: new iam.ServicePrincipal("ec2.amazonaws.com"),

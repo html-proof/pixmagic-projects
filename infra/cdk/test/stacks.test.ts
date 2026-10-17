@@ -114,6 +114,13 @@ describe("the data stack", () => {
     for (const [, r] of nats) expect(r.Properties.MetadataOptions).toEqual({ HttpTokens: "required" });
     const names = Object.values(t.data.findResources("AWS::EC2::LaunchTemplate")).map((lt) => lt.Properties.LaunchTemplateName);
     expect(new Set(names).size).toBe(names.length);
+    // EC2 refuses descriptions outside a-zA-Z0-9. _-:/()#,@[]+=&;{}!$* (an apostrophe failed a deploy).
+    const ec2Text = /^[a-zA-Z0-9. _\-:/()#,@[\]+=&;{}!$*]*$/;
+    for (const g of Object.values(t.data.findResources("AWS::EC2::SecurityGroup"))) {
+      expect(g.Properties.GroupDescription).toMatch(ec2Text);
+      for (const rule of [...(g.Properties.SecurityGroupIngress ?? []), ...(g.Properties.SecurityGroupEgress ?? [])] as Array<{ Description?: string }>) expect(rule.Description ?? "").toMatch(ec2Text);
+    }
+    for (const r of Object.values(t.data.findResources("AWS::EC2::SecurityGroupIngress"))) expect(r.Properties.Description ?? "").toMatch(ec2Text);
     // Inbound only from inside the VPC.
     t.data.hasResourceProperties("AWS::EC2::SecurityGroup", {
       GroupName: "insights-production-nat",
