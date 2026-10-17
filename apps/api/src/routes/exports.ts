@@ -2,16 +2,15 @@ import { z } from "zod";
 import { withTenant } from "@app/db";
 import { audit, logger, toCsv } from "@app/core";
 import { EXPORT_SECTION_IDS, EXPORT_SECTIONS, exportTable, storeOverview } from "@app/core/reports";
-import { allows, DATE_PRESETS, redactOverview, resolvePreset, seesModule } from "@app/shared";
+import { allows, redactOverview, seesModule } from "@app/shared";
 import { clientIp, HttpError, requireWorkspace, type Deps } from "../context.js";
 import type { App } from "../app.js";
 import { limit, LIMITS } from "../rateLimit.js";
+import { datesQuery, resolveQueryDates } from "./dashboard.js";
 
 const querySchema = z.object({
   section: z.enum(EXPORT_SECTION_IDS as [string, ...string[]]),
-  preset: z.enum(DATE_PRESETS).default("30d"),
-  from: z.string().optional(),
-  to: z.string().optional(),
+  ...datesQuery,
 });
 
 /**
@@ -33,12 +32,7 @@ export function exportRoutes(app: App, deps: Deps) {
     const { csv, range, shop } = await withTenant(ws, async (tx) => {
       const store = await tx.store.findFirst({ where: { id: storeId, workspaceId: ws } });
       if (!store) throw new HttpError(404, "Not found", "not_found");
-      let dates;
-      try {
-        dates = resolvePreset(q.preset, new Date(), store.timezone, q.from && q.to ? { from: q.from, to: q.to } : undefined);
-      } catch (e) {
-        throw new HttpError(400, (e as Error).message, "invalid_range");
-      }
+      const dates = resolveQueryDates(q, new Date(), store.timezone);
       const wanted = new Set<string>(def.modules);
       const report = redactOverview(await storeOverview(tx, store, dates, new Date(), (m) => wanted.has(m) && seesModule(a.access, m)), a.access);
       const t = exportTable(section, report.modules);

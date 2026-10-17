@@ -1,17 +1,36 @@
 import { z } from "zod";
 import { withTenant } from "@app/db";
-import { DATE_PRESETS, redactOverview, resolvePreset, seesModule } from "@app/shared";
+import { COMPARE_MODES, DATE_PRESETS, redactOverview, resolvePreset, seesModule } from "@app/shared";
 import { logger, revocableScopes } from "@app/core";
 import { recentSyncJobs, storeOverview, workspaceStores } from "@app/core/reports";
 import { HttpError, requireWorkspace, type Deps } from "../context.js";
 import type { App } from "../app.js";
 import { autoRefresh } from "../sync.js";
 
-const querySchema = z.object({
+/**
+ * The dates asked about and what they are compared with, as the dashboard and its downloads ask:
+ * `preset=7d`, `preset=custom&from=…&to=…`, plus `compare=year` or `compare=custom&cfrom=…&cto=…`
+ * (the period just before when absent).
+ */
+export const datesQuery = {
   preset: z.enum(DATE_PRESETS).default("30d"),
   from: z.string().optional(),
   to: z.string().optional(),
-});
+  compare: z.enum(COMPARE_MODES).default("previous"),
+  cfrom: z.string().optional(),
+  cto: z.string().optional(),
+};
+const querySchema = z.object(datesQuery);
+type DatesQuery = z.infer<typeof querySchema>;
+
+/** The dates in the store's zone; custom dates or comparison dates that can't be reported on are a 400 `invalid_range`. */
+export function resolveQueryDates(q: DatesQuery, now: Date, timeZone: string) {
+  try {
+    return resolvePreset(q.preset, now, timeZone, q.from && q.to ? { from: q.from, to: q.to } : undefined, { mode: q.compare, from: q.cfrom, to: q.cto });
+  } catch (e) {
+    throw new HttpError(400, (e as Error).message, "invalid_range");
+  }
+}
 
 /**
  * `revocableScopes` is computed with the same helper the revoke endpoint enforces with, rather
@@ -81,18 +100,14 @@ export function dashboardRoutes(app: App, deps: Deps) {
       if (!store) throw new HttpError(404, "Not found", "not_found");
       polled = store;
       const now = new Date();
-      let dates;
-      try {
-        dates = resolvePreset(q.preset, now, store.timezone, q.from && q.to ? { from: q.from, to: q.to } : undefined);
-      } catch (e) {
-        throw new HttpError(400, (e as Error).message, "invalid_range");
-      }
+      const dates = resolveQueryDates(q, now, store.timezone);
       const report = redactOverview(await storeOverview(tx, store, dates, now, (m) => seesModule(access, m)), access);
       return {
         store: publicStore(store),
         syncProblem: report.syncProblem,
         range: dates.range,
-        previous: dates.previous,
+        // What the range is compared with, how it was chosen, and whether the imported orders reach back to it.
+        previous: { ...dates.previous, compare: q.compare, imported: report.previousImported },
         today: report.today,
         capabilities: report.capabilities,
         modules: report.modules,

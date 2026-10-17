@@ -1,5 +1,5 @@
 import type { Store, Tx } from "@app/db";
-import { delta, localDay, resolveCapabilities, summarize, yearBreakdown, type Comparison, type DateRange } from "@app/shared";
+import { comparisonImported, delta, localDay, resolveCapabilities, summarize, yearBreakdown, type Comparison, type DateRange } from "@app/shared";
 import { adsConfigured } from "../adConnections.js";
 import { declaredOptionalScopes, declaredScopes } from "../scopes.js";
 import { adsenseModule, adsModule } from "./ads.js";
@@ -55,11 +55,16 @@ export async function storeOverview(tx: Tx, store: Store, dates: { range: DateRa
   const enabled = new Set(capabilities.filter((c) => c.enabled && sees(c.id)).map((c) => c.id));
   const modules: Record<string, unknown> = {};
   const data = await importedData(tx, scope);
+  // A comparison reaching back before the first imported order (Shopify shares 60 days without
+  // read_all_orders) would count a period mostly missing: its order figures and changes are left
+  // out (null), and the page says there is no earlier data, rather than show a fake drop or 0%.
+  const previousImported = comparisonImported(previous, data.oldestOrderDay);
+  const change = (now: number | null, before: number | null) => (previousImported ? delta(now, before) : null);
 
   let hasData = false;
   if (enabled.has("sales_overview") || enabled.has("refunds") || enabled.has("customers")) {
-    // While the range is still running, the period before stops at the same time of day (Shopify's like-for-like).
-    const [cur, prev] = await Promise.all([dailyRows(tx, ws, storeId, range), comparisonRows(tx, ws, storeId, previous, store.timezone)]);
+    // While the range is still running, the comparison stops at the same time of day (Shopify's like-for-like).
+    const [cur, prev] = await Promise.all([dailyRows(tx, ws, storeId, range), previousImported ? comparisonRows(tx, ws, storeId, previous, store.timezone) : []]);
     const c = summarize(cur);
     const p = summarize(prev);
     hasData = cur.some((r) => r.orders > 0 || r.refunds > 0);
@@ -79,21 +84,23 @@ export async function storeOverview(tx: Tx, store: Store, dates: { range: DateRa
           tax: c.taxes,
           shipping: c.shipping,
         },
-        previous: {
-          grossSales: p.grossSales,
-          netSales: p.netSales,
-          totalSales: p.totalSales,
-          orders: p.orders,
-          units: p.units,
-          averageOrderValue: p.averageOrderValue,
-        },
+        previous: previousImported
+          ? {
+              grossSales: p.grossSales,
+              netSales: p.netSales,
+              totalSales: p.totalSales,
+              orders: p.orders,
+              units: p.units,
+              averageOrderValue: p.averageOrderValue,
+            }
+          : null,
         deltas: {
-          netSales: delta(c.netSales, p.netSales),
-          totalSales: delta(c.totalSales, p.totalSales),
-          orders: delta(c.orders, p.orders),
-          averageOrderValue: delta(c.averageOrderValue, p.averageOrderValue),
-          grossSales: delta(c.grossSales, p.grossSales),
-          units: delta(c.units, p.units),
+          netSales: change(c.netSales, p.netSales),
+          totalSales: change(c.totalSales, p.totalSales),
+          orders: change(c.orders, p.orders),
+          averageOrderValue: change(c.averageOrderValue, p.averageOrderValue),
+          grossSales: change(c.grossSales, p.grossSales),
+          units: change(c.units, p.units),
         },
         series: dailySeries(cur, range),
         // This calendar year month by month, whatever the dates picked. Reaches back to the
@@ -104,13 +111,13 @@ export async function storeOverview(tx: Tx, store: Store, dates: { range: DateRa
     if (enabled.has("refunds")) {
       modules.refunds = {
         current: { refunds: c.refunds, refundRate: c.refundRate, refundedOrders: cur.reduce((a, r) => a + r.refundedOrders, 0) },
-        deltas: { refunds: delta(c.refunds, p.refunds) },
+        deltas: { refunds: change(c.refunds, p.refunds) },
       };
     }
     if (enabled.has("customers")) {
       modules.customers = {
         current: { returningCustomerRate: c.returningCustomerRate },
-        previous: { returningCustomerRate: p.returningCustomerRate },
+        previous: { returningCustomerRate: previousImported ? p.returningCustomerRate : null },
       };
     }
   }
@@ -165,6 +172,8 @@ export async function storeOverview(tx: Tx, store: Store, dates: { range: DateRa
     syncProblem: store.status === "error" ? syncProblem(failed?.error) : null,
     // The store's today, so the page can tell a finished day from one still running.
     today,
+    // False: the imported orders don't reach back to the comparison, so no order figure is compared.
+    previousImported,
     capabilities,
     modules,
     hasData,

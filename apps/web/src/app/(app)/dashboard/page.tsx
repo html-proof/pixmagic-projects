@@ -5,7 +5,7 @@ import { CircleDollarSign, Gem, Package, ShoppingCart } from "lucide-react";
 import { useApp, canManage, StoresPending } from "@/components/AppContext";
 import { EmptyState, Alert } from "@/components/ui";
 import { AboutThisData, EmptyStoreNote, StoreStatus, type LiveState } from "@/components/dashboard/StoreHeader";
-import { comparedWith, CustomDates, DateRangeSelect, periodWords, useDateRange, versusWords, type Shown } from "@/components/dashboard/DateRange";
+import { CompareDates, comparedWith, CompareSelect, CustomDates, DateRangeSelect, periodWords, useDateRange, versusWords, type Shown } from "@/components/dashboard/DateRange";
 import { TopicDetail } from "@/components/dashboard/TopicDetail";
 import { availableTopics, useDetailView } from "@/components/dashboard/topics";
 import { AreaList, HealthOverview, StoreSummary } from "@/components/dashboard/Overview";
@@ -279,10 +279,17 @@ export default function DashboardPage() {
         <div className="flex flex-wrap items-center gap-2.5">
           {headerStore && <StoreStatus key={headerStore.id} store={headerStore} live={live} everySec={everySec} />}
           <DateRangeSelect r={dates} shown={shown} id="date-range" label="Dates" />
+          {/* What the ▲ ▼ changes are on, as Shopify Analytics' second date chip. */}
+          <CompareSelect r={dates} shown={shown} id="compare-with" label="Compare with" />
         </div>
         {dates.preset === "custom" && (
           <div className="flex w-full justify-end">
             <CustomDates r={dates} />
+          </div>
+        )}
+        {dates.compare === "custom" && (
+          <div className="flex w-full justify-end">
+            <CompareDates r={dates} />
           </div>
         )}
       </header>

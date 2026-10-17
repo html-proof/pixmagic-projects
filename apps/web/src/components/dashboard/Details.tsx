@@ -1,17 +1,19 @@
 "use client";
 import Link from "next/link";
 import type { ReactNode } from "react";
+import type { CompareMode } from "@app/shared/dates";
 import { bestEntryPage, biggestDropOff, dropOffSection } from "@app/shared/journey";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { BarRow, StackedBar } from "./Charts";
 import { ContactsCard } from "./Contacts";
+import { comparisonHelp, noEarlierData, versusWords } from "./DateRange";
 import { FunnelCard, JourneyCard, SECTION_LABEL, STEP_LABEL } from "./Funnel";
 import { fmtComparison, fmtDuration, fmtRange, hourRange, plural, weekdayNames } from "./format";
 import { CatalogCard, ChannelsCard, DiscountCodesCard, FulfillmentCard, InventoryCard, OrderTimingCard, RecentOrdersCard, TrafficCard } from "./Modules";
 import { AdsDetail } from "./AdsPanel";
 import { AdsenseDetail } from "./AdsensePanel";
 import { Explained } from "./Explain";
-import { B, Change, InShort, upDown } from "./Narrative";
+import { B, Change, comparedOn, InShort, upDown } from "./Narrative";
 import { OverviewDetail } from "./Overview";
 import { Delta, Panel, Stat } from "./Primitives";
 import { DailySalesCard, MonthlySalesCard } from "./SalesBreakdown";
@@ -27,6 +29,16 @@ export type { Topic } from "./topics";
 // ---------------------------------------------------------------------------
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
+
+/** A figure for the dates compared with, by how they were chosen. */
+const COMPARE_LABEL: Record<CompareMode, string> = { previous: "The period before", year: "Same dates last year", custom: "The dates compared" };
+
+/** The sales comparison table's title, by what the dates are compared with. */
+const COMPARE_TITLE: Record<CompareMode, string> = {
+  previous: "This period and the one before",
+  year: "This period and the same dates last year",
+  custom: "This period and the dates compared",
+};
 
 // ---------------------------------------------------------------------------
 // Each topic.
@@ -45,13 +57,16 @@ function SalesDetail({ ov, currency }: { ov: Overview; currency: string }) {
   const total = c.totalSales ?? null;
   const r = ov.modules.refunds;
   const prevPeriod = fmtComparison(ov.previous);
+  const versus = versusWords(ov);
+  // Null when the imported orders don't reach back to the dates compared with: nothing is compared.
+  const missing = ov.previous.imported === false ? noEarlierData(ov.data?.oldestOrderDay) : null;
   const change = upDown(total !== null ? (s.deltas.totalSales ?? null) : s.deltas.netSales);
   const rows: Array<{ label: string; now: string; before: string; delta: number | null }> = [
-    ...(total !== null && p.totalSales !== undefined ? [{ label: "Total sales", now: money(total), before: money(p.totalSales), delta: s.deltas.totalSales ?? null }] : []),
-    { label: "Net sales", now: money(c.netSales), before: money(p.netSales), delta: s.deltas.netSales },
-    ...(bd && p.grossSales !== undefined ? [{ label: "Gross sales", now: money(bd.grossSales), before: money(p.grossSales), delta: s.deltas.grossSales ?? null }] : []),
-    { label: "Orders", now: fmtNum(c.orders), before: fmtNum(p.orders), delta: s.deltas.orders },
-    { label: "Average order", now: money(c.averageOrderValue ?? 0), before: p.averageOrderValue !== null ? money(p.averageOrderValue) : "—", delta: s.deltas.averageOrderValue },
+    ...(total !== null ? [{ label: "Total sales", now: money(total), before: p?.totalSales !== undefined ? money(p.totalSales) : "—", delta: s.deltas.totalSales ?? null }] : []),
+    { label: "Net sales", now: money(c.netSales), before: p ? money(p.netSales) : "—", delta: s.deltas.netSales },
+    ...(bd ? [{ label: "Gross sales", now: money(bd.grossSales), before: p?.grossSales !== undefined ? money(p.grossSales) : "—", delta: s.deltas.grossSales ?? null }] : []),
+    { label: "Orders", now: fmtNum(c.orders), before: p ? fmtNum(p.orders) : "—", delta: s.deltas.orders },
+    { label: "Average order", now: money(c.averageOrderValue ?? 0), before: p && p.averageOrderValue !== null ? money(p.averageOrderValue) : "—", delta: s.deltas.averageOrderValue },
   ];
   // Shopify's "Total sales breakdown", in its order.
   const lines: Array<{ label: string; note: string; amount: number; sign: "" | "−" }> = bd
@@ -100,16 +115,16 @@ function SalesDetail({ ov, currency }: { ov: Overview; currency: string }) {
         )}
       </InShort>
 
-      <Panel id="d-sales-glance" title="At a glance" help={`Compared with ${prevPeriod}, the same number of days just before${ov.previous.until ? ", up to the same time of day, as Shopify compares" : ""}.`}>
+      <Panel id="d-sales-glance" title="At a glance" help={missing ?? `Compared with ${comparisonHelp(ov.previous)}.`}>
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
-          {total !== null && <Stat label="Total sales" value={money(total)} note={<Delta value={s.deltas.totalSales ?? null} />} />}
-          <Stat label="Net sales" value={money(c.netSales)} note={<Delta value={s.deltas.netSales} />} />
-          <Stat label="Orders" value={fmtNum(c.orders)} note={<Delta value={s.deltas.orders} />} />
-          <Stat label="Average order" value={money(c.averageOrderValue ?? 0)} note={<Delta value={s.deltas.averageOrderValue} />} />
-          {total === null && bd && <Stat label="Gross sales" value={money(bd.grossSales)} note={<Delta value={s.deltas.grossSales ?? null} />} />}
+          {total !== null && <Stat label="Total sales" value={money(total)} note={<Delta value={s.deltas.totalSales ?? null} label={versus} />} />}
+          <Stat label="Net sales" value={money(c.netSales)} note={<Delta value={s.deltas.netSales} label={versus} />} />
+          <Stat label="Orders" value={fmtNum(c.orders)} note={<Delta value={s.deltas.orders} label={versus} />} />
+          <Stat label="Average order" value={money(c.averageOrderValue ?? 0)} note={<Delta value={s.deltas.averageOrderValue} label={versus} />} />
+          {total === null && bd && <Stat label="Gross sales" value={money(bd.grossSales)} note={<Delta value={s.deltas.grossSales ?? null} label={versus} />} />}
           <Stat label="Items sold" value={fmtNum(c.units)} note={c.orders ? `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(c.units / c.orders)} per order` : undefined} />
           {r ? (
-            <Stat label="Returns" value={money(r.current.refunds)} note={<Delta value={r.deltas.refunds} invert />} />
+            <Stat label="Returns" value={money(r.current.refunds)} note={<Delta value={r.deltas.refunds} invert label={versus} />} />
           ) : refunds !== null ? (
             <Stat label="Returns" value={money(refunds)} />
           ) : null}
@@ -156,7 +171,7 @@ function SalesDetail({ ov, currency }: { ov: Overview; currency: string }) {
         </Panel>
       )}
 
-      <Panel id="d-sales-compare" title="This period and the one before" help={`${fmtRange(ov.range.from, ov.range.to)} against ${prevPeriod}.`}>
+      <Panel id="d-sales-compare" title={COMPARE_TITLE[ov.previous.compare ?? "previous"]} help={`${fmtRange(ov.range.from, ov.range.to)} against ${prevPeriod}.`}>
         <div className="-mx-1 overflow-x-auto">
           <table className="w-full min-w-[26rem] text-sm">
             <thead className="text-left text-xs text-muted">
@@ -179,13 +194,13 @@ function SalesDetail({ ov, currency }: { ov: Overview; currency: string }) {
             </tbody>
           </table>
         </div>
-        <p className="mt-2 text-xs text-muted">&quot;—&quot; means there were no sales before to compare with.</p>
+        <p className="mt-2 text-xs text-muted">{missing ?? <>&quot;—&quot; means there were no sales before to compare with.</>}</p>
       </Panel>
 
       {r && (
         <Panel id="d-sales-refunds" title="Returns" help="Refunds, cancellations and edits, booked on the day they were made, not the day of the order.">
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
-            <Stat label="Returned" value={money(r.current.refunds)} note={<Delta value={r.deltas.refunds} invert />} />
+            <Stat label="Returned" value={money(r.current.refunds)} note={<Delta value={r.deltas.refunds} invert label={versus} />} />
             <Stat label="Return rate" value={fmtPct(r.current.refundRate)} note="Share of sales (after discounts) given back." />
             <Stat label="Orders with a return" value={fmtNum(r.current.refundedOrders)} note="Orders refunded, cancelled or edited down in these dates." />
           </div>
@@ -294,7 +309,7 @@ function ShoppersDetail({ ov }: { ov: Overview }) {
           </>
         )}
       </InShort>
-      <FunnelCard m={f} />
+      <FunnelCard m={f} versus={versusWords(ov)} />
       {f.visits > 0 && <JourneyCard m={f} />}
     </>
   );
@@ -485,14 +500,14 @@ function CustomersDetail({ ov, contactsOn }: { ov: Overview; contactsOn: boolean
             ) : (
               <p>
                 <B>{fmtPct(rate)}</B> of orders came from people who had bought before
-                {before !== null ? <> (it was {fmtPct(before)} in the period before)</> : null}. The rest were first-time customers.
+                {before !== null ? <> (it was {fmtPct(before)} for {comparedOn(ov)})</> : null}. The rest were first-time customers.
               </p>
             )}
           </InShort>
           <Panel id="d-customers" title="Returning customers" help="A customer counts as returning if Shopify says they have more than one order, or we have an earlier order from them.">
             <div className="grid grid-cols-2 gap-3">
               <Stat label="These dates" value={fmtPct(rate)} note="Orders from returning customers." />
-              <Stat label="The period before" value={fmtPct(before)} note={fmtComparison(ov.previous)} />
+              <Stat label={COMPARE_LABEL[ov.previous.compare ?? "previous"]} value={fmtPct(before)} note={ov.previous.imported === false ? "No earlier data" : fmtComparison(ov.previous)} />
             </div>
             {rate !== null && (
               <div className="mt-5">

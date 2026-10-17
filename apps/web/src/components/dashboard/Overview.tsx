@@ -4,7 +4,8 @@ import { ArrowRight, HeartPulse } from "lucide-react";
 import { gradeRefundRate, gradeShipping, gradeStock, gradeTrend, type Health } from "@app/shared/health";
 import { biggestDropOff } from "@app/shared/journey";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
-import { fmtComparison, fmtDay, fmtMonth, fmtRange, fmtRelative, hourRange, plural } from "./format";
+import { fmtDay, fmtMonth, fmtRange, fmtRelative, hourRange, plural } from "./format";
+import { comparisonHelp, noEarlierData } from "./DateRange";
 import { STEP_LABEL } from "./Funnel";
 import { AreaPreview } from "./Previews";
 import { Icon } from "./Icons";
@@ -37,8 +38,15 @@ const HEALTH: Record<Health, { label: string; tone: Tone; order: number }> = {
 // The grading rules (trends, refunds, stock, shipping) live in @app/shared/health and are listed in
 // docs/kpis.md. While the only day picked is today, it isn't over, so trends aren't graded.
 
-/** How this page says a change of exactly 0 (the ads panels say ", the same as the period before"). */
-const LEVEL = ", level with the period before";
+/** How this page says a change of exactly 0 on `on` (the ads panels say ", the same as …"). */
+const level = (on: string) => `, level with ${on}`;
+
+/**
+ * A change in sales to end a sentence: ", up 12% on the period before", or, when the imported
+ * orders don't reach back to the dates compared with, that there is nothing to compare with.
+ */
+const salesChange = (ov: Overview, d: number | null) =>
+  d === null && ov.previous.imported === false ? ", with no earlier data to compare" : changeWords(d, level(comparedOn(ov)), comparedOn(ov));
 
 export function businessHealth(ov: Overview, currency: string): Check[] {
   const m = ov.modules;
@@ -51,10 +59,10 @@ export function businessHealth(ov: Overview, currency: string): Check[] {
   const s = m.sales_overview;
   if (s) {
     const c = s.current;
-    out.push({ id: "net", topic: "sales", area: "Sales", health: gradeTrend(s.deltas.netSales, running), text: `${money(c.netSales)} in net sales${changeWords(s.deltas.netSales, LEVEL, on)}.${still}` });
-    out.push({ id: "orders", topic: "sales", area: "Orders", health: gradeTrend(s.deltas.orders, running), text: `${plural(c.orders, "order")}${changeWords(s.deltas.orders, LEVEL, on)}.${still}` });
+    out.push({ id: "net", topic: "sales", area: "Sales", health: gradeTrend(s.deltas.netSales, running), text: `${money(c.netSales)} in net sales${salesChange(ov, s.deltas.netSales)}.${still}` });
+    out.push({ id: "orders", topic: "sales", area: "Orders", health: gradeTrend(s.deltas.orders, running), text: `${plural(c.orders, "order")}${salesChange(ov, s.deltas.orders)}.${still}` });
     if (c.averageOrderValue !== null) {
-      out.push({ id: "aov", topic: "sales", area: "Average order", health: gradeTrend(s.deltas.averageOrderValue, running), text: `${money(c.averageOrderValue)} per order${changeWords(s.deltas.averageOrderValue, LEVEL, on)}.` });
+      out.push({ id: "aov", topic: "sales", area: "Average order", health: gradeTrend(s.deltas.averageOrderValue, running), text: `${money(c.averageOrderValue)} per order${salesChange(ov, s.deltas.averageOrderValue)}.` });
     }
   }
   const r = m.refunds?.current;
@@ -64,7 +72,7 @@ export function businessHealth(ov: Overview, currency: string): Check[] {
   }
   const f = m.funnel;
   if (f && f.visits > 0) {
-    out.push({ id: "conversion", topic: "shoppers", area: "Visitors who bought", health: gradeTrend(f.deltas.conversionRate, running), text: `${fmtPct(f.conversionRate)} of ${plural(f.visits, "visit")} ended in a purchase${changeWords(f.deltas.conversionRate, LEVEL, on)}.` });
+    out.push({ id: "conversion", topic: "shoppers", area: "Visitors who bought", health: gradeTrend(f.deltas.conversionRate, running), text: `${fmtPct(f.conversionRate)} of ${plural(f.visits, "visit")} ended in a purchase${changeWords(f.deltas.conversionRate, level(on), on)}.` });
   }
   const cu = m.customers;
   if (cu && cu.current.returningCustomerRate !== null) {
@@ -174,7 +182,6 @@ export function StoreSummary({ ov, currency }: { ov: Overview; currency: string 
   const s = ov.modules.sales_overview;
   if (!s) return null;
   const attention = businessHealth(ov, currency).filter((c) => c.health === "attention").length;
-  const on = comparedOn(ov);
   const when =
     ov.range.from !== ov.range.to
       ? `From ${fmtDay(ov.range.from, { year: false })} to ${fmtDay(ov.range.to, { year: false })}`
@@ -185,7 +192,7 @@ export function StoreSummary({ ov, currency }: { ov: Overview; currency: string 
     <p className="text-sm leading-relaxed">
       {when} you made <B>{fmtMoney(s.current.netSales, currency)}</B> from{" "}
       <B>{plural(s.current.orders, "order")}</B>
-      {changeWords(s.deltas.netSales, LEVEL, on)}.{" "}
+      {salesChange(ov, s.deltas.netSales)}.{" "}
       {attention > 0 ? (
         <>
           <B>{plural(attention, "thing needs", "things need")} your attention</B>; they&apos;re at the top of the list below.
@@ -339,8 +346,6 @@ export function OverviewDetail({ ov, currency, onOpen }: { ov: Overview; currenc
   const f = m.funnel;
   const y = s?.year;
   const range = fmtRange(ov.range.from, ov.range.to);
-  const before = fmtComparison(ov.previous);
-  const on = comparedOn(ov);
   // Gross sales, discounts, tax, shipping and total sales, and returns, only for someone who may
   // see them (Team & Access).
   const bd = s ? breakdownOf(s.current) : null;
@@ -363,7 +368,7 @@ export function OverviewDetail({ ov, currency, onOpen }: { ov: Overview; currenc
             <p>
               From {range} you made <B>{money(s.current.netSales)}</B> from <B>{plural(s.current.orders, "order")}</B>
               {s.current.averageOrderValue !== null ? <>, about {money(s.current.averageOrderValue)} each</> : null}
-              {changeWords(s.deltas.netSales, LEVEL, on)}.
+              {salesChange(ov, s.deltas.netSales)}.
             </p>
           )}
           {f && f.visits > 0 && (
@@ -411,7 +416,7 @@ export function OverviewDetail({ ov, currency, onOpen }: { ov: Overview; currenc
         <Panel
           id="d-key-figures"
           title="Every key figure"
-          help={`${range}, against ${before} (the same number of days just before${ov.previous.until ? ", up to the same time of day, as Shopify compares" : ""}).${
+          help={`${range}, against ${comparisonHelp(ov.previous)}.${ov.previous.imported === false ? ` ${noEarlierData(ov.data?.oldestOrderDay)}` : ""}${
             ov.previous.until && (m.ads || m.adsense) ? " Ad platforms report whole days, so their figures compare whole days." : ""
           }`}
         >
@@ -427,22 +432,22 @@ export function OverviewDetail({ ov, currency, onOpen }: { ov: Overview; currenc
               </thead>
               <tbody>
                 {/* Shopify's "Total sales breakdown", line for line and in its order. */}
-                {bd && <Row label="Gross sales" now={money(bd.grossSales)} before={s.previous.grossSales !== undefined ? money(s.previous.grossSales) : null} change={<Change value={s.deltas.grossSales ?? null} />} />}
+                {bd && <Row label="Gross sales" now={money(bd.grossSales)} before={s.previous?.grossSales !== undefined ? money(s.previous.grossSales) : null} change={<Change value={s.deltas.grossSales ?? null} />} />}
                 {bd && <Row label="Discounts" now={money(-bd.discounts)} />}
                 {returns !== null && <Row label="Returns" now={money(-returns)} change={m.refunds ? <Change value={m.refunds.deltas.refunds} invert /> : undefined} />}
-                <Row label="Net sales" now={money(s.current.netSales)} before={money(s.previous.netSales)} change={<Change value={s.deltas.netSales} />} />
+                <Row label="Net sales" now={money(s.current.netSales)} before={s.previous ? money(s.previous.netSales) : null} change={<Change value={s.deltas.netSales} />} />
                 {bd?.shipping != null && <Row label="Shipping charges" now={money(bd.shipping)} />}
                 {bd?.tax != null && <Row label="Taxes" now={money(bd.tax)} />}
                 {s.current.totalSales !== undefined && (
                   <Row
                     label="Total sales"
                     now={money(s.current.totalSales)}
-                    before={s.previous.totalSales !== undefined ? money(s.previous.totalSales) : null}
+                    before={s.previous?.totalSales !== undefined ? money(s.previous.totalSales) : null}
                     change={<Change value={s.deltas.totalSales ?? null} />}
                   />
                 )}
-                <Row label="Orders" now={fmtNum(s.current.orders)} before={fmtNum(s.previous.orders)} change={<Change value={s.deltas.orders} />} />
-                <Row label="Average order" now={s.current.averageOrderValue !== null ? money(s.current.averageOrderValue) : "—"} before={s.previous.averageOrderValue !== null ? money(s.previous.averageOrderValue) : null} change={<Change value={s.deltas.averageOrderValue} />} />
+                <Row label="Orders" now={fmtNum(s.current.orders)} before={s.previous ? fmtNum(s.previous.orders) : null} change={<Change value={s.deltas.orders} />} />
+                <Row label="Average order" now={s.current.averageOrderValue !== null ? money(s.current.averageOrderValue) : "—"} before={s.previous && s.previous.averageOrderValue !== null ? money(s.previous.averageOrderValue) : null} change={<Change value={s.deltas.averageOrderValue} />} />
                 <Row label="Items sold" now={fmtNum(s.current.units)} />
                 {f && <Row label="Store visits" now={fmtNum(f.visits)} before={fmtNum(f.previous.visits)} change={<Change value={f.deltas.visits} />} />}
                 {f && <Row label="Visitors who bought" now={fmtPct(f.conversionRate)} before={f.previous.conversionRate !== null ? fmtPct(f.previous.conversionRate) : null} change={<Change value={f.deltas.conversionRate} />} />}

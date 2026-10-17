@@ -86,7 +86,7 @@ export function NeutralDelta({ value }: { value: number | null }) {
   );
 }
 
-export function Delta({ value, invert = false, label = "vs previous period" }: { value: number | null | undefined; invert?: boolean; label?: string }) {
+export function Delta({ value, invert = false, label = "vs before" }: { value: number | null | undefined; invert?: boolean; label?: string }) {
   if (value === null || value === undefined) return <span className="text-xs text-muted">no earlier data to compare</span>;
   const good = invert ? value < 0 : value > 0;
   const arrow = value > 0 ? "▲" : value < 0 ? "▼" : "■";

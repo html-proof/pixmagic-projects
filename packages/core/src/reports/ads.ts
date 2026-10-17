@@ -19,6 +19,17 @@ import type { Scope } from "./common.js";
 // ---------------------------------------------------------------------------
 
 /**
+ * The days to read: the range and its comparison, each on its own. The comparison needn't sit just
+ * before the range (a year earlier, dates picked, even overlapping it), so one span from the
+ * comparison's start to the range's end could read a year of rows, or miss a comparison after it.
+ * Ad platforms report whole days, so a running comparison's `until` doesn't apply.
+ */
+const rangeAndComparison = (range: DateRange, previous: DateRange) => [
+  { day: { gte: range.from, lte: range.to } },
+  { day: { gte: previous.from, lte: previous.to } },
+];
+
+/**
  * What the store's connected ad accounts report for these dates. Only accounts in one currency
  * are added up (the store's, when any account uses it): adding dollars to euros means nothing.
  * Accounts in other currencies are listed as left out. The platforms' days are their own
@@ -35,7 +46,7 @@ export async function adsModule(tx: Tx, { ws, storeId }: Scope, range: DateRange
   const currency = conns.some((c) => c.currency === storeCurrency) ? storeCurrency : (conns.find((c) => c.currency)?.currency ?? storeCurrency);
   const counted = conns.filter((c) => (c.currency ?? currency) === currency);
   const raw = await tx.adCampaignDaily.findMany({
-    where: { workspaceId: ws, storeId, connectionId: { in: counted.map((c) => c.id) }, day: { gte: previous.from, lte: range.to } },
+    where: { workspaceId: ws, storeId, connectionId: { in: counted.map((c) => c.id) }, OR: rangeAndComparison(range, previous) },
   });
   const rows: AdDayRow[] = raw.map((r) => ({
     provider: r.provider as AdSpendProvider,
@@ -101,7 +112,7 @@ export async function adsenseModule(tx: Tx, { ws, storeId }: Scope, range: DateR
   const currency = conns.some((c) => c.currency === storeCurrency) ? storeCurrency : (conns.find((c) => c.currency)?.currency ?? storeCurrency);
   const counted = conns.filter((c) => (c.currency ?? currency) === currency);
   const raw = await tx.adsenseDaily.findMany({
-    where: { workspaceId: ws, storeId, connectionId: { in: counted.map((c) => c.id) }, day: { gte: previous.from, lte: range.to } },
+    where: { workspaceId: ws, storeId, connectionId: { in: counted.map((c) => c.id) }, OR: rangeAndComparison(range, previous) },
   });
   const rows: AdsenseDayRow[] = raw.map((r) => ({
     accountId: r.accountId,

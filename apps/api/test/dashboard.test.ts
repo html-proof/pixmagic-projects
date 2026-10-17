@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { recomputeDays } from "@app/core";
 import { systemDb, withTenant } from "@app/db";
-import { addDays, localDay, resolvePreset } from "@app/shared";
+import { addDays, localDay, resolvePreset, yearEarlier } from "@app/shared";
 import { storeOverview, syncProblem } from "@app/core/reports";
 import { clean, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
 
@@ -304,8 +304,9 @@ describe("date ranges", () => {
     expect(res.statusCode).toBe(200);
     const { range, previous, modules } = res.json();
     expect(range).toEqual({ from: addDays(today, -2), to: today });
-    // Today is still running: the period before stops at this time of day on its last day.
-    expect(previous).toEqual({ from: addDays(today, -5), to: addDays(today, -3), until: expect.stringMatching(/^\d{2}:\d{2}:\d{2}$/) });
+    // Today is still running: the period before stops at this time of day on its last day. No
+    // orders at all, so nothing imported reaches back to it.
+    expect(previous).toEqual({ from: addDays(today, -5), to: addDays(today, -3), until: expect.stringMatching(/^\d{2}:\d{2}:\d{2}$/), compare: "previous", imported: false });
     expect(modules.sales_overview.series.map((x: { day: string }) => x.day)).toEqual([addDays(today, -2), addDays(today, -1), today]);
   });
 
@@ -337,7 +338,7 @@ describe("date ranges", () => {
     await systemDb.funnelVisit.create({ data: { workspaceId: ws, storeId: store.id, day: "2026-03-08", visitor: "v4", enteredAt: new Date("2026-03-08T15:00:00Z"), furthestStep: 4 } });
 
     const report = (preset: "today" | "yesterday") =>
-      withTenant(ws, (tx) => storeOverview(tx, store, resolvePreset(preset, now, TZ), now)) as Promise<{
+      withTenant(ws, (tx) => storeOverview(tx, store, resolvePreset(preset, now, TZ), now)) as unknown as Promise<{
         modules: { sales_overview: { current: Record<string, number>; previous: Record<string, number>; deltas: Record<string, number> }; funnel: { visits: number; previous: { visits: number; conversionRate: number } } };
       }>;
     expect(resolvePreset("today", now, TZ).previous).toEqual({ from: "2026-03-07", to: "2026-03-07", until: "12:00:00" });
@@ -369,6 +370,133 @@ describe("date ranges", () => {
       expect(res.statusCode, qs).toBe(400);
       expect(res.json().error, qs).toBe("invalid_range");
     }
+  });
+});
+
+describe("what the dates are compared with", () => {
+  const today = localDay(new Date(), TZ);
+  const d = (n: number) => addDays(today, n);
+  const at = (day: string) => `${day}T17:00:00Z`; // 12:00 or 13:00 in New York, on that day
+
+  /** A Meta ad account and an AdSense account on the store, with what they report for `days`. */
+  async function seedAds(store: Store, days: Array<[day: string, spend: number, earnings: number]>) {
+    const conn = (provider: string, accountId: string) =>
+      systemDb.adConnection.create({ data: { workspaceId: store.workspaceId, storeId: store.id, provider, accountId, currency: "USD", accessTokenEnc: "x", tokenKeyVersion: 1 } });
+    const meta = await conn("meta", "act_1");
+    const sense = await conn("adsense", "pub-1");
+    for (const [day, spend, earnings] of days) {
+      await systemDb.adCampaignDaily.create({ data: { workspaceId: store.workspaceId, storeId: store.id, connectionId: meta.id, provider: "meta", accountId: "act_1", campaignId: "1", campaignName: "Spring", day, spend, clicks: 1 } });
+      await systemDb.adsenseDaily.create({ data: { workspaceId: store.workspaceId, storeId: store.id, connectionId: sense.id, accountId: "pub-1", site: "", day, earnings, pageViews: 100 } });
+    }
+  }
+
+  it("compares with the same dates a year earlier, ads included", async () => {
+    const { a, ws, store } = await owner();
+    const [from, to] = [d(-10), d(-8)];
+    await seedOrder(store, { id: "Y0", createdAt: at(yearEarlier(from)), lines: [{ qty: 1, price: 15 }] });
+    await seedOrder(store, { id: "Y1", createdAt: at(yearEarlier(d(-9))), lines: [{ qty: 1, price: 60 }] });
+    // Just before the dates: what "previous period" compares with, not a year earlier.
+    await seedOrder(store, { id: "P1", createdAt: at(d(-12)), lines: [{ qty: 1, price: 999 }] });
+    await seedOrder(store, { id: "C1", createdAt: at(d(-9)), lines: [{ qty: 1, price: 100 }] });
+    await seedOrder(store, { id: "C2", createdAt: at(to), lines: [{ qty: 1, price: 50 }] });
+    await recomputeDays(store, [yearEarlier(from), yearEarlier(d(-9)), d(-12), d(-9), to]);
+    await seedAds(store, [[d(-9), 40, 10], [d(-12), 500, 100], [yearEarlier(d(-9)), 20, 5]]);
+
+    const res = await overview(a.headers, ws, store.id, `preset=custom&from=${from}&to=${to}&compare=year`);
+    expect(res.statusCode).toBe(200);
+    const { range, previous, modules: m } = res.json();
+    expect(range).toEqual({ from, to });
+    // Finished dates: whole days, so no time of day.
+    expect(previous).toEqual({ from: yearEarlier(from), to: yearEarlier(to), compare: "year", imported: true });
+    expect(m.sales_overview.current).toMatchObject({ netSales: 150, orders: 2 });
+    expect(m.sales_overview.previous).toMatchObject({ netSales: 75, orders: 2 });
+    expect(m.sales_overview.deltas).toMatchObject({ netSales: 1, orders: 0 });
+    expect(m.ads.current.spend).toBe(40);
+    expect(m.ads.previous.spend).toBe(20);
+    expect(m.ads.deltas.spend).toBe(1);
+    expect(m.adsense.current.earnings).toBe(10);
+    expect(m.adsense.previous.earnings).toBe(5);
+
+    // The default is still the period just before, which holds P1.
+    const before = (await overview(a.headers, ws, store.id, `preset=custom&from=${from}&to=${to}`)).json();
+    expect(before.previous).toEqual({ from: d(-13), to: d(-11), compare: "previous", imported: true });
+    expect(before.modules.sales_overview.previous).toMatchObject({ netSales: 999, orders: 1 });
+    expect(before.modules.ads.previous.spend).toBe(500);
+  });
+
+  it("compares with custom dates, even after the dates picked, ads included", async () => {
+    const { a, ws, store } = await owner();
+    await seedOrder(store, { id: "C1", createdAt: at(d(-19)), lines: [{ qty: 1, price: 30 }] });
+    await seedOrder(store, { id: "K1", createdAt: at(d(-4)), lines: [{ qty: 1, price: 10 }] });
+    await recomputeDays(store, [d(-19), d(-4)]);
+    // Read as one span from the comparison's start to the range's end, these were never found.
+    await seedAds(store, [[d(-19), 30, 6], [d(-4), 10, 2], [d(-10), 777, 77]]);
+
+    const qs = `preset=custom&from=${d(-20)}&to=${d(-18)}&compare=custom&cfrom=${d(-5)}&cto=${d(-3)}`;
+    const { previous, modules: m } = (await overview(a.headers, ws, store.id, qs)).json();
+    expect(previous).toEqual({ from: d(-5), to: d(-3), compare: "custom", imported: true });
+    expect(m.sales_overview.current).toMatchObject({ netSales: 30, orders: 1 });
+    expect(m.sales_overview.previous).toMatchObject({ netSales: 10, orders: 1 });
+    expect(m.sales_overview.deltas.netSales).toBe(2);
+    expect(m.ads.current.spend).toBe(30);
+    expect(m.ads.previous.spend).toBe(10);
+    expect(m.ads.series.map((x: { spend: number }) => x.spend)).toEqual([0, 30, 0]);
+    expect(m.adsense.current.earnings).toBe(6);
+    expect(m.adsense.previous.earnings).toBe(2);
+
+    // While the dates run to today, the comparison's last day stops at the same time of day.
+    const running = (await overview(a.headers, ws, store.id, `preset=7d&compare=custom&cfrom=${d(-30)}&cto=${d(-24)}`)).json();
+    expect(running.previous).toEqual({ from: d(-30), to: d(-24), until: expect.stringMatching(/^\d{2}:\d{2}:\d{2}$/), compare: "custom", imported: false });
+  });
+
+  it("says there is no earlier data, never 0% or a drop, for a comparison before the first imported order", async () => {
+    const { a, ws, store } = await owner();
+    // Shopify's 60 days: the first imported order is 20 days ago.
+    await seedOrder(store, { id: "O1", createdAt: at(d(-20)), lines: [{ qty: 1, price: 80 }] });
+    await seedOrder(store, { id: "O2", createdAt: at(d(-5)), lines: [{ qty: 1, price: 40 }] });
+    await recomputeDays(store, [d(-20), d(-5)]);
+
+    for (const qs of [
+      `preset=custom&from=${d(-6)}&to=${d(-4)}&compare=year`,
+      // Partly before: 25 to 18 days ago would count 80 against a period mostly missing.
+      `preset=custom&from=${d(-6)}&to=${d(-4)}&compare=custom&cfrom=${d(-25)}&cto=${d(-18)}`,
+    ]) {
+      const { previous, modules: m } = (await overview(a.headers, ws, store.id, qs)).json();
+      expect(previous.imported, qs).toBe(false);
+      expect(m.sales_overview.current, qs).toMatchObject({ netSales: 40, orders: 1 });
+      expect(m.sales_overview.previous, qs).toBeNull();
+      expect(Object.values(m.sales_overview.deltas).every((x) => x === null), qs).toBe(true);
+      expect(m.refunds.deltas.refunds, qs).toBeNull();
+      expect(m.customers.previous.returningCustomerRate, qs).toBeNull();
+    }
+    // From the first imported order on, it compares as usual.
+    const ok = (await overview(a.headers, ws, store.id, `preset=custom&from=${d(-6)}&to=${d(-4)}&compare=custom&cfrom=${d(-20)}&cto=${d(-18)}`)).json();
+    expect(ok.previous.imported).toBe(true);
+    expect(ok.modules.sales_overview.deltas.netSales).toBe(-0.5);
+  });
+
+  it("refuses comparison dates it cannot report on with a 400, on the dashboard and its downloads", async () => {
+    const { a, ws, store } = await owner();
+    for (const qs of [
+      "preset=7d&compare=custom",
+      "preset=7d&compare=custom&cfrom=2026-03-01",
+      "preset=7d&compare=custom&cfrom=2026-03-09&cto=2026-03-01",
+      "preset=7d&compare=custom&cfrom=2026-02-30&cto=2026-03-02",
+      `preset=7d&compare=custom&cfrom=${d(1)}&cto=${d(3)}`,
+      "preset=7d&compare=custom&cfrom=2025-01-01&cto=2026-01-02",
+    ]) {
+      const res = await overview(a.headers, ws, store.id, qs);
+      expect(res.statusCode, qs).toBe(400);
+      expect(res.json().error, qs).toBe("invalid_range");
+    }
+    expect((await overview(a.headers, ws, store.id, "preset=7d&compare=lastweek")).json().error).toBe("validation");
+
+    const download = (qs: string) => ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${store.id}/export?section=sales&${qs}`, headers: a.headers });
+    expect((await download("preset=7d&compare=year")).statusCode).toBe(200);
+    expect((await download(`preset=7d&compare=custom&cfrom=${d(-30)}&cto=${d(-24)}`)).statusCode).toBe(200);
+    const bad = await download("preset=7d&compare=custom&cfrom=2026-03-09&cto=2026-03-01");
+    expect(bad.statusCode).toBe(400);
+    expect(bad.json().error).toBe("invalid_range");
   });
 });
 
