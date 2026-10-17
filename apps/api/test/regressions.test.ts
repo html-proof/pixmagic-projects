@@ -77,3 +77,23 @@ describe("pixel timestamps", () => {
     expect(await systemDb.funnelVisit.count({ where: { storeId: store.id, day: future.toISOString().slice(0, 10) } })).toBe(0);
   });
 });
+
+describe("pixel paths (2026-10-17 audit)", () => {
+  it("accepts the long paths the pixel sends, instead of refusing the whole batch", async () => {
+    const u = await signIn(ctx, "u1", "a@x.com");
+    const store = await createStore(await createWorkspace(ctx, u.headers), "p.myshopify.com", ["read_orders"]);
+    const at = new Date().toISOString();
+    // The pixel sends location.pathname cut to 2048 characters; the API used to stop at 512, and the
+    // pixel ignores a refused batch, so the other events in it (other shoppers) were lost too.
+    const long = `/collections/${"a".repeat(1500)}`;
+    const events = [
+      { id: "l1", name: "page_viewed", clientId: "c1", timestamp: at, path: long },
+      { id: "l2", name: "page_viewed", clientId: "c2", timestamp: at, path: "/" },
+    ];
+    const res = await ctx.app.inject({ method: "POST", url: `/pixel/${store.pixelIngestKey}`, headers: { "content-type": "text/plain" }, payload: JSON.stringify({ events }) });
+    expect(res.json()).toEqual({ ok: true, accepted: 2 });
+    const visits = await systemDb.funnelVisit.findMany({ where: { storeId: store.id } });
+    expect(visits).toHaveLength(2);
+    for (const v of visits) expect((v.entryPath ?? "").length).toBeLessThanOrEqual(200);
+  });
+});

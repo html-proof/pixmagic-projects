@@ -11,10 +11,10 @@ import { Prisma } from "@app/db";
 
 
 /**
- * A sale's value before tax, as recomputeDays reads it (`saleValue` in @app/shared): a return is
- * never money in, whatever its sign. For a query whose order_sales alias is `s`.
+ * A sale's value before tax, as recomputeDays reads it (`saleValue` in @app/shared), with the sign
+ * Shopify gave it. For a query whose order_sales alias is `s`.
  */
-export const SALE_VALUE = Prisma.sql`CASE WHEN s.action_type = 'return' THEN -ABS(s.amount - s.tax) ELSE s.amount - s.tax END`;
+export const SALE_VALUE = Prisma.sql`(s.amount - s.tax)`;
 
 /**
  * A store-local wall-clock moment (`day` at `time`, "HH:MM:SS", in the store's zone) as the UTC

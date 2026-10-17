@@ -618,11 +618,19 @@ export async function deleteProduct(store: Pick<Store, "id">, productShopifyId: 
  *    (a return, a cancellation, an edit) is a return, so net sales = gross − discounts − returns.
  *    Shipping lines make shipping, duties and fees go to total sales only; gift cards and tips
  *    count nowhere, as in Shopify's reports.
- *  - A return is never counted as money in, whichever sign Shopify gave it (`-ABS`).
+ *  - Every sale keeps the sign Shopify gave it: a refund's adjustment lines come in pairs of both
+ *    signs, and only their sum is what it took back (`saleValue` in @app/shared).
+ *
+ * One recompute per store at a time (a transaction-scoped advisory lock): the aggregate queue runs
+ * two jobs at once, and two recomputes of a day that read before and after a webhook's write could
+ * otherwise commit in the wrong order, leaving the older totals. The statement's snapshot is taken
+ * after the lock, so whichever runs last reads every write committed before it.
  */
 export async function recomputeDays(store: Pick<Store, "id" | "workspaceId">, days: string[]) {
   if (!days.length) return;
-  await systemDb.$executeRaw`
+  await systemDb.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`aggregate:${store.id}`}))`;
+    await tx.$executeRaw`
     ${dayTotals(store, days)}
     INSERT INTO daily_store_metrics
       (workspace_id, store_id, day, gross_sales, discounts, refunds, shipping, taxes, total_sales, orders, units,
@@ -642,6 +650,7 @@ export async function recomputeDays(store: Pick<Store, "id" | "workspaceId">, da
       orders_with_customer = EXCLUDED.orders_with_customer,
       returning_customer_orders = EXCLUDED.returning_customer_orders,
       refunded_orders = EXCLUDED.refunded_orders`;
+  });
 }
 
 /**
@@ -664,9 +673,7 @@ export function dayTotals(store: Pick<Store, "id" | "workspaceId">, days: string
       GROUP BY local_day
     ),
     v AS (
-      SELECT local_day AS day, order_id, action_type, line_type, quantity, discount,
-             CASE WHEN action_type = 'return' THEN -ABS(amount - tax) ELSE amount - tax END AS value,
-             CASE WHEN action_type = 'return' THEN -ABS(tax) ELSE tax END AS tax
+      SELECT local_day AS day, order_id, action_type, line_type, quantity, discount, amount - tax AS value, tax
       FROM order_sales
       WHERE workspace_id = ${store.workspaceId} AND store_id = ${store.id} AND local_day = ANY(${days}::text[])
         AND line_type NOT IN ('gift_card', 'tip')

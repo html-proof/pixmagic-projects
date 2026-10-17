@@ -173,7 +173,7 @@ describe("order modules (store time zone, DST weekend)", () => {
     // E: legacy row with no fulfillment status / channel yet, and a blank code.
     await seedOrder(store, { id: "E", createdAt: "2026-03-09T16:00:00Z", subtotal: 20, source: null, codes: ["  "], lines: [{ product: "zz", qty: 4, price: 5 }] });
     // F: cancelled the same day: an order of that day (as Shopify counts it) whose sale is reversed,
-    // so it adds nothing to sales; operational modules (timing, shipping, codes, vendors) leave it out.
+    // so it adds nothing to sales; timing and shipping leave it out.
     await seedOrder(store, { id: "F", createdAt: "2026-03-09T20:00:00Z", cancelled: true, subtotal: 500, tax: 100, source: "web", fulfillment: "unfulfilled", codes: ["SAVE10"], lines: [{ product: "p1", qty: 5, price: 100 }] });
     await recomputeDays(store, ["2026-03-06", "2026-03-07", "2026-03-08", "2026-03-09"]);
   }
@@ -206,12 +206,16 @@ describe("order modules (store time zone, DST weekend)", () => {
     expect(m.fulfillment.openNow).toBe(3);
     expect(m.fulfillment.oldestOpenDays).toBe(dayDiff("2026-03-06", today));
 
+    // From the orders' sales records, before tax: B 10 + C 5 + D 3 of discounts, 100 + 50 + 30 of net
+    // sales. F (cancelled) used SAVE10 too, so it is one of its orders, as in Shopify's sales by
+    // discount, with nothing discounted and its net sales back to 0. (The orders' totals would say
+    // otherwise: they include tax, and shipping discounts.)
     expect(m.discount_codes.items).toEqual([
-      { code: "SAVE10", orders: 3, discount: 18, sales: 180 },
+      { code: "SAVE10", orders: 4, discount: 18, sales: 180 },
       { code: "FREESHIP", orders: 1, discount: 5, sales: 50 },
     ]);
 
-    // Vendor revenue = line price × qty − discount, range only, cancelled excluded; unknown products skipped.
+    // Vendor net sales from the product sales in the range (F sold and reversed nets to 0); unknown products skipped.
     expect(m.catalog.topVendors).toEqual([
       { vendor: "Acme", revenue: 100, units: 2 },
       { vendor: "Beta", revenue: 80, units: 3 },

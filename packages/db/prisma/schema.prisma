@@ -322,6 +322,8 @@ model WebhookEvent {
 
   @@index([shopDomain, topic])
   @@index([status])
+  // The dashboard's freshness (reports/overview.ts dataFreshness) reads one store's recent events on every poll.
+  @@index([storeId, receivedAt])
   @@map("webhook_events")
 }
 

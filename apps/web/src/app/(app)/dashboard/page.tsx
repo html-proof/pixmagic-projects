@@ -157,7 +157,7 @@ export default function DashboardPage() {
   useEffect(() => {
     setEverySec(syncState && IMPORTING.has(syncState) ? IMPORTING_EVERY_SEC : adsFetching ? ADS_FETCHING_EVERY_SEC : LIVE_EVERY_SEC);
   }, [syncState, adsFetching]);
-  // "Live" while the last successful check is recent (a missed check or two is fine: the odd
+  // The page's own connection: "live" while the last successful check is recent (a missed check or two is fine: the odd
   // request fails even when all is well, e.g. a slow cold start); "checking" until the first
   // answer for this question arrives, or "Reconnecting…" straight away if that check failed
   // (otherwise an outage on arrival, or on picking new dates, reads "Checking…" for good).
@@ -277,7 +277,7 @@ export default function DashboardPage() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2.5">
-          {headerStore && <StoreStatus key={headerStore.id} store={headerStore} live={live} everySec={everySec} />}
+          {headerStore && <StoreStatus key={headerStore.id} store={headerStore} live={live} freshness={ov?.freshness} now={now} />}
           <DateRangeSelect r={dates} shown={shown} id="date-range" label="Dates" />
           {/* What the ▲ ▼ changes are on, as Shopify Analytics' second date chip. */}
           <CompareSelect r={dates} shown={shown} id="compare-with" label="Compare with" />
@@ -416,7 +416,7 @@ export default function DashboardPage() {
         </section>
       )}
 
-      {ov && <AboutThisData store={ov.store} data={ov.data} everySec={everySec} />}
+      {ov && <AboutThisData store={ov.store} data={ov.data} freshness={ov.freshness} everySec={everySec} />}
 
       {ov && detail.view && (
         <TopicDetail topic={detail.view} ov={ov} currency={cur} contactsOn={contactsOn} onClose={detail.close} onOpen={detail.open} exportHref={exportHref} canPrint={hasFullAccess(access.role) || allowed("reports.export")} />
