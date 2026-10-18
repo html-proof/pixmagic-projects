@@ -13,7 +13,7 @@ Webhooks drive all updates after the initial backfill. Endpoint: `POST <APP_URL>
    If the queue send fails, a row this request inserted is removed again (when the DB allows) so the retry starts afresh; a re-armed row is kept for any earlier message still behind it. Either way the API answers `500` so Shopify retries.
 3. **Queue, then ack.** The payload goes to the `webhooks` SQS queue (the message carries the event id); the API replies `200` in milliseconds. Payloads over 100 KB are kept in the S3 payloads bucket (deleted after 7 days) and the message carries their key. Payloads are never written to Postgres.
 
-## Processing (worker, `apps/worker/src/handlers.ts`)
+## Processing (worker, `apps/worker/src/handlers/webhooks.ts`)
 
 | Topic | Effect |
 | --- | --- |

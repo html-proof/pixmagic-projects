@@ -48,9 +48,9 @@ request → requestContext (id, access log) → security headers → body limit 
 
 | Item | Blocked by | Then |
 | --- | --- | --- |
-| One Meta Graph transport (timeouts already central; add `appsecret_proof`, Bearer auth, host check on paging, Retry-After) | Ads workstreams (`claude/ads-ws-*`) rewrite `core/ads.ts` | `core/metaGraph.ts` used by ads and WhatsApp |
+| ~~One Meta Graph transport~~ done 2026-10-18 (`core/metaGraph.ts`: Bearer auth, host check on paging); `appsecret_proof` and Retry-After still to do | owner decision on "Require App Secret" | one line each in `graphCall` |
 | Typed provider payloads instead of `any` | `core/normalize.ts` edited on another branch | Zod schemas at the boundary |
-| Split `worker/handlers.ts` (975 lines) by job | nothing (cold), but every worker change touches it | `sync.ts`, `webhooks.ts`, `billing.ts`, `sweeps.ts` behind a re-export |
+| ~~Split `worker/handlers.ts` by job~~ done 2026-10-18 | | `apps/worker/src/handlers/` behind a re-export |
 | `noUncheckedIndexedAccess` in the web app | 437 findings in landing animations | a pass with visual checks |
 | Retention sweeps (`webhook_events`, `pixel_events_seen`, `email_otps`, `funnel_visits`) | deletes production data on a schedule: owner decision | cron sweep behind a lease |
 | Money precision for 3-decimal currencies | column type change on production money columns: owner decision | `DECIMAL(20,4)` migration + normalizers in minor units |

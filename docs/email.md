@@ -121,7 +121,7 @@ apps/api/src/routes/emailAccounts.ts    accounts, OAuth start/callback, SMTP, se
 apps/api/src/routes/emailContent.ts     catalog, domains, templates, automations
 apps/api/src/routes/emailActivity.ts    overview, analytics, messages, settings, suppressions, keys, audit
 apps/api/src/routes/emailPublic.ts      POST /v1/events, unsubscribe
-apps/worker/src/handlers.ts             runEmailJob; Shopify webhook and GDPR hooks
+apps/worker/src/handlers/integrations.ts runEmailJob (webhooks.ts: the Shopify webhook and GDPR hooks)
 apps/worker/src/index.ts                queue "email"; sweepEmail on the */15 cron
 apps/aws/src/nodeSmtp.ts                SmtpConnect over Node net/tls
 apps/web/src/app/(app)/settings/email/  Overview, Accounts, Domains, Templates (+editor),

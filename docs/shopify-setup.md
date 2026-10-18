@@ -201,7 +201,7 @@ This **is** implemented, and it is what the "Enable" button on a locked dashboar
 | Request URL, scope query, follow-up rules | [`packages/core/src/scopes.ts`](../packages/core/src/scopes.ts) |
 | `POST /workspaces/:ws/stores/:id/scopes/request`, `.../scopes/refresh` and `.../scopes/revoke` | [`apps/api/src/routes/scopes.ts`](../apps/api/src/routes/scopes.ts) |
 | Which locked modules offer a button (`requestableScopes`) | `resolveCapabilities`, [`packages/shared/src/capabilities.ts`](../packages/shared/src/capabilities.ts) |
-| Reacting to a grant we didn't initiate | `app/scopes_update`, [`apps/worker/src/handlers.ts`](../apps/worker/src/handlers.ts) |
+| Reacting to a grant we didn't initiate | `app/scopes_update`, [`apps/worker/src/handlers/webhooks.ts`](../apps/worker/src/handlers/webhooks.ts) |
 
 The app is `embedded = false`, so App Bridge's `shopify.scopes.request()` is not available and we use Shopify's [request URL](https://shopify.dev/docs/apps/build/authentication-authorization/manage-access-scopes):
 

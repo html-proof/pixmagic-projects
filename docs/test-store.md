@@ -109,7 +109,7 @@ differ for reasons that are not bugs:
 | Axis | What bizinsights does | Where |
 | --- | --- | --- |
 | Day boundaries | Buckets by `localDay(createdAt, store.timezone)`, the store's IANA zone as reported by Shopify | `packages/core/src/persist.ts:23` |
-| History depth | **Last 60 days only.** `read_orders` is capped there; all history needs `read_all_orders`, which needs Shopify approval | `apps/worker/src/handlers.ts:65` |
+| History depth | **Last 60 days only.** `read_orders` is capped there; all history needs `read_all_orders`, which needs Shopify approval | `BACKFILL_DAYS` in `apps/worker/src/handlers/sync.ts` |
 | Gross sales | `sum(line price × qty)`, **before** discounts, **excluding** tax and shipping | `packages/shared/src/kpi.ts:7` |
 | Net sales | `gross − discounts − refunds` | `packages/shared/src/kpi.ts:66` |
 | Refund timing | Attributed to the day the **refund** was created, not the day the order was placed | `packages/shared/src/kpi.ts:9` |

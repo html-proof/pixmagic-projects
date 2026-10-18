@@ -34,7 +34,7 @@ whole tab (docs/shopify-setup.md, "refused to connect" inside the admin).
 | Req | What it asks | Status | Evidence | Action |
 | --- | --- | --- | --- | --- |
 | 2.1.1-2.1.3 | No critical or minor errors, operable UI | REVIEW | Unit, integration and e2e suites in CI; live walk-through needed after each deploy | Walk the reviewer path on a dev store before submitting |
-| 2.1.4 | Synced data is accurate | REVIEW | Webhooks (orders, refunds, products) keep data current, idempotent and order-safe (`apps/worker/src/handlers.ts`); a daily reconcile re-pulls recent orders. **On AWS the schedules are off** (`AWS_SCHEDULES` GitHub variable unset), so the daily reconcile and the stuck-import reaper don't run | OWNER: turn schedules on (the cutover plan) |
+| 2.1.4 | Synced data is accurate | REVIEW | Webhooks (orders, refunds, products) keep data current, idempotent and order-safe (`apps/worker/src/handlers/webhooks.ts`); a daily reconcile re-pulls recent orders. **On AWS the schedules are off** (`AWS_SCHEDULES` GitHub variable unset), so the daily reconcile and the stuck-import reaper don't run | OWNER: turn schedules on (the cutover plan) |
 | 2.2.1 | Uses Shopify APIs | PASS | Admin GraphQL API for every read | |
 | 2.2.2, 2.2.3 | Consistent embedded experience, latest App Bridge | N/A | Non-embedded (see top) | |
 | 2.2.4 | GraphQL Admin API only (new public apps since 2025-04-01) | PASS | One Admin API endpoint in the codebase: `https://${shop}/admin/api/${version}/graphql.json` (`packages/core/src/shopify.ts`). Other Shopify URLs are OAuth (`/admin/oauth/authorize`, `/admin/oauth/access_token`) and install links. All 25 GraphQL documents validate against the 2026-10 schema (script below) | |
@@ -96,7 +96,7 @@ invalid HMAC with 401 and a valid request with 2xx, and act within 30 days.
 
 Billing is off, and the listing must say Free. What is in place for when it goes on
 (`packages/core/src/billing.ts`, the routes in `apps/api/src/routes/workspaces.ts`, the webhooks
-in `apps/worker/src/handlers.ts`; how it works: [shopify-setup.md](shopify-setup.md#4-billing)):
+in `apps/worker/src/handlers/webhooks.ts`; how it works: [shopify-setup.md](shopify-setup.md#4-billing)):
 
 | Piece | Evidence |
 | --- | --- |

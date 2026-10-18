@@ -48,8 +48,9 @@ The UI must import `@app/shared` **by subpath** (`/roles`, `/dates`, `/ads`, `/s
 
 Import cycles inside packages (file level): two are type-only (`app.ts` ↔ route files,
 `handlers.ts` ↔ `bulkOrders.ts`; a third, `overview.tsx` ↔ `previews.tsx`, went away when the
-health grades moved to `@app/shared/health`); one is real and broken at runtime by a dynamic import: `core/tokens.ts` → `adConnections.ts` / `whatsapp/store.ts` →
-`tokens.ts` (`tokens.ts:116-117`).
+health grades moved to `@app/shared/health`); a third was real, hidden behind a dynamic import (`core/tokens.ts` → `adConnections.ts` / `whatsapp/store.ts` → `tokens.ts`), and
+went away on 2026-10-18 when key rotation moved to `core/keyRotation.ts`. `pnpm lint` now fails on any cycle
+(`scripts/check-import-cycles.mjs`, dynamic imports included).
 
 ## 2. Runtime paths
 
@@ -127,10 +128,10 @@ time limit (`withTimeout`: 30 s, 10 s for Cognito), so a hung provider fails lik
 | --- | --- | --- |
 | Identity, workspaces, roles | api `routes/auth.ts`, `routes/workspaces.ts` | users, workspaces, memberships, invitations, api_keys, notification_preferences, audit_logs, alerts, subscriptions, email_otps |
 | Store connection and sync | api `routes/shopify.ts`, `connectStore.ts`, `sync.ts`; worker | stores, sync_jobs, webhook_events |
-| Commerce data | core `normalize.ts` + `persist.ts` | orders, order_line_items, refunds, products, product_variants |
+| Commerce data | core `shopifyQueries.ts` (what is asked), `normalize.ts` + `persist.ts` | orders, order_line_items, refunds, products, product_variants |
 | Aggregates | core `persist.ts` (`recomputeDays`) | daily_store_metrics |
 | Storefront funnel | api `routes/pixel.ts` | funnel_visits, funnel_daily, pixel_events_seen |
-| Advertising | core `ads/` (one client per platform), `adConnections.ts` | ad_connections, ad_campaign_daily, adsense_daily |
+| Advertising | core `ads/` (one client per platform), `adConnections/` (connections, tokens, sync, reports) | ad_connections, ad_campaign_daily, adsense_daily |
 | WhatsApp | core `whatsapp/*` | whatsapp_* (9 tables), order_tracking(_events), abandoned_checkouts, customer_reviews |
 
 Every store-scoped table carries `workspace_id`, and RLS restricts the `app_rls` role to

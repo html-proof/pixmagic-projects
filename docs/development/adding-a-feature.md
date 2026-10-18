@@ -47,7 +47,7 @@ barrel in the UI. Example: `packages/shared/src/health.ts`.
 Anything that may outlast a request, must retry, or runs on a schedule:
 
 - **A job**: a message type in `packages/core/src/queues.ts`, a handler in
-  `apps/worker/src/handlers.ts`, dispatched from `consume()` (`apps/worker/src/index.ts`). Make
+  `apps/worker/src/handlers/` (one module per queue, re-exported by `handlers.ts`), dispatched from `consume()` (`apps/worker/src/index.ts`). Make
   it idempotent (deliveries repeat) and guard writes against stale data (see
   `applySubscriptionUpdate`, `writeIfNotNewer`). Failures retry with backoff up to
   `MAX_ATTEMPTS`; record a final failure in `onFailure`.
