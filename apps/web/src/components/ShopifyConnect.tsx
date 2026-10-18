@@ -70,7 +70,7 @@ export function ShopifyConnect({ workspaceId }: { workspaceId: string }) {
           disabled={busy !== null}
           onClick={() => void go("picker", `/workspaces/${workspaceId}/shopify/start`, {})}
         >
-          <ShopifyIcon />
+          <ShopifyIcon onAccent />
           {busy === "picker" ? "Opening Shopify…" : "Continue with Shopify"}
         </button>
       ) : (

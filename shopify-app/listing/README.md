@@ -123,11 +123,13 @@ shows: `listing-copy.md`). To retake them from production instead, use a develop
 workspace is an App Store one. Never use a live merchant's store: its order details would be in
 the recent orders list.
 
-No image may show the store switcher: it carries a redrawn Shopify bag
-(`apps/web/src/components/ShopifyIcon.tsx`), and Shopify's brand rules forbid altered logos (the
-feature media guidelines also say no Shopify logo at all). The current set keeps it out of frame:
-the panels are taken in a 1136 px window, where the 896 px panel covers everything right of the
-sidebar, and Team & Access is framed from just under the top bar.
+No image may show anything that carries the Shopify bag (the store switcher, the Shopify connect
+buttons, Settings, Integrations): requirement 4.4.3 keeps Shopify's trademarks out of the app
+icon, banner and screenshots. Since 2026-10-19 that bag is Shopify's official Shopping Bag, the files
+from shopify.com/brand-assets copied unchanged (`apps/web/src/components/ShopifyIcon.tsx`), so the
+app itself follows the brand rules. Requirement 4.4.3 still applies to the images. The current set
+keeps the switcher out of frame: the panels are taken in a 1136 px window, where the 896 px panel
+covers everything right of the sidebar, and Team & Access is framed from just under the top bar.
 
 ## Cost
 
