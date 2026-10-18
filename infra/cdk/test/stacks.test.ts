@@ -245,6 +245,25 @@ describe("the app stack", () => {
     });
   });
 
+  it("emails the owner as the month's spend passes 50/75/90/100% of US$80, and on a forecast above it", () => {
+    const [budget] = Object.values(t.app.findResources("AWS::Budgets::Budget"));
+    expect(budget!.Properties.Budget).toMatchObject({ BudgetType: "COST", TimeUnit: "MONTHLY", BudgetLimit: { Amount: 80, Unit: "USD" } });
+    const alerts = budget!.Properties.NotificationsWithSubscribers as Array<{ Notification: Record<string, unknown>; Subscribers: unknown[] }>;
+    expect(alerts.map((a) => [a.Notification.NotificationType, a.Notification.Threshold])).toEqual([["ACTUAL", 50], ["ACTUAL", 75], ["ACTUAL", 90], ["ACTUAL", 100], ["FORECASTED", 100]]);
+    for (const a of alerts) expect(a.Subscribers).toEqual([{ SubscriptionType: "EMAIL", Address: "aby@zodiix.com" }]);
+    // The alarms stay off email unless alertEmail is given.
+    t.app.resourceCountIs("AWS::SNS::Subscription", 0);
+    // A change to the alerts replaces the budget, so it gets a name of its own.
+    const name = budget!.Properties.Budget.BudgetName as string;
+    expect(name).toMatch(/^insights-production-monthly-[0-9a-f]{8}$/);
+    const other = Object.values(synth({ budgetEmail: "someone@example.com" }).app.findResources("AWS::Budgets::Budget"))[0]!;
+    expect(other.Properties.Budget.BudgetName).not.toBe(name);
+    // Staging: no address, no alerts, the plain name.
+    const staging = Object.values(synth({ env: "staging" }).app.findResources("AWS::Budgets::Budget"))[0]!;
+    expect(staging.Properties.Budget).toMatchObject({ BudgetName: "insights-staging-monthly", BudgetLimit: { Amount: 40 } });
+    expect(staging.Properties.NotificationsWithSubscribers).toBeUndefined();
+  });
+
   it("tells the functions which commit and build they run (GET /api/version shows it)", () => {
     const fns = Object.values(t.app.findResources("AWS::Lambda::Function", { Properties: { FunctionName: Match.stringLikeRegexp("^insights-production-(api|jobs|cron)$") } }));
     expect(fns).toHaveLength(3);

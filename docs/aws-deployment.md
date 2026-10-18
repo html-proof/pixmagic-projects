@@ -25,7 +25,7 @@ Account `605411278365`, region `ap-southeast-2` (Sydney); the WAF web ACL lives 
 | Sign-in | Cognito pool `insights-production` (from `infra/aws/cognito.yaml`); its emails (codes) through Lambda `insights-production-cognito-email` and Resend, "Sign-in emails" below | `apps/api/src/cognito.ts`, `apps/aws/src/cognitoEmail.ts` |
 | App email | Resend (bizinsights.io verified, live 2026-10-16); SES as fallback (sandbox: verified recipients only); "App email" below | `packages/core/src/mail/`, `apps/aws/src/mailers.ts`, `apps/aws/src/sesMailer.ts` |
 | Secrets | Secrets Manager `insights/production/{app,db-owner,worker-cognito}`; settings in SSM `/insights/production/runtime` | `apps/aws/src/secrets.ts` |
-| Logs, alarms | CloudWatch (90 days), dashboard `insights-production`, SNS `insights-production-alarms`, budget US$120/month | `infra/cdk/lib/app-stack.ts` |
+| Logs, alarms | CloudWatch (90 days), dashboard `insights-production`, SNS `insights-production-alarms`, budget US$80/month (emails `budgetEmail`) | `infra/cdk/lib/app-stack.ts` |
 | DB admin | EC2 `insights-production-admin` (t4g.nano, Systems Manager only, normally **stopped**) | `infra/cdk/lib/data-stack.ts` |
 
 Redis/ElastiCache is not used: the app has no Redis; DynamoDB does its coordination. There are no
@@ -476,7 +476,10 @@ share Resend's limits with the app's email (free tier: 100 a day, 3,000 a month)
 
 ## Owner-only steps
 
-- **Alerts**: an email address for alarms and the budget (`-c alertEmail=...`; confirm the SNS email).
+- **Alerts**: an email address for the alarms (`-c alertEmail=...`; confirm the SNS email). The
+  budget already emails `budgetEmail` (config.ts) and needs no confirmation.
+- **Support plan**: the account signed up with a paid plan (Business Support+, the greater of
+  US$29/month or 9% of the bill). Basic support is free; switch in Support Center → Support plans.
 - **Sign-up codes and password resets** come from Cognito's own email (`COGNITO_DEFAULT`): any
   address, but at most 50 a day for the whole pool, from `no-reply@verificationemail.com`. Going past
   that needs Cognito on SES (production access, denied so far) or a Cognito custom email sender
@@ -495,27 +498,46 @@ share Resend's limits with the app's email (free tier: 100 a day, 3,000 a month)
 
 ## Cost (US$/month, on-demand, approximate)
 
-The owner's ceiling is **US$100-120 a month** (2026-10-17). Prices from the AWS Price List API on
-2026-10-17 (Sydney, before the 10% GST that AWS Australia adds):
+The owner's ceiling is **US$50-80 a month** (2026-10-18), keeping everything above, Multi-AZ
+included. Measured and priced on 2026-10-18 (AWS Price List API, Sydney, before the 10% GST that
+AWS Australia adds; usage from CloudWatch at that day's traffic):
 
 | Item | US$/month |
 | --- | --- |
-| RDS db.t4g.micro Multi-AZ $0.051/hour + 20 GB gp3 Multi-AZ $0.276/GB | ~43 |
-| Two NAT instances: t4g.nano $0.0053/hour + 8 GB gp3 + public IPv4 $0.005/hour, each ~8.3 | ~17 |
-| WAF (web ACL + 5 rules + requests) | ~10-11 |
-| CloudWatch alarms (~25 × $0.10), dashboard, logs | ~5-8 |
-| GuardDuty (free for the first 30 days) | ~1-4 |
-| Secrets Manager (3 × $0.40), KMS key for Cognito's emails, admin host's disk (stopped) | ~3 |
-| EBS snapshots of the three instance disks, daily, kept 7 days, plus one launch snapshot each ($0.055/GB of used blocks) | ~0.5-2 |
-| Lambda, SQS, DynamoDB, S3, CloudFront, Cognito, Scheduler at today's traffic (free tiers) | ~0-5 |
-| **Total** | **~81-92** (~89-101 with GST) |
+| RDS db.t4g.micro Multi-AZ: 1-year reserved instance, No Upfront, $0.040/hour (on demand $0.051) | 29.20 |
+| RDS 20 GB gp3 Multi-AZ, $0.276/GB (20 GB is gp3's minimum; backups fit the free allowance) | 5.52 |
+| Two NAT instances: t4g.nano $0.0053/hour + public IPv4 $0.005/hour + 8 GB gp3, each ~8.3 | 16.58 |
+| WAF: web ACL $5 + 5 rules × $1 + requests | ~10.2 |
+| GuardDuty (free trial until ~2026-11-15) | ~2.9 |
+| CloudWatch: 25 alarms, 10 free; logs, metrics, dashboard in the free tier | ~1.5 |
+| Secrets Manager (3 × $0.40 + calls), KMS key for Cognito's emails | ~2.5 |
+| Admin host's disk (stopped), EBS snapshots, X-Ray, S3, DynamoDB, SQS | ~2.6 |
+| Lambda, CloudFront, Cognito, Scheduler, SNS, ACM (free tiers) | 0 |
+| **Total** | **~71** (~78 with GST) |
 
-Biggest lever: the database size (`dbInstanceType`). db.t4g.small Multi-AZ is ~US$37 more (~117-128):
-move to it when the database alarms say so (`db-free-memory` below 100 MB, `db-connections` above
-60 of ~80, `db-cpu`). NAT instances replaced the NAT gateway
-($0.059/hour + $0.059/GB, ~47 with its address) in 2026-10-17: two of them cost a third of one
-gateway. Budget alarm at US$120 (80% actual, 100% forecast, once an alert email is set). Cost
-allocation tags `app` and `environment` can be activated in Billing once AWS has seen them.
+The **reserved instance** (`insights-production-t4g-micro-maz-2026-10`, bought 2026-10-18, runs to
+2027-10-18) bills $0.040/hour whether or not the database runs. It is size-flexible: on db.t4g.small
+Multi-AZ it still pays half (~US$29 more a month instead of ~US$37). A paid **support plan** comes
+on top (Owner-only steps).
+
+Biggest lever: the database size (`dbInstanceType`). Move to db.t4g.small when the database alarms
+say so (`db-free-memory` below 100 MB, `db-connections` above 60 of ~80, `db-cpu`): that takes the
+bill past US$80 (~100). On 2026-10-18 freeable memory bottomed at 103 MB with 50 MB in swap.
+NAT instances replaced the NAT gateway ($0.059/hour + $0.059/GB, ~47 with its address) on
+2026-10-17: two of them cost a third of one gateway.
+
+**Budget** `insights-production-monthly-<digest>`: US$80, tax included, emails `budgetEmail` when the
+month passes 50/75/90/100% (US$40/60/72/80) and when AWS forecasts it above US$80. Nothing is
+stopped at any threshold. At ~US$78 with GST the 50-90% emails are expected every month. The name
+carries a digest of the alerts because CloudFormation replaces a budget whose alerts change.
+Cost Anomaly Detection's default monitor emails the account's sign-up address daily.
+
+Looked at on 2026-10-18 and not worth it: moving region (us-east-1 is ~US$17 cheaper, but every
+request crosses the Pacific, Cognito users can't move with their passwords, and the data would
+leave Australia; Singapore and Melbourne cost the same as Sydney); the CloudFront flat-rate Free
+plan (US$0 instead of the WAF's ~10, but no custom 429, no header-based rules for Cloudflare's
+client address, no custom response-headers policy, no SLA). Cost allocation tags `app` and
+`environment` can be activated in Billing.
 
 ## Fault tolerance
 

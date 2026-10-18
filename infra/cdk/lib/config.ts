@@ -14,8 +14,10 @@ export interface EnvConfig {
   /**
    * RDS instance class, e.g. "t4g.micro" (1 GB memory, ~80 connections) or "t4g.small" (2 GB,
    * ~200; with Multi-AZ ~US$37/month more). Production is on t4g.micro to keep the bill within
-   * US$100-120 (2026-10-17); its alarms (db-free-memory, db-connections, db-cpu) say when it's
+   * US$50-80 (2026-10-18); its alarms (db-free-memory, db-connections, db-cpu) say when it's
    * time for t4g.small. With Multi-AZ, a change costs one failover (about a minute).
+   * Production's instance is paid by a 1-year reserved instance (db.t4g.micro PostgreSQL Multi-AZ,
+   * No Upfront, until 2027-10-18): it is size-flexible, so on t4g.small it still pays half.
    */
   dbInstanceType: string;
   /**
@@ -61,8 +63,15 @@ export interface EnvConfig {
    * `-c cognitoEmail=off` (or `on`) overrides it for one deploy, e.g. while the provider is down.
    */
   cognitoCustomEmail: boolean;
-  /** Where alarm and budget emails go (empty: the topic and budget exist without subscribers). */
+  /** Where alarm emails go (empty: the topic exists without subscribers). */
   alertEmail: string;
+  /**
+   * Where the budget's emails go (spend at 50/75/90/100% of monthlyBudgetUsd, and a forecast above
+   * it); costs only, none of the alarms. Empty: alertEmail, or no subscribers without one.
+   * `-c budgetEmail=...` overrides it for one deploy.
+   */
+  budgetEmail: string;
+  /** The monthly ceiling in US$, tax included (AWS Budgets' default; AWS Australia adds 10% GST). */
   monthlyBudgetUsd: number;
   /** GitHub repository allowed to deploy through OIDC. */
   githubRepo: string;
@@ -98,7 +107,10 @@ const ENVIRONMENTS: Record<EnvConfig["name"], Omit<EnvConfig, "schedulesEnabled"
     },
     cognitoDomainPrefix: "insights-605411278365",
     cognitoCustomEmail: true,
-    monthlyBudgetUsd: 120,
+    // The owner's address at AWS (it also gets Cost Anomaly Detection's daily alerts).
+    budgetEmail: "aby@zodiix.com",
+    // The owner's ceiling, US$50-80 a month (2026-10-18; docs/aws-deployment.md, Cost).
+    monthlyBudgetUsd: 80,
     githubRepo: "html-proof/pixmagic-projects",
     githubOidcSubject: "repo:html-proof@68529971/pixmagic-projects@1413246051",
   },
@@ -117,6 +129,7 @@ const ENVIRONMENTS: Record<EnvConfig["name"], Omit<EnvConfig, "schedulesEnabled"
     cognitoDomainPrefix: "insights-staging-605411278365",
     // A few test emails a day fit Cognito's own sender, without a second KMS key.
     cognitoCustomEmail: false,
+    budgetEmail: "",
     monthlyBudgetUsd: 40,
     githubRepo: "html-proof/pixmagic-projects",
     githubOidcSubject: "repo:html-proof@68529971/pixmagic-projects@1413246051",
@@ -128,11 +141,13 @@ export function envConfig(context: (key: string) => unknown): EnvConfig {
   const base = ENVIRONMENTS[name];
   if (!base) throw new Error(`Unknown environment "${name}" (production or staging)`);
   const cognitoEmail = context("cognitoEmail");
+  const budgetEmail = context("budgetEmail");
   return {
     ...base,
     schedulesEnabled: String(context("schedules") ?? "off") === "on",
     alertEmail: String(context("alertEmail") ?? ""),
     cognitoCustomEmail: cognitoEmail === undefined || cognitoEmail === "" ? base.cognitoCustomEmail : String(cognitoEmail) === "on",
+    budgetEmail: budgetEmail === undefined || budgetEmail === "" ? base.budgetEmail : String(budgetEmail),
   };
 }
 
