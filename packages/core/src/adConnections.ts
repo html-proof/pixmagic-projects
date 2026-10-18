@@ -11,3 +11,4 @@ export { adAccessToken, encryptAdTokens, reencryptAdTokens } from "./adConnectio
 export * from "./adConnections/connect.js";
 export * from "./adConnections/sync.js";
 export * from "./adConnections/reports.js";
+export * from "./adConnections/status.js";

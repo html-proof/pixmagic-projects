@@ -4,6 +4,7 @@
  */
 import {
   fromGoogleAdsRow,
+  googleAccountStatus,
   googleCustomerId,
   googleReportMetrics,
   googleReportRows,
@@ -15,7 +16,7 @@ import {
   type GoogleReportMetrics,
   type GoogleReportRow,
 } from "@app/shared";
-import { AdsApiError, AdsAuthError, AdsNoAccountsError, AdsNotApprovedError, AdsRetryableError, REQUIRED_AD_SCOPE, type AdAccount } from "./common.js";
+import { AdsApiError, AdsAuthError, AdsNoAccountsError, AdsNotApprovedError, AdsRetryableError, REQUIRED_AD_SCOPE, type AdAccount, type AdAccountHealth } from "./common.js";
 import { googleConsentUrl, type GoogleOAuthClient } from "./googleOAuth.js";
 
 /**
@@ -216,4 +217,21 @@ export async function googleReport(
   const rows = all.slice(0, maxRows);
   const totals = googleReportRows("device", totalRows.map((r) => ({ ...r, segments: { device: "ALL" } })))[0];
   return { level, since, until, totals: totals ?? googleReportMetrics({}), rows, truncated: all.length > rows.length };
+}
+
+/**
+ * One Google Ads account's health as Google reports it now: its customer status (normalized), name,
+ * currency and time zone. One operation, made with the daily re-check.
+ */
+export async function googleAccountHealth(c: GoogleConfig, accessToken: string, account: { accountId: string; loginCustomerId?: string | null }): Promise<AdAccountHealth> {
+  const me = (
+    await googleSearch<{ customer?: { status?: string; descriptiveName?: string; currencyCode?: string; timeZone?: string } }>(
+      c,
+      accessToken,
+      account.accountId,
+      "SELECT customer.status, customer.descriptive_name, customer.currency_code, customer.time_zone FROM customer",
+      account.loginCustomerId,
+    )
+  )[0]?.customer;
+  return { status: googleAccountStatus(me?.status), detail: null, name: me?.descriptiveName ?? null, currency: me?.currencyCode ?? null, timezone: me?.timeZone ?? null };
 }
