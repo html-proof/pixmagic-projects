@@ -67,21 +67,22 @@ async function tokenRequest(
     body: JSON.stringify(body),
   });
   if (!res.ok) {
-    throw new ShopifyHttpError(`Token request failed (${res.status})`, res.status);
+    // Shopify's OAuth errors are `{"error": "<code>"}` (invalid_request, invalid_subject_token...):
+    // the code tells a dead token from a passing failure, and never carries anything secret.
+    const code = ((await res.json().catch(() => null)) as { error?: unknown } | null)?.error;
+    const detail = typeof code === "string" ? ` ${code.slice(0, 60)}` : "";
+    throw new ShopifyHttpError(`Token request failed (${res.status}${detail})`, res.status);
   }
   return parseTokenResponse((await res.json()) as Record<string, unknown>);
 }
 
 /**
- * Authorization-code exchange for the *permanent* offline token background sync runs on.
- *
- * Sending `expiring: 1` here would opt into Shopify's expiring tokens instead: a 1-hour access
- * token plus a single-use 90-day refresh token. That is deliberately not done. Rotation then
- * became a liveness requirement for every store - a store whose refresh failed once was dead,
- * and the refresh token is invalidated by any later authorize for the same app and shop, so an
- * abandoned authorize could kill a live store's token while leaving its row untouched. A permanent
- * offline token has no expiry and no refresh token, so there is nothing to rotate and nothing to
- * invalidate; it stays valid until the merchant uninstalls.
+ * Authorization-code exchange for the offline token background sync runs on: an *expiring* one
+ * (`expiring=1`), a 1-hour access token plus a 90-day refresh token that `getAccessToken` rotates.
+ * Shopify requires them of public apps (new ones since 2026-04-01, all of them from 2027-01-01,
+ * when it stops accepting non-expiring tokens) and flags every use of a non-expiring one in the
+ * Dev Dashboard's API health as "Deprecated offline token". Shopify decides offline vs online from
+ * the authorize URL (no `grant_options[]=per-user`), not from this request.
  */
 export function exchangeCodeForToken(
   cfg: ShopifyAppConfig,
@@ -89,10 +90,47 @@ export function exchangeCodeForToken(
   code: string,
   fetchImpl: FetchLike = fetch,
 ): Promise<TokenResponse> {
-  return tokenRequest(shop, { client_id: cfg.apiKey, client_secret: cfg.apiSecret, code }, fetchImpl);
+  return tokenRequest(shop, { client_id: cfg.apiKey, client_secret: cfg.apiSecret, code, expiring: "1" }, fetchImpl);
 }
 
-/** Rotate: Shopify returns a new access token AND a new refresh token. */
+/** OAuth token exchange (RFC 8693), and Shopify's name for an offline access token in it. */
+const TOKEN_EXCHANGE_GRANT = "urn:ietf:params:oauth:grant-type:token-exchange";
+const OFFLINE_ACCESS_TOKEN = "urn:shopify:params:oauth:token-type:offline-access-token";
+
+/**
+ * Trade a store's non-expiring offline token for an expiring one, with no merchant involved.
+ * Shopify stops accepting the old token for GraphQL the moment this succeeds, so the answer has to
+ * be stored before anything else; a lost answer comes back unchanged if the same request is made
+ * again within 7 days. 400 `invalid_subject_token`: the token isn't an active non-expiring offline
+ * token of this app on this shop (revoked, or already traded).
+ */
+export function exchangeForExpiringToken(
+  cfg: Pick<ShopifyAppConfig, "apiKey" | "apiSecret">,
+  shop: string,
+  nonExpiringToken: string,
+  fetchImpl: FetchLike = fetch,
+): Promise<TokenResponse> {
+  return tokenRequest(
+    shop,
+    {
+      client_id: cfg.apiKey,
+      client_secret: cfg.apiSecret,
+      grant_type: TOKEN_EXCHANGE_GRANT,
+      subject_token: nonExpiringToken,
+      subject_token_type: OFFLINE_ACCESS_TOKEN,
+      requested_token_type: OFFLINE_ACCESS_TOKEN,
+      expiring: "1",
+    },
+    fetchImpl,
+  );
+}
+
+/**
+ * Rotate: Shopify returns a new access token AND a new refresh token. Presenting the new refresh
+ * token retires the one before it; until then the one presented here still works, so a refresh
+ * whose answer was lost can simply be made again. 401 `invalid_request`: the refresh token is
+ * expired, retired or otherwise dead, and only the merchant opening the app again gets a new one.
+ */
 export function refreshAccessToken(
   cfg: Pick<ShopifyAppConfig, "apiKey" | "apiSecret">,
   shop: string,

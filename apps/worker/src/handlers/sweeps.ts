@@ -1,6 +1,6 @@
 /** The cron sweeps: nightly reconcile, sales re-reads, stuck jobs, expiring tokens, and the one-off seeds after a move. */
 import { systemDb } from "@app/db";
-import { getAccessToken, logger, raiseAlert, settleReturningCustomers, startReconciliation, type SyncKind } from "@app/core";
+import { getAccessToken, logger, migrateToExpiringToken, raiseAlert, settleReturningCustomers, startReconciliation, StoreDisconnectedError, type SyncKind } from "@app/core";
 import { expandScopes, localDay } from "@app/shared";
 import { enqueueAggregate, type WorkerDeps } from "./common.js";
 import { BACKFILL_DAYS } from "./sync.js";
@@ -346,18 +346,43 @@ export async function failStaleJobs(deps: WorkerDeps) {
   return reaped;
 }
 
-/** Rotate tokens that expire within the next hour so request paths rarely block on refresh. */
+/**
+ * Validity a token must have left to sit out a sweep: one 15-minute tick plus getAccessToken's 5-minute
+ * margin. Expiring offline tokens live an hour, so each store rotates about every 45 minutes,
+ * which also keeps its 90-day refresh token from running out while nobody opens the dashboard.
+ */
+export const TOKEN_SWEEP_VALIDITY_MS = 20 * 60_000;
+/** A store Shopify wouldn't move to an expiring token is asked again after this long. */
+const TOKEN_MIGRATE_RETRY_MS = 3600_000;
+
+/**
+ * Rotate tokens that expire before the next tick, so request paths rarely block on a refresh, and
+ * move stores still on a non-expiring token to an expiring one (migrateToExpiringToken). Returns
+ * how many stores got a new token.
+ */
 export async function refreshExpiringTokens(deps: WorkerDeps) {
-  const soon = new Date(Date.now() + 3600_000);
+  const soon = new Date(Date.now() + TOKEN_SWEEP_VALIDITY_MS);
   const stores = await systemDb.store.findMany({
-    where: { status: { not: "uninstalled" }, accessTokenEnc: { not: null }, accessTokenExpiresAt: { lt: soon } },
+    where: {
+      status: { not: "uninstalled" },
+      accessTokenEnc: { not: null },
+      OR: [{ accessTokenExpiresAt: null }, { accessTokenExpiresAt: { lt: soon }, refreshTokenEnc: { not: null } }],
+    },
   });
+  let renewed = 0;
   for (const s of stores) {
     try {
-      await getAccessToken(s, deps.coord, deps.fetchImpl, 3600_000);
+      if (s.accessTokenExpiresAt) {
+        await getAccessToken(s, deps.coord, deps.fetchImpl, TOKEN_SWEEP_VALIDITY_MS);
+        renewed++;
+      } else if (await deps.coord.acquire(`sweep:token-migrate:${s.id}`, TOKEN_MIGRATE_RETRY_MS)) {
+        if (await migrateToExpiringToken(s, deps.coord, deps.fetchImpl)) renewed++;
+      }
     } catch (err) {
-      logger.error({ err, storeId: s.id }, "token refresh failed");
+      // A store Shopify cut off fails its next sync the same way, which is what tells the merchant.
+      if (err instanceof StoreDisconnectedError) logger.warn({ err, storeId: s.id }, "token refresh refused; the store must be reconnected");
+      else logger.error({ err, storeId: s.id }, s.accessTokenExpiresAt ? "token refresh failed" : "move to an expiring token failed");
     }
   }
-  return stores.length;
+  return renewed;
 }

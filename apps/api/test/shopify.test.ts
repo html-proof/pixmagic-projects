@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { systemDb } from "@app/db";
 import { signShopifyQuery, signWebhookBody } from "@app/shared";
-import { getAccessToken, INLINE_PAYLOAD_LIMIT } from "@app/core";
+import { encryptTokenFields, getAccessToken, INLINE_PAYLOAD_LIMIT } from "@app/core";
 import { clean, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
 
 let ctx: TestCtx;
@@ -48,10 +48,10 @@ describe("Shopify OAuth", () => {
     ctx.setFetch(async (input, init) => {
       expect(String(input)).toBe("https://demo-shop.myshopify.com/admin/oauth/access_token");
       const body = JSON.parse(String(init?.body));
-      expect(body).toMatchObject({ code: "authcode", client_secret: SECRET });
-      expect(body).not.toHaveProperty("expiring");
+      // An expiring offline token: Shopify flags a non-expiring one as deprecated.
+      expect(body).toMatchObject({ code: "authcode", client_secret: SECRET, expiring: "1" });
       return new Response(
-        JSON.stringify({ access_token: "shpat_PLAINTEXT", scope: "read_orders" }),
+        JSON.stringify({ access_token: "shpat_PLAINTEXT", scope: "read_orders", expires_in: 3600, refresh_token: "shprt_PLAINTEXT", refresh_token_expires_in: 7_776_000 }),
         { status: 200, headers: { "content-type": "application/json" } },
       );
     });
@@ -68,6 +68,8 @@ describe("Shopify OAuth", () => {
     expect(store.workspaceId).toBe(ws);
     expect(store.grantedScopes).toEqual(["read_orders"]);
     expect(store.accessTokenEnc).toBeTruthy();
+    expect(store.refreshTokenEnc).toBeTruthy();
+    expect(store.accessTokenExpiresAt!.getTime()).toBeGreaterThan(Date.now() + 59 * 60_000);
     expect(JSON.stringify(store)).not.toContain("PLAINTEXT");
     expect(await getAccessToken(store, ctx.deps.coord)).toBe("shpat_PLAINTEXT");
 
@@ -84,6 +86,32 @@ describe("Shopify OAuth", () => {
       headers: { cookie: `${cookie}; ${stateCookie}` },
     });
     expect(replay.headers.location).toContain("error=state_expired");
+  });
+
+  it("puts a re-authorization's token on the store even when the connect goes no further", async () => {
+    const { res, ws, cookie } = await startInstall();
+    const store = await createStore(ws, "demo-shop.myshopify.com", ["read_orders"], { shopifyAppKey: "default" });
+    const hour = new Date(Date.now() + 3600_000);
+    await systemDb.store.update({
+      where: { id: store.id },
+      data: encryptTokenFields(store.id, { accessToken: "shpat_OLD", refreshToken: "shprt_OLD", scopes: ["read_orders"], accessTokenExpiresAt: hour, refreshTokenExpiresAt: hour }),
+    });
+    const state = new URL(res.json().url).searchParams.get("state")!;
+    // Shopify answers without read_orders, so this connect stops there. It has retired shprt_OLD all
+    // the same, and a store left on it would lose its access within the hour.
+    ctx.setFetch(async () =>
+      new Response(JSON.stringify({ access_token: "shpat_NEW", scope: "read_products", expires_in: 3600, refresh_token: "shprt_NEW", refresh_token_expires_in: 7_776_000 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    const cb = await ctx.app.inject({
+      method: "GET",
+      url: callbackUrl({ code: "authcode", shop: "demo-shop.myshopify.com", state, timestamp: String(Math.floor(Date.now() / 1000)) }),
+      headers: { cookie: `${cookie}; shopify_oauth_state=${state}` },
+    });
+    expect(cb.headers.location).toContain("error=missing_required_scopes");
+    expect(await getAccessToken(store, ctx.deps.coord)).toBe("shpat_NEW");
   });
 
   it.each([
