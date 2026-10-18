@@ -644,6 +644,9 @@ model FunnelVisit {
 // "Continue with Meta/Google Ads/Google AdSense". One row per account. The token belongs to the
 // person who connected: every account they connected in one go shares it, encrypted with the same
 // AAD (`ads:<provider>:<storeId>:<kind>`).
+// Columns marked @ignore exist in the database (migration 20261019120000) but not yet in the client:
+// they ship before the code that reads them, so a deploy never queries a column its migration hasn't
+// added yet (the workflow migrates after the new code is live). The next change removes @ignore.
 model AdConnection {
   id                   String    @id @default(cuid())
   workspaceId          String    @map("workspace_id")
@@ -657,10 +660,36 @@ model AdConnection {
   loginCustomerId      String?   @map("login_customer_id")
   /** Shown on the dashboard and synced. Turned off from Settings without losing the connection. */
   enabled              Boolean   @default(true)
-  /** "active" | "reconnect" (access ended: connect again) | "error" (see last_error). */
+  /**
+   * "active" | "reconnect" (access ended: connect again) | "permission" (this login lost access to
+   * this one account; connect with a login that has it) | "unavailable" (the platform won't report on
+   * the account: closed, disabled, sign-up unfinished) | "error" (a failure a retry may fix).
+   * AD_CONNECTION_STATUSES in @app/shared/ads.
+   */
   status               String    @default("active")
+  /** Why it isn't active, as a code the UI words (AD_ERROR_CODES in @app/shared/ads); null when active. */
+  errorCode            String?   @map("error_code") @ignore
+  /** The platform's own reason, through providerDetail(): for the logs and support, never shown raw. */
   lastError            String?   @map("last_error")
   lastSyncedAt         DateTime? @map("last_synced_at")
+  /**
+   * The ad account's own health at the platform, normalized (AD_ACCOUNT_STATUSES in @app/shared/ads):
+   * Meta's account_status, AdSense's state and pending tasks. Null until read.
+   */
+  accountStatus        String?   @map("account_status") @ignore
+  /** What the platform says about that status (Meta's disable reason, AdSense's pending tasks). */
+  accountStatusDetail  String?   @map("account_status_detail") @ignore
+  /** AdSense: the sites (DOMAIN_CODE) whose earnings belong to this store; empty = every site. */
+  sites                String[]  @default([]) @ignore
+  /**
+   * The last day (the account's own, YYYY-MM-DD) up to which every day from history_from on is
+   * stored without a gap. A sync that leaves a gap after it fetches the gap first.
+   */
+  syncedThrough        String?   @map("synced_through") @ignore
+  /** A sync was asked for (connect, Refresh) and hasn't finished yet: the card says "Synchronizing". */
+  syncRequestedAt      DateTime? @map("sync_requested_at") @ignore
+  /** Syncs that failed in a row; reset by one that works. Failing accounts are tried less often. */
+  consecutiveFailures  Int       @default(0) @map("consecutive_failures") @ignore
   /**
    * The first day (the account's own, YYYY-MM-DD) from which every day's figures are stored: the
    * start of the earliest window a sync fetched in full (the first sync fetches 90 days), keeping
@@ -678,6 +707,8 @@ model AdConnection {
   grantedScopes        String[]  @default([]) @map("granted_scopes")
   createdAt            DateTime  @default(now()) @map("created_at")
   updatedAt            DateTime  @updatedAt @map("updated_at")
+  campaignDays         AdCampaignDaily[]
+  adsenseDays          AdsenseDaily[]
 
   @@unique([storeId, provider, accountId])
   @@index([workspaceId])
@@ -697,12 +728,20 @@ model AdCampaignDaily {
   day             String
   spend           Decimal  @default(0) @db.Decimal(18, 2)
   impressions     Int      @default(0)
+  /** Every click the platform counts (Meta's "clicks (all)" include likes, comments and profile clicks). */
   clicks          Int      @default(0)
+  /** Clicks on the ad's link: Meta's inline_link_clicks, Google's clicks. Null until read (rows from before 2026-10-19). */
+  linkClicks      Int?     @map("link_clicks") @ignore
+  /** The platform's own conversions: Meta's purchases, Google's every primary conversion action (leads, calls...). */
   conversions     Decimal  @default(0) @db.Decimal(18, 2)
   conversionValue Decimal  @default(0) @map("conversion_value") @db.Decimal(18, 2)
+  /** Purchases only, as the platform credits them (Google: conversion actions of category PURCHASE). Null until read. */
+  purchases       Decimal? @db.Decimal(18, 2) @ignore
+  purchaseValue   Decimal? @map("purchase_value") @db.Decimal(18, 2) @ignore
   leads           Int      @default(0)
   currency        String?
   updatedAt       DateTime @updatedAt @map("updated_at")
+  connection      AdConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
 
   @@id([connectionId, campaignId, day])
   @@index([workspaceId])
@@ -726,6 +765,7 @@ model AdsenseDaily {
   clicks       Int      @default(0)
   currency     String?
   updatedAt    DateTime @updatedAt @map("updated_at")
+  connection   AdConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
 
   @@id([connectionId, site, day])
   @@index([workspaceId])
