@@ -794,7 +794,9 @@ The five red security checks on 2026-10-18 and what answers each:
   included, to `insights-account-trail-605411278365` with log file validation (digest files), kept
   a year; versioning keeps a deleted file 30 days. No CloudWatch Logs copy and no data events, both
   billed. Read events with `aws cloudtrail lookup-events` (last 90 days, no trail needed) or the
-  files in the bucket.
+  files in the bucket. The bucket policy lets CloudTrail in only for this trail (`aws:SourceArn`
+  = the trail's Sydney ARN, which every Region sends), so no other account's trail can write there;
+  a second trail into this bucket needs its ARN added in audit-stack.ts.
 - **IAM Access Analyzer - external access** (17 of 18 Regions red): only Sydney had an analyzer,
   made by hand on 2026-10-15. The StackSet `insights-account-access-analyzer` makes the account
   analyzer `insights-account` (free) in each of the 18 enabled Regions (`ACCOUNT_REGIONS` in
