@@ -97,7 +97,7 @@ const PROVIDERS = [
   {
     name: "Google Firebase",
     purpose:
-      "Our previous sign-in service. If your account was created before we moved to Amazon Cognito, your first sign-in afterwards is checked against it once, so you can keep your password.",
+      "Runs our domain's DNS and the network in front of bizinsights.io (encryption in transit, caching of static files, protection against attacks), so every request to the app passes through it. It was also our previous hosting provider and keeps serving our old address, and the data of stores connected there, until that is retired.",
   },
   { name: "Shopify", purpose: "The source of your store data." },
   { name: "Meta (WhatsApp Business Platform)", purpose: "Delivers WhatsApp messages, only for stores that connect WhatsApp." },

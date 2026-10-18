@@ -88,8 +88,17 @@ jobs:
           arn=$(aws sts get-caller-identity --query Arn --output text)
           echo "$arn"
           [[ -n "$ROLE" && "$arn" == *":assumed-role/${ROLE##*/}/"* ]]
+      # This commit's deploy role trust requires the workflow and branch claims: before cdk deploy
+      # gives it that trust, the trust-check roles must prove IAM checks them and this workflow meets
+      # them, or a wrong trust would lock the next deploy out (oidc-trust.ts prove). A commit from
+      # before that check has nothing to prove.
+      - name: The trust this commit deploys is proven
+        env: { ROLE: "${{ vars.AWS_DEPLOY_ROLE_ARN }}" }
+        run: |
+          if ! grep -q 'mode === "prove"' infra/cdk/scripts/oidc-trust.ts 2>/dev/null; then echo "::notice::This commit's oidc-trust.ts has no prove mode: nothing to prove."; exit 0; fi
+          pnpm --filter @infra/cdk exec tsx scripts/oidc-trust.ts prove --role "$ROLE" --region "$AWS_REGION"
       - name: Build the Lambda package (API + UI)
-        run: pnpm --filter @app/aws build -- --no-staging-bundle
+        run: pnpm --filter @app/aws build
       - name: Record the release being replaced
         id: before
         run: |

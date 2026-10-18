@@ -8,10 +8,6 @@
  * Keys stay quoted: packages/core/test/appConfig.test.ts reads the Shopify scopes from this file.
  */
 export const APP_SETTINGS = {
-  // The move from Firebase: the old project's public web API key (saas-89329). A first sign-in with a
-  // password Cognito doesn't know yet is checked against Firebase once and moved over. Clear it to end
-  // the migration window (docs/cognito-setup.md, "Ending the migration").
-  "LEGACY_FIREBASE_API_KEY": "AIzaSyDsrFIOe52bv3ZD0PM_h_l6_Tm9q7Uzq4s",
   "SHOPIFY_API_KEY": "57e9ef75435db908617fdd46099afe0e",
   "SHOPIFY_SCOPES": "read_orders,read_products",
   // NOTE: under Shopify managed installation (use_legacy_install_flow = false) these two settings do

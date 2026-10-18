@@ -133,7 +133,7 @@ export function accountRoutes(app: App, deps: Deps) {
     return c.json({ user: publicUser(updated) });
   });
 
-  /** An account whose address isn't verified yet (moved from Firebase unverified): a code to it. */
+  /** An account whose address isn't verified yet (an employee who joined from a copied link, say): a code to it. */
   app.post("/auth/account/verify-email/send", async (c) => {
     const user = await requireUser(c, deps);
     await limit(deps.coord, `rl:account:verify:${user.id}`, LIMITS.codeEmail);

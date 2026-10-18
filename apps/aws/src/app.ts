@@ -1,6 +1,6 @@
-import { cognitoAuth, cognitoConfig, firebasePasswordCheck, unconfiguredCognito, type Deps } from "@app/api";
+import { cognitoAuth, cognitoConfig, unconfiguredCognito, type Deps } from "@app/api";
 import type { WorkerDeps } from "@app/worker";
-import { env as config, logger, withTimeout } from "@app/core";
+import { logger, withTimeout } from "@app/core";
 
 /**
  * What the Lambda functions (index.ts) and the local server (local.ts) share: which requests are
@@ -29,11 +29,9 @@ export function apiDeps(jobs: WorkerDeps): Deps {
   const authFetch = withTimeout((input, init) => fetch(input, init), AUTH_TIMEOUT_MS);
   const cognito = cognitoConfig();
   if (!cognito) logger.error({}, "COGNITO_USER_POOL_ID / COGNITO_CLIENT_ID are not set: every sign-in will answer 503");
-  const legacyKey = config().LEGACY_FIREBASE_API_KEY;
   return {
     ...jobs,
     auth: cognito ? cognitoAuth(cognito, authFetch) : unconfiguredCognito(),
-    legacy: legacyKey ? firebasePasswordCheck(legacyKey, authFetch) : null,
     globalLimit: async (ip) => (await jobs.coord.hit(`rl:global:${ip}`, 60)) <= GLOBAL_LIMIT_PER_MIN,
   };
 }
