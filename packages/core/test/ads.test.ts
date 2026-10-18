@@ -67,8 +67,8 @@ describe("Meta", () => {
       return json({ error: { message: "unexpected" } }, 400);
     });
     expect(await metaAdAccounts(meta(f.fetchImpl), "TOKEN")).toEqual([
-      { accountId: "act_1", name: "Main", currency: "AUD", timezone: "Australia/Sydney" },
-      { accountId: "act_2", name: "Second", currency: "USD", timezone: null },
+      { accountId: "act_1", name: "Main", currency: "AUD", timezone: "Australia/Sydney", status: null, statusDetail: null },
+      { accountId: "act_2", name: "Second", currency: "USD", timezone: null, status: null, statusDetail: null },
     ]);
     const rows = await metaCampaignDays(meta(f.fetchImpl), "TOKEN", "1", "2026-10-01", "2026-10-02");
     expect(rows).toEqual([expect.objectContaining({ provider: "meta", accountId: "act_1", campaignName: "Spring", spend: 5.5, conversions: 1 })]);

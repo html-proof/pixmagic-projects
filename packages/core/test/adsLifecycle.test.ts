@@ -100,15 +100,47 @@ describe("sign-in security and lifecycle", () => {
     const del = fake(async (u, init) => {
       expect(init?.method).toBe("DELETE");
       expect(u.pathname).toBe("/v25.0/me/permissions/ads_read");
-      expect(u.search).toBe("");
+      // Only the token's proof, never the token itself.
+      expect([...u.searchParams.keys()]).toEqual(["appsecret_proof"]);
       expect(new Headers(init?.headers).get("authorization")).toBe("Bearer T");
       expect(String(init?.body ?? "")).toBe("");
       return json({ success: true });
     });
-    await metaRevokeAdsRead(meta(del.fetchImpl), "T");
+    expect(await metaRevokeAdsRead(meta(del.fetchImpl), "T")).toBe("revoked");
     expect(del.calls).toHaveLength(1);
-    const expired = fake(() => json({ error: { message: "Session has expired", code: 190 } }, 400));
-    await expect(metaRevokeAdsRead(meta(expired.fetchImpl), "T")).resolves.toBeUndefined();
+  });
+
+  it("Meta: a token that stopped working doesn't end the grant: bizinsights' app token takes ads_read back for the person", async () => {
+    const userTokenDead = (appToken: (u: URL, init?: RequestInit) => Response) =>
+      fake((u, init) => {
+        const auth = new Headers(init?.headers).get("authorization");
+        if (auth === "Bearer T") return json({ error: { message: "Error validating access token: Session has expired", code: 190, error_subcode: 463 } }, 400);
+        expect(auth).toBe("Bearer app1|sec");
+        // The app token holds the secret itself: no proof goes with it.
+        expect(u.searchParams.has("appsecret_proof")).toBe(false);
+        return appToken(u, init);
+      });
+    const ok = userTokenDead((u, init) => {
+      expect(init?.method).toBe("DELETE");
+      expect(u.pathname).toBe("/v25.0/5550001/permissions/ads_read");
+      return json({ success: true });
+    });
+    expect(await metaRevokeAdsRead(meta(ok.fetchImpl), "T", "5550001")).toBe("revoked");
+    expect(ok.calls).toHaveLength(2);
+
+    // Meta refuses, and lists the person's grants without ads_read: there was nothing left to take back.
+    const gone = userTokenDead((u, init) =>
+      init?.method === "DELETE" ? json({ error: { message: "(#100) Invalid parameter", code: 100 } }, 400) : json({ data: [{ permission: "whatsapp_business_messaging", status: "granted" }, { permission: "ads_read", status: "declined" }] }),
+    );
+    expect(await metaRevokeAdsRead(meta(gone.fetchImpl), "T", "5550001")).toBe("not_granted");
+    // Meta refuses and ads_read is still granted: not revoked, and said so.
+    const still = userTokenDead((_u, init) => (init?.method === "DELETE" ? json({ error: { message: "(#100) Invalid parameter", code: 100 } }, 400) : json({ data: [{ permission: "ads_read", status: "granted" }] })));
+    await expect(metaRevokeAdsRead(meta(still.fetchImpl), "T", "5550001")).rejects.toMatchObject({ code: 100 });
+    // Without the person's id nothing can take it back: never reported as revoked.
+    const unknown = userTokenDead(() => json({ error: { message: "unexpected" } }, 400));
+    await expect(metaRevokeAdsRead(meta(unknown.fetchImpl), "T")).rejects.toBeInstanceOf(AdsAuthError);
+    await expect(metaRevokeAdsRead(meta(unknown.fetchImpl), "T", "../me")).rejects.toBeInstanceOf(AdsAuthError);
+    expect(unknown.calls).toHaveLength(2);
   });
 
   it("Meta: a range too big for one answer runs as a report job", async () => {
