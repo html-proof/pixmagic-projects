@@ -133,6 +133,9 @@ export const restProductSchema = obj({
 /** products/delete carries only the id. */
 export const restProductDeleteSchema = obj({ id: restId });
 
+/** orders/delete carries only the id too. */
+export const restOrderDeleteSchema = obj({ id: restId });
+
 export type RestOrder = z.output<typeof restOrderSchema>;
 export type RestVariant = z.output<typeof restVariantSchema>;
 export type RestProduct = z.output<typeof restProductSchema>;
@@ -311,8 +314,12 @@ const visit = obj({
   utmParameters: obj({ source: str, medium: str, campaign: str }).nullish(),
 });
 
-/** Order.customerJourneySummary, when it is an object (see graphqlOrderSchema). */
-export const journeySummarySchema = obj({ ready: z.boolean().nullish(), lastVisit: visit.nullish() });
+/**
+ * Order.customerJourneySummary, when it is an object (see graphqlOrderSchema). `customerOrderIndex`
+ * is the order's position in its customer's order history (1 = their first purchase; test orders
+ * aren't counted), which is how Shopify tells a new customer's order from a returning one's.
+ */
+export const journeySummarySchema = obj({ ready: z.boolean().nullish(), customerOrderIndex: count.nullish(), lastVisit: visit.nullish() });
 
 export const graphqlLineItemSchema = obj({
   id: gid,
@@ -347,6 +354,16 @@ export const graphqlAgreementSchema = obj({
 
 /** An order's agreements read on their own (ORDER_SALES_QUERY), checked all together. */
 export const graphqlAgreementListSchema = z.array(graphqlAgreementSchema);
+
+/**
+ * What ORDER_SALES_QUERY reads about the order's customer besides its sales: Shopify's position of
+ * the order in the customer's history, and the customer's lifetime order count (asked for only with
+ * read_customers). Checked on their own: a value that doesn't fit is dropped, never the sales.
+ */
+export const orderCustomerHistorySchema = obj({
+  customerJourneySummary: obj({ customerOrderIndex: count.nullish() }).nullish(),
+  customer: obj({ numberOfOrders: count.nullish() }).nullish(),
+});
 
 /** One node of ordersQuery() / bulkOrdersQuery(), completed by the per-order detail queries. */
 export const graphqlOrderSchema = obj({

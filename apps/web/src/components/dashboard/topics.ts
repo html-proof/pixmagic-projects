@@ -38,7 +38,7 @@ export function availableTopics(ov: Overview, contactsOn: boolean): Topic[] {
     adsense: false,
     sales: !!m.sales_overview,
     products: !!(m.top_products || m.catalog),
-    shoppers: !!m.funnel,
+    shoppers: !!(m.funnel || m.shopify_sessions),
     timing: !!m.order_timing,
     channels: !!m.channels,
     shipping: !!m.fulfillment,
@@ -135,8 +135,12 @@ export function topicSummary(t: Topic, ov: Overview, currency: string): string {
       if (top) return `${top.title} leads with ${money(top.revenue)}`;
       return m.catalog ? `${plural(m.catalog.products.total, "product")} in your catalog` : "No product sales yet";
     }
-    case "shoppers":
+    case "shoppers": {
+      // Shopify's own sessions when it shares them; the pixel's tracked visits otherwise.
+      const s = m.shopify_sessions?.current;
+      if (s && s.sessions !== null) return `${plural(s.sessions, "session")} · ${fmtPct(s.conversionRate)} converted`;
       return m.funnel && m.funnel.visits > 0 ? `${plural(m.funnel.visits, "tracked visit")} · ${fmtPct(m.funnel.conversionRate)} bought` : "No visits recorded yet";
+    }
     case "timing": {
       const o = m.order_timing;
       return o?.busiestDay && o.busiestHour !== null ? `${o.busiestDay}s, around ${hourRange(o.busiestHour)}` : "Not enough orders to spot a pattern";
@@ -160,7 +164,7 @@ export function topicSummary(t: Topic, ov: Overview, currency: string): string {
     }
     case "customers": {
       const r = m.customers?.current.returningCustomerRate;
-      return r !== undefined && r !== null ? `${fmtPct(r)} of orders from returning customers` : "Who's buying, and who to follow up";
+      return r !== undefined && r !== null ? `${fmtPct(r)} of customers had bought before` : "Who's buying, and who to follow up";
     }
     case "orders": {
       const o = m.recent_orders?.items[0];

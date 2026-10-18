@@ -5,8 +5,10 @@ import { fileURLToPath } from "node:url";
 import { Hono } from "hono";
 import { handle } from "hono/aws-lambda";
 import { buildApp, CLIENT_IP_HEADER, type App } from "@app/api";
-import { consume, runScheduled, seedAfterMove, seedSalesRereads, type WorkerDeps } from "@app/worker";
+import { consume, runScheduled, seedAfterMove, seedSalesRereads, settleAllCustomers, startChecks, type WorkerDeps } from "@app/worker";
 import { logger, memoryBlobs, memoryCoord, withLogContext, withTimeout, type Coord, type Queues } from "@app/core";
+import { shopifyCheckReport } from "@app/core/reports";
+import { systemDb } from "@app/db";
 import { apiDeps, apiPath } from "./app.js";
 import { roleCredentials } from "./awsClient.js";
 import { consumeSqs, isSqsEvent } from "./consumer.js";
@@ -26,7 +28,8 @@ import { staticSite } from "./staticSite.js";
  *           API on one origin, so the session cookie stays first-party.
  *   - jobs: SQS event source mappings (sync, webhooks, aggregate, email) → the worker's consume().
  *   - cron: EventBridge Scheduler ({ "cron": "..." }) → runScheduled(), plus maintenance actions
- *           invoked directly ({ "action": "migrate" | "counts" | "after-move" | "reread" }).
+ *           invoked directly ({ "action": "migrate" | "counts" | "after-move" | "reread" }, or
+ *           { "action": "shopify-check", "shop": "<shop>.myshopify.com" }).
  * Platform pieces: RDS PostgreSQL (process-wide pools; Lambda has no per-request scope), DynamoDB
  * for the coordinator, S3 for large webhook bodies, SES for app email, Secrets Manager + SSM for
  * configuration (secrets.ts). local.ts runs the same app on one machine, without any of them.
@@ -174,7 +177,13 @@ const http = handle(root);
 
 /** Direct invocations (not through the URL): maintenance actions for the deploy scripts. */
 interface Action {
-  action: "migrate" | "counts" | "after-move" | "reread";
+  action: "migrate" | "counts" | "after-move" | "reread" | "verify" | "shopify-check";
+  /** verify: one store (its myshopify domain) instead of every connected one; shopify-check: the store. */
+  shop?: string;
+  /** verify: how many finished days back (7 by default). */
+  days?: number;
+  /** verify: record what differs, repair nothing. */
+  dryRun?: boolean;
 }
 interface CronEvent {
   cron: string;
@@ -213,9 +222,30 @@ export const handler = async (event: unknown, context: unknown) => {
     return result;
   }
   if (action === "reread") {
-    // After each deploy's migrations: stores whose orders lack their sales records (seedSalesRereads).
-    const queued = await seedSalesRereads(await jobs());
-    return { queued };
+    // After each deploy's migrations: stores whose orders lack their sales records or their
+    // customer's history (seedSalesRereads), and new vs returning customers settled again.
+    const deps = await jobs();
+    const settledDays = await settleAllCustomers(deps);
+    const queued = await seedSalesRereads(deps);
+    return { queued, settledDays };
+  }
+  if (action === "verify") {
+    // Check stores' figures against Shopify now (docs/RUNBOOK.md); the daily check runs by itself.
+    const e = event as Partial<Action>;
+    return startChecks(await jobs(), {
+      shop: typeof e.shop === "string" ? e.shop : undefined,
+      days: typeof e.days === "number" && e.days >= 1 && e.days <= 366 ? Math.floor(e.days) : undefined,
+      dryRun: e.dryRun === true,
+    });
+  }
+  if (action === "shopify-check") {
+    // The reconciliation report for one store (core reports/shopifyCheck.ts): every figure of the
+    // standard periods, ours next to Shopify's own reports, read live. Read-only; docs/RUNBOOK.md.
+    const shop = (event as Partial<Action>).shop;
+    const deps = await jobs();
+    const store = shop ? await systemDb.store.findUnique({ where: { shopDomain: shop } }) : null;
+    if (!store) return { error: "unknown_shop" };
+    return shopifyCheckReport(systemDb, store, deps);
   }
   if (action === "migrate" || action === "counts") {
     await ensureSecrets();

@@ -4,6 +4,7 @@ import {
   flagStaleSessions,
   logger,
   MAX_ATTEMPTS,
+  pruneShopifyReports,
   pruneTeamRecords,
   raiseAlert,
   type AdsSyncData,
@@ -13,8 +14,11 @@ import {
   sweepWhatsapp,
   sweepEmail,
   type EmailJob,
+  type ShopifyReportsJob,
   type SyncJobData,
+  type VerifyJob,
   type WebhookJobData,
+  pruneReconciliations,
   type WhatsappJob,
 } from "@app/core";
 import {
@@ -34,8 +38,13 @@ import {
   UnrecoverableError,
   type WorkerDeps,
 } from "./handlers.js";
+import { runShopifyReports } from "./shopifyReports.js";
+
+import { failVerify, runVerify } from "./verify.js";
 
 export * from "./handlers.js";
+export { runVerify, startChecks } from "./verify.js";
+export { runShopifyReports } from "./shopifyReports.js";
 
 /** A queue message as the consumer sees it: SQS's (apps/aws/src/consumer.ts), the local queues', or a test's. */
 export interface QueueMessage<T = unknown> {
@@ -91,6 +100,10 @@ export async function consume(queue: QueueName, msg: QueueMessage, deps: Consume
     if (queue === "sync" && kind === "ads") await runAdsSync(job as AdsSyncData, deps);
     // WhatsApp messages ride the sync queue too; the message rows carry their own state.
     else if (queue === "sync" && (kind === "whatsapp" || kind === "whatsapp_dispatch")) await runWhatsappJob(job as WhatsappJob, deps);
+    // The check against Shopify rides the sync queue too; its run's row is its record.
+    else if (queue === "sync" && kind === "verify") await runVerify(job as VerifyJob, deps);
+    // Shopify's report figures for the dashboard ride the sync queue too; the kept rows carry their state.
+    else if (queue === "sync" && kind === "shopify_reports") await runShopifyReports(job as ShopifyReportsJob, deps);
     else if (queue === "sync") await runSync(job as SyncJobData, deps);
     else if (queue === "webhooks") await processWebhook(job as WebhookJobData, deps);
     else if (queue === "email") await runEmailJob(job as EmailJob, deps);
@@ -162,6 +175,14 @@ async function onFailure(queue: QueueName, body: unknown, err: Error, final: boo
     // The message row is the record (scheduled / failed with its reason), and the sweeper picks up
     // anything still due. A dispatch chain that gave up lets the next tick start a new one.
     if (final && kind === "whatsapp_dispatch") await deps.coord.release(`wa-dispatch:${(body as { storeId: string }).storeId}`).catch(() => {});
+    return;
+  }
+  if (queue === "sync" && kind === "verify") {
+    if (final) await failVerify(body as VerifyJob, err);
+    return;
+  }
+  if (queue === "sync" && kind === "shopify_reports") {
+    // Nothing to mark: the dashboard asks again for whatever is still missing or stale.
     return;
   }
   if (queue === "sync" && (body as { kind?: string })?.kind === "ads") {
@@ -318,7 +339,15 @@ export async function runScheduled(cron: string, deps: WorkerDeps) {
       logger.error({ err }, "team retention sweep failed; the next tick tries again");
       return null;
     });
-    return { refreshed, staleJobsFailed, reconciled, salesRereads, adsSynced, whatsapp, staffOpenShifts, email, pixelDedupePruned, teamPruned };
+    const checksPruned = await pruneReconciliations().catch((err: unknown) => {
+      logger.error({ err }, "pruning old checks against Shopify failed; the next tick tries again");
+      return null;
+    });
+    const shopifyReportsPruned = await pruneShopifyReports().catch((err: unknown) => {
+      logger.error({ err }, "shopify reports prune failed; the next tick tries again");
+      return null;
+    });
+    return { refreshed, staleJobsFailed, reconciled, salesRereads, adsSynced, whatsapp, staffOpenShifts, email, pixelDedupePruned, teamPruned, checksPruned, shopifyReportsPruned };
   }
   logger.warn({ cron }, "unknown cron trigger");
   return {};

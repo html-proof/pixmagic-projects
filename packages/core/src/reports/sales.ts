@@ -1,4 +1,4 @@
-import { toNumber, type Tx } from "@app/db";
+import { Prisma, toNumber, type Tx } from "@app/db";
 import { addDays, eachDay, type Comparison, type DailyMetricsRow, type DateRange } from "@app/shared";
 import { dayTotals } from "../persist.js";
 import { localMoment, r2, SALE_VALUE, type Scope } from "./common.js";
@@ -56,6 +56,29 @@ export async function comparisonRows(tx: Tx, workspaceId: string, storeId: strin
       refundedOrders: Number(x.refunded_orders),
     })),
   ];
+}
+
+/**
+ * Customers who ordered in a range, as Shopify's reports count them: each customer once, however
+ * many orders they placed. `returning` are those with an order from a customer whose history
+ * already held one (`orders.is_returning_customer`, settled from Shopify's own position of the
+ * order), `firstTime` those with their very first purchase in the range; a customer who bought
+ * for the first time and again in the same range is in both. The rate is returning ÷ customers
+ * (Shopify's "returning customer rate"), null without customers. With `until` (a comparison that
+ * stops at a time of day) the last day counts only the orders placed before that moment.
+ */
+export async function customerCounts(tx: Tx, { ws, storeId }: Scope, r: DateRange & { until?: string | null }, timeZone: string) {
+  const cut = r.until ? Prisma.sql`AND (local_day < ${r.to} OR shopify_created_at < ${localMoment(r.to, r.until, timeZone)})` : Prisma.empty;
+  const [row] = await tx.$queryRaw<Array<{ customers: number; returning: number; first_time: number }>>`
+    SELECT COUNT(DISTINCT customer_key)::int AS customers,
+           (COUNT(DISTINCT customer_key) FILTER (WHERE is_returning_customer))::int AS returning,
+           (COUNT(DISTINCT customer_key) FILTER (WHERE NOT is_returning_customer))::int AS first_time
+    FROM orders
+    WHERE workspace_id = ${ws} AND store_id = ${storeId} AND customer_key IS NOT NULL
+      AND local_day BETWEEN ${r.from} AND ${r.to} ${cut}`;
+  const customers = row?.customers ?? 0;
+  const returning = row?.returning ?? 0;
+  return { customers, returningCustomers: returning, newCustomers: row?.first_time ?? 0, returningCustomerRate: customers > 0 ? returning / customers : null };
 }
 
 /**

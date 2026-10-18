@@ -544,7 +544,10 @@ describe("initial sync", () => {
     expect(queues.sent.sync).toEqual([{ storeId: store.id, kind: "orders", syncJobId: ordersJob.id, pagedOnly: true, cursor: "c1", progress: 2 }]);
     expect((await systemDb.syncJob.findUniqueOrThrow({ where: { id: ordersJob.id } })).status).toBe("running");
     await runSync(queues.sent.sync.pop()!, deps);
-    expect(queues.sent.sync).toHaveLength(0);
+    // Nothing more of the import; its check against Shopify is queued (a few minutes later).
+    expect(queues.sent.sync.map((j) => (j as { kind: string }).kind)).toEqual(["verify"]);
+    expect((await systemDb.reconciliation.findFirstOrThrow({ where: { storeId: store.id } })).trigger).toBe("import");
+    queues.sent.sync.length = 0;
     await drainAggregates();
     expect(await systemDb.order.count()).toBe(3);
     const s2 = await systemDb.store.findUniqueOrThrow({ where: { id: store.id } });
@@ -1585,10 +1588,13 @@ describe("daily reconcile", () => {
 
     expect(await scheduleReconcile(deps)).toBe(2);
     const sent = queues.sent.sync.map((j) => `${j.storeId === withProducts.id ? "a" : "b"}:${j.kind}:${j.sinceDays ?? "-"}`).sort();
-    expect(sent).toEqual(["a:orders:3", "a:products:-", "a:variants:-", "b:orders:3"]);
+    // And each store's last 7 days are checked against Shopify once the re-pull has had time to land.
+    expect(sent).toEqual(["a:orders:3", "a:products:-", "a:variants:-", "a:verify:-", "b:orders:3", "b:verify:-"]);
     expect(RECONCILE_ORDER_DAYS).toBe(3);
+    expect(await systemDb.reconciliation.count({ where: { trigger: "scheduled", status: "running" } })).toBe(2);
     // Every message has its own job row (visible as sync progress).
-    const jobs = await systemDb.syncJob.findMany({ where: { id: { in: queues.sent.sync.map((j) => j.syncJobId) } } });
+    const syncSent = queues.sent.sync.filter((j) => (j as { kind: string }).kind !== "verify");
+    const jobs = await systemDb.syncJob.findMany({ where: { id: { in: syncSent.map((j) => j.syncJobId) } } });
     expect(jobs).toHaveLength(4);
     expect(jobs.every((j) => j.status === "queued")).toBe(true);
   });
@@ -1602,17 +1608,19 @@ describe("daily reconcile", () => {
     await activeStore();
     // 03:15 came and went with the database unreachable. The first tick that reaches it catches up.
     expect(await runScheduled(CRON.refreshTokens, deps)).toMatchObject({ refreshed: 0, staleJobsFailed: 0, reconciled: 1, adsSynced: 0 });
-    expect(queues.sent.sync.map((j) => j.kind)).toEqual(["orders"]);
+    // The re-pull, and the check against Shopify that follows it.
+    const repulls = () => queues.sent.sync.filter((j) => (j as { kind: string }).kind !== "verify");
+    expect(queues.sent.sync.map((j) => j.kind)).toEqual(["orders", "verify"]);
 
     // Every later tick finds it done - including the next 03:15, when both triggers fire at once.
     await runScheduled(CRON.refreshTokens, deps);
     await Promise.all([runScheduled(CRON.reconcile, deps), runScheduled(CRON.refreshTokens, deps)]);
-    expect(queues.sent.sync).toHaveLength(1);
+    expect(repulls()).toHaveLength(1);
 
     // A day on, the lease has lapsed: reconciled again, once, by whichever trigger gets there first.
     coord.clear();
     await Promise.all([runScheduled(CRON.reconcile, deps), runScheduled(CRON.refreshTokens, deps)]);
-    expect(queues.sent.sync).toHaveLength(2);
+    expect(repulls()).toHaveLength(2);
   });
 
   it("gives a store whose enqueue failed back to the next tick, without repeating the ones already enqueued", async () => {
@@ -1631,11 +1639,12 @@ describe("daily reconcile", () => {
       },
     };
     await expect(scheduleReconcile({ ...deps, queues: flaky })).rejects.toThrow("queue unavailable");
-    expect(queues.sent.sync.map((j) => j.storeId)).toEqual([reached]);
+    const storesSent = () => [...new Set(queues.sent.sync.map((j) => j.storeId))].sort();
+    expect(storesSent()).toEqual([reached]);
 
     // The next tick does exactly the store that was missed, and the one after has nothing left.
     expect(await scheduleReconcile(deps)).toBe(1);
-    expect(queues.sent.sync.map((j) => j.storeId).sort()).toEqual([a.id, b.id].sort());
+    expect(storesSent()).toEqual([a.id, b.id].sort());
     expect(await scheduleReconcile(deps)).toBe(0);
   });
 
@@ -1663,7 +1672,7 @@ describe("daily reconcile", () => {
     const store = await activeStore();
     await systemDb.store.update({ where: { id: store.id }, data: { lastSyncedAt: new Date(Date.now() - 5.5 * 86400_000) } });
     await scheduleReconcile(deps);
-    expect(queues.sent.sync).toEqual([{ storeId: store.id, kind: "orders", syncJobId: expect.any(String), sinceDays: 7 }]);
+    expect(queues.sent.sync.filter((j) => (j as { kind: string }).kind !== "verify")).toEqual([{ storeId: store.id, kind: "orders", syncJobId: expect.any(String), sinceDays: 7 }]);
   });
 
   it("recomputes days in the backfill window that have orders or sales but no daily totals", async () => {
@@ -2131,6 +2140,8 @@ describe("bulk order backfill", () => {
     for (let i = 0; msg && i < limit; i++) {
       await runSync(msg, deps);
       msg = queues.sent.sync.shift();
+      // A finished import queues its check against Shopify: not part of the chain.
+      while (msg && (msg as { kind: string }).kind === "verify") msg = queues.sent.sync.shift();
     }
   }
 
@@ -2179,6 +2190,8 @@ describe("bulk order backfill", () => {
       if (msg.bulk?.phase === "ingest") offsets.push(msg.bulk.byteOffset ?? 0);
       await runSync(msg, deps);
       msg = queues.sent.sync.shift();
+      // The finished import's check against Shopify is not part of the chain.
+      while (msg && (msg as { kind: string }).kind === "verify") msg = queues.sent.sync.shift();
     }
     // Every resume point is the first byte of an order line, never mid-order.
     for (const off of offsets.slice(1)) expect(body.slice(off)).toMatch(/^\{"id":"gid:\/\/shopify\/Order\//);

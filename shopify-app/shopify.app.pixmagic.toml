@@ -53,6 +53,8 @@ api_version = "2026-10"
     "orders/cancelled",
     "orders/fulfilled",
     "orders/partially_fulfilled",
+    # A deleted order leaves Shopify's reports, so it leaves the dashboard too.
+    "orders/delete",
     "refunds/create",
     "products/create",
     "products/update",

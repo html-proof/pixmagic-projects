@@ -81,7 +81,7 @@ export function businessHealth(ov: Overview, currency: string): Check[] {
     const now = cu.current.returningCustomerRate;
     const before = cu.previous.returningCustomerRate;
     const d = before !== null && before > 0 ? (now - before) / before : null;
-    out.push({ id: "returning", topic: "customers", area: "Returning customers", health: gradeTrend(d, running), text: `${fmtPct(now)} of orders came from returning customers${before !== null ? ` (${fmtPct(before)} before)` : ""}.` });
+    out.push({ id: "returning", topic: "customers", area: "Returning customers", health: gradeTrend(d, running), text: `${fmtPct(now)} of customers had bought before${before !== null ? ` (${fmtPct(before)} before)` : ""}.` });
   }
   const inv = m.inventory?.current;
   if (inv && inv.trackedVariants > 0) {
@@ -459,6 +459,15 @@ export function OverviewDetail({ ov, currency, onOpen }: { ov: Overview; currenc
                 <Row label="Orders" now={fmtNum(s.current.orders)} before={s.previous ? fmtNum(s.previous.orders) : null} change={<Change value={s.deltas.orders} />} />
                 <Row label="Average order" now={s.current.averageOrderValue !== null ? money(s.current.averageOrderValue) : "—"} before={s.previous && s.previous.averageOrderValue !== null ? money(s.previous.averageOrderValue) : null} change={<Change value={s.deltas.averageOrderValue} />} />
                 <Row label="Items sold" now={fmtNum(s.current.units)} />
+                {m.shopify_sessions?.current && (
+                  <Row label="Sessions (Shopify)" now={fmtNum(m.shopify_sessions.current.sessions ?? 0)} before={m.shopify_sessions.previous ? fmtNum(m.shopify_sessions.previous.sessions ?? 0) : null} change={<Change value={m.shopify_sessions.deltas.sessions} />} />
+                )}
+                {m.shopify_sessions?.current && (
+                  <Row label="Conversion rate (Shopify)" now={fmtPct(m.shopify_sessions.current.conversionRate)} before={m.shopify_sessions.previous ? fmtPct(m.shopify_sessions.previous.conversionRate) : null} change={<Change value={m.shopify_sessions.deltas.conversionRate} />} />
+                )}
+                {m.profit?.current && m.profit.current.grossProfit !== null && (
+                  <Row label="Gross profit (Shopify)" now={money(m.profit.current.grossProfit)} before={m.profit.previous?.grossProfit != null ? money(m.profit.previous.grossProfit) : null} change={<Change value={m.profit.deltas.grossProfit} />} />
+                )}
                 {f && <Row label="Tracked visits (pixel)" now={fmtNum(f.visits)} before={f.previous.visits !== null ? fmtNum(f.previous.visits) : null} change={<Change value={f.deltas.visits} />} />}
                 {f && <Row label="Tracked visits that bought" now={fmtPct(f.conversionRate)} before={f.previous.conversionRate !== null ? fmtPct(f.previous.conversionRate) : null} change={<Change value={f.deltas.conversionRate} />} />}
                 {m.ads && <Row label={`Ad spend (${m.ads.currency})`} now={fmtMoney(m.ads.current.spend, m.ads.currency)} before={m.ads.previous.spend !== null ? fmtMoney(m.ads.previous.spend, m.ads.currency) : null} change={<Change value={m.ads.deltas.spend} invert />} />}
