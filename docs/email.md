@@ -218,8 +218,10 @@ reserved. `data` holds up to 50 fields, three levels deep; templates and conditi
    read").
 3. **Credentials → OAuth client (Web application)**: authorized redirect URI exactly
    `https://<APP_URL host>/api/email/oauth/google/callback` (production:
-   `https://d2mr8m2p1qkh58.cloudfront.net/api/email/oauth/google/callback`). The existing "Insights web" client can
-   be reused (add the URI) or a separate one created.
+   `https://bizinsights.io/api/email/oauth/google/callback`). The existing "Insights web" client can
+   be reused (add the URI) or a separate one created. Reusing it adds `gmail.send` and a third consent
+   flow to that client's OAuth verification (`docs/ads-review-packs.md`), so wait until the Google Ads
+   review is done, or declare and record it there too.
 4. Set `EMAIL_GOOGLE_CLIENT_ID` in `apps/aws/src/settings.ts` and
    `node infra/cdk/scripts/put-secrets.mjs --set EMAIL_GOOGLE_CLIENT_SECRET`, then deploy (merge to `main`).
 5. Workspace admins of a Google Workspace domain that restricts third-party apps must allow the
@@ -237,7 +239,7 @@ refresh token keeps the stored one; a new account without one is refused with in
    types: "Accounts in any organizational directory and personal Microsoft accounts" for `common`
    (or organizations only, with `EMAIL_MICROSOFT_AUTHORITY=organizations`). Redirect URI (Web):
    `https://<APP_URL host>/api/email/oauth/microsoft/callback` (production:
-   `https://d2mr8m2p1qkh58.cloudfront.net/api/email/oauth/microsoft/callback`).
+   `https://bizinsights.io/api/email/oauth/microsoft/callback`).
 2. **API permissions → Microsoft Graph → Delegated**: `Mail.Send`, `User.Read`, `offline_access`,
    `openid`, `email`, `profile`. No application permissions (the code only ever acts as the signed-in
    user, `/me`).

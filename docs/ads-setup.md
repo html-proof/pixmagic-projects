@@ -82,9 +82,14 @@ functions read them when an instance starts.
 
 The redirect (callback) addresses, which both platforms must have registered **exactly**:
 
-- Meta: `https://d2mr8m2p1qkh58.cloudfront.net/api/ads/meta/callback`
-- Google Ads: `https://d2mr8m2p1qkh58.cloudfront.net/api/ads/google/callback`
-- Google AdSense: `https://d2mr8m2p1qkh58.cloudfront.net/api/ads/adsense/callback` (on the same Google OAuth client)
+- Meta: `https://bizinsights.io/api/ads/meta/callback`
+- Google Ads: `https://bizinsights.io/api/ads/google/callback`
+- Google AdSense: `https://bizinsights.io/api/ads/adsense/callback` (on the same Google OAuth client)
+
+The app builds them from `APP_URL` (`adsRedirectUri` in `packages/core/src/adConnections/config.ts`), which is
+`https://bizinsights.io` since 2026-10-16, so it never sends the old `d2mr8m2p1qkh58.cloudfront.net` or
+`insights.imeseban.workers.dev` callbacks. Remove those from Google before its branding verification (only verified
+domains may appear); `docs/ads-review-packs.md` says what to change on each platform.
 
 (Local development: since 2026-10-11 the production client "Insights web" no longer lists `localhost` redirect URIs, because
 Google's OAuth policies want separate clients/projects per deployment tier for verification. To test Google sign-in locally,
@@ -96,9 +101,11 @@ its id/secret in `apps/aws/.env`. Paste-ready review material for both platforms
 **bizinsights' Meta Ads app (set up 2026-10-11):** "Insights", App ID `971575545351940`, owned by the Facebook account
 sebanceo@gmail.com, Development mode, no business portfolio yet. Use case "Measure ad performance data with Marketing
 API" (ads_read ready for testing). Facebook Login for Business: redirect URI
-registered for the old deployment's address (strict mode, HTTPS; add the AWS Meta callback above); configuration "Insights ads reporting"
+registered for the old deployment's address (strict mode, HTTPS; add the bizinsights.io Meta callback above and press
+**Save Changes** at the bottom of the page); configuration "Insights ads reporting"
 `1521935306664882` (General, user access token, ads_read only) = `META_CONFIG_ID`. Basic settings: app domain, privacy policy
-`/privacy`, data deletion instructions `/data-deletion`, category Business and pages, Website platform. Still to do: the
+`/privacy`, data deletion instructions `/data-deletion`, category Business and pages, Website platform, all still on the
+old address: move them to `bizinsights.io` (`https://bizinsights.io/privacy`, `/terms`, `/data-deletion`). Still to do: the
 app secret (`META_APP_SECRET`, pasted by the owner), an app icon, then a business portfolio + verification and App Review
 for Advanced Access to ads_read before merchants outside the app's roles can connect. WhatsApp stays on "pixmagic"
 (`1799660384680551`, `WHATSAPP_APP_ID`).
@@ -118,7 +125,7 @@ for Advanced Access to ads_read before merchants outside the app's roles can con
 4. In **App settings → Basic**:
    - copy the **App ID** into `META_APP_ID`;
    - copy the **App secret** into `META_APP_SECRET`.
-   - Fill in the privacy policy URL (`https://d2mr8m2p1qkh58.cloudfront.net/privacy`) and an app icon. Both are needed before the app can go live.
+   - Fill in the privacy policy URL (`https://bizinsights.io/privacy`), the terms URL (`https://bizinsights.io/terms`), the data deletion instructions URL (`https://bizinsights.io/data-deletion`), the app domain `bizinsights.io` and an app icon. They are needed before the app can go live.
 5. **Who can connect.** While the app is in **Development** mode, only people with a role on the app (and their ad accounts) can connect. Add yourself and your test users under **App roles**.
 
    To let any merchant connect their own ad accounts, the app needs **Advanced Access to `ads_read`** through **App Review**, and Meta **Business Verification**. Meta asks for:
@@ -172,8 +179,9 @@ access for real accounts** (Explorer or above). Developer tokens are gone (2026-
 1. At <https://console.cloud.google.com/>, create or pick a project and enable the **Google Ads API** (APIs & Services → Library).
 2. **OAuth consent screen**:
    - User type: **External**. App name: bizinsights.
-   - Support email; app domain and privacy policy `https://d2mr8m2p1qkh58.cloudfront.net/privacy`.
-   - Authorized domain: `d2mr8m2p1qkh58.cloudfront.net`.
+   - Support email; homepage `https://bizinsights.io/`, privacy policy `https://bizinsights.io/privacy`, terms `https://bizinsights.io/terms`.
+   - Authorized domain: `bizinsights.io`, verified as a Search Console **Domain** property (a DNS TXT record at Cloudflare).
+     A cloudfront.net address can't be verified: it is on the Public Suffix List.
    - Add the scope `https://www.googleapis.com/auth/adwords`.
 3. **Credentials → Create credentials → OAuth client ID**, application type **Web application**:
    - add the Google callback address above under **Authorized redirect URIs**;
@@ -182,7 +190,8 @@ access for real accounts** (Explorer or above). Developer tokens are gone (2026-
 4. While the consent screen is in **Testing**, only the test users you list can connect, and their access expires after 7 days. To open it to everyone, **Publish** the app. Because the Ads scope is a sensitive scope, Google runs a verification. It needs:
    - the privacy policy;
    - a short video of the flow;
-   - a domain you have verified.
+   - a domain you have verified: for bizinsights.io the Search Console Domain property is still to do (no TXT record on
+     2026-10-19). The full checklist is in `docs/ads-review-packs.md`.
 
 ### API access level (Google Cloud)
 
