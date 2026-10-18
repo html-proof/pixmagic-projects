@@ -5,7 +5,7 @@ its reasoning; it has been built and runs since 2026-10-15. What actually runs, 
 in [aws-deployment.md](aws-deployment.md), which wins where the two differ (for example, the domain
 bizinsights.io has its DNS at Cloudflare, not Route 53; pages come from the `api` function and only the
 build files from S3; there is no RDS Proxy or CodeDeploy canary yet). Sign-in:
-[cognito-setup.md](cognito-setup.md); the isolated Phase 1 staging environment: [aws-staging.md](aws-staging.md).
+[cognito-setup.md](cognito-setup.md). (The Phase 1 CloudShell staging template, `infra/aws/staging.yaml`, was never deployed and was removed on 2026-10-18; a staging environment would be `cdk deploy -c env=staging`.)
 
 Principles:
 
@@ -36,7 +36,7 @@ Principles:
 | Invitations, alerts, staff emails | **Amazon SES** (domain identity with DKIM/SPF/DMARC) | Also Cognito's sender (raises the 50/day limit) and enables passwordless codes. |
 | Merchants' own SMTP accounts (email integrations) | Node `net`/`tls` from Lambda through the NAT gateway | Plain outbound TCP; ports 465/587/2525. |
 | Logs, traces | **CloudWatch Logs**, metric filters, alarms, **X-Ray** (sampled) | One place for logs, metrics and alarms. |
-| Sign-in | **Cognito** (Phase 1) | Replaced Firebase Authentication; Firebase is asked only during the migration window. |
+| Sign-in | **Cognito** (Phase 1) | Replaced Firebase Authentication; since 2026-10-18 the app never calls Firebase ([cognito-setup.md](cognito-setup.md), section 4). |
 | Session, encryption, OAuth client secrets | **Secrets Manager** (+ **KMS** key) | Read at cold start; rotation for database passwords. |
 | Safe deploys, instant rollback | **Lambda versions + aliases** with **CodeDeploy** canary | 10% for 5 minutes, automatic rollback on alarms. |
 | Backups | RDS automated backups (14 days) + **AWS Backup** monthly copy | Point-in-time restore to any second. |

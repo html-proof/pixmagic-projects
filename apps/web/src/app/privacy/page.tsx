@@ -29,7 +29,7 @@ export const metadata: Metadata = {
  *     packages/core/src/adConnections.ts); /data-deletion is the Meta app's deletion instructions URL.
  * Revise UPDATED with any material change; owners are emailed first (see "Changes to this policy").
  */
-const UPDATED = "2026-10-16";
+const UPDATED = "2026-10-18";
 
 const TOC = [
   { id: "who-we-are", title: "Who we are" },
@@ -80,12 +80,8 @@ const PROVIDERS = [
   },
   {
     name: "Cloudflare",
-    purpose: "Our previous hosting provider. It keeps serving our old address, and the data of stores connected there, until everything has moved to Amazon Web Services.",
-  },
-  {
-    name: "Google Firebase",
     purpose:
-      "Our previous sign-in service. If your account was created before we moved to Amazon Cognito, your first sign-in afterwards is checked against it once, so you can keep your password.",
+      "Runs our domain's DNS and the network in front of bizinsights.io (encryption in transit, caching of static files, protection against attacks), so every request to the app passes through it. It was also our previous hosting provider and keeps serving our old address, and the data of stores connected there, until that is retired.",
   },
   { name: "Shopify", purpose: "The source of your store data." },
   { name: "Meta (WhatsApp Business Platform)", purpose: "Delivers WhatsApp messages, only for stores that connect WhatsApp." },

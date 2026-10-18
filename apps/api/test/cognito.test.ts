@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import { exportJWK, generateKeyPair, SignJWT, type JWTPayload } from "jose";
 import type { FetchLike } from "@app/core";
 import { cognitoAuth, CognitoError, CognitoUnavailableError, type CognitoConfig } from "../src/cognito.js";
-import { firebasePasswordCheck, LegacyUnavailableError } from "../src/legacyFirebase.js";
 import { newSession, readSession, signSession } from "../src/session.js";
 
 /**
@@ -222,29 +221,6 @@ describe("ID token verification", () => {
   it("calls unreachable signing keys an outage, not a bad token", async () => {
     const down = cognitoAuth(CFG, network(() => json({}, 503)).fetchImpl);
     await expect(down.verifyIdToken(await sign(good))).rejects.toBeInstanceOf(CognitoUnavailableError);
-  });
-});
-
-describe("the Firebase password check (migration only)", () => {
-  const idToken = (claims: object) => `x.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.y`;
-
-  it("returns the Firebase account for the right password, and null for any refusal", async () => {
-    const net = network((s) => {
-      const { password } = JSON.parse(s.body) as { password: string };
-      if (password === "right") return json({ localId: "fb-1", idToken: idToken({ email_verified: true }), displayName: "Old" });
-      return json({ error: { message: "INVALID_LOGIN_CREDENTIALS" } }, 400);
-    });
-    const check = firebasePasswordCheck("public-web-key", net.fetchImpl);
-    expect(await check.verifyPassword("a@x.com", "right")).toEqual({ uid: "fb-1", emailVerified: true, displayName: "Old" });
-    expect(await check.verifyPassword("a@x.com", "wrong")).toBeNull();
-    expect(net.seen[0]!.url).toBe("https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=public-web-key");
-  });
-
-  it("calls Firebase's own throttling and outages 'unavailable', never a wrong password", async () => {
-    for (const answer of [() => json({ error: { message: "TOO_MANY_ATTEMPTS_TRY_LATER" } }, 400), () => json({}, 503), () => Promise.reject(new TypeError("fetch failed"))]) {
-      const check = firebasePasswordCheck("k", network(answer as () => Response).fetchImpl);
-      await expect(check.verifyPassword("a@x.com", "pw")).rejects.toBeInstanceOf(LegacyUnavailableError);
-    }
   });
 });
 

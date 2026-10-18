@@ -89,7 +89,7 @@ jobs:
           echo "$arn"
           [[ -n "$ROLE" && "$arn" == *":assumed-role/${ROLE##*/}/"* ]]
       - name: Build the Lambda package (API + UI)
-        run: pnpm --filter @app/aws build -- --no-staging-bundle
+        run: pnpm --filter @app/aws build
       - name: Record the release being replaced
         id: before
         run: |

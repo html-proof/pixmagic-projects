@@ -7,9 +7,7 @@
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit",
     "test": "vitest run",
-    "test:integration": "vitest run",
-    "ops:cognito-plan": "vitest run --config ops/vitest.config.ts cognito-plan",
-    "ops:cognito-verify": "vitest run --config ops/vitest.config.ts cognito-verify"
+    "test:integration": "vitest run"
   },
   "dependencies": {
     "@app/core": "workspace:*",

@@ -221,7 +221,7 @@ jobs:
           overwrite: true
       # What Deploy to AWS ships: the UI (Next.js export) and the bundled function.
       - name: Build the Lambda package (UI + function)
-        run: pnpm --filter @app/aws build -- --no-staging-bundle
+        run: pnpm --filter @app/aws build
       # For the push to main that merges this pull request (tested job). Failing to record only
       # means that push runs this job again.
       - name: Record the tree that passed

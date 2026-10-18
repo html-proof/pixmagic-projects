@@ -3,25 +3,9 @@ import { disconnectDb, systemDb } from "@app/db";
 import { resetDb } from "@app/db/testing";
 import { buildApp, type App } from "../src/app.js";
 import type { Deps } from "../src/context.js";
-import { LegacyUnavailableError, type LegacyPasswordCheck } from "../src/legacyFirebase.js";
 import { fakeCognito } from "./fakeCognito.js";
 
 export { fakeCognito };
-
-/** Firebase accounts during the migration window: email -> password and account. */
-export function fakeLegacy(): LegacyPasswordCheck & { accounts: Map<string, { uid: string; password: string; emailVerified: boolean; displayName: string | null }>; down: boolean } {
-  const accounts = new Map<string, { uid: string; password: string; emailVerified: boolean; displayName: string | null }>();
-  const self = {
-    accounts,
-    down: false,
-    async verifyPassword(email: string, password: string) {
-      if (self.down) throw new LegacyUnavailableError("Firebase is down (test)");
-      const a = accounts.get(email);
-      return a && a.password === password ? { uid: a.uid, emailVerified: a.emailVerified, displayName: a.displayName } : null;
-    },
-  };
-  return self;
-}
 
 export interface InjectOptions {
   method: string;
@@ -61,7 +45,6 @@ export interface TestCtx {
   deps: Deps & { coord: ReturnType<typeof memoryCoord>; queues: ReturnType<typeof memoryQueues> };
   mailer: ReturnType<typeof memoryMailer>;
   auth: ReturnType<typeof fakeCognito>;
-  legacy: ReturnType<typeof fakeLegacy>;
   setFetch(f: FetchLike): void;
   /** Change env for one test; both env and the Shopify app registry are cached, so reset them. */
   setEnv(vars: Record<string, string>): void;
@@ -70,13 +53,11 @@ export interface TestCtx {
 export async function setup(): Promise<TestCtx> {
   const mailer = memoryMailer();
   const auth = fakeCognito();
-  const legacy = fakeLegacy();
   let fetchImpl: FetchLike = async () => {
     throw new Error("unexpected network call in test");
   };
   const deps = {
     auth,
-    legacy,
     coord: memoryCoord(),
     queues: memoryQueues(),
     payloads: memoryBlobs(),
@@ -89,7 +70,7 @@ export async function setup(): Promise<TestCtx> {
     resetEnvCache();
     resetShopifyAppsCache();
   };
-  return { app: { inject: (o) => inject(hono, o) }, deps, mailer, auth, legacy, setFetch: (f) => (fetchImpl = f), setEnv };
+  return { app: { inject: (o) => inject(hono, o) }, deps, mailer, auth, setFetch: (f) => (fetchImpl = f), setEnv };
 }
 
 export async function teardown(_ctx: TestCtx) {
@@ -101,8 +82,6 @@ export async function clean(ctx: TestCtx) {
   ctx.deps.coord.clear();
   ctx.deps.queues.clear();
   ctx.auth.reset();
-  ctx.legacy.accounts.clear();
-  ctx.legacy.down = false;
 }
 
 export const ORIGIN = { origin: "http://localhost:3001" };
