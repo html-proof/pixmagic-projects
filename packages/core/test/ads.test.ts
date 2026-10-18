@@ -118,7 +118,11 @@ describe("Google", () => {
       if (u.pathname === "/v25/customers/111/googleAds:searchStream" && query.endsWith("FROM customer")) {
         return json([{ results: [{ customer: { id: "111", descriptiveName: "Shop ads", currencyCode: "AUD", timeZone: "Australia/Sydney", manager: false } }] }]);
       }
-      if (u.pathname === "/v25/customers/111/googleAds:searchStream") return json([{ results: [{ campaign: { id: "5", name: "Brand" }, segments: { date: "2026-10-01" }, metrics: { costMicros: "2500000", impressions: "50", clicks: "3", conversions: 1, conversionsValue: 40 } }] }]);
+      // Purchases only: conversion actions of the PURCHASE category (a lead was the other conversion).
+      if (u.pathname === "/v25/customers/111/googleAds:searchStream" && query.includes("segments.conversion_action_category = 'PURCHASE'")) {
+        return json([{ results: [{ campaign: { id: "5" }, segments: { date: "2026-10-01", conversionActionCategory: "PURCHASE" }, metrics: { conversions: 1, conversionsValue: 40 } }] }]);
+      }
+      if (u.pathname === "/v25/customers/111/googleAds:searchStream") return json([{ results: [{ campaign: { id: "5", name: "Brand" }, segments: { date: "2026-10-01" }, metrics: { costMicros: "2500000", impressions: "50", clicks: "3", conversions: 2, conversionsValue: 55 } }] }]);
       if (u.pathname === "/v25/customers/222/googleAds:searchStream" && query.endsWith("FROM customer")) return json([{ results: [{ customer: { id: "222", descriptiveName: "Agency", manager: true } }] }]);
       if (u.pathname === "/v25/customers/222/googleAds:searchStream") {
         expect(headers.get("login-customer-id")).toBe("222");
@@ -128,11 +132,11 @@ describe("Google", () => {
       return json([{ error: { message: "The customer account can't be accessed because it is not yet enabled or has been deactivated.", status: "PERMISSION_DENIED" } }], 403);
     });
     expect(await googleAdAccounts(google(f.fetchImpl), "AT")).toEqual([
-      { accountId: "111", name: "Shop ads", currency: "AUD", timezone: "Australia/Sydney", loginCustomerId: null },
-      { accountId: "444", name: "Client", currency: "USD", timezone: "America/New_York", loginCustomerId: "222" },
+      { accountId: "111", name: "Shop ads", currency: "AUD", timezone: "Australia/Sydney", loginCustomerId: null, status: null },
+      { accountId: "444", name: "Client", currency: "USD", timezone: "America/New_York", loginCustomerId: "222", status: null },
     ]);
     const rows = await googleCampaignDays(google(f.fetchImpl), "AT", { accountId: "111" }, "2026-10-01", "2026-10-01");
-    expect(rows).toEqual([{ provider: "google", accountId: "111", campaignId: "5", campaignName: "Brand", day: "2026-10-01", spend: 2.5, impressions: 50, clicks: 3, linkClicks: 3, conversions: 1, conversionValue: 40, purchases: null, purchaseValue: null, leads: 0 }]);
+    expect(rows).toEqual([{ provider: "google", accountId: "111", campaignId: "5", campaignName: "Brand", day: "2026-10-01", spend: 2.5, impressions: 50, clicks: 3, linkClicks: 3, conversions: 2, conversionValue: 55, purchases: 1, purchaseValue: 40, leads: 0 }]);
     await expect(googleCampaignDays(google(f.fetchImpl), "AT", { accountId: "111" }, "2026-10-01' OR 1=1 --", "2026-10-01")).rejects.toThrow("Invalid date range");
   });
 });
@@ -170,8 +174,8 @@ describe("AdSense", () => {
       return json({ accounts: [{ name: "accounts/pub-3", state: "NEEDS_ATTENTION" }] });
     });
     expect(await adsenseAccounts(adsense(f.fetchImpl), "AT")).toEqual([
-      { accountId: "pub-1", name: "My site", currency: null, timezone: "Australia/Sydney" },
-      { accountId: "pub-3", name: null, currency: null, timezone: null },
+      { accountId: "pub-1", name: "My site", currency: null, timezone: "Australia/Sydney", status: "active", statusDetail: null },
+      { accountId: "pub-3", name: null, currency: null, timezone: null, status: "needs_attention", statusDetail: null },
     ]);
     expect(f.calls[1]!.url.searchParams.get("pageToken")).toBe("p2");
   });
