@@ -101,7 +101,7 @@ token and clears both expiry columns.
 | Products | `products` (100 per page) | title, status, vendor, type |
 | Variants | `productVariants` (100 per page) | price, stock on hand, unit cost |
 
-Every query's requested cost is kept under Shopify's 1000-point limit (worked out in `packages/core/src/normalize.ts`, checked by `packages/core/test/queryCost.ts`). If Shopify still answers `MAX_COST_EXCEEDED`, the sync job halves the page size and retries the same page. Webhooks keep orders, refunds and products current (an order or refund webhook whose money changed reads that order's sales records); a daily reconcile re-pulls recent orders, products and stock.
+Every query's requested cost is kept under Shopify's 1000-point limit (worked out in `packages/core/src/shopifyQueries.ts`, checked by `packages/core/test/queryCost.ts`). If Shopify still answers `MAX_COST_EXCEEDED`, the sync job halves the page size and retries the same page. Webhooks keep orders, refunds and products current (an order or refund webhook whose money changed reads that order's sales records); a daily reconcile re-pulls recent orders, products and stock.
 
 What keeps a store complete, and its limits:
 

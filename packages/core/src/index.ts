@@ -10,6 +10,7 @@ export * from "./keyRotation.js";
 export * from "./queues.js";
 export * from "./shopifyPayloads.js";
 export * from "./normalize.js";
+export * from "./shopifyQueries.js";
 export * from "./persist.js";
 export * from "./shopifyReports.js";
 export * from "./notify.js";

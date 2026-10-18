@@ -130,7 +130,7 @@ document was validated against the 2026-10 schema with Shopify's public schema p
 ```bash
 # schema: POST an introspection query to https://shopify.dev/admin-graphql-direct-proxy/2026-10
 # then graphql.validate() each document (ordersQuery(true/false), bulkOrdersQuery, the constants in
-# packages/core/src/normalize.ts, scopes.ts, apps/api/src/routes/contacts.ts, whatsapp/events.ts)
+# packages/core/src/shopifyQueries.ts, scopes.ts, apps/api/src/routes/contacts.ts, whatsapp/events.ts)
 ```
 
 Result: 22 of 22 valid; the billing documents added since (`APP_SUBSCRIPTION_CANCEL`,

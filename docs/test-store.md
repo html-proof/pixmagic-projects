@@ -115,7 +115,7 @@ differ for reasons that are not bugs:
 | Refund timing | Attributed to the day the **refund** was created, not the day the order was placed | `packages/shared/src/kpi.ts:9` |
 | Cancelled orders | Excluded from order counts and sales | `packages/shared/src/kpi.ts:154` |
 | AOV | `(gross − discounts) / orders`, i.e. before refunds | `packages/shared/src/kpi.ts:61` |
-| Currency | `shopMoney` throughout — **shop** currency, never presentment currency | `packages/core/src/normalize.ts` |
+| Currency | `shopMoney` throughout — **shop** currency, never presentment currency | `packages/core/src/shopifyQueries.ts` (queries), `normalize.ts` (reading them) |
 | Sessions, funnel, conversion rate | **Not reported.** Needs the web pixel and `write_pixels` + `read_customer_events`, deliberately not requested | — |
 | New vs returning | **Not reported.** Needs `read_customers`, deliberately not requested | — |
 
