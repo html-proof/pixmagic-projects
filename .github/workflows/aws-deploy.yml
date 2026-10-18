@@ -35,12 +35,12 @@ jobs:
     if: >-
       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
       || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
-    # The runner the repository variable SELF_HOSTED_DEPLOY_RUNNER names: the PC's deploy-only
-    # runner, under its own account, which refuses every job but this one from main
+    # The runner the repository variable SELF_HOSTED_MAIN_RUNNER names: the PC's runner for main,
+    # under its own account, which refuses every job but main's CI and this one from main
     # (docs/aws-deployment.md). Pull-request jobs run code nobody has reviewed yet, and on a shared
     # runner whatever they leave behind this job would run with, holding the deploy role. Without
     # it, the same runner as CI: GitHub's ubuntu-latest, or SELF_HOSTED_RUNNER (ci.yml).
-    runs-on: ${{ fromJSON(vars.SELF_HOSTED_DEPLOY_RUNNER || vars.SELF_HOSTED_RUNNER || '"ubuntu-latest"') }}
+    runs-on: ${{ fromJSON(vars.SELF_HOSTED_MAIN_RUNNER || vars.SELF_HOSTED_RUNNER || '"ubuntu-latest"') }}
     timeout-minutes: 60
     environment: production
     env:
@@ -53,8 +53,8 @@ jobs:
           echo %ProgramFiles%\Git\bin>>"%GITHUB_PATH%"
           echo npm_config_store_dir=%RUNNER_TOOL_CACHE%\pnpm-store>>"%GITHUB_ENV%"
       - name: On the runner pull requests use
-        if: vars.SELF_HOSTED_DEPLOY_RUNNER == '' && vars.SELF_HOSTED_RUNNER != ''
-        run: echo "::warning::Deploying on the runner pull requests use. Install the deploy-only runner and set SELF_HOSTED_DEPLOY_RUNNER (docs/aws-deployment.md)."
+        if: vars.SELF_HOSTED_MAIN_RUNNER == '' && vars.SELF_HOSTED_RUNNER != ''
+        run: echo "::warning::Deploying on the runner pull requests use. Install the runner for main and set SELF_HOSTED_MAIN_RUNNER (docs/aws-deployment.md)."
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}

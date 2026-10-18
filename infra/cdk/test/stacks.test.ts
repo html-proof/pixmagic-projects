@@ -204,9 +204,45 @@ describe("the data stack", () => {
 
 describe("the app stack", () => {
   it("leaves the schedules off unless asked (no double syncs while the old deployment still runs)", () => {
-    const states = (tpl: Template) => Object.values(tpl.findResources("AWS::Scheduler::Schedule")).map((s) => s.Properties.State);
+    const states = (tpl: Template) =>
+      Object.values(tpl.findResources("AWS::Scheduler::Schedule"))
+        .filter((s) => "cron" in JSON.parse(s.Properties.Target.Input))
+        .map((s) => s.Properties.State);
     expect(states(t.app)).toEqual(["DISABLED", "DISABLED"]);
     expect(states(synth({ schedules: "on" }).app)).toEqual(["ENABLED", "ENABLED"]);
+  });
+
+  it("emails the owner the day's AWS cost every morning, letting only the cron function read Cost Explorer", () => {
+    const costSchedules = (tpl: Template) => Object.values(tpl.findResources("AWS::Scheduler::Schedule", { Properties: { Target: { Input: '{"action":"cost-report"}' } } }));
+    const ceGrants = (tpl: Template) =>
+      Object.values(tpl.findResources("AWS::IAM::Policy")).filter((p) => JSON.stringify(p.Properties.PolicyDocument).includes("ce:"));
+    // Once a day at 07:00 in Victoria, on even while the sweeps' schedules are off.
+    const [report, ...others] = costSchedules(t.app);
+    expect(others).toHaveLength(0);
+    expect(report!.Properties).toMatchObject({
+      Name: "insights-production-costreport",
+      ScheduleExpression: "cron(0 7 * * ? *)",
+      ScheduleExpressionTimezone: "Australia/Melbourne",
+      State: "ENABLED",
+      Target: { Arn: { Ref: expect.stringMatching(/^Livecron/) }, DeadLetterConfig: { Arn: { "Fn::GetAtt": [expect.stringMatching(/^MissedTicks/), "Arn"] } } },
+    });
+    // Exactly ce:GetCostAndUsage (no resource-level permissions exist for it), on the cron role alone.
+    const grants = ceGrants(t.app);
+    expect(grants).toHaveLength(1);
+    const statements = grants[0]!.Properties.PolicyDocument.Statement as Array<{ Action: unknown; Resource: unknown }>;
+    expect(statements.filter((st) => JSON.stringify(st.Action).includes("ce:"))).toEqual([{ Action: "ce:GetCostAndUsage", Effect: "Allow", Resource: "*" }]);
+    expect(grants[0]!.Properties.Roles).toEqual([{ Ref: expect.stringMatching(/^FncronServiceRole/) }]);
+    // The budget's address, on the cron function only.
+    const vars = (name: string) => Object.values(t.app.findResources("AWS::Lambda::Function", { Properties: { FunctionName: name } }))[0]!.Properties.Environment.Variables as Record<string, unknown>;
+    expect(vars("insights-production-cron").COST_REPORT_TO).toBe("aby@zodiix.com");
+    expect(vars("insights-production-api").COST_REPORT_TO).toBeUndefined();
+    expect(vars("insights-production-jobs").COST_REPORT_TO).toBeUndefined();
+    // Off in staging (the account's bill is production's email) and with -c costReport=off: no schedule, no grant, no address.
+    for (const off of [synth({ env: "staging" }).app, synth({ costReport: "off" }).app]) {
+      expect(costSchedules(off)).toHaveLength(0);
+      expect(ceGrants(off)).toHaveLength(0);
+      for (const f of Object.values(off.findResources("AWS::Lambda::Function"))) expect(f.Properties.Environment?.Variables?.COST_REPORT_TO).toBeUndefined();
+    }
   });
 
   it("gives every job queue a dead-letter queue and covers the jobs timeout", () => {
@@ -588,6 +624,40 @@ describe("IAM", () => {
     expect(workflow).toMatch(/^\s+id-token: write\s*$/m);
   });
 
+  it("proves the deploy role's next trust on roles that grant nothing: one must admit the deploy workflow, two must refuse it", () => {
+    const repo = "html-proof/pixmagic-projects";
+    const base = {
+      "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+      "token.actions.githubusercontent.com:sub": "repo:html-proof@68529971/pixmagic-projects@1413246051:environment:production",
+      "token.actions.githubusercontent.com:job_workflow_ref": `${repo}/.github/workflows/aws-deploy.yml@refs/heads/main`,
+      "token.actions.githubusercontent.com:ref": "refs/heads/main",
+    };
+    const expected: Record<string, Record<string, string>> = {
+      "insights-production-github-trust-check": base,
+      // Each changes one claim, to a ref git can't create ("..").
+      "insights-production-github-trust-check-wrong-workflow": { ...base, "token.actions.githubusercontent.com:job_workflow_ref": `${repo}/.github/workflows/aws-deploy.yml@refs/heads/never..matches` },
+      "insights-production-github-trust-check-wrong-ref": { ...base, "token.actions.githubusercontent.com:ref": "refs/heads/never..matches" },
+    };
+    type Role = { Properties: { RoleName: string; AssumeRolePolicyDocument: { Statement: Array<{ Condition: unknown }> }; ManagedPolicyArns?: unknown; Policies?: unknown } };
+    const roles = Object.entries(t.ci.findResources("AWS::IAM::Role") as Record<string, Role>).filter(([, r]) => r.Properties.RoleName.includes("trust-check"));
+    expect(Object.fromEntries(roles.map(([, r]) => [r.Properties.RoleName, r.Properties.AssumeRolePolicyDocument.Statement.map((s) => s.Condition)]))).toEqual(
+      Object.fromEntries(Object.entries(expected).map(([name, cond]) => [name, [{ StringEquals: cond }]])),
+    );
+    // No permissions of any kind: no managed or inline policy, and no AWS::IAM::Policy names them.
+    type Policy = { Properties: { Roles?: Array<{ Ref: string }>; PolicyDocument: { Statement: Array<{ Action: string | string[]; Resource: unknown }> } } };
+    const policies = Object.values(t.ci.findResources("AWS::IAM::Policy") as Record<string, Policy>);
+    for (const [id, r] of roles) {
+      expect(r.Properties.ManagedPolicyArns).toBeUndefined();
+      expect(r.Properties.Policies).toBeUndefined();
+      expect(policies.some((p) => p.Properties.Roles?.some((ref) => ref.Ref === id))).toBe(false);
+    }
+    // The deploy role may read exactly those three roles (STS refuses a missing role too).
+    const getRole = policies.flatMap((p) => p.Properties.PolicyDocument.Statement).filter((s) => [s.Action].flat().includes("iam:GetRole"));
+    expect(getRole).toHaveLength(1);
+    expect(getRole[0]!.Action).toBe("iam:GetRole");
+    expect(getRole[0]!.Resource).toEqual(roles.map(([id]) => ({ "Fn::GetAtt": [id, "Arn"] })));
+  });
+
   it("lets the deploy role read everything the workflow's smoke tests check", () => {
     type Policy = { Properties: { PolicyDocument: { Statement: Array<{ Action: string | string[] }> } } };
     const actions = Object.values(t.ci.findResources("AWS::IAM::Policy")).flatMap((p) => (p as Policy).Properties.PolicyDocument.Statement.flatMap((s) => [s.Action].flat()));
@@ -621,6 +691,20 @@ describe("the audit stack (Trusted Advisor security checks)", () => {
     t.audit.hasResourceProperties("AWS::S3::BucketPolicy", {
       PolicyDocument: { Statement: Match.arrayWith([Match.objectLike({ Effect: "Deny", Condition: { Bool: { "aws:SecureTransport": "false" } } })]) },
     });
+  });
+
+  it("lets CloudTrail use the bucket only for this trail, so no other account's trail can write to it", () => {
+    t.audit.hasResourceProperties("AWS::CloudTrail::Trail", { TrailName: "insights-account" });
+    const [policy] = Object.values(t.audit.findResources("AWS::S3::BucketPolicy"));
+    type Statement = { Effect: string; Principal: unknown; Action: string; Condition?: unknown };
+    const statements = (policy!.Properties.PolicyDocument.Statement as Statement[]).map(({ Effect, Principal, Action, Condition }) => ({ Effect, Principal, Action, Condition }));
+    const trail = { "aws:SourceArn": "arn:aws:cloudtrail:ap-southeast-2:605411278365:trail/insights-account" };
+    const cloudtrail = { Service: "cloudtrail.amazonaws.com" };
+    expect(statements).toEqual([
+      { Effect: "Deny", Principal: { AWS: "*" }, Action: "s3:*", Condition: { Bool: { "aws:SecureTransport": "false" } } },
+      { Effect: "Allow", Principal: cloudtrail, Action: "s3:GetBucketAcl", Condition: { StringEquals: trail } },
+      { Effect: "Allow", Principal: cloudtrail, Action: "s3:PutObject", Condition: { StringEquals: { "s3:x-amz-acl": "bucket-owner-full-control", ...trail } } },
+    ]);
   });
 
   it("puts an account analyzer in every enabled Region, and fails the deploy if one can't be made (IAM Access Analyzer - external access)", () => {

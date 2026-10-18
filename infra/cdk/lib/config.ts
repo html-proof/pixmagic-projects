@@ -73,6 +73,12 @@ export interface EnvConfig {
   budgetEmail: string;
   /** The monthly ceiling in US$, tax included (AWS Budgets' default; AWS Australia adds 10% GST). */
   monthlyBudgetUsd: number;
+  /**
+   * A daily email to budgetEmail of the last day's AWS cost by service and the month so far
+   * (apps/aws/src/costReport.ts), from one Cost Explorer call a day at US$0.01 (~US$0.30/month).
+   * Its own schedule, on even while `schedules` is off. `-c costReport=off` (or `on`) overrides it.
+   */
+  costReport: boolean;
   /** GitHub repository allowed to deploy through OIDC. */
   githubRepo: string;
   /**
@@ -120,6 +126,7 @@ const ENVIRONMENTS: Record<EnvConfig["name"], Omit<EnvConfig, "schedulesEnabled"
     budgetEmail: "aby@zodiix.com",
     // The owner's ceiling, US$50-80 a month (2026-10-18; docs/aws-deployment.md, Cost).
     monthlyBudgetUsd: 80,
+    costReport: true,
     githubRepo: "html-proof/pixmagic-projects",
     githubOidcSubject: "repo:html-proof@68529971/pixmagic-projects@1413246051",
     githubDeployWorkflow: ".github/workflows/aws-deploy.yml",
@@ -142,6 +149,8 @@ const ENVIRONMENTS: Record<EnvConfig["name"], Omit<EnvConfig, "schedulesEnabled"
     cognitoCustomEmail: false,
     budgetEmail: "",
     monthlyBudgetUsd: 40,
+    // The account's bill is the same in both environments: production's email covers it.
+    costReport: false,
     githubRepo: "html-proof/pixmagic-projects",
     githubOidcSubject: "repo:html-proof@68529971/pixmagic-projects@1413246051",
     githubDeployWorkflow: ".github/workflows/aws-deploy.yml",
@@ -155,12 +164,14 @@ export function envConfig(context: (key: string) => unknown): EnvConfig {
   if (!base) throw new Error(`Unknown environment "${name}" (production or staging)`);
   const cognitoEmail = context("cognitoEmail");
   const budgetEmail = context("budgetEmail");
+  const costReport = context("costReport");
   return {
     ...base,
     schedulesEnabled: String(context("schedules") ?? "off") === "on",
     alertEmail: String(context("alertEmail") ?? ""),
     cognitoCustomEmail: cognitoEmail === undefined || cognitoEmail === "" ? base.cognitoCustomEmail : String(cognitoEmail) === "on",
     budgetEmail: budgetEmail === undefined || budgetEmail === "" ? base.budgetEmail : String(budgetEmail),
+    costReport: costReport === undefined || costReport === "" ? base.costReport : String(costReport) === "on",
   };
 }
 
@@ -177,6 +188,36 @@ export function githubDeployClaims(cfg: EnvConfig): { aud: string; sub: string; 
     job_workflow_ref: `${cfg.githubRepo}/${cfg.githubDeployWorkflow}@${ref}`,
     ref,
   };
+}
+
+export type GithubDeployClaims = ReturnType<typeof githubDeployClaims>;
+
+/**
+ * Roles that grant nothing, which prove the deploy role's next trust before it gets it
+ * (ci-stack.ts; checked after every deploy by scripts/oidc-trust.ts). The first trusts exactly
+ * githubDeployClaims, so the deploy workflow must get it. The others each swap one claim for a ref
+ * git can't name (".." is not allowed in one, so no token ever carries it), so the workflow must be
+ * refused: proof that IAM checks that claim rather than skipping it.
+ */
+export function githubTrustChecks(cfg: EnvConfig): Array<{ id: string; roleName: string; claims: GithubDeployClaims; admits: boolean }> {
+  const claims = githubDeployClaims(cfg);
+  const never = "refs/heads/never..matches";
+  const roleName = `insights-${cfg.name}-github-trust-check`;
+  return [
+    { id: "TrustCheck", roleName, claims, admits: true },
+    {
+      id: "TrustCheckWrongWorkflow",
+      roleName: `${roleName}-wrong-workflow`,
+      claims: { ...claims, job_workflow_ref: `${cfg.githubRepo}/${cfg.githubDeployWorkflow}@${never}` },
+      admits: false,
+    },
+    { id: "TrustCheckWrongRef", roleName: `${roleName}-wrong-ref`, claims: { ...claims, ref: never }, admits: false },
+  ];
+}
+
+/** IAM trust conditions requiring each of these claims of GitHub's OIDC token, exactly. */
+export function githubClaimConditions(claims: Partial<GithubDeployClaims>): Record<string, string> {
+  return Object.fromEntries(Object.entries(claims).map(([claim, value]) => [`token.actions.githubusercontent.com:${claim}`, value]));
 }
 
 const here = dirname(fileURLToPath(import.meta.url));
