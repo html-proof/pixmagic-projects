@@ -22,6 +22,7 @@ the code, the code wins and the page is the bug.
 
 | Page | What it holds |
 | --- | --- |
+| [architecture/initial-audit.md](architecture/initial-audit.md) | Audit of 2026-10-18: baseline checks, verified stack, findings and what was changed |
 | [architecture/current-state.md](architecture/current-state.md) | Audit of 2026-10-14: stack, structure, findings by severity |
 | [architecture/target-architecture.md](architecture/target-architecture.md) | Where the structure is heading, and what is left to get there |
 | [architecture/refactoring-plan.md](architecture/refactoring-plan.md) | The staged restructuring, and what was deliberately not done |

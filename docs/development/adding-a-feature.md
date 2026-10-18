@@ -61,7 +61,10 @@ Anything that may outlast a request, must retry, or runs on a schedule:
 - Every HTTP call goes through the injected `fetchImpl` (`deps.fetchImpl`), which carries the
   default timeout; never call the global `fetch` directly in production code.
 - Tokens are stored encrypted (`encrypt(..., keyring(), aad)`), never logged (add new credential
-  field names to `REDACT` in `packages/core/src/logger.ts`).
+  field names to `REDACT` in `packages/core/src/logger.ts`), and sent in a header, never in a URL.
+  Anything on Meta's Graph API uses `graphCall` (`packages/core/src/metaGraph.ts`) with its own
+  `fail` mapping, as `core/ads/meta.ts` and `core/whatsapp/graph.ts` do. A new encrypted field joins
+  key rotation in `packages/core/src/keyRotation.ts`.
 - OAuth: single-use state in the Coordinator plus a cookie, PKCE where the provider supports it
   (`apps/api/src/routes/ads.ts`). Webhooks: verify the signature on the raw body before parsing.
 - Settings go in the config schema (`packages/core/src/env.ts`), then `APP_SETTINGS` in
@@ -72,7 +75,9 @@ Anything that may outlast a request, must retry, or runs on a schedule:
 ## A screen
 
 - A page in `apps/web/src/app/` (signed-in pages under `(app)/`), its components in
-  `apps/web/src/components/<area>/` (PascalCase file names for components).
+  `apps/web/src/components/<area>/` (PascalCase file names for components). A page with tabs or
+  independent sections keeps only their routing; each tab or section is a file in
+  `components/<area>/<page>/` (example: `components/staff/employee/`).
 - Load data with `useApi` / `useLiveApi`; show `Skeleton` while loading and `LoadError` when a load
   fails; report a failed action with `actionError`.
 - No business rules in components: format and arrange what the API returns; a rule goes to
