@@ -82,6 +82,15 @@ export interface EnvConfig {
    * with the same name can't deploy.
    */
   githubOidcSubject: string;
+  /**
+   * The one workflow file, and the branch it must run from, whose jobs may assume the deploy role
+   * (the token's `job_workflow_ref` and `ref` claims; githubDeployClaims below). `sub` names only
+   * the repository and the environment, and on GitHub Free a private repository's environment
+   * can't be limited to a branch: without these, any branch's workflow naming the environment
+   * would get the role.
+   */
+  githubDeployWorkflow: string;
+  githubDeployBranch: string;
 }
 
 const ACCOUNT = "605411278365";
@@ -113,6 +122,8 @@ const ENVIRONMENTS: Record<EnvConfig["name"], Omit<EnvConfig, "schedulesEnabled"
     monthlyBudgetUsd: 80,
     githubRepo: "html-proof/pixmagic-projects",
     githubOidcSubject: "repo:html-proof@68529971/pixmagic-projects@1413246051",
+    githubDeployWorkflow: ".github/workflows/aws-deploy.yml",
+    githubDeployBranch: "main",
   },
   staging: {
     name: "staging",
@@ -133,6 +144,8 @@ const ENVIRONMENTS: Record<EnvConfig["name"], Omit<EnvConfig, "schedulesEnabled"
     monthlyBudgetUsd: 40,
     githubRepo: "html-proof/pixmagic-projects",
     githubOidcSubject: "repo:html-proof@68529971/pixmagic-projects@1413246051",
+    githubDeployWorkflow: ".github/workflows/aws-deploy.yml",
+    githubDeployBranch: "main",
   },
 };
 
@@ -148,6 +161,21 @@ export function envConfig(context: (key: string) => unknown): EnvConfig {
     alertEmail: String(context("alertEmail") ?? ""),
     cognitoCustomEmail: cognitoEmail === undefined || cognitoEmail === "" ? base.cognitoCustomEmail : String(cognitoEmail) === "on",
     budgetEmail: budgetEmail === undefined || budgetEmail === "" ? base.budgetEmail : String(budgetEmail),
+  };
+}
+
+/**
+ * The GitHub OIDC token claims the deploy role requires, each exactly (ci-stack.ts). The deploy
+ * workflow checks its own token against them before it signs in, and after it deployed that a
+ * fresh token still gets the role (scripts/oidc-trust.ts).
+ */
+export function githubDeployClaims(cfg: EnvConfig): Record<string, string> {
+  const ref = `refs/heads/${cfg.githubDeployBranch}`;
+  return {
+    aud: "sts.amazonaws.com",
+    sub: `${cfg.githubOidcSubject}:environment:${cfg.name}`,
+    job_workflow_ref: `${cfg.githubRepo}/${cfg.githubDeployWorkflow}@${ref}`,
+    ref,
   };
 }
 

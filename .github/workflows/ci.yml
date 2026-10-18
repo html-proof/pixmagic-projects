@@ -59,7 +59,7 @@ jobs:
     steps:
       - id: find
         continue-on-error: true
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
             const tree = context.payload.head_commit?.tree_id;
@@ -114,7 +114,7 @@ jobs:
         id: scope
         if: github.event_name == 'pull_request'
         continue-on-error: true
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
             const pr = context.payload.pull_request;
@@ -133,9 +133,9 @@ jobs:
             const run = hit !== undefined || changed.length >= 3000;
             core.info(run ? `Browser tests run (${hit ?? "3,000+ files"} changed).` : "Browser tests skipped: nothing they drive changed.");
             core.setOutput("e2e", String(run));
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           # A self-hosted runner keeps its pnpm store between runs (first step): no cache to move.
@@ -185,7 +185,7 @@ jobs:
         id: integration_passed
         if: steps.integration.outputs.key != ''
         continue-on-error: true
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           KEY: ${{ steps.integration.outputs.key }}
         with:
@@ -209,7 +209,7 @@ jobs:
       - name: Record the integration tests' pass
         if: steps.integration.outputs.key != '' && steps.integration_passed.outputs.passed != 'true'
         continue-on-error: true
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: passed-integration-${{ steps.integration.outputs.key }}
           path: ${{ runner.temp }}/passed-integration.txt
@@ -230,7 +230,7 @@ jobs:
           echo "tree=$tree" >> "$GITHUB_OUTPUT"
       - if: steps.passed.outputs.tree != ''
         continue-on-error: true
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: passed-checks-${{ steps.passed.outputs.tree }}
           path: ${{ runner.temp }}/passed-tree.txt
@@ -257,9 +257,9 @@ jobs:
         run: |
           echo %ProgramFiles%\Git\bin>>"%GITHUB_PATH%"
           echo npm_config_store_dir=%RUNNER_TOOL_CACHE%\pnpm-store>>"%GITHUB_ENV%"
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: ${{ vars.SELF_HOSTED_RUNNER == '' && 'pnpm' || '' }}
@@ -306,12 +306,12 @@ jobs:
           echo "tree=$tree" >> "$GITHUB_OUTPUT"
       - if: steps.passed.outputs.tree != ''
         continue-on-error: true
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: passed-e2e-${{ steps.passed.outputs.tree }}
           path: ${{ runner.temp }}/passed-tree.txt
           retention-days: 14
           overwrite: true
       - if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with: { name: playwright-report, path: apps/web/test-results }
