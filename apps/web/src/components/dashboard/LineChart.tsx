@@ -16,8 +16,24 @@ export interface LineSeries {
   label: string;
   /** A categorical chart colour (var(--viz-cat-N)): fixed per entity, never per rank. */
   color: string;
-  values: number[];
+  /** One per day; null where the day has no figure (not read yet): a gap in the line, never a 0. */
+  values: Array<number | null>;
 }
+
+/** The runs of days a series has figures for, as [first, last] index pairs: each is drawn on its own. */
+function runsOf(values: Array<number | null>): Array<[number, number]> {
+  const runs: Array<[number, number]> = [];
+  values.forEach((v, i) => {
+    if (v === null) return;
+    const last = runs.at(-1);
+    if (last && last[1] === i - 1) last[1] = i;
+    else runs.push([i, i]);
+  });
+  return runs;
+}
+
+/** What a missing day reads as in the tooltip and the screen-reader table. */
+const NO_DATA = "No data";
 
 const MARGIN = { top: 10, right: 12, bottom: 24, left: 52 };
 const END_LABEL_W = 0;
@@ -65,7 +81,8 @@ export function LineChart({
   const n = days.length;
   // The dates can change under a held hover (a shorter range): never read past the new end.
   const at = hover !== null && hover < n ? hover : null;
-  const max = Math.max(0, ...series.flatMap((s) => s.values));
+  const max = Math.max(0, ...series.flatMap((s) => s.values.filter((v): v is number => v !== null)));
+  const show = (v: number | null | undefined) => (v === null || v === undefined ? NO_DATA : format(v));
   const ticks = niceTicks(Math.max(max, floor, integer ? 4 : 0), 4);
   const step = ticks[1] ?? 1;
   const top = ticks[ticks.length - 1] || 1;
@@ -99,7 +116,7 @@ export function LineChart({
     } else if (e.key === "Escape") setAt(null);
   };
 
-  const describe = (i: number) => `${fmtLongDay(days[i]!)}${days[i] === today ? " (today so far)" : ""}: ${series.map((s) => `${s.label} ${format(s.values[i] ?? 0)}`).join(", ")}.`;
+  const describe = (i: number) => `${fmtLongDay(days[i]!)}${days[i] === today ? " (today so far)" : ""}: ${series.map((s) => `${s.label} ${show(s.values[i])}`).join(", ")}.`;
 
   return (
     <div className="min-w-0">
@@ -167,36 +184,47 @@ export function LineChart({
             {!bars &&
               area &&
               n > 1 &&
-              series.map((s) => (
-                <path
-                  key={`a-${s.key}`}
-                  d={`M${x(0)},${y(0)} ${s.values.map((v, i) => `L${x(i)},${y(v)}`).join(" ")} L${x(n - 1)},${y(0)} Z`}
-                  fill={`url(#${fillId}-${s.key})`}
-                  className="animate-fade"
-                />
-              ))}
+              series.flatMap((s) =>
+                runsOf(s.values)
+                  .filter(([a, b]) => b > a)
+                  .map(([a, b]) => (
+                    <path
+                      key={`a-${s.key}-${a}`}
+                      d={`M${x(a)},${y(0)} ${s.values.slice(a, b + 1).map((v, j) => `L${x(a + j)},${y(v ?? 0)}`).join(" ")} L${x(b)},${y(0)} Z`}
+                      fill={`url(#${fillId}-${s.key})`}
+                      className="animate-fade"
+                    />
+                  )),
+              )}
+            {/* One line per run of days with figures; a day alone between gaps is a dot. */}
             {!bars &&
-              series.map((s) =>
-                n <= 1 ? (
-                  <circle key={s.key} cx={x(0)} cy={y(s.values[0] ?? 0)} r={4} fill={s.color} stroke="var(--surface)" strokeWidth={2} />
-                ) : (
-                  <polyline
-                    key={s.key}
-                    points={s.values.map((v, i) => `${x(i)},${y(v)}`).join(" ")}
-                    fill="none"
-                    stroke={s.color}
-                    strokeWidth={2}
-                    strokeLinejoin="round"
-                    strokeLinecap="round"
-                  />
+              series.flatMap((s) =>
+                runsOf(s.values).map(([a, b]) =>
+                  a === b ? (
+                    <circle key={`${s.key}-${a}`} cx={x(a)} cy={y(s.values[a] ?? 0)} r={n <= 1 ? 4 : 2.5} fill={s.color} stroke="var(--surface)" strokeWidth={n <= 1 ? 2 : 1} />
+                  ) : (
+                    <polyline
+                      key={`${s.key}-${a}`}
+                      points={s.values
+                        .slice(a, b + 1)
+                        .map((v, j) => `${x(a + j)},${y(v ?? 0)}`)
+                        .join(" ")}
+                      fill="none"
+                      stroke={s.color}
+                      strokeWidth={2}
+                      strokeLinejoin="round"
+                      strokeLinecap="round"
+                    />
+                  ),
                 ),
               )}
             {at !== null && !bars && (
               <g>
                 <line x1={x(at)} x2={x(at)} y1={MARGIN.top} y2={MARGIN.top + plotH} stroke="var(--muted)" strokeWidth={1} strokeDasharray="3 3" />
-                {series.map((s) => (
-                  <circle key={s.key} cx={x(at)} cy={y(s.values[at] ?? 0)} r={4} fill={s.color} stroke="var(--surface)" strokeWidth={2} />
-                ))}
+                {series.map((s) => {
+                  const v = s.values[at];
+                  return v === null || v === undefined ? null : <circle key={s.key} cx={x(at)} cy={y(v)} r={4} fill={s.color} stroke="var(--surface)" strokeWidth={2} />;
+                })}
               </g>
             )}
             <rect
@@ -220,7 +248,7 @@ export function LineChart({
             {series.map((s) => (
               <div key={s.key} className="mt-1 flex items-center gap-2">
                 <span aria-hidden className={bars ? "inline-block h-2.5 w-2.5 shrink-0 rounded-sm" : "inline-block h-0.5 w-3 shrink-0 rounded"} style={{ background: s.color }} />
-                <span className="font-semibold tabular-nums text-text">{format(s.values[at] ?? 0)}</span>
+                <span className="font-semibold tabular-nums text-text">{show(s.values[at])}</span>
                 <span className="truncate text-muted">{s.label}</span>
               </div>
             ))}
@@ -247,7 +275,7 @@ export function LineChart({
               <tr key={d}>
                 <th scope="row">{fmtLongDay(d)}</th>
                 {series.map((s) => (
-                  <td key={s.key}>{format(s.values[i] ?? 0)}</td>
+                  <td key={s.key}>{show(s.values[i])}</td>
                 ))}
               </tr>
             ))}

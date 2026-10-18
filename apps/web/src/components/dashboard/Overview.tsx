@@ -5,6 +5,7 @@ import { gradeRefundRate, gradeShipping, gradeStock, gradeTrend, type Health } f
 import { biggestDropOff } from "@app/shared/journey";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { fmtDay, fmtMonth, fmtRange, fmtRelative, hourRange, plural } from "./format";
+import { throughLabel } from "./AdsCommon";
 import { comparisonHelp, noEarlierData } from "./DateRange";
 import { STEP_LABEL } from "./Funnel";
 import { AreaPreview } from "./Previews";
@@ -96,14 +97,24 @@ export function businessHealth(ov: Overview, currency: string): Check[] {
     out.push({ id: "shipping", topic: "shipping", area: "Shipping", health, text });
   }
   const ads = m.ads;
-  if (ads && ads.current.spend > 0) {
-    const back = ads.current.roas !== null ? `; the platforms count ${fmtMoney(ads.current.conversionValue, ads.currency)} in sales from them (${new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(ads.current.roas)}×)` : "";
-    out.push({ id: "ads", topic: "ads", area: "Ads", health: "info", text: `${fmtMoney(ads.current.spend, ads.currency)} spent on ads for ${plural(ads.current.clicks, "click")}${back}.` });
+  if (ads && !ads.current) {
+    // Some account lacks days of the range: say so rather than give a short total.
+    out.push({ id: "ads", topic: "ads", area: "Ads", health: "info", text: "Ad figures for these dates are unavailable: some ad accounts haven't been read for all of them yet." });
+  } else if (ads?.current && ads.current.spend > 0) {
+    const c = ads.current;
+    const clicks = c.linkClicks === null ? "" : ` for ${plural(c.linkClicks, "link click")}`;
+    const back =
+      c.roas !== null && c.purchaseValue !== null
+        ? `; the platforms credit ${fmtMoney(c.purchaseValue, ads.currency)} in purchases to them (${new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(c.roas)}×)`
+        : "";
+    out.push({ id: "ads", topic: "ads", area: "Ads", health: "info", text: `${fmtMoney(c.spend, ads.currency)} spent on ads${clicks}${back}.` });
   }
   const adsense = m.adsense;
-  if (adsense && adsense.current.pageViews > 0) {
-    const rpm = adsense.current.pageRpm !== null ? `, ${fmtMoney(adsense.current.pageRpm, adsense.currency)} per 1,000 views` : "";
-    out.push({ id: "adsense", topic: "adsense", area: "Ad earnings", health: "info", text: `${fmtMoney(adsense.current.earnings, adsense.currency)} earned from AdSense ads on your site${rpm}.` });
+  if (adsense && !adsense.current) {
+    out.push({ id: "adsense", topic: "adsense", area: "Ad earnings", health: "info", text: "AdSense figures for these dates are unavailable: the account hasn't been read for all of them yet." });
+  } else if (adsense?.current && adsense.current.pageViews > 0) {
+    const rpm = adsense.current.pageRpm !== null ? `, ${fmtMoney(adsense.current.pageRpm, adsense.currency)} per 1,000 page views` : "";
+    out.push({ id: "adsense", topic: "adsense", area: "Ad earnings", health: "info", text: `${fmtMoney(adsense.current.earnings, adsense.currency)} estimated earnings from AdSense ads on your site${rpm}.` });
   }
   const top = m.top_products?.items[0];
   if (top) out.push({ id: "best", topic: "products", area: "Best seller", health: "info", text: `${top.title}: ${money(top.revenue)} from ${plural(top.units, "unit")}.` });
@@ -350,12 +361,16 @@ export function OverviewDetail({ ov, currency, onOpen }: { ov: Overview; currenc
   const range = fmtRange(ov.range.from, ov.range.to);
   // Why the figures with a history of their own aren't compared, if they aren't (one sentence for
   // ads and AdSense when their figures start on the same day).
-  const adsMissing = m.ads?.previous.imported === false ? noEarlierData(m.ads.historyFrom, "ads") : null;
+  const adsMissing = m.ads?.notCompared === "no_history" ? noEarlierData(m.ads.historyFrom, "ads") : null;
   const notCompared = [
     f?.previous.imported === false ? noEarlierData(f.historyFrom, "visits") : null,
     adsMissing,
-    m.adsense?.previous.imported === false && !(adsMissing && m.adsense.historyFrom === m.ads?.historyFrom) ? noEarlierData(m.adsense.historyFrom, "adsense") : null,
+    m.adsense?.notCompared === "no_history" && !(adsMissing && m.adsense.historyFrom === m.ads?.historyFrom) ? noEarlierData(m.adsense.historyFrom, "adsense") : null,
   ].filter(Boolean);
+  // The ad rows show what their change compares: with today left out of both sides, the dates up to yesterday.
+  const adsNow = m.ads ? (m.ads.compared?.current.totals ?? m.ads.current) : null;
+  const adsLabel = (what: string) => (m.ads?.compared?.trimmed ? `${what}, ${throughLabel(m.ads, ov)}` : what);
+  const senseNow = m.adsense ? (m.adsense.compared?.current.totals ?? m.adsense.current) : null;
   // Gross sales, discounts, tax, shipping and total sales, and returns, only for someone who may
   // see them (Team & Access).
   const bd = s ? breakdownOf(s.current) : null;
@@ -427,7 +442,7 @@ export function OverviewDetail({ ov, currency, onOpen }: { ov: Overview; currenc
           id="d-key-figures"
           title="Every key figure"
           help={`${range}, against ${comparisonHelp(ov.previous)}.${ov.previous.imported === false ? ` ${noEarlierData(ov.data?.historyFrom)}` : ""}${
-            ov.previous.until && (m.ads || m.adsense) ? " Ad platforms report whole days, so their figures compare whole days." : ""
+            ov.previous.until && (m.ads || m.adsense) ? " Ad platforms report whole days, so while these dates include today their figures compare whole days only, up to yesterday." : ""
           }${notCompared.map((x) => ` ${x}`).join("")}`}
         >
           <div className="-mx-1 overflow-x-auto">
@@ -470,9 +485,30 @@ export function OverviewDetail({ ov, currency, onOpen }: { ov: Overview; currenc
                 )}
                 {f && <Row label="Tracked visits (pixel)" now={fmtNum(f.visits)} before={f.previous.visits !== null ? fmtNum(f.previous.visits) : null} change={<Change value={f.deltas.visits} />} />}
                 {f && <Row label="Tracked visits that bought" now={fmtPct(f.conversionRate)} before={f.previous.conversionRate !== null ? fmtPct(f.previous.conversionRate) : null} change={<Change value={f.deltas.conversionRate} />} />}
-                {m.ads && <Row label={`Ad spend (${m.ads.currency})`} now={fmtMoney(m.ads.current.spend, m.ads.currency)} before={m.ads.previous.spend !== null ? fmtMoney(m.ads.previous.spend, m.ads.currency) : null} change={<Change value={m.ads.deltas.spend} invert />} />}
-                {m.ads && <Row label="Return on ad spend" now={m.ads.current.roas !== null ? `${m.ads.current.roas.toFixed(2)}×` : "—"} before={m.ads.previous.roas !== null ? `${m.ads.previous.roas.toFixed(2)}×` : null} change={<Change value={m.ads.deltas.roas} />} />}
-                {m.adsense && <Row label={`AdSense earnings (${m.adsense.currency})`} now={fmtMoney(m.adsense.current.earnings, m.adsense.currency)} before={m.adsense.previous.earnings !== null ? fmtMoney(m.adsense.previous.earnings, m.adsense.currency) : null} change={<Change value={m.adsense.deltas.earnings} />} />}
+                {m.ads && (
+                  <Row
+                    label={adsLabel(`Ad spend (${m.ads.currency})`)}
+                    now={adsNow ? fmtMoney(adsNow.spend, m.ads.currency) : "Unavailable"}
+                    before={m.ads.previous.spend !== null ? fmtMoney(m.ads.previous.spend, m.ads.currency) : null}
+                    change={<Change value={m.ads.deltas.spend} invert />}
+                  />
+                )}
+                {m.ads && (
+                  <Row
+                    label={adsLabel("Return on ad spend (platforms' own)")}
+                    now={!adsNow ? "Unavailable" : adsNow.purchases === null ? "Being re-read" : adsNow.roas !== null ? `${adsNow.roas.toFixed(2)}×` : "—"}
+                    before={m.ads.previous.roas !== null ? `${m.ads.previous.roas.toFixed(2)}×` : null}
+                    change={<Change value={m.ads.deltas.roas} />}
+                  />
+                )}
+                {m.adsense && (
+                  <Row
+                    label={m.adsense.compared?.trimmed ? `Estimated AdSense earnings (${m.adsense.currency}), ${throughLabel(m.adsense, ov)}` : `Estimated AdSense earnings (${m.adsense.currency})`}
+                    now={senseNow ? fmtMoney(senseNow.earnings, m.adsense.currency) : "Unavailable"}
+                    before={m.adsense.previous.earnings !== null ? fmtMoney(m.adsense.previous.earnings, m.adsense.currency) : null}
+                    change={<Change value={m.adsense.deltas.earnings} />}
+                  />
+                )}
                 {m.customers && m.customers.current.returningCustomerRate !== null && <Row label="Returning customers" now={fmtPct(m.customers.current.returningCustomerRate)} before={m.customers.previous.returningCustomerRate !== null ? fmtPct(m.customers.previous.returningCustomerRate) : null} />}
               </tbody>
             </table>
