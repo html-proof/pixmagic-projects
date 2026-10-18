@@ -357,23 +357,39 @@ export function touched(state: CheckState, days: Iterable<string>) {
 
 /**
  * Stored orders with a share of the window that Shopify didn't list (by id): the walk saw every
- * order Shopify changed since the window began, so these are deleted orders, test orders, or orders
- * Shopify no longer shares (older than its 60 days). The caller looks each up.
+ * order Shopify shares that changed since the window began, so these are deleted orders, test
+ * orders, or orders Shopify no longer shares. `createdAt` tells the last apart (`withinReach`).
  */
-export async function unlistedOrders(store: Pick<Store, "id">, w: CheckWindow, seen: string[]): Promise<Array<{ id: string; name: string }>> {
-  const rows = await systemDb.$queryRaw<Array<{ shopify_id: string; name: string }>>`
-    SELECT o.shopify_id, o.name FROM orders o
+export async function unlistedOrders(store: Pick<Store, "id">, w: CheckWindow, seen: string[]): Promise<Array<{ id: string; name: string; createdAt: Date }>> {
+  const rows = await systemDb.$queryRaw<Array<{ shopify_id: string; name: string; created_at: Date }>>`
+    SELECT o.shopify_id, o.name, o.shopify_created_at AS created_at FROM orders o
     WHERE o.store_id = ${store.id}
       AND (o.local_day BETWEEN ${w.from} AND ${w.to}
            OR EXISTS (SELECT 1 FROM order_sales s WHERE s.order_id = o.id AND s.local_day BETWEEN ${w.from} AND ${w.to}))
       AND NOT (o.shopify_id = ANY(${seen}::text[]))`;
-  return rows.map((r) => ({ id: r.shopify_id, name: r.name }));
+  return rows.map((r) => ({ id: r.shopify_id, name: r.name, createdAt: r.created_at }));
+}
+
+/** Days of orders Shopify shares without read_all_orders, by creation date. */
+export const SHOPIFY_ORDER_DAYS = 60;
+
+/**
+ * Whether Shopify shares this order with the app at all. Without read_all_orders it neither lists
+ * nor returns (`nodes`, `order`) an order created more than 60 days ago: to the API it looks exactly
+ * like a deleted one. So an order older than that, a day's margin included, is never taken for
+ * deleted: it is out of reach, and kept as stored. (2026-10-18: the first 60-day check removed
+ * PixMagic's #2718S, created 61 days before and edited since, as "deleted"; it was put back.)
+ */
+export function withinReach(createdAt: Date, grantedScopes: string[], now = new Date()): boolean {
+  if (expandScopes(grantedScopes).has("read_all_orders")) return true;
+  return createdAt.getTime() > now.getTime() - (SHOPIFY_ORDER_DAYS - 1) * 86_400_000;
 }
 
 /** What Shopify said about one unlisted order: gone (deleted), a test order, or still there. */
 export type Lookup = "gone" | "test" | "present";
 
-export function noteUnlisted(state: CheckState, order: { id: string; name: string | null }, found: Lookup) {
+/** "out_of_reach": Shopify doesn't share the order (withinReach), so it wasn't looked up. */
+export function noteUnlisted(state: CheckState, order: { id: string; name: string | null }, found: Lookup | "out_of_reach") {
   note(state, found === "gone" ? "deleted" : found === "test" ? "test_order" : "not_listed", order);
 }
 

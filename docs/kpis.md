@@ -347,7 +347,9 @@ checked the same way over its whole window once it is in. Owners and admins can 
 - **Why an order differs** (`findings`): missing (never arrived), outdated (Shopify changed it later,
   its webhook lost), its sales differ (same version, different records), a test order stored,
   deleted in Shopify (stored, not listed, and Shopify says it is gone), changed while the check ran
-  (a sync delay, not an error), not listed (Shopify no longer shares it, e.g. past its 60 days). Days
+  (a sync delay, not an error), not listed (Shopify no longer shares it: created more than 60 days
+  ago without `read_all_orders`, which to the API looks exactly like a deleted order, so it is never
+  looked up or removed, and the figures it touches are reported as not verifiable). Days
   whose stored totals had drifted from their own orders are found too (`stale_day`).
 - **Repair**: any order that differs is written again from Shopify's copy (the upsert a webhook
   does), deleted and test orders are removed, and every day of the window is recomputed. Nothing
