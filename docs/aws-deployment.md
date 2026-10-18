@@ -108,9 +108,11 @@ affect:
   Unlike the tree check above, this also holds when `main` moved, as long as what moved is outside
   that list (the UI, the CDK app, docs). Tests that start reading a file outside the list need it
   added there (step "What the integration tests read").
-- A newer push cancels the older run on the same pull request or on `main` (only the newest run on
-  `main` gets deployed anyway); re-run a failed job only when it is flaky, not to retry a real
-  failure.
+- A newer push cancels the older run on the same pull request. On `main` it waits: the run in
+  progress finishes and deploys, then the newest waiting push runs (older waiting ones are dropped).
+  So merges minutes apart still deploy, at most one run behind. Before 2026-10-18 `main` cancelled
+  too, and that day only 2 of 8 main runs reached Deploy. Re-run a failed job only when it is flaky,
+  not to retry a real failure.
 
 Minutes used so far this month: GitHub → Settings → Billing and licensing → Usage, or
 `gh api users/html-proof/settings/billing/usage/summary` (after `gh auth refresh -s user` once).
@@ -129,7 +131,8 @@ Set up once, in an elevated Windows PowerShell. `infra/runner/install-runner.ps1
 below in one go (`powershell -ExecutionPolicy Bypass -File infra\runner\install-runner.ps1`, from
 the repository folder) and asks only for the new account's password; or run them one at a time.
 The runner runs as its own local account (not the owner's, whose `aws login` session and Git
-credentials stay out of reach) in a folder only administrators can change:
+credentials stay out of reach) in a folder only administrators and the runner can change (config.cmd
+gives its group `GITHUB_ActionsRunner_*` full control):
 
 ```powershell
 $ProgressPreference = 'SilentlyContinue'
@@ -217,6 +220,12 @@ job signs in only with the OIDC deploy role and checks that it did.
   The folder has C:\'s default permissions: any signed-in account on the PC may change it, the same
   trust as what one job leaves for the next.
 - The PC must be on and awake: queued jobs wait up to 24 hours for the runner, then are cancelled.
+  It's a laptop with Modern Standby: it sleeps 3 minutes after the last input once the screen
+  turns off (even on AC, even with "sleep: never"), and when the lid closes. Asleep, it drops the
+  network, so a running job stalls or is lost (on 2026-10-18 it slept twice mid-pipeline). Keep it
+  plugged in and awake: in an elevated PowerShell, `powercfg /change monitor-timeout-ac 0`, then
+  `powercfg /setacvalueindex SCHEME_CURRENT SUB_BUTTONS LIDACTION 0` and
+  `powercfg /setactive SCHEME_CURRENT` (lid closed on AC does nothing).
   A busy PC (demos, other test runs) makes the integration tests 2-3 times slower and can time one
   out: re-run the job.
 - While the runner deploys, nobody deploys by hand: the two don't share a lock.
