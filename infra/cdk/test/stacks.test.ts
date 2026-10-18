@@ -204,9 +204,45 @@ describe("the data stack", () => {
 
 describe("the app stack", () => {
   it("leaves the schedules off unless asked (no double syncs while the old deployment still runs)", () => {
-    const states = (tpl: Template) => Object.values(tpl.findResources("AWS::Scheduler::Schedule")).map((s) => s.Properties.State);
+    const states = (tpl: Template) =>
+      Object.values(tpl.findResources("AWS::Scheduler::Schedule"))
+        .filter((s) => "cron" in JSON.parse(s.Properties.Target.Input))
+        .map((s) => s.Properties.State);
     expect(states(t.app)).toEqual(["DISABLED", "DISABLED"]);
     expect(states(synth({ schedules: "on" }).app)).toEqual(["ENABLED", "ENABLED"]);
+  });
+
+  it("emails the owner the day's AWS cost every morning, letting only the cron function read Cost Explorer", () => {
+    const costSchedules = (tpl: Template) => Object.values(tpl.findResources("AWS::Scheduler::Schedule", { Properties: { Target: { Input: '{"action":"cost-report"}' } } }));
+    const ceGrants = (tpl: Template) =>
+      Object.values(tpl.findResources("AWS::IAM::Policy")).filter((p) => JSON.stringify(p.Properties.PolicyDocument).includes("ce:"));
+    // Once a day at 07:00 in Victoria, on even while the sweeps' schedules are off.
+    const [report, ...others] = costSchedules(t.app);
+    expect(others).toHaveLength(0);
+    expect(report!.Properties).toMatchObject({
+      Name: "insights-production-costreport",
+      ScheduleExpression: "cron(0 7 * * ? *)",
+      ScheduleExpressionTimezone: "Australia/Melbourne",
+      State: "ENABLED",
+      Target: { Arn: { Ref: expect.stringMatching(/^Livecron/) }, DeadLetterConfig: { Arn: { "Fn::GetAtt": [expect.stringMatching(/^MissedTicks/), "Arn"] } } },
+    });
+    // Exactly ce:GetCostAndUsage (no resource-level permissions exist for it), on the cron role alone.
+    const grants = ceGrants(t.app);
+    expect(grants).toHaveLength(1);
+    const statements = grants[0]!.Properties.PolicyDocument.Statement as Array<{ Action: unknown; Resource: unknown }>;
+    expect(statements.filter((st) => JSON.stringify(st.Action).includes("ce:"))).toEqual([{ Action: "ce:GetCostAndUsage", Effect: "Allow", Resource: "*" }]);
+    expect(grants[0]!.Properties.Roles).toEqual([{ Ref: expect.stringMatching(/^FncronServiceRole/) }]);
+    // The budget's address, on the cron function only.
+    const vars = (name: string) => Object.values(t.app.findResources("AWS::Lambda::Function", { Properties: { FunctionName: name } }))[0]!.Properties.Environment.Variables as Record<string, unknown>;
+    expect(vars("insights-production-cron").COST_REPORT_TO).toBe("aby@zodiix.com");
+    expect(vars("insights-production-api").COST_REPORT_TO).toBeUndefined();
+    expect(vars("insights-production-jobs").COST_REPORT_TO).toBeUndefined();
+    // Off in staging (the account's bill is production's email) and with -c costReport=off: no schedule, no grant, no address.
+    for (const off of [synth({ env: "staging" }).app, synth({ costReport: "off" }).app]) {
+      expect(costSchedules(off)).toHaveLength(0);
+      expect(ceGrants(off)).toHaveLength(0);
+      for (const f of Object.values(off.findResources("AWS::Lambda::Function"))) expect(f.Properties.Environment?.Variables?.COST_REPORT_TO).toBeUndefined();
+    }
   });
 
   it("gives every job queue a dead-letter queue and covers the jobs timeout", () => {
