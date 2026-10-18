@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { appForShop, installTarget, resetShopifyAppsCache, servesAnyShop, shopifyApp, shopifyApps } from "../src/apps.js";
+import { appForShop, appStoreWorkspace, connectApp, installTarget, resetShopifyAppsCache, servesAnyShop, shopifyApp, shopifyApps } from "../src/apps.js";
 import { resetEnvCache } from "../src/env.js";
 
 const TEST_STORE = "my-test-store.myshopify.com";
@@ -179,5 +179,60 @@ describe("Shopify app registry: the App Store app new stores are sent to", () =>
     expect(installTarget().key).toBe("default");
     configure({ SHOPIFY_INSTALL_APP: "pixmagic" });
     expect(installTarget().key).toBe("default");
+  });
+
+  describe("App Store workspaces", () => {
+    const store = (shopDomain: string, shopifyAppKey: string) => ({ shopDomain, shopifyAppKey });
+    const listed = store("listed.myshopify.com", "public");
+    const direct = store("direct.myshopify.com", "default");
+
+    it("are the ones whose every store came through the App Store app", () => {
+      expect(appStoreWorkspace([listed])).toBe(true);
+      expect(appStoreWorkspace([listed, store("other.myshopify.com", "public")])).toBe(true);
+      // A merchant with a store from another of our apps keeps everything they had.
+      expect(appStoreWorkspace([listed, direct])).toBe(false);
+      expect(appStoreWorkspace([direct])).toBe(false);
+      expect(appStoreWorkspace([store(CLIENT_STORE, "pixmagic")])).toBe(false);
+      // Nothing to go by yet.
+      expect(appStoreWorkspace([])).toBe(false);
+    });
+
+    it("include the reviewer's test store, though it is on the main app", () => {
+      configure({ SHOPIFY_APP_STORE_PREVIEW_SHOPS: " Direct.myshopify.com , not a shop!" });
+      expect(appStoreWorkspace([direct])).toBe(true);
+      expect(appStoreWorkspace([direct, listed])).toBe(true);
+      expect(appStoreWorkspace([direct, store("else.myshopify.com", "default")])).toBe(false);
+    });
+
+    it("add stores through the App Store app; everyone else through the install target", () => {
+      expect(connectApp(null, [listed])?.key).toBe("public");
+      expect(connectApp("new-store.myshopify.com", [listed])?.key).toBe("public");
+      expect(connectApp(null, [direct])?.key).toBe("default");
+      expect(connectApp("new-store.myshopify.com", [direct])?.key).toBe("default");
+      expect(connectApp(null, [])?.key).toBe("default");
+    });
+
+    it("never move a store off the app it came through, and a store with its own app keeps it", () => {
+      // Reconnecting the reviewer's main-app test store in an App Store workspace.
+      configure({ SHOPIFY_APP_STORE_PREVIEW_SHOPS: direct.shopDomain });
+      expect(connectApp(direct.shopDomain, [direct], direct)?.key).toBe("default");
+      // A main-app store whose workspace later took an App Store store.
+      expect(connectApp(direct.shopDomain, [listed], direct)?.key).toBe("default");
+      // Once new stores go to the App Store app, existing main-app stores still reconnect through theirs.
+      configure({ SHOPIFY_APP_STORE_PREVIEW_SHOPS: "", SHOPIFY_INSTALL_APP: "public" });
+      expect(connectApp(direct.shopDomain, [direct], direct)?.key).toBe("default");
+      expect(connectApp(CLIENT_STORE, [listed])?.key).toBe("pixmagic");
+    });
+
+    it("send nobody to an app their store can't install", () => {
+      // The App Store app misconfigured (no secret): back to the install target, which serves any store.
+      configure({ SHOPIFY_APP_SECRET_PUBLIC: "" });
+      expect(connectApp(null, [listed])?.key).toBe("default");
+      // The main app limited to our own stores: no picker, and a stranger's store by name is refused.
+      configure({ SHOPIFY_DEFAULT_APP_SHOPS: TEST_STORE });
+      expect(connectApp(null, [direct])).toBeNull();
+      expect(connectApp("someone-elses-store.myshopify.com", [direct])).toBeNull();
+      expect(connectApp(TEST_STORE, [direct])?.key).toBe("default");
+    });
   });
 });

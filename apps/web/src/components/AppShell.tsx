@@ -124,11 +124,12 @@ function NavGroup({ title, items, onNavigate }: { title?: string; items: NavItem
 function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const path = usePathname().replace(/\/$/, "");
   const view = useCurrentView();
-  const { me, workspace, access, allowed } = useApp();
+  const { me, workspace, access, allowed, offers } = useApp();
   const onDash = isDashboard(path);
   const full = hasFullAccess(access.role);
-  // Only what this member was granted (Team & Access); the API refuses the rest whatever the menu shows.
-  const topic = (t: Topic, label: string, icon: LucideIcon): NavItem[] => (seesTopic(access, t) ? [{ label, icon, href: `${DASHBOARD}?view=${t}`, topic: t, active: onDash && view === t }] : []);
+  // Only what this member was granted (Team & Access), of what the workspace offers; the API refuses
+  // the rest whatever the menu shows.
+  const topic = (t: Topic, label: string, icon: LucideIcon): NavItem[] => (seesTopic(access, t, offers) ? [{ label, icon, href: `${DASHBOARD}?view=${t}`, topic: t, active: onDash && view === t }] : []);
   const area = (href: string, label: string, icon: LucideIcon): NavItem => ({ label, icon, href, active: path === href || path.startsWith(`${href}/`) });
 
   const main: NavItem[] = [
@@ -143,8 +144,8 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   ];
   const store: NavItem[] = [...topic("orders", "Orders", ReceiptText), ...topic("stock", "Stock", Boxes), ...topic("shipping", "Shipping", Truck), ...topic("channels", "Sales channels", Store)];
   const apps: NavItem[] = [
-    ...(allowed("marketing.campaigns") ? [area("/whatsapp", "WhatsApp", MessageCircle)] : []),
-    ...(staffAccess(workspace.role, workspace.staffRole, workspace.permissions).permissions.length > 0 ? [area("/staff", "Staff", Users)] : []),
+    ...(offers("whatsapp") && allowed("marketing.campaigns") ? [area("/whatsapp", "WhatsApp", MessageCircle)] : []),
+    ...(offers("staff") && staffAccess(workspace.role, workspace.staffRole, workspace.permissions).permissions.length > 0 ? [area("/staff", "Staff", Users)] : []),
     ...(me.employments?.length ? [area("/portal", "My work", Briefcase)] : []),
     ...(!full && allowed("integrations.status") ? [area("/settings/integrations", "Integrations", Plug)] : []),
     ...(allowed("members:manage") ? [area("/team", "Team & Access", ShieldCheck)] : []),
@@ -559,18 +560,18 @@ function TopBar({ onMenu, onSearch }: { onMenu: () => void; onSearch: () => void
  * either way; this keeps them off a page that could only show refusals.
  */
 function useAccessGuard(): boolean {
-  const { me, access, workspace, setAccessNotice } = useApp();
+  const { me, access, workspace, setAccessNotice, offers } = useApp();
   const router = useRouter();
   const path = usePathname();
   const view = useCurrentView();
-  const pageOk = canOpenPage(path, access, workspace.staffRole ?? null, !!me.shared);
-  const topicOk = !(isDashboard(path) && view && !seesTopic(access, view));
+  const pageOk = canOpenPage(path, access, workspace.staffRole ?? null, !!me.shared, offers);
+  const topicOk = !(isDashboard(path) && view && !seesTopic(access, view, offers));
   const ok = pageOk && topicOk;
   useEffect(() => {
     if (ok) return;
     setAccessNotice(pageOk ? "That part of the dashboard isn't shared with you." : "You don't have access to that page.");
-    router.replace(landingPath(access, workspace.staffRole ?? null));
-  }, [ok, pageOk, access, workspace.staffRole, router, setAccessNotice]);
+    router.replace(landingPath(access, workspace.staffRole ?? null, offers));
+  }, [ok, pageOk, access, workspace.staffRole, router, setAccessNotice, offers]);
   return ok;
 }
 
@@ -587,7 +588,7 @@ function AccessNotice() {
 }
 
 export function AppShell({ children }: { children: ReactNode }) {
-  const { me, workspace, workspaces, setWorkspaceId, access, allowed } = useApp();
+  const { me, workspace, workspaces, setWorkspaceId, access, allowed, offers } = useApp();
   const router = useRouter();
   const path = usePathname();
   const allowedHere = useAccessGuard();
@@ -615,21 +616,21 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   const items = useMemo<PaletteItem[]>(() => {
     const go = (href: string) => () => router.push(href);
-    const staff = staffAccess(workspace.role, workspace.staffRole, workspace.permissions).permissions.length > 0;
-    const page = (href: string) => canOpenPage(href, access, workspace.staffRole ?? null, !!me.shared);
+    const staff = offers("staff") && staffAccess(workspace.role, workspace.staffRole, workspace.permissions).permissions.length > 0;
+    const page = (href: string) => canOpenPage(href, access, workspace.staffRole ?? null, !!me.shared, offers);
     return [
       ...(showsDashboardHome(access) ? [{ id: "dashboard", label: "Dashboard", group: "Insights", icon: LayoutDashboard, keywords: "home", go: go(DASHBOARD) }] : []),
-      ...TOPICS.filter((t) => seesTopic(access, t)).map(
+      ...TOPICS.filter((t) => seesTopic(access, t, offers)).map(
         (t): PaletteItem => ({ id: `topic-${t}`, label: topicInfo(t).title, group: "Insights", icon: TOPIC_ICON[t], keywords: TOPIC_WORDS[t], go: () => goToTopic(t, window.location.pathname, (href) => router.push(href)) }),
       ),
-      ...(allowed("marketing.campaigns") ? [{ id: "whatsapp", label: "WhatsApp", group: "Apps", icon: MessageCircle, keywords: "messages campaigns", go: go("/whatsapp") }] : []),
+      ...(offers("whatsapp") && allowed("marketing.campaigns") ? [{ id: "whatsapp", label: "WhatsApp", group: "Apps", icon: MessageCircle, keywords: "messages campaigns", go: go("/whatsapp") }] : []),
       ...(staff ? [{ id: "staff", label: "Staff", group: "Apps", icon: Users, keywords: "employees payroll timesheets roster", go: go("/staff") }] : []),
       ...(me.employments?.length ? [{ id: "portal", label: "My work", group: "Apps", icon: Briefcase, go: go("/portal") }] : []),
       ...(allowed("members:manage") ? [{ id: "team", label: "Team & Access", group: "Settings", icon: ShieldCheck, keywords: "members invite users roles permissions share", go: go("/team") }] : []),
       ...SETTINGS_PAGES.filter((s) => !s.href && page(`/settings/${s.slug}`)).map((s): PaletteItem => ({ id: `settings-${s.slug}`, label: s.label, group: "Settings", icon: s.icon, keywords: s.keywords, go: go(`/settings/${s.slug}`) })),
       { id: "help", label: "Help centre", group: "Help", icon: Headset, keywords: "support contact faq", go: go("/support") },
     ];
-  }, [router, workspace.role, workspace.staffRole, workspace.permissions, me.employments, me.shared, access, allowed]);
+  }, [router, workspace.role, workspace.staffRole, workspace.permissions, me.employments, me.shared, access, allowed, offers]);
 
   return (
     <div className="min-h-dvh">

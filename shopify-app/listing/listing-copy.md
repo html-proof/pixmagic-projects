@@ -119,7 +119,7 @@ Never list Growth or Scale (`PLANS` in `packages/core/src/billing.ts`) while bil
 bizinsights is a free, read-only sales and stock dashboard. It is not embedded in the Shopify admin: it opens in its own browser tab at bizinsights.io with its own login (see Test account).
 
 Before you start
-- Install only from this listing or our install link. Until approval, the connect buttons inside bizinsights.io (Continue with Shopify, Connect a store, Reconnect) go through our earlier app and can't install on your store.
+- Install from this listing. The test account already holds our development store "Insights Test": switch between it and your store with the menus in the top bar. Connect buttons inside bizinsights go through this app too.
 - Test orders (Bogus Gateway, test mode) are left out, as in Shopify's reports. Create orders in the admin instead: Orders > Create order > Collect payment > Mark as paid.
 - Shopify shares the last 60 days of orders with the app.
 
@@ -132,15 +132,21 @@ Before you start
 7. Create another paid order, then Settings > Shopify > Sync now. It appears in Recent orders (or within about 5 minutes while the dashboard is open).
 8. Uninstall: the access token is deleted at once, and shop/redact erases the store's data. Reinstalling authorizes again and re-imports.
 
-Not in this listing: the optional "More insights you can unlock" cards (each asks Shopify for an extra permission), and the WhatsApp, Staff, advertising and email modules, which need the merchant's own third-party accounts.
+The optional "More insights you can unlock" cards each ask Shopify for an extra permission; nothing in this listing depends on them.
 
 Data: read_orders and read_products only. The reports store no customer name, email, address or phone. Tokens are encrypted (AES-256-GCM). customers/data_request appears in Settings > Privacy requests; customers/redact and shop/redact are handled.
 
 Support: sales@ikorex.com.au
 ```
 
-Delete the "Not in this listing" paragraph once those modules are hidden from App Store installs,
-and the first "Before you start" bullet once `SHOPIFY_INSTALL_APP` is `public`.
+Revised 2026-10-18 for the pull request that hides WhatsApp, Staff, advertising and email from App
+Store installs and sends their in-app connects through this app (`apps/web/src/lib/features.ts`,
+`appStoreWorkspace` and `connectApp` in `packages/core/src/apps.ts`). The test account's own
+workspace counts as one: its store is listed in `SHOPIFY_APP_STORE_PREVIEW_SHOPS`
+(`apps/aws/src/settings.ts`), because the "Insights Test" development store is in the main app's
+organization and stays on the main app. The form held the earlier text at submission: paste this
+one in when the reviewer's feedback comes back, before **Submit fixes** (its warning that the
+in-app connect buttons "can't install on your store" no longer holds).
 
 **Test account** (OWNER): a bizinsights login created at https://bizinsights.io/signup with email
 and password (no Google sign-in, no two-factor), typed into the form's Username and Password

@@ -6,6 +6,7 @@ import { can, type Role } from "@app/shared/roles";
 import type { StaffRole } from "@app/shared/staff";
 import { api, contextHeaders, isSharedTab, isSignedOut, isTransient, keepRetrying, onSessionGone, setSharedTab } from "@/lib/api";
 import { ACCESS_CHANGED_EVENT, onAccessSignal } from "@/lib/access";
+import { offersModule, type AppModule } from "@/lib/features";
 import { LoadError, Unreachable } from "@/components/LoadError";
 import { AccessRevoked, SharedLinkEnded } from "@/components/team/AccessStates";
 import { signInAndReturn } from "@/lib/returnTo";
@@ -27,6 +28,11 @@ export interface MeWorkspace {
   accessExpiresAt?: string | null;
   /** Fingerprint of this access (the API's `x-access-fp`): a different one means it changed. */
   fingerprint?: string;
+  /**
+   * Its stores came in through the App Store app: it offers only what the listing describes
+   * (lib/features.ts, APP_STORE_MODULES), and adds stores through that app.
+   */
+  appStore?: boolean;
 }
 
 export interface Me {
@@ -73,6 +79,8 @@ interface Ctx {
   access: MemberAccess;
   /** Whether they may do what `need` names there (the API checks the same on every request). */
   allowed(need: AccessNeed): boolean;
+  /** Whether the open workspace offers this part of the app at all (lib/features.ts, offersModule). */
+  offers(part: AppModule): boolean;
   /** Set when their access just changed while they were using the app, to say so once. */
   accessNotice: string | null;
   setAccessNotice(text: string | null): void;
@@ -316,6 +324,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setWorkspaceId,
       access,
       allowed: (need) => allows(access, need),
+      offers: (part) => offersModule(workspace.appStore, part),
       accessNotice,
       setAccessNotice,
       stores,

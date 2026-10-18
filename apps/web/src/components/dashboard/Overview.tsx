@@ -527,7 +527,7 @@ export function OverviewDetail({ ov, currency, onOpen }: { ov: Overview; currenc
           {m.channels && <Fact label="Sales channels used" value={fmtNum(m.channels.items.length)} note="In these dates" />}
           {m.discount_codes && <Fact label="Discount codes used" value={fmtNum(m.discount_codes.items.length)} note="In these dates (top 10)" />}
           <Fact label="Currency and time zone" value={ov.store.currency} note={ov.store.timezone} />
-          <Fact label="Up to date with Shopify" value={fmtRelative(ov.freshness?.asOf ?? ov.store.lastSyncedAt) ?? "Not yet"} note="New orders usually arrive within a minute" />
+          <Fact label="Up to date with Shopify" value={fmtRelative(ov.freshness?.asOf ?? ov.store.lastSyncedAt) ?? "Not yet"} note="Checked about every 5 minutes while the dashboard is open, and again every night" />
         </dl>
       </Panel>
     </>

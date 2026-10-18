@@ -242,7 +242,7 @@ export function TrendCharts({ ov, currency }: { ov: Overview; currency: string }
             integer
             bars
           />
-          {ordersEmpty && <EmptyChart icon={ShoppingCart} title="No orders in this period" body="Orders show up here within a minute of being placed." />}
+          {ordersEmpty && <EmptyChart icon={ShoppingCart} title="No orders in this period" body="New orders show up here within a few minutes while this page is open. Test orders aren't counted, as in Shopify's reports." />}
         </div>
       </section>
     </div>

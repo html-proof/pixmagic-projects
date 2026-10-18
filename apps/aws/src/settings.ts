@@ -37,6 +37,12 @@ export const APP_SETTINGS = {
   // "default" until Shopify approves "public": an unapproved app installs only on development
   // stores of its own organization, and ours are in the main app's. Approved: set "public".
   "SHOPIFY_INSTALL_APP": "default",
+  // Stores whose workspace is shown as an App Store install sees it (packages/core/src/apps.ts
+  // appStoreWorkspace: only what the listing describes, connects through "public") though they are
+  // connected through another app: "Insights Test", the store in the App Store reviewer's test
+  // account. It is a development store of the main app's organization, which the unapproved
+  // "public" app can't read, so it stays on the main app. Clear it once review is over.
+  "SHOPIFY_APP_STORE_PREVIEW_SHOPS": "insights-test-gpjkykfc.myshopify.com",
   // Paid plans (packages/core/src/billing.ts): "1" lets merchants start one and applies each plan's
   // store limit. Off until they launch; turn it on together with BILLING_ENABLED in
   // apps/web/src/lib/features.ts (docs/shopify-app-store-compliance.md, "Billing").

@@ -29,6 +29,17 @@ export default function SupportPage() {
 
       <LegalSection id="faq" title="Common questions">
         <dl className="divide-y divide-border">
+          <Faq q="How quickly do new orders show up?">
+            While your dashboard is open, bizinsights checks Shopify for new orders and refunds every 5 minutes, and every night it reads the
+            latest days again to catch anything missed. To check straight away, press <strong>Sync now</strong> in Settings → Shopify.
+          </Faq>
+
+          <Faq q="I placed a test order and it isn't on my dashboard.">
+            Test orders (Shopify&apos;s Bogus Gateway, or a payment provider in test mode) aren&apos;t counted, just as Shopify&apos;s own
+            reports leave them out. To try bizinsights on a development store, create an order in your Shopify admin instead (Orders → Create
+            order, then mark it as paid).
+          </Faq>
+
           <Faq q="Why does my dashboard only go back 60 days?">
             The <code>read_orders</code> permission Shopify grants is limited to the last 60 days of orders. Longer history needs an
             additional permission (<code>read_all_orders</code>) that Shopify grants on request. Let us know if you need it and we will
@@ -45,7 +56,7 @@ export default function SupportPage() {
           <Faq q="Why can't I see sessions, conversion rate or new versus returning customers?">
             Those need extra permissions — storefront tracking and customer records — that bizinsights does not request when you install
             it. Each card that needs one has an Enable button on your dashboard that asks Shopify for it, and you can withdraw it at any
-            time from Settings → Stores. Until then we hide what we cannot calculate rather than show an empty chart.
+            time from Settings → Shopify. Until then we hide what we cannot calculate rather than show an empty chart.
           </Faq>
 
           <Faq q="Shopify says the installation link cannot be used.">
@@ -55,12 +66,16 @@ export default function SupportPage() {
 
           <Faq q="How do I disconnect?">
             Uninstall bizinsights from your Shopify admin under Settings → Apps and sales channels. Your access tokens are destroyed as soon
-            as Shopify notifies us. To remove the imported history as well, disconnect the store in Settings → Stores, or write to us and
-            we will delete your whole workspace and account.
+            as Shopify notifies us, and the store&apos;s data is erased when Shopify asks us to, 48 hours later. To remove the imported
+            history straight away, disconnect the store in bizinsights under Settings → Shopify, or write to us and we will delete your whole
+            workspace and account.
           </Faq>
 
           <Faq q="Can I connect more than one store?">
-            Yes. Go to Settings → Stores and connect another store, then switch between them with the store selector on the dashboard.
+            Yes. In bizinsights, open Settings → Shopify and click <strong>Continue with Shopify</strong>: Shopify asks which store to add and
+            for your approval, then brings you back with it connected. Switch between your stores with the store selector at the top of the
+            dashboard. If you install bizinsights on the other store from the Shopify App Store instead, sign in when it opens and the store
+            is added to your account.
           </Faq>
         </dl>
       </LegalSection>

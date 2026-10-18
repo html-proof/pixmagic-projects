@@ -43,7 +43,7 @@ const AWAITING_GRANT_KEY = "insights:awaiting-scope-grant";
  * it, so it resolves itself and the card just says so.
  */
 function LockedModule({ c, onRequest, pending }: { c: Capability; onRequest: (c: Capability) => void; pending: boolean }) {
-  const { workspace } = useApp();
+  const { workspace, store } = useApp();
   const reconnect = c.reconnectableScopes.length > 0;
   const requestable = !reconnect && c.missingScopes.length > 0 && c.requestableScopes.length === c.missingScopes.length;
   return (
@@ -61,8 +61,8 @@ function LockedModule({ c, onRequest, pending }: { c: Capability; onRequest: (c:
               ? `Needs your permission in Shopify to read ${scopeList(c.missingScopes)}. We'll take you there to approve it.`
               : `Needs access to ${scopeList(c.missingScopes)}. We're waiting on Shopify to approve our access to that data — it isn't something you can turn on.`}
       </p>
-      {reconnect && canManage(workspace.role) && (
-        <Link className="btn-primary mt-2 inline-block" href="/onboarding">Reconnect</Link>
+      {reconnect && canManage(workspace.role) && store && (
+        <Link className="btn-primary mt-2 inline-block" href={reconnectHref(workspace.id, store.shopDomain)}>Reconnect</Link>
       )}
       {requestable && canManage(workspace.role) && (
         <button className="btn-primary mt-2" onClick={() => onRequest(c)} disabled={pending}>
@@ -72,6 +72,12 @@ function LockedModule({ c, onRequest, pending }: { c: Capability; onRequest: (c:
     </li>
   );
 }
+
+/**
+ * Reconnecting a store: onboarding authorizes it again by name, through the app it is connected
+ * with (apps/api `connectApp`), so a merchant is never sent to an app their store may refuse.
+ */
+const reconnectHref = (ws: string, shop: string) => `/onboarding?${new URLSearchParams({ ws, shop })}`;
 
 /**
  * The dashboard re-checks the backend this often and only redraws when something changed.
@@ -140,7 +146,7 @@ function DashboardSkeleton() {
 const firstName = (name: string | null) => name?.trim().split(/\s+/)[0] || null;
 
 export default function DashboardPage() {
-  const { me, workspace, stores, storesStatus, store, access, allowed } = useApp();
+  const { me, workspace, stores, storesStatus, store, access, allowed, offers } = useApp();
   // Team & Access: a member with nothing shared yet asks for no numbers at all.
   const sharesData = hasDashboardAccess(access);
   const adsNotice = useAdsConnectedNotice();
@@ -244,7 +250,7 @@ export default function DashboardPage() {
       <EmptyState
         title="Connect your first store"
         body="Once your Shopify store is connected we'll pull in your orders, products and stock levels and keep everything up to date automatically."
-        action={canManage(workspace.role) ? <Link className="btn-primary" href="/onboarding">Continue with Shopify</Link> : <p className="text-sm text-muted">Ask a workspace admin to connect a store.</p>}
+        action={canManage(workspace.role) ? <Link className="btn-primary" href={`/onboarding?ws=${encodeURIComponent(workspace.id)}`}>Continue with Shopify</Link> : <p className="text-sm text-muted">Ask a workspace admin to connect a store.</p>}
       />
     );
   }
@@ -253,7 +259,7 @@ export default function DashboardPage() {
   const m = ov?.modules;
   // Unlocking more data is the store's owners' and admins' business, not a shared member's.
   const disabled = hasFullAccess(access.role) ? (ov?.capabilities.filter((c) => !c.enabled) ?? []) : [];
-  const exportSection = detail.view && allowed("reports.export") && seesTopic(access, detail.view) ? TOPIC_EXPORT[detail.view] : undefined;
+  const exportSection = detail.view && allowed("reports.export") && seesTopic(access, detail.view, offers) ? TOPIC_EXPORT[detail.view] : undefined;
   const exportHref = exportSection && store && asking ? apiHref(`/workspaces/${workspace.id}/stores/${store.id}/export?section=${exportSection}&${asking.qs}`) : null;
   const headerStore = ov?.store ?? store;
   const contactsOn = ov?.capabilities.some((c) => c.id === "contacts" && c.enabled) ?? false;
@@ -346,7 +352,7 @@ export default function DashboardPage() {
                   : "If it keeps coming back, Shopify has most likely stopped accepting our access. Reconnecting grants it again and restarts the import straight away."}
               </p>
               {canManage(workspace.role) && (
-                <Link className="btn-primary mt-2 inline-block" href="/onboarding">Reconnect</Link>
+                <Link className="btn-primary mt-2 inline-block" href={reconnectHref(workspace.id, ov.store.shopDomain)}>Reconnect</Link>
               )}
             </>
           )}
@@ -394,8 +400,9 @@ export default function DashboardPage() {
       {ov && <AreaList ov={ov} currency={cur} topics={topics} onOpen={detail.open} />}
 
       {/* Ad platforms report about themselves, so they get their own section rather than a card in
-          the store's list: results when connected, one way in when not (components/dashboard/Advertising.tsx). */}
-      {ov && <AdvertisingSection ov={ov} manage={allowed("integrations.manage")} onOpen={detail.open} />}
+          the store's list: results when connected, one way in when not (components/dashboard/Advertising.tsx).
+          Not in a workspace that leaves advertising out (lib/features.ts). */}
+      {ov && offers("ads") && <AdvertisingSection ov={ov} manage={allowed("integrations.manage")} onOpen={detail.open} />}
 
       {disabled.length > 0 && (
         <section aria-labelledby="more-h">
