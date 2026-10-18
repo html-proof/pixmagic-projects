@@ -43,7 +43,7 @@ stage is recorded in [refactoring-report.md](refactoring-report.md).
 | --- | --- | --- |
 | Shopify API version bump (H6) | Silent behaviour changes in GraphQL; needs the Partner Dashboard's API health and a live store to test against | owner checks, then a tested bump |
 | Moving production Postgres off the PC; superuser role; credential rotation (T4) | Live infrastructure and credentials | owner decision / action (`docs/security.md`) |
-| Shared Meta Graph transport, Meta token in headers + `appsecret_proof`, async report polling (M13, M14, M16) | `core/ads.ts` and `core/whatsapp/graph.ts` are being rewritten on the ads and WhatsApp branches | do it on top of those branches (design in current-state M16 / dependency map) |
+| `appsecret_proof` and async report polling (M13, rest of M14) | The shared transport and the token in the header were done on 2026-10-18 (`core/metaGraph.ts`, [initial-audit.md](initial-audit.md)); `appsecret_proof` needs Meta's "Require App Secret" decided per app (a merchant's own WhatsApp app has a secret we don't hold) | owner decision, then one line in `graphCall` |
 | Raw provider text in API messages (M6) | Mostly inside `routes/{ads,whatsapp,workspaces}.ts`, edited elsewhere | same pattern as `connectError`, after those merges |
 | Typing untrusted payloads instead of `any` (M17) | `core/normalize.ts` is edited on another branch | Zod / typed GraphQL shapes after that merge |
 | Caching Firebase revocation checks (M18) | `authProvider.ts` is edited on the staff branch; also a security trade-off (up to N seconds of a revoked session) | owner decision on the window |

@@ -35,6 +35,9 @@ Secrets are in Secrets Manager (`insights/production/app`), set with `node infra
 5. Data/normalisation error: capture the error, file a bug, then re-sync after the fix ships.
 6. Resolve: `UPDATE alerts SET resolved_at=now() WHERE id='…';` and set `stores.status='active'` once a sync succeeds (it does this itself on a successful orders sync).
 
+### `reconciliation_mismatch` (warning) – figures still differ from Shopify after the daily check
+The check found figures it couldn't match or repair. Read its row (`reconciliations.findings`: the causes with order ids, and `days` with both sides per day), then see [Dashboard numbers look wrong](#dashboard-numbers-look-wrong). The next check that matches resolves it.
+
 ### `webhook_failed` (warning)
 1. `SELECT topic, error, attempts FROM webhook_events WHERE status='failed' ORDER BY received_at DESC LIMIT 50;`
 2. `Order … not found for refund …`: refund arrived before its order and the order never came. The daily reconcile fixes it; to fix now, re-sync the store.
@@ -67,14 +70,28 @@ The database is unreachable from the functions. Queue consumers notice the same 
 3. Sign-in codes are Cognito's emails (item 1), not ours: `EMAIL_FROM` and SES only carry invitations and alerts. Our rate limit is 3 codes / 15 min per email.
 
 ### Dashboard numbers look wrong
-1. Compare with Shopify Analytics for the **same time zone and definitions** (see [kpis.md](kpis.md)). Common causes: Shopify "Total sales" includes tax and shipping; ours excludes them. Refunds are on refund date.
-2. Recompute the store's daily aggregates from its orders and refunds (idempotent; see [Maintenance tasks](#maintenance-tasks)):
+1. Look at the store's last check against Shopify's records ("About this data" on the dashboard, or `GET /workspaces/:ws/stores/:id/check`), or run one now. It reads the store's orders back from Shopify, repairs any that differ and records what it found ([kpis.md](kpis.md#checked-against-shopify)); `dryRun` only records, `days` reaches further back (60 at most without `read_all_orders`):
+
+```bash
+aws lambda invoke --region ap-southeast-2 --function-name insights-production-cron:live --cli-binary-format raw-in-base64-out --payload '{"action":"verify","shop":"shop.myshopify.com","days":7}' verify.json
+```
+
+   It runs as a job (a minute or two for a small store): its row in `reconciliations` (status, `findings`, `actions`) and `reconciliation_results` (per figure: Shopify's, ours before and after) say how it came out. `differences` left after a repair raise the `reconciliation_mismatch` alert: a bug to chase, with the order ids in `findings`.
+2. Run the check against Shopify's own reports (a store that has granted `read_reports`; read-only, up to 21 ShopifyQL calls):
+
+```bash
+aws lambda invoke --region ap-southeast-2 --function-name insights-production-cron:live --cli-binary-format raw-in-base64-out --payload '{"action":"shopify-check","shop":"shop.myshopify.com"}' check.json
+```
+
+   Every figure of today, yesterday, the last 7/30/90 days, this month and last month, ours next to Shopify's, each `match`, `difference`, `sync_delay` (changes still being counted here), `definition_mismatch` (the pixel's tracked visits against Shopify's sessions) or `not_verifiable` (Shopify refused, or the period starts before the imported history). Owners and admins get the same from `GET /workspaces/:ws/stores/:id/shopify-check` (`?format=csv` downloads it). A `difference` on a sales figure is a bug to chase: both sides add up Shopify's sales records.
+   Without `read_reports`, compare with Shopify Analytics by hand for the **same time zone, dates and comparison** (see [kpis.md](kpis.md)). Refunds count on the day they were made.
+3. Recompute the store's daily aggregates from its orders and refunds (idempotent; see [Maintenance tasks](#maintenance-tasks)):
 
 ```bash
 OPS_SHOP=shop.myshopify.com pnpm --filter @app/worker ops:recompute
 ```
 
-3. Still off: re-sync the store (re-pulls 60 days).
+4. Still off: re-sync the store (re-pulls 60 days).
 
 ## Maintenance tasks
 

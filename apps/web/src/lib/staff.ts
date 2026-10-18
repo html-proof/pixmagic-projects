@@ -210,3 +210,13 @@ export interface SessionRow {
   employee?: { id: string; fullName: string; jobTitle: string; employeeNumber: string };
   pendingCorrection?: boolean;
 }
+
+/** A page of shifts (GET .../timesheets), as the Timesheets page and an employee's tabs list them. */
+export interface TimesheetList {
+  timezone: string;
+  total: number;
+  page: number;
+  pageSize: number;
+  pendingCorrections: number;
+  items: SessionRow[];
+}

@@ -206,6 +206,14 @@ On the PC there is no Docker: each job starts its own throwaway PostgreSQL 18 fr
 (`apps/web/e2e/mailpit-stub.mjs`), all on free ports; the runner stops them with the job. The deploy
 job signs in only with the OIDC deploy role and checks that it did.
 
+- The e2e job's browsers come from `C:\ms-playwright` (`PW_BROWSERS` in the job's environment
+  points elsewhere): Playwright's own download times out on the PC's network, where IPv6 addresses
+  resolve but don't connect. When Playwright moves to a new browser build, the job fails at
+  "playwright install"; fill the folder from an account where the browsers are installed (or after
+  installing them on another network), in Windows PowerShell:
+  `Copy-Item -Recurse -Force $env:LOCALAPPDATA\ms-playwright\* C:\ms-playwright`. The folder has
+  C:\'s default permissions: any signed-in account on the PC may change it (the runner's account
+  writes Playwright's `.links` record there), the same trust as what one job leaves for the next.
 - The PC must be on and awake: queued jobs wait up to 24 hours for the runner, then are cancelled.
   A busy PC (demos, other test runs) makes the integration tests 2-3 times slower and can time one
   out: re-run the job.

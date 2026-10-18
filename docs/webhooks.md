@@ -20,7 +20,8 @@ Webhooks drive all updates after the initial backfill. Endpoint: `POST <APP_URL>
 | `orders/create`, `orders/updated`, `orders/paid`, `orders/cancelled`, `orders/fulfilled`, `orders/partially_fulfilled` | Upsert order + line items + embedded refunds; enqueue re-aggregation of affected days. With WhatsApp on: order timeline, tracking link, notifications (docs/whatsapp.md) |
 | `checkouts/create`, `checkouts/update` | WhatsApp only: abandoned-checkout rows (only with a phone number) and cart reminders; `completed_at` cancels them |
 | `fulfillments/create`, `fulfillments/update`, `fulfillment_events/create` | WhatsApp only: parcel stages. Need `read_fulfillments`, which isn't requested today, so they aren't subscribed; the jobs read shipment status from order payloads and a GraphQL poll instead |
-| `refunds/create` | Upsert refund (booked on refund date). If the order isn't known yet the job throws and retries with backoff |
+| `orders/delete` | Remove the order, its line items and sales records, and recompute its days: Shopify's reports stop counting a deleted order. The daily check against Shopify (docs/kpis.md, "Checked against Shopify") finds deletions whose webhook was missed |
+| `refunds/create` | Read the order's sales records again (the refund is one of them) and recompute the days they fall on |
 | `products/create`, `products/update`, `products/delete` | Upsert / delete product |
 | `app/uninstalled` | Store → `uninstalled`, tokens wiped; a plan billed on the store ends (Free). Data kept until `shop/redact`. One older than the current installation only re-reads the store's charges from Shopify |
 | `app/scopes_update` | Replace granted scopes → dashboard modules update immediately |

@@ -17,7 +17,9 @@ export type ModuleId =
   | "discount_codes"
   | "recent_orders"
   | "inventory"
-  | "catalog";
+  | "catalog"
+  | "shopify_sessions"
+  | "profit";
 
 export interface CapabilityDef {
   id: ModuleId;
@@ -51,7 +53,7 @@ export const CAPABILITIES: readonly CapabilityDef[] = [
   {
     id: "customers",
     title: "New vs returning",
-    description: "Share of orders that come from repeat customers.",
+    description: "Share of customers who had bought from you before.",
     requiredScopes: ["read_orders", "read_customers"],
   },
   {
@@ -109,6 +111,20 @@ export const CAPABILITIES: readonly CapabilityDef[] = [
     requiredScopes: ["write_pixels", "read_customer_events"],
     requires: ["pixel_installed"],
   },
+  // Shopify's own report figures (packages/core/src/shopifyReports.ts): only Shopify's reports
+  // count sessions and visitors as Shopify Analytics does, and record the cost of each sale.
+  {
+    id: "shopify_sessions",
+    title: "Sessions and visitors (Shopify)",
+    description: "Shopify Analytics' own sessions, unique visitors and conversion rate, so they match what you see in Shopify.",
+    requiredScopes: ["read_reports"],
+  },
+  {
+    id: "profit",
+    title: "Gross profit",
+    description: "Shopify's gross profit and cost of goods sold, from the cost per item recorded with each sale.",
+    requiredScopes: ["read_reports"],
+  },
 ];
 
 /**
@@ -140,6 +156,10 @@ export const SCOPE_LABELS: Record<string, { title: string; description: string }
   write_pixels: {
     title: "Visit tracking",
     description: "Lets bizinsights install the tracker that records those storefront visits.",
+  },
+  read_reports: {
+    title: "Your Shopify reports",
+    description: "Shopify's own sessions, visitors and gross profit figures, and its sales report to check ours against.",
   },
 };
 

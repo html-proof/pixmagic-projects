@@ -48,16 +48,6 @@ export async function upsertOrder(store: StoreCtx, o: NormalizedOrder): Promise<
 
   const withCustomers = expandScopes(store.grantedScopes).has("read_customers");
   const ck = withCustomers && o.customerId ? customerKey(store, o.customerId) : null;
-  let isReturning = false;
-  if (ck) {
-    if (o.customerOrderCount !== null) isReturning = o.customerOrderCount > 1;
-    if (!isReturning) {
-      const prior = await systemDb.order.count({
-        where: { storeId: store.id, customerKey: ck, shopifyCreatedAt: { lt: o.createdAt }, cancelledAt: null },
-      });
-      isReturning = prior > 0;
-    }
-  }
 
   const base = {
     name: o.name,
@@ -73,7 +63,11 @@ export async function upsertOrder(store: StoreCtx, o: NormalizedOrder): Promise<
     totalShipping: o.totalShipping,
     totalPrice: o.totalPrice,
     customerKey: ck,
-    isReturningCustomer: isReturning,
+    // What Shopify says about the customer's history, when this copy says anything (a REST webhook
+    // doesn't): kept otherwise. Whether the order is a returning customer's is settled from them
+    // once it is written (settleReturningCustomers).
+    ...(o.customerOrderIndex !== null ? { customerOrderIndex: o.customerOrderIndex } : {}),
+    ...(o.customerOrderCount !== null ? { customerOrderCount: o.customerOrderCount } : {}),
     sourceName: o.sourceName,
     fulfillmentStatus: o.fulfillmentStatus,
     fulfilledAt: o.fulfilledAt,
@@ -131,6 +125,7 @@ export async function upsertOrder(store: StoreCtx, o: NormalizedOrder): Promise<
 
   days.add(day);
   if (existing && existing.localDay !== day) days.add(existing.localDay);
+  if (ck) for (const d of await settleReturningCustomers(store.id, [ck])) days.add(d);
   return days;
 }
 
@@ -180,21 +175,39 @@ export async function replaceOrderSales(
   sales: NormalizedSale[],
   readAt: Date,
   salesKey: string | null | undefined,
+  history: CustomerHistory = { customerOrderIndex: null, customerOrderCount: null },
 ): Promise<Set<string> | null> {
-  return systemDb.$transaction(async (tx) => {
+  const written = await systemDb.$transaction(async (tx) => {
     // One writer per order, as in upsertOrder (the same lock key).
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`order:${store.id}:${orderShopifyId}`}))`;
     const order = await tx.order.findUnique({
       where: { storeId_shopifyId: { storeId: store.id, shopifyId: orderShopifyId } },
-      select: { id: true, localDay: true, salesUpdatedAt: true },
+      select: { id: true, localDay: true, salesUpdatedAt: true, customerKey: true },
     });
     if (!order) return null;
-    if (order.salesUpdatedAt && order.salesUpdatedAt > readAt) return new Set<string>();
+    if (order.salesUpdatedAt && order.salesUpdatedAt > readAt) return { days: new Set<string>(), customerKey: null };
     const days = await writeSalesTx(tx, store, order.id, sales);
-    await tx.order.update({ where: { id: order.id }, data: { salesUpdatedAt: readAt, ...(salesKey !== undefined ? { salesKey } : {}) } });
+    await tx.order.update({
+      where: { id: order.id },
+      data: {
+        salesUpdatedAt: readAt,
+        ...(salesKey !== undefined ? { salesKey } : {}),
+        ...(history.customerOrderIndex !== null ? { customerOrderIndex: history.customerOrderIndex } : {}),
+        ...(history.customerOrderCount !== null ? { customerOrderCount: history.customerOrderCount } : {}),
+      },
+    });
     days.add(order.localDay);
-    return days;
+    return { days, customerKey: order.customerKey };
   });
+  if (!written) return null;
+  if (written.customerKey) for (const d of await settleReturningCustomers(store.id, [written.customerKey])) written.days.add(d);
+  return written.days;
+}
+
+/** What an order read says about its customer's history (see Order.customerOrderIndex in the schema). */
+export interface CustomerHistory {
+  customerOrderIndex: number | null;
+  customerOrderCount: number | null;
 }
 
 /** The money state the stored sales of an order were read for, or undefined when it isn't stored. */
@@ -206,18 +219,25 @@ export async function storedSalesState(store: Pick<Store, "id">, orderShopifyId:
   return o ?? undefined;
 }
 
-/** Delete these orders (with their line items and sales); returns the days they were on. */
-async function removeOrders(store: StoreCtx, shopifyIds: string[]): Promise<Set<string>> {
+/**
+ * Delete these orders (with their line items and sales): test orders, and orders the merchant
+ * deleted in Shopify, which its reports no longer count (`orders/delete`, or found gone by the
+ * reconciliation). Returns the days they were on, and the days whose other orders changed from
+ * new to returning customer's or back (the customer's history lost an order).
+ */
+export async function removeOrders(store: Pick<Store, "id">, shopifyIds: string[]): Promise<Set<string>> {
   const days = new Set<string>();
   if (!shopifyIds.length) return days;
-  const rows = await systemDb.$queryRaw<Array<{ day: string }>>`
-    SELECT o.local_day AS day FROM orders o WHERE o.store_id = ${store.id} AND o.shopify_id = ANY(${shopifyIds}::text[])
+  const rows = await systemDb.$queryRaw<Array<{ day: string; customer_key: string | null }>>`
+    SELECT o.local_day AS day, o.customer_key FROM orders o WHERE o.store_id = ${store.id} AND o.shopify_id = ANY(${shopifyIds}::text[])
     UNION
-    SELECT s.local_day AS day FROM order_sales s JOIN orders o ON o.id = s.order_id
+    SELECT s.local_day AS day, NULL AS customer_key FROM order_sales s JOIN orders o ON o.id = s.order_id
     WHERE o.store_id = ${store.id} AND o.shopify_id = ANY(${shopifyIds}::text[])`;
   if (!rows.length) return days;
   await systemDb.order.deleteMany({ where: { storeId: store.id, shopifyId: { in: shopifyIds } } });
   for (const r of rows) days.add(r.day);
+  const keys = [...new Set(rows.map((r) => r.customer_key).filter((k): k is string => !!k))];
+  for (const d of await settleReturningCustomers(store.id, keys)) days.add(d);
   return days;
 }
 
@@ -240,10 +260,9 @@ async function removeOrders(store: StoreCtx, shopifyIds: string[]): Promise<Set<
  * data-modifying CTE would be a round trip cheaper and wrong: CTE execution order is
  * unspecified, so the insert could run before the delete and collide on the unique index.
  *
- * It deliberately does NOT derive `is_returning_customer` by counting earlier orders the way
- * `upsertOrder` does: that costs a query per order and is wrong anyway when orders do not
- * arrive oldest-first. Shopify's own count is used when present, and
- * `recomputeReturningCustomers` settles the rest once the import is complete.
+ * Whether each order is a returning customer's is settled for the batch's customers in one
+ * statement at the end (`settleReturningCustomers`), from Shopify's position of each order in its
+ * customer's history; the import settles the whole store again once every order is in.
  *
  * Sales and test orders are handled as `upsertOrder` handles them.
  *
@@ -275,7 +294,10 @@ export async function writeOrderBatch(store: StoreCtx, orders: NormalizedOrder[]
       total_shipping: String(o.totalShipping),
       total_price: String(o.totalPrice),
       customer_key: withCustomers && o.customerId ? customerKey(store, o.customerId) : null,
-      is_returning_customer: (o.customerOrderCount ?? 0) > 1,
+      // Provisional until settleReturningCustomers runs below, from Shopify's own position of the order.
+      is_returning_customer: (o.customerOrderIndex ?? 0) > 1,
+      customer_order_index: o.customerOrderIndex,
+      customer_order_count: o.customerOrderCount,
       source_name: o.sourceName,
       fulfillment_status: o.fulfillmentStatus,
       fulfilled_at: ts(o.fulfilledAt),
@@ -309,7 +331,8 @@ export async function writeOrderBatch(store: StoreCtx, orders: NormalizedOrder[]
       INSERT INTO orders (id, workspace_id, store_id, shopify_id, name, currency, local_day, shopify_created_at, shopify_updated_at,
                           cancelled_at, financial_status, subtotal, total_discounts, total_tax, total_shipping, total_price,
                           customer_key, is_returning_customer, source_name, fulfillment_status, fulfilled_at, discount_codes,
-                          traffic_source, traffic_medium, traffic_campaign, referrer_host, sales_updated_at, sales_key)
+                          traffic_source, traffic_medium, traffic_campaign, referrer_host, sales_updated_at, sales_key,
+                          customer_order_index, customer_order_count)
       SELECT gen_random_uuid()::text, ${store.workspaceId}, ${store.id}, s.shopify_id, s.name, s.currency, s.local_day,
              (s.created_at)::timestamptz AT TIME ZONE 'UTC', (s.updated_at)::timestamptz AT TIME ZONE 'UTC',
              (s.cancelled_at)::timestamptz AT TIME ZONE 'UTC', s.financial_status,
@@ -317,13 +340,14 @@ export async function writeOrderBatch(store: StoreCtx, orders: NormalizedOrder[]
              s.customer_key, s.is_returning_customer, s.source_name, s.fulfillment_status,
              (s.fulfilled_at)::timestamptz AT TIME ZONE 'UTC', s.discount_codes,
              s.traffic_source, s.traffic_medium, s.traffic_campaign, s.referrer_host,
-             (s.sales_updated_at)::timestamptz AT TIME ZONE 'UTC', s.sales_key
+             (s.sales_updated_at)::timestamptz AT TIME ZONE 'UTC', s.sales_key,
+             s.customer_order_index, s.customer_order_count
       FROM jsonb_to_recordset(${JSON.stringify(payload)}::jsonb) AS s(
         shopify_id text, name text, currency text, local_day text, created_at text, updated_at text, cancelled_at text,
         financial_status text, subtotal text, total_discounts text, total_tax text, total_shipping text, total_price text,
         customer_key text, is_returning_customer boolean, source_name text, fulfillment_status text, fulfilled_at text,
         discount_codes text[], traffic_source text, traffic_medium text, traffic_campaign text, referrer_host text,
-        sales_updated_at text, sales_key text
+        sales_updated_at text, sales_key text, customer_order_index int, customer_order_count int
       )
       ON CONFLICT (store_id, shopify_id) DO UPDATE SET
         name = EXCLUDED.name, currency = EXCLUDED.currency, local_day = EXCLUDED.local_day,
@@ -332,7 +356,10 @@ export async function writeOrderBatch(store: StoreCtx, orders: NormalizedOrder[]
         subtotal = EXCLUDED.subtotal, total_discounts = EXCLUDED.total_discounts, total_tax = EXCLUDED.total_tax,
         total_shipping = EXCLUDED.total_shipping, total_price = EXCLUDED.total_price,
         customer_key = EXCLUDED.customer_key,
-        is_returning_customer = orders.is_returning_customer OR EXCLUDED.is_returning_customer,
+        -- Settled for the batch's customers after this (settleReturningCustomers); a copy that
+        -- says nothing about the customer's history keeps what was known.
+        customer_order_index = COALESCE(EXCLUDED.customer_order_index, orders.customer_order_index),
+        customer_order_count = COALESCE(EXCLUDED.customer_order_count, orders.customer_order_count),
         source_name = EXCLUDED.source_name, fulfillment_status = EXCLUDED.fulfillment_status,
         fulfilled_at = EXCLUDED.fulfilled_at, discount_codes = EXCLUDED.discount_codes,
         -- The bulk export carries Shopify's journey; while it isn't processed yet (null), keep what's known.
@@ -419,6 +446,8 @@ export async function writeOrderBatch(store: StoreCtx, orders: NormalizedOrder[]
           quantity = EXCLUDED.quantity, amount = EXCLUDED.amount, discount = EXCLUDED.discount, tax = EXCLUDED.tax`;
     }
   });
+  const keys = [...new Set(payload.map((p) => p.customer_key).filter((k): k is string => !!k))];
+  for (const d of await settleReturningCustomers(store.id, keys)) days.add(d);
   return days;
 }
 
@@ -722,30 +751,48 @@ export async function backfillDays(storeId: string): Promise<string[]> {
 }
 
 /**
- * Repair `is_returning_customer` across a store after a backfill.
+ * Decide, for the given customers' orders (every customer of the store when `customerKeys` is
+ * left out), whether each is a returning customer's, as Shopify does: an order is a new customer's
+ * when it is their very first purchase, and a returning customer's when their order history already
+ * holds an earlier one, whatever they bought since. Returns the store-local days whose orders
+ * changed, for the caller to recompute.
  *
- * `upsertOrder` decides this per order, and when Shopify withholds `numberOfOrders` it falls
- * back to counting the customer's earlier orders *already in our database*. That fallback is
- * only correct if orders arrive oldest-first, which they deliberately no longer do - the
- * backfill walks newest-first so the dashboard fills immediately (see `ordersQuery`). One pass
- * at the end of the backfill, when every order is present, settles it.
+ * - Shopify's own position of the order in the customer's history (`customer_order_index`, from
+ *   the order's journey) decides when it is known: 1 is new, more is returning.
+ * - Otherwise (no journey: POS and draft orders, or not read with it yet): returning when an
+ *   earlier order of the customer is stored, or when the customer's lifetime order count, as
+ *   Shopify last gave it, is more than the orders stored for them, which proves orders from
+ *   before the imported history.
  *
- * `OR`-ing rather than replacing preserves a `true` that came from `numberOfOrders > 1`: that
- * knows about the customer's orders outside our 60-day window, and nothing in our tables does.
+ * Until 2026-10-18 the lifetime count alone decided ("more than one order"), read whenever the
+ * order was imported, so a customer's first order turned "returning" once they bought again, and
+ * the flag never came back. Every order is now worked out from scratch, so this also repairs those.
+ * Earlier cancelled orders count as order history, as they do in Shopify's.
  */
-export async function recomputeReturningCustomers(storeId: string) {
-  await systemDb.$executeRaw`
-    UPDATE orders o SET is_returning_customer = TRUE
-    WHERE o.store_id = ${storeId}
-      AND o.customer_key IS NOT NULL
-      AND NOT o.is_returning_customer
-      AND EXISTS (
-        SELECT 1 FROM orders p
-        WHERE p.store_id = o.store_id
-          AND p.customer_key = o.customer_key
-          AND p.cancelled_at IS NULL
-          AND p.shopify_created_at < o.shopify_created_at
-      )`;
+export async function settleReturningCustomers(storeId: string, customerKeys?: string[]): Promise<Set<string>> {
+  if (customerKeys && !customerKeys.length) return new Set();
+  const only = customerKeys ? Prisma.sql`AND customer_key = ANY(${customerKeys}::text[])` : Prisma.empty;
+  // Shopify's order ids grow with time, so (created_at, length, id) orders two orders of one moment too.
+  const rows = await systemDb.$queryRaw<Array<{ day: string }>>`
+    WITH mine AS (
+      SELECT id, customer_key, shopify_created_at AS at, length(shopify_id) AS idlen, shopify_id AS sid,
+             customer_order_index, customer_order_count, local_day
+      FROM orders WHERE store_id = ${storeId} AND customer_key IS NOT NULL ${only}
+    ),
+    c AS (SELECT customer_key, COUNT(*) AS held, MAX(customer_order_count) AS n FROM mine GROUP BY customer_key),
+    r AS (
+      SELECT m.id, m.local_day,
+             CASE WHEN m.customer_order_index IS NOT NULL THEN m.customer_order_index > 1
+                  ELSE EXISTS (SELECT 1 FROM mine p WHERE p.customer_key = m.customer_key AND (p.at, p.idlen, p.sid) < (m.at, m.idlen, m.sid))
+                       OR COALESCE(c.n, 0) > c.held
+             END AS ret
+      FROM mine m JOIN c ON c.customer_key = m.customer_key
+    )
+    UPDATE orders o SET is_returning_customer = r.ret
+    FROM r
+    WHERE o.id = r.id AND o.is_returning_customer IS DISTINCT FROM r.ret
+    RETURNING r.local_day AS day`;
+  return new Set(rows.map((r) => r.day));
 }
 
 /** shop/redact & uninstall cleanup: remove all synced commerce data for a store. */
@@ -761,6 +808,9 @@ export async function purgeStoreData(storeId: string, fetchImpl?: FetchLike) {
     systemDb.productVariant.deleteMany({ where: { storeId } }),
     systemDb.product.deleteMany({ where: { storeId } }),
     systemDb.dailyStoreMetrics.deleteMany({ where: { storeId } }),
+    // Its checks against Shopify describe data that is gone.
+    systemDb.reconciliation.deleteMany({ where: { storeId } }),
+    systemDb.shopifyReport.deleteMany({ where: { storeId } }),
     systemDb.funnelDaily.deleteMany({ where: { storeId } }),
     systemDb.funnelVisit.deleteMany({ where: { storeId } }),
     systemDb.pixelEventSeen.deleteMany({ where: { storeId } }),

@@ -106,10 +106,10 @@ Locally nothing runs on a schedule: `POST /__scheduled?cron=<expression>` runs o
 | Shopify Admin GraphQL + bulk | orders, products, inventory, billing, scopes | `core/shopify.ts` (`gql`), `worker/bulkOrders.ts` | offline token (AES-GCM at rest) | worker, api (contacts, scopes, billing) |
 | Shopify OAuth | store connect | `apps/api/src/routes/shopify.ts` | client id/secret, HMAC, state | api |
 | Shopify webhooks | data changes, GDPR, billing | `routes/webhooks.ts` | HMAC of raw body | inbound |
-| Meta Marketing API | ad spend sync, reports | `core/ads.ts` (`metaGet/metaSend`) | user token (query/form) | worker, api |
-| Google Ads API, Google OAuth | ad spend sync, reports | `core/ads.ts` | OAuth (PKCE), refresh token | worker, api |
-| AdSense Management API | ad earnings | `core/ads.ts` | OAuth | worker, api |
-| WhatsApp Cloud API (Meta Graph) | messages, templates, Embedded Signup | `core/whatsapp/graph.ts` | Bearer system/business token, app token | worker, api |
+| Meta Marketing API | ad spend sync, reports | `core/ads/meta.ts` (`metaGet/metaSend`) on `core/metaGraph.ts` | user token (Authorization header) | worker, api |
+| Google Ads API, Google OAuth | ad spend sync, reports | `core/ads/googleAds.ts`, `core/ads/googleOAuth.ts` | OAuth (PKCE), refresh token | worker, api |
+| AdSense Management API | ad earnings | `core/ads/adsense.ts` | OAuth | worker, api |
+| WhatsApp Cloud API (Meta Graph) | messages, templates, Embedded Signup | `core/whatsapp/graph.ts` on `core/metaGraph.ts` | Bearer system/business token, app token | worker, api |
 | WhatsApp webhooks | message status, inbound | `routes/whatsappPublic.ts` | `X-Hub-Signature-256` | inbound |
 | Amazon Cognito | sign-in, sign-up, emailed codes, Google federation, admin calls | `apps/api/src/cognito.ts` | app client secret; admin calls signed with the `api` function's role | api |
 | Firebase (migration window only) | a first sign-in with a password Cognito doesn't know yet | `apps/api/src/legacyFirebase.ts` | public web API key | api |
@@ -130,7 +130,7 @@ time limit (`withTimeout`: 30 s, 10 s for Cognito), so a hung provider fails lik
 | Commerce data | core `normalize.ts` + `persist.ts` | orders, order_line_items, refunds, products, product_variants |
 | Aggregates | core `persist.ts` (`recomputeDays`) | daily_store_metrics |
 | Storefront funnel | api `routes/pixel.ts` | funnel_visits, funnel_daily, pixel_events_seen |
-| Advertising | core `ads.ts`, `adConnections.ts` | ad_connections, ad_campaign_daily, adsense_daily |
+| Advertising | core `ads/` (one client per platform), `adConnections.ts` | ad_connections, ad_campaign_daily, adsense_daily |
 | WhatsApp | core `whatsapp/*` | whatsapp_* (9 tables), order_tracking(_events), abandoned_checkouts, customer_reviews |
 
 Every store-scoped table carries `workspace_id`, and RLS restricts the `app_rls` role to

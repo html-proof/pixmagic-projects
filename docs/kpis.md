@@ -2,6 +2,43 @@
 
 Source of truth: `packages/shared/src/kpi.ts` (reference implementation) and `recomputeDays` in `packages/core/src/persist.ts` (SQL used in production). An integration test asserts they produce identical results.
 
+## Metric registry: what each figure matches
+
+Shopify is the reference for every figure it reports itself. Each dashboard figure, the Shopify
+report it reproduces, where bizinsights gets it, and how exactly it can match. "Records" means
+bizinsights adds up Shopify's own sales records (below), so the figure matches Shopify's report to
+the cent for the same dates, and the daily check against Shopify (section "Checked against
+Shopify") proves the records held are Shopify's current ones. "Reports" means Shopify's own report
+total, read with ShopifyQL, which needs `read_reports` and Level 2 protected customer data
+approval; until then the card says why it has no figure, never shows 0.
+
+| Figure | Shopify reference | Source here | Parity | Notes |
+| --- | --- | --- | --- | --- |
+| Gross sales | Sales report: gross sales | Records (order sales) | Exact | Edit-added items count on the edit's day, as in Shopify |
+| Discounts | Sales report: discounts | Records | Exact | Line and order discounts before tax; shipping discounts sit in shipping |
+| Returns (sales reversals) | Sales report: sales reversals (formerly "returns") | Records | Exact | Refunds, returns, cancellations and edit removals, on the day they happened |
+| Net sales | Sales report: net sales | Records | Exact | Gross − discounts − reversals |
+| Shipping charges | Sales report: shipping charges | Records | Exact | After shipping discounts and refunds |
+| Taxes | Sales report: taxes | Records | Exact | Gift cards and tips left out, as Shopify does |
+| Total sales | Sales report: total sales | Records | Exact | Net sales + shipping + taxes + duties + fees |
+| Orders | Sales report: orders | Orders placed | Exact for the range | Cancelled included, test and deleted orders never. Shopify's "over time" reports also show an order edited on a later day on that day; a range total counts it once, as here |
+| Average order value | Sales report: AOV | Records | Exact except for edits | (Gross − discounts) ÷ orders. Shopify leaves later edits out of the numerator ("excluding post-order adjustments"); an edit on a later day in the range makes the two differ slightly |
+| Items sold (net) | Sales report: net items sold | Records | Exact | Ordered − reversed quantities |
+| Returning customer rate | Customers: returning customer rate | Orders placed + Shopify's order position | Exact for online orders | Returning customers ÷ customers, each counted once. New = the order is the customer's first purchase (`customerOrderIndex`); POS and draft orders have no position and fall back (see Formulas). Needs `read_customers` |
+| Refunded orders, refund rate | (bizinsights) | Records | n/a | Not a Shopify report figure |
+| Top products, vendors | Sales by product / vendor: net sales | Records | Exact | |
+| Discount codes | Discounts report | Records | Close | An order with two codes counts for both |
+| Sales channels, traffic sources | Sales by channel / by referrer | Orders + journey | Close | Shopify's last visit before the order; ads platforms attribute differently |
+| Sessions, visitors, conversion rate | Analytics: sessions, online store visitors, conversion rate | Reports (ShopifyQL) | Exact once granted | Bot sessions left out by Shopify. Without `read_reports` only the pixel's **tracked visits** exist, labelled as such and never called sessions |
+| Gross profit | Profit reports: gross profit | Reports (ShopifyQL) | Exact once granted | Uses the cost Shopify recorded at the time of sale, which the Admin API doesn't expose; never estimated from today's unit costs |
+| Net profit | none | | Not shown | No source holds the other costs (fees, postage, apps, staff, ads) |
+| Checkout started, abandoned checkouts, add to cart | Analytics: funnel | Pixel (tracked visits) | BizInsights measure | Consent-dependent; shown as tracked visits. Shopify's figures come with the sessions report |
+| Payment success / failure | none in the reports | | Not shown | |
+| Sales by device | Sessions by device | Reports (ShopifyQL) | Not built | The orders carry no device |
+| Ad spend, ROAS | Meta / Google | Ad platforms | Their figures | Never mixed into store sales |
+
+Currency is always the store's (shop money), days the store's time zone, as in Shopify's reports.
+
 ## Where the sales figures come from
 
 The sales figures are Shopify's own. Shopify's reports are built from its **sales records**: each
@@ -23,6 +60,10 @@ shipping, taxes and total sales as Shopify's sales reports for the same dates.
   order in the import window that has it empty (at most daily).
 - **Test orders** (`Order.test`) are never stored, and one stored before is removed, as Shopify's
   reports leave them out.
+- **Deleted orders** leave the dashboard as they leave Shopify's reports: `orders/delete` removes the
+  order, its line items and sales records and recomputes its days, and the daily check against
+  Shopify removes any whose webhook was missed. Shopify lets a merchant delete only test, imported,
+  draft-converted and manually paid orders, once archived or cancelled.
 
 ## Conventions
 
@@ -124,7 +165,8 @@ shipping, taxes and total sales as Shopify's sales reports for the same dates.
 | Units (items sold) | Σ quantity sold − Σ quantity returned | |
 | **Average order value** | (Gross − Discounts) ÷ Orders | Typical spend per order, after discounts, before returns |
 | **Refund rate** | Returns ÷ (Gross − Discounts) | Share of sales later taken back |
-| **Returning customer rate** | orders from returning customers ÷ orders with a customer | Requires `read_customers`. A customer is "returning" if Shopify reports more than one order for them, or we have an earlier order from them |
+| **Returning customer rate** | returning customers ÷ customers, each customer counted once (orders placed in the range) | Shopify's definition. Requires `read_customers`. An order is a returning customer's when the customer's history already held an order: Shopify's own position of the order (`CustomerJourneySummary.customerOrderIndex`, 1 = first purchase, test orders not counted) decides; without one (POS, draft orders), an earlier stored order of theirs, or a lifetime order count (`numberOfOrders`) above the orders stored for them. A customer who bought for the first time and again in the same range counts as both new and returning. Until 2026-10-18 the lifetime count alone decided, so a first order turned "returning" once the customer bought again, and the rate divided orders, not customers |
+| New customers | customers whose very first purchase is in the range | |
 | Top products | Σ net sales and Σ net items per product (its product sales in the range), top 5 | Requires `read_products`; the products together make net sales |
 | Top vendors | Σ net sales and Σ net items of each vendor's products (their product sales in the range), top 5 | Same terms as top products; used to be line-item prices, tax included |
 | Discount codes | per code, the orders placed with it (cancelled included, as Shopify counts them): Σ discount before tax of their items as sold, and their net sales | Reconciles with the Discounts line: shipping discounts are in shipping; an order with two codes counts for both. Used to be the orders' `totalDiscountsSet` (tax and shipping discounts in) |
@@ -258,6 +300,72 @@ Visits are compared only from the first whole day after the pixel was put in pla
 
 `funnel_daily` is no longer written or read. It holds whatever the pre-visit pixel recorded and can be dropped once nothing needs that history.
 
+## Shopify's own reports (sessions, gross profit, the check)
+
+Some figures only Shopify's reports can give exactly, so bizinsights asks them (ShopifyQL,
+`packages/core/src/shopifyReports.ts`; needs `read_reports` and Shopify's Level 2 protected
+customer data approval, docs/shopify-setup.md) instead of estimating:
+
+| Figure | ShopifyQL | Notes |
+| --- | --- | --- |
+| Sessions | `FROM sessions SHOW sessions`, human sessions only | Shopify ends a session after 30 minutes idle; bot sessions are left out (`human_or_bot_session = 'human'`, Shopify's own classification) |
+| Visitors | `online_store_visitors` | Unique over the whole range: asked for the range whole, never summed from days |
+| Conversion rate | `sessions_that_completed_checkout ÷ sessions` | Shopify's formula; the funnel steps (`sessions_with_cart_additions`, `sessions_that_reached_checkout`) and `pageviews` are shown too |
+| Gross profit | `FROM sales SHOW gross_profit` | Net sales − cost of goods sold, from the cost Shopify recorded with each sale. Sales with no cost recorded count at no cost in Shopify's figure, so the card shows how much (`net_sales_without_cost_recorded`) and the margin on the sales whose cost is known. Not net profit: bizinsights knows none of the other costs |
+| The check | `FROM sales SHOW gross_sales, discounts, sales_reversals, net_sales, shipping_charges, taxes, total_sales, orders` | Our figures for exactly the same window, line by line, to the cent: both add up Shopify's sales records. Shopify's sign for discounts and reversals is read off its own identity (net = gross − discounts − reversals) |
+
+- **Windows**: the dashboard's range and its comparison, in the store's time zone. While the range
+  runs both stop at the last 5-minute mark (today up to 4:40 pm against yesterday up to 4:40 pm),
+  so one answer serves every poll until the next mark.
+- **Kept, not waited for**: answers are kept per store, dataset and window (`shopify_reports`); the
+  dashboard asks the worker for missing or stale ones and fills in on a later poll. Stale: running
+  windows after 10 minutes, the last two days after 30, older ones after 6 hours; a failed call
+  after 10 minutes (the last figures stay shown), a refusal after 6 hours. Kept 14 days.
+- **No figures, no numbers**: when Shopify refuses (no access, a report this plan can't run) or
+  hasn't answered yet, the card says so. A comparison before bizinsights' imported history is
+  still compared: Shopify's reports have the whole history.
+- **The check's states**: match; differs; catching up (changes from Shopify are still being
+  counted here, or our data is older than Shopify's answer); not reported.
+- **Reconciliation report**: the same check for today, yesterday, the last 7/30/90 days, this month
+  and last month at once, with Shopify's sessions against the pixel's tracked visits
+  (`definition_mismatch`) and its gross profit (`shopifyCheckReport`, docs/RUNBOOK.md).
+
+## Checked against Shopify
+
+Every day, about 15 minutes after the daily re-pull, each connected store's last 7 finished days
+are read back from Shopify and compared with what the dashboard holds (`startReconciliation` in
+packages/core/src/reconcile.ts, the `verify` job in apps/worker/src/verify.ts). A first import is
+checked the same way over its whole window once it is in. Owners and admins can check now from
+"About this data" (`POST .../check`, 4 an hour); operators with the cron action `verify`
+(docs/RUNBOOK.md).
+
+- **What it reads**: every order Shopify changed since the window began (placing, refunding,
+  returning, cancelling and editing an order all change it), whole, with its sales records: the
+  query the import uses. Each order's share of the window (orders placed, gross sales, discounts,
+  returns, net sales, shipping, taxes, total sales, items) is added up with the reference formulas
+  (`aggregateDaily`) into Shopify's totals, and compared with the share of the copy stored here.
+- **Why an order differs** (`findings`): missing (never arrived), outdated (Shopify changed it later,
+  its webhook lost), its sales differ (same version, different records), a test order stored,
+  deleted in Shopify (stored, not listed, and Shopify says it is gone), changed while the check ran
+  (a sync delay, not an error), not listed (Shopify no longer shares it, e.g. past its 60 days). Days
+  whose stored totals had drifted from their own orders are found too (`stale_day`).
+- **Repair**: any order that differs is written again from Shopify's copy (the upsert a webhook
+  does), deleted and test orders are removed, and every day of the window is recomputed. Nothing
+  else is ever deleted to make a figure match. `dryRun` only records.
+- **Kept** (`reconciliations`, `reconciliation_results`, 90 days): per figure, Shopify's total, ours
+  before and after the repair, its status (`match`, `repaired`, `difference`, `sync_delay`,
+  `not_verifiable`) and the main cause; per check, the findings with a few order ids, and the days
+  that still differ. A difference nothing explains raises the `reconciliation_mismatch` alert, which
+  the next check that matches resolves.
+- **On the dashboard**: a pill beside the store's status ("Matches Shopify", "Mostly matches
+  Shopify", "Differs from Shopify", "Checking with Shopify…") with the dates and time of the check,
+  and under "About this data" what it found; the figures side by side for members with the sales
+  breakdown permission (`GET .../check`).
+- **What it proves, and what it doesn't**: that every order and sales record held for those days is
+  Shopify's current one, and that the day totals add them up. It can't prove the formulas are
+  Shopify's report definitions: that is the report check (section above, ShopifyQL), kept apart as
+  its own source. Today is left out until it is over; it is checked the next day.
+
 ## How current the numbers are
 
 The pill beside the store's status says when the numbers last matched Shopify (`freshness` in the
@@ -275,6 +383,12 @@ Shopify's own reports can take a few minutes to include a new order too, so the 
 briefly in either direction.
 
 ## Known limitations
+
+- An order edited on a later day: Shopify's "over time" reports show it as an order on that day too,
+  and its AOV leaves post-order adjustments out. Here an order counts once, on the day it was placed,
+  and AOV includes edit-added sales. Range totals of orders agree; AOV can differ slightly.
+- A refund today on an order older than Shopify's 60 days (without `read_all_orders`) is in Shopify's
+  reports and can't be read here: neither the order nor the refund is visible to the app.
 
 - `read_orders` exposes 60 days of history. Longer ranges show data only from 60 days before the first import onward unless `read_all_orders` is approved.
 - An edit reaches the dashboard through the `orders/updated` delivery it causes (`orders/edited` isn't subscribed): its totals change, so the order's sales are read again.

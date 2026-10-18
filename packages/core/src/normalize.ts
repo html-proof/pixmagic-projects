@@ -68,7 +68,14 @@ export interface NormalizedOrder {
   totalShipping: number;
   totalPrice: number;
   customerId: string | null;
+  /** The customer's lifetime order count when read (Customer.numberOfOrders); null when not read. */
   customerOrderCount: number | null;
+  /**
+   * Shopify's position of this order in the customer's order history (1 = their first purchase,
+   * CustomerJourneySummary.customerOrderIndex). Null when the source doesn't say: REST webhooks,
+   * an order with no journey (POS, draft orders), or a journey not processed yet.
+   */
+  customerOrderIndex: number | null;
   /** Sales channel exactly as Shopify reports it (web, pos, an app id, ...); labels come from channelLabel(). */
   sourceName: string | null;
   /** Lowercase snake of GraphQL displayFulfillmentStatus (fulfilled, partially_fulfilled, unfulfilled, ...). */
@@ -266,6 +273,7 @@ export function normalizeRestOrder(o: RestOrder): NormalizedOrder {
     totalPrice: num(o.total_price),
     customerId: o.customer?.id ? String(o.customer.id) : null,
     customerOrderCount: o.customer?.orders_count ?? null,
+    customerOrderIndex: null,
     sourceName: text(o.source_name),
     fulfillmentStatus: restFulfillmentStatus(o.fulfillment_status),
     fulfilledAt: earliest((o.fulfillments ?? []).map((f) => f.created_at)),
@@ -299,18 +307,28 @@ function restTraffic(o: RestOrder): Pick<NormalizedOrder, "traffic" | "trafficFr
 
 /**
  * Shopify's journey for the order. Not asked for (detail queries) or not processed yet (`ready:
- * false`): unknown for now. Processed with no visit (POS, draft orders): that is the answer.
+ * false`): unknown for now. Processed with no visit (POS, draft orders): that is the answer. The
+ * order's position in its customer's history comes with it whenever Shopify gives one.
  */
-function journeyTraffic(o: GraphqlOrder): Pick<NormalizedOrder, "traffic" | "trafficFrom"> {
-  const notYet = { traffic: null, trafficFrom: null };
+function journeyTraffic(o: GraphqlOrder): Pick<NormalizedOrder, "traffic" | "trafficFrom" | "customerOrderIndex"> {
+  const notYet = { traffic: null, trafficFrom: null, customerOrderIndex: null };
   if (!("customerJourneySummary" in o)) return notYet;
   const raw = o.customerJourneySummary;
-  if (raw === null || raw === undefined) return { traffic: classifyVisit(null, text(o.sourceName)), trafficFrom: "journey" };
+  if (raw === null || raw === undefined) return { traffic: classifyVisit(null, text(o.sourceName)), trafficFrom: "journey", customerOrderIndex: null };
   // A journey that doesn't fit (logged) is treated like one not processed yet.
   const j = parseShopify(journeySummarySchema, raw, "GraphQL customer journey", { order: o.id });
-  if (!j || j.ready === false) return notYet;
-  return { traffic: classifyVisit(j.lastVisit ?? null, text(o.sourceName)), trafficFrom: "journey" };
+  if (!j) return notYet;
+  const customerOrderIndex = orderIndex(j.customerOrderIndex);
+  if (j.ready === false) return { ...notYet, customerOrderIndex };
+  return { traffic: classifyVisit(j.lastVisit ?? null, text(o.sourceName)), trafficFrom: "journey", customerOrderIndex };
 }
+
+/** A position in the customer's history, if it is one (1 or more). */
+export const orderIndex = (v: string | number | null | undefined): number | null => {
+  if (v === null || v === undefined) return null;
+  const n = Number(v);
+  return Number.isInteger(n) && n >= 1 ? n : null;
+};
 
 /** Shopify's enum value (PRODUCT, ADDITIONAL_FEE) as stored: lowercase, "unknown" when missing. */
 const saleEnum = (v: string | null | undefined) => text(v)?.toLowerCase() ?? "unknown";
@@ -511,8 +529,8 @@ const SALE_FIELDS = /* GraphQL */ `
  *
  * Nothing downstream depends on the direction: `progress` is a count, `recomputeDays` is a pure
  * function of the stored rows, and the "fully synced" transition fires on "no next page", not on
- * a date. The one exception is `upsertOrder`'s returning-customer fallback - see
- * `recomputeReturningCustomers` in persist.ts, which repairs it after the backfill.
+ * a date. Whether an order is a returning customer's comes from Shopify's position of the order
+ * in the customer's history, whatever order they arrive in (`settleReturningCustomers`).
  */
 export function ordersQuery(includeCustomer: boolean): string {
   return /* GraphQL */ `
@@ -522,7 +540,7 @@ export function ordersQuery(includeCustomer: boolean): string {
         nodes {
           id name createdAt updatedAt cancelledAt test currencyCode displayFinancialStatus
           sourceName displayFulfillmentStatus discountCodes
-          customerJourneySummary { ready lastVisit { ${VISIT_FIELDS} } }
+          customerJourneySummary { ready customerOrderIndex lastVisit { ${VISIT_FIELDS} } }
           subtotalPriceSet { shopMoney { amount } }
           totalDiscountsSet { shopMoney { amount } }
           totalTaxSet { shopMoney { amount } }
@@ -588,7 +606,7 @@ export function bulkOrdersQuery(includeCustomer: boolean, search: string | null)
           node {
             id name createdAt updatedAt cancelledAt test currencyCode displayFinancialStatus
             sourceName displayFulfillmentStatus discountCodes
-            customerJourneySummary { ready lastVisit { ${VISIT_FIELDS} } }
+            customerJourneySummary { ready customerOrderIndex lastVisit { ${VISIT_FIELDS} } }
             subtotalPriceSet { shopMoney { amount } }
             totalDiscountsSet { shopMoney { amount } }
             totalTaxSet { shopMoney { amount } }
@@ -687,13 +705,20 @@ export const ORDER_LINE_ITEMS_QUERY = /* GraphQL */ `
  * One order's sales, an agreement at a time: `$cursor` walks the agreements, `$salesCursor` the
  * sales of the current one when it has more than 100. Used for an order that overflows the page
  * and for the webhooks, which carry no sales. `updatedAt` dates what was read (the staleness guard).
- * Cost: 1 (Order) + agreements(first: 1) = 2 + 1 (pageInfo) + 1 × (1 (agreement)
- *   + sales(first: 100) = 2 + 1 (pageInfo) + 100 × 8 = 803) = 807 → 808.
+ * It also reads the order's position in its customer's history (customerJourneySummary, read_orders)
+ * and, with read_customers, the customer's lifetime order count: a webhook carries neither, and they
+ * decide whether the order is a new or a returning customer's (settleReturningCustomers).
+ * Cost: 1 (Order) + customerJourneySummary 1 [+ customer 1] + agreements(first: 1) = 2 + 1
+ *   (pageInfo) + 1 × (1 (agreement) + sales(first: 100) = 2 + 1 (pageInfo) + 100 × 8 = 803) = 807
+ *   → 809, 810 with the customer.
  */
-export const ORDER_SALES_QUERY = /* GraphQL */ `
+export function orderSalesQuery(includeCustomer: boolean): string {
+  return /* GraphQL */ `
   query OrderSales($id: ID!, $cursor: String, $salesCursor: String) {
     order(id: $id) {
       updatedAt
+      customerJourneySummary { customerOrderIndex }
+      ${includeCustomer ? "customer { numberOfOrders }" : ""}
       agreements(first: 1, after: $cursor) {
         pageInfo { hasNextPage endCursor }
         nodes {
@@ -706,6 +731,10 @@ export const ORDER_SALES_QUERY = /* GraphQL */ `
       }
     }
   }`;
+}
+
+/** orderSalesQuery without the customer (a store that hasn't granted read_customers). */
+export const ORDER_SALES_QUERY = orderSalesQuery(false);
 
 /**
  * Products page. Cost: Product node = 1 (all other fields are scalars/enums);

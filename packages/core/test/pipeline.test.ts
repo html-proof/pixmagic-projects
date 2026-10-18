@@ -11,6 +11,7 @@ import {
   normalizeRestVariant,
   ORDER_LINE_ITEMS_QUERY,
   ORDER_SALES_QUERY,
+  orderSalesQuery,
   ordersQuery,
   PAGE_SIZE,
   PRODUCTS_QUERY,
@@ -116,7 +117,9 @@ describe("query cost (Shopify rejects requested cost > 1000)", () => {
 
   it("per-order detail queries stay under the cap", () => {
     expect(requestedCost(ORDER_LINE_ITEMS_QUERY)).toBe(704);
-    expect(requestedCost(ORDER_SALES_QUERY)).toBe(808);
+    // The order's position in its customer's history costs 1, the customer's order count 1 more.
+    expect(requestedCost(ORDER_SALES_QUERY)).toBe(809);
+    expect(requestedCost(orderSalesQuery(true))).toBe(810);
   });
 
   it("products and variants pages", () => {

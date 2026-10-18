@@ -274,13 +274,16 @@ export interface Overview {
    * changes that failed for good in the last 24 hours.
    */
   freshness?: Freshness;
+  /** The last check of the figures against Shopify's own records (outcome only). */
+  check?: CheckSummary;
   capabilities: Capability[];
   hasData: boolean;
   data?: ImportedData;
   modules: {
     sales_overview?: SalesOverview;
     refunds?: { current: { refunds: number; refundRate: number | null; refundedOrders: number }; deltas: { refunds: number | null } };
-    customers?: { current: { returningCustomerRate: number | null }; previous: { returningCustomerRate: number | null } };
+    /** Customers counted once each, as Shopify's reports count them; rate = returning ÷ customers. */
+    customers?: { current: CustomerCounts; previous: { [K in keyof CustomerCounts]: CustomerCounts[K] | null } };
     top_products?: { items: Array<{ productId: string | null; title: string; revenue: number; units: number }> };
     funnel?: FunnelModule;
     channels?: ChannelsModule;
@@ -297,5 +300,102 @@ export interface Overview {
     ad_connections?: { meta: number; google: number; adsense: number; hidden: number };
     /** Which platforms this server can connect (absent: none is set up). */
     ad_configured?: { meta: boolean; google: boolean; adsense: boolean };
+    /** Shopify's own figures (packages/core/src/reports/shopify.ts), with its reports granted. */
+    shopify_sessions?: ShopifySessionsModule;
+    profit?: ProfitModule;
+    shopify_check?: ShopifyCheckModule;
   };
+}
+
+/** Customers who ordered in a range (the customers module): each once, however many orders. */
+export interface CustomerCounts {
+  customers: number;
+  /** Customers with an order placed when their history already held one. */
+  returningCustomers: number;
+  /** Customers whose very first purchase is in the range (one can be in both). */
+  newCustomers: number;
+  returningCustomerRate: number | null;
+}
+
+/** The figures a check against Shopify compares (RECONCILE_METRICS in packages/core/src/reconcile.ts). */
+export type CheckMetric = "orders" | "grossSales" | "discounts" | "returns" | "netSales" | "shipping" | "taxes" | "totalSales" | "units";
+
+/** The last check against Shopify's own records, as the overview gives it to everyone: no figures. */
+export interface CheckSummary {
+  /** When the check now running began; null when none is. */
+  running: string | null;
+  last: {
+    status: "verified" | "repaired" | "differences" | "incomplete";
+    from: string;
+    to: string;
+    checkedAt: string;
+    ordersChecked: number;
+    matched: number;
+    compared: number;
+    /** Orders written again or removed so the figures match. */
+    repaired: number;
+  } | null;
+}
+
+/** GET .../check: the last check with its figures (needs the sales breakdown permission). */
+export interface CheckDetail {
+  running: string | null;
+  last: {
+    id: string;
+    status: string;
+    from: string;
+    to: string;
+    checkedAt: string;
+    currency: string;
+    findings: Partial<Record<string, number>>;
+    repaired: number;
+    removed: number;
+    results: Array<{ metric: CheckMetric; shopify: number | null; before: number | null; bizinsights: number | null; status: string; cause: string | null }>;
+  } | null;
+}
+
+/** Where a Shopify report answer stands: figures, being fetched, or why Shopify gave none. */
+export type ReportStatus = "ready" | "loading" | "access_denied" | "unsupported" | "failed";
+
+interface ReportAnswer {
+  status: ReportStatus;
+  /** When Shopify was asked. */
+  asOf: string | null;
+  /** While the range runs: the store-local time both windows stop at (a 5-minute mark). */
+  until: string | null;
+}
+
+export interface SessionFigures {
+  sessions: number | null;
+  visitors: number | null;
+  cartSessions: number | null;
+  checkoutSessions: number | null;
+  completedSessions: number | null;
+  pageviews: number | null;
+  conversionRate: number | null;
+}
+
+export interface ShopifySessionsModule extends ReportAnswer {
+  current: SessionFigures | null;
+  previous: SessionFigures | null;
+  deltas: { sessions: number | null; visitors: number | null; conversionRate: number | null };
+}
+
+export interface ProfitModule extends ReportAnswer {
+  current: {
+    grossProfit: number | null;
+    costOfGoodsSold: number | null;
+    netSalesWithCost: number | null;
+    netSalesWithoutCost: number | null;
+    profitOnCosted: number | null;
+    marginOnCosted: number | null;
+  } | null;
+  previous: { grossProfit: number | null } | null;
+  deltas: { grossProfit: number | null };
+}
+
+export interface ShopifyCheckModule extends ReportAnswer {
+  window: { from: string; to: string };
+  rows: Array<{ metric: string; shopify: number | null; ours: number; difference: number | null; state: "match" | "differs" | "delay" | "unknown" }> | null;
+  matches: boolean | null;
 }

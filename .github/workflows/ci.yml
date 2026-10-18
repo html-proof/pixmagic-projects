@@ -290,6 +290,11 @@ jobs:
             export NODE_OPTIONS="--import=file:///$(cygpath -m "$GITHUB_WORKSPACE")/apps/web/e2e/ipv4-only.mjs"
           fi
           pnpm --filter @app/web exec playwright install --with-deps chromium
+          # Playwright's browser download times out on the PC's network (IPv6 resolves but doesn't
+          # connect), so the runner uses browsers kept on the PC; install below then only checks
+          # them, and downloads only when Playwright moves to a new browser build (docs/aws-deployment.md).
+          echo "PLAYWRIGHT_BROWSERS_PATH=${PW_BROWSERS:-C:\\ms-playwright}" >> "$GITHUB_ENV"
+      - run: pnpm --filter @app/web exec playwright install --with-deps chromium
       - run: pnpm e2e
       # For the push to main that merges this pull request (tested job). Failing to record only
       # means that push runs this job again.

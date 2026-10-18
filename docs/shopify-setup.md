@@ -243,6 +243,31 @@ What a revoke does *not* do: it does not delete data the scope let us import, an
 
 Giving scopes back follows the same switch: see [Giving a scope back](#giving-a-scope-back) above.
 
+### Shopify's reports (`read_reports`): sessions, visitors, gross profit, the check
+
+**Current state (2026-10-17): built, not offered yet.** The dashboard can show Shopify Analytics'
+own sessions, visitors and conversion rate, its gross profit, and a line-by-line check of our sales
+figures against its sales report (docs/kpis.md, "Shopify's own reports"). They come from ShopifyQL
+(`shopifyqlQuery`), which needs the `read_reports` scope **and Level 2 protected customer data
+access** (name, email, phone, address), even though none of that data is read. Until both are in
+place the cards "Sessions and visitors (Shopify)" and "Gross profit" say bizinsights is waiting on
+Shopify, and nothing calls ShopifyQL. To turn them on, per app (PixMagic first: it is the store
+compared with Shopify):
+
+1. Dev Dashboard → the app → **API access → Protected customer data access**: request the
+   customer data fields name, email, phone and address (Level 2), with "Store analytics" as the
+   reason. A custom-distribution app is granted as soon as the form is filled in; the App Store app
+   (public) needs Shopify's review.
+2. Add `"read_reports"` to `optional_scopes` in all three tomls and to `SHOPIFY_OPTIONAL_SCOPES` in
+   `apps/aws/src/settings.ts` (appConfig.test.ts checks they agree), `shopify app deploy` each
+   app (`--config pixmagic`, `--config public`), and merge to `main`.
+3. In the dashboard, **Enable** on either card takes the merchant to Shopify to grant it. The next
+   poll asks Shopify; the figures fill in within a minute.
+
+Check: `aws lambda invoke --function-name insights-production-cron:live --payload
+'{"action":"shopify-check","shop":"<shop>.myshopify.com"}'` (docs/RUNBOOK.md) lists every figure
+with its status; rows say "hasn't granted" until step 3, "didn't let bizinsights read" until step 1.
+
 ## 3d. Troubleshooting installs
 
 **"This installation link can't be used — It may have expired, or the app may not be available for this store."**

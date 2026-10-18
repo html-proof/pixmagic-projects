@@ -89,6 +89,14 @@ export function describeAlert(alert: { code: string; severity: string; message: 
       body: "A recent change in your store, such as a new order or a refund, may be missing for now. The daily check with Shopify picks up recent orders it missed.",
     };
   }
+  if (code === "reconciliation_mismatch") {
+    return {
+      severity,
+      area: "shopify",
+      title: "Some figures differ from Shopify's",
+      body: "The daily check against your Shopify orders found figures it couldn't match or repair. The dashboard shows which under About this data; the next check runs tomorrow, and support can look into it if this stays.",
+    };
+  }
   if (code === "privacy_request") {
     return {
       severity,

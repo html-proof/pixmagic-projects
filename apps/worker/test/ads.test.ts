@@ -52,10 +52,12 @@ describe("ad account sync", () => {
     const conn = await connection("meta");
     const d1 = addDays(today(), -1);
     await systemDb.adCampaignDaily.create({ data: { workspaceId: conn.workspaceId, storeId: conn.storeId, connectionId: conn.id, provider: "meta", accountId: "act_1", campaignId: "gone", campaignName: "Deleted campaign", day: d1, spend: 99 } });
-    fetchImpl = async (input) => {
+    fetchImpl = async (input, init) => {
       const u = new URL(String(input));
       expect(u.pathname).toBe("/v25.0/act_1/insights");
-      expect(u.searchParams.get("access_token")).toBe("ACCESS");
+      // The token goes in the header, never in the URL.
+      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer ACCESS");
+      expect(u.searchParams.has("access_token")).toBe(false);
       return json({ data: [{ campaign_id: "7", campaign_name: "Spring", date_start: d1, spend: "12.5", impressions: "900", clicks: "30", actions: [{ action_type: "omni_purchase", value: "2" }], action_values: [{ action_type: "omni_purchase", value: "88" }] }] });
     };
     const { msg, m } = message({ kind: "ads", connectionId: conn.id, since: addDays(today(), -2), until: today() });

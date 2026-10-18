@@ -302,6 +302,8 @@ model Store {
   updatedAt             DateTime    @updatedAt @map("updated_at")
   workspace             Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   billedSubscriptions   Subscription[]
+  shopifyReports        ShopifyReport[]
+  reconciliations       Reconciliation[]
 
   @@index([workspaceId])
   @@map("stores")
@@ -406,6 +408,13 @@ model Order {
   /// The money state of the REST payload the stored sales were read for (`salesKey` in
   /// packages/core/src/normalize.ts): a webhook whose state matches needs no new read.
   salesKey            String?         @map("sales_key")
+  /// Shopify's position of this order in its customer's order history (CustomerJourneySummary
+  /// .customerOrderIndex: 1 = the customer's first purchase; test orders not counted). Null when
+  /// Shopify gave none (no journey, e.g. POS) or the order was only seen in a webhook so far.
+  customerOrderIndex  Int?            @map("customer_order_index")
+  /// The customer's lifetime order count (Customer.numberOfOrders) when this order was read; a
+  /// fallback for orders without customerOrderIndex (settleReturningCustomers in core).
+  customerOrderCount  Int?            @map("customer_order_count")
   lineItems           OrderLineItem[]
   /// No longer written: returns are read from Shopify's sales (order_sales) instead.
   refunds             Refund[]
@@ -453,6 +462,82 @@ model Refund {
   @@unique([storeId, shopifyId])
   @@index([storeId, localDay])
   @@map("refunds")
+}
+
+// Shopify's own report figures (ShopifyQL, scope read_reports; packages/core/src/shopifyReports.ts):
+// one answer per store, dataset ("sales" | "profit" | "sessions") and store-local window
+// ("from|to|until"), kept so the dashboard's polls never wait on Shopify. `values` holds the figures
+// in our names; `error` why Shopify gave none ("access_denied" | "unsupported" | "failed"), next to
+// the last figures it did give when a refresh failed.
+model ShopifyReport {
+  id          String   @id @default(cuid())
+  workspaceId String   @map("workspace_id")
+  storeId     String   @map("store_id")
+  dataset     String
+  window      String   @map("time_window")
+  values      Json?
+  error       String?
+  fetchedAt   DateTime @map("fetched_at")
+  store       Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, dataset, window])
+  @@index([workspaceId])
+  @@index([fetchedAt])
+  @@map("shopify_reports")
+}
+
+// One check of a store's figures against Shopify for a window of store-local days
+// (packages/core/src/reconcile.ts, docs/kpis.md "Checked against Shopify"). `source` is what the
+// figures were checked against: "shopify_records" (Shopify's orders and sales records, read again)
+// or "shopify_reports" (Shopify's own report totals, ShopifyQL). `findings` holds the order-level
+// causes found (missing, outdated, deleted orders, sales that differ, stale day totals) with a few
+// order ids each; `actions` what was repaired. Kept 90 days.
+model Reconciliation {
+  id            String                 @id @default(cuid())
+  workspaceId   String                 @map("workspace_id")
+  storeId       String                 @map("store_id")
+  source        String
+  trigger       String
+  fromDay       String                 @map("from_day")
+  toDay         String                 @map("to_day")
+  timezone      String
+  currency      String
+  /// running | verified | repaired | differences | incomplete | failed
+  status        String
+  ordersChecked Int                    @default(0) @map("orders_checked")
+  findings      Json?
+  actions       Json?
+  /// Where a running check has got to (its cursor, Shopify's totals so far): cleared when it ends.
+  state         Json?
+  error         String?
+  startedAt     DateTime               @map("started_at")
+  finishedAt    DateTime?              @map("finished_at")
+  store         Store                  @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  results       ReconciliationResult[]
+
+  @@index([storeId, startedAt])
+  @@index([workspaceId])
+  @@map("reconciliations")
+}
+
+// One metric of a reconciliation: Shopify's figure, ours before and after any repair, and why
+// they differed. Money in the store's currency.
+model ReconciliationResult {
+  id               String         @id @default(cuid())
+  workspaceId      String         @map("workspace_id")
+  reconciliationId String         @map("reconciliation_id")
+  metric           String
+  shopifyValue     Decimal?       @map("shopify_value") @db.Decimal(18, 2)
+  beforeValue      Decimal?       @map("before_value") @db.Decimal(18, 2)
+  afterValue       Decimal?       @map("after_value") @db.Decimal(18, 2)
+  /// match | repaired | difference | sync_delay | not_verifiable
+  status           String
+  cause            String?
+  reconciliation   Reconciliation @relation(fields: [reconciliationId], references: [id], onDelete: Cascade)
+
+  @@unique([reconciliationId, metric])
+  @@index([workspaceId])
+  @@map("reconciliation_results")
 }
 
 // One of Shopify's sales records for an order (Order.agreements → sales): what was sold, returned
