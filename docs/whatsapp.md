@@ -21,7 +21,7 @@ Everything is off until a merchant turns it on. A store has WhatsApp "on" once i
 | Campaigns, automations, the sweeper and retention | `campaigns.ts`, `automations.ts`, `scheduler.ts` (same folder) |
 | Merchant API | `apps/api/src/routes/whatsapp.ts`, `whatsappOps.ts`, `whatsappCommon.ts` |
 | Public routes: Meta webhook, tracking page, review form, tracked links | `apps/api/src/routes/whatsappPublic.ts` |
-| Background jobs (queue consumer, Shopify webhooks, cron) | `apps/worker/src/handlers.ts`, `apps/worker/src/index.ts` |
+| Background jobs (queue consumer, Shopify webhooks, cron) | `apps/worker/src/handlers/` (`integrations.ts`: sends; `webhooks.ts`: Shopify events, GDPR), `apps/worker/src/index.ts` (the `*/15` cron runs `sweepWhatsapp` from `scheduler.ts`) |
 | Dashboard | `apps/web/src/app/(app)/whatsapp/*`, `apps/web/src/components/whatsapp/*` |
 | Customer pages | `apps/web/src/app/track`, `apps/web/src/app/review` |
 | Tests | `packages/shared/test/whatsapp.test.ts`, `apps/worker/test/whatsapp.test.ts`, `apps/api/test/whatsapp.test.ts` |

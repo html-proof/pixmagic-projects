@@ -28,10 +28,13 @@ const ACTION_LABEL: Record<string, string> = {
   "staff.invitation_revoked": "Invitation revoked",
   "staff.account_activated": "Employee account set up",
   "staff.schedule_created": "Shifts scheduled",
+  "staff.schedule_updated": "Scheduled shift changed",
+  "staff.schedule_deleted": "Scheduled shift removed",
   "staff.shift_added": "Missing shift added",
   "staff.shift_corrected": "Shift corrected",
   "staff.hours_rejected": "Hours rejected",
   "staff.hours_approved": "Hours approved",
+  "staff.hours_reopened": "Hours reopened for review",
   "staff.correction_requested": "Correction requested",
   "staff.correction_approved": "Correction approved",
   "staff.correction_rejected": "Correction rejected",
@@ -88,6 +91,12 @@ function auditDetail(a: AuditItem, tz: string): string | null {
       return str(m.expiresAt) ? `Expires ${fmtDateTime(str(m.expiresAt), tz)}` : null;
     case "staff.schedule_created": {
       const n = Number(m.shifts);
+      return Number.isFinite(n) && n > 0 ? `${n} ${n === 1 ? "shift" : "shifts"}` : null;
+    }
+    case "staff.schedule_deleted":
+      return str(m.startsAt) ? `It was to start ${fmtDateTime(str(m.startsAt), tz)}` : null;
+    case "staff.hours_approved": {
+      const n = Number(m.count);
       return Number.isFinite(n) && n > 0 ? `${n} ${n === 1 ? "shift" : "shifts"}` : null;
     }
     case "payroll.payment_recorded": {

@@ -299,6 +299,46 @@ describe("attendance", () => {
   });
 });
 
+describe("an employee's audit history", () => {
+  it("shows the approval of their own hours, and a scheduled shift being removed", async () => {
+    at("2026-10-14T08:00:00Z");
+    const { ws, h } = await org("Acme");
+    await setTz(h, ws, "UTC");
+    const jane = await hire(h, ws, "Jane Doe", "jane@example.com");
+    const sam = await hire(h, ws, "Sam Lee", "sam@example.com");
+    const jh = await join(h, ws, jane.id, "jane@example.com");
+    const sh = await join(h, ws, sam.id, "sam@example.com");
+    for (const eh of [jh, sh]) {
+      at("2026-10-14T09:00:00Z");
+      ok(await clock(eh, ws, "clock-in"));
+      at("2026-10-14T17:00:00Z");
+      ok(await clock(eh, ws, "clock-out"));
+    }
+
+    // Both shifts approved in one go: each employee's history names only their own.
+    const sheet = ok(await call("GET", `/workspaces/${ws}/staff/timesheets?from=2026-10-14&to=2026-10-14&status=pending`, h));
+    expect(sheet.items).toHaveLength(2);
+    expect(ok(await call("POST", `/workspaces/${ws}/staff/timesheets/approve`, h, { sessionIds: sheet.items.map((s: { id: string }) => s.id) })).approved).toBe(2);
+    const audit = async (id: string) => ok(await call("GET", `/workspaces/${ws}/staff/employees/${id}/audit`, h)).items as Array<{ action: string; metadata: Record<string, unknown> }>;
+    for (const e of [jane, sam]) {
+      const own = sheet.items.filter((s: { employeeId: string }) => s.employeeId === e.id).map((s: { id: string }) => s.id);
+      const approvals = (await audit(e.id)).filter((a) => a.action === "staff.hours_approved");
+      expect(approvals).toEqual([expect.objectContaining({ metadata: { count: 1, sessionIds: own } })]);
+    }
+    // Approving them again changes nothing, so it records nothing.
+    expect(ok(await call("POST", `/workspaces/${ws}/staff/timesheets/approve`, h, { sessionIds: sheet.items.map((s: { id: string }) => s.id) })).approved).toBe(0);
+    expect((await audit(jane.id)).filter((a) => a.action === "staff.hours_approved")).toHaveLength(1);
+
+    // A scheduled shift that is removed stays in the history, with when it was to start.
+    const planned = ok(await call("POST", `/workspaces/${ws}/staff/schedules`, h, { employeeId: jane.id, day: "2026-10-16", startTime: "09:00", endTime: "17:00" }), 201).items[0];
+    ok(await call("DELETE", `/workspaces/${ws}/staff/schedules/${planned.id}`, h));
+    const removed = (await audit(jane.id)).find((a) => a.action === "staff.schedule_deleted");
+    expect(removed?.metadata).toEqual({ scheduleId: planned.id, startsAt: "2026-10-16T09:00:00.000Z" });
+    expect((await audit(sam.id)).some((a) => a.action === "staff.schedule_deleted")).toBe(false);
+    expect((await call("DELETE", `/workspaces/${ws}/staff/schedules/${planned.id}`, h)).statusCode).toBe(404);
+  });
+});
+
 describe("payroll", () => {
   async function weekWithOvertime() {
     at("2026-10-12T07:00:00Z");
