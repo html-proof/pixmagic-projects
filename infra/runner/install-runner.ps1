@@ -22,7 +22,6 @@
 #      5 starts the service, so the hook is on from the runner's first job.
 #   5. Registers the runner with a one-hour token from the gh CLI (or one you paste from GitHub).
 #      config.cmd asks for the runner group (press Enter) and the account's password again.
-#   5. -Main only: the job hook (infra/runner/main-only-hook.js) and the browsers folder.
 #   6. Leaves the service only the two privileges it needs, then restarts it.
 #   7. harden-runner.ps1 for the account: a password required, no logon but as the service.
 # It doesn't switch CI over: the repository variables SELF_HOSTED_RUNNER and
@@ -134,31 +133,6 @@ if ($Main) {
     Stop-Service $service
     throw "config.cmd rewrote $dir\.env without the job hook. The service is stopped: run this script's step 4 lines again, then Start-Service $service."
   }
-
-Step "5/7 Job hook and browsers"
-if ($Main) {
-  # Outside the runner folder (which config.cmd lets the runner change): administrators only, the
-  # runner reads it.
-  $hookDir = 'C:\ProgramData\bizinsights-runner'
-  $sid = (Get-LocalUser $account).SID.Value
-  New-Item -ItemType Directory -Force $hookDir | Out-Null
-  icacls $hookDir /inheritance:r /grant:r '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-18:(OI)(CI)F' "*$($sid):(OI)(CI)RX" | Out-Null
-  if ($LASTEXITCODE -ne 0) { throw "icacls $hookDir failed ($LASTEXITCODE)" }
-  $hook = Join-Path $hookDir 'main-only-hook.js'
-  Copy-Item -Force (Join-Path $PSScriptRoot 'main-only-hook.js') $hook
-  # main's e2e job must not start the browsers in C:\ms-playwright, which pull-request jobs can
-  # change: its own folder, which harden-runner.ps1 (step 7) locks to this account. The first e2e
-  # run on main downloads them (ci.yml, "Browser for the tests").
-  $browsers = 'C:\ms-playwright-main'
-  New-Item -ItemType Directory -Force $browsers | Out-Null
-  # The runner reads .env when its service starts (step 6) and passes it on to every job.
-  $envFile = Join-Path $dir '.env'
-  $lines = @(Get-Content $envFile -ErrorAction SilentlyContinue | Where-Object { $_ -notmatch '^(ACTIONS_RUNNER_HOOK_JOB_STARTED|PW_BROWSERS)=' })
-  $lines + "ACTIONS_RUNNER_HOOK_JOB_STARTED=$hook" + "PW_BROWSERS=$browsers" | Set-Content -Encoding ASCII $envFile
-  Write-Host "Every job starts with $hook; it lets through only main's CI and Deploy to AWS from main."
-  Write-Host "The e2e job's browsers: $browsers."
-} else {
-  Write-Host "None (the pull requests' runner)."
 }
 
 Step "6/7 Service privileges"

@@ -18,14 +18,6 @@
 #   2. For each runner account (ghrunner and ghmain, those that exist; or the ones -Account names):
 #      a password is required (New-LocalUser leaves "password not required", PASSWD_NOTREQD, set).
 #   3. And no logon but as its service: local, Remote Desktop and network logon denied.
-# For each runner account (ghrunner and ghmain, those that exist; or the ones -Account names):
-#   1. A password is required: New-LocalUser leaves "password not required" (PASSWD_NOTREQD) set.
-#   2. No logon but as its service: local, Remote Desktop and network logon denied.
-# Then the e2e job's browsers (PLAYWRIGHT_BROWSERS_PATH in ci.yml): C:\ms-playwright changeable by
-# administrators, SYSTEM and ghrunner only (it downloads new browser builds), readable by users;
-# C:\ms-playwright-main (the runner for main's) the same with ghmain, and not readable by others.
-# C:\ inherits "Authenticated Users: Modify" to new folders, so any account on the PC could swap
-# the chrome.exe a runner starts.
 #
 # -Release allows the -Account accounts network logon again, and nothing else: config.cmd checks
 # the password with one, so install-runner.ps1 lifts that denial while it registers a runner, then
@@ -39,11 +31,6 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'runner-folders.ps1')
 
 $rights = 'SeDenyInteractiveLogonRight', 'SeDenyRemoteInteractiveLogonRight', 'SeDenyNetworkLogonRight'
-# Each runner downloads new browser builds into its own folder (PW_BROWSERS; ci.yml).
-$browsers = @(
-  @{ Path = 'C:\ms-playwright'; Writer = 'ghrunner'; UsersRead = $true },
-  @{ Path = 'C:\ms-playwright-main'; Writer = 'ghmain'; UsersRead = $false }
-)
 
 function Step($text) { Write-Host "`n== $text" -ForegroundColor Cyan }
 function Get-AccountSid([string]$Name) { $u = Get-LocalUser $Name -ErrorAction SilentlyContinue; if ($u) { $u.SID.Value } }
@@ -139,23 +126,6 @@ Step "3/3 No local, Remote Desktop or network logon for $($users.Name -join ', '
 # Their runner services log on as services, a right config.cmd granted and this leaves alone.
 Set-DenyRights $sids $true
 Write-Host "Done."
-
-Step "3/3 The e2e browsers: changeable by administrators, SYSTEM and their runner's account only"
-foreach ($b in $browsers) {
-  $writer = Get-LocalUser $b.Writer -ErrorAction SilentlyContinue
-  if (-not (Test-Path $b.Path)) { Write-Host "$($b.Path): not there, nothing to do."; continue }
-  if (-not $writer) { Write-Host "$($b.Path): no $($b.Writer) account, left as it is."; continue }
-  $grants = @('*S-1-5-18:(OI)(CI)F', '*S-1-5-32-544:(OI)(CI)F', "*$($writer.SID.Value):(OI)(CI)M")
-  if ($b.UsersRead) { $grants += '*S-1-5-32-545:(OI)(CI)RX' }
-  icacls $b.Path /inheritance:r /grant:r @grants | Out-Null
-  if ($LASTEXITCODE -ne 0) { throw "icacls $($b.Path) failed ($LASTEXITCODE)" }
-  # Everything inside inherits exactly that (no ACE of its own left over).
-  if (Get-ChildItem -Force $b.Path | Select-Object -First 1) {
-    icacls "$($b.Path)\*" /reset /T /C /Q | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "icacls /reset under $($b.Path) failed ($LASTEXITCODE)" }
-  }
-  icacls $b.Path
-}
 
 Get-LocalUser $users.Name | Format-Table Name, Enabled, PasswordRequired -AutoSize
 Write-Host "Done." -ForegroundColor Green

@@ -288,8 +288,6 @@ e2e job that is the app under test, the sign-in stand-ins and the Mailpit stand-
 A pull-request job could reach them as a client, and could log in to main's test database as the
 tenant role `app_rls` (fixed password, no superuser) and change test data. That can make main's
 tests fail or pass wrongly; it gives no way to run code as ghmain.
-on the system `PATH` are administrators-only (checked 2026-10-18), so main's jobs run only programs
-administrators installed and their own.
 
 Labels alone wouldn't keep other jobs off it: any branch's workflow can ask for any label. Its job
 hook (`infra/runner/main-only-hook.js`, which the runner runs with its own Node before every job;
@@ -300,7 +298,6 @@ change. A refused job's "Set up runner" step says why. The script writes the hoo
 `.env` before it registers the runner, so a job already queued for the label meets the hook too.
 It refuses a runner, hook or browsers folder that already exists and isn't an administrator's
 (someone else may have planted files there for it to run elevated, or for ghmain to run).
-change. A refused job's "Set up runner" step says why.
 
 In an elevated Windows PowerShell, from the repository folder (asks for a new password for ghmain,
 twice):
@@ -337,7 +334,6 @@ again.
 - The e2e browsers (below), and the runner for main's hook folder.
 
 Then, for each runner account that exists (ghrunner, ghmain):
-It is safe to run again. For each runner account that exists (ghrunner, ghmain):
 
 - A password is required. `New-LocalUser` leaves the account flagged "password not required"
   (PASSWD_NOTREQD), which lets it be given an empty one. By hand: `net user ghrunner /passwordreq:yes`.
@@ -358,7 +354,6 @@ readable by other accounts. Both are owned by Administrators from then on. By ha
 ```powershell
 icacls C:\ms-playwright /setowner "*S-1-5-32-544" /T /C /Q
 ```
-readable by other accounts. By hand, for the first (the second: `ghmain`, without the last grant):
 
 ```powershell
 icacls C:\ms-playwright /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" "ghrunner:(OI)(CI)M" "*S-1-5-32-545:(OI)(CI)RX"
