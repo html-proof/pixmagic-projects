@@ -85,6 +85,21 @@ describe("the data stack", () => {
     });
   });
 
+  it("versions every bucket and lets old versions expire (Trusted Advisor S3 Bucket Versioning)", () => {
+    const buckets = [...Object.values(t.data.findResources("AWS::S3::Bucket")), ...Object.values(t.app.findResources("AWS::S3::Bucket"))];
+    expect(buckets).toHaveLength(3);
+    for (const b of buckets) {
+      expect(b.Properties.VersioningConfiguration).toEqual({ Status: "Enabled" });
+      const rules = b.Properties.LifecycleConfiguration.Rules as Array<{ NoncurrentVersionExpiration?: { NoncurrentDays: number } }>;
+      expect(rules.some((r) => r.NoncurrentVersionExpiration)).toBe(true);
+    }
+    // Processed webhook bodies hold customer data: an old version stays one day only.
+    t.data.hasResourceProperties("AWS::S3::Bucket", {
+      BucketName: Match.stringLikeRegexp("-payloads-"),
+      LifecycleConfiguration: { Rules: Match.arrayWith([Match.objectLike({ NoncurrentVersionExpiration: { NoncurrentDays: 1 } }), Match.objectLike({ ExpiredObjectDeleteMarker: true })]) },
+    });
+  });
+
   it("goes out through a NAT instance in each AZ, not a NAT gateway, and has no SSH key anywhere", () => {
     t.data.resourceCountIs("AWS::EC2::NatGateway", 0);
     t.data.resourceCountIs("AWS::EC2::EIP", 0);

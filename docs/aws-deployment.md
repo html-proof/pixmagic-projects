@@ -551,6 +551,19 @@ Reading a stale "NAT Gateway AZ Independence" export (check `c1dfptbg10`): it na
 routing `0.0.0.0/0` to nat-a and appSubnet2 (2b) to nat-b. With no NAT gateway left, the check has
 nothing to flag the next time AWS runs it.
 
+AWS re-ran both network checks on 2026-10-17 at 10:31Z, four hours after CloudFormation deleted the
+gateway (CloudTrail `DeleteNatGateway`, 06:22Z), and they still showed it: their data lags the
+account by more than a day, and `aws support refresh-trusted-advisor-check` refuses them. To check
+the real state instead: no NAT gateway (`describe-nat-gateways`), each app subnet's route to its own
+AZ's instance (`describe-route-tables`), and traffic through both instances (`NetworkOut` of nat-a
+and nat-b in CloudWatch; on 2026-10-18 about 10 MB and 25 MB a day). "Single AZ Application Check"
+reads egress traffic patterns, so it clears once AWS reads traffic from after 06:22Z.
+
+**Buckets** (Trusted Advisor "Amazon S3 Bucket Versioning"): all three are versioned. Earlier
+versions expire by themselves: build files (`site`) after 30 days, database dumps (`artifacts`)
+after 7, webhook bodies (`payloads`) after one day, since processed bodies hold customer data.
+Together that is a few cents a month at most.
+
 **Instance disks** (Trusted Advisor "Amazon EBS Snapshots", check `H7IgTzjTYb`, red on 2026-10-17
 for the NAT instances' and the admin host's disks): Data Lifecycle Manager's default policy
 (`EbsSnapshots` in data-stack.ts, production only, since one is allowed per Region) snapshots every
