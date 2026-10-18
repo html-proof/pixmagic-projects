@@ -67,7 +67,8 @@ never claims "live": Shopify gives no freshness guarantee for webhooks.
   people about new ones once (`notifyStockAlerts`): one email per store to members who can see
   inventory and kept "Stock alerts" on (Settings → Notifications), the bell (alert code
   `inventory_stock`), and optionally WhatsApp. One that flaps is told again at most once a day.
-  Low = 1..threshold available counting every location; threshold = variant's, else product's, else
+  Only for a store set up for inventory (stock levels granted, or Stock settings saved), so nobody
+  gets alerts they never asked for when the module ships. Low = 1..threshold available counting every location; threshold = variant's, else product's, else
   the store's (default 10). Fast movement = at least 5 units today and 3× the 30-day daily rate.
 - **WhatsApp alerts** go through the store's own WhatsApp connection with an approved template of
   two body variables (store name, the summary): submit the library's `insights_stock_alert`, pick it
