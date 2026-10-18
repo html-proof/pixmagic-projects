@@ -9,7 +9,7 @@ import { ApprovalBadge, Field, Flags, Modal, Pagination, Table, Tabs, Td, Th } f
 import { Alert, EmptyState } from "@/components/ui";
 import { PageHeader, Skeleton, useAction, useToast } from "@/components/AppUi";
 import { actionError, api, useApi } from "@/lib/api";
-import { fmtDateTime, fmtDay, fmtHours, fmtTime, fromLocalInput, toLocalInput, useStaff, type EmployeeRow, type SessionRow, type StaffConfig } from "@/lib/staff";
+import { fmtDateTime, fmtDay, fmtHours, fmtTime, fromLocalInput, toLocalInput, useStaff, type EmployeeRow, type SessionRow, type StaffConfig, type TimesheetList } from "@/lib/staff";
 
 // ---------------------------------------------------------------------------------------------
 // Timesheets: every shift in a date range, approving, rejecting and correcting hours, setting a
@@ -31,15 +31,6 @@ const STATUS_FILTERS: ReadonlyArray<readonly [StatusFilter, string]> = [
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const PAGE_SIZE = 50;
 const LOCKED_HELP = "These hours are in approved payroll, so they can't be changed. Add an adjustment to the next payroll instead.";
-
-interface TimesheetList {
-  timezone: string;
-  total: number;
-  page: number;
-  pageSize: number;
-  pendingCorrections: number;
-  items: SessionRow[];
-}
 
 interface Snapshot {
   clockInAt: string;
