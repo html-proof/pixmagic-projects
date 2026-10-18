@@ -355,9 +355,22 @@ export async function updateSchedule(actor: StaffActor, id: string, input: Omit<
 }
 
 export async function deleteSchedule(actor: StaffActor, id: string) {
-  const n = await withTenant(actor.workspaceId, (tx) => tx.shiftSchedule.deleteMany({ where: { id, workspaceId: actor.workspaceId, employee: employeeScope(actor) } }));
-  if (!n.count) throw notFound("That shift");
-  await audit({ workspaceId: actor.workspaceId, actorUserId: actor.userId, action: "staff.schedule_deleted", metadata: { scheduleId: id }, ip: actor.ip });
+  const row = await withTenant(actor.workspaceId, async (tx) => {
+    const existing = await tx.shiftSchedule.findFirst({ where: { id, workspaceId: actor.workspaceId, employee: employeeScope(actor) }, select: { employeeId: true, startsAt: true } });
+    if (!existing) return null;
+    const n = await tx.shiftSchedule.deleteMany({ where: { id, workspaceId: actor.workspaceId } });
+    return n.count ? existing : null;
+  });
+  if (!row) throw notFound("That shift");
+  await audit({
+    workspaceId: actor.workspaceId,
+    actorUserId: actor.userId,
+    action: "staff.schedule_deleted",
+    targetType: "employee",
+    targetId: row.employeeId,
+    metadata: { scheduleId: id, startsAt: row.startsAt.toISOString() },
+    ip: actor.ip,
+  });
   return { ok: true };
 }
 

@@ -132,7 +132,7 @@ test("owner adds and invites an employee, who registers, clocks in and out, and 
     await expect(page.getByRole("tabpanel", { name: tab })).toBeVisible();
     await expect(page.getByText(/We couldn.t load|ran into a problem/)).toHaveCount(0);
     if (tab === "Timesheets") await expect(page.getByRole("tabpanel").getByText("Approved").first()).toBeVisible();
-    if (tab === "Audit History") await expect(page.getByRole("tabpanel").getByText("Employee account set up").first()).toBeVisible();
+    if (tab === "Audit History") await expect(page.getByRole("tabpanel").getByText("Hours approved").first()).toBeVisible();
   }
 
   // ---- Owner: the staff settings page shows each of its sections

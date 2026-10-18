@@ -921,10 +921,15 @@ export async function approveSessions(actor: StaffActor, sessionIds: string[], n
       await tx.timesheetApproval.create({ data: { workspaceId: actor.workspaceId, sessionId: s.id, action: "approved", revision: s.revision, actorUserId: actor.userId, note } });
       await tx.attendanceEvent.create({ data: { workspaceId: actor.workspaceId, employeeId: s.employeeId, sessionId: s.id, type: "approval", at: now, source: "admin", actorUserId: actor.userId, note } });
     }
-    return todo.length;
+    return todo;
   }).catch(frozen);
-  if (approved) await audit({ workspaceId: actor.workspaceId, actorUserId: actor.userId, action: "staff.hours_approved", metadata: { count: approved, sessionIds: sessionIds.slice(0, 50) }, ip: actor.ip });
-  return { approved };
+  // One entry per employee, so each one's Audit History shows the approval of their own shifts.
+  const byEmployee = new Map<string, string[]>();
+  for (const s of approved) byEmployee.set(s.employeeId, [...(byEmployee.get(s.employeeId) ?? []), s.id]);
+  for (const [employeeId, ids] of byEmployee) {
+    await audit({ workspaceId: actor.workspaceId, actorUserId: actor.userId, action: "staff.hours_approved", targetType: "employee", targetId: employeeId, metadata: { count: ids.length, sessionIds: ids.slice(0, 50) }, ip: actor.ip });
+  }
+  return { approved: approved.length };
 }
 
 export async function rejectSession(actor: StaffActor, sessionId: string, reason: string) {
