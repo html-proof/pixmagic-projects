@@ -255,7 +255,7 @@ function Onboarding() {
               You&apos;ll sign in to Shopify, pick your store and approve read-only access. We only ask for what the dashboard uses, and you can disconnect any time.
             </p>
             <button type="button" className="btn-primary w-full sm:w-auto" disabled={!!busy} onClick={connectWithShopify}>
-              <ShopifyIcon />
+              <ShopifyIcon onAccent />
               {busy === "oneclick" ? "Opening Shopify…" : "Continue with Shopify"}
             </button>
             {/* Shopify's own store picker is the way in (App Store requirement 2.3.1: never ask

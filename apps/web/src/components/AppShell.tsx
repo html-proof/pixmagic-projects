@@ -197,7 +197,7 @@ function StoreSwitcher() {
   const title = store?.name ?? store?.shopDomain ?? "Choose a store";
   return (
     <div className="relative flex h-11 min-w-0 max-w-[17rem] flex-1 items-center gap-2.5 rounded-xl border border-border bg-surface pl-2 pr-8 shadow-[var(--shadow)] transition-colors focus-within:ring-2 focus-within:ring-accent hover:border-accent/40 sm:flex-none">
-      <span aria-hidden className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[#95bf47]/15 text-[#5e8e3e] dark:text-[#95bf47]">
+      <span aria-hidden className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-border bg-white">
         <ShopifyIcon size={16} />
       </span>
       <span aria-hidden className="min-w-0 leading-tight">
