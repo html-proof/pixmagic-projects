@@ -330,6 +330,38 @@ describe("checked against Shopify", () => {
     expect((rec.actions as { removed: number }).removed).toBe(2);
   });
 
+  // Regression (2026-10-18, production): PixMagic's #2718S was created 61 days before the first
+  // 60-day check and edited inside the window. Shopify neither lists nor returns an order that old
+  // without read_all_orders, so the check took it for deleted and removed it.
+  it("never removes an order Shopify no longer shares (over 60 days old): it is out of reach, not deleted", async () => {
+    const store = await makeStore(["read_orders"]);
+    const kept = gOrder(1, { createdAt: at(2) });
+    // Placed 61 days ago, with a sale (an edit) inside the window.
+    const old = gOrder(7, { createdAt: at(61) });
+    await seed(store, [kept, old]);
+    const edit = await systemDb.order.findFirstOrThrow({ where: { shopifyId: "7" } });
+    await systemDb.orderSale.create({
+      data: { workspaceId: store.workspaceId, storeId: store.id, orderId: edit.id, shopifyId: "edit-1", localDay: dayOf(at(3)), happenedAt: new Date(at(3)), actionType: "order", lineType: "product", quantity: 1, amount: 37, discount: 0, tax: 3.36 },
+    });
+    await recomputeDays(store, [dayOf(at(3))]);
+    // Shopify lists only #1, and answers null for #7 (it doesn't share it any more).
+    const calls = fakeShopify([kept], { gone: ["7"] });
+    const started = await startReconciliation(deps, store, "scheduled");
+    await runChecks();
+    const rec = await systemDb.reconciliation.findUniqueOrThrow({ where: { id: started!.id } });
+    expect(await systemDb.order.count({ where: { shopifyId: "7" } })).toBe(1);
+    expect((rec.actions as { removed: number }).removed).toBe(0);
+    expect((rec.findings as Record<string, { count: number; orders: Array<{ name: string }> }>).not_listed).toMatchObject({ count: 1, orders: [{ name: "#7" }] });
+    expect(rec.findings).not.toHaveProperty("deleted");
+    // Never even looked up: to the API it is indistinguishable from a deleted order.
+    expect(calls.some((c) => c.query.includes("OrdersStillThere"))).toBe(false);
+    // The figures it touches can't be vouched for; the rest still match.
+    expect(rec.status).toBe("incomplete");
+    const r = await results(rec.id);
+    expect(r.totalSales!.status).toBe("not_verifiable");
+    expect(r.orders!.status).toBe("match");
+  });
+
   it("only looks in a dry run: the differences are recorded and alerted, nothing is written", async () => {
     const store = await makeStore();
     await seed(store, [gOrder(1, { createdAt: at(2) })]);

@@ -18,6 +18,7 @@ import {
   touched,
   unlistedOrders,
   upsertOrder,
+  withinReach,
   verifyQueue,
   windowSearch,
   type CheckState,
@@ -135,9 +136,14 @@ async function verifyRun(job: VerifyJob, deps: WorkerDeps, now: () => number) {
     return { continued: true };
   }
 
-  // Stored orders of the window that Shopify didn't list: deleted, test, or out of its reach.
+  // Stored orders of the window that Shopify didn't list: deleted, test, or out of its reach. One
+  // Shopify doesn't share any more (created over 60 days ago) can't be told from a deleted one, so
+  // it is never looked up, let alone removed: it is "not listed", and the check can't vouch for it.
   if (state.seen) {
-    const unlisted = await unlistedOrders(store, w, state.seen);
+    const all = await unlistedOrders(store, w, state.seen);
+    const checkedAt = new Date(now());
+    for (const o of all.filter((x) => !withinReach(x.createdAt, store.grantedScopes, checkedAt))) noteUnlisted(state, o, "out_of_reach");
+    const unlisted = all.filter((x) => withinReach(x.createdAt, store.grantedScopes, checkedAt));
     for (let i = 0; i < unlisted.length; i += LOOKUP_BATCH) {
       const batch = unlisted.slice(i, i + LOOKUP_BATCH);
       const d = await shopify.gql<{ nodes: Array<{ id?: string; test?: boolean | null } | null> }>(NODES_QUERY, {
