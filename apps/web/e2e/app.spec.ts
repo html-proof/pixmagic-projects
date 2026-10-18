@@ -468,7 +468,8 @@ test("dashboard shows webhook-driven metrics and only granted modules", async ({
   await expect(page.getByTestId("check-details")).toContainText("2 of 2 figures match Shopify");
   await expect(page.getByTestId("check-details")).toContainText("1 order was missing");
   await expect(page.getByTestId("check-table")).toContainText("Total sales");
-  await expect(page.getByTestId("check-now")).toBeVisible();
+  // This store has no token here, so its sync stopped ("error"): no "Check now" until it is connected.
+  await expect(page.getByTestId("check-now")).toHaveCount(0);
 
   await page.goto("/settings/stores");
   // The store card's title (the name also appears in the store switcher and the details line).
