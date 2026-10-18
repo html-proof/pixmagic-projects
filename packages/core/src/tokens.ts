@@ -90,11 +90,10 @@ export async function getAccessToken(
 }
 
 /**
- * Re-encrypt everything stored under this keyring with the active key (run after adding a new
- * key, and before removing the old one): store tokens, ad tokens and WhatsApp data. Returns the
- * number of rows rewritten; 0 means nothing still needs an old key.
+ * Re-encrypt the stores' Shopify tokens with the active key; part of key rotation
+ * (reencryptAllTokens in keyRotation.ts). Returns the number of stores rewritten.
  */
-export async function reencryptAllTokens(): Promise<number> {
+export async function reencryptStoreTokens(): Promise<number> {
   const k = keyring();
   const stores = await systemDb.store.findMany({
     where: { accessTokenEnc: { not: null }, NOT: { tokenKeyVersion: k.active } },
@@ -111,12 +110,5 @@ export async function reencryptAllTokens(): Promise<number> {
       },
     });
   }
-  // Ad platform tokens and WhatsApp data use the same keyring (loaded lazily: both modules import
-  // this one).
-  const { reencryptAdTokens } = await import("./adConnections.js");
-  const { reencryptWhatsappData } = await import("./whatsapp/store.js");
-  // Email credentials are envelope encrypted under EMAIL_CREDENTIAL_KEYS (TOKEN_ENCRYPTION_KEYS when
-  // that is empty): their data keys are re-wrapped with its active key.
-  const { reencryptEmailCredentials } = await import("./email/tokens.js");
-  return stores.length + (await reencryptAdTokens()) + (await reencryptWhatsappData()) + (await reencryptEmailCredentials());
+  return stores.length;
 }
