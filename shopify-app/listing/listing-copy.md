@@ -77,8 +77,8 @@ store ("Harbour & Pine Co.", AUD, fictional names on the reserved `.example` dom
 `shopify_app_key = 'appstore'`, so the menu is the App Store workspace's (no WhatsApp, Staff or
 advertising). Headless Chromium, reduced motion, every request leaving the machine blocked; the
 store's time zone was set to one where the day was mostly over, so "Today" isn't an empty bar.
-Each frame is rendered at exactly 1600 x 900 and keeps the store switcher (a redrawn Shopify bag)
-out:
+Each frame is rendered at exactly 1600 x 900 and keeps the store switcher out (it shows the
+Shopify bag, and requirement 4.4.3 keeps Shopify's trademarks out of screenshots):
 
 - Panels (1-4): a 1136 px window, where the 896 px panel covers everything right of the sidebar;
   the top 1136 x 639 at a device scale of 1600/1136. At this scale the Best sellers panel can't
