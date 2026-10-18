@@ -127,6 +127,8 @@ export class AppStack extends Stack {
     if (envBytes > 3600) throw new Error(`The functions' environment is ~${envBytes} bytes; Lambda allows 4 KB`);
     // Only the API signs people in: the Cognito app client secret is read by that function alone.
     const cognitoSecret = `insights/${cfg.name}/worker-cognito`;
+    // The owner's daily cost email (config.ts costReport) goes where the budget's emails go, from cron alone.
+    const costReportTo = cfg.costReport ? cfg.budgetEmail || cfg.alertEmail : "";
     const fn = (name: "api" | "jobs" | "cron", memory: number, timeout: Duration, description: string) => {
       const logGroup = new logs.LogGroup(this, `Logs-${name}`, { logGroupName: `/aws/lambda/${prefix}-${name}`, retention: cfg.logRetentionDays as logs.RetentionDays, removalPolicy: RemovalPolicy.RETAIN });
       const f = new lambda.Function(this, `Fn-${name}`, {
@@ -138,7 +140,11 @@ export class AppStack extends Stack {
         code,
         memorySize: memory,
         timeout,
-        environment: name === "api" ? { ...environment, COGNITO_WORKER_SECRET_ARN: cognitoSecret } : environment,
+        environment: {
+          ...environment,
+          ...(name === "api" ? { COGNITO_WORKER_SECRET_ARN: cognitoSecret } : {}),
+          ...(name === "cron" && costReportTo ? { COST_REPORT_TO: costReportTo } : {}),
+        },
         vpc: data.vpc,
         vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
         securityGroups: [data.appSg],
@@ -166,6 +172,8 @@ export class AppStack extends Stack {
     const jobs = fn("jobs", 1024, Duration.seconds(900), "Insights background jobs (SQS)");
     const cron = fn("cron", 1024, Duration.seconds(900), "Insights scheduled sweeps + maintenance actions");
     this.apiRole = api.fn.role!;
+    // The cost email's one Cost Explorer call a day (it has no resource-level permissions).
+    if (costReportTo) cron.fn.addToRolePolicy(new iam.PolicyStatement({ actions: ["ce:GetCostAndUsage"], resources: ["*"] }));
 
     // The jobs function's queues. Concurrency per queue at least 2 (SQS's minimum) and small
     // while the account's Lambda concurrency is 10.
@@ -297,6 +305,15 @@ export class AppStack extends Stack {
     const schedulerRole = new iam.Role(this, "SchedulerRole", { roleName: `${prefix}-scheduler`, assumedBy: new iam.ServicePrincipal("scheduler.amazonaws.com") });
     cron.alias.grantInvoke(schedulerRole);
     missedTicks.grantSendMessages(schedulerRole);
+    // Scheduler retries only a hand-over Lambda refused (throttled, unavailable), never a run that
+    // failed, so a retry can't run a tick twice.
+    const target = (input: Record<string, string>): scheduler.CfnSchedule.TargetProperty => ({
+      arn: cron.alias.functionArn,
+      roleArn: schedulerRole.roleArn,
+      input: JSON.stringify(input),
+      retryPolicy: { maximumRetryAttempts: 5, maximumEventAgeInSeconds: 600 },
+      deadLetterConfig: { arn: missedTicks.queueArn },
+    });
     const schedule = (id: string, expression: string, workerCron: string) =>
       new scheduler.CfnSchedule(this, id, {
         name: `${prefix}-${id.toLowerCase()}`,
@@ -305,18 +322,24 @@ export class AppStack extends Stack {
         scheduleExpressionTimezone: "UTC",
         flexibleTimeWindow: { mode: "OFF" },
         state: cfg.schedulesEnabled ? "ENABLED" : "DISABLED",
-        // Scheduler retries only a hand-over Lambda refused (throttled, unavailable), never a run that
-        // failed, so a retry can't run a tick twice.
-        target: {
-          arn: cron.alias.functionArn,
-          roleArn: schedulerRole.roleArn,
-          input: JSON.stringify({ cron: workerCron }),
-          retryPolicy: { maximumRetryAttempts: 5, maximumEventAgeInSeconds: 600 },
-          deadLetterConfig: { arn: missedTicks.queueArn },
-        },
+        target: target({ cron: workerCron }),
       });
     schedule("Every15Min", "cron(0/15 * * * ? *)", "*/15 * * * *");
     schedule("Nightly", "cron(15 3 * * ? *)", "15 3 * * *");
+    // The owner's daily AWS cost email (apps/aws costReport.ts): 07:00 in Victoria, ~20 hours after
+    // the UTC day it reports ended, so Cost Explorer has it. On whatever `schedules` says: it reads
+    // the bill and touches no store.
+    if (costReportTo) {
+      new scheduler.CfnSchedule(this, "CostReport", {
+        name: `${prefix}-costreport`,
+        description: "The owner's daily AWS cost email (apps/aws costReport.ts)",
+        scheduleExpression: "cron(0 7 * * ? *)",
+        scheduleExpressionTimezone: "Australia/Melbourne",
+        flexibleTimeWindow: { mode: "OFF" },
+        state: "ENABLED",
+        target: target({ action: "cost-report" }),
+      });
+    }
 
     // --- Alarms → SNS → email.
     const topic = new sns.Topic(this, "Alarms", { topicName: `${prefix}-alarms`, displayName: `Insights ${cfg.name} alarms` });

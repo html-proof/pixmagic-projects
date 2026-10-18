@@ -766,6 +766,20 @@ arn:aws:ce::605411278365:anomalysubscription/b4c7c83e-dfb5-4310-b5c3-83da0709952
 --threshold-expression` with `{"And":[...]}` of `ANOMALY_TOTAL_IMPACT_ABSOLUTE` ≥ 100 and
 `ANOMALY_TOTAL_IMPACT_PERCENTAGE` ≥ 40.
 
+**Daily cost email** (`costReport` in config.ts, on in production only): every morning at 07:00
+Melbourne time the `CostReport` schedule runs the cron function's `{"action":"cost-report"}`
+(apps/aws/src/costReport.ts). It makes one Cost Explorer `GetCostAndUsage` call (us-east-1, DAILY,
+UnblendedCost grouped by SERVICE, from the 1st of the month to the end of yesterday in UTC) and
+emails `budgetEmail` through Resend (not SES) the cost of yesterday (UTC) by service, the month so far,
+and a reminder that Cost Explorer runs about a day behind the Bills page and leaves out the support
+plan and GST until the invoice. Each call costs US$0.01, so ~US$0.30 a month. The cron role has
+`ce:GetCostAndUsage` and nothing else of Cost Explorer. It runs whatever `schedules` says, since it
+touches no store. A failure is retried twice, then lands in the missed-ticks queue (alarm). Send one
+now: `aws lambda invoke --region ap-southeast-2 --function-name insights-production-cron:live
+--cli-binary-format raw-in-base64-out --payload '{"action":"cost-report"}' out.json`. The answer and
+the log line `cost report sent` carry Resend's message id, never the address. Turn it off with
+`costReport: false` (or `-c costReport=off` for one deploy).
+
 Not costing anything yet, but watch: three manual RDS snapshots never expire, and backups may pass
 the 20 GB free allowance once the 14-day chain fills; four log groups keep logs forever (the RDS
 postgresql group and three CDK helper groups; 1.1 MB together on 2026-10-18, under a cent a month,
