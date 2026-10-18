@@ -13,8 +13,13 @@ export interface DailyMetricsRow {
   shipping: number; // shipping charged after shipping discounts and refunds, before tax
   taxes: number;
   totalSales: number; // net sales + shipping + taxes + duties and fees (Shopify's "Total sales")
-  orders: number; // orders placed that day (cancelled orders included, test orders never stored)
-  units: number; // items sold less items returned that day
+  // orders placed that day, on the day Shopify processed them (cancelled orders included, test
+  // orders never stored, orders of gift cards only left out: Shopify's reports don't count them)
+  orders: number;
+  // what those orders sold when placed: their own items after discounts, before tax, without gift
+  // cards or later edits. Average order value is this ÷ orders, as Shopify's AOV is
+  orderValue: number;
+  units: number; // items sold less items returned that day, gift cards included (Shopify's "net items sold")
   ordersWithCustomer: number;
   returningCustomerOrders: number;
   refundedOrders: number; // distinct orders with a return that day
@@ -48,12 +53,13 @@ export function summarize(rows: DailyMetricsRow[]): KpiSummary {
       a.taxes += r.taxes;
       a.totalSales += r.totalSales;
       a.orders += r.orders;
+      a.orderValue += r.orderValue;
       a.units += r.units;
       a.ordersWithCustomer += r.ordersWithCustomer;
       a.returning += r.returningCustomerOrders;
       return a;
     },
-    { grossSales: 0, discounts: 0, refunds: 0, shipping: 0, taxes: 0, totalSales: 0, orders: 0, units: 0, ordersWithCustomer: 0, returning: 0 },
+    { grossSales: 0, discounts: 0, refunds: 0, shipping: 0, taxes: 0, totalSales: 0, orders: 0, orderValue: 0, units: 0, ordersWithCustomer: 0, returning: 0 },
   );
   // Money totals are rounded to cents before deriving ratios, so the result does
   // not depend on float summation order (SQL and JS agree exactly).
@@ -61,7 +67,9 @@ export function summarize(rows: DailyMetricsRow[]): KpiSummary {
   const discounts = r2(t.discounts);
   const refunds = r2(t.refunds);
   const netBeforeRefunds = r2(gross - discounts);
-  const aov = ratio(netBeforeRefunds, t.orders);
+  // Shopify's AOV: the orders' value as placed (later edits, returns, gift cards, tax and shipping
+  // left out) ÷ the orders, which leave out orders of gift cards only.
+  const aov = ratio(r2(t.orderValue), t.orders);
   return {
     grossSales: gross,
     discounts,
@@ -88,9 +96,20 @@ export function delta(current: number | null, previous: number | null): number |
 
 export interface OrderInput {
   createdAt: Date;
+  /**
+   * When Shopify processed the order: the date its reports put it on. The same moment as createdAt
+   * for an order placed in the store; earlier for one imported, synced from POS offline or brought
+   * in by a marketplace app. Null for an order stored before it was read: createdAt stands in.
+   */
+  processedAt?: Date | null;
+  /** Every item a gift card: Shopify's reports don't count the order, nor its customer. */
+  giftCardOnly?: boolean;
   customerKey: string | null;
   isReturningCustomer: boolean;
 }
+
+/** The day an order counts on: Shopify's processed date, else its creation (orders stored before it was read). */
+export const orderMoment = (o: Pick<OrderInput, "createdAt" | "processedAt">): Date => o.processedAt ?? o.createdAt;
 
 /** One of Shopify's sales records, as stored (order_sales). */
 export interface SaleInput {
@@ -98,6 +117,11 @@ export interface SaleInput {
   happenedAt: Date;
   /** order | return | update | unknown */
   actionType: string;
+  /**
+   * The agreement it belongs to (Shopify's OrderActionType, lowercase): order (placed), order_edit,
+   * refund, return, ... Null for a record stored before it was read: taken as the order's own.
+   */
+  agreement?: string | null;
   /** product | shipping | gift_card | tip | duty | fee | additional_fee | adjustment | unknown */
   lineType: string;
   quantity: number | null;
@@ -132,12 +156,16 @@ export function emptyRow(day: string): DailyMetricsRow {
     taxes: 0,
     totalSales: 0,
     orders: 0,
+    orderValue: 0,
     units: 0,
     ordersWithCustomer: 0,
     returningCustomerOrders: 0,
     refundedOrders: 0,
   };
 }
+
+/** Lines that count as items sold: Shopify's net items sold includes gift cards. */
+const ITEM_LINES: ReadonlySet<string> = new Set(["product", "gift_card"]);
 
 export function aggregateDaily(
   orders: OrderInput[],
@@ -152,7 +180,8 @@ export function aggregateDaily(
     return r;
   };
   for (const o of orders) {
-    const r = row(toDay(o.createdAt, timeZone));
+    if (o.giftCardOnly) continue;
+    const r = row(toDay(orderMoment(o), timeZone));
     r.orders += 1;
     if (o.customerKey) {
       r.ordersWithCustomer += 1;
@@ -161,9 +190,13 @@ export function aggregateDaily(
   }
   const returnedPerDay = new Map<string, Set<string>>();
   for (const x of sales) {
-    if (x.lineType === "gift_card" || x.lineType === "tip") continue;
+    if (x.lineType === "tip") continue;
     const day = toDay(x.happenedAt, timeZone);
     const r = row(day);
+    if (ITEM_LINES.has(x.lineType) && x.actionType === "order") r.units += Math.abs(x.quantity ?? 0);
+    if (ITEM_LINES.has(x.lineType) && x.actionType === "return") r.units -= Math.abs(x.quantity ?? 0);
+    // Gift cards are sold as payment, not merchandise: no sales, tax or returns, as in Shopify.
+    if (x.lineType === "gift_card") continue;
     const { value, tax } = saleValue(x);
     r.taxes += tax;
     r.totalSales += value + tax;
@@ -171,10 +204,9 @@ export function aggregateDaily(
       if (x.actionType === "order") {
         r.grossSales += value + x.discount;
         r.discounts += x.discount;
+        if ((x.agreement ?? "order") === "order") r.orderValue += value;
       } else r.refunds -= value;
     } else if (x.lineType === "shipping") r.shipping += value;
-    if (x.lineType === "product" && x.actionType === "order") r.units += Math.abs(x.quantity ?? 0);
-    if (x.lineType === "product" && x.actionType === "return") r.units -= Math.abs(x.quantity ?? 0);
     if (x.actionType === "return") {
       const set = returnedPerDay.get(day) ?? new Set<string>();
       set.add(x.orderId);

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { randomBytes } from "node:crypto";
 import {
   aggregateDaily,
+  orderMoment,
   can,
   channelLabel,
   ALL_HISTORY,
@@ -482,7 +483,8 @@ describe("KPIs", () => {
     expect(d1.taxes).toBeCloseTo(11.5, 6);
     // Net 140 + shipping 5 + taxes 11.50; the gift card and the tip are in neither.
     expect(d1.totalSales).toBeCloseTo(156.5, 6);
-    expect(d1.units).toBe(5 - 1);
+    // The gift card is an item sold (Shopify's net items sold), though no sale; the tip isn't.
+    expect(d1.units).toBe(6 - 1);
     expect(d1.refundedOrders).toBe(1);
 
     const d3 = daily.get("2026-03-03")!;
@@ -492,6 +494,41 @@ describe("KPIs", () => {
     expect(d3.totalSales).toBe(-49.5);
     expect(d3.units).toBe(-1);
     expect(d3.refundedOrders).toBe(1);
+  });
+
+  // Found 2026-10-19 by checking a dev store of seeded orders against its own ShopifyQL sales report.
+  it("counts an order on the day Shopify processed it, as its reports do", () => {
+    // Imported (or synced from POS offline) on 5 Mar for a sale on 1 Mar: Shopify reports it on 1 Mar.
+    const imported = { createdAt: new Date("2026-03-05T15:00:00Z"), processedAt: new Date("2026-03-01T15:00:00Z"), customerKey: null, isReturningCustomer: false };
+    const daily = aggregateDaily([imported], [sale({ orderId: "i", happenedAt: imported.processedAt, amount: 40 })], tz, localDay);
+    expect(daily.get("2026-03-01")).toMatchObject({ orders: 1, grossSales: 40 });
+    expect(daily.has("2026-03-05")).toBe(false);
+    // Stored before its processed date was read: its creation stands in.
+    expect(orderMoment({ createdAt: imported.createdAt, processedAt: null })).toEqual(imported.createdAt);
+  });
+
+  it("leaves orders of gift cards only out of orders and customers, but counts their cards as items", () => {
+    const giftCards = { createdAt: placed, giftCardOnly: true, customerKey: "c9", isReturningCustomer: false };
+    const daily = aggregateDaily([giftCards], [sale({ orderId: "g", happenedAt: placed, lineType: "gift_card", quantity: 2, amount: 100 })], tz, localDay);
+    expect(daily.get("2026-03-01")).toMatchObject({ orders: 0, ordersWithCustomer: 0, grossSales: 0, totalSales: 0, units: 2 });
+    expect(summarize([...daily.values()]).averageOrderValue).toBeNull();
+  });
+
+  it("values the average order as placed: an edit adding an item later is gross sales, not order value", () => {
+    const o = { createdAt: placed, customerKey: null, isReturningCustomer: false };
+    const daily = aggregateDaily(
+      [o],
+      [
+        sale({ orderId: "e", happenedAt: placed, agreement: "order", amount: 110, discount: 10, tax: 10 }),
+        sale({ orderId: "e", happenedAt: new Date("2026-03-01T20:00:00Z"), agreement: "order_edit", amount: 22, tax: 2 }),
+      ],
+      tz,
+      localDay,
+    );
+    const s = summarize([...daily.values()]);
+    expect(s.grossSales).toBe(130);
+    // (110 − 10 tax): what the order sold as placed, after its discount. Shopify: "excluding post-order adjustments".
+    expect(s.averageOrderValue).toBe(100);
   });
 
   it("summarizes with documented formulas", () => {

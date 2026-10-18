@@ -32,7 +32,7 @@ const VISIT_FIELDS = /* GraphQL */ `source sourceType referrerUrl landingPage ut
 
 // LineItem node: 1 (LineItem) + variant 1 + product 1 + originalUnitPriceSet 2 + totalDiscountSet 2 = 7
 const LINE_ITEM_FIELDS = /* GraphQL */ `
-  id title quantity sku
+  id title quantity sku isGiftCard
   variant { id }
   product { id }
   originalUnitPriceSet { shopMoney { amount } }
@@ -80,7 +80,7 @@ export function ordersQuery(includeCustomer: boolean): string {
       orders(first: $first, after: $cursor, query: $query, sortKey: CREATED_AT, reverse: true) {
         pageInfo { hasNextPage endCursor }
         nodes {
-          id name createdAt updatedAt cancelledAt test currencyCode displayFinancialStatus
+          id name createdAt processedAt updatedAt cancelledAt test currencyCode displayFinancialStatus
           sourceName displayFulfillmentStatus discountCodes
           customerJourneySummary { ready customerOrderIndex lastVisit { ${VISIT_FIELDS} } }
           subtotalPriceSet { shopMoney { amount } }
@@ -97,7 +97,7 @@ export function ordersQuery(includeCustomer: boolean): string {
           agreements(first: ${ORDER_NESTED.agreements}) {
             pageInfo { hasNextPage }
             nodes {
-              id happenedAt
+              id happenedAt reason
               sales(first: ${ORDER_NESTED.sales}) {
                 pageInfo { hasNextPage }
                 nodes { ${SALE_FIELDS} }
@@ -146,7 +146,7 @@ export function bulkOrdersQuery(includeCustomer: boolean, search: string | null)
       orders(${args.join(", ")}) {
         edges {
           node {
-            id name createdAt updatedAt cancelledAt test currencyCode displayFinancialStatus
+            id name createdAt processedAt updatedAt cancelledAt test currencyCode displayFinancialStatus
             sourceName displayFulfillmentStatus discountCodes
             customerJourneySummary { ready customerOrderIndex lastVisit { ${VISIT_FIELDS} } }
             subtotalPriceSet { shopMoney { amount } }
@@ -157,7 +157,7 @@ export function bulkOrdersQuery(includeCustomer: boolean, search: string | null)
             ${includeCustomer ? "customer { id numberOfOrders }" : ""}
             fulfillments { createdAt }
             lineItems { edges { node { ${LINE_ITEM_FIELDS} } } }
-            agreements { edges { node { id happenedAt sales { edges { node { ${SALE_FIELDS} } } } } } }
+            agreements { edges { node { id happenedAt reason sales { edges { node { ${SALE_FIELDS} } } } } } }
           }
         }
       }
@@ -264,7 +264,7 @@ export function orderSalesQuery(includeCustomer: boolean): string {
       agreements(first: 1, after: $cursor) {
         pageInfo { hasNextPage endCursor }
         nodes {
-          id happenedAt
+          id happenedAt reason
           sales(first: ${ORDER_DETAIL.sales}, after: $salesCursor) {
             pageInfo { hasNextPage endCursor }
             nodes { ${SALE_FIELDS} }

@@ -29,7 +29,8 @@ export function customerKey(store: Pick<Store, "id">, customerId: string): strin
 export async function upsertOrder(store: StoreCtx, o: NormalizedOrder): Promise<Set<string>> {
   if (o.test) return removeOrders(store, [o.shopifyId]);
   const days = new Set<string>();
-  const day = localDay(o.createdAt, store.timezone);
+  // The day Shopify's reports put the order on: when it was processed.
+  const day = localDay(o.processedAt, store.timezone);
   const existing = await systemDb.order.findUnique({
     where: { storeId_shopifyId: { storeId: store.id, shopifyId: o.shopifyId } },
     select: { id: true, shopifyUpdatedAt: true, localDay: true, trafficSource: true },
@@ -54,7 +55,9 @@ export async function upsertOrder(store: StoreCtx, o: NormalizedOrder): Promise<
     currency: o.currency,
     localDay: day,
     shopifyCreatedAt: o.createdAt,
+    shopifyProcessedAt: o.processedAt,
     shopifyUpdatedAt: o.updatedAt,
+    giftCardOnly: o.giftCardOnly,
     cancelledAt: o.cancelledAt,
     financialStatus: o.financialStatus,
     subtotal: o.subtotal,
@@ -141,6 +144,7 @@ function saleRows(store: StoreCtx, orderId: string, sales: NormalizedSale[]) {
     localDay: localDay(x.happenedAt, store.timezone),
     happenedAt: x.happenedAt,
     actionType: x.actionType,
+    agreement: x.agreement,
     lineType: x.lineType,
     lineItemShopifyId: x.lineItemShopifyId,
     quantity: x.quantity,
@@ -276,7 +280,7 @@ export async function writeOrderBatch(store: StoreCtx, orders: NormalizedOrder[]
 
   const withCustomers = expandScopes(store.grantedScopes).has("read_customers");
   const payload = rows.map((o) => {
-    const day = localDay(o.createdAt, store.timezone);
+    const day = localDay(o.processedAt, store.timezone);
     days.add(day);
     for (const x of o.sales ?? []) days.add(localDay(x.happenedAt, store.timezone));
     return {
@@ -285,7 +289,9 @@ export async function writeOrderBatch(store: StoreCtx, orders: NormalizedOrder[]
       currency: o.currency,
       local_day: day,
       created_at: ts(o.createdAt),
+      processed_at: ts(o.processedAt),
       updated_at: ts(o.updatedAt),
+      gift_card_only: o.giftCardOnly,
       cancelled_at: ts(o.cancelledAt),
       financial_status: o.financialStatus,
       subtotal: String(o.subtotal),
@@ -315,26 +321,27 @@ export async function writeOrderBatch(store: StoreCtx, orders: NormalizedOrder[]
     // When each order's stored sales were read, before this batch writes: sales read at a later
     // state than the batch's copy (a webhook's read meanwhile) are kept, as in upsertOrder. Locked,
     // so no such read lands between this look and the write.
-    const salesReadAt = new Map(
-      (
-        await tx.$queryRaw<Array<{ shopify_id: string; sales_updated_at: Date | null }>>`
-          SELECT shopify_id, sales_updated_at FROM orders
-          WHERE store_id = ${store.id} AND shopify_id = ANY(${rows.map((o) => o.shopifyId)}::text[])
-          FOR UPDATE`
-      ).map((r) => [r.shopify_id, r.sales_updated_at]),
-    );
+    const held = await tx.$queryRaw<Array<{ shopify_id: string; sales_updated_at: Date | null; local_day: string }>>`
+      SELECT shopify_id, sales_updated_at, local_day FROM orders
+      WHERE store_id = ${store.id} AND shopify_id = ANY(${rows.map((o) => o.shopifyId)}::text[])
+      FOR UPDATE`;
+    const salesReadAt = new Map(held.map((r) => [r.shopify_id, r.sales_updated_at]));
+    // An order can move day: one stored by its creation before its processed date was read.
+    for (const r of held) days.add(r.local_day);
     const salesFresh = (o: NormalizedOrder) => {
       const readAt = salesReadAt.get(o.shopifyId);
       return !!o.sales && !(readAt && readAt > o.updatedAt);
     };
     const written = await tx.$queryRaw<Array<{ id: string; shopify_id: string }>>`
-      INSERT INTO orders (id, workspace_id, store_id, shopify_id, name, currency, local_day, shopify_created_at, shopify_updated_at,
+      INSERT INTO orders (id, workspace_id, store_id, shopify_id, name, currency, local_day, shopify_created_at, shopify_processed_at,
+                          shopify_updated_at, gift_card_only,
                           cancelled_at, financial_status, subtotal, total_discounts, total_tax, total_shipping, total_price,
                           customer_key, is_returning_customer, source_name, fulfillment_status, fulfilled_at, discount_codes,
                           traffic_source, traffic_medium, traffic_campaign, referrer_host, sales_updated_at, sales_key,
                           customer_order_index, customer_order_count)
       SELECT gen_random_uuid()::text, ${store.workspaceId}, ${store.id}, s.shopify_id, s.name, s.currency, s.local_day,
-             (s.created_at)::timestamptz AT TIME ZONE 'UTC', (s.updated_at)::timestamptz AT TIME ZONE 'UTC',
+             (s.created_at)::timestamptz AT TIME ZONE 'UTC', (s.processed_at)::timestamptz AT TIME ZONE 'UTC',
+             (s.updated_at)::timestamptz AT TIME ZONE 'UTC', s.gift_card_only,
              (s.cancelled_at)::timestamptz AT TIME ZONE 'UTC', s.financial_status,
              s.subtotal::numeric, s.total_discounts::numeric, s.total_tax::numeric, s.total_shipping::numeric, s.total_price::numeric,
              s.customer_key, s.is_returning_customer, s.source_name, s.fulfillment_status,
@@ -343,15 +350,17 @@ export async function writeOrderBatch(store: StoreCtx, orders: NormalizedOrder[]
              (s.sales_updated_at)::timestamptz AT TIME ZONE 'UTC', s.sales_key,
              s.customer_order_index, s.customer_order_count
       FROM jsonb_to_recordset(${JSON.stringify(payload)}::jsonb) AS s(
-        shopify_id text, name text, currency text, local_day text, created_at text, updated_at text, cancelled_at text,
-        financial_status text, subtotal text, total_discounts text, total_tax text, total_shipping text, total_price text,
+        shopify_id text, name text, currency text, local_day text, created_at text, processed_at text, updated_at text,
+        gift_card_only boolean, cancelled_at text, financial_status text, subtotal text, total_discounts text, total_tax text,
+        total_shipping text, total_price text,
         customer_key text, is_returning_customer boolean, source_name text, fulfillment_status text, fulfilled_at text,
         discount_codes text[], traffic_source text, traffic_medium text, traffic_campaign text, referrer_host text,
         sales_updated_at text, sales_key text, customer_order_index int, customer_order_count int
       )
       ON CONFLICT (store_id, shopify_id) DO UPDATE SET
         name = EXCLUDED.name, currency = EXCLUDED.currency, local_day = EXCLUDED.local_day,
-        shopify_created_at = EXCLUDED.shopify_created_at, shopify_updated_at = EXCLUDED.shopify_updated_at,
+        shopify_created_at = EXCLUDED.shopify_created_at, shopify_processed_at = EXCLUDED.shopify_processed_at,
+        shopify_updated_at = EXCLUDED.shopify_updated_at, gift_card_only = EXCLUDED.gift_card_only,
         cancelled_at = EXCLUDED.cancelled_at, financial_status = EXCLUDED.financial_status,
         subtotal = EXCLUDED.subtotal, total_discounts = EXCLUDED.total_discounts, total_tax = EXCLUDED.total_tax,
         total_shipping = EXCLUDED.total_shipping, total_price = EXCLUDED.total_price,
@@ -421,6 +430,7 @@ export async function writeOrderBatch(store: StoreCtx, orders: NormalizedOrder[]
         local_day: x.localDay,
         happened_at: ts(x.happenedAt),
         action_type: x.actionType,
+        agreement: x.agreement,
         line_type: x.lineType,
         line_item_shopify_id: x.lineItemShopifyId,
         quantity: x.quantity,
@@ -431,18 +441,19 @@ export async function writeOrderBatch(store: StoreCtx, orders: NormalizedOrder[]
     );
     if (sales.length) {
       await tx.$executeRaw`
-        INSERT INTO order_sales (id, workspace_id, store_id, order_id, shopify_id, local_day, happened_at, action_type, line_type,
-                                 line_item_shopify_id, quantity, amount, discount, tax)
+        INSERT INTO order_sales (id, workspace_id, store_id, order_id, shopify_id, local_day, happened_at, action_type, agreement,
+                                 line_type, line_item_shopify_id, quantity, amount, discount, tax)
         SELECT gen_random_uuid()::text, ${store.workspaceId}, ${store.id}, s.order_id, s.shopify_id, s.local_day,
-               (s.happened_at)::timestamptz AT TIME ZONE 'UTC', s.action_type, s.line_type, s.line_item_shopify_id, s.quantity,
+               (s.happened_at)::timestamptz AT TIME ZONE 'UTC', s.action_type, s.agreement, s.line_type, s.line_item_shopify_id, s.quantity,
                s.amount::numeric, s.discount::numeric, s.tax::numeric
         FROM jsonb_to_recordset(${JSON.stringify(sales)}::jsonb) AS s(
-          order_id text, shopify_id text, local_day text, happened_at text, action_type text, line_type text,
+          order_id text, shopify_id text, local_day text, happened_at text, action_type text, agreement text, line_type text,
           line_item_shopify_id text, quantity int, amount text, discount text, tax text
         )
         ON CONFLICT (store_id, shopify_id) DO UPDATE SET
           order_id = EXCLUDED.order_id, local_day = EXCLUDED.local_day, happened_at = EXCLUDED.happened_at,
-          action_type = EXCLUDED.action_type, line_type = EXCLUDED.line_type, line_item_shopify_id = EXCLUDED.line_item_shopify_id,
+          action_type = EXCLUDED.action_type, agreement = EXCLUDED.agreement,
+          line_type = EXCLUDED.line_type, line_item_shopify_id = EXCLUDED.line_item_shopify_id,
           quantity = EXCLUDED.quantity, amount = EXCLUDED.amount, discount = EXCLUDED.discount, tax = EXCLUDED.tax`;
     }
   });
@@ -662,9 +673,9 @@ export async function recomputeDays(store: Pick<Store, "id" | "workspaceId">, da
     await tx.$executeRaw`
     ${dayTotals(store, days)}
     INSERT INTO daily_store_metrics
-      (workspace_id, store_id, day, gross_sales, discounts, refunds, shipping, taxes, total_sales, orders, units,
+      (workspace_id, store_id, day, gross_sales, discounts, refunds, shipping, taxes, total_sales, orders, order_value, units,
        orders_with_customer, returning_customer_orders, refunded_orders)
-    SELECT ${store.workspaceId}, ${store.id}, day, gross_sales, discounts, refunds, shipping, taxes, total_sales, orders, units,
+    SELECT ${store.workspaceId}, ${store.id}, day, gross_sales, discounts, refunds, shipping, taxes, total_sales, orders, order_value, units,
            orders_with_customer, returning_customer_orders, refunded_orders
     FROM t
     ON CONFLICT (store_id, day) DO UPDATE SET
@@ -675,6 +686,7 @@ export async function recomputeDays(store: Pick<Store, "id" | "workspaceId">, da
       taxes = EXCLUDED.taxes,
       total_sales = EXCLUDED.total_sales,
       orders = EXCLUDED.orders,
+      order_value = EXCLUDED.order_value,
       units = EXCLUDED.units,
       orders_with_customer = EXCLUDED.orders_with_customer,
       returning_customer_orders = EXCLUDED.returning_customer_orders,
@@ -692,33 +704,38 @@ export function dayTotals(store: Pick<Store, "id" | "workspaceId">, days: string
   return Prisma.sql`
     WITH d AS (SELECT unnest(${days}::text[]) AS day),
     o AS (
+      -- Orders on the day Shopify processed them (local_day), orders of gift cards only left out:
+      -- Shopify's reports count neither them nor their customers.
       SELECT local_day AS day,
              COUNT(*)::int AS orders,
              (COUNT(*) FILTER (WHERE customer_key IS NOT NULL))::int AS owc,
              (COUNT(*) FILTER (WHERE customer_key IS NOT NULL AND is_returning_customer))::int AS ret
       FROM orders
       WHERE workspace_id = ${store.workspaceId} AND store_id = ${store.id} AND local_day = ANY(${days}::text[])
-        ${until ? Prisma.sql`AND shopify_created_at < ${until}` : Prisma.empty}
+        AND NOT gift_card_only
+        ${until ? Prisma.sql`AND COALESCE(shopify_processed_at, shopify_created_at) < ${until}` : Prisma.empty}
       GROUP BY local_day
     ),
     v AS (
-      SELECT local_day AS day, order_id, action_type, line_type, quantity, discount, amount - tax AS value, tax
+      SELECT local_day AS day, order_id, action_type, agreement, line_type, quantity, discount, amount - tax AS value, tax
       FROM order_sales
       WHERE workspace_id = ${store.workspaceId} AND store_id = ${store.id} AND local_day = ANY(${days}::text[])
-        AND line_type NOT IN ('gift_card', 'tip')
+        AND line_type <> 'tip'
         ${until ? Prisma.sql`AND happened_at < ${until}` : Prisma.empty}
     ),
     s AS (
+      -- Gift cards count as items only (Shopify's net items sold): no sales, tax or returns.
       SELECT day,
              SUM(value + discount) FILTER (WHERE line_type IN ('product', 'adjustment') AND action_type = 'order') AS gross,
              SUM(discount) FILTER (WHERE line_type IN ('product', 'adjustment') AND action_type = 'order') AS disc,
+             SUM(value) FILTER (WHERE line_type IN ('product', 'adjustment') AND action_type = 'order' AND COALESCE(agreement, 'order') = 'order') AS placed,
              -SUM(value) FILTER (WHERE line_type IN ('product', 'adjustment') AND action_type <> 'order') AS returns,
              SUM(value) FILTER (WHERE line_type = 'shipping') AS shipping,
-             SUM(tax) AS taxes,
-             SUM(value) FILTER (WHERE line_type <> 'shipping' AND line_type NOT IN ('product', 'adjustment')) AS other,
-             (SUM(ABS(COALESCE(quantity, 0))) FILTER (WHERE line_type = 'product' AND action_type = 'order'))::int AS units_in,
-             (SUM(ABS(COALESCE(quantity, 0))) FILTER (WHERE line_type = 'product' AND action_type = 'return'))::int AS units_out,
-             (COUNT(DISTINCT order_id) FILTER (WHERE action_type = 'return'))::int AS ro
+             SUM(tax) FILTER (WHERE line_type <> 'gift_card') AS taxes,
+             SUM(value) FILTER (WHERE line_type NOT IN ('shipping', 'product', 'adjustment', 'gift_card')) AS other,
+             (SUM(ABS(COALESCE(quantity, 0))) FILTER (WHERE line_type IN ('product', 'gift_card') AND action_type = 'order'))::int AS units_in,
+             (SUM(ABS(COALESCE(quantity, 0))) FILTER (WHERE line_type IN ('product', 'gift_card') AND action_type = 'return'))::int AS units_out,
+             (COUNT(DISTINCT order_id) FILTER (WHERE action_type = 'return' AND line_type <> 'gift_card'))::int AS ro
       FROM v
       GROUP BY day
     ),
@@ -727,7 +744,8 @@ export function dayTotals(store: Pick<Store, "id" | "workspaceId">, days: string
              COALESCE(s.gross, 0) AS gross_sales, COALESCE(s.disc, 0) AS discounts, COALESCE(s.returns, 0) AS refunds,
              COALESCE(s.shipping, 0) AS shipping, COALESCE(s.taxes, 0) AS taxes,
              COALESCE(s.gross, 0) - COALESCE(s.disc, 0) - COALESCE(s.returns, 0) + COALESCE(s.shipping, 0) + COALESCE(s.taxes, 0) + COALESCE(s.other, 0) AS total_sales,
-             COALESCE(o.orders, 0) AS orders, COALESCE(s.units_in, 0) - COALESCE(s.units_out, 0) AS units,
+             COALESCE(o.orders, 0) AS orders, COALESCE(s.placed, 0) AS order_value,
+             COALESCE(s.units_in, 0) - COALESCE(s.units_out, 0) AS units,
              COALESCE(o.owc, 0) AS orders_with_customer, COALESCE(o.ret, 0) AS returning_customer_orders, COALESCE(s.ro, 0) AS refunded_orders
       FROM d
       LEFT JOIN o ON o.day = d.day
@@ -758,11 +776,14 @@ export async function backfillDays(storeId: string): Promise<string[]> {
  * changed, for the caller to recompute.
  *
  * - Shopify's own position of the order in the customer's history (`customer_order_index`, from
- *   the order's journey) decides when it is known: 1 is new, more is returning.
+ *   the order's journey) decides when it is known: 1 is new, more is returning. Its reports follow
+ *   it too, even for imported orders whose processed dates run in another order than their creation:
+ *   checked order by order against ShopifyQL on a seeded dev store (2026-10-19), the position matched
+ *   107 of 109; going by processed dates instead matched 103.
  * - Otherwise (no journey: POS and draft orders, or not read with it yet): returning when an
- *   earlier order of the customer is stored, or when the customer's lifetime order count, as
- *   Shopify last gave it, is more than the orders stored for them, which proves orders from
- *   before the imported history.
+ *   earlier order of the customer is stored (by when it happened: processed), or when the
+ *   customer's lifetime order count, as Shopify last gave it, is more than the orders stored for
+ *   them, which proves orders from before the imported history.
  *
  * Until 2026-10-18 the lifetime count alone decided ("more than one order"), read whenever the
  * order was imported, so a customer's first order turned "returning" once they bought again, and
@@ -772,10 +793,11 @@ export async function backfillDays(storeId: string): Promise<string[]> {
 export async function settleReturningCustomers(storeId: string, customerKeys?: string[]): Promise<Set<string>> {
   if (customerKeys && !customerKeys.length) return new Set();
   const only = customerKeys ? Prisma.sql`AND customer_key = ANY(${customerKeys}::text[])` : Prisma.empty;
-  // Shopify's order ids grow with time, so (created_at, length, id) orders two orders of one moment too.
+  // Orders follow each other by when they happened (processed; created before that was read), and
+  // Shopify's order ids grow with time, so (at, length, id) orders two orders of one moment too.
   const rows = await systemDb.$queryRaw<Array<{ day: string }>>`
     WITH mine AS (
-      SELECT id, customer_key, shopify_created_at AS at, length(shopify_id) AS idlen, shopify_id AS sid,
+      SELECT id, customer_key, COALESCE(shopify_processed_at, shopify_created_at) AS at, length(shopify_id) AS idlen, shopify_id AS sid,
              customer_order_index, customer_order_count, local_day
       FROM orders WHERE store_id = ${storeId} AND customer_key IS NOT NULL ${only}
     ),
