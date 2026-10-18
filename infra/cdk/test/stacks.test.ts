@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { App } from "aws-cdk-lib";
@@ -14,7 +14,7 @@ writeFileSync(join(fnDir, "public/_next/static/chunks/main.js"), "void 0;\n");
 writeFileSync(join(fnDir, "build.json"), `${JSON.stringify({ commit: "0123456789abcdef0123456789abcdef01234567", builtAt: "2026-10-17T09:00:00.000Z" })}\n`);
 process.env.INSIGHTS_FUNCTION_DIR = fnDir;
 
-const { envConfig, appVars } = await import("../lib/config.js");
+const { envConfig, appVars, REPO_ROOT } = await import("../lib/config.js");
 const { EdgeStack } = await import("../lib/edge-stack.js");
 const { DataStack } = await import("../lib/data-stack.js");
 const { AppStack } = await import("../lib/app-stack.js");
@@ -564,22 +564,29 @@ describe("IAM", () => {
     }
   });
 
-  it("lets only this repository's production environment deploy from GitHub", () => {
-    // The immutable subject GitHub sends for this repository (owner and repository ids), not the bare name.
+  it("lets only the deploy workflow on main, in this repository's production environment, deploy from GitHub", () => {
+    // The immutable subject GitHub sends for this repository (owner and repository ids), not the
+    // bare name; and the workflow file and branch, which the subject doesn't name.
     t.ci.hasResourceProperties("AWS::IAM::Role", {
       AssumeRolePolicyDocument: {
         Statement: [
           Match.objectLike({
             Condition: {
-              StringEquals: {
-                "token.actions.githubusercontent.com:sub": "repo:html-proof@68529971/pixmagic-projects@1413246051:environment:production",
+              StringEquals: Match.exact({
                 "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-              },
+                "token.actions.githubusercontent.com:sub": "repo:html-proof@68529971/pixmagic-projects@1413246051:environment:production",
+                "token.actions.githubusercontent.com:job_workflow_ref": "html-proof/pixmagic-projects/.github/workflows/aws-deploy.yml@refs/heads/main",
+                "token.actions.githubusercontent.com:ref": "refs/heads/main",
+              }),
             },
           }),
         ],
       },
     });
+    // The workflow the trust names is the one that deploys.
+    const workflow = readFileSync(join(REPO_ROOT, ".github/workflows/aws-deploy.yml"), "utf8");
+    expect(workflow).toMatch(/^\s+environment: production\s*$/m);
+    expect(workflow).toMatch(/^\s+id-token: write\s*$/m);
   });
 
   it("lets the deploy role read everything the workflow's smoke tests check", () => {

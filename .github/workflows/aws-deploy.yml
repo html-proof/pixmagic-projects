@@ -2,9 +2,9 @@ name: Deploy to AWS
 
 # Push to main (after CI's checks pass on the same commit) or run by hand. Deploys with GitHub's
 # OIDC token exchanged for the role in InsightsCi-production: no AWS keys are stored in GitHub.
-# Setup (once): repository → Settings → Environments → "production" (add required reviewers to
-# gate releases), with the variable AWS_DEPLOY_ROLE_ARN = the InsightsCi-production stack's
-# DeployRoleArn output. docs/aws-deployment.md has the rest.
+# The role admits only this file run from main. Setup (once): repository → Settings →
+# Environments → "production", with the variable AWS_DEPLOY_ROLE_ARN = the InsightsCi-production
+# stack's DeployRoleArn output. docs/aws-deployment.md has the rest.
 on:
   workflow_dispatch:
   workflow_run:
@@ -35,9 +35,12 @@ jobs:
     if: >-
       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
       || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
-    # GitHub's ubuntu-latest, or the self-hosted runner the repository variable SELF_HOSTED_RUNNER
-    # names (ci.yml).
-    runs-on: ${{ fromJSON(vars.SELF_HOSTED_RUNNER || '"ubuntu-latest"') }}
+    # The runner the repository variable SELF_HOSTED_DEPLOY_RUNNER names: the PC's deploy-only
+    # runner, under its own account, which refuses every job but this one from main
+    # (docs/aws-deployment.md). Pull-request jobs run code nobody has reviewed yet, and on a shared
+    # runner whatever they leave behind this job would run with, holding the deploy role. Without
+    # it, the same runner as CI: GitHub's ubuntu-latest, or SELF_HOSTED_RUNNER (ci.yml).
+    runs-on: ${{ fromJSON(vars.SELF_HOSTED_DEPLOY_RUNNER || vars.SELF_HOSTED_RUNNER || '"ubuntu-latest"') }}
     timeout-minutes: 60
     environment: production
     env:
@@ -49,19 +52,28 @@ jobs:
         run: |
           echo %ProgramFiles%\Git\bin>>"%GITHUB_PATH%"
           echo npm_config_store_dir=%RUNNER_TOOL_CACHE%\pnpm-store>>"%GITHUB_ENV%"
-      - uses: actions/checkout@v7
+      - name: On the runner pull requests use
+        if: vars.SELF_HOSTED_DEPLOY_RUNNER == '' && vars.SELF_HOSTED_RUNNER != ''
+        run: echo "::warning::Deploying on the runner pull requests use. Install the deploy-only runner and set SELF_HOSTED_DEPLOY_RUNNER (docs/aws-deployment.md)."
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-          cache: ${{ vars.SELF_HOSTED_RUNNER == '' && 'pnpm' || '' }}
+          # A self-hosted runner keeps its pnpm store between runs (first step): no cache to move.
+          cache: ${{ runner.environment == 'github-hosted' && 'pnpm' || '' }}
       - run: pnpm install --frozen-lockfile
         env: { DATABASE_URL: "postgresql://build:build@localhost:5432/build" }
       - name: Unit tests (AWS adapters, CDK)
         run: pnpm --filter @app/aws --filter @infra/cdk test
-      - uses: aws-actions/configure-aws-credentials@v6
+      # The deploy role admits only this file run from main (infra/cdk/lib/config.ts,
+      # githubDeployClaims). Checked here first, so a trust this job's own token couldn't meet is
+      # never deployed, and a mismatch reads plainly instead of as STS's "Not authorized".
+      - name: Token claims the deploy role requires
+        run: pnpm --filter @infra/cdk exec tsx scripts/oidc-trust.ts claims --env production
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ap-southeast-2
@@ -99,6 +111,12 @@ jobs:
       - name: Smoke tests
         id: smoke
         run: node infra/cdk/scripts/smoke.mjs --env production
+      # The trust as just deployed must still admit this workflow, or the next deploy can't sign in.
+      # Nothing to roll back if not: the release is fine, the role's trust needs fixing.
+      - name: The next deploy can still sign in
+        id: trust
+        env: { ROLE: "${{ vars.AWS_DEPLOY_ROLE_ARN }}" }
+        run: pnpm --filter @infra/cdk exec tsx scripts/oidc-trust.ts assume --role "$ROLE" --region "$AWS_REGION"
       - name: Roll back on failure
-        if: failure() && steps.before.outputs.versions != ''
+        if: failure() && steps.before.outputs.versions != '' && steps.trust.outcome != 'failure'
         run: node infra/cdk/scripts/rollback.mjs --env production --to "${{ steps.before.outputs.versions }}"

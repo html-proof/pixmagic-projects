@@ -76,11 +76,36 @@ deploy` → migrate → smoke tests → automatic rollback of the `live` aliases
 signs in with GitHub OIDC (role in the `InsightsCi-production` stack), no AWS keys in GitHub.
 One-time setup in the repository's Settings → Environments → `production`: variable
 `AWS_DEPLOY_ROLE_ARN` (the stack's `DeployRoleArn` output), optional `AWS_ALERT_EMAIL`,
-`GOOGLE_SIGNIN_CLIENT_ID`, `AWS_SCHEDULES` (`on` after cutover), and required reviewers.
-The role trusts the token's `sub` exactly as this repository sends it: the immutable form
-`repo:html-proof@68529971/pixmagic-projects@1413246051:environment:production` (`githubOidcSubject`
-in `infra/cdk/lib/config.ts`). "Not authorized to perform sts:AssumeRoleWithWebIdentity" in the
-workflow means the two differ: compare with CloudTrail's AssumeRoleWithWebIdentity events.
+`GOOGLE_SIGNIN_CLIENT_ID` and `AWS_SCHEDULES` (`on` after cutover). Required reviewers and branch
+rules for an environment need a paid plan for a private repository; the role's trust does that job.
+
+The role admits a token only when all of these claims match exactly (`githubDeployClaims` in
+`infra/cdk/lib/config.ts`; AWS STS has read GitHub's own claims since January 2026):
+
+- `sub` exactly as this repository sends it, the immutable form
+  `repo:html-proof@68529971/pixmagic-projects@1413246051:environment:production`
+  (`githubOidcSubject`; the repository's OIDC subject setting is left as it is).
+- `job_workflow_ref` = `html-proof/pixmagic-projects/.github/workflows/aws-deploy.yml@refs/heads/main`
+  and `ref` = `refs/heads/main`: this one workflow file, run from `main`. With `sub` alone (before
+  2026-10-18), any branch's workflow naming the `production` environment got the role.
+
+The workflow checks this from both ends. Before it signs in, "Token claims the deploy role
+requires" compares its own token with those values (`infra/cdk/scripts/oidc-trust.ts claims`), so
+a trust it couldn't meet never gets deployed, and a mismatch is spelled out. After the smoke tests,
+"The next deploy can still sign in" has STS exchange a fresh token for the role (`oidc-trust.ts
+assume`; that 15-minute session is dropped unread). "Not authorized to perform
+sts:AssumeRoleWithWebIdentity" at sign-in means token and trust differ: the first step prints the
+token's values.
+
+If "The next deploy can still sign in" fails, the release is live (nothing is rolled back) but the
+next deploy can't sign in. With the owner's admin sign-in and no deploy running: IAM console →
+Roles → `insights-production-github-deploy` → Trust relationships → Edit trust policy, delete the
+`job_workflow_ref` and `ref` lines and save. Then make `githubDeployClaims` match what the step
+printed and merge that: CloudFormation sets the trust again only when its template changes.
+
+Every action in the workflows is pinned to a commit SHA, with its version in a comment (a tag can
+be moved to other code; a SHA can't). Dependabot (`.github/dependabot.yml`) proposes updates once a
+month, all in one pull request.
 
 ### Keeping within GitHub's included minutes
 
@@ -124,12 +149,14 @@ to be increased" (a job failing in seconds with no steps or log; read it with
 `gh api repos/html-proof/pixmagic-projects/check-runs/<job id>/annotations`) means the account's
 included minutes are used up (GitHub Free: 2,000 a month for private repositories, reset on the
 1st at 00:00 UTC) or a payment failed. Self-hosted runners cost nothing, so CI and Deploy can run on
-the owner's PC instead. Every job's `runs-on` reads the repository variable `SELF_HOSTED_RUNNER`;
-while it is unset, everything runs on `ubuntu-latest` exactly as before.
+the owner's PC instead. Every CI job's `runs-on` reads the repository variable `SELF_HOSTED_RUNNER`;
+while it is unset, everything runs on `ubuntu-latest` exactly as before. Deploy to AWS reads
+`SELF_HOSTED_DEPLOY_RUNNER` first (the deploy-only runner below), then `SELF_HOSTED_RUNNER`.
 
 Set up once, in an elevated Windows PowerShell. `infra/runner/install-runner.ps1` does every step
 below in one go (`powershell -ExecutionPolicy Bypass -File infra\runner\install-runner.ps1`, from
-the repository folder) and asks only for the new account's password; or run them one at a time.
+the repository folder) and asks only for the new account's password, then hardens the account
+(`harden-runner.ps1`, "Hardening the runner" below); or run them one at a time.
 The runner runs as its own local account (not the owner's, whose `aws login` session and Git
 credentials stay out of reach) in a folder only administrators and the runner can change (config.cmd
 gives its group `GITHUB_ActionsRunner_*` full control):
@@ -201,9 +228,80 @@ Restart-Service $svc
 ```
 
 (`sc.exe`, not `sc`: in PowerShell `sc` is Set-Content.) Settings → Actions → Runners should now
-show bizinsights-pc as Idle. Finally the switch (Settings → Secrets and variables → Actions →
-Variables): `SELF_HOSTED_RUNNER` = `["self-hosted","bizinsights-pc"]`. The first job run on the
-PC also proves GitHub still starts self-hosted jobs under the billing block.
+show bizinsights-pc as Idle. Then the account's hardening ("Hardening the runner" below). Finally
+the switch (Settings → Secrets and variables → Actions → Variables): `SELF_HOSTED_RUNNER` =
+`["self-hosted","bizinsights-pc"]`. The first job run on the PC also proves GitHub still starts
+self-hosted jobs under the billing block.
+
+#### The deploy-only runner
+
+Pull-request jobs run code nobody has reviewed yet (a new dependency's install script, say), and a
+runner keeps state between jobs: its tool cache, its pnpm store, its account's profile and the
+runner folder. On one shared runner, whatever such a job leaves there the next Deploy to AWS runs
+with, while it holds the deploy role, which reaches AdministratorAccess through the CDK roles. So
+deploys get a second runner service on the same PC: account `ghdeploy`, folder
+`C:\actions-runner-deploy`, name and only label `bizinsights-pc-deploy`. Neither account can
+change the other's folders or profile, and the folders on the system `PATH` are administrators-only
+(checked 2026-10-18), so a deploy runs only programs administrators installed and its own.
+
+Labels alone wouldn't keep other jobs off it: any branch's workflow can ask for any label. Its job
+hook (`infra/runner/deploy-only-hook.js`, which the runner runs with its own Node before every job;
+a copy in `C:\ProgramData\bizinsights-runner`, administrators-only) fails every job before its first
+step unless GitHub says it is `aws-deploy.yml` from `main`, started by a CI run or by hand. Those
+values come from the job's github context, which a workflow file can't change. A refused job's
+"Set up runner" step says why.
+
+In an elevated Windows PowerShell, from the repository folder (asks for a new password for
+ghdeploy, twice):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File infra\runner\install-runner.ps1 -Deploy
+```
+
+Then the variable `SELF_HOSTED_DEPLOY_RUNNER` = `["bizinsights-pc-deploy"]`. Until it is set, each
+deploy runs on the shared runner and warns ("On the runner pull requests use"). The next deploy's
+"Set up runner" step should show "A job started hook has been configured by the self-hosted runner
+administrator" and "allowed on this runner". With its own runner a deploy no longer queues behind
+pull-request jobs either; the two share the laptop's CPU.
+
+After 2026-11-01, when GitHub's included minutes are back, `SELF_HOSTED_DEPLOY_RUNNER` =
+`"ubuntu-latest"` deploys on a fresh GitHub machine every time while CI stays on the PC (about 5
+minutes a deploy).
+
+#### Hardening the runner
+
+Owner-run, in an elevated Windows PowerShell; install-runner.ps1 does this for the account it
+creates. For a runner installed before 2026-10-18 (ghrunner), run once, from the repository folder:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File infra\runner\harden-runner.ps1
+```
+
+It is safe to run again. For each runner account that exists (ghrunner, ghdeploy):
+
+- A password is required. `New-LocalUser` leaves the account flagged "password not required"
+  (PASSWD_NOTREQD), which lets it be given an empty one. By hand: `net user ghrunner /passwordreq:yes`.
+- No logon but as its service: it is denied local logon, Remote Desktop and network logon. By
+  hand: `secpol.msc` → Local Policies → User Rights Assignment → "Deny log on locally", "Deny log
+  on through Remote Desktop Services" and "Deny access to this computer from the network": add the
+  account to each. "Log on as a service", which config.cmd granted, stays. config.cmd checks the
+  password with a network logon, so registering that account's runner again needs the network
+  denial lifted first: install-runner.ps1 does that and puts it back.
+
+And `C:\ms-playwright` (the e2e job's browsers): C:\ passes "Authenticated Users: Modify" down to
+new folders, so every account on the PC could replace the `chrome.exe` the runner starts. The
+script leaves it changeable by administrators, SYSTEM and ghrunner (which downloads new browser
+builds into it), readable by users. By hand:
+
+```powershell
+icacls C:\ms-playwright /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" "ghrunner:(OI)(CI)M" "*S-1-5-32-545:(OI)(CI)RX"
+```
+
+```powershell
+icacls "C:\ms-playwright\*" /reset /T /C /Q
+```
+
+(The second makes everything inside inherit exactly that.)
 
 On the PC there is no Docker: each job starts its own throwaway PostgreSQL 18 from
 `C:\Program Files\PostgreSQL\18\bin` and the e2e job a Mailpit stand-in
@@ -216,9 +314,9 @@ job signs in only with the OIDC deploy role and checks that it did.
   tries IPv6 first and gives up on every attempt ("timed out after 30000ms" after 5 s). So that
   step preloads `apps/web/e2e/ipv4-only.mjs`, and a new browser build downloads into the folder by
   itself. If a download still fails, fill the folder by hand from an account that has the browsers,
-  in Windows PowerShell: `Copy-Item -Recurse -Force $env:LOCALAPPDATA\ms-playwright\* C:\ms-playwright`.
-  The folder has C:\'s default permissions: any signed-in account on the PC may change it, the same
-  trust as what one job leaves for the next.
+  in an elevated Windows PowerShell (once hardened, only administrators and ghrunner may write
+  there), then run harden-runner.ps1 again:
+  `Copy-Item -Recurse -Force C:\Users\<account>\AppData\Local\ms-playwright\* C:\ms-playwright`.
 - The PC must be on and awake: queued jobs wait up to 24 hours for the runner, then are cancelled.
   It's a laptop with Modern Standby: it sleeps 3 minutes after the last input once the screen
   turns off (even on AC, even with "sleep: never"), and when the lid closes. Asleep, it drops the
@@ -233,12 +331,15 @@ job signs in only with the OIDC deploy role and checks that it did.
   used up ("Artifact storage quota has been hit"). Then every push to `main` runs the checks again
   (about 40 minutes on the PC) instead of reusing a pull request's pass. It costs only time.
 - Job code still runs on the owner's PC: it can reach anything listening on localhost there, and
-  what one job leaves in the runner folder the next one (a deploy, with the deploy role) runs with.
-  Only collaborators can start jobs (fork pull requests are off); keep it that way, and never make
-  the repository public while the runner is attached.
-- Back to GitHub's runners: delete `SELF_HOSTED_RUNNER` first, then `Stop-Service "actions.runner.*"`
-  and `.\config.cmd remove` with the token from the runner's page in Settings → Actions → Runners,
-  then `Remove-LocalUser ghrunner`.
+  what one CI job leaves behind the next CI job runs with. With the deploy-only runner that stops
+  short of the deploy; without it, the deploy runs with it too. Only collaborators can start jobs
+  (fork pull requests are off); keep it that way, and never make the repository public while a
+  runner is attached.
+- Back to GitHub's runners: delete `SELF_HOSTED_DEPLOY_RUNNER` and `SELF_HOSTED_RUNNER` first. Then,
+  for each runner (`C:\actions-runner-deploy` with account ghdeploy, `C:\actions-runner` with
+  ghrunner), in an elevated PowerShell in its folder: `Stop-Service "actions.runner.*.<name>"`,
+  `.\config.cmd remove` with the token from the runner's page in Settings → Actions → Runners, and
+  `Remove-LocalUser <account>`. Last, `Remove-Item -Recurse C:\ProgramData\bizinsights-runner`.
 
 ## Database
 
