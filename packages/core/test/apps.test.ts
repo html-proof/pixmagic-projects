@@ -240,9 +240,13 @@ describe("Shopify app registry: the App Store app new stores are sent to", () =>
 
     it("send nobody to an app their store can't install", () => {
       // The App Store app misconfigured (no secret): back to the install target, which serves any store.
+      // The App Store app misconfigured (no secret): the first App Store app, same organization.
       configure({ SHOPIFY_APP_SECRET_APPSTORE: "" });
+      expect(connectApp(null, [listed])?.key).toBe("public");
+      expect(connectApp(null, [firstListed])?.key).toBe("public");
+      // Neither configured: back to the install target, which serves any store.
+      configure({ SHOPIFY_APP_SECRET_PUBLIC: "" });
       expect(connectApp(null, [listed])?.key).toBe("default");
-      expect(connectApp(null, [firstListed])?.key).toBe("default");
       // The main app limited to our own stores: no picker, and a stranger's store by name is refused.
       configure({ SHOPIFY_DEFAULT_APP_SHOPS: TEST_STORE });
       expect(connectApp(null, [direct])).toBeNull();

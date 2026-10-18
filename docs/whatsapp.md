@@ -271,7 +271,7 @@ manual route); nothing pretends to be connected.
 
 - Webhook topics added to both `shopify-app/shopify.app*.toml`: `orders/fulfilled`, `orders/partially_fulfilled`,
   `checkouts/create`, `checkouts/update` (all `read_orders`; no new scope). They take effect with
-  `cd shopify-app && shopify app deploy` (and `--config pixmagic` for the custom app).
+  `cd shopify-app && shopify app deploy --config <app>` for each app (docs/shopify-setup.md section 2).
 - **Protected customer data, Level 2** (name, phone, address) must be approved for live stores: until then Shopify
   redacts them from webhooks and messages are recorded as skipped ("no WhatsApp number"). Development stores are
   exempt, which is how to test.

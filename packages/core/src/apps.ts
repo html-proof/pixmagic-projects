@@ -238,8 +238,12 @@ export function connectApp(shop: string | null, stores: readonly StoreApp[], exi
     const kept = existing ? apps.find((a) => a.key === existing.shopifyAppKey) : undefined;
     if (kept && servesAnyShop(kept)) return kept;
   }
-  const listed = appStoreWorkspace(stores) ? apps.find((a) => a.key === APP_STORE_APP) : undefined;
-  const target = listed && servesAnyShop(listed) ? listed : installTarget();
+  // The App Store app, or while it is misconfigured (its secret missing) the first one: both are in
+  // the organization whose development stores an App Store workspace's merchant can install on.
+  const listed = appStoreWorkspace(stores)
+    ? APP_STORE_APPS.map((k) => apps.find((a) => a.key === k)).find((a) => a && servesAnyShop(a))
+    : undefined;
+  const target = listed ?? installTarget();
   return servesAnyShop(target) ? target : null;
 }
 
