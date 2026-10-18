@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { envConfig, githubClaimConditions, githubTrustChecks } from "../lib/config.js";
-import { type Assumed, canonical, checkTrust, compareClaims, tokenClaims } from "../lib/oidc-trust.js";
+import { type Assumed, canonical, checkTrust, compareClaims, proveTrustChecks, tokenClaims } from "../lib/oidc-trust.js";
 
 const cfg = envConfig(() => undefined);
 const deployRoleArn = "arn:aws:iam::605411278365:role/insights-production-github-deploy";
@@ -96,6 +96,23 @@ describe("the trust check after a deploy", () => {
       expect(r.deployRole).toBe("unknown");
       expect(r.lines.at(-1)).toMatch(/^::error::Couldn't check whether the deploy role still admits this workflow/);
     }
+  });
+
+  it("proves before a deploy without asking for the deploy role, and refuses to prove from missing roles", async () => {
+    const asked: string[] = [];
+    const ok = await proveTrustChecks({ cfg, deployRoleArn, liveConditions: liveAsDeployed, assume: async (arn) => (asked.push(roleName(arn)), enforcing(arn)) });
+    expect(ok.proven).toBe(true);
+    expect(asked).not.toContain(DEPLOY);
+    // The first deploy of the trust-check roles hasn't happened: nothing is there to prove anything.
+    const none = await proveTrustChecks({
+      cfg,
+      deployRoleArn,
+      liveConditions: (name) => {
+        throw new Error(`An error occurred (NoSuchEntity) when calling the GetRole operation: The role with name ${name} cannot be found.`);
+      },
+      assume: async (arn) => enforcing(arn),
+    });
+    expect(none.proven).toBe(false);
   });
 
   it("compares trusts whatever order IAM keeps their keys in", () => {
