@@ -45,7 +45,7 @@ api_version = "2026-10"
   # webhook topics containing protected customer data") until Protected customer data access is
   # granted for it (Partner Dashboard -> API access requests). Then add back, as in
   # shopify.app.toml: orders/create, orders/updated, orders/paid, orders/cancelled,
-  # orders/fulfilled, orders/partially_fulfilled, refunds/create, checkouts/create,
+  # orders/fulfilled, orders/partially_fulfilled, orders/delete, refunds/create, checkouts/create,
   # checkouts/update - and `shopify app deploy --config public`. Until then its stores get orders
   # from the import and the dashboard's Sync, not live.
   topics = [

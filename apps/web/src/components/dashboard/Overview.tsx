@@ -81,7 +81,7 @@ export function businessHealth(ov: Overview, currency: string): Check[] {
     const now = cu.current.returningCustomerRate;
     const before = cu.previous.returningCustomerRate;
     const d = before !== null && before > 0 ? (now - before) / before : null;
-    out.push({ id: "returning", topic: "customers", area: "Returning customers", health: gradeTrend(d, running), text: `${fmtPct(now)} of orders came from returning customers${before !== null ? ` (${fmtPct(before)} before)` : ""}.` });
+    out.push({ id: "returning", topic: "customers", area: "Returning customers", health: gradeTrend(d, running), text: `${fmtPct(now)} of customers had bought before${before !== null ? ` (${fmtPct(before)} before)` : ""}.` });
   }
   const inv = m.inventory?.current;
   if (inv && inv.trackedVariants > 0) {

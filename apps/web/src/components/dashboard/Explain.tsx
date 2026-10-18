@@ -118,7 +118,7 @@ const TERMS: Record<Topic, Terms> = {
     ["Net sales", "Those orders' sales after discounts and after their returns and cancellations, before tax and shipping."],
   ],
   customers: [
-    ["Returning customer", "Someone Shopify says has more than one order, or who ordered from you before."],
+    ["Returning customer", "A customer whose order came after an earlier one, as Shopify counts them. Their very first purchase counts as new, even if they bought again since."],
     ["First order", "An order from someone buying from you for the first time."],
     ["Customers to follow up", "People who left items in checkout, or signed up for emails, with their details straight from Shopify. Nothing is stored by bizinsights."],
     ["Link back to their cart", "Shopify's own link for an unfinished checkout. Opening it takes the shopper straight back to checkout with everything still in their cart, so they can pay and finish."],
@@ -253,7 +253,7 @@ function nextSteps(topic: Topic, ov: Overview, currency: string): ReactNode[] {
     }
     case "customers": {
       const r = m.customers?.current.returningCustomerRate;
-      if (r !== undefined && r !== null && r < 0.25) out.push(<>Only {fmtPct(r)} of orders come from returning customers. A thank-you email, or a small code for a second order, can bring first-time buyers back.</>);
+      if (r !== undefined && r !== null && r < 0.25) out.push(<>Only {fmtPct(r)} of your customers had bought before. A thank-you email, or a small code for a second order, can bring first-time buyers back.</>);
       break;
     }
     case "orders":

@@ -499,25 +499,31 @@ function CustomersDetail({ ov, contactsOn }: { ov: Overview; contactsOn: boolean
               <p>No orders with a known customer in these dates yet.</p>
             ) : (
               <p>
-                <B>{fmtPct(rate)}</B> of orders came from people who had bought before
-                {before !== null ? <> (it was {fmtPct(before)} for {comparedOn(ov)})</> : null}. The rest were first-time customers.
+                <B>{fmtPct(rate)}</B> of the {fmtNum(cu.current.customers)} {cu.current.customers === 1 ? "customer" : "customers"} who ordered had bought from you before
+                {before !== null ? <> (it was {fmtPct(before)} for {comparedOn(ov)})</> : null}. {fmtNum(cu.current.newCustomers)} made their first purchase.
               </p>
             )}
           </InShort>
-          <Panel id="d-customers" title="Returning customers" help="A customer counts as returning if Shopify says they have more than one order, or we have an earlier order from them.">
-            <div className="grid grid-cols-2 gap-3">
-              <Stat label="These dates" value={fmtPct(rate)} note="Orders from returning customers." />
+          <Panel
+            id="d-customers"
+            title="Returning customers"
+            help="As Shopify counts them: each customer once, however many orders. A customer is returning when an order of theirs in these dates came after an earlier one, and new when their very first purchase is in these dates (someone can be both)."
+          >
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <Stat label="Returning customer rate" value={fmtPct(rate)} note="Returning customers ÷ customers." />
               <Stat label={COMPARE_LABEL[ov.previous.compare ?? "previous"]} value={fmtPct(before)} note={ov.previous.imported === false ? "No earlier data" : fmtComparison(ov.previous)} />
+              <Stat label="Customers" value={fmtNum(cu.current.customers)} note="Who ordered in these dates." />
+              <Stat label="New customers" value={fmtNum(cu.current.newCustomers)} note="Their first purchase ever." />
             </div>
             {rate !== null && (
               <div className="mt-5">
-                <p className="mb-2 text-xs text-muted">Orders with a known customer in these dates</p>
+                <p className="mb-2 text-xs text-muted">Customers who ordered in these dates</p>
                 <StackedBar
                   label="Returning and first-time customers"
                   format={(v) => fmtPct(v / 1000)}
                   segments={[
-                    { label: "Returning customers", value: Math.round(rate * 1000), fill: "bg-[var(--viz-cat-1)]" },
-                    { label: "First orders", value: Math.round((1 - rate) * 1000), fill: "bg-[var(--viz-cat-3)]" },
+                    { label: "Had bought before", value: Math.round(rate * 1000), fill: "bg-[var(--viz-cat-1)]" },
+                    { label: "First purchase only", value: Math.round((1 - rate) * 1000), fill: "bg-[var(--viz-cat-3)]" },
                   ]}
                 />
               </div>

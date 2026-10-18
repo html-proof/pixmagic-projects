@@ -52,6 +52,8 @@ export const LIMITS = {
   teamChanges: { max: 120, windowSec: 600 },
   /** Dashboard CSV downloads, per user (each one reads a whole report). */
   dashboardExports: { max: 30, windowSec: 600 },
+  /** "Check against Shopify now", per store: each one re-reads a week of orders from Shopify. */
+  storeCheck: { max: 4, windowSec: 3600 },
   /** New workspaces, per user. */
   workspaceCreate: { max: 10, windowSec: 3600 },
   /** New API keys, per workspace. */

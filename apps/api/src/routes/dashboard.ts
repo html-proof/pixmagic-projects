@@ -1,11 +1,12 @@
 import { z } from "zod";
 import { withTenant } from "@app/db";
 import { COMPARE_MODES, DATE_PRESETS, redactOverview, resolvePreset, seesModule } from "@app/shared";
-import { logger, revocableScopes } from "@app/core";
+import { latestReconciliation, logger, revocableScopes, startReconciliation } from "@app/core";
 import { recentSyncJobs, storeOverview, workspaceStores } from "@app/core/reports";
 import { HttpError, requireWorkspace, type Deps } from "../context.js";
 import type { App } from "../app.js";
 import { autoRefresh } from "../sync.js";
+import { limit, LIMITS } from "../rateLimit.js";
 
 /**
  * The dates asked about and what they are compared with, as the dashboard and its downloads ask:
@@ -111,6 +112,8 @@ export function dashboardRoutes(app: App, deps: Deps) {
         today: report.today,
         // When the numbers last matched Shopify, and any changes still waiting (dataFreshness in core).
         freshness: report.freshness,
+        // The last check against Shopify's own records (outcome only; checkSummary in core).
+        check: report.check,
         capabilities: report.capabilities,
         modules: report.modules,
         hasData: report.hasData,
@@ -122,5 +125,33 @@ export function dashboardRoutes(app: App, deps: Deps) {
       await autoRefresh(deps, polled).catch((err) => logger.warn({ err, storeId }, "auto refresh failed"));
     }
     return c.json(body);
+  });
+
+  /**
+   * The last check against Shopify with its figures: Shopify's, ours before and after any repair,
+   * and why they differed (packages/core/src/reconcile.ts). The figures are the sales breakdown, so
+   * they need finance.breakdown (owners and admins hold it).
+   */
+  app.get("/workspaces/:ws/stores/:storeId/check", async (c) => {
+    const { ws, storeId } = c.req.param();
+    await requireWorkspace(c, deps, ws, "finance.breakdown");
+    return c.json(await withTenant(ws, async (tx) => {
+      const store = await tx.store.findFirst({ where: { id: storeId, workspaceId: ws }, select: { id: true } });
+      if (!store) throw new HttpError(404, "Not found", "not_found");
+      return latestReconciliation(tx, { ws, storeId });
+    }));
+  });
+
+  /** Check the last 7 finished days against Shopify now (the daily check runs by itself as well). */
+  app.post("/workspaces/:ws/stores/:storeId/check", async (c) => {
+    const { ws, storeId } = c.req.param();
+    await requireWorkspace(c, deps, ws, "integrations.manage");
+    const store = await withTenant(ws, (tx) => tx.store.findFirst({ where: { id: storeId, workspaceId: ws } }));
+    if (!store) throw new HttpError(404, "Not found", "not_found");
+    if (store.status !== "active") throw new HttpError(409, "The store must be connected and imported before it can be checked.", "store_not_ready");
+    await limit(deps.coord, `rl:check:${store.id}`, LIMITS.storeCheck);
+    const started = await startReconciliation(deps, store, "manual");
+    if (!started) throw new HttpError(409, "There is no finished day to check yet.", "nothing_to_check");
+    return c.json(started, 202);
   });
 }

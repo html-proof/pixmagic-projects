@@ -160,7 +160,7 @@ export function topicSummary(t: Topic, ov: Overview, currency: string): string {
     }
     case "customers": {
       const r = m.customers?.current.returningCustomerRate;
-      return r !== undefined && r !== null ? `${fmtPct(r)} of orders from returning customers` : "Who's buying, and who to follow up";
+      return r !== undefined && r !== null ? `${fmtPct(r)} of customers had bought before` : "Who's buying, and who to follow up";
     }
     case "orders": {
       const o = m.recent_orders?.items[0];

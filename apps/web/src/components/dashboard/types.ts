@@ -274,13 +274,16 @@ export interface Overview {
    * changes that failed for good in the last 24 hours.
    */
   freshness?: Freshness;
+  /** The last check of the figures against Shopify's own records (outcome only). */
+  check?: CheckSummary;
   capabilities: Capability[];
   hasData: boolean;
   data?: ImportedData;
   modules: {
     sales_overview?: SalesOverview;
     refunds?: { current: { refunds: number; refundRate: number | null; refundedOrders: number }; deltas: { refunds: number | null } };
-    customers?: { current: { returningCustomerRate: number | null }; previous: { returningCustomerRate: number | null } };
+    /** Customers counted once each, as Shopify's reports count them; rate = returning ÷ customers. */
+    customers?: { current: CustomerCounts; previous: { [K in keyof CustomerCounts]: CustomerCounts[K] | null } };
     top_products?: { items: Array<{ productId: string | null; title: string; revenue: number; units: number }> };
     funnel?: FunnelModule;
     channels?: ChannelsModule;
@@ -298,4 +301,51 @@ export interface Overview {
     /** Which platforms this server can connect (absent: none is set up). */
     ad_configured?: { meta: boolean; google: boolean; adsense: boolean };
   };
+}
+
+/** Customers who ordered in a range (the customers module): each once, however many orders. */
+export interface CustomerCounts {
+  customers: number;
+  /** Customers with an order placed when their history already held one. */
+  returningCustomers: number;
+  /** Customers whose very first purchase is in the range (one can be in both). */
+  newCustomers: number;
+  returningCustomerRate: number | null;
+}
+
+/** The figures a check against Shopify compares (RECONCILE_METRICS in packages/core/src/reconcile.ts). */
+export type CheckMetric = "orders" | "grossSales" | "discounts" | "returns" | "netSales" | "shipping" | "taxes" | "totalSales" | "units";
+
+/** The last check against Shopify's own records, as the overview gives it to everyone: no figures. */
+export interface CheckSummary {
+  /** When the check now running began; null when none is. */
+  running: string | null;
+  last: {
+    status: "verified" | "repaired" | "differences" | "incomplete";
+    from: string;
+    to: string;
+    checkedAt: string;
+    ordersChecked: number;
+    matched: number;
+    compared: number;
+    /** Orders written again or removed so the figures match. */
+    repaired: number;
+  } | null;
+}
+
+/** GET .../check: the last check with its figures (needs the sales breakdown permission). */
+export interface CheckDetail {
+  running: string | null;
+  last: {
+    id: string;
+    status: string;
+    from: string;
+    to: string;
+    checkedAt: string;
+    currency: string;
+    findings: Partial<Record<string, number>>;
+    repaired: number;
+    removed: number;
+    results: Array<{ metric: CheckMetric; shopify: number | null; before: number | null; bizinsights: number | null; status: string; cause: string | null }>;
+  } | null;
 }

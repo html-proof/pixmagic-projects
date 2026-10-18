@@ -1,13 +1,14 @@
 import type { Store, Tx } from "@app/db";
 import { comparisonImported, delta, localDay, resolveCapabilities, summarize, yearBreakdown, type Comparison, type DateRange } from "@app/shared";
 import { adsConfigured } from "../adConnections.js";
+import { latestReconciliation } from "../reconcile.js";
 import { declaredOptionalScopes, declaredScopes } from "../scopes.js";
 import { adsenseModule, adsModule } from "./ads.js";
 import { catalog, importedData, inventory } from "./catalog.js";
 import type { Scope } from "./common.js";
 import { funnel } from "./funnel.js";
 import { channels, discountCodes, fulfillment, orderTiming, recentOrders, traffic } from "./orders.js";
-import { comparisonRows, dailyRows, dailySeries, topProducts } from "./sales.js";
+import { comparisonRows, customerCounts, dailyRows, dailySeries, topProducts } from "./sales.js";
 
 /**
  * Why a store's sync stopped, in a word the dashboard can explain: Shopify's own answer to the
@@ -115,9 +116,14 @@ export async function storeOverview(tx: Tx, store: Store, dates: { range: DateRa
       };
     }
     if (enabled.has("customers")) {
+      // Shopify's returning customer rate: customers who had bought before ÷ customers, each counted once.
+      const [now, before] = await Promise.all([
+        customerCounts(tx, scope, range, store.timezone),
+        previousImported ? customerCounts(tx, scope, previous, store.timezone) : null,
+      ]);
       modules.customers = {
-        current: { returningCustomerRate: c.returningCustomerRate },
-        previous: { returningCustomerRate: previousImported ? p.returningCustomerRate : null },
+        current: now,
+        previous: before ?? { customers: null, returningCustomers: null, newCustomers: null, returningCustomerRate: null },
       };
     }
   }
@@ -164,6 +170,7 @@ export async function storeOverview(tx: Tx, store: Store, dates: { range: DateRa
   if (enabled.has("catalog")) modules.catalog = await catalog(tx, scope, range);
 
   const freshness = await dataFreshness(tx, scope, store, now);
+  const check = await checkSummary(tx, scope);
   const failed =
     store.status === "error"
       ? await tx.syncJob.findFirst({ where: { storeId, workspaceId: ws, status: "failed" }, orderBy: { createdAt: "desc" }, select: { error: true } })
@@ -173,6 +180,8 @@ export async function storeOverview(tx: Tx, store: Store, dates: { range: DateRa
     syncProblem: store.status === "error" ? syncProblem(failed?.error) : null,
     // How current the numbers are: when they last matched Shopify, and whether changes are waiting.
     freshness,
+    // The last check against Shopify's own records: its outcome and dates, never its figures.
+    check,
     // The store's today, so the page can tell a finished day from one still running.
     today,
     // False: the imported orders don't reach back to the comparison, so no order figure is compared.
@@ -213,6 +222,30 @@ export async function dataFreshness(tx: Tx, { ws, storeId }: Scope, store: Pick<
     waiting: w?.waiting ?? 0,
     waitingSince: w?.waiting_since ? w.waiting_since.toISOString() : null,
     failed: w?.failed ?? 0,
+  };
+}
+
+/**
+ * The last check of the store's figures against Shopify (packages/core/src/reconcile.ts), as every
+ * member who sees the dashboard may see it: the outcome, the days it covered and when, how many
+ * figures matched; never the figures themselves (those need finance.breakdown, GET .../check).
+ */
+export async function checkSummary(tx: Tx, scope: Scope) {
+  const { last, running } = await latestReconciliation(tx, scope);
+  return {
+    running,
+    last: last
+      ? {
+          status: last.status,
+          from: last.from,
+          to: last.to,
+          checkedAt: last.checkedAt,
+          ordersChecked: last.ordersChecked,
+          matched: last.results.filter((r) => r.status === "match" || r.status === "repaired").length,
+          compared: last.results.length,
+          repaired: last.repaired + last.removed,
+        }
+      : null,
   };
 }
 

@@ -19,7 +19,6 @@ import {
   normalizeRestProductVariants,
   normalizeGraphqlSales,
   ORDER_LINE_ITEMS_QUERY,
-  ORDER_SALES_QUERY,
   ordersQuery,
   PAGE_SIZE,
   parseShopify,
@@ -40,6 +39,8 @@ import {
   graphqlVariantSchema,
   restOrderSchema,
   restProductDeleteSchema,
+  restOrderDeleteSchema,
+  removeOrders,
   restProductSchema,
   restRefundWebhookSchema,
   scopesUpdateSchema,
@@ -61,7 +62,12 @@ import {
   bulkUpsertProducts,
   bulkUpsertVariants,
   seedScopeFollowUp,
-  recomputeReturningCustomers,
+  settleReturningCustomers,
+  startReconciliation,
+  orderSalesQuery,
+  orderCustomerHistorySchema,
+  orderIndex,
+  type CustomerHistory,
   backfillDays,
   type AggregateJobData,
   type BlobStore,
@@ -295,27 +301,35 @@ async function fetchOrderLineItems(deps: WorkerDeps, store: Store, pace: Pace, o
 }
 
 /**
- * All agreements of one order with all of their sales (ORDER_SALES_QUERY, an agreement at a time,
- * a hundred sales at a time), and the order's updated_at as Shopify answered; null if the order
- * is gone.
+ * All agreements of one order with all of their sales (orderSalesQuery, an agreement at a time,
+ * a hundred sales at a time), the order's updated_at as Shopify answered, and what Shopify says
+ * about the customer's history (`history`); null if the order is gone.
  */
-async function fetchOrderAgreements(deps: WorkerDeps, store: Store, pace: Pace, orderId: string): Promise<{ updatedAt: string; agreements: unknown[] } | null> {
+async function fetchOrderAgreements(
+  deps: WorkerDeps,
+  store: Store,
+  pace: Pace,
+  orderId: string,
+): Promise<{ updatedAt: string; agreements: unknown[]; history: CustomerHistory } | null> {
   const agreements: unknown[] = [];
   let updatedAt: string | null = null;
+  let history: CustomerHistory | null = null;
   let cursor: string | null = null;
+  const query = orderSalesQuery(expandScopes(store.grantedScopes).has("read_customers"));
   for (;;) {
     let current: RawAgreement | null = null;
     const sales: unknown[] = [];
     let salesCursor: string | null = null;
     let next: Page<unknown>["pageInfo"] | null = null;
     for (;;) {
-      const d: { order: { updatedAt: string; agreements: Page<RawAgreement> } | null } = await gql(deps, store, pace, ORDER_SALES_QUERY, {
+      const d: { order: ({ updatedAt: string; agreements: Page<RawAgreement> } & Record<string, unknown>) | null } = await gql(deps, store, pace, query, {
         id: orderId,
         cursor,
         salesCursor,
       });
       if (!d.order) return null;
       updatedAt ??= d.order.updatedAt;
+      history ??= customerHistory(d.order, store.id);
       next = d.order.agreements.pageInfo;
       const a = d.order.agreements.nodes[0];
       if (!a) break;
@@ -326,9 +340,21 @@ async function fetchOrderAgreements(deps: WorkerDeps, store: Store, pace: Pace, 
       salesCursor = info.endCursor;
     }
     if (current) agreements.push({ ...current, sales: { nodes: sales } });
-    if (!next?.hasNextPage || !next.endCursor) return { updatedAt: updatedAt ?? new Date().toISOString(), agreements };
+    if (!next?.hasNextPage || !next.endCursor) {
+      return { updatedAt: updatedAt ?? new Date().toISOString(), agreements, history: history ?? { customerOrderIndex: null, customerOrderCount: null } };
+    }
     cursor = next.endCursor;
   }
+}
+
+/** The customer history fields of an orderSalesQuery answer; what doesn't fit is dropped (logged), never the sales. */
+function customerHistory(order: Record<string, unknown>, storeId: string): CustomerHistory {
+  const h = parseShopify(orderCustomerHistorySchema, order, "GraphQL order customer history", { storeId });
+  const count = h?.customer?.numberOfOrders;
+  return {
+    customerOrderIndex: orderIndex(h?.customerJourneySummary?.customerOrderIndex),
+    customerOrderCount: count === null || count === undefined ? null : Number(count),
+  };
 }
 
 /**
@@ -353,6 +379,21 @@ async function completeOrder(deps: WorkerDeps, store: Store, pace: Pace, node: G
 }
 
 /**
+ * Shopify reads for a job outside the sync chains (the check against Shopify, apps/worker/src/
+ * verify.ts): the same paced, error-mapped calls, sharing one pace across the invocation.
+ */
+export function shopifyReader(deps: WorkerDeps, store: Store) {
+  const pace: Pace = { pendingMs: 0 };
+  return {
+    gql: <T>(query: string, variables?: Record<string, unknown>) => gql<T>(deps, store, pace, query, variables),
+    /** An orders-page node made whole (line items and sales past the page's limits); null when it doesn't fit. */
+    completeOrder: (node: GraphqlOrder) => completeOrder(deps, store, pace, node),
+    /** The delay Shopify's cost budget still asks for before the next call, in ms. */
+    pendingMs: () => pace.pendingMs,
+  };
+}
+
+/**
  * Read an order's sales from Shopify and store them, after a webhook: REST payloads carry none.
  * Skipped when the order isn't stored (a test order, or one not synced yet: the reconcile reads
  * it), and when the stored sales were read for the payload's money state already (`salesKey`, see
@@ -369,7 +410,7 @@ async function refreshOrderSales(deps: WorkerDeps, store: Store, shopifyId: stri
   // All or nothing: storing some of an order's sales would understate it.
   const agreements = parseShopify(graphqlAgreementListSchema, read.agreements, "GraphQL order sales", { storeId: store.id, order: shopifyId });
   if (!agreements) return none;
-  return (await replaceOrderSales(store, shopifyId, normalizeGraphqlSales(agreements), new Date(read.updatedAt), salesKey)) ?? none;
+  return (await replaceOrderSales(store, shopifyId, normalizeGraphqlSales(agreements), new Date(read.updatedAt), salesKey, read.history)) ?? none;
 }
 
 /**
@@ -488,7 +529,7 @@ export async function runSync(data: SyncJobData, deps: WorkerDeps) {
         if (!data.sinceDays) {
           // enqueueAggregate chunks at 31 days, so a 60-day window is two messages rather than
           // the ~1,400 a per-page backfill would have sent.
-          await recomputeReturningCustomers(store.id);
+          await settleReturningCustomers(store.id);
           await enqueueAggregate(deps, store.id, await backfillDays(store.id));
         }
         // Where the imported history now starts, for the dashboard's "No earlier data": the
@@ -505,6 +546,16 @@ export async function runSync(data: SyncJobData, deps: WorkerDeps) {
         // that failure: lastSyncedAt stays null, so "Refresh data" re-runs the full import.
         if (!data.sinceDays || store.lastSyncedAt) {
           await systemDb.store.update({ where: { id: store.id }, data: { status: "active", lastSyncedAt: new Date() } });
+        }
+        // A first import is checked against Shopify once it is in (its whole window), after its
+        // day totals have had a few minutes to be added up. The import is done whatever the check finds.
+        if (!data.sinceDays) {
+          const fresh = await systemDb.store.findUnique({ where: { id: store.id } });
+          if (fresh) {
+            await startReconciliation(deps, fresh, "import", { days: BACKFILL_DAYS, delaySeconds: 300 }).catch((err: unknown) =>
+              logger.warn({ err, storeId: store.id }, "couldn't start the check of the import against Shopify"),
+            );
+          }
         }
       };
 
@@ -690,6 +741,16 @@ export async function processWebhook(data: WebhookJobData, deps: WorkerDeps) {
         // The payload has no sales: read them when its money state is new (placed, refunded,
         // cancelled, edited), not on every paid/fulfilled/tagged delivery.
         for (const d of await readSalesAfterWebhook(deps, store, o.shopifyId, o.salesKey, days)) days.add(d);
+        await enqueueAggregate(deps, store.id, days);
+        break;
+      }
+      case "orders/delete": {
+        // Shopify's reports stop counting a deleted order (only test, imported, draft and manually
+        // paid orders can be deleted, once archived or cancelled): so do we.
+        const gone = parseShopify(restOrderDeleteSchema, p, data.topic, logIds);
+        if (!gone) break;
+        const days = await removeOrders(store, [String(gone.id)]);
+        if (days.size) logger.info({ ...logIds, order: String(gone.id) }, "order deleted in Shopify; removed");
         await enqueueAggregate(deps, store.id, days);
         break;
       }
@@ -919,6 +980,9 @@ export async function rememberFailedAggregate(deps: Pick<WorkerDeps, "coord">, d
 /** Days of recently updated orders the daily reconcile re-pulls (at least; see reconcileOrderDays). */
 export const RECONCILE_ORDER_DAYS = 3;
 
+/** How long after the daily re-pull the check against Shopify starts (SQS delays at most 15 minutes). */
+export const VERIFY_AFTER_RECONCILE_S = 900;
+
 /**
  * How long a store is left alone once its reconcile has been enqueued.
  *
@@ -1006,6 +1070,24 @@ export async function seedAfterMove(deps: Pick<WorkerDeps, "queues">) {
   return { stores: stores.length, jobs };
 }
 
+/**
+ * Settle every store's new and returning customers again from what is stored (settleReturningCustomers)
+ * and recompute the days that changed. Run after each deploy's migrations (the `reread` action):
+ * cheap, and it repairs at once whatever an earlier rule decided, ahead of the re-reads that bring in
+ * Shopify's own positions. Returns the number of days queued.
+ */
+export async function settleAllCustomers(deps: Pick<WorkerDeps, "queues">) {
+  const stores = await systemDb.store.findMany({ where: { status: { not: "uninstalled" } }, select: { id: true } });
+  let days = 0;
+  for (const s of stores) {
+    const changed = await settleReturningCustomers(s.id);
+    if (changed.size) await enqueueAggregate(deps as WorkerDeps, s.id, changed);
+    days += changed.size;
+  }
+  if (days) logger.info({ stores: stores.length, days }, "settled new and returning customers again");
+  return days;
+}
+
 /** How often one store's sales records may be re-read without anyone asking (shared with the dashboard's). */
 const SALES_REREAD_EVERY_S = 86_400;
 
@@ -1024,7 +1106,15 @@ const SALES_REREAD_EVERY_S = 86_400;
 export async function seedSalesRereads(deps: Pick<WorkerDeps, "queues" | "coord">) {
   const since = new Date(Date.now() - BACKFILL_DAYS * 86_400_000);
   const lacking = await systemDb.order.findMany({
-    where: { shopifyCreatedAt: { gte: since }, salesUpdatedAt: null },
+    where: {
+      shopifyCreatedAt: { gte: since },
+      OR: [
+        { salesUpdatedAt: null },
+        // A customer's order never read with what Shopify says of their history (stored before it
+        // was read): new or returning can only be guessed until it is.
+        { customerKey: { not: null }, customerOrderIndex: null, customerOrderCount: null },
+      ],
+    },
     distinct: ["storeId"],
     select: { storeId: true },
   });
@@ -1063,7 +1153,7 @@ export async function scheduleReconcile(deps: WorkerDeps) {
   // Read on every tick now, so only what is needed (not the token ciphertexts).
   const stores = await systemDb.store.findMany({
     where: { status: { in: ["active", "error"] } },
-    select: { id: true, workspaceId: true, grantedScopes: true, timezone: true, lastSyncedAt: true },
+    select: { id: true, workspaceId: true, grantedScopes: true, timezone: true, currency: true, lastSyncedAt: true, ordersHistoryFrom: true, status: true },
   });
   const now = Date.now();
   let reconciled = 0;
@@ -1088,6 +1178,14 @@ export async function scheduleReconcile(deps: WorkerDeps) {
       if (missing.length) {
         logger.warn({ storeId: s.id, days: missing.length }, "re-aggregating days that have orders but no daily totals");
         await enqueueAggregate(deps, s.id, missing);
+      }
+      // Then the last 7 finished days are checked against Shopify, once that re-pull has had time
+      // to land (docs/kpis.md "Checked against Shopify"). A store whose sync is broken is left out:
+      // its check could only report what the sync problem already says.
+      if (s.status === "active") {
+        await startReconciliation(deps, s, "scheduled", { delaySeconds: VERIFY_AFTER_RECONCILE_S }).catch((err: unknown) =>
+          logger.warn({ err, storeId: s.id }, "couldn't start the daily check against Shopify"),
+        );
       }
     } catch (err) {
       // Best-effort: the Coordinator does not need Postgres, but a failed release must not hide

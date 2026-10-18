@@ -277,7 +277,7 @@ export default function DashboardPage() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2.5">
-          {headerStore && <StoreStatus key={headerStore.id} store={headerStore} live={live} freshness={ov?.freshness} now={now} />}
+          {headerStore && <StoreStatus key={headerStore.id} store={headerStore} live={live} freshness={ov?.freshness} check={ov?.store.id === headerStore.id ? ov?.check : undefined} now={now} />}
           <DateRangeSelect r={dates} shown={shown} id="date-range" label="Dates" />
           {/* What the ▲ ▼ changes are on, as Shopify Analytics' second date chip. */}
           <CompareSelect r={dates} shown={shown} id="compare-with" label="Compare with" />
@@ -416,7 +416,18 @@ export default function DashboardPage() {
         </section>
       )}
 
-      {ov && <AboutThisData store={ov.store} data={ov.data} freshness={ov.freshness} everySec={everySec} />}
+      {ov && (
+        <AboutThisData
+          store={ov.store}
+          data={ov.data}
+          freshness={ov.freshness}
+          everySec={everySec}
+          check={ov.check}
+          ws={workspace.id}
+          seesFigures={allowed("finance.breakdown")}
+          canCheck={allowed("integrations.manage")}
+        />
+      )}
 
       {ov && detail.view && (
         <TopicDetail topic={detail.view} ov={ov} currency={cur} contactsOn={contactsOn} onClose={detail.close} onOpen={detail.open} exportHref={exportHref} canPrint={hasFullAccess(access.role) || allowed("reports.export")} />

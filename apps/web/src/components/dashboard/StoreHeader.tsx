@@ -2,7 +2,8 @@
 import { fmtNum } from "@/lib/api";
 import { fmtDay, fmtRelative } from "./format";
 import { Dot, type Tone } from "./Primitives";
-import type { Freshness, ImportedData, OverviewStore } from "./types";
+import { CheckDetails, CheckPill } from "./ShopifyCheck";
+import type { CheckSummary, Freshness, ImportedData, OverviewStore } from "./types";
 
 const STATUS: Record<string, { tone: Tone; label: string }> = {
   active: { tone: "good", label: "Connected" },
@@ -67,7 +68,7 @@ const pill = "inline-flex h-9 items-center gap-2 rounded-full border border-bord
  * (it re-checks every few seconds), so there is no refresh button: the second pill says when the
  * numbers last matched Shopify (freshnessPill), or "Reconnecting…" if the page lost the server.
  */
-export function StoreStatus({ store, live, freshness, now }: { store: OverviewStore; live: LiveState; freshness: Freshness | undefined; now: number }) {
+export function StoreStatus({ store, live, freshness, check, now }: { store: OverviewStore; live: LiveState; freshness: Freshness | undefined; check?: CheckSummary; now: number }) {
   const status = STATUS[store.status] ?? { tone: "neutral" as Tone, label: store.status };
   const synced = fmtRelative(store.lastSyncedAt);
   const fresh = freshnessPill(live, freshness, now);
@@ -81,12 +82,31 @@ export function StoreStatus({ store, live, freshness, now }: { store: OverviewSt
         <Dot tone={fresh.tone} />
         {fresh.label}
       </span>
+      <CheckPill check={check} now={now} />
     </>
   );
 }
 
 /** What has been imported and how the numbers are counted, folded away at the foot of the page. */
-export function AboutThisData({ store, data, freshness, everySec }: { store: OverviewStore; data: ImportedData | undefined; freshness: Freshness | undefined; everySec: number }) {
+export function AboutThisData({
+  store,
+  data,
+  freshness,
+  everySec,
+  check,
+  ws,
+  seesFigures = false,
+  canCheck = false,
+}: {
+  store: OverviewStore;
+  data: ImportedData | undefined;
+  freshness: Freshness | undefined;
+  everySec: number;
+  check?: CheckSummary;
+  ws?: string;
+  seesFigures?: boolean;
+  canCheck?: boolean;
+}) {
   const synced = fmtRelative(freshness?.asOf ?? store.lastSyncedAt);
   const fullHistory = store.grantedScopes.includes("read_all_orders");
   return (
@@ -127,6 +147,7 @@ export function AboutThisData({ store, data, freshness, everySec }: { store: Ove
             can take a few minutes to include them too, so the two may briefly differ.
           </p>
           {!fullHistory && <p>Shopify shares the most recent 60 days of orders with apps, so older history isn&apos;t included.</p>}
+          {ws && store.status !== "uninstalled" && <CheckDetails ws={ws} storeId={store.id} check={check} seesFigures={seesFigures} canRun={canCheck && store.status === "active"} />}
         </div>
       </details>
     </section>

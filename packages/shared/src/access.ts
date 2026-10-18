@@ -102,7 +102,7 @@ export const ACCESS_PERMISSIONS: readonly AccessPermissionDef[] = [
   { key: "customers.profiles", module: "customers", kind: "view", sensitive: true, requires: ["customers.list"], label: "View customer profiles", reveals: "Customers' names and a link to each one in Shopify admin." },
   { key: "customers.contact", module: "customers", kind: "view", sensitive: true, requires: ["customers.list"], label: "View contact information", reveals: "Email addresses, phone numbers and abandoned-checkout recovery links." },
   { key: "customers.orders", module: "customers", kind: "view", requires: ["customers.list"], label: "View order history", reveals: "How many orders each customer has placed and how much they have spent." },
-  { key: "customers.analytics", module: "customers", kind: "view", label: "View returning vs new customers", reveals: "The share of orders that come from returning customers." },
+  { key: "customers.analytics", module: "customers", kind: "view", label: "View returning vs new customers", reveals: "How many customers ordered, and the share who had bought before." },
   // ---- Products
   { key: "products.view", module: "products", kind: "view", label: "View products", reveals: "The catalog: products by status, variants and best-selling vendors." },
   { key: "products.performance", module: "products", kind: "view", label: "View product performance", reveals: "Best sellers by revenue and units sold." },
