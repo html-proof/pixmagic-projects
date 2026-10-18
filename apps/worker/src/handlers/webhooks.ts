@@ -2,7 +2,7 @@
 import { systemDb, type Store } from "@app/db";
 import { applySubscriptionUpdate, audit, customerKey, deleteProduct, endBillingForStore, getAccessToken, gidToId, logger, normalizeRestOrder, normalizeRestProduct, normalizeRestProductVariants, parseShopify, pruneVariants, purgeStoreData, raiseAlert, recordDataRequest, resolveAlerts, customersDataRequestSchema, customersRedactSchema, restOrderSchema, restProductDeleteSchema, restOrderDeleteSchema, removeOrders, restProductSchema, restRefundWebhookSchema, scopesUpdateSchema, subscriptionUpdateSchema, syncBillingFromShopify, upsertOrder, upsertProduct, upsertVariant, seedScopeFollowUp, type WebhookJobData, redactWhatsappCustomer, whatsappOnShopifyEvent, emailOnShopifyEvent, purgeEmailStoreData, redactEmailCustomer } from "@app/core";
 import { enqueueAggregate, UnrecoverableError, type WorkerDeps } from "./common.js";
-import { readSalesAfterWebhook } from "./shopifyRead.js";
+import { gql, readSalesAfterWebhook } from "./shopifyRead.js";
 
 /** Topics about the app installation itself (not store data). */
 const APP_SCOPED_TOPICS = new Set(["app/uninstalled", "app/scopes_update", "shop/redact", "app_subscriptions/update"]);
@@ -53,6 +53,22 @@ async function eraseStore(store: Store, deps: WorkerDeps) {
     const stores = await tx.store.count({ where: { workspaceId: store.workspaceId } });
     if (ws?.awaitingClaim && members === 0 && stores === 0) await tx.workspace.delete({ where: { id: store.workspaceId } });
   });
+}
+
+/**
+ * True when Shopify still accepts the store's token, i.e. the installation it was granted to is in
+ * place. False when Shopify refuses it (401/403: uninstalled, or never usable), the shop is closed
+ * or gone (402/404/423), or the store holds no token. Anything else (the network, Shopify's 5xx)
+ * is thrown, so the delivery is retried rather than decided on a guess.
+ */
+async function installationWorks(deps: WorkerDeps, store: Store): Promise<boolean> {
+  try {
+    await gql(deps, store, { pendingMs: 0 }, "{ currentAppInstallation { id } }");
+    return true;
+  } catch (err) {
+    if (err instanceof UnrecoverableError) return false;
+    throw err;
+  }
 }
 
 export async function processWebhook(data: WebhookJobData, deps: WorkerDeps) {
@@ -158,23 +174,32 @@ export async function processWebhook(data: WebhookJobData, deps: WorkerDeps) {
       }
       case "app/uninstalled": {
         // Shopify retries a failed delivery for up to 48 hours, and the merchant may well have
-        // reinstalled in the meantime (that is the usual fix for an accidental uninstall). Applying
-        // a delivery older than the current installation would wipe live tokens and disconnect a
-        // working store, with nothing to put it back. Scope the write to the install it refers to.
-        // `installedAt` is nullable and SQL comparisons never match NULL, so an unknown install
-        // time must fall through to "apply it": failing to process a real uninstall would keep a
-        // revoked merchant's tokens and data, which is worse than the stale delivery guarded here.
+        // reinstalled in the meantime (that is the usual fix for an accidental uninstall; App
+        // Review's test does it within seconds). Applying a delivery older than the current
+        // installation would wipe live tokens and disconnect a working store, with nothing to put
+        // it back. It is set aside only once Shopify has shown that installation works, though: a
+        // store whose token Shopify refuses (or that holds none) has nothing to protect, and kept
+        // "installed" it outlived its shop (the review stores of 2026-10-18 stayed in `error` with
+        // their data). `installedAt` is nullable: an unknown install time shows nothing stale, so
+        // the uninstall applies, as failing to process a real one would keep a revoked merchant's
+        // tokens and data.
         const triggeredAt = data.triggeredAt ? new Date(data.triggeredAt) : null;
-        const { count } = await systemDb.store.updateMany({
-          where: {
-            id: store.id,
-            ...(triggeredAt ? { OR: [{ installedAt: null }, { installedAt: { lte: triggeredAt } }] } : {}),
-          },
-          data: { status: "uninstalled", uninstalledAt: new Date(), accessTokenEnc: null, refreshTokenEnc: null, accessTokenExpiresAt: null, refreshTokenExpiresAt: null },
-        });
+        const stale = !!triggeredAt && !!store.installedAt && store.installedAt > triggeredAt;
+        let count = 0;
+        if (!stale || !(await installationWorks(deps, store))) {
+          if (stale) logger.info({ topic: data.topic, shop: data.shop, storeId: store.id, triggeredAt: data.triggeredAt, installedAt: store.installedAt?.toISOString() }, "app/uninstalled predates the current installation, but Shopify refuses that one; applied");
+          // Scoped to the installation looked at: a reinstall landing meanwhile is left alone.
+          ({ count } = await systemDb.store.updateMany({
+            where: {
+              id: store.id,
+              ...(stale ? { installedAt: store.installedAt } : triggeredAt ? { OR: [{ installedAt: null }, { installedAt: { lte: triggeredAt } }] } : {}),
+            },
+            data: { status: "uninstalled", uninstalledAt: new Date(), accessTokenEnc: null, refreshTokenEnc: null, accessTokenExpiresAt: null, refreshTokenExpiresAt: null },
+          }));
+        }
         if (count === 0) {
           logger.info(
-            { topic: data.topic, shop: data.shop, storeId: store.id, triggeredAt: data.triggeredAt, installedAt: store.installedAt },
+            { topic: data.topic, shop: data.shop, storeId: store.id, triggeredAt: data.triggeredAt, installedAt: store.installedAt?.toISOString() },
             "stale app/uninstalled predates the current installation; ignored",
           );
           // The uninstall still cancelled every charge made before it, and the reinstall may have
@@ -281,14 +306,23 @@ export async function processWebhook(data: WebhookJobData, deps: WorkerDeps) {
         break;
       }
       case "shop/redact": {
-        // Sent 48 hours after an uninstall. A store installed again since then is in use under
-        // its new installation's grant: erasing it now would wipe a working store.
-        if (store.status !== "uninstalled") {
-          logger.info({ topic: data.topic, shop: data.shop, storeId: store.id, status: store.status }, "shop/redact for a store installed again since; nothing erased");
-          await audit({ workspaceId: store.workspaceId, action: "gdpr.shop_redact_skipped", targetType: "store", targetId: store.id, metadata: { reason: "reinstalled" } });
+        // Sent 48 hours after an uninstall, and when a shop closes: App Review closes its test
+        // stores, and their requests came within the hour with no app/uninstalled before them. A
+        // store installed again since is in use under its new installation's grant, and erasing it
+        // would wipe a working store. Its status doesn't show that: a closed shop, or an uninstall
+        // that never reached us or was set aside, leaves it looking installed too. The evidence is
+        // an install after Shopify made this request (which is then about an earlier one), or a
+        // token Shopify still accepts.
+        const requestedAt = data.triggeredAt ? new Date(data.triggeredAt) : null;
+        const installedSince = !!requestedAt && !!store.installedAt && store.installedAt > requestedAt;
+        if (store.status !== "uninstalled" && (installedSince || (await installationWorks(deps, store)))) {
+          const reason = installedSince ? "installed_after_request" : "installation_works";
+          logger.info({ topic: data.topic, shop: data.shop, storeId: store.id, status: store.status, reason }, "shop/redact for a store installed again since; nothing erased");
+          await audit({ workspaceId: store.workspaceId, action: "gdpr.shop_redact_skipped", targetType: "store", targetId: store.id, metadata: { reason } });
           break;
         }
         await eraseStore(store, deps);
+        logger.info({ topic: data.topic, shop: data.shop, storeId: store.id, status: store.status }, "shop/redact erased the store");
         await audit({ workspaceId: store.workspaceId, action: "gdpr.shop_redacted", targetType: "store", targetId: store.id, metadata: { shop: store.shopDomain } });
         break;
       }

@@ -61,6 +61,11 @@ async function webhook(topic: string, shop: string, payload: unknown, triggeredA
 
 const sub = (ws: string) => systemDb.subscription.findUniqueOrThrow({ where: { workspaceId: ws } });
 
+const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+/** A late app/uninstalled first asks whether the current installation works (it does, here). */
+const isInstallationCheck = (init?: RequestInit) => String(init?.body).includes("currentAppInstallation");
+const installationWorks = () => json({ data: { currentAppInstallation: { id: "gid://shopify/AppInstallation/1" } } });
+
 describe("billing when the app is uninstalled", () => {
   it("app/uninstalled ends the plan billed on that store, and the change awaiting approval with it", async () => {
     const { ws, store } = await payingWorkspace();
@@ -86,12 +91,10 @@ describe("billing when the app is uninstalled", () => {
     const asked: unknown[] = [];
     // The charge in force was the old installation's (not visible now); the change was approved since.
     fetchImpl = async (_url, init) => {
+      if (isInstallationCheck(init)) return installationWorks();
       const { variables } = JSON.parse(String(init?.body)) as { variables: { ids: string[] } };
       asked.push(variables.ids);
-      return new Response(JSON.stringify({ data: { nodes: variables.ids.map((id) => (id === PENDING ? { id, status: "ACTIVE" } : null)) } }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
+      return json({ data: { nodes: variables.ids.map((id) => (id === PENDING ? { id, status: "ACTIVE" } : null)) } });
     };
     await webhook("app/uninstalled", store.shopDomain, { id: 1 }, new Date(Date.now() - 20 * 60_000).toISOString());
     expect(asked).toEqual([[PENDING, CHARGE]]);
@@ -100,11 +103,15 @@ describe("billing when the app is uninstalled", () => {
     expect(await sub(ws)).toMatchObject({ plan: "scale", shopifyChargeId: PENDING, pendingChargeId: null });
   });
 
-  it("a late app/uninstalled for a store paying for nothing asks Shopify nothing", async () => {
+  it("a late app/uninstalled for a store paying for nothing asks Shopify nothing about charges", async () => {
     const ws = await systemDb.workspace.create({ data: { name: "Free" } });
     const store = await addStore(ws.id, "free.myshopify.com");
     await systemDb.subscription.create({ data: { workspaceId: ws.id, plan: "free" } });
     await systemDb.store.update({ where: { id: store.id }, data: { installedAt: new Date() } });
+    fetchImpl = async (_url, init) => {
+      if (isInstallationCheck(init)) return installationWorks();
+      throw new Error("unexpected fetch");
+    };
     await webhook("app/uninstalled", store.shopDomain, { id: 1 }, new Date(Date.now() - 20 * 60_000).toISOString());
     expect((await sub(ws.id)).plan).toBe("free");
   });
