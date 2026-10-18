@@ -291,6 +291,24 @@ describe("webhook processing", () => {
     expect(queues.sent.sync.find((j) => j.kind === "orders")?.sinceDays).toBeUndefined();
   });
 
+  /**
+   * Shopify shared 60 days of orders before, so a comparison with older dates (a Shopify screen
+   * comparing 18 Oct with 14 Mar) said "No earlier data". The grant alone imported nothing.
+   */
+  it("app/scopes_update imports the whole order history when read_all_orders arrives", async () => {
+    const store = await makeStore(["read_orders", "read_products"]);
+    await webhook("app/scopes_update", { current: ["read_orders", "read_all_orders", "read_products"] });
+
+    const orders = queues.sent.sync.filter((j) => j.kind === "orders");
+    expect(orders).toHaveLength(1);
+    expect(orders[0]!.sinceDays).toBeUndefined();
+    // Run once the scope is saved, that import asks Shopify for every order, with no date filter,
+    // and records the history as complete.
+    const after = await systemDb.store.findUniqueOrThrow({ where: { id: store.id } });
+    expect(ordersSearch(orders[0]!, after.grantedScopes)).toBeNull();
+    expect(importedFrom(orders[0]!, after.grantedScopes)).toEqual(new Date(0));
+  });
+
   it("app/scopes_update still queues the import when its first attempt failed to", async () => {
     // Before: the new scopes were saved first, so the retry found nothing newly granted and the
     // backfill was never queued.

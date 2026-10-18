@@ -39,6 +39,27 @@ approval; until then the card says why it has no figure, never shows 0.
 
 Currency is always the store's (shop money), days the store's time zone, as in Shopify's reports.
 
+### Matching a Shopify screen
+
+A figure and its change match Shopify's only when both screens ask the same question. Before
+reading a difference as a bug, check in this order:
+
+1. **The dates**: the same days (both in the store's time zone).
+2. **The comparison**: Shopify's second date chip shows the dates it compares with; the
+   bizinsights pill beside the dates shows its own. They must be the same dates. A custom
+   comparison stays chosen in Shopify: PixMagic's Shopify screen compared with 14 Mar 2026 on both
+   17 and 18 Oct 2026. On 18 Oct that gave ↓25% orders (3 against 4) and ↓48% net sales (A$792.73
+   against about A$1,525), while bizinsights compared with 17 Oct (6 orders, A$1,794.58: ↓50% and
+   ↓55.8%). The day's own figures matched to the cent.
+3. **How far back the orders go**: a comparison before `historyFrom` (Shopify shares 60 days
+   without `read_all_orders`) says "No earlier data"; getting the scope is in docs/shopify-setup.md
+   ("Protected customer data").
+4. **The login**: Team & Access hides figures a member may not see. Without `finance.breakdown`
+   there is no Total sales tile (the headline falls back to Net sales) and no gross sales,
+   discounts, shipping or taxes; the figures shown are the same as an owner's.
+5. **Rounding**: Shopify's screen shows changes in whole percent (bizinsights' ↓55.8% is ↓56%
+   there) and money to the cent, rounded after adding up, as here.
+
 ## Where the sales figures come from
 
 The sales figures are Shopify's own. Shopify's reports are built from its **sales records**: each
@@ -83,7 +104,9 @@ shipping, taxes and total sales as Shopify's sales reports for the same dates.
     have another length than the range, sit after it or overlap it. A pair that breaks a rule is
     refused with `400 invalid_range`, as a bad custom range is.
 
-  The answer's `previous` holds the dates (`from`, `to`, `until`), `compare`, and `imported`.
+  The answer's `previous` holds the dates (`from`, `to`, `until`), `compare`, and `imported`. The
+  comparison pill shows those dates ("vs 17 Oct 2026"), as Shopify's comparison chip shows its own
+  ("Mar 14, 2026"), and a finished day's tiles say "vs 17 Oct", not "vs the day before".
   **Like for like, as Shopify's Analytics compares:** whatever the choice, while the range is still
   running (it ends on the store's today), the comparison stops at the same time of day on its last
   day. Today until 4:44:12 pm is compared with yesterday until 4:44:12 pm (or 17 Oct last year until

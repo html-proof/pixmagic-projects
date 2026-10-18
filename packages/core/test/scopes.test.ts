@@ -97,6 +97,15 @@ describe("scopeFollowUpKinds", () => {
     expect(scopeFollowUpKinds(["read_customers"])).toEqual(["orders"]);
   });
 
+  it("imports the whole order history when read_all_orders arrives", () => {
+    // Without it Shopify shared 60 days, so a comparison with dates before them (14 Mar against
+    // 18 Oct) said "No earlier data". The grant fills nothing in by itself: the orders import,
+    // with no sinceDays, is what reads the older orders and records the history as complete.
+    expect(scopeFollowUpKinds(["read_all_orders"])).toEqual(["orders"]);
+    // One import covers both reasons to re-read the orders.
+    expect(scopeFollowUpKinds(["read_customers", "read_all_orders"])).toEqual(["orders"]);
+  });
+
   it("installs the web pixel when write_pixels arrives", () => {
     // read_customer_events alone grants nothing to do: the pixel is what produces the events.
     expect(scopeFollowUpKinds(["read_customer_events"])).toEqual([]);
