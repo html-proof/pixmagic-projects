@@ -84,7 +84,7 @@ export default function StockSettingsPage() {
             <div>
               <h2 className="font-semibold">Low stock and alerts</h2>
               <p className="mt-0.5 text-sm text-muted">
-                An item is low when its available units, counting every location, are at or below the threshold; out at 0 or below. An item or a product can have its own threshold, set from its panel. People are told once when an item becomes low or sells out, not again while it stays that way.
+                An item is low when its available units, counting every location, are at or below the threshold; out at 0 or below. An item or a product can have its own threshold, set from its panel. People are told once when an item becomes low or sells out, not again while it stays that way. Alerts start once stock levels are connected or these settings are saved.
               </p>
             </div>
             <fieldset disabled={!canAlerts} className="grid gap-4 sm:grid-cols-2">

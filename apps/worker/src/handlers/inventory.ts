@@ -10,6 +10,7 @@ import {
   applyLevels,
   ensureInventoryWebhooks,
   evaluateFastMovement,
+  evaluateStockAlerts,
   finishInventoryPass,
   graphqlLocationLevelSchema,
   graphqlLocationSchema,
@@ -147,25 +148,31 @@ async function page<T>(deps: WorkerDeps, store: Store, pace: Pace, data: SyncJob
 const HOURLY_LEASE_MS = 55 * 60_000;
 
 /**
- * The stores that read stock levels: start the scheduled check against Shopify for each one due
- * (every `reconcileHours`, from its settings), record the day's stock hourly, look for unusual
- * sell-offs, and announce new stock alerts. Each store on its own: one failing doesn't stop the rest.
+ * The stores whose inventory is set up (stock levels granted, or Stock settings saved: a store
+ * nobody has set up gets no alerts it never asked for): start the scheduled check against Shopify
+ * for each one due (every `reconcileHours`, from its settings), record the day's stock and
+ * re-evaluate the alerts hourly (with Shopify's totals only, the catalog import is what moves
+ * them), look for unusual sell-offs, and announce new stock alerts. Each store on its own: one
+ * failing doesn't stop the rest.
  */
 export async function sweepInventory(deps: WorkerDeps, now = new Date()) {
   const stores = await systemDb.store.findMany({ where: { status: { in: ["active", "error"] } } });
+  const configured = new Set((await systemDb.inventorySettings.findMany({ select: { storeId: true } })).map((s) => s.storeId));
   const result = { checksStarted: 0, snapshots: 0, announced: 0 };
   for (const store of stores) {
     try {
       const levels = hasCapabilityScopes(store.grantedScopes, "stock_levels");
+      if (!levels && !configured.has(store.id)) continue;
       if (levels) {
         const settings = await inventorySettings(store.id);
         const last = await systemDb.inventorySyncRun.findFirst({ where: { storeId: store.id }, orderBy: { startedAt: "desc" } });
         const due = !last || now.getTime() - last.startedAt.getTime() >= settings.reconcileHours * 3600_000;
         if (due && (await startInventoryPass(deps, store, last ? "reconcile" : "import"))) result.checksStarted++;
-        if (await deps.coord.acquire(`inventory-hourly:${store.id}`, HOURLY_LEASE_MS)) {
-          if (await takeSnapshot(store, now)) result.snapshots++;
-          await evaluateFastMovement(store, now);
-        }
+      }
+      if (await deps.coord.acquire(`inventory-hourly:${store.id}`, HOURLY_LEASE_MS)) {
+        if (levels && (await takeSnapshot(store, now))) result.snapshots++;
+        await evaluateStockAlerts(store);
+        await evaluateFastMovement(store, now);
       }
       result.announced += await notifyStockAlerts(deps, store, now);
     } catch (err) {

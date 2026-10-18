@@ -478,6 +478,22 @@ describe("stock alerts", () => {
     expect(await systemDb.alert.count({ where: { storeId: store.id, code: STOCK_ALERT_CODE } })).toBe(0);
   });
 
+  it("a store nobody set up gets no alerts; with Shopify's totals only, alerts start once its settings are saved", async () => {
+    const store = await makeStore(["read_orders", "read_products"]);
+    const owner = await systemDb.user.create({ data: { email: "owner@example.com", emailVerified: true } });
+    await systemDb.membership.create({ data: { workspaceId: store.workspaceId, userId: owner.id, role: "owner" } });
+    await catalog(store, "1", [{ id: "11" }]); // 0 available (Shopify's total): out of stock
+    await sweepInventory(deps);
+    expect(await systemDb.inventoryAlert.count()).toBe(0);
+    expect(mailer.sent).toHaveLength(0);
+    // Stock settings saved: the next sweep evaluates and announces, without asking Shopify anything.
+    await systemDb.inventorySettings.create({ data: { storeId: store.id, workspaceId: store.workspaceId } });
+    const r = await sweepInventory(deps);
+    expect(r.announced).toBe(1);
+    expect(mailer.sent.map((m) => m.to)).toEqual(["owner@example.com"]);
+    expect(shop.asked).toEqual([]);
+  });
+
   it("the sweep starts the scheduled check when it is due, records the day, and leaves a fresh store alone", async () => {
     const store = await makeStore();
     await catalog(store, "1", [{ id: "11" }]);

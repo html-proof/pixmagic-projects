@@ -216,7 +216,7 @@ export function ConnectCard({ capability }: { capability: "stock_levels" | "stoc
           to grant it.
         </p>
       ) : (
-        <p className="mt-2 text-sm text-muted">This isn&apos;t available for your store yet: bizinsights is waiting for Shopify to approve the access.</p>
+        <p className="mt-2 text-sm text-muted">This can&apos;t be turned on for your store yet: the bizinsights app doesn&apos;t offer this access in Shopify yet.{capability === "stock_levels" ? " Until then, Inventory shows Shopify’s total available stock per item." : ""}</p>
       )}
     </div>
   );

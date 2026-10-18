@@ -209,6 +209,5 @@ it("seeds the Inventory demo", async () => {
   }
   await takeSnapshot(store);
   await evaluateStockAlerts(store);
-  // eslint-disable-next-line no-console
   console.log(`Inventory demo seeded for ${email}: workspace "${ws.name}", ${variants.length} variants, ${reads.length} levels, ${orderId - 50000} orders.`);
 });

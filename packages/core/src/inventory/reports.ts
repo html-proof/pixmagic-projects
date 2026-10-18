@@ -213,6 +213,8 @@ export async function inventoryOverview(
     basis: "stock",
   });
   const needsLevels = "Needs stock-level access in Shopify (Inventory → Stock settings).";
+  // Without stock levels the units on hand aren't known: stock value counts the units available.
+  const availableBasis = "Counted on available units: on-hand stock needs stock-level access.";
 
   // Units sold today and this month, each against the same span before, up to the same time of day.
   const time = localTime(now, store.timezone);
@@ -250,11 +252,15 @@ export async function inventoryOverview(
     outOfStock: stockKpi(t.out, prev?.outOfStock),
     costValue: see.costs
       ? {
-          ...stockKpi(costValue, prev?.costValue ? Number(prev.costValue) : undefined, t.with_cost < t.in_stock ? `Incomplete: ${t.in_stock - t.with_cost} of ${t.in_stock} items in stock have no cost per item.` : undefined),
+          ...stockKpi(
+            costValue,
+            prev?.costValue ? Number(prev.costValue) : undefined,
+            [t.with_cost < t.in_stock ? `Incomplete: ${t.in_stock - t.with_cost} of ${t.in_stock} items in stock have no cost per item.` : "", levels ? "" : availableBasis].filter(Boolean).join(" ") || undefined,
+          ),
           complete: t.with_cost === t.in_stock,
         }
       : null,
-    retailValue: see.costs ? stockKpi(numOrNull(t.retail_value), prev ? Number(prev.retailValue) : undefined) : null,
+    retailValue: see.costs ? stockKpi(numOrNull(t.retail_value), prev ? Number(prev.retailValue) : undefined, levels ? undefined : availableBasis) : null,
     unitsToday: ordersCover(yesterday)
       ? ({ value: uToday, previous: uYesterday, change: pct(uToday, uYesterday), basis: "orders" } as StockKpi)
       : ({ value: uToday, previous: null, change: null, note: notImported, basis: "orders" } as StockKpi),
