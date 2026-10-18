@@ -11,6 +11,8 @@ import { providerDetail } from "../errors.js";
 
 /** The person's access was refused or has expired: they have to connect again. */
 export class AdsAuthError extends Error {
+  /** The platform's own name for the error, for the logs (Google's "authenticationError.OAUTH_TOKEN_REVOKED"). */
+  declare providerCode?: string;
   constructor(
     message: string,
     /** "auth_expired" (expired, revoked) or "scope_missing" (the reporting permission was taken back). */
@@ -22,6 +24,8 @@ export class AdsAuthError extends Error {
 
 /** The platform said no for a reason that a retry may fix (rate limits, outages). */
 export class AdsRetryableError extends Error {
+  /** The platform's own name for the error, for the logs (Google's "quotaError.RESOURCE_EXHAUSTED"). */
+  declare providerCode?: string;
   constructor(
     message: string,
     /** The platform's own error code, when it gives one (Meta's `error.code`). */
@@ -48,8 +52,20 @@ export class AdsRateLimitedError extends AdsRetryableError {
   }
 }
 
+/**
+ * A live report too big to answer within one request: the platform is still preparing it (Meta's
+ * asynchronous report job). Asking again in a minute or two may find it done; nothing is wrong.
+ */
+export class AdsReportPendingError extends AdsRetryableError {
+  constructor(message: string) {
+    super(message, undefined, "temporary");
+  }
+}
+
 /** Anything else the platform rejected (a bad request, an account we can't read). */
 export class AdsApiError extends Error {
+  /** The platform's own name for the error, for the logs (Google's "authorizationError.USER_PERMISSION_DENIED"). */
+  declare providerCode?: string;
   constructor(
     message: string,
     public status: number,
@@ -127,6 +143,14 @@ export interface AdAccount {
   statusDetail?: string | null;
 }
 
+/**
+ * The ad accounts a sign-in can see. `truncated`: the login reaches more than could be listed (an
+ * agency login with thousands), so the picker can say the list was cut rather than look complete.
+ */
+export type AdAccountList = AdAccount[] & { truncated?: boolean };
+
+export const adAccountList = (accounts: AdAccount[], truncated: boolean): AdAccountList => Object.assign(accounts, truncated ? { truncated: true } : {});
+
 /** An ad account's health as the platform reports it now (metaAccountHealth, adsenseAccountHealth). */
 export interface AdAccountHealth {
   status: AdAccountStatus | null;
@@ -186,3 +210,104 @@ export const REQUIRED_AD_SCOPE = {
 
 /** When a token stops working, from the `expires_in` seconds a token endpoint answers. */
 export const tokenExpiry = (seconds: unknown) => (typeof seconds === "number" && seconds > 0 ? new Date(Date.now() + seconds * 1000) : null);
+
+// ---------------------------------------------------------------------------
+// Google's APIs (Google Ads, AdSense) answer errors the same way: google.rpc.Status as JSON, the
+// real reason in error.details[] (https://cloud.google.com/apis/design/errors). The top-level
+// message is often only the wrapper's ("The caller does not have permission").
+// ---------------------------------------------------------------------------
+
+/** One error of a Google Ads GoogleAdsFailure (error.details[].errors[]). */
+export interface GoogleAdsFailureError {
+  /** The errorCode oneof's field and value, e.g. "authorizationError.USER_PERMISSION_DENIED". */
+  code: string | null;
+  message: string | null;
+  /** QuotaErrorDetails, on quota errors: ACCOUNT or DEVELOPER (the project's), the bucket's name, and how long to wait. */
+  quota: { rateScope: string | null; rateName: string | null; retryDelayS: number | null } | null;
+}
+
+/** A Google API error, read for what sorts it. */
+export interface GoogleApiError {
+  httpStatus: number;
+  /** The google.rpc.Code name: PERMISSION_DENIED, UNAUTHENTICATED, RESOURCE_EXHAUSTED... */
+  status: string | null;
+  message: string;
+  /** google.rpc.ErrorInfo reasons: SERVICE_DISABLED, ACCESS_TOKEN_SCOPE_INSUFFICIENT... */
+  reasons: string[];
+  /** google.rpc.RetryInfo's retryDelay, in whole seconds. */
+  retryAfterS: number | null;
+  /** Google Ads only: the GoogleAdsFailure's errors, most specific first as Google lists them. */
+  adsErrors: GoogleAdsFailureError[];
+}
+
+/** A protobuf Duration as JSON ("30s", "1.5s"; or {seconds, nanos}) → whole seconds, rounded up. */
+export function durationSeconds(d: unknown): number | null {
+  let s: number | null = null;
+  if (typeof d === "string") {
+    const m = /^(\d+(?:\.\d+)?)s$/.exec(d.trim());
+    s = m ? Number(m[1]) : null;
+  } else if (d && typeof d === "object") {
+    const o = d as { seconds?: unknown; nanos?: unknown };
+    s = Number(o.seconds ?? 0) + Number(o.nanos ?? 0) / 1e9;
+  }
+  return s !== null && Number.isFinite(s) && s > 0 ? Math.ceil(s) : null;
+}
+
+type Json = Record<string, unknown>;
+const isObj = (v: unknown): v is Json => !!v && typeof v === "object" && !Array.isArray(v);
+const str = (v: unknown) => (typeof v === "string" && v ? v : null);
+
+/** Read a Google API `error` object (whatever shape it came in) and its HTTP status. */
+export function readGoogleError(error: unknown, httpStatus: number, fallback: string): GoogleApiError {
+  const e = isObj(error) ? error : {};
+  const details = Array.isArray(e.details) ? e.details.filter(isObj) : [];
+  const adsErrors: GoogleAdsFailureError[] = [];
+  const reasons: string[] = [];
+  let retryAfterS: number | null = null;
+  for (const d of details) {
+    // GoogleAdsFailure: { "@type": "...errors.GoogleAdsFailure", errors: [{ errorCode: { authorizationError: "..." }, message, details }] }
+    for (const g of Array.isArray(d.errors) ? d.errors.filter(isObj) : []) {
+      const oneof = isObj(g.errorCode) ? Object.entries(g.errorCode).find(([, v]) => typeof v === "string") : undefined;
+      const q = isObj(g.details) && isObj(g.details.quotaErrorDetails) ? g.details.quotaErrorDetails : null;
+      adsErrors.push({
+        code: oneof ? `${oneof[0]}.${String(oneof[1])}` : null,
+        message: str(g.message),
+        quota: q ? { rateScope: str(q.rateScope), rateName: str(q.rateName), retryDelayS: durationSeconds(q.retryDelay) } : null,
+      });
+    }
+    // google.rpc.ErrorInfo { reason, domain, metadata } and google.rpc.RetryInfo { retryDelay }.
+    const reason = str(d.reason);
+    if (reason) reasons.push(reason);
+    const delay = durationSeconds(d.retryDelay);
+    if (delay !== null) retryAfterS = Math.max(retryAfterS ?? 0, delay);
+  }
+  return { httpStatus, status: str(e.status), message: str(e.message) ?? fallback, reasons, retryAfterS, adsErrors };
+}
+
+/** Google's own API isn't switched on for bizinsights' Cloud project: "<API> has not been used in project N before or it is disabled". */
+const serviceDisabled = (g: GoogleApiError) =>
+  g.reasons.includes("SERVICE_DISABLED") || g.reasons.includes("API_DISABLED") || (g.httpStatus === 403 && /has not been used in project|it is disabled/i.test(g.message));
+
+/**
+ * The two set-up failures every Google API names in an ErrorInfo: the API switched off on bizinsights'
+ * Cloud project (ours to fix), and a token without the API's permission (the person unticked it, or it
+ * was taken back: connecting again with it ticked fixes it). Null otherwise.
+ */
+export function googleSetupError(g: GoogleApiError, message: string): Error | null {
+  if (serviceDisabled(g)) return new AdsApiError(message, g.httpStatus || 403, undefined, "not_configured");
+  if (g.reasons.includes("ACCESS_TOKEN_SCOPE_INSUFFICIENT")) return new AdsAuthError(message, "scope_missing");
+  return null;
+}
+
+/**
+ * The failures every Google API answers alike: the set-up ones above, ended access, throttling and
+ * outages. Null for the rest, which each API sorts itself.
+ */
+export function googleCommonError(g: GoogleApiError, message: string): Error | null {
+  const setup = googleSetupError(g, message);
+  if (setup) return setup;
+  if (g.httpStatus === 401 || g.status === "UNAUTHENTICATED") return new AdsAuthError(message);
+  if (g.httpStatus === 429 || g.status === "RESOURCE_EXHAUSTED") return new AdsRateLimitedError(message, g.retryAfterS);
+  if (g.httpStatus >= 500 || g.status === "UNAVAILABLE" || g.status === "INTERNAL" || g.status === "DEADLINE_EXCEEDED") return new AdsRetryableError(message);
+  return null;
+}
