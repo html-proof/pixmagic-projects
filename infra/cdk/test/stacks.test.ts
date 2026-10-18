@@ -657,6 +657,20 @@ describe("the audit stack (Trusted Advisor security checks)", () => {
     });
   });
 
+  it("lets CloudTrail use the bucket only for this trail, so no other account's trail can write to it", () => {
+    t.audit.hasResourceProperties("AWS::CloudTrail::Trail", { TrailName: "insights-account" });
+    const [policy] = Object.values(t.audit.findResources("AWS::S3::BucketPolicy"));
+    type Statement = { Effect: string; Principal: unknown; Action: string; Condition?: unknown };
+    const statements = (policy!.Properties.PolicyDocument.Statement as Statement[]).map(({ Effect, Principal, Action, Condition }) => ({ Effect, Principal, Action, Condition }));
+    const trail = { "aws:SourceArn": "arn:aws:cloudtrail:ap-southeast-2:605411278365:trail/insights-account" };
+    const cloudtrail = { Service: "cloudtrail.amazonaws.com" };
+    expect(statements).toEqual([
+      { Effect: "Deny", Principal: { AWS: "*" }, Action: "s3:*", Condition: { Bool: { "aws:SecureTransport": "false" } } },
+      { Effect: "Allow", Principal: cloudtrail, Action: "s3:GetBucketAcl", Condition: { StringEquals: trail } },
+      { Effect: "Allow", Principal: cloudtrail, Action: "s3:PutObject", Condition: { StringEquals: { "s3:x-amz-acl": "bucket-owner-full-control", ...trail } } },
+    ]);
+  });
+
   it("puts an account analyzer in every enabled Region, and fails the deploy if one can't be made (IAM Access Analyzer - external access)", () => {
     expect(ACCOUNT_REGIONS).toHaveLength(18);
     expect(ACCOUNT_REGIONS).toContain("ap-southeast-2");
