@@ -1,7 +1,9 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { systemDb } from "@app/db";
-import { signShopifyQuery } from "@app/shared";
+import { signShopifyQuery, signWebhookBody } from "@app/shared";
 import { getAccessToken, recordDataRequest } from "@app/core";
+// The worker's own handler, for what it does with an uninstall queued before a reinstall.
+import { processWebhook } from "@app/worker";
 import { clean, createStore, createWorkspace, setup, signIn, teardown, testBrowser, type TestCtx } from "./helpers.js";
 
 /**
@@ -331,5 +333,138 @@ describe("installing from Shopify", () => {
     expect(cb.headers.location).toBe("http://localhost:3001/claim?error=exchange_failed");
     expect(await systemDb.store.count()).toBe(0);
     expect(await systemDb.workspace.count()).toBe(0);
+  });
+});
+
+describe("uninstalled and installed again seconds apart (App Review's test)", () => {
+  // Shopify revokes the token at once, but its app/uninstalled waits in the queue for the worker,
+  // so the reinstall's launch can arrive while the store still looks installed (production,
+  // 2026-10-18: the launch opened the dashboard, then the worker wiped the token).
+  const minutesAgo = (n: number) => new Date(Date.now() - n * 60_000);
+  const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+
+  /**
+   * Shopify after the reinstall: the code exchange issues `issues`, and its Admin API takes only
+   * the tokens in `accepts`. Returns the tokens presented to the Admin API, in order.
+   */
+  function shopify({ accepts, issues = "shpat_reinstalled" }: { accepts: string[]; issues?: string }) {
+    const presented: string[] = [];
+    ctx.setFetch(async (input, init) => {
+      const url = String(input);
+      if (url === `https://${SHOP}/admin/oauth/access_token`) return json({ access_token: issues, scope: "read_orders,read_products" });
+      if (url.startsWith(`https://${SHOP}/admin/api/`)) {
+        const token = new Headers(init?.headers).get("x-shopify-access-token") ?? "";
+        presented.push(token);
+        return accepts.includes(token)
+          ? json({ data: { currentAppInstallation: { id: "gid://shopify/AppInstallation/2" } } })
+          : json({ errors: "[API] Invalid API key or access token (unrecognized login or wrong password)" }, 401);
+      }
+      throw new Error(`unexpected call to ${url}`);
+    });
+    return presented;
+  }
+
+  /** Shopify's app/uninstalled, received and queued (not processed); returns the queued job. */
+  async function uninstallQueued() {
+    const body = JSON.stringify({ id: 1, myshopify_domain: SHOP });
+    const res = await ctx.app.inject({
+      method: "POST",
+      url: "/webhooks/shopify",
+      headers: {
+        "content-type": "application/json",
+        "x-shopify-hmac-sha256": signWebhookBody(body, SECRET),
+        "x-shopify-topic": "app/uninstalled",
+        "x-shopify-shop-domain": SHOP,
+        "x-shopify-webhook-id": "uninstall-1",
+        "x-shopify-triggered-at": new Date(Date.now() - 1000).toISOString(),
+      },
+      payload: body,
+    });
+    expect(res.statusCode).toBe(200);
+    const job = ctx.deps.queues.sent.webhooks.find((j) => j.topic === "app/uninstalled")!;
+    expect(await systemDb.webhookEvent.findUniqueOrThrow({ where: { id: job.eventId } })).toMatchObject({ status: "queued" });
+    return job;
+  }
+
+  /** A store installed from Shopify a while ago (token shpat_installed), claimed if `claim`. */
+  async function installedEarlier(claim: boolean) {
+    const { browser } = await install();
+    if (claim) {
+      await browser.signIn("owner", "owner@x.com");
+      await browser.post("/shopify/claim");
+    }
+    const store = await systemDb.store.update({ where: { shopDomain: SHOP }, data: { status: "active", installedAt: minutesAgo(30) } });
+    return { browser, store };
+  }
+
+  it("authorizes a claimed store again instead of opening it, and the queued uninstall then leaves the new installation alone", async () => {
+    const { browser, store } = await installedEarlier(true);
+    const uninstall = await uninstallQueued();
+    const presented = shopify({ accepts: ["shpat_reinstalled"] });
+
+    const launch = await browser.get(launchUrl());
+    const authorize = new URL(String(launch.headers.location));
+    expect(`${authorize.origin}${authorize.pathname}`).toBe(`https://${SHOP}/admin/oauth/authorize`);
+    expect(authorize.searchParams.get("client_id")).toBe("test_key");
+    expect(presented).toEqual(["shpat_installed"]);
+
+    const cb = await browser.get(callbackUrl(authorize.searchParams.get("state")!));
+    expect(cb.headers.location).toBe(`http://localhost:3001/onboarding?step=sync&store=${store.id}`);
+    const reinstalled = await systemDb.store.findUniqueOrThrow({ where: { id: store.id } });
+    expect(reinstalled).toMatchObject({ workspaceId: store.workspaceId, status: "syncing", uninstalledAt: null });
+    expect(reinstalled.installedAt!.getTime()).toBeGreaterThan(Date.parse(uninstall.triggeredAt!));
+    expect(await getAccessToken(reinstalled, ctx.deps.coord)).toBe("shpat_reinstalled");
+
+    // The worker gets to the uninstall: it predates an installation Shopify honours, so it's set aside.
+    await processWebhook(uninstall, ctx.deps);
+    const after = await systemDb.store.findUniqueOrThrow({ where: { id: store.id } });
+    expect(after).toMatchObject({ status: "syncing", uninstalledAt: null });
+    expect(await getAccessToken(after, ctx.deps.coord)).toBe("shpat_reinstalled");
+    expect(await systemDb.webhookEvent.findUniqueOrThrow({ where: { id: uninstall.eventId } })).toMatchObject({ status: "succeeded" });
+    expect(await systemDb.auditLog.count({ where: { action: "store.uninstalled" } })).toBe(0);
+    // And the store opens from Shopify now, without another authorization.
+    expect((await browser.get(launchUrl())).headers.location).toBe(`http://localhost:3001/onboarding?step=sync&store=${store.id}`);
+  });
+
+  it("records the approval of a store nobody has claimed as its installation, so the queued uninstall leaves it alone too", async () => {
+    const { store } = await installedEarlier(false);
+    const uninstall = await uninstallQueued();
+    shopify({ accepts: ["shpat_reinstalled"] });
+    const jobs = await systemDb.syncJob.count();
+
+    const browser = testBrowser(ctx);
+    const launch = await browser.get(launchUrl());
+    const authorize = new URL(String(launch.headers.location));
+    expect(authorize.pathname).toBe("/admin/oauth/authorize");
+    const cb = await browser.get(callbackUrl(authorize.searchParams.get("state")!));
+    expect(cb.headers.location).toBe("http://localhost:3001/claim");
+    const reinstalled = await systemDb.store.findUniqueOrThrow({ where: { id: store.id } });
+    expect(reinstalled.installedAt!.getTime()).toBeGreaterThan(Date.parse(uninstall.triggeredAt!));
+    // Still no second import for a store opened again before anyone claimed it.
+    expect(await systemDb.syncJob.count()).toBe(jobs);
+
+    await processWebhook(uninstall, ctx.deps);
+    const after = await systemDb.store.findUniqueOrThrow({ where: { id: store.id } });
+    expect(after).toMatchObject({ status: "active", uninstalledAt: null });
+    expect(await getAccessToken(after, ctx.deps.coord)).toBe("shpat_reinstalled");
+    expect((await browser.get("/shopify/claim")).json()).toMatchObject({ shop: SHOP, claimable: true });
+  });
+
+  it("still opens a store whose token Shopify accepts, asking Shopify once and authorizing nothing", async () => {
+    const { browser, store } = await installedEarlier(true);
+    const presented = shopify({ accepts: ["shpat_installed"] });
+    const launch = await browser.get(launchUrl());
+    expect(launch.headers.location).toBe(`http://localhost:3001/onboarding?step=sync&store=${store.id}`);
+    expect(launch.headers["set-cookie"] ?? "").not.toContain("shopify_oauth_state=");
+    expect(presented).toEqual(["shpat_installed"]);
+  });
+
+  it("opens the store as before when Shopify can't be asked", async () => {
+    const { browser, store } = await installedEarlier(true);
+    ctx.setFetch(async () => {
+      throw new TypeError("fetch failed");
+    });
+    const launch = await browser.get(launchUrl());
+    expect(launch.headers.location).toBe(`http://localhost:3001/onboarding?step=sync&store=${store.id}`);
   });
 });

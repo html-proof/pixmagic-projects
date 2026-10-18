@@ -51,6 +51,9 @@ importers:
         specifier: ^3.25.0
         version: 3.25.76
     devDependencies:
+      '@app/worker':
+        specifier: workspace:*
+        version: link:../worker
       '@types/node':
         specifier: ^24.0.0
         version: 24.19.1
