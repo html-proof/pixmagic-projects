@@ -129,9 +129,11 @@ describe("connecting ad accounts", () => {
   it("says Meta only lets the app's testers in until Meta grants Advanced Access to ads_read, and still offers the button", async () => {
     const restricted = async () => (await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${storeId}/ads`, headers })).json().restricted;
     // Facebook shows everyone else "Feature Unavailable" and never comes back, so the page has to say so first.
-    expect(await restricted()).toEqual({ meta: true, google: false, adsense: false });
+    // Google Ads shows "Google hasn't verified this app" until Google verifies the adwords scope; AdSense never.
+    expect(await restricted()).toEqual({ meta: true, google: true, adsense: false });
     expect((await connect("meta")).statusCode).toBe(200);
-    ctx.setEnv({ ...KEYS, META_ADS_ADVANCED_ACCESS: "1" });
+    expect((await connect("google")).statusCode).toBe(200);
+    ctx.setEnv({ ...KEYS, META_ADS_ADVANCED_ACCESS: "1", GOOGLE_ADS_OAUTH_VERIFIED: "1" });
     expect(await restricted()).toEqual({ meta: false, google: false, adsense: false });
   });
 
