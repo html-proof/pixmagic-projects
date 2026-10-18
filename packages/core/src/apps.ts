@@ -174,8 +174,20 @@ export function appForShop(shop: string): ShopifyApp | null {
   return servesAnyShop(main) ? main : null;
 }
 
-/** The App Store app's key (shopify-app/shopify.app.public.toml): the one app of ours Shopify can list. */
-export const APP_STORE_APP = "public";
+/**
+ * The App Store app's key (shopify-app/shopify.app.appstore.toml): the app of ours submitted to the
+ * Shopify App Store, which App Store workspaces connect new stores through (`connectApp`).
+ */
+export const APP_STORE_APP = "appstore";
+
+/**
+ * Every key whose stores came from an App Store listing: the App Store app, and "public"
+ * (shopify.app.public.toml, 658431ae), the first App Store app, replaced 2026-10-18 when its
+ * submission was started over with a new app. Stores connected through "public" stay on it (their
+ * tokens, webhooks and reconnects use its credentials), and their workspaces keep looking the way
+ * the listing describes.
+ */
+export const APP_STORE_APPS: readonly string[] = [APP_STORE_APP, "public"];
 
 /** A store as far as choosing its app goes. */
 export interface StoreApp {
@@ -187,9 +199,9 @@ export interface StoreApp {
  * Whether a workspace is shown as a merchant who installed from the App Store sees bizinsights: only
  * what the listing describes (apps/web/src/lib/features.ts, APP_STORE_MODULES), with in-app connects
  * going through the App Store app (`connectApp`). True when it holds a store and every one of them
- * came through the App Store app or is one of SHOPIFY_APP_STORE_PREVIEW_SHOPS. `stores` includes
- * disconnected and uninstalled ones, which keep their app. A workspace with a store from any other
- * of our apps keeps everything it had.
+ * came through an App Store app (`APP_STORE_APPS`) or is one of SHOPIFY_APP_STORE_PREVIEW_SHOPS.
+ * `stores` includes disconnected and uninstalled ones, which keep their app. A workspace with a
+ * store from any other of our apps keeps everything it had.
  */
 export function appStoreWorkspace(stores: readonly StoreApp[]): boolean {
   if (!stores.length) return false;
@@ -199,7 +211,7 @@ export function appStoreWorkspace(stores: readonly StoreApp[]): boolean {
       .map((s) => normalizeShopDomain(s.trim()))
       .filter(Boolean),
   );
-  return stores.every((s) => s.shopifyAppKey === APP_STORE_APP || preview.has(s.shopDomain));
+  return stores.every((s) => APP_STORE_APPS.includes(s.shopifyAppKey) || preview.has(s.shopDomain));
 }
 
 /**
@@ -210,7 +222,8 @@ export function appStoreWorkspace(stores: readonly StoreApp[]): boolean {
  *   (`appForShop`).
  * - A store connected before keeps the app it came through, when that app may go on any store: a
  *   reconnect never moves a merchant to an app their store may refuse.
- * - An App Store workspace adds stores through the App Store app, so a merchant who installed from
+ * - An App Store workspace adds stores through the App Store app (`APP_STORE_APP`, also for a
+ *   workspace whose stores came through the earlier "public"), so a merchant who installed from
  *   the listing is never sent to an app Shopify hasn't approved for their store.
  * - Everyone else: the install target.
  *

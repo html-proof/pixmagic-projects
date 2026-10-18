@@ -74,7 +74,7 @@ const schema = z.object({
   SHOPIFY_DEFAULT_APP_SHOPS: z.string().optional().default(""),
   /**
    * Key of the app a store without one of its own is sent to: Shopify's store picker (one-click
-   * connect) and typed-in stores. "default" is the main app; "public" is the App Store app in our
+   * connect) and typed-in stores. "default" is the main app; "appstore" is the App Store app in our
    * Partner organization (docs/shopify-setup.md, "The App Store app"). An unknown key, or an app
    * whose allowlist doesn't cover any store, falls back to the main app.
    */

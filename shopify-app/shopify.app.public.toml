@@ -1,9 +1,10 @@
-# Shopify CLI configuration for the App Store app: public distribution, in the Pixmagic Partner
-# organization (5229240). The only one of our apps that can be submitted for review: the main app
-# (shopify.app.toml) lives in a Dev Dashboard organization with no Partner account, and PixMagic's
-# (shopify.app.pixmagic.toml) is custom-distributed, which can never change. Same backend, URLs,
-# scopes and webhooks as both; the backend knows it as "public" (SHOPIFY_EXTRA_APPS,
-# SHOPIFY_APP_SECRET_PUBLIC, apps/aws/src/settings.ts). docs/shopify-setup.md, "The App Store app".
+# Shopify CLI configuration for the FIRST App Store app: public distribution, in the Pixmagic
+# Partner organization (5229240). Replaced on 2026-10-18 by shopify.app.appstore.toml, when the owner
+# chose to start the App Store submission over with a new registration; never submit both (App
+# Store requirement 1.1.5). Kept because stores connected through it use its credentials. Same
+# backend, URLs, scopes and webhooks as the others; the backend knows it as "public"
+# (SHOPIFY_EXTRA_APPS, SHOPIFY_APP_SECRET_PUBLIC, apps/aws/src/settings.ts).
+# docs/shopify-setup.md, "The App Store app".
 # Deploy with: cd shopify-app && shopify app deploy --config public
 client_id = "658431ae6a22c880e0ab2a0e2040a28a"
 name = "bizinsights"

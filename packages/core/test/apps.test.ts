@@ -146,9 +146,12 @@ describe("Shopify app registry: the App Store app new stores are sent to", () =>
       SHOPIFY_DEFAULT_APP_SHOPS: "",
       SHOPIFY_APP_SECRET_PIXMAGIC: "pixmagic-secret",
       SHOPIFY_APP_SECRET_PUBLIC: "public-secret",
+      SHOPIFY_APP_SECRET_APPSTORE: "appstore-secret",
       SHOPIFY_EXTRA_APPS: JSON.stringify([
         { key: "pixmagic", clientId: "pixmagic-client-id", shops: [CLIENT_STORE] },
+        // The first App Store app, kept for the stores connected through it.
         { key: "public", clientId: "public-client-id", shops: [] },
+        { key: "appstore", clientId: "appstore-client-id", shops: [] },
       ]),
       SHOPIFY_INSTALL_APP: "default",
     });
@@ -162,15 +165,15 @@ describe("Shopify app registry: the App Store app new stores are sent to", () =>
   });
 
   it("keeps sending new stores to the main app until the App Store app is chosen", () => {
-    expect(shopifyApps().map((a) => a.key)).toEqual(["default", "pixmagic", "public"]);
+    expect(shopifyApps().map((a) => a.key)).toEqual(["default", "pixmagic", "public", "appstore"]);
     expect(installTarget().key).toBe("default");
     expect(appForShop("new-store.myshopify.com")?.key).toBe("default");
   });
 
   it("sends new stores to the App Store app once SHOPIFY_INSTALL_APP names it; a store's own app still wins", () => {
-    configure({ SHOPIFY_INSTALL_APP: "public" });
-    expect(installTarget()).toMatchObject({ key: "public", clientId: "public-client-id" });
-    expect(appForShop("new-store.myshopify.com")?.key).toBe("public");
+    configure({ SHOPIFY_INSTALL_APP: "appstore" });
+    expect(installTarget()).toMatchObject({ key: "appstore", clientId: "appstore-client-id" });
+    expect(appForShop("new-store.myshopify.com")?.key).toBe("appstore");
     expect(appForShop(CLIENT_STORE)?.key).toBe("pixmagic");
   });
 
@@ -183,12 +186,18 @@ describe("Shopify app registry: the App Store app new stores are sent to", () =>
 
   describe("App Store workspaces", () => {
     const store = (shopDomain: string, shopifyAppKey: string) => ({ shopDomain, shopifyAppKey });
-    const listed = store("listed.myshopify.com", "public");
+    const listed = store("listed.myshopify.com", "appstore");
+    /** A store that came through the first App Store app, before it was replaced. */
+    const firstListed = store("first-listed.myshopify.com", "public");
     const direct = store("direct.myshopify.com", "default");
 
-    it("are the ones whose every store came through the App Store app", () => {
+    it("are the ones whose every store came through an App Store app", () => {
       expect(appStoreWorkspace([listed])).toBe(true);
-      expect(appStoreWorkspace([listed, store("other.myshopify.com", "public")])).toBe(true);
+      expect(appStoreWorkspace([listed, store("other.myshopify.com", "appstore")])).toBe(true);
+      // Stores from the first App Store app still count, alone or next to the current one's.
+      expect(appStoreWorkspace([firstListed])).toBe(true);
+      expect(appStoreWorkspace([firstListed, listed])).toBe(true);
+      expect(appStoreWorkspace([firstListed, direct])).toBe(false);
       // A merchant with a store from another of our apps keeps everything they had.
       expect(appStoreWorkspace([listed, direct])).toBe(false);
       expect(appStoreWorkspace([direct])).toBe(false);
@@ -205,8 +214,11 @@ describe("Shopify app registry: the App Store app new stores are sent to", () =>
     });
 
     it("add stores through the App Store app; everyone else through the install target", () => {
-      expect(connectApp(null, [listed])?.key).toBe("public");
-      expect(connectApp("new-store.myshopify.com", [listed])?.key).toBe("public");
+      expect(connectApp(null, [listed])?.key).toBe("appstore");
+      expect(connectApp("new-store.myshopify.com", [listed])?.key).toBe("appstore");
+      // A workspace from the first App Store app adds stores through the current one.
+      expect(connectApp(null, [firstListed])?.key).toBe("appstore");
+      expect(connectApp("new-store.myshopify.com", [firstListed])?.key).toBe("appstore");
       expect(connectApp(null, [direct])?.key).toBe("default");
       expect(connectApp("new-store.myshopify.com", [direct])?.key).toBe("default");
       expect(connectApp(null, [])?.key).toBe("default");
@@ -219,15 +231,18 @@ describe("Shopify app registry: the App Store app new stores are sent to", () =>
       // A main-app store whose workspace later took an App Store store.
       expect(connectApp(direct.shopDomain, [listed], direct)?.key).toBe("default");
       // Once new stores go to the App Store app, existing main-app stores still reconnect through theirs.
-      configure({ SHOPIFY_APP_STORE_PREVIEW_SHOPS: "", SHOPIFY_INSTALL_APP: "public" });
+      configure({ SHOPIFY_APP_STORE_PREVIEW_SHOPS: "", SHOPIFY_INSTALL_APP: "appstore" });
       expect(connectApp(direct.shopDomain, [direct], direct)?.key).toBe("default");
       expect(connectApp(CLIENT_STORE, [listed])?.key).toBe("pixmagic");
+      // A store from the first App Store app reconnects through it, not the current one.
+      expect(connectApp(firstListed.shopDomain, [firstListed, listed], firstListed)?.key).toBe("public");
     });
 
     it("send nobody to an app their store can't install", () => {
       // The App Store app misconfigured (no secret): back to the install target, which serves any store.
-      configure({ SHOPIFY_APP_SECRET_PUBLIC: "" });
+      configure({ SHOPIFY_APP_SECRET_APPSTORE: "" });
       expect(connectApp(null, [listed])?.key).toBe("default");
+      expect(connectApp(null, [firstListed])?.key).toBe("default");
       // The main app limited to our own stores: no picker, and a stranger's store by name is refused.
       configure({ SHOPIFY_DEFAULT_APP_SHOPS: TEST_STORE });
       expect(connectApp(null, [direct])).toBeNull();

@@ -27,10 +27,13 @@ export const testEnv = {
   // A second app, custom-distributed to one client store (multi-app support).
   SHOPIFY_EXTRA_APPS: JSON.stringify([
     { key: "client", clientId: "client_key", shops: ["client-shop.myshopify.com"] },
-    // The App Store app (production's "public"): any store, not where new stores are sent.
+    // The first App Store app (production's "public"), kept for the stores connected through it.
     { key: "public", clientId: "public_key", shops: [] },
+    // The App Store app (production's "appstore"): any store, not where new stores are sent.
+    { key: "appstore", clientId: "appstore_key", shops: [] },
   ]),
   SHOPIFY_APP_SECRET_CLIENT: "client_secret",
   SHOPIFY_APP_SECRET_PUBLIC: "public_secret",
+  SHOPIFY_APP_SECRET_APPSTORE: "appstore_secret",
   LOG_LEVEL: "silent",
 };
