@@ -10,6 +10,7 @@ import {
   confirmSignUp,
   errorCode,
   finishEmailCodeSignIn,
+  finishMfaSignIn,
   recallEmail,
   rememberEmail,
   resendSignUpCode,
@@ -46,6 +47,8 @@ export default function LoginPage() {
   const [confirming, setConfirming] = useState(false);
   // Passwordless: a code Cognito emails (only where the deployment switched it on).
   const [codeSignIn, setCodeSignIn] = useState<CodeSignIn>("off");
+  // The password was right and the account has two-step verification: the app's code finishes it.
+  const [appCode, setAppCode] = useState(false);
   const [error, setError] = useState<{ text: string; hint?: string; reset?: boolean } | null>(null);
   const [notice, setNotice] = useState<{ kind: "info" | "success"; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -76,6 +79,12 @@ export default function LoginPage() {
     setCodeSignIn(mode);
   }
 
+  /** Signed in, or on to the authenticator app's code. */
+  function afterFirstStep(r: Awaited<ReturnType<typeof signIn>>) {
+    if ("next" in r) setAppCode(true);
+    else router.replace(afterSignIn());
+  }
+
   async function onPassword(e: FormEvent) {
     e.preventDefault();
     if (!fields.submit()) return;
@@ -83,8 +92,7 @@ export default function LoginPage() {
     setError(null);
     setNotice(null);
     try {
-      await signIn(email.trim(), password, keep);
-      router.replace(afterSignIn());
+      afterFirstStep(await signIn(email.trim(), password, keep));
     } catch (err) {
       const code = errorCode(err);
       if (code === "unconfirmed") {
@@ -113,12 +121,55 @@ export default function LoginPage() {
           large
           onSubmit={async (code) => {
             await confirmSignUp(email.trim(), code);
-            await signIn(email.trim(), password, keep);
-            router.replace(afterSignIn());
+            const r = await signIn(email.trim(), password, keep);
+            setConfirming(false);
+            afterFirstStep(r);
           }}
           onResend={() => resendSignUpCode(email.trim())}
         />
         <button type="button" className="text-sm text-muted underline" onClick={() => setConfirming(false)}>
+          Back to sign in
+        </button>
+      </AuthSplitShell>
+    );
+  }
+
+  if (appCode) {
+    return (
+      <AuthSplitShell title="Two-step verification" subtitle="One more step to keep your account safe." action={CREATE_ACCOUNT}>
+        <CodeStep
+          email={email.trim()}
+          intro={<>Open your authenticator app and enter the 6-digit code it shows for bizinsights.</>}
+          submitLabel="Sign In"
+          large
+          onSubmit={async (code) => {
+            try {
+              await finishMfaSignIn(code);
+              router.replace(afterSignIn());
+            } catch (err) {
+              // Too long since the password (or too many wrong codes): start again from it.
+              if (errorCode(err) !== "mfa_expired") throw err;
+              setAppCode(false);
+              setPassword("");
+              setError({ text: authErrorMessage(err) });
+            }
+          }}
+        />
+        <p className="text-sm text-muted">
+          Lost your phone?{" "}
+          <Link prefetch={false} href="/support" className="underline">
+            Contact support
+          </Link>{" "}
+          and we&apos;ll help you back in.
+        </p>
+        <button
+          type="button"
+          className="text-sm text-muted underline"
+          onClick={() => {
+            setAppCode(false);
+            setPassword("");
+          }}
+        >
           Back to sign in
         </button>
       </AuthSplitShell>
@@ -181,10 +232,7 @@ export default function LoginPage() {
             email={email.trim()}
             submitLabel="Sign In"
             large
-            onSubmit={async (code) => {
-              await finishEmailCodeSignIn(email.trim(), code, keep);
-              router.replace(afterSignIn());
-            }}
+            onSubmit={async (code) => afterFirstStep(await finishEmailCodeSignIn(email.trim(), code, keep))}
             onResend={() => startEmailCodeSignIn(email.trim())}
           />
         )
@@ -225,8 +273,7 @@ export default function LoginPage() {
         </form>
       )}
 
-      <Divider label="OR CONTINUE WITH" />
-      <SocialButtons row />
+      <SocialButtons row keep={keep} terms before={<Divider label="OR CONTINUE WITH" />} />
 
       <p className="pt-1 text-center text-[15px] text-muted">
         Don&apos;t have an account?{" "}

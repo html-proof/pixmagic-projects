@@ -33,9 +33,16 @@ export const authConfig = () =>
     throw e;
   }));
 
-/** `keep` false: "Keep me signed in" unticked, so the session ends when the browser closes. */
+/**
+ * `keep` false: "Keep me signed in" unticked, so the session ends when the browser closes.
+ * `next: "mfa"`: the password was right and the account has two-step verification: the code from
+ * the authenticator app finishes signing in (finishMfaSignIn).
+ */
 export const signIn = (email: string, password: string, keep = true) =>
-  api<{ user: SignedInUser }>("/auth/login", { method: "POST", body: { email, password, keep } });
+  api<{ user: SignedInUser } | { next: "mfa" }>("/auth/login", { method: "POST", body: { email, password, keep } });
+
+/** The authenticator app's code after the password (the API kept the rest of the sign-in, for this browser only). */
+export const finishMfaSignIn = (code: string) => api<{ user: SignedInUser }>("/auth/login/mfa", { method: "POST", body: { code } });
 
 export const signUp = (input: { name: string; email: string; password: string; confirmPassword: string; acceptTerms: boolean }) =>
   api<{ ok: true; next: "confirm"; email: string }>("/auth/signup", { method: "POST", body: input });
@@ -52,21 +59,93 @@ export const resetPassword = (input: { email: string; code: string; password: st
 export const startEmailCodeSignIn = (email: string) => api<{ ok: true; message: string }>("/auth/otp/start", { method: "POST", body: { email } });
 
 export const finishEmailCodeSignIn = (email: string, code: string, keep = true) =>
-  api<{ user: SignedInUser }>("/auth/otp/verify", { method: "POST", body: { email, code, keep } });
+  api<{ user: SignedInUser } | { next: "mfa" }>("/auth/otp/verify", { method: "POST", body: { email, code, keep } });
 
 /**
  * "Continue with Google": a full-page trip through the user pool to the provider and back
  * to /auth/callback. No popup, so no Cross-Origin-Opener-Policy warnings and nothing for a popup
- * blocker to stop.
+ * blocker to stop. `keep` false: "Keep me signed in" was unticked.
  */
-export function continueWith(provider: SocialProvider, returnTo?: string | null) {
-  const q = returnTo && isSafePath(returnTo) ? `?${new URLSearchParams({ returnTo })}` : "";
-  window.location.assign(`/api/auth/oauth/${provider}/start${q}`);
+export function continueWith(provider: SocialProvider, returnTo?: string | null, keep = true) {
+  const q = new URLSearchParams();
+  if (returnTo && isSafePath(returnTo)) q.set("returnTo", returnTo);
+  if (!keep) q.set("keep", "0");
+  const query = q.toString();
+  window.location.assign(`/api/auth/oauth/${provider}/start${query ? `?${query}` : ""}`);
 }
 
-/** /auth/callback hands back what the provider (via Cognito) put in its address. */
+/** Linking from Settings in this tab: where to come back to, for a callback the API can't place any more. */
+const LINK_KEY = "insights:linking";
+const LINK_TTL_MS = 10 * 60_000;
+
+/**
+ * Link a Google account to the signed-in account (Settings): a full-page trip to Google and back.
+ * The person comes back to `returnTo` (a path of this site) with `?linked=google`, or with
+ * `?link_error=<code>` (linkErrorMessage words it). The session stays the one they have.
+ */
+export function linkGoogle(returnTo: string) {
+  const back = isSafePath(returnTo) ? returnTo : "/settings/security";
+  try {
+    sessionStorage.setItem(LINK_KEY, JSON.stringify({ path: back, at: Date.now() }));
+  } catch {
+    /* storage blocked: the API still names where to go back to */
+  }
+  window.location.assign(`/api/auth/oauth/google/start?${new URLSearchParams({ link: "1", returnTo: back })}`);
+}
+
+/** The page a link from Settings started on, consumed; null when none is under way in this tab. */
+export function takeLinkReturn(): string | null {
+  try {
+    const raw = sessionStorage.getItem(LINK_KEY);
+    sessionStorage.removeItem(LINK_KEY);
+    if (!raw) return null;
+    const { path, at } = JSON.parse(raw) as { path?: unknown; at?: number };
+    return isSafePath(path) && typeof at === "number" && Date.now() - at < LINK_TTL_MS ? path : null;
+  } catch {
+    return null;
+  }
+}
+
+/** `path` with `?<key>=<value>` added (or replaced). */
+export function withQuery(path: string, key: string, value: string) {
+  const u = new URL(path, window.location.origin);
+  u.searchParams.set(key, value);
+  return `${u.pathname}${u.search}${u.hash}`;
+}
+
+/** What to tell the person when linking Google came back with `?link_error=<code>`. */
+export function linkErrorMessage(code: string): string {
+  switch (code) {
+    case "cancelled":
+      return "Linking Google was cancelled. Nothing was changed.";
+    case "google_in_use":
+      return "That Google account already signs in to another bizinsights account. Remove it there first, or use a different Google account.";
+    case "already_linked":
+      return "Your account already has a Google sign-in. Remove it first to link a different one.";
+    case "signin_required":
+    case "signin_changed":
+      return "Sign in to your account again, then link Google.";
+    case "provider_unavailable":
+      return "Signing in with Google isn't available right now.";
+    case "rate_limited":
+      return "Too many attempts from your network. Wait a few minutes, then try again.";
+    case "unavailable":
+      return "We can't reach the sign-in service right now. Please try again in a moment.";
+    case "code_invalid":
+    case "state_expired":
+    case "state_mismatch":
+      return "That took too long. Please try again.";
+    default:
+      return "We couldn't link that Google account. Please try again.";
+  }
+}
+
+/**
+ * /auth/callback hands back what the provider (via Cognito) put in its address. A sign-in answers
+ * with the user; a link from Settings with `linked` and where to go back to.
+ */
 export const finishOAuth = (params: { state: string; code?: string; error?: string; error_description?: string }) =>
-  api<{ user: SignedInUser; redirect: string | null }>("/auth/oauth/callback", { method: "POST", body: params });
+  api<{ user: SignedInUser; redirect: string | null } | { linked: "google"; redirect: string }>("/auth/oauth/callback", { method: "POST", body: params });
 
 /**
  * Sign this browser out. After Google the user pool's own session in this browser is
@@ -90,18 +169,41 @@ export function leaveTo(href: string, router: { replace(href: string): void }) {
   else router.replace(href);
 }
 
+export type SignInMethodName = "password" | "google";
+
 export interface AccountInfo {
   user: SignedInUser & { timezone: string };
-  signedInWith: "password" | "google";
+  signedInWith: SignInMethodName;
   signedInAt: number;
   sessionExpiresAt: number;
-  methods: Array<{ method: "password" | "google"; email: string | null; linkedAt: string; lastUsedAt: string | null }>;
+  methods: Array<{ id: string; method: SignInMethodName; email: string | null; linkedAt: string; lastUsedAt: string | null }>;
+  /** The account has an email-and-password sign-in (whatever this session used). */
+  hasPassword: boolean;
+  /** Google sign-in is offered and this account has none yet: "Link Google account". */
+  canLinkGoogle: boolean;
   canChangePassword: boolean;
   canChangeEmail: boolean;
+  /** Two-step verification (an authenticator app) on the password. null: couldn't be checked just now. */
+  mfaEnabled: boolean | null;
 }
 
+/** `signedIn` false: the account asks for an app code at sign-in, so this browser signs in again too. */
 export const changePassword = (input: { currentPassword: string; password: string; confirmPassword: string }) =>
-  api<{ ok: true }>("/auth/account/password", { method: "POST", body: input });
+  api<{ ok: true; signedIn: boolean }>("/auth/account/password", { method: "POST", body: input });
+
+/** A password for an account that signs in with Google only (needs a Google sign-in in the last 15 minutes). */
+export const addPassword = (input: { password: string; confirmPassword: string }) => api<{ ok: true }>("/auth/account/password/add", { method: "POST", body: input });
+
+/** Remove a sign-in method (not the last, nor the one signed in with). `password`: when signed in with one. */
+export const removeSignInMethod = (id: string, password?: string) => api<{ ok: true }>(`/auth/account/methods/${encodeURIComponent(id)}`, { method: "DELETE", body: { password } });
+
+/** Two-step verification, step 1: the authenticator app's secret (shown once). */
+export const startMfaSetup = (password?: string) => api<{ secret: string; otpauthUri: string }>("/auth/account/mfa/setup", { method: "POST", body: { password } });
+
+/** Step 2: a code from the app turns it on. */
+export const confirmMfaSetup = (code: string) => api<{ ok: true; mfaEnabled: true }>("/auth/account/mfa/verify", { method: "POST", body: { code } });
+
+export const turnOffMfa = (password: string, code: string) => api<{ ok: true; mfaEnabled: false }>("/auth/account/mfa/disable", { method: "POST", body: { password, code } });
 
 export const startEmailChange = (email: string, password?: string) =>
   api<{ ok: true; pendingEmail: string }>("/auth/account/email", { method: "POST", body: { email, password } });

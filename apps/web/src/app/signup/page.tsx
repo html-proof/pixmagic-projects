@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 import { ArrowRight, Lock, UserRound } from "lucide-react";
 import { accountPasswordProblem, ACCOUNT_PASSWORD_MIN, DISPLAY_NAME_MAX } from "@app/shared/auth";
-import { afterSignIn, authErrorMessage, confirmSignUp, errorCode, resendSignUpCode, signIn, signUp, useRedirectIfSignedIn } from "@/lib/auth";
+import { afterSignIn, authErrorMessage, confirmSignUp, errorCode, rememberEmail, resendSignUpCode, signIn, signUp, useRedirectIfSignedIn } from "@/lib/auth";
 import { Alert, Divider } from "@/components/ui";
 import { emailProblem, useFieldErrors } from "@/components/auth/AuthCard";
 import { AuthSplitShell } from "@/components/auth/AuthSplitShell";
@@ -76,7 +76,16 @@ export default function SignupPage() {
           large
           onSubmit={async (code) => {
             await confirmSignUp(sentTo, code);
-            await signIn(sentTo, password);
+            try {
+              await signIn(sentTo, password);
+            } catch (err) {
+              // The address is confirmed either way; a password that doesn't work (one set by an
+              // earlier sign-up, say) is for the sign-in page, which offers "Forgot password?".
+              if (errorCode(err) !== "invalid_credentials") throw err;
+              rememberEmail(sentTo);
+              router.replace("/login?confirmed=1");
+              return;
+            }
             // Through the app shell, which sends a new merchant to onboarding.
             router.replace(afterSignIn());
           }}
@@ -92,8 +101,7 @@ export default function SignupPage() {
   const termsError = fields.error("terms");
   return (
     <AuthSplitShell title="Create your account" subtitle="Free to start. You'll connect your Shopify store from your dashboard." action={SIGN_IN}>
-      <SocialButtons row />
-      <Divider label="OR SIGN UP WITH YOUR EMAIL" />
+      <SocialButtons row terms after={<Divider label="OR SIGN UP WITH YOUR EMAIL" />} />
       {error ? (
         <Alert onDismiss={() => setError(null)}>
           {error}

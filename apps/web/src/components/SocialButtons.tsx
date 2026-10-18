@@ -1,5 +1,6 @@
 "use client";
-import { useEffect, useState } from "react";
+import Link from "next/link";
+import { useEffect, useState, type ReactNode } from "react";
 import { authConfig, continueWith, type AuthConfig, type SocialProvider } from "@/lib/auth";
 import { peekReturnTo } from "@/lib/returnTo";
 
@@ -24,15 +25,35 @@ const PROVIDERS: Array<{ id: SocialProvider; name: string; Mark: () => React.JSX
  * Cognito to the provider and back to /auth/callback; the session is our httpOnly cookie.
  * `row`: the split auth pages' compact buttons, centered under the "or continue with" divider
  * (side by side if another provider is added later). `large` draws them stacked at AuthCard's size.
+ *
+ * Only the providers this deployment has switched on are drawn, and nothing at all (`before` and
+ * `after`, the divider, included) when it has none. If the settings can't be read, every button
+ * stays: the server says on its own page if one isn't set up. `keep` false: "Keep me signed in"
+ * was unticked on the page. `terms`: the notice that continuing accepts the Terms and Privacy Policy
+ * (the pages where it creates an account).
  */
-export function SocialButtons({ row = false, large = false }: { row?: boolean; large?: boolean }) {
-  const [config, setConfig] = useState<AuthConfig | null>(null);
+export function SocialButtons({
+  row = false,
+  large = false,
+  keep = true,
+  terms = false,
+  before,
+  after,
+}: {
+  row?: boolean;
+  large?: boolean;
+  keep?: boolean;
+  terms?: boolean;
+  before?: ReactNode;
+  after?: ReactNode;
+}) {
+  // undefined: still asking; null: couldn't tell.
+  const [config, setConfig] = useState<AuthConfig | null | undefined>(undefined);
   const [leaving, setLeaving] = useState<SocialProvider | null>(null);
 
   useEffect(() => {
     authConfig()
       .then(setConfig)
-      // Unknown: leave the buttons on; the server says on its own page if one isn't set up.
       .catch(() => setConfig(null));
     // Back from the provider with the browser's Back button (a page restored from cache): usable again.
     const reset = () => setLeaving(null);
@@ -40,13 +61,14 @@ export function SocialButtons({ row = false, large = false }: { row?: boolean; l
     return () => window.removeEventListener("pageshow", reset);
   }, []);
 
-  const unavailable = PROVIDERS.filter((p) => config && !config.providers[p.id]);
+  const shown = config === undefined ? [] : PROVIDERS.filter((p) => config === null || config.providers[p.id]);
+  if (!shown.length) return null;
 
   return (
-    <div className={row ? "flex flex-wrap justify-center gap-3" : large ? "space-y-3" : "space-y-2"}>
-      {PROVIDERS.map(({ id, name, Mark }) => {
-        const off = !!config && !config.providers[id];
-        return (
+    <>
+      {before}
+      <div className={row ? "flex flex-wrap justify-center gap-3" : large ? "space-y-3" : "space-y-2"}>
+        {shown.map(({ id, name, Mark }) => (
           <button
             key={id}
             type="button"
@@ -57,23 +79,31 @@ export function SocialButtons({ row = false, large = false }: { row?: boolean; l
                   ? "btn-secondary h-12 w-full gap-3 rounded-xl text-[15px] font-semibold"
                   : "btn-secondary w-full"
             }
-            disabled={off || leaving !== null}
-            aria-describedby={off ? "social-unavailable" : undefined}
+            disabled={leaving !== null}
             onClick={() => {
               setLeaving(id);
-              continueWith(id, peekReturnTo());
+              continueWith(id, peekReturnTo(), keep);
             }}
           >
             <Mark />
             {leaving === id ? `Opening ${name}…` : `Continue with ${name}`}
           </button>
-        );
-      })}
-      {unavailable.length > 0 && (
-        <p id="social-unavailable" className={row ? "basis-full text-center text-xs text-muted" : large ? "text-sm leading-relaxed text-muted" : "text-xs text-muted"}>
-          Sign in with {unavailable.map((p) => p.name).join(" and ")} isn&apos;t available yet. Please use your email address.
-        </p>
-      )}
-    </div>
+        ))}
+        {terms && (
+          <p className={row ? "basis-full text-center text-xs text-muted" : "text-center text-xs text-muted"}>
+            By continuing with {shown.map((p) => p.name).join(" or ")}, you agree to the{" "}
+            <Link prefetch={false} href="/terms" target="_blank" className="underline underline-offset-2">
+              Terms of Service
+            </Link>{" "}
+            and the{" "}
+            <Link prefetch={false} href="/privacy" target="_blank" className="underline underline-offset-2">
+              Privacy Policy
+            </Link>
+            .
+          </p>
+        )}
+      </div>
+      {after}
+    </>
   );
 }
