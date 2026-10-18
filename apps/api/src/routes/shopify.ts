@@ -155,6 +155,26 @@ export function appForSignedQuery(q: Record<string, string>): ShopifyApp | null 
   return shopifyApps().find((a) => verifyShopifyQueryHmac(q, a.clientSecret)) ?? null;
 }
 
+/**
+ * What a refused Shopify-signed link (/callback, /launch) looked like, so its log line can tell a
+ * tampered or hand-made link from a real one: the parameter names it carried (never the values:
+ * the signature, `code`, `id_token` and `session` are credentials or close to it), whether it was
+ * signed at all, the shop as given, which of our apps signed it (null: none of the `appsChecked`
+ * did), and the kind of request the browser said it was (`document` for a navigation, `iframe`
+ * inside the admin, null from scripts and tools). Everything here is bounded: it is the sender's.
+ */
+function linkShape(c: Ctx, q: Record<string, string>, app: ShopifyApp | null) {
+  const names = [...new URL(c.req.url).searchParams.keys()].sort();
+  return {
+    params: names.slice(0, 30).map((n) => n.slice(0, 40)),
+    hmacPresent: !!q.hmac,
+    shop: q.shop?.slice(0, 255) ?? null,
+    app: app?.key ?? null,
+    ...(app ? {} : { appsChecked: shopifyApps().length }),
+    fetchDest: c.req.header("sec-fetch-dest")?.slice(0, 32) ?? null,
+  };
+}
+
 const htmlEscape = (s: string) => s.replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`);
 
 /**
@@ -388,10 +408,15 @@ export function shopifyRoutes(app: App, deps: Deps) {
     const appUrl = env().APP_URL;
     // Errors go back to the page the connect started from, once the state record says which.
     let errorPage = "/onboarding";
-    const fail = (code: string, shop?: string) =>
-      c.redirect(`${appUrl}${errorPage}?error=${encodeURIComponent(code)}${shop ? `&shop=${encodeURIComponent(shop)}` : ""}`);
-
+    /** Which flow the state record says this is, once read (logged with a refusal). */
+    let flow: string | undefined;
     const app = appForSignedQuery(q);
+    // One line per callback that connects nothing: otherwise all the logs hold is its 302.
+    const fail = (code: string, shop?: string) => {
+      logger.warn({ event: "shopify_callback_rejected", reason: code, flow, ...linkShape(c, q, app) }, "shopify callback rejected");
+      return c.redirect(`${appUrl}${errorPage}?error=${encodeURIComponent(code)}${shop ? `&shop=${encodeURIComponent(shop)}` : ""}`);
+    };
+
     if (!app) return fail("invalid_hmac");
     const shop = normalizeShopDomain(q.shop ?? "");
     if (!shop || shop !== q.shop) return fail("invalid_shop");
@@ -407,6 +432,7 @@ export function shopifyRoutes(app: App, deps: Deps) {
       const raw = await deps.coord.take(stateKey);
       if (!raw) return fail("state_expired");
       const state = JSON.parse(raw) as OAuthState;
+      flow = state.mode ?? "connect";
       errorPage = state.mode === "install" ? "/claim" : connectPage(state.from);
       if (state.shop !== shop) return fail("shop_mismatch");
       // The redirect must come back signed by the app the flow was started for.
@@ -471,7 +497,10 @@ export function shopifyRoutes(app: App, deps: Deps) {
     // Shopify signs a fresh link on every launch, so an old one is a replay (or a bookmark).
     const stale = !!app && !freshTimestamp(q.timestamp);
     if (!app || !shop || stale) {
-      logger.warn({ event: "shopify_launch_rejected", reason: !app ? "invalid_hmac" : stale ? "stale" : "invalid_shop" }, "unverified app launch");
+      logger.warn(
+        { event: "shopify_launch_rejected", reason: !app ? "invalid_hmac" : stale ? "stale" : "invalid_shop", ...linkShape(c, q, app) },
+        "unverified app launch",
+      );
       return c.redirect(`${appUrl}/onboarding?error=launch_unverified`);
     }
     // Shopify's admin opens the app inside its own iframe (embedded=1), though the app is
