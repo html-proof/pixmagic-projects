@@ -27,49 +27,61 @@ If you change it, keep it inside that band. Re-run `make-icons.py` rather than e
 
 ## What is already pushed
 
-`shopify app deploy` releases the contents of `../shopify.app.toml` as a new app version: scopes
-(`read_orders,read_products`, plus the optional ones), the webhook subscriptions including the
-three mandatory compliance topics, the API version they are sent in, the app URLs, and the
-`insights-pixel` extension. Run it from `shopify-app/` after any change to the toml (the API
-version moved to 2026-10 on 2026-10-16; see `docs/shopify-app-store-compliance.md`).
+The App Store app is the one in [../shopify.app.public.toml](../shopify.app.public.toml) (client id
+658431ae…, Partner org 5229240, Dev Dashboard app 436203126785). `shopify app deploy --config public`
+releases that file as a new app version: scopes (`read_orders,read_products`, plus the optional
+ones), the webhook subscriptions including the three mandatory compliance topics, the API version
+they are sent in, the app URLs, and the `insights-pixel` extension. Run it from `shopify-app/` after
+any change to that toml. The main app (`shopify.app.toml`) has no Partner account and can never be
+submitted.
 
 That is the whole of what the CLI can do. **It does not create the listing and it does not
 submit the app for review.** Those are Dashboard-only, and until review passes the app still
 installs only on development stores in our own Partner org - see
 `../../docs/shopify-setup.md` 3f.
 
-## What is left (Dashboard only)
+## Where the submission stands (2026-10-18)
 
-Dashboard: https://dev.shopify.com/dashboard/238480582/apps/430680145921
+Submission checklist: https://partners.shopify.com/5229240/apps/436203126785/distribution/app-store
 
-1. **Protected customer data access** - API access -> Protected customer data access.
-   Request **Level 1**; `read_orders` needs it (suggested answers in `listing-copy.md`). Do this
-   *before* submitting: Shopify will not accept the request while the app is under review.
-   The optional scopes in the toml are protected customer data too: if Level 1 (and, for
-   `read_customers`, the matching fields) is not approved by submission day, remove
-   `optional_scopes` from both tomls and `SHOPIFY_OPTIONAL_SCOPES` (`apps/aws/src/settings.ts`),
-   merge, and `shopify app deploy` again (docs/shopify-setup.md, "Optional scopes").
-2. **Listing** - name, the icon above, introduction, details, features, pricing (Free), privacy
-   policy URL, support contact: all in `listing-copy.md`.
-3. **Screenshots** - see below.
-4. **Screencast** - 2-3 minutes, English: install from a development store, the "is connected"
-   page, sign in, Add store, the import page, the dashboard (date range, sales breakdown, top
-   products, inventory, recent orders), then uninstall. Real production UI only.
-5. **Reviewer instructions and a test account** - the text is in `listing-copy.md`. Create the
-   reviewer's bizinsights account on https://bizinsights.io yourself and put its email and
-   password in the form (requirement 4.5.4); check it signs in on the day you submit.
-6. **Emergency developer contact** - name, email and phone.
-7. **Automated checks**, then **Submit for review** (owner's call).
+Done: API versions, configuration checks, emergency contact, automated checks, and the English
+listing (everything in `listing-copy.md`: copy, category, Free plan, feature image, 5 screenshots,
+support, privacy policy, testing instructions). The listing form reports two issues left, both
+owner-only:
+
+1. **Test account** - create the reviewer's bizinsights login on https://bizinsights.io/signup
+   (email and password, no Google sign-in) and type it into the form (requirement 4.5.4).
+2. **Screencast URL** - record it (shot list in `listing-copy.md`) and paste a YouTube or direct
+   video link.
+
+Then, before **Submit for review** (owner's call):
+
+3. **Protected customer data** - the checklist says "Doesn't need access to protected customer
+   data", which is wrong for an app that reads orders. Change it and request **Level 1** (answers
+   in `listing-copy.md`); Shopify won't take the request while the app is under review. Decide the
+   optional scopes at the same time: get them covered, or remove `optional_scopes` from the public
+   toml (today `appConfig.test.ts` ties all three tomls to one `SHOPIFY_OPTIONAL_SCOPES`, so that is
+   a code change) and `shopify app deploy --config public`.
+4. **App capabilities** - the checklist says "embedded"; the app is not (`embedded = false`).
+5. **The app and site, as a reviewer sees them** (code, one pull request): hide WhatsApp, Staff,
+   advertising and email for App Store installs; send in-app "Connect" buttons to this app, not the
+   unapproved main app; reword "within a minute" and "place a test order" in the dashboard; drop
+   "Real-time analytics" and label the mock figures on /login and /signup; fix /support
+   ("Settings → Stores", connecting another store) and /privacy (Cloudflare, Resend, Staff data).
+6. **Run the reviewer path once** on a fresh development store: install, claim, import,
+   dashboard, Sync now, uninstall, reinstall.
 
 Approval is what unblocks every live merchant store at once. Budget days to weeks for it.
 
 ## Screenshots
 
-Shopify wants 1600 x 900 desktop images of the real UI, one feature each, no browser chrome. Take
-them from https://bizinsights.io signed in to an account whose store is a development store with
-demo data (`npx shopify store create dev ... --demo-data`), in a 1600 x 900 viewport, e.g. with
-Chrome DevTools' device toolbar set to 1600 x 900 and "Capture screenshot". Never use a live
-merchant's store: its customers' names would be in the recent orders list.
+Shopify wants 1600 x 900 desktop images of the real UI, one feature each, no browser chrome, no
+personal data, and none repeating the feature image. The current set came from the real UI built
+locally on fictional data (how: `listing-copy.md`). To retake them from production instead, use a
+development store and a 1600 x 900 viewport. Never use a live merchant's store: its order details
+would be in the recent orders list. The store switcher shows a redrawn Shopify bag
+(`apps/web/src/components/ShopifyIcon.tsx`); Shopify's brand rules forbid altered logos, so crop it
+out or switch to the official asset before retaking them.
 
 ## Cost
 
