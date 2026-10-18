@@ -89,7 +89,7 @@ describe("sign-in security and lifecycle", () => {
     await expect(googleRevoke({ fetchImpl: down.fetchImpl }, "RT")).rejects.toBeInstanceOf(AdsRetryableError);
   });
 
-  it("Meta: a system-user token (no expiry) is kept as it is; revoking drops ads_read only, with the token in the body", async () => {
+  it("Meta: a system-user token (no expiry) is kept as it is; revoking drops ads_read only, with the token in the header", async () => {
     const f = fake(() => json({ access_token: "SYSTEM_USER" }));
     expect(await metaExchangeCode(meta(f.fetchImpl), "CODE", "https://app/cb")).toEqual({ accessToken: "SYSTEM_USER", refreshToken: null, expiresAt: null });
     expect(f.calls).toHaveLength(1);
@@ -101,7 +101,8 @@ describe("sign-in security and lifecycle", () => {
       expect(init?.method).toBe("DELETE");
       expect(u.pathname).toBe("/v25.0/me/permissions/ads_read");
       expect(u.search).toBe("");
-      expect(new URLSearchParams(String(init?.body)).get("access_token")).toBe("T");
+      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer T");
+      expect(String(init?.body ?? "")).toBe("");
       return json({ success: true });
     });
     await metaRevokeAdsRead(meta(del.fetchImpl), "T");
@@ -116,7 +117,8 @@ describe("sign-in security and lifecycle", () => {
         expect(u.pathname).toBe("/v25.0/act_1/insights");
         const form = new URLSearchParams(String(init.body));
         expect(form.get("time_increment")).toBe("1");
-        expect(form.get("access_token")).toBe("T");
+        expect(form.has("access_token")).toBe(false);
+        expect(new Headers(init.headers).get("authorization")).toBe("Bearer T");
         expect(form.has("limit")).toBe(false);
         return json({ report_run_id: "777" });
       }
@@ -209,9 +211,10 @@ describe("a Meta login with nothing to connect says why", () => {
     expect(err).toBeInstanceOf(AdsNoAccountsError);
     expect(err).toMatchObject({ reason: "no_ads_account" });
     // Meta's inspector is asked with the app's own token about the person's.
-    const inspect = f.calls.find((c) => c.url.pathname.endsWith("/debug_token"))!.url.searchParams;
-    expect(inspect.get("input_token")).toBe("USER_T");
-    expect(inspect.get("access_token")).toBe("app1|sec");
+    const inspect = f.calls.find((c) => c.url.pathname.endsWith("/debug_token"))!;
+    expect(inspect.url.searchParams.get("input_token")).toBe("USER_T");
+    expect(inspect.url.searchParams.has("access_token")).toBe(false);
+    expect(new Headers(inspect.init?.headers).get("authorization")).toBe("Bearer app1|sec");
   });
 
   it("the person picked accounts on Facebook's screen and none came through", async () => {

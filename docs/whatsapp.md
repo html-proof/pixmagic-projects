@@ -13,10 +13,10 @@ Everything is off until a merchant turns it on. A store has WhatsApp "on" once i
 | Part | Code |
 | --- | --- |
 | Pure logic: phone numbers, notification kinds, template library, error handling, sending hours, automation conditions | `packages/shared/src/whatsapp.ts` |
-| Meta Graph API client (code exchange, number, templates, send) | `packages/core/src/whatsapp/graph.ts` |
+| Meta Graph API client (code exchange, number, templates, send), on the transport the ads share (`core/metaGraph.ts`: token in the header, paging only to graph.facebook.com) | `packages/core/src/whatsapp/graph.ts` |
 | Encryption, contacts and consent, settings, template sync | `packages/core/src/whatsapp/store.ts` |
 | The message queue and sender | `packages/core/src/whatsapp/messages.ts` |
-| Shopify events → timeline, tracking links, notifications, carts, attribution, shipment poll, GDPR | `packages/core/src/whatsapp/events.ts` |
+| Shopify events → timeline, tracking links, notifications, carts, attribution, shipment poll, GDPR | `packages/core/src/whatsapp/events.ts` (the webhooks' entry point) and `events/`: `orders.ts`, `checkouts.ts`, `timeline.ts`, `shipments.ts`, `redact.ts`, `context.ts` |
 | Meta webhooks (statuses, STOP/START, preferences, template reviews) | `packages/core/src/whatsapp/webhook.ts` |
 | Campaigns, automations, the sweeper and retention | `campaigns.ts`, `automations.ts`, `scheduler.ts` (same folder) |
 | Merchant API | `apps/api/src/routes/whatsapp.ts`, `whatsappOps.ts`, `whatsappCommon.ts` |

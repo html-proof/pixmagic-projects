@@ -6,6 +6,7 @@ export * from "./http.js";
 export * from "./shopify.js";
 export * from "./scopes.js";
 export * from "./tokens.js";
+export * from "./keyRotation.js";
 export * from "./queues.js";
 export * from "./shopifyPayloads.js";
 export * from "./normalize.js";

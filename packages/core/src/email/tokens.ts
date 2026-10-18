@@ -16,7 +16,7 @@ import { logger } from "../logger.js";
 import { raiseAlert } from "../notify.js";
 import { emailAudit, type EmailDeps } from "./common.js";
 import { googleEmailConfig, googleEmailRefresh, googleEmailRevoke, microsoftEmailConfig, microsoftEmailRefresh, OAuthError, type OAuthTokens } from "./oauth.js";
-import { AAD, credentialKeyring, open, seal, sealedKeyVersion } from "./vault.js";
+import { AAD, credentialKeyring, needsRewrap, open, rewrap, seal, sealedKeyVersion } from "./vault.js";
 
 export type AccountRef = Pick<EmailAccount, "id" | "workspaceId" | "connectionMethod" | "emailAddress" | "provider">;
 
@@ -190,7 +190,6 @@ export async function getConnectionHealth(account: Pick<EmailAccount, "id" | "wo
 
 /** Re-wrap every email credential under the active key (after adding a KEK). Returns rows rewritten. */
 export async function reencryptEmailCredentials(): Promise<number> {
-  const { rewrap, needsRewrap } = await import("./vault.js");
   const active = credentialKeyring().active;
   let n = 0;
   for (const c of await systemDb.emailOAuthCredential.findMany({ where: { NOT: { encryptionKeyVersion: active } } })) {
