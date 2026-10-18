@@ -165,11 +165,11 @@ export function envConfig(context: (key: string) => unknown): EnvConfig {
 }
 
 /**
- * The GitHub OIDC token claims the deploy role requires, each exactly (ci-stack.ts). The deploy
- * workflow checks its own token against them before it signs in, and after it deployed that a
- * fresh token still gets the role (scripts/oidc-trust.ts).
+ * The GitHub OIDC token claims the deploy workflow's token carries, which the deploy workflow
+ * checks before it signs in (scripts/oidc-trust.ts). The deploy role requires aud and sub for now;
+ * job_workflow_ref and ref only once a deploy has proven IAM checks them (ci-stack.ts).
  */
-export function githubDeployClaims(cfg: EnvConfig): Record<string, string> {
+export function githubDeployClaims(cfg: EnvConfig): { aud: string; sub: string; job_workflow_ref: string; ref: string } {
   const ref = `refs/heads/${cfg.githubDeployBranch}`;
   return {
     aud: "sts.amazonaws.com",

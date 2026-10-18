@@ -6,11 +6,9 @@ import { type EnvConfig, githubDeployClaims } from "./config.js";
 /**
  * Deploys from GitHub Actions (.github/workflows/aws-deploy.yml) with short-lived credentials:
  * GitHub's OIDC token is exchanged for this role, no AWS access keys are stored in GitHub. Only
- * that workflow file, run from main in the `production` environment of the one repository, may
- * assume it (githubDeployClaims; AWS STS reads GitHub's job_workflow_ref and ref claims since
- * 2026-01), and it can do little itself: hand off to the CDK bootstrap roles (which deploy the
- * stacks), run the migrate action, read what the smoke tests check, and move the `live` aliases
- * back for a rollback.
+ * the `production` environment of the one repository may assume it, and it can do little itself:
+ * hand off to the CDK bootstrap roles (which deploy the stacks), run the migrate action, read what
+ * the smoke tests check, and move the `live` aliases back for a rollback.
  */
 export class CiStack extends Stack {
   constructor(scope: Construct, id: string, cfg: EnvConfig, props: StackProps) {
@@ -19,11 +17,16 @@ export class CiStack extends Stack {
       url: "https://token.actions.githubusercontent.com",
       clientIds: ["sts.amazonaws.com"],
     });
+    // aud and sub only, as before 2026-10-18. The workflow file and branch (job_workflow_ref, ref:
+    // githubDeployClaims) go in only after a deploy has proven, on a role that grants nothing,
+    // that IAM checks them and this workflow meets them: a wrong trust here locks every later
+    // deploy out, and only the account's root can put it back.
+    const { aud, sub } = githubDeployClaims(cfg);
     const role = new iam.Role(this, "DeployRole", {
       roleName: `insights-${cfg.name}-github-deploy`,
       description: `GitHub Actions deploys of ${cfg.githubRepo} (environment ${cfg.name})`,
       assumedBy: new iam.WebIdentityPrincipal(provider.oidcProviderArn, {
-        StringEquals: Object.fromEntries(Object.entries(githubDeployClaims(cfg)).map(([claim, value]) => [`token.actions.githubusercontent.com:${claim}`, value])),
+        StringEquals: { "token.actions.githubusercontent.com:aud": aud, "token.actions.githubusercontent.com:sub": sub },
       }),
     });
     role.addToPolicy(new iam.PolicyStatement({ actions: ["sts:AssumeRole"], resources: [`arn:aws:iam::${cfg.account}:role/cdk-hnb659fds-*`] }));

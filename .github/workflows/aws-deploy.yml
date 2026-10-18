@@ -2,9 +2,9 @@ name: Deploy to AWS
 
 # Push to main (after CI's checks pass on the same commit) or run by hand. Deploys with GitHub's
 # OIDC token exchanged for the role in InsightsCi-production: no AWS keys are stored in GitHub.
-# The role admits only this file run from main. Setup (once): repository → Settings →
-# Environments → "production", with the variable AWS_DEPLOY_ROLE_ARN = the InsightsCi-production
-# stack's DeployRoleArn output. docs/aws-deployment.md has the rest.
+# Setup (once): repository → Settings → Environments → "production", with the variable
+# AWS_DEPLOY_ROLE_ARN = the InsightsCi-production stack's DeployRoleArn output.
+# docs/aws-deployment.md has the rest.
 on:
   workflow_dispatch:
   workflow_run:
@@ -68,11 +68,15 @@ jobs:
         env: { DATABASE_URL: "postgresql://build:build@localhost:5432/build" }
       - name: Unit tests (AWS adapters, CDK)
         run: pnpm --filter @app/aws --filter @infra/cdk test
-      # The deploy role admits only this file run from main (infra/cdk/lib/config.ts,
-      # githubDeployClaims). Checked here first, so a trust this job's own token couldn't meet is
-      # never deployed, and a mismatch reads plainly instead of as STS's "Not authorized".
+      # This job's token carries the claims infra/cdk/lib/config.ts expects (githubDeployClaims):
+      # checked before signing in, so a trust this token couldn't meet is never deployed, and a
+      # mismatch reads plainly instead of as STS's "Not authorized". This file is the default
+      # branch's, the checkout may be an older commit's (a CI run for it that ended after a merge):
+      # without the script there is nothing to check.
       - name: Token claims the deploy role requires
-        run: pnpm --filter @infra/cdk exec tsx scripts/oidc-trust.ts claims --env production
+        run: |
+          if [[ ! -f infra/cdk/scripts/oidc-trust.ts ]]; then echo "::notice::This commit has no infra/cdk/scripts/oidc-trust.ts: nothing to check."; exit 0; fi
+          pnpm --filter @infra/cdk exec tsx scripts/oidc-trust.ts claims --env production
       - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
@@ -116,7 +120,9 @@ jobs:
       - name: The next deploy can still sign in
         id: trust
         env: { ROLE: "${{ vars.AWS_DEPLOY_ROLE_ARN }}" }
-        run: pnpm --filter @infra/cdk exec tsx scripts/oidc-trust.ts assume --role "$ROLE" --region "$AWS_REGION"
+        run: |
+          if [[ ! -f infra/cdk/scripts/oidc-trust.ts ]]; then echo "::notice::This commit has no infra/cdk/scripts/oidc-trust.ts: nothing to check."; exit 0; fi
+          pnpm --filter @infra/cdk exec tsx scripts/oidc-trust.ts assume --role "$ROLE" --region "$AWS_REGION"
       - name: Roll back on failure
         if: failure() && steps.before.outputs.versions != '' && steps.trust.outcome != 'failure'
         run: node infra/cdk/scripts/rollback.mjs --env production --to "${{ steps.before.outputs.versions }}"
