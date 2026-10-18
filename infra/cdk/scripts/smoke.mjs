@@ -5,11 +5,15 @@
 //
 //   node infra/cdk/scripts/smoke.mjs [--env production]
 //
-// Prints one line per check and exits non-zero if any fails.
+// Prints one line per check and exits non-zero if any fails. What isn't a reason to roll back but
+// needs the owner (a provider's secret missing) is a ::warning:: line, shown on the run's summary.
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { resolve4 } from "node:dns/promises";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { connect } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const args = process.argv.slice(2);
 const envName = args[args.indexOf("--env") + 1] && args.includes("--env") ? args[args.indexOf("--env") + 1] : "production";
@@ -230,6 +234,40 @@ await check("functions healthy (live alias, no errors in the last hour)", async 
     out.push(`${part} v${alias.FunctionVersion} errors ${errors}`);
   }
   return out.join(", ");
+});
+// What the app has set up, asked of the cron function the way the deploy runs its migrations
+// ({"action":"config"}): booleans and setting names, never a value. A provider whose public id is in
+// the app's settings (apps/aws/src/settings.ts) but whose secret isn't in insights/<env>/app works
+// nowhere (an ad platform's card says "Coming soon", its connections stop syncing) while every
+// other check passes, so each one is a warning on the run. Not a failure: rolling the release back
+// wouldn't bring the secret, and a provider may be left unset on purpose.
+const annotationProperty = (s) => s.replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A").replace(/:/g, "%3A").replace(/,/g, "%2C");
+await check("app configuration read from the cron function", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "insights-smoke-"));
+  try {
+    const out = join(dir, "config.json");
+    const meta = aws(["lambda", "invoke", "--function-name", `insights-${envName}-cron:live`, "--cli-binary-format", "raw-in-base64-out", "--payload", JSON.stringify({ action: "config" }), out]);
+    const report = JSON.parse(readFileSync(out, "utf8"));
+    expect(!meta.FunctionError, `${meta.FunctionError}: ${report.errorType ?? ""} ${report.errorMessage ?? ""}`);
+    expect(Array.isArray(report.credentials) && report.ads && report.auth, `unexpected answer: ${JSON.stringify(report).slice(0, 200)}`);
+    const half = report.credentials.filter((c) => c.idSet && !c.secretSet);
+    for (const c of half) {
+      console.log(
+        `::warning title=${annotationProperty(`${c.provider} isn't set up`)}::${c.idSetting} is set but ${c.secretSetting} is missing from insights/${envName}/app, so ${c.provider} doesn't work here. ` +
+          `Copy the secret, run node infra/cdk/scripts/put-secrets.mjs --set ${c.secretSetting}, then run Deploy to AWS (docs/aws-deployment.md).`,
+      );
+    }
+    const on = (flags) => Object.keys(flags).filter((k) => flags[k]).join("+") || "none";
+    return [
+      `ads ${on(report.ads.configured)} (restricted ${on(report.ads.restricted)})`,
+      `WhatsApp Embedded Signup ${report.whatsapp.embeddedSignup ? "on" : "off"}`,
+      `email ${on({ gmail: report.email.google, outlook: report.email.microsoft, resend: report.email.resend })}`,
+      `Google sign-in ${report.auth.google ? "on" : "off"}`,
+      half.length ? `missing a secret: ${half.map((c) => c.provider).join(", ")}` : "every provider with an id has its secret",
+    ].join("; ");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 await check("the public address runs this checkout's commit, on the live release", async () => {
   // What a visitor reaches (Cloudflare → CloudFront → the function URL) against what was deployed:
