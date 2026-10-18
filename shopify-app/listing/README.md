@@ -97,10 +97,10 @@ rewritten to match: paste them into the form when the review feedback comes back
 Still open, all for `appstore`'s first submission (checklist
 https://partners.shopify.com/5229240/apps/436930412545/distribution/app-store):
 
-1. **Listing**: the text, category, search terms and the Free plan were saved on 2026-10-18 from
-   `listing-copy.md` (submission 143753). Feature media and at least 3 desktop screenshots are
-   missing: retake them in an App Store workspace (no WhatsApp, Staff or advertising in the menu,
-   and no redrawn Shopify bag; see Screenshots below) rather than reusing the first app's.
+1. **Listing**: done. The text, category, search terms and the Free plan were saved on 2026-10-18
+   from `listing-copy.md` (submission 143753); the feature image and 5 desktop screenshots, with
+   their alt text, on 2026-10-19 (see Screenshots below). The listing's issue list now names only
+   the owner's Test account and Screencast URL.
 2. **Owner**: the protected customer data request (API access requests), the test account
    (Username, Password, Account description) and the screencast URL.
 3. **Run the reviewer path once** on a fresh development store of the Pixmagic organization:
@@ -117,12 +117,17 @@ Approval is what unblocks every live merchant store at once. Budget days to week
 ## Screenshots
 
 Shopify wants 1600 x 900 desktop images of the real UI, one feature each, no browser chrome, no
-personal data, and none repeating the feature image. The current set came from the real UI built
-locally on fictional data (how: `listing-copy.md`). To retake them from production instead, use a
-development store and a 1600 x 900 viewport. Never use a live merchant's store: its order details
-would be in the recent orders list. The store switcher shows a redrawn Shopify bag
-(`apps/web/src/components/ShopifyIcon.tsx`); Shopify's brand rules forbid altered logos, so crop it
-out or switch to the official asset before retaking them.
+personal data, and none repeating the feature image. `appstore`'s set (uploaded 2026-10-19) came
+from the real UI built locally on fictional data, in an App Store workspace (how and what each one
+shows: `listing-copy.md`). To retake them from production instead, use a development store whose
+workspace is an App Store one. Never use a live merchant's store: its order details would be in
+the recent orders list.
+
+No image may show the store switcher: it carries a redrawn Shopify bag
+(`apps/web/src/components/ShopifyIcon.tsx`), and Shopify's brand rules forbid altered logos (the
+feature media guidelines also say no Shopify logo at all). The current set keeps it out of frame:
+the panels are taken in a 1136 px window, where the 896 px panel covers everything right of the
+sidebar, and Team & Access is framed from just under the top bar.
 
 ## Cost
 
