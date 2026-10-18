@@ -5,6 +5,7 @@ import {
   can,
   channelLabel,
   ALL_HISTORY,
+  adsHistoryStart,
   clampCustomRange,
   comparisonImported,
   customRangeProblem,
@@ -13,6 +14,7 @@ import {
   delta,
   encrypt,
   expandScopes,
+  firstWholeDay,
   historyStart,
   isDay,
   keyVersionOf,
@@ -30,6 +32,7 @@ import {
   summarizeJourney,
   verifyShopifyQueryHmac,
   verifyShopifyWebhookHmac,
+  visitsHistoryStart,
   yearEarlier,
   type SaleInput,
 } from "../src/index.js";
@@ -390,6 +393,40 @@ describe("what the dates are compared with", () => {
     // read_all_orders: the whole history, so no comparison is "before the import".
     expect(historyStart(new Date(0), tz, "2026-08-25")).toBe(ALL_HISTORY);
     expect(comparisonImported({ from: "2019-01-01", to: "2019-01-31" }, historyStart(new Date(0), tz, "2026-08-25"))).toBe(true);
+  });
+
+  it("counts store visits from the first whole day after the pixel was put in place", () => {
+    const tz = "Australia/Melbourne";
+    // Put in place at 10:00 on 18 Aug in Melbourne (00:00Z): the 18th was only partly counted.
+    const installed = new Date("2026-08-18T00:00:00Z");
+    expect(firstWholeDay(installed, tz)).toBe("2026-08-19");
+    // At the store's midnight, that day was counted whole.
+    expect(firstWholeDay(new Date("2026-08-18T14:00:00Z"), tz)).toBe("2026-08-19");
+    // Visits on the install day itself don't make it a whole day.
+    expect(visitsHistoryStart(installed, tz, "2026-08-18")).toBe("2026-08-19");
+    expect(visitsHistoryStart(installed, tz, "2026-08-25")).toBe("2026-08-19");
+    expect(visitsHistoryStart(installed, tz, null)).toBe("2026-08-19");
+    // Visits from an earlier day: a pixel already in place before bizinsights recorded it.
+    expect(visitsHistoryStart(installed, tz, "2026-08-10")).toBe("2026-08-10");
+    // No install recorded: the first visit's day.
+    expect(visitsHistoryStart(null, tz, "2026-08-25")).toBe("2026-08-25");
+    expect(visitsHistoryStart(null, tz, null)).toBeNull();
+    // The last 30 days on 17 Oct reach back before a pixel added at noon on 1 Oct: not compared.
+    const added = visitsHistoryStart(new Date("2026-10-01T02:00:00Z"), tz, "2026-10-01");
+    expect(added).toBe("2026-10-02");
+    expect(comparisonImported({ from: "2026-09-17", to: "2026-10-16" }, added)).toBe(false);
+    expect(comparisonImported({ from: "2026-10-02", to: "2026-10-09" }, added)).toBe(true);
+  });
+
+  it("compares ad figures from the latest start among the accounts counted", () => {
+    // Two accounts connected two months apart: only from the later one's start are both in.
+    expect(adsHistoryStart(["2026-05-01", "2026-07-20"])).toBe("2026-07-20");
+    expect(adsHistoryStart(["2026-07-20", "2026-05-01"])).toBe("2026-07-20");
+    // One not synced yet holds no figures, so it changes neither period: left out.
+    expect(adsHistoryStart(["2026-05-01", null])).toBe("2026-05-01");
+    expect(adsHistoryStart([null])).toBeNull();
+    expect(adsHistoryStart([])).toBeNull();
+    expect(comparisonImported({ from: "2026-07-19", to: "2026-08-17" }, adsHistoryStart(["2026-05-01", "2026-07-20"]))).toBe(false);
   });
 });
 

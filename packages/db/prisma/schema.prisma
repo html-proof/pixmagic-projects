@@ -286,6 +286,10 @@ model Store {
   tokenKeyVersion       Int?        @map("token_key_version")
   grantedScopes         String[]    @map("granted_scopes")
   pixelInstalled        Boolean     @default(false) @map("pixel_installed")
+  // From when the web pixel counts the store's visits: when bizinsights first had it in place (the
+  // install_pixel job, or the first event accepted before it), keeping the earliest; null with no
+  // pixel yet. The dashboard compares visits only with dates from then on ("No earlier data").
+  pixelInstalledAt      DateTime?   @map("pixel_installed_at")
   pixelIngestKey        String?     @unique @map("pixel_ingest_key")
   installedAt           DateTime?   @map("installed_at")
   uninstalledAt         DateTime?   @map("uninstalled_at")
@@ -570,6 +574,12 @@ model AdConnection {
   status               String    @default("active")
   lastError            String?   @map("last_error")
   lastSyncedAt         DateTime? @map("last_synced_at")
+  /**
+   * The first day (the account's own, YYYY-MM-DD) from which every day's figures are stored: the
+   * start of the earliest window a sync fetched in full (the first sync fetches 90 days), keeping
+   * the earliest; null before any sync worked. The dashboard compares only from then on.
+   */
+  historyFrom          String?   @map("history_from")
   accessTokenEnc       String    @map("access_token_enc")
   refreshTokenEnc      String?   @map("refresh_token_enc")
   accessTokenExpiresAt DateTime? @map("access_token_expires_at")

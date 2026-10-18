@@ -59,9 +59,29 @@ shipping, taxes and total sales as Shopify's sales reports for the same dates.
   below), `previous.imported` is false: the sales figures of the comparison come back `null`, every
   sales, refund and returning-customer change is `null`, and the dashboard says "No earlier data"
   instead of a change. A period mostly missing would otherwise read as a fake drop (or a fake rise,
-  or 0%). It is the same rule as the month-by-month view's "not imported" months. Store visits and ad
-  figures have their own history and are compared as usual (a comparison before it has 0 visits or
-  spend, so no change is shown).
+  or 0%). It is the same rule as the month-by-month view's "not imported" months.
+
+  Store visits and ad figures have histories of their own, and the same rule applies to each on its
+  own: the funnel and the ads and AdSense modules return their own `historyFrom` and
+  `previous.imported`, and when the comparison starts before their `historyFrom` their comparison
+  figures come back `null`, every change is `null`, and their panels say "No earlier data" with the
+  reason. So the sales can compare while the visits or ads don't, and the other way round. A
+  comparison lying entirely before a history gives no change anyway (the change on 0 is `null`); one
+  that straddles its start would show a rise that never happened.
+
+  - **Visits** count from when the web pixel was put in place (`stores.pixel_installed_at`: the
+    install_pixel job that worked first, or the first events accepted when no install was recorded;
+    kept when the pixel is put in place again, cleared when the store's data is purged). That day was
+    only partly counted, so the funnel's `historyFrom` is the day after, unless the pixel came at
+    midnight (`visitsHistoryStart` in packages/shared/src/dates.ts). A store with visits from an
+    earlier day, or with no install time, starts at its first visit's day.
+  - **Ad figures** start, for each ad account, at the first day of the earliest window a sync fetched
+    in full (`ad_connections.history_from`, in the account's own days, kept at the earliest): the 90
+    days before it was connected (`ADS_BACKFILL_DAYS`). With several accounts added up, `historyFrom`
+    is the latest start among the accounts counted (`adsHistoryStart`): before it, one of them is in
+    the dates picked and missing from the dates compared with. An account not synced yet has no
+    figures in either period and is left out; hidden accounts and accounts in another currency
+    aren't counted, so their starts don't matter.
 
   **Where the imported history starts (`data.historyFrom`):** the first store-local day whose orders
   were all imported. Shopify shares the last 60 days of orders without `read_all_orders`, so each
@@ -191,7 +211,8 @@ Reference implementation: `packages/shared/src/ads.ts`. Connection and sync: `do
 - **Days** are each ad account's own calendar days. They line up with the store's days when the time zones match.
 - **Currency:** only accounts in one currency are added together. That is the store's currency when any connected account uses it, otherwise the first account's. Other accounts are listed and left out.
 - **Platform attribution is never mixed into store sales.** Meta and Google can both claim one sale, and neither matches Shopify's orders exactly.
-- **Freshness:** the last 3 days are refreshed hourly. The last 30 days are fetched again daily, because purchases keep being credited after the click. A first connection fetches 90 days.
+- **Freshness:** the last 3 days are refreshed hourly. The last 30 days are fetched again daily, because purchases keep being credited after the click. A first connection fetches 90 days. An account whose stored history falls short of those 90 days (its first sync failed and a later one worked, or it was connected before `history_from` was recorded) gets the whole 90 days in its daily re-check instead, until they are in (`recheckDays` in packages/core/src/adConnections.ts).
+- **No earlier data:** comparisons go back only to where every counted account's figures start (see Conventions).
 
 ## Ad earnings (Google AdSense)
 
@@ -211,6 +232,7 @@ Stored per AdSense account, site (`DOMAIN_CODE`) and day in `adsense_daily`; nev
 - **Currency** is chosen as for ads: the store's when any AdSense account uses it, otherwise the first known.
 - **Earnings are money in, ad spend is money out:** the two modules are separate and never summed.
 - **Freshness:** as for ads (last 3 days hourly, last 30 days daily, 90 days on first connect).
+- **No earlier data:** as for ads, from where every counted AdSense account's figures start.
 
 ## Funnel (web pixel)
 
@@ -231,6 +253,8 @@ An **exit** is a visit that ended without a purchase. Purchases are not exits.
 Stored paths drop the query string, fragment and market prefix (`/en-au`). Product pages reached through a collection are stored as `/products/<handle>`. Checkout, thank-you, order-status, cart-permalink and account pages carry shopper tokens, so they collapse to `/checkout`, `/cart` and `/account`.
 
 Shoppers who decline analytics consent are not tracked, so funnel numbers are behavioural trends. Today's numbers include visits still in progress, which count as exits from the page they are on. Revenue KPIs never use pixel data.
+
+Visits are compared only from the first whole day after the pixel was put in place (`historyFrom`, see Conventions: "No earlier data").
 
 `funnel_daily` is no longer written or read. It holds whatever the pre-visit pixel recorded and can be dropped once nothing needs that history.
 

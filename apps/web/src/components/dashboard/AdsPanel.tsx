@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { GoogleIcon, MetaIcon } from "@/components/BrandIcons";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { AccountStatus, accountGroups, dailyMoneyColumns } from "./AdsCommon";
+import { noEarlierData } from "./DateRange";
 import { fmtLongDay, fmtMoneyCompact, fmtMoneyWhole, fmtRange, fmtSpan, fmtTimes, plural } from "./format";
 import { Icon } from "./Icons";
 import { GoogleReportPanel } from "./GoogleReport";
@@ -58,6 +59,8 @@ export function AdsDetail({ ov }: { ov: Overview }) {
   const money = (n: number) => fmtMoney(n, a.currency);
   const { left, waiting, failing } = accountGroups(a.accounts);
   const split = a.byProvider.length > 1 ? a.byProvider.map((p) => `${PLATFORM[p.provider].name} ${money(p.spend)}`).join(", ") : null;
+  // Null when every counted account has figures for the dates compared with.
+  const missing = a.previous.imported === false ? noEarlierData(a.historyFrom, "ads") : null;
 
   return (
     <>
@@ -77,7 +80,8 @@ export function AdsDetail({ ov }: { ov: Overview }) {
           ) : (
             <>
               <p>
-                You spent <B>{money(c.spend)}</B> on ads{split ? <> ({split})</> : null}{changeWords(a.deltas.spend, `, the same as ${comparedOnWholeDays(ov)}`, comparedOnWholeDays(ov))}.
+                You spent <B>{money(c.spend)}</B> on ads{split ? <> ({split})</> : null}
+                {missing ? ", with no earlier data to compare" : changeWords(a.deltas.spend, `, the same as ${comparedOnWholeDays(ov)}`, comparedOnWholeDays(ov))}.
               </p>
               <p>
                 They brought <B>{plural(c.clicks, "click")}</B>{c.cpc !== null ? <>, about {money(c.cpc)} each</> : null}
@@ -105,7 +109,7 @@ export function AdsDetail({ ov }: { ov: Overview }) {
         </div>
       </div>
 
-      <Panel id="d-ads-glance" title="At a glance" help={`${fmtRange(ov.range.from, ov.range.to)}, against ${fmtRange(ov.previous.from, ov.previous.to)}. In ${a.currency}.`}>
+      <Panel id="d-ads-glance" title="At a glance" help={`${fmtRange(ov.range.from, ov.range.to)}, against ${fmtRange(ov.previous.from, ov.previous.to)}. ${missing ? `${missing} ` : ""}In ${a.currency}.`}>
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           <Stat label="Ad spend" value={money(c.spend)} note={<NeutralDelta value={a.deltas.spend} />} />
           <Stat label="Clicks" value={fmtNum(c.clicks)} note={<Delta value={a.deltas.clicks} label="vs before" />} />

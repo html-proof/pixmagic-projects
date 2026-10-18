@@ -219,14 +219,34 @@ export function comparisonHelp(p: ShownComparison): string {
   return `${fmtComparison(p)}${how}${p.until ? ", up to the same time of day, as Shopify compares" : ""}`;
 }
 
+/** What has its own history on the dashboard: each is compared only with dates from its start. */
+export type HistorySource = "sales" | "visits" | "ads" | "adsense";
+
 /**
- * Why sales aren't compared when the imported orders don't reach back to the comparison
- * (`previous.imported` false). `historyFrom` is the first day every order was imported from;
- * absent for a member who may not see orders.
+ * Why figures aren't compared when their history doesn't reach back to the comparison
+ * (`previous.imported` false). `historyFrom` is the first day they were all recorded from: the
+ * overview's `data.historyFrom` for sales (absent for a member who may not see orders), the
+ * funnel's or the ad module's own for visits and ads.
  */
-export function noEarlierData(historyFrom: string | null | undefined): string {
-  const start = historyFrom ? `Shopify shared orders from ${fmtDay(historyFrom)} on, so sales aren't compared with dates before that` : "no orders were imported from those dates, so sales aren't compared";
-  return `No earlier data: ${start}. Without access to all orders, Shopify shares only the last 60 days.`;
+export function noEarlierData(historyFrom: string | null | undefined, source: HistorySource = "sales"): string {
+  const day = historyFrom ? fmtDay(historyFrom) : null;
+  switch (source) {
+    case "visits":
+      return day
+        ? `No earlier data: the bizinsights pixel has counted visits since ${day}, so visits aren't compared with dates before that.`
+        : "No earlier data: no visits were counted on those dates, so visits aren't compared.";
+    case "ads":
+    case "adsense": {
+      const what = source === "ads" ? "ad figures" : "AdSense figures";
+      return day
+        ? `No earlier data: bizinsights has your ${what} from ${day} on, so they aren't compared with dates before that. An account brings the 90 days before it was connected.`
+        : `No earlier data: your ${source === "ads" ? "ad accounts haven't" : "AdSense account hasn't"} been read yet, so nothing is compared.`;
+    }
+    default: {
+      const start = day ? `Shopify shared orders from ${day} on, so sales aren't compared with dates before that` : "no orders were imported from those dates, so sales aren't compared";
+      return `No earlier data: ${start}. Without access to all orders, Shopify shares only the last 60 days.`;
+    }
+  }
 }
 
 /**

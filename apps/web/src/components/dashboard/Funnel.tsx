@@ -2,6 +2,7 @@
 import type { FunnelStep, FunnelStepSummary, JourneyPageRow, SectionSummary, SiteSection } from "@app/shared/journey";
 import { fmtNum, fmtPct } from "@/lib/api";
 import { BarRow } from "./Charts";
+import { noEarlierData } from "./DateRange";
 import { plural } from "./format";
 import { AnimatedNumber } from "./Motion";
 import { Badge, Delta, Empty, Panel, Stat } from "./Primitives";
@@ -111,11 +112,13 @@ function StepRow({ s, index, visits, last }: { s: FunnelStepSummary; index: numb
 
 /** The shopping funnel: every visit, how far it got, and how many dropped out where. */
 export function FunnelCard({ m, versus }: { m: FunnelModule; versus?: string }) {
+  // Null when the pixel counted visits on the dates compared with: nothing is compared before it.
+  const missing = m.previous.imported === false ? noEarlierData(m.historyFrom, "visits") : null;
   return (
     <Panel
       id="funnel"
       title="Shopping funnel"
-      help="Every visit the bizinsights pixel tracked in these dates: how far shoppers got, and the page they were on when they left. A tracked visit is one shopper on one day, and shoppers who decline tracking aren't counted, so these are trends, not Shopify's sessions or conversion rate (Shopify Analytics counts every session, ending one after 30 minutes idle)."
+      help={`Every visit the bizinsights pixel tracked in these dates: how far shoppers got, and the page they were on when they left. A tracked visit is one shopper on one day, and shoppers who decline tracking aren't counted, so these are trends, not Shopify's sessions or conversion rate (Shopify Analytics counts every session, ending one after 30 minutes idle).${missing ? ` ${missing}` : ""}`}
     >
       {m.visits === 0 ? (
         <Empty>No storefront visits recorded in these dates yet. They show up here within a minute of someone browsing your store.</Empty>

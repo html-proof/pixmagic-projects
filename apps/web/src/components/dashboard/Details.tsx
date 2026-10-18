@@ -284,7 +284,7 @@ function ShoppersDetail({ ov }: { ov: Overview }) {
   const leak = biggestDropOff(f.steps);
   const where = dropOffSection(leak);
   const bestEntry = bestEntryPage(f.entryPages);
-  const visitsChange = upDown(f.deltas.visits);
+  const visitsChange = f.previous.imported === false ? "no earlier data to compare" : upDown(f.deltas.visits);
   return (
     <>
       <InShort>

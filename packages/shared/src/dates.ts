@@ -211,12 +211,44 @@ export const ALL_HISTORY = "1970-01-01";
 export function historyStart(importedFrom: Date | null, timeZone: string, oldestOrderDay: string | null): string | null {
   let from: string | null = null;
   if (importedFrom && importedFrom.getTime() <= 0) from = ALL_HISTORY;
-  else if (importedFrom) {
-    const day = localDay(importedFrom, timeZone);
-    from = localTime(importedFrom, timeZone) === "00:00:00" ? day : addDays(day, 1);
-  }
+  else if (importedFrom) from = firstWholeDay(importedFrom, timeZone);
   if (from === null || oldestOrderDay === null) return from ?? oldestOrderDay;
   return oldestOrderDay < from ? oldestOrderDay : from;
+}
+
+/**
+ * The first store-local day counted in full by something that started counting at `since`: the
+ * day after the one it started on, which was only partly counted, unless it started at midnight.
+ */
+export function firstWholeDay(since: Date, timeZone: string): string {
+  const day = localDay(since, timeZone);
+  return localTime(since, timeZone) === "00:00:00" ? day : addDays(day, 1);
+}
+
+/**
+ * The first store-local day whose store visits were all counted, or null with none. The web pixel
+ * counts from when it was put in place (`pixelInstalledAt`, stores.pixel_installed_at), so that
+ * day was only partly counted and the day after is the first whole one. A store with visits from
+ * an earlier day (a pixel already in place before bizinsights recorded it), or with no install
+ * time recorded, starts at its first visit's day instead.
+ */
+export function visitsHistoryStart(pixelInstalledAt: Date | null, timeZone: string, oldestVisitDay: string | null): string | null {
+  if (!pixelInstalledAt) return oldestVisitDay;
+  if (oldestVisitDay !== null && oldestVisitDay < localDay(pixelInstalledAt, timeZone)) return oldestVisitDay;
+  return firstWholeDay(pixelInstalledAt, timeZone);
+}
+
+/**
+ * The first day every counted ad account has its figures from (ad_connections.history_from, each
+ * account's own day): the latest of their starts, since a comparison before one account's start
+ * would count that account in the dates picked and not in the dates compared with, a rise that
+ * never happened. An account with no start yet has no figures stored, so it changes neither
+ * period and is left out. Null when no account has a start.
+ */
+export function adsHistoryStart(starts: Array<string | null>): string | null {
+  let latest: string | null = null;
+  for (const s of starts) if (s !== null && (latest === null || s > latest)) latest = s;
+  return latest;
 }
 
 /**

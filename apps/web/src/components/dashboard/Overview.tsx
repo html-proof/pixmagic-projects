@@ -72,7 +72,9 @@ export function businessHealth(ov: Overview, currency: string): Check[] {
   }
   const f = m.funnel;
   if (f && f.visits > 0) {
-    out.push({ id: "conversion", topic: "shoppers", area: "Tracked visits that bought", health: gradeTrend(f.deltas.conversionRate, running), text: `${fmtPct(f.conversionRate)} of ${plural(f.visits, "visit")} ended in a purchase${changeWords(f.deltas.conversionRate, level(on), on)}.` });
+    // Before the pixel counted visits there is nothing to compare with, as for sales.
+    const change = f.previous.imported === false ? ", with no earlier data to compare" : changeWords(f.deltas.conversionRate, level(on), on);
+    out.push({ id: "conversion", topic: "shoppers", area: "Tracked visits that bought", health: gradeTrend(f.deltas.conversionRate, running), text: `${fmtPct(f.conversionRate)} of ${plural(f.visits, "visit")} ended in a purchase${change}.` });
   }
   const cu = m.customers;
   if (cu && cu.current.returningCustomerRate !== null) {
@@ -346,6 +348,14 @@ export function OverviewDetail({ ov, currency, onOpen }: { ov: Overview; currenc
   const f = m.funnel;
   const y = s?.year;
   const range = fmtRange(ov.range.from, ov.range.to);
+  // Why the figures with a history of their own aren't compared, if they aren't (one sentence for
+  // ads and AdSense when their figures start on the same day).
+  const adsMissing = m.ads?.previous.imported === false ? noEarlierData(m.ads.historyFrom, "ads") : null;
+  const notCompared = [
+    f?.previous.imported === false ? noEarlierData(f.historyFrom, "visits") : null,
+    adsMissing,
+    m.adsense?.previous.imported === false && !(adsMissing && m.adsense.historyFrom === m.ads?.historyFrom) ? noEarlierData(m.adsense.historyFrom, "adsense") : null,
+  ].filter(Boolean);
   // Gross sales, discounts, tax, shipping and total sales, and returns, only for someone who may
   // see them (Team & Access).
   const bd = s ? breakdownOf(s.current) : null;
@@ -418,7 +428,7 @@ export function OverviewDetail({ ov, currency, onOpen }: { ov: Overview; currenc
           title="Every key figure"
           help={`${range}, against ${comparisonHelp(ov.previous)}.${ov.previous.imported === false ? ` ${noEarlierData(ov.data?.historyFrom)}` : ""}${
             ov.previous.until && (m.ads || m.adsense) ? " Ad platforms report whole days, so their figures compare whole days." : ""
-          }`}
+          }${notCompared.map((x) => ` ${x}`).join("")}`}
         >
           <div className="-mx-1 overflow-x-auto">
             <table className="w-full min-w-[26rem] text-sm">
@@ -449,11 +459,11 @@ export function OverviewDetail({ ov, currency, onOpen }: { ov: Overview; currenc
                 <Row label="Orders" now={fmtNum(s.current.orders)} before={s.previous ? fmtNum(s.previous.orders) : null} change={<Change value={s.deltas.orders} />} />
                 <Row label="Average order" now={s.current.averageOrderValue !== null ? money(s.current.averageOrderValue) : "—"} before={s.previous && s.previous.averageOrderValue !== null ? money(s.previous.averageOrderValue) : null} change={<Change value={s.deltas.averageOrderValue} />} />
                 <Row label="Items sold" now={fmtNum(s.current.units)} />
-                {f && <Row label="Tracked visits (pixel)" now={fmtNum(f.visits)} before={fmtNum(f.previous.visits)} change={<Change value={f.deltas.visits} />} />}
+                {f && <Row label="Tracked visits (pixel)" now={fmtNum(f.visits)} before={f.previous.visits !== null ? fmtNum(f.previous.visits) : null} change={<Change value={f.deltas.visits} />} />}
                 {f && <Row label="Tracked visits that bought" now={fmtPct(f.conversionRate)} before={f.previous.conversionRate !== null ? fmtPct(f.previous.conversionRate) : null} change={<Change value={f.deltas.conversionRate} />} />}
-                {m.ads && <Row label={`Ad spend (${m.ads.currency})`} now={fmtMoney(m.ads.current.spend, m.ads.currency)} before={fmtMoney(m.ads.previous.spend, m.ads.currency)} change={<Change value={m.ads.deltas.spend} invert />} />}
+                {m.ads && <Row label={`Ad spend (${m.ads.currency})`} now={fmtMoney(m.ads.current.spend, m.ads.currency)} before={m.ads.previous.spend !== null ? fmtMoney(m.ads.previous.spend, m.ads.currency) : null} change={<Change value={m.ads.deltas.spend} invert />} />}
                 {m.ads && <Row label="Return on ad spend" now={m.ads.current.roas !== null ? `${m.ads.current.roas.toFixed(2)}×` : "—"} before={m.ads.previous.roas !== null ? `${m.ads.previous.roas.toFixed(2)}×` : null} change={<Change value={m.ads.deltas.roas} />} />}
-                {m.adsense && <Row label={`AdSense earnings (${m.adsense.currency})`} now={fmtMoney(m.adsense.current.earnings, m.adsense.currency)} before={fmtMoney(m.adsense.previous.earnings, m.adsense.currency)} change={<Change value={m.adsense.deltas.earnings} />} />}
+                {m.adsense && <Row label={`AdSense earnings (${m.adsense.currency})`} now={fmtMoney(m.adsense.current.earnings, m.adsense.currency)} before={m.adsense.previous.earnings !== null ? fmtMoney(m.adsense.previous.earnings, m.adsense.currency) : null} change={<Change value={m.adsense.deltas.earnings} />} />}
                 {m.customers && m.customers.current.returningCustomerRate !== null && <Row label="Returning customers" now={fmtPct(m.customers.current.returningCustomerRate)} before={m.customers.previous.returningCustomerRate !== null ? fmtPct(m.customers.previous.returningCustomerRate) : null} />}
               </tbody>
             </table>

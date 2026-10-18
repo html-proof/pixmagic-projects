@@ -2418,7 +2418,21 @@ describe("moving to a new address", () => {
     await runSync({ storeId: store.id, kind: "install_pixel", syncJobId: job.id }, deps);
     expect((await systemDb.store.findUniqueOrThrow({ where: { id: store.id } })).pixelInstalled).toBe(true);
     expect((await systemDb.syncJob.findUniqueOrThrow({ where: { id: job.id } })).status).toBe("succeeded");
+    return store;
   }
+
+  it("records when the pixel started counting visits, and keeps that time when it is put in place again", async () => {
+    pixelShop(null);
+    const before = Date.now();
+    const store = await installPixel();
+    const first = (await systemDb.store.findUniqueOrThrow({ where: { id: store.id } })).pixelInstalledAt;
+    expect(first!.getTime()).toBeGreaterThanOrEqual(before);
+    // Put in place again (a move to a new address): the visits counted since the first time are kept.
+    pixelShop(here);
+    const job = await systemDb.syncJob.create({ data: { workspaceId: store.workspaceId, storeId: store.id, kind: "install_pixel" } });
+    await runSync({ storeId: store.id, kind: "install_pixel", syncJobId: job.id }, deps);
+    expect((await systemDb.store.findUniqueOrThrow({ where: { id: store.id } })).pixelInstalledAt).toEqual(first);
+  });
 
   it("points a pixel made for the old host at this one", async () => {
     // Before: TAKEN was taken as done, so the pixel kept posting to the old host for good.

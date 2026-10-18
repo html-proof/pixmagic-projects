@@ -67,10 +67,10 @@ import {
   type BlobStore,
   type Coord,
   ADS_RECENT_DAYS,
-  ADS_RECHECK_DAYS,
   AdsApiError,
   AdsAuthError,
   enqueueAdSync,
+  recheckDays,
   syncAdConnection,
   type AdsSyncData,
   type FetchLike,
@@ -574,6 +574,9 @@ export async function runSync(data: SyncJobData, deps: WorkerDeps) {
         }
       }
       await systemDb.store.update({ where: { id: store.id }, data: { pixelInstalled: true } });
+      // From now on the pixel counts visits, for the dashboard's "No earlier data". A pixel put in
+      // place again (a move, a reinstall) keeps the first time: the visits since then are kept.
+      await systemDb.store.updateMany({ where: { id: store.id, pixelInstalledAt: null }, data: { pixelInstalledAt: new Date() } });
       break;
     }
   }
@@ -1278,12 +1281,13 @@ const ADS_SPREAD_S = 300;
 /**
  * Keep connected ad accounts current. Runs on the 15-minute tick; leases make most ticks a no-op.
  * Spend for today changes all day; conversions are attributed days later, so once a day the last
- * 30 days are fetched again. Accounts waiting for a reconnect are left alone.
+ * 30 days are fetched again (the whole 90 while an account's history falls short, see
+ * `recheckDays`). Accounts waiting for a reconnect are left alone.
  */
 export async function scheduleAdsSync(deps: WorkerDeps) {
   const all = await systemDb.adConnection.findMany({
     where: { enabled: true, status: { in: ["active", "error"] } },
-    select: { id: true, timezone: true, storeId: true },
+    select: { id: true, timezone: true, storeId: true, lastSyncedAt: true, historyFrom: true },
   });
   // A store that uninstalled the app stops pulling ad data with the tokens it left behind; they are
   // revoked when its data is purged (shop/redact), or used again if it reinstalls before that.
@@ -1298,7 +1302,7 @@ export async function scheduleAdsSync(deps: WorkerDeps) {
     const lease = (await deps.coord.acquire(wide, ADS_RECHECK_LEASE_MS)) ? wide : (await deps.coord.acquire(recent, ADS_RECENT_LEASE_MS)) ? recent : null;
     if (!lease) continue;
     try {
-      await enqueueAdSync(deps.queues, c, lease === wide ? ADS_RECHECK_DAYS : ADS_RECENT_DAYS, { delaySeconds: Math.floor(Math.random() * ADS_SPREAD_S) });
+      await enqueueAdSync(deps.queues, c, lease === wide ? recheckDays(c) : ADS_RECENT_DAYS, { delaySeconds: Math.floor(Math.random() * ADS_SPREAD_S) });
       sent++;
     } catch (err) {
       await deps.coord.release(lease).catch(() => {});

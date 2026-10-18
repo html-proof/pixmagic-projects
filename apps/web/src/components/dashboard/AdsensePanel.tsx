@@ -3,6 +3,7 @@ import Link from "next/link";
 import { GoogleIcon } from "@/components/BrandIcons";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { AccountStatus, accountGroups, dailyMoneyColumns } from "./AdsCommon";
+import { noEarlierData } from "./DateRange";
 import { fmtLongDay, fmtMoneyCompact, fmtMoneyWhole, fmtRange, fmtSpan, plural } from "./format";
 import { Icon } from "./Icons";
 import { B, changeWords, comparedOnWholeDays } from "./Narrative";
@@ -54,6 +55,8 @@ export function AdsenseDetail({ ov }: { ov: Overview }) {
   const { left, waiting, failing } = accountGroups(a.accounts);
   const empty = c.earnings === 0 && c.pageViews === 0;
   const bySite = a.sites.length > 1 || (a.sites.length === 1 && a.sites[0]!.site !== "");
+  // Null when every counted account has figures for the dates compared with.
+  const missing = a.previous.imported === false ? noEarlierData(a.historyFrom, "adsense") : null;
 
   return (
     <>
@@ -73,7 +76,8 @@ export function AdsenseDetail({ ov }: { ov: Overview }) {
           ) : (
             <>
               <p>
-                Ads shown on your site earned <B>{money(c.earnings)}</B>{changeWords(a.deltas.earnings, `, the same as ${comparedOnWholeDays(ov)}`, comparedOnWholeDays(ov))}.
+                Ads shown on your site earned <B>{money(c.earnings)}</B>
+                {missing ? ", with no earlier data to compare" : changeWords(a.deltas.earnings, `, the same as ${comparedOnWholeDays(ov)}`, comparedOnWholeDays(ov))}.
               </p>
               <p>
                 That came from <B>{plural(c.pageViews, "page view")}</B>
@@ -94,7 +98,7 @@ export function AdsenseDetail({ ov }: { ov: Overview }) {
         </div>
       </div>
 
-      <Panel id="d-adsense-glance" title="At a glance" help={`${fmtRange(ov.range.from, ov.range.to)}, against ${fmtRange(ov.previous.from, ov.previous.to)}. In ${a.currency}.`}>
+      <Panel id="d-adsense-glance" title="At a glance" help={`${fmtRange(ov.range.from, ov.range.to)}, against ${fmtRange(ov.previous.from, ov.previous.to)}. ${missing ? `${missing} ` : ""}In ${a.currency}.`}>
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           <Stat label="Estimated earnings" value={money(c.earnings)} note={<Delta value={a.deltas.earnings} label="vs before" />} />
           <Stat label="Page views" value={fmtNum(c.pageViews)} note={<Delta value={a.deltas.pageViews} label="vs before" />} />

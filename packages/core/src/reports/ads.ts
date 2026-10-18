@@ -4,7 +4,9 @@ import {
   adTotals,
   adsenseSeries,
   adsenseTotals,
+  adsHistoryStart,
   campaignTotals,
+  comparisonImported,
   delta,
   siteTotals,
   type AdDayRow,
@@ -22,12 +24,25 @@ import type { Scope } from "./common.js";
  * The days to read: the range and its comparison, each on its own. The comparison needn't sit just
  * before the range (a year earlier, dates picked, even overlapping it), so one span from the
  * comparison's start to the range's end could read a year of rows, or miss a comparison after it.
- * Ad platforms report whole days, so a running comparison's `until` doesn't apply.
+ * Ad platforms report whole days, so a running comparison's `until` doesn't apply. A comparison
+ * from before the accounts' history isn't read at all (see `adsHistory`).
  */
-const rangeAndComparison = (range: DateRange, previous: DateRange) => [
+const rangeAndComparison = (range: DateRange, previous: DateRange, compared: boolean) => [
   { day: { gte: range.from, lte: range.to } },
-  { day: { gte: previous.from, lte: previous.to } },
+  ...(compared ? [{ day: { gte: previous.from, lte: previous.to } }] : []),
 ];
+
+/**
+ * From which day the counted accounts all have their figures (`historyFrom`: the latest of their
+ * starts, see `adsHistoryStart`), and whether the comparison is from then on (`imported`). An
+ * account connected today brings the 90 days before it: a comparison reaching back further would
+ * count it in the dates picked and not in the dates compared with, a rise that never happened, so
+ * its figures and changes are left out (null) and the page says there is no earlier data.
+ */
+function adsHistory(counted: Array<{ historyFrom: string | null }>, previous: DateRange) {
+  const historyFrom = adsHistoryStart(counted.map((c) => c.historyFrom));
+  return { historyFrom, imported: comparisonImported(previous, historyFrom) };
+}
 
 /**
  * What the store's connected ad accounts report for these dates. Only accounts in one currency
@@ -39,14 +54,15 @@ export async function adsModule(tx: Tx, { ws, storeId }: Scope, range: DateRange
   const conns = await tx.adConnection.findMany({
     // Spend only: AdSense accounts earn money for the store and have their own module below.
     where: { workspaceId: ws, storeId, enabled: true, provider: { in: ["meta", "google"] } },
-    select: { id: true, provider: true, accountId: true, accountName: true, currency: true, status: true, lastSyncedAt: true, lastError: true },
+    select: { id: true, provider: true, accountId: true, accountName: true, currency: true, status: true, lastSyncedAt: true, lastError: true, historyFrom: true },
     orderBy: [{ provider: "asc" }, { createdAt: "asc" }],
   });
   if (!conns.length) return null;
   const currency = conns.some((c) => c.currency === storeCurrency) ? storeCurrency : (conns.find((c) => c.currency)?.currency ?? storeCurrency);
   const counted = conns.filter((c) => (c.currency ?? currency) === currency);
+  const { historyFrom, imported } = adsHistory(counted, previous);
   const raw = await tx.adCampaignDaily.findMany({
-    where: { workspaceId: ws, storeId, connectionId: { in: counted.map((c) => c.id) }, OR: rangeAndComparison(range, previous) },
+    where: { workspaceId: ws, storeId, connectionId: { in: counted.map((c) => c.id) }, OR: rangeAndComparison(range, previous, imported) },
   });
   const rows: AdDayRow[] = raw.map((r) => ({
     provider: r.provider as AdSpendProvider,
@@ -80,12 +96,16 @@ export async function adsModule(tx: Tx, { ws, storeId }: Scope, range: DateRange
       counted: counted.some((x) => x.id === c.id),
     })),
     current,
-    previous: { spend: before.spend, clicks: before.clicks, conversions: before.conversions, conversionValue: before.conversionValue, roas: before.roas },
+    /** The first day every counted account has figures from (null: none synced yet). */
+    historyFrom,
+    previous: imported
+      ? { spend: before.spend, clicks: before.clicks, conversions: before.conversions, conversionValue: before.conversionValue, roas: before.roas, imported }
+      : { spend: null, clicks: null, conversions: null, conversionValue: null, roas: null, imported },
     deltas: {
-      spend: delta(current.spend, before.spend),
-      clicks: delta(current.clicks, before.clicks),
-      conversions: delta(current.conversions, before.conversions),
-      roas: delta(current.roas, before.roas),
+      spend: imported ? delta(current.spend, before.spend) : null,
+      clicks: imported ? delta(current.clicks, before.clicks) : null,
+      conversions: imported ? delta(current.conversions, before.conversions) : null,
+      roas: imported ? delta(current.roas, before.roas) : null,
     },
     series: adSeries(cur, range),
     byProvider: providers.map((p) => ({ provider: p, ...adTotals(cur.filter((r) => r.provider === p)) })),
@@ -105,14 +125,15 @@ export async function adsModule(tx: Tx, { ws, storeId }: Scope, range: DateRange
 export async function adsenseModule(tx: Tx, { ws, storeId }: Scope, range: DateRange, previous: DateRange, storeCurrency: string, netSales: number | null) {
   const conns = await tx.adConnection.findMany({
     where: { workspaceId: ws, storeId, enabled: true, provider: "adsense" },
-    select: { id: true, accountId: true, accountName: true, currency: true, status: true, lastSyncedAt: true },
+    select: { id: true, accountId: true, accountName: true, currency: true, status: true, lastSyncedAt: true, historyFrom: true },
     orderBy: { createdAt: "asc" },
   });
   if (!conns.length) return null;
   const currency = conns.some((c) => c.currency === storeCurrency) ? storeCurrency : (conns.find((c) => c.currency)?.currency ?? storeCurrency);
   const counted = conns.filter((c) => (c.currency ?? currency) === currency);
+  const { historyFrom, imported } = adsHistory(counted, previous);
   const raw = await tx.adsenseDaily.findMany({
-    where: { workspaceId: ws, storeId, connectionId: { in: counted.map((c) => c.id) }, OR: rangeAndComparison(range, previous) },
+    where: { workspaceId: ws, storeId, connectionId: { in: counted.map((c) => c.id) }, OR: rangeAndComparison(range, previous, imported) },
   });
   const rows: AdsenseDayRow[] = raw.map((r) => ({
     accountId: r.accountId,
@@ -140,12 +161,16 @@ export async function adsenseModule(tx: Tx, { ws, storeId }: Scope, range: DateR
       counted: counted.some((x) => x.id === c.id),
     })),
     current,
-    previous: { earnings: before.earnings, pageViews: before.pageViews, clicks: before.clicks, pageRpm: before.pageRpm },
+    /** The first day every counted account has figures from (null: none synced yet). */
+    historyFrom,
+    previous: imported
+      ? { earnings: before.earnings, pageViews: before.pageViews, clicks: before.clicks, pageRpm: before.pageRpm, imported }
+      : { earnings: null, pageViews: null, clicks: null, pageRpm: null, imported },
     deltas: {
-      earnings: delta(current.earnings, before.earnings),
-      pageViews: delta(current.pageViews, before.pageViews),
-      clicks: delta(current.clicks, before.clicks),
-      pageRpm: delta(current.pageRpm, before.pageRpm),
+      earnings: imported ? delta(current.earnings, before.earnings) : null,
+      pageViews: imported ? delta(current.pageViews, before.pageViews) : null,
+      clicks: imported ? delta(current.clicks, before.clicks) : null,
+      pageRpm: imported ? delta(current.pageRpm, before.pageRpm) : null,
     },
     series: adsenseSeries(cur, range),
     sites: siteTotals(cur, 10),

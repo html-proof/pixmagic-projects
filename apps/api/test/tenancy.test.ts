@@ -166,7 +166,8 @@ describe("pixel ingest", () => {
       ["content", "/pages/about", "search", "/search", 0, 2],
       ["checkout", "/checkout", "checkout", "/checkout", 4, 1],
     ]);
-    expect((await systemDb.store.findUniqueOrThrow({ where: { id: storeA.id } })).pixelInstalled).toBe(true);
+    // The pixel counts from the first events accepted when no install was recorded.
+    expect(await systemDb.store.findUniqueOrThrow({ where: { id: storeA.id } })).toMatchObject({ pixelInstalled: true, pixelInstalledAt: expect.any(Date) });
     expect((await post("nope", [ev("11", "page_viewed", 0, "c1")])).statusCode).toBe(404);
     expect((await post(storeA.pixelIngestKey!, [{ ...ev("12", "page_viewed", 0, "c1"), name: "made_up" }])).statusCode).toBe(400);
     // Funnel module still hidden: write_pixels/read_customer_events not granted.
@@ -186,7 +187,16 @@ describe("pixel ingest", () => {
     const res = await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${store.id}/overview?preset=custom&from=2026-10-01&to=2026-10-01`, headers: u.headers });
     expect(res.statusCode).toBe(200);
     const f = res.json().modules.funnel;
-    expect(f).toMatchObject({ visits: 3, purchases: 1, exits: 2, pagesPerVisit: 2, previous: { visits: 0, conversionRate: null }, deltas: { visits: null, conversionRate: null } });
+    // The day before is before the pixel counted any visit: nothing to compare with, rather than 0.
+    expect(f).toMatchObject({
+      visits: 3,
+      purchases: 1,
+      exits: 2,
+      pagesPerVisit: 2,
+      historyFrom: "2026-10-01",
+      previous: { visits: null, conversionRate: null, imported: false },
+      deltas: { visits: null, conversionRate: null },
+    });
     expect(f.conversionRate).toBeCloseTo(1 / 3);
     expect(f.steps.map((s: { step: string; reached: number; left: number }) => [s.step, s.reached, s.left])).toEqual([
       ["visited", 3, 1],

@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { GoogleIcon, MetaIcon } from "@/components/BrandIcons";
 import { Alert } from "@/components/ui";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
+import { noEarlierData } from "./DateRange";
 import { fmtMoneyCompact, fmtRange, fmtTimes, plural } from "./format";
 import { Icon } from "./Icons";
 import { LineChart, type LineSeries } from "./LineChart";
@@ -132,7 +133,7 @@ function StatusNotes({ accounts, manage }: { accounts: Account[]; manage: boolea
   );
 }
 
-function GroupCard({ title, sub, onOpen, children, testid }: { title: ReactNode; sub: ReactNode; onOpen: () => void; children: ReactNode; testid: string }) {
+function GroupCard({ title, sub, onOpen, children, note, testid }: { title: ReactNode; sub: ReactNode; onOpen: () => void; children: ReactNode; note?: string | null; testid: string }) {
   return (
     <div className="card min-w-0" data-testid={testid}>
       <div className="flex flex-wrap items-start justify-between gap-2">
@@ -145,6 +146,7 @@ function GroupCard({ title, sub, onOpen, children, testid }: { title: ReactNode;
         </button>
       </div>
       <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">{children}</div>
+      {note && <p className="mt-3 text-xs text-muted">{note}</p>}
     </div>
   );
 }
@@ -154,7 +156,13 @@ function SpendKpis({ a, onOpen }: { a: AdsModule; onOpen: () => void }) {
   const money = (n: number | null) => (n === null ? NA : fmtMoney(n, a.currency));
   const names = a.byProvider.map((p) => PLATFORM[p.provider].name).join(" and ") || "Meta Ads and Google Ads";
   return (
-    <GroupCard title="Ad spend" sub={`Money you paid ${names}, in ${a.currency}`} onOpen={onOpen} testid="ads-spend">
+    <GroupCard
+      title="Ad spend"
+      sub={`Money you paid ${names}, in ${a.currency}`}
+      onOpen={onOpen}
+      note={a.previous.imported === false ? noEarlierData(a.historyFrom, "ads") : null}
+      testid="ads-spend"
+    >
       <Stat label="Ad spend" value={money(c.spend)} note={<NeutralDelta value={a.deltas.spend} />} />
       <Stat label="Impressions" value={fmtNum(c.impressions)} note="Times your ads were shown" />
       <Stat label="Clicks" value={fmtNum(c.clicks)} note={<Delta value={a.deltas.clicks} label="vs before" />} />
@@ -171,7 +179,13 @@ function EarningsKpis({ a, onOpen }: { a: AdsenseModule; onOpen: () => void }) {
   const c = a.current;
   const money = (n: number | null) => (n === null ? NA : fmtMoney(n, a.currency));
   return (
-    <GroupCard title="Ad earnings" sub={`Money Google AdSense pays you for ads on your site, in ${a.currency}`} onOpen={onOpen} testid="ads-earnings">
+    <GroupCard
+      title="Ad earnings"
+      sub={`Money Google AdSense pays you for ads on your site, in ${a.currency}`}
+      onOpen={onOpen}
+      note={a.previous.imported === false ? noEarlierData(a.historyFrom, "adsense") : null}
+      testid="ads-earnings"
+    >
       <Stat label="Estimated earnings" value={money(c.earnings)} note={<Delta value={a.deltas.earnings} label="vs before" />} />
       <Stat label="Page views" value={fmtNum(c.pageViews)} note={<Delta value={a.deltas.pageViews} label="vs before" />} />
       <Stat label="Impressions" value={fmtNum(c.impressions)} note="Ads shown on your site" />

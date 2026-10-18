@@ -282,7 +282,8 @@ See `docs/kpis.md`, "Ads" and "Ad earnings (AdSense)". In short:
 - **Spend, views and clicks** are exactly what the platforms bill and count.
 - **Purchases and their value** are each platform's **own attribution**: Meta and Google can both claim the same sale, so they are never added into the store's sales.
 - Only accounts in one currency are added together: the store's currency, when any account uses it. Others are listed as left out.
-- Recent days are refreshed hourly. The last 30 days are fetched again daily, because the platforms keep crediting purchases for days after a click.
+- Recent days are refreshed hourly. The last 30 days are fetched again daily, because the platforms keep crediting purchases for days after a click. An account whose first 90 days never came in gets all 90 in its daily re-check, until they do.
+- Each account remembers the first day its figures are stored from (`ad_connections.history_from`). The dashboard compares ad figures only from where every counted account's figures start, and says "No earlier data" before that (docs/kpis.md).
 - Meta's purchases are counted with `use_unified_attribution_setting=true`: each ad set's own attribution setting, the way Ads Manager shows them.
 
 ## The Meta Ads report (dashboard → Ads → "Meta Ads report")

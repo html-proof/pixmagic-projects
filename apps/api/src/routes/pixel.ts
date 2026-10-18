@@ -132,6 +132,11 @@ export function pixelRoutes(app: App, deps: Deps) {
     if (accepted && !store.pixelInstalled) {
       await systemDb.store.update({ where: { id: store.id }, data: { pixelInstalled: true } });
     }
+    // A pixel in place before bizinsights recorded one (made before the record existed, or kept
+    // through a reinstall): its visits count from now, for the dashboard's "No earlier data".
+    if (accepted && !store.pixelInstalledAt) {
+      await systemDb.store.updateMany({ where: { id: store.id, pixelInstalledAt: null }, data: { pixelInstalledAt: new Date() } });
+    }
     return c.json({ ok: true, accepted });
   });
 }

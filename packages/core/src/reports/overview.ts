@@ -124,7 +124,7 @@ export async function storeOverview(tx: Tx, store: Store, dates: { range: DateRa
 
   if (enabled.has("top_products")) modules.top_products = await topProducts(tx, scope, range);
 
-  if (enabled.has("funnel")) modules.funnel = await funnel(tx, scope, range, previous, store.timezone);
+  if (enabled.has("funnel")) modules.funnel = await funnel(tx, scope, range, previous, store);
 
   // Not a Shopify capability: present once an ad account is connected to the store.
   const netSales = (modules.sales_overview as { current?: { netSales?: number } } | undefined)?.current?.netSales ?? null;

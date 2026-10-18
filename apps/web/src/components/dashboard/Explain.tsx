@@ -28,7 +28,7 @@ const TERMS: Record<Topic, Terms> = {
     ["Looks good", "Up or level on the dates compared with, refunds at 5% of sales or less, nothing low or sold out, nothing waiting to ship."],
     ["For your info", "Facts with no good or bad, like your best seller, or numbers with nothing earlier to compare with."],
     ["What it's compared with", "You choose beside the dates. Previous period: the same number of days just before (last 30 days against the 30 days before that, last month against the whole month before). Previous year: the same dates a year earlier. Or pick dates of your own. While the dates include today, the comparison is counted up to the same time of day, as Shopify does: today until 4 pm against yesterday until 4 pm."],
-    ["No earlier data", "Shown instead of a change when the dates compared with reach back before the orders Shopify shared with bizinsights: without access to all orders, Shopify shares only the 60 days before the first import, so a change against earlier dates would read as a drop that never happened."],
+    ["No earlier data", "Shown instead of a change when the dates compared with reach back before what bizinsights has: the orders Shopify shared (without access to all orders, only the 60 days before the first import), visits since the bizinsights pixel was added, and ad figures from 90 days before each ad account was connected. A change against earlier dates would read as a drop or a rise that never happened."],
   ],
   sales: [
     ["Same as Shopify", "Every sales figure here is worked out from Shopify's own sales records, the way Shopify's reports do, so the same dates show the same numbers in both. Test orders aren't counted."],

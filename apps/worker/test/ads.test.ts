@@ -66,6 +66,30 @@ describe("ad account sync", () => {
     const after = await systemDb.adConnection.findUniqueOrThrow({ where: { id: conn.id } });
     expect(after.status).toBe("active");
     expect(after.lastSyncedAt).toBeTruthy();
+    // Every day from the window's start on is stored: the account's history starts there.
+    expect(after.historyFrom).toBe(addDays(today(), -2));
+  });
+
+  it("keeps the earliest window any sync fetched in full as where the account's history starts", async () => {
+    const conn = await connection("meta");
+    fetchImpl = async () => json({ data: [] });
+    const sync = async (days: number) => {
+      const { msg, m } = message({ kind: "ads", connectionId: conn.id, since: addDays(today(), -(days - 1)), until: today() });
+      await consume("sync", msg, deps);
+      expect(m.acked).toBe(true);
+      return (await systemDb.adConnection.findUniqueOrThrow({ where: { id: conn.id } })).historyFrom;
+    };
+    // The first sync's 90 days, even with nothing spent in them.
+    expect(await sync(90)).toBe(addDays(today(), -89));
+    // The hourly refresh and the daily re-check fetch fewer days: the start stays.
+    expect(await sync(3)).toBe(addDays(today(), -89));
+    expect(await sync(30)).toBe(addDays(today(), -89));
+    // A sync that fails records nothing.
+    await systemDb.adConnection.update({ where: { id: conn.id }, data: { historyFrom: null } });
+    fetchImpl = async () => json({ error: { message: "Invalid OAuth access token", type: "OAuthException", code: 190 } }, 400);
+    const { msg } = message({ kind: "ads", connectionId: conn.id, since: addDays(today(), -89), until: today() });
+    await consume("sync", msg, deps);
+    expect((await systemDb.adConnection.findUniqueOrThrow({ where: { id: conn.id } })).historyFrom).toBeNull();
   });
 
   it("refreshes Google's hour-long access token before reading, and keeps the new one", async () => {
@@ -195,5 +219,21 @@ describe("ad account sync", () => {
     // Wired into the cron.
     coord.clear();
     expect(await runScheduled(CRON.refreshTokens, deps)).toMatchObject({ adsSynced: 1 });
+  });
+
+  it("the daily re-check fetches the whole 90 days for an account whose history falls short of them", async () => {
+    // Synced before, with no start recorded (connected before it was), or one its first sync never reached.
+    const short = await connection("meta", { lastSyncedAt: new Date(), historyFrom: null });
+    expect(await scheduleAdsSync(deps)).toBe(1);
+    expect(queues.sent.sync[0]).toMatchObject({ connectionId: short.id, since: addDays(today(), -89), until: today() });
+    await systemDb.adConnection.update({ where: { id: short.id }, data: { historyFrom: addDays(today(), -20) } });
+    coord.clear();
+    await scheduleAdsSync(deps);
+    expect(queues.sent.sync[1]).toMatchObject({ connectionId: short.id, since: addDays(today(), -89) });
+    // Once the 90 days are in, it goes back to 30.
+    await systemDb.adConnection.update({ where: { id: short.id }, data: { historyFrom: addDays(today(), -89) } });
+    coord.clear();
+    await scheduleAdsSync(deps);
+    expect(queues.sent.sync[2]).toMatchObject({ connectionId: short.id, since: addDays(today(), -29) });
   });
 });

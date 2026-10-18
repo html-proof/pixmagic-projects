@@ -352,6 +352,9 @@ export async function syncAdConnection(connectionId: string, since: string, unti
       throw new AdsApiError(`Unknown ad platform ${conn.provider}`, 400);
     }
     await systemDb.adConnection.update({ where: { id: conn.id }, data: { status: "active", lastError: null, lastSyncedAt: new Date() } });
+    // Every day from `since` on is stored now: where the account's history starts, for the
+    // dashboard's "No earlier data", keeping the earliest window any sync fetched in full.
+    await systemDb.adConnection.updateMany({ where: { id: conn.id, OR: [{ historyFrom: null }, { historyFrom: { gt: since } }] }, data: { historyFrom: since } });
     return { skipped: false as const, stored };
   } catch (err) {
     const message = (err instanceof Error ? err.message : String(err)).slice(0, 500);
@@ -484,6 +487,17 @@ export function adToday(conn: Pick<AdConnection, "timezone">, now = new Date()):
   } catch {
     return localDay(now, "UTC");
   }
+}
+
+/**
+ * The days the daily re-check fetches: the last 30, or the first sync's whole 90 for an account
+ * whose stored history falls short of them (its first sync failed and a later one worked, or it
+ * was connected before history_from was recorded), so those days are filled in and its start
+ * recorded. Not before any sync worked: the first sync, queued on connecting, is on its way.
+ */
+export function recheckDays(conn: Pick<AdConnection, "timezone" | "lastSyncedAt" | "historyFrom">, now = new Date()): number {
+  const full = addDays(adToday(conn, now), -(ADS_BACKFILL_DAYS - 1));
+  return conn.lastSyncedAt && (conn.historyFrom === null || conn.historyFrom > full) ? ADS_BACKFILL_DAYS : ADS_RECHECK_DAYS;
 }
 
 export async function enqueueAdSync(queues: Queues, conn: Pick<AdConnection, "id" | "timezone">, days: number, opts?: { delaySeconds?: number }) {
