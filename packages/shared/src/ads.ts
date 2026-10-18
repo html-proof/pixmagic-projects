@@ -17,6 +17,205 @@ export type AdProvider = (typeof AD_PROVIDERS)[number];
 /** The platforms a store pays to advertise on. AdSense pays the store instead, so it is never added into spend. */
 export type AdSpendProvider = Exclude<AdProvider, "adsense">;
 
+// ---------------------------------------------------------------------------
+// Where a connection stands, and why: what ad_connections.status, error_code and account_status hold.
+// The API, the worker and both settings pages read these, so a state is named and worded once.
+// ---------------------------------------------------------------------------
+
+/**
+ * ad_connections.status. "reconnect": the sign-in ended (expired, revoked, permission taken back), so
+ * connecting again fixes it. "permission": this login can no longer read this one account (removed
+ * from it, the manager link is gone), so connecting with a login that has access fixes it.
+ * "unavailable": the platform won't report on the account (closed, cancelled, set-up unfinished).
+ * "error": a failure a retry may fix; syncs keep trying, less often after several in a row.
+ */
+export const AD_CONNECTION_STATUSES = ["active", "reconnect", "permission", "unavailable", "error"] as const;
+export type AdConnectionStatus = (typeof AD_CONNECTION_STATUSES)[number];
+
+/**
+ * Why a connection isn't working (ad_connections.error_code). The platform's own words go to the
+ * logs (through providerDetail()); people read the wording below.
+ */
+export const AD_ERROR_CODES = [
+  /** The sign-in expired or was revoked (Google invalid_grant, Meta 190/102). */
+  "auth_expired",
+  /** The reporting permission was taken back or never granted. */
+  "scope_missing",
+  /** The person whose login powered it has left bizinsights or the workspace. */
+  "connector_left",
+  /** This login can no longer read this account. */
+  "no_access",
+  /** The platform closed or cancelled the account. */
+  "account_closed",
+  /** The platform disabled or suspended the account. */
+  "account_disabled",
+  /** The account's set-up at the platform isn't finished (or awaits the platform's approval). */
+  "account_not_ready",
+  /** bizinsights' own app isn't approved for this yet (Google Ads API access level, Meta App Review): on our side. */
+  "not_approved",
+  /** The platform's API isn't switched on for bizinsights: on our side. */
+  "not_configured",
+  /** The platform asked bizinsights to slow down for a while. */
+  "rate_limited",
+  /** bizinsights' daily allowance at the platform is used up (Google Ads API operations). */
+  "quota_exhausted",
+  /** The platform or the network didn't answer. */
+  "temporary",
+  /** The platform refused for another reason. */
+  "provider_error",
+  /** Something went wrong in bizinsights. */
+  "internal",
+] as const;
+export type AdErrorCode = (typeof AD_ERROR_CODES)[number];
+
+export const isAdErrorCode = (v: unknown): v is AdErrorCode => typeof v === "string" && (AD_ERROR_CODES as readonly string[]).includes(v);
+
+/** The status each code leaves a connection in. */
+export const AD_ERROR_STATUS: Record<AdErrorCode, AdConnectionStatus> = {
+  auth_expired: "reconnect",
+  scope_missing: "reconnect",
+  connector_left: "reconnect",
+  no_access: "permission",
+  account_closed: "unavailable",
+  account_disabled: "unavailable",
+  account_not_ready: "unavailable",
+  not_approved: "error",
+  not_configured: "error",
+  rate_limited: "error",
+  quota_exhausted: "error",
+  temporary: "error",
+  provider_error: "error",
+  internal: "error",
+};
+
+/** Codes that are bizinsights' to fix, never the merchant's: worded as such, and alerted to the operator. */
+export const AD_ERROR_OURS: ReadonlySet<AdErrorCode> = new Set(["not_approved", "not_configured", "quota_exhausted", "internal"]);
+
+const PLATFORM_NAME: Record<AdProvider, string> = { meta: "Meta", google: "Google Ads", adsense: "Google AdSense" };
+const PLATFORM_HOME_NAME: Record<AdProvider, string> = { meta: "Meta Ads Manager", google: "ads.google.com", adsense: "AdSense" };
+
+/** What a code means for the merchant, in one or two plain sentences. Null code: nothing is wrong. */
+export function adErrorMessage(code: AdErrorCode | null | undefined, provider: AdProvider): string | null {
+  if (!code) return null;
+  const p = PLATFORM_NAME[provider];
+  const home = PLATFORM_HOME_NAME[provider];
+  switch (code) {
+    case "auth_expired":
+      return `bizinsights' access to ${p} has ended. Press Reconnect and sign in again to keep the numbers coming.`;
+    case "scope_missing":
+      return `The permission to read ${p} reports was taken back. Press Reconnect and leave it ticked on ${provider === "meta" ? "Facebook's" : "Google's"} screen.`;
+    case "connector_left":
+      return "The person who connected this account no longer has access to bizinsights. Someone with access to the account needs to press Reconnect.";
+    case "no_access":
+      return provider === "meta"
+        ? "This Facebook login can no longer see this ad account. Ask the account's admin to assign you to it in Meta Business settings, or reconnect with a login that has access."
+        : `This Google login can no longer read this ${provider === "adsense" ? "AdSense" : "Google Ads"} account. Ask its owner to add you as a user, or reconnect with a Google account that has access.`;
+    case "account_closed":
+      return `${p} says this account is closed, so there is nothing new to read. Its earlier numbers stay on the dashboard.`;
+    case "account_disabled":
+      return `${p} has disabled this account. Check it in ${home}; the numbers resume once ${p} enables it again.`;
+    case "account_not_ready":
+      return `This account isn't ready at ${p} yet (its set-up isn't finished or awaits ${p}'s approval). Finish it in ${home}, then press Refresh.`;
+    case "not_approved":
+      return `${p} is still approving bizinsights for this. It's on our side, not yours: the numbers start once it's approved.`;
+    case "not_configured":
+      return `${p} isn't fully switched on for bizinsights yet. It's on our side, not yours: we're on it.`;
+    case "rate_limited":
+      return `${p} asked bizinsights to slow down for a while. The next update tries again by itself.`;
+    case "quota_exhausted":
+      return `bizinsights has used today's allowance of ${p} requests. Updates resume by themselves tomorrow; nothing is lost.`;
+    case "temporary":
+      return `${p} didn't answer the last update. bizinsights tries again by itself.`;
+    case "provider_error":
+      return `${p} refused the last update. bizinsights tries again by itself; if it keeps happening, reconnect.`;
+    case "internal":
+      return "Something went wrong on our side with the last update. We'll try again by ourselves.";
+  }
+}
+
+/**
+ * The ad account's own health at the platform (ad_connections.account_status), normalized. Meta's
+ * account_status, Google's customer status and AdSense's account state all map onto these.
+ */
+export const AD_ACCOUNT_STATUSES = ["active", "payment_issue", "under_review", "disabled", "closing", "closed", "needs_attention", "setup_unfinished"] as const;
+export type AdAccountStatus = (typeof AD_ACCOUNT_STATUSES)[number];
+
+export const isAdAccountStatus = (v: unknown): v is AdAccountStatus => typeof v === "string" && (AD_ACCOUNT_STATUSES as readonly string[]).includes(v);
+
+/**
+ * Meta's account_status code (https://developers.facebook.com/docs/marketing-api/reference/ad-account/):
+ * 1 ACTIVE, 2 DISABLED, 3 UNSETTLED, 7 PENDING_RISK_REVIEW, 8 PENDING_SETTLEMENT, 9 IN_GRACE_PERIOD,
+ * 100 PENDING_CLOSURE, 101 CLOSED, 201 ANY_ACTIVE, 202 ANY_CLOSED.
+ */
+export function metaAccountStatus(code: number | string | null | undefined): AdAccountStatus | null {
+  switch (Number(code)) {
+    case 1:
+    case 201:
+      return "active";
+    case 2:
+      return "disabled";
+    case 3:
+    case 8:
+    case 9:
+      return "payment_issue";
+    case 7:
+      return "under_review";
+    case 100:
+      return "closing";
+    case 101:
+    case 202:
+      return "closed";
+    default:
+      return null;
+  }
+}
+
+/** Google Ads customer.status: ENABLED, CANCELED, SUSPENDED, CLOSED. */
+export function googleAccountStatus(status: string | null | undefined): AdAccountStatus | null {
+  switch (status) {
+    case "ENABLED":
+      return "active";
+    case "SUSPENDED":
+      return "disabled";
+    case "CANCELED":
+    case "CLOSED":
+      return "closed";
+    default:
+      return null;
+  }
+}
+
+/** AdSense v2 Account.state (READY, NEEDS_ATTENTION, CLOSED) and its pendingTasks. */
+export function adsenseAccountStatus(state: string | null | undefined, pendingTasks: readonly string[] = []): AdAccountStatus | null {
+  if (state === "CLOSED") return "closed";
+  if (state === "NEEDS_ATTENTION") return "needs_attention";
+  if (state === "READY") return pendingTasks.length ? "setup_unfinished" : "active";
+  return null;
+}
+
+/** A short label for an account status that isn't plain "active" (null for active or unknown). */
+export function adAccountStatusLabel(status: AdAccountStatus | null | undefined, provider: AdProvider): string | null {
+  const p = PLATFORM_NAME[provider];
+  switch (status) {
+    case "payment_issue":
+      return `Payment needed at ${p}`;
+    case "under_review":
+      return `Under review by ${p}`;
+    case "disabled":
+      return `Disabled by ${p}`;
+    case "closing":
+      return "Closing";
+    case "closed":
+      return "Closed";
+    case "needs_attention":
+      return `Needs attention in ${p}`;
+    case "setup_unfinished":
+      return "Set-up not finished";
+    default:
+      return null;
+  }
+}
+
 /** One campaign on one day, as stored (ad_campaign_daily). */
 export interface AdDayRow {
   provider: AdSpendProvider;
@@ -27,10 +226,16 @@ export interface AdDayRow {
   day: string;
   spend: number;
   impressions: number;
+  /** Every click the platform counts: Meta's "clicks (all)" include likes, comments and profile clicks. */
   clicks: number;
-  /** Purchases (Meta) or conversions (Google), as the platform counts them. */
+  /** Clicks on the ad's link (Meta's inline_link_clicks; Google's clicks). Null: not read yet (older rows). */
+  linkClicks: number | null;
+  /** The platform's own conversions: Meta's purchases; Google's every primary conversion action (leads, sign-ups, calls, purchases...). */
   conversions: number;
   conversionValue: number;
+  /** Purchases only, as the platform credits them (Google: conversion actions of category PURCHASE). Null: not read yet. */
+  purchases: number | null;
+  purchaseValue: number | null;
   /** Leads from lead forms and lead events (Meta); 0 where the platform has none. */
   leads: number;
 }
@@ -168,11 +373,18 @@ export interface MetaInsightRow {
   spend?: string;
   impressions?: string;
   clicks?: string;
+  inline_link_clicks?: string;
   actions?: MetaAction[];
   action_values?: MetaAction[];
 }
 
-export function fromMetaInsight(accountId: string, r: MetaInsightRow): AdDayRow {
+/**
+ * One campaign-day as stored. `linkClicks` is null only when the row didn't come from a query that
+ * asked for inline_link_clicks (Meta leaves the field out on a day without link clicks: zero then).
+ */
+export function fromMetaInsight(accountId: string, r: MetaInsightRow, opts: { linkClicksAsked?: boolean } = { linkClicksAsked: true }): AdDayRow {
+  const purchases = firstAction(r.actions, META_PURCHASE);
+  const purchaseValue = r2(firstAction(r.action_values, META_PURCHASE));
   return {
     provider: "meta",
     accountId,
@@ -182,8 +394,12 @@ export function fromMetaInsight(accountId: string, r: MetaInsightRow): AdDayRow 
     spend: r2(Number(r.spend ?? 0)),
     impressions: Number(r.impressions ?? 0),
     clicks: Number(r.clicks ?? 0),
-    conversions: firstAction(r.actions, META_PURCHASE),
-    conversionValue: r2(firstAction(r.action_values, META_PURCHASE)),
+    linkClicks: r.inline_link_clicks !== undefined ? Math.round(Number(r.inline_link_clicks) || 0) : opts.linkClicksAsked ? 0 : null,
+    // Meta's conversions are its purchases: the same figure.
+    conversions: purchases,
+    conversionValue: purchaseValue,
+    purchases,
+    purchaseValue,
     leads: Math.round(firstAction(r.actions, META_LEAD)),
   };
 }
@@ -196,8 +412,11 @@ export function fromMetaInsight(accountId: string, r: MetaInsightRow): AdDayRow 
 export const META_REPORT_LEVELS = ["campaign", "adset", "ad"] as const;
 export type MetaReportLevel = (typeof META_REPORT_LEVELS)[number];
 
-/** Whole-account splits: where the ads ran (Facebook Feed, Instagram Stories...), on which devices, in which countries. */
-export const META_REPORT_BREAKDOWNS = ["placement", "device", "country"] as const;
+/**
+ * Whole-account splits: where the ads ran (Facebook Feed, Instagram Stories...), on which devices, in
+ * which countries, and to which age groups and genders (Meta's own aggregates; nothing about a person).
+ */
+export const META_REPORT_BREAKDOWNS = ["placement", "device", "country", "age", "gender"] as const;
 export type MetaReportBreakdown = (typeof META_REPORT_BREAKDOWNS)[number];
 
 /** Every way the Meta Ads report can be cut. */
@@ -211,6 +430,8 @@ export const META_BREAKDOWN_PARAM: Record<MetaReportBreakdown, string> = {
   placement: "publisher_platform,platform_position",
   device: "impression_device",
   country: "country",
+  age: "age",
+  gender: "gender",
 };
 
 /** One row of GET /act_<id>/insights for a whole range (no time_increment). */
@@ -226,6 +447,10 @@ export interface MetaRangeInsight {
   platform_position?: string;
   impression_device?: string;
   country?: string;
+  /** "18-24", "25-34", ... "65+", "Unknown". */
+  age?: string;
+  /** "female", "male", "unknown". */
+  gender?: string;
   spend?: string;
   impressions?: string;
   reach?: string;
@@ -335,6 +560,8 @@ const META_DEVICE: Record<string, string> = {
   unknown: "Unknown",
 };
 
+const META_GENDER: Record<string, string> = { female: "Women", male: "Men", unknown: "Unknown" };
+
 /** "instagram_stories" → "Stories", "an_classic" → "Classic": the position without its platform's prefix. */
 const positionLabel = (p: string) => {
   const words = p.replace(/^(facebook|instagram|messenger|an|threads)_/, "").replace(/_/g, " ").trim();
@@ -363,6 +590,12 @@ export function fromMetaBreakdownInsight(breakdown: MetaReportBreakdown, r: Meta
   } else if (breakdown === "device") {
     id = r.impression_device ?? "unknown";
     name = META_DEVICE[id] ?? positionLabel(id);
+  } else if (breakdown === "age") {
+    id = r.age ?? "unknown";
+    name = !r.age || r.age.toLowerCase() === "unknown" ? "Unknown age" : `Aged ${r.age}`;
+  } else if (breakdown === "gender") {
+    id = r.gender ?? "unknown";
+    name = META_GENDER[id] ?? "Unknown";
   } else {
     id = r.country ?? "unknown";
     name = r.country ? countryName(r.country) : "Unknown";
@@ -402,10 +635,41 @@ export function fromGoogleAdsRow(accountId: string, r: GoogleAdsRow): AdDayRow |
     spend: r2(Number(m.costMicros ?? 0) / 1_000_000),
     impressions: Number(m.impressions ?? 0),
     clicks: Number(m.clicks ?? 0),
+    // Google's clicks are clicks on the ad (its link, call button, ...): the comparable figure.
+    linkClicks: Number(m.clicks ?? 0),
     conversions: Math.round(Number(m.conversions ?? 0) * 100) / 100,
     conversionValue: r2(Number(m.conversionsValue ?? 0)),
+    // Purchases need their own query (conversion segments can't sit next to cost): merged in by the caller.
+    purchases: null,
+    purchaseValue: null,
     leads: 0,
   };
+}
+
+/** One result of the purchase-only query: conversions of category PURCHASE per campaign per day. */
+export interface GooglePurchaseRow {
+  campaign?: { id?: string | number };
+  segments?: { date?: string };
+  metrics?: { conversions?: string | number; conversionsValue?: string | number };
+}
+
+/**
+ * Put each campaign-day's purchases (from the purchase-only query) on its row. Rows the purchase query
+ * didn't return had none: zero, since that query ran for the same days.
+ */
+export function withGooglePurchases(rows: AdDayRow[], purchases: GooglePurchaseRow[]): AdDayRow[] {
+  const by = new Map<string, { n: number; v: number }>();
+  for (const p of purchases) {
+    const key = `${String(p.campaign?.id ?? "account")}|${p.segments?.date ?? ""}`;
+    const d = by.get(key) ?? { n: 0, v: 0 };
+    d.n += Number(p.metrics?.conversions ?? 0) || 0;
+    d.v += Number(p.metrics?.conversionsValue ?? 0) || 0;
+    by.set(key, d);
+  }
+  return rows.map((r) => {
+    const d = by.get(`${r.campaignId}|${r.day}`);
+    return { ...r, purchases: Math.round((d?.n ?? 0) * 100) / 100, purchaseValue: r2(d?.v ?? 0) };
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -555,7 +819,7 @@ export interface AdsenseDayRow {
   /** Estimated earnings: AdSense finalizes them after the month ends. */
   earnings: number;
   pageViews: number;
-  /** Ads shown. */
+  /** AdSense's IMPRESSIONS: ad requests where at least one ad was shown (not each ad shown). */
   impressions: number;
   clicks: number;
 }
@@ -569,7 +833,7 @@ export interface AdsenseTotals {
   pageRpm: number | null;
   /** Earnings per click. */
   perClick: number | null;
-  /** Clicks per ad shown. */
+  /** Clicks per impression (AdSense's impression CTR). */
   ctr: number | null;
 }
 
@@ -664,3 +928,57 @@ export function fromAdsenseReport(accountId: string, report: AdsenseReport): { r
 
 /** AdSense names accounts "accounts/pub-<digits>"; the publisher id is the part after the slash. */
 export const adsenseAccountId = (name: string) => name.replace(/^accounts\//, "");
+
+// ---------------------------------------------------------------------------
+// The AdSense report: one date range at a time, asked of AdSense directly, by site, country or
+// device type (AdSense's PLATFORM_TYPE: desktop, high-end mobile, tablet...).
+// ---------------------------------------------------------------------------
+
+export const ADSENSE_REPORT_LEVELS = ["site", "country", "platform"] as const;
+export type AdsenseReportLevel = (typeof ADSENSE_REPORT_LEVELS)[number];
+
+/** The AdSense dimensions each level is split by (reports:generate `dimensions`): an id, then a name when AdSense has one. */
+export const ADSENSE_REPORT_DIMENSIONS: Record<AdsenseReportLevel, string[]> = {
+  site: ["DOMAIN_CODE"],
+  country: ["COUNTRY_CODE", "COUNTRY_NAME"],
+  platform: ["PLATFORM_TYPE_CODE", "PLATFORM_TYPE_NAME"],
+};
+
+/** The metrics the report asks for (estimated: AdSense finalizes earnings after the month ends). */
+export const ADSENSE_REPORT_METRICS = ["ESTIMATED_EARNINGS", "PAGE_VIEWS", "IMPRESSIONS", "CLICKS"] as const;
+
+export interface AdsenseReportRow extends AdsenseTotals {
+  id: string;
+  name: string;
+}
+
+/** A report split by one level → its rows, biggest earner first, and the currency its money is in. */
+export function adsenseReportRows(level: AdsenseReportLevel, report: AdsenseReport): { rows: AdsenseReportRow[]; currency: string | null } {
+  const headers = report.headers ?? [];
+  const col = (name: string) => headers.findIndex((h) => h.name === name);
+  const [idDim, nameDim] = ADSENSE_REPORT_DIMENSIONS[level];
+  const at = { id: col(idDim!), name: nameDim ? col(nameDim) : -1, earnings: col("ESTIMATED_EARNINGS"), pageViews: col("PAGE_VIEWS"), impressions: col("IMPRESSIONS"), clicks: col("CLICKS") };
+  const num = (cells: Array<{ value?: string }>, i: number) => (i < 0 ? 0 : Number(cells[i]?.value ?? 0) || 0);
+  const groups = new Map<string, { name: string; rows: AdsenseDayRow[] }>();
+  for (const r of report.rows ?? []) {
+    const cells = r.cells ?? [];
+    const id = (at.id < 0 ? "" : cells[at.id]?.value) || "unknown";
+    const label = at.name >= 0 ? cells[at.name]?.value : undefined;
+    const name = label || (level === "country" ? countryName(id === "unknown" ? null : id) : id === "unknown" ? "Unknown" : id);
+    const g = groups.get(id) ?? { name, rows: [] };
+    g.rows.push({
+      accountId: "",
+      site: level === "site" ? id : "",
+      day: "",
+      earnings: num(cells, at.earnings),
+      pageViews: Math.round(num(cells, at.pageViews)),
+      impressions: Math.round(num(cells, at.impressions)),
+      clicks: Math.round(num(cells, at.clicks)),
+    });
+    groups.set(id, g);
+  }
+  const rows = [...groups.entries()]
+    .map(([id, g]) => ({ id, name: g.name, ...adsenseTotals(g.rows) }))
+    .sort((a, b) => b.earnings - a.earnings || b.pageViews - a.pageViews || a.name.localeCompare(b.name));
+  return { rows, currency: headers.find((h) => h.type === "METRIC_CURRENCY")?.currencyCode ?? null };
+}

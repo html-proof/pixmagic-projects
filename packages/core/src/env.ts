@@ -118,6 +118,12 @@ const schema = z.object({
    * is no token to set, only this switch. Off, the Google Ads card says "Coming soon".
    */
   GOOGLE_ADS_ENABLED: z.string().optional().default(""),
+  /**
+   * "1" once Google has verified the OAuth app's use of the sensitive adwords scope (Google Auth
+   * Platform → Verification Center). Until then Google shows "Google hasn't verified this app" before
+   * its consent screen and caps new users at 100, so Settings says so before sending people there.
+   */
+  GOOGLE_ADS_OAUTH_VERIFIED: z.string().optional().default(""),
   GOOGLE_ADS_API_VERSION: z.string().default("v25"),
   /**
    * WhatsApp Business Platform (Cloud API). Embedded Signup ("Connect WhatsApp Business") needs

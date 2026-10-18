@@ -79,6 +79,10 @@ export const APP_SETTINGS = {
   // retired developer tokens on 2026-09-09, so there is no token to set. Empty: "Coming soon".
   // Explorer granted 2026-10-11 (2,880 operations a day on real accounts).
   "GOOGLE_ADS_ENABLED": "1",
+  // "1" once Google verifies the app's use of the adwords scope (Google Auth Platform → Verification
+  // Center: branding first, then data access with the demo video). Until then Google shows "Google
+  // hasn't verified this app" before its consent screen, so Settings warns first. AdSense is unaffected.
+  "GOOGLE_ADS_OAUTH_VERIFIED": "",
   // WhatsApp Business Platform (Cloud API), docs/whatsapp.md. "Connect WhatsApp Business" (Meta's
   // Embedded Signup) needs the Meta app id (empty: META_APP_ID is used), the Facebook Login for
   // Business configuration id of its WhatsApp Embedded Signup variation, and the secrets

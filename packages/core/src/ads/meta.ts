@@ -11,6 +11,7 @@ import {
   isMetaBreakdown,
   META_BREAKDOWN_PARAM,
   metaAccountId,
+  metaAccountStatus,
   metaReportMetrics,
   type AdDayRow,
   type MetaInsightRow,
@@ -23,7 +24,7 @@ import {
 } from "@app/shared";
 import { graphCall, type GraphFailure } from "../metaGraph.js";
 import type { FetchLike } from "../shopify.js";
-import { AdsApiError, AdsAuthError, AdsNoAccountsError, AdsRetryableError, REQUIRED_AD_SCOPE, tokenExpiry, type AdAccount, type TokenSet } from "./common.js";
+import { AdsApiError, AdsAuthError, AdsNoAccountsError, AdsRetryableError, REQUIRED_AD_SCOPE, tokenExpiry, type AdAccount, type AdAccountHealth, type TokenSet } from "./common.js";
 
 export interface MetaConfig {
   appId: string;
@@ -114,8 +115,12 @@ export async function metaUserId(c: MetaConfig, accessToken: string): Promise<st
 /**
  * Take back ads_read only: anything else the person gave bizinsights' Meta app (WhatsApp) stays. A token
  * that already stopped working has nothing left to take back.
+ *
+ * `externalUserId` (the person's app-scoped id): when known, the grant can be taken back with
+ * bizinsights' app token even after the person's own token expired.
  */
-export async function metaRevokeAdsRead(c: MetaConfig, accessToken: string): Promise<void> {
+export async function metaRevokeAdsRead(c: MetaConfig, accessToken: string, externalUserId?: string | null): Promise<void> {
+  void externalUserId;
   try {
     await metaSend(c, "DELETE", "me/permissions/ads_read", {}, accessToken);
   } catch (err) {
@@ -314,5 +319,42 @@ export async function metaReport(c: MetaConfig, accessToken: string, accountId: 
     rows,
     truncated: all.length > rows.length,
     attribution: [...new Set(all.map((r) => r.attribution).filter((a): a is string => !!a))],
+  };
+}
+
+/** Meta's disable_reason codes, in words (https://developers.facebook.com/docs/marketing-api/reference/ad-account/). */
+const META_DISABLE_REASON: Record<number, string> = {
+  1: "Meta's advertising policies",
+  2: "an intellectual property review",
+  3: "a payment problem",
+  4: "the account was shut down",
+  5: "an advertising review",
+  6: "a business integrity review",
+  7: "the account was closed for good",
+  8: "an unused reseller account",
+  9: "the account wasn't used",
+  11: "a business portfolio policy review",
+  12: "a misrepresented account",
+  15: "the account may have been compromised",
+};
+
+/**
+ * One ad account's health as Meta reports it now: its account_status (normalized), why it is
+ * disabled, and its name, currency and time zone. One cheap call, made with the daily re-check.
+ */
+export async function metaAccountHealth(c: MetaConfig, accessToken: string, accountId: string): Promise<AdAccountHealth> {
+  const act = metaAccountId(accountId);
+  if (!/^act_\d{1,30}$/.test(act)) throw new AdsApiError(`Invalid Meta ad account ${accountId}`, 400);
+  const a = await metaGet<{ account_status?: number; disable_reason?: number; name?: string; currency?: string; timezone_name?: string }>(c, act, {
+    fields: "account_status,disable_reason,name,currency,timezone_name",
+  }, accessToken);
+  const status = metaAccountStatus(a.account_status);
+  const reason = a.disable_reason ? META_DISABLE_REASON[a.disable_reason] : undefined;
+  return {
+    status,
+    detail: status && status !== "active" && reason ? `Because of ${reason}` : null,
+    name: a.name ?? null,
+    currency: a.currency ?? null,
+    timezone: a.timezone_name ?? null,
   };
 }

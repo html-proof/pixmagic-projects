@@ -1,10 +1,21 @@
 /**
  * What the three ad platform clients share: the errors every caller sorts failures by, an ad
  * account as a person picks it, a token set, and the one permission each platform is asked for.
+ *
+ * Every error carries an `errorCode` (AD_ERROR_CODES in @app/shared/ads): what the connection's
+ * error_code becomes, and so what the merchant reads. classifyAdError() turns any failure into the
+ * status, code and cleaned detail a connection stores.
  */
+import { AD_ERROR_STATUS, type AdAccountStatus, type AdConnectionStatus, type AdErrorCode } from "@app/shared";
+import { providerDetail } from "../errors.js";
+
 /** The person's access was refused or has expired: they have to connect again. */
 export class AdsAuthError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    /** "auth_expired" (expired, revoked) or "scope_missing" (the reporting permission was taken back). */
+    public errorCode: Extract<AdErrorCode, "auth_expired" | "scope_missing"> = "auth_expired",
+  ) {
     super(message);
   }
 }
@@ -15,8 +26,25 @@ export class AdsRetryableError extends Error {
     message: string,
     /** The platform's own error code, when it gives one (Meta's `error.code`). */
     public code?: number,
+    public errorCode: Extract<AdErrorCode, "temporary" | "rate_limited" | "quota_exhausted"> = "temporary",
   ) {
     super(message);
+  }
+}
+
+/**
+ * The platform asked bizinsights to wait (Meta's throttling, Google's RESOURCE_EXHAUSTED). `retryAfterS`
+ * is how long the platform said to wait, when it said; the queue waits that long without spending a
+ * retry. "quota_exhausted": bizinsights' daily allowance is used up (Google Ads API operations).
+ */
+export class AdsRateLimitedError extends AdsRetryableError {
+  constructor(
+    message: string,
+    public retryAfterS: number | null = null,
+    errorCode: Extract<AdErrorCode, "rate_limited" | "quota_exhausted"> = "rate_limited",
+    code?: number,
+  ) {
+    super(message, code, errorCode);
   }
 }
 
@@ -27,6 +55,7 @@ export class AdsApiError extends Error {
     public status: number,
     /** The platform's own error code, when it gives one (Meta's `error.code`). */
     public code?: number,
+    public errorCode: AdErrorCode = "provider_error",
   ) {
     super(message);
   }
@@ -38,7 +67,29 @@ export class AdsApiError extends Error {
  */
 export class AdsNotApprovedError extends AdsApiError {
   constructor(message: string) {
-    super(message, 403);
+    super(message, 403, undefined, "not_approved");
+  }
+}
+
+/**
+ * This login can no longer read this one account (Google USER_PERMISSION_DENIED, a Meta permission
+ * error while ads_read is still granted, AdSense PERMISSION_DENIED on the account). Reconnecting with
+ * the same login doesn't help; a login that has access does.
+ */
+export class AdsPermissionError extends AdsApiError {
+  constructor(message: string, code?: number) {
+    super(message, 403, code, "no_access");
+  }
+}
+
+/** The platform won't report on this account: closed or cancelled, disabled or suspended, or its set-up isn't finished. */
+export class AdsUnavailableError extends AdsApiError {
+  constructor(
+    message: string,
+    errorCode: Extract<AdErrorCode, "account_closed" | "account_disabled" | "account_not_ready">,
+    code?: number,
+  ) {
+    super(message, 403, code, errorCode);
   }
 }
 
@@ -70,6 +121,48 @@ export interface AdAccount {
   timezone: string | null;
   /** Google: the manager account the client is reached through (sent as login-customer-id). */
   loginCustomerId?: string | null;
+  /** The account's own health at the platform, when the listing says (Meta account_status, AdSense state). */
+  status?: AdAccountStatus | null;
+  /** What the platform says about that status (Meta's disable reason, AdSense's pending tasks). */
+  statusDetail?: string | null;
+}
+
+/** An ad account's health as the platform reports it now (metaAccountHealth, adsenseAccountHealth). */
+export interface AdAccountHealth {
+  status: AdAccountStatus | null;
+  detail: string | null;
+  name: string | null;
+  currency: string | null;
+  timezone: string | null;
+}
+
+/** What a failed sync or report leaves on its connection. */
+export interface AdFailure {
+  status: AdConnectionStatus;
+  code: AdErrorCode;
+  /** The platform's own reason, cleaned (providerDetail): for the logs and support. Null for our own errors. */
+  detail: string | null;
+  /** A later attempt may work (the queue retries it). */
+  retryable: boolean;
+  /** How long the platform asked to wait, when it said. */
+  retryAfterS: number | null;
+}
+
+/**
+ * Sort any failure into what its connection stores. Errors that aren't the platform's (a TypeError, the
+ * database) are "internal" and keep no detail: their text can carry internals.
+ */
+export function classifyAdError(err: unknown): AdFailure {
+  const detail = (e: Error) => providerDetail(e.message) || null;
+  if (err instanceof AdsAuthError) return { status: AD_ERROR_STATUS[err.errorCode], code: err.errorCode, detail: detail(err), retryable: false, retryAfterS: null };
+  if (err instanceof AdsRateLimitedError) return { status: "error", code: err.errorCode, detail: detail(err), retryable: true, retryAfterS: err.retryAfterS };
+  if (err instanceof AdsRetryableError) return { status: "error", code: err.errorCode, detail: detail(err), retryable: true, retryAfterS: null };
+  if (err instanceof AdsApiError) {
+    const code = err.errorCode;
+    // Our own set-up (not approved, not configured) and the platform's other refusals are retried by the schedule, not at once.
+    return { status: AD_ERROR_STATUS[code], code, detail: detail(err), retryable: false, retryAfterS: null };
+  }
+  return { status: "error", code: "internal", detail: null, retryable: true, retryAfterS: null };
 }
 
 export interface TokenSet {

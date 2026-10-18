@@ -73,8 +73,11 @@ export async function adsModule(tx: Tx, { ws, storeId }: Scope, range: DateRange
     spend: toNumber(r.spend),
     impressions: r.impressions,
     clicks: r.clicks,
+    linkClicks: r.linkClicks,
     conversions: toNumber(r.conversions),
     conversionValue: toNumber(r.conversionValue),
+    purchases: r.purchases === null ? null : toNumber(r.purchases),
+    purchaseValue: r.purchaseValue === null ? null : toNumber(r.purchaseValue),
     leads: r.leads,
   }));
   const inRange = (d: DateRange) => rows.filter((r) => r.day >= d.from && r.day <= d.to);

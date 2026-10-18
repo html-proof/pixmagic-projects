@@ -29,8 +29,11 @@ const row = (over: Partial<AdDayRow>): AdDayRow => ({
   spend: 0,
   impressions: 0,
   clicks: 0,
+  linkClicks: 0,
   conversions: 0,
   conversionValue: 0,
+  purchases: 0,
+  purchaseValue: 0,
   leads: 0,
   ...over,
 });
@@ -57,8 +60,27 @@ describe("ad platform rows", () => {
         { action_type: "omni_purchase", value: "80.5" },
       ],
     });
-    expect(r).toEqual({ provider: "meta", accountId: "act_9", campaignId: "77", campaignName: "Retargeting", day: "2026-10-03", spend: 12.35, impressions: 1000, clicks: 25, conversions: 2, conversionValue: 80.5, leads: 1 });
+    expect(r).toEqual({
+      provider: "meta",
+      accountId: "act_9",
+      campaignId: "77",
+      campaignName: "Retargeting",
+      day: "2026-10-03",
+      spend: 12.35,
+      impressions: 1000,
+      clicks: 25,
+      // Asked for but left out by Meta: no link clicks that day.
+      linkClicks: 0,
+      conversions: 2,
+      conversionValue: 80.5,
+      purchases: 2,
+      purchaseValue: 80.5,
+      leads: 1,
+    });
     expect(fromMetaInsight("act_9", { date_start: "2026-10-03" })).toMatchObject({ spend: 0, conversions: 0, campaignId: "account" });
+    expect(fromMetaInsight("act_9", { date_start: "2026-10-03", clicks: "30", inline_link_clicks: "12" }).linkClicks).toBe(12);
+    // A row from a query that didn't ask for link clicks: unknown, not zero.
+    expect(fromMetaInsight("act_9", { date_start: "2026-10-03", clicks: "30" }, {}).linkClicks).toBeNull();
   });
 
   it("reads Google Ads rows, turning micros into money", () => {
@@ -68,7 +90,22 @@ describe("ad platform rows", () => {
         segments: { date: "2026-10-02" },
         metrics: { costMicros: "4567890", impressions: "320", clicks: "18", conversions: 1.5, conversionsValue: 99.999 },
       }),
-    ).toEqual({ provider: "google", accountId: "1234567890", campaignId: "555", campaignName: "Search - brand", day: "2026-10-02", spend: 4.57, impressions: 320, clicks: 18, conversions: 1.5, conversionValue: 100, leads: 0 });
+    ).toEqual({
+      provider: "google",
+      accountId: "1234567890",
+      campaignId: "555",
+      campaignName: "Search - brand",
+      day: "2026-10-02",
+      spend: 4.57,
+      impressions: 320,
+      clicks: 18,
+      linkClicks: 18,
+      conversions: 1.5,
+      conversionValue: 100,
+      purchases: null,
+      purchaseValue: null,
+      leads: 0,
+    });
     expect(fromGoogleAdsRow("1", { metrics: {} })).toBeNull();
     expect(googleCustomerId("123-456-7890")).toBe("1234567890");
     expect(metaAccountId("42")).toBe("act_42");
