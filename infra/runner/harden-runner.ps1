@@ -6,13 +6,14 @@
 # Run it in an elevated Windows PowerShell (right-click Windows PowerShell > Run as administrator):
 #   powershell -ExecutionPolicy Bypass -File <this file>
 #
-# For each runner account (ghrunner and ghdeploy, those that exist; or the ones -Account names):
+# For each runner account (ghrunner and ghmain, those that exist; or the ones -Account names):
 #   1. A password is required: New-LocalUser leaves "password not required" (PASSWD_NOTREQD) set.
 #   2. No logon but as its service: local, Remote Desktop and network logon denied.
-# Then C:\ms-playwright (the e2e job's browsers, PLAYWRIGHT_BROWSERS_PATH in ci.yml): changeable by
-# administrators, SYSTEM and ghrunner only (it downloads new browser builds), readable by users.
-# C:\ inherits "Authenticated Users: Modify" to it, so any account on the PC could swap the
-# chrome.exe the runner starts.
+# Then the e2e job's browsers (PLAYWRIGHT_BROWSERS_PATH in ci.yml): C:\ms-playwright changeable by
+# administrators, SYSTEM and ghrunner only (it downloads new browser builds), readable by users;
+# C:\ms-playwright-main (the runner for main's) the same with ghmain, and not readable by others.
+# C:\ inherits "Authenticated Users: Modify" to new folders, so any account on the PC could swap
+# the chrome.exe a runner starts.
 #
 # -Release allows the -Account accounts network logon again: config.cmd checks the password with
 # one, so install-runner.ps1 lifts that denial while it registers a runner, then puts it back.
@@ -24,7 +25,11 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $rights = 'SeDenyInteractiveLogonRight', 'SeDenyRemoteInteractiveLogonRight', 'SeDenyNetworkLogonRight'
-$browsers = 'C:\ms-playwright'
+# Each runner downloads new browser builds into its own folder (PW_BROWSERS; ci.yml).
+$browsers = @(
+  @{ Path = 'C:\ms-playwright'; Writer = 'ghrunner'; UsersRead = $true },
+  @{ Path = 'C:\ms-playwright-main'; Writer = 'ghmain'; UsersRead = $false }
+)
 
 function Step($text) { Write-Host "`n== $text" -ForegroundColor Cyan }
 
@@ -72,7 +77,7 @@ function Set-DenyRights([string[]]$Sids, [bool]$Deny, [string[]]$Which = $rights
   }
 }
 
-if (-not $Account) { $Account = @('ghrunner', 'ghdeploy') }
+if (-not $Account) { $Account = @('ghrunner', 'ghmain') }
 $users = @($Account | ForEach-Object { Get-LocalUser $_ -ErrorAction SilentlyContinue } | Where-Object { $_ })
 if (-not $users) { throw "None of these local accounts exists: $($Account -join ', ')." }
 $sids = @($users | ForEach-Object { $_.SID.Value })
@@ -96,19 +101,21 @@ Step "2/3 No local, Remote Desktop or network logon for $($users.Name -join ', '
 Set-DenyRights $sids $true
 Write-Host "Done."
 
-Step "3/3 $browsers changeable by administrators, SYSTEM and ghrunner only"
-$runner = Get-LocalUser ghrunner -ErrorAction SilentlyContinue
-if (-not (Test-Path $browsers)) {
-  Write-Host "Not there: nothing to do (the e2e job creates it; run this again afterwards)."
-} elseif (-not $runner) {
-  Write-Host "No ghrunner account: left as it is."
-} else {
-  icacls $browsers /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' "*$($runner.SID.Value):(OI)(CI)M" '*S-1-5-32-545:(OI)(CI)RX' | Out-Null
-  if ($LASTEXITCODE -ne 0) { throw "icacls $browsers failed ($LASTEXITCODE)" }
+Step "3/3 The e2e browsers: changeable by administrators, SYSTEM and their runner's account only"
+foreach ($b in $browsers) {
+  $writer = Get-LocalUser $b.Writer -ErrorAction SilentlyContinue
+  if (-not (Test-Path $b.Path)) { Write-Host "$($b.Path): not there, nothing to do."; continue }
+  if (-not $writer) { Write-Host "$($b.Path): no $($b.Writer) account, left as it is."; continue }
+  $grants = @('*S-1-5-18:(OI)(CI)F', '*S-1-5-32-544:(OI)(CI)F', "*$($writer.SID.Value):(OI)(CI)M")
+  if ($b.UsersRead) { $grants += '*S-1-5-32-545:(OI)(CI)RX' }
+  icacls $b.Path /inheritance:r /grant:r @grants | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw "icacls $($b.Path) failed ($LASTEXITCODE)" }
   # Everything inside inherits exactly that (no ACE of its own left over).
-  icacls "$browsers\*" /reset /T /C /Q | Out-Null
-  if ($LASTEXITCODE -ne 0) { throw "icacls /reset under $browsers failed ($LASTEXITCODE)" }
-  icacls $browsers
+  if (Get-ChildItem -Force $b.Path | Select-Object -First 1) {
+    icacls "$($b.Path)\*" /reset /T /C /Q | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "icacls /reset under $($b.Path) failed ($LASTEXITCODE)" }
+  }
+  icacls $b.Path
 }
 
 Get-LocalUser $users.Name | Format-Table Name, Enabled, PasswordRequired -AutoSize
