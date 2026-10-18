@@ -1,12 +1,41 @@
 "use client";
+import Link from "next/link";
 import { createContext, useCallback, useContext, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { actionError } from "@/lib/api";
 
 // ---------------------------------------------------------------------------
-// Pieces every signed-in area uses (WhatsApp, Email, Staff, the employee portal): the page header,
-// the loading skeleton, toasts, actions with feedback, and a confirm dialog.
+// Pieces every signed-in area uses (WhatsApp, Email, Staff, the employee portal): a section's side
+// menu, the page header, the loading skeleton, toasts, actions with feedback, and a confirm dialog.
 // ---------------------------------------------------------------------------
+
+/**
+ * A section with a menu of its own (Staff Management, WhatsApp): the menu down the left from tablet
+ * width, a row of links that scrolls sideways above the page on phones.
+ */
+export function SectionLayout({ title, icon, items, children }: { title: string; icon: ReactNode; items: ReadonlyArray<{ href: string; label: string; active: boolean }>; children: ReactNode }) {
+  return (
+    <div className="grid gap-6 md:grid-cols-[13rem_1fr]">
+      <nav aria-label={title} className="flex gap-1 overflow-x-auto pb-1 md:flex-col md:pb-0">
+        <p className="mb-2 hidden items-center gap-2 px-3 text-sm font-semibold md:flex">
+          {icon}
+          {title}
+        </p>
+        {items.map(({ href, label, active }) => (
+          <Link
+            key={href}
+            href={href}
+            aria-current={active ? "page" : undefined}
+            className={`whitespace-nowrap rounded-lg px-3 py-2 text-sm transition ${active ? "bg-surface font-semibold shadow-sm" : "text-muted hover:text-text"}`}
+          >
+            {label}
+          </Link>
+        ))}
+      </nav>
+      <div className="min-w-0 space-y-4">{children}</div>
+    </div>
+  );
+}
 
 export function PageHeader({ title, sub, actions }: { title: string; sub?: ReactNode; actions?: ReactNode }) {
   return (

@@ -27,8 +27,6 @@ export const INVITE_DAYS_DEFAULT = 60;
 export const INVITE_DAYS_MAX = 60;
 export const INVITE_MESSAGE_MAX = 500;
 const DAY_MS = 86_400_000;
-/** Before this change a used link kept working this long after its first opening (kept for old rows' wording). */
-export const LINK_REOPEN_DAYS = INVITE_DAYS_MAX;
 
 export type InvitationStatus = "pending" | "accepted" | "revoked" | "expired";
 

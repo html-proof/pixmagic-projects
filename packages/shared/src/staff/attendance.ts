@@ -74,7 +74,6 @@ export const LIVE_STATUS_LABEL: Record<LiveStatus, string> = {
 };
 
 export const CORRECTION_STATUSES = ["pending", "approved", "rejected", "cancelled"] as const;
-export type CorrectionStatus = (typeof CORRECTION_STATUSES)[number];
 
 export const PAYROLL_STATUSES = [
   "draft",

@@ -30,28 +30,6 @@ export async function ensureStaffSettings(workspaceId: string): Promise<StaffSet
   });
 }
 
-export interface PayContext {
-  timezone: string;
-  currency: string;
-  weekStartsOn: number;
-  payCycle: PayCycle;
-  payCycleAnchor: string;
-  staleSessionHours: number;
-  lateGraceMinutes: number;
-  requireApproval: boolean;
-}
-
-export const payContext = (s: StaffSettings): PayContext => ({
-  timezone: s.timezone,
-  currency: s.currency,
-  weekStartsOn: s.weekStartsOn,
-  payCycle: s.payCycle as PayCycle,
-  payCycleAnchor: s.payCycleAnchor,
-  staleSessionHours: s.staleSessionHours,
-  lateGraceMinutes: s.lateGraceMinutes,
-  requireApproval: s.requireApproval,
-});
-
 /** A stored overtime policy as engine rules. */
 export function overtimeRules(p: OvertimePolicy | null | undefined): OvertimeRules | null {
   if (!p) return null;

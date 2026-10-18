@@ -490,7 +490,6 @@ export const OVERVIEW_MODULE_ACCESS = {
   // dashboard's capability list can say whether this member gets them at all.
   contacts: ["customers.list", "analytics.abandonment"],
 } as const satisfies Record<string, readonly AccessKey[]>;
-export type OverviewModuleKey = keyof typeof OVERVIEW_MODULE_ACCESS;
 
 export function seesModule(access: MemberAccess, module: string): boolean {
   const need = (OVERVIEW_MODULE_ACCESS as Record<string, readonly AccessKey[]>)[module];

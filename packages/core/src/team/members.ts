@@ -1,77 +1,16 @@
 import { systemDb, withTenant, type Tx } from "@app/db";
-import { ACCESS_KEYS, can, hasFullAccess, modulesOf, type AccessModule, type Role } from "@app/shared";
+import { ACCESS_KEYS, can, hasFullAccess, modulesOf, type Role } from "@app/shared";
 import type { StaffRole } from "@app/shared/staff";
+import type { DeliveryStatus, TeamRow, TeamRowStatus, TeamSummary } from "@app/shared/team";
 import { latestDeliveries } from "../mail/deliveries.js";
-import type { DeliveryStatus } from "../mail/types.js";
 import { accessFingerprint, checkAssignment, lockTeam, memberState, TeamError, teamNotFound, type AssignableRole, type TeamActor } from "./common.js";
 import { invitationStatus } from "./invitations.js";
 
 // ---------------------------------------------------------------------------
-// The team page's data
+// The team page's data (its shapes: @app/shared/team)
 // ---------------------------------------------------------------------------
 
-export type TeamRowStatus = "active" | "revoked" | "pending" | "expired" | "cancelled";
-
-export interface TeamRow {
-  kind: "member" | "invitation";
-  id: string;
-  email: string;
-  name: string | null;
-  role: Role;
-  permissions: string[];
-  modules: AccessModule[];
-  staffRole: StaffRole | null;
-  status: TeamRowStatus;
-  /** Joined (members) or invited (invitations). */
-  since: string;
-  invitedBy: string | null;
-  /** Members: their user id (to mark "you"), when they last signed in, when their access last changed, and its fingerprint (for safe edits). */
-  userId?: string;
-  lastSignInAt?: string | null;
-  accessChangedAt?: string | null;
-  fingerprint?: string;
-  /** Invitations: until when, the note, and how its email went. */
-  expiresAt?: string;
-  message?: string | null;
-  sentAt?: string | null;
-  sendFailedAt?: string | null;
-  sendCount?: number;
-  /** Members who joined from an invitation: when their access ends (null: no end date). */
-  accessExpiresAt?: string | null;
-  /**
-   * The invitation link behind the row (an invitation's own, or the one a member joined from): its
-   * id for the link actions, until when it opens the dashboard, how often and when it last did, and
-   * whether the same link can be copied again (false for links from before they were kept).
-   */
-  link?: { invitationId: string; expiresAt: string; openCount: number; lastOpenedAt: string | null; copyable: boolean } | null;
-  /** The latest invitation email as the mail provider reported it (core/mail). */
-  delivery?: { status: DeliveryStatus; provider: string; at: string; error: string | null; attempts: number } | null;
-}
-
-/** The invitation counts the team page leads with. */
-export interface InvitationSummary {
-  /** Every invitation on record (the retention sweep removes ended ones after 90 days). */
-  total: number;
-  /** Accepted, and the member's access still active. */
-  active: number;
-  /** Sent, not opened yet, not expired. */
-  pending: number;
-  /** Not opened in time, or the access it gave has ended. */
-  expired: number;
-  /** Cancelled before opening, or the member's access revoked. */
-  revoked: number;
-}
-
-export interface TeamSummary {
-  totalMembers: number;
-  activeMembers: number;
-  pendingInvitations: number;
-  /** Expired or cancelled invitations still on record (the retention sweep removes them after 90 days). */
-  endedInvitations: number;
-  /** Each count as it stood at the end of each of the last TREND_DAYS days (oldest first, today last). */
-  trend: Record<"totalMembers" | "activeMembers" | "pendingInvitations" | "endedInvitations", number[]>;
-  invitations: InvitationSummary;
-}
+export type { InvitationSummary, TeamRow, TeamRowStatus, TeamSummary } from "@app/shared/team";
 
 export const TREND_DAYS = 30;
 

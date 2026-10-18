@@ -213,5 +213,3 @@ export async function customerDataExport(tx: Tx, request: DataRequest) {
     },
   };
 }
-
-export type CustomerDataExport = Awaited<ReturnType<typeof customerDataExport>>;

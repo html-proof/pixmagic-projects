@@ -5,13 +5,8 @@
  * it needs no change to invitations. Merchants' own connected accounts are core/email, not this.
  */
 
-/**
- * What became of one email, as far as we know. "sent" means the provider accepted it, never that it
- * arrived: only "delivered" (the recipient's server took it, reported by the provider's webhook)
- * says that.
- */
-export const DELIVERY_STATUSES = ["queued", "sent", "delivered", "delayed", "bounced", "complained", "failed", "not_allowed"] as const;
-export type DeliveryStatus = (typeof DELIVERY_STATUSES)[number];
+/** What became of one email (defined with the team page's types, which show it). */
+export { DELIVERY_STATUSES, type DeliveryStatus } from "@app/shared/team";
 
 /** What a provider answered for a message it accepted. */
 export interface MailReceipt {
