@@ -44,32 +44,42 @@ installs only on development stores in our own Partner org - see
 
 Submission checklist: https://partners.shopify.com/5229240/apps/436203126785/distribution/app-store
 
-Done: API versions, configuration checks, emergency contact, automated checks, app capabilities
-("Doesn't have specialized capabilities": not embedded, no theme, checkout or payments), and the English
-listing (everything in `listing-copy.md`: copy, category, Free plan, feature image, 5 screenshots,
-support, privacy policy, testing instructions). The listing form reports two issues left, both
-owner-only:
+**Submitted for review on 2026-10-18 at 17:01 UTC.** Shopify shows "Submitted - We're assigning a
+reviewer to your submission"; it emails sales@ikorex.com.au if anything needs changing. Don't press
+**Withdraw** on that page: it takes the app out of the review queue. If the reviewer asks for
+changes, fix them and use **Submit fixes** on the same page for this app; never start a new listing
+or app.
 
-1. **Test account** - create the reviewer's bizinsights login on https://bizinsights.io/signup
-   (email and password, no Google sign-in) and type it into the form (requirement 4.5.4).
-2. **Screencast URL** - record it (shot list in `listing-copy.md`) and paste a YouTube or direct
-   video link.
+Checked just before submitting:
 
-Then, before **Submit for review** (owner's call):
+- Every checklist step green: API versions, configuration, emergency contact, English listing
+  (`listing-copy.md`), listing check, automated checks, "Doesn't have specialized capabilities", AI
+  self-review box ticked.
+- **Protected customer data**: Level 1 (reasons Store management, Analytics), no name, email,
+  phone or address fields, 9 of 9 data protection questions answered. Status Draft; Shopify reviews
+  it together with the listing.
+- **Test account**: a password login (no Google sign-in, two-factor off in Cognito), confirmed and
+  email-verified. It owns one workspace whose only store is the "Insights Test" development store,
+  so a reviewer sees no live merchant's data. Keep it that way: never invite it to a merchant's
+  workspace while the app is in review.
+- **Screencast**: unlisted YouTube video "bizinsights - Shopify App Store review demo"
+  (https://youtu.be/cQDJjtduHys), reachable.
+- Listing visibility after approval: "only accessible to merchants who have its direct URL" until
+  someone clicks **Make fully visible** on the same page (owner's call).
 
-3. **Protected customer data** - the checklist says "Doesn't need access to protected customer
-   data", which is wrong for an app that reads orders. Change it and request **Level 1** (answers
-   in `listing-copy.md`); Shopify won't take the request while the app is under review. Decide the
-   optional scopes at the same time: get them covered, or remove `optional_scopes` from the public
-   toml (today `appConfig.test.ts` ties all three tomls to one `SHOPIFY_OPTIONAL_SCOPES`, so that is
-   a code change) and `shopify app deploy --config public`.
-4. **The app and site, as a reviewer sees them** (code, one pull request): hide WhatsApp, Staff,
+Still open, likely to come back as review feedback (the testing instructions already warn about the
+first two):
+
+1. **The app and site, as a reviewer sees them** (code, one pull request): hide WhatsApp, Staff,
    advertising and email for App Store installs; send in-app "Connect" buttons to this app, not the
    unapproved main app; reword "within a minute" and "place a test order" in the dashboard; drop
    "Real-time analytics" and label the mock figures on /login and /signup; fix /support
    ("Settings → Stores", connecting another store) and /privacy (Cloudflare, Resend, Staff data).
-5. **Run the reviewer path once** on a fresh development store: install, claim, import,
+2. **Run the reviewer path once** on a fresh development store: install, claim, import,
    dashboard, Sync now, uninstall, reinstall.
+3. **After approval**: set `SHOPIFY_INSTALL_APP` to `public` (`apps/aws/src/settings.ts`), add the
+   order and refund webhook topics back to `../shopify.app.public.toml` once protected customer data
+   is granted, and `shopify app deploy --config public`.
 
 Approval is what unblocks every live merchant store at once. Budget days to weeks for it.
 
