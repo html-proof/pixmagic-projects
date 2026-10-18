@@ -181,11 +181,18 @@ export class DataStack extends Stack {
     });
 
     const privateBucket = { blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL, encryption: s3.BucketEncryption.S3_MANAGED, enforceSSL: true, objectOwnership: s3.ObjectOwnership.BUCKET_OWNER_ENFORCED };
-    // Webhook bodies too large for a queue message; processed ones are deleted at once.
+    // Webhook bodies too large for a queue message; processed ones are deleted at once. Versioned
+    // (Trusted Advisor "S3 Bucket Versioning"), so a body deleted or overwritten by mistake can be
+    // got back for a day; then the old version and its delete marker go, so customer data in
+    // processed bodies isn't kept longer than that.
     this.payloads = new s3.Bucket(this, "Payloads", {
       ...privateBucket,
       bucketName: `${prefix}-payloads-${cfg.account}`,
-      lifecycleRules: [{ expiration: Duration.days(7), abortIncompleteMultipartUploadAfter: Duration.days(1) }],
+      versioned: true,
+      lifecycleRules: [
+        { expiration: Duration.days(7), noncurrentVersionExpiration: Duration.days(1), abortIncompleteMultipartUploadAfter: Duration.days(1) },
+        { expiredObjectDeleteMarker: true },
+      ],
       removalPolicy: RemovalPolicy.RETAIN,
     });
     // Database dumps for moves and restores (kept 30 days), and anything else the deploy hands over.

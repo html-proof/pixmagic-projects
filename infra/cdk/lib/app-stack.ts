@@ -200,7 +200,9 @@ export class AppStack extends Stack {
     // of chunks at once; through the function each one took a Lambda slot, and past the account's
     // concurrency Lambda answered 429 with a JSON body, which the browser refused to run as a script.
     // Files of earlier builds stay (prune: false), so a page opened before a release, or served
-    // again after a rollback of the `live` alias, still finds its chunks.
+    // again after a rollback of the `live` alias, still finds its chunks. Versioned (Trusted Advisor
+    // "S3 Bucket Versioning"): a file deleted or overwritten by mistake comes back from its earlier
+    // version for 30 days (a deploy re-uploading the same file leaves one too).
     const buildFiles = join(FUNCTION_DIR, "public/_next/static");
     if (!existsSync(buildFiles)) throw new Error(`No UI build files at ${buildFiles}: build the package without --skip-web`);
     const site = new s3.Bucket(this, "Site", {
@@ -209,6 +211,8 @@ export class AppStack extends Stack {
       encryption: s3.BucketEncryption.S3_MANAGED,
       enforceSSL: true,
       objectOwnership: s3.ObjectOwnership.BUCKET_OWNER_ENFORCED,
+      versioned: true,
+      lifecycleRules: [{ noncurrentVersionExpiration: Duration.days(30), expiredObjectDeleteMarker: true, abortIncompleteMultipartUploadAfter: Duration.days(1) }],
       removalPolicy: RemovalPolicy.RETAIN,
     });
     const upload = (id: string, files: Pick<s3deploy.BucketDeploymentProps, "include" | "exclude" | "contentType">) =>
