@@ -1,11 +1,19 @@
 import { describe, expect, it } from "vitest";
 import {
+  accountCoverage,
+  adComparisonWindows,
   adSeries,
   adsenseAccountId,
   adsenseSeries,
+  adsenseSiteChosen,
   adsenseTotals,
   adTotals,
   campaignTotals,
+  commonCoverage,
+  coveredPart,
+  coversDays,
+  lastWholeAdDay,
+  sameDays,
   fromAdsenseReport,
   fromGoogleAdsRow,
   fromMetaInsight,
@@ -115,41 +123,129 @@ describe("ad platform rows", () => {
 
 describe("ad totals", () => {
   const rows = [
-    row({ day: "2026-10-01", spend: 10, impressions: 1000, clicks: 20, conversions: 1, conversionValue: 50 }),
-    row({ day: "2026-10-03", spend: 30, impressions: 3000, clicks: 40, conversions: 3, conversionValue: 150, leads: 2 }),
-    row({ provider: "google", accountId: "9", campaignId: "g1", campaignName: "Search", day: "2026-10-03", spend: 20, impressions: 500, clicks: 30, conversions: 0 }),
+    // Meta: clicks (all) include likes and comments; link clicks are the comparable figure.
+    row({ day: "2026-10-01", spend: 10, impressions: 1000, clicks: 20, linkClicks: 12, conversions: 1, conversionValue: 50, purchases: 1, purchaseValue: 50 }),
+    row({ day: "2026-10-03", spend: 30, impressions: 3000, clicks: 40, linkClicks: 28, conversions: 3, conversionValue: 150, purchases: 3, purchaseValue: 150, leads: 2 }),
+    // Google: 4 conversions, of which 1 purchase (the rest leads and calls).
+    row({ provider: "google", accountId: "9", campaignId: "g1", campaignName: "Search", day: "2026-10-03", spend: 20, impressions: 500, clicks: 30, linkClicks: 30, conversions: 4, conversionValue: 90, purchases: 1, purchaseValue: 40 }),
   ];
 
-  it("adds up spend and works out the rates from the totals", () => {
+  it("adds up spend and works out the rates on link clicks and purchases, never on clicks (all) or every conversion", () => {
     expect(adTotals(rows)).toEqual({
       spend: 60,
       impressions: 4500,
       clicks: 90,
-      conversions: 4,
-      conversionValue: 200,
+      linkClicks: 70,
+      conversions: 8,
+      conversionValue: 290,
+      purchases: 5,
+      purchaseValue: 240,
       leads: 2,
-      ctr: 90 / 4500,
-      cpc: 0.67,
+      ctr: 70 / 4500,
+      cpc: 0.86,
       cpm: 13.33,
-      costPerConversion: 15,
-      roas: 200 / 60,
+      costPerConversion: 7.5,
+      costPerPurchase: 12,
+      roas: 4,
     });
-    expect(adTotals([])).toMatchObject({ spend: 0, ctr: null, cpc: null, cpm: null, costPerConversion: null, roas: null });
+    expect(adTotals([])).toMatchObject({ spend: 0, linkClicks: 0, purchases: 0, ctr: null, cpc: null, cpm: null, costPerConversion: null, costPerPurchase: null, roas: null });
   });
 
-  it("charts every day of the range and ranks campaigns by spend", () => {
+  it("says nothing about link clicks or purchases while a day's aren't read yet, rather than a short count", () => {
+    const older = [...rows, row({ day: "2026-09-30", spend: 5, impressions: 100, clicks: 9, linkClicks: null, purchases: null, purchaseValue: null })];
+    const t = adTotals(older);
+    expect(t).toMatchObject({ spend: 65, clicks: 99, linkClicks: null, ctr: null, cpc: null, purchases: null, purchaseValue: null, costPerPurchase: null, roas: null });
+    // What every platform reports on every day still adds up.
+    expect(t.conversions).toBe(8);
+    expect(t.cpm).toBe(14.13);
+  });
+
+  it("charts every day of the range, with a day outside the stored days missing rather than 0", () => {
     expect(adSeries(rows, { from: "2026-10-01", to: "2026-10-04" })).toEqual([
-      { day: "2026-10-01", spend: 10, clicks: 20, impressions: 1000, conversions: 1, conversionValue: 50 },
-      { day: "2026-10-02", spend: 0, clicks: 0, impressions: 0, conversions: 0, conversionValue: 0 },
-      { day: "2026-10-03", spend: 50, clicks: 70, impressions: 3500, conversions: 3, conversionValue: 150 },
-      { day: "2026-10-04", spend: 0, clicks: 0, impressions: 0, conversions: 0, conversionValue: 0 },
+      { day: "2026-10-01", spend: 10, clicks: 20, linkClicks: 12, impressions: 1000, conversions: 1, conversionValue: 50, purchases: 1, purchaseValue: 50 },
+      { day: "2026-10-02", spend: 0, clicks: 0, linkClicks: 0, impressions: 0, conversions: 0, conversionValue: 0, purchases: 0, purchaseValue: 0 },
+      { day: "2026-10-03", spend: 50, clicks: 70, linkClicks: 58, impressions: 3500, conversions: 7, conversionValue: 240, purchases: 4, purchaseValue: 190 },
+      { day: "2026-10-04", spend: 0, clicks: 0, linkClicks: 0, impressions: 0, conversions: 0, conversionValue: 0, purchases: 0, purchaseValue: 0 },
     ]);
+    // Stored up to the 3rd: the 4th isn't a quiet day, it isn't known.
+    const series = adSeries(rows, { from: "2026-10-01", to: "2026-10-04" }, { from: "2026-09-01", through: "2026-10-03" });
+    expect(series.map((d) => d.spend)).toEqual([10, 0, 50, null]);
+    expect(series[3]).toEqual({ day: "2026-10-04", spend: null, impressions: null, clicks: null, linkClicks: null, conversions: null, conversionValue: null, purchases: null, purchaseValue: null });
+    // Nothing stored at all: every day is missing.
+    expect(adSeries([], { from: "2026-10-01", to: "2026-10-02" }, { from: null, through: null }).map((d) => d.spend)).toEqual([null, null]);
+  });
+
+  it("ranks campaigns by spend", () => {
     const top = campaignTotals([...rows, row({ day: "2026-10-04", campaignName: "Spring (renamed)", spend: 1 })]);
     expect(top.map((c) => [c.provider, c.name, c.spend])).toEqual([
       ["meta", "Spring (renamed)", 41],
       ["google", "Search", 20],
     ]);
     expect(previousRange({ from: "2026-10-01", to: "2026-10-04" })).toEqual({ from: "2026-09-27", to: "2026-09-30" });
+  });
+});
+
+describe("what the stored days cover", () => {
+  it("runs from an account's history start to the last day stored without a gap", () => {
+    expect(accountCoverage({ historyFrom: "2026-07-21", syncedThrough: "2026-10-18" }, "2026-10-19")).toEqual({ from: "2026-07-21", through: "2026-10-18" });
+    // Never synced, or a start without an end: nothing is covered, so nothing is shown as 0.
+    expect(accountCoverage({ historyFrom: null, syncedThrough: null }, "2026-10-19")).toEqual({ from: null, through: null });
+    expect(accountCoverage({ historyFrom: "2026-07-21", syncedThrough: null }, "2026-10-19")).toEqual({ from: null, through: null });
+    // A closed account spends nothing after it closed: its zeros are real, up to its today.
+    expect(accountCoverage({ historyFrom: "2026-07-21", syncedThrough: "2026-09-01", errorCode: "account_closed" }, "2026-10-19")).toEqual({ from: "2026-07-21", through: "2026-10-19" });
+    expect(accountCoverage({ historyFrom: "2026-07-21", syncedThrough: "2026-09-01", accountStatus: "closed" }, "2026-10-19").through).toBe("2026-10-19");
+    // Access ended or a failing sync: only what was stored.
+    expect(accountCoverage({ historyFrom: "2026-07-21", syncedThrough: "2026-09-01", errorCode: "auth_expired" }, "2026-10-19").through).toBe("2026-09-01");
+  });
+
+  it("covers, for several accounts, only the days each of them has", () => {
+    const a = { from: "2026-07-01", through: "2026-10-19" };
+    const b = { from: "2026-08-15", through: "2026-10-16" };
+    expect(commonCoverage([a, b])).toEqual({ from: "2026-08-15", through: "2026-10-16" });
+    expect(commonCoverage([a, { from: null, through: null }])).toEqual({ from: null, through: null });
+    expect(commonCoverage([])).toEqual({ from: null, through: null });
+    // Ranges that don't meet cover nothing together.
+    expect(commonCoverage([{ from: "2026-01-01", through: "2026-01-31" }, { from: "2026-03-01", through: "2026-03-31" }])).toEqual({ from: null, through: null });
+    const both = commonCoverage([a, b]);
+    expect(coversDays(both, { from: "2026-10-10", to: "2026-10-16" })).toBe(true);
+    expect(coversDays(both, { from: "2026-10-13", to: "2026-10-19" })).toBe(false);
+    expect(coveredPart(both, { from: "2026-10-13", to: "2026-10-19" })).toEqual({ from: "2026-10-13", to: "2026-10-16" });
+    // A year asked for, 90 days held: the part held.
+    expect(coveredPart({ from: "2026-07-21", through: "2026-10-19" }, { from: "2025-10-19", to: "2026-10-19" })).toEqual({ from: "2026-07-21", to: "2026-10-19" });
+    expect(coveredPart(both, { from: "2026-01-01", to: "2026-01-31" })).toBeNull();
+    expect(coveredPart({ from: null, through: null }, { from: "2026-01-01", to: "2026-01-31" })).toBeNull();
+  });
+
+  it("compares whole days only: a range reaching a running day loses it on both sides, and Today has nothing to compare", () => {
+    const week = { from: "2026-10-13", to: "2026-10-19" };
+    const before = { from: "2026-10-06", to: "2026-10-12" };
+    // Today is the 19th: both sides lose their last day.
+    expect(adComparisonWindows(week, before, "2026-10-18")).toEqual({ current: { from: "2026-10-13", to: "2026-10-18" }, previous: { from: "2026-10-06", to: "2026-10-11" }, trimmed: 1 });
+    // A finished range compares as picked.
+    expect(adComparisonWindows({ from: "2026-10-01", to: "2026-10-07" }, { from: "2026-09-24", to: "2026-09-30" }, "2026-10-18")).toEqual({
+      current: { from: "2026-10-01", to: "2026-10-07" },
+      previous: { from: "2026-09-24", to: "2026-09-30" },
+      trimmed: 0,
+    });
+    // Today alone, or yesterday while an ad account's own day is still running.
+    expect(adComparisonWindows({ from: "2026-10-19", to: "2026-10-19" }, { from: "2026-10-18", to: "2026-10-18" }, "2026-10-18")).toBeNull();
+    expect(adComparisonWindows({ from: "2026-10-18", to: "2026-10-18" }, { from: "2026-10-17", to: "2026-10-17" }, "2026-10-17")).toBeNull();
+    // Dates picked to compare with that are shorter than what's left out: nothing to compare.
+    expect(adComparisonWindows(week, { from: "2026-09-01", to: "2026-09-01" }, "2026-10-18")).toBeNull();
+    // The last day that is over everywhere: the store's yesterday, or earlier for an account whose day lags.
+    expect(lastWholeAdDay("2026-10-19", [])).toBe("2026-10-18");
+    expect(lastWholeAdDay("2026-10-19", ["2026-10-19", "2026-10-18"])).toBe("2026-10-17");
+    expect(lastWholeAdDay("2026-10-19", ["2026-10-20"])).toBe("2026-10-18");
+  });
+
+  it("tells time zones with different days apart from ones that only have another name", () => {
+    const now = new Date("2026-10-19T03:00:00Z");
+    expect(sameDays("Australia/Melbourne", "Australia/Melbourne", now)).toBe(true);
+    expect(sameDays("Australia/Melbourne", "Australia/Sydney", now)).toBe(true);
+    expect(sameDays("Australia/Melbourne", "America/Los_Angeles", now)).toBe(false);
+    // Same offset in one season only (Brisbane keeps no summer time): different days part of the year.
+    expect(sameDays("Australia/Melbourne", "Australia/Brisbane", now)).toBe(false);
+    expect(sameDays("Not/AZone", "UTC", now)).toBe(true);
   });
 });
 
@@ -201,6 +297,21 @@ describe("AdSense", () => {
       { day: "2026-10-03", earnings: 1, pageViews: 0, impressions: 0, clicks: 0 },
     ]);
     expect(siteTotals(rows).map((s) => [s.site, s.earnings])).toEqual([["blog.example.com", 5], ["shop.example.com", 3]]);
+    // Days AdSense was never read (before the account's history starts) are missing, not $0.
+    expect(adsenseSeries(rows, { from: "2026-09-30", to: "2026-10-02" }, { from: "2026-10-01", through: "2026-10-01" })).toEqual([
+      { day: "2026-09-30", earnings: null, pageViews: null, impressions: null, clicks: null },
+      { day: "2026-10-01", earnings: 7, pageViews: 30, impressions: 0, clicks: 0 },
+      { day: "2026-10-02", earnings: null, pageViews: null, impressions: null, clicks: null },
+    ]);
+  });
+
+  it("keeps a connection's earnings to the sites chosen for the store, every site when none are", () => {
+    expect(adsenseSiteChosen([], "blog.example.com")).toBe(true);
+    expect(adsenseSiteChosen(["shop.example.com"], "shop.example.com")).toBe(true);
+    expect(adsenseSiteChosen(["Shop.Example.com "], "shop.example.com")).toBe(true);
+    expect(adsenseSiteChosen(["shop.example.com"], "blog.example.com")).toBe(false);
+    // A report that wasn't split by site can't be told apart: not the chosen site's.
+    expect(adsenseSiteChosen(["shop.example.com"], "")).toBe(false);
   });
 
   it("takes the publisher id out of an account name", () => {
