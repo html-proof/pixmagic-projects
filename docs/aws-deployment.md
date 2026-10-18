@@ -218,6 +218,14 @@ job signs in only with the OIDC deploy role and checks that it did.
   A busy PC (demos, other test runs) makes the integration tests 2-3 times slower and can time one
   out: re-run the job.
 - While the runner deploys, nobody deploys by hand: the two don't share a lock.
+- The PC's network hands out IPv6 addresses with no route behind them. Most tools fall back to
+  IPv4, but Playwright's browser download tries IPv6 first and gives up on every attempt ("timed out
+  after 30000ms" after 5 s). So the e2e job's download step preloads `apps/web/e2e/ipv4-only.mjs`.
+  Browsers then stay in the runner account's profile, and only a new Playwright version downloads
+  again.
+- Pass records (`passed-*` artifacts) can't be stored while the account's artifact storage quota is
+  used up ("Artifact storage quota has been hit"). Then every push to `main` runs the checks again
+  (about 40 minutes on the PC) instead of reusing a pull request's pass. It costs only time.
 - Job code still runs on the owner's PC: it can reach anything listening on localhost there, and
   what one job leaves in the runner folder the next one (a deploy, with the deploy role) runs with.
   Only collaborators can start jobs (fork pull requests are off); keep it that way, and never make
