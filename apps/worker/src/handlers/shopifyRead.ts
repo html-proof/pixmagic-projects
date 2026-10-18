@@ -26,7 +26,7 @@ export interface Pace {
 }
 
 /** Shopify's answers about the shop rather than the request (see gql). */
-const SHOP_UNAVAILABLE = new Set([402, 404, 423]);
+export const SHOP_UNAVAILABLE = new Set([402, 404, 423]);
 
 export async function gql<T>(deps: WorkerDeps, store: Store, pace: Pace, query: string, variables?: Record<string, unknown>) {
   try {
