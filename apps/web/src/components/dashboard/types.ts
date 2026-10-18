@@ -334,6 +334,8 @@ export interface CheckSummary {
     compared: number;
     /** Orders written again or removed so the figures match. */
     repaired: number;
+    /** Orders Shopify no longer shares (placed over 60 days ago), left out of the comparison. */
+    setAside: number;
   } | null;
 }
 
@@ -350,7 +352,10 @@ export interface CheckDetail {
     findings: Partial<Record<string, number>>;
     repaired: number;
     removed: number;
-    results: Array<{ metric: CheckMetric; shopify: number | null; before: number | null; bizinsights: number | null; status: string; cause: string | null }>;
+    /** Orders Shopify no longer shares, left out of the comparison, and their share of each figure. */
+    setAside: { orders: number; totals: Record<CheckMetric, number> } | null;
+    /** `setAside`: the part of `bizinsights` left out of the comparison (0 when nothing was). */
+    results: Array<{ metric: CheckMetric; shopify: number | null; before: number | null; bizinsights: number | null; setAside: number; status: string; cause: string | null }>;
   } | null;
 }
 

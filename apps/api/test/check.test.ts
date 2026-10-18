@@ -114,14 +114,56 @@ describe("checked against Shopify", () => {
     expect(last).toMatchObject({ id: rec.id, status: "repaired", from: "2026-10-11", to: "2026-10-17", currency: "AUD", findings: { missing: 1 }, repaired: 1 });
     // In the order the dashboard lists them; the order ids stay in the database.
     expect(last.results.map((r: { metric: string }) => r.metric)).toEqual(["orders", "netSales", "taxes"]);
-    expect(last.results[1]).toEqual({ metric: "netSales", shopify: 812.5, before: 712.5, bizinsights: 812.5, status: "repaired", cause: "missing" });
+    expect(last.results[1]).toEqual({ metric: "netSales", shopify: 812.5, before: 712.5, bizinsights: 812.5, setAside: 0, status: "repaired", cause: "missing" });
+    expect(last.setAside).toBeNull();
     expect(JSON.stringify(res.json())).not.toContain("#9");
 
     const ov = await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${store.id}/overview?preset=7d`, headers: a.headers });
     expect(ov.json().check).toEqual({
       running: null,
-      last: { status: "repaired", from: "2026-10-11", to: "2026-10-17", checkedAt: "2026-10-18T03:31:00.000Z", ordersChecked: 9, matched: 3, compared: 3, repaired: 1 },
+      last: { status: "repaired", from: "2026-10-11", to: "2026-10-17", checkedAt: "2026-10-18T03:31:00.000Z", ordersChecked: 9, matched: 3, compared: 3, repaired: 1, setAside: 0 },
     });
+  });
+
+  it("says what a check set aside: orders Shopify no longer shares, and their share of each figure", async () => {
+    const { a, ws, store } = await owner();
+    const totals = { orders: 0, grossSales: 33.64, discounts: 0, returns: 0, netSales: 33.64, shipping: 0, taxes: 3.36, totalSales: 37, units: 1 };
+    await systemDb.reconciliation.create({
+      data: {
+        workspaceId: ws,
+        storeId: store.id,
+        source: "shopify_records",
+        trigger: "manual",
+        fromDay: "2026-08-21",
+        toDay: "2026-10-18",
+        timezone: "UTC",
+        currency: "AUD",
+        status: "verified",
+        ordersChecked: 200,
+        findings: { not_listed: { count: 1, orders: [{ id: "2718", name: "#2718S" }] } },
+        actions: { repaired: 0, removed: 0, recomputed: 59, setAside: { orders: 1, totals } },
+        startedAt: new Date("2026-10-19T03:30:00Z"),
+        finishedAt: new Date("2026-10-19T03:35:00Z"),
+        results: {
+          create: [
+            { workspaceId: ws, metric: "orders", shopifyValue: 200, beforeValue: 200, afterValue: 200, status: "match" },
+            { workspaceId: ws, metric: "totalSales", shopifyValue: 9000, beforeValue: 9037, afterValue: 9037, status: "match" },
+          ],
+        },
+      },
+    });
+    const last = (await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${store.id}/check`, headers: a.headers })).json().last;
+    expect(last.setAside).toEqual({ orders: 1, totals });
+    expect(last.findings).toEqual({ not_listed: 1 });
+    expect(last.results.map((r: { metric: string; setAside: number }) => [r.metric, r.setAside])).toEqual([
+      ["orders", 0],
+      ["totalSales", 37],
+    ]);
+    expect(JSON.stringify(last)).not.toContain("#2718S");
+
+    // Everyone sees how many orders were set aside, never how much.
+    const ov = await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${store.id}/overview?preset=7d`, headers: a.headers });
+    expect(ov.json().check.last).toMatchObject({ status: "verified", matched: 2, compared: 2, setAside: 1 });
   });
 
   it("another workspace's store is not found; a store still importing can't be checked; too many checks are refused", async () => {
