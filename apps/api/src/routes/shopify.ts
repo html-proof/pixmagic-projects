@@ -13,6 +13,7 @@ import {
   obtainStoreToken,
   shopifyApp,
   shopifyApps,
+  shopifyHonoursToken,
   storeLimitReached,
   type Plan,
   type ShopifyApp,
@@ -80,6 +81,22 @@ async function workingFor(store: Store | null, app: ShopifyApp): Promise<boolean
     select: { error: true },
   });
   return syncProblem(failed?.error) !== "access";
+}
+
+/**
+ * Whether Shopify still accepts the token of a store that works by our records (one quick call,
+ * core's shopifyHonoursToken). No answer (Shopify slow or down, the shop frozen) counts as yes: the
+ * store opens as it always has, rather than a merchant waiting on Shopify to open their dashboard.
+ */
+async function stillHonoured(deps: Deps, store: Store, app: ShopifyApp): Promise<boolean> {
+  try {
+    if (await shopifyHonoursToken(store, deps.coord, deps.fetchImpl)) return true;
+  } catch (err) {
+    logger.warn({ err, shop: store.shopDomain, app: app.key }, "couldn't ask Shopify whether the store's token works; opening the store");
+    return true;
+  }
+  logger.info({ event: "shopify_launch_token_refused", shop: store.shopDomain, app: app.key, storeId: store.id }, "Shopify refuses the token of a store opened from Shopify; authorizing again");
+  return false;
 }
 
 /**
@@ -291,9 +308,14 @@ async function finishInstall(
 
   // Opened again before anyone claimed it: the import already ran, this approval only earns the
   // browser its claim (landingFor), so go there. The fresher token is on the row already
-  // (exchangeOrFail puts it on a row that holds one from this app).
+  // (exchangeOrFail puts it on a row that holds one from this app). The approval is recorded as
+  // the current installation all the same: it may follow an uninstall seconds earlier (App
+  // Review's test), and the app/uninstalled still queued from then must find the store installed
+  // after it, or the worker wipes the token just put on the row. Only over a row still installed:
+  // one the worker uninstalled meanwhile is attached again below.
   if (existing && (await workingFor(existing, app)) && (await unclaimed(existing.workspaceId))) {
-    return c.redirect(await landingFor(c, deps, existing));
+    const { count } = await systemDb.store.updateMany({ where: { id: existing.id, status: { not: "uninstalled" } }, data: { installedAt: new Date() } });
+    if (count) return c.redirect(await landingFor(c, deps, existing));
   }
 
   // The store goes back to its own workspace, except one an account had until the merchant
@@ -532,7 +554,7 @@ export function shopifyRoutes(app: App, deps: Deps) {
 
       const store = await systemDb.store.findUnique({ where: { shopDomain: shop } });
       /** Which of our apps this launch goes on with: see appToKeep. */
-      const via = await appToKeep(store, app);
+      let via = await appToKeep(store, app);
 
       // 1. A one-click connect this browser started from inside the app: finish it there.
       if (pendingNonce) {
@@ -552,8 +574,15 @@ export function shopifyRoutes(app: App, deps: Deps) {
 
       // 2. Installed and working: open it. One nobody has claimed yet goes through Shopify's
       //    approval first (it doesn't prompt again): a signed link alone doesn't earn a claim.
+      //    Working by our records isn't enough. An uninstall and a reinstall seconds apart (App
+      //    Review's test) open the app before the worker has applied the app/uninstalled, with a
+      //    token the uninstall revoked. So Shopify is asked first, and a store whose token it
+      //    refuses is authorized below: the callback records the new installation, and the queued
+      //    app/uninstalled, now older than it, is set aside by the worker.
       if (store && (await workingFor(store, via)) && !(await unclaimed(store.workspaceId))) {
-        return c.redirect(await landingFor(c, deps, store));
+        if (await stillHonoured(deps, store, via)) return c.redirect(await landingFor(c, deps, store));
+        // The app Shopify just opened is installed; the one the store was kept on may not be.
+        via = app;
       }
 
       // 3. A new or uninstalled store opened by someone signed in who manages exactly one

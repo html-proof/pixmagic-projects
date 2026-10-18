@@ -24,7 +24,10 @@ beforeEach(async () => {
   await resetDb();
   queues.clear();
   coord.clear();
-  fetchImpl = async () => {
+  fetchImpl = async (url, init) => {
+    // app/uninstalled asks whether the store's token still works: as after a real uninstall, it doesn't.
+    if (isInstallationCheck(init)) return new Response(JSON.stringify({ errors: "[API] Invalid API key or access token" }), { status: 401 });
+    if (String(url).endsWith("/admin/oauth/access_token")) return new Response(JSON.stringify({ error: "invalid_subject_token" }), { status: 400 });
     throw new Error("unexpected fetch");
   };
 });
@@ -62,9 +65,12 @@ async function webhook(topic: string, shop: string, payload: unknown, triggeredA
 const sub = (ws: string) => systemDb.subscription.findUniqueOrThrow({ where: { workspaceId: ws } });
 
 const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
-/** A late app/uninstalled first asks whether the current installation works (it does, here). */
-const isInstallationCheck = (init?: RequestInit) => String(init?.body).includes("currentAppInstallation");
+/** app/uninstalled and shop/redact first ask whether the store's token still works. */
+function isInstallationCheck(init?: RequestInit) {
+  return String(init?.body).includes("currentAppInstallation");
+}
 const installationWorks = () => json({ data: { currentAppInstallation: { id: "gid://shopify/AppInstallation/1" } } });
+
 
 describe("billing when the app is uninstalled", () => {
   it("app/uninstalled ends the plan billed on that store, and the change awaiting approval with it", async () => {
@@ -114,6 +120,15 @@ describe("billing when the app is uninstalled", () => {
     };
     await webhook("app/uninstalled", store.shopDomain, { id: 1 }, new Date(Date.now() - 20 * 60_000).toISOString());
     expect((await sub(ws.id)).plan).toBe("free");
+  });
+
+  it("shop/redact for a shop closed with the app still installed ends the plan billed on it", async () => {
+    // Closing a shop sends no app/uninstalled, but Shopify cancels the app's charges with it.
+    const { ws, store } = await payingWorkspace();
+    await webhook("shop/redact", store.shopDomain, { shop_id: 1, shop_domain: store.shopDomain });
+    expect(await systemDb.store.findUnique({ where: { id: store.id } })).toBeNull();
+    expect(await sub(ws)).toMatchObject({ plan: "free", status: "active", shopifyChargeId: null, pendingPlan: null, pendingChargeId: null, billingStoreId: null });
+    expect(await systemDb.auditLog.findFirstOrThrow({ where: { action: "billing.subscription_ended" } })).toMatchObject({ metadata: { plan: "growth", reason: "uninstalled" } });
   });
 
   it("app_subscriptions/update CANCELLED for the charge in force drops the workspace to Free", async () => {

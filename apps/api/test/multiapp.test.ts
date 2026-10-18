@@ -137,6 +137,18 @@ describe("several Shopify apps", () => {
       expect(authorize.pathname).toBe("/admin/oauth/authorize");
       expect(authorize.searchParams.get("client_id")).toBe("test_key");
     });
+
+    it("a store whose own app was uninstalled moments ago (not applied yet) is authorized through the app opened", async () => {
+      const store = await connected("default");
+      await systemDb.store.update({
+        where: { id: store.id },
+        data: encryptTokenFields(store.id, { accessToken: "shpat_REVOKED", refreshToken: null, scopes: ["read_orders"], accessTokenExpiresAt: null, refreshTokenExpiresAt: null }),
+      });
+      ctx.setFetch(async () => json({ errors: "[API] Invalid API key or access token (unrecognized login or wrong password)" }, 401));
+      const authorize = new URL(String((await launch("appstore_secret")).headers.location));
+      expect(authorize.pathname).toBe("/admin/oauth/authorize");
+      expect(authorize.searchParams.get("client_id")).toBe("appstore_key");
+    });
   });
 
   it("other stores keep using the default app", async () => {

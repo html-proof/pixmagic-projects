@@ -58,9 +58,14 @@ beforeEach(async () => {
   fetchImpl = async (url, init) => {
     const sales = salesAnswer(url, init);
     if (sales) return sales;
+    // app/uninstalled asks whether the store's token still works: as after a real uninstall, it doesn't.
+    if (String(init?.body).includes("currentAppInstallation")) return revoked();
+    if (String(url).endsWith("/admin/oauth/access_token")) return new Response(JSON.stringify({ error: "invalid_subject_token" }), { status: 400 });
     throw new Error("unexpected fetch");
   };
 });
+
+const revoked = () => new Response(JSON.stringify({ errors: "[API] Invalid API key or access token (unrecognized login or wrong password)" }), { status: 401, headers: { "content-type": "application/json" } });
 
 async function makeStore(scopes = ["read_orders", "read_products", "read_customers"], timezone = "America/New_York", shopDomain = "s.myshopify.com") {
   const ws = await systemDb.workspace.create({ data: { name: "W" } });
@@ -394,6 +399,66 @@ describe("webhook processing", () => {
     expect(await systemDb.auditLog.count({ where: { action: "store.uninstalled" } })).toBe(1);
   });
 
+  it("leaves alone a reinstall that only swapped the token, though installedAt predates the uninstall", async () => {
+    // Uninstalled at T0 and reinstalled seconds later into a working store nobody claimed: the
+    // callback puts the new token on the row and takes finishInstall's shortcut, so installedAt
+    // stays at the first install. Shopify revoked the old token at T0; it accepts the row's one.
+    const store = await makeStore();
+    await systemDb.store.update({ where: { id: store.id }, data: { status: "active", installedAt: minutesAgo(60) } });
+    const asked = shopifyInstallation(200);
+    await webhook("app/uninstalled", {}, minutesAgo(1));
+    const after = await systemDb.store.findUniqueOrThrow({ where: { id: store.id } });
+    expect(after.status).toBe("active");
+    expect(after.accessTokenEnc).toBeTruthy();
+    expect(await systemDb.auditLog.count({ where: { action: "store.uninstalled" } })).toBe(0);
+    expect(asked).toHaveLength(1);
+  });
+
+  it("sets aside a stale app/uninstalled while the shop is frozen or locked (402/423): that says nothing about the app", async () => {
+    for (const status of [402, 423]) {
+      const store = await makeStore();
+      await systemDb.store.update({ where: { id: store.id }, data: { status: "active", installedAt: new Date() } });
+      shopifyInstallation(status, status === 402 ? "Unavailable Shop" : "Locked");
+      await webhook("app/uninstalled", {}, minutesAgo(5));
+      const after = await systemDb.store.findUniqueOrThrow({ where: { id: store.id } });
+      expect(after.status).toBe("active");
+      expect(after.accessTokenEnc).toBeTruthy();
+      await systemDb.store.delete({ where: { id: store.id } });
+    }
+  });
+
+  it("sets aside a stale app/uninstalled that lands while a reinstall is being written (no token yet)", async () => {
+    // attachStore writes status and installedAt first and the tokens just after.
+    const store = await makeStore();
+    await systemDb.store.update({ where: { id: store.id }, data: { status: "syncing", installedAt: new Date(), accessTokenEnc: null } });
+    await webhook("app/uninstalled", {}, minutesAgo(1));
+    expect((await systemDb.store.findUniqueOrThrow({ where: { id: store.id } })).status).toBe("syncing");
+  });
+
+  it("applies a fresh app/uninstalled for a frozen shop (402): only a stale one is set aside for it", async () => {
+    const store = await makeStore();
+    await systemDb.store.update({ where: { id: store.id }, data: { status: "active", installedAt: minutesAgo(60) } });
+    shopifyInstallation(402, "Unavailable Shop");
+    await webhook("app/uninstalled", {}, minutesAgo(1));
+    expect((await systemDb.store.findUniqueOrThrow({ where: { id: store.id } })).status).toBe("uninstalled");
+  });
+
+  it("app/uninstalled is retried while Shopify can't be asked, and applied on the last attempt rather than dropped", async () => {
+    const store = await makeStore();
+    await systemDb.store.update({ where: { id: store.id }, data: { status: "active", installedAt: minutesAgo(60) } });
+    fetchImpl = async () => {
+      throw new TypeError("fetch failed");
+    };
+    await expect(webhook("app/uninstalled", {}, minutesAgo(1))).rejects.toThrow("fetch failed");
+    expect((await systemDb.store.findUniqueOrThrow({ where: { id: store.id } })).status).toBe("active");
+
+    const ev = await systemDb.webhookEvent.create({ data: { webhookId: "uninstall-last-try", topic: "app/uninstalled", shopDomain: "s.myshopify.com", attempts: MAX_ATTEMPTS - 1 } });
+    await processWebhook({ eventId: ev.id, topic: "app/uninstalled", shop: "s.myshopify.com", payload: {}, triggeredAt: minutesAgo(1).toISOString() }, deps);
+    const after = await systemDb.store.findUniqueOrThrow({ where: { id: store.id } });
+    expect(after.status).toBe("uninstalled");
+    expect(after.accessTokenEnc).toBeNull();
+  });
+
   it("applies an app/uninstalled delivery generated after the current installation", async () => {
     const store = await makeStore();
     await systemDb.store.update({ where: { id: store.id }, data: { installedAt: new Date(Date.now() - 60 * 60_000) } });
@@ -578,6 +643,12 @@ describe("webhook processing", () => {
     expect(await systemDb.store.findUnique({ where: { id: store.id } })).not.toBeNull();
     expect(await systemDb.order.count()).toBe(1);
     expect(await systemDb.auditLog.count({ where: { action: { startsWith: "gdpr.shop_redact" } } })).toBe(0);
+
+    // The last attempt carries the request out rather than let it drop: nothing would deliver it again.
+    const ev = await systemDb.webhookEvent.create({ data: { webhookId: "redact-last-try", topic: "shop/redact", shopDomain: "s.myshopify.com", attempts: MAX_ATTEMPTS - 1 } });
+    await processWebhook({ eventId: ev.id, topic: "shop/redact", shop: "s.myshopify.com", payload: { shop_domain: "s.myshopify.com" }, triggeredAt: minutesAgo(1).toISOString() }, deps);
+    expect(await systemDb.store.findUnique({ where: { id: store.id } })).toBeNull();
+    expect(await systemDb.order.count()).toBe(0);
   });
 
   it("GDPR: customers/data_request is recorded once, owners are told, and redaction removes it", async () => {
