@@ -163,7 +163,7 @@ function DashboardPreview() {
   return (
     // Anchored to the bottom so the tilted card's raised right side can rise beside the list above.
     <div aria-hidden="true" className="relative mt-4 min-h-[284px] flex-1">
-      <p className="absolute top-0 left-0 rounded-full bg-white/10 px-2.5 py-1 text-[11px] font-medium text-white/75 ring-1 ring-white/15" data-testid="showcase-illustration">
+      <p className="absolute top-0 left-0 z-10 rounded-full bg-[#0b2e20] px-2.5 py-1 text-[11px] font-medium text-white/80 shadow-[0_6px_16px_-6px_rgb(0_0_0/0.6)] ring-1 ring-white/20" data-testid="showcase-illustration">
         Illustration with sample figures
       </p>
       {/* The entrance animation and the tilt are on separate elements: an animation's transform replaces an inline one. */}
