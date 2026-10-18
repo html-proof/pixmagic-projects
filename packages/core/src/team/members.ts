@@ -1,5 +1,5 @@
 import { systemDb, withTenant, type Tx } from "@app/db";
-import { ACCESS_KEYS, can, hasFullAccess, modulesOf, type AccessModule, type Role } from "@app/shared";
+import { ACCESS_KEYS, can, hasFullAccess, modulesOf, type Role } from "@app/shared";
 import type { StaffRole } from "@app/shared/staff";
 import type { DeliveryStatus, TeamRow, TeamRowStatus, TeamSummary } from "@app/shared/team";
 import { latestDeliveries } from "../mail/deliveries.js";
