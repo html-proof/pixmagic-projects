@@ -27,6 +27,7 @@ Account `605411278365`, region `ap-southeast-2` (Sydney); the WAF web ACL lives 
 | Secrets | Secrets Manager `insights/production/{app,db-owner,worker-cognito}`; settings in SSM `/insights/production/runtime` | `apps/aws/src/secrets.ts` |
 | Logs, alarms | CloudWatch (90 days), dashboard `insights-production`, SNS `insights-production-alarms`, budget US$80/month (emails `budgetEmail`) | `infra/cdk/lib/app-stack.ts` |
 | DB admin | EC2 `insights-production-admin` (t4g.nano, Systems Manager only, normally **stopped**) | `infra/cdk/lib/data-stack.ts` |
+| Audit (whole account) | CloudTrail `insights-account` (every Region) → S3 `insights-account-trail-605411278365` (1 year); IAM Access Analyzer `insights-account` in all 18 enabled Regions (StackSet `insights-account-access-analyzer`); GuardDuty (turned on by hand) | `infra/cdk/lib/audit-stack.ts` |
 
 Redis/ElastiCache is not used: the app has no Redis; DynamoDB does its coordination. There are no
 file uploads (exports are generated on request), so S3 holds only webhook bodies and dumps.
@@ -494,6 +495,10 @@ share Resend's limits with the app's email (free tier: 100 a day, 3,000 a month)
 
 ## Owner-only steps
 
+- **MFA on the root user** (Trusted Advisor "MFA on Root Account", red): sign in as root → account
+  menu (top right) → **Security credentials** → **Multi-factor authentication (MFA)** → **Assign MFA
+  device**, a passkey/security key or an authenticator app. It needs the owner's own device, so no
+  deploy can do it. `aws login` keeps working after it (the browser sign-in asks for the code).
 - **Alerts**: an email address for the alarms (`-c alertEmail=...`; confirm the SNS email). The
   budget already emails `budgetEmail` (config.ts) and needs no confirmation.
 - **Support plan**: the account signed up with a paid plan (Business Support+, the greater of
@@ -530,6 +535,7 @@ before the 10% GST that AWS Australia adds; usage from CloudWatch at that day's 
 | CloudWatch: 25 alarms, 10 free; logs, metrics, dashboard in the free tier | ~1.5 |
 | Secrets Manager (3 × $0.40 + calls), KMS (Cognito email key + ~60-90k requests, 20k free) | ~2.5 |
 | Admin host's disk (stopped), EBS snapshots, X-Ray (~200k traces, 100k free), SQS (~1.3 M requests, 1 M free), S3, DynamoDB, SES | ~2.9 |
+| CloudTrail: the trail's first copy of management events is free; its bucket's log files (PUT requests from 18 Regions, a few hundred MB a year), since 2026-10-18 and not yet in the totals below | ~0.5 |
 | Lambda, CloudFront, Cognito, Scheduler, SNS, ACM (always-free tiers; the account has no 12-month free tier or credits) | 0 |
 | **Total** | **~87** (~96 with GST) |
 
@@ -653,3 +659,32 @@ What production does have, at no extra cost:
   the dead-letter queue, database CPU/memory/storage/connections, the NAT instances' status checks
   and CPU, plus RDS's own events (availability, failure, failover, low storage, maintenance,
   recovery, restoration). **Nobody receives them until an alert email is set** (Owner-only steps).
+
+## Security checks (Trusted Advisor)
+
+The five red security checks on 2026-10-18 and what answers each:
+
+- **Security Groups - Specific Ports Unrestricted** and **- Unrestricted Access**: both were one
+  rule, SSH (22) from `0.0.0.0/0` on `launch-wizard-1` (`sg-08f68079a6d50843e`), a group the EC2
+  console's launch wizard made on 2026-10-15 in the default VPC. Nothing used it (no instance, no
+  network interface, no launch template), so it was deleted by hand on 2026-10-18. The app's own
+  groups take nothing in from the internet (a CDK test checks it). Launching from the console makes
+  such a group again unless "Select existing security group" is chosen.
+- **AWS CloudTrail Management Events Logging** (every Region red): there was no trail. The audit
+  stack's trail `insights-account` logs management events of every Region, global services
+  included, to `insights-account-trail-605411278365` with log file validation (digest files), kept
+  a year; versioning keeps a deleted file 30 days. No CloudWatch Logs copy and no data events, both
+  billed. Read events with `aws cloudtrail lookup-events` (last 90 days, no trail needed) or the
+  files in the bucket.
+- **IAM Access Analyzer - external access** (17 of 18 Regions red): only Sydney had an analyzer,
+  made by hand on 2026-10-15. The StackSet `insights-account-access-analyzer` makes the account
+  analyzer `insights-account` (free) in each of the 18 enabled Regions (`ACCOUNT_REGIONS` in
+  audit-stack.ts; a Region enabled later needs adding there). One account analyzer is allowed per
+  Region, so the hand-made Sydney one was deleted just before the first deploy of this stack and
+  the StackSet made it again. Its roles: `insights-account-stackset-admin` (only this account's
+  StackSets may assume it) and `insights-account-stackset-exec` (stacks and analyzers only).
+  Findings: IAM console → Access analyzer, per Region.
+- **MFA on Root Account**: the owner's step (Owner-only steps above).
+
+Trusted Advisor re-reads these on its own schedule (about daily); "Refresh" on a check, or
+`aws support refresh-trusted-advisor-check --check-id <id> --region us-east-1`, asks sooner.

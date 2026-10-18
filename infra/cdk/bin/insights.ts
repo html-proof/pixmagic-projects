@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { App, Tags } from "aws-cdk-lib";
 import { AppStack } from "../lib/app-stack.js";
+import { AuditStack } from "../lib/audit-stack.js";
 import { AuthStack } from "../lib/auth-stack.js";
 import { CiStack } from "../lib/ci-stack.js";
 import { envConfig } from "../lib/config.js";
@@ -14,6 +15,7 @@ import { EdgeStack } from "../lib/edge-stack.js";
  *   InsightsApp-<env>   ap-southeast-2   SQS, Lambda (api, jobs, cron), CloudFront, schedules, alarms, budget
  *   InsightsAuth-<env>  ap-southeast-2   Cognito (infra/aws/cognito.yaml) + the runtime parameter
  *   InsightsCi-<env>    ap-southeast-2   GitHub OIDC deploy role
+ *   InsightsAudit-production  ap-southeast-2   CloudTrail (all Regions), IAM Access Analyzer in every Region (account-wide, production only)
  * Context: -c env=production|staging, -c schedules=on (at cutover), -c alertEmail=..., -c budgetEmail=..., -c googleClientId=...
  * docs/aws-deployment.md is the runbook.
  */
@@ -34,6 +36,8 @@ new AuthStack(app, name("Auth"), cfg, {
   googleClientId: String(app.node.tryGetContext("googleClientId") ?? "") || undefined,
 });
 new CiStack(app, name("Ci"), cfg, { env, description: "Insights: GitHub Actions deploy role (OIDC)" });
+// Account-wide (one trail and one analyzer per Region is enough), so staging doesn't get a copy.
+if (cfg.name === "production") new AuditStack(app, name("Audit"), cfg, { env, description: "Insights: CloudTrail and IAM Access Analyzer for the whole account" });
 
 Tags.of(app).add("app", "insights");
 Tags.of(app).add("environment", cfg.name);
