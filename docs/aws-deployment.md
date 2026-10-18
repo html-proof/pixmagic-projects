@@ -90,13 +90,34 @@ read GitHub's own claims since January 2026; the trust is to also require `job_w
 nothing, that IAM checks them: a wrong trust locks every later deploy out (each run signs in before
 it deploys), and only the account's root can put it back.
 
-The workflow checks from both ends. Before it signs in, "Token claims the deploy role requires"
-compares its own token with `githubDeployClaims` (`infra/cdk/scripts/oidc-trust.ts claims`). After
-the smoke tests, "The next deploy can still sign in" has STS exchange a fresh token for the role
-(`oidc-trust.ts assume`; that 15-minute session is dropped unread). Both do nothing when the commit
-being deployed predates the script (the workflow file is always the default branch's). "Not
-authorized to perform sts:AssumeRoleWithWebIdentity" at sign-in means token and trust differ: the
-first step prints the token's values.
+The proof: three roles in the same stack (`githubTrustChecks`) that grant nothing (no policy at all).
+`insights-production-github-trust-check` trusts exactly `githubDeployClaims`;
+`…-trust-check-wrong-workflow` and `…-trust-check-wrong-ref` each swap one of the two claims for a ref
+git can't name (`never..matches`), so no token ever carries it.
+
+The workflow checks from both ends (`infra/cdk/scripts/oidc-trust.ts`, logic in
+`infra/cdk/lib/oidc-trust.ts`):
+
+- Before it signs in, "Token claims the deploy role requires" compares its own token with
+  `githubDeployClaims`.
+- After the smoke tests, "The next deploy can still sign in" reads each trust-check role's live
+  trust (`iam:GetRole`; STS also refuses a role that doesn't exist, so a refusal counts only from a
+  role that's there). STS must then admit the workflow to the first and refuse it the other two
+  ("Proven: IAM checks job_workflow_ref and ref…" in the log and the run's summary; anything else is
+  a warning and changes nothing). Last, STS must exchange a fresh token for the deploy role itself:
+  if not, the step fails. Every session these create lasts 15 minutes, and its credentials are
+  dropped unread.
+
+Both steps do nothing when the commit being deployed predates the script: the workflow file is
+always the default branch's, while the checkout may be an older commit's (a CI run that ended after
+a merge). "Not authorized to perform sts:AssumeRoleWithWebIdentity" at sign-in means token and
+trust differ: the first step prints the token's values.
+
+Giving the deploy role the full trust is a one-line change in `infra/cdk/lib/ci-stack.ts` (its
+`StringEquals` from `githubDeployClaims(cfg)` instead of `{ aud, sub }`, and the CDK test with it).
+Make it only after a Deploy to AWS run on `main` printed "Proven", and with no deploy running. That
+run signs in with the old trust and then deploys the new one; its last step proves the next deploy
+can still sign in.
 
 If "The next deploy can still sign in" fails, the release is live (nothing is rolled back) but the
 next deploy can't sign in. The owner, with the account's admin sign-in and no deploy running, puts
@@ -158,8 +179,8 @@ to be increased" (a job failing in seconds with no steps or log; read it with
 included minutes are used up (GitHub Free: 2,000 a month for private repositories, reset on the
 1st at 00:00 UTC) or a payment failed. Self-hosted runners cost nothing, so CI and Deploy can run on
 the owner's PC instead. Every CI job's `runs-on` reads the repository variable `SELF_HOSTED_RUNNER`;
-while it is unset, everything runs on `ubuntu-latest` exactly as before. Deploy to AWS reads
-`SELF_HOSTED_DEPLOY_RUNNER` first (the deploy-only runner below), then `SELF_HOSTED_RUNNER`.
+while it is unset, everything runs on `ubuntu-latest` exactly as before. Pushes to `main` and
+Deploy to AWS read `SELF_HOSTED_MAIN_RUNNER` first (the runner for main, below).
 
 Set up once, in an elevated Windows PowerShell. `infra/runner/install-runner.ps1` does every step
 below in one go (`powershell -ExecutionPolicy Bypass -File infra\runner\install-runner.ps1`, from
@@ -241,40 +262,58 @@ the switch (Settings → Secrets and variables → Actions → Variables): `SELF
 `["self-hosted","bizinsights-pc"]`. The first job run on the PC also proves GitHub still starts
 self-hosted jobs under the billing block.
 
-#### The deploy-only runner
+#### The runner for main
 
 Pull-request jobs run code nobody has reviewed yet (a new dependency's install script, say), and a
 runner keeps state between jobs: its tool cache, its pnpm store, its account's profile and the
 runner folder. On one shared runner, whatever such a job leaves there the next Deploy to AWS runs
-with, while it holds the deploy role, which reaches AdministratorAccess through the CDK roles. So
-deploys get a second runner service on the same PC: account `ghdeploy`, folder
-`C:\actions-runner-deploy`, name and only label `bizinsights-pc-deploy`. Neither account can
-change the other's folders or profile, and the folders on the system `PATH` are administrators-only
-(checked 2026-10-18), so a deploy runs only programs administrators installed and its own.
+with, while it holds the deploy role, which reaches AdministratorAccess through the CDK roles. And
+one runner takes jobs oldest-queued first: main's e2e job queues only once main's checks are done,
+so pull-request runs pushed meanwhile go first, and the deploy waits behind them all.
+
+So `main` gets a second runner service on the same PC, for CI on pushes to `main` and for Deploy to
+AWS: the code that already got into `main`, the same code the deploy runs. Account `ghmain`,
+folder `C:\actions-runner-main`, name and only label `bizinsights-pc-main`, and its own e2e
+browsers in `C:\ms-playwright-main` (`PW_BROWSERS` in the runner's `.env`; the first e2e run on
+`main` downloads them). Neither account can change the other's folders or profile, and the folders
+on the system `PATH` are administrators-only (checked 2026-10-18). Node also looks in
+`C:\node_modules` for any package a project lacks (vite asks for `fsevents`, which Windows never
+gets), and any account may create folders at C:\, so the scripts keep that folder administrators'
+too ("Hardening the runner"). Each job's PostgreSQL superuser has a password of its own: the two
+runners' jobs can run at the same time, and a superuser can run programs as the account that
+started the server. Server and clients use 127.0.0.1 only (with `localhost`, a job holding the
+port on ::1 first could ask the tests for that password in clear), and psql and createdb accept
+SCRAM only (`PGREQUIREAUTH`).
+
+What the two runners still share: anything listening on localhost while a job runs. During main's
+e2e job that is the app under test, the sign-in stand-ins and the Mailpit stand-in, on free ports.
+A pull-request job could reach them as a client, and could log in to main's test database as the
+tenant role `app_rls` (fixed password, no superuser) and change test data. That can make main's
+tests fail or pass wrongly; it gives no way to run code as ghmain.
 
 Labels alone wouldn't keep other jobs off it: any branch's workflow can ask for any label. Its job
-hook (`infra/runner/deploy-only-hook.js`, which the runner runs with its own Node before every job;
+hook (`infra/runner/main-only-hook.js`, which the runner runs with its own Node before every job;
 a copy in `C:\ProgramData\bizinsights-runner`, administrators-only) fails every job before its first
-step unless GitHub says it is `aws-deploy.yml` from `main`, started by a CI run or by hand. Those
-values come from the job's github context, which a workflow file can't change. A refused job's
-"Set up runner" step says why.
+step unless GitHub says it is `ci.yml` for a push to `main`, or `aws-deploy.yml` from `main` started
+by a CI run or by hand. Those values come from the job's github context, which a workflow file can't
+change. A refused job's "Set up runner" step says why. The script writes the hook into the runner's
+`.env` before it registers the runner, so a job already queued for the label meets the hook too.
+It refuses a runner, hook or browsers folder that already exists and isn't an administrator's
+(someone else may have planted files there for it to run elevated, or for ghmain to run).
 
-In an elevated Windows PowerShell, from the repository folder (asks for a new password for
-ghdeploy, twice):
+In an elevated Windows PowerShell, from the repository folder (asks for a new password for ghmain,
+twice):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File infra\runner\install-runner.ps1 -Deploy
+powershell -ExecutionPolicy Bypass -File infra\runner\install-runner.ps1 -Main
 ```
 
-Then the variable `SELF_HOSTED_DEPLOY_RUNNER` = `["bizinsights-pc-deploy"]`. Until it is set, each
-deploy runs on the shared runner and warns ("On the runner pull requests use"). The next deploy's
-"Set up runner" step should show "A job started hook has been configured by the self-hosted runner
-administrator" and "allowed on this runner". With its own runner a deploy no longer queues behind
-pull-request jobs either; the two share the laptop's CPU.
-
-After 2026-11-01, when GitHub's included minutes are back, `SELF_HOSTED_DEPLOY_RUNNER` =
-`"ubuntu-latest"` deploys on a fresh GitHub machine every time while CI stays on the PC (about 5
-minutes a deploy).
+Then the variable `SELF_HOSTED_MAIN_RUNNER` = `["bizinsights-pc-main"]`. Until it is set, main's
+jobs run on the shared runner and each deploy warns ("On the runner pull requests use"). Once set,
+the next run's "Set up runner" steps should show "A job started hook has been configured by the
+self-hosted runner administrator" and "allowed on this runner". (CI uses the runner for main only
+while `SELF_HOSTED_RUNNER` is set too: its steps decide between the PC and GitHub's machines by that
+variable.) Main and pull-request runs now go side by side and share the laptop's CPU.
 
 #### Hardening the runner
 
@@ -285,7 +324,18 @@ creates. For a runner installed before 2026-10-18 (ghrunner), run once, from the
 powershell -ExecutionPolicy Bypass -File infra\runner\harden-runner.ps1
 ```
 
-It is safe to run again. For each runner account that exists (ghrunner, ghdeploy):
+It is safe to run again. First the folders jobs run code from, owned by Administrators
+(`infra/runner/runner-folders.ps1`). A standard account can create folders at C:\ and in
+C:\ProgramData, and a folder's owner can always rewrite its permissions, so the script stops at a
+folder that someone other than an administrator, you or the runner it belongs to made first. Look
+at what's inside, delete it in an elevated Command Prompt (`rmdir /s /q <folder>`), then run it
+again.
+
+- `C:\node_modules`: read-only to users (it creates it). Today any account could make it, and a
+  `fsevents` folder planted there would run inside every test and deploy job.
+- The e2e browsers (below), and the runner for main's hook folder.
+
+Then, for each runner account that exists (ghrunner, ghmain):
 
 - A password is required. `New-LocalUser` leaves the account flagged "password not required"
   (PASSWD_NOTREQD), which lets it be given an empty one. By hand: `net user ghrunner /passwordreq:yes`.
@@ -296,10 +346,16 @@ It is safe to run again. For each runner account that exists (ghrunner, ghdeploy
   password with a network logon, so registering that account's runner again needs the network
   denial lifted first: install-runner.ps1 does that and puts it back.
 
-And `C:\ms-playwright` (the e2e job's browsers): C:\ passes "Authenticated Users: Modify" down to
-new folders, so every account on the PC could replace the `chrome.exe` the runner starts. The
-script leaves it changeable by administrators, SYSTEM and ghrunner (which downloads new browser
-builds into it), readable by users. By hand:
+And the e2e job's browsers: C:\ passes "Authenticated Users: Modify" down to new folders, so every
+account on the PC could replace the `chrome.exe` a runner starts. The script leaves
+`C:\ms-playwright` changeable by administrators, SYSTEM and ghrunner (which downloads new browser
+builds into it), readable by users; and `C:\ms-playwright-main` the same with ghmain, not
+readable by other accounts. Both are owned by Administrators from then on. By hand, for the first
+(the second: `ghmain`, without the last grant; `C:\node_modules`: no `ghrunner` grant):
+
+```powershell
+icacls C:\ms-playwright /setowner "*S-1-5-32-544" /T /C /Q
+```
 
 ```powershell
 icacls C:\ms-playwright /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" "ghrunner:(OI)(CI)M" "*S-1-5-32-545:(OI)(CI)RX"
@@ -309,22 +365,24 @@ icacls C:\ms-playwright /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32
 icacls "C:\ms-playwright\*" /reset /T /C /Q
 ```
 
-(The second makes everything inside inherit exactly that.)
+(The last makes everything inside inherit exactly that.)
 
 On the PC there is no Docker: each job starts its own throwaway PostgreSQL 18 from
 `C:\Program Files\PostgreSQL\18\bin` and the e2e job a Mailpit stand-in
 (`apps/web/e2e/mailpit-stub.mjs`), all on free ports; the runner stops them with the job. The deploy
 job signs in only with the OIDC deploy role and checks that it did.
 
-- The e2e job's browsers live in `C:\ms-playwright` (`PW_BROWSERS` in the job's environment
-  points elsewhere), so "Browser for the tests" only checks them. The PC's network hands out IPv6
+- The e2e job's browsers live in `C:\ms-playwright` (on the runner for main, `C:\ms-playwright-main`:
+  `PW_BROWSERS` in the job's environment points elsewhere), so "Browser for the tests" only checks
+  them. The PC's network hands out IPv6
   addresses with no route behind them. Most tools fall back to IPv4, but Playwright's download
   tries IPv6 first and gives up on every attempt ("timed out after 30000ms" after 5 s). So that
   step preloads `apps/web/e2e/ipv4-only.mjs`, and a new browser build downloads into the folder by
   itself. If a download still fails, fill the folder by hand from an account that has the browsers,
-  in an elevated Windows PowerShell (once hardened, only administrators and ghrunner may write
-  there), then run harden-runner.ps1 again:
+  in an elevated Windows PowerShell (once hardened, only administrators and the runner's account
+  may write there), then run harden-runner.ps1 again:
   `Copy-Item -Recurse -Force C:\Users\<account>\AppData\Local\ms-playwright\* C:\ms-playwright`.
+  Never copy from `C:\ms-playwright` into `C:\ms-playwright-main`: pull-request jobs can change the first.
 - The PC must be on and awake: queued jobs wait up to 24 hours for the runner, then are cancelled.
   It's a laptop with Modern Standby: it sleeps 3 minutes after the last input once the screen
   turns off (even on AC, even with "sleep: never"), and when the lid closes. Asleep, it drops the
@@ -339,15 +397,15 @@ job signs in only with the OIDC deploy role and checks that it did.
   used up ("Artifact storage quota has been hit"). Then every push to `main` runs the checks again
   (about 40 minutes on the PC) instead of reusing a pull request's pass. It costs only time.
 - Job code still runs on the owner's PC: it can reach anything listening on localhost there, and
-  what one CI job leaves behind the next CI job runs with. With the deploy-only runner that stops
-  short of the deploy; without it, the deploy runs with it too. Only collaborators can start jobs
-  (fork pull requests are off); keep it that way, and never make the repository public while a
-  runner is attached.
-- Back to GitHub's runners: delete `SELF_HOSTED_DEPLOY_RUNNER` and `SELF_HOSTED_RUNNER` first. Then,
-  for each runner (`C:\actions-runner-deploy` with account ghdeploy, `C:\actions-runner` with
+  what one pull request's job leaves behind the next job on that runner runs with. With the runner
+  for main that stops short of main's CI and the deploy; without it, they run with it too. Only
+  collaborators can start jobs (fork pull requests are off); keep it that way, and never make the
+  repository public while a runner is attached.
+- Back to GitHub's runners: delete `SELF_HOSTED_MAIN_RUNNER` and `SELF_HOSTED_RUNNER` first. Then,
+  for each runner (`C:\actions-runner-main` with account ghmain, `C:\actions-runner` with
   ghrunner), in an elevated PowerShell in its folder: `Stop-Service "actions.runner.*.<name>"`,
   `.\config.cmd remove` with the token from the runner's page in Settings → Actions → Runners, and
-  `Remove-LocalUser <account>`. Last, `Remove-Item -Recurse C:\ProgramData\bizinsights-runner`.
+  `Remove-LocalUser <account>`. Last, `Remove-Item -Recurse C:\ProgramData\bizinsights-runner, C:\ms-playwright-main`.
 
 ## Database
 
@@ -663,6 +721,21 @@ top: the account is on Business Support+ (AWS's price list names its sign-up pro
 `AWSSupportEssential` "AWS Business Support+"), the greater of US$29/month or 9% of the bill
 (Owner-only steps).
 
+**What the bill shows** (Bills page and Cost Explorer, read 2026-10-18 ~15:10 UTC): October so far
+US$26.46 = US$24.06 of charges + US$2.40 GST. **US$15.72 of the 24.06 is Business Support+**
+("Recurring monthly charge (2026-10-15 to 2026-10-31)", US$29 prorated). The app's own resources were
+~8.3: RDS 3.71, EC2 2.93 (the NAT gateway's last day included), WAF 0.87, public IPv4 0.45, Cost
+Explorer API 0.15 (US$0.01 a call, so a cost audit costs ~0.15), the rest a few cents each. Cost
+Explorer starts on 2026-10-16, too little history for AWS's forecast. Usage per day fell from 3.30
+(2026-10-16: NAT gateway + single-AZ db.t4g.small) to 2.85 (2026-10-17, the switch) and runs at ~2.5,
+the table above without GuardDuty; traffic was flat or falling (API invocations 11.7k → 8.0k → 4.1k
+a day). Every charge is in Sydney except the WAF (global) and the Cost Explorer API (us-east-1); a
+sweep of all 18 enabled Regions found nothing else: no load balancer, NAT gateway, Elastic IP,
+cache, container, Backup plan or trial service (Inspector, Security Hub, Config, Macie all off).
+Expected: October ~US$63 with GST (support 15.72 + ~41 usage), November ~US$105-120 (support for the
+month, GuardDuty billing from ~14 November), then ~96, or ~87.5 with the reservation. So the budget
+emails at 50% (US$40, ~23 October) and 75% (US$60, ~30 October) come from the support plan, not a leak.
+
 **Reserved instance:** none is active. Two orders on 2026-10-18 (`insights-production-t4g-micro-maz-2026-10`
 at 10:52 UTC, and `...-2026-10-b` at 12:30 UTC after the card was updated) both ended `payment-failed`
 about an hour later. AWS can't charge the card on file (GitHub reports failed payments too), and the
@@ -681,14 +754,36 @@ on 2026-10-17: two of them cost a third of one gateway.
 month passes 50/75/90/100% (US$40/60/72/80) and when AWS forecasts it above US$80. Nothing is
 stopped at any threshold. Until Basic support, the reservation and the Advanced RDS decision are in
 place, the 100% email is expected every month: it is accurate, not noise. The name carries a digest
-of the alerts because CloudFormation replaces a budget whose alerts change. Cost Anomaly
-Detection's default subscription alerts only at an impact of US$100 and 40%, so at this account's
-size it is no safety net, and the alarm topic still has no subscriber.
+of the alerts because CloudFormation replaces a budget whose alerts change. The alarm topic still
+has no subscriber.
+
+**Cost Anomaly Detection**: AWS's `Default-Services-Subscription` (on its `Default-Services-Monitor`)
+emails `budgetEmail` daily about any anomaly with a total impact of **US$5** or more (set by hand
+2026-10-18; AWS's default, US$100 and 40%, never fires at this account's size). AWS made the
+monitor, so it is not in CDK. Detection needs about 10 days of history (from ~26 October). Back to
+AWS's default: `aws ce update-anomaly-subscription --region us-east-1 --subscription-arn
+arn:aws:ce::605411278365:anomalysubscription/b4c7c83e-dfb5-4310-b5c3-83da07099523
+--threshold-expression` with `{"And":[...]}` of `ANOMALY_TOTAL_IMPACT_ABSOLUTE` ≥ 100 and
+`ANOMALY_TOTAL_IMPACT_PERCENTAGE` ≥ 40.
+
+**Daily cost email** (`costReport` in config.ts, on in production only): every morning at 07:00
+Melbourne time the `CostReport` schedule runs the cron function's `{"action":"cost-report"}`
+(apps/aws/src/costReport.ts). It makes one Cost Explorer `GetCostAndUsage` call (us-east-1, DAILY,
+UnblendedCost grouped by SERVICE, from the 1st of the month to the end of yesterday in UTC) and
+emails `budgetEmail` through Resend (not SES) the cost of yesterday (UTC) by service, the month so far,
+and a reminder that Cost Explorer runs about a day behind the Bills page and leaves out the support
+plan and GST until the invoice. Each call costs US$0.01, so ~US$0.30 a month. The cron role has
+`ce:GetCostAndUsage` and nothing else of Cost Explorer. It runs whatever `schedules` says, since it
+touches no store. A failure is retried twice, then lands in the missed-ticks queue (alarm). Send one
+now: `aws lambda invoke --region ap-southeast-2 --function-name insights-production-cron:live
+--cli-binary-format raw-in-base64-out --payload '{"action":"cost-report"}' out.json`. The answer and
+the log line `cost report sent` carry Resend's message id, never the address. Turn it off with
+`costReport: false` (or `-c costReport=off` for one deploy).
 
 Not costing anything yet, but watch: three manual RDS snapshots never expire, and backups may pass
 the 20 GB free allowance once the 14-day chain fills; four log groups keep logs forever (the RDS
-postgresql group and three CDK helper groups); storage autoscaling can grow the disk to 100 GB and
-it never shrinks back.
+postgresql group and three CDK helper groups; 1.1 MB together on 2026-10-18, under a cent a month,
+not worth a deploy yet); storage autoscaling can grow the disk to 100 GB and it never shrinks back.
 
 Looked at on 2026-10-18 and not worth it: moving region (us-east-1 is ~US$18 cheaper, but every
 request crosses the Pacific, Cognito users can't move with their passwords, and the data would

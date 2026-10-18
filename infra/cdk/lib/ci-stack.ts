@@ -1,7 +1,7 @@
 import { CfnOutput, Stack, type StackProps } from "aws-cdk-lib";
 import * as iam from "aws-cdk-lib/aws-iam";
 import type { Construct } from "constructs";
-import { type EnvConfig, githubDeployClaims } from "./config.js";
+import { type EnvConfig, githubClaimConditions, githubDeployClaims, githubTrustChecks } from "./config.js";
 
 /**
  * Deploys from GitHub Actions (.github/workflows/aws-deploy.yml) with short-lived credentials:
@@ -18,17 +18,28 @@ export class CiStack extends Stack {
       clientIds: ["sts.amazonaws.com"],
     });
     // aud and sub only, as before 2026-10-18. The workflow file and branch (job_workflow_ref, ref:
-    // githubDeployClaims) go in only after a deploy has proven, on a role that grants nothing,
+    // githubDeployClaims) go in only after a deploy has proven, on the trust-check roles below,
     // that IAM checks them and this workflow meets them: a wrong trust here locks every later
     // deploy out, and only the account's root can put it back.
     const { aud, sub } = githubDeployClaims(cfg);
     const role = new iam.Role(this, "DeployRole", {
       roleName: `insights-${cfg.name}-github-deploy`,
       description: `GitHub Actions deploys of ${cfg.githubRepo} (environment ${cfg.name})`,
-      assumedBy: new iam.WebIdentityPrincipal(provider.oidcProviderArn, {
-        StringEquals: { "token.actions.githubusercontent.com:aud": aud, "token.actions.githubusercontent.com:sub": sub },
-      }),
+      assumedBy: new iam.WebIdentityPrincipal(provider.oidcProviderArn, { StringEquals: githubClaimConditions({ aud, sub }) }),
     });
+    // Roles with no policy at all, so their sessions can do nothing, each trusting one variant of
+    // the claims (githubTrustChecks). After every deploy the workflow checks IAM admits it to the
+    // first and refuses it the others (scripts/oidc-trust.ts assume).
+    // The deploy role reads their trust (read-only): STS also refuses a role that doesn't exist.
+    const checks = githubTrustChecks(cfg).map(
+      (check) =>
+        new iam.Role(this, check.id, {
+          roleName: check.roleName,
+          description: `Grants nothing: proves the deploy role's GitHub trust (${check.admits ? "must admit" : "must refuse"} ${cfg.githubDeployWorkflow})`,
+          assumedBy: new iam.WebIdentityPrincipal(provider.oidcProviderArn, { StringEquals: githubClaimConditions(check.claims) }),
+        }),
+    );
+    role.addToPolicy(new iam.PolicyStatement({ actions: ["iam:GetRole"], resources: checks.map((c) => c.roleArn) }));
     role.addToPolicy(new iam.PolicyStatement({ actions: ["sts:AssumeRole"], resources: [`arn:aws:iam::${cfg.account}:role/cdk-hnb659fds-*`] }));
     role.addToPolicy(
       new iam.PolicyStatement({
