@@ -191,3 +191,61 @@ describe("Shopify app configuration", () => {
     expect(tomlString(read(APP_CONFIGS[0]!), "client_id")).toMatch(/^[0-9a-f]{32}$/);
   });
 });
+
+/**
+ * The ad platforms' and WhatsApp's API versions, pinned in apps/aws/src/settings.ts, end on dates
+ * their makers announce. Google refuses every call to a sunset Google Ads version, so on that day
+ * every Google Ads account would show "Sync problem"; Meta does the same to a Marketing API or Graph
+ * API version past its end. This fails the build 90 days before the end, like the Shopify check
+ * above: move to a newer version, check every query and field against its changelog, and add the
+ * new version's end date here.
+ *
+ * End dates, as published (checked 2026-10-19):
+ *   - Google Ads: https://developers.google.com/google-ads/api/docs/sunset-dates gives a month,
+ *     and a version may be turned off on any day of it, so its first day counts.
+ *   - Meta: https://developers.facebook.com/docs/graph-api/changelog. META_API_VERSION reads ads
+ *     (Marketing API, whose versions end sooner); WHATSAPP_API_VERSION is the Graph API (Cloud API).
+ *     A version still marked "TBD" there has `null`: it passes while the changelog was read within
+ *     the last 180 days, so a date Meta announces later is found in time. Read it again and update
+ *     `checked` (and the date, once there is one).
+ */
+const API_VERSION_ENDS: Record<string, { checked: string; ends: Record<string, string | null>; source: string }> = {
+  GOOGLE_ADS_API_VERSION: {
+    checked: "2026-10-19",
+    ends: { v24: "2027-05-01", v25: "2027-08-01", v26: "2027-11-01" },
+    source: "https://developers.google.com/google-ads/api/docs/sunset-dates",
+  },
+  META_API_VERSION: {
+    checked: "2026-10-19",
+    ends: { "v24.0": "2026-10-06", "v25.0": null, "v26.0": null },
+    source: "https://developers.facebook.com/docs/graph-api/changelog (Marketing API versions)",
+  },
+  WHATSAPP_API_VERSION: {
+    checked: "2026-10-19",
+    ends: { "v24.0": "2028-02-18", "v25.0": "2028-07-29", "v26.0": null },
+    source: "https://developers.facebook.com/docs/graph-api/changelog (Graph API versions)",
+  },
+};
+
+describe("API versions the ad platforms and WhatsApp still serve", () => {
+  const settings = read("apps/aws/src/settings.ts");
+  const DAY = 86_400_000;
+
+  for (const [setting, { checked, ends, source }] of Object.entries(API_VERSION_ENDS)) {
+    it(`uses a ${setting} that stays available for at least 90 more days`, () => {
+      const version = envValue(settings, setting);
+      expect(version, `${setting} isn't in apps/aws/src/settings.ts`).toBeTruthy();
+      expect(Object.keys(ends), `${setting} ${version} has no end date here: look it up (${source}) and add it`).toContain(version);
+      // Present: checked just above.
+      const end = ends[version!] as string | null;
+      if (end === null) {
+        const sinceChecked = (Date.now() - Date.parse(checked)) / DAY;
+        expect(sinceChecked, `${setting} ${version}'s end date was "TBD" on ${checked}: read ${source} again and record it`).toBeLessThan(180);
+        return;
+      }
+      const daysLeft = (Date.parse(end) - Date.now()) / DAY;
+      expect(daysLeft, `${setting} ${version} stops being served on ${end} (${source})`).toBeGreaterThan(90);
+    });
+  }
+});
+
