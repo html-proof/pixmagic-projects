@@ -414,6 +414,14 @@ describe("inventory webhooks", () => {
     expect((await systemDb.productVariant.findUniqueOrThrow({ where: { storeId_shopifyId: { storeId: store.id, shopifyId: "11" } } })).inventoryQuantity).toBe(30);
   });
 
+  it("a delivery after the store gave stock-level access back is set aside without asking Shopify", async () => {
+    const store = await makeStore(["read_orders", "read_products"]);
+    const ev = await webhook("inventory_levels/update", { inventory_item_id: 999, location_id: 100, available: 1 });
+    expect(shop.asked).toEqual([]);
+    expect((await systemDb.webhookEvent.findUniqueOrThrow({ where: { id: ev.id } })).status).toBe("succeeded");
+    expect(await systemDb.inventoryLevel.count({ where: { storeId: store.id } })).toBe(0);
+  });
+
   it("locations/delete keeps the location as deleted and drops its stock", async () => {
     const store = await imported();
     await webhook("locations/delete", { id: 100 });

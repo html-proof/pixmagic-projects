@@ -304,6 +304,8 @@ export const PRODUCTS_QUERY = /* GraphQL */ `
  * (1 + unitCost 1 + measurement (1 + weight 1)) 4 = 7.
  * productVariants(first: $first) = 2 + 1 (pageInfo) + $first × 7 → 100 → 703.
  * unitCost may be withheld (ACCESS_DENIED) → null; shopifyGraphql keeps the rest of the data.
+ * `barcode` is marked deprecated in 2026-10 (still served; `barcodes` is a connection, which would
+ * cost a page of its own per variant): move when Shopify retires it.
  */
 export const VARIANTS_QUERY = /* GraphQL */ `
   query Variants($first: Int!, $cursor: String) {

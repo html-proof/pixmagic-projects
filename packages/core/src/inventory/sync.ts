@@ -103,6 +103,8 @@ async function variantsOfItem(storeId: string, inventoryItemId: string): Promise
 export async function onLevelWebhook(store: Store, gql: InventoryGql, payload: unknown, context: Record<string, unknown>): Promise<boolean> {
   const p = parseShopify(restInventoryLevelSchema, payload, "inventory level webhook", context);
   if (!p) return false;
+  // A delivery after the merchant gave the access back: nothing can be read (the next grant re-reads everything).
+  if (!hasCapabilityScopes(store.grantedScopes, "stock_levels")) return false;
   const item = String(p.inventory_item_id);
   const location = String(p.location_id);
   const d = await gql<{ inventoryItem: unknown }>(ITEM_LEVEL_QUERY, { item: itemGid(item), location: locationGid(location), names: LEVEL_NAMES });
@@ -153,6 +155,7 @@ export async function onInventoryItemWebhook(store: Store, payload: unknown, con
 export async function onLocationWebhook(store: Store, gql: InventoryGql, topic: string, payload: unknown, context: Record<string, unknown>): Promise<boolean> {
   const p = parseShopify(restLocationSchema, payload, topic, context);
   if (!p) return false;
+  if (!hasCapabilityScopes(store.grantedScopes, "stock_levels")) return false;
   const id = String(p.id);
   if (topic === "locations/delete") {
     await removeLocation(store, id);
