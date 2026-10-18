@@ -190,93 +190,38 @@ describe("forgot password", () => {
   });
 });
 
-describe("moving accounts over from Firebase", () => {
-  /** A merchant from before the move: a users row with its Firebase uid, a workspace, a Firebase password. */
-  async function firebaseMerchant(opts: { password?: string; emailVerified?: boolean } = {}) {
-    const user = await systemDb.user.create({ data: { firebaseUid: "fb-1", email: "old@x.com", emailVerified: opts.emailVerified ?? true, displayName: "Old Timer" } });
+describe("accounts from before Cognito", () => {
+  /** A merchant from before the move: a users row with its Firebase uid and a workspace, no Cognito user. */
+  async function earlierMerchant() {
+    const user = await systemDb.user.create({ data: { firebaseUid: "fb-1", email: "old@x.com", emailVerified: true, displayName: "Old Timer" } });
     const ws = await systemDb.workspace.create({ data: { name: "Old Shop", memberships: { create: { userId: user.id, role: "owner" } } } });
-    ctx.legacy.accounts.set("old@x.com", { uid: "fb-1", password: opts.password ?? "their-old-password", emailVerified: opts.emailVerified ?? true, displayName: "Old Timer" });
     return { user, ws };
   }
 
-  it("signs in with the Firebase password once, creates the Cognito user with it, and keeps users.id and everything it owns", async () => {
-    const { user, ws } = await firebaseMerchant();
-    const login = await post("/auth/login", { email: "old@x.com", password: "their-old-password" });
-    expect(login.statusCode).toBe(200);
-    expect(login.json().user.id).toBe(user.id);
-    const me = await get("/me", { cookie: cookiesFrom(login) });
-    expect(me.json().workspaces).toEqual([expect.objectContaining({ id: ws.id, role: "owner" })]);
-
-    const cognitoUser = [...ctx.auth.users.values()].find((u) => u.email === "old@x.com")!;
-    expect(cognitoUser.password).toBe("their-old-password");
-    const identity = await systemDb.authIdentity.findFirstOrThrow({ where: { userId: user.id } });
-    expect(identity).toMatchObject({ subject: cognitoUser.sub, migratedFromFirebaseUid: "fb-1", method: "password" });
-    expect((await systemDb.user.findUniqueOrThrow({ where: { id: user.id } })).firebaseUid).toBe("fb-1");
-    expect(await systemDb.authEvent.count({ where: { type: "firebase_account_migrated", userId: user.id } })).toBe(1);
-
-    // From now on Cognito alone answers (Firebase isn't asked, even with a wrong password).
-    ctx.auth.calls.length = 0;
-    ctx.legacy.down = true;
-    expect((await post("/auth/login", { email: "old@x.com", password: "their-old-password" })).statusCode).toBe(200);
-    expect((await post("/auth/login", { email: "old@x.com", password: "not-it-at-all" })).statusCode).toBe(401);
-    expect(await systemDb.user.count()).toBe(1);
-    expect(await systemDb.authIdentity.count()).toBe(1);
-  });
-
-  it("creates nothing when Firebase doesn't accept the password either", async () => {
-    await firebaseMerchant();
-    const res = await post("/auth/login", { email: "old@x.com", password: "a-wrong-guess" });
+  it("refuses their old password without sending it anywhere but Cognito, and creates nothing", async () => {
+    await earlierMerchant();
+    const outbound: string[] = [];
+    ctx.setFetch(async (input) => {
+      outbound.push(String(input));
+      throw new Error("unexpected network call in test");
+    });
+    const res = await post("/auth/login", { email: "old@x.com", password: "their-old-password" });
     expect(res.statusCode).toBe(401);
+    expect(res.json().error).toBe("invalid_credentials");
+    expect(outbound).toEqual([]);
     expect(ctx.auth.users.size).toBe(0);
   });
 
-  it("never asks Firebase about an address Cognito already knows", async () => {
-    await firebaseMerchant();
-    ctx.auth.addUser({ email: "old@x.com", password: "the-cognito-one" });
-    expect((await post("/auth/login", { email: "old@x.com", password: "their-old-password" })).statusCode).toBe(401);
-  });
-
-  it("says 'try again', not 'wrong password', when Firebase can't be asked", async () => {
-    await firebaseMerchant();
-    ctx.legacy.down = true;
-    const res = await post("/auth/login", { email: "old@x.com", password: "their-old-password" });
-    expect(res.statusCode).toBe(503);
-    expect(res.json().error).toBe("auth_unavailable");
-  });
-
-  it("moves a password too short for Cognito by sending a reset code, then keeps the same user", async () => {
-    const { user } = await firebaseMerchant({ password: "abc123" });
-    const res = await post("/auth/login", { email: "old@x.com", password: "abc123" });
-    expect(res.statusCode).toBe(403);
-    expect(res.json().error).toBe("reset_required");
+  it("lets them reset their password with a code, and keeps their user and everything it owns", async () => {
+    const { user, ws } = await earlierMerchant();
+    expect((await post("/auth/password/forgot", { email: "old@x.com" })).statusCode).toBe(200);
+    expect(await systemDb.authEvent.count({ where: { type: "firebase_account_provisioned", userId: user.id } })).toBe(1);
     const code = ctx.auth.code("reset", "old@x.com");
-    expect((await post("/auth/password/reset", { email: "old@x.com", code, password: "a-longer-one", confirmPassword: "a-longer-one" })).statusCode).toBe(200);
-    const login = await post("/auth/login", { email: "old@x.com", password: "a-longer-one" });
+    expect((await post("/auth/password/reset", { email: "old@x.com", code, password: "fresh-password", confirmPassword: "fresh-password" })).statusCode).toBe(200);
+    const login = await post("/auth/login", { email: "old@x.com", password: "fresh-password" });
     expect(login.json().user.id).toBe(user.id);
-  });
-
-  it("lets someone who never signs in during the window reset their password, and keeps their user", async () => {
-    const { user } = await firebaseMerchant();
-    // Migration window over: Firebase is no longer consulted at all.
-    const app = buildApp({ ...ctx.deps, legacy: null });
-    const send = (url: string, payload: unknown) => app.request(url, { method: "POST", headers: { ...ORIGIN, "content-type": "application/json" }, body: JSON.stringify(payload) });
-    expect((await send("/auth/login", { email: "old@x.com", password: "their-old-password" })).status).toBe(401);
-    expect((await send("/auth/password/forgot", { email: "old@x.com" })).status).toBe(200);
-    const code = ctx.auth.code("reset", "old@x.com");
-    expect((await send("/auth/password/reset", { email: "old@x.com", code, password: "fresh-password", confirmPassword: "fresh-password" })).status).toBe(200);
-    const login = await send("/auth/login", { email: "old@x.com", password: "fresh-password" });
-    expect(((await login.json()) as { user: { id: string } }).user.id).toBe(user.id);
-  });
-
-  it("keeps an unverified Firebase address unverified until the code Cognito sends to it is entered", async () => {
-    const { user } = await firebaseMerchant({ emailVerified: false });
-    const login = await post("/auth/login", { email: "old@x.com", password: "their-old-password" });
-    expect(login.json().user).toMatchObject({ id: user.id, emailVerified: false });
-    const headers = { cookie: cookiesFrom(login) };
-    expect((await post("/auth/account/verify-email/send", {}, headers)).statusCode).toBe(200);
-    const code = ctx.auth.code("verify", "old@x.com");
-    const verified = await post("/auth/account/verify-email", { code }, headers);
-    expect(verified.json().user.emailVerified).toBe(true);
+    const me = await get("/me", { cookie: cookiesFrom(login) });
+    expect(me.json().workspaces).toEqual([expect.objectContaining({ id: ws.id, role: "owner" })]);
   });
 });
 

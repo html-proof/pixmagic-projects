@@ -177,8 +177,8 @@ export function envConfig(context: (key: string) => unknown): EnvConfig {
 
 /**
  * The GitHub OIDC token claims the deploy workflow's token carries, which the deploy workflow
- * checks before it signs in (scripts/oidc-trust.ts). The deploy role requires aud and sub for now;
- * job_workflow_ref and ref only once a deploy has proven IAM checks them (ci-stack.ts).
+ * checks before it signs in (scripts/oidc-trust.ts). The deploy role requires every one of them
+ * (ci-stack.ts).
  */
 export function githubDeployClaims(cfg: EnvConfig): { aud: string; sub: string; job_workflow_ref: string; ref: string } {
   const ref = `refs/heads/${cfg.githubDeployBranch}`;

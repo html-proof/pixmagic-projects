@@ -221,6 +221,11 @@ export class ScopeRevokeError extends Error {
  *    silently read as 100% new until the orders are re-imported, which is worse than the
  *    module staying locked. The re-import is deliberately a FULL one (no `sinceDays`): the
  *    gap is the whole history, not the last few days.
+ *  - `read_all_orders` lifts Shopify's 60-day limit, but the orders older than that are still
+ *    not here: until they are imported, a comparison with earlier dates (a Shopify screen set to
+ *    14 Mar against 18 Oct) keeps saying "No earlier data". The same full import reads them all
+ *    (`ordersSearch` drops its date filter once the scope is held) and records the history as
+ *    complete (`importedFrom` → the epoch).
  *  - `write_pixels` only grants permission to create the web pixel; nothing has created it
  *    yet, and until it exists the storefront sends no events, so the funnel stays empty with
  *    no indication why.
@@ -231,7 +236,7 @@ export class ScopeRevokeError extends Error {
 export function scopeFollowUpKinds(newlyGranted: string[]): SyncKind[] {
   const granted = new Set(newlyGranted);
   const kinds: SyncKind[] = [];
-  if (granted.has("read_customers")) kinds.push("orders");
+  if (granted.has("read_customers") || granted.has("read_all_orders")) kinds.push("orders");
   if (granted.has("read_products")) kinds.push("products", "variants");
   if (granted.has("write_pixels")) kinds.push("install_pixel");
   return kinds;

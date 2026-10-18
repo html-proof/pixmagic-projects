@@ -57,12 +57,6 @@ const schema = z.object({
    * signed with a key published on GitHub, so production refuses to start with it set.
    */
   COGNITO_ENDPOINT: z.string().optional().default(""),
-  /**
-   * The Firebase project's public web API key, during the move to Cognito only: someone signing in
-   * with a password Cognito doesn't know yet has it checked against Firebase once, and their
-   * Cognito user is created with it (apps/api/src/legacyFirebase.ts). Empty: no migration.
-   */
-  LEGACY_FIREBASE_API_KEY: z.string().optional().default(""),
   SHOPIFY_API_KEY: z.string().default(""),
   SHOPIFY_API_SECRET: z.string().default(""),
   SHOPIFY_SCOPES: z.string().default("read_orders,read_products"),

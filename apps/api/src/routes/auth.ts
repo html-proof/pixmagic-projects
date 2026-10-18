@@ -5,7 +5,6 @@ import { employmentsForUser, env, logger, sessionAccess } from "@app/core";
 import { ACCESS_KEYS, accountPasswordProblem, DISPLAY_NAME_MAX, EMAIL_CODE_RE, hasFullAccess, pkcePair, randomToken, safeEqual, sha256Hex } from "@app/shared";
 import { body, clientIp, HttpError, isLinkSession, loadUser, pickSession, requireAppOrigin, requireUser, sessionOf, SESSION_COOKIE, sharedWorkspace, type Ctx, type Deps } from "../context.js";
 import { CognitoError, CognitoUnavailableError, type CognitoTokens, type FederatedProvider, type SignInResult } from "../cognito.js";
-import { LegacyUnavailableError } from "../legacyFirebase.js";
 import { recordAuthEvent, resolveUser } from "../identity.js";
 import { apiPath, clearSessionCookies, clearShareCookie, newSession, readRefreshToken, readSession, retiredSessionKey, setSessionCookies } from "../session.js";
 import type { App } from "../app.js";
@@ -55,7 +54,7 @@ const safePath = (p: unknown): p is string => typeof p === "string" && p.startsW
  */
 export function cognitoFailure(err: unknown, at: string): HttpError {
   if (err instanceof HttpError) return err;
-  if (err instanceof CognitoUnavailableError || err instanceof LegacyUnavailableError) {
+  if (err instanceof CognitoUnavailableError) {
     logger.error({ err, at }, "sign-in service unavailable");
     return new HttpError(503, UNAVAILABLE, "auth_unavailable");
   }
@@ -129,11 +128,11 @@ export function authRoutes(app: App, deps: Deps) {
    * keys, issuer, audience = our app client, token_use, expiry, and the nonce for OAuth); only
    * then is the person looked up, linked or created, and the session cookie set.
    */
-  async function finishSignIn(c: Ctx, tokens: CognitoTokens, opts: { nonce?: string; firebaseUid?: string; keep?: boolean } = {}) {
+  async function finishSignIn(c: Ctx, tokens: CognitoTokens, opts: { nonce?: string; keep?: boolean } = {}) {
     const claims = await deps.auth.verifyIdToken(tokens.idToken, { nonce: opts.nonce }).catch((err) => {
       throw cognitoFailure(err, "verify ID token");
     });
-    const user = await resolveUser(claims, { firebaseUid: opts.firebaseUid, ip: clientIp(c) }).catch(dbOutage(SIGN_IN_UNAVAILABLE));
+    const user = await resolveUser(claims, { ip: clientIp(c) }).catch(dbOutage(SIGN_IN_UNAVAILABLE));
     const s = newSession({ userId: user.id, sub: claims.sub, username: claims.username, method: claims.method, authTime: claims.authTime, keep: opts.keep });
     setSessionCookies(c, s, tokens.refreshToken);
     // Security trail: who signed in, how and from where (user id, never the email or a token).
@@ -151,9 +150,10 @@ export function authRoutes(app: App, deps: Deps) {
   }
 
   /**
-   * Someone signed in on Firebase before the move (users.firebase_uid) but has no Cognito user
-   * yet: create one, without emailing them, so Cognito can send them a reset or sign-in code.
-   * Their password stays unknown (random), so this grants nobody access by itself.
+   * An account from before the move to Cognito (users.firebase_uid: the old deployment's users, if
+   * they are merged in) that has no Cognito user yet: create one, without emailing them, so Cognito
+   * can send them a reset or sign-in code. Their password stays unknown (random), so this grants
+   * nobody access by itself; their old password is never checked anywhere.
    */
   async function provisionMovedAccount(email: string, ip: string) {
     const row = await systemDb.user.findUnique({ where: { email }, include: { identities: { where: { method: "password" } } } }).catch(() => null);
@@ -167,34 +167,6 @@ export function authRoutes(app: App, deps: Deps) {
     } catch (err) {
       if (!isCognito(err, "UsernameExistsException")) throw err;
     }
-  }
-
-  /**
-   * First Cognito sign-in of a Firebase password account (see legacyFirebase.ts). Returns null when
-   * this isn't one: Cognito already has the person (its "wrong password" stands), migration is
-   * off, or Firebase doesn't accept the password either.
-   */
-  async function moveFromFirebase(email: string, password: string, ip: string): Promise<{ result: SignInResult; firebaseUid: string } | null> {
-    if (!deps.legacy) return null;
-    if (await deps.auth.adminGetUser(email)) return null;
-    const legacy = await deps.legacy.verifyPassword(email, password);
-    if (!legacy) return null;
-    try {
-      const created = await deps.auth.adminCreateUser({ email, emailVerified: legacy.emailVerified, name: legacy.displayName, password });
-      logger.info({ cognitoSub: created.sub }, "moved a Firebase password account to Cognito");
-    } catch (err) {
-      if (isCognito(err, "InvalidPasswordException")) {
-        // Firebase accepted 6-character passwords; Cognito's policy doesn't. Move the account and
-        // have them choose a new password with a code sent to the same inbox.
-        await deps.auth.adminCreateUser({ email, emailVerified: true, name: legacy.displayName });
-        await deps.auth.forgotPassword(email);
-        await recordAuthEvent("firebase_account_needs_new_password", null, ip, { firebaseUid: legacy.uid });
-        throw new HttpError(403, "We've upgraded our sign-in system and your password needs to be longer. We've emailed you a code to choose a new one.", "reset_required");
-      }
-      // A concurrent first sign-in created it a moment ago: sign in normally.
-      if (!isCognito(err, "UsernameExistsException")) throw err;
-    }
-    return { result: await deps.auth.passwordSignIn(email, password), firebaseUid: legacy.uid };
   }
 
   // ---------------- What the sign-in pages offer ----------------
@@ -215,19 +187,10 @@ export function authRoutes(app: App, deps: Deps) {
     const ip = clientIp(c);
     await limit(deps.coord, `rl:login:ip:${ip}`, LIMITS.loginIp);
     await limit(deps.coord, `rl:login:email:${sha256Hex(input.email)}`, LIMITS.loginEmail);
-    let firebaseUid: string | undefined;
-    let result: SignInResult;
-    try {
-      result = await deps.auth.passwordSignIn(input.email, input.password);
-    } catch (err) {
-      if (!isCognito(err, "NotAuthorizedException", "UserNotFoundException")) throw cognitoFailure(err, "login");
-      const moved = await moveFromFirebase(input.email, input.password, ip).catch((e: unknown) => {
-        throw cognitoFailure(e, "login (moving from Firebase)");
-      });
-      if (!moved) throw cognitoFailure(err, "login");
-      ({ result, firebaseUid } = moved);
-    }
-    const user = await finishSignIn(c, tokensOrChallenge(result), { firebaseUid, keep: input.keep });
+    const result = await deps.auth.passwordSignIn(input.email, input.password).catch((err: unknown) => {
+      throw cognitoFailure(err, "login");
+    });
+    const user = await finishSignIn(c, tokensOrChallenge(result), { keep: input.keep });
     return c.json({ user: publicUser(user) });
   });
 

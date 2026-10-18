@@ -280,7 +280,7 @@ export default function DashboardPage() {
           {headerStore && <StoreStatus key={headerStore.id} store={headerStore} live={live} freshness={ov?.freshness} check={ov?.store.id === headerStore.id ? ov?.check : undefined} now={now} />}
           <DateRangeSelect r={dates} shown={shown} id="date-range" label="Dates" />
           {/* What the ▲ ▼ changes are on, as Shopify Analytics' second date chip. */}
-          <CompareSelect r={dates} shown={shown} id="compare-with" label="Compare with" />
+          <CompareSelect r={dates} shown={shown} current={!olderAnswer} id="compare-with" label="Compare with" />
         </div>
         {dates.preset === "custom" && (
           <div className="flex w-full justify-end">

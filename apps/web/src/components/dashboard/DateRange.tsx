@@ -196,8 +196,8 @@ export const comparedWith = (shown: Shown) => {
 
 /**
  * What a change is on, short enough for under a headline number: "vs same time yesterday",
- * "vs previous 30 days", "vs same day last year", "vs 14 Mar 2026". Last month is compared with the
- * whole month before it, whatever its length.
+ * "vs 17 Oct", "vs previous 30 days", "vs same day last year", "vs 14 Mar 2026". Last month is
+ * compared with the whole month before it, whatever its length.
  */
 export function versusWords(shown: { range: DateRange; previous: ShownComparison } | null): string {
   if (!shown) return "vs previous period";
@@ -205,7 +205,9 @@ export function versusWords(shown: { range: DateRange; previous: ShownComparison
   const days = daysBetweenInclusive(range.from, range.to);
   if (p.compare === "year") return days === 1 ? "vs same day last year" : "vs same dates last year";
   if (p.compare === "custom") return `vs ${comparisonDates(p)}`;
-  if (days === 1) return p.until ? "vs same time yesterday" : "vs the day before";
+  // A finished day names the day it is compared with: "the day before" left it to be worked out,
+  // next to a Shopify screen comparing with a date of its own.
+  if (days === 1) return p.until ? "vs same time yesterday" : `vs ${fmtDay(p.from, { year: false })}`;
   if (daysBetweenInclusive(p.from, p.to) !== days) return "vs the month before";
   return `vs previous ${days} days`;
 }
@@ -325,21 +327,52 @@ export function DateRangeSelect({
   );
 }
 
-/** The comparison menu beside the dates: what the ▲ ▼ changes are on, as Shopify's second date chip. */
-export function CompareSelect({ r, shown, id, label, size = "md" }: { r: DateRangeState; shown: Shown; id: string; label: string; size?: "sm" | "md" }) {
+/**
+ * The comparison menu beside the dates: what the ▲ ▼ changes are on, as Shopify's second date chip.
+ *
+ * Like that chip it names the dates compared with ("vs 17 Oct 2026"), not only how they were
+ * chosen: "vs Previous period" beside a Shopify screen comparing with 14 Mar read as the same
+ * comparison, and the two sets of changes as a mismatch. `current` is false while the answer
+ * on screen is still the one for the dates picked before, whose comparison it would name; the
+ * pill then says how the comparison is chosen until the new answer lands.
+ */
+export function CompareSelect({
+  r,
+  shown,
+  current = true,
+  id,
+  label,
+  size = "md",
+}: {
+  r: DateRangeState;
+  shown: Shown;
+  current?: boolean;
+  id: string;
+  label: string;
+  size?: "sm" | "md";
+}) {
+  const mode = COMPARISONS.find((c) => c.id === r.compare)!.label;
+  const answered = current && shown && (shown.previous.compare ?? "previous") === r.compare ? shown.previous : null;
   const text =
     r.compare === "custom"
       ? r.cfrom && r.cto && !r.compareProblem
         ? fmtSpan(r.cfrom, r.cto, { year: true })
         : "Pick dates"
-      : COMPARISONS.find((c) => c.id === r.compare)!.label;
+      : answered
+        ? fmtSpan(answered.from, answered.to, { year: true })
+        : mode;
   return (
     <PillSelect
       id={id}
       label={label}
       icon={ArrowLeftRight}
-      text={<><span className="font-normal text-muted">vs </span>{text}</>}
-      title={comparedWith(shown)}
+      text={
+        <span data-testid="compare-dates">
+          <span className="font-normal text-muted">vs </span>
+          {text}
+        </span>
+      }
+      title={answered && r.compare !== "custom" ? `${mode}. ${comparedWith(shown)}` : comparedWith(shown)}
       size={size}
       value={r.compare}
       options={COMPARISONS}

@@ -6,9 +6,10 @@ import { type EnvConfig, githubClaimConditions, githubDeployClaims, githubTrustC
 /**
  * Deploys from GitHub Actions (.github/workflows/aws-deploy.yml) with short-lived credentials:
  * GitHub's OIDC token is exchanged for this role, no AWS access keys are stored in GitHub. Only
- * the `production` environment of the one repository may assume it, and it can do little itself:
- * hand off to the CDK bootstrap roles (which deploy the stacks), run the migrate action, read what
- * the smoke tests check, and move the `live` aliases back for a rollback.
+ * the deploy workflow file, run from main in the `production` environment of the one repository,
+ * may assume it (githubDeployClaims), and it can do little itself: hand off to the CDK bootstrap
+ * roles (which deploy the stacks), run the migrate action, read what the smoke tests check, and
+ * move the `live` aliases back for a rollback.
  */
 export class CiStack extends Stack {
   constructor(scope: Construct, id: string, cfg: EnvConfig, props: StackProps) {
@@ -17,15 +18,16 @@ export class CiStack extends Stack {
       url: "https://token.actions.githubusercontent.com",
       clientIds: ["sts.amazonaws.com"],
     });
-    // aud and sub only, as before 2026-10-18. The workflow file and branch (job_workflow_ref, ref:
-    // githubDeployClaims) go in only after a deploy has proven, on the trust-check roles below,
-    // that IAM checks them and this workflow meets them: a wrong trust here locks every later
-    // deploy out, and only the account's root can put it back.
-    const { aud, sub } = githubDeployClaims(cfg);
+    // Every claim of githubDeployClaims: aud, sub, and the workflow file and branch
+    // (job_workflow_ref, ref), which sub doesn't name. The deploy workflow gives the role this
+    // trust only after the trust-check roles below prove IAM checks those two and this workflow
+    // meets them ("The trust this commit deploys is proven", before cdk deploy). A wrong trust here
+    // locks every later deploy out, and only the account's root can put it back
+    // (docs/aws-deployment.md).
     const role = new iam.Role(this, "DeployRole", {
       roleName: `insights-${cfg.name}-github-deploy`,
       description: `GitHub Actions deploys of ${cfg.githubRepo} (environment ${cfg.name})`,
-      assumedBy: new iam.WebIdentityPrincipal(provider.oidcProviderArn, { StringEquals: githubClaimConditions({ aud, sub }) }),
+      assumedBy: new iam.WebIdentityPrincipal(provider.oidcProviderArn, { StringEquals: githubClaimConditions(githubDeployClaims(cfg)) }),
     });
     // Roles with no policy at all, so their sessions can do nothing, each trusting one variant of
     // the claims (githubTrustChecks). After every deploy the workflow checks IAM admits it to the

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Build the AWS Lambda package (infra/aws/staging.yaml): dist/function.zip with
+// Build the AWS Lambda package: dist/function (and the same as dist/function.zip) with
 //   index.mjs        the function (API + static UI), bundled with esbuild
 //   cognito-email.mjs  the user pool's Custom Email Sender trigger (src/cognitoEmail.ts), on its own
 //   public/          the web UI (Next.js export, built into apps/web/out-aws)
@@ -7,9 +7,9 @@
 //   rds-ca.pem       Amazon RDS's CA bundle (NODE_EXTRA_CA_CERTS: TLS to the database is verified)
 //   build.json       the commit it was built from and when (infra/cdk's APP_COMMIT, APP_BUILT_AT)
 //
-//   node apps/aws/scripts/build.mjs [--skip-web] [--no-staging-bundle]
+//   node apps/aws/scripts/build.mjs [--skip-web]
 //
-// infra/cdk deploys dist/function; the staging bundle is the Phase 1 CloudShell path (docs/aws-staging.md).
+// infra/cdk deploys dist/function.
 import { execFileSync, spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -76,19 +76,3 @@ else execFileSync("zip", ["-qr", zip, "."], { cwd: out, stdio: "inherit" });
 
 const size = readFileSync(zip).length;
 console.log(`built ${zip} (${(size / 1024 / 1024).toFixed(1)} MB)`);
-
-if (process.argv.includes("--no-staging-bundle")) process.exit(0);
-
-// One file to upload to CloudShell: the package, both templates and the deploy script (LF line
-// endings: bash on Linux reads them), plus the commit they were built from.
-const bundleDir = resolve(pkg, "dist/staging-bundle");
-mkdirSync(bundleDir, { recursive: true });
-cpSync(zip, resolve(bundleDir, "function.zip"));
-for (const f of ["staging.yaml", "cognito.yaml", "deploy-staging.sh"]) {
-  writeFileSync(resolve(bundleDir, f), readFileSync(resolve(root, "infra/aws", f), "utf8").replace(/\r\n/g, "\n"));
-}
-writeFileSync(resolve(bundleDir, "COMMIT"), `${buildInfo.commit}\n`);
-const bundle = resolve(pkg, "dist/insights-staging-bundle.zip");
-if (tar && existsSync(tar)) execFileSync(tar, ["-a", "-c", "-f", bundle, "-C", bundleDir, "."], { stdio: "inherit" });
-else execFileSync("zip", ["-qr", bundle, "."], { cwd: bundleDir, stdio: "inherit" });
-console.log(`built ${bundle} (commit ${buildInfo.commit})`);

@@ -153,7 +153,22 @@ What keeps a store complete, and its limits:
 
 Shopify treats order data as customer data. If an import fails with "Shopify withheld orders (access denied)", request access in the Partner Dashboard: **Apps → Insights → API access → Protected customer data access → Request access** (pick the data and reasons). Development stores get access as soon as the request is filled in; production stores need Shopify's review. The optional scopes (`read_customers`, `write_pixels`, `read_customer_events`) also need this approval before they can be requested.
 
-To import more than 60 days of history, request **Read all orders** in the same place, then add `read_all_orders` to `SHOPIFY_OPTIONAL_SCOPES` (and `optional_scopes` in the toml).
+To import more than 60 days of history (and so compare with dates further back, such as a
+Shopify screen set to compare with 14 Mar), in this order:
+
+1. Partner Dashboard → the app → **API access → Read all orders scope → Request access**, with the
+   reason (sales reports and comparisons over the store's whole history). Shopify reviews it per
+   app: the main app, PixMagic's and the App Store app each need their own.
+2. Once approved, add `read_all_orders` to `scopes` (the required ones) in that app's toml and to
+   `SHOPIFY_SCOPES` in `apps/aws/src/settings.ts` (appConfig.test checks they agree), run
+   `shopify app deploy --config <toml>` and merge to `main`. Before approval this breaks installs.
+3. The merchant opens the app from their Shopify admin and accepts the new permission (Shopify
+   asks once, under managed installation). `app/scopes_update` then queues a full orders import
+   (`scopeFollowUpKinds`), which reads every order with no date filter and records the history as
+   complete, so "No earlier data" goes away for any comparison.
+
+Declaring it in `optional_scopes` instead grants nothing by itself: no dashboard button asks for
+`read_all_orders` (it unlocks no module), so it would need one first.
 
 ## 3c. A client's store with its own app (custom distribution) — not the product strategy
 
@@ -244,6 +259,7 @@ Both then queue the same follow-up import, because **granting a scope does not b
 
 - `read_customers` changes what the orders query asks for, so every order already imported carries no customer hash → a **full** orders re-import, not a recent-days one. Without it "New vs returning" reads as 100% new, which is worse than the module staying locked.
 - `write_pixels` only grants permission to create the web pixel → `install_pixel`. Until it exists the storefront sends no events.
+- `read_all_orders` (granted however it was asked for) → the same **full** orders import, which now reads the orders older than 60 days. Until then a comparison with older dates still says "No earlier data".
 
 ### Giving a scope back
 

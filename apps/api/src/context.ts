@@ -5,7 +5,6 @@ import { allows, hasFullAccess, LEGACY_GRANTS, sha256Hex, type AccessNeed, type 
 import type { StaffAccess, StaffRole } from "@app/shared/staff";
 import { addLogContext, env, logger, memberState, sessionAccess, type BlobStore, type Coord, type FetchLike, type Mailer, type Queues, type SmtpConnect } from "@app/core";
 import { CognitoError, CognitoUnavailableError, type CognitoAuth } from "./cognito.js";
-import type { LegacyPasswordCheck } from "./legacyFirebase.js";
 import { clearSessionCookies, readRefreshToken, readSession, retiredSessionKey, REVALIDATE_MS, SESSION_CONTEXT_HEADER, SESSION_COOKIE, setSessionCookies, SHARE_COOKIE, type SessionClaims } from "./session.js";
 
 export { retiredSessionKey, SESSION_COOKIE, SHARE_COOKIE };
@@ -13,8 +12,6 @@ export { retiredSessionKey, SESSION_COOKIE, SHARE_COOKIE };
 export interface Deps {
   /** Amazon Cognito: every sign-in, sign-up and password operation. */
   auth: CognitoAuth;
-  /** While accounts move over from Firebase: checks a password Cognito doesn't know yet (legacyFirebase.ts). */
-  legacy?: LegacyPasswordCheck | null;
   coord: Coord;
   queues: Queues;
   /** Webhook payloads too large for a queue message. */

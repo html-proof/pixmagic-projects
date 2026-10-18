@@ -1,2 +1,2 @@
-# Shell scripts run on Linux (CloudShell, CI): never CRLF.
+# Shell scripts run on Linux (CI): never CRLF.
 *.sh text eol=lf
