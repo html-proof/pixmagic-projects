@@ -20,6 +20,7 @@ const { DataStack } = await import("../lib/data-stack.js");
 const { AppStack } = await import("../lib/app-stack.js");
 const { AuthStack } = await import("../lib/auth-stack.js");
 const { CiStack } = await import("../lib/ci-stack.js");
+const { AuditStack, ACCOUNT_REGIONS, ANALYZER_NAME } = await import("../lib/audit-stack.js");
 const { viewerRequestCode } = await import("../lib/viewer-request.js");
 
 function synth(context: Record<string, string> = {}) {
@@ -31,7 +32,8 @@ function synth(context: Record<string, string> = {}) {
   const appStack = new AppStack(app, "A", cfg, data, edge.webAclArn, { env, crossRegionReferences: true });
   const auth = new AuthStack(app, "U", cfg, { env, appUrl: appStack.appUrl, apiRole: appStack.apiRole, runtimeParam: appStack.runtimeParam });
   const ci = new CiStack(app, "C", cfg, { env });
-  return { edge: Template.fromStack(edge), data: Template.fromStack(data), app: Template.fromStack(appStack), auth: Template.fromStack(auth), ci: Template.fromStack(ci) };
+  const audit = new AuditStack(app, "T", cfg, { env });
+  return { edge: Template.fromStack(edge), data: Template.fromStack(data), app: Template.fromStack(appStack), auth: Template.fromStack(auth), ci: Template.fromStack(ci), audit: Template.fromStack(audit) };
 }
 
 let t: ReturnType<typeof synth>;
@@ -556,7 +558,7 @@ describe("Cognito's emails", () => {
 
 describe("IAM", () => {
   it("has no IAM user or access key anywhere (roles only)", () => {
-    for (const tpl of [t.ci, t.app, t.data, t.auth]) {
+    for (const tpl of [t.ci, t.app, t.data, t.auth, t.audit]) {
       tpl.resourceCountIs("AWS::IAM::User", 0);
       tpl.resourceCountIs("AWS::IAM::AccessKey", 0);
     }
@@ -586,6 +588,64 @@ describe("IAM", () => {
     for (const needed of ["rds:DescribeDBInstances", "s3:GetBucketPublicAccessBlock", "sqs:GetQueueUrl", "sqs:GetQueueAttributes", "logs:DescribeLogStreams", "cloudwatch:GetMetricStatistics", "lambda:GetAlias"]) {
       expect(actions).toContain(needed);
     }
+  });
+});
+
+describe("the audit stack (Trusted Advisor security checks)", () => {
+  it("logs every Region's management events, reads and writes, with digest files (AWS CloudTrail Management Events Logging)", () => {
+    t.audit.resourceCountIs("AWS::CloudTrail::Trail", 1);
+    t.audit.hasResourceProperties("AWS::CloudTrail::Trail", {
+      IsMultiRegionTrail: true,
+      IncludeGlobalServiceEvents: true,
+      IsLogging: true,
+      EnableLogFileValidation: true,
+      EventSelectors: [{ IncludeManagementEvents: true, ReadWriteType: "All" }],
+    });
+  });
+
+  it("keeps the logs in a private, versioned bucket for a year, retained if the stack goes", () => {
+    t.audit.hasResource("AWS::S3::Bucket", {
+      DeletionPolicy: "Retain",
+      Properties: {
+        PublicAccessBlockConfiguration: { BlockPublicAcls: true, BlockPublicPolicy: true, IgnorePublicAcls: true, RestrictPublicBuckets: true },
+        VersioningConfiguration: { Status: "Enabled" },
+        LifecycleConfiguration: { Rules: Match.arrayWith([Match.objectLike({ ExpirationInDays: 365, NoncurrentVersionExpiration: { NoncurrentDays: 30 }, AbortIncompleteMultipartUpload: { DaysAfterInitiation: 1 } })]) },
+      },
+    });
+    t.audit.hasResourceProperties("AWS::S3::BucketPolicy", {
+      PolicyDocument: { Statement: Match.arrayWith([Match.objectLike({ Effect: "Deny", Condition: { Bool: { "aws:SecureTransport": "false" } } })]) },
+    });
+  });
+
+  it("puts an account analyzer in every enabled Region, and fails the deploy if one can't be made (IAM Access Analyzer - external access)", () => {
+    expect(ACCOUNT_REGIONS).toHaveLength(18);
+    expect(ACCOUNT_REGIONS).toContain("ap-southeast-2");
+    const [stackSet] = Object.values(t.audit.findResources("AWS::CloudFormation::StackSet"));
+    expect(stackSet!.Properties.PermissionModel).toBe("SELF_MANAGED");
+    expect(stackSet!.Properties.StackInstancesGroup).toEqual([{ DeploymentTargets: { Accounts: ["605411278365"] }, Regions: ACCOUNT_REGIONS }]);
+    expect(stackSet!.Properties.OperationPreferences.FailureToleranceCount).toBe(0);
+    const template = JSON.parse(stackSet!.Properties.TemplateBody);
+    expect(Object.values(template.Resources)).toEqual([{ Type: "AWS::AccessAnalyzer::Analyzer", Properties: { AnalyzerName: ANALYZER_NAME, Type: "ACCOUNT" } }]);
+    // The StackSet waits for the trail, so its new roles have had time to become usable.
+    expect(stackSet!.DependsOn).toEqual([expect.stringMatching(/^Trail/)]);
+  });
+
+  it("lets only this account's StackSets use the administration role, and the execution role make only stacks and analyzers", () => {
+    t.audit.hasResourceProperties("AWS::IAM::Role", {
+      RoleName: "insights-account-stackset-admin",
+      AssumeRolePolicyDocument: {
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Principal: { Service: "cloudformation.amazonaws.com" },
+            Condition: { StringEquals: { "aws:SourceAccount": "605411278365" }, ArnLike: { "aws:SourceArn": "arn:aws:cloudformation:*:605411278365:stackset/*" } },
+          }),
+        ]),
+      },
+    });
+    type Statement = { Action: string | string[] };
+    const [exec] = Object.values(t.audit.findResources("AWS::IAM::Role", { Properties: { RoleName: "insights-account-stackset-exec" } }));
+    const actions = (exec!.Properties.Policies as Array<{ PolicyDocument: { Statement: Statement[] } }>).flatMap((p) => p.PolicyDocument.Statement.flatMap((s) => [s.Action].flat()));
+    for (const action of actions) expect(action).toMatch(/^(cloudformation:\*|access-analyzer:\w+|organizations:List\w+|iam:CreateServiceLinkedRole)$/);
   });
 });
 
