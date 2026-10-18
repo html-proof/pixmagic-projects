@@ -1,6 +1,6 @@
 /** The webhooks queue: each Shopify topic applied to the store's data (orders, products, refunds, app and GDPR topics). */
 import { systemDb, type Store } from "@app/db";
-import { applySubscriptionUpdate, audit, customerKey, deleteProduct, endBillingForStore, getAccessToken, gidToId, logger, normalizeRestOrder, normalizeRestProduct, normalizeRestProductVariants, parseShopify, pruneVariants, purgeStoreData, raiseAlert, recordDataRequest, resolveAlerts, customersDataRequestSchema, customersRedactSchema, restOrderSchema, restProductDeleteSchema, restOrderDeleteSchema, removeOrders, restProductSchema, restRefundWebhookSchema, scopesUpdateSchema, subscriptionUpdateSchema, syncBillingFromShopify, upsertOrder, upsertProduct, upsertVariant, seedScopeFollowUp, type WebhookJobData, redactWhatsappCustomer, whatsappOnShopifyEvent, emailOnShopifyEvent, purgeEmailStoreData, redactEmailCustomer } from "@app/core";
+import { applySubscriptionUpdate, audit, customerKey, deleteProduct, endBillingForStore, getAccessToken, gidToId, INSTALLATION_QUERY, logger, normalizeRestOrder, normalizeRestProduct, normalizeRestProductVariants, parseShopify, pruneVariants, purgeStoreData, raiseAlert, recordDataRequest, resolveAlerts, customersDataRequestSchema, customersRedactSchema, restOrderSchema, restProductDeleteSchema, restOrderDeleteSchema, removeOrders, restProductSchema, restRefundWebhookSchema, scopesUpdateSchema, subscriptionUpdateSchema, syncBillingFromShopify, upsertOrder, upsertProduct, upsertVariant, seedScopeFollowUp, type WebhookJobData, redactWhatsappCustomer, whatsappOnShopifyEvent, emailOnShopifyEvent, purgeEmailStoreData, redactEmailCustomer } from "@app/core";
 import { enqueueAggregate, UnrecoverableError, type WorkerDeps } from "./common.js";
 import { gql, readSalesAfterWebhook } from "./shopifyRead.js";
 
@@ -63,7 +63,7 @@ async function eraseStore(store: Store, deps: WorkerDeps) {
  */
 async function installationWorks(deps: WorkerDeps, store: Store): Promise<boolean> {
   try {
-    await gql(deps, store, { pendingMs: 0 }, "{ currentAppInstallation { id } }");
+    await gql(deps, store, { pendingMs: 0 }, INSTALLATION_QUERY);
     return true;
   } catch (err) {
     if (err instanceof UnrecoverableError) return false;
