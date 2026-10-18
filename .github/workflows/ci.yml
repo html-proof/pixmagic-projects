@@ -149,7 +149,10 @@ jobs:
           cache: ${{ vars.SELF_HOSTED_RUNNER == '' && 'pnpm' || '' }}
       # Its superuser gets a password of its own each job (TEST_PG_PASSWORD; the tests read it): the
       # PC may run another runner's job at the same time, and a superuser can run programs as the
-      # account that started the server.
+      # account that started the server. Server and clients use 127.0.0.1 only: with "localhost"
+      # the server takes whichever of ::1 and 127.0.0.1 it can, clients try ::1 first, and another
+      # job holding [::1]:port could ask them for the password in clear. psql and createdb refuse
+      # anything but SCRAM (PGREQUIREAUTH) besides.
       - name: Throwaway Postgres (self-hosted runner)
         if: vars.SELF_HOSTED_RUNNER != ''
         run: |
@@ -158,19 +161,20 @@ jobs:
           port=$(node -e "const s=require('net').createServer().listen(0,'127.0.0.1',()=>{console.log(s.address().port);s.close()})")
           pw=$(node -e "process.stdout.write(require('crypto').randomBytes(24).toString('hex'))")
           echo "::add-mask::$pw"
+          export PGREQUIREAUTH=scram-sha-256
           rm -rf "$data" && printf %s "$pw" > "$RUNNER_TEMP/pgpw"
           "$pgbin/initdb" -D "$data" -U app --pwfile="$RUNNER_TEMP/pgpw" --auth=scram-sha-256 -E UTF8 --locale=C --no-instructions >/dev/null
-          "$pgbin/pg_ctl" -D "$data" -l "$data.log" -o "-p $port -c listen_addresses=localhost -c fsync=off" -w start >"$data.ctl.log" 2>&1 </dev/null
-          PGPASSWORD="$pw" "$pgbin/createdb" -h localhost -p "$port" -U app app
+          "$pgbin/pg_ctl" -D "$data" -l "$data.log" -o "-p $port -c listen_addresses=127.0.0.1 -c fsync=off" -w start >"$data.ctl.log" 2>&1 </dev/null
+          PGPASSWORD="$pw" "$pgbin/createdb" -h 127.0.0.1 -p "$port" -U app app
           echo "$pgbin" >> "$GITHUB_PATH"
-          { echo "TEST_PG_PORT=$port"; echo "TEST_PG_PASSWORD=$pw"; } >> "$GITHUB_ENV"
+          { echo "TEST_PG_PORT=$port"; echo "TEST_PG_PASSWORD=$pw"; echo "PGREQUIREAUTH=scram-sha-256"; } >> "$GITHUB_ENV"
       - run: pnpm install --frozen-lockfile
       # Known vulnerabilities in any dependency (direct or transitive) fail the build.
       - name: Dependency audit (high and critical advisories)
         run: pnpm audit --audit-level high
       - run: pnpm lint
       - name: Create tenant DB role
-        run: PGPASSWORD="${TEST_PG_PASSWORD:-app}" psql -h localhost -p "${TEST_PG_PORT:-5434}" -U app -d app -f infra/postgres/init.sql
+        run: PGPASSWORD="${TEST_PG_PASSWORD:-app}" psql -h 127.0.0.1 -p "${TEST_PG_PORT:-5434}" -U app -d app -f infra/postgres/init.sql
       - run: pnpm typecheck
       - run: pnpm test
       # The integration tests and the migrations check after them (about 4 of this job's 7.5 minutes)
@@ -214,7 +218,7 @@ jobs:
       - name: Migrations match the schema
         if: steps.integration_passed.outputs.passed != 'true'
         run: |
-          DATABASE_URL="postgresql://app:${TEST_PG_PASSWORD:-app}@localhost:${TEST_PG_PORT:-5434}/app_test" \
+          DATABASE_URL="postgresql://app:${TEST_PG_PASSWORD:-app}@127.0.0.1:${TEST_PG_PORT:-5434}/app_test" \
             pnpm --filter @app/db exec prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --exit-code
       # For later runs with the same content key, on a pull request or on main. Only when the two
       # steps above ran and passed here; failing to record only means the next run tests again.
@@ -288,14 +292,14 @@ jobs:
           pgbin="${PG_BIN:-C:/Program Files/PostgreSQL/18/bin}"
           data="$(cygpath -m "$RUNNER_TEMP")/pg"
           read -r pg mail app cognito login < <(node -e "const n=require('net');Promise.all([1,2,3,4,5].map(()=>new Promise(r=>{const s=n.createServer().listen(0,'127.0.0.1',()=>r(s))}))).then(ss=>{console.log(ss.map(s=>s.address().port).join(' '));ss.forEach(s=>s.close())})")
-          # A superuser password of its own, as in the checks job (Throwaway Postgres).
+          # A superuser password of its own and 127.0.0.1 only, as in the checks job (Throwaway Postgres).
           pw=$(node -e "process.stdout.write(require('crypto').randomBytes(24).toString('hex'))")
           echo "::add-mask::$pw"
           rm -rf "$data" && printf %s "$pw" > "$RUNNER_TEMP/pgpw"
           "$pgbin/initdb" -D "$data" -U app --pwfile="$RUNNER_TEMP/pgpw" --auth=scram-sha-256 -E UTF8 --locale=C --no-instructions >/dev/null
-          "$pgbin/pg_ctl" -D "$data" -l "$data.log" -o "-p $pg -c listen_addresses=localhost -c fsync=off" -w start >"$data.ctl.log" 2>&1 </dev/null
+          "$pgbin/pg_ctl" -D "$data" -l "$data.log" -o "-p $pg -c listen_addresses=127.0.0.1 -c fsync=off" -w start >"$data.ctl.log" 2>&1 </dev/null
           node -e "require('child_process').spawn(process.execPath,['apps/web/e2e/mailpit-stub.mjs',process.argv[1]],{detached:true,stdio:'ignore',windowsHide:true}).unref()" "$mail"
-          { echo "TEST_PG_PORT=$pg"; echo "TEST_PG_PASSWORD=$pw"; echo "E2E_MAILPIT_URL=http://127.0.0.1:$mail"; echo "E2E_PORT=$app"; echo "E2E_COGNITO_PORT=$cognito"; echo "E2E_LOGIN_PORT=$login"; } >> "$GITHUB_ENV"
+          { echo "TEST_PG_PORT=$pg"; echo "TEST_PG_PASSWORD=$pw"; echo "PGREQUIREAUTH=scram-sha-256"; echo "E2E_MAILPIT_URL=http://127.0.0.1:$mail"; echo "E2E_PORT=$app"; echo "E2E_COGNITO_PORT=$cognito"; echo "E2E_LOGIN_PORT=$login"; } >> "$GITHUB_ENV"
           # The runner uses browsers kept on the PC; the step below then only checks them, and
           # downloads only when Playwright moves to a new browser build (docs/aws-deployment.md).
           echo "PLAYWRIGHT_BROWSERS_PATH=${PW_BROWSERS:-C:\\ms-playwright}" >> "$GITHUB_ENV"

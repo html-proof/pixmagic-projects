@@ -4,7 +4,7 @@ import { type Assumed, canonical, checkTrust, compareClaims, tokenClaims } from 
 
 const cfg = envConfig(() => undefined);
 const deployRoleArn = "arn:aws:iam::605411278365:role/insights-production-github-deploy";
-const answer = (status: number, code: string, message = ""): Assumed => ({ ok: status === 200, status, code, answer: status === 200 ? "admitted" : `${status} ${code}: ${message}`, arn: status === 200 ? "arn:aws:sts::605411278365:assumed-role/x/trust-check-1" : "" });
+const answer = (status: number, code: string, message = ""): Assumed => ({ ok: status === 200, status, code, message, answer: status === 200 ? "admitted" : `${status} ${code}: ${message}`, arn: status === 200 ? "arn:aws:sts::605411278365:assumed-role/x/trust-check-1" : "" });
 const admitted = answer(200, "");
 const refused = answer(403, "AccessDenied", "Not authorized to perform sts:AssumeRoleWithWebIdentity");
 const roleName = (arn: string) => arn.split("/").pop()!;
@@ -83,7 +83,7 @@ describe("the trust check after a deploy", () => {
   });
 
   it("reports the deploy role refusing the workflow as the error it is, AccessDenied or another refusal", async () => {
-    for (const no of [refused, answer(400, "InvalidIdentityToken", "Couldn't retrieve verification key")]) {
+    for (const no of [refused, answer(400, "InvalidIdentityToken", "Incorrect token audience")]) {
       const r = await checkTrust({ cfg, deployRoleArn, liveConditions: liveAsDeployed, assume: async (arn) => (roleName(arn) === DEPLOY ? no : enforcing(arn)) });
       expect(r.deployRole).toBe("refused");
       expect(r.lines.at(-1)).toMatch(/^::error::The deploy role refused a fresh token from this workflow: STS answered/);
@@ -91,7 +91,7 @@ describe("the trust check after a deploy", () => {
   });
 
   it("tells not reaching STS (or STS too busy) apart from a refusal", async () => {
-    for (const none of [() => Promise.reject(new Error("fetch failed")), async () => answer(503, "ServiceUnavailable"), async () => answer(400, "Throttling", "Rate exceeded")]) {
+    for (const none of [() => Promise.reject(new Error("fetch failed")), async () => answer(503, "ServiceUnavailable"), async () => answer(400, "Throttling", "Rate exceeded"), async () => answer(400, "IDPCommunicationError", "Couldn't get a response from the identity provider"), async () => answer(400, "InvalidIdentityToken", "Couldn't retrieve verification key from your identity provider")]) {
       const r = await checkTrust({ cfg, deployRoleArn, liveConditions: liveAsDeployed, assume: (arn) => (roleName(arn) === DEPLOY ? none() : enforcing(arn)) });
       expect(r.deployRole).toBe("unknown");
       expect(r.lines.at(-1)).toMatch(/^::error::Couldn't check whether the deploy role still admits this workflow/);

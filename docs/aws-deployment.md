@@ -281,7 +281,9 @@ on the system `PATH` are administrators-only (checked 2026-10-18). Node also loo
 gets), and any account may create folders at C:\, so the scripts keep that folder administrators'
 too ("Hardening the runner"). Each job's PostgreSQL superuser has a password of its own: the two
 runners' jobs can run at the same time, and a superuser can run programs as the account that
-started the server.
+started the server. Server and clients use 127.0.0.1 only (with `localhost`, a job holding the
+port on ::1 first could ask the tests for that password in clear), and psql and createdb accept
+SCRAM only (`PGREQUIREAUTH`).
 
 What the two runners still share: anything listening on localhost while a job runs. During main's
 e2e job that is the app under test, the sign-in stand-ins and the Mailpit stand-in, on free ports.
