@@ -40,6 +40,7 @@ import {
   type MetaReportRow,
   type MetaReportView,
 } from "@app/shared";
+import { graphCall, type GraphFailure } from "./metaGraph.js";
 import type { FetchLike } from "./shopify.js";
 
 /** The person's access was refused or has expired: they have to connect again. */
@@ -165,39 +166,34 @@ export function metaAuthorizeUrl(c: MetaConfig, redirectUri: string, state: stri
   return `https://www.facebook.com/${c.version}/dialog/oauth?${q}`;
 }
 
-async function metaGet<T>(c: MetaConfig, path: string, params: Record<string, string>): Promise<T> {
-  // A full URL is Meta's own `paging.next`, which carries the access token: only ever to Graph.
-  if (path.startsWith("https://") && new URL(path).hostname !== "graph.facebook.com") {
-    throw new AdsApiError("Meta returned a page link outside graph.facebook.com", 502);
-  }
-  const url = path.startsWith("https://") ? path : `https://graph.facebook.com/${c.version}/${path}?${new URLSearchParams(params)}`;
-  return metaCall<T>(c, url, { method: "GET" });
-}
-
-/** POST and DELETE: the parameters go in the form body, so the token never sits in a URL. */
-async function metaSend<T>(c: MetaConfig, method: "POST" | "DELETE", path: string, params: Record<string, string>): Promise<T> {
-  return metaCall<T>(c, `https://graph.facebook.com/${c.version}/${path}`, {
-    method,
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams(params).toString(),
-  });
-}
-
-async function metaCall<T>(c: MetaConfig, url: string, init: RequestInit): Promise<T> {
-  const res = await (c.fetchImpl ?? fetch)(url, init);
-  const body = (await res.json().catch(() => ({}))) as T & { error?: { message?: string; code?: number; error_subcode?: number } };
-  if (res.ok && !body.error) return body;
-  const e = body.error ?? {};
-  const msg = e.message ?? `Meta returned ${res.status}`;
+/** A Graph API failure as the ads code sorts it: connect again, try later, or give up. */
+function metaAdsError(f: GraphFailure): Error {
+  // Nothing answered: Meta or the network is down. The queue tries again; the API says "busy".
+  if (f.reason === "network") return new AdsRetryableError(`Meta didn't answer: ${f.message}`);
+  const msg = f.message ?? `Meta returned ${f.status}`;
+  if (f.reason === "bad_link") return new AdsApiError(msg, 502);
+  const code = f.code ?? undefined;
   // 190: the token is invalid or expired; 102: session expired. Both need the person to connect again.
   // 10/200-299 (permission) are API errors with their code: reconnecting only helps if ads_read itself
   // was taken back, which the sync checks (adConnections.ts); a login that lost one account can't fix it.
-  const code = e.code ?? 0;
-  if (code === 190 || code === 102 || res.status === 401) throw new AdsAuthError(msg);
+  if (code === 190 || code === 102 || f.status === 401) return new AdsAuthError(msg);
   // 4, 17, 32, 613, 80000-80014: rate limits; 1/2: temporary.
-  if ([1, 2, 4, 17, 32, 613].includes(e.code ?? 0) || (e.code ?? 0) >= 80000 || res.status === 429 || res.status >= 500) throw new AdsRetryableError(msg, e.code);
-  throw new AdsApiError(msg, res.status, e.code);
+  if ([1, 2, 4, 17, 32, 613].includes(code ?? 0) || (code ?? 0) >= 80000 || f.status === 429 || f.status >= 500) return new AdsRetryableError(msg, code);
+  return new AdsApiError(msg, f.status, code);
 }
+
+/** GET. `path` is relative to the API version, or a `paging.next` link Meta handed back. */
+function metaGet<T>(c: MetaConfig, path: string, query: Record<string, string>, token?: string): Promise<T> {
+  return graphCall<T>(c.fetchImpl ?? fetch, { version: c.version, method: "GET", path, query, token }, metaAdsError);
+}
+
+/** POST and DELETE: the parameters go in the form body. */
+function metaSend<T>(c: MetaConfig, method: "POST" | "DELETE", path: string, form: Record<string, string>, token?: string): Promise<T> {
+  return graphCall<T>(c.fetchImpl ?? fetch, { version: c.version, method, path, form, token }, metaAdsError);
+}
+
+/** bizinsights' own app token, which Meta wants for the token inspector (debug_token). */
+const metaAppToken = (c: MetaConfig) => `${c.appId}|${c.appSecret}`;
 
 /** The code from the redirect → a long-lived (about 60 days) user token. */
 /**
@@ -219,13 +215,13 @@ export async function metaExchangeCode(c: MetaConfig, code: string, redirectUri:
 
 /** The permissions the person granted this app (a declined one is listed as "declined"). */
 export async function metaGrantedPermissions(c: MetaConfig, accessToken: string): Promise<string[]> {
-  const res = await metaGet<{ data?: Array<{ permission: string; status: string }> }>(c, "me/permissions", { access_token: accessToken });
+  const res = await metaGet<{ data?: Array<{ permission: string; status: string }> }>(c, "me/permissions", {}, accessToken);
   return (res.data ?? []).filter((p) => p.status === "granted").map((p) => p.permission);
 }
 
 /** The person's app-scoped Meta user id, so connections that share their grant can be told apart from others. */
 export async function metaUserId(c: MetaConfig, accessToken: string): Promise<string | null> {
-  const me = await metaGet<{ id?: string }>(c, "me", { fields: "id", access_token: accessToken });
+  const me = await metaGet<{ id?: string }>(c, "me", { fields: "id" }, accessToken);
   return me.id && /^\d{1,30}$/.test(me.id) ? me.id : null;
 }
 
@@ -235,7 +231,7 @@ export async function metaUserId(c: MetaConfig, accessToken: string): Promise<st
  */
 export async function metaRevokeAdsRead(c: MetaConfig, accessToken: string): Promise<void> {
   try {
-    await metaSend(c, "DELETE", "me/permissions/ads_read", { access_token: accessToken });
+    await metaSend(c, "DELETE", "me/permissions/ads_read", {}, accessToken);
   } catch (err) {
     if (err instanceof AdsAuthError) return;
     throw err;
@@ -248,10 +244,7 @@ export async function metaRevokeAdsRead(c: MetaConfig, accessToken: string): Pro
  * none), a list (maybe empty) when the person picked accounts on Facebook's screen.
  */
 export async function metaAdsReadTargets(c: MetaConfig, accessToken: string): Promise<string[] | null> {
-  const r = await metaGet<{ data?: { granular_scopes?: Array<{ scope?: string; target_ids?: string[] }> } }>(c, "debug_token", {
-    input_token: accessToken,
-    access_token: `${c.appId}|${c.appSecret}`,
-  });
+  const r = await metaGet<{ data?: { granular_scopes?: Array<{ scope?: string; target_ids?: string[] }> } }>(c, "debug_token", { input_token: accessToken }, metaAppToken(c));
   return (r.data?.granular_scopes ?? []).find((g) => g.scope === REQUIRED_AD_SCOPE.meta)?.target_ids ?? null;
 }
 
@@ -265,13 +258,12 @@ export async function metaAdAccounts(c: MetaConfig, accessToken: string): Promis
   let page = await metaGet<{ data: Array<{ id: string; name?: string; currency?: string; timezone_name?: string }>; paging?: { next?: string } }>(c, "me/adaccounts", {
     fields: "id,name,currency,timezone_name,account_status",
     limit: "100",
-    access_token: accessToken,
-  });
+  }, accessToken);
   for (let i = 0; i < 20; i++) {
     for (const a of page.data ?? []) out.push({ accountId: metaAccountId(a.id), name: a.name ?? null, currency: a.currency ?? null, timezone: a.timezone_name ?? null });
     next = page.paging?.next ?? null;
     if (!next) break;
-    page = await metaGet(c, next, {});
+    page = await metaGet(c, next, {}, accessToken);
   }
   if (out.length) return out;
   // Only explains the empty list: a failed look-up still ends in "no ad account".
@@ -294,7 +286,7 @@ export async function metaCampaignDays(c: MetaConfig, accessToken: string, accou
   const act = metaAccountId(accountId);
   let page: { data: MetaInsightRow[]; paging?: { next?: string } };
   try {
-    page = await metaGet(c, `${act}/insights`, { ...params, access_token: accessToken });
+    page = await metaGet(c, `${act}/insights`, params, accessToken);
   } catch (err) {
     // Meta answers a big account's long range with a temporary error ("reduce the amount of data");
     // it wants those run as a report job instead.
@@ -306,7 +298,7 @@ export async function metaCampaignDays(c: MetaConfig, accessToken: string, accou
     for (const r of page.data ?? []) out.push(fromMetaInsight(act, r));
     const next = page.paging?.next;
     if (!next) break;
-    page = await metaGet(c, next, {});
+    page = await metaGet(c, next, {}, accessToken);
   }
   return out;
 }
@@ -317,11 +309,11 @@ export async function metaCampaignDays(c: MetaConfig, accessToken: string, accou
  */
 export async function metaInsightsJob(c: MetaConfig, accessToken: string, act: string, params: Record<string, string>, pollMs = 5000): Promise<MetaInsightRow[]> {
   const { limit: pageSize = "500", ...jobParams } = params;
-  const job = await metaSend<{ report_run_id?: string }>(c, "POST", `${act}/insights`, { ...jobParams, access_token: accessToken });
+  const job = await metaSend<{ report_run_id?: string }>(c, "POST", `${act}/insights`, jobParams, accessToken);
   const id = job.report_run_id;
   if (!id || !/^\d{1,30}$/.test(id)) throw new AdsApiError("Meta didn't start the report", 502);
   for (let i = 0; ; i++) {
-    const s = await metaGet<{ async_status?: string; async_percent_completion?: number }>(c, id, { fields: "async_status,async_percent_completion", access_token: accessToken });
+    const s = await metaGet<{ async_status?: string; async_percent_completion?: number }>(c, id, { fields: "async_status,async_percent_completion" }, accessToken);
     if (s.async_status === "Job Completed") break;
     if (s.async_status === "Job Failed" || s.async_status === "Job Skipped") throw new AdsRetryableError(`Meta's report job ended: ${s.async_status}`);
     // About 8 minutes: a queue consumer may run for 15, and a retry would only start the job again.
@@ -329,12 +321,12 @@ export async function metaInsightsJob(c: MetaConfig, accessToken: string, act: s
     if (pollMs > 0) await new Promise((r) => setTimeout(r, pollMs));
   }
   const out: MetaInsightRow[] = [];
-  let page = await metaGet<{ data: MetaInsightRow[]; paging?: { next?: string } }>(c, `${id}/insights`, { limit: pageSize, access_token: accessToken });
+  let page = await metaGet<{ data: MetaInsightRow[]; paging?: { next?: string } }>(c, `${id}/insights`, { limit: pageSize }, accessToken);
   for (let i = 0; i < 100; i++) {
     out.push(...(page.data ?? []));
     const next = page.paging?.next;
     if (!next) break;
-    page = await metaGet(c, next, {});
+    page = await metaGet(c, next, {}, accessToken);
   }
   return out;
 }
@@ -370,13 +362,12 @@ export async function metaRangeInsights(
     ...(breakdown && level === "account" ? { breakdowns: META_BREAKDOWN_PARAM[breakdown] } : {}),
     use_unified_attribution_setting: "true",
     limit: "500",
-    access_token: accessToken,
-  });
+  }, accessToken);
   for (let i = 0; i < 20; i++) {
     out.push(...(page.data ?? []));
     const next = page.paging?.next;
     if (!next || out.length >= maxRows) break;
-    page = await metaGet(c, next, {});
+    page = await metaGet(c, next, {}, accessToken);
   }
   return out;
 }
@@ -389,8 +380,7 @@ export async function metaStatuses(c: MetaConfig, accessToken: string, ids: stri
     const res = await metaGet<Record<string, { id?: string; effective_status?: string }>>(c, "", {
       ids: valid.slice(i, i + 50).join(","),
       fields: "effective_status",
-      access_token: accessToken,
-    });
+    }, accessToken);
     for (const [id, v] of Object.entries(res)) if (v?.effective_status) out.set(id, v.effective_status);
   }
   return out;

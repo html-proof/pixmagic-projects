@@ -79,7 +79,7 @@ function metaPlatform(revoked: string[]): FetchLike {
       return u.searchParams.get("grant_type") === "fb_exchange_token" ? json({ access_token: "META_LONG", expires_in: 5_184_000 }) : json({ access_token: "META_SHORT", expires_in: 3600 });
     }
     if (u.pathname.endsWith("/me/permissions/ads_read") && init?.method === "DELETE") {
-      revoked.push(new URLSearchParams(String(init.body)).get("access_token")!);
+      revoked.push(new Headers(init.headers).get("authorization")!.replace(/^Bearer /, ""));
       return json({ success: true });
     }
     if (u.pathname.endsWith("/me/permissions")) return json({ data: [{ permission: "ads_read", status: "granted" }] });
