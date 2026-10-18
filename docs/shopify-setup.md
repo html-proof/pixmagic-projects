@@ -1,6 +1,6 @@
 # Shopify app configuration
 
-The integration is a **public** app using the **authorization code grant** with **permanent offline access tokens**. It is **not embedded**: merchants use our own web app at https://bizinsights.io. Non-embedded is still allowed for public apps: a Shopify staff answer of 2026-08-24 says "fully non-embedded public apps are still allowed in the Shopify App Store" and that App Bridge and requirements 2.2.2/2.2.3 don't apply while `embedded = false` ([forum thread](https://community.shopify.dev/t/non-embedded-shopify-apps-still-allowed/27111)). Everything else in the [App Store requirements](https://shopify.dev/docs/apps/launch/shopify-app-store/app-store-requirements) applies; [shopify-app-store-compliance.md](shopify-app-store-compliance.md) checks each one.
+The integration is a **public** app using the **authorization code grant** with **expiring offline access tokens**. It is **not embedded**: merchants use our own web app at https://bizinsights.io. Non-embedded is still allowed for public apps: a Shopify staff answer of 2026-08-24 says "fully non-embedded public apps are still allowed in the Shopify App Store" and that App Bridge and requirements 2.2.2/2.2.3 don't apply while `embedded = false` ([forum thread](https://community.shopify.dev/t/non-embedded-shopify-apps-still-allowed/27111)). Everything else in the [App Store requirements](https://shopify.dev/docs/apps/launch/shopify-app-store/app-store-requirements) applies; [shopify-app-store-compliance.md](shopify-app-store-compliance.md) checks each one.
 
 > **Unlisted still means reviewed.** "Unlisted" controls *visibility* in the App Store, not *eligibility*. Both listed and unlisted public apps go through Shopify's app review, and **until that review passes the app installs only on development stores in our own Partner organization.** No install link, scope change or code change gets a live merchant store past that gate — see [3d](#3d-troubleshooting-installs).
 
@@ -64,33 +64,59 @@ The public "Continue with Shopify" sign-up (`/auth/shopify/start`, per-user gran
 
 1. `POST /workspaces/:ws/shopify/install {shop}` — user must be signed in, email verified and have `stores:manage`. The shop is normalised to `x.myshopify.com` (custom domains rejected). A random `state` is stored in the coordinator (DynamoDB on AWS; 10 min, bound to user + workspace + shop) **and** in an httpOnly cookie.
 2. Browser goes to `https://{shop}/admin/oauth/authorize?client_id&scope&redirect_uri&state`.
-3. `GET /shopify/callback` verifies, in order: query HMAC (timing-safe), shop format and exact match, timestamp within 10 min, state cookie == state param, state exists in the coordinator (taken on read, so single use), same signed-in user, then exchanges the code for a permanent offline token (no `expiring` flag - see "Why not expiring tokens" below).
-4. The access token is AES-256-GCM encrypted (store id as AAD) and saved with the granted scopes. A permanent offline token carries no expiry and no refresh token, so those columns stay null. Initial sync jobs are seeded and the user lands on the onboarding progress screen.
+3. `GET /shopify/callback` verifies, in order: query HMAC (timing-safe), shop format and exact match, timestamp within 10 min, state cookie == state param, state exists in the coordinator (taken on read, so single use), same signed-in user, then exchanges the code for an **expiring** offline token (`expiring=1`, see "Expiring offline tokens" below).
+4. The access token and refresh token are AES-256-GCM encrypted (store id + kind as AAD) and saved with both expiry times and the granted scopes. Initial sync jobs are seeded and the user lands on the onboarding progress screen.
 
-### Why not expiring tokens
+### Expiring offline tokens
 
-Sending `expiring: 1` on the token exchange opts into Shopify's expiring tokens: a 1-hour access
-token plus a single-use 90-day refresh token. The app did that until 2026-10-04 and it is
-deliberately reversed, because it made successful rotation a liveness requirement for **every**
-store:
+Shopify requires public apps to use expiring offline tokens: new apps since 2026-04-01, every
+public app from **2027-01-01**, when Shopify stops accepting non-expiring tokens for the GraphQL
+Admin API and merchants still on one lose the app until they open it again. Until then, every use
+of a non-expiring token shows in the Dev Dashboard (app → **API health**) as **"Deprecated offline
+token"**. The app used non-expiring tokens from 2026-10-04 to 2026-10-18; since then:
 
-- A store whose refresh failed even once was dead until the merchant reconnected. There was no
-  permanent credential to fall back on.
-- The refresh token is single use, and any later authorize for the same app and shop invalidates
-  the outstanding one. Leg 2 stashes its token in the signup record and only writes it to the
-  store on claim, so an **abandoned signup could kill a live store's token while leaving its row
-  untouched** - which is what it looked like had happened to `9kdgux-gq.myshopify.com`.
+- **New connections** send `expiring=1` on the code exchange and get a 1-hour access token plus a
+  90-day refresh token.
+- **Stores connected before** are moved by the worker's `*/15` sweep (`refreshExpiringTokens` →
+  `migrateToExpiringToken`): Shopify's token exchange trades the non-expiring token for an
+  expiring pair, with no merchant involved. The old token stops working for GraphQL the moment
+  that succeeds, so the new pair is written first (a lost answer comes back unchanged if asked
+  again within 7 days, so a network error or 5xx is asked again at once, and the next tick if it
+  lasts). A store Shopify refuses (`invalid_subject_token`) keeps its old token and is asked
+  again hourly. A sync refused with 401/403 while its store is still on a non-expiring token
+  moves the store itself and retries (`withAccessToken`): Shopify refuses a *new* public app's
+  non-expiring tokens outright ("Non-expiring access tokens are no longer accepted", which is
+  what broke the App Store reviewers' stores on the public app on 2026-10-17/18), and a trade
+  whose answer was lost leaves the row on a token Shopify has retired (a plain 401). A store
+  whose import had failed for lost access is re-synced once moved, instead of showing Reconnect
+  until someone opens its dashboard. This needs `AWS_SCHEDULES=on` (it is).
+- **Rotation**: `getAccessToken` refreshes 5 minutes before expiry, and the sweep rotates every
+  token with under 20 minutes left, so each store rotates about every 45 minutes and its refresh
+  token never runs out while nobody opens the dashboard. Each refresh returns a new pair; the
+  refresh token presented stays usable until the new one is used, so a refresh whose answer was
+  lost (or that failed with a 5xx) is simply made again, and the current access token is used
+  until it expires.
+- The old Cloudflare Worker `insights` (removed from the repo in PR #28) still has its crons. If
+  its PC database comes back up it would sync the stores it knows with their old non-expiring
+  tokens, and Shopify would flag the app again: keep it off, or delete its crons.
 
-A permanent offline token has no expiry and no refresh token, so there is nothing to rotate and
-nothing for a later authorize to invalidate. It stays valid until the merchant uninstalls.
+Why it is safe now when it wasn't on 2026-10-04 (when a store whose refresh failed once was dead,
+and an abandoned signup could kill a live store's token):
 
-Token rotation: `packages/core/src/tokens.ts` still refreshes 5 minutes before expiry under a
-coordinator lock, and the `*/15` cron still rotates tokens expiring within the hour every 15
-minutes. Both paths are now **dormant for new connections** - `accessTokenExpiresAt` is null, so
-`getAccessToken` returns the stored token without ever calling Shopify. They are kept for store
-rows connected while `expiring: 1` was in force, which still carry an expiry and a refresh token.
-Those rows keep rotating until they are reconnected; a reconnect replaces them with a permanent
-token and clears both expiry columns.
+- **One process at a time** gets, rotates or trades a store's token: the coordinator lock
+  `lock:token-refresh:<store id>`. Shopify warns that acquiring and refreshing at once each
+  retire the other's result.
+- **Every new authorization goes on the row at once.** Shopify retires every refresh token it gave
+  the app for the shop as soon as it hands out a new token, so `obtainStoreToken` writes the code
+  exchange's token to the shop's row (when it holds one from the same app) under that lock, before
+  the callback decides anything else. A connect that then fails (scopes missing, store taken, a
+  blip) no longer leaves the store on a dead refresh token. The Shopify sign-up that stashed tokens
+  outside the store row is gone (removed 2026-10-11).
+- **Writes are compare-and-set**: a refresh only replaces the refresh token it presented, so a
+  reconnect that lands meanwhile keeps its token; a refresh refused because the row got a new
+  token meanwhile goes again with that one. Key rotation (`reencryptStoreTokens`) does the same.
+- **A refused refresh token** (401 `invalid_request`) reads as lost access ("rejected our
+  access"), so the dashboard offers Reconnect and opening the app from Shopify authorizes again.
 
 ### What the first import fetches
 

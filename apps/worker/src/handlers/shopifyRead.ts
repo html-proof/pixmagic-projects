@@ -3,7 +3,7 @@
  * items and sales records beyond the first page, and the reader the daily check uses (verify.ts).
  */
 import type { Store } from "@app/db";
-import { env, getAccessToken, graphqlOrderOverflow, logger, normalizeGraphqlSales, ORDER_LINE_ITEMS_QUERY, parseShopify, replaceOrderSales, storedSalesState, graphqlAgreementListSchema, graphqlOrderSchema, shopifyGraphqlWithCost, ShopifyGraphqlError, ShopifyHttpError, StoreDisconnectedError, orderSalesQuery, orderCustomerHistorySchema, orderIndex, type CustomerHistory, type GraphqlOrder, type SyncJobData } from "@app/core";
+import { env, withAccessToken, graphqlOrderOverflow, logger, normalizeGraphqlSales, ORDER_LINE_ITEMS_QUERY, parseShopify, replaceOrderSales, storedSalesState, graphqlAgreementListSchema, graphqlOrderSchema, shopifyGraphqlWithCost, ShopifyGraphqlError, ShopifyHttpError, StoreDisconnectedError, orderSalesQuery, orderCustomerHistorySchema, orderIndex, type CustomerHistory, type GraphqlOrder, type SyncJobData } from "@app/core";
 import { expandScopes } from "@app/shared";
 import { AccessRevokedError, enqueueAggregate, sleep, UnrecoverableError, type WorkerDeps } from "./common.js";
 
@@ -34,15 +34,18 @@ export async function gql<T>(deps: WorkerDeps, store: Store, pace: Pace, query: 
       await sleep(pace.pendingMs);
       pace.pendingMs = 0;
     }
-    const accessToken = await getAccessToken(store, deps.coord, deps.fetchImpl);
-    const { data, requiredDelayMs } = await shopifyGraphqlWithCost<T>({
-      shop: store.shopDomain,
-      accessToken,
-      apiVersion: env().SHOPIFY_API_VERSION,
-      query,
-      variables,
-      fetchImpl: deps.fetchImpl,
-    });
+    // A token swapped under this call (moved to an expiring one, rotated, reconnected) is retried with
+    // the new one rather than taken for lost access.
+    const { data, requiredDelayMs } = await withAccessToken(store, deps.coord, deps.fetchImpl, (accessToken) =>
+      shopifyGraphqlWithCost<T>({
+        shop: store.shopDomain,
+        accessToken,
+        apiVersion: env().SHOPIFY_API_VERSION,
+        query,
+        variables,
+        fetchImpl: deps.fetchImpl,
+      }),
+    );
     pace.pendingMs = requiredDelayMs;
     return data;
   } catch (err) {

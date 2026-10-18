@@ -6,11 +6,11 @@ import {
   buildAuthorizeUrl,
   connectApp,
   DEFAULT_APP,
-  encryptTokenFields,
   env,
   exchangeCodeForToken,
   logger,
   managedInstallUrl,
+  obtainStoreToken,
   shopifyApp,
   shopifyApps,
   storeLimitReached,
@@ -237,11 +237,15 @@ export function logHandoff(flow: string, shop: string | null, app: ShopifyApp, s
 const logReturn = (flow: string, shop: string, app: ShopifyApp) =>
   logger.info({ event: "shopify_install_return", flow, shop, app: app.key }, "merchant returned from Shopify");
 
-/** The authorization code exchanged for the offline token, or the error to send the merchant back with. */
+/**
+ * The authorization code exchanged for the offline token, or the error to send the merchant back
+ * with. A store already holding a token from this app gets the new one at once, whatever happens
+ * next (obtainStoreToken): Shopify has just retired the refresh token it had.
+ */
 async function exchangeOrFail(app: ShopifyApp, shop: string, code: string, deps: Deps): Promise<TokenResponse | string> {
   let token: TokenResponse;
   try {
-    token = await exchangeCodeForToken(shopifyConfig(app), shop, code, deps.fetchImpl);
+    token = await obtainStoreToken(shop, app.key, deps.coord, () => exchangeCodeForToken(shopifyConfig(app), shop, code, deps.fetchImpl));
   } catch (err) {
     logger.error({ err, shop }, "shopify code exchange failed");
     return "exchange_failed";
@@ -266,9 +270,9 @@ async function finishInstall(
   const existing = await systemDb.store.findUnique({ where: { shopDomain: shop } });
 
   // Opened again before anyone claimed it: the import already ran, this approval only earns the
-  // browser its claim (landingFor), so keep the fresher token and go there.
+  // browser its claim (landingFor), so go there. The fresher token is on the row already
+  // (exchangeOrFail puts it on a row that holds one from this app).
   if (existing && (await workingFor(existing, app)) && (await unclaimed(existing.workspaceId))) {
-    await systemDb.store.update({ where: { id: existing.id }, data: encryptTokenFields(existing.id, token) });
     return c.redirect(await landingFor(c, deps, existing));
   }
 

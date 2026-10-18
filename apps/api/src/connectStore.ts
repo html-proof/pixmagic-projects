@@ -1,8 +1,7 @@
 import { systemDb, type Store, type Tx } from "@app/db";
-import { audit, encryptTokenFields, endBillingForStore, logger, purgeStoreData, syncBillingFromShopify, type TokenResponse } from "@app/core";
+import { audit, encryptTokenFields, endBillingForStore, logger, purgeStoreData, seedInitialSync, syncBillingFromShopify, type TokenResponse } from "@app/core";
 import { randomToken } from "@app/shared";
 import { HttpError, type Deps } from "./context.js";
-import { seedInitialSync } from "./sync.js";
 
 /** Where the first-sync progress page lives. */
 export const syncPage = (storeId: string) => `/onboarding?step=sync&store=${storeId}`;

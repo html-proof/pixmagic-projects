@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildAuthorizeUrl,
   exchangeCodeForToken,
+  exchangeForExpiringToken,
   gidToId,
   normalizeGraphqlOrder,
   normalizeRestOrder,
@@ -31,22 +32,44 @@ describe("OAuth helpers", () => {
     expect(() => buildAuthorizeUrl(cfg, "evil.com", "s")).toThrow();
   });
 
-  it("exchanges the code for a permanent offline token, never opting into expiring tokens", async () => {
+  it("exchanges the code for an expiring offline token (Shopify flags non-expiring ones as deprecated)", async () => {
     const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body));
-      expect(body).toMatchObject({ client_id: "key", client_secret: "secret", code: "c0de" });
-      // `expiring: 1` would ask Shopify for a 1-hour token plus a single-use refresh token,
-      // making rotation a liveness requirement for every store. It must not be sent.
-      expect(body).not.toHaveProperty("expiring");
-      return jsonResponse({ access_token: "shpat_x", scope: "read_orders,read_products" });
+      expect(body).toEqual({ client_id: "key", client_secret: "secret", code: "c0de", expiring: "1" });
+      return jsonResponse({
+        access_token: "shpat_x",
+        scope: "read_orders,read_products",
+        expires_in: 3600,
+        refresh_token: "shprt_x",
+        refresh_token_expires_in: 7_776_000,
+      });
     });
+    const before = Date.now();
     const t = await exchangeCodeForToken(cfg, "s.myshopify.com", "c0de", fetchImpl as typeof fetch);
     expect(t.accessToken).toBe("shpat_x");
     expect(t.scopes).toEqual(["read_orders", "read_products"]);
-    // No expiry and no refresh token: nothing to rotate, nothing for a later authorize to invalidate.
-    expect(t.accessTokenExpiresAt).toBeNull();
-    expect(t.refreshToken).toBeNull();
-    expect(t.refreshTokenExpiresAt).toBeNull();
+    expect(t.refreshToken).toBe("shprt_x");
+    expect(t.accessTokenExpiresAt!.getTime()).toBeGreaterThanOrEqual(before + 3600_000);
+    expect(t.refreshTokenExpiresAt!.getTime()).toBeGreaterThanOrEqual(before + 90 * 86_400_000);
+  });
+
+  it("trades a non-expiring offline token for an expiring one with Shopify's token exchange", async () => {
+    const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(String(url)).toBe("https://s.myshopify.com/admin/oauth/access_token");
+      expect(JSON.parse(String(init?.body))).toEqual({
+        client_id: "key",
+        client_secret: "secret",
+        grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
+        subject_token: "shpat_old",
+        subject_token_type: "urn:shopify:params:oauth:token-type:offline-access-token",
+        requested_token_type: "urn:shopify:params:oauth:token-type:offline-access-token",
+        expiring: "1",
+      });
+      return jsonResponse({ access_token: "shpat_new", scope: "read_orders", expires_in: 3600, refresh_token: "shprt_new", refresh_token_expires_in: 7_776_000 });
+    });
+    const t = await exchangeForExpiringToken(cfg, "s.myshopify.com", "shpat_old", fetchImpl as typeof fetch);
+    expect(t).toMatchObject({ accessToken: "shpat_new", refreshToken: "shprt_new" });
+    expect(t.accessTokenExpiresAt).not.toBeNull();
   });
 
   it("refresh uses grant_type=refresh_token", async () => {
@@ -58,9 +81,11 @@ describe("OAuth helpers", () => {
     expect(t.refreshToken).toBe("new_r");
   });
 
-  it("surfaces token errors", async () => {
-    const fetchImpl = async () => jsonResponse({ error: "invalid_request" }, 400);
-    await expect(exchangeCodeForToken(cfg, "s.myshopify.com", "x", fetchImpl as typeof fetch)).rejects.toThrow(/400/);
+  it("surfaces token errors with Shopify's error code", async () => {
+    const fetchImpl = async () => jsonResponse({ error: "invalid_subject_token" }, 400);
+    await expect(exchangeForExpiringToken(cfg, "s.myshopify.com", "x", fetchImpl as typeof fetch)).rejects.toThrow("Token request failed (400 invalid_subject_token)");
+    const html = async () => new Response("<html>oops</html>", { status: 502 });
+    await expect(exchangeCodeForToken(cfg, "s.myshopify.com", "x", html as typeof fetch)).rejects.toThrow("Token request failed (502)");
   });
 });
 
