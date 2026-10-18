@@ -50,24 +50,38 @@ export function compareClaims(cfg: EnvConfig, claims: Record<string, unknown>): 
 }
 
 /** STS's answer to one AssumeRoleWithWebIdentity; status 0 when there was none. */
-export type Assumed = { ok: boolean; status: number; code: string; answer: string; arn: string };
+export type Assumed = { ok: boolean; status: number; code: string; message: string; answer: string; arn: string };
 
 /** Only this proves a trust refused the token: a role that doesn't exist gets the same answer. */
 export const isRefusal = (r: Assumed) => r.status === 403 && r.code === "AccessDenied";
-/** No answer, or STS too busy to give one: says nothing about the trust. */
-export const isInconclusive = (r: Assumed) => !r.ok && (r.status === 0 || r.status >= 500 || /^Throttling/.test(r.code));
+/**
+ * No answer, STS too busy, or STS unable to reach GitHub to check the token (AWS calls these
+ * transient): says nothing about the trust.
+ */
+export const isInconclusive = (r: Assumed) =>
+  !r.ok &&
+  (r.status === 0 ||
+    r.status >= 500 ||
+    /^Throttling/.test(r.code) ||
+    r.code === "IDPCommunicationError" ||
+    (r.code === "InvalidIdentityToken" && /^Couldn't retrieve verification key/.test(r.message)));
 
 /**
- * One AssumeRoleWithWebIdentity. It is unsigned: no AWS credentials involved. The session lasts
- * the minimum 15 minutes and its credentials are dropped unread.
+ * One AssumeRoleWithWebIdentity, tried up to 3 times while the answer is inconclusive. It is
+ * unsigned: no AWS credentials involved. The session lasts the minimum 15 minutes and its
+ * credentials are dropped unread.
  */
-export async function assumeWithWebIdentity(roleArn: string, region: string, token: string, sessionName: string): Promise<Assumed> {
+export async function assumeWithWebIdentity(roleArn: string, region: string, token: string, sessionName: string, waitMs = 5000): Promise<Assumed> {
   const body = new URLSearchParams({ Action: "AssumeRoleWithWebIdentity", Version: "2011-06-15", RoleArn: roleArn, RoleSessionName: sessionName, DurationSeconds: "900", WebIdentityToken: token });
-  const res = await fetchRetrying(`https://sts.${region}.amazonaws.com/`, { method: "POST", body });
-  const xml = await res.text();
-  const tag = (name: string) => new RegExp(`<${name}>([^<]*)</${name}>`).exec(xml)?.[1] ?? "";
-  const code = tag("Code");
-  return { ok: res.ok, status: res.status, code, answer: res.ok ? "admitted" : `${res.status} ${code}: ${tag("Message")}`, arn: tag("Arn") };
+  for (let attempt = 1; ; attempt++) {
+    const res = await fetchRetrying(`https://sts.${region}.amazonaws.com/`, { method: "POST", body }, waitMs);
+    const xml = await res.text();
+    const tag = (name: string) => new RegExp(`<${name}>([^<]*)</${name}>`).exec(xml)?.[1] ?? "";
+    const [code, message] = [tag("Code"), tag("Message")];
+    const r = { ok: res.ok, status: res.status, code, message, answer: res.ok ? "admitted" : `${res.status} ${code}: ${message}`, arn: tag("Arn") };
+    if (!isInconclusive(r) || attempt === 3) return r;
+    await new Promise((done) => setTimeout(done, waitMs));
+  }
 }
 
 /** JSON with every object's keys sorted: IAM needn't keep the order they were written in. */
@@ -104,7 +118,7 @@ export async function checkTrust(o: {
     try {
       return await o.assume(roleArn);
     } catch (err) {
-      return { ok: false, status: 0, code: "", answer: `no answer (${(err as Error).message})`, arn: "" };
+      return { ok: false, status: 0, code: "", message: (err as Error).message, answer: `no answer (${(err as Error).message})`, arn: "" };
     }
   };
   const lines: string[] = [];

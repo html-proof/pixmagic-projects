@@ -27,8 +27,8 @@ const PG_PORT = process.env.TEST_PG_PORT ?? "5434";
 const PG_PASSWORD = encodeURIComponent(process.env.TEST_PG_PASSWORD ?? "app");
 
 export const E2E_ENV = {
-  DATABASE_URL: `postgresql://app:${PG_PASSWORD}@localhost:${PG_PORT}/app_e2e`,
-  APP_DATABASE_URL: `postgresql://app_rls:app_rls@localhost:${PG_PORT}/app_e2e`,
+  DATABASE_URL: `postgresql://app:${PG_PASSWORD}@127.0.0.1:${PG_PORT}/app_e2e`,
+  APP_DATABASE_URL: `postgresql://app_rls:app_rls@127.0.0.1:${PG_PORT}/app_e2e`,
 };
 
 const env = {
