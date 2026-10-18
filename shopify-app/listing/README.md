@@ -44,7 +44,8 @@ installs only on development stores in our own Partner org - see
 
 Submission checklist: https://partners.shopify.com/5229240/apps/436203126785/distribution/app-store
 
-Done: API versions, configuration checks, emergency contact, automated checks, and the English
+Done: API versions, configuration checks, emergency contact, automated checks, app capabilities
+("Doesn't have specialized capabilities": not embedded, no theme, checkout or payments), and the English
 listing (everything in `listing-copy.md`: copy, category, Free plan, feature image, 5 screenshots,
 support, privacy policy, testing instructions). The listing form reports two issues left, both
 owner-only:
@@ -62,13 +63,12 @@ Then, before **Submit for review** (owner's call):
    optional scopes at the same time: get them covered, or remove `optional_scopes` from the public
    toml (today `appConfig.test.ts` ties all three tomls to one `SHOPIFY_OPTIONAL_SCOPES`, so that is
    a code change) and `shopify app deploy --config public`.
-4. **App capabilities** - the checklist says "embedded"; the app is not (`embedded = false`).
-5. **The app and site, as a reviewer sees them** (code, one pull request): hide WhatsApp, Staff,
+4. **The app and site, as a reviewer sees them** (code, one pull request): hide WhatsApp, Staff,
    advertising and email for App Store installs; send in-app "Connect" buttons to this app, not the
    unapproved main app; reword "within a minute" and "place a test order" in the dashboard; drop
    "Real-time analytics" and label the mock figures on /login and /signup; fix /support
    ("Settings → Stores", connecting another store) and /privacy (Cloudflare, Resend, Staff data).
-6. **Run the reviewer path once** on a fresh development store: install, claim, import,
+5. **Run the reviewer path once** on a fresh development store: install, claim, import,
    dashboard, Sync now, uninstall, reinstall.
 
 Approval is what unblocks every live merchant store at once. Budget days to weeks for it.
