@@ -16,8 +16,13 @@ The integration is a **public** app using the **authorization code grant** with 
 Edit `shopify-app/shopify.app.toml`: set `client_id` and the app's address (`APP_DOMAIN` below; production: `bizinsights.io`). Then:
 
 ```bash
-cd shopify-app && npx shopify app deploy
+cd shopify-app && npx shopify app deploy --config shopify.app.toml
 ```
+
+Each of our apps is its own config, released on its own: `--config shopify.app.toml` (main),
+`--config pixmagic`, `--config appstore` (the App Store app) and `--config public` (the first App
+Store app, kept for its stores). A bare `shopify app deploy` releases only the main app, or whichever
+config the CLI last used (`.shopify/`), never all of them.
 
 This pushes, as one versioned config:
 
@@ -26,7 +31,7 @@ This pushes, as one versioned config:
 | App URL | `https://APP_DOMAIN/api/shopify/launch` (HMAC-verified: authorizes a store we hold no working token for, otherwise opens it) |
 | Redirect URL | `https://APP_DOMAIN/api/shopify/callback` |
 | Scopes | `read_orders,read_products` (required) |
-| Optional scopes | `read_customers`, `write_pixels`, `read_customer_events` — declared in both tomls and mirrored in `SHOPIFY_OPTIONAL_SCOPES` since 2026-10-04; merchants grant them per module with **Enable**, see [3e](#3e-optional-scopes-and-why-the-env-var-cant-fix-an-install) |
+| Optional scopes | `read_customers`, `write_pixels`, `read_customer_events` — declared in every toml and mirrored in `SHOPIFY_OPTIONAL_SCOPES` since 2026-10-04; merchants grant them per module with **Enable**, see [3e](#3e-optional-scopes-and-why-the-env-var-cant-fix-an-install) |
 | Webhooks | see [webhooks.md](webhooks.md), delivered to `https://APP_DOMAIN/api/webhooks/shopify` |
 | Compliance webhooks | `customers/data_request`, `customers/redact`, `shop/redact` |
 | Web pixel extension | `extensions/insights-pixel` |
@@ -299,10 +304,10 @@ compared with Shopify):
 1. Dev Dashboard → the app → **API access → Protected customer data access**: request the
    customer data fields name, email, phone and address (Level 2), with "Store analytics" as the
    reason. A custom-distribution app is granted as soon as the form is filled in; the App Store app
-   (public) needs Shopify's review.
-2. Add `"read_reports"` to `optional_scopes` in all three tomls and to `SHOPIFY_OPTIONAL_SCOPES` in
+   (`appstore`) needs Shopify's review.
+2. Add `"read_reports"` to `optional_scopes` in every toml and to `SHOPIFY_OPTIONAL_SCOPES` in
    `apps/aws/src/settings.ts` (appConfig.test.ts checks they agree), `shopify app deploy` each
-   app (`--config pixmagic`, `--config public`), and merge to `main`.
+   app (`--config pixmagic`, `--config appstore`, `--config public`), and merge to `main`.
 3. In the dashboard, **Enable** on either card takes the merchant to Shopify to grant it. The next
    poll asks Shopify; the figures fill in within a minute.
 
@@ -352,27 +357,36 @@ app opens as the whole tab and goes through the usual launch. Nothing else becam
 ## 3g. The App Store app (public distribution, Pixmagic Partner organization)
 
 Only an app in a **Partner organization** can be submitted to the App Store, and a distribution
-choice is permanent. Our three apps, all named "bizinsights" and all served by this backend:
+choice is permanent. Our four apps, all named "bizinsights" and all served by this backend:
 
 | App | Client ID | Organization | Distribution | Backend key |
 | --- | --- | --- | --- | --- |
 | Main (`shopify.app.toml`) | `57e9ef75…` | "My Store" (Dev Dashboard only, no Partner account) | can't be submitted | `default` |
 | PixMagic (`shopify.app.pixmagic.toml`) | `bb0ea9e4…` | Pixmagic (Partner 5229240) | custom, pixmagic.myshopify.com | `pixmagic` |
-| **App Store** (`shopify.app.public.toml`) | `658431ae…` | Pixmagic (Partner 5229240) | **public** (chosen 2026-10-16) | `public` |
+| **App Store** (`shopify.app.appstore.toml`) | `cf5c717d…` | Pixmagic (Partner 5229240, Dev Dashboard app 436930412545) | **public** (registered 2026-10-18) | `appstore` |
+| First App Store app (`shopify.app.public.toml`) | `658431ae…` | Pixmagic (Partner 5229240, Dev Dashboard app 436203126785) | public (chosen 2026-10-16) | `public` |
 
-- Secret: `SHOPIFY_APP_SECRET_PUBLIC` in `insights/production/app` (put-secrets.mjs). Installs from
-  its listing are recognised by their signature, so they work without anything else.
+- **Why two App Store apps.** `public` was submitted on 2026-10-18 and bounced: Shopify refuses
+  non-expiring offline tokens from public apps registered after 2026-04-01, and the code exchange
+  didn't ask for expiring ones yet (fixed in PR #118 for every app). The owner chose to start the
+  submission over with a new registration, `appstore`. `public` stays configured (key, secret,
+  toml) while any store is connected through it: a store's tokens, webhooks and reconnects use the
+  credentials of the app it came through. Requirement 1.1.5 forbids two identical published apps,
+  so only one of the two may ever be published.
+- Secrets: `SHOPIFY_APP_SECRET_APPSTORE` and `SHOPIFY_APP_SECRET_PUBLIC` in `insights/production/app`
+  (put-secrets.mjs; `shopify app env show --config appstore` prints the client secret). Installs
+  from a listing are recognised by their signature, so they work without anything else.
 - New stores (one-click connect, typed-in stores) go to `SHOPIFY_INSTALL_APP`
   (apps/aws/src/settings.ts). It stays `default` until Shopify approves the App Store app: an
   unapproved app installs only on development stores of its own organization, and ours are in the
-  main app's. Approved: set it to `public` and deploy.
-- Except in an **App Store workspace**: one whose every store came through this app
-  (`appStoreWorkspace` in packages/core/src/apps.ts; `SHOPIFY_APP_STORE_PREVIEW_SHOPS` adds the App
-  Store reviewer's test store, which is on the main app). Its in-app connects go through this app
-  whatever `SHOPIFY_INSTALL_APP` says, and the web app leaves out WhatsApp, Staff, advertising and
-  email there (`APP_STORE_MODULES`, apps/web/src/lib/features.ts). Reconnecting a store always goes
-  through the app it came through (`connectApp`), so no merchant is moved to an app their store
-  may refuse.
+  main app's. Approved: set it to `appstore` and deploy.
+- Except in an **App Store workspace**: one whose every store came through an App Store app
+  (`appstore` or `public`: `APP_STORE_APPS` and `appStoreWorkspace` in packages/core/src/apps.ts;
+  `SHOPIFY_APP_STORE_PREVIEW_SHOPS` adds the App Store reviewer's test store, which is on the main
+  app). Its in-app connects go through `appstore` whatever `SHOPIFY_INSTALL_APP` says, and the web
+  app leaves out WhatsApp, Staff, advertising and email there (`APP_STORE_MODULES`,
+  apps/web/src/lib/features.ts). Reconnecting a store always goes through the app it came through
+  (`connectApp`), so no merchant is moved to an app their store may refuse.
 - Webhooks: as a public app it may not subscribe to order, refund or checkout topics until
   **Protected customer data access** is granted for it (Partner Dashboard → the app → API access
   requests). The toml lists what to add back then.

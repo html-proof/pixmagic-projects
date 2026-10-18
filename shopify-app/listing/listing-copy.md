@@ -5,10 +5,13 @@ Every claim was checked against the code at main 1daf7c3 and against Shopify's f
 "What must not be claimed" before changing any of it, and [README.md](README.md) for what is still
 missing before the app can be submitted.
 
-- Listing form: https://apps.shopify.com/services/partner-app-submissions/658431ae6a22c880e0ab2a0e2040a28a/en
-- Submission checklist: https://partners.shopify.com/5229240/apps/436203126785/distribution/app-store
-- Dev Dashboard (icon, versions): https://dev.shopify.com/dashboard/238834824/apps/436203126785/settings
-- Config: [../shopify.app.public.toml](../shopify.app.public.toml) (client id 658431ae…, never the main or PixMagic app)
+The App Store app is `appstore` since 2026-10-18 (a new registration; the first one, `public`,
+658431ae…, was where this copy was first saved). Its listing starts empty: paste this copy in.
+
+- Submission checklist: https://partners.shopify.com/5229240/apps/436930412545/distribution/app-store
+- Dev Dashboard (icon, versions): https://dev.shopify.com/dashboard/238834824/apps/436930412545/settings
+- Config: [../shopify.app.appstore.toml](../shopify.app.appstore.toml) (client id cf5c717d…, never the main or PixMagic app)
+- The first App Store app's form, for copying from: https://apps.shopify.com/services/partner-app-submissions/658431ae6a22c880e0ab2a0e2040a28a/en
 
 The app as reviewed: install grant `read_orders,read_products`, non-embedded (its own tab and login),
 free (billing is off, `apps/web/src/lib/features.ts`), no order or refund webhooks until protected
@@ -144,9 +147,9 @@ Store installs and sends their in-app connects through this app (`apps/web/src/l
 `appStoreWorkspace` and `connectApp` in `packages/core/src/apps.ts`). The test account's own
 workspace counts as one: its store is listed in `SHOPIFY_APP_STORE_PREVIEW_SHOPS`
 (`apps/aws/src/settings.ts`), because the "Insights Test" development store is in the main app's
-organization and stays on the main app. The form held the earlier text at submission: paste this
-one in when the reviewer's feedback comes back, before **Submit fixes** (its warning that the
-in-app connect buttons "can't install on your store" no longer holds).
+organization and stays on the main app. This text is the one saved in `appstore`'s listing on
+2026-10-18 (the first app's form still holds an older text, which warned that the in-app connect
+buttons "can't install on your store"; that no longer holds).
 
 **Test account** (OWNER): a bizinsights login created at https://bizinsights.io/signup with email
 and password (no Google sign-in, no two-factor), typed into the form's Username and Password

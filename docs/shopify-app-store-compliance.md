@@ -148,8 +148,8 @@ docs/kpis.md), two levels of connections below `orders`, and
 it is stored as `fulfillment_not_required`. `packages/core/test/appConfig.test.ts` now fails the
 build 90 days before the configured version stops being served.
 
-Shopify's side changes only with `cd shopify-app && shopify app deploy` (the webhook version is part
-of the app version).
+Shopify's side changes only with `cd shopify-app && shopify app deploy --config <app>`, once per app
+(`appstore` is the App Store app; the webhook version is part of the app version).
 
 ## What can't be checked from the repository
 

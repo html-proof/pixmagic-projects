@@ -27,9 +27,10 @@ If you change it, keep it inside that band. Re-run `make-icons.py` rather than e
 
 ## What is already pushed
 
-The App Store app is the one in [../shopify.app.public.toml](../shopify.app.public.toml) (client id
-658431ae…, Partner org 5229240, Dev Dashboard app 436203126785). `shopify app deploy --config public`
-releases that file as a new app version: scopes (`read_orders,read_products`, plus the optional
+The App Store app is the one in [../shopify.app.appstore.toml](../shopify.app.appstore.toml) (client
+id cf5c717d…, Partner org 5229240, Dev Dashboard app 436930412545, registered 2026-10-18).
+`shopify app deploy --config appstore` releases that file as a new app version (first one:
+`bizinsights-appstore-1`, 2026-10-18): scopes (`read_orders,read_products`, plus the optional
 ones), the webhook subscriptions including the three mandatory compliance topics, the API version
 they are sent in, the app URLs, and the `insights-pixel` extension. Run it from `shopify-app/` after
 any change to that toml. The main app (`shopify.app.toml`) has no Partner account and can never be
@@ -42,7 +43,23 @@ installs only on development stores in our own Partner org - see
 
 ## Where the submission stands (2026-10-18)
 
-Submission checklist: https://partners.shopify.com/5229240/apps/436203126785/distribution/app-store
+**Starting over with a new app.** The first App Store app (`public`, 658431ae…, checklist
+https://partners.shopify.com/5229240/apps/436203126785/distribution/app-store) was submitted at
+17:01 UTC and bounced to Draft by Shopify's automated install test: its stores' syncs got 403
+"Non-expiring access tokens are no longer accepted" (fixed for every app by PR #118). The owner then
+chose a brand-new registration, `appstore`, accepting that the listing, the protected customer data
+request, the screencast and the review start over. Only one of the two may be published (App Store
+requirement 1.1.5): decide what happens to `public`'s submission before submitting `appstore`.
+
+The new app's checklist: https://partners.shopify.com/5229240/apps/436930412545/distribution/app-store.
+Done on 2026-10-18: registered (`shopify app init`, Pixmagic organization), public distribution,
+app icon uploaded, `bizinsights-appstore-1` released (bizinsights.io URLs, non-embedded, compliance
+webhooks), client secret in `insights/production/app`. Everything below "Checked just before
+submitting" describes the first app's submission and has to be done again for this one: listing
+(`listing-copy.md`), protected customer data request, test account, screencast, automated checks,
+capabilities, AI self-review.
+
+What follows is the first app's record.
 
 **Submitted for review on 2026-10-18 at 17:01 UTC.** Shopify shows "Submitted - We're assigning a
 reviewer to your submission"; it emails sales@ikorex.com.au if anything needs changing. Don't press
@@ -77,15 +94,23 @@ label their figures as an illustration; /support and /privacy were corrected (Se
 another store, Cloudflare, Resend, Staff data). The testing instructions in `listing-copy.md` were
 rewritten to match: paste them into the form when the review feedback comes back.
 
-Still open:
+Still open, all for `appstore`'s first submission (checklist
+https://partners.shopify.com/5229240/apps/436930412545/distribution/app-store):
 
-1. **Paste the new testing instructions** (`listing-copy.md`) into the listing form with the next
-   **Submit fixes**.
-2. **Run the reviewer path once** on a fresh development store: install, claim, import,
-   dashboard, Sync now, uninstall, reinstall.
-3. **After approval**: set `SHOPIFY_INSTALL_APP` to `public` (`apps/aws/src/settings.ts`), add the
-   order and refund webhook topics back to `../shopify.app.public.toml` once protected customer data
-   is granted, and `shopify app deploy --config public`.
+1. **Listing**: the text, category, search terms and the Free plan were saved on 2026-10-18 from
+   `listing-copy.md` (submission 143753). Feature media and at least 3 desktop screenshots are
+   missing: retake them in an App Store workspace (no WhatsApp, Staff or advertising in the menu,
+   and no redrawn Shopify bag; see Screenshots below) rather than reusing the first app's.
+2. **Owner**: the protected customer data request (API access requests), the test account
+   (Username, Password, Account description) and the screencast URL.
+3. **Run the reviewer path once** on a fresh development store of the Pixmagic organization:
+   install, claim, import, dashboard, Sync now, uninstall, reinstall. Then the automated checks
+   ("Run") and the capabilities step, last, since the checks expire after 30 days.
+4. **Decide what happens to `public`'s submission** (requirement 1.1.5), then press **Submit for
+   review** on `appstore`'s checklist. Never press **Submit fixes** on `public`'s page again.
+5. **After approval**: set `SHOPIFY_INSTALL_APP` to `appstore` (`apps/aws/src/settings.ts`), add the
+   order and refund webhook topics back to `../shopify.app.appstore.toml` once protected customer data
+   is granted, and `shopify app deploy --config appstore`.
 
 Approval is what unblocks every live merchant store at once. Budget days to weeks for it.
 

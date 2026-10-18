@@ -493,7 +493,7 @@ test("a workspace installed from the App Store shows only what the listing descr
   const { rows } = await db.query("SELECT m.workspace_id FROM memberships m JOIN users u ON u.id = m.user_id WHERE u.email = $1 LIMIT 1", [email]);
   await db.query(
     `INSERT INTO stores (id, workspace_id, shop_domain, shopify_app_key, status, timezone, currency, granted_scopes, created_at, updated_at)
-     VALUES (gen_random_uuid()::text, $1, $2, 'public', 'active', 'UTC', 'USD', ARRAY['read_orders','read_products'], now(), now())`,
+     VALUES (gen_random_uuid()::text, $1, $2, 'appstore', 'active', 'UTC', 'USD', ARRAY['read_orders','read_products'], now(), now())`,
     [rows[0].workspace_id, `listed-${Date.now()}.myshopify.com`],
   );
 
