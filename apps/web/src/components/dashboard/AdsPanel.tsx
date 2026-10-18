@@ -11,7 +11,7 @@ import { GoogleReportPanel } from "./GoogleReport";
 import { MetaReportPanel } from "./MetaReport";
 import { B, changeWords, comparedOnWholeDays } from "./Narrative";
 import { Delta, NeutralDelta, Panel, Stat } from "./Primitives";
-import { ColumnsWithTotal } from "./SalesBreakdown";
+import { ColumnsWithTotal } from "./ColumnsWithTotal";
 import type { AdsModule, Overview } from "./types";
 
 // ---------------------------------------------------------------------------
