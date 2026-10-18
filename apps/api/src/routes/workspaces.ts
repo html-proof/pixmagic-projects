@@ -16,6 +16,7 @@ import {
   purgeStoreData,
   removeMember,
   revokeTeamInvitation,
+  seedResync,
   SHOP_PARTNER_DEVELOPMENT,
   shopifyGraphql,
   syncBillingFromShopify,
@@ -26,7 +27,7 @@ import { STAFF_ROLES, staffAccess, staffCan } from "@app/shared/staff";
 import { body, clientIp, HttpError, requireFullAccess, requireUser, requireWorkspace, type Deps } from "../context.js";
 import { inviteLimits, teamActor } from "./team.js";
 import type { App } from "../app.js";
-import { AUTO_REFRESH, seedResync } from "../sync.js";
+import { AUTO_REFRESH } from "../sync.js";
 import { limit, LIMITS } from "../rateLimit.js";
 
 const roleSchema = z.enum(ROLES);

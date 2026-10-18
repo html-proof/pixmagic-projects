@@ -34,7 +34,8 @@ const fetchImpl: FetchLike = async (url, init) => {
   calls.push(body);
   return answer(body);
 };
-const deps: WorkerDeps = { coord, queues: memoryQueues(), payloads: memoryBlobs(), mailer: memoryMailer(), fetchImpl };
+const queues = memoryQueues();
+const deps: WorkerDeps = { coord, queues, payloads: memoryBlobs(), mailer: memoryMailer(), fetchImpl };
 
 /** What Shopify answers with an expiring offline token. */
 const pair = (n: string) => ({ access_token: `shpat_${n}`, scope: "read_orders", expires_in: 3600, refresh_token: `shprt_${n}`, refresh_token_expires_in: 7_776_000 });
@@ -62,6 +63,7 @@ afterAll(async () => disconnectDb());
 beforeEach(async () => {
   await resetDb();
   coord.clear();
+  queues.clear();
   calls = [];
   answer = () => {
     throw new Error("no answer set");
@@ -93,6 +95,35 @@ describe("moving stores to expiring tokens", () => {
     coord.clear(); // the hour is up
     await refreshExpiringTokens(deps);
     expect(calls).toHaveLength(2);
+  });
+
+  it("a passing failure is asked again at once, and the next tick if it lasts", async () => {
+    await makeStore(nonExpiring("shpat_old"));
+    let n = 0;
+    answer = () => (++n <= 3 ? json({}, 503) : json(pair("new")));
+    // Three tries in place, all 503: no cooldown, so the next tick tries again.
+    expect(await refreshExpiringTokens(deps)).toBe(0);
+    expect(calls).toHaveLength(3);
+    expect(await refreshExpiringTokens(deps)).toBe(1);
+  });
+
+  it("a store whose import failed for lost access syncs again once moved; one that failed otherwise doesn't", async () => {
+    const store = await makeStore(nonExpiring("shpat_old"));
+    const failed = (error: string) =>
+      systemDb.syncJob.create({ data: { workspaceId: store.workspaceId, storeId: store.id, kind: "orders", status: "failed", error, finishedAt: new Date() } });
+    await systemDb.store.update({ where: { id: store.id }, data: { status: "error" } });
+    await failed("Shopify rejected our access (403); merchant must reconnect");
+    answer = () => json(pair("new"));
+    expect(await refreshExpiringTokens(deps)).toBe(1);
+    // Never imported (lastSyncedAt null): the whole first import again, `shop` first.
+    expect(queues.sent.sync.map((j) => j.kind)).toEqual(["shop"]);
+
+    await setTokens(store.id, nonExpiring("shpat_old"));
+    await failed("Shopify 402: Unavailable Shop");
+    queues.clear();
+    coord.clear();
+    expect(await refreshExpiringTokens(deps)).toBe(1);
+    expect(queues.sent.sync).toHaveLength(0);
   });
 });
 
@@ -152,29 +183,37 @@ describe("rotating an expiring token", () => {
 });
 
 describe("a call whose token is swapped under it", () => {
-  it("a 403 for a non-expiring token moves the store and runs the call again", async () => {
+  it.each([
+    ["Shopify refusing non-expiring tokens", "Shopify auth error 403: Non-expiring access tokens are no longer accepted for the Admin API", 403],
+    // A trade whose answer was lost has retired the token the row still holds: a plain 401. Asking
+    // again gets the same pair back.
+    ["a lost trade", "Shopify auth error 401: [API] Invalid API key or access token", 401],
+  ])("a refusal of a non-expiring token (%s) moves the store and runs the call again", async (_name, message, status) => {
     const store = await makeStore(nonExpiring("shpat_old"));
     answer = () => json(pair("new"));
     const used: string[] = [];
     const result = await withAccessToken(store, coord, fetchImpl, async (token) => {
       used.push(token);
-      if (token === "shpat_old") throw new ShopifyHttpError("Shopify auth error 403: Non-expiring access tokens are no longer accepted for the Admin API", 403);
+      if (token === "shpat_old") throw new ShopifyHttpError(message, status);
       return "ok";
     });
     expect(result).toBe("ok");
     expect(used).toEqual(["shpat_old", "shpat_new"]);
   });
 
-  it("a refusal with the same token still in place is the caller's to handle", async () => {
-    const store = await makeStore(nonExpiring("shpat_old"));
-    let n = 0;
+  it("a refusal Shopify stands by is the caller's to handle", async () => {
     const call = async () => {
-      n++;
       throw new ShopifyHttpError("Shopify auth error 401", 401);
     };
+    // A revoked non-expiring token: Shopify won't trade it either (asked once, not retried).
+    const store = await makeStore(nonExpiring("shpat_old"));
+    answer = () => json({ error: "invalid_subject_token" }, 400);
     await expect(withAccessToken(store, coord, fetchImpl, call)).rejects.toThrow("401");
-    expect(n).toBe(1);
-    expect(calls).toHaveLength(0);
+    expect(calls).toHaveLength(1);
+    // An expiring token that is still the row's: nothing to trade, nothing asked.
+    await setTokens(store.id, expiring("shpat_1", "shprt_1", 3600_000));
+    await expect(withAccessToken(store, coord, fetchImpl, call)).rejects.toThrow("401");
+    expect(calls).toHaveLength(1);
   });
 });
 

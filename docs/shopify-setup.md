@@ -81,15 +81,24 @@ token"**. The app used non-expiring tokens from 2026-10-04 to 2026-10-18; since 
   `migrateToExpiringToken`): Shopify's token exchange trades the non-expiring token for an
   expiring pair, with no merchant involved. The old token stops working for GraphQL the moment
   that succeeds, so the new pair is written first (a lost answer comes back unchanged if asked
-  again within 7 days). A store Shopify refuses keeps its old token and is asked again hourly.
-  A sync that gets Shopify's "Non-expiring access tokens are no longer accepted" 403 moves the
-  store itself and retries (`withAccessToken`). This needs `AWS_SCHEDULES=on` (it is).
+  again within 7 days, so a network error or 5xx is asked again at once, and the next tick if it
+  lasts). A store Shopify refuses (`invalid_subject_token`) keeps its old token and is asked
+  again hourly. A sync refused with 401/403 while its store is still on a non-expiring token
+  moves the store itself and retries (`withAccessToken`): Shopify refuses a *new* public app's
+  non-expiring tokens outright ("Non-expiring access tokens are no longer accepted", which is
+  what broke the App Store reviewers' stores on the public app on 2026-10-17/18), and a trade
+  whose answer was lost leaves the row on a token Shopify has retired (a plain 401). A store
+  whose import had failed for lost access is re-synced once moved, instead of showing Reconnect
+  until someone opens its dashboard. This needs `AWS_SCHEDULES=on` (it is).
 - **Rotation**: `getAccessToken` refreshes 5 minutes before expiry, and the sweep rotates every
   token with under 20 minutes left, so each store rotates about every 45 minutes and its refresh
   token never runs out while nobody opens the dashboard. Each refresh returns a new pair; the
   refresh token presented stays usable until the new one is used, so a refresh whose answer was
   lost (or that failed with a 5xx) is simply made again, and the current access token is used
   until it expires.
+- The old Cloudflare Worker `insights` (removed from the repo in PR #28) still has its crons. If
+  its PC database comes back up it would sync the stores it knows with their old non-expiring
+  tokens, and Shopify would flag the app again: keep it off, or delete its crons.
 
 Why it is safe now when it wasn't on 2026-10-04 (when a store whose refresh failed once was dead,
 and an abandoned signup could kill a live store's token):

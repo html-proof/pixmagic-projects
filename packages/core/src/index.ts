@@ -8,6 +8,7 @@ export * from "./scopes.js";
 export * from "./tokens.js";
 export * from "./keyRotation.js";
 export * from "./queues.js";
+export * from "./seedSync.js";
 export * from "./shopifyPayloads.js";
 export * from "./normalize.js";
 export * from "./shopifyQueries.js";

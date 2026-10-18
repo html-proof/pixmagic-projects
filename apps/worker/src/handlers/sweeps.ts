@@ -1,6 +1,18 @@
 /** The cron sweeps: nightly reconcile, sales re-reads, stuck jobs, expiring tokens, and the one-off seeds after a move. */
 import { systemDb } from "@app/db";
-import { getAccessToken, logger, migrateToExpiringToken, raiseAlert, settleReturningCustomers, startReconciliation, StoreDisconnectedError, type SyncKind } from "@app/core";
+import {
+  getAccessToken,
+  logger,
+  migrateToExpiringToken,
+  raiseAlert,
+  seedResync,
+  settleReturningCustomers,
+  ShopifyHttpError,
+  startReconciliation,
+  StoreDisconnectedError,
+  type SyncKind,
+} from "@app/core";
+import { syncProblem } from "@app/core/reports";
 import { expandScopes, localDay } from "@app/shared";
 import { enqueueAggregate, type WorkerDeps } from "./common.js";
 import { BACKFILL_DAYS } from "./sync.js";
@@ -371,18 +383,42 @@ export async function refreshExpiringTokens(deps: WorkerDeps) {
   });
   let renewed = 0;
   for (const s of stores) {
+    const cooldown = `sweep:token-migrate:${s.id}`;
     try {
       if (s.accessTokenExpiresAt) {
         await getAccessToken(s, deps.coord, deps.fetchImpl, TOKEN_SWEEP_VALIDITY_MS);
         renewed++;
-      } else if (await deps.coord.acquire(`sweep:token-migrate:${s.id}`, TOKEN_MIGRATE_RETRY_MS)) {
-        if (await migrateToExpiringToken(s, deps.coord, deps.fetchImpl)) renewed++;
+      } else if (await deps.coord.acquire(cooldown, TOKEN_MIGRATE_RETRY_MS)) {
+        if (await migrateToExpiringToken(s, deps.coord, deps.fetchImpl)) {
+          renewed++;
+          // Moved either way: a failure here leaves the store to its dashboard's retry (autoRefresh).
+          await resumeAfterLostAccess(deps, s.id).catch((err: unknown) =>
+            logger.error({ err, storeId: s.id }, "store moved to an expiring token, but its sync was not queued again"),
+          );
+        }
       }
     } catch (err) {
+      // Shopify or the network having a moment: the next tick asks again, not the next hour.
+      if (!s.accessTokenExpiresAt && !(err instanceof ShopifyHttpError && !err.retryable)) await deps.coord.release(cooldown).catch(() => {});
       // A store Shopify cut off fails its next sync the same way, which is what tells the merchant.
       if (err instanceof StoreDisconnectedError) logger.warn({ err, storeId: s.id }, "token refresh refused; the store must be reconnected");
       else logger.error({ err, storeId: s.id }, s.accessTokenExpiresAt ? "token refresh failed" : "move to an expiring token failed");
     }
   }
   return renewed;
+}
+
+/**
+ * A store whose import failed because Shopify refused its old token (it refuses a new public app's
+ * non-expiring tokens outright, as on the App Store reviewers' stores on 2026-10-17/18) syncs again
+ * once it holds one Shopify takes, instead of showing Reconnect until someone opens its dashboard.
+ * A successful sync puts it back to active.
+ */
+async function resumeAfterLostAccess(deps: WorkerDeps, storeId: string) {
+  const store = await systemDb.store.findUniqueOrThrow({ where: { id: storeId } });
+  if (store.status !== "error") return;
+  const failed = await systemDb.syncJob.findFirst({ where: { storeId, status: "failed" }, orderBy: { createdAt: "desc" }, select: { error: true } });
+  if (syncProblem(failed?.error) !== "access") return;
+  const jobs = await seedResync(deps, store);
+  logger.info({ storeId, shop: store.shopDomain, jobs: jobs.length }, "store syncs again now that Shopify takes its token");
 }

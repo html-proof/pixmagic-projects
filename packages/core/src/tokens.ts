@@ -112,7 +112,8 @@ async function rotate(storeId: string, fetchImpl: FetchLike, minValidityMs: numb
         row = now;
         continue;
       }
-      if (err instanceof ShopifyHttpError && err.status === 401) throw refused(row.shopDomain, "refresh token refused");
+      // 401 invalid_request (expired, retired) or another 4xx (invalid_grant...): asking again won't help.
+      if (err instanceof ShopifyHttpError && err.status >= 400 && err.status < 500 && !err.retryable) throw refused(row.shopDomain, "refresh token refused");
       // Shopify or the network having a moment: the token held still works until it expires, and
       // Shopify takes the same refresh token again next time.
       if (validFor(row, 0)) {
@@ -148,7 +149,7 @@ export async function migrateToExpiringToken(store: Pick<Store, "id">, coord: Co
   try {
     const row = await connectedRow(store.id);
     if (row.accessTokenExpiresAt) return false;
-    const t = await exchangeForExpiringToken(credentialsOf(row), row.shopDomain, accessOf(row), fetchImpl);
+    const t = await tradeWithRetry(() => exchangeForExpiringToken(credentialsOf(row), row.shopDomain, accessOf(row), fetchImpl));
     if (!t.accessTokenExpiresAt || !t.refreshToken) throw new Error("Shopify answered the token exchange without an expiring token");
     // The old token no longer works for GraphQL, so this write is what keeps the store connected. One
     // that misses (the row changed meanwhile) leaves the old token in place, and asking again within
@@ -164,14 +165,29 @@ export async function migrateToExpiringToken(store: Pick<Store, "id">, coord: Co
   }
 }
 
-/** Shopify's 403 for a non-expiring token once it no longer takes them. */
-const NON_EXPIRING_REFUSED = /non-expiring access tokens/i;
+/**
+ * The trade is safe to repeat (Shopify answers the same pair for 7 days), so a network error or a
+ * 429/5xx is asked again at once rather than costing the store its next sweep.
+ */
+async function tradeWithRetry(trade: () => Promise<TokenResponse>): Promise<TokenResponse> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await trade();
+    } catch (err) {
+      const passing = !(err instanceof ShopifyHttpError) || err.retryable;
+      if (!passing || attempt >= 2) throw err;
+      await sleep(500 * (attempt + 1));
+    }
+  }
+}
 
 /**
  * Run `call` with the store's access token. A 401/403 may only mean the token was swapped under
- * the caller (moved to an expiring one, which retires the old at once, or reconnected), so `call`
- * runs once more when the store holds a different token by then. A refusal of a non-expiring token
- * as such moves the store to an expiring one first.
+ * the caller (rotated or reconnected), so `call` runs once more when the store holds a different
+ * token by then. A store still on a non-expiring token is first moved to an expiring one: Shopify
+ * refuses non-expiring tokens of new public apps outright, and a trade whose answer was lost has
+ * already retired the token the row still holds (a plain 401). A row already on an expiring token
+ * costs one read there, and a token that is really revoked gets `invalid_subject_token`.
  */
 export async function withAccessToken<T>(
   store: Pick<Store, "id" | "shopDomain" | "status">,
@@ -184,9 +200,7 @@ export async function withAccessToken<T>(
     return await call(token);
   } catch (err) {
     if (!(err instanceof ShopifyHttpError) || (err.status !== 401 && err.status !== 403)) throw err;
-    if (NON_EXPIRING_REFUSED.test(err.message)) {
-      await migrateToExpiringToken(store, coord, fetchImpl).catch((e: unknown) => logger.warn({ err: e, storeId: store.id }, "store not moved to an expiring shopify token"));
-    }
+    await migrateToExpiringToken(store, coord, fetchImpl).catch((e: unknown) => logger.warn({ err: e, storeId: store.id }, "store not moved to an expiring shopify token"));
     const now = await getAccessToken(store, coord, fetchImpl);
     if (now === token) throw err;
     return call(now);
