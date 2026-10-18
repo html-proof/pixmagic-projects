@@ -88,16 +88,11 @@ const PROVIDERS = [
   {
     name: "Cloudflare",
     purpose:
-      "Our domain's DNS and the network in front of bizinsights.io: every visit to the site passes through it on its way to Amazon Web Services, so it handles your IP address and the pages you request. It was also our previous hosting provider, and keeps serving our old address, with the data of the stores connected there, until they have moved to Amazon Web Services.",
+      "Runs our domain's DNS and the network in front of bizinsights.io (encryption in transit, caching of static files, protection against attacks): every visit to the site passes through it on its way to Amazon Web Services, so it handles your IP address and the pages you request. It was also our previous hosting provider and keeps serving our old address, and the data of stores connected there, until that is retired.",
   },
   {
     name: "Resend",
     purpose: "Sends bizinsights' own emails: sign-in and verification codes, team invitations and alerts, to the address each one is for.",
-  },
-  {
-    name: "Google Firebase",
-    purpose:
-      "Runs our domain's DNS and the network in front of bizinsights.io (encryption in transit, caching of static files, protection against attacks), so every request to the app passes through it. It was also our previous hosting provider and keeps serving our old address, and the data of stores connected there, until that is retired.",
   },
   { name: "Shopify", purpose: "The source of your store data." },
   { name: "Meta (WhatsApp Business Platform)", purpose: "Delivers WhatsApp messages, only for stores that connect WhatsApp." },
