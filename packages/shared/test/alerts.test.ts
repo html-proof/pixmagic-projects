@@ -31,6 +31,13 @@ describe("describeAlert", () => {
     expect(describeAlert({ code: "sync_install_pixel_failed", severity: "warning", message: "" }).title).toBe("Visitor tracking isn't set up");
   });
 
+  it("doesn't send a merchant to reconnect when Shopify hasn't approved the app yet", () => {
+    const w = describeAlert({ code: "sync_orders_not_approved", severity: "warning", message: LEAK });
+    expect(w).toMatchObject({ severity: "warning", area: "shopify", title: "Shopify hasn't approved bizinsights to read your orders yet" });
+    expect(w.body).toContain("reconnecting won't change it");
+    expect(w.body).not.toContain("ECONNREFUSED");
+  });
+
   it("passes on the messages the app composes itself", () => {
     const reauth = "The email account shop@acme.test must be reconnected before it can send again (Settings → Email → Accounts).";
     expect(describeAlert({ code: "email_account_reauth:acc1", severity: "warning", message: reauth })).toEqual({ severity: "warning", area: "email", title: "An email account needs reconnecting", body: reauth });

@@ -70,7 +70,7 @@ export function dashboardRoutes(app: App, deps: Deps) {
     const { ws } = c.req.param();
     await requireWorkspace(c, deps, ws, "dashboard:read");
     const stores = await withTenant(ws, (tx) => workspaceStores(tx, ws));
-    return c.json({ stores: stores.map(({ store, imported }) => ({ ...publicStore(store), imported })) });
+    return c.json({ stores: stores.map(({ store, imported, syncProblem }) => ({ ...publicStore(store), imported, syncProblem })) });
   });
 
   // The import's progress and its failures: the Shopify connection's status page.

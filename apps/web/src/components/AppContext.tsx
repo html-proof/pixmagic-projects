@@ -60,6 +60,8 @@ export interface StoreSummary {
   lastSyncedAt: string | null;
   /** How much of the store actually landed, so the UI can tell an empty store from a broken one. */
   imported?: { orders: number; products: number };
+  /** While the store is in error: why its sync stopped (syncProblem in the API). */
+  syncProblem?: "shop_unavailable" | "shop_gone" | "shop_locked" | "access" | "not_approved" | "other" | null;
 }
 
 /**
