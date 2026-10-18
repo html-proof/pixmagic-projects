@@ -90,13 +90,34 @@ read GitHub's own claims since January 2026; the trust is to also require `job_w
 nothing, that IAM checks them: a wrong trust locks every later deploy out (each run signs in before
 it deploys), and only the account's root can put it back.
 
-The workflow checks from both ends. Before it signs in, "Token claims the deploy role requires"
-compares its own token with `githubDeployClaims` (`infra/cdk/scripts/oidc-trust.ts claims`). After
-the smoke tests, "The next deploy can still sign in" has STS exchange a fresh token for the role
-(`oidc-trust.ts assume`; that 15-minute session is dropped unread). Both do nothing when the commit
-being deployed predates the script (the workflow file is always the default branch's). "Not
-authorized to perform sts:AssumeRoleWithWebIdentity" at sign-in means token and trust differ: the
-first step prints the token's values.
+The proof: three roles in the same stack (`githubTrustChecks`) that grant nothing (no policy at all).
+`insights-production-github-trust-check` trusts exactly `githubDeployClaims`;
+`…-trust-check-wrong-workflow` and `…-trust-check-wrong-ref` each swap one of the two claims for a ref
+git can't name (`never..matches`), so no token ever carries it.
+
+The workflow checks from both ends (`infra/cdk/scripts/oidc-trust.ts`, logic in
+`infra/cdk/lib/oidc-trust.ts`):
+
+- Before it signs in, "Token claims the deploy role requires" compares its own token with
+  `githubDeployClaims`.
+- After the smoke tests, "The next deploy can still sign in" reads each trust-check role's live
+  trust (`iam:GetRole`; STS also refuses a role that doesn't exist, so a refusal counts only from a
+  role that's there). STS must then admit the workflow to the first and refuse it the other two
+  ("Proven: IAM checks job_workflow_ref and ref…" in the log and the run's summary; anything else is
+  a warning and changes nothing). Last, STS must exchange a fresh token for the deploy role itself:
+  if not, the step fails. Every session these create lasts 15 minutes, and its credentials are
+  dropped unread.
+
+Both steps do nothing when the commit being deployed predates the script: the workflow file is
+always the default branch's, while the checkout may be an older commit's (a CI run that ended after
+a merge). "Not authorized to perform sts:AssumeRoleWithWebIdentity" at sign-in means token and
+trust differ: the first step prints the token's values.
+
+Giving the deploy role the full trust is a one-line change in `infra/cdk/lib/ci-stack.ts` (its
+`StringEquals` from `githubDeployClaims(cfg)` instead of `{ aud, sub }`, and the CDK test with it).
+Make it only after a Deploy to AWS run on `main` printed "Proven", and with no deploy running. That
+run signs in with the old trust and then deploys the new one; its last step proves the next deploy
+can still sign in.
 
 If "The next deploy can still sign in" fails, the release is live (nothing is rolled back) but the
 next deploy can't sign in. The owner, with the account's admin sign-in and no deploy running, puts

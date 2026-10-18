@@ -179,6 +179,36 @@ export function githubDeployClaims(cfg: EnvConfig): { aud: string; sub: string; 
   };
 }
 
+export type GithubDeployClaims = ReturnType<typeof githubDeployClaims>;
+
+/**
+ * Roles that grant nothing, which prove the deploy role's next trust before it gets it
+ * (ci-stack.ts; checked after every deploy by scripts/oidc-trust.ts). The first trusts exactly
+ * githubDeployClaims, so the deploy workflow must get it. The others each swap one claim for a ref
+ * git can't name (".." is not allowed in one, so no token ever carries it), so the workflow must be
+ * refused: proof that IAM checks that claim rather than skipping it.
+ */
+export function githubTrustChecks(cfg: EnvConfig): Array<{ id: string; roleName: string; claims: GithubDeployClaims; admits: boolean }> {
+  const claims = githubDeployClaims(cfg);
+  const never = "refs/heads/never..matches";
+  const roleName = `insights-${cfg.name}-github-trust-check`;
+  return [
+    { id: "TrustCheck", roleName, claims, admits: true },
+    {
+      id: "TrustCheckWrongWorkflow",
+      roleName: `${roleName}-wrong-workflow`,
+      claims: { ...claims, job_workflow_ref: `${cfg.githubRepo}/${cfg.githubDeployWorkflow}@${never}` },
+      admits: false,
+    },
+    { id: "TrustCheckWrongRef", roleName: `${roleName}-wrong-ref`, claims: { ...claims, ref: never }, admits: false },
+  ];
+}
+
+/** IAM trust conditions requiring each of these claims of GitHub's OIDC token, exactly. */
+export function githubClaimConditions(claims: Partial<GithubDeployClaims>): Record<string, string> {
+  return Object.fromEntries(Object.entries(claims).map(([claim, value]) => [`token.actions.githubusercontent.com:${claim}`, value]));
+}
+
 const here = dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = resolve(here, "../../..");
 
