@@ -28,7 +28,7 @@ Webhooks drive all updates after the initial backfill. Endpoint: `POST <APP_URL>
 | `app_subscriptions/update` | The pending charge active → it becomes the plan; the charge in force cancelled, declined or expired → Free (`packages/core/src/billing.ts`) |
 | `customers/data_request` | Audit entry, with how many WhatsApp contacts the store holds for that customer (analytics hold no PII) |
 | `customers/redact` | Null the hashed customer key on that customer's orders; delete the customer's WhatsApp number, messages, timelines and reviews |
-| `shop/redact` | Delete all synced data for the store, WhatsApp included, and the store row. Skipped only when Shopify still accepts the store's token (installed again since); our status doesn't decide it, because a closed shop's redact can come before its `app/uninstalled`, or without one. Shopify unreachable (5xx, network): retried |
+| `shop/redact` | Delete all synced data for the store, WhatsApp included |
 
 ### Idempotency guarantees
 

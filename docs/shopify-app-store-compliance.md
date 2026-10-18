@@ -89,7 +89,7 @@ invalid HMAC with 401 and a valid request with 2xx, and act within 30 days.
 | 200 on success, idempotent | PASS | Unique webhook id; redelivery answered 200 `duplicate` (`shopify.test.ts`) |
 | `customers/data_request` | FIXED | Before: only an audit entry; nothing reached the store owner. Now recorded once per Shopify request (keyed hashes only, `data_requests` table with RLS), owners and admins are alerted (email + in-app alert), and they download the customer's data from Settings → Privacy requests (`packages/core/src/privacy.ts`; `apps/worker/test/worker.test.ts`, `apps/api/test/privacy.test.ts`) |
 | `customers/redact` | PASS | Unlinks the customer hash from orders, deletes WhatsApp and email records, and now the matching data requests |
-| `shop/redact` | FIXED | Before: erased data even for a store installed again since, and kept the store row. Now skipped for a reinstalled store, proven by Shopify still accepting its token (2026-10-18: going by status left three closed review stores' data in place); otherwise deletes all data, the store row, its jobs, alerts and requests, and a workspace nobody claimed (`worker.test.ts` "GDPR: …") |
+| `shop/redact` | FIXED | Before: erased data even for a store installed again since, and kept the store row. Now skipped for a reinstalled store; otherwise deletes all data, the store row, its jobs, alerts and requests, and a workspace nobody claimed (`worker.test.ts` "GDPR: …") |
 | Protected customer data | OWNER | Request Level 1 in the Dev Dashboard before submitting (answers in `listing-copy.md`). The optional scopes in the toml are protected data: remove them if approval hasn't landed by submission day |
 
 ## Billing (before paid plans are switched on)
