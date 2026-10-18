@@ -58,7 +58,7 @@ const ENV_SCOPES = "read_orders,read_products";
  * dashboard "Enable" button is built from `declaredOptionalScopes`, so this list, the
  * `optional_scopes` in both tomls and the shipped env must agree exactly.
  */
-const ENV_OPTIONAL_SCOPES = ["read_customers", "write_pixels", "read_customer_events"];
+const ENV_OPTIONAL_SCOPES = ["read_customers", "write_pixels", "read_customer_events", "read_inventory", "read_locations", "write_inventory"];
 
 describe("Shopify app configuration", () => {
   for (const path of APP_CONFIGS) {
