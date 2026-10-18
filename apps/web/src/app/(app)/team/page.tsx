@@ -1,6 +1,6 @@
 "use client";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Ban, CalendarX2, CircleCheck, Link2, ChevronLeft, ChevronRight, Clock, EllipsisVertical, MailX, Plus, RotateCcw, Search, Send, Shield, UsersRound } from "lucide-react";
 import { ROLE_INFO } from "@app/shared/access";
 import { ROLES, type Role } from "@app/shared/roles";
@@ -9,7 +9,7 @@ import { ConfirmDialog, ToastProvider, useAction } from "@/components/AppUi";
 import { LoadError } from "@/components/LoadError";
 import { AccessPanel, emailProblemText, HistoryPanel, InvitePanel, LinkPanel } from "@/components/team/Panels";
 import { api, useApi } from "@/lib/api";
-import type { Catalog, TeamPage, TeamRow } from "@/lib/team";
+import { offeredCatalog, type Catalog, type TeamPage, type TeamRow } from "@/lib/team";
 import { AccessSummary, AccessUntil, type Act, Avatar, DeliveryLine, lastSeen, ROLE_LOOK, RolePill, RowActions, StatusPill } from "@/components/team/MemberRow";
 import { Menu, type MenuItem, SummaryCard } from "@/components/team/TeamUi";
 
@@ -37,7 +37,7 @@ const SORTS: Array<[value: string, label: string]> = [
 const RENEW_DAYS = 60;
 
 function TeamAccess() {
-  const { workspace, me } = useApp();
+  const { workspace, me, offers } = useApp();
   const ws = workspace.id;
   const [q, setQ] = useState("");
   const [search, setSearch] = useState("");
@@ -56,7 +56,9 @@ function TeamAccess() {
   }, [q]);
   const qs = new URLSearchParams({ sort, dir, page: String(page), pageSize: "20", ...(search ? { q: search } : {}), ...(status ? { status } : {}), ...(role ? { role } : {}) });
   const team = useApi<TeamPage>(`/workspaces/${ws}/team?${qs}`);
-  const catalog = useApi<Catalog>(`/workspaces/${ws}/team/catalog`);
+  const catalogAnswer = useApi<Catalog>(`/workspaces/${ws}/team/catalog`).data;
+  // Only the permissions of what this workspace offers (an App Store workspace leaves some parts out).
+  const catalog = useMemo(() => (catalogAnswer ? offeredCatalog(catalogAnswer, offers) : null), [catalogAnswer, offers]);
   const [inviting, setInviting] = useState(false);
   const [panel, setPanel] = useState<{ row: TeamRow; editing: boolean } | null>(null);
   const [confirm, setConfirm] = useState<{ act: "revoke" | "remove" | "cancel" | "replace"; row: TeamRow } | null>(null);
@@ -220,7 +222,7 @@ function TeamAccess() {
             <p className="mt-1 max-w-2xl text-sm text-muted">Manage who can access your business dashboard and control exactly what information they can see.</p>
           </div>
           <div className="flex items-center gap-2">
-            <button type="button" className="btn-primary h-11 px-5" onClick={() => setInviting(true)} disabled={!catalog.data}>
+            <button type="button" className="btn-primary h-11 px-5" onClick={() => setInviting(true)} disabled={!catalog}>
               <Plus aria-hidden className="h-4 w-4" />
               Invite Member
             </button>
@@ -402,13 +404,13 @@ function TeamAccess() {
         </p>
       </section>
 
-      {inviting && catalog.data && <InvitePanel ws={ws} catalog={catalog.data} onClose={() => setInviting(false)} onSent={reload} />}
+      {inviting && catalog && <InvitePanel ws={ws} catalog={catalog} onClose={() => setInviting(false)} onSent={reload} />}
       {linkShown && <LinkPanel {...linkShown} onClose={() => setLinkShown(null)} />}
       {historyOf && <HistoryPanel ws={ws} row={historyOf} onClose={() => setHistoryOf(null)} />}
-      {panel && catalog.data && (
+      {panel && catalog && (
         <AccessPanel
           ws={ws}
-          catalog={catalog.data}
+          catalog={catalog}
           row={panel.row}
           editing={panel.editing}
           canEdit={actionsFor(panel.row).some(([a]) => a === "edit")}

@@ -1,12 +1,32 @@
 import { allows, hasFullAccess, modulesOf, type AccessKey, type AccessNeed, type MemberAccess } from "@app/shared/access";
 import { staffAccess, type StaffRole } from "@app/shared/staff";
 import type { Topic } from "@/components/dashboard/topics";
+import type { AppModule } from "@/lib/features";
 
 // ---------------------------------------------------------------------------
 // What the signed-in member may open, in the web app's terms (pages and dashboard topics). The API
 // decides: it checks every request and leaves out what isn't granted. These rules only decide what
-// to show and where to send someone, from the same permissions (@app/shared/access).
+// to show and where to send someone, from the same permissions (@app/shared/access), and from what
+// the workspace offers at all (`Offers`: an App Store workspace leaves some parts out,
+// lib/features.ts).
 // ---------------------------------------------------------------------------
+
+/** Whether the workspace offers a part of the app (useApp().offers). */
+export type Offers = (part: AppModule) => boolean;
+const ALL: Offers = () => true;
+
+/** The dashboard panels that belong to a part of the app a workspace may leave out. */
+const TOPIC_MODULE: Partial<Record<Topic, AppModule>> = { ads: "ads", adsense: "ads" };
+
+/** The pages of each part of the app a workspace may leave out, by path prefix. */
+const MODULE_PAGES: Array<[prefix: string, part: AppModule]> = [
+  ["/whatsapp", "whatsapp"],
+  ["/staff", "staff"],
+  ["/settings/ads", "ads"],
+  ["/settings/email", "email"],
+];
+
+const under = (p: string, prefix: string) => p === prefix || p.startsWith(`${prefix}/`);
 
 /** The dashboard's detail panels and the permissions that show each (any of). */
 export const TOPIC_NEED: Record<Topic, readonly AccessKey[]> = {
@@ -25,7 +45,10 @@ export const TOPIC_NEED: Record<Topic, readonly AccessKey[]> = {
   orders: ["orders.list"],
 };
 
-export const seesTopic = (access: MemberAccess, t: Topic) => allows(access, TOPIC_NEED[t]);
+export const seesTopic = (access: MemberAccess, t: Topic, offers: Offers = ALL) => {
+  const part = TOPIC_MODULE[t];
+  return (!part || offers(part)) && allows(access, TOPIC_NEED[t]);
+};
 
 /** Which dashboard section a topic downloads as CSV (core's EXPORT_SECTIONS), if any. */
 export const TOPIC_EXPORT: Partial<Record<Topic, string>> = {
@@ -58,12 +81,12 @@ export function showsDashboardHome(access: MemberAccess): boolean {
 const TOPIC_ORDER: Topic[] = ["sales", "products", "customers", "ads", "discounts", "shoppers", "orders", "stock", "shipping", "channels", "timing", "overview"];
 
 /** Where a member starts: the dashboard, or the one area they have; their account page with nothing at all. */
-export function landingPath(access: MemberAccess, staffRole: StaffRole | null): string {
+export function landingPath(access: MemberAccess, staffRole: StaffRole | null, offers: Offers = ALL): string {
   if (showsDashboardHome(access)) return "/dashboard";
-  const topic = TOPIC_ORDER.find((t) => seesTopic(access, t));
+  const topic = TOPIC_ORDER.find((t) => seesTopic(access, t, offers));
   if (topic) return `/dashboard?view=${topic}`;
-  if (staffAccess(access.role, staffRole, access.permissions).permissions.length) return "/staff";
-  if (allows(access, "marketing.campaigns")) return "/whatsapp";
+  if (offers("staff") && staffAccess(access.role, staffRole, access.permissions).permissions.length) return "/staff";
+  if (offers("whatsapp") && allows(access, "marketing.campaigns")) return "/whatsapp";
   if (allows(access, "integrations.status")) return "/settings/integrations";
   // Nothing granted yet: the dashboard says so ("No access assigned").
   return "/dashboard";
@@ -94,10 +117,14 @@ const PAGE_NEED: Array<[prefix: string, need: AccessNeed | "full" | "staff" | "d
 /** The account's own pages, which a dashboard opened from a shared link can't open (it isn't signed in to the account). */
 const ACCOUNT_PAGES = ["/settings/profile", "/settings/security"];
 
-/** `shared`: opened from an invitation link (Me.shared), so the account's own pages are closed. */
-export function canOpenPage(path: string, access: MemberAccess, staffRole: StaffRole | null, shared = false): boolean {
+/**
+ * `shared`: opened from an invitation link (Me.shared), so the account's own pages are closed.
+ * `offers`: the parts of the app the workspace offers; the pages of the others are closed to everyone.
+ */
+export function canOpenPage(path: string, access: MemberAccess, staffRole: StaffRole | null, shared = false, offers: Offers = ALL): boolean {
   const p = path.replace(/\/$/, "") || "/";
-  if (shared && ACCOUNT_PAGES.some((a) => p === a || p.startsWith(`${a}/`))) return false;
+  if (shared && ACCOUNT_PAGES.some((a) => under(p, a))) return false;
+  if (MODULE_PAGES.some(([prefix, part]) => under(p, prefix) && !offers(part))) return false;
   let best: (typeof PAGE_NEED)[number] | null = null;
   for (const rule of PAGE_NEED) {
     if ((p === rule[0] || p.startsWith(`${rule[0]}/`)) && (!best || rule[0].length > best[0].length)) best = rule;

@@ -86,6 +86,12 @@ const schema = z.object({
    */
   SHOPIFY_INSTALL_APP: z.string().optional().default("default"),
   /**
+   * Stores whose workspace is shown as an App Store install although they are connected through
+   * another of our apps, comma separated (apps.ts `appStoreWorkspace`): the App Store reviewer's
+   * test store, a development store the unapproved App Store app can't read.
+   */
+  SHOPIFY_APP_STORE_PREVIEW_SHOPS: z.string().optional().default(""),
+  /**
    * "1" when paid plans are on sale (packages/core/src/billing.ts): merchants can start one, and
    * each plan's store limit applies. Turn it on together with `BILLING_ENABLED` in
    * apps/web/src/lib/features.ts, which shows Settings → Billing. Off, no charge can be started

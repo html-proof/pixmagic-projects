@@ -485,6 +485,52 @@ test("dashboard shows webhook-driven metrics and only granted modules", async ({
   await expect(page.getByText("created the workspace")).toBeVisible();
 });
 
+test("a workspace installed from the App Store shows only what the listing describes", async ({ page }) => {
+  const email = uniqueEmail("listed");
+  await signUp(page, email);
+  await createWorkspace(page, "Listed Co");
+  // A store installed through the App Store app (Shopify's side can't run in CI).
+  const { rows } = await db.query("SELECT m.workspace_id FROM memberships m JOIN users u ON u.id = m.user_id WHERE u.email = $1 LIMIT 1", [email]);
+  await db.query(
+    `INSERT INTO stores (id, workspace_id, shop_domain, shopify_app_key, status, timezone, currency, granted_scopes, created_at, updated_at)
+     VALUES (gen_random_uuid()::text, $1, $2, 'public', 'active', 'UTC', 'USD', ARRAY['read_orders','read_products'], now(), now())`,
+    [rows[0].workspace_id, `listed-${Date.now()}.myshopify.com`],
+  );
+
+  // No WhatsApp, Staff or advertising in the menu, and no Advertising section on the dashboard.
+  await page.goto("/dashboard");
+  const nav = page.getByRole("navigation", { name: "App" });
+  await expect(nav.getByRole("link", { name: "Settings" })).toBeVisible();
+  await expect(nav.getByRole("link", { name: "Sales & Orders" })).toBeVisible();
+  for (const name of ["WhatsApp", "Staff", "Marketing"]) await expect(nav.getByRole("link", { name, exact: true })).toHaveCount(0);
+  await expect(page.getByTestId("about-data")).toBeVisible();
+  await expect(page.getByTestId("ads-onboarding")).toHaveCount(0);
+
+  // Settings: Shopify, without the advertising, email and WhatsApp connections.
+  await page.goto("/settings/integrations");
+  await expect(page.getByTestId("int-shopify")).toBeVisible();
+  for (const id of ["int-whatsapp", "int-google-ads", "int-meta-ads"]) await expect(page.getByTestId(id)).toHaveCount(0);
+  const settings = page.getByRole("navigation", { name: "Settings" });
+  await expect(settings.getByRole("link", { name: "Shopify" })).toBeVisible();
+  for (const name of ["Advertising", "Email integrations"]) await expect(settings.getByRole("link", { name })).toHaveCount(0);
+
+  // Their pages are closed as well, typed in or bookmarked.
+  for (const path of ["/whatsapp", "/staff", "/settings/ads", "/settings/email"]) {
+    await page.goto(path);
+    await expect(page.getByTestId("access-notice")).toContainText("You don't have access to that page.");
+    await expect(page).toHaveURL(/\/dashboard/);
+  }
+
+  // Team & Access offers no Staff or advertising permissions.
+  await page.goto("/team");
+  await page.getByRole("button", { name: "Invite Member" }).click();
+  await expect(page.getByTestId("module-analytics")).toBeVisible();
+  await expect(page.getByTestId("module-staff")).toHaveCount(0);
+  await page.getByRole("button", { name: "Expand all" }).click();
+  await expect(page.getByText("View advertising analytics")).toHaveCount(0);
+  await expect(page.getByTestId("module-marketing")).toContainText("View conversion attribution");
+});
+
 /**
  * The dynamic optional-scope request flow, end to end through the real app.
  *

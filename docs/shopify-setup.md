@@ -322,6 +322,13 @@ choice is permanent. Our three apps, all named "bizinsights" and all served by t
   (apps/aws/src/settings.ts). It stays `default` until Shopify approves the App Store app: an
   unapproved app installs only on development stores of its own organization, and ours are in the
   main app's. Approved: set it to `public` and deploy.
+- Except in an **App Store workspace**: one whose every store came through this app
+  (`appStoreWorkspace` in packages/core/src/apps.ts; `SHOPIFY_APP_STORE_PREVIEW_SHOPS` adds the App
+  Store reviewer's test store, which is on the main app). Its in-app connects go through this app
+  whatever `SHOPIFY_INSTALL_APP` says, and the web app leaves out WhatsApp, Staff, advertising and
+  email there (`APP_STORE_MODULES`, apps/web/src/lib/features.ts). Reconnecting a store always goes
+  through the app it came through (`connectApp`), so no merchant is moved to an app their store
+  may refuse.
 - Webhooks: as a public app it may not subscribe to order, refund or checkout topics until
   **Protected customer data access** is granted for it (Partner Dashboard → the app → API access
   requests). The toml lists what to add back then.

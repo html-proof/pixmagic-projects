@@ -2,23 +2,22 @@ import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { z } from "zod";
 import { systemDb, type Store, type User } from "@app/db";
 import {
-  appForShop,
   audit,
   buildAuthorizeUrl,
+  connectApp,
   DEFAULT_APP,
   encryptTokenFields,
-  installTarget,
   env,
   exchangeCodeForToken,
   logger,
   managedInstallUrl,
-  servesAnyShop,
   shopifyApp,
   shopifyApps,
   storeLimitReached,
   type Plan,
   type ShopifyApp,
   type ShopifyAppConfig,
+  type StoreApp,
   type TokenResponse,
 } from "@app/core";
 import { syncProblem } from "@app/core/reports";
@@ -197,13 +196,19 @@ function breakOutOfAdmin(c: Ctx, shop: string, apiKey: string, target: string) {
 const beginAuthorize = (c: Ctx, deps: Deps, userId: string, workspaceId: string, shop: string, app: string, from?: ConnectFrom) =>
   authorizeRedirect(c, deps, { mode: "connect", userId, workspaceId, shop, app, ...(from ? { from } : {}) });
 
+/** The stores of a workspace, and which of our apps each came through (`connectApp`). */
+const storeApps = (workspaceId: string): Promise<StoreApp[]> =>
+  systemDb.store.findMany({ where: { workspaceId }, select: { shopDomain: true, shopifyAppKey: true } });
+
 /**
- * The app `shop` installs through. Shopify shows "This installation link can't be used" when a
- * store may not install the app it is sent to, and it never calls us back, so a store we have
- * no app for is refused here instead — with an answer the merchant can act on.
+ * The app `shop` installs through when it is connected to `workspaceId` (core's `connectApp`).
+ * Shopify shows "This installation link can't be used" when a store may not install the app it is
+ * sent to, and it never calls us back, so a store we have no app for is refused here instead — with
+ * an answer the merchant can act on.
  */
-export function installApp(shop: string): ShopifyApp {
-  const app = appForShop(shop);
+export async function installApp(shop: string, workspaceId: string): Promise<ShopifyApp> {
+  const existing = await systemDb.store.findUnique({ where: { shopDomain: shop }, select: { shopDomain: true, shopifyAppKey: true } });
+  const app = connectApp(shop, await storeApps(workspaceId), existing);
   if (!app) {
     throw new HttpError(
       400,
@@ -336,7 +341,7 @@ export function shopifyRoutes(app: App, deps: Deps) {
     }
     const full = await storeLimitReached(ws, shop);
     if (full) throw storeLimit(full);
-    return c.json({ url: await beginAuthorize(c, deps, user.id, ws, shop, installApp(shop).key, from) });
+    return c.json({ url: await beginAuthorize(c, deps, user.id, ws, shop, (await installApp(shop, ws)).key, from) });
   });
 
   /**
@@ -344,10 +349,12 @@ export function shopifyRoutes(app: App, deps: Deps) {
    * pick a store and approve the scopes. Shopify then opens /shopify/launch for that store,
    * which finishes the connection for the workspace remembered here.
    *
-   * Letting the merchant pick the store on Shopify only works while the main app may be
-   * installed on any store. Once it is limited to named stores, a store served by its own app
-   * can only be reached by name, so we ask for the address instead of sending the merchant to
-   * an install link their store would be refused.
+   * The install link is the app this workspace adds stores through (`connectApp`): the App Store
+   * app for a workspace whose stores came from the App Store, the install target otherwise.
+   * Letting the merchant pick the store on Shopify only works while that app may be installed on
+   * any store. Once it is limited to named stores, a store served by its own app can only be
+   * reached by name, so we ask for the address instead of sending the merchant to an install link
+   * their store would be refused.
    */
   app.post("/workspaces/:ws/shopify/start", async (c) => {
     const { ws } = c.req.param();
@@ -355,8 +362,8 @@ export function shopifyRoutes(app: App, deps: Deps) {
     const user = access.user!;
     if (!user.emailVerified) throw new HttpError(403, "Verify your email before connecting a store", "email_unverified");
     const { from } = z.object({ from: connectFromSchema }).parse(await body(c));
-    const mainApp = installTarget();
-    if (!servesAnyShop(mainApp)) {
+    const picker = connectApp(null, await storeApps(ws));
+    if (!picker) {
       throw new HttpError(400, "Enter your store's myshopify.com address to connect it", "shop_required");
     }
     // Asked before Shopify installs anything: the store is picked there, and only one the
@@ -367,8 +374,8 @@ export function shopifyRoutes(app: App, deps: Deps) {
     const nonce = randomToken(24);
     await deps.coord.put(`oauth:pending:${nonce}`, JSON.stringify({ userId: user.id, workspaceId: ws, ...(from ? { from } : {}) }), STATE_TTL_S);
     setCookie(c, PENDING_COOKIE, nonce, cookieOpts());
-    logHandoff("oneclick", null, mainApp, shopifyConfig(mainApp).scopes);
-    return c.json({ url: managedInstallUrl(mainApp.clientId) });
+    logHandoff("oneclick", null, picker, shopifyConfig(picker).scopes);
+    return c.json({ url: managedInstallUrl(picker.clientId) });
   });
 
   /** Step 2: Shopify redirects back here. */

@@ -3,23 +3,27 @@ import { ArrowUp, ChartColumn, Check, FileText, LayoutDashboard, Package, Settin
 import { useEffect, useState } from "react";
 import { BrandLogo, BrandMark } from "@/components/Brand";
 
-/** What the showcase says, one message at a time (each headline is exactly two lines). */
+/**
+ * What the showcase says, one message at a time (each headline is exactly two lines). Only what the
+ * App Store listing offers (shopify-app/listing/listing-copy.md, "What must not be claimed"): no
+ * live updates, conversion, ads or email.
+ */
 const SLIDES: Array<{ headline: [string, string]; body: string }> = [
   {
     headline: ["Turn your data", "into decisions"],
-    body: "Track performance, understand your audience and grow faster with powerful insights.",
+    body: "Track sales, orders, top products and stock, and see which areas of your store need attention first.",
   },
   {
     headline: ["Every number,", "in plain words"],
-    body: "Revenue, orders, customers and conversion side by side, explained so anyone can act on them.",
+    body: "Total sales, orders, products and stock side by side, explained so anyone can act on them.",
   },
   {
-    headline: ["All your channels", "in one place"],
-    body: "Bring your store, ads and email together and see what is actually driving your sales.",
+    headline: ["Compare any dates", "at a glance"],
+    body: "See each number next to the period before or the dates you pick, with the change worked out for you.",
   },
 ];
 
-const FEATURES = ["Real-time analytics", "Beautiful reports", "Secure & reliable", "Access anywhere"];
+const FEATURES = ["Sales, orders and stock", "Plain-language reports", "Read-only Shopify access", "Access anywhere"];
 
 /** Time on each message while it advances on its own. */
 const SLIDE_MS = 7000;
@@ -147,15 +151,21 @@ const NAV = [
 
 const STATS = [
   { label: "Orders", value: "1,428", change: "8%" },
-  { label: "Customers", value: "892", change: "16%" },
-  { label: "Conversion", value: "4.8%", change: "2%" },
+  { label: "Products sold", value: "3,912", change: "11%" },
+  { label: "Avg. order", value: "$87.10", change: "4%" },
 ];
 
-/** A tilted, illustrative dashboard (made-up numbers, hidden from assistive technology). */
+/**
+ * A tilted, illustrative dashboard: made-up numbers, labelled as such, and hidden from assistive
+ * technology.
+ */
 function DashboardPreview() {
   return (
     // Anchored to the bottom so the tilted card's raised right side can rise beside the list above.
     <div aria-hidden="true" className="relative mt-4 min-h-[284px] flex-1">
+      <p className="absolute top-0 left-0 rounded-full bg-white/10 px-2.5 py-1 text-[11px] font-medium text-white/75 ring-1 ring-white/15" data-testid="showcase-illustration">
+        Illustration with sample figures
+      </p>
       {/* The entrance animation and the tilt are on separate elements: an animation's transform replaces an inline one. */}
       <div className="absolute bottom-0 left-0 w-[calc(100%+2.5rem)] max-w-[620px] animate-rise [--i:2]">
         <div
@@ -176,9 +186,9 @@ function DashboardPreview() {
           </div>
           <div className="flex min-w-0 flex-1 flex-col gap-3">
             <div className="auth-glass relative px-4 pt-3.5 pb-2">
-              <p className="text-[12px] text-white/70">Total Revenue</p>
+              <p className="text-[12px] text-white/70">Total sales</p>
               <p className="mt-1 flex items-baseline gap-2 text-[26px] font-semibold tracking-tight">
-                $12,438 <span className="text-[12px] font-medium text-[#7be3a8]">+ 12%</span>
+                $124,380 <span className="text-[12px] font-medium text-[#7be3a8]">+ 12%</span>
               </p>
               <RevenueLine />
               <span className="absolute -top-3.5 right-5 flex items-center gap-1 rounded-lg bg-[#24855a] px-2.5 py-1.5 text-[15px] font-semibold text-white shadow-[0_10px_24px_-8px_rgb(0_0_0/0.6)] ring-1 ring-white/15">

@@ -26,10 +26,17 @@ export const metadata: Metadata = {
  *     packages/shared/src/journey.ts `cleanPath`);
  *   - ad accounts are read-only in use (Meta ads_read, Google adwords for Google Ads reporting, adsense.readonly) and
  *     their daily figures and token are deleted, and the grant revoked, on disconnect (apps/api/src/routes/ads.ts,
- *     packages/core/src/adConnections.ts); /data-deletion is the Meta app's deletion instructions URL.
+ *     packages/core/src/adConnections.ts); /data-deletion is the Meta app's deletion instructions URL;
+ *   - Staff Management keeps what the merchant enters about employees, and the IP address and browser of each
+ *     clock-in and clock-out from the employee portal (packages/core/src/staff/attendance.ts), until the
+ *     workspace is deleted (docs/staff.md, "Retention");
+ *   - bizinsights' own email (sign-in codes through Cognito's custom email sender, invitations, alerts) goes
+ *     through Resend (apps/aws/src/mailers.ts, cognitoEmail.ts);
+ *   - Cloudflare proxies bizinsights.io in front of CloudFront (infra/cdk/lib/cloudflare.ts) and still runs the
+ *     old Worker until the cutover.
  * Revise UPDATED with any material change; owners are emailed first (see "Changes to this policy").
  */
-const UPDATED = "2026-10-16";
+const UPDATED = "2026-10-18";
 
 const TOC = [
   { id: "who-we-are", title: "Who we are" },
@@ -76,11 +83,16 @@ const HIGHLIGHTS = [
 const PROVIDERS = [
   {
     name: "Amazon Web Services",
-    purpose: "Hosting, storage and background jobs; accounts, sign-in and sign-in emails through Amazon Cognito.",
+    purpose: "Hosting, the database, storage and background jobs, in Sydney, Australia; accounts and sign-in through Amazon Cognito.",
   },
   {
     name: "Cloudflare",
-    purpose: "Our previous hosting provider. It keeps serving our old address, and the data of stores connected there, until everything has moved to Amazon Web Services.",
+    purpose:
+      "Our domain's DNS and the network in front of bizinsights.io: every visit to the site passes through it on its way to Amazon Web Services, so it handles your IP address and the pages you request. It was also our previous hosting provider, and keeps serving our old address, with the data of the stores connected there, until they have moved to Amazon Web Services.",
+  },
+  {
+    name: "Resend",
+    purpose: "Sends bizinsights' own emails: sign-in and verification codes, team invitations and alerts, to the address each one is for.",
   },
   {
     name: "Google Firebase",
@@ -197,9 +209,9 @@ export default function PrivacyPage() {
         <p>
           To help you get back in touch, the dashboard shows the name, email address and phone number of shoppers who left a checkout
           unfinished, signed up for your newsletter or recently became customers, together with whether they agreed to receive
-          marketing emails. bizinsights reads this information from Shopify each time you open that card, and shows it only to workspace
-          members with the Owner, Admin or Analyst role. It is not saved in our database; we record only that the card was viewed, and
-          by whom, in your workspace&apos;s audit log.
+          marketing emails. bizinsights reads this information from Shopify each time you open that card, and shows it only to the
+          workspace&apos;s owners and admins and to members given permission to see customers&apos; contact details. It is not saved in our
+          database; we record only that the card was viewed, and by whom, in your workspace&apos;s audit log.
         </p>
 
         <h3>WhatsApp messaging</h3>
@@ -245,6 +257,19 @@ export default function PrivacyPage() {
           or billing setting, and never spends money.
         </p>
 
+        <h3>Staff Management</h3>
+        <p>
+          If you use Staff Management, bizinsights keeps what you enter about your employees: name, work email and phone number, job title,
+          department, employment type, start date, working days and hours, pay rates and schedules, and the timesheets, payroll runs and
+          payment records (amount, method and any reference you add) that follow from them. Employees you invite get a sign-in of their own
+          to see their schedule, timesheets and pay; when they clock in or out there, we record the time and the IP address and browser of
+          the device they used. Only the workspace&apos;s owners and admins, and members you give Staff permissions, see these records.
+        </p>
+        <p>
+          Staff records are kept for as long as your workspace exists, because payroll records usually have to be kept for a period set
+          by law; deleting the workspace deletes them.
+        </p>
+
         <h3>Email sending</h3>
         <p>To send the emails your automations and tests request, bizinsights connects to the mailbox you choose:</p>
         <ul>
@@ -287,7 +312,8 @@ export default function PrivacyPage() {
         <p>
           We store your email address and whether it has been verified, your workspace and role, your notification preferences, and an
           audit log of actions taken in your workspace. Sign-in is handled by Amazon Cognito, which keeps your password only as a
-          salted hash. We never store your password, and we never see your Shopify or Google password.
+          salted hash, and the codes it emails you are sent through Resend. We never store your password, and we never see your Shopify
+          or Google password.
         </p>
       </LegalSection>
 
@@ -328,7 +354,7 @@ export default function PrivacyPage() {
         <p>
           We keep store data for as long as the app is installed. Uninstalling the app from Shopify immediately destroys the stored
           access tokens. Shopify then asks us, 48 hours later, to erase the store, and we delete everything we hold about it,
-          including the store itself. Disconnecting a store in Settings → Stores deletes its orders and metrics from bizinsights.
+          including the store itself. Disconnecting a store in bizinsights under Settings → Shopify deletes its orders and metrics at once.
         </p>
         <p>
           When one of your customers asks your store what data it holds about them, Shopify tells us, and the store&apos;s owners and

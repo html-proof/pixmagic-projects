@@ -23,3 +23,22 @@ export const BILLING_PAGE: boolean = BILLING_ENABLED || process.env.NEXT_PUBLIC_
  * already exist keep working, since the API still accepts them.
  */
 export const API_KEYS_ENABLED: boolean = false;
+
+/** The parts of the app beyond the Shopify dashboard, each built on another company's accounts. */
+export type AppModule = "whatsapp" | "staff" | "ads" | "email";
+
+/**
+ * What a workspace whose stores came in through the App Store app offers (`MeWorkspace.appStore`,
+ * packages/core/src/apps.ts `appStoreWorkspace`): only what the App Store listing describes
+ * (shopify-app/listing/listing-copy.md). WhatsApp, advertising (Meta Ads, Google Ads, AdSense) and
+ * email need the merchant's own Meta, Google or mail accounts and approvals Shopify's reviewer can't
+ * complete, and Staff (timesheets and payroll) is no part of a Shopify analytics listing, so they
+ * are left out there: the menus, the pages, Team & Access's permissions for them and the
+ * dashboard's Advertising section. Every other workspace keeps all of them, and the API routes and
+ * data stay in place. Flip one to `true` to offer it to App Store merchants too (and describe it in
+ * the listing).
+ */
+export const APP_STORE_MODULES: Record<AppModule, boolean> = { whatsapp: false, staff: false, ads: false, email: false };
+
+/** Whether a workspace offers `part` of the app (`appStore`: it came in through the App Store app). */
+export const offersModule = (appStore: boolean | undefined, part: AppModule): boolean => !appStore || APP_STORE_MODULES[part];
