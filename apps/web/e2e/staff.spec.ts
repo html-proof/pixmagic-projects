@@ -5,7 +5,8 @@ import { signUp, uniqueEmail } from "./helpers";
 /**
  * Staff Management in a real browser against the real app: an owner adds an employee and
  * invites them; the invitation arrives by email; the employee sets a password and lands in the
- * portal; clocks in, survives a refresh, takes a break, clocks out; the owner approves the hours.
+ * portal; clocks in, survives a refresh, takes a break, clocks out; the owner approves the hours,
+ * then opens every tab of the employee's page and the staff settings.
  * Payroll maths, permissions and isolation are covered in depth by apps/api/test/staff.test.ts.
  */
 
@@ -50,6 +51,8 @@ test("owner adds and invites an employee, who registers, clocks in and out, and 
   await page.getByLabel("Hourly rate").fill("24.50");
   await page.getByRole("button", { name: "Save employee" }).click();
   await expect(page.getByText("EMP-0001")).toBeVisible();
+  const employeePage = await page.getByRole("link", { name: "View employee" }).getAttribute("href");
+  expect(employeePage).toMatch(/^\/staff\/employee\?id=/);
   await page.getByRole("button", { name: "Send invitation" }).click();
 
   // ---- The invitation email
@@ -119,6 +122,25 @@ test("owner adds and invites an employee, who registers, clocks in and out, and 
   await expect(page.getByRole("row", { name: /Jamie Rivera/ })).toHaveCount(0);
   await page.getByLabel("Status").selectOption({ label: "Approved" });
   await expect(page.getByRole("row", { name: /Jamie Rivera/ })).toContainText("Approved");
+
+  // ---- Owner: every tab of the employee's page loads, with what just happened in it
+  await page.goto(employeePage!);
+  await expect(page.getByRole("heading", { name: "Jamie Rivera" })).toBeVisible();
+  for (const tab of ["Attendance", "Timesheets", "Payroll", "Payment History", "Schedule", "Audit History", "Overview"]) {
+    await page.getByRole("tab", { name: tab, exact: true }).click();
+    await expect(page.getByRole("tab", { name: tab, exact: true })).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByRole("tabpanel", { name: tab })).toBeVisible();
+    await expect(page.getByText(/We couldn.t load|ran into a problem/)).toHaveCount(0);
+    if (tab === "Timesheets") await expect(page.getByRole("tabpanel").getByText("Approved").first()).toBeVisible();
+    if (tab === "Audit History") await expect(page.getByRole("tabpanel").getByText("Employee account set up").first()).toBeVisible();
+  }
+
+  // ---- Owner: the staff settings page shows each of its sections
+  await page.goto("/staff/settings");
+  for (const section of ["General and pay cycle", "Departments", "Overtime policies", "Break policies", "Public holidays"]) {
+    await expect(page.getByText(section, { exact: true }).first()).toBeVisible();
+  }
+  await expect(page.getByText(/We couldn.t load|ran into a problem/)).toHaveCount(0);
 
   // ---- The employee isn't a workspace member: the admin section sends them back to their portal
   await emp.goto("/staff");
