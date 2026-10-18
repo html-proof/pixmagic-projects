@@ -356,9 +356,12 @@ export async function updateSchedule(actor: StaffActor, id: string, input: Omit<
 
 export async function deleteSchedule(actor: StaffActor, id: string) {
   const row = await withTenant(actor.workspaceId, async (tx) => {
-    const existing = await tx.shiftSchedule.findFirst({ where: { id, workspaceId: actor.workspaceId, employee: employeeScope(actor) }, select: { employeeId: true, startsAt: true } });
+    // Locked first, so an edit can't land between reading the shift (for the audit) and deleting it.
+    await tx.$queryRaw`SELECT id FROM shift_schedules WHERE id = ${id} AND workspace_id = ${actor.workspaceId} FOR UPDATE`;
+    const where = { id, workspaceId: actor.workspaceId, employee: employeeScope(actor) };
+    const existing = await tx.shiftSchedule.findFirst({ where, select: { employeeId: true, startsAt: true } });
     if (!existing) return null;
-    const n = await tx.shiftSchedule.deleteMany({ where: { id, workspaceId: actor.workspaceId } });
+    const n = await tx.shiftSchedule.deleteMany({ where });
     return n.count ? existing : null;
   });
   if (!row) throw notFound("That shift");

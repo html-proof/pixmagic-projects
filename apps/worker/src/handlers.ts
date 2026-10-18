@@ -1,5 +1,5 @@
 /**
- * The queue consumers' and cron sweeps' work, one module per queue in handlers/ (see each file).
+ * The queue consumers' and cron sweeps' work, one module per job in handlers/ (see each file).
  * This file re-exports what the rest of the worker, @app/worker and the tests use, so no import
  * path changes; the helpers the modules share among themselves stay inside handlers/.
  */

@@ -14,9 +14,9 @@ apps/worker       queue jobs and cron sweeps: retry, backoff, failure records   
 apps/aws          composition root: AWS services → Deps, secrets, timeouts, log context  no logic
 packages/core     use cases and data access: reports, persistence, integrations      no HTTP, no queue mechanics
   ├─ reports/        dashboard read side                                  ✔ done (2026-10-14)
-  ├─ shopify, persist, normalize, tokens, scopes                          ✔ (normalize: `any` to remove)
-  ├─ ads, adConnections                                                    ◐ one Meta transport to extract
-  ├─ whatsapp/                                                             ◐ campaign/automation rules still in routes
+  ├─ shopify, shopifyQueries, persist, normalize, tokens, scopes          ✔ typed payloads (shopifyPayloads.ts)
+  ├─ ads/, adConnections/, metaGraph                                       ✔ one Meta transport (2026-10-18)
+  ├─ whatsapp/                                                             ✔ campaign/automation rules in core
   └─ staff/          (on its branch)                                       ✔ shaped this way already
 packages/db       schema, migrations, RLS, request-scoped clients
 packages/shared   pure rules: KPIs, health grading ✔, journey maths ✔, dates, roles, WhatsApp rules
@@ -49,7 +49,7 @@ request → requestContext (id, access log) → security headers → body limit 
 | Item | Blocked by | Then |
 | --- | --- | --- |
 | ~~One Meta Graph transport~~ done 2026-10-18 (`core/metaGraph.ts`: Bearer auth, host check on paging); `appsecret_proof` and Retry-After still to do | owner decision on "Require App Secret" | one line each in `graphCall` |
-| Typed provider payloads instead of `any` | `core/normalize.ts` edited on another branch | Zod schemas at the boundary |
+| ~~Typed provider payloads instead of `any`~~ done 2026-10-16 | | Zod schemas at the boundary: `core/shopifyPayloads.ts`, `core/whatsapp/metaPayloads.ts` |
 | ~~Split `worker/handlers.ts` by job~~ done 2026-10-18 | | `apps/worker/src/handlers/` behind a re-export |
 | `noUncheckedIndexedAccess` in the web app | 437 findings in landing animations | a pass with visual checks |
 | Retention sweeps (`webhook_events`, `pixel_events_seen`, `email_otps`, `funnel_visits`) | deletes production data on a schedule: owner decision | cron sweep behind a lease |

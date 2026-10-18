@@ -48,9 +48,9 @@ The UI must import `@app/shared` **by subpath** (`/roles`, `/dates`, `/ads`, `/s
 
 Import cycles inside packages (file level): two are type-only (`app.ts` ↔ route files,
 `handlers.ts` ↔ `bulkOrders.ts`; a third, `overview.tsx` ↔ `previews.tsx`, went away when the
-health grades moved to `@app/shared/health`); a third was real, hidden behind a dynamic import (`core/tokens.ts` → `adConnections.ts` / `whatsapp/store.ts` → `tokens.ts`), and
-went away on 2026-10-18 when key rotation moved to `core/keyRotation.ts`. `pnpm lint` now fails on any cycle
-(`scripts/check-import-cycles.mjs`, dynamic imports included).
+health grades moved to `@app/shared/health`); another was real, hidden behind a dynamic import (`core/tokens.ts` → `adConnections.ts` / `whatsapp/store.ts` → `tokens.ts`), and
+went away on 2026-10-18 when key rotation moved to `core/keyRotation.ts`. `pnpm lint` now fails on any cycle that exists
+at run time (`scripts/check-import-cycles.mjs`: type-only imports are left out, dynamic `import()` counts).
 
 ## 2. Runtime paths
 
