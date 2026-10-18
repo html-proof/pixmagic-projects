@@ -17,9 +17,13 @@ on:
   pull_request:
     paths-ignore: ["**.md", "docs/**"]
 
+# A newer push cancels the older run on the same pull request. On main it waits instead: the run in
+# progress finishes and deploys, then the newest waiting push runs (GitHub drops older waiting runs
+# in a group). With the checks taking ~25 min on the PC, cancelling there meant merges a few
+# minutes apart never deployed at all.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 # Checks only read the repository (and a pull request's list of changed files); nothing here should
 # be able to push or edit issues/PRs.
