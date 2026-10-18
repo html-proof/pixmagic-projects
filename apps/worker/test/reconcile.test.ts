@@ -333,7 +333,7 @@ describe("checked against Shopify", () => {
   // Regression (2026-10-18, production): PixMagic's #2718S was created 61 days before the first
   // 60-day check and edited inside the window. Shopify neither lists nor returns an order that old
   // without read_all_orders, so the check took it for deleted and removed it.
-  it("never removes an order Shopify no longer shares (over 60 days old): it is out of reach, not deleted", async () => {
+  it("never removes an order Shopify no longer shares (over 60 days old): it is out of reach, not deleted, and its share is set aside", async () => {
     const store = await makeStore(["read_orders"]);
     const kept = gOrder(1, { createdAt: at(2) });
     // Placed 61 days ago, with a sale (an edit) inside the window.
@@ -355,11 +355,61 @@ describe("checked against Shopify", () => {
     expect(rec.findings).not.toHaveProperty("deleted");
     // Never even looked up: to the API it is indistinguishable from a deleted order.
     expect(calls.some((c) => c.query.includes("OrdersStillThere"))).toBe(false);
-    // The figures it touches can't be vouched for; the rest still match.
+    // Its A$37 edit is set aside, and everything else matches to the cent: the check is verified.
+    expect(rec.status).toBe("verified");
+    expect((rec.actions as { setAside: unknown }).setAside).toEqual({
+      orders: 1,
+      totals: { orders: 0, grossSales: 33.64, discounts: 0, returns: 0, netSales: 33.64, shipping: 0, taxes: 3.36, totalSales: 37, units: 1 },
+    });
+    const r = await results(rec.id);
+    expect(Object.values(r).every((x) => x.status === "match")).toBe(true);
+    // The dashboard keeps its full figure; Shopify's lacks the edit.
+    expect(toNumber(r.totalSales!.shopifyValue)).toBe(110);
+    expect(toNumber(r.totalSales!.afterValue)).toBe(147);
+    expect(r.totalSales!.cause).toBeNull();
+    expect(await systemDb.alert.count({ where: { code: "reconciliation_mismatch" } })).toBe(0);
+  });
+
+  it("what still differs once an order Shopify no longer shares is set aside is a difference as any other", async () => {
+    const store = await makeStore(["read_orders"]);
+    const kept = gOrder(1, { createdAt: at(2) });
+    const old = gOrder(7, { createdAt: at(61) });
+    await seed(store, [kept, old]);
+    const edit = await systemDb.order.findFirstOrThrow({ where: { shopifyId: "7" } });
+    await systemDb.orderSale.create({
+      data: { workspaceId: store.workspaceId, storeId: store.id, orderId: edit.id, shopifyId: "edit-1", localDay: dayOf(at(3)), happenedAt: new Date(at(3)), actionType: "order", lineType: "product", quantity: 1, amount: 37, discount: 0, tax: 3.36 },
+    });
+    await recomputeDays(store, [dayOf(at(3))]);
+    // Shopify also has #2, which never arrived here; the check only looks.
+    fakeShopify([kept, gOrder(2, { createdAt: at(4) })]);
+    const started = await startReconciliation(deps, store, "manual", { dryRun: true });
+    await runChecks();
+    const rec = await systemDb.reconciliation.findUniqueOrThrow({ where: { id: started!.id } });
+    expect(rec.status).toBe("differences");
+    const r = await results(rec.id);
+    expect(r.orders!.status).toBe("difference");
+    expect(r.totalSales!.status).toBe("difference");
+    expect(r.totalSales!.cause).toBe("missing");
+    // The days still differing are recorded without what was set aside: #2's day only.
+    expect((rec.findings as { days: Array<{ day: string }> }).days.map((d) => d.day)).toEqual([dayOf(at(4))]);
+  });
+
+  it("a stored order Shopify still has but didn't list is not set aside: the figures it touches can't be vouched for", async () => {
+    const store = await makeStore(["read_orders"]);
+    const kept = gOrder(1, { createdAt: at(2) });
+    await seed(store, [kept, gOrder(8, { createdAt: at(3) })]);
+    // The walk leaves #8 out, and the lookup says it is there.
+    fakeShopify([kept]);
+    const started = await startReconciliation(deps, store, "manual");
+    await runChecks();
+    const rec = await systemDb.reconciliation.findUniqueOrThrow({ where: { id: started!.id } });
+    expect(await systemDb.order.count({ where: { shopifyId: "8" } })).toBe(1);
+    expect((rec.findings as Record<string, { count: number }>).not_listed!.count).toBe(1);
+    expect(rec.actions).not.toHaveProperty("setAside");
     expect(rec.status).toBe("incomplete");
     const r = await results(rec.id);
     expect(r.totalSales!.status).toBe("not_verifiable");
-    expect(r.orders!.status).toBe("match");
+    expect(r.totalSales!.cause).toBe("not_listed");
   });
 
   it("only looks in a dry run: the differences are recorded and alerted, nothing is written", async () => {

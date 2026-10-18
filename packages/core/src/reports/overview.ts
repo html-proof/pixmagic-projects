@@ -261,6 +261,8 @@ export async function checkSummary(tx: Tx, scope: Scope) {
           matched: last.results.filter((r) => r.status === "match" || r.status === "repaired").length,
           compared: last.results.length,
           repaired: last.repaired + last.removed,
+          // Orders Shopify no longer shares, left out of the comparison (a count, no money).
+          setAside: last.setAside?.orders ?? 0,
         }
       : null,
   };

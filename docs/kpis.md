@@ -349,20 +349,30 @@ checked the same way over its whole window once it is in. Owners and admins can 
   deleted in Shopify (stored, not listed, and Shopify says it is gone), changed while the check ran
   (a sync delay, not an error), not listed (Shopify no longer shares it: created more than 60 days
   ago without `read_all_orders`, which to the API looks exactly like a deleted order, so it is never
-  looked up or removed, and the figures it touches are reported as not verifiable). Days
-  whose stored totals had drifted from their own orders are found too (`stale_day`).
+  looked up or removed). Days whose stored totals had drifted from their own orders are found too
+  (`stale_day`).
+- **Set aside**: an order Shopify no longer shares can still have a share of the window (an edit,
+  refund or return inside it), and Shopify's side can't hold it. So its stored share (its sales
+  records in the window, `setAside`) is added up per day and taken off our totals before they are
+  compared: a figure that then agrees is a `match`, and the check can be `verified`; one that still
+  differs is judged as any other. The dashboard keeps its full figure; the check records how much it
+  left out (`actions.setAside` on the check: how many orders and their share of each figure), and
+  says so ("excluding A$37.00 of sales from 1 order Shopify no longer shares"). A stored order that
+  Shopify does still have but didn't list is not set aside: the figures that differ are then not
+  verifiable.
 - **Repair**: any order that differs is written again from Shopify's copy (the upsert a webhook
   does), deleted and test orders are removed, and every day of the window is recomputed. Nothing
   else is ever deleted to make a figure match. `dryRun` only records.
 - **Kept** (`reconciliations`, `reconciliation_results`, 90 days): per figure, Shopify's total, ours
   before and after the repair, its status (`match`, `repaired`, `difference`, `sync_delay`,
-  `not_verifiable`) and the main cause; per check, the findings with a few order ids, and the days
-  that still differ. A difference nothing explains raises the `reconciliation_mismatch` alert, which
-  the next check that matches resolves.
+  `not_verifiable`) and the main cause; per check, the findings with a few order ids, what was set
+  aside, and the days that still differ once it is left out. A difference nothing explains raises
+  the `reconciliation_mismatch` alert, which the next check that matches resolves.
 - **On the dashboard**: a pill beside the store's status ("Matches Shopify", "Mostly matches
-  Shopify", "Differs from Shopify", "Checking with Shopify…") with the dates and time of the check,
-  and under "About this data" what it found; the figures side by side for members with the sales
-  breakdown permission (`GET .../check`).
+  Shopify", "Differs from Shopify", "Checking with Shopify…") with the dates and time of the check
+  and how many orders were set aside, and under "About this data" what it found; the figures side by
+  side for members with the sales breakdown permission (`GET .../check`: per figure `setAside`, the
+  part of ours left out, and `setAside` on the check), with an "Excluded" column when any was.
 - **What it proves, and what it doesn't**: that every order and sales record held for those days is
   Shopify's current one, and that the day totals add them up. It can't prove the formulas are
   Shopify's report definitions: that is the report check (section above, ShopifyQL), kept apart as

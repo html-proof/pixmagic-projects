@@ -13,6 +13,7 @@ import {
   raiseAlert,
   removeOrders,
   resolveAlerts,
+  setAside,
   ShopifyGraphqlError,
   startReconciliation,
   touched,
@@ -138,11 +139,13 @@ async function verifyRun(job: VerifyJob, deps: WorkerDeps, now: () => number) {
 
   // Stored orders of the window that Shopify didn't list: deleted, test, or out of its reach. One
   // Shopify doesn't share any more (created over 60 days ago) can't be told from a deleted one, so
-  // it is never looked up, let alone removed: it is "not listed", and the check can't vouch for it.
+  // it is never looked up, let alone removed: it is "not listed", and its stored share of the window
+  // is set aside so the rest can still be compared to the cent.
+  let unaccounted = 0;
   if (state.seen) {
     const all = await unlistedOrders(store, w, state.seen);
     const checkedAt = new Date(now());
-    for (const o of all.filter((x) => !withinReach(x.createdAt, store.grantedScopes, checkedAt))) noteUnlisted(state, o, "out_of_reach");
+    await setAside(store, w, state, all.filter((x) => !withinReach(x.createdAt, store.grantedScopes, checkedAt)));
     const unlisted = all.filter((x) => withinReach(x.createdAt, store.grantedScopes, checkedAt));
     for (let i = 0; i < unlisted.length; i += LOOKUP_BATCH) {
       const batch = unlisted.slice(i, i + LOOKUP_BATCH);
@@ -154,7 +157,8 @@ async function verifyRun(job: VerifyJob, deps: WorkerDeps, now: () => number) {
         const n = d.nodes[k];
         const found: Lookup = !n || !n.id ? "gone" : n.test ? "test" : "present";
         noteUnlisted(state, o, found);
-        if (found !== "present") remove.push(o.id);
+        if (found === "present") unaccounted++;
+        else remove.push(o.id);
       });
       if (repair && remove.length) {
         touched(state, await removeOrders(store, remove));
@@ -163,7 +167,8 @@ async function verifyRun(job: VerifyJob, deps: WorkerDeps, now: () => number) {
     }
   }
 
-  const complete = state.seen !== null && !state.findings.not_listed?.count;
+  // Orders set aside don't make it incomplete; one Shopify still has but didn't list does.
+  const complete = state.seen !== null && unaccounted === 0;
   const { status } = await finishCheck(store, rec, w, state, complete);
   await alertOn(store, status, state, deps);
   return { ok: true, status };
