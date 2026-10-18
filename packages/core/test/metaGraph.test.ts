@@ -1,3 +1,4 @@
+import { createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { AdsApiError, AdsRetryableError, metaAdAccounts, graph, metaRevokeAdsRead, WhatsappApiError, type FetchLike } from "../src/index.js";
 import { graphCall, type GraphFailure } from "../src/metaGraph.js";
@@ -83,6 +84,37 @@ describe("graphCall (the one Meta Graph API transport)", () => {
     // An empty answer is fine (some POSTs answer nothing).
     const empty = fake(() => new Response("", { status: 200 }));
     expect(await graphCall(empty.fetchImpl, { version: "v25.0", method: "POST", path: "1/subscribed_apps", token: "T" }, failed)).toEqual({});
+  });
+
+  it("with the app's secret, proves the token with appsecret_proof; never for a call without a person's token", async () => {
+    // Meta: appsecret_proof is the hex HMAC-SHA256 of the access token, keyed with the app secret
+    // (https://developers.facebook.com/docs/graph-api/securing-requests).
+    const proof = createHmac("sha256", "APP_SECRET").update("USER_TOKEN").digest("hex");
+    const f = fake(() => json({ data: [] }));
+    await graphCall(f.fetchImpl, { version: "v25.0", method: "GET", path: "me/adaccounts", token: "USER_TOKEN", appSecret: "APP_SECRET", query: { limit: "5" } }, failed);
+    expect(f.calls[0]!.url.searchParams.get("appsecret_proof")).toBe(proof);
+    expect(f.calls[0]!.url.toString()).not.toContain("APP_SECRET");
+    // A paging link that carried another call's proof gets this call's own.
+    await graphCall(f.fetchImpl, { version: "v25.0", method: "GET", path: "https://graph.facebook.com/v25.0/me/adaccounts?after=x&appsecret_proof=stale", token: "USER_TOKEN", appSecret: "APP_SECRET" }, failed);
+    expect(f.calls[1]!.url.searchParams.getAll("appsecret_proof")).toEqual([proof]);
+    // A DELETE carries it too (in the query: the form holds only the call's own fields).
+    await graphCall(f.fetchImpl, { version: "v25.0", method: "DELETE", path: "me/permissions/ads_read", token: "USER_TOKEN", appSecret: "APP_SECRET", form: {} }, failed);
+    expect(f.calls[2]!.url.searchParams.get("appsecret_proof")).toBe(proof);
+    // No secret given (WhatsApp, the token inspector), or no token at all: no proof.
+    await graphCall(f.fetchImpl, { version: "v25.0", method: "GET", path: "me", token: "USER_TOKEN" }, failed);
+    await graphCall(f.fetchImpl, { version: "v25.0", method: "GET", path: "oauth/access_token", appSecret: "APP_SECRET", query: { code: "C" } }, failed);
+    expect(f.calls.slice(3).every((c) => !c.url.searchParams.has("appsecret_proof"))).toBe(true);
+  });
+
+  it("hands a failure the answer's headers, where Meta says how long a throttle lasts", async () => {
+    const usage = JSON.stringify({ "123": [{ type: "ads_insights", call_count: 100, total_cputime: 30, total_time: 40, estimated_time_to_regain_access: 7 }] });
+    const f = fake(() => new Response(JSON.stringify({ error: { message: "User request limit reached", code: 17 } }), { status: 400, headers: { "x-business-use-case-usage": usage } }));
+    const failure = await failureOf(graphCall(f.fetchImpl, { version: "v25.0", method: "GET", path: "act_1/insights", token: "T" }, failed));
+    expect(failure.headers?.get("x-business-use-case-usage")).toBe(usage);
+    const down: FetchLike = async () => {
+      throw new TypeError("fetch failed");
+    };
+    expect((await failureOf(graphCall(down, { version: "v25.0", method: "GET", path: "me", token: "T" }, failed))).headers).toBeNull();
   });
 
   it("sends a JSON body when asked", async () => {

@@ -7,11 +7,15 @@
  * - a `paging.next` link Meta hands back is followed only to graph.facebook.com, and without any
  *   token it carried;
  * - no answer at all (network down, timeout) and an answer that isn't JSON are reported the same
- *   way as Meta's own errors, so each caller sorts every failure in one place.
+ *   way as Meta's own errors, so each caller sorts every failure in one place;
+ * - with the app's secret (`appSecret`), every call made with a person's token carries
+ *   `appsecret_proof`, so a leaked token is useless without the secret. The ads app's secret is
+ *   bizinsights' own; a merchant's own WhatsApp app has a secret we don't hold, so WhatsApp sends none.
  *
  * How a failure is classified (reconnect, retry, give up) differs between the two callers, so each
  * passes its own `fail` that turns the failure into its error type.
  */
+import { hmacSha256Hex } from "@app/shared";
 import type { FetchLike } from "./shopify.js";
 
 export const GRAPH_HOST = "graph.facebook.com";
@@ -35,6 +39,11 @@ export interface GraphFailure {
   details: string | null;
   /** The start of the body as it came (an HTML error page, say), for when nothing above says more. */
   text: string | null;
+  /**
+   * The answer's headers (null when nothing answered): Meta says how long a throttle lasts in its
+   * usage headers (X-Business-Use-Case-Usage, X-Ad-Account-Usage), not in the error body.
+   */
+  headers: Headers | null;
 }
 
 export interface GraphRequest {
@@ -45,6 +54,11 @@ export interface GraphRequest {
   path: string;
   /** Sent as `Authorization: Bearer`. A user, system-user or app token (`<app id>|<app secret>`). */
   token?: string;
+  /**
+   * The secret of the app the token was issued to: `appsecret_proof` (HMAC-SHA256 of the token, keyed
+   * with it, in hex) then goes with the call. Not for an app token, which holds the secret itself.
+   */
+  appSecret?: string;
   /** Query string parameters. */
   query?: Record<string, string>;
   /** Form fields, for a POST or DELETE. */
@@ -64,6 +78,7 @@ const failure = (reason: GraphFailureReason, status: number, message: string | n
   userMessage: null,
   details: null,
   text: null,
+  headers: null,
   ...extra,
 });
 
@@ -84,6 +99,9 @@ function graphUrl(req: GraphRequest): URL | null {
   // A paging link repeats the parameters of the call that made it, a token among them when one went
   // in the URL. The header carries it now.
   url.searchParams.delete("access_token");
+  // The proof is worked out for this call's token: never one a paging link carried for another.
+  url.searchParams.delete("appsecret_proof");
+  if (req.token && req.appSecret) url.searchParams.set("appsecret_proof", hmacSha256Hex(req.appSecret, req.token));
   return url;
 }
 
@@ -130,6 +148,7 @@ export async function graphCall<T>(fetchImpl: FetchLike, req: GraphRequest, fail
       userMessage: e?.error_user_msg ?? null,
       details: e?.error_data?.details ?? null,
       text: text ? text.slice(0, 300) : null,
+      headers: res.headers ?? null,
     }),
   );
 }
