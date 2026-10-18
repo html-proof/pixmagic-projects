@@ -7,12 +7,14 @@ const db = process.env.TEST_DB ?? "app_test";
 if (!/_test$/.test(db)) throw new Error(`TEST_DB must end in _test (got ${db})`);
 const port = process.env.TEST_PG_PORT ?? "5434";
 if (!/^\d+$/.test(port)) throw new Error(`TEST_PG_PORT must be a port number (got ${port})`);
+// The superuser's password: "app" (docker compose), or the one a CI job on the PC gave its server.
+const password = encodeURIComponent(process.env.TEST_PG_PASSWORD ?? "app");
 
 export const testEnv = {
   NODE_ENV: "test",
   APP_URL: "http://localhost:3001",
   API_URL: "http://localhost:4000",
-  DATABASE_URL: `postgresql://app:app@localhost:${port}/${db}`,
+  DATABASE_URL: `postgresql://app:${password}@localhost:${port}/${db}`,
   APP_DATABASE_URL: `postgresql://app_rls:app_rls@localhost:${port}/${db}`,
   SESSION_SECRET: "test-session-secret-0123456789",
   TOKEN_ENCRYPTION_KEYS: "1:MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=",

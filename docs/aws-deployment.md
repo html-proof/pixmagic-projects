@@ -90,13 +90,34 @@ read GitHub's own claims since January 2026; the trust is to also require `job_w
 nothing, that IAM checks them: a wrong trust locks every later deploy out (each run signs in before
 it deploys), and only the account's root can put it back.
 
-The workflow checks from both ends. Before it signs in, "Token claims the deploy role requires"
-compares its own token with `githubDeployClaims` (`infra/cdk/scripts/oidc-trust.ts claims`). After
-the smoke tests, "The next deploy can still sign in" has STS exchange a fresh token for the role
-(`oidc-trust.ts assume`; that 15-minute session is dropped unread). Both do nothing when the commit
-being deployed predates the script (the workflow file is always the default branch's). "Not
-authorized to perform sts:AssumeRoleWithWebIdentity" at sign-in means token and trust differ: the
-first step prints the token's values.
+The proof: three roles in the same stack (`githubTrustChecks`) that grant nothing (no policy at all).
+`insights-production-github-trust-check` trusts exactly `githubDeployClaims`;
+`…-trust-check-wrong-workflow` and `…-trust-check-wrong-ref` each swap one of the two claims for a ref
+git can't name (`never..matches`), so no token ever carries it.
+
+The workflow checks from both ends (`infra/cdk/scripts/oidc-trust.ts`, logic in
+`infra/cdk/lib/oidc-trust.ts`):
+
+- Before it signs in, "Token claims the deploy role requires" compares its own token with
+  `githubDeployClaims`.
+- After the smoke tests, "The next deploy can still sign in" reads each trust-check role's live
+  trust (`iam:GetRole`; STS also refuses a role that doesn't exist, so a refusal counts only from a
+  role that's there). STS must then admit the workflow to the first and refuse it the other two
+  ("Proven: IAM checks job_workflow_ref and ref…" in the log and the run's summary; anything else is
+  a warning and changes nothing). Last, STS must exchange a fresh token for the deploy role itself:
+  if not, the step fails. Every session these create lasts 15 minutes, and its credentials are
+  dropped unread.
+
+Both steps do nothing when the commit being deployed predates the script: the workflow file is
+always the default branch's, while the checkout may be an older commit's (a CI run that ended after
+a merge). "Not authorized to perform sts:AssumeRoleWithWebIdentity" at sign-in means token and
+trust differ: the first step prints the token's values.
+
+Giving the deploy role the full trust is a one-line change in `infra/cdk/lib/ci-stack.ts` (its
+`StringEquals` from `githubDeployClaims(cfg)` instead of `{ aud, sub }`, and the CDK test with it).
+Make it only after a Deploy to AWS run on `main` printed "Proven", and with no deploy running. That
+run signs in with the old trust and then deploys the new one; its last step proves the next deploy
+can still sign in.
 
 If "The next deploy can still sign in" fails, the release is live (nothing is rolled back) but the
 next deploy can't sign in. The owner, with the account's admin sign-in and no deploy running, puts
@@ -255,6 +276,18 @@ AWS: the code that already got into `main`, the same code the deploy runs. Accou
 folder `C:\actions-runner-main`, name and only label `bizinsights-pc-main`, and its own e2e
 browsers in `C:\ms-playwright-main` (`PW_BROWSERS` in the runner's `.env`; the first e2e run on
 `main` downloads them). Neither account can change the other's folders or profile, and the folders
+on the system `PATH` are administrators-only (checked 2026-10-18). Node also looks in
+`C:\node_modules` for any package a project lacks (vite asks for `fsevents`, which Windows never
+gets), and any account may create folders at C:\, so the scripts keep that folder administrators'
+too ("Hardening the runner"). Each job's PostgreSQL superuser has a password of its own: the two
+runners' jobs can run at the same time, and a superuser can run programs as the account that
+started the server.
+
+What the two runners still share: anything listening on localhost while a job runs. During main's
+e2e job that is the app under test, the sign-in stand-ins and the Mailpit stand-in, on free ports.
+A pull-request job could reach them as a client, and could log in to main's test database as the
+tenant role `app_rls` (fixed password, no superuser) and change test data. That can make main's
+tests fail or pass wrongly; it gives no way to run code as ghmain.
 on the system `PATH` are administrators-only (checked 2026-10-18), so main's jobs run only programs
 administrators installed and their own.
 
@@ -263,6 +296,10 @@ hook (`infra/runner/main-only-hook.js`, which the runner runs with its own Node 
 a copy in `C:\ProgramData\bizinsights-runner`, administrators-only) fails every job before its first
 step unless GitHub says it is `ci.yml` for a push to `main`, or `aws-deploy.yml` from `main` started
 by a CI run or by hand. Those values come from the job's github context, which a workflow file can't
+change. A refused job's "Set up runner" step says why. The script writes the hook into the runner's
+`.env` before it registers the runner, so a job already queued for the label meets the hook too.
+It refuses a runner, hook or browsers folder that already exists and isn't an administrator's
+(someone else may have planted files there for it to run elevated, or for ghmain to run).
 change. A refused job's "Set up runner" step says why.
 
 In an elevated Windows PowerShell, from the repository folder (asks for a new password for ghmain,
@@ -288,6 +325,18 @@ creates. For a runner installed before 2026-10-18 (ghrunner), run once, from the
 powershell -ExecutionPolicy Bypass -File infra\runner\harden-runner.ps1
 ```
 
+It is safe to run again. First the folders jobs run code from, owned by Administrators
+(`infra/runner/runner-folders.ps1`). A standard account can create folders at C:\ and in
+C:\ProgramData, and a folder's owner can always rewrite its permissions, so the script stops at a
+folder that someone other than an administrator, you or the runner it belongs to made first. Look
+at what's inside, delete it in an elevated Command Prompt (`rmdir /s /q <folder>`), then run it
+again.
+
+- `C:\node_modules`: read-only to users (it creates it). Today any account could make it, and a
+  `fsevents` folder planted there would run inside every test and deploy job.
+- The e2e browsers (below), and the runner for main's hook folder.
+
+Then, for each runner account that exists (ghrunner, ghmain):
 It is safe to run again. For each runner account that exists (ghrunner, ghmain):
 
 - A password is required. `New-LocalUser` leaves the account flagged "password not required"
@@ -303,6 +352,12 @@ And the e2e job's browsers: C:\ passes "Authenticated Users: Modify" down to new
 account on the PC could replace the `chrome.exe` a runner starts. The script leaves
 `C:\ms-playwright` changeable by administrators, SYSTEM and ghrunner (which downloads new browser
 builds into it), readable by users; and `C:\ms-playwright-main` the same with ghmain, not
+readable by other accounts. Both are owned by Administrators from then on. By hand, for the first
+(the second: `ghmain`, without the last grant; `C:\node_modules`: no `ghrunner` grant):
+
+```powershell
+icacls C:\ms-playwright /setowner "*S-1-5-32-544" /T /C /Q
+```
 readable by other accounts. By hand, for the first (the second: `ghmain`, without the last grant):
 
 ```powershell
@@ -313,7 +368,7 @@ icacls C:\ms-playwright /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32
 icacls "C:\ms-playwright\*" /reset /T /C /Q
 ```
 
-(The second makes everything inside inherit exactly that.)
+(The last makes everything inside inherit exactly that.)
 
 On the PC there is no Docker: each job starts its own throwaway PostgreSQL 18 from
 `C:\Program Files\PostgreSQL\18\bin` and the e2e job a Mailpit stand-in
