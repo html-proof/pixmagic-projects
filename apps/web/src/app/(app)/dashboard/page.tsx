@@ -258,7 +258,8 @@ export default function DashboardPage() {
   const cur = ov?.store.currency ?? store?.currency ?? "USD";
   const m = ov?.modules;
   // Unlocking more data is the store's owners' and admins' business, not a shared member's.
-  const disabled = hasFullAccess(access.role) ? (ov?.capabilities.filter((c) => !c.enabled) ?? []) : [];
+  // The Inventory pages ask for their own access (stock levels, stock changes): not a dashboard card.
+  const disabled = hasFullAccess(access.role) ? (ov?.capabilities.filter((c) => !c.enabled && c.area !== "inventory") ?? []) : [];
   const exportSection = detail.view && allowed("reports.export") && seesTopic(access, detail.view, offers) ? TOPIC_EXPORT[detail.view] : undefined;
   const exportHref = exportSection && store && asking ? apiHref(`/workspaces/${workspace.id}/stores/${store.id}/export?section=${exportSection}&${asking.qs}`) : null;
   const headerStore = ov?.store ?? store;

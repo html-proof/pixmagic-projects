@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { encryptTokenFields, normalizeRestOrder, upsertOrder, type FetchLike } from "@app/core";
+import { encryptTokenFields, normalizeRestOrder, upsertOrder } from "@app/core";
 import { systemDb } from "@app/db";
 import { localDay } from "@app/shared";
 import { clean, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
@@ -94,7 +94,7 @@ async function business(name = "Acme", scopes = SCOPES) {
   return { owner, ws, store, base: `/workspaces/${ws}/stores/${store.id}/inventory` };
 }
 
-async function sale(store: { id: string; workspaceId: string; timezone: string }, id: number, variant: string, quantity: number, createdAt = new Date()) {
+async function sale(store: Parameters<typeof upsertOrder>[0], id: number, variant: string, quantity: number, createdAt = new Date()) {
   await upsertOrder(
     store,
     normalizeRestOrder({

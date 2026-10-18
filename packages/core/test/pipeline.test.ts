@@ -21,6 +21,7 @@ import {
   VARIANTS_QUERY,
 } from "../src/index.js";
 import { requestedCost } from "./queryCost.js";
+import { INVENTORY_LOCATION_QUERY, INVENTORY_LOCATIONS_QUERY, INVENTORY_PAGE_SIZE, ITEM_LEVEL_QUERY, LOCATION_LEVELS_QUERY, PRODUCT_MEDIA_QUERY } from "../src/inventory/queries.js";
 
 const MAX_COST = 1000;
 const m = (amount: string) => ({ shopMoney: { amount } });
@@ -125,6 +126,14 @@ describe("query cost (Shopify rejects requested cost > 1000)", () => {
   it("products and variants pages", () => {
     expect(requestedCost(PRODUCTS_QUERY, { first: PAGE_SIZE.products })).toBe(853);
     expect(requestedCost(VARIANTS_QUERY, { first: PAGE_SIZE.variants })).toBe(703);
+  });
+
+  it("the Inventory module's pages and reads stay under the cap", () => {
+    expect(requestedCost(INVENTORY_LOCATIONS_QUERY, { first: INVENTORY_PAGE_SIZE.locations })).toBe(503);
+    expect(requestedCost(LOCATION_LEVELS_QUERY, { first: INVENTORY_PAGE_SIZE.levels })).toBe(604);
+    expect(requestedCost(ITEM_LEVEL_QUERY)).toBe(3);
+    expect(requestedCost(INVENTORY_LOCATION_QUERY)).toBe(2);
+    expect(requestedCost(PRODUCT_MEDIA_QUERY)).toBe(39);
   });
 
   it("the estimator reproduces the old orders query being far over the cap", () => {

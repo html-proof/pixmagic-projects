@@ -1,0 +1,145 @@
+# Inventory
+
+The Inventory section (`/inventory`, sidebar → Inventory) shows a store's stock as Shopify keeps
+it, alerts the team when items run low or sell out, and changes stock in Shopify. Everything it
+shows was read from Shopify or recorded by bizinsights on the way; a figure it can't work out is
+shown as "—" with the reason, never estimated.
+
+| Page | What it shows |
+| --- | --- |
+| Inventory overview | 16 figures (definitions on each card, `KPI_INFO` in `@app/shared/inventory`), the sync strip, what's low and out |
+| All stock / Low stock / Out of stock | The stock list: search, filters, sorting, pages, row selection, CSV, saved filters (per device); Low and Out add sales rate, days left and a reorder suggestion |
+| Inventory movements | Every stock change bizinsights saw, and the changes made here with Shopify's answer |
+| Locations | Each Shopify location with its stock |
+| Inventory reports | Trends from the day's-end records, top sellers, slow movers, sell-through, turnover, stockouts, stock by location |
+| Stock settings | Threshold, alert channels, the check's schedule, restock planning, Shopify access |
+| Product panel (`?product=` on any page) | Product information, each variant's stock at every location in every state, sales, history; Adjust stock |
+
+## Where the stock comes from
+
+Shopify keeps stock per **inventory item** (one per variant) per **location**, in separate quantity
+states: `available`, `on_hand`, `committed`, `incoming`, `reserved`, `damaged`, `safety_stock`,
+`quality_control` (`on_hand` = available + committed + reserved + damaged + safety_stock +
+quality_control; incoming is separate). bizinsights stores exactly that (`inventory_levels`, one row
+per item and location, every state) and never treats one state as another.
+
+Two sources, never mixed in one answer (`stockSource` in `packages/core/src/inventory/stock.ts`):
+
+- **levels**: the store granted `read_inventory` + `read_locations` (capability `stock_levels`) and
+  a full pass has stored every location. Everything per location and per state.
+- **variants**: only Shopify's own total per variant (`ProductVariant.inventoryQuantity`, read with
+  the catalog on `read_products`): available units only. On hand, committed, incoming and per-location
+  figures say "Needs stock-level access".
+
+Totals count each item at each location once and leave out untracked items (counted on their own)
+and archived products.
+
+## Keeping it in step with Shopify
+
+| How | When | Code |
+| --- | --- | --- |
+| Full pass | Once the scopes are granted (`scopeFollowUpKinds` → `inventory`), "Refresh stock", and every `reconcileHours` (default 6) | `runInventoryStep` (apps/worker/src/handlers/inventory.ts): locations, then each location's levels 200 a page (halved on MAX_COST_EXCEEDED), each message one page |
+| Webhooks | As Shopify sends them | `inventory_levels/update` and `/connect` re-read the level (`ITEM_LEVEL_QUERY`: the payload has only `available` and may be stale); `/disconnect` removes it; `inventory_items/update` (cost, tracking, SKU); `locations/*` |
+| Subscriptions | Each pass checks them | Shop-specific (`webhookSubscriptionCreate`, `ensureInventoryWebhooks`), to `${API_URL}/webhooks/shopify`, signed with the app's secret like the toml's. Not in the toml: the scopes are optional there |
+
+Writes are guarded by Shopify's `InventoryLevel.updatedAt`: an older read never overwrites a newer
+one, so late or out-of-order webhooks can't move stock backwards (`applyLevels`, rows locked
+`FOR UPDATE`). A webhook delivered twice is processed once (`webhook_events`) and a level read twice
+records one change.
+
+The scheduled pass is the **check against Shopify**: each level that differed is corrected and
+recorded as a `reconcile` movement, and the pass's record (`inventory_sync_runs`) counts levels
+checked and differences, with up to 20 examples. The sync strip shows the last check, flags stock as
+possibly out of date when no check succeeded for twice the interval or the last one failed, and
+never claims "live": Shopify gives no freshness guarantee for webhooks.
+
+## History, snapshots, alerts
+
+- **Movements** (`inventory_movements`): each state change seen, with before, after and how it was
+  seen: `webhook`, `sync` (a refresh), `reconcile` (the check), `adjustment` (made here, confirmed by
+  Shopify, linked to its adjustment). Shopify's own adjustment history isn't in its API, so changes
+  before bizinsights followed a store aren't there, and the page says so. Kept two years.
+- **Snapshots** (`inventory_snapshots`): the stock storewide and per location under the store-local
+  day, written hourly and after each pass (the last write is the day's close). Trend charts and
+  turnover read only these: a day without one is "not recorded", never filled in.
+- **Alerts** (`inventory_alerts`): one row per variant and kind (`out_of_stock`, `low_stock`,
+  `fast_movement`), opened when it crosses in, resolved when it leaves. The 15-minute sweep tells
+  people about new ones once (`notifyStockAlerts`): one email per store to members who can see
+  inventory and kept "Stock alerts" on (Settings → Notifications), the bell (alert code
+  `inventory_stock`), and optionally WhatsApp. One that flaps is told again at most once a day.
+  Low = 1..threshold available counting every location; threshold = variant's, else product's, else
+  the store's (default 10). Fast movement = at least 5 units today and 3× the 30-day daily rate.
+- **WhatsApp alerts** go through the store's own WhatsApp connection with an approved template of
+  two body variables (store name, the summary): submit the library's `insights_stock_alert`, pick it
+  and the numbers (up to 5, stored encrypted, shown masked) in Stock settings.
+
+Forecasts (days of stock, run-out date, reorder, fast/slow-moving) need at least 14 days of imported
+orders (`MIN_HISTORY_DAYS`); slow-moving needs 30. Reorder = rate × (lead time + days to cover) −
+available − incoming.
+
+## Changing stock
+
+From the product panel, for members with `inventory.adjust` on a store that granted
+`write_inventory` (capability `stock_adjustments`). `adjustStock` (core/inventory/adjust.ts):
+
+| Kind | Shopify mutation |
+| --- | --- |
+| Increase, Decrease, Correction | `inventoryAdjustQuantities` on `available` (a delta) |
+| Set quantity | `inventorySetQuantities` on `available` |
+| Stocktake | `inventorySetQuantities` on `on_hand` (reason `cycle_count_available`) |
+| Mark damaged | `inventoryMoveQuantities` available → damaged |
+
+- Every mutation carries `@idempotent(key:)` (required since API 2026-04) with the client's key, one
+  per confirmation dialog, which is also `inventory_adjustments.idempotency_key`: a repeated request
+  answers with the first one's outcome, an unconfirmed one is sent again with the same key.
+- `changeFromQuantity` is what the person saw: Shopify refuses (`CHANGE_FROM_QUANTITY_STALE`) if the
+  stock moved meanwhile, and the dialog shows the new number. Changes to one item at one location
+  also take a lock (`inventory-adjust:<store>:<item>:<location>`).
+- Nothing is shown as changed until Shopify answers with an adjustment group and no userErrors; then
+  the level is read back from Shopify and stored. A timeout or 5xx is `unknown` ("Shopify didn't
+  confirm"), never success. Shopify's own error text stays in the logs.
+- `inventory_adjustments` is written `pending` and settled once; a trigger refuses any other update
+  (migration `20261019120000_inventory_module`), and the tenant role can't update or delete it or
+  the movements. Each change is also in the workspace audit log (`inventory.adjusted`).
+
+## Permissions (Team & Access, module "Inventory")
+
+| Key | Gives |
+| --- | --- |
+| `inventory.view` | Stock, locations, reports, alerts list, settings (read) |
+| `inventory.products` | Product information (description, images, barcodes, options, shipping) |
+| `inventory.costs` (sensitive) | Cost per item, stock value, margin, turnover, sales revenue |
+| `inventory.history` | Movements and adjustments |
+| `inventory.export` (sensitive) | CSV; costs in it only with `inventory.costs` |
+| `inventory.adjust` (sensitive) | Changing stock in Shopify |
+| `inventory.alerts` (sensitive) | Thresholds and alert channels |
+| `inventory.settings` (sensitive) | Check schedule, lead time, cover |
+
+Owners and admins hold all; viewer/analyst/manager templates start with view + products (+ history
+for analyst and manager). The API checks each route (`apps/api/src/routes/inventory.ts`) and leaves
+out what isn't granted; a shared link never gets the manage ones. Every query is filtered by
+workspace and store, with Postgres RLS behind it.
+
+## Turning on stock levels and stock changes
+
+The three scopes are **optional scopes** (docs/shopify-setup.md 3e), asked for from Stock settings
+or the "Give access in Shopify" card by an owner or admin, one Shopify consent screen each.
+
+1. Declare them in every app's toml: `optional_scopes` gets `read_inventory`, `read_locations`,
+   `write_inventory`, mirrored in `SHOPIFY_OPTIONAL_SCOPES` (apps/aws/src/settings.ts;
+   packages/core/test/appConfig.test.ts checks they agree).
+2. `shopify app deploy --config <app>` for each app (`pixmagic`, `appstore`, `public`, default)
+   **before** the change reaches AWS: an optional scope the deployed app doesn't declare sends the
+   merchant to a Shopify error page.
+3. Merge to `main` (Deploy to AWS).
+4. For App Store workspaces also set `APP_STORE_MODULES.inventory` (apps/web/src/lib/features.ts) and
+   describe Inventory in the listing.
+
+Until then the section works from Shopify's per-variant totals (`variants` source).
+
+## Not covered
+
+- Units sold per fulfilment location: the imported orders don't record which location fulfilled
+  them, so the report says so instead of guessing.
+- Shopify's own adjustment history before bizinsights followed a store (not in Shopify's API).
+- Cost at the time of each sale: turnover uses today's cost per item, as stated on the figure.

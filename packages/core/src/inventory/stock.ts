@@ -109,14 +109,14 @@ export function soldCte(s: Pick<StockScope, "ws" | "storeId">, from: string, to:
  * How many of the last VELOCITY_DAYS days (today included) the store's imported orders cover,
  * for the sales rates: fewer than MIN_HISTORY_DAYS and no rate is given.
  */
-export async function salesDays(store: Pick<Store, "id" | "workspaceId" | "ordersHistoryFrom" | "timezone">, today: string): Promise<{ from: string; days: number }> {
+export async function salesDays(store: Pick<Store, "id" | "workspaceId" | "ordersHistoryFrom" | "timezone">, today: string): Promise<{ from: string; days: number; historyFrom: string | null }> {
   const from = addDays(today, -(VELOCITY_DAYS - 1));
   const [oldest] = await systemDb.$queryRaw<Array<{ day: string | null }>>`
     SELECT MIN(local_day) AS day FROM orders WHERE workspace_id = ${store.workspaceId} AND store_id = ${store.id}`;
   const start = historyStart(store.ordersHistoryFrom, store.timezone, oldest?.day ?? null);
-  if (!start) return { from, days: 0 };
+  if (!start) return { from, days: 0, historyFrom: null };
   const covered = start > from ? start : from;
-  return { from: covered, days: covered > today ? 0 : daysBetweenInclusive(covered, today) };
+  return { from: covered, days: covered > today ? 0 : daysBetweenInclusive(covered, today), historyFrom: start };
 }
 
 // ---------------------------------------------------------------------------

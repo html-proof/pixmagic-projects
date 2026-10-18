@@ -1,5 +1,7 @@
 "use client";
 import { gradeCover, gradeShipping, type Grade } from "@app/shared/health";
+import Link from "next/link";
+import { useApp } from "@/components/AppContext";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { BarRow, ColumnChart, StackedBar } from "./Charts";
 import { fmtDateTime, fmtDuration, hourLabel, hourRange, humanize, plural, weekdayNames } from "./format";
@@ -315,11 +317,22 @@ export function RecentOrdersCard({ items, currency, timezone, shopDomain }: { it
 const coverLabel = (d: number | null) => (d === null ? "No recent sales" : d < 1 ? "Under a day" : `About ${plural(Math.round(d), "day")}`);
 const coverTone = (d: number | null, qty: number): Tone => GRADE_TONE[gradeCover(d, qty)];
 
+/** The way from the dashboard's stock card to the Inventory section, for whoever may open it. */
+function OpenInventory() {
+  const { allowed, offers } = useApp();
+  if (!offers("inventory") || !allowed("inventory.view")) return null;
+  return (
+    <Link href="/inventory" className="text-accent underline">
+      Open Inventory
+    </Link>
+  );
+}
+
 export function InventoryCard({ m, currency }: { m: InventoryModule; currency: string }) {
   const c = m.current;
   if (c.trackedVariants === 0) {
     return (
-      <Panel id="inventory" title="Inventory" help="Stock on hand, what it's worth and what's about to run out.">
+      <Panel id="inventory" title="Inventory" help="Stock on hand, what it's worth and what's about to run out." aside={<OpenInventory />}>
         <Empty>No stock levels yet. They appear once your products and variants are imported, for items where Shopify tracks quantity.</Empty>
       </Panel>
     );
@@ -333,7 +346,7 @@ export function InventoryCard({ m, currency }: { m: InventoryModule; currency: s
         ? `Based on ${fmtNum(c.variantsWithCost)} of ${plural(c.trackedVariants, "variant")} with a cost.`
         : "What you paid for the stock you hold.";
   return (
-    <Panel id="inventory" title="Inventory" help="Stock on hand across all locations for active and draft products. “Running low” uses the last 30 days of sales.">
+    <Panel id="inventory" title="Inventory" help="Stock on hand across all locations for active and draft products. “Running low” uses the last 30 days of sales." aside={<OpenInventory />}>
       <div className={`grid grid-cols-2 gap-3 ${valued ? "lg:grid-cols-5" : "lg:grid-cols-3"}`}>
         <Stat label="Units in stock" value={fmtNum(c.unitsInStock)} note={`Across ${plural(c.trackedVariants, "tracked variant")}.`} />
         {valued && <Stat label="Stock value at cost" value={fmtMoney(c.stockValueAtCost, currency)} note={costNote} />}

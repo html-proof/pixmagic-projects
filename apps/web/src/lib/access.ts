@@ -20,6 +20,7 @@ const TOPIC_MODULE: Partial<Record<Topic, AppModule>> = { ads: "ads", adsense: "
 
 /** The pages of each part of the app a workspace may leave out, by path prefix. */
 const MODULE_PAGES: Array<[prefix: string, part: AppModule]> = [
+  ["/inventory", "inventory"],
   ["/whatsapp", "whatsapp"],
   ["/staff", "staff"],
   ["/settings/ads", "ads"],
@@ -65,7 +66,7 @@ export const TOPIC_EXPORT: Partial<Record<Topic, string>> = {
 /** A member with permissions in at least one dashboard area (everything but Integrations, Staff and Reports alone). */
 export function hasDashboardAccess(access: MemberAccess): boolean {
   if (hasFullAccess(access.role)) return true;
-  return modulesOf(access).some((m) => m !== "integrations" && m !== "staff" && m !== "reports");
+  return modulesOf(access).some((m) => m !== "integrations" && m !== "staff" && m !== "reports" && m !== "inventory");
 }
 
 /**
@@ -74,7 +75,7 @@ export function hasDashboardAccess(access: MemberAccess): boolean {
  */
 export function showsDashboardHome(access: MemberAccess): boolean {
   if (hasFullAccess(access.role)) return true;
-  return modulesOf(access).filter((m) => m !== "integrations" && m !== "staff" && m !== "reports").length >= 2;
+  return modulesOf(access).filter((m) => m !== "integrations" && m !== "staff" && m !== "reports" && m !== "inventory").length >= 2;
 }
 
 /** Topics in the order the sidebar lists them. */
@@ -85,6 +86,7 @@ export function landingPath(access: MemberAccess, staffRole: StaffRole | null, o
   if (showsDashboardHome(access)) return "/dashboard";
   const topic = TOPIC_ORDER.find((t) => seesTopic(access, t, offers));
   if (topic) return `/dashboard?view=${topic}`;
+  if (offers("inventory") && allows(access, "inventory.view")) return "/inventory";
   if (offers("staff") && staffAccess(access.role, staffRole, access.permissions).permissions.length) return "/staff";
   if (offers("whatsapp") && allows(access, "marketing.campaigns")) return "/whatsapp";
   if (allows(access, "integrations.status")) return "/settings/integrations";
@@ -98,6 +100,7 @@ export function landingPath(access: MemberAccess, staffRole: StaffRole | null, o
  */
 const PAGE_NEED: Array<[prefix: string, need: AccessNeed | "full" | "staff" | "dashboard"]> = [
   ["/dashboard", "dashboard"],
+  ["/inventory", "inventory.view"],
   ["/team", "members:manage"],
   ["/staff", "staff"],
   ["/whatsapp", "marketing.campaigns"],

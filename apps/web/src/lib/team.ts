@@ -74,6 +74,7 @@ export function offeredCatalog(catalog: Catalog, offers: Offers): Catalog {
     ...(campaigns ? [] : ["marketing.campaigns"]),
     ...(accounts ? [] : ["integrations.manage"]),
     ...(offers("staff") ? [] : ["staff.team", "staff.timesheets", "staff.payroll", "staff.manage"]),
+    ...(offers("inventory") ? [] : ["inventory.view", "inventory.products", "inventory.costs", "inventory.history", "inventory.export", "inventory.adjust", "inventory.alerts", "inventory.settings"]),
   ]);
   if (!hidden.size) return catalog;
   const modules = catalog.modules

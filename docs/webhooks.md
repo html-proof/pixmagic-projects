@@ -22,7 +22,11 @@ Webhooks drive all updates after the initial backfill. Endpoint: `POST <APP_URL>
 | `fulfillments/create`, `fulfillments/update`, `fulfillment_events/create` | WhatsApp only: parcel stages. Need `read_fulfillments`, which isn't requested today, so they aren't subscribed; the jobs read shipment status from order payloads and a GraphQL poll instead |
 | `orders/delete` | Remove the order, its line items and sales records, and recompute its days: Shopify's reports stop counting a deleted order. The daily check against Shopify (docs/kpis.md, "Checked against Shopify") finds deletions whose webhook was missed |
 | `refunds/create` | Read the order's sales records again (the refund is one of them) and recompute the days they fall on |
-| `products/create`, `products/update`, `products/delete` | Upsert / delete product |
+| `products/create`, `products/update`, `products/delete` | Upsert / delete product (with the product information the Inventory pages show); a deleted product's stock levels go with it |
+| `inventory_levels/update`, `inventory_levels/connect` | Inventory: read the level again from Shopify (every quantity state) and store it unless a newer one is stored; the variant's alerts are re-evaluated. Shop-specific subscriptions, made once the store grants `read_inventory` (docs/inventory.md) |
+| `inventory_levels/disconnect` | Inventory: the item is no longer stocked at the location; its level goes |
+| `inventory_items/update` | Inventory: cost per item, tracking on or off, SKU, shipping, on the variant that owns the item |
+| `locations/create`, `update`, `delete`, `activate`, `deactivate` | Inventory: the location read again; a deleted one is kept as deleted (history names it) and its stock goes. Needs `read_locations` |
 | `app/uninstalled` | Store → `uninstalled`, tokens wiped; a plan billed on the store ends (Free). Data kept until `shop/redact`. One older than the current installation is set aside (it only re-reads the store's charges from Shopify) when Shopify still accepts that installation's token; one it refuses, or a store with no token, has nothing to protect and is uninstalled |
 | `app/scopes_update` | Replace granted scopes → dashboard modules update immediately |
 | `app_subscriptions/update` | The pending charge active → it becomes the plan; the charge in force cancelled, declined or expired → Free (`packages/core/src/billing.ts`) |

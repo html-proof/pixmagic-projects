@@ -8,7 +8,6 @@ import { Prisma, systemDb, type Store } from "@app/db";
 import type { InventoryTrigger, Queues } from "../queues.js";
 import { env } from "../env.js";
 import { logger } from "../logger.js";
-import { gidToId } from "../normalize.js";
 import { graphqlItemLevelSchema, graphqlLocationSchema, parseShopify, restInventoryItemSchema, restInventoryLevelSchema, restLocationSchema } from "../shopifyPayloads.js";
 import { expandScopes } from "@app/shared";
 import { hasCapabilityScopes } from "./access.js";
