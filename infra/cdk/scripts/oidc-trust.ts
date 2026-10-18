@@ -7,15 +7,19 @@
 //     deploy that would give the role a trust its own workflow can't meet stops here.
 //   tsx scripts/oidc-trust.ts assume --role <arn> [--region ap-southeast-2] [--env production]
 //     After `cdk deploy`: the trust-check roles (githubTrustChecks) admit or refuse this workflow
-//     as they should, which proves the trust the deploy role is to get next (a warning if not);
+//     as they should, which shows IAM still checks the claims the deploy role requires (a warning if not);
 //     and a fresh token still gets the deploy role, so the next deploy can sign in (an error if
 //     not). Reads the trust-check roles with `aws iam get-role`: needs the deploy role's credentials.
+//   tsx scripts/oidc-trust.ts prove --role <arn> [--region ap-southeast-2] [--env production]
+//     Before `cdk deploy`, signed in: only the trust-check part, and it must prove IAM checks
+//     job_workflow_ref and ref and this workflow meets them, which the deploy role's trust in this
+//     commit requires. So a deploy never gives the role a trust that would lock the next one out.
 //
 // Prints claim values (repository, environment, workflow file, branch), never a token or credentials.
 import { execFileSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
 import { envConfig } from "../lib/config.js";
-import { assumeWithWebIdentity, checkTrust, compareClaims, requestIdToken, tokenClaims } from "../lib/oidc-trust.js";
+import { assumeWithWebIdentity, checkTrust, compareClaims, proveTrustChecks, requestIdToken, tokenClaims } from "../lib/oidc-trust.js";
 
 const args = process.argv.slice(2);
 const opt = (name: string, fallback: string) => {
@@ -27,18 +31,19 @@ const cfg = envConfig((k) => (k === "env" ? opt("--env", "production") : undefin
 async function claims() {
   const { ok, lines } = compareClaims(cfg, tokenClaims(await requestIdToken()));
   for (const line of lines) console.log(line);
-  if (!ok) throw new Error("This job's token doesn't meet the trust the deploy role is to get (lib/config.ts, githubDeployClaims): nothing deployed.");
+  if (!ok) throw new Error("This job's token doesn't meet the deploy role's trust (lib/config.ts, githubDeployClaims): nothing deployed.");
 }
 
-async function assume() {
+/** The deploy role, and how this job reads IAM and asks STS. */
+function deps() {
   const role = opt("--role", "");
   if (!/^arn:aws:iam::\d{12}:role\/[\w+=,.@/-]+$/.test(role)) throw new Error(`--role must be a role ARN (got "${role}").`);
   const region = opt("--region", "ap-southeast-2");
   const session = `trust-check-${process.env.GITHUB_RUN_ID ?? "local"}`;
-  const report = await checkTrust({
+  return {
     cfg,
     deployRoleArn: role,
-    liveConditions: (roleName) => {
+    liveConditions: (roleName: string) => {
       const out = execFileSync("aws", ["iam", "get-role", "--role-name", roleName, "--region", region, "--output", "json"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
       type Doc = { Statement: Array<{ Condition?: unknown }> };
       const raw = (JSON.parse(out) as { Role: { AssumeRolePolicyDocument: Doc | string } }).Role.AssumeRolePolicyDocument;
@@ -47,8 +52,24 @@ async function assume() {
       return doc.Statement.map((s) => s.Condition);
     },
     // A fresh token for each: they're short-lived.
-    assume: async (roleArn) => assumeWithWebIdentity(roleArn, region, await requestIdToken(), session),
-  });
+    assume: async (roleArn: string) => assumeWithWebIdentity(roleArn, region, await requestIdToken(), session),
+  };
+}
+
+async function prove() {
+  const { proven, lines, summary } = await proveTrustChecks(deps());
+  for (const line of lines) console.log(line);
+  if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${summary.join("\n")}\n`);
+  if (!proven) {
+    throw new Error(
+      "This commit's deploy role trust requires job_workflow_ref and ref, and the trust-check roles don't prove that IAM checks them " +
+        "for this workflow: nothing deployed, the live trust is unchanged (docs/aws-deployment.md, Deploy (GitHub Actions)).",
+    );
+  }
+}
+
+async function assume() {
+  const report = await checkTrust(deps());
   for (const line of report.lines) console.log(line);
   if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${report.summary.join("\n")}\n`);
   if (report.deployRole === "refused") {
@@ -69,7 +90,8 @@ const mode = args[0];
 try {
   if (mode === "claims") await claims();
   else if (mode === "assume") await assume();
-  else throw new Error("Usage: oidc-trust.ts claims [--env production] | assume --role <arn> [--region ap-southeast-2] [--env production]");
+  else if (mode === "prove") await prove();
+  else throw new Error("Usage: oidc-trust.ts claims [--env production] | assume|prove --role <arn> [--region ap-southeast-2] [--env production]");
 } catch (err) {
   console.error((err as Error).message);
   process.exit(1);

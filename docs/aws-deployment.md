@@ -79,16 +79,23 @@ One-time setup in the repository's Settings → Environments → `production`: v
 `GOOGLE_SIGNIN_CLIENT_ID` and `AWS_SCHEDULES` (`on` after cutover). Required reviewers and branch
 rules for an environment need a paid plan for a private repository; the role's trust does that job.
 
-The role admits a token whose `aud` is `sts.amazonaws.com` and whose `sub` is exactly what this
-repository sends: the immutable form
-`repo:html-proof@68529971/pixmagic-projects@1413246051:environment:production` (`githubOidcSubject`
-in `infra/cdk/lib/config.ts`; the repository's OIDC subject setting is left as it is). `sub` names
-no branch, so any branch's workflow naming the `production` environment gets the role. AWS STS has
-read GitHub's own claims since January 2026; the trust is to also require `job_workflow_ref` =
-`html-proof/pixmagic-projects/.github/workflows/aws-deploy.yml@refs/heads/main` and `ref` =
-`refs/heads/main` (`githubDeployClaims`), but only after a deploy has proven, on roles that grant
-nothing, that IAM checks them: a wrong trust locks every later deploy out (each run signs in before
-it deploys), and only the account's root can put it back.
+The role admits a token only when all of these claims match exactly (`githubDeployClaims` in
+`infra/cdk/lib/config.ts`; AWS STS has read GitHub's own claims since January 2026):
+
+- `aud` = `sts.amazonaws.com`.
+- `sub` exactly as this repository sends it, the immutable form
+  `repo:html-proof@68529971/pixmagic-projects@1413246051:environment:production`
+  (`githubOidcSubject`; the repository's OIDC subject setting is left as it is).
+- `job_workflow_ref` = `html-proof/pixmagic-projects/.github/workflows/aws-deploy.yml@refs/heads/main`
+  and `ref` = `refs/heads/main`: this one workflow file, run from `main`. `sub` names no branch, so
+  with it alone (until 2026-10-18) any branch's workflow naming the `production` environment got
+  the role.
+
+A wrong trust locks every later deploy out (each run signs in before it deploys), and only the
+account's root can put it back. So a deploy gives the role this trust only after proving, on
+roles that grant nothing, that IAM checks the last two and this workflow meets them: "The trust
+this commit deploys is proven", after sign-in and before `cdk deploy`, which stops the run
+(nothing deployed, the live trust unchanged) if not. Every deploy repeats that proof.
 
 The proof: three roles in the same stack (`githubTrustChecks`) that grant nothing (no policy at all).
 `insights-production-github-trust-check` trusts exactly `githubDeployClaims`;
@@ -100,11 +107,15 @@ The workflow checks from both ends (`infra/cdk/scripts/oidc-trust.ts`, logic in
 
 - Before it signs in, "Token claims the deploy role requires" compares its own token with
   `githubDeployClaims`.
+- Signed in, before `cdk deploy`, "The trust this commit deploys is proven" runs the trust-check
+  part below (`oidc-trust.ts prove`) and stops the run unless it says "Proven".
 - After the smoke tests, "The next deploy can still sign in" reads each trust-check role's live
   trust (`iam:GetRole`; STS also refuses a role that doesn't exist, so a refusal counts only from a
   role that's there). STS must then admit the workflow to the first and refuse it the other two
-  ("Proven: IAM checks job_workflow_ref and ref…" in the log and the run's summary; anything else is
-  a warning and changes nothing). Last, STS must exchange a fresh token for the deploy role itself:
+  ("Proven: IAM checks job_workflow_ref and ref…" in the log and the run's summary). Anything else
+  is a warning: deploys still work, but IAM may no longer be checking those two claims, so the
+  deploy role may admit more than this workflow; find out why (AWS changed something, or a
+  trust-check role was changed). Last, STS must exchange a fresh token for the deploy role itself:
   if not, the step fails. Every session these create lasts 15 minutes, and its credentials are
   dropped unread.
 
@@ -113,11 +124,10 @@ always the default branch's, while the checkout may be an older commit's (a CI r
 a merge). "Not authorized to perform sts:AssumeRoleWithWebIdentity" at sign-in means token and
 trust differ: the first step prints the token's values.
 
-Giving the deploy role the full trust is a one-line change in `infra/cdk/lib/ci-stack.ts` (its
-`StringEquals` from `githubDeployClaims(cfg)` instead of `{ aud, sub }`, and the CDK test with it).
-Make it only after a Deploy to AWS run on `main` printed "Proven", and with no deploy running. That
-run signs in with the old trust and then deploys the new one; its last step proves the next deploy
-can still sign in.
+Renaming `aws-deploy.yml` or deploying from another branch changes the token's claims, and a run
+signs in with the trust as it was before it deploys. So it takes two pull requests. The first
+makes the trust accept the old and the new value (IAM's `StringEquals` takes a list) and deploys
+from the old workflow. The second switches the workflow and drops the old value.
 
 If "The next deploy can still sign in" fails, the release is live (nothing is rolled back) but the
 next deploy can't sign in. The owner, with the account's admin sign-in and no deploy running, puts
