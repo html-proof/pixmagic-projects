@@ -502,7 +502,9 @@ share Resend's limits with the app's email (free tier: 100 a day, 3,000 a month)
 - **Alerts**: an email address for the alarms (`-c alertEmail=...`; confirm the SNS email). The
   budget already emails `budgetEmail` (config.ts) and needs no confirmation.
 - **Support plan**: the account signed up with a paid plan (Business Support+, the greater of
-  US$29/month or 9% of the bill). Basic support is free; switch in Support Center → Support plans.
+  US$29/month or 9% of the bill). Basic support is free; switch in Support Center → Support plans →
+  Basic Support → Review downgrade. AWS refuses until the 30-day minimum ends (tried 2026-10-18), so
+  from 2026-11-14 ~04:43 UTC; a one-time reminder task (`aws-support-plan-to-basic`) fires that day.
 - **Sign-up codes and password resets** come from Cognito's own email (`COGNITO_DEFAULT`): any
   address, but at most 50 a day for the whole pool, from `no-reply@verificationemail.com`. Going past
   that needs Cognito on SES (production access, denied so far) or a Cognito custom email sender
@@ -546,10 +548,12 @@ top: the account is on Business Support+ (AWS's price list names its sign-up pro
 `AWSSupportEssential` "AWS Business Support+"), the greater of US$29/month or 9% of the bill
 (Owner-only steps).
 
-**Reserved instance:** `insights-production-t4g-micro-maz-2026-10` was ordered on 2026-10-18 and
-ended `payment-failed`, so none is active. Fix the payment method, then order it again (1 year, No
-Upfront, db.t4g.micro PostgreSQL Multi-AZ). It is size-flexible: on db.t4g.small Multi-AZ it still
-pays half. Check with `aws rds describe-reserved-db-instances`.
+**Reserved instance:** none is active. Two orders on 2026-10-18 (`insights-production-t4g-micro-maz-2026-10`
+at 10:52 UTC, and `...-2026-10-b` at 12:30 UTC after the card was updated) both ended `payment-failed`
+about an hour later. AWS can't charge the card on file (GitHub reports failed payments too), and the
+same card pays the monthly invoice. Once payments work, order it again (1 year, No Upfront,
+db.t4g.micro PostgreSQL Multi-AZ, offering 0487c451-607c-446a-86af-f5d23305e90d). It is size-flexible:
+on db.t4g.small Multi-AZ it still pays half. Check with `aws rds describe-reserved-db-instances`.
 
 Biggest lever: the database size (`dbInstanceType`). Move to db.t4g.small when the database alarms
 say so (`db-free-memory` below 100 MB, `db-connections` above 60 of ~80, `db-cpu`): that takes the
