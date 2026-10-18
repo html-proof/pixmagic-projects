@@ -239,6 +239,12 @@ export function scopeFollowUpKinds(newlyGranted: string[]): SyncKind[] {
   if (granted.has("read_customers") || granted.has("read_all_orders")) kinds.push("orders");
   if (granted.has("read_products")) kinds.push("products", "variants");
   if (granted.has("write_pixels")) kinds.push("install_pixel");
+  // Stock levels (read_inventory, read_locations; write_inventory implies the first): the catalog
+  // again, so every variant has its inventory item, then a full pass over every location's levels.
+  if (granted.has("read_inventory") || granted.has("write_inventory") || granted.has("read_locations")) {
+    if (!kinds.includes("variants")) kinds.push("variants");
+    kinds.push("inventory");
+  }
   return kinds;
 }
 

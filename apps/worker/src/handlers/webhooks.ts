@@ -2,7 +2,8 @@
 import { systemDb, type Store } from "@app/db";
 import { applySubscriptionUpdate, audit, customerKey, deleteProduct, endBillingForStore, getAccessToken, gidToId, logger, normalizeRestOrder, normalizeRestProduct, normalizeRestProductVariants, parseShopify, pruneVariants, purgeStoreData, raiseAlert, recordDataRequest, resolveAlerts, customersDataRequestSchema, customersRedactSchema, restOrderSchema, restProductDeleteSchema, restOrderDeleteSchema, removeOrders, restProductSchema, restRefundWebhookSchema, scopesUpdateSchema, subscriptionUpdateSchema, syncBillingFromShopify, upsertOrder, upsertProduct, upsertVariant, seedScopeFollowUp, type WebhookJobData, redactWhatsappCustomer, whatsappOnShopifyEvent, emailOnShopifyEvent, purgeEmailStoreData, redactEmailCustomer } from "@app/core";
 import { enqueueAggregate, UnrecoverableError, type WorkerDeps } from "./common.js";
-import { gql, readSalesAfterWebhook } from "./shopifyRead.js";
+import { gql, readSalesAfterWebhook, shopifyReader } from "./shopifyRead.js";
+import { onInventoryItemWebhook, onLevelDisconnect, onLevelWebhook, onLocationWebhook } from "@app/core";
 
 /** Topics about the app installation itself (not store data). */
 const APP_SCOPED_TOPICS = new Set(["app/uninstalled", "app/scopes_update", "shop/redact", "app_subscriptions/update"]);
@@ -170,6 +171,32 @@ export async function processWebhook(data: WebhookJobData, deps: WorkerDeps) {
         if (!gone) break;
         await deleteProduct(store, String(gone.id));
         await deps.coord.put(tombstoneKey(store.id, String(gone.id)), "1", TOMBSTONE_TTL_S);
+        break;
+      }
+      // ---- Inventory (shop-specific subscriptions, core/inventory/sync.ts ensureInventoryWebhooks)
+      case "inventory_levels/update":
+      case "inventory_levels/connect": {
+        if (store.status === "uninstalled") break;
+        await onLevelWebhook(store, shopifyReader(deps, store).gql, p, logIds);
+        break;
+      }
+      case "inventory_levels/disconnect": {
+        if (store.status === "uninstalled") break;
+        await onLevelDisconnect(store, p, logIds);
+        break;
+      }
+      case "inventory_items/update": {
+        if (store.status === "uninstalled") break;
+        await onInventoryItemWebhook(store, p, logIds);
+        break;
+      }
+      case "locations/create":
+      case "locations/update":
+      case "locations/delete":
+      case "locations/activate":
+      case "locations/deactivate": {
+        if (store.status === "uninstalled") break;
+        await onLocationWebhook(store, shopifyReader(deps, store).gql, data.topic, p, logIds);
         break;
       }
       case "app/uninstalled": {

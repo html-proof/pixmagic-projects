@@ -19,12 +19,15 @@ import {
   type VerifyJob,
   type WebhookJobData,
   pruneReconciliations,
+  failInventoryPass,
   type WhatsappJob,
 } from "@app/core";
 import {
   AccessRevokedError,
   failStaleJobs,
   processWebhook,
+  pruneInventory,
+  sweepInventory,
   refreshExpiringTokens,
   rememberFailedAggregate,
   runAdsSync,
@@ -205,6 +208,7 @@ async function onFailure(queue: QueueName, body: unknown, err: Error, final: boo
     // start, and kept its store "syncing" with nothing behind it.
     await systemDb.syncJob.update({ where: { id: data.syncJobId }, data: final ? { status: "failed", error } : { error } }).catch(() => {});
     if (!final) return;
+    if (data.kind === "inventory") await failInventoryPass(data.inventory?.runId, error).catch(() => {});
     const store = await systemDb.store.findUnique({ where: { id: data.storeId } });
     if (!store || store.status === "uninstalled") return;
     // `error` means "this store's data has stopped": the dashboard offers Reconnect and stops
@@ -212,7 +216,8 @@ async function onFailure(queue: QueueName, body: unknown, err: Error, final: boo
     // when the store's import was in progress and this was part of it. A catalog refresh, a daily
     // reconcile or a pixel install giving up on an otherwise healthy store is not that: flipping it
     // turned one Shopify 5xx streak into a "your store is broken" banner and a critical alert.
-    const flippable: StoreStatus[] = err instanceof AccessRevokedError ? ["active", "syncing"] : data.kind === "install_pixel" ? [] : ["syncing"];
+    // An inventory pass isn't part of the import either: its failure is its own alert.
+    const flippable: StoreStatus[] = err instanceof AccessRevokedError ? ["active", "syncing"] : data.kind === "install_pixel" || data.kind === "inventory" ? [] : ["syncing"];
     const flipped = flippable.length
       ? await systemDb.store.updateMany({ where: { id: store.id, status: { in: flippable } }, data: { status: "error" } })
       : { count: 0 };
@@ -347,7 +352,16 @@ export async function runScheduled(cron: string, deps: WorkerDeps) {
       logger.error({ err }, "shopify reports prune failed; the next tick tries again");
       return null;
     });
-    return { refreshed, staleJobsFailed, reconciled, salesRereads, adsSynced, whatsapp, staffOpenShifts, email, pixelDedupePruned, teamPruned, checksPruned, shopifyReportsPruned };
+    // Inventory: the scheduled checks against Shopify, the day's stock records, stock alerts.
+    const inventory = await sweepInventory(deps).catch((err: unknown) => {
+      logger.error({ err }, "inventory sweep failed; the next tick tries again");
+      return null;
+    });
+    const inventoryPruned = await pruneInventory().catch((err: unknown) => {
+      logger.error({ err }, "inventory prune failed; the next tick tries again");
+      return null;
+    });
+    return { refreshed, staleJobsFailed, reconciled, salesRereads, adsSynced, whatsapp, staffOpenShifts, email, pixelDedupePruned, teamPruned, checksPruned, shopifyReportsPruned, inventory, inventoryPruned };
   }
   logger.warn({ cron }, "unknown cron trigger");
   return {};

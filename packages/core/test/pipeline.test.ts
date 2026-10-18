@@ -123,8 +123,8 @@ describe("query cost (Shopify rejects requested cost > 1000)", () => {
   });
 
   it("products and variants pages", () => {
-    expect(requestedCost(PRODUCTS_QUERY, { first: PAGE_SIZE.products })).toBe(103);
-    expect(requestedCost(VARIANTS_QUERY, { first: PAGE_SIZE.variants })).toBe(403);
+    expect(requestedCost(PRODUCTS_QUERY, { first: PAGE_SIZE.products })).toBe(853);
+    expect(requestedCost(VARIANTS_QUERY, { first: PAGE_SIZE.variants })).toBe(703);
   });
 
   it("the estimator reproduces the old orders query being far over the cap", () => {
@@ -315,7 +315,7 @@ describe("Shopify's sales records", () => {
 describe("product and variant normalizers", () => {
   it("GraphQL products carry vendor, type and creation date", () => {
     const p = normalizeGraphqlProduct({ id: "gid://shopify/Product/8", title: "Tee", status: "ARCHIVED", vendor: "Acme", productType: "", createdAt: "2025-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z" });
-    expect(p).toEqual({
+    expect(p).toMatchObject({
       shopifyId: "8",
       title: "Tee",
       status: "archived",
@@ -342,7 +342,7 @@ describe("product and variant normalizers", () => {
       updatedAt: "2026-01-01T00:00:00Z",
       product: { id: "gid://shopify/Product/8" },
     };
-    expect(normalizeGraphqlVariant({ ...base, inventoryItem: { tracked: true, unitCost: { amount: "9.5" } } })).toEqual({
+    expect(normalizeGraphqlVariant({ ...base, inventoryItem: { tracked: true, unitCost: { amount: "9.5" } } })).toMatchObject({
       shopifyId: "70",
       productShopifyId: "8",
       title: "M",
@@ -358,6 +358,92 @@ describe("product and variant normalizers", () => {
     const withheld = normalizeGraphqlVariant({ ...base, inventoryItem: null });
     expect(withheld.unitCost).toBeUndefined();
     expect(withheld.inventoryQuantity).toBe(4);
+    // With the inventory item withheld its details are unknown too (kept as stored).
+    expect(withheld.inventoryItemId).toBeUndefined();
+    expect(withheld.requiresShipping).toBeUndefined();
+    expect(withheld.weight).toBeUndefined();
+  });
+
+  it("GraphQL products and variants carry the Inventory module's product information", () => {
+    const p = normalizeGraphqlProduct({
+      id: "gid://shopify/Product/8",
+      title: "Tee",
+      status: "ACTIVE",
+      vendor: "Acme",
+      productType: "Shirts",
+      updatedAt: "2026-01-01T00:00:00Z",
+      handle: "tee",
+      tags: ["summer", "cotton"],
+      onlineStoreUrl: "https://shop.example/products/tee",
+      description: "A soft cotton tee.",
+      category: { fullName: "Apparel & Accessories > Clothing > Shirts & Tops" },
+      featuredMedia: { preview: { image: { url: "https://cdn.shopify.com/tee.jpg" } } },
+      collections: { nodes: [{ id: "gid://shopify/Collection/5", title: "Summer" }] },
+    });
+    expect(p).toMatchObject({
+      handle: "tee",
+      tags: ["summer", "cotton"],
+      category: "Apparel & Accessories > Clothing > Shirts & Tops",
+      collections: [{ id: "5", title: "Summer" }],
+      imageUrl: "https://cdn.shopify.com/tee.jpg",
+      onlineStoreUrl: "https://shop.example/products/tee",
+      description: "A soft cotton tee.",
+    });
+    const v = normalizeGraphqlVariant({
+      id: "gid://shopify/ProductVariant/70",
+      title: "M / Red",
+      sku: "TEE-M-R",
+      price: "25.00",
+      inventoryQuantity: 4,
+      updatedAt: "2026-01-01T00:00:00Z",
+      createdAt: "2025-06-01T00:00:00Z",
+      product: { id: "gid://shopify/Product/8" },
+      barcode: "0123456789",
+      compareAtPrice: "30.00",
+      taxable: true,
+      inventoryPolicy: "CONTINUE",
+      position: 2,
+      selectedOptions: [{ name: "Size", value: "M" }, { name: "Colour", value: "Red" }],
+      inventoryItem: { id: "gid://shopify/InventoryItem/900", tracked: true, requiresShipping: false, unitCost: { amount: "9.50" }, measurement: { weight: { value: 0.2, unit: "KILOGRAMS" } } },
+    });
+    expect(v).toMatchObject({
+      inventoryItemId: "900",
+      barcode: "0123456789",
+      compareAtPrice: 30,
+      taxable: true,
+      inventoryPolicy: "continue",
+      position: 2,
+      options: [{ name: "Size", value: "M" }, { name: "Colour", value: "Red" }],
+      requiresShipping: false,
+      weight: 0.2,
+      weightUnit: "KILOGRAMS",
+      createdAt: new Date("2025-06-01T00:00:00Z"),
+    });
+  });
+
+  it("REST products: description as plain text, tags split, options named, weights in GraphQL units", () => {
+    const payload = {
+      id: 8,
+      title: "Tee",
+      status: "active",
+      updated_at: "2026-02-01T00:00:00Z",
+      handle: "tee",
+      body_html: "<p>Soft &amp; <strong>cotton</strong></p><script>x()</script>",
+      tags: "summer, cotton ,",
+      image: { src: "https://cdn.shopify.com/tee.jpg" },
+      options: [{ name: "Size", position: 1 }, { name: "Colour", position: 2 }],
+      variants: [{ id: 70, title: "M / Red", sku: "T", price: "25.00", option1: "M", option2: "Red", option3: null, inventory_item_id: 900, barcode: "", weight: 200, weight_unit: "g", inventory_policy: "deny", taxable: false }],
+    };
+    expect(normalizeRestProduct(payload)).toMatchObject({ handle: "tee", description: "Soft & cotton", tags: ["summer", "cotton"], imageUrl: "https://cdn.shopify.com/tee.jpg" });
+    // Collections and the category aren't in REST payloads: undefined keeps the stored ones.
+    expect(normalizeRestProduct(payload).collections).toBeUndefined();
+    const [v] = normalizeRestProductVariants(payload);
+    expect(v).toMatchObject({ inventoryItemId: "900", barcode: null, weight: 200, weightUnit: "GRAMS", inventoryPolicy: "deny", taxable: false, options: [{ name: "Size", value: "M" }, { name: "Colour", value: "Red" }] });
+    // A payload without the fields leaves them undefined, so stored values stay.
+    const [bare] = normalizeRestProductVariants({ id: 8, variants: [{ id: 71, title: "L", price: "1" }] });
+    expect(bare!.inventoryItemId).toBeUndefined();
+    expect(bare!.barcode).toBeUndefined();
+    expect(bare!.options).toBeUndefined();
   });
 
   it("REST product variants: no cost, inventory_quantity included", () => {

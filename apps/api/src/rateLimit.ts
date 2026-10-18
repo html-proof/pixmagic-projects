@@ -64,6 +64,13 @@ export const LIMITS = {
   shopifyInstall: { max: 20, windowSec: 600 },
   /** "Refresh data", per store (keeps Shopify's rate limit for real work). */
   resync: { max: 1, windowSec: 300 },
+  // ---- Inventory ----
+  /** "Refresh stock", per store: each one reads every location's levels from Shopify. */
+  inventoryRefresh: { max: 1, windowSec: 300 },
+  /** Stock changes sent to Shopify, per user. */
+  inventoryAdjust: { max: 60, windowSec: 600 },
+  /** A product's images read live from Shopify, per user. */
+  inventoryMedia: { max: 120, windowSec: 600 },
   /** Optional-scope refresh/revoke, per store: one Shopify call each. */
   scopes: { max: 3, windowSec: 10 },
   /** Ad accounts "Sync now", per store and user: each queues a sync per connected account. */

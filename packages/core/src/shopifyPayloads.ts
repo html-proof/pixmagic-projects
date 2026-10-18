@@ -31,6 +31,8 @@ const amount = z.union([z.string(), z.number()]);
 const count = z.union([z.number().int(), z.string().regex(/^\d+$/, "not a count")]);
 const quantity = z.number().int();
 const str = z.string().nullish();
+/** A field read only for display: any scalar, or null. Anything else is read as absent rather than rejecting the payload. */
+const looseScalar = z.union([z.string(), z.number(), z.boolean()]).nullish().catch(null);
 
 // ---------------------------------------------------------------- REST webhooks
 
@@ -111,6 +113,21 @@ export const restVariantSchema = obj({
   /** Present (even as null) only on payloads before API 2024-07; normalizeRestVariant checks for the key. */
   inventory_management: str,
   updated_at: timestamp.nullish(),
+  // Product information for the Inventory module. Loosely typed on purpose: one of these in an
+  // unexpected shape must not reject the whole product (its variants would then go unrecorded).
+  created_at: timestamp.nullish(),
+  inventory_item_id: restId.nullish(),
+  barcode: looseScalar,
+  compare_at_price: looseScalar,
+  option1: looseScalar,
+  option2: looseScalar,
+  option3: looseScalar,
+  taxable: looseScalar,
+  inventory_policy: looseScalar,
+  requires_shipping: looseScalar,
+  weight: looseScalar,
+  weight_unit: looseScalar,
+  position: looseScalar,
 });
 
 /**
@@ -128,6 +145,15 @@ export const restProductSchema = obj({
   updated_at: timestamp.nullish(),
   variants: z.array(restVariantSchema).nullish(),
   variant_gids: z.array(obj({ admin_graphql_api_id: gid })).nullish(),
+  // Product information (Inventory module), as loose as the variant's.
+  handle: looseScalar,
+  body_html: looseScalar,
+  /** Comma separated in REST payloads. */
+  tags: z.union([z.string(), z.array(z.string())]).nullish(),
+  image: obj({ src: looseScalar }).nullish().catch(null),
+  images: z.array(obj({ src: looseScalar })).nullish().catch(null),
+  /** The option names, in the order of the variants' option1..3. */
+  options: z.array(obj({ name: looseScalar, position: looseScalar })).nullish().catch(null),
 });
 
 /** products/delete carries only the id. */
@@ -404,6 +430,14 @@ export const graphqlProductSchema = obj({
   productType: str,
   createdAt: timestamp.nullish(),
   updatedAt: timestamp,
+  // Product information (Inventory module). Absent on pages asked for before it was read.
+  handle: str,
+  tags: z.array(z.string()).nullish().catch(null),
+  onlineStoreUrl: str,
+  description: str,
+  category: obj({ fullName: str }).nullish().catch(null),
+  featuredMedia: obj({ preview: obj({ image: obj({ url: str }).nullish() }).nullish() }).nullish().catch(null),
+  collections: obj({ nodes: z.array(obj({ id: gid, title: str })) }).nullish().catch(null),
 });
 
 export const graphqlVariantSchema = obj({
@@ -415,7 +449,21 @@ export const graphqlVariantSchema = obj({
   updatedAt: timestamp,
   product: obj({ id: gid }),
   /** null when Shopify withholds it (ACCESS_DENIED), undefined when not asked for: cost and tracking unknown. */
-  inventoryItem: obj({ tracked: z.boolean().nullish(), unitCost: obj({ amount: amount.nullish() }).nullish() }).nullish(),
+  inventoryItem: obj({
+    id: gid.nullish(),
+    tracked: z.boolean().nullish(),
+    requiresShipping: z.boolean().nullish(),
+    unitCost: obj({ amount: amount.nullish() }).nullish(),
+    measurement: obj({ weight: obj({ value: z.number().nullish(), unit: str }).nullish() }).nullish().catch(null),
+  }).nullish(),
+  // Variant details (Inventory module).
+  createdAt: timestamp.nullish(),
+  barcode: str,
+  compareAtPrice: amount.nullish(),
+  taxable: z.boolean().nullish(),
+  inventoryPolicy: str,
+  position: z.number().int().nullish(),
+  selectedOptions: z.array(obj({ name: z.string(), value: z.string() })).nullish().catch(null),
 });
 
 /** Order.fulfillments as the WhatsApp shipment poll asks for them (SHIPMENTS_QUERY in whatsapp/events.ts). */
@@ -437,6 +485,70 @@ export type GraphqlMoney = z.output<typeof moneyBag>;
 export type GraphqlOrder = z.output<typeof graphqlOrderSchema>;
 export type GraphqlProduct = z.output<typeof graphqlProductSchema>;
 export type GraphqlVariant = z.output<typeof graphqlVariantSchema>;
+
+// ---------------------------------------------------------------- Inventory (core/inventory)
+
+const quantityList = z.array(obj({ name: z.string(), quantity: quantity }));
+
+/** A Location node (INVENTORY_LOCATIONS_QUERY, INVENTORY_LOCATION_QUERY). */
+export const graphqlLocationSchema = obj({
+  id: gid,
+  name: str,
+  isActive: z.boolean().nullish(),
+  fulfillsOnlineOrders: z.boolean().nullish(),
+  isFulfillmentService: z.boolean().nullish(),
+  address: obj({
+    address1: str,
+    address2: str,
+    city: str,
+    province: str,
+    zip: str,
+    country: str,
+    countryCode: str,
+    formatted: z.array(z.string()).nullish().catch(null),
+  })
+    .nullish()
+    .catch(null),
+});
+
+/** One of a location's InventoryLevel nodes (LOCATION_LEVELS_QUERY). */
+export const graphqlLocationLevelSchema = obj({
+  updatedAt: timestamp,
+  item: obj({ id: gid }),
+  quantities: quantityList,
+});
+
+/** An InventoryItem with its level at one location (ITEM_LEVEL_QUERY); `inventoryLevel` null: not stocked there. */
+export const graphqlItemLevelSchema = obj({
+  id: gid,
+  tracked: z.boolean().nullish(),
+  inventoryLevel: obj({ updatedAt: timestamp, quantities: quantityList }).nullish(),
+});
+
+/** inventory_levels/update and /connect (and /disconnect, which has no quantities). */
+export const restInventoryLevelSchema = obj({
+  inventory_item_id: restId,
+  location_id: restId,
+  available: quantity.nullish(),
+  updated_at: timestamp.nullish(),
+});
+
+/** inventory_items/update: cost, tracking and shipping, read where they change. */
+export const restInventoryItemSchema = obj({
+  id: restId,
+  sku: str,
+  cost: amount.nullish(),
+  tracked: z.boolean().nullish(),
+  requires_shipping: z.boolean().nullish(),
+  updated_at: timestamp.nullish(),
+});
+
+/** locations/create, update, delete, activate, deactivate: only the id is read (the location is read again). */
+export const restLocationSchema = obj({ id: restId });
+
+export type GraphqlLocation = z.output<typeof graphqlLocationSchema>;
+export type GraphqlLocationLevel = z.output<typeof graphqlLocationLevelSchema>;
+export type GraphqlItemLevel = z.output<typeof graphqlItemLevelSchema>;
 
 // ---------------------------------------------------------------- parsing
 

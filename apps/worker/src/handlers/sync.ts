@@ -5,6 +5,7 @@ import { env, logger, normalizeGraphqlOrder, normalizeGraphqlProduct, normalizeG
 import { expandScopes } from "@app/shared";
 import { enqueueAggregate, type WorkerDeps } from "./common.js";
 import { completeOrder, fetchPage, gql, MAX_PACE_DELAY_S, type Pace, type Page } from "./shopifyRead.js";
+import { runInventoryStep } from "./inventory.js";
 
 /** Shopify only exposes the last 60 days of orders without read_all_orders. */
 export const BACKFILL_DAYS = 60;
@@ -64,7 +65,8 @@ export async function runSync(data: SyncJobData, deps: WorkerDeps) {
   if (!store || store.status === "uninstalled") return { skipped: true };
   const job = await systemDb.syncJob.findUnique({ where: { id: data.syncJobId } });
   if (!job || job.status === "succeeded") return { skipped: true }; // redelivery
-  if (!data.cursor) {
+  // An inventory pass also starts each location's levels without a cursor: only its first message starts the job.
+  if (!data.cursor && !(data.kind === "inventory" && data.inventory && data.inventory.phase !== "locations")) {
     const now = new Date();
     await systemDb.syncJob.update({ where: { id: job.id }, data: { status: "running", startedAt: now, lastActivityAt: now, attempts: { increment: 1 } } });
   }
@@ -219,6 +221,10 @@ export async function runSync(data: SyncJobData, deps: WorkerDeps) {
         return { ok: true, continued: true };
       }
       await finishBackfill();
+      break;
+    }
+    case "inventory": {
+      if ((await runInventoryStep(data, store, deps, pace)) === "continued") return { ok: true, continued: true };
       break;
     }
     case "install_pixel": {

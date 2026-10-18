@@ -10,3 +10,4 @@ export { processWebhook } from "./handlers/webhooks.js";
 export { runAggregate, rememberFailedAggregate } from "./handlers/aggregate.js";
 export { RECONCILE_ORDER_DAYS, VERIFY_AFTER_RECONCILE_S, reconcileOrderDays, seedAfterMove, settleAllCustomers, seedSalesRereads, scheduleReconcile, failStaleJobs, refreshExpiringTokens } from "./handlers/sweeps.js";
 export { runEmailJob, runWhatsappJob, runAdsSync, scheduleAdsSync } from "./handlers/integrations.js";
+export { runInventoryStep, sweepInventory, pruneInventory } from "./handlers/inventory.js";

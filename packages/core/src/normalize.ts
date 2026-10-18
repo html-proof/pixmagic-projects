@@ -105,7 +105,29 @@ export interface NormalizedProduct {
   productType: string | null;
   createdAt: Date | null;
   updatedAt: Date;
+  // Product information (Inventory module). `undefined`: the source didn't carry it, keep what is stored.
+  handle?: string | null;
+  /** Plain text, cut at DESCRIPTION_LIMIT characters. */
+  description?: string | null;
+  tags?: string[];
+  category?: string | null;
+  collections?: ProductCollection[];
+  imageUrl?: string | null;
+  onlineStoreUrl?: string | null;
 }
+
+export interface ProductCollection {
+  id: string;
+  title: string;
+}
+
+export interface VariantOption {
+  name: string;
+  value: string;
+}
+
+/** How much of a product's description is kept (the detail panel shows it; Shopify's can be long). */
+export const DESCRIPTION_LIMIT = 5000;
 
 export interface NormalizedVariant {
   shopifyId: string;
@@ -127,6 +149,21 @@ export interface NormalizedVariant {
   /** Unit cost; `undefined` when the source doesn't carry cost (REST webhooks): keep the known value. */
   unitCost?: number | null;
   updatedAt: Date;
+  // Variant details (Inventory module). `undefined`: the source didn't carry it, keep what is stored.
+  /** The variant's InventoryItem, numeric id. */
+  inventoryItemId?: string | null;
+  barcode?: string | null;
+  compareAtPrice?: number | null;
+  options?: VariantOption[] | null;
+  taxable?: boolean | null;
+  /** "deny" | "continue" */
+  inventoryPolicy?: string | null;
+  requiresShipping?: boolean | null;
+  weight?: number | null;
+  /** GRAMS | KILOGRAMS | OUNCES | POUNDS */
+  weightUnit?: string | null;
+  position?: number | null;
+  createdAt?: Date | null;
 }
 
 export const gidToId = (gid: string | number | null | undefined): string | null => {
@@ -378,6 +415,34 @@ export function normalizeGraphqlOrder(o: GraphqlOrder): NormalizedOrder {
   };
 }
 
+/** A description as plain text: HTML tags and spacing collapsed, the common entities decoded, cut at DESCRIPTION_LIMIT. */
+export function plainDescription(html: string | null | undefined): string | null {
+  if (!html) return null;
+  const textOnly = html
+    .replace(/<(script|style)[^>]*>[\s\S]*?<\/\1>/gi, " ")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&")
+    .replace(/\s+/g, " ")
+    .trim();
+  return textOnly ? textOnly.slice(0, DESCRIPTION_LIMIT) : null;
+}
+
+const scalarText = (v: string | number | boolean | null | undefined): string | null => (v === null || v === undefined || v === "" ? null : String(v));
+const scalarNum = (v: string | number | boolean | null | undefined): number | null => {
+  if (v === null || v === undefined || v === "" || typeof v === "boolean") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+};
+const scalarBool = (v: string | number | boolean | null | undefined): boolean | null => (typeof v === "boolean" ? v : v === "true" ? true : v === "false" ? false : null);
+
+/** REST's weight units as GraphQL names them (WeightUnit). */
+const REST_WEIGHT_UNIT: Record<string, string> = { g: "GRAMS", kg: "KILOGRAMS", oz: "OUNCES", lb: "POUNDS" };
+
 export function normalizeGraphqlProduct(p: GraphqlProduct): NormalizedProduct {
   return {
     shopifyId: gidToId(p.id)!,
@@ -387,11 +452,20 @@ export function normalizeGraphqlProduct(p: GraphqlProduct): NormalizedProduct {
     productType: text(p.productType),
     createdAt: p.createdAt ? date(p.createdAt) : null,
     updatedAt: date(p.updatedAt),
+    handle: text(p.handle),
+    description: p.description ? p.description.slice(0, DESCRIPTION_LIMIT) || null : null,
+    tags: p.tags ?? [],
+    category: text(p.category?.fullName),
+    collections: (p.collections?.nodes ?? []).map((c) => ({ id: gidToId(c.id)!, title: c.title ?? "" })),
+    imageUrl: text(p.featuredMedia?.preview?.image?.url),
+    onlineStoreUrl: text(p.onlineStoreUrl),
   };
 }
 
-/** products/create|update webhook payload. */
+/** products/create|update webhook payload. Collections and the category aren't in it (kept as stored). */
 export function normalizeRestProduct(p: RestProduct): NormalizedProduct {
+  const tags = typeof p.tags === "string" ? p.tags.split(",").map((t) => t.trim()).filter(Boolean) : p.tags ?? undefined;
+  const image = scalarText(p.image?.src) ?? scalarText(p.images?.[0]?.src);
   return {
     shopifyId: String(p.id),
     title: p.title ?? "",
@@ -400,6 +474,10 @@ export function normalizeRestProduct(p: RestProduct): NormalizedProduct {
     productType: text(p.product_type),
     createdAt: p.created_at ? date(p.created_at) : null,
     updatedAt: p.updated_at ? date(p.updated_at) : new Date(),
+    ...(p.handle !== undefined ? { handle: scalarText(p.handle) } : {}),
+    ...(p.body_html !== undefined ? { description: plainDescription(scalarText(p.body_html)) } : {}),
+    ...(tags !== undefined ? { tags } : {}),
+    ...(p.image !== undefined || p.images !== undefined ? { imageUrl: image } : {}),
   };
 }
 
@@ -409,6 +487,7 @@ export function normalizeGraphqlVariant(v: GraphqlVariant): NormalizedVariant {
   const qty = v.inventoryQuantity ?? null;
   const productShopifyId = gidToId(v.product.id);
   if (!productShopifyId) throw new Error(`Variant ${v.id} has no product id`);
+  const weight = item?.measurement?.weight;
   return {
     shopifyId: gidToId(v.id)!,
     productShopifyId,
@@ -418,6 +497,17 @@ export function normalizeGraphqlVariant(v: GraphqlVariant): NormalizedVariant {
     inventoryQuantity: item?.tracked === false ? null : qty,
     unitCost: item ? (item.unitCost?.amount != null ? num(item.unitCost.amount) : null) : undefined,
     updatedAt: date(v.updatedAt),
+    inventoryItemId: item?.id ? gidToId(item.id) : undefined,
+    barcode: text(v.barcode),
+    compareAtPrice: v.compareAtPrice != null && v.compareAtPrice !== "" ? num(v.compareAtPrice) : null,
+    options: v.selectedOptions ?? null,
+    taxable: v.taxable ?? null,
+    inventoryPolicy: text(v.inventoryPolicy)?.toLowerCase() ?? null,
+    requiresShipping: item ? (item.requiresShipping ?? null) : undefined,
+    weight: item ? (weight?.value ?? null) : undefined,
+    weightUnit: item ? text(weight?.unit) : undefined,
+    position: v.position ?? null,
+    createdAt: v.createdAt ? date(v.createdAt) : null,
   };
 }
 
@@ -434,6 +524,11 @@ export function normalizeRestVariant(v: RestVariant, product?: RestProduct): Nor
   const hasTracking = "inventory_management" in v;
   const untracked = hasTracking && !v.inventory_management;
   const updated = v.updated_at ?? product?.updated_at;
+  // option1..3 named after the product's options, in order (a variant of a product without options has "Default Title").
+  const names = (product?.options ?? []).map((o) => scalarText(o.name));
+  const values = [v.option1, v.option2, v.option3].map(scalarText);
+  const options = values.flatMap((value, i) => (value !== null && names[i] ? [{ name: names[i]!, value }] : []));
+  const unit = scalarText(v.weight_unit);
   return {
     shopifyId: String(v.id),
     productShopifyId: String(productId),
@@ -444,6 +539,16 @@ export function normalizeRestVariant(v: RestVariant, product?: RestProduct): Nor
     ...(!hasTracking && qty !== undefined ? { trackingUnknown: true } : {}),
     unitCost: undefined,
     updatedAt: updated ? date(updated) : new Date(),
+    ...(v.inventory_item_id != null ? { inventoryItemId: String(v.inventory_item_id) } : {}),
+    ...(v.barcode !== undefined ? { barcode: scalarText(v.barcode) } : {}),
+    ...(v.compare_at_price !== undefined ? { compareAtPrice: scalarNum(v.compare_at_price) } : {}),
+    ...(product?.options && values.some((x) => x !== null) ? { options } : {}),
+    ...(v.taxable !== undefined ? { taxable: scalarBool(v.taxable) } : {}),
+    ...(v.inventory_policy !== undefined ? { inventoryPolicy: scalarText(v.inventory_policy)?.toLowerCase() ?? null } : {}),
+    ...(v.requires_shipping !== undefined ? { requiresShipping: scalarBool(v.requires_shipping) } : {}),
+    ...(v.weight !== undefined ? { weight: scalarNum(v.weight), weightUnit: unit ? (REST_WEIGHT_UNIT[unit] ?? unit.toUpperCase()) : null } : {}),
+    ...(v.position !== undefined ? { position: scalarNum(v.position) } : {}),
+    ...(v.created_at ? { createdAt: date(v.created_at) } : {}),
   };
 }
 

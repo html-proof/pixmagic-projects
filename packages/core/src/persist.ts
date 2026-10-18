@@ -459,7 +459,7 @@ export async function writeOrderBatch(store: StoreCtx, orders: NormalizedOrder[]
 export async function upsertProduct(
   store: Pick<Store, "id" | "workspaceId">,
   p: Pick<NormalizedProduct, "shopifyId" | "title" | "status" | "updatedAt"> &
-    Partial<Pick<NormalizedProduct, "vendor" | "productType" | "createdAt">>,
+    Partial<Pick<NormalizedProduct, "vendor" | "productType" | "createdAt" | "handle" | "description" | "tags" | "category" | "collections" | "imageUrl" | "onlineStoreUrl">>,
 ): Promise<boolean> {
   const where = { storeId_shopifyId: { storeId: store.id, shopifyId: p.shopifyId } };
   const existing = await systemDb.product.findUnique({ where, select: { shopifyUpdatedAt: true } });
@@ -471,6 +471,13 @@ export async function upsertProduct(
     ...(p.vendor !== undefined ? { vendor: p.vendor } : {}),
     ...(p.productType !== undefined ? { productType: p.productType } : {}),
     ...(p.createdAt !== undefined ? { shopifyCreatedAt: p.createdAt } : {}),
+    ...(p.handle !== undefined ? { handle: p.handle } : {}),
+    ...(p.description !== undefined ? { description: p.description } : {}),
+    ...(p.tags !== undefined ? { tags: p.tags } : {}),
+    ...(p.category !== undefined ? { category: p.category } : {}),
+    ...(p.collections !== undefined ? { collections: p.collections as unknown as Prisma.InputJsonValue } : {}),
+    ...(p.imageUrl !== undefined ? { imageUrl: p.imageUrl } : {}),
+    ...(p.onlineStoreUrl !== undefined ? { onlineStoreUrl: p.onlineStoreUrl } : {}),
   };
   return writeIfNotNewer(
     () => systemDb.product.updateMany({ where: { storeId: store.id, shopifyId: p.shopifyId, shopifyUpdatedAt: { lte: p.updatedAt } }, data }),
@@ -497,6 +504,23 @@ async function writeIfNotNewer(update: () => Promise<{ count: number }>, create:
   }
 }
 
+/** A variant's details for the Inventory module, as columns: only the ones the source carried. */
+function variantDetails(v: NormalizedVariant) {
+  return {
+    ...(v.inventoryItemId !== undefined ? { inventoryItemId: v.inventoryItemId } : {}),
+    ...(v.barcode !== undefined ? { barcode: v.barcode } : {}),
+    ...(v.compareAtPrice !== undefined ? { compareAtPrice: v.compareAtPrice } : {}),
+    ...(v.options !== undefined ? { options: v.options === null ? Prisma.DbNull : (v.options as unknown as Prisma.InputJsonValue) } : {}),
+    ...(v.taxable !== undefined ? { taxable: v.taxable } : {}),
+    ...(v.inventoryPolicy !== undefined ? { inventoryPolicy: v.inventoryPolicy } : {}),
+    ...(v.requiresShipping !== undefined ? { requiresShipping: v.requiresShipping } : {}),
+    ...(v.weight !== undefined ? { weight: v.weight } : {}),
+    ...(v.weightUnit !== undefined ? { weightUnit: v.weightUnit } : {}),
+    ...(v.position !== undefined ? { position: v.position } : {}),
+    ...(v.createdAt !== undefined ? { shopifyCreatedAt: v.createdAt } : {}),
+  };
+}
+
 /**
  * Idempotent variant upsert (older payloads never overwrite newer ones). Fields the
  * source doesn't carry (`undefined`) keep their stored value: REST webhooks have no
@@ -517,6 +541,7 @@ export async function upsertVariant(store: Pick<Store, "id" | "workspaceId">, v:
     shopifyUpdatedAt: v.updatedAt,
     ...(v.inventoryQuantity !== undefined && !keepUntracked ? { inventoryQuantity: v.inventoryQuantity } : {}),
     ...(v.unitCost !== undefined ? { unitCost: v.unitCost } : {}),
+    ...variantDetails(v),
   };
   return writeIfNotNewer(
     () => systemDb.productVariant.updateMany({ where: { storeId: store.id, shopifyId: v.shopifyId, shopifyUpdatedAt: { lte: v.updatedAt } }, data }),
@@ -555,21 +580,33 @@ function dedupe<T extends { shopifyId: string }>(rows: T[]): T[] {
  * needs their per-row return value and their "undefined keeps the stored value" semantics.
  */
 export async function bulkUpsertProducts(store: Pick<Store, "id" | "workspaceId">, products: NormalizedProduct[]) {
-  const rows = dedupe(products);
+  const all = dedupe(products);
+  // Without the product information (a page asked for before it was read), the stored one is kept.
+  const partial = all.filter((p) => p.handle === undefined);
+  for (const p of partial) await upsertProduct(store, p);
+  const rows = all.filter((p) => p.handle !== undefined);
   if (!rows.length) return;
   await systemDb.$executeRaw`
-    INSERT INTO products (id, workspace_id, store_id, shopify_id, title, status, vendor, product_type, shopify_created_at, shopify_updated_at)
+    INSERT INTO products (id, workspace_id, store_id, shopify_id, title, status, vendor, product_type, shopify_created_at, shopify_updated_at,
+                          handle, description, tags, category, collections, image_url, online_store_url)
     SELECT gen_random_uuid()::text, ${store.workspaceId}, ${store.id}, s.shopify_id, s.title, s.status, s.vendor, s.product_type,
-           (s.created_at)::timestamptz AT TIME ZONE 'UTC', (s.updated_at)::timestamptz AT TIME ZONE 'UTC'
+           (s.created_at)::timestamptz AT TIME ZONE 'UTC', (s.updated_at)::timestamptz AT TIME ZONE 'UTC',
+           s.handle, s.description, ARRAY(SELECT jsonb_array_elements_text(s.tags::jsonb)), s.category, s.collections::jsonb, s.image_url, s.online_store_url
     FROM unnest(
       ${rows.map((p) => p.shopifyId)}::text[], ${rows.map((p) => p.title)}::text[], ${rows.map((p) => p.status)}::text[],
       ${rows.map((p) => p.vendor ?? null)}::text[], ${rows.map((p) => p.productType ?? null)}::text[],
-      ${rows.map((p) => ts(p.createdAt))}::text[], ${rows.map((p) => ts(p.updatedAt))}::text[]
-    ) AS s(shopify_id, title, status, vendor, product_type, created_at, updated_at)
+      ${rows.map((p) => ts(p.createdAt))}::text[], ${rows.map((p) => ts(p.updatedAt))}::text[],
+      ${rows.map((p) => p.handle ?? null)}::text[], ${rows.map((p) => p.description ?? null)}::text[],
+      ${rows.map((p) => JSON.stringify(p.tags ?? []))}::text[], ${rows.map((p) => p.category ?? null)}::text[],
+      ${rows.map((p) => JSON.stringify(p.collections ?? []))}::text[], ${rows.map((p) => p.imageUrl ?? null)}::text[],
+      ${rows.map((p) => p.onlineStoreUrl ?? null)}::text[]
+    ) AS s(shopify_id, title, status, vendor, product_type, created_at, updated_at, handle, description, tags, category, collections, image_url, online_store_url)
     ON CONFLICT (store_id, shopify_id) DO UPDATE SET
       title = EXCLUDED.title, status = EXCLUDED.status, vendor = EXCLUDED.vendor,
       product_type = EXCLUDED.product_type, shopify_created_at = EXCLUDED.shopify_created_at,
-      shopify_updated_at = EXCLUDED.shopify_updated_at
+      shopify_updated_at = EXCLUDED.shopify_updated_at, handle = EXCLUDED.handle, description = EXCLUDED.description,
+      tags = EXCLUDED.tags, category = EXCLUDED.category, collections = EXCLUDED.collections,
+      image_url = EXCLUDED.image_url, online_store_url = EXCLUDED.online_store_url
     WHERE products.shopify_updated_at <= EXCLUDED.shopify_updated_at`;
 }
 
@@ -582,25 +619,44 @@ export async function bulkUpsertProducts(store: Pick<Store, "id" | "workspaceId"
  */
 export async function bulkUpsertVariants(store: Pick<Store, "id" | "workspaceId">, variants: NormalizedVariant[]) {
   const rows = dedupe(variants);
-  const partial = rows.filter((v) => v.unitCost === undefined || v.trackingUnknown === true || v.inventoryQuantity === undefined);
+  // Also one at a time: a page without the variant details (asked for before they were read, or
+  // with the inventory item withheld), whose stored details are kept.
+  const partial = rows.filter(
+    (v) => v.unitCost === undefined || v.trackingUnknown === true || v.inventoryQuantity === undefined || v.barcode === undefined || v.inventoryItemId === undefined || v.weight === undefined,
+  );
   const full = rows.filter((v) => !partial.includes(v));
   for (const v of partial) await upsertVariant(store, v);
   if (!full.length) return;
+  const txt = (x: string | number | boolean | null | undefined) => (x === null || x === undefined ? null : String(x));
   await systemDb.$executeRaw`
-    INSERT INTO product_variants (id, workspace_id, store_id, product_shopify_id, shopify_id, title, sku, price, inventory_quantity, unit_cost, shopify_updated_at)
+    INSERT INTO product_variants (id, workspace_id, store_id, product_shopify_id, shopify_id, title, sku, price, inventory_quantity, unit_cost, shopify_updated_at,
+                                  inventory_item_id, barcode, compare_at_price, options, taxable, inventory_policy, requires_shipping, weight, weight_unit, position, shopify_created_at)
     SELECT gen_random_uuid()::text, ${store.workspaceId}, ${store.id}, s.product_shopify_id, s.shopify_id, s.title, s.sku,
-           s.price::numeric, s.inventory_quantity::int, s.unit_cost::numeric, (s.updated_at)::timestamptz AT TIME ZONE 'UTC'
+           s.price::numeric, s.inventory_quantity::int, s.unit_cost::numeric, (s.updated_at)::timestamptz AT TIME ZONE 'UTC',
+           s.inventory_item_id, s.barcode, s.compare_at_price::numeric, s.options::jsonb, s.taxable::boolean, s.inventory_policy,
+           s.requires_shipping::boolean, s.weight::numeric, s.weight_unit, s.position::int, (s.created_at)::timestamptz AT TIME ZONE 'UTC'
     FROM unnest(
       ${full.map((v) => v.productShopifyId)}::text[], ${full.map((v) => v.shopifyId)}::text[], ${full.map((v) => v.title)}::text[],
       ${full.map((v) => v.sku ?? null)}::text[], ${full.map((v) => String(v.price))}::text[],
       ${full.map((v) => (v.inventoryQuantity == null ? null : String(v.inventoryQuantity)))}::text[],
       ${full.map((v) => (v.unitCost == null ? null : String(v.unitCost)))}::text[],
-      ${full.map((v) => ts(v.updatedAt))}::text[]
-    ) AS s(product_shopify_id, shopify_id, title, sku, price, inventory_quantity, unit_cost, updated_at)
+      ${full.map((v) => ts(v.updatedAt))}::text[],
+      ${full.map((v) => v.inventoryItemId ?? null)}::text[], ${full.map((v) => v.barcode ?? null)}::text[],
+      ${full.map((v) => txt(v.compareAtPrice))}::text[], ${full.map((v) => (v.options ? JSON.stringify(v.options) : null))}::text[],
+      ${full.map((v) => txt(v.taxable))}::text[], ${full.map((v) => v.inventoryPolicy ?? null)}::text[],
+      ${full.map((v) => txt(v.requiresShipping))}::text[], ${full.map((v) => txt(v.weight))}::text[],
+      ${full.map((v) => v.weightUnit ?? null)}::text[], ${full.map((v) => txt(v.position))}::text[],
+      ${full.map((v) => ts(v.createdAt))}::text[]
+    ) AS s(product_shopify_id, shopify_id, title, sku, price, inventory_quantity, unit_cost, updated_at,
+           inventory_item_id, barcode, compare_at_price, options, taxable, inventory_policy, requires_shipping, weight, weight_unit, position, created_at)
     ON CONFLICT (store_id, shopify_id) DO UPDATE SET
       product_shopify_id = EXCLUDED.product_shopify_id, title = EXCLUDED.title, sku = EXCLUDED.sku,
       price = EXCLUDED.price, inventory_quantity = EXCLUDED.inventory_quantity, unit_cost = EXCLUDED.unit_cost,
-      shopify_updated_at = EXCLUDED.shopify_updated_at
+      shopify_updated_at = EXCLUDED.shopify_updated_at, inventory_item_id = EXCLUDED.inventory_item_id,
+      barcode = EXCLUDED.barcode, compare_at_price = EXCLUDED.compare_at_price, options = EXCLUDED.options,
+      taxable = EXCLUDED.taxable, inventory_policy = EXCLUDED.inventory_policy, requires_shipping = EXCLUDED.requires_shipping,
+      weight = EXCLUDED.weight, weight_unit = EXCLUDED.weight_unit, position = EXCLUDED.position,
+      shopify_created_at = EXCLUDED.shopify_created_at
     WHERE product_variants.shopify_updated_at <= EXCLUDED.shopify_updated_at`;
 }
 
@@ -615,20 +671,27 @@ export async function pruneVariants(
   keepShopifyIds: string[],
   asOf: Date,
 ): Promise<number> {
-  const res = await systemDb.productVariant.deleteMany({
-    where: {
-      storeId: store.id,
-      productShopifyId,
-      shopifyId: { notIn: keepShopifyIds },
-      shopifyUpdatedAt: { lte: asOf },
-    },
-  });
+  const where = { storeId: store.id, productShopifyId, shopifyId: { notIn: keepShopifyIds }, shopifyUpdatedAt: { lte: asOf } };
+  const items = await variantItems(store.id, where);
+  const [res] = await systemDb.$transaction([
+    systemDb.productVariant.deleteMany({ where }),
+    // Their stock went with them in Shopify (the inventory item belongs to the variant).
+    systemDb.inventoryLevel.deleteMany({ where: { storeId: store.id, inventoryItemId: { in: items } } }),
+  ]);
   return res.count;
 }
 
-/** products/delete: the product and all of its variants. */
+/** The inventory items of the variants `where` picks. */
+async function variantItems(storeId: string, where: Prisma.ProductVariantWhereInput): Promise<string[]> {
+  const rows = await systemDb.productVariant.findMany({ where: { ...where, storeId, inventoryItemId: { not: null } }, select: { inventoryItemId: true } });
+  return rows.map((r) => r.inventoryItemId!);
+}
+
+/** products/delete: the product, all of its variants and their stock levels. */
 export async function deleteProduct(store: Pick<Store, "id">, productShopifyId: string) {
+  const items = await variantItems(store.id, { productShopifyId });
   await systemDb.$transaction([
+    systemDb.inventoryLevel.deleteMany({ where: { storeId: store.id, inventoryItemId: { in: items } } }),
     systemDb.productVariant.deleteMany({ where: { storeId: store.id, productShopifyId } }),
     systemDb.product.deleteMany({ where: { storeId: store.id, shopifyId: productShopifyId } }),
   ]);
@@ -807,6 +870,15 @@ export async function purgeStoreData(storeId: string, fetchImpl?: FetchLike) {
     systemDb.order.deleteMany({ where: { storeId } }),
     systemDb.productVariant.deleteMany({ where: { storeId } }),
     systemDb.product.deleteMany({ where: { storeId } }),
+    // Inventory: stock levels, locations, the stock history and its records, alerts and settings.
+    systemDb.inventoryLevel.deleteMany({ where: { storeId } }),
+    systemDb.inventoryLocation.deleteMany({ where: { storeId } }),
+    systemDb.inventoryMovement.deleteMany({ where: { storeId } }),
+    systemDb.inventorySnapshot.deleteMany({ where: { storeId } }),
+    systemDb.inventoryAdjustment.deleteMany({ where: { storeId } }),
+    systemDb.inventoryAlert.deleteMany({ where: { storeId } }),
+    systemDb.inventorySyncRun.deleteMany({ where: { storeId } }),
+    systemDb.inventorySettings.deleteMany({ where: { storeId } }),
     systemDb.dailyStoreMetrics.deleteMany({ where: { storeId } }),
     // Its checks against Shopify describe data that is gone.
     systemDb.reconciliation.deleteMany({ where: { storeId } }),
