@@ -207,23 +207,19 @@ On the PC there is no Docker: each job starts its own throwaway PostgreSQL 18 fr
 (`apps/web/e2e/mailpit-stub.mjs`), all on free ports; the runner stops them with the job. The deploy
 job signs in only with the OIDC deploy role and checks that it did.
 
-- The e2e job's browsers come from `C:\ms-playwright` (`PW_BROWSERS` in the job's environment
-  points elsewhere): Playwright's own download times out on the PC's network, where IPv6 addresses
-  resolve but don't connect. When Playwright moves to a new browser build, the job fails at
-  "playwright install"; fill the folder from an account where the browsers are installed (or after
-  installing them on another network), in Windows PowerShell:
-  `Copy-Item -Recurse -Force $env:LOCALAPPDATA\ms-playwright\* C:\ms-playwright`. The folder has
-  C:\'s default permissions: any signed-in account on the PC may change it (the runner's account
-  writes Playwright's `.links` record there), the same trust as what one job leaves for the next.
+- The e2e job's browsers live in `C:\ms-playwright` (`PW_BROWSERS` in the job's environment
+  points elsewhere), so "Browser for the tests" only checks them. The PC's network hands out IPv6
+  addresses with no route behind them. Most tools fall back to IPv4, but Playwright's download
+  tries IPv6 first and gives up on every attempt ("timed out after 30000ms" after 5 s). So that
+  step preloads `apps/web/e2e/ipv4-only.mjs`, and a new browser build downloads into the folder by
+  itself. If a download still fails, fill the folder by hand from an account that has the browsers,
+  in Windows PowerShell: `Copy-Item -Recurse -Force $env:LOCALAPPDATA\ms-playwright\* C:\ms-playwright`.
+  The folder has C:\'s default permissions: any signed-in account on the PC may change it, the same
+  trust as what one job leaves for the next.
 - The PC must be on and awake: queued jobs wait up to 24 hours for the runner, then are cancelled.
   A busy PC (demos, other test runs) makes the integration tests 2-3 times slower and can time one
   out: re-run the job.
 - While the runner deploys, nobody deploys by hand: the two don't share a lock.
-- The PC's network hands out IPv6 addresses with no route behind them. Most tools fall back to
-  IPv4, but Playwright's browser download tries IPv6 first and gives up on every attempt ("timed out
-  after 30000ms" after 5 s). So the e2e job's download step preloads `apps/web/e2e/ipv4-only.mjs`.
-  Browsers then stay in the runner account's profile, and only a new Playwright version downloads
-  again.
 - Pass records (`passed-*` artifacts) can't be stored while the account's artifact storage quota is
   used up ("Artifact storage quota has been hit"). Then every push to `main` runs the checks again
   (about 40 minutes on the PC) instead of reusing a pull request's pass. It costs only time.
