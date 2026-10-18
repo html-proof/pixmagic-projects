@@ -281,7 +281,15 @@ jobs:
           "$pgbin/pg_ctl" -D "$data" -l "$data.log" -o "-p $pg -c listen_addresses=localhost -c fsync=off" -w start >"$data.ctl.log" 2>&1 </dev/null
           node -e "require('child_process').spawn(process.execPath,['apps/web/e2e/mailpit-stub.mjs',process.argv[1]],{detached:true,stdio:'ignore',windowsHide:true}).unref()" "$mail"
           { echo "TEST_PG_PORT=$pg"; echo "E2E_MAILPIT_URL=http://127.0.0.1:$mail"; echo "E2E_PORT=$app"; echo "E2E_COGNITO_PORT=$cognito"; echo "E2E_LOGIN_PORT=$login"; } >> "$GITHUB_ENV"
-      - run: pnpm --filter @app/web exec playwright install --with-deps chromium
+      # The PC's network hands out IPv6 addresses with no route behind them, and Playwright's
+      # downloader always tries IPv6 first and gives up on each attempt after 5 s. There, its
+      # lookups get IPv4 addresses only (e2e/ipv4-only.mjs): for the download, not the tests.
+      - name: Browser for the tests
+        run: |
+          if [[ "${{ vars.SELF_HOSTED_RUNNER != '' }}" == true ]]; then
+            export NODE_OPTIONS="--import=file:///$(cygpath -m "$GITHUB_WORKSPACE")/apps/web/e2e/ipv4-only.mjs"
+          fi
+          pnpm --filter @app/web exec playwright install --with-deps chromium
       - run: pnpm e2e
       # For the push to main that merges this pull request (tested job). Failing to record only
       # means that push runs this job again.
