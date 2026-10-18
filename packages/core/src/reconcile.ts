@@ -20,6 +20,8 @@
  * (`finishCheck`) stored orders of the window that Shopify didn't list are looked up one by one
  * (deleted ones are removed, as Shopify's reports drop them), every day of the window is
  * recomputed from the source tables, and the totals before and after are compared with Shopify's.
+ * Orders Shopify no longer shares with the app (`withinReach`) can't be read back at all: their
+ * stored share is set aside (`setAside`) and the rest compared without it.
  * The run's progress rides in its row (`state`), so a big store's check spans several jobs.
  *
  * Nothing is ever deleted to make a number match: the only deletions are of orders Shopify itself
@@ -96,6 +98,12 @@ function add(a: Totals, b: Totals): Totals {
   return out;
 }
 
+function sub(a: Totals, b: Totals): Totals {
+  const out = zero();
+  for (const m of RECONCILE_METRICS) out[m] = a[m] - b[m];
+  return out;
+}
+
 /** Whether two figures agree: counts exactly, money to the cent (after rounding both to cents). */
 export function same(metric: ReconcileMetric, a: number, b: number): boolean {
   return COUNT_METRICS.has(metric) ? a === b : Math.abs(r2(a) - r2(b)) < CENT;
@@ -159,6 +167,13 @@ export interface CheckState {
   findings: Partial<Record<FindingKind, Finding>>;
   repaired: number;
   removed: number;
+  /**
+   * The stored share of orders Shopify no longer shares (`setAside`), per day: left out of ours
+   * before comparing, as Shopify's side can't hold them. Absent in a state saved before it existed.
+   */
+  excluded?: DayTotals;
+  /** How many orders that is. */
+  excludedOrders?: number;
 }
 
 export interface CheckWindow {
@@ -247,7 +262,19 @@ export async function startReconciliation(
 
 /** The first state of a run: what the dashboard shows for the window now. */
 export async function initialState(store: Pick<Store, "id" | "workspaceId">, w: CheckWindow): Promise<CheckState> {
-  return { cursor: null, shopify: {}, before: await storedDayTotals(store, w), seen: [], touched: [], changedDuring: 0, findings: {}, repaired: 0, removed: 0 };
+  return {
+    cursor: null,
+    shopify: {},
+    before: await storedDayTotals(store, w),
+    seen: [],
+    touched: [],
+    changedDuring: 0,
+    findings: {},
+    repaired: 0,
+    removed: 0,
+    excluded: {},
+    excludedOrders: 0,
+  };
 }
 
 /** The window's days as the dashboard reads them (daily_store_metrics), quiet days as zero. */
@@ -393,6 +420,36 @@ export function noteUnlisted(state: CheckState, order: { id: string; name: strin
   note(state, found === "gone" ? "deleted" : found === "test" ? "test_order" : "not_listed", order);
 }
 
+/**
+ * Orders Shopify no longer shares (not `withinReach`): recorded as not listed, never looked up or
+ * removed, and their stored share of the window set aside (`excluded`), so the figures are compared
+ * without them. Shopify's side can't hold them, so what they add here can be neither confirmed nor
+ * blamed for a difference; everything else still has to match to the cent.
+ */
+export async function setAside(store: Pick<Store, "id">, w: CheckWindow, state: CheckState, orders: Array<{ id: string; name: string | null }>) {
+  const days = new Set(eachDay(w.from, w.to));
+  const stored = await storedOrders(store, orders.map((o) => o.id), w);
+  const excluded = (state.excluded ??= {});
+  for (const o of orders) {
+    noteUnlisted(state, o, "out_of_reach");
+    const mine = stored.get(o.id);
+    if (!mine) continue;
+    for (const [day, t] of Object.entries(orderShare({ createdAt: mine.createdAt }, mine.sales, w.timezone, days))) excluded[day] = add(excluded[day] ?? zero(), t);
+    state.excludedOrders = (state.excludedOrders ?? 0) + 1;
+  }
+}
+
+/** What a check set aside (`setAside`), as kept in its row (`actions.setAside`). */
+export type SetAside = {
+  orders: number;
+  /** Their share of the window's figures, added up. */
+  totals: Totals;
+};
+
+function setAsideOf(state: CheckState): SetAside | null {
+  return state.excludedOrders ? { orders: state.excludedOrders, totals: roundTotals(sumDays(state.excluded ?? {})) } : null;
+}
+
 /** Days whose daily_store_metrics row doesn't match its source rows any more (a lost recompute). */
 async function staleDays(store: Pick<Store, "id" | "workspaceId">, w: CheckWindow, before: DayTotals): Promise<string[]> {
   const fresh = await sourceDayTotals(store, w);
@@ -428,38 +485,44 @@ export interface MetricResult {
   shopify: number | null;
   before: number;
   after: number;
+  /** Ours from orders Shopify no longer shares, left out of the comparison (`setAside`). */
+  setAside: number;
   status: ResultStatus;
   cause: string | null;
 }
 
 /** The finding that best explains a difference, for the record. */
 function mainCause(state: CheckState): string | null {
-  for (const k of FINDINGS) if (state.findings[k]?.count) return k;
+  // Orders set aside are out of the comparison, so they explain no difference left in it.
+  const allSetAside = (state.findings.not_listed?.count ?? 0) <= (state.excludedOrders ?? 0);
+  for (const k of FINDINGS) if (state.findings[k]?.count && !(k === "not_listed" && allSetAside)) return k;
   return null;
 }
 
 /**
- * How each figure came out. `complete` is false when the check couldn't see every order (stored
- * orders it couldn't account for, or too many to track): money it can't vouch for is then
- * not_verifiable rather than a match.
+ * How each figure came out: Shopify's total against ours without what was set aside (`setAside`).
+ * `complete` is false when the check couldn't see every order (stored orders it couldn't account
+ * for, or too many to track): money it can't vouch for is then not_verifiable rather than a match.
  */
 export function judge(state: CheckState, after: DayTotals, complete: boolean): MetricResult[] {
   const shopify = sumDays(state.shopify);
   const before = sumDays(state.before);
   const now = sumDays(after);
+  const aside = sumDays(state.excluded ?? {});
   const cause = mainCause(state);
   return RECONCILE_METRICS.map((metric) => {
     const s = shopify[metric];
     const b = before[metric];
     const a = now[metric];
-    const beforeMatched = same(metric, s, b);
-    const afterMatches = same(metric, s, a);
+    const x = aside[metric];
+    const beforeMatched = same(metric, s, b - x);
+    const afterMatches = same(metric, s, a - x);
     let status: ResultStatus;
     if (!complete && !afterMatches) status = "not_verifiable";
     else if (afterMatches) status = beforeMatched ? "match" : "repaired";
     else if (state.changedDuring > 0) status = "sync_delay";
     else status = "difference";
-    return { metric, shopify: r2(s), before: r2(b), after: r2(a), status, cause: beforeMatched ? null : cause };
+    return { metric, shopify: r2(s), before: r2(b), after: r2(a), setAside: r2(x), status, cause: beforeMatched ? null : cause };
   });
 }
 
@@ -490,11 +553,19 @@ export async function finishCheck(
   const after = await storedDayTotals(store, w);
   const results = judge(state, after, complete);
   const status = runStatus(results, complete);
-  // The days that still differ, for the record (a handful at most on a healthy store).
+  const aside = setAsideOf(state);
+  // The days that still differ once what was set aside is left out, for the record (a handful at
+  // most on a healthy store). `bizinsights` is the day as the dashboard shows it.
+  const without = (d: string) => sub(after[d]!, state.excluded?.[d] ?? zero());
   const differing = Object.keys(after)
-    .filter((d) => !sameTotals(after[d]!, state.shopify[d] ?? zero()))
+    .filter((d) => !sameTotals(without(d), state.shopify[d] ?? zero()))
     .slice(0, 31)
-    .map((day) => ({ day, shopify: roundTotals(state.shopify[day] ?? zero()), bizinsights: roundTotals(after[day]!) }));
+    .map((day) => ({
+      day,
+      shopify: roundTotals(state.shopify[day] ?? zero()),
+      bizinsights: roundTotals(after[day]!),
+      ...(state.excluded?.[day] ? { setAside: roundTotals(state.excluded[day]) } : {}),
+    }));
   await systemDb.$transaction([
     systemDb.reconciliationResult.deleteMany({ where: { reconciliationId: rec.id } }),
     systemDb.reconciliationResult.createMany({
@@ -516,12 +587,15 @@ export async function finishCheck(
         finishedAt: now,
         ordersChecked: state.seen?.length ?? 0,
         findings: { ...state.findings, ...(differing.length ? { days: differing } : {}) } as Prisma.InputJsonValue,
-        actions: { repaired: state.repaired, removed: state.removed, recomputed: eachDay(w.from, w.to).length } as Prisma.InputJsonValue,
+        actions: { repaired: state.repaired, removed: state.removed, recomputed: eachDay(w.from, w.to).length, ...(aside ? { setAside: aside } : {}) } as Prisma.InputJsonValue,
         state: Prisma.DbNull,
       },
     }),
   ]);
-  logger.info({ storeId: store.id, reconciliationId: rec.id, status, from: w.from, to: w.to, findings: findingCounts(state), repaired: state.repaired, removed: state.removed }, "checked against shopify");
+  logger.info(
+    { storeId: store.id, reconciliationId: rec.id, status, from: w.from, to: w.to, findings: findingCounts(state), repaired: state.repaired, removed: state.removed, setAside: aside },
+    "checked against shopify",
+  );
   return { status, results };
 }
 
@@ -545,6 +619,7 @@ export async function latestReconciliation(tx: Tx, { ws, storeId }: { ws: string
     }),
     tx.reconciliation.findFirst({ where: { workspaceId: ws, storeId, status: "running" }, orderBy: { startedAt: "desc" }, select: { startedAt: true } }),
   ]);
+  const aside = last ? readSetAside(last.actions) : null;
   return {
     running: running ? running.startedAt.toISOString() : null,
     last: last
@@ -560,6 +635,8 @@ export async function latestReconciliation(tx: Tx, { ws, storeId }: { ws: string
           findings: summarizeFindings(last.findings),
           repaired: Number((last.actions as { repaired?: number } | null)?.repaired ?? 0),
           removed: Number((last.actions as { removed?: number } | null)?.removed ?? 0),
+          /** Orders Shopify no longer shares, left out of the comparison, and their share of the figures. */
+          setAside: aside,
           results: RECONCILE_METRICS.map((m) => last.results.find((r) => r.metric === m))
             .filter((r): r is NonNullable<typeof r> => !!r)
             .map((r) => ({
@@ -567,12 +644,23 @@ export async function latestReconciliation(tx: Tx, { ws, storeId }: { ws: string
               shopify: r.shopifyValue === null ? null : toNumber(r.shopifyValue),
               before: r.beforeValue === null ? null : toNumber(r.beforeValue),
               bizinsights: r.afterValue === null ? null : toNumber(r.afterValue),
+              /** Part of `bizinsights` left out of the comparison (0 when nothing was). */
+              setAside: aside?.totals[r.metric as ReconcileMetric] ?? 0,
               status: r.status as ResultStatus,
               cause: r.cause,
             })),
         }
       : null,
   };
+}
+
+/** `actions.setAside` of a check's row, when it set any order aside. */
+function readSetAside(actions: unknown): SetAside | null {
+  const raw = (actions as { setAside?: { orders?: unknown; totals?: Record<string, unknown> } } | null)?.setAside;
+  if (!raw || typeof raw.orders !== "number" || raw.orders <= 0) return null;
+  const totals = zero();
+  for (const m of RECONCILE_METRICS) totals[m] = Number(raw.totals?.[m] ?? 0) || 0;
+  return { orders: raw.orders, totals };
 }
 
 /** Finding counts only (the order ids stay in the database, for support). */

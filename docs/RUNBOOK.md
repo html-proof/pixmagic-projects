@@ -30,7 +30,7 @@ Secrets are in Secrets Manager (`insights/production/app`), set with `node infra
    have sat `running` forever and held the store in `syncing`. Check `/aws/lambda/insights-production-jobs`
    around `sync_jobs.started_at` for `Task timed out` or an out-of-memory exit; if that is the
    cause, a re-sync repeats it: the fix is in the job or the function's size (`fn("jobs", ...)`
-   in `infra/cdk/lib/app-stack.ts`). `failStaleJobs` in `apps/worker/src/handlers.ts` runs on
+   in `infra/cdk/lib/app-stack.ts`). `failStaleJobs` in `apps/worker/src/handlers/sweeps.ts` runs on
    the `*/15` cron and reaps anything `running` for over 30 minutes.
 5. Data/normalisation error: capture the error, file a bug, then re-sync after the fix ships.
 6. Resolve: `UPDATE alerts SET resolved_at=now() WHERE id='…';` and set `stores.status='active'` once a sync succeeds (it does this itself on a successful orders sync).

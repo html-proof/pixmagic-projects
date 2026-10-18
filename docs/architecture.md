@@ -43,9 +43,9 @@ Each package may import only the ones above it in this table, never one below.
 | --- | --- | --- |
 | `packages/shared` | Pure functions and constants: KPI formulas, dates, roles and permissions, HMAC/AES, WhatsApp template rules, Zod schemas shared by API and UI, the staff pay/time engine (`@app/shared/staff`), the email rule and template engine (`@app/shared/email`). Browser-safe subpath exports (`@app/shared/roles`, `/dates`, `/whatsapp`, `/staff`, `/email`, ...). | Do I/O, read env, import Prisma. The UI imports subpaths only: the root barrel pulls `node:crypto` into the browser. |
 | `packages/db` | Prisma schema, migrations (with RLS policies), `systemDb` / `tenantDb` / `withTenant` / `withDb`. | Contain business rules. |
-| `packages/core` | Everything that talks to the database or an outside API on the app's behalf: Shopify client and sync, token encryption and key rotation (`keyRotation.ts`), normalizers, persistence and aggregates, alerts and audit, ad platforms (`ads/`: one client per platform), WhatsApp, email integrations (`email/`: OAuth, SMTP, delivery, rules; docs/email.md). Every Meta Graph API call, ads and WhatsApp alike, goes through `metaGraph.ts` (token in the Authorization header, paging links only to graph.facebook.com). The config schema (`env.ts`) and logger. | Know about HTTP requests or queues' delivery mechanics. |
+| `packages/core` | Everything that talks to the database or an outside API on the app's behalf: Shopify client and sync (the GraphQL documents in `shopifyQueries.ts`), token encryption and key rotation (`keyRotation.ts`), normalizers, persistence and aggregates, alerts and audit, ad platforms (`ads/`: one client per platform; `adConnections/`: connected accounts, their tokens, sync and reports), WhatsApp, email integrations (`email/`: OAuth, SMTP, delivery, rules; docs/email.md). Every Meta Graph API call, ads and WhatsApp alike, goes through `metaGraph.ts` (token in the Authorization header, paging links only to graph.facebook.com). The config schema (`env.ts`) and logger. | Know about HTTP requests or queues' delivery mechanics. |
 | `apps/api` | HTTP: routing, auth, permission checks, input validation, response shapes. | Hold business logic that a job or another route could need: put it in core. |
-| `apps/worker` | Queue consumers and cron sweeps: retries, backoff, failure bookkeeping, then a call into core. `ops/` holds one-off maintenance tasks (RUNBOOK.md). | |
+| `apps/worker` | Queue consumers and cron sweeps (`src/handlers/`: one module per job, re-exported by `handlers.ts`): retries, backoff, failure bookkeeping, then a call into core. `ops/` holds one-off maintenance tasks (RUNBOOK.md). | |
 | `apps/aws` | The Lambda entry (one build, three functions: api, jobs, cron; plus `cognitoEmail.ts`, its own small entry in the same package for the Cognito pool's email trigger): loads secrets at cold start, wires DynamoDB, SQS, S3 and SES into `Deps`, serves the UI and the API on one origin, gives every outbound call its timeout (`withTimeout`), runs migrations on request. The app's shared settings (`settings.ts`) and the local server (`local.ts`, `dev.ts`, `localQueues.ts`), which wires the same app to in-process stand-ins. | Contain logic beyond that wiring. |
 | `infra/cdk` | The AWS infrastructure as code (edge, data, app, auth and CI stacks) and the deploy, data-copy, smoke-test and rollback scripts. | Hold application code. |
 | `apps/web` | The UI (see [Frontend](#frontend-appsweb)). Depends on `@app/shared` only; talks to the API over HTTP. | Import core/db, or compute KPIs the API already returns. |
@@ -121,8 +121,9 @@ src/app/            routes (App Router). (app)/ is the signed-in shell: AppProvi
 src/components/     UI. dashboard/, whatsapp/, email/, staff/, team/, landing/ per area; app-wide pieces at
                     the top (AppUi.tsx: page header, skeleton, toasts, useAction, confirm dialog; ui.tsx:
                     Alert, EmptyState, AuthShell). A page with several tabs or sections keeps only
-                    their routing; each one is a file in components/<area>/<page>/
-                    (staff/employee/, staff/timesheets/, staff/settings/).
+                    their routing and state; the tabs and sections are components in
+                    components/<area>/<page>/, a file each (staff/employee/, staff/timesheets/,
+                    staff/settings/) or one file for small read-only ones (staff/payroll/).
 src/hooks/          animation hooks for the landing page.
 src/lib/            non-UI modules: the API client and hooks, sign-in (auth.ts: every call to /api/auth), storage, types of
                     API responses shared by several pages.
@@ -242,8 +243,8 @@ the migrations produce exactly `schema.prisma`, and that the Lambda package buil
 
 ## Known structural debt
 
-Deliberately not moved yet, because the files are under active work elsewhere and a move would turn
-that work into conflicts. Each is safe to do on its own. (Done in the 2026-10-14 restructuring:
+The planned moves are all done (below, by date); what is left needs a decision or a pass of its own,
+for the reason given on each item. (Done in the 2026-10-14 restructuring:
 dashboard reporting moved to `packages/core/src/reports/`, one cursor-paging helper, dashboard
 helpers and grading rules de-duplicated, dashboard component files renamed;
 [architecture/refactoring-report.md](architecture/refactoring-report.md). Done 2026-10-16: the
@@ -257,12 +258,16 @@ no `any` is left in the hand-written source. Done 2026-10-18
 ([architecture/initial-audit.md](architecture/initial-audit.md)): one Meta Graph transport,
 `core/ads.ts` and `core/whatsapp/events.ts` split by platform and by event, the import-cycle
 check, and the staff employee, timesheets and settings pages and the Team page split into
-components.)
+components; then `worker/handlers.ts` (one module per job in `worker/src/handlers/`),
+`core/adConnections.ts` (`core/adConnections/`), Shopify's GraphQL documents out of
+`core/normalize.ts` (`core/shopifyQueries.ts`), the pay run page's sections
+(`components/staff/payroll/`) and the sales chart (`components/dashboard/ColumnsWithTotal.tsx`).)
 
-- Large files that do several jobs: `worker/handlers.ts` (1,300 lines: every queue's handlers)
-  and `core/normalize.ts`, both being changed by the Shopify data accuracy work; then
-  `core/adConnections.ts` (OAuth hand-off, tokens, sync, reports and revocation of ad accounts).
-- Pages that are one very long component rather than many files: `staff/payroll/period/page.tsx`
-  (one 625-line component) and `components/dashboard/SalesBreakdown.tsx`. Splitting them means
-  choosing sub-components and their props, not moving code, so each wants its own change with the
-  e2e run.
+What is left is not a move:
+
+- `appsecret_proof` on Meta Graph calls: one line in `graphCall` once the owner decides "Require
+  App Secret" per Meta app (a merchant's own WhatsApp app has a secret we don't hold).
+- `noUncheckedIndexedAccess` in `apps/web` (437 findings, nearly all in landing animations): a pass
+  with visual checks.
+- No formatter (Prettier) or import sorting: one repository-wide reformat, at a moment when no
+  branch is open, as a commit of its own.

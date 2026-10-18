@@ -46,6 +46,9 @@ const FINDING_WORDS: Record<string, (n: number) => string> = {
   stale_day: (n) => `${n} ${n === 1 ? "day's total was" : "days' totals were"} behind`,
 };
 
+/** Orders Shopify no longer shares (placed over 60 days ago) are left out of a check (`setAside`). */
+const notShared = (n: number) => `${n === 1 ? "1 order" : `${fmtNum(n)} orders`} Shopify no longer shares`;
+
 /** The pill: how the last check came out, in a word, with the details on hover. */
 export function checkPill(check: CheckSummary | undefined, now: number): { tone: Tone; label: string; title: string } | null {
   if (!check) return null;
@@ -54,16 +57,22 @@ export function checkPill(check: CheckSummary | undefined, now: number): { tone:
   const when = fmtRelative(last.checkedAt, now);
   const days = fmtRange(last.from, last.to);
   const of = `${last.matched} of ${last.compared} figures`;
-  if (last.status === "verified") return { tone: "good", label: "Matches Shopify", title: `Checked against your Shopify orders ${when}: ${days} match, all ${last.compared} figures to the cent.` };
+  const excluding = last.setAside > 0 ? ` (excluding ${notShared(last.setAside)}, placed more than 60 days ago)` : "";
+  if (last.status === "verified")
+    return { tone: "good", label: "Matches Shopify", title: `Checked against your Shopify orders ${when}: ${days} match, all ${last.compared} figures to the cent${excluding}.` };
   if (last.status === "repaired")
     return {
       tone: "good",
       label: "Matches Shopify",
-      title: `Checked against your Shopify orders ${when}: ${days} match after bizinsights brought ${last.repaired === 1 ? "1 order" : `${fmtNum(last.repaired)} orders`} up to date.`,
+      title: `Checked against your Shopify orders ${when}: ${days} match after bizinsights brought ${last.repaired === 1 ? "1 order" : `${fmtNum(last.repaired)} orders`} up to date${excluding}.`,
     };
   if (last.status === "incomplete")
-    return { tone: "neutral", label: "Mostly matches Shopify", title: `Checked against your Shopify orders ${when} for ${days}: ${of} match; the rest were still changing or couldn't be checked.` };
-  return { tone: "warn", label: "Differs from Shopify", title: `Checked against your Shopify orders ${when} for ${days}: ${of} match. See About this data for which.` };
+    return {
+      tone: "neutral",
+      label: "Mostly matches Shopify",
+      title: `Checked against your Shopify orders ${when} for ${days}: ${of} match${excluding}; the rest were still changing or couldn't be checked.`,
+    };
+  return { tone: "warn", label: "Differs from Shopify", title: `Checked against your Shopify orders ${when} for ${days}: ${of} match${excluding}. See About this data for which.` };
 }
 
 export function CheckPill({ check, now }: { check: CheckSummary | undefined; now: number }) {
@@ -89,6 +98,11 @@ export function CheckDetails({ ws, storeId, check, seesFigures, canRun }: { ws: 
   const [note, setNote] = useState<string | null>(null);
   const last = check?.last ?? null;
   const d = detail.data?.last ?? null;
+  const found = Object.entries(d?.findings ?? {})
+    // Orders Shopify no longer shares, when all were set aside, are said with the figures.
+    .filter(([k, n]) => !(k === "not_listed" && (n ?? 0) <= (last?.setAside ?? 0)))
+    .map(([k, n]) => FINDING_WORDS[k]?.(n ?? 0))
+    .filter((x): x is string => !!x);
 
   const run = async () => {
     setBusy(true);
@@ -107,20 +121,17 @@ export function CheckDetails({ ws, storeId, check, seesFigures, canRun }: { ws: 
     <div className="mt-3 space-y-2" data-testid="check-details">
       <p className="font-medium text-text">Checked against Shopify</p>
       {last ? (
-        <p>
+        <p data-testid="check-summary">
           {fmtRange(last.from, last.to)}, checked {fmtRelative(last.checkedAt)}: {last.matched} of {last.compared} figures match Shopify&apos;s orders
-          {last.repaired > 0 ? <> after {last.repaired === 1 ? "1 order was" : `${fmtNum(last.repaired)} orders were`} brought up to date</> : null}.
-          {d && Object.keys(d.findings).length > 0 && (
+          {last.repaired > 0 ? <> after {last.repaired === 1 ? "1 order was" : `${fmtNum(last.repaired)} orders were`} brought up to date</> : null}
+          {last.setAside > 0 ? (
             <>
-              {" "}
-              It found:{" "}
-              {Object.entries(d.findings)
-                .map(([k, n]) => FINDING_WORDS[k]?.(n ?? 0))
-                .filter(Boolean)
-                .join("; ")}
-              .
+              , excluding {d?.setAside ? <>{fmtMoney(d.setAside.totals.totalSales, d.currency)} of sales from </> : null}
+              {notShared(last.setAside)}
             </>
-          )}
+          ) : null}
+          .
+          {found.length > 0 && <> It found: {found.join("; ")}.</>}
         </p>
       ) : (
         <p>{check?.running ? "The first check is running." : "Not checked yet: bizinsights checks each store's last 7 finished days every day."}</p>
@@ -128,6 +139,13 @@ export function CheckDetails({ ws, storeId, check, seesFigures, canRun }: { ws: 
       <p>
         Every day bizinsights reads the last week of orders back from Shopify, with each one&apos;s sales records, and adds them up again. Any order that differs (missing, out of
         date, or deleted in Shopify) is put right at once. Today is left out until it is over.
+        {last && last.setAside > 0 && (
+          <>
+            {" "}
+            Shopify shares only the last 60 days of orders with apps, so an older order that changed in these days can&apos;t be read back: its part stays in your figures but is
+            left out of the comparison, and everything else must still match to the cent.
+          </>
+        )}
       </p>
       {seesFigures && d && d.results.length > 0 && (
         <div className="overflow-x-auto">
@@ -137,6 +155,11 @@ export function CheckDetails({ ws, storeId, check, seesFigures, canRun }: { ws: 
                 <th className="py-1 pr-3 font-medium">Figure</th>
                 <th className="py-1 pr-3 font-medium">Shopify</th>
                 <th className="py-1 pr-3 font-medium">bizinsights</th>
+                {d.setAside && (
+                  <th className="py-1 pr-3 font-medium" title={`From ${notShared(d.setAside.orders)}: in bizinsights' figure, left out of the comparison`}>
+                    Excluded
+                  </th>
+                )}
                 <th className="py-1 font-medium">Result</th>
               </tr>
             </thead>
@@ -146,6 +169,7 @@ export function CheckDetails({ ws, storeId, check, seesFigures, canRun }: { ws: 
                   <td className="py-1 pr-3 text-text">{METRIC_LABEL[r.metric] ?? r.metric}</td>
                   <td className="py-1 pr-3">{fmt(r.metric, r.shopify, d.currency)}</td>
                   <td className="py-1 pr-3">{fmt(r.metric, r.bizinsights, d.currency)}</td>
+                  {d.setAside && <td className="py-1 pr-3">{r.setAside ? fmt(r.metric, r.setAside, d.currency) : "—"}</td>}
                   <td className="py-1">{RESULT_LABEL[r.status] ?? r.status}</td>
                 </tr>
               ))}

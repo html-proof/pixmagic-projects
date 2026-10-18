@@ -101,7 +101,7 @@ token and clears both expiry columns.
 | Products | `products` (100 per page) | title, status, vendor, type |
 | Variants | `productVariants` (100 per page) | price, stock on hand, unit cost |
 
-Every query's requested cost is kept under Shopify's 1000-point limit (worked out in `packages/core/src/normalize.ts`, checked by `packages/core/test/queryCost.ts`). If Shopify still answers `MAX_COST_EXCEEDED`, the sync job halves the page size and retries the same page. Webhooks keep orders, refunds and products current (an order or refund webhook whose money changed reads that order's sales records); a daily reconcile re-pulls recent orders, products and stock.
+Every query's requested cost is kept under Shopify's 1000-point limit (worked out in `packages/core/src/shopifyQueries.ts`, checked by `packages/core/test/queryCost.ts`). If Shopify still answers `MAX_COST_EXCEEDED`, the sync job halves the page size and retries the same page. Webhooks keep orders, refunds and products current (an order or refund webhook whose money changed reads that order's sales records); a daily reconcile re-pulls recent orders, products and stock.
 
 What keeps a store complete, and its limits:
 
@@ -201,7 +201,7 @@ This **is** implemented, and it is what the "Enable" button on a locked dashboar
 | Request URL, scope query, follow-up rules | [`packages/core/src/scopes.ts`](../packages/core/src/scopes.ts) |
 | `POST /workspaces/:ws/stores/:id/scopes/request`, `.../scopes/refresh` and `.../scopes/revoke` | [`apps/api/src/routes/scopes.ts`](../apps/api/src/routes/scopes.ts) |
 | Which locked modules offer a button (`requestableScopes`) | `resolveCapabilities`, [`packages/shared/src/capabilities.ts`](../packages/shared/src/capabilities.ts) |
-| Reacting to a grant we didn't initiate | `app/scopes_update`, [`apps/worker/src/handlers.ts`](../apps/worker/src/handlers.ts) |
+| Reacting to a grant we didn't initiate | `app/scopes_update`, [`apps/worker/src/handlers/webhooks.ts`](../apps/worker/src/handlers/webhooks.ts) |
 
 The app is `embedded = false`, so App Bridge's `shopify.scopes.request()` is not available and we use Shopify's [request URL](https://shopify.dev/docs/apps/build/authentication-authorization/manage-access-scopes):
 

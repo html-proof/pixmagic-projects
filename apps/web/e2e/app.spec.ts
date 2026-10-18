@@ -448,26 +448,33 @@ test("dashboard shows webhook-driven metrics and only granted modules", async ({
   await expect(page.getByTestId("metric-Total sales")).toContainText("$100.00");
 
   // The daily check against Shopify, as the worker records it (Shopify's side can't run in CI):
-  // its outcome beside the store's status, its figures under "About this data" for the owner.
+  // its outcome beside the store's status, its figures under "About this data" for the owner. One
+  // order Shopify no longer shares (placed over 60 days ago) had a US$37 edit in the window: set aside.
   const { rows: st } = await db.query("SELECT id FROM stores WHERE shop_domain = $1", [shop]);
   const { rows: rec } = await db.query(
     `INSERT INTO reconciliations (id, workspace_id, store_id, source, trigger, from_day, to_day, timezone, currency, status, orders_checked, findings, actions, started_at, finished_at)
      VALUES (gen_random_uuid()::text, $1, $2, 'shopify_records', 'scheduled', '2026-10-10', '2026-10-16', 'UTC', 'USD', 'repaired', 1,
-             '{"missing":{"count":1,"orders":[{"id":"42","name":"#42"}]}}'::jsonb, '{"repaired":1,"removed":0}'::jsonb, now(), now())
+             '{"missing":{"count":1,"orders":[{"id":"42","name":"#42"}]},"not_listed":{"count":1,"orders":[{"id":"7","name":"#7"}]}}'::jsonb,
+             '{"repaired":1,"removed":0,"setAside":{"orders":1,"totals":{"orders":0,"grossSales":33.64,"discounts":0,"returns":0,"netSales":33.64,"shipping":0,"taxes":3.36,"totalSales":37,"units":1}}}'::jsonb,
+             now(), now())
      RETURNING id`,
     [rows[0].workspace_id, st[0].id],
   );
   await db.query(
     `INSERT INTO reconciliation_results (id, workspace_id, reconciliation_id, metric, shopify_value, before_value, after_value, status, cause)
-     VALUES (gen_random_uuid()::text, $1, $2, 'orders', 1, 0, 1, 'repaired', 'missing'), (gen_random_uuid()::text, $1, $2, 'totalSales', 100, 0, 100, 'repaired', 'missing')`,
+     VALUES (gen_random_uuid()::text, $1, $2, 'orders', 1, 0, 1, 'repaired', 'missing'), (gen_random_uuid()::text, $1, $2, 'totalSales', 100, 37, 137, 'repaired', 'missing')`,
     [rows[0].workspace_id, rec[0].id],
   );
   await page.goto("/dashboard");
   await expect(page.getByTestId("shopify-check")).toContainText("Matches Shopify");
+  await expect(page.getByTestId("shopify-check")).toHaveAttribute("title", /excluding 1 order Shopify no longer shares/);
   await page.getByTestId("about-data").getByText("About this data").click();
   await expect(page.getByTestId("check-details")).toContainText("2 of 2 figures match Shopify");
-  await expect(page.getByTestId("check-details")).toContainText("1 order was missing");
+  await expect(page.getByTestId("check-details")).toContainText("excluding $37.00 of sales from 1 order Shopify no longer shares.");
+  await expect(page.getByTestId("check-details")).toContainText("It found: 1 order was missing.");
   await expect(page.getByTestId("check-table")).toContainText("Total sales");
+  await expect(page.getByTestId("check-table")).toContainText("Excluded");
+  await expect(page.getByTestId("check-table")).toContainText("$37.00");
   // This store has no token here, so its sync stopped ("error"): no "Check now" until it is connected.
   await expect(page.getByTestId("check-now")).toHaveCount(0);
 

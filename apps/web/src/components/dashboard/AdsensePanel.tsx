@@ -8,7 +8,7 @@ import { fmtLongDay, fmtMoneyCompact, fmtMoneyWhole, fmtRange, fmtSpan, plural }
 import { Icon } from "./Icons";
 import { B, changeWords, comparedOnWholeDays } from "./Narrative";
 import { Delta, Panel, Stat } from "./Primitives";
-import { ColumnsWithTotal } from "./SalesBreakdown";
+import { ColumnsWithTotal } from "./ColumnsWithTotal";
 import type { AdsenseModule, Overview } from "./types";
 
 // ---------------------------------------------------------------------------

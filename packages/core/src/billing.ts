@@ -12,7 +12,7 @@ import { systemDb, type Store } from "@app/db";
 import { env, switchedOn } from "./env.js";
 import { logger } from "./logger.js";
 import { audit } from "./notify.js";
-import { APP_SUBSCRIPTION_STATUSES } from "./normalize.js";
+import { APP_SUBSCRIPTION_STATUSES } from "./shopifyQueries.js";
 import { shopifyGraphql, type FetchLike } from "./shopify.js";
 
 export type PlanId = "free" | "growth" | "scale";

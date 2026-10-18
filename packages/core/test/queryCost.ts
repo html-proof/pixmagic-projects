@@ -1,6 +1,6 @@
 /**
  * Test-only estimator of Shopify's *requested* query cost, derived from the query text
- * so the arithmetic in src/normalize.ts can't silently drift from the queries:
+ * so the arithmetic in src/shopifyQueries.ts can't silently drift from the queries:
  *   - scalar / enum (field without a selection set) = 0
  *   - object = 1 + its selections
  *   - connection (a `first` argument and a `nodes` selection) = 2 + other selections

@@ -79,29 +79,37 @@ One-time setup in the repository's Settings → Environments → `production`: v
 `GOOGLE_SIGNIN_CLIENT_ID` and `AWS_SCHEDULES` (`on` after cutover). Required reviewers and branch
 rules for an environment need a paid plan for a private repository; the role's trust does that job.
 
-The role admits a token only when all of these claims match exactly (`githubDeployClaims` in
-`infra/cdk/lib/config.ts`; AWS STS has read GitHub's own claims since January 2026):
+The role admits a token whose `aud` is `sts.amazonaws.com` and whose `sub` is exactly what this
+repository sends: the immutable form
+`repo:html-proof@68529971/pixmagic-projects@1413246051:environment:production` (`githubOidcSubject`
+in `infra/cdk/lib/config.ts`; the repository's OIDC subject setting is left as it is). `sub` names
+no branch, so any branch's workflow naming the `production` environment gets the role. AWS STS has
+read GitHub's own claims since January 2026; the trust is to also require `job_workflow_ref` =
+`html-proof/pixmagic-projects/.github/workflows/aws-deploy.yml@refs/heads/main` and `ref` =
+`refs/heads/main` (`githubDeployClaims`), but only after a deploy has proven, on roles that grant
+nothing, that IAM checks them: a wrong trust locks every later deploy out (each run signs in before
+it deploys), and only the account's root can put it back.
 
-- `sub` exactly as this repository sends it, the immutable form
-  `repo:html-proof@68529971/pixmagic-projects@1413246051:environment:production`
-  (`githubOidcSubject`; the repository's OIDC subject setting is left as it is).
-- `job_workflow_ref` = `html-proof/pixmagic-projects/.github/workflows/aws-deploy.yml@refs/heads/main`
-  and `ref` = `refs/heads/main`: this one workflow file, run from `main`. With `sub` alone (before
-  2026-10-18), any branch's workflow naming the `production` environment got the role.
-
-The workflow checks this from both ends. Before it signs in, "Token claims the deploy role
-requires" compares its own token with those values (`infra/cdk/scripts/oidc-trust.ts claims`), so
-a trust it couldn't meet never gets deployed, and a mismatch is spelled out. After the smoke tests,
-"The next deploy can still sign in" has STS exchange a fresh token for the role (`oidc-trust.ts
-assume`; that 15-minute session is dropped unread). "Not authorized to perform
-sts:AssumeRoleWithWebIdentity" at sign-in means token and trust differ: the first step prints the
-token's values.
+The workflow checks from both ends. Before it signs in, "Token claims the deploy role requires"
+compares its own token with `githubDeployClaims` (`infra/cdk/scripts/oidc-trust.ts claims`). After
+the smoke tests, "The next deploy can still sign in" has STS exchange a fresh token for the role
+(`oidc-trust.ts assume`; that 15-minute session is dropped unread). Both do nothing when the commit
+being deployed predates the script (the workflow file is always the default branch's). "Not
+authorized to perform sts:AssumeRoleWithWebIdentity" at sign-in means token and trust differ: the
+first step prints the token's values.
 
 If "The next deploy can still sign in" fails, the release is live (nothing is rolled back) but the
-next deploy can't sign in. With the owner's admin sign-in and no deploy running: IAM console →
-Roles → `insights-production-github-deploy` → Trust relationships → Edit trust policy, delete the
-`job_workflow_ref` and `ref` lines and save. Then make `githubDeployClaims` match what the step
-printed and merge that: CloudFormation sets the trust again only when its template changes.
+next deploy can't sign in. The owner, with the account's admin sign-in and no deploy running, puts
+the trust back to `aud` and `sub` only; then fix the cause and merge it. CloudFormation sets the
+trust again only when its template changes. Save this as `trust.json`:
+
+```json
+{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Federated":"arn:aws:iam::605411278365:oidc-provider/token.actions.githubusercontent.com"},"Action":"sts:AssumeRoleWithWebIdentity","Condition":{"StringEquals":{"token.actions.githubusercontent.com:aud":"sts.amazonaws.com","token.actions.githubusercontent.com:sub":"repo:html-proof@68529971/pixmagic-projects@1413246051:environment:production"}}}]}
+```
+
+```powershell
+aws iam update-assume-role-policy --role-name insights-production-github-deploy --policy-document file://trust.json
+```
 
 Every action in the workflows is pinned to a commit SHA, with its version in a comment (a tag can
 be moved to other code; a SHA can't). Dependabot (`.github/dependabot.yml`) proposes updates once a
