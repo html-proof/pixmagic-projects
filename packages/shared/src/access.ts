@@ -486,6 +486,11 @@ export const OVERVIEW_MODULE_ACCESS = {
   adsense: ["marketing.ads"],
   ad_connections: ["marketing.ads"],
   ad_configured: ["marketing.ads"],
+  // Shopify's own figures (packages/core/src/reports/shopify.ts): its sessions with the funnel, its
+  // gross profit and the check of the sales figures against its sales report with the breakdown.
+  shopify_sessions: ["analytics.conversion"],
+  profit: ["finance.breakdown"],
+  shopify_check: ["finance.breakdown"],
   // Not a module of the overview: the live customer lists (GET .../contacts), named here so the
   // dashboard's capability list can say whether this member gets them at all.
   contacts: ["customers.list", "analytics.abandonment"],

@@ -808,6 +808,9 @@ export async function purgeStoreData(storeId: string, fetchImpl?: FetchLike) {
     systemDb.productVariant.deleteMany({ where: { storeId } }),
     systemDb.product.deleteMany({ where: { storeId } }),
     systemDb.dailyStoreMetrics.deleteMany({ where: { storeId } }),
+    // Its checks against Shopify describe data that is gone.
+    systemDb.reconciliation.deleteMany({ where: { storeId } }),
+    systemDb.shopifyReport.deleteMany({ where: { storeId } }),
     systemDb.funnelDaily.deleteMany({ where: { storeId } }),
     systemDb.funnelVisit.deleteMany({ where: { storeId } }),
     systemDb.pixelEventSeen.deleteMany({ where: { storeId } }),

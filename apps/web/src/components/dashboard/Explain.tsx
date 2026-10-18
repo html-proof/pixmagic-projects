@@ -45,6 +45,8 @@ const TERMS: Record<Topic, Terms> = {
     ["Day-by-day bars", "One bar per day. Darker bars are your stronger days: about 1.5 and 2 times your average day. The orange line underneath adds the days up as you go."],
     ["Month-by-month bars", "One bar per month this year. The change above each compares it with the month before; this month is compared with the same days of last month."],
     ["Not imported", "Shopify shares only the last 60 days of orders with most apps, so earlier days are marked instead of shown as $0."],
+    ["Checked against Shopify", "The same dates in Shopify's own sales report, next to ours, figure by figure. They should agree to the cent. “Catching up” means changes from Shopify are still being counted here, or Shopify's report hasn't included the newest orders yet."],
+    ["Gross profit (Shopify)", "Shopify's figure: net sales less the cost of the goods sold, from the cost per item recorded with each sale. Sales with no cost recorded in Shopify count as if they cost nothing, so the card says how much that is. It isn't net profit: fees, postage, apps, staff and ads aren't taken off."],
   ],
   ads: [
     ["Ad spend", "What Meta and Google charged for your ads on those days, in the ad account's currency."],
@@ -79,6 +81,9 @@ const TERMS: Record<Topic, Terms> = {
     ["Top vendors", "The brands whose products sold best in these dates, by net sales (after discounts and returns, before tax)."],
   ],
   shoppers: [
+    ["Sessions (Shopify)", "Shopify Analytics' own count of visits to your online store: a session ends after 30 minutes without activity, and bot sessions are left out by Shopify's own classification."],
+    ["Visitors (Shopify)", "The different people behind those sessions, over the whole of the dates picked (one person on three days is one visitor)."],
+    ["Conversion rate (Shopify)", "Sessions that completed checkout divided by sessions, Shopify's own formula."],
     ["Tracked visit", "One shopper on one day, however many pages they looked at, as the bizinsights pixel saw it. Not Shopify's session: Shopify ends a session after 30 minutes idle and counts shoppers who decline tracking too."],
     ["Tracked visits that bought", "The share of tracked visits that ended with a finished checkout. Shopify's conversion rate divides by its sessions instead, so the two differ."],
     ["The steps", "Visited your store → viewed a product → added to cart → started checkout → completed a purchase. A visit counts for every step it reached."],

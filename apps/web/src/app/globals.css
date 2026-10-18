@@ -143,6 +143,9 @@ body {
 @utility alert-info {
   --tone: var(--info);
 }
+@utility alert-warn {
+  --tone: var(--warn);
+}
 @keyframes alert-in {
   from { opacity: 0; transform: translateY(-4px); }
   to { opacity: 1; transform: none; }

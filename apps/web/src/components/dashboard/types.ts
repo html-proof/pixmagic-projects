@@ -300,6 +300,10 @@ export interface Overview {
     ad_connections?: { meta: number; google: number; adsense: number; hidden: number };
     /** Which platforms this server can connect (absent: none is set up). */
     ad_configured?: { meta: boolean; google: boolean; adsense: boolean };
+    /** Shopify's own figures (packages/core/src/reports/shopify.ts), with its reports granted. */
+    shopify_sessions?: ShopifySessionsModule;
+    profit?: ProfitModule;
+    shopify_check?: ShopifyCheckModule;
   };
 }
 
@@ -348,4 +352,50 @@ export interface CheckDetail {
     removed: number;
     results: Array<{ metric: CheckMetric; shopify: number | null; before: number | null; bizinsights: number | null; status: string; cause: string | null }>;
   } | null;
+}
+
+/** Where a Shopify report answer stands: figures, being fetched, or why Shopify gave none. */
+export type ReportStatus = "ready" | "loading" | "access_denied" | "unsupported" | "failed";
+
+interface ReportAnswer {
+  status: ReportStatus;
+  /** When Shopify was asked. */
+  asOf: string | null;
+  /** While the range runs: the store-local time both windows stop at (a 5-minute mark). */
+  until: string | null;
+}
+
+export interface SessionFigures {
+  sessions: number | null;
+  visitors: number | null;
+  cartSessions: number | null;
+  checkoutSessions: number | null;
+  completedSessions: number | null;
+  pageviews: number | null;
+  conversionRate: number | null;
+}
+
+export interface ShopifySessionsModule extends ReportAnswer {
+  current: SessionFigures | null;
+  previous: SessionFigures | null;
+  deltas: { sessions: number | null; visitors: number | null; conversionRate: number | null };
+}
+
+export interface ProfitModule extends ReportAnswer {
+  current: {
+    grossProfit: number | null;
+    costOfGoodsSold: number | null;
+    netSalesWithCost: number | null;
+    netSalesWithoutCost: number | null;
+    profitOnCosted: number | null;
+    marginOnCosted: number | null;
+  } | null;
+  previous: { grossProfit: number | null } | null;
+  deltas: { grossProfit: number | null };
+}
+
+export interface ShopifyCheckModule extends ReportAnswer {
+  window: { from: string; to: string };
+  rows: Array<{ metric: string; shopify: number | null; ours: number; difference: number | null; state: "match" | "differs" | "delay" | "unknown" }> | null;
+  matches: boolean | null;
 }

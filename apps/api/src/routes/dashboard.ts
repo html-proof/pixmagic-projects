@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { withTenant } from "@app/db";
 import { COMPARE_MODES, DATE_PRESETS, redactOverview, resolvePreset, seesModule } from "@app/shared";
-import { latestReconciliation, logger, revocableScopes, startReconciliation } from "@app/core";
+import { latestReconciliation, logger, requestShopifyReports, revocableScopes, startReconciliation, type ReportRequest } from "@app/core";
 import { recentSyncJobs, storeOverview, workspaceStores } from "@app/core/reports";
 import { HttpError, requireWorkspace, type Deps } from "../context.js";
 import type { App } from "../app.js";
@@ -96,6 +96,7 @@ export function dashboardRoutes(app: App, deps: Deps) {
     const q = querySchema.parse(c.req.query());
 
     let polled: Parameters<typeof autoRefresh>[1] | null = null;
+    let reports: ReportRequest[] = [];
     const body = await withTenant(ws, async (tx) => {
       const store = await tx.store.findFirst({ where: { id: storeId, workspaceId: ws } });
       if (!store) throw new HttpError(404, "Not found", "not_found");
@@ -103,6 +104,7 @@ export function dashboardRoutes(app: App, deps: Deps) {
       const now = new Date();
       const dates = resolveQueryDates(q, now, store.timezone);
       const report = redactOverview(await storeOverview(tx, store, dates, now, (m) => seesModule(access, m)), access);
+      reports = report.shopifyRefresh;
       return {
         store: publicStore(store),
         syncProblem: report.syncProblem,
@@ -123,6 +125,8 @@ export function dashboardRoutes(app: App, deps: Deps) {
     // The dashboard polls this every 15 s: use that to keep the store fresh from Shopify.
     if (polled) {
       await autoRefresh(deps, polled).catch((err) => logger.warn({ err, storeId }, "auto refresh failed"));
+      // Shopify's own report figures this answer lacked or held stale: the worker fetches them, a later poll shows them.
+      if (reports.length) await requestShopifyReports(deps, polled, reports).catch((err) => logger.warn({ err, storeId }, "shopify reports request failed"));
     }
     return c.json(body);
   });

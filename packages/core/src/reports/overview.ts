@@ -1,5 +1,5 @@
 import type { Store, Tx } from "@app/db";
-import { comparisonImported, delta, localDay, resolveCapabilities, summarize, yearBreakdown, type Comparison, type DateRange } from "@app/shared";
+import { comparisonImported, delta, localDay, resolveCapabilities, summarize, yearBreakdown, type Comparison, type DailyMetricsRow, type DateRange } from "@app/shared";
 import { adsConfigured } from "../adConnections.js";
 import { latestReconciliation } from "../reconcile.js";
 import { declaredOptionalScopes, declaredScopes } from "../scopes.js";
@@ -9,6 +9,7 @@ import type { Scope } from "./common.js";
 import { funnel } from "./funnel.js";
 import { channels, discountCodes, fulfillment, orderTiming, recentOrders, traffic } from "./orders.js";
 import { comparisonRows, customerCounts, dailyRows, dailySeries, topProducts } from "./sales.js";
+import { shopifyModules } from "./shopify.js";
 
 /**
  * Why a store's sync stopped, in a word the dashboard can explain: Shopify's own answer to the
@@ -63,9 +64,11 @@ export async function storeOverview(tx: Tx, store: Store, dates: { range: DateRa
   const change = (now: number | null, before: number | null) => (previousImported ? delta(now, before) : null);
 
   let hasData = false;
+  let rangeRows: DailyMetricsRow[] | null = null;
   if (enabled.has("sales_overview") || enabled.has("refunds") || enabled.has("customers")) {
     // While the range is still running, the comparison stops at the same time of day (Shopify's like-for-like).
     const [cur, prev] = await Promise.all([dailyRows(tx, ws, storeId, range), previousImported ? comparisonRows(tx, ws, storeId, previous, store.timezone) : []]);
+    rangeRows = cur;
     const c = summarize(cur);
     const p = summarize(prev);
     hasData = cur.some((r) => r.orders > 0 || r.refunds > 0);
@@ -171,6 +174,18 @@ export async function storeOverview(tx: Tx, store: Store, dates: { range: DateRa
 
   const freshness = await dataFreshness(tx, scope, store, now);
   const check = await checkSummary(tx, scope);
+  // Shopify's own report figures, once the store has granted its reports (read_reports): its
+  // sessions and visitors, its gross profit, and the sales figures checked against its sales report.
+  // Read from what the worker keeps; `shopifyRefresh` says which to fetch again.
+  const checkSales = store.grantedScopes.includes("read_reports") && enabled.has("sales_overview") && sees("shopify_check");
+  const shopify = await shopifyModules(
+    tx,
+    store,
+    dates,
+    { today, now, rangeRows: rangeRows ?? (checkSales ? await dailyRows(tx, ws, storeId, range) : []), dataAsOf: freshness.asOf, waiting: freshness.waiting },
+    { sessions: enabled.has("shopify_sessions"), profit: enabled.has("profit"), check: checkSales },
+  );
+  Object.assign(modules, shopify.modules);
   const failed =
     store.status === "error"
       ? await tx.syncJob.findFirst({ where: { storeId, workspaceId: ws, status: "failed" }, orderBy: { createdAt: "desc" }, select: { error: true } })
@@ -190,6 +205,8 @@ export async function storeOverview(tx: Tx, store: Store, dates: { range: DateRa
     modules,
     hasData,
     data,
+    // Shopify reports to fetch again (missing or stale); the route queues them, nothing waits.
+    shopifyRefresh: shopify.refresh,
   };
 }
 

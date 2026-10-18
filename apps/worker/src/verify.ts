@@ -43,6 +43,8 @@ import { AccessRevokedError, shopifyReader, UnrecoverableError, type WorkerDeps 
 
 /** How long one invocation walks before handing over to the next message (the function allows 15 minutes). */
 const WORK_MS = 8 * 60_000;
+/** Held by the invocation working on a run: longer than an invocation can live (15 minutes). */
+const LEASE_MS = 16 * 60_000;
 /** Ids per lookup of the orders Shopify didn't list (`nodes`: one point each). */
 const LOOKUP_BATCH = 50;
 /** While an import of the store runs, the check waits this long between looks... */
@@ -60,6 +62,18 @@ interface Page {
 }
 
 export async function runVerify(job: VerifyJob, deps: WorkerDeps, now = () => Date.now()) {
+  // One invocation per run at a time: SQS can deliver a message twice, and two walks of one run
+  // would add Shopify's totals up twice. A copy that finds the run taken leaves it to the other.
+  const lease = `verify:${job.reconciliationId}`;
+  if (!(await deps.coord.acquire(lease, LEASE_MS))) return { skipped: true };
+  try {
+    return await verifyRun(job, deps, now);
+  } finally {
+    await deps.coord.release(lease).catch(() => {});
+  }
+}
+
+async function verifyRun(job: VerifyJob, deps: WorkerDeps, now: () => number) {
   const rec = await systemDb.reconciliation.findUnique({ where: { id: job.reconciliationId } });
   if (!rec || rec.status !== "running") return { skipped: true };
   const store = await systemDb.store.findUnique({ where: { id: job.storeId } });

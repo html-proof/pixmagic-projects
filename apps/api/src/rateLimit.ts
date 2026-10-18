@@ -54,6 +54,8 @@ export const LIMITS = {
   dashboardExports: { max: 30, windowSec: 600 },
   /** "Check against Shopify now", per store: each one re-reads a week of orders from Shopify. */
   storeCheck: { max: 4, windowSec: 3600 },
+  /** The check against Shopify's reports, per store: up to 21 live ShopifyQL calls each. */
+  shopifyCheck: { max: 3, windowSec: 600 },
   /** New workspaces, per user. */
   workspaceCreate: { max: 10, windowSec: 3600 },
   /** New API keys, per workspace. */

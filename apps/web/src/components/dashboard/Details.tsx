@@ -17,6 +17,7 @@ import { B, Change, comparedOn, InShort, upDown } from "./Narrative";
 import { OverviewDetail } from "./Overview";
 import { Delta, Panel, Stat } from "./Primitives";
 import { DailySalesCard, MonthlySalesCard } from "./SalesBreakdown";
+import { ProfitCard, ShopifyCheckCard, ShopifySessionsCard } from "./ShopifyReports";
 import type { Topic } from "./topics";
 import type { Overview } from "./types";
 import { breakdownOf } from "./redacted";
@@ -171,6 +172,9 @@ function SalesDetail({ ov, currency }: { ov: Overview; currency: string }) {
         </Panel>
       )}
 
+      {ov.modules.shopify_check && <ShopifyCheckCard m={ov.modules.shopify_check} currency={currency} />}
+      {ov.modules.profit && <ProfitCard m={ov.modules.profit} currency={currency} versus={versus} />}
+
       <Panel id="d-sales-compare" title={COMPARE_TITLE[ov.previous.compare ?? "previous"]} help={`${fmtRange(ov.range.from, ov.range.to)} against ${prevPeriod}.`}>
         <div className="-mx-1 overflow-x-auto">
           <table className="w-full min-w-[26rem] text-sm">
@@ -279,8 +283,19 @@ function ProductsDetail({ ov, currency }: { ov: Overview; currency: string }) {
   );
 }
 
+/** Shopify's own sessions and visitors first, when granted; then what the pixel tracked. */
 function ShoppersDetail({ ov }: { ov: Overview }) {
-  const f = ov.modules.funnel!;
+  const s = ov.modules.shopify_sessions;
+  const f = ov.modules.funnel;
+  return (
+    <>
+      {s && <ShopifySessionsCard m={s} versus={versusWords(ov)} />}
+      {f && <FunnelDetail ov={ov} f={f} />}
+    </>
+  );
+}
+
+function FunnelDetail({ ov, f }: { ov: Overview; f: NonNullable<Overview["modules"]["funnel"]> }) {
   const leak = biggestDropOff(f.steps);
   const where = dropOffSection(leak);
   const bestEntry = bestEntryPage(f.entryPages);
@@ -579,7 +594,7 @@ export function TopicContents({
     : topic === "ads" && m.ads ? <AdsDetail ov={ov} />
     : topic === "adsense" && m.adsense ? <AdsenseDetail ov={ov} />
     : topic === "products" && (m.top_products || m.catalog) ? <ProductsDetail ov={ov} currency={currency} />
-    : topic === "shoppers" && m.funnel ? <ShoppersDetail ov={ov} />
+    : topic === "shoppers" && (m.funnel || m.shopify_sessions) ? <ShoppersDetail ov={ov} />
     : topic === "timing" && m.order_timing ? <TimingDetail ov={ov} />
     : topic === "channels" && m.channels ? <ChannelsDetail ov={ov} currency={currency} />
     : topic === "shipping" && m.fulfillment ? <ShippingDetail ov={ov} />

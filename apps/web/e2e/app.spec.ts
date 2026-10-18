@@ -447,6 +447,29 @@ test("dashboard shows webhook-driven metrics and only granted modules", async ({
   await page.getByLabel("Dates").selectOption({ label: "Last 7 days" });
   await expect(page.getByTestId("metric-Total sales")).toContainText("$100.00");
 
+  // The daily check against Shopify, as the worker records it (Shopify's side can't run in CI):
+  // its outcome beside the store's status, its figures under "About this data" for the owner.
+  const { rows: st } = await db.query("SELECT id FROM stores WHERE shop_domain = $1", [shop]);
+  const { rows: rec } = await db.query(
+    `INSERT INTO reconciliations (id, workspace_id, store_id, source, trigger, from_day, to_day, timezone, currency, status, orders_checked, findings, actions, started_at, finished_at)
+     VALUES (gen_random_uuid()::text, $1, $2, 'shopify_records', 'scheduled', '2026-10-10', '2026-10-16', 'UTC', 'USD', 'repaired', 1,
+             '{"missing":{"count":1,"orders":[{"id":"42","name":"#42"}]}}'::jsonb, '{"repaired":1,"removed":0}'::jsonb, now(), now())
+     RETURNING id`,
+    [rows[0].workspace_id, st[0].id],
+  );
+  await db.query(
+    `INSERT INTO reconciliation_results (id, workspace_id, reconciliation_id, metric, shopify_value, before_value, after_value, status, cause)
+     VALUES (gen_random_uuid()::text, $1, $2, 'orders', 1, 0, 1, 'repaired', 'missing'), (gen_random_uuid()::text, $1, $2, 'totalSales', 100, 0, 100, 'repaired', 'missing')`,
+    [rows[0].workspace_id, rec[0].id],
+  );
+  await page.goto("/dashboard");
+  await expect(page.getByTestId("shopify-check")).toContainText("Matches Shopify");
+  await page.getByTestId("about-data").getByText("About this data").click();
+  await expect(page.getByTestId("check-details")).toContainText("2 of 2 figures match Shopify");
+  await expect(page.getByTestId("check-details")).toContainText("1 order was missing");
+  await expect(page.getByTestId("check-table")).toContainText("Total sales");
+  await expect(page.getByTestId("check-now")).toBeVisible();
+
   await page.goto("/settings/stores");
   // The store card's title (the name also appears in the store switcher and the details line).
   await expect(page.locator("p").getByText(shop, { exact: true })).toBeVisible();
@@ -513,4 +536,52 @@ test("locked modules offer only the action that can work, and Enable reaches Sho
     const n = await db.query("SELECT count(*)::int AS n FROM audit_logs WHERE action = 'store.scopes_requested'");
     expect(Number(n.rows[0].n)).toBe(1);
   }).toPass({ timeout: 10_000 });
+});
+
+/**
+ * Shopify's own report figures (packages/core/src/reports/shopify.ts) for a store that granted its
+ * reports: the kept answers show as Shopify's sessions, its gross profit with what has no cost
+ * recorded, and the sales figures checked against Shopify's line by line.
+ */
+test("shows Shopify's own sessions and gross profit, and checks the sales figures against Shopify's", async ({ page }) => {
+  const email = uniqueEmail("shopifyql");
+  await signUp(page, email);
+  await createWorkspace(page, "Reports Co");
+  await stubShopify(page);
+  const { rows } = await db.query("SELECT m.workspace_id FROM memberships m JOIN users u ON u.id = m.user_id WHERE u.email = $1 LIMIT 1", [email]);
+  const ws = rows[0].workspace_id as string;
+  const shop = `reports-${Date.now()}.myshopify.com`;
+  const store = await db.query(
+    `INSERT INTO stores (id, workspace_id, shop_domain, status, timezone, currency, granted_scopes, created_at, updated_at)
+     VALUES (gen_random_uuid()::text, $1, $2, 'active', 'UTC', 'AUD', ARRAY['read_orders','read_products','read_reports'], now(), now()) RETURNING id`,
+    [ws, shop],
+  );
+  const storeId = store.rows[0].id as string;
+  await db.query(
+    `INSERT INTO daily_store_metrics (workspace_id, store_id, day, gross_sales, discounts, refunds, shipping, taxes, total_sales, orders, units, orders_with_customer, returning_customer_orders, refunded_orders)
+     VALUES ($1, $2, '2026-09-21', 1699.08, 54.53, 45.50, 34.54, 167.91, 1801.50, 5, 6, 5, 0, 1)`,
+    [ws, storeId],
+  );
+  const keep = (dataset: string, window: string, values: Record<string, number>) =>
+    db.query(`INSERT INTO shopify_reports (id, workspace_id, store_id, dataset, time_window, "values", fetched_at) VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, now())`, [ws, storeId, dataset, window, JSON.stringify(values)]);
+  await keep("sales", "2026-09-21|2026-09-21|", { grossSales: 1699.08, discounts: -54.53, salesReversals: -45.5, netSales: 1599.05, shipping: 34.54, taxes: 167.91, totalSales: 1801.5, orders: 5 });
+  await keep("profit", "2026-09-21|2026-09-21|", { grossProfit: 900, costOfGoodsSold: -650, netSalesWithCost: 1500, netSalesWithoutCost: 99.05 });
+  await keep("profit", "2026-09-20|2026-09-20|", { grossProfit: 450, costOfGoodsSold: -300, netSalesWithCost: 700, netSalesWithoutCost: 0 });
+  await keep("sessions", "2026-09-21|2026-09-21|", { sessions: 200, visitors: 150, cartSessions: 20, checkoutSessions: 10, completedSessions: 5, pageviews: 600 });
+  await keep("sessions", "2026-09-20|2026-09-20|", { sessions: 100, visitors: 90, cartSessions: 10, checkoutSessions: 5, completedSessions: 2, pageviews: 300 });
+
+  await page.goto("/dashboard?preset=custom&from=2026-09-21&to=2026-09-21&view=sales");
+  const check = page.getByTestId("module-shopify-check");
+  await expect(check).toContainText("All match");
+  await expect(check.getByTestId("shopify-check-table")).toContainText("Net sales");
+  const profit = page.getByTestId("module-profit");
+  await expect(profit).toContainText("Gross profit (Shopify)");
+  await expect(profit).toContainText("Not available");
+  await expect(profit.getByTestId("profit-missing-cost")).toContainText("had no cost recorded in Shopify");
+
+  await page.goto("/dashboard?preset=custom&from=2026-09-21&to=2026-09-21&view=shoppers");
+  const sessions = page.getByTestId("module-shopify-sessions");
+  await expect(sessions).toContainText("Sessions and visitors (Shopify)");
+  await expect(sessions).toContainText("200");
+  await expect(sessions).toContainText("2.5%");
 });
