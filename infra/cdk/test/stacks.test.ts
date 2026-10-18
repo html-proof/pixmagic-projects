@@ -600,9 +600,9 @@ describe("IAM", () => {
     }
   });
 
-  it("lets only this repository's production environment deploy from GitHub", () => {
+  it("lets only the deploy workflow on main, in this repository's production environment, deploy from GitHub", () => {
     // The immutable subject GitHub sends for this repository (owner and repository ids), not the
-    // bare name. Nothing more until a deploy has proven the workflow and branch claims (ci-stack.ts).
+    // bare name; and the workflow file and branch, which the subject doesn't name.
     t.ci.hasResourceProperties("AWS::IAM::Role", {
       RoleName: "insights-production-github-deploy",
       AssumeRolePolicyDocument: {
@@ -612,6 +612,8 @@ describe("IAM", () => {
               StringEquals: Match.exact({
                 "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
                 "token.actions.githubusercontent.com:sub": "repo:html-proof@68529971/pixmagic-projects@1413246051:environment:production",
+                "token.actions.githubusercontent.com:job_workflow_ref": "html-proof/pixmagic-projects/.github/workflows/aws-deploy.yml@refs/heads/main",
+                "token.actions.githubusercontent.com:ref": "refs/heads/main",
               }),
             },
           }),
