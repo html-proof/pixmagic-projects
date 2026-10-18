@@ -119,8 +119,9 @@ export class AuditStack extends Stack {
     // A new role can take a few seconds to be usable, and a StackSet whose role StackSets can't yet
     // assume fails (and rolls the stack back): the bucket and trail go between them.
     trailBucket.node.addDependency(adminRole, execRole);
+    const trailName = "insights-account";
     const trail = new cloudtrail.Trail(this, "Trail", {
-      trailName: "insights-account",
+      trailName,
       bucket: trailBucket,
       isMultiRegionTrail: true,
       includeGlobalServiceEvents: true,
@@ -128,6 +129,16 @@ export class AuditStack extends Stack {
       enableFileValidation: true,
       sendToCloudWatchLogs: false,
     });
+    // The Trail lets cloudtrail.amazonaws.com check the bucket's ACL and write under AWSLogs/<account>/
+    // without naming a trail (it does so only for organization trails), so another account's trail
+    // could write there too, at this account's storage cost. AWS's documented policy makes both
+    // grants conditional on this trail's ARN, which CloudTrail sends from every Region of the trail.
+    // Spelled out, not trail.trailArn: the trail waits for the bucket policy. Statement 0 is the
+    // bucket's TLS-only Deny; the Trail adds GetBucketAcl (1), then PutObject (2).
+    const trailPolicy = trailBucket.policy!.node.defaultChild as s3.CfnBucketPolicy;
+    for (const i of [1, 2]) {
+      trailPolicy.addPropertyOverride(`PolicyDocument.Statement.${i}.Condition.StringEquals.aws:SourceArn`, `arn:aws:cloudtrail:${this.region}:${account}:trail/${trailName}`);
+    }
 
     const analyzers = new CfnStackSet(this, "AccessAnalyzers", {
       stackSetName: "insights-account-access-analyzer",
