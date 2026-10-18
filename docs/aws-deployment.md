@@ -276,15 +276,28 @@ AWS: the code that already got into `main`, the same code the deploy runs. Accou
 folder `C:\actions-runner-main`, name and only label `bizinsights-pc-main`, and its own e2e
 browsers in `C:\ms-playwright-main` (`PW_BROWSERS` in the runner's `.env`; the first e2e run on
 `main` downloads them). Neither account can change the other's folders or profile, and the folders
-on the system `PATH` are administrators-only (checked 2026-10-18), so main's jobs run only programs
-administrators installed and their own.
+on the system `PATH` are administrators-only (checked 2026-10-18). Node also looks in
+`C:\node_modules` for any package a project lacks (vite asks for `fsevents`, which Windows never
+gets), and any account may create folders at C:\, so the scripts keep that folder administrators'
+too ("Hardening the runner"). Each job's PostgreSQL superuser has a password of its own: the two
+runners' jobs can run at the same time, and a superuser can run programs as the account that
+started the server.
+
+What the two runners still share: anything listening on localhost while a job runs. During main's
+e2e job that is the app under test, the sign-in stand-ins and the Mailpit stand-in, on free ports.
+A pull-request job could reach them as a client, and could log in to main's test database as the
+tenant role `app_rls` (fixed password, no superuser) and change test data. That can make main's
+tests fail or pass wrongly; it gives no way to run code as ghmain.
 
 Labels alone wouldn't keep other jobs off it: any branch's workflow can ask for any label. Its job
 hook (`infra/runner/main-only-hook.js`, which the runner runs with its own Node before every job;
 a copy in `C:\ProgramData\bizinsights-runner`, administrators-only) fails every job before its first
 step unless GitHub says it is `ci.yml` for a push to `main`, or `aws-deploy.yml` from `main` started
 by a CI run or by hand. Those values come from the job's github context, which a workflow file can't
-change. A refused job's "Set up runner" step says why.
+change. A refused job's "Set up runner" step says why. The script writes the hook into the runner's
+`.env` before it registers the runner, so a job already queued for the label meets the hook too.
+It refuses a runner, hook or browsers folder that already exists and isn't an administrator's
+(someone else may have planted files there for it to run elevated, or for ghmain to run).
 
 In an elevated Windows PowerShell, from the repository folder (asks for a new password for ghmain,
 twice):
@@ -309,7 +322,18 @@ creates. For a runner installed before 2026-10-18 (ghrunner), run once, from the
 powershell -ExecutionPolicy Bypass -File infra\runner\harden-runner.ps1
 ```
 
-It is safe to run again. For each runner account that exists (ghrunner, ghmain):
+It is safe to run again. First the folders jobs run code from, owned by Administrators
+(`infra/runner/runner-folders.ps1`). A standard account can create folders at C:\ and in
+C:\ProgramData, and a folder's owner can always rewrite its permissions, so the script stops at a
+folder that someone other than an administrator, you or the runner it belongs to made first. Look
+at what's inside, delete it in an elevated Command Prompt (`rmdir /s /q <folder>`), then run it
+again.
+
+- `C:\node_modules`: read-only to users (it creates it). Today any account could make it, and a
+  `fsevents` folder planted there would run inside every test and deploy job.
+- The e2e browsers (below), and the runner for main's hook folder.
+
+Then, for each runner account that exists (ghrunner, ghmain):
 
 - A password is required. `New-LocalUser` leaves the account flagged "password not required"
   (PASSWD_NOTREQD), which lets it be given an empty one. By hand: `net user ghrunner /passwordreq:yes`.
@@ -324,7 +348,12 @@ And the e2e job's browsers: C:\ passes "Authenticated Users: Modify" down to new
 account on the PC could replace the `chrome.exe` a runner starts. The script leaves
 `C:\ms-playwright` changeable by administrators, SYSTEM and ghrunner (which downloads new browser
 builds into it), readable by users; and `C:\ms-playwright-main` the same with ghmain, not
-readable by other accounts. By hand, for the first (the second: `ghmain`, without the last grant):
+readable by other accounts. Both are owned by Administrators from then on. By hand, for the first
+(the second: `ghmain`, without the last grant; `C:\node_modules`: no `ghrunner` grant):
+
+```powershell
+icacls C:\ms-playwright /setowner "*S-1-5-32-544" /T /C /Q
+```
 
 ```powershell
 icacls C:\ms-playwright /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" "ghrunner:(OI)(CI)M" "*S-1-5-32-545:(OI)(CI)RX"
@@ -334,7 +363,7 @@ icacls C:\ms-playwright /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32
 icacls "C:\ms-playwright\*" /reset /T /C /Q
 ```
 
-(The second makes everything inside inherit exactly that.)
+(The last makes everything inside inherit exactly that.)
 
 On the PC there is no Docker: each job starts its own throwaway PostgreSQL 18 from
 `C:\Program Files\PostgreSQL\18\bin` and the e2e job a Mailpit stand-in

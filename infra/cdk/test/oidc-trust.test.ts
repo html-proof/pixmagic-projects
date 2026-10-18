@@ -4,9 +4,11 @@ import { type Assumed, canonical, checkTrust, compareClaims, tokenClaims } from 
 
 const cfg = envConfig(() => undefined);
 const deployRoleArn = "arn:aws:iam::605411278365:role/insights-production-github-deploy";
-const admitted: Assumed = { ok: true, refused: false, answer: "admitted", arn: "arn:aws:sts::605411278365:assumed-role/x/trust-check-1" };
-const refused: Assumed = { ok: false, refused: true, answer: "403 AccessDenied: Not authorized to perform sts:AssumeRoleWithWebIdentity", arn: "" };
+const answer = (status: number, code: string, message = ""): Assumed => ({ ok: status === 200, status, code, answer: status === 200 ? "admitted" : `${status} ${code}: ${message}`, arn: status === 200 ? "arn:aws:sts::605411278365:assumed-role/x/trust-check-1" : "" });
+const admitted = answer(200, "");
+const refused = answer(403, "AccessDenied", "Not authorized to perform sts:AssumeRoleWithWebIdentity");
 const roleName = (arn: string) => arn.split("/").pop()!;
+const DEPLOY = "insights-production-github-deploy";
 
 /** IAM as it should be: each trust-check role has exactly its claims. */
 const liveAsDeployed = (name: string) => {
@@ -22,20 +24,20 @@ describe("the trust check after a deploy", () => {
     const asked: string[] = [];
     const r = await checkTrust({ cfg, deployRoleArn, liveConditions: liveAsDeployed, assume: async (arn) => (asked.push(roleName(arn)), enforcing(arn)) });
     expect(r.proven).toBe(true);
-    expect(r.deployRole.ok).toBe(true);
-    expect(asked).toEqual(["insights-production-github-trust-check", "insights-production-github-trust-check-wrong-workflow", "insights-production-github-trust-check-wrong-ref", "insights-production-github-deploy"]);
+    expect(r.deployRole).toBe("admitted");
+    expect(asked).toEqual(["insights-production-github-trust-check", "insights-production-github-trust-check-wrong-workflow", "insights-production-github-trust-check-wrong-ref", DEPLOY]);
     expect(r.lines.some((l) => l.startsWith("::"))).toBe(false);
   });
 
   it("isn't proven when IAM ignores a claim (a wrong role admits the workflow), and says so without failing the deploy", async () => {
     const r = await checkTrust({ cfg, deployRoleArn, liveConditions: liveAsDeployed, assume: async (arn) => (roleName(arn).endsWith("wrong-ref") ? admitted : enforcing(arn)) });
     expect(r.proven).toBe(false);
-    expect(r.deployRole.ok).toBe(true);
+    expect(r.deployRole).toBe("admitted");
     expect(r.lines).toContain("::warning::insights-production-github-trust-check-wrong-ref: admitted this workflow (must refuse it)");
   });
 
   it("isn't proven when IAM doesn't match the claims at all (the matching role refuses too)", async () => {
-    const r = await checkTrust({ cfg, deployRoleArn, liveConditions: liveAsDeployed, assume: async (arn) => (roleName(arn) === "insights-production-github-deploy" ? admitted : refused) });
+    const r = await checkTrust({ cfg, deployRoleArn, liveConditions: liveAsDeployed, assume: async (arn) => (roleName(arn) === DEPLOY ? admitted : refused) });
     expect(r.proven).toBe(false);
     expect(r.lines.filter((l) => l.startsWith("::warning::"))).toHaveLength(2); // the matching role, and the verdict
   });
@@ -53,21 +55,47 @@ describe("the trust check after a deploy", () => {
       assume: async (arn) => (asked.push(roleName(arn)), enforcing(arn)),
     });
     expect(r.proven).toBe(false);
-    expect(asked).toEqual(["insights-production-github-trust-check", "insights-production-github-deploy"]);
+    expect(asked).toEqual(["insights-production-github-trust-check", DEPLOY]);
     expect(r.lines.find((l) => l.includes("wrong-workflow"))).toMatch(/unreadable: An error occurred \(NoSuchEntity\)/);
   });
 
-  it("counts only STS's AccessDenied as a refusal, not another error", async () => {
-    const invalid: Assumed = { ok: false, refused: false, answer: "400 InvalidIdentityToken: expired", arn: "" };
-    const r = await checkTrust({ cfg, deployRoleArn, liveConditions: liveAsDeployed, assume: async (arn) => (roleName(arn).includes("wrong") ? invalid : admitted) });
+  it("counts only STS's AccessDenied as a wrong role's refusal, not another error", async () => {
+    const r = await checkTrust({ cfg, deployRoleArn, liveConditions: liveAsDeployed, assume: async (arn) => (roleName(arn).includes("wrong") ? answer(400, "InvalidIdentityToken", "expired") : admitted) });
     expect(r.proven).toBe(false);
   });
 
-  it("reports the deploy role refusing the workflow as the error it is", async () => {
-    const r = await checkTrust({ cfg, deployRoleArn, liveConditions: liveAsDeployed, assume: async (arn) => (roleName(arn) === "insights-production-github-deploy" ? refused : enforcing(arn)) });
-    expect(r.proven).toBe(true);
-    expect(r.deployRole.ok).toBe(false);
-    expect(r.lines.at(-1)).toMatch(/^::error::The deploy role refused a fresh token from this workflow: STS answered 403 AccessDenied/);
+  it("keeps going when asking about a trust-check role throws (no network), and still checks the deploy role", async () => {
+    const asked: string[] = [];
+    const r = await checkTrust({
+      cfg,
+      deployRoleArn,
+      liveConditions: liveAsDeployed,
+      assume: async (arn) => {
+        asked.push(roleName(arn));
+        if (roleName(arn).endsWith("wrong-workflow")) throw new Error("fetch failed");
+        return enforcing(arn);
+      },
+    });
+    expect(r.proven).toBe(false);
+    expect(r.deployRole).toBe("admitted");
+    expect(asked).toHaveLength(4);
+    expect(r.lines.find((l) => l.includes("wrong-workflow"))).toMatch(/^::warning::.*answered no answer \(fetch failed\)/);
+  });
+
+  it("reports the deploy role refusing the workflow as the error it is, AccessDenied or another refusal", async () => {
+    for (const no of [refused, answer(400, "InvalidIdentityToken", "Couldn't retrieve verification key")]) {
+      const r = await checkTrust({ cfg, deployRoleArn, liveConditions: liveAsDeployed, assume: async (arn) => (roleName(arn) === DEPLOY ? no : enforcing(arn)) });
+      expect(r.deployRole).toBe("refused");
+      expect(r.lines.at(-1)).toMatch(/^::error::The deploy role refused a fresh token from this workflow: STS answered/);
+    }
+  });
+
+  it("tells not reaching STS (or STS too busy) apart from a refusal", async () => {
+    for (const none of [() => Promise.reject(new Error("fetch failed")), async () => answer(503, "ServiceUnavailable"), async () => answer(400, "Throttling", "Rate exceeded")]) {
+      const r = await checkTrust({ cfg, deployRoleArn, liveConditions: liveAsDeployed, assume: (arn) => (roleName(arn) === DEPLOY ? none() : enforcing(arn)) });
+      expect(r.deployRole).toBe("unknown");
+      expect(r.lines.at(-1)).toMatch(/^::error::Couldn't check whether the deploy role still admits this workflow/);
+    }
   });
 
   it("compares trusts whatever order IAM keeps their keys in", () => {

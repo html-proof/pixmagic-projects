@@ -40,7 +40,10 @@ async function assume() {
     deployRoleArn: role,
     liveConditions: (roleName) => {
       const out = execFileSync("aws", ["iam", "get-role", "--role-name", roleName, "--region", region, "--output", "json"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-      const doc = (JSON.parse(out) as { Role: { AssumeRolePolicyDocument: { Statement: Array<{ Condition?: unknown }> } } }).Role.AssumeRolePolicyDocument;
+      type Doc = { Statement: Array<{ Condition?: unknown }> };
+      const raw = (JSON.parse(out) as { Role: { AssumeRolePolicyDocument: Doc | string } }).Role.AssumeRolePolicyDocument;
+      // The CLI decodes policy documents; the API itself sends them URL-encoded.
+      const doc = typeof raw === "string" ? (JSON.parse(decodeURIComponent(raw)) as Doc) : raw;
       return doc.Statement.map((s) => s.Condition);
     },
     // A fresh token for each: they're short-lived.
@@ -48,10 +51,16 @@ async function assume() {
   });
   for (const line of report.lines) console.log(line);
   if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${report.summary.join("\n")}\n`);
-  if (!report.deployRole.ok) {
+  if (report.deployRole === "refused") {
     throw new Error(
       "The deploy role no longer admits this workflow, so the next deploy can't sign in. This release is live (no rollback). " +
         "docs/aws-deployment.md, Deploy (GitHub Actions), says how to restore the trust.",
+    );
+  }
+  if (report.deployRole === "unknown") {
+    throw new Error(
+      "Couldn't ask STS whether the deploy role still admits this workflow (see above): that says nothing about its trust. " +
+        "This release is live (no rollback). Re-run this job's failed steps; the trust needs fixing only if STS refuses the token.",
     );
   }
 }

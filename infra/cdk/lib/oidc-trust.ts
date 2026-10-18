@@ -49,7 +49,13 @@ export function compareClaims(cfg: EnvConfig, claims: Record<string, unknown>): 
   return { ok, lines };
 }
 
-export type Assumed = { ok: boolean; refused: boolean; answer: string; arn: string };
+/** STS's answer to one AssumeRoleWithWebIdentity; status 0 when there was none. */
+export type Assumed = { ok: boolean; status: number; code: string; answer: string; arn: string };
+
+/** Only this proves a trust refused the token: a role that doesn't exist gets the same answer. */
+export const isRefusal = (r: Assumed) => r.status === 403 && r.code === "AccessDenied";
+/** No answer, or STS too busy to give one: says nothing about the trust. */
+export const isInconclusive = (r: Assumed) => !r.ok && (r.status === 0 || r.status >= 500 || /^Throttling/.test(r.code));
 
 /**
  * One AssumeRoleWithWebIdentity. It is unsigned: no AWS credentials involved. The session lasts
@@ -60,7 +66,8 @@ export async function assumeWithWebIdentity(roleArn: string, region: string, tok
   const res = await fetchRetrying(`https://sts.${region}.amazonaws.com/`, { method: "POST", body });
   const xml = await res.text();
   const tag = (name: string) => new RegExp(`<${name}>([^<]*)</${name}>`).exec(xml)?.[1] ?? "";
-  return { ok: res.ok, refused: res.status === 403 && tag("Code") === "AccessDenied", answer: res.ok ? "admitted" : `${res.status} ${tag("Code")}: ${tag("Message")}`, arn: tag("Arn") };
+  const code = tag("Code");
+  return { ok: res.ok, status: res.status, code, answer: res.ok ? "admitted" : `${res.status} ${code}: ${tag("Message")}`, arn: tag("Arn") };
 }
 
 /** JSON with every object's keys sorted: IAM needn't keep the order they were written in. */
@@ -70,7 +77,12 @@ export function canonical(value: unknown): string {
   return JSON.stringify(sort(value));
 }
 
-export type TrustReport = { proven: boolean; deployRole: Assumed; lines: string[]; summary: string[] };
+/**
+ * proven: the trust-check roles show the deploy role's next trust would admit this workflow and
+ * nothing else. deployRole: whether the deploy role itself still admits it ("unknown" when STS
+ * couldn't be asked).
+ */
+export type TrustReport = { proven: boolean; deployRole: "admitted" | "refused" | "unknown"; lines: string[]; summary: string[] };
 
 /**
  * After a deploy. First the trust-check roles (githubTrustChecks): each one's live trust must be
@@ -87,6 +99,14 @@ export async function checkTrust(o: {
   assume: (roleArn: string) => Promise<Assumed>;
 }): Promise<TrustReport> {
   const account = o.deployRoleArn.split(":")[4];
+  // Not reaching GitHub or STS (after retries) is an answer too, not a reason to stop checking.
+  const ask = async (roleArn: string): Promise<Assumed> => {
+    try {
+      return await o.assume(roleArn);
+    } catch (err) {
+      return { ok: false, status: 0, code: "", answer: `no answer (${(err as Error).message})`, arn: "" };
+    }
+  };
   const lines: string[] = [];
   const summary = ["### GitHub OIDC trust", ""];
   let proven = true;
@@ -102,9 +122,9 @@ export async function checkTrust(o: {
     if (canonical(live) !== canonical([{ StringEquals: githubClaimConditions(check.claims) }])) {
       line = `${check.roleName}: its trust isn't the expected one, so nothing is proven (IAM has ${typeof live === "string" ? live : JSON.stringify(live)})`;
     } else {
-      const r = await o.assume(`arn:aws:iam::${account}:role/${check.roleName}`);
-      asExpected = check.admits ? r.ok : r.refused;
-      line = `${check.roleName}: ${r.ok ? "admitted" : r.refused ? "refused" : `answered ${r.answer}`} this workflow (${check.admits ? "must admit it" : "must refuse it"})`;
+      const r = await ask(`arn:aws:iam::${account}:role/${check.roleName}`);
+      asExpected = check.admits ? r.ok : isRefusal(r);
+      line = `${check.roleName}: ${r.ok ? "admitted" : isRefusal(r) ? "refused" : `answered ${r.answer}`} this workflow (${check.admits ? "must admit it" : "must refuse it"})`;
     }
     lines.push(asExpected ? `ok  ${line}` : `::warning::${line}`);
     summary.push(`- ${asExpected ? "✅" : "⚠️"} ${line}`);
@@ -116,11 +136,15 @@ export async function checkTrust(o: {
   lines.push(proven ? verdict : `::warning::${verdict}`);
   summary.push("", verdict, "");
 
-  const deployRole = await o.assume(o.deployRoleArn);
-  const line = deployRole.ok
-    ? `A fresh token from this workflow still gets ${deployRole.arn || o.deployRoleArn}.`
-    : `The deploy role refused a fresh token from this workflow: STS answered ${deployRole.answer}`;
-  lines.push(deployRole.ok ? line : `::error::${line}`);
-  summary.push(`- ${deployRole.ok ? "✅" : "❌"} ${line}`);
+  // Any other refusal (AccessDenied, InvalidIdentityToken...) would stop the next deploy too.
+  const r = await ask(o.deployRoleArn);
+  const deployRole = r.ok ? "admitted" : isInconclusive(r) ? "unknown" : "refused";
+  const line = {
+    admitted: `A fresh token from this workflow still gets ${r.arn || o.deployRoleArn}.`,
+    refused: `The deploy role refused a fresh token from this workflow: STS answered ${r.answer}`,
+    unknown: `Couldn't check whether the deploy role still admits this workflow: ${r.answer}`,
+  }[deployRole];
+  lines.push(deployRole === "admitted" ? line : `::error::${line}`);
+  summary.push(`- ${deployRole === "admitted" ? "✅" : "❌"} ${line}`);
   return { proven, deployRole, lines, summary };
 }
