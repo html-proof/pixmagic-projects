@@ -158,8 +158,8 @@ to be increased" (a job failing in seconds with no steps or log; read it with
 included minutes are used up (GitHub Free: 2,000 a month for private repositories, reset on the
 1st at 00:00 UTC) or a payment failed. Self-hosted runners cost nothing, so CI and Deploy can run on
 the owner's PC instead. Every CI job's `runs-on` reads the repository variable `SELF_HOSTED_RUNNER`;
-while it is unset, everything runs on `ubuntu-latest` exactly as before. Deploy to AWS reads
-`SELF_HOSTED_DEPLOY_RUNNER` first (the deploy-only runner below), then `SELF_HOSTED_RUNNER`.
+while it is unset, everything runs on `ubuntu-latest` exactly as before. Pushes to `main` and
+Deploy to AWS read `SELF_HOSTED_MAIN_RUNNER` first (the runner for main, below).
 
 Set up once, in an elevated Windows PowerShell. `infra/runner/install-runner.ps1` does every step
 below in one go (`powershell -ExecutionPolicy Bypass -File infra\runner\install-runner.ps1`, from
@@ -241,40 +241,43 @@ the switch (Settings → Secrets and variables → Actions → Variables): `SELF
 `["self-hosted","bizinsights-pc"]`. The first job run on the PC also proves GitHub still starts
 self-hosted jobs under the billing block.
 
-#### The deploy-only runner
+#### The runner for main
 
 Pull-request jobs run code nobody has reviewed yet (a new dependency's install script, say), and a
 runner keeps state between jobs: its tool cache, its pnpm store, its account's profile and the
 runner folder. On one shared runner, whatever such a job leaves there the next Deploy to AWS runs
-with, while it holds the deploy role, which reaches AdministratorAccess through the CDK roles. So
-deploys get a second runner service on the same PC: account `ghdeploy`, folder
-`C:\actions-runner-deploy`, name and only label `bizinsights-pc-deploy`. Neither account can
-change the other's folders or profile, and the folders on the system `PATH` are administrators-only
-(checked 2026-10-18), so a deploy runs only programs administrators installed and its own.
+with, while it holds the deploy role, which reaches AdministratorAccess through the CDK roles. And
+one runner takes jobs oldest-queued first: main's e2e job queues only once main's checks are done,
+so pull-request runs pushed meanwhile go first, and the deploy waits behind them all.
+
+So `main` gets a second runner service on the same PC, for CI on pushes to `main` and for Deploy to
+AWS: the code that already got into `main`, the same code the deploy runs. Account `ghmain`,
+folder `C:\actions-runner-main`, name and only label `bizinsights-pc-main`, and its own e2e
+browsers in `C:\ms-playwright-main` (`PW_BROWSERS` in the runner's `.env`; the first e2e run on
+`main` downloads them). Neither account can change the other's folders or profile, and the folders
+on the system `PATH` are administrators-only (checked 2026-10-18), so main's jobs run only programs
+administrators installed and their own.
 
 Labels alone wouldn't keep other jobs off it: any branch's workflow can ask for any label. Its job
-hook (`infra/runner/deploy-only-hook.js`, which the runner runs with its own Node before every job;
+hook (`infra/runner/main-only-hook.js`, which the runner runs with its own Node before every job;
 a copy in `C:\ProgramData\bizinsights-runner`, administrators-only) fails every job before its first
-step unless GitHub says it is `aws-deploy.yml` from `main`, started by a CI run or by hand. Those
-values come from the job's github context, which a workflow file can't change. A refused job's
-"Set up runner" step says why.
+step unless GitHub says it is `ci.yml` for a push to `main`, or `aws-deploy.yml` from `main` started
+by a CI run or by hand. Those values come from the job's github context, which a workflow file can't
+change. A refused job's "Set up runner" step says why.
 
-In an elevated Windows PowerShell, from the repository folder (asks for a new password for
-ghdeploy, twice):
+In an elevated Windows PowerShell, from the repository folder (asks for a new password for ghmain,
+twice):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File infra\runner\install-runner.ps1 -Deploy
+powershell -ExecutionPolicy Bypass -File infra\runner\install-runner.ps1 -Main
 ```
 
-Then the variable `SELF_HOSTED_DEPLOY_RUNNER` = `["bizinsights-pc-deploy"]`. Until it is set, each
-deploy runs on the shared runner and warns ("On the runner pull requests use"). The next deploy's
-"Set up runner" step should show "A job started hook has been configured by the self-hosted runner
-administrator" and "allowed on this runner". With its own runner a deploy no longer queues behind
-pull-request jobs either; the two share the laptop's CPU.
-
-After 2026-11-01, when GitHub's included minutes are back, `SELF_HOSTED_DEPLOY_RUNNER` =
-`"ubuntu-latest"` deploys on a fresh GitHub machine every time while CI stays on the PC (about 5
-minutes a deploy).
+Then the variable `SELF_HOSTED_MAIN_RUNNER` = `["bizinsights-pc-main"]`. Until it is set, main's
+jobs run on the shared runner and each deploy warns ("On the runner pull requests use"). Once set,
+the next run's "Set up runner" steps should show "A job started hook has been configured by the
+self-hosted runner administrator" and "allowed on this runner". (CI uses the runner for main only
+while `SELF_HOSTED_RUNNER` is set too: its steps decide between the PC and GitHub's machines by that
+variable.) Main and pull-request runs now go side by side and share the laptop's CPU.
 
 #### Hardening the runner
 
@@ -285,7 +288,7 @@ creates. For a runner installed before 2026-10-18 (ghrunner), run once, from the
 powershell -ExecutionPolicy Bypass -File infra\runner\harden-runner.ps1
 ```
 
-It is safe to run again. For each runner account that exists (ghrunner, ghdeploy):
+It is safe to run again. For each runner account that exists (ghrunner, ghmain):
 
 - A password is required. `New-LocalUser` leaves the account flagged "password not required"
   (PASSWD_NOTREQD), which lets it be given an empty one. By hand: `net user ghrunner /passwordreq:yes`.
@@ -296,10 +299,11 @@ It is safe to run again. For each runner account that exists (ghrunner, ghdeploy
   password with a network logon, so registering that account's runner again needs the network
   denial lifted first: install-runner.ps1 does that and puts it back.
 
-And `C:\ms-playwright` (the e2e job's browsers): C:\ passes "Authenticated Users: Modify" down to
-new folders, so every account on the PC could replace the `chrome.exe` the runner starts. The
-script leaves it changeable by administrators, SYSTEM and ghrunner (which downloads new browser
-builds into it), readable by users. By hand:
+And the e2e job's browsers: C:\ passes "Authenticated Users: Modify" down to new folders, so every
+account on the PC could replace the `chrome.exe` a runner starts. The script leaves
+`C:\ms-playwright` changeable by administrators, SYSTEM and ghrunner (which downloads new browser
+builds into it), readable by users; and `C:\ms-playwright-main` the same with ghmain, not
+readable by other accounts. By hand, for the first (the second: `ghmain`, without the last grant):
 
 ```powershell
 icacls C:\ms-playwright /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" "ghrunner:(OI)(CI)M" "*S-1-5-32-545:(OI)(CI)RX"
@@ -316,15 +320,17 @@ On the PC there is no Docker: each job starts its own throwaway PostgreSQL 18 fr
 (`apps/web/e2e/mailpit-stub.mjs`), all on free ports; the runner stops them with the job. The deploy
 job signs in only with the OIDC deploy role and checks that it did.
 
-- The e2e job's browsers live in `C:\ms-playwright` (`PW_BROWSERS` in the job's environment
-  points elsewhere), so "Browser for the tests" only checks them. The PC's network hands out IPv6
+- The e2e job's browsers live in `C:\ms-playwright` (on the runner for main, `C:\ms-playwright-main`:
+  `PW_BROWSERS` in the job's environment points elsewhere), so "Browser for the tests" only checks
+  them. The PC's network hands out IPv6
   addresses with no route behind them. Most tools fall back to IPv4, but Playwright's download
   tries IPv6 first and gives up on every attempt ("timed out after 30000ms" after 5 s). So that
   step preloads `apps/web/e2e/ipv4-only.mjs`, and a new browser build downloads into the folder by
   itself. If a download still fails, fill the folder by hand from an account that has the browsers,
-  in an elevated Windows PowerShell (once hardened, only administrators and ghrunner may write
-  there), then run harden-runner.ps1 again:
+  in an elevated Windows PowerShell (once hardened, only administrators and the runner's account
+  may write there), then run harden-runner.ps1 again:
   `Copy-Item -Recurse -Force C:\Users\<account>\AppData\Local\ms-playwright\* C:\ms-playwright`.
+  Never copy from `C:\ms-playwright` into `C:\ms-playwright-main`: pull-request jobs can change the first.
 - The PC must be on and awake: queued jobs wait up to 24 hours for the runner, then are cancelled.
   It's a laptop with Modern Standby: it sleeps 3 minutes after the last input once the screen
   turns off (even on AC, even with "sleep: never"), and when the lid closes. Asleep, it drops the
@@ -339,15 +345,15 @@ job signs in only with the OIDC deploy role and checks that it did.
   used up ("Artifact storage quota has been hit"). Then every push to `main` runs the checks again
   (about 40 minutes on the PC) instead of reusing a pull request's pass. It costs only time.
 - Job code still runs on the owner's PC: it can reach anything listening on localhost there, and
-  what one CI job leaves behind the next CI job runs with. With the deploy-only runner that stops
-  short of the deploy; without it, the deploy runs with it too. Only collaborators can start jobs
-  (fork pull requests are off); keep it that way, and never make the repository public while a
-  runner is attached.
-- Back to GitHub's runners: delete `SELF_HOSTED_DEPLOY_RUNNER` and `SELF_HOSTED_RUNNER` first. Then,
-  for each runner (`C:\actions-runner-deploy` with account ghdeploy, `C:\actions-runner` with
+  what one pull request's job leaves behind the next job on that runner runs with. With the runner
+  for main that stops short of main's CI and the deploy; without it, they run with it too. Only
+  collaborators can start jobs (fork pull requests are off); keep it that way, and never make the
+  repository public while a runner is attached.
+- Back to GitHub's runners: delete `SELF_HOSTED_MAIN_RUNNER` and `SELF_HOSTED_RUNNER` first. Then,
+  for each runner (`C:\actions-runner-main` with account ghmain, `C:\actions-runner` with
   ghrunner), in an elevated PowerShell in its folder: `Stop-Service "actions.runner.*.<name>"`,
   `.\config.cmd remove` with the token from the runner's page in Settings → Actions → Runners, and
-  `Remove-LocalUser <account>`. Last, `Remove-Item -Recurse C:\ProgramData\bizinsights-runner`.
+  `Remove-LocalUser <account>`. Last, `Remove-Item -Recurse C:\ProgramData\bizinsights-runner, C:\ms-playwright-main`.
 
 ## Database
 

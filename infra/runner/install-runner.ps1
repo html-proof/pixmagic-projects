@@ -1,12 +1,14 @@
 # Installs one of this PC's GitHub Actions runners for html-proof/pixmagic-projects: the steps in
 # docs/aws-deployment.md ("When GitHub-hosted jobs can't start"), in one go.
-#   (no switch)  bizinsights-pc, as ghrunner in C:\actions-runner: CI's jobs (SELF_HOSTED_RUNNER).
-#   -Deploy      bizinsights-pc-deploy, as ghdeploy in C:\actions-runner-deploy: Deploy to AWS only
-#                (SELF_HOSTED_DEPLOY_RUNNER). Its job hook refuses every other job, so nothing a
-#                pull request's code leaves behind reaches the job that holds the deploy role.
+#   (no switch)  bizinsights-pc, as ghrunner in C:\actions-runner: pull requests' CI jobs
+#                (SELF_HOSTED_RUNNER), and main's while there is no runner for main.
+#   -Main        bizinsights-pc-main, as ghmain in C:\actions-runner-main: CI for pushes to main and
+#                Deploy to AWS (SELF_HOSTED_MAIN_RUNNER). Its job hook refuses every other job, so
+#                nothing a pull request's code leaves behind reaches the job that holds the deploy
+#                role. Its e2e browsers are its own too (C:\ms-playwright-main).
 #
 # Run it in an elevated Windows PowerShell (right-click Windows PowerShell > Run as administrator):
-#   powershell -ExecutionPolicy Bypass -File <this file> [-Deploy]
+#   powershell -ExecutionPolicy Bypass -File <this file> [-Main]
 #
 # What it does, stopping at the first error:
 #   1. The runner folder, changeable by Administrators and SYSTEM only.
@@ -15,14 +17,14 @@
 #      The runner runs as that account, so your own aws login and Git credentials stay out of reach.
 #   4. Registers the runner with a one-hour token from the gh CLI (or one you paste from GitHub).
 #      config.cmd asks for the runner group (press Enter) and the account's password again.
-#   5. -Deploy only: the job hook (infra/runner/deploy-only-hook.js).
+#   5. -Main only: the job hook (infra/runner/main-only-hook.js) and the browsers folder.
 #   6. Leaves the service only the two privileges it needs, then restarts it.
 #   7. harden-runner.ps1 for the account: a password required, no logon but as the service.
 # It doesn't switch CI over: the repository variables SELF_HOSTED_RUNNER and
-# SELF_HOSTED_DEPLOY_RUNNER do that.
+# SELF_HOSTED_MAIN_RUNNER do that.
 #Requires -RunAsAdministrator
 param(
-  [switch]$Deploy
+  [switch]$Main
 )
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue' # PowerShell 5.1 downloads very slowly with the progress bar
@@ -30,8 +32,8 @@ $ProgressPreference = 'SilentlyContinue' # PowerShell 5.1 downloads very slowly 
 $repo = 'html-proof/pixmagic-projects'
 $version = '2.338.0'
 $sha256 = 'F48E0750A21812BCA5F82DE5F7F5AEAE71ABEE647FAB5A582F1742D07EBA455F'
-if ($Deploy) {
-  $name = 'bizinsights-pc-deploy'; $dir = 'C:\actions-runner-deploy'; $account = 'ghdeploy'
+if ($Main) {
+  $name = 'bizinsights-pc-main'; $dir = 'C:\actions-runner-main'; $account = 'ghmain'
 } else {
   $name = 'bizinsights-pc'; $dir = 'C:\actions-runner'; $account = 'ghrunner'
 }
@@ -90,30 +92,37 @@ if (-not $token) {
   $token = Read-Host "Paste that token"
 }
 Write-Host "Press Enter for the runner group, then type the $account password."
-# The deploy runner carries its own label only: a job asking for any self-hosted runner never
+# The runner for main carries its own label only: a job asking for any self-hosted runner never
 # lands there (its hook would refuse it).
 $labels = @('--labels', $name)
-if ($Deploy) { $labels += '--no-default-labels' }
+if ($Main) { $labels += '--no-default-labels' }
 & (Join-Path $dir 'config.cmd') --url "https://github.com/$repo" --token $token --name $name @labels --work _work --runasservice --windowslogonaccount ".\$account"
 if ($LASTEXITCODE -ne 0) { throw "config.cmd failed ($LASTEXITCODE)" }
 
-Step "5/7 Job hook"
-if ($Deploy) {
+Step "5/7 Job hook and browsers"
+if ($Main) {
   # Outside the runner folder (which config.cmd lets the runner change): administrators only, the
-  # runner reads it. The runner reads .env when its service starts (step 6).
+  # runner reads it.
   $hookDir = 'C:\ProgramData\bizinsights-runner'
   $sid = (Get-LocalUser $account).SID.Value
   New-Item -ItemType Directory -Force $hookDir | Out-Null
   icacls $hookDir /inheritance:r /grant:r '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-18:(OI)(CI)F' "*$($sid):(OI)(CI)RX" | Out-Null
   if ($LASTEXITCODE -ne 0) { throw "icacls $hookDir failed ($LASTEXITCODE)" }
-  $hook = Join-Path $hookDir 'deploy-only-hook.js'
-  Copy-Item -Force (Join-Path $PSScriptRoot 'deploy-only-hook.js') $hook
+  $hook = Join-Path $hookDir 'main-only-hook.js'
+  Copy-Item -Force (Join-Path $PSScriptRoot 'main-only-hook.js') $hook
+  # main's e2e job must not start the browsers in C:\ms-playwright, which pull-request jobs can
+  # change: its own folder, which harden-runner.ps1 (step 7) locks to this account. The first e2e
+  # run on main downloads them (ci.yml, "Browser for the tests").
+  $browsers = 'C:\ms-playwright-main'
+  New-Item -ItemType Directory -Force $browsers | Out-Null
+  # The runner reads .env when its service starts (step 6) and passes it on to every job.
   $envFile = Join-Path $dir '.env'
-  $lines = @(Get-Content $envFile -ErrorAction SilentlyContinue | Where-Object { $_ -notmatch '^ACTIONS_RUNNER_HOOK_JOB_STARTED=' })
-  $lines + "ACTIONS_RUNNER_HOOK_JOB_STARTED=$hook" | Set-Content -Encoding ASCII $envFile
-  Write-Host "Every job starts with $hook; it lets through only Deploy to AWS from main."
+  $lines = @(Get-Content $envFile -ErrorAction SilentlyContinue | Where-Object { $_ -notmatch '^(ACTIONS_RUNNER_HOOK_JOB_STARTED|PW_BROWSERS)=' })
+  $lines + "ACTIONS_RUNNER_HOOK_JOB_STARTED=$hook" + "PW_BROWSERS=$browsers" | Set-Content -Encoding ASCII $envFile
+  Write-Host "Every job starts with $hook; it lets through only main's CI and Deploy to AWS from main."
+  Write-Host "The e2e job's browsers: $browsers."
 } else {
-  Write-Host "None (CI's runner)."
+  Write-Host "None (the pull requests' runner)."
 }
 
 Step "6/7 Service privileges"
@@ -127,6 +136,6 @@ Step "7/7 Account ${account}: a password required, no logon but as the service"
 & $harden -Account $account
 
 Write-Host "`nDone. GitHub > Settings > Actions > Runners should show $name as Idle." -ForegroundColor Green
-if ($Deploy) {
-  Write-Host 'Then the repository variable SELF_HOSTED_DEPLOY_RUNNER = ["bizinsights-pc-deploy"].' -ForegroundColor Green
+if ($Main) {
+  Write-Host 'Then the repository variable SELF_HOSTED_MAIN_RUNNER = ["bizinsights-pc-main"].' -ForegroundColor Green
 }
