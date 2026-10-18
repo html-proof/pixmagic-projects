@@ -651,12 +651,13 @@ before the 10% GST that AWS Australia adds; usage from CloudWatch at that day's 
 | CloudWatch: 25 alarms, 10 free; logs, metrics, dashboard in the free tier | ~1.5 |
 | Secrets Manager (3 × $0.40 + calls), KMS (Cognito email key + ~60-90k requests, 20k free) | ~2.5 |
 | Admin host's disk (stopped), EBS snapshots, X-Ray (~200k traces, 100k free), SQS (~1.3 M requests, 1 M free), S3, DynamoDB, SES | ~2.9 |
-| CloudTrail: the trail's first copy of management events is free; its bucket's log files (PUT requests from 18 Regions, a few hundred MB a year), since 2026-10-18 and not yet in the totals below | ~0.5 |
+| Audit stack (since 2026-10-18): the trail's first copy of management events is free, and so are the 18 external-access analyzers; its bucket's log and digest files (S3 PUTs from 18 Regions every ~5 minutes, ~200-270 bytes per event compressed, ~1-3 GB a year kept for 395 days) | ~0.35 (≤1) |
 | Lambda, CloudFront, Cognito, Scheduler, SNS, ACM (always-free tiers; the account has no 12-month free tier or credits) | 0 |
-| **Total** | **~87** (~96 with GST) |
+| **Total** | **~87.5** (~96 with GST) |
 
-With the reservation it is ~79 (~87 with GST). Turning off GuardDuty's Advanced RDS add-on as well
-brings it to ~72 (~79.65 with GST), the only combination under the US$80 budget. The admin host adds
+With the reservation it is ~79.5 (~87.5 with GST). Turning off GuardDuty's Advanced RDS add-on as well
+brings it to ~72.8 (~80 with GST): that was the only combination under the US$80 budget before the
+audit stack. The owner chose to keep Advanced RDS (2026-10-18). The admin host adds
 ~3.9 while it runs. Before GuardDuty's trial ends the total is ~76. A paid **support plan** comes on
 top: the account is on Business Support+ (AWS's price list names its sign-up product
 `AWSSupportEssential` "AWS Business Support+"), the greater of US$29/month or 9% of the bill
