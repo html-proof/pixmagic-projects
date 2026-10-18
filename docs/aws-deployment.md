@@ -124,9 +124,11 @@ included minutes are used up (GitHub Free: 2,000 a month for private repositorie
 the owner's PC instead. Every job's `runs-on` reads the repository variable `SELF_HOSTED_RUNNER`;
 while it is unset, everything runs on `ubuntu-latest` exactly as before.
 
-Set up once, in an elevated Windows PowerShell, one command at a time. The runner runs as its own
-local account (not the owner's, whose `aws login` session and Git credentials stay out of reach) in
-a folder only administrators can change:
+Set up once, in an elevated Windows PowerShell. `infra/runner/install-runner.ps1` does every step
+below in one go (`powershell -ExecutionPolicy Bypass -File infra\runner\install-runner.ps1`, from
+the repository folder) and asks only for the new account's password; or run them one at a time.
+The runner runs as its own local account (not the owner's, whose `aws login` session and Git
+credentials stay out of reach) in a folder only administrators can change:
 
 ```powershell
 $ProgressPreference = 'SilentlyContinue'
