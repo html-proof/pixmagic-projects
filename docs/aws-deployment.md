@@ -124,9 +124,11 @@ included minutes are used up (GitHub Free: 2,000 a month for private repositorie
 the owner's PC instead. Every job's `runs-on` reads the repository variable `SELF_HOSTED_RUNNER`;
 while it is unset, everything runs on `ubuntu-latest` exactly as before.
 
-Set up once, in an elevated Windows PowerShell, one command at a time. The runner runs as its own
-local account (not the owner's, whose `aws login` session and Git credentials stay out of reach) in
-a folder only administrators can change:
+Set up once, in an elevated Windows PowerShell. `infra/runner/install-runner.ps1` does every step
+below in one go (`powershell -ExecutionPolicy Bypass -File infra\runner\install-runner.ps1`, from
+the repository folder) and asks only for the new account's password; or run them one at a time.
+The runner runs as its own local account (not the owner's, whose `aws login` session and Git
+credentials stay out of reach) in a folder only administrators can change:
 
 ```powershell
 $ProgressPreference = 'SilentlyContinue'
@@ -499,45 +501,61 @@ share Resend's limits with the app's email (free tier: 100 a day, 3,000 a month)
 ## Cost (US$/month, on-demand, approximate)
 
 The owner's ceiling is **US$50-80 a month** (2026-10-18), keeping everything above, Multi-AZ
-included. Measured and priced on 2026-10-18 (AWS Price List API, Sydney, before the 10% GST that
-AWS Australia adds; usage from CloudWatch at that day's traffic):
+included. Measured, priced and independently re-checked on 2026-10-18 (AWS Price List API, Sydney,
+before the 10% GST that AWS Australia adds; usage from CloudWatch at that day's traffic):
 
 | Item | US$/month |
 | --- | --- |
-| RDS db.t4g.micro Multi-AZ: 1-year reserved instance, No Upfront, $0.040/hour (on demand $0.051) | 29.20 |
-| RDS 20 GB gp3 Multi-AZ, $0.276/GB (20 GB is gp3's minimum; backups fit the free allowance) | 5.52 |
+| RDS db.t4g.micro Multi-AZ, on demand $0.051/hour (a 1-year No Upfront reservation is $0.0401: 29.27) | 37.23 |
+| RDS 20 GiB gp3 Multi-AZ, $0.276/GB (gp3's minimum; ~3.2 GB used, most of it WAL) | 5.52 |
 | Two NAT instances: t4g.nano $0.0053/hour + public IPv4 $0.005/hour + 8 GB gp3, each ~8.3 | 16.58 |
+| GuardDuty after its trial (ends ~2026-11-14): RDS protection 2.26 + **Advanced RDS (`RDS_DATA_RISK`) 6.78** + CloudTrail events ~1.5 + S3/Lambda/DNS/flow logs ~0.2 | ~10.7 |
 | WAF: web ACL $5 + 5 rules × $1 + requests | ~10.2 |
-| GuardDuty (free trial until ~2026-11-15) | ~2.9 |
 | CloudWatch: 25 alarms, 10 free; logs, metrics, dashboard in the free tier | ~1.5 |
-| Secrets Manager (3 × $0.40 + calls), KMS key for Cognito's emails | ~2.5 |
-| Admin host's disk (stopped), EBS snapshots, X-Ray, S3, DynamoDB, SQS | ~2.6 |
-| Lambda, CloudFront, Cognito, Scheduler, SNS, ACM (free tiers) | 0 |
-| **Total** | **~71** (~78 with GST) |
+| Secrets Manager (3 × $0.40 + calls), KMS (Cognito email key + ~60-90k requests, 20k free) | ~2.5 |
+| Admin host's disk (stopped), EBS snapshots, X-Ray (~200k traces, 100k free), SQS (~1.3 M requests, 1 M free), S3, DynamoDB, SES | ~2.9 |
+| Lambda, CloudFront, Cognito, Scheduler, SNS, ACM (always-free tiers; the account has no 12-month free tier or credits) | 0 |
+| **Total** | **~87** (~96 with GST) |
 
-The **reserved instance** (`insights-production-t4g-micro-maz-2026-10`, bought 2026-10-18, runs to
-2027-10-18) bills $0.040/hour whether or not the database runs. It is size-flexible: on db.t4g.small
-Multi-AZ it still pays half (~US$29 more a month instead of ~US$37). A paid **support plan** comes
-on top (Owner-only steps).
+With the reservation it is ~79 (~87 with GST). Turning off GuardDuty's Advanced RDS add-on as well
+brings it to ~72 (~79.65 with GST), the only combination under the US$80 budget. The admin host adds
+~3.9 while it runs. Before GuardDuty's trial ends the total is ~76. A paid **support plan** comes on
+top: the account is on Business Support+ (AWS's price list names its sign-up product
+`AWSSupportEssential` "AWS Business Support+"), the greater of US$29/month or 9% of the bill
+(Owner-only steps).
+
+**Reserved instance:** `insights-production-t4g-micro-maz-2026-10` was ordered on 2026-10-18 and
+ended `payment-failed`, so none is active. Fix the payment method, then order it again (1 year, No
+Upfront, db.t4g.micro PostgreSQL Multi-AZ). It is size-flexible: on db.t4g.small Multi-AZ it still
+pays half. Check with `aws rds describe-reserved-db-instances`.
 
 Biggest lever: the database size (`dbInstanceType`). Move to db.t4g.small when the database alarms
 say so (`db-free-memory` below 100 MB, `db-connections` above 60 of ~80, `db-cpu`): that takes the
-bill past US$80 (~100). On 2026-10-18 freeable memory bottomed at 103 MB with 50 MB in swap.
-NAT instances replaced the NAT gateway ($0.059/hour + $0.059/GB, ~47 with its address) on
-2026-10-17: two of them cost a third of one gateway.
+bill past US$100. On 2026-10-18 freeable memory touched 99 MiB for one 5-minute period (swap at
+most ~52 MiB of 4 GiB). Connections are the nearer limit: the API has no concurrency cap and no
+RDS Proxy. NAT instances replaced the NAT gateway ($0.059/hour + $0.059/GB, ~47 with its address)
+on 2026-10-17: two of them cost a third of one gateway.
 
 **Budget** `insights-production-monthly-<digest>`: US$80, tax included, emails `budgetEmail` when the
 month passes 50/75/90/100% (US$40/60/72/80) and when AWS forecasts it above US$80. Nothing is
-stopped at any threshold. At ~US$78 with GST the 50-90% emails are expected every month. The name
-carries a digest of the alerts because CloudFormation replaces a budget whose alerts change.
-Cost Anomaly Detection's default monitor emails the account's sign-up address daily.
+stopped at any threshold. Until Basic support, the reservation and the Advanced RDS decision are in
+place, the 100% email is expected every month: it is accurate, not noise. The name carries a digest
+of the alerts because CloudFormation replaces a budget whose alerts change. Cost Anomaly
+Detection's default subscription alerts only at an impact of US$100 and 40%, so at this account's
+size it is no safety net, and the alarm topic still has no subscriber.
 
-Looked at on 2026-10-18 and not worth it: moving region (us-east-1 is ~US$17 cheaper, but every
+Not costing anything yet, but watch: three manual RDS snapshots never expire, and backups may pass
+the 20 GB free allowance once the 14-day chain fills; four log groups keep logs forever (the RDS
+postgresql group and three CDK helper groups); storage autoscaling can grow the disk to 100 GB and
+it never shrinks back.
+
+Looked at on 2026-10-18 and not worth it: moving region (us-east-1 is ~US$18 cheaper, but every
 request crosses the Pacific, Cognito users can't move with their passwords, and the data would
-leave Australia; Singapore and Melbourne cost the same as Sydney); the CloudFront flat-rate Free
-plan (US$0 instead of the WAF's ~10, but no custom 429, no header-based rules for Cloudflare's
-client address, no custom response-headers policy, no SLA). Cost allocation tags `app` and
-`environment` can be activated in Billing.
+leave Australia; Singapore costs the same as Sydney; Melbourne the same, with no db.t4g.micro/small
+reservations and no SES). The CloudFront flat-rate Free plan (US$0 instead of the WAF's ~10) would
+mean dropping the custom 429 response and the Cloudflare per-client rate rule (both Pro and up),
+moving the rate windows from 60 seconds to 5 minutes, and swapping the custom headers policy for a
+managed one, with no SLA. Cost allocation tags `app` and `environment` can be activated in Billing.
 
 ## Fault tolerance
 
