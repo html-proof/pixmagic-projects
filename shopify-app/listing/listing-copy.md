@@ -65,16 +65,29 @@ sales, orders and average order value over 30 days`.
 | # | Shows | Alt text |
 | --- | --- | --- |
 | 1 | Sales panel, "How your total sales add up" | Sales breakdown: gross sales, discounts, returns and net sales |
-| 2 | Best sellers panel, top vendors | Best-selling products and top vendors ranked by net sales |
-| 3 | Stock panel, restock soon | Stock levels with low-stock and sold-out items to reorder |
+| 2 | Best sellers panel, top products | Top products ranked by net sales, with units and share of sales |
+| 3 | Stock panel, in short and restock soon | Stock levels with low-stock and sold-out items to reorder |
 | 4 | Recent orders panel | Recent orders with channel, payment and fulfillment status |
-| 5 | Team & Access members list | Team & Access page with roles and permissions for each member |
+| 5 | Team & Access members table | Team & Access page with roles and permissions for each member |
 
 A full dashboard screenshot was removed because it repeated the feature image (requirement 4.4.5).
-The images are not in the repo. They were captured from the real UI at main 1daf7c3, built and run
-locally against a throwaway Postgres holding an invented store ("Harbour & Pine Co.", AUD,
-fictional names on the reserved `.example` domain): headless Chromium, 1600 x 900, reduced motion,
-every request leaving the machine blocked. Never capture a live merchant's store.
+The images are not in the repo. `appstore`'s set was uploaded on 2026-10-19, captured from the real
+UI at 5f1004c (PR #121), built and run locally against a throwaway Postgres holding an invented
+store ("Harbour & Pine Co.", AUD, fictional names on the reserved `.example` domain) saved with
+`shopify_app_key = 'appstore'`, so the menu is the App Store workspace's (no WhatsApp, Staff or
+advertising). Headless Chromium, reduced motion, every request leaving the machine blocked; the
+store's time zone was set to one where the day was mostly over, so "Today" isn't an empty bar.
+Each frame is rendered at exactly 1600 x 900 and keeps the store switcher (a redrawn Shopify bag)
+out:
+
+- Panels (1-4): a 1136 px window, where the 896 px panel covers everything right of the sidebar;
+  the top 1136 x 639 at a device scale of 1600/1136. At this scale the Best sellers panel can't
+  also fit Top vendors, hence image 2's alt text.
+- Team & Access (5): a 1360 px window scrolled to the members table, 1360 x 765 from just under the
+  top bar, at 1600/1360.
+- Feature image: the dashboard's main area only, 1180 x 664 at 1600/1180.
+
+Never capture a live merchant's store.
 
 **Support and resources**
 
