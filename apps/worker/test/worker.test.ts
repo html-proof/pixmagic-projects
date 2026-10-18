@@ -476,16 +476,69 @@ describe("webhook processing", () => {
     expect(await systemDb.alert.count({ where: { storeId: store.id, code: "privacy_request", resolvedAt: null } })).toBe(0);
   });
 
+  /** Shopify's Admin GraphQL endpoint answering the shop check with `status` (200: the token works). */
+  function shopCheckAnswers(status: number) {
+    const calls: string[] = [];
+    const before = fetchImpl;
+    fetchImpl = async (url, init) => {
+      if (String(url).endsWith("/graphql.json") && String(init?.body).includes("shop { id }")) {
+        calls.push(String(url));
+        return status === 200
+          ? new Response(JSON.stringify({ data: { shop: { id: "gid://shopify/Shop/1" } } }), { status })
+          : new Response(JSON.stringify({ errors: "Unavailable Shop" }), { status });
+      }
+      return before(url, init);
+    };
+    return calls;
+  }
+
   it("GDPR: shop/redact for a store installed again since erases nothing", async () => {
     const store = await makeStore();
     await claim(store.workspaceId);
     await webhook("orders/create", order());
-    // Uninstalled, then installed again before Shopify's 48-hour shop/redact arrived.
+    // Uninstalled, then installed again before Shopify's 48-hour shop/redact arrived: Shopify still
+    // takes the new installation's token.
+    const calls = shopCheckAnswers(200);
     await webhook("shop/redact", { shop_domain: "s.myshopify.com" });
+    expect(calls).toHaveLength(1);
     const after = await systemDb.store.findUniqueOrThrow({ where: { id: store.id } });
     expect(after.accessTokenEnc).toBeTruthy();
     expect(await systemDb.order.count()).toBe(1);
     expect(await systemDb.auditLog.count({ where: { action: "gdpr.shop_redact_skipped" } })).toBe(1);
+  });
+
+  // 2026-10-18: Shopify closed its App Store review stores and sent shop/redact while they still read
+  // "error" (their app/uninstalled came later, or never): the data stayed. Our status isn't the proof.
+  for (const [status, why] of [[401, "the token was revoked"], [402, "the shop is closed"], [404, "the shop is gone"]] as const) {
+    it(`GDPR: shop/redact erases a store that isn't "uninstalled" yet when ${why} (${status})`, async () => {
+      const store = await makeStore();
+      await claim(store.workspaceId);
+      await webhook("orders/create", order());
+      await systemDb.store.update({ where: { id: store.id }, data: { status: "error" } });
+      const calls = shopCheckAnswers(status);
+      await webhook("shop/redact", { shop_domain: "s.myshopify.com" });
+      expect(calls.length).toBeGreaterThan(0);
+      expect(await systemDb.store.findUnique({ where: { id: store.id } })).toBeNull();
+      expect(await systemDb.order.count()).toBe(0);
+      expect(await systemDb.auditLog.count({ where: { action: "gdpr.shop_redacted" } })).toBe(1);
+      expect(await systemDb.auditLog.count({ where: { action: "gdpr.shop_redact_skipped" } })).toBe(0);
+    });
+  }
+
+  it("GDPR: shop/redact erases a store we hold no token for, whatever its status", async () => {
+    const store = await makeStore();
+    await systemDb.store.update({ where: { id: store.id }, data: { status: "active", accessTokenEnc: null } });
+    await webhook("shop/redact", { shop_domain: "s.myshopify.com" });
+    expect(await systemDb.store.findUnique({ where: { id: store.id } })).toBeNull();
+  });
+
+  it("GDPR: shop/redact is retried, not decided, when Shopify can't answer", async () => {
+    const store = await makeStore();
+    await webhook("orders/create", order());
+    shopCheckAnswers(503);
+    await expect(webhook("shop/redact", { shop_domain: "s.myshopify.com" })).rejects.toThrow(/503/);
+    expect(await systemDb.store.findUnique({ where: { id: store.id } })).not.toBeNull();
+    expect(await systemDb.order.count()).toBe(1);
   });
 
   it("GDPR: customers/data_request is recorded once, owners are told, and redaction removes it", async () => {

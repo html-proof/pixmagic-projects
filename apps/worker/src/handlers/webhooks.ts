@@ -1,6 +1,6 @@
 /** The webhooks queue: each Shopify topic applied to the store's data (orders, products, refunds, app and GDPR topics). */
 import { systemDb, type Store } from "@app/db";
-import { applySubscriptionUpdate, audit, customerKey, deleteProduct, endBillingForStore, getAccessToken, gidToId, logger, normalizeRestOrder, normalizeRestProduct, normalizeRestProductVariants, parseShopify, pruneVariants, purgeStoreData, raiseAlert, recordDataRequest, resolveAlerts, customersDataRequestSchema, customersRedactSchema, restOrderSchema, restProductDeleteSchema, restOrderDeleteSchema, removeOrders, restProductSchema, restRefundWebhookSchema, scopesUpdateSchema, subscriptionUpdateSchema, syncBillingFromShopify, upsertOrder, upsertProduct, upsertVariant, seedScopeFollowUp, type WebhookJobData, redactWhatsappCustomer, whatsappOnShopifyEvent, emailOnShopifyEvent, purgeEmailStoreData, redactEmailCustomer } from "@app/core";
+import { applySubscriptionUpdate, audit, customerKey, deleteProduct, endBillingForStore, env, getAccessToken, gidToId, logger, shopifyGraphql, ShopifyHttpError, StoreDisconnectedError, withAccessToken, normalizeRestOrder, normalizeRestProduct, normalizeRestProductVariants, parseShopify, pruneVariants, purgeStoreData, raiseAlert, recordDataRequest, resolveAlerts, customersDataRequestSchema, customersRedactSchema, restOrderSchema, restProductDeleteSchema, restOrderDeleteSchema, removeOrders, restProductSchema, restRefundWebhookSchema, scopesUpdateSchema, subscriptionUpdateSchema, syncBillingFromShopify, upsertOrder, upsertProduct, upsertVariant, seedScopeFollowUp, type WebhookJobData, redactWhatsappCustomer, whatsappOnShopifyEvent, emailOnShopifyEvent, purgeEmailStoreData, redactEmailCustomer } from "@app/core";
 import { enqueueAggregate, UnrecoverableError, type WorkerDeps } from "./common.js";
 import { readSalesAfterWebhook } from "./shopifyRead.js";
 
@@ -53,6 +53,34 @@ async function eraseStore(store: Store, deps: WorkerDeps) {
     const stores = await tx.store.count({ where: { workspaceId: store.workspaceId } });
     if (ws?.awaitingClaim && members === 0 && stores === 0) await tx.workspace.delete({ where: { id: store.workspaceId } });
   });
+}
+
+/** Shopify's answers that mean the shop no longer lets this token in: revoked (401/403), frozen or closed (402), gone (404), locked (423). */
+const NOT_INSTALLED = new Set([401, 402, 403, 404, 423]);
+
+/**
+ * Whether the shop still has the app, by Shopify's own answer: a call with the store's token works.
+ *
+ * shop/redact can't go by our status. Shopify sends it once the shop no longer has the app: 48 hours
+ * after an uninstall, or soon after the shop closes (its App Store review stores), and a closed shop's
+ * app/uninstalled may come after the redact or not at all. On 2026-10-18 three closed review stores
+ * still read "error" when their shop/redact arrived, and kept their data. A store installed again
+ * since answers with its new installation's token; a gone one with one of NOT_INSTALLED or a refused
+ * refresh token. Anything else (5xx, a network error) is thrown, so the delivery is retried instead
+ * of the data being kept or erased on a guess.
+ */
+async function appStillInstalled(store: Store, deps: WorkerDeps): Promise<boolean> {
+  if (store.status === "uninstalled" || !store.accessTokenEnc) return false;
+  try {
+    await withAccessToken(store, deps.coord, deps.fetchImpl, (accessToken) =>
+      shopifyGraphql({ shop: store.shopDomain, accessToken, apiVersion: env().SHOPIFY_API_VERSION, query: "{ shop { id } }", fetchImpl: deps.fetchImpl, maxRetries: 1 }),
+    );
+    return true;
+  } catch (err) {
+    if (err instanceof StoreDisconnectedError) return false;
+    if (err instanceof ShopifyHttpError && NOT_INSTALLED.has(err.status)) return false;
+    throw err;
+  }
 }
 
 export async function processWebhook(data: WebhookJobData, deps: WorkerDeps) {
@@ -281,9 +309,10 @@ export async function processWebhook(data: WebhookJobData, deps: WorkerDeps) {
         break;
       }
       case "shop/redact": {
-        // Sent 48 hours after an uninstall. A store installed again since then is in use under
-        // its new installation's grant: erasing it now would wipe a working store.
-        if (store.status !== "uninstalled") {
+        // Sent once the shop no longer has the app. A store installed again since then is in use
+        // under its new installation's grant: erasing it now would wipe a working store. Only
+        // Shopify still accepting its token says that (appStillInstalled), not its status.
+        if (await appStillInstalled(store, deps)) {
           logger.info({ topic: data.topic, shop: data.shop, storeId: store.id, status: store.status }, "shop/redact for a store installed again since; nothing erased");
           await audit({ workspaceId: store.workspaceId, action: "gdpr.shop_redact_skipped", targetType: "store", targetId: store.id, metadata: { reason: "reinstalled" } });
           break;

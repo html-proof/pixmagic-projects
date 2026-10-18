@@ -147,9 +147,9 @@ Store installs and sends their in-app connects through this app (`apps/web/src/l
 `appStoreWorkspace` and `connectApp` in `packages/core/src/apps.ts`). The test account's own
 workspace counts as one: its store is listed in `SHOPIFY_APP_STORE_PREVIEW_SHOPS`
 (`apps/aws/src/settings.ts`), because the "Insights Test" development store is in the main app's
-organization and stays on the main app. The form held the earlier text at submission: paste this
-one in when the reviewer's feedback comes back, before **Submit fixes** (its warning that the
-in-app connect buttons "can't install on your store" no longer holds).
+organization and stays on the main app. This text is the one saved in `appstore`'s listing on
+2026-10-18 (the first app's form still holds an older text, which warned that the in-app connect
+buttons "can't install on your store"; that no longer holds).
 
 **Test account** (OWNER): a bizinsights login created at https://bizinsights.io/signup with email
 and password (no Google sign-in, no two-factor), typed into the form's Username and Password

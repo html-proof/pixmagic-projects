@@ -94,13 +94,21 @@ label their figures as an illustration; /support and /privacy were corrected (Se
 another store, Cloudflare, Resend, Staff data). The testing instructions in `listing-copy.md` were
 rewritten to match: paste them into the form when the review feedback comes back.
 
-Still open:
+Still open, all for `appstore`'s first submission (checklist
+https://partners.shopify.com/5229240/apps/436930412545/distribution/app-store):
 
-1. **Paste the new testing instructions** (`listing-copy.md`) into the listing form with the next
-   **Submit fixes**.
-2. **Run the reviewer path once** on a fresh development store: install, claim, import,
-   dashboard, Sync now, uninstall, reinstall.
-3. **After approval**: set `SHOPIFY_INSTALL_APP` to `appstore` (`apps/aws/src/settings.ts`), add the
+1. **Listing**: the text, category, search terms and the Free plan were saved on 2026-10-18 from
+   `listing-copy.md` (submission 143753). Feature media and at least 3 desktop screenshots are
+   missing: retake them in an App Store workspace (no WhatsApp, Staff or advertising in the menu,
+   and no redrawn Shopify bag; see Screenshots below) rather than reusing the first app's.
+2. **Owner**: the protected customer data request (API access requests), the test account
+   (Username, Password, Account description) and the screencast URL.
+3. **Run the reviewer path once** on a fresh development store of the Pixmagic organization:
+   install, claim, import, dashboard, Sync now, uninstall, reinstall. Then the automated checks
+   ("Run") and the capabilities step, last, since the checks expire after 30 days.
+4. **Decide what happens to `public`'s submission** (requirement 1.1.5), then press **Submit for
+   review** on `appstore`'s checklist. Never press **Submit fixes** on `public`'s page again.
+5. **After approval**: set `SHOPIFY_INSTALL_APP` to `appstore` (`apps/aws/src/settings.ts`), add the
    order and refund webhook topics back to `../shopify.app.appstore.toml` once protected customer data
    is granted, and `shopify app deploy --config appstore`.
 
