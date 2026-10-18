@@ -724,6 +724,21 @@ top: the account is on Business Support+ (AWS's price list names its sign-up pro
 `AWSSupportEssential` "AWS Business Support+"), the greater of US$29/month or 9% of the bill
 (Owner-only steps).
 
+**What the bill shows** (Bills page and Cost Explorer, read 2026-10-18 ~15:10 UTC): October so far
+US$26.46 = US$24.06 of charges + US$2.40 GST. **US$15.72 of the 24.06 is Business Support+**
+("Recurring monthly charge (2026-10-15 to 2026-10-31)", US$29 prorated). The app's own resources were
+~8.3: RDS 3.71, EC2 2.93 (the NAT gateway's last day included), WAF 0.87, public IPv4 0.45, Cost
+Explorer API 0.15 (US$0.01 a call, so a cost audit costs ~0.15), the rest a few cents each. Cost
+Explorer starts on 2026-10-16, too little history for AWS's forecast. Usage per day fell from 3.30
+(2026-10-16: NAT gateway + single-AZ db.t4g.small) to 2.85 (2026-10-17, the switch) and runs at ~2.5,
+the table above without GuardDuty; traffic was flat or falling (API invocations 11.7k → 8.0k → 4.1k
+a day). Every charge is in Sydney except the WAF (global) and the Cost Explorer API (us-east-1); a
+sweep of all 18 enabled Regions found nothing else: no load balancer, NAT gateway, Elastic IP,
+cache, container, Backup plan or trial service (Inspector, Security Hub, Config, Macie all off).
+Expected: October ~US$63 with GST (support 15.72 + ~41 usage), November ~US$105-120 (support for the
+month, GuardDuty billing from ~14 November), then ~96, or ~87.5 with the reservation. So the budget
+emails at 50% (US$40, ~23 October) and 75% (US$60, ~30 October) come from the support plan, not a leak.
+
 **Reserved instance:** none is active. Two orders on 2026-10-18 (`insights-production-t4g-micro-maz-2026-10`
 at 10:52 UTC, and `...-2026-10-b` at 12:30 UTC after the card was updated) both ended `payment-failed`
 about an hour later. AWS can't charge the card on file (GitHub reports failed payments too), and the
@@ -742,14 +757,22 @@ on 2026-10-17: two of them cost a third of one gateway.
 month passes 50/75/90/100% (US$40/60/72/80) and when AWS forecasts it above US$80. Nothing is
 stopped at any threshold. Until Basic support, the reservation and the Advanced RDS decision are in
 place, the 100% email is expected every month: it is accurate, not noise. The name carries a digest
-of the alerts because CloudFormation replaces a budget whose alerts change. Cost Anomaly
-Detection's default subscription alerts only at an impact of US$100 and 40%, so at this account's
-size it is no safety net, and the alarm topic still has no subscriber.
+of the alerts because CloudFormation replaces a budget whose alerts change. The alarm topic still
+has no subscriber.
+
+**Cost Anomaly Detection**: AWS's `Default-Services-Subscription` (on its `Default-Services-Monitor`)
+emails `budgetEmail` daily about any anomaly with a total impact of **US$5** or more (set by hand
+2026-10-18; AWS's default, US$100 and 40%, never fires at this account's size). AWS made the
+monitor, so it is not in CDK. Detection needs about 10 days of history (from ~26 October). Back to
+AWS's default: `aws ce update-anomaly-subscription --region us-east-1 --subscription-arn
+arn:aws:ce::605411278365:anomalysubscription/b4c7c83e-dfb5-4310-b5c3-83da07099523
+--threshold-expression` with `{"And":[...]}` of `ANOMALY_TOTAL_IMPACT_ABSOLUTE` ≥ 100 and
+`ANOMALY_TOTAL_IMPACT_PERCENTAGE` ≥ 40.
 
 Not costing anything yet, but watch: three manual RDS snapshots never expire, and backups may pass
 the 20 GB free allowance once the 14-day chain fills; four log groups keep logs forever (the RDS
-postgresql group and three CDK helper groups); storage autoscaling can grow the disk to 100 GB and
-it never shrinks back.
+postgresql group and three CDK helper groups; 1.1 MB together on 2026-10-18, under a cent a month,
+not worth a deploy yet); storage autoscaling can grow the disk to 100 GB and it never shrinks back.
 
 Looked at on 2026-10-18 and not worth it: moving region (us-east-1 is ~US$18 cheaper, but every
 request crosses the Pacific, Cognito users can't move with their passwords, and the data would
