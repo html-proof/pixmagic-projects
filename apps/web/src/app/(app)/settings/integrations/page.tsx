@@ -146,11 +146,14 @@ function Facts({ rows }: { rows: Array<[string, ReactNode]> }) {
 const Features = ({ items }: { items: string[] }) => <p className="mt-2 text-xs text-muted">Turns on: {items.join(" · ")}</p>;
 
 export default function IntegrationsPage() {
-  const { workspace, store, storesStatus } = useApp();
+  const { workspace, store, storesStatus, offers } = useApp();
   const manage = canManage(workspace.role);
   const storeBase = store ? `/workspaces/${workspace.id}/stores/${store.id}` : null;
-  const wa = useApi<WaOverview>(storeBase ? `${storeBase}/whatsapp` : null);
-  const ads = useApi<AdsState>(storeBase ? `${storeBase}/ads` : null);
+  // An App Store workspace leaves WhatsApp and advertising out (lib/features.ts): no card, no request.
+  const showWa = offers("whatsapp");
+  const showAds = offers("ads");
+  const wa = useApi<WaOverview>(storeBase && showWa ? `${storeBase}/whatsapp` : null);
+  const ads = useApi<AdsState>(storeBase && showAds ? `${storeBase}/ads` : null);
   const [note, setNote] = useState<{ kind: "success" | "error"; text: string } | null>(null);
   const [leaving, setLeaving] = useState<AdPlatform | null>(null);
   // Back from Facebook's own page without connecting: Facebook never says why to bizinsights, so this does.
@@ -351,7 +354,7 @@ export default function IntegrationsPage() {
           actions={
             !store ? (
               manage && (
-                <Link className="btn-primary" href="/onboarding">
+                <Link className="btn-primary" href={`/onboarding?ws=${encodeURIComponent(workspace.id)}`}>
                   Continue with Shopify
                 </Link>
               )
@@ -375,73 +378,75 @@ export default function IntegrationsPage() {
           {store && <Features items={["Sales dashboard", "Products and stock", "Customers to follow up"]} />}
         </Card>
 
-        <Card
-          testid="int-whatsapp"
-          icon={<WhatsappIcon size={22} />}
-          name="WhatsApp"
-          sub="Order and delivery updates, cart reminders and reviews from your own business number"
-          state={store ? waState : "not_connected"}
-          actions={
-            store && wa.data && storeBase ? (
+        {showWa && (
+          <Card
+            testid="int-whatsapp"
+            icon={<WhatsappIcon size={22} />}
+            name="WhatsApp"
+            sub="Order and delivery updates, cart reminders and reviews from your own business number"
+            state={store ? waState : "not_connected"}
+            actions={
+              store && wa.data && storeBase ? (
+                <>
+                  {manage && wa.data.platform.embeddedSignup && (
+                    <EmbeddedSignup
+                      base={`${storeBase}/whatsapp`}
+                      platform={wa.data.platform}
+                      label={waConn ? "Reconnect with WhatsApp" : "Continue with WhatsApp"}
+                      onConnected={() => void wa.reload()}
+                      notify={(kind, text) => setNote({ kind, text })}
+                    />
+                  )}
+                  <Link className="btn-secondary" href="/whatsapp/connect">
+                    {waConn ? "Manage" : wa.data.platform.embeddedSignup ? "Other ways to connect" : "Set up WhatsApp"}
+                  </Link>
+                  {manage && waConn && (
+                    <button type="button" className="text-sm text-danger underline-offset-2 hover:underline" onClick={() => void disconnect("wa-off")} disabled={!!busy}>
+                      {busy === "wa-off" ? "Disconnecting…" : "Disconnect"}
+                    </button>
+                  )}
+                </>
+              ) : null
+            }
+          >
+            {!store ? (
+              <p className="text-muted">Connect your Shopify store first: WhatsApp messages are about its orders.</p>
+            ) : wa.error ? (
+              <p className="text-muted">{actionError(wa.error, "check WhatsApp")}</p>
+            ) : waConn ? (
               <>
-                {manage && wa.data.platform.embeddedSignup && (
-                  <EmbeddedSignup
-                    base={`${storeBase}/whatsapp`}
-                    platform={wa.data.platform}
-                    label={waConn ? "Reconnect with WhatsApp" : "Continue with WhatsApp"}
-                    onConnected={() => void wa.reload()}
-                    notify={(kind, text) => setNote({ kind, text })}
-                  />
-                )}
-                <Link className="btn-secondary" href="/whatsapp/connect">
-                  {waConn ? "Manage" : wa.data.platform.embeddedSignup ? "Other ways to connect" : "Set up WhatsApp"}
-                </Link>
-                {manage && waConn && (
-                  <button type="button" className="text-sm text-danger underline-offset-2 hover:underline" onClick={() => void disconnect("wa-off")} disabled={!!busy}>
-                    {busy === "wa-off" ? "Disconnecting…" : "Disconnect"}
-                  </button>
-                )}
+                <Facts
+                  rows={[
+                    ["Business account", waConn.wabaName ?? "WhatsApp Business Account"],
+                    ["Number", `${waConn.displayPhoneNumber ?? "—"}${waConn.verifiedName ? ` · ${waConn.verifiedName}` : ""}`],
+                    ["Last synchronized", waConn.lastSyncedAt ? fmtRelative(waConn.lastSyncedAt) : "Not yet"],
+                    [
+                      "Health",
+                      waState === "action_required"
+                        ? "Register the number to start sending (Manage)"
+                        : waState === "connecting"
+                          ? "Waiting for Meta's first message"
+                          : waState === "permission_expired"
+                            ? "Meta access ended: reconnect"
+                            : waState === "failed"
+                              ? (waConn.lastError ?? "Meta reported a problem")
+                              : `Working · quality ${quality(waConn.qualityRating).toLowerCase()} · ${tier(waConn.messagingLimitTier)}`,
+                    ],
+                  ]}
+                />
+                <Features items={["Messages and delivery status", "Message templates", "Order updates", "Cart reminders", "Reviews"]} />
               </>
-            ) : null
-          }
-        >
-          {!store ? (
-            <p className="text-muted">Connect your Shopify store first: WhatsApp messages are about its orders.</p>
-          ) : wa.error ? (
-            <p className="text-muted">{actionError(wa.error, "check WhatsApp")}</p>
-          ) : waConn ? (
-            <>
-              <Facts
-                rows={[
-                  ["Business account", waConn.wabaName ?? "WhatsApp Business Account"],
-                  ["Number", `${waConn.displayPhoneNumber ?? "—"}${waConn.verifiedName ? ` · ${waConn.verifiedName}` : ""}`],
-                  ["Last synchronized", waConn.lastSyncedAt ? fmtRelative(waConn.lastSyncedAt) : "Not yet"],
-                  [
-                    "Health",
-                    waState === "action_required"
-                      ? "Register the number to start sending (Manage)"
-                      : waState === "connecting"
-                        ? "Waiting for Meta's first message"
-                        : waState === "permission_expired"
-                          ? "Meta access ended: reconnect"
-                          : waState === "failed"
-                            ? (waConn.lastError ?? "Meta reported a problem")
-                            : `Working · quality ${quality(waConn.qualityRating).toLowerCase()} · ${tier(waConn.messagingLimitTier)}`,
-                  ],
-                ]}
-              />
-              <Features items={["Messages and delivery status", "Message templates", "Order updates", "Cart reminders", "Reviews"]} />
-            </>
-          ) : wa.data && !wa.data.platform.embeddedSignup ? (
-            <p className="text-muted">One-click WhatsApp sign-up is being switched on. You can already connect with your own Meta app from Set up WhatsApp.</p>
-          ) : (
-            <p className="text-muted">Meta opens a window: log in, choose your business and number (or add one) and confirm the code Meta texts you. About 3 minutes.</p>
-          )}
-        </Card>
+            ) : wa.data && !wa.data.platform.embeddedSignup ? (
+              <p className="text-muted">One-click WhatsApp sign-up is being switched on. You can already connect with your own Meta app from Set up WhatsApp.</p>
+            ) : (
+              <p className="text-muted">Meta opens a window: log in, choose your business and number (or add one) and confirm the code Meta texts you. About 3 minutes.</p>
+            )}
+          </Card>
+        )}
 
-        {adCard("google", googleState)}
+        {showAds && adCard("google", googleState)}
 
-        {adCard("meta", metaState)}
+        {showAds && adCard("meta", metaState)}
       </div>
     </div>
   );

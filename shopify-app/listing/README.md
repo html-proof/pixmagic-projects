@@ -67,14 +67,20 @@ Checked just before submitting:
 - Listing visibility after approval: "only accessible to merchants who have its direct URL" until
   someone clicks **Make fully visible** on the same page (owner's call).
 
-Still open, likely to come back as review feedback (the testing instructions already warn about the
-first two):
+Done since (2026-10-18): **the app and site, as a reviewer sees them**. A workspace whose stores came
+through this app (and the test account's, through `SHOPIFY_APP_STORE_PREVIEW_SHOPS`) shows no
+WhatsApp, Staff, advertising or email (`APP_STORE_MODULES` in `apps/web/src/lib/features.ts`), and
+its in-app Continue with Shopify / Connect / Reconnect go through this app, while a store keeps the
+app it came through (`connectApp`, `packages/core/src/apps.ts`). The dashboard no longer promises
+"within a minute" or suggests test orders; /login and /signup dropped "Real-time analytics" and
+label their figures as an illustration; /support and /privacy were corrected (Settings → Shopify,
+another store, Cloudflare, Resend, Staff data). The testing instructions in `listing-copy.md` were
+rewritten to match: paste them into the form when the review feedback comes back.
 
-1. **The app and site, as a reviewer sees them** (code, one pull request): hide WhatsApp, Staff,
-   advertising and email for App Store installs; send in-app "Connect" buttons to this app, not the
-   unapproved main app; reword "within a minute" and "place a test order" in the dashboard; drop
-   "Real-time analytics" and label the mock figures on /login and /signup; fix /support
-   ("Settings → Stores", connecting another store) and /privacy (Cloudflare, Resend, Staff data).
+Still open:
+
+1. **Paste the new testing instructions** (`listing-copy.md`) into the listing form with the next
+   **Submit fixes**.
 2. **Run the reviewer path once** on a fresh development store: install, claim, import,
    dashboard, Sync now, uninstall, reinstall.
 3. **After approval**: set `SHOPIFY_INSTALL_APP` to `public` (`apps/aws/src/settings.ts`), add the

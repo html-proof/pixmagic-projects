@@ -1,7 +1,7 @@
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { z } from "zod";
 import { systemDb } from "@app/db";
-import { employmentsForUser, env, logger, sessionAccess } from "@app/core";
+import { appStoreWorkspace, employmentsForUser, env, logger, sessionAccess } from "@app/core";
 import { ACCESS_KEYS, accountPasswordProblem, DISPLAY_NAME_MAX, EMAIL_CODE_RE, hasFullAccess, pkcePair, randomToken, safeEqual, sha256Hex } from "@app/shared";
 import { body, clientIp, HttpError, isLinkSession, loadUser, pickSession, requireAppOrigin, requireUser, sessionOf, SESSION_COOKIE, sharedWorkspace, type Ctx, type Deps } from "../context.js";
 import { CognitoError, CognitoUnavailableError, type CognitoTokens, type FederatedProvider, type SignInResult } from "../cognito.js";
@@ -457,6 +457,11 @@ export function authRoutes(app: App, deps: Deps) {
       include: { workspace: { select: { id: true, name: true } } },
       orderBy: { createdAt: "asc" },
     });
+    // Which of those came in through the App Store app: the app shows them only what its listing describes.
+    const stores = await systemDb.store.findMany({
+      where: { workspaceId: { in: memberships.map((m) => m.workspaceId) } },
+      select: { workspaceId: true, shopDomain: true, shopifyAppKey: true },
+    });
     return c.json({
       user: publicUser(user),
       // Each with what this person may see there (Team & Access). A revoked membership, or one whose
@@ -473,6 +478,7 @@ export function authRoutes(app: App, deps: Deps) {
           status: eff.state,
           fingerprint: eff.fingerprint,
           accessExpiresAt: m.accessExpiresAt?.toISOString() ?? null,
+          appStore: appStoreWorkspace(stores.filter((s) => s.workspaceId === m.workspaceId)),
         };
       }),
       // Organizations this account works for as an employee (the employee portal).

@@ -136,6 +136,54 @@ describe("several Shopify apps", () => {
   });
 
   /**
+   * A merchant who installed from the App Store listing must never be sent to the main app, which
+   * Shopify hasn't approved for their store; everyone else carries on as before.
+   */
+  describe("a workspace whose stores came through the App Store app", () => {
+    const LISTED = "listed-shop.myshopify.com";
+    const DIRECT = "direct-shop.myshopify.com";
+    const clientId = (url: string) => new URL(url).searchParams.get("client_id");
+    afterEach(() => ctx.setEnv({ SHOPIFY_APP_STORE_PREVIEW_SHOPS: "" }));
+
+    it("is marked as such on /me, and only that one", async () => {
+      const { b, ws } = await owner();
+      const other = (await b.post("/workspaces", { name: "Other" })).json().workspace.id as string;
+      await createStore(ws, LISTED, ["read_orders"], { shopifyAppKey: "public" });
+      await createStore(other, DIRECT, ["read_orders"], { shopifyAppKey: "default" });
+      const flags = Object.fromEntries((await b.get("/me")).json().workspaces.map((w: { id: string; appStore: boolean }) => [w.id, w.appStore]));
+      expect(flags).toEqual({ [ws]: true, [other]: false });
+    });
+
+    it("adds stores through the App Store app, by Shopify's picker or by name", async () => {
+      const { b, ws, install } = await owner();
+      await createStore(ws, LISTED, ["read_orders"], { shopifyAppKey: "public", status: "uninstalled" });
+      expect((await b.post(`/workspaces/${ws}/shopify/start`)).json().url).toBe("https://admin.shopify.com/oauth/install?client_id=public_key");
+      expect(clientId((await install("another-shop")).json().url)).toBe("public_key");
+      // A client's store still goes to its own app.
+      expect(clientId((await install("client-shop")).json().url)).toBe("client_key");
+    });
+
+    it("reconnects a store through the app it came through", async () => {
+      const { ws, install } = await owner();
+      // The App Store reviewer's test store: on the main app, shown as an App Store install.
+      ctx.setEnv({ SHOPIFY_APP_STORE_PREVIEW_SHOPS: DIRECT });
+      await createStore(ws, DIRECT, ["read_orders"], { shopifyAppKey: "default", status: "error" });
+      expect(clientId((await install("direct-shop")).json().url)).toBe("test_key");
+      expect(clientId((await install("new-shop")).json().url)).toBe("public_key");
+    });
+
+    it("leaves a workspace with a main-app store on the main app", async () => {
+      const { b, ws, install } = await owner();
+      await createStore(ws, DIRECT, ["read_orders"], { shopifyAppKey: "default" });
+      await createStore(ws, LISTED, ["read_orders"], { shopifyAppKey: "public" });
+      expect((await b.post(`/workspaces/${ws}/shopify/start`)).json().url).toContain("client_id=test_key");
+      expect(clientId((await install("new-shop")).json().url)).toBe("test_key");
+      // Its App Store store reconnects through the App Store app all the same.
+      expect(clientId((await install("listed-shop")).json().url)).toBe("public_key");
+    });
+  });
+
+  /**
    * Until the main app passes Shopify's review it may only be installed on stores in our own
    * developer organization (SHOPIFY_DEFAULT_APP_SHOPS). Sending anyone else to it ends on
    * Shopify's "This installation link can't be used" page, so those merchants must be routed

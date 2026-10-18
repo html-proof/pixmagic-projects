@@ -57,7 +57,7 @@ export function freshnessPill(live: LiveState, f: Freshness | undefined, now: nu
   return {
     tone: fresh ? "good" : "neutral",
     label: `Updated ${updated}`,
-    title: `${since} New orders and refunds usually arrive within a minute, and while this page is open bizinsights also checks Shopify every few minutes. Shopify's own reports can take a few minutes to include them too.`,
+    title: `${since} While this page is open, bizinsights checks Shopify for new orders and refunds about every 5 minutes, and every night it reads the latest days again. Shopify's own reports can take a few minutes to include new orders too.`,
   };
 }
 
@@ -143,8 +143,9 @@ export function AboutThisData({
             Money in {store.currency}. Days and times follow the store&apos;s time zone ({store.timezone}). {store.shopDomain}
           </p>
           <p>
-            New numbers are checked every {everySec} seconds. New orders and refunds usually reach bizinsights within a minute; Shopify&apos;s own reports
-            can take a few minutes to include them too, so the two may briefly differ.
+            This page asks for new numbers every {everySec} seconds. While it is open, bizinsights checks Shopify for new orders and refunds about every 5
+            minutes (Sync now in Settings → Shopify checks straight away), and every night it reads the latest days again, so Shopify&apos;s reports and
+            these may briefly differ. Test orders aren&apos;t counted, as in Shopify&apos;s reports.
           </p>
           {!fullHistory && <p>Shopify shares the most recent 60 days of orders with apps, so older history isn&apos;t included.</p>}
           {ws && store.status !== "uninstalled" && <CheckDetails ws={ws} storeId={store.id} check={check} seesFigures={seesFigures} canRun={canCheck && store.status === "active"} />}
@@ -159,8 +160,9 @@ export function EmptyStoreNote({ store, data }: { store: OverviewStore; data: Im
   if (!data || store.status !== "active" || data.orders !== 0 || data.products !== 0) return null;
   return (
     <p className="alert alert-info" data-testid="empty-store">
-      Your Shopify store doesn&apos;t have any orders or products yet. Add a product or place a test order in Shopify and it will show up here
-      automatically.
+      Your Shopify store doesn&apos;t have any orders or products yet. Add a product, or create an order in Shopify (Orders → Create order, then mark it
+      as paid), and it shows up here the next time bizinsights checks Shopify; Sync now in Settings → Shopify checks straight away. Test orders
+      aren&apos;t counted, as in Shopify&apos;s reports.
     </p>
   );
 }

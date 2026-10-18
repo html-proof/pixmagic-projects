@@ -2,6 +2,7 @@ import type { AccessKind, AccessModule } from "@app/shared/access";
 import type { Role } from "@app/shared/roles";
 import type { StaffRole } from "@app/shared/staff";
 import type { DeliveryStatus, TeamRow, TeamRowStatus, TeamSummary } from "@app/shared/team";
+import type { Offers } from "@/lib/access";
 
 // Responses of the Team & Access API (apps/api/src/routes/team.ts), as the team page reads them. The
 // rows, counts, history and email delivery statuses are @app/shared/team, shared with the API.
@@ -57,6 +58,41 @@ export interface Catalog {
   staffRoles: Array<{ id: StaffRole; label: string; description: string }>;
   limits: { messageMax: number; expiryDaysMax: number; expiryDaysDefault: number };
   hasStore: boolean;
+}
+
+/**
+ * The catalog as a workspace offers it: without the permissions of the parts of the app it leaves
+ * out (lib/features.ts, APP_STORE_MODULES), in the list or in a role's preset, and without a module
+ * left with none. A member already holding one keeps it; it just isn't offered.
+ */
+export function offeredCatalog(catalog: Catalog, offers: Offers): Catalog {
+  const ads = offers("ads");
+  const campaigns = ads || offers("whatsapp");
+  const accounts = campaigns || offers("email");
+  const hidden = new Set<string>([
+    ...(ads ? [] : ["marketing.ads"]),
+    ...(campaigns ? [] : ["marketing.campaigns"]),
+    ...(accounts ? [] : ["integrations.manage"]),
+    ...(offers("staff") ? [] : ["staff.team", "staff.timesheets", "staff.payroll", "staff.manage"]),
+  ]);
+  if (!hidden.size) return catalog;
+  const modules = catalog.modules
+    .map((m) => ({
+      ...m,
+      // With ads, WhatsApp and email all left out, the only account to report on is the store.
+      ...(m.id === "marketing" && !campaigns && { description: "Orders and sales that came from paid traffic and campaign links." }),
+      ...(m.id === "integrations" && !accounts && { description: "Whether the Shopify store is connected and working." }),
+      permissions: m.permissions
+        .filter((p) => !hidden.has(p.key))
+        .map((p) => (p.key === "integrations.status" && !accounts ? { ...p, reveals: "Whether the Shopify store is connected and syncing." } : p)),
+    }))
+    .filter((m) => m.permissions.length > 0);
+  return {
+    ...catalog,
+    modules,
+    roles: catalog.roles.map((r) => ({ ...r, template: r.template.filter((k) => !hidden.has(k)) })),
+    staffRoles: offers("staff") ? catalog.staffRoles : [],
+  };
 }
 
 export interface MemberDetail {

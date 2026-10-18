@@ -164,8 +164,9 @@ To stop bizinsights' access in Shopify too, uninstall the app from your Shopify 
 
             {empty && (
               <p className="rounded-lg border border-border bg-bg p-3 text-sm" data-testid="store-empty">
-                Connected, but there was nothing to import: this store has no orders or products in Shopify yet. Add a product or
-                place a test order and it will appear here on its own.
+                Connected, but there was nothing to import: this store has no orders or products in Shopify yet. Add a product, or create
+                an order in Shopify (Orders → Create order, then mark it as paid), and press Sync now. Test orders aren&apos;t counted, as in
+                Shopify&apos;s reports.
               </p>
             )}
 
