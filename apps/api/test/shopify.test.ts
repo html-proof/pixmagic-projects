@@ -296,6 +296,89 @@ describe("Shopify OAuth", () => {
     });
     expect(cb.headers.location).toContain("error=state_mismatch");
   });
+
+  describe("refusals are logged", () => {
+    /** Log lines written while `fn` runs, parsed. The suite runs with LOG_LEVEL=silent otherwise. */
+    async function logsOf(fn: () => Promise<unknown>) {
+      const prev = process.env.LOG_LEVEL;
+      process.env.LOG_LEVEL = "info";
+      const lines: Array<Record<string, unknown>> = [];
+      const take = (s: unknown) => lines.push(JSON.parse(String(s)) as Record<string, unknown>);
+      const spies = [vi.spyOn(console, "log"), vi.spyOn(console, "warn"), vi.spyOn(console, "error")].map((s) => s.mockImplementation(take));
+      try {
+        await fn();
+      } finally {
+        spies.forEach((s) => s.mockRestore());
+        process.env.LOG_LEVEL = prev;
+      }
+      return lines;
+    }
+    const now = () => String(Math.floor(Date.now() / 1000));
+
+    it("a callback with a bad signature: one line with the reason and the link's shape, no secrets", async () => {
+      const q = new URLSearchParams({ code: "CODE_VALUE_42", shop: "demo-shop.myshopify.com", state: "st", timestamp: now(), hmac: "badc0ffee0ddf00d" });
+      const lines = await logsOf(async () => {
+        const cb = await ctx.app.inject({ method: "GET", url: `/shopify/callback?${q}`, headers: { "sec-fetch-dest": "document" } });
+        expect(cb.headers.location).toContain("error=invalid_hmac");
+      });
+      const refused = lines.filter((l) => l.event === "shopify_callback_rejected");
+      expect(refused).toHaveLength(1);
+      expect(refused[0]).toMatchObject({
+        level: "warn",
+        reason: "invalid_hmac",
+        params: ["code", "hmac", "shop", "state", "timestamp"],
+        hmacPresent: true,
+        shop: "demo-shop.myshopify.com",
+        app: null,
+        appsChecked: expect.any(Number),
+        fetchDest: "document",
+      });
+      const all = JSON.stringify(lines);
+      expect(all).not.toContain("badc0ffee0ddf00d");
+      expect(all).not.toContain("CODE_VALUE_42");
+      expect(all).not.toContain(SECRET);
+    });
+
+    it("a callback refused after its signature checked out names the app that signed it", async () => {
+      const lines = await logsOf(async () => {
+        const cb = await ctx.app.inject({ method: "GET", url: callbackUrl({ code: "CODE_VALUE_42", shop: "demo-shop.myshopify.com", state: "st", timestamp: now() }) });
+        expect(cb.headers.location).toContain("error=state_mismatch");
+      });
+      const refused = lines.filter((l) => l.event === "shopify_callback_rejected");
+      expect(refused).toHaveLength(1);
+      expect(refused[0]).toMatchObject({ reason: "state_mismatch", app: "default", hmacPresent: true, fetchDest: null });
+      expect(refused[0]).not.toHaveProperty("appsChecked");
+      expect(JSON.stringify(lines)).not.toContain("CODE_VALUE_42");
+    });
+
+    it("a launch with a bad signature: one line with the reason and the link's shape, no secrets", async () => {
+      const q = new URLSearchParams({ shop: "demo-shop.myshopify.com", host: "aG9zdA", timestamp: now(), id_token: "ID_TOKEN_VALUE", session: "SESSION_VALUE", hmac: "badc0ffee0ddf00d" });
+      const lines = await logsOf(async () => {
+        const res = await ctx.app.inject({ method: "GET", url: `/shopify/launch?${q}`, headers: { "sec-fetch-dest": "iframe" } });
+        expect(res.headers.location).toBe("http://localhost:3001/onboarding?error=launch_unverified");
+      });
+      const refused = lines.filter((l) => l.event === "shopify_launch_rejected");
+      expect(refused).toHaveLength(1);
+      expect(refused[0]).toMatchObject({
+        level: "warn",
+        reason: "invalid_hmac",
+        params: ["hmac", "host", "id_token", "session", "shop", "timestamp"],
+        hmacPresent: true,
+        shop: "demo-shop.myshopify.com",
+        app: null,
+        fetchDest: "iframe",
+      });
+      const all = JSON.stringify(lines);
+      for (const secret of ["badc0ffee0ddf00d", "ID_TOKEN_VALUE", "SESSION_VALUE", SECRET]) expect(all).not.toContain(secret);
+    });
+
+    it("a launch with no signature at all says so", async () => {
+      const lines = await logsOf(() => ctx.app.inject({ method: "GET", url: "/shopify/launch?shop=demo-shop.myshopify.com" }));
+      const refused = lines.filter((l) => l.event === "shopify_launch_rejected");
+      expect(refused).toHaveLength(1);
+      expect(refused[0]).toMatchObject({ reason: "invalid_hmac", params: ["shop"], hmacPresent: false, app: null });
+    });
+  });
 });
 
 describe("webhook security & idempotency", () => {
