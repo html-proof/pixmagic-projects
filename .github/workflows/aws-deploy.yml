@@ -2,9 +2,9 @@ name: Deploy to AWS
 
 # Push to main (after CI's checks pass on the same commit) or run by hand. Deploys with GitHub's
 # OIDC token exchanged for the role in InsightsCi-production: no AWS keys are stored in GitHub.
-# Setup (once): repository → Settings → Environments → "production" (add required reviewers to
-# gate releases), with the variable AWS_DEPLOY_ROLE_ARN = the InsightsCi-production stack's
-# DeployRoleArn output. docs/aws-deployment.md has the rest.
+# The role admits only this file run from main. Setup (once): repository → Settings →
+# Environments → "production", with the variable AWS_DEPLOY_ROLE_ARN = the InsightsCi-production
+# stack's DeployRoleArn output. docs/aws-deployment.md has the rest.
 on:
   workflow_dispatch:
   workflow_run:
