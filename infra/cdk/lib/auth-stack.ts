@@ -61,8 +61,8 @@ export class AuthStack extends Stack {
     // Only this pool may invoke the email sender.
     emailSender?.fn.addPermission("CognitoInvoke", { principal: new iam.ServicePrincipal("cognito-idp.amazonaws.com"), sourceArn: pool.attrArn, sourceAccount: cfg.account });
 
-    // The admin calls the app makes (moving Firebase users, staff invitations, account deletion,
-    // sign-out everywhere), on this pool only.
+    // The admin calls the app makes (accounts from before Cognito, staff invitations, account
+    // deletion, sign-out everywhere), on this pool only.
     new iam.Policy(this, "ApiCognitoAdmin", {
       policyName: `insights-${cfg.name}-cognito-admin`,
       roles: [props.apiRole],

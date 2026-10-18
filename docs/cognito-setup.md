@@ -3,7 +3,7 @@
 bizinsights signs people in with an Amazon Cognito user pool: email and password (with emailed codes
 for sign-up and password resets), Continue with Google, and optionally a passwordless emailed
 code (Sign in with Apple was removed on 2026-10-16). It replaced Firebase Authentication; this page
-covers how it works, how to set it up, and how existing accounts move over.
+covers how it works, how to set it up, and what is left of the move.
 
 ## How it works
 
@@ -31,9 +31,9 @@ browser ──► /api/auth/* (API)    ──► Cognito user-pool API          
 - **The confidential app client's secret** signs every user-pool call (`SECRET_HASH`). The API
   function's own role, which may make only five admin calls on this pool (create, get, set password,
   delete, sign out everywhere), signs the admin calls with SigV4. No access keys anywhere.
-- **Audit**: `auth_events` records account-level changes (account created, identity linked, account
-  moved from Firebase, password reset/changed, email changed or verified, signed out everywhere,
-  account deleted).
+- **Audit**: `auth_events` records account-level changes (account created, identity linked, an
+  account from before Cognito given its Cognito user, password reset/changed, email changed or
+  verified, signed out everywhere, account deleted).
 
 ### Routes
 
@@ -41,7 +41,7 @@ browser ──► /api/auth/* (API)    ──► Cognito user-pool API          
 | --- | --- |
 | `GET /api/auth/config` | which "Continue with ..." buttons work; whether emailed-code sign-in is on |
 | `POST /api/auth/signup`, `/signup/confirm`, `/signup/resend` | create an account; confirm the emailed code |
-| `POST /api/auth/login` | email + password (moves a Firebase account on its first sign-in) |
+| `POST /api/auth/login` | email + password |
 | `POST /api/auth/password/forgot`, `/password/reset` | reset code by email; new password |
 | `POST /api/auth/otp/start`, `/otp/verify` | passwordless code (only with `COGNITO_EMAIL_OTP=1`) |
 | `GET /api/auth/oauth/google/start` | to Google, with state, PKCE and a nonce |
@@ -83,8 +83,9 @@ Cognito's documentation asks for SES: verify a domain in SES in the same region,
 
 ## 2. Google
 
-In Google Cloud (project saas-89329 has the client Firebase used; a new "Web application" OAuth
-client works as well):
+Continue with Google is off in production until this is done (`GET /api/auth/config` answers
+`"google": false`). In Google Cloud, with a "Web application" OAuth client in a project the owner's
+Google account controls:
 
 1. APIs & Services → Credentials → the OAuth client → **Authorized redirect URIs**: add the stack's
    `ProviderRedirectUri` (`https://<prefix>.auth.<region>.amazoncognito.com/oauth2/idpresponse`).
@@ -104,84 +105,31 @@ signs the admin calls (`apps/aws/src/secrets.ts`, `apps/aws/src/index.ts`). `COG
 goes in `APP_SETTINGS` (`apps/aws/src/settings.ts`) only once SES is set up. The web build needs
 nothing: every environment uses the same UI build.
 
-## 4. Moving existing accounts from Firebase
+## 4. Accounts from before Cognito
 
-Firebase stores passwords with its own modified scrypt, which Cognito's password-hash import does
-not accept (it takes standard scrypt, bcrypt, Argon2id and PBKDF2). So passwords move one person at a
-time, and nobody has to do anything:
+The move from Firebase is over, and the app no longer talks to Firebase at all:
 
-- **Password accounts**: the first sign-in after the switch fails in Cognito (no such user), so the
-  API asks Firebase once whether that email and password are right (`accounts:signInWithPassword`
-  with the project's public web API key, `LEGACY_FIREBASE_API_KEY`). If they are, it creates the
-  Cognito user with that same password and signs them in. Their `users.id`, workspaces and stores are
-  untouched: the new identity is linked through the Firebase uid. Firebase allowed 6-character
-  passwords; for those, Cognito can't take the password, so a reset code is emailed instead and the
-  sign-in page says so.
-- **Google accounts**: "Continue with Google" creates a Google user in the pool, and the API links
-  it to the existing account by its Google-verified address.
-- **Accounts that only used emailed codes or links**, and anyone who never signs in during the
-  window: "Forgot password?" creates their Cognito user (no email to them, random password) and
-  Cognito emails a reset code. Proving the inbox gets them back into the same `users.id`.
-- **Apple accounts**: Apple was never switched on in production Firebase, so there are none (and
-  bizinsights no longer offers Apple sign-in; "Forgot password?" would move one).
+- Until 2026-10-18 a password sign-in that Cognito refused was checked against Firebase once
+  (`LEGACY_FIREBASE_API_KEY`), and the Cognito user was created with that password. That check, and
+  the `ops:cognito-plan` / `ops:cognito-verify` tasks that planned the move, were removed
+  (`git log --diff-filter=D -- apps/api/src/legacyFirebase.ts` finds the commit; its parent still
+  has them). On that day production's database had no account left from
+  Firebase: no `users.firebase_uid` set, no identity created by a move, and the API's logs since
+  2026-10-15 show no Firebase sign-in at all.
+- The old deployment's database (on the owner's PC; [aws-deployment.md](aws-deployment.md),
+  "Cutover") still holds Firebase accounts. If any of them are merged in, they keep their
+  `users.firebase_uid` and come back without Firebase: "Forgot password?" (or the emailed-code sign-in)
+  creates their Cognito user (no email to them, random password) and Cognito emails a code; proving
+  the inbox gets them into the same `users.id`, workspaces and stores. Continue with Google, or
+  signing up again with the same address, links to it too, on the verified address. Their old
+  password is not kept anywhere.
+- `users.firebase_uid` stays: it is what "Forgot password?" recognises such an account by.
+  `auth_identities.migrated_from_firebase_uid` is no longer written (no production row has it set);
+  dropping it is a migration of its own.
 
-Nothing is merged on an unverified address, a Firebase account is asked about only while it has no
-Cognito user, and every step is recorded in `auth_events`.
-
-### Before the switch: the dry run
-
-With the repo-root `.env` holding the owner-role `DATABASE_URL`, and (optionally)
-`FIREBASE_SERVICE_ACCOUNT_B64` and the `COGNITO_*` settings with admin keys:
-
-```bash
-pnpm --filter @app/api ops:cognito-plan
-```
-
-It writes `ops-reports/plan-<time>.md` (every user, how they will reach Cognito, and anything to look
-at first) and `ops-reports/snapshot-<time>.json` (who belongs to which workspace with which role, every
-employee link). It only reads. Keep the snapshot.
-
-### The switch
-
-It happens at the cutover to AWS ([aws-deployment.md](aws-deployment.md), "Cutover"), which signs in
-with Cognito only:
-
-1. The data is copied in with `infra/cdk/scripts/migrate-data.mjs`, which backs the source up first
-   and applies the migrations, `20261016000000_cognito_identities` included.
-2. `LEGACY_FIREBASE_API_KEY` is set (`apps/aws/src/settings.ts`), and sections 1-3 are done.
-3. Everyone signed in before is signed out once (the Firebase session cookie isn't ours any more) and
-   signs in again, which is what moves their account.
-4. Smoke-test: create an account, confirm the code, sign out, sign in; sign in with an existing
-   (Firebase) account's password; Continue with Google; Forgot password.
-
-### After the switch: the proof
-
-```bash
-$env:OPS_SNAPSHOT = "ops-reports/snapshot-<time>.json"
-```
-
-```bash
-pnpm --filter @app/api ops:cognito-verify
-```
-
-It fails, and lists the differences, if any user from the snapshot is gone or has different
-workspaces, roles or employee records; it also re-runs the plan, so `on_cognito` shows how many
-accounts have moved.
-
-### Rollback
-
-Rolling back the cutover returns sign-in to the old deployment, which still uses Firebase, until it
-is retired ([aws-deployment.md](aws-deployment.md#retiring-the-old-cloudflare-deployment)). Firebase still has every account and `users.firebase_uid` still
-points at it, so everyone can sign in the old way again (accounts created on Cognito in between have
-no Firebase account: they would need to sign up again on Firebase). The migration needs no undo:
-the old version ignores the new tables and columns.
-
-### Ending the migration window
-
-When the plan shows (nearly) everyone `on_cognito`, clear `LEGACY_FIREBASE_API_KEY` in `apps/aws/src/settings.ts` and merge to `main`. From
-then on Firebase is never asked anything; those who hadn't moved use "Forgot password?". Then the
-Firebase project's Authentication can be switched off (keep it a while for rollback). `users.firebase_uid`
-can stay: it is what "Forgot password?" recognises an old account by.
+Nothing is merged on an unverified address, and every step is recorded in `auth_events`. The old
+deployment keeps signing its own users in with Firebase until it is retired
+([aws-deployment.md](aws-deployment.md#retiring-the-old-cloudflare-deployment)).
 
 ## 5. Local development and tests
 
@@ -198,9 +146,8 @@ so Continue with Google runs end to end in a browser.
 - **Every sign-in says "We can't reach the sign-in service"**: `COGNITO_USER_POOL_ID` /
   `COGNITO_CLIENT_ID` unset (the API logs it at startup), or Cognito unreachable. CloudWatch Logs
   `/aws/lambda/insights-production-api`.
-- **"That email and password don't match" for a Firebase account**: `LEGACY_FIREBASE_API_KEY`
-  unset or wrong, or a Cognito user already exists for that address (then Cognito's password is the
-  one; "Forgot password?").
+- **"That email and password don't match" for an account from before Cognito**: its old Firebase
+  password no longer works anywhere; "Forgot password?" gets them in (section 4).
 - **Google: `redirect_mismatch` / `invalid_request` at Cognito**: the app client's callback URL
   must be exactly `<APP_URL>/auth/callback`; Google's must be the stack's `ProviderRedirectUri`.
 - **"This sign-in didn't start in this browser"**: the state cookie (`__oauth`, 10 minutes) is gone:

@@ -24,17 +24,15 @@ export const emailTaken = () =>
  * needed. In order:
  *
  * 1. The Cognito user is already linked (auth_identities): that user.
- * 2. It was just created from a Firebase account (`firebaseUid`): the user that Firebase account
- *    belonged to, whatever its email says.
- * 3. A user with the same email exists: linked only when Cognito vouches for the address
+ * 2. A user with the same email exists: linked only when Cognito vouches for the address
  *    (email_verified: a confirmed sign-up code, Google). Otherwise anyone could register
  *    someone else's address and walk into their workspaces; they are told it's taken instead.
- * 4. Nobody: a new user.
+ * 3. Nobody: a new user.
  *
  * Idempotent: the (provider, subject) pair is unique, so a retried or concurrent first sign-in
  * finds the identity the other one created.
  */
-export async function resolveUser(claims: IdentityClaims, opts: { firebaseUid?: string; ip?: string | null } = {}): Promise<User> {
+export async function resolveUser(claims: IdentityClaims, opts: { ip?: string | null } = {}): Promise<User> {
   const email = claims.email?.toLowerCase() ?? null;
   if (!email) throw new HttpError(400, "An email address is required to sign in. Share your email with us when you sign in with Google.", "email_required");
   const where = { provider_subject: { provider: "cognito", subject: claims.sub } };
@@ -70,7 +68,6 @@ export async function resolveUser(claims: IdentityClaims, opts: { firebaseUid?: 
           username: claims.username,
           method: claims.method,
           email,
-          migratedFromFirebaseUid: opts.firebaseUid ?? null,
           lastUsedAt: new Date(),
         },
       });
@@ -81,17 +78,9 @@ export async function resolveUser(claims: IdentityClaims, opts: { firebaseUid?: 
       if (raced) return raced.user;
       throw err;
     }
-    await recordAuthEvent(reason, user.id, opts.ip ?? null, { cognitoSub: claims.sub, method: claims.method, ...(opts.firebaseUid ? { firebaseUid: opts.firebaseUid } : {}) });
+    await recordAuthEvent(reason, user.id, opts.ip ?? null, { cognitoSub: claims.sub, method: claims.method });
     return user;
   };
-
-  if (opts.firebaseUid) {
-    const legacy = await systemDb.user.findUnique({ where: { firebaseUid: opts.firebaseUid } });
-    if (legacy) {
-      const user = claims.emailVerified && !legacy.emailVerified ? await systemDb.user.update({ where: { id: legacy.id }, data: { emailVerified: true } }) : legacy;
-      return link(user, "firebase_account_migrated");
-    }
-  }
 
   const sameEmail = await systemDb.user.findUnique({ where: { email } });
   if (sameEmail) {
@@ -106,7 +95,6 @@ export async function resolveUser(claims: IdentityClaims, opts: { firebaseUid?: 
         email,
         emailVerified: claims.emailVerified,
         displayName: claims.name?.slice(0, 80) ?? null,
-        firebaseUid: opts.firebaseUid ?? null,
         identities: {
           create: {
             provider: "cognito",
@@ -114,7 +102,6 @@ export async function resolveUser(claims: IdentityClaims, opts: { firebaseUid?: 
             username: claims.username,
             method: claims.method,
             email,
-            migratedFromFirebaseUid: opts.firebaseUid ?? null,
             lastUsedAt: new Date(),
           },
         },

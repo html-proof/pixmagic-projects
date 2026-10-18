@@ -10,8 +10,8 @@ import { AuthCard, AuthSubmit } from "@/components/auth/AuthCard";
 import { CodeStep } from "@/components/auth/CodeStep";
 
 /**
- * A signed-in account whose address isn't verified yet (one moved over from Firebase unverified,
- * or an employee who joined from a copied link): the app shell sends it here. A code goes to the
+ * A signed-in account whose address isn't verified yet (an employee who joined from a copied
+ * link, say): the app shell sends it here. A code goes to the
  * address; entering it verifies it. New sign-ups confirm their code on the sign-up page instead.
  */
 export default function VerifyEmailPage() {

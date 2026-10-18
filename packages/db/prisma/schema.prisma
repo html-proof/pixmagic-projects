@@ -52,8 +52,8 @@ enum JobStatus {
 model User {
   id            String       @id @default(cuid())
   /// The Firebase Authentication account this user signed in with before the move to Cognito.
-  /// Kept (never reused) so a password can be checked against Firebase once, at the first
-  /// Cognito sign-in, and so a rollback finds every account again. New accounts have none.
+  /// Marks an account from before the move: "Forgot password?" creates its Cognito user
+  /// (apps/api/src/routes/auth.ts). Firebase itself is never called. New accounts have none.
   firebaseUid   String?      @unique @map("firebase_uid")
   email         String       @unique
   emailVerified Boolean      @default(false) @map("email_verified")
@@ -90,7 +90,9 @@ model AuthIdentity {
   /// How this Cognito user signs in: "password" or "google".
   method            String
   email             String?
-  /// Set when this identity was created by moving a Firebase account over (audit trail).
+  /// Set when this identity was created by moving a Firebase account over at its first sign-in
+  /// (audit trail). That move ended on 2026-10-18 and no production identity has it set; nothing
+  /// writes it any more.
   migratedFromFirebaseUid String? @map("migrated_from_firebase_uid")
   createdAt         DateTime  @default(now()) @map("created_at")
   lastUsedAt        DateTime? @map("last_used_at")
@@ -101,7 +103,7 @@ model AuthIdentity {
   @@map("auth_identities")
 }
 
-/// Account-level security events (sign-in identity linked, Firebase account moved, password or
+/// Account-level security events (sign-in identity linked, earlier account provisioned, password or
 /// email changed, signed out everywhere, account deleted). Workspace actions go to audit_logs.
 model AuthEvent {
   id        String   @id @default(cuid())

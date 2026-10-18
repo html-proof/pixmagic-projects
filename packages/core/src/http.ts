@@ -1,7 +1,7 @@
 import type { FetchLike } from "./shopify.js";
 
 /**
- * How long an outbound call (Shopify, Meta, Google, Firebase, email, Slack) may take before it is
+ * How long an outbound call (Shopify, Meta, Google, email, Slack) may take before it is
  * abandoned. Long enough for Shopify's slowest GraphQL pages and a 2 MB bulk-result chunk; short
  * enough that one hung provider can't hold a whole queue batch (its messages run one after
  * another) until the function's time limit, which redelivers every message in it.
