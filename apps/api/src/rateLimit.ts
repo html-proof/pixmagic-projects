@@ -26,6 +26,12 @@ export const LIMITS = {
   codeVerifyIp: { max: 20, windowSec: 900 },
   /** "Continue with Google" started and finished, per IP. */
   oauthIp: { max: 30, windowSec: 300 },
+  /**
+   * Codes from an authenticator app (two-step verification: signing in, setting it up), per IP
+   * and per account. Six digits are a million guesses; Cognito also ends a sign-in after a few wrong ones.
+   */
+  mfaVerifyIp: { max: 20, windowSec: 900 },
+  mfaVerifyAccount: { max: 10, windowSec: 900 },
   /** Password, email and account changes, per user. */
   accountChange: { max: 10, windowSec: 3600 },
 

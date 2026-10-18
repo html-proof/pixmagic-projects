@@ -84,6 +84,33 @@ describe("creating an account with email and password", () => {
     const taken = await signup();
     expect(taken.statusCode).toBe(409);
     expect(taken.json().error).toBe("account_exists");
+    expect(ctx.auth.calls).not.toContain("adminDeleteUser");
+  });
+
+  it("signing up again with another password before confirming replaces the first sign-up: the new password is the one that works", async () => {
+    // Whoever typed the address first (anyone can) must not keep a password on the account its inbox's owner confirms.
+    await signup({ password: "squatters-password", confirmPassword: "squatters-password" });
+    const firstCode = ctx.auth.code("signup", "ada@example.com");
+    const again = await signup({ password: "owners-password", confirmPassword: "owners-password" });
+    expect(again.statusCode).toBe(200);
+    expect(again.json()).toMatchObject({ next: "confirm", email: "ada@example.com" });
+    expect(ctx.auth.calls).toContain("adminDeleteUser");
+    // The first sign-up's code went with it; the fresh one confirms the new sign-up.
+    expect((await post("/auth/signup/confirm", { email: "ada@example.com", code: firstCode })).json().error).toBe("invalid_code");
+    expect((await post("/auth/signup/confirm", { email: "ada@example.com", code: ctx.auth.code("signup", "ada@example.com") })).statusCode).toBe(200);
+    expect((await post("/auth/login", { email: "ada@example.com", password: "squatters-password" })).statusCode).toBe(401);
+    const login = await post("/auth/login", { email: "ada@example.com", password: "owners-password" });
+    expect(login.statusCode).toBe(200);
+    expect(login.json().user).toMatchObject({ email: "ada@example.com", emailVerified: true });
+    expect(await systemDb.authEvent.count({ where: { type: "unconfirmed_signup_replaced" } })).toBe(1);
+  });
+
+  it("limits how often signing up again can email the same address", async () => {
+    await signup();
+    for (let i = 0; i < 3; i++) expect((await signup()).statusCode).toBe(200);
+    const res = await signup();
+    expect(res.statusCode).toBe(429);
+    expect(ctx.auth.sent.filter((s) => s.kind === "signup")).toHaveLength(4);
   });
 
   it("resends a code without saying whether the address has an account", async () => {
@@ -283,6 +310,89 @@ describe("Continue with Google", () => {
     expect(res.statusCode).toBe(409);
     expect(res.json().error).toBe("email_in_use");
     expect(await systemDb.authIdentity.count()).toBe(1);
+  });
+
+  it("won't create an account from an address Google hasn't verified (it could never be verified here)", async () => {
+    const res = await (await federated({ id: "g-unverified", email: "unverified@gmail.com", emailVerified: false })).finish();
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe("email_unverified_provider");
+    expect(res.json().message).toMatch(/Google hasn't confirmed/);
+    expect(await systemDb.user.count()).toBe(0);
+    expect(res.headers["set-cookie"] ?? "").not.toMatch(/__session=[^;]/);
+  });
+
+  it("takes over an account whose address was never verified: the password someone else set there stops working", async () => {
+    // Anyone can make a workspace, add an employee with someone's address and open the copied
+    // invitation link themselves, choosing the password.
+    const owner = await signIn(ctx, "owner-sub", "owner@x.com");
+    const ws = await createWorkspace(ctx, owner.headers);
+    const employee = {
+      fullName: "Vic Tim",
+      email: "victim@gmail.com",
+      jobTitle: "Barista",
+      employmentType: "full_time",
+      joinedOn: "2026-10-01",
+      standardWeeklyMinutes: 2400,
+      workingDays: [1, 2, 3, 4, 5],
+      hourlyRate: "20",
+    };
+    const hired = await post(`/workspaces/${ws}/staff/employees`, employee, owner.headers);
+    expect(hired.statusCode).toBe(201);
+    const invitation = await post(`/workspaces/${ws}/staff/employees/${hired.json().employee.id}/invitations`, { delivery: "link" }, owner.headers);
+    const token = decodeURIComponent(/token=([^&]+)/.exec(invitation.json().url)![1]!);
+    const accepted = await post("/staff/invitations/accept", { token, password: "Not-Theirs-42", confirmPassword: "Not-Theirs-42" });
+    expect(accepted.json().emailVerified).toBe(false);
+    const squatter = { cookie: cookiesFrom(accepted), ...ORIGIN };
+    expect((await get("/me", squatter)).statusCode).toBe(200);
+    const account = await systemDb.user.findUniqueOrThrow({ where: { email: "victim@gmail.com" } });
+
+    // The address's owner signs in with Google, which has verified it.
+    const { browser, finish } = await federated({ id: "g-victim", email: "victim@gmail.com", name: "Vic Tim" });
+    const res = await finish();
+    expect(res.statusCode).toBe(200);
+    expect(res.json().user).toMatchObject({ id: account.id, emailVerified: true });
+    // The password is gone, in Cognito and here, and so is every session from before.
+    expect((await post("/auth/login", { email: "victim@gmail.com", password: "Not-Theirs-42" })).statusCode).toBe(401);
+    expect((await get("/me", squatter)).statusCode).toBe(401);
+    expect((await systemDb.authIdentity.findMany({ where: { userId: account.id } })).map((i) => i.method)).toEqual(["google"]);
+    expect(await systemDb.authEvent.findFirst({ where: { type: "unverified_identity_removed", userId: account.id } })).toMatchObject({
+      metadata: { removed: [expect.objectContaining({ method: "password" })], by: expect.objectContaining({ method: "google" }) },
+    });
+    // The owner of the address is signed in, and stays so.
+    expect((await browser.get("/me")).statusCode).toBe(200);
+    const again = await (await federated({ id: "g-victim", email: "victim@gmail.com" })).finish();
+    expect(again.json().user.id).toBe(account.id);
+  });
+
+  it("links a Team & Access invitee's placeholder account (no sign-in yet) as before, ending nothing", async () => {
+    const placeholder = await systemDb.user.create({ data: { email: "invitee@gmail.com", emailVerified: false } });
+    const res = await (await federated({ id: "g-invitee", email: "invitee@gmail.com" })).finish();
+    expect(res.json().user).toMatchObject({ id: placeholder.id, emailVerified: true });
+    expect(await systemDb.authEvent.count({ where: { type: "unverified_identity_removed" } })).toBe(0);
+    expect((await systemDb.user.findUniqueOrThrow({ where: { id: placeholder.id } })).sessionsValidAfter).toBeNull();
+    expect(ctx.auth.calls).not.toContain("adminDeleteUser");
+  });
+
+  it("\"Keep me signed in\" unticked carries through Google: cookies that end with the browser", async () => {
+    const sessionCookies = (res: { headers: Record<string, string> }) => (res.headers["set-cookie"] ?? "").split(", ").filter((c) => /^__session(_rt)?=[^;]/.test(c));
+    const kept = await (await federated({ id: "g-kept", email: "kept@gmail.com" })).finish();
+    expect(sessionCookies(kept)).toHaveLength(2);
+    for (const cookie of sessionCookies(kept)) expect(cookie).toMatch(/Max-Age=\d+/);
+
+    const browser = testBrowser(ctx);
+    const start = await browser.get("/auth/oauth/google/start?keep=0");
+    const back = ctx.auth.federatedSignIn(start.headers.location!, { id: "g-brief", email: "brief@gmail.com" });
+    const brief = await browser.post("/auth/oauth/callback", { code: back.code, state: back.state });
+    expect(brief.statusCode).toBe(200);
+    expect(sessionCookies(brief)).toHaveLength(2);
+    for (const cookie of sessionCookies(brief)) expect(cookie).not.toMatch(/Max-Age/);
+    // The minute's re-check keeps it that way.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + REVALIDATE_MS + 1_000);
+    const rechecked = await browser.get("/me");
+    expect(rechecked.statusCode).toBe(200);
+    expect(sessionCookies(rechecked).length).toBeGreaterThan(0);
+    for (const cookie of sessionCookies(rechecked)) expect(cookie).not.toMatch(/Max-Age/);
   });
 
   it("keeps the name from the first sign-in when the provider later sends none", async () => {

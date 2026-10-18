@@ -1,6 +1,6 @@
-import { systemDb, type User } from "@app/db";
+import { systemDb, type AuthIdentity, type User } from "@app/db";
 import { logger } from "@app/core";
-import type { IdentityClaims } from "./cognito.js";
+import type { CognitoAuth, IdentityClaims } from "./cognito.js";
 import { HttpError } from "./context.js";
 
 /** Account-level security events (auth_events). Best effort: never fails what it records. */
@@ -19,6 +19,50 @@ export const emailTaken = () =>
     "email_in_use",
   );
 
+const providerEmailUnverified = () =>
+  new HttpError(
+    400,
+    "Google hasn't confirmed that this email address is yours, so we can't create an account with it. Confirm it in your Google account, or create an account with your email and a password.",
+    "email_unverified_provider",
+  );
+
+/**
+ * An account whose address was never verified meets a sign-in that verifies it: the verified one
+ * takes the account over. Whoever set up the account's other sign-in methods never proved the
+ * inbox (anyone can create an employee with someone's address and open the copied link
+ * themselves), so those methods are removed in Cognito and here, and every session of the account
+ * ends, before the new identity is linked. The same rule Firebase applies to unverified providers.
+ * An account with no sign-in yet (a Team & Access invitation's placeholder) has nothing to remove.
+ */
+async function takeOverUnverified(user: User & { identities: AuthIdentity[] }, claims: IdentityClaims, opts: ResolveOptions): Promise<User> {
+  const prior = user.identities.filter((i) => i.subject !== claims.sub);
+  // Cognito first, so the old password stops working even if what follows fails (a retry finishes it).
+  for (const id of prior) {
+    await opts.auth.adminDeleteUser(id.username).catch((err: unknown) => {
+      logger.error({ err, userId: user.id }, "could not remove an unverified account's Cognito user");
+      throw new HttpError(503, "We can't finish signing you in right now. Please try again in a moment.", "auth_unavailable");
+    });
+  }
+  const updated = await systemDb.$transaction(async (tx) => {
+    // Only these rows: a concurrent take-over may already have linked the new identity.
+    if (prior.length) await tx.authIdentity.deleteMany({ where: { id: { in: prior.map((i) => i.id) } } });
+    return tx.user.update({ where: { id: user.id }, data: { emailVerified: true, ...(prior.length > 0 && { sessionsValidAfter: new Date() }) } });
+  });
+  if (prior.length) {
+    await recordAuthEvent("unverified_identity_removed", user.id, opts.ip ?? null, {
+      removed: prior.map((i) => ({ cognitoSub: i.subject, method: i.method })),
+      by: { cognitoSub: claims.sub, method: claims.method },
+    });
+  }
+  return updated;
+}
+
+export interface ResolveOptions {
+  ip?: string | null;
+  /** Removes the Cognito users of an unverified account a verified sign-in takes over. */
+  auth: Pick<CognitoAuth, "adminDeleteUser">;
+}
+
 /**
  * The user (users.id, which never changes) for a verified Cognito sign-in, creating or linking as
  * needed. In order:
@@ -27,12 +71,15 @@ export const emailTaken = () =>
  * 2. A user with the same email exists: linked only when Cognito vouches for the address
  *    (email_verified: a confirmed sign-up code, Google). Otherwise anyone could register
  *    someone else's address and walk into their workspaces; they are told it's taken instead.
- * 3. Nobody: a new user.
+ *    When that user's own address was never verified, the verified sign-in takes it over
+ *    (takeOverUnverified).
+ * 3. Nobody: a new user. Not from a Google account whose address Google hasn't verified: such an
+ *    account could never verify it here (Google's tokens can't ask Cognito for a code).
  *
  * Idempotent: the (provider, subject) pair is unique, so a retried or concurrent first sign-in
  * finds the identity the other one created.
  */
-export async function resolveUser(claims: IdentityClaims, opts: { ip?: string | null } = {}): Promise<User> {
+export async function resolveUser(claims: IdentityClaims, opts: ResolveOptions): Promise<User> {
   const email = claims.email?.toLowerCase() ?? null;
   if (!email) throw new HttpError(400, "An email address is required to sign in. Share your email with us when you sign in with Google.", "email_required");
   const where = { provider_subject: { provider: "cognito", subject: claims.sub } };
@@ -82,12 +129,14 @@ export async function resolveUser(claims: IdentityClaims, opts: { ip?: string | 
     return user;
   };
 
-  const sameEmail = await systemDb.user.findUnique({ where: { email } });
+  const sameEmail = await systemDb.user.findUnique({ where: { email }, include: { identities: true } });
   if (sameEmail) {
     if (!claims.emailVerified) throw emailTaken();
-    const user = sameEmail.emailVerified ? sameEmail : await systemDb.user.update({ where: { id: sameEmail.id }, data: { emailVerified: true } });
+    const user: User = sameEmail.emailVerified ? sameEmail : await takeOverUnverified(sameEmail, claims, opts);
     return link(user, "identity_linked");
   }
+
+  if (!claims.emailVerified && claims.method !== "password") throw providerEmailUnverified();
 
   try {
     const created = await systemDb.user.create({
