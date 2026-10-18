@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { CfnOutput, Duration, RemovalPolicy, SecretValue, Stack, type StackProps } from "aws-cdk-lib";
@@ -403,15 +404,22 @@ export class AppStack extends Stack {
       ],
     });
 
-    // --- Budget: the owner's ceiling (US$100-120/month, 2026-10-17); alerts at 80% actual, 100% forecast.
+    // --- Budget: the owner's ceiling (US$50-80/month, 2026-10-18), tax included. Emails when the
+    // month's spend passes 50, 75, 90 and 100% of it, and when AWS forecasts the month above it
+    // (five: the most a budget takes). Nothing is stopped at any threshold.
+    const budgetEmail = cfg.budgetEmail || cfg.alertEmail;
+    const budgetAlerts: budgets.CfnBudget.NotificationWithSubscribersProperty[] | undefined = budgetEmail
+      ? [
+          ...[50, 75, 90, 100].map((threshold) => ({ notificationType: "ACTUAL", threshold })),
+          { notificationType: "FORECASTED", threshold: 100 },
+        ].map((n) => ({ notification: { ...n, comparisonOperator: "GREATER_THAN", thresholdType: "PERCENTAGE" }, subscribers: [{ subscriptionType: "EMAIL", address: budgetEmail }] }))
+      : undefined;
+    // CloudFormation replaces a budget whose alerts change (they can't be updated in place), and the
+    // replacement can't take the old one's name; a digest of the alerts in the name lets it.
+    const alertsDigest = budgetAlerts ? `-${createHash("sha256").update(JSON.stringify(budgetAlerts)).digest("hex").slice(0, 8)}` : "";
     new budgets.CfnBudget(this, "Budget", {
-      budget: { budgetName: `${prefix}-monthly`, budgetType: "COST", timeUnit: "MONTHLY", budgetLimit: { amount: cfg.monthlyBudgetUsd, unit: "USD" } },
-      notificationsWithSubscribers: cfg.alertEmail
-        ? [
-            { notification: { notificationType: "ACTUAL", comparisonOperator: "GREATER_THAN", threshold: 80, thresholdType: "PERCENTAGE" }, subscribers: [{ subscriptionType: "EMAIL", address: cfg.alertEmail }] },
-            { notification: { notificationType: "FORECASTED", comparisonOperator: "GREATER_THAN", threshold: 100, thresholdType: "PERCENTAGE" }, subscribers: [{ subscriptionType: "EMAIL", address: cfg.alertEmail }] },
-          ]
-        : undefined,
+      budget: { budgetName: `${prefix}-monthly${alertsDigest}`, budgetType: "COST", timeUnit: "MONTHLY", budgetLimit: { amount: cfg.monthlyBudgetUsd, unit: "USD" } },
+      notificationsWithSubscribers: budgetAlerts,
     });
 
     new CfnOutput(this, "AppUrl", { value: this.appUrl, description: "The app" });

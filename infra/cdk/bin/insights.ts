@@ -14,7 +14,7 @@ import { EdgeStack } from "../lib/edge-stack.js";
  *   InsightsApp-<env>   ap-southeast-2   SQS, Lambda (api, jobs, cron), CloudFront, schedules, alarms, budget
  *   InsightsAuth-<env>  ap-southeast-2   Cognito (infra/aws/cognito.yaml) + the runtime parameter
  *   InsightsCi-<env>    ap-southeast-2   GitHub OIDC deploy role
- * Context: -c env=production|staging, -c schedules=on (at cutover), -c alertEmail=..., -c googleClientId=...
+ * Context: -c env=production|staging, -c schedules=on (at cutover), -c alertEmail=..., -c budgetEmail=..., -c googleClientId=...
  * docs/aws-deployment.md is the runbook.
  */
 const app = new App();
