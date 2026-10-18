@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { REQUIRED_AD_SCOPE } from "../src/ads/common.js";
 
 /**
  * Guards the one piece of configuration Shopify reads instead of us.
@@ -249,3 +250,33 @@ describe("API versions the ad platforms and WhatsApp still serve", () => {
   }
 });
 
+/**
+ * Google's OAuth verification checks that the homepage says why the app asks for Google data, and
+ * the verification form links to https://bizinsights.io/#google-data. So the landing page's ad
+ * accounts section (apps/web/src/components/landing/AdPlatforms.tsx) must stay on the page, keep that
+ * id, name every permission the ads clients ask for, and keep its Limited Use statement and links.
+ */
+describe("the homepage's ad accounts section", () => {
+  const section = read("apps/web/src/components/landing/AdPlatforms.tsx");
+
+  it("is on the landing page, with the id Google's verification form links to", () => {
+    expect(section).toContain('id="google-data"');
+    expect(read("apps/web/src/components/landing/LandingPage.tsx")).toMatch(/<AdPlatforms \/>/);
+  });
+
+  it("names every permission the ad platforms are asked for", () => {
+    for (const scope of Object.values(REQUIRED_AD_SCOPE)) expect(section).toContain(`scope: "${scope.split("/").pop()}"`);
+  });
+
+  it("states Limited Use and links the privacy policy's Google section and the terms", () => {
+    expect(section).toContain("Google API Services User Data Policy");
+    expect(section).toContain("including the Limited Use requirements");
+    expect(section).toContain('href="/privacy#google-user-data"');
+    expect(read("apps/web/src/app/privacy/page.tsx")).toContain('id: "google-user-data"');
+    expect(section).toContain('href="/terms"');
+  });
+
+  it("stays static text (the landing page's motion rules)", () => {
+    expect(section).not.toMatch(/from "motion|use client|useEffect|useState/);
+  });
+});
