@@ -6,8 +6,8 @@ import { signUp, uniqueEmail } from "./helpers";
 /**
  * The Total sales breakdown and Custom sales in the browser: the lines add up to Shopify's total
  * sales, switching lines off changes Custom sales at once and never Shopify's figure, a saved and
- * applied calculation shows across the dashboard (named) and comes back on the next visit, and the
- * card fits a phone.
+ * applied calculation shows across the dashboard (named: the month-by-month card measures it too)
+ * and comes back on the next visit, and the card fits a phone.
  */
 
 const db = new pg.Pool({ connectionString: E2E_ENV.DATABASE_URL });
@@ -112,6 +112,19 @@ test("total sales line by line, Custom sales from it, saved and shown across the
   // Restored on the next visit, from the store's saved calculation.
   await page.reload();
   await expect(page.getByTestId("tile-custom-sales")).toContainText("$1,060.00");
+
+  // This year month by month measures it too, named, with Shopify's net sales beside it; net
+  // sales is one pick away.
+  await page.getByTestId("metric-Total sales").click();
+  const monthly = page.getByTestId("monthly-sales");
+  await expect(monthly.getByLabel("Sales card shows")).toHaveValue("custom");
+  await expect(monthly).toContainText("$1,060.00");
+  await expect(monthly.getByTestId("custom-measure")).toContainText("Custom sales · Sales excluding tax and duties");
+  await expect(monthly.getByTestId("custom-measure")).toContainText("$1,000.00");
+  await monthly.getByLabel("Sales card shows").selectOption("net");
+  await expect(monthly.getByTestId("custom-measure")).toHaveCount(0);
+  await expect(monthly).not.toContainText("$1,060.00");
+  await page.getByRole("button", { name: "Close details" }).click();
 
   // On a phone the card fits the screen: no sideways scrolling.
   await page.setViewportSize({ width: 375, height: 812 });

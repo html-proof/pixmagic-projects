@@ -196,9 +196,9 @@ function SalesDetail({ ov, currency }: { ov: Overview; currency: string }) {
       )}
 
       {ov.hasData && s.series.length > 1 && (
-        <DailySalesCard series={s.series} range={ov.range} today={ov.today} historyFrom={ov.data?.historyFrom ?? null} currency={currency} />
+        <DailySalesCard series={s.series} range={ov.range} today={ov.today} historyFrom={ov.data?.historyFrom ?? null} currency={currency} custom={custom} />
       )}
-      {s.year && s.year.orders > 0 && <MonthlySalesCard year={s.year} historyFrom={ov.data?.historyFrom ?? null} currency={currency} />}
+      {s.year && s.year.orders > 0 && <MonthlySalesCard year={s.year} historyFrom={ov.data?.historyFrom ?? null} currency={currency} custom={custom} />}
     </>
   );
 }
