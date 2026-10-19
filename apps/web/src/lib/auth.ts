@@ -47,14 +47,22 @@ export const finishMfaSignIn = (code: string) => api<{ user: SignedInUser }>("/a
 export const signUp = (input: { name: string; email: string; password: string; confirmPassword: string; acceptTerms: boolean }) =>
   api<{ ok: true; next: "confirm"; email: string }>("/auth/signup", { method: "POST", body: input });
 
-export const confirmSignUp = (email: string, code: string) => api<{ ok: true }>("/auth/signup/confirm", { method: "POST", body: { email, code } });
+/**
+ * The sign-up code. With `signIn` (the password chosen on this page) it signs in too, and that
+ * password is the one the account keeps, whoever else signed up with the address meanwhile: the
+ * code proves the inbox. No `user` in the answer: the address was confirmed already (another tab),
+ * so sign in as usual.
+ */
+export const confirmSignUp = (email: string, code: string, signIn?: { password: string; keep?: boolean }) =>
+  api<{ ok: true; user?: SignedInUser }>("/auth/signup/confirm", { method: "POST", body: { email, code, ...signIn } });
 
 export const resendSignUpCode = (email: string) => api<{ ok: true; message: string }>("/auth/signup/resend", { method: "POST", body: { email } });
 
 export const forgotPassword = (email: string) => api<{ ok: true; message: string }>("/auth/password/forgot", { method: "POST", body: { email } });
 
+/** `otherMethods`: the account's other ways to sign in ("google"), which a new password doesn't end. */
 export const resetPassword = (input: { email: string; code: string; password: string; confirmPassword: string }) =>
-  api<{ ok: true }>("/auth/password/reset", { method: "POST", body: input });
+  api<{ ok: true; otherMethods?: SignInMethodName[] }>("/auth/password/reset", { method: "POST", body: input });
 
 export const startEmailCodeSignIn = (email: string) => api<{ ok: true; message: string }>("/auth/otp/start", { method: "POST", body: { email } });
 
@@ -68,23 +76,51 @@ export const finishEmailCodeSignIn = (email: string, code: string, keep = true) 
  */
 export function continueWith(provider: SocialProvider, returnTo?: string | null, keep = true) {
   const q = new URLSearchParams();
-  if (returnTo && isSafePath(returnTo)) q.set("returnTo", returnTo);
+  if (returnTo && isSafeDestination(returnTo)) q.set("returnTo", returnTo);
   if (!keep) q.set("keep", "0");
   const query = q.toString();
   window.location.assign(`/api/auth/oauth/${provider}/start${query ? `?${query}` : ""}`);
 }
 
+/**
+ * A path of this site as the browser will read it. isSafePath checks the text; this also checks
+ * where it leads once dot segments are resolved ("/..//evil.example" is "//evil.example").
+ */
+export function isSafeDestination(path: unknown): path is string {
+  if (!isSafePath(path)) return false;
+  try {
+    const u = new URL(path, window.location.origin);
+    return u.origin === window.location.origin && isSafePath(`${u.pathname}${u.search}${u.hash}`);
+  } catch {
+    return false;
+  }
+}
+
 /** Linking from Settings in this tab: where to come back to, for a callback the API can't place any more. */
 const LINK_KEY = "insights:linking";
 const LINK_TTL_MS = 10 * 60_000;
+/** The API's limit for linking without the password again (RECENT_SIGN_IN_S), less a minute for the trip. */
+const LINK_RECENT_MS = 14 * 60_000;
+
+/**
+ * Linking adds a way into the account, so it needs a sign-in in the last 15 minutes or the
+ * password: true when this session is older, and the page should ask for the password
+ * (prepareGoogleLink) before linkGoogle.
+ */
+export const linkNeedsPassword = (account: Pick<AccountInfo, "signedInAt">, now = Date.now()) => now - account.signedInAt > LINK_RECENT_MS;
+
+/** The password again, so this session may start one link to Google in the next five minutes. Password sessions only. */
+export const prepareGoogleLink = (password: string) => api<{ ok: true; expiresInSeconds: number }>("/auth/account/methods/google/prepare", { method: "POST", body: { password } });
 
 /**
  * Link a Google account to the signed-in account (Settings): a full-page trip to Google and back.
  * The person comes back to `returnTo` (a path of this site) with `?linked=google`, or with
- * `?link_error=<code>` (linkErrorMessage words it). The session stays the one they have.
+ * `?link_error=<code>` (linkErrorMessage words it). The session stays the one they have. A session
+ * older than 15 minutes needs prepareGoogleLink first (linkNeedsPassword), or comes back with
+ * `?link_error=reauth_required`.
  */
 export function linkGoogle(returnTo: string) {
-  const back = isSafePath(returnTo) ? returnTo : "/settings/security";
+  const back = isSafeDestination(returnTo) ? returnTo : "/settings/security";
   try {
     sessionStorage.setItem(LINK_KEY, JSON.stringify({ path: back, at: Date.now() }));
   } catch {
@@ -100,15 +136,15 @@ export function takeLinkReturn(): string | null {
     sessionStorage.removeItem(LINK_KEY);
     if (!raw) return null;
     const { path, at } = JSON.parse(raw) as { path?: unknown; at?: number };
-    return isSafePath(path) && typeof at === "number" && Date.now() - at < LINK_TTL_MS ? path : null;
+    return isSafeDestination(path) && typeof at === "number" && Date.now() - at < LINK_TTL_MS ? path : null;
   } catch {
     return null;
   }
 }
 
-/** `path` with `?<key>=<value>` added (or replaced). */
+/** `path` (a page of this site; Settings → Security if it isn't one) with `?<key>=<value>` added (or replaced). */
 export function withQuery(path: string, key: string, value: string) {
-  const u = new URL(path, window.location.origin);
+  const u = new URL(isSafeDestination(path) ? path : "/settings/security", window.location.origin);
   u.searchParams.set(key, value);
   return `${u.pathname}${u.search}${u.hash}`;
 }
@@ -125,6 +161,10 @@ export function linkErrorMessage(code: string): string {
     case "signin_required":
     case "signin_changed":
       return "Sign in to your account again, then link Google.";
+    case "reauth_required":
+      return "For your safety, enter your password again, then link Google.";
+    case "email_unverified":
+      return "Verify your email address first, then link Google.";
     case "provider_unavailable":
       return "Signing in with Google isn't available right now.";
     case "rate_limited":

@@ -29,7 +29,13 @@ import { SocialButtons } from "@/components/SocialButtons";
 /** What a redirect to this page came to say. */
 const NOTICES: Record<string, { kind: "info" | "success"; text: string }> = {
   signedOut: { kind: "info", text: "You've been signed out." },
+  // A new password ends every session, but not the account's other ways in.
+  resetGoogle: {
+    kind: "success",
+    text: "Your password has been changed. Sign in with the new one. Your account can also be signed in to with Google: if you don't recognise that, remove it in Settings → Security.",
+  },
   reset: { kind: "success", text: "Your password has been changed. Sign in with the new one." },
+  confirmedElsewhere: { kind: "info", text: "Your email address is already confirmed, with a different password. Sign in with that one, or use \"Forgot Password?\" to choose a new one." },
   confirmed: { kind: "success", text: "Your email address is confirmed. Sign in to continue." },
   deleted: { kind: "info", text: "Your account has been deleted." },
 };
@@ -120,7 +126,15 @@ export default function LoginPage() {
           submitLabel="Confirm and sign in"
           large
           onSubmit={async (code) => {
-            await confirmSignUp(email.trim(), code);
+            // The code signs in with the password typed here, which becomes the account's: the
+            // code proves the inbox, whatever password an earlier sign-up with it had set.
+            const confirmed = await confirmSignUp(email.trim(), code, { password, keep });
+            if (confirmed.user) {
+              setConfirming(false);
+              router.replace(afterSignIn());
+              return;
+            }
+            // Confirmed already (another tab): sign in as usual.
             const r = await signIn(email.trim(), password, keep);
             setConfirming(false);
             afterFirstStep(r);

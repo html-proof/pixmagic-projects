@@ -3,8 +3,8 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { ApiError } from "@/lib/api";
-import { afterSignIn, authErrorMessage, errorCode, finishOAuth, takeLinkReturn, withQuery } from "@/lib/auth";
-import { isSafePath, takeReturnTo } from "@/lib/returnTo";
+import { afterSignIn, authErrorMessage, errorCode, finishOAuth, isSafeDestination, takeLinkReturn, withQuery } from "@/lib/auth";
+import { takeReturnTo } from "@/lib/returnTo";
 import { Alert } from "@/components/ui";
 import { AuthCard } from "@/components/auth/AuthCard";
 import { SocialButtons } from "@/components/SocialButtons";
@@ -38,14 +38,15 @@ export default function OAuthCallbackPage() {
     const linkingFrom = takeLinkReturn();
     finishOAuth(params)
       .then((r) => {
-        if ("linked" in r) return router.replace(r.redirect);
+        // Only ever a page of this site, as the browser will read it (the API checks too).
+        if ("linked" in r) return router.replace(isSafeDestination(r.redirect) ? r.redirect : withQuery(linkingFrom ?? "/settings/security", "linked", "google"));
         // The server's copy of where they were headed wins; the browser's is then spent too.
         const local = takeReturnTo();
-        router.replace(r.redirect ?? local ?? afterSignIn());
+        router.replace((isSafeDestination(r.redirect) ? r.redirect : null) ?? local ?? afterSignIn());
       })
       .catch((e: unknown) => {
         const back = e instanceof ApiError ? e.data.redirect : null;
-        if (isSafePath(back)) return router.replace(back);
+        if (isSafeDestination(back)) return router.replace(back);
         if (linkingFrom) return router.replace(withQuery(linkingFrom, "link_error", errorCode(e) ?? "failed"));
         setError({ text: authErrorMessage(e), code: errorCode(e) });
       });
@@ -66,7 +67,7 @@ export default function OAuthCallbackPage() {
     <AuthCard title={error.code === "cancelled" ? "Sign-in cancelled" : "We couldn't sign you in"} subtitle="Nothing was changed. You can try again below.">
       <Alert>
         {error.text}
-        {error.code === "email_in_use" && (
+        {(error.code === "email_in_use" || error.code === "google_removed") && (
           <>
             {" "}
             <Link prefetch={false} href="/login" className="underline">

@@ -75,16 +75,20 @@ export default function SignupPage() {
           busyLabel="Verifying…"
           large
           onSubmit={async (code) => {
-            await confirmSignUp(sentTo, code);
-            try {
-              await signIn(sentTo, password);
-            } catch (err) {
-              // The address is confirmed either way; a password that doesn't work (one set by an
-              // earlier sign-up, say) is for the sign-in page, which offers "Forgot password?".
-              if (errorCode(err) !== "invalid_credentials") throw err;
-              rememberEmail(sentTo);
-              router.replace("/login?confirmed=1");
-              return;
+            // With the password chosen here: the code signs in, and this password is the account's,
+            // whoever else signed up with the address in the meantime.
+            const r = await confirmSignUp(sentTo, code, { password });
+            if (!r.user) {
+              // Confirmed already, in another tab: sign in as usual.
+              try {
+                await signIn(sentTo, password);
+              } catch (err) {
+                // Confirmed elsewhere with another password: the sign-in page says so and offers "Forgot password?".
+                if (errorCode(err) !== "invalid_credentials") throw err;
+                rememberEmail(sentTo);
+                router.replace("/login?confirmedElsewhere=1");
+                return;
+              }
             }
             // Through the app shell, which sends a new merchant to onboarding.
             router.replace(afterSignIn());

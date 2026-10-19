@@ -20,6 +20,8 @@ import {
   leaveTo,
   linkErrorMessage,
   linkGoogle,
+  linkNeedsPassword,
+  prepareGoogleLink,
   removeSignInMethod,
   signOut,
   signOutEverywhere,
@@ -259,11 +261,40 @@ function MethodsSection({ account: a, onChanged }: { account: AccountInfo; onCha
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [leaving, setLeaving] = useState(false);
+  // Linking after the first 15 minutes of a sign-in: the password first (the API asks for it too).
+  const [confirmingLink, setConfirmingLink] = useState(false);
+  const [linkPassword, setLinkPassword] = useState("");
   const cancel = useCallback(() => {
     setRemoving(null);
     setPassword("");
   }, []);
+  const cancelLink = useCallback(() => {
+    setConfirmingLink(false);
+    setLinkPassword("");
+  }, []);
   const needsPassword = a.signedInWith === "password";
+
+  function startLink() {
+    if (linkNeedsPassword(a)) return setConfirmingLink(true);
+    setLeaving(true);
+    linkGoogle(window.location.pathname);
+  }
+
+  async function linkWithPassword() {
+    if (!linkPassword) return;
+    setBusy(true);
+    setMsg(null);
+    try {
+      await prepareGoogleLink(linkPassword);
+      setLeaving(true);
+      linkGoogle(window.location.pathname);
+    } catch (err) {
+      setMsg(failure(err));
+      setBusy(false);
+    } finally {
+      cancelLink();
+    }
+  }
 
   async function remove() {
     if (!removing || (needsPassword && !password)) return;
@@ -312,22 +343,27 @@ function MethodsSection({ account: a, onChanged }: { account: AccountInfo; onCha
         ))}
       </ul>
       {a.canLinkGoogle && (
-        <button
-          type="button"
-          className="btn-secondary mt-3 min-h-11"
-          disabled={leaving}
-          onClick={() => {
-            setLeaving(true);
-            linkGoogle(window.location.pathname);
-          }}
-        >
+        <button type="button" className="btn-secondary mt-3 min-h-11" disabled={leaving} onClick={startLink}>
           {leaving ? "Opening Google…" : "Link Google account"}
         </button>
       )}
       <p className="mt-3 text-xs text-muted">
-        {a.canLinkGoogle ? "Link a Google account to sign in with it too, whatever its email address. " : ""}
+        {a.canLinkGoogle ? "Link a Google account to sign in with it too, whatever its email address. We email you whenever a way to sign in is added. " : ""}
         Removing a way to sign in signs it out everywhere within a minute.
       </p>
+      <ConfirmDialog
+        open={confirmingLink}
+        title="Confirm it's you"
+        confirmLabel={busy ? "Checking…" : "Continue to Google"}
+        busy={busy || !linkPassword}
+        onCancel={cancelLink}
+        onConfirm={() => void linkWithPassword()}
+      >
+        <div className="space-y-3">
+          <p>A linked Google account can sign in to your account, so enter your password first.</p>
+          <PasswordField id="link-password" label="Your password" autoComplete="current-password" value={linkPassword} onChange={setLinkPassword} />
+        </div>
+      </ConfirmDialog>
       <ConfirmDialog
         open={!!removing}
         title={`Remove ${removing ? METHOD_NAMES[removing.method] : ""}?`}
@@ -338,7 +374,11 @@ function MethodsSection({ account: a, onChanged }: { account: AccountInfo; onCha
         onConfirm={() => void remove()}
       >
         <div className="space-y-3">
-          <p>You won&apos;t be able to sign in with it any more. You can add it again later.</p>
+          <p>
+            {removing?.method === "google"
+              ? "That Google account won't be able to sign in to your account any more, unless you link it again here."
+              : "You won't be able to sign in with it any more. You can add it again later."}
+          </p>
           {needsPassword ? (
             <PasswordField id="remove-password" label="Your password" autoComplete="current-password" value={password} onChange={setPassword} />
           ) : (
