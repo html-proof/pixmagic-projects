@@ -14,7 +14,21 @@ const TTL_MS = 60 * 60_000;
 export const isSafePath = (path: unknown): path is string =>
   // eslint-disable-next-line no-control-regex -- rejecting control characters is the point
   typeof path === "string" && path.startsWith("/") && !path.startsWith("//") && !/[\\\u0000-\u001f\u007f]/.test(path);
-const safe = isSafePath;
+
+/**
+ * A path of this site as the browser will read it. isSafePath checks the text; this also checks
+ * where it leads once dot segments are resolved ("/..//evil.example" is "//evil.example").
+ */
+export function isSafeDestination(path: unknown): path is string {
+  if (!isSafePath(path)) return false;
+  try {
+    const u = new URL(path, window.location.origin);
+    return u.origin === window.location.origin && isSafePath(`${u.pathname}${u.search}${u.hash}`);
+  } catch {
+    return false;
+  }
+}
+const safe = isSafeDestination;
 
 export function setReturnTo(path: string) {
   if (!safe(path)) return;

@@ -112,8 +112,10 @@ function EmailSection({ account: a, provider, onChanged }: { account: AccountInf
           <Alert kind={msg.kind}>{msg.text}</Alert>
         </div>
       )}
-      {!a.canChangeEmail ? (
-        <p className="mt-2 text-xs text-muted">You signed in with {provider ?? "another provider"}, which manages this address. Change it there, or sign in with your email and password to change it here.</p>
+      {!a.canChangeEmail && !provider ? (
+        <p className="mt-2 text-xs text-muted">Verify this address first, then you can change it here. If it isn&apos;t yours, ask whoever invited you to invite the right one.</p>
+      ) : !a.canChangeEmail ? (
+        <p className="mt-2 text-xs text-muted">You signed in with {provider}, which manages this address. Change it there, or sign in with your email and password to change it here.</p>
       ) : pending ? (
         <div className="mt-3">
           <CodeStep
@@ -222,6 +224,10 @@ function PasswordSection({ account: a, provider, onChanged, router }: { account:
           </Link>{" "}
           on the sign-in page.
         </p>
+      ) : !a.canAddPassword ? (
+        <p className="mt-1 text-sm text-muted">
+          You have no password yet. To add one, sign in with Google using {a.user.email}, your account&apos;s address, then come back here.
+        </p>
       ) : (
         <form onSubmit={submit} className="mt-3 grid gap-3 sm:max-w-md">
           <p className="text-sm text-muted">
@@ -272,12 +278,14 @@ function MethodsSection({ account: a, onChanged }: { account: AccountInfo; onCha
     setConfirmingLink(false);
     setLinkPassword("");
   }, []);
-  const needsPassword = a.signedInWith === "password";
+  // A Google account under another address proves nothing about this one: the password, or nothing.
+  const needsPassword = a.confirmWith === "password";
+  const cantConfirm = a.confirmWith === "own_address_sign_in";
 
   function startLink() {
     if (linkNeedsPassword(a)) return setConfirmingLink(true);
     setLeaving(true);
-    linkGoogle(window.location.pathname);
+    void linkGoogle(window.location.pathname);
   }
 
   async function linkWithPassword() {
@@ -287,7 +295,7 @@ function MethodsSection({ account: a, onChanged }: { account: AccountInfo; onCha
     try {
       await prepareGoogleLink(linkPassword);
       setLeaving(true);
-      linkGoogle(window.location.pathname);
+      void linkGoogle(window.location.pathname);
     } catch (err) {
       setMsg(failure(err));
       setBusy(false);
@@ -297,7 +305,7 @@ function MethodsSection({ account: a, onChanged }: { account: AccountInfo; onCha
   }
 
   async function remove() {
-    if (!removing || (needsPassword && !password)) return;
+    if (!removing || cantConfirm || (needsPassword && !password)) return;
     setBusy(true);
     setMsg(null);
     try {
@@ -348,8 +356,8 @@ function MethodsSection({ account: a, onChanged }: { account: AccountInfo; onCha
         </button>
       )}
       <p className="mt-3 text-xs text-muted">
-        {a.canLinkGoogle ? "Link a Google account to sign in with it too, whatever its email address. We email you whenever a way to sign in is added. " : ""}
-        Removing a way to sign in signs it out everywhere within a minute.
+        {a.canLinkGoogle ? "Link a Google account to sign in with it too, whatever its email address. " : ""}
+        We email you whenever a way to sign in is added or removed. Removing one signs it out everywhere at once.
       </p>
       <ConfirmDialog
         open={confirmingLink}
@@ -369,7 +377,7 @@ function MethodsSection({ account: a, onChanged }: { account: AccountInfo; onCha
         title={`Remove ${removing ? METHOD_NAMES[removing.method] : ""}?`}
         confirmLabel={busy ? "Removing…" : "Remove"}
         danger
-        busy={busy || (needsPassword && !password)}
+        busy={busy || cantConfirm || (needsPassword && !password)}
         onCancel={cancel}
         onConfirm={() => void remove()}
       >
@@ -379,11 +387,7 @@ function MethodsSection({ account: a, onChanged }: { account: AccountInfo; onCha
               ? "That Google account won't be able to sign in to your account any more, unless you link it again here."
               : "You won't be able to sign in with it any more. You can add it again later."}
           </p>
-          {needsPassword ? (
-            <PasswordField id="remove-password" label="Your password" autoComplete="current-password" value={password} onChange={setPassword} />
-          ) : (
-            <p className="text-sm text-muted">For your safety this needs a sign-in in the last 15 minutes.</p>
-          )}
+          <ConfirmItsYou account={a} id="remove-password" password={password} onPassword={setPassword} />
         </div>
       </ConfirmDialog>
     </section>
@@ -605,10 +609,11 @@ function DeleteSection({ account: a, router }: { account: AccountInfo; router: R
     setTyped("");
     setPassword("");
   }, []);
-  const needsPassword = a.signedInWith === "password";
+  const needsPassword = a.confirmWith === "password";
+  const cantConfirm = a.confirmWith === "own_address_sign_in";
 
   async function remove() {
-    if (typed !== "DELETE" || (needsPassword && !password)) return;
+    if (typed !== "DELETE" || cantConfirm || (needsPassword && !password)) return;
     setBusy(true);
     setMsg(null);
     try {
@@ -637,7 +642,15 @@ function DeleteSection({ account: a, router }: { account: AccountInfo; router: R
       <button type="button" className="btn-danger mt-3 min-h-11" onClick={() => setOpen(true)}>
         Delete my account
       </button>
-      <ConfirmDialog open={open} title="Delete your account?" confirmLabel={busy ? "Deleting…" : "Delete account"} danger busy={busy || typed !== "DELETE" || (needsPassword && !password)} onCancel={cancel} onConfirm={() => void remove()}>
+      <ConfirmDialog
+        open={open}
+        title="Delete your account?"
+        confirmLabel={busy ? "Deleting…" : "Delete account"}
+        danger
+        busy={busy || typed !== "DELETE" || cantConfirm || (needsPassword && !password)}
+        onCancel={cancel}
+        onConfirm={() => void remove()}
+      >
         <div className="space-y-3">
           <p>This can&apos;t be undone.</p>
           <div>
@@ -646,13 +659,20 @@ function DeleteSection({ account: a, router }: { account: AccountInfo; router: R
             </label>
             <input id="type-delete" className="input" autoComplete="off" value={typed} onChange={(e) => setTyped(e.target.value)} />
           </div>
-          {needsPassword ? (
-            <PasswordField id="delete-password" label="Your password" autoComplete="current-password" value={password} onChange={setPassword} />
-          ) : (
-            <p className="text-sm text-muted">For your safety this needs a sign-in in the last 15 minutes.</p>
-          )}
+          <ConfirmItsYou account={a} id="delete-password" password={password} onPassword={setPassword} />
         </div>
       </ConfirmDialog>
     </section>
   );
+}
+
+/**
+ * How a change that could lock the person out is confirmed (the account's `confirmWith`): their
+ * password; a recent sign-in with Google using the account's address; or, signed in with a Google
+ * account under another address and no password, a sign-in with the account's address first.
+ */
+function ConfirmItsYou({ account: a, id, password, onPassword }: { account: AccountInfo; id: string; password: string; onPassword: (v: string) => void }) {
+  if (a.confirmWith === "password") return <PasswordField id={id} label="Your password" autoComplete="current-password" value={password} onChange={onPassword} />;
+  if (a.confirmWith === "recent_sign_in") return <p className="text-sm text-muted">For your safety this needs a sign-in in the last 15 minutes.</p>;
+  return <p className="text-sm text-muted">To do this, sign out and sign in with Google using {a.user.email}, your account&apos;s address.</p>;
 }

@@ -24,6 +24,11 @@ export const LIMITS = {
   codeIp: { max: 10, windowSec: 3600 },
   /** Guesses at emailed codes (sign-up confirmation, password reset, sign-in), per IP. */
   codeVerifyIp: { max: 20, windowSec: 900 },
+  /**
+   * Guesses at a code we email ourselves to claim an address nobody proved (auth.ts, address
+   * claims), per address: Cognito's own lockout doesn't stand behind these.
+   */
+  claimVerifyEmail: { max: 5, windowSec: 3600 },
   /** "Continue with Google" started and finished, per IP. */
   oauthIp: { max: 30, windowSec: 300 },
   /**

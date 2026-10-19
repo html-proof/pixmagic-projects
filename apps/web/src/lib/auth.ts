@@ -1,7 +1,7 @@
 "use client";
 import { useEffect } from "react";
 import { api, ApiError, isTransient, keepRetrying } from "./api";
-import { isSafePath, takeReturnTo } from "./returnTo";
+import { isSafeDestination, takeReturnTo } from "./returnTo";
 
 /**
  * Every sign-in, sign-up and account-security call the UI makes, in one place. They all go to our
@@ -82,19 +82,8 @@ export function continueWith(provider: SocialProvider, returnTo?: string | null,
   window.location.assign(`/api/auth/oauth/${provider}/start${query ? `?${query}` : ""}`);
 }
 
-/**
- * A path of this site as the browser will read it. isSafePath checks the text; this also checks
- * where it leads once dot segments are resolved ("/..//evil.example" is "//evil.example").
- */
-export function isSafeDestination(path: unknown): path is string {
-  if (!isSafePath(path)) return false;
-  try {
-    const u = new URL(path, window.location.origin);
-    return u.origin === window.location.origin && isSafePath(`${u.pathname}${u.search}${u.hash}`);
-  } catch {
-    return false;
-  }
-}
+/** A path of this site as the browser will read it, dot segments resolved (returnTo.ts, where return paths are checked too). */
+export { isSafeDestination };
 
 /** Linking from Settings in this tab: where to come back to, for a callback the API can't place any more. */
 const LINK_KEY = "insights:linking";
@@ -113,20 +102,29 @@ export const linkNeedsPassword = (account: Pick<AccountInfo, "signedInAt">, now 
 export const prepareGoogleLink = (password: string) => api<{ ok: true; expiresInSeconds: number }>("/auth/account/methods/google/prepare", { method: "POST", body: { password } });
 
 /**
- * Link a Google account to the signed-in account (Settings): a full-page trip to Google and back.
- * The person comes back to `returnTo` (a path of this site) with `?linked=google`, or with
- * `?link_error=<code>` (linkErrorMessage words it). The session stays the one they have. A session
- * older than 15 minutes needs prepareGoogleLink first (linkNeedsPassword), or comes back with
- * `?link_error=reauth_required`.
+ * Link a Google account to the signed-in account (Settings): a full-page trip to Google (its
+ * account chooser, always) and back. The person comes back to `returnTo` (a path of this site) with
+ * `?linked=google`, or with `?link_error=<code>` (linkErrorMessage words it), which is also where a
+ * refusal before leaving goes. The session stays the one they have. A session older than 15
+ * minutes needs prepareGoogleLink first (linkNeedsPassword), or comes back with
+ * `?link_error=reauth_required`. Started with a POST from this page (the API refuses a link to it
+ * that another site could open), so call it from a click; it resolves once the page is leaving.
  */
-export function linkGoogle(returnTo: string) {
+export async function linkGoogle(returnTo: string): Promise<void> {
   const back = isSafeDestination(returnTo) ? returnTo : "/settings/security";
   try {
     sessionStorage.setItem(LINK_KEY, JSON.stringify({ path: back, at: Date.now() }));
   } catch {
     /* storage blocked: the API still names where to go back to */
   }
-  window.location.assign(`/api/auth/oauth/google/start?${new URLSearchParams({ link: "1", returnTo: back })}`);
+  let next: string;
+  try {
+    const { redirect } = await api<{ redirect: string }>("/auth/oauth/google/link", { method: "POST", body: { returnTo: back } });
+    next = /^https?:\/\//.test(redirect) ? redirect : withQuery(back, "link_error", "provider_error");
+  } catch (e) {
+    next = withQuery(back, "link_error", e instanceof ApiError && e.status !== 0 ? e.code : "unavailable");
+  }
+  window.location.assign(next);
 }
 
 /** The page a link from Settings started on, consumed; null when none is under way in this tab. */
@@ -163,6 +161,8 @@ export function linkErrorMessage(code: string): string {
       return "Sign in to your account again, then link Google.";
     case "reauth_required":
       return "For your safety, enter your password again, then link Google.";
+    case "start_again":
+      return "Please start linking Google again from this page.";
     case "email_unverified":
       return "Verify your email address first, then link Google.";
     case "provider_unavailable":
@@ -222,7 +222,17 @@ export interface AccountInfo {
   /** Google sign-in is offered and this account has none yet: "Link Google account". */
   canLinkGoogle: boolean;
   canChangePassword: boolean;
+  /** No password yet, and this session (Google with the account's own address) may add one. */
+  canAddPassword: boolean;
+  /** Password session with a verified address: an address nobody has proved stays until it is. */
   canChangeEmail: boolean;
+  /**
+   * What removing a sign-in method or deleting the account asks for: the account's password; a
+   * sign-in in the last 15 minutes (Google with the account's own address); or neither will do
+   * from this session (a Google account under another address, and no password): sign in with the
+   * account's address.
+   */
+  confirmWith: "password" | "recent_sign_in" | "own_address_sign_in";
   /** Two-step verification (an authenticator app) on the password. null: couldn't be checked just now. */
   mfaEnabled: boolean | null;
 }
@@ -231,10 +241,10 @@ export interface AccountInfo {
 export const changePassword = (input: { currentPassword: string; password: string; confirmPassword: string }) =>
   api<{ ok: true; signedIn: boolean }>("/auth/account/password", { method: "POST", body: input });
 
-/** A password for an account that signs in with Google only (needs a Google sign-in in the last 15 minutes). */
+/** A password for an account that signs in with Google only (needs a Google sign-in with its address in the last 15 minutes). */
 export const addPassword = (input: { password: string; confirmPassword: string }) => api<{ ok: true }>("/auth/account/password/add", { method: "POST", body: input });
 
-/** Remove a sign-in method (not the last, nor the one signed in with). `password`: when signed in with one. */
+/** Remove a sign-in method (not the last, nor the one signed in with). `password`: when the account asks for it (confirmWith). */
 export const removeSignInMethod = (id: string, password?: string) => api<{ ok: true }>(`/auth/account/methods/${encodeURIComponent(id)}`, { method: "DELETE", body: { password } });
 
 /** Two-step verification, step 1: the authenticator app's secret (shown once). */

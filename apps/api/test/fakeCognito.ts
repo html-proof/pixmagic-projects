@@ -166,13 +166,14 @@ export function fakeCognito() {
         return { tokens: issue(u) };
       }),
     ),
-    refresh: track("refresh", (refreshToken, username) =>
+    refresh: track("refresh", (refreshToken, sub) =>
       up(() => {
         if (state.refreshUnavailable) throw new CognitoUnavailableError("Cognito refresh is down (test)");
         const owner = refreshTokens.get(refreshToken);
         const u = users.get(owner ?? "");
-        // A wrong user name fails the SECRET_HASH check, which Cognito reports the same way.
-        if (!owner || owner !== username || !u || !u.enabled) throw err("NotAuthorizedException", "Invalid Refresh Token");
+        // The hash is keyed by the sub (a Google user's user name isn't it): anything else fails the
+        // SECRET_HASH check, which Cognito reports the same way.
+        if (!owner || !u || u.sub !== sub || !u.enabled) throw err("NotAuthorizedException", "Invalid Refresh Token");
         const t = issue(u);
         refreshTokens.delete(t.refreshToken!);
         return { ...t, refreshToken: undefined };
@@ -289,8 +290,8 @@ export function fakeCognito() {
         return { tokens: issue(u) };
       }),
     ),
-    authorizeUrl: ({ provider, redirectUri, state: st, codeChallenge, nonce }) =>
-      `https://auth.example.test/oauth2/authorize?${new URLSearchParams({ identity_provider: provider, redirect_uri: redirectUri, state: st, code_challenge: codeChallenge, code_challenge_method: "S256", nonce })}`,
+    authorizeUrl: ({ provider, redirectUri, state: st, codeChallenge, nonce, selectAccount }) =>
+      `https://auth.example.test/oauth2/authorize?${new URLSearchParams({ identity_provider: provider, redirect_uri: redirectUri, state: st, code_challenge: codeChallenge, code_challenge_method: "S256", nonce, ...(selectAccount && { prompt: "select_account" }) })}`,
     exchangeCode: track("exchangeCode", ({ code, redirectUri, codeVerifier }) =>
       up(() => {
         const p = oauthCodes.get(code);

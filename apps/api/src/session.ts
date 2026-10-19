@@ -61,6 +61,13 @@ export interface SessionClaims {
   /** Last checked with Cognito (ms). */
   ck: number;
   /**
+   * true: this sign-in proved the account's own address (Cognito vouched for it, and it is the
+   * account's). A Google account linked under another address proves that address only, so its
+   * sessions never count as the person again for a change that could lock them out
+   * (account.ts, reauthenticate).
+   */
+  own?: true;
+  /**
    * false: "Keep me signed in" was unticked, so the cookies end when the browser closes (and at
    * exp, whichever comes first). Absent: they last until exp, as every session did before.
    */
@@ -99,7 +106,7 @@ export function readSession(cookie: string | undefined, now = Date.now()): Sessi
 }
 
 export function newSession(
-  input: { userId: string; sub: string; username: string; method: SignInMethod; authTime: number; keep?: boolean },
+  input: { userId: string; sub: string; username: string; method: SignInMethod; authTime: number; keep?: boolean; ownAddress?: boolean },
   now = Date.now(),
 ): SessionClaims {
   return {
@@ -114,8 +121,13 @@ export function newSession(
     at: input.authTime,
     ck: now,
     ...(input.keep === false && { keep: false as const }),
+    ...(input.ownAddress && { own: true as const }),
   };
 }
+
+/** Whether a verified sign-in (its ID token's claims) proves `accountEmail`, the account's own address. */
+export const provesAddress = (claims: { email: string | null; emailVerified: boolean }, accountEmail: string) =>
+  claims.emailVerified && !!claims.email && claims.email.toLowerCase() === accountEmail.toLowerCase();
 
 /**
  * A session for someone who opened an invitation link (POST /invitations/open): this workspace

@@ -21,9 +21,12 @@ browser ──► /api/auth/* (API)    ──► Cognito user-pool API          
   sets `__session` (an HMAC-signed, httpOnly, SameSite=Lax, Secure cookie, 5 days) and
   `__session_rt` (the Cognito refresh token, AES-GCM encrypted with `TOKEN_ENCRYPTION_KEYS`, sent
   to `/api` only). Each request costs one HMAC; every minute the refresh token is spent with
-  Cognito, so a user disabled or deleted there, or signed out everywhere, loses the session.
-  `apps/api/src/session.ts`. "Keep me signed in" unticked (on the sign-in page, also for Google)
-  makes both cookies end with the browser.
+  Cognito, so a user disabled or deleted there, or signed out everywhere, loses the session, and
+  a session due for that check without its refresh-token cookie ends (the session cookie alone is
+  never enough). Each request also checks the session's sign-in is still one of the account's
+  (`auth_identities`), so removing a method, or a take-over, ends its sessions at once.
+  `apps/api/src/session.ts`, `context.ts`. "Keep me signed in" unticked (on the sign-in page, also
+  for Google) makes both cookies end with the browser.
 - **Accounts**: `users.id` never changes. Each Cognito user (password, Google) is linked to
   it in `auth_identities` (provider, Cognito `sub`, user name, method). Several identities can point
   at one user (`apps/api/src/identity.ts`):
@@ -32,10 +35,22 @@ browser ──► /api/auth/* (API)    ──► Cognito user-pool API          
   - When that existing account's own address was never verified (an employee account made from a
     copied invitation link, whose password whoever opened the link chose), the verified sign-in
     takes it over: the account's other Cognito users are deleted, their identities removed, every
-    session ended (`unverified_identity_removed`). A Team & Access invitee's placeholder account
-    has no sign-in yet and simply links. Only a sign-in that verifies the account's own address
-    counts: a Google account linked under another address (and that session's re-checks) never
-    marks the account verified, and such an account can't link Google at all.
+    session ended, and what that person set up undone: the API keys they made and the access and
+    invitations they gave are revoked, and the account leaves the workspaces it made or claimed;
+    memberships and employee records workspace owners gave the address stay
+    (`unverified_identity_removed`, with counts). A Team & Access invitee's placeholder account
+    has no sign-in yet and simply links. Only a sign-in or a code that verifies the account's own
+    address counts: a Google account linked under another address (and that session's re-checks)
+    never marks the account verified, nor does a verification code Cognito sent to another
+    address (the API reads what Cognito vouches for after the code). Such an account can't link
+    Google, can't change its address, and is never moved to another one by a sign-in.
+  - The owner of such an address isn't locked out without Google: Cognito holds the address for
+    that unverified password user (sign-up says "account exists") and sends it no reset code. So
+    a sign-up or a password reset for it emails our own code (Cognito's wording, the app's
+    mailer; an HMAC of it in the coordinator, 24 hours for a sign-up, 1 hour for a reset, five
+    guesses an hour). Nothing changes until it is entered; then the unproven password user is
+    deleted, the owner gets their own (address verified) and the account is taken over as above
+    (`address_claim_started`, `address_claimed`). No Cognito permission beyond create and delete.
   - No account is created from a Google address Google hasn't verified: such an account could
     never verify it here (Google's tokens can't ask Cognito for a code).
   - Signing up again over a sign-up that was never confirmed: the same password sends a fresh
@@ -43,28 +58,39 @@ browser ──► /api/auth/* (API)    ──► Cognito user-pool API          
     enters the code proves the inbox, so the sign-up page sends its password with the code
     (`/signup/confirm` with `password`): if the confirmed sign-up has another password (someone
     signed up with the address after the owner), it is replaced with this one, its Cognito tokens
-    end, and so does any session signed in with the old one (`signup_password_replaced`).
-  - Settings → Security links a Google account whatever its address (the person's own session at
-    both ends of the trip, a sign-in in the last 15 minutes or the password just now, a verified
-    address; refused when another account uses that Google account), adds a password to a
-    Google-only account (a Cognito password user for the account's address, after a Google
-    sign-in in the last 15 minutes), and removes a method (never the last, nor the one signed in
-    with; its Cognito user is deleted). Each addition is emailed to the account's address. A
-    removed Google account stays out even when its address is the account's: Cognito makes its
-    federated user again on its next sign-in, but the removal (`identity_removed` with its Cognito
-    user name, in `auth_events`) stops it linking back by address (`google_removed`) until it is
-    linked again from Settings.
+    end, and so does any session signed in with the old one (`signup_password_replaced`). A
+    password Cognito wouldn't take (the sign-in page's code step sends what was typed there)
+    leaves no password at all: "Forgot password?" sets one.
+  - Settings → Security links a Google account whatever its address (started with
+    `POST /api/auth/oauth/google/link` from our own pages, never a link another site could open;
+    Google's account chooser every time; the person's own session at both ends of the trip, a
+    sign-in in the last 15 minutes or the password just now, a verified address; refused when
+    another account uses that Google account), adds a password to a Google-only account (a
+    Cognito password user for the account's address, after a Google sign-in with that address in
+    the last 15 minutes), and removes a method (never the last, nor the one signed in with; its
+    Cognito user is deleted and its sessions end at once). Each addition and removal is emailed
+    to the account's address. A Google session counts as the person again only when it proved the
+    account's own address (the session's `own` claim, and that identity's address): one linked
+    under another address needs the account's password to remove a method or delete the account,
+    and can't add a password (`GET /api/auth/account` says which: `confirmWith`). A removed Google
+    account stays out even when its address is the account's: Cognito makes its federated user
+    again on its next sign-in, but the removal (`identity_removed` with its Cognito user name, in
+    `auth_events`) stops it linking back by address (`google_removed`) until it is linked again
+    from Settings.
   - A password reset ends every session but not the other ways in: the reset's answer names them
     (`otherMethods`), and the sign-in page asks the person to check a linked Google account.
 - **Two-step verification** (section 6): opt-in, for password accounts.
 - **Tenancy is unchanged**: a sign-in says who someone is; workspaces, roles and permissions stay in
   our database (`requireWorkspace`, Postgres RLS).
-- **The confidential app client's secret** signs every user-pool call (`SECRET_HASH`). The API
+- **The confidential app client's secret** signs every user-pool call (`SECRET_HASH`; a refresh's is
+  keyed by the user's `sub`, as AWS says for a pool whose users sign in with their email, which a
+  Google user's `google_<id>` name isn't). The API
   function's own role, which may make only five admin calls on this pool (create, get, set password,
   delete, sign out everywhere), signs the admin calls with SigV4. No access keys anywhere.
 - **Audit**: `auth_events` records account-level changes (account created, identity linked or
-  removed, an unverified account taken over, an unconfirmed sign-up replaced, a confirmed sign-up's
-  password replaced by the code's owner, an account from before
+  removed, an unverified account taken over, a claim of an address nobody proved started or
+  completed, an unconfirmed sign-up replaced, a confirmed sign-up's password replaced by the code's
+  owner, an account from before
   Cognito given its Cognito user, password reset/changed, email changed or verified, two-step
   verification on or off, signed out everywhere, account deleted).
 
@@ -77,11 +103,12 @@ browser ──► /api/auth/* (API)    ──► Cognito user-pool API          
 | `POST /api/auth/login`, `/login/mfa` | email + password (`{ next: "mfa" }` when the account has two-step verification); then the app's code |
 | `POST /api/auth/password/forgot`, `/password/reset` | reset code by email; new password |
 | `POST /api/auth/otp/start`, `/otp/verify` | passwordless code (only with `COGNITO_EMAIL_OTP=1`) |
-| `GET /api/auth/oauth/google/start` | to Google, with state, PKCE and a nonce. `?keep=0`: "Keep me signed in" unticked. `?link=1&returnTo=<path>`: link Google to the signed-in account (a sign-in in the last 15 minutes, or `POST /api/auth/account/methods/google/prepare` with the password first); back to `<path>?linked=google` or `?link_error=<code>` |
+| `GET /api/auth/oauth/google/start` | to Google to sign in, with state, PKCE and a nonce. `?keep=0`: "Keep me signed in" unticked. (`?link=1` no longer links: back to `returnTo` with `?link_error=start_again`) |
+| `POST /api/auth/oauth/google/link` `{ returnTo }` | link Google to the signed-in account, from our own pages: `{ redirect }` to Google's account chooser (a sign-in in the last 15 minutes, or `POST /api/auth/account/methods/google/prepare` with the password first); back to `<returnTo>?linked=google` or `?link_error=<code>`; refusals are errors whose code the page puts there |
 | `POST /api/auth/oauth/callback` | what the provider sent back (from the `/auth/callback` page) |
 | `POST /api/auth/logout`, `/logout-all` | this browser; every device |
 | `GET /api/auth/session`, `/api/auth/whoami`, `/api/me` | the session |
-| `GET /api/auth/account` | Settings → Security: methods (with `id`), `hasPassword`, `canLinkGoogle`, `mfaEnabled` (null: Cognito couldn't be asked) |
+| `GET /api/auth/account` | Settings → Security: methods (with `id`), `hasPassword`, `canLinkGoogle`, `canAddPassword`, `confirmWith` (`password`, `recent_sign_in` or `own_address_sign_in`: what removing a method or deleting the account asks for), `mfaEnabled` (null: Cognito couldn't be asked) |
 | `POST /api/auth/account/{password,password/add,email,email/confirm,verify-email/send,verify-email,delete}` | change or add a password, change or verify the email, delete the account |
 | `DELETE /api/auth/account/methods/:id` | remove a sign-in method |
 | `POST /api/auth/account/methods/google/prepare` | the password again, so this session may start one link to Google in the next 5 minutes |
@@ -153,9 +180,10 @@ Nothing is clicked in the Cognito console, and nobody runs `cdk deploy` by hand.
    runtime parameter. Its step "Restart the functions on changed runtime settings" then publishes the
    functions again (each restart writes the run's id into their description, so every change
    publishes a new version, even a second one on the same commit), so no instance that started
-   during the deploy keeps the old setting. The step needs the deploy role to read
-   `/insights/production/runtime` and to update and publish the three functions; until it may, it
-   only warns that it couldn't read the runtime settings: then restart them by hand
+   during the deploy keeps the old setting. The deploy role may read
+   `/insights/production/runtime` and update and publish the three functions (ci-stack.ts). The
+   one run that first grants it read the settings before it had it, so it only warns that it
+   couldn't read them: if Google was switched on in that same run, restart them by hand once
    ([aws-deployment.md](aws-deployment.md), "Restarting the functions").
 7. **Check**: `curl https://bizinsights.io/api/auth/config` answers `"google":true`;
    `curl -sI https://bizinsights.io/api/auth/oauth/google/start` answers 302 to

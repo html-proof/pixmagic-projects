@@ -26,7 +26,7 @@ import { BREAK_KINDS, localDayOf, passwordProblems, shiftDay } from "@app/shared
 import { body, clientIp, HttpError, requireAppOrigin, requireUser, type Ctx, type Deps } from "../context.js";
 import { CognitoError, CognitoUnavailableError } from "../cognito.js";
 import { resolveUser } from "../identity.js";
-import { newSession, setSessionCookies } from "../session.js";
+import { newSession, provesAddress, setSessionCookies } from "../session.js";
 import { cognitoFailure } from "./auth.js";
 import type { App } from "../app.js";
 import { limit, LIMITS } from "../rateLimit.js";
@@ -103,7 +103,11 @@ export function staffPortalRoutes(app: App, deps: Deps) {
       if (!("tokens" in signedIn)) throw new CognitoError("UnexpectedChallenge", signedIn.challenge);
       const claims = await deps.auth.verifyIdToken(signedIn.tokens.idToken);
       user = await resolveUser(claims, { ip: clientIp(c), auth: deps.auth });
-      setSessionCookies(c, newSession({ userId: user.id, sub: claims.sub, username: claims.username, method: claims.method, authTime: claims.authTime }), signedIn.tokens.refreshToken);
+      setSessionCookies(
+        c,
+        newSession({ userId: user.id, sub: claims.sub, username: claims.username, method: claims.method, authTime: claims.authTime, ownAddress: provesAddress(claims, user.email) }),
+        signedIn.tokens.refreshToken,
+      );
     } catch (err) {
       await release();
       if (err instanceof CognitoError && err.code === "UsernameExistsException") {
