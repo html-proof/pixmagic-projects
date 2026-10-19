@@ -471,7 +471,9 @@ describe("the edge stack", () => {
     const acl = Object.values(t.edge.findResources("AWS::WAFv2::WebACL"))[0]!.Properties;
     expect(acl.Scope).toBe("CLOUDFRONT");
     const rules = Object.fromEntries((acl.Rules as Array<{ Name: string }>).map((r) => [r.Name, r])) as Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
-    expect(rules["api-rate-per-ip"].Statement.RateBasedStatement.Limit).toBe(300);
+    // Per address, and one address is often an office or a mobile carrier's NAT: the same figure
+    // as the app's own GLOBAL_LIMIT_PER_MIN (apps/aws/src/app.ts).
+    expect(rules["api-rate-per-ip"].Statement.RateBasedStatement.Limit).toBe(1500);
     expect(rules["api-rate-per-ip"].Statement.RateBasedStatement.AggregateKeyType).toBe("IP");
     expect(rules["aws-ip-reputation"].OverrideAction).toEqual({ None: {} });
     expect(rules["aws-common-count-only"].OverrideAction).toEqual({ Count: {} });
@@ -498,7 +500,7 @@ describe("the edge stack behind Cloudflare", () => {
     const viaCloudflare = rule("api-rate-per-client-via-cloudflare").Statement.RateBasedStatement;
     expect(viaCloudflare.AggregateKeyType).toBe("FORWARDED_IP");
     expect(viaCloudflare.ForwardedIPConfig).toEqual({ HeaderName: "cf-connecting-ip", FallbackBehavior: "NO_MATCH" });
-    expect(viaCloudflare.Limit).toBe(300);
+    expect(viaCloudflare.Limit).toBe(1500);
     const scope = (r: { ScopeDownStatement: { AndStatement: { Statements: unknown[] } } }) => JSON.stringify(r.ScopeDownStatement.AndStatement.Statements.at(-1));
     expect(scope(viaCloudflare)).toMatch(/^\{"OrStatement".*IPSetReferenceStatement/);
     expect(scope(rule("api-rate-per-ip").Statement.RateBasedStatement)).toMatch(/^\{"NotStatement".*IPSetReferenceStatement/);
