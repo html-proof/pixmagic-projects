@@ -1,4 +1,4 @@
-import { MONTH_LINES, type SalesMonth } from "@app/shared/sales";
+import { MONTH_LINES, type MonthLine, type SalesMonth } from "@app/shared/sales";
 import { calculationName, customApplied, customSales, type SalesLines } from "@app/shared/salesCalculation";
 import type { SalesOverview, YearMonth } from "./types";
 
@@ -43,7 +43,7 @@ export const dayLinesOf = (d: SalesOverview["series"][number]): Omit<SalesLines,
   d.tax === undefined || d.shipping === undefined ? null : { netSales: d.netSales, additionalFees: d.additionalFees ?? 0, duties: d.duties ?? 0, shipping: d.shipping, taxes: d.tax };
 
 /** A month of this year with its lines of total sales, when the member may see them (as `dayLinesOf`). */
-export const hasMonthLines = (m: YearMonth): m is SalesMonth => MONTH_LINES.every((k) => m[k] !== undefined);
+export const hasMonthLines = (m: YearMonth): m is YearMonth & Pick<SalesMonth, MonthLine> => MONTH_LINES.every((k) => m[k] !== undefined);
 
 /**
  * Custom sales as the dashboard shows it next to Shopify's figures: only when the store applies a

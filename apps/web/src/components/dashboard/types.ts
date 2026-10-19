@@ -5,8 +5,11 @@ import type { JourneyPageRow, JourneySummary } from "@app/shared/journey";
 import type { MonthLine, SalesDay, SalesMonth, YearBreakdown } from "@app/shared/sales";
 import type { SalesCalculation } from "@app/shared/salesCalculation";
 
-/** A month of `SalesOverview.year`: its lines of total sales only for a member who may see them (`MONTH_LINES`). */
-export type YearMonth = Omit<SalesMonth, MonthLine> & Partial<Pick<SalesMonth, MonthLine>>;
+/**
+ * A month of `SalesOverview.year`: its lines of total sales (`MONTH_LINES`) and its refunds only for
+ * a member who may see them (Team & Access: "View gross sales, discounts, tax and shipping", "View refunds").
+ */
+export type YearMonth = Omit<SalesMonth, MonthLine | "refunds"> & Partial<Pick<SalesMonth, MonthLine | "refunds">>;
 
 export interface Capability {
   id: string;

@@ -224,10 +224,28 @@ describe("redactOverview", () => {
     for (const k of MONTH_LINES) expect(y.months[0]).not.toHaveProperty(k);
     expect(reports.modules.sales_overview).not.toHaveProperty("calculation");
 
-    const both = redactOverview(report(), member(["analytics.sales", "finance.reports", "finance.breakdown"])) as ReturnType<typeof report>;
+    const both = redactOverview(report(), member(["analytics.sales", "finance.reports", "finance.breakdown", "finance.refunds"])) as ReturnType<typeof report>;
     expect(both.modules.sales_overview.year.months[0]).toEqual(report().modules.sales_overview.year.months[0]);
     // The original is untouched.
     expect(report().modules.sales_overview.year.months[0]!.taxes).toBe(5);
+  });
+
+  it("keeps each month's refunds only with View refunds", () => {
+    const reports = redactOverview(report(), member(["analytics.sales", "finance.reports"])) as ReturnType<typeof report>;
+    for (const m of reports.modules.sales_overview.year.months) expect(m).not.toHaveProperty("refunds");
+    expect(reports.modules.sales_overview.year.months[0]).toMatchObject({ netSales: 100, orders: 3 });
+
+    const refunds = redactOverview(report(), member(["analytics.sales", "finance.reports", "finance.refunds"])) as ReturnType<typeof report>;
+    expect(refunds.modules.sales_overview.year.months[0]).toMatchObject({ refunds: 10, netSales: 100 });
+    // The breakdown's lines still need their own permission.
+    for (const k of MONTH_LINES) expect(refunds.modules.sales_overview.year.months[0]).not.toHaveProperty(k);
+
+    // With the breakdown but without refunds: the lines stay, the refunds go.
+    const lines = redactOverview(report(), member(["analytics.sales", "finance.reports", "finance.breakdown"])) as ReturnType<typeof report>;
+    const { refunds: _refunds, ...withoutRefunds } = report().modules.sales_overview.year.months[0]!;
+    expect(lines.modules.sales_overview.year.months[0]).toEqual(withoutRefunds);
+    // The original is untouched.
+    expect(report().modules.sales_overview.year.months[0]!.refunds).toBe(10);
   });
 
   it("keeps them once granted", () => {

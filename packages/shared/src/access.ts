@@ -575,10 +575,11 @@ function redactFields(modules: Obj, g: ReadonlySet<AccessKey>): Obj {
       delete s.calculation;
     }
     if (!g.has("finance.reports")) delete s.year;
-    // Returns are refunds (and cancellations and edits), for the range and each day.
+    // Returns are refunds (and cancellations and edits), for the range, each day and each month.
     if (!g.has("finance.refunds")) {
       s = { ...s, current: omit(s.current, ["returns"]) };
       if (Array.isArray(s.series)) s.series = s.series.map((d: unknown) => omit(d, ["refunds"]));
+      if (isObj(s.year) && Array.isArray(s.year.months)) s.year = { ...s.year, months: s.year.months.map((m: unknown) => omit(m, ["refunds"])) };
     }
     out.sales_overview = s;
   }

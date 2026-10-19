@@ -368,7 +368,8 @@ export function MonthlySalesCard({
           </>
         )}
         <TipRow>{m.orders === 1 ? "1 order" : `${fmtNum(m.orders)} orders`}{m.averageOrderValue !== null ? ` · ${money(m.averageOrderValue)} average` : ""}</TipRow>
-        {m.refunds > 0 && <TipRow>Refunds {money(m.refunds)}</TipRow>}
+        {/* Months without `refunds` (Team & Access: "View refunds") show no refunds. */}
+        {m.refunds !== undefined && m.refunds > 0 && <TipRow>Refunds {money(m.refunds)}</TipRow>}
         {x.change !== null && <TipRow>{changeText(x.change)} {comparedText(m)}</TipRow>}
         {m.coverage === "partial" && <TipRow>Only from {fmtDay(historyFrom, { year: false })}: earlier orders weren&apos;t shared by Shopify.</TipRow>}
         <div className="mt-1 flex items-center gap-1.5 text-muted">
