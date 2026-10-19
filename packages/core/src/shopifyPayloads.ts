@@ -71,6 +71,8 @@ export const restOrderSchema = obj({
   name: str,
   currency: str,
   created_at: timestamp,
+  /** When the sale happened, the date Shopify's reports use (earlier than created_at for an imported order). */
+  processed_at: timestamp.nullish(),
   updated_at: timestamp.nullish(),
   cancelled_at: timestamp.nullish(),
   /** A test order (Bogus Gateway, a payment provider's test mode): Shopify's reports leave it out. */
@@ -326,6 +328,7 @@ export const graphqlLineItemSchema = obj({
   title: str,
   quantity: quantity.nullish(),
   sku: str,
+  isGiftCard: z.boolean().nullish(),
   variant: ref,
   product: ref,
   originalUnitPriceSet: moneyBag,
@@ -370,6 +373,8 @@ export const graphqlOrderSchema = obj({
   id: gid,
   name: z.string(),
   createdAt: timestamp,
+  /** When the sale happened, the date Shopify's reports use (earlier than createdAt for an imported order). */
+  processedAt: timestamp.nullish(),
   updatedAt: timestamp.nullish(),
   cancelledAt: timestamp.nullish(),
   test: z.boolean().nullish(),

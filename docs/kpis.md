@@ -21,10 +21,10 @@ approval; until then the card says why it has no figure, never shows 0.
 | Shipping charges | Sales report: shipping charges | Records | Exact | After shipping discounts and refunds |
 | Taxes | Sales report: taxes | Records | Exact | Gift cards and tips left out, as Shopify does |
 | Total sales | Sales report: total sales | Records | Exact | Net sales + shipping + taxes + duties + fees |
-| Orders | Sales report: orders | Orders placed | Exact for the range | Cancelled included, test and deleted orders never. Shopify's "over time" reports also show an order edited on a later day on that day; a range total counts it once, as here |
-| Average order value | Sales report: AOV | Records | Exact except for edits | (Gross − discounts) ÷ orders. Shopify leaves later edits out of the numerator ("excluding post-order adjustments"); an edit on a later day in the range makes the two differ slightly |
-| Items sold (net) | Sales report: net items sold | Records | Exact | Ordered − reversed quantities |
-| Returning customer rate | Customers: returning customer rate | Orders placed + Shopify's order position | Exact for online orders | Returning customers ÷ customers, each counted once. New = the order is the customer's first purchase (`customerOrderIndex`); POS and draft orders have no position and fall back (see Formulas). Needs `read_customers` |
+| Orders | Sales report: orders | Orders placed | Exact | On the day Shopify processed them (`processedAt`, see Conventions). Cancelled included; test, deleted and gift-card-only orders never. An order edited on a later day counts once, on its own day, in Shopify's report by day too |
+| Average order value | Sales report: AOV | Records | Exact | What the orders sold on the day they were placed (their items after discounts, before tax; gift cards and what an edit on a later day added left out: "excluding post-order adjustments") ÷ orders |
+| Items sold (net) | Sales report: net items sold | Records | Exact | Ordered − reversed quantities, gift cards included |
+| Returning customer rate | Customers: returning customer rate | Orders placed, by when they happened | Exact | Returning customers ÷ customers, each counted once; a customer who bought only gift cards isn't one. Returning = the customer has an earlier order by processed date (see Formulas). Needs `read_customers` |
 | Refunded orders, refund rate | (bizinsights) | Records | n/a | Not a Shopify report figure |
 | Top products, vendors | Sales by product / vendor: net sales | Records | Exact | |
 | Discount codes | Discounts report | Records | Close | An order with two codes counts for both |
@@ -162,6 +162,14 @@ shipping, taxes and total sales as Shopify's sales reports for the same dates.
   successful orders sweep (a start they surely hold), and their next window import makes it exact.
   `oldestOrderDay`/`newestOrderDay` stay the orders actually held ("Orders from … to …").
 - **Daily series** (the sales chart and sparklines) has one point per day of the range; days without orders or sales are 0.
+- **An order counts on the day Shopify processed it** (`Order.processedAt`), the date its reports and
+  its order list use. For an order placed in the store that is the moment it was created; an order
+  imported from another platform, synced from POS offline or brought in by a marketplace app was
+  processed earlier than Shopify created it, and counts then, with its sales (its own agreement
+  happened at `processedAt` too). Until 2026-10-19 orders counted on their creation day, so
+  imported orders all showed as orders of the day they were imported while their sales sat on the
+  right days. Orders stored before then keep their creation day until read again
+  (`shopify_processed_at` empty: the next re-read of the 60-day window fills it in).
 - **A sale counts on the day it happened**: an order's sales on the day it was placed, a refund, return, cancellation or edit on the day it was made (the agreement's `happenedAt`), whatever day the order was placed. Last month's numbers can change only if Shopify backdates a record, which it doesn't.
 - **Cancelled orders** count as orders of the day they were placed, as in Shopify's reports; the cancellation is a return on the day it was made, so a cancelled order adds nothing to net sales once both are in the range. Operational modules (order timing, shipping, discount codes, vendors) still leave cancelled orders out.
 - **Prices that include tax** (GST, VAT) are taken apart as Shopify does: a sale's value is its amount less its tax.
@@ -172,6 +180,10 @@ shipping, taxes and total sales as Shopify's sales reports for the same dates.
   20261017140100 re-totalled the days stored that way.
 - **Missing denominators** produce `null` (shown as "—"), never a fake 0.
 - Tax and shipping are excluded from net sales and included in total sales. Gift card sales and tips are in neither (Shopify counts a gift card when it is spent, not when it is sold).
+- **Gift cards** are items sold (net items sold counts them, ordered and returned), but an order of
+  gift cards only is not an order: Shopify's reports count neither it nor its customer, so orders,
+  customers, returning customers and average order value leave it out (`orders.gift_card_only`). An
+  order with a gift card and anything else counts.
 
 ## Formulas
 
@@ -184,11 +196,11 @@ shipping, taxes and total sales as Shopify's sales reports for the same dates.
 | Shipping charges | Σ (amount − tax) of shipping sales | After shipping discounts and refunds |
 | Taxes | Σ tax of every sale (gift cards and tips aside) | |
 | **Total sales** | Net sales + Shipping + Taxes + duties and fees | Shopify's headline figure; the first tile |
-| Orders | count of orders placed (cancelled included, test orders never stored) | |
-| Units (items sold) | Σ quantity sold − Σ quantity returned | |
-| **Average order value** | (Gross − Discounts) ÷ Orders | Typical spend per order, after discounts, before returns |
+| Orders | count of orders placed, on the day Shopify processed them (cancelled included; test orders never stored; gift-card-only orders left out) | |
+| Units (items sold) | Σ quantity sold − Σ quantity returned, gift cards included | Shopify's net items sold |
+| **Average order value** | Order value ÷ Orders. Order value (`daily_store_metrics.order_value`) = Σ (amount − tax) of the product and adjustment sales (action `order`) made on the day their order was placed: gross − discounts of the day's orders, an edit made that day included, one made on a later day not (as Shopify's AOV measures) | Typical spend per order as placed, after discounts, before tax, shipping and returns. Rows from before order_value was kept fall back to (Gross − Discounts) |
 | **Refund rate** | Returns ÷ (Gross − Discounts) | Share of sales later taken back |
-| **Returning customer rate** | returning customers ÷ customers, each customer counted once (orders placed in the range) | Shopify's definition. Requires `read_customers`. An order is a returning customer's when the customer's history already held an order: Shopify's own position of the order (`CustomerJourneySummary.customerOrderIndex`, 1 = first purchase, test orders not counted) decides; without one (POS, draft orders), an earlier stored order of theirs, or a lifetime order count (`numberOfOrders`) above the orders stored for them. A customer who bought for the first time and again in the same range counts as both new and returning. Until 2026-10-18 the lifetime count alone decided, so a first order turned "returning" once the customer bought again, and the rate divided orders, not customers |
+| **Returning customer rate** | returning customers ÷ customers, each customer counted once (orders placed in the range) | Shopify's definition. Requires `read_customers`. An order is a returning customer's when the customer has an earlier order by when it happened (processed date; same moment: by order id), an order of gift cards only aside, as Shopify's report judges it (checked order by order, 878 of 878, on a seeded dev store, 2026-10-19). Orders from before the imported history count through Shopify's position of the order (`CustomerJourneySummary.customerOrderIndex`, which follows creation) being above the customer's orders stored up to it, or without one (POS, draft orders) a lifetime order count (`numberOfOrders`) above the orders stored for them. Until 2026-10-19 the position decided alone, which imported orders (created in another order than they happened) got wrong. A customer who bought for the first time and again in the same range counts as both new and returning. Until 2026-10-18 the lifetime count alone decided, so a first order turned "returning" once the customer bought again, and the rate divided orders, not customers |
 | New customers | customers whose very first purchase is in the range | |
 | Top products | Σ net sales and Σ net items per product (its product sales in the range), top 5 | Requires `read_products`; the products together make net sales |
 | Top vendors | Σ net sales and Σ net items of each vendor's products (their product sales in the range), top 5 | Same terms as top products; used to be line-item prices, tax included |
@@ -419,9 +431,6 @@ briefly in either direction.
 
 ## Known limitations
 
-- An order edited on a later day: Shopify's "over time" reports show it as an order on that day too,
-  and its AOV leaves post-order adjustments out. Here an order counts once, on the day it was placed,
-  and AOV includes edit-added sales. Range totals of orders agree; AOV can differ slightly.
 - A refund today on an order older than Shopify's 60 days (without `read_all_orders`) is in Shopify's
   reports and can't be read here: neither the order nor the refund is visible to the app.
 

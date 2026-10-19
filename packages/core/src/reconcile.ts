@@ -28,7 +28,7 @@
  * says are gone or are test orders, exactly what its reports leave out.
  */
 import { Prisma, systemDb, toNumber, type Store, type Tx } from "@app/db";
-import { addDays, aggregateDaily, eachDay, emptyRow, expandScopes, localDay, type DailyMetricsRow, type SaleInput } from "@app/shared";
+import { addDays, aggregateDaily, eachDay, emptyRow, expandScopes, localDay, type DailyMetricsRow, type OrderInput, type SaleInput } from "@app/shared";
 import { logger } from "./logger.js";
 import type { NormalizedOrder } from "./normalize.js";
 import { dayTotals, recomputeDays } from "./persist.js";
@@ -121,15 +121,19 @@ function addInto(into: DayTotals, rows: Map<string, DailyMetricsRow>, days: Read
   }
 }
 
-/** One order's share of the window's days, from its sales records and when it was placed. */
+/**
+ * One order's share of the window's days, from its sales records and when it was placed (processed:
+ * the day Shopify's reports put it on), counted as an order unless it holds only gift cards.
+ */
 export function orderShare(
-  order: { createdAt: Date },
+  order: Pick<OrderInput, "createdAt" | "processedAt" | "giftCardOnly">,
   sales: SaleInput[],
   timeZone: string,
   days: ReadonlySet<string>,
 ): DayTotals {
   const out: DayTotals = {};
-  addInto(out, aggregateDaily([{ createdAt: order.createdAt, customerKey: null, isReturningCustomer: false }], sales, timeZone, localDay), days);
+  const o: OrderInput = { createdAt: order.createdAt, processedAt: order.processedAt, giftCardOnly: order.giftCardOnly, customerKey: null, isReturningCustomer: false };
+  addInto(out, aggregateDaily([o], sales, timeZone, localDay), days);
   return out;
 }
 
@@ -300,12 +304,14 @@ export async function storedDayTotals(store: Pick<Store, "id" | "workspaceId">, 
 
 // ---------------------------------------------------------------- a page of orders
 
-/** What is stored of these orders: when Shopify last changed them, and their sales in the window. */
+type StoredOrder = { updatedAt: Date; createdAt: Date; processedAt: Date | null; giftCardOnly: boolean; sales: SaleInput[] };
+
+/** What is stored of these orders: when Shopify last changed them, when they happened, and their sales in the window. */
 async function storedOrders(store: Pick<Store, "id">, shopifyIds: string[], w: CheckWindow) {
-  if (!shopifyIds.length) return new Map<string, { updatedAt: Date; createdAt: Date; sales: SaleInput[] }>();
+  if (!shopifyIds.length) return new Map<string, StoredOrder>();
   const orders = await systemDb.order.findMany({
     where: { storeId: store.id, shopifyId: { in: shopifyIds } },
-    select: { id: true, shopifyId: true, shopifyUpdatedAt: true, shopifyCreatedAt: true },
+    select: { id: true, shopifyId: true, shopifyUpdatedAt: true, shopifyCreatedAt: true, shopifyProcessedAt: true, giftCardOnly: true },
   });
   const sales = orders.length
     ? await systemDb.orderSale.findMany({
@@ -319,7 +325,12 @@ async function storedOrders(store: Pick<Store, "id">, shopifyIds: string[], w: C
     list.push({ ...s, amount: toNumber(s.amount), discount: toNumber(s.discount), tax: toNumber(s.tax) });
     byOrder.set(s.orderId, list);
   }
-  return new Map(orders.map((o) => [o.shopifyId, { updatedAt: o.shopifyUpdatedAt, createdAt: o.shopifyCreatedAt, sales: byOrder.get(o.id) ?? [] }]));
+  return new Map(
+    orders.map((o): [string, StoredOrder] => [
+      o.shopifyId,
+      { updatedAt: o.shopifyUpdatedAt, createdAt: o.shopifyCreatedAt, processedAt: o.shopifyProcessedAt, giftCardOnly: o.giftCardOnly, sales: byOrder.get(o.id) ?? [] },
+    ]),
+  );
 }
 
 function note(state: CheckState, kind: FindingKind, order: { id: string; name: string | null }) {
@@ -329,7 +340,16 @@ function note(state: CheckState, kind: FindingKind, order: { id: string; name: s
 }
 
 const salesOf = (o: NormalizedOrder): SaleInput[] =>
-  (o.sales ?? []).map((x) => ({ orderId: o.shopifyId, happenedAt: x.happenedAt, actionType: x.actionType, lineType: x.lineType, quantity: x.quantity, amount: x.amount, discount: x.discount, tax: x.tax }));
+  (o.sales ?? []).map((x) => ({
+    orderId: o.shopifyId,
+    happenedAt: x.happenedAt,
+    actionType: x.actionType,
+    lineType: x.lineType,
+    quantity: x.quantity,
+    amount: x.amount,
+    discount: x.discount,
+    tax: x.tax,
+  }));
 
 /** An order to write again from Shopify's copy, or to remove (Shopify's test orders). */
 export type Repair = { order: NormalizedOrder; action: "write" | "remove" };
@@ -361,7 +381,7 @@ export async function checkOrders(store: Pick<Store, "id">, w: CheckWindow, stat
     }
     const theirs = orderShare(o, salesOf(o), w.timezone, days);
     for (const [day, t] of Object.entries(theirs)) state.shopify[day] = add(state.shopify[day] ?? zero(), t);
-    const ours = mine ? orderShare({ createdAt: mine.createdAt }, mine.sales, w.timezone, days) : {};
+    const ours = mine ? orderShare(mine, mine.sales, w.timezone, days) : {};
     if (sameShare(theirs, ours)) continue;
     // The order differs from what is stored: say why, then write Shopify's copy.
     if (o.updatedAt > startedAt) {
@@ -434,7 +454,7 @@ export async function setAside(store: Pick<Store, "id">, w: CheckWindow, state: 
     noteUnlisted(state, o, "out_of_reach");
     const mine = stored.get(o.id);
     if (!mine) continue;
-    for (const [day, t] of Object.entries(orderShare({ createdAt: mine.createdAt }, mine.sales, w.timezone, days))) excluded[day] = add(excluded[day] ?? zero(), t);
+    for (const [day, t] of Object.entries(orderShare(mine, mine.sales, w.timezone, days))) excluded[day] = add(excluded[day] ?? zero(), t);
     state.excludedOrders = (state.excludedOrders ?? 0) + 1;
   }
 }

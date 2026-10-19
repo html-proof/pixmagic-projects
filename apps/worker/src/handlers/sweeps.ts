@@ -154,6 +154,9 @@ export async function seedSalesRereads(deps: Pick<WorkerDeps, "queues" | "coord"
         // A customer's order never read with what Shopify says of their history (stored before it
         // was read): new or returning can only be guessed until it is.
         { customerKey: { not: null }, customerOrderIndex: null, customerOrderCount: null },
+        // Stored before its processed date was read: it counts on its creation day until it is,
+        // and its gift-card flag and its sales' agreements are filled in by the same read.
+        { shopifyProcessedAt: null },
       ],
     },
     distinct: ["storeId"],
