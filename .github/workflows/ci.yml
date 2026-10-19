@@ -151,6 +151,14 @@ jobs:
             core.info(run ? `Browser tests run (${hit ?? "3,000+ files"} changed).` : "Browser tests skipped: nothing they drive changed.");
             core.setOutput("e2e", String(run));
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The PC is a laptop that, unplugged, sleeps 3 minutes after its screen turns off; asleep it
+      # loses the job, or a test's clock runs on while nothing happens ("Hook timed out in 60000ms").
+      # A power request held until the job ends keeps it awake (a closed lid is a power setting of
+      # the owner's: docs/aws-deployment.md). Never worth failing a job over.
+      - name: Keep the PC awake for this job (self-hosted runner)
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        run: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File infra/runner/keep-awake.ps1
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -304,6 +312,11 @@ jobs:
           echo %ProgramFiles%\Git\bin>>"%GITHUB_PATH%"
           echo npm_config_store_dir=%RUNNER_TOOL_CACHE%\pnpm-store>>"%GITHUB_ENV%"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # As in the checks job: the laptop holds a power request until the job ends.
+      - name: Keep the PC awake for this job (self-hosted runner)
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        run: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File infra/runner/keep-awake.ps1
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
