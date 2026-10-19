@@ -26,7 +26,9 @@ scopes = "read_orders,read_products"
 # store is already installed (the install screen is not shown again). Re-check this the day the
 # main app is submitted - if PCD approval has not landed by then, comment this back out, clear
 # SHOPIFY_OPTIONAL_SCOPES, and redeploy both. See docs/shopify-setup.md "Optional scopes".
-optional_scopes = ["read_customers", "write_pixels", "read_customer_events"]
+# The Inventory module's stock levels, locations and stock changes (docs/inventory.md); none of
+# them is protected customer data.
+optional_scopes = ["read_customers", "write_pixels", "read_customer_events", "read_inventory", "read_locations", "write_inventory"]
 use_legacy_install_flow = false
 
 [auth]

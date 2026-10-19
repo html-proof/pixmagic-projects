@@ -23,7 +23,9 @@ scopes = "read_orders,read_products"
 # must mirror this list exactly. These three are protected customer data: see
 # docs/shopify-setup.md "Optional scopes" before submitting without Protected customer data
 # access approved.
-optional_scopes = ["read_customers", "write_pixels", "read_customer_events"]
+# The Inventory module's stock levels, locations and stock changes (docs/inventory.md); none of
+# them is protected customer data.
+optional_scopes = ["read_customers", "write_pixels", "read_customer_events", "read_inventory", "read_locations", "write_inventory"]
 use_legacy_install_flow = false
 
 [auth]

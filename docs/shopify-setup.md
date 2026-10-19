@@ -31,7 +31,7 @@ This pushes, as one versioned config:
 | App URL | `https://APP_DOMAIN/api/shopify/launch` (HMAC-verified: authorizes a store we hold no working token for, otherwise opens it) |
 | Redirect URL | `https://APP_DOMAIN/api/shopify/callback` |
 | Scopes | `read_orders,read_products` (required) |
-| Optional scopes | `read_customers`, `write_pixels`, `read_customer_events` — declared in every toml and mirrored in `SHOPIFY_OPTIONAL_SCOPES` since 2026-10-04; merchants grant them per module with **Enable**, see [3e](#3e-optional-scopes-and-why-the-env-var-cant-fix-an-install) |
+| Optional scopes | `read_customers`, `write_pixels`, `read_customer_events` — declared in every toml and mirrored in `SHOPIFY_OPTIONAL_SCOPES` since 2026-10-04; `read_inventory`, `read_locations`, `write_inventory` (Inventory, [inventory.md](inventory.md)) since 2026-10-19; merchants grant them per module with **Enable**, see [3e](#3e-optional-scopes-and-why-the-env-var-cant-fix-an-install) |
 | Webhooks | see [webhooks.md](webhooks.md), delivered to `https://APP_DOMAIN/api/webhooks/shopify` |
 | Compliance webhooks | `customers/data_request`, `customers/redact`, `shop/redact` |
 | Web pixel extension | `extensions/insights-pixel` |
