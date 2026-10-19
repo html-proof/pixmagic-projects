@@ -100,7 +100,14 @@ describe("which provider has its public id but not its secret", () => {
     const vars = { META_APP_ID: "971575545351940", GOOGLE_ADS_CLIENT_ID: "x.apps.googleusercontent.com", GOOGLE_ADS_CLIENT_SECRET: "GOCSPX-y", EMAIL_MICROSOFT_CLIENT_SECRET: "a secret without its id" };
     expect(half(vars)).toEqual(["Meta Ads"]);
     const meta = providerCredentials(vars).find((c) => c.provider === "Meta Ads")!;
-    expect(meta).toEqual({ provider: "Meta Ads", idSetting: "META_APP_ID", secretSetting: "META_APP_SECRET", idSet: true, secretSet: false });
+    expect(meta).toEqual({
+      provider: "Meta Ads",
+      idSetting: "META_APP_ID",
+      secretSetting: "META_APP_SECRET",
+      idSet: true,
+      secretSet: false,
+      effect: 'Meta Ads says "Coming soon" and its connections stop syncing',
+    });
     // A secret without its id is not half of anything: the provider just isn't used.
     expect(providerCredentials(vars).find((c) => c.provider.startsWith("Outlook"))).toMatchObject({ idSet: false, secretSet: true });
   });
@@ -118,7 +125,7 @@ describe("which provider has its public id but not its secret", () => {
       "SHOPIFY_EXTRA_APPS/SHOPIFY_APP_SECRET_APPSTORE",
       "META_APP_ID/META_APP_SECRET",
       "GOOGLE_ADS_CLIENT_ID/GOOGLE_ADS_CLIENT_SECRET",
-      "WHATSAPP_APP_ID/WHATSAPP_APP_SECRET",
+      "WHATSAPP_CONFIG_ID/WHATSAPP_APP_SECRET",
       "EMAIL_GOOGLE_CLIENT_ID/EMAIL_GOOGLE_CLIENT_SECRET",
       "EMAIL_MICROSOFT_CLIENT_ID/EMAIL_MICROSOFT_CLIENT_SECRET",
     ]);
@@ -136,12 +143,33 @@ describe("which provider has its public id but not its secret", () => {
   });
 
   it("lets WhatsApp borrow the Meta Ads app's secret only when it runs on that app", () => {
+    const signup = { WHATSAPP_CONFIG_ID: "public-wa-config-9999", META_APP_ID: "971575545351940", META_APP_SECRET: "m" };
     // Its own app: only its own secret signs what it sends.
-    expect(half({ WHATSAPP_APP_ID: "1799660384680551", META_APP_ID: "971575545351940", META_APP_SECRET: "m" })).toEqual(["WhatsApp"]);
-    // The same app as Meta Ads: META_APP_SECRET is its secret.
-    expect(half({ WHATSAPP_APP_ID: "971575545351940", META_APP_ID: "971575545351940", META_APP_SECRET: "m" })).toEqual([]);
-    // No id of its own: it is on the Meta Ads app, whose pair says what is missing.
-    expect(half({ META_APP_ID: "971575545351940" })).toEqual(["Meta Ads"]);
+    expect(half({ ...signup, WHATSAPP_APP_ID: "1799660384680551" })).toEqual(["WhatsApp (Embedded Signup)"]);
+    expect(half({ ...signup, WHATSAPP_APP_ID: "1799660384680551", WHATSAPP_APP_SECRET: "w" })).toEqual([]);
+    // The same app as Meta Ads, or no id of its own: META_APP_SECRET is its secret.
+    expect(half({ ...signup, WHATSAPP_APP_ID: "971575545351940" })).toEqual([]);
+    expect(half(signup)).toEqual([]);
+    expect(half({ ...signup, META_APP_SECRET: "" })).toEqual(["Meta Ads", "WhatsApp (Embedded Signup)"]);
+  });
+
+  it("asks for WhatsApp's secret only once Embedded Signup is wanted (its configuration id is set)", () => {
+    // What production ships today: WhatsApp's app picked, no Embedded Signup configuration yet.
+    // Manual connections bring their own app's secret, so nothing is missing for them.
+    expect(half({ WHATSAPP_APP_ID: "1799660384680551" })).toEqual([]);
+    expect(half({ WHATSAPP_APP_ID: "1799660384680551", WHATSAPP_CONFIG_ID: "public-wa-config-9999" })).toEqual(["WhatsApp (Embedded Signup)"]);
+    const wa = providerCredentials({ WHATSAPP_CONFIG_ID: "c" }).find((c) => c.secretSetting === "WHATSAPP_APP_SECRET")!;
+    expect(wa.effect).toBe("Connect WhatsApp Business (Embedded Signup) can't be turned on; manual WhatsApp connections still work");
+  });
+
+  it('says what each missing secret stops, in words that follow "so"', () => {
+    const all = providerCredentials({ SHOPIFY_EXTRA_APPS: EXTRA_APPS });
+    for (const c of all) {
+      // The warning ends the sentence itself, and names settings only where it says which is missing.
+      expect(c.effect, c.provider).toMatch(/^[A-Za-z"]/);
+      expect(c.effect, c.provider).not.toMatch(/\.$|\n|[A-Z]+_[A-Z]+/);
+    }
+    expect(all.find((c) => c.provider === "Shopify app pixmagic")!.effect).toBe("stores can't install the Shopify app pixmagic or refresh their access");
   });
 });
 
@@ -150,7 +178,7 @@ describe("the configuration report", () => {
     setEnv({ ...EVERYTHING, META_ADS_ADVANCED_ACCESS: "", GOOGLE_ADS_OAUTH_VERIFIED: "1", COGNITO_EMAIL_OTP: "" });
     const r = configReport();
     expect(r.ads).toEqual({ configured: { meta: true, google: true, adsense: true }, restricted: { meta: true, google: false, adsense: false } });
-    expect(r.whatsapp).toEqual({ embeddedSignup: true, webhookVerifyToken: true });
+    expect(r.whatsapp).toEqual({ embeddedSignup: true, embeddedSignupNeeds: [], webhookVerifyToken: true });
     expect(r.email).toEqual({ google: true, microsoft: true, resend: true });
     expect(r.auth).toEqual({ cognito: true, google: true, emailOtp: false });
     expect(r.halfConfigured).toEqual([]);
@@ -174,6 +202,24 @@ describe("the configuration report", () => {
     expect(r.ads.restricted).toEqual({ meta: false, google: false, adsense: false });
   });
 
+  it("names what Embedded Signup still lacks, exactly when it is off", () => {
+    const cases: Array<[Record<string, string>, string[]]> = [
+      [{}, ["WHATSAPP_APP_ID", "WHATSAPP_CONFIG_ID", "WHATSAPP_APP_SECRET"]],
+      // Production today: the app is picked, its configuration and secret aren't there.
+      [{ WHATSAPP_APP_ID: "1799660384680551" }, ["WHATSAPP_CONFIG_ID", "WHATSAPP_APP_SECRET"]],
+      [{ WHATSAPP_APP_ID: "1799660384680551", WHATSAPP_APP_SECRET: "w" }, ["WHATSAPP_CONFIG_ID"]],
+      [{ WHATSAPP_APP_ID: "1799660384680551", WHATSAPP_CONFIG_ID: "c", META_APP_ID: "971575545351940", META_APP_SECRET: "m" }, ["WHATSAPP_APP_SECRET"]],
+      [{ META_APP_ID: "971575545351940", META_APP_SECRET: "m", WHATSAPP_CONFIG_ID: "c" }, []],
+      [{ WHATSAPP_APP_ID: "1799660384680551", WHATSAPP_APP_SECRET: "w", WHATSAPP_CONFIG_ID: "c" }, []],
+    ];
+    for (const [vars, needs] of cases) {
+      setEnv(vars);
+      const r = configReport();
+      expect(r.whatsapp.embeddedSignupNeeds, JSON.stringify(vars)).toEqual(needs);
+      expect(r.whatsapp.embeddedSignup, JSON.stringify(vars)).toBe(needs.length === 0);
+    }
+  });
+
   it("counts Google sign-in only with the pool's domain and Google among its providers", () => {
     setEnv({ COGNITO_IDENTITY_PROVIDERS: "Google" });
     expect(configReport().auth.google).toBe(false);
@@ -187,12 +233,12 @@ describe("the configuration report", () => {
 describe("the warning at cold start", () => {
   it("logs each half-configured provider once per instance, by setting name only", () => {
     const warn = vi.spyOn(logger, "warn").mockImplementation(() => {});
-    const vars = { META_APP_ID: "971575545351940", WHATSAPP_APP_ID: "1799660384680551" };
+    const vars = { META_APP_ID: "971575545351940", WHATSAPP_APP_ID: "1799660384680551", WHATSAPP_CONFIG_ID: "public-wa-config-9999" };
     warnHalfConfigured(vars);
     warnHalfConfigured(vars);
     expect(warn.mock.calls).toEqual([
       [{ provider: "Meta Ads", idSetting: "META_APP_ID", secretSetting: "META_APP_SECRET" }, "public id set but secret missing"],
-      [{ provider: "WhatsApp", idSetting: "WHATSAPP_APP_ID", secretSetting: "WHATSAPP_APP_SECRET" }, "public id set but secret missing"],
+      [{ provider: "WhatsApp (Embedded Signup)", idSetting: "WHATSAPP_CONFIG_ID", secretSetting: "WHATSAPP_APP_SECRET" }, "public id set but secret missing"],
     ]);
   });
 

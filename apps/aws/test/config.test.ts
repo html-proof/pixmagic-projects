@@ -36,8 +36,15 @@ describe("the shipped settings", () => {
       "Shopify app appstore: SHOPIFY_APP_SECRET_APPSTORE",
       "Meta Ads: META_APP_SECRET",
       "Google Ads and Google AdSense: GOOGLE_ADS_CLIENT_SECRET",
-      "WhatsApp: WHATSAPP_APP_SECRET",
     ]);
+  });
+
+  it("leave WhatsApp alone until its Embedded Signup configuration is set", () => {
+    // WHATSAPP_APP_ID is shipped, WHATSAPP_CONFIG_ID is empty: Embedded Signup is off on purpose, so
+    // its secret missing is no warning. Once the configuration id is set, it is.
+    expect(APP_SETTINGS.WHATSAPP_CONFIG_ID).toBe("");
+    const withSignup = { ...APP_SETTINGS, WHATSAPP_CONFIG_ID: "1234567890" };
+    expect(halfConfigured(withSignup).map((c) => c.provider)).toContain("WhatsApp (Embedded Signup)");
   });
 });
 
@@ -47,10 +54,11 @@ describe('the cron action {"action":"config"}', () => {
     resetEnvCache();
     const warn = vi.spyOn(logger, "warn").mockImplementation(() => {});
 
-    const report = (await handler({ action: "config" }, {})) as { ads: unknown; halfConfigured: string[] };
+    const report = (await handler({ action: "config" }, {})) as { ads: unknown; whatsapp: unknown; halfConfigured: string[] };
 
     expect(report.ads).toEqual({ configured: { meta: true, google: false, adsense: false }, restricted: { meta: true, google: false, adsense: false } });
-    expect(report.halfConfigured).toEqual(["Shopify", "Shopify app pixmagic", "Shopify app public", "Shopify app appstore", "Google Ads and Google AdSense", "WhatsApp"]);
+    expect(report.halfConfigured).toEqual(["Shopify", "Shopify app pixmagic", "Shopify app public", "Shopify app appstore", "Google Ads and Google AdSense"]);
+    expect(report.whatsapp).toEqual({ embeddedSignup: false, embeddedSignupNeeds: ["WHATSAPP_CONFIG_ID", "WHATSAPP_APP_SECRET"], webhookVerifyToken: false });
     const text = JSON.stringify(report);
     for (const value of [...Object.values(SECRETS), APP_SETTINGS.META_APP_ID, APP_SETTINGS.GOOGLE_ADS_CLIENT_ID, APP_SETTINGS.SHOPIFY_API_KEY]) expect(text).not.toContain(value);
     // The cold start already said it in the logs, once per provider.
