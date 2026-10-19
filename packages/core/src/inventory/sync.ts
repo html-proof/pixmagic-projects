@@ -17,10 +17,25 @@ import { INVENTORY_LOCATION_QUERY, INVENTORY_WEBHOOK_TOPICS, ITEM_LEVEL_QUERY, i
 import type { InventoryGql } from "./shopify.js";
 import { takeSnapshot } from "./stock.js";
 
-/** A pass still queued or running after this long is taken for dead: a new one may start. */
+/** A pass still queued or running after this long, and quiet for PASS_QUIET_MS, is taken for dead: a new one may start. */
 const PASS_STALE_MS = 3 * 3600_000;
+/** How long a pass's pages may fall silent (the pace, retry backoff) and it still counts as under way. */
+const PASS_QUIET_MS = 30 * 60_000;
 /** Differences kept as examples on a pass's record. */
 const SAMPLE_SIZE = 20;
+
+/**
+ * The store's inventory jobs that are under way: queued or running, and alive (queued lately, or a
+ * page read lately). A job whose message was lost stays queued until the stale-job sweep fails it
+ * hours later; it neither holds up the next pass nor shows as "Refreshing" in the meantime.
+ */
+export function livePassWhere(now = new Date()): Prisma.SyncJobWhereInput {
+  return {
+    kind: "inventory",
+    status: { in: ["queued", "running"] },
+    OR: [{ createdAt: { gt: new Date(now.getTime() - PASS_STALE_MS) } }, { lastActivityAt: { gt: new Date(now.getTime() - PASS_QUIET_MS) } }],
+  };
+}
 
 /**
  * Start a full pass for the store, unless it can't read stock levels or one is already under way.
@@ -33,8 +48,7 @@ export async function startInventoryPass(
   opts: { delaySeconds?: number } = {},
 ): Promise<{ syncJobId: string; runId: string } | null> {
   if (store.status === "uninstalled" || !hasCapabilityScopes(store.grantedScopes, "stock_levels")) return null;
-  const since = new Date(Date.now() - PASS_STALE_MS);
-  const busy = await systemDb.syncJob.findFirst({ where: { storeId: store.id, kind: "inventory", status: { in: ["queued", "running"] }, createdAt: { gt: since } } });
+  const busy = await systemDb.syncJob.findFirst({ where: { storeId: store.id, ...livePassWhere() } });
   if (busy) return null;
   const startedAt = new Date();
   const job = await systemDb.syncJob.create({ data: { workspaceId: store.workspaceId, storeId: store.id, kind: "inventory" } });

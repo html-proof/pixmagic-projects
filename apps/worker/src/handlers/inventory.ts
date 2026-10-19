@@ -11,6 +11,7 @@ import {
   ensureInventoryWebhooks,
   evaluateFastMovement,
   evaluateStockAlerts,
+  failInventoryPass,
   finishInventoryPass,
   graphqlLocationLevelSchema,
   graphqlLocationSchema,
@@ -49,16 +50,23 @@ export async function runInventoryStep(data: SyncJobData, store: Store, deps: Wo
     logger.info({ storeId: store.id, scopes: store.grantedScopes }, "inventory pass skipped: the store hasn't granted stock-level access");
     return "done";
   }
-  // A job queued without a pass (the first import, a scope grant): this message starts one.
-  let inv: InventoryData;
-  if (data.inventory) {
-    inv = data.inventory;
-  } else {
-    const startedAt = new Date();
-    const trigger = (await hasFinishedPass(store.id)) ? "manual" : "import";
-    const run = await systemDb.inventorySyncRun.create({ data: { workspaceId: store.workspaceId, storeId: store.id, trigger, status: "running", startedAt } });
-    inv = { trigger, runId: run.id, phase: "locations", startedAt: startedAt.toISOString() };
+  if (data.inventory) return passStep({ ...data, inventory: data.inventory }, store, deps, pace);
+  // A job queued without a pass (the first import, a scope grant, a refresh): this message starts
+  // one. Every message after it carries the pass, so their final failure marks it failed
+  // (onFailure); this one's failure is marked here, and its retry starts a pass of its own.
+  const startedAt = new Date();
+  const trigger = (await hasFinishedPass(store.id)) ? "manual" : "import";
+  const run = await systemDb.inventorySyncRun.create({ data: { workspaceId: store.workspaceId, storeId: store.id, trigger, status: "running", startedAt } });
+  try {
+    return await passStep({ ...data, inventory: { trigger, runId: run.id, phase: "locations", startedAt: startedAt.toISOString() } }, store, deps, pace);
+  } catch (err) {
+    await failInventoryPass(run.id, err instanceof Error ? err.message : String(err)).catch(() => {});
+    throw err;
   }
+}
+
+async function passStep(data: SyncJobData & { inventory: InventoryData }, store: Store, deps: WorkerDeps, pace: Pace): Promise<Step> {
+  const inv = data.inventory;
   const since = new Date(inv.startedAt);
   const send = (next: Partial<SyncJobData> & { inventory: InventoryData }, defaultSize?: number) =>
     deps.queues.sync.send(

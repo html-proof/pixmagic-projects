@@ -250,6 +250,17 @@ async function onFailure(queue: QueueName, body: unknown, err: Error, final: boo
     await systemDb.syncJob.update({ where: { id: data.syncJobId }, data: final ? { status: "failed", error } : { error } }).catch(() => {});
     if (!final) return;
     if (data.kind === "inventory") await failInventoryPass(data.inventory?.runId, error).catch(() => {});
+    // The jobs seeded to wait for this one's time zone (orders, a stock pass) will never be sent:
+    // left queued, they read as an import or a stock check about to start until the stale-job
+    // sweep gave up on them hours later.
+    if (data.kind === "shop" && data.waitingJobIds?.length) {
+      await systemDb.syncJob
+        .updateMany({
+          where: { id: { in: data.waitingJobIds }, status: "queued", startedAt: null },
+          data: { status: "failed", finishedAt: new Date(), error: `Not started: reading the store's details from Shopify failed first (${error})`.slice(0, 500) },
+        })
+        .catch(() => {});
+    }
     const store = await systemDb.store.findUnique({ where: { id: data.storeId } });
     if (!store || store.status === "uninstalled") return;
     // `error` means "this store's data has stopped": the dashboard offers Reconnect and stops
