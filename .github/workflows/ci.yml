@@ -50,16 +50,21 @@ defaults:
 
 jobs:
   # Merging a pull request that is up to date with main leaves main with exactly the tree that the
-  # pull request's last run tested. Each pull-request job that passes records its tree (an artifact
-  # named passed-<job>-<tree>, kept 14 days); on a push to main this looks them up, and a job that
-  # already passed on this exact tree is skipped. Anything it can't confirm runs as usual.
+  # pull request's last run tested. Each pull-request job that passes records its tree as a commit
+  # status on the pull request's head (context ci/passed-<job>, description "tree <tree>"); on a
+  # push to main this looks them up, and a job that already passed on this exact tree is skipped.
+  # Anything it can't confirm runs as usual. Statuses, not artifacts: artifacts count against the
+  # account's Actions storage (500 MB on GitHub Free, shared by all its private repositories), and
+  # once that is used up no upload works and every record was lost.
   tested:
     name: Already passed on a pull request?
     if: github.event_name == 'push'
     runs-on: ${{ fromJSON(vars.SELF_HOSTED_RUNNER && (github.event_name == 'push' && vars.SELF_HOSTED_MAIN_RUNNER || vars.SELF_HOSTED_RUNNER) || '"ubuntu-latest"') }}
     timeout-minutes: 5
     permissions:
-      actions: read
+      contents: read
+      pull-requests: read
+      statuses: read
     outputs:
       checks: ${{ steps.find.outputs.checks }}
       e2e: ${{ steps.find.outputs.e2e }}
@@ -70,13 +75,18 @@ jobs:
         with:
           script: |
             const tree = context.payload.head_commit?.tree_id;
+            // Where a pull request's run left its records: the commits this one was made from, and
+            // the head of the pull request it merged (whatever the merge method).
+            const refs = new Set();
+            const { data: commit } = await github.rest.git.getCommit({ ...context.repo, commit_sha: context.sha });
+            for (const p of commit.parents) refs.add(p.sha);
+            const { data: prs } = await github.rest.repos.listPullRequestsAssociatedWithCommit({ ...context.repo, commit_sha: context.sha });
+            for (const pr of prs) if (pr.merged_at && pr.head.repo?.id === context.payload.repository.id) refs.add(pr.head.sha);
+            const statuses = [];
+            for (const ref of refs) statuses.push(...(await github.paginate(github.rest.repos.listCommitStatusesForRef, { ...context.repo, ref, per_page: 100 })));
             for (const job of ["checks", "e2e"]) {
-              let passed = false;
-              if (tree) {
-                const { data } = await github.rest.actions.listArtifactsForRepo({ ...context.repo, name: `passed-${job}-${tree}`, per_page: 100 });
-                // Only this repository's own branches count, not a fork's pull request.
-                passed = data.artifacts.some((a) => !a.expired && a.workflow_run && a.workflow_run.head_repository_id === a.workflow_run.repository_id);
-              }
+              // Only this workflow's own records count: a fork's pull request can't write statuses.
+              const passed = !!tree && statuses.some((s) => s.context === `ci/passed-${job}` && s.state === "success" && s.description === `tree ${tree}` && s.creator?.login === "github-actions[bot]");
               core.info(`${job}: ${passed ? "passed on a pull request with this exact tree, skipped" : "runs"}`);
               core.setOutput(job, String(passed));
             }
@@ -86,11 +96,11 @@ jobs:
     needs: tested
     if: ${{ !cancelled() && needs.tested.outputs.checks != 'true' }}
     runs-on: ${{ fromJSON(vars.SELF_HOSTED_RUNNER && (github.event_name == 'push' && vars.SELF_HOSTED_MAIN_RUNNER || vars.SELF_HOSTED_RUNNER) || '"ubuntu-latest"') }}
-    # actions: read for looking up passed-integration-<key> artifacts.
+    # statuses: write for the pass records (ci/passed-checks, ci/passed-integration).
     permissions:
       contents: read
       pull-requests: read
-      actions: read
+      statuses: write
     # A busy PC runs the integration tests 2-3 times slower than a GitHub runner.
     timeout-minutes: ${{ vars.SELF_HOSTED_RUNNER != '' && 45 || 30 }}
     outputs:
@@ -182,8 +192,9 @@ jobs:
       # @app/shared), the test setup, the role grants, the dependencies, the TypeScript base config,
       # .gitattributes (line endings on checkout) and this file; .npmrc counts once there is one. Their
       # git ids, with the runner's OS and Node version, make a content key. A run where the two passed
-      # records it (an artifact named passed-integration-<key>, kept 14 days), and a later run with the
-      # same key skips them. A listed path missing from the commit fails this step: then they run.
+      # records it (a commit status ci/passed-integration, description "key <key>"), and a later run
+      # with the same key skips them. A listed path missing from the commit fails this step: then they
+      # run.
       - name: What the integration tests read (content key)
         id: integration
         continue-on-error: true
@@ -196,7 +207,11 @@ jobs:
           printf '%s %s %s\n%s\n' "$RUNNER_OS" "$RUNNER_ARCH" "$(node --version | tr -d '\r')" "$listing" > "$RUNNER_TEMP/passed-integration.txt"
           key=$(git hash-object --stdin < "$RUNNER_TEMP/passed-integration.txt")
           echo "key=$key" >> "$GITHUB_OUTPUT"
-      # Only an answer of "yes" skips them: if this step fails, they run.
+      # Only an answer of "yes" skips them: if this step fails, they run. Records are looked for on
+      # this commit; on a pull request also its newest 30 commits; and on the main commit it starts
+      # from (a pull request's base, or this push's commit): that one, the commits it was made from,
+      # and the head of the pull request it merged (a push to main that skipped the checks job
+      # records nothing itself). Each pass records again on its own commit, so records move forward.
       - name: Integration tests already passed on this content?
         id: integration_passed
         if: steps.integration.outputs.key != ''
@@ -206,9 +221,25 @@ jobs:
           KEY: ${{ steps.integration.outputs.key }}
         with:
           script: |
-            const { data } = await github.rest.actions.listArtifactsForRepo({ ...context.repo, name: `passed-integration-${process.env.KEY}`, per_page: 100 });
-            // Only this repository's own branches count, not a fork's pull request.
-            const passed = data.artifacts.some((a) => !a.expired && a.workflow_run && a.workflow_run.head_repository_id === a.workflow_run.repository_id);
+            const pr = context.payload.pull_request;
+            const refs = [];
+            if (pr) {
+              const commits = await github.paginate(github.rest.pulls.listCommits, { ...context.repo, pull_number: pr.number, per_page: 100 });
+              refs.push(...commits.slice(-30).reverse().map((c) => c.sha));
+            }
+            const from = pr ? pr.base.sha : context.sha;
+            refs.push(from);
+            const { data: commit } = await github.rest.git.getCommit({ ...context.repo, commit_sha: from });
+            refs.push(...commit.parents.map((p) => p.sha));
+            const { data: merged } = await github.rest.repos.listPullRequestsAssociatedWithCommit({ ...context.repo, commit_sha: from });
+            refs.push(...merged.filter((m) => m.merged_at && m.head.repo?.id === context.payload.repository.id).map((m) => m.head.sha));
+            let passed = false;
+            for (const ref of new Set(refs)) {
+              const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, { ...context.repo, ref, per_page: 100 });
+              // Only this workflow's own records count: a fork's pull request can't write statuses.
+              passed = statuses.some((s) => s.context === "ci/passed-integration" && s.state === "success" && s.description === `key ${process.env.KEY}` && s.creator?.login === "github-actions[bot]");
+              if (passed) break;
+            }
             core.info(passed ? `Passed before with key ${process.env.KEY}: integration tests and migrations check skipped.` : "Integration tests run.");
             core.setOutput("passed", String(passed));
       - run: pnpm test:integration
@@ -220,38 +251,33 @@ jobs:
         run: |
           DATABASE_URL="postgresql://app:${TEST_PG_PASSWORD:-app}@127.0.0.1:${TEST_PG_PORT:-5434}/app_test" \
             pnpm --filter @app/db exec prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --exit-code
-      # For later runs with the same content key, on a pull request or on main. Only when the two
-      # steps above ran and passed here; failing to record only means the next run tests again.
+      # For later runs with the same content key, on a pull request or on main: on the pull
+      # request's head, or the commit pushed to main. Reached only when the two steps above passed
+      # here or were skipped on an earlier pass; failing to record only means a later run tests again.
       - name: Record the integration tests' pass
-        if: steps.integration.outputs.key != '' && steps.integration_passed.outputs.passed != 'true'
+        if: steps.integration.outputs.key != ''
         continue-on-error: true
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          KEY: ${{ steps.integration.outputs.key }}
         with:
-          name: passed-integration-${{ steps.integration.outputs.key }}
-          path: ${{ runner.temp }}/passed-integration.txt
-          retention-days: 14
-          overwrite: true
+          script: |
+            const sha = context.payload.pull_request?.head.sha ?? context.sha;
+            await github.rest.repos.createCommitStatus({ ...context.repo, sha, state: "success", context: "ci/passed-integration", description: `key ${process.env.KEY}` });
       # What Deploy to AWS ships: the UI (Next.js export) and the bundled function.
       - name: Build the Lambda package (UI + function)
         run: pnpm --filter @app/aws build
-      # For the push to main that merges this pull request (tested job). Failing to record only
+      # For the push to main that merges this pull request (tested job): the tree this run tested
+      # (the pull request merged into main), on the pull request's head. Failing to record only
       # means that push runs this job again.
       - name: Record the tree that passed
-        id: passed
         if: github.event_name == 'pull_request'
         continue-on-error: true
-        run: |
-          tree=$(git rev-parse 'HEAD^{tree}')
-          echo "$tree" > "$RUNNER_TEMP/passed-tree.txt"
-          echo "tree=$tree" >> "$GITHUB_OUTPUT"
-      - if: steps.passed.outputs.tree != ''
-        continue-on-error: true
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
-          name: passed-checks-${{ steps.passed.outputs.tree }}
-          path: ${{ runner.temp }}/passed-tree.txt
-          retention-days: 14
-          overwrite: true
+          script: |
+            const tree = (await exec.getExecOutput("git", ["rev-parse", "HEAD^{tree}"], { silent: true })).stdout.trim();
+            await github.rest.repos.createCommitStatus({ ...context.repo, sha: context.payload.pull_request.head.sha, state: "success", context: "ci/passed-checks", description: `tree ${tree}` });
 
   e2e:
     name: End-to-end (Playwright)
@@ -263,6 +289,10 @@ jobs:
       ${{ !cancelled() && needs.tested.outputs.e2e != 'true'
       && (needs.checks.result == 'success' || (needs.checks.result == 'skipped' && needs.tested.outputs.checks == 'true'))
       && (github.event_name != 'pull_request' || needs.checks.outputs.e2e != 'false') }}
+    # statuses: write for the pass record (ci/passed-e2e).
+    permissions:
+      contents: read
+      statuses: write
     timeout-minutes: 30
     steps:
       # Windows runner: Git Bash for the run steps, and a pnpm store that outlives the job
@@ -313,24 +343,19 @@ jobs:
           fi
           pnpm --filter @app/web exec playwright install --with-deps chromium
       - run: pnpm e2e
-      # For the push to main that merges this pull request (tested job). Failing to record only
-      # means that push runs this job again.
+      # For the push to main that merges this pull request (tested job), as in the checks job.
       - name: Record the tree that passed
-        id: passed
         if: github.event_name == 'pull_request'
         continue-on-error: true
-        run: |
-          tree=$(git rev-parse 'HEAD^{tree}')
-          echo "$tree" > "$RUNNER_TEMP/passed-tree.txt"
-          echo "tree=$tree" >> "$GITHUB_OUTPUT"
-      - if: steps.passed.outputs.tree != ''
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const tree = (await exec.getExecOutput("git", ["rev-parse", "HEAD^{tree}"], { silent: true })).stdout.trim();
+            await github.rest.repos.createCommitStatus({ ...context.repo, sha: context.payload.pull_request.head.sha, state: "success", context: "ci/passed-e2e", description: `tree ${tree}` });
+      # The failed tests' traces, for a week. This is the workflow's only artifact: they count against
+      # the account's 500 MB of Actions storage, and while that is used up the upload fails (the job
+      # has failed already; this step's failure adds nothing).
+      - if: failure()
         continue-on-error: true
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: passed-e2e-${{ steps.passed.outputs.tree }}
-          path: ${{ runner.temp }}/passed-tree.txt
-          retention-days: 14
-          overwrite: true
-      - if: failure()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with: { name: playwright-report, path: apps/web/test-results }
+        with: { name: playwright-report, path: apps/web/test-results, retention-days: 7 }

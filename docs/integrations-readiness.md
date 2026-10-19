@@ -42,11 +42,11 @@ The detail behind each line: [ads-setup.md](ads-setup.md) (how the integrations 
 
 | Requirement | Status | Why | Next action (who) |
 | --- | --- | --- | --- |
-| Sign in with Google in production | Pending | Off: the GitHub variable `GOOGLE_SIGNIN_CLIENT_ID` isn't set, so the deploy doesn't add Google to Cognito. This branch adds account linking, two-step verification and an optional own sign-in domain; none needs Google sign-in on. | Steps below, in order. cognito-setup.md section 2. |
-| A separate Cloud project for sign-in | Pending | Must not be insights-511119: a project asking only `openid`, `email`, `profile` needs no verification. | Create the project, its consent screen (External, In production, those three scopes only). (Owner) |
-| Its OAuth client and redirect URI | Pending | Redirect URI `https://insights-605411278365.auth.ap-southeast-2.amazoncognito.com/oauth2/idpresponse` (or `https://auth.bizinsights.io/oauth2/idpresponse` with the own domain). | Create a Web client with that URI. (Owner) |
-| Its secret in AWS | Pending | Read by the deploy; without it the sign-in stack's update fails and rolls back. | `node infra/cdk/scripts/put-secrets.mjs --env production --set GOOGLE_SIGNIN_CLIENT_SECRET` (reads the clipboard, must start with `GOCSPX-`). (Owner) |
-| GitHub variable | Pending | `GOOGLE_SIGNIN_CLIENT_ID` in the repository's `production` environment. | Set it, then run **Deploy to AWS** on `main` and check the run succeeded. (Owner) |
+| Sign in with Google in production | Completed (2026-10-19, release 75) | `/api/auth/config` answers `"google":true`; a real Continue with Google sign-in (sebanceo@gmail.com) reached the dashboard. The first deploy couldn't read the runtime settings, so api/jobs/cron were restarted by hand once (versions 76). | None. Google's screen names the amazoncognito.com domain; `auth.bizinsights.io` (row below) would show bizinsights.io instead. |
+| A separate Cloud project for sign-in | Completed | Project `bizinsights-sign-in`: External, In production, scopes openid/email/profile only (no verification or user cap), authorized domains bizinsights.io and amazoncognito.com. | None. |
+| Its OAuth client and redirect URI | Completed | Web client "bizinsights sign-in" `567753266621-ltq5j5kij5s3em8gr0err3tbrh5fqciq.apps.googleusercontent.com`, redirect `https://insights-605411278365.auth.ap-southeast-2.amazoncognito.com/oauth2/idpresponse`. | None. |
+| Its secret in AWS | Completed | `GOOGLE_SIGNIN_CLIENT_SECRET` in `insights/production/app` (2026-10-19). | None. |
+| GitHub variable | Completed | `GOOGLE_SIGNIN_CLIENT_ID` on the `production` environment. | None. |
 | Own sign-in domain `auth.bizinsights.io` | Not applicable (optional) | Lets Google's screen show bizinsights.io instead of amazoncognito.com. Not required. | If wanted: cognito-setup.md section 7. (Owner, with Claude) |
 
 ## Meta (developer app "Insights", App ID 971575545351940)
@@ -68,7 +68,7 @@ The detail behind each line: [ads-setup.md](ads-setup.md) (how the integrations 
 
 | Requirement | Status | Why | Next action (who) |
 | --- | --- | --- | --- |
-| Provider secrets in production (`META_APP_SECRET`, `GOOGLE_ADS_CLIENT_SECRET`) | Pending (check) | Not checked from this branch. Without a secret, that platform's card says "Coming soon", its connections stop syncing, and Meta's callbacks answer 503. Every deploy now warns on the Deploy run for each provider whose id is set but secret missing. | Run `node infra/cdk/scripts/put-secrets.mjs --dry-run` and look for both names under `keys now:`; add a missing one with `--set <NAME>` (it checks the shape: Meta 32 hex characters, Google `GOCSPX-...`). Also read the warnings on this branch's Deploy run. (Owner) |
+| Provider secrets in production (`META_APP_SECRET`, `GOOGLE_ADS_CLIENT_SECRET`) | Pending (Meta) | `GOOGLE_ADS_CLIENT_SECRET` stored 2026-10-19 (a new secret on "Insights web"; until then AWS had none, so Google Ads/AdSense never worked on bizinsights.io). An AdSense connection then completed in production. `META_APP_SECRET` is still missing: the Meta card can't connect. | Reset the Meta app secret, copy it on the PC, `put-secrets --set META_APP_SECRET`, then restart the functions (aws-deployment.md). (Owner) |
 | This branch deployed | Pending | Needed before the Meta callbacks, Require App Secret and the #google-data link. Includes migration `20261019120000_ad_connection_health`. | Merge the pull request when CI is green and confirm **Deploy to AWS** succeeded. (Claude, with your go-ahead) |
 | Meta API version | Completed | v26.0 since this branch. The build fails 90 days before a version's end, so a red build is the reminder. | Re-read Meta's changelog by 2027-04-17 (ads-setup.md, "Keeping the API versions current"). (Claude) |
 
