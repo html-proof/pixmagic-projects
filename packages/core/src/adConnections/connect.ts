@@ -4,8 +4,9 @@
  */
 import { systemDb, type AdConnection } from "@app/db";
 import { decrypt, type AdProvider } from "@app/shared";
-import { AdsAuthError, classifyAdError, googleRevoke, metaRevokeAdsRead, type AdAccount, type TokenSet } from "../ads.js";
+import { AdsAuthError, classifyAdError, googleRevoke, metaRevokeAdsRead, type AdAccount, type AdAccountList, type TokenSet } from "../ads.js";
 import type { Coord } from "../coord.js";
+import { fetchUntil } from "../http.js";
 import { logger } from "../logger.js";
 import type { FetchLike } from "../shopify.js";
 import { keyring } from "../tokens.js";
@@ -29,6 +30,13 @@ export interface PendingAdConnect {
   /** The permissions granted, and who granted them (both stored with the connection). */
   grantedScopes?: string[];
   externalUserId?: string | null;
+  /** The platform's list was cut short (an agency login reaching more than one sign-in can list): the picker says so. */
+  truncated?: boolean;
+  /**
+   * The refresh token is one this person gave before, taken from their other connections (Google sent
+   * none): cancelling the choice must not revoke it (dropUnusedGrant's `reusedRefreshToken`).
+   */
+  reusedRefreshToken?: boolean;
   /** Epoch ms after which the choice is gone. */
   expiresAt: number;
 }
@@ -39,10 +47,25 @@ const grantFamily = (provider: string): AdProvider[] => (provider === "meta" ? [
 /** The choices one person has waiting, so dropping one grant can't pull the tokens out from under another. */
 const personPendingKey = (provider: string, externalUserId: string) => `ads-pending-person:${provider === "meta" ? "meta" : "google"}:${externalUserId}`;
 
+/**
+ * Hold a sign-in's accounts and tokens while the person picks. Each account keeps what the platform
+ * said about it (status, statusDetail: shown in the picker, stored with the connection), and the list
+ * whether it was cut short (`truncated`, from an AdAccountList, which JSON alone would drop).
+ */
 export async function holdPendingAdConnect(
   coord: Coord,
   nonce: string,
-  input: { userId: string; workspaceId: string; storeId: string; provider: AdProvider; accounts: AdAccount[]; tokens: TokenSet; externalUserId?: string | null },
+  input: {
+    userId: string;
+    workspaceId: string;
+    storeId: string;
+    provider: AdProvider;
+    accounts: AdAccountList;
+    tokens: TokenSet;
+    externalUserId?: string | null;
+    truncated?: boolean;
+    reusedRefreshToken?: boolean;
+  },
 ) {
   const enc = encryptAdTokens(input.storeId, input.provider, input.tokens);
   const pending: PendingAdConnect = {
@@ -50,12 +73,14 @@ export async function holdPendingAdConnect(
     workspaceId: input.workspaceId,
     storeId: input.storeId,
     provider: input.provider,
-    accounts: input.accounts,
+    accounts: [...input.accounts],
     accessTokenEnc: enc.accessTokenEnc,
     refreshTokenEnc: enc.refreshTokenEnc,
     accessTokenExpiresAt: input.tokens.expiresAt ? input.tokens.expiresAt.toISOString() : null,
     grantedScopes: input.tokens.grantedScopes,
     externalUserId: input.externalUserId ?? null,
+    truncated: !!(input.truncated ?? input.accounts.truncated),
+    ...(input.reusedRefreshToken ? { reusedRefreshToken: true } : {}),
     expiresAt: Date.now() + ADS_PENDING_TTL_S * 1000,
   };
   await coord.put(pendingKey(nonce), JSON.stringify(pending), ADS_PENDING_TTL_S);
@@ -91,6 +116,18 @@ export async function takePendingAdConnect(coord: Coord, nonce: string): Promise
   if (!raw) return null;
   const p = JSON.parse(raw) as PendingAdConnect;
   return p.expiresAt > Date.now() ? p : null;
+}
+
+/**
+ * Use up, unanswered, every account choice one person (the platform's id for them) has waiting: their
+ * access ended or they asked for their data to be deleted. Returns how many there were. Best effort.
+ */
+export async function dropPendingAdConnectsOf(coord: Coord, provider: AdProvider, externalUserId: string): Promise<number> {
+  const key = personPendingKey(provider, externalUserId);
+  let dropped = 0;
+  for (const p of await pendingOf(coord, key)) if (await coord.take(pendingKey(p.nonce)).catch(() => null)) dropped++;
+  await coord.take(key).catch(() => null);
+  return dropped;
 }
 
 /** The sign-in's tokens back from a pending choice. */
@@ -158,6 +195,9 @@ export async function saveAdConnections(input: {
         errorCode: null,
         lastError: null,
         consecutiveFailures: 0,
+        // A sync asked for before can't be waiting on this sign-in: the catch-up connecting queues is sent
+        // (enqueueAdCatchUp skips a connection whose earlier request still looks on its way).
+        syncRequestedAt: null,
         ...health,
         ...tokens,
       },
@@ -182,10 +222,24 @@ export async function reusableRefreshToken(provider: AdProvider, externalUserId:
   return decrypt(row.refreshTokenEnc, keyring(), aad(row.storeId, row.provider, "refresh"));
 }
 
-export type RevokeOutcome = "revoked" | "still_used" | "unknown_person" | "not_configured" | "failed";
-
 /** Rows that still hold a working grant: not waiting for a reconnect (whose grant is dead), and with a token. */
 const holdsGrant = { status: { not: "reconnect" }, accessTokenEnc: { not: "" } };
+
+/**
+ * Whether this bizinsights user connected `provider` before with a Google login whose refresh token
+ * bizinsights still holds and uses. Then Google's consent screen can be skipped on their next connect
+ * (GoogleConsentOptions.forceConsent false): a consent hands out a new refresh token every time, and
+ * Google silently ends a login's oldest past 100 for one client. Google then sends none, and theirs is
+ * reused (reusableRefreshToken); if they pick a login bizinsights holds none for, the callback asks
+ * again with the consent screen.
+ */
+export async function holdsReusableRefreshToken(provider: AdProvider, userId: string): Promise<boolean> {
+  if (provider === "meta") return false;
+  const n = await systemDb.adConnection.count({ where: { provider, connectedByUserId: userId, externalUserId: { not: null }, refreshTokenEnc: { not: null }, ...holdsGrant } });
+  return n > 0;
+}
+
+export type RevokeOutcome = "revoked" | "still_used" | "unknown_person" | "not_configured" | "failed";
 
 /** At most this many unknown persons are looked up while someone waits for a disconnect; past it the grant is kept. */
 const PERSON_LOOKUPS = 10;
@@ -245,12 +299,19 @@ async function grantStillUsed(provider: string, externalUserId: string, exceptId
   return unsure;
 }
 
-/** Take back the grant: Google's whole grant to bizinsights' client; Meta's ads_read only (WhatsApp keeps working). */
+/**
+ * Take back the grant: Google's whole grant to bizinsights' client; Meta's ads_read only (WhatsApp keeps
+ * working). Meta's is taken back with the person's own token, or, once that has expired, with
+ * bizinsights' app token for their app-scoped id (`externalUserId`).
+ */
 async function revokeGrant(provider: string, tokens: { accessToken: string; refreshToken: string | null }, externalUserId: string, fetchImpl?: FetchLike): Promise<RevokeOutcome> {
   if (provider === "meta") {
     const cfg = metaConfig(fetchImpl);
     if (!cfg) return "not_configured";
-    await metaRevokeAdsRead(cfg, tokens.accessToken, externalUserId);
+    // "not_granted": the person no longer grants ads_read (they removed it, or the app), so nothing of
+    // it is left at Meta: what a revoke is for.
+    const outcome = await metaRevokeAdsRead(cfg, tokens.accessToken, externalUserId);
+    if (outcome === "not_granted") logger.info({ provider }, "meta ads_read was no longer granted; nothing left to revoke");
   } else {
     // Revoking the refresh token ends its access tokens too.
     await googleRevoke({ fetchImpl }, tokens.refreshToken ?? tokens.accessToken);
@@ -323,24 +384,35 @@ export async function dropUnusedGrant(
   }
 }
 
+/** How long taking back a leaving person's grants may take in all, while their request waits (it runs inside the API's time limit). */
+export const AD_RELEASE_REVOKE_BUDGET_MS = 15_000;
+
+/** One sign-in a leaving person powered, detached already, whose grant may still be taken back (revokeReleasedAdGrants). */
+export interface ReleasedAdGrant {
+  /** The sign-in's first row as it was before its tokens were deleted (who granted it is looked up with them). */
+  first: AdConnection;
+  /** Every row of the sign-in. */
+  ids: string[];
+  /** Its tokens, or null when they couldn't be read (nothing can be revoked then). */
+  tokens: { accessToken: string; refreshToken: string | null } | null;
+}
+
 /**
  * Someone whose login powers ad connections leaves: their bizinsights account is deleted, or (with
- * `workspaceId`) they are removed from that workspace. Their connections stop using their grant: the
- * tokens are deleted and the rows wait for a reconnect ("connector_left"), keeping the days already
- * stored; then the grant is taken back unless another connection still relies on it.
+ * `workspaceId`) they are removed from that workspace. Their connections stop using their grant at once,
+ * in the database only (no platform call, so a slow platform can't hold up their leaving): the tokens
+ * are deleted and the rows wait for a reconnect ("connector_left"), keeping the days already stored and
+ * who granted them (externalUserId), so a Meta data deletion request from that person still finds them.
+ * Returns each sign-in, for revokeReleasedAdGrants to take the grant back.
  */
-export async function releaseUserAdGrants(
-  userId: string,
-  workspaceId?: string,
-  fetchImpl?: FetchLike,
-): Promise<{ released: number; outcomes: RevokeOutcome[] }> {
+export async function detachUserAdGrants(userId: string, workspaceId?: string): Promise<{ released: number; grants: ReleasedAdGrant[] }> {
   const rows = await systemDb.adConnection.findMany({ where: { connectedByUserId: userId, ...(workspaceId ? { workspaceId } : {}), accessTokenEnc: { not: "" } } });
   const k = keyring();
   let released = 0;
-  const outcomes: RevokeOutcome[] = [];
+  const grants: ReleasedAdGrant[] = [];
   for (const group of bySignIn(rows)) {
     const first = group[0];
-    let tokens: { accessToken: string; refreshToken: string | null } | null = null;
+    let tokens: ReleasedAdGrant["tokens"] = null;
     try {
       tokens = {
         accessToken: decrypt(first.accessTokenEnc, k, aad(first.storeId, first.provider, "access")),
@@ -349,9 +421,9 @@ export async function releaseUserAdGrants(
     } catch (err) {
       logger.warn({ err, connectionId: first.id }, "ad tokens of a leaving person couldn't be read; deleted without a revoke");
     }
-    const person = first.externalUserId ?? (tokens ? await resolvePerson(first, fetchImpl) : null);
+    const ids = group.map((r) => r.id);
     const { count } = await systemDb.adConnection.updateMany({
-      where: { id: { in: group.map((r) => r.id) } },
+      where: { id: { in: ids } },
       data: {
         status: "reconnect",
         errorCode: "connector_left",
@@ -359,24 +431,66 @@ export async function releaseUserAdGrants(
         accessTokenEnc: "",
         refreshTokenEnc: null,
         accessTokenExpiresAt: null,
-        externalUserId: null,
         connectedByUserId: null,
         syncRequestedAt: null,
       },
     });
     released += count;
-    // Without a working token or a known person there is no telling whose grant it was.
-    if (!tokens || !person || person === "ended") {
-      outcomes.push("unknown_person");
-      continue;
-    }
+    grants.push({ first, ids, tokens });
+  }
+  return { released, grants };
+}
+
+/**
+ * Take back the grants detachUserAdGrants left, each unless another connection still relies on it, all
+ * within `deadline` (epoch ms; by default AD_RELEASE_REVOKE_BUDGET_MS from now): a platform that doesn't
+ * answer in time leaves its grant ("failed"; the person can still remove bizinsights at Google or
+ * Meta). A sign-in that never learned who granted it is looked up now with its old token, and what is
+ * learned is kept on its rows. Never throws.
+ */
+export async function revokeReleasedAdGrants(grants: ReleasedAdGrant[], fetchImpl?: FetchLike, opts: { deadline?: number } = {}): Promise<RevokeOutcome[]> {
+  const f = fetchUntil(fetchImpl, opts.deadline ?? Date.now() + AD_RELEASE_REVOKE_BUDGET_MS);
+  const outcomes: RevokeOutcome[] = [];
+  // One person's grant is decided once, however many of their sign-ins were released.
+  const decided = new Map<string, RevokeOutcome>();
+  for (const { first, ids, tokens } of grants) {
     try {
-      outcomes.push((await grantStillUsed(first.provider, person, null, fetchImpl)) ? "still_used" : await revokeGrant(first.provider, tokens, person, fetchImpl));
+      // Without a working token or a known person there is no telling whose grant it was.
+      const person = first.externalUserId ?? (tokens ? await resolvePerson(first, f) : null);
+      if (!tokens || !person || person === "ended") {
+        outcomes.push("unknown_person");
+        continue;
+      }
+      if (!first.externalUserId) await systemDb.adConnection.updateMany({ where: { id: { in: ids }, externalUserId: null }, data: { externalUserId: person } });
+      const key = `${grantFamily(first.provider)[0]}:${person}`;
+      const before = decided.get(key);
+      if (before === "revoked" || before === "still_used") {
+        outcomes.push(before);
+        continue;
+      }
+      const outcome = (await grantStillUsed(first.provider, person, null, f)) ? "still_used" : await revokeGrant(first.provider, tokens, person, f);
+      decided.set(key, outcome);
+      outcomes.push(outcome);
     } catch (err) {
       logger.warn({ err, connectionId: first.id }, "ad access revoke failed");
       outcomes.push("failed");
     }
   }
+  return outcomes;
+}
+
+/**
+ * Both steps for someone who leaves (detachUserAdGrants, then revokeReleasedAdGrants within
+ * `revokeDeadline`). The database step throws on failure; the platform step never does.
+ */
+export async function releaseUserAdGrants(
+  userId: string,
+  workspaceId?: string,
+  fetchImpl?: FetchLike,
+  opts: { revokeDeadline?: number } = {},
+): Promise<{ released: number; outcomes: RevokeOutcome[] }> {
+  const { released, grants } = await detachUserAdGrants(userId, workspaceId);
+  const outcomes = await revokeReleasedAdGrants(grants, fetchImpl, { deadline: opts.revokeDeadline });
   if (released) logger.info({ userId, workspaceId: workspaceId ?? null, released, outcomes }, "ad connections released from a leaving person");
   return { released, outcomes };
 }

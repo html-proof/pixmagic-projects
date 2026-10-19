@@ -158,6 +158,26 @@ describe("Google's daily allowance", () => {
     expect(googleAdsBudgetAllows(b, "schedule")).toBe(false);
   });
 
+  it("the allowance is GOOGLE_ADS_DAILY_OPERATIONS once set (a higher access level), else Explorer's; an empty setting is unset", async () => {
+    const coord = memoryCoord();
+    try {
+      process.env.GOOGLE_ADS_DAILY_OPERATIONS = "15000";
+      resetEnvCache();
+      expect((await googleAdsBudget(coord)).limit).toBe(15000);
+      expect(googleAdsBudgetAllows({ paused: false, used: 11_999, limit: 15000 }, "schedule")).toBe(true);
+      process.env.GOOGLE_ADS_DAILY_OPERATIONS = "";
+      resetEnvCache();
+      expect((await googleAdsBudget(coord)).limit).toBe(2880);
+      // Not a number of operations: the config refuses it rather than guess.
+      process.env.GOOGLE_ADS_DAILY_OPERATIONS = "lots";
+      resetEnvCache();
+      await expect(googleAdsBudget(coord)).rejects.toThrow(/GOOGLE_ADS_DAILY_OPERATIONS/);
+    } finally {
+      delete process.env.GOOGLE_ADS_DAILY_OPERATIONS;
+      resetEnvCache();
+    }
+  });
+
   it("counts only the requests that reach the Google Ads API", async () => {
     const f: FetchLike = async () => new Response("{}");
     const c = countingGoogleAdsFetch(f);

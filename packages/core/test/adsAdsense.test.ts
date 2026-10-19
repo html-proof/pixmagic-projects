@@ -140,10 +140,26 @@ describe("the AdSense report", () => {
 
   it("a store whose sites AdSense can't match gets nothing, never every site's earnings; a cut-off report says so", async () => {
     const f = fake(() => json(report("site", "1500")));
-    expect(await adsenseReport(adsense(f.fetchImpl), "AT", "pub-1", "site", "2026-10-01", "2026-10-07", ["bad,host", "a\\b"])).toEqual({ rows: [], currency: null, truncated: false });
+    expect(await adsenseReport(adsense(f.fetchImpl), "AT", "pub-1", "site", "2026-10-01", "2026-10-07", ["bad,host", "a\\b"])).toEqual({
+      rows: [],
+      currency: null,
+      truncated: false,
+      totals: { earnings: 0, pageViews: 0, impressions: 0, clicks: 0, pageRpm: null, perClick: null, ctr: null },
+    });
     expect(f.calls).toHaveLength(0);
     expect((await adsenseReport(adsense(f.fetchImpl), "AT", "pub-1", "site", "2026-10-01", "2026-10-07", ["bad,host", "shop.example.com"])).truncated).toBe(true);
     expect(f.calls[0]!.url.searchParams.getAll("filters")).toEqual(["DOMAIN_CODE==shop.example.com"]);
     await expect(adsenseReport(adsense(f.fetchImpl), "AT", "pub-1", "site", "2026-10-01' OR 1=1", "2026-10-07")).rejects.toThrow("Invalid date range");
+  });
+
+  it("the totals are AdSense's own (the rows a cut-off report leaves out included), else the rows added up", async () => {
+    // Its totals row: as long as the others, the dimension's cell empty.
+    const cut = fake(() => json({ ...report("site", "1500"), totals: { cells: [{}, { value: "250.40" }, { value: "90000" }, { value: "120000" }, { value: "300" }] } }));
+    const r = await adsenseReport(adsense(cut.fetchImpl), "AT", "pub-1", "site", "2026-10-01", "2026-10-07");
+    expect(r.truncated).toBe(true);
+    expect(r.totals).toEqual({ earnings: 250.4, pageViews: 90000, impressions: 120000, clicks: 300, pageRpm: 2.78, perClick: 0.83, ctr: 300 / 120000 });
+    // No totals row: the rows read.
+    const plain = await adsenseReport(adsense(fake(() => json(report("site"))).fetchImpl), "AT", "pub-1", "site", "2026-10-01", "2026-10-07");
+    expect(plain.totals).toMatchObject({ earnings: 4.2, pageViews: 900, impressions: 1200, clicks: 3 });
   });
 });

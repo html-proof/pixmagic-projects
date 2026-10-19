@@ -50,7 +50,7 @@ import {
 export interface MetaConfig {
   appId: string;
   appSecret: string;
-  /** Graph / Marketing API version, e.g. "v25.0". */
+  /** Graph / Marketing API version, e.g. "v26.0". */
   version: string;
   /**
    * Facebook Login for Business: the Login Configuration made in the app dashboard (user access
@@ -625,6 +625,11 @@ export interface MetaLiveReportOptions {
   pollMs?: number;
   polls?: number;
   syncMs?: number;
+  /**
+   * False: leave each row's delivery status unknown (null) instead of reading it, for a range read only
+   * for its figures (a comparison's): the statuses are list calls on Meta's rate limit. Default true.
+   */
+  statuses?: boolean;
 }
 
 /**
@@ -718,19 +723,84 @@ async function metaRangeRead(
   }
 }
 
-/** effective_status per campaign / ad set / ad id (ACTIVE, PAUSED, CAMPAIGN_PAUSED, WITH_ISSUES...); `deadline` as a live report's. */
-export async function metaStatuses(c: MetaConfig, accessToken: string, ids: string[], opts: { deadline?: number } = {}): Promise<Map<string, string>> {
+/** The ad account's edge that lists each level's objects. */
+const LEVEL_EDGE: Record<MetaReportLevel, string> = { campaign: "campaigns", adset: "adsets", ad: "ads" };
+/** Pages of campaigns, ad sets or ads read at most for their statuses (5,000). */
+const STATUS_PAGES = 10;
+
+/**
+ * effective_status per campaign / ad set / ad id (ACTIVE, PAUSED, CAMPAIGN_PAUSED, WITH_ISSUES...), read
+ * from the account's own list of them with every status asked for (archived and deleted ones are left
+ * out otherwise), until every id is found or STATUS_PAGES pages are read. Graph API v26.0 refuses the
+ * multiple-id lookup (GET /?ids=) this used before, and every version does from 2026-10-27
+ * (https://developers.facebook.com/docs/graph-api/changelog/version26.0); one list page also costs one
+ * call where a lookup counted each id. A page after the first that fails ends the look with the
+ * statuses found so far. `deadline` as a live report's.
+ */
+export async function metaStatuses(
+  c: MetaConfig,
+  accessToken: string,
+  accountId: string,
+  level: MetaReportLevel,
+  ids: string[],
+  opts: { deadline?: number } = {},
+): Promise<Map<string, string>> {
   const out = new Map<string, string>();
-  const valid = [...new Set(ids)].filter((id) => /^\d{1,30}$/.test(id));
+  const wanted = new Set(ids.filter((id) => /^\d{1,30}$/.test(id)));
+  if (!wanted.size) return out;
+  const act = metaAccountId(accountId);
+  if (!/^act_\d{1,30}$/.test(act)) throw new AdsApiError(`Invalid Meta ad account ${accountId}`, 400);
   const limit = opts.deadline === undefined ? undefined : { deadline: opts.deadline };
-  for (let i = 0; i < valid.length; i += 50) {
-    const res = await metaGet<Record<string, { id?: string; effective_status?: string }>>(c, "", {
-      ids: valid.slice(i, i + 50).join(","),
-      fields: "effective_status",
-    }, accessToken, limit);
-    for (const [id, v] of Object.entries(res)) if (v?.effective_status) out.set(id, v.effective_status);
+  type Page = { data?: Array<{ id?: string; effective_status?: string }>; paging?: { next?: string } };
+  let page = await metaGet<Page>(c, `${act}/${LEVEL_EDGE[level]}`, { fields: "id,effective_status", effective_status: JSON.stringify(EVERY_STATUS[level]), limit: "500" }, accessToken, limit);
+  for (let i = 1; ; i++) {
+    for (const o of page.data ?? []) if (o.id && o.effective_status && wanted.has(o.id)) out.set(o.id, o.effective_status);
+    const next = page.paging?.next;
+    if (out.size >= wanted.size || !next || i >= STATUS_PAGES) return out;
+    try {
+      page = await metaGet<Page>(c, next, {}, accessToken, limit);
+    } catch (err) {
+      logger.info({ err, act, level, found: out.size, wanted: wanted.size }, "meta: delivery statuses read in part");
+      return out;
+    }
   }
-  return out;
+}
+
+/**
+ * The device split is read with publisher_platform, the combination Meta documents impression_device
+ * in (META_BREAKDOWN_PARAM), so it comes as one row per platform and device: here they are added up
+ * into one row per device. Spend, impressions, clicks and each action's count and value add up; reach
+ * and frequency count people, who may have seen the ads on several platforms, so a device made of more
+ * than one row has them unknown.
+ */
+export function mergeMetaDeviceRows(rows: MetaRangeInsight[]): MetaRangeInsight[] {
+  const byDevice = new Map<string, MetaRangeInsight[]>();
+  for (const r of rows) {
+    const device = r.impression_device ?? "unknown";
+    byDevice.set(device, [...(byDevice.get(device) ?? []), r]);
+  }
+  const total = (list: MetaRangeInsight[], k: "spend" | "impressions" | "clicks" | "inline_link_clicks") => String(list.reduce((a, r) => a + (Number(r[k] ?? 0) || 0), 0));
+  const actions = (list: MetaRangeInsight[], k: "actions" | "action_values") => {
+    const by = new Map<string, number>();
+    for (const r of list) for (const a of r[k] ?? []) by.set(a.action_type, (by.get(a.action_type) ?? 0) + (Number(a.value) || 0));
+    return by.size ? [...by].map(([action_type, value]) => ({ action_type, value: String(value) })) : undefined;
+  };
+  return [...byDevice].map(([device, list]) => {
+    if (list.length === 1) {
+      const { publisher_platform: _platform, ...one } = list[0]!;
+      return { ...one, impression_device: device };
+    }
+    return {
+      impression_device: device,
+      spend: total(list, "spend"),
+      impressions: total(list, "impressions"),
+      clicks: total(list, "clicks"),
+      inline_link_clicks: total(list, "inline_link_clicks"),
+      actions: actions(list, "actions"),
+      action_values: actions(list, "action_values"),
+      attribution_setting: list[0]!.attribution_setting,
+    };
+  });
 }
 
 export interface MetaReport {
@@ -767,19 +837,22 @@ export async function metaReport(
     metaRangeRead(c, accessToken, accountId, "account", since, until, 2000, undefined, live),
     breakdown ? metaRangeRead(c, accessToken, accountId, "account", since, until, 2000, breakdown, live) : metaRangeRead(c, accessToken, accountId, level as MetaReportLevel, since, until, 2000, undefined, live),
   ]);
-  const all = raw.rows
+  const all = (breakdown === "device" ? mergeMetaDeviceRows(raw.rows) : raw.rows)
     .map((r) => (breakdown ? fromMetaBreakdownInsight(breakdown, r) : fromMetaRangeInsight(level as MetaReportLevel, r)))
     .sort((a, b) => b.spend - a.spend || b.impressions - a.impressions);
   const rows = all.slice(0, maxRows);
-  if (!breakdown) {
+  if (!breakdown && opts.statuses === false) {
+    for (const r of rows) r.status = null;
+  } else if (!breakdown) {
     // A status that can't be read (an ad deleted since, no answer, no time left for it) leaves the
     // row's status unknown, not the report broken: the numbers are the report.
     const unknown = new Map<string, string>();
     const statuses =
       live.deadline - Date.now() < META_REPORT_JOB.statusMs
         ? unknown
-        : await metaStatuses(c, accessToken, rows.map((r) => r.id), { deadline: live.deadline }).catch((err: unknown) => {
-            if (err instanceof AdsApiError || err instanceof AdsReportPendingError || err instanceof MetaNoAnswerError) return unknown;
+        : await metaStatuses(c, accessToken, accountId, level as MetaReportLevel, rows.map((r) => r.id), { deadline: live.deadline }).catch((err: unknown) => {
+            // Meta refusing, throttling, not answering, or no time left: the statuses only are unknown.
+            if (err instanceof AdsApiError || err instanceof AdsRetryableError) return unknown;
             throw err;
           });
     for (const r of rows) r.status = statuses.get(r.id) ?? null;

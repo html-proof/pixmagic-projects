@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { withTimeout, type FetchLike } from "../src/index.js";
+import { fetchUntil, withTimeout, type FetchLike } from "../src/index.js";
 
 /** A fetch that answers after `ms`, or rejects as soon as its signal aborts (as fetch does). */
 function slowFetch(ms: number) {
@@ -37,5 +37,27 @@ describe("withTimeout", () => {
     const own = new AbortController();
     await withTimeout(impl, 1_000)("https://example.test/", { signal: own.signal });
     expect(seen[0]).toBe(own.signal);
+  });
+});
+
+describe("fetchUntil", () => {
+  it("every call shares one deadline: a call is cut off when it passes, and none starts after it", async () => {
+    const { impl } = slowFetch(10_000);
+    const deadline = Date.now() + 100;
+    const f = fetchUntil(impl, deadline, () => new Error("out of time"));
+    await expect(f("https://example.test/")).rejects.toThrow("out of time");
+    await expect(f("https://example.test/")).rejects.toThrow("out of time");
+    // By default, a TimeoutError like withTimeout's.
+    await expect(fetchUntil(impl, Date.now() - 1)("https://example.test/")).rejects.toMatchObject({ name: "TimeoutError" });
+  });
+
+  it("answers in time pass through, and the call's own signal still applies", async () => {
+    const { impl } = slowFetch(5);
+    expect(await (await fetchUntil(impl, Date.now() + 5_000)("https://example.test/")).text()).toBe("ok");
+    const own = new AbortController();
+    const slow = slowFetch(10_000);
+    const call = fetchUntil(slow.impl, Date.now() + 5_000, () => new Error("out of time"))("https://example.test/", { signal: own.signal });
+    own.abort(new Error("cancelled"));
+    await expect(call).rejects.toThrow("cancelled");
   });
 });

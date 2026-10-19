@@ -54,7 +54,8 @@ describe("ad account sync", () => {
     await systemDb.adCampaignDaily.create({ data: { workspaceId: conn.workspaceId, storeId: conn.storeId, connectionId: conn.id, provider: "meta", accountId: "act_1", campaignId: "gone", campaignName: "Deleted campaign", day: d1, spend: 99 } });
     fetchImpl = async (input, init) => {
       const u = new URL(String(input));
-      expect(u.pathname).toBe("/v25.0/act_1/insights");
+      // The configured Marketing API version (META_API_VERSION's default).
+      expect(u.pathname).toBe("/v26.0/act_1/insights");
       // The token goes in the header, never in the URL.
       expect(new Headers(init?.headers).get("authorization")).toBe("Bearer ACCESS");
       expect(u.searchParams.has("access_token")).toBe(false);
@@ -193,17 +194,32 @@ describe("ad account sync", () => {
     expect(await systemDb.adConnection.findUniqueOrThrow({ where: { id: revoked.id } })).toMatchObject({ status: "permission", errorCode: "no_access", lastError: expect.stringContaining("ads_read") });
   });
 
-  it("rate limits are retried, and only the last attempt marks the account", async () => {
+  it("a rate limit is waited for without spending a retry; once it has waited long enough, the last ordinary attempt marks the account", async () => {
     const conn = await connection("meta");
+    // Meta's code 17: the app is throttled, which says nothing about the account.
     fetchImpl = async () => json({ error: { message: "User request limit reached", code: 17 } }, 400);
-    const first = message({ kind: "ads", connectionId: conn.id, since: today(), until: today() }, 1);
+    const job: AdsSyncData = { kind: "ads", connectionId: conn.id, since: today(), until: today() };
+    const first = message(job, 1);
     await consume("sync", first.msg, deps);
-    expect(first.m.retried).not.toBeNull();
+    // Re-sent as a new message for later, and this one acked: no attempt spent, nothing marked.
+    expect(first.m).toEqual({ acked: true, retried: null });
+    expect(queues.sent.sync).toEqual([{ ...job, rateDeferral: { count: 1, since: expect.any(Number) } }]);
+    expect(queues.sentOpts.sync[0]!.delaySeconds).toBeGreaterThanOrEqual(30);
+    expect(await systemDb.adConnection.findUniqueOrThrow({ where: { id: conn.id } })).toMatchObject({ status: "active", errorCode: null, consecutiveFailures: 0 });
+
+    // Still throttled six hours on: the ordinary retries take over, and only the last one marks the account.
+    queues.clear();
+    const waited = { ...job, rateDeferral: { count: 12, since: Date.now() - 6 * 3600_000 - 60_000 } } as AdsSyncData;
+    const retry = message(waited, 1);
+    await consume("sync", retry.msg, deps);
+    expect(retry.m.acked).toBe(false);
+    expect(retry.m.retried).not.toBeNull();
+    expect(queues.sent.sync).toEqual([]);
     expect((await systemDb.adConnection.findUniqueOrThrow({ where: { id: conn.id } })).status).toBe("active");
-    const last = message({ kind: "ads", connectionId: conn.id, since: today(), until: today() }, 6);
+    const last = message(waited, 6);
     await consume("sync", last.msg, deps);
-    expect(last.m.acked).toBe(true);
-    expect((await systemDb.adConnection.findUniqueOrThrow({ where: { id: conn.id } })).status).toBe("error");
+    expect(last.m).toEqual({ acked: true, retried: null });
+    expect(await systemDb.adConnection.findUniqueOrThrow({ where: { id: conn.id } })).toMatchObject({ status: "error", errorCode: "rate_limited", consecutiveFailures: 1 });
   });
 
   it("the 15-minute tick refreshes recent days hourly and re-checks 30 days once a day, skipping accounts awaiting a reconnect", async () => {

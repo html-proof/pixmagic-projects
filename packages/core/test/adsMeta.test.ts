@@ -399,9 +399,16 @@ describe("Meta's report jobs", () => {
 describe("the Meta Ads report", () => {
   it("asks for the biggest spenders first, archived and deleted included; says when Meta had more", async () => {
     let page = 0;
+    let statusPages = 0;
     const f = fake((u) => {
-      // Delivery statuses of the ads listed.
-      if (u.searchParams.has("ids")) return json({ "1": { id: "1", effective_status: "ARCHIVED" } });
+      // Delivery statuses of the ads listed, from the account's list of ads (archived and deleted ones asked for too).
+      if (u.pathname.endsWith("/act_1/ads")) {
+        statusPages++;
+        if (u.searchParams.has("after")) return json({ data: [{ id: "3", effective_status: "PAUSED" }, { id: "77", effective_status: "ACTIVE" }] });
+        expect(u.searchParams.get("fields")).toBe("id,effective_status");
+        expect(JSON.parse(u.searchParams.get("effective_status")!)).toEqual(expect.arrayContaining(["ACTIVE", "PAUSED", "ARCHIVED", "DELETED", "ADSET_PAUSED"]));
+        return json({ data: [{ id: "1", effective_status: "ARCHIVED" }], paging: { next: "https://graph.facebook.com/v25.0/act_1/ads?after=s1" } });
+      }
       if (level(u) === "account") {
         expect(u.searchParams.has("filtering")).toBe(false);
         return json({ data: [{ spend: "100", impressions: "1000", reach: "500" }] });
@@ -419,10 +426,13 @@ describe("the Meta Ads report", () => {
     expect(r.rows.map((x) => [x.id, x.status])).toEqual([
       ["1", "ARCHIVED"],
       ["2", null],
-      ["3", null],
+      ["3", "PAUSED"],
       ["4", null],
     ]);
     expect(r.truncated).toBe(true);
+    // Two pages of the list, and never Graph's multiple-id lookup (GET /?ids=), which v26.0 refuses.
+    expect(statusPages).toBe(2);
+    expect(f.calls.some((c) => c.url.searchParams.has("ids"))).toBe(false);
     // The account level on its own, a page at a time up to maxRows.
     const one = fake(() => json({ data: [{ ad_id: "5", spend: "60" }], paging: { next: "https://graph.facebook.com/v25.0/act_1/insights?after=x" } }));
     expect(await metaRangeInsights(meta(one.fetchImpl), "T", "1", "ad", "2026-10-01", "2026-10-07", 1)).toHaveLength(1);
@@ -517,19 +527,27 @@ describe("the Meta Ads report", () => {
   it("the rows' delivery statuses are a nicety: skipped with little time left, unknown when Meta doesn't answer", async () => {
     const report = (statuses: (init: RequestInit | undefined) => Response | Promise<Response>) =>
       fake((u, init) => {
-        if (u.searchParams.has("ids")) return statuses(init);
+        if (u.pathname.endsWith("/act_1/campaigns")) return statuses(init);
         return level(u) === "account" ? json({ data: [{ spend: "5", reach: "10" }] }) : json({ data: [{ campaign_id: "1", campaign_name: "A", spend: "5" }] });
       });
-    const short = report(() => json({ "1": { effective_status: "ACTIVE" } }));
+    const short = report(() => json({ data: [{ id: "1", effective_status: "ACTIVE" }] }));
     const r = await metaReport(meta(short.fetchImpl), "T", "1", "campaign", "2026-10-01", "2026-10-07", 200, { deadline: Date.now() + META_REPORT_JOB.statusMs - 500 });
     expect(r.rows.map((x) => [x.id, x.status])).toEqual([["1", null]]);
-    expect(short.calls.some((c) => c.url.searchParams.has("ids"))).toBe(false);
+    expect(short.calls.some((c) => c.url.pathname.endsWith("/act_1/campaigns"))).toBe(false);
     const silent = report(() => {
       throw new TypeError("fetch failed");
     });
     expect((await metaReport(meta(silent.fetchImpl), "T", "1", "campaign", "2026-10-01", "2026-10-07")).rows[0]!.status).toBeNull();
-    const plenty = report(() => json({ "1": { effective_status: "ACTIVE" } }));
+    // Meta throttling the status look-up after the figures came: the report still comes.
+    const throttled = report(() => json({ error: { message: "User request limit reached", code: 17 } }, 400));
+    expect((await metaReport(meta(throttled.fetchImpl), "T", "1", "campaign", "2026-10-01", "2026-10-07")).rows[0]!.status).toBeNull();
+    const plenty = report(() => json({ data: [{ id: "1", effective_status: "ACTIVE" }] }));
     expect((await metaReport(meta(plenty.fetchImpl), "T", "1", "campaign", "2026-10-01", "2026-10-07")).rows[0]!.status).toBe("ACTIVE");
+    // A range read for its figures only (a comparison's): no status look-up at all.
+    const figures = report(() => json({ data: [{ id: "1", effective_status: "ACTIVE" }] }));
+    const compared = await metaReport(meta(figures.fetchImpl), "T", "1", "campaign", "2026-10-01", "2026-10-07", 200, { statuses: false });
+    expect(compared.rows.map((x) => [x.id, x.spend, x.status])).toEqual([["1", 5, null]]);
+    expect(figures.calls.some((c) => c.url.pathname.endsWith("/act_1/campaigns"))).toBe(false);
   });
 
   it("the whole account split by age and by gender, Meta's own aggregates", async () => {
@@ -547,5 +565,51 @@ describe("the Meta Ads report", () => {
     expect((await metaReport(meta(f.fetchImpl), "T", "1", "gender", "2026-10-01", "2026-10-07")).rows.map((r) => r.name)).toEqual(["Women", "Men", "Unknown"]);
     // A split asks for the same metrics as every other view.
     expect(f.calls.every((c) => c.url.searchParams.get("fields") === "spend,impressions,reach,frequency,clicks,inline_link_clicks,actions,action_values")).toBe(true);
+  });
+
+  it("devices: asked with the platform (Meta documents impression_device only with it), added up per device; reach unknown where platforms were added", async () => {
+    const f = fake((u) => {
+      const b = u.searchParams.get("breakdowns");
+      if (b === null) return json({ data: [{ spend: "20", impressions: "1000", reach: "600" }] });
+      expect(b).toBe("publisher_platform,impression_device");
+      return json({
+        data: [
+          {
+            publisher_platform: "facebook",
+            impression_device: "iphone",
+            spend: "6.10",
+            impressions: "300",
+            reach: "200",
+            frequency: "1.5",
+            clicks: "12",
+            inline_link_clicks: "8",
+            actions: [{ action_type: "omni_purchase", value: "2" }, { action_type: "lead", value: "1" }],
+            action_values: [{ action_type: "omni_purchase", value: "50" }],
+          },
+          {
+            publisher_platform: "instagram",
+            impression_device: "iphone",
+            spend: "3.90",
+            impressions: "200",
+            reach: "150",
+            frequency: "1.33",
+            clicks: "5",
+            inline_link_clicks: "4",
+            actions: [{ action_type: "omni_purchase", value: "1" }],
+            action_values: [{ action_type: "omni_purchase", value: "30" }],
+          },
+          { publisher_platform: "facebook", impression_device: "desktop", spend: "10", impressions: "500", reach: "300", frequency: "1.67", clicks: "9", inline_link_clicks: "6" },
+        ],
+      });
+    });
+    const r = await metaReport(meta(f.fetchImpl), "T", "1", "device", "2026-10-01", "2026-10-07");
+    expect(r.rows.map((x) => [x.id, x.name, x.spend, x.impressions, x.clicks, x.linkClicks, x.purchases, x.purchaseValue, x.leads, x.reach, x.frequency])).toEqual([
+      // Facebook and Instagram on iPhones, added up: people may have been reached on both, so their count isn't known.
+      ["iphone", "iPhone", 10, 500, 17, 12, 3, 80, 1, null, null],
+      // Computers ran on one platform only: its reach is the device's.
+      ["desktop", "Computers", 10, 500, 9, 6, 0, 0, 0, 300, 1.67],
+    ]);
+    // The account's own totals still come from Meta, de-duplicated.
+    expect(r.totals.reach).toBe(600);
   });
 });

@@ -27,6 +27,10 @@ import {
   metaAccountId,
   previousRange,
   siteTotals,
+  adErrorMessage,
+  adsenseReportTotals,
+  adStatusCode,
+  META_BREAKDOWN_PARAM,
   type AdDayRow,
   type AdsenseDayRow,
 } from "../src/ads";
@@ -396,5 +400,35 @@ describe("the Meta Ads report's numbers", () => {
     expect(metaAttributionLabel("7d_click_1d_view_1d_ev")).toBe("7-day click, 1-day view, 1-day engaged view");
     expect(metaAttributionLabel("skan")).toBe("skan");
     expect(metaAttributionLabel(null)).toBeNull();
+  });
+
+  it("splits by device with publisher_platform, a combination Meta documents (impression_device alone isn't one)", () => {
+    expect(META_BREAKDOWN_PARAM.device).toBe("publisher_platform,impression_device");
+    expect(META_BREAKDOWN_PARAM.placement).toBe("publisher_platform,platform_position");
+  });
+});
+
+describe("a connection's wording", () => {
+  it("is its code's when the code belongs to its status, else the status's own; nothing when active", () => {
+    expect(adStatusCode("active", "auth_expired")).toBeNull();
+    expect(adStatusCode("reconnect", "connector_left")).toBe("connector_left");
+    expect(adStatusCode("unavailable", "account_closed")).toBe("account_closed");
+    // A code left from an earlier failure words nothing of another status.
+    expect(adStatusCode("reconnect", "temporary")).toBe("auth_expired");
+    expect(adStatusCode("permission", null)).toBe("no_access");
+    expect(adStatusCode("unavailable", "no_access")).toBe("account_not_ready");
+    expect(adStatusCode("error", "made_up")).toBe("provider_error");
+    expect(adErrorMessage(adStatusCode("reconnect", "temporary"), "meta")).toContain("Press Reconnect");
+  });
+});
+
+describe("the AdSense report's totals", () => {
+  const headers = [{ name: "DOMAIN_CODE" }, { name: "ESTIMATED_EARNINGS" }, { name: "PAGE_VIEWS" }, { name: "IMPRESSIONS" }, { name: "CLICKS" }];
+  const rows = [{ earnings: 1, pageViews: 100, impressions: 200, clicks: 2, pageRpm: 10, perClick: 0.5, ctr: 0.01 }];
+
+  it("are AdSense's totals row when it sent one, read by column name, else the rows added up", () => {
+    expect(adsenseReportTotals({ headers, totals: { cells: [{}, { value: "12.5" }, { value: "5000" }, { value: "8000" }, { value: "25" }] } }, rows)).toEqual({ earnings: 12.5, pageViews: 5000, impressions: 8000, clicks: 25, pageRpm: 2.5, perClick: 0.5, ctr: 25 / 8000 });
+    expect(adsenseReportTotals({ headers }, rows)).toMatchObject({ earnings: 1, pageViews: 100, impressions: 200, clicks: 2 });
+    expect(adsenseReportTotals({}, [])).toMatchObject({ earnings: 0, pageRpm: null });
   });
 });

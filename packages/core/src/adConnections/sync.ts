@@ -364,9 +364,12 @@ const QUOTA_FAILURE: AdFailure = { status: "error", code: "quota_exhausted", det
 export async function syncAdConnection(connectionId: string, since: string, until: string, fetchImpl?: FetchLike, opts: AdSyncOptions = {}): Promise<AdSyncResult> {
   const conn = await systemDb.adConnection.findUnique({ where: { id: connectionId } });
   if (!conn) return { skipped: true, reason: "gone" };
-  if (!conn.enabled) return { skipped: true, reason: "hidden" };
-  // The person whose login it used has left (releaseUserAdGrants): no token until someone connects it again.
-  if (!conn.accessTokenEnc) return { skipped: true, reason: "no_token" };
+  // Hidden, or the person whose login it used has left (releaseUserAdGrants: no token until someone
+  // connects it again): nothing is read, and a card that said "Synchronizing" for this job stops saying so.
+  if (!conn.enabled || !conn.accessTokenEnc) {
+    if (conn.syncRequestedAt) await systemDb.adConnection.updateMany({ where: { id: conn.id, syncRequestedAt: { not: null } }, data: { syncRequestedAt: null } });
+    return { skipped: true, reason: conn.enabled ? "no_token" : "hidden" };
+  }
   const trigger = opts.trigger ?? "request";
   const google = conn.provider === "google";
   if (google && opts.coord) {

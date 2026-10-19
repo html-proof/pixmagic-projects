@@ -99,7 +99,7 @@ const schema = z.object({
    */
   META_APP_ID: z.string().optional().default(""),
   META_APP_SECRET: z.string().optional().default(""),
-  META_API_VERSION: z.string().default("v25.0"),
+  META_API_VERSION: z.string().default("v26.0"),
   /** Facebook Login for Business configuration id (public). Empty: classic `scope=ads_read`. */
   META_CONFIG_ID: z.string().optional().default(""),
   /**
@@ -125,6 +125,12 @@ const schema = z.object({
    */
   GOOGLE_ADS_OAUTH_VERIFIED: z.string().optional().default(""),
   GOOGLE_ADS_API_VERSION: z.string().default("v25"),
+  /**
+   * Google Ads API operations bizinsights' Cloud project may make a day, across every merchant. Unset
+   * (or empty): Explorer access's 2,880 (GOOGLE_ADS_DAILY_OPERATIONS in adConnections/budget.ts). Set
+   * it once Google grants a higher access level; the syncs' budget follows it.
+   */
+  GOOGLE_ADS_DAILY_OPERATIONS: z.preprocess((v) => (v === "" ? undefined : v), z.coerce.number().int().positive().optional()),
   /**
    * WhatsApp Business Platform (Cloud API). Embedded Signup ("Connect WhatsApp Business") needs
    * the Meta app's id and secret (the ad accounts' Meta app is used when these are empty) and the

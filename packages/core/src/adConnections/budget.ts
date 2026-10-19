@@ -23,11 +23,9 @@ export const GOOGLE_ADS_HISTORY_SHARE = 0.6;
 /** How long Google Ads syncs pause when Google says the allowance is used up and doesn't say for how long. */
 export const GOOGLE_ADS_PAUSE_S = 3600;
 
-/** The allowance: GOOGLE_ADS_DAILY_OPERATIONS when the config carries it, else Explorer's. */
+/** The allowance: the GOOGLE_ADS_DAILY_OPERATIONS setting when it is set, else Explorer's. */
 export function googleAdsDailyOperations(): number {
-  // Read through env() like every setting; the constant stands in until the config schema lists it.
-  const v = Number((env() as unknown as Record<string, unknown>).GOOGLE_ADS_DAILY_OPERATIONS);
-  return Number.isFinite(v) && v > 0 ? Math.floor(v) : GOOGLE_ADS_DAILY_OPERATIONS;
+  return env().GOOGLE_ADS_DAILY_OPERATIONS ?? GOOGLE_ADS_DAILY_OPERATIONS;
 }
 
 const HOUR_MS = 3_600_000;

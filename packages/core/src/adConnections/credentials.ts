@@ -1,7 +1,7 @@
 /** A connection's tokens: encrypted at rest, refreshed when they expire, re-encrypted on key rotation. */
 import { systemDb, type AdConnection } from "@app/db";
 import { decrypt, encrypt, keyVersionOf, type AdProvider } from "@app/shared";
-import { AdsApiError, AdsAuthError, googleRefresh, googleUserId, metaUserId, type TokenSet } from "../ads.js";
+import { AdsApiError, AdsAuthError, googleRefresh, googleUserId, metaUserId, REQUIRED_AD_SCOPE, type TokenSet } from "../ads.js";
 import { logger } from "../logger.js";
 import type { FetchLike } from "../shopify.js";
 import { keyring } from "../tokens.js";
@@ -60,7 +60,9 @@ export async function accessTokenAndPerson(conn: AdConnection, fetchImpl?: Fetch
   const cfg = googleOAuthFor(provider, fetchImpl);
   if (!cfg) throw new AdsApiError(`${AD_PROVIDER_NAME[provider] ?? "Google"} isn't set up on this server`, 503, undefined, "not_configured");
   if (!conn.refreshTokenEnc) throw new AdsAuthError("Google access has no refresh token");
-  const fresh = await googleRefresh(cfg, decrypt(conn.refreshTokenEnc, k, aad(conn.storeId, conn.provider, "refresh")));
+  // A grant that no longer covers the reporting permission says so here ("scope_missing": connect
+  // again with it ticked), instead of handing out a token every report then fails with.
+  const fresh = await googleRefresh(cfg, decrypt(conn.refreshTokenEnc, k, aad(conn.storeId, conn.provider, "refresh")), { requiredScope: REQUIRED_AD_SCOPE[provider] });
   const enc = encryptAdTokens(conn.storeId, provider, fresh);
   // Every account connected in the same sign-in shares the token: keep them all on the new one, both
   // tokens sealed with the active key. Re-sealing the refresh token each time (not only when Google
