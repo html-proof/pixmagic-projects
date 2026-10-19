@@ -28,12 +28,14 @@ export function MetaDeletionStatus() {
     fetch(`/api/meta/data-deletion/${encodeURIComponent(c)}`, { credentials: "omit" })
       .then(async (res) => {
         if (!live) return;
-        // A code the API doesn't know may come back as 404 rather than "unknown": the same answer.
-        if (res.status === 404) return setAnswer({ status: "unknown" });
+        // A code the API doesn't know is a 200 "unknown". A 404 is a route that isn't there (not
+        // deployed, or not routed): it says nothing about the request, so it's "couldn't check".
         if (res.status === 400) return setFailed("bad_code");
         if (!res.ok) return setFailed("unreachable");
-        const a = (await res.json()) as Answer;
-        if (live) setAnswer(a.status === "done" ? a : { status: "unknown" });
+        const a = (await res.json()) as Partial<Answer>;
+        if (!live) return;
+        if (a.status === "done" || a.status === "unknown") setAnswer({ status: a.status, at: typeof a.at === "string" && !Number.isNaN(Date.parse(a.at)) ? a.at : undefined });
+        else setFailed("unreachable");
       })
       .catch(() => live && setFailed("unreachable"));
     return () => {

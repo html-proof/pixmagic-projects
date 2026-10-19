@@ -27,8 +27,9 @@ export const metadata: Metadata = {
  *   - ad accounts are read-only in use (Meta ads_read, Google adwords for Google Ads reporting, adsense.readonly) and
  *     their daily figures and token are deleted, and the grant revoked, on disconnect (apps/api/src/routes/ads.ts,
  *     packages/core/src/adConnections.ts); /data-deletion is the Meta app's deletion instructions URL, and Meta's
- *     deauthorize and data deletion callbacks (POST /webhooks/meta/deauthorize, /webhooks/meta/data-deletion) stop the
- *     reading and delete the Meta Ads figures; Google sign-in keeps the email and the Cognito user name (auth_identities,
+ *     deauthorize and data deletion callbacks (POST /webhooks/meta/deauthorize, /webhooks/meta/data-deletion, once
+ *     their URLs are set in the Meta app; until then the next update finds the token ended) stop the reading and
+ *     delete the Meta Ads figures; Google sign-in keeps the email and the Cognito user name (auth_identities,
  *     and the removal note in auth_events);
  *   - Staff Management keeps what the merchant enters about employees, and the IP address and browser of each
  *     clock-in and clock-out from the employee portal (packages/core/src/staff/attendance.ts), until the
@@ -256,7 +257,8 @@ export default function PrivacyPage() {
         </p>
         <p>
           You can also remove bizinsights from Facebook, under <strong>Settings &amp; privacy → Settings → Business integrations</strong>.
-          Facebook tells bizinsights at once, and bizinsights stops reading your Meta ad accounts straight away. If you then send
+          Its access ends there, and bizinsights stops reading your Meta ad accounts: at once when Facebook lets it know, and at the latest
+          at its next update. If you then send
           Facebook&apos;s data deletion request for bizinsights (listed under the apps you removed), bizinsights deletes the Meta Ads figures
           and the access it holds for that Facebook login, and Facebook gives you a confirmation code and a link where you can check the
           request&apos;s status.

@@ -20,7 +20,9 @@ export const metadata: Metadata = {
  * Facebook calls Meta's deauthorize callback (POST /webhooks/meta/deauthorize: reading stops at once),
  * and Facebook's data deletion request calls POST /webhooks/meta/data-deletion, which deletes the Meta
  * Ads figures and answers with this page's address and a confirmation code (?code=), whose status
- * MetaDeletionStatus shows (GET /api/meta/data-deletion/:code).
+ * MetaDeletionStatus shows (GET /api/meta/data-deletion/:code). Both callbacks work only once their
+ * URLs are set in the Meta app; until then the removal still ends the token, and the next update marks
+ * the connection "reconnect", which is why the page says "at the latest at its next update".
  */
 const UPDATED = "2026-10-19";
 
@@ -90,7 +92,8 @@ export default function DataDeletionPage() {
           <li>
             <strong>Meta</strong> — in Facebook, go to <strong>Settings &amp; privacy → Settings → Business integrations</strong> (or, for a
             business portfolio, <strong>Meta Business Suite → Settings → Integrations → Connected apps</strong>), find bizinsights and remove
-            it. Facebook tells bizinsights at once, and bizinsights stops reading your Meta ad accounts straight away.
+            it. Its access ends there, and bizinsights stops reading your Meta ad accounts: at once when Facebook lets it know, and at
+            the latest at its next update.
           </li>
           <li>
             <strong>Meta, with deletion</strong> — after removing bizinsights, open the apps you removed on the same Facebook page, choose
