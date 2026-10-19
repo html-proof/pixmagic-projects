@@ -36,7 +36,7 @@ The detail behind each line: [ads-setup.md](ads-setup.md) (how the integrations 
 | AdSense Management API enabled | Completed | In use since 2026-10-10: AdSense connections sync in production. | None. |
 | Publishing status "In production" | Completed | The consent screen is published (External), so anyone can sign in, not only test users. Re-check it shows "In production" before submitting. | Glance at Audience before submitting. (Owner) |
 | Turn off the "unverified app" warning in bizinsights | Blocked | The Google Ads card warns merchants about Google's unverified-app screen while `GOOGLE_ADS_OAUTH_VERIFIED` is empty. | After Google approves `adwords`: Claude sets `GOOGLE_ADS_OAUTH_VERIFIED` to `"1"` in `apps/aws/src/settings.ts` and ships it through `main`. (Claude, on your word) |
-| Homepage section on Google data (https://bizinsights.io/#google-data) | Pending | Written on this branch (`AdPlatforms.tsx`); it is live once this branch deploys. Documentation link 3 in the Google form points at it. | Approve the wording, merge, confirm the deploy; check the link opens the section. (Owner approves, Claude ships) |
+| Homepage section on Google data (https://bizinsights.io/#google-data) | Completed | Live since this branch's deploy (release 77, 2026-10-19): the served homepage holds the `google-data` section "Google Ads, Google AdSense and Meta Ads" (`AdPlatforms.tsx`, checked 2026-10-20). Documentation link 3 in the Google form points at it. | None. (Claude) |
 
 ### "Continue with Google" sign-in to bizinsights (separate from Google Ads)
 
