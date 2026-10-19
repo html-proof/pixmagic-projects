@@ -525,12 +525,18 @@ a hosted zone that isn't the registrar's nameservers would only be a second, ign
 | `www` | CNAME | `d2mr8m2p1qkh58.cloudfront.net` | Proxied |
 | `_629bb4707c1bf383a6f9ecec0cb165bf` | CNAME | `_70137766a706c2c3a6f74580a42334a6.wzccmgtwzk.acm-validations.aws` | DNS only |
 | `_66e52976e7c4c9a179bf51623272d845.www` | CNAME | `_4a5b10a140cad564c7f3420dc090c8dd.wzccmgtwzk.acm-validations.aws` | DNS only |
+| `_eab665a4a171b7418b4d9e90cb9d56bd.auth` | CNAME | `_442b2e17b5d149c6ab91d07e32ce1239.wzccmgtwzk.acm-validations.aws` | DNS only |
+| `auth` | CNAME | the Auth stack's output `CustomDomainTarget` (Cognito's CloudFront distribution), once step one of cognito-setup.md "Own sign-in domain" is deployed | DNS only |
 | `_dmarc` | TXT | `v=DMARC1; p=quarantine; adkim=r; aspf=r; rua=mailto:dmarc_rua@onsecureserver.net;` (from GoDaddy, kept) | DNS only |
 | `_domainconnect` | CNAME | `_domainconnect.gd.domaincontrol.com` (from GoDaddy, kept) | as imported |
 
 - **Certificate**: ACM in us-east-1 (CloudFront's region), `bizinsights.io` + `www.bizinsights.io`,
   `arn:aws:acm:us-east-1:605411278365:certificate/776966d7-d73c-4896-bd30-1568c9f7b3f7`, DNS-validated
   by the two `acm-validations.aws` records. ACM renews it by itself while they stay: never delete them.
+- **Sign-in certificate**: `auth.bizinsights.io` (the Cognito own domain, cognito-setup.md section 7)
+  has its own, `arn:aws:acm:us-east-1:605411278365:certificate/b0849d46-9714-4de4-b893-a9ab1171761d`
+  (requested 2026-10-20 in the ACM console; the app's certificate has no wildcard), validated by the
+  `_eab665…auth` record above, which likewise stays for renewals.
 - **Proxied through Cloudflare** (since 2026-10-16), in front of CloudFront, which still does TLS
   to the origin, caching, AWS WAF and the redirects. CloudFront then sees a Cloudflare edge address
   as the viewer, so the viewer-request function and the WAF's second rate rule take the client's

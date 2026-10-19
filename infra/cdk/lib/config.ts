@@ -134,6 +134,14 @@ const ENVIRONMENTS: Record<EnvConfig["name"], Omit<EnvConfig, "schedulesEnabled"
       certificateArn: "arn:aws:acm:us-east-1:605411278365:certificate/776966d7-d73c-4896-bd30-1568c9f7b3f7",
     },
     cognitoDomainPrefix: "insights-605411278365",
+    // Step one (docs/cognito-setup.md, "Own sign-in domain"): the domain exists beside the prefix
+    // domain; sign-in moves to it with inUse: true once its DNS record resolves and Google's
+    // client lists https://auth.bizinsights.io/oauth2/idpresponse.
+    cognitoCustomDomain: {
+      name: "auth.bizinsights.io",
+      certificateArn: "arn:aws:acm:us-east-1:605411278365:certificate/b0849d46-9714-4de4-b893-a9ab1171761d",
+      inUse: false,
+    },
     cognitoCustomEmail: true,
     // The owner's address at AWS (it also gets Cost Anomaly Detection's daily alerts).
     budgetEmail: "aby@zodiix.com",
