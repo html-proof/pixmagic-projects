@@ -175,15 +175,8 @@ export function GoogleAccountCard() {
       </IntegrationCard>
       {/* Enabled while the field is empty (pressing it says what's missing); "Working…" only while the password is checked. */}
       <ConfirmDialog open={asking} title="Confirm it's you" confirmLabel="Continue to Google" busy={busy} onCancel={cancel} onConfirm={() => void continueWithPassword()}>
-        {/* A form, so Enter in the field continues too. */}
-        <form
-          className="space-y-3"
-          noValidate
-          onSubmit={(e) => {
-            e.preventDefault();
-            void continueWithPassword();
-          }}
-        >
+        {/* The dialog is a form: Enter in the field continues too. */}
+        <div className="space-y-3">
           <p>A linked Google account can sign in to your account, so enter your password first.</p>
           <PasswordField
             id={PASSWORD_ID}
@@ -196,7 +189,7 @@ export function GoogleAccountCard() {
             }}
             error={missing ? "Enter your bizinsights password to continue." : null}
           />
-        </form>
+        </div>
       </ConfirmDialog>
     </>
   );
