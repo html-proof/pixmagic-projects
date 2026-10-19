@@ -392,7 +392,14 @@ export default function DashboardPage() {
               compared={compared}
               versus={versus}
               // The store's own calculation, when it shows it: under Shopify's figure, named, never instead of it.
-              extra={custom ? <span data-testid="tile-custom-sales">Custom sales · {custom.name}: <span className="font-semibold text-text">{fmtMoney(custom.current, cur)}</span></span> : undefined}
+              extra={
+                custom ? (
+                  <span data-testid="tile-custom-sales" title={`Custom sales · ${custom.name}: ${fmtMoney(custom.current, cur)}`}>
+                    Custom sales <span className="font-semibold text-text">{fmtMoney(custom.current, cur)}</span>
+                    <span className="block truncate">{custom.name}</span>
+                  </span>
+                ) : undefined
+              }
               onClick={() => detail.open("sales")}
             />
           ) : (

@@ -104,7 +104,8 @@ test("total sales line by line, Custom sales from it, saved and shown across the
   await page.getByRole("button", { name: "Apply to dashboard" }).click();
   await expect(card).toContainText('Shown on the dashboard as "Custom sales · Sales excluding tax and duties"');
   await page.getByRole("button", { name: "Close details" }).click();
-  await expect(page.getByTestId("tile-custom-sales")).toContainText("Custom sales · Sales excluding tax and duties: $1,060.00");
+  await expect(page.getByTestId("tile-custom-sales")).toContainText("Custom sales $1,060.00");
+  await expect(page.getByTestId("tile-custom-sales")).toContainText("Sales excluding tax and duties");
   await expect(page.getByTestId("metric-Total sales")).toContainText("$1,210.00");
   await expect(page.getByLabel("Sales chart shows")).toHaveValue("custom");
 

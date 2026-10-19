@@ -88,7 +88,7 @@ export function KpiCard({
             </span>
           )}
         </span>
-        {extra && <span className="mt-2 block truncate text-xs text-muted">{extra}</span>}
+        {extra && <span className="mt-2 block min-w-0 text-xs text-muted">{extra}</span>}
       </span>
       {/* No aria-label: it would replace the figure; screen readers read the tile, then this. */}
       <span className="sr-only"> – open details</span>
