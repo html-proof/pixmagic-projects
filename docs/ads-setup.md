@@ -191,6 +191,11 @@ The app builds every address from `APP_URL` (`https://bizinsights.io`), so they 
 The old `d2mr8m2p1qkh58.cloudfront.net` and `insights.imeseban.workers.dev` callbacks are never sent; remove them
 (Google's branding verification accepts only verified domains).
 
+In the Meta app dashboard, the Valid OAuth Redirect URIs and App domains fields are token lists: type the value, then
+**click the suggestion that appears under the field**, then Save Changes. Pressing Enter shows a chip and a "Changes
+saved" toast, but a reload shows the list unchanged (seen three times on 2026-10-19). Check with the Redirect URI
+Validator at the top of the Facebook Login for Business settings page.
+
 **Local development.** Don't add localhost to "Insights web": Google wants a separate project per deployment tier.
 Create an OAuth client in a separate Cloud project and register `<APP_URL>/api/ads/<provider>/callback` for the
 local server you run: `http://localhost:8787` for the usual local server (`apps/aws/.env.example`), and
