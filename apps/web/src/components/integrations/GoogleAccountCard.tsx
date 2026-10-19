@@ -19,12 +19,13 @@ const when = (t: string | null) => (t ? new Date(t).toLocaleDateString() : "neve
 
 /**
  * "Google Account" on Connect your business: signing in to bizinsights with Google (through the
- * user pool), linked to this account from here. Shown only while the deployment offers Google
- * sign-in (GET /api/auth/config); otherwise nothing, since there is nothing to do. Settings →
+ * user pool), linked to this account from here. While the deployment doesn't offer Google sign-in
+ * (GET /api/auth/config) the card says "Not configured" and offers nothing to press. Settings →
  * Security (components/auth/AccountSecurity.tsx) is where sign-in methods are removed.
  */
 export function GoogleAccountCard() {
-  const [offered, setOffered] = useState<boolean | null>(null);
+  // null while asking; "error" when the answer couldn't be read.
+  const [offered, setOffered] = useState<boolean | "error" | null>(null);
   const [msg, setMsg] = useState<Note | null>(null);
   const [asking, setAsking] = useState(false);
   const [password, setPassword] = useState("");
@@ -32,7 +33,7 @@ export function GoogleAccountCard() {
   const [missing, setMissing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [leaving, setLeaving] = useState(false);
-  const account = useApi<AccountInfo>(offered ? "/auth/account" : null);
+  const account = useApi<AccountInfo>(offered === true ? "/auth/account" : null);
   const a = account.data;
 
   useEffect(() => {
@@ -40,7 +41,7 @@ export function GoogleAccountCard() {
     authConfig()
       .then((c) => live && setOffered(c.providers.google))
       // Can't tell: no card, rather than one that may offer what isn't there.
-      .catch(() => live && setOffered(false));
+      .catch(() => live && setOffered("error"));
     return () => {
       live = false;
     };
@@ -75,7 +76,28 @@ export function GoogleAccountCard() {
   }, [asking]);
 
   const alert = msg && <NoteAlert note={msg} onDismiss={() => setMsg(null)} />;
-  if (!offered) return alert || null;
+  if (offered === false)
+    return (
+      <>
+        {alert}
+        <IntegrationCard
+          testid="int-google-account"
+          state="not_configured"
+          icon={<GoogleIcon size={22} />}
+          name="Google Account"
+          sub="Secure account authentication: sign in to bizinsights with Google"
+          badge={<StatusBadge label="Not configured" tone="neutral" state="not_configured" />}
+          actions={
+            <Link className="btn-secondary" href="/settings/security">
+              Manage sign-in methods
+            </Link>
+          }
+        >
+          <p className="text-muted">Sign-in with Google isn&apos;t switched on for bizinsights yet. You sign in with your email address for now.</p>
+        </IntegrationCard>
+      </>
+    );
+  if (offered !== true) return alert || null;
 
   const google = a?.methods.filter((m) => m.method === "google") ?? [];
   const state = !a ? (account.error ? "unknown" : "checking") : google.length ? "linked" : "not_linked";
