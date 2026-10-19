@@ -72,9 +72,15 @@ export const LIMITS = {
   resync: { max: 1, windowSec: 300 },
   /** Optional-scope refresh/revoke, per store: one Shopify call each. */
   scopes: { max: 3, windowSec: 10 },
+  /**
+   * Starting an ad account sign-in ("Continue with Meta / Google Ads / AdSense"), per user: each writes
+   * a coordinator item, and its callback lists the login's accounts against the platform's quota (Google
+   * Ads operations are shared by every merchant). The callback needs a fresh one, so this bounds it too.
+   */
+  adsConnect: { max: 10, windowSec: 600 },
   /** Ad accounts "Sync now", per store and user: each queues a sync per connected account. */
   adsSync: { max: 6, windowSec: 600 },
-  /** Meta Ads report, per store and user: each one is a few Meta calls (a cached answer doesn't count). */
+  /** Meta, Google Ads and AdSense reports, per store and user: each one is a few platform calls (a cached answer doesn't count). */
   adsReport: { max: 30, windowSec: 600 },
   /** WhatsApp: connecting a number (Meta calls each), per store. */
   waConnect: { max: 10, windowSec: 600 },
