@@ -151,6 +151,7 @@ export default function LoginPage() {
               if (errorCode(err) !== "mfa_expired") throw err;
               setAppCode(false);
               setPassword("");
+              if (codeSignIn === "code") setCodeSignIn("available");
               setError({ text: authErrorMessage(err) });
             }
           }}
@@ -168,6 +169,7 @@ export default function LoginPage() {
           onClick={() => {
             setAppCode(false);
             setPassword("");
+            if (codeSignIn === "code") setCodeSignIn("available");
           }}
         >
           Back to sign in

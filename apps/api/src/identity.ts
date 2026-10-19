@@ -88,8 +88,10 @@ export async function resolveUser(claims: IdentityClaims, opts: ResolveOptions):
   if (linked) {
     let user = linked.user;
     const data: { email?: string; emailVerified?: boolean } = {};
-    // Cognito is the authority on the address once it has verified it (an email change, say).
-    if (claims.emailVerified && email !== user.email && linked.email !== email) data.email = email;
+    // Cognito is the authority on the address once it has verified it (an email change, say): when
+    // this identity's address was the account's. One linked under another address (Google, from
+    // Settings) never renames the account.
+    if (claims.emailVerified && email !== user.email && linked.email !== email && linked.email === user.email) data.email = email;
     if (claims.emailVerified && !user.emailVerified) data.emailVerified = true;
     if (Object.keys(data).length) {
       user = await systemDb.user.update({ where: { id: user.id }, data }).catch((err: unknown) => {

@@ -151,6 +151,20 @@ describe("linking Google from Settings", () => {
     expect(await systemDb.user.count()).toBe(1);
   });
 
+  it("never renames the account after a Google account linked under another address, while a Google-only account follows Google's", async () => {
+    const browser = testBrowser(ctx);
+    const user = await browser.signIn("u1", "owner@shop.com");
+    await linkGoogle(browser, { id: "g-1", email: "owner.personal@gmail.com" });
+    ctx.auth.users.get("google_g-1")!.email = "owner.renamed@gmail.com";
+    expect((await googleSignIn({ id: "g-1", email: "owner.renamed@gmail.com" })).user.id).toBe(user.id);
+    expect((await systemDb.user.findUniqueOrThrow({ where: { id: user.id } })).email).toBe("owner@shop.com");
+
+    const { user: solo } = await googleSignIn({ id: "g-2", email: "solo@gmail.com" });
+    ctx.auth.users.get("google_g-2")!.email = "solo.renamed@gmail.com";
+    await googleSignIn({ id: "g-2", email: "solo.renamed@gmail.com" });
+    expect((await systemDb.user.findUniqueOrThrow({ where: { id: solo.id } })).email).toBe("solo.renamed@gmail.com");
+  });
+
   it("keeps the page's query and refuses anywhere but this site", async () => {
     const browser = testBrowser(ctx);
     await browser.signIn("u1", "owner@shop.com");
