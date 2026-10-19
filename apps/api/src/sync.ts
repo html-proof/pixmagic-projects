@@ -36,13 +36,15 @@ export const AUTO_REFRESH = { ordersEverySec: 300, catalogEverySec: 1800, retryE
 
 /**
  * Whether the store has orders in the import window that were stored without something only a
- * full read gives: where the customer came from, or Shopify's sales records (orders stored before
- * the sales totals were read from them, or known only from a webhook whose read failed).
+ * full read gives: where the customer came from, Shopify's sales records (orders stored before
+ * the sales totals were read from them, or known only from a webhook whose read failed), or when
+ * the order was processed (stored before that was read: the day it counts on, with its gift-card
+ * flag and its sales' agreements, which a read fills in too).
  */
 async function needsReread(storeId: string): Promise<boolean> {
   const since = new Date(Date.now() - AUTO_REFRESH.sourcesDays * 86_400_000);
   return !!(await systemDb.order.findFirst({
-    where: { storeId, shopifyCreatedAt: { gte: since }, OR: [{ trafficSource: null }, { salesUpdatedAt: null }] },
+    where: { storeId, shopifyCreatedAt: { gte: since }, OR: [{ trafficSource: null }, { salesUpdatedAt: null }, { shopifyProcessedAt: null }] },
     select: { id: true },
   }));
 }

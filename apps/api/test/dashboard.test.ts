@@ -790,6 +790,18 @@ describe("a store whose sync stopped", () => {
     expect(syncProblem("Store x.myshopify.com is not connected")).toBe("access");
     expect(syncProblem("Shopify 4020 something")).toBe("other");
     expect(syncProblem(null)).toBe("other");
+    // The worker's NotApprovedError, from Shopify's GraphQL answer or a collection it withheld.
+    expect(syncProblem("Shopify hasn't approved the app for protected customer data yet: Shopify GraphQL error: This app is not approved to access the Order object.")).toBe("not_approved");
+    expect(syncProblem("Shopify withheld orders (access denied). The app needs Shopify's approval for protected customer data before it can read them.")).toBe("not_approved");
+  });
+
+  it("tells Settings → Stores why too, so its card doesn't send everyone to reconnect", async () => {
+    const { a, ws, store } = await owner();
+    const list = async () => (await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores`, headers: a.headers })).json().stores;
+    expect((await list())[0]).toMatchObject({ id: store.id, syncProblem: null });
+    await systemDb.store.update({ where: { id: store.id }, data: { status: "error" } });
+    await systemDb.syncJob.create({ data: { workspaceId: ws, storeId: store.id, kind: "orders", status: "failed", error: "Shopify hasn't approved the app for protected customer data yet: x" } });
+    expect((await list())[0]).toMatchObject({ id: store.id, status: "error", syncProblem: "not_approved" });
   });
 
   it("says why, from Shopify's own answer: a frozen store isn't the same as lost access", async () => {

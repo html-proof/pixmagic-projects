@@ -274,6 +274,29 @@ describe("Shopify's sales records", () => {
     expect(normalizeGraphqlOrder(gqlOrder({ test: true })).test).toBe(true);
   });
 
+  // Found 2026-10-19 by checking a dev store of seeded orders against its own ShopifyQL sales report.
+  it("date an order by when Shopify processed it, and tell gift-card-only orders", () => {
+    const line = (id: number, isGiftCard: boolean) => ({ id: `gid://shopify/LineItem/${id}`, title: "x", quantity: 1, isGiftCard, originalUnitPriceSet: m("10"), totalDiscountSet: m("0") });
+    const g = normalizeGraphqlOrder(gqlOrder({ processedAt: "2025-12-30T10:00:00Z" }));
+    // Imported on 1 Jan for a sale on 30 Dec: Shopify's reports put it on 30 Dec.
+    expect(g.processedAt).toEqual(new Date("2025-12-30T10:00:00Z"));
+    expect(g.createdAt).toEqual(new Date("2026-01-01T00:00:00Z"));
+    expect(normalizeGraphqlOrder(gqlOrder()).processedAt).toEqual(new Date("2026-01-01T00:00:00Z"));
+    expect(g.giftCardOnly).toBe(false);
+    expect(normalizeGraphqlOrder(gqlOrder({ lineItems: { pageInfo: { hasNextPage: false }, nodes: [line(1, true), line(2, true)] } })).giftCardOnly).toBe(true);
+    expect(normalizeGraphqlOrder(gqlOrder({ lineItems: { pageInfo: { hasNextPage: false }, nodes: [line(1, true), line(2, false)] } })).giftCardOnly).toBe(false);
+    // A truncated list could hide the item that isn't a gift card: not decided until it is whole.
+    expect(normalizeGraphqlOrder(gqlOrder({ lineItems: { pageInfo: { hasNextPage: true }, nodes: [line(1, true)] } })).giftCardOnly).toBe(false);
+
+    const rest = { id: 9, created_at: "2026-03-05T00:00:00Z", processed_at: "2026-03-01T09:00:00Z", line_items: [{ id: 1, title: "Card", quantity: 1, price: "50.00", gift_card: true }] };
+    const r = normalizeRestOrder(rest);
+    expect(r.processedAt).toEqual(new Date("2026-03-01T09:00:00Z"));
+    expect(r.giftCardOnly).toBe(true);
+    // The estimate of the order as placed is dated as Shopify's own agreement will be.
+    expect(r.provisionalSales).toMatchObject([{ happenedAt: new Date("2026-03-01T09:00:00Z") }]);
+    expect(normalizeRestOrder({ ...rest, processed_at: undefined }).processedAt).toEqual(new Date("2026-03-05T00:00:00Z"));
+  });
+
   it("REST orders carry none, but a provisional estimate of the order as placed", () => {
     const rest = {
       id: 9,

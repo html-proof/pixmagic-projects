@@ -47,10 +47,18 @@ export interface NormalizedOrder {
   name: string;
   currency: string;
   createdAt: Date;
+  /**
+   * When the sale happened (Order.processedAt): the date Shopify's reports put the order on. The
+   * same moment as createdAt for an order placed in the store; earlier for one imported, synced
+   * from POS offline or brought in by a marketplace app. createdAt when the source has none.
+   */
+  processedAt: Date;
   updatedAt: Date;
   cancelledAt: Date | null;
   /** A test order: never stored (Shopify's reports leave test orders out), and removed if it was. */
   test: boolean;
+  /** Every item a gift card: Shopify's reports count neither the order nor its customer. */
+  giftCardOnly: boolean;
   financialStatus: string | null;
   subtotal: number;
   totalDiscounts: number;
@@ -205,6 +213,9 @@ const earliest = (values: Array<string | null | undefined>): Date | null => {
 
 const codes = (list: Array<string | null | undefined>): string[] => list.map(text).filter((c): c is string => c !== null);
 
+/** An order whose every item is a gift card (none: not one), from its line items' gift-card flags. */
+const giftCardsOnly = (flags: Array<boolean | null | undefined>): boolean => flags.length > 0 && flags.every((f) => f === true);
+
 /**
  * REST `fulfillment_status` (null | fulfilled | partial | restocked) mapped onto the
  * GraphQL displayFulfillmentStatus vocabulary used everywhere else.
@@ -246,7 +257,8 @@ export function restSalesKey(o: RestOrder): string {
  */
 export function restProvisionalSales(o: RestOrder): NormalizedSale[] {
   if (o.cancelled_at) return [];
-  const happenedAt = date(o.created_at);
+  // The order's own agreement happened when the order was processed.
+  const happenedAt = date(o.processed_at ?? o.created_at);
   const withTax = o.taxes_included !== true;
   const taxOf = (lines: Array<{ price?: string | number | null }> | null | undefined) => (lines ?? []).reduce((a, t) => a + num(t.price), 0);
   const items = (o.line_items ?? []).map((li): NormalizedSale => {
@@ -289,9 +301,11 @@ export function normalizeRestOrder(o: RestOrder): NormalizedOrder {
     name: String(o.name ?? o.id),
     currency: o.currency ?? "USD",
     createdAt: date(o.created_at),
+    processedAt: date(o.processed_at ?? o.created_at),
     updatedAt: date(o.updated_at ?? o.created_at),
     cancelledAt: o.cancelled_at ? date(o.cancelled_at) : null,
     test: o.test === true,
+    giftCardOnly: giftCardsOnly((o.line_items ?? []).map((li) => li.gift_card)),
     financialStatus: o.financial_status ?? null,
     subtotal: num(o.subtotal_price),
     totalDiscounts: num(o.total_discounts),
@@ -383,9 +397,13 @@ export function normalizeGraphqlOrder(o: GraphqlOrder): NormalizedOrder {
     name: o.name,
     currency: o.currencyCode ?? "USD",
     createdAt: date(o.createdAt),
+    processedAt: date(o.processedAt ?? o.createdAt),
     updatedAt: date(o.updatedAt ?? o.createdAt),
     cancelledAt: o.cancelledAt ? date(o.cancelledAt) : null,
     test: o.test === true,
+    // Read off whole line items only: a truncated list (completed later by the detail query) could
+    // hide the one item that isn't a gift card.
+    giftCardOnly: o.lineItems?.pageInfo?.hasNextPage === true ? false : giftCardsOnly((o.lineItems?.nodes ?? []).map((li) => li.isGiftCard)),
     financialStatus: o.displayFinancialStatus?.toLowerCase() ?? null,
     subtotal: money(o.subtotalPriceSet),
     totalDiscounts: money(o.totalDiscountsSet),

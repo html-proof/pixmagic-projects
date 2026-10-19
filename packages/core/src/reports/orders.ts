@@ -18,11 +18,12 @@ const OPEN_FULFILLMENT_STATUSES = [
 /**
  * Each order's net sales from the sales that happened in the range (before tax, after discounts
  * and returns), for the orders placed in the range or with sales in it. `placed` says which of
- * them count as orders of the range. Grouped by the caller, so every grouping adds up to net sales.
+ * them count as orders of the range (not orders of gift cards only, which Shopify's reports don't
+ * count). Grouped by the caller, so every grouping adds up to net sales.
  */
 function salesByOrder(ws: string, storeId: string, r: DateRange) {
   return Prisma.sql`
-    SELECT o.*, (o.local_day BETWEEN ${r.from} AND ${r.to}) AS placed, COALESCE(v.sales, 0) AS sales
+    SELECT o.*, (o.local_day BETWEEN ${r.from} AND ${r.to} AND NOT o.gift_card_only) AS placed, COALESCE(v.sales, 0) AS sales
     FROM orders o
     LEFT JOIN (
       SELECT s.order_id, SUM(${SALE_VALUE}) AS sales
@@ -125,16 +126,16 @@ export async function traffic(tx: Tx, { ws, storeId }: Scope, r: DateRange) {
 }
 
 /**
- * Orders by weekday and hour in the store's time zone. shopify_created_at is a
- * `timestamp` (no zone) holding UTC: `AT TIME ZONE 'UTC'` makes it a timestamptz,
- * the second `AT TIME ZONE <store tz>` turns that into store-local wall time
- * (DST-aware, per order).
+ * Orders by weekday and hour in the store's time zone, when they happened (processed; created
+ * for an order stored before that was read). The timestamps are `timestamp` (no zone) holding
+ * UTC: `AT TIME ZONE 'UTC'` makes one a timestamptz, the second `AT TIME ZONE <store tz>` turns
+ * that into store-local wall time (DST-aware, per order).
  */
 export async function orderTiming(tx: Tx, { ws, storeId }: Scope, r: DateRange, timeZone: string) {
   const rows = await tx.$queryRaw<Array<{ dow: number; hour: number; orders: number }>>`
     SELECT EXTRACT(ISODOW FROM t.local_ts)::int AS dow, EXTRACT(HOUR FROM t.local_ts)::int AS hour, COUNT(*)::int AS orders
     FROM (
-      SELECT (o.shopify_created_at AT TIME ZONE 'UTC') AT TIME ZONE ${timeZone}::text AS local_ts
+      SELECT (COALESCE(o.shopify_processed_at, o.shopify_created_at) AT TIME ZONE 'UTC') AT TIME ZONE ${timeZone}::text AS local_ts
       FROM orders o
       WHERE o.workspace_id = ${ws} AND o.store_id = ${storeId}
         AND o.cancelled_at IS NULL AND o.local_day BETWEEN ${r.from} AND ${r.to}

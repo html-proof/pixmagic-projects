@@ -663,9 +663,16 @@ model Order {
   shopifyId           String          @map("shopify_id")
   name                String
   currency            String
+  /// Store-local day of shopifyProcessedAt (shopifyCreatedAt while that is null), as Shopify's reports date the order.
   localDay            String          @map("local_day")
   shopifyCreatedAt    DateTime        @map("shopify_created_at")
+  /// Order.processedAt: when the sale happened, the date Shopify's reports use. Earlier than
+  /// shopifyCreatedAt for an imported, POS-offline or marketplace order. Null on orders stored
+  /// before it was read (the re-read fills it in).
+  shopifyProcessedAt  DateTime?       @map("shopify_processed_at")
   shopifyUpdatedAt    DateTime        @map("shopify_updated_at")
+  /// Every item a gift card. Shopify's reports count neither the order nor its customer.
+  giftCardOnly        Boolean         @default(false) @map("gift_card_only")
   cancelledAt         DateTime?       @map("cancelled_at")
   financialStatus     String?         @map("financial_status")
   subtotal            Decimal         @db.Decimal(18, 2)
@@ -877,7 +884,13 @@ model DailyStoreMetrics {
   taxes                   Decimal @default(0) @db.Decimal(18, 2)
   /// Net sales + shipping + taxes + duties and fees: Shopify's "Total sales".
   totalSales              Decimal @default(0) @map("total_sales") @db.Decimal(18, 2)
+  /// Orders placed that day, gift-card-only orders left out (as Shopify's reports count them).
   orders                  Int     @default(0)
+  /// What those orders sold on the day they were placed (items after discounts, before tax; no gift
+  /// cards, no edits made on a later day): average order value's numerator. Null on rows from before
+  /// it was kept.
+  orderValue              Decimal? @map("order_value") @db.Decimal(18, 2)
+  /// Items sold less items returned, gift cards included (Shopify's net items sold).
   units                   Int     @default(0)
   ordersWithCustomer      Int     @default(0) @map("orders_with_customer")
   returningCustomerOrders Int     @default(0) @map("returning_customer_orders")
@@ -931,6 +944,9 @@ model FunnelVisit {
 // "Continue with Meta/Google Ads/Google AdSense". One row per account. The token belongs to the
 // person who connected: every account they connected in one go shares it, encrypted with the same
 // AAD (`ads:<provider>:<storeId>:<kind>`).
+// Columns marked @ignore exist in the database (migration 20261019120000) but not yet in the client:
+// they ship before the code that reads them, so a deploy never queries a column its migration hasn't
+// added yet (the workflow migrates after the new code is live). The next change removes @ignore.
 model AdConnection {
   id                   String    @id @default(cuid())
   workspaceId          String    @map("workspace_id")
@@ -944,10 +960,36 @@ model AdConnection {
   loginCustomerId      String?   @map("login_customer_id")
   /** Shown on the dashboard and synced. Turned off from Settings without losing the connection. */
   enabled              Boolean   @default(true)
-  /** "active" | "reconnect" (access ended: connect again) | "error" (see last_error). */
+  /**
+   * "active" | "reconnect" (access ended: connect again) | "permission" (this login lost access to
+   * this one account; connect with a login that has it) | "unavailable" (the platform won't report on
+   * the account: closed, disabled, sign-up unfinished) | "error" (a failure a retry may fix).
+   * AD_CONNECTION_STATUSES in @app/shared/ads.
+   */
   status               String    @default("active")
+  /** Why it isn't active, as a code the UI words (AD_ERROR_CODES in @app/shared/ads); null when active. */
+  errorCode            String?   @map("error_code") @ignore
+  /** The platform's own reason, through providerDetail(): for the logs and support, never shown raw. */
   lastError            String?   @map("last_error")
   lastSyncedAt         DateTime? @map("last_synced_at")
+  /**
+   * The ad account's own health at the platform, normalized (AD_ACCOUNT_STATUSES in @app/shared/ads):
+   * Meta's account_status, AdSense's state and pending tasks. Null until read.
+   */
+  accountStatus        String?   @map("account_status") @ignore
+  /** What the platform says about that status (Meta's disable reason, AdSense's pending tasks). */
+  accountStatusDetail  String?   @map("account_status_detail") @ignore
+  /** AdSense: the sites (DOMAIN_CODE) whose earnings belong to this store; empty = every site. */
+  sites                String[]  @default([]) @ignore
+  /**
+   * The last day (the account's own, YYYY-MM-DD) up to which every day from history_from on is
+   * stored without a gap. A sync that leaves a gap after it fetches the gap first.
+   */
+  syncedThrough        String?   @map("synced_through") @ignore
+  /** A sync was asked for (connect, Refresh) and hasn't finished yet: the card says "Synchronizing". */
+  syncRequestedAt      DateTime? @map("sync_requested_at") @ignore
+  /** Syncs that failed in a row; reset by one that works. Failing accounts are tried less often. */
+  consecutiveFailures  Int       @default(0) @map("consecutive_failures") @ignore
   /**
    * The first day (the account's own, YYYY-MM-DD) from which every day's figures are stored: the
    * start of the earliest window a sync fetched in full (the first sync fetches 90 days), keeping
@@ -965,6 +1007,8 @@ model AdConnection {
   grantedScopes        String[]  @default([]) @map("granted_scopes")
   createdAt            DateTime  @default(now()) @map("created_at")
   updatedAt            DateTime  @updatedAt @map("updated_at")
+  campaignDays         AdCampaignDaily[]
+  adsenseDays          AdsenseDaily[]
 
   @@unique([storeId, provider, accountId])
   @@index([workspaceId])
@@ -984,12 +1028,20 @@ model AdCampaignDaily {
   day             String
   spend           Decimal  @default(0) @db.Decimal(18, 2)
   impressions     Int      @default(0)
+  /** Every click the platform counts (Meta's "clicks (all)" include likes, comments and profile clicks). */
   clicks          Int      @default(0)
+  /** Clicks on the ad's link: Meta's inline_link_clicks, Google's clicks. Null until read (rows from before 2026-10-19). */
+  linkClicks      Int?     @map("link_clicks") @ignore
+  /** The platform's own conversions: Meta's purchases, Google's every primary conversion action (leads, calls...). */
   conversions     Decimal  @default(0) @db.Decimal(18, 2)
   conversionValue Decimal  @default(0) @map("conversion_value") @db.Decimal(18, 2)
+  /** Purchases only, as the platform credits them (Google: conversion actions of category PURCHASE). Null until read. */
+  purchases       Decimal? @db.Decimal(18, 2) @ignore
+  purchaseValue   Decimal? @map("purchase_value") @db.Decimal(18, 2) @ignore
   leads           Int      @default(0)
   currency        String?
   updatedAt       DateTime @updatedAt @map("updated_at")
+  connection      AdConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
 
   @@id([connectionId, campaignId, day])
   @@index([workspaceId])
@@ -1013,6 +1065,7 @@ model AdsenseDaily {
   clicks       Int      @default(0)
   currency     String?
   updatedAt    DateTime @updatedAt @map("updated_at")
+  connection   AdConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
 
   @@id([connectionId, site, day])
   @@index([workspaceId])

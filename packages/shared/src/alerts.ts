@@ -56,7 +56,12 @@ const SYNC_WHAT: Record<string, string> = {
 
 const STILL_CORRECT = "The figures you already see are still correct, and the next scheduled sync will try again.";
 
-function syncWording(kind: string, outcome: "failed" | "stalled", severity: AlertSeverity): Omit<AlertWording, "severity"> {
+/** Shopify approves an app's access to protected customer data (orders carry customer details) before it may read them on merchants' stores. */
+const NOT_APPROVED_BODY =
+  "Shopify has to approve an app before it can read orders, which hold customer details, on merchants' stores, and bizinsights is still waiting on that approval. There's nothing to do on your side, and reconnecting won't change it: your orders import by themselves once Shopify approves.";
+
+function syncWording(kind: string, outcome: "failed" | "stalled" | "not_approved", severity: AlertSeverity): Omit<AlertWording, "severity"> {
+  if (outcome === "not_approved") return { area: "shopify", title: `Shopify hasn't approved bizinsights to read ${SYNC_WHAT[kind] ?? "your store data"} yet`, body: NOT_APPROVED_BODY };
   if (kind === "install_pixel") {
     return {
       area: "shopify",
@@ -81,8 +86,8 @@ export function describeAlert(alert: { code: string; severity: string; message: 
   const severity = (SEVERITIES.includes(alert.severity) ? alert.severity : "warning") as AlertSeverity;
   const { code, message } = alert;
 
-  const sync = /^sync_(.+)_(failed|stalled)$/.exec(code);
-  if (sync) return { severity, ...syncWording(sync[1]!, sync[2] as "failed" | "stalled", severity) };
+  const sync = /^sync_(.+)_(failed|stalled|not_approved)$/.exec(code);
+  if (sync) return { severity, ...syncWording(sync[1]!, sync[2] as "failed" | "stalled" | "not_approved", severity) };
   if (code === "webhook_failed") {
     return {
       severity,

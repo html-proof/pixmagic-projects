@@ -3,7 +3,7 @@
  * This file re-exports what the rest of the worker, @app/worker and the tests use, so no import
  * path changes; the helpers the modules share among themselves stay inside handlers/.
  */
-export { type WorkerDeps, UnrecoverableError, AccessRevokedError } from "./handlers/common.js";
+export { type WorkerDeps, UnrecoverableError, AccessRevokedError, NotApprovedError } from "./handlers/common.js";
 export { shopifyReader } from "./handlers/shopifyRead.js";
 export { BACKFILL_DAYS, AGG_EAGER_ORDERS, ordersSearch, importedFrom, pixelIngestUrl, runSync } from "./handlers/sync.js";
 export { processWebhook } from "./handlers/webhooks.js";

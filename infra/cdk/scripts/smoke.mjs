@@ -196,13 +196,27 @@ await check("database is private (no public address, not reachable)", async () =
   return `${db.DBInstanceClass}, backups ${db.BackupRetentionPeriod} days, deletion protection ${db.DeletionProtection}`;
 });
 await check("buckets are private", async () => {
+  const unanswered = [];
   for (const kind of ["payloads", "artifacts", "site"]) {
     const name = `insights-${envName}-${kind}-605411278365`;
+    // AWS's own answer: with all four settings on, S3 ignores public ACLs and refuses anonymous
+    // access whatever the bucket policy says.
     const pab = aws(["s3api", "get-public-access-block", "--bucket", name]).PublicAccessBlockConfiguration;
     expect(Object.values(pab).every(Boolean), `${name} public access block`);
-    const r = await get(`https://${name}.s3.${region}.amazonaws.com/`);
-    expect(r.status === 403, `${name} anonymous list: ${r.status}`);
+    // And what anyone on the internet gets. Any answer but 403 fails. The runner's network sometimes
+    // can't reach S3's regional endpoint at all (connect timeouts, 2026-10-18): a request with no
+    // answer proves nothing either way, so it is asked again once and then left to the check above.
+    const url = `https://${name}.s3.${region}.amazonaws.com/`;
+    let r = null;
+    for (let attempt = 0; attempt < 2 && !r; attempt++) {
+      r = await get(url).catch((err) => {
+        if (attempt === 1) unanswered.push(`${kind}: ${err.cause?.code ?? err.name}`);
+        return null;
+      });
+    }
+    if (r) expect(r.status === 403, `${name} anonymous list: ${r.status}`);
   }
+  return unanswered.length ? `S3 gave no answer from here (${unanswered.join(", ")}); public access block verified` : "";
 });
 await check("functions healthy (live alias, no errors in the last hour)", async () => {
   const end = new Date();

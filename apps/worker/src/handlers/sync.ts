@@ -256,7 +256,7 @@ export async function runSync(data: SyncJobData, deps: WorkerDeps) {
   // Except a short orders refresh on a store whose full import never completed: that import is
   // still the open problem, and the store stays in `error` for it (see finishBackfill).
   if (!(data.kind === "orders" && data.sinceDays && !store.lastSyncedAt)) {
-    await resolveAlerts(store.id, [`sync_${data.kind}_failed`, `sync_${data.kind}_stalled`]);
+    await resolveAlerts(store.id, [`sync_${data.kind}_failed`, `sync_${data.kind}_stalled`, `sync_${data.kind}_not_approved`]);
   }
   return { ok: true };
 }
