@@ -14,6 +14,7 @@ import {
   pauseGoogleAds,
   releaseUserAdGrants,
   resetEnvCache,
+  syncAdConnection,
   type AdsSyncData,
   type FetchLike,
 } from "@app/core";
@@ -81,14 +82,17 @@ const today = () => localDay(new Date(), "UTC");
 const row = (id: string) => systemDb.adConnection.findUniqueOrThrow({ where: { id } });
 const sent = () => queues.sent.sync as unknown as AdsSyncData[];
 
-/** Meta answering insights with one campaign-day, and recording the date ranges asked for. */
-function metaInsights(ranges: Array<{ since: string; until: string }>, extra: (u: URL) => Response | null = () => null): FetchLike {
+/**
+ * Meta answering insights with no rows, and recording the date ranges asked for: the campaigns' in
+ * `ranges`, the account's own totals (each window reads both) in `accountRanges`.
+ */
+function metaInsights(ranges: Array<{ since: string; until: string }>, extra: (u: URL) => Response | null = () => null, accountRanges: Array<{ since: string; until: string }> = []): FetchLike {
   return async (input) => {
     const u = new URL(String(input));
     const other = extra(u);
     if (other) return other;
     if (u.pathname.endsWith("/insights")) {
-      ranges.push(JSON.parse(u.searchParams.get("time_range")!));
+      (u.searchParams.get("level") === "account" ? accountRanges : ranges).push(JSON.parse(u.searchParams.get("time_range")!));
       return json({ data: [] });
     }
     return json({ error: { message: `unexpected ${u.pathname}`, code: 100 } }, 400);
@@ -98,14 +102,23 @@ function metaInsights(ranges: Array<{ since: string; until: string }>, extra: (u
 describe("what a failed sync leaves on its connection", () => {
   it("a failure that isn't the platform's keeps no text, only 'internal', and only once the retries ran out", async () => {
     const conn = await connection("google");
-    // Google answers something that isn't a report: the code reading it breaks (a TypeError).
-    fetchImpl = async () => json({ unexpected: true });
+    // Google's report is fine; storing it isn't: the figure doesn't fit the column, and the database's
+    // error (which names tables and types) must not reach the connection.
+    fetchImpl = async () => json([{ results: [{ campaign: { id: "5", name: "Brand" }, segments: { date: today() }, metrics: { costMicros: "1e30", clicks: "4", impressions: "10" } }] }]);
     const first = await run({ kind: "ads", connectionId: conn.id, since: today(), until: today() }, 1);
     expect(first.retried).not.toBeNull();
     expect((await row(conn.id)).status).toBe("active");
     const last = await run({ kind: "ads", connectionId: conn.id, since: today(), until: today() }, 6);
     expect(last.acked).toBe(true);
     expect(await row(conn.id)).toMatchObject({ status: "error", errorCode: "internal", lastError: null, consecutiveFailures: 1 });
+  });
+
+  it("an answer from Google that isn't a report is Google's failure: recorded at once as a refusal, not retried", async () => {
+    const conn = await connection("google");
+    fetchImpl = async () => json({ unexpected: true });
+    const m = await run({ kind: "ads", connectionId: conn.id, since: today(), until: today() }, 1);
+    expect(m).toMatchObject({ acked: true, retried: null });
+    expect(await row(conn.id)).toMatchObject({ status: "error", errorCode: "provider_error", consecutiveFailures: 1 });
   });
 
   it("the platform's own reason is kept without links or long ids, and a refusal isn't retried", async () => {
@@ -144,20 +157,31 @@ describe("storing an account's days", () => {
   });
 
   it("a disconnect while the sync runs leaves no days behind, and nothing is retried", async () => {
+    const d1 = addDays(today(), -1);
+    let calls = 0;
+    /** The merchant presses Disconnect while the platform is still answering. */
+    const disconnectingDuring = (provider: "meta" | "adsense", id: string): FetchLike => async () => {
+      // Meta's sync reads the campaigns and the account's own totals: the row goes with the first
+      // answer, and the second finds it gone already.
+      calls++;
+      await systemDb.adConnection.deleteMany({ where: { id } });
+      if (provider === "meta") return json({ data: [{ campaign_id: "7", campaign_name: "Spring", date_start: d1, spend: "5", impressions: "9", clicks: "3" }] });
+      return json({
+        headers: [{ name: "DATE" }, { name: "DOMAIN_CODE" }, { name: "ESTIMATED_EARNINGS", type: "METRIC_CURRENCY", currencyCode: "AUD" }, { name: "PAGE_VIEWS" }, { name: "IMPRESSIONS" }, { name: "CLICKS" }],
+        rows: [{ cells: [{ value: d1 }, { value: "shop.example.com" }, { value: "7.25" }, { value: "30" }, { value: "60" }, { value: "1" }] }],
+      });
+    };
     for (const provider of ["meta", "adsense"] as const) {
+      // Storing the days meets the foreign key: the sync ends as "gone", not as a failure.
+      calls = 0;
+      const direct = await connection(provider);
+      expect(await syncAdConnection(direct.id, d1, today(), disconnectingDuring(provider, direct.id), { queues, coord })).toEqual({ skipped: true, reason: "gone" });
+      expect(calls).toBe(provider === "meta" ? 2 : 1);
+      // Through the queue: acked, with nothing to retry and nothing queued after it.
       const conn = await connection(provider);
-      const d1 = addDays(today(), -1);
-      fetchImpl = async () => {
-        // The merchant presses Disconnect while the platform is still answering.
-        await systemDb.adConnection.delete({ where: { id: conn.id } });
-        if (provider === "meta") return json({ data: [{ campaign_id: "7", campaign_name: "Spring", date_start: d1, spend: "5", impressions: "9", clicks: "3" }] });
-        return json({
-          headers: [{ name: "DATE" }, { name: "DOMAIN_CODE" }, { name: "ESTIMATED_EARNINGS", type: "METRIC_CURRENCY", currencyCode: "AUD" }, { name: "PAGE_VIEWS" }, { name: "IMPRESSIONS" }, { name: "CLICKS" }],
-          rows: [{ cells: [{ value: d1 }, { value: "shop.example.com" }, { value: "7.25" }, { value: "30" }, { value: "60" }, { value: "1" }] }],
-        });
-      };
-      const m = await run({ kind: "ads", connectionId: conn.id, since: d1, until: today() });
-      expect(m).toMatchObject({ acked: true, retried: null });
+      fetchImpl = disconnectingDuring(provider, conn.id);
+      expect(await run({ kind: "ads", connectionId: conn.id, since: d1, until: today() })).toEqual({ acked: true, retried: null });
+      expect(sent()).toEqual([]);
     }
     expect(await systemDb.adCampaignDaily.count()).toBe(0);
     expect(await systemDb.adsenseDaily.count()).toBe(0);
@@ -185,16 +209,20 @@ describe("holes and history", () => {
   it("a hole since the last day stored is fetched before the days asked for (an account back from 45 days in reconnect)", async () => {
     const conn = await connection("meta", { historyFrom: addDays(today(), -200), syncedThrough: addDays(today(), -45), lastSyncedAt: new Date(Date.now() - 45 * 86_400_000) });
     const ranges: Array<{ since: string; until: string }> = [];
-    fetchImpl = metaInsights(ranges);
+    const accountRanges: Array<{ since: string; until: string }> = [];
+    fetchImpl = metaInsights(ranges, undefined, accountRanges);
     await run({ kind: "ads", connectionId: conn.id, since: addDays(today(), -2), until: today() });
+    // One window, read once by campaign and once for the account's own totals.
     expect(ranges).toEqual([{ since: addDays(today(), -44), until: today() }]);
+    expect(accountRanges).toEqual(ranges);
     expect(await row(conn.id)).toMatchObject({ historyFrom: addDays(today(), -200), syncedThrough: today() });
   });
 
   it("a hole longer than 90 days is fetched 90 days at a time, each part queued once the one before it landed", async () => {
     const conn = await connection("meta", { historyFrom: addDays(today(), -759), syncedThrough: addDays(today(), -200) });
     const ranges: Array<{ since: string; until: string }> = [];
-    fetchImpl = metaInsights(ranges);
+    const accountRanges: Array<{ since: string; until: string }> = [];
+    fetchImpl = metaInsights(ranges, undefined, accountRanges);
     await run({ kind: "ads", connectionId: conn.id, since: addDays(today(), -2), until: today(), trigger: "schedule" });
     expect(ranges).toEqual([{ since: addDays(today(), -199), until: addDays(today(), -110) }]);
     expect((await row(conn.id)).syncedThrough).toBe(addDays(today(), -110));
@@ -202,6 +230,13 @@ describe("holes and history", () => {
     await run(sent()[0]!);
     expect(ranges[1]).toEqual({ since: addDays(today(), -109), until: addDays(today(), -20) });
     await run(sent()[1]!);
+    expect(ranges).toEqual([
+      { since: addDays(today(), -199), until: addDays(today(), -110) },
+      { since: addDays(today(), -109), until: addDays(today(), -20) },
+      { since: addDays(today(), -19), until: today() },
+    ]);
+    // Each window's account totals were read once, for the same days.
+    expect(accountRanges).toEqual(ranges);
     expect(await row(conn.id)).toMatchObject({ historyFrom: addDays(today(), -759), syncedThrough: today() });
   });
 
