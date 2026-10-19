@@ -145,7 +145,8 @@ export default function PrivacyPage() {
             <>bizinsights (&ldquo;we&rdquo;, &ldquo;us&rdquo;, &ldquo;our&rdquo;) is the controller of the personal data described in this policy.</>
           ) : (
             <>
-              bizinsights is provided by {CONTACT.legalName} (&ldquo;we&rdquo;, &ldquo;us&rdquo;, &ldquo;our&rdquo;), the controller of the
+              bizinsights is operated by {CONTACT.legalName}
+              {CONTACT.companyNumber && <> ({CONTACT.companyNumber})</>} (&ldquo;we&rdquo;, &ldquo;us&rdquo;, &ldquo;our&rdquo;), the controller of the
               personal data described in this policy.
             </>
           )}{" "}
