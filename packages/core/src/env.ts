@@ -99,7 +99,7 @@ const schema = z.object({
    */
   META_APP_ID: z.string().optional().default(""),
   META_APP_SECRET: z.string().optional().default(""),
-  META_API_VERSION: z.string().default("v25.0"),
+  META_API_VERSION: z.string().default("v26.0"),
   /** Facebook Login for Business configuration id (public). Empty: classic `scope=ads_read`. */
   META_CONFIG_ID: z.string().optional().default(""),
   /**
@@ -118,7 +118,19 @@ const schema = z.object({
    * is no token to set, only this switch. Off, the Google Ads card says "Coming soon".
    */
   GOOGLE_ADS_ENABLED: z.string().optional().default(""),
+  /**
+   * "1" once Google has verified the OAuth app's use of the sensitive adwords scope (Google Auth
+   * Platform → Verification Center). Until then Google shows "Google hasn't verified this app" before
+   * its consent screen and caps new users at 100, so Settings says so before sending people there.
+   */
+  GOOGLE_ADS_OAUTH_VERIFIED: z.string().optional().default(""),
   GOOGLE_ADS_API_VERSION: z.string().default("v25"),
+  /**
+   * Google Ads API operations bizinsights' Cloud project may make a day, across every merchant. Unset
+   * (or empty): Explorer access's 2,880 (GOOGLE_ADS_DAILY_OPERATIONS in adConnections/budget.ts). Set
+   * it once Google grants a higher access level; the syncs' budget follows it.
+   */
+  GOOGLE_ADS_DAILY_OPERATIONS: z.preprocess((v) => (v === "" ? undefined : v), z.coerce.number().int().positive().optional()),
   /**
    * WhatsApp Business Platform (Cloud API). Embedded Signup ("Connect WhatsApp Business") needs
    * the Meta app's id and secret (the ad accounts' Meta app is used when these are empty) and the

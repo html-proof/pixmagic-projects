@@ -56,6 +56,15 @@ export interface EnvConfig {
   /** Prefix of the Cognito domain, <prefix>.auth.<region>.amazoncognito.com (unique in the region). */
   cognitoDomainPrefix: string;
   /**
+   * Optional: the pool's own OAuth domain under the app's (e.g. auth.bizinsights.io), so Google's
+   * sign-in pages show it instead of amazoncognito.com, a domain nobody can verify with Google for
+   * an OAuth consent screen. Added beside the prefix domain, which keeps working; once set, the app
+   * (COGNITO_DOMAIN) and the Google redirect URI use it. Needs a public ACM certificate for `name`
+   * in us-east-1, and a DNS-only CNAME at Cloudflare to the stack output CustomDomainTarget
+   * (docs/cognito-setup.md, "Own sign-in domain"). Unset: the prefix domain only.
+   */
+  cognitoCustomDomain?: { name: string; certificateArn: string };
+  /**
    * Cognito's own emails (sign-up and email-change codes, password resets, sign-in codes, temporary
    * passwords) sent by the app's mail provider (Resend) from EMAIL_FROM, through the user pool's
    * Custom Email Sender trigger (auth-stack.ts; its KMS key is ~US$1/month). Off: Cognito sends

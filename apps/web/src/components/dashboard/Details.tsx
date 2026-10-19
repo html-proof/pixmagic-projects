@@ -3,6 +3,7 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 import type { CompareMode } from "@app/shared/dates";
 import { bestEntryPage, biggestDropOff, dropOffSection } from "@app/shared/journey";
+import { useApp } from "@/components/AppContext";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { BarRow, StackedBar } from "./Charts";
 import { ContactsCard } from "./Contacts";
@@ -10,6 +11,7 @@ import { comparisonHelp, noEarlierData, versusWords } from "./DateRange";
 import { FunnelCard, JourneyCard, SECTION_LABEL, STEP_LABEL } from "./Funnel";
 import { fmtComparison, fmtDuration, fmtRange, hourRange, plural, weekdayNames } from "./format";
 import { CatalogCard, ChannelsCard, DiscountCodesCard, FulfillmentCard, InventoryCard, OrderTimingCard, RecentOrdersCard, TrafficCard } from "./Modules";
+import { shownFigures, upToWords } from "./adFigures";
 import { AdsDetail } from "./AdsPanel";
 import { AdsenseDetail } from "./AdsensePanel";
 import { Explained } from "./Explain";
@@ -573,8 +575,15 @@ export function TopicContents({
   const body: ReactNode =
     topic === "overview" ? <OverviewDetail ov={ov} currency={currency} onOpen={onOpen} />
     : topic === "sales" && m.sales_overview ? <SalesDetail ov={ov} currency={currency} />
-    : topic === "ads" && m.ads ? <AdsDetail ov={ov} />
+    : topic === "ads" && m.ads ? (
+      <>
+        <AdsDetail ov={ov} />
+        {m.adsense && <AdsenseLink ov={ov} onOpen={onOpen} />}
+      </>
+    )
     : topic === "adsense" && m.adsense ? <AdsenseDetail ov={ov} />
+    // Marketing with only AdSense connected (or the ad accounts hidden): its earnings, not "nothing connected".
+    : topic === "ads" && m.adsense ? <AdsenseDetail ov={ov} />
     : topic === "products" && (m.top_products || m.catalog) ? <ProductsDetail ov={ov} currency={currency} />
     : topic === "shoppers" && (m.funnel || m.shopify_sessions) ? <ShoppersDetail ov={ov} />
     : topic === "timing" && m.order_timing ? <TimingDetail ov={ov} />
@@ -584,19 +593,58 @@ export function TopicContents({
     : topic === "discounts" && m.discount_codes ? <DiscountsDetail ov={ov} currency={currency} />
     : topic === "customers" && (m.customers || contactsOn) ? <CustomersDetail ov={ov} contactsOn={contactsOn} />
     : topic === "orders" && m.recent_orders ? <OrdersDetail ov={ov} currency={currency} />
-    // The sidebar's Marketing opens this before any ad account is connected: say where that's done.
-    : topic === "ads" ? (
-      <p className="text-sm text-muted">
-        No ad accounts are connected to this store yet. Connect Meta Ads or Google Ads in{" "}
-        <Link href="/settings/ads" className="font-medium text-accent underline">Settings → Advertising</Link> and their results show up here.
-      </p>
-    )
+    // The sidebar's Marketing opens this before any ad account is connected, or with all of them hidden: say so, and where that's done.
+    : topic === "ads" ? <NoAdAccounts ov={ov} />
     : <p className="text-sm text-muted">There&apos;s nothing to show here for this store yet.</p>;
   return (
     <>
       {body}
-      {/* Then, under every topic: what to do about it, and what each number means. */}
-      <Explained topic={topic} ov={ov} currency={currency} />
+      {/* Then, under every topic: what to do about it, and what each number means (AdSense's when that's what Marketing shows). */}
+      <Explained topic={topic === "ads" && !m.ads && m.adsense ? "adsense" : topic} ov={ov} currency={currency} />
     </>
+  );
+}
+
+/** Under the ads details, when AdSense is connected too: its estimated earnings, one tap away. */
+function AdsenseLink({ ov, onOpen }: { ov: Overview; onOpen: (t: Topic) => void }) {
+  const s = ov.modules.adsense!;
+  const { totals, through } = shownFigures(s);
+  return (
+    <div className="card flex flex-wrap items-center justify-between gap-2 text-sm" data-testid="ads-adsense-link">
+      <span>
+        <span className="font-medium">Google AdSense</span>
+        <span className="text-muted">
+          {" · "}
+          {totals ? `${fmtMoney(totals.earnings, s.currency)} estimated earnings from ads on your site${through ? ` ${upToWords(through)}` : ""}` : "estimated earnings from ads on your site"}
+        </span>
+      </span>
+      <button type="button" className="text-xs text-accent underline-offset-2 hover:underline" onClick={() => onOpen("adsense")}>
+        See details
+      </button>
+    </div>
+  );
+}
+
+function NoAdAccounts({ ov }: { ov: Overview }) {
+  const { allowed } = useApp();
+  const n = ov.modules.ad_connections;
+  const settings = (
+    <Link href="/settings/ads" className="font-medium text-accent underline">
+      Settings → Advertising
+    </Link>
+  );
+  if (n && n.hidden > 0 && n.meta + n.google + n.adsense > 0) {
+    return (
+      <p className="text-sm text-muted">
+        This store&apos;s ad accounts are hidden from the dashboard.{" "}
+        {allowed("integrations.manage") ? <>Turn on the ones that belong to this store in {settings} to see their results here.</> : "Ask a workspace owner or admin to turn them on."}
+      </p>
+    );
+  }
+  return (
+    <p className="text-sm text-muted">
+      No ad accounts are connected to this store yet. Connect Meta Ads or Google Ads to see what you spend, or Google AdSense to see what your site earns from ads,
+      in {settings}, and their results show up here.
+    </p>
   );
 }

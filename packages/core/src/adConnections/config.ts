@@ -11,10 +11,23 @@ export function metaConfig(fetchImpl?: FetchLike): MetaConfig | null {
   return { appId: e.META_APP_ID, appSecret: e.META_APP_SECRET, version: e.META_API_VERSION, configId: e.META_CONFIG_ID || undefined, fetchImpl };
 }
 
-/** Google Ads: the same Google OAuth client as AdSense, switched on once its Cloud project may reach real accounts. */
+/**
+ * Google Ads for new connections: the same Google OAuth client as AdSense, offered once its Cloud
+ * project may reach real accounts (GOOGLE_ADS_ENABLED). Only the Connect button and the listing of
+ * what's configured go by this; accounts already connected keep working through googleClient().
+ */
 export function googleConfig(fetchImpl?: FetchLike): GoogleConfig | null {
+  if (!switchedOn(env().GOOGLE_ADS_ENABLED)) return null;
+  return googleClient(fetchImpl);
+}
+
+/**
+ * Google Ads for accounts already connected: token refresh, syncs, reports and the sign-in's callback.
+ * Switching GOOGLE_ADS_ENABLED off stops new connections only; their data keeps coming.
+ */
+export function googleClient(fetchImpl?: FetchLike): GoogleConfig | null {
   const e = env();
-  if (!e.GOOGLE_ADS_CLIENT_ID || !e.GOOGLE_ADS_CLIENT_SECRET || !switchedOn(e.GOOGLE_ADS_ENABLED)) return null;
+  if (!e.GOOGLE_ADS_CLIENT_ID || !e.GOOGLE_ADS_CLIENT_SECRET) return null;
   return { clientId: e.GOOGLE_ADS_CLIENT_ID, clientSecret: e.GOOGLE_ADS_CLIENT_SECRET, version: e.GOOGLE_ADS_API_VERSION, fetchImpl };
 }
 
@@ -28,12 +41,16 @@ export function adsenseConfig(fetchImpl?: FetchLike): AdsenseConfig | null {
 export const adsConfigured = (): Record<AdProvider, boolean> => ({ meta: metaConfig() !== null, google: googleConfig() !== null, adsense: adsenseConfig() !== null });
 
 /**
- * Platforms whose sign-in only lets in the people added to bizinsights' own app: Meta, until ads_read
- * has Advanced Access (META_ADS_ADVANCED_ACCESS). Facebook turns everyone else away on its own page.
+ * Platforms whose sign-in isn't open to everyone yet. Meta: until ads_read has Advanced Access
+ * (META_ADS_ADVANCED_ACCESS), Facebook lets in only the people added to bizinsights' own app and
+ * turns everyone else away on its own page. Google Ads: until Google verifies bizinsights' use of
+ * the sensitive adwords scope (GOOGLE_ADS_OAUTH_VERIFIED), Google shows a "Google hasn't verified
+ * this app" screen first (people can continue past it) and lets at most 100 new people in. AdSense
+ * asks only for a non-sensitive scope, so it is never restricted.
  */
 export const adsRestricted = (): Record<AdProvider, boolean> => ({
   meta: metaConfig() !== null && !switchedOn(env().META_ADS_ADVANCED_ACCESS),
-  google: false,
+  google: googleConfig() !== null && !switchedOn(env().GOOGLE_ADS_OAUTH_VERIFIED),
   adsense: false,
 });
 

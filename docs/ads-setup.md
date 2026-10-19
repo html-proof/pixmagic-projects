@@ -1,311 +1,334 @@
-# Advertising integrations: "Continue with Google Ads", "Continue with Meta Ads" and "Continue with Google AdSense"
+# Advertising integrations: Google Ads, Meta Ads and Google AdSense
 
-**How a merchant uses it.**
+What a merchant sees, what the owner sets up, and how the connections behave. The owner's checklist of what
+is done and what is still open at Google, Meta and AWS is [integrations-readiness.md](integrations-readiness.md);
+paste-ready review material is [ads-review-packs.md](ads-review-packs.md).
+
+## How a merchant uses it
+
 1. The dashboard's **Advertising** section offers **Connect advertising accounts** while nothing is connected.
-2. That opens **Settings → Advertising**, the integrations page.
-3. They press **Continue with Google Ads**, **Continue with Meta Ads** or **Continue with Google AdSense**, and approve on the platform's own screen.
+2. That opens **Settings → Advertising** (`/settings/ads`, "Advertising integrations"). The same cards are also on
+   **Settings → Integrations** (`/settings/integrations`, "Connect your business"), next to the **Google Account**
+   (Continue with Google sign-in), Shopify and WhatsApp cards. Card order for ads: Google Ads, Meta Ads, Google AdSense.
+3. They press **Continue with Google Ads**, **Continue with Meta Ads** or **Continue with Google AdSense** and
+   approve on the platform's own screen. Connecting needs the integrations permission (`integrations.manage`:
+   owners and admins, unless the owner gave it to another role) and a verified email address.
 4. When the login can see several accounts and some are new, they tick the ones that belong to this store.
    - The sign-in waits on the server, encrypted, for 15 minutes.
    - One account, or a reconnect that sees nothing new, skips this step.
-5. They land back on the **dashboard**. The Advertising section shows its numbers as the first sync arrives, usually within a minute or two:
-   - KPI tiles, kept separate for spend and earnings;
-   - money per day;
-   - impressions and clicks per platform;
-   - a by-platform comparison.
+   - Leaving the picker without choosing (Cancel) gives the platform's access back when nothing else uses it
+     (`dropUnusedGrant`, below).
+5. They land back on the **dashboard**. The first sync usually arrives within a minute or two; the card says
+   **Synchronizing** meanwhile.
 
-**Google Ads is offered again** (2026-10-11): its card comes first on Settings → Advertising, on
-Settings → Connect your business, and on the dashboard's "Connect more". Until `GOOGLE_ADS_ENABLED` is "1" (with the
-Google OAuth client id and secret set), the card says "Coming soon" and has no button; merchants are never asked for keys.
+**Google AdSense** runs the other way: it is what the store's *site* earns from Google ads shown on it. Its
+estimated earnings, page views, ads shown and clicks go on a separate **Ad earnings** card and are never added
+to ad spend. On Settings → Advertising the AdSense card lets the merchant pick which **sites** (AdSense domains)
+belong to this store; none picked means every site. Accounts that can't be split by site are read as daily
+totals for the whole account ("All sites").
 
-**Google retired developer tokens on 2026-09-09.** Google Ads API access now follows the **Google Cloud project** that
-owns the OAuth client (insights-511119): there is no token and no manager account to set up
-(<https://developers.google.com/google-ads/api/docs/api-policy/developer-token>). Access levels
-(<https://developers.google.com/google-ads/api/docs/api-policy/access-levels>), set on Cloud console → Google Ads API →
-Overview ("Access levels → Manage"):
-- **Test**: test accounts only. Real accounts answer `CLOUD_PROJECT_NOT_APPROVED_FOR_PRODUCTION`, which bizinsights shows as
-  "Google is still approving bizinsights for live Google Ads accounts" (`not_approved`), never as "no accounts".
-- **Explorer**: real accounts, 2,880 operations a day (roughly 60 connected accounts at the hourly sync). Applied for with
-  one button; Google may grant it within minutes.
-- **Basic**: 15,000 a day; needs Explorer plus **brand verification** of the Cloud project.
+Access is **read-only**: Google's `adwords` scope (the only Google Ads scope there is, used only to read),
+`adsense.readonly`, and Meta's `ads_read`. bizinsights never creates, changes or pauses an ad.
 
-**State on 2026-10-11:** Explorer **granted** to project insights-511119 within minutes of applying, and
-`GOOGLE_ADS_ENABLED` is "1" in production. Remaining, for a clean consent screen:
-1. ~~Explorer granted~~ (done).
-2. The `adwords` scope added under Google Auth Platform → Data Access (it lists only `adsense.readonly` now). It's
-   sensitive: until Google verifies the app, people signing in for Google Ads see the "Google hasn't verified this app"
-   screen and new users are capped at 100. Verification needs the privacy policy, a short video of the connect flow
-   (YouTube link) and a scope justification. AdSense sign-ins don't ask for `adwords`, so they stay unaffected.
-3. ~~`"GOOGLE_ADS_ENABLED": "1"`~~ (done).
+## The card states
 
-Verified 2026-10-11 against the real Google: the "Insights web" client accepted the production callback of the
-time (the old deployment's address) and `http://localhost:8789/...` with the `adwords` scope and a PKCE challenge:
-Google's own "Sign in to continue to bizinsights" page opens, with no error. The AWS callbacks below must be on the
-client too before Google sign-in works there.
+Each connection has a stored **status** (`ad_connections.status`) and, when it isn't working, an
+**error code** (`error_code`). The code is worded for the merchant by `adErrorMessage` in
+`packages/shared/src/ads.ts`; the platform's own words go only to the logs. Status and code always change together
+(`AD_ERROR_STATUS`).
 
-**The integrations page** is for management only:
-- each platform's status (Connected, Syncing, Needs reconnecting, Sync problem, Not connected, Coming soon);
-- account details and last sync;
-- the permission granted;
-- Refresh, Reconnect or add accounts, Show on dashboard, and Disconnect.
+| Status | Codes | What it means |
+| --- | --- | --- |
+| `active` | none | Working. |
+| `reconnect` | `auth_expired`, `scope_missing`, `connector_left` | The sign-in ended, the permission was taken back, or the person whose login powered it left. Reconnect fixes it. |
+| `permission` | `no_access` | This login can no longer read this account. |
+| `unavailable` | `account_closed`, `account_disabled`, `account_not_ready` | The platform closed, disabled or hasn't finished the account. |
+| `error` | `not_approved`, `not_configured`, `rate_limited`, `quota_exhausted`, `temporary`, `provider_error`, `internal` | A failure a retry may fix. `not_approved`, `not_configured`, `quota_exhausted` and `internal` are bizinsights' to fix and are worded "on our side, not yours". |
 
-If the person unticks or declines the one permission on the platform's screen, they're told so (`permission_missing`) and nothing is connected.
+The account's own health at the platform is stored too (`account_status`: active, payment issue, under review,
+disabled, closing, closed, needs attention, set-up unfinished), read from Meta's `account_status`, Google's customer
+status and AdSense's account state.
 
-Merchants connect their ad accounts on **Settings → Ad accounts**. bizinsights then reads, every hour,
-what each campaign spent and what it brought (views, clicks, purchases, leads, sales value) and
-shows it on the dashboard's **Ads** card next to the store's own sales.
+The cards show these as one badge (`AD_STATE` in `apps/web/src/lib/adConnections.ts`): Coming soon, Not connected,
+Connecting, Synchronizing, Connected, Authorization required, Permission missing, Verification pending, Sync failed,
+Reconnect required, Disconnected, plus Checking… and Status unavailable while the page loads. A platform's card shows
+the worst of its accounts. Each account row shows who connected it, when, the permission granted, the last sync,
+and **Refresh**, **Show on dashboard** and **Disconnect**.
 
-**Google AdSense** runs the other way: it is what the store's *site* earns from Google ads shown on
-it. Its estimated earnings, page views, ads shown and clicks, per site and day, go on a separate
-**Ad earnings** card, and are never added to ad spend.
+Two notes appear before anyone is sent to a platform:
+- **Google Ads**: while `GOOGLE_ADS_OAUTH_VERIFIED` isn't `"1"`, the card warns that Google first shows "Google
+  hasn't verified this app" and that the way on is **Advanced → Go to bizinsights.io (unsafe)**
+  (`apps/web/src/components/GoogleAdsAccess.tsx`). AdSense never shows that screen.
+- **Meta Ads**: while `META_ADS_ADVANCED_ACCESS` isn't `"1"`, the card says only people with a role on the Meta app
+  can connect, and how to ask to be added (`MetaAdsAccess.tsx`).
 
-Access is **read-only**: Meta's `ads_read` permission, Google's Ads reporting scope, and
-`adsense.readonly`. bizinsights never creates, changes or pauses an ad. Tokens are stored encrypted with the same keyring as Shopify's
-(`TOKEN_ENCRYPTION_KEYS`) and deleted when an account is disconnected or the store is removed.
+## What the dashboard shows
 
-Until the keys below are set, each card says its platform's sign-in is "being switched on" (Coming soon),
-without a button. Nothing else changes. AdSense needs only the Google OAuth client (id and secret), so it works
-without Google Ads API access.
+- KPI tiles kept separate for spend and earnings, money per day, impressions and **link clicks** per platform, and a
+  by-platform comparison.
+- **Purchases** are purchase conversions only: Google's conversions in the `PURCHASE` category (a second GAQL query;
+  if Google refuses it, purchases are left empty rather than guessed), and Meta's purchase actions. Meta's clicks are
+  **inline link clicks** (`inline_link_clicks`), what Google counts as clicks; Meta's `clicks` ("clicks (all)") is
+  not used for the tiles.
+- Figures cover only days that are stored. When some of the chosen dates aren't stored for an account, the tile says
+  **Unavailable** with the reason instead of showing 0, and a range whose last days aren't over yet says
+  "figures up to <date>". Comparisons start only where every counted account's history starts ("No earlier data"
+  before that).
+- Only accounts in one currency are added together (the store's, when any account uses it); others are listed as
+  left out.
+
+Details of each figure: [kpis.md](kpis.md), "Ads" and "Ad earnings (AdSense)".
+
+## Syncing
+
+- **First connect**: the last 90 days, then history is walked back 90 days at a time to **25 months**
+  (`ADS_HISTORY_DAYS` = 760; less where the platform keeps less: Meta about 37 months, AdSense about 3 years). At most
+  3 history walks start per 15-minute scheduler tick, so a deploy doesn't start every account's walk at once.
+- **Coverage**: each connection stores one unbroken run of days, `history_from` to `synced_through`. A sync that would
+  leave a hole (the account waited for a reconnect, was hidden or kept failing) fetches the hole first ("catch-up").
+  A hole the platform no longer reports moves `history_from` past it, so the dashboard says "No earlier data" rather
+  than counting those days as nothing spent.
+- **Recent days** (the last 3) are refreshed every hour for Meta and AdSense, and **every 3 hours for Google Ads**
+  (one daily operations allowance serves every merchant). After 3 failures in a row an account is tried every 6
+  hours, after 10 only daily.
+- **Daily re-check**, because platforms keep crediting conversions after the click (`recheckDays` in
+  `packages/core/src/adConnections/sync.ts`): **Google 90 days**, **Meta 30**, **AdSense 30**, or the whole previous
+  month during the first 10 days of a month (when AdSense finalizes earnings). The same daily run reads each account's
+  health. Accounts with nothing new to read (closed, or a login that lost them) are only asked once a day whether
+  they're back; accounts waiting for a reconnect are left alone.
+- **Rate limits**: when a platform says "slow down", the job is sent again after the wait it names (or a backoff of 30
+  seconds to an hour) **without spending a retry**.
+- **Google Ads API operations budget**: the Cloud project may make a fixed number of operations a day across every
+  merchant (Explorer: 2,880). The syncs count what they spend; **scheduled syncs stop at 80%** of the allowance and
+  history walks at 60%, leaving the rest to people connecting accounts and opening reports. When Google says the
+  allowance is used up, Google syncs pause (an hour unless Google says otherwise) and the account shows
+  `quota_exhausted`. Set `GOOGLE_ADS_DAILY_OPERATIONS` when Google grants a higher access level.
+- **Meta report jobs**: when Meta answers a big account's long range with "reduce the amount of data", the sync runs
+  it as an asynchronous Insights report job.
+
+## Alerts
+
+The 15-minute sweep raises one alert per connection in the bell feed (and email, by the notification settings) to
+the people who manage integrations, and closes it when the connection works again, is hidden or disconnected:
+
+- `ads_reconnect`: status `reconnect` or `permission`;
+- `ads_unavailable`: status `unavailable`;
+- `ads_failing`: status `error` for 6 syncs in a row or more than 24 hours (never for codes that are bizinsights' to
+  fix: those go to the operator's logs);
+- `ads_expiring`: a Meta sign-in that ends within 7 days.
+
+## Disconnecting, and when access is given back
+
+- **Disconnect** deletes the token and every figure fetched for that account, then gives the access back to the
+  platform **only when no other connection relies on the same person's grant** (another store, or AdSense next to
+  Google Ads, since Google revokes a person's whole grant to the client at once). A connection whose person isn't
+  known yet is looked up with its own token first. Google: `POST oauth2.googleapis.com/revoke`. Meta:
+  `DELETE /me/permissions/ads_read` (only ads_read), or, when the person's token has ended, the same on their user id
+  with the app token. The outcome (`revoked`, `still_used`, `unknown_person`,
+  `failed`) is in the response and the audit log.
+- **A connect that ends without connecting** (cancelled picker, an error after the code exchange) drops the grant it
+  just made, under the same rules (`dropUnusedGrant`).
+- **A member removed from a workspace**: their ad connections there are released (`releaseUserAdGrants`): the tokens
+  are cleared, the accounts wait for someone else to press Reconnect (`connector_left`), the figures stay, and the
+  grant is revoked when nothing else uses it. A sync running at that moment can't undo it.
+- **Account deletion**: the same for every workspace, before the user is deleted.
+- **Meta's own callbacks** (below): removing bizinsights in Facebook marks the person's Meta connections "reconnect"
+  at once; a data deletion request deletes them and their figures.
+
+## Security
+
+- **The sign-in.** One-time `state` (10 minutes), bound to the browser by an HttpOnly cookie, accepted only for the
+  signed-in person who started it. Codes are exchanged on the server only.
+- **PKCE (Google Ads and AdSense)**: the S256 challenge goes to Google; the verifier stays on the server.
+- **Tokens** are AES-256-GCM encrypted with `TOKEN_ENCRYPTION_KEYS`, bound to their store and platform, never sent to
+  the browser or logged. A key rotation re-seals them; a sign-in left on a removed key waits for a reconnect.
+- **Who signed in** is kept per connection (`external_user_id`: Google's account id, checked to be a token issued to
+  bizinsights' own client; Meta's app-scoped user id), with the permissions granted (`granted_scopes`).
+- **Meta `appsecret_proof`**: every Graph call made with a person's token carries it (HMAC of the token with
+  `META_APP_SECRET`, `packages/core/src/metaGraph.ts`), so a leaked token is useless without the secret. Once this
+  is deployed, **"Require App Secret"** can be turned on in the Meta app (App settings → Advanced → Security).
+  WhatsApp sends none (a merchant's own WhatsApp app has a secret we don't hold).
+- **Meta tokens** last about 60 days and can't be renewed silently: Settings warns from 14 days before, the alert from
+  7. When it ends the account shows Reconnect required; history is kept.
+
+## Settings (owner)
 
 | Setting | Where it goes | Secret? |
 | --- | --- | --- |
-| `META_APP_ID` | `apps/aws/src/settings.ts` (`APP_SETTINGS`) | no |
+| `META_APP_ID` | `apps/aws/src/settings.ts` (`APP_SETTINGS`): `971575545351940` | no |
 | `META_APP_SECRET` | `node infra/cdk/scripts/put-secrets.mjs --set META_APP_SECRET` | **yes** |
-| `META_CONFIG_ID` | `settings.ts` (optional: Facebook Login for Business configuration) | no |
-| `META_ADS_ADVANCED_ACCESS` | `settings.ts`: `"1"` once Meta grants Advanced Access to `ads_read` (empty: Settings says only the app's testers can connect) | no |
-| `GOOGLE_ADS_CLIENT_ID` | `settings.ts` (Google Ads **and** AdSense) | no |
-| `GOOGLE_ADS_CLIENT_SECRET` | `node infra/cdk/scripts/put-secrets.mjs --set GOOGLE_ADS_CLIENT_SECRET` (Google Ads **and** AdSense) | **yes** |
-| `GOOGLE_ADS_ENABLED` | `settings.ts`: `"1"` once the Cloud project has Explorer access or above | no |
-| `META_API_VERSION`, `GOOGLE_ADS_API_VERSION` | `settings.ts` (`v25.0`, `v25`) | no |
+| `META_CONFIG_ID` | `settings.ts`: Facebook Login for Business configuration `1521935306664882` | no |
+| `META_ADS_ADVANCED_ACCESS` | `settings.ts`: `"1"` once Meta grants Advanced Access to `ads_read` | no |
+| `META_API_VERSION` | `settings.ts`: `v26.0` | no |
+| `GOOGLE_ADS_CLIENT_ID` | `settings.ts`: the "Insights web" client (Google Ads **and** AdSense) | no |
+| `GOOGLE_ADS_CLIENT_SECRET` | `node infra/cdk/scripts/put-secrets.mjs --set GOOGLE_ADS_CLIENT_SECRET` | **yes** |
+| `GOOGLE_ADS_ENABLED` | `settings.ts`: `"1"` (Explorer access, since 2026-10-11) | no |
+| `GOOGLE_ADS_OAUTH_VERIFIED` | `settings.ts`: `"1"` once Google verifies the `adwords` scope (removes the unverified-app note) | no |
+| `GOOGLE_ADS_DAILY_OPERATIONS` | `settings.ts`: empty = Explorer's 2,880; set when Google grants Basic or Standard | no |
+| `GOOGLE_ADS_API_VERSION` | `settings.ts`: `v25` | no |
 
-Settings ship by merging to `main` (Deploy to AWS). Secrets go to Secrets Manager with `put-secrets.mjs`; the
-functions read them when an instance starts.
+Settings ship by merging to `main` (Deploy to AWS). Secrets go to Secrets Manager with `put-secrets.mjs`, which reads
+the clipboard and refuses a value of the wrong shape: a Meta app secret must be 32 hexadecimal characters, a Google
+client secret must start with `GOCSPX-`, and a value equal to a public id in `settings.ts` is refused. It never
+prints a value. Until a platform's id and secret are both set, its card says **Coming soon** without a button.
 
-The redirect (callback) addresses, which both platforms must have registered **exactly**:
+**Is every secret there?** `node infra/cdk/scripts/put-secrets.mjs --dry-run` lists the key names. Every deploy also
+asks the cron function and puts a warning on the Deploy run for each provider whose public id is set but whose
+secret is missing ("Meta Ads isn't set up", with the command to run). Details: [aws-deployment.md](aws-deployment.md),
+"Which provider secrets are there".
 
-- Meta: `https://bizinsights.io/api/ads/meta/callback`
-- Google Ads: `https://bizinsights.io/api/ads/google/callback`
-- Google AdSense: `https://bizinsights.io/api/ads/adsense/callback` (on the same Google OAuth client)
+### Addresses to register at the platforms
 
-The app builds them from `APP_URL` (`adsRedirectUri` in `packages/core/src/adConnections/config.ts`), which is
-`https://bizinsights.io` since 2026-10-16, so it never sends the old `d2mr8m2p1qkh58.cloudfront.net` or
-`insights.imeseban.workers.dev` callbacks. Remove those from Google before its branding verification (only verified
-domains may appear); `docs/ads-review-packs.md` says what to change on each platform.
+The app builds every address from `APP_URL` (`https://bizinsights.io`), so they must be registered **exactly**:
 
-(Local development: since 2026-10-11 the production client "Insights web" no longer lists `localhost` redirect URIs, because
-Google's OAuth policies want separate clients/projects per deployment tier for verification. To test Google sign-in locally,
-create a separate OAuth client in a separate Cloud project with `http://localhost:8787/api/ads/<provider>/callback` and put
-its id/secret in `apps/aws/.env`. Paste-ready review material for both platforms: `docs/ads-review-packs.md`.)
+| Where | Address |
+| --- | --- |
+| Google client "Insights web" → Authorized redirect URIs | `https://bizinsights.io/api/ads/google/callback` and `https://bizinsights.io/api/ads/adsense/callback` |
+| Meta app → Facebook Login for Business → Settings → Valid OAuth Redirect URIs | `https://bizinsights.io/api/ads/meta/callback` |
+| Meta app → Facebook Login for Business → Settings → Deauthorize callback URL | `https://bizinsights.io/api/webhooks/meta/deauthorize` |
+| Meta app → App settings → Basic → User data deletion → Data deletion callback URL | `https://bizinsights.io/api/webhooks/meta/data-deletion` |
+
+The old `d2mr8m2p1qkh58.cloudfront.net` and `insights.imeseban.workers.dev` callbacks are never sent; remove them
+(Google's branding verification accepts only verified domains).
+
+**Local development.** Don't add localhost to "Insights web": Google wants a separate project per deployment tier.
+Create an OAuth client in a separate Cloud project and register `<APP_URL>/api/ads/<provider>/callback` for the
+local server you run: `http://localhost:8787` for the usual local server (`apps/aws/.env.example`), and
+`http://localhost:8789` for the ads demo (`.claude/ads-demo-server.mjs`). Put its id and secret in `apps/aws/.env`.
+A new project's Google Ads API access starts at Test (test accounts only).
 
 ## 1. Meta (Facebook and Instagram ads)
 
-**bizinsights' Meta Ads app (set up 2026-10-11):** "Insights", App ID `971575545351940`, owned by the Facebook account
-sebanceo@gmail.com, Development mode, no business portfolio yet. Use case "Measure ad performance data with Marketing
-API" (ads_read ready for testing). Facebook Login for Business: redirect URI
-registered for the old deployment's address (strict mode, HTTPS; add the bizinsights.io Meta callback above and press
-**Save Changes** at the bottom of the page); configuration "Insights ads reporting"
-`1521935306664882` (General, user access token, ads_read only) = `META_CONFIG_ID`. Basic settings: app domain, privacy policy
-`/privacy`, data deletion instructions `/data-deletion`, category Business and pages, Website platform, all still on the
-old address: move them to `bizinsights.io` (`https://bizinsights.io/privacy`, `/terms`, `/data-deletion`). Still to do: the
-app secret (`META_APP_SECRET`, pasted by the owner), an app icon, then a business portfolio + verification and App Review
-for Advanced Access to ads_read before merchants outside the app's roles can connect. WhatsApp stays on "pixmagic"
-(`1799660384680551`, `WHATSAPP_APP_ID`).
+**The app:** "Insights", App ID `971575545351940`, owned by the Facebook account sebanceo@gmail.com, Development mode,
+use case "Measure ad performance data with Marketing API" (`ads_read` ready for testing = Standard Access). Facebook
+Login for Business configuration "Insights ads reporting" `1521935306664882` (user access token, ad accounts, ads_read
+only) = `META_CONFIG_ID`. No business portfolio yet. WhatsApp runs on its own app ("pixmagic", `WHATSAPP_APP_ID`).
 
-1. Go to <https://developers.facebook.com/apps> with the Facebook account that manages the business, and **Create app**.
-   - Use case: **Other**. App type: **Business**.
-   - Connect it to your Meta Business portfolio.
-2. In the app, add the **Facebook Login for Business** product.
-   - Under its settings, add the Meta callback address above to **Valid OAuth Redirect URIs**.
-   - Under **Configurations**, create one:
-     - token type **User access token**;
-     - assets: **Ad accounts**;
-     - permission: **ads_read** only.
-   - Copy its **Configuration ID** into `META_CONFIG_ID`. Meta recommends it over the `scope` parameter.
-   - Leave `META_CONFIG_ID` empty if the app uses classic Facebook Login instead. bizinsights then asks for `scope=ads_read`, with `auth_type=rerequest` so a declined permission is asked again.
+To set up a new app from scratch:
+
+1. <https://developers.facebook.com/apps> → **Create app**, use case **Other**, type **Business**.
+2. Add **Facebook Login for Business**. In its settings, add the Meta callback and the Deauthorize callback above.
+   Under **Configurations**, create one: **User access token**, assets **Ad accounts**, permission **ads_read** only,
+   and copy its id into `META_CONFIG_ID`. (Empty `META_CONFIG_ID`: classic Facebook Login with `scope=ads_read` and
+   `auth_type=rerequest`.)
 3. Add the **Marketing API** product.
-4. In **App settings → Basic**:
-   - copy the **App ID** into `META_APP_ID`;
-   - copy the **App secret** into `META_APP_SECRET`.
-   - Fill in the privacy policy URL (`https://bizinsights.io/privacy`), the terms URL (`https://bizinsights.io/terms`), the data deletion instructions URL (`https://bizinsights.io/data-deletion`), the app domain `bizinsights.io` and an app icon. They are needed before the app can go live.
-5. **Who can connect.** While the app is in **Development** mode, only people with a role on the app (and their ad accounts) can connect. Add yourself and your test users under **App roles**.
+4. **App settings → Basic**: App ID into `META_APP_ID`, App secret into `META_APP_SECRET`; privacy policy
+   `https://bizinsights.io/privacy`, terms `https://bizinsights.io/terms`, app domain `bizinsights.io`, an app icon,
+   and the Data deletion callback above (the public instructions stay at `https://bizinsights.io/data-deletion`).
+5. **App settings → Advanced → Security**: turn on **Require App Secret** (after the deploy that sends
+   `appsecret_proof`, which is this branch's).
+6. **Who can connect.** In Development mode, with Standard Access, only people with a role on the app (admins,
+   developers, testers) can grant `ads_read`. Everyone else needs **Advanced Access to `ads_read`** through App Review,
+   which needs **Business Verification** first. Then set `META_ADS_ADVANCED_ACCESS` to `"1"` and deploy.
+7. Switch the app to **Live** after approval and the Data Use Checkup.
 
-   To let any merchant connect their own ad accounts, the app needs **Advanced Access to `ads_read`** through **App Review**, and Meta **Business Verification**. Meta asks for:
-   - a screen recording of the connect flow and the Ads card;
-   - an explanation that the data is shown read-only to the advertiser who connected it.
+### Meta's deauthorize and data deletion callbacks
 
-   Expect a few days to a few weeks. Once Meta grants it, set `META_ADS_ADVANCED_ACCESS` to `"1"` and deploy: the
-   "only testers can connect" note on the Meta Ads cards goes away.
-6. Switch the app to **Live**.
+`apps/api/src/routes/metaWebhooks.ts`. Both are form POSTs from Meta whose `signed_request` is checked with
+`META_APP_SECRET` before anything happens (without the secret they answer 503 `not_configured`).
 
-**Token lifetime:** Meta user tokens last about **60 days** and can't be renewed silently. Settings shows "Meta access ends in N days" from 14 days before. When it ends, the account shows **Needs reconnecting** and pressing **Continue with Meta** again renews it. History is kept.
+- `POST /api/webhooks/meta/deauthorize`: the person removed bizinsights in their Facebook settings. Their Meta ad
+  connections go to Reconnect required at once, and the account choices they left waiting are dropped.
+- `POST /api/webhooks/meta/data-deletion`: their Meta ad connections and every figure fetched for them are deleted.
+  Meta gets back a confirmation code and the status page `https://bizinsights.io/data-deletion?code=<code>`, which
+  reads `GET /api/meta/data-deletion/:code` ("done", with when, or "unknown"). The same request sent again gets the
+  same code.
 
-**When a Facebook login has nothing to connect:** bizinsights asks Meta's token inspector (`debug_token`, with the app token) which ad accounts the grant names, and Settings → Advertising says which case it is, with **Connect again**, **Open Ads Manager** and **Open Business settings**:
-- `error=none_shared`: the person picked accounts on Facebook's screen but shared none. They connect again and edit what bizinsights can access.
-- `error=no_accounts`: the login reaches no ad account. Business-portfolio ad accounts need the person assigned to them in Business settings → Ad accounts (admins too); a different Facebook login means logging out of Facebook in that browser first, since Facebook has no account chooser.
+Refused requests are limited per address, and a request is acted on once.
 
-The callback logs `ads: nothing to connect for this login` with the reason and the account ids the grant names.
+### When a Facebook login has nothing to connect
+
+bizinsights asks Meta's token inspector which ad accounts the grant names, and Settings says which case it is, with
+**Connect again**, **Open Ads Manager** and **Open Business settings**:
+- `error=none_shared`: accounts were picked on Facebook's screen but none shared;
+- `error=no_accounts`: the login reaches no ad account (business-portfolio accounts need the person assigned in
+  Business settings → Ad accounts). Facebook has no account chooser: log out of Facebook in that browser to use
+  another login.
 
 ### Facebook says "Feature Unavailable"
 
-"Facebook Login is currently unavailable for this app, since we are updating additional details for this app. Please try
-again later." is Facebook's own page, shown instead of its login. Facebook never sends the person back to bizinsights, so
-nothing reaches our logs. Two causes, both fixed in Meta, not in code:
+Facebook's own page, shown instead of its login; nothing reaches our logs. Two causes, both fixed in Meta:
 
-1. **The Facebook account has no role on the app** (the usual one, for anyone other than the app's admin). While
-   `ads_read` has only Standard Access ("Ready for testing"), Meta lets only the app's administrators, developers and
-   testers grant it.
-   - Now: add the person under App roles → Roles → **Testers** (by name, Facebook ID or username). They accept at
-     <https://developers.facebook.com/requests/>, then press Continue with Meta Ads again.
-   - For everyone: Advanced Access to `ads_read` (step 5 above), which needs Business Verification of a registered business.
-2. **Meta has paused the app's login for everyone, admin included.** Open <https://developers.facebook.com/apps> with the
-   admin's Facebook account. If it shows "Account confirmation needed: We've noticed unusual activity on this developer
-   account", press **Confirm Account** and finish Meta's steps. Also look for required actions on the app dashboard.
-   Seen on 2026-10-14 and again on 2026-10-15. A second administrator (another Facebook account of the owner's) keeps the
-   app manageable while one account is blocked. Keep browser automation off developers.facebook.com: it is the likely
-   trigger.
-
-What bizinsights does about it:
-- While `META_ADS_ADVANCED_ACCESS` isn't `"1"`, the Meta Ads card on Settings → Advertising and on Connect your business
-  says, before the button sends anyone to Facebook, that only testers can connect and how to ask to be added. The link
-  goes to the support email from `apps/web/src/lib/contact.ts`, or to `/support` while that's blank.
-- Someone who presses Back from Facebook's page sees what it meant. The button doesn't stay on "Opening…" either.
+1. **The Facebook account has no role on the app** (usual for anyone but the admin, while `ads_read` has only
+   Standard Access). Add the person under App roles → Roles → **Testers**; they accept at
+   <https://developers.facebook.com/requests/>. For everyone: Advanced Access (step 6).
+2. **Meta paused the app's login for everyone.** Open <https://developers.facebook.com/apps> with the admin's account;
+   if it shows "Account confirmation needed", press **Confirm Account**. Seen 2026-10-14 and 2026-10-15. Keep browser
+   automation off developers.facebook.com: it is the likely trigger.
 
 ## 2. Google Ads
 
-Google needs an **OAuth client** for the "Continue with Google Ads" sign-in, in a Cloud project with **Google Ads API
-access for real accounts** (Explorer or above). Developer tokens are gone (2026-09-09).
+Google retired developer tokens on 2026-09-09: Google Ads API access follows the **Cloud project** that owns the OAuth
+client (insights-511119). There is no token and no manager account to set up.
 
-### OAuth client (Google Cloud)
+**Access levels** (Cloud console → APIs & Services → Google Ads API → Overview → Access levels → Manage):
+- **Test**: test accounts only. Real accounts answer `CLOUD_PROJECT_NOT_APPROVED_FOR_PRODUCTION`, shown as
+  `not_approved` ("Google is still approving bizinsights").
+- **Explorer**: real accounts, 2,880 operations a day. **Granted to insights-511119 on 2026-10-11.**
+- **Basic**: 15,000 a day; needs Explorer plus brand verification of the project. Then set
+  `GOOGLE_ADS_DAILY_OPERATIONS`.
 
-1. At <https://console.cloud.google.com/>, create or pick a project and enable the **Google Ads API** (APIs & Services → Library).
-2. **OAuth consent screen**:
-   - User type: **External**. App name: bizinsights.
-   - Support email; homepage `https://bizinsights.io/`, privacy policy `https://bizinsights.io/privacy`, terms `https://bizinsights.io/terms`.
-   - Authorized domain: `bizinsights.io`, verified as a Search Console **Domain** property (a DNS TXT record at Cloudflare).
-     A cloudfront.net address can't be verified: it is on the Public Suffix List.
-   - Add the scope `https://www.googleapis.com/auth/adwords`.
-3. **Credentials → Create credentials → OAuth client ID**, application type **Web application**:
-   - add the Google callback address above under **Authorized redirect URIs**;
-   - copy the **Client ID** into `GOOGLE_ADS_CLIENT_ID`;
-   - copy the **Client secret** into `GOOGLE_ADS_CLIENT_SECRET`.
-4. While the consent screen is in **Testing**, only the test users you list can connect, and their access expires after 7 days. To open it to everyone, **Publish** the app. Because the Ads scope is a sensitive scope, Google runs a verification. It needs:
-   - the privacy policy;
-   - a short video of the flow;
-   - a domain you have verified: for bizinsights.io the Search Console Domain property is still to do (no TXT record on
-     2026-10-19). The full checklist is in `docs/ads-review-packs.md`.
+**OAuth client** ("Insights web", Web application, in insights-511119): the two redirect URIs above; Client ID into
+`GOOGLE_ADS_CLIENT_ID`, secret into `GOOGLE_ADS_CLIENT_SECRET`. The consent screen (Google Auth Platform) needs
+branding (app name bizinsights, homepage, privacy, terms, authorized domain `bizinsights.io`, verified as a Search
+Console Domain property) and, under Data Access, `https://www.googleapis.com/auth/adwords`. That scope is
+**sensitive**: until Google verifies it (a demo video and a justification, after branding is verified), people
+signing in for Google Ads see "Google hasn't verified this app" and new users count toward a lifetime cap of 100.
+Once verified, set `GOOGLE_ADS_OAUTH_VERIFIED` to `"1"` and deploy. Steps and texts:
+[ads-review-packs.md](ads-review-packs.md).
 
-### API access level (Google Cloud)
+**Manager accounts:** a login that reaches ad accounts through a manager account (an agency) gets each client account
+listed; bizinsights reads them through the manager (`login-customer-id`).
 
-1. Cloud console → **APIs & Services → Google Ads API → Access levels → Manage** (the Google Ads API Overview page).
-2. Under **Upgrade access level**, with **Explorer** as the next level, press **Apply for access**. Google reviews it,
-   often within minutes.
-3. For more than about 60 connected accounts, complete **brand verification** (Google Auth Platform → Verification
-   Center), then apply for **Basic** the same way.
-4. Set `"GOOGLE_ADS_ENABLED": "1"` and deploy.
+### The Google Ads report (dashboard → Ads → "Google Ads report")
 
-**Manager accounts:** a merchant who signs in with a Google account that reaches ad accounts through a manager account (an agency, say) gets each client account listed. bizinsights reaches them through the manager automatically (`login-customer-id`).
+`GET /api/workspaces/:ws/stores/:storeId/ads/google/report?connection=&level=campaign|ad_group|device|country&from=&to=`
+(add `cfrom=&cto=` to compare with another range): spent, impressions, clicks, CTR, CPC, CPM, conversions, cost per
+conversion, conversion value and ROAS, with the account's totals on top. Campaigns show status, type and daily budget;
+countries are where the viewers were (`user_location_view`). Asked of Google for exactly those dates, in the account's
+time zone and currency, counted against the operations budget, cached 10 minutes (ranges including today) or an hour,
+and limited to 30 reports per 10 minutes.
 
 ## 3. Google AdSense
 
-AdSense uses the **same Google Cloud project and OAuth client** as Google Ads. In that project:
+Same Cloud project and OAuth client as Google Ads. In that project: enable the **AdSense Management API**, add the
+AdSense callback to the client, and add `https://www.googleapis.com/auth/adsense.readonly` under Data Access. Google
+lists it as **non-sensitive**, so AdSense needs no scope verification and never shows the unverified-app screen. There
+is no access level to request. A Google login with no AdSense account gets "That Google login has no AdSense account".
 
-1. **APIs & Services → Library**: enable the **AdSense Management API**.
-2. **Clients → your web client → Authorized redirect URIs**: add the AdSense callback address above.
-3. **Data Access**: add the scope `https://www.googleapis.com/auth/adsense.readonly`. Google lists it as
-   **non-sensitive** (only the Ads scope `adwords` is sensitive), so AdSense alone needs no sensitive-scope
-   verification to publish the app.
-4. While the app is in **Testing**, only its test users can connect, and their access lasts 7 days.
-
-There is no Google Ads API access level to request for AdSense. A Google login with no AdSense account gets
-"That Google login has no AdSense account". An account that can't be split by site in reports is
-read as daily totals for the whole account, shown as "All sites".
-
-## 4. Turn it on
-
-Copy each secret to the clipboard and run its line (one at a time: it reads the clipboard):
-
-```bash
-node infra/cdk/scripts/put-secrets.mjs --set META_APP_SECRET
-```
-
-```bash
-node infra/cdk/scripts/put-secrets.mjs --set GOOGLE_ADS_CLIENT_SECRET
-```
-
-1. Put the public ids (and `GOOGLE_ADS_ENABLED` once Google has granted Explorer) in `apps/aws/src/settings.ts` and merge to `main` (see `docs/aws-deployment.md`).
-2. The database needs migrations `20261009185831_ad_accounts`, `20261010080000_adsense_daily` and `20261011130000_ad_connection_identity` (the **Deploy to AWS** workflow applies them, like every migration; the last one only adds two columns and an index).
-3. Open **Settings → Advertising** (or press **Connect advertising accounts** on the dashboard).
-   - Press **Continue with Meta Ads**, **Continue with Google AdSense** or **Continue with Google Ads**, and approve.
-   - If the login sees several accounts, tick the ones for this store.
-   - You land on the dashboard. Each new account's last 90 days are fetched in the background.
-   - Untick **Show on dashboard** later for any account that isn't this store's.
-
-## Security and the connection lifecycle
-
-- **The sign-in.** One-time `state` in the coordinator (10 minutes), bound to the browser by an HttpOnly cookie, and the
-  callback is only accepted for the signed-in person who started it. Codes are exchanged on the server only.
-- **PKCE (Google Ads and AdSense).** The S256 challenge goes in Google's URL; the verifier stays in the coordinator with the
-  state and goes only with the code exchange, so an intercepted code is useless. Meta documents PKCE only for its OIDC
-  flow (which needs `openid` and doesn't cover Login for Business), so Meta relies on state + cookie + the app secret.
-- **Tokens** are AES-256-GCM encrypted with `TOKEN_ENCRYPTION_KEYS`, bound to their store and platform (AAD
-  `ads:<provider>:<storeId>:<kind>`), never sent to the browser or logged.
-- **Who signed in** is kept per connection (`external_user_id`: Google's `sub` from tokeninfo, checked to be a token issued to
-  bizinsights' own client; Meta's app-scoped user id), with the permissions granted (`granted_scopes`). Migration
-  `20261011130000_ad_connection_identity`.
-- **Google refresh tokens.** Google sends one on consent (`prompt=consent`); if a sign-in comes back without one, the same
-  person's existing refresh token is reused. If Google replaces a refresh token during a refresh, the new one is stored for
-  every account that shares it.
-- **Meta tokens.** A user token is swapped for a long-lived one (about 60 days; Settings warns from 14 days before). A Login
-  for Business **system-user** token comes back without an expiry and is kept as it is.
-- **Disconnect** deletes the token and every number fetched for that account, then gives the access back to the platform
-  **only when no other connection relies on the same person's grant** (another store, or AdSense next to Google Ads, since
-  Google revokes the person's whole grant to the client). Connections whose person isn't known yet (made before
-  identities were kept, or whose lookup failed) count as possibly the same person, so nothing is revoked while any
-  exist; a Google connection learns its person at its next token refresh. Google: `POST oauth2.googleapis.com/revoke`. Meta:
-  `DELETE /me/permissions/ads_read` (only ads_read: WhatsApp keeps working). The outcome (`revoked`, `still_used`,
-  `unknown_person`, `failed`) is in the response and the audit log.
-- **Sync.** Ad syncs ride the sync queue; each tick's syncs are spread over 5 minutes and retries back off exponentially with
-  jitter. Access that ended marks the account "reconnect"; history is kept.
-- **Meta report jobs.** When Meta answers a big account's long range with "reduce the amount of data", the daily sync runs it
-  as an asynchronous Insights report job (`POST /act_x/insights` → `report_run_id`, polled for about a minute).
-
-## The Google Ads report (dashboard → Ads → "Google Ads report")
-
-`GET /workspaces/:ws/stores/:storeId/ads/google/report?connection=&level=campaign|ad_group|device|country&from=&to=`:
-spent, impressions, clicks, click-through rate, cost per click, cost per 1,000 impressions, conversions, cost per
-conversion, conversion value and return on ad spend, with the account's own totals on top.
-
-- Campaigns show their status (Active, Paused, Removed), type (Search, Shopping, Performance Max, YouTube...) and daily budget.
-- Ad groups name their campaign; Performance Max has no ad groups, which the panel says.
-- Countries are where the people who saw the ads were (`user_location_view`), named from Google's geo targets.
-- Asked of Google for exactly those dates (GAQL, dates validated before they reach the query), in the account's time zone and currency.
-- Cached 10 minutes (ranges including today) or an hour, inside the same 30-per-10-minutes limit as the Meta report.
-- Access Google took back marks the account "reconnect" and the panel says so instead of showing old numbers.
-
-The Meta Ads report also splits the whole account by **placement** (Facebook Feed, Instagram Stories...), **device**
-and **country** (`breakdowns=publisher_platform,platform_position` / `impression_device` / `country`).
-
-## How numbers are counted
-
-See `docs/kpis.md`, "Ads" and "Ad earnings (AdSense)". In short:
-
-- **Spend, views and clicks** are exactly what the platforms bill and count.
-- **Purchases and their value** are each platform's **own attribution**: Meta and Google can both claim the same sale, so they are never added into the store's sales.
-- Only accounts in one currency are added together: the store's currency, when any account uses it. Others are listed as left out.
-- Recent days are refreshed hourly. The last 30 days are fetched again daily, because the platforms keep crediting purchases for days after a click. An account whose first 90 days never came in gets all 90 in its daily re-check, until they do.
-- Each account remembers the first day its figures are stored from (`ad_connections.history_from`). The dashboard compares ad figures only from where every counted account's figures start, and says "No earlier data" before that (docs/kpis.md).
-- Meta's purchases are counted with `use_unified_attribution_setting=true`: each ad set's own attribution setting, the way Ads Manager shows them.
+**The AdSense report** (`GET .../ads/adsense/report?connection=&level=site|country|platform&from=&to=`): estimated
+earnings, page views, ads shown and clicks by site, country or device type, limited to the store's chosen sites.
+Earnings are estimated until AdSense finalizes them after the month ends.
 
 ## The Meta Ads report (dashboard → Ads → "Meta Ads report")
 
-The Ads detail view has a table per connected Meta ad account, by **campaign, ad set or ad**:
-spent, impressions, **reach**, **frequency**, **link clicks**, link click rate, cost per link
-click, cost per 1,000 impressions, purchases, cost per purchase, purchase value and return on ad
-spend, plus each row's delivery status (Active, Paused, In review, Rejected, Has issues...).
+`GET /api/workspaces/:ws/stores/:storeId/ads/meta/report?connection=&level=&from=&to=` (and `cfrom=&cto=` to compare):
+by **campaign, ad set or ad**, or the whole account split by **placement, device, country, age or gender**: spent,
+impressions, reach, frequency, link clicks, link click rate, cost per link click, CPM, purchases, cost per purchase,
+purchase value and ROAS, with each row's delivery status. Asked of Meta for exactly the dates picked (reach can't be
+summed by day), in the ad account's time zone; a comparison reads both ranges at once. Cached 10 minutes or an hour,
+30 reports per store and user per 10 minutes. A report that doesn't finish in time says Meta is still preparing it.
+Expired or revoked access turns the account to Reconnect required at once.
 
-- It is asked of Meta for exactly the dates picked (`GET /workspaces/:ws/stores/:storeId/ads/meta/report?connection=&level=&from=&to=`), never added up from the stored days: reach counts each person once over the whole range, so daily reach can't be summed. The "Whole ad account" row is Meta's own account-level figure.
-- Days follow the **ad account's** time zone. Ranges including today say the numbers are still coming in.
-- Answers are cached in the coordinator for 10 minutes (ranges including today) or an hour (past ranges), and limited to 30 Meta reports per store and user per 10 minutes (`LIMITS.adsReport`), to stay inside Meta's rate limits.
-- Expired or revoked access (Meta error 190, or `ads_read` taken back) turns the account to "reconnect" at once, and the report says so instead of showing old numbers as current.
-- Read-only: there is no control that edits a campaign, budget or ad, and `ads_management` is never requested.
+## Keeping the API versions current
 
-Merchants manage Shopify, WhatsApp, Google Ads and Meta Ads from **Settings → Connect your business** (`/settings/integrations`): one button each, a status (Not connected, Connecting, Connected, Action required, Permission expired, Connection failed, Coming soon), the account and identifier, the last sync, and Reconnect / Disconnect.
+The build fails 90 days before a configured API version stops being served
+(`packages/core/test/appConfig.test.ts`, table `API_VERSION_ENDS`). For Google Ads, the table holds Google's published
+sunset dates. For Meta, a version whose end date is still "TBD" counts as ending at its release date plus the shortest
+life of any dated version in the list (v24.0: 363 days), and the table must be re-read within 60 days once a newer
+version exists (180 otherwise), or the test fails. A red `main` blocks every deploy, so upgrade before then:
+
+1. Read the platform's changelog (Google: <https://developers.google.com/google-ads/api/docs/sunset-dates> and the
+   release notes; Meta: the Marketing API changelog) and check every call and field `packages/core/src/ads/` uses.
+2. Change `GOOGLE_ADS_API_VERSION` or `META_API_VERSION` in `apps/aws/src/settings.ts`.
+3. Update `API_VERSION_ENDS`: the new version's dates and today's date as `checked`.
+4. Run `pnpm --filter @app/core test`, merge to `main` and confirm the Deploy run.
+
+State on 2026-10-19: Meta v26.0 (moved from v25.0 on this branch; its projected end is 2027-07-27, re-read the
+changelog by 2027-04-17, sooner once v27.0 is out). Google Ads v25 (ends 2027-08-01).
+
+## Database
+
+Migrations `20261009185831_ad_accounts`, `20261010080000_adsense_daily`, `20261011130000_ad_connection_identity`,
+`20261017160000_visits_ads_history_from` and `20261019120000_ad_connection_health` (status, error code, account
+health, sites, coverage). The Deploy to AWS workflow applies them.

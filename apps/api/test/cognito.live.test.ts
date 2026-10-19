@@ -55,7 +55,7 @@ describe.skipIf(!live)("Cognito, live", () => {
       expect(claims).toMatchObject({ sub: created.sub, email: address, method: "password" });
       expect(signedIn.tokens.refreshToken).toBeTruthy();
 
-      const refreshed = await auth.refresh(signedIn.tokens.refreshToken!, claims.username);
+      const refreshed = await auth.refresh(signedIn.tokens.refreshToken!, claims.sub);
       expect((await auth.verifyIdToken(refreshed.idToken)).sub).toBe(created.sub);
 
       await auth.changePassword(refreshed.accessToken, "first-password-1", "second-password-2");
@@ -64,7 +64,7 @@ describe.skipIf(!live)("Cognito, live", () => {
       expect("tokens" in again).toBe(true);
 
       await auth.revokeRefreshToken(signedIn.tokens.refreshToken!);
-      await expect(auth.refresh(signedIn.tokens.refreshToken!, claims.username)).rejects.toMatchObject({ code: "NotAuthorizedException" });
+      await expect(auth.refresh(signedIn.tokens.refreshToken!, claims.sub)).rejects.toMatchObject({ code: "NotAuthorizedException" });
     } finally {
       await auth.adminDeleteUser(created.username);
     }

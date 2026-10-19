@@ -15,6 +15,7 @@ import {
   previewTeamInvitation,
   queryTeam,
   recordLinkOpened,
+  releaseUserAdGrants,
   removeMember,
   renewTeamAccess,
   replaceInvitationLink,
@@ -83,6 +84,20 @@ const daysSchema = z.object({ days: z.number().int().min(1).max(INVITE_DAYS_MAX)
 export async function inviteLimits(deps: Deps, ws: string, userId: string | undefined) {
   await limit(deps.coord, `rl:invite:${ws}`, LIMITS.invitations, "That's a lot of invitations in a short time. Please wait a while before sending more.");
   if (userId) await limit(deps.coord, `rl:invite-user:${userId}`, LIMITS.invitationsPerUser, "You've sent the most invitations allowed in a day. Please try again tomorrow.");
+}
+
+/**
+ * Remove a member, and stop their login powering this workspace's ad data: the ad connections they
+ * connected here wait for someone else to reconnect them (keeping their days; "connector_left"), and
+ * their grant goes back to Google or Meta unless something else relies on it (within
+ * AD_RELEASE_REVOKE_BUDGET_MS: a platform that doesn't answer leaves the grant, not the request hanging).
+ * The member is removed whatever happens to the ad connections.
+ */
+export async function removeMemberReleasingAds(c: Ctx, deps: Deps, a: WorkspaceAccess, memberId: string, opts: { allowSelf?: boolean } = {}) {
+  const { userId } = await loadMember(a.workspaceId, memberId);
+  const removed = await removeMember(teamActor(c, a), memberId, opts);
+  await releaseUserAdGrants(userId, a.workspaceId, deps.fetchImpl).catch((err: unknown) => logger.error({ err, workspaceId: a.workspaceId, userId }, "a removed member's ad connections weren't released"));
+  return removed;
 }
 
 /** A team change needs a person (not an API key) who may manage members. */
@@ -220,7 +235,7 @@ export function teamRoutes(app: App, deps: Deps) {
   app.delete(`${BASE}/members/:id`, async (c) => {
     const { ws, id } = c.req.param();
     const a = await requireTeamManager(c, deps, ws);
-    return c.json({ ok: true, ...(await removeMember(teamActor(c, a), idSchema.parse(id))) });
+    return c.json({ ok: true, ...(await removeMemberReleasingAds(c, deps, a, idSchema.parse(id))) });
   });
 
   /** Renew the access an invitation gave a member, and their link, for `days` (default 60) from now. */
@@ -363,6 +378,19 @@ export function teamRoutes(app: App, deps: Deps) {
     await limit(deps.coord, `rl:invite-open:${inv.id}`, LIMITS.inviteAcceptUser);
 
     const user = inv.reopenUserId ? await systemDb.user.findUniqueOrThrow({ where: { id: inv.reopenUserId } }) : await userForInvitee(inv.email);
+    // An account for this address that nobody has proved the address of, but that someone can sign in
+    // to (a password set by whoever made it): a link that may have been passed around doesn't prove the
+    // inbox either, so the invitation never lands there. It waits until the address is verified.
+    if (inv.status === "pending" && !user.emailVerified && (await systemDb.authIdentity.count({ where: { userId: user.id } })) > 0) {
+      logger.warn({ event: "invite_open_unverified_account", invitationId: inv.id, userId: user.id, ip: clientIp(c) }, "invitation link refused: the address's account isn't verified");
+      return c.json(
+        {
+          error: "account_unverified",
+          message: "This email address already has a bizinsights account that hasn't been confirmed. Sign in to it and confirm the email address first (or continue with Google using that address), then open this link again.",
+        },
+        409,
+      );
+    }
     if (inv.status === "pending") await acceptTeamInvitation(user, token, clientIp(c), { viaLink: true });
     const m = await systemDb.membership.findUnique({ where: { workspaceId_userId: { workspaceId: inv.workspaceId, userId: user.id } }, select: { accessExpiresAt: true } });
     const ends = [inv.expiresAt, m?.accessExpiresAt].filter((d): d is Date => !!d).sort((x, y) => x.getTime() - y.getTime())[0] ?? null;

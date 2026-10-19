@@ -592,6 +592,69 @@ describe("Cognito's emails", () => {
   });
 });
 
+describe("Cognito sign-in", () => {
+  type Resource = { Properties: Record<string, any>; Condition?: string; DependsOn?: string[] }; // eslint-disable-line @typescript-eslint/no-explicit-any
+  /** The Auth stack alone, for a configuration the context can't express. */
+  function synthAuth(override: Partial<import("../lib/config.js").EnvConfig>) {
+    const app = new App();
+    const cfg = { ...envConfig((k) => app.node.tryGetContext(k)), ...override };
+    const env = { account: cfg.account, region: cfg.region };
+    const edge = new EdgeStack(app, "E", cfg, { env: { account: cfg.account, region: "us-east-1" }, crossRegionReferences: true });
+    const data = new DataStack(app, "D", cfg, { env });
+    const appStack = new AppStack(app, "A", cfg, data, edge.webAclArn, { env, crossRegionReferences: true });
+    return Template.fromStack(new AuthStack(app, "U", cfg, { env, appUrl: appStack.appUrl, apiRole: appStack.apiRole, runtimeParam: appStack.runtimeParam }));
+  }
+  const resource = (tpl: Template, id: string) => tpl.toJSON().Resources[id] as Resource;
+  const ownDomain = { name: "auth.bizinsights.io", certificateArn: "arn:aws:acm:us-east-1:605411278365:certificate/0a1b2c3d-1234-5678-9abc-def012345678" };
+
+  it("offers two-step verification with an authenticator app to those who turn it on, and asks nobody else", () => {
+    const pool = resource(t.auth, "UserPool");
+    expect(pool.Properties.MfaConfiguration).toBe("OPTIONAL");
+    expect(pool.Properties.EnabledMfas).toEqual(["SOFTWARE_TOKEN_MFA"]);
+    // No text messages: nothing to configure or pay for there.
+    expect(pool.Properties.SmsConfiguration).toBeUndefined();
+  });
+
+  it("keeps production on the prefix domain alone, exactly as deployed, while no own domain is set", () => {
+    expect(envConfig(() => undefined).cognitoCustomDomain).toBeUndefined();
+    expect(resource(t.auth, "UserPoolDomain").Properties).toEqual({ UserPoolId: { Ref: "UserPool" }, Domain: "insights-605411278365", ManagedLoginVersion: 2 });
+    const tpl = t.auth.toJSON();
+    // The own domain's resource is there but switched off: its parameter keeps the empty default.
+    expect(resource(t.auth, "CustomUserPoolDomain").Condition).toBe("HasCustomDomain");
+    expect(tpl.Conditions.HasCustomDomain).toEqual({ "Fn::Not": [{ "Fn::Equals": [{ Ref: "CustomDomain" }, ""] }] });
+    expect(tpl.Parameters.CustomDomain).toMatchObject({ Type: "String", Default: "" });
+    // The outputs resolve to what they were.
+    expect(tpl.Outputs.Domain.Value["Fn::If"]).toEqual(["HasCustomDomain", { "Fn::Sub": "https://${CustomDomain}" }, { "Fn::Sub": "https://insights-605411278365.auth.${AWS::Region}.amazoncognito.com" }]);
+    expect(tpl.Outputs.ProviderRedirectUri.Value["Fn::If"][2]).toEqual({ "Fn::Sub": "https://insights-605411278365.auth.${AWS::Region}.amazoncognito.com/oauth2/idpresponse" });
+    expect(JSON.stringify(tpl)).toContain('\\"COGNITO_DOMAIN\\":\\"https://insights-605411278365.auth.ap-southeast-2.amazoncognito.com\\"');
+    const runtime = Object.values(t.auth.findResources("AWS::SSM::Parameter"))[0] as Resource;
+    expect(runtime.DependsOn ?? []).not.toContain("CustomUserPoolDomain");
+  });
+
+  it("adds an own domain beside the prefix domain, and moves the app and Google's redirect URI to it once it exists", () => {
+    const tpl = synthAuth({ cognitoCustomDomain: ownDomain });
+    const json = tpl.toJSON();
+    expect(json.Conditions.HasCustomDomain).toEqual({ "Fn::Not": [{ "Fn::Equals": ["auth.bizinsights.io", ""] }] });
+    expect(resource(tpl, "CustomUserPoolDomain").Properties).toEqual({
+      UserPoolId: { Ref: "UserPool" },
+      Domain: "auth.bizinsights.io",
+      CustomDomainConfig: { CertificateArn: ownDomain.certificateArn },
+      ManagedLoginVersion: 2,
+    });
+    // The prefix domain stays exactly as it is: never replaced.
+    expect(resource(tpl, "UserPoolDomain").Properties).toEqual({ UserPoolId: { Ref: "UserPool" }, Domain: "insights-605411278365", ManagedLoginVersion: 2 });
+    expect(json.Outputs.ProviderRedirectUri.Value["Fn::If"][1]).toEqual({ "Fn::Sub": "https://auth.bizinsights.io/oauth2/idpresponse" });
+    expect(json.Outputs.CustomDomainTarget).toMatchObject({ Condition: "HasCustomDomain", Value: { "Fn::GetAtt": "CustomUserPoolDomain.CloudFrontDistribution" } });
+    expect(JSON.stringify(json)).toContain('\\"COGNITO_DOMAIN\\":\\"https://auth.bizinsights.io\\"');
+    const runtime = Object.values(tpl.findResources("AWS::SSM::Parameter"))[0] as Resource;
+    expect(runtime.DependsOn).toContain("CustomUserPoolDomain");
+  });
+
+  it("refuses an own domain whose certificate isn't in us-east-1", () => {
+    expect(() => synthAuth({ cognitoCustomDomain: { ...ownDomain, certificateArn: "arn:aws:acm:ap-southeast-2:605411278365:certificate/0a1b2c3d" } })).toThrow(/us-east-1/);
+  });
+});
+
 describe("IAM", () => {
   it("has no IAM user or access key anywhere (roles only)", () => {
     for (const tpl of [t.ci, t.app, t.data, t.auth, t.audit]) {
@@ -658,6 +721,28 @@ describe("IAM", () => {
     expect(getRole).toHaveLength(1);
     expect(getRole[0]!.Action).toBe("iam:GetRole");
     expect(getRole[0]!.Resource).toEqual(roles.map(([id]) => ({ "Fn::GetAtt": [id, "Arn"] })));
+  });
+
+  it("lets the deploy role restart exactly the three functions when the runtime settings change, and read only that parameter", () => {
+    type Statement = { Effect: string; Action: string | string[]; Resource: unknown };
+    type Policy = { Properties: { PolicyDocument: { Statement: Statement[] } } };
+    const statements = Object.values(t.ci.findResources("AWS::IAM::Policy")).flatMap((p) => (p as Policy).Properties.PolicyDocument.Statement);
+    const granting = (action: string) => statements.filter((s) => [s.Action].flat().includes(action));
+    // The workflow's restart step (aws-deploy.yml) reads the parameter before and after the deploy...
+    const workflow = readFileSync(join(REPO_ROOT, ".github/workflows/aws-deploy.yml"), "utf8");
+    expect(workflow).toContain("aws ssm get-parameter --name /insights/production/runtime");
+    expect(workflow).toMatch(/for f in api jobs cron; do\s+n="insights-production-\$f"/);
+    expect(granting("ssm:GetParameter")).toEqual([{ Effect: "Allow", Action: "ssm:GetParameter", Resource: "arn:aws:ssm:ap-southeast-2:605411278365:parameter/insights/production/runtime" }]);
+    // ...then republishes those functions, on their unqualified ARNs (the step's --function-name), and nothing else.
+    const fns = ["api", "jobs", "cron"].map((f) => `arn:aws:lambda:ap-southeast-2:605411278365:function:insights-production-${f}`);
+    const restart = granting("lambda:PublishVersion");
+    expect(restart).toEqual([{ Effect: "Allow", Action: ["lambda:UpdateFunctionConfiguration", "lambda:PublishVersion"], Resource: fns }]);
+    expect(granting("lambda:UpdateFunctionConfiguration")).toEqual(restart);
+    // Together, or the first deploy that changes the parameter fails at the publish and rolls back.
+    expect(granting("lambda:UpdateAlias").length).toBe(1);
+    // Never a way to hand the functions another execution role.
+    expect(granting("iam:PassRole")).toEqual([]);
+    for (const s of statements) expect([s.Action].flat().some((a) => a === "*" || a === "lambda:*" || a === "ssm:*")).toBe(false);
   });
 
   it("lets the deploy role read everything the workflow's smoke tests check", () => {

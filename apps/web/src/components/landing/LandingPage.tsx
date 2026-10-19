@@ -11,6 +11,7 @@ import { IntroAnimation } from "./intro/IntroAnimation";
 import { InsightHero } from "./hero/InsightHero";
 import { Deferred, releaseWhenIdle } from "./shared/Deferred";
 import { allowGpuParticles } from "./shared/particles";
+import { AdPlatforms } from "./AdPlatforms";
 
 // Everything below the hero is split into its own chunks. They still render into the static
 // HTML (SEO, no layout jump), but their JavaScript doesn't hold up the first screen, and each one
@@ -120,6 +121,8 @@ export function LandingPage() {
         <Deferred id="final">
           <FinalCTA />
         </Deferred>
+        {/* Static text, not deferred: what the app does with the ad accounts a merchant connects (#google-data). */}
+        <AdPlatforms />
       </main>
       <Deferred id="footer">
         <Footer />

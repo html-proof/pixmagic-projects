@@ -65,7 +65,11 @@ export const APP_SETTINGS = {
   // "Measure ad performance data with Marketing API"). Meta Ads stays "Coming soon" until META_APP_SECRET is set.
   // WhatsApp runs on its own app (WHATSAPP_APP_ID below) and never borrows this app's secret.
   "META_APP_ID": "971575545351940",
-  "META_API_VERSION": "v25.0",
+  // Marketing API v26.0 (2026-07-29). Every call and field the ads code uses was checked against its
+  // changelog on 2026-10-19: none changed, except the multiple-id lookup (GET /?ids=), which v26.0
+  // refuses and every version does from 2026-10-27, so delivery statuses come from the account's
+  // campaign, ad set and ad lists instead (packages/core/src/ads/meta.ts metaStatuses).
+  "META_API_VERSION": "v26.0",
   // Facebook Login for Business configuration "Insights ads reporting": user access token, ads_read only.
   "META_CONFIG_ID": "1521935306664882",
   // "1" once Meta grants the app Advanced Access to ads_read (App Review, after Business Verification).
@@ -79,6 +83,14 @@ export const APP_SETTINGS = {
   // retired developer tokens on 2026-09-09, so there is no token to set. Empty: "Coming soon".
   // Explorer granted 2026-10-11 (2,880 operations a day on real accounts).
   "GOOGLE_ADS_ENABLED": "1",
+  // The project's Google Ads API operations a day, shared by every merchant: the syncs' budget (scheduled
+  // ones stop at 80%, history at 60%). Empty: Explorer's 2,880. Set it when Google grants Basic or
+  // Standard access (the figure shown in Cloud console → Google Ads API → Overview).
+  "GOOGLE_ADS_DAILY_OPERATIONS": "",
+  // "1" once Google verifies the app's use of the adwords scope (Google Auth Platform → Verification
+  // Center: branding first, then data access with the demo video). Until then Google shows "Google
+  // hasn't verified this app" before its consent screen, so Settings warns first. AdSense is unaffected.
+  "GOOGLE_ADS_OAUTH_VERIFIED": "",
   // WhatsApp Business Platform (Cloud API), docs/whatsapp.md. "Connect WhatsApp Business" (Meta's
   // Embedded Signup) needs the Meta app id (empty: META_APP_ID is used), the Facebook Login for
   // Business configuration id of its WhatsApp Embedded Signup variation, and the secrets

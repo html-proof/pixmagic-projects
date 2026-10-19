@@ -51,25 +51,34 @@ const TERMS: Record<Topic, Terms> = {
   ],
   ads: [
     ["Ad spend", "What Meta and Google charged for your ads on those days, in the ad account's currency."],
-    ["Views and clicks", "Views (impressions) are times an ad was shown; clicks are taps or clicks on it."],
-    ["Click-through rate", "Clicks divided by views: how often people who saw an ad clicked it."],
-    ["Cost per click / per 1,000 views", "Spend divided by clicks, or by thousands of views."],
-    ["Purchases (platforms' count)", "Purchases Meta or Google credit to their own ads, from their pixel or conversion tracking. Both can claim the same sale, so they won't add up to your Shopify orders."],
-    ["Sales value and return on ad spend", "The value of those purchases, and that value divided by spend: 3× means the platform counts $3 of sales for every $1 spent."],
+    ["Impressions and link clicks", "Impressions are times an ad was shown; link clicks are clicks on the ad's link, to your store or another page. Meta's own \"clicks (all)\" also count likes, comments and profile taps, so they aren't used."],
+    ["Click-through rate (CTR)", "Link clicks divided by impressions: how often people who saw an ad clicked it."],
+    ["Cost per click (CPC) / per 1,000 impressions (CPM)", "Spend divided by link clicks, or by thousands of impressions."],
+    ["Purchases (platforms' count)", "Purchases Meta or Google credit to their own ads, from their pixel or conversion tracking (for Google, its conversion actions of the Purchase category). Both can claim the same sale, so they won't add up to your Shopify orders."],
+    ["Purchase value and return on ad spend (ROAS)", "The value of those purchases, and that value divided by spend: each platform's own figure. 3× means the platform counts $3 of purchases for every $1 spent."],
     ["Cost per purchase", "Spend divided by the purchases the platform counts."],
+    ["Conversions (all conversion actions)", "Google Ads' own conversions: every action it's set to count, so leads, sign-ups and calls as well as purchases. Shown on their own, never added to purchases."],
     ["Ads as share of sales", "Ad spend divided by your store's own net sales for the same dates: what ads cost out of every dollar of net sales."],
-    ["Days", "Each ad account's own calendar day, in its time zone. They line up with your store's days when the time zones match."],
+    ["Unavailable", "Shown instead of a figure when an ad account has no figures for some of the dates: it's still being read for the first time, its updates stopped (for example, access ended), or its history doesn't reach back that far. A missing day is never counted as $0. A closed account spends nothing, so its days since it closed count as 0."],
+    ["Up to (a date)", "While the only days missing are the newest ones, still running or not started yet in an ad account's own time zone, the figure covers the dates up to the last day every account has, and says so. The next update brings the rest."],
+    ["Compared with", "Changes compare whole days only: while the dates include today, both sides stop at yesterday, because today isn't over. Today on its own isn't compared."],
+    ["Days", "Each ad account's own calendar day, in its time zone. They line up with your store's days when the time zones match; the cards say when they don't."],
     ["Updated", "Every hour, and the last 30 days are fetched again daily because the platforms keep counting purchases for a while after the click."],
   ],
   adsense: [
-    ["Estimated earnings", "What Google AdSense says the ads shown on your site earned you, in the AdSense account's currency. AdSense finalizes each month after it ends, so recent days can still change a little."],
+    ["Estimated earnings", "What Google AdSense estimates the ads shown on your site earned, in the AdSense account's currency. AdSense finalizes each month after it ends, so recent days can still change: it isn't money paid out yet."],
     ["Page views", "Pages on your site that showed AdSense ads, as AdSense counts them."],
-    ["Earnings per 1,000 views", "Earnings divided by thousands of page views (AdSense calls it page RPM): what a thousand visits are worth in ad money."],
-    ["Ads shown and clicks", "How many ads were shown, and how many times visitors clicked one."],
-    ["Click rate", "Clicks divided by ads shown."],
-    ["Earnings per click", "Earnings divided by clicks."],
-    ["Next to your sales", "Ad earnings divided by your store's own net sales for the same dates. Earnings are money paid to you: they're never mixed with what you spend on ads."],
-    ["By site", "Each site (web address) the ads were shown on. A store and a blog on the same AdSense account show as separate rows."],
+    ["Page RPM", "Estimated earnings divided by thousands of page views: what a thousand page views are worth in ad money."],
+    ["Impressions", "AdSense counts one for each ad request where at least one ad was delivered to the page, not one for every ad shown."],
+    ["Click-through rate (CTR)", "Clicks divided by impressions."],
+    ["Earnings per click", "Estimated earnings divided by clicks."],
+    ["Next to your sales", "Estimated earnings divided by your store's own net sales for the same dates. Estimated earnings are what AdSense expects to pay you, not money paid out yet: they're never mixed with what you spend on ads."],
+    ["By site", "Each of the store's sites the ads were shown on. Other sites on the same AdSense account aren't counted when sites are chosen for the store in Settings, and the page lists them."],
+    [
+      "Unavailable",
+      "Shown instead of a figure when AdSense hasn't been read for some of the dates, or, with sites chosen for the store, when AdSense reported those days for all of the account's sites together, so the store's share isn't known. A missing day is never counted as $0.",
+    ],
+    ["Up to (a date)", "While the only days missing are the newest ones, still running or not started yet in the AdSense account's time zone, the figure covers the dates up to the last day read, and says so."],
     ["Days", "The AdSense account's own calendar day, in its time zone."],
     ["Updated", "Every hour, and the last 30 days are fetched again daily while AdSense settles its estimates."],
   ],
@@ -168,22 +177,24 @@ function nextSteps(topic: Topic, ov: Overview, currency: string): ReactNode[] {
     }
     case "ads": {
       const a = m.ads;
-      if (!a || a.current.spend === 0) break;
-      const [p1, p2] = [...a.byProvider].filter((p) => p.costPerConversion !== null).sort((x, y) => x.costPerConversion! - y.costPerConversion!);
+      // Only on figures for every day: a short total would point the wrong way.
+      if (!a?.current || a.current.spend === 0) break;
+      // Purchases against purchases only: Google's other conversions (leads, calls) aren't sales.
+      const [p1, p2] = [...a.byProvider].filter((p) => p.costPerPurchase !== null).sort((x, y) => x.costPerPurchase! - y.costPerPurchase!);
       if (p1 && p2) {
         const name = (p: typeof p1) => (p.provider === "meta" ? "Meta" : "Google Ads");
-        out.push(<>{name(p1)} gets a purchase for {fmtMoney(p1.costPerConversion!, a.currency)} against {fmtMoney(p2.costPerConversion!, a.currency)} on {name(p2)}, by their own counts.</>);
+        out.push(<>{name(p1)} gets a purchase for {fmtMoney(p1.costPerPurchase!, a.currency)} against {fmtMoney(p2.costPerPurchase!, a.currency)} on {name(p2)}, by their own counts.</>);
       }
-      const worst = a.campaigns?.find((c) => c.spend > 0 && c.conversions === 0);
-      if (worst) out.push(<>&ldquo;{worst.name}&rdquo; spent {fmtMoney(worst.spend, a.currency)} with no purchase counted. Check whether it&apos;s meant to bring sales, or something else such as awareness.</>);
+      const worst = a.campaigns?.find((c) => c.complete !== false && c.spend > 0 && c.purchases === 0 && c.conversions === 0);
+      if (worst) out.push(<>&ldquo;{worst.name}&rdquo; spent {fmtMoney(worst.spend, a.currency)} with no purchase or other conversion counted. Check whether it&apos;s meant to bring sales, or something else such as awareness.</>);
       if (a.shareOfSales !== null) out.push(<>Ads cost {fmtPct(a.shareOfSales)} of your net sales. Compare that with your profit margin: if ads cost more than you make on a sale, they lose money even when they bring sales.</>);
       break;
     }
     case "adsense": {
       const a = m.adsense;
-      if (!a || a.current.pageViews === 0) break;
+      if (!a?.current || a.current.pageViews === 0) break;
       const site = a.sites.length > 1 ? a.sites[0] : null;
-      if (site && site.site && a.current.earnings > 0) out.push(<>{site.site} brings {fmtPct(site.earnings / a.current.earnings)} of your ad earnings.</>);
+      if (site && site.site && a.current.earnings > 0) out.push(<>{site.site} brings {fmtPct(site.earnings / a.current.earnings)} of your estimated ad earnings.</>);
       if (a.deltas.pageRpm !== null && a.deltas.pageRpm < -0.2) out.push(<>Each 1,000 page views earned {fmtPct(Math.abs(a.deltas.pageRpm))} less than {comparedOnWholeDays(ov)}. Advertisers often pay less after a busy season; if it lasts, check AdSense for ad settings or blocked ad categories.</>);
       if (a.vsSales !== null && a.vsSales > 0) out.push(<>Ad earnings add {fmtPct(a.vsSales)} to your net sales. Ads on a store can also distract shoppers: if fewer visitors buy after adding them, they may cost more than they earn.</>);
       break;

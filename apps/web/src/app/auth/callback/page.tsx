@@ -2,7 +2,8 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { afterSignIn, authErrorMessage, errorCode, finishOAuth } from "@/lib/auth";
+import { ApiError } from "@/lib/api";
+import { afterSignIn, authErrorMessage, errorCode, finishOAuth, isSafeDestination, takeLinkReturn, withQuery } from "@/lib/auth";
 import { takeReturnTo } from "@/lib/returnTo";
 import { Alert } from "@/components/ui";
 import { AuthCard } from "@/components/auth/AuthCard";
@@ -12,6 +13,9 @@ import { SocialButtons } from "@/components/SocialButtons";
  * Where the user pool sends the browser back after Google (the app client's callback
  * URL). The code in the address is useless on its own: the API exchanges it with the client
  * secret and the PKCE verifier only it holds, and only for the browser that started the sign-in.
+ *
+ * A Google account linked from Settings comes back here too: the API answers where to go back
+ * to (the page that asked, with ?linked=google or ?link_error=<code>), and this page goes there.
  */
 export default function OAuthCallbackPage() {
   const router = useRouter();
@@ -30,13 +34,22 @@ export default function OAuthCallbackPage() {
       ...(q.get("error") ? { error: q.get("error")! } : {}),
       ...(q.get("error_description") ? { error_description: q.get("error_description")! } : {}),
     };
+    // Set when this tab started linking Google from Settings: where to go back to if the API can't say.
+    const linkingFrom = takeLinkReturn();
     finishOAuth(params)
       .then((r) => {
+        // Only ever a page of this site, as the browser will read it (the API checks too).
+        if ("linked" in r) return router.replace(isSafeDestination(r.redirect) ? r.redirect : withQuery(linkingFrom ?? "/settings/security", "linked", "google"));
         // The server's copy of where they were headed wins; the browser's is then spent too.
         const local = takeReturnTo();
-        router.replace(r.redirect ?? local ?? afterSignIn());
+        router.replace((isSafeDestination(r.redirect) ? r.redirect : null) ?? local ?? afterSignIn());
       })
-      .catch((e: unknown) => setError({ text: authErrorMessage(e), code: errorCode(e) }));
+      .catch((e: unknown) => {
+        const back = e instanceof ApiError ? e.data.redirect : null;
+        if (isSafeDestination(back)) return router.replace(back);
+        if (linkingFrom) return router.replace(withQuery(linkingFrom, "link_error", errorCode(e) ?? "failed"));
+        setError({ text: authErrorMessage(e), code: errorCode(e) });
+      });
   }, [router]);
 
   if (!error) {
@@ -54,11 +67,19 @@ export default function OAuthCallbackPage() {
     <AuthCard title={error.code === "cancelled" ? "Sign-in cancelled" : "We couldn't sign you in"} subtitle="Nothing was changed. You can try again below.">
       <Alert>
         {error.text}
-        {error.code === "email_in_use" && (
+        {(error.code === "email_in_use" || error.code === "google_removed") && (
           <>
             {" "}
             <Link prefetch={false} href="/login" className="underline">
               Sign in with your password
+            </Link>
+          </>
+        )}
+        {error.code === "email_unverified_provider" && (
+          <>
+            {" "}
+            <Link prefetch={false} href="/signup" className="underline">
+              Create an account with your email
             </Link>
           </>
         )}

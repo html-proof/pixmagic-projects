@@ -54,7 +54,8 @@ describe("ad account sync", () => {
     await systemDb.adCampaignDaily.create({ data: { workspaceId: conn.workspaceId, storeId: conn.storeId, connectionId: conn.id, provider: "meta", accountId: "act_1", campaignId: "gone", campaignName: "Deleted campaign", day: d1, spend: 99 } });
     fetchImpl = async (input, init) => {
       const u = new URL(String(input));
-      expect(u.pathname).toBe("/v25.0/act_1/insights");
+      // The configured Marketing API version (META_API_VERSION's default).
+      expect(u.pathname).toBe("/v26.0/act_1/insights");
       // The token goes in the header, never in the URL.
       expect(new Headers(init?.headers).get("authorization")).toBe("Bearer ACCESS");
       expect(u.searchParams.has("access_token")).toBe(false);
@@ -181,30 +182,49 @@ describe("ad account sync", () => {
       return json({ error: { message: "(#200) Requires ads_read permission", code: 200 } }, 403);
     };
     await consume("sync", message({ kind: "ads", connectionId: revoked.id, since: today(), until: today() }).msg, deps);
-    expect((await systemDb.adConnection.findUniqueOrThrow({ where: { id: revoked.id } })).status).toBe("reconnect");
+    expect(await systemDb.adConnection.findUniqueOrThrow({ where: { id: revoked.id } })).toMatchObject({ status: "reconnect", errorCode: "scope_missing" });
 
-    // Still granted: this login lost the account itself, which reconnecting can't fix.
-    await systemDb.adConnection.update({ where: { id: revoked.id }, data: { status: "active", lastError: null } });
+    // Still granted: this login lost the account itself, which reconnecting with it can't fix, and
+    // retrying every hour can't either (the daily look asks whether it's back).
+    await systemDb.adConnection.update({ where: { id: revoked.id }, data: { status: "active", errorCode: null, lastError: null } });
     adsRead = "granted";
-    await consume("sync", message({ kind: "ads", connectionId: revoked.id, since: today(), until: today() }).msg, deps);
-    expect(await systemDb.adConnection.findUniqueOrThrow({ where: { id: revoked.id } })).toMatchObject({ status: "error", lastError: expect.stringContaining("ads_read") });
+    const lost = message({ kind: "ads", connectionId: revoked.id, since: today(), until: today() });
+    await consume("sync", lost.msg, deps);
+    expect(lost.m).toMatchObject({ acked: true, retried: null });
+    expect(await systemDb.adConnection.findUniqueOrThrow({ where: { id: revoked.id } })).toMatchObject({ status: "permission", errorCode: "no_access", lastError: expect.stringContaining("ads_read") });
   });
 
-  it("rate limits are retried, and only the last attempt marks the account", async () => {
+  it("a rate limit is waited for without spending a retry; once it has waited long enough, the last ordinary attempt marks the account", async () => {
     const conn = await connection("meta");
+    // Meta's code 17: the app is throttled, which says nothing about the account.
     fetchImpl = async () => json({ error: { message: "User request limit reached", code: 17 } }, 400);
-    const first = message({ kind: "ads", connectionId: conn.id, since: today(), until: today() }, 1);
+    const job: AdsSyncData = { kind: "ads", connectionId: conn.id, since: today(), until: today() };
+    const first = message(job, 1);
     await consume("sync", first.msg, deps);
-    expect(first.m.retried).not.toBeNull();
+    // Re-sent as a new message for later, and this one acked: no attempt spent, nothing marked.
+    expect(first.m).toEqual({ acked: true, retried: null });
+    expect(queues.sent.sync).toEqual([{ ...job, rateDeferral: { count: 1, since: expect.any(Number) } }]);
+    expect(queues.sentOpts.sync[0]!.delaySeconds).toBeGreaterThanOrEqual(30);
+    expect(await systemDb.adConnection.findUniqueOrThrow({ where: { id: conn.id } })).toMatchObject({ status: "active", errorCode: null, consecutiveFailures: 0 });
+
+    // Still throttled six hours on: the ordinary retries take over, and only the last one marks the account.
+    queues.clear();
+    const waited = { ...job, rateDeferral: { count: 12, since: Date.now() - 6 * 3600_000 - 60_000 } } as AdsSyncData;
+    const retry = message(waited, 1);
+    await consume("sync", retry.msg, deps);
+    expect(retry.m.acked).toBe(false);
+    expect(retry.m.retried).not.toBeNull();
+    expect(queues.sent.sync).toEqual([]);
     expect((await systemDb.adConnection.findUniqueOrThrow({ where: { id: conn.id } })).status).toBe("active");
-    const last = message({ kind: "ads", connectionId: conn.id, since: today(), until: today() }, 6);
+    const last = message(waited, 6);
     await consume("sync", last.msg, deps);
-    expect(last.m.acked).toBe(true);
-    expect((await systemDb.adConnection.findUniqueOrThrow({ where: { id: conn.id } })).status).toBe("error");
+    expect(last.m).toEqual({ acked: true, retried: null });
+    expect(await systemDb.adConnection.findUniqueOrThrow({ where: { id: conn.id } })).toMatchObject({ status: "error", errorCode: "rate_limited", consecutiveFailures: 1 });
   });
 
   it("the 15-minute tick refreshes recent days hourly and re-checks 30 days once a day, skipping accounts awaiting a reconnect", async () => {
-    const a = await connection("meta");
+    // Connected a while ago (a new connection is left to its first sync for an hour).
+    const a = await connection("meta", { createdAt: new Date(Date.now() - 2 * 3600_000) });
     await systemDb.adConnection.create({
       data: { ...(({ id: _id, createdAt: _c, updatedAt: _u, ...rest }) => rest)(a), accountId: "act_2", status: "reconnect" },
     });
@@ -223,19 +243,22 @@ describe("ad account sync", () => {
     expect(await runScheduled(CRON.refreshTokens, deps)).toMatchObject({ adsSynced: 1 });
   });
 
-  it("the daily re-check fetches the whole 90 days for an account whose history falls short of them", async () => {
-    // Synced before, with no start recorded (connected before it was), or one its first sync never reached.
-    const short = await connection("meta", { lastSyncedAt: new Date(), historyFrom: null });
-    expect(await scheduleAdsSync(deps)).toBe(1);
-    expect(queues.sent.sync[0]).toMatchObject({ connectionId: short.id, since: addDays(today(), -89), until: today() });
-    await systemDb.adConnection.update({ where: { id: short.id }, data: { historyFrom: addDays(today(), -20) } });
-    coord.clear();
+  it("an account whose stored history falls short of 25 months has it walked back, 90 days at a time", async () => {
+    // Synced before, its stored days starting 20 days back (its first sync's window, or one cut short).
+    const short = await connection("meta", { lastSyncedAt: new Date(), historyFrom: addDays(today(), -20), syncedThrough: today() });
+    expect(await scheduleAdsSync(deps)).toBe(2);
+    expect(queues.sent.sync).toEqual([
+      expect.objectContaining({ connectionId: short.id, since: addDays(today(), -29), until: today(), trigger: "schedule", health: true }),
+      { kind: "ads", connectionId: short.id, since: addDays(today(), -110), until: addDays(today(), -21), trigger: "history" },
+    ]);
+    // A window on its way holds the walk: the next tick doesn't queue it again.
     await scheduleAdsSync(deps);
-    expect(queues.sent.sync[1]).toMatchObject({ connectionId: short.id, since: addDays(today(), -89) });
-    // Once the 90 days are in, it goes back to 30.
-    await systemDb.adConnection.update({ where: { id: short.id }, data: { historyFrom: addDays(today(), -89) } });
+    expect(queues.sent.sync.filter((j) => (j as unknown as AdsSyncData).trigger === "history")).toHaveLength(1);
+    // Once 25 months are in, there is nothing left to walk.
+    await systemDb.adConnection.update({ where: { id: short.id }, data: { historyFrom: addDays(today(), -759) } });
     coord.clear();
+    queues.clear();
     await scheduleAdsSync(deps);
-    expect(queues.sent.sync[2]).toMatchObject({ connectionId: short.id, since: addDays(today(), -29) });
+    expect(queues.sent.sync.map((j) => (j as unknown as AdsSyncData).trigger)).toEqual(["schedule"]);
   });
 });

@@ -122,17 +122,55 @@ export function exportTable(section: ExportSection, modules: Obj): { header: str
     case "ads": {
       const a = isObj(modules.ads) ? modules.ads : {};
       const campaigns = list(a.campaigns);
-      const rows = campaigns.length ? campaigns : list(a.byProvider);
-      return table(rows, [
-        ["Platform", "provider"],
-        ["Campaign", "name"],
-        ["Spend", "spend"],
-        ["Impressions", "impressions"],
-        ["Clicks", "clicks"],
-        ["Conversions", "conversions"],
-        ["Conversion value", "conversionValue"],
-        ["Return on ad spend", "roas"],
-      ]);
+      if (!campaigns.length) return platformTable(list(a.byProvider));
+      // A campaign whose account's figures stop before the range ends adds up only the days stored.
+      const out = table(campaigns.map((c) => ({ ...c, provider: platformName(c.provider) })), [...AD_COLUMNS, ["Complete", "complete"]]);
+      const complete = out.header.indexOf("Complete");
+      if (complete >= 0) out.rows = campaigns.map((c, i) => out.rows[i]!.map((cell, j) => (j === complete ? (c.complete === false ? "no" : "yes") : cell)));
+      return out;
     }
   }
+}
+
+/**
+ * The ads columns. Clicks are every click the platform counts (Meta's include likes and comments);
+ * link clicks are the ones every platform means the same way. Conversions are the platform's own, every
+ * conversion action (Google counts leads and calls too); purchases and return on ad spend are purchases only.
+ */
+const AD_COLUMNS: Array<[label: string, key: string]> = [
+  ["Platform", "provider"],
+  ["Campaign", "name"],
+  ["Spend", "spend"],
+  ["Impressions", "impressions"],
+  ["Clicks (all)", "clicks"],
+  ["Link clicks", "linkClicks"],
+  ["Conversions (all conversion actions)", "conversions"],
+  ["Conversion value", "conversionValue"],
+  ["Purchases", "purchases"],
+  ["Purchase value", "purchaseValue"],
+  ["Return on ad spend (purchases)", "roas"],
+];
+
+const PLATFORM_NAMES: Record<string, string> = { meta: "Meta Ads", google: "Google Ads" };
+const platformName = (p: unknown) => (typeof p === "string" ? (PLATFORM_NAMES[p] ?? p) : null);
+
+/**
+ * Each platform's totals, when the range has no campaign. A platform whose accounts don't have every
+ * day of the range stored has no total for it: its cells say "Unavailable" and the note says which days
+ * are stored, or, when only days not over yet are missing, the figures up to the last day stored, dated.
+ */
+function platformTable(platforms: Obj[]) {
+  const metrics = AD_COLUMNS.filter(([, k]) => k !== "provider" && k !== "name" && platforms.some((p) => k in p));
+  const header = ["Platform", ...metrics.map(([label]) => label), "Complete", "Note"];
+  const rows = platforms.map((p): Cell[] => {
+    const coverage = isObj(p.coverage) ? p.coverage : {};
+    const soFar = isObj(p.soFar) && isObj(p.soFar.totals) ? p.soFar : null;
+    const partial = isObj(p.partial) ? p.partial : null;
+    const name = platformName(p.provider);
+    if (coverage.complete === true) return [name, ...metrics.map(([, k]) => val(p, k)), "yes", null];
+    if (soFar) return [name, ...metrics.map(([, k]) => val(soFar.totals as Obj, k)), `up to ${String(soFar.to)}`, "Up to the last day stored: the days after it aren't over yet."];
+    const note = partial ? `Figures are stored for ${String(partial.from)} to ${String(partial.to)} only.` : "No figures are stored for these dates yet.";
+    return [name, ...metrics.map((): Cell => "Unavailable"), "no", note];
+  });
+  return { header, rows };
 }

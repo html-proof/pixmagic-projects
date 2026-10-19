@@ -33,7 +33,10 @@ async function storeWithGoogleAds(shop: string, externalUserId: string | null = 
   const ws = await systemDb.workspace.create({ data: { name: "W" } });
   const store = await systemDb.store.create({ data: { workspaceId: ws.id, shopDomain: shop, grantedScopes: ["read_orders"], status: "active", timezone: "UTC", pixelIngestKey: `pk-${shop}` } });
   const tokens = encryptAdTokens(store.id, "google", { accessToken: "ACCESS", refreshToken: `REFRESH-${shop}`, expiresAt: new Date(Date.now() + 86_400_000) });
-  const conn = await systemDb.adConnection.create({ data: { workspaceId: ws.id, storeId: store.id, provider: "google", accountId: "111", currency: "USD", timezone: "UTC", externalUserId, ...tokens } });
+  // Synced before: a connection's very first sync is left to the one queued when it was connected.
+  const conn = await systemDb.adConnection.create({
+    data: { workspaceId: ws.id, storeId: store.id, provider: "google", accountId: "111", currency: "USD", timezone: "UTC", externalUserId, lastSyncedAt: new Date(Date.now() - 3600_000), ...tokens },
+  });
   return { ws, store, conn };
 }
 

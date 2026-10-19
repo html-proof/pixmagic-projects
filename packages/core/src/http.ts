@@ -18,3 +18,25 @@ export function withTimeout(fetchImpl: FetchLike, ms = OUTBOUND_TIMEOUT_MS): Fet
     fetchImpl(input, init?.signal ? init : { ...init, signal: AbortSignal.timeout(ms) });
   return timed as FetchLike;
 }
+
+/**
+ * `fetchImpl` with one deadline (epoch ms) shared by every call made through it: each call gets what's
+ * left of it (at most OUTBOUND_TIMEOUT_MS), and none starts after it. For work that must end within a
+ * request's time limit, however many calls it takes. A call cut off by the deadline rejects with
+ * `outOfTime()` (by default a `TimeoutError`, as withTimeout's); the call's own signal still applies.
+ */
+export function fetchUntil(fetchImpl: FetchLike | undefined, deadline: number, outOfTime: () => Error = () => new DOMException("The deadline passed", "TimeoutError")): FetchLike {
+  const f = fetchImpl ?? fetch;
+  const timed = async (input: Parameters<FetchLike>[0], init?: Parameters<FetchLike>[1]) => {
+    const left = deadline - Date.now();
+    if (left <= 0) throw outOfTime();
+    const own = AbortSignal.timeout(Math.min(left, OUTBOUND_TIMEOUT_MS));
+    try {
+      return await f(input, { ...init, signal: init?.signal ? AbortSignal.any([init.signal, own]) : own });
+    } catch (err) {
+      if (own.aborted) throw outOfTime();
+      throw err;
+    }
+  };
+  return timed as FetchLike;
+}

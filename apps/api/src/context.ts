@@ -26,7 +26,12 @@ export interface Deps {
   dbHealthy?: () => Promise<boolean>;
 }
 
-export type AppEnv = { Variables: { user?: User; session?: SessionClaims; sessionCookie?: "own" | "share" } };
+/** The sign-in a session came from, as the account has it (auth_identities): its address at its last sign-in. */
+export interface SessionIdentity {
+  email: string | null;
+}
+
+export type AppEnv = { Variables: { user?: User; session?: SessionClaims; sessionCookie?: "own" | "share"; identity?: SessionIdentity } };
 export type Ctx = Context<AppEnv>;
 
 export class HttpError extends Error {
@@ -77,22 +82,27 @@ const SESSION_REVOKED = new Set(["NotAuthorizedException", "UserNotFoundExceptio
 /**
  * Re-check a session with Cognito by spending its refresh token (at most every REVALIDATE_MS, and
  * by one request at a time). Cognito unreachable is not a verdict: the session carries on and is
- * checked again on a later request.
+ * checked again on a later request. "verified": Cognito vouches for `accountEmail`, the account's
+ * own address (a Google account linked under another address vouches for that one only).
+ *
+ * A session due for its check whose refresh-token cookie didn't come along ends. That cookie is set
+ * with the session's and goes with every request to the API's path (API_URL), where the web app
+ * and Shopify's returns call it, so a request without it is from someone who kept the session
+ * cookie alone: a session nothing done in Cognito (a deleted user, a sign-out everywhere) could end.
  */
-async function revalidate(c: Ctx, deps: Deps, s: SessionClaims): Promise<"ok" | "verified" | "revoked" | "skipped"> {
+async function revalidate(c: Ctx, deps: Deps, s: SessionClaims, accountEmail: string): Promise<"ok" | "verified" | "revoked" | "skipped"> {
   if (s.m === "link") return "skipped";
   const rt = readRefreshToken(c, s);
-  if (rt === undefined) return "skipped";
-  if (rt === null) return "revoked";
+  if (!rt) return "revoked";
   if (!(await deps.coord.acquire(`session:check:${s.sid}`, 30_000).catch(() => false))) return "skipped";
   try {
-    const tokens = await deps.auth.refresh(rt, s.un);
+    const tokens = await deps.auth.refresh(rt, s.sub);
     const id = await deps.auth.verifyIdToken(tokens.idToken);
     if (id.sub !== s.sub) return "revoked";
     const next = { ...s, ck: Date.now() };
     setSessionCookies(c, next, tokens.refreshToken);
     c.set("session", next);
-    return id.emailVerified ? "verified" : "ok";
+    return id.emailVerified && id.email?.toLowerCase() === accountEmail.toLowerCase() ? "verified" : "ok";
   } catch (err) {
     if (err instanceof CognitoError && SESSION_REVOKED.has(err.code)) {
       logger.info({ cognitoError: err.code }, "session ended by Cognito");
@@ -163,8 +173,19 @@ async function loadSessionUser(c: Ctx, deps: Deps): Promise<User | null> {
   // The session is genuine from here on, so failing to load its user is our outage (the database
   // is reachable only through a tunnel that drops), never "signed out".
   let user: User | null;
+  let identity: SessionIdentity | undefined;
   try {
-    user = await systemDb.user.findUnique({ where: { id: s.uid } });
+    const row = await systemDb.user.findUnique({
+      where: { id: s.uid },
+      include: { identities: { where: { provider: "cognito", subject: s.sub }, select: { email: true }, take: 1 } },
+    });
+    if (row) {
+      const { identities, ...rest } = row;
+      user = rest;
+      identity = identities[0];
+    } else {
+      user = null;
+    }
   } catch (err) {
     logger.error({ err, path: c.req.path }, "session user lookup failed");
     throw new HttpError(503, "We can't reach your account right now. Please try again in a moment.", "db_unavailable");
@@ -172,10 +193,15 @@ async function loadSessionUser(c: Ctx, deps: Deps): Promise<User | null> {
   if (!user) return null;
   // "Sign out everywhere" since this session started.
   if (user.sessionsValidAfter && s.iat < user.sessionsValidAfter.getTime()) return null;
+  // The way it signed in is no longer the account's (removed in Settings, or by a take-over): its
+  // sessions end with it, on their very next request, whatever cookies they still hold. A session
+  // opened from a shared link has no sign-in of its own (its membership is checked instead).
+  if (s.m !== "link" && !identity) return null;
   c.set("session", s);
   c.set("sessionCookie", picked.cookie);
+  if (identity) c.set("identity", identity);
   if (Date.now() - s.ck > REVALIDATE_MS) {
-    const checked = await revalidate(c, deps, s);
+    const checked = await revalidate(c, deps, s, user.email);
     if (checked === "revoked") {
       clearSessionCookies(c);
       return null;
@@ -187,6 +213,16 @@ async function loadSessionUser(c: Ctx, deps: Deps): Promise<User | null> {
   c.set("user", user);
   addLogContext({ userId: user.id });
   return user;
+}
+
+/**
+ * Whether this session's sign-in proved the account's own address and still names it: Cognito
+ * vouched for the address at sign-in (SessionClaims.own), and it is the account's address now.
+ * A Google account linked under another address never does (after requireUser).
+ */
+export function sessionProvesAddress(c: Ctx, user: User): boolean {
+  const id = c.get("identity");
+  return !!c.get("session")?.own && !!id?.email && id.email.toLowerCase() === user.email.toLowerCase();
 }
 
 /** The signed-in session's claims (after requireUser). */
@@ -205,7 +241,7 @@ export async function accessTokenFor(c: Ctx, deps: Deps): Promise<string> {
   const rt = readRefreshToken(c, s);
   if (!rt) throw new HttpError(401, "Please sign in again to change this.", "reauth_required");
   try {
-    const tokens = await deps.auth.refresh(rt, s.un);
+    const tokens = await deps.auth.refresh(rt, s.sub);
     if (tokens.refreshToken) setSessionCookies(c, s, tokens.refreshToken);
     return tokens.accessToken;
   } catch (err) {

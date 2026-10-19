@@ -265,7 +265,9 @@ Public ids in `apps/aws/src/settings.ts` (`APP_SETTINGS`: `WHATSAPP_APP_ID`, `WH
 `WHATSAPP_API_VERSION`), secrets with `node infra/cdk/scripts/put-secrets.mjs --set WHATSAPP_APP_SECRET` and
 `node infra/cdk/scripts/put-secrets.mjs --set WHATSAPP_WEBHOOK_VERIFY_TOKEN`. Placeholders for the local server
 are in `apps/aws/.env.example`. Without them the dashboard says Meta's sign-up isn't set up (and offers the
-manual route); nothing pretends to be connected.
+manual route); nothing pretends to be connected. The deploy's config check asks for `WHATSAPP_APP_SECRET` only once
+`WHATSAPP_CONFIG_ID` is set; until then the Deploy run's line lists what Embedded Signup still needs
+([aws-deployment.md](aws-deployment.md), "Which provider secrets are there").
 
 ### 3. Shopify
 

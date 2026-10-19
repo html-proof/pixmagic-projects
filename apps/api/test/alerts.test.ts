@@ -79,6 +79,22 @@ describe("GET /workspaces/:ws/alerts", () => {
     expect(await areas()).toContain("staff");
   });
 
+  it("lists an ad account's alerts to members who manage integrations (Settings → Advertising), not only to owners and admins", async () => {
+    const { ws, store } = await seed();
+    await systemDb.alert.create({ data: { workspaceId: ws, storeId: store.id, severity: "warning", code: "ads_reconnect:conn1", message: 'Meta ad account "Shop ads": access has ended.', createdAt: ago(1) } });
+    const marketer = await signIn(ctx, "marketer", "marketer@acme.test");
+    await systemDb.membership.create({ data: { workspaceId: ws, userId: marketer.user.id, role: "analyst", permissions: ["dashboard:read", "marketing.ads", "integrations.status", "integrations.manage"] } });
+    const areas = async () => {
+      const res = await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/alerts`, headers: marketer.headers });
+      expect(res.statusCode).toBe(200);
+      return (res.json().alerts as Array<{ area: string }>).map((a) => a.area);
+    };
+    expect(await areas()).toContain("ads");
+    // Seeing the numbers isn't fixing the connection.
+    await systemDb.membership.update({ where: { workspaceId_userId: { workspaceId: ws, userId: marketer.user.id } }, data: { permissions: ["dashboard:read", "marketing.ads", "integrations.status"] } });
+    expect(await areas()).not.toContain("ads");
+  });
+
   it("is only for the workspace's members", async () => {
     const { ws } = await seed();
     const stranger = await signIn(ctx, "stranger", "stranger@else.test");

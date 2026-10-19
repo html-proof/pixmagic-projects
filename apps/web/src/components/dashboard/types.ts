@@ -1,5 +1,5 @@
 /** Response of GET /workspaces/:ws/stores/:storeId/overview (built by packages/core/src/reports/overview.ts, served by apps/api/src/routes/dashboard.ts). */
-import type { AdsenseTotals, AdTotals } from "@app/shared/ads";
+import type { AdCoverage, AdProvider, AdSeriesDay, AdsenseReportLevel, AdsenseReportRow, AdsenseSeriesDay, AdsenseTotals, AdSpendProvider, AdTotals } from "@app/shared/ads";
 import type { CompareMode } from "@app/shared/dates";
 import type { JourneyPageRow, JourneySummary } from "@app/shared/journey";
 import type { SalesDay, YearBreakdown } from "@app/shared/sales";
@@ -99,42 +99,142 @@ export interface SalesOverview {
   calculation?: SalesCalculation;
 }
 
-/** What connected Meta / Google ad accounts report for the dates (see adsModule in the API). */
-export interface AdsModule {
+/**
+ * One connected ad account as the ads modules list it (accountView in packages/core/src/reports/ads.ts):
+ * its state, its time zone, and the days its stored figures cover.
+ */
+export interface AdAccount<P extends AdProvider = AdProvider> {
+  id: string;
+  provider: P;
+  accountId: string;
+  name: string | null;
+  currency: string | null;
+  /** AD_CONNECTION_STATUSES: active, reconnect, permission, unavailable, error. */
+  status: string;
+  /** Why it isn't active (AD_ERROR_CODES); null when it is, or unknown. */
+  errorCode?: string | null;
+  /** The account's own health at the platform (AD_ACCOUNT_STATUSES); null until read. */
+  accountStatus?: string | null;
+  lastSyncedAt: string | null;
+  /** Added up: in the currency the module is in. */
+  counted: boolean;
+  timezone?: string | null;
+  /** Its days follow another time zone than the store's. */
+  otherTimeZone?: boolean;
+  /** The account's own today (YYYY-MM-DD). */
+  today?: string;
+  /** The days its stored figures cover (its own days); nulls: nothing stored yet. */
+  coverage?: AdCoverage;
+  /** Whether those days include every day of the range. */
+  coversRange?: boolean;
+  /** AdSense: the sites chosen as the store's (empty: every site). */
+  sites?: string[];
+  /** AdSense, sites chosen: the last day read whose earnings AdSense didn't split by site (the store's share of them isn't known). */
+  unsplitThrough?: string | null;
+}
+
+/** Why a change isn't given: only running days picked, a comparison before the figures start, or days missing on either side. */
+export type NotCompared = "running" | "no_history" | "incomplete";
+
+export interface FiguresWindow<T> {
+  from: string;
+  to: string;
+  totals: T;
+}
+
+/**
+ * Figures that exist only for days every account they add up has stored. `current` is null when
+ * one of them lacks a day of the range ("Unavailable"), and `partial` then gives the days they all
+ * have; `soFar` is that same part when the only days it lacks are at the end and not over yet (shown
+ * as the figure, "through" its last day); `compared` is what each side of the change is worked out
+ * on (whole days only: while the dates include today, both sides stop at the last day that is
+ * over), null with `notCompared` why.
+ */
+export interface AdFigures<T> {
+  coverage: AdCoverage & { complete: boolean };
+  current: T | null;
+  partial: FiguresWindow<T> | null;
+  /** Absent from answers that predate it. */
+  soFar?: FiguresWindow<T> | null;
+  compared: { current: FiguresWindow<T>; previous: FiguresWindow<T>; trimmed: number } | null;
+  notCompared: NotCompared | null;
+  /** The first day every account has figures from (each brings the 90 days before it was connected). */
+  historyFrom: string | null;
+  /** When the least recently updated account last synced; null while one never has. */
+  updatedAt: string | null;
+}
+
+export interface AdsComparison {
+  /** The dates the "before" figures are from (the compared side); null when nothing is compared. */
+  from: string | null;
+  to: string | null;
+  spend: number | null;
+  linkClicks: number | null;
+  conversions: number | null;
+  conversionValue: number | null;
+  purchases: number | null;
+  purchaseValue: number | null;
+  roas: number | null;
+  /** False when the comparison starts before `historyFrom`: "No earlier data". */
+  imported: boolean;
+}
+export interface AdsDeltas {
+  spend: number | null;
+  linkClicks: number | null;
+  conversions: number | null;
+  purchases: number | null;
+  purchaseValue: number | null;
+  roas: number | null;
+}
+
+/** One platform's figures (byProvider): its totals flat on the entry too (null when unavailable). */
+export type AdsProviderFigures = AdFigures<AdTotals> & { [K in keyof AdTotals]: AdTotals[K] | null } & { provider: AdSpendProvider; accounts: string[]; previous: AdsComparison; deltas: AdsDeltas };
+
+/** What connected Meta / Google ad accounts report for the dates (see adsFigures in the API). */
+export interface AdsModule extends AdFigures<AdTotals> {
   /** The one currency everything below is in. */
   currency: string;
-  accounts: Array<{ id: string; provider: "meta" | "google"; accountId: string; name: string | null; currency: string | null; status: string; lastSyncedAt: string | null; counted: boolean }>;
-  current: AdTotals;
-  /** The first day every counted account has figures from (each account brings the 90 days before it was connected). */
-  historyFrom?: string | null;
-  /** All null, and `imported` false, when the comparison starts before `historyFrom`: "No earlier data". */
-  previous: { spend: number | null; clicks: number | null; conversions: number | null; conversionValue: number | null; roas: number | null; imported?: boolean };
-  deltas: { spend: number | null; clicks: number | null; conversions: number | null; roas: number | null };
-  series: Array<{ day: string; spend: number; clicks: number; impressions: number; conversions: number; conversionValue: number }>;
-  byProvider: Array<AdTotals & { provider: "meta" | "google" }>;
-  /** Each platform's own days (same shape as series). */
-  seriesByProvider: Array<{ provider: "meta" | "google"; series: Array<{ day: string; spend: number; clicks: number; impressions: number; conversions: number; conversionValue: number }> }>;
-  /** Team & Access: "View campaigns and their performance". */
-  campaigns?: Array<AdTotals & { provider: "meta" | "google"; accountId: string; campaignId: string; name: string }>;
-  /** Ad spend divided by the store's net sales (same currency only). */
+  accounts: Array<AdAccount<AdSpendProvider>>;
+  /** The figures compared with (from `compared.previous`): all null when nothing is compared. */
+  previous: AdsComparison;
+  deltas: AdsDeltas;
+  /** Every day of the range; a day a counted account has no figures for is null throughout. */
+  series: AdSeriesDay[];
+  byProvider: AdsProviderFigures[];
+  /** Each platform's own days (missing where its accounts have none). */
+  seriesByProvider: Array<{ provider: AdSpendProvider; series: AdSeriesDay[] }>;
+  /** Team & Access: "View campaigns and their performance". `complete` false: its account's figures stop before the range ends. */
+  campaigns?: Array<AdTotals & { provider: AdSpendProvider; accountId: string; campaignId: string; name: string; complete?: boolean }>;
+  /** Ad spend divided by the store's net sales (same currency, every day known). */
   shareOfSales: number | null;
 }
 
-/** What connected AdSense accounts earned from ads shown on the store's site (see adsenseModule in the API). */
-export interface AdsenseModule {
+/** What connected AdSense accounts earned from ads shown on the store's site (see adsenseFigures in the API). */
+export interface AdsenseModule extends AdFigures<AdsenseTotals> {
   currency: string;
-  accounts: Array<{ id: string; provider: "adsense"; accountId: string; name: string | null; currency: string | null; status: string; lastSyncedAt: string | null; counted: boolean }>;
-  current: AdsenseTotals;
-  /** The first day every counted account has figures from (as for ads). */
-  historyFrom?: string | null;
-  /** All null, and `imported` false, when the comparison starts before `historyFrom`: "No earlier data". */
-  previous: { earnings: number | null; pageViews: number | null; clicks: number | null; pageRpm: number | null; imported?: boolean };
+  accounts: Array<AdAccount<"adsense">>;
+  previous: { from: string | null; to: string | null; earnings: number | null; pageViews: number | null; clicks: number | null; pageRpm: number | null; imported: boolean };
   deltas: { earnings: number | null; pageViews: number | null; clicks: number | null; pageRpm: number | null };
-  series: Array<{ day: string; earnings: number; pageViews: number; impressions: number; clicks: number }>;
-  /** Per site the ads were shown on; one row with site "" when AdSense didn't split by site. */
+  series: AdsenseSeriesDay[];
+  /** The store's sites the ads were shown on; one row with site "" when AdSense didn't split by site. */
   sites: Array<AdsenseTotals & { site: string }>;
-  /** Ad earnings divided by the store's net sales (same currency only). */
+  /** Sites on the same AdSense accounts that aren't the store's: left out of every figure above. */
+  sitesLeftOut?: Array<AdsenseTotals & { site: string }>;
+  /** Estimated earnings divided by the store's net sales (same currency, every day known). */
   vsSales: number | null;
+}
+
+/** GET .../ads/adsense/report: one AdSense account split by country or device type, asked of AdSense for exactly these dates. */
+export interface AdsenseReportAnswer {
+  level: AdsenseReportLevel;
+  since: string;
+  until: string;
+  currency: string | null;
+  rows: AdsenseReportRow[];
+  totals: AdsenseTotals;
+  truncated: boolean;
+  /** The sites the answer is limited to (the connection's chosen sites; empty: every site). Absent: taken as the connection's. */
+  sites?: string[];
 }
 
 export interface ChannelsModule {

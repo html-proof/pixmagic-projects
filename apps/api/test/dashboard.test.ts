@@ -386,9 +386,11 @@ describe("what the dates are compared with", () => {
 
   /** A Meta ad account and an AdSense account on the store, with what they report for `days`. */
   async function seedAds(store: Store, days: Array<[day: string, spend: number, earnings: number]>) {
-    // Connected long before these dates: their figures reach back further than any comparison here.
+    // Connected long before these dates, and synced up to today: their figures reach back further than any comparison here.
     const conn = (provider: string, accountId: string) =>
-      systemDb.adConnection.create({ data: { workspaceId: store.workspaceId, storeId: store.id, provider, accountId, currency: "USD", accessTokenEnc: "x", tokenKeyVersion: 1, historyFrom: "2020-01-01" } });
+      systemDb.adConnection.create({
+        data: { workspaceId: store.workspaceId, storeId: store.id, provider, accountId, currency: "USD", timezone: TZ, accessTokenEnc: "x", tokenKeyVersion: 1, historyFrom: "2020-01-01", syncedThrough: today, lastSyncedAt: new Date() },
+      });
     const meta = await conn("meta", "act_1");
     const sense = await conn("adsense", "pub-1");
     for (const [day, spend, earnings] of days) {
@@ -526,9 +528,11 @@ describe("what the dates are compared with", () => {
     await visit(d(-14), "v1", 4);
     await visit(d(-5), "v2", 4);
     await visit(d(-4), "v3");
-    // Two Meta accounts: one connected long ago, one 12 days ago (its first sync brought from then on).
+    // Two Meta accounts: one connected long ago, one 12 days ago (its first sync brought from then on), both synced up to today.
     const conn = (provider: string, accountId: string, historyFrom: string, currency = "USD") =>
-      systemDb.adConnection.create({ data: { workspaceId: ws, storeId: store.id, provider, accountId, currency, accessTokenEnc: "x", tokenKeyVersion: 1, historyFrom } });
+      systemDb.adConnection.create({
+        data: { workspaceId: ws, storeId: store.id, provider, accountId, currency, timezone: TZ, accessTokenEnc: "x", tokenKeyVersion: 1, historyFrom, syncedThrough: today, lastSyncedAt: new Date() },
+      });
     const old = await conn("meta", "act_old", d(-100));
     const recent = await conn("meta", "act_new", d(-12));
     // In euros, so not added in: its start doesn't count either.
@@ -552,7 +556,12 @@ describe("what the dates are compared with", () => {
     expect(early.previous.imported).toBe(true);
     expect(early.modules.funnel).toMatchObject({ visits: 2, conversionRate: 0.5, historyFrom: d(-19), previous: { visits: null, conversionRate: null, imported: false } });
     expect(none(early.modules.funnel.deltas)).toBe(true);
-    expect(early.modules.ads).toMatchObject({ historyFrom: d(-12), current: { spend: 50 }, previous: { spend: null, clicks: null, conversions: null, conversionValue: null, roas: null, imported: false } });
+    expect(early.modules.ads).toMatchObject({
+      historyFrom: d(-12),
+      current: { spend: 50 },
+      previous: { spend: null, linkClicks: null, conversions: null, conversionValue: null, purchases: null, roas: null, imported: false },
+      notCompared: "no_history",
+    });
     expect(none(early.modules.ads.deltas)).toBe(true);
     expect(early.modules.adsense).toMatchObject({ historyFrom: d(-12), current: { earnings: 4 }, previous: { earnings: null, pageViews: null, imported: false } });
     expect(none(early.modules.adsense.deltas)).toBe(true);
@@ -592,6 +601,214 @@ describe("what the dates are compared with", () => {
     const bad = await download("preset=7d&compare=custom&cfrom=2026-03-09&cto=2026-03-01");
     expect(bad.statusCode).toBe(400);
     expect(bad.json().error).toBe("invalid_range");
+  });
+});
+
+describe("ad figures only for the days the accounts have stored", () => {
+  const today = localDay(new Date(), TZ);
+  const d = (n: number) => addDays(today, n);
+
+  /** An ad account on the store: synced up to today from 90 days back unless said otherwise. */
+  const adAccount = (store: Store, provider: string, accountId: string, over: Record<string, unknown> = {}) =>
+    systemDb.adConnection.create({
+      data: {
+        workspaceId: store.workspaceId,
+        storeId: store.id,
+        provider,
+        accountId,
+        accountName: `Account ${accountId}`,
+        currency: "USD",
+        timezone: TZ,
+        accessTokenEnc: "x",
+        tokenKeyVersion: 1,
+        historyFrom: d(-89),
+        syncedThrough: today,
+        lastSyncedAt: new Date(),
+        ...over,
+      },
+    });
+  const spendDays = async (store: Store, c: { id: string; provider: string; accountId: string }, from: string, to: string, spend: number) => {
+    for (let day = from; day <= to; day = addDays(day, 1)) {
+      await systemDb.adCampaignDaily.create({
+        data: { workspaceId: store.workspaceId, storeId: store.id, connectionId: c.id, provider: c.provider, accountId: c.accountId, campaignId: "1", campaignName: "Spring", day, spend, impressions: 100, clicks: 4, linkClicks: 2, purchases: 1, purchaseValue: 3 * spend },
+      });
+    }
+  };
+  const earnDays = async (store: Store, c: { id: string; accountId: string }, site: string, from: string, to: string, earnings: number) => {
+    for (let day = from; day <= to; day = addDays(day, 1)) {
+      await systemDb.adsenseDaily.create({ data: { workspaceId: store.workspaceId, storeId: store.id, connectionId: c.id, accountId: c.accountId, site, day, earnings, pageViews: 100, impressions: 50, clicks: 1 } });
+    }
+  };
+
+  it("never shows 0 for an account whose access ended or that was never read, and keeps a healthy platform's figures", async () => {
+    const { a, ws, store } = await owner();
+    const meta = await adAccount(store, "meta", "act_1");
+    // Access ended three days ago: nothing stored since.
+    const google = await adAccount(store, "google", "123", { status: "reconnect", errorCode: "auth_expired", syncedThrough: d(-3), lastSyncedAt: new Date(Date.now() - 3 * 86_400_000) });
+    // Connected a moment ago: its first sync hasn't finished.
+    await adAccount(store, "adsense", "pub-1", { historyFrom: null, syncedThrough: null, lastSyncedAt: null });
+    await spendDays(store, meta, d(-13), today, 10);
+    await spendDays(store, google, d(-13), d(-3), 5);
+
+    const { modules: m } = (await overview(a.headers, ws, store.id, "preset=7d")).json();
+    // Together: Google's last three days aren't known, so there is no total, only the part every account has.
+    expect(m.ads.current).toBeNull();
+    expect(m.ads.coverage).toEqual({ from: d(-89), through: d(-3), complete: false });
+    expect(m.ads.partial).toMatchObject({ from: d(-6), to: d(-3), totals: { spend: 60 } });
+    expect(m.ads.notCompared).toBe("incomplete");
+    expect(m.ads.deltas.spend).toBeNull();
+    expect(m.ads.shareOfSales).toBeNull();
+    expect(m.ads.series.map((x: { spend: number | null }) => x.spend)).toEqual([15, 15, 15, 15, null, null, null]);
+    // Meta on its own covers the week; Google's entry is unavailable, never $0.
+    const meta7 = m.ads.byProvider.find((p: { provider: string }) => p.provider === "meta");
+    const google7 = m.ads.byProvider.find((p: { provider: string }) => p.provider === "google");
+    expect(meta7).toMatchObject({ spend: 70, current: { spend: 70, purchases: 7, roas: 3 }, coverage: { complete: true }, notCompared: null, deltas: { spend: 0 } });
+    expect(meta7.updatedAt).toEqual(expect.any(String));
+    expect(google7).toMatchObject({ spend: null, current: null, partial: { from: d(-6), to: d(-3), totals: { spend: 20 } }, notCompared: "incomplete" });
+    expect(m.ads.accounts.find((x: { provider: string }) => x.provider === "google")).toMatchObject({ status: "reconnect", errorCode: "auth_expired", coverage: { from: d(-89), through: d(-3) }, coversRange: false });
+    // AdSense not read yet: nothing to show, and nothing shown as $0.
+    expect(m.adsense).toMatchObject({ current: null, partial: null, coverage: { from: null, through: null, complete: false }, notCompared: "incomplete", vsSales: null });
+    expect(m.adsense.series.every((x: { earnings: number | null }) => x.earnings === null)).toBe(true);
+  });
+
+  it("gives what it holds of a 366-day range, with the days before the accounts' history missing", async () => {
+    const { a, ws, store } = await owner();
+    const meta = await adAccount(store, "meta", "act_1");
+    const sense = await adAccount(store, "adsense", "pub-1");
+    await spendDays(store, meta, d(-89), today, 1);
+    await earnDays(store, sense, "", d(-89), today, 2);
+
+    const res = await overview(a.headers, ws, store.id, `preset=custom&from=${d(-365)}&to=${today}`);
+    expect(res.statusCode).toBe(200);
+    const m = res.json().modules;
+    expect(m.ads.series).toHaveLength(366);
+    expect(m.ads.series.filter((x: { spend: number | null }) => x.spend === null)).toHaveLength(276);
+    expect(m.ads).toMatchObject({ current: null, partial: { from: d(-89), to: today, totals: { spend: 90 } }, notCompared: "no_history", previous: { imported: false } });
+    expect(m.adsense).toMatchObject({ current: null, partial: { from: d(-89), to: today, totals: { earnings: 180 } }, notCompared: "no_history" });
+    expect(m.adsense.series.filter((x: { earnings: number | null }) => x.earnings === null)).toHaveLength(276);
+  });
+
+  it("says when an account's days follow another time zone, and leaves a day it hasn't reached missing", async () => {
+    const { a, ws, store } = await owner();
+    // Eleven hours behind UTC: its "today" can still be the store's yesterday, so it's stored up to then.
+    const google = await adAccount(store, "google", "123", { timezone: "Pacific/Pago_Pago", syncedThrough: d(-1) });
+    const meta = await adAccount(store, "meta", "act_1");
+    await spendDays(store, google, d(-3), d(-1), 5);
+    await spendDays(store, meta, d(-3), today, 10);
+
+    const { modules: m } = (await overview(a.headers, ws, store.id, "preset=today")).json();
+    expect(m.ads.accounts.map((x: { provider: string; timezone: string; otherTimeZone: boolean }) => [x.provider, x.timezone, x.otherTimeZone])).toEqual([
+      ["google", "Pacific/Pago_Pago", true],
+      ["meta", TZ, false],
+    ]);
+    expect(m.ads.current).toBeNull();
+    expect(m.ads.byProvider.find((p: { provider: string }) => p.provider === "google")).toMatchObject({ current: null, partial: null, spend: null });
+    expect(m.ads.byProvider.find((p: { provider: string }) => p.provider === "meta")).toMatchObject({ spend: 10, notCompared: "running", deltas: { spend: null } });
+    expect(m.ads.seriesByProvider.find((s: { provider: string }) => s.provider === "google").series).toEqual([expect.objectContaining({ day: today, spend: null })]);
+
+    // Over a week, the only day missing is one Google hasn't finished or begun: the week so far, through yesterday.
+    const week = (await overview(a.headers, ws, store.id, "preset=7d")).json().modules.ads;
+    expect(week.current).toBeNull();
+    expect(week.soFar).toMatchObject({ from: d(-6), to: d(-1), totals: { spend: 45 } });
+    expect(week.byProvider.find((p: { provider: string }) => p.provider === "google")).toMatchObject({ current: null, soFar: { from: d(-6), to: d(-1), totals: { spend: 15 } } });
+    expect(week.series.at(-1)).toMatchObject({ day: today, spend: null });
+  });
+
+  it("compares a platform with a long history even when another's starts after the comparison", async () => {
+    const { a, ws, store } = await owner();
+    const google = await adAccount(store, "google", "123", { historyFrom: addDays(today, -800) });
+    // Connected ten days ago: its history doesn't reach the comparison.
+    const meta = await adAccount(store, "meta", "act_1", { historyFrom: d(-9) });
+    const days = (from: string, to: string) => {
+      const out: string[] = [];
+      for (let x = from; x <= to; x = addDays(x, 1)) out.push(x);
+      return out;
+    };
+    const rows = (c: { id: string; provider: string; accountId: string }, list: string[], spend: number) =>
+      systemDb.adCampaignDaily.createMany({
+        data: list.map((day) => ({ workspaceId: store.workspaceId, storeId: store.id, connectionId: c.id, provider: c.provider, accountId: c.accountId, campaignId: "1", campaignName: "Spring", day, spend, clicks: 1, linkClicks: 1, purchases: 0, purchaseValue: 0 })),
+      });
+    const yearBefore = days(yearEarlier(d(-89)), yearEarlier(today));
+    await rows(google, [...new Set([...days(d(-179), today), ...yearBefore])], 2);
+    await rows(meta, days(d(-9), today), 10);
+
+    // Last 90 days against the 90 before: Google's "before" is what it spent then, never $0; Meta has no earlier data.
+    const m = (await overview(a.headers, ws, store.id, "preset=90d")).json().modules.ads;
+    const g = m.byProvider.find((p: { provider: string }) => p.provider === "google");
+    expect(g).toMatchObject({ current: { spend: 180 }, notCompared: null, previous: { from: d(-179), to: d(-91), spend: 178, imported: true }, deltas: { spend: 0 } });
+    expect(m.byProvider.find((p: { provider: string }) => p.provider === "meta")).toMatchObject({ notCompared: "no_history", previous: { spend: null, imported: false }, deltas: { spend: null } });
+    expect(m).toMatchObject({ current: null, notCompared: "no_history", previous: { spend: null } });
+
+    // The same dates a year earlier: the same.
+    const y = (await overview(a.headers, ws, store.id, "preset=90d&compare=year")).json().modules.ads;
+    expect(y.byProvider.find((p: { provider: string }) => p.provider === "google")).toMatchObject({ notCompared: null, previous: { from: yearEarlier(d(-89)), imported: true } });
+    expect(y.byProvider.find((p: { provider: string }) => p.provider === "google").deltas.spend).not.toBeNull();
+    expect(y.byProvider.find((p: { provider: string }) => p.provider === "google").previous.spend).toBeGreaterThan(0);
+  });
+
+  it("compares whole days only while the dates include today, and shows as before what was compared", async () => {
+    const { a, ws, store } = await owner();
+    const meta = await adAccount(store, "meta", "act_1");
+    await spendDays(store, meta, d(-13), d(-1), 10);
+    // Today so far: part of a day, which a whole day before would make look like a drop.
+    await spendDays(store, meta, today, today, 2);
+
+    const week = (await overview(a.headers, ws, store.id, "preset=7d")).json().modules.ads;
+    expect(week.current.spend).toBe(62);
+    expect(week.compared).toMatchObject({ current: { from: d(-6), to: d(-1), totals: { spend: 60 } }, previous: { from: d(-13), to: d(-8), totals: { spend: 60 } }, trimmed: 1 });
+    expect(week.previous).toMatchObject({ from: d(-13), to: d(-8), spend: 60, imported: true });
+    expect(week.deltas.spend).toBe(0);
+
+    const day = (await overview(a.headers, ws, store.id, "preset=today")).json().modules.ads;
+    expect(day.current.spend).toBe(2);
+    expect(day).toMatchObject({ compared: null, notCompared: "running", previous: { spend: null }, deltas: { spend: null, roas: null } });
+  });
+
+  it("adds up only one currency, and an account in another currency that isn't read yet changes nothing", async () => {
+    const { a, ws, store } = await owner();
+    const usd = await adAccount(store, "meta", "act_1");
+    const eur = await adAccount(store, "google", "123", { currency: "EUR" });
+    await adAccount(store, "meta", "act_2", { currency: "EUR", historyFrom: null, syncedThrough: null, lastSyncedAt: null });
+    await spendDays(store, usd, d(-6), today, 10);
+    await spendDays(store, eur, d(-6), today, 999);
+
+    const { modules: m } = (await overview(a.headers, ws, store.id, "preset=7d")).json();
+    expect(m.ads.currency).toBe("USD");
+    expect(m.ads.current.spend).toBe(70);
+    expect(m.ads.byProvider.map((p: { provider: string }) => p.provider)).toEqual(["meta"]);
+    expect(m.ads.accounts.map((x: { accountId: string; counted: boolean }) => [x.accountId, x.counted])).toEqual([
+      ["123", false],
+      ["act_1", true],
+      ["act_2", false],
+    ]);
+  });
+
+  it("counts only the AdSense sites chosen for the store, and sets only those next to its sales", async () => {
+    const { a, ws, store } = await owner();
+    const sense = await adAccount(store, "adsense", "pub-1", { sites: ["ads-shop.example.com"] });
+    await earnDays(store, sense, "ads-shop.example.com", d(-6), d(-6), 12);
+    await earnDays(store, sense, "blog.example.com", d(-6), d(-6), 30);
+    await seedOrder(store, { id: "O1", createdAt: `${d(-6)}T17:00:00Z`, lines: [{ qty: 1, price: 400 }] });
+    await recomputeDays(store, [d(-6)]);
+
+    const { modules: m } = (await overview(a.headers, ws, store.id, "preset=7d")).json();
+    expect(m.adsense.current).toMatchObject({ earnings: 12, pageViews: 100 });
+    expect(m.adsense.sites.map((s: { site: string }) => s.site)).toEqual(["ads-shop.example.com"]);
+    expect(m.adsense.sitesLeftOut).toEqual([expect.objectContaining({ site: "blog.example.com", earnings: 30 })]);
+    expect(m.adsense.vsSales).toBe(0.03);
+    expect(m.adsense.accounts[0]).toMatchObject({ sites: ["ads-shop.example.com"], coversRange: true });
+  });
+
+  it("shows earnings AdSense didn't split by site as unavailable when sites are chosen, never as another site's or as $0", async () => {
+    const { a, ws, store } = await owner();
+    const sense = await adAccount(store, "adsense", "pub-1", { sites: ["ads-shop.example.com"] });
+    // AdSense wouldn't split this account's report by site: one row a day, every site together.
+    await earnDays(store, sense, "", d(-13), today, 5);
+
+    const { modules: m } = (await overview(a.headers, ws, store.id, "preset=7d")).json();
+    expect(m.adsense).toMatchObject({ current: null, partial: null, soFar: null, vsSales: null, sites: [], sitesLeftOut: [] });
+    expect(m.adsense.accounts[0]).toMatchObject({ unsplitThrough: today, coversRange: false, coverage: { from: null, through: null } });
+    expect(m.adsense.series.every((x: { earnings: number | null }) => x.earnings === null)).toBe(true);
   });
 });
 

@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { systemDb } from "@app/db";
-import { adAccessToken, type FetchLike } from "@app/core";
-import { pkceChallenge } from "@app/shared";
+import { adAccessToken, encryptAdTokens, googleAdsOperationsToday, pauseGoogleAds, type FetchLike } from "@app/core";
+import { adErrorMessage, pkceChallenge } from "@app/shared";
 import { clean, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
 
 /**
@@ -151,27 +151,52 @@ describe("Continue with Google Ads: the sign-in", () => {
     expect(list.body).not.toContain("100200300");
   });
 
-  it("a sign-in where Google sends no new refresh token reuses the one this person already gave; a first-timer is told to try again", async () => {
+  it("someone who gave bizinsights a working refresh token skips Google's consent screen and theirs is reused; a login it holds none for is asked with the consent screen", async () => {
     const seen = fresh();
     ctx.setFetch(googlePlatform(seen));
-    await connect("google");
+    const first = await connect("google");
+    // The first time: the consent screen, which hands out a refresh token.
+    expect(first.url.searchParams.get("prompt")).toBe("select_account consent");
     const second = (await createStore(ws, "ads-life-2.myshopify.com", ["read_orders"], { currency: "USD" })).id;
     const repeat = googlePlatform(seen, { refreshToken: null });
     ctx.setFetch(repeat);
-    const { location } = await connect("google", second);
+    const { url, location } = await connect("google", second);
+    // Each consent makes Google hand out another refresh token, and it ends a login's oldest past 100:
+    // only the account chooser this time, and Google sends none.
+    expect(url.searchParams.get("prompt")).toBe("select_account");
     expect(location.pathname).toBe("/dashboard");
     const row = await systemDb.adConnection.findFirstOrThrow({ where: { storeId: second, provider: "google" } });
     await expire([row.id]);
     await adAccessToken(await systemDb.adConnection.findUniqueOrThrow({ where: { id: row.id } }), repeat);
     expect(seen.refreshes).toEqual(["G_REFRESH_1"]);
 
-    // Someone bizinsights has never had a refresh token from.
+    // They pick another Google login, one bizinsights holds no refresh token for: Google sent none.
     ctx.setFetch(googlePlatform(fresh(), { refreshToken: null, sub: "999" }));
     const third = (await createStore(ws, "ads-life-3.myshopify.com", ["read_orders"], { currency: "USD" })).id;
     const start = await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/stores/${third}/ads/google/connect`, headers });
     const state = new URL(start.json().url).searchParams.get("state")!;
     const cb = await ctx.app.inject({ method: "GET", url: `/ads/google/callback?state=${state}&code=C`, headers: { cookie: `${cookie}; ads_oauth_state=${state}` } });
-    expect(new URL(cb.headers.location as string).searchParams.get("error")).toBe("no_refresh_token");
+    // Sent back to Google, with the consent screen this time, under a new state for this browser.
+    const again = new URL(cb.headers.location as string);
+    expect(again.origin).toBe("https://accounts.google.com");
+    expect(again.searchParams.get("prompt")).toBe("select_account consent");
+    const state2 = again.searchParams.get("state")!;
+    expect(state2).not.toBe(state);
+    // (The used state's removal comes first; the browser keeps the last value set.)
+    const jar = [...String(cb.headers["set-cookie"]).matchAll(/ads_oauth_state=([^;]*)/g)].map((m) => m[1]);
+    expect(jar.at(-1)).toContain(state2);
+    expect(await systemDb.adConnection.count({ where: { storeId: third } })).toBe(0);
+    // Google still sending none after its consent screen: the person is told to try again.
+    const cb2 = await ctx.app.inject({ method: "GET", url: `/ads/google/callback?state=${state2}&code=C2`, headers: { cookie: `${cookie}; ads_oauth_state=${state2}` } });
+    expect(new URL(cb2.headers.location as string).searchParams.get("error")).toBe("no_refresh_token");
+
+    // With it, the login connects.
+    ctx.setFetch(googlePlatform(fresh(), { refreshToken: "G_REFRESH_999", sub: "999" }));
+    const start3 = await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/stores/${third}/ads/google/connect`, headers });
+    const s3 = new URL(start3.json().url).searchParams.get("state")!;
+    const bounce = await ctx.app.inject({ method: "GET", url: `/ads/google/callback?state=${s3}&code=C3`, headers: { cookie: `${cookie}; ads_oauth_state=${s3}` } });
+    expect(new URL(bounce.headers.location as string).pathname).toBe("/dashboard");
+    expect((await systemDb.adConnection.findFirstOrThrow({ where: { storeId: third } })).externalUserId).toBe("999");
   });
 
   it("a refresh token Google replaces is stored for every account that shares it", async () => {
@@ -465,5 +490,246 @@ describe("the Meta Ads report's splits", () => {
       names.push(res.json().report.rows[0].name);
     }
     expect(names).toEqual(["Facebook · Feed", "iPhone", "Australia"]);
+  });
+});
+
+describe("access given back when nothing uses it", () => {
+  it("Meta: a disconnect after the person's token expired takes ads_read back with bizinsights' app token, for that person", async () => {
+    const revoked: string[] = [];
+    ctx.setFetch(metaPlatform(revoked));
+    await connect("meta");
+    const rows = await systemDb.adConnection.findMany({ where: { storeId, provider: "meta" }, orderBy: { accountId: "asc" } });
+    await disconnect(rows[0]!.id);
+    // The other account's token has run out (Meta's last about 60 days).
+    await systemDb.adConnection.update({ where: { id: rows[1]!.id }, data: { accessTokenExpiresAt: new Date(Date.now() - 86_400_000) } });
+    const appTokenCalls: Array<{ path: string; token: string }> = [];
+    ctx.setFetch(async (input, init) => {
+      const u = new URL(String(input));
+      const token = new Headers(init?.headers).get("authorization")?.replace(/^Bearer /, "") ?? "";
+      if (init?.method === "DELETE" && u.pathname.endsWith("/me/permissions/ads_read")) return json({ error: { message: "Error validating access token: Session has expired", type: "OAuthException", code: 190 } }, 400);
+      if (init?.method === "DELETE" && u.pathname.endsWith("/5550001/permissions/ads_read")) {
+        appTokenCalls.push({ path: u.pathname, token });
+        return json({ success: true });
+      }
+      return json({ error: { message: `unexpected ${u.pathname}` } }, 400);
+    });
+    const res = await disconnect(rows[1]!.id);
+    expect(res.json()).toEqual({ ok: true, revoked: "revoked" });
+    expect(appTokenCalls).toEqual([{ path: "/v26.0/5550001/permissions/ads_read", token: "meta_app|meta_secret" }]);
+  });
+
+  it("cancelling the account choice gives the sign-in's grant back, unless the same person relies on it elsewhere", async () => {
+    const revoked: string[] = [];
+    ctx.setFetch(metaPlatform(revoked));
+    const start = await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/stores/${storeId}/ads/meta/connect`, headers });
+    const state = new URL(start.json().url).searchParams.get("state")!;
+    const cb = await ctx.app.inject({ method: "GET", url: `/ads/meta/callback?${new URLSearchParams({ state, code: "CODE" })}`, headers: { cookie: `${cookie}; ads_oauth_state=${state}` } });
+    const pick = new URL(cb.headers.location as string).searchParams.get("choose")!;
+    expect(pick).toBeTruthy();
+    expect((await ctx.app.inject({ method: "DELETE", url: `/workspaces/${ws}/stores/${storeId}/ads/pending/${pick}`, headers })).json()).toEqual({ ok: true });
+    expect(revoked).toEqual(["META_LONG"]);
+    expect(await systemDb.adConnection.count()).toBe(0);
+
+    // Connected on another store by the same person: their grant stays when a later choice is cancelled.
+    await connect("meta");
+    const other = (await createStore(ws, "ads-life-2.myshopify.com", ["read_orders"], { currency: "USD" })).id;
+    const start2 = await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/stores/${other}/ads/meta/connect`, headers });
+    const state2 = new URL(start2.json().url).searchParams.get("state")!;
+    const cb2 = await ctx.app.inject({ method: "GET", url: `/ads/meta/callback?${new URLSearchParams({ state: state2, code: "CODE" })}`, headers: { cookie: `${cookie}; ads_oauth_state=${state2}` } });
+    const pick2 = new URL(cb2.headers.location as string).searchParams.get("choose")!;
+    await ctx.app.inject({ method: "DELETE", url: `/workspaces/${ws}/stores/${other}/ads/pending/${pick2}`, headers });
+    expect(revoked).toEqual(["META_LONG"]);
+  });
+
+  it("a Google sign-in that finds nothing to connect gives its grant back", async () => {
+    const seen = fresh();
+    const base = googlePlatform(seen);
+    ctx.setFetch(async (input, init) => {
+      const u = new URL(String(input));
+      if (u.pathname.endsWith("customers:listAccessibleCustomers")) return json({ resourceNames: [] });
+      return base(input, init);
+    });
+    const start = await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/stores/${storeId}/ads/google/connect`, headers });
+    const state = new URL(start.json().url).searchParams.get("state")!;
+    const cb = await ctx.app.inject({ method: "GET", url: `/ads/google/callback?state=${state}&code=C`, headers: { cookie: `${cookie}; ads_oauth_state=${state}` } });
+    expect(new URL(cb.headers.location as string).searchParams.get("error")).toBe("no_accounts");
+    expect(seen.revoked).toEqual(["G_REFRESH_1"]);
+  });
+});
+
+describe("a Google grant that no longer covers reporting", () => {
+  it("is found at the token refresh: the connection asks for a reconnect with the permission ticked", async () => {
+    const seen = fresh();
+    ctx.setFetch(googlePlatform(seen));
+    await connect("google");
+    const conn = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, provider: "google" } });
+    await expire([conn.id]);
+    const base = googlePlatform(seen);
+    ctx.setFetch(async (input, init) => {
+      const u = new URL(String(input));
+      // The person unticked the Google Ads permission on Google's own account page: the refresh lists what is left.
+      if (u.host === "oauth2.googleapis.com" && u.pathname === "/token") return json({ access_token: "G_ACCESS_2", expires_in: 3599, scope: "openid https://www.googleapis.com/auth/userinfo.email" });
+      return base(input, init);
+    });
+    const res = await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${storeId}/ads/google/report?connection=${conn.id}&from=2026-09-01&to=2026-09-30`, headers });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe("reconnect");
+    expect(await systemDb.adConnection.findUniqueOrThrow({ where: { id: conn.id } })).toMatchObject({ status: "reconnect", errorCode: "scope_missing" });
+    expect(seen.reportQueries).toEqual([]);
+  });
+});
+
+describe("the Google Ads report compared, and Google's daily allowance", () => {
+  const reportUrl = (connection: string, q: Record<string, string> = {}) =>
+    `/workspaces/${ws}/stores/${storeId}/ads/google/report?${new URLSearchParams({ connection, from: "2026-09-01", to: "2026-09-30", ...q })}`;
+
+  it("the comparison's dates asked of Google too, its figures by id; the operations counted like a sync's", async () => {
+    const seen = fresh();
+    ctx.setFetch(googlePlatform(seen));
+    await connect("google");
+    const conn = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, provider: "google" } });
+    const before = await googleAdsOperationsToday(ctx.deps.coord);
+    const res = await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, { cfrom: "2026-08-01", cto: "2026-08-31" }), headers });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().report.comparison).toMatchObject({ since: "2026-08-01", until: "2026-08-31", totals: { spend: 30 }, rows: [{ id: "7", spend: 30, cpc: 0.5 }] });
+    expect(res.json().report.comparison.rows[0].name).toBeUndefined();
+    expect(seen.reportQueries.some((q) => q.includes("BETWEEN '2026-08-01' AND '2026-08-31'"))).toBe(true);
+    expect(await googleAdsOperationsToday(ctx.deps.coord)).toBe(before + seen.reportQueries.length);
+  });
+
+  it("a sign-in's account listing counts against the allowance; while it's used up, the sign-in comes back rate_limited with nothing exchanged", async () => {
+    const seen = fresh();
+    ctx.setFetch(googlePlatform(seen));
+    const before = await googleAdsOperationsToday(ctx.deps.coord);
+    await connect("google");
+    // listAccessibleCustomers and the one customer's details.
+    expect(await googleAdsOperationsToday(ctx.deps.coord)).toBe(before + 2);
+
+    await pauseGoogleAds(ctx.deps.coord, null);
+    const exchanges = seen.exchanges.length;
+    const start = await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/stores/${storeId}/ads/google/connect`, headers });
+    const state = new URL(start.json().url).searchParams.get("state")!;
+    const cb = await ctx.app.inject({ method: "GET", url: `/ads/google/callback?${new URLSearchParams({ state, code: "CODE" })}`, headers: { cookie: `${cookie}; ads_oauth_state=${state}` } });
+    const location = new URL(cb.headers.location as string);
+    expect(location.pathname).toBe("/settings/ads");
+    expect(Object.fromEntries(location.searchParams)).toEqual({ error: "rate_limited", provider: "google", store: storeId });
+    expect(seen.exchanges).toHaveLength(exchanges);
+  });
+
+  it("while Google says the day's allowance is used up, the report says so in plain words and asks Google nothing", async () => {
+    const seen = fresh();
+    ctx.setFetch(googlePlatform(seen));
+    await connect("google");
+    const conn = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, provider: "google" } });
+    await pauseGoogleAds(ctx.deps.coord, null);
+    const res = await ctx.app.inject({ method: "GET", url: reportUrl(conn.id), headers });
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toEqual({ error: "quota_exhausted", message: adErrorMessage("quota_exhausted", "google") });
+    expect(seen.reportQueries).toEqual([]);
+    // bizinsights' limit, not the account's.
+    expect((await systemDb.adConnection.findUniqueOrThrow({ where: { id: conn.id } })).status).toBe("active");
+  });
+});
+
+describe("someone whose login powers ad accounts leaves", () => {
+  /** A Meta connection powered by `userId`'s login (Meta's person 5550001), in `store`. */
+  async function connectedBy(userId: string, workspaceId: string, store: string, accountId: string) {
+    const tokens = encryptAdTokens(store, "meta", { accessToken: "META_LONG", refreshToken: null, expiresAt: new Date(Date.now() + 30 * 86_400_000) });
+    return systemDb.adConnection.create({
+      data: { workspaceId, storeId: store, provider: "meta", accountId, accountName: accountId, currency: "USD", timezone: "UTC", connectedByUserId: userId, externalUserId: "5550001", ...tokens },
+    });
+  }
+
+  it("removed from the workspace: the accounts they connected here wait for someone else to reconnect them; elsewhere theirs keep working", async () => {
+    const admin = await signIn(ctx, "ads-life-admin", "admin@x.com");
+    const member = await systemDb.membership.create({ data: { workspaceId: ws, userId: admin.user.id, role: "admin" } });
+    const here = await connectedBy(admin.user.id, ws, storeId, "act_1");
+    // Their own business, with their own store: the same Meta login powers it.
+    const theirWs = await createWorkspace(ctx, admin.headers, "Admin's own");
+    const theirStore = (await createStore(theirWs, "admins-own.myshopify.com", ["read_orders"])).id;
+    const theirs = await connectedBy(admin.user.id, theirWs, theirStore, "act_9");
+    const revoked: string[] = [];
+    ctx.setFetch(metaPlatform(revoked));
+
+    expect((await ctx.app.inject({ method: "DELETE", url: `/workspaces/${ws}/team/members/${member.id}`, headers })).statusCode).toBe(200);
+    expect(await systemDb.adConnection.findUniqueOrThrow({ where: { id: here.id } })).toMatchObject({ status: "reconnect", errorCode: "connector_left", accessTokenEnc: "", connectedByUserId: null });
+    expect(await systemDb.adConnection.findUniqueOrThrow({ where: { id: theirs.id } })).toMatchObject({ status: "active", connectedByUserId: admin.user.id });
+    // Their grant still powers their own store: not taken back.
+    expect(revoked).toEqual([]);
+    const list = await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${storeId}/ads`, headers });
+    expect(list.json().connections[0]).toMatchObject({ status: "reconnect", errorCode: "connector_left", message: expect.stringContaining("no longer has access"), connectedBy: null });
+  });
+
+  it("removed through the older members route too", async () => {
+    const admin = await signIn(ctx, "ads-life-admin2", "admin2@x.com");
+    const member = await systemDb.membership.create({ data: { workspaceId: ws, userId: admin.user.id, role: "admin" } });
+    const here = await connectedBy(admin.user.id, ws, storeId, "act_1");
+    const revoked: string[] = [];
+    ctx.setFetch(metaPlatform(revoked));
+    expect((await ctx.app.inject({ method: "DELETE", url: `/workspaces/${ws}/members/${member.id}`, headers })).statusCode).toBe(200);
+    expect(await systemDb.adConnection.findUniqueOrThrow({ where: { id: here.id } })).toMatchObject({ status: "reconnect", errorCode: "connector_left" });
+    // Nothing else relies on that grant: ads_read goes back to Meta.
+    expect(revoked).toEqual(["META_LONG"]);
+  });
+
+  it("their bizinsights account deleted: every account their login powers waits for a reconnect, and the grant goes back", async () => {
+    const admin = await signIn(ctx, "ads-life-leaver", "leaver@x.com");
+    await systemDb.membership.create({ data: { workspaceId: ws, userId: admin.user.id, role: "admin" } });
+    const a = await connectedBy(admin.user.id, ws, storeId, "act_1");
+    const b = await connectedBy(admin.user.id, ws, storeId, "act_2");
+    const revoked: string[] = [];
+    ctx.setFetch(metaPlatform(revoked));
+    const password = ctx.auth.users.get("ads-life-leaver")!.password!;
+    const res = await ctx.app.inject({ method: "POST", url: "/auth/account/delete", headers: admin.headers, payload: { confirm: "DELETE", password } });
+    expect(res.statusCode).toBe(200);
+    expect(await systemDb.user.findUnique({ where: { id: admin.user.id } })).toBeNull();
+    // Who granted them stays, so a data deletion request from that person still finds them.
+    for (const id of [a.id, b.id]) expect(await systemDb.adConnection.findUniqueOrThrow({ where: { id } })).toMatchObject({ status: "reconnect", errorCode: "connector_left", accessTokenEnc: "", externalUserId: "5550001" });
+    expect(revoked).toEqual(["META_LONG"]);
+  });
+
+  it("their account deleted while Meta doesn't answer: the account is still deleted, and the grant is left (best effort)", async () => {
+    const admin = await signIn(ctx, "ads-life-leaver2", "leaver2@x.com");
+    await systemDb.membership.create({ data: { workspaceId: ws, userId: admin.user.id, role: "admin" } });
+    const a = await connectedBy(admin.user.id, ws, storeId, "act_1");
+    ctx.setFetch(async () => {
+      throw new TypeError("fetch failed");
+    });
+    const password = ctx.auth.users.get("ads-life-leaver2")!.password!;
+    const res = await ctx.app.inject({ method: "POST", url: "/auth/account/delete", headers: admin.headers, payload: { confirm: "DELETE", password } });
+    expect(res.statusCode).toBe(200);
+    expect(await systemDb.user.findUnique({ where: { id: admin.user.id } })).toBeNull();
+    expect(await systemDb.adConnection.findUniqueOrThrow({ where: { id: a.id } })).toMatchObject({ status: "reconnect", errorCode: "connector_left", accessTokenEnc: "" });
+  });
+
+  it("a hidden account waiting for a reconnect: showing it queues nothing and never says 'Synchronizing'; reconnecting queues its catch-up", async () => {
+    const admin = await signIn(ctx, "ads-life-admin3", "admin3@x.com");
+    const member = await systemDb.membership.create({ data: { workspaceId: ws, userId: admin.user.id, role: "admin" } });
+    const here = await connectedBy(admin.user.id, ws, storeId, "act_1");
+    await systemDb.adConnection.update({ where: { id: here.id }, data: { enabled: false } });
+    ctx.setFetch(metaPlatform([]));
+    expect((await ctx.app.inject({ method: "DELETE", url: `/workspaces/${ws}/team/members/${member.id}`, headers })).statusCode).toBe(200);
+
+    ctx.deps.queues.clear();
+    const show = await ctx.app.inject({ method: "PATCH", url: `/workspaces/${ws}/stores/${storeId}/ads/connections/${here.id}`, headers, payload: { enabled: true } });
+    expect(show.json().connection).toMatchObject({ enabled: true, status: "reconnect", syncRequestedAt: null });
+    expect(ctx.deps.queues.sent.sync ?? []).toEqual([]);
+
+    // Even a request left over from before (a job skipped before it could end it) doesn't hold up the reconnect's catch-up.
+    await systemDb.adConnection.update({ where: { id: here.id }, data: { syncRequestedAt: new Date() } });
+    await connect("meta");
+    expect(ctx.deps.queues.sent.sync).toEqual(expect.arrayContaining([expect.objectContaining({ kind: "ads", connectionId: here.id, trigger: "request" })]));
+    expect(await systemDb.adConnection.findUniqueOrThrow({ where: { id: here.id } })).toMatchObject({ status: "active", errorCode: null, syncRequestedAt: expect.any(Date) });
+  });
+
+  it("an account hidden while its sync is on its way stops saying 'Synchronizing', and showing it again queues its catch-up", async () => {
+    const conn = await connectedBy((await systemDb.user.findFirstOrThrow({ where: { email: "owner@x.com" } })).id, ws, storeId, "act_1");
+    ctx.deps.queues.clear();
+    expect((await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/stores/${storeId}/ads/sync`, headers })).json().queued).toBe(1);
+    const patch = (enabled: boolean) => ctx.app.inject({ method: "PATCH", url: `/workspaces/${ws}/stores/${storeId}/ads/connections/${conn.id}`, headers, payload: { enabled } });
+    expect((await patch(false)).json().connection).toMatchObject({ enabled: false, syncRequestedAt: null });
+    const shown = await patch(true);
+    expect(shown.json().connection).toMatchObject({ enabled: true, syncRequestedAt: expect.any(String) });
+    expect(ctx.deps.queues.sent.sync).toHaveLength(2);
   });
 });
