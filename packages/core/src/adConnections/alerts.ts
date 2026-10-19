@@ -10,7 +10,7 @@
  * recordAdFailure logs them for the operator.
  */
 import { systemDb, type AdConnection } from "@app/db";
-import { AD_ERROR_OURS, adErrorMessage, isAdErrorCode, type AdErrorCode, type AdProvider } from "@app/shared";
+import { AD_ERROR_OURS, AD_ERROR_STATUS, adErrorMessage, isAdErrorCode, type AdErrorCode, type AdProvider } from "@app/shared";
 import { logger } from "../logger.js";
 import { raiseAlert, resolveAlerts, type Mailer } from "../notify.js";
 import type { FetchLike } from "../shopify.js";
@@ -45,7 +45,7 @@ export interface AdAlert {
 
 const NOUN: Record<AdProvider, string> = { meta: "Meta ad account", google: "Google Ads account", adsense: "AdSense account" };
 
-/** A code for a status marked before codes were kept (or with one this version doesn't know). */
+/** A code for a status marked before codes were kept, with one this version doesn't know, or with one of another status. */
 const CODE_FOR_STATUS: Record<string, AdErrorCode> = { reconnect: "auth_expired", permission: "no_access", unavailable: "account_not_ready", error: "provider_error" };
 
 function day(d: Date, timeZone: string | null): string {
@@ -62,7 +62,9 @@ export function adAlertsFor(c: AlertConn, now = new Date()): AdAlert[] {
   const provider = (c.provider in NOUN ? c.provider : "google") as AdProvider;
   const name = (c.accountName || c.accountId).slice(0, 120);
   const account = `${NOUN[provider]} "${name}"`;
-  const code: AdErrorCode = isAdErrorCode(c.errorCode) ? c.errorCode : (CODE_FOR_STATUS[c.status] ?? "provider_error");
+  // The status decides what is asked of the merchant; a code left from an earlier failure (a writer
+  // that changed the status alone) would word it as something else, so it is used only when it matches.
+  const code: AdErrorCode = isAdErrorCode(c.errorCode) && AD_ERROR_STATUS[c.errorCode] === c.status ? c.errorCode : (CODE_FOR_STATUS[c.status] ?? "provider_error");
   const out: AdAlert[] = [];
   if (AD_ERROR_OURS.has(code) && c.status === "error") {
     // Ours to fix: nothing for the merchant to do.

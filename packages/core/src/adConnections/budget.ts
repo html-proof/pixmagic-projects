@@ -45,8 +45,11 @@ export async function countGoogleAdsOperations(coord: Coord, n: number, now = Da
   try {
     let total = 0;
     for (let i = 0; i < n; i++) total = await coord.hit(countKey(hour), 3600);
-    // Two syncs finishing together may each write their own total: the hour's figure is off by a few at most.
-    await coord.put(seenKey(hour), String(total), 25 * 3600);
+    // The coordinator picks a counter's window by its own clock: a call that reaches it just after the
+    // hour has ended starts a new counter from 1. So the figure kept for the hour only ever grows; two
+    // syncs finishing together, or one across the hour, leave it a few short at most.
+    const before = Number(await coord.peek(seenKey(hour))) || 0;
+    if (total > before) await coord.put(seenKey(hour), String(total), 25 * 3600);
   } catch (err) {
     logger.warn({ err, n }, "google ads operations not counted");
   }

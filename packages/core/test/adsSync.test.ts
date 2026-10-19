@@ -131,6 +131,19 @@ describe("Google's daily allowance", () => {
     expect(await googleAdsOperationsToday(coord, t + 3_600_000)).toBe(4);
   });
 
+  it("never lowers an hour's figure when the coordinator's counter starts again at the hour's end", async () => {
+    const coord = memoryCoord();
+    const t = Date.parse("2026-10-19T10:59:59Z");
+    await countGoogleAdsOperations(coord, 400, t);
+    // The next sync's hits reach the coordinator just after 11:00: its window for this key is a new one.
+    let fresh = 0;
+    const rolled = { ...coord, hit: async () => ++fresh };
+    await countGoogleAdsOperations(rolled, 2, t);
+    expect(await googleAdsOperationsToday(coord, t)).toBe(400);
+    await countGoogleAdsOperations(coord, 3, t);
+    expect(await googleAdsOperationsToday(coord, t)).toBe(403);
+  });
+
   it("holds background syncs back at 80% (history at 60%), and everything while Google says it is used up", async () => {
     const at = (used: number) => ({ paused: false, used, limit: 2880 });
     expect(googleAdsBudgetAllows(at(2303), "schedule")).toBe(true);
@@ -183,6 +196,21 @@ describe("an ad connection's alerts", () => {
     expect(adAlertsFor(conn({ provider: "adsense", accountName: null, accountId: "pub-1", status: "permission", errorCode: "no_access" }), now)[0]!.message).toContain('AdSense account "pub-1"');
     const w = describeAlert({ code: "ads_reconnect:c1", severity: "warning", message: a!.message });
     expect(w).toEqual({ severity: "warning", area: "ads", title: "An ad account needs reconnecting", body: a!.message });
+  });
+
+  it("is worded from the status when the code left on the row belongs to another one", () => {
+    // A sync timed out (temporary), then a live report found the token dead and changed the status alone.
+    const [a] = adAlertsFor(conn({ status: "reconnect", errorCode: "temporary" }), now);
+    expect(a).toMatchObject({ kind: "ads_reconnect" });
+    expect(a!.message).toContain("Press Reconnect");
+    expect(a!.message).not.toContain("tries again by itself");
+    // A lost account with a code of ours left over still asks the merchant, worded as the lost account.
+    const [b] = adAlertsFor(conn({ status: "permission", errorCode: "internal" }), now);
+    expect(b!.message).toContain("can no longer see this ad account");
+    // An outage after an account was closed: worded as the failure it is.
+    const [c] = adAlertsFor(conn({ status: "error", errorCode: "account_closed", consecutiveFailures: 6 }), now);
+    expect(c).toMatchObject({ kind: "ads_failing" });
+    expect(c!.message).not.toContain("closed");
   });
 
   it("Meta access running out within a week is announced with its date", () => {
