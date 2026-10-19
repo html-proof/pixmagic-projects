@@ -52,6 +52,8 @@ export const REPORT_METRICS = {
     sales_reversals: "salesReversals",
     net_sales: "netSales",
     shipping_charges: "shipping",
+    duties: "duties",
+    additional_fees: "additionalFees",
     taxes: "taxes",
     total_sales: "totalSales",
     orders: "orders",

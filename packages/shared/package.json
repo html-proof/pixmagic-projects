@@ -18,6 +18,7 @@
     "./journey": "./src/journey.ts",
     "./roles": "./src/roles.ts",
     "./sales": "./src/sales.ts",
+    "./salesCalculation": "./src/salesCalculation.ts",
     "./whatsapp": "./src/whatsapp.ts",
     "./traffic": "./src/traffic.ts",
     "./staff": "./src/staff/index.ts",

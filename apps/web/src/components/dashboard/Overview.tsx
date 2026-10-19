@@ -14,7 +14,7 @@ import { Icon } from "./Icons";
 import { B, Change, changeWords, comparedOn } from "./Narrative";
 import { Panel, Stat, type Tone } from "./Primitives";
 import { topicInfo, topicSummary, type Topic } from "./topics";
-import { breakdownOf } from "./redacted";
+import { appliedCustom, breakdownOf } from "./redacted";
 import type { AdFigures, Overview } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -364,6 +364,7 @@ export function OverviewDetail({ ov, currency, onOpen }: { ov: Overview; currenc
   const s = m.sales_overview;
   const f = m.funnel;
   const y = s?.year;
+  const custom = appliedCustom(s);
   const range = fmtRange(ov.range.from, ov.range.to);
   // Why the figures with a history of their own aren't compared, if they aren't (one sentence for
   // ads and AdSense when their figures start on the same day).
@@ -475,6 +476,8 @@ export function OverviewDetail({ ov, currency, onOpen }: { ov: Overview; currenc
                 {bd && <Row label="Discounts" now={money(-bd.discounts)} />}
                 {returns !== null && <Row label="Returns" now={money(-returns)} change={m.refunds ? <Change value={m.refunds.deltas.refunds} invert /> : undefined} />}
                 <Row label="Net sales" now={money(s.current.netSales)} before={s.previous ? money(s.previous.netSales) : null} change={<Change value={s.deltas.netSales} />} />
+                {s.current.additionalFees ? <Row label="Additional fees" now={money(s.current.additionalFees)} /> : null}
+                {s.current.duties ? <Row label="Duties" now={money(s.current.duties)} /> : null}
                 {bd?.shipping != null && <Row label="Shipping charges" now={money(bd.shipping)} />}
                 {bd?.tax != null && <Row label="Taxes" now={money(bd.tax)} />}
                 {s.current.totalSales !== undefined && (
@@ -483,6 +486,15 @@ export function OverviewDetail({ ov, currency, onOpen }: { ov: Overview; currenc
                     now={money(s.current.totalSales)}
                     before={s.previous?.totalSales !== undefined ? money(s.previous.totalSales) : null}
                     change={<Change value={s.deltas.totalSales ?? null} />}
+                  />
+                )}
+                {/* The store's own calculation, beside Shopify's figure and named, never instead of it. */}
+                {custom && (
+                  <Row
+                    label={`Custom sales · ${custom.name}`}
+                    now={money(custom.current)}
+                    before={custom.previous !== null ? money(custom.previous) : null}
+                    change={<Change value={custom.delta} />}
                   />
                 )}
                 <Row label="Orders" now={fmtNum(s.current.orders)} before={s.previous ? fmtNum(s.previous.orders) : null} change={<Change value={s.deltas.orders} />} />

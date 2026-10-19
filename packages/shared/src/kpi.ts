@@ -12,7 +12,9 @@ export interface DailyMetricsRow {
   refunds: number; // returns: what refunds, cancellations and edits took back that day, before tax
   shipping: number; // shipping charged after shipping discounts and refunds, before tax
   taxes: number;
-  totalSales: number; // net sales + shipping + taxes + duties and fees (Shopify's "Total sales")
+  duties: number; // import duties charged that day, before tax
+  additionalFees: number; // Shopify's fees and additional fees (and any sale it gives no type), before tax
+  totalSales: number; // net sales + shipping + taxes + duties + additional fees (Shopify's "Total sales")
   // orders placed that day, on the day Shopify processed them (cancelled orders included, test
   // orders never stored, orders of gift cards only left out: Shopify's reports don't count them)
   orders: number;
@@ -33,6 +35,8 @@ export interface KpiSummary {
   netSales: number;
   shipping: number;
   taxes: number;
+  duties: number;
+  additionalFees: number;
   totalSales: number;
   orders: number;
   units: number;
@@ -52,6 +56,8 @@ export function summarize(rows: DailyMetricsRow[]): KpiSummary {
       a.refunds += r.refunds;
       a.shipping += r.shipping;
       a.taxes += r.taxes;
+      a.duties += r.duties;
+      a.additionalFees += r.additionalFees;
       a.totalSales += r.totalSales;
       a.orders += r.orders;
       a.orderValue += r.orderValue;
@@ -60,7 +66,7 @@ export function summarize(rows: DailyMetricsRow[]): KpiSummary {
       a.returning += r.returningCustomerOrders;
       return a;
     },
-    { grossSales: 0, discounts: 0, refunds: 0, shipping: 0, taxes: 0, totalSales: 0, orders: 0, orderValue: 0, units: 0, ordersWithCustomer: 0, returning: 0 },
+    { grossSales: 0, discounts: 0, refunds: 0, shipping: 0, taxes: 0, duties: 0, additionalFees: 0, totalSales: 0, orders: 0, orderValue: 0, units: 0, ordersWithCustomer: 0, returning: 0 },
   );
   // Money totals are rounded to cents before deriving ratios, so the result does
   // not depend on float summation order (SQL and JS agree exactly).
@@ -78,6 +84,8 @@ export function summarize(rows: DailyMetricsRow[]): KpiSummary {
     netSales: r2(netBeforeRefunds - refunds),
     shipping: r2(t.shipping),
     taxes: r2(t.taxes),
+    duties: r2(t.duties),
+    additionalFees: r2(t.additionalFees),
     totalSales: r2(t.totalSales),
     orders: t.orders,
     units: t.units,
@@ -134,6 +142,13 @@ export interface SaleInput {
 export const MERCHANDISE_LINES: ReadonlySet<string> = new Set(["product", "adjustment"]);
 
 /**
+ * Where a sale that isn't merchandise, shipping, a gift card or a tip goes in Shopify's total sales
+ * breakdown: a duty is a duty; a fee, an additional fee or a sale Shopify gives no type
+ * (`unknown`) is an additional fee, so the lines always add up to total sales, as Shopify's do.
+ */
+export const chargeLine = (lineType: string): "duties" | "additionalFees" => (lineType === "duty" ? "duties" : "additionalFees");
+
+/**
  * A sale's value before tax, and its tax, with the sign Shopify gave it, as its reports add them
  * up. A return's lines are mostly negative, but not all: a refund that differs from the items'
  * value carries adjustment lines of both signs (+225.10 and −225.10 on one PixMagic refund), and
@@ -152,6 +167,8 @@ export function emptyRow(day: string): DailyMetricsRow {
     refunds: 0,
     shipping: 0,
     taxes: 0,
+    duties: 0,
+    additionalFees: 0,
     totalSales: 0,
     orders: 0,
     orderValue: 0,
@@ -209,6 +226,7 @@ export function aggregateDaily(
         if (placedOn.get(x.orderId) === day) r.orderValue += value;
       } else r.refunds -= value;
     } else if (x.lineType === "shipping") r.shipping += value;
+    else r[chargeLine(x.lineType)] += value;
     if (x.actionType === "return") {
       const set = returnedPerDay.get(day) ?? new Set<string>();
       set.add(x.orderId);

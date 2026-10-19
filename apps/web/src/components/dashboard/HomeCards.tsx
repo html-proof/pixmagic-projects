@@ -5,7 +5,8 @@ import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { fmtMoneyCompact } from "./format";
 import { LineChart } from "./LineChart";
 import type { Overview } from "./types";
-import { showsRefunds, showsTotalSales } from "./redacted";
+import { customSales } from "@app/shared/salesCalculation";
+import { appliedCustom, dayLinesOf, showsRefunds, showsTotalSales } from "./redacted";
 
 // ---------------------------------------------------------------------------
 // The top of the dashboard: four headline numbers, the sales and orders trends, and the summary
@@ -47,6 +48,7 @@ export function KpiCard({
   compared,
   versus = "vs previous period",
   i = 0,
+  extra,
   onClick,
 }: {
   title: string;
@@ -60,6 +62,8 @@ export function KpiCard({
   /** What the change is on, under the number: "vs same time yesterday" (`versusWords`). */
   versus?: string;
   i?: number;
+  /** One more line under the change, such as the store's Custom sales beside Shopify's figure. */
+  extra?: ReactNode;
   onClick: () => void;
 }) {
   return (
@@ -84,6 +88,7 @@ export function KpiCard({
             </span>
           )}
         </span>
+        {extra && <span className="mt-2 block min-w-0 text-xs text-muted">{extra}</span>}
       </span>
       {/* No aria-label: it would replace the figure; screen readers read the tile, then this. */}
       <span className="sr-only"> – open details</span>
@@ -139,13 +144,14 @@ const running = (values: number[]) => {
   return values.map((v) => Math.round((total += v) * 100) / 100);
 };
 
-type SalesView = "sales" | "net" | "running" | "refunds";
+type SalesView = "sales" | "custom" | "net" | "running" | "refunds";
 type OrdersView = "daily" | "total";
 
 /** Net sales and orders over the dates picked, side by side (the headline numbers above open their details). */
 export function TrendCharts({ ov, currency }: { ov: Overview; currency: string }) {
   const s = ov.modules.sales_overview;
-  const [salesView, setSalesView] = useState<SalesView>("sales");
+  // Until one is picked: Custom sales when the store shows it on the dashboard, else total sales.
+  const [salesView, setSalesView] = useState<SalesView | null>(null);
   const [ordersView, setOrdersView] = useState<OrdersView>("daily");
   if (!s) return null;
   const days = s.series.map((d) => d.day);
@@ -158,15 +164,36 @@ export function TrendCharts({ ov, currency }: { ov: Overview; currency: string }
   // Refunds and total sales per day only for someone who may see them (Team & Access).
   const refundsShown = showsRefunds(s.series);
   const totalShown = showsTotalSales(s.series);
-  const view: SalesView = (salesView === "refunds" && !refundsShown) || (salesView === "sales" && !totalShown) ? "net" : salesView;
+  // The store's own calculation, day by day from each day's lines, named wherever it shows.
+  const custom = appliedCustom(s);
+  const wanted = salesView ?? (custom ? "custom" : "sales");
+  const view: SalesView =
+    (wanted === "refunds" && !refundsShown) || (wanted === "sales" && !totalShown) || (wanted === "custom" && !custom) ? (totalShown ? "sales" : "net") : wanted;
   const salesValues =
-    view === "refunds" ? s.series.map((d) => d.refunds ?? 0) : view === "running" ? running(net) : view === "sales" ? s.series.map((d) => d.totalSales ?? 0) : net;
+    view === "refunds"
+      ? s.series.map((d) => d.refunds ?? 0)
+      : view === "running"
+        ? running(net)
+        : view === "sales"
+          ? s.series.map((d) => d.totalSales ?? 0)
+          : view === "custom" && custom
+            ? s.series.map((d) => {
+                const lines = dayLinesOf(d);
+                return lines ? customSales(lines, custom.components) : 0;
+              })
+            : net;
   const salesEmpty = salesValues.every((v) => v === 0);
   const orders = s.series.map((d) => d.orders);
   const orderValues = ordersView === "total" ? running(orders) : orders;
   const ordersEmpty = orderValues.every((v) => v === 0);
 
-  const salesLabel = { sales: "Total sales per day", net: "Net sales per day", running: "Net sales, running total", refunds: "Returns per day" }[view];
+  const salesLabel = {
+    sales: "Total sales per day (Shopify)",
+    custom: `Custom sales per day · ${custom?.name ?? ""}`,
+    net: "Net sales per day",
+    running: "Net sales, running total",
+    refunds: "Returns per day",
+  }[view];
   const ordersLabel = ordersView === "total" ? "Orders, running total" : "Orders per day";
 
   return (
@@ -176,7 +203,7 @@ export function TrendCharts({ ov, currency }: { ov: Overview; currency: string }
           id="trend-sales-h"
           icon={ChartColumn}
           title="Sales overview"
-          sub="Your store's sales performance over time."
+          sub={view === "custom" && custom ? `Custom sales (${custom.name}), not Shopify's total sales.` : "Your store's sales performance over time."}
           aside={
             <ChartChoice<SalesView>
               label="Sales chart shows"
@@ -184,6 +211,7 @@ export function TrendCharts({ ov, currency }: { ov: Overview; currency: string }
               onChange={setSalesView}
               options={[
                 ...(totalShown ? [["sales", "Total sales"] as [SalesView, string]] : []),
+                ...(custom ? [["custom", `Custom sales · ${custom.name}`] as [SalesView, string]] : []),
                 ["net", "Net sales"],
                 ["running", "Running total"],
                 ...(refundsShown ? [["refunds", "Returns"] as [SalesView, string]] : []),

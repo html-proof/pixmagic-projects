@@ -716,8 +716,9 @@ export async function deleteProduct(store: Pick<Store, "id">, productShopifyId: 
  *    sale's value before tax is its amount less its tax. Product and adjustment lines make net
  *    sales: an order action adds to gross sales (value + discount) and discounts; any other action
  *    (a return, a cancellation, an edit) is a return, so net sales = gross − discounts − returns.
- *    Shipping lines make shipping, duties and fees go to total sales only; gift cards and tips
- *    count nowhere, as in Shopify's reports.
+ *    Shipping lines make shipping, duty lines duties, and fees, additional fees and lines of no
+ *    known type additional fees (`chargeLine` in @app/shared): those three and taxes go to total
+ *    sales only. Gift cards and tips count nowhere, as in Shopify's reports.
  *  - Every sale keeps the sign Shopify gave it: a refund's adjustment lines come in pairs of both
  *    signs, and only their sum is what it took back (`saleValue` in @app/shared).
  *
@@ -733,9 +734,9 @@ export async function recomputeDays(store: Pick<Store, "id" | "workspaceId">, da
     await tx.$executeRaw`
     ${dayTotals(store, days)}
     INSERT INTO daily_store_metrics
-      (workspace_id, store_id, day, gross_sales, discounts, refunds, shipping, taxes, total_sales, orders, order_value, units,
+      (workspace_id, store_id, day, gross_sales, discounts, refunds, shipping, taxes, duties, additional_fees, total_sales, orders, order_value, units,
        orders_with_customer, returning_customer_orders, refunded_orders)
-    SELECT ${store.workspaceId}, ${store.id}, day, gross_sales, discounts, refunds, shipping, taxes, total_sales, orders, order_value, units,
+    SELECT ${store.workspaceId}, ${store.id}, day, gross_sales, discounts, refunds, shipping, taxes, duties, additional_fees, total_sales, orders, order_value, units,
            orders_with_customer, returning_customer_orders, refunded_orders
     FROM t
     ON CONFLICT (store_id, day) DO UPDATE SET
@@ -744,6 +745,8 @@ export async function recomputeDays(store: Pick<Store, "id" | "workspaceId">, da
       refunds = EXCLUDED.refunds,
       shipping = EXCLUDED.shipping,
       taxes = EXCLUDED.taxes,
+      duties = EXCLUDED.duties,
+      additional_fees = EXCLUDED.additional_fees,
       total_sales = EXCLUDED.total_sales,
       orders = EXCLUDED.orders,
       order_value = EXCLUDED.order_value,
@@ -794,7 +797,8 @@ export function dayTotals(store: Pick<Store, "id" | "workspaceId">, days: string
              -SUM(value) FILTER (WHERE line_type IN ('product', 'adjustment') AND action_type <> 'order') AS returns,
              SUM(value) FILTER (WHERE line_type = 'shipping') AS shipping,
              SUM(tax) FILTER (WHERE line_type <> 'gift_card') AS taxes,
-             SUM(value) FILTER (WHERE line_type NOT IN ('shipping', 'product', 'adjustment', 'gift_card')) AS other,
+             SUM(value) FILTER (WHERE line_type = 'duty') AS duties,
+             SUM(value) FILTER (WHERE line_type NOT IN ('shipping', 'product', 'adjustment', 'gift_card', 'duty')) AS fees,
              (SUM(ABS(COALESCE(quantity, 0))) FILTER (WHERE line_type IN ('product', 'gift_card') AND action_type = 'order'))::int AS units_in,
              (SUM(ABS(COALESCE(quantity, 0))) FILTER (WHERE line_type IN ('product', 'gift_card') AND action_type = 'return'))::int AS units_out,
              (COUNT(DISTINCT order_id) FILTER (WHERE action_type = 'return' AND line_type <> 'gift_card'))::int AS ro
@@ -805,7 +809,9 @@ export function dayTotals(store: Pick<Store, "id" | "workspaceId">, days: string
       SELECT d.day,
              COALESCE(s.gross, 0) AS gross_sales, COALESCE(s.disc, 0) AS discounts, COALESCE(s.returns, 0) AS refunds,
              COALESCE(s.shipping, 0) AS shipping, COALESCE(s.taxes, 0) AS taxes,
-             COALESCE(s.gross, 0) - COALESCE(s.disc, 0) - COALESCE(s.returns, 0) + COALESCE(s.shipping, 0) + COALESCE(s.taxes, 0) + COALESCE(s.other, 0) AS total_sales,
+             COALESCE(s.duties, 0) AS duties, COALESCE(s.fees, 0) AS additional_fees,
+             COALESCE(s.gross, 0) - COALESCE(s.disc, 0) - COALESCE(s.returns, 0) + COALESCE(s.shipping, 0) + COALESCE(s.taxes, 0)
+               + COALESCE(s.duties, 0) + COALESCE(s.fees, 0) AS total_sales,
              COALESCE(o.orders, 0) AS orders, COALESCE(s.placed, 0) AS order_value,
              COALESCE(s.units_in, 0) - COALESCE(s.units_out, 0) AS units,
              COALESCE(o.owc, 0) AS orders_with_customer, COALESCE(o.ret, 0) AS returning_customer_orders, COALESCE(s.ro, 0) AS refunded_orders
@@ -907,6 +913,8 @@ export async function purgeStoreData(storeId: string, fetchImpl?: FetchLike) {
     systemDb.inventorySyncRun.deleteMany({ where: { storeId } }),
     systemDb.inventorySettings.deleteMany({ where: { storeId } }),
     systemDb.dailyStoreMetrics.deleteMany({ where: { storeId } }),
+    // The store's own sales calculation (which lines Custom sales counts) goes with its figures.
+    systemDb.salesCalculation.deleteMany({ where: { storeId } }),
     // Its checks against Shopify describe data that is gone.
     systemDb.reconciliation.deleteMany({ where: { storeId } }),
     systemDb.shopifyReport.deleteMany({ where: { storeId } }),

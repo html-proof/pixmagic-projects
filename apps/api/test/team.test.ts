@@ -388,7 +388,7 @@ describe("exports and sensitive fields (scenarios 15-16)", () => {
     expect(await systemDb.auditLog.count({ where: { workspaceId: b.ws, action: "report.exported" } })).toBe(1);
     // The owner's has the total sales (it holds tax and shipping) and returns columns.
     const owners = await call("GET", url, b.owner.headers);
-    expect(noBom(owners.body).split("\r\n")[0]).toBe('"Day","Orders","Total sales","Net sales","Average order value","Returns"');
+    expect(noBom(owners.body).split("\r\n")[0]).toBe('"Day","Orders","Total sales","Net sales","Additional fees","Duties","Shipping charges","Taxes","Average order value","Returns"');
   });
 
   it("leaves out financial detail, stock value and customers' personal data until each is granted", async () => {

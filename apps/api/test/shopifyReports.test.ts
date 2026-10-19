@@ -18,7 +18,7 @@ beforeEach(async () => clean(ctx));
 const SCOPES = ["read_orders", "read_products", "read_reports"];
 const RANGE = "preset=custom&from=2026-09-21&to=2026-09-21";
 const ourDay = { day: "2026-09-21", grossSales: 1699.08, discounts: 54.53, refunds: 45.5, shipping: 34.54, taxes: 167.91, totalSales: 1801.5, orders: 5, units: 6 };
-const shopifySales = { grossSales: 1699.08, discounts: -54.53, salesReversals: -45.5, netSales: 1599.05, shipping: 34.54, taxes: 167.91, totalSales: 1801.5, orders: 5 };
+const shopifySales = { grossSales: 1699.08, discounts: -54.53, salesReversals: -45.5, netSales: 1599.05, shipping: 34.54, duties: 0, additionalFees: 0, taxes: 167.91, totalSales: 1801.5, orders: 5 };
 
 async function owner(scopes = SCOPES) {
   const a = await signIn(ctx, "ua", "a@x.com");
@@ -132,8 +132,8 @@ describe("the reconciliation report (GET .../shopify-check)", () => {
     ctx.setFetch(async (_url, init) => {
       const q = (JSON.parse(String(init?.body)) as { variables: { query: string } }).variables.query;
       const sales = q.endsWith(`SINCE ${yesterday} UNTIL ${yesterday}`)
-        ? { gross_sales: 1699.08, discounts: -54.53, sales_reversals: -45.5, net_sales: 1599.05, shipping_charges: 34.54, taxes: 167.91, total_sales: 1801.5, orders: 5 }
-        : { gross_sales: 0, discounts: 0, sales_reversals: 0, net_sales: 0, shipping_charges: 0, taxes: 0, total_sales: 0, orders: 0 };
+        ? { gross_sales: 1699.08, discounts: -54.53, sales_reversals: -45.5, net_sales: 1599.05, shipping_charges: 34.54, duties: 0, additional_fees: 0, taxes: 167.91, total_sales: 1801.5, orders: 5 }
+        : { gross_sales: 0, discounts: 0, sales_reversals: 0, net_sales: 0, shipping_charges: 0, duties: 0, additional_fees: 0, taxes: 0, total_sales: 0, orders: 0 };
       const row = q.startsWith("FROM sessions")
         ? { sessions: 10, online_store_visitors: 8, sessions_with_cart_additions: 2, sessions_that_reached_checkout: 1, sessions_that_completed_checkout: 1, pageviews: 30 }
         : q.includes("gross_profit")
@@ -145,7 +145,7 @@ describe("the reconciliation report (GET .../shopify-check)", () => {
     expect(res.statusCode).toBe(200);
     const periods = res.json().periods as Array<{ preset: string; rows: Array<{ metric: string; status: string; shopify: number | null; difference: number | null }> }>;
     const row = (preset: string, metric: string) => periods.find((p) => p.preset === preset)!.rows.find((r) => r.metric === metric)!;
-    for (const metric of ["Gross sales", "Discounts", "Returns (sales reversals)", "Net sales", "Shipping charges", "Taxes", "Total sales", "Orders", "Average order value"]) expect(row("yesterday", metric).status, metric).toBe("match");
+    for (const metric of ["Gross sales", "Discounts", "Returns (sales reversals)", "Net sales", "Shipping charges", "Duties", "Additional fees", "Taxes", "Total sales", "Orders", "Average order value"]) expect(row("yesterday", metric).status, metric).toBe("match");
     // The 7 days hold yesterday's sales here, nothing in this fake Shopify: a difference, shown as one.
     expect(row("7d", "Net sales")).toMatchObject({ status: "difference", difference: 1599.05 });
     expect(row("yesterday", "Sessions").status).toBe("definition_mismatch");

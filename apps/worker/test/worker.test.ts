@@ -886,11 +886,16 @@ describe("aggregation parity", () => {
         refunds: toNumber(r.refunds),
         shipping: toNumber(r.shipping),
         taxes: toNumber(r.taxes),
+        duties: toNumber(r.duties),
+        additionalFees: toNumber(r.additionalFees),
         totalSales: toNumber(r.totalSales),
         orderValue: toNumber(r.orderValue ?? 0),
       })),
     );
     expect(sqlSummary).toEqual(summarize([...ref.values()]));
+    // Duties and additional fees each on their own line (4.00 before tax per sale: 4.40 less 0.40 tax).
+    expect(sqlSummary.duties).toBeGreaterThan(0);
+    expect(sqlSummary.additionalFees).toBeGreaterThan(0);
     expect(sql.map((r) => r.day).sort()).toEqual([...ref.keys()].sort());
     for (const r of sql) {
       const t = ref.get(r.day)!;
@@ -898,7 +903,10 @@ describe("aggregation parity", () => {
       expect(r.units).toBe(t.units);
       expect(r.refundedOrders).toBe(t.refundedOrders);
       expect(r.returningCustomerOrders).toBe(t.returningCustomerOrders);
-      for (const k of ["grossSales", "discounts", "refunds", "shipping", "taxes", "totalSales", "orderValue"] as const) expect(toNumber(r[k] ?? 0)).toBeCloseTo(t[k], 2);
+      for (const k of ["grossSales", "discounts", "refunds", "shipping", "taxes", "duties", "additionalFees", "totalSales", "orderValue"] as const) expect(toNumber(r[k] ?? 0)).toBeCloseTo(t[k], 2);
+      // Shopify's identity, day by day: the lines add up to total sales to the cent.
+      const lines = toNumber(r.grossSales) - toNumber(r.discounts) - toNumber(r.refunds) + toNumber(r.shipping) + toNumber(r.taxes) + toNumber(r.duties) + toNumber(r.additionalFees);
+      expect(Math.round(lines * 100)).toBe(Math.round(toNumber(r.totalSales) * 100));
     }
     // The cancellations are orders of the days they were placed, with their reversal on the 10th.
     expect(sql.find((r) => r.day === "2026-01-10")).toMatchObject({ orders: 0 });

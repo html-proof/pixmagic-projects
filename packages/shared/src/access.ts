@@ -139,7 +139,7 @@ export const ACCESS_PERMISSIONS: readonly AccessPermissionDef[] = [
   { key: "discounts.codes", module: "discounts", kind: "view", label: "View discount codes and usage", reveals: "Which discount codes were used, and on how many orders." },
   { key: "discounts.performance", module: "discounts", kind: "view", requires: ["discounts.codes"], label: "View discount performance", reveals: "How much each code took off, and the sales it came with." },
   // ---- Finance
-  { key: "finance.breakdown", module: "finance", kind: "view", sensitive: true, requires: ["analytics.sales"], label: "View gross sales, discounts, tax, shipping and total sales", reveals: "How total sales add up: gross sales, discounts and returns to net sales, plus shipping and tax. Without it, the headline shows net sales." },
+  { key: "finance.breakdown", module: "finance", kind: "view", sensitive: true, requires: ["analytics.sales"], label: "View gross sales, discounts, tax, shipping and total sales", reveals: "How total sales add up: gross sales, discounts and returns to net sales, plus shipping, duties, fees and tax, and the store's Custom sales calculation. Without it, the headline shows net sales." },
   { key: "finance.refunds", module: "finance", kind: "view", sensitive: true, requires: ["analytics.sales"], label: "View refunds", reveals: "Returns (money refunded, cancelled or edited out), the return rate and how many orders had one." },
   { key: "finance.reports", module: "finance", kind: "view", sensitive: true, requires: ["analytics.sales"], label: "View financial reports", reveals: "This year's sales month by month, compared with last year." },
   // ---- Integrations
@@ -559,14 +559,17 @@ function redactFields(modules: Obj, g: ReadonlySet<AccessKey>): Obj {
   if (isObj(sales)) {
     let s: Obj = { ...sales };
     if (!g.has("finance.breakdown")) {
-      // Total sales is net sales plus tax and shipping, so it goes with them, every day too.
+      // Total sales is net sales plus tax, shipping, duties and fees, so it goes with them, every
+      // day too, and so does the store's own calculation from those lines (Custom sales).
+      const lines = ["tax", "shipping", "duties", "additionalFees", "totalSales"];
       s = {
         ...s,
-        current: omit(s.current, ["grossSales", "discounts", "tax", "shipping", "totalSales"]),
-        previous: omit(s.previous, ["grossSales", "totalSales"]),
+        current: omit(s.current, ["grossSales", "discounts", ...lines]),
+        previous: omit(s.previous, ["grossSales", ...lines]),
         deltas: omit(s.deltas, ["grossSales", "totalSales"]),
       };
-      if (Array.isArray(s.series)) s.series = s.series.map((d: unknown) => omit(d, ["totalSales"]));
+      if (Array.isArray(s.series)) s.series = s.series.map((d: unknown) => omit(d, lines));
+      delete s.calculation;
     }
     if (!g.has("finance.reports")) delete s.year;
     // Returns are refunds (and cancellations and edits), for the range and each day.

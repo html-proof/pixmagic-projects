@@ -15,6 +15,8 @@ export async function dailyRows(tx: Tx, workspaceId: string, storeId: string, r:
     refunds: toNumber(x.refunds),
     shipping: toNumber(x.shipping),
     taxes: toNumber(x.taxes),
+    duties: toNumber(x.duties),
+    additionalFees: toNumber(x.additionalFees),
     totalSales: toNumber(x.totalSales),
     orders: x.orders,
     // A row from before order_value was kept: gross − discounts, as average order value was then.
@@ -41,6 +43,8 @@ export async function comparisonRows(tx: Tx, workspaceId: string, storeId: strin
     | "refunds"
     | "shipping"
     | "taxes"
+    | "duties"
+    | "additional_fees"
     | "total_sales"
     | "orders"
     | "order_value"
@@ -50,7 +54,7 @@ export async function comparisonRows(tx: Tx, workspaceId: string, storeId: strin
     | "refunded_orders";
   const part = await tx.$queryRaw<Array<Record<Column | "day", string>>>`
     ${dayTotals({ id: storeId, workspaceId }, [c.to], localMoment(c.to, c.until, timeZone))}
-    SELECT day, gross_sales::text, discounts::text, refunds::text, shipping::text, taxes::text, total_sales::text,
+    SELECT day, gross_sales::text, discounts::text, refunds::text, shipping::text, taxes::text, duties::text, additional_fees::text, total_sales::text,
            orders::text, order_value::text, units::text, orders_with_customer::text, returning_customer_orders::text, refunded_orders::text
     FROM t`;
   return [
@@ -62,6 +66,8 @@ export async function comparisonRows(tx: Tx, workspaceId: string, storeId: strin
       refunds: Number(x.refunds),
       shipping: Number(x.shipping),
       taxes: Number(x.taxes),
+      duties: Number(x.duties),
+      additionalFees: Number(x.additional_fees),
       totalSales: Number(x.total_sales),
       orders: Number(x.orders),
       orderValue: Number(x.order_value),
@@ -102,18 +108,24 @@ export async function customerCounts(tx: Tx, { ws, storeId }: Scope, r: DateRang
 /**
  * One point per day of the range. daily_store_metrics only has rows for days with orders or
  * refunds, so the quiet days are filled in as zeros: without them the chart drew "last 30 days"
- * as however many days happened to sell, ending on the last sale rather than on today.
+ * as however many days happened to sell, ending on the last sale rather than on today. Each day
+ * carries the lines of its total sales too (shipping, tax, duties, additional fees), from which
+ * the store's own calculation (Custom sales, @app/shared/salesCalculation) is drawn day by day.
  */
 export function dailySeries(rows: DailyMetricsRow[], r: DateRange) {
   const byDay = new Map(rows.map((x) => [x.day, x]));
   return eachDay(r.from, r.to).map((day) => {
     const x = byDay.get(day);
-    if (!x) return { day, netSales: 0, totalSales: 0, orders: 0, refunds: 0, averageOrderValue: null };
+    if (!x) return { day, netSales: 0, totalSales: 0, shipping: 0, tax: 0, duties: 0, additionalFees: 0, orders: 0, refunds: 0, averageOrderValue: null };
     const beforeRefunds = r2(x.grossSales - x.discounts);
     return {
       day,
       netSales: r2(beforeRefunds - x.refunds),
       totalSales: r2(x.totalSales),
+      shipping: r2(x.shipping),
+      tax: r2(x.taxes),
+      duties: r2(x.duties),
+      additionalFees: r2(x.additionalFees),
       orders: x.orders,
       refunds: r2(x.refunds),
       averageOrderValue: x.orders > 0 ? r2(x.orderValue / x.orders) : null,

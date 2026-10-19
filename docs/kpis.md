@@ -19,8 +19,11 @@ approval; until then the card says why it has no figure, never shows 0.
 | Returns (sales reversals) | Sales report: sales reversals (formerly "returns") | Records | Exact | Refunds, returns, cancellations and edit removals, on the day they happened |
 | Net sales | Sales report: net sales | Records | Exact | Gross − discounts − reversals |
 | Shipping charges | Sales report: shipping charges | Records | Exact | After shipping discounts and refunds |
+| Duties | Sales report: duties | Records | Exact | Duty sales, before tax (their tax is in taxes) |
+| Additional fees | Sales report: additional fees | Records | Exact | Fee and additional-fee sales, and any sale Shopify gives no type, before tax |
 | Taxes | Sales report: taxes | Records | Exact | Gift cards and tips left out, as Shopify does |
-| Total sales | Sales report: total sales | Records | Exact | Net sales + shipping + taxes + duties + fees |
+| Total sales | Sales report: total sales | Records | Exact | Net sales + additional fees + duties + shipping + taxes |
+| Custom sales | none (the store's own calculation) | Records | Its own definition | The lines of total sales the store chose; always shown beside Shopify's figures, named, never instead of them (section "Total sales breakdown and Custom sales") |
 | Orders | Sales report: orders | Orders placed | Exact | On the day Shopify processed them (`processedAt`, see Conventions). Cancelled included; test, deleted and gift-card-only orders never. An order edited on a later day counts once, on its own day, in Shopify's report by day too |
 | Average order value | Sales report: AOV | Records | Exact | What the orders sold on the day they were placed (their items after discounts, before tax; gift cards and what an edit on a later day added left out: "excluding post-order adjustments") ÷ orders |
 | Items sold (net) | Sales report: net items sold | Records | Exact | Ordered − reversed quantities, gift cards included |
@@ -199,8 +202,11 @@ shipping, taxes and total sales as Shopify's sales reports for the same dates.
 | Returns (`refunds`) | − Σ (amount − tax) of the other product and adjustment sales: returns, cancellations, edits | What refunds, cancellations and edits took back |
 | **Net sales** | Gross − Discounts − Returns | What you kept, before tax and shipping |
 | Shipping charges | Σ (amount − tax) of shipping sales | After shipping discounts and refunds |
-| Taxes | Σ tax of every sale (gift cards and tips aside) | |
-| **Total sales** | Net sales + Shipping + Taxes + duties and fees | Shopify's headline figure; the first tile |
+| Duties | Σ (amount − tax) of duty sales | Refunded duties take it down on the day of the refund |
+| Additional fees | Σ (amount − tax) of fee, additional-fee and unknown sales | A sale Shopify gives no type is counted here, so the lines always add up to total sales |
+| Taxes | Σ tax of every sale (gift cards and tips aside) | On items, shipping, duties and fees alike, counted once |
+| **Total sales** | Net sales + Additional fees + Duties + Shipping + Taxes | Shopify's headline figure; the first tile |
+| Custom sales | Σ of the lines of total sales the store's calculation counts | The store's own figure, never Shopify's (below) |
 | Orders | count of orders placed, on the day Shopify processed them (cancelled included; test orders never stored; gift-card-only orders left out) | |
 | Units (items sold) | Σ quantity sold − Σ quantity returned, gift cards included | Shopify's net items sold |
 | **Average order value** | Order value ÷ Orders. Order value (`daily_store_metrics.order_value`) = Σ (amount − tax) of the product and adjustment sales (action `order`) made on the day their order was placed: gross − discounts of the day's orders, an edit made that day included, one made on a later day not (as Shopify's AOV measures) | Typical spend per order as placed, after discounts, before tax, shipping and returns. Rows from before order_value was kept fall back to (Gross − Discounts) |
@@ -215,6 +221,50 @@ shipping, taxes and total sales as Shopify's sales reports for the same dates.
 | Left at a step | visits whose furthest step is exactly this one | Plus the site section they were last on |
 | Section exit rate | visits that left the site from this section without buying ÷ visits that saw this section | |
 | Δ vs previous | (current − previous) ÷ \|previous\| | Against the comparison chosen; `null` when previous is 0 or not imported; like for like while the range runs (Conventions) |
+
+## Total sales breakdown and Custom sales
+
+Shopify's total sales is the sum of five lines, which its reports give one by one (ShopifyQL
+`net_sales`, `additional_fees`, `duties`, `shipping_charges`, `taxes`; checked on a dev store
+2026-10-19: 612,740.29 + 0 + 0 + 6,439.55 + 61,849.30 = 681,029.14 = `total_sales`):
+
+**Total sales = Net sales + Additional fees + Duties + Shipping charges + Taxes**, and
+**Net sales = Gross sales − Discounts − Returns (sales reversals)**.
+
+bizinsights adds up each line from Shopify's sales records (`daily_store_metrics.duties` and
+`additional_fees` beside `shipping` and `taxes`; `dayTotals` in packages/core/src/persist.ts,
+`aggregateDaily` in packages/shared/src/kpi.ts, tested for parity), so the lines add up to total
+sales to the cent, day by day. Nothing is counted twice: a sale's tax goes to taxes only (its value
+to its own line), so tax on shipping or duties is never in shipping or duties; a refund of shipping,
+a duty or a fee takes that line down on the day of the refund, once; discounts on items are inside
+net sales and shipping discounts inside shipping charges. Days stored before the lines had columns
+of their own were split from their stored sales records by migration 20261019180000; their total
+sales did not change. A day whose total predates Shopify's sales records altogether (none in the
+60-day window) can hold some total sales that no line explains: the breakdown shows it as "Not
+split into lines", never inside a line.
+
+**Custom sales** is the store's own calculation from those lines (`@app/shared/salesCalculation`):
+which of the five it counts. Each line can be left out (product revenue only, sales without tax for
+prices that include it or tax passed on, without shipping, without duties for international sales).
+Built in: Shopify standard (every line), Product revenue only (net sales), Sales excluding tax,
+Sales excluding shipping, Sales excluding tax and duties; a store keeps up to 10 calculations of
+its own, by name (default name "Custom business revenue").
+
+- **Never Shopify's figure.** Shopify's total sales and every other Shopify figure stay exactly as
+  above whatever is chosen. Custom sales is shown beside them, named ("Custom sales · Sales
+  excluding tax"), with the difference (what the lines left out add up to).
+- **Only the choice is stored** (`sales_calculations`: the five switches, a name, whether the
+  dashboard shows it, the saved calculations), never an amount: every figure is worked out from the
+  store's sales records for the dates on screen, in cents.
+- **Where it shows.** The Sales details hold the breakdown card for everyone who may see the
+  breakdown (Team & Access `finance.breakdown`; switches there last until the page is left). Once
+  an owner or admin saves a calculation and applies it to the dashboard (`PUT .../sales-calculation`,
+  in the audit log as `sales_calculation.changed`), it also shows under the Total sales tile, as a
+  view of the sales chart (the one chosen until another is picked), in the overview report's key
+  figures and as its own column in the Sales download, each time named. Without
+  `finance.breakdown` a member gets neither the lines nor the calculation.
+- **Comparisons**: the lines come for the dates compared with too, so Custom sales has its own
+  change on them, with the same "No earlier data" rule as every sales figure.
 
 ## Sales breakdown (Sales section)
 
@@ -416,7 +466,7 @@ customer data approval, docs/shopify-setup.md) instead of estimating:
 | Visitors | `online_store_visitors` | Unique over the whole range: asked for the range whole, never summed from days |
 | Conversion rate | `sessions_that_completed_checkout ÷ sessions` | Shopify's formula; the funnel steps (`sessions_with_cart_additions`, `sessions_that_reached_checkout`) and `pageviews` are shown too |
 | Gross profit | `FROM sales SHOW gross_profit` | Net sales − cost of goods sold, from the cost Shopify recorded with each sale. Sales with no cost recorded count at no cost in Shopify's figure, so the card shows how much (`net_sales_without_cost_recorded`) and the margin on the sales whose cost is known. Not net profit: bizinsights knows none of the other costs |
-| The check | `FROM sales SHOW gross_sales, discounts, sales_reversals, net_sales, shipping_charges, taxes, total_sales, orders` | Our figures for exactly the same window, line by line, to the cent: both add up Shopify's sales records. Shopify's sign for discounts and reversals is read off its own identity (net = gross − discounts − reversals) |
+| The check | `FROM sales SHOW gross_sales, discounts, sales_reversals, net_sales, shipping_charges, duties, additional_fees, taxes, total_sales, orders` | Our figures for exactly the same window, line by line, to the cent: both add up Shopify's sales records. Shopify's sign for discounts and reversals is read off its own identity (net = gross − discounts − reversals) |
 
 - **Windows**: the dashboard's range and its comparison, in the store's time zone. While the range
   runs both stop at the last 5-minute mark (today up to 4:40 pm against yesterday up to 4:40 pm),

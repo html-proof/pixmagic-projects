@@ -12,6 +12,7 @@ import { AreaList, HealthOverview, StoreSummary } from "@/components/dashboard/O
 import { AdvertisingSection } from "@/components/dashboard/Advertising";
 import { fmtRange, fmtRelative } from "@/components/dashboard/format";
 import { KpiCard, SummaryCard, TrendCharts } from "@/components/dashboard/HomeCards";
+import { appliedCustom } from "@/components/dashboard/redacted";
 import { AnimatedNumber } from "@/components/dashboard/Motion";
 import type { Capability, Overview } from "@/components/dashboard/types";
 import { signInFinished } from "@/lib/adSignIn";
@@ -266,6 +267,7 @@ export default function DashboardPage() {
   const contactsOn = ov?.capabilities.some((c) => c.id === "contacts" && c.enabled) ?? false;
   const topics = ov ? availableTopics(ov, contactsOn) : [];
   const s = m?.sales_overview;
+  const custom = appliedCustom(s);
 
   const shown: Shown = ov && { range: ov.range, previous: ov.previous, timezone: ov.store.timezone };
   const compared = comparedWith(shown);
@@ -380,7 +382,26 @@ export default function DashboardPage() {
           {/* Total sales, as Shopify's home page headlines it: the same figure for the same dates. It
               holds tax and shipping, so a member who may not see those (Team & Access) gets net sales. */}
           {s.current.totalSales !== undefined ? (
-            <KpiCard i={0} icon={CircleDollarSign} tint="green" title="Total sales" value={<AnimatedNumber value={s.current.totalSales} format={(n) => fmtMoney(n, cur)} />} delta={s.deltas.totalSales ?? null} compared={compared} versus={versus} onClick={() => detail.open("sales")} />
+            <KpiCard
+              i={0}
+              icon={CircleDollarSign}
+              tint="green"
+              title="Total sales"
+              value={<AnimatedNumber value={s.current.totalSales} format={(n) => fmtMoney(n, cur)} />}
+              delta={s.deltas.totalSales ?? null}
+              compared={compared}
+              versus={versus}
+              // The store's own calculation, when it shows it: under Shopify's figure, named, never instead of it.
+              extra={
+                custom ? (
+                  <span data-testid="tile-custom-sales" title={`Custom sales · ${custom.name}: ${fmtMoney(custom.current, cur)}`}>
+                    Custom sales <span className="font-semibold text-text">{fmtMoney(custom.current, cur)}</span>
+                    <span className="block truncate">{custom.name}</span>
+                  </span>
+                ) : undefined
+              }
+              onClick={() => detail.open("sales")}
+            />
           ) : (
             <KpiCard i={0} icon={CircleDollarSign} tint="green" title="Net sales" value={<AnimatedNumber value={s.current.netSales} format={(n) => fmtMoney(n, cur)} />} delta={s.deltas.netSales} compared={compared} versus={versus} onClick={() => detail.open("sales")} />
           )}

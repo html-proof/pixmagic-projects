@@ -6,7 +6,7 @@ import { pickAnswers, quantizeUntil, reconcileSales, reportStale, reportWindows 
 describe("ShopifyQL for Shopify's own report figures", () => {
   it("asks for whole days, or up to a time of day while the window runs", () => {
     expect(reportQuery("sales", { from: "2026-10-01", to: "2026-10-16" })).toBe(
-      "FROM sales SHOW gross_sales, discounts, sales_reversals, net_sales, shipping_charges, taxes, total_sales, orders SINCE 2026-10-01 UNTIL 2026-10-16",
+      "FROM sales SHOW gross_sales, discounts, sales_reversals, net_sales, shipping_charges, duties, additional_fees, taxes, total_sales, orders SINCE 2026-10-01 UNTIL 2026-10-16",
     );
     expect(reportQuery("sessions", { from: "2026-10-17", to: "2026-10-17", until: "16:40:00" })).toBe(
       "FROM sessions SHOW sessions, online_store_visitors, sessions_with_cart_additions, sessions_that_reached_checkout, sessions_that_completed_checkout, pageviews WHERE human_or_bot_session = 'human' SINCE 2026-10-17 UNTIL 2026-10-17T16:39:59",
@@ -43,7 +43,7 @@ describe("windows and staleness", () => {
   it("asks again sooner for recent days and failed calls than for old days or refusals", () => {
     const now = new Date("2026-10-17T06:00:00Z");
     const ago = (min: number) => new Date(now.getTime() - min * 60_000);
-    const kept = (min: number, error: "failed" | "access_denied" | null = null) => ({ dataset: "sales" as const, window: "", values: error ? null : {}, error, fetchedAt: ago(min) });
+    const kept = (min: number, error: "failed" | "access_denied" | null = null) => ({ dataset: "sessions" as const, window: "", values: error ? null : {}, error, fetchedAt: ago(min) });
     const today = "2026-10-17";
     expect(reportStale(undefined, { from: today, to: today }, today, now)).toBe(true);
     expect(reportStale(kept(5), { from: today, to: today }, today, now)).toBe(false);
@@ -53,15 +53,25 @@ describe("windows and staleness", () => {
     expect(reportStale(kept(11, "failed"), { from: "2026-09-01", to: "2026-09-30" }, today, now)).toBe(true);
     expect(reportStale(kept(120, "access_denied"), { from: today, to: today }, today, now)).toBe(false);
   });
+
+  it("asks again at once for a sales answer kept before duties and additional fees were asked for", () => {
+    const now = new Date("2026-10-19T06:00:00Z");
+    const today = "2026-10-19";
+    const sales = (values: Record<string, number>) => ({ dataset: "sales" as const, window: "2026-09-01|2026-09-30|", values, error: null, fetchedAt: new Date(now.getTime() - 60_000) });
+    const all = { grossSales: 1, discounts: 0, salesReversals: 0, netSales: 1, shipping: 0, duties: 0, additionalFees: 0, taxes: 0, totalSales: 1, orders: 1 };
+    const { duties: _d, additionalFees: _f, ...older } = all;
+    expect(reportStale(sales(all), { from: "2026-09-01", to: "2026-09-30" }, today, now)).toBe(false);
+    expect(reportStale(sales(older), { from: "2026-09-01", to: "2026-09-30" }, today, now)).toBe(true);
+  });
 });
 
 describe("our sales figures against Shopify's sales report", () => {
   const ours = summarize([
-    { day: "2026-09-21", grossSales: 1699.08, discounts: 54.53, refunds: 45.5, shipping: 34.54, taxes: 167.91, totalSales: 1801.5, orders: 5, orderValue: 1644.55, units: 6, ordersWithCustomer: 5, returningCustomerOrders: 0, refundedOrders: 1 },
+    { day: "2026-09-21", grossSales: 1699.08, discounts: 54.53, refunds: 45.5, shipping: 34.54, taxes: 167.91, duties: 0, additionalFees: 0, totalSales: 1801.5, orders: 5, orderValue: 1644.55, units: 6, ordersWithCustomer: 5, returningCustomerOrders: 0, refundedOrders: 1 },
   ]);
 
   it("matches to the cent whichever sign Shopify reports discounts and reversals with", () => {
-    const negative = { grossSales: 1699.08, discounts: -54.53, salesReversals: -45.5, netSales: 1599.05, shipping: 34.54, taxes: 167.91, totalSales: 1801.5, orders: 5 };
+    const negative = { grossSales: 1699.08, discounts: -54.53, salesReversals: -45.5, netSales: 1599.05, shipping: 34.54, duties: 0, additionalFees: 0, taxes: 167.91, totalSales: 1801.5, orders: 5 };
     const positive = { ...negative, discounts: 54.53, salesReversals: 45.5 };
     for (const shopify of [negative, positive]) {
       const rows = reconcileSales(ours, shopify, { behind: false });
@@ -72,13 +82,41 @@ describe("our sales figures against Shopify's sales report", () => {
 
   it("flags a difference, or a delay while changes are still being counted, and a figure Shopify left out", () => {
     // The returns bug fixed on 2026-10-17 would have shown as this: 136.50 counted, 45.50 in Shopify.
-    const before = summarize([{ ...{ day: "2026-09-21", grossSales: 1699.08, discounts: 54.53, refunds: 136.5, shipping: 34.54, taxes: 167.91, totalSales: 1710.5, orders: 5, orderValue: 1644.55, units: 6, ordersWithCustomer: 5, returningCustomerOrders: 0, refundedOrders: 1 } }]);
+    const before = summarize([{ ...{ day: "2026-09-21", grossSales: 1699.08, discounts: 54.53, refunds: 136.5, shipping: 34.54, taxes: 167.91, duties: 0, additionalFees: 0, totalSales: 1710.5, orders: 5, orderValue: 1644.55, units: 6, ordersWithCustomer: 5, returningCustomerOrders: 0, refundedOrders: 1 } }]);
     const shopify = { grossSales: 1699.08, discounts: -54.53, salesReversals: -45.5, netSales: 1599.05, shipping: 34.54, taxes: 167.91, totalSales: 1801.5, orders: null };
     const rows = reconcileSales(before, shopify, { behind: false });
     expect(rows.find((r) => r.metric === "returns")).toMatchObject({ shopify: 45.5, ours: 136.5, difference: 91, state: "differs" });
     expect(rows.find((r) => r.metric === "totalSales")).toMatchObject({ difference: -91, state: "differs" });
     expect(rows.find((r) => r.metric === "orders")).toMatchObject({ shopify: null, state: "unknown" });
     expect(reconcileSales(before, shopify, { behind: true }).find((r) => r.metric === "returns")!.state).toBe("delay");
+  });
+});
+
+describe("duties and additional fees against Shopify's sales report", () => {
+  // An international order: A$40 of duties and a A$2.50 retail delivery fee, each with its own line
+  // in Shopify's total sales breakdown (ShopifyQL `duties`, `additional_fees`).
+  const day = { day: "2026-10-18", grossSales: 500, discounts: 0, refunds: 0, shipping: 20, taxes: 56.25, duties: 40, additionalFees: 2.5, totalSales: 618.75, orders: 1, orderValue: 500, units: 2, ordersWithCustomer: 1, returningCustomerOrders: 0, refundedOrders: 0 };
+  const shopify = { grossSales: 500, discounts: 0, salesReversals: 0, netSales: 500, shipping: 20, duties: 40, additionalFees: 2.5, taxes: 56.25, totalSales: 618.75, orders: 1 };
+
+  it("compares each line, and they add up to Shopify's total sales", () => {
+    const rows = reconcileSales(summarize([day]), shopify, { behind: false });
+    expect(rows.map((r) => r.metric)).toEqual(["grossSales", "discounts", "returns", "netSales", "shipping", "duties", "additionalFees", "taxes", "totalSales", "orders"]);
+    expect(rows.every((r) => r.state === "match"), JSON.stringify(rows)).toBe(true);
+    expect(shopify.netSales + shopify.additionalFees + shopify.duties + shopify.shipping + shopify.taxes).toBe(shopify.totalSales);
+  });
+
+  it("shows a fee booked on the wrong line as two differences, while total sales still matches", () => {
+    const rows = reconcileSales(summarize([{ ...day, duties: 42.5, additionalFees: 0 }]), shopify, { behind: false });
+    expect(rows.find((r) => r.metric === "duties")).toMatchObject({ difference: 2.5, state: "differs" });
+    expect(rows.find((r) => r.metric === "additionalFees")).toMatchObject({ difference: -2.5, state: "differs" });
+    expect(rows.find((r) => r.metric === "totalSales")!.state).toBe("match");
+  });
+
+  it("says not reported for a kept answer from before the lines were asked for", () => {
+    const { duties: _d, additionalFees: _f, ...older } = shopify;
+    const rows = reconcileSales(summarize([day]), older, { behind: false });
+    expect(rows.find((r) => r.metric === "duties")!.state).toBe("unknown");
+    expect(rows.find((r) => r.metric === "totalSales")!.state).toBe("match");
   });
 });
 
