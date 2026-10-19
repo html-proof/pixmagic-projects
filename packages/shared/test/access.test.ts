@@ -20,6 +20,7 @@ import {
   type MemberAccess,
 } from "../src/access";
 import { can } from "../src/roles";
+import { MONTH_LINES } from "../src/sales";
 import { staffAccess } from "../src/staff/access";
 
 const member = (permissions: string[], role: MemberAccess["role"] = "custom"): MemberAccess => ({ role, permissions });
@@ -132,7 +133,32 @@ const report = () => ({
       previous: { grossSales: 90, netSales: 80, totalSales: 90, tax: 4, shipping: 6, duties: 0, additionalFees: 0, orders: 2, units: 2, averageOrderValue: 40 },
       deltas: { netSales: 0.25, totalSales: 0.24, orders: 0.5, averageOrderValue: -0.1, grossSales: 0.3, units: 1 },
       series: [{ day: "2026-10-01", netSales: 100, totalSales: 115, shipping: 7, tax: 5, duties: 2, additionalFees: 1, orders: 3, refunds: 10, averageOrderValue: 33 }],
-      year: { year: 2026, months: [], total: 100, orders: 3 },
+      year: {
+        year: 2026,
+        months: [
+          {
+            month: "2026-10",
+            from: "2026-10-01",
+            to: "2026-10-01",
+            current: true,
+            coverage: "full",
+            netSales: 100,
+            orders: 3,
+            refunds: 10,
+            averageOrderValue: 33,
+            additionalFees: 1,
+            duties: 2,
+            shipping: 7,
+            taxes: 5,
+            totalSales: 115,
+            change: 0.25,
+            comparedWith: { from: "2026-09-01", to: "2026-09-01" },
+            comparedLines: { netSales: 80, additionalFees: 0, duties: 0, shipping: 6, taxes: 4, totalSales: 90 },
+          },
+        ],
+        total: 100,
+        orders: 3,
+      },
       calculation: { components: { netSales: true, additionalFees: true, duties: false, shipping: true, taxes: false }, label: null, applyToDashboard: true, presets: [], updatedAt: "2026-10-19T00:00:00.000Z" },
     },
     top_products: { items: [{ title: "Hat", revenue: 100, units: 4 }] },
@@ -189,6 +215,21 @@ describe("redactOverview", () => {
     expect(report().modules.sales_overview.current.grossSales).toBe(120);
   });
 
+  it("keeps this year month by month for financial reports, its lines of total sales only with the breakdown", () => {
+    const reports = redactOverview(report(), member(["analytics.sales", "finance.reports"])) as ReturnType<typeof report>;
+    const y = reports.modules.sales_overview.year;
+    expect(y).toMatchObject({ year: 2026, total: 100, orders: 3 });
+    expect(y.months[0]).toMatchObject({ month: "2026-10", coverage: "full", netSales: 100, orders: 3, change: 0.25, comparedWith: { from: "2026-09-01", to: "2026-09-01" } });
+    // Custom sales is drawn from the lines, so neither the month's lines nor those it is compared on stay.
+    for (const k of MONTH_LINES) expect(y.months[0]).not.toHaveProperty(k);
+    expect(reports.modules.sales_overview).not.toHaveProperty("calculation");
+
+    const both = redactOverview(report(), member(["analytics.sales", "finance.reports", "finance.breakdown"])) as ReturnType<typeof report>;
+    expect(both.modules.sales_overview.year.months[0]).toEqual(report().modules.sales_overview.year.months[0]);
+    // The original is untouched.
+    expect(report().modules.sales_overview.year.months[0]!.taxes).toBe(5);
+  });
+
   it("keeps them once granted", () => {
     const out = redactOverview(report(), member([...LEGACY_GRANTS.viewer, "reports.export"])) as ReturnType<typeof report>;
     expect(out.modules.sales_overview.current.grossSales).toBe(120);
@@ -196,6 +237,7 @@ describe("redactOverview", () => {
     expect(out.modules.sales_overview.previous).toMatchObject({ tax: 4, shipping: 6 });
     expect(out.modules.sales_overview.series[0]).toMatchObject({ refunds: 10, totalSales: 115, tax: 5, duties: 2 });
     expect(out.modules.sales_overview.calculation.applyToDashboard).toBe(true);
+    expect(out.modules.sales_overview.year.months[0]).toMatchObject({ taxes: 5, totalSales: 115, comparedLines: { shipping: 6 } });
     expect(out.modules.inventory.current.retailValue).toBe(200);
     expect(out.modules.recent_orders.items[0]!.financialStatus).toBe("paid");
   });

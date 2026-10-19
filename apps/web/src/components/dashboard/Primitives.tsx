@@ -97,3 +97,14 @@ export function Delta({ value, invert = false, label = "vs before" }: { value: n
     </span>
   );
 }
+
+/** What a chart shows, picked from a short list (the sales charts: Custom sales, net sales...). */
+export function ChartChoice<T extends string>({ label, value, options, onChange }: { label: string; value: T; options: Array<[T, string]>; onChange: (v: T) => void }) {
+  return (
+    <select aria-label={label} className="input h-9 w-auto cursor-pointer py-1 pr-8 text-xs font-medium shadow-[var(--shadow)]" value={value} onChange={(e) => onChange(e.target.value as T)}>
+      {options.map(([v, l]) => (
+        <option key={v} value={v}>{l}</option>
+      ))}
+    </select>
+  );
+}

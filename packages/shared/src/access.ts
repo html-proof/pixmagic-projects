@@ -11,6 +11,7 @@
 // Imported by the UI through `@app/shared/access`: no I/O, relative imports stay extensionless.
 
 import { can as roleCan, type Permission, type Role } from "./roles";
+import { MONTH_LINES } from "./sales";
 
 // ---------------------------------------------------------------------------
 // The catalog
@@ -569,6 +570,8 @@ function redactFields(modules: Obj, g: ReadonlySet<AccessKey>): Obj {
         deltas: omit(s.deltas, ["grossSales", "totalSales"]),
       };
       if (Array.isArray(s.series)) s.series = s.series.map((d: unknown) => omit(d, lines));
+      // This year month by month ("View financial reports") keeps its net sales, without the lines.
+      if (isObj(s.year) && Array.isArray(s.year.months)) s.year = { ...s.year, months: s.year.months.map((m: unknown) => omit(m, MONTH_LINES)) };
       delete s.calculation;
     }
     if (!g.has("finance.reports")) delete s.year;

@@ -7,6 +7,7 @@ import { LineChart } from "./LineChart";
 import type { Overview } from "./types";
 import { customSales } from "@app/shared/salesCalculation";
 import { appliedCustom, dayLinesOf, showsRefunds, showsTotalSales } from "./redacted";
+import { ChartChoice } from "./Primitives";
 
 // ---------------------------------------------------------------------------
 // The top of the dashboard: four headline numbers, the sales and orders trends, and the summary
@@ -111,16 +112,6 @@ function CardHead({ icon: IconCmp, title, sub, id, aside }: { icon: LucideIcon; 
       </div>
       {aside}
     </div>
-  );
-}
-
-function ChartChoice<T extends string>({ label, value, options, onChange }: { label: string; value: T; options: Array<[T, string]>; onChange: (v: T) => void }) {
-  return (
-    <select aria-label={label} className="input h-9 w-auto cursor-pointer py-1 pr-8 text-xs font-medium shadow-[var(--shadow)]" value={value} onChange={(e) => onChange(e.target.value as T)}>
-      {options.map(([v, l]) => (
-        <option key={v} value={v}>{l}</option>
-      ))}
-    </select>
   );
 }
 

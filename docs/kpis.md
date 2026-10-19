@@ -260,11 +260,15 @@ its own, by name (default name "Custom business revenue").
   breakdown (Team & Access `finance.breakdown`; switches there last until the page is left). Once
   an owner or admin saves a calculation and applies it to the dashboard (`PUT .../sales-calculation`,
   in the audit log as `sales_calculation.changed`), it also shows under the Total sales tile, as a
-  view of the sales chart (the one chosen until another is picked), in the overview report's key
-  figures and as its own column in the Sales download, each time named. Without
-  `finance.breakdown` a member gets neither the lines nor the calculation.
+  view of the sales chart (the one chosen until another is picked), as what the Sales section's
+  "Day by day" and "Month by month" cards measure (also until Net sales is picked; section "Sales
+  breakdown" below), in the overview report's key figures and as its own column in the Sales
+  download, each time named. Without `finance.breakdown` a member gets neither the lines (for the
+  range, each day or each month of the year) nor the calculation.
 - **Comparisons**: the lines come for the dates compared with too, so Custom sales has its own
-  change on them, with the same "No earlier data" rule as every sales figure.
+  change on them, with the same "No earlier data" rule as every sales figure. Each month of the
+  year carries its lines and those of the dates it is compared with (`comparedLines`), so a month's
+  Custom sales has its own change on the month before.
 
 ## Sales breakdown (Sales section)
 
@@ -282,6 +286,15 @@ Reference implementation: `packages/shared/src/sales.ts`.
 - Net sales, orders and average order value per month, January to the current month.
 - **Change**: on the month before (January on December). The current month is compared with the same days of the month before (1–9 Oct with 1–9 Sep), never with the whole month.
 - **Average month**: over finished months that were fully imported.
+
+**Custom sales.** While the store shows its Custom sales on the dashboard, both cards measure it
+by default (picker beside "Show table": "Custom sales · <name>" or "Net sales"): each day's or
+month's figure is the lines its calculation counts, added up in cents, and the average day or
+month, the day tiers, the best day, weekday and month, the running total and the month's change all
+follow it. It is named in the picker, the headline (with Shopify's net sales for the same dates
+beside it), each tooltip (with that day's or month's net sales) and the table, which keeps a Net
+sales column; Shopify's figures never change. Without the lines (`finance.breakdown`) the cards
+measure net sales only.
 
 **Not imported.** Days and months before the store's imported history (`historyFrom`, see Conventions: the first whole day of Shopify's 60-day window, not the first order) are drawn hatched and labelled, never as $0. Shopify shares only the last 60 days of orders without `read_all_orders`; with it nothing is "not imported". A month that is only partly imported is drawn lighter, and no change is calculated for it or against it.
 

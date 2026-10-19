@@ -1,14 +1,17 @@
 "use client";
 import { useState, type ReactNode } from "react";
-import { dailyBreakdown, weekdayOf, type BreakdownDay, type SalesDay, type SalesMonth, type YearBreakdown } from "@app/shared/sales";
+import { customSalesMonths, dailyBreakdown, NET_SALES_MONTHS, weekdayOf, yearFigures } from "@app/shared/sales";
+import { customSales, type ComponentSelection } from "@app/shared/salesCalculation";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { fmtDay, fmtLongDay, fmtMonth, fmtMoneyCompact, fmtMoneyWhole, fmtSpan, fmtWeekday, weekdayName } from "./format";
-import { Delta } from "./Primitives";
-import { asSalesDays, showsRefunds } from "./redacted";
+import { ChartChoice, Delta } from "./Primitives";
+import { asSalesDays, dayLinesOf, hasMonthLines, showsRefunds } from "./redacted";
 import { type Column, ColumnsWithTotal } from "./ColumnsWithTotal";
+import type { SalesOverview, YearMonth } from "./types";
 
 // The sales cards: day by day for the dates picked, and month by month for this calendar year,
-// each drawn with ColumnsWithTotal.
+// each drawn with ColumnsWithTotal. Each measures net sales, or the store's Custom sales while it
+// shows it on the dashboard (named, with Shopify's net sales beside it).
 
 /** A short colored key beside a legend label (identity is never color alone: the label says it). */
 function Key({ kind, color, faded, children }: { kind: "box" | "line" | "band" | "hatch"; color: string; faded?: boolean; children: ReactNode }) {
@@ -51,36 +54,89 @@ function fullMonthsText(months: string[]): string | null {
   return `${months.map((m) => fmtMonth(m)).join(" and ")} complete`;
 }
 
+/** The store's Custom sales when it shows it on the dashboard (`appliedCustom` in ./redacted). */
+type AppliedCustom = { name: string; components: ComponentSelection };
+type Measure = "custom" | "net";
+
+/**
+ * What a sales card measures: the store's Custom sales while it shows it on the dashboard (until
+ * another is picked, as the sales chart on the home page), else net sales. Shopify's net sales
+ * stays one pick away and on every day and month of the card, so Custom sales never stands in for it.
+ */
+function useMeasure(custom: AppliedCustom | null) {
+  const [picked, setPicked] = useState<Measure | null>(null);
+  const measure: Measure = custom && (picked ?? "custom") === "custom" ? "custom" : "net";
+  return [measure, setPicked] as const;
+}
+
+function MeasureChoice({ custom, value, onChange }: { custom: AppliedCustom | null; value: Measure; onChange: (m: Measure) => void }) {
+  if (!custom) return null;
+  return (
+    <ChartChoice<Measure>
+      label="Sales card shows"
+      value={value}
+      onChange={onChange}
+      options={[
+        ["custom", `Custom sales · ${custom.name}`],
+        ["net", "Net sales"],
+      ]}
+    />
+  );
+}
+
+/** Under the headline while Custom sales is measured: its name, and Shopify's figure beside it. */
+function CustomNote({ custom, net, money }: { custom: AppliedCustom; net: number; money: (n: number) => string }) {
+  return (
+    <p className="mt-0.5 text-xs text-muted" data-testid="custom-measure">
+      Custom sales · {custom.name}, not Shopify&apos;s figure. Shopify&apos;s net sales: <span className="tabular-nums">{money(net)}</span>
+    </p>
+  );
+}
+
 export function DailySalesCard({
   series,
   range,
   today,
   historyFrom,
   currency,
+  custom = null,
 }: {
   /** Days without `refunds` (Team & Access: "View refunds") show no refunds column. */
-  series: Array<Omit<SalesDay, "refunds" | "totalSales"> & { refunds?: number; totalSales?: number }>;
+  series: SalesOverview["series"];
   range: { from: string; to: string };
   today: string;
   historyFrom: string | null;
   currency: string;
+  /** Offered as what the days are measured by, named; each day's lines make it (`dayLinesOf`). */
+  custom?: AppliedCustom | null;
 }) {
   const [table, setTable] = useState(false);
+  const [measure, setMeasure] = useMeasure(custom);
   const showRefunds = showsRefunds(series);
-  const b = dailyBreakdown(asSalesDays(series), today, historyFrom);
+  const days = asSalesDays(series);
+  const net = dailyBreakdown(days, today, historyFrom);
+  const shown = measure === "custom" && custom ? custom : null;
+  const b = shown
+    ? dailyBreakdown(days, today, historyFrom, (d) => {
+        const lines = dayLinesOf(d);
+        return lines ? customSales(lines, shown.components) : 0;
+      })
+    : net;
+  const name = shown ? `Custom sales · ${shown.name}` : "Net sales";
   const money = (n: number) => fmtMoney(n, currency);
   const whole = (n: number) => fmtMoneyWhole(n, currency);
   const hasToday = b.days.some((d) => d.status === "today");
   const hasMissing = b.days.some((d) => d.status === "not_imported");
   const n = b.days.length;
   const t = b.tiers;
-  const fillOf = (d: BreakdownDay) => (t ? TIER_FILL[d.tier] : PLAIN_FILL);
+  type Day = (typeof b.days)[number];
+  const fillOf = (d: Day) => (t ? TIER_FILL[d.tier] : PLAIN_FILL);
 
   const columns: Column[] = b.days.map((d) => {
     const weekend = weekdayOf(d.day) >= 5;
     return {
       key: d.day,
-      value: d.netSales,
+      value: d.value,
       fill: fillOf(d),
       faded: d.status === "today",
       missing: d.status === "not_imported",
@@ -93,12 +149,12 @@ export function DailySalesCard({
         // Long ranges label Mondays, very long ones the first of each month.
         major: n <= 31 || (n <= 120 ? weekdayOf(d.day) === 0 : d.day.endsWith("-01")),
       },
-      label: d.netSales !== 0 ? whole(d.netSales) : undefined,
+      label: d.value !== 0 ? whole(d.value) : undefined,
       keepLabel: d.day === b.best?.day || d.status === "today",
     };
   });
 
-  const tip = (d: BreakdownDay) => {
+  const tip = (d: Day) => {
     if (d.status === "not_imported") {
       return (
         <>
@@ -107,11 +163,17 @@ export function DailySalesCard({
         </>
       );
     }
-    const vsAvg = b.average && d.status === "complete" ? (d.netSales - b.average) / b.average : null;
+    const vsAvg = b.average && d.status === "complete" ? (d.value - b.average) / b.average : null;
     return (
       <>
         <div className="text-muted">{fmtLongDay(d.day)}{d.status === "today" ? " · today so far" : ""}</div>
-        <div className="mt-0.5 text-sm font-semibold tabular-nums">{money(d.netSales)}</div>
+        <div className="mt-0.5 text-sm font-semibold tabular-nums">{money(d.value)}</div>
+        {shown && (
+          <>
+            <TipRow>{name}</TipRow>
+            <TipRow>Net sales {money(d.netSales)}</TipRow>
+          </>
+        )}
         <TipRow>{d.orders === 1 ? "1 order" : `${fmtNum(d.orders)} orders`}{d.averageOrderValue !== null ? ` · ${money(d.averageOrderValue)} average` : ""}</TipRow>
         {showRefunds && d.refunds > 0 && <TipRow>Refunds {money(d.refunds)}</TipRow>}
         {vsAvg !== null && <TipRow>{vsAvg >= 0 ? "▲" : "▼"} {fmtPct(Math.abs(vsAvg))} {vsAvg >= 0 ? "above" : "below"} an average day</TipRow>}
@@ -127,7 +189,8 @@ export function DailySalesCard({
   const describe = (i: number) => {
     const d = b.days[i]!;
     if (d.status === "not_imported") return `${fmtLongDay(d.day)}: not imported.`;
-    return `${fmtLongDay(d.day)}${d.status === "today" ? ", today so far" : ""}: ${money(d.netSales)} net sales from ${fmtNum(d.orders)} orders. ${money(d.cumulative ?? 0)} so far in this range.`;
+    const what = shown ? `${name} (net sales ${money(d.netSales)})` : "net sales";
+    return `${fmtLongDay(d.day)}${d.status === "today" ? ", today so far" : ""}: ${money(d.value)} ${what} from ${fmtNum(d.orders)} orders. ${money(d.cumulative ?? 0)} so far in this range.`;
   };
 
   const notes = [
@@ -135,6 +198,7 @@ export function DailySalesCard({
     hasToday ? `${fmtDay(today, { year: false })} is today (so far)` : null,
     hasMissing ? `orders before ${fmtDay(historyFrom, { year: false })} weren't shared by Shopify` : null,
   ].filter(Boolean);
+  const valueColumns = 4 + (showRefunds ? 1 : 0) + (shown ? 1 : 0);
 
   return (
     <div className="card animate-rise mt-4 min-w-0" style={{ ["--i" as string]: 4 }} data-testid="daily-sales">
@@ -142,14 +206,18 @@ export function DailySalesCard({
         <div className="min-w-0">
           <p className="text-xs font-medium uppercase tracking-wide text-muted">{fmtSpan(range.from, range.to)} · Daily</p>
           <p className="mt-1 text-3xl font-semibold">{money(b.total)}</p>
+          {shown && <CustomNote custom={shown} net={net.total} money={money} />}
           {notes.length > 0 && <p className="mt-0.5 text-xs text-muted first-letter:uppercase">{notes.join(" · ")}</p>}
         </div>
-        <button className="text-xs text-muted underline" onClick={() => setTable((x) => !x)}>{table ? "Show chart" : "Show table"}</button>
+        <div className="flex flex-wrap items-center gap-3">
+          <MeasureChoice custom={custom} value={measure} onChange={setMeasure} />
+          <button className="text-xs text-muted underline" onClick={() => setTable((x) => !x)}>{table ? "Show chart" : "Show table"}</button>
+        </div>
       </div>
 
       <dl className="mt-4 grid grid-cols-2 gap-2 lg:grid-cols-4">
         <Figure label="Average day" value={b.average !== null ? money(b.average) : "—"} note={hasToday ? "finished days only" : `${fmtNum(b.importedDays)} days`} />
-        <Figure label="Best day" value={b.best ? money(b.best.netSales) : "—"} note={b.best ? fmtLongDay(b.best.day) : "no sales yet"} />
+        <Figure label="Best day" value={b.best ? money(b.best.value) : "—"} note={b.best ? fmtLongDay(b.best.day) : "no sales yet"} />
         <Figure label="Days with sales" value={`${fmtNum(b.daysWithSales)} of ${fmtNum(b.importedDays)}`} note={b.importedDays ? `${fmtPct(b.daysWithSales / b.importedDays)} of days` : undefined} />
         {b.bestWeekday ? (
           <Figure
@@ -158,22 +226,23 @@ export function DailySalesCard({
             note={`${money(b.bestWeekday.average)} on average`}
           />
         ) : (
-          <Figure label="Orders" value={fmtNum(b.orders)} note={b.orders ? `${money(Math.round((b.total / b.orders) * 100) / 100)} net per order` : undefined} />
+          <Figure label="Orders" value={fmtNum(b.orders)} note={b.orders ? `${money(Math.round((b.total / b.orders) * 100) / 100)} ${shown ? "Custom sales" : "net"} per order` : undefined} />
         )}
       </dl>
 
       {table ? (
         <div className="mt-4 max-h-96 overflow-auto">
           <table className="w-full text-sm">
-            <caption className="sr-only">Net sales per day</caption>
+            <caption className="sr-only">{name} per day</caption>
             <thead className="sticky top-0 bg-surface text-left text-xs text-muted">
               <tr>
                 <th className="py-1 font-normal">Day</th>
+                {shown && <th className="py-1 text-right font-normal">{name}</th>}
                 <th className="py-1 text-right font-normal">Net sales</th>
                 <th className="py-1 text-right font-normal">Orders</th>
                 <th className="py-1 text-right font-normal">Average order</th>
                 {showRefunds && <th className="py-1 text-right font-normal">Refunds</th>}
-                <th className="py-1 text-right font-normal">So far</th>
+                <th className="py-1 text-right font-normal">{shown ? "Custom sales so far" : "So far"}</th>
               </tr>
             </thead>
             <tbody>
@@ -181,9 +250,10 @@ export function DailySalesCard({
                 <tr key={d.day} className="border-t border-border">
                   <td className="py-1">{fmtLongDay(d.day)}{d.status === "today" ? " (so far)" : ""}</td>
                   {d.status === "not_imported" ? (
-                    <td colSpan={showRefunds ? 5 : 4} className="py-1 text-right text-muted">Not imported</td>
+                    <td colSpan={valueColumns} className="py-1 text-right text-muted">Not imported</td>
                   ) : (
                     <>
+                      {shown && <td className="py-1 text-right tabular-nums">{money(d.value)}</td>}
                       <td className="py-1 text-right tabular-nums">{money(d.netSales)}</td>
                       <td className="py-1 text-right tabular-nums">{fmtNum(d.orders)}</td>
                       <td className="py-1 text-right tabular-nums">{d.averageOrderValue !== null ? money(d.averageOrderValue) : "—"}</td>
@@ -199,6 +269,7 @@ export function DailySalesCard({
       ) : (
         <>
           <div className="mt-4 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
+            {shown && <span className="font-medium text-text">{name}</span>}
             {t ? (
               <>
                 {t.best !== null && <Key kind="box" color={TIER_FILL[3]}>≥ {whole(t.best)}</Key>}
@@ -213,7 +284,7 @@ export function DailySalesCard({
           </div>
           <ColumnsWithTotal
             columns={columns}
-            label={`Net sales per day, ${fmtSpan(range.from, range.to)}, with the running total below`}
+            label={`${name} per day, ${fmtSpan(range.from, range.to)}, with the running total below`}
             fmtAxis={(v) => fmtMoneyCompact(v, currency)}
             reference={b.average}
             runningLabel="Running total"
@@ -228,39 +299,56 @@ export function DailySalesCard({
   );
 }
 
-export function MonthlySalesCard({ year, historyFrom, currency }: { year: YearBreakdown; historyFrom: string | null; currency: string }) {
+export function MonthlySalesCard({
+  year,
+  historyFrom,
+  currency,
+  custom = null,
+}: {
+  year: NonNullable<SalesOverview["year"]>;
+  historyFrom: string | null;
+  currency: string;
+  /** Offered as what the months are measured by, named; each month's lines make it (`customSalesMonths`). */
+  custom?: AppliedCustom | null;
+}) {
   const [table, setTable] = useState(false);
+  const months = year.months;
+  // Custom sales month by month needs every month's lines (an answer from before they came has none).
+  const lined = months.every(hasMonthLines) ? months : null;
+  const offered = lined ? custom : null;
+  const [measure, setMeasure] = useMeasure(offered);
+  const shown = measure === "custom" && offered ? offered : null;
+  const f = shown && lined ? yearFigures(lined, customSalesMonths(shown.components)) : yearFigures(months, NET_SALES_MONTHS);
+  const name = shown ? `Custom sales · ${shown.name}` : "Net sales";
   const money = (n: number) => fmtMoney(n, currency);
   const whole = (n: number) => fmtMoneyWhole(n, currency);
-  const months = year.months;
   const current = months.at(-1);
-
-  let running = 0;
-  const cumulative = months.map((m) => (m.coverage === "none" ? null : (running = Math.round((running + m.netSales) * 100) / 100)));
-  const finished = months.filter((m) => !m.current && m.coverage === "full");
-  const average = finished.length ? finished.reduce((a, m) => a + m.netSales, 0) / finished.length : null;
-  const best = months.filter((m) => m.coverage !== "none" && m.netSales > 0).reduce<SalesMonth | null>((a, m) => (!a || m.netSales > a.netSales ? m : a), null);
+  const currentFigure = f.months.at(-1);
   const firstImported = months.find((m) => m.coverage !== "none");
   const anyMissing = months.some((m) => m.coverage !== "full");
 
   const changeText = (c: number) => `${c >= 0 ? "▲" : "▼"} ${fmtPct(Math.abs(c))}`;
-  const columns: Column[] = months.map((m, i) => ({
-    key: m.month,
-    value: m.netSales,
-    fill: "var(--viz-tier-2)",
-    faded: m.current || m.coverage === "partial",
-    missing: m.coverage === "none",
-    running: cumulative[i]!,
-    tick: { top: fmtMonth(m.month, { short: true }), bottom: m.current ? "so far" : m.coverage === "partial" ? "partial" : undefined, strong: m.current, major: true },
-    label: whole(m.netSales),
-    keepLabel: m.current || m.month === best?.month,
-    note: m.change !== null && !m.current ? { text: changeText(m.change), tone: m.change >= 0 ? "good" : "danger" } : undefined,
-  }));
+  const columns: Column[] = months.map((m, i) => {
+    const x = f.months[i]!;
+    return {
+      key: m.month,
+      value: x.value,
+      fill: "var(--viz-tier-2)",
+      faded: m.current || m.coverage === "partial",
+      missing: m.coverage === "none",
+      running: x.cumulative,
+      tick: { top: fmtMonth(m.month, { short: true }), bottom: m.current ? "so far" : m.coverage === "partial" ? "partial" : undefined, strong: m.current, major: true },
+      label: whole(x.value),
+      keepLabel: m.current || m.month === f.best?.month,
+      note: x.change !== null && !m.current ? { text: changeText(x.change), tone: x.change >= 0 ? "good" : "danger" } : undefined,
+    };
+  });
 
-  const comparedText = (m: SalesMonth) =>
+  const comparedText = (m: YearMonth) =>
     !m.comparedWith ? null : m.current ? `vs ${fmtSpan(m.comparedWith.from, m.comparedWith.to)}` : `vs ${fmtMonth(m.comparedWith.from.slice(0, 7))}`;
   const tip = (i: number) => {
     const m = months[i]!;
+    const x = f.months[i]!;
     if (m.coverage === "none") {
       return (
         <>
@@ -272,22 +360,30 @@ export function MonthlySalesCard({ year, historyFrom, currency }: { year: YearBr
     return (
       <>
         <div className="text-muted">{fmtMonth(m.month, { year: true })}{m.current ? ` · to ${fmtDay(m.to, { year: false })}` : ""}</div>
-        <div className="mt-0.5 text-sm font-semibold tabular-nums">{money(m.netSales)}</div>
+        <div className="mt-0.5 text-sm font-semibold tabular-nums">{money(x.value)}</div>
+        {shown && (
+          <>
+            <TipRow>{name}</TipRow>
+            <TipRow>Net sales {money(m.netSales)}</TipRow>
+          </>
+        )}
         <TipRow>{m.orders === 1 ? "1 order" : `${fmtNum(m.orders)} orders`}{m.averageOrderValue !== null ? ` · ${money(m.averageOrderValue)} average` : ""}</TipRow>
         {m.refunds > 0 && <TipRow>Refunds {money(m.refunds)}</TipRow>}
-        {m.change !== null && <TipRow>{changeText(m.change)} {comparedText(m)}</TipRow>}
+        {x.change !== null && <TipRow>{changeText(x.change)} {comparedText(m)}</TipRow>}
         {m.coverage === "partial" && <TipRow>Only from {fmtDay(historyFrom, { year: false })}: earlier orders weren&apos;t shared by Shopify.</TipRow>}
         <div className="mt-1 flex items-center gap-1.5 text-muted">
           <span aria-hidden className="inline-block h-0.5 w-3 rounded" style={{ background: "var(--viz-total)" }} />
-          <span className="font-medium tabular-nums text-text">{money(cumulative[i] ?? 0)}</span> this year so far
+          <span className="font-medium tabular-nums text-text">{money(x.cumulative ?? 0)}</span> this year so far
         </div>
       </>
     );
   };
   const describe = (i: number) => {
     const m = months[i]!;
+    const x = f.months[i]!;
     if (m.coverage === "none") return `${fmtMonth(m.month, { year: true })}: not imported.`;
-    return `${fmtMonth(m.month, { year: true })}${m.current ? " so far" : ""}: ${money(m.netSales)} net sales from ${fmtNum(m.orders)} orders${m.change !== null ? `, ${m.change >= 0 ? "up" : "down"} ${fmtPct(Math.abs(m.change))} ${comparedText(m)}` : ""}.`;
+    const what = shown ? `${name} (net sales ${money(m.netSales)})` : "net sales";
+    return `${fmtMonth(m.month, { year: true })}${m.current ? " so far" : ""}: ${money(x.value)} ${what} from ${fmtNum(m.orders)} orders${x.change !== null ? `, ${x.change >= 0 ? "up" : "down"} ${fmtPct(Math.abs(x.change))} ${comparedText(m)}` : ""}.`;
   };
 
   return (
@@ -295,25 +391,29 @@ export function MonthlySalesCard({ year, historyFrom, currency }: { year: YearBr
       <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
         <div className="min-w-0">
           <p className="text-xs font-medium uppercase tracking-wide text-muted">This year · Monthly</p>
-          <p className="mt-1 text-3xl font-semibold">{money(year.total)}</p>
+          <p className="mt-1 text-3xl font-semibold">{money(f.total)}</p>
+          {shown && <CustomNote custom={shown} net={year.total} money={money} />}
           <p className="mt-0.5 text-xs text-muted">
             {fmtSpan(`${year.year}-01-01`, current?.to ?? `${year.year}-01-01`)}
             {current ? ` · ${fmtMonth(current.month)} is month to date` : ""}
             {anyMissing && firstImported ? ` · orders before ${fmtDay(historyFrom, { year: false })} weren't shared by Shopify` : ""}
           </p>
         </div>
-        <button className="text-xs text-muted underline" onClick={() => setTable((x) => !x)}>{table ? "Show chart" : "Show table"}</button>
+        <div className="flex flex-wrap items-center gap-3">
+          <MeasureChoice custom={offered} value={measure} onChange={setMeasure} />
+          <button className="text-xs text-muted underline" onClick={() => setTable((x) => !x)}>{table ? "Show chart" : "Show table"}</button>
+        </div>
       </div>
 
       <dl className="mt-4 grid grid-cols-2 gap-2 lg:grid-cols-4">
-        <Figure label="Average month" value={average !== null ? money(average) : "—"} note={finished.length ? `over ${finished.length} full month${finished.length === 1 ? "" : "s"}` : "no full month yet"} />
-        <Figure label="Best month" value={best ? money(best.netSales) : "—"} note={best ? fmtMonth(best.month) : "no sales yet"} />
-        <Figure label="Orders this year" value={fmtNum(year.orders)} note={year.orders ? `${money(Math.round((year.total / year.orders) * 100) / 100)} net per order` : undefined} />
-        {current && (
+        <Figure label="Average month" value={f.average !== null ? money(f.average) : "—"} note={f.finishedMonths ? `over ${f.finishedMonths} full month${f.finishedMonths === 1 ? "" : "s"}` : "no full month yet"} />
+        <Figure label="Best month" value={f.best ? money(f.best.value) : "—"} note={f.best ? fmtMonth(f.best.month) : "no sales yet"} />
+        <Figure label="Orders this year" value={fmtNum(year.orders)} note={year.orders ? `${money(Math.round((f.total / year.orders) * 100) / 100)} ${shown ? "Custom sales" : "net"} per order` : undefined} />
+        {current && currentFigure && (
           <Figure
             label={`${fmtMonth(current.month)} so far`}
-            value={money(current.netSales)}
-            note={current.change !== null ? <Delta value={current.change} label={comparedText(current)!} /> : "nothing comparable before it"}
+            value={money(currentFigure.value)}
+            note={currentFigure.change !== null ? <Delta value={currentFigure.change} label={comparedText(current)!} /> : "nothing comparable before it"}
           />
         )}
       </dl>
@@ -321,48 +421,53 @@ export function MonthlySalesCard({ year, historyFrom, currency }: { year: YearBr
       {table ? (
         <div className="mt-4 overflow-auto">
           <table className="w-full text-sm">
-            <caption className="sr-only">Net sales per month this year</caption>
+            <caption className="sr-only">{name} per month this year</caption>
             <thead className="text-left text-xs text-muted">
               <tr>
                 <th className="py-1 font-normal">Month</th>
+                {shown && <th className="py-1 text-right font-normal">{name}</th>}
                 <th className="py-1 text-right font-normal">Net sales</th>
                 <th className="py-1 text-right font-normal">Orders</th>
                 <th className="py-1 text-right font-normal">Average order</th>
-                <th className="py-1 text-right font-normal">Change</th>
-                <th className="py-1 text-right font-normal">Year so far</th>
+                <th className="py-1 text-right font-normal">{shown ? "Custom sales change" : "Change"}</th>
+                <th className="py-1 text-right font-normal">{shown ? "Custom sales, year so far" : "Year so far"}</th>
               </tr>
             </thead>
             <tbody>
-              {months.map((m, i) => (
-                <tr key={m.month} className="border-t border-border">
-                  <td className="py-1">{fmtMonth(m.month)}{m.current ? " (so far)" : m.coverage === "partial" ? " (partly imported)" : ""}</td>
-                  {m.coverage === "none" ? (
-                    <td colSpan={5} className="py-1 text-right text-muted">Not imported</td>
-                  ) : (
-                    <>
-                      <td className="py-1 text-right tabular-nums">{money(m.netSales)}</td>
-                      <td className="py-1 text-right tabular-nums">{fmtNum(m.orders)}</td>
-                      <td className="py-1 text-right tabular-nums">{m.averageOrderValue !== null ? money(m.averageOrderValue) : "—"}</td>
-                      <td className="py-1 text-right tabular-nums">{m.change !== null ? `${changeText(m.change)} ${comparedText(m)}` : "—"}</td>
-                      <td className="py-1 text-right tabular-nums">{money(cumulative[i] ?? 0)}</td>
-                    </>
-                  )}
-                </tr>
-              ))}
+              {months.map((m, i) => {
+                const x = f.months[i]!;
+                return (
+                  <tr key={m.month} className="border-t border-border">
+                    <td className="py-1">{fmtMonth(m.month)}{m.current ? " (so far)" : m.coverage === "partial" ? " (partly imported)" : ""}</td>
+                    {m.coverage === "none" ? (
+                      <td colSpan={shown ? 6 : 5} className="py-1 text-right text-muted">Not imported</td>
+                    ) : (
+                      <>
+                        {shown && <td className="py-1 text-right tabular-nums">{money(x.value)}</td>}
+                        <td className="py-1 text-right tabular-nums">{money(m.netSales)}</td>
+                        <td className="py-1 text-right tabular-nums">{fmtNum(m.orders)}</td>
+                        <td className="py-1 text-right tabular-nums">{m.averageOrderValue !== null ? money(m.averageOrderValue) : "—"}</td>
+                        <td className="py-1 text-right tabular-nums">{x.change !== null ? `${changeText(x.change)} ${comparedText(m)}` : "—"}</td>
+                        <td className="py-1 text-right tabular-nums">{money(x.cumulative ?? 0)}</td>
+                      </>
+                    )}
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
       ) : (
         <>
           <div className="mt-4 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
-            <Key kind="box" color="var(--viz-tier-2)">Net sales</Key>
+            <Key kind="box" color="var(--viz-tier-2)">{name}</Key>
             {current && <Key kind="box" color="var(--viz-tier-2)" faded>Month so far{anyMissing ? " / partly imported" : ""}</Key>}
             {months.some((m) => m.coverage === "none") && <Key kind="hatch" color="var(--muted)">Not imported</Key>}
             <span>▲▼ change on the month before</span>
           </div>
           <ColumnsWithTotal
             columns={columns}
-            label={`Net sales per month in ${year.year}, with the year's running total below`}
+            label={`${name} per month in ${year.year}, with the year's running total below`}
             fmtAxis={(v) => fmtMoneyCompact(v, currency)}
             runningLabel="Year so far"
             fmtRunning={whole}

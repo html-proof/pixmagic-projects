@@ -1,6 +1,6 @@
-import type { SalesDay } from "@app/shared/sales";
+import { MONTH_LINES, type SalesMonth } from "@app/shared/sales";
 import { calculationName, customApplied, customSales, type SalesLines } from "@app/shared/salesCalculation";
-import type { SalesOverview } from "./types";
+import type { SalesOverview, YearMonth } from "./types";
 
 /** Change on the period compared with; null without one, as the API's deltas. */
 const delta = (now: number, before: number) => (before === 0 ? null : (now - before) / Math.abs(before));
@@ -11,9 +11,9 @@ const delta = (now: number, before: number) => (before === 0 ? null : (now - bef
 
 /**
  * The day rows as the sales charts take them: a refund or total the member may not see counts as
- * none (these charts only sum net sales).
+ * none (these charts sum net sales, or Custom sales from the day's lines: `dayLinesOf`).
  */
-export const asSalesDays = (series: SalesOverview["series"]): SalesDay[] =>
+export const asSalesDays = <D extends SalesOverview["series"][number]>(series: D[]) =>
   series.map((d) => ({ ...d, refunds: d.refunds ?? 0, totalSales: d.totalSales ?? 0 }));
 
 /** Whether the day rows carry refunds ("View refunds"). */
@@ -41,6 +41,9 @@ export function salesLinesOf(c: SalesOverview["current"] | SalesOverview["previo
 /** A day of the series as lines (only for a member who may see them: `tax` is there). */
 export const dayLinesOf = (d: SalesOverview["series"][number]): Omit<SalesLines, "totalSales"> | null =>
   d.tax === undefined || d.shipping === undefined ? null : { netSales: d.netSales, additionalFees: d.additionalFees ?? 0, duties: d.duties ?? 0, shipping: d.shipping, taxes: d.tax };
+
+/** A month of this year with its lines of total sales, when the member may see them (as `dayLinesOf`). */
+export const hasMonthLines = (m: YearMonth): m is SalesMonth => MONTH_LINES.every((k) => m[k] !== undefined);
 
 /**
  * Custom sales as the dashboard shows it next to Shopify's figures: only when the store applies a

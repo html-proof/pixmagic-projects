@@ -2,8 +2,11 @@
 import type { AdCoverage, AdProvider, AdSeriesDay, AdsenseReportLevel, AdsenseReportRow, AdsenseSeriesDay, AdsenseTotals, AdSpendProvider, AdTotals } from "@app/shared/ads";
 import type { CompareMode } from "@app/shared/dates";
 import type { JourneyPageRow, JourneySummary } from "@app/shared/journey";
-import type { SalesDay, YearBreakdown } from "@app/shared/sales";
+import type { MonthLine, SalesDay, SalesMonth, YearBreakdown } from "@app/shared/sales";
 import type { SalesCalculation } from "@app/shared/salesCalculation";
+
+/** A month of `SalesOverview.year`: its lines of total sales only for a member who may see them (`MONTH_LINES`). */
+export type YearMonth = Omit<SalesMonth, MonthLine> & Partial<Pick<SalesMonth, MonthLine>>;
 
 export interface Capability {
   id: string;
@@ -90,8 +93,11 @@ export interface SalesOverview {
   series: Array<
     Omit<SalesDay, "refunds" | "totalSales"> & { refunds?: number; totalSales?: number; shipping?: number; tax?: number; duties?: number; additionalFees?: number }
   >;
-  /** This calendar year by month, whatever the range. Team & Access: "View financial reports". */
-  year?: YearBreakdown;
+  /**
+   * This calendar year by month, whatever the range. Team & Access: "View financial reports"; each
+   * month's lines of total sales as `totalSales`.
+   */
+  year?: Omit<YearBreakdown, "months"> & { months: YearMonth[] };
   /**
    * The store's own calculation from the lines of total sales (Custom sales): which it counts and
    * whether the dashboard shows it. Team & Access: as grossSales (its figures are drawn from them).
