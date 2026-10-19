@@ -65,6 +65,8 @@ export interface GraphRequest {
   form?: Record<string, string>;
   /** A JSON body, for a POST. */
   json?: unknown;
+  /** Ends the call early (a live report's time limit); without one, the fetch's own time limit applies. */
+  signal?: AbortSignal;
 }
 
 const failure = (reason: GraphFailureReason, status: number, message: string | null, extra: Partial<GraphFailure> = {}): GraphFailure => ({
@@ -124,13 +126,15 @@ export async function graphCall<T>(fetchImpl: FetchLike, req: GraphRequest, fail
     body = new URLSearchParams(form).toString();
   }
   let res: Response;
+  let text: string;
   try {
-    res = await fetchImpl(url.toString(), { method: req.method, headers, body });
+    res = await fetchImpl(url.toString(), { method: req.method, headers, body, ...(req.signal ? { signal: req.signal } : {}) });
+    // An answer cut off part way (the time limit ran out while it came) is no answer: never an empty success.
+    text = await res.text();
   } catch (err) {
-    // No answer at all: Meta or the network is down, or the call timed out (withTimeout).
+    // No answer at all: Meta or the network is down, or the call timed out (withTimeout, or `signal`).
     throw fail(failure("network", 0, err instanceof Error ? err.message : String(err)));
   }
-  const text = await res.text().catch(() => "");
   let json: unknown = null;
   try {
     json = text ? JSON.parse(text) : null;

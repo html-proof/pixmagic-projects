@@ -117,6 +117,30 @@ describe("graphCall (the one Meta Graph API transport)", () => {
     expect((await failureOf(graphCall(down, { version: "v25.0", method: "GET", path: "me", token: "T" }, failed))).headers).toBeNull();
   });
 
+  it("a call's own time limit goes to the fetch, and an answer cut off part way is no answer, never an empty success", async () => {
+    const f = fake(() => json({ ok: true }));
+    const signal = AbortSignal.timeout(5000);
+    await graphCall(f.fetchImpl, { version: "v25.0", method: "GET", path: "me", token: "T", signal }, failed);
+    expect(f.calls[0]!.init?.signal).toBe(signal);
+    // Without one, the fetch keeps its own (withTimeout's): nothing is sent that would replace it.
+    await graphCall(f.fetchImpl, { version: "v25.0", method: "GET", path: "me", token: "T" }, failed);
+    expect(f.calls[1]!.init && "signal" in f.calls[1]!.init).toBe(false);
+    // A 200 whose body stops coming (the time limit ran out while it came).
+    const cut = fake(
+      () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('{"data":[{"id":"act_1"}'));
+              controller.error(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+    );
+    expect(await failureOf(graphCall(cut.fetchImpl, { version: "v25.0", method: "GET", path: "act_1/insights", token: "T" }, failed))).toMatchObject({ reason: "network", status: 0 });
+  });
+
   it("sends a JSON body when asked", async () => {
     const f = fake(() => json({ messages: [{ id: "wamid.1" }] }));
     await graphCall(f.fetchImpl, { version: "v25.0", method: "POST", path: "/123/messages", token: "T", json: { to: "61400000000" } }, failed);
