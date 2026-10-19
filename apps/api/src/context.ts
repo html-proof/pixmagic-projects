@@ -77,9 +77,10 @@ const SESSION_REVOKED = new Set(["NotAuthorizedException", "UserNotFoundExceptio
 /**
  * Re-check a session with Cognito by spending its refresh token (at most every REVALIDATE_MS, and
  * by one request at a time). Cognito unreachable is not a verdict: the session carries on and is
- * checked again on a later request.
+ * checked again on a later request. "verified": Cognito vouches for `accountEmail`, the account's
+ * own address (a Google account linked under another address vouches for that one only).
  */
-async function revalidate(c: Ctx, deps: Deps, s: SessionClaims): Promise<"ok" | "verified" | "revoked" | "skipped"> {
+async function revalidate(c: Ctx, deps: Deps, s: SessionClaims, accountEmail: string): Promise<"ok" | "verified" | "revoked" | "skipped"> {
   if (s.m === "link") return "skipped";
   const rt = readRefreshToken(c, s);
   if (rt === undefined) return "skipped";
@@ -92,7 +93,7 @@ async function revalidate(c: Ctx, deps: Deps, s: SessionClaims): Promise<"ok" | 
     const next = { ...s, ck: Date.now() };
     setSessionCookies(c, next, tokens.refreshToken);
     c.set("session", next);
-    return id.emailVerified ? "verified" : "ok";
+    return id.emailVerified && id.email?.toLowerCase() === accountEmail.toLowerCase() ? "verified" : "ok";
   } catch (err) {
     if (err instanceof CognitoError && SESSION_REVOKED.has(err.code)) {
       logger.info({ cognitoError: err.code }, "session ended by Cognito");
@@ -175,7 +176,7 @@ async function loadSessionUser(c: Ctx, deps: Deps): Promise<User | null> {
   c.set("session", s);
   c.set("sessionCookie", picked.cookie);
   if (Date.now() - s.ck > REVALIDATE_MS) {
-    const checked = await revalidate(c, deps, s);
+    const checked = await revalidate(c, deps, s, user.email);
     if (checked === "revoked") {
       clearSessionCookies(c);
       return null;

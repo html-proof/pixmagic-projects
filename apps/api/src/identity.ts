@@ -1,6 +1,6 @@
 import { systemDb, type AuthIdentity, type User } from "@app/db";
-import { logger } from "@app/core";
-import type { CognitoAuth, IdentityClaims } from "./cognito.js";
+import { env, logger, type Mailer } from "@app/core";
+import type { CognitoAuth, IdentityClaims, SignInMethod } from "./cognito.js";
 import { HttpError } from "./context.js";
 
 /** Account-level security events (auth_events). Best effort: never fails what it records. */
@@ -25,6 +25,69 @@ const providerEmailUnverified = () =>
     "Google hasn't confirmed that this email address is yours, so we can't create an account with it. Confirm it in your Google account, or create an account with your email and a password.",
     "email_unverified_provider",
   );
+
+const removedMethod = () =>
+  new HttpError(
+    409,
+    "This Google account was removed from your bizinsights account's ways to sign in. Sign in another way, then link it again in Settings → Security if you want to use it.",
+    "google_removed",
+  );
+
+/**
+ * The name auth_events use for a Cognito user ("google_<id>" for a Google one): it stays the same
+ * when Cognito creates the federated user again (a new sub) after it was removed.
+ */
+export const cognitoUsernameKey = (username: string) => username.toLowerCase();
+
+/**
+ * The account removed this Google account from its ways to sign in (Settings → Security) and
+ * hasn't linked it again since: identity_removed and identity_linked events name it by its Cognito
+ * user name. Without this, its next "Continue with Google" would link it straight back by its
+ * verified address, and removing it would protect nothing.
+ */
+async function removedFromAccount(userId: string, username: string): Promise<boolean> {
+  const last = await systemDb.authEvent.findFirst({
+    where: { userId, type: { in: ["identity_removed", "identity_linked"] }, metadata: { path: ["cognitoUsername"], equals: cognitoUsernameKey(username) } },
+    orderBy: { createdAt: "desc" },
+    select: { type: true },
+  });
+  return last?.type === "identity_removed";
+}
+
+/**
+ * Tells the account's address that a new way to sign in was added from Settings (Google linked, a
+ * password added). Whoever got into the account another way (a leaked password, a computer left
+ * signed in) could otherwise add their own way back in unnoticed. Plain text; best effort: a
+ * failure is logged and changes nothing.
+ */
+export async function notifyMethodAdded(mailer: Mailer, user: Pick<User, "id" | "email" | "timezone">, added: { method: SignInMethod; email: string | null }, at = new Date()) {
+  const app = env().APP_URL;
+  const format = (timeZone: string) =>
+    new Intl.DateTimeFormat("en", { year: "numeric", month: "long", day: "numeric", hour: "numeric", minute: "2-digit", timeZone, timeZoneName: "short" }).format(at);
+  let when: string;
+  try {
+    when = format(user.timezone);
+  } catch {
+    when = format("UTC");
+  }
+  const google = added.method === "google";
+  const subject = google ? "Google sign-in was added to your bizinsights account" : "A password was added to your bizinsights account";
+  const what = google ? `Sign-in with the Google account ${added.email ?? "you chose"}` : "A password";
+  const text = [
+    "Hello,",
+    "",
+    `${what} was added to your bizinsights account (${user.email}) on ${when}. ${google ? "That Google account can now sign in to your account." : "Your email address and that password can now sign in to your account."}`,
+    "",
+    "If this was you, there's nothing more to do.",
+    "",
+    "If it wasn't you, someone else may be signed in to your account:",
+    `1. Reset your password (${app}/forgot-password). That signs everyone out.`,
+    `2. Sign in and remove any way to sign in you don't recognise in Settings > Security (${app}/settings/security).`,
+    "",
+    "bizinsights Team",
+  ].join("\n");
+  await mailer.send(user.email, subject, text).catch((err: unknown) => logger.warn({ err, userId: user.id }, "could not email a new sign-in method's notice"));
+}
 
 /**
  * An account whose address was never verified meets a sign-in that verifies it: the verified one
@@ -72,7 +135,8 @@ export interface ResolveOptions {
  *    (email_verified: a confirmed sign-up code, Google). Otherwise anyone could register
  *    someone else's address and walk into their workspaces; they are told it's taken instead.
  *    When that user's own address was never verified, the verified sign-in takes it over
- *    (takeOverUnverified).
+ *    (takeOverUnverified). A Google account the user removed in Settings is refused
+ *    (removedFromAccount) until they link it again there.
  * 3. Nobody: a new user. Not from a Google account whose address Google hasn't verified: such an
  *    account could never verify it here (Google's tokens can't ask Cognito for a code).
  *
@@ -92,7 +156,11 @@ export async function resolveUser(claims: IdentityClaims, opts: ResolveOptions):
     // this identity's address was the account's. One linked under another address (Google, from
     // Settings) never renames the account.
     if (claims.emailVerified && email !== user.email && linked.email !== email && linked.email === user.email) data.email = email;
-    if (claims.emailVerified && !user.emailVerified) data.emailVerified = true;
+    // Verified only by a sign-in that proves the account's own address. A Google account linked
+    // under another address proves that one, not this: counting it would let whoever opened an
+    // unverified account (someone else's address) make it look proven, and keep it from the
+    // address's owner (takeOverUnverified).
+    if (claims.emailVerified && !user.emailVerified && (data.email ?? user.email) === email) data.emailVerified = true;
     if (Object.keys(data).length) {
       user = await systemDb.user.update({ where: { id: user.id }, data }).catch((err: unknown) => {
         // The new address already belongs to another user: keep this one's and say nothing.
@@ -127,13 +195,16 @@ export async function resolveUser(claims: IdentityClaims, opts: ResolveOptions):
       if (raced) return raced.user;
       throw err;
     }
-    await recordAuthEvent(reason, user.id, opts.ip ?? null, { cognitoSub: claims.sub, method: claims.method });
+    await recordAuthEvent(reason, user.id, opts.ip ?? null, { cognitoSub: claims.sub, method: claims.method, cognitoUsername: cognitoUsernameKey(claims.username) });
     return user;
   };
 
   const sameEmail = await systemDb.user.findUnique({ where: { email }, include: { identities: true } });
   if (sameEmail) {
     if (!claims.emailVerified) throw emailTaken();
+    // Removed in Settings: never linked back by its address alone. (A password comes back only
+    // through a sign-up code to the address, which proves it again.)
+    if (claims.method !== "password" && (await removedFromAccount(sameEmail.id, claims.username))) throw removedMethod();
     const user: User = sameEmail.emailVerified ? sameEmail : await takeOverUnverified(sameEmail, claims, opts);
     return link(user, "identity_linked");
   }

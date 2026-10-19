@@ -4,14 +4,12 @@ import { logger } from "@app/core";
 import { accountPasswordProblem, EMAIL_CODE_RE } from "@app/shared";
 import { accessTokenFor, body, clientIp, HttpError, requireUser, sessionOf, type Ctx, type Deps } from "../context.js";
 import { CognitoError, type CognitoUser } from "../cognito.js";
-import { recordAuthEvent } from "../identity.js";
-import { clearSessionCookies, newSession, readRefreshToken, setSessionCookies } from "../session.js";
+import { cognitoUsernameKey, notifyMethodAdded, recordAuthEvent } from "../identity.js";
+import { clearSessionCookies, LINK_PROOF_TTL_S, linkProofKey, newSession, readRefreshToken, RECENT_SIGN_IN_S, setSessionCookies, signedInRecently as recentSignIn } from "../session.js";
 import type { App } from "../app.js";
 import { limit, LIMITS } from "../rateLimit.js";
 import { cognitoFailure, enabledProviders, publicUser } from "./auth.js";
 
-/** Changes that hand over the account (email, deletion) need a sign-in this recent, or the password. */
-const RECENT_SIGN_IN_S = 15 * 60;
 const codeSchema = z.string().trim().regex(EMAIL_CODE_RE, "Enter the 6-digit code from the email.");
 const totpSchema = z.string().trim().regex(/^\d{6}$/, "Enter the 6-digit code from your authenticator app.");
 const isUniqueViolation = (err: unknown) => (err as { code?: string })?.code === "P2002";
@@ -37,13 +35,15 @@ function otpauthUri(email: string, secret: string) {
 export function accountRoutes(app: App, deps: Deps) {
   /** The password is the account's: Cognito says yes to it (a two-step challenge still means it was right). */
   async function checkPassword(email: string, password: string) {
-    await deps.auth.passwordSignIn(email, password).catch((err: unknown) => {
+    const r = await deps.auth.passwordSignIn(email, password).catch((err: unknown) => {
       if (isCognito(err, "NotAuthorizedException")) throw new HttpError(400, "Your current password isn't right.", "wrong_password");
       throw cognitoFailure(err, "reauthenticate");
     });
+    // Those tokens were only for this check.
+    if ("tokens" in r && r.tokens.refreshToken) await deps.auth.revokeRefreshToken(r.tokens.refreshToken).catch((err: unknown) => logger.warn({ err }, "could not revoke a check's refresh token"));
   }
 
-  const signedInRecently = (c: Ctx) => Date.now() / 1000 - sessionOf(c).at <= RECENT_SIGN_IN_S;
+  const signedInRecently = (c: Ctx) => recentSignIn(sessionOf(c));
   const reauthRequired = () => new HttpError(401, `Sign out and sign in again with Google, then try again within ${RECENT_SIGN_IN_S / 60} minutes.`, "reauth_required");
 
   /**
@@ -195,13 +195,38 @@ export function accountRoutes(app: App, deps: Deps) {
       await deps.auth.adminDeleteUser(created.username).catch((e: unknown) => logger.error({ err: e }, "could not remove a password user after failing to link it"));
       throw err;
     }
-    await recordAuthEvent("identity_linked", user.id, clientIp(c), { cognitoSub: created.sub, method: "password", via: "settings" });
+    await recordAuthEvent("identity_linked", user.id, clientIp(c), { cognitoSub: created.sub, method: "password", via: "settings", cognitoUsername: cognitoUsernameKey(created.username) });
+    // The account's address hears of it, in case it wasn't them.
+    await notifyMethodAdded(deps.mailer, user, { method: "password", email: user.email });
     return c.json({ ok: true });
+  });
+
+  /**
+   * Linking a Google account adds a way into the account, so it needs the person again: a sign-in
+   * in the last 15 minutes, or this. The password, checked here, lets this session start one link
+   * (GET /auth/oauth/google/start?link=1) in the next few minutes. Password sessions only: a
+   * Google session's account has its Google sign-in already.
+   */
+  app.post("/auth/account/methods/google/prepare", async (c) => {
+    const user = await requireUser(c, deps);
+    const s = sessionOf(c);
+    const input = z.object({ password: z.string().min(1, "Enter your current password.").max(256) }).parse(await body(c));
+    await limit(deps.coord, `rl:account:${user.id}`, LIMITS.accountChange);
+    if (s.m !== "password") throw new HttpError(400, "Sign in with your email and password to link a Google account.", "password_session_required");
+    if (!user.emailVerified) throw new HttpError(403, "Verify your email address first, then link Google.", "email_unverified");
+    await checkPassword(user.email, input.password);
+    await deps.coord.put(linkProofKey(s.sid), "1", LINK_PROOF_TTL_S).catch((err: unknown) => {
+      logger.error({ err }, "could not store a link's proof");
+      throw new HttpError(503, "We can't reach the sign-in service right now. Please try again in a moment.", "auth_unavailable");
+    });
+    return c.json({ ok: true, expiresInSeconds: LINK_PROOF_TTL_S });
   });
 
   /**
    * Remove one way of signing in (its Cognito user goes too). Never the last one, nor the one this
    * session signed in with; and it needs the person again, like any change that could lock them out.
+   * The removal is kept in auth_events (identity_removed, with its Cognito user name), which stops a
+   * removed Google account from linking itself back by its address (identity.ts, removedFromAccount).
    */
   app.delete("/auth/account/methods/:id", async (c) => {
     const user = await requireUser(c, deps);
@@ -218,8 +243,13 @@ export function accountRoutes(app: App, deps: Deps) {
     await deps.auth.adminDeleteUser(target.username).catch((err: unknown) => {
       throw cognitoFailure(err, "remove sign-in method");
     });
-    await systemDb.authIdentity.deleteMany({ where: { id: target.id, userId: user.id } });
-    await recordAuthEvent("identity_removed", user.id, clientIp(c), { cognitoSub: target.subject, method: target.method });
+    // Together: the event is what keeps the method out (not a best-effort trail here).
+    await systemDb.$transaction([
+      systemDb.authIdentity.deleteMany({ where: { id: target.id, userId: user.id } }),
+      systemDb.authEvent.create({
+        data: { type: "identity_removed", userId: user.id, ip: clientIp(c), metadata: { cognitoSub: target.subject, method: target.method, cognitoUsername: cognitoUsernameKey(target.username) } },
+      }),
+    ]);
     return c.json({ ok: true });
   });
 
@@ -290,7 +320,7 @@ export function accountRoutes(app: App, deps: Deps) {
       ({ accessToken, refreshToken } = first.tokens);
     } else {
       if (first.challenge !== "SOFTWARE_TOKEN_MFA") throw new HttpError(403, "Your account needs a sign-in step this app doesn't support yet. Please contact support.", "challenge_unsupported");
-      const done = await deps.auth.answerTotpChallenge(user.email, first.session, input.code).catch((err: unknown) => {
+      const done = await deps.auth.answerTotpChallenge(first.username ?? user.email, first.session, input.code).catch((err: unknown) => {
         if (isCognito(err, "CodeMismatchException")) throw new HttpError(400, "That code isn't right. Enter the code your authenticator app shows now.", "invalid_code");
         throw cognitoFailure(err, "turn off two-step verification");
       });

@@ -99,7 +99,8 @@ export function fakeCognito() {
     if (!u.totp?.enabled) return { tokens: issue(u) };
     const session = `mfa-session-${++seq}-${randomBytes(12).toString("hex")}`;
     mfaSessions.set(session, { username: u.username, expiresAt: Date.now() + 180_000, wrong: 0 });
-    return { challenge: "SOFTWARE_TOKEN_MFA", session };
+    // Cognito names the user by its real name (ChallengeParameters.USER_ID_FOR_SRP), not the email.
+    return { challenge: "SOFTWARE_TOKEN_MFA", session, username: u.username };
   };
   const up = <T>(fn: () => T): Promise<Awaited<T>> => {
     if (state.unavailable) return Promise.reject(new CognitoUnavailableError("Cognito is down (test)"));
@@ -274,10 +275,11 @@ export function fakeCognito() {
         if (u.totp) u.totp.enabled = enabled;
       }),
     ),
-    answerTotpChallenge: track("answerTotpChallenge", (email, session, code) =>
+    answerTotpChallenge: track("answerTotpChallenge", (username, session, code) =>
       up(() => {
         const s = mfaSessions.get(session);
-        const u = native(email);
+        // A challenge's USERNAME can't be an alias (the email): only the name the challenge gave.
+        const u = users.get(username);
         if (!s || !u || s.username !== u.username || s.expiresAt < Date.now()) throw err("NotAuthorizedException", "Invalid session for the user, session is expired.");
         if (!u.totp || !totpMatches(u.totp.secret, code)) {
           if (++s.wrong >= 3) mfaSessions.delete(session);
@@ -319,7 +321,10 @@ export function fakeCognito() {
       up(() => {
         const u = users.get(username);
         if (!u) throw err("UserNotFoundException");
+        policy(password);
         u.password = password;
+        // Permanent: the user is CONFIRMED from now on.
+        u.status = "CONFIRMED";
       }),
     ),
     adminDeleteUser: track("adminDeleteUser", (username) =>

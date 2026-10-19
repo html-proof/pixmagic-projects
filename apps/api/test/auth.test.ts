@@ -113,6 +113,69 @@ describe("creating an account with email and password", () => {
     expect(ctx.auth.sent.filter((s) => s.kind === "signup")).toHaveLength(4);
   });
 
+  it("the code decides whose password the account keeps: confirming with the password chosen here replaces one a later sign-up set", async () => {
+    // The owner signs up; someone else then signs up again with their address and another
+    // password (each try replaces the pending sign-up and emails the owner a new code).
+    await signup({ password: "owners-password", confirmPassword: "owners-password" });
+    await signup({ password: "squatters-password", confirmPassword: "squatters-password" });
+    // The owner enters the newest code from their inbox; their sign-up page sends their password with it.
+    const confirm = await post("/auth/signup/confirm", { email: "ada@example.com", code: ctx.auth.code("signup", "ada@example.com"), password: "owners-password" });
+    expect(confirm.statusCode).toBe(200);
+    expect(confirm.json()).toMatchObject({ ok: true, user: { email: "ada@example.com", emailVerified: true } });
+    expect(String(confirm.headers["set-cookie"])).toMatch(/__session=[^;]/);
+    expect((await post("/auth/login", { email: "ada@example.com", password: "squatters-password" })).statusCode).toBe(401);
+    expect((await post("/auth/login", { email: "ada@example.com", password: "owners-password" })).json().user.id).toBe(confirm.json().user.id);
+    expect(await systemDb.authEvent.count({ where: { type: "signup_password_replaced" } })).toBe(1);
+    // The other person's next try finds the address taken.
+    expect((await signup({ password: "squatters-password", confirmPassword: "squatters-password" })).json().error).toBe("account_exists");
+  });
+
+  it("ends the session of anyone who signed in with the replaced password in the moment before it was replaced", async () => {
+    await signup({ password: "owners-password", confirmPassword: "owners-password" });
+    await signup({ password: "squatters-password", confirmPassword: "squatters-password" });
+    const confirmSignUp = ctx.auth.confirmSignUp;
+    let squatter = "";
+    vi.spyOn(ctx.auth, "confirmSignUp").mockImplementationOnce(async (email, code) => {
+      await confirmSignUp(email, code);
+      // Confirmed: the other person's password works for an instant, and they sign in with it.
+      squatter = cookiesFrom(await post("/auth/login", { email, password: "squatters-password" }));
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(Date.now() + 1_000);
+    });
+    const res = await post("/auth/signup/confirm", { email: "ada@example.com", code: ctx.auth.code("signup", "ada@example.com"), password: "owners-password" });
+    expect(res.statusCode).toBe(200);
+    expect(squatter).toMatch(/__session=/);
+    expect((await get("/me", { cookie: squatter })).statusCode).toBe(401);
+    expect((await get("/me", { cookie: cookiesFrom(res) })).json().user.email).toBe("ada@example.com");
+    expect(await systemDb.authEvent.findFirst({ where: { type: "signup_password_replaced" } })).toMatchObject({ userId: res.json().user.id });
+    vi.restoreAllMocks();
+  });
+
+  it("signs in straight away when the code comes with the password that signed up, honouring \"Keep me signed in\"", async () => {
+    await signup();
+    const res = await post("/auth/signup/confirm", { email: "ada@example.com", code: ctx.auth.code("signup", "ada@example.com"), password: "correct-horse", keep: false });
+    expect(res.json()).toMatchObject({ ok: true, user: { email: "ada@example.com", displayName: "Ada Lovelace" } });
+    const session = String(res.headers["set-cookie"]).split(", ").find((c) => c.startsWith("__session="));
+    expect(session).toBeDefined();
+    expect(session).not.toMatch(/Max-Age/);
+    expect(ctx.auth.calls).not.toContain("adminSetPassword");
+    expect(await systemDb.authEvent.count({ where: { type: "signup_password_replaced" } })).toBe(0);
+  });
+
+  it("never signs in, or sets a password, for a sign-up that was already confirmed", async () => {
+    await signup();
+    expect((await post("/auth/signup/confirm", { email: "ada@example.com", code: ctx.auth.code("signup", "ada@example.com") })).json()).toEqual({ ok: true });
+    // Nothing is proved by a second confirmation, whatever code and password come with it: it
+    // can't be a way to try passwords outside the sign-in page's limits.
+    for (const password of ["a-guessed-password", "correct-horse"]) {
+      const again = await post("/auth/signup/confirm", { email: "ada@example.com", code: "123456", password });
+      expect(again.json()).toEqual({ ok: true });
+      expect(again.headers["set-cookie"] ?? "").not.toMatch(/__session=[^;]/);
+    }
+    expect(ctx.auth.calls).not.toContain("adminSetPassword");
+    expect((await post("/auth/login", { email: "ada@example.com", password: "correct-horse" })).statusCode).toBe(200);
+  });
+
   it("resends a code without saying whether the address has an account", async () => {
     await signup();
     const known = await post("/auth/signup/resend", { email: "ada@example.com" });
@@ -205,6 +268,18 @@ describe("forgot password", () => {
     expect((await get("/me", before.headers)).statusCode).toBe(401);
     expect((await post("/auth/login", { email: "a@x.com", password: "brand-new-pass" })).statusCode).toBe(200);
     expect(await systemDb.authEvent.count({ where: { type: "password_reset" } })).toBe(1);
+  });
+
+  it("names the account's other ways to sign in, which a new password doesn't end", async () => {
+    const { user } = await signIn(ctx, "u1", "a@x.com");
+    const reset = async () => {
+      await post("/auth/password/forgot", { email: "a@x.com" });
+      return post("/auth/password/reset", { email: "a@x.com", code: ctx.auth.code("reset", "a@x.com"), password: "brand-new-pass", confirmPassword: "brand-new-pass" });
+    };
+    expect((await reset()).json()).toEqual({ ok: true, otherMethods: [] });
+    await systemDb.authIdentity.create({ data: { userId: user.id, provider: "cognito", subject: "g-sub", username: "google_1", method: "google", email: "someone@gmail.com" } });
+    // Method names only, never the Google account's address.
+    expect((await reset()).json()).toEqual({ ok: true, otherMethods: ["google"] });
   });
 
   it("answers an unknown address exactly like a known one", async () => {
@@ -310,6 +385,19 @@ describe("Continue with Google", () => {
     expect(res.statusCode).toBe(409);
     expect(res.json().error).toBe("email_in_use");
     expect(await systemDb.authIdentity.count()).toBe(1);
+  });
+
+  it("goes back only to a page of this site, however the path is written", async () => {
+    // Dot segments pass a check of the raw text but resolve to another site ("//evil.example").
+    const unsafe = ["//evil.example/x", "/..//evil.example/x", "/%2e%2e//evil.example/x", "/.//evil.example/x", "/a/..//evil.example/x"];
+    for (const [i, returnTo] of unsafe.entries()) {
+      const res = await (await federated({ id: `g-r${i}`, email: `r${i}@gmail.com` }, "google", returnTo)).finish();
+      expect(res.statusCode).toBe(200);
+      expect(res.json().redirect).toBeNull();
+    }
+    // One that stays on this site is kept, as the browser will read it.
+    const ok = await (await federated({ id: "g-ok", email: "ok@gmail.com" }, "google", "/settings/../dashboard?view=sales")).finish();
+    expect(ok.json().redirect).toBe("/dashboard?view=sales");
   });
 
   it("won't create an account from an address Google hasn't verified (it could never be verified here)", async () => {

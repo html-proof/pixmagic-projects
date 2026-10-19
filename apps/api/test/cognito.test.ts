@@ -133,24 +133,29 @@ describe("the user-pool API", () => {
     expect(await cognitoAuth(CFG, notYet.fetchImpl).verifyTotp("the-at", "000000")).toBe(false);
   });
 
-  it("answers the sign-in's SOFTWARE_TOKEN_MFA challenge with the code, its session and SECRET_HASH", async () => {
+  it("answers the sign-in's SOFTWARE_TOKEN_MFA challenge as the user the challenge names (USER_ID_FOR_SRP), with its session and SECRET_HASH", async () => {
     const net = network((s) =>
       JSON.parse(s.body).AuthFlow === "USER_PASSWORD_AUTH"
-        ? json({ ChallengeName: "SOFTWARE_TOKEN_MFA", Session: "cognito-session-xyz", ChallengeParameters: { USER_ID_FOR_SRP: "uuid-1" } })
+        ? json({ ChallengeName: "SOFTWARE_TOKEN_MFA", Session: "cognito-session-xyz", ChallengeParameters: { USER_ID_FOR_SRP: "uuid-1", FRIENDLY_DEVICE_NAME: "bizinsights" } })
         : json({ AuthenticationResult: { IdToken: "id", AccessToken: "at", RefreshToken: "rt", ExpiresIn: 3600 } }),
     );
     const auth = cognitoAuth(CFG, net.fetchImpl);
-    expect(await auth.passwordSignIn("a@x.com", "pw")).toEqual({ challenge: "SOFTWARE_TOKEN_MFA", session: "cognito-session-xyz" });
-    expect(await auth.answerTotpChallenge("a@x.com", "cognito-session-xyz", "654321")).toEqual({ tokens: { idToken: "id", accessToken: "at", refreshToken: "rt", expiresIn: 3600 } });
+    const challenge = await auth.passwordSignIn("a@x.com", "pw");
+    // The pool signs in by email, but names its users by a UUID: the answer must use that name.
+    expect(challenge).toEqual({ challenge: "SOFTWARE_TOKEN_MFA", session: "cognito-session-xyz", username: "uuid-1" });
+    expect(await auth.answerTotpChallenge("uuid-1", "cognito-session-xyz", "654321")).toEqual({ tokens: { idToken: "id", accessToken: "at", refreshToken: "rt", expiresIn: 3600 } });
     expect(target(net.seen[1]!)).toBe("RespondToAuthChallenge");
     expect(JSON.parse(net.seen[1]!.body)).toEqual({
       ClientId: "client123",
       ChallengeName: "SOFTWARE_TOKEN_MFA",
       Session: "cognito-session-xyz",
-      ChallengeResponses: { USERNAME: "a@x.com", SOFTWARE_TOKEN_MFA_CODE: "654321", SECRET_HASH: secretHash("a@x.com") },
+      ChallengeResponses: { USERNAME: "uuid-1", SOFTWARE_TOKEN_MFA_CODE: "654321", SECRET_HASH: secretHash("uuid-1") },
     });
     const wrong = network(() => json({ __type: "CodeMismatchException", message: "Invalid code received for user" }, 400));
-    await expect(cognitoAuth(CFG, wrong.fetchImpl).answerTotpChallenge("a@x.com", "s", "000000")).rejects.toMatchObject({ code: "CodeMismatchException" });
+    await expect(cognitoAuth(CFG, wrong.fetchImpl).answerTotpChallenge("uuid-1", "s", "000000")).rejects.toMatchObject({ code: "CodeMismatchException" });
+    // A challenge without the name (none seen so far) leaves it out; the caller then uses the email.
+    const bare = network(() => json({ ChallengeName: "SOFTWARE_TOKEN_MFA", Session: "cognito-session-xyz" }));
+    expect(await cognitoAuth(CFG, bare.fetchImpl).passwordSignIn("a@x.com", "pw")).toEqual({ challenge: "SOFTWARE_TOKEN_MFA", session: "cognito-session-xyz" });
   });
 
   it("tells a refusal apart from an outage", async () => {

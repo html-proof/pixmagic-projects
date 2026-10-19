@@ -14,7 +14,10 @@ let ctx: TestCtx;
 beforeAll(async () => (ctx = await setup()));
 afterAll(async () => teardown(ctx));
 beforeEach(async () => clean(ctx));
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 
 const post = (url: string, payload: unknown, headers: Record<string, string> = {}) => ctx.app.inject({ method: "POST", url, headers: { ...ORIGIN, ...headers }, payload });
 const get = (url: string, headers: Record<string, string> = {}) => ctx.app.inject({ method: "GET", url, headers });
@@ -123,6 +126,7 @@ describe("setting it up (Settings → Security)", () => {
 describe("signing in with it", () => {
   it("asks for the app's code after the password, keeping Cognito's session on the server", async () => {
     const { password, secret } = mfaUser();
+    const answer = vi.spyOn(ctx.auth, "answerTotpChallenge");
     const browser = testBrowser(ctx);
     const first = await browser.post("/auth/login", { email: "a@x.com", password });
     expect(first.statusCode).toBe(200);
@@ -140,6 +144,8 @@ describe("signing in with it", () => {
     const res = await browser.post("/auth/login/mfa", { code: totpCode(secret) });
     expect(res.statusCode).toBe(200);
     expect(res.json().user).toMatchObject({ email: "a@x.com" });
+    // Answered as the user the challenge named (Cognito's own name, "u1" here), never the email.
+    expect(answer).toHaveBeenLastCalledWith("u1", expect.any(String), expect.any(String));
     expect(cookie(res, "__session")).toMatch(/Max-Age=\d+/);
     expect((await browser.get("/me")).statusCode).toBe(200);
     expect((await userOf("u1")).email).toBe("a@x.com");

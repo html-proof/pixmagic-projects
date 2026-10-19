@@ -49,7 +49,12 @@ export interface CognitoTokens {
   expiresIn: number;
 }
 
-export type SignInResult = { tokens: CognitoTokens } | { challenge: string; session: string };
+/**
+ * `username` on a challenge: the Cognito user name it names (ChallengeParameters.USER_ID_FOR_SRP,
+ * the user's real name, never the email signed in with), which the answer must give as USERNAME
+ * and hash into SECRET_HASH.
+ */
+export type SignInResult = { tokens: CognitoTokens } | { challenge: string; session: string; username?: string };
 
 /** What a verified Cognito ID token says about the person. */
 export interface IdentityClaims {
@@ -155,8 +160,11 @@ export interface CognitoAuth {
   verifyTotp(accessToken: string, code: string): Promise<boolean>;
   /** Whether sign-in asks for a code (and prefers it to any other second step). */
   setTotpEnabled(accessToken: string, enabled: boolean): Promise<void>;
-  /** The code that answers passwordSignIn's SOFTWARE_TOKEN_MFA challenge (its `session`). */
-  answerTotpChallenge(email: string, session: string, code: string): Promise<SignInResult>;
+  /**
+   * The code that answers passwordSignIn's SOFTWARE_TOKEN_MFA challenge (its `session`). `username`:
+   * the challenge's `username` (Cognito's own name for the user; the email only if it gave none).
+   */
+  answerTotpChallenge(username: string, session: string, code: string): Promise<SignInResult>;
 
   // ---- Managed login (OAuth 2.0 authorization code + PKCE): Google ----
   authorizeUrl(input: { provider: FederatedProvider; redirectUri: string; state: string; codeChallenge: string; nonce: string }): string;
@@ -245,6 +253,8 @@ export function cognitoAuth(cfg: CognitoConfig, fetchImpl: FetchLike = fetch): C
   type AuthResult = {
     AuthenticationResult?: { IdToken: string; AccessToken: string; RefreshToken?: string; ExpiresIn: number };
     ChallengeName?: string;
+    /** USER_ID_FOR_SRP (and sometimes USERNAME): the user's real Cognito name, for the answer. */
+    ChallengeParameters?: Record<string, string>;
     Session?: string;
   };
   const tokensOf = (r: NonNullable<AuthResult["AuthenticationResult"]>): CognitoTokens => ({
@@ -255,7 +265,10 @@ export function cognitoAuth(cfg: CognitoConfig, fetchImpl: FetchLike = fetch): C
   });
   const signInResult = (r: AuthResult): SignInResult => {
     if (r.AuthenticationResult) return { tokens: tokensOf(r.AuthenticationResult) };
-    if (r.ChallengeName) return { challenge: r.ChallengeName, session: r.Session ?? "" };
+    if (r.ChallengeName) {
+      const username = r.ChallengeParameters?.USER_ID_FOR_SRP || r.ChallengeParameters?.USERNAME;
+      return { challenge: r.ChallengeName, session: r.Session ?? "", ...(username && { username }) };
+    }
     throw new CognitoUnavailableError("Cognito answered a sign-in with neither tokens nor a challenge");
   };
 
@@ -432,13 +445,15 @@ export function cognitoAuth(cfg: CognitoConfig, fetchImpl: FetchLike = fetch): C
     async setTotpEnabled(accessToken, enabled) {
       await call("SetUserMFAPreference", { AccessToken: accessToken, SoftwareTokenMfaSettings: { Enabled: enabled, PreferredMfa: enabled } });
     },
-    async answerTotpChallenge(email, session, code) {
-      // The address signed in with: any sign-in attribute may name the user here, SECRET_HASH included.
+    async answerTotpChallenge(username, session, code) {
+      // The name the challenge gave (USER_ID_FOR_SRP): Cognito's API reference says a challenge's
+      // USERNAME can't be an alias, and the pool signs people in by email, whose users are named
+      // by a UUID. SECRET_HASH is keyed by the same name.
       const r = await call<AuthResult>("RespondToAuthChallenge", {
         ClientId: cfg.clientId,
         ChallengeName: "SOFTWARE_TOKEN_MFA",
         Session: session,
-        ChallengeResponses: { USERNAME: email, SOFTWARE_TOKEN_MFA_CODE: code, ...withSecret(email) },
+        ChallengeResponses: { USERNAME: username, SOFTWARE_TOKEN_MFA_CODE: code, ...withSecret(username) },
       });
       return signInResult(r);
     },
