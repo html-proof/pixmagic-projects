@@ -76,23 +76,33 @@ secret among them:
 | --- | --- | --- |
 | `META_APP_ID` | `META_APP_SECRET` | Meta Ads says "Coming soon"; Meta connections stop syncing |
 | `GOOGLE_ADS_CLIENT_ID` | `GOOGLE_ADS_CLIENT_SECRET` (the "Insights web" client's) | Google Ads and AdSense say "Coming soon"; their connections stop syncing |
-| `WHATSAPP_APP_ID` | `WHATSAPP_APP_SECRET` | Connect WhatsApp Business and its webhooks can't work (manual connections still do) |
+| `WHATSAPP_CONFIG_ID` (empty today), on the app `WHATSAPP_APP_ID` (else `META_APP_ID`) | `WHATSAPP_APP_SECRET` (`META_APP_SECRET` serves when WhatsApp is on the Meta Ads app) | Connect WhatsApp Business (Embedded Signup) can't be turned on; manual WhatsApp connections still work |
 | `SHOPIFY_API_KEY`, each app in `SHOPIFY_EXTRA_APPS` | `SHOPIFY_API_SECRET`, `SHOPIFY_APP_SECRET_<KEY>` | That Shopify app's stores can't install or refresh their access |
 | `EMAIL_GOOGLE_CLIENT_ID`, `EMAIL_MICROSOFT_CLIENT_ID` (empty today) | `EMAIL_GOOGLE_CLIENT_SECRET`, `EMAIL_MICROSOFT_CLIENT_SECRET` | Connect Gmail / Outlook says it isn't set up |
 
+Embedded Signup is off until `WHATSAPP_CONFIG_ID` is set, so until then nothing warns about
+WhatsApp's secret: the check's line on the Deploy run names what it still needs instead
+("WhatsApp Embedded Signup off (needs WHATSAPP_CONFIG_ID, WHATSAPP_APP_SECRET)").
+
 Every deploy also checks this from the cron function itself (smoke tests, "app configuration read
 from the cron function"): each provider in that state is a warning on the Deploy run's summary
-("Meta Ads isn't set up"), and the functions log `public id set but secret missing` once per cold
-start. Neither fails the deploy. To check by hand at any time, ask the cron function (booleans and
-setting names only, never a value):
+("Meta Ads isn't set up"), with the `put-secrets.mjs --env <env> --set <NAME>` command to run, and
+the functions log `public id set but secret missing` once per cold start. Neither fails the deploy.
+If the function gives no answer (throttled, timed out, the runner's network), the run says
+"Provider secrets weren't checked" instead, and passes; only an error from the function itself, twice,
+fails the smoke tests (and rolls back). To check by hand at any time, ask the cron function (booleans
+and setting names only, never a value):
 
 ```powershell
 aws lambda invoke --function-name insights-production-cron:live --cli-binary-format raw-in-base64-out --payload '{\"action\":\"config\"}' config.json
 ```
 
-`config.json` then says which ad platforms, email integrations and sign-in options are on, and lists
-under `halfConfigured` each provider whose secret is missing. After adding one with `--set`, run
-**Deploy to AWS** (Actions → Run workflow, on `main`) so new instances read it.
+`config.json` then says which ad platforms, email integrations and sign-in options are on, what
+WhatsApp Embedded Signup still needs (`whatsapp.embeddedSignupNeeds`), and lists under
+`halfConfigured` each provider whose secret is missing. After adding one with `--set`, run
+**Deploy to AWS** (Actions → Run workflow, on `main`) so new instances read it. For another
+environment, pass `--env <name>` to `put-secrets.mjs` and use `insights-<name>-cron:live`, then
+deploy that environment again by hand (`cdk deploy --all -c env=<name>`).
 
 The functions read secrets at cold start; after changing one, force fresh instances with a deploy,
 or publish the same code as a new version and move the `live` alias ("App email" below shows how:
@@ -470,7 +480,8 @@ protected routes, the Cognito wiring (a password-reset request for an address th
 CSRF, CORS, Shopify HMAC refusal, that the function URL refuses requests that skip CloudFront, and
 on the AWS side: database private and encrypted, buckets private, functions healthy, what the app
 has set up (the cron action `config`; a provider whose secret is missing is a `::warning::`, not a
-failure: "Which provider secrets are there" above), DLQ empty, and that the public address runs
+failure, and so is no answer from the function; only an error from the function fails it: "Which
+provider secrets are there" above), DLQ empty, and that the public address runs
 what was deployed: `https://bizinsights.io/api/version` must name the commit checked out where
 smoke.mjs runs, and the api function's `live` alias version as its
 `release`. Run it from the deployed commit (a checkout of another commit fails that one check).
@@ -732,7 +743,8 @@ share Resend's limits with the app's email (free tier: 100 a day, 3,000 a month)
 - **Provider secrets**: nothing records that META_APP_SECRET (Meta app 971575545351940, App settings →
   Basic) and GOOGLE_ADS_CLIENT_SECRET (Google Cloud client "Insights web") were put in
   `insights/production/app` after the move from Cloudflare (the old Worker's values didn't move by
-  themselves), nor WHATSAPP_APP_SECRET and WHATSAPP_WEBHOOK_VERIFY_TOKEN. Check with
+  themselves), nor WHATSAPP_APP_SECRET and WHATSAPP_WEBHOOK_VERIFY_TOKEN (needed once Embedded
+  Signup gets its `WHATSAPP_CONFIG_ID`). Check with
   `put-secrets.mjs --dry-run` ("Which provider secrets are there" above; the Deploy run's warnings
   say the same), add each missing one with `put-secrets.mjs --set <NAME>`, then run Deploy to AWS.
   Until then Meta Ads, Google Ads and AdSense say "Coming soon" and their connections don't sync.
