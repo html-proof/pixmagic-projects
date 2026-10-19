@@ -4,7 +4,7 @@
  */
 import type { AdConnection } from "@app/db";
 import type { AdProvider, AdsenseReportLevel, AdsenseReportRow, GoogleReportLevel, MetaReportView } from "@app/shared";
-import { AdsApiError, adsenseReport, classifyAdError, googleReport, metaClassifyPermissionError, metaReport, type GoogleReport, type MetaReport } from "../ads.js";
+import { AdsApiError, adsenseReport, classifyAdError, googleReport, META_REPORT_JOB, metaClassifyPermissionError, metaReport, type GoogleReport, type MetaReport } from "../ads.js";
 import { logger } from "../logger.js";
 import type { FetchLike } from "../shopify.js";
 import { AD_PROVIDER_NAME, adsenseConfig, googleConfig, metaConfig } from "./config.js";
@@ -33,14 +33,18 @@ async function liveReport<T>(conn: AdConnection, read: () => Promise<T>): Promis
 /**
  * The Meta Ads report for one connected account and range, straight from Meta. A permission error
  * says whether ads_read was taken back (reconnect) or this login lost the account (permission).
+ * `opts.deadline` (epoch ms): when Meta's reads must be done; by default META_REPORT_JOB.budgetMs from
+ * now. A request that asks for two ranges one after the other (a comparison) passes one deadline to
+ * both, so together they still fit the request's time.
  */
-export async function metaReportForConnection(conn: AdConnection, level: MetaReportView, since: string, until: string, fetchImpl?: FetchLike): Promise<MetaReport> {
+export async function metaReportForConnection(conn: AdConnection, level: MetaReportView, since: string, until: string, fetchImpl?: FetchLike, opts: { deadline?: number } = {}): Promise<MetaReport> {
   const cfg = metaConfig(fetchImpl);
   if (!cfg) throw notSetUp("meta");
+  const deadline = opts.deadline ?? Date.now() + META_REPORT_JOB.budgetMs;
   return liveReport(conn, async () => {
     const token = await adAccessToken(conn, fetchImpl);
     try {
-      return await metaReport(cfg, token, conn.accountId, level, since, until);
+      return await metaReport(cfg, token, conn.accountId, level, since, until, undefined, { deadline });
     } catch (err) {
       throw await metaClassifyPermissionError(cfg, token, err);
     }

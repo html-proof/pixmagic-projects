@@ -136,11 +136,36 @@ describe("sign-in security and lifecycle", () => {
     // Meta refuses and ads_read is still granted: not revoked, and said so.
     const still = userTokenDead((_u, init) => (init?.method === "DELETE" ? json({ error: { message: "(#100) Invalid parameter", code: 100 } }, 400) : json({ data: [{ permission: "ads_read", status: "granted" }] })));
     await expect(metaRevokeAdsRead(meta(still.fetchImpl), "T", "5550001")).rejects.toMatchObject({ code: 100 });
-    // Without the person's id nothing can take it back: never reported as revoked.
+    // Without the person's id, Meta's token inspector is asked whose token it was; when it can't say,
+    // nothing can take it back: never reported as revoked.
     const unknown = userTokenDead(() => json({ error: { message: "unexpected" } }, 400));
     await expect(metaRevokeAdsRead(meta(unknown.fetchImpl), "T")).rejects.toBeInstanceOf(AdsAuthError);
     await expect(metaRevokeAdsRead(meta(unknown.fetchImpl), "T", "../me")).rejects.toBeInstanceOf(AdsAuthError);
-    expect(unknown.calls).toHaveLength(2);
+    expect(unknown.calls.map((c) => c.url.pathname)).toEqual(["/v25.0/me/permissions/ads_read", "/v25.0/debug_token", "/v25.0/me/permissions/ads_read", "/v25.0/debug_token"]);
+  });
+
+  it("Meta: with no person id kept, the token inspector says whose expired token it was, and the app token takes ads_read back", async () => {
+    // debug_token answers for a token that no longer works: is_valid false, Meta's error, and user_id.
+    const inspected = (data: Record<string, unknown>) =>
+      fake((u, init) => {
+        const auth = new Headers(init?.headers).get("authorization");
+        if (auth === "Bearer T") return json({ error: { message: "Error validating access token: Session has expired", code: 190, error_subcode: 463 } }, 400);
+        expect(auth).toBe("Bearer app1|sec");
+        if (u.pathname === "/v25.0/debug_token") {
+          expect(u.searchParams.get("input_token")).toBe("T");
+          return json({ data: { is_valid: false, error: { code: 190, subcode: 463, message: "Session has expired" }, ...data } });
+        }
+        expect(init?.method).toBe("DELETE");
+        expect(u.pathname).toBe("/v25.0/5550002/permissions/ads_read");
+        return json({ success: true });
+      });
+    const ours = inspected({ app_id: "app1", user_id: "5550002" });
+    expect(await metaRevokeAdsRead(meta(ours.fetchImpl), "T")).toBe("revoked");
+    expect(ours.calls).toHaveLength(3);
+    // Another app's token, or no usable id: not ours to take back.
+    await expect(metaRevokeAdsRead(meta(inspected({ app_id: "other", user_id: "5550002" }).fetchImpl), "T")).rejects.toBeInstanceOf(AdsAuthError);
+    await expect(metaRevokeAdsRead(meta(inspected({ app_id: "app1", user_id: "me/../x" }).fetchImpl), "T")).rejects.toBeInstanceOf(AdsAuthError);
+    await expect(metaRevokeAdsRead(meta(inspected({ app_id: "app1" }).fetchImpl), "T")).rejects.toBeInstanceOf(AdsAuthError);
   });
 
   it("Meta: a range too big for one answer runs as a report job", async () => {

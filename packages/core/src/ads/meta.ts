@@ -29,7 +29,8 @@ import { logger } from "../logger.js";
 import { graphCall, type GraphFailure } from "../metaGraph.js";
 import type { FetchLike } from "../shopify.js";
 import {
-  adAccountList,
+  AD_DISCOVERY_BUDGET_MS,
+  adAccountListWithin,
   AdsApiError,
   AdsAuthError,
   AdsNoAccountsError,
@@ -145,14 +146,47 @@ const metaAppToken = (c: MetaConfig) => `${c.appId}|${c.appSecret}`;
  */
 const proofFor = (c: MetaConfig, token?: string) => (token && token !== metaAppToken(c) ? c.appSecret : undefined);
 
+/**
+ * The time a read made inside an API request has (a live report, the account list at sign-in): no call
+ * starts after `deadline` (epoch ms), and each gets what's left of it, at most `capMs`.
+ */
+interface CallLimit {
+  deadline: number;
+  capMs?: number;
+}
+
+/**
+ * The read ran out of the time its request has. A live report says Meta is still preparing it (the
+ * person can look again in a minute); the account list stops there and says it was cut.
+ */
+class MetaOutOfTimeError extends AdsReportPendingError {
+  constructor() {
+    super("Meta is still preparing this report");
+  }
+}
+
+/** Run one call within `limit`: out of time before it or during it is MetaOutOfTimeError; without a limit, the fetch's own applies. */
+async function withinLimit<T>(limit: CallLimit | undefined, call: (signal?: AbortSignal) => Promise<T>): Promise<T> {
+  if (!limit) return call();
+  const left = limit.deadline - Date.now();
+  if (left <= 0) throw new MetaOutOfTimeError();
+  try {
+    return await call(AbortSignal.timeout(Math.min(left, limit.capMs ?? left)));
+  } catch (err) {
+    // No answer and no time left: the request's time ran out, not just this call's share of it.
+    if (err instanceof MetaNoAnswerError && Date.now() >= limit.deadline - 50) throw new MetaOutOfTimeError();
+    throw err;
+  }
+}
+
 /** GET. `path` is relative to the API version, or a `paging.next` link Meta handed back. */
-function metaGet<T>(c: MetaConfig, path: string, query: Record<string, string>, token?: string): Promise<T> {
-  return graphCall<T>(c.fetchImpl ?? fetch, { version: c.version, method: "GET", path, query, token, appSecret: proofFor(c, token) }, metaAdsError);
+function metaGet<T>(c: MetaConfig, path: string, query: Record<string, string>, token?: string, limit?: CallLimit): Promise<T> {
+  return withinLimit(limit, (signal) => graphCall<T>(c.fetchImpl ?? fetch, { version: c.version, method: "GET", path, query, token, appSecret: proofFor(c, token), signal }, metaAdsError));
 }
 
 /** POST and DELETE: the parameters go in the form body. */
-function metaSend<T>(c: MetaConfig, method: "POST" | "DELETE", path: string, form: Record<string, string>, token?: string): Promise<T> {
-  return graphCall<T>(c.fetchImpl ?? fetch, { version: c.version, method, path, form, token, appSecret: proofFor(c, token) }, metaAdsError);
+function metaSend<T>(c: MetaConfig, method: "POST" | "DELETE", path: string, form: Record<string, string>, token?: string, limit?: CallLimit): Promise<T> {
+  return withinLimit(limit, (signal) => graphCall<T>(c.fetchImpl ?? fetch, { version: c.version, method, path, form, token, appSecret: proofFor(c, token), signal }, metaAdsError));
 }
 
 /**
@@ -193,16 +227,30 @@ export async function metaUserId(c: MetaConfig, accessToken: string): Promise<st
  * person's app-scoped id (`externalUserId`), bizinsights' app token takes it back instead: DELETE
  * /{user-id}/permissions/{permission} "must be made with a user access token or an app access token
  * for the current app" (https://developers.facebook.com/docs/graph-api/reference/user/permissions/).
+ * Without that id, Meta's token inspector is asked whose token it was.
  */
 export async function metaRevokeAdsRead(c: MetaConfig, accessToken: string, externalUserId?: string | null): Promise<"revoked" | "not_granted"> {
   try {
     await metaSend(c, "DELETE", "me/permissions/ads_read", {}, accessToken);
     return "revoked";
   } catch (err) {
-    const userId = externalUserId && /^\d{1,30}$/.test(externalUserId) ? externalUserId : null;
-    if (!(err instanceof AdsAuthError) || !userId) throw err;
+    if (!(err instanceof AdsAuthError)) throw err;
+    const userId = (externalUserId && /^\d{1,30}$/.test(externalUserId) ? externalUserId : null) ?? (await metaTokenUserId(c, accessToken));
+    if (!userId) throw err;
     return metaRevokeWithAppToken(c, userId);
   }
+}
+
+/**
+ * Who a token that no longer works was issued to: `user_id` from Meta's token inspector, asked with the
+ * app token (https://developers.facebook.com/docs/graph-api/reference/debug_token/). Null when Meta
+ * doesn't say, or says the token is another app's.
+ */
+async function metaTokenUserId(c: MetaConfig, accessToken: string): Promise<string | null> {
+  const r = await metaGet<{ data?: { app_id?: string; user_id?: string } }>(c, "debug_token", { input_token: accessToken }, metaAppToken(c)).catch(() => null);
+  const d = r?.data;
+  if (!d || (d.app_id && d.app_id !== c.appId)) return null;
+  return d.user_id && /^\d{1,30}$/.test(d.user_id) ? d.user_id : null;
 }
 
 async function metaRevokeWithAppToken(c: MetaConfig, userId: string): Promise<"revoked" | "not_granted"> {
@@ -246,20 +294,23 @@ export async function metaAdsReadTargets(c: MetaConfig, accessToken: string): Pr
   return (r.data?.granular_scopes ?? []).find((g) => g.scope === REQUIRED_AD_SCOPE.meta)?.target_ids ?? null;
 }
 
-/** Pages of ad accounts read at most: 10,000 accounts, as many as a person can tick in the picker. */
-export const META_ACCOUNT_PAGES = 100;
+/** Pages of ad accounts read at most (2,000 accounts): the sign-in reads them all before the person picks. */
+export const META_ACCOUNT_PAGES = 20;
 
 /**
  * Ad accounts the person can read, with each one's status at Meta (disabled, payment needed, closed...)
- * so the picker can say so. An agency login can reach more than can be listed: the list is then
+ * so the picker can say so. Read inside the OAuth callback, so the list stops at META_ACCOUNT_PAGES
+ * pages, at AD_DISCOVERY_BUDGET_MS (`budgetMs`) after the first page, and at what the sign-in can hold
+ * while the person picks (AD_ACCOUNT_LIST_MAX_BYTES): an agency login that reaches more gets the list
  * marked `truncated`. Never empty: with nothing to connect it throws AdsNoAccountsError, saying whether
  * the login reaches no ad account or the person shared none on Facebook's screen.
  */
-export async function metaAdAccounts(c: MetaConfig, accessToken: string): Promise<AdAccountList> {
+export async function metaAdAccounts(c: MetaConfig, accessToken: string, opts: { budgetMs?: number } = {}): Promise<AdAccountList> {
   type Page = { data?: Array<{ id: string; name?: string; currency?: string; timezone_name?: string; account_status?: number; disable_reason?: number }>; paging?: { next?: string } };
   const out: AdAccount[] = [];
   let page = await metaGet<Page>(c, "me/adaccounts", { fields: "id,name,currency,timezone_name,account_status,disable_reason", limit: "100" }, accessToken);
-  let truncated = false;
+  const limit: CallLimit = { deadline: Date.now() + (opts.budgetMs ?? AD_DISCOVERY_BUDGET_MS) };
+  let cut: "pages" | "time" | null = null;
   for (let i = 1; ; i++) {
     for (const a of page.data ?? []) {
       out.push({ accountId: metaAccountId(a.id), name: a.name ?? null, currency: a.currency ?? null, timezone: a.timezone_name ?? null, ...metaStatusOf(a.account_status, a.disable_reason) });
@@ -267,13 +318,21 @@ export async function metaAdAccounts(c: MetaConfig, accessToken: string): Promis
     const next = page.paging?.next;
     if (!next) break;
     if (i >= META_ACCOUNT_PAGES) {
-      truncated = true;
-      logger.warn({ listed: out.length }, "meta: login reaches more ad accounts than are listed");
+      cut = "pages";
       break;
     }
-    page = await metaGet<Page>(c, next, {}, accessToken);
+    try {
+      page = await metaGet<Page>(c, next, {}, accessToken, limit);
+    } catch (err) {
+      // Out of time: the accounts read so far, said to be cut, rather than a sign-in that never comes back.
+      if (!(err instanceof MetaOutOfTimeError)) throw err;
+      cut = "time";
+      break;
+    }
   }
-  if (out.length) return adAccountList(out, truncated);
+  const list = adAccountListWithin(out, cut !== null);
+  if (list.truncated) logger.warn({ read: out.length, listed: list.length, cut: cut ?? "size" }, "meta: login reaches more ad accounts than one sign-in lists");
+  if (list.length) return list;
   // Only explains the empty list: a failed look-up still ends in "no ad account".
   const targets = await metaAdsReadTargets(c, accessToken).catch(() => null);
   if (targets) throw new AdsNoAccountsError(`The ads_read grant names ${targets.length ? targets.join(", ") : "no ad account"} and none can be read`, "none_shared");
@@ -290,7 +349,7 @@ class MetaTooManyRowsError extends AdsApiError {
 }
 
 /** Read Meta's paging links on from a first page, at most `maxPages` pages; `more` when Meta had more. */
-async function metaPagesFrom<R>(c: MetaConfig, accessToken: string, first: InsightsPage<R>, maxPages: number): Promise<{ rows: R[]; more: boolean }> {
+async function metaPagesFrom<R>(c: MetaConfig, accessToken: string, first: InsightsPage<R>, maxPages: number, limit?: CallLimit): Promise<{ rows: R[]; more: boolean }> {
   const rows: R[] = [];
   let page = first;
   for (let i = 1; ; i++) {
@@ -298,7 +357,7 @@ async function metaPagesFrom<R>(c: MetaConfig, accessToken: string, first: Insig
     const next = page.paging?.next;
     if (!next) return { rows, more: false };
     if (i >= maxPages) return { rows, more: true };
-    page = await metaGet<InsightsPage<R>>(c, next, {}, accessToken);
+    page = await metaGet<InsightsPage<R>>(c, next, {}, accessToken, limit);
   }
 }
 
@@ -389,13 +448,18 @@ const round2 = (n: number) => Math.round(n * 100) / 100;
  * Per day, what the account spent (and was credited) beyond its listed campaigns, as one more campaign
  * row: what Meta leaves out of a campaign-level read (deleted campaigns, and archived ones if the
  * status filter was refused) still counts in the account's totals and in what Meta bills.
+ *
+ * Meta rounds money to the cent at each level, so the campaigns' sum can miss the account's by up to
+ * half a cent per row either way. A gap only in money and within that is rounding, not a campaign: no
+ * row. A whole impression, click or action that no listed campaign has always makes one.
  */
 export function withMetaOtherCampaigns(act: string, campaigns: AdDayRow[], account: AdDayRow[]): AdDayRow[] {
-  type Sums = Pick<AdDayRow, "spend" | "impressions" | "clicks" | "conversions" | "conversionValue" | "leads"> & { linkClicks: number; purchases: number; purchaseValue: number };
-  const zero = (): Sums => ({ spend: 0, impressions: 0, clicks: 0, linkClicks: 0, conversions: 0, conversionValue: 0, purchases: 0, purchaseValue: 0, leads: 0 });
+  type Sums = Pick<AdDayRow, "spend" | "impressions" | "clicks" | "conversions" | "conversionValue" | "leads"> & { linkClicks: number; purchases: number; purchaseValue: number; rows: number };
+  const zero = (): Sums => ({ spend: 0, impressions: 0, clicks: 0, linkClicks: 0, conversions: 0, conversionValue: 0, purchases: 0, purchaseValue: 0, leads: 0, rows: 0 });
   const byDay = new Map<string, Sums>();
   for (const r of campaigns) {
     const s = byDay.get(r.day) ?? zero();
+    s.rows++;
     s.spend += r.spend;
     s.impressions += r.impressions;
     s.clicks += r.clicks;
@@ -427,8 +491,11 @@ export function withMetaOtherCampaigns(act: string, campaigns: AdDayRow[], accou
       purchaseValue: a.purchaseValue === null ? null : gap(a.purchaseValue, s.purchaseValue),
       leads: gap(a.leads, s.leads),
     };
-    const counts = [row.spend, row.impressions, row.clicks, row.linkClicks ?? 0, row.conversions, row.conversionValue, row.purchases ?? 0, row.purchaseValue ?? 0, row.leads];
-    if (counts.some((n) => n > 0)) out.push(row);
+    const counts = [row.impressions, row.clicks, row.linkClicks ?? 0, row.conversions, row.purchases ?? 0, row.leads];
+    // Half a cent for each campaign row and for the account's own figure.
+    const rounding = 0.005 * (s.rows + 1) + 1e-9;
+    const money = [row.spend, row.conversionValue, row.purchaseValue ?? 0];
+    if (counts.some((n) => n >= 1) || money.some((n) => n > rounding)) out.push(row);
   }
   return out;
 }
@@ -458,24 +525,25 @@ export async function metaCampaignDays(c: MetaConfig, accessToken: string, accou
  * Wait for a report job: "Job Completed" with async_percent_completion 100, as Meta says to poll
  * (https://developers.facebook.com/docs/marketing-api/insights/best-practices). A failed job's own
  * error (error_code, error_message: v25.0 and later) is what's thrown; one still running after
- * `polls` checks throws `stillRunning()`.
+ * `polls` checks, or (within a request's `limit`) with no time left for another wait and the read
+ * after it, throws `stillRunning()`.
  */
-async function metaJobDone(c: MetaConfig, accessToken: string, id: string, pollMs: number, polls: number, stillRunning: () => Error): Promise<void> {
+async function metaJobDone(c: MetaConfig, accessToken: string, id: string, pollMs: number, polls: number, stillRunning: () => Error, limit?: CallLimit): Promise<void> {
   for (let i = 0; ; i++) {
-    const s = await metaGet<{ async_status?: string; async_percent_completion?: number | string }>(c, id, { fields: "async_status,async_percent_completion" }, accessToken);
+    const s = await metaGet<{ async_status?: string; async_percent_completion?: number | string }>(c, id, { fields: "async_status,async_percent_completion" }, accessToken, limit);
     if (s.async_status === "Job Completed" && Number(s.async_percent_completion) >= 100) return;
-    if (s.async_status === "Job Failed") throw await metaJobFailure(c, accessToken, id);
+    if (s.async_status === "Job Failed") throw await metaJobFailure(c, accessToken, id, limit);
     // Expired before it ran: a new job would have to be started.
     if (s.async_status === "Job Skipped") throw new AdsRetryableError("Meta skipped the report job");
-    if (i >= polls) throw stillRunning();
+    if (i >= polls || (limit && Date.now() + pollMs + META_REPORT_JOB.readMs >= limit.deadline)) throw stillRunning();
     if (pollMs > 0) await new Promise((r) => setTimeout(r, pollMs));
   }
 }
 
 /** Why a report job failed, sorted like any Graph API failure; a failure Meta doesn't explain is worth a retry. */
-async function metaJobFailure(c: MetaConfig, accessToken: string, id: string): Promise<Error> {
+async function metaJobFailure(c: MetaConfig, accessToken: string, id: string, limit?: CallLimit): Promise<Error> {
   type Why = { error_code?: number | string; error_message?: string; error_subcode?: number | string; error_user_title?: string; error_user_msg?: string };
-  const why = await metaGet<Why>(c, id, { fields: "error_code,error_message,error_subcode,error_user_title,error_user_msg" }, accessToken).catch((): Why => ({}));
+  const why = await metaGet<Why>(c, id, { fields: "error_code,error_message,error_subcode,error_user_title,error_user_msg" }, accessToken, limit).catch((): Why => ({}));
   const code = Number(why.error_code) || null;
   const message = `Meta's report job failed${why.error_message ? `: ${why.error_message}` : ""}`;
   if (code === null) return new AdsRetryableError(message);
@@ -516,16 +584,17 @@ async function metaJobRows<R>(
   act: string,
   params: Record<string, string>,
   pollMs: number,
-  opts: { polls?: number; stillRunning?: () => Error; maxPages?: number; allowMore?: boolean },
+  /** `limit`: the time of the request the job runs within (a live report). */
+  opts: { polls?: number; stillRunning?: () => Error; maxPages?: number; allowMore?: boolean; limit?: CallLimit },
 ): Promise<{ rows: R[]; more: boolean }> {
   const { limit: pageSize = "500", ...jobParams } = params;
-  const job = await metaSend<{ report_run_id?: string }>(c, "POST", `${act}/insights`, jobParams, accessToken);
+  const job = await metaSend<{ report_run_id?: string }>(c, "POST", `${act}/insights`, jobParams, accessToken, opts.limit);
   const id = job.report_run_id;
   if (!id || !/^\d{1,30}$/.test(id)) throw new AdsApiError("Meta didn't start the report", 502);
   // About 8 minutes: a queue consumer may run for 15, and a retry would only start the job again.
-  await metaJobDone(c, accessToken, id, pollMs, opts.polls ?? 96, opts.stillRunning ?? (() => new AdsRetryableError("Meta's report is taking longer than usual")));
-  const first = await metaGet<InsightsPage<R>>(c, `${id}/insights`, { limit: pageSize }, accessToken);
-  const read = await metaPagesFrom(c, accessToken, first, opts.maxPages ?? JOB_MAX_PAGES);
+  await metaJobDone(c, accessToken, id, pollMs, opts.polls ?? 96, opts.stillRunning ?? (() => new AdsRetryableError("Meta's report is taking longer than usual")), opts.limit);
+  const first = await metaGet<InsightsPage<R>>(c, `${id}/insights`, { limit: pageSize }, accessToken, opts.limit);
+  const read = await metaPagesFrom(c, accessToken, first, opts.maxPages ?? JOB_MAX_PAGES, opts.limit);
   if (read.more && !opts.allowMore) throw new MetaTooManyRowsError("report rows");
   return read;
 }
@@ -538,16 +607,32 @@ const LEVEL_FIELDS: Record<MetaReportLevel, string> = {
 };
 
 /**
- * How long a live report waits for a report job: about 15 seconds. The API's whole request has 55, and
- * the synchronous try before it may have used 30 of them.
+ * A live report's time. The API has 55 seconds for the whole request and needs some of them itself, so
+ * Meta's reads get `budgetMs` from when the report is asked. The synchronous try gets at most `syncMs`
+ * of it: past that the range runs as a report job (Meta's advice when a synchronous read times out),
+ * checked every `pollMs` while `readMs` is still left to read its results. The rows' delivery
+ * statuses are looked up only with `statusMs` left.
  */
-export const META_REPORT_JOB = { pollMs: 1500, polls: 10 } as const;
+export const META_REPORT_JOB = { budgetMs: 40_000, syncMs: 15_000, pollMs: 1500, readMs: 6000, statusMs: 3000 } as const;
+
+/**
+ * How a live report runs. `deadline` (epoch ms): when Meta's reads must be done, by default
+ * META_REPORT_JOB.budgetMs from the call (two reports in one request, a comparison, share one).
+ * `pollMs`, `polls` and `syncMs` override META_REPORT_JOB's (tests).
+ */
+export interface MetaLiveReportOptions {
+  deadline?: number;
+  pollMs?: number;
+  polls?: number;
+  syncMs?: number;
+}
 
 /**
  * Totals for one whole range, for the account or per campaign / ad set / ad (archived and deleted ones
  * included, biggest spend first). Results follow each ad set's own attribution setting, as Ads Manager
- * shows them. A range too heavy to answer at once runs as a report job; one that isn't done within
- * META_REPORT_JOB throws AdsReportPendingError, so the person can be told to look again in a minute.
+ * shows them. A range too heavy to answer at once runs as a report job; one that isn't done within the
+ * request's time (META_REPORT_JOB) throws AdsReportPendingError, so the person can be told to look
+ * again in a minute.
  */
 export async function metaRangeInsights(
   c: MetaConfig,
@@ -559,12 +644,16 @@ export async function metaRangeInsights(
   maxRows = 2000,
   /** Split the account's numbers by placement, device, country, age or gender (level "account" only). */
   breakdown?: MetaReportBreakdown,
-  opts: { pollMs?: number; polls?: number } = {},
+  opts: MetaLiveReportOptions = {},
 ): Promise<MetaRangeInsight[]> {
-  return (await metaRangeRead(c, accessToken, accountId, level, since, until, maxRows, breakdown, opts)).rows;
+  const deadline = opts.deadline ?? Date.now() + META_REPORT_JOB.budgetMs;
+  return (await metaRangeRead(c, accessToken, accountId, level, since, until, maxRows, breakdown, { ...opts, deadline })).rows;
 }
 
-/** metaRangeInsights, saying whether Meta had more rows than `maxRows`. */
+/**
+ * metaRangeInsights, saying whether Meta had more rows than `maxRows`. Every call is made within
+ * `opts.deadline`. `asJob`: the range is already known to be too heavy for one answer.
+ */
 async function metaRangeRead(
   c: MetaConfig,
   accessToken: string,
@@ -574,8 +663,9 @@ async function metaRangeRead(
   until: string,
   maxRows: number,
   breakdown: MetaReportBreakdown | undefined,
-  opts: { pollMs?: number; polls?: number },
+  opts: MetaLiveReportOptions & { deadline: number },
   extras = true,
+  asJob = false,
 ): Promise<{ rows: MetaRangeInsight[]; more: boolean }> {
   if (!isDay(since) || !isDay(until)) throw new AdsApiError(`Invalid date range ${since}..${until}`, 400);
   const act = metaAccountId(accountId);
@@ -592,41 +682,52 @@ async function metaRangeRead(
     limit: String(pageSize),
   };
   const maxPages = Math.ceil(maxRows / pageSize);
+  const limit: CallLimit = { deadline: opts.deadline };
+  let job = asJob;
   try {
-    let first: InsightsPage<MetaRangeInsight>;
-    try {
-      first = await metaGet<InsightsPage<MetaRangeInsight>>(c, `${act}/insights`, params, accessToken);
-    } catch (err) {
-      if (!wantsJob(err)) throw err;
-      const job = await metaJobRows<MetaRangeInsight>(c, accessToken, act, params, opts.pollMs ?? META_REPORT_JOB.pollMs, {
-        polls: opts.polls ?? META_REPORT_JOB.polls,
-        stillRunning: () => new AdsReportPendingError("Meta is still preparing this report"),
-        maxPages,
-        allowMore: true,
-      });
-      return { rows: job.rows.slice(0, maxRows), more: job.more || job.rows.length > maxRows };
+    if (!job) {
+      let first: InsightsPage<MetaRangeInsight> | null = null;
+      try {
+        first = await metaGet<InsightsPage<MetaRangeInsight>>(c, `${act}/insights`, params, accessToken, { ...limit, capMs: opts.syncMs ?? META_REPORT_JOB.syncMs });
+      } catch (err) {
+        if (!wantsJob(err)) throw err;
+      }
+      if (first !== null) {
+        const read = await metaPagesFrom(c, accessToken, first, maxPages, limit);
+        return { rows: read.rows.slice(0, maxRows), more: read.more || read.rows.length > maxRows };
+      }
     }
-    const read = await metaPagesFrom(c, accessToken, first, maxPages);
-    return { rows: read.rows.slice(0, maxRows), more: read.more || read.rows.length > maxRows };
+    job = true;
+    const rows = await metaJobRows<MetaRangeInsight>(c, accessToken, act, params, opts.pollMs ?? META_REPORT_JOB.pollMs, {
+      // Checked for as long as the request's time allows (metaJobDone).
+      polls: opts.polls ?? Number.POSITIVE_INFINITY,
+      stillRunning: () => new AdsReportPendingError("Meta is still preparing this report"),
+      maxPages,
+      allowMore: true,
+      limit,
+    });
+    return { rows: rows.rows.slice(0, maxRows), more: rows.more || rows.rows.length > maxRows };
   } catch (err) {
-    // Meta refusing the status filter or the sort: the report still comes, without them.
+    // Meta refusing the status filter or the sort: the report still comes, without them. A range that
+    // already went to a job goes straight to one again: its synchronous try would only time out again.
     if (extras && refusedParameter(err)) {
       logger.warn({ err, act, level }, "meta: a report parameter was refused; asking without the status filter and sort");
-      return metaRangeRead(c, accessToken, accountId, level, since, until, maxRows, breakdown, opts, false);
+      return metaRangeRead(c, accessToken, accountId, level, since, until, maxRows, breakdown, opts, false, job);
     }
     throw err;
   }
 }
 
-/** effective_status per campaign / ad set / ad id (ACTIVE, PAUSED, CAMPAIGN_PAUSED, WITH_ISSUES...). */
-export async function metaStatuses(c: MetaConfig, accessToken: string, ids: string[]): Promise<Map<string, string>> {
+/** effective_status per campaign / ad set / ad id (ACTIVE, PAUSED, CAMPAIGN_PAUSED, WITH_ISSUES...); `deadline` as a live report's. */
+export async function metaStatuses(c: MetaConfig, accessToken: string, ids: string[], opts: { deadline?: number } = {}): Promise<Map<string, string>> {
   const out = new Map<string, string>();
   const valid = [...new Set(ids)].filter((id) => /^\d{1,30}$/.test(id));
+  const limit = opts.deadline === undefined ? undefined : { deadline: opts.deadline };
   for (let i = 0; i < valid.length; i += 50) {
     const res = await metaGet<Record<string, { id?: string; effective_status?: string }>>(c, "", {
       ids: valid.slice(i, i + 50).join(","),
       fields: "effective_status",
-    }, accessToken);
+    }, accessToken, limit);
     for (const [id, v] of Object.entries(res)) if (v?.effective_status) out.set(id, v.effective_status);
   }
   return out;
@@ -658,23 +759,29 @@ export async function metaReport(
   since: string,
   until: string,
   maxRows = 200,
-  opts: { pollMs?: number; polls?: number } = {},
+  opts: MetaLiveReportOptions = {},
 ): Promise<MetaReport> {
   const breakdown = isMetaBreakdown(level) ? level : null;
+  const live = { ...opts, deadline: opts.deadline ?? Date.now() + META_REPORT_JOB.budgetMs };
   const [account, raw] = await Promise.all([
-    metaRangeRead(c, accessToken, accountId, "account", since, until, 2000, undefined, opts),
-    breakdown ? metaRangeRead(c, accessToken, accountId, "account", since, until, 2000, breakdown, opts) : metaRangeRead(c, accessToken, accountId, level as MetaReportLevel, since, until, 2000, undefined, opts),
+    metaRangeRead(c, accessToken, accountId, "account", since, until, 2000, undefined, live),
+    breakdown ? metaRangeRead(c, accessToken, accountId, "account", since, until, 2000, breakdown, live) : metaRangeRead(c, accessToken, accountId, level as MetaReportLevel, since, until, 2000, undefined, live),
   ]);
   const all = raw.rows
     .map((r) => (breakdown ? fromMetaBreakdownInsight(breakdown, r) : fromMetaRangeInsight(level as MetaReportLevel, r)))
     .sort((a, b) => b.spend - a.spend || b.impressions - a.impressions);
   const rows = all.slice(0, maxRows);
   if (!breakdown) {
-    // A status that can't be read (an ad deleted since) leaves the row's status unknown, not the report broken.
-    const statuses = await metaStatuses(c, accessToken, rows.map((r) => r.id)).catch((err: unknown) => {
-      if (err instanceof AdsApiError) return new Map<string, string>();
-      throw err;
-    });
+    // A status that can't be read (an ad deleted since, no answer, no time left for it) leaves the
+    // row's status unknown, not the report broken: the numbers are the report.
+    const unknown = new Map<string, string>();
+    const statuses =
+      live.deadline - Date.now() < META_REPORT_JOB.statusMs
+        ? unknown
+        : await metaStatuses(c, accessToken, rows.map((r) => r.id), { deadline: live.deadline }).catch((err: unknown) => {
+            if (err instanceof AdsApiError || err instanceof AdsReportPendingError || err instanceof MetaNoAnswerError) return unknown;
+            throw err;
+          });
     for (const r of rows) r.status = statuses.get(r.id) ?? null;
   }
   return {

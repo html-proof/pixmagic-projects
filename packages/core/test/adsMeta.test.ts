@@ -1,6 +1,8 @@
 import { createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
+import type { AdDayRow } from "@app/shared";
 import {
+  AD_ACCOUNT_LIST_MAX_BYTES,
   AdsApiError,
   AdsAuthError,
   AdsPermissionError,
@@ -11,6 +13,7 @@ import {
   isMetaPermissionError,
   META_ACCOUNT_PAGES,
   META_OTHER_CAMPAIGNS,
+  META_REPORT_JOB,
   metaAdAccounts,
   metaAdsReadTargets,
   metaCampaignDays,
@@ -18,6 +21,7 @@ import {
   metaRangeInsights,
   metaReport,
   metaRetryAfterS,
+  withMetaOtherCampaigns,
   type FetchLike,
 } from "../src/index.js";
 
@@ -41,6 +45,13 @@ function fake(route: (url: URL, init: RequestInit | undefined) => Response | Pro
 }
 
 const meta = (fetchImpl: FetchLike) => ({ appId: "app1", appSecret: "sec", version: "v25.0", fetchImpl });
+/** A call that never answers: it ends only when its signal (our time limit) does. */
+const noAnswer = (init: RequestInit | undefined) =>
+  new Promise<Response>((_, reject) => {
+    const signal = init?.signal;
+    if (!signal) return reject(new Error("the call was made without a time limit"));
+    signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+  });
 const level = (u: URL) => u.searchParams.get("level");
 const failureOf = <T>(p: Promise<T>) =>
   p.then(
@@ -160,6 +171,53 @@ describe("the ad accounts a Meta login reaches", () => {
     const short = fake(() => json({ data: [{ id: "act_1" }] }));
     expect((await metaAdAccounts(meta(short.fetchImpl), "T")).truncated).toBeUndefined();
   });
+
+  // The list is read inside the OAuth callback (the API has 55 s) and then held in one DynamoDB item
+  // (400 KB) while the person picks: a sign-in that can't finish or can't be held helps nobody.
+  it("an agency login stops at the sign-in's time: the accounts read by then, marked as cut", async () => {
+    const paging = (next: (n: number, init: RequestInit | undefined) => Response | Promise<Response>) => {
+      let n = 0;
+      return fake((_u, init) => {
+        n++;
+        return n === 1 ? json({ data: [{ id: "act_1", name: "First" }], paging: { next: "https://graph.facebook.com/v25.0/me/adaccounts?after=1" } }) : next(n, init);
+      });
+    };
+    // Out of time before the next page: not asked for.
+    const late = paging(() => json({ data: [{ id: "act_2" }] }));
+    const cut = await metaAdAccounts(meta(late.fetchImpl), "T", { budgetMs: 0 });
+    expect(cut.map((a) => a.accountId)).toEqual(["act_1"]);
+    expect(cut.truncated).toBe(true);
+    expect(late.calls).toHaveLength(1);
+    // A next page that doesn't come before the time is up: the call is ended, the list kept.
+    const slow = paging((_n, init) => noAnswer(init));
+    const started = Date.now();
+    const kept = await metaAdAccounts(meta(slow.fetchImpl), "T", { budgetMs: 150 });
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(kept.map((a) => a.accountId)).toEqual(["act_1"]);
+    expect(kept.truncated).toBe(true);
+    // A page that fails while there is time still fails the sign-in: no silent cut.
+    const broken = paging(() => {
+      throw new TypeError("fetch failed");
+    });
+    await expect(metaAdAccounts(meta(broken.fetchImpl), "T")).rejects.toBeInstanceOf(AdsRetryableError);
+  });
+
+  it("the list stops at what the sign-in can hold while the person picks", async () => {
+    let n = 0;
+    // 20 pages of 100 accounts with long names (and characters that take more than one byte): well over the budget.
+    const f = fake(() => {
+      n++;
+      const data = Array.from({ length: 100 }, (_, i) => ({ id: `act_${n * 1000 + i}`, name: `Agency client ${"é".repeat(150)} ${n}-${i}`, currency: "EUR", timezone_name: "Europe/Paris", account_status: 1 }));
+      return json({ data, paging: { next: `https://graph.facebook.com/v25.0/me/adaccounts?after=${n}` } });
+    });
+    const accounts = await metaAdAccounts(meta(f.fetchImpl), "T");
+    expect(accounts.truncated).toBe(true);
+    expect(accounts.length).toBeGreaterThan(500);
+    expect(accounts.length).toBeLessThan(META_ACCOUNT_PAGES * 100);
+    expect(new TextEncoder().encode(JSON.stringify(accounts)).length).toBeLessThanOrEqual(AD_ACCOUNT_LIST_MAX_BYTES);
+    // In Meta's order: the first ones read are the ones kept.
+    expect(accounts[0]!.accountId).toBe("act_1000");
+  });
 });
 
 describe("Meta's daily campaign numbers add up to the account's own total", () => {
@@ -217,6 +275,42 @@ describe("Meta's daily campaign numbers add up to the account's own total", () =
     );
     const rows = await metaCampaignDays(meta(f.fetchImpl), "T", "1", "2026-10-01", "2026-10-01");
     expect(rows.map((r) => r.campaignId)).toEqual(["1", "2"]);
+  });
+
+  it("campaigns a cent or two below the account, the same impressions and clicks: rounding, no 'Other campaigns' row", () => {
+    const day = (d: string, campaignId: string, spend: number, impressions: number, over: Partial<AdDayRow> = {}): AdDayRow => ({
+      provider: "meta",
+      accountId: "act_1",
+      campaignId,
+      campaignName: campaignId,
+      day: d,
+      spend,
+      impressions,
+      clicks: 1,
+      linkClicks: 1,
+      conversions: 0,
+      conversionValue: 0,
+      purchases: 0,
+      purchaseValue: 0,
+      leads: 0,
+      ...over,
+    });
+    // Each of four campaigns rounded down by up to half a cent: the account's figure is 0.02 above their sum.
+    const campaigns = ["1", "2", "3", "4"].map((id) => day("2026-10-01", id, 2.5, 100, { conversionValue: 10 }));
+    const account = [day("2026-10-01", "account", 10.02, 400, { clicks: 4, linkClicks: 4, conversionValue: 40.01 })];
+    expect(withMetaOtherCampaigns("act_1", campaigns, account)).toEqual(campaigns);
+    // One campaign: a cent is still rounding.
+    const single = [day("2026-10-02", "1", 3.33, 10)];
+    expect(withMetaOtherCampaigns("act_1", single, [day("2026-10-02", "account", 3.34, 10)])).toEqual(single);
+    // Past what rounding explains, money alone makes the row: the account spent it.
+    const spent = withMetaOtherCampaigns("act_1", single, [day("2026-10-02", "account", 3.4, 10)]);
+    expect(spent.at(-1)).toMatchObject({ ...META_OTHER_CAMPAIGNS, day: "2026-10-02", spend: 0.07, impressions: 0 });
+    // A whole impression no listed campaign has is a campaign, however little it spent.
+    const deleted = withMetaOtherCampaigns("act_1", single, [day("2026-10-02", "account", 3.34, 12)]);
+    expect(deleted.at(-1)).toMatchObject({ ...META_OTHER_CAMPAIGNS, spend: 0.01, impressions: 2 });
+    // So is a purchase or a lead.
+    expect(withMetaOtherCampaigns("act_1", single, [day("2026-10-02", "account", 3.33, 10, { purchases: 1, conversions: 1 })]).at(-1)).toMatchObject({ ...META_OTHER_CAMPAIGNS, purchases: 1 });
+    expect(withMetaOtherCampaigns("act_1", single, [day("2026-10-02", "account", 3.33, 10, { leads: 1 })]).at(-1)).toMatchObject({ ...META_OTHER_CAMPAIGNS, leads: 1 });
   });
 
   it("Meta refusing the status filter: campaigns are read without it, and the account's total still holds", async () => {
@@ -361,6 +455,81 @@ describe("the Meta Ads report", () => {
     expect(err).toBeInstanceOf(AdsReportPendingError);
     expect(err).toBeInstanceOf(AdsRetryableError);
     expect(slow.calls.filter((c) => c.url.pathname === "/v25.0/901").length).toBeLessThanOrEqual(8);
+  });
+
+  // The API has 55 s for the whole request (and its fetch gives a call 30 s): the report must end
+  // within its own deadline with "still preparing", never be cut off by the function's time limit.
+  it("a synchronous try that doesn't answer becomes a job, checked only while the request's time allows", async () => {
+    let polls = 0;
+    const f = fake((u, init) => {
+      if (init?.method === "POST") return json({ report_run_id: "904" });
+      if (u.pathname === "/v25.0/act_1/insights") return noAnswer(init);
+      if (u.pathname === "/v25.0/904") {
+        polls++;
+        return json({ async_status: "Job Running", async_percent_completion: 50 });
+      }
+      return json({ error: { message: "unexpected" } }, 400);
+    });
+    const started = Date.now();
+    // Room for the synchronous try (100 ms here), a few checks, and the read kept back for after the job.
+    const deadline = started + META_REPORT_JOB.readMs + 600;
+    const err = await failureOf(metaRangeInsights(meta(f.fetchImpl), "T", "1", "campaign", "2026-01-01", "2026-10-01", 2000, undefined, { deadline, syncMs: 100, pollMs: 100 }));
+    expect(err).toBeInstanceOf(AdsReportPendingError);
+    // Given up with the time for reading the results still left, not at the deadline.
+    expect(Date.now()).toBeLessThan(deadline - META_REPORT_JOB.readMs + 150);
+    expect(polls).toBeGreaterThanOrEqual(2);
+    expect(f.calls.filter((c) => c.init?.method === "POST")).toHaveLength(1);
+  });
+
+  it("out of the request's time during the synchronous try or a page: still preparing, and nothing started after it", async () => {
+    const f = fake((u, init) => (u.pathname === "/v25.0/act_1/insights" && init?.method !== "POST" ? noAnswer(init) : json({ report_run_id: "905" })));
+    const started = Date.now();
+    // The default synchronous share (15 s) is more than is left: the deadline ends the call.
+    const err = await failureOf(metaReport(meta(f.fetchImpl), "T", "1", "campaign", "2026-01-01", "2026-10-01", 200, { deadline: started + 300 }));
+    expect(err).toBeInstanceOf(AdsReportPendingError);
+    expect(Date.now() - started).toBeLessThan(1500);
+    expect(f.calls.some((c) => c.init?.method === "POST")).toBe(false);
+    // A deadline already gone: no call at all.
+    const none = fake(() => json({ data: [] }));
+    await expect(metaReport(meta(none.fetchImpl), "T", "1", "campaign", "2026-01-01", "2026-10-01", 200, { deadline: Date.now() - 1 })).rejects.toBeInstanceOf(AdsReportPendingError);
+    expect(none.calls).toHaveLength(0);
+    // A second page that doesn't come in time.
+    const paged = fake((u, init) => (u.searchParams.has("after") ? noAnswer(init) : json({ data: [{ campaign_id: "1", spend: "5" }], paging: { next: "https://graph.facebook.com/v25.0/act_1/insights?after=2" } })));
+    await expect(metaRangeInsights(meta(paged.fetchImpl), "T", "1", "campaign", "2026-10-01", "2026-10-07", 1000, undefined, { deadline: Date.now() + 200 })).rejects.toBeInstanceOf(AdsReportPendingError);
+  });
+
+  it("a refused filter on a range already sent to a job goes straight to a job without them, not through another synchronous try", async () => {
+    const f = fake((u, init) => {
+      if (init?.method === "POST") {
+        const form = new URLSearchParams(String(init.body));
+        return form.has("filtering") ? json({ error: { message: "(#100) Invalid parameter", code: 100 } }, 400) : json({ report_run_id: "906" });
+      }
+      if (u.pathname === "/v25.0/act_1/insights") return json({ error: { message: "Please reduce the amount of data you're asking for, then retry your request", code: 1 } }, 500);
+      if (u.pathname === "/v25.0/906") return json({ async_status: "Job Completed", async_percent_completion: 100 });
+      if (u.pathname === "/v25.0/906/insights") return json({ data: [{ campaign_id: "1", campaign_name: "A", spend: "5" }] });
+      return json({ error: { message: "unexpected" } }, 400);
+    });
+    expect(await metaRangeInsights(meta(f.fetchImpl), "T", "1", "campaign", "2026-01-01", "2026-10-01", 2000, undefined, { pollMs: 0 })).toHaveLength(1);
+    expect(f.calls.filter((c) => c.url.pathname === "/v25.0/act_1/insights" && c.init?.method !== "POST")).toHaveLength(1);
+    expect(f.calls.filter((c) => c.init?.method === "POST")).toHaveLength(2);
+  });
+
+  it("the rows' delivery statuses are a nicety: skipped with little time left, unknown when Meta doesn't answer", async () => {
+    const report = (statuses: (init: RequestInit | undefined) => Response | Promise<Response>) =>
+      fake((u, init) => {
+        if (u.searchParams.has("ids")) return statuses(init);
+        return level(u) === "account" ? json({ data: [{ spend: "5", reach: "10" }] }) : json({ data: [{ campaign_id: "1", campaign_name: "A", spend: "5" }] });
+      });
+    const short = report(() => json({ "1": { effective_status: "ACTIVE" } }));
+    const r = await metaReport(meta(short.fetchImpl), "T", "1", "campaign", "2026-10-01", "2026-10-07", 200, { deadline: Date.now() + META_REPORT_JOB.statusMs - 500 });
+    expect(r.rows.map((x) => [x.id, x.status])).toEqual([["1", null]]);
+    expect(short.calls.some((c) => c.url.searchParams.has("ids"))).toBe(false);
+    const silent = report(() => {
+      throw new TypeError("fetch failed");
+    });
+    expect((await metaReport(meta(silent.fetchImpl), "T", "1", "campaign", "2026-10-01", "2026-10-07")).rows[0]!.status).toBeNull();
+    const plenty = report(() => json({ "1": { effective_status: "ACTIVE" } }));
+    expect((await metaReport(meta(plenty.fetchImpl), "T", "1", "campaign", "2026-10-01", "2026-10-07")).rows[0]!.status).toBe("ACTIVE");
   });
 
   it("the whole account split by age and by gender, Meta's own aggregates", async () => {

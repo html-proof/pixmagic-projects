@@ -33,7 +33,7 @@ vi.mock("../src/adConnections/config.js", () => ({
 }));
 
 const { adsenseReportForConnection, googleReportForConnection, metaReportForConnection } = await import("../src/adConnections/reports.js");
-const { AdsAuthError, AdsPermissionError, AdsRateLimitedError } = await import("../src/ads.js");
+const { AdsAuthError, AdsPermissionError, AdsRateLimitedError, AdsReportPendingError } = await import("../src/ads.js");
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 const conn = (over: Partial<AdConnection> = {}) => ({ id: "conn1", provider: "meta", accountId: "act_1", currency: "USD", sites: [], ...over }) as AdConnection;
@@ -59,6 +59,23 @@ describe("live reports per connection", () => {
     const lost = await metaReportForConnection(conn(), "campaign", "2026-10-01", "2026-10-07", meta("granted")).catch((e: unknown) => e);
     expect(lost).toBeInstanceOf(AdsPermissionError);
     expect(recorded[0]!.failure).toMatchObject({ status: "permission", code: "no_access", detail: "(#200) Requires ads_read permission" });
+  });
+
+  it("Meta: the request's deadline reaches every Meta call; past it the report is still being prepared, which says nothing about the connection", async () => {
+    const calls: URL[] = [];
+    const meta: FetchLike = async (input) => {
+      calls.push(new URL(String(input)));
+      return json({ data: [] });
+    };
+    // A comparison's second range, asked once the first used up the request's time.
+    const err = await metaReportForConnection(conn(), "campaign", "2026-09-01", "2026-09-07", meta, { deadline: Date.now() - 1 }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AdsReportPendingError);
+    expect(calls).toEqual([]);
+    expect(recorded).toEqual([{ id: "conn1", from: "report", failure: expect.objectContaining({ status: "error", code: "temporary", retryable: true }) }]);
+    // With time left (the default: META_REPORT_JOB.budgetMs from now), the report comes.
+    recorded.length = 0;
+    expect((await metaReportForConnection(conn(), "campaign", "2026-09-01", "2026-09-07", meta)).rows).toEqual([]);
+    expect(recorded).toEqual([]);
   });
 
   it("Google: the failure is classified and recorded as a report's; recording failing never hides the report's own error", async () => {
