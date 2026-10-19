@@ -12,6 +12,9 @@ import { Facts, IntegrationCard, StatusBadge } from "./IntegrationCard";
 /** Where linking Google comes back to: this page, with ?linked=google or ?link_error=<code>. */
 const RETURN = "/settings/integrations";
 
+/** The password field of the "Confirm it's you" dialog. */
+const PASSWORD_ID = "int-link-password";
+
 const when = (t: string | null) => (t ? new Date(t).toLocaleDateString() : "never");
 
 /**
@@ -25,6 +28,8 @@ export function GoogleAccountCard() {
   const [msg, setMsg] = useState<Note | null>(null);
   const [asking, setAsking] = useState(false);
   const [password, setPassword] = useState("");
+  // Continue was pressed with the field empty: say so beside it, rather than a button that does nothing.
+  const [missing, setMissing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [leaving, setLeaving] = useState(false);
   const account = useApi<AccountInfo>(offered ? "/auth/account" : null);
@@ -61,7 +66,13 @@ export function GoogleAccountCard() {
   const cancel = useCallback(() => {
     setAsking(false);
     setPassword("");
+    setMissing(false);
   }, []);
+
+  // The dialog opens on the password field (ConfirmDialog's own effect, a child's, has just focused its first button).
+  useEffect(() => {
+    if (asking) document.getElementById(PASSWORD_ID)?.focus();
+  }, [asking]);
 
   const alert = msg && <NoteAlert note={msg} onDismiss={() => setMsg(null)} />;
   if (!offered) return alert || null;
@@ -89,7 +100,12 @@ export function GoogleAccountCard() {
   };
 
   const continueWithPassword = async () => {
-    if (!password) return;
+    if (busy) return;
+    if (!password) {
+      setMissing(true);
+      document.getElementById(PASSWORD_ID)?.focus();
+      return;
+    }
     setBusy(true);
     try {
       await prepareGoogleLink(password);
@@ -157,11 +173,30 @@ export function GoogleAccountCard() {
           <p className="text-muted">Google can&apos;t be linked to this account right now. Settings → Security shows how you sign in.</p>
         )}
       </IntegrationCard>
-      <ConfirmDialog open={asking} title="Confirm it's you" confirmLabel={busy ? "Checking…" : "Continue to Google"} busy={busy || !password} onCancel={cancel} onConfirm={() => void continueWithPassword()}>
-        <div className="space-y-3">
+      {/* Enabled while the field is empty (pressing it says what's missing); "Working…" only while the password is checked. */}
+      <ConfirmDialog open={asking} title="Confirm it's you" confirmLabel="Continue to Google" busy={busy} onCancel={cancel} onConfirm={() => void continueWithPassword()}>
+        {/* A form, so Enter in the field continues too. */}
+        <form
+          className="space-y-3"
+          noValidate
+          onSubmit={(e) => {
+            e.preventDefault();
+            void continueWithPassword();
+          }}
+        >
           <p>A linked Google account can sign in to your account, so enter your password first.</p>
-          <PasswordField id="int-link-password" label="Your password" autoComplete="current-password" value={password} onChange={setPassword} />
-        </div>
+          <PasswordField
+            id={PASSWORD_ID}
+            label="Your password"
+            autoComplete="current-password"
+            value={password}
+            onChange={(v) => {
+              setPassword(v);
+              if (v) setMissing(false);
+            }}
+            error={missing ? "Enter your bizinsights password to continue." : null}
+          />
+        </form>
       </ConfirmDialog>
     </>
   );
