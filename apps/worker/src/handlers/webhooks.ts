@@ -35,12 +35,16 @@ const unreadableGdprRequest = (topic: string) => new UnrecoverableError(`Shopify
  * alerts and privacy requests go, and so does the store row itself: a later install starts from
  * nothing (a new workspace and a new claim) instead of being joined to the account that had it
  * before. A workspace made for the store that nobody ever claimed goes with it.
+ *
+ * The erase records itself (gdpr.shop_redacted, naming the shop) in its own transaction: in the
+ * workspace's log when the workspace stays, and with no workspace when it went too, so the record
+ * outlives it (written for the erased workspace, it failed its foreign key and nothing was kept).
  */
-async function eraseStore(store: Store, deps: WorkerDeps) {
+async function eraseStore(store: Store, deps: WorkerDeps): Promise<{ workspaceErased: boolean }> {
   await purgeStoreData(store.id, deps.fetchImpl);
   await purgeEmailStoreData(store.id);
   // One transaction: a retry after a failure finds the store still there and does it all again.
-  await systemDb.$transaction(async (tx) => {
+  return systemDb.$transaction(async (tx) => {
     // A claim of the workspace takes the same lock (apps/api/src/routes/shopify.ts).
     await tx.$queryRaw`SELECT id FROM workspaces WHERE id = ${store.workspaceId} FOR UPDATE`;
     await tx.syncJob.deleteMany({ where: { storeId: store.id } });
@@ -51,7 +55,18 @@ async function eraseStore(store: Store, deps: WorkerDeps) {
     const ws = await tx.workspace.findUnique({ where: { id: store.workspaceId }, select: { awaitingClaim: true } });
     const members = await tx.membership.count({ where: { workspaceId: store.workspaceId } });
     const stores = await tx.store.count({ where: { workspaceId: store.workspaceId } });
-    if (ws?.awaitingClaim && members === 0 && stores === 0) await tx.workspace.delete({ where: { id: store.workspaceId } });
+    const workspaceErased = !!ws?.awaitingClaim && members === 0 && stores === 0;
+    if (workspaceErased) await tx.workspace.delete({ where: { id: store.workspaceId } });
+    await tx.auditLog.create({
+      data: {
+        workspaceId: workspaceErased ? null : store.workspaceId,
+        action: "gdpr.shop_redacted",
+        targetType: "store",
+        targetId: store.id,
+        metadata: { shop: store.shopDomain, ...(workspaceErased ? { erasedWorkspaceId: store.workspaceId } : {}) },
+      },
+    });
+    return { workspaceErased };
   });
 }
 
@@ -381,9 +396,8 @@ export async function processWebhook(data: WebhookJobData, deps: WorkerDeps) {
         // the app's charges with it: the plan billed on the store ends here as on an uninstall (a
         // no-op for a store whose uninstall already ended it). Before the erase, which unlinks it.
         await endBillingForStore(store.id, "uninstalled");
-        await eraseStore(store, deps);
-        logger.info({ topic: data.topic, shop: data.shop, storeId: store.id, status: store.status, state }, "shop/redact erased the store");
-        await audit({ workspaceId: store.workspaceId, action: "gdpr.shop_redacted", targetType: "store", targetId: store.id, metadata: { shop: store.shopDomain } });
+        const { workspaceErased } = await eraseStore(store, deps);
+        logger.info({ topic: data.topic, shop: data.shop, storeId: store.id, status: store.status, state, workspaceErased }, "shop/redact erased the store");
         break;
       }
       default:
