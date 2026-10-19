@@ -5,14 +5,18 @@ import type { GoogleReportLevel, GoogleReportMetrics, GoogleReportRow } from "@a
 import { useApp } from "@/components/AppContext";
 import { Alert } from "@/components/ui";
 import { actionError, api, ApiError, fmtMoney, fmtNum, fmtPct } from "@/lib/api";
-import { fmtRange } from "./format";
+import { Definitions } from "./AdsCommon";
+import { fmtRange, fmtSpan } from "./format";
 import { Badge, Panel, type Tone } from "./Primitives";
+import { ReportChange, reportChange } from "./ReportCompare";
 import type { AdsModule, Overview } from "./types";
 
 // ---------------------------------------------------------------------------
 // The Google Ads report: campaigns (with status, type and budget), ad groups, devices and countries
 // for the dates picked, asked of Google for exactly those dates (GET .../ads/google/report).
-// Read-only: there is nothing here that changes a campaign.
+// Read-only: there is nothing here that changes a campaign. When the answer carries the dates
+// compared with (`comparison`), each row shows its change; the dates picked must have ended, so
+// a day still running is never set against whole days.
 // ---------------------------------------------------------------------------
 
 interface Report {
@@ -22,6 +26,8 @@ interface Report {
   totals: GoogleReportMetrics;
   rows: GoogleReportRow[];
   truncated: boolean;
+  /** The dates compared with, when asked for and given: their totals and each row's figures (by id). */
+  comparison?: { since: string; until: string; totals: GoogleReportMetrics; rows: Array<{ id: string } & Partial<GoogleReportMetrics>> };
 }
 interface Answer {
   account: { id: string; accountId: string; name: string | null; currency: string | null; timezone: string | null };
@@ -82,7 +88,18 @@ function Cells({ m, money }: { m: GoogleReportMetrics; money: (n: number | null)
   );
 }
 
-const HEADINGS = ["Spent", "Impressions", "Clicks", "Click-through rate", "Per click", "Per 1,000 impressions", "Conversions", "Per conversion", "Conversion value", "Return"];
+// Google's own column names where they differ from everyday words: its conversions count every
+// conversion action, so their value ÷ cost is "Conv. value / cost", not a return on purchases.
+const HEADINGS = ["Spent", "Impressions", "Clicks", "Click-through rate", "Per click", "Per 1,000 impressions", "Conversions (all actions)", "Per conversion", "Conversion value", "Conv. value / cost"];
+
+const DEFINITIONS: Array<[string, string]> = [
+  ["Click-through rate", "Clicks ÷ impressions."],
+  ["Per click", "Spend ÷ clicks (Google's average CPC)."],
+  ["Per 1,000 impressions", "Spend × 1,000 ÷ impressions (CPM)."],
+  ["Conversions (all actions)", "Google's own count of every conversion action set to count: purchases, and also leads, sign-ups, calls. Not your Shopify orders."],
+  ["Per conversion", "Spend ÷ conversions."],
+  ["Conv. value / cost", "Conversion value ÷ spend, on every conversion action. The Google Ads card's ROAS is on purchases only."],
+];
 
 export function GoogleReportPanel({ ov, accounts }: { ov: Overview; accounts: AdsModule["accounts"] }) {
   const { workspace } = useApp();
@@ -93,6 +110,10 @@ export function GoogleReportPanel({ ov, accounts }: { ov: Overview; accounts: Ad
   const [error, setError] = useState<{ message: string; reconnect: boolean } | null>(null);
   const [loading, setLoading] = useState(false);
   const { from, to } = ov.range;
+  // Changes only for dates that are over: a day still running against whole days reads as a drop.
+  const ended = to < ov.today;
+  const cfrom = ended ? ov.previous.from : null;
+  const cto = ended ? ov.previous.to : null;
   const chosen = google.find((a) => a.id === connection) ?? google[0];
 
   useEffect(() => {
@@ -100,7 +121,7 @@ export function GoogleReportPanel({ ov, accounts }: { ov: Overview; accounts: Ad
     let live = true;
     setLoading(true);
     setError(null);
-    const qs = new URLSearchParams({ connection: chosen.id, level, from, to });
+    const qs = new URLSearchParams({ connection: chosen.id, level, from, to, ...(cfrom && cto ? { cfrom, cto } : {}) });
     api<Answer>(`/workspaces/${workspace.id}/stores/${ov.store.id}/ads/google/report?${qs}`)
       .then((a) => live && setAnswer(a))
       .catch((e: unknown) => {
@@ -113,7 +134,7 @@ export function GoogleReportPanel({ ov, accounts }: { ov: Overview; accounts: Ad
       live = false;
     };
     // The account's status changes on every poll; only a different question asks Google again.
-  }, [workspace.id, ov.store.id, chosen?.id, level, from, to]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [workspace.id, ov.store.id, chosen?.id, level, from, to, cfrom, cto]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!chosen) return null;
   const r = answer?.report;
@@ -121,6 +142,8 @@ export function GoogleReportPanel({ ov, accounts }: { ov: Overview; accounts: Ad
   const money = (n: number | null) => (n === null ? NA : fmtMoney(n, currency));
   const includesToday = !!answer && to >= answer.today;
   const current = LEVELS.find((l) => l.id === (r?.level ?? level))!;
+  const cmp = r?.comparison;
+  const before = new Map((cmp?.rows ?? []).map((row) => [row.id, row]));
 
   return (
     <Panel
@@ -186,13 +209,25 @@ export function GoogleReportPanel({ ov, accounts }: { ov: Overview; accounts: Ad
                       {h}
                     </th>
                   ))}
+                  {cmp && <th className="px-2 pb-2 text-right font-normal">Spend vs before</th>}
+                  {cmp && <th className="px-2 pb-2 text-right font-normal">Conversions vs before</th>}
                 </tr>
               </thead>
               <tbody>
                 <tr className="border-t border-border bg-surface font-medium">
                   <td className="px-2 py-2">Whole ad account</td>
                   <Cells m={r.totals} money={money} />
+                  {cmp && <ReportChange value={reportChange(r.totals.spend, cmp.totals.spend)} neutral />}
+                  {cmp && <ReportChange value={reportChange(r.totals.conversions, cmp.totals.conversions)} />}
                 </tr>
+                {cmp && (
+                  <tr className="border-t border-border text-muted" data-testid="google-report-before">
+                    <td className="px-2 py-2">Before ({fmtSpan(cmp.since, cmp.until)})</td>
+                    <Cells m={cmp.totals} money={money} />
+                    <td />
+                    <td />
+                  </tr>
+                )}
                 {r.rows.map((row) => {
                   const s = statusOf(row.status);
                   const details = [
@@ -200,6 +235,7 @@ export function GoogleReportPanel({ ov, accounts }: { ov: Overview; accounts: Ad
                     row.channel ? (CHANNEL[row.channel] ?? row.channel.toLowerCase().replace(/_/g, " ")) : null,
                     row.dailyBudget !== null ? `budget ${money(row.dailyBudget)} a day` : null,
                   ].filter(Boolean);
+                  const was = before.get(row.id);
                   return (
                     <tr key={row.id} className="border-t border-border">
                       <td className="max-w-[18rem] px-2 py-2">
@@ -214,6 +250,8 @@ export function GoogleReportPanel({ ov, accounts }: { ov: Overview; accounts: Ad
                         )}
                       </td>
                       <Cells m={row} money={money} />
+                      {cmp && <ReportChange value={reportChange(row.spend, was?.spend)} neutral />}
+                      {cmp && <ReportChange value={reportChange(row.conversions, was?.conversions)} />}
                     </tr>
                   );
                 })}
@@ -231,13 +269,20 @@ export function GoogleReportPanel({ ov, accounts }: { ov: Overview; accounts: Ad
           {r.truncated && <p className="mt-2 text-xs text-muted">Showing the {r.rows.length} that spent most.</p>}
           <ul className="mt-3 list-disc space-y-1 pl-4 text-xs text-muted">
             <li>
-              Conversions and their value are Google&apos;s own count, using each conversion action&apos;s attribution settings. They are not your Shopify orders, they can
-              overlap with what Meta claims, and they aren&apos;t added into your store&apos;s sales.
+              Conversions and their value are Google&apos;s own count of every conversion action it&apos;s set to count (purchases, and also leads, sign-ups or calls),
+              using each action&apos;s attribution settings. They are not your Shopify orders, they can overlap with what Meta claims, and they aren&apos;t added into your
+              store&apos;s sales.
             </li>
+            {cmp ? (
+              <li>Changes compare with {fmtSpan(cmp.since, cmp.until)}, as Google reports those dates now.</li>
+            ) : !ended ? (
+              <li>Changes show once the dates picked are over: today is still running, so it isn&apos;t set against whole days.</li>
+            ) : null}
             {r.level === "ad_group" && r.rows.length > 0 && <li>Performance Max campaigns have no ad groups, so their spend shows on the Campaigns tab but not here.</li>}
             {r.level === "country" && <li>Countries are where the people who saw your ads were, not the places your campaigns target.</li>}
             {answer && <li>{answer.cached ? "Fetched from Google in the last few minutes." : "Fetched from Google just now."}</li>}
           </ul>
+          <Definitions items={DEFINITIONS} />
         </>
       )}
     </Panel>

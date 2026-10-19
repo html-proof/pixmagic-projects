@@ -35,7 +35,8 @@ approval; until then the card says why it has no figure, never shows 0.
 | Checkout started, abandoned checkouts, add to cart | Analytics: funnel | Pixel (tracked visits) | BizInsights measure | Consent-dependent; shown as tracked visits. Shopify's figures come with the sessions report |
 | Payment success / failure | none in the reports | | Not shown | |
 | Sales by device | Sessions by device | Reports (ShopifyQL) | Not built | The orders carry no device |
-| Ad spend, ROAS | Meta / Google | Ad platforms | Their figures | Never mixed into store sales |
+| Ad spend, ROAS | Meta / Google | Ad platforms | Their figures | Never mixed into store sales; ROAS on the platform's purchases only, each platform's own |
+| Estimated earnings | AdSense | AdSense | Its estimate | Finalized by AdSense after the month ends; only the store's chosen sites |
 
 Currency is always the store's (shop money), days the store's time zone, as in Shopify's reports.
 
@@ -116,8 +117,11 @@ shipping, taxes and total sales as Shopify's sales reports for the same dates.
   daylight-saving change doesn't shift it). The comparison's last day is then added up from the orders
   placed and the sales made before that moment, by the same query that fills daily_store_metrics
   (`dayTotals` in packages/core/src/persist.ts), and its store visits are the ones that started before
-  it. Ad platforms (Meta, Google, AdSense) report whole days, so their comparisons stay whole days;
-  their rows are read for the range and for the comparison separately, wherever the comparison sits.
+  it. Ad platforms (Meta, Google, AdSense) report whole days, so their comparisons are whole days
+  only: while the range reaches a day still running (the store's today, or an ad account's today in
+  its own time zone), both the range and the comparison lose that many days at their end and the
+  change says "through yesterday"; Today on its own isn't compared (see "Ads" below). Their rows are
+  read for the range and for the comparison separately, wherever the comparison sits.
 
   **No earlier data:** when the comparison starts before the store's imported history (`historyFrom`,
   below), `previous.imported` is false: the sales figures of the comparison come back `null`, every
@@ -142,10 +146,11 @@ shipping, taxes and total sales as Shopify's sales reports for the same dates.
   - **Ad figures** start, for each ad account, at the first day of the earliest window a sync fetched
     in full (`ad_connections.history_from`, in the account's own days, kept at the earliest): the 90
     days before it was connected (`ADS_BACKFILL_DAYS`). With several accounts added up, `historyFrom`
-    is the latest start among the accounts counted (`adsHistoryStart`): before it, one of them is in
+    is the latest start among the accounts counted (`commonCoverage`): before it, one of them is in
     the dates picked and missing from the dates compared with. An account not synced yet has no
-    figures in either period and is left out; hidden accounts and accounts in another currency
-    aren't counted, so their starts don't matter.
+    figures at all, so nothing it is part of is given (its `historyFrom` is null and the change says
+    why, see "Ads"); hidden accounts and accounts in another currency aren't counted, so their starts
+    don't matter.
 
   **Where the imported history starts (`data.historyFrom`):** the first store-local day whose orders
   were all imported. Shopify shares the last 60 days of orders without `read_all_orders`, so each
@@ -259,45 +264,109 @@ a webhook's `landing_site` / `referring_site` live (`packages/shared/src/traffic
 
 ## Ads (Meta Ads, Google Ads)
 
-Reference implementation: `packages/shared/src/ads.ts`. Connection and sync: `docs/ads-setup.md`.
+Reference implementation: `packages/shared/src/ads.ts` (`adTotals`, `adSeries`, the coverage helpers)
+and `adsFigures` in `packages/core/src/reports/ads.ts`. Connection and sync: `docs/ads-setup.md`.
 
 | KPI | Formula | Notes |
 | --- | --- | --- |
 | Ad spend | Σ spend per campaign per day | What the platform billed; in the ad account's currency |
-| Views, clicks | Σ impressions, Σ clicks | |
-| Click-through rate | clicks ÷ views | |
-| Cost per click, per 1,000 views | spend ÷ clicks, spend × 1000 ÷ views | |
-| Purchases | Meta: the first of `omni_purchase`, `purchase`, `offsite_conversion.fb_pixel_purchase`, `onsite_web_purchase` (never their sum: they overlap). Google: `metrics.conversions` | The platform's own attribution |
-| Sales value | the matching `action_values` (Meta), `metrics.conversions_value` (Google) | The platform's own attribution |
-| Return on ad spend | sales value ÷ spend | |
+| Impressions | Σ impressions | Times an ad was shown |
+| Link clicks | Σ link clicks: Meta `inline_link_clicks`, Google `metrics.clicks` | Meta's `clicks` ("clicks (all)") also count likes, comments and profile taps: stored, never used for rates. `null` ("Being re-read") while any day added up was stored before its link clicks were read |
+| Click-through rate (CTR) | link clicks ÷ impressions | |
+| Cost per click (CPC) | spend ÷ link clicks | |
+| Cost per 1,000 impressions (CPM) | spend × 1000 ÷ impressions | |
+| Purchases (platform's count) | Meta: the first of `omni_purchase`, `purchase`, `offsite_conversion.fb_pixel_purchase`, `onsite_web_purchase` (never their sum: they overlap). Google: `metrics.conversions` of the conversion actions in the Purchase category (`segments.conversion_action_category = PURCHASE`, its own query) | The platform's own attribution, never the store's orders. `null` while any day added up has none read yet |
+| Purchase value | the matching `action_values` (Meta), `metrics.conversions_value` of those Purchase actions (Google) | As for purchases |
+| Return on ad spend (ROAS) | purchase value ÷ spend | Per platform it is that platform's own figure ("Google Ads-reported ROAS", "Meta-reported ROAS"); across platforms their claims added up, which can overlap |
 | Cost per purchase | spend ÷ purchases | |
-| Ads as share of sales | ad spend ÷ the store's net sales for the same dates | Only when both are in the same currency |
+| Conversions (all conversion actions) | Google: `metrics.conversions`, every action set to count in Conversions (leads, sign-ups, calls and purchases) | Shown on the Google Ads card and the Ads panel only, never called or added up as purchases. Meta's conversions are its purchases |
+| Cost per conversion | spend ÷ conversions | |
+| Ads as share of sales | ad spend ÷ the store's net sales for the same dates | Only when both are in the same currency and every day of the ad spend is known |
 
-- **Days** are each ad account's own calendar days. They line up with the store's days when the time zones match.
-- **Currency:** only accounts in one currency are added together. That is the store's currency when any connected account uses it, otherwise the first account's. Other accounts are listed and left out.
+- **Only days the accounts have stored.** Each counted account covers the days from where its history
+  starts (`ad_connections.history_from`) to the last day stored without a gap (`synced_through`, both
+  in the account's own days); never synced: nothing (`accountCoverage`). A closed account
+  (`account_closed`) covers on to its today, since it spends nothing after it closed. A figure is given
+  only when every account it adds up covers every day it needs: otherwise `current` is `null` (the
+  card says "Unavailable", which account lacks which days and why, from its status and `errorCode`),
+  `partial` gives the part of the range they all cover and its totals, and the daily series has
+  `null` (drawn as "No data", never as 0) on the days not covered. A failing, ended or never-synced
+  account, or a day that hasn't started yet in the account's time zone, is never counted as $0.
+- **Up to a date, while only days not over yet are missing.** When `partial` starts on the range's
+  first day and reaches the last day that is over everywhere (`lastWholeAdDay`), and every account
+  that stops short still syncs (status `active`, or closed), the only days missing are still running
+  or not begun: an account's today before its next sync, or (an account in a zone behind the store's)
+  a store day it hasn't reached. `soFar` then holds that part, and the page shows it as the figure,
+  dated "up to 18 Oct", with why the rest isn't in yet. `current` stays `null`, and so do "ads as share
+  of sales" and the series' missing days. A gap after a failure, a sync more than a day behind, or a
+  history that starts inside the range stays "Unavailable".
+- **Per platform.** `byProvider` works the same out for each platform's counted accounts on their own,
+  with the totals flat on the entry (all `null` when that platform's accounts don't cover the range),
+  so one platform's gap never hides another's figures. Each entry, and the module, says when its
+  least recently updated account last synced (`updatedAt`), shown as "updated 12 minutes ago".
+- **Total ad spend** is a card of its own only when two platforms or more are counted (they are then
+  in one currency).
+- **Changes compare whole days only.** `compared` holds the days each side is worked out on and their
+  totals: while the range reaches a day still running (the store's today, or a counted account's today
+  in its own zone; `lastWholeAdDay`), both sides lose that many days at their end (`trimmed`), and the
+  change says "through yesterday" (`adComparisonWindows`). Today alone (or yesterday while an account's
+  day is still running) has no change: `notCompared` is `running` and the page says "today so far". The
+  `previous` figures and dates are those compared, so what is shown as before is what was compared.
+  `notCompared` is also `no_history` (the comparison starts before `historyFrom`: "No earlier data")
+  or `incomplete` (a counted account lacks days of either side). Each platform is compared from its
+  own history, so the comparison's days are read whenever any counted platform's figures reach back to
+  them (`daysToRead`); when they aren't read, nothing is compared (`no_history`), never set against $0.
+- **Days** are each ad account's own calendar days. When an account's time zone has other days than
+  the store's (`otherTimeZone`, `sameDays`: not the name, the local date and time now and half a year
+  either side), its card says "Google Ads days follow the ad account's time zone, America/Los_Angeles",
+  and a store day the account hasn't reached yet is missing, not 0.
+- **Currency:** only accounts in one currency are added together. That is the store's currency when any connected account uses it, otherwise the first account's. Other accounts are listed and left out, whatever state they're in.
 - **Platform attribution is never mixed into store sales.** Meta and Google can both claim one sale, and neither matches Shopify's orders exactly.
 - **Freshness:** the last 3 days are refreshed hourly. The last 30 days are fetched again daily, because purchases keep being credited after the click. A first connection fetches 90 days. An account whose stored history falls short of those 90 days (its first sync failed and a later one worked, or it was connected before `history_from` was recorded) gets the whole 90 days in its daily re-check instead, until they are in (`recheckDays` in packages/core/src/adConnections/sync.ts).
 - **No earlier data:** comparisons go back only to where every counted account's figures start (see Conventions).
 
 ## Ad earnings (Google AdSense)
 
-Reference implementation: `adsenseTotals` and `fromAdsenseReport` in `packages/shared/src/ads.ts`.
-Stored per AdSense account, site (`DOMAIN_CODE`) and day in `adsense_daily`; never in `ad_campaign_daily`.
+Reference implementation: `adsenseTotals` and `fromAdsenseReport` in `packages/shared/src/ads.ts`, and
+`adsenseFigures` in `packages/core/src/reports/ads.ts`. Stored per AdSense account, site (`DOMAIN_CODE`)
+and day in `adsense_daily`; never in `ad_campaign_daily`.
 
 | KPI | Formula | Notes |
 | --- | --- | --- |
-| Estimated earnings | Σ `ESTIMATED_EARNINGS` | AdSense finalizes a month after it ends; in the account's currency, read from the report |
-| Page views, ads shown, clicks | Σ `PAGE_VIEWS`, Σ `IMPRESSIONS`, Σ `CLICKS` | |
-| Earnings per 1,000 views (page RPM) | earnings × 1000 ÷ page views | |
-| Earnings per click | earnings ÷ clicks | |
-| Click rate | clicks ÷ ads shown | |
-| Next to your sales | earnings ÷ the store's net sales for the same dates | Only when both are in the same currency |
+| Estimated earnings | Σ `ESTIMATED_EARNINGS` | AdSense's estimate: accurate up to yesterday, finalized after the month ends, not money paid out; in the account's currency, read from the report |
+| Page views | Σ `PAGE_VIEWS` | |
+| Impressions | Σ `IMPRESSIONS` | AdSense counts one for each ad request where at least one ad was delivered, not one per ad shown (that is `INDIVIDUAL_AD_IMPRESSIONS`, not read) |
+| Clicks | Σ `CLICKS` | |
+| Page RPM | estimated earnings × 1000 ÷ page views | |
+| Impression RPM | estimated earnings × 1000 ÷ impressions | |
+| Earnings per click | estimated earnings ÷ clicks | |
+| Click-through rate (CTR) | clicks ÷ impressions | AdSense's impression CTR |
+| Next to your sales | estimated earnings ÷ the store's net sales for the same dates | Only when both are in the same currency and every day is known |
 
+- **The store's sites only.** Each connection's `sites` (DOMAIN_CODE values chosen in Settings; none
+  chosen: every site) say which sites' earnings belong to the store (`adsenseSiteChosen`). Rows of other
+  sites on the same AdSense account count nowhere, "next to your sales" included, and are listed as
+  left out (`sitesLeftOut`).
+- **Days AdSense didn't split by site.** When AdSense won't split an account's report by site, its
+  days are stored as one row with site "" (every site together). With no sites chosen they count as
+  the store's. With sites chosen, the store's share of them isn't known: they are neither counted nor
+  listed as left out, and the account's figures start after the last such day read
+  (`unsplitThrough`, `coverageAfter`), so those days are "Unavailable", never $0.
+- **Only days the account has stored**, as for ads: a day AdSense wasn't read for (before its history,
+  after its last sync that worked) is missing, never $0, and the totals for a range that needs it are
+  `null` with `partial` giving what is known (or `soFar`, as for ads, while only days not over yet are
+  missing).
+- **Changes** compare whole days only, as for ads.
 - **Days** are the AdSense account's own calendar days (`reportingTimeZone=ACCOUNT_TIME_ZONE`).
 - **Currency** is chosen as for ads: the store's when any AdSense account uses it, otherwise the first known.
 - **Earnings are money in, ad spend is money out:** the two modules are separate and never summed.
+  Estimated earnings are what AdSense expects to pay, never presented as money paid out.
 - **Freshness:** as for ads (last 3 days hourly, last 30 days daily, 90 days on first connect).
 - **No earlier data:** as for ads, from where every counted AdSense account's figures start.
+- **By country, by device type:** asked of AdSense for the dates picked (GET `.../ads/adsense/report`,
+  `level=country|platform`), limited to the connection's chosen sites like every other AdSense figure
+  here (every site when none are chosen; the answer's `sites` says which), shown to members who may see
+  the other live reports.
 
 ## Funnel (web pixel)
 

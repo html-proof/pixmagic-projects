@@ -9,7 +9,7 @@
  */
 // Without the ".js" the rest of the package uses: the web app imports this file directly
 // (@app/shared/ads), and its bundler doesn't map "./dates.js" to dates.ts.
-import { addDays, eachDay, isDay } from "./dates";
+import { addDays, eachDay, isDay, localDay, localTime } from "./dates";
 
 /** Everything that can be connected on Settings → Ad accounts. */
 export const AD_PROVIDERS = ["meta", "google", "adsense"] as const;
@@ -240,27 +240,58 @@ export interface AdDayRow {
   leads: number;
 }
 
+/**
+ * A set of campaign-days added up. Clicks, click-through rate and cost per click are on link clicks,
+ * the one click every platform means the same way (Meta's "clicks (all)" count likes and comments
+ * too). Purchases, their value and return on ad spend are on purchases only: Google's conversions
+ * count every action set as one (leads, sign-ups, calls...), so they stay as "conversions" and are
+ * never called purchases. A figure some day doesn't have yet (rows stored before it was read) makes
+ * the total null, never a short count.
+ */
 export interface AdTotals {
   spend: number;
   impressions: number;
+  /** Every click the platform counts (Meta's include likes, comments and profile clicks). */
   clicks: number;
+  /** Clicks on the ad's link (Google: clicks on the ad); null while some day's aren't read yet. */
+  linkClicks: number | null;
+  /** The platform's own conversions: Meta's purchases; Google's every conversion action in "Conversions". */
   conversions: number;
   conversionValue: number;
+  /** Purchases as the platform credits them to its ads; null while some day's aren't read yet. */
+  purchases: number | null;
+  purchaseValue: number | null;
   leads: number;
-  /** Clicks per impression. */
+  /** Link clicks per impression. */
   ctr: number | null;
-  /** Spend per click. */
+  /** Spend per link click. */
   cpc: number | null;
   /** Spend per thousand impressions. */
   cpm: number | null;
-  /** Spend per conversion. */
+  /** Spend per conversion (the platform's own, every conversion action). */
   costPerConversion: number | null;
-  /** Conversion value per unit of spend ("return on ad spend"). */
+  /** Spend per purchase. */
+  costPerPurchase: number | null;
+  /** Purchase value per unit of spend: the platform's own return on ad spend. */
   roas: number | null;
 }
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const ratio = (a: number, b: number) => (b > 0 ? a / b : null);
+/** a ÷ b when both are known. */
+const known = (a: number | null, b: number | null) => (a === null || b === null ? null : ratio(a, b));
+const cents = (n: number | null) => (n === null ? null : r2(n));
+
+/** The sum of a figure some rows may not have yet: null as soon as one hasn't. */
+function sumKnown<R>(rows: R[], pick: (r: R) => number | null): number | null {
+  let sum = 0;
+  for (const r of rows) {
+    const v = pick(r);
+    if (v === null) return null;
+    sum += v;
+  }
+  return sum;
+}
 
 export function adTotals(rows: AdDayRow[]): AdTotals {
   const t = rows.reduce(
@@ -276,46 +307,178 @@ export function adTotals(rows: AdDayRow[]): AdTotals {
     { spend: 0, impressions: 0, clicks: 0, conversions: 0, conversionValue: 0, leads: 0 },
   );
   const spend = r2(t.spend);
-  const conversions = Math.round(t.conversions * 100) / 100;
-  const cpc = ratio(spend, t.clicks);
-  const cpm = ratio(spend * 1000, t.impressions);
-  const cpa = ratio(spend, conversions);
+  const conversions = r2(t.conversions);
+  const linkClicks = sumKnown(rows, (r) => r.linkClicks);
+  const purchases = cents(sumKnown(rows, (r) => r.purchases));
+  const purchaseValue = cents(sumKnown(rows, (r) => r.purchaseValue));
   return {
     spend,
     impressions: t.impressions,
     clicks: t.clicks,
+    linkClicks,
     conversions,
     conversionValue: r2(t.conversionValue),
+    purchases,
+    purchaseValue,
     leads: t.leads,
-    ctr: ratio(t.clicks, t.impressions),
-    cpc: cpc === null ? null : r2(cpc),
-    cpm: cpm === null ? null : r2(cpm),
-    costPerConversion: cpa === null ? null : r2(cpa),
-    roas: ratio(r2(t.conversionValue), spend),
+    ctr: known(linkClicks, t.impressions),
+    cpc: cents(known(spend, linkClicks)),
+    cpm: cents(ratio(spend * 1000, t.impressions)),
+    costPerConversion: cents(ratio(spend, conversions)),
+    costPerPurchase: cents(known(spend, purchases)),
+    roas: known(purchaseValue, spend),
   };
 }
 
-/** One point per day of the range: spend, clicks, conversions and their value, quiet days as zero. */
-export function adSeries(rows: AdDayRow[], range: { from: string; to: string }) {
-  const by = new Map<string, { spend: number; clicks: number; conversions: number; conversionValue: number; impressions: number }>();
+// ---------------------------------------------------------------------------
+// What the stored days cover. A day an ad account has no figures stored for (it was never read, its
+// syncs stopped, or the day hasn't started yet in the account's time zone) is missing: it is never
+// added in as 0, and a total that would need it isn't given.
+// ---------------------------------------------------------------------------
+
+/** The days an account's stored figures cover, both included (the account's own days); null: none stored. */
+export interface AdCoverage {
+  from: string | null;
+  through: string | null;
+}
+
+const NO_COVERAGE: AdCoverage = { from: null, through: null };
+
+/** A closed ad account: the platform says so (error code or the account's own status). */
+export const isClosedAdAccount = (c: { errorCode?: string | null; accountStatus?: string | null }) => c.errorCode === "account_closed" || c.accountStatus === "closed";
+
+/**
+ * The days one account covers: from where its history starts (history_from) to the last day stored
+ * without a gap (synced_through). A closed account spends and earns nothing after it closed, so its
+ * days run on to its own today as real zeros; any other account whose syncs stopped covers only what
+ * it stored. Never synced: nothing.
+ */
+export function accountCoverage(
+  c: { historyFrom: string | null; syncedThrough: string | null; errorCode?: string | null; accountStatus?: string | null },
+  accountToday: string,
+): AdCoverage {
+  if (!c.historyFrom || !c.syncedThrough || c.syncedThrough < c.historyFrom) return NO_COVERAGE;
+  return { from: c.historyFrom, through: isClosedAdAccount(c) && accountToday > c.syncedThrough ? accountToday : c.syncedThrough };
+}
+
+/** Whether a comparison can be worked out from these days: it starts on or after the day they start. */
+export const canCompareFrom = (c: AdCoverage, previous: { from: string }) => c.from !== null && previous.from >= c.from;
+
+/** The days every one of these accounts covers: the latest start to the earliest end (nothing if one has none). */
+export function commonCoverage(list: AdCoverage[]): AdCoverage {
+  if (!list.length) return NO_COVERAGE;
+  let from = "";
+  let through = "9999-12-31";
+  for (const c of list) {
+    if (c.from === null || c.through === null) return NO_COVERAGE;
+    if (c.from > from) from = c.from;
+    if (c.through < through) through = c.through;
+  }
+  return from > through ? NO_COVERAGE : { from, through };
+}
+
+/** The days of `c` after `day` (nothing when none are left). */
+export function coverageAfter(c: AdCoverage, day: string): AdCoverage {
+  if (c.from === null || c.through === null) return NO_COVERAGE;
+  const next = addDays(day, 1);
+  const from = next > c.from ? next : c.from;
+  return from > c.through ? NO_COVERAGE : { from, through: c.through };
+}
+
+/** Whether `c` covers every day of `w`. */
+export const coversDays = (c: AdCoverage, w: { from: string; to: string }) => c.from !== null && c.through !== null && c.from <= w.from && w.to <= c.through;
+
+/** The part of `range` that `c` covers, or null when they don't meet. */
+export function coveredPart(c: AdCoverage, range: { from: string; to: string }): { from: string; to: string } | null {
+  if (c.from === null || c.through === null) return null;
+  const from = c.from > range.from ? c.from : range.from;
+  const to = c.through < range.to ? c.through : range.to;
+  return from <= to ? { from, to } : null;
+}
+
+/**
+ * The days a change is worked out on. Ad platforms report whole days, and a day still running (the
+ * store's today, or an ad account's today in its own zone) holds only part of its figures: set
+ * against a whole day it reads as a drop that never happened. So while the range reaches past
+ * `lastWholeDay` (the last day finished everywhere), the range and the comparison both lose that
+ * many days at their end, and the change is "through" the range's last whole day. A range of running
+ * days only (Today) has nothing to compare: null.
+ */
+export function adComparisonWindows(range: { from: string; to: string }, previous: { from: string; to: string }, lastWholeDay: string) {
+  if (range.to <= lastWholeDay) return { current: { from: range.from, to: range.to }, previous: { from: previous.from, to: previous.to }, trimmed: 0 };
+  if (lastWholeDay < range.from) return null;
+  const trimmed = eachDay(addDays(lastWholeDay, 1), range.to).length;
+  const prevTo = addDays(previous.to, -trimmed);
+  if (prevTo < previous.from) return null;
+  return { current: { from: range.from, to: lastWholeDay }, previous: { from: previous.from, to: prevTo }, trimmed };
+}
+
+/** The last day that is over for the store and for each of these ad accounts, in its own time zone. */
+export function lastWholeAdDay(storeToday: string, accountTodays: readonly string[]): string {
+  let today = storeToday;
+  for (const t of accountTodays) if (t < today) today = t;
+  return addDays(today, -1);
+}
+
+/**
+ * Whether two time zones have the same calendar days: the same local date and time now and half a
+ * year either side (so summer time counts). "Australia/Melbourne" and "Australia/Sydney" do.
+ */
+export function sameDays(a: string, b: string, now: Date): boolean {
+  if (a === b) return true;
+  try {
+    return [0, 182, -182].every((n) => {
+      const t = new Date(now.getTime() + n * 86_400_000);
+      return localDay(t, a) === localDay(t, b) && localTime(t, a).slice(0, 5) === localTime(t, b).slice(0, 5);
+    });
+  } catch {
+    // A zone Intl doesn't know: nothing to tell the merchant.
+    return true;
+  }
+}
+
+/** One day of the ads chart. Every figure is null on a day a counted account has no figures for. */
+export interface AdSeriesDay {
+  day: string;
+  spend: number | null;
+  impressions: number | null;
+  /** Every click the platforms count. */
+  clicks: number | null;
+  /** Link clicks; also null on a covered day whose link clicks aren't read yet. */
+  linkClicks: number | null;
+  conversions: number | null;
+  conversionValue: number | null;
+  /** Also null on a covered day whose purchases aren't read yet. */
+  purchases: number | null;
+  purchaseValue: number | null;
+}
+
+/**
+ * One point per day of the range. A day `coverage` includes and nothing ran on is a real 0; a day
+ * outside it is missing (every figure null). Without a coverage every day counts as covered.
+ */
+export function adSeries(rows: AdDayRow[], range: { from: string; to: string }, coverage?: AdCoverage): AdSeriesDay[] {
+  const by = new Map<string, AdDayRow[]>();
   for (const r of rows) {
-    const d = by.get(r.day) ?? { spend: 0, clicks: 0, conversions: 0, conversionValue: 0, impressions: 0 };
-    d.spend += r.spend;
-    d.clicks += r.clicks;
-    d.conversions += r.conversions;
-    d.conversionValue += r.conversionValue;
-    d.impressions += r.impressions;
-    by.set(r.day, d);
+    const list = by.get(r.day) ?? [];
+    list.push(r);
+    by.set(r.day, list);
   }
   return eachDay(range.from, range.to).map((day) => {
-    const d = by.get(day);
+    if (coverage && !coversDays(coverage, { from: day, to: day })) {
+      return { day, spend: null, impressions: null, clicks: null, linkClicks: null, conversions: null, conversionValue: null, purchases: null, purchaseValue: null };
+    }
+    const t = adTotals(by.get(day) ?? []);
     return {
       day,
-      spend: r2(d?.spend ?? 0),
-      clicks: d?.clicks ?? 0,
-      impressions: d?.impressions ?? 0,
-      conversions: Math.round((d?.conversions ?? 0) * 100) / 100,
-      conversionValue: r2(d?.conversionValue ?? 0),
+      spend: t.spend,
+      impressions: t.impressions,
+      clicks: t.clicks,
+      linkClicks: t.linkClicks,
+      conversions: t.conversions,
+      conversionValue: t.conversionValue,
+      purchases: t.purchases,
+      purchaseValue: t.purchaseValue,
     };
   });
 }
@@ -862,8 +1025,20 @@ export function adsenseTotals(rows: AdsenseDayRow[]): AdsenseTotals {
   };
 }
 
-/** One point per day of the range, quiet days as zero. */
-export function adsenseSeries(rows: AdsenseDayRow[], range: { from: string; to: string }) {
+/** One day of the AdSense chart: every figure null on a day a counted account has no figures for. */
+export interface AdsenseSeriesDay {
+  day: string;
+  earnings: number | null;
+  pageViews: number | null;
+  impressions: number | null;
+  clicks: number | null;
+}
+
+/**
+ * One point per day of the range: a covered day without earnings is a real 0, a day outside
+ * `coverage` is missing (null). Without a coverage every day counts as covered.
+ */
+export function adsenseSeries(rows: AdsenseDayRow[], range: { from: string; to: string }, coverage?: AdCoverage): AdsenseSeriesDay[] {
   const by = new Map<string, { earnings: number; pageViews: number; impressions: number; clicks: number }>();
   for (const r of rows) {
     const d = by.get(r.day) ?? { earnings: 0, pageViews: 0, impressions: 0, clicks: 0 };
@@ -874,9 +1049,20 @@ export function adsenseSeries(rows: AdsenseDayRow[], range: { from: string; to: 
     by.set(r.day, d);
   }
   return eachDay(range.from, range.to).map((day) => {
+    if (coverage && !coversDays(coverage, { from: day, to: day })) return { day, earnings: null, pageViews: null, impressions: null, clicks: null };
     const d = by.get(day);
     return { day, earnings: r2(d?.earnings ?? 0), pageViews: d?.pageViews ?? 0, impressions: d?.impressions ?? 0, clicks: d?.clicks ?? 0 };
   });
+}
+
+/**
+ * Whether an AdSense row's site belongs to the store: the connection's chosen sites
+ * (ad_connections.sites, AdSense's DOMAIN_CODE values), or every site when none are chosen.
+ */
+export function adsenseSiteChosen(sites: readonly string[], site: string): boolean {
+  if (!sites.length) return true;
+  const s = site.trim().toLowerCase();
+  return sites.some((x) => x.trim().toLowerCase() === s);
 }
 
 /** Totals per site, biggest earner first. */

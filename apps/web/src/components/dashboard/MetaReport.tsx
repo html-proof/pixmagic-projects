@@ -5,14 +5,19 @@ import { metaAttributionLabel, type MetaReportMetrics, type MetaReportRow, type 
 import { useApp } from "@/components/AppContext";
 import { Alert } from "@/components/ui";
 import { actionError, api, ApiError, fmtMoney, fmtNum, fmtPct } from "@/lib/api";
-import { fmtRange, fmtTimes } from "./format";
+import { Definitions } from "./AdsCommon";
+import { fmtRange, fmtSpan, fmtTimes } from "./format";
 import { Badge, Panel, type Tone } from "./Primitives";
+import { ReportChange, reportChange } from "./ReportCompare";
 import type { AdsModule, Overview } from "./types";
 
 // ---------------------------------------------------------------------------
-// The Meta Ads report: campaigns, ad sets and ads, or the whole account by placement, device or
-// country, for the dates picked, asked of Meta for exactly those dates (GET .../ads/meta/report). Reach and frequency count each person once over the
-// range, so they're never added up from days. Read-only: there is nothing here that changes an ad.
+// The Meta Ads report: campaigns, ad sets and ads, or the whole account by placement, device,
+// country, age group or gender, for the dates picked, asked of Meta for exactly those dates (GET
+// .../ads/meta/report). Reach and frequency count each person once over the range, so they're
+// never added up from days. Read-only: there is nothing here that changes an ad. When the answer
+// carries the dates compared with (`comparison`), each row shows its change; the dates picked must
+// have ended, so a day still running is never set against whole days.
 // ---------------------------------------------------------------------------
 
 interface Report {
@@ -23,6 +28,8 @@ interface Report {
   rows: MetaReportRow[];
   truncated: boolean;
   attribution: string[];
+  /** The dates compared with, when asked for and given: their totals and each row's figures (by id). */
+  comparison?: { since: string; until: string; totals: MetaReportMetrics; rows: Array<{ id: string } & Partial<MetaReportMetrics>> };
 }
 interface Answer {
   account: { id: string; accountId: string; name: string | null; currency: string | null; timezone: string | null };
@@ -38,6 +45,8 @@ const LEVELS: Array<{ id: MetaReportView; label: string; one: string }> = [
   { id: "placement", label: "Placements", one: "Placement" },
   { id: "device", label: "Devices", one: "Device" },
   { id: "country", label: "Countries", one: "Country" },
+  { id: "age", label: "Age", one: "Age group" },
+  { id: "gender", label: "Gender", one: "Gender" },
 ];
 
 /** Meta's effective_status in words, and how worried to be about it. */
@@ -91,7 +100,18 @@ function Cells({ m, money }: { m: MetaReportMetrics; money: (n: number | null) =
   );
 }
 
-const HEADINGS = ["Spent", "Impressions", "Reach", "Frequency", "Link clicks", "Link click rate", "Per link click", "Per 1,000 impressions", "Purchases", "Per purchase", "Purchase value", "Return"];
+const HEADINGS = ["Spent", "Impressions", "Reach", "Frequency", "Link clicks", "Link click rate", "Per link click", "Per 1,000 impressions", "Purchases", "Per purchase", "Purchase value", "Purchase ROAS"];
+
+const DEFINITIONS: Array<[string, string]> = [
+  ["Reach", "People who saw an ad at least once in these dates, each counted once."],
+  ["Frequency", "Impressions ÷ reach: how many times each person saw an ad on average."],
+  ["Link clicks", "Clicks on the ad's link. Meta's “clicks (all)”, which also count likes, comments and profile taps, aren't used."],
+  ["Link click rate", "Link clicks ÷ impressions (CTR)."],
+  ["Per link click", "Spend ÷ link clicks (CPC)."],
+  ["Per 1,000 impressions", "Spend × 1,000 ÷ impressions (CPM)."],
+  ["Per purchase", "Spend ÷ the purchases Meta credits to the ads."],
+  ["Purchase ROAS", "Purchase value ÷ spend: Meta's own return on ad spend."],
+];
 
 export function MetaReportPanel({ ov, accounts }: { ov: Overview; accounts: AdsModule["accounts"] }) {
   const { workspace } = useApp();
@@ -102,6 +122,10 @@ export function MetaReportPanel({ ov, accounts }: { ov: Overview; accounts: AdsM
   const [error, setError] = useState<{ message: string; reconnect: boolean } | null>(null);
   const [loading, setLoading] = useState(false);
   const { from, to } = ov.range;
+  // Changes only for dates that are over: a day still running against whole days reads as a drop.
+  const ended = to < ov.today;
+  const cfrom = ended ? ov.previous.from : null;
+  const cto = ended ? ov.previous.to : null;
   const chosen = meta.find((a) => a.id === connection) ?? meta[0];
 
   useEffect(() => {
@@ -109,7 +133,7 @@ export function MetaReportPanel({ ov, accounts }: { ov: Overview; accounts: AdsM
     let live = true;
     setLoading(true);
     setError(null);
-    const qs = new URLSearchParams({ connection: chosen.id, level, from, to });
+    const qs = new URLSearchParams({ connection: chosen.id, level, from, to, ...(cfrom && cto ? { cfrom, cto } : {}) });
     api<Answer>(`/workspaces/${workspace.id}/stores/${ov.store.id}/ads/meta/report?${qs}`)
       .then((a) => live && setAnswer(a))
       .catch((e: unknown) => {
@@ -122,7 +146,7 @@ export function MetaReportPanel({ ov, accounts }: { ov: Overview; accounts: AdsM
       live = false;
     };
     // The account's status changes on every poll; only a different question asks Meta again.
-  }, [workspace.id, ov.store.id, chosen?.id, level, from, to]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [workspace.id, ov.store.id, chosen?.id, level, from, to, cfrom, cto]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!chosen) return null;
   const r = answer?.report;
@@ -130,6 +154,8 @@ export function MetaReportPanel({ ov, accounts }: { ov: Overview; accounts: AdsM
   const money = (n: number | null) => (n === null ? NA : fmtMoney(n, currency));
   const attribution = (r?.attribution ?? []).map(metaAttributionLabel).filter(Boolean).join("; ");
   const includesToday = !!answer && to >= answer.today;
+  const cmp = r?.comparison;
+  const before = new Map((cmp?.rows ?? []).map((row) => [row.id, row]));
 
   return (
     <Panel
@@ -195,15 +221,28 @@ export function MetaReportPanel({ ov, accounts }: { ov: Overview; accounts: AdsM
                       {h}
                     </th>
                   ))}
+                  {cmp && <th className="px-2 pb-2 text-right font-normal">Spend vs before</th>}
+                  {cmp && <th className="px-2 pb-2 text-right font-normal">Purchases vs before</th>}
                 </tr>
               </thead>
               <tbody>
                 <tr className="border-t border-border bg-surface font-medium">
                   <td className="px-2 py-2">Whole ad account</td>
                   <Cells m={r.totals} money={money} />
+                  {cmp && <ReportChange value={reportChange(r.totals.spend, cmp.totals.spend)} neutral />}
+                  {cmp && <ReportChange value={reportChange(r.totals.purchases, cmp.totals.purchases)} />}
                 </tr>
+                {cmp && (
+                  <tr className="border-t border-border text-muted" data-testid="meta-report-before">
+                    <td className="px-2 py-2">Before ({fmtSpan(cmp.since, cmp.until)})</td>
+                    <Cells m={cmp.totals} money={money} />
+                    <td />
+                    <td />
+                  </tr>
+                )}
                 {r.rows.map((row) => {
                   const s = statusOf(row.status);
+                  const was = before.get(row.id);
                   return (
                     <tr key={row.id} className="border-t border-border">
                       <td className="max-w-[18rem] px-2 py-2">
@@ -216,6 +255,8 @@ export function MetaReportPanel({ ov, accounts }: { ov: Overview; accounts: AdsM
                         </span>
                       </td>
                       <Cells m={row} money={money} />
+                      {cmp && <ReportChange value={reportChange(row.spend, was?.spend)} neutral />}
+                      {cmp && <ReportChange value={reportChange(row.purchases, was?.purchases)} />}
                     </tr>
                   );
                 })}
@@ -228,12 +269,19 @@ export function MetaReportPanel({ ov, accounts }: { ov: Overview; accounts: AdsM
             <li>Reach counts each person once over the whole period, so the rows don&apos;t add up to the account&apos;s reach. Frequency is impressions per person reached.</li>
             {r.level === "device" && <li>Devices are the ones the ads were shown on.</li>}
             {r.level === "country" && <li>Countries are where the people who saw your ads were.</li>}
+            {(r.level === "age" || r.level === "gender") && <li>Age groups and genders are Meta&apos;s own totals for the people who saw the ads; nothing here is about any one person.</li>}
+            {cmp ? (
+              <li>Changes compare with {fmtSpan(cmp.since, cmp.until)}, as Meta reports those dates now.</li>
+            ) : !ended ? (
+              <li>Changes show once the dates picked are over: today is still running, so it isn&apos;t set against whole days.</li>
+            ) : null}
             <li>
               Purchases and purchase value are Meta&apos;s own count of sales it credits to these ads
               {attribution ? ` (${attribution})` : ""}. They are not your Shopify orders, and they aren&apos;t added into your store&apos;s sales.
             </li>
             {answer && <li>{answer.cached ? "Fetched from Meta in the last few minutes." : "Fetched from Meta just now."}</li>}
           </ul>
+          <Definitions items={DEFINITIONS} />
         </>
       )}
     </Panel>
