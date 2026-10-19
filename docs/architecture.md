@@ -202,7 +202,10 @@ so every effect has to be cheap for the GPU process:
 start with a secret still set to a value published in this repository, or with a development
 setting that turns a safeguard off (the Auth emulator, a Mailpit relay, a local `APP_URL`). New
 settings go into its schema with a default (or as required), then into `apps/aws/src/settings.ts`
-(or, for a secret, `put-secrets.mjs`) and `apps/aws/.env.example`. Code reads settings through
+(or, for a secret, `put-secrets.mjs`) and `apps/aws/.env.example`. A new provider with a public id
+and a secret also adds that pair to `providerCredentials` in `packages/core/src/configReport.ts`,
+so the deploy's config check warns when the id is set and the secret isn't (and a shape for the
+secret to `put-secrets.mjs`, if it has a recognisable one). Code reads settings through
 `env()`, not `process.env`. The exceptions are deliberate: the logger (`LOG_LEVEL`), the database
 connections (`DATABASE_URL` / `APP_DATABASE_URL`), per-app Shopify secrets whose names are dynamic
 (`SHOPIFY_APP_SECRET_<KEY>`), and `apps/aws`, which puts the secrets into `process.env` at cold start
@@ -265,8 +268,10 @@ components; then `worker/handlers.ts` (one module per job in `worker/src/handler
 
 What is left is not a move:
 
-- `appsecret_proof` on Meta Graph calls: one line in `graphCall` once the owner decides "Require
-  App Secret" per Meta app (a merchant's own WhatsApp app has a secret we don't hold).
+- `appsecret_proof` on WhatsApp's Meta Graph calls. The ads calls send it (every
+  call made with a person's token, `metaGraph.ts` with the ads app's secret), so "Require App
+  Secret" can be turned on for the ads app "Insights" once that is deployed. WhatsApp still sends none: a merchant's own
+  WhatsApp app has a secret we don't hold.
 - `noUncheckedIndexedAccess` in `apps/web` (437 findings, nearly all in landing animations): a pass
   with visual checks.
 - No formatter (Prettier) or import sorting: one repository-wide reformat, at a moment when no

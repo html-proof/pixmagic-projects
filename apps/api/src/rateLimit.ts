@@ -24,8 +24,19 @@ export const LIMITS = {
   codeIp: { max: 10, windowSec: 3600 },
   /** Guesses at emailed codes (sign-up confirmation, password reset, sign-in), per IP. */
   codeVerifyIp: { max: 20, windowSec: 900 },
+  /**
+   * Guesses at a code we email ourselves to claim an address nobody proved (auth.ts, address
+   * claims), per address: Cognito's own lockout doesn't stand behind these.
+   */
+  claimVerifyEmail: { max: 5, windowSec: 3600 },
   /** "Continue with Google" started and finished, per IP. */
   oauthIp: { max: 30, windowSec: 300 },
+  /**
+   * Codes from an authenticator app (two-step verification: signing in, setting it up), per IP
+   * and per account. Six digits are a million guesses; Cognito also ends a sign-in after a few wrong ones.
+   */
+  mfaVerifyIp: { max: 20, windowSec: 900 },
+  mfaVerifyAccount: { max: 10, windowSec: 900 },
   /** Password, email and account changes, per user. */
   accountChange: { max: 10, windowSec: 3600 },
 
@@ -73,10 +84,20 @@ export const LIMITS = {
   inventoryMedia: { max: 120, windowSec: 600 },
   /** Optional-scope refresh/revoke, per store: one Shopify call each. */
   scopes: { max: 3, windowSec: 10 },
+  /**
+   * Starting an ad account sign-in ("Continue with Meta / Google Ads / AdSense"), per user: each writes
+   * a coordinator item, and its callback lists the login's accounts against the platform's quota (Google
+   * Ads operations are shared by every merchant). The callback needs a fresh one, so this bounds it too.
+   */
+  adsConnect: { max: 10, windowSec: 600 },
   /** Ad accounts "Sync now", per store and user: each queues a sync per connected account. */
   adsSync: { max: 6, windowSec: 600 },
-  /** Meta Ads report, per store and user: each one is a few Meta calls (a cached answer doesn't count). */
+  /** Meta, Google Ads and AdSense reports, per store and user: each one is a few platform calls (a cached answer doesn't count). */
   adsReport: { max: 30, windowSec: 600 },
+  /** The status page of a Meta data deletion request, per IP (a code is 80 random bits; this only slows guessing). */
+  metaDeletionStatusIp: { max: 60, windowSec: 600 },
+  /** Meta's callbacks refused (a signed_request that doesn't verify), per IP: past it they're answered 429 and no longer logged. Meta's own aren't counted. */
+  metaCallbackRefusedIp: { max: 20, windowSec: 600 },
   /** WhatsApp: connecting a number (Meta calls each), per store. */
   waConnect: { max: 10, windowSec: 600 },
   /** WhatsApp: "Refresh" (number and templates from Meta), per store. */

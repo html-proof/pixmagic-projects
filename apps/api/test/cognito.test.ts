@@ -56,10 +56,12 @@ describe("the user-pool API", () => {
     });
   });
 
-  it("refreshes with the Cognito user name in SECRET_HASH, not the email", async () => {
+  it("refreshes with the user's sub in SECRET_HASH (the pool signs in with email, not a user name)", async () => {
     const net = network(() => json({ AuthenticationResult: { IdToken: "id", AccessToken: "at", ExpiresIn: 3600 } }));
-    await cognitoAuth(CFG, net.fetchImpl).refresh("the-rt", "google_123");
-    expect(JSON.parse(net.seen[0]!.body).AuthParameters).toEqual({ REFRESH_TOKEN: "the-rt", SECRET_HASH: secretHash("google_123") });
+    // A Google user: user name google_123, sub a UUID. AWS: without `username` as a sign-in
+    // attribute, a refresh's hash is keyed by the sub.
+    await cognitoAuth(CFG, net.fetchImpl).refresh("the-rt", "6f1d1c4e-0000-4000-8000-000000000001");
+    expect(JSON.parse(net.seen[0]!.body).AuthParameters).toEqual({ REFRESH_TOKEN: "the-rt", SECRET_HASH: secretHash("6f1d1c4e-0000-4000-8000-000000000001") });
   });
 
   it("uses GetTokensFromRefreshToken (with the client secret) when rotation is on", async () => {
@@ -73,7 +75,7 @@ describe("the user-pool API", () => {
   it("signs administrator calls with SigV4 for cognito-idp in the pool's region", async () => {
     const net = network(() => json({ Username: "uuid-1", UserAttributes: [{ Name: "sub", Value: "uuid-1" }, { Name: "email", Value: "a@x.com" }, { Name: "email_verified", Value: "true" }], Enabled: true, UserStatus: "CONFIRMED" }));
     const u = await cognitoAuth(CFG, net.fetchImpl).adminGetUser("a@x.com");
-    expect(u).toEqual({ username: "uuid-1", sub: "uuid-1", email: "a@x.com", emailVerified: true, enabled: true, status: "CONFIRMED" });
+    expect(u).toEqual({ username: "uuid-1", sub: "uuid-1", email: "a@x.com", emailVerified: true, enabled: true, status: "CONFIRMED", mfaEnabled: false });
     const auth = net.seen[0]!.headers.get("authorization")!;
     expect(auth).toMatch(/^AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE\/\d{8}\/ap-southeast-2\/cognito-idp\/aws4_request, SignedHeaders=[^,]*x-amz-target[^,]*, Signature=[0-9a-f]{64}$/);
     expect(net.seen[0]!.headers.get("x-amz-date")).toMatch(/^\d{8}T\d{6}Z$/);
@@ -105,6 +107,57 @@ describe("the user-pool API", () => {
     );
     await expect(cognitoAuth(CFG, net.fetchImpl).adminCreateUser({ email: "c@x.com", emailVerified: true, password: "short" })).rejects.toMatchObject({ code: "InvalidPasswordException" });
     expect(net.seen.map(target)).toEqual(["AdminCreateUser", "AdminSetUserPassword", "AdminDeleteUser"]);
+  });
+
+  it("reads whether a user's sign-in asks for an authenticator app's code", async () => {
+    const answer = (list?: string[]) => network(() => json({ Username: "uuid-1", UserAttributes: [{ Name: "sub", Value: "uuid-1" }], UserStatus: "CONFIRMED", ...(list && { UserMFASettingList: list, PreferredMfaSetting: list[0] }) }));
+    expect((await cognitoAuth(CFG, answer(["SOFTWARE_TOKEN_MFA"]).fetchImpl).adminGetUser("uuid-1"))?.mfaEnabled).toBe(true);
+    expect((await cognitoAuth(CFG, answer(["SMS_MFA"]).fetchImpl).adminGetUser("uuid-1"))?.mfaEnabled).toBe(false);
+    expect((await cognitoAuth(CFG, answer().fetchImpl).adminGetUser("uuid-1"))?.mfaEnabled).toBe(false);
+  });
+
+  it("sets up two-step verification with the person's own access token, unsigned", async () => {
+    const net = network((s) =>
+      target(s) === "AssociateSoftwareToken" ? json({ SecretCode: "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP" }) : target(s) === "VerifySoftwareToken" ? json({ Status: "SUCCESS" }) : json({}),
+    );
+    const auth = cognitoAuth(CFG, net.fetchImpl);
+    expect(await auth.associateTotp("the-at")).toEqual({ secret: "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP" });
+    expect(await auth.verifyTotp("the-at", "123456")).toBe(true);
+    await auth.setTotpEnabled("the-at", true);
+    await auth.setTotpEnabled("the-at", false);
+    expect(net.seen.map(target)).toEqual(["AssociateSoftwareToken", "VerifySoftwareToken", "SetUserMFAPreference", "SetUserMFAPreference"]);
+    for (const s of net.seen) expect(s.headers.get("authorization")).toBeNull();
+    expect(JSON.parse(net.seen[0]!.body)).toEqual({ AccessToken: "the-at" });
+    expect(JSON.parse(net.seen[1]!.body)).toEqual({ AccessToken: "the-at", UserCode: "123456", FriendlyDeviceName: "bizinsights" });
+    expect(JSON.parse(net.seen[2]!.body)).toEqual({ AccessToken: "the-at", SoftwareTokenMfaSettings: { Enabled: true, PreferredMfa: true } });
+    expect(JSON.parse(net.seen[3]!.body)).toEqual({ AccessToken: "the-at", SoftwareTokenMfaSettings: { Enabled: false, PreferredMfa: false } });
+    const notYet = network(() => json({ Status: "ERROR" }));
+    expect(await cognitoAuth(CFG, notYet.fetchImpl).verifyTotp("the-at", "000000")).toBe(false);
+  });
+
+  it("answers the sign-in's SOFTWARE_TOKEN_MFA challenge as the user the challenge names (USER_ID_FOR_SRP), with its session and SECRET_HASH", async () => {
+    const net = network((s) =>
+      JSON.parse(s.body).AuthFlow === "USER_PASSWORD_AUTH"
+        ? json({ ChallengeName: "SOFTWARE_TOKEN_MFA", Session: "cognito-session-xyz", ChallengeParameters: { USER_ID_FOR_SRP: "uuid-1", FRIENDLY_DEVICE_NAME: "bizinsights" } })
+        : json({ AuthenticationResult: { IdToken: "id", AccessToken: "at", RefreshToken: "rt", ExpiresIn: 3600 } }),
+    );
+    const auth = cognitoAuth(CFG, net.fetchImpl);
+    const challenge = await auth.passwordSignIn("a@x.com", "pw");
+    // The pool signs in by email, but names its users by a UUID: the answer must use that name.
+    expect(challenge).toEqual({ challenge: "SOFTWARE_TOKEN_MFA", session: "cognito-session-xyz", username: "uuid-1" });
+    expect(await auth.answerTotpChallenge("uuid-1", "cognito-session-xyz", "654321")).toEqual({ tokens: { idToken: "id", accessToken: "at", refreshToken: "rt", expiresIn: 3600 } });
+    expect(target(net.seen[1]!)).toBe("RespondToAuthChallenge");
+    expect(JSON.parse(net.seen[1]!.body)).toEqual({
+      ClientId: "client123",
+      ChallengeName: "SOFTWARE_TOKEN_MFA",
+      Session: "cognito-session-xyz",
+      ChallengeResponses: { USERNAME: "uuid-1", SOFTWARE_TOKEN_MFA_CODE: "654321", SECRET_HASH: secretHash("uuid-1") },
+    });
+    const wrong = network(() => json({ __type: "CodeMismatchException", message: "Invalid code received for user" }, 400));
+    await expect(cognitoAuth(CFG, wrong.fetchImpl).answerTotpChallenge("uuid-1", "s", "000000")).rejects.toMatchObject({ code: "CodeMismatchException" });
+    // A challenge without the name (none seen so far) leaves it out; the caller then uses the email.
+    const bare = network(() => json({ ChallengeName: "SOFTWARE_TOKEN_MFA", Session: "cognito-session-xyz" }));
+    expect(await cognitoAuth(CFG, bare.fetchImpl).passwordSignIn("a@x.com", "pw")).toEqual({ challenge: "SOFTWARE_TOKEN_MFA", session: "cognito-session-xyz" });
   });
 
   it("tells a refusal apart from an outage", async () => {

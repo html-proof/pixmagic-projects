@@ -16,7 +16,7 @@ Account `605411278365`, region `ap-southeast-2` (Sydney); the WAF web ACL lives 
 | UI + API | Lambda `insights-production-api` (function URL, alias `live`) behind CloudFront + WAF | `apps/aws/src/index.ts` |
 | UI build files | `/_next/static/*` from S3 `insights-production-site-605411278365` (CloudFront OAC, uploaded by `cdk deploy`, old builds kept) | `infra/cdk/lib/app-stack.ts` |
 | Background jobs | SQS `insights-production-{sync,webhooks,aggregate,email}` + `-dlq` → Lambda `insights-production-jobs` | `apps/aws/src/consumer.ts`, `sqsQueues.ts` |
-| Schedules | EventBridge Scheduler `*/15` and `03:15 UTC` → Lambda `insights-production-cron` (**off until cutover**) | `runScheduled()` in `apps/worker` |
+| Schedules | EventBridge Scheduler `*/15` and `03:15 UTC` → Lambda `insights-production-cron` (on since 2026-10-16: GitHub variable `AWS_SCHEDULES=on`) | `runScheduled()` in `apps/worker` |
 | Database | RDS PostgreSQL 17 `insights-production` (db.t4g.micro, Multi-AZ: standby in the other AZ, private, encrypted, 14-day PITR) | `infra/cdk/lib/data-stack.ts` |
 | Way out to the internet | EC2 NAT instances `insights-production-nat-a` / `-b` (t4g.nano, one per AZ, Systems Manager only) | `infra/cdk/lib/nat-instances.ts` |
 | Coordinator | DynamoDB `insights-production-coord` | `apps/aws/src/dynamoCoord.ts` |
@@ -62,6 +62,48 @@ SESSION_SECRET and APP_RLS_PASSWORD, and prints key names only. A secret only it
 node infra/cdk/scripts/put-secrets.mjs --set META_APP_SECRET
 ```
 
+`--set` refuses a value that hasn't that secret's shape (a Meta app secret is 32 letters and digits,
+a Google one starts with `GOCSPX-`, ...) or that is one of the app's public settings, such as the App
+ID copied instead of the secret: it then asks for the value instead, and saves nothing if that is
+wrong too.
+
+**Which provider secrets are there.** `node infra/cdk/scripts/put-secrets.mjs --dry-run` changes
+nothing and ends with `keys now:`, the names (never the values) of everything in
+`insights/production/app`. Each provider whose public id is in `apps/aws/src/settings.ts` needs its
+secret among them:
+
+| Public id in settings.ts | Secret | Without it |
+| --- | --- | --- |
+| `META_APP_ID` | `META_APP_SECRET` | Meta Ads says "Coming soon"; Meta connections stop syncing |
+| `GOOGLE_ADS_CLIENT_ID` | `GOOGLE_ADS_CLIENT_SECRET` (the "Insights web" client's) | Google Ads and AdSense say "Coming soon"; their connections stop syncing |
+| `WHATSAPP_CONFIG_ID` (empty today), on the app `WHATSAPP_APP_ID` (else `META_APP_ID`) | `WHATSAPP_APP_SECRET` (`META_APP_SECRET` serves when WhatsApp is on the Meta Ads app) | Connect WhatsApp Business (Embedded Signup) can't be turned on; manual WhatsApp connections still work |
+| `SHOPIFY_API_KEY`, each app in `SHOPIFY_EXTRA_APPS` | `SHOPIFY_API_SECRET`, `SHOPIFY_APP_SECRET_<KEY>` | That Shopify app's stores can't install or refresh their access |
+| `EMAIL_GOOGLE_CLIENT_ID`, `EMAIL_MICROSOFT_CLIENT_ID` (empty today) | `EMAIL_GOOGLE_CLIENT_SECRET`, `EMAIL_MICROSOFT_CLIENT_SECRET` | Connect Gmail / Outlook says it isn't set up |
+
+Embedded Signup is off until `WHATSAPP_CONFIG_ID` is set, so until then nothing warns about
+WhatsApp's secret: the check's line on the Deploy run names what it still needs instead
+("WhatsApp Embedded Signup off (needs WHATSAPP_CONFIG_ID, WHATSAPP_APP_SECRET)").
+
+Every deploy also checks this from the cron function itself (smoke tests, "app configuration read
+from the cron function"): each provider in that state is a warning on the Deploy run's summary
+("Meta Ads isn't set up"), with the `put-secrets.mjs --env <env> --set <NAME>` command to run, and
+the functions log `public id set but secret missing` once per cold start. Neither fails the deploy.
+If the function gives no answer (throttled, timed out, the runner's network), the run says
+"Provider secrets weren't checked" instead, and passes; only an error from the function itself, twice,
+fails the smoke tests (and rolls back). To check by hand at any time, ask the cron function (booleans
+and setting names only, never a value):
+
+```powershell
+aws lambda invoke --function-name insights-production-cron:live --cli-binary-format raw-in-base64-out --payload '{\"action\":\"config\"}' config.json
+```
+
+`config.json` then says which ad platforms, email integrations and sign-in options are on, what
+WhatsApp Embedded Signup still needs (`whatsapp.embeddedSignupNeeds`), and lists under
+`halfConfigured` each provider whose secret is missing. After adding one with `--set`, run
+**Deploy to AWS** (Actions → Run workflow, on `main`) so new instances read it. For another
+environment, pass `--env <name>` to `put-secrets.mjs` and use `insights-<name>-cron:live`, then
+deploy that environment again by hand (`cdk deploy --all -c env=<name>`).
+
 The functions read secrets at cold start; after changing one, force fresh instances with a deploy,
 or publish the same code as a new version and move the `live` alias ("App email" below shows how:
 changing `$LATEST` alone restarts nothing live).
@@ -76,7 +118,7 @@ deploy` → migrate → smoke tests → automatic rollback of the `live` aliases
 signs in with GitHub OIDC (role in the `InsightsCi-production` stack), no AWS keys in GitHub.
 One-time setup in the repository's Settings → Environments → `production`: variable
 `AWS_DEPLOY_ROLE_ARN` (the stack's `DeployRoleArn` output), optional `AWS_ALERT_EMAIL`,
-`GOOGLE_SIGNIN_CLIENT_ID` and `AWS_SCHEDULES` (`on` after cutover). Required reviewers and branch
+`GOOGLE_SIGNIN_CLIENT_ID` and `AWS_SCHEDULES` (`on` since 2026-10-16). Required reviewers and branch
 rules for an environment need a paid plan for a private repository; the role's trust does that job.
 
 The role admits a token only when all of these claims match exactly (`githubDeployClaims` in
@@ -436,9 +478,12 @@ job signs in only with the OIDC deploy role and checks that it did.
 headers, HTTPS redirect, `/api/readyz` (database as owner and tenant role, coordinator), 401 on
 protected routes, the Cognito wiring (a password-reset request for an address that doesn't exist),
 CSRF, CORS, Shopify HMAC refusal, that the function URL refuses requests that skip CloudFront, and
-on the AWS side: database private and encrypted, buckets private, functions healthy, DLQ empty,
-and that the public address runs what was deployed: `https://bizinsights.io/api/version` must name
-the commit checked out where smoke.mjs runs, and the api function's `live` alias version as its
+on the AWS side: database private and encrypted, buckets private, functions healthy, what the app
+has set up (the cron action `config`; a provider whose secret is missing is a `::warning::`, not a
+failure, and so is no answer from the function; only an error from the function fails it: "Which
+provider secrets are there" above), DLQ empty, and that the public address runs
+what was deployed: `https://bizinsights.io/api/version` must name the commit checked out where
+smoke.mjs runs, and the api function's `live` alias version as its
 `release`. Run it from the deployed commit (a checkout of another commit fails that one check).
 Sign-up and sign-in with a real address are the owner's to try (they need a mailbox).
 
@@ -522,8 +567,9 @@ the Auth stack with `-c cognitoEmail=off` ("Sign-in emails" below).
 > from the PC database (old pixel/funnel history, users who haven't come back) and merge it in.
 
 Before the window: provider secrets the stores in use need (`GOOGLE_ADS_CLIENT_SECRET` for AdSense
-refreshes; `SHOPIFY_APP_SECRET_PIXMAGIC` is set) with `put-secrets.mjs --set`, and the AWS redirect
-URIs added at Google. A new secret reaches the functions only when they start, so run **Deploy to
+refreshes; `SHOPIFY_APP_SECRET_PIXMAGIC` is set) with `put-secrets.mjs --set`, and the bizinsights.io
+redirect URIs registered at Google and Meta (needed already, whatever the cutover: "Owner-only steps"
+below). A new secret reaches the functions only when they start, so run **Deploy to
 AWS** (Actions → Run workflow) after setting one. The Cloudflare commands below run from
 `apps/cloudflare` in a checkout of the old code ([below](#retiring-the-old-cloudflare-deployment)).
 
@@ -535,8 +581,8 @@ AWS** (Actions → Run workflow) after setting one. The Cloudflare commands belo
    deploy <that version>@100% -y`. Pages say "moving", the API answers 503 + Retry-After, so Shopify
    holds webhooks. From here the PC database no longer changes.
 2. **Final copy:** `node infra/cdk/scripts/migrate-data.mjs --replace` (wipes the AWS copy first).
-3. **Schedules on:** GitHub variable `AWS_SCHEDULES=on`, then the next Deploy to AWS (the merge of the
-   Shopify URL change in step 4) turns them on.
+3. **Schedules on:** done. The GitHub variable `AWS_SCHEDULES` is `on` since 2026-10-16, so every
+   Deploy to AWS keeps the schedules on.
 4. **Shopify:** done. Both apps are live on `https://bizinsights.io`: the main app since version
    `insights-13` (now `insights-14`), the PixMagic app since version `pixmagic-7` (2026-10-16, webhooks
    API 2026-10).
@@ -650,6 +696,10 @@ for f in api jobs cron; do n=insights-production-$f; d=$(aws lambda get-function
 Check first that `$LATEST` holds the live code (same `CodeSha256` as the alias's version), or this
 would ship whatever `$LATEST` has.
 
+A Deploy to AWS run does this by itself when the deploy changed `/insights/production/runtime` (its
+step "Restart the functions on changed runtime settings", with the run's id in the description): a
+secret changed in Secrets Manager alone still needs the loop above.
+
 ## Sign-in emails (Cognito's codes)
 
 Cognito doesn't send its own emails in production: sign-up and email-change codes, password-reset
@@ -687,17 +737,32 @@ share Resend's limits with the app's email (free tier: 100 a day, 3,000 a month)
   US$29/month or 9% of the bill). Basic support is free; switch in Support Center → Support plans →
   Basic Support → Review downgrade. AWS refuses until the 30-day minimum ends (tried 2026-10-18), so
   from 2026-11-14 ~04:43 UTC; a one-time reminder task (`aws-support-plan-to-basic`) fires that day.
-- **Sign-up codes and password resets** come from Cognito's own email (`COGNITO_DEFAULT`): any
-  address, but at most 50 a day for the whole pool, from `no-reply@verificationemail.com`. Going past
-  that needs Cognito on SES (production access, denied so far) or a Cognito custom email sender
-  (a Lambda trigger + a KMS key, ~US$1/month) sending through Resend.
-- **Google sign-in**: add `https://insights-605411278365.auth.ap-southeast-2.amazoncognito.com/oauth2/idpresponse`
-  to a Google OAuth client, put its secret with `put-secrets.mjs --set GOOGLE_SIGNIN_CLIENT_SECRET`,
-  deploy with `-c googleClientId=<client id>`.
-- **Provider secrets** not on this PC: META_APP_SECRET, GOOGLE_ADS_CLIENT_SECRET, WHATSAPP_APP_SECRET,
-  WHATSAPP_WEBHOOK_VERIFY_TOKEN (`put-secrets.mjs --set`, then a Deploy to AWS run).
-- **Custom domain**: done, bizinsights.io (above). Provider consoles still list the old addresses:
-  Google/Meta OAuth redirect URIs move to `https://bizinsights.io/api/...` with the cutover. Both
+- **Google sign-in**: the steps are in [cognito-setup.md](cognito-setup.md), section 2: an OAuth
+  client in a Google Cloud project of its own (only `openid`, `email`, `profile`; not
+  `insights-511119`) with the redirect URI
+  `https://insights-605411278365.auth.ap-southeast-2.amazoncognito.com/oauth2/idpresponse`, its secret
+  through `put-secrets.mjs --set GOOGLE_SIGNIN_CLIENT_SECRET`, the GitHub `production` environment
+  variable `GOOGLE_SIGNIN_CLIENT_ID`, then a Deploy to AWS run (no hand deploy), which restarts the
+  functions when the runtime settings change. The run that first gives the deploy role that
+  permission (ci-stack.ts) read the settings before it had it, so it can't tell and only warns: if
+  that same run switched Google on, restart them by hand once ("Restarting the functions", above).
+  Sign-in codes already go out through Resend
+  ("Sign-in emails" above).
+- **Provider secrets**: nothing records that META_APP_SECRET (Meta app 971575545351940, App settings →
+  Basic) and GOOGLE_ADS_CLIENT_SECRET (Google Cloud client "Insights web") were put in
+  `insights/production/app` after the move from Cloudflare (the old Worker's values didn't move by
+  themselves), nor WHATSAPP_APP_SECRET and WHATSAPP_WEBHOOK_VERIFY_TOKEN (needed once Embedded
+  Signup gets its `WHATSAPP_CONFIG_ID`). Check with
+  `put-secrets.mjs --dry-run` ("Which provider secrets are there" above; the Deploy run's warnings
+  say the same), add each missing one with `put-secrets.mjs --set <NAME>`, then run Deploy to AWS.
+  Until then Meta Ads, Google Ads and AdSense say "Coming soon" and their connections don't sync.
+- **Custom domain**: done, bizinsights.io (above). The app has sent only bizinsights.io callbacks since
+  2026-10-16, so Google and Meta need these redirect URIs registered now (exactly, and nothing on the old
+  hosts once nothing uses them): `https://bizinsights.io/api/ads/google/callback` and
+  `https://bizinsights.io/api/ads/adsense/callback` on the Google client "Insights web";
+  `https://bizinsights.io/api/ads/meta/callback` in Facebook Login for Business of Meta app
+  971575545351940 (steps in [ads-review-packs.md](ads-review-packs.md)); and, once their clients
+  exist, `https://bizinsights.io/api/email/oauth/google/callback` and `.../microsoft/callback`. Both
   Shopify apps are already there (main `insights-14`, PixMagic `pixmagic-7`). To go back to an
   earlier Shopify version, use the Dev Dashboard (the app → **Versions** → that version →
   **Release**): `shopify app release --version <tag>` answers "could not be found" for every version

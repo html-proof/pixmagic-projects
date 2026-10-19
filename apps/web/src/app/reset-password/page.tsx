@@ -76,8 +76,9 @@ export default function ResetPasswordPage() {
         large
         extraValid={!weak && !mismatch && !!password && !!confirm}
         onSubmit={async (code) => {
-          await resetPassword({ email, code, password, confirmPassword: confirm });
-          router.replace("/login?reset=1");
+          const r = await resetPassword({ email, code, password, confirmPassword: confirm });
+          // Google still signs in to the account: the sign-in page asks them to check it's theirs.
+          router.replace(r.otherMethods?.includes("google") ? "/login?resetGoogle=1" : "/login?reset=1");
         }}
         onResend={() => forgotPassword(email)}
       >

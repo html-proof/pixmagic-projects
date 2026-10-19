@@ -241,7 +241,7 @@ export function noEarlierData(historyFrom: string | null | undefined, source: Hi
     case "adsense": {
       const what = source === "ads" ? "ad figures" : "AdSense figures";
       return day
-        ? `No earlier data: bizinsights has your ${what} from ${day} on, so they aren't compared with dates before that. An account brings the 90 days before it was connected.`
+        ? `No earlier data: bizinsights has your ${what} from ${day} on, so they aren't compared with dates before that. A new account brings its last 90 days first, then earlier days back to 25 months, a few months at a time.`
         : `No earlier data: your ${source === "ads" ? "ad accounts haven't" : "AdSense account hasn't"} been read yet, so nothing is compared.`;
     }
     default: {

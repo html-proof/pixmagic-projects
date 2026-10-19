@@ -5,7 +5,13 @@ import type { FetchLike } from "@app/core";
  * Secrets for AWS hosting come from Secrets Manager at cold start, never from the function's
  * environment (which anyone who can read the function's configuration can see):
  *
- *  - APP_SECRET_ARN: SESSION_SECRET, TOKEN_ENCRYPTION_KEYS, OTP_PEPPER, APP_RLS_PASSWORD
+ *  - APP_SECRET_ARN (insights/<env>/app): every key it holds is copied, whatever its name. The
+ *    app's own: SESSION_SECRET, TOKEN_ENCRYPTION_KEYS, OTP_PEPPER, APP_RLS_PASSWORD. The providers'
+ *    (each set with infra/cdk/scripts/put-secrets.mjs; one missing turns that provider off):
+ *    META_APP_SECRET, GOOGLE_ADS_CLIENT_SECRET, GOOGLE_SIGNIN_CLIENT_SECRET, WHATSAPP_APP_SECRET,
+ *    WHATSAPP_WEBHOOK_VERIFY_TOKEN, EMAIL_GOOGLE_CLIENT_SECRET, EMAIL_MICROSOFT_CLIENT_SECRET,
+ *    EMAIL_CREDENTIAL_KEYS, RESEND_API_KEY, RESEND_WEBHOOK_SECRET, SHOPIFY_API_SECRET and
+ *    SHOPIFY_APP_SECRET_<KEY> (one per Shopify app)
  *  - COGNITO_WORKER_SECRET_ARN: COGNITO_CLIENT_SECRET, COGNITO_ADMIN_* (infra/aws/cognito.yaml)
  *  - DB_SECRET_ARN: the database owner's secret ({ username, password })
  *  - RUNTIME_PARAM: an SSM parameter (JSON, not secret) with APP_URL and the Cognito ids

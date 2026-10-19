@@ -617,6 +617,20 @@ describe("opening the dashboard straight from the invitation link", () => {
     expect(team.summary).toMatchObject({ totalMembers: 2, pendingInvitations: 0 });
   });
 
+  it("never lands on an account for the address that nobody verified but someone can sign in to", async () => {
+    const b = await business();
+    const token = await sendInvite(b, "squatted@example.com");
+    // Someone else made an account for that address and set its password, without proving the inbox.
+    const squat = await systemDb.user.create({ data: { email: "squatted@example.com", emailVerified: false } });
+    await systemDb.authIdentity.create({ data: { userId: squat.id, provider: "cognito", subject: "sub-squat", username: "squat-user", method: "password", email: "squatted@example.com" } });
+    const res = await open(token);
+    expect(res.statusCode, res.body).toBe(409);
+    expect(res.json().error).toBe("account_unverified");
+    expect(res.headers["set-cookie"] ?? "").not.toContain("__share=");
+    expect(await systemDb.membership.count({ where: { workspaceId: b.ws, userId: squat.id } })).toBe(0);
+    expect((await systemDb.invitation.findFirstOrThrow({ where: { workspaceId: b.ws, email: "squatted@example.com" } })).acceptedAt).toBeNull();
+  });
+
   it("keeps working after the first time (another device), and stops once their access is revoked", async () => {
     const b = await business();
     const token = await sendInvite(b, "again@example.com");

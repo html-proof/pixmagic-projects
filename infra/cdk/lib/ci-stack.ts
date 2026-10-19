@@ -8,8 +8,8 @@ import { type EnvConfig, githubClaimConditions, githubDeployClaims, githubTrustC
  * GitHub's OIDC token is exchanged for this role, no AWS access keys are stored in GitHub. Only
  * the deploy workflow file, run from main in the `production` environment of the one repository,
  * may assume it (githubDeployClaims), and it can do little itself: hand off to the CDK bootstrap
- * roles (which deploy the stacks), run the migrate action, read what the smoke tests check, and
- * move the `live` aliases back for a rollback.
+ * roles (which deploy the stacks), run the migrate action, read what the smoke tests check, restart
+ * the functions when their runtime settings changed, and move the `live` aliases back for a rollback.
  */
 export class CiStack extends Stack {
   constructor(scope: Construct, id: string, cfg: EnvConfig, props: StackProps) {
@@ -50,9 +50,23 @@ export class CiStack extends Stack {
       }),
     );
     role.addToPolicy(new iam.PolicyStatement({ actions: ["cloudformation:DescribeStacks"], resources: [`arn:aws:cloudformation:*:${cfg.account}:stack/Insights*-${cfg.name}/*`] }));
+    const prefix = `insights-${cfg.name}`;
+    // The workflow's "Restart the functions on changed runtime settings": it compares the runtime
+    // parameter (not secret) before and after `cdk deploy`, and when it changed (Google switched on,
+    // say) publishes api, jobs and cron again with a new description and moves `live` (UpdateAlias,
+    // above). One grant, exactly these: with the read alone, the first deploy that changes the
+    // parameter would fail at the publish and roll back. Nothing new is within reach: the CDK
+    // deploy roles this role assumes already change these functions, and changing their execution
+    // role would also need iam:PassRole, which it hasn't.
+    role.addToPolicy(new iam.PolicyStatement({ actions: ["ssm:GetParameter"], resources: [`arn:aws:ssm:${cfg.region}:${cfg.account}:parameter/insights/${cfg.name}/runtime`] }));
+    role.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ["lambda:UpdateFunctionConfiguration", "lambda:PublishVersion"],
+        resources: ["api", "jobs", "cron"].map((f) => `arn:aws:lambda:${cfg.region}:${cfg.account}:function:${prefix}-${f}`),
+      }),
+    );
     // Read-only facts the workflow's smoke tests check (scripts/smoke.mjs, "AWS side"). Without them
     // those checks fail and the workflow rolls every release back.
-    const prefix = `insights-${cfg.name}`;
     role.addToPolicy(new iam.PolicyStatement({ actions: ["rds:DescribeDBInstances"], resources: [`arn:aws:rds:${cfg.region}:${cfg.account}:db:${prefix}`] }));
     role.addToPolicy(
       new iam.PolicyStatement({

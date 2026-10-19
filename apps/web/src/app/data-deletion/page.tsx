@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { MetaDeletionStatus } from "@/components/integrations/MetaDeletionStatus";
 import { ContactCard, LegalPage, LegalSection, SupportEmail, sectionsOf } from "@/components/legal/LegalPage";
 
 export const metadata: Metadata = {
@@ -15,9 +16,15 @@ export const metadata: Metadata = {
  * token and the data fetched with it, then revokes the platform grant once no other connection relies
  * on it (apps/api/src/routes/ads.ts DELETE .../ads/connections/:id, adConnections.ts
  * revokeAdAccessIfUnused; packages/core/src/whatsapp/connect.ts disconnectWhatsapp), and access the
- * person removes at Google or Meta turns the connection to "reconnect" at its next use.
+ * person removes at Google turns the connection to "reconnect" at its next use. Removing bizinsights in
+ * Facebook calls Meta's deauthorize callback (POST /webhooks/meta/deauthorize: reading stops at once),
+ * and Facebook's data deletion request calls POST /webhooks/meta/data-deletion, which deletes the Meta
+ * Ads figures and answers with this page's address and a confirmation code (?code=), whose status
+ * MetaDeletionStatus shows (GET /api/meta/data-deletion/:code). Both callbacks work only once their
+ * URLs are set in the Meta app; until then the removal still ends the token, and the next update marks
+ * the connection "reconnect", which is why the page says "at the latest at its next update".
  */
-const UPDATED = "2026-10-16";
+const UPDATED = "2026-10-19";
 
 const TOC = [
   { id: "disconnect", title: "Disconnect in bizinsights" },
@@ -35,10 +42,14 @@ export default function DataDeletionPage() {
       updated={UPDATED}
       toc={TOC}
       intro={
-        <p>
-          How to withdraw the access you gave bizinsights through Google (Google Ads, Google AdSense) or Meta (WhatsApp Business, Facebook
-          and Instagram ads), and have the data that came with it deleted.
-        </p>
+        <>
+          <p>
+            How to withdraw the access you gave bizinsights through Google (Google Ads, Google AdSense) or Meta (WhatsApp Business, Facebook
+            and Instagram ads), and have the data that came with it deleted.
+          </p>
+          {/* Opened from Facebook's data deletion request (?code=): that request's status. */}
+          <MetaDeletionStatus />
+        </>
       }
     >
       <LegalSection {...section("disconnect")}>
@@ -76,16 +87,25 @@ export default function DataDeletionPage() {
           <li>
             <strong>Google</strong> — open <strong>myaccount.google.com → Security → Your connections to third-party apps &amp; services</strong>,
             choose bizinsights and remove its access. Google then withdraws bizinsights&apos; access to Google Ads and AdSense; bizinsights shows
-            those accounts as &ldquo;Needs reconnecting&rdquo; and stops reading from them.
+            those accounts as &ldquo;Reconnect required&rdquo; and stops reading from them.
           </li>
           <li>
             <strong>Meta</strong> — in Facebook, go to <strong>Settings &amp; privacy → Settings → Business integrations</strong> (or, for a
             business portfolio, <strong>Meta Business Suite → Settings → Integrations → Connected apps</strong>), find bizinsights and remove
-            it. Meta then withdraws bizinsights&apos; access; bizinsights shows the connection as &ldquo;Permission expired&rdquo; and stops
-            reading from it.
+            it. Its access ends there, and bizinsights stops reading your Meta ad accounts: at once when Facebook lets it know, and at
+            the latest at its next update.
+          </li>
+          <li>
+            <strong>Meta, with deletion</strong> — after removing bizinsights, open the apps you removed on the same Facebook page, choose
+            bizinsights and send Facebook&apos;s data deletion request. bizinsights then deletes the Meta Ads figures and the access it holds
+            for your Facebook login, and Facebook shows you a confirmation code with a link to this page, where you can check the
+            request&apos;s status.
           </li>
         </ul>
-        <p>Removing access at Google or Meta does not by itself delete what bizinsights already holds. Use step 1 or step 3 for that.</p>
+        <p>
+          Removing access at Google, or removing bizinsights from Facebook without the deletion request, does not by itself delete what
+          bizinsights already holds. Use step 1 or step 3 for that.
+        </p>
       </LegalSection>
 
       <LegalSection {...section("ask-us")}>

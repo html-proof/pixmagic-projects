@@ -10,6 +10,7 @@ import {
   confirmSignUp,
   errorCode,
   finishEmailCodeSignIn,
+  finishMfaSignIn,
   recallEmail,
   rememberEmail,
   resendSignUpCode,
@@ -28,7 +29,13 @@ import { SocialButtons } from "@/components/SocialButtons";
 /** What a redirect to this page came to say. */
 const NOTICES: Record<string, { kind: "info" | "success"; text: string }> = {
   signedOut: { kind: "info", text: "You've been signed out." },
+  // A new password ends every session, but not the account's other ways in.
+  resetGoogle: {
+    kind: "success",
+    text: "Your password has been changed. Sign in with the new one. Your account can also be signed in to with Google: if you don't recognise that, remove it in Settings → Security.",
+  },
   reset: { kind: "success", text: "Your password has been changed. Sign in with the new one." },
+  confirmedElsewhere: { kind: "info", text: "Your email address is already confirmed, with a different password. Sign in with that one, or use \"Forgot Password?\" to choose a new one." },
   confirmed: { kind: "success", text: "Your email address is confirmed. Sign in to continue." },
   deleted: { kind: "info", text: "Your account has been deleted." },
 };
@@ -46,6 +53,8 @@ export default function LoginPage() {
   const [confirming, setConfirming] = useState(false);
   // Passwordless: a code Cognito emails (only where the deployment switched it on).
   const [codeSignIn, setCodeSignIn] = useState<CodeSignIn>("off");
+  // The password was right and the account has two-step verification: the app's code finishes it.
+  const [appCode, setAppCode] = useState(false);
   const [error, setError] = useState<{ text: string; hint?: string; reset?: boolean } | null>(null);
   const [notice, setNotice] = useState<{ kind: "info" | "success"; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -76,6 +85,12 @@ export default function LoginPage() {
     setCodeSignIn(mode);
   }
 
+  /** Signed in, or on to the authenticator app's code. */
+  function afterFirstStep(r: Awaited<ReturnType<typeof signIn>>) {
+    if ("next" in r) setAppCode(true);
+    else router.replace(afterSignIn());
+  }
+
   async function onPassword(e: FormEvent) {
     e.preventDefault();
     if (!fields.submit()) return;
@@ -83,8 +98,7 @@ export default function LoginPage() {
     setError(null);
     setNotice(null);
     try {
-      await signIn(email.trim(), password, keep);
-      router.replace(afterSignIn());
+      afterFirstStep(await signIn(email.trim(), password, keep));
     } catch (err) {
       const code = errorCode(err);
       if (code === "unconfirmed") {
@@ -112,13 +126,66 @@ export default function LoginPage() {
           submitLabel="Confirm and sign in"
           large
           onSubmit={async (code) => {
-            await confirmSignUp(email.trim(), code);
-            await signIn(email.trim(), password, keep);
-            router.replace(afterSignIn());
+            // The code signs in with the password typed here, which becomes the account's: the
+            // code proves the inbox, whatever password an earlier sign-up with it had set.
+            const confirmed = await confirmSignUp(email.trim(), code, { password, keep });
+            if (confirmed.user) {
+              setConfirming(false);
+              router.replace(afterSignIn());
+              return;
+            }
+            // Confirmed already (another tab): sign in as usual.
+            const r = await signIn(email.trim(), password, keep);
+            setConfirming(false);
+            afterFirstStep(r);
           }}
           onResend={() => resendSignUpCode(email.trim())}
         />
         <button type="button" className="text-sm text-muted underline" onClick={() => setConfirming(false)}>
+          Back to sign in
+        </button>
+      </AuthSplitShell>
+    );
+  }
+
+  if (appCode) {
+    return (
+      <AuthSplitShell title="Two-step verification" subtitle="One more step to keep your account safe." action={CREATE_ACCOUNT}>
+        <CodeStep
+          email={email.trim()}
+          intro={<>Open your authenticator app and enter the 6-digit code it shows for bizinsights.</>}
+          submitLabel="Sign In"
+          large
+          onSubmit={async (code) => {
+            try {
+              await finishMfaSignIn(code);
+              router.replace(afterSignIn());
+            } catch (err) {
+              // Too long since the password (or too many wrong codes): start again from it.
+              if (errorCode(err) !== "mfa_expired") throw err;
+              setAppCode(false);
+              setPassword("");
+              if (codeSignIn === "code") setCodeSignIn("available");
+              setError({ text: authErrorMessage(err) });
+            }
+          }}
+        />
+        <p className="text-sm text-muted">
+          Lost your phone?{" "}
+          <Link prefetch={false} href="/support" className="underline">
+            Contact support
+          </Link>{" "}
+          and we&apos;ll help you back in.
+        </p>
+        <button
+          type="button"
+          className="text-sm text-muted underline"
+          onClick={() => {
+            setAppCode(false);
+            setPassword("");
+            if (codeSignIn === "code") setCodeSignIn("available");
+          }}
+        >
           Back to sign in
         </button>
       </AuthSplitShell>
@@ -181,10 +248,7 @@ export default function LoginPage() {
             email={email.trim()}
             submitLabel="Sign In"
             large
-            onSubmit={async (code) => {
-              await finishEmailCodeSignIn(email.trim(), code, keep);
-              router.replace(afterSignIn());
-            }}
+            onSubmit={async (code) => afterFirstStep(await finishEmailCodeSignIn(email.trim(), code, keep))}
             onResend={() => startEmailCodeSignIn(email.trim())}
           />
         )
@@ -225,8 +289,7 @@ export default function LoginPage() {
         </form>
       )}
 
-      <Divider label="OR CONTINUE WITH" />
-      <SocialButtons row />
+      <SocialButtons row keep={keep} terms before={<Divider label="OR CONTINUE WITH" />} />
 
       <p className="pt-1 text-center text-[15px] text-muted">
         Don&apos;t have an account?{" "}

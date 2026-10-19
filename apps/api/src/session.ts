@@ -61,6 +61,13 @@ export interface SessionClaims {
   /** Last checked with Cognito (ms). */
   ck: number;
   /**
+   * true: this sign-in proved the account's own address (Cognito vouched for it, and it is the
+   * account's). A Google account linked under another address proves that address only, so its
+   * sessions never count as the person again for a change that could lock them out
+   * (account.ts, reauthenticate).
+   */
+  own?: true;
+  /**
    * false: "Keep me signed in" was unticked, so the cookies end when the browser closes (and at
    * exp, whichever comes first). Absent: they last until exp, as every session did before.
    */
@@ -99,7 +106,7 @@ export function readSession(cookie: string | undefined, now = Date.now()): Sessi
 }
 
 export function newSession(
-  input: { userId: string; sub: string; username: string; method: SignInMethod; authTime: number; keep?: boolean },
+  input: { userId: string; sub: string; username: string; method: SignInMethod; authTime: number; keep?: boolean; ownAddress?: boolean },
   now = Date.now(),
 ): SessionClaims {
   return {
@@ -114,8 +121,13 @@ export function newSession(
     at: input.authTime,
     ck: now,
     ...(input.keep === false && { keep: false as const }),
+    ...(input.ownAddress && { own: true as const }),
   };
 }
+
+/** Whether a verified sign-in (its ID token's claims) proves `accountEmail`, the account's own address. */
+export const provesAddress = (claims: { email: string | null; emailVerified: boolean }, accountEmail: string) =>
+  claims.emailVerified && !!claims.email && claims.email.toLowerCase() === accountEmail.toLowerCase();
 
 /**
  * A session for someone who opened an invitation link (POST /invitations/open): this workspace
@@ -201,3 +213,18 @@ export function readRefreshToken(c: Context, claims: SessionClaims): string | nu
 
 /** Coordinator key that retires one signed-out session until it would have expired. */
 export const retiredSessionKey = (sid: string) => `session:retired:${sid}`;
+
+/**
+ * Changes that give someone a way into the account (a new sign-in method, another email address,
+ * deleting it) need the person again: a sign-in this recent, or their password.
+ */
+export const RECENT_SIGN_IN_S = 15 * 60;
+export const signedInRecently = (claims: SessionClaims, now = Date.now()) => now / 1000 - claims.at <= RECENT_SIGN_IN_S;
+
+/**
+ * Coordinator key: this session re-entered its password to link a Google account
+ * (POST /auth/account/methods/google/prepare). The start of the link spends it; it lasts
+ * LINK_PROOF_TTL_S, and only this session (its id is in an httpOnly cookie) can spend it.
+ */
+export const linkProofKey = (sid: string) => `link:proof:${sid}`;
+export const LINK_PROOF_TTL_S = 300;

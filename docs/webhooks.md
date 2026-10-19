@@ -1,6 +1,6 @@
 # Webhooks
 
-Webhooks drive all updates after the initial backfill. Endpoint: `POST <APP_URL>/api/webhooks/shopify`, in production `https://d2mr8m2p1qkh58.cloudfront.net/api/webhooks/shopify` (`apps/api/src/routes/webhooks.ts`, served by the `api` Lambda function built from `apps/aws`). The endpoint is exempt from the global per-IP rate limit: Shopify sends every store's webhooks from a small pool of addresses, and each delivery is HMAC-verified instead.
+Webhooks drive all updates after the initial backfill. Endpoint: `POST <APP_URL>/api/webhooks/shopify`, in production `https://bizinsights.io/api/webhooks/shopify` (`apps/api/src/routes/webhooks.ts`, served by the `api` Lambda function built from `apps/aws`). The endpoint is exempt from the global per-IP rate limit: Shopify sends every store's webhooks from a small pool of addresses, and each delivery is HMAC-verified instead.
 
 ## Intake contract
 

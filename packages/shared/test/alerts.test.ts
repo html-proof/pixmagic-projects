@@ -46,6 +46,19 @@ describe("describeAlert", () => {
     expect(describeAlert({ code: "wa_rule_r1", severity: "info", message: "VIP order (order #1001)" })).toMatchObject({ area: "whatsapp", severity: "info", body: "VIP order (order #1001)" });
   });
 
+  it("words an ad account's alerts by kind, passes on the message core composes, and sends them to Settings → Advertising", () => {
+    const body = 'Meta ad account "Shop ads": bizinsights\' access to Meta has ended. Press Reconnect and sign in again to keep the numbers coming.';
+    expect(describeAlert({ code: "ads_reconnect:c1", severity: "warning", message: body })).toEqual({ severity: "warning", area: "ads", title: "An ad account needs reconnecting", body });
+    expect(describeAlert({ code: "ads_expiring:c1", severity: "warning", message: "x" }).title).toBe("Meta access ends soon");
+    expect(describeAlert({ code: "ads_failing:c1", severity: "warning", message: "x" }).title).toBe("An ad account stopped updating");
+    expect(describeAlert({ code: "ads_unavailable:c1", severity: "warning", message: "x" }).title).toBe("An ad account isn't available");
+    // Never an empty body.
+    expect(describeAlert({ code: "ads_failing:c1", severity: "warning", message: "" }).body).toContain("Settings → Advertising");
+    // A code of the family this version doesn't know is the generic one.
+    expect(describeAlert({ code: "ads_something:c1", severity: "warning", message: LEAK }).area).toBe("general");
+    expect(ALERT_PATH.ads).toBe("/settings/ads");
+  });
+
   it("sends a customer's data request to Settings → Privacy requests", () => {
     expect(describeAlert({ code: "privacy_request", severity: "warning", message: "A customer of a.myshopify.com asked" })).toEqual({
       severity: "warning",

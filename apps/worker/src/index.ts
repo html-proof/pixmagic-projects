@@ -1,5 +1,6 @@
 import { dbReachable, systemDb, type StoreStatus } from "@app/db";
 import {
+  AdsRateLimitedError,
   backoffSeconds,
   flagStaleSessions,
   logger,
@@ -7,6 +8,7 @@ import {
   pruneShopifyReports,
   pruneTeamRecords,
   raiseAlert,
+  recordAdSyncFailure,
   type AdsSyncData,
   type AggregateJobData,
   type Producer,
@@ -39,6 +41,7 @@ import {
   scheduleAdsSync,
   scheduleReconcile,
   seedSalesRereads,
+  sweepAdConnectionAlerts,
   UnrecoverableError,
   type WorkerDeps,
 } from "./handlers.js";
@@ -85,6 +88,21 @@ const DB_DEFER_MAX_DELAY_S = 300;
 const DB_DEFER_MAX_MS = 24 * 3600_000;
 
 /**
+ * Carried in the body of an ad sync re-sent because the platform asked bizinsights to wait (see
+ * deferForRateLimit); like DbDeferral, it travels in the body because the re-send is a new message.
+ */
+interface RateDeferral {
+  count: number;
+  since: number;
+}
+
+/** Shortest and longest wait between re-sends while a platform asks to wait (Meta's lockouts last up to an hour). */
+const RATE_DEFER_MIN_DELAY_S = 30;
+const RATE_DEFER_MAX_DELAY_S = 3600;
+/** Past this the sync is let through to the ordinary retries, so it is recorded rather than waiting for good. */
+const RATE_DEFER_MAX_MS = 6 * 3600_000;
+
+/**
  * Process one message. Success acks; failure retries with exponential backoff
  * until MAX_ATTEMPTS (or immediately fails on UnrecoverableError), then records
  * the failure and raises an alert. A failure while the database is unreachable
@@ -95,7 +113,7 @@ export async function consume(queue: QueueName, msg: QueueMessage, deps: Consume
   // The deferral is consume's bookkeeping, not part of the job. Handlers re-enqueue
   // `{ ...data, ... }` (the next page, a halved page, the next bulk phase), so passing it through
   // would start every follow-up message part-way through an outage it never saw.
-  const { dbDeferral, ...job } = (msg.body ?? {}) as { dbDeferral?: DbDeferral };
+  const { dbDeferral, rateDeferral, ...job } = (msg.body ?? {}) as { dbDeferral?: DbDeferral; rateDeferral?: RateDeferral };
   // Ad platforms rate-limit per app: jitter keeps many accounts' retries from landing together.
   const jitter = queue === "sync" && (job as { kind?: string }).kind === "ads" ? Math.floor(Math.random() * 30) : 0;
   try {
@@ -115,6 +133,7 @@ export async function consume(queue: QueueName, msg: QueueMessage, deps: Consume
     msg.ack();
   } catch (e) {
     const err = e instanceof Error ? e : new Error(String(e));
+    if (queue === "sync" && (job as { kind?: string }).kind === "ads" && err instanceof AdsRateLimitedError && (await deferForRateLimit(msg, job, rateDeferral, err, deps))) return;
     if (!(err instanceof UnrecoverableError) && !(await (deps.dbHealthy ?? dbReachable)())) {
       await deferForDb(queue, msg, job, dbDeferral, err, deps);
       return;
@@ -167,6 +186,31 @@ async function deferForDb(queue: QueueName, msg: QueueMessage, job: object, prev
   msg.ack();
 }
 
+/**
+ * An ad platform asked bizinsights to wait (Meta's throttling, a Google rate limit): that says nothing
+ * about the account, so it spends none of the job's retries. The job is re-sent as a new message after
+ * the wait the platform gave (or a growing one), the way deferForDb does for the database, and the
+ * original is acked once the copy is queued. False: it has waited long enough already; the ordinary
+ * retries take over, so the account ends up marked rather than waiting for good.
+ */
+async function deferForRateLimit(msg: QueueMessage, job: object, prev: RateDeferral | undefined, err: AdsRateLimitedError, deps: WorkerDeps): Promise<boolean> {
+  const now = Date.now();
+  const since = prev?.since ?? now;
+  const count = prev?.count ?? 0;
+  if (now - since >= RATE_DEFER_MAX_MS) return false;
+  const wait = err.retryAfterS ?? 60 * 2 ** count;
+  const delaySeconds = Math.min(RATE_DEFER_MAX_DELAY_S, Math.max(RATE_DEFER_MIN_DELAY_S, Math.ceil(wait))) + Math.floor(Math.random() * 30);
+  logger.warn({ connectionId: (job as AdsSyncData).connectionId, messageId: msg.id, deferrals: count, delaySeconds, errorCode: err.errorCode }, "ad sync waiting: the platform asked to slow down");
+  try {
+    await (deps.queues.sync as Producer<unknown>).send({ ...job, rateDeferral: { count: count + 1, since } }, { delaySeconds });
+  } catch (sendErr) {
+    logger.error({ err: sendErr, messageId: msg.id }, "re-sending a rate-limited ad sync failed");
+    return false;
+  }
+  msg.ack();
+  return true;
+}
+
 async function onFailure(queue: QueueName, body: unknown, err: Error, final: boolean, deps: WorkerDeps) {
   const error = err.message.slice(0, 500);
   const kind = (body as { kind?: string })?.kind;
@@ -191,13 +235,9 @@ async function onFailure(queue: QueueName, body: unknown, err: Error, final: boo
   }
   if (queue === "sync" && (body as { kind?: string })?.kind === "ads") {
     // An ad account, not the store's import: never touches the store's status or raises a store
-    // alert. Settings shows the account's own state (runAdsSync marks reconnect / error).
-    if (final) {
-      const data = body as AdsSyncData;
-      await systemDb.adConnection
-        .updateMany({ where: { id: data.connectionId, status: "active" }, data: { status: "error", lastError: error } })
-        .catch(() => {});
-    }
+    // alert. The account's own state is marked from what the last attempt met, as a code and the
+    // platform's cleaned reason (never the error's own text); its alerts come from the cron's sweep.
+    if (final) await recordAdSyncFailure(body as AdsSyncData, err instanceof UnrecoverableError && err.cause !== undefined ? err.cause : err);
     return;
   }
   if (queue === "sync") {
@@ -222,6 +262,7 @@ async function onFailure(queue: QueueName, body: unknown, err: Error, final: boo
     // but nothing the merchant does fixes it: its own code (worded as such in @app/shared/alerts,
     // resolved by the next good run like a failure) and never critical.
     const notApproved = err instanceof NotApprovedError;
+    const flippable: StoreStatus[] = err instanceof AccessRevokedError || notApproved ? ["active", "syncing"] : data.kind === "install_pixel" || data.kind === "inventory" ? [] : ["syncing"];
     const flippable: StoreStatus[] =
       err instanceof AccessRevokedError || notApproved ? ["active", "syncing"] : data.kind === "install_pixel" || data.kind === "inventory" ? [] : ["syncing"];
     const flipped = flippable.length
@@ -327,6 +368,11 @@ export async function runScheduled(cron: string, deps: WorkerDeps) {
       logger.error({ err }, "ad sync scheduling failed; the next tick tries again");
       return null;
     });
+    // Ad accounts that need someone (access ended or ending, the account gone, syncs that keep failing).
+    const adAlerts = await sweepAdConnectionAlerts(deps).catch((err: unknown) => {
+      logger.error({ err }, "ad alert sweep failed; the next tick tries again");
+      return null;
+    });
     // WhatsApp: campaigns, due messages, parcel status, retention. Last, on its own leases.
     const whatsapp = await sweepWhatsapp(deps).catch((err: unknown) => {
       logger.error({ err }, "whatsapp sweep failed; the next tick tries again");
@@ -367,7 +413,7 @@ export async function runScheduled(cron: string, deps: WorkerDeps) {
       logger.error({ err }, "inventory prune failed; the next tick tries again");
       return null;
     });
-    return { refreshed, staleJobsFailed, reconciled, salesRereads, adsSynced, whatsapp, staffOpenShifts, email, pixelDedupePruned, teamPruned, checksPruned, shopifyReportsPruned, inventory, inventoryPruned };
+    return { refreshed, staleJobsFailed, reconciled, salesRereads, adsSynced, adAlerts, whatsapp, staffOpenShifts, email, pixelDedupePruned, teamPruned, checksPruned, shopifyReportsPruned, inventory, inventoryPruned };
   }
   logger.warn({ cron }, "unknown cron trigger");
   return {};

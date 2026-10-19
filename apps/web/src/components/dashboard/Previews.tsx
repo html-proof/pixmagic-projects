@@ -129,33 +129,35 @@ export function AreaPreview({ topic, ov, currency, health }: { topic: Topic; ov:
     }
     case "ads": {
       const a = m.ads;
-      if (!a || a.series.length < 2) return null;
-      const values = a.series.map((d) => d.spend);
+      // Only with every day known: a mini chart can't say which days are missing.
+      if (!a || !a.current || a.series.length < 2) return null;
+      const c = a.current;
+      const values = a.series.map((d) => d.spend ?? 0);
       const top = values.indexOf(Math.max(...values));
       const today = a.series.findIndex((d) => d.day === ov.today);
-      const split = a.byProvider.length > 1 && a.current.spend > 0 ? a.byProvider.map((p) => `${p.provider === "meta" ? "Meta" : "Google"} ${fmtPct(p.spend / a.current.spend)}`).join(" · ") : null;
+      const split = a.byProvider.length > 1 && c.spend > 0 ? a.byProvider.map((p) => `${p.provider === "meta" ? "Meta" : "Google"} ${fmtPct((p.spend ?? 0) / c.spend)}`).join(" · ") : null;
       return (
         <>
           <MiniColumns values={values} emphasis={values[top]! > 0 ? top : null} faded={today >= 0 ? today : null} />
           <Caption>
             Ad spend per day{split ? <> · {split}</> : null}
-            {a.current.roas !== null ? <> · platforms report {new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(a.current.roas)}× back</> : null}
+            {c.roas !== null ? <> · platforms credit {new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(c.roas)}× back in purchases</> : null}
           </Caption>
         </>
       );
     }
     case "adsense": {
       const a = m.adsense;
-      if (!a || a.series.length < 2) return null;
-      const values = a.series.map((d) => d.earnings);
+      if (!a || !a.current || a.series.length < 2) return null;
+      const values = a.series.map((d) => d.earnings ?? 0);
       const top = values.indexOf(Math.max(...values));
       const today = a.series.findIndex((d) => d.day === ov.today);
       return (
         <>
           <MiniColumns values={values} emphasis={values[top]! > 0 ? top : null} faded={today >= 0 ? today : null} />
           <Caption>
-            Ad earnings per day
-            {a.current.pageRpm !== null ? <> · {fmtMoney(a.current.pageRpm, a.currency)} per 1,000 views</> : null}
+            Estimated ad earnings per day
+            {a.current.pageRpm !== null ? <> · {fmtMoney(a.current.pageRpm, a.currency)} per 1,000 page views</> : null}
           </Caption>
         </>
       );

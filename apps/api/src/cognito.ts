@@ -49,7 +49,12 @@ export interface CognitoTokens {
   expiresIn: number;
 }
 
-export type SignInResult = { tokens: CognitoTokens } | { challenge: string; session: string };
+/**
+ * `username` on a challenge: the Cognito user name it names (ChallengeParameters.USER_ID_FOR_SRP,
+ * the user's real name, never the email signed in with), which the answer must give as USERNAME
+ * and hash into SECRET_HASH.
+ */
+export type SignInResult = { tokens: CognitoTokens } | { challenge: string; session: string; username?: string };
 
 /** What a verified Cognito ID token says about the person. */
 export interface IdentityClaims {
@@ -72,6 +77,8 @@ export interface CognitoUser {
   enabled: boolean;
   /** CONFIRMED, UNCONFIRMED, FORCE_CHANGE_PASSWORD, RESET_REQUIRED, EXTERNAL_PROVIDER, ... */
   status: string;
+  /** Two-step verification with an authenticator app (TOTP) is on: every sign-in asks for a code. */
+  mfaEnabled: boolean;
 }
 
 export interface CognitoConfig {
@@ -128,8 +135,13 @@ export interface CognitoAuth {
   /** Passwordless sign-in with a code Cognito emails (needs the Essentials plan and SES). */
   startEmailOtp(email: string): Promise<{ session: string }>;
   answerEmailOtp(email: string, session: string, code: string): Promise<SignInResult>;
-  /** New ID and access tokens (and a new refresh token when rotation is on). `username` is the Cognito user name. */
-  refresh(refreshToken: string, username: string): Promise<CognitoTokens>;
+  /**
+   * New ID and access tokens (and a new refresh token when rotation is on). `sub`: the user's sub,
+   * which keys a refresh's SECRET_HASH in a pool whose users sign in with their email, not with a
+   * user name (AWS, "Computing secret hash values"). For a password user it is also the user name;
+   * for a Google one ("google_<id>") it isn't.
+   */
+  refresh(refreshToken: string, sub: string): Promise<CognitoTokens>;
   verifyIdToken(idToken: string, opts?: { nonce?: string }): Promise<IdentityClaims>;
 
   // ---- Passwords ----
@@ -146,8 +158,26 @@ export interface CognitoAuth {
   globalSignOut(accessToken: string): Promise<void>;
   revokeRefreshToken(refreshToken: string): Promise<void>;
 
+  // ---- Two-step verification: a code from an authenticator app (TOTP) ----
+  /** Starts setting it up for the signed-in person: the secret (base32) their app needs. */
+  associateTotp(accessToken: string): Promise<{ secret: string }>;
+  /** A code from the app for that secret. true: Cognito has registered the app (it isn't asked for at sign-in until enabled). */
+  verifyTotp(accessToken: string, code: string): Promise<boolean>;
+  /** Whether sign-in asks for a code (and prefers it to any other second step). */
+  setTotpEnabled(accessToken: string, enabled: boolean): Promise<void>;
+  /**
+   * The code that answers passwordSignIn's SOFTWARE_TOKEN_MFA challenge (its `session`). `username`:
+   * the challenge's `username` (Cognito's own name for the user; the email only if it gave none).
+   */
+  answerTotpChallenge(username: string, session: string, code: string): Promise<SignInResult>;
+
   // ---- Managed login (OAuth 2.0 authorization code + PKCE): Google ----
-  authorizeUrl(input: { provider: FederatedProvider; redirectUri: string; state: string; codeChallenge: string; nonce: string }): string;
+  /**
+   * `selectAccount`: the provider shows its account chooser even to a browser signed in to one
+   * account (prompt=select_account, which managed login passes on to Google), so nothing is linked
+   * without the person choosing it.
+   */
+  authorizeUrl(input: { provider: FederatedProvider; redirectUri: string; state: string; codeChallenge: string; nonce: string; selectAccount?: boolean }): string;
   exchangeCode(input: { code: string; redirectUri: string; codeVerifier: string }): Promise<CognitoTokens>;
   /** Ends the user pool's own browser session (after Google), then returns to `logoutUri`. */
   logoutUrl(logoutUri: string): string | null;
@@ -233,6 +263,8 @@ export function cognitoAuth(cfg: CognitoConfig, fetchImpl: FetchLike = fetch): C
   type AuthResult = {
     AuthenticationResult?: { IdToken: string; AccessToken: string; RefreshToken?: string; ExpiresIn: number };
     ChallengeName?: string;
+    /** USER_ID_FOR_SRP (and sometimes USERNAME): the user's real Cognito name, for the answer. */
+    ChallengeParameters?: Record<string, string>;
     Session?: string;
   };
   const tokensOf = (r: NonNullable<AuthResult["AuthenticationResult"]>): CognitoTokens => ({
@@ -243,11 +275,22 @@ export function cognitoAuth(cfg: CognitoConfig, fetchImpl: FetchLike = fetch): C
   });
   const signInResult = (r: AuthResult): SignInResult => {
     if (r.AuthenticationResult) return { tokens: tokensOf(r.AuthenticationResult) };
-    if (r.ChallengeName) return { challenge: r.ChallengeName, session: r.Session ?? "" };
+    if (r.ChallengeName) {
+      const username = r.ChallengeParameters?.USER_ID_FOR_SRP || r.ChallengeParameters?.USERNAME;
+      return { challenge: r.ChallengeName, session: r.Session ?? "", ...(username && { username }) };
+    }
     throw new CognitoUnavailableError("Cognito answered a sign-in with neither tokens nor a challenge");
   };
 
-  type AdminUser = { Username: string; UserAttributes?: Array<{ Name: string; Value: string }>; Attributes?: Array<{ Name: string; Value: string }>; Enabled?: boolean; UserStatus?: string };
+  type AdminUser = {
+    Username: string;
+    UserAttributes?: Array<{ Name: string; Value: string }>;
+    Attributes?: Array<{ Name: string; Value: string }>;
+    Enabled?: boolean;
+    UserStatus?: string;
+    /** The second steps switched on for the user (AdminGetUser only): SMS_MFA, EMAIL_OTP, SOFTWARE_TOKEN_MFA. */
+    UserMFASettingList?: string[];
+  };
   const userOf = (u: AdminUser): CognitoUser => {
     const attrs = u.UserAttributes ?? u.Attributes;
     return {
@@ -257,6 +300,7 @@ export function cognitoAuth(cfg: CognitoConfig, fetchImpl: FetchLike = fetch): C
       emailVerified: truthy(attr(attrs, "email_verified")),
       enabled: u.Enabled !== false,
       status: u.UserStatus ?? "UNKNOWN",
+      mfaEnabled: u.UserMFASettingList?.includes("SOFTWARE_TOKEN_MFA") ?? false,
     };
   };
 
@@ -327,7 +371,7 @@ export function cognitoAuth(cfg: CognitoConfig, fetchImpl: FetchLike = fetch): C
       });
       return signInResult(r);
     },
-    async refresh(refreshToken, username) {
+    async refresh(refreshToken, sub) {
       if (cfg.refreshRotation) {
         const r = await call<AuthResult>("GetTokensFromRefreshToken", {
           ClientId: cfg.clientId,
@@ -340,8 +384,9 @@ export function cognitoAuth(cfg: CognitoConfig, fetchImpl: FetchLike = fetch): C
       const r = await call<AuthResult>("InitiateAuth", {
         ClientId: cfg.clientId,
         AuthFlow: "REFRESH_TOKEN_AUTH",
-        // SECRET_HASH for a refresh is keyed by the Cognito user name, not the email signed in with.
-        AuthParameters: { REFRESH_TOKEN: refreshToken, ...withSecret(username) },
+        // SECRET_HASH for a refresh is keyed by the user's sub here, not the email signed in with,
+        // nor a Google user's "google_<id>" user name.
+        AuthParameters: { REFRESH_TOKEN: refreshToken, ...withSecret(sub) },
       });
       if (!r.AuthenticationResult) throw new CognitoUnavailableError("Cognito answered a refresh without tokens");
       return tokensOf(r.AuthenticationResult);
@@ -399,7 +444,32 @@ export function cognitoAuth(cfg: CognitoConfig, fetchImpl: FetchLike = fetch): C
       await call("RevokeToken", { Token: refreshToken, ClientId: cfg.clientId, ...(cfg.clientSecret ? { ClientSecret: cfg.clientSecret } : {}) });
     },
 
-    authorizeUrl({ provider, redirectUri, state, codeChallenge, nonce }) {
+    async associateTotp(accessToken) {
+      const r = await call<{ SecretCode?: string }>("AssociateSoftwareToken", { AccessToken: accessToken });
+      if (!r.SecretCode) throw new CognitoUnavailableError("Cognito answered AssociateSoftwareToken without a secret");
+      return { secret: r.SecretCode };
+    },
+    async verifyTotp(accessToken, code) {
+      const r = await call<{ Status?: string }>("VerifySoftwareToken", { AccessToken: accessToken, UserCode: code, FriendlyDeviceName: "bizinsights" });
+      return r.Status === "SUCCESS";
+    },
+    async setTotpEnabled(accessToken, enabled) {
+      await call("SetUserMFAPreference", { AccessToken: accessToken, SoftwareTokenMfaSettings: { Enabled: enabled, PreferredMfa: enabled } });
+    },
+    async answerTotpChallenge(username, session, code) {
+      // The name the challenge gave (USER_ID_FOR_SRP): Cognito's API reference says a challenge's
+      // USERNAME can't be an alias, and the pool signs people in by email, whose users are named
+      // by a UUID. SECRET_HASH is keyed by the same name.
+      const r = await call<AuthResult>("RespondToAuthChallenge", {
+        ClientId: cfg.clientId,
+        ChallengeName: "SOFTWARE_TOKEN_MFA",
+        Session: session,
+        ChallengeResponses: { USERNAME: username, SOFTWARE_TOKEN_MFA_CODE: code, ...withSecret(username) },
+      });
+      return signInResult(r);
+    },
+
+    authorizeUrl({ provider, redirectUri, state, codeChallenge, nonce, selectAccount }) {
       if (!cfg.domain) throw new CognitoError("NotConfigured", "COGNITO_DOMAIN is not set");
       const q = new URLSearchParams({
         response_type: "code",
@@ -412,6 +482,8 @@ export function cognitoAuth(cfg: CognitoConfig, fetchImpl: FetchLike = fetch): C
         code_challenge: codeChallenge,
         code_challenge_method: "S256",
         nonce,
+        // Managed login (ManagedLoginVersion 2) passes prompt on to the provider (any value but "none").
+        ...(selectAccount && { prompt: "select_account" }),
       });
       return `${cfg.domain}/oauth2/authorize?${q}`;
     },
@@ -452,7 +524,7 @@ export function cognitoAuth(cfg: CognitoConfig, fetchImpl: FetchLike = fetch): C
         await call("AdminDeleteUser", { UserPoolId: cfg.userPoolId, Username: user.username }, true).catch(() => {});
         throw err;
       }
-      return { ...user, status: "CONFIRMED" };
+      return { ...user, status: "CONFIRMED", mfaEnabled: false };
     },
     async adminSetPassword(username, password) {
       await call("AdminSetUserPassword", { UserPoolId: cfg.userPoolId, Username: username, Password: password, Permanent: true }, true);
@@ -501,6 +573,10 @@ export function unconfiguredCognito(): CognitoAuth {
     verifyEmail: fail,
     globalSignOut: fail,
     revokeRefreshToken: fail,
+    associateTotp: fail,
+    verifyTotp: fail,
+    setTotpEnabled: fail,
+    answerTotpChallenge: fail,
     authorizeUrl: () => {
       throw new CognitoError("NotConfigured", "Cognito is not configured");
     },

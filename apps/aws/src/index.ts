@@ -6,7 +6,7 @@ import { Hono } from "hono";
 import { handle } from "hono/aws-lambda";
 import { buildApp, CLIENT_IP_HEADER, type App } from "@app/api";
 import { consume, runScheduled, seedAfterMove, seedSalesRereads, settleAllCustomers, startChecks, type WorkerDeps } from "@app/worker";
-import { logger, memoryBlobs, memoryCoord, withLogContext, withTimeout, type Coord, type Queues } from "@app/core";
+import { configReport, logger, memoryBlobs, memoryCoord, warnHalfConfigured, withLogContext, withTimeout, type Coord, type Queues } from "@app/core";
 import { shopifyCheckReport } from "@app/core/reports";
 import { systemDb } from "@app/db";
 import { apiDeps, apiPath } from "./app.js";
@@ -31,7 +31,8 @@ import { staticSite } from "./staticSite.js";
  *   - cron: EventBridge Scheduler ({ "cron": "..." }) → runScheduled(), plus maintenance actions
  *           invoked directly ({ "action": "migrate" | "counts" | "after-move" | "reread" }, or
  *           { "action": "shopify-check", "shop": "<shop>.myshopify.com" }), and the owner's daily
- *           AWS cost email ({ "action": "cost-report" }, its own schedule; costReport.ts).
+ *           AWS cost email ({ "action": "cost-report" }, its own schedule; costReport.ts), and what
+ *           this deployment has set up ({ "action": "config" }: booleans and setting names only).
  * Platform pieces: RDS PostgreSQL (process-wide pools; Lambda has no per-request scope), DynamoDB
  * for the coordinator, S3 for large webhook bodies, SES for app email, Secrets Manager + SSM for
  * configuration (secrets.ts). local.ts runs the same app on one machine, without any of them.
@@ -96,6 +97,8 @@ function ensureSecrets(): Promise<void> {
       process.env.COGNITO_ADMIN_SECRET_ACCESS_KEY = process.env.AWS_SECRET_ACCESS_KEY;
       process.env.COGNITO_ADMIN_SESSION_TOKEN = process.env.AWS_SESSION_TOKEN ?? "";
     }
+    // A provider with its public id set and no secret fails quietly ("Coming soon"): say so in the logs.
+    warnHalfConfigured();
   })().catch((err: unknown) => {
     secretsLoaded = undefined;
     throw err;
@@ -179,7 +182,7 @@ const http = handle(root);
 
 /** Direct invocations (not through the URL): maintenance actions for the deploy scripts. */
 interface Action {
-  action: "migrate" | "counts" | "after-move" | "reread" | "verify" | "shopify-check" | "cost-report";
+  action: "migrate" | "counts" | "after-move" | "reread" | "verify" | "shopify-check" | "cost-report" | "config";
   /** verify: one store (its myshopify domain) instead of every connected one; shopify-check: the store. */
   shop?: string;
   /** verify: how many finished days back (7 by default). */
@@ -260,6 +263,12 @@ export const handler = async (event: unknown, context: unknown) => {
       logger.error({ err }, "cost report failed");
       throw err;
     }
+  }
+  if (action === "config") {
+    // What this deployment has set up (core configReport.ts): booleans and setting names, never a
+    // value. The deploy's smoke test warns about each provider whose secret is missing.
+    await ensureSecrets();
+    return configReport();
   }
   if (action === "migrate" || action === "counts") {
     await ensureSecrets();
