@@ -238,7 +238,7 @@ sales to the cent, day by day. Nothing is counted twice: a sale's tax goes to ta
 to its own line), so tax on shipping or duties is never in shipping or duties; a refund of shipping,
 a duty or a fee takes that line down on the day of the refund, once; discounts on items are inside
 net sales and shipping discounts inside shipping charges. Days stored before the lines had columns
-of their own were split from their stored sales records by migration 20261019150000; their total
+of their own were split from their stored sales records by migration 20261019180000; their total
 sales did not change. A day whose total predates Shopify's sales records altogether (none in the
 60-day window) can hold some total sales that no line explains: the breakdown shows it as "Not
 split into lines", never inside a line.
