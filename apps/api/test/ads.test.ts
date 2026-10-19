@@ -515,14 +515,14 @@ describe("ads on the dashboard", () => {
     const today = localDay(new Date(), "UTC");
     const day = (n: number) => addDays(today, -n);
     // What its first sync records: the 90 days it fetched.
-    await systemDb.adConnection.update({ where: { id: usd.id }, data: { historyFrom: day(89) } });
+    await systemDb.adConnection.update({ where: { id: usd.id }, data: { historyFrom: day(89), syncedThrough: today, lastSyncedAt: new Date() } });
     const base = { workspaceId: ws, storeId, provider: "meta" };
     await systemDb.adCampaignDaily.createMany({
       data: [
-        { ...base, connectionId: usd.id, accountId: "act_1", campaignId: "1", campaignName: "Spring", day: day(1), spend: 30, impressions: 3000, clicks: 60, conversions: 3, conversionValue: 120 },
-        { ...base, connectionId: usd.id, accountId: "act_1", campaignId: "2", campaignName: "Retarget", day: day(2), spend: 10, impressions: 1000, clicks: 40, conversions: 1, conversionValue: 60 },
+        { ...base, connectionId: usd.id, accountId: "act_1", campaignId: "1", campaignName: "Spring", day: day(1), spend: 30, impressions: 3000, clicks: 60, linkClicks: 60, conversions: 3, conversionValue: 120, purchases: 3, purchaseValue: 120 },
+        { ...base, connectionId: usd.id, accountId: "act_1", campaignId: "2", campaignName: "Retarget", day: day(2), spend: 10, impressions: 1000, clicks: 40, linkClicks: 40, conversions: 1, conversionValue: 60, purchases: 1, purchaseValue: 60 },
         // The period before (days 7..13 for "last 7 days").
-        { ...base, connectionId: usd.id, accountId: "act_1", campaignId: "1", campaignName: "Spring", day: day(9), spend: 20, impressions: 2000, clicks: 50, conversions: 1, conversionValue: 40 },
+        { ...base, connectionId: usd.id, accountId: "act_1", campaignId: "1", campaignName: "Spring", day: day(9), spend: 20, impressions: 2000, clicks: 50, linkClicks: 50, conversions: 1, conversionValue: 40, purchases: 1, purchaseValue: 40 },
         // Euros: listed, never added to dollars.
         { ...base, connectionId: eur.id, accountId: "act_2", campaignId: "9", campaignName: "EU", day: day(1), spend: 999, clicks: 1 },
       ],
@@ -565,7 +565,7 @@ describe("AdSense on the dashboard", () => {
     // An ad account that spends...
     ctx.setFetch(metaPlatform);
     await connectAll("meta");
-    const usd = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, accountId: "act_1" } });
+    const usd = await systemDb.adConnection.update({ where: { id: (await systemDb.adConnection.findFirstOrThrow({ where: { storeId, accountId: "act_1" } })).id }, data: { historyFrom: day(89), syncedThrough: today, lastSyncedAt: new Date() } });
     await systemDb.adCampaignDaily.create({ data: { workspaceId: ws, storeId, connectionId: usd.id, provider: "meta", accountId: "act_1", campaignId: "1", campaignName: "Spring", day: day(1), spend: 30, clicks: 10 } });
     // ...and an AdSense account that earns, synced through the real client.
     ctx.setFetch(
@@ -578,6 +578,7 @@ describe("AdSense on the dashboard", () => {
     await connectFlow("adsense");
     const sense = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, provider: "adsense" } });
     await syncAdConnection(sense.id, day(13), today, ctx.deps.fetchImpl);
+    await systemDb.adConnection.update({ where: { id: sense.id }, data: { syncedThrough: today } });
     const synced = await systemDb.adConnection.findUniqueOrThrow({ where: { id: sense.id } });
     // The sync fetched every day from day(13) on: that is where its history starts.
     expect(synced).toMatchObject({ currency: "USD", status: "active", historyFrom: day(13) });
