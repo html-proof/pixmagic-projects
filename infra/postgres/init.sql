@@ -31,4 +31,11 @@ BEGIN
   IF to_regclass('public.users') IS NOT NULL THEN
     REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON users FROM app_rls;
   END IF;
+  -- The stock history and the adjustments made in bizinsights (migration 20261019120000_inventory_module).
+  IF to_regclass('public.inventory_adjustments') IS NOT NULL THEN
+    REVOKE UPDATE, DELETE, TRUNCATE ON inventory_adjustments FROM app_rls;
+  END IF;
+  IF to_regclass('public.inventory_movements') IS NOT NULL THEN
+    REVOKE UPDATE, DELETE, TRUNCATE ON inventory_movements FROM app_rls;
+  END IF;
 END $$;

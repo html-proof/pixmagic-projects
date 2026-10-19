@@ -13,7 +13,7 @@ import type { GraphqlOrder } from "./shopifyPayloads.js";
 // packages/core/test/queryCost.ts re-derives every number below from the query text.
 
 /** Default page sizes for the paginated sync kinds (overridable per message via SyncJobData.pageSize). */
-export const PAGE_SIZE = { orders: 5, products: 100, variants: 100 } as const;
+export const PAGE_SIZE = { orders: 5, products: 50, variants: 100 } as const;
 
 /**
  * Truncation limits of the nested selections in ordersQuery(); see graphqlOrderOverflow(). Most
@@ -279,22 +279,33 @@ export function orderSalesQuery(includeCustomer: boolean): string {
 export const ORDER_SALES_QUERY = orderSalesQuery(false);
 
 /**
- * Products page. Cost: Product node = 1 (all other fields are scalars/enums);
- * products(first: $first) = 2 + 1 (pageInfo) + $first × 1 → 100 → 103.
+ * Products page, with the product information the Inventory module shows (description, tags,
+ * category, featured image, collections). Cost per Product node: 1 + category 1 + featuredMedia
+ * (1 + preview 1 + image 1) 3 + collections(first: 10) (2 + 10 × 1) 12 = 17;
+ * products(first: $first) = 2 + 1 (pageInfo) + $first × 17 → 50 → 853.
  */
 export const PRODUCTS_QUERY = /* GraphQL */ `
   query Products($first: Int!, $cursor: String) {
     products(first: $first, after: $cursor) {
       pageInfo { hasNextPage endCursor }
-      nodes { id title status vendor productType createdAt updatedAt }
+      nodes {
+        id title status vendor productType createdAt updatedAt
+        handle tags onlineStoreUrl description(truncateAt: 5000)
+        category { fullName }
+        featuredMedia { preview { image { url } } }
+        collections(first: 10) { nodes { id title } }
+      }
     }
   }`;
 
 /**
- * Variants page (price, stock, unit cost). Cost per ProductVariant node:
- *   1 (variant) + product 1 + inventoryItem 1 + unitCost (MoneyV2) 1 = 4.
- * productVariants(first: $first) = 2 + 1 (pageInfo) + $first × 4 → 100 → 403.
+ * Variants page (price, stock, unit cost, and the inventory item and details the Inventory module
+ * shows). Cost per ProductVariant node: 1 (variant) + selectedOptions 1 + product 1 + inventoryItem
+ * (1 + unitCost 1 + measurement (1 + weight 1)) 4 = 7.
+ * productVariants(first: $first) = 2 + 1 (pageInfo) + $first × 7 → 100 → 703.
  * unitCost may be withheld (ACCESS_DENIED) → null; shopifyGraphql keeps the rest of the data.
+ * `barcode` is marked deprecated in 2026-10 (still served; `barcodes` is a connection, which would
+ * cost a page of its own per variant): move when Shopify retires it.
  */
 export const VARIANTS_QUERY = /* GraphQL */ `
   query Variants($first: Int!, $cursor: String) {
@@ -302,8 +313,10 @@ export const VARIANTS_QUERY = /* GraphQL */ `
       pageInfo { hasNextPage endCursor }
       nodes {
         id title sku price inventoryQuantity updatedAt
+        createdAt barcode compareAtPrice taxable inventoryPolicy position
+        selectedOptions { name value }
         product { id }
-        inventoryItem { tracked unitCost { amount } }
+        inventoryItem { id tracked requiresShipping unitCost { amount } measurement { weight { value unit } } }
       }
     }
   }`;

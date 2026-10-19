@@ -46,6 +46,12 @@ Who can open a workspace's dashboard, and what of it they see. Owners and admins
 - `GET …/export?section=` (CSV) needs "Export approved reports" plus the section's own permission,
   and holds only what the member sees. Customer lists are never exported.
 - Workspace API keys see what viewers saw before Team & Access (`LEGACY_GRANTS.viewer`), read-only.
+- The Inventory pages (`apps/web/src/app/(app)/inventory`, API `routes/inventory.ts`) have a module
+  of their own: view, product information, costs and stock value, stock history, export, adjust
+  stock, stock alerts, inventory settings (docs/inventory.md). Costs are left out of every answer
+  and CSV without `inventory.costs`; changing stock needs `inventory.adjust`, which a shared link
+  never has. Existing members get none of them until an owner or admin ticks them; the viewer,
+  analyst and manager templates start with view and product information.
 
 ## Invitations
 

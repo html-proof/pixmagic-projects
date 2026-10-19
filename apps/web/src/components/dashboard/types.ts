@@ -8,6 +8,8 @@ export interface Capability {
   id: string;
   title: string;
   description: string;
+  /** "inventory": the Inventory pages' own access, offered there rather than among the dashboard's locked modules. */
+  area?: "dashboard" | "inventory";
   enabled: boolean;
   missingScopes: string[];
   /** Subsets of missingScopes: askable now, vs fixed by reconnecting (see @app/shared). */

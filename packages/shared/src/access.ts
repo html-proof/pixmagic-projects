@@ -16,7 +16,7 @@ import { can as roleCan, type Permission, type Role } from "./roles";
 // The catalog
 // ---------------------------------------------------------------------------
 
-export const ACCESS_MODULES = ["analytics", "customers", "products", "orders", "marketing", "discounts", "finance", "integrations", "staff", "reports"] as const;
+export const ACCESS_MODULES = ["analytics", "customers", "products", "inventory", "orders", "marketing", "discounts", "finance", "integrations", "staff", "reports"] as const;
 export type AccessModule = (typeof ACCESS_MODULES)[number];
 
 export const ACCESS_KEYS = [
@@ -34,6 +34,14 @@ export const ACCESS_KEYS = [
   "products.performance",
   "products.inventory",
   "products.prices",
+  "inventory.view",
+  "inventory.products",
+  "inventory.costs",
+  "inventory.history",
+  "inventory.export",
+  "inventory.adjust",
+  "inventory.alerts",
+  "inventory.settings",
   "orders.list",
   "orders.payments",
   "orders.fulfillment",
@@ -81,6 +89,7 @@ export const ACCESS_MODULE_INFO: Record<AccessModule, { label: string; descripti
   analytics: { label: "Analytics", description: "Sales, conversion, busiest times and where orders come from." },
   customers: { label: "Customer details", description: "Who buys from the store. Personal details need their own permission." },
   products: { label: "Product details", description: "The catalog, best sellers and stock." },
+  inventory: { label: "Inventory", description: "Stock at every location, product information, stock history and stock changes made in Shopify." },
   orders: { label: "Orders", description: "The latest orders and how they're getting on." },
   marketing: { label: "Marketing", description: "Advertising results, campaigns and attribution." },
   discounts: { label: "Discounts", description: "Discount codes and what they bring in." },
@@ -108,6 +117,15 @@ export const ACCESS_PERMISSIONS: readonly AccessPermissionDef[] = [
   { key: "products.performance", module: "products", kind: "view", label: "View product performance", reveals: "Best sellers by revenue and units sold." },
   { key: "products.inventory", module: "products", kind: "view", label: "View inventory and stock", reveals: "Stock on hand, items running low or sold out, and how long stock will last." },
   { key: "products.prices", module: "products", kind: "view", sensitive: true, requires: ["products.inventory"], label: "View stock value and prices", reveals: "What the stock is worth at cost and at retail price." },
+  // ---- Inventory
+  { key: "inventory.view", module: "inventory", kind: "view", label: "View inventory", reveals: "Stock levels at every location, items running low or sold out, locations and the stock reports, in units." },
+  { key: "inventory.products", module: "inventory", kind: "view", requires: ["inventory.view"], label: "View product information", reveals: "Product details: descriptions, images, variants, SKUs, barcodes, options, selling prices and shipping details." },
+  { key: "inventory.costs", module: "inventory", kind: "view", sensitive: true, requires: ["inventory.view"], label: "View costs and stock value", reveals: "Cost per item, what the stock is worth at cost and at selling price, potential margin and inventory turnover." },
+  { key: "inventory.history", module: "inventory", kind: "view", requires: ["inventory.view"], label: "View stock history", reveals: "Every stock change bizinsights has seen, and the changes made in bizinsights with who made them." },
+  { key: "inventory.export", module: "inventory", kind: "export", sensitive: true, requires: ["inventory.view"], label: "Export inventory", reveals: "Download the stock list as a CSV file, with costs only for someone who may also see them." },
+  { key: "inventory.adjust", module: "inventory", kind: "manage", sensitive: true, requires: ["inventory.view"], label: "Adjust stock", reveals: "Change stock in Shopify: stock received, corrections, stock counts and damaged stock." },
+  { key: "inventory.alerts", module: "inventory", kind: "manage", sensitive: true, requires: ["inventory.view"], label: "Manage stock alerts", reveals: "Low-stock thresholds, and how the team is told about low and sold-out stock (email, WhatsApp, the bell)." },
+  { key: "inventory.settings", module: "inventory", kind: "manage", sensitive: true, requires: ["inventory.view"], label: "Manage inventory settings", reveals: "How often stock is checked against Shopify, and the lead time and cover used for restock suggestions." },
   // ---- Orders
   { key: "orders.list", module: "orders", kind: "view", label: "View order list", reveals: "The latest orders: order number, date, total, items and sales channel." },
   { key: "orders.payments", module: "orders", kind: "view", requires: ["orders.list"], label: "View payment status", reveals: "Whether each order is paid, pending, refunded or failed." },
@@ -167,6 +185,14 @@ export const ACCESS_CAPABILITY: Partial<Record<AccessKey, string>> = {
   "products.performance": "top_products",
   "products.inventory": "inventory",
   "products.prices": "inventory",
+  "inventory.view": "stock_levels",
+  "inventory.products": "catalog",
+  "inventory.costs": "stock_levels",
+  "inventory.history": "stock_levels",
+  "inventory.export": "stock_levels",
+  "inventory.adjust": "stock_adjustments",
+  "inventory.alerts": "stock_levels",
+  "inventory.settings": "stock_levels",
   "orders.list": "recent_orders",
   "orders.payments": "recent_orders",
   "orders.fulfillment": "fulfillment",
@@ -208,7 +234,7 @@ export const ROLE_INFO: Record<Role, { label: string; description: string }> = {
  * finance, payroll, managing anything, exports): those are always picked one by one.
  */
 export const ROLE_TEMPLATES: Record<RestrictedRole, readonly AccessKey[]> = {
-  viewer: ["analytics.sales", "products.view", "products.performance", "products.inventory", "orders.list", "discounts.codes", "reports.view"],
+  viewer: ["analytics.sales", "products.view", "products.performance", "products.inventory", "inventory.view", "inventory.products", "orders.list", "discounts.codes", "reports.view"],
   analyst: [
     "analytics.sales",
     "analytics.conversion",
@@ -219,6 +245,9 @@ export const ROLE_TEMPLATES: Record<RestrictedRole, readonly AccessKey[]> = {
     "products.view",
     "products.performance",
     "products.inventory",
+    "inventory.view",
+    "inventory.products",
+    "inventory.history",
     "orders.list",
     "orders.payments",
     "orders.fulfillment",
@@ -242,6 +271,9 @@ export const ROLE_TEMPLATES: Record<RestrictedRole, readonly AccessKey[]> = {
     "products.view",
     "products.performance",
     "products.inventory",
+    "inventory.view",
+    "inventory.products",
+    "inventory.history",
     "orders.list",
     "orders.payments",
     "orders.fulfillment",
@@ -481,6 +513,9 @@ export const OVERVIEW_MODULE_ACCESS = {
   discount_codes: ["discounts.codes"],
   recent_orders: ["orders.list"],
   inventory: ["products.inventory"],
+  // The Inventory module's own Shopify access (capabilities.ts): its pages, not the dashboard's.
+  stock_levels: ["inventory.view"],
+  stock_adjustments: ["inventory.adjust"],
   catalog: ["products.view"],
   ads: ["marketing.ads"],
   adsense: ["marketing.ads"],

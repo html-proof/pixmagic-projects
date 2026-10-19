@@ -137,12 +137,16 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
     ...topic("overview", "Business Overview", Gauge),
     ...topic("sales", "Sales & Orders", ShoppingBag),
     ...topic("products", "Products", Package),
+    // The Inventory section (stock per location, alerts, changes). It takes the place of the
+    // dashboard's Stock panel in the menu for whoever can open it; the panel stays on the dashboard.
+    ...(offers("inventory") && allowed("inventory.view") ? [area("/inventory", "Inventory", Boxes)] : []),
     ...topic("customers", "Customers", UsersRound),
     ...topic("ads", "Marketing", Megaphone),
     ...topic("discounts", "Discounts", BadgePercent),
     ...topic("shoppers", "Analytics", ChartColumn),
   ];
-  const store: NavItem[] = [...topic("orders", "Orders", ReceiptText), ...topic("stock", "Stock", Boxes), ...topic("shipping", "Shipping", Truck), ...topic("channels", "Sales channels", Store)];
+  const inventory = offers("inventory") && allowed("inventory.view");
+  const store: NavItem[] = [...topic("orders", "Orders", ReceiptText), ...(inventory ? [] : topic("stock", "Stock", Boxes)), ...topic("shipping", "Shipping", Truck), ...topic("channels", "Sales channels", Store)];
   const apps: NavItem[] = [
     ...(offers("whatsapp") && allowed("marketing.campaigns") ? [area("/whatsapp", "WhatsApp", MessageCircle)] : []),
     ...(offers("staff") && staffAccess(workspace.role, workspace.staffRole, workspace.permissions).permissions.length > 0 ? [area("/staff", "Staff", Users)] : []),
@@ -623,6 +627,18 @@ export function AppShell({ children }: { children: ReactNode }) {
       ...TOPICS.filter((t) => seesTopic(access, t, offers)).map(
         (t): PaletteItem => ({ id: `topic-${t}`, label: topicInfo(t).title, group: "Insights", icon: TOPIC_ICON[t], keywords: TOPIC_WORDS[t], go: () => goToTopic(t, window.location.pathname, (href) => router.push(href)) }),
       ),
+      ...(offers("inventory") && allowed("inventory.view")
+        ? [
+            { id: "inventory", label: "Inventory", group: "Inventory", icon: Boxes, keywords: "stock levels warehouse locations sku", go: go("/inventory") },
+            { id: "inventory-stock", label: "All stock", group: "Inventory", icon: Boxes, keywords: "inventory products variants sku barcode", go: go("/inventory/stock") },
+            { id: "inventory-low", label: "Low stock", group: "Inventory", icon: TriangleAlert, keywords: "inventory running low restock reorder", go: go("/inventory/low-stock") },
+            { id: "inventory-out", label: "Out of stock", group: "Inventory", icon: OctagonAlert, keywords: "inventory sold out", go: go("/inventory/out-of-stock") },
+            ...(allowed("inventory.history") ? [{ id: "inventory-movements", label: "Inventory movements", group: "Inventory", icon: Boxes, keywords: "stock history adjustments audit", go: go("/inventory/movements") }] : []),
+            { id: "inventory-locations", label: "Locations", group: "Inventory", icon: Store, keywords: "inventory warehouses shops", go: go("/inventory/locations") },
+            { id: "inventory-reports", label: "Inventory reports", group: "Inventory", icon: ChartColumn, keywords: "stock trends turnover sell-through", go: go("/inventory/reports") },
+            { id: "inventory-settings", label: "Stock settings", group: "Inventory", icon: Settings, keywords: "thresholds alerts low stock", go: go("/inventory/settings") },
+          ]
+        : []),
       ...(offers("whatsapp") && allowed("marketing.campaigns") ? [{ id: "whatsapp", label: "WhatsApp", group: "Apps", icon: MessageCircle, keywords: "messages campaigns", go: go("/whatsapp") }] : []),
       ...(staff ? [{ id: "staff", label: "Staff", group: "Apps", icon: Users, keywords: "employees payroll timesheets roster", go: go("/staff") }] : []),
       ...(me.employments?.length ? [{ id: "portal", label: "My work", group: "Apps", icon: Briefcase, go: go("/portal") }] : []),

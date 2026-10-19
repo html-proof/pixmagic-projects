@@ -264,6 +264,8 @@ model NotificationPreference {
   syncFailures Boolean @default(true) @map("sync_failures")
   weeklyDigest Boolean @default(false) @map("weekly_digest")
   productNews  Boolean @default(false) @map("product_news")
+  // Low-stock and out-of-stock emails (the Inventory module's alerts).
+  stockAlerts  Boolean @default(true) @map("stock_alerts")
 
   @@id([userId, workspaceId])
   @@map("notification_preferences")
@@ -306,6 +308,14 @@ model Store {
   billedSubscriptions   Subscription[]
   shopifyReports        ShopifyReport[]
   reconciliations       Reconciliation[]
+  inventoryLocations    InventoryLocation[]
+  inventoryLevels       InventoryLevel[]
+  inventoryMovements    InventoryMovement[]
+  inventorySnapshots    InventorySnapshot[]
+  inventoryAdjustments  InventoryAdjustment[]
+  inventorySettings     InventorySettings?
+  inventoryAlerts       InventoryAlert[]
+  inventorySyncRuns     InventorySyncRun[]
 
   @@index([workspaceId])
   @@map("stores")
@@ -332,16 +342,29 @@ model WebhookEvent {
 }
 
 model Product {
-  id          String   @id @default(cuid())
-  workspaceId String   @map("workspace_id")
-  storeId     String   @map("store_id")
-  shopifyId   String   @map("shopify_id")
-  title       String
-  status      String?
-  vendor      String?
-  productType String?  @map("product_type")
-  shopifyCreatedAt DateTime? @map("shopify_created_at")
-  shopifyUpdatedAt DateTime @map("shopify_updated_at")
+  id                String    @id @default(cuid())
+  workspaceId       String    @map("workspace_id")
+  storeId           String    @map("store_id")
+  shopifyId         String    @map("shopify_id")
+  title             String
+  status            String?
+  vendor            String?
+  productType       String?   @map("product_type")
+  shopifyCreatedAt  DateTime? @map("shopify_created_at")
+  shopifyUpdatedAt  DateTime  @map("shopify_updated_at")
+  // Product information for the Inventory module (null on rows stored before it read them; the
+  // next catalog sync fills them in). `description` is Shopify's plain-text description, cut at
+  // 5,000 characters; `category` the taxonomy category's full name; `collections` [{id, title}]
+  // (the first 10, numeric ids); `imageUrl` the featured image.
+  handle            String?
+  description       String?
+  tags              String[]  @default([])
+  category          String?
+  collections       Json?
+  imageUrl          String?   @map("image_url")
+  onlineStoreUrl    String?   @map("online_store_url")
+  // The merchant's own low-stock threshold for every variant of the product (null: the store's).
+  lowStockThreshold Int?      @map("low_stock_threshold")
 
   @@unique([storeId, shopifyId])
   @@index([workspaceId])
@@ -350,23 +373,287 @@ model Product {
 
 // One row per product variant: price, stock and unit cost (inventory module).
 model ProductVariant {
-  id                String   @id @default(cuid())
-  workspaceId       String   @map("workspace_id")
-  storeId           String   @map("store_id")
-  productShopifyId  String   @map("product_shopify_id")
-  shopifyId         String   @map("shopify_id")
+  id                String    @id @default(cuid())
+  workspaceId       String    @map("workspace_id")
+  storeId           String    @map("store_id")
+  productShopifyId  String    @map("product_shopify_id")
+  shopifyId         String    @map("shopify_id")
   title             String
   sku               String?
-  price             Decimal  @db.Decimal(18, 2)
+  price             Decimal   @db.Decimal(18, 2)
   // Total sellable quantity across locations; null when Shopify doesn't track inventory for it.
-  inventoryQuantity Int?     @map("inventory_quantity")
-  unitCost          Decimal? @map("unit_cost") @db.Decimal(18, 2)
-  shopifyUpdatedAt  DateTime @map("shopify_updated_at")
+  inventoryQuantity Int?      @map("inventory_quantity")
+  unitCost          Decimal?  @map("unit_cost") @db.Decimal(18, 2)
+  shopifyUpdatedAt  DateTime  @map("shopify_updated_at")
+  // The variant's InventoryItem (numeric id; one per variant): what its stock levels are keyed by
+  // (inventory_levels.inventory_item_id). Null until a catalog sync since the Inventory module read it.
+  inventoryItemId   String?   @map("inventory_item_id")
+  barcode           String?
+  compareAtPrice    Decimal?  @map("compare_at_price") @db.Decimal(18, 2)
+  // [{name, value}]: size, colour, material...
+  options           Json?
+  taxable           Boolean?
+  // "deny" | "continue": whether Shopify keeps selling it when it is out of stock.
+  inventoryPolicy   String?   @map("inventory_policy")
+  requiresShipping  Boolean?  @map("requires_shipping")
+  weight            Decimal?  @db.Decimal(18, 4)
+  // GRAMS | KILOGRAMS | OUNCES | POUNDS, as Shopify names them.
+  weightUnit        String?   @map("weight_unit")
+  position          Int?
+  shopifyCreatedAt  DateTime? @map("shopify_created_at")
+  // The merchant's own low-stock threshold for this variant (null: the product's, else the store's).
+  lowStockThreshold Int?      @map("low_stock_threshold")
 
   @@unique([storeId, shopifyId])
   @@index([storeId, productShopifyId])
+  @@index([storeId, inventoryItemId])
   @@index([workspaceId])
   @@map("product_variants")
+}
+
+// ------------------------------------------------------------------ Inventory module
+// docs/inventory.md. Shopify keeps stock per InventoryItem (one per variant) per Location, in
+// separate quantity states; these tables mirror that and nothing is ever derived from guesses.
+// Ids are Shopify's numeric ids (gid://shopify/<Type>/<id> without the prefix), as elsewhere.
+
+// A Shopify location (warehouse, shop, app-managed). Kept with `deletedAt` once Shopify drops it,
+// so the stock history that names it still can.
+model InventoryLocation {
+  id                   String    @id @default(cuid())
+  workspaceId          String    @map("workspace_id")
+  storeId              String    @map("store_id")
+  shopifyId            String    @map("shopify_id")
+  name                 String
+  isActive             Boolean   @map("is_active")
+  // Managed by a fulfillment service app (Shopify's "legacy" locations).
+  isFulfillmentService Boolean   @default(false) @map("is_fulfillment_service")
+  fulfillsOnlineOrders Boolean?  @map("fulfills_online_orders")
+  // {address1, address2, city, province, zip, country, countryCode}; null when Shopify gave none.
+  address              Json?
+  formattedAddress     String?   @map("formatted_address")
+  syncedAt             DateTime  @map("synced_at")
+  deletedAt            DateTime? @map("deleted_at")
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, shopifyId])
+  @@index([workspaceId])
+  @@map("inventory_locations")
+}
+
+// One inventory item at one location, with every quantity state Shopify reports for it, as last
+// read from Shopify. `on_hand` = available + committed + reserved + damaged + safety_stock +
+// quality_control (Shopify's rule); `incoming` is separate.
+model InventoryLevel {
+  id                String   @id @default(cuid())
+  workspaceId       String   @map("workspace_id")
+  storeId           String   @map("store_id")
+  inventoryItemId   String   @map("inventory_item_id")
+  locationShopifyId String   @map("location_shopify_id")
+  available         Int
+  onHand            Int      @map("on_hand")
+  committed         Int
+  incoming          Int
+  reserved          Int
+  damaged           Int
+  safetyStock       Int      @map("safety_stock")
+  qualityControl    Int      @map("quality_control")
+  // InventoryLevel.updatedAt: older reads never overwrite newer ones (webhooks arrive out of order).
+  shopifyUpdatedAt  DateTime @map("shopify_updated_at")
+  // When bizinsights last read it from Shopify (a sync, a check, a webhook's re-read).
+  syncedAt          DateTime @map("synced_at")
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, inventoryItemId, locationShopifyId])
+  @@index([storeId, locationShopifyId])
+  @@index([workspaceId])
+  @@map("inventory_levels")
+}
+
+// A change in a quantity state that bizinsights saw: the value before (null the first time it was
+// seen) and after. `source` says how it was seen: "webhook" (Shopify announced it and we read the
+// level), "sync" (an import or refresh found it), "reconcile" (the scheduled check found a change no
+// webhook had reported), "adjustment" (made in bizinsights and confirmed by Shopify:
+// `adjustmentId`). Shopify's own adjustment history is not readable through its API, so every row
+// here is an observation of Shopify's state, never a reconstruction. Names are copied in so the
+// history still reads after a product or location is deleted.
+model InventoryMovement {
+  id                String   @id @default(cuid())
+  workspaceId       String   @map("workspace_id")
+  storeId           String   @map("store_id")
+  inventoryItemId   String   @map("inventory_item_id")
+  locationShopifyId String   @map("location_shopify_id")
+  variantShopifyId  String?  @map("variant_shopify_id")
+  productShopifyId  String?  @map("product_shopify_id")
+  productTitle      String?  @map("product_title")
+  variantTitle      String?  @map("variant_title")
+  sku               String?
+  locationName      String?  @map("location_name")
+  // available | on_hand | committed | incoming | reserved | damaged | safety_stock | quality_control
+  quantityName      String   @map("quantity_name")
+  before            Int?
+  after             Int
+  delta             Int
+  source            String
+  adjustmentId      String?  @map("adjustment_id")
+  shopifyUpdatedAt  DateTime @map("shopify_updated_at")
+  observedAt        DateTime @default(now()) @map("observed_at")
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([storeId, observedAt])
+  @@index([storeId, variantShopifyId, observedAt])
+  @@index([workspaceId])
+  @@map("inventory_movements")
+}
+
+// The store's stock at the end of a store-local day (updated through the day; the last write is the
+// day's close), storewide (`locationKey` "all") and per location (its numeric id). Trend charts
+// read these and only these: a day without one shows as not recorded.
+model InventorySnapshot {
+  id                String   @id @default(cuid())
+  workspaceId       String   @map("workspace_id")
+  storeId           String   @map("store_id")
+  day               String
+  locationKey       String   @map("location_key")
+  trackedVariants   Int      @map("tracked_variants")
+  untrackedVariants Int      @map("untracked_variants")
+  available         Int
+  onHand            Int      @map("on_hand")
+  committed         Int
+  incoming          Int
+  lowStock          Int      @map("low_stock")
+  outOfStock        Int      @map("out_of_stock")
+  // Cost of the units on hand, for the variants whose cost is known (`variantsWithCost` of
+  // `variantsInStock`); null when none is.
+  costValue         Decimal? @map("cost_value") @db.Decimal(18, 2)
+  variantsWithCost  Int      @map("variants_with_cost")
+  variantsInStock   Int      @map("variants_in_stock")
+  retailValue       Decimal  @map("retail_value") @db.Decimal(18, 2)
+  takenAt           DateTime @map("taken_at")
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, day, locationKey])
+  @@index([workspaceId])
+  @@map("inventory_snapshots")
+}
+
+// A stock change asked for in bizinsights, and what Shopify said. Written "pending" before the
+// mutation is sent and settled once (confirmed | failed | unknown), never edited after: a database
+// trigger refuses any other update (migration 20261019120000), and the tenant role may only read.
+// `idempotencyKey` is the client's, sent to Shopify as @idempotent(key:), so a retried request
+// changes stock once.
+model InventoryAdjustment {
+  id                String    @id @default(cuid())
+  workspaceId       String    @map("workspace_id")
+  storeId           String    @map("store_id")
+  idempotencyKey    String    @map("idempotency_key")
+  actorUserId       String?   @map("actor_user_id")
+  inventoryItemId   String    @map("inventory_item_id")
+  locationShopifyId String    @map("location_shopify_id")
+  variantShopifyId  String?   @map("variant_shopify_id")
+  productShopifyId  String?   @map("product_shopify_id")
+  productTitle      String?   @map("product_title")
+  variantTitle      String?   @map("variant_title")
+  sku               String?
+  locationName      String?   @map("location_name")
+  // increase | decrease | set | correction | damaged | stocktake
+  kind              String
+  // The quantity state changed: available, on_hand (stocktake), damaged (moved from available).
+  quantityName      String    @map("quantity_name")
+  // Shopify's reason code (correction, received, damaged, cycle_count_available, ...).
+  reason            String
+  note              String?
+  referenceId       String?   @map("reference_id")
+  // The change asked for: a delta (increase, decrease, correction, damaged) or a new quantity (set, stocktake).
+  delta             Int?
+  quantity          Int?
+  // The quantity the person saw when they asked; sent as changeFromQuantity, so Shopify refuses
+  // the change if the stock moved in the meantime.
+  expectedBefore    Int?      @map("expected_before")
+  status            String
+  errorCode         String?   @map("error_code")
+  // inventoryAdjustmentGroup.id from Shopify's answer.
+  shopifyGroupId    String?   @map("shopify_group_id")
+  // The quantity read back from Shopify right after it confirmed the change.
+  resultQuantity    Int?      @map("result_quantity")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  completedAt       DateTime? @map("completed_at")
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, idempotencyKey])
+  @@index([storeId, createdAt])
+  @@index([workspaceId])
+  @@map("inventory_adjustments")
+}
+
+// The store's inventory settings (thresholds, alerts, the check's schedule). No row = defaults
+// (@app/shared/inventory INVENTORY_DEFAULTS).
+model InventorySettings {
+  storeId           String   @id @map("store_id")
+  workspaceId       String   @map("workspace_id")
+  lowStockThreshold Int      @default(10) @map("low_stock_threshold")
+  emailAlerts       Boolean  @default(true) @map("email_alerts")
+  dashboardAlerts   Boolean  @default(true) @map("dashboard_alerts")
+  whatsappAlerts    Boolean  @default(false) @map("whatsapp_alerts")
+  // The approved WhatsApp template the alert is sent with, and the numbers it goes to
+  // (AES-256-GCM, never returned: the API sends them masked).
+  whatsappTemplate  String?  @map("whatsapp_template")
+  whatsappToEnc     String?  @map("whatsapp_to_enc")
+  // Hours between full checks of every stock level against Shopify (1 to 24).
+  reconcileHours    Int      @default(6) @map("reconcile_hours")
+  // For restock suggestions: days a reorder takes to arrive, and days of sales it should cover.
+  leadTimeDays      Int      @default(14) @map("lead_time_days")
+  coverDays         Int      @default(30) @map("cover_days")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@map("inventory_settings")
+}
+
+// A variant's stock alert (out_of_stock | low_stock | fast_movement): one row per variant and kind,
+// opened when the variant crosses into it and resolved when it leaves. `notifiedAt` is when people
+// were told, so an alert that stays open is announced once (and one that flaps at most once a day).
+model InventoryAlert {
+  id               String    @id @default(cuid())
+  workspaceId      String    @map("workspace_id")
+  storeId          String    @map("store_id")
+  variantShopifyId String    @map("variant_shopify_id")
+  kind             String
+  available        Int
+  threshold        Int?
+  openedAt         DateTime  @map("opened_at")
+  resolvedAt       DateTime? @map("resolved_at")
+  notifiedAt       DateTime? @map("notified_at")
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, variantShopifyId, kind])
+  @@index([storeId, resolvedAt])
+  @@index([workspaceId])
+  @@map("inventory_alerts")
+}
+
+// One full pass over a store's stock (the import, a manual refresh, or the scheduled check against
+// Shopify): how many levels it read and how many differed from what bizinsights held.
+model InventorySyncRun {
+  id            String    @id @default(cuid())
+  workspaceId   String    @map("workspace_id")
+  storeId       String    @map("store_id")
+  // import | manual | reconcile
+  trigger       String
+  status        String
+  locations     Int       @default(0)
+  levelsChecked Int       @default(0) @map("levels_checked")
+  differences   Int       @default(0)
+  // Up to 20 of the differences: [{inventoryItemId, locationId, name, ours, shopify}].
+  sample        Json?
+  error         String?
+  startedAt     DateTime  @map("started_at")
+  finishedAt    DateTime? @map("finished_at")
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([storeId, startedAt])
+  @@index([workspaceId])
+  @@map("inventory_sync_runs")
 }
 
 model Order {

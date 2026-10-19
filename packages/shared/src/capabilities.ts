@@ -19,7 +19,9 @@ export type ModuleId =
   | "inventory"
   | "catalog"
   | "shopify_sessions"
-  | "profit";
+  | "profit"
+  | "stock_levels"
+  | "stock_adjustments";
 
 export interface CapabilityDef {
   id: ModuleId;
@@ -29,6 +31,11 @@ export interface CapabilityDef {
   requiredScopes: string[];
   /** Extra non-scope prerequisites (e.g. web pixel installed). */
   requires?: Array<"pixel_installed">;
+  /**
+   * Where it is offered: the dashboard's modules (the default), or the Inventory pages, which ask
+   * for their own access ("Connect stock levels") and are left out of the dashboard's locked list.
+   */
+  area?: "dashboard" | "inventory";
 }
 
 export const CAPABILITIES: readonly CapabilityDef[] = [
@@ -125,6 +132,22 @@ export const CAPABILITIES: readonly CapabilityDef[] = [
     description: "Shopify's gross profit and cost of goods sold, from the cost per item recorded with each sale.",
     requiredScopes: ["read_reports"],
   },
+  // The Inventory module (docs/inventory.md): stock per location and quantity state, kept in step
+  // with Shopify by webhooks and a scheduled check; and changing stock in Shopify from bizinsights.
+  {
+    id: "stock_levels",
+    title: "Stock by location",
+    description: "Available, on-hand, committed and incoming stock at each of your locations, kept in step with Shopify.",
+    requiredScopes: ["read_products", "read_inventory", "read_locations"],
+    area: "inventory",
+  },
+  {
+    id: "stock_adjustments",
+    title: "Stock adjustments",
+    description: "Change stock in Shopify from bizinsights: stock received, corrections, counts and damaged stock.",
+    requiredScopes: ["read_products", "write_inventory", "read_locations"],
+    area: "inventory",
+  },
 ];
 
 /**
@@ -161,6 +184,18 @@ export const SCOPE_LABELS: Record<string, { title: string; description: string }
     title: "Your Shopify reports",
     description: "Shopify's own sessions, visitors and gross profit figures, and its sales report to check ours against.",
   },
+  read_inventory: {
+    title: "Your stock levels",
+    description: "Available, on-hand, committed and incoming stock for each item at each location.",
+  },
+  read_locations: {
+    title: "Your locations",
+    description: "The names and addresses of the places you keep stock, so stock can be shown per location.",
+  },
+  write_inventory: {
+    title: "Changing your stock",
+    description: "Lets people you allow change stock quantities in Shopify from bizinsights. Nothing changes unless someone asks.",
+  },
 };
 
 export function scopeLabel(scope: string): string {
@@ -194,6 +229,8 @@ export interface CapabilityState {
   id: ModuleId;
   title: string;
   description: string;
+  /** Where it is offered (CapabilityDef.area): "dashboard" unless it belongs to the Inventory pages. */
+  area: "dashboard" | "inventory";
   enabled: boolean;
   missingScopes: string[];
   /**
@@ -239,6 +276,7 @@ export function resolveCapabilities(
     return {
       id: c.id,
       title: c.title,
+      area: c.area ?? "dashboard",
       description: c.description,
       enabled: missingScopes.length === 0 && missingRequirements.length === 0,
       missingScopes,

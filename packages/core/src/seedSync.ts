@@ -2,6 +2,7 @@
 import { systemDb, type Store } from "@app/db";
 import { expandScopes } from "@app/shared";
 import type { Queues, SyncKind } from "./queues.js";
+import { hasCapabilityScopes } from "./inventory/access.js";
 
 /**
  * Kinds that must wait for the "shop" job, because they bucket rows by the store's local day
@@ -12,7 +13,7 @@ import type { Queues, SyncKind } from "./queues.js";
  * added a serial hop to the front of every import. The worker fans these out after `shop`;
  * the rest are enqueued here, straight away.
  */
-const NEEDS_TIMEZONE = new Set<SyncKind>(["orders"]);
+const NEEDS_TIMEZONE = new Set<SyncKind>(["orders", "inventory"]);
 
 /**
  * Create the initial sync job rows (visible as onboarding progress) and enqueue everything
@@ -24,6 +25,8 @@ export async function seedInitialSync(deps: { queues: Pick<Queues, "sync"> }, st
   const kinds: SyncKind[] = ["shop", "orders"];
   if (scopes.has("read_products")) kinds.push("products", "variants");
   if (scopes.has("write_pixels")) kinds.push("install_pixel");
+  // Stock levels, once granted (the inventory pass records the store's day, so it waits for the zone).
+  if (hasCapabilityScopes(store.grantedScopes, "stock_levels")) kinds.push("inventory");
 
   const jobs = [];
   for (const kind of kinds) {
@@ -54,6 +57,7 @@ export async function seedResync(
   const scopes = expandScopes(store.grantedScopes);
   const kinds: SyncKind[] = ["orders"];
   if (scopes.has("read_products")) kinds.push("products", "variants");
+  if (hasCapabilityScopes(store.grantedScopes, "stock_levels")) kinds.push("inventory");
   const jobs = [];
   for (const kind of kinds) {
     const job = await systemDb.syncJob.create({ data: { workspaceId: store.workspaceId, storeId: store.id, kind } });

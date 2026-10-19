@@ -11,7 +11,7 @@
 export type AlertSeverity = "info" | "warning" | "critical";
 
 /** Where the problem gets fixed: the bell and the alert email link each to its page. */
-export type AlertArea = "shopify" | "email" | "staff" | "whatsapp" | "privacy" | "general";
+export type AlertArea = "shopify" | "email" | "staff" | "whatsapp" | "privacy" | "inventory" | "general";
 
 /** The app page each area's alerts link to (a path: the email puts APP_URL in front of it). */
 export const ALERT_PATH: Record<AlertArea, string> = {
@@ -20,6 +20,7 @@ export const ALERT_PATH: Record<AlertArea, string> = {
   staff: "/staff/timesheets",
   whatsapp: "/whatsapp/automations",
   privacy: "/settings/privacy",
+  inventory: "/inventory/low-stock",
   general: "/support",
 };
 
@@ -50,6 +51,7 @@ const SYNC_WHAT: Record<string, string> = {
   products: "your products",
   variants: "your product variants",
   orders: "your orders",
+  inventory: "your stock levels",
 };
 
 const STILL_CORRECT = "The figures you already see are still correct, and the next scheduled sync will try again.";
@@ -113,6 +115,8 @@ export function describeAlert(alert: { code: string; severity: string; message: 
   // These messages are composed from the app's wording and the merchant's own addresses and counts.
   if (code.startsWith("email_account_reauth:")) return { severity, area: "email", title: "An email account needs reconnecting", body: message };
   if (code.startsWith("email_sender_rejected:")) return { severity, area: "email", title: "A sender address was refused", body: message };
+  // Composed from the app's wording and the store's own counts (core's inventory alerts).
+  if (code === "inventory_stock") return { severity, area: "inventory", title: "Stock is running low", body: message };
   if (code === "staff_open_shifts") return { severity, area: "staff", title: "Shifts left open", body: message };
   // The text a merchant wrote in a WhatsApp automation's "notify the team" step.
   if (code.startsWith("wa_rule_")) return { severity, area: "whatsapp", title: "WhatsApp automation", body: message };

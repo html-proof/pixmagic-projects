@@ -46,6 +46,8 @@ This pushes, as one versioned config:
 | `read_products` | Top products, inventory, catalog | Products (title, status, vendor, type) and variants (price, stock, unit cost) |
 | `read_customers` (optional) | New vs returning | Only the customer id is used, and only as a keyed hash |
 | `write_pixels`, `read_customer_events` (optional) | Shopping funnel | Install the web pixel and receive storefront events |
+| `read_inventory`, `read_locations` (optional, once declared) | Inventory: stock per location and quantity state | docs/inventory.md, "Turning on stock levels and stock changes" |
+| `write_inventory` (optional, once declared) | Inventory: changing stock from bizinsights | Only when a person with `inventory.adjust` asks; each change confirmed by Shopify |
 
 The dashboard reads the scopes **actually granted** (from the token response and `app/scopes_update`) and hides any module whose scopes are missing.
 

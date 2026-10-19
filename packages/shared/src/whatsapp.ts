@@ -486,6 +486,16 @@ export const TEMPLATE_LIBRARY: LibraryTemplate[] = [
     stopButton: true,
     mapping: m(["occasion", "store_name", "discount_percentage", "end_date"], ["campaign_link_code"]),
   },
+  // To the store's own team, not to customers: the Inventory module's low-stock alerts
+  // (Inventory → Stock settings picks it and the numbers it goes to).
+  {
+    name: "insights_stock_alert",
+    category: "UTILITY",
+    label: "Stock alert (to your team)",
+    body: "Stock alert for {{1}}: {{2}}\nOpen bizinsights to see which products need restocking.",
+    examples: ["Green Leaf Store", "3 products are out of stock and 5 are running low."],
+    mapping: m(["store_name", "custom_text"]),
+  },
 ];
 
 export const libraryTemplate = (name: string) => TEMPLATE_LIBRARY.find((t) => t.name === name) ?? null;
