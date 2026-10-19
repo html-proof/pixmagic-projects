@@ -299,13 +299,26 @@ test("a browser signed in to another account opens a shared link: the account st
   await expect(shared).toHaveURL(/\/dashboard/);
   await expect(sidebar(shared).getByRole("link", { name: "Products" })).toBeVisible();
 
-  // ---- Closing the shared dashboard leaves their own account signed in.
+  // ---- Closing the shared dashboard leaves their own account signed in. The tab goes to the
+  // homepage, which sends a signed-in browser straight on to its own dashboard: so this one ends
+  // on the client's own (store-less) dashboard, with nothing of Shared Co in it, as their own
+  // account, and the shared-link session is over. (The homepage is passed through too quickly to
+  // be asserted on: only where the tab ends up is.)
   await shared.bringToFront();
   await shared.getByRole("button", { name: "Account menu" }).focus();
   await shared.keyboard.press("Enter");
   await shared.getByRole("button", { name: "Close the shared dashboard" }).focus();
   await shared.keyboard.press("Enter");
-  await expect(shared).not.toHaveURL(/\/dashboard/);
+  await expect(shared.getByRole("heading", { name: "Connect your first store" })).toBeVisible({ timeout: 15_000 });
+  await expect(shared).toHaveURL(/\/dashboard/);
+  await expect(shared.getByTestId("member-badge")).toHaveCount(0);
+  const after = await shared.evaluate(async () => ({
+    own: (await (await fetch("/api/me")).json()) as { user: { email: string }; shared: unknown },
+    link: (await fetch("/api/me", { headers: { "x-bi-context": "shared" } })).status,
+  }));
+  expect(after.own.user.email).toBe(personal);
+  expect(after.own.shared).toBeNull();
+  expect(after.link).toBe(401);
   const still = await own.evaluate(async () => (await fetch("/api/me")).status);
   expect(still).toBe(200);
   await ctx.close();

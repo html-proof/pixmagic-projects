@@ -166,14 +166,14 @@ export function fakeCognito() {
         return { tokens: issue(u) };
       }),
     ),
-    refresh: track("refresh", (refreshToken, sub) =>
+    refresh: track("refresh", (refreshToken, username) =>
       up(() => {
         if (state.refreshUnavailable) throw new CognitoUnavailableError("Cognito refresh is down (test)");
         const owner = refreshTokens.get(refreshToken);
         const u = users.get(owner ?? "");
-        // The hash is keyed by the sub (a Google user's user name isn't it): anything else fails the
-        // SECRET_HASH check, which Cognito reports the same way.
-        if (!owner || !u || u.sub !== sub || !u.enabled) throw err("NotAuthorizedException", "Invalid Refresh Token");
+        // The hash is keyed by the Cognito user name (a native user's is its sub; a Google user's is
+        // google_<id>): anything else fails the SECRET_HASH check, which Cognito reports the same way.
+        if (!owner || !u || u.username !== username || !u.enabled) throw err("NotAuthorizedException", "Invalid Refresh Token");
         const t = issue(u);
         refreshTokens.delete(t.refreshToken!);
         return { ...t, refreshToken: undefined };

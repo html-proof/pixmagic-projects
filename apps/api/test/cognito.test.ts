@@ -56,12 +56,11 @@ describe("the user-pool API", () => {
     });
   });
 
-  it("refreshes with the user's sub in SECRET_HASH (the pool signs in with email, not a user name)", async () => {
+  it("refreshes with the Cognito user name in SECRET_HASH (a Google user's google_<id>, never the sub)", async () => {
     const net = network(() => json({ AuthenticationResult: { IdToken: "id", AccessToken: "at", ExpiresIn: 3600 } }));
-    // A Google user: user name google_123, sub a UUID. AWS: without `username` as a sign-in
-    // attribute, a refresh's hash is keyed by the sub.
-    await cognitoAuth(CFG, net.fetchImpl).refresh("the-rt", "6f1d1c4e-0000-4000-8000-000000000001");
-    expect(JSON.parse(net.seen[0]!.body).AuthParameters).toEqual({ REFRESH_TOKEN: "the-rt", SECRET_HASH: secretHash("6f1d1c4e-0000-4000-8000-000000000001") });
+    // A Google user: user name google_123, sub a UUID. Cognito refuses a refresh hashed with the sub.
+    await cognitoAuth(CFG, net.fetchImpl).refresh("the-rt", "google_123");
+    expect(JSON.parse(net.seen[0]!.body).AuthParameters).toEqual({ REFRESH_TOKEN: "the-rt", SECRET_HASH: secretHash("google_123") });
   });
 
   it("uses GetTokensFromRefreshToken (with the client secret) when rotation is on", async () => {
