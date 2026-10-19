@@ -21,7 +21,8 @@ import {
 } from "@app/shared";
 import { logger } from "../logger.js";
 import {
-  adAccountList,
+  AD_DISCOVERY_BUDGET_MS,
+  adAccountListWithin,
   AdsApiError,
   AdsAuthError,
   AdsNoAccountsError,
@@ -196,13 +197,14 @@ const GOOGLE_DISCOVERY_CONCURRENCY = 8;
 
 /**
  * Run `task` over `items`, at most `limit` at a time, keeping the order. A task that throws stops
- * new ones starting; its error is thrown once the running ones are done.
+ * new ones starting; its error is thrown once the running ones are done. Past `deadline` (epoch ms)
+ * no new one starts either, once the first `limit` have: those left out stay `undefined`.
  */
-async function eachLimited<T, R>(items: T[], limit: number, task: (item: T) => Promise<R>): Promise<R[]> {
-  const out = new Array<R>(items.length);
+async function eachLimited<T, R>(items: T[], limit: number, task: (item: T) => Promise<R>, deadline = Number.POSITIVE_INFINITY): Promise<Array<R | undefined>> {
+  const out = new Array<R | undefined>(items.length).fill(undefined);
   const run = { next: 0, failed: false, err: undefined as unknown };
   const worker = async () => {
-    while (!run.failed && run.next < items.length) {
+    while (!run.failed && run.next < items.length && (run.next < limit || Date.now() < deadline)) {
       const i = run.next++;
       try {
         out[i] = await task(items[i]!);
@@ -232,18 +234,21 @@ type Discovered = { kind: "direct"; account: AdAccount } | { kind: "manager"; cl
  * themselves have no metrics of their own and are never listed. Never empty: with nothing to
  * connect it throws AdsNoAccountsError, saying why, so the person is told what to do.
  *
- * Each accessible customer costs a query (a manager one more), so the look-ups run 8 at a time and
- * stop at GOOGLE_DISCOVERY_MAX_CUSTOMERS: the list is then marked `truncated`.
+ * Each accessible customer costs a query (a manager one more), and it all runs inside the OAuth
+ * callback: the look-ups run 8 at a time, stop at GOOGLE_DISCOVERY_MAX_CUSTOMERS and at
+ * AD_DISCOVERY_BUDGET_MS (`budgetMs`), and the list stops at what the sign-in can hold while the
+ * person picks (AD_ACCOUNT_LIST_MAX_BYTES). A list cut by any of them is marked `truncated`.
  */
-export async function googleAdAccounts(c: GoogleConfig, accessToken: string): Promise<AdAccountList> {
+export async function googleAdAccounts(c: GoogleConfig, accessToken: string, opts: { budgetMs?: number } = {}): Promise<AdAccountList> {
   const list = await googleAds<{ resourceNames?: string[] }>(c, accessToken, "customers:listAccessibleCustomers", { method: "GET" });
+  const deadline = Date.now() + (opts.budgetMs ?? AD_DISCOVERY_BUDGET_MS);
   const all = [...new Set((list.resourceNames ?? []).map((r) => googleCustomerId(r.split("/").pop() ?? "")).filter(Boolean))];
   if (!all.length) throw new AdsNoAccountsError("This Google login has no Google Ads account");
   const ids = all.slice(0, GOOGLE_DISCOVERY_MAX_CUSTOMERS);
   if (all.length > ids.length) {
     logger.warn({ accessible: all.length, checked: ids.length, dropped: all.slice(ids.length, ids.length + 20) }, "google ads: login reaches more customers than one sign-in looks up; the rest are left out");
   }
-  const found = await eachLimited(ids, GOOGLE_DISCOVERY_CONCURRENCY, async (id): Promise<Discovered> => {
+  const looked = await eachLimited(ids, GOOGLE_DISCOVERY_CONCURRENCY, async (id): Promise<Discovered> => {
     let me: CustomerRow["customer"];
     try {
       me = (await googleSearch<CustomerRow>(c, accessToken, id, "SELECT customer.id, customer.descriptive_name, customer.currency_code, customer.time_zone, customer.manager, customer.status FROM customer"))[0]?.customer;
@@ -282,7 +287,12 @@ export async function googleAdAccounts(c: GoogleConfig, accessToken: string): Pr
       });
     }
     return { kind: "manager", clients: accounts };
-  });
+  }, deadline);
+  const late = ids.filter((_, i) => looked[i] === undefined);
+  if (late.length) {
+    logger.warn({ checked: ids.length - late.length, late: late.length, dropped: late.slice(0, 20) }, "google ads: account look-ups ran out of the sign-in's time; the rest are left out");
+  }
+  const found = looked.filter((f): f is Discovered => f !== undefined);
   const out = new Map<string, AdAccount>();
   const unreadable: string[] = [];
   // In the order Google listed them: an account reached directly wins over the same one under a manager.
@@ -291,7 +301,13 @@ export async function googleAdAccounts(c: GoogleConfig, accessToken: string): Pr
     else if (f.kind === "direct") out.set(f.account.accountId, f.account);
     else for (const a of f.clients) if (!out.has(a.accountId)) out.set(a.accountId, a);
   }
-  if (out.size) return adAccountList([...out.values()], all.length > ids.length);
+  if (out.size) {
+    const listed = adAccountListWithin([...out.values()], all.length > ids.length || late.length > 0);
+    if (listed.length < out.size) logger.warn({ found: out.size, listed: listed.length }, "google ads: more accounts than one sign-in can hold; the rest are left out");
+    return listed;
+  }
+  // Nothing readable among the ones looked at in time: the others may be, so it's worth another go.
+  if (late.length) throw new AdsRetryableError("Google Ads took too long to list this login's accounts");
   // Accounts exist but none can be read: unfinished or closed accounts first, since they're the person's own.
   if (unreadable.length) throw new AdsNoAccountsError(`Google Ads won't report on ${unreadable.slice(0, 20).join("; ")}`, "not_ready");
   throw new AdsNoAccountsError(`Only manager accounts with no active ad account under them: ${ids.slice(0, 20).join(", ")}`, "manager_only");

@@ -151,6 +151,34 @@ export type AdAccountList = AdAccount[] & { truncated?: boolean };
 
 export const adAccountList = (accounts: AdAccount[], truncated: boolean): AdAccountList => Object.assign(accounts, truncated ? { truncated: true } : {});
 
+/**
+ * How much of an account list one sign-in carries. The list is read inside the OAuth callback, then
+ * waits in the coordinator while the person picks: one DynamoDB item, which holds 400 KB with the
+ * tokens and everything else, so the accounts get 300 KB of it.
+ */
+export const AD_ACCOUNT_LIST_MAX_BYTES = 300_000;
+
+/**
+ * How long a sign-in spends listing accounts beyond the first answer: the callback runs in the API,
+ * which has 55 seconds for the whole request and other calls to make.
+ */
+export const AD_DISCOVERY_BUDGET_MS = 20_000;
+
+const utf8 = new TextEncoder();
+
+/** The accounts, in order, that fit in `maxBytes` as JSON; marked `truncated` when some didn't (or `truncated` already). */
+export function adAccountListWithin(accounts: AdAccount[], truncated: boolean, maxBytes = AD_ACCOUNT_LIST_MAX_BYTES): AdAccountList {
+  // "[" and "]", then each account and its comma.
+  let bytes = 2;
+  let fit = 0;
+  for (const a of accounts) {
+    bytes += utf8.encode(JSON.stringify(a)).length + 1;
+    if (bytes > maxBytes) break;
+    fit++;
+  }
+  return adAccountList(fit < accounts.length ? accounts.slice(0, fit) : accounts, truncated || fit < accounts.length);
+}
+
 /** An ad account's health as the platform reports it now (metaAccountHealth, adsenseAccountHealth). */
 export interface AdAccountHealth {
   status: AdAccountStatus | null;

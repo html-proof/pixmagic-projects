@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  AD_ACCOUNT_LIST_MAX_BYTES,
   adsenseAuthorizeUrl,
   AdsApiError,
   AdsAuthError,
@@ -326,6 +327,43 @@ describe("the accounts a Google login reaches", () => {
     const err = await googleAdAccounts(google(allCancelled.fetchImpl), "AT").catch((e: unknown) => e);
     expect(err).toBeInstanceOf(AdsNoAccountsError);
     expect(err).toMatchObject({ reason: "not_ready" });
+  });
+
+  // It all runs inside the OAuth callback (the API has 55 s), and the list is then held in one
+  // DynamoDB item (400 KB) while the person picks.
+  it("look-ups stop at the sign-in's time: the first round always runs, the rest are left out and the list marked as cut", async () => {
+    const accessible = Array.from({ length: 20 }, (_, i) => `customers/${7000 + i}`);
+    const f = fake((u) => {
+      if (u.pathname.endsWith("customers:listAccessibleCustomers")) return json({ resourceNames: accessible });
+      const id = u.pathname.split("/")[3]!;
+      return json([{ results: [{ customer: { id, manager: false, status: "ENABLED" } }] }]);
+    });
+    const accounts = await googleAdAccounts(google(f.fetchImpl), "AT", { budgetMs: 0 });
+    expect(accounts.map((a) => a.accountId)).toEqual(accessible.slice(0, 8).map((r) => r.split("/")[1]));
+    expect(accounts.truncated).toBe(true);
+    expect(f.calls).toHaveLength(1 + 8);
+    // Nothing readable in the round that ran, and others not looked at: worth another go, not "no account".
+    const unreadable = fake((u) =>
+      u.pathname.endsWith("customers:listAccessibleCustomers")
+        ? json({ resourceNames: accessible })
+        : json([adsFailure(403, "PERMISSION_DENIED", [{ errorCode: { authorizationError: "CUSTOMER_NOT_ENABLED" }, message: "x" }])], 403),
+    );
+    await expect(googleAdAccounts(google(unreadable.fetchImpl), "AT", { budgetMs: 0 })).rejects.toBeInstanceOf(AdsRetryableError);
+  });
+
+  it("a manager with thousands of clients: the list stops at what the sign-in can hold", async () => {
+    const f = fake((u, init) => {
+      if (u.pathname.endsWith("customers:listAccessibleCustomers")) return json({ resourceNames: ["customers/100"] });
+      if (!queryOf(init).includes("FROM customer_client")) return json([{ results: [{ customer: { id: "100", manager: true, status: "ENABLED" } }] }]);
+      const results = Array.from({ length: 4000 }, (_, i) => ({ customerClient: { id: String(200000 + i), descriptiveName: `Client ${"ü".repeat(40)} ${i}`, currencyCode: "EUR", timeZone: "Europe/Berlin", manager: false, status: "ENABLED" } }));
+      return json([{ results }]);
+    });
+    const accounts = await googleAdAccounts(google(f.fetchImpl), "AT");
+    expect(accounts.truncated).toBe(true);
+    expect(accounts.length).toBeGreaterThan(1000);
+    expect(accounts.length).toBeLessThan(4000);
+    expect(new TextEncoder().encode(JSON.stringify(accounts)).length).toBeLessThanOrEqual(AD_ACCOUNT_LIST_MAX_BYTES);
+    expect(accounts[0]).toMatchObject({ accountId: "200000", loginCustomerId: "100" });
   });
 });
 
