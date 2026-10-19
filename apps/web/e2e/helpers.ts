@@ -2,7 +2,7 @@ import { createHmac } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, type Page } from "@playwright/test";
-import { E2E_BASE_URL, E2E_COGNITO_DATA, E2E_COGNITO_PORT } from "../playwright.config";
+import { E2E_BASE_URL, E2E_COGNITO_DATA, E2E_COGNITO_PORT, E2E_MAILPIT_URL } from "../playwright.config";
 
 export const uniqueEmail = (p: string) => `${p}-${Date.now()}-${Math.floor(Math.random() * 1e6)}@example.com`;
 
@@ -41,6 +41,39 @@ export async function verifiedOnConfirm(email: string) {
     body: JSON.stringify({ UserPoolId: "local_insights", Username: email, UserAttributes: [{ Name: "email", Value: email.toLowerCase() }, { Name: "email_verified", Value: "true" }] }),
   });
   expect(res.ok, await res.text()).toBe(true);
+}
+
+/**
+ * Two-step verification (an authenticator app) in the emulator's pool: optional, as in
+ * production, so accounts without it sign in as before. The seed has it off.
+ */
+export async function poolMfa(on: boolean) {
+  const res = await fetch(`http://127.0.0.1:${E2E_COGNITO_PORT}/`, {
+    method: "POST",
+    headers: { "content-type": "application/x-amz-json-1.1", "x-amz-target": "AWSCognitoIdentityProviderService.SetUserPoolMfaConfig" },
+    body: JSON.stringify({ UserPoolId: "local_insights", MfaConfiguration: on ? "OPTIONAL" : "OFF", SoftwareTokenMfaConfiguration: { Enabled: on } }),
+  });
+  expect(res.ok, await res.text()).toBe(true);
+}
+
+/** What an authenticator app shows now for a base32 key (RFC 6238: HMAC-SHA1, 6 digits, 30 seconds). */
+export function totpCode(key: string, at = Date.now()): string {
+  const B32 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  let bits = "";
+  for (const ch of key.replace(/[\s=]+/g, "").toUpperCase()) bits += B32.indexOf(ch).toString(2).padStart(5, "0");
+  const secret = Buffer.from((bits.match(/.{8}/g) ?? []).map((b) => parseInt(b, 2)));
+  const counter = Buffer.alloc(8);
+  counter.writeBigUInt64BE(BigInt(Math.floor(at / 30_000)));
+  const h = createHmac("sha1", secret).update(counter).digest();
+  const o = h[h.length - 1]! & 0xf;
+  return String((h.readUInt32BE(o) & 0x7fffffff) % 1_000_000).padStart(6, "0");
+}
+
+/** The subjects of the emails the app sent to `email`, newest first (Mailpit, or its stand-in). */
+export async function mailSubjects(email: string): Promise<string[]> {
+  const res = await fetch(`${E2E_MAILPIT_URL}/api/v1/search?${new URLSearchParams({ query: `to:${email}` })}`);
+  const body = (await res.json()) as { messages?: Array<{ Subject: string }> };
+  return (body.messages ?? []).map((m) => m.Subject);
 }
 
 /** A signed-in account whose email isn't verified sits on /verify-email: send the code and enter it. */
