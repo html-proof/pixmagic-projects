@@ -135,8 +135,13 @@ export interface CognitoAuth {
   /** Passwordless sign-in with a code Cognito emails (needs the Essentials plan and SES). */
   startEmailOtp(email: string): Promise<{ session: string }>;
   answerEmailOtp(email: string, session: string, code: string): Promise<SignInResult>;
-  /** New ID and access tokens (and a new refresh token when rotation is on). `username` is the Cognito user name. */
-  refresh(refreshToken: string, username: string): Promise<CognitoTokens>;
+  /**
+   * New ID and access tokens (and a new refresh token when rotation is on). `sub`: the user's sub,
+   * which keys a refresh's SECRET_HASH in a pool whose users sign in with their email, not with a
+   * user name (AWS, "Computing secret hash values"). For a password user it is also the user name;
+   * for a Google one ("google_<id>") it isn't.
+   */
+  refresh(refreshToken: string, sub: string): Promise<CognitoTokens>;
   verifyIdToken(idToken: string, opts?: { nonce?: string }): Promise<IdentityClaims>;
 
   // ---- Passwords ----
@@ -167,7 +172,12 @@ export interface CognitoAuth {
   answerTotpChallenge(username: string, session: string, code: string): Promise<SignInResult>;
 
   // ---- Managed login (OAuth 2.0 authorization code + PKCE): Google ----
-  authorizeUrl(input: { provider: FederatedProvider; redirectUri: string; state: string; codeChallenge: string; nonce: string }): string;
+  /**
+   * `selectAccount`: the provider shows its account chooser even to a browser signed in to one
+   * account (prompt=select_account, which managed login passes on to Google), so nothing is linked
+   * without the person choosing it.
+   */
+  authorizeUrl(input: { provider: FederatedProvider; redirectUri: string; state: string; codeChallenge: string; nonce: string; selectAccount?: boolean }): string;
   exchangeCode(input: { code: string; redirectUri: string; codeVerifier: string }): Promise<CognitoTokens>;
   /** Ends the user pool's own browser session (after Google), then returns to `logoutUri`. */
   logoutUrl(logoutUri: string): string | null;
@@ -361,7 +371,7 @@ export function cognitoAuth(cfg: CognitoConfig, fetchImpl: FetchLike = fetch): C
       });
       return signInResult(r);
     },
-    async refresh(refreshToken, username) {
+    async refresh(refreshToken, sub) {
       if (cfg.refreshRotation) {
         const r = await call<AuthResult>("GetTokensFromRefreshToken", {
           ClientId: cfg.clientId,
@@ -374,8 +384,9 @@ export function cognitoAuth(cfg: CognitoConfig, fetchImpl: FetchLike = fetch): C
       const r = await call<AuthResult>("InitiateAuth", {
         ClientId: cfg.clientId,
         AuthFlow: "REFRESH_TOKEN_AUTH",
-        // SECRET_HASH for a refresh is keyed by the Cognito user name, not the email signed in with.
-        AuthParameters: { REFRESH_TOKEN: refreshToken, ...withSecret(username) },
+        // SECRET_HASH for a refresh is keyed by the user's sub here, not the email signed in with,
+        // nor a Google user's "google_<id>" user name.
+        AuthParameters: { REFRESH_TOKEN: refreshToken, ...withSecret(sub) },
       });
       if (!r.AuthenticationResult) throw new CognitoUnavailableError("Cognito answered a refresh without tokens");
       return tokensOf(r.AuthenticationResult);
@@ -458,7 +469,7 @@ export function cognitoAuth(cfg: CognitoConfig, fetchImpl: FetchLike = fetch): C
       return signInResult(r);
     },
 
-    authorizeUrl({ provider, redirectUri, state, codeChallenge, nonce }) {
+    authorizeUrl({ provider, redirectUri, state, codeChallenge, nonce, selectAccount }) {
       if (!cfg.domain) throw new CognitoError("NotConfigured", "COGNITO_DOMAIN is not set");
       const q = new URLSearchParams({
         response_type: "code",
@@ -471,6 +482,8 @@ export function cognitoAuth(cfg: CognitoConfig, fetchImpl: FetchLike = fetch): C
         code_challenge: codeChallenge,
         code_challenge_method: "S256",
         nonce,
+        // Managed login (ManagedLoginVersion 2) passes prompt on to the provider (any value but "none").
+        ...(selectAccount && { prompt: "select_account" }),
       });
       return `${cfg.domain}/oauth2/authorize?${q}`;
     },

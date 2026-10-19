@@ -51,14 +51,18 @@ async function googleSignIn(person: { id: string; email: string }) {
   return { browser, user: res.json().user as { id: string } };
 }
 
-/** Link Google from Settings in `browser` (signed in already): the start's redirect and the callback's answer. */
+/** Start linking Google from Settings in `browser`, as the page does: its answer names the provider's address, or why not. */
+const startLink = (browser: ReturnType<typeof testBrowser>, returnTo = "/settings/integrations") => browser.post("/auth/oauth/google/link", { returnTo });
+
+/** Link Google from Settings in `browser` (signed in already): the start's answer and the callback's. */
 async function linkGoogle(browser: ReturnType<typeof testBrowser>, person: { id: string; email: string }, returnTo = "/settings/integrations") {
-  const start = await browser.get(`/auth/oauth/google/start?link=1&returnTo=${encodeURIComponent(returnTo)}`);
-  expect(start.statusCode).toBe(302);
-  if (!start.headers.location!.startsWith("https://auth.example.test/")) return { start, res: null };
-  const back = ctx.auth.federatedSignIn(start.headers.location!, person);
+  const start = await startLink(browser, returnTo);
+  if (start.statusCode !== 200) return { start, res: null };
+  const back = ctx.auth.federatedSignIn(start.json().redirect, person);
   return { start, res: await browser.post("/auth/oauth/callback", { code: back.code, state: back.state }) };
 }
+
+const cookieOf = (browser: ReturnType<typeof testBrowser>) => [...browser.jar].map(([k, v]) => `${k}=${v}`).join("; ");
 
 describe("GET /auth/account", () => {
   it("lists each method with its id, whether there is a password, and whether Google can be linked", async () => {
@@ -135,9 +139,11 @@ describe("linking Google from Settings", () => {
     const browser = testBrowser(ctx);
     const user = await browser.signIn("u1", "owner@shop.com");
     const { start, res } = await linkGoogle(browser, { id: "g-1", email: "owner.personal@gmail.com" });
-    const authorize = new URL(start.headers.location!);
+    const authorize = new URL(start.json().redirect);
     expect(authorize.searchParams.get("identity_provider")).toBe("Google");
     expect(authorize.searchParams.get("code_challenge_method")).toBe("S256");
+    // Google's account chooser every time: the person picks the account, the browser's doesn't just go.
+    expect(authorize.searchParams.get("prompt")).toBe("select_account");
     expect(res!.statusCode).toBe(200);
     expect(res!.json()).toEqual({ linked: "google", redirect: "/settings/integrations?linked=google" });
     // No second session: the Google sign-in's refresh token went straight back.
@@ -176,14 +182,29 @@ describe("linking Google from Settings", () => {
     expect(unsafe.res!.json().redirect).toBe("/settings/security?linked=google");
   });
 
-  it("needs the account's own session: none, or one opened from a shared link, goes back with link_error", async () => {
-    const nobody = await get("/auth/oauth/google/start?link=1&returnTo=/settings/integrations");
-    expect(nobody.headers.location).toBe("http://localhost:3001/settings/integrations?link_error=signin_required");
+  it("needs the account's own session: none, or one opened from a shared link, is refused with signin_required", async () => {
+    const nobody = await post("/auth/oauth/google/link", { returnTo: "/settings/integrations" });
+    expect(nobody.statusCode).toBe(401);
+    expect(nobody.json().error).toBe("signin_required");
     const { user, headers } = await signIn(ctx, "u1", "owner@shop.com");
     const ws = await createWorkspace(ctx, headers);
     const share = signSession(newLinkSession({ userId: user.id, workspaceId: ws }));
-    const shared = await get("/auth/oauth/google/start?link=1&returnTo=/settings/integrations", { cookie: `__share=${share}` });
-    expect(shared.headers.location).toBe("http://localhost:3001/settings/integrations?link_error=signin_required");
+    const shared = await post("/auth/oauth/google/link", { returnTo: "/settings/integrations" }, { cookie: `__share=${share}` });
+    expect(shared.json().error).toBe("signin_required");
+  });
+
+  it("starts only from this site's own pages: a plain link (any site can open one) or another site's request links nothing", async () => {
+    const browser = testBrowser(ctx);
+    await browser.signIn("u1", "owner@shop.com");
+    // The old navigation start, opened by a page anywhere: back to the page, nothing started.
+    const opened = await browser.get("/auth/oauth/google/start?link=1&returnTo=/settings/security");
+    expect(opened.headers.location).toBe("http://localhost:3001/settings/security?link_error=start_again");
+    expect(opened.headers["set-cookie"] ?? "").not.toContain("__oauth=");
+    // Another site's POST, cookies and all.
+    const cross = await ctx.app.inject({ method: "POST", url: "/auth/oauth/google/link", headers: { cookie: cookieOf(browser), origin: "https://evil.example" }, payload: { returnTo: "/settings/security" } });
+    expect(cross.statusCode).toBe(403);
+    expect(cross.headers["set-cookie"] ?? "").not.toContain("__oauth=");
+    expect(ctx.auth.calls).not.toContain("exchangeCode");
   });
 
   it("refuses a Google account that already signs in to another account", async () => {
@@ -201,12 +222,13 @@ describe("linking Google from Settings", () => {
     await browser.signIn("u1", "owner@shop.com");
     expect((await linkGoogle(browser, { id: "g-1", email: "g@gmail.com" })).res!.statusCode).toBe(200);
     const twice = await linkGoogle(browser, { id: "g-2", email: "g2@gmail.com" });
-    expect(twice.start.headers.location).toBe("http://localhost:3001/settings/integrations?link_error=already_linked");
+    expect(twice.start.statusCode).toBe(409);
+    expect(twice.start.json().error).toBe("already_linked");
 
     const switched = testBrowser(ctx);
     await switched.signIn("u2", "two@shop.com");
-    const start = await switched.get("/auth/oauth/google/start?link=1&returnTo=/settings/integrations");
-    const back = ctx.auth.federatedSignIn(start.headers.location!, { id: "g-3", email: "g3@gmail.com" });
+    const start = await startLink(switched);
+    const back = ctx.auth.federatedSignIn(start.json().redirect, { id: "g-3", email: "g3@gmail.com" });
     // Signed out, and someone else signed in, in the same browser meanwhile.
     await switched.post("/auth/logout");
     const intruder = await switched.signIn("u3", "three@shop.com");
@@ -219,8 +241,8 @@ describe("linking Google from Settings", () => {
   it("goes back with link_error when the person cancels at Google", async () => {
     const browser = testBrowser(ctx);
     await browser.signIn("u1", "owner@shop.com");
-    const start = await browser.get("/auth/oauth/google/start?link=1&returnTo=/settings/integrations");
-    const state = new URL(start.headers.location!).searchParams.get("state")!;
+    const start = await startLink(browser);
+    const state = new URL(start.json().redirect).searchParams.get("state")!;
     const res = await browser.post("/auth/oauth/callback", { state, error: "access_denied" });
     expect(res.json()).toMatchObject({ error: "cancelled", redirect: "/settings/integrations?link_error=cancelled" });
   });
@@ -234,31 +256,31 @@ describe("linking Google from Settings", () => {
       const { res } = await linkGoogle(browser, { id: `g-${i}`, email: `g${i}@gmail.com` }, returnTo);
       expect(res!.json()).toEqual({ linked: "google", redirect: "/settings/security?linked=google" });
     }
-    // The start's own refusals too.
-    const nobody = await get(`/auth/oauth/google/start?link=1&returnTo=${encodeURIComponent("/..//evil.example/x")}`);
-    expect(nobody.headers.location).toBe("http://localhost:3001/settings/security?link_error=signin_required");
+    // The old navigation start's answer too.
+    const opened = await get(`/auth/oauth/google/start?link=1&returnTo=${encodeURIComponent("/..//evil.example/x")}`);
+    expect(opened.headers.location).toBe("http://localhost:3001/settings/security?link_error=start_again");
   });
 
   it("needs a sign-in in the last 15 minutes, or the password just now, which is good for one link", async () => {
     const browser = testBrowser(ctx);
     const user = await browser.signIn("u1", "owner@shop.com");
-    const start = () => browser.get("/auth/oauth/google/start?link=1&returnTo=/settings/integrations");
+    const start = () => startLink(browser);
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(Date.now() + 16 * 60_000);
-    expect((await start()).headers.location).toBe("http://localhost:3001/settings/integrations?link_error=reauth_required");
+    expect((await start()).json().error).toBe("reauth_required");
     const prepare = (password: string) => browser.post("/auth/account/methods/google/prepare", { password });
     expect((await prepare("not-the-password")).json().error).toBe("wrong_password");
     const password = ctx.auth.users.get("u1")!.password!;
     expect((await prepare(password)).json()).toEqual({ ok: true, expiresInSeconds: 300 });
     const first = await start();
-    expect(first.headers.location).toMatch(/^https:\/\/auth\.example\.test\//);
+    expect(first.json().redirect).toMatch(/^https:\/\/auth\.example\.test\//);
     // Spent by that start.
-    expect((await start()).headers.location).toBe("http://localhost:3001/settings/integrations?link_error=reauth_required");
+    expect((await start()).json().error).toBe("reauth_required");
     // And it lasts five minutes.
     await prepare(password);
     vi.setSystemTime(Date.now() + 301_000);
-    expect((await start()).headers.location).toBe("http://localhost:3001/settings/integrations?link_error=reauth_required");
-    const back = ctx.auth.federatedSignIn(first.headers.location!, { id: "g-1", email: "owner.personal@gmail.com" });
+    expect((await start()).json().error).toBe("reauth_required");
+    const back = ctx.auth.federatedSignIn(first.json().redirect, { id: "g-1", email: "owner.personal@gmail.com" });
     expect((await browser.post("/auth/oauth/callback", { code: back.code, state: back.state })).json().linked).toBe("google");
     expect(await systemDb.authIdentity.count({ where: { userId: user.id, method: "google" } })).toBe(1);
     // The password's check left no Cognito session behind.
@@ -292,28 +314,126 @@ describe("linking Google from Settings", () => {
     expect(ctx.mailer.sent.slice(sentBefore)).toEqual([expect.objectContaining({ to: "solo@gmail.com", subject: "A password was added to your bizinsights account" })]);
   });
 
-  it("sends a start to the page's link_error while Google is off", async () => {
+  it("refuses a start while Google is off", async () => {
     restore();
     restore = withEnv({ COGNITO_DOMAIN: "https://auth.example.test", COGNITO_IDENTITY_PROVIDERS: "" });
-    const res = await get("/auth/oauth/google/start?link=1&returnTo=/settings/integrations");
-    expect(res.headers.location).toBe("http://localhost:3001/settings/integrations?link_error=provider_unavailable");
+    const browser = testBrowser(ctx);
+    await browser.signIn("u1", "owner@shop.com");
+    const res = await startLink(browser);
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error).toBe("provider_unavailable");
   });
 });
 
 describe("an account whose address nobody has proved", () => {
+  /** victim@gmail.com's account, opened by someone else with a password (an employee added with that address, the copied link). */
+  async function squatted() {
+    const squatter = testBrowser(ctx);
+    const account = await squatter.signIn("u-sq", "victim@gmail.com", false);
+    expect(account.emailVerified).toBe(false);
+    return { squatter, account, password: ctx.auth.users.get("u-sq")!.password! };
+  }
+
+  /** An email change to the squatter's own inbox, started in Cognito anyway (as it could be before these checks): its code. */
+  async function changeStartedAnyway(password: string) {
+    const signedIn = await ctx.auth.passwordSignIn("victim@gmail.com", password);
+    if (!("tokens" in signedIn)) throw new Error("expected tokens");
+    await ctx.auth.updateEmail(signedIn.tokens.accessToken, "squatter@evil.test");
+    return ctx.auth.code("verify", "squatter@evil.test");
+  }
+
+  it("can't be moved to another address, and a code that proved the squatter's own inbox never verifies it: the owner's Google takes it over", async () => {
+    const { squatter, account, password } = await squatted();
+    // The reviewer's sequence: an email change to the squatter's inbox, its code entered as the address's verification.
+    const change = await squatter.post("/auth/account/email", { email: "squatter@evil.test", password });
+    expect(change.statusCode).toBe(403);
+    expect(change.json().error).toBe("email_unverified");
+    expect(ctx.auth.calls).not.toContain("updateEmail");
+    const code = await changeStartedAnyway(password);
+    expect((await squatter.post("/auth/account/email/confirm", { code })).json().error).toBe("email_unverified");
+    const verify = await squatter.post("/auth/account/verify-email", { code });
+    expect(verify.statusCode).toBe(400);
+    expect(verify.json().error).toBe("invalid_code");
+    expect(await systemDb.user.findUniqueOrThrow({ where: { id: account.id } })).toMatchObject({ email: "victim@gmail.com", emailVerified: false });
+    // Signing in with the address Cognito now has neither moves the account there nor verifies it.
+    const moved = await post("/auth/login", { email: "squatter@evil.test", password });
+    expect(moved.json().user).toMatchObject({ id: account.id, email: "victim@gmail.com", emailVerified: false });
+
+    // The address's owner continues with Google: the account is theirs alone.
+    const owner = await googleSignIn({ id: "g-victim", email: "victim@gmail.com" });
+    expect(owner.user.id).toBe(account.id);
+    expect((await systemDb.authIdentity.findMany({ where: { userId: account.id } })).map((i) => i.username)).toEqual(["google_g-victim"]);
+    expect((await squatter.get("/me")).statusCode).toBe(401);
+    expect((await post("/auth/login", { email: "squatter@evil.test", password })).statusCode).toBe(401);
+  });
+
+  it("is taken over by the owner's own sign-up with the address, after the same attempt", async () => {
+    const { squatter, account, password } = await squatted();
+    await squatter.post("/auth/account/verify-email", { code: await changeStartedAnyway(password) });
+    // Without Google (production today): the owner signs up with their address, free in Cognito
+    // now that the squatter's user carries the other one, and confirms the code from their inbox.
+    const owner = testBrowser(ctx);
+    expect((await owner.post("/auth/signup", { name: "Vic", email: "victim@gmail.com", password: "owners-password", confirmPassword: "owners-password", acceptTerms: true })).statusCode).toBe(200);
+    const confirmed = await owner.post("/auth/signup/confirm", { email: "victim@gmail.com", code: ctx.auth.code("signup", "victim@gmail.com"), password: "owners-password" });
+    expect(confirmed.json().user).toMatchObject({ id: account.id, email: "victim@gmail.com", emailVerified: true, displayName: "Vic" });
+    expect((await systemDb.authIdentity.findMany({ where: { userId: account.id } })).map((i) => i.method)).toEqual(["password"]);
+    expect((await squatter.get("/me")).statusCode).toBe(401);
+    expect((await post("/auth/login", { email: "squatter@evil.test", password })).statusCode).toBe(401);
+    expect((await owner.get("/me")).json().user.id).toBe(account.id);
+  });
+
+  it("verifies with the code sent to its own address", async () => {
+    const { squatter, account } = await squatted();
+    expect((await squatter.post("/auth/account/verify-email/send")).statusCode).toBe(200);
+    const res = await squatter.post("/auth/account/verify-email", { code: ctx.auth.code("verify", "victim@gmail.com") });
+    expect(res.json().user).toMatchObject({ id: account.id, email: "victim@gmail.com", emailVerified: true });
+    expect(await systemDb.authEvent.count({ where: { type: "email_verified", userId: account.id } })).toBe(1);
+  });
+
+  it("leaves what it set up behind when the owner takes it over: its workspace, API keys, invitations and the access it gave", async () => {
+    const { squatter, account } = await squatted();
+    // As the unverified account: a workspace, an API key, an admin (the squatter's other account), an invitation.
+    const ws = (await squatter.post("/workspaces", { name: "Victim Store" })).json().workspace.id as string;
+    const key = await squatter.post(`/workspaces/${ws}/api-keys`, { name: "sync" });
+    expect(key.statusCode).toBe(200);
+    const secret = key.json().secret as string;
+    const accomplice = await signIn(ctx, "u-x", "attacker@evil.test");
+    await systemDb.membership.create({ data: { workspaceId: ws, userId: accomplice.user.id, role: "admin", invitedById: account.id } });
+    expect((await squatter.post(`/workspaces/${ws}/team/invitations`, { email: "another@evil.test", role: "viewer", permissions: [] })).statusCode).toBe(200);
+    // A workspace a real owner gave the address: that stays the address owner's.
+    const realOwner = await signIn(ctx, "u-o", "real.owner@shop.com");
+    const theirs = await createWorkspace(ctx, realOwner.headers, "Their Store");
+    await systemDb.membership.create({ data: { workspaceId: theirs, userId: account.id, role: "viewer", invitedById: realOwner.user.id } });
+    // The name it gave the account, for whoever owns the address next.
+    await systemDb.user.update({ where: { id: account.id }, data: { displayName: "Support: call +1 555 0100" } });
+
+    const owner = await googleSignIn({ id: "g-victim", email: "victim@gmail.com" });
+    expect(owner.user.id).toBe(account.id);
+    const me = (await owner.browser.get("/me")).json();
+    expect(me.workspaces.map((w: { name: string }) => w.name)).toEqual(["Their Store"]);
+    expect(me.user.displayName).toBeNull();
+    // The key reads nothing, the admin the squatter made has no access, the invitation can't be used.
+    expect((await get(`/workspaces/${ws}/stores`, { authorization: `Bearer ${secret}` })).statusCode).toBe(404);
+    expect((await get(`/workspaces/${ws}/stores`, accomplice.headers)).json().error).toBe("access_revoked");
+    expect(await systemDb.invitation.findFirstOrThrow({ where: { workspaceId: ws } })).toMatchObject({ revokedAt: expect.any(Date) });
+    expect(await systemDb.authEvent.findFirst({ where: { type: "unverified_identity_removed", userId: account.id } })).toMatchObject({
+      metadata: expect.objectContaining({ revokedApiKeys: 1, revokedInvitations: 1, revokedMembers: 1, leftWorkspaces: [ws] }),
+    });
+    // The real owner's workspace is untouched.
+    expect((await get(`/workspaces/${theirs}/stores`, realOwner.headers)).statusCode).toBe(200);
+  });
+
   it("can't link Google, and a Google account under another address never proves it: the address's owner still takes the account over", async () => {
     // Opened by someone who doesn't own the address (an employee added with it, the copied invitation link).
     const squatter = testBrowser(ctx);
     const account = await squatter.signIn("u-sq", "victim@gmail.com", false);
     expect(account.emailVerified).toBe(false);
-    expect((await squatter.get("/auth/oauth/google/start?link=1&returnTo=/settings/security")).headers.location).toBe(
-      "http://localhost:3001/settings/security?link_error=email_unverified",
-    );
+    expect((await startLink(squatter, "/settings/security")).json().error).toBe("email_unverified");
     // Nor when the address stops being verified between the start and Google's answer.
     await systemDb.user.update({ where: { id: account.id }, data: { emailVerified: true } });
-    const started = await squatter.get("/auth/oauth/google/start?link=1&returnTo=/settings/security");
+    const started = await startLink(squatter, "/settings/security");
     await systemDb.user.update({ where: { id: account.id }, data: { emailVerified: false } });
-    const backLate = ctx.auth.federatedSignIn(started.headers.location!, { id: "g-late", email: "late@gmail.com" });
+    const backLate = ctx.auth.federatedSignIn(started.json().redirect, { id: "g-late", email: "late@gmail.com" });
     const late = await squatter.post("/auth/oauth/callback", { code: backLate.code, state: backLate.state });
     expect(late.json()).toMatchObject({ error: "email_unverified", redirect: "/settings/security?link_error=email_unverified" });
 
@@ -385,6 +505,62 @@ describe("removing a sign-in method", () => {
     // Linked again from Settings, it signs in as before.
     expect((await linkGoogle(browser, { id: "g-1", email: "owner@shop.com" })).res!.json().linked).toBe("google");
     expect((await googleSignIn({ id: "g-1", email: "owner@shop.com" })).user.id).toBe(user.id);
+  });
+
+  it("ends the removed method's sessions at once, even one that kept only its session cookie, and tells the account's address", async () => {
+    const owner = testBrowser(ctx);
+    await owner.signIn("u1", "owner@shop.com");
+    // Someone linked their own Google account at the owner's computer, then signed in with it elsewhere.
+    await linkGoogle(owner, { id: "g-intruder", email: "intruder@gmail.com" });
+    const intruder = await googleSignIn({ id: "g-intruder", email: "intruder@gmail.com" });
+    const sessionOnly = { cookie: `__session=${intruder.browser.jar.get("__session")}` };
+    expect((await get("/me", sessionOnly)).statusCode).toBe(200);
+
+    const google = (await owner.get("/auth/account")).json().methods.find((m: { method: string }) => m.method === "google");
+    const before = ctx.mailer.sent.length;
+    expect((await del(`/auth/account/methods/${google.id}`, { cookie: cookieOf(owner) }, { password: ctx.auth.users.get("u1")!.password })).statusCode).toBe(200);
+    // No waiting for a re-check with Cognito, and no refresh-token cookie needed for it to end.
+    expect((await get("/me", sessionOnly)).statusCode).toBe(401);
+    expect((await intruder.browser.get("/me")).statusCode).toBe(401);
+    expect((await owner.get("/me")).statusCode).toBe(200);
+    const notice = ctx.mailer.sent.slice(before);
+    expect(notice).toEqual([expect.objectContaining({ to: "owner@shop.com", subject: "Google sign-in was removed from your bizinsights account" })]);
+    expect(notice[0]!.text).toContain("intruder@gmail.com");
+    expect(notice[0]!.text).toContain("http://localhost:3001/forgot-password");
+  });
+
+  it("needs the account's password from a Google account linked under another address: it can't take the owner's ways in, nor add its own password", async () => {
+    // The reviewer's escalation: a Google account linked in a stolen minute, used later from elsewhere.
+    const owner = testBrowser(ctx);
+    const user = await owner.signIn("u1", "owner@shop.com");
+    await linkGoogle(owner, { id: "g-x", email: "intruder@gmail.com" });
+    const intruder = await googleSignIn({ id: "g-x", email: "intruder@gmail.com" });
+    const account = (await intruder.browser.get("/auth/account")).json();
+    expect(account).toMatchObject({ signedInWith: "google", confirmWith: "password", canAddPassword: false });
+    const pw = account.methods.find((m: { method: string }) => m.method === "password");
+    const remove = (payload: unknown) => del(`/auth/account/methods/${pw.id}`, { cookie: cookieOf(intruder.browser) }, payload);
+    expect((await remove({})).json().error).toBe("password_required");
+    expect((await remove({ password: "a-guess-at-it" })).json().error).toBe("wrong_password");
+    expect((await post("/auth/account/delete", { confirm: "DELETE" }, { cookie: cookieOf(intruder.browser) })).json().error).toBe("password_required");
+    expect((await post("/auth/login", { email: "owner@shop.com", password: ctx.auth.users.get("u1")!.password })).statusCode).toBe(200);
+
+    // An account left with only that Google account (its password gone another way): nothing it has proves the address.
+    await systemDb.authIdentity.deleteMany({ where: { userId: user.id, method: "password" } });
+    await ctx.auth.adminDeleteUser("u1");
+    expect((await intruder.browser.get("/auth/account")).json()).toMatchObject({ confirmWith: "own_address_sign_in", canAddPassword: false, hasPassword: false });
+    const add = await intruder.browser.post("/auth/account/password/add", { password: "intruders-password", confirmPassword: "intruders-password" });
+    expect(add.statusCode).toBe(401);
+    expect(add.json()).toMatchObject({ error: "reauth_required", message: expect.stringContaining("owner@shop.com") });
+    expect(ctx.auth.calls).not.toContain("adminCreateUser");
+    expect((await post("/auth/account/delete", { confirm: "DELETE" }, { cookie: cookieOf(intruder.browser) })).json().error).toBe("reauth_required");
+  });
+
+  it("lets a recent Google sign-in with the account's own address confirm changes, as before", async () => {
+    const { browser } = await googleSignIn({ id: "g-1", email: "merchant@gmail.com" });
+    expect((await browser.get("/auth/account")).json()).toMatchObject({ confirmWith: "recent_sign_in", canAddPassword: true });
+    const password = testBrowser(ctx);
+    await password.signIn("u2", "two@shop.com");
+    expect((await password.get("/auth/account")).json()).toMatchObject({ confirmWith: "password", canAddPassword: false });
   });
 
   it("never removes the last method, the one signed in with, or someone else's", async () => {

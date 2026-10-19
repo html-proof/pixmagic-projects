@@ -4,9 +4,9 @@ import { systemDb } from "@app/db";
 import { appStoreWorkspace, employmentsForUser, env, logger, sessionAccess } from "@app/core";
 import { ACCESS_KEYS, accountPasswordProblem, DISPLAY_NAME_MAX, EMAIL_CODE_RE, hasFullAccess, pkcePair, randomToken, safeEqual, sha256Hex } from "@app/shared";
 import { body, clientIp, HttpError, isLinkSession, loadUser, pickSession, requireAppOrigin, requireUser, sessionOf, SESSION_COOKIE, sharedWorkspace, type Ctx, type Deps } from "../context.js";
-import { CognitoError, CognitoUnavailableError, type CognitoTokens, type CognitoUser, type FederatedProvider, type SignInResult } from "../cognito.js";
+import { CognitoError, CognitoUnavailableError, unguessablePassword, type CognitoTokens, type CognitoUser, type FederatedProvider, type SignInResult } from "../cognito.js";
 import { cognitoUsernameKey, notifyMethodAdded, recordAuthEvent, resolveUser } from "../identity.js";
-import { apiPath, clearSessionCookies, clearShareCookie, linkProofKey, newSession, readRefreshToken, readSession, retiredSessionKey, setSessionCookies, signedInRecently } from "../session.js";
+import { apiPath, clearSessionCookies, clearShareCookie, linkProofKey, newSession, provesAddress, readRefreshToken, readSession, retiredSessionKey, setSessionCookies, signedInRecently } from "../session.js";
 import type { App } from "../app.js";
 import { limit, LIMITS } from "../rateLimit.js";
 
@@ -200,7 +200,15 @@ export function authRoutes(app: App, deps: Deps) {
       throw cognitoFailure(err, "verify ID token");
     });
     const user = await resolveUser(claims, { ip: clientIp(c), auth: deps.auth }).catch(dbOutage(SIGN_IN_UNAVAILABLE));
-    const s = newSession({ userId: user.id, sub: claims.sub, username: claims.username, method: claims.method, authTime: claims.authTime, keep: opts.keep });
+    const s = newSession({
+      userId: user.id,
+      sub: claims.sub,
+      username: claims.username,
+      method: claims.method,
+      authTime: claims.authTime,
+      keep: opts.keep,
+      ownAddress: provesAddress(claims, user.email),
+    });
     setSessionCookies(c, s, tokens.refreshToken);
     // Security trail: who signed in, how and from where (user id, never the email or a token).
     logger.info({ event: "session_created", userId: user.id, method: claims.method, ip: clientIp(c) }, "signed in");
@@ -409,8 +417,13 @@ export function authRoutes(app: App, deps: Deps) {
       });
     let result = await signIn();
     if (!result) {
-      // Not a password Cognito would take: the address is confirmed; "Forgot password?" sets one.
-      if (accountPasswordProblem(input.password)) return c.json({ ok: true });
+      // Not a password Cognito would take (the sign-in page's code step sends what was typed
+      // there): the address is confirmed, but whatever password the sign-up had may be someone
+      // else's, so none stays. "Forgot password?" sets one; the code proved the inbox.
+      if (accountPasswordProblem(input.password)) {
+        await claimConfirmedSignUp(c, input.email, unguessablePassword());
+        return c.json({ ok: true });
+      }
       await claimConfirmedSignUp(c, input.email, input.password);
       result = await signIn();
       if (!result) throw cognitoFailure(new CognitoError("NotAuthorizedException", ""), "sign in after confirming");
@@ -537,23 +550,47 @@ export function authRoutes(app: App, deps: Deps) {
   // ---------------- Continue with Google (Cognito managed login, code + PKCE) ----------------
 
   /**
-   * Leaves for Google, by way of the user pool. Errors land on the sign-in error page.
+   * A trip to the provider by way of the user pool: what the callback needs is kept in the
+   * coordinator under a new state, and only this browser can finish it (no login CSRF): the state
+   * must come back with the __oauth cookie set here. The provider's address; null when the state
+   * couldn't be kept.
+   */
+  async function beginTrip(c: Ctx, trip: Pick<PendingSignIn, "provider" | "returnTo" | "keep" | "linkUserId">): Promise<string | null> {
+    const state = randomToken(24);
+    const nonce = randomToken(24);
+    const pkce = pkcePair();
+    const pending: PendingSignIn = { ...trip, verifier: pkce.verifier, nonce };
+    try {
+      await deps.coord.put(`oauth:signin:${state}`, JSON.stringify(pending), OAUTH_STATE_TTL_S);
+    } catch (err) {
+      logger.error({ err }, "could not store a sign-in's state");
+      return null;
+    }
+    setCookie(c, OAUTH_COOKIE, [state, ...pendingStates(getCookie(c, OAUTH_COOKIE))].slice(0, MAX_PENDING_STATES).join("."), {
+      ...cookieBase(),
+      path: oauthCookiePath(),
+      maxAge: OAUTH_STATE_TTL_S,
+    });
+    // Linking: Google's account chooser every time, so it links the account the person picks,
+    // never just whichever one this browser happens to be signed in to.
+    return deps.auth.authorizeUrl({ provider: trip.provider, redirectUri: redirectUri(), state, codeChallenge: pkce.challenge, nonce, selectAccount: !!trip.linkUserId });
+  }
+
+  /**
+   * Leaves for Google to sign in (or create the account), by way of the user pool. Errors land on
+   * the sign-in error page. `?keep=0`: "Keep me signed in" was unticked, so the session's cookies
+   * end with the browser.
    *
-   * `?keep=0`: "Keep me signed in" was unticked, so the session's cookies end with the browser.
-   * `?link=1`: a signed-in person links Google to their account from Settings (no new session);
-   * the callback sends them back to `returnTo` with `?linked=google`, or `?link_error=<code>`,
-   * which is also where this route's own refusals go. A new way into the account needs the
-   * person again: a sign-in in the last 15 minutes, or their password just now
-   * (POST /auth/account/methods/google/prepare), like the account's other changes.
+   * Never to link Google to the account signed in here (`?link=1`, as linking once started): a
+   * plain link any site can open would add whichever Google account the browser is signed in to,
+   * without the person choosing to. Linking starts from Settings with a POST (below); a `?link=1`
+   * goes back to `returnTo` with `?link_error=start_again`.
    */
   app.get("/auth/oauth/:provider/start", async (c) => {
     const appUrl = env().APP_URL;
     const returnTo = safeReturnTo(c.req.query("returnTo"));
-    const linking = c.req.query("link") === "1";
-    const fail = (reason: string) =>
-      c.redirect(
-        linking ? `${appUrl}${withParam(returnTo ?? LINK_RETURN, "link_error", reason)}` : `${appUrl}/auth/error?${new URLSearchParams({ reason, provider: c.req.param("provider") })}`,
-      );
+    if (c.req.query("link") === "1") return c.redirect(`${appUrl}${withParam(returnTo ?? LINK_RETURN, "link_error", "start_again")}`);
+    const fail = (reason: string) => c.redirect(`${appUrl}/auth/error?${new URLSearchParams({ reason, provider: c.req.param("provider") })}`);
     const provider = PROVIDERS[c.req.param("provider")];
     if (!provider || !enabledProviders().has(provider)) return fail("provider_unavailable");
     try {
@@ -561,50 +598,47 @@ export function authRoutes(app: App, deps: Deps) {
     } catch {
       return fail("rate_limited");
     }
-    let linkUserId: string | undefined;
-    if (linking) {
-      // The account's own session only: never one opened from a shared link (loadUser refuses those here).
-      const user = await loadUser(c, deps).catch(() => undefined);
-      if (user === undefined) return fail("unavailable");
-      if (!user) return fail("signin_required");
-      // Nobody has proved this account's address yet: a way in added now would outlive the
-      // address's owner taking the account over (identity.ts, takeOverUnverified).
-      if (!user.emailVerified) return fail("email_unverified");
-      const hasGoogle = await systemDb.authIdentity.count({ where: { userId: user.id, method: "google" } }).catch(() => null);
-      if (hasGoogle === null) return fail("unavailable");
-      if (hasGoogle) return fail("already_linked");
-      const s = sessionOf(c);
-      if (!signedInRecently(s)) {
-        const proof = await deps.coord.take(linkProofKey(s.sid)).catch(() => undefined);
-        if (proof === undefined) return fail("unavailable");
-        if (!proof) return fail("reauth_required");
-      }
-      linkUserId = user.id;
-    }
-    const state = randomToken(24);
-    const nonce = randomToken(24);
-    const pkce = pkcePair();
-    const pending: PendingSignIn = {
-      provider,
-      verifier: pkce.verifier,
-      nonce,
-      returnTo,
-      ...(c.req.query("keep") === "0" && { keep: false as const }),
-      ...(linkUserId && { linkUserId }),
-    };
-    try {
-      await deps.coord.put(`oauth:signin:${state}`, JSON.stringify(pending), OAUTH_STATE_TTL_S);
-    } catch (err) {
-      logger.error({ err }, "could not store a sign-in's state");
-      return fail("unavailable");
-    }
-    // Only this browser can finish this sign-in (no login CSRF): the state must come back with this cookie.
-    setCookie(c, OAUTH_COOKIE, [state, ...pendingStates(getCookie(c, OAUTH_COOKIE))].slice(0, MAX_PENDING_STATES).join("."), {
-      ...cookieBase(),
-      path: oauthCookiePath(),
-      maxAge: OAUTH_STATE_TTL_S,
+    const to = await beginTrip(c, { provider, returnTo, ...(c.req.query("keep") === "0" && { keep: false as const }) });
+    return to ? c.redirect(to) : fail("unavailable");
+  });
+
+  /**
+   * Link Google to the signed-in account (Settings), no new session: `{ redirect }`, the provider's
+   * address for the page to go to. The callback then sends the person back to `returnTo` with
+   * `?linked=google`, or `?link_error=<code>`; this route's own refusals are errors whose code the
+   * page puts there itself. Our own pages only (requireAppOrigin), so no other site can start it.
+   * A new way into the account needs the person again: a sign-in in the last 15 minutes, or their
+   * password just now (POST /auth/account/methods/google/prepare), like the account's other changes.
+   */
+  app.post("/auth/oauth/:provider/link", async (c) => {
+    requireAppOrigin(c);
+    const input = z.object({ returnTo: z.string().max(1000).optional() }).parse(await body(c));
+    const provider = PROVIDERS[c.req.param("provider")];
+    if (!provider || !enabledProviders().has(provider)) throw new HttpError(404, "Signing in with Google isn't available right now.", "provider_unavailable");
+    await limit(deps.coord, `rl:oauth:${clientIp(c)}`, LIMITS.oauthIp);
+    const unavailable = () => new HttpError(503, UNAVAILABLE, "unavailable");
+    // The account's own session only: never one opened from a shared link (loadUser refuses those here).
+    const user = await loadUser(c, deps).catch(() => {
+      throw unavailable();
     });
-    return c.redirect(deps.auth.authorizeUrl({ provider, redirectUri: redirectUri(), state, codeChallenge: pkce.challenge, nonce }));
+    if (!user) throw new HttpError(401, "Sign in to your account again, then link Google.", "signin_required");
+    // Nobody has proved this account's address yet: a way in added now would outlive the
+    // address's owner taking the account over (identity.ts, takeOverUnverified).
+    if (!user.emailVerified) throw new HttpError(403, "Verify your email address first, then link Google.", "email_unverified");
+    const hasGoogle = await systemDb.authIdentity.count({ where: { userId: user.id, method: "google" } }).catch(() => {
+      throw unavailable();
+    });
+    if (hasGoogle) throw new HttpError(409, "Your account already has a Google sign-in. Remove it first to link a different one.", "already_linked");
+    const s = sessionOf(c);
+    if (!signedInRecently(s)) {
+      const proof = await deps.coord.take(linkProofKey(s.sid)).catch(() => {
+        throw unavailable();
+      });
+      if (!proof) throw new HttpError(401, "For your safety, enter your password again, then link Google.", "reauth_required");
+    }
+    const to = await beginTrip(c, { provider, returnTo: safeReturnTo(input.returnTo), linkUserId: user.id });
+    if (!to) throw unavailable();
+    return c.json({ redirect: to });
   });
 
   /**

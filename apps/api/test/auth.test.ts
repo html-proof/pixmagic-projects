@@ -151,6 +151,21 @@ describe("creating an account with email and password", () => {
     vi.restoreAllMocks();
   });
 
+  it("leaves no earlier sign-up's password behind when the code comes with a password Cognito wouldn't take", async () => {
+    // The sign-in page's code step sends whatever was typed there; the pending sign-up may be someone else's.
+    await signup({ password: "squatters-password", confirmPassword: "squatters-password" });
+    const res = await post("/auth/signup/confirm", { email: "ada@example.com", code: ctx.auth.code("signup", "ada@example.com"), password: "short" });
+    expect(res.json()).toEqual({ ok: true });
+    expect(res.headers["set-cookie"] ?? "").not.toMatch(/__session=[^;]/);
+    expect((await post("/auth/login", { email: "ada@example.com", password: "squatters-password" })).statusCode).toBe(401);
+    expect(ctx.auth.calls).toContain("adminSetPassword");
+    // The code proved the inbox: "Forgot password?" sets the password from there.
+    expect((await post("/auth/password/forgot", { email: "ada@example.com" })).statusCode).toBe(200);
+    const reset = await post("/auth/password/reset", { email: "ada@example.com", code: ctx.auth.code("reset", "ada@example.com"), password: "owners-password", confirmPassword: "owners-password" });
+    expect(reset.statusCode).toBe(200);
+    expect((await post("/auth/login", { email: "ada@example.com", password: "owners-password" })).statusCode).toBe(200);
+  });
+
   it("signs in straight away when the code comes with the password that signed up, honouring \"Keep me signed in\"", async () => {
     await signup();
     const res = await post("/auth/signup/confirm", { email: "ada@example.com", code: ctx.auth.code("signup", "ada@example.com"), password: "correct-horse", keep: false });
@@ -206,6 +221,20 @@ describe("signing in with email and password", () => {
     const forged = `${Buffer.from(JSON.stringify({ ...claims, uid: "someone-else" })).toString("base64url")}.${sig}`;
     expect((await get("/me", { cookie: `__session=${forged}` })).statusCode).toBe(401);
     expect((await get("/me", { cookie: `__session=${signSession({ ...claims, exp: Date.now() - 1 })}` })).statusCode).toBe(401);
+    expect((await get("/me", { cookie })).statusCode).toBe(200);
+  });
+
+  it("ends a session that comes without its refresh-token cookie at its next check with Cognito", async () => {
+    const { cookie } = await signIn(ctx, "u1", "a@x.com");
+    const sessionOnly = cookie.split("; ").filter((c) => c.startsWith("__session=")).join("; ");
+    // Between checks it is only our own cookie, as before.
+    expect((await get("/me", { cookie: sessionOnly })).statusCode).toBe(200);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + REVALIDATE_MS + 1_000);
+    // Due for its check: nothing Cognito could say would end it otherwise.
+    const alone = await get("/me", { cookie: sessionOnly });
+    expect(alone.statusCode).toBe(401);
+    expect(alone.headers["set-cookie"]).toMatch(/__session=;.*Max-Age=0/);
     expect((await get("/me", { cookie })).statusCode).toBe(200);
   });
 

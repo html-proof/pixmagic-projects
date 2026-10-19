@@ -1,11 +1,21 @@
 import { z } from "zod";
-import { systemDb } from "@app/db";
+import { systemDb, type User } from "@app/db";
 import { logger } from "@app/core";
 import { accountPasswordProblem, EMAIL_CODE_RE } from "@app/shared";
-import { accessTokenFor, body, clientIp, HttpError, requireUser, sessionOf, type Ctx, type Deps } from "../context.js";
-import { CognitoError, type CognitoUser } from "../cognito.js";
-import { cognitoUsernameKey, notifyMethodAdded, recordAuthEvent } from "../identity.js";
-import { clearSessionCookies, LINK_PROOF_TTL_S, linkProofKey, newSession, readRefreshToken, RECENT_SIGN_IN_S, setSessionCookies, signedInRecently as recentSignIn } from "../session.js";
+import { accessTokenFor, body, clientIp, HttpError, requireUser, sessionOf, sessionProvesAddress, type Ctx, type Deps } from "../context.js";
+import { CognitoError, type CognitoUser, type SignInMethod } from "../cognito.js";
+import { cognitoUsernameKey, notifyMethodAdded, notifyMethodRemoved, recordAuthEvent } from "../identity.js";
+import {
+  clearSessionCookies,
+  LINK_PROOF_TTL_S,
+  linkProofKey,
+  newSession,
+  provesAddress,
+  readRefreshToken,
+  RECENT_SIGN_IN_S,
+  setSessionCookies,
+  signedInRecently as recentSignIn,
+} from "../session.js";
 import type { App } from "../app.js";
 import { limit, LIMITS } from "../rateLimit.js";
 import { cognitoFailure, enabledProviders, publicUser } from "./auth.js";
@@ -45,15 +55,35 @@ export function accountRoutes(app: App, deps: Deps) {
 
   const signedInRecently = (c: Ctx) => recentSignIn(sessionOf(c));
   const reauthRequired = () => new HttpError(401, `Sign out and sign in again with Google, then try again within ${RECENT_SIGN_IN_S / 60} minutes.`, "reauth_required");
+  /** A Google account linked under another address can't stand in for the account's own. */
+  const ownAddressRequired = (user: User) =>
+    new HttpError(401, `To do this, sign in with your email and password, or with Google using ${user.email}, your account's address.`, "reauth_required");
+  const hasPassword = async (userId: string) => (await systemDb.authIdentity.count({ where: { userId, method: "password" } })) > 0;
 
   /**
-   * The person proves it's them again: their password when they signed in with one, else a
-   * Google sign-in in the last few minutes.
+   * How this session proves it's the person again, for a change that could lock them out:
+   * - "password": the account's password (a password session; or a Google account linked under
+   *   another address, which proves that address only);
+   * - "recent_sign_in": a sign-in in the last few minutes with Google using the account's own address;
+   * - "own_address_sign_in": nothing it has: a Google account under another address, and no password.
    */
-  async function reauthenticate(c: Ctx, email: string, password: string | undefined) {
-    if (sessionOf(c).m === "password") {
+  async function confirmWith(c: Ctx, user: User): Promise<"password" | "recent_sign_in" | "own_address_sign_in"> {
+    if (sessionOf(c).m === "password") return "password";
+    if (sessionProvesAddress(c, user)) return "recent_sign_in";
+    return (await hasPassword(user.id)) ? "password" : "own_address_sign_in";
+  }
+
+  /**
+   * The person proves it's them again (confirmWith). Otherwise whoever linked their own Google
+   * account (one stolen minute at a signed-in computer is enough) could later remove the owner's
+   * password from their own sessions and add one of theirs for the owner's address.
+   */
+  async function reauthenticate(c: Ctx, user: User, password: string | undefined) {
+    const how = await confirmWith(c, user);
+    if (how === "own_address_sign_in") throw ownAddressRequired(user);
+    if (how === "password") {
       if (!password) throw new HttpError(400, "Enter your current password.", "password_required");
-      return checkPassword(email, password);
+      return checkPassword(user.email, password);
     }
     if (!signedInRecently(c)) throw reauthRequired();
   }
@@ -101,8 +131,13 @@ export function accountRoutes(app: App, deps: Deps) {
       canLinkGoogle: enabledProviders().has("Google") && !identities.some((i) => i.method === "google"),
       // A password is changed with the email-and-password Cognito user, which this session must be.
       canChangePassword: s.m === "password",
-      // A Google account's address comes from Google on every sign-in.
-      canChangeEmail: s.m === "password",
+      // Added from a Google sign-in that proved the account's own address (which the password is for).
+      canAddPassword: !password && sessionProvesAddress(c, user),
+      // A Google account's address comes from Google on every sign-in. An address nobody has proved
+      // stays until it is (identity.ts: whatever others gave it is its owner's).
+      canChangeEmail: s.m === "password" && user.emailVerified,
+      // What removing a method or deleting the account asks for (reauthenticate).
+      confirmWith: await confirmWith(c, user),
       mfaEnabled,
     });
   });
@@ -138,7 +173,11 @@ export function accountRoutes(app: App, deps: Deps) {
     let signedIn = false;
     if ("tokens" in fresh) {
       const claims = await deps.auth.verifyIdToken(fresh.tokens.idToken);
-      setSessionCookies(c, newSession({ userId: user.id, sub: claims.sub, username: claims.username, method: "password", authTime: claims.authTime, keep: s.keep }), fresh.tokens.refreshToken);
+      setSessionCookies(
+        c,
+        newSession({ userId: user.id, sub: claims.sub, username: claims.username, method: "password", authTime: claims.authTime, keep: s.keep, ownAddress: provesAddress(claims, user.email) }),
+        fresh.tokens.refreshToken,
+      );
       signedIn = true;
     } else {
       clearSessionCookies(c);
@@ -149,18 +188,20 @@ export function accountRoutes(app: App, deps: Deps) {
 
   /**
    * A password for an account that signs in with Google only: a password Cognito user for the
-   * account's address, linked to it. Google has verified the address, and a recent Google sign-in
-   * proves it's them. (Before, the advice was "Forgot password?", which can't work: there is no
-   * password user to reset.)
+   * account's address, linked to it. A recent Google sign-in with that address proves it's them
+   * (Google verified it). One with a Google account linked under another address proves nothing
+   * about this one, so it can't set the address's password. (Before, the advice was "Forgot
+   * password?", which can't work: there is no password user to reset.)
    */
   app.post("/auth/account/password/add", async (c) => {
     const user = await requireUser(c, deps);
     const input = z.object({ password: z.string().max(256), confirmPassword: z.string().max(256) }).parse(await body(c));
     await limit(deps.coord, `rl:account:${user.id}`, LIMITS.accountChange);
-    if (await systemDb.authIdentity.count({ where: { userId: user.id, method: "password" } })) {
+    if (await hasPassword(user.id)) {
       throw new HttpError(409, "You already have a password. To change it, sign in with it, or use \"Forgot password?\" on the sign-in page.", "password_exists");
     }
     if (!user.emailVerified) throw new HttpError(403, "Verify your email address first, then add a password.", "email_unverified");
+    if (!sessionProvesAddress(c, user)) throw ownAddressRequired(user);
     if (!signedInRecently(c)) throw reauthRequired();
     const weak = accountPasswordProblem(input.password);
     if (weak) throw new HttpError(400, weak, "weak_password");
@@ -224,9 +265,11 @@ export function accountRoutes(app: App, deps: Deps) {
 
   /**
    * Remove one way of signing in (its Cognito user goes too). Never the last one, nor the one this
-   * session signed in with; and it needs the person again, like any change that could lock them out.
+   * session signed in with; and it needs the person again, like any change that could lock them out
+   * (a Google account linked under another address can't remove the owner's own ways in by itself).
    * The removal is kept in auth_events (identity_removed, with its Cognito user name), which stops a
-   * removed Google account from linking itself back by its address (identity.ts, removedFromAccount).
+   * removed Google account from linking itself back by its address (identity.ts, removedFromAccount),
+   * and the account's address hears of it.
    */
   app.delete("/auth/account/methods/:id", async (c) => {
     const user = await requireUser(c, deps);
@@ -238,8 +281,9 @@ export function accountRoutes(app: App, deps: Deps) {
     if (!target) throw new HttpError(404, "That sign-in method isn't on your account.", "not_found");
     if (identities.length < 2) throw new HttpError(409, "This is the only way you sign in. Add another before removing it.", "last_method");
     if (target.subject === s.sub) throw new HttpError(409, "You're signed in with this method right now. Sign in another way, then remove it.", "method_in_use");
-    await reauthenticate(c, user.email, input.password);
-    // Cognito first: from here the method signs nobody in (its sessions end at their next check).
+    await reauthenticate(c, user, input.password);
+    // Cognito first: from here the method signs nobody in. Its sessions here end on their next
+    // request, refresh-token cookie or not (context.ts: a session's sign-in must be the account's).
     await deps.auth.adminDeleteUser(target.username).catch((err: unknown) => {
       throw cognitoFailure(err, "remove sign-in method");
     });
@@ -250,6 +294,11 @@ export function accountRoutes(app: App, deps: Deps) {
         data: { type: "identity_removed", userId: user.id, ip: clientIp(c), metadata: { cognitoSub: target.subject, method: target.method, cognitoUsername: cognitoUsernameKey(target.username) } },
       }),
     ]);
+    await notifyMethodRemoved(deps.mailer, user, {
+      method: target.method as SignInMethod,
+      email: target.email,
+      passwordLeft: identities.some((i) => i.id !== target.id && i.method === "password"),
+    });
     return c.json({ ok: true });
   });
 
@@ -336,6 +385,28 @@ export function accountRoutes(app: App, deps: Deps) {
     return c.json({ ok: true, mfaEnabled: false });
   });
 
+  /**
+   * An account whose address nobody has proved (an employee who joined from a copied link) keeps
+   * it until it is proved: what workspace owners gave that address (an invitation, an employee
+   * record) belongs to its owner, who takes the account over by proving it (identity.ts). Moved to
+   * another address, it would go with whoever opened the account instead.
+   */
+  const unverifiedAddress = () =>
+    new HttpError(403, "Verify your current email address first, then change it. If it isn't your address, ask whoever invited you to invite the right one.", "email_unverified");
+
+  /** The address Cognito has for this session's Cognito user now (after a code it accepted), and whether it is verified. */
+  async function cognitoAddress(c: Ctx, at: string) {
+    const s = sessionOf(c);
+    const rt = readRefreshToken(c, s);
+    if (!rt) throw new HttpError(401, "Please sign in again.", "reauth_required");
+    return deps.auth
+      .refresh(rt, s.sub)
+      .then((t) => deps.auth.verifyIdToken(t.idToken))
+      .catch((err: unknown) => {
+        throw accountFailure(err, at);
+      });
+  }
+
   /** Step 1 of an email change: Cognito emails a code to the new address (the old one stays until it's confirmed). */
   app.post("/auth/account/email", async (c) => {
     const user = await requireUser(c, deps);
@@ -343,8 +414,9 @@ export function accountRoutes(app: App, deps: Deps) {
     const input = z.object({ email: z.string().trim().email("Enter a valid email address.").max(254).transform((e) => e.toLowerCase()), password: z.string().max(256).optional() }).parse(await body(c));
     await limit(deps.coord, `rl:account:${user.id}`, LIMITS.accountChange);
     if (s.m !== "password") throw new HttpError(400, "Your email address comes from Google. Change it there.", "email_managed_elsewhere");
+    if (!user.emailVerified) throw unverifiedAddress();
     if (input.email === user.email) throw new HttpError(400, "That's already your email address.", "same_email");
-    await reauthenticate(c, user.email, input.password);
+    await reauthenticate(c, user, input.password);
     if (await systemDb.user.findUnique({ where: { email: input.email } })) {
       throw new HttpError(409, "That email address belongs to another account.", "email_in_use");
     }
@@ -361,19 +433,13 @@ export function accountRoutes(app: App, deps: Deps) {
     const s = sessionOf(c);
     const { code } = z.object({ code: codeSchema }).parse(await body(c));
     await limit(deps.coord, `rl:code:verify:${clientIp(c)}`, LIMITS.codeVerifyIp);
+    if (!user.emailVerified) throw unverifiedAddress();
     const accessToken = await accessTokenFor(c, deps);
     await deps.auth.verifyEmail(accessToken, code).catch((err: unknown) => {
       throw accountFailure(err, "confirm email change");
     });
     // What Cognito now says the address is.
-    const rt = readRefreshToken(c, s);
-    if (!rt) throw new HttpError(401, "Please sign in again.", "reauth_required");
-    const claims = await deps.auth
-      .refresh(rt, s.un)
-      .then((t) => deps.auth.verifyIdToken(t.idToken))
-      .catch((err: unknown) => {
-        throw accountFailure(err, "read changed email");
-      });
+    const claims = await cognitoAddress(c, "read changed email");
     if (!claims.email || !claims.emailVerified) throw new HttpError(400, "That code isn't right. Check the email and try again.", "invalid_code");
     const updated = await systemDb.user.update({ where: { id: user.id }, data: { email: claims.email, emailVerified: true } }).catch((err: unknown) => {
       if (isUniqueViolation(err)) throw new HttpError(409, "That email address belongs to another account.", "email_in_use");
@@ -396,6 +462,11 @@ export function accountRoutes(app: App, deps: Deps) {
     return c.json({ ok: true });
   });
 
+  /**
+   * The code from the account's own address. Cognito takes any code it sent this user (one for an
+   * email change to another address too), so the account counts as verified only when Cognito now
+   * vouches for the account's own address: never because someone proved an inbox of theirs.
+   */
   app.post("/auth/account/verify-email", async (c) => {
     const user = await requireUser(c, deps);
     const { code } = z.object({ code: codeSchema }).parse(await body(c));
@@ -405,6 +476,11 @@ export function accountRoutes(app: App, deps: Deps) {
     await deps.auth.verifyEmail(accessToken, code).catch((err: unknown) => {
       throw accountFailure(err, "verify email");
     });
+    const claims = await cognitoAddress(c, "read verified email");
+    if (!provesAddress(claims, user.email)) {
+      logger.warn({ userId: user.id }, "a verification code proved another address than the account's; not verified");
+      throw new HttpError(400, `That code wasn't for ${user.email}. Ask for a new code, then enter the one we send there.`, "invalid_code");
+    }
     const updated = await systemDb.user.update({ where: { id: user.id }, data: { emailVerified: true } });
     await recordAuthEvent("email_verified", user.id, clientIp(c));
     return c.json({ user: publicUser(updated) });
@@ -419,7 +495,7 @@ export function accountRoutes(app: App, deps: Deps) {
     const user = await requireUser(c, deps);
     const input = z.object({ confirm: z.literal("DELETE", { errorMap: () => ({ message: "Type DELETE to confirm." }) }), password: z.string().max(256).optional() }).parse(await body(c));
     await limit(deps.coord, `rl:account:${user.id}`, LIMITS.accountChange);
-    await reauthenticate(c, user.email, input.password);
+    await reauthenticate(c, user, input.password);
     const owned = await systemDb.membership.findMany({ where: { userId: user.id, role: "owner" }, include: { workspace: { select: { id: true, name: true } } } });
     const soleOwner: string[] = [];
     for (const m of owned) {
