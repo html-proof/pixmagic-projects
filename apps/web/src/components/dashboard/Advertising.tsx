@@ -11,10 +11,12 @@ import {
   ChangeNote,
   ComparedLine,
   Definitions,
+  SoFarNote,
   timeZoneNote,
   UNAVAILABLE,
   UnavailableNote,
 } from "./AdsCommon";
+import { shownFigures, upToWords } from "./adFigures";
 import { noEarlierData } from "./DateRange";
 import { fmtDay, fmtMoneyCompact, fmtRange, fmtRelative, fmtTimes, plural } from "./format";
 import { Icon } from "./Icons";
@@ -169,11 +171,15 @@ function SummaryCard({
   );
 }
 
-/** The card's main figure: its value (or "Unavailable" with why), the change, and what was compared. */
+/**
+ * The card's main figure: its value (or "Unavailable" with why), the change, and what was compared.
+ * `through`: the value is the dates so far, up to that day (the days after it aren't over yet).
+ */
 function Headline<T>({
   label,
   fig,
   value,
+  through,
   change,
   accounts,
   ov,
@@ -182,6 +188,7 @@ function Headline<T>({
   label: string;
   fig: AdFigures<T>;
   value: string | null;
+  through: string | null;
   change: ReactNode;
   accounts: AdAccount[];
   ov: Overview;
@@ -197,6 +204,11 @@ function Headline<T>({
         </p>
       ) : (
         <>
+          {through && (
+            <p className="mt-1 text-xs text-muted">
+              <SoFarNote through={through} accounts={accounts} range={ov.range} />
+            </p>
+          )}
           <p className="mt-1">{change}</p>
           {fig.compared && (
             <p className="mt-1 text-xs text-muted">
@@ -229,7 +241,7 @@ function SpendCard({ a, p, ov, onOpen }: { a: AdsModule; p: AdsProviderFigures; 
   const P = PLATFORM[p.provider];
   const money = (n: number) => fmtMoney(n, a.currency);
   const accounts = a.accounts.filter((acc) => acc.counted && acc.provider === p.provider);
-  const c = p.current;
+  const { totals: c, through } = shownFigures(p);
   const facts: Array<[string, string]> = c
     ? [
         ["Link clicks", known(c.linkClicks, fmtNum)],
@@ -250,7 +262,7 @@ function SpendCard({ a, p, ov, onOpen }: { a: AdsModule; p: AdsProviderFigures; 
       note={[timeZoneNote(accounts), historyNote(p, "ads")].filter(Boolean).join(" ") || null}
       testid={`ads-card-${p.provider}`}
     >
-      <Headline label="Ad spend" fig={p} value={c ? money(c.spend) : null} change={<ChangeNote fig={p} value={p.deltas.spend} ov={ov} neutral />} accounts={accounts} ov={ov} show={(t) => money(t.spend)} />
+      <Headline label="Ad spend" fig={p} value={c ? money(c.spend) : null} through={through} change={<ChangeNote fig={p} value={p.deltas.spend} ov={ov} neutral />} accounts={accounts} ov={ov} show={(t) => money(t.spend)} />
       {facts.length > 0 && <Facts items={facts} />}
     </SummaryCard>
   );
@@ -260,7 +272,7 @@ function SpendCard({ a, p, ov, onOpen }: { a: AdsModule; p: AdsProviderFigures; 
 function TotalSpendCard({ a, ov, onOpen }: { a: AdsModule; ov: Overview; onOpen: () => void }) {
   const money = (n: number) => fmtMoney(n, a.currency);
   const names = a.byProvider.map((p) => PLATFORM[p.provider].name).join(" and ");
-  const c = a.current;
+  const { totals: c, through } = shownFigures(a);
   return (
     <SummaryCard
       title="Total ad spend"
@@ -276,6 +288,7 @@ function TotalSpendCard({ a, ov, onOpen }: { a: AdsModule; ov: Overview; onOpen:
         label="Ad spend"
         fig={a}
         value={c ? money(c.spend) : null}
+        through={through}
         change={<ChangeNote fig={a} value={a.deltas.spend} ov={ov} neutral />}
         accounts={a.accounts}
         ov={ov}
@@ -296,7 +309,7 @@ function TotalSpendCard({ a, ov, onOpen }: { a: AdsModule; ov: Overview; onOpen:
 
 function EarningsCard({ a, ov, onOpen }: { a: AdsenseModule; ov: Overview; onOpen: () => void }) {
   const money = (n: number) => fmtMoney(n, a.currency);
-  const c = a.current;
+  const { totals: c, through } = shownFigures(a);
   const accounts = a.accounts.filter((acc) => acc.counted);
   const leftOut = a.sitesLeftOut?.length ? `Not counted: ${a.sitesLeftOut.map((s) => s.site || "All sites").join(", ")}, not chosen as this store's sites.` : null;
   return (
@@ -311,7 +324,7 @@ function EarningsCard({ a, ov, onOpen }: { a: AdsenseModule; ov: Overview; onOpe
       note={[timeZoneNote(accounts), historyNote(a, "adsense"), leftOut].filter(Boolean).join(" ") || null}
       testid="ads-earnings"
     >
-      <Headline label="Estimated earnings" fig={a} value={c ? money(c.earnings) : null} change={<ChangeNote fig={a} value={a.deltas.earnings} ov={ov} />} accounts={accounts} ov={ov} show={(t) => money(t.earnings)} />
+      <Headline label="Estimated earnings" fig={a} value={c ? money(c.earnings) : null} through={through} change={<ChangeNote fig={a} value={a.deltas.earnings} ov={ov} />} accounts={accounts} ov={ov} show={(t) => money(t.earnings)} />
       {c && (
         <Facts
           items={[
@@ -383,7 +396,7 @@ function Trends({ ov, fetching }: { ov: Overview; fetching: boolean }) {
       {sameMoney ? (
         <ChartCard
           title={ads && sense ? "Ad spend and estimated ad earnings per day" : ads ? "Ad spend per day" : "Estimated ad earnings per day"}
-          sub={`${span}, in ${moneyCur}.${ads && sense ? " Spend is money you paid; earnings are money paid to you." : ""}${gaps}`}
+          sub={`${span}, in ${moneyCur}.${ads && sense ? " Spend is what you paid for ads; estimated earnings are what AdSense expects to pay you, not money paid out yet." : ""}${gaps}`}
           testid="ads-money-chart"
         >
           {plot([...spendSeries, ...earnSeries], money(moneyCur), axis(moneyCur), `Ad spend and earnings per day, ${span}`)}
@@ -414,12 +427,12 @@ function Trends({ ov, fetching }: { ov: Overview; fetching: boolean }) {
 function Comparison({ ov }: { ov: Overview }) {
   const ads = ov.modules.ads;
   const sense = ov.modules.adsense;
-  type Row = { p: Provider; money: string; kind: "spent" | "earned" | null; impressions: string; clicks: string; ctr: string; perClick: string; per1000: string; purchases: string; roas: string };
+  type Row = { p: Provider; money: string; kind: "spent" | "earned" | null; through: string | null; impressions: string; clicks: string; ctr: string; perClick: string; per1000: string; purchases: string; roas: string };
   const rows: Row[] = [];
-  const blank = (p: Provider): Row => ({ p, money: UNAVAILABLE, kind: null, impressions: "—", clicks: "—", ctr: "—", perClick: "—", per1000: "—", purchases: "—", roas: "—" });
+  const blank = (p: Provider): Row => ({ p, money: UNAVAILABLE, kind: null, through: null, impressions: "—", clicks: "—", ctr: "—", perClick: "—", per1000: "—", purchases: "—", roas: "—" });
   for (const b of ads?.byProvider ?? []) {
     const cur = ads!.currency;
-    const c = b.current;
+    const { totals: c, through } = shownFigures(b);
     if (!c) {
       rows.push(blank(b.provider));
       continue;
@@ -428,6 +441,7 @@ function Comparison({ ov }: { ov: Overview }) {
       p: b.provider,
       money: fmtMoney(c.spend, cur),
       kind: "spent",
+      through,
       impressions: fmtNum(c.impressions),
       clicks: known(c.linkClicks, fmtNum),
       ctr: c.linkClicks === null ? BEING_READ : c.ctr === null ? NA : fmtPct(c.ctr),
@@ -438,7 +452,7 @@ function Comparison({ ov }: { ov: Overview }) {
     });
   }
   if (sense) {
-    const c = sense.current;
+    const { totals: c, through } = shownFigures(sense);
     if (!c) rows.push(blank("adsense"));
     else {
       const rpm = ratio(c.earnings * 1000, c.impressions);
@@ -446,6 +460,7 @@ function Comparison({ ov }: { ov: Overview }) {
         p: "adsense",
         money: fmtMoney(c.earnings, sense.currency),
         kind: "earned",
+        through,
         impressions: fmtNum(c.impressions),
         clicks: fmtNum(c.clicks),
         ctr: c.ctr === null ? NA : fmtPct(c.ctr),
@@ -460,7 +475,9 @@ function Comparison({ ov }: { ov: Overview }) {
   return (
     <div className="card mt-4 min-w-0" data-testid="ads-comparison">
       <h3 className="font-semibold">By platform</h3>
-      <p className="text-xs text-muted">Each platform&apos;s own numbers for these dates. Spent is money you paid; earned is money paid to you (AdSense&apos;s estimate).</p>
+      <p className="text-xs text-muted">
+        Each platform&apos;s own numbers for these dates. Spent is what you paid for ads; earned is AdSense&apos;s estimate of what it will pay you, not money paid out yet.
+      </p>
       <div className="-mx-1 mt-3 overflow-x-auto">
         <table className="w-full min-w-[46rem] text-sm">
           <thead className="text-left text-xs text-muted">
@@ -487,6 +504,7 @@ function Comparison({ ov }: { ov: Overview }) {
                       <P.Icon size={16} />
                       {P.name}
                     </span>
+                    {r.through && <span className="block text-xs text-muted">{upToWords(r.through)}</span>}
                   </td>
                   <td className="px-1 py-2 text-right tabular-nums">
                     {r.money} {r.kind && <span className="text-xs text-muted">{r.kind}</span>}

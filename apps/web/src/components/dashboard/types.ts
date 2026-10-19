@@ -103,6 +103,8 @@ export interface AdAccount<P extends AdProvider = AdProvider> {
   coversRange?: boolean;
   /** AdSense: the sites chosen as the store's (empty: every site). */
   sites?: string[];
+  /** AdSense, sites chosen: the last day read whose earnings AdSense didn't split by site (the store's share of them isn't known). */
+  unsplitThrough?: string | null;
 }
 
 /** Why a change isn't given: only running days picked, a comparison before the figures start, or days missing on either side. */
@@ -117,13 +119,17 @@ export interface FiguresWindow<T> {
 /**
  * Figures that exist only for days every account they add up has stored. `current` is null when
  * one of them lacks a day of the range ("Unavailable"), and `partial` then gives the days they all
- * have; `compared` is what each side of the change is worked out on (whole days only: while the
- * dates include today, both sides stop at the last day that is over), null with `notCompared` why.
+ * have; `soFar` is that same part when the only days it lacks are at the end and not over yet (shown
+ * as the figure, "through" its last day); `compared` is what each side of the change is worked out
+ * on (whole days only: while the dates include today, both sides stop at the last day that is
+ * over), null with `notCompared` why.
  */
 export interface AdFigures<T> {
   coverage: AdCoverage & { complete: boolean };
   current: T | null;
   partial: FiguresWindow<T> | null;
+  /** Absent from answers that predate it. */
+  soFar?: FiguresWindow<T> | null;
   compared: { current: FiguresWindow<T>; previous: FiguresWindow<T>; trimmed: number } | null;
   notCompared: NotCompared | null;
   /** The first day every account has figures from (each brings the 90 days before it was connected). */
@@ -201,6 +207,8 @@ export interface AdsenseReportAnswer {
   rows: AdsenseReportRow[];
   totals: AdsenseTotals;
   truncated: boolean;
+  /** The sites the answer is limited to (the connection's chosen sites; empty: every site). Absent: taken as the connection's. */
+  sites?: string[];
 }
 
 export interface ChannelsModule {

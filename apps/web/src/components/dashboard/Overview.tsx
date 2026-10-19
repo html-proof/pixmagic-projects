@@ -6,6 +6,7 @@ import { biggestDropOff } from "@app/shared/journey";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { fmtDay, fmtMonth, fmtRange, fmtRelative, hourRange, plural } from "./format";
 import { throughLabel } from "./AdsCommon";
+import { shownFigures, upToWords } from "./adFigures";
 import { comparisonHelp, noEarlierData } from "./DateRange";
 import { STEP_LABEL } from "./Funnel";
 import { AreaPreview } from "./Previews";
@@ -14,7 +15,7 @@ import { B, Change, changeWords, comparedOn } from "./Narrative";
 import { Panel, Stat, type Tone } from "./Primitives";
 import { topicInfo, topicSummary, type Topic } from "./topics";
 import { breakdownOf } from "./redacted";
-import type { Overview } from "./types";
+import type { AdFigures, Overview } from "./types";
 
 // ---------------------------------------------------------------------------
 // The whole business at a glance: one health check per area, worked out from the numbers the
@@ -97,24 +98,29 @@ export function businessHealth(ov: Overview, currency: string): Check[] {
     out.push({ id: "shipping", topic: "shipping", area: "Shipping", health, text });
   }
   const ads = m.ads;
-  if (ads && !ads.current) {
+  // The whole range, or the days so far while only days not over yet are missing ("up to 18 Oct").
+  const adsShown = ads ? shownFigures(ads) : null;
+  const upTo = (through: string | null) => (through ? ` ${upToWords(through)}` : "");
+  if (ads && !adsShown?.totals) {
     // Some account lacks days of the range: say so rather than give a short total.
     out.push({ id: "ads", topic: "ads", area: "Ads", health: "info", text: "Ad figures for these dates are unavailable: some ad accounts haven't been read for all of them yet." });
-  } else if (ads?.current && ads.current.spend > 0) {
-    const c = ads.current;
+  } else if (ads && adsShown?.totals && adsShown.totals.spend > 0) {
+    const c = adsShown.totals;
     const clicks = c.linkClicks === null ? "" : ` for ${plural(c.linkClicks, "link click")}`;
     const back =
       c.roas !== null && c.purchaseValue !== null
         ? `; the platforms credit ${fmtMoney(c.purchaseValue, ads.currency)} in purchases to them (${new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(c.roas)}×)`
         : "";
-    out.push({ id: "ads", topic: "ads", area: "Ads", health: "info", text: `${fmtMoney(c.spend, ads.currency)} spent on ads${clicks}${back}.` });
+    out.push({ id: "ads", topic: "ads", area: "Ads", health: "info", text: `${fmtMoney(c.spend, ads.currency)} spent on ads${upTo(adsShown.through)}${clicks}${back}.` });
   }
   const adsense = m.adsense;
-  if (adsense && !adsense.current) {
+  const senseShown = adsense ? shownFigures(adsense) : null;
+  if (adsense && !senseShown?.totals) {
     out.push({ id: "adsense", topic: "adsense", area: "Ad earnings", health: "info", text: "AdSense figures for these dates are unavailable: the account hasn't been read for all of them yet." });
-  } else if (adsense?.current && adsense.current.pageViews > 0) {
-    const rpm = adsense.current.pageRpm !== null ? `, ${fmtMoney(adsense.current.pageRpm, adsense.currency)} per 1,000 page views` : "";
-    out.push({ id: "adsense", topic: "adsense", area: "Ad earnings", health: "info", text: `${fmtMoney(adsense.current.earnings, adsense.currency)} estimated earnings from AdSense ads on your site${rpm}.` });
+  } else if (adsense && senseShown?.totals && senseShown.totals.pageViews > 0) {
+    const c = senseShown.totals;
+    const rpm = c.pageRpm !== null ? `, ${fmtMoney(c.pageRpm, adsense.currency)} per 1,000 page views` : "";
+    out.push({ id: "adsense", topic: "adsense", area: "Ad earnings", health: "info", text: `${fmtMoney(c.earnings, adsense.currency)} estimated earnings from AdSense ads on your site${upTo(senseShown.through)}${rpm}.` });
   }
   const top = m.top_products?.items[0];
   if (top) out.push({ id: "best", topic: "products", area: "Best seller", health: "info", text: `${top.title}: ${money(top.revenue)} from ${plural(top.units, "unit")}.` });
@@ -367,10 +373,18 @@ export function OverviewDetail({ ov, currency, onOpen }: { ov: Overview; currenc
     adsMissing,
     m.adsense?.notCompared === "no_history" && !(adsMissing && m.adsense.historyFrom === m.ads?.historyFrom) ? noEarlierData(m.adsense.historyFrom, "adsense") : null,
   ].filter(Boolean);
-  // The ad rows show what their change compares: with today left out of both sides, the dates up to yesterday.
-  const adsNow = m.ads ? (m.ads.compared?.current.totals ?? m.ads.current) : null;
-  const adsLabel = (what: string) => (m.ads?.compared?.trimmed ? `${what}, ${throughLabel(m.ads, ov)}` : what);
-  const senseNow = m.adsense ? (m.adsense.compared?.current.totals ?? m.adsense.current) : null;
+  // The ad rows show what their change compares: with today left out of both sides, the dates up to
+  // yesterday. With nothing compared, the dates' figures, or the days so far, dated.
+  const nowOf = <T,>(fig: AdFigures<T>): { totals: T | null; label: string | null } => {
+    if (fig.compared) return { totals: fig.compared.current.totals, label: fig.compared.trimmed ? throughLabel(fig, ov) : null };
+    const { totals, through } = shownFigures(fig);
+    return { totals, label: through ? upToWords(through) : null };
+  };
+  const adsNowOf = m.ads ? nowOf(m.ads) : null;
+  const adsNow = adsNowOf?.totals ?? null;
+  const adsLabel = (what: string) => (adsNowOf?.label ? `${what}, ${adsNowOf.label}` : what);
+  const senseNowOf = m.adsense ? nowOf(m.adsense) : null;
+  const senseNow = senseNowOf?.totals ?? null;
   // Gross sales, discounts, tax, shipping and total sales, and returns, only for someone who may
   // see them (Team & Access).
   const bd = s ? breakdownOf(s.current) : null;
@@ -503,7 +517,7 @@ export function OverviewDetail({ ov, currency, onOpen }: { ov: Overview; currenc
                 )}
                 {m.adsense && (
                   <Row
-                    label={m.adsense.compared?.trimmed ? `Estimated AdSense earnings (${m.adsense.currency}), ${throughLabel(m.adsense, ov)}` : `Estimated AdSense earnings (${m.adsense.currency})`}
+                    label={senseNowOf?.label ? `Estimated AdSense earnings (${m.adsense.currency}), ${senseNowOf.label}` : `Estimated AdSense earnings (${m.adsense.currency})`}
                     now={senseNow ? fmtMoney(senseNow.earnings, m.adsense.currency) : "Unavailable"}
                     before={m.adsense.previous.earnings !== null ? fmtMoney(m.adsense.previous.earnings, m.adsense.currency) : null}
                     change={<Change value={m.adsense.deltas.earnings} />}

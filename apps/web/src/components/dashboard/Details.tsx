@@ -11,6 +11,7 @@ import { comparisonHelp, noEarlierData, versusWords } from "./DateRange";
 import { FunnelCard, JourneyCard, SECTION_LABEL, STEP_LABEL } from "./Funnel";
 import { fmtComparison, fmtDuration, fmtRange, hourRange, plural, weekdayNames } from "./format";
 import { CatalogCard, ChannelsCard, DiscountCodesCard, FulfillmentCard, InventoryCard, OrderTimingCard, RecentOrdersCard, TrafficCard } from "./Modules";
+import { shownFigures, upToWords } from "./adFigures";
 import { AdsDetail } from "./AdsPanel";
 import { AdsenseDetail } from "./AdsensePanel";
 import { Explained } from "./Explain";
@@ -625,13 +626,14 @@ export function TopicContents({
 /** Under the ads details, when AdSense is connected too: its estimated earnings, one tap away. */
 function AdsenseLink({ ov, onOpen }: { ov: Overview; onOpen: (t: Topic) => void }) {
   const s = ov.modules.adsense!;
+  const { totals, through } = shownFigures(s);
   return (
     <div className="card flex flex-wrap items-center justify-between gap-2 text-sm" data-testid="ads-adsense-link">
       <span>
         <span className="font-medium">Google AdSense</span>
         <span className="text-muted">
           {" · "}
-          {s.current ? `${fmtMoney(s.current.earnings, s.currency)} estimated earnings from ads on your site` : "estimated earnings from ads on your site"}
+          {totals ? `${fmtMoney(totals.earnings, s.currency)} estimated earnings from ads on your site${through ? ` ${upToWords(through)}` : ""}` : "estimated earnings from ads on your site"}
         </span>
       </span>
       <button type="button" className="text-xs text-accent underline-offset-2 hover:underline" onClick={() => onOpen("adsense")}>

@@ -5,9 +5,24 @@ import type { AdTotals } from "@app/shared/ads";
 import { useApp } from "@/components/AppContext";
 import { GoogleIcon, MetaIcon } from "@/components/BrandIcons";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
-import { AccountStatus, accountGroups, AdStatusNotes, BEING_READ, ChangeNote, ComparedLine, dailyMoneyColumns, missingReason, missingReasons, runningWords, throughLabel, timeZoneNote, UNAVAILABLE } from "./AdsCommon";
+import {
+  AccountStatus,
+  accountGroups,
+  AdStatusNotes,
+  BEING_READ,
+  ChangeNote,
+  ComparedLine,
+  dailyMoneyColumns,
+  missingReason,
+  missingReasons,
+  runningWords,
+  throughLabel,
+  timeZoneNote,
+  UNAVAILABLE,
+} from "./AdsCommon";
+import { shownFigures, upToWords } from "./adFigures";
 import { noEarlierData } from "./DateRange";
-import { fmtLongDay, fmtMoneyCompact, fmtMoneyWhole, fmtRange, fmtSpan, fmtTimes, plural } from "./format";
+import { fmtDay, fmtLongDay, fmtMoneyCompact, fmtMoneyWhole, fmtRange, fmtSpan, fmtTimes, plural } from "./format";
 import { Icon } from "./Icons";
 import { GoogleReportPanel } from "./GoogleReport";
 import { MetaReportPanel } from "./MetaReport";
@@ -69,7 +84,10 @@ function SpendChart({ a, ov }: { a: AdsModule; ov: Overview }) {
   );
 }
 
-/** The figures at a glance: for the whole range, or, when that's unavailable, for the days every account has. */
+/**
+ * The figures at a glance: for the whole range (or the days so far), or, when that's unavailable,
+ * for the days every account has (`partial`: no changes then).
+ */
 function Glance({ a, t, ov, partial }: { a: AdsModule; t: AdTotals; ov: Overview; partial: boolean }) {
   const money = (n: number) => fmtMoney(n, a.currency);
   // Changes belong to the whole range only.
@@ -85,7 +103,8 @@ function Glance({ a, t, ov, partial }: { a: AdsModule; t: AdTotals; ov: Overview
       <Stat label="Cost per click" value={t.linkClicks === null ? BEING_READ : t.cpc !== null ? money(t.cpc) : "—"} note="Spend ÷ link clicks" />
       <Stat label="Click-through rate" value={t.linkClicks === null ? BEING_READ : fmtPct(t.ctr)} note={`${fmtNum(t.impressions)} impressions`} />
       <Stat label="Cost per 1,000 impressions" value={t.cpm !== null ? money(t.cpm) : "—"} />
-      {!partial && <Stat label="Ads as share of sales" value={fmtPct(a.shareOfSales)} note="Ad spend ÷ your net sales" />}
+      {/* Every day of the range only: the store's sales include the days still to come in. */}
+      {a.current && <Stat label="Ads as share of sales" value={fmtPct(a.shareOfSales)} note="Ad spend ÷ your net sales" />}
       {t.leads > 0 && <Stat label="Leads" value={fmtNum(t.leads)} />}
     </div>
   );
@@ -94,13 +113,18 @@ function Glance({ a, t, ov, partial }: { a: AdsModule; t: AdTotals; ov: Overview
 export function AdsDetail({ ov }: { ov: Overview }) {
   const { allowed } = useApp();
   const a = ov.modules.ads!;
-  const c = a.current;
+  // The whole range, or while only days not over yet are missing, the days so far (up to `upTo`).
+  const { totals: c, through: upTo } = shownFigures(a);
   const money = (n: number) => fmtMoney(n, a.currency);
   const { left } = accountGroups(a.accounts);
   const counted = a.accounts.filter((acc) => acc.counted);
   const reasons = missingReasons(counted, ov.range);
-  const split = c && a.byProvider.length > 1 ? a.byProvider.map((p) => `${PLATFORM[p.provider].name} ${p.spend === null ? UNAVAILABLE.toLowerCase() : money(p.spend)}`).join(", ") : null;
-  const google = a.byProvider.find((p) => p.provider === "google")?.current ?? null;
+  const spendOf = (p: (typeof a.byProvider)[number]) => shownFigures(p).totals?.spend ?? null;
+  // Split by platform only when each platform's figure covers the same days as the total.
+  const sameDays = a.byProvider.every((p) => (shownFigures(p).through ?? ov.range.to) === (upTo ?? ov.range.to));
+  const split = c && sameDays && a.byProvider.length > 1 ? a.byProvider.map((p) => `${PLATFORM[p.provider].name} ${spendOf(p) === null ? UNAVAILABLE.toLowerCase() : money(spendOf(p)!)}`).join(", ") : null;
+  const googleP = a.byProvider.find((p) => p.provider === "google");
+  const google = googleP ? shownFigures(googleP).totals : null;
   const missing = a.notCompared === "no_history" ? noEarlierData(a.historyFrom, "ads") : null;
   const on = comparedOnWholeDays(ov);
   const through = throughLabel(a, ov);
@@ -145,9 +169,10 @@ export function AdsDetail({ ov }: { ov: Overview }) {
           {c && (
             <>
               <p>
-                You spent <B>{money(c.spend)}</B> on ads{split ? <> ({split})</> : null}
+                {upTo ? <>Up to {fmtDay(upTo, { year: false })}, you</> : "You"} spent <B>{money(c.spend)}</B> on ads{split ? <> ({split})</> : null}
                 {change(a.deltas.spend)}.
               </p>
+              {upTo && reasons.length > 0 && <p className="text-muted">{reasons.join(" ")}</p>}
               <p>
                 {c.linkClicks === null ? (
                   <>Their link clicks for some of these days are still being read again from the platforms</>
@@ -196,7 +221,12 @@ export function AdsDetail({ ov }: { ov: Overview }) {
         title="At a glance"
         help={
           <>
-            {c || !a.partial ? fmtRange(ov.range.from, ov.range.to) : `${fmtRange(a.partial.from, a.partial.to)} only, the days every account has`}.{" "}
+            {upTo
+              ? `${fmtRange(ov.range.from, upTo)}, the days so far`
+              : c || !a.partial
+                ? fmtRange(ov.range.from, ov.range.to)
+                : `${fmtRange(a.partial.from, a.partial.to)} only, the days every account has`}
+            .{" "}
             {a.compared && !(!c && a.partial) ? (
               <>
                 <ComparedLine fig={a} show={(t) => money(t.spend)} what="spend" />.{" "}
@@ -222,6 +252,7 @@ export function AdsDetail({ ov }: { ov: Overview }) {
         <section className="card animate-rise min-w-0" data-testid="ads-daily">
           <p className="text-xs font-medium uppercase tracking-wide text-muted">{fmtSpan(ov.range.from, ov.range.to)} · Ad spend per day</p>
           <p className="mt-1 text-3xl font-semibold">{c ? money(c.spend) : UNAVAILABLE}</p>
+          {upTo && <p className="text-xs text-muted">Spent {upToWords(upTo)}. Days with no figures yet are marked, not drawn as $0.</p>}
           {!c && <p className="text-xs text-muted">Days with no figures yet are marked, not drawn as $0.</p>}
           <ColumnsLegend />
           <SpendChart a={a} ov={ov} />
@@ -247,7 +278,7 @@ export function AdsDetail({ ov }: { ov: Overview }) {
             <tbody>
               {a.byProvider.map((p) => {
                 const P = PLATFORM[p.provider];
-                const t = p.current;
+                const { totals: t, through: pUpTo } = shownFigures(p);
                 const why = t ? null : a.accounts.filter((acc) => acc.counted && acc.provider === p.provider).map((acc) => missingReason(acc, ov.range)).filter(Boolean).join(" ");
                 return (
                   <tr key={p.provider} className="border-t border-border">
@@ -256,6 +287,7 @@ export function AdsDetail({ ov }: { ov: Overview }) {
                         <P.Icon size={16} />
                         {P.name}
                       </span>
+                      {pUpTo && <span className="block text-xs text-muted">{upToWords(pUpTo)}</span>}
                     </td>
                     {t ? (
                       <>

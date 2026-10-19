@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
+import { shownFigures, upToWords } from "./adFigures";
 import { hourRange, plural } from "./format";
 import type { IconName } from "./Icons";
 import type { Overview } from "./types";
@@ -123,15 +124,17 @@ export function topicSummary(t: Topic, ov: Overview, currency: string): string {
     case "ads": {
       const a = m.ads;
       if (!a) return "Connect Meta or Google Ads";
-      // Some account lacks days of the range: never a short total.
-      if (!a.current) return "Ad figures unavailable for some of these days";
-      return `${fmtMoney(a.current.spend, a.currency)} spent${a.current.linkClicks === null ? "" : ` · ${plural(a.current.linkClicks, "link click")}`}`;
+      // Some account lacks days of the range: never a short total, except the days so far, dated.
+      const { totals: c, through } = shownFigures(a);
+      if (!c) return "Ad figures unavailable for some of these days";
+      return `${fmtMoney(c.spend, a.currency)} spent${through ? ` ${upToWords(through)}` : ""}${c.linkClicks === null ? "" : ` · ${plural(c.linkClicks, "link click")}`}`;
     }
     case "adsense": {
       const a = m.adsense;
       if (!a) return "Connect Google AdSense";
-      if (!a.current) return "AdSense figures unavailable for some of these days";
-      return `${fmtMoney(a.current.earnings, a.currency)} estimated · ${plural(a.current.pageViews, "page view")}`;
+      const { totals: c, through } = shownFigures(a);
+      if (!c) return "AdSense figures unavailable for some of these days";
+      return `${fmtMoney(c.earnings, a.currency)} estimated${through ? ` ${upToWords(through)}` : ""} · ${plural(c.pageViews, "page view")}`;
     }
     case "products": {
       const top = m.top_products?.items[0];

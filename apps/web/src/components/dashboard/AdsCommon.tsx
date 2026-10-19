@@ -1,10 +1,11 @@
 "use client";
 import Link from "next/link";
 import { Fragment, type ReactNode } from "react";
-import { adAccountStatusLabel, adErrorMessage, isAdAccountStatus, isAdErrorCode, type AdErrorCode, type AdProvider } from "@app/shared/ads";
+import { adAccountStatusLabel, adErrorMessage, isAdAccountStatus, isAdErrorCode, isClosedAdAccount, type AdErrorCode, type AdProvider } from "@app/shared/ads";
 import { addDays } from "@app/shared/dates";
 import { weekdayOf } from "@app/shared/sales";
 import { Alert } from "@/components/ui";
+import { upToWords } from "./adFigures";
 import { fmtDay, fmtMoneyWhole, fmtRelative, fmtSpan, fmtWeekday } from "./format";
 import type { Column } from "./ColumnsWithTotal";
 import { Delta, NeutralDelta } from "./Primitives";
@@ -62,10 +63,10 @@ export function dailyMoneyColumns<D extends { day: string }>(series: D[], value:
   });
 }
 
-type AccountState = Pick<AdAccount, "counted" | "status" | "lastSyncedAt" | "coverage">;
+type AccountState = Pick<AdAccount, "counted" | "status" | "lastSyncedAt" | "coverage" | "unsplitThrough">;
 
-/** Nothing stored yet: never synced (older answers say so by lastSyncedAt alone). */
-const neverRead = (acc: AccountState) => (acc.coverage ? acc.coverage.through === null : !acc.lastSyncedAt);
+/** Nothing stored yet: never synced (older answers say so by lastSyncedAt alone). Days AdSense didn't split by site were read. */
+const neverRead = (acc: AccountState) => (acc.coverage ? acc.coverage.through === null && !acc.unsplitThrough : !acc.lastSyncedAt);
 
 /**
  * Accounts left out of the totals (another currency), those still being read for the first time,
@@ -80,9 +81,10 @@ export function accountGroups<A extends AccountState>(accounts: A[]) {
 }
 
 /** The reason an account isn't working, as a code: its own, or for an older answer without one, its status's usual one. */
-function codeOf(acc: Pick<AdAccount, "status" | "errorCode">): AdErrorCode | null {
+function codeOf(acc: Pick<AdAccount, "status" | "errorCode" | "accountStatus">): AdErrorCode | null {
   if (acc.status === "active") return null;
   if (isAdErrorCode(acc.errorCode)) return acc.errorCode;
+  if (acc.accountStatus === "closed") return "account_closed";
   if (acc.status === "reconnect") return "auth_expired";
   if (acc.status === "permission") return "no_access";
   if (acc.status === "unavailable") return "account_not_ready";
@@ -100,6 +102,11 @@ export function missingReason(acc: AdAccount, range: { from: string; to: string 
   const name = nameOf(acc);
   const { from, through } = acc.coverage;
   const problem = adErrorMessage(codeOf(acc), acc.provider);
+  // Sites are chosen for the store, and AdSense reported the days up to unsplitThrough for every site
+  // together: the account's figures start after them (or, when they reach its last day, not at all).
+  if (acc.unsplitThrough && (from === null || (from === addDays(acc.unsplitThrough, 1) && from > range.from))) {
+    return `AdSense didn't split ${name}'s earnings by site up to ${fmtDay(acc.unsplitThrough)}, so this store's share of those days isn't known.`;
+  }
   if (from === null || through === null) {
     return problem ? `Nothing could be read from ${name} yet. ${problem}` : `${name} is being read for the first time: its last 90 days arrive within a few minutes.`;
   }
@@ -175,7 +182,16 @@ export function AdStatusNotes({ accounts, manage }: { accounts: AdAccount[]; man
             {failing.map((a) => (
               <li key={a.id}>
                 <span className="font-medium">{nameOf(a)}:</span> {adErrorMessage(codeOf(a), a.provider)}{" "}
-                {a.coverage?.through ? `Its figures stop on ${fmtDay(a.coverage.through)}, so the days since show as unavailable, not as 0.` : neverRead(a) ? "Nothing could be read from it yet." : ""}
+                {/* A closed account spends and earns nothing: its days since count as the zeros they are (accountCoverage). */}
+                {isClosedAdAccount(a)
+                  ? a.coverage?.through
+                    ? `A closed account ${a.provider === "adsense" ? "earns" : "spends"} nothing, so its days since it closed count as 0.`
+                    : "Nothing could be read from it before it closed."
+                  : a.coverage?.through
+                    ? `Its figures stop on ${fmtDay(a.coverage.through)}, so the days since show as unavailable, not as 0.`
+                    : neverRead(a)
+                      ? "Nothing could be read from it yet."
+                      : ""}
               </li>
             ))}
           </ul>
@@ -262,6 +278,17 @@ export function UnavailableNote<T>({ fig, accounts, range, show }: { fig: Pick<A
           {r}
         </span>
       ))}
+    </span>
+  );
+}
+
+/** Under a figure of the dates so far (`shownFigures`): the day it stops on, and why the days after it aren't in yet. */
+export function SoFarNote({ through, accounts, range }: { through: string; accounts: AdAccount[]; range: { from: string; to: string } }) {
+  const reasons = missingReasons(accounts, range);
+  const up = upToWords(through);
+  return (
+    <span className="block" data-testid="ads-so-far">
+      {up[0]!.toUpperCase() + up.slice(1)}: {reasons.length ? reasons.join(" ") : "the days after it aren't in yet."}
     </span>
   );
 }
