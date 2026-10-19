@@ -57,6 +57,7 @@ export class AuthStack extends Stack {
       }
       parameters.CustomDomain = custom.name;
       parameters.CustomDomainCertArn = custom.certificateArn;
+      parameters.CustomDomainInUse = custom.inUse ? "true" : "false";
     }
     const emailSender = cfg.cognitoCustomEmail ? this.customEmailSender(cfg, prefix, props.appUrl) : undefined;
     if (emailSender) {
@@ -84,7 +85,9 @@ export class AuthStack extends Stack {
       ],
     });
 
-    const domain = custom ? `https://${custom.name}` : `https://${cfg.cognitoDomainPrefix}.auth.${cfg.region}.amazoncognito.com`;
+    // The own domain only once it is in use (config.ts): until then it exists for the DNS record
+    // and Google's client to be readied, while sign-in keeps going through the prefix domain.
+    const domain = custom?.inUse ? `https://${custom.name}` : `https://${cfg.cognitoDomainPrefix}.auth.${cfg.region}.amazoncognito.com`;
     const runtime = new ssm.StringParameter(this, "Runtime", {
       parameterName: props.runtimeParam,
       description: "Insights runtime settings (not secret): the app's address and its Cognito pool",
@@ -99,9 +102,10 @@ export class AuthStack extends Stack {
       }),
     });
     // The functions move to the own domain only once Cognito has it.
-    if (custom) runtime.node.addDependency(template.getResource("CustomUserPoolDomain"));
+    if (custom?.inUse) runtime.node.addDependency(template.getResource("CustomUserPoolDomain"));
     // Outputs: cognito.yaml's own (UserPoolId, ClientId, Domain, ProviderRedirectUri for Google,
-    // and CustomDomainTarget for the DNS record when there is an own domain).
+    // and with an own domain CustomDomainTarget for the DNS record and CustomDomainRedirectUri for
+    // Google's client before the switch).
   }
 
   /**

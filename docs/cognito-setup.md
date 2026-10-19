@@ -279,29 +279,46 @@ back to the password), and the exact exception for a wrong code at `VerifySoftwa
 ## 7. Own sign-in domain (optional)
 
 Google's sign-in pages name the pool's OAuth domain, `insights-605411278365.auth.ap-southeast-2.amazoncognito.com`,
-which the owner can't verify with Google. `cognitoCustomDomain` (`infra/cdk/lib/config.ts`, unset
-in production: nothing changes until it is set) gives the pool its own domain beside the prefix
-one (a resource of its own, `CustomUserPoolDomain`: the prefix domain is never replaced and keeps
-working). Once it exists the app uses it (`COGNITO_DOMAIN`) and Google's redirect URI becomes
-`https://auth.bizinsights.io/oauth2/idpresponse`. While Google sign-in is off, do this first and use
-the new addresses in section 2; with Google on, Continue with Google fails from the deploy until
-the DNS record and the redirect URI are in place.
+which the owner can't verify with Google: Google's screen shows an app's name and logo only once
+the project's branding is verified, and until then the domain of the redirect URI, so Continue
+with Google says "to continue to insights-605411278365.auth.ap-southeast-2.amazoncognito.com".
+`cognitoCustomDomain` (`infra/cdk/lib/config.ts`, unset in production: nothing changes until it is
+set) gives the pool its own domain beside the prefix one (a resource of its own,
+`CustomUserPoolDomain`: the prefix domain is never replaced and keeps working). Its `inUse` flag
+moves sign-in over in a second step, so Continue with Google keeps working throughout: with
+`inUse: false` the domain exists (its CloudFront target, for the DNS record) while the app
+(`COGNITO_DOMAIN`) and Google's redirect URI stay on the prefix domain; with `inUse: true` the app
+uses it and Google's redirect URI becomes `https://auth.bizinsights.io/oauth2/idpresponse`. The
+ID tokens are unaffected (their issuer and keys are the pool's, not the domain's). In this order:
 
 1. **Certificate**: ACM in **us-east-1** (N. Virginia; Cognito serves the domain through CloudFront)
    → Request a public certificate for `auth.bizinsights.io`, DNS validation. Add the CNAME ACM shows
-   at Cloudflare (DNS only) and wait for "Issued".
-2. **Config**: in `infra/cdk/lib/config.ts`, production gets
-   `cognitoCustomDomain: { name: "auth.bizinsights.io", certificateArn: "arn:aws:acm:us-east-1:605411278365:certificate/…" }`;
-   pull request, merge, and the Deploy to AWS run adds the domain. Cognito wants `bizinsights.io`
-   itself to resolve (it does, through Cloudflare).
-3. **DNS**: the Auth stack's output `CustomDomainTarget` (`….cloudfront.net`) → Cloudflare → DNS →
-   CNAME `auth` → that target, **DNS only (grey cloud)**: Cognito's CloudFront serves the
-   certificate itself, and Cloudflare's proxy in front would break it. It can take up to an hour.
+   at Cloudflare (DNS only) and wait for "Issued". The app's own certificate
+   (`bizinsights.io` + `www.bizinsights.io`, aws-deployment.md "Domain: bizinsights.io") doesn't
+   cover it: no wildcard.
+2. **Config, first step**: in `infra/cdk/lib/config.ts`, production gets
+   `cognitoCustomDomain: { name: "auth.bizinsights.io", certificateArn: "arn:aws:acm:us-east-1:605411278365:certificate/…", inUse: false }`;
+   pull request, merge, and the Deploy to AWS run creates the domain and prints the Auth stack's
+   outputs `CustomDomainTarget` and `CustomDomainRedirectUri`. Cognito wants `bizinsights.io` itself
+   to resolve (it does, through Cloudflare). Sign-in is untouched.
+3. **DNS**: `CustomDomainTarget` (`….cloudfront.net`) → Cloudflare → DNS → CNAME `auth` → that
+   target, **DNS only (grey cloud)**: Cognito's CloudFront serves the certificate itself, and
+   Cloudflare's proxy in front would break it. It can take up to an hour;
+   `curl -s https://auth.bizinsights.io/.well-known/openid-configuration` answering the pool's
+   OpenID configuration (JSON, not a connection or certificate error) shows it serves.
 4. **Google**: on the sign-in OAuth client add the redirect URI `https://auth.bizinsights.io/oauth2/idpresponse`
-   and the JavaScript origin `https://auth.bizinsights.io`; once Continue with Google works, remove
-   the `amazoncognito.com` ones, and `amazoncognito.com` from the consent screen's Authorized domains.
-5. **Check**: `curl https://bizinsights.io/api/auth/oauth/google/start -sI` sends to
-   `https://auth.bizinsights.io/oauth2/authorize?…`, and Continue with Google signs in.
+   (`CustomDomainRedirectUri`) and the JavaScript origin `https://auth.bizinsights.io`, keeping the
+   `amazoncognito.com` ones for now.
+5. **Config, second step**: `inUse: true`; pull request, merge. The deploy moves the app to the
+   domain, and its step "Restart the functions on changed runtime settings" restarts the functions.
+6. **Check**: `curl https://bizinsights.io/api/auth/oauth/google/start -sI` sends to
+   `https://auth.bizinsights.io/oauth2/authorize?…`, and Continue with Google signs in; Google's
+   screen now says "to continue to bizinsights.io".
+7. **Afterwards**: remove the `amazoncognito.com` redirect URI and JavaScript origin from the
+   client, and `amazoncognito.com` from the consent screen's Authorized domains. Then verify the
+   sign-in project's branding (Google Auth Platform → Branding: name bizinsights, the logo,
+   homepage, privacy and terms on bizinsights.io → Verification Center), so Google's screen shows
+   the name and logo instead of the domain (docs/integrations-readiness.md).
 
 ## Troubleshooting
 

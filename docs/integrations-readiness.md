@@ -4,7 +4,8 @@ The owner's checklist for opening Google Ads, Google AdSense, Meta Ads and "Cont
 merchant. Each line says where it stands, why, and what happens next and who does it.
 
 Last updated 2026-10-20 (evening: the registration facts from ABN Lookup, the Google Ads account state, the list of
-what only you can do with the values to paste; then the Meta portfolio created and Business Verification submitted).
+what only you can do with the values to paste; then the Meta portfolio created and Business Verification submitted;
+later that night: what the public sees on Continue with Google's screen, and the own sign-in domain's steps).
 Status words:
 
 - **Completed**: done and confirmed.
@@ -50,12 +51,13 @@ The detail behind each line: [ads-setup.md](ads-setup.md) (how the integrations 
 
 | Requirement | Status | Why | Next action (who) |
 | --- | --- | --- | --- |
-| Sign in with Google in production | Completed (2026-10-19, release 75) | `/api/auth/config` answers `"google":true`; a real Continue with Google sign-in (sebanceo@gmail.com) reached the dashboard. The first deploy couldn't read the runtime settings, so api/jobs/cron were restarted by hand once (versions 76). | None. Google's screen names the amazoncognito.com domain; `auth.bizinsights.io` (row below) would show bizinsights.io instead. |
-| A separate Cloud project for sign-in | Completed | Project `bizinsights-sign-in`: External, In production, scopes openid/email/profile only (no verification or user cap), authorized domains bizinsights.io and amazoncognito.com. | None. |
+| Sign in with Google in production | Completed (2026-10-19, release 75) | `/api/auth/config` answers `"google":true`; a real Continue with Google sign-in (sebanceo@gmail.com) reached the dashboard. The first deploy couldn't read the runtime settings, so api/jobs/cron were restarted by hand once (versions 76). Re-checked 2026-10-20 from a browser signed in to nothing: the button reaches Google's account chooser, which anyone can use (the consent screen is In production). | None for the sign-in itself. What the public sees on Google's screen is "to continue to insights-605411278365.auth.ap-southeast-2.amazoncognito.com" and that domain's "Privacy Policy and Terms of Service": Google names an app only once its branding is verified, and until then the redirect URI's domain, amazoncognito.com here. The two rows below fix that. |
+| A separate Cloud project for sign-in | **Pending: publishing status is Testing** (found 2026-10-20) | Project `bizinsights-sign-in`: External, scopes openid/email/profile only, authorized domains bizinsights.io, amazoncognito.com and the pool's full amazoncognito.com host. Its Audience page says **Testing, 0 test users**: in that status Google lets only listed test users sign in, and anyone else gets "Error 403: access_denied, the app is currently being tested". The project owner's own account got through, which is why the 2026-10-19 check passed. With these scopes, publishing needs no review. | Audience → **Publish app** → Confirm. Claude's attempt was stopped by the permission check, so it is yours: either press it, or tell Claude in so many words to press it. (Owner) |
 | Its OAuth client and redirect URI | Completed | Web client "bizinsights sign-in" `567753266621-ltq5j5kij5s3em8gr0err3tbrh5fqciq.apps.googleusercontent.com`, redirect `https://insights-605411278365.auth.ap-southeast-2.amazoncognito.com/oauth2/idpresponse`. | None. |
 | Its secret in AWS | Completed | `GOOGLE_SIGNIN_CLIENT_SECRET` in `insights/production/app` (2026-10-19). | None. |
 | GitHub variable | Completed | `GOOGLE_SIGNIN_CLIENT_ID` on the `production` environment. | None. |
-| Own sign-in domain `auth.bizinsights.io` | Not applicable (optional) | Lets Google's screen show bizinsights.io instead of amazoncognito.com. Not required. | If wanted: cognito-setup.md section 7. (Owner, with Claude) |
+| Own sign-in domain `auth.bizinsights.io` | Pending (step one deploying) | Makes the redirect URI's domain bizinsights.io, so Google's screen says "to continue to bizinsights.io" at once, and the sign-in project's branding can then be verified against the same domain (next row). The code is on `main`: `cognitoCustomDomain` in `infra/cdk/lib/config.ts` with an `inUse` switch, so the domain is created first and sign-in moves to it only once the DNS record and Google's client are ready; the amazoncognito.com domain stays beside it, so Continue with Google never breaks in between (cognito-setup.md section 7). Done 2026-10-20 in the owner's Chrome, on the owner's word: the certificate `b0849d46-…` requested in ACM us-east-1 (the app's certificate has no wildcard) and its validation CNAME added at Cloudflare (aws-deployment.md, "Domain: bizinsights.io"); production config set with `inUse: false`. | (1) Claude: once ACM shows the certificate Issued, merge the step-one pull request; the deploy creates the domain and prints `CustomDomainTarget` and `CustomDomainRedirectUri`. (2) Cloudflare: CNAME `auth` → that target, DNS only (grey cloud); Google client "bizinsights sign-in": add redirect URI `https://auth.bizinsights.io/oauth2/idpresponse` and JavaScript origin `https://auth.bizinsights.io`. (Claude in your Chrome, on the go-ahead already given.) (3) Claude: `inUse: true`, pull request, merge, check. (4) Remove the amazoncognito.com entries from the client and the consent screen. |
+| Branding of the sign-in project (name and logo on Google's screen) | Pending (logo, then verification) | Google's screen shows an app's name and logo only after brand verification, and `bizinsights-sign-in` has none: its screen names the redirect URI's domain. Checked 2026-10-20 in the owner's Chrome: name bizinsights, support email, homepage https://bizinsights.io/, privacy and terms links are all saved; **no logo**. A logo attached to the form by script showed in the preview but was not kept by Save (twice), so it goes in through Browse. Verification submitted while the redirect domain is amazoncognito.com may fail Google's automated check that the name on the screen matches the homepage (developers with other hosted sign-in domains report exactly that); it can be resubmitted after the own domain is in use. | (1) Owner: Branding → Browse → the 120x120 green-bars logo (Claude sent the file; it is the one the Ads project passed with) → Save. (2) After publishing (row above) and, ideally, once the own domain is in use: Verification Center → verify branding (the Ads project's passed in under five minutes on 2026-10-19). (Owner, or Claude in your Chrome on your word.) |
 
 ## Meta (developer app "Insights", App ID 971575545351940)
 
@@ -86,16 +88,21 @@ Everything Claude can do alone is done: the code is live, both secrets are in AW
 point at bizinsights.io, Require App Secret is on, Google branding is verified and published, and the texts, scripts
 and reviewer instructions are written. The rest needs your logins, your certificate or your payment method.
 
-1. **You, 10 minutes.** Google Ads: create the payments profile on client 745-450-4478's billing page (link in the
+1. **You, 2 minutes.** Continue with Google for the public: in the `bizinsights-sign-in` project, Audience →
+   **Publish app** (it is still Testing, so only listed test users can sign in), and Branding → Browse → the
+   120x120 logo → Save. Claude then finishes the own domain `auth.bizinsights.io` (certificate requested and
+   validation record in place on 2026-10-20; two deploys with the DNS record and the Google client entries in
+   between) and submits the branding for verification, so Google's screen shows "bizinsights" and the logo.
+2. **You, 10 minutes.** Google Ads: create the payments profile on client 745-450-4478's billing page (link in the
    `adwords` row). Then tell Claude whether to pause the draft campaign or let it run a few days at A$1/day.
-2. **You with Claude, about 30 minutes.** Dry run of the Google script on bizinsights.io, record the video, upload
+3. **You with Claude, about 30 minutes.** Dry run of the Google script on bizinsights.io, record the video, upload
    it unlisted, submit `adwords` verification in the Verification Center.
-3. **Done 2026-10-20.** Meta: portfolio Zodiix Pty Ltd created, Business Verification submitted (phone code
+4. **Done 2026-10-20.** Meta: portfolio Zodiix Pty Ltd created, Business Verification submitted (phone code
    confirmed, ASIC certificate uploaded). Meta decides in its own time, usually days.
-4. **You, while Meta decides.** Create the reviewer account in production with a development store connected,
+5. **You, while Meta decides.** Create the reviewer account in production with a development store connected,
    connect your own Meta ad account in your workspace so the app makes real `ads_read` calls in the 30 days before
    submitting, and record the Meta screencast (Meta pack steps 8, 9 and 11).
-5. **After Meta verifies the business.** App Review for `ads_read` and `public_profile` (texts and script in
+6. **After Meta verifies the business.** App Review for `ads_read` and `public_profile` (texts and script in
    ads-review-packs.md), then Access Verification.
-6. **After each approval.** Claude flips `GOOGLE_ADS_OAUTH_VERIFIED` or `META_ADS_ADVANCED_ACCESS` and ships it.
-7. **Any time, optional.** Google Ads API Basic access (draft answers in ads-review-packs.md).
+7. **After each approval.** Claude flips `GOOGLE_ADS_OAUTH_VERIFIED` or `META_ADS_ADVANCED_ACCESS` and ships it.
+8. **Any time, optional.** Google Ads API Basic access (draft answers in ads-review-packs.md).

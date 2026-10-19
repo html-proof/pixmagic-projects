@@ -58,12 +58,16 @@ export interface EnvConfig {
   /**
    * Optional: the pool's own OAuth domain under the app's (e.g. auth.bizinsights.io), so Google's
    * sign-in pages show it instead of amazoncognito.com, a domain nobody can verify with Google for
-   * an OAuth consent screen. Added beside the prefix domain, which keeps working; once set, the app
-   * (COGNITO_DOMAIN) and the Google redirect URI use it. Needs a public ACM certificate for `name`
-   * in us-east-1, and a DNS-only CNAME at Cloudflare to the stack output CustomDomainTarget
-   * (docs/cognito-setup.md, "Own sign-in domain"). Unset: the prefix domain only.
+   * an OAuth consent screen. Added beside the prefix domain, which keeps working. Needs a public
+   * ACM certificate for `name` in us-east-1, and a DNS-only CNAME at Cloudflare to the stack output
+   * CustomDomainTarget (docs/cognito-setup.md, "Own sign-in domain"). Unset: the prefix domain only.
+   *
+   * `inUse` switches sign-in over in a second step, so Continue with Google never breaks: false
+   * creates the domain (the CNAME's target then exists) while the app (COGNITO_DOMAIN) and
+   * Google's redirect URI stay on the prefix domain; true, once the CNAME resolves and Google's
+   * client lists the new redirect URI, moves the app to it.
    */
-  cognitoCustomDomain?: { name: string; certificateArn: string };
+  cognitoCustomDomain?: { name: string; certificateArn: string; inUse: boolean };
   /**
    * Cognito's own emails (sign-up and email-change codes, password resets, sign-in codes, temporary
    * passwords) sent by the app's mail provider (Resend) from EMAIL_FROM, through the user pool's
@@ -130,6 +134,14 @@ const ENVIRONMENTS: Record<EnvConfig["name"], Omit<EnvConfig, "schedulesEnabled"
       certificateArn: "arn:aws:acm:us-east-1:605411278365:certificate/776966d7-d73c-4896-bd30-1568c9f7b3f7",
     },
     cognitoDomainPrefix: "insights-605411278365",
+    // Step one (docs/cognito-setup.md, "Own sign-in domain"): the domain exists beside the prefix
+    // domain; sign-in moves to it with inUse: true once its DNS record resolves and Google's
+    // client lists https://auth.bizinsights.io/oauth2/idpresponse.
+    cognitoCustomDomain: {
+      name: "auth.bizinsights.io",
+      certificateArn: "arn:aws:acm:us-east-1:605411278365:certificate/b0849d46-9714-4de4-b893-a9ab1171761d",
+      inUse: false,
+    },
     cognitoCustomEmail: true,
     // The owner's address at AWS (it also gets Cost Anomaly Detection's daily alerts).
     budgetEmail: "aby@zodiix.com",

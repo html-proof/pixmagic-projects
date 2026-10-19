@@ -605,7 +605,8 @@ describe("Cognito sign-in", () => {
     return Template.fromStack(new AuthStack(app, "U", cfg, { env, appUrl: appStack.appUrl, apiRole: appStack.apiRole, runtimeParam: appStack.runtimeParam }));
   }
   const resource = (tpl: Template, id: string) => tpl.toJSON().Resources[id] as Resource;
-  const ownDomain = { name: "auth.bizinsights.io", certificateArn: "arn:aws:acm:us-east-1:605411278365:certificate/0a1b2c3d-1234-5678-9abc-def012345678" };
+  const ownDomain = { name: "auth.bizinsights.io", certificateArn: "arn:aws:acm:us-east-1:605411278365:certificate/0a1b2c3d-1234-5678-9abc-def012345678", inUse: false };
+  const PREFIX_DOMAIN = "https://insights-605411278365.auth.ap-southeast-2.amazoncognito.com";
 
   it("offers two-step verification with an authenticator app to those who turn it on, and asks nobody else", () => {
     const pool = resource(t.auth, "UserPool");
@@ -615,23 +616,39 @@ describe("Cognito sign-in", () => {
     expect(pool.Properties.SmsConfiguration).toBeUndefined();
   });
 
-  it("keeps production on the prefix domain alone, exactly as deployed, while no own domain is set", () => {
-    expect(envConfig(() => undefined).cognitoCustomDomain).toBeUndefined();
-    expect(resource(t.auth, "UserPoolDomain").Properties).toEqual({ UserPoolId: { Ref: "UserPool" }, Domain: "insights-605411278365", ManagedLoginVersion: 2 });
-    const tpl = t.auth.toJSON();
+  it("keeps the prefix domain alone, exactly as deployed before, while no own domain is set", () => {
+    const tpl = synthAuth({ cognitoCustomDomain: undefined });
+    const json = tpl.toJSON();
+    expect(resource(tpl, "UserPoolDomain").Properties).toEqual({ UserPoolId: { Ref: "UserPool" }, Domain: "insights-605411278365", ManagedLoginVersion: 2 });
     // The own domain's resource is there but switched off: its parameter keeps the empty default.
-    expect(resource(t.auth, "CustomUserPoolDomain").Condition).toBe("HasCustomDomain");
-    expect(tpl.Conditions.HasCustomDomain).toEqual({ "Fn::Not": [{ "Fn::Equals": [{ Ref: "CustomDomain" }, ""] }] });
-    expect(tpl.Parameters.CustomDomain).toMatchObject({ Type: "String", Default: "" });
+    expect(resource(tpl, "CustomUserPoolDomain").Condition).toBe("HasCustomDomain");
+    expect(json.Conditions.HasCustomDomain).toEqual({ "Fn::Not": [{ "Fn::Equals": [{ Ref: "CustomDomain" }, ""] }] });
+    expect(json.Conditions.UsesCustomDomain).toEqual({ "Fn::And": [{ Condition: "HasCustomDomain" }, { "Fn::Equals": [{ Ref: "CustomDomainInUse" }, "true"] }] });
+    expect(json.Parameters.CustomDomain).toMatchObject({ Type: "String", Default: "" });
+    expect(json.Parameters.CustomDomainInUse).toMatchObject({ Type: "String", Default: "false", AllowedValues: ["true", "false"] });
     // The outputs resolve to what they were.
-    expect(tpl.Outputs.Domain.Value["Fn::If"]).toEqual(["HasCustomDomain", { "Fn::Sub": "https://${CustomDomain}" }, { "Fn::Sub": "https://insights-605411278365.auth.${AWS::Region}.amazoncognito.com" }]);
-    expect(tpl.Outputs.ProviderRedirectUri.Value["Fn::If"][2]).toEqual({ "Fn::Sub": "https://insights-605411278365.auth.${AWS::Region}.amazoncognito.com/oauth2/idpresponse" });
-    expect(JSON.stringify(tpl)).toContain('\\"COGNITO_DOMAIN\\":\\"https://insights-605411278365.auth.ap-southeast-2.amazoncognito.com\\"');
+    expect(json.Outputs.Domain.Value["Fn::If"]).toEqual(["UsesCustomDomain", { "Fn::Sub": "https://${CustomDomain}" }, { "Fn::Sub": "https://insights-605411278365.auth.${AWS::Region}.amazoncognito.com" }]);
+    expect(json.Outputs.ProviderRedirectUri.Value["Fn::If"][2]).toEqual({ "Fn::Sub": "https://insights-605411278365.auth.${AWS::Region}.amazoncognito.com/oauth2/idpresponse" });
+    expect(JSON.stringify(json)).toContain(`\\"COGNITO_DOMAIN\\":\\"${PREFIX_DOMAIN}\\"`);
+    const runtime = Object.values(tpl.findResources("AWS::SSM::Parameter"))[0] as Resource;
+    expect(runtime.DependsOn ?? []).not.toContain("CustomUserPoolDomain");
+  });
+
+  it("production: the own domain auth.bizinsights.io exists, with its own us-east-1 certificate, while sign-in stays on the prefix domain", () => {
+    // Step one of docs/cognito-setup.md "Own sign-in domain": inUse flips in step two.
+    expect(envConfig(() => undefined).cognitoCustomDomain).toEqual({
+      name: "auth.bizinsights.io",
+      certificateArn: "arn:aws:acm:us-east-1:605411278365:certificate/b0849d46-9714-4de4-b893-a9ab1171761d",
+      inUse: false,
+    });
+    expect(resource(t.auth, "CustomUserPoolDomain").Properties).toMatchObject({ Domain: "auth.bizinsights.io", ManagedLoginVersion: 2 });
+    expect(resource(t.auth, "UserPoolDomain").Properties).toEqual({ UserPoolId: { Ref: "UserPool" }, Domain: "insights-605411278365", ManagedLoginVersion: 2 });
+    expect(JSON.stringify(t.auth.toJSON())).toContain(`\\"COGNITO_DOMAIN\\":\\"${PREFIX_DOMAIN}\\"`);
     const runtime = Object.values(t.auth.findResources("AWS::SSM::Parameter"))[0] as Resource;
     expect(runtime.DependsOn ?? []).not.toContain("CustomUserPoolDomain");
   });
 
-  it("adds an own domain beside the prefix domain, and moves the app and Google's redirect URI to it once it exists", () => {
+  it("adds an own domain beside the prefix domain and, until it is in use, leaves sign-in on the prefix domain", () => {
     const tpl = synthAuth({ cognitoCustomDomain: ownDomain });
     const json = tpl.toJSON();
     expect(json.Conditions.HasCustomDomain).toEqual({ "Fn::Not": [{ "Fn::Equals": ["auth.bizinsights.io", ""] }] });
@@ -643,11 +660,31 @@ describe("Cognito sign-in", () => {
     });
     // The prefix domain stays exactly as it is: never replaced.
     expect(resource(tpl, "UserPoolDomain").Properties).toEqual({ UserPoolId: { Ref: "UserPool" }, Domain: "insights-605411278365", ManagedLoginVersion: 2 });
-    expect(json.Outputs.ProviderRedirectUri.Value["Fn::If"][1]).toEqual({ "Fn::Sub": "https://auth.bizinsights.io/oauth2/idpresponse" });
+    // Nothing of sign-in has moved: the app and Google's redirect URI still name the prefix domain,
+    // so Continue with Google keeps working while the DNS record and Google's client are readied.
+    expect(json.Conditions.UsesCustomDomain).toEqual({ "Fn::And": [{ Condition: "HasCustomDomain" }, { "Fn::Equals": ["false", "true"] }] });
+    expect(json.Outputs.Domain.Value["Fn::If"][0]).toBe("UsesCustomDomain");
+    expect(json.Outputs.ProviderRedirectUri.Value["Fn::If"][0]).toBe("UsesCustomDomain");
+    expect(JSON.stringify(json)).toContain(`\\"COGNITO_DOMAIN\\":\\"${PREFIX_DOMAIN}\\"`);
+    const runtime = Object.values(tpl.findResources("AWS::SSM::Parameter"))[0] as Resource;
+    expect(runtime.DependsOn ?? []).not.toContain("CustomUserPoolDomain");
+    // What the two steps in between need: the DNS record's target, and the redirect URI for Google's client.
     expect(json.Outputs.CustomDomainTarget).toMatchObject({ Condition: "HasCustomDomain", Value: { "Fn::GetAtt": "CustomUserPoolDomain.CloudFrontDistribution" } });
+    expect(json.Outputs.CustomDomainRedirectUri).toMatchObject({ Condition: "HasCustomDomain", Value: { "Fn::Sub": "https://auth.bizinsights.io/oauth2/idpresponse" } });
+  });
+
+  it("moves the app and Google's redirect URI to the own domain once it is in use", () => {
+    const tpl = synthAuth({ cognitoCustomDomain: { ...ownDomain, inUse: true } });
+    const json = tpl.toJSON();
+    expect(json.Conditions.UsesCustomDomain).toEqual({ "Fn::And": [{ Condition: "HasCustomDomain" }, { "Fn::Equals": ["true", "true"] }] });
+    expect(json.Outputs.Domain.Value["Fn::If"][1]).toEqual({ "Fn::Sub": "https://auth.bizinsights.io" });
+    expect(json.Outputs.ProviderRedirectUri.Value["Fn::If"][1]).toEqual({ "Fn::Sub": "https://auth.bizinsights.io/oauth2/idpresponse" });
     expect(JSON.stringify(json)).toContain('\\"COGNITO_DOMAIN\\":\\"https://auth.bizinsights.io\\"');
+    // The functions get the new address only once Cognito serves the domain.
     const runtime = Object.values(tpl.findResources("AWS::SSM::Parameter"))[0] as Resource;
     expect(runtime.DependsOn).toContain("CustomUserPoolDomain");
+    // Both domains stay: a sign-in that started on the prefix domain still finishes there.
+    expect(resource(tpl, "UserPoolDomain").Properties).toEqual({ UserPoolId: { Ref: "UserPool" }, Domain: "insights-605411278365", ManagedLoginVersion: 2 });
   });
 
   it("refuses an own domain whose certificate isn't in us-east-1", () => {
