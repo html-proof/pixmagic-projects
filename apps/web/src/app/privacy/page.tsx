@@ -26,7 +26,10 @@ export const metadata: Metadata = {
  *     packages/shared/src/journey.ts `cleanPath`);
  *   - ad accounts are read-only in use (Meta ads_read, Google adwords for Google Ads reporting, adsense.readonly) and
  *     their daily figures and token are deleted, and the grant revoked, on disconnect (apps/api/src/routes/ads.ts,
- *     packages/core/src/adConnections.ts); /data-deletion is the Meta app's deletion instructions URL;
+ *     packages/core/src/adConnections.ts); /data-deletion is the Meta app's deletion instructions URL, and Meta's
+ *     deauthorize and data deletion callbacks (POST /webhooks/meta/deauthorize, /webhooks/meta/data-deletion) stop the
+ *     reading and delete the Meta Ads figures; Google sign-in keeps the email and the Cognito user name (auth_identities,
+ *     and the removal note in auth_events);
  *   - Staff Management keeps what the merchant enters about employees, and the IP address and browser of each
  *     clock-in and clock-out from the employee portal (packages/core/src/staff/attendance.ts), until the
  *     workspace is deleted (docs/staff.md, "Retention");
@@ -36,7 +39,7 @@ export const metadata: Metadata = {
  *     old Worker until the cutover.
  * Revise UPDATED with any material change; owners are emailed first (see "Changes to this policy").
  */
-const UPDATED = "2026-10-18";
+const UPDATED = "2026-10-19";
 
 const TOC = [
   { id: "who-we-are", title: "Who we are" },
@@ -246,10 +249,17 @@ export default function PrivacyPage() {
         <p>
           When you disconnect an account, bizinsights deletes its figures and access token immediately and then returns the access to
           Google or Meta (Google Ads and AdSense share one Google sign-in, so Google&apos;s access is returned with the last of them). If
-          you instead remove bizinsights&apos; access in your Google or Meta account, bizinsights stops reading immediately, marks the account
-          &ldquo;Needs reconnecting&rdquo; and keeps the figures already fetched until you disconnect it or ask us to delete them (see{" "}
-          <Link href="/data-deletion">Delete your data</Link>). bizinsights never creates, changes or pauses an ad, never changes a budget
-          or billing setting, and never spends money.
+          you instead remove bizinsights&apos; access in your Google account, bizinsights stops reading at its next update, shows the
+          account as &ldquo;Reconnect required&rdquo; and keeps the figures already fetched until you disconnect it or ask us to delete them
+          (see <Link href="/data-deletion">Delete your data</Link>). bizinsights never creates, changes or pauses an ad, never changes a
+          budget or billing setting, and never spends money.
+        </p>
+        <p>
+          You can also remove bizinsights from Facebook, under <strong>Settings &amp; privacy → Settings → Business integrations</strong>.
+          Facebook tells bizinsights at once, and bizinsights stops reading your Meta ad accounts straight away. If you then send
+          Facebook&apos;s data deletion request for bizinsights (listed under the apps you removed), bizinsights deletes the Meta Ads figures
+          and the access it holds for that Facebook login, and Facebook gives you a confirmation code and a link where you can check the
+          request&apos;s status.
         </p>
 
         <h3>Staff Management</h3>
@@ -309,6 +319,12 @@ export default function PrivacyPage() {
           audit log of actions taken in your workspace. Sign-in is handled by Amazon Cognito, which keeps your password only as a
           salted hash, and the codes it emails you are sent through Resend. We never store your password, and we never see your Shopify
           or Google password.
+        </p>
+        <p>
+          If you sign in with Google, Google shares your name, email address and Google account ID with Amazon Cognito when you allow it
+          on Google&apos;s screen. We keep that email address and an identifier that includes the Google account ID with your account, so
+          Google sign-in reaches it. When you remove Google from your sign-in methods in Settings → Security, the link is deleted and your
+          account&apos;s security history notes the removal, so that Google account can&apos;t sign in again unless you link it again.
         </p>
       </LegalSection>
 
