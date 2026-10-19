@@ -1,7 +1,7 @@
 import { createHmac } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { systemDb } from "@app/db";
-import { encryptAdTokens, logger } from "@app/core";
+import { encryptAdTokens, holdPendingAdConnect, logger, peekPendingAdConnect } from "@app/core";
 import { clean, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
 
 /**
@@ -121,6 +121,10 @@ describe("Meta's data deletion callback", () => {
     const a = await connection("meta", "act_1");
     const b = await connection("meta", "act_2", { status: "reconnect", errorCode: "auth_expired" });
     const kept = await connection("meta", "act_3", { externalUserId: "999" });
+    // An account choice of theirs, waiting: their token and the accounts their login listed.
+    const pending = { userId: "u1", workspaceId: ws, storeId, provider: "meta" as const, accounts: [{ accountId: "act_4", name: "New", currency: "USD", timezone: "UTC" }], tokens: { accessToken: "T", refreshToken: null, expiresAt: null } };
+    await holdPendingAdConnect(ctx.deps.coord, "pick-theirs-0123456789", { ...pending, externalUserId: PERSON });
+    await holdPendingAdConnect(ctx.deps.coord, "pick-others-0123456789", { ...pending, externalUserId: "999" });
     const res = await callback("data-deletion", fromMeta());
     expect(res.statusCode).toBe(200);
     const { url, confirmation_code: code } = res.json() as { url: string; confirmation_code: string };
@@ -131,6 +135,8 @@ describe("Meta's data deletion callback", () => {
     expect(await systemDb.adCampaignDaily.count({ where: { connectionId: { in: [a.id, b.id] } } })).toBe(0);
     expect(await systemDb.adConnection.count({ where: { id: kept.id } })).toBe(1);
     expect(await systemDb.adCampaignDaily.count({ where: { connectionId: kept.id } })).toBe(1);
+    expect(await peekPendingAdConnect(ctx.deps.coord, "pick-theirs-0123456789")).toBeNull();
+    expect(await peekPendingAdConnect(ctx.deps.coord, "pick-others-0123456789")).not.toBeNull();
     expect(await systemDb.auditLog.findFirstOrThrow({ where: { action: "ads.disconnected" } })).toMatchObject({ metadata: expect.objectContaining({ provider: "meta", accounts: 2, via: "meta_data_deletion" }) });
     // The record keeps the code, not the person.
     const record = await systemDb.authEvent.findFirstOrThrow({ where: { type: "meta_data_deletion" } });

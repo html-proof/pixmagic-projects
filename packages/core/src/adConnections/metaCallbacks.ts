@@ -11,9 +11,11 @@
 import { createHmac, randomBytes } from "node:crypto";
 import { systemDb } from "@app/db";
 import { safeEqual } from "@app/shared";
+import type { Coord } from "../coord.js";
 import { logger } from "../logger.js";
 import { audit } from "../notify.js";
 import { resolveAdAlerts } from "./alerts.js";
+import { dropPendingAdConnectsOf } from "./connect.js";
 
 /** How old a signed request may be (its issued_at), and how far ahead of this server's clock. */
 export const META_SIGNED_REQUEST_MAX_AGE_S = 24 * 3600;
@@ -67,9 +69,11 @@ async function auditByStore(rows: Array<{ workspaceId: string; storeId: string; 
  * The person removed bizinsights in their Facebook settings, so their Meta grant is gone. Every Meta ad
  * connection on it waits for a reconnect now (hidden ones too), not at its next sync, with its token
  * deleted, as a sync that met ended access leaves it (auth_expired); the days already stored stay. Its
- * alert comes from the next sweep, as a sync's does. Returns how many connections were marked.
+ * alert comes from the next sweep, as a sync's does. An account choice they have waiting (`coord`) is
+ * dropped: its token no longer works. Returns how many connections were marked.
  */
-export async function metaDeauthorized(userId: string): Promise<number> {
+export async function metaDeauthorized(userId: string, coord?: Coord): Promise<number> {
+  if (coord) await dropPendingAdConnectsOf(coord, "meta", userId);
   const rows = await systemDb.adConnection.findMany({ where: { provider: "meta", externalUserId: userId, accessTokenEnc: { not: "" } }, select: { id: true, workspaceId: true, storeId: true, accountId: true } });
   if (!rows.length) return 0;
   const { count } = await systemDb.adConnection.updateMany({
@@ -88,10 +92,12 @@ export const META_DELETION_EVENT = "meta_data_deletion";
 /**
  * The person asked Facebook for what bizinsights holds about them to be deleted: their Meta ad
  * connections go, and with them every figure fetched for them (ad_campaign_daily goes with its
- * connection) and their alerts. The request is kept under a random confirmation code (alphanumeric, as
+ * connection) and their alerts, and any account choice they have waiting (`coord`: their token and the
+ * accounts their login listed). The request is kept under a random confirmation code (alphanumeric, as
  * Meta asks) for its status page; the record holds the code, when, and how many connections went.
  */
-export async function metaDataDeletion(userId: string): Promise<{ confirmationCode: string; deleted: number }> {
+export async function metaDataDeletion(userId: string, coord?: Coord): Promise<{ confirmationCode: string; deleted: number }> {
+  if (coord) await dropPendingAdConnectsOf(coord, "meta", userId);
   const rows = await systemDb.adConnection.findMany({ where: { provider: "meta", externalUserId: userId } });
   const { count } = rows.length ? await systemDb.adConnection.deleteMany({ where: { id: { in: rows.map((r) => r.id) } } }) : { count: 0 };
   for (const r of rows) await resolveAdAlerts(r).catch((err: unknown) => logger.warn({ err, connectionId: r.id }, "ad alerts not resolved"));

@@ -844,7 +844,8 @@ export async function metaReport(
       live.deadline - Date.now() < META_REPORT_JOB.statusMs
         ? unknown
         : await metaStatuses(c, accessToken, accountId, level as MetaReportLevel, rows.map((r) => r.id), { deadline: live.deadline }).catch((err: unknown) => {
-            if (err instanceof AdsApiError || err instanceof AdsReportPendingError || err instanceof MetaNoAnswerError) return unknown;
+            // Meta refusing, throttling, not answering, or no time left: the statuses only are unknown.
+            if (err instanceof AdsApiError || err instanceof AdsRetryableError) return unknown;
             throw err;
           });
     for (const r of rows) r.status = statuses.get(r.id) ?? null;

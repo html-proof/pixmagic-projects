@@ -117,6 +117,18 @@ export async function takePendingAdConnect(coord: Coord, nonce: string): Promise
   return p.expiresAt > Date.now() ? p : null;
 }
 
+/**
+ * Use up, unanswered, every account choice one person (the platform's id for them) has waiting: their
+ * access ended or they asked for their data to be deleted. Returns how many there were. Best effort.
+ */
+export async function dropPendingAdConnectsOf(coord: Coord, provider: AdProvider, externalUserId: string): Promise<number> {
+  const key = personPendingKey(provider, externalUserId);
+  let dropped = 0;
+  for (const p of await pendingOf(coord, key)) if (await coord.take(pendingKey(p.nonce)).catch(() => null)) dropped++;
+  await coord.take(key).catch(() => null);
+  return dropped;
+}
+
 /** The sign-in's tokens back from a pending choice. */
 export function pendingTokens(p: PendingAdConnect): TokenSet {
   const k = keyring();

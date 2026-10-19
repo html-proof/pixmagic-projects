@@ -538,6 +538,9 @@ describe("the Meta Ads report", () => {
       throw new TypeError("fetch failed");
     });
     expect((await metaReport(meta(silent.fetchImpl), "T", "1", "campaign", "2026-10-01", "2026-10-07")).rows[0]!.status).toBeNull();
+    // Meta throttling the status look-up after the figures came: the report still comes.
+    const throttled = report(() => json({ error: { message: "User request limit reached", code: 17 } }, 400));
+    expect((await metaReport(meta(throttled.fetchImpl), "T", "1", "campaign", "2026-10-01", "2026-10-07")).rows[0]!.status).toBeNull();
     const plenty = report(() => json({ data: [{ id: "1", effective_status: "ACTIVE" }] }));
     expect((await metaReport(meta(plenty.fetchImpl), "T", "1", "campaign", "2026-10-01", "2026-10-07")).rows[0]!.status).toBe("ACTIVE");
   });

@@ -33,7 +33,7 @@ export function metaWebhookRoutes(app: App, deps: Deps) {
   app.post("/webhooks/meta/deauthorize", async (c) => {
     const who = await signedBy(c);
     if ("refused" in who) return who.refused;
-    await metaDeauthorized(who.userId);
+    await metaDeauthorized(who.userId, deps.coord);
     return c.json({ ok: true });
   });
 
@@ -45,7 +45,7 @@ export function metaWebhookRoutes(app: App, deps: Deps) {
   app.post("/webhooks/meta/data-deletion", async (c) => {
     const who = await signedBy(c);
     if ("refused" in who) return who.refused;
-    const { confirmationCode } = await metaDataDeletion(who.userId);
+    const { confirmationCode } = await metaDataDeletion(who.userId, deps.coord);
     return c.json({ url: `${env().APP_URL}/data-deletion?${new URLSearchParams({ code: confirmationCode })}`, confirmation_code: confirmationCode });
   });
 
