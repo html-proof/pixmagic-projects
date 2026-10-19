@@ -140,7 +140,7 @@ against Shopify), and its daily figures were compared day by day with Shopify's 
 (ShopifyQL `FROM sales SHOW … GROUP BY day`, `read_reports`).
 
 Gross sales, discounts, returns, net sales, shipping, taxes and total sales matched to the cent on
-every day. Four rules didn't, and were fixed (migration 20261019120000_shopify_report_rules):
+every day. Four rules didn't, and were fixed (migration 20261019130000_shopify_report_rules):
 orders counted on their creation day instead of their processed day; orders of gift cards only
 counted as orders and their buyers as customers; gift cards left out of items sold; AOV counting
 items an edit added later. After the fix orders and items matched on every day too, and AOV,
