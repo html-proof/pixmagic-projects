@@ -179,6 +179,8 @@ export interface SeededAdConnection {
   grantedScopes?: string[];
   loginCustomerId?: string | null;
   sites?: string[];
+  /** When it was connected (created_at); three days ago when left out. */
+  connectedAt?: Date;
 }
 
 /** A moment as the UTC wall-clock time the timestamp columns hold (node-pg would write the machine's local time). */
@@ -194,7 +196,8 @@ export async function insertAdConnection(db: pg.Pool, c: SeededAdConnection): Pr
     `INSERT INTO ad_connections (id, workspace_id, store_id, provider, account_id, account_name, currency, timezone, enabled, status, error_code, last_error,
        last_synced_at, synced_through, history_from, sync_requested_at, account_status, granted_scopes, login_customer_id, sites,
        access_token_enc, token_key_version, created_at, updated_at)
-     VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, 'e2e-placeholder', 1, (now() at time zone 'utc') - interval '3 days', now() at time zone 'utc')
+     VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, 'e2e-placeholder', 1,
+       COALESCE($20::timestamp, (now() at time zone 'utc') - interval '3 days'), now() at time zone 'utc')
      RETURNING id`,
     [
       c.workspaceId,
@@ -216,6 +219,7 @@ export async function insertAdConnection(db: pg.Pool, c: SeededAdConnection): Pr
       c.grantedScopes ?? [],
       c.loginCustomerId ?? null,
       c.sites ?? [],
+      utc(c.connectedAt),
     ],
   );
   return rows[0].id as string;

@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import pg from "pg";
 import { E2E_ENV } from "../playwright.config";
-import { createWorkspace, insertAdConnection, insertStore, signUp, uniqueEmail } from "./helpers";
+import { createWorkspace, insertAdConnection, insertStore, PASSWORD, signUp, uniqueEmail } from "./helpers";
 
 /**
  * Settings → Connect your business and Settings → Advertising, through the real app. Google, Meta
@@ -90,9 +90,11 @@ test("each connected account shows its state, the same way on both pages", async
     historyFrom: "2024-09-20",
     grantedScopes: ["https://www.googleapis.com/auth/adwords"],
   });
-  // Never synced yet, and on another time zone than the store's (UTC).
-  await insertAdConnection(db, { ...at, provider: "google", accountId: "222-222-2222", accountName: "New Account", timezone: "America/Los_Angeles" });
+  // Just connected, so not synced yet, and on another time zone than the store's (UTC).
+  await insertAdConnection(db, { ...at, provider: "google", accountId: "222-222-2222", accountName: "New Account", timezone: "America/Los_Angeles", connectedAt: new Date() });
   await insertAdConnection(db, { ...at, provider: "google", accountId: "777-777-7777", accountName: "Old Promo", enabled: false, lastSyncedAt: hoursAgo(5) });
+  // Hidden, and worse than anything shown on the Google card: the card mustn't count it.
+  await insertAdConnection(db, { ...at, provider: "google", accountId: "999-999-9999", accountName: "Lapsed Promo", enabled: false, status: "reconnect", errorCode: "auth_expired", lastSyncedAt: hoursAgo(400) });
   await insertAdConnection(db, {
     ...at,
     provider: "meta",
@@ -111,6 +113,7 @@ test("each connected account shows its state, the same way on both pages", async
     ["111-111-1111", "connected", "Connected"],
     ["222-222-2222", "synchronizing", "Synchronizing"],
     ["777-777-7777", "connected", "Connected"],
+    ["999-999-9999", "reconnect_required", "Reconnect required"],
     ["act_333", "sync_failed", "Sync failed"],
     ["act_444", "permission_missing", "Permission missing"],
     ["act_888", "reconnect_required", "Reconnect required"],
@@ -124,8 +127,9 @@ test("each connected account shows its state, the same way on both pages", async
   ] as const) {
     await page.goto(path);
     const card = (p: string) => (prefix === "int-" ? `int-${p}-ads` : `ads-provider-${p}`);
-    // A card shows its most pressing account: hidden accounts don't count.
+    // A card shows its most pressing account: hidden accounts don't count (Lapsed Promo would outrank them all).
     await expect(platform(page, card("google"))).toHaveText("Synchronizing");
+    await expect(page.getByTestId(card("google")).getByTestId("platform-hidden")).toHaveCount(0);
     await expect(platform(page, card("meta"))).toHaveText("Reconnect required");
     await expect(platform(page, card("adsense"))).toHaveText("Verification pending");
     for (const [id, state, label] of expected) {
@@ -202,6 +206,89 @@ test("reasons only the newer API sends: authorization, permission taken back, cl
   expect(rows[0].sites).toEqual([]);
 });
 
+test("an account hidden before its first sync isn't Synchronizing and nothing looks again for it; a first sync that never landed says so", async ({ page }) => {
+  const { ws, storeId } = await ownerWithStore(page, "hidden");
+  const at = { workspaceId: ws, storeId };
+  // Unticked in the picker just after connecting: never synced, and the worker skips hidden accounts.
+  await insertAdConnection(db, { ...at, provider: "google", accountId: "456-000-0001", accountName: "Unticked New", enabled: false, connectedAt: new Date() });
+  // On the dashboard, connected three days ago, and its first sync never landed.
+  await insertAdConnection(db, { ...at, provider: "meta", accountId: "act_4561", accountName: "Stalled Ads" });
+  const adsPath = `/api/workspaces/${ws}/stores/${storeId}/ads`;
+  let looks = 0;
+  page.on("request", (r) => {
+    if (r.method() === "GET" && new URL(r.url()).pathname === adsPath) looks++;
+  });
+  await quietMeta(page);
+  // The page's own clock, so its 5-second look-again can be run through without waiting.
+  await page.clock.install();
+
+  for (const [path, card] of [
+    ["/settings/integrations", (p: string) => `int-${p}-ads`],
+    ["/settings/ads", (p: string) => `ads-provider-${p}`],
+  ] as const) {
+    await page.goto(path);
+    await expect(platform(page, card("google"))).toHaveText("Connected");
+    await expect(page.getByTestId(card("google")).getByTestId("platform-hidden")).toBeVisible();
+    const hidden = account(page, "456-000-0001");
+    await expect(hidden).toHaveAttribute("data-state", "connected");
+    await expect(hidden.getByTestId("account-message")).toHaveText("Nothing fetched yet: bizinsights fetches this account's figures once it's shown on the dashboard.");
+    await expect(platform(page, card("meta"))).toHaveText("Sync failed");
+    await expect(account(page, "act_4561").getByTestId("account-message")).toContainText("The first update hasn't come through yet");
+
+    const before = looks;
+    await page.clock.runFor(16_000);
+    await page.waitForTimeout(500);
+    expect(looks, `${path} looked again with nothing synchronizing`).toBe(before);
+  }
+
+  // The control (the same wait, well short of 5 real seconds): an account just connected to the
+  // dashboard is Synchronizing, and the page looks again by itself.
+  await insertAdConnection(db, { ...at, provider: "adsense", accountId: "pub-4562", accountName: "Fresh Site", connectedAt: new Date() });
+  await page.reload();
+  await expect(account(page, "pub-4562")).toHaveAttribute("data-state", "synchronizing");
+  const before = looks;
+  await page.clock.runFor(16_000);
+  await page.waitForTimeout(500);
+  expect(looks).toBeGreaterThan(before);
+});
+
+test("a look again sent before a change and answered after it doesn't undo the change", async ({ page }) => {
+  const { ws, storeId } = await ownerWithStore(page, "order");
+  // Just connected, so Synchronizing: the page looks again every 5 seconds.
+  await insertAdConnection(db, { workspaceId: ws, storeId, provider: "google", accountId: "789-000-0001", accountName: "Fresh Search", connectedAt: new Date() });
+  const adsPath = `/api/workspaces/${ws}/stores/${storeId}/ads`;
+  let gets = 0;
+  let release = () => {};
+  const held = new Promise<void>((r) => (release = r));
+  let answered = () => {};
+  const polled = new Promise<void>((r) => (answered = r));
+  await page.route(`**${adsPath}`, async (route) => {
+    if (route.request().method() !== "GET" || ++gets !== 2) return route.continue();
+    // The first look again: answered by the server now, before the change, and delivered after it.
+    const res = await route.fetch();
+    answered();
+    await held;
+    await route.fulfill({ response: res });
+  });
+  await page.clock.install();
+  await page.goto("/settings/ads");
+  const box = page.getByRole("checkbox", { name: "Show on dashboard: Fresh Search" });
+  await expect(box).toBeChecked();
+  await page.clock.runFor(5_500);
+  await polled;
+
+  await box.click();
+  await expect(box).not.toBeChecked();
+  await expect(account(page, "789-000-0001")).toContainText("Hidden from the dashboard");
+  release();
+  await page.waitForTimeout(1_000);
+  // Read at once, not waited for: the next look again would put a wrong answer right within seconds.
+  expect(await box.isChecked()).toBe(false);
+  expect(await account(page, "789-000-0001").textContent()).toContain("Hidden from the dashboard");
+  const { rows } = await db.query("SELECT enabled FROM ad_connections WHERE account_id = '789-000-0001' AND store_id = $1", [storeId]);
+  expect(rows[0].enabled).toBe(false);
+});
+
 test("a member who may only view integrations gets no buttons; Manage integrations brings them", async ({ page }) => {
   const { email, ws, storeId } = await ownerWithStore(page, "member");
   await insertAdConnection(db, { workspaceId: ws, storeId, provider: "google", accountId: "123-000-0001", accountName: "Shop Search", lastSyncedAt: hoursAgo(1) });
@@ -234,9 +321,11 @@ test("a member who may only view integrations gets no buttons; Manage integratio
 
 test("disconnecting asks first, then says bizinsights couldn't hand the access back and where to remove it", async ({ page }) => {
   const { ws, storeId } = await ownerWithStore(page, "disconnect");
+  const otherStore = await insertStore(db, ws, `disconnect-other-${Date.now()}.myshopify.com`);
   await insertAdConnection(db, { workspaceId: ws, storeId, provider: "google", accountId: "321-000-0001", accountName: "Only Account", lastSyncedAt: hoursAgo(1) });
   await quietMeta(page);
   await page.goto("/settings/integrations");
+  await page.getByTestId("store-switcher").selectOption(storeId);
   await page.getByRole("button", { name: "Disconnect Only Account" }).click();
   const dialog = page.getByRole("dialog", { name: "Disconnect Only Account?" });
   await expect(dialog).toContainText("every figure it fetched for it");
@@ -250,10 +339,20 @@ test("disconnecting asks first, then says bizinsights couldn't hand the access b
   // Its placeholder token can't reach Google, so bizinsights can't give the access back itself.
   const note = page.getByRole("status").filter({ hasText: "Only Account is disconnected" });
   await expect(note).toContainText("couldn't hand its access back to Google");
-  await expect(note.getByRole("link", { name: "your Google Account's third-party connections" })).toHaveAttribute("href", "https://myaccount.google.com/permissions");
+  const removeAccess = note.getByRole("link", { name: "your Google Account's third-party connections" });
+  await expect(removeAccess).toHaveAttribute("href", "https://myaccount.google.com/permissions");
+  // The row (and its Disconnect button) is gone: the keyboard focus is on the note, and Tab reaches its link.
+  await expect(page.getByTestId("action-note")).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(removeAccess).toBeFocused();
   await expect(platform(page, "int-google-ads")).toHaveText("Disconnected");
   const { rows } = await db.query("SELECT count(*)::int AS n FROM ad_connections WHERE store_id = $1", [storeId]);
   expect(rows[0].n).toBe(0);
+
+  // Another store chosen at the top (the page stays): the note and "Disconnected" were about the first one.
+  await page.getByTestId("store-switcher").selectOption(otherStore);
+  await expect(platform(page, "int-google-ads")).toHaveText("Coming soon");
+  await expect(page.getByTestId("action-note")).toHaveCount(0);
 });
 
 test("the account picker: search, a count, hidden and closed accounts left unticked, and a note when the list was cut short", async ({ page }) => {
@@ -304,6 +403,36 @@ test("the account picker: search, a count, hidden and closed accounts left untic
   await expect(platform(page, "ads-provider-meta")).toHaveText("Coming soon");
 });
 
+test("the account picker on a first connection ticks every account that runs, and leaves closed and disabled ones unticked", async ({ page }) => {
+  const { ws, storeId } = await ownerWithStore(page, "picker-first");
+  const nonce = "e2e-pending-nonce-0002";
+  const accounts = [
+    { accountId: "123-000-1001", name: "Main Store", status: "active" },
+    { accountId: "123-000-1002", name: "Second Store", status: null },
+    { accountId: "123-000-1003", name: "Old Brand", status: "closed" },
+    { accountId: "123-000-1004", name: "Paused Brand", status: "disabled" },
+  ].map((a) => ({ ...a, currency: "USD", timezone: "UTC", connected: false, enabled: null, statusDetail: null }));
+  await page.route(`**/api/workspaces/${ws}/stores/${storeId}/ads/pending/${nonce}`, (route) =>
+    route.request().method() === "GET"
+      ? route.fulfill({ json: { provider: "google", expiresAt: new Date(Date.now() + 600_000).toISOString(), truncated: false, accounts } })
+      : route.fulfill({ json: { ok: true } }),
+  );
+  await page.goto(`/settings/ads?choose=${nonce}&store=${storeId}`);
+  const picker = page.getByTestId("ads-choose");
+  await expect(picker.getByRole("heading", { name: /Choose Google Ads accounts/ })).toBeVisible();
+  const tick = (id: string) => picker.locator("li", { hasText: id }).getByRole("checkbox");
+  await expect(tick("123-000-1001")).toBeChecked();
+  await expect(tick("123-000-1002")).toBeChecked();
+  await expect(tick("123-000-1003")).not.toBeChecked();
+  await expect(tick("123-000-1004")).not.toBeChecked();
+  await expect(picker.getByTestId("ads-choose-count")).toHaveText("2 selected");
+  await expect(picker.locator("li", { hasText: "123-000-1003" })).toContainText("Closed");
+  await expect(picker.locator("li", { hasText: "123-000-1004" })).toContainText("Disabled by Google Ads");
+  // A short list: no search box, and nothing said about a list cut short.
+  await expect(picker.getByLabel("Find an account")).toHaveCount(0);
+  await expect(picker).not.toContainText("more accounts for this login");
+});
+
 test("a sign-in that came back with a problem is explained, whatever the code", async ({ page }) => {
   const { storeId } = await ownerWithStore(page, "callback");
   await page.goto(`/settings/ads?error=rate_limited&provider=google&store=${storeId}`);
@@ -343,19 +472,92 @@ test("Google Account: Continue with Google links it from Connect your business, 
   await expect(page).toHaveURL(/\/settings\/integrations$/);
 });
 
+test("Google Account: a sign-in older than 15 minutes asks for the password in a dialog the keyboard can use, then links", async ({ page }) => {
+  const email = uniqueEmail("hubpass");
+  await signUp(page, email);
+  await createWorkspace(page, "Pass Co");
+  await quietMeta(page);
+  // This session as if it began 20 minutes ago (the server still knows it's fresh; the password is checked for real).
+  await page.route("**/api/auth/account", async (route) => {
+    const res = await route.fetch();
+    const json = (await res.json()) as { signedInAt: number };
+    await route.fulfill({ response: res, json: { ...json, signedInAt: Date.now() - 20 * 60_000 } });
+  });
+  await page.goto("/settings/integrations");
+  await expect(platform(page, "int-google-account")).toHaveText("Not linked");
+  await page.getByTestId("int-google-account").getByRole("button", { name: "Continue with Google" }).click();
+
+  const dialog = page.getByRole("dialog", { name: "Confirm it's you" });
+  const field = dialog.getByLabel("Your password", { exact: true });
+  // It opens on the password, and nothing in it is disabled or claims to be working.
+  await expect(field).toBeFocused();
+  await expect(dialog.getByRole("button", { name: "Cancel" })).toBeEnabled();
+  await expect(dialog.getByRole("button", { name: "Continue to Google" })).toBeEnabled();
+  // Enter with nothing typed says what's missing.
+  await page.keyboard.press("Enter");
+  await expect(dialog).toContainText("Enter your bizinsights password to continue.");
+  await expect(field).toBeFocused();
+  // Typed, Enter continues to Google.
+  await field.fill(PASSWORD);
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("heading", { name: "Sign in with Google (test)" })).toBeVisible();
+  await page.getByLabel("Email").fill(uniqueEmail("hubpass-google"));
+  await page.getByRole("button", { name: "Continue" }).click();
+  await expect(page).toHaveURL(/\/settings\/integrations$/, { timeout: 20_000 });
+  await expect(page.getByRole("status").filter({ hasText: "Google is linked" })).toBeVisible();
+});
+
 test("the data deletion page shows a Meta deletion request's status, and the privacy policy explains removing bizinsights in Facebook", async ({ page }) => {
   await page.goto("/data-deletion");
   await expect(page.getByTestId("deletion-status")).toHaveCount(0);
   await expect(page.locator("main")).toContainText("send Facebook's data deletion request");
 
-  await page.goto("/data-deletion?code=e2eunknowncode1");
-  await expect(page.getByTestId("deletion-status")).toContainText("no deletion request with the code e2eunknowncode1");
+  // Each answer GET /api/meta/data-deletion/:code can give (the route itself: the next test).
+  const code = "0123456789abcdef0123";
+  const status = page.getByTestId("deletion-status");
+  const answering = async (reply: { status: number; json: object }) => {
+    await page.unroute("**/api/meta/data-deletion/**");
+    await page.route("**/api/meta/data-deletion/**", (route) => route.fulfill(reply));
+  };
+  await answering({ status: 200, json: { status: "done", at: "2026-10-18T09:30:00.000Z" } });
+  await page.goto(`/data-deletion?code=${code}`);
+  await expect(status).toContainText("Deletion complete");
+  await expect(status).toContainText(`Deletion request ${code} is done: completed on`);
+  await answering({ status: 200, json: { status: "unknown" } });
+  await page.reload();
+  await expect(status).toContainText(`no deletion request with the code ${code}`);
+  // A 404 is a route that isn't there, not an unknown request: never "no deletion request".
+  await answering({ status: 404, json: { error: "not_found" } });
+  await page.reload();
+  await expect(status).toContainText(`We couldn't check deletion request ${code} just now`);
+  await page.unroute("**/api/meta/data-deletion/**");
+  let asked = false;
+  await page.route("**/api/meta/data-deletion/**", (route) => {
+    asked = true;
+    return route.fulfill({ status: 200, json: { status: "unknown" } });
+  });
   await page.goto(`/data-deletion?code=${encodeURIComponent("<script>")}`);
-  await expect(page.getByTestId("deletion-status")).toContainText("isn't a confirmation code bizinsights gives");
+  await expect(status).toContainText("isn't a confirmation code bizinsights gives");
+  expect(asked).toBe(false);
+  await page.unroute("**/api/meta/data-deletion/**");
 
   await page.goto("/privacy");
   await expect(page.locator("main")).toContainText("Business integrations");
-  await expect(page.locator("main")).toContainText("stops reading your Meta ad accounts straight away");
+  await expect(page.locator("main")).toContainText("stops reading your Meta ad accounts: at once when Facebook lets it know");
   // Google's Limited Use statement stays as it is.
   await expect(page.locator("main")).toContainText("including the Limited Use requirements");
+});
+
+test("a deletion request's status comes from the API: an unknown code is a 200 'unknown' (the newer API)", async ({ page }) => {
+  // The route ships with the API of the 2026-10-19 contract: told apart by the reasons GET .../ads sends.
+  const { ws, storeId } = await ownerWithStore(page, "deletion");
+  await insertAdConnection(db, { workspaceId: ws, storeId, provider: "meta", accountId: "act_9001", accountName: "Any Ads", lastSyncedAt: hoursAgo(1) });
+  test.skip(!(await apiSendsReasons(page, ws, storeId)), "This API doesn't implement the 2026-10-19 contract yet (the API workstream adds GET /api/meta/data-deletion/:code with it).");
+
+  const code = "fedcba9876543210fedc";
+  const res = await page.request.get(`/api/meta/data-deletion/${code}`);
+  expect(res.status()).toBe(200);
+  expect(await res.json()).toEqual({ status: "unknown" });
+  await page.goto(`/data-deletion?code=${code}`);
+  await expect(page.getByTestId("deletion-status")).toContainText(`no deletion request with the code ${code}`);
 });
