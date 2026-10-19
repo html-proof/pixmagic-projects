@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import type { AdDayRow } from "@app/shared";
+import { META_OBJECT_FIELDS, type AdDayRow } from "@app/shared";
 import {
   AD_ACCOUNT_LIST_MAX_BYTES,
   AdsApiError,
@@ -402,10 +402,15 @@ describe("the Meta Ads report", () => {
     let statusPages = 0;
     const f = fake((u) => {
       // Delivery statuses of the ads listed, from the account's list of ads (archived and deleted ones asked for too).
+      // The account's campaigns, read for their counts alone on the ad level.
+      if (u.pathname.endsWith("/act_1/campaigns")) {
+        expect(u.searchParams.get("fields")).toBe(META_OBJECT_FIELDS.campaign);
+        return json({ data: [{ id: "c1", effective_status: "ACTIVE" }, { id: "c2", effective_status: "PAUSED" }, { id: "c3", effective_status: "ARCHIVED" }] });
+      }
       if (u.pathname.endsWith("/act_1/ads")) {
         statusPages++;
         if (u.searchParams.has("after")) return json({ data: [{ id: "3", effective_status: "PAUSED" }, { id: "77", effective_status: "ACTIVE" }] });
-        expect(u.searchParams.get("fields")).toBe("id,effective_status");
+        expect(u.searchParams.get("fields")).toBe(META_OBJECT_FIELDS.ad);
         expect(JSON.parse(u.searchParams.get("effective_status")!)).toEqual(expect.arrayContaining(["ACTIVE", "PAUSED", "ARCHIVED", "DELETED", "ADSET_PAUSED"]));
         return json({ data: [{ id: "1", effective_status: "ARCHIVED" }], paging: { next: "https://graph.facebook.com/v25.0/act_1/ads?after=s1" } });
       }
@@ -430,6 +435,7 @@ describe("the Meta Ads report", () => {
       ["4", null],
     ]);
     expect(r.truncated).toBe(true);
+    expect(r.campaigns).toEqual({ active: 1, paused: 1, other: 1, total: 3, complete: true });
     // Two pages of the list, and never Graph's multiple-id lookup (GET /?ids=), which v26.0 refuses.
     expect(statusPages).toBe(2);
     expect(f.calls.some((c) => c.url.searchParams.has("ids"))).toBe(false);
@@ -547,7 +553,49 @@ describe("the Meta Ads report", () => {
     const figures = report(() => json({ data: [{ id: "1", effective_status: "ACTIVE" }] }));
     const compared = await metaReport(meta(figures.fetchImpl), "T", "1", "campaign", "2026-10-01", "2026-10-07", 200, { statuses: false });
     expect(compared.rows.map((x) => [x.id, x.spend, x.status])).toEqual([["1", 5, null]]);
+    expect(compared.campaigns).toBeNull();
     expect(figures.calls.some((c) => c.url.pathname.endsWith("/act_1/campaigns"))).toBe(false);
+  });
+
+  it("each row's settings come with its status (objective, budget in the account's currency, schedule, bidding), and the campaigns are counted by state", async () => {
+    const f = fake((u) => {
+      if (u.pathname.endsWith("/act_1/campaigns")) {
+        expect(u.searchParams.get("fields")).toBe(META_OBJECT_FIELDS.campaign);
+        return json({
+          data: [
+            { id: "1", effective_status: "ACTIVE", objective: "OUTCOME_SALES", buying_type: "AUCTION", daily_budget: "2500", start_time: "2026-09-01T00:00:00+0000", bid_strategy: "LOWEST_COST_WITHOUT_CAP" },
+            { id: "2", effective_status: "PAUSED", objective: "OUTCOME_LEADS", lifetime_budget: "100000", start_time: "2026-09-01T00:00:00+0000", stop_time: "2026-12-31T00:00:00+0000" },
+            { id: "3", effective_status: "ARCHIVED" },
+          ],
+        });
+      }
+      return level(u) === "account" ? json({ data: [{ spend: "15", reach: "10" }] }) : json({ data: [{ campaign_id: "1", campaign_name: "A", spend: "10" }, { campaign_id: "2", campaign_name: "B", spend: "5" }] });
+    });
+    const r = await metaReport(meta(f.fetchImpl), "T", "1", "campaign", "2026-10-01", "2026-10-07", 200, { currency: "USD" });
+    expect(r.rows.map((x) => [x.id, x.status, x.details])).toEqual([
+      ["1", "ACTIVE", expect.objectContaining({ objective: "OUTCOME_SALES", buyingType: "AUCTION", dailyBudget: 25, lifetimeBudget: null, startTime: "2026-09-01T00:00:00+0000", endTime: null, bidStrategy: "LOWEST_COST_WITHOUT_CAP" })],
+      ["2", "PAUSED", expect.objectContaining({ objective: "OUTCOME_LEADS", dailyBudget: null, lifetimeBudget: 1000, endTime: "2026-12-31T00:00:00+0000" })],
+    ]);
+    expect(r.campaigns).toEqual({ active: 1, paused: 1, other: 1, total: 3, complete: true });
+    // One list call: the counts come with the statuses and settings.
+    expect(f.calls.filter((c) => c.url.pathname.endsWith("/act_1/campaigns"))).toHaveLength(1);
+  });
+
+  it("Meta refusing the settings fields: the statuses are read alone; a campaign list cut short gives counts marked as such", async () => {
+    const f = fake((u) => {
+      if (u.pathname.endsWith("/act_1/adsets")) {
+        if (u.searchParams.get("fields") !== "id,effective_status") return json({ error: { message: "(#100) Tried accessing nonexisting field (bid_strategy)", code: 100 } }, 400);
+        return json({ data: [{ id: "9", effective_status: "ACTIVE" }] });
+      }
+      // Always another page of campaigns: the count stops at the pages it reads and says it was cut.
+      if (u.pathname.endsWith("/act_1/campaigns")) return json({ data: [{ id: "1", effective_status: "ACTIVE" }], paging: { next: "https://graph.facebook.com/v25.0/act_1/campaigns?after=x" } });
+      return level(u) === "account" ? json({ data: [{ spend: "5", reach: "10" }] }) : json({ data: [{ adset_id: "9", adset_name: "S", campaign_name: "A", spend: "5" }] });
+    });
+    const r = await metaReport(meta(f.fetchImpl), "T", "1", "adset", "2026-10-01", "2026-10-07");
+    expect(r.rows[0]).toMatchObject({ id: "9", status: "ACTIVE", details: expect.objectContaining({ dailyBudget: null, optimizationGoal: null, billingEvent: null }) });
+    expect(f.calls.filter((c) => c.url.pathname.endsWith("/act_1/adsets"))).toHaveLength(2);
+    expect(r.campaigns).toEqual({ active: 10, paused: 0, other: 0, total: 10, complete: false });
+    expect(f.calls.filter((c) => c.url.pathname.endsWith("/act_1/campaigns"))).toHaveLength(10);
   });
 
   it("the whole account split by age and by gender, Meta's own aggregates", async () => {
@@ -563,8 +611,11 @@ describe("the Meta Ads report", () => {
       ["Unknown age", 1],
     ]);
     expect((await metaReport(meta(f.fetchImpl), "T", "1", "gender", "2026-10-01", "2026-10-07")).rows.map((r) => r.name)).toEqual(["Women", "Men", "Unknown"]);
-    // A split asks for the same metrics as every other view.
-    expect(f.calls.every((c) => c.url.searchParams.get("fields") === "spend,impressions,reach,frequency,clicks,inline_link_clicks,actions,action_values")).toBe(true);
+    // A split asks for the same metrics as every other view (the campaign list, read for its counts, is another call).
+    const insights = f.calls.filter((c) => c.url.pathname.endsWith("/insights"));
+    expect(insights.length).toBeGreaterThan(0);
+    expect(insights.every((c) => c.url.searchParams.get("fields") === "spend,impressions,reach,frequency,clicks,inline_link_clicks,actions,action_values")).toBe(true);
+    expect(f.calls.some((c) => c.url.pathname.endsWith("/act_1/campaigns") && c.url.searchParams.get("fields") === META_OBJECT_FIELDS.campaign)).toBe(true);
   });
 
   it("devices: asked with the platform (Meta documents impression_device only with it), added up per device; reach unknown where platforms were added", async () => {

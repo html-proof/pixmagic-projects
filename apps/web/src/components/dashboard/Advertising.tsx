@@ -18,7 +18,7 @@ import {
 } from "./AdsCommon";
 import { shownFigures, upToWords } from "./adFigures";
 import { noEarlierData } from "./DateRange";
-import { fmtDay, fmtMoneyCompact, fmtRange, fmtRelative, fmtTimes, plural } from "./format";
+import { fmtDay, fmtMoneyCompact, fmtMoneyWhole, fmtRange, fmtRelative, fmtTimes, plural } from "./format";
 import { Icon } from "./Icons";
 import { LineChart, type LineSeries } from "./LineChart";
 import type { Topic } from "./topics";
@@ -248,6 +248,8 @@ function SpendCard({ a, p, ov, onOpen }: { a: AdsModule; p: AdsProviderFigures; 
         ["Purchases (platform's count)", known(c.purchases, fmtNum)],
         [`${P.short}-reported ROAS`, c.purchases === null ? BEING_READ : fmtTimes(c.roas, NA)],
         ...(p.provider === "google" ? [["Conversions (all conversion actions)", fmtNum(c.conversions)] as [string, string]] : []),
+        // The store's own sales per unit of ad spend (MER), when this is the only platform spending: every sale, not the platform's claim.
+        ...(a.byProvider.length === 1 && a.sales ? [[`Your sales per ${fmtMoneyWhole(1, a.currency)} of ads (MER)`, fmtTimes(a.sales.salesPerSpend, NA)] as [string, string]] : []),
       ]
     : [];
   return (
@@ -300,6 +302,7 @@ function TotalSpendCard({ a, ov, onOpen }: { a: AdsModule; ov: Overview; onOpen:
             ["Impressions", fmtNum(c.impressions)],
             ["Link clicks", known(c.linkClicks, fmtNum)],
             ["Ads as share of sales", a.shareOfSales === null ? NA : fmtPct(a.shareOfSales)],
+            [`Your sales per ${fmtMoneyWhole(1, a.currency)} of ads (MER)`, a.sales ? fmtTimes(a.sales.salesPerSpend, NA) : NA],
           ]}
         />
       )}
