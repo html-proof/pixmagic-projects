@@ -32,7 +32,8 @@ const TERMS: Record<Topic, Terms> = {
   ],
   sales: [
     ["Same as Shopify", "Every sales figure here is worked out from Shopify's own sales records, the way Shopify's reports do, so the same dates show the same numbers in both. Test orders aren't counted."],
-    ["Total sales", "What customers paid: net sales plus shipping and taxes (and any duties or fees). Shopify's home page shows this figure."],
+    ["Total sales", "What customers paid: net sales plus additional fees, duties, shipping charges and taxes. Shopify's home page shows this figure."],
+    ["Custom sales", "Your own calculation from the lines of total sales: for example without taxes, or product revenue only. It is always shown next to Shopify's total sales and named after the calculation, and never changes Shopify's figures. Owners and admins choose it in the Total sales breakdown."],
     ["Net sales", "What your products sold for: gross sales, minus discounts, minus returns. Tax and shipping aren't included. It is sales, not profit: what the products cost you isn't taken off."],
     ["Gross sales", "Every item sold at its listed price, before any discount and before tax."],
     ["Discounts", "Money taken off by discount codes and automatic discounts."],

@@ -3,6 +3,7 @@ import type { AdsenseTotals, AdTotals } from "@app/shared/ads";
 import type { CompareMode } from "@app/shared/dates";
 import type { JourneyPageRow, JourneySummary } from "@app/shared/journey";
 import type { SalesDay, YearBreakdown } from "@app/shared/sales";
+import type { SalesCalculation } from "@app/shared/salesCalculation";
 
 export interface Capability {
   id: string;
@@ -45,19 +46,35 @@ export interface SalesOverview {
     returns?: number;
     /** Gross − discounts − returns. */
     netSales: number;
-    /** Net sales + shipping + taxes + duties and fees: Shopify's headline "Total sales". */
+    /** Net sales + additional fees + duties + shipping + taxes: Shopify's headline "Total sales". */
     totalSales?: number;
     orders: number;
     units: number;
     averageOrderValue: number | null;
     tax?: number;
     shipping?: number;
+    /** Import duties, before tax. Team & Access as grossSales; absent from answers of older releases. */
+    duties?: number;
+    /** Shopify's fees and additional fees, before tax. As duties. */
+    additionalFees?: number;
   };
   /**
    * The same figures for the dates compared with (`Overview.previous`); null when the imported
    * orders don't reach back to them (`previous.imported` false), and every delta is then null too.
    */
-  previous: { grossSales?: number; netSales: number; totalSales?: number; orders: number; units: number; averageOrderValue: number | null } | null;
+  previous: {
+    grossSales?: number;
+    netSales: number;
+    totalSales?: number;
+    /** The lines of total sales, as in `current` (Team & Access as grossSales). */
+    tax?: number;
+    shipping?: number;
+    duties?: number;
+    additionalFees?: number;
+    orders: number;
+    units: number;
+    averageOrderValue: number | null;
+  } | null;
   deltas: {
     netSales: number | null;
     totalSales?: number | null;
@@ -70,9 +87,16 @@ export interface SalesOverview {
    * Every day of the range, quiet days as zero. Each day's `refunds`: Team & Access "View refunds";
    * its `totalSales`: "View gross sales, discounts, tax and shipping".
    */
-  series: Array<Omit<SalesDay, "refunds" | "totalSales"> & { refunds?: number; totalSales?: number }>;
+  series: Array<
+    Omit<SalesDay, "refunds" | "totalSales"> & { refunds?: number; totalSales?: number; shipping?: number; tax?: number; duties?: number; additionalFees?: number }
+  >;
   /** This calendar year by month, whatever the range. Team & Access: "View financial reports". */
   year?: YearBreakdown;
+  /**
+   * The store's own calculation from the lines of total sales (Custom sales): which it counts and
+   * whether the dashboard shows it. Team & Access: as grossSales (its figures are drawn from them).
+   */
+  calculation?: SalesCalculation;
 }
 
 /** What connected Meta / Google ad accounts report for the dates (see adsModule in the API). */

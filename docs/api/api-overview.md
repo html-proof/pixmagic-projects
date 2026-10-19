@@ -86,6 +86,8 @@ Shopify HMAC of the raw body ||||||||||| GET | `/workspaces/:ws/stores/:storeId/
 | GET | `/workspaces/:ws/stores` | dashboard:read | dashboard.ts |
 | GET | `/workspaces/:ws/stores/:storeId/sync` | dashboard:read | dashboard.ts |
 | GET | `/workspaces/:ws/stores/:storeId/overview` | dashboard:read | dashboard.ts |
+| GET | `/workspaces/:ws/stores/:storeId/sales-calculation` | finance.breakdown | dashboard.ts |
+| PUT | `/workspaces/:ws/stores/:storeId/sales-calculation` | stores:manage | dashboard.ts |
 | POST | `/pixel/:key` | per-store ingest key, rate-limited | pixel.ts |
 | POST | `/workspaces/:ws/stores/:storeId/scopes/request` | stores:manage | scopes.ts |
 | POST | `/workspaces/:ws/stores/:storeId/scopes/refresh` | stores:manage | scopes.ts |

@@ -46,14 +46,14 @@ describe("Shopify reports", () => {
     answer = (q) =>
       q.startsWith("FROM sessions")
         ? table({ sessions: "212", online_store_visitors: "180", sessions_with_cart_additions: 31, sessions_that_reached_checkout: 12, sessions_that_completed_checkout: 7, pageviews: "655" })
-        : table({ gross_sales: "1699.08", discounts: "-54.53", sales_reversals: "-45.50", net_sales: "1599.05", shipping_charges: "34.54", taxes: "167.91", total_sales: "1801.50", orders: 5 });
+        : table({ gross_sales: "1699.08", discounts: "-54.53", sales_reversals: "-45.50", net_sales: "1599.05", shipping_charges: "34.54", duties: "12.40", additional_fees: "0", taxes: "167.91", total_sales: "1813.90", orders: 5 });
     await runShopifyReports({ kind: "shopify_reports", storeId: store.id, requests: [today, september] }, deps);
     expect(asked).toEqual([
       "FROM sessions SHOW sessions, online_store_visitors, sessions_with_cart_additions, sessions_that_reached_checkout, sessions_that_completed_checkout, pageviews WHERE human_or_bot_session = 'human' SINCE 2026-10-17 UNTIL 2026-10-17T16:39:59",
-      "FROM sales SHOW gross_sales, discounts, sales_reversals, net_sales, shipping_charges, taxes, total_sales, orders SINCE 2026-09-01 UNTIL 2026-09-30",
+      "FROM sales SHOW gross_sales, discounts, sales_reversals, net_sales, shipping_charges, duties, additional_fees, taxes, total_sales, orders SINCE 2026-09-01 UNTIL 2026-09-30",
     ]);
     expect((await kept(store.id, today)).values).toEqual({ sessions: 212, visitors: 180, cartSessions: 31, checkoutSessions: 12, completedSessions: 7, pageviews: 655 });
-    expect(await kept(store.id, september)).toMatchObject({ error: null, values: { netSales: 1599.05, discounts: -54.53, orders: 5 } });
+    expect(await kept(store.id, september)).toMatchObject({ error: null, values: { netSales: 1599.05, discounts: -54.53, duties: 12.4, additionalFees: 0, totalSales: 1813.9, orders: 5 } });
   });
 
   it("keeps Shopify's refusals as such, and a failed refresh keeps the last figures", async () => {

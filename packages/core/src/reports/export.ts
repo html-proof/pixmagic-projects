@@ -1,4 +1,4 @@
-import type { AccessKey } from "@app/shared";
+import { calculationName, customApplied, customSales, type AccessKey, type SalesCalculation } from "@app/shared";
 
 /**
  * The dashboard sections that can be downloaded as CSV ("Export approved reports"), each with the
@@ -32,6 +32,9 @@ function table(rows: Obj[], columns: Array<[label: string, key: string]>) {
   return { header: present.map(([label]) => label), rows: rows.map((r) => present.map(([, k]) => val(r, k))) };
 }
 
+const num = (o: Obj, k: string) => (typeof o[k] === "number" ? (o[k] as number) : 0);
+const linesOf = (d: Obj) => ({ netSales: num(d, "netSales"), additionalFees: num(d, "additionalFees"), duties: num(d, "duties"), shipping: num(d, "shipping"), taxes: num(d, "tax") });
+
 const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
 /**
@@ -42,11 +45,21 @@ export function exportTable(section: ExportSection, modules: Obj): { header: str
   switch (section) {
     case "sales": {
       const s = isObj(modules.sales_overview) ? modules.sales_overview : {};
-      return table(list(s.series), [
+      // Shopify's total sales and its lines as they are; the store's own calculation (Custom
+      // sales) only as a column of its own, named, when the store shows it on the dashboard.
+      const calc = isObj(s.calculation) ? (s.calculation as unknown as SalesCalculation) : null;
+      const custom = customApplied(calc) ? calc : null;
+      const days = list(s.series).map((d) => (custom && "tax" in d ? { ...d, customSales: customSales(linesOf(d), custom.components) } : d));
+      return table(days, [
         ["Day", "day"],
         ["Orders", "orders"],
         ["Total sales", "totalSales"],
         ["Net sales", "netSales"],
+        ["Additional fees", "additionalFees"],
+        ["Duties", "duties"],
+        ["Shipping charges", "shipping"],
+        ["Taxes", "tax"],
+        ...(custom ? [[`Custom sales (${calculationName(custom)})`, "customSales"] as [string, string]] : []),
         ["Average order value", "averageOrderValue"],
         ["Returns", "refunds"],
       ]);

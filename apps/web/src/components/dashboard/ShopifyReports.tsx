@@ -103,6 +103,8 @@ const CHECK_LABEL: Record<string, string> = {
   returns: "Returns",
   netSales: "Net sales",
   shipping: "Shipping charges",
+  duties: "Duties",
+  additionalFees: "Additional fees",
   taxes: "Taxes",
   totalSales: "Total sales",
   orders: "Orders",

@@ -1,9 +1,19 @@
 import { z } from "zod";
 import { withTenant } from "@app/db";
-import { COMPARE_MODES, DATE_PRESETS, redactOverview, resolvePreset, seesModule } from "@app/shared";
-import { latestReconciliation, logger, requestShopifyReports, revocableScopes, startReconciliation, type ReportRequest } from "@app/core";
+import { COMPARE_MODES, DATE_PRESETS, redactOverview, resolvePreset, salesCalculationInput, seesModule } from "@app/shared";
+import {
+  audit,
+  latestReconciliation,
+  logger,
+  requestShopifyReports,
+  revocableScopes,
+  saveSalesCalculation,
+  startReconciliation,
+  storeSalesCalculation,
+  type ReportRequest,
+} from "@app/core";
 import { recentSyncJobs, storeOverview, workspaceStores } from "@app/core/reports";
-import { HttpError, requireWorkspace, type Deps } from "../context.js";
+import { body, clientIp, HttpError, requireWorkspace, type Deps } from "../context.js";
 import type { App } from "../app.js";
 import { autoRefresh } from "../sync.js";
 import { limit, LIMITS } from "../rateLimit.js";
@@ -157,5 +167,49 @@ export function dashboardRoutes(app: App, deps: Deps) {
     const started = await startReconciliation(deps, store, "manual");
     if (!started) throw new HttpError(409, "There is no finished day to check yet.", "nothing_to_check");
     return c.json(started, 202);
+  });
+
+  /**
+   * The store's own sales calculation (Custom sales, docs/kpis.md): which lines of Shopify's total
+   * sales it counts. Its figures are drawn from the sales breakdown, so reading it needs
+   * finance.breakdown; the overview carries it too.
+   */
+  app.get("/workspaces/:ws/stores/:storeId/sales-calculation", async (c) => {
+    const { ws, storeId } = c.req.param();
+    await requireWorkspace(c, deps, ws, "finance.breakdown");
+    return c.json(await withTenant(ws, async (tx) => {
+      const store = await tx.store.findFirst({ where: { id: storeId, workspaceId: ws }, select: { id: true } });
+      if (!store) throw new HttpError(404, "Not found", "not_found");
+      return { calculation: await storeSalesCalculation(tx, { ws, storeId }) };
+    }));
+  });
+
+  /**
+   * Save it, for everyone who opens the store's dashboard: owners and admins only (it changes what
+   * the whole team sees), never a shared link. Only the choice of lines is kept, never an amount,
+   * and Shopify's own figures are untouched. Each change is in the audit log, before and after.
+   */
+  app.put("/workspaces/:ws/stores/:storeId/sales-calculation", async (c) => {
+    const { ws, storeId } = c.req.param();
+    const a = await requireWorkspace(c, deps, ws, "stores:manage");
+    const input = salesCalculationInput.parse(await body(c));
+    const { saved, before } = await withTenant(ws, async (tx) => {
+      const store = await tx.store.findFirst({ where: { id: storeId, workspaceId: ws }, select: { id: true } });
+      if (!store) throw new HttpError(404, "Not found", "not_found");
+      return saveSalesCalculation(tx, { ws, storeId }, input, a.user?.id ?? null);
+    });
+    await audit({
+      workspaceId: ws,
+      actorUserId: a.user?.id ?? null,
+      action: "sales_calculation.changed",
+      targetType: "store",
+      targetId: storeId,
+      metadata: {
+        before: { components: before.components, label: before.label, applyToDashboard: before.applyToDashboard, presets: before.presets.length },
+        after: { components: saved.components, label: saved.label, applyToDashboard: saved.applyToDashboard, presets: saved.presets.length },
+      },
+      ip: clientIp(c),
+    }).catch((err: unknown) => logger.warn({ err }, "audit failed"));
+    return c.json({ calculation: saved });
   });
 }

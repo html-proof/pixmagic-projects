@@ -243,6 +243,13 @@ export const fmtNum = (n: number | null | undefined) => (n === null || n === und
  * one until the new answer lands, so the caller can say so when that answer is slow or failing.
  * `failing` is whether the latest check (first or background) failed.
  */
+/**
+ * Fired after a change that live answers carry (the store's sales calculation, say): every
+ * `useLiveApi` asks again at once instead of on its next tick.
+ */
+export const LIVE_DATA_CHANGED_EVENT = "insights:live-data-changed";
+export const liveDataChanged = () => window.dispatchEvent(new Event(LIVE_DATA_CHANGED_EVENT));
+
 export function useLiveApi<T>(path: string | null, intervalMs: number) {
   // The answer and its question are set together, so no render ever pairs one with the other's.
   const [answer, setAnswer] = useState<{ path: string; value: T } | null>(null);
@@ -320,10 +327,12 @@ export function useLiveApi<T>(path: string | null, intervalMs: number) {
     // Permissions changed: the answer may hold more or less now, so ask at once.
     const now = () => void check(false);
     window.addEventListener(ACCESS_CHANGED_EVENT, now);
+    window.addEventListener(LIVE_DATA_CHANGED_EVENT, now);
     return () => {
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", tick);
       window.removeEventListener(ACCESS_CHANGED_EVENT, now);
+      window.removeEventListener(LIVE_DATA_CHANGED_EVENT, now);
     };
   }, [path, intervalMs, check]);
 

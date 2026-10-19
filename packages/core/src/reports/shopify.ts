@@ -9,7 +9,7 @@
  */
 import type { Store, Tx } from "@app/db";
 import { addDays, delta, summarize, type Comparison, type DailyMetricsRow, type DateRange } from "@app/shared";
-import { keptReports, windowKey, type KeptReport, type ReportDataset, type ReportError, type ReportRequest, type ReportValues, type ReportWindow } from "../shopifyReports.js";
+import { keptReports, REPORT_METRICS, windowKey, type KeptReport, type ReportDataset, type ReportError, type ReportRequest, type ReportValues, type ReportWindow } from "../shopifyReports.js";
 import { comparisonRows } from "./sales.js";
 
 /** Minutes a running window's end moves by: its answer serves every poll until the next mark. */
@@ -40,9 +40,12 @@ export function reportWindows(range: DateRange, previous: Comparison): { current
  * mark (its key changes); days that just ended keep changing for a while (late refunds, Shopify's
  * own processing); older ones hardly ever. A failed call is tried again after 10 minutes; Shopify
  * refusing (no access, a report it can't run here) after 6 hours, or as soon as the scopes change.
+ * A sales answer kept before a figure was asked for (duties and additional fees, 2026-10-19) is
+ * asked again at once: its missing lines would read as differences.
  */
 export function reportStale(r: KeptReport | undefined, w: ReportWindow, today: string, now: Date): boolean {
   if (!r) return true;
+  if (r.dataset === "sales" && r.values && Object.keys(REPORT_METRICS.sales).some((k) => !(REPORT_METRICS.sales[k as keyof typeof REPORT_METRICS.sales] in r.values!))) return true;
   const age = now.getTime() - r.fetchedAt.getTime();
   if (r.error === "failed") return age > 10 * 60_000;
   if (r.error) return age > 6 * 3600_000;
@@ -122,7 +125,7 @@ function profitFigures(x: ReportValues | null) {
 }
 
 export interface CheckRow {
-  metric: "grossSales" | "discounts" | "returns" | "netSales" | "shipping" | "taxes" | "totalSales" | "orders";
+  metric: "grossSales" | "discounts" | "returns" | "netSales" | "shipping" | "duties" | "additionalFees" | "taxes" | "totalSales" | "orders";
   shopify: number | null;
   ours: number;
   difference: number | null;
@@ -149,6 +152,8 @@ export function reconcileSales(ours: ReturnType<typeof summarize>, shopify: Repo
     ["returns", reduction(rev), ours.refunds],
     ["netSales", net, ours.netSales],
     ["shipping", v(shopify, "shipping"), ours.shipping],
+    ["duties", v(shopify, "duties"), ours.duties],
+    ["additionalFees", v(shopify, "additionalFees"), ours.additionalFees],
     ["taxes", v(shopify, "taxes"), ours.taxes],
     ["totalSales", v(shopify, "totalSales"), ours.totalSales],
     ["orders", v(shopify, "orders"), ours.orders],

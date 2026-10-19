@@ -128,11 +128,12 @@ const report = () => ({
   data: { orders: 10, products: 4, variants: 6, oldestOrderDay: "2026-01-01", newestOrderDay: "2026-10-01", historyFrom: "2025-12-28" },
   modules: {
     sales_overview: {
-      current: { grossSales: 120, discounts: 10, returns: 10, netSales: 100, totalSales: 112, orders: 3, units: 4, averageOrderValue: 33, tax: 5, shipping: 7 },
-      previous: { grossSales: 90, netSales: 80, totalSales: 90, orders: 2, units: 2, averageOrderValue: 40 },
+      current: { grossSales: 120, discounts: 10, returns: 10, netSales: 100, totalSales: 115, orders: 3, units: 4, averageOrderValue: 33, tax: 5, shipping: 7, duties: 2, additionalFees: 1 },
+      previous: { grossSales: 90, netSales: 80, totalSales: 90, tax: 4, shipping: 6, duties: 0, additionalFees: 0, orders: 2, units: 2, averageOrderValue: 40 },
       deltas: { netSales: 0.25, totalSales: 0.24, orders: 0.5, averageOrderValue: -0.1, grossSales: 0.3, units: 1 },
-      series: [{ day: "2026-10-01", netSales: 100, totalSales: 112, orders: 3, refunds: 10, averageOrderValue: 33 }],
+      series: [{ day: "2026-10-01", netSales: 100, totalSales: 115, shipping: 7, tax: 5, duties: 2, additionalFees: 1, orders: 3, refunds: 10, averageOrderValue: 33 }],
       year: { year: 2026, months: [], total: 100, orders: 3 },
+      calculation: { components: { netSales: true, additionalFees: true, duties: false, shipping: true, taxes: false }, label: null, applyToDashboard: true, presets: [], updatedAt: "2026-10-19T00:00:00.000Z" },
     },
     top_products: { items: [{ title: "Hat", revenue: 100, units: 4 }] },
     inventory: { current: { trackedVariants: 1, unitsInStock: 2, stockValueAtCost: 80, variantsWithCost: 1, retailValue: 200, outOfStock: 0, lowStock: 1 }, lowStockItems: [] },
@@ -166,11 +167,12 @@ describe("redactOverview", () => {
     const s = out.modules.sales_overview as unknown as Record<string, Record<string, unknown>> & { series: Array<Record<string, unknown>> };
     // Total sales holds tax and shipping, and returns are refunds: both go with them.
     expect(s.current).toEqual({ netSales: 100, orders: 3, units: 4, averageOrderValue: 33 });
-    expect(s.previous).not.toHaveProperty("grossSales");
-    expect(s.previous).not.toHaveProperty("totalSales");
+    expect(s.previous).toEqual({ netSales: 80, orders: 2, units: 2, averageOrderValue: 40 });
     expect(s.deltas).not.toHaveProperty("grossSales");
     expect(s.deltas).not.toHaveProperty("totalSales");
     expect(s).not.toHaveProperty("year");
+    // The store's own calculation is drawn from those lines, so it goes with them.
+    expect(s).not.toHaveProperty("calculation");
     expect(s.series[0]).toEqual({ day: "2026-10-01", netSales: 100, orders: 3, averageOrderValue: 33 });
     expect(out.modules.inventory.current).not.toHaveProperty("stockValueAtCost");
     expect(out.modules.inventory.current).not.toHaveProperty("retailValue");
@@ -190,9 +192,10 @@ describe("redactOverview", () => {
   it("keeps them once granted", () => {
     const out = redactOverview(report(), member([...LEGACY_GRANTS.viewer, "reports.export"])) as ReturnType<typeof report>;
     expect(out.modules.sales_overview.current.grossSales).toBe(120);
-    expect(out.modules.sales_overview.current).toMatchObject({ totalSales: 112, returns: 10 });
-    expect(out.modules.sales_overview.series[0]!.refunds).toBe(10);
-    expect(out.modules.sales_overview.series[0]!.totalSales).toBe(112);
+    expect(out.modules.sales_overview.current).toMatchObject({ totalSales: 115, returns: 10, duties: 2, additionalFees: 1 });
+    expect(out.modules.sales_overview.previous).toMatchObject({ tax: 4, shipping: 6 });
+    expect(out.modules.sales_overview.series[0]).toMatchObject({ refunds: 10, totalSales: 115, tax: 5, duties: 2 });
+    expect(out.modules.sales_overview.calculation.applyToDashboard).toBe(true);
     expect(out.modules.inventory.current.retailValue).toBe(200);
     expect(out.modules.recent_orders.items[0]!.financialStatus).toBe("paid");
   });

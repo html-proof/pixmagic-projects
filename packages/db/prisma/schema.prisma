@@ -314,6 +314,7 @@ model Store {
   inventorySnapshots    InventorySnapshot[]
   inventoryAdjustments  InventoryAdjustment[]
   inventorySettings     InventorySettings?
+  salesCalculation      SalesCalculation?
   inventoryAlerts       InventoryAlert[]
   inventorySyncRuns     InventorySyncRun[]
 
@@ -882,7 +883,11 @@ model DailyStoreMetrics {
   /// Shipping charged after shipping discounts and refunds, before tax.
   shipping                Decimal @default(0) @db.Decimal(18, 2)
   taxes                   Decimal @default(0) @db.Decimal(18, 2)
-  /// Net sales + shipping + taxes + duties and fees: Shopify's "Total sales".
+  /// Import duties charged, before tax.
+  duties                  Decimal @default(0) @db.Decimal(18, 2)
+  /// Shopify's fees and additional fees (and any sale it gives no type), before tax.
+  additionalFees          Decimal @default(0) @map("additional_fees") @db.Decimal(18, 2)
+  /// Net sales + shipping + taxes + duties + additional fees: Shopify's "Total sales".
   totalSales              Decimal @default(0) @map("total_sales") @db.Decimal(18, 2)
   /// Orders placed that day, gift-card-only orders left out (as Shopify's reports count them).
   orders                  Int     @default(0)
@@ -899,6 +904,27 @@ model DailyStoreMetrics {
   @@id([storeId, day])
   @@index([workspaceId])
   @@map("daily_store_metrics")
+}
+
+// A store's own sales calculation ("Custom sales", docs/kpis.md): which lines of Shopify's total
+// sales it counts, and whether the dashboard shows it. Only the choice is kept, never an amount:
+// the figures always come from the store's sales records for the dates on screen.
+model SalesCalculation {
+  storeId          String   @id @map("store_id")
+  workspaceId      String   @map("workspace_id")
+  /// { netSales, additionalFees, duties, shipping, taxes } as booleans (salesCalculationInput in @app/shared).
+  components       Json
+  /// The merchant's name for a calculation of their own.
+  label            String?
+  applyToDashboard Boolean  @default(false) @map("apply_to_dashboard")
+  /// Calculations kept to switch between: [{ name, components }], at most 10.
+  presets          Json     @default("[]")
+  updatedByUserId  String?  @map("updated_by_user_id")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+  store            Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@map("sales_calculations")
 }
 
 model FunnelDaily {

@@ -20,7 +20,8 @@ import { DailySalesCard, MonthlySalesCard } from "./SalesBreakdown";
 import { ProfitCard, ShopifyCheckCard, ShopifySessionsCard } from "./ShopifyReports";
 import type { Topic } from "./topics";
 import type { Overview } from "./types";
-import { breakdownOf } from "./redacted";
+import { appliedCustom, breakdownOf, salesLinesOf } from "./redacted";
+import { TotalSalesBreakdown } from "./TotalSalesBreakdown";
 
 export type { Topic } from "./topics";
 
@@ -77,15 +78,8 @@ function SalesDetail({ ov, currency }: { ov: Overview; currency: string }) {
         { label: "Returns", note: "What refunds, cancellations and order edits took back, on the day they were made.", amount: refunds ?? 0, sign: "−" },
       ]
     : [];
-  // Duties and fees: what total sales holds besides net sales, shipping and taxes.
-  const otherCharges = bd && total !== null ? r2(total - c.netSales - (bd.shipping ?? 0) - (bd.tax ?? 0)) : 0;
-  const charges: Array<{ label: string; note: string; amount: number }> = bd
-    ? [
-        ...(bd.shipping !== null ? [{ label: "Shipping charges", note: "What customers paid for shipping, after shipping discounts and refunds.", amount: bd.shipping }] : []),
-        ...(bd.tax !== null ? [{ label: "Taxes", note: "Collected on items and on shipping.", amount: bd.tax }] : []),
-        ...(otherCharges !== 0 ? [{ label: "Duties and fees", note: "Import duties and other charges on orders.", amount: otherCharges }] : []),
-      ]
-    : [];
+  // The store's own calculation (Custom sales), when it shows it on the dashboard: beside Shopify's figures, named.
+  const custom = appliedCustom(s);
 
   return (
     <>
@@ -119,6 +113,7 @@ function SalesDetail({ ov, currency }: { ov: Overview; currency: string }) {
       <Panel id="d-sales-glance" title="At a glance" help={missing ?? `Compared with ${comparisonHelp(ov.previous)}.`}>
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
           {total !== null && <Stat label="Total sales" value={money(total)} note={<Delta value={s.deltas.totalSales ?? null} label={versus} />} />}
+          {custom && <Stat label={`Custom sales · ${custom.name}`} value={money(custom.current)} note={<Delta value={custom.delta} label={versus} />} />}
           <Stat label="Net sales" value={money(c.netSales)} note={<Delta value={s.deltas.netSales} label={versus} />} />
           <Stat label="Orders" value={fmtNum(c.orders)} note={<Delta value={s.deltas.orders} label={versus} />} />
           <Stat label="Average order" value={money(c.averageOrderValue ?? 0)} note={<Delta value={s.deltas.averageOrderValue} label={versus} />} />
@@ -132,11 +127,14 @@ function SalesDetail({ ov, currency }: { ov: Overview; currency: string }) {
         </div>
       </Panel>
 
+      {/* Net sales to total sales, line by line, and the store's own calculation from those lines. */}
+      {salesLinesOf(c) && <TotalSalesBreakdown ov={ov} currency={currency} />}
+
       {bd && (
         <Panel
           id="d-sales-adds-up"
-          title={total !== null ? "How your total sales add up" : "How your net sales add up"}
-          help="The same lines as Shopify's total sales breakdown, from Shopify's own sales records. Test orders aren't counted."
+          title="How your net sales add up"
+          help="The first lines of Shopify's total sales breakdown, from Shopify's own sales records. Test orders aren't counted."
         >
           <ul className="divide-y divide-border text-sm">
             {lines.map((l) => (
@@ -148,26 +146,10 @@ function SalesDetail({ ov, currency }: { ov: Overview; currency: string }) {
                 <p className="shrink-0 tabular-nums">{l.sign && l.amount > 0 ? `${l.sign} ` : ""}{money(l.amount)}</p>
               </li>
             ))}
-            <li className="flex items-center justify-between gap-4 py-2.5">
+            <li className="flex items-center justify-between gap-4 py-2.5 text-base">
               <p className="font-semibold">= Net sales</p>
               <p className="font-semibold tabular-nums">{money(c.netSales)}</p>
             </li>
-            {total !== null &&
-              charges.map((l) => (
-                <li key={l.label} className="flex items-start justify-between gap-4 py-2.5">
-                  <div className="min-w-0">
-                    <p className="font-medium">{l.label}</p>
-                    <p className="text-xs text-muted">{l.note}</p>
-                  </div>
-                  <p className="shrink-0 tabular-nums">{l.amount !== 0 ? `${l.amount > 0 ? "+" : "−"} ` : ""}{money(Math.abs(l.amount))}</p>
-                </li>
-              ))}
-            {total !== null && (
-              <li className="flex items-center justify-between gap-4 py-2.5 text-base">
-                <p className="font-semibold">= Total sales</p>
-                <p className="font-semibold tabular-nums">{money(total)}</p>
-              </li>
-            )}
           </ul>
         </Panel>
       )}

@@ -2,6 +2,7 @@ import type { Store, Tx } from "@app/db";
 import { comparisonImported, delta, localDay, resolveCapabilities, summarize, yearBreakdown, type Comparison, type DailyMetricsRow, type DateRange } from "@app/shared";
 import { adsConfigured } from "../adConnections.js";
 import { latestReconciliation } from "../reconcile.js";
+import { storeSalesCalculation } from "../salesCalculation.js";
 import { declaredOptionalScopes, declaredScopes } from "../scopes.js";
 import { adsenseModule, adsModule } from "./ads.js";
 import { catalog, importedData, inventory } from "./catalog.js";
@@ -77,7 +78,8 @@ export async function storeOverview(tx: Tx, store: Store, dates: { range: DateRa
     hasData = cur.some((r) => r.orders > 0 || r.refunds > 0);
     if (enabled.has("sales_overview")) {
       // Shopify's "Total sales breakdown", line for line: gross − discounts − returns = net sales,
-      // + shipping + taxes (+ duties and fees) = total sales.
+      // + additional fees + duties + shipping + taxes = total sales. The lines come for the dates
+      // compared with too, so the store's own calculation from them (Custom sales) compares as well.
       modules.sales_overview = {
         current: {
           grossSales: c.grossSales,
@@ -90,12 +92,18 @@ export async function storeOverview(tx: Tx, store: Store, dates: { range: DateRa
           averageOrderValue: c.averageOrderValue,
           tax: c.taxes,
           shipping: c.shipping,
+          duties: c.duties,
+          additionalFees: c.additionalFees,
         },
         previous: previousImported
           ? {
               grossSales: p.grossSales,
               netSales: p.netSales,
               totalSales: p.totalSales,
+              tax: p.taxes,
+              shipping: p.shipping,
+              duties: p.duties,
+              additionalFees: p.additionalFees,
               orders: p.orders,
               units: p.units,
               averageOrderValue: p.averageOrderValue,
@@ -113,6 +121,9 @@ export async function storeOverview(tx: Tx, store: Store, dates: { range: DateRa
         // This calendar year month by month, whatever the dates picked. Reaches back to the
         // December before so January has something to compare with.
         year: yearBreakdown(await dailyRows(tx, ws, storeId, { from: `${Number(today.slice(0, 4)) - 1}-12-01`, to: today }), today, data.historyFrom),
+        // The store's own calculation from those lines: which it counts and whether the dashboard
+        // shows it. Restored for everyone who opens the dashboard; Shopify's figures above never change.
+        calculation: await storeSalesCalculation(tx, scope),
       };
     }
     if (enabled.has("refunds")) {
