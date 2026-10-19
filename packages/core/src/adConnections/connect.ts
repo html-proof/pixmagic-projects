@@ -267,15 +267,19 @@ async function revokeGrant(provider: string, tokens: { accessToken: string; refr
  */
 export async function revokeAdAccessIfUnused(conn: AdConnection, fetchImpl?: FetchLike): Promise<RevokeOutcome> {
   await resolveAdAlerts(conn).catch((err: unknown) => logger.warn({ err, connectionId: conn.id }, "ad alerts not resolved"));
-  if (!conn.externalUserId || !conn.accessTokenEnc) return "unknown_person";
+  if (!conn.accessTokenEnc) return "unknown_person";
+  // A connection that never learned who granted it asks the platform now, with its own token (what it
+  // learns is kept on the rest of its sign-in; this row is gone). Access that ended has nothing to revoke.
+  const person = conn.externalUserId ?? (await resolvePerson(conn, fetchImpl).catch(() => null));
+  if (!person || person === "ended") return "unknown_person";
   const k = keyring();
   try {
-    if (await grantStillUsed(conn.provider, conn.externalUserId, conn.id, fetchImpl)) return "still_used";
+    if (await grantStillUsed(conn.provider, person, conn.id, fetchImpl)) return "still_used";
     const tokens = {
       accessToken: decrypt(conn.accessTokenEnc, k, aad(conn.storeId, conn.provider, "access")),
       refreshToken: conn.refreshTokenEnc ? decrypt(conn.refreshTokenEnc, k, aad(conn.storeId, conn.provider, "refresh")) : null,
     };
-    return await revokeGrant(conn.provider, tokens, conn.externalUserId, fetchImpl);
+    return await revokeGrant(conn.provider, tokens, person, fetchImpl);
   } catch (err) {
     logger.warn({ err, connectionId: conn.id, provider: conn.provider }, "ad access revoke failed");
     return "failed";

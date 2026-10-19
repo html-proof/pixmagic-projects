@@ -116,6 +116,29 @@ describe("a disconnect gives the grant back unless something relies on it", () =
     expect((await systemDb.adConnection.findUniqueOrThrow({ where: { id: other.id } })).externalUserId).toBe("1001");
   });
 
+  it("a disconnected connection that never learned who granted it asks first, then revokes when nothing else relies on it", async () => {
+    const s = await store();
+    const meta = await connection("meta", s, { access: "MZ" });
+    await systemDb.adConnection.delete({ where: { id: meta.id } });
+    const seen = fresh();
+    expect(await revokeAdAccessIfUnused(meta, platform(seen, { MZ: "2050" }))).toBe("revoked");
+    expect([seen.lookups, seen.metaRevoked]).toEqual([["MZ"], ["MZ"]]);
+    // Google: the same, and another account of the same sign-in learns the person and keeps the grant.
+    const g = await connection("google", s, { access: "GZ", refresh: "RZ" });
+    const sibling = await systemDb.adConnection.create({ data: { ...(({ id: _i, createdAt: _c, updatedAt: _u, ...rest }) => rest)(g), accountId: "sibling" } });
+    await systemDb.adConnection.delete({ where: { id: g.id } });
+    const google = fresh();
+    expect(await revokeAdAccessIfUnused(g, platform(google, { GZ: "1050" }))).toBe("still_used");
+    expect(google.revoked).toEqual([]);
+    expect((await systemDb.adConnection.findUniqueOrThrow({ where: { id: sibling.id } })).externalUserId).toBe("1050");
+    // A platform that won't say, or access that ended, leaves nothing to decide on.
+    const unknown = await connection("meta", s, { access: "MU" });
+    await systemDb.adConnection.delete({ where: { id: unknown.id } });
+    const none = fresh();
+    expect(await revokeAdAccessIfUnused(unknown, platform(none, { MU: null }))).toBe("unknown_person");
+    expect(none.metaRevoked).toEqual([]);
+  });
+
   it("a connection waiting for a reconnect holds no grant, and a dead token's row is marked so on the way", async () => {
     const mine = await connection("meta", await store(), { access: "MA" }, { externalUserId: "2001" });
     await connection("meta", await store(), { access: "MB" }, { status: "reconnect", errorCode: "auth_expired" });
