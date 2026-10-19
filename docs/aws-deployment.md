@@ -687,13 +687,14 @@ share Resend's limits with the app's email (free tier: 100 a day, 3,000 a month)
   US$29/month or 9% of the bill). Basic support is free; switch in Support Center → Support plans →
   Basic Support → Review downgrade. AWS refuses until the 30-day minimum ends (tried 2026-10-18), so
   from 2026-11-14 ~04:43 UTC; a one-time reminder task (`aws-support-plan-to-basic`) fires that day.
-- **Sign-up codes and password resets** come from Cognito's own email (`COGNITO_DEFAULT`): any
-  address, but at most 50 a day for the whole pool, from `no-reply@verificationemail.com`. Going past
-  that needs Cognito on SES (production access, denied so far) or a Cognito custom email sender
-  (a Lambda trigger + a KMS key, ~US$1/month) sending through Resend.
-- **Google sign-in**: add `https://insights-605411278365.auth.ap-southeast-2.amazoncognito.com/oauth2/idpresponse`
-  to a Google OAuth client, put its secret with `put-secrets.mjs --set GOOGLE_SIGNIN_CLIENT_SECRET`,
-  deploy with `-c googleClientId=<client id>`.
+- **Google sign-in**: the steps are in [cognito-setup.md](cognito-setup.md), section 2: an OAuth
+  client in a Google Cloud project of its own (only `openid`, `email`, `profile`; not
+  `insights-511119`) with the redirect URI
+  `https://insights-605411278365.auth.ap-southeast-2.amazoncognito.com/oauth2/idpresponse`, its secret
+  through `put-secrets.mjs --set GOOGLE_SIGNIN_CLIENT_SECRET`, the GitHub `production` environment
+  variable `GOOGLE_SIGNIN_CLIENT_ID`, then a Deploy to AWS run (no hand deploy), which restarts the
+  functions when the runtime settings change. Sign-in codes already go out through Resend
+  ("Sign-in emails" above).
 - **Provider secrets** not on this PC: META_APP_SECRET, GOOGLE_ADS_CLIENT_SECRET, WHATSAPP_APP_SECRET,
   WHATSAPP_WEBHOOK_VERIFY_TOKEN (`put-secrets.mjs --set`, then a Deploy to AWS run).
 - **Custom domain**: done, bizinsights.io (above). Provider consoles still list the old addresses:
