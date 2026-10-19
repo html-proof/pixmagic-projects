@@ -7,12 +7,14 @@ import {
   adsenseAccountId,
   adsenseAccountStatus,
   adsenseReportRows,
+  adsenseReportTotals,
   fromAdsenseReport,
   isDay,
   type AdsenseDayRow,
   type AdsenseReport,
   type AdsenseReportLevel,
   type AdsenseReportRow,
+  type AdsenseTotals,
 } from "@app/shared";
 import { AdsApiError, AdsNoAccountsError, AdsPermissionError, googleCommonError, readGoogleError, REQUIRED_AD_SCOPE, type AdAccount, type AdAccountHealth } from "./common.js";
 import { googleConsentUrl, type GoogleConsentOptions, type GoogleOAuthClient } from "./googleOAuth.js";
@@ -165,6 +167,7 @@ export const ADSENSE_REPORT_MAX_ROWS = 1000;
  * The AdSense report for one account and range, by site, country or device type, on the account's own
  * calendar. `sites` (DOMAIN_CODE values) limits it to the store's sites; empty means every site.
  * `truncated`: AdSense matched more rows than were read (only the biggest earners are listed).
+ * `totals`: the whole report's, the rows left out of a cut-off one included (AdSense's totals row).
  */
 export async function adsenseReport(
   c: AdsenseConfig,
@@ -174,7 +177,7 @@ export async function adsenseReport(
   since: string,
   until: string,
   sites: readonly string[] = [],
-): Promise<{ rows: AdsenseReportRow[]; currency: string | null; truncated: boolean }> {
+): Promise<{ rows: AdsenseReportRow[]; currency: string | null; truncated: boolean; totals: AdsenseTotals }> {
   if (!isDay(since) || !isDay(until)) throw new AdsApiError(`Invalid date range ${since}..${until}`, 400);
   const pub = publisherId(accountId);
   // AdSense filters (https://developers.google.com/adsense/management/reporting/filtering):
@@ -183,7 +186,7 @@ export async function adsenseReport(
   const hosts = sites.filter((h) => /^[a-z0-9.-]{1,253}$/i.test(h));
   // The store has sites, none of them a host AdSense could match: nothing of the account's is theirs.
   // Never every site instead, which would show other sites' earnings as the store's.
-  if (sites.length && !hosts.length) return { rows: [], currency: null, truncated: false };
+  if (sites.length && !hosts.length) return { rows: [], currency: null, truncated: false, totals: adsenseReportTotals({}, []) };
   const q = new URLSearchParams([
     ["dateRange", "CUSTOM"],
     ...dateParams("startDate", since),
@@ -199,5 +202,6 @@ export async function adsenseReport(
   const report = await adsenseGet<AdsenseReport & { totalMatchedRows?: string }>(c, accessToken, `accounts/${pub}/reports:generate`, q);
   // "Reports producing more rows than the requested limit will be truncated", told by totalMatchedRows.
   const matched = Number(report.totalMatchedRows ?? 0);
-  return { ...adsenseReportRows(level, report), truncated: Number.isFinite(matched) && matched > (report.rows?.length ?? 0) };
+  const { rows, currency } = adsenseReportRows(level, report);
+  return { rows, currency, truncated: Number.isFinite(matched) && matched > (report.rows?.length ?? 0), totals: adsenseReportTotals(report, rows) };
 }

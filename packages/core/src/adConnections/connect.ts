@@ -4,7 +4,7 @@
  */
 import { systemDb, type AdConnection } from "@app/db";
 import { decrypt, type AdProvider } from "@app/shared";
-import { AdsAuthError, classifyAdError, googleRevoke, metaRevokeAdsRead, type AdAccount, type TokenSet } from "../ads.js";
+import { AdsAuthError, classifyAdError, googleRevoke, metaRevokeAdsRead, type AdAccount, type AdAccountList, type TokenSet } from "../ads.js";
 import type { Coord } from "../coord.js";
 import { logger } from "../logger.js";
 import type { FetchLike } from "../shopify.js";
@@ -29,6 +29,13 @@ export interface PendingAdConnect {
   /** The permissions granted, and who granted them (both stored with the connection). */
   grantedScopes?: string[];
   externalUserId?: string | null;
+  /** The platform's list was cut short (an agency login reaching more than one sign-in can list): the picker says so. */
+  truncated?: boolean;
+  /**
+   * The refresh token is one this person gave before, taken from their other connections (Google sent
+   * none): cancelling the choice must not revoke it (dropUnusedGrant's `reusedRefreshToken`).
+   */
+  reusedRefreshToken?: boolean;
   /** Epoch ms after which the choice is gone. */
   expiresAt: number;
 }
@@ -39,10 +46,25 @@ const grantFamily = (provider: string): AdProvider[] => (provider === "meta" ? [
 /** The choices one person has waiting, so dropping one grant can't pull the tokens out from under another. */
 const personPendingKey = (provider: string, externalUserId: string) => `ads-pending-person:${provider === "meta" ? "meta" : "google"}:${externalUserId}`;
 
+/**
+ * Hold a sign-in's accounts and tokens while the person picks. Each account keeps what the platform
+ * said about it (status, statusDetail: shown in the picker, stored with the connection), and the list
+ * whether it was cut short (`truncated`, from an AdAccountList, which JSON alone would drop).
+ */
 export async function holdPendingAdConnect(
   coord: Coord,
   nonce: string,
-  input: { userId: string; workspaceId: string; storeId: string; provider: AdProvider; accounts: AdAccount[]; tokens: TokenSet; externalUserId?: string | null },
+  input: {
+    userId: string;
+    workspaceId: string;
+    storeId: string;
+    provider: AdProvider;
+    accounts: AdAccountList;
+    tokens: TokenSet;
+    externalUserId?: string | null;
+    truncated?: boolean;
+    reusedRefreshToken?: boolean;
+  },
 ) {
   const enc = encryptAdTokens(input.storeId, input.provider, input.tokens);
   const pending: PendingAdConnect = {
@@ -50,12 +72,14 @@ export async function holdPendingAdConnect(
     workspaceId: input.workspaceId,
     storeId: input.storeId,
     provider: input.provider,
-    accounts: input.accounts,
+    accounts: [...input.accounts],
     accessTokenEnc: enc.accessTokenEnc,
     refreshTokenEnc: enc.refreshTokenEnc,
     accessTokenExpiresAt: input.tokens.expiresAt ? input.tokens.expiresAt.toISOString() : null,
     grantedScopes: input.tokens.grantedScopes,
     externalUserId: input.externalUserId ?? null,
+    truncated: !!(input.truncated ?? input.accounts.truncated),
+    ...(input.reusedRefreshToken ? { reusedRefreshToken: true } : {}),
     expiresAt: Date.now() + ADS_PENDING_TTL_S * 1000,
   };
   await coord.put(pendingKey(nonce), JSON.stringify(pending), ADS_PENDING_TTL_S);
@@ -182,10 +206,24 @@ export async function reusableRefreshToken(provider: AdProvider, externalUserId:
   return decrypt(row.refreshTokenEnc, keyring(), aad(row.storeId, row.provider, "refresh"));
 }
 
-export type RevokeOutcome = "revoked" | "still_used" | "unknown_person" | "not_configured" | "failed";
-
 /** Rows that still hold a working grant: not waiting for a reconnect (whose grant is dead), and with a token. */
 const holdsGrant = { status: { not: "reconnect" }, accessTokenEnc: { not: "" } };
+
+/**
+ * Whether this bizinsights user connected `provider` before with a Google login whose refresh token
+ * bizinsights still holds and uses. Then Google's consent screen can be skipped on their next connect
+ * (GoogleConsentOptions.forceConsent false): a consent hands out a new refresh token every time, and
+ * Google silently ends a login's oldest past 100 for one client. Google then sends none, and theirs is
+ * reused (reusableRefreshToken); if they pick a login bizinsights holds none for, the callback asks
+ * again with the consent screen.
+ */
+export async function holdsReusableRefreshToken(provider: AdProvider, userId: string): Promise<boolean> {
+  if (provider === "meta") return false;
+  const n = await systemDb.adConnection.count({ where: { provider, connectedByUserId: userId, externalUserId: { not: null }, refreshTokenEnc: { not: null }, ...holdsGrant } });
+  return n > 0;
+}
+
+export type RevokeOutcome = "revoked" | "still_used" | "unknown_person" | "not_configured" | "failed";
 
 /** At most this many unknown persons are looked up while someone waits for a disconnect; past it the grant is kept. */
 const PERSON_LOOKUPS = 10;
@@ -245,12 +283,19 @@ async function grantStillUsed(provider: string, externalUserId: string, exceptId
   return unsure;
 }
 
-/** Take back the grant: Google's whole grant to bizinsights' client; Meta's ads_read only (WhatsApp keeps working). */
+/**
+ * Take back the grant: Google's whole grant to bizinsights' client; Meta's ads_read only (WhatsApp keeps
+ * working). Meta's is taken back with the person's own token, or, once that has expired, with
+ * bizinsights' app token for their app-scoped id (`externalUserId`).
+ */
 async function revokeGrant(provider: string, tokens: { accessToken: string; refreshToken: string | null }, externalUserId: string, fetchImpl?: FetchLike): Promise<RevokeOutcome> {
   if (provider === "meta") {
     const cfg = metaConfig(fetchImpl);
     if (!cfg) return "not_configured";
-    await metaRevokeAdsRead(cfg, tokens.accessToken, externalUserId);
+    // "not_granted": the person no longer grants ads_read (they removed it, or the app), so nothing of
+    // it is left at Meta: what a revoke is for.
+    const outcome = await metaRevokeAdsRead(cfg, tokens.accessToken, externalUserId);
+    if (outcome === "not_granted") logger.info({ provider }, "meta ads_read was no longer granted; nothing left to revoke");
   } else {
     // Revoking the refresh token ends its access tokens too.
     await googleRevoke({ fetchImpl }, tokens.refreshToken ?? tokens.accessToken);

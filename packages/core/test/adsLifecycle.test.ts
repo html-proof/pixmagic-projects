@@ -368,7 +368,7 @@ describe("live reports", () => {
           ],
         });
       }
-      if (u.searchParams.get("breakdowns") === "impression_device") return json({ data: [{ impression_device: "android_smartphone", spend: "1" }] });
+      if (u.searchParams.get("breakdowns") === "publisher_platform,impression_device") return json({ data: [{ publisher_platform: "facebook", impression_device: "android_smartphone", spend: "1" }] });
       if (u.searchParams.get("breakdowns") === "country") return json({ data: [{ country: "GB", spend: "2" }] });
       return json({ data: [{ spend: "10", impressions: "300", reach: "200" }] });
     });

@@ -54,7 +54,8 @@ describe("ad account sync", () => {
     await systemDb.adCampaignDaily.create({ data: { workspaceId: conn.workspaceId, storeId: conn.storeId, connectionId: conn.id, provider: "meta", accountId: "act_1", campaignId: "gone", campaignName: "Deleted campaign", day: d1, spend: 99 } });
     fetchImpl = async (input, init) => {
       const u = new URL(String(input));
-      expect(u.pathname).toBe("/v25.0/act_1/insights");
+      // The configured Marketing API version (META_API_VERSION's default).
+      expect(u.pathname).toBe("/v26.0/act_1/insights");
       // The token goes in the header, never in the URL.
       expect(new Headers(init?.headers).get("authorization")).toBe("Bearer ACCESS");
       expect(u.searchParams.has("access_token")).toBe(false);

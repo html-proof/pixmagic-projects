@@ -94,6 +94,20 @@ export const AD_ERROR_OURS: ReadonlySet<AdErrorCode> = new Set(["not_approved", 
 const PLATFORM_NAME: Record<AdProvider, string> = { meta: "Meta", google: "Google Ads", adsense: "Google AdSense" };
 const PLATFORM_HOME_NAME: Record<AdProvider, string> = { meta: "Meta Ads Manager", google: "ads.google.com", adsense: "AdSense" };
 
+/** The code that words each status when a connection has none of its own (marked before codes were kept, or by another status). */
+const STATUS_CODE: Record<Exclude<AdConnectionStatus, "active">, AdErrorCode> = { reconnect: "auth_expired", permission: "no_access", unavailable: "account_not_ready", error: "provider_error" };
+
+/**
+ * The code a connection's status is worded by: its own code when that code belongs to the status
+ * (AD_ERROR_STATUS), else the status's own wording; null when it is active. A code left over from an
+ * earlier failure (a writer that changed only the status) would word the status as something else.
+ */
+export function adStatusCode(status: string, errorCode: string | null | undefined): AdErrorCode | null {
+  if (status === "active") return null;
+  if (isAdErrorCode(errorCode) && AD_ERROR_STATUS[errorCode] === status) return errorCode;
+  return STATUS_CODE[status as Exclude<AdConnectionStatus, "active">] ?? "provider_error";
+}
+
 /** What a code means for the merchant, in one or two plain sentences. Null code: nothing is wrong. */
 export function adErrorMessage(code: AdErrorCode | null | undefined, provider: AdProvider): string | null {
   if (!code) return null;
@@ -588,10 +602,15 @@ export type MetaReportView = (typeof META_REPORT_VIEWS)[number];
 
 export const isMetaBreakdown = (v: MetaReportView): v is MetaReportBreakdown => (META_REPORT_BREAKDOWNS as readonly string[]).includes(v);
 
-/** The Insights API `breakdowns` for each split. */
+/**
+ * The Insights API `breakdowns` for each split. The device split asks for one of Meta's documented
+ * combinations, publisher_platform with impression_device
+ * (https://developers.facebook.com/docs/marketing-api/insights/breakdowns), and its rows are added up
+ * per device afterwards (core's metaReport).
+ */
 export const META_BREAKDOWN_PARAM: Record<MetaReportBreakdown, string> = {
   placement: "publisher_platform,platform_position",
-  device: "impression_device",
+  device: "publisher_platform,impression_device",
   country: "country",
   age: "age",
   gender: "gender",
@@ -1083,6 +1102,24 @@ export function siteTotals(rows: AdsenseDayRow[], limit = 10) {
 export interface AdsenseReport {
   headers?: Array<{ name?: string; type?: string; currencyCode?: string }>;
   rows?: Array<{ cells?: Array<{ value?: string }> }>;
+  /** The whole report's totals: a row like the others, its dimension cells empty. */
+  totals?: { cells?: Array<{ value?: string }> };
+}
+
+/**
+ * A report's totals: AdSense's own totals row when it sent one (it covers every matched row, also the
+ * ones a cut-off report leaves out), else the sum of `rows`.
+ */
+export function adsenseReportTotals(report: AdsenseReport, rows: readonly AdsenseTotals[]): AdsenseTotals {
+  const headers = report.headers ?? [];
+  const cells = report.totals?.cells;
+  const col = (name: string) => headers.findIndex((h) => h.name === name);
+  const at = { earnings: col("ESTIMATED_EARNINGS"), pageViews: col("PAGE_VIEWS"), impressions: col("IMPRESSIONS"), clicks: col("CLICKS") };
+  const num = (i: number) => (cells && i >= 0 ? Number(cells[i]?.value ?? 0) || 0 : 0);
+  type Counts = Pick<AdsenseTotals, "earnings" | "pageViews" | "impressions" | "clicks">;
+  const sum = (list: readonly Counts[]) => adsenseTotals(list.map((r) => ({ accountId: "", site: "", day: "", earnings: r.earnings, pageViews: r.pageViews, impressions: r.impressions, clicks: r.clicks })));
+  if (cells && at.earnings >= 0) return sum([{ earnings: num(at.earnings), pageViews: Math.round(num(at.pageViews)), impressions: Math.round(num(at.impressions)), clicks: Math.round(num(at.clicks)) }]);
+  return sum(rows);
 }
 
 /**
