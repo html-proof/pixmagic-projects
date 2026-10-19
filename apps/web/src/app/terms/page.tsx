@@ -97,7 +97,7 @@ export default function TermsPage() {
 
       <LegalSection {...section("who-we-are")}>
         <p>
-          {CONTACT.legalName === BRAND_NAME ? "These terms are between you and bizinsights" : <>bizinsights is provided by {CONTACT.legalName}</>}{" "}
+          {CONTACT.legalName === BRAND_NAME ? "These terms are between you and bizinsights" : <>bizinsights is operated by {CONTACT.legalName}{CONTACT.companyNumber && <> ({CONTACT.companyNumber})</>}</>}{" "}
           (&ldquo;we&rdquo;, &ldquo;us&rdquo;, &ldquo;our&rdquo;)
           {CONTACT.postalAddress && <>, {CONTACT.postalAddress}</>}. You can reach us at <SupportEmail subject="Terms of service" />.
         </p>
