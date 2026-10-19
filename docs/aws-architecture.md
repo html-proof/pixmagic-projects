@@ -104,8 +104,8 @@ Slack) call back on the app's address (section 7).
 | aggregate | 5 (1 s) | 4 | 5 min | 6 |
 | email | 10 (2 s) | 5 | 2 min | 6 |
 
-What is built is smaller while the account's Lambda concurrency is 10 (`sources` in
-`infra/cdk/lib/app-stack.ts`; a message goes to the DLQ after 10 receives).
+What is built is smaller than this table (`sources` in
+`infra/cdk/lib/app-stack.ts`, sized when the account's Lambda concurrency was 10; it is 1,000 since 2026-10-20 at the latest, so the queues can grow with the database; a message goes to the DLQ after 10 receives).
 
 A job's `retry({ delaySeconds })` is `ChangeMessageVisibility` (up to 12 h, so the 15-minute
 backoff cap fits), `ack()` a successful batch item, `attempts` the message's `ApproximateReceiveCount`

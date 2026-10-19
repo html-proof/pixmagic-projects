@@ -176,7 +176,8 @@ export class AppStack extends Stack {
     if (costReportTo) cron.fn.addToRolePolicy(new iam.PolicyStatement({ actions: ["ce:GetCostAndUsage"], resources: ["*"] }));
 
     // The jobs function's queues. Concurrency per queue at least 2 (SQS's minimum) and small
-    // while the account's Lambda concurrency is 10.
+    // (sized when the account's Lambda concurrency was 10; it is 1,000 now, so these can rise
+    // with the database's connection limit: each running job holds a connection).
     const sources: Array<[QueueName, number, number, number]> = [
       ["sync", 1, 0, 2],
       ["webhooks", 10, 2, 2],
