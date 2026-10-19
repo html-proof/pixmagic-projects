@@ -203,51 +203,101 @@ describe("Shopify app configuration", () => {
  *
  * End dates, as published (checked 2026-10-19):
  *   - Google Ads: https://developers.google.com/google-ads/api/docs/sunset-dates gives a month,
- *     and a version may be turned off on any day of it, so its first day counts.
+ *     and a version may be turned off on any day of it, so its first day counts. Google dates each
+ *     version when it is released, so none is ever unknown here.
  *   - Meta: https://developers.facebook.com/docs/graph-api/changelog. META_API_VERSION reads ads
  *     (Marketing API, whose versions end sooner); WHATSAPP_API_VERSION is the Graph API (Cloud API).
- *     A version still marked "TBD" there has `null`: it passes while the changelog was read within
- *     the last 180 days, so a date Meta announces later is found in time. Read it again and update
- *     `checked` (and the date, once there is one).
+ *     A version still marked "TBD" there has `ends: null` and its release date. Meta promises only
+ *     90 days after the next version comes out, and then says the end date in the changelog, so a
+ *     TBD version is counted as ending when the shortest-lived dated version in its list would
+ *     have (Marketing API v24.0: 363 days, which puts v25.0 at 2027-02-16), and the changelog has
+ *     to be read again within 180 days, or 60 once a newer version is out (then Meta may announce
+ *     the end at any time). Read it again and update `checked` (and the date, once there is one).
  */
-const API_VERSION_ENDS: Record<string, { checked: string; ends: Record<string, string | null>; source: string }> = {
+interface VersionDates {
+  /** Needed for a version whose end is still TBD, and to learn how long a version lasts. */
+  released?: string;
+  ends: string | null;
+}
+const API_VERSION_ENDS: Record<string, { checked: string; versions: Record<string, VersionDates>; source: string }> = {
   GOOGLE_ADS_API_VERSION: {
     checked: "2026-10-19",
-    ends: { v24: "2027-05-01", v25: "2027-08-01", v26: "2027-11-01" },
+    versions: { v24: { ends: "2027-05-01" }, v25: { ends: "2027-08-01" }, v26: { ends: "2027-11-01" } },
     source: "https://developers.google.com/google-ads/api/docs/sunset-dates",
   },
   META_API_VERSION: {
     checked: "2026-10-19",
-    ends: { "v24.0": "2026-10-06", "v25.0": null, "v26.0": null },
+    versions: {
+      "v24.0": { released: "2025-10-08", ends: "2026-10-06" },
+      "v25.0": { released: "2026-02-18", ends: null },
+      "v26.0": { released: "2026-07-29", ends: null },
+    },
     source: "https://developers.facebook.com/docs/graph-api/changelog (Marketing API versions)",
   },
   WHATSAPP_API_VERSION: {
     checked: "2026-10-19",
-    ends: { "v24.0": "2028-02-18", "v25.0": "2028-07-29", "v26.0": null },
+    versions: {
+      "v24.0": { released: "2025-10-08", ends: "2028-02-18" },
+      "v25.0": { released: "2026-02-18", ends: "2028-07-29" },
+      "v26.0": { released: "2026-07-29", ends: null },
+    },
     source: "https://developers.facebook.com/docs/graph-api/changelog (Graph API versions)",
   },
 };
 
+const DAY = 86_400_000;
+
+/**
+ * When a version stops being served, as far as this table knows: its published end, or for a TBD
+ * one, its release plus the shortest life of a dated version in the same list. Also how soon the
+ * changelog must be read again (`recheckDays`), shorter once a newer version is out.
+ */
+function versionEnd(versions: Record<string, VersionDates>, version: string): { end: number; projected: boolean; recheckDays: number } {
+  const v = versions[version]!;
+  const superseded = Object.values(versions).some((o) => o.released && v.released && o.released > v.released);
+  const recheckDays = superseded ? 60 : 180;
+  if (v.ends) return { end: Date.parse(v.ends), projected: false, recheckDays };
+  if (!v.released) throw new Error(`${version}: an end date of "TBD" needs its release date`);
+  const lives = Object.values(versions).flatMap((o) => (o.released && o.ends ? [Date.parse(o.ends) - Date.parse(o.released)] : []));
+  if (!lives.length) throw new Error(`${version}: no dated version in the list to tell how long a version lasts`);
+  return { end: Date.parse(v.released) + Math.min(...lives), projected: true, recheckDays };
+}
+
 describe("API versions the ad platforms and WhatsApp still serve", () => {
   const settings = read("apps/aws/src/settings.ts");
-  const DAY = 86_400_000;
 
-  for (const [setting, { checked, ends, source }] of Object.entries(API_VERSION_ENDS)) {
+  for (const [setting, { checked, versions, source }] of Object.entries(API_VERSION_ENDS)) {
     it(`uses a ${setting} that stays available for at least 90 more days`, () => {
       const version = envValue(settings, setting);
       expect(version, `${setting} isn't in apps/aws/src/settings.ts`).toBeTruthy();
-      expect(Object.keys(ends), `${setting} ${version} has no end date here: look it up (${source}) and add it`).toContain(version);
-      // Present: checked just above.
-      const end = ends[version!] as string | null;
-      if (end === null) {
+      expect(Object.keys(versions), `${setting} ${version} has no end date here: look it up (${source}) and add it`).toContain(version);
+      const { end, projected, recheckDays } = versionEnd(versions, version!);
+      const when = new Date(end).toISOString().slice(0, 10);
+      const daysLeft = (end - Date.now()) / DAY;
+      expect(
+        daysLeft,
+        projected
+          ? `${setting} ${version}'s end is still "TBD", but versions in this list have lasted no longer than to about ${when}: move to a newer version (${source})`
+          : `${setting} ${version} stops being served on ${when} (${source})`,
+      ).toBeGreaterThan(90);
+      if (projected) {
         const sinceChecked = (Date.now() - Date.parse(checked)) / DAY;
-        expect(sinceChecked, `${setting} ${version}'s end date was "TBD" on ${checked}: read ${source} again and record it`).toBeLessThan(180);
-        return;
+        expect(sinceChecked, `${setting} ${version}'s end date was "TBD" on ${checked}: read ${source} again and record it`).toBeLessThan(recheckDays);
       }
-      const daysLeft = (Date.parse(end) - Date.now()) / DAY;
-      expect(daysLeft, `${setting} ${version} stops being served on ${end} (${source})`).toBeGreaterThan(90);
     });
   }
+
+  it("projects a TBD version's end from how long dated versions lasted", () => {
+    const meta = API_VERSION_ENDS.META_API_VERSION!.versions;
+    // v24.0 lasted 363 days, from 2025-10-08 to 2026-10-06.
+    expect(versionEnd(meta, "v25.0")).toEqual({ end: Date.parse("2027-02-16"), projected: true, recheckDays: 60 });
+    expect(versionEnd(meta, "v26.0")).toEqual({ end: Date.parse("2027-07-27"), projected: true, recheckDays: 180 });
+    expect(versionEnd(meta, "v24.0")).toEqual({ end: Date.parse("2026-10-06"), projected: false, recheckDays: 60 });
+    // The Graph API's shortest dated life here is v24.0's (2025-10-08 to 2028-02-18).
+    expect(versionEnd(API_VERSION_ENDS.WHATSAPP_API_VERSION!.versions, "v26.0").end).toBe(Date.parse("2028-12-08"));
+    expect(() => versionEnd({ v1: { ends: null } }, "v1")).toThrow(/needs its release date/);
+    expect(() => versionEnd({ v1: { released: "2026-01-01", ends: null } }, "v1")).toThrow(/no dated version/);
+  });
 });
 
 /**
