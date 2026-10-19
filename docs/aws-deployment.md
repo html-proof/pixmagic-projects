@@ -445,12 +445,20 @@ job signs in only with the OIDC deploy role and checks that it did.
   `Copy-Item -Recurse -Force C:\Users\<account>\AppData\Local\ms-playwright\* C:\ms-playwright`.
   Never copy from `C:\ms-playwright` into `C:\ms-playwright-main`: pull-request jobs can change the first.
 - The PC must be on and awake: queued jobs wait up to 24 hours for the runner, then are cancelled.
-  It's a laptop with Modern Standby: it sleeps 3 minutes after the last input once the screen
-  turns off (even on AC, even with "sleep: never"), and when the lid closes. Asleep, it drops the
-  network, so a running job stalls or is lost (on 2026-10-18 it slept twice mid-pipeline). Keep it
-  plugged in and awake: in an elevated PowerShell, `powercfg /change monitor-timeout-ac 0`, then
-  `powercfg /setacvalueindex SCHEME_CURRENT SUB_BUTTONS LIDACTION 0` and
-  `powercfg /setactive SCHEME_CURRENT` (lid closed on AC does nothing).
+  It's a laptop with Modern Standby: unplugged, it turns the screen off and sleeps 3 minutes after
+  the last input (on AC the screen stays on: `monitor-timeout-ac 0` is set), and it sleeps when
+  the lid closes. Asleep, it drops the network and does no work while a test's clock keeps
+  running, so a job is lost or a test times out: on 2026-10-18 it slept twice mid-pipeline, and on
+  2026-10-19 a 78 s sleep (unplugged with the lid closed) failed `pnpm test:integration` with
+  "Hook timed out in 60000ms" in a `beforeEach`. Every job on the PC therefore holds a power
+  request from its first steps to its end (`infra/runner/keep-awake.ps1`, step "Keep the PC awake
+  for this job"): the PC won't idle into sleep while a job runs, plugged in or not. A closed lid
+  still sleeps it, whatever requests are held, unless the lid action is "do nothing" on battery as
+  well as on AC: in an elevated PowerShell, `powercfg /setacvalueindex SCHEME_CURRENT SUB_BUTTONS LIDACTION 0`,
+  `powercfg /setdcvalueindex SCHEME_CURRENT SUB_BUTTONS LIDACTION 0`, then
+  `powercfg /setactive SCHEME_CURRENT`. Which sleep a failure was: the System log's Kernel-Power
+  events 506 (entering standby, with `LidOpenState`), 507 (leaving, `DurationInUs`) and 105
+  (plugged in or out). The PC's clock is UTC+5:30, and so is vitest's "Start at".
   A busy PC (demos, other test runs) makes the integration tests 2-3 times slower and can time one
   out: re-run the job.
 - While the runner deploys, nobody deploys by hand: the two don't share a lock.
