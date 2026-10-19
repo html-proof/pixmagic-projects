@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { systemDb } from "@app/db";
-import { logger, releaseUserAdGrants } from "@app/core";
+import { detachUserAdGrants, logger, revokeReleasedAdGrants } from "@app/core";
 import { accountPasswordProblem, EMAIL_CODE_RE } from "@app/shared";
 import { accessTokenFor, body, clientIp, HttpError, requireUser, sessionOf, type Ctx, type Deps } from "../context.js";
 import { CognitoError, type CognitoUser } from "../cognito.js";
@@ -443,15 +443,25 @@ export function accountRoutes(app: App, deps: Deps) {
         throw cognitoFailure(err, "delete Cognito user");
       });
     }
+    let released: Awaited<ReturnType<typeof detachUserAdGrants>> | null = null;
     try {
       // Ad connections their login powers stop using it (they wait for someone else to reconnect them,
-      // keeping their days), and the grant goes back to Google or Meta unless something else relies on it.
-      await releaseUserAdGrants(user.id, undefined, deps.fetchImpl);
+      // keeping their days): a database step that never stops the account from being deleted.
+      released = await detachUserAdGrants(user.id).catch((err: unknown) => {
+        logger.error({ err, userId: user.id }, "account deletion: the person's ad connections weren't released; their tokens remain until a disconnect");
+        return null;
+      });
       await systemDb.user.delete({ where: { id: user.id } });
     } catch (err) {
       logger.error({ err, userId: user.id }, "account deletion: Cognito users deleted but the user row was not; finish by hand (docs/RUNBOOK.md)");
       await recordAuthEvent("account_deletion_incomplete", user.id, clientIp(c));
       throw new HttpError(503, "We removed your sign-in but couldn't finish deleting your data. We'll complete it; contact support if you need confirmation.", "deletion_incomplete");
+    }
+    // Then their grants go back to Google or Meta unless something else relies on them: best effort,
+    // within AD_RELEASE_REVOKE_BUDGET_MS, so a platform that doesn't answer can't hold up the answer.
+    if (released?.grants.length) {
+      const outcomes = await revokeReleasedAdGrants(released.grants, deps.fetchImpl);
+      logger.info({ userId: user.id, released: released.released, outcomes }, "account deletion: ad connections released");
     }
     await recordAuthEvent("account_deleted", null, clientIp(c), { userId: user.id, identities: identities.length });
     clearSessionCookies(c);

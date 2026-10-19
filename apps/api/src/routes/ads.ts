@@ -20,7 +20,10 @@ import {
   AdsUnavailableError,
   adToday,
   adsRedirectUri,
+  AD_REPORT_BUDGET_MS,
   audit,
+  countGoogleAdsOperations,
+  countingGoogleAdsFetch,
   dropUnusedGrant,
   enqueueAdCatchUp,
   enqueueAdSync,
@@ -29,6 +32,7 @@ import {
   googleAuthorizeUrl,
   googleClient,
   googleConfig,
+  googleAdsPaused,
   googleExchangeCode,
   googleReportForConnection,
   googleUserId,
@@ -44,6 +48,7 @@ import {
   META_REPORT_JOB,
   metaReportForConnection,
   metaUserId,
+  pauseGoogleAds,
   peekPendingAdConnect,
   pendingTokens,
   REQUIRED_AD_SCOPE,
@@ -253,6 +258,22 @@ async function connectAccounts(
   return saved;
 }
 
+/**
+ * Ask for one shown connection to be brought up to date, someone waiting ("Synchronizing"): a catch-up,
+ * or for an account this login can't read now, or that the platform won't report on, a check whether
+ * it is back (which catches up if so). Nothing for one waiting for a reconnect, or without a token
+ * (its person left): only connecting again helps those, and a job would only be skipped. Returns
+ * whether a job was sent (one already on its way isn't sent again).
+ */
+async function queueRefresh(deps: Deps, conn: AdConnection): Promise<boolean> {
+  if (!conn.enabled || conn.status === "reconnect" || !conn.accessTokenEnc) return false;
+  if (conn.status === "permission" || conn.status === "unavailable") {
+    await enqueueAdSync(deps.queues, conn, 1, { healthOnly: true, interactive: true });
+    return true;
+  }
+  return !!(await enqueueAdCatchUp(deps.queues, conn, { interactive: true }));
+}
+
 /** A pending choice that belongs to this person, workspace and store, or a 404 that says it's gone. */
 async function ownPending(deps: Deps, nonce: string, userId: string | undefined, ws: string, storeId: string) {
   const p = await peekPendingAdConnect(deps.coord, nonce);
@@ -371,15 +392,25 @@ const reportDates = z
   .refine((v) => !v.cfrom || !v.cto || v.cfrom <= v.cto, "cfrom is after cto")
   .refine((v) => !v.cfrom || !v.cto || daysBetweenInclusive(v.cfrom, v.cto) <= MAX_CUSTOM_DAYS, "Compare up to a year at a time");
 
+interface ReportRange {
+  from: string;
+  to: string;
+  /** The comparison's: read for its figures only (Meta: no delivery statuses), so cached apart from a report of the same dates. */
+  compare?: boolean;
+}
+
 /** The ranges a report request asks for: its own, then the comparison's when there is one. */
-const rangesOf = (q: { from: string; to: string; cfrom?: string; cto?: string }) => [{ from: q.from, to: q.to }, ...(q.cfrom && q.cto ? [{ from: q.cfrom, to: q.cto }] : [])];
+const rangesOf = (q: { from: string; to: string; cfrom?: string; cto?: string }): ReportRange[] => [
+  { from: q.from, to: q.to },
+  ...(q.cfrom && q.cto ? [{ from: q.cfrom, to: q.cto, compare: true }] : []),
+];
 
 /**
  * Read a report's ranges, each from the cache or the platform (all at once, so a comparison takes no
  * longer than one range), and cache what was read: days that are over change little, today's keep
  * coming in. The first failure is thrown once every read has ended, the ranges that worked cached.
  */
-async function readRanges<T>(deps: Deps, ranges: Array<{ from: string; to: string }>, today: string, key: (r: { from: string; to: string }) => string, read: (r: { from: string; to: string }) => Promise<T>, rateKey: string) {
+async function readRanges<T>(deps: Deps, ranges: ReportRange[], today: string, key: (r: ReportRange) => string, read: (r: ReportRange) => Promise<T>, rateKey: string) {
   const cached = await Promise.all(ranges.map((r) => deps.coord.peek(key(r))));
   if (cached.some((c) => !c)) await limit(deps.coord, rateKey, LIMITS.adsReport);
   const results = await Promise.allSettled(
@@ -493,6 +524,8 @@ export function adsRoutes(app: App, deps: Deps) {
       const googleCfg = provider === "google" ? googleClient(deps.fetchImpl) : null;
       const adsenseCfg = provider === "adsense" ? adsenseConfig(deps.fetchImpl) : null;
       if (!metaCfg && !googleCfg && !adsenseCfg) return back({ error: "not_configured", provider }, state.storeId);
+      // Listing a login's Google Ads accounts spends bizinsights' daily operations: none while they're used up.
+      if (googleCfg && (await googleAdsPaused(deps.coord))) return back({ error: "rate_limited", provider }, state.storeId);
 
       // Still no database at the deadline: go on with the sign-in and hold it for the person (below).
       // Then the check that they are who started it happens when they finish (ownPending).
@@ -519,6 +552,18 @@ export function adsRoutes(app: App, deps: Deps) {
       // The person can untick the one permission on the platform's screen: then nothing can be read.
       const granted = (t: TokenSet) => !t.grantedScopes || t.grantedScopes.includes(REQUIRED_AD_SCOPE[provider]);
       // Who signed in, so a later disconnect knows whether anything else still relies on their grant. Never blocks a connect.
+      /** The login's Google Ads accounts, its searches counted against the daily operations (and Google saying they're used up pausing them), as a sync's are. */
+      const googleDiscovery = async (cfg: NonNullable<typeof googleCfg>, accessToken: string) => {
+        const counter = countingGoogleAdsFetch(cfg.fetchImpl);
+        try {
+          return await googleAdAccounts({ ...cfg, fetchImpl: counter.fetchImpl }, accessToken);
+        } catch (err) {
+          if (err instanceof AdsRateLimitedError && err.errorCode === "quota_exhausted") await pauseGoogleAds(deps.coord, err.retryAfterS).catch(() => undefined);
+          throw err;
+        } finally {
+          await countGoogleAdsOperations(deps.coord, counter.operations());
+        }
+      };
       const whoIs = (p: Promise<string | null>) =>
         p.catch((err: unknown) => {
           logger.warn({ err, provider }, "ad platform user id lookup failed");
@@ -559,7 +604,7 @@ export function adsRoutes(app: App, deps: Deps) {
             );
           }
           if (!tokens.refreshToken) return await fail("no_refresh_token");
-          accounts = googleCfg ? await googleAdAccounts(googleCfg, tokens.accessToken) : await adsenseAccounts(cfg, tokens.accessToken);
+          accounts = googleCfg ? await googleDiscovery(googleCfg, tokens.accessToken) : await adsenseAccounts(cfg, tokens.accessToken);
         }
       } catch (err) {
         // Ours, not the platform's.
@@ -688,8 +733,13 @@ export function adsRoutes(app: App, deps: Deps) {
     const before = [...conn.sites].sort();
     const sitesChanged = !!sites && (sites.length !== before.length || sites.some((s, i) => s !== before[i]));
     const shown = input.enabled === true && !conn.enabled;
-    let updated = await systemDb.adConnection.update({ where: { id: conn.id }, data: { ...(input.enabled !== undefined ? { enabled: input.enabled } : {}), ...(sites ? { sites } : {}) } });
-    if (updated.enabled && (shown || sitesChanged) && (await enqueueAdCatchUp(deps.queues, updated, { interactive: true }))) {
+    const hidden = input.enabled === false && conn.enabled;
+    let updated = await systemDb.adConnection.update({
+      where: { id: conn.id },
+      // A hidden account isn't synced: nothing it asked for is on its way any more.
+      data: { ...(input.enabled !== undefined ? { enabled: input.enabled } : {}), ...(sites ? { sites } : {}), ...(hidden ? { syncRequestedAt: null } : {}) },
+    });
+    if ((shown || sitesChanged) && (await queueRefresh(deps, updated))) {
       // The answer's card says "Synchronizing" (syncRequestedAt) from now.
       updated = await systemDb.adConnection.findUniqueOrThrow({ where: { id: conn.id } });
     }
@@ -750,8 +800,8 @@ export function adsRoutes(app: App, deps: Deps) {
       deps,
       rangesOf(q),
       today,
-      (r) => `ads-report:${conn.id}:${q.level}:${r.from}:${r.to}`,
-      (r) => metaReportForConnection(conn, q.level, r.from, r.to, deps.fetchImpl, { deadline }),
+      (r) => `ads-report:${conn.id}:${q.level}:${r.from}:${r.to}${r.compare ? ":figures" : ""}`,
+      (r) => metaReportForConnection(conn, q.level, r.from, r.to, deps.fetchImpl, { deadline, ...(r.compare ? { statuses: false } : {}) }),
       `rl:ads-report:${storeId}:${access.user?.id ?? clientIp(c)}`,
     ).catch((err: unknown) => {
       throw reportFailure(err, "meta", conn.id);
@@ -776,13 +826,15 @@ export function adsRoutes(app: App, deps: Deps) {
     if (conn.status === "reconnect") throw new HttpError(409, ACCESS_ENDED.google, "reconnect");
     const account = { id: conn.id, accountId: conn.accountId, name: conn.accountName, currency: conn.currency, timezone: conn.timezone };
     const today = adToday(conn);
+    // Both ranges' calls end within one deadline, so the answer comes within the request's time.
+    const deadline = Date.now() + AD_REPORT_BUDGET_MS;
     // Google finishes most of a day's numbers within about three hours, and still revises conversions after.
     const { reports, cached } = await readRanges<GoogleReport>(
       deps,
       rangesOf(q),
       today,
       (r) => `ads-greport:${conn.id}:${q.level}:${r.from}:${r.to}`,
-      (r) => googleReportForConnection(conn, q.level, r.from, r.to, deps.fetchImpl, { coord: deps.coord }),
+      (r) => googleReportForConnection(conn, q.level, r.from, r.to, deps.fetchImpl, { coord: deps.coord, deadline }),
       `rl:ads-report:${storeId}:${access.user?.id ?? clientIp(c)}`,
     ).catch((err: unknown) => {
       throw reportFailure(err, "google", conn.id);
@@ -818,7 +870,7 @@ export function adsRoutes(app: App, deps: Deps) {
       [{ from: q.from, to: q.to }],
       today,
       (r) => `ads-sreport:${conn.id}:${q.level}:${r.from}:${r.to}:${sitesKey}`,
-      (r) => adsenseReportForConnection(conn, q.level, r.from, r.to, deps.fetchImpl),
+      (r) => adsenseReportForConnection(conn, q.level, r.from, r.to, deps.fetchImpl, { deadline: Date.now() + AD_REPORT_BUDGET_MS }),
       `rl:ads-report:${storeId}:${access.user?.id ?? clientIp(c)}`,
     ).catch((err: unknown) => {
       throw reportFailure(err, "adsense", conn.id);
@@ -842,14 +894,7 @@ export function adsRoutes(app: App, deps: Deps) {
       tx.adConnection.findMany({ where: { workspaceId: ws, storeId, enabled: true, status: { not: "reconnect" }, accessTokenEnc: { not: "" }, ...(provider ? { provider } : {}) } }),
     );
     let queued = 0;
-    for (const conn of conns) {
-      if (conn.status === "permission" || conn.status === "unavailable") {
-        await enqueueAdSync(deps.queues, conn, 1, { healthOnly: true, interactive: true });
-        queued++;
-      } else if (await enqueueAdCatchUp(deps.queues, conn, { interactive: true })) {
-        queued++;
-      }
-    }
+    for (const conn of conns) if (await queueRefresh(deps, conn)) queued++;
     return c.json({ queued });
   });
 }

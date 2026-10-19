@@ -1112,7 +1112,10 @@ describe("the Meta Ads report compared with other dates", () => {
       if (u.searchParams.get("level") === "account") return json({ data: [{ spend: spend[range.since], impressions: "1000", reach: "400" }] });
       return json({ data: [{ campaign_id: "11", campaign_name: "Spring sale", spend: spend[range.since], impressions: "1000", reach: "400", inline_link_clicks: "10" }] });
     }
-    if (u.pathname.endsWith("/act_1/campaigns")) return json({ data: [{ id: "11", effective_status: "ACTIVE" }] });
+    if (u.pathname.endsWith("/act_1/campaigns")) {
+      asked.push("statuses");
+      return json({ data: [{ id: "11", effective_status: "ACTIVE" }] });
+    }
     return metaPlatform(input);
   };
   const reportUrl = (connection: string, q: Record<string, string>) => `/workspaces/${ws}/stores/${storeId}/ads/meta/report?${new URLSearchParams({ connection, from: "2026-09-01", to: "2026-09-30", ...q })}`;
@@ -1131,12 +1134,17 @@ describe("the Meta Ads report compared with other dates", () => {
     expect(body.report.comparison).toMatchObject({ since: "2026-08-01", until: "2026-08-30", totals: { spend: 80, reach: 400 }, rows: [{ id: "11", spend: 80, linkClicks: 10 }] });
     // Only figures beside each id: no names or statuses again.
     expect(body.report.comparison.rows[0].name).toBeUndefined();
-    expect(asked.sort()).toEqual(["account:2026-08-01", "account:2026-09-01", "campaign:2026-08-01", "campaign:2026-09-01"]);
+    // Delivery statuses are read for the report's own rows only (they're list calls on Meta's rate limit).
+    expect(asked.sort()).toEqual(["account:2026-08-01", "account:2026-09-01", "campaign:2026-08-01", "campaign:2026-09-01", "statuses"]);
     // The range on its own comes from the cache now.
     const alone = await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, {}), headers });
     expect(alone.json()).toMatchObject({ cached: true, report: { totals: { spend: 100 } } });
     expect(alone.json().report.comparison).toBeUndefined();
-    expect(asked).toHaveLength(4);
+    expect(asked).toHaveLength(5);
+    // The comparison's dates asked as a report of their own: never the status-less copy, read again with statuses.
+    const own = await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${storeId}/ads/meta/report?${new URLSearchParams({ connection: conn.id, from: "2026-08-01", to: "2026-08-30" })}`, headers });
+    expect(own.json()).toMatchObject({ cached: false, report: { totals: { spend: 80 }, rows: [{ id: "11", status: "ACTIVE" }] } });
+    expect(asked).toHaveLength(8);
     // Comparison dates that aren't a real range of up to a year, or only one of them: refused.
     const bad: Array<Record<string, string>> = [{ cfrom: "2026-08-30", cto: "2026-08-01" }, { cfrom: "2026-08-01" }, { cfrom: "2024-01-01", cto: "2026-08-01" }, { cto: "2026-08-01" }];
     for (const q of bad) {

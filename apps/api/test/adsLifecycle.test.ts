@@ -597,6 +597,25 @@ describe("the Google Ads report compared, and Google's daily allowance", () => {
     expect(await googleAdsOperationsToday(ctx.deps.coord)).toBe(before + seen.reportQueries.length);
   });
 
+  it("a sign-in's account listing counts against the allowance; while it's used up, the sign-in comes back rate_limited with nothing exchanged", async () => {
+    const seen = fresh();
+    ctx.setFetch(googlePlatform(seen));
+    const before = await googleAdsOperationsToday(ctx.deps.coord);
+    await connect("google");
+    // listAccessibleCustomers and the one customer's details.
+    expect(await googleAdsOperationsToday(ctx.deps.coord)).toBe(before + 2);
+
+    await pauseGoogleAds(ctx.deps.coord, null);
+    const exchanges = seen.exchanges.length;
+    const start = await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/stores/${storeId}/ads/google/connect`, headers });
+    const state = new URL(start.json().url).searchParams.get("state")!;
+    const cb = await ctx.app.inject({ method: "GET", url: `/ads/google/callback?${new URLSearchParams({ state, code: "CODE" })}`, headers: { cookie: `${cookie}; ads_oauth_state=${state}` } });
+    const location = new URL(cb.headers.location as string);
+    expect(location.pathname).toBe("/settings/ads");
+    expect(Object.fromEntries(location.searchParams)).toEqual({ error: "rate_limited", provider: "google", store: storeId });
+    expect(seen.exchanges).toHaveLength(exchanges);
+  });
+
   it("while Google says the day's allowance is used up, the report says so in plain words and asks Google nothing", async () => {
     const seen = fresh();
     ctx.setFetch(googlePlatform(seen));
@@ -664,7 +683,53 @@ describe("someone whose login powers ad accounts leaves", () => {
     const res = await ctx.app.inject({ method: "POST", url: "/auth/account/delete", headers: admin.headers, payload: { confirm: "DELETE", password } });
     expect(res.statusCode).toBe(200);
     expect(await systemDb.user.findUnique({ where: { id: admin.user.id } })).toBeNull();
-    for (const id of [a.id, b.id]) expect(await systemDb.adConnection.findUniqueOrThrow({ where: { id } })).toMatchObject({ status: "reconnect", errorCode: "connector_left", accessTokenEnc: "", externalUserId: null });
+    // Who granted them stays, so a data deletion request from that person still finds them.
+    for (const id of [a.id, b.id]) expect(await systemDb.adConnection.findUniqueOrThrow({ where: { id } })).toMatchObject({ status: "reconnect", errorCode: "connector_left", accessTokenEnc: "", externalUserId: "5550001" });
     expect(revoked).toEqual(["META_LONG"]);
+  });
+
+  it("their account deleted while Meta doesn't answer: the account is still deleted, and the grant is left (best effort)", async () => {
+    const admin = await signIn(ctx, "ads-life-leaver2", "leaver2@x.com");
+    await systemDb.membership.create({ data: { workspaceId: ws, userId: admin.user.id, role: "admin" } });
+    const a = await connectedBy(admin.user.id, ws, storeId, "act_1");
+    ctx.setFetch(async () => {
+      throw new TypeError("fetch failed");
+    });
+    const password = ctx.auth.users.get("ads-life-leaver2")!.password!;
+    const res = await ctx.app.inject({ method: "POST", url: "/auth/account/delete", headers: admin.headers, payload: { confirm: "DELETE", password } });
+    expect(res.statusCode).toBe(200);
+    expect(await systemDb.user.findUnique({ where: { id: admin.user.id } })).toBeNull();
+    expect(await systemDb.adConnection.findUniqueOrThrow({ where: { id: a.id } })).toMatchObject({ status: "reconnect", errorCode: "connector_left", accessTokenEnc: "" });
+  });
+
+  it("a hidden account waiting for a reconnect: showing it queues nothing and never says 'Synchronizing'; reconnecting queues its catch-up", async () => {
+    const admin = await signIn(ctx, "ads-life-admin3", "admin3@x.com");
+    const member = await systemDb.membership.create({ data: { workspaceId: ws, userId: admin.user.id, role: "admin" } });
+    const here = await connectedBy(admin.user.id, ws, storeId, "act_1");
+    await systemDb.adConnection.update({ where: { id: here.id }, data: { enabled: false } });
+    ctx.setFetch(metaPlatform([]));
+    expect((await ctx.app.inject({ method: "DELETE", url: `/workspaces/${ws}/team/members/${member.id}`, headers })).statusCode).toBe(200);
+
+    ctx.deps.queues.clear();
+    const show = await ctx.app.inject({ method: "PATCH", url: `/workspaces/${ws}/stores/${storeId}/ads/connections/${here.id}`, headers, payload: { enabled: true } });
+    expect(show.json().connection).toMatchObject({ enabled: true, status: "reconnect", syncRequestedAt: null });
+    expect(ctx.deps.queues.sent.sync ?? []).toEqual([]);
+
+    // Even a request left over from before (a job skipped before it could end it) doesn't hold up the reconnect's catch-up.
+    await systemDb.adConnection.update({ where: { id: here.id }, data: { syncRequestedAt: new Date() } });
+    await connect("meta");
+    expect(ctx.deps.queues.sent.sync).toEqual(expect.arrayContaining([expect.objectContaining({ kind: "ads", connectionId: here.id, trigger: "request" })]));
+    expect(await systemDb.adConnection.findUniqueOrThrow({ where: { id: here.id } })).toMatchObject({ status: "active", errorCode: null, syncRequestedAt: expect.any(Date) });
+  });
+
+  it("an account hidden while its sync is on its way stops saying 'Synchronizing', and showing it again queues its catch-up", async () => {
+    const conn = await connectedBy((await systemDb.user.findFirstOrThrow({ where: { email: "owner@x.com" } })).id, ws, storeId, "act_1");
+    ctx.deps.queues.clear();
+    expect((await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/stores/${storeId}/ads/sync`, headers })).json().queued).toBe(1);
+    const patch = (enabled: boolean) => ctx.app.inject({ method: "PATCH", url: `/workspaces/${ws}/stores/${storeId}/ads/connections/${conn.id}`, headers, payload: { enabled } });
+    expect((await patch(false)).json().connection).toMatchObject({ enabled: false, syncRequestedAt: null });
+    const shown = await patch(true);
+    expect(shown.json().connection).toMatchObject({ enabled: true, syncRequestedAt: expect.any(String) });
+    expect(ctx.deps.queues.sent.sync).toHaveLength(2);
   });
 });

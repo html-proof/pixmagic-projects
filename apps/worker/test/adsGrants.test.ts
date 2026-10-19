@@ -209,20 +209,49 @@ describe("someone who leaves", () => {
     expect(seen.revoked).toEqual(["URA"]);
     const released = await systemDb.adConnection.findMany({ where: { storeId: s.id, connectedByUserId: null }, orderBy: { accountId: "asc" } });
     expect(released.map((r) => [r.accountId, r.status, r.errorCode, r.accessTokenEnc, r.refreshTokenEnc, r.externalUserId])).toEqual([
-      ["111", "reconnect", "connector_left", "", null, null],
-      ["222", "reconnect", "connector_left", "", null, null],
+      // Who granted them stays (a Meta data deletion request finds rows by it); nothing reads a token-less row's.
+      ["111", "reconnect", "connector_left", "", null, "1100"],
+      ["222", "reconnect", "connector_left", "", null, "1100"],
     ]);
     expect(await systemDb.adCampaignDaily.count({ where: { connectionId: a.id } })).toBe(1);
     expect((await systemDb.adConnection.findUniqueOrThrow({ where: { id: someoneElse.id } })).status).toBe("active");
     expect((await systemDb.adConnection.findUniqueOrThrow({ where: { id: elsewhere.id } })).accessTokenEnc).not.toBe("");
-    // A sync queued before skips it; key rotation leaves it alone.
+    // A sync queued before skips it, and the card stops saying "Synchronizing"; key rotation leaves it alone.
+    await systemDb.adConnection.update({ where: { id: a.id }, data: { syncRequestedAt: new Date() } });
     expect(await syncAdConnection(a.id, "2026-10-01", "2026-10-02", platform(fresh(), {}))).toEqual({ skipped: true, reason: "no_token" });
+    expect((await systemDb.adConnection.findUniqueOrThrow({ where: { id: a.id } })).syncRequestedAt).toBeNull();
     expect(await reencryptAdTokens()).toBe(0);
 
     // Their account is deleted: everywhere else too.
     const all = fresh();
     expect(await releaseUserAdGrants("user-1", undefined, platform(all, {}))).toEqual({ released: 1, outcomes: ["revoked"] });
     expect(all.metaRevoked).toEqual(["UM"]);
+  });
+
+  it("a hidden account's sync is skipped and its card stops saying 'Synchronizing'", async () => {
+    const conn = await connection("google", await store(), { access: "HA" }, { enabled: false, syncRequestedAt: new Date() });
+    expect(await syncAdConnection(conn.id, "2026-10-01", "2026-10-02", platform(fresh(), {}))).toEqual({ skipped: true, reason: "hidden" });
+    expect((await systemDb.adConnection.findUniqueOrThrow({ where: { id: conn.id } })).syncRequestedAt).toBeNull();
+  });
+
+  it("a platform that doesn't answer can't hold a leaving person up: the rows are released at once, the grant left past the deadline", async () => {
+    const s = await store();
+    await connection("google", s, { access: "SA", refresh: "SRA" }, { connectedByUserId: "user-1", externalUserId: "1300" });
+    const hangs: FetchLike = (_input, init) =>
+      new Promise((_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(init.signal!.reason), { once: true }));
+    const started = Date.now();
+    expect(await releaseUserAdGrants("user-1", undefined, hangs, { revokeDeadline: Date.now() + 300 })).toEqual({ released: 1, outcomes: ["failed"] });
+    expect(Date.now() - started).toBeLessThan(5000);
+    expect(await systemDb.adConnection.findFirstOrThrow({ where: { storeId: s.id } })).toMatchObject({ status: "reconnect", errorCode: "connector_left", accessTokenEnc: "" });
+  });
+
+  it("a sign-in that never learned who granted it is looked up with its old token, and what is learned is kept on its rows", async () => {
+    const s = await store();
+    const conn = await connection("meta", s, { access: "LA" }, { connectedByUserId: "user-1" });
+    const seen = fresh();
+    expect(await releaseUserAdGrants("user-1", undefined, platform(seen, { LA: "2300" }))).toEqual({ released: 1, outcomes: ["revoked"] });
+    expect(seen.metaRevoked).toEqual(["LA"]);
+    expect(await systemDb.adConnection.findUniqueOrThrow({ where: { id: conn.id } })).toMatchObject({ errorCode: "connector_left", accessTokenEnc: "", externalUserId: "2300" });
   });
 
   it("a grant another connection still relies on is kept", async () => {

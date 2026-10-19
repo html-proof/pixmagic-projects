@@ -34,7 +34,7 @@ vi.mock("../src/adConnections/config.js", () => ({
 }));
 
 const { adsenseReportForConnection, googleReportForConnection, metaReportForConnection } = await import("../src/adConnections/reports.js");
-const { AdsAuthError, AdsPermissionError, AdsRateLimitedError, AdsReportPendingError } = await import("../src/ads.js");
+const { AdsAuthError, AdsPermissionError, AdsRateLimitedError, AdsReportPendingError, AdsRetryableError } = await import("../src/ads.js");
 const { googleAdsOperationsToday, googleAdsPaused, pauseGoogleAds } = await import("../src/adConnections/budget.js");
 const { memoryCoord } = await import("../src/coord.js");
 
@@ -132,6 +132,29 @@ describe("live reports per connection", () => {
     await expect(googleReportForConnection(account, "campaign", "2026-10-01", "2026-10-07", exhausted, { coord: fresh })).rejects.toMatchObject({ errorCode: "quota_exhausted" });
     expect(await googleAdsPaused(fresh)).toBe(true);
     expect(recorded.every((r) => (r.failure as { status: string }).status === "error")).toBe(true);
+  });
+
+  it("Google and AdSense: a report ends by its deadline, as 'busy' (try again), and the operations it started are still counted", async () => {
+    const coord = memoryCoord();
+    let calls = 0;
+    // Google takes the request and never answers (until the call is cut off).
+    const hangs: FetchLike = (_input, init) => {
+      calls++;
+      return new Promise((_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(init.signal!.reason), { once: true }));
+    };
+    const started = Date.now();
+    const google = await googleReportForConnection(conn({ provider: "google", accountId: "111" }), "campaign", "2026-10-01", "2026-10-07", hangs, { coord, deadline: Date.now() + 200 }).catch((e: unknown) => e);
+    expect(google).toBeInstanceOf(AdsRetryableError);
+    expect(google).not.toBeInstanceOf(AdsRateLimitedError);
+    expect(Date.now() - started).toBeLessThan(5000);
+    expect(calls).toBeGreaterThan(0);
+    expect(await googleAdsOperationsToday(coord)).toBe(calls);
+    const adsense = await adsenseReportForConnection(conn({ provider: "adsense", accountId: "accounts/pub-1" }), "site", "2026-10-01", "2026-10-07", hangs, { deadline: Date.now() + 200 }).catch((e: unknown) => e);
+    expect(adsense).toBeInstanceOf(AdsRetryableError);
+    // A deadline already passed makes no call at all.
+    calls = 0;
+    await expect(googleReportForConnection(conn({ provider: "google", accountId: "111" }), "campaign", "2026-10-01", "2026-10-07", hangs, { deadline: Date.now() - 1 })).rejects.toBeInstanceOf(AdsRetryableError);
+    expect(calls).toBe(0);
   });
 
   it("AdSense: limited to the connection's sites, in the report's currency", async () => {

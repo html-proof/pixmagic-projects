@@ -543,6 +543,11 @@ describe("the Meta Ads report", () => {
     expect((await metaReport(meta(throttled.fetchImpl), "T", "1", "campaign", "2026-10-01", "2026-10-07")).rows[0]!.status).toBeNull();
     const plenty = report(() => json({ data: [{ id: "1", effective_status: "ACTIVE" }] }));
     expect((await metaReport(meta(plenty.fetchImpl), "T", "1", "campaign", "2026-10-01", "2026-10-07")).rows[0]!.status).toBe("ACTIVE");
+    // A range read for its figures only (a comparison's): no status look-up at all.
+    const figures = report(() => json({ data: [{ id: "1", effective_status: "ACTIVE" }] }));
+    const compared = await metaReport(meta(figures.fetchImpl), "T", "1", "campaign", "2026-10-01", "2026-10-07", 200, { statuses: false });
+    expect(compared.rows.map((x) => [x.id, x.spend, x.status])).toEqual([["1", 5, null]]);
+    expect(figures.calls.some((c) => c.url.pathname.endsWith("/act_1/campaigns"))).toBe(false);
   });
 
   it("the whole account split by age and by gender, Meta's own aggregates", async () => {

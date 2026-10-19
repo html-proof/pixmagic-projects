@@ -89,7 +89,9 @@ export async function inviteLimits(deps: Deps, ws: string, userId: string | unde
 /**
  * Remove a member, and stop their login powering this workspace's ad data: the ad connections they
  * connected here wait for someone else to reconnect them (keeping their days; "connector_left"), and
- * their grant goes back to Google or Meta unless something else relies on it.
+ * their grant goes back to Google or Meta unless something else relies on it (within
+ * AD_RELEASE_REVOKE_BUDGET_MS: a platform that doesn't answer leaves the grant, not the request hanging).
+ * The member is removed whatever happens to the ad connections.
  */
 export async function removeMemberReleasingAds(c: Ctx, deps: Deps, a: WorkspaceAccess, memberId: string, opts: { allowSelf?: boolean } = {}) {
   const { userId } = await loadMember(a.workspaceId, memberId);

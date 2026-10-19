@@ -625,6 +625,11 @@ export interface MetaLiveReportOptions {
   pollMs?: number;
   polls?: number;
   syncMs?: number;
+  /**
+   * False: leave each row's delivery status unknown (null) instead of reading it, for a range read only
+   * for its figures (a comparison's): the statuses are list calls on Meta's rate limit. Default true.
+   */
+  statuses?: boolean;
 }
 
 /**
@@ -836,7 +841,9 @@ export async function metaReport(
     .map((r) => (breakdown ? fromMetaBreakdownInsight(breakdown, r) : fromMetaRangeInsight(level as MetaReportLevel, r)))
     .sort((a, b) => b.spend - a.spend || b.impressions - a.impressions);
   const rows = all.slice(0, maxRows);
-  if (!breakdown) {
+  if (!breakdown && opts.statuses === false) {
+    for (const r of rows) r.status = null;
+  } else if (!breakdown) {
     // A status that can't be read (an ad deleted since, no answer, no time left for it) leaves the
     // row's status unknown, not the report broken: the numbers are the report.
     const unknown = new Map<string, string>();
