@@ -669,6 +669,32 @@ export interface MetaReportMetrics {
   leads: number;
 }
 
+/**
+ * What a campaign, ad set or ad is set to at Meta (read from the account's own list of them, with
+ * its delivery status): its objective, budget, schedule and bidding. Money is in the ad account's
+ * currency. A field Meta didn't say, or that doesn't apply to the level, is null.
+ */
+export interface MetaObjectDetails {
+  /** Campaigns: Meta's objective (OUTCOME_SALES, OUTCOME_LEADS...; see metaObjectiveLabel). */
+  objective: string | null;
+  /** Campaigns: AUCTION or RESERVED. */
+  buyingType: string | null;
+  /** Campaigns and ad sets: the daily budget, or the lifetime budget, whichever is set. */
+  dailyBudget: number | null;
+  lifetimeBudget: number | null;
+  /** Campaigns and ad sets: when delivery is scheduled to start and end (ISO 8601; end null when open-ended). */
+  startTime: string | null;
+  endTime: string | null;
+  /** Campaigns and ad sets: LOWEST_COST_WITHOUT_CAP, COST_CAP... (see metaWords). */
+  bidStrategy: string | null;
+  /** Ad sets: what delivery is optimized for (OFFSITE_CONVERSIONS, LINK_CLICKS...) and what is billed (IMPRESSIONS, LINK_CLICKS). */
+  optimizationGoal: string | null;
+  billingEvent: string | null;
+  /** Ads: Meta's shareable preview of the ad, and its creative's id. */
+  previewLink: string | null;
+  creativeId: string | null;
+}
+
 export interface MetaReportRow extends MetaReportMetrics {
   id: string;
   name: string;
@@ -680,6 +706,191 @@ export interface MetaReportRow extends MetaReportMetrics {
   status: string | null;
   /** How Meta credited purchases, e.g. "7d_click_1d_view". */
   attribution: string | null;
+  /** The object's own settings at Meta (campaign, ad set and ad levels); absent or null when not read. */
+  details?: MetaObjectDetails | null;
+}
+
+/** How many campaigns an ad account has in each state at Meta now (its whole list, not only the ones that spent). */
+export interface MetaCampaignCounts {
+  /** effective_status ACTIVE. */
+  active: number;
+  /** PAUSED (by the advertiser). */
+  paused: number;
+  /** Everything else: archived, deleted, in review, with issues. */
+  other: number;
+  total: number;
+  /** False when the list was cut short (more campaigns than were read): the counts are of those read. */
+  complete: boolean;
+}
+
+/** The empty counts, to add campaigns into (metaCountCampaign). */
+export const noMetaCampaignCounts = (): MetaCampaignCounts => ({ active: 0, paused: 0, other: 0, total: 0, complete: true });
+
+/** Count one campaign by its effective_status into `counts`. */
+export function metaCountCampaign(counts: MetaCampaignCounts, effectiveStatus: string | null | undefined): void {
+  counts.total++;
+  if (effectiveStatus === "ACTIVE") counts.active++;
+  else if (effectiveStatus === "PAUSED") counts.paused++;
+  else counts.other++;
+}
+
+/** The fields each level's list is read with: the delivery status, and the object's settings (MetaObjectDetails). */
+export const META_OBJECT_FIELDS: Record<MetaReportLevel, string> = {
+  campaign: "id,effective_status,objective,buying_type,daily_budget,lifetime_budget,start_time,stop_time,bid_strategy",
+  adset: "id,effective_status,optimization_goal,billing_event,bid_strategy,daily_budget,lifetime_budget,start_time,end_time",
+  ad: "id,effective_status,preview_shareable_link,creative{id}",
+};
+
+/** One campaign, ad set or ad as Meta lists it (the fields of META_OBJECT_FIELDS; each level leaves out the others'). */
+export interface MetaListedObject {
+  id?: string;
+  effective_status?: string;
+  objective?: string;
+  buying_type?: string;
+  /** Budgets come in the currency's minor unit (cents for most currencies), as strings. */
+  daily_budget?: string | number;
+  lifetime_budget?: string | number;
+  start_time?: string;
+  /** Campaigns say stop_time, ad sets end_time. */
+  stop_time?: string;
+  end_time?: string;
+  bid_strategy?: string;
+  optimization_goal?: string;
+  billing_event?: string;
+  preview_shareable_link?: string;
+  creative?: { id?: string };
+}
+
+/**
+ * How many of a currency's minor units make one unit: 100 for most, 1 for currencies without a
+ * minor unit (JPY, KRW...), 1000 for a few (KWD, BHD), as ISO 4217 has them (Intl knows the list).
+ * Meta states budgets in minor units.
+ */
+export function minorUnitsPerUnit(currency: string | null | undefined): number {
+  if (!currency) return 100;
+  try {
+    const digits = new Intl.NumberFormat("en", { style: "currency", currency }).resolvedOptions().maximumFractionDigits ?? 2;
+    return 10 ** digits;
+  } catch {
+    return 100;
+  }
+}
+
+/** A budget as Meta states it (minor units) in the account's currency; null when not set or not a number. */
+export function metaBudget(minor: string | number | null | undefined, currency: string | null | undefined): number | null {
+  if (minor === null || minor === undefined || minor === "") return null;
+  const n = Number(minor);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return r2(n / minorUnitsPerUnit(currency));
+}
+
+/** A listed campaign, ad set or ad → its settings (MetaObjectDetails), budgets in `currency`. */
+export function metaObjectDetails(o: MetaListedObject, currency: string | null | undefined): MetaObjectDetails {
+  const text = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null);
+  const creativeId = text(o.creative?.id);
+  const preview = text(o.preview_shareable_link);
+  return {
+    objective: text(o.objective),
+    buyingType: text(o.buying_type),
+    dailyBudget: metaBudget(o.daily_budget, currency),
+    lifetimeBudget: metaBudget(o.lifetime_budget, currency),
+    startTime: text(o.start_time),
+    endTime: text(o.stop_time ?? o.end_time),
+    bidStrategy: text(o.bid_strategy),
+    optimizationGoal: text(o.optimization_goal),
+    billingEvent: text(o.billing_event),
+    // Only Meta's own preview pages: a link elsewhere would be shown as if Meta's.
+    previewLink: preview && /^https:\/\/(www\.|business\.)?facebook\.com\//i.test(preview) ? preview : null,
+    creativeId: creativeId && /^\d{1,30}$/.test(creativeId) ? creativeId : null,
+  };
+}
+
+/** Meta's campaign objectives in everyday words (the ODAX ones, and the older ones still on old campaigns). */
+const META_OBJECTIVE: Record<string, string> = {
+  OUTCOME_SALES: "Sales",
+  OUTCOME_LEADS: "Leads",
+  OUTCOME_TRAFFIC: "Traffic",
+  OUTCOME_ENGAGEMENT: "Engagement",
+  OUTCOME_AWARENESS: "Awareness",
+  OUTCOME_APP_PROMOTION: "App promotion",
+  CONVERSIONS: "Conversions",
+  LINK_CLICKS: "Traffic",
+  LEAD_GENERATION: "Lead generation",
+  MESSAGES: "Messages",
+  POST_ENGAGEMENT: "Post engagement",
+  PAGE_LIKES: "Page likes",
+  EVENT_RESPONSES: "Event responses",
+  VIDEO_VIEWS: "Video views",
+  REACH: "Reach",
+  BRAND_AWARENESS: "Brand awareness",
+  APP_INSTALLS: "App installs",
+  PRODUCT_CATALOG_SALES: "Catalog sales",
+  STORE_VISITS: "Store visits",
+  LOCAL_AWARENESS: "Local awareness",
+};
+
+/** "OUTCOME_SALES" → "Sales"; anything else as Meta wrote it, in words. Null for none. */
+export function metaObjectiveLabel(objective: string | null | undefined): string | null {
+  if (!objective) return null;
+  return META_OBJECTIVE[objective] ?? metaWords(objective);
+}
+
+/** "LOWEST_COST_WITHOUT_CAP" → "Lowest cost without cap": Meta's constants as words. Null for none. */
+export function metaWords(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const words = value.replace(/_/g, " ").trim().toLowerCase();
+  return words ? words[0]!.toUpperCase() + words.slice(1) : null;
+}
+
+/**
+ * Where a row's delivery status puts it, for the report's status filter: ACTIVE is "active"; PAUSED,
+ * CAMPAIGN_PAUSED and ADSET_PAUSED are "paused"; anything else (archived, deleted, in review, with
+ * issues, billing needed) is "other"; unknown statuses fall under "other" too.
+ */
+export type MetaStatusGroup = "active" | "paused" | "other";
+export function metaStatusGroup(status: string | null | undefined): MetaStatusGroup {
+  if (status === "ACTIVE") return "active";
+  if (status === "PAUSED" || status === "CAMPAIGN_PAUSED" || status === "ADSET_PAUSED") return "paused";
+  return "other";
+}
+
+// ---------------------------------------------------------------------------
+// The store's own sales next to its ad spend: Shopify's figures (net sales, orders), never an ad
+// platform's attribution. Two measures, kept apart on purpose: a platform's ROAS is the purchase
+// value it credits to its own ads ÷ what it charged (its claim); the store's sales per unit of ad
+// spend (MER, marketing efficiency ratio) is every sale the store made ÷ everything spent on ads.
+// ---------------------------------------------------------------------------
+
+export interface AdsVsSales {
+  /** The store's net sales and orders for the same dates (Shopify's own figures, in the store's currency). */
+  netSales: number;
+  orders: number;
+  /** Net sales ÷ ad spend: the store's sales per unit of ad spend (MER); null while nothing was spent. */
+  salesPerSpend: number | null;
+  /** Ad spend ÷ net sales; null while there were no sales. */
+  shareOfSales: number | null;
+  /** Ad spend ÷ the store's orders (every order, whatever brought it): a derived cost, not an attribution; null without orders. */
+  costPerOrder: number | null;
+}
+
+/** The store's sales set against `spend` (adsVsSales is null when either side isn't known). */
+export function adsVsSales(spend: number | null, netSales: number | null, orders: number | null): AdsVsSales | null {
+  if (spend === null || netSales === null || orders === null) return null;
+  const sps = ratio(netSales, spend);
+  return {
+    netSales,
+    orders,
+    salesPerSpend: sps === null ? null : Math.round(sps * 100) / 100,
+    shareOfSales: ratio(spend, netSales),
+    costPerOrder: cents(ratio(spend, orders)),
+  };
+}
+
+/** The ad platforms a Shopify traffic source belongs to: Facebook and Instagram are Meta's, Google and YouTube are Google Ads'. */
+export function trafficSourcePlatform(source: string | null | undefined): AdSpendProvider | null {
+  if (source === "facebook" || source === "instagram") return "meta";
+  if (source === "google" || source === "youtube") return "google";
+  return null;
 }
 
 const num = (s: string | undefined) => {

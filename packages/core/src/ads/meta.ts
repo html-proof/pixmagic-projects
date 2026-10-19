@@ -12,12 +12,19 @@ import {
   isDay,
   isMetaBreakdown,
   META_BREAKDOWN_PARAM,
+  META_OBJECT_FIELDS,
   metaAccountId,
   metaAccountStatus,
+  metaCountCampaign,
+  metaObjectDetails,
   metaReportMetrics,
+  noMetaCampaignCounts,
   type AdAccountStatus,
   type AdDayRow,
+  type MetaCampaignCounts,
   type MetaInsightRow,
+  type MetaListedObject,
+  type MetaObjectDetails,
   type MetaRangeInsight,
   type MetaReportBreakdown,
   type MetaReportLevel,
@@ -626,10 +633,13 @@ export interface MetaLiveReportOptions {
   polls?: number;
   syncMs?: number;
   /**
-   * False: leave each row's delivery status unknown (null) instead of reading it, for a range read only
-   * for its figures (a comparison's): the statuses are list calls on Meta's rate limit. Default true.
+   * False: leave each row's delivery status and settings unknown (null) and the campaign counts
+   * unread, for a range read only for its figures (a comparison's): those are list calls on Meta's
+   * rate limit. Default true.
    */
   statuses?: boolean;
+  /** The ad account's currency, for the budgets in each row's settings. */
+  currency?: string | null;
 }
 
 /**
@@ -725,45 +735,85 @@ async function metaRangeRead(
 
 /** The ad account's edge that lists each level's objects. */
 const LEVEL_EDGE: Record<MetaReportLevel, string> = { campaign: "campaigns", adset: "adsets", ad: "ads" };
-/** Pages of campaigns, ad sets or ads read at most for their statuses (5,000). */
+/** Pages of campaigns, ad sets or ads read at most for their statuses and settings (5,000). */
 const STATUS_PAGES = 10;
 
+/** What one level's list says of the objects asked about, and (campaigns) of the whole list. */
+export interface MetaListing {
+  /** By id: the delivery status (effective_status) and the settings of each object asked about that the list had. */
+  objects: Map<string, { status: string; details: MetaObjectDetails }>;
+  /** Campaigns, when counted: every campaign read, by state; null otherwise. */
+  counts: MetaCampaignCounts | null;
+}
+
 /**
- * effective_status per campaign / ad set / ad id (ACTIVE, PAUSED, CAMPAIGN_PAUSED, WITH_ISSUES...), read
- * from the account's own list of them with every status asked for (archived and deleted ones are left
- * out otherwise), until every id is found or STATUS_PAGES pages are read. Graph API v26.0 refuses the
+ * The delivery status (effective_status: ACTIVE, PAUSED, CAMPAIGN_PAUSED, WITH_ISSUES...) and settings
+ * (objective, budget, schedule, bidding; an ad's preview) of campaigns / ad sets / ads by id, read from
+ * the account's own list of them with every status asked for (archived and deleted ones are left out
+ * otherwise), until every id is found or STATUS_PAGES pages are read. With `count` (campaigns), the
+ * whole list is read, to STATUS_PAGES pages, and counted by state. Graph API v26.0 refuses the
  * multiple-id lookup (GET /?ids=) this used before, and every version does from 2026-10-27
  * (https://developers.facebook.com/docs/graph-api/changelog/version26.0); one list page also costs one
- * call where a lookup counted each id. A page after the first that fails ends the look with the
- * statuses found so far. `deadline` as a live report's.
+ * call where a lookup counted each id. A field list Meta refuses (code 100: a field this version
+ * doesn't know) is asked again as the status alone; a page after the first that fails ends the look
+ * with what was found so far. `deadline` as a live report's; `currency` for the budgets.
  */
-export async function metaStatuses(
+export async function metaListed(
   c: MetaConfig,
   accessToken: string,
   accountId: string,
   level: MetaReportLevel,
   ids: string[],
-  opts: { deadline?: number } = {},
-): Promise<Map<string, string>> {
-  const out = new Map<string, string>();
+  opts: { deadline?: number; currency?: string | null; count?: boolean } = {},
+): Promise<MetaListing> {
+  const objects: MetaListing["objects"] = new Map();
+  const counts = level === "campaign" && opts.count ? noMetaCampaignCounts() : null;
   const wanted = new Set(ids.filter((id) => /^\d{1,30}$/.test(id)));
-  if (!wanted.size) return out;
+  if (!wanted.size && !counts) return { objects, counts };
   const act = metaAccountId(accountId);
   if (!/^act_\d{1,30}$/.test(act)) throw new AdsApiError(`Invalid Meta ad account ${accountId}`, 400);
   const limit = opts.deadline === undefined ? undefined : { deadline: opts.deadline };
-  type Page = { data?: Array<{ id?: string; effective_status?: string }>; paging?: { next?: string } };
-  let page = await metaGet<Page>(c, `${act}/${LEVEL_EDGE[level]}`, { fields: "id,effective_status", effective_status: JSON.stringify(EVERY_STATUS[level]), limit: "500" }, accessToken, limit);
+  type Page = { data?: MetaListedObject[]; paging?: { next?: string } };
+  const first = (fields: string) => metaGet<Page>(c, `${act}/${LEVEL_EDGE[level]}`, { fields, effective_status: JSON.stringify(EVERY_STATUS[level]), limit: "500" }, accessToken, limit);
+  let page: Page;
+  try {
+    page = await first(META_OBJECT_FIELDS[level]);
+  } catch (err) {
+    if (!refusedParameter(err)) throw err;
+    logger.warn({ err, act, level }, "meta: the settings fields were refused; reading delivery statuses alone");
+    page = await first("id,effective_status");
+  }
+  const cut = (): MetaListing => {
+    if (counts) counts.complete = false;
+    return { objects, counts };
+  };
   for (let i = 1; ; i++) {
-    for (const o of page.data ?? []) if (o.id && o.effective_status && wanted.has(o.id)) out.set(o.id, o.effective_status);
+    for (const o of page.data ?? []) {
+      if (counts) metaCountCampaign(counts, o.effective_status);
+      if (o.id && o.effective_status && wanted.has(o.id)) objects.set(o.id, { status: o.effective_status, details: metaObjectDetails(o, opts.currency) });
+    }
     const next = page.paging?.next;
-    if (out.size >= wanted.size || !next || i >= STATUS_PAGES) return out;
+    if (!next) return { objects, counts };
+    if (!counts && objects.size >= wanted.size) return { objects, counts };
+    if (i >= STATUS_PAGES) return cut();
     try {
       page = await metaGet<Page>(c, next, {}, accessToken, limit);
     } catch (err) {
-      logger.info({ err, act, level, found: out.size, wanted: wanted.size }, "meta: delivery statuses read in part");
-      return out;
+      logger.info({ err, act, level, found: objects.size, wanted: wanted.size }, "meta: the account's list read in part");
+      return cut();
     }
   }
+}
+
+/** effective_status per campaign / ad set / ad id (metaListed, statuses only). */
+export async function metaStatuses(c: MetaConfig, accessToken: string, accountId: string, level: MetaReportLevel, ids: string[], opts: { deadline?: number } = {}): Promise<Map<string, string>> {
+  const { objects } = await metaListed(c, accessToken, accountId, level, ids, opts);
+  return new Map([...objects].map(([id, o]) => [id, o.status]));
+}
+
+/** How many campaigns the account has in each state at Meta now (metaListed over the whole campaign list). */
+export async function metaCampaignCounts(c: MetaConfig, accessToken: string, accountId: string, opts: { deadline?: number } = {}): Promise<MetaCampaignCounts> {
+  return (await metaListed(c, accessToken, accountId, "campaign", [], { ...opts, count: true })).counts!;
 }
 
 /**
@@ -815,11 +865,14 @@ export interface MetaReport {
   truncated: boolean;
   /** The attribution settings the rows were reported with. */
   attribution: string[];
+  /** How many campaigns the account has in each state at Meta now (its whole list); null when not read. */
+  campaigns: MetaCampaignCounts | null;
 }
 
 /**
- * By campaign, ad set or ad (with each one's delivery status), or the whole account split by placement,
- * device, country, age or gender. Range-based: a comparison asks for its own range with a second call.
+ * By campaign, ad set or ad (with each one's delivery status and settings), or the whole account split
+ * by placement, device, country, age or gender; with the account's campaigns counted by state.
+ * Range-based: a comparison asks for its own range with a second call.
  */
 export async function metaReport(
   c: MetaConfig,
@@ -841,21 +894,34 @@ export async function metaReport(
     .map((r) => (breakdown ? fromMetaBreakdownInsight(breakdown, r) : fromMetaRangeInsight(level as MetaReportLevel, r)))
     .sort((a, b) => b.spend - a.spend || b.impressions - a.impressions);
   const rows = all.slice(0, maxRows);
-  if (!breakdown && opts.statuses === false) {
-    for (const r of rows) r.status = null;
+  let campaigns: MetaCampaignCounts | null = null;
+  if (opts.statuses !== false) {
+    // A status, a setting or a count that can't be read (an ad deleted since, no answer, no time left
+    // for it) leaves that unknown, not the report broken: the numbers are the report. Meta refusing,
+    // throttling, not answering, or no time left: unknown.
+    const timeLeft = () => live.deadline - Date.now() >= META_REPORT_JOB.statusMs;
+    const quiet = <T>(p: Promise<T>): Promise<T | null> =>
+      p.catch((err: unknown) => {
+        if (err instanceof AdsApiError || err instanceof AdsRetryableError) return null;
+        throw err;
+      });
+    if (!breakdown) {
+      const lvl = level as MetaReportLevel;
+      const listing = timeLeft() ? await quiet(metaListed(c, accessToken, accountId, lvl, rows.map((r) => r.id), { deadline: live.deadline, currency: opts.currency, count: lvl === "campaign" })) : null;
+      for (const r of rows) {
+        const o = listing?.objects.get(r.id);
+        r.status = o?.status ?? null;
+        r.details = o?.details ?? null;
+      }
+      campaigns = listing?.counts ?? null;
+    }
+    // The campaign counts come with the campaign list; every other cut reads the list for them alone.
+    if (level !== "campaign" && timeLeft()) campaigns = await quiet(metaCampaignCounts(c, accessToken, accountId, { deadline: live.deadline }));
   } else if (!breakdown) {
-    // A status that can't be read (an ad deleted since, no answer, no time left for it) leaves the
-    // row's status unknown, not the report broken: the numbers are the report.
-    const unknown = new Map<string, string>();
-    const statuses =
-      live.deadline - Date.now() < META_REPORT_JOB.statusMs
-        ? unknown
-        : await metaStatuses(c, accessToken, accountId, level as MetaReportLevel, rows.map((r) => r.id), { deadline: live.deadline }).catch((err: unknown) => {
-            // Meta refusing, throttling, not answering, or no time left: the statuses only are unknown.
-            if (err instanceof AdsApiError || err instanceof AdsRetryableError) return unknown;
-            throw err;
-          });
-    for (const r of rows) r.status = statuses.get(r.id) ?? null;
+    for (const r of rows) {
+      r.status = null;
+      r.details = null;
+    }
   }
   return {
     level,
@@ -866,6 +932,7 @@ export async function metaReport(
     rows,
     truncated: all.length > rows.length || raw.more,
     attribution: [...new Set(all.map((r) => r.attribution).filter((a): a is string => !!a))],
+    campaigns,
   };
 }
 

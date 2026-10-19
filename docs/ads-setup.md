@@ -191,6 +191,11 @@ The app builds every address from `APP_URL` (`https://bizinsights.io`), so they 
 The old `d2mr8m2p1qkh58.cloudfront.net` and `insights.imeseban.workers.dev` callbacks are never sent; remove them
 (Google's branding verification accepts only verified domains).
 
+In the Meta app dashboard, the Valid OAuth Redirect URIs and App domains fields are token lists: type the value, then
+**click the suggestion that appears under the field**, then Save Changes. Pressing Enter shows a chip and a "Changes
+saved" toast, but a reload shows the list unchanged (seen three times on 2026-10-19). Check with the Redirect URI
+Validator at the top of the Facebook Login for Business settings page.
+
 **Local development.** Don't add localhost to "Insights web": Google wants a separate project per deployment tier.
 Create an OAuth client in a separate Cloud project and register `<APP_URL>/api/ads/<provider>/callback` for the
 local server you run: `http://localhost:8787` for the usual local server (`apps/aws/.env.example`), and
@@ -309,6 +314,34 @@ purchase value and ROAS, with each row's delivery status. Asked of Meta for exac
 summed by day), in the ad account's time zone; a comparison reads both ranges at once. Cached 10 minutes or an hour,
 30 reports per store and user per 10 minutes. A report that doesn't finish in time says Meta is still preparing it.
 Expired or revoked access turns the account to Reconnect required at once.
+
+The panel opens with the account's figures **at a glance** (the twelve above, each with its change against the dates
+compared with and the figure before, and **Active campaigns**: how many of the account's campaigns deliver now), then
+the table. Each campaign, ad set or ad row carries what it is **set to at Meta now** (`details`, read from the account's
+own list of them with the delivery status, `metaListed` in `packages/core/src/ads/meta.ts`): a campaign's objective,
+buying type, budget (daily or lifetime, in the account's currency: Meta states budgets in minor units,
+`metaBudget`), schedule and bid strategy; an ad set's optimization goal, billing event, budget and schedule; an ad's
+shareable preview (only `facebook.com` links are kept). The campaign counts (`campaigns`: active, paused, other,
+total, and whether the list was read in full) come from the same list on the campaign level and from one more list
+call on the others. A field list Meta refuses (a version that doesn't know one) is asked again as the status alone;
+a list that can't be read in time leaves the settings and counts unknown, never the report broken. The table filters
+by delivery status (all, active, paused, other) and, on the campaign level, by objective, on the rows already read:
+the account's totals always cover every row.
+
+## Next to the store's own sales (dashboard → Ads)
+
+The Ads panel sets the store's Shopify figures against the ad spend (`sales` on the ads module, `salesVsSpend` in
+`packages/core/src/reports/ads.ts`): net sales, orders, **sales per unit of ad spend** (MER, net sales ÷ spend), the
+spend's share of sales and the **cost per Shopify order** (spend ÷ every order), with the dates compared with and the
+changes when the dates picked have ended. A platform's ROAS (the purchase value it credits to its own ads ÷ what it
+charged) and MER (every sale ÷ everything spent) are kept apart on every card and in every sentence.
+
+Beside them, two ways to credit a sale to ads: what each platform counts for itself, and what Shopify's record of the
+visit behind each order says (`sourced`: `sourcedOrders`, the orders whose last visit came from a Facebook or Instagram
+ad for Meta, a Google or YouTube ad for Google Ads, with their net sales and their sales per unit of that platform's
+spend). Team & Access "View conversion attribution" shows the second; the formulas are in [kpis.md](kpis.md). The
+panel also draws one figure over the days per platform ("Over the days": spend, purchase value, purchases, ROAS, link
+clicks, impressions, click-through rate, cost per click, CPM), days a platform has no figures for left blank.
 
 ## Keeping the API versions current
 

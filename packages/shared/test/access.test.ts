@@ -167,7 +167,7 @@ const report = () => ({
     traffic: { items: [{ id: "t", source: "google", label: "Google", orders: 1, sales: 10, paidOrders: 1, paidSales: 10, share: 1 }], paid: { orders: 1, sales: 10, share: 1 }, campaigns: [{ campaign: "x" }], pending: 0 },
     channels: { items: [] },
     discount_codes: { items: [{ code: "SAVE", orders: 2, discount: 5, sales: 50 }] },
-    ads: { currency: "USD", campaigns: [{ name: "c" }], current: { spend: 1 } },
+    ads: { currency: "USD", campaigns: [{ name: "c" }], current: { spend: 1 }, sales: { netSales: 10, orders: 1 }, sourced: [{ provider: "meta", orders: 1, sales: 10, salesPerSpend: 10 }] },
     ad_connections: { meta: 1, google: 0, adsense: 0, hidden: 0 },
     mystery_new_module: { secret: 1 },
   },
@@ -208,6 +208,9 @@ describe("redactOverview", () => {
     expect(out.modules.traffic.items[0]).not.toHaveProperty("paidSales");
     expect(out.modules.discount_codes.items[0]).toEqual({ code: "SAVE", orders: 2 });
     expect(out.modules.ads).not.toHaveProperty("campaigns");
+    // Orders Shopify credits to a platform's ads are attribution, like the traffic module's paid figures; the store's own sales next to the spend stay.
+    expect(out.modules.ads).not.toHaveProperty("sourced");
+    expect(out.modules.ads).toHaveProperty("sales");
     expect(out.modules).toHaveProperty("ad_connections");
     // Sales figures come with the dates they were imported from (a member without them gets neither, above).
     expect(out.data).toMatchObject({ orders: 10, oldestOrderDay: "2026-01-01", historyFrom: "2025-12-28" });

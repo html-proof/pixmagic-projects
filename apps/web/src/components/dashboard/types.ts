@@ -1,5 +1,5 @@
 /** Response of GET /workspaces/:ws/stores/:storeId/overview (built by packages/core/src/reports/overview.ts, served by apps/api/src/routes/dashboard.ts). */
-import type { AdCoverage, AdProvider, AdSeriesDay, AdsenseReportLevel, AdsenseReportRow, AdsenseSeriesDay, AdsenseTotals, AdSpendProvider, AdTotals } from "@app/shared/ads";
+import type { AdCoverage, AdProvider, AdSeriesDay, AdsenseReportLevel, AdsenseReportRow, AdsenseSeriesDay, AdsenseTotals, AdSpendProvider, AdsVsSales, AdTotals } from "@app/shared/ads";
 import type { CompareMode } from "@app/shared/dates";
 import type { JourneyPageRow, JourneySummary } from "@app/shared/journey";
 import type { MonthLine, SalesDay, SalesMonth, YearBreakdown } from "@app/shared/sales";
@@ -216,6 +216,26 @@ export interface AdsModule extends AdFigures<AdTotals> {
   campaigns?: Array<AdTotals & { provider: AdSpendProvider; accountId: string; campaignId: string; name: string; complete?: boolean }>;
   /** Ad spend divided by the store's net sales (same currency, every day known). */
   shareOfSales: number | null;
+  /**
+   * The store's own sales (Shopify's net sales and orders for the same dates) set against the ad
+   * spend: sales per unit of spend (MER), the spend's share of sales, the cost per order; with the
+   * dates compared with and the changes when both sides are whole ranges. Null when not known,
+   * in another currency, or some days of the spend are missing. Absent from older answers.
+   */
+  sales?: AdsVsSalesFigures | null;
+  /**
+   * Per platform, the orders Shopify's own visit record credits to its ads (a paid visit from
+   * Facebook or Instagram, from Google or YouTube) and the store's sales from them per unit of that
+   * platform's spend: the store's attribution, beside the platform's own purchases. Team & Access
+   * "View conversion attribution"; null when the sources weren't read. Absent from older answers.
+   */
+  sourced?: Array<{ provider: AdSpendProvider; orders: number; sales: number; salesPerSpend: number | null }> | null;
+}
+
+/** adsVsSales (@app/shared/ads) with the dates compared with and the changes (salesVsSpend in the API). */
+export interface AdsVsSalesFigures extends AdsVsSales {
+  previous: { netSales: number; orders: number; salesPerSpend: number | null; costPerOrder: number | null } | null;
+  deltas: { netSales: number | null; orders: number | null; salesPerSpend: number | null; costPerOrder: number | null };
 }
 
 /** What connected AdSense accounts earned from ads shown on the store's site (see adsenseFigures in the API). */

@@ -78,7 +78,7 @@ export async function metaReportForConnection(
   return liveReport(conn, async () => {
     const token = await adAccessToken(conn, fetchImpl);
     try {
-      return await metaReport(cfg, token, conn.accountId, level, since, until, undefined, { deadline, ...(opts.statuses === false ? { statuses: false } : {}) });
+      return await metaReport(cfg, token, conn.accountId, level, since, until, undefined, { deadline, currency: conn.currency, ...(opts.statuses === false ? { statuses: false } : {}) });
     } catch (err) {
       throw await metaClassifyPermissionError(cfg, token, err);
     }

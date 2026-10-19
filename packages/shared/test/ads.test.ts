@@ -30,7 +30,18 @@ import {
   adErrorMessage,
   adsenseReportTotals,
   adStatusCode,
+  adsVsSales,
   META_BREAKDOWN_PARAM,
+  META_OBJECT_FIELDS,
+  metaBudget,
+  metaCountCampaign,
+  metaObjectDetails,
+  metaObjectiveLabel,
+  metaStatusGroup,
+  metaWords,
+  minorUnitsPerUnit,
+  noMetaCampaignCounts,
+  trafficSourcePlatform,
   type AdDayRow,
   type AdsenseDayRow,
 } from "../src/ads";
@@ -430,5 +441,93 @@ describe("the AdSense report's totals", () => {
     expect(adsenseReportTotals({ headers, totals: { cells: [{}, { value: "12.5" }, { value: "5000" }, { value: "8000" }, { value: "25" }] } }, rows)).toEqual({ earnings: 12.5, pageViews: 5000, impressions: 8000, clicks: 25, pageRpm: 2.5, perClick: 0.5, ctr: 25 / 8000 });
     expect(adsenseReportTotals({ headers }, rows)).toMatchObject({ earnings: 1, pageViews: 100, impressions: 200, clicks: 2 });
     expect(adsenseReportTotals({}, [])).toMatchObject({ earnings: 0, pageRpm: null });
+  });
+});
+
+describe("what a campaign, ad set or ad is set to at Meta", () => {
+  it("reads budgets in the currency's units (Meta states them in minor units), the schedule, the bidding and an ad's preview", () => {
+    expect(minorUnitsPerUnit("USD")).toBe(100);
+    expect(minorUnitsPerUnit("JPY")).toBe(1);
+    expect(minorUnitsPerUnit("KWD")).toBe(1000);
+    expect(minorUnitsPerUnit("NOPE")).toBe(100);
+    expect(minorUnitsPerUnit(null)).toBe(100);
+    expect(metaBudget("2500", "USD")).toBe(25);
+    expect(metaBudget(2500, "JPY")).toBe(2500);
+    expect(metaBudget("0", "USD")).toBeNull();
+    expect(metaBudget("", "USD")).toBeNull();
+    expect(metaBudget(undefined, "USD")).toBeNull();
+    const campaign = metaObjectDetails(
+      { id: "1", effective_status: "ACTIVE", objective: "OUTCOME_SALES", buying_type: "AUCTION", daily_budget: "1500", start_time: "2026-10-01T00:00:00+1100", stop_time: "", bid_strategy: "LOWEST_COST_WITHOUT_CAP" },
+      "AUD",
+    );
+    expect(campaign).toEqual({
+      objective: "OUTCOME_SALES",
+      buyingType: "AUCTION",
+      dailyBudget: 15,
+      lifetimeBudget: null,
+      startTime: "2026-10-01T00:00:00+1100",
+      endTime: null,
+      bidStrategy: "LOWEST_COST_WITHOUT_CAP",
+      optimizationGoal: null,
+      billingEvent: null,
+      previewLink: null,
+      creativeId: null,
+    });
+    // Ad sets say end_time where campaigns say stop_time.
+    expect(metaObjectDetails({ optimization_goal: "OFFSITE_CONVERSIONS", billing_event: "IMPRESSIONS", lifetime_budget: 90000, end_time: "2026-12-31T23:59:59+1100" }, "AUD")).toMatchObject({
+      dailyBudget: null,
+      lifetimeBudget: 900,
+      endTime: "2026-12-31T23:59:59+1100",
+      optimizationGoal: "OFFSITE_CONVERSIONS",
+      billingEvent: "IMPRESSIONS",
+    });
+    // Only Meta's own preview pages are kept, and a creative id is digits.
+    expect(metaObjectDetails({ preview_shareable_link: "https://www.facebook.com/ads/preview/?x=1", creative: { id: "120330" } }, "USD")).toMatchObject({ previewLink: "https://www.facebook.com/ads/preview/?x=1", creativeId: "120330" });
+    expect(metaObjectDetails({ preview_shareable_link: "https://evil.example/preview", creative: { id: "x; drop" } }, "USD")).toMatchObject({ previewLink: null, creativeId: null });
+    // The fields each level is read with carry the settings beside the status.
+    expect(META_OBJECT_FIELDS.campaign.split(",")).toEqual(expect.arrayContaining(["id", "effective_status", "objective", "daily_budget", "lifetime_budget", "start_time", "stop_time"]));
+    expect(META_OBJECT_FIELDS.ad).toContain("preview_shareable_link");
+  });
+
+  it("words objectives, bidding and goals, and groups delivery statuses for the filter", () => {
+    expect(metaObjectiveLabel("OUTCOME_SALES")).toBe("Sales");
+    expect(metaObjectiveLabel("LINK_CLICKS")).toBe("Traffic");
+    expect(metaObjectiveLabel("SOMETHING_NEW")).toBe("Something new");
+    expect(metaObjectiveLabel(null)).toBeNull();
+    expect(metaWords("LOWEST_COST_WITHOUT_CAP")).toBe("Lowest cost without cap");
+    expect(metaWords("")).toBeNull();
+    expect(metaStatusGroup("ACTIVE")).toBe("active");
+    expect(metaStatusGroup("CAMPAIGN_PAUSED")).toBe("paused");
+    expect(metaStatusGroup("ADSET_PAUSED")).toBe("paused");
+    expect(metaStatusGroup("WITH_ISSUES")).toBe("other");
+    expect(metaStatusGroup(null)).toBe("other");
+  });
+
+  it("counts campaigns by state: active, paused by the advertiser, and the rest", () => {
+    const counts = noMetaCampaignCounts();
+    for (const s of ["ACTIVE", "ACTIVE", "PAUSED", "ARCHIVED", "DELETED", "WITH_ISSUES", undefined]) metaCountCampaign(counts, s);
+    expect(counts).toEqual({ active: 2, paused: 1, other: 4, total: 7, complete: true });
+  });
+});
+
+describe("the store's own sales next to the ad spend", () => {
+  it("sets net sales and orders against the spend: sales per unit of spend (MER), its share of sales, the cost per order", () => {
+    expect(adsVsSales(250, 1000, 40)).toEqual({ netSales: 1000, orders: 40, salesPerSpend: 4, shareOfSales: 0.25, costPerOrder: 6.25 });
+    // Nothing spent: no sales per spend; no sales or orders: no share or cost.
+    expect(adsVsSales(0, 1000, 40)).toEqual({ netSales: 1000, orders: 40, salesPerSpend: null, shareOfSales: 0, costPerOrder: 0 });
+    expect(adsVsSales(100, 0, 0)).toEqual({ netSales: 0, orders: 0, salesPerSpend: 0, shareOfSales: null, costPerOrder: null });
+    // Either side unknown: nothing.
+    expect(adsVsSales(null, 1000, 40)).toBeNull();
+    expect(adsVsSales(100, null, 40)).toBeNull();
+    expect(adsVsSales(100, 1000, null)).toBeNull();
+  });
+
+  it("knows which platform a Shopify traffic source belongs to", () => {
+    expect(trafficSourcePlatform("facebook")).toBe("meta");
+    expect(trafficSourcePlatform("instagram")).toBe("meta");
+    expect(trafficSourcePlatform("google")).toBe("google");
+    expect(trafficSourcePlatform("youtube")).toBe("google");
+    expect(trafficSourcePlatform("tiktok")).toBeNull();
+    expect(trafficSourcePlatform(null)).toBeNull();
   });
 });

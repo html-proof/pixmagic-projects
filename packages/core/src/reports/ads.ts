@@ -6,6 +6,7 @@ import {
   adsenseSeries,
   adsenseSiteChosen,
   adsenseTotals,
+  adsVsSales,
   adTotals,
   campaignTotals,
   canCompareFrom,
@@ -19,6 +20,7 @@ import {
   localDay,
   sameDays,
   siteTotals,
+  trafficSourcePlatform,
   type AdDayRow,
   type AdsenseDayRow,
   type AdSpendProvider,
@@ -27,7 +29,8 @@ import {
   type DateRange,
 } from "@app/shared";
 import { adToday } from "../adConnections/sync.js";
-import type { Scope } from "./common.js";
+import { num, r2, type Scope } from "./common.js";
+import { salesByOrder } from "./orders.js";
 
 // ---------------------------------------------------------------------------
 // Ad platforms (Meta Ads, Google Ads) and Google AdSense, connected on Settings → Ad accounts: what
@@ -69,9 +72,22 @@ export interface AdsAsk {
   storeTimeZone: string;
   /** The store's net sales for the range (null: not known, or not the member's to see). */
   netSales: number | null;
+  /** The store's orders for the range (Shopify's count; null: not known, or not the member's to see). */
+  orders?: number | null;
+  /** The store's net sales and orders for the dates compared with (null: not imported, or not known). */
+  before?: { netSales: number | null; orders: number | null } | null;
+  /** Orders Shopify's own visit record credits to each platform's ads, for the range (sourcedOrders; null: not read). */
+  sourced?: SourcedOrders[] | null;
   now: Date;
   /** False: the comparison's days weren't read (see `daysToRead`), so nothing is compared rather than set against $0. */
   previousRead?: boolean;
+}
+
+/** Orders (and their net sales, in the store's currency) that Shopify's visit record credits to one platform's ads. */
+export interface SourcedOrders {
+  provider: AdSpendProvider;
+  orders: number;
+  sales: number;
 }
 
 /** Why a change isn't given: only running days picked, a comparison before the figures start, or days missing on either side. */
@@ -232,6 +248,57 @@ function adsBlock(f: ReturnType<typeof figures<AdDayRow, AdTotals>>) {
 }
 
 /**
+ * The store's own sales set against the ad spend (adsVsSales in @app/shared): Shopify's net sales and
+ * orders for the same dates, the sales per unit of spend (MER) and the cost per order, and their
+ * change against the dates compared with. Same currency and every day of the spend known only; the
+ * change only while both sides are whole ranges (no running day trimmed off the ads' comparison),
+ * since the store's figures are for the whole of each.
+ */
+function salesVsSpend(all: ReturnType<typeof adsBlock>, ask: AdsAsk, currency: string) {
+  if (currency !== ask.storeCurrency || !all.current) return null;
+  const now = adsVsSales(all.current.spend, ask.netSales, ask.orders ?? null);
+  if (!now) return null;
+  const c = all.compared;
+  const before = c && c.trimmed === 0 && ask.before ? adsVsSales(c.previous.totals.spend, ask.before.netSales, ask.before.orders) : null;
+  return {
+    ...now,
+    /** The same for the dates compared with; null when they can't be compared. */
+    previous: before ? { netSales: before.netSales, orders: before.orders, salesPerSpend: before.salesPerSpend, costPerOrder: before.costPerOrder } : null,
+    deltas: {
+      netSales: delta(now.netSales, before?.netSales ?? null),
+      orders: delta(now.orders, before?.orders ?? null),
+      salesPerSpend: delta(now.salesPerSpend, before?.salesPerSpend ?? null),
+      costPerOrder: delta(now.costPerOrder, before?.costPerOrder ?? null),
+    },
+  };
+}
+
+/**
+ * Orders Shopify's own visit record credits to each ad platform's ads: the last visit before the order
+ * came from Facebook or Instagram (Meta) or from Google or YouTube (Google Ads) through a link tagged as
+ * an ad (traffic_medium "paid"; packages/shared/src/traffic.ts). The store's view of a sale, in its own
+ * currency: never what the platform claims. The orders placed in the range (gift-card-only ones aside)
+ * and their net sales from the sales in the range, as the traffic module counts them (salesByOrder).
+ */
+export async function sourcedOrders(tx: Tx, { ws, storeId }: Scope, r: DateRange): Promise<SourcedOrders[]> {
+  const rows = await tx.$queryRaw<Array<{ source: string | null; orders: number; sales: string }>>`
+    SELECT o.traffic_source AS source, (COUNT(*) FILTER (WHERE o.placed))::int AS orders, COALESCE(SUM(o.sales), 0)::text AS sales
+    FROM (${salesByOrder(ws, storeId, r)}) o
+    WHERE o.traffic_medium = 'paid' AND o.traffic_source IN ('facebook', 'instagram', 'google', 'youtube')
+    GROUP BY 1`;
+  const by = new Map<AdSpendProvider, SourcedOrders>();
+  for (const x of rows) {
+    const provider = trafficSourcePlatform(x.source);
+    if (!provider) continue;
+    const s = by.get(provider) ?? { provider, orders: 0, sales: 0 };
+    s.orders += num(x.orders);
+    s.sales = r2(s.sales + num(x.sales));
+    by.set(provider, s);
+  }
+  return [...by.values()];
+}
+
+/**
  * What the store's ad accounts (Meta Ads, Google Ads) report for these dates, from their stored
  * days: the counted accounts together, then each platform on its own (`byProvider`, its totals
  * flat on the entry as well, null when that platform's accounts don't cover the range), so one
@@ -266,6 +333,21 @@ export function adsFigures(conns: AdConn[], rows: Array<AdDayRow & { connectionI
     campaigns: campaignTotals(inRange, 10).map((c) => ({ ...c, complete: covering.has(`${c.provider}:${c.accountId}`) })),
     /** Ad spend as a share of the store's net sales: same currency and every day known only. */
     shareOfSales: all.current && currency === ask.storeCurrency && ask.netSales !== null && ask.netSales > 0 ? all.current.spend / ask.netSales : null,
+    /** The store's own sales (Shopify's net sales and orders) set against the ad spend, with the change (salesVsSpend). */
+    sales: salesVsSpend(all, ask, currency),
+    /**
+     * Per platform, the orders Shopify's visit record credits to its ads (sourcedOrders) and the store's
+     * sales from them per unit of that platform's spend: the store's attribution, next to the platform's
+     * own purchases. Team & Access "View conversion attribution"; null when the sources weren't read.
+     */
+    sourced: ask.sourced
+      ? providers.map((p) => {
+          const s = ask.sourced!.find((x) => x.provider === p);
+          const spend = byProvider.find((b) => b.provider === p)?.current?.spend ?? null;
+          const sales = s?.sales ?? 0;
+          return { provider: p, orders: s?.orders ?? 0, sales, salesPerSpend: currency === ask.storeCurrency && spend !== null && spend > 0 ? r2(sales / spend) : null };
+        })
+      : null,
   };
 }
 
@@ -371,6 +453,11 @@ async function storeTimeZone(tx: Tx, { ws, storeId }: Scope) {
 export interface AdsOptions {
   timeZone?: string;
   now?: Date;
+  /** The store's orders for the range, and its net sales and orders for the dates compared with (AdsAsk). */
+  orders?: number | null;
+  before?: { netSales: number | null; orders: number | null } | null;
+  /** Read which orders Shopify credits to each platform's ads (sourcedOrders): when the store's traffic sources are read at all. */
+  attribution?: boolean;
 }
 
 /** The ads module of the dashboard (see `adsFigures`): null when no ad account is shown on the store. */
@@ -383,7 +470,17 @@ export async function adsModule(tx: Tx, scope: Scope, range: DateRange, previous
     orderBy: [{ provider: "asc" }, { createdAt: "asc" }],
   });
   if (!conns.length) return null;
-  const ask: AdsAsk = { range, previous, storeCurrency, netSales, now: opts.now ?? new Date(), storeTimeZone: opts.timeZone ?? (await storeTimeZone(tx, scope)) };
+  const ask: AdsAsk = {
+    range,
+    previous,
+    storeCurrency,
+    netSales,
+    orders: opts.orders ?? null,
+    before: opts.before ?? null,
+    sourced: opts.attribution ? await sourcedOrders(tx, scope, range) : null,
+    now: opts.now ?? new Date(),
+    storeTimeZone: opts.timeZone ?? (await storeTimeZone(tx, scope)),
+  };
   const read = daysToRead(conns, ask);
   const raw = await tx.adCampaignDaily.findMany({ where: { workspaceId: ws, storeId, connectionId: { in: read.ids }, OR: read.OR } });
   const rows = raw.map((r) => ({

@@ -357,3 +357,53 @@ describe("AdSense figures", () => {
     expect(m.deltas.earnings).toBeNull();
   });
 });
+
+describe("the store's own sales next to the ad spend", () => {
+  it("sets Shopify's net sales and orders against the spend, with the change only on whole ranges", () => {
+    const meta = conn({ id: "m" });
+    // Seven whole days, ended yesterday, compared with the seven before: $70 spent each time.
+    const ended = week({ range: { from: d(-7), to: d(-1) }, previous: { from: d(-14), to: d(-8) }, netSales: 1400, orders: 70, before: { netSales: 700, orders: 50 } });
+    const m = adsFigures([meta], daily(meta, d(-14), d(-1)), ended)!;
+    expect(m.sales).toMatchObject({
+      netSales: 1400,
+      orders: 70,
+      salesPerSpend: 20,
+      shareOfSales: 0.05,
+      costPerOrder: 1,
+      previous: { netSales: 700, orders: 50, salesPerSpend: 10, costPerOrder: 1.4 },
+      deltas: { netSales: 1, orders: 0.4, salesPerSpend: 1 },
+    });
+    expect(m.sales!.deltas.costPerOrder).toBeCloseTo(-0.2857, 3);
+    expect(m.shareOfSales).toBe(0.05);
+
+    // Today in the range: the ads' change stops at yesterday, which the store's whole-range figures don't match, so no change.
+    const running = adsFigures([meta], daily(meta, d(-13), TODAY), week({ orders: 60, before: { netSales: 500, orders: 40 } }))!;
+    expect(running.compared?.trimmed).toBe(1);
+    expect(running.sales).toMatchObject({ netSales: 1000, orders: 60, salesPerSpend: 14.29, costPerOrder: 1.17, previous: null, deltas: { netSales: null, salesPerSpend: null, costPerOrder: null } });
+
+    // Not known, another currency, or days missing (no total to set them against): nothing.
+    const rows = daily(meta, d(-13), TODAY);
+    expect(adsFigures([meta], rows, week({ orders: null }))!.sales).toBeNull();
+    expect(adsFigures([meta], rows, week({ netSales: null, orders: 5 }))!.sales).toBeNull();
+    const eur = conn({ id: "e", currency: "EUR" });
+    expect(adsFigures([eur], daily(eur, d(-13), TODAY), week({ orders: 5 }))!.sales).toBeNull();
+    const short = conn({ id: "s", syncedThrough: d(-2) });
+    expect(adsFigures([short], daily(short, d(-13), d(-2)), week({ orders: 5 }))!.sales).toBeNull();
+  });
+
+  it("counts the orders Shopify credits to each platform's ads, and the store's sales from them per unit of that platform's spend", () => {
+    const meta = conn({ id: "m" });
+    const google = conn({ id: "g", provider: "google" });
+    const rows = [...daily(meta, d(-13), TODAY), ...daily(google, d(-13), TODAY, { spend: 5 })];
+    const m = adsFigures([meta, google], rows, week({ sourced: [{ provider: "meta", orders: 3, sales: 210 }] }))!;
+    // Meta spent $70 in the range, Google $35; Shopify credits nothing to Google's ads.
+    expect(m.sourced).toEqual([
+      { provider: "meta", orders: 3, sales: 210, salesPerSpend: 3 },
+      { provider: "google", orders: 0, sales: 0, salesPerSpend: 0 },
+    ]);
+    // Not read: nothing. Another currency: the orders, but no ratio to the spend.
+    expect(adsFigures([meta, google], rows, week())!.sourced).toBeNull();
+    const eur = conn({ id: "e", currency: "EUR" });
+    expect(adsFigures([eur], daily(eur, d(-13), TODAY), week({ sourced: [{ provider: "meta", orders: 2, sales: 50 }] }))!.sourced).toEqual([{ provider: "meta", orders: 2, sales: 50, salesPerSpend: null }]);
+  });
+});
