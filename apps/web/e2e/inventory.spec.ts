@@ -19,9 +19,11 @@ async function ownerWithStore(page: Page) {
     return ((await r.json()) as { workspace: { id: string } }).workspace.id;
   });
   const scopes = ["read_orders", "read_products", "read_inventory", "read_locations"];
+  // Imported already (last_synced_at): a store that never finished an import gets its first import
+  // again when the dashboard opens, stock pass included, and this one has no Shopify to read.
   const { rows } = await db.query(
-    `INSERT INTO stores (id, workspace_id, shop_domain, name, status, timezone, currency, granted_scopes, pixel_ingest_key, created_at, updated_at)
-     VALUES (gen_random_uuid()::text, $1, $2, 'Stockroom', 'active', 'UTC', 'USD', $3, gen_random_uuid()::text, now(), now()) RETURNING id`,
+    `INSERT INTO stores (id, workspace_id, shop_domain, name, status, timezone, currency, granted_scopes, pixel_ingest_key, last_synced_at, created_at, updated_at)
+     VALUES (gen_random_uuid()::text, $1, $2, 'Stockroom', 'active', 'UTC', 'USD', $3, gen_random_uuid()::text, now(), now(), now()) RETURNING id`,
     [ws, `stockroom-${Date.now()}.myshopify.com`, scopes],
   );
   const store = rows[0].id as string;

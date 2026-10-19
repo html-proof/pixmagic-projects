@@ -4,11 +4,13 @@ import { resetDb } from "@app/db/testing";
 import {
   encryptTokenFields,
   evaluateStockAlerts,
+  livePassWhere,
   memoryBlobs,
   memoryCoord,
   memoryMailer,
   memoryQueues,
   notifyStockAlerts,
+  seedInitialSync,
   startInventoryPass,
   STOCK_ALERT_CODE,
   takeSnapshot,
@@ -339,6 +341,45 @@ describe("inventory pass", () => {
     expect((await systemDb.syncJob.findUniqueOrThrow({ where: { id: started!.syncJobId } })).status).toBe("failed");
     expect((await systemDb.inventorySyncRun.findUniqueOrThrow({ where: { id: started!.runId } })).status).toBe("failed");
     expect(await systemDb.alert.count({ where: { storeId: store.id, code: "sync_inventory_failed" } })).toBe(1);
+  });
+
+  it("a job queued without a pass records the pass it starts as failed when its first message fails", async () => {
+    const store = await makeStore();
+    shop.status = 401;
+    const job = await systemDb.syncJob.create({ data: { workspaceId: store.workspaceId, storeId: store.id, kind: "inventory" } });
+    let acked = false;
+    const qm: QueueMessage = { id: "m1", body: { storeId: store.id, kind: "inventory", syncJobId: job.id }, attempts: 1, ack: () => (acked = true), retry: () => {} };
+    await consume("sync", qm, { ...deps, dbHealthy: async () => true });
+    expect(acked).toBe(true);
+    expect((await systemDb.syncJob.findUniqueOrThrow({ where: { id: job.id } })).status).toBe("failed");
+    const runs = await systemDb.inventorySyncRun.findMany({ where: { storeId: store.id } });
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({ trigger: "import", status: "failed" });
+  });
+
+  it("a first import whose store details can't be read leaves no stock check waiting to start", async () => {
+    const store = await makeStore();
+    const jobs = await seedInitialSync(deps, store);
+    const waiting = jobs.filter((j) => j.kind === "inventory" || j.kind === "orders").map((j) => j.id);
+    expect(waiting).toHaveLength(2);
+    const shopMsg = queues.sent.sync.find((m) => (m as SyncJobData).kind === "shop") as SyncJobData;
+    expect(shopMsg.waitingJobIds).toEqual(expect.arrayContaining(waiting));
+    shop.status = 401;
+    await consume("sync", { id: "m1", body: shopMsg, attempts: 1, ack: () => {}, retry: () => {} }, { ...deps, dbHealthy: async () => true });
+    // Never sent now: left queued, Inventory said "Checking every stock level…" until the stale-job sweep, hours later.
+    for (const id of waiting) expect(await systemDb.syncJob.findUniqueOrThrow({ where: { id } })).toMatchObject({ status: "failed", error: expect.stringMatching(/^Not started/) });
+    expect(await systemDb.syncJob.count({ where: { storeId: store.id, ...livePassWhere() } })).toBe(0);
+  });
+
+  it("a pass whose message was lost neither holds up the next one nor counts as under way", async () => {
+    const store = await makeStore();
+    const lost = new Date(Date.now() - 4 * 3600_000);
+    await systemDb.syncJob.create({ data: { workspaceId: store.workspaceId, storeId: store.id, kind: "inventory", status: "running", createdAt: lost, startedAt: lost, lastActivityAt: lost } });
+    expect(await systemDb.syncJob.count({ where: { storeId: store.id, ...livePassWhere() } })).toBe(0);
+    expect(await startInventoryPass(deps, store, "manual")).not.toBeNull();
+    // A long pass still reading pages is under way, however long ago it started.
+    await systemDb.syncJob.updateMany({ where: { storeId: store.id, createdAt: lost }, data: { lastActivityAt: new Date() } });
+    expect(await systemDb.syncJob.count({ where: { storeId: store.id, ...livePassWhere() } })).toBe(2);
   });
 
   it("never mixes two stores' stock, even with the same Shopify ids", async () => {

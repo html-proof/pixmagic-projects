@@ -12,6 +12,7 @@ import {
   inventoryReports,
   inventorySettings,
   inventoryStatus,
+  livePassWhere,
   locationsReport,
   logger,
   maskNumber,
@@ -288,7 +289,7 @@ export function inventoryRoutes(app: App, deps: Deps) {
     await limit(deps.coord, `rl:inventory-refresh:${store.id}`, LIMITS.inventoryRefresh, "Stock was refreshed a moment ago. Wait a few minutes before refreshing again.");
     const started = await startInventoryPass(deps, store, "manual");
     if (!started) {
-      const busy = await withTenant(ws, (tx) => tx.syncJob.findFirst({ where: { workspaceId: ws, storeId, kind: "inventory", status: { in: ["queued", "running"] } } }));
+      const busy = await withTenant(ws, (tx) => tx.syncJob.findFirst({ where: { workspaceId: ws, storeId, ...livePassWhere() } }));
       if (busy) return c.json({ started: false, running: true }, 202);
       throw new HttpError(409, "Stock levels need bizinsights to have access to them in Shopify first.", "scope_missing");
     }

@@ -30,6 +30,7 @@ import {
 import { localMoment } from "../reports/common.js";
 import type { StoreInventorySettings } from "./settings.js";
 import { soldCte, STATUS, variantStockCte, type StockScope } from "./stock.js";
+import { livePassWhere } from "./sync.js";
 
 const num = (v: unknown) => (v === null || v === undefined ? 0 : Number(v));
 const numOrNull = (v: unknown) => (v === null || v === undefined ? null : Number(v));
@@ -62,7 +63,7 @@ export async function inventoryStatus(tx: Tx, store: Pick<Store, "id" | "workspa
   const [last, lastOk, running, counts] = await Promise.all([
     tx.inventorySyncRun.findFirst({ where: { workspaceId: s.ws, storeId: s.storeId }, orderBy: { startedAt: "desc" } }),
     tx.inventorySyncRun.findFirst({ where: { workspaceId: s.ws, storeId: s.storeId, status: "succeeded" }, orderBy: { finishedAt: "desc" } }),
-    tx.syncJob.findFirst({ where: { workspaceId: s.ws, storeId: s.storeId, kind: "inventory", status: { in: ["queued", "running"] } }, orderBy: { createdAt: "desc" } }),
+    tx.syncJob.findFirst({ where: { workspaceId: s.ws, storeId: s.storeId, ...livePassWhere(now) }, orderBy: { createdAt: "desc" } }),
     tx.$queryRaw<Array<{ locations: number; levels: number; updated: Date | null }>>`
       SELECT (SELECT COUNT(*)::int FROM inventory_locations WHERE workspace_id = ${s.ws} AND store_id = ${s.storeId} AND deleted_at IS NULL) AS locations,
              (SELECT COUNT(*)::int FROM inventory_levels WHERE workspace_id = ${s.ws} AND store_id = ${s.storeId}) AS levels,
