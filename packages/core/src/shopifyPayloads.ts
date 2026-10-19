@@ -352,8 +352,6 @@ export const graphqlSaleSchema = obj({
 export const graphqlAgreementSchema = obj({
   id: gid,
   happenedAt: timestamp,
-  /** OrderActionType: ORDER (the order as placed), ORDER_EDIT, REFUND, RETURN, ... */
-  reason: str,
   sales: obj({ pageInfo, nodes: z.array(graphqlSaleSchema).nullish() }).nullish(),
 });
 

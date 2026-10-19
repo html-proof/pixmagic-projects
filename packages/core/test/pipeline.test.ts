@@ -62,7 +62,6 @@ const gqlOrder = (over: Record<string, unknown> = {}) => ({
       {
         id: "gid://shopify/SalesAgreement/1",
         happenedAt: "2026-01-01T00:00:00Z",
-        reason: "ORDER",
         sales: {
           pageInfo: { hasNextPage: false },
           nodes: [
@@ -242,7 +241,6 @@ describe("Shopify's sales records", () => {
         shopifyId: "11",
         happenedAt: new Date("2026-01-01T00:00:00Z"),
         actionType: "order",
-        agreement: "order",
         lineType: "product",
         lineItemShopifyId: "7",
         quantity: 1,
@@ -254,7 +252,6 @@ describe("Shopify's sales records", () => {
         shopifyId: "12",
         happenedAt: new Date("2026-01-01T00:00:00Z"),
         actionType: "order",
-        agreement: "order",
         lineType: "shipping",
         lineItemShopifyId: null,
         quantity: null,
@@ -269,9 +266,8 @@ describe("Shopify's sales records", () => {
   });
 
   // Found 2026-10-19 by checking a dev store of seeded orders against its own ShopifyQL sales report.
-  it("date an order by when Shopify processed it, and tell gift-card-only orders and each sale's agreement", () => {
+  it("date an order by when Shopify processed it, and tell gift-card-only orders", () => {
     const line = (id: number, isGiftCard: boolean) => ({ id: `gid://shopify/LineItem/${id}`, title: "x", quantity: 1, isGiftCard, originalUnitPriceSet: m("10"), totalDiscountSet: m("0") });
-    const edited = { id: "gid://shopify/SalesAgreement/2", happenedAt: "2026-01-05T00:00:00Z", reason: "ORDER_EDIT", sales: { pageInfo: { hasNextPage: false }, nodes: [] } };
     const g = normalizeGraphqlOrder(gqlOrder({ processedAt: "2025-12-30T10:00:00Z" }));
     // Imported on 1 Jan for a sale on 30 Dec: Shopify's reports put it on 30 Dec.
     expect(g.processedAt).toEqual(new Date("2025-12-30T10:00:00Z"));
@@ -282,16 +278,13 @@ describe("Shopify's sales records", () => {
     expect(normalizeGraphqlOrder(gqlOrder({ lineItems: { pageInfo: { hasNextPage: false }, nodes: [line(1, true), line(2, false)] } })).giftCardOnly).toBe(false);
     // A truncated list could hide the item that isn't a gift card: not decided until it is whole.
     expect(normalizeGraphqlOrder(gqlOrder({ lineItems: { pageInfo: { hasNextPage: true }, nodes: [line(1, true)] } })).giftCardOnly).toBe(false);
-    const agreements = gqlOrder().agreements;
-    const withEdit = normalizeGraphqlOrder(gqlOrder({ agreements: { ...agreements, nodes: [...agreements.nodes, { ...edited, sales: agreements.nodes[0]!.sales }] } }));
-    expect(withEdit.sales!.map((x) => x.agreement)).toEqual(["order", "order", "order_edit", "order_edit"]);
 
     const rest = { id: 9, created_at: "2026-03-05T00:00:00Z", processed_at: "2026-03-01T09:00:00Z", line_items: [{ id: 1, title: "Card", quantity: 1, price: "50.00", gift_card: true }] };
     const r = normalizeRestOrder(rest);
     expect(r.processedAt).toEqual(new Date("2026-03-01T09:00:00Z"));
     expect(r.giftCardOnly).toBe(true);
     // The estimate of the order as placed is dated as Shopify's own agreement will be.
-    expect(r.provisionalSales).toMatchObject([{ happenedAt: new Date("2026-03-01T09:00:00Z"), agreement: "order" }]);
+    expect(r.provisionalSales).toMatchObject([{ happenedAt: new Date("2026-03-01T09:00:00Z") }]);
     expect(normalizeRestOrder({ ...rest, processed_at: undefined }).processedAt).toEqual(new Date("2026-03-05T00:00:00Z"));
   });
 

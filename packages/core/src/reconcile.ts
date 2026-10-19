@@ -316,7 +316,7 @@ async function storedOrders(store: Pick<Store, "id">, shopifyIds: string[], w: C
   const sales = orders.length
     ? await systemDb.orderSale.findMany({
         where: { storeId: store.id, orderId: { in: orders.map((o) => o.id) }, localDay: { gte: w.from, lte: w.to } },
-        select: { orderId: true, happenedAt: true, actionType: true, agreement: true, lineType: true, quantity: true, amount: true, discount: true, tax: true },
+        select: { orderId: true, happenedAt: true, actionType: true, lineType: true, quantity: true, amount: true, discount: true, tax: true },
       })
     : [];
   const byOrder = new Map<string, SaleInput[]>();
@@ -344,7 +344,6 @@ const salesOf = (o: NormalizedOrder): SaleInput[] =>
     orderId: o.shopifyId,
     happenedAt: x.happenedAt,
     actionType: x.actionType,
-    agreement: x.agreement,
     lineType: x.lineType,
     quantity: x.quantity,
     amount: x.amount,

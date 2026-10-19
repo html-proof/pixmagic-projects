@@ -140,14 +140,15 @@ against Shopify), and its daily figures were compared day by day with Shopify's 
 (ShopifyQL `FROM sales SHOW … GROUP BY day`, `read_reports`).
 
 Gross sales, discounts, returns, net sales, shipping, taxes and total sales matched to the cent on
-every day. Four rules didn't, and were fixed (migration 20261019130000_shopify_report_rules):
+every day. Five rules didn't, and were fixed (migration 20261019130000_shopify_report_rules):
 orders counted on their creation day instead of their processed day; orders of gift cards only
 counted as orders and their buyers as customers; gift cards left out of items sold; AOV counting
-items an edit added later. After the fix orders and items matched on every day too, and AOV,
-customers and every sales figure for any range. Returning customers follow Shopify's own position
-of each order (`customerOrderIndex`), which its report follows for 107 of 109 orders; the other two
-belonged to one customer whose three backdated orders were created in another order than their
-processed dates, which a real store's import (oldest first) doesn't do.
+items an edit added on a later day (an edit made the day the order was placed does count);
+returning customers decided by Shopify's position of the order (`customerOrderIndex`, which follows
+creation) where its report goes by when the orders happened. After the fix, with 985 orders: every
+figure equal on all 74 days with sales, all 12 tiles equal for 7 ranges, and the returning flag
+equal on 878 of 878 orders. Shopify's report settles asynchronously: compared minutes after the
+orders were made, it still classified some customers by creation order.
 
 To repeat it: create a dev store with `shopify store create dev --demo-data`, give the Shopify CLI
 access with `shopify store auth --scopes write_orders,read_reports,…` (one approval in the admin),

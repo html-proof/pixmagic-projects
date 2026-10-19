@@ -144,7 +144,6 @@ function saleRows(store: StoreCtx, orderId: string, sales: NormalizedSale[]) {
     localDay: localDay(x.happenedAt, store.timezone),
     happenedAt: x.happenedAt,
     actionType: x.actionType,
-    agreement: x.agreement,
     lineType: x.lineType,
     lineItemShopifyId: x.lineItemShopifyId,
     quantity: x.quantity,
@@ -430,7 +429,6 @@ export async function writeOrderBatch(store: StoreCtx, orders: NormalizedOrder[]
         local_day: x.localDay,
         happened_at: ts(x.happenedAt),
         action_type: x.actionType,
-        agreement: x.agreement,
         line_type: x.lineType,
         line_item_shopify_id: x.lineItemShopifyId,
         quantity: x.quantity,
@@ -441,19 +439,18 @@ export async function writeOrderBatch(store: StoreCtx, orders: NormalizedOrder[]
     );
     if (sales.length) {
       await tx.$executeRaw`
-        INSERT INTO order_sales (id, workspace_id, store_id, order_id, shopify_id, local_day, happened_at, action_type, agreement,
-                                 line_type, line_item_shopify_id, quantity, amount, discount, tax)
+        INSERT INTO order_sales (id, workspace_id, store_id, order_id, shopify_id, local_day, happened_at, action_type, line_type,
+                                 line_item_shopify_id, quantity, amount, discount, tax)
         SELECT gen_random_uuid()::text, ${store.workspaceId}, ${store.id}, s.order_id, s.shopify_id, s.local_day,
-               (s.happened_at)::timestamptz AT TIME ZONE 'UTC', s.action_type, s.agreement, s.line_type, s.line_item_shopify_id, s.quantity,
+               (s.happened_at)::timestamptz AT TIME ZONE 'UTC', s.action_type, s.line_type, s.line_item_shopify_id, s.quantity,
                s.amount::numeric, s.discount::numeric, s.tax::numeric
         FROM jsonb_to_recordset(${JSON.stringify(sales)}::jsonb) AS s(
-          order_id text, shopify_id text, local_day text, happened_at text, action_type text, agreement text, line_type text,
+          order_id text, shopify_id text, local_day text, happened_at text, action_type text, line_type text,
           line_item_shopify_id text, quantity int, amount text, discount text, tax text
         )
         ON CONFLICT (store_id, shopify_id) DO UPDATE SET
           order_id = EXCLUDED.order_id, local_day = EXCLUDED.local_day, happened_at = EXCLUDED.happened_at,
-          action_type = EXCLUDED.action_type, agreement = EXCLUDED.agreement,
-          line_type = EXCLUDED.line_type, line_item_shopify_id = EXCLUDED.line_item_shopify_id,
+          action_type = EXCLUDED.action_type, line_type = EXCLUDED.line_type, line_item_shopify_id = EXCLUDED.line_item_shopify_id,
           quantity = EXCLUDED.quantity, amount = EXCLUDED.amount, discount = EXCLUDED.discount, tax = EXCLUDED.tax`;
     }
   });
@@ -717,18 +714,20 @@ export function dayTotals(store: Pick<Store, "id" | "workspaceId">, days: string
       GROUP BY local_day
     ),
     v AS (
-      SELECT local_day AS day, order_id, action_type, agreement, line_type, quantity, discount, amount - tax AS value, tax
-      FROM order_sales
-      WHERE workspace_id = ${store.workspaceId} AND store_id = ${store.id} AND local_day = ANY(${days}::text[])
-        AND line_type <> 'tip'
-        ${until ? Prisma.sql`AND happened_at < ${until}` : Prisma.empty}
+      -- own_day: a sale on the day its order was placed (the order's own, or an edit made that day).
+      SELECT s.local_day AS day, s.order_id, s.action_type, s.line_type, s.quantity, s.discount, s.amount - s.tax AS value, s.tax,
+             s.local_day = o.local_day AS own_day
+      FROM order_sales s JOIN orders o ON o.id = s.order_id
+      WHERE s.workspace_id = ${store.workspaceId} AND s.store_id = ${store.id} AND s.local_day = ANY(${days}::text[])
+        AND s.line_type <> 'tip'
+        ${until ? Prisma.sql`AND s.happened_at < ${until}` : Prisma.empty}
     ),
     s AS (
       -- Gift cards count as items only (Shopify's net items sold): no sales, tax or returns.
       SELECT day,
              SUM(value + discount) FILTER (WHERE line_type IN ('product', 'adjustment') AND action_type = 'order') AS gross,
              SUM(discount) FILTER (WHERE line_type IN ('product', 'adjustment') AND action_type = 'order') AS disc,
-             SUM(value) FILTER (WHERE line_type IN ('product', 'adjustment') AND action_type = 'order' AND COALESCE(agreement, 'order') = 'order') AS placed,
+             SUM(value) FILTER (WHERE line_type IN ('product', 'adjustment') AND action_type = 'order' AND own_day) AS placed,
              -SUM(value) FILTER (WHERE line_type IN ('product', 'adjustment') AND action_type <> 'order') AS returns,
              SUM(value) FILTER (WHERE line_type = 'shipping') AS shipping,
              SUM(tax) FILTER (WHERE line_type <> 'gift_card') AS taxes,
@@ -775,15 +774,18 @@ export async function backfillDays(storeId: string): Promise<string[]> {
  * holds an earlier one, whatever they bought since. Returns the store-local days whose orders
  * changed, for the caller to recompute.
  *
- * - Shopify's own position of the order in the customer's history (`customer_order_index`, from
- *   the order's journey) decides when it is known: 1 is new, more is returning. Its reports follow
- *   it too, even for imported orders whose processed dates run in another order than their creation:
- *   checked order by order against ShopifyQL on a seeded dev store (2026-10-19), the position matched
- *   107 of 109; going by processed dates instead matched 103.
- * - Otherwise (no journey: POS and draft orders, or not read with it yet): returning when an
- *   earlier order of the customer is stored (by when it happened: processed), or when the
- *   customer's lifetime order count, as Shopify last gave it, is more than the orders stored for
- *   them, which proves orders from before the imported history.
+ * - "Earlier" is by when the orders happened (processed; ties by order id), as Shopify's reports
+ *   judge it, and an order of gift cards only doesn't count. Checked order by order against
+ *   ShopifyQL on a seeded dev store of 985 orders (2026-10-19): this matched 877 of 878 customers'
+ *   orders (the one left: two orders of one moment, now ordered by id), while Shopify's own position
+ *   of the order (`customer_order_index`), which follows creation, matched 705: imported orders
+ *   are created in another order than they happened. Shopify's report settles asynchronously, so
+ *   check it some minutes after the orders are made.
+ * - Orders from before the imported history aren't stored: Shopify's position counting more orders
+ *   created up to this one than are stored proves there are some (they were created, and almost
+ *   always happened, before it). Without a position (no journey: POS and draft orders, or not read
+ *   with it yet), the customer's lifetime order count, as Shopify last gave it, above the orders
+ *   stored for them proves the same.
  *
  * Until 2026-10-18 the lifetime count alone decided ("more than one order"), read whenever the
  * order was imported, so a customer's first order turned "returning" once they bought again, and
@@ -797,17 +799,20 @@ export async function settleReturningCustomers(storeId: string, customerKeys?: s
   // Shopify's order ids grow with time, so (at, length, id) orders two orders of one moment too.
   const rows = await systemDb.$queryRaw<Array<{ day: string }>>`
     WITH mine AS (
-      SELECT id, customer_key, COALESCE(shopify_processed_at, shopify_created_at) AS at, length(shopify_id) AS idlen, shopify_id AS sid,
-             customer_order_index, customer_order_count, local_day
+      SELECT id, customer_key, COALESCE(shopify_processed_at, shopify_created_at) AS at, shopify_created_at AS created,
+             length(shopify_id) AS idlen, shopify_id AS sid, gift_card_only, customer_order_index, customer_order_count, local_day
       FROM orders WHERE store_id = ${storeId} AND customer_key IS NOT NULL ${only}
     ),
     c AS (SELECT customer_key, COUNT(*) AS held, MAX(customer_order_count) AS n FROM mine GROUP BY customer_key),
     r AS (
       SELECT m.id, m.local_day,
-             CASE WHEN m.customer_order_index IS NOT NULL THEN m.customer_order_index > 1
-                  ELSE EXISTS (SELECT 1 FROM mine p WHERE p.customer_key = m.customer_key AND (p.at, p.idlen, p.sid) < (m.at, m.idlen, m.sid))
-                       OR COALESCE(c.n, 0) > c.held
-             END AS ret
+             EXISTS (SELECT 1 FROM mine p WHERE p.customer_key = m.customer_key AND NOT p.gift_card_only
+                       AND (p.at, p.idlen, p.sid) < (m.at, m.idlen, m.sid))
+             OR CASE WHEN m.customer_order_index IS NOT NULL
+                     THEN m.customer_order_index > (SELECT COUNT(*) FROM mine p WHERE p.customer_key = m.customer_key
+                                                      AND (p.created, p.idlen, p.sid) <= (m.created, m.idlen, m.sid))
+                     ELSE COALESCE(c.n, 0) > c.held
+                END AS ret
       FROM mine m JOIN c ON c.customer_key = m.customer_key
     )
     UPDATE orders o SET is_returning_customer = r.ret

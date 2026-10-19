@@ -24,11 +24,9 @@ export const sale = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-/** An agreement; `reason` is Shopify's OrderActionType (ORDER, ORDER_EDIT, REFUND, ...), left out unless given. */
-export const agreement = <S>(happenedAt: string, sales: S[], reason?: string) => ({
+export const agreement = <S>(happenedAt: string, sales: S[]) => ({
   id: `gid://shopify/SalesAgreement/${++seq}`,
   happenedAt,
-  ...(reason ? { reason } : {}),
   sales: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: sales },
 });
 

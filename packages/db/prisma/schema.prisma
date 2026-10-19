@@ -564,9 +564,6 @@ model OrderSale {
   happenedAt        DateTime @map("happened_at")
   /// order | return | update | unknown (Shopify's SaleActionType, lowercase).
   actionType        String   @map("action_type")
-  /// The agreement the sale belongs to (Shopify's OrderActionType, lowercase): order (the order as
-  /// placed), order_edit, refund, return, ... Null on records stored before it was read.
-  agreement         String?
   /// product | shipping | gift_card | tip | duty | fee | additional_fee | adjustment | unknown (SaleLineType).
   lineType          String   @map("line_type")
   /// The line item of a product sale (OrderLineItem.shopifyId).
@@ -602,8 +599,9 @@ model DailyStoreMetrics {
   totalSales              Decimal @default(0) @map("total_sales") @db.Decimal(18, 2)
   /// Orders placed that day, gift-card-only orders left out (as Shopify's reports count them).
   orders                  Int     @default(0)
-  /// What those orders sold as placed (items after discounts, before tax; no gift cards, no later
-  /// edits): average order value's numerator. Null on rows from before it was kept.
+  /// What those orders sold on the day they were placed (items after discounts, before tax; no gift
+  /// cards, no edits made on a later day): average order value's numerator. Null on rows from before
+  /// it was kept.
   orderValue              Decimal? @map("order_value") @db.Decimal(18, 2)
   /// Items sold less items returned, gift cards included (Shopify's net items sold).
   units                   Int     @default(0)

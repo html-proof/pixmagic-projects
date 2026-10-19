@@ -795,24 +795,22 @@ describe("aggregation parity", () => {
       const imported = i % 5 === 1;
       const giftCardOnly = i % 8 === 3;
       const agreements = [
-        agreement(
-          placed,
-          [
-            sale({
-              lineType: giftCardOnly ? "GIFT_CARD" : "PRODUCT",
-              quantity: 1 + (i % 3),
-              totalAmount: saleMoney(`${10 + i}.25`),
-              totalDiscountAmountBeforeTaxes: saleMoney(i % 2 && !giftCardOnly ? "1.10" : "0"),
-              totalTaxAmount: saleMoney(i % 3 && !giftCardOnly ? "0.93" : "0"),
-              lineItem: { id: `gid://shopify/LineItem/${5000 + i}` },
-            }),
-            ...(giftCardOnly ? [] : [sale({ lineType: LINES[i % LINES.length], quantity: null, totalAmount: saleMoney("4.40"), totalTaxAmount: saleMoney("0.40") })]),
-          ],
-          i % 2 ? "ORDER" : undefined,
-        ),
+        agreement(placed, [
+          sale({
+            lineType: giftCardOnly ? "GIFT_CARD" : "PRODUCT",
+            quantity: 1 + (i % 3),
+            totalAmount: saleMoney(`${10 + i}.25`),
+            totalDiscountAmountBeforeTaxes: saleMoney(i % 2 && !giftCardOnly ? "1.10" : "0"),
+            totalTaxAmount: saleMoney(i % 3 && !giftCardOnly ? "0.93" : "0"),
+            lineItem: { id: `gid://shopify/LineItem/${5000 + i}` },
+          }),
+          ...(giftCardOnly ? [] : [sale({ lineType: LINES[i % LINES.length], quantity: null, totalAmount: saleMoney("4.40"), totalTaxAmount: saleMoney("0.40") })]),
+        ]),
       ];
-      // An edit adding an item later: gross sales on the edit's day, but not the order's value as placed.
-      if (i % 5 === 2) agreements.push(agreement("2026-01-08T05:00:00Z", [sale({ quantity: 1, totalAmount: saleMoney("7.70"), totalTaxAmount: saleMoney("0.70") })], "ORDER_EDIT"));
+      // Edits adding an item: gross sales on the edit's day either way, the order's value only when
+      // made the day it was placed (as Shopify's AOV counts them).
+      if (i % 5 === 2) agreements.push(agreement("2026-01-08T05:00:00Z", [sale({ quantity: 1, totalAmount: saleMoney("7.70"), totalTaxAmount: saleMoney("0.70") })]));
+      if (i % 5 === 4) agreements.push(agreement(placed, [sale({ quantity: 1, totalAmount: saleMoney("3.30"), totalTaxAmount: saleMoney("0.30") })]));
       // Refunds late on 6 Jan UTC (7 Jan in Tokyo), some with adjustment lines of both signs (a refund
       // that differs from the items' value); edits; cancellations.
       if (i % 4 === 0) agreements.push(agreement("2026-01-06T23:30:00Z", [sale({ actionType: "RETURN", totalAmount: saleMoney("-3.33"), totalTaxAmount: saleMoney("-0.30") })]));
@@ -848,6 +846,7 @@ describe("aggregation parity", () => {
     const dbOrders = await systemDb.order.findMany({ include: { sales: true } });
     const ref = aggregateDaily(
       dbOrders.map((o) => ({
+        id: o.id,
         createdAt: o.shopifyCreatedAt,
         processedAt: o.shopifyProcessedAt,
         giftCardOnly: o.giftCardOnly,
@@ -859,7 +858,6 @@ describe("aggregation parity", () => {
           orderId: o.id,
           happenedAt: x.happenedAt,
           actionType: x.actionType,
-          agreement: x.agreement,
           lineType: x.lineType,
           quantity: x.quantity,
           amount: toNumber(x.amount),

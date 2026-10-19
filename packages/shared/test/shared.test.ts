@@ -434,12 +434,12 @@ describe("what the dates are compared with", () => {
 describe("KPIs", () => {
   const tz = "America/New_York";
   const orders = [
-    { createdAt: new Date("2026-03-01T15:00:00Z"), customerKey: "c1", isReturningCustomer: false },
-    { createdAt: new Date("2026-03-01T16:00:00Z"), customerKey: "c2", isReturningCustomer: true },
+    { id: "o1", createdAt: new Date("2026-03-01T15:00:00Z"), customerKey: "c1", isReturningCustomer: false },
+    { id: "o2", createdAt: new Date("2026-03-01T16:00:00Z"), customerKey: "c2", isReturningCustomer: true },
     // Cancelled later: still an order of the day it was placed, as in Shopify's reports.
-    { createdAt: new Date("2026-03-01T17:00:00Z"), customerKey: null, isReturningCustomer: false },
+    { id: "o3", createdAt: new Date("2026-03-01T17:00:00Z"), customerKey: null, isReturningCustomer: false },
     // 01:00 UTC on Mar 2 is still Mar 1 in New York
-    { createdAt: new Date("2026-03-02T01:00:00Z"), customerKey: null, isReturningCustomer: false },
+    { id: "o4", createdAt: new Date("2026-03-02T01:00:00Z"), customerKey: null, isReturningCustomer: false },
   ];
   const sale = (over: Partial<SaleInput> & Pick<SaleInput, "orderId" | "happenedAt">): SaleInput => ({
     actionType: "order",
@@ -514,21 +514,23 @@ describe("KPIs", () => {
     expect(summarize([...daily.values()]).averageOrderValue).toBeNull();
   });
 
-  it("values the average order as placed: an edit adding an item later is gross sales, not order value", () => {
-    const o = { createdAt: placed, customerKey: null, isReturningCustomer: false };
+  it("values the average order on the day it was placed: an edit that day counts, one on a later day doesn't", () => {
+    const o = { id: "e", createdAt: placed, customerKey: null, isReturningCustomer: false };
     const daily = aggregateDaily(
       [o],
       [
-        sale({ orderId: "e", happenedAt: placed, agreement: "order", amount: 110, discount: 10, tax: 10 }),
-        sale({ orderId: "e", happenedAt: new Date("2026-03-01T20:00:00Z"), agreement: "order_edit", amount: 22, tax: 2 }),
+        sale({ orderId: "e", happenedAt: placed, amount: 110, discount: 10, tax: 10 }),
+        // Edited the same evening (still 1 Mar in New York), then again on 3 Mar.
+        sale({ orderId: "e", happenedAt: new Date("2026-03-01T20:00:00Z"), amount: 22, tax: 2 }),
+        sale({ orderId: "e", happenedAt: new Date("2026-03-03T15:00:00Z"), amount: 33, tax: 3 }),
       ],
       tz,
       localDay,
     );
     const s = summarize([...daily.values()]);
-    expect(s.grossSales).toBe(130);
-    // (110 − 10 tax): what the order sold as placed, after its discount. Shopify: "excluding post-order adjustments".
-    expect(s.averageOrderValue).toBe(100);
+    expect(s.grossSales).toBe(160);
+    // (110 − 10) + (22 − 2): Shopify's AOV leaves out what an edit adds on a later day.
+    expect(s.averageOrderValue).toBe(120);
   });
 
   it("summarizes with documented formulas", () => {

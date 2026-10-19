@@ -31,11 +31,6 @@ export interface NormalizedSale {
   happenedAt: Date;
   /** order | return | update | unknown */
   actionType: string;
-  /**
-   * The agreement it belongs to (Shopify's OrderActionType, lowercase): order (the order as
-   * placed), order_edit, refund, return, ... Null when the source didn't say.
-   */
-  agreement: string | null;
   /** product | shipping | gift_card | tip | duty | fee | additional_fee | adjustment | unknown */
   lineType: string;
   lineItemShopifyId: string | null;
@@ -236,7 +231,6 @@ export function restProvisionalSales(o: RestOrder): NormalizedSale[] {
     return {
       shopifyId: `provisional:line:${li.id}`,
       happenedAt,
-      agreement: "order",
       actionType: "order",
       lineType: li.gift_card ? "gift_card" : "product",
       lineItemShopifyId: String(li.id),
@@ -252,7 +246,6 @@ export function restProvisionalSales(o: RestOrder): NormalizedSale[] {
     return {
       shopifyId: `provisional:shipping:${o.id}:${sl.id ?? i}`,
       happenedAt,
-      agreement: "order",
       actionType: "order",
       lineType: "shipping",
       lineItemShopifyId: null,
@@ -351,7 +344,6 @@ export function normalizeGraphqlSales(agreements: NonNullable<GraphqlOrder["agre
       shopifyId: gidToId(s.id)!,
       happenedAt: date(a.happenedAt),
       actionType: saleEnum(s.actionType),
-      agreement: text(a.reason)?.toLowerCase() ?? null,
       lineType: saleEnum(s.lineType),
       lineItemShopifyId: gidToId(s.lineItem?.id),
       quantity: s.quantity ?? null,

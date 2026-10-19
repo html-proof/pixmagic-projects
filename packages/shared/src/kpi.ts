@@ -16,8 +16,9 @@ export interface DailyMetricsRow {
   // orders placed that day, on the day Shopify processed them (cancelled orders included, test
   // orders never stored, orders of gift cards only left out: Shopify's reports don't count them)
   orders: number;
-  // what those orders sold when placed: their own items after discounts, before tax, without gift
-  // cards or later edits. Average order value is this ÷ orders, as Shopify's AOV is
+  // what those orders sold on the day they were placed: their items after discounts, before tax,
+  // without gift cards, and without what an edit on a later day added. Average order value is this
+  // ÷ orders, as Shopify's AOV is
   orderValue: number;
   units: number; // items sold less items returned that day, gift cards included (Shopify's "net items sold")
   ordersWithCustomer: number;
@@ -67,8 +68,8 @@ export function summarize(rows: DailyMetricsRow[]): KpiSummary {
   const discounts = r2(t.discounts);
   const refunds = r2(t.refunds);
   const netBeforeRefunds = r2(gross - discounts);
-  // Shopify's AOV: the orders' value as placed (later edits, returns, gift cards, tax and shipping
-  // left out) ÷ the orders, which leave out orders of gift cards only.
+  // Shopify's AOV: the orders' value on the day they were placed (edits on a later day, returns, gift
+  // cards, tax and shipping left out) ÷ the orders, which leave out orders of gift cards only.
   const aov = ratio(r2(t.orderValue), t.orders);
   return {
     grossSales: gross,
@@ -95,6 +96,8 @@ export function delta(current: number | null, previous: number | null): number |
 // ---- Orders and sales -> daily rows (the reference for recomputeDays in packages/core) ----
 
 export interface OrderInput {
+  /** The id its sales name (SaleInput.orderId): how a sale is known to be its order's own. */
+  id?: string;
   createdAt: Date;
   /**
    * When Shopify processed the order: the date its reports put it on. The same moment as createdAt
@@ -117,11 +120,6 @@ export interface SaleInput {
   happenedAt: Date;
   /** order | return | update | unknown */
   actionType: string;
-  /**
-   * The agreement it belongs to (Shopify's OrderActionType, lowercase): order (placed), order_edit,
-   * refund, return, ... Null for a record stored before it was read: taken as the order's own.
-   */
-  agreement?: string | null;
   /** product | shipping | gift_card | tip | duty | fee | additional_fee | adjustment | unknown */
   lineType: string;
   quantity: number | null;
@@ -179,7 +177,11 @@ export function aggregateDaily(
     if (!r) out.set(day, (r = emptyRow(day)));
     return r;
   };
+  // The day each order was placed: its own sales that day (an edit made the same day included) are
+  // its value as placed, Shopify's AOV numerator; an edit on a later day isn't.
+  const placedOn = new Map<string, string>();
   for (const o of orders) {
+    if (o.id) placedOn.set(o.id, toDay(orderMoment(o), timeZone));
     if (o.giftCardOnly) continue;
     const r = row(toDay(orderMoment(o), timeZone));
     r.orders += 1;
@@ -204,7 +206,7 @@ export function aggregateDaily(
       if (x.actionType === "order") {
         r.grossSales += value + x.discount;
         r.discounts += x.discount;
-        if ((x.agreement ?? "order") === "order") r.orderValue += value;
+        if (placedOn.get(x.orderId) === day) r.orderValue += value;
       } else r.refunds -= value;
     } else if (x.lineType === "shipping") r.shipping += value;
     if (x.actionType === "return") {

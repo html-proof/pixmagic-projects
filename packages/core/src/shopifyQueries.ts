@@ -97,7 +97,7 @@ export function ordersQuery(includeCustomer: boolean): string {
           agreements(first: ${ORDER_NESTED.agreements}) {
             pageInfo { hasNextPage }
             nodes {
-              id happenedAt reason
+              id happenedAt
               sales(first: ${ORDER_NESTED.sales}) {
                 pageInfo { hasNextPage }
                 nodes { ${SALE_FIELDS} }
@@ -157,7 +157,7 @@ export function bulkOrdersQuery(includeCustomer: boolean, search: string | null)
             ${includeCustomer ? "customer { id numberOfOrders }" : ""}
             fulfillments { createdAt }
             lineItems { edges { node { ${LINE_ITEM_FIELDS} } } }
-            agreements { edges { node { id happenedAt reason sales { edges { node { ${SALE_FIELDS} } } } } } }
+            agreements { edges { node { id happenedAt sales { edges { node { ${SALE_FIELDS} } } } } } }
           }
         }
       }
@@ -264,7 +264,7 @@ export function orderSalesQuery(includeCustomer: boolean): string {
       agreements(first: 1, after: $cursor) {
         pageInfo { hasNextPage endCursor }
         nodes {
-          id happenedAt reason
+          id happenedAt
           sales(first: ${ORDER_DETAIL.sales}, after: $salesCursor) {
             pageInfo { hasNextPage endCursor }
             nodes { ${SALE_FIELDS} }
