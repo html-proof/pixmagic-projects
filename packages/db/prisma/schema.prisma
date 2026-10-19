@@ -1163,7 +1163,10 @@ model ApiKey {
 
 model AuditLog {
   id          String    @id @default(cuid())
-  workspaceId String    @map("workspace_id")
+  /// Null for a system record that outlives the workspace it was about: a GDPR shop/redact that
+  /// erased the store's unclaimed workspace with it (apps/worker/src/handlers/webhooks.ts). RLS shows
+  /// such a row to no workspace, and a deleted workspace's own rows still go with it (Cascade).
+  workspaceId String?   @map("workspace_id")
   actorUserId String?   @map("actor_user_id")
   action      String
   targetType  String?   @map("target_type")
@@ -1171,7 +1174,7 @@ model AuditLog {
   metadata    Json?
   ip          String?
   createdAt   DateTime  @default(now()) @map("created_at")
-  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workspace   Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
   @@index([workspaceId, createdAt])
   @@map("audit_logs")

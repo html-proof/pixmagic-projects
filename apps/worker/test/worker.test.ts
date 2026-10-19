@@ -541,16 +541,22 @@ describe("webhook processing", () => {
     expect(await systemDb.webhookEvent.count({ where: { storeId: store.id } })).toBe(0);
     // The account keeps its workspace and its record of what happened.
     expect(await systemDb.workspace.findUnique({ where: { id: store.workspaceId } })).not.toBeNull();
-    expect(await systemDb.auditLog.count({ where: { workspaceId: store.workspaceId, action: "gdpr.shop_redacted" } })).toBe(1);
+    expect(await systemDb.auditLog.findFirstOrThrow({ where: { workspaceId: store.workspaceId, action: "gdpr.shop_redacted" } })).toMatchObject({ metadata: { shop: "s.myshopify.com" } });
+    expect(await systemDb.auditLog.count({ where: { action: "gdpr.shop_redacted" } })).toBe(1);
   });
 
-  it("GDPR: shop/redact for a store nobody claimed removes its workspace too", async () => {
+  it("GDPR: shop/redact for a store nobody claimed removes its workspace too, and its record of the erase stays", async () => {
     const store = await makeStore();
     await systemDb.workspace.update({ where: { id: store.workspaceId }, data: { awaitingClaim: true } });
     await webhook("app/uninstalled", {});
     await webhook("shop/redact", { shop_domain: "s.myshopify.com" });
     expect(await systemDb.store.count()).toBe(0);
     expect(await systemDb.workspace.findUnique({ where: { id: store.workspaceId } })).toBeNull();
+    // Written for the erased workspace, the record failed its foreign key (App Review's stores,
+    // 2026-10-19): it is kept with no workspace, naming the shop.
+    const record = await systemDb.auditLog.findFirstOrThrow({ where: { action: "gdpr.shop_redacted", metadata: { path: ["shop"], equals: "s.myshopify.com" } } });
+    expect(record).toMatchObject({ workspaceId: null, targetType: "store", targetId: store.id, metadata: { shop: "s.myshopify.com", erasedWorkspaceId: store.workspaceId } });
+    expect(await systemDb.auditLog.count({ where: { action: "gdpr.shop_redacted" } })).toBe(1);
   });
 
   it("GDPR: shop/redact keeps a workspace the app didn't make for an install, even without members", async () => {
@@ -615,8 +621,10 @@ describe("webhook processing", () => {
     await webhook("shop/redact", { shop_domain: "s.myshopify.com" }, minutesAgo(1));
     expect(await systemDb.store.findUnique({ where: { id: store.id } })).toBeNull();
     expect(await systemDb.order.count()).toBe(0);
-    // Nobody ever claimed it (as with App Review's stores), so its workspace goes too.
+    // Nobody ever claimed it (as with App Review's stores), so its workspace goes too, and the
+    // record of the erase is kept without it.
     expect(await systemDb.workspace.findUnique({ where: { id: store.workspaceId } })).toBeNull();
+    expect(await systemDb.auditLog.findFirstOrThrow({ where: { action: "gdpr.shop_redacted" } })).toMatchObject({ workspaceId: null, targetId: store.id, metadata: { shop: "s.myshopify.com" } });
   });
 
   it("GDPR: shop/redact erases a store whose shop is gone (404), or that holds no token, without a status saying so", async () => {
