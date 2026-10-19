@@ -400,7 +400,7 @@ export function accountRoutes(app: App, deps: Deps) {
     const rt = readRefreshToken(c, s);
     if (!rt) throw new HttpError(401, "Please sign in again.", "reauth_required");
     return deps.auth
-      .refresh(rt, s.sub)
+      .refresh(rt, s.un || s.sub)
       .then((t) => deps.auth.verifyIdToken(t.idToken))
       .catch((err: unknown) => {
         throw accountFailure(err, at);
