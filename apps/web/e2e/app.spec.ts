@@ -618,7 +618,9 @@ test("shows Shopify's own sessions and gross profit, and checks the sales figure
   );
   const keep = (dataset: string, window: string, values: Record<string, number>) =>
     db.query(`INSERT INTO shopify_reports (id, workspace_id, store_id, dataset, time_window, "values", fetched_at) VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, now())`, [ws, storeId, dataset, window, JSON.stringify(values)]);
-  await keep("sales", "2026-09-21|2026-09-21|", { grossSales: 1699.08, discounts: -54.53, salesReversals: -45.5, netSales: 1599.05, shipping: 34.54, taxes: 167.91, totalSales: 1801.5, orders: 5 });
+  // Every figure the sales report is asked for, duties and additional fees included: an answer kept
+  // without them is one from before they were asked, read as not reported (and fetched again).
+  await keep("sales", "2026-09-21|2026-09-21|", { grossSales: 1699.08, discounts: -54.53, salesReversals: -45.5, netSales: 1599.05, shipping: 34.54, duties: 0, additionalFees: 0, taxes: 167.91, totalSales: 1801.5, orders: 5 });
   await keep("profit", "2026-09-21|2026-09-21|", { grossProfit: 900, costOfGoodsSold: -650, netSalesWithCost: 1500, netSalesWithoutCost: 99.05 });
   await keep("profit", "2026-09-20|2026-09-20|", { grossProfit: 450, costOfGoodsSold: -300, netSalesWithCost: 700, netSalesWithoutCost: 0 });
   await keep("sessions", "2026-09-21|2026-09-21|", { sessions: 200, visitors: 150, cartSessions: 20, checkoutSessions: 10, completedSessions: 5, pageviews: 600 });
