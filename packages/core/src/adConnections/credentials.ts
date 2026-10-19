@@ -112,10 +112,20 @@ export async function learnAdPerson(conn: AdConnection, accessToken: string, fet
  * Each sign-in's rows are rewritten together and only over the ciphertexts read (compare-and-swap):
  * a refresh in between already sealed them with the active key, and writing the old token back would
  * undo it. Returns the rows rewritten; 0 means none still needs an older key.
+ *
+ * A sign-in sealed with a key that has been removed already (an older version left refresh tokens
+ * behind) can't be read by anyone again: its tokens are deleted and its accounts wait for a reconnect,
+ * which the merchant is told about; the run goes on. Any other token that can't be decrypted fails the
+ * run at the end, since that may be a wrong key rather than a lost one.
  */
 export async function reencryptAdTokens(): Promise<number> {
   const k = keyring();
   const current = `v${k.active}.`;
+  // Sealed with a key version the keyring no longer has. (A malformed one names none: decrypting it fails the run.)
+  const removedKey = (ciphertext: string | null) => {
+    const v = ciphertext ? /^v(\d+)\./.exec(ciphertext)?.[1] : undefined;
+    return v !== undefined && !k.keys.has(Number(v));
+  };
   const rows = await systemDb.adConnection.findMany({
     where: {
       // Rows whose person left keep no token (releaseUserAdGrants).
@@ -132,18 +142,33 @@ export async function reencryptAdTokens(): Promise<number> {
   let failed = 0;
   for (const group of groups.values()) {
     const first = group[0]!;
+    // Only over the ciphertexts read (see above).
+    const asRead = {
+      id: { in: group.map((c) => c.id) },
+      ...(first.refreshTokenEnc ? { refreshTokenEnc: first.refreshTokenEnc } : { refreshTokenEnc: null }),
+      accessTokenEnc: { in: [...new Set(group.map((c) => c.accessTokenEnc))] },
+    };
     // Accounts of one sign-in may hold different access tokens (each refreshed on its own before):
-    // they all get the one that lasts longest.
-    const freshest = group.reduce((a, b) => ((b.accessTokenExpiresAt?.getTime() ?? 0) > (a.accessTokenExpiresAt?.getTime() ?? 0) ? b : a));
+    // they all get the one that lasts longest, of those still readable.
+    const usable = group.filter((c) => !removedKey(c.accessTokenEnc));
+    if (removedKey(first.refreshTokenEnc) || !usable.length) {
+      const { count } = await systemDb.adConnection.updateMany({
+        where: asRead,
+        data: { status: "reconnect", errorCode: "auth_expired", lastError: null, accessTokenEnc: "", refreshTokenEnc: null, accessTokenExpiresAt: null, syncRequestedAt: null },
+      });
+      logger.error(
+        { connectionIds: group.map((c) => c.id), storeId: first.storeId, provider: first.provider },
+        "ad tokens sealed with a removed key: deleted, the accounts wait for a reconnect",
+      );
+      rewritten += count;
+      continue;
+    }
+    const freshest = usable.reduce((a, b) => ((b.accessTokenExpiresAt?.getTime() ?? 0) > (a.accessTokenExpiresAt?.getTime() ?? 0) ? b : a));
     try {
       const access = decrypt(freshest.accessTokenEnc, k, aad(first.storeId, first.provider, "access"));
       const refresh = first.refreshTokenEnc ? decrypt(first.refreshTokenEnc, k, aad(first.storeId, first.provider, "refresh")) : null;
       const { count } = await systemDb.adConnection.updateMany({
-        where: {
-          id: { in: group.map((c) => c.id) },
-          ...(first.refreshTokenEnc ? { refreshTokenEnc: first.refreshTokenEnc } : { refreshTokenEnc: null }),
-          accessTokenEnc: { in: [...new Set(group.map((c) => c.accessTokenEnc))] },
-        },
+        where: asRead,
         data: {
           accessTokenEnc: encrypt(access, k, aad(first.storeId, first.provider, "access")),
           accessTokenExpiresAt: freshest.accessTokenExpiresAt,

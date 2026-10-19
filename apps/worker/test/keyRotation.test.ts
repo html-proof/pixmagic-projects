@@ -137,4 +137,46 @@ describe("rotating the token encryption key", () => {
     for (const id of [b.id, legacy.id]) expect(await adAccessToken(await systemDb.adConnection.findUniqueOrThrow({ where: { id } }), google)).toBe("NEW_ACCESS");
     expect(refreshes).toEqual(["REFRESH", "REFRESH", "L_REFRESH"]);
   });
+
+  it("a refresh token stranded on a key removed earlier sends its accounts to reconnect; one unreadable row doesn't stop the other parts", async () => {
+    const V3 = "3:" + Buffer.alloc(32, 3).toString("base64");
+    const ws = await systemDb.workspace.create({ data: { name: "W" } });
+    const store = await systemDb.store.create({
+      data: { workspaceId: ws.id, shopDomain: "s.myshopify.com", grantedScopes: ["read_orders"], status: "active", timezone: "UTC", pixelIngestKey: "pk-s" },
+    });
+    // Under v1, a Google sign-in with two accounts.
+    const enc = encryptAdTokens(store.id, "google", { accessToken: "G_ACCESS", refreshToken: "G_REFRESH", expiresAt: new Date(Date.now() + 3600_000) });
+    const base = { workspaceId: ws.id, storeId: store.id, provider: "google", currency: "USD", timezone: "UTC", externalUserId: "1", ...enc };
+    const a = await systemDb.adConnection.create({ data: { ...base, accountId: "111" } });
+    const b = await systemDb.adConnection.create({ data: { ...base, accountId: "222" } });
+    // v2 added: an older version's refresh re-sealed only the access token, and its re-encryption went
+    // by token_key_version, so v1 was removed with the refresh token still on it.
+    useKeys(`${NEW},${OLD}`);
+    const access = encryptAdTokens(store.id, "google", { accessToken: "G_ACCESS", refreshToken: null, expiresAt: null }).accessTokenEnc;
+    await systemDb.adConnection.updateMany({ where: { id: { in: [a.id, b.id] } }, data: { accessTokenEnc: access, tokenKeyVersion: 2 } });
+    const meta = await systemDb.adConnection.create({
+      data: { workspaceId: ws.id, storeId: store.id, provider: "meta", accountId: "act_1", currency: "USD", timezone: "UTC", ...encryptAdTokens(store.id, "meta", { accessToken: "EAA_ad", refreshToken: null, expiresAt: null }) },
+    });
+    const contact = await systemDb.whatsappContact.create({ data: { workspaceId: ws.id, storeId: store.id, phoneHash: "h", phoneEnc: waEncrypt(store.id, "phone", "919000000001"), phoneMasked: "001" } });
+    // And a store token that no key opens (damaged), which fails its part.
+    const broken = await systemDb.store.create({
+      data: { workspaceId: ws.id, shopDomain: "x.myshopify.com", grantedScopes: ["read_orders"], status: "active", timezone: "UTC", pixelIngestKey: "pk-x", accessTokenEnc: encryptAdTokens(store.id, "meta", { accessToken: "x", refreshToken: null, expiresAt: null }).accessTokenEnc, tokenKeyVersion: 2 },
+    });
+
+    // Now v3 is added, and v1 is long gone.
+    useKeys(`${V3},${NEW}`);
+    await expect(reencryptAllTokens()).rejects.toThrow(/re-encrypted 4 rows, but store tokens failed/);
+    // The stranded sign-in: nobody can read it again, so its accounts wait for a reconnect (the alert says so).
+    for (const id of [a.id, b.id]) {
+      expect(await systemDb.adConnection.findUniqueOrThrow({ where: { id } })).toMatchObject({ status: "reconnect", errorCode: "auth_expired", accessTokenEnc: "", refreshTokenEnc: null });
+    }
+    // The parts after the failing one ran all the same.
+    useKeys(V3);
+    expect(await adAccessToken(await systemDb.adConnection.findUniqueOrThrow({ where: { id: meta.id } }))).toBe("EAA_ad");
+    expect(waDecrypt(store.id, "phone", (await systemDb.whatsappContact.findUniqueOrThrow({ where: { id: contact.id } })).phoneEnc)).toBe("919000000001");
+    // Once the damaged row is dealt with, nothing is left.
+    await systemDb.store.delete({ where: { id: broken.id } });
+    useKeys(`${V3},${NEW}`);
+    expect(await reencryptAllTokens()).toBe(0);
+  });
 });
