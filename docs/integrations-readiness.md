@@ -4,7 +4,8 @@ The owner's checklist for opening Google Ads, Google AdSense, Meta Ads and "Cont
 merchant. Each line says where it stands, why, and what happens next and who does it.
 
 Last updated 2026-10-20 (evening: the registration facts from ABN Lookup, the Google Ads account state, and the
-list of what only you can do, with the values to paste). Status words:
+list of what only you can do, with the values to paste; later that night: what the public sees on Continue with
+Google's screen, and the own sign-in domain's steps). Status words:
 
 - **Completed**: done and confirmed.
 - **Pending**: can be done now, or is waiting on a step that is under way.
@@ -49,12 +50,13 @@ The detail behind each line: [ads-setup.md](ads-setup.md) (how the integrations 
 
 | Requirement | Status | Why | Next action (who) |
 | --- | --- | --- | --- |
-| Sign in with Google in production | Completed (2026-10-19, release 75) | `/api/auth/config` answers `"google":true`; a real Continue with Google sign-in (sebanceo@gmail.com) reached the dashboard. The first deploy couldn't read the runtime settings, so api/jobs/cron were restarted by hand once (versions 76). | None. Google's screen names the amazoncognito.com domain; `auth.bizinsights.io` (row below) would show bizinsights.io instead. |
+| Sign in with Google in production | Completed (2026-10-19, release 75) | `/api/auth/config` answers `"google":true`; a real Continue with Google sign-in (sebanceo@gmail.com) reached the dashboard. The first deploy couldn't read the runtime settings, so api/jobs/cron were restarted by hand once (versions 76). Re-checked 2026-10-20 from a browser signed in to nothing: the button reaches Google's account chooser, which anyone can use (the consent screen is In production). | None for the sign-in itself. What the public sees on Google's screen is "to continue to insights-605411278365.auth.ap-southeast-2.amazoncognito.com" and that domain's "Privacy Policy and Terms of Service": Google names an app only once its branding is verified, and until then the redirect URI's domain, amazoncognito.com here. The two rows below fix that. |
 | A separate Cloud project for sign-in | Completed | Project `bizinsights-sign-in`: External, In production, scopes openid/email/profile only (no verification or user cap), authorized domains bizinsights.io and amazoncognito.com. | None. |
 | Its OAuth client and redirect URI | Completed | Web client "bizinsights sign-in" `567753266621-ltq5j5kij5s3em8gr0err3tbrh5fqciq.apps.googleusercontent.com`, redirect `https://insights-605411278365.auth.ap-southeast-2.amazoncognito.com/oauth2/idpresponse`. | None. |
 | Its secret in AWS | Completed | `GOOGLE_SIGNIN_CLIENT_SECRET` in `insights/production/app` (2026-10-19). | None. |
 | GitHub variable | Completed | `GOOGLE_SIGNIN_CLIENT_ID` on the `production` environment. | None. |
-| Own sign-in domain `auth.bizinsights.io` | Not applicable (optional) | Lets Google's screen show bizinsights.io instead of amazoncognito.com. Not required. | If wanted: cognito-setup.md section 7. (Owner, with Claude) |
+| Own sign-in domain `auth.bizinsights.io` | Pending (certificate) | Makes the redirect URI's domain bizinsights.io, so Google's screen says "to continue to bizinsights.io" at once, and the sign-in project's branding can then be verified against the same domain (next row). The code is on `main`: `cognitoCustomDomain` in `infra/cdk/lib/config.ts` with an `inUse` switch, so the domain is created first and sign-in moves to it only once the DNS record and Google's client are ready; the amazoncognito.com domain stays beside it, so Continue with Google never breaks in between (cognito-setup.md section 7). The app's certificate covers only `bizinsights.io` and `www.bizinsights.io`, so the domain needs one of its own, and requesting it needs an AWS login Claude doesn't hold (the PC's `aws login` session had expired on 2026-10-20). | (1) You: `aws login` on the PC, then Claude requests the certificate (`auth.bizinsights.io`, ACM us-east-1, DNS validation) and gives you its validation CNAME for Cloudflare; or request it yourself in the ACM console and paste the ARN. (2) Claude: config with `inUse: false`, pull request, merge; the deploy prints `CustomDomainTarget` and `CustomDomainRedirectUri`. (3) Cloudflare: CNAME `auth` → that target, DNS only (grey cloud); Google client "bizinsights sign-in": add redirect URI `https://auth.bizinsights.io/oauth2/idpresponse` and JavaScript origin `https://auth.bizinsights.io`. (Owner, or Claude in your Chrome on your word.) (4) Claude: `inUse: true`, pull request, merge, check. (5) Remove the amazoncognito.com entries from the client and the consent screen. |
+| Branding of the sign-in project (name and logo on Google's screen) | Blocked (own sign-in domain) | Google's screen shows an app's name and logo only after brand verification, and `bizinsights-sign-in` has none: its screen names the redirect URI's domain. Submitted while that domain is amazoncognito.com, Google's automated check that the name on the screen matches the homepage would likely fail (developers with other hosted sign-in domains report exactly that), so the own domain goes first. Claude couldn't read the project's console: the Google account in its browser (imeseban@gmail.com) has no role on the project. | After the own domain is in use: Google Auth Platform → Branding of `bizinsights-sign-in`: app name bizinsights, the 120x120 green-bars logo, homepage https://bizinsights.io/, privacy https://bizinsights.io/privacy, terms https://bizinsights.io/terms, authorized domain bizinsights.io only (the Search Console Domain property is already verified), Save; then Verification Center → verify branding (the Ads project's passed in under five minutes on 2026-10-19). (Owner, or Claude in your Chrome on your word.) |
 
 ## Meta (developer app "Insights", App ID 971575545351940)
 
@@ -91,14 +93,19 @@ Everything Claude can do alone is done: the code is live, both secrets are in AW
 point at bizinsights.io, Require App Secret is on, Google branding is verified and published, and the texts, scripts
 and reviewer instructions are written. The rest needs your logins, your certificate or your payment method.
 
-1. **You, 10 minutes.** Google Ads: create the payments profile on client 745-450-4478's billing page (link in the
+1. **You, 5 minutes, then Claude.** Continue with Google's screen for the public: `aws login` on the PC so Claude
+   can request the certificate for `auth.bizinsights.io` (or request it yourself in ACM, us-east-1, and paste the
+   ARN), and add its validation CNAME at Cloudflare. Claude then ships the domain in two steps and asks you for the
+   DNS record and the two Google client entries in between; afterwards the sign-in project's branding gets
+   verified (its row above), so Google's screen shows "bizinsights" and the logo.
+2. **You, 10 minutes.** Google Ads: create the payments profile on client 745-450-4478's billing page (link in the
    `adwords` row). Then tell Claude whether to pause the draft campaign or let it run a few days at A$1/day.
-2. **You with Claude, about 30 minutes.** Dry run of the Google script on bizinsights.io, record the video, upload
+3. **You with Claude, about 30 minutes.** Dry run of the Google script on bizinsights.io, record the video, upload
    it unlisted, submit `adwords` verification in the Verification Center.
-3. **You, 15 minutes.** Meta: create the portfolio as Zodiix Pty Ltd, fill in Business info, connect the app.
-4. **You, 15 minutes, then Meta's days.** Business Verification with the ASIC certificate. If Meta offers domain
+4. **You, 15 minutes.** Meta: create the portfolio as Zodiix Pty Ltd, fill in Business info, connect the app.
+5. **You, 15 minutes, then Meta's days.** Business Verification with the ASIC certificate. If Meta offers domain
    confirmation, paste the TXT record to Claude.
-5. **After Meta verifies the business.** App Review for `ads_read` and `public_profile` (texts and script in
+6. **After Meta verifies the business.** App Review for `ads_read` and `public_profile` (texts and script in
    ads-review-packs.md), then Access Verification.
-6. **After each approval.** Claude flips `GOOGLE_ADS_OAUTH_VERIFIED` or `META_ADS_ADVANCED_ACCESS` and ships it.
-7. **Any time, optional.** Google Ads API Basic access (draft answers in ads-review-packs.md).
+7. **After each approval.** Claude flips `GOOGLE_ADS_OAUTH_VERIFIED` or `META_ADS_ADVANCED_ACCESS` and ships it.
+8. **Any time, optional.** Google Ads API Basic access (draft answers in ads-review-packs.md).

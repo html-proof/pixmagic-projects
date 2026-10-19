@@ -33,6 +33,15 @@ Parameters:
     Type: String
     Default: ""
     Description: ARN of a public ACM certificate for CustomDomain in us-east-1 (Cognito serves it through CloudFront).
+  CustomDomainInUse:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "false"
+    Description: >-
+      Whether sign-in goes through CustomDomain. "false" only creates it (so its CloudFront target
+      exists for the DNS record) while the app and Google's redirect URI stay on the prefix domain;
+      "true" once the DNS record resolves and Google's client lists the new redirect URI. Ignored
+      without CustomDomain.
   GoogleClientId:
     Type: String
     Default: ""
@@ -83,6 +92,7 @@ Conditions:
   HasCustomEmailSender: !Equals [!Ref CustomEmailSenderState, ENABLED]
   HasExtraCallbacks: !Not [!Equals [!Join ["", !Ref ExtraCallbackUrls], ""]]
   HasCustomDomain: !Not [!Equals [!Ref CustomDomain, ""]]
+  UsesCustomDomain: !And [!Condition HasCustomDomain, !Equals [!Ref CustomDomainInUse, "true"]]
   IsProduction: !Equals [!Ref Environment, production]
 
 Resources:
@@ -267,7 +277,7 @@ Outputs:
     Value: !Ref WebClient
     Description: COGNITO_CLIENT_ID
   Domain:
-    Value: !If [HasCustomDomain, !Sub "https://${CustomDomain}", !Sub "https://${DomainPrefix}.auth.${AWS::Region}.amazoncognito.com"]
+    Value: !If [UsesCustomDomain, !Sub "https://${CustomDomain}", !Sub "https://${DomainPrefix}.auth.${AWS::Region}.amazoncognito.com"]
     Description: COGNITO_DOMAIN
   IdentityProviders:
     Value: !Join [",", [!If [HasGoogle, Google, !Ref AWS::NoValue]]]
@@ -275,12 +285,16 @@ Outputs:
   Issuer:
     Value: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}
   ProviderRedirectUri:
-    Value: !If [HasCustomDomain, !Sub "https://${CustomDomain}/oauth2/idpresponse", !Sub "https://${DomainPrefix}.auth.${AWS::Region}.amazoncognito.com/oauth2/idpresponse"]
-    Description: Add this as an authorized redirect URI on the Google OAuth client.
+    Value: !If [UsesCustomDomain, !Sub "https://${CustomDomain}/oauth2/idpresponse", !Sub "https://${DomainPrefix}.auth.${AWS::Region}.amazoncognito.com/oauth2/idpresponse"]
+    Description: The redirect URI sign-in uses now; the Google OAuth client must list it.
   CustomDomainTarget:
     Condition: HasCustomDomain
     Value: !GetAtt CustomUserPoolDomain.CloudFrontDistribution
     Description: Point a DNS-only CNAME for CustomDomain at this (Cloudflare, grey cloud).
+  CustomDomainRedirectUri:
+    Condition: HasCustomDomain
+    Value: !Sub "https://${CustomDomain}/oauth2/idpresponse"
+    Description: Add this to the Google OAuth client before CustomDomainInUse is set to "true".
   WorkerSecretsArn:
     Value: !Ref WorkerSecrets
   UserPoolArn:
