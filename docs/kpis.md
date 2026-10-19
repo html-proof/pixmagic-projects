@@ -292,6 +292,14 @@ and `adsFigures` in `packages/core/src/reports/ads.ts`. Connection and sync: `do
   `partial` gives the part of the range they all cover and its totals, and the daily series has
   `null` (drawn as "No data", never as 0) on the days not covered. A failing, ended or never-synced
   account, or a day that hasn't started yet in the account's time zone, is never counted as $0.
+- **Up to a date, while only days not over yet are missing.** When `partial` starts on the range's
+  first day and reaches the last day that is over everywhere (`lastWholeAdDay`), and every account
+  that stops short still syncs (status `active`, or closed), the only days missing are still running
+  or not begun: an account's today before its next sync, or (an account in a zone behind the store's)
+  a store day it hasn't reached. `soFar` then holds that part, and the page shows it as the figure,
+  dated "up to 18 Oct", with why the rest isn't in yet. `current` stays `null`, and so do "ads as share
+  of sales" and the series' missing days. A gap after a failure, a sync more than a day behind, or a
+  history that starts inside the range stays "Unavailable".
 - **Per platform.** `byProvider` works the same out for each platform's counted accounts on their own,
   with the totals flat on the entry (all `null` when that platform's accounts don't cover the range),
   so one platform's gap never hides another's figures. Each entry, and the module, says when its
@@ -305,7 +313,9 @@ and `adsFigures` in `packages/core/src/reports/ads.ts`. Connection and sync: `do
   day is still running) has no change: `notCompared` is `running` and the page says "today so far". The
   `previous` figures and dates are those compared, so what is shown as before is what was compared.
   `notCompared` is also `no_history` (the comparison starts before `historyFrom`: "No earlier data")
-  or `incomplete` (a counted account lacks days of either side).
+  or `incomplete` (a counted account lacks days of either side). Each platform is compared from its
+  own history, so the comparison's days are read whenever any counted platform's figures reach back to
+  them (`daysToRead`); when they aren't read, nothing is compared (`no_history`), never set against $0.
 - **Days** are each ad account's own calendar days. When an account's time zone has other days than
   the store's (`otherTimeZone`, `sameDays`: not the name, the local date and time now and half a year
   either side), its card says "Google Ads days follow the ad account's time zone, America/Los_Angeles",
@@ -337,18 +347,26 @@ and day in `adsense_daily`; never in `ad_campaign_daily`.
   chosen: every site) say which sites' earnings belong to the store (`adsenseSiteChosen`). Rows of other
   sites on the same AdSense account count nowhere, "next to your sales" included, and are listed as
   left out (`sitesLeftOut`).
+- **Days AdSense didn't split by site.** When AdSense won't split an account's report by site, its
+  days are stored as one row with site "" (every site together). With no sites chosen they count as
+  the store's. With sites chosen, the store's share of them isn't known: they are neither counted nor
+  listed as left out, and the account's figures start after the last such day read
+  (`unsplitThrough`, `coverageAfter`), so those days are "Unavailable", never $0.
 - **Only days the account has stored**, as for ads: a day AdSense wasn't read for (before its history,
   after its last sync that worked) is missing, never $0, and the totals for a range that needs it are
-  `null` with `partial` giving what is known.
+  `null` with `partial` giving what is known (or `soFar`, as for ads, while only days not over yet are
+  missing).
 - **Changes** compare whole days only, as for ads.
 - **Days** are the AdSense account's own calendar days (`reportingTimeZone=ACCOUNT_TIME_ZONE`).
 - **Currency** is chosen as for ads: the store's when any AdSense account uses it, otherwise the first known.
 - **Earnings are money in, ad spend is money out:** the two modules are separate and never summed.
+  Estimated earnings are what AdSense expects to pay, never presented as money paid out.
 - **Freshness:** as for ads (last 3 days hourly, last 30 days daily, 90 days on first connect).
 - **No earlier data:** as for ads, from where every counted AdSense account's figures start.
 - **By country, by device type:** asked of AdSense for the dates picked (GET `.../ads/adsense/report`,
-  `level=country|platform`), for the whole account (every site), shown to members who may see the other
-  live reports.
+  `level=country|platform`), limited to the connection's chosen sites like every other AdSense figure
+  here (every site when none are chosen; the answer's `sites` says which), shown to members who may see
+  the other live reports.
 
 ## Funnel (web pixel)
 
