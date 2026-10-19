@@ -136,12 +136,13 @@ export interface CognitoAuth {
   startEmailOtp(email: string): Promise<{ session: string }>;
   answerEmailOtp(email: string, session: string, code: string): Promise<SignInResult>;
   /**
-   * New ID and access tokens (and a new refresh token when rotation is on). `sub`: the user's sub,
-   * which keys a refresh's SECRET_HASH in a pool whose users sign in with their email, not with a
-   * user name (AWS, "Computing secret hash values"). For a password user it is also the user name;
-   * for a Google one ("google_<id>") it isn't.
+   * New ID and access tokens (and a new refresh token when rotation is on). `username`: the
+   * Cognito user name (the ID token's cognito:username), which keys a refresh's SECRET_HASH. For a
+   * password user in this pool it equals the sub; for a Google user it is "google_<id>", and a hash
+   * keyed by the sub is refused (NotAuthorizedException), which ended every Google session at its
+   * first re-check (2026-10-19).
    */
-  refresh(refreshToken: string, sub: string): Promise<CognitoTokens>;
+  refresh(refreshToken: string, username: string): Promise<CognitoTokens>;
   verifyIdToken(idToken: string, opts?: { nonce?: string }): Promise<IdentityClaims>;
 
   // ---- Passwords ----
@@ -371,7 +372,7 @@ export function cognitoAuth(cfg: CognitoConfig, fetchImpl: FetchLike = fetch): C
       });
       return signInResult(r);
     },
-    async refresh(refreshToken, sub) {
+    async refresh(refreshToken, username) {
       if (cfg.refreshRotation) {
         const r = await call<AuthResult>("GetTokensFromRefreshToken", {
           ClientId: cfg.clientId,
@@ -384,9 +385,9 @@ export function cognitoAuth(cfg: CognitoConfig, fetchImpl: FetchLike = fetch): C
       const r = await call<AuthResult>("InitiateAuth", {
         ClientId: cfg.clientId,
         AuthFlow: "REFRESH_TOKEN_AUTH",
-        // SECRET_HASH for a refresh is keyed by the user's sub here, not the email signed in with,
-        // nor a Google user's "google_<id>" user name.
-        AuthParameters: { REFRESH_TOKEN: refreshToken, ...withSecret(sub) },
+        // SECRET_HASH for a refresh is keyed by the Cognito user name (a password user's equals
+        // the sub; a Google user's is "google_<id>"), never by the email signed in with.
+        AuthParameters: { REFRESH_TOKEN: refreshToken, ...withSecret(username) },
       });
       if (!r.AuthenticationResult) throw new CognitoUnavailableError("Cognito answered a refresh without tokens");
       return tokensOf(r.AuthenticationResult);

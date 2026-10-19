@@ -96,7 +96,7 @@ async function revalidate(c: Ctx, deps: Deps, s: SessionClaims, accountEmail: st
   if (!rt) return "revoked";
   if (!(await deps.coord.acquire(`session:check:${s.sid}`, 30_000).catch(() => false))) return "skipped";
   try {
-    const tokens = await deps.auth.refresh(rt, s.sub);
+    const tokens = await deps.auth.refresh(rt, s.un || s.sub);
     const id = await deps.auth.verifyIdToken(tokens.idToken);
     if (id.sub !== s.sub) return "revoked";
     const next = { ...s, ck: Date.now() };
@@ -241,7 +241,7 @@ export async function accessTokenFor(c: Ctx, deps: Deps): Promise<string> {
   const rt = readRefreshToken(c, s);
   if (!rt) throw new HttpError(401, "Please sign in again to change this.", "reauth_required");
   try {
-    const tokens = await deps.auth.refresh(rt, s.sub);
+    const tokens = await deps.auth.refresh(rt, s.un || s.sub);
     if (tokens.refreshToken) setSessionCookies(c, s, tokens.refreshToken);
     return tokens.accessToken;
   } catch (err) {
