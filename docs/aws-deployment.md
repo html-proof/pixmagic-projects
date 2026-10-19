@@ -693,7 +693,9 @@ share Resend's limits with the app's email (free tier: 100 a day, 3,000 a month)
   `https://insights-605411278365.auth.ap-southeast-2.amazoncognito.com/oauth2/idpresponse`, its secret
   through `put-secrets.mjs --set GOOGLE_SIGNIN_CLIENT_SECRET`, the GitHub `production` environment
   variable `GOOGLE_SIGNIN_CLIENT_ID`, then a Deploy to AWS run (no hand deploy), which restarts the
-  functions when the runtime settings change. Sign-in codes already go out through Resend
+  functions when the runtime settings change (once the deploy role may read the runtime parameter
+  and publish the functions; until then restart them by hand: "Restarting the functions", above).
+  Sign-in codes already go out through Resend
   ("Sign-in emails" above).
 - **Provider secrets** not on this PC: META_APP_SECRET, GOOGLE_ADS_CLIENT_SECRET, WHATSAPP_APP_SECRET,
   WHATSAPP_WEBHOOK_VERIFY_TOKEN (`put-secrets.mjs --set`, then a Deploy to AWS run).
