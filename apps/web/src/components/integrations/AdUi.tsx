@@ -64,7 +64,8 @@ export function AdAccountRow({
   const tone = AD_STATE[state].tone;
   const name = accountLabel(c);
   const P = AD_PLATFORMS[c.provider];
-  const headline = c.message ?? activeLine(c, state);
+  // A sync asked for is running: that's the news, even for an account whose last update failed.
+  const headline = state === "synchronizing" ? activeLine(c, state) : (c.message ?? activeLine(c, state));
   const otherDays = !!c.timezone && !!storeTimezone && !sameDays(c.timezone, storeTimezone, new Date());
   const accessLeft = c.provider === "meta" ? daysUntil(c.accessExpiresAt) : null;
   const permissions = grantedPermissions(c);
