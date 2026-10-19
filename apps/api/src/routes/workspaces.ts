@@ -14,7 +14,6 @@ import {
   PLANS,
   PRORATE_ON_CANCEL,
   purgeStoreData,
-  removeMember,
   revokeTeamInvitation,
   seedResync,
   SHOP_PARTNER_DEVELOPMENT,
@@ -25,7 +24,7 @@ import {
 import { allows, describeAlert, hasFullAccess, LEGACY_GRANTS, randomToken, ROLES, sha256Hex, type AlertArea, type AlertView } from "@app/shared";
 import { STAFF_ROLES, staffAccess, staffCan } from "@app/shared/staff";
 import { body, clientIp, HttpError, requireFullAccess, requireUser, requireWorkspace, type Deps } from "../context.js";
-import { inviteLimits, teamActor } from "./team.js";
+import { inviteLimits, removeMemberReleasingAds, teamActor } from "./team.js";
 import type { App } from "../app.js";
 import { AUTO_REFRESH } from "../sync.js";
 import { limit, LIMITS } from "../rateLimit.js";
@@ -103,7 +102,7 @@ export function workspaceRoutes(app: App, deps: Deps) {
   app.delete("/workspaces/:ws/members/:memberId", async (c) => {
     const { ws, memberId } = c.req.param();
     const a = await requireWorkspace(c, deps, ws, "members:manage");
-    await removeMember(teamActor(c, a), memberId, { allowSelf: true });
+    await removeMemberReleasingAds(c, deps, a, memberId, { allowSelf: true });
     return c.json({ ok: true });
   });
 
@@ -351,7 +350,8 @@ export function workspaceRoutes(app: App, deps: Deps) {
     }));
     const storeById = new Map(stores.map((s) => [s.id, { id: s.id, name: s.name ?? s.shopDomain }]));
     // Only what this person can open and fix. Settings → Privacy requests needs audit:read
-    // (routes/privacy.ts); the Shopify connection and the help page's alerts go to owners and admins.
+    // (routes/privacy.ts); Settings → Advertising, integrations.manage (routes/ads.ts); the Shopify
+    // connection and the help page's alerts go to owners and admins.
     const mayFix = (area: AlertArea) =>
       area === "staff"
         ? staffCan(staff, "attendance:view")
@@ -361,7 +361,9 @@ export function workspaceRoutes(app: App, deps: Deps) {
             ? allows(a.access, "audit:read")
             : area === "whatsapp"
               ? allows(a.access, "marketing.campaigns")
-              : hasFullAccess(a.access.role);
+              : area === "ads"
+                ? allows(a.access, "integrations.manage")
+                : hasFullAccess(a.access.role);
     const alerts: AlertView[] = [];
     for (const row of [...problems, ...notes].sort((x, y) => y.createdAt.getTime() - x.createdAt.getTime())) {
       // A store that has since been uninstalled or removed has nothing left to fix.

@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { systemDb } from "@app/db";
-import { adAccessToken, googleAdsOperationsToday, pauseGoogleAds, type FetchLike } from "@app/core";
+import { adAccessToken, encryptAdTokens, googleAdsOperationsToday, pauseGoogleAds, type FetchLike } from "@app/core";
 import { adErrorMessage, pkceChallenge } from "@app/shared";
 import { clean, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
 
@@ -612,3 +612,59 @@ describe("the Google Ads report compared, and Google's daily allowance", () => {
   });
 });
 
+describe("someone whose login powers ad accounts leaves", () => {
+  /** A Meta connection powered by `userId`'s login (Meta's person 5550001), in `store`. */
+  async function connectedBy(userId: string, workspaceId: string, store: string, accountId: string) {
+    const tokens = encryptAdTokens(store, "meta", { accessToken: "META_LONG", refreshToken: null, expiresAt: new Date(Date.now() + 30 * 86_400_000) });
+    return systemDb.adConnection.create({
+      data: { workspaceId, storeId: store, provider: "meta", accountId, accountName: accountId, currency: "USD", timezone: "UTC", connectedByUserId: userId, externalUserId: "5550001", ...tokens },
+    });
+  }
+
+  it("removed from the workspace: the accounts they connected here wait for someone else to reconnect them; elsewhere theirs keep working", async () => {
+    const admin = await signIn(ctx, "ads-life-admin", "admin@x.com");
+    const member = await systemDb.membership.create({ data: { workspaceId: ws, userId: admin.user.id, role: "admin" } });
+    const here = await connectedBy(admin.user.id, ws, storeId, "act_1");
+    // Their own business, with their own store: the same Meta login powers it.
+    const theirWs = await createWorkspace(ctx, admin.headers, "Admin's own");
+    const theirStore = (await createStore(theirWs, "admins-own.myshopify.com", ["read_orders"])).id;
+    const theirs = await connectedBy(admin.user.id, theirWs, theirStore, "act_9");
+    const revoked: string[] = [];
+    ctx.setFetch(metaPlatform(revoked));
+
+    expect((await ctx.app.inject({ method: "DELETE", url: `/workspaces/${ws}/team/members/${member.id}`, headers })).statusCode).toBe(200);
+    expect(await systemDb.adConnection.findUniqueOrThrow({ where: { id: here.id } })).toMatchObject({ status: "reconnect", errorCode: "connector_left", accessTokenEnc: "", connectedByUserId: null });
+    expect(await systemDb.adConnection.findUniqueOrThrow({ where: { id: theirs.id } })).toMatchObject({ status: "active", connectedByUserId: admin.user.id });
+    // Their grant still powers their own store: not taken back.
+    expect(revoked).toEqual([]);
+    const list = await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${storeId}/ads`, headers });
+    expect(list.json().connections[0]).toMatchObject({ status: "reconnect", errorCode: "connector_left", message: expect.stringContaining("no longer has access"), connectedBy: null });
+  });
+
+  it("removed through the older members route too", async () => {
+    const admin = await signIn(ctx, "ads-life-admin2", "admin2@x.com");
+    const member = await systemDb.membership.create({ data: { workspaceId: ws, userId: admin.user.id, role: "admin" } });
+    const here = await connectedBy(admin.user.id, ws, storeId, "act_1");
+    const revoked: string[] = [];
+    ctx.setFetch(metaPlatform(revoked));
+    expect((await ctx.app.inject({ method: "DELETE", url: `/workspaces/${ws}/members/${member.id}`, headers })).statusCode).toBe(200);
+    expect(await systemDb.adConnection.findUniqueOrThrow({ where: { id: here.id } })).toMatchObject({ status: "reconnect", errorCode: "connector_left" });
+    // Nothing else relies on that grant: ads_read goes back to Meta.
+    expect(revoked).toEqual(["META_LONG"]);
+  });
+
+  it("their bizinsights account deleted: every account their login powers waits for a reconnect, and the grant goes back", async () => {
+    const admin = await signIn(ctx, "ads-life-leaver", "leaver@x.com");
+    await systemDb.membership.create({ data: { workspaceId: ws, userId: admin.user.id, role: "admin" } });
+    const a = await connectedBy(admin.user.id, ws, storeId, "act_1");
+    const b = await connectedBy(admin.user.id, ws, storeId, "act_2");
+    const revoked: string[] = [];
+    ctx.setFetch(metaPlatform(revoked));
+    const password = ctx.auth.users.get("ads-life-leaver")!.password!;
+    const res = await ctx.app.inject({ method: "POST", url: "/auth/account/delete", headers: admin.headers, payload: { confirm: "DELETE", password } });
+    expect(res.statusCode).toBe(200);
+    expect(await systemDb.user.findUnique({ where: { id: admin.user.id } })).toBeNull();
+    for (const id of [a.id, b.id]) expect(await systemDb.adConnection.findUniqueOrThrow({ where: { id } })).toMatchObject({ status: "reconnect", errorCode: "connector_left", accessTokenEnc: "", externalUserId: null });
+    expect(revoked).toEqual(["META_LONG"]);
+  });
+});

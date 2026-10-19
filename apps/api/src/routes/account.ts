@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { systemDb } from "@app/db";
-import { logger } from "@app/core";
+import { logger, releaseUserAdGrants } from "@app/core";
 import { accountPasswordProblem, EMAIL_CODE_RE } from "@app/shared";
 import { accessTokenFor, body, clientIp, HttpError, requireUser, sessionOf, type Ctx, type Deps } from "../context.js";
 import { CognitoError, type CognitoUser } from "../cognito.js";
@@ -444,6 +444,9 @@ export function accountRoutes(app: App, deps: Deps) {
       });
     }
     try {
+      // Ad connections their login powers stop using it (they wait for someone else to reconnect them,
+      // keeping their days), and the grant goes back to Google or Meta unless something else relies on it.
+      await releaseUserAdGrants(user.id, undefined, deps.fetchImpl);
       await systemDb.user.delete({ where: { id: user.id } });
     } catch (err) {
       logger.error({ err, userId: user.id }, "account deletion: Cognito users deleted but the user row was not; finish by hand (docs/RUNBOOK.md)");
