@@ -61,9 +61,9 @@ test("Connect your business lists every card, Google Account first, and ad platf
 
   // Not set up on this server: "Coming soon", never "Not connected", and no button to press.
   for (const [testid, name, button] of [
-    ["int-google-ads", "Google Ads", "Connect Google Ads"],
+    ["int-google-ads", "Google Ads", "Continue with Google Ads"],
     ["int-meta-ads", "Meta Ads", "Continue with Meta Ads"],
-    ["int-adsense-ads", "Google AdSense", "Connect Google AdSense"],
+    ["int-adsense-ads", "Google AdSense", "Continue with Google AdSense"],
   ] as const) {
     const card = page.getByTestId(testid);
     await expect(card.getByRole("heading", { name })).toBeVisible();

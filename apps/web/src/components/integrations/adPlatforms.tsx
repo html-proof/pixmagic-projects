@@ -29,7 +29,7 @@ export const AD_PLATFORMS: Record<AdProvider, AdPlatformInfo> = {
   google: {
     name: "Google Ads",
     sub: "Search, Shopping, YouTube and Performance Max: spend, clicks, conversions and the campaigns behind them",
-    button: "Connect Google Ads",
+    button: "Continue with Google Ads",
     opening: "Opening Google…",
     Icon: GoogleIcon,
     features: ["Ad spend next to your sales", "Campaigns, ad groups, devices and countries", "Clicks, conversions and ROAS"],
@@ -54,7 +54,7 @@ export const AD_PLATFORMS: Record<AdProvider, AdPlatformInfo> = {
   adsense: {
     name: "Google AdSense",
     sub: "What your site earns from ads shown on it: earnings, page views, impressions and clicks",
-    button: "Connect Google AdSense",
+    button: "Continue with Google AdSense",
     opening: "Opening Google…",
     Icon: GoogleIcon,
     features: ["Ad earnings next to your sales", "Earnings by site, country and device", "Page views, impressions and clicks"],
