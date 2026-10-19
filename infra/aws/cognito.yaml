@@ -21,6 +21,18 @@ Parameters:
     Type: String
     Description: Prefix of the pool's OAuth domain, <prefix>.auth.<region>.amazoncognito.com (unique in the region).
     AllowedPattern: "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+  CustomDomain:
+    Type: String
+    Default: ""
+    Description: >-
+      Optional: the pool's own OAuth domain under the app's, e.g. auth.bizinsights.io, served
+      alongside the prefix domain (which keeps working), so Google's screens name the app's
+      domain rather than amazoncognito.com. Empty = the prefix domain only.
+    AllowedPattern: "^$|^([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,63}$"
+  CustomDomainCertArn:
+    Type: String
+    Default: ""
+    Description: ARN of a public ACM certificate for CustomDomain in us-east-1 (Cognito serves it through CloudFront).
   GoogleClientId:
     Type: String
     Default: ""
@@ -70,6 +82,7 @@ Conditions:
   HasSes: !Not [!Equals [!Ref SesFromEmail, ""]]
   HasCustomEmailSender: !Equals [!Ref CustomEmailSenderState, ENABLED]
   HasExtraCallbacks: !Not [!Equals [!Join ["", !Ref ExtraCallbackUrls], ""]]
+  HasCustomDomain: !Not [!Equals [!Ref CustomDomain, ""]]
   IsProduction: !Equals [!Ref Environment, production]
 
 Resources:
@@ -115,7 +128,11 @@ Resources:
           TemporaryPasswordValidityDays: 7
         SignInPolicy:
           AllowedFirstAuthFactors: !If [HasSes, [PASSWORD, EMAIL_OTP], [PASSWORD]]
-      MfaConfiguration: "OFF"
+      # Two-step verification with an authenticator app (TOTP), for those who turn it on in
+      # Settings: Cognito asks for a code only from users who have set one up and enabled it, so
+      # everyone else signs in as before. Both properties update the pool in place (no replacement).
+      MfaConfiguration: OPTIONAL
+      EnabledMfas: [SOFTWARE_TOKEN_MFA]
       # With the custom email sender below, Cognito sends no email itself: this, and the message
       # template, only apply without it.
       EmailConfiguration: !If
@@ -144,6 +161,19 @@ Resources:
     Properties:
       UserPoolId: !Ref UserPool
       Domain: !Ref DomainPrefix
+      ManagedLoginVersion: 2
+
+  # The optional own domain: a resource of its own beside the prefix domain (a pool may have one of
+  # each), so turning it on or off never replaces the prefix domain. Cognito puts it behind a
+  # CloudFront distribution (output CustomDomainTarget), which the DNS record must point at.
+  CustomUserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Condition: HasCustomDomain
+    Properties:
+      UserPoolId: !Ref UserPool
+      Domain: !Ref CustomDomain
+      CustomDomainConfig:
+        CertificateArn: !Ref CustomDomainCertArn
       ManagedLoginVersion: 2
 
   GoogleProvider:
@@ -237,7 +267,7 @@ Outputs:
     Value: !Ref WebClient
     Description: COGNITO_CLIENT_ID
   Domain:
-    Value: !Sub https://${DomainPrefix}.auth.${AWS::Region}.amazoncognito.com
+    Value: !If [HasCustomDomain, !Sub "https://${CustomDomain}", !Sub "https://${DomainPrefix}.auth.${AWS::Region}.amazoncognito.com"]
     Description: COGNITO_DOMAIN
   IdentityProviders:
     Value: !Join [",", [!If [HasGoogle, Google, !Ref AWS::NoValue]]]
@@ -245,8 +275,12 @@ Outputs:
   Issuer:
     Value: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}
   ProviderRedirectUri:
-    Value: !Sub https://${DomainPrefix}.auth.${AWS::Region}.amazoncognito.com/oauth2/idpresponse
+    Value: !If [HasCustomDomain, !Sub "https://${CustomDomain}/oauth2/idpresponse", !Sub "https://${DomainPrefix}.auth.${AWS::Region}.amazoncognito.com/oauth2/idpresponse"]
     Description: Add this as an authorized redirect URI on the Google OAuth client.
+  CustomDomainTarget:
+    Condition: HasCustomDomain
+    Value: !GetAtt CustomUserPoolDomain.CloudFrontDistribution
+    Description: Point a DNS-only CNAME for CustomDomain at this (Cloudflare, grey cloud).
   WorkerSecretsArn:
     Value: !Ref WorkerSecrets
   UserPoolArn:
