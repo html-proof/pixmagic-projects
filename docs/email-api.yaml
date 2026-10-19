@@ -13,7 +13,7 @@ info:
     Errors are `{ "error": "<code>", "message": "<text>", "detail"?: {...} }`. Validation errors
     use code `validation`. Lists page with `limit` (1-100) and `cursor`.
 servers:
-  - url: https://d2mr8m2p1qkh58.cloudfront.net/api
+  - url: https://bizinsights.io/api
 security:
   - session: []
 components:

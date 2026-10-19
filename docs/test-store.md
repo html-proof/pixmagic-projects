@@ -88,7 +88,7 @@ that covers a missed delivery, so a dropped webhook costs freshness, never corre
 Fire one by hand:
 
 ```bash
-npx shopify app webhook trigger --topic orders/create --address https://d2mr8m2p1qkh58.cloudfront.net/api/webhooks/shopify
+npx shopify app webhook trigger --topic orders/create --address https://bizinsights.io/api/webhooks/shopify
 ```
 
 ## 4. Comparing against third-party apps
