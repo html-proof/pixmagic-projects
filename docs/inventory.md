@@ -136,7 +136,11 @@ or the "Give access in Shopify" card by an owner or admin, one Shopify consent s
 4. For App Store workspaces also set `APP_STORE_MODULES.inventory` (apps/web/src/lib/features.ts) and
    describe Inventory in the listing.
 
-Until then the section works from Shopify's per-variant totals (`variants` source).
+Done 2026-10-19 ~07:16Z on the owner's go: released `pixmagic-9`, `insights-16` (default),
+`bizinsights-public-3` and `bizinsights-appstore-2` (the App Store app, then under review), each
+only adding the three optional scopes; `SHOPIFY_OPTIONAL_SCOPES` followed on `main`.
+
+Until a store grants them the section works from Shopify's per-variant totals (`variants` source).
 
 ## Not covered
 
