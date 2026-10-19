@@ -2,6 +2,7 @@ import { createHmac } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, type Page } from "@playwright/test";
+import type pg from "pg";
 import { E2E_BASE_URL, E2E_COGNITO_DATA, E2E_COGNITO_PORT, E2E_MAILPIT_URL } from "../playwright.config";
 
 export const uniqueEmail = (p: string) => `${p}-${Date.now()}-${Math.floor(Math.random() * 1e6)}@example.com`;
@@ -170,4 +171,89 @@ export function signedWebhook(topic: string, shop: string, payload: unknown, id:
     },
     body,
   });
+}
+
+/** A workspace for the signed-in account (POST /api/workspaces from the page); its id. */
+export async function createWorkspace(page: Page, name: string): Promise<string> {
+  return page.evaluate(async (n) => {
+    const r = await fetch("/api/workspaces", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: n }) });
+    if (!r.ok) throw new Error(`POST /workspaces failed: ${r.status}`);
+    return ((await r.json()) as { workspace: { id: string } }).workspace.id;
+  }, name);
+}
+
+/** A connected Shopify store, written straight into the database (Shopify's side can't run in e2e); its id. */
+export async function insertStore(db: pg.Pool, ws: string, shop: string, scopes: string[] = ["read_orders", "read_products"], timezone = "UTC"): Promise<string> {
+  const { rows } = await db.query(
+    `INSERT INTO stores (id, workspace_id, shop_domain, status, timezone, currency, granted_scopes, pixel_ingest_key, created_at, updated_at)
+     VALUES (gen_random_uuid()::text, $1, $2, 'active', $4, 'USD', $3, gen_random_uuid()::text, now(), now()) RETURNING id`,
+    [ws, shop, scopes, timezone],
+  );
+  return rows[0].id as string;
+}
+
+export interface SeededAdConnection {
+  workspaceId: string;
+  storeId: string;
+  provider: "google" | "meta" | "adsense";
+  accountId: string;
+  accountName?: string | null;
+  currency?: string | null;
+  timezone?: string | null;
+  enabled?: boolean;
+  status?: "active" | "reconnect" | "permission" | "unavailable" | "error";
+  errorCode?: string | null;
+  lastError?: string | null;
+  lastSyncedAt?: Date | null;
+  syncedThrough?: string | null;
+  historyFrom?: string | null;
+  syncRequestedAt?: Date | null;
+  accountStatus?: string | null;
+  grantedScopes?: string[];
+  loginCustomerId?: string | null;
+  sites?: string[];
+  /** When it was connected (created_at); three days ago when left out. */
+  connectedAt?: Date;
+}
+
+/** A moment as the UTC wall-clock time the timestamp columns hold (node-pg would write the machine's local time). */
+const utc = (d: Date | null | undefined) => (d ? d.toISOString().replace("Z", "") : null);
+
+/**
+ * A connected ad account, written straight into ad_connections (Google and Meta can't run in e2e),
+ * in whatever state a test needs; its id. Its token is a placeholder nothing can read with, so a
+ * sync it starts fails and a disconnect can't hand the access back to the platform.
+ */
+export async function insertAdConnection(db: pg.Pool, c: SeededAdConnection): Promise<string> {
+  const { rows } = await db.query(
+    `INSERT INTO ad_connections (id, workspace_id, store_id, provider, account_id, account_name, currency, timezone, enabled, status, error_code, last_error,
+       last_synced_at, synced_through, history_from, sync_requested_at, account_status, granted_scopes, login_customer_id, sites,
+       access_token_enc, token_key_version, created_at, updated_at)
+     VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, 'e2e-placeholder', 1,
+       COALESCE($20::timestamp, (now() at time zone 'utc') - interval '3 days'), now() at time zone 'utc')
+     RETURNING id`,
+    [
+      c.workspaceId,
+      c.storeId,
+      c.provider,
+      c.accountId,
+      c.accountName ?? null,
+      c.currency ?? "USD",
+      c.timezone ?? "UTC",
+      c.enabled ?? true,
+      c.status ?? "active",
+      c.errorCode ?? null,
+      c.lastError ?? null,
+      utc(c.lastSyncedAt),
+      c.syncedThrough ?? null,
+      c.historyFrom ?? null,
+      utc(c.syncRequestedAt),
+      c.accountStatus ?? null,
+      c.grantedScopes ?? [],
+      c.loginCustomerId ?? null,
+      c.sites ?? [],
+      utc(c.connectedAt),
+    ],
+  );
+  return rows[0].id as string;
 }
