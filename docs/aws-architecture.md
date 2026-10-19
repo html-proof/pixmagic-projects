@@ -25,7 +25,7 @@ Principles:
 | --- | --- | --- |
 | The web UI (Next.js static export) | **S3** (private) + **CloudFront** (Origin Access Control) | Static files at the edge, cached; no compute. |
 | `/api/*`, `/webhooks/*`, `/pixel/*`, `/shopify/*`, health (the Hono API) | **Lambda** (Node 22, arm64) behind **CloudFront** (function URL origin) | Per-request code; scales to zero. Only requests carrying CloudFront's secret origin header are served (section 2). |
-| The app's address | **Route 53** (custom domain) + **ACM** certificate; today the CloudFront address | A custom domain is what Google's OAuth app verification asks for. |
+| The app's address | A custom domain + **ACM** certificate: https://bizinsights.io since 2026-10-16 (DNS at Cloudflare, not Route 53) | A custom domain is what Google's OAuth app verification asks for. |
 | Coarse API flood protection (300 requests/min/IP) | **AWS WAF** rate-based rule on CloudFront, plus AWS managed rule groups | Blocks floods before they cost a Lambda invocation. |
 | Per-key rate limits, one-time OAuth state, locks, signed-out sessions, export grants (the coordinator) | **DynamoDB** table (on-demand, TTL) | `apps/aws/src/dynamoCoord.ts`; the local server keeps it in memory. |
 | Webhook bodies too big for a queue message (over 100 KB) | **S3** bucket `payloads` (7-day lifecycle) | Only the rare large body; the message carries its key. |
@@ -182,20 +182,22 @@ EventBridge Scheduler invokes the `scheduled` function at `cron(0/15 * * * ? *)`
 - One CloudWatch dashboard per environment; X-Ray tracing at 10% sampling.
 - A CloudWatch Synthetics canary loading the sign-in page and `/api/readyz` every 5 minutes.
 
-## 7. Integrations to re-point at cutover
+## 7. Integrations on the app's address
 
-The app's address is `https://d2mr8m2p1qkh58.cloudfront.net` until there is a custom domain
-(`app.<domain>` below); the Shopify tomls already use it.
+The app's address is `https://bizinsights.io` since 2026-10-16 (pages asked for on
+`d2mr8m2p1qkh58.cloudfront.net` or on www are redirected there). Every OAuth callback is built from
+`APP_URL`, so each provider must have exactly these registered; how each one stands is in
+[aws-deployment.md](aws-deployment.md), "Owner-only steps".
 
-| Integration | What changes | Where |
+| Integration | On bizinsights.io | Where |
 | --- | --- | --- |
-| Shopify (main app and each client app, e.g. pixmagic) | `application_url`, `redirect_urls`, webhook `uri` → `https://app.<domain>/api/...` | `shopify-app/shopify.app.toml`, `shopify.app.pixmagic.toml`, then `shopify app deploy` |
-| Shopify web pixel extension | API URL it posts events to | `shopify-app/extensions/insights-pixel`, redeploy |
-| Meta (Ads login, WhatsApp) | OAuth redirect URIs; WhatsApp webhook callback URL and verify token | Meta app dashboards |
-| Google (Ads, AdSense) | OAuth redirect URIs; domain verification for the consent screen (fixes "unverified app") | Google Cloud console, Search Console (Route 53 TXT record) |
-| Google sign-in (Cognito) | Redirect URI `https://auth.<domain>/oauth2/idpresponse` | Google Cloud OAuth client |
-| Microsoft (email integrations) | Redirect URI | Microsoft Entra app registration |
-| Cognito app client | Callback `https://app.<domain>/auth/callback`, logout `…/login?signedOut=1` | `infra/aws/cognito.yaml` (`AppUrl`) |
+| Shopify (the main app and each other app: pixmagic, public, appstore) | `application_url`, `redirect_urls`, webhook `uri` → `https://bizinsights.io/api/...` (in every toml) | `shopify-app/shopify.app*.toml`, then `shopify app deploy` |
+| Shopify web pixel extension | Posts to the `API_URL` it was given when it was made (the `after-move` action re-points older pixels) | `shopify-app/extensions/insights-pixel` |
+| Meta (Ads login, WhatsApp) | Redirect URI `https://bizinsights.io/api/ads/meta/callback`; WhatsApp webhook callback `https://bizinsights.io/api/webhooks/whatsapp` and its verify token | Meta app dashboards |
+| Google (Ads, AdSense) | Redirect URIs `https://bizinsights.io/api/ads/google/callback` and `.../adsense/callback`; domain verification for the consent screen (fixes "unverified app"): a Search Console **Domain** property for bizinsights.io, whose TXT record goes in Cloudflare DNS | Google Cloud console, Search Console |
+| Google sign-in (Cognito) | Redirect URI `<the user pool's domain>/oauth2/idpresponse` | Google Cloud OAuth client ([cognito-setup.md](cognito-setup.md)) |
+| Microsoft and Gmail (email integrations) | Redirect URIs `https://bizinsights.io/api/email/oauth/microsoft/callback` and `.../google/callback` | Microsoft Entra app registration, Google Cloud OAuth client |
+| Cognito app client | Callback `https://bizinsights.io/auth/callback`, logout `…/login?signedOut=1` | `infra/aws/cognito.yaml` (`AppUrl`) |
 | Slack alerts | none | — |
 
 ## 8. Environments, code and delivery

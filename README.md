@@ -2,7 +2,9 @@
 
 A multi-tenant SaaS that gives Shopify merchants plain-language analytics. Merchants sign up or log in with an email and password (Amazon Cognito; Continue with Google once its OAuth client is configured, see [docs/cognito-setup.md](docs/cognito-setup.md)), then connect their store from inside the app (**Settings → Shopify**, or the first-run connect page) through Shopify's own OAuth screen. bizinsights imports orders, products and inventory into the dashboard (public, unlisted app, authorization-code grant, expiring offline tokens rotated and kept encrypted on the server; see [docs/shopify-setup.md](docs/shopify-setup.md)).
 
-Runs on **AWS** (https://d2mr8m2p1qkh58.cloudfront.net): CloudFront and WAF in front of one Lambda package deployed as three functions (the UI and the API, the queue jobs, the schedules), with RDS PostgreSQL, SQS, DynamoDB, S3 and SES. Every merge to `main` deploys it. Locally the same code runs as one Node process.
+Merchants can also connect Google Ads, Google AdSense and Meta Ads, read-only, to see their advertising next to their sales ([docs/ads-setup.md](docs/ads-setup.md)).
+
+Runs on **AWS** at https://bizinsights.io (DNS at Cloudflare; pages asked for on CloudFront's own address or on www redirect there): CloudFront and WAF in front of one Lambda package deployed as three functions (the UI and the API, the queue jobs, the schedules), with RDS PostgreSQL, SQS, DynamoDB and S3; email goes through Resend, with SES as the fallback. Every merge to `main` deploys it ([docs/aws-deployment.md](docs/aws-deployment.md)). Locally the same code runs as one Node process.
 
 ```
 apps/aws       The host: Lambda entry, AWS adapters (SQS, DynamoDB, S3, SES), app settings, and the local server
