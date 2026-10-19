@@ -723,6 +723,28 @@ describe("IAM", () => {
     expect(getRole[0]!.Resource).toEqual(roles.map(([id]) => ({ "Fn::GetAtt": [id, "Arn"] })));
   });
 
+  it("lets the deploy role restart exactly the three functions when the runtime settings change, and read only that parameter", () => {
+    type Statement = { Effect: string; Action: string | string[]; Resource: unknown };
+    type Policy = { Properties: { PolicyDocument: { Statement: Statement[] } } };
+    const statements = Object.values(t.ci.findResources("AWS::IAM::Policy")).flatMap((p) => (p as Policy).Properties.PolicyDocument.Statement);
+    const granting = (action: string) => statements.filter((s) => [s.Action].flat().includes(action));
+    // The workflow's restart step (aws-deploy.yml) reads the parameter before and after the deploy...
+    const workflow = readFileSync(join(REPO_ROOT, ".github/workflows/aws-deploy.yml"), "utf8");
+    expect(workflow).toContain("aws ssm get-parameter --name /insights/production/runtime");
+    expect(workflow).toMatch(/for f in api jobs cron; do\s+n="insights-production-\$f"/);
+    expect(granting("ssm:GetParameter")).toEqual([{ Effect: "Allow", Action: "ssm:GetParameter", Resource: "arn:aws:ssm:ap-southeast-2:605411278365:parameter/insights/production/runtime" }]);
+    // ...then republishes those functions, on their unqualified ARNs (the step's --function-name), and nothing else.
+    const fns = ["api", "jobs", "cron"].map((f) => `arn:aws:lambda:ap-southeast-2:605411278365:function:insights-production-${f}`);
+    const restart = granting("lambda:PublishVersion");
+    expect(restart).toEqual([{ Effect: "Allow", Action: ["lambda:UpdateFunctionConfiguration", "lambda:PublishVersion"], Resource: fns }]);
+    expect(granting("lambda:UpdateFunctionConfiguration")).toEqual(restart);
+    // Together, or the first deploy that changes the parameter fails at the publish and rolls back.
+    expect(granting("lambda:UpdateAlias").length).toBe(1);
+    // Never a way to hand the functions another execution role.
+    expect(granting("iam:PassRole")).toEqual([]);
+    for (const s of statements) expect([s.Action].flat().some((a) => a === "*" || a === "lambda:*" || a === "ssm:*")).toBe(false);
+  });
+
   it("lets the deploy role read everything the workflow's smoke tests check", () => {
     type Policy = { Properties: { PolicyDocument: { Statement: Array<{ Action: string | string[] }> } } };
     const actions = Object.values(t.ci.findResources("AWS::IAM::Policy")).flatMap((p) => (p as Policy).Properties.PolicyDocument.Statement.flatMap((s) => [s.Action].flat()));
