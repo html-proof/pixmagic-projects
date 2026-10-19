@@ -344,6 +344,9 @@ export interface AdCoverage {
 
 const NO_COVERAGE: AdCoverage = { from: null, through: null };
 
+/** A closed ad account: the platform says so (error code or the account's own status). */
+export const isClosedAdAccount = (c: { errorCode?: string | null; accountStatus?: string | null }) => c.errorCode === "account_closed" || c.accountStatus === "closed";
+
 /**
  * The days one account covers: from where its history starts (history_from) to the last day stored
  * without a gap (synced_through). A closed account spends and earns nothing after it closed, so its
@@ -355,9 +358,11 @@ export function accountCoverage(
   accountToday: string,
 ): AdCoverage {
   if (!c.historyFrom || !c.syncedThrough || c.syncedThrough < c.historyFrom) return NO_COVERAGE;
-  const closed = c.errorCode === "account_closed" || c.accountStatus === "closed";
-  return { from: c.historyFrom, through: closed && accountToday > c.syncedThrough ? accountToday : c.syncedThrough };
+  return { from: c.historyFrom, through: isClosedAdAccount(c) && accountToday > c.syncedThrough ? accountToday : c.syncedThrough };
 }
+
+/** Whether a comparison can be worked out from these days: it starts on or after the day they start. */
+export const canCompareFrom = (c: AdCoverage, previous: { from: string }) => c.from !== null && previous.from >= c.from;
 
 /** The days every one of these accounts covers: the latest start to the earliest end (nothing if one has none). */
 export function commonCoverage(list: AdCoverage[]): AdCoverage {
@@ -370,6 +375,14 @@ export function commonCoverage(list: AdCoverage[]): AdCoverage {
     if (c.through < through) through = c.through;
   }
   return from > through ? NO_COVERAGE : { from, through };
+}
+
+/** The days of `c` after `day` (nothing when none are left). */
+export function coverageAfter(c: AdCoverage, day: string): AdCoverage {
+  if (c.from === null || c.through === null) return NO_COVERAGE;
+  const next = addDays(day, 1);
+  const from = next > c.from ? next : c.from;
+  return from > c.through ? NO_COVERAGE : { from, through: c.through };
 }
 
 /** Whether `c` covers every day of `w`. */

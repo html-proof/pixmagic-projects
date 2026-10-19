@@ -8,15 +8,17 @@ import {
   adsenseTotals,
   adTotals,
   campaignTotals,
+  canCompareFrom,
   commonCoverage,
+  coverageAfter,
   coveredPart,
   coversDays,
   delta,
+  isClosedAdAccount,
   lastWholeAdDay,
   localDay,
   sameDays,
   siteTotals,
-  type AdCoverage,
   type AdDayRow,
   type AdsenseDayRow,
   type AdSpendProvider,
@@ -36,7 +38,8 @@ import type { Scope } from "./common.js";
 // (synced_through). A day an account hasn't stored (never synced yet, its syncs stopped, access
 // ended, or the day hasn't started yet in the account's own time zone) is missing: never added in as
 // 0. A total that would need a missing day is null, and `partial` gives the part of the range every
-// account covers, so the page can say "Unavailable" and why, and what it does know.
+// account covers, so the page can say "Unavailable" and why, and what it does know. When the only
+// days missing are ones not over yet (`soFar`), the page shows the total up to the last day stored.
 // ---------------------------------------------------------------------------
 
 /** What these modules read of each connection. */
@@ -67,6 +70,8 @@ export interface AdsAsk {
   /** The store's net sales for the range (null: not known, or not the member's to see). */
   netSales: number | null;
   now: Date;
+  /** False: the comparison's days weren't read (see `daysToRead`), so nothing is compared rather than set against $0. */
+  previousRead?: boolean;
 }
 
 /** Why a change isn't given: only running days picked, a comparison before the figures start, or days missing on either side. */
@@ -131,12 +136,20 @@ interface Window<T> {
   totals: T;
 }
 
+/** An account whose missing days are still to come: it syncs (or it was closed, and spends nothing). */
+const keepsUp = (a: Pick<AccountView, "status" | "errorCode" | "accountStatus">) => a.status === "active" || isClosedAdAccount(a);
+
 /**
  * The figures of some accounts (all counted ones, or one platform's) for the range and its
  * comparison: totals only when every one of them covers every day they need.
  *
  * - `current`: the range's totals; null unless every account covers the whole range.
  * - `partial`: then, the part of the range they all cover and its totals (null when there's none).
+ * - `soFar`: the same as `partial` when the only days it lacks are at the range's end and not over
+ *   yet: every day up to the last one that is over everywhere is there, and each account that stops
+ *   short still syncs. That's the day still running before its next sync, or (an account in a time
+ *   zone behind the store's) a store day it hasn't reached. The page shows it as the figure, dated
+ *   "up to" its last day; the days after are never filled with 0. Null otherwise ("Unavailable").
  * - `compared`: the days each side of the change is worked out on and their totals. Platforms
  *   report whole days, so while the range reaches a day still running (the store's today, or an
  *   account's today in its own zone), both sides stop at the last day that is over everywhere
@@ -150,9 +163,11 @@ function figures<R extends { day: string }, T>(accounts: AccountView[], rows: R[
   const within = (w: DateRange) => rows.filter((r) => r.day >= w.from && r.day <= w.to);
   const window = (w: DateRange): Window<T> => ({ from: w.from, to: w.to, totals: total(within(w)) });
   const part = complete ? null : coveredPart(cov, ask.range);
-  const windows = adComparisonWindows(ask.range, ask.previous, lastWholeAdDay(storeToday, accounts.map((a) => a.today)));
-  // The comparison starts where every account's figures do (the old "imported" rule).
-  const imported = cov.from !== null && ask.previous.from >= cov.from;
+  const lastWhole = lastWholeAdDay(storeToday, accounts.map((a) => a.today));
+  const windows = adComparisonWindows(ask.range, ask.previous, lastWhole);
+  const soFar = part && part.from === ask.range.from && part.to >= lastWhole && accounts.every((a) => a.coversRange || keepsUp(a)) ? part : null;
+  // The comparison starts where every account's figures do (the old "imported" rule), and its days were read.
+  const imported = ask.previousRead !== false && canCompareFrom(cov, ask.previous);
   let notCompared: NotCompared | null = null;
   if (!windows) notCompared = "running";
   else if (cov.from === null) notCompared = "incomplete";
@@ -160,10 +175,12 @@ function figures<R extends { day: string }, T>(accounts: AccountView[], rows: R[
   else if (!coversDays(cov, windows.current) || !coversDays(cov, windows.previous)) notCompared = "incomplete";
   const synced = accounts.map((a) => a.lastSyncedAt);
   const oldest = synced.length && synced.every((s): s is Date => s !== null) ? new Date(Math.min(...synced.map((s) => s.getTime()))) : null;
+  const partial = part ? window(part) : null;
   return {
     coverage: { from: cov.from, through: cov.through, complete },
     current: complete ? total(within(ask.range)) : null,
-    partial: part ? window(part) : null,
+    partial,
+    soFar: soFar ? partial : null,
     compared: windows && !notCompared ? { current: window(windows.current), previous: window(windows.previous), trimmed: windows.trimmed } : null,
     notCompared,
     /** The first day every account has figures from (null: one has none yet). */
@@ -257,14 +274,40 @@ export function adsFigures(conns: AdConn[], rows: Array<AdDayRow & { connectionI
  * other way from ads: never added to ad spend. Only the sites chosen for the store count (each
  * connection's `sites`, every site when none are chosen); the others' earnings are listed as left
  * out, and "next to your sales" is worked out on the chosen ones alone.
+ *
+ * A day AdSense wouldn't split by site is stored as one row with site "". With sites chosen, nobody
+ * can tell which part of it was the store's, so it is neither counted nor listed as another site's:
+ * the account's figures start after the last such day read (`unsplitThrough`), and the days up to it
+ * are missing, never $0.
  */
 export function adsenseFigures(conns: AdConn[], rows: Array<AdsenseDayRow & { connectionId: string }>, ask: AdsAsk) {
   if (!conns.length) return null;
   const currency = chooseCurrency(conns, ask.storeCurrency);
-  const accounts = conns.map((c) => ({ ...accountView(c, (c.currency ?? currency) === currency, ask), provider: "adsense" as const, sites: c.sites ?? [] }));
+  const sitesOf = new Map(conns.map((c) => [c.id, c.sites ?? []]));
+  const unsplit = (r: AdsenseDayRow & { connectionId: string }) => r.site === "" && !adsenseSiteChosen(sitesOf.get(r.connectionId) ?? [], "");
+  const lastUnsplit = new Map<string, string>();
+  for (const r of rows) {
+    if (!unsplit(r)) continue;
+    const last = lastUnsplit.get(r.connectionId);
+    if (!last || r.day > last) lastUnsplit.set(r.connectionId, r.day);
+  }
+  const accounts = conns.map((c) => {
+    const view = accountView(c, (c.currency ?? currency) === currency, ask);
+    const unsplitThrough = lastUnsplit.get(c.id) ?? null;
+    const coverage = unsplitThrough ? coverageAfter(view.coverage, unsplitThrough) : view.coverage;
+    return {
+      ...view,
+      provider: "adsense" as const,
+      sites: c.sites ?? [],
+      /** Sites chosen, and AdSense didn't split this account's earnings by site up to this day: the store's share of them isn't known. */
+      unsplitThrough,
+      coverage,
+      coversRange: coversDays(coverage, ask.range),
+    };
+  });
   const counted = accounts.filter((a) => a.counted);
-  const sitesOf = new Map(counted.map((a) => [a.id, a.sites]));
-  const mine = rows.filter((r) => sitesOf.has(r.connectionId));
+  const ids = new Set(counted.map((a) => a.id));
+  const mine = rows.filter((r) => ids.has(r.connectionId) && !unsplit(r));
   const chosen = mine.filter((r) => adsenseSiteChosen(sitesOf.get(r.connectionId)!, r.site));
   const others = mine.filter((r) => !adsenseSiteChosen(sitesOf.get(r.connectionId)!, r.site));
   const inRange = <R extends { day: string }>(list: R[]) => list.filter((r) => r.day >= ask.range.from && r.day <= ask.range.to);
@@ -296,14 +339,22 @@ export function adsenseFigures(conns: AdConn[], rows: Array<AdsenseDayRow & { co
   };
 }
 
-/** The days to read: the range, and the comparison too when it can be compared at all. */
-function daysToRead(conns: AdConn[], ask: AdsAsk) {
+/**
+ * The days to read: the range, and the comparison too when some figures can be compared at all.
+ * Each platform is compared on its own (`byProvider`), so the comparison is read when any counted
+ * platform's figures reach back to it, even if another's start later; one from before every
+ * platform's figures start isn't read.
+ */
+export function daysToRead(conns: AdConn[], ask: AdsAsk) {
   const currency = chooseCurrency(conns, ask.storeCurrency);
-  const cov: AdCoverage = commonCoverage(conns.filter((c) => (c.currency ?? currency) === currency).map((c) => accountCoverage(c, adToday(c, ask.now))));
-  // A comparison from before the counted accounts' figures start isn't read at all.
-  const compared = cov.from !== null && ask.previous.from >= cov.from;
+  const counted = conns.filter((c) => (c.currency ?? currency) === currency);
+  const coverage = (list: AdConn[]) => commonCoverage(list.map((c) => accountCoverage(c, adToday(c, ask.now))));
+  const providers = [...new Set(counted.map((c) => c.provider))];
+  const compared = providers.some((p) => canCompareFrom(coverage(counted.filter((c) => c.provider === p)), ask.previous));
   return {
-    ids: conns.filter((c) => (c.currency ?? currency) === currency).map((c) => c.id),
+    ids: counted.map((c) => c.id),
+    /** Whether the comparison's days are read (`AdsAsk.previousRead`). */
+    compared,
     // The comparison needn't sit just before the range (a year earlier, dates picked, even
     // overlapping it): two windows, never one span from the comparison's start to the range's end.
     OR: [{ day: { gte: ask.range.from, lte: ask.range.to } }, ...(compared ? [{ day: { gte: ask.previous.from, lte: ask.previous.to } }] : [])],
@@ -352,7 +403,7 @@ export async function adsModule(tx: Tx, scope: Scope, range: DateRange, previous
     purchaseValue: r.purchaseValue === null ? null : toNumber(r.purchaseValue),
     leads: r.leads,
   }));
-  return adsFigures(conns, rows, ask);
+  return adsFigures(conns, rows, { ...ask, previousRead: read.compared });
 }
 
 /** The AdSense module of the dashboard (see `adsenseFigures`): null when no AdSense account is shown on the store. */
@@ -377,7 +428,7 @@ export async function adsenseModule(tx: Tx, scope: Scope, range: DateRange, prev
     impressions: r.impressions,
     clicks: r.clicks,
   }));
-  return adsenseFigures(conns, rows, ask);
+  return adsenseFigures(conns, rows, { ...ask, previousRead: read.compared });
 }
 
 export type AdsFigures = NonNullable<ReturnType<typeof adsFigures>>;

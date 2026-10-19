@@ -703,6 +703,45 @@ describe("ad figures only for the days the accounts have stored", () => {
     expect(m.ads.byProvider.find((p: { provider: string }) => p.provider === "google")).toMatchObject({ current: null, partial: null, spend: null });
     expect(m.ads.byProvider.find((p: { provider: string }) => p.provider === "meta")).toMatchObject({ spend: 10, notCompared: "running", deltas: { spend: null } });
     expect(m.ads.seriesByProvider.find((s: { provider: string }) => s.provider === "google").series).toEqual([expect.objectContaining({ day: today, spend: null })]);
+
+    // Over a week, the only day missing is one Google hasn't finished or begun: the week so far, through yesterday.
+    const week = (await overview(a.headers, ws, store.id, "preset=7d")).json().modules.ads;
+    expect(week.current).toBeNull();
+    expect(week.soFar).toMatchObject({ from: d(-6), to: d(-1), totals: { spend: 45 } });
+    expect(week.byProvider.find((p: { provider: string }) => p.provider === "google")).toMatchObject({ current: null, soFar: { from: d(-6), to: d(-1), totals: { spend: 15 } } });
+    expect(week.series.at(-1)).toMatchObject({ day: today, spend: null });
+  });
+
+  it("compares a platform with a long history even when another's starts after the comparison", async () => {
+    const { a, ws, store } = await owner();
+    const google = await adAccount(store, "google", "123", { historyFrom: addDays(today, -800) });
+    // Connected ten days ago: its history doesn't reach the comparison.
+    const meta = await adAccount(store, "meta", "act_1", { historyFrom: d(-9) });
+    const days = (from: string, to: string) => {
+      const out: string[] = [];
+      for (let x = from; x <= to; x = addDays(x, 1)) out.push(x);
+      return out;
+    };
+    const rows = (c: { id: string; provider: string; accountId: string }, list: string[], spend: number) =>
+      systemDb.adCampaignDaily.createMany({
+        data: list.map((day) => ({ workspaceId: store.workspaceId, storeId: store.id, connectionId: c.id, provider: c.provider, accountId: c.accountId, campaignId: "1", campaignName: "Spring", day, spend, clicks: 1, linkClicks: 1, purchases: 0, purchaseValue: 0 })),
+      });
+    const yearBefore = days(yearEarlier(d(-89)), yearEarlier(today));
+    await rows(google, [...new Set([...days(d(-179), today), ...yearBefore])], 2);
+    await rows(meta, days(d(-9), today), 10);
+
+    // Last 90 days against the 90 before: Google's "before" is what it spent then, never $0; Meta has no earlier data.
+    const m = (await overview(a.headers, ws, store.id, "preset=90d")).json().modules.ads;
+    const g = m.byProvider.find((p: { provider: string }) => p.provider === "google");
+    expect(g).toMatchObject({ current: { spend: 180 }, notCompared: null, previous: { from: d(-179), to: d(-91), spend: 178, imported: true }, deltas: { spend: 0 } });
+    expect(m.byProvider.find((p: { provider: string }) => p.provider === "meta")).toMatchObject({ notCompared: "no_history", previous: { spend: null, imported: false }, deltas: { spend: null } });
+    expect(m).toMatchObject({ current: null, notCompared: "no_history", previous: { spend: null } });
+
+    // The same dates a year earlier: the same.
+    const y = (await overview(a.headers, ws, store.id, "preset=90d&compare=year")).json().modules.ads;
+    expect(y.byProvider.find((p: { provider: string }) => p.provider === "google")).toMatchObject({ notCompared: null, previous: { from: yearEarlier(d(-89)), imported: true } });
+    expect(y.byProvider.find((p: { provider: string }) => p.provider === "google").deltas.spend).not.toBeNull();
+    expect(y.byProvider.find((p: { provider: string }) => p.provider === "google").previous.spend).toBeGreaterThan(0);
   });
 
   it("compares whole days only while the dates include today, and shows as before what was compared", async () => {
@@ -756,6 +795,18 @@ describe("ad figures only for the days the accounts have stored", () => {
     expect(m.adsense.sitesLeftOut).toEqual([expect.objectContaining({ site: "blog.example.com", earnings: 30 })]);
     expect(m.adsense.vsSales).toBe(0.03);
     expect(m.adsense.accounts[0]).toMatchObject({ sites: ["ads-shop.example.com"], coversRange: true });
+  });
+
+  it("shows earnings AdSense didn't split by site as unavailable when sites are chosen, never as another site's or as $0", async () => {
+    const { a, ws, store } = await owner();
+    const sense = await adAccount(store, "adsense", "pub-1", { sites: ["ads-shop.example.com"] });
+    // AdSense wouldn't split this account's report by site: one row a day, every site together.
+    await earnDays(store, sense, "", d(-13), today, 5);
+
+    const { modules: m } = (await overview(a.headers, ws, store.id, "preset=7d")).json();
+    expect(m.adsense).toMatchObject({ current: null, partial: null, soFar: null, vsSales: null, sites: [], sitesLeftOut: [] });
+    expect(m.adsense.accounts[0]).toMatchObject({ unsplitThrough: today, coversRange: false, coverage: { from: null, through: null } });
+    expect(m.adsense.series.every((x: { earnings: number | null }) => x.earnings === null)).toBe(true);
   });
 });
 

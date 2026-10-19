@@ -9,9 +9,12 @@ import {
   adsenseTotals,
   adTotals,
   campaignTotals,
+  canCompareFrom,
   commonCoverage,
+  coverageAfter,
   coveredPart,
   coversDays,
+  isClosedAdAccount,
   lastWholeAdDay,
   sameDays,
   fromAdsenseReport,
@@ -214,6 +217,21 @@ describe("what the stored days cover", () => {
     expect(coveredPart({ from: "2026-07-21", through: "2026-10-19" }, { from: "2025-10-19", to: "2026-10-19" })).toEqual({ from: "2026-07-21", to: "2026-10-19" });
     expect(coveredPart(both, { from: "2026-01-01", to: "2026-01-31" })).toBeNull();
     expect(coveredPart({ from: null, through: null }, { from: "2026-01-01", to: "2026-01-31" })).toBeNull();
+  });
+
+  it("starts the days covered after a given day, and compares only from where they start", () => {
+    const c = { from: "2026-07-21", through: "2026-10-19" };
+    expect(coverageAfter(c, "2026-10-09")).toEqual({ from: "2026-10-10", through: "2026-10-19" });
+    // A day before the start changes nothing; one on or after the end leaves nothing.
+    expect(coverageAfter(c, "2026-06-01")).toEqual(c);
+    expect(coverageAfter(c, "2026-10-19")).toEqual({ from: null, through: null });
+    expect(coverageAfter({ from: null, through: null }, "2026-10-01")).toEqual({ from: null, through: null });
+    expect(canCompareFrom(c, { from: "2026-07-21" })).toBe(true);
+    expect(canCompareFrom(c, { from: "2026-07-20" })).toBe(false);
+    expect(canCompareFrom({ from: null, through: null }, { from: "2026-10-01" })).toBe(false);
+    expect(isClosedAdAccount({ errorCode: "account_closed" })).toBe(true);
+    expect(isClosedAdAccount({ accountStatus: "closed" })).toBe(true);
+    expect(isClosedAdAccount({ errorCode: "account_disabled", accountStatus: "disabled" })).toBe(false);
   });
 
   it("compares whole days only: a range reaching a running day loses it on both sides, and Today has nothing to compare", () => {
