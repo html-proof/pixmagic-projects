@@ -4,7 +4,7 @@ import { adAccountStatusLabel, sameDays } from "@app/shared/ads";
 import { ConfirmDialog } from "@/components/AppUi";
 import { fmtDay, fmtRelative } from "@/components/dashboard/format";
 import { Alert } from "@/components/ui";
-import { AD_STATE, accountLabel, connectionState, grantedPermissions, type AdConnection, type AdState } from "@/lib/adConnections";
+import { AD_STATE, accountLabel, connectionState, firstSyncOverdue, grantedPermissions, type AdConnection, type AdState } from "@/lib/adConnections";
 import { AD_PLATFORMS } from "./adPlatforms";
 import { Facts, StatusBadge } from "./IntegrationCard";
 
@@ -32,6 +32,8 @@ function activeLine(c: AdConnection, state: AdState): string | null {
   if (state === "synchronizing") {
     return c.lastSyncedAt ? "Updating now. The dashboard follows by itself." : "Fetching the last 90 days now, then earlier history a few months at a time.";
   }
+  if (firstSyncOverdue(c)) return "The first update hasn't come through yet. bizinsights tries again by itself; Refresh asks for it now.";
+  if (!c.enabled && !c.lastSyncedAt && c.status === "active") return "Nothing fetched yet: bizinsights fetches this account's figures once it's shown on the dashboard.";
   const status = adAccountStatusLabel(c.accountStatus, c.provider);
   if (status) return `${AD_PLATFORMS[c.provider].name} says: ${status}.`;
   return null;
@@ -159,22 +161,31 @@ export interface Note {
   kind: "success" | "error" | "info";
   text: string;
   link?: { url: string; label: string };
+  /** Take the keyboard focus: what had it is gone (the row of an account just disconnected). */
+  focus?: boolean;
 }
 
 export function NoteAlert({ note, onDismiss }: { note: Note; onDismiss?: () => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  // Runs after the closing dialog hands focus back to the button it came from, which is about to go.
+  useEffect(() => {
+    if (note.focus) ref.current?.focus();
+  }, [note]);
   return (
-    <Alert kind={note.kind} onDismiss={onDismiss}>
-      {note.text}
-      {note.link && (
-        <>
-          {" "}
-          <a className="underline" href={note.link.url} target="_blank" rel="noopener noreferrer">
-            {note.link.label}
-          </a>
-          .
-        </>
-      )}
-    </Alert>
+    <div ref={ref} tabIndex={note.focus ? -1 : undefined} className="rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-accent" data-testid="action-note">
+      <Alert kind={note.kind} onDismiss={onDismiss}>
+        {note.text}
+        {note.link && (
+          <>
+            {" "}
+            <a className="underline" href={note.link.url} target="_blank" rel="noopener noreferrer">
+              {note.link.label}
+            </a>
+            .
+          </>
+        )}
+      </Alert>
+    </div>
   );
 }
 

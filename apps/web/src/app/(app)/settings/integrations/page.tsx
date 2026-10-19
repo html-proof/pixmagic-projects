@@ -76,6 +76,12 @@ export default function IntegrationsPage() {
   const ads = useAdConnections(storeBase && showAds ? storeBase : null);
   const [note, setNote] = useState<{ kind: "success" | "error"; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  // Another store chosen at the top: a WhatsApp note was about the last one (the ad notes reset in useAdConnections).
+  const [noteFor, setNoteFor] = useState(storeBase);
+  if (noteFor !== storeBase) {
+    setNoteFor(storeBase);
+    setNote(null);
+  }
   const { reload: reloadWa } = wa;
 
   const waState = whatsappState(wa.data, !!wa.error);

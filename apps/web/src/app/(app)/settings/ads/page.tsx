@@ -143,7 +143,7 @@ export default function AdAccountsPage() {
         </Alert>
       )}
       {/* A load that hit an outage retries by itself (useApi), so this says so instead of asking for a retry. */}
-      {ads.loadError && <LoadError what="your ad accounts" error={ads.loadError} onRetry={() => void ads.reload()} busy={ads.loading} />}
+      {ads.loadError && <LoadError what="your ad accounts" error={ads.loadError} onRetry={() => void ads.retry()} busy={ads.loading} />}
 
       {pick && manage && <ChooseAccounts pick={pick} base={base} storeId={store.id} storeName={storeName} onLoaded={setChoosing} onDone={closePick} />}
 

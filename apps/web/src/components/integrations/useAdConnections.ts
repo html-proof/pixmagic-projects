@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { adConnectionsOf, accountLabel, connectionState, platformState, revokeNote, type AdConnection, type AdProvider, type AdsState, type RevokeOutcome } from "@/lib/adConnections";
 import { leavingForSignIn, useBackFromSignIn } from "@/lib/adSignIn";
 import { actionError, api, ApiError, useApi } from "@/lib/api";
@@ -23,8 +23,9 @@ function connectError(e: unknown, name: string): string {
  * look again while a sync runs. `base`: /workspaces/:ws/stores/:storeId, null without a store.
  */
 export function useAdConnections(base: string | null) {
-  const ads = useApi<AdsState>(base ? `${base}/ads` : null);
-  const { reload } = ads;
+  const path = base ? `${base}/ads` : null;
+  const ads = useApi<AdsState>(path);
+  const { setData } = ads;
   const connections = useMemo(() => adConnectionsOf(ads.data), [ads.data]);
   const [busy, setBusy] = useState<string | null>(null);
   const [note, setNote] = useState<Note | null>(null);
@@ -36,20 +37,56 @@ export function useAdConnections(base: string | null) {
   // Back from Facebook's own page without connecting: Facebook never says why to bizinsights, so the page does.
   const [backFromMeta, setBackFromMeta] = useState(false);
 
+  // Another store chosen at the top (the page stays mounted): what was said or under way here was
+  // about the last one. Not on the first store's arrival, which a note from the trip back can precede.
+  const [storeBase, setStoreBase] = useState(base);
+  if (storeBase !== base) {
+    setStoreBase(base);
+    if (storeBase !== null) {
+      setNote(null);
+      setGone(new Set());
+      setChoosing(null);
+      setConfirming(null);
+      setBackFromMeta(false);
+    }
+  }
+
   useBackFromSignIn((provider) => {
     setLeaving(null);
     setBusy(null);
     if (provider === "meta") setBackFromMeta(true);
   });
 
+  // Looking again (a poll, or after an action): each look is numbered, and only the latest one's
+  // answer is shown. A poll sent just before a change can come back after the change's own look, and
+  // would put the old state back (useApi keeps answers apart by question, not within one).
+  const looks = useRef(0);
+  const reload = useCallback(async (): Promise<boolean> => {
+    if (!path) return true;
+    const n = ++looks.current;
+    try {
+      const value = await api<AdsState>(path);
+      if (n === looks.current) setData(value);
+      return true;
+    } catch {
+      // What is shown stays; a refusal or an ended session is handled by api() itself.
+      return false;
+    }
+  }, [path, setData]);
+  const busyNow = useRef(busy);
+  busyNow.current = busy;
+
   const view = (p: AdProvider) =>
     platformState(p, { answer: ads.data, failed: !!ads.error && !ads.data, connections, connecting: leaving === p || choosing === p, justDisconnected: gone.has(p) });
 
-  // A sync is running somewhere: look again until it settles, so the badge moves on by itself.
-  const syncing = connections.some((c) => connectionState(c) === "synchronizing");
+  // A sync is running for an account on the dashboard: look again until it settles, so the badge
+  // moves on by itself. Not during an action, which looks again itself when it's done.
+  const syncing = connections.some((c) => c.enabled && connectionState(c) === "synchronizing");
   useEffect(() => {
     if (!syncing) return;
-    const t = window.setInterval(() => void reload(), POLL_MS);
+    const t = window.setInterval(() => {
+      if (!busyNow.current) void reload();
+    }, POLL_MS);
     return () => window.clearInterval(t);
   }, [syncing, reload]);
 
@@ -119,7 +156,12 @@ export function useAdConnections(base: string | null) {
       });
       const after = revokeNote(c.provider, r.revoked);
       const text = `${accountLabel(c)} is disconnected: its access and the figures fetched for it are deleted from bizinsights.`;
-      setNote(after?.kind === "info" ? { kind: "info", text: `${text} ${after.text}`, link: after.link } : { kind: "success", text: after ? `${text} ${after.text}` : text });
+      // The note takes the focus: the row whose Disconnect button had it goes with the reload.
+      setNote(
+        after?.kind === "info"
+          ? { kind: "info", text: `${text} ${after.text}`, link: after.link, focus: true }
+          : { kind: "success", text: after ? `${text} ${after.text}` : text, focus: true },
+      );
       if (!connections.some((x) => x.provider === c.provider && x.id !== c.id)) setGone((s) => new Set([...s, c.provider]));
     } catch (e) {
       setNote({ kind: "error", text: actionError(e, "disconnect that account") });
@@ -138,7 +180,10 @@ export function useAdConnections(base: string | null) {
     answer: ads.data,
     loadError: ads.error,
     loading: ads.loading,
+    /** Look again after a change (only the latest look's answer is shown). */
     reload,
+    /** Try the first load again after it failed (its error clears when it works). */
+    retry: ads.reload,
     connections,
     view,
     busy,

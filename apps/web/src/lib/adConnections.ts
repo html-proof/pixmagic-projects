@@ -147,18 +147,23 @@ export function adConnectionsOf(state: AdsState | null): AdConnection[] {
  * | coming_soon            | Coming soon            | the platform isn't set up on this server (configured false) and nothing is connected                      |
  * | not_connected          | Not connected          | nothing connected, and the platform lets anyone connect                                                   |
  * | connecting             | Connecting             | leaving for the platform's sign-in, or back from it with accounts to choose                               |
- * | synchronizing          | Synchronizing          | a requested sync hasn't finished (syncRequestedAt after lastSyncedAt), or active and never synced yet      |
- * | connected              | Connected              | active, and a sync has worked                                                                             |
+ * | synchronizing          | Synchronizing          | shown on the dashboard, and a sync someone asked for is on its way (syncRequestedAt, for up to 30 minutes), |
+ * |                        |                        | or active and never synced, in the first 30 minutes after connecting                                      |
+ * | connected              | Connected              | active, and a sync has worked; or hidden from the dashboard before its first sync (nothing is fetched for a |
+ * |                        |                        | hidden account, so nothing is under way: its row says so)                                                 |
  * | authorization_required | Authorization required | reconnect + connector_left: the person whose login powered it left; someone with access must authorize again |
  * | permission_missing     | Permission missing     | reconnect + scope_missing (the read permission was taken back), or status permission (this login lost the account) |
  * | verification_pending   | Verification pending   | an unconnected card whose platform is restricted; error + not_approved; unavailable + account_not_ready;    |
  * |                        |                        | an active account the platform has under review, not finished setting up, or needing attention           |
- * | sync_failed            | Sync failed            | error (other than not_approved); unavailable + account_disabled; an active account the platform disabled  |
+ * | sync_failed            | Sync failed            | error (other than not_approved); unavailable + account_disabled; an active account the platform disabled; |
+ * |                        |                        | shown on the dashboard and still never synced 30 minutes after connecting (the first sync went missing)   |
  * | reconnect_required     | Reconnect required     | reconnect + auth_expired (or no code): the sign-in expired or was revoked                                  |
  * | disconnected           | Disconnected           | unavailable + account_closed, or the platform says the account is closed; and, for a moment, a card whose  |
  * |                        |                        | last account the person just disconnected                                                                 |
  *
  * A requested sync shows "Synchronizing" for every status but reconnect (nothing is queued for those).
+ * Only accounts shown on the dashboard can be synchronizing: the worker skips a hidden one, so a page
+ * never waits (or keeps looking again) for it.
  */
 export type AdState =
   | "checking"
@@ -200,15 +205,30 @@ export const RECONNECT_STATES: ReadonlySet<AdState> = new Set(["reconnect_requir
 /** The account statuses that mean "not ready at the platform yet". */
 const NOT_READY: ReadonlySet<AdAccountStatus> = new Set(["under_review", "setup_unfinished", "needs_attention"]);
 
-/** A requested sync older than this is taken as lost (the API's ADS_REQUEST_STALE_MS): the card stops saying "Synchronizing". */
+/**
+ * A requested sync older than this is taken as lost (the API's ADS_REQUEST_STALE_MS): the card stops
+ * saying "Synchronizing". So is a first sync that hasn't landed this long after connecting (its retries
+ * take a few minutes; after an hour the worker's schedule tries the account again by itself).
+ */
 const SYNC_REQUEST_STALE_MS = 30 * 60_000;
 
-/** A sync someone asked for is still running. */
-export function syncRunning(c: Pick<AdConnection, "syncRequestedAt" | "lastSyncedAt">, now = Date.now()): boolean {
-  if (!c.syncRequestedAt) return false;
+/**
+ * A sync someone asked for is still on its way. The worker clears syncRequestedAt when the last window
+ * asked for has landed, or failed, or a health check ended; lastSyncedAt moves on after every window,
+ * so it says nothing about the request (a long catch-up lands in several). A hidden account's sync is
+ * skipped, so it never counts there.
+ */
+export function syncRunning(c: Pick<AdConnection, "enabled" | "syncRequestedAt">, now = Date.now()): boolean {
+  if (!c.enabled || !c.syncRequestedAt) return false;
   const asked = Date.parse(c.syncRequestedAt);
-  if (Number.isNaN(asked) || now - asked > SYNC_REQUEST_STALE_MS) return false;
-  return !c.lastSyncedAt || asked > Date.parse(c.lastSyncedAt);
+  return !Number.isNaN(asked) && now - asked <= SYNC_REQUEST_STALE_MS;
+}
+
+/** Shown on the dashboard, connected over 30 minutes ago, and its first sync still hasn't landed. */
+export function firstSyncOverdue(c: Pick<AdConnection, "enabled" | "status" | "lastSyncedAt" | "connectedAt">, now = Date.now()): boolean {
+  if (!c.enabled || c.status !== "active" || c.lastSyncedAt) return false;
+  const at = Date.parse(c.connectedAt);
+  return !Number.isNaN(at) && now - at > SYNC_REQUEST_STALE_MS;
 }
 
 /** Where one connection stands. */
@@ -219,10 +239,13 @@ export function connectionState(c: AdConnection, now = Date.now()): AdState {
   if (c.status === "permission") return "permission_missing";
   if (c.status === "unavailable") return code === "account_closed" ? "disconnected" : code === "account_disabled" ? "sync_failed" : "verification_pending";
   if (c.status === "error") return code === "not_approved" ? "verification_pending" : "sync_failed";
-  if (!c.lastSyncedAt) return "synchronizing";
+  // Just connected: its first sync is on its way (an older API doesn't send syncRequestedAt for it).
+  if (!c.lastSyncedAt && c.enabled && !firstSyncOverdue(c, now)) return "synchronizing";
   if (c.accountStatus === "closed") return "disconnected";
   if (c.accountStatus === "disabled") return "sync_failed";
   if (c.accountStatus && NOT_READY.has(c.accountStatus)) return "verification_pending";
+  if (firstSyncOverdue(c, now)) return "sync_failed";
+  // Synced, or hidden before its first sync: nothing is fetched for a hidden account, so nothing is under way.
   return "connected";
 }
 

@@ -140,7 +140,11 @@ export function AdPlatformCard({
       badge={
         <>
           <StateBadge state={view.state} testid="platform-state" />
-          {view.hidden && <span className="text-xs text-muted">Hidden from the dashboard</span>}
+          {view.hidden && (
+            <span className="text-xs text-muted" data-testid="platform-hidden">
+              Hidden from the dashboard
+            </span>
+          )}
         </>
       }
       actions={actions}
