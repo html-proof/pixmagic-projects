@@ -84,6 +84,96 @@ describe("creating an account with email and password", () => {
     const taken = await signup();
     expect(taken.statusCode).toBe(409);
     expect(taken.json().error).toBe("account_exists");
+    expect(ctx.auth.calls).not.toContain("adminDeleteUser");
+  });
+
+  it("signing up again with another password before confirming replaces the first sign-up: the new password is the one that works", async () => {
+    // Whoever typed the address first (anyone can) must not keep a password on the account its inbox's owner confirms.
+    await signup({ password: "squatters-password", confirmPassword: "squatters-password" });
+    const firstCode = ctx.auth.code("signup", "ada@example.com");
+    const again = await signup({ password: "owners-password", confirmPassword: "owners-password" });
+    expect(again.statusCode).toBe(200);
+    expect(again.json()).toMatchObject({ next: "confirm", email: "ada@example.com" });
+    expect(ctx.auth.calls).toContain("adminDeleteUser");
+    // The first sign-up's code went with it; the fresh one confirms the new sign-up.
+    expect((await post("/auth/signup/confirm", { email: "ada@example.com", code: firstCode })).json().error).toBe("invalid_code");
+    expect((await post("/auth/signup/confirm", { email: "ada@example.com", code: ctx.auth.code("signup", "ada@example.com") })).statusCode).toBe(200);
+    expect((await post("/auth/login", { email: "ada@example.com", password: "squatters-password" })).statusCode).toBe(401);
+    const login = await post("/auth/login", { email: "ada@example.com", password: "owners-password" });
+    expect(login.statusCode).toBe(200);
+    expect(login.json().user).toMatchObject({ email: "ada@example.com", emailVerified: true });
+    expect(await systemDb.authEvent.count({ where: { type: "unconfirmed_signup_replaced" } })).toBe(1);
+  });
+
+  it("limits how often signing up again can email the same address", async () => {
+    await signup();
+    for (let i = 0; i < 3; i++) expect((await signup()).statusCode).toBe(200);
+    const res = await signup();
+    expect(res.statusCode).toBe(429);
+    expect(ctx.auth.sent.filter((s) => s.kind === "signup")).toHaveLength(4);
+  });
+
+  it("the code decides whose password the account keeps: confirming with the password chosen here replaces one a later sign-up set", async () => {
+    // The owner signs up; someone else then signs up again with their address and another
+    // password (each try replaces the pending sign-up and emails the owner a new code).
+    await signup({ password: "owners-password", confirmPassword: "owners-password" });
+    await signup({ password: "squatters-password", confirmPassword: "squatters-password" });
+    // The owner enters the newest code from their inbox; their sign-up page sends their password with it.
+    const confirm = await post("/auth/signup/confirm", { email: "ada@example.com", code: ctx.auth.code("signup", "ada@example.com"), password: "owners-password" });
+    expect(confirm.statusCode).toBe(200);
+    expect(confirm.json()).toMatchObject({ ok: true, user: { email: "ada@example.com", emailVerified: true } });
+    expect(String(confirm.headers["set-cookie"])).toMatch(/__session=[^;]/);
+    expect((await post("/auth/login", { email: "ada@example.com", password: "squatters-password" })).statusCode).toBe(401);
+    expect((await post("/auth/login", { email: "ada@example.com", password: "owners-password" })).json().user.id).toBe(confirm.json().user.id);
+    expect(await systemDb.authEvent.count({ where: { type: "signup_password_replaced" } })).toBe(1);
+    // The other person's next try finds the address taken.
+    expect((await signup({ password: "squatters-password", confirmPassword: "squatters-password" })).json().error).toBe("account_exists");
+  });
+
+  it("ends the session of anyone who signed in with the replaced password in the moment before it was replaced", async () => {
+    await signup({ password: "owners-password", confirmPassword: "owners-password" });
+    await signup({ password: "squatters-password", confirmPassword: "squatters-password" });
+    const confirmSignUp = ctx.auth.confirmSignUp;
+    let squatter = "";
+    vi.spyOn(ctx.auth, "confirmSignUp").mockImplementationOnce(async (email, code) => {
+      await confirmSignUp(email, code);
+      // Confirmed: the other person's password works for an instant, and they sign in with it.
+      squatter = cookiesFrom(await post("/auth/login", { email, password: "squatters-password" }));
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(Date.now() + 1_000);
+    });
+    const res = await post("/auth/signup/confirm", { email: "ada@example.com", code: ctx.auth.code("signup", "ada@example.com"), password: "owners-password" });
+    expect(res.statusCode).toBe(200);
+    expect(squatter).toMatch(/__session=/);
+    expect((await get("/me", { cookie: squatter })).statusCode).toBe(401);
+    expect((await get("/me", { cookie: cookiesFrom(res) })).json().user.email).toBe("ada@example.com");
+    expect(await systemDb.authEvent.findFirst({ where: { type: "signup_password_replaced" } })).toMatchObject({ userId: res.json().user.id });
+    vi.restoreAllMocks();
+  });
+
+  it("signs in straight away when the code comes with the password that signed up, honouring \"Keep me signed in\"", async () => {
+    await signup();
+    const res = await post("/auth/signup/confirm", { email: "ada@example.com", code: ctx.auth.code("signup", "ada@example.com"), password: "correct-horse", keep: false });
+    expect(res.json()).toMatchObject({ ok: true, user: { email: "ada@example.com", displayName: "Ada Lovelace" } });
+    const session = String(res.headers["set-cookie"]).split(", ").find((c) => c.startsWith("__session="));
+    expect(session).toBeDefined();
+    expect(session).not.toMatch(/Max-Age/);
+    expect(ctx.auth.calls).not.toContain("adminSetPassword");
+    expect(await systemDb.authEvent.count({ where: { type: "signup_password_replaced" } })).toBe(0);
+  });
+
+  it("never signs in, or sets a password, for a sign-up that was already confirmed", async () => {
+    await signup();
+    expect((await post("/auth/signup/confirm", { email: "ada@example.com", code: ctx.auth.code("signup", "ada@example.com") })).json()).toEqual({ ok: true });
+    // Nothing is proved by a second confirmation, whatever code and password come with it: it
+    // can't be a way to try passwords outside the sign-in page's limits.
+    for (const password of ["a-guessed-password", "correct-horse"]) {
+      const again = await post("/auth/signup/confirm", { email: "ada@example.com", code: "123456", password });
+      expect(again.json()).toEqual({ ok: true });
+      expect(again.headers["set-cookie"] ?? "").not.toMatch(/__session=[^;]/);
+    }
+    expect(ctx.auth.calls).not.toContain("adminSetPassword");
+    expect((await post("/auth/login", { email: "ada@example.com", password: "correct-horse" })).statusCode).toBe(200);
   });
 
   it("resends a code without saying whether the address has an account", async () => {
@@ -178,6 +268,18 @@ describe("forgot password", () => {
     expect((await get("/me", before.headers)).statusCode).toBe(401);
     expect((await post("/auth/login", { email: "a@x.com", password: "brand-new-pass" })).statusCode).toBe(200);
     expect(await systemDb.authEvent.count({ where: { type: "password_reset" } })).toBe(1);
+  });
+
+  it("names the account's other ways to sign in, which a new password doesn't end", async () => {
+    const { user } = await signIn(ctx, "u1", "a@x.com");
+    const reset = async () => {
+      await post("/auth/password/forgot", { email: "a@x.com" });
+      return post("/auth/password/reset", { email: "a@x.com", code: ctx.auth.code("reset", "a@x.com"), password: "brand-new-pass", confirmPassword: "brand-new-pass" });
+    };
+    expect((await reset()).json()).toEqual({ ok: true, otherMethods: [] });
+    await systemDb.authIdentity.create({ data: { userId: user.id, provider: "cognito", subject: "g-sub", username: "google_1", method: "google", email: "someone@gmail.com" } });
+    // Method names only, never the Google account's address.
+    expect((await reset()).json()).toEqual({ ok: true, otherMethods: ["google"] });
   });
 
   it("answers an unknown address exactly like a known one", async () => {
@@ -283,6 +385,102 @@ describe("Continue with Google", () => {
     expect(res.statusCode).toBe(409);
     expect(res.json().error).toBe("email_in_use");
     expect(await systemDb.authIdentity.count()).toBe(1);
+  });
+
+  it("goes back only to a page of this site, however the path is written", async () => {
+    // Dot segments pass a check of the raw text but resolve to another site ("//evil.example").
+    const unsafe = ["//evil.example/x", "/..//evil.example/x", "/%2e%2e//evil.example/x", "/.//evil.example/x", "/a/..//evil.example/x"];
+    for (const [i, returnTo] of unsafe.entries()) {
+      const res = await (await federated({ id: `g-r${i}`, email: `r${i}@gmail.com` }, "google", returnTo)).finish();
+      expect(res.statusCode).toBe(200);
+      expect(res.json().redirect).toBeNull();
+    }
+    // One that stays on this site is kept, as the browser will read it.
+    const ok = await (await federated({ id: "g-ok", email: "ok@gmail.com" }, "google", "/settings/../dashboard?view=sales")).finish();
+    expect(ok.json().redirect).toBe("/dashboard?view=sales");
+  });
+
+  it("won't create an account from an address Google hasn't verified (it could never be verified here)", async () => {
+    const res = await (await federated({ id: "g-unverified", email: "unverified@gmail.com", emailVerified: false })).finish();
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe("email_unverified_provider");
+    expect(res.json().message).toMatch(/Google hasn't confirmed/);
+    expect(await systemDb.user.count()).toBe(0);
+    expect(res.headers["set-cookie"] ?? "").not.toMatch(/__session=[^;]/);
+  });
+
+  it("takes over an account whose address was never verified: the password someone else set there stops working", async () => {
+    // Anyone can make a workspace, add an employee with someone's address and open the copied
+    // invitation link themselves, choosing the password.
+    const owner = await signIn(ctx, "owner-sub", "owner@x.com");
+    const ws = await createWorkspace(ctx, owner.headers);
+    const employee = {
+      fullName: "Vic Tim",
+      email: "victim@gmail.com",
+      jobTitle: "Barista",
+      employmentType: "full_time",
+      joinedOn: "2026-10-01",
+      standardWeeklyMinutes: 2400,
+      workingDays: [1, 2, 3, 4, 5],
+      hourlyRate: "20",
+    };
+    const hired = await post(`/workspaces/${ws}/staff/employees`, employee, owner.headers);
+    expect(hired.statusCode).toBe(201);
+    const invitation = await post(`/workspaces/${ws}/staff/employees/${hired.json().employee.id}/invitations`, { delivery: "link" }, owner.headers);
+    const token = decodeURIComponent(/token=([^&]+)/.exec(invitation.json().url)![1]!);
+    const accepted = await post("/staff/invitations/accept", { token, password: "Not-Theirs-42", confirmPassword: "Not-Theirs-42" });
+    expect(accepted.json().emailVerified).toBe(false);
+    const squatter = { cookie: cookiesFrom(accepted), ...ORIGIN };
+    expect((await get("/me", squatter)).statusCode).toBe(200);
+    const account = await systemDb.user.findUniqueOrThrow({ where: { email: "victim@gmail.com" } });
+
+    // The address's owner signs in with Google, which has verified it.
+    const { browser, finish } = await federated({ id: "g-victim", email: "victim@gmail.com", name: "Vic Tim" });
+    const res = await finish();
+    expect(res.statusCode).toBe(200);
+    expect(res.json().user).toMatchObject({ id: account.id, emailVerified: true });
+    // The password is gone, in Cognito and here, and so is every session from before.
+    expect((await post("/auth/login", { email: "victim@gmail.com", password: "Not-Theirs-42" })).statusCode).toBe(401);
+    expect((await get("/me", squatter)).statusCode).toBe(401);
+    expect((await systemDb.authIdentity.findMany({ where: { userId: account.id } })).map((i) => i.method)).toEqual(["google"]);
+    expect(await systemDb.authEvent.findFirst({ where: { type: "unverified_identity_removed", userId: account.id } })).toMatchObject({
+      metadata: { removed: [expect.objectContaining({ method: "password" })], by: expect.objectContaining({ method: "google" }) },
+    });
+    // The owner of the address is signed in, and stays so.
+    expect((await browser.get("/me")).statusCode).toBe(200);
+    const again = await (await federated({ id: "g-victim", email: "victim@gmail.com" })).finish();
+    expect(again.json().user.id).toBe(account.id);
+  });
+
+  it("links a Team & Access invitee's placeholder account (no sign-in yet) as before, ending nothing", async () => {
+    const placeholder = await systemDb.user.create({ data: { email: "invitee@gmail.com", emailVerified: false } });
+    const res = await (await federated({ id: "g-invitee", email: "invitee@gmail.com" })).finish();
+    expect(res.json().user).toMatchObject({ id: placeholder.id, emailVerified: true });
+    expect(await systemDb.authEvent.count({ where: { type: "unverified_identity_removed" } })).toBe(0);
+    expect((await systemDb.user.findUniqueOrThrow({ where: { id: placeholder.id } })).sessionsValidAfter).toBeNull();
+    expect(ctx.auth.calls).not.toContain("adminDeleteUser");
+  });
+
+  it("\"Keep me signed in\" unticked carries through Google: cookies that end with the browser", async () => {
+    const sessionCookies = (res: { headers: Record<string, string> }) => (res.headers["set-cookie"] ?? "").split(", ").filter((c) => /^__session(_rt)?=[^;]/.test(c));
+    const kept = await (await federated({ id: "g-kept", email: "kept@gmail.com" })).finish();
+    expect(sessionCookies(kept)).toHaveLength(2);
+    for (const cookie of sessionCookies(kept)) expect(cookie).toMatch(/Max-Age=\d+/);
+
+    const browser = testBrowser(ctx);
+    const start = await browser.get("/auth/oauth/google/start?keep=0");
+    const back = ctx.auth.federatedSignIn(start.headers.location!, { id: "g-brief", email: "brief@gmail.com" });
+    const brief = await browser.post("/auth/oauth/callback", { code: back.code, state: back.state });
+    expect(brief.statusCode).toBe(200);
+    expect(sessionCookies(brief)).toHaveLength(2);
+    for (const cookie of sessionCookies(brief)) expect(cookie).not.toMatch(/Max-Age/);
+    // The minute's re-check keeps it that way.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + REVALIDATE_MS + 1_000);
+    const rechecked = await browser.get("/me");
+    expect(rechecked.statusCode).toBe(200);
+    expect(sessionCookies(rechecked).length).toBeGreaterThan(0);
+    for (const cookie of sessionCookies(rechecked)) expect(cookie).not.toMatch(/Max-Age/);
   });
 
   it("keeps the name from the first sign-in when the provider later sends none", async () => {

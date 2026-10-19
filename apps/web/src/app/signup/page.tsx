@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 import { ArrowRight, Lock, UserRound } from "lucide-react";
 import { accountPasswordProblem, ACCOUNT_PASSWORD_MIN, DISPLAY_NAME_MAX } from "@app/shared/auth";
-import { afterSignIn, authErrorMessage, confirmSignUp, errorCode, resendSignUpCode, signIn, signUp, useRedirectIfSignedIn } from "@/lib/auth";
+import { afterSignIn, authErrorMessage, confirmSignUp, errorCode, rememberEmail, resendSignUpCode, signIn, signUp, useRedirectIfSignedIn } from "@/lib/auth";
 import { Alert, Divider } from "@/components/ui";
 import { emailProblem, useFieldErrors } from "@/components/auth/AuthCard";
 import { AuthSplitShell } from "@/components/auth/AuthSplitShell";
@@ -75,8 +75,21 @@ export default function SignupPage() {
           busyLabel="Verifying…"
           large
           onSubmit={async (code) => {
-            await confirmSignUp(sentTo, code);
-            await signIn(sentTo, password);
+            // With the password chosen here: the code signs in, and this password is the account's,
+            // whoever else signed up with the address in the meantime.
+            const r = await confirmSignUp(sentTo, code, { password });
+            if (!r.user) {
+              // Confirmed already, in another tab: sign in as usual.
+              try {
+                await signIn(sentTo, password);
+              } catch (err) {
+                // Confirmed elsewhere with another password: the sign-in page says so and offers "Forgot password?".
+                if (errorCode(err) !== "invalid_credentials") throw err;
+                rememberEmail(sentTo);
+                router.replace("/login?confirmedElsewhere=1");
+                return;
+              }
+            }
             // Through the app shell, which sends a new merchant to onboarding.
             router.replace(afterSignIn());
           }}
@@ -92,8 +105,7 @@ export default function SignupPage() {
   const termsError = fields.error("terms");
   return (
     <AuthSplitShell title="Create your account" subtitle="Free to start. You'll connect your Shopify store from your dashboard." action={SIGN_IN}>
-      <SocialButtons row />
-      <Divider label="OR SIGN UP WITH YOUR EMAIL" />
+      <SocialButtons row terms after={<Divider label="OR SIGN UP WITH YOUR EMAIL" />} />
       {error ? (
         <Alert onDismiss={() => setError(null)}>
           {error}

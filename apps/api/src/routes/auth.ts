@@ -4,9 +4,9 @@ import { systemDb } from "@app/db";
 import { appStoreWorkspace, employmentsForUser, env, logger, sessionAccess } from "@app/core";
 import { ACCESS_KEYS, accountPasswordProblem, DISPLAY_NAME_MAX, EMAIL_CODE_RE, hasFullAccess, pkcePair, randomToken, safeEqual, sha256Hex } from "@app/shared";
 import { body, clientIp, HttpError, isLinkSession, loadUser, pickSession, requireAppOrigin, requireUser, sessionOf, SESSION_COOKIE, sharedWorkspace, type Ctx, type Deps } from "../context.js";
-import { CognitoError, CognitoUnavailableError, type CognitoTokens, type FederatedProvider, type SignInResult } from "../cognito.js";
-import { recordAuthEvent, resolveUser } from "../identity.js";
-import { apiPath, clearSessionCookies, clearShareCookie, newSession, readRefreshToken, readSession, retiredSessionKey, setSessionCookies } from "../session.js";
+import { CognitoError, CognitoUnavailableError, type CognitoTokens, type CognitoUser, type FederatedProvider, type SignInResult } from "../cognito.js";
+import { cognitoUsernameKey, notifyMethodAdded, recordAuthEvent, resolveUser } from "../identity.js";
+import { apiPath, clearSessionCookies, clearShareCookie, linkProofKey, newSession, readRefreshToken, readSession, retiredSessionKey, setSessionCookies, signedInRecently } from "../session.js";
 import type { App } from "../app.js";
 import { limit, LIMITS } from "../rateLimit.js";
 
@@ -27,7 +27,66 @@ const OAUTH_STATE_TTL_S = 600;
 const MAX_PENDING_STATES = 5;
 const OAUTH_COOKIE = "__oauth";
 const OTP_COOKIE = "__otp";
-const pendingStates = (cookie: string | undefined) => (cookie ?? "").split(".").filter((n) => /^[A-Za-z0-9_-]{16,64}$/.test(n));
+/**
+ * Between the password and the authenticator app's code: names the pending sign-in in the
+ * coordinator, which holds Cognito's challenge session (the browser never sees it). Lives as long
+ * as that session does (the app client's AuthSessionValidity, 3 minutes: infra/aws/cognito.yaml).
+ */
+const MFA_COOKIE = "__mfa";
+const MFA_TTL_S = 180;
+const TOKEN_RE = /^[A-Za-z0-9_-]{16,64}$/;
+const pendingStates = (cookie: string | undefined) => (cookie ?? "").split(".").filter((n) => TOKEN_RE.test(n));
+const totpSchema = z.string().trim().regex(/^\d{6}$/, "Enter the 6-digit code from your authenticator app.");
+
+/** A "Continue with Google" in progress: what the callback needs, kept in the coordinator under its state. */
+interface PendingSignIn {
+  provider: FederatedProvider;
+  verifier: string;
+  nonce: string;
+  returnTo: string | null;
+  /** "Keep me signed in" was unticked on the page that started it. */
+  keep?: false;
+  /** Set when a signed-in person links Google from Settings: their users.id (no new session then). */
+  linkUserId?: string;
+}
+
+/** A sign-in waiting for the authenticator app's code (askForCode), in the coordinator under mfa:signin:<id>. */
+interface PendingCode {
+  /** The address signed in with (the per-account rate limit). */
+  email: string;
+  /** Cognito's name for the user, from its challenge: what the answer must give. */
+  username: string;
+  session: string;
+  keep?: false;
+}
+
+/** Where linking Google from Settings goes back to when the page didn't say. */
+const LINK_RETURN = "/settings/security";
+const BASE = "http://app.invalid";
+
+/**
+ * A page of this site to send the browser back to, as the browser will read it, or null. The
+ * check runs on the normalised path too: dot segments ("/..//evil.example", "/%2e%2e//evil.example")
+ * pass a check of the raw text but resolve to "//evil.example", another site.
+ */
+function safeReturnTo(raw: unknown): string | null {
+  if (!safePath(raw)) return null;
+  let u: URL;
+  try {
+    u = new URL(raw, BASE);
+  } catch {
+    return null;
+  }
+  const out = `${u.pathname}${u.search}${u.hash}`;
+  return u.origin === BASE && safePath(out) ? out : null;
+}
+
+/** `path` (from safeReturnTo) with one query parameter set; LINK_RETURN if it somehow isn't safe. */
+function withParam(path: string, key: string, value: string) {
+  const u = new URL(safeReturnTo(path) ?? LINK_RETURN, BASE);
+  u.searchParams.set(key, value);
+  return `${u.pathname}${u.search}${u.hash}`;
+}
 
 const UNAVAILABLE = "We can't reach the sign-in service right now. Please try again in a moment.";
 const CODE_SENT = "If that address can receive email, a code is on its way. It expires in a few minutes.";
@@ -93,6 +152,12 @@ export function cognitoFailure(err: unknown, at: string): HttpError {
       return new HttpError(503, "This sign-in option isn't set up yet.", "not_configured");
     case "InvalidToken":
       return new HttpError(401, "We couldn't verify that sign-in. Please try again.", "invalid_token");
+    // Two-step verification: a wrong code while setting it up, or the pool without it switched on.
+    case "EnableSoftwareTokenMFAException":
+      return new HttpError(400, "That code isn't right. Check the time on your phone, then enter the code your app shows now.", "invalid_code");
+    case "SoftwareTokenMFANotFoundException":
+    case "MFAMethodNotFoundException":
+      return new HttpError(503, "Two-step verification isn't available right now. Please try again later.", "mfa_unavailable");
   }
   return new HttpError(400, "We couldn't complete that. Please try again.", "auth_failed");
 }
@@ -120,6 +185,8 @@ export function publicUser(u: { id: string; email: string; emailVerified: boolea
 export function authRoutes(app: App, deps: Deps) {
   const oauthCookiePath = () => `${apiPath() === "/" ? "" : apiPath()}/auth/oauth`;
   const otpCookiePath = () => `${apiPath() === "/" ? "" : apiPath()}/auth/otp`;
+  // /auth/login and /auth/login/mfa.
+  const mfaCookiePath = () => `${apiPath() === "/" ? "" : apiPath()}/auth/login`;
   const cookieBase = () => ({ httpOnly: true, sameSite: "Lax" as const, secure: env().NODE_ENV === "production" });
   const redirectUri = () => `${env().APP_URL}/auth/callback`;
 
@@ -132,7 +199,7 @@ export function authRoutes(app: App, deps: Deps) {
     const claims = await deps.auth.verifyIdToken(tokens.idToken, { nonce: opts.nonce }).catch((err) => {
       throw cognitoFailure(err, "verify ID token");
     });
-    const user = await resolveUser(claims, { ip: clientIp(c) }).catch(dbOutage(SIGN_IN_UNAVAILABLE));
+    const user = await resolveUser(claims, { ip: clientIp(c), auth: deps.auth }).catch(dbOutage(SIGN_IN_UNAVAILABLE));
     const s = newSession({ userId: user.id, sub: claims.sub, username: claims.username, method: claims.method, authTime: claims.authTime, keep: opts.keep });
     setSessionCookies(c, s, tokens.refreshToken);
     // Security trail: who signed in, how and from where (user id, never the email or a token).
@@ -147,6 +214,23 @@ export function authRoutes(app: App, deps: Deps) {
       throw new HttpError(403, "You need to choose a new password. Use \"Forgot password?\" to get a code.", "reset_required");
     }
     throw new HttpError(403, "Your account needs a sign-in step this app doesn't support yet. Please contact support.", "challenge_unsupported");
+  }
+
+  /**
+   * The password was right and the account has two-step verification: keep Cognito's challenge
+   * session here, bound to this browser by an httpOnly cookie, and ask for the app's code
+   * (POST /auth/login/mfa). `null` when the result needs no code.
+   */
+  async function askForCode(c: Ctx, email: string, r: SignInResult, keep: boolean | undefined) {
+    if (!("challenge" in r) || r.challenge !== "SOFTWARE_TOKEN_MFA") return null;
+    const id = randomToken(24);
+    const pending: PendingCode = { email, username: r.username ?? email, session: r.session, ...(keep === false && { keep: false as const }) };
+    await deps.coord.put(`mfa:signin:${id}`, JSON.stringify(pending), MFA_TTL_S).catch((err: unknown) => {
+      logger.error({ err }, "could not store a two-step sign-in");
+      throw new HttpError(503, UNAVAILABLE, "auth_unavailable");
+    });
+    setCookie(c, MFA_COOKIE, id, { ...cookieBase(), path: mfaCookiePath(), maxAge: MFA_TTL_S });
+    return c.json({ next: "mfa" as const });
   }
 
   /**
@@ -190,7 +274,44 @@ export function authRoutes(app: App, deps: Deps) {
     const result = await deps.auth.passwordSignIn(input.email, input.password).catch((err: unknown) => {
       throw cognitoFailure(err, "login");
     });
+    const codeStep = await askForCode(c, input.email, result, input.keep);
+    if (codeStep) return codeStep;
     const user = await finishSignIn(c, tokensOrChallenge(result), { keep: input.keep });
+    return c.json({ user: publicUser(user) });
+  });
+
+  /** Two-step verification: the code from the authenticator app, after the password (askForCode). */
+  app.post("/auth/login/mfa", async (c) => {
+    requireAppOrigin(c);
+    const input = z.object({ code: totpSchema }).parse(await body(c));
+    await limit(deps.coord, `rl:mfa:ip:${clientIp(c)}`, LIMITS.mfaVerifyIp);
+    const id = getCookie(c, MFA_COOKIE);
+    const timedOut = () => {
+      deleteCookie(c, MFA_COOKIE, { ...cookieBase(), path: mfaCookiePath() });
+      return new HttpError(400, "That sign-in has timed out. Enter your email and password again.", "mfa_expired");
+    };
+    if (!id || !TOKEN_RE.test(id)) throw timedOut();
+    const key = `mfa:signin:${id}`;
+    const raw = await deps.coord.peek(key).catch(() => {
+      throw new HttpError(503, UNAVAILABLE, "auth_unavailable");
+    });
+    if (!raw) throw timedOut();
+    const pending = JSON.parse(raw) as PendingCode;
+    // Per account as well as per IP: six digits are guessable without both.
+    await limit(deps.coord, `rl:mfa:email:${sha256Hex(pending.email)}`, LIMITS.mfaVerifyAccount);
+    const result = await deps.auth.answerTotpChallenge(pending.username, pending.session, input.code).catch(async (err: unknown) => {
+      if (isCognito(err, "CodeMismatchException")) throw new HttpError(400, "That code isn't right. Enter the code your authenticator app shows now.", "invalid_code");
+      // Cognito's session has ended (too long, or too many wrong codes): start again.
+      if (isCognito(err, "NotAuthorizedException", "ExpiredCodeException")) {
+        await deps.coord.take(key).catch(() => null);
+        throw timedOut();
+      }
+      throw cognitoFailure(err, "two-step sign-in");
+    });
+    await deps.coord.take(key).catch(() => null);
+    deleteCookie(c, MFA_COOKIE, { ...cookieBase(), path: mfaCookiePath() });
+    // "Keep me signed in" as it was ticked with the password.
+    const user = await finishSignIn(c, tokensOrChallenge(result), { keep: pending.keep });
     return c.json({ user: publicUser(user) });
   });
 
@@ -213,28 +334,109 @@ export function authRoutes(app: App, deps: Deps) {
       await deps.auth.signUp({ email: input.email, password: input.password, name: input.name });
     } catch (err) {
       if (!isCognito(err, "UsernameExistsException")) throw cognitoFailure(err, "signup");
-      // Signed up before but never entered the code (or pressed the button twice): send a fresh
-      // code and carry on to the code screen rather than calling the account taken.
+      // Signed up before but never entered the code: carry on to the code screen rather than
+      // calling the account taken.
       const existing = await deps.auth.adminGetUser(input.email).catch(() => null);
       if (existing?.status !== "UNCONFIRMED") throw cognitoFailure(err, "signup");
-      await deps.auth.resendSignUpCode(input.email).catch((e: unknown) => logger.warn({ err: e }, "resending a sign-up code failed"));
+      await limit(deps.coord, `rl:code:email:${sha256Hex(input.email)}`, LIMITS.codeEmail);
+      await signUpAgain(c, input, existing);
     }
     return c.json({ ok: true, next: "confirm", email: input.email });
   });
 
+  /**
+   * A sign-up over an earlier one that was never confirmed. With the same password (the button
+   * pressed twice, another tab) it is the same sign-up: a fresh code. With another password, this
+   * one replaces it, so the password just typed is the one that works once the code is entered.
+   * Keeping the first would let whoever started it (anyone can type someone's address) into the
+   * account the inbox's owner then confirms. An unconfirmed sign-up never proved the inbox and
+   * has nothing of ours behind it (a user row only exists after a sign-in), so nothing is lost.
+   */
+  async function signUpAgain(c: Ctx, input: { email: string; password: string; name: string }, existing: CognitoUser) {
+    // Cognito checks the password before it says the user isn't confirmed.
+    const same = await deps.auth.passwordSignIn(input.email, input.password).then(
+      () => {
+        // Confirmed in the meantime (another tab entered the code): the address is taken now.
+        throw new HttpError(409, "An account with that email already exists. Log in instead, or reset your password if you've forgotten it.", "account_exists");
+      },
+      (err: unknown) => {
+        if (isCognito(err, "UserNotConfirmedException")) return true;
+        if (isCognito(err, "NotAuthorizedException")) return false;
+        throw cognitoFailure(err, "signup again");
+      },
+    );
+    if (same) {
+      await deps.auth.resendSignUpCode(input.email).catch((e: unknown) => logger.warn({ err: e }, "resending a sign-up code failed"));
+      return;
+    }
+    // Never one that is somebody's sign-in already (a confirmed user can't become unconfirmed; this is a guard).
+    if (await systemDb.authIdentity.findUnique({ where: { provider_subject: { provider: "cognito", subject: existing.sub } } }).catch(dbOutage(SIGN_IN_UNAVAILABLE))) {
+      throw new HttpError(409, "An account with that email already exists. Log in instead, or reset your password if you've forgotten it.", "account_exists");
+    }
+    await deps.auth.adminDeleteUser(existing.username).catch((err: unknown) => {
+      throw cognitoFailure(err, "replace unconfirmed sign-up");
+    });
+    await deps.auth.signUp({ email: input.email, password: input.password, name: input.name }).catch((err: unknown) => {
+      throw cognitoFailure(err, "signup");
+    });
+    await recordAuthEvent("unconfirmed_signup_replaced", null, clientIp(c), { cognitoSub: existing.sub });
+  }
+
+  /**
+   * The sign-up code. With `password` (the one chosen in this browser) it also signs in, and the
+   * code decides whose password the account keeps: whoever enters it proves the inbox. Anyone can
+   * sign up again with the address meanwhile (signUpAgain), so the pending sign-up may carry
+   * someone else's password by the time the owner types the newest code; that password is then
+   * replaced with this one, and anything signed in with it ends.
+   */
   app.post("/auth/signup/confirm", async (c) => {
     requireAppOrigin(c);
-    const input = z.object({ email: emailSchema, code: codeSchema }).parse(await body(c));
+    const input = z.object({ email: emailSchema, code: codeSchema, password: passwordSchema.optional(), keep: keepSchema }).parse(await body(c));
     await limit(deps.coord, `rl:code:verify:${clientIp(c)}`, LIMITS.codeVerifyIp);
     try {
       await deps.auth.confirmSignUp(input.email, input.code);
     } catch (err) {
-      // Already confirmed (a second tab, a double press): nothing left to do.
+      // Already confirmed (a second tab, a double press): nothing left to do here. Never a
+      // sign-in: this request proved nothing (the page signs in through /auth/login instead).
       if (isCognito(err, "NotAuthorizedException") && /CONFIRMED/i.test((err as Error).message)) return c.json({ ok: true });
       throw cognitoFailure(err, "confirm signup");
     }
-    return c.json({ ok: true });
+    if (!input.password) return c.json({ ok: true });
+    const signIn = () =>
+      deps.auth.passwordSignIn(input.email, input.password!).catch((err: unknown) => {
+        if (isCognito(err, "NotAuthorizedException")) return null;
+        throw cognitoFailure(err, "sign in after confirming");
+      });
+    let result = await signIn();
+    if (!result) {
+      // Not a password Cognito would take: the address is confirmed; "Forgot password?" sets one.
+      if (accountPasswordProblem(input.password)) return c.json({ ok: true });
+      await claimConfirmedSignUp(c, input.email, input.password);
+      result = await signIn();
+      if (!result) throw cognitoFailure(new CognitoError("NotAuthorizedException", ""), "sign in after confirming");
+    }
+    const user = await finishSignIn(c, tokensOrChallenge(result), { keep: input.keep });
+    return c.json({ ok: true, user: publicUser(user) });
   });
+
+  /**
+   * The code just confirmed a sign-up whose password isn't the one this browser chose: that
+   * password is someone else's (a later sign-up with the address, signUpAgain). Set this one,
+   * end the Cognito user's tokens, and end the sessions of an account someone signed in to with
+   * the old password between the confirmation and now.
+   */
+  async function claimConfirmedSignUp(c: Ctx, email: string, password: string) {
+    const fail = (err: unknown) => {
+      throw cognitoFailure(err, "set the confirmed sign-up's password");
+    };
+    const cu = await deps.auth.adminGetUser(email).catch(fail);
+    if (!cu) throw cognitoFailure(new CognitoError("NotAuthorizedException", ""), "set the confirmed sign-up's password");
+    await deps.auth.adminSetPassword(cu.username, password).catch(fail);
+    await deps.auth.adminGlobalSignOut(cu.username).catch(fail);
+    const linked = await systemDb.authIdentity.findUnique({ where: { provider_subject: { provider: "cognito", subject: cu.sub } } }).catch(dbOutage(SIGN_IN_UNAVAILABLE));
+    if (linked) await systemDb.user.update({ where: { id: linked.userId }, data: { sessionsValidAfter: new Date() } }).catch(dbOutage(SIGN_IN_UNAVAILABLE));
+    await recordAuthEvent("signup_password_replaced", linked?.userId ?? null, clientIp(c), { cognitoSub: cu.sub });
+  }
 
   app.post("/auth/signup/resend", async (c) => {
     requireAppOrigin(c);
@@ -276,7 +478,10 @@ export function authRoutes(app: App, deps: Deps) {
       // Cognito answers an unknown address like a wrong code once user-existence errors are hidden.
       throw cognitoFailure(isCognito(err, "UserNotFoundException") ? new CognitoError("CodeMismatchException", "") : err, "reset password");
     });
-    // A new password ends every other session, everywhere: whoever knew the old one is out.
+    // A new password ends every session, everywhere: whoever knew the old one is out. Other ways
+    // in (a linked Google account) stay, so the answer names them: the page asks the person to
+    // check them in Settings → Security, where they can be removed. Only whoever holds the code
+    // (the inbox) sees that.
     const user = await systemDb.user.findUnique({ where: { email: input.email }, include: { identities: true } }).catch(() => null);
     if (user) {
       await systemDb.user.update({ where: { id: user.id }, data: { sessionsValidAfter: new Date() } }).catch((err: unknown) => logger.error({ err }, "could not end sessions after a password reset"));
@@ -285,7 +490,8 @@ export function authRoutes(app: App, deps: Deps) {
       }
       await recordAuthEvent("password_reset", user.id, clientIp(c));
     }
-    return c.json({ ok: true });
+    const otherMethods = [...new Set((user?.identities ?? []).filter((i) => i.method !== "password").map((i) => i.method))];
+    return c.json({ ok: true, otherMethods });
   });
 
   // ---------------- Passwordless: a code Cognito emails (when switched on) ----------------
@@ -322,16 +528,32 @@ export function authRoutes(app: App, deps: Deps) {
       throw cognitoFailure(isCognito(err, "NotAuthorizedException") ? new CognitoError("ExpiredCodeException", "") : err, "email code verify");
     });
     deleteCookie(c, OTP_COOKIE, { ...cookieBase(), path: otpCookiePath() });
+    const codeStep = await askForCode(c, input.email, result, input.keep);
+    if (codeStep) return codeStep;
     const user = await finishSignIn(c, tokensOrChallenge(result), { keep: input.keep });
     return c.json({ user: publicUser(user) });
   });
 
   // ---------------- Continue with Google (Cognito managed login, code + PKCE) ----------------
 
-  /** Leaves for Google, by way of the user pool. Errors land on the sign-in error page. */
+  /**
+   * Leaves for Google, by way of the user pool. Errors land on the sign-in error page.
+   *
+   * `?keep=0`: "Keep me signed in" was unticked, so the session's cookies end with the browser.
+   * `?link=1`: a signed-in person links Google to their account from Settings (no new session);
+   * the callback sends them back to `returnTo` with `?linked=google`, or `?link_error=<code>`,
+   * which is also where this route's own refusals go. A new way into the account needs the
+   * person again: a sign-in in the last 15 minutes, or their password just now
+   * (POST /auth/account/methods/google/prepare), like the account's other changes.
+   */
   app.get("/auth/oauth/:provider/start", async (c) => {
     const appUrl = env().APP_URL;
-    const fail = (reason: string) => c.redirect(`${appUrl}/auth/error?${new URLSearchParams({ reason, provider: c.req.param("provider") })}`);
+    const returnTo = safeReturnTo(c.req.query("returnTo"));
+    const linking = c.req.query("link") === "1";
+    const fail = (reason: string) =>
+      c.redirect(
+        linking ? `${appUrl}${withParam(returnTo ?? LINK_RETURN, "link_error", reason)}` : `${appUrl}/auth/error?${new URLSearchParams({ reason, provider: c.req.param("provider") })}`,
+      );
     const provider = PROVIDERS[c.req.param("provider")];
     if (!provider || !enabledProviders().has(provider)) return fail("provider_unavailable");
     try {
@@ -339,16 +561,39 @@ export function authRoutes(app: App, deps: Deps) {
     } catch {
       return fail("rate_limited");
     }
-    const returnTo = c.req.query("returnTo");
+    let linkUserId: string | undefined;
+    if (linking) {
+      // The account's own session only: never one opened from a shared link (loadUser refuses those here).
+      const user = await loadUser(c, deps).catch(() => undefined);
+      if (user === undefined) return fail("unavailable");
+      if (!user) return fail("signin_required");
+      // Nobody has proved this account's address yet: a way in added now would outlive the
+      // address's owner taking the account over (identity.ts, takeOverUnverified).
+      if (!user.emailVerified) return fail("email_unverified");
+      const hasGoogle = await systemDb.authIdentity.count({ where: { userId: user.id, method: "google" } }).catch(() => null);
+      if (hasGoogle === null) return fail("unavailable");
+      if (hasGoogle) return fail("already_linked");
+      const s = sessionOf(c);
+      if (!signedInRecently(s)) {
+        const proof = await deps.coord.take(linkProofKey(s.sid)).catch(() => undefined);
+        if (proof === undefined) return fail("unavailable");
+        if (!proof) return fail("reauth_required");
+      }
+      linkUserId = user.id;
+    }
     const state = randomToken(24);
     const nonce = randomToken(24);
     const pkce = pkcePair();
+    const pending: PendingSignIn = {
+      provider,
+      verifier: pkce.verifier,
+      nonce,
+      returnTo,
+      ...(c.req.query("keep") === "0" && { keep: false as const }),
+      ...(linkUserId && { linkUserId }),
+    };
     try {
-      await deps.coord.put(
-        `oauth:signin:${state}`,
-        JSON.stringify({ provider, verifier: pkce.verifier, nonce, returnTo: safePath(returnTo) ? returnTo : null }),
-        OAUTH_STATE_TTL_S,
-      );
+      await deps.coord.put(`oauth:signin:${state}`, JSON.stringify(pending), OAUTH_STATE_TTL_S);
     } catch (err) {
       logger.error({ err }, "could not store a sign-in's state");
       return fail("unavailable");
@@ -382,7 +627,8 @@ export function authRoutes(app: App, deps: Deps) {
       throw new HttpError(503, UNAVAILABLE, "auth_unavailable");
     });
     if (!raw) throw new HttpError(400, "This sign-in took too long. Please try again.", "state_expired");
-    const pendingSignIn = JSON.parse(raw) as { provider: FederatedProvider; verifier: string; nonce: string; returnTo: string | null };
+    const pendingSignIn = JSON.parse(raw) as PendingSignIn;
+    if (pendingSignIn.linkUserId) return linkFromCallback(c, q, pendingSignIn);
     if (q.error || !q.code) {
       logger.info({ error: q.error, description: q.error_description?.slice(0, 200) }, "federated sign-in did not complete");
       // Cognito passes the provider's "no" on as access_denied (or as an invalid_request naming it).
@@ -395,9 +641,74 @@ export function authRoutes(app: App, deps: Deps) {
       if (isCognito(err, "invalid_grant")) throw new HttpError(400, "This sign-in link has expired. Please try again.", "code_invalid");
       throw cognitoFailure(err, "oauth token exchange");
     });
-    const user = await finishSignIn(c, tokens, { nonce: pendingSignIn.nonce });
+    const user = await finishSignIn(c, tokens, { nonce: pendingSignIn.nonce, keep: pendingSignIn.keep });
     return c.json({ user: publicUser(user), redirect: pendingSignIn.returnTo });
   });
+
+  /**
+   * The end of linking Google from Settings. The person who started it must still be the one
+   * signed in here; the Google account must belong to nobody else. Every answer names where the
+   * page goes next: `returnTo` with `?linked=google`, or with `?link_error=<code>`.
+   */
+  async function linkFromCallback(c: Ctx, q: { code?: string; error?: string; error_description?: string }, p: PendingSignIn) {
+    const back = p.returnTo ?? LINK_RETURN;
+    const refuse = (status: 400 | 403 | 409 | 503, code: string, message: string) => c.json({ error: code, message, redirect: withParam(back, "link_error", code) }, status);
+    if (q.error || !q.code) {
+      logger.info({ error: q.error, description: q.error_description?.slice(0, 200) }, "linking Google did not complete");
+      const cancelled = q.error === "access_denied" || /cancel|denied|user_cancelled/i.test(q.error_description ?? "");
+      return cancelled ? refuse(400, "cancelled", "Linking Google was cancelled. Nothing was changed.") : refuse(400, "provider_error", "We couldn't link that Google account. Please try again.");
+    }
+    const user = await loadUser(c, deps).catch(() => undefined);
+    if (user === undefined) return refuse(503, "unavailable", "We can't reach your account right now. Please try again in a moment.");
+    if (!user || user.id !== p.linkUserId) return refuse(403, "signin_changed", "You're no longer signed in to the account that asked to link Google. Sign in and try again.");
+    if (!user.emailVerified) return refuse(403, "email_unverified", "Verify your email address first, then link Google.");
+    const outcome = await deps.auth
+      .exchangeCode({ code: q.code, redirectUri: redirectUri(), codeVerifier: p.verifier })
+      .then(async (tokens) => {
+        const verified = await deps.auth.verifyIdToken(tokens.idToken, { nonce: p.nonce });
+        // Only who the Google account is was wanted, not a second session: hand its refresh token back.
+        if (tokens.refreshToken) await deps.auth.revokeRefreshToken(tokens.refreshToken).catch((err: unknown) => logger.warn({ err }, "could not revoke a linking sign-in's refresh token"));
+        return { claims: verified };
+      })
+      .catch((err: unknown) => ({ err }));
+    if ("err" in outcome) {
+      if (isCognito(outcome.err, "invalid_grant")) return refuse(400, "code_invalid", "This link took too long. Please try again.");
+      const down = cognitoFailure(outcome.err, "link Google").statusCode === 503;
+      return down ? refuse(503, "unavailable", UNAVAILABLE) : refuse(400, "provider_error", "We couldn't link that Google account. Please try again.");
+    }
+    const { claims } = outcome;
+    if (claims.method !== "google") return refuse(400, "provider_error", "We couldn't link that Google account. Please try again.");
+    const where = { provider_subject: { provider: "cognito", subject: claims.sub } };
+    const taken = (other: { userId: string } | null) => !!other && other.userId !== user.id;
+    let added = false;
+    try {
+      const existing = await systemDb.authIdentity.findUnique({ where });
+      if (taken(existing)) return refuse(409, "google_in_use", "That Google account already signs in to another bizinsights account. Remove it there first, or use a different Google account.");
+      if (!existing) {
+        if (await systemDb.authIdentity.count({ where: { userId: user.id, method: "google" } })) {
+          return refuse(409, "already_linked", "Your account already has a Google sign-in. Remove it first to link a different one.");
+        }
+        try {
+          await systemDb.authIdentity.create({
+            data: { userId: user.id, provider: "cognito", subject: claims.sub, username: claims.username, method: "google", email: claims.email, lastUsedAt: new Date() },
+          });
+        } catch (err) {
+          if ((err as { code?: string })?.code !== "P2002") throw err;
+          // Linked meanwhile: by this account (a second tab) is fine, by another is not.
+          if (taken(await systemDb.authIdentity.findUnique({ where }))) return refuse(409, "google_in_use", "That Google account already signs in to another bizinsights account. Remove it there first, or use a different Google account.");
+          return c.json({ linked: "google" as const, redirect: withParam(back, "linked", "google") });
+        }
+        await recordAuthEvent("identity_linked", user.id, clientIp(c), { cognitoSub: claims.sub, method: "google", via: "settings", cognitoUsername: cognitoUsernameKey(claims.username) });
+        added = true;
+      }
+    } catch (err) {
+      logger.error({ err }, "database unreachable while linking Google");
+      return refuse(503, "unavailable", "We can't reach your account right now. Please try again in a moment.");
+    }
+    // The account's address hears of it, in case it wasn't them.
+    if (added) await notifyMethodAdded(deps.mailer, user, { method: "google", email: claims.email });
+    return c.json({ linked: "google" as const, redirect: withParam(back, "linked", "google") });
+  }
 
   // ---------------- Session ----------------
 

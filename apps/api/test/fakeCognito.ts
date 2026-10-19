@@ -1,13 +1,14 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import { CognitoError, CognitoUnavailableError, type CognitoAuth, type CognitoTokens, type CognitoUser, type FederatedProvider, type IdentityClaims, type SignInMethod } from "../src/cognito.js";
 
 /**
  * An in-memory Cognito user pool that behaves like the real one where the app depends on it:
  * email-as-username native users, UNCONFIRMED until the sign-up code, codes per purpose,
  * refresh tokens bound to their user (and ended by sign-out), federated users with their own
- * subs, PKCE checked on the code exchange, and Cognito's exception names. ID tokens are
- * `fake.<base64url JSON>`: the real verification (signature, issuer, audience) is covered
- * against real keys in cognito.test.ts.
+ * subs, PKCE checked on the code exchange, two-step verification with an authenticator app
+ * (real TOTP codes, a SOFTWARE_TOKEN_MFA challenge at sign-in), and Cognito's exception names.
+ * ID tokens are `fake.<base64url JSON>`: the real verification (signature, issuer, audience) is
+ * covered against real keys in cognito.test.ts.
  */
 export interface FakeUser {
   sub: string;
@@ -20,9 +21,30 @@ export interface FakeUser {
   status: "CONFIRMED" | "UNCONFIRMED";
   enabled: boolean;
   method: SignInMethod;
+  /** Two-step verification: the registered app's secret, and whether sign-in asks for its code. */
+  totp?: { secret: string; enabled: boolean };
+  /** A secret from AssociateSoftwareToken that no code has verified yet. */
+  totpPending?: string;
 }
 
 export type FakeCognito = ReturnType<typeof fakeCognito>;
+
+const B32 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+
+/** RFC 6238 with Cognito's parameters (HMAC-SHA1, 6 digits, 30 seconds), from a base32 secret. */
+export function totpCode(secret: string, at = Date.now()): string {
+  let bits = "";
+  for (const ch of secret.replace(/=+$/, "").toUpperCase()) bits += B32.indexOf(ch).toString(2).padStart(5, "0");
+  const key = Buffer.from((bits.match(/.{8}/g) ?? []).map((b) => parseInt(b, 2)));
+  const counter = Buffer.alloc(8);
+  counter.writeBigUInt64BE(BigInt(Math.floor(at / 30_000)));
+  const h = createHmac("sha1", key).update(counter).digest();
+  const o = h[h.length - 1]! & 0xf;
+  return String((h.readUInt32BE(o) & 0x7fffffff) % 1_000_000).padStart(6, "0");
+}
+
+/** Cognito accepts the codes 30 seconds either side of now (clock skew). */
+const totpMatches = (secret: string, code: string) => [-30_000, 0, 30_000].some((d) => totpCode(secret, Date.now() + d) === code);
 
 export function fakeCognito() {
   const users = new Map<string, FakeUser>();
@@ -33,6 +55,8 @@ export function fakeCognito() {
   const accessTokens = new Map<string, string>();
   /** Federated codes handed back by the fake "Google": code -> user, PKCE challenge, nonce. */
   const oauthCodes = new Map<string, { username: string; challenge: string; nonce: string; redirectUri: string }>();
+  /** SOFTWARE_TOKEN_MFA sessions: valid for three minutes (the app client's AuthSessionValidity), three wrong codes, one right one. */
+  const mfaSessions = new Map<string, { username: string; expiresAt: number; wrong: number }>();
   const calls: string[] = [];
   let seq = 0;
   const state = { unavailable: false, refreshUnavailable: false };
@@ -69,7 +93,15 @@ export function fakeCognito() {
   const policy = (password: string) => {
     if (password.length < 8 || password.trim() !== password) throw err("InvalidPasswordException", "Password did not conform with policy: Password not long enough");
   };
-  const asUser = (u: FakeUser): CognitoUser => ({ username: u.username, sub: u.sub, email: u.email, emailVerified: u.emailVerified, enabled: u.enabled, status: u.status });
+  const asUser = (u: FakeUser): CognitoUser => ({ username: u.username, sub: u.sub, email: u.email, emailVerified: u.emailVerified, enabled: u.enabled, status: u.status, mfaEnabled: !!u.totp?.enabled });
+  /** A password sign-in that got past the password: tokens, or the code step when two-step verification is on. */
+  const signedIn = (u: FakeUser) => {
+    if (!u.totp?.enabled) return { tokens: issue(u) };
+    const session = `mfa-session-${++seq}-${randomBytes(12).toString("hex")}`;
+    mfaSessions.set(session, { username: u.username, expiresAt: Date.now() + 180_000, wrong: 0 });
+    // Cognito names the user by its real name (ChallengeParameters.USER_ID_FOR_SRP), not the email.
+    return { challenge: "SOFTWARE_TOKEN_MFA", session, username: u.username };
+  };
   const up = <T>(fn: () => T): Promise<Awaited<T>> => {
     if (state.unavailable) return Promise.reject(new CognitoUnavailableError("Cognito is down (test)"));
     return Promise.resolve().then(fn) as Promise<Awaited<T>>;
@@ -114,7 +146,7 @@ export function fakeCognito() {
         const u = native(email);
         if (!u || !u.enabled || u.password === null || u.password !== password) throw err("NotAuthorizedException", "Incorrect username or password.");
         if (u.status === "UNCONFIRMED") throw err("UserNotConfirmedException");
-        return { tokens: issue(u) };
+        return signedIn(u);
       }),
     ),
     startEmailOtp: track("startEmailOtp", (email) =>
@@ -217,6 +249,46 @@ export function fakeCognito() {
         refreshTokens.delete(refreshToken);
       }),
     ),
+    associateTotp: track("associateTotp", (accessToken) =>
+      up(() => {
+        const u = byToken(accessToken);
+        const secret = [...randomBytes(32)].map((b) => B32[b % 32]).join("");
+        u.totpPending = secret;
+        return { secret };
+      }),
+    ),
+    verifyTotp: track("verifyTotp", (accessToken, code) =>
+      up(() => {
+        const u = byToken(accessToken);
+        // Cognito names a wrong code at this step EnableSoftwareTokenMFAException ("Code mismatch").
+        if (!u.totpPending || !totpMatches(u.totpPending, code)) throw err("EnableSoftwareTokenMFAException", "Code mismatch");
+        // Registering a new app replaces the old one; whether sign-in asks for it stays as it was.
+        u.totp = { secret: u.totpPending, enabled: u.totp?.enabled ?? false };
+        u.totpPending = undefined;
+        return true;
+      }),
+    ),
+    setTotpEnabled: track("setTotpEnabled", (accessToken, enabled) =>
+      up(() => {
+        const u = byToken(accessToken);
+        if (enabled && !u.totp) throw err("InvalidParameterException", "User has not verified software token mfa");
+        if (u.totp) u.totp.enabled = enabled;
+      }),
+    ),
+    answerTotpChallenge: track("answerTotpChallenge", (username, session, code) =>
+      up(() => {
+        const s = mfaSessions.get(session);
+        // A challenge's USERNAME can't be an alias (the email): only the name the challenge gave.
+        const u = users.get(username);
+        if (!s || !u || s.username !== u.username || s.expiresAt < Date.now()) throw err("NotAuthorizedException", "Invalid session for the user, session is expired.");
+        if (!u.totp || !totpMatches(u.totp.secret, code)) {
+          if (++s.wrong >= 3) mfaSessions.delete(session);
+          throw err("CodeMismatchException", "Invalid code received for user");
+        }
+        mfaSessions.delete(session);
+        return { tokens: issue(u) };
+      }),
+    ),
     authorizeUrl: ({ provider, redirectUri, state: st, codeChallenge, nonce }) =>
       `https://auth.example.test/oauth2/authorize?${new URLSearchParams({ identity_provider: provider, redirect_uri: redirectUri, state: st, code_challenge: codeChallenge, code_challenge_method: "S256", nonce })}`,
     exchangeCode: track("exchangeCode", ({ code, redirectUri, codeVerifier }) =>
@@ -249,7 +321,10 @@ export function fakeCognito() {
       up(() => {
         const u = users.get(username);
         if (!u) throw err("UserNotFoundException");
+        policy(password);
         u.password = password;
+        // Permanent: the user is CONFIRMED from now on.
+        u.status = "CONFIRMED";
       }),
     ),
     adminDeleteUser: track("adminDeleteUser", (username) =>
@@ -275,6 +350,7 @@ export function fakeCognito() {
       refreshTokens.clear();
       accessTokens.clear();
       oauthCodes.clear();
+      mfaSessions.clear();
       calls.length = 0;
       state.unavailable = false;
       state.refreshUnavailable = false;
@@ -307,6 +383,14 @@ export function fakeCognito() {
       };
       users.set(sub, u);
       return u;
+    },
+    /** Two-step verification already set up for a user (as if done in Settings): the secret, for totpCode(). */
+    enableTotp(username: string) {
+      const u = users.get(username);
+      if (!u) throw new Error(`no user ${username}`);
+      const secret = [...randomBytes(32)].map((b) => B32[b % 32]).join("");
+      u.totp = { secret, enabled: true };
+      return secret;
     },
     /**
      * The person finishes at Google (the URL our start route redirected to): their federated

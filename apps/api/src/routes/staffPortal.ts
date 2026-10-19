@@ -102,7 +102,7 @@ export function staffPortalRoutes(app: App, deps: Deps) {
       const signedIn = await deps.auth.passwordSignIn(look.email, input.password);
       if (!("tokens" in signedIn)) throw new CognitoError("UnexpectedChallenge", signedIn.challenge);
       const claims = await deps.auth.verifyIdToken(signedIn.tokens.idToken);
-      user = await resolveUser(claims, { ip: clientIp(c) });
+      user = await resolveUser(claims, { ip: clientIp(c), auth: deps.auth });
       setSessionCookies(c, newSession({ userId: user.id, sub: claims.sub, username: claims.username, method: claims.method, authTime: claims.authTime }), signedIn.tokens.refreshToken);
     } catch (err) {
       await release();

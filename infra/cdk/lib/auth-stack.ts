@@ -49,6 +49,15 @@ export class AuthStack extends Stack {
       // Resolved by CloudFormation from Secrets Manager at deploy time; never in the template.
       parameters.GoogleClientSecret = `{{resolve:secretsmanager:insights/${cfg.name}/app:SecretString:GOOGLE_SIGNIN_CLIENT_SECRET}}`;
     }
+    const custom = cfg.cognitoCustomDomain;
+    if (custom) {
+      // Cognito serves it through CloudFront, which only takes certificates from us-east-1.
+      if (!/^arn:aws:acm:us-east-1:\d{12}:certificate\/[\w-]+$/.test(custom.certificateArn)) {
+        throw new Error(`cognitoCustomDomain.certificateArn must be an ACM certificate in us-east-1, got ${custom.certificateArn}`);
+      }
+      parameters.CustomDomain = custom.name;
+      parameters.CustomDomainCertArn = custom.certificateArn;
+    }
     const emailSender = cfg.cognitoCustomEmail ? this.customEmailSender(cfg, prefix, props.appUrl) : undefined;
     if (emailSender) {
       parameters.CustomEmailSenderState = "ENABLED";
@@ -61,8 +70,9 @@ export class AuthStack extends Stack {
     // Only this pool may invoke the email sender.
     emailSender?.fn.addPermission("CognitoInvoke", { principal: new iam.ServicePrincipal("cognito-idp.amazonaws.com"), sourceArn: pool.attrArn, sourceAccount: cfg.account });
 
-    // The admin calls the app makes (accounts from before Cognito, staff invitations, account
-    // deletion, sign-out everywhere), on this pool only.
+    // The admin calls the app makes (accounts from before Cognito, staff invitations, adding a
+    // password and removing sign-in methods, whether two-step verification is on, account deletion,
+    // sign-out everywhere), on this pool only.
     new iam.Policy(this, "ApiCognitoAdmin", {
       policyName: `insights-${cfg.name}-cognito-admin`,
       roles: [props.apiRole],
@@ -74,8 +84,8 @@ export class AuthStack extends Stack {
       ],
     });
 
-    const domain = `https://${cfg.cognitoDomainPrefix}.auth.${cfg.region}.amazoncognito.com`;
-    new ssm.StringParameter(this, "Runtime", {
+    const domain = custom ? `https://${custom.name}` : `https://${cfg.cognitoDomainPrefix}.auth.${cfg.region}.amazoncognito.com`;
+    const runtime = new ssm.StringParameter(this, "Runtime", {
       parameterName: props.runtimeParam,
       description: "Insights runtime settings (not secret): the app's address and its Cognito pool",
       stringValue: Stack.of(this).toJsonString({
@@ -88,7 +98,10 @@ export class AuthStack extends Stack {
         COGNITO_IDENTITY_PROVIDERS: props.googleClientId ? "Google" : "",
       }),
     });
-    // Outputs: cognito.yaml's own (UserPoolId, ClientId, Domain, ProviderRedirectUri for Google).
+    // The functions move to the own domain only once Cognito has it.
+    if (custom) runtime.node.addDependency(template.getResource("CustomUserPoolDomain"));
+    // Outputs: cognito.yaml's own (UserPoolId, ClientId, Domain, ProviderRedirectUri for Google,
+    // and CustomDomainTarget for the DNS record when there is an own domain).
   }
 
   /**

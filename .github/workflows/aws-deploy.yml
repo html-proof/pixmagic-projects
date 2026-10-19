@@ -104,9 +104,51 @@ jobs:
         run: |
           v() { aws lambda get-alias --function-name "insights-production-$1" --name live --query FunctionVersion --output text 2>/dev/null || true; }
           echo "versions=api=$(v api),jobs=$(v jobs),cron=$(v cron)" >> "$GITHUB_OUTPUT"
+      # The functions read /insights/production/runtime (the Auth stack's: Cognito's ids and domain,
+      # COGNITO_IDENTITY_PROVIDERS) once per cold start, and the Auth stack deploys after the App
+      # stack has moved `live`. A digest only: nothing of the value goes into the log.
+      - name: Runtime settings before the deploy
+        id: runtime_before
+        run: |
+          d=$(aws ssm get-parameter --name /insights/production/runtime --query Parameter.Value --output text 2>/dev/null | sha256sum | cut -c1-64) || d=""
+          echo "digest=${d:-unknown}" >> "$GITHUB_OUTPUT"
       - name: Deploy (CDK)
         working-directory: infra/cdk
         run: npx cdk deploy --all --require-approval never --concurrency 3 -c env=production -c schedules=${{ vars.AWS_SCHEDULES || 'off' }} -c alertEmail=${{ vars.AWS_ALERT_EMAIL }} -c googleClientId=${{ vars.GOOGLE_SIGNIN_CLIENT_ID }}
+      # Runtime settings changed (Google switched on, say): an instance that started between the App
+      # stack's alias move and the Auth stack's update holds the old ones for its lifetime. Publish
+      # the same code again and move `live` (docs/aws-deployment.md, "Restarting the functions"),
+      # only while $LATEST is exactly what `live` runs. Any failure fails the job, so the rollback runs.
+      # Lambda publishes nothing new for an unchanged configuration (it hands back the last version),
+      # so each restart writes this run's id into the description, replacing an earlier one's: a
+      # second change on the same commit (Google switched off again) restarts them too.
+      - name: Restart the functions on changed runtime settings
+        env: { BEFORE: "${{ steps.runtime_before.outputs.digest }}", RUN: "${{ github.run_id }}.${{ github.run_attempt }}" }
+        run: |
+          set -euo pipefail
+          after=$(aws ssm get-parameter --name /insights/production/runtime --query Parameter.Value --output text 2>/dev/null | sha256sum | cut -c1-64) || after=""
+          # Not readable (the deploy role without ssm:GetParameter on it): no way to tell, so no restart.
+          if [[ "$BEFORE" == "unknown" || -z "$after" ]]; then echo "::warning::Couldn't read the runtime settings: the functions weren't restarted for them (docs/aws-deployment.md, Restarting the functions)."; exit 0; fi
+          if [[ "$BEFORE" == "$after" ]]; then echo "Runtime settings unchanged: nothing to restart."; exit 0; fi
+          echo "Runtime settings changed: publishing fresh versions of api, jobs and cron."
+          for f in api jobs cron; do
+            n="insights-production-$f"
+            live=$(aws lambda get-alias --function-name "$n" --name live --query FunctionVersion --output text)
+            live_sha=$(aws lambda get-function-configuration --function-name "$n" --qualifier "$live" --query CodeSha256 --output text)
+            latest_sha=$(aws lambda get-function-configuration --function-name "$n" --query CodeSha256 --output text)
+            if [[ "$live_sha" != "$latest_sha" ]]; then echo "::error::$n: \$LATEST is not the code live runs (version $live); not publishing it."; exit 1; fi
+            aws lambda wait function-updated --function-name "$n"
+            d=$(aws lambda get-function-configuration --function-name "$n" --query Description --output text)
+            if [[ "$d" == "None" ]]; then d=""; fi
+            base="${d%% · runtime settings reloaded*}"
+            # Lambda descriptions hold 256 characters.
+            aws lambda update-function-configuration --function-name "$n" --description "${base:0:200} · runtime settings reloaded (run $RUN)" > /dev/null
+            aws lambda wait function-updated --function-name "$n"
+            v=$(aws lambda publish-version --function-name "$n" --query Version --output text)
+            if [[ "$v" == "$live" ]]; then echo "::error::$n: Lambda published no new version (still $live), so nothing would restart."; exit 1; fi
+            aws lambda update-alias --function-name "$n" --name live --function-version "$v" > /dev/null
+            echo "$n: live $live -> $v"
+          done
       - name: Database migrations
         run: |
           aws lambda invoke --function-name insights-production-cron:live --cli-binary-format raw-in-base64-out \

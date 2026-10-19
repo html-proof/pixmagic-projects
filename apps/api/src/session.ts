@@ -201,3 +201,18 @@ export function readRefreshToken(c: Context, claims: SessionClaims): string | nu
 
 /** Coordinator key that retires one signed-out session until it would have expired. */
 export const retiredSessionKey = (sid: string) => `session:retired:${sid}`;
+
+/**
+ * Changes that give someone a way into the account (a new sign-in method, another email address,
+ * deleting it) need the person again: a sign-in this recent, or their password.
+ */
+export const RECENT_SIGN_IN_S = 15 * 60;
+export const signedInRecently = (claims: SessionClaims, now = Date.now()) => now / 1000 - claims.at <= RECENT_SIGN_IN_S;
+
+/**
+ * Coordinator key: this session re-entered its password to link a Google account
+ * (POST /auth/account/methods/google/prepare). The start of the link spends it; it lasts
+ * LINK_PROOF_TTL_S, and only this session (its id is in an httpOnly cookie) can spend it.
+ */
+export const linkProofKey = (sid: string) => `link:proof:${sid}`;
+export const LINK_PROOF_TTL_S = 300;
