@@ -17,6 +17,8 @@ export async function dailyRows(tx: Tx, workspaceId: string, storeId: string, r:
     taxes: toNumber(x.taxes),
     totalSales: toNumber(x.totalSales),
     orders: x.orders,
+    // A row from before order_value was kept: gross − discounts, as average order value was then.
+    orderValue: x.orderValue === null ? r2(toNumber(x.grossSales) - toNumber(x.discounts)) : toNumber(x.orderValue),
     units: x.units,
     ordersWithCustomer: x.ordersWithCustomer,
     returningCustomerOrders: x.returningCustomerOrders,
@@ -33,11 +35,23 @@ export async function dailyRows(tx: Tx, workspaceId: string, storeId: string, r:
 export async function comparisonRows(tx: Tx, workspaceId: string, storeId: string, c: Comparison, timeZone: string): Promise<DailyMetricsRow[]> {
   if (!c.until) return dailyRows(tx, workspaceId, storeId, c);
   const whole = c.from < c.to ? await dailyRows(tx, workspaceId, storeId, { from: c.from, to: addDays(c.to, -1) }) : [];
-  type Column = "gross_sales" | "discounts" | "refunds" | "shipping" | "taxes" | "total_sales" | "orders" | "units" | "orders_with_customer" | "returning_customer_orders" | "refunded_orders";
+  type Column =
+    | "gross_sales"
+    | "discounts"
+    | "refunds"
+    | "shipping"
+    | "taxes"
+    | "total_sales"
+    | "orders"
+    | "order_value"
+    | "units"
+    | "orders_with_customer"
+    | "returning_customer_orders"
+    | "refunded_orders";
   const part = await tx.$queryRaw<Array<Record<Column | "day", string>>>`
     ${dayTotals({ id: storeId, workspaceId }, [c.to], localMoment(c.to, c.until, timeZone))}
     SELECT day, gross_sales::text, discounts::text, refunds::text, shipping::text, taxes::text, total_sales::text,
-           orders::text, units::text, orders_with_customer::text, returning_customer_orders::text, refunded_orders::text
+           orders::text, order_value::text, units::text, orders_with_customer::text, returning_customer_orders::text, refunded_orders::text
     FROM t`;
   return [
     ...whole,
@@ -50,6 +64,7 @@ export async function comparisonRows(tx: Tx, workspaceId: string, storeId: strin
       taxes: Number(x.taxes),
       totalSales: Number(x.total_sales),
       orders: Number(x.orders),
+      orderValue: Number(x.order_value),
       units: Number(x.units),
       ordersWithCustomer: Number(x.orders_with_customer),
       returningCustomerOrders: Number(x.returning_customer_orders),
@@ -68,13 +83,16 @@ export async function comparisonRows(tx: Tx, workspaceId: string, storeId: strin
  * stops at a time of day) the last day counts only the orders placed before that moment.
  */
 export async function customerCounts(tx: Tx, { ws, storeId }: Scope, r: DateRange & { until?: string | null }, timeZone: string) {
-  const cut = r.until ? Prisma.sql`AND (local_day < ${r.to} OR shopify_created_at < ${localMoment(r.to, r.until, timeZone)})` : Prisma.empty;
+  const cut = r.until
+    ? Prisma.sql`AND (local_day < ${r.to} OR COALESCE(shopify_processed_at, shopify_created_at) < ${localMoment(r.to, r.until, timeZone)})`
+    : Prisma.empty;
+  // A customer who bought only gift cards isn't one of Shopify's customers for the range.
   const [row] = await tx.$queryRaw<Array<{ customers: number; returning: number; first_time: number }>>`
     SELECT COUNT(DISTINCT customer_key)::int AS customers,
            (COUNT(DISTINCT customer_key) FILTER (WHERE is_returning_customer))::int AS returning,
            (COUNT(DISTINCT customer_key) FILTER (WHERE NOT is_returning_customer))::int AS first_time
     FROM orders
-    WHERE workspace_id = ${ws} AND store_id = ${storeId} AND customer_key IS NOT NULL
+    WHERE workspace_id = ${ws} AND store_id = ${storeId} AND customer_key IS NOT NULL AND NOT gift_card_only
       AND local_day BETWEEN ${r.from} AND ${r.to} ${cut}`;
   const customers = row?.customers ?? 0;
   const returning = row?.returning ?? 0;
@@ -98,7 +116,7 @@ export function dailySeries(rows: DailyMetricsRow[], r: DateRange) {
       totalSales: r2(x.totalSales),
       orders: x.orders,
       refunds: r2(x.refunds),
-      averageOrderValue: x.orders > 0 ? r2(beforeRefunds / x.orders) : null,
+      averageOrderValue: x.orders > 0 ? r2(x.orderValue / x.orders) : null,
     };
   });
 }

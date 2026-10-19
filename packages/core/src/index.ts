@@ -28,3 +28,4 @@ export * from "./email/index.js";
 export * from "./team/index.js";
 export * from "./reconcile.js";
 export * from "./configReport.js";
+export * from "./inventory/index.js";

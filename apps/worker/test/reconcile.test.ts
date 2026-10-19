@@ -202,6 +202,26 @@ describe("new and returning customers, as Shopify tells them apart", () => {
     expect(flags).toEqual({ "11": false, "12": true, "13": true, "14": false });
   });
 
+  // Found 2026-10-19 on a seeded dev store, order by order against ShopifyQL: its report judges by
+  // when the orders happened, not by Shopify's position (which follows creation).
+  it("goes by when the orders happened: imported out of order, and a gift-card-only purchase", async () => {
+    const store = await makeStore();
+    const imported = (id: number, processedDaysAgo: number, index: number) =>
+      normalizeGraphqlOrder(gOrder(id, { createdAt: at(1, 8 + index), processedAt: at(processedDaysAgo) }, { customer: 7, index, count: 3 }));
+    // Created 1st, 2nd and 3rd, but they happened 10, 20 and 30 days ago: the last created is the first purchase.
+    // Customer 8 bought only a gift card before: their order is still a new customer's.
+    await writeOrderBatch(store, [
+      imported(51, 10, 1),
+      imported(52, 20, 2),
+      imported(53, 30, 3),
+      normalizeGraphqlOrder(gOrder(54, { createdAt: at(1, 8), processedAt: at(9), lineItems: { pageInfo: { hasNextPage: false }, nodes: [{ id: "gid://shopify/LineItem/54", title: "Card", quantity: 1, isGiftCard: true }] } }, { customer: 8, index: 1, count: 2 })),
+      normalizeGraphqlOrder(gOrder(55, { createdAt: at(1, 9), processedAt: at(5) }, { customer: 8, index: 2, count: 2 })),
+    ]);
+    const flags = Object.fromEntries((await systemDb.order.findMany()).map((o) => [o.shopifyId, o.isReturningCustomer]));
+    expect(flags).toEqual({ "51": true, "52": true, "53": false, "54": false, "55": false });
+    expect((await systemDb.order.findFirstOrThrow({ where: { shopifyId: "54" } })).giftCardOnly).toBe(true);
+  });
+
   it("repairs flags an earlier rule set, and returns the days that changed", async () => {
     const store = await makeStore();
     await seed(store, [gOrder(21, { createdAt: at(5) }, { customer: 7, index: 1, count: 2 }), gOrder(22, { createdAt: at(2) }, { customer: 7, index: 2, count: 2 })]);

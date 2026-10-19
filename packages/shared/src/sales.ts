@@ -191,16 +191,18 @@ export function yearBreakdown(rows: DailyMetricsRow[], today: string, historyFro
     let discounts = 0;
     let refunds = 0;
     let orders = 0;
+    let orderValue = 0;
     for (const r of rows) {
       if (r.day < from || r.day > to) continue;
       gross += r.grossSales;
       discounts += r.discounts;
       refunds += r.refunds;
       orders += r.orders;
+      orderValue += r.orderValue;
     }
     // Rounded to cents before subtracting, as `summarize` does, so totals agree with the tiles.
     const beforeRefunds = r2(r2(gross) - r2(discounts));
-    return { netSales: r2(beforeRefunds - r2(refunds)), refunds: r2(refunds), orders, averageOrderValue: orders > 0 ? r2(beforeRefunds / orders) : null };
+    return { netSales: r2(beforeRefunds - r2(refunds)), refunds: r2(refunds), orders, averageOrderValue: orders > 0 ? r2(r2(orderValue) / orders) : null };
   };
   const coverage = (from: string, to: string): MonthCoverage =>
     historyFrom === null || from >= historyFrom ? "full" : to < historyFrom ? "none" : "partial";

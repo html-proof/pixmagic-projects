@@ -258,7 +258,8 @@ export default function DashboardPage() {
   const cur = ov?.store.currency ?? store?.currency ?? "USD";
   const m = ov?.modules;
   // Unlocking more data is the store's owners' and admins' business, not a shared member's.
-  const disabled = hasFullAccess(access.role) ? (ov?.capabilities.filter((c) => !c.enabled) ?? []) : [];
+  // The Inventory pages ask for their own access (stock levels, stock changes): not a dashboard card.
+  const disabled = hasFullAccess(access.role) ? (ov?.capabilities.filter((c) => !c.enabled && c.area !== "inventory") ?? []) : [];
   const exportSection = detail.view && allowed("reports.export") && seesTopic(access, detail.view, offers) ? TOPIC_EXPORT[detail.view] : undefined;
   const exportHref = exportSection && store && asking ? apiHref(`/workspaces/${workspace.id}/stores/${store.id}/export?section=${exportSection}&${asking.qs}`) : null;
   const headerStore = ov?.store ?? store;
@@ -333,6 +334,15 @@ export default function DashboardPage() {
                 Your numbers below are from the last sync{ov.store.lastSyncedAt ? ` (${fmtRelative(ov.store.lastSyncedAt)})` : ""}.
               </p>
               <a className="btn-primary mt-2 inline-block" href={`https://${ov.store.shopDomain}/admin/settings/plan`} target="_blank" rel="noreferrer">Open Shopify admin</a>
+            </>
+          ) : ov.syncProblem === "not_approved" ? (
+            <>
+              <p>Shopify hasn&apos;t approved bizinsights to read {ov.store.name ?? ov.store.shopDomain}&apos;s orders yet.</p>
+              <p className="mt-1 text-xs">
+                Shopify has to approve an app before it can read orders, which hold customer details, on merchants&apos; stores, and bizinsights is still waiting on that
+                approval. There&apos;s nothing to do on your side, and reconnecting won&apos;t change it. We try again about every half hour while this page is open, so
+                your orders import by themselves once Shopify approves.
+              </p>
             </>
           ) : ov.syncProblem === "shop_locked" ? (
             <>

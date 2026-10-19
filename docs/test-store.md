@@ -108,25 +108,53 @@ differ for reasons that are not bugs:
 
 | Axis | What bizinsights does | Where |
 | --- | --- | --- |
-| Day boundaries | Buckets by `localDay(createdAt, store.timezone)`, the store's IANA zone as reported by Shopify | `packages/core/src/persist.ts:23` |
+| Day boundaries | An order counts on the store-local day Shopify **processed** it (`processedAt`), each sale, refund, edit or cancellation on the day it happened, in the store's IANA zone | `upsertOrder` / `writeOrderBatch` in `packages/core/src/persist.ts` |
 | History depth | **Last 60 days only.** `read_orders` is capped there; all history needs `read_all_orders`, which needs Shopify approval | `BACKFILL_DAYS` in `apps/worker/src/handlers/sync.ts` |
-| Gross sales | `sum(line price × qty)`, **before** discounts, **excluding** tax and shipping | `packages/shared/src/kpi.ts:7` |
-| Net sales | `gross − discounts − refunds` | `packages/shared/src/kpi.ts:66` |
-| Refund timing | Attributed to the day the **refund** was created, not the day the order was placed | `packages/shared/src/kpi.ts:9` |
-| Cancelled orders | Excluded from order counts and sales | `packages/shared/src/kpi.ts:154` |
-| AOV | `(gross − discounts) / orders`, i.e. before refunds | `packages/shared/src/kpi.ts:61` |
+| Sales figures | Shopify's own sales records added up: gross, discounts, returns, net, shipping, taxes and total sales as its sales report has them | `dayTotals` in `packages/core/src/persist.ts`, docs/kpis.md |
+| Refund timing | Attributed to the day the **refund** was made, not the day the order was placed (as Shopify does) | same |
+| Cancelled orders | Orders of the day they were placed; the cancellation is a return on the day it was made | same |
+| Gift cards | Items sold, but no sales; an order of gift cards only is not an order, nor its buyer a customer | same |
+| AOV | What the orders sold as placed (after discounts, before tax; no gift cards, no later edits) ÷ orders | `summarize` in `packages/shared/src/kpi.ts` |
 | Currency | `shopMoney` throughout — **shop** currency, never presentment currency | `packages/core/src/shopifyQueries.ts` (queries), `normalize.ts` (reading them) |
-| Sessions, funnel, conversion rate | **Not reported.** Needs the web pixel and `write_pixels` + `read_customer_events`, deliberately not requested | — |
-| New vs returning | **Not reported.** Needs `read_customers`, deliberately not requested | — |
+| Sessions, funnel, conversion rate | Shopify's own figures need `read_reports` (and Level 2 protected customer data); the pixel's figures are "tracked visits" | docs/kpis.md |
+| New vs returning | Needs `read_customers` (an optional scope the merchant enables) | docs/kpis.md |
 
 The last two are the most common source of "the other app shows more": they are scope choices,
 not gaps. The dashboard reads the scopes actually granted and hides any module whose scopes are
 missing, rather than showing an empty card.
 
 The two differences that most often look like a bug and are not: **refund timing** (a refund
-today against an order from last week moves money on a different day in each tool) and **gross
-excluding tax and shipping** (an app reporting "total sales" from `totalPriceSet` always reads
-higher).
+today against an order from last week moves money on a different day in each tool) and **total
+sales vs net sales** (Shopify's headline is total sales: net sales plus shipping and taxes).
+
+### Checking against a dev store full of orders (2026-10-19)
+
+Run once on `bizinsights-sync-check.myshopify.com` (AUD, prices including GST, New York time), a
+development store in the "My Store" organization created with `shopify store create dev
+--demo-data`, seeded with about 1,000 orders through the Admin API (Shopify lets a development
+store create 5 a minute): processed dates spread over 80 days, orders right at midnight, repeat and
+guest customers, discount codes, free and paid shipping, gift cards, test and pending orders, then
+partial and full refunds, shipping and goodwill refunds, cancellations and order edits. The local
+server imported the store with the same jobs as production (bulk export, sales records, the check
+against Shopify), and its daily figures were compared day by day with Shopify's own sales report
+(ShopifyQL `FROM sales SHOW … GROUP BY day`, `read_reports`).
+
+Gross sales, discounts, returns, net sales, shipping, taxes and total sales matched to the cent on
+every day. Five rules didn't, and were fixed (migration 20261019130000_shopify_report_rules):
+orders counted on their creation day instead of their processed day; orders of gift cards only
+counted as orders and their buyers as customers; gift cards left out of items sold; AOV counting
+items an edit added on a later day (an edit made the day the order was placed does count);
+returning customers decided by Shopify's position of the order (`customerOrderIndex`, which follows
+creation) where its report goes by when the orders happened. After the fix, with 985 orders: every
+figure equal on all 74 days with sales, all 12 tiles equal for 7 ranges, and the returning flag
+equal on 878 of 878 orders. Shopify's report settles asynchronously: compared minutes after the
+orders were made, it still classified some customers by creation order.
+
+To repeat it: create a dev store with `shopify store create dev --demo-data`, give the Shopify CLI
+access with `shopify store auth --scopes write_orders,read_reports,…` (one approval in the admin),
+create orders through REST `POST /admin/api/2026-10/orders.json` (`orderCreate` needs an offline
+token; the CLI's is online) with `processed_at` in the past, attach the store to a local server
+(docs/local-dev.md) and compare its `daily_store_metrics` with ShopifyQL by day.
 
 ### When a difference is real
 

@@ -17,7 +17,11 @@ export const MAX_ATTEMPTS = 6;
 /** Exponential backoff: 5s, 10s, 20s, ... capped at 15 minutes. */
 export const backoffSeconds = (attempt: number) => Math.min(900, 5 * 2 ** Math.max(0, attempt - 1));
 
-export type SyncKind = "shop" | "products" | "variants" | "orders" | "install_pixel";
+/** `inventory`: every location and stock level of the store, read from Shopify (core/inventory). */
+export type SyncKind = "shop" | "products" | "variants" | "orders" | "install_pixel" | "inventory";
+
+/** How an inventory pass came about, which is also what it records its differences as. */
+export type InventoryTrigger = "import" | "manual" | "reconcile";
 
 export interface SyncJobData {
   storeId: string;
@@ -63,6 +67,21 @@ export interface SyncJobData {
    * starts once it has learned it. Absent on messages sent before the ids were carried.
    */
   waitingJobIds?: string[];
+  /**
+   * Where an inventory pass has got to: the locations first (paged by `cursor`), then each
+   * location's stock levels in turn (`index` into `locations`, paged by `cursor`). `runId` is its
+   * inventory_sync_runs row, which counts what it read and what differed.
+   */
+  inventory?: {
+    trigger: InventoryTrigger;
+    runId?: string;
+    phase: "locations" | "levels";
+    /** Location ids to read levels at, in order. */
+    locations?: string[];
+    index?: number;
+    /** ISO time the pass started: levels at a location it didn't see since then are gone. */
+    startedAt: string;
+  };
 }
 
 export interface WebhookJobData {

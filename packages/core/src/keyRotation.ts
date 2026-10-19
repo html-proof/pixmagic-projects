@@ -3,11 +3,13 @@ import { reencryptEmailCredentials } from "./email/tokens.js";
 import { logger } from "./logger.js";
 import { reencryptStoreTokens } from "./tokens.js";
 import { reencryptWhatsappData } from "./whatsapp/store.js";
+import { reencryptInventorySettings } from "./inventory/settings.js";
 
 /**
  * Re-encrypt everything stored under the keyrings with their active key (run after adding a new
  * key, and before removing the old one; docs/RUNBOOK.md): store tokens, ad tokens and WhatsApp data
- * under TOKEN_ENCRYPTION_KEYS, and the email credentials' data keys, which are re-wrapped under
+ * under TOKEN_ENCRYPTION_KEYS (and the inventory alerts' WhatsApp numbers), and the email
+ * credentials' data keys, which are re-wrapped under
  * EMAIL_CREDENTIAL_KEYS (TOKEN_ENCRYPTION_KEYS when that is empty). Returns the number of rows
  * rewritten; 0 means nothing still needs an old key.
  *
@@ -22,6 +24,7 @@ export async function reencryptAllTokens(): Promise<number> {
     ["ad tokens", reencryptAdTokens],
     ["WhatsApp data", reencryptWhatsappData],
     ["email credentials", reencryptEmailCredentials],
+    ["inventory settings", reencryptInventorySettings],
   ];
   let rewritten = 0;
   const failed: Array<{ part: string; err: unknown }> = [];

@@ -151,14 +151,15 @@ export function workspaceRoutes(app: App, deps: Deps) {
     const pref = await withTenant(ws, (tx) =>
       tx.notificationPreference.findUnique({ where: { userId_workspaceId: { userId: a.user!.id, workspaceId: ws } } }),
     );
-    return c.json({ preferences: pref ?? { syncFailures: true, weeklyDigest: false, productNews: false } });
+    return c.json({ preferences: pref ?? { syncFailures: true, weeklyDigest: false, productNews: false, stockAlerts: true } });
   });
 
   app.put("/workspaces/:ws/notifications", async (c) => {
     const { ws } = c.req.param();
     const a = await requireWorkspace(c, deps, ws, "dashboard:read");
     if (!a.user) throw new HttpError(403, "Session required", "forbidden");
-    const prefs = z.object({ syncFailures: z.boolean(), weeklyDigest: z.boolean(), productNews: z.boolean() }).parse(await body(c));
+    // stockAlerts is optional for clients from before it existed (kept as stored).
+    const prefs = z.object({ syncFailures: z.boolean(), weeklyDigest: z.boolean(), productNews: z.boolean(), stockAlerts: z.boolean().optional() }).parse(await body(c));
     await withTenant(ws, (tx) =>
       tx.notificationPreference.upsert({
         where: { userId_workspaceId: { userId: a.user!.id, workspaceId: ws } },

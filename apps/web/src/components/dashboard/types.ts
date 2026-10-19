@@ -8,6 +8,8 @@ export interface Capability {
   id: string;
   title: string;
   description: string;
+  /** "inventory": the Inventory pages' own access, offered there rather than among the dashboard's locked modules. */
+  area?: "dashboard" | "inventory";
   enabled: boolean;
   missingScopes: string[];
   /** Subsets of missingScopes: askable now, vs fixed by reconnecting (see @app/shared). */
@@ -357,7 +359,7 @@ export interface Freshness {
 export interface Overview {
   store: OverviewStore;
   /** While the store is in error: why Shopify stopped the sync (see syncProblem in the API). */
-  syncProblem?: "shop_unavailable" | "shop_gone" | "shop_locked" | "access" | "other" | null;
+  syncProblem?: "shop_unavailable" | "shop_gone" | "shop_locked" | "access" | "not_approved" | "other" | null;
   range: { from: string; to: string };
   /**
    * What the range is compared with (`Comparison` in @app/shared): `until` while the range is still

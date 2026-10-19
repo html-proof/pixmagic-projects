@@ -11,7 +11,7 @@
 export type AlertSeverity = "info" | "warning" | "critical";
 
 /** Where the problem gets fixed: the bell and the alert email link each to its page. */
-export type AlertArea = "shopify" | "ads" | "email" | "staff" | "whatsapp" | "privacy" | "general";
+export type AlertArea = "shopify" | "ads" | "email" | "staff" | "whatsapp" | "privacy" | "inventory" | "general";
 
 /** The app page each area's alerts link to (a path: the email puts APP_URL in front of it). */
 export const ALERT_PATH: Record<AlertArea, string> = {
@@ -21,6 +21,7 @@ export const ALERT_PATH: Record<AlertArea, string> = {
   staff: "/staff/timesheets",
   whatsapp: "/whatsapp/automations",
   privacy: "/settings/privacy",
+  inventory: "/inventory/low-stock",
   general: "/support",
 };
 
@@ -51,11 +52,17 @@ const SYNC_WHAT: Record<string, string> = {
   products: "your products",
   variants: "your product variants",
   orders: "your orders",
+  inventory: "your stock levels",
 };
 
 const STILL_CORRECT = "The figures you already see are still correct, and the next scheduled sync will try again.";
 
-function syncWording(kind: string, outcome: "failed" | "stalled", severity: AlertSeverity): Omit<AlertWording, "severity"> {
+/** Shopify approves an app's access to protected customer data (orders carry customer details) before it may read them on merchants' stores. */
+const NOT_APPROVED_BODY =
+  "Shopify has to approve an app before it can read orders, which hold customer details, on merchants' stores, and bizinsights is still waiting on that approval. There's nothing to do on your side, and reconnecting won't change it: your orders import by themselves once Shopify approves.";
+
+function syncWording(kind: string, outcome: "failed" | "stalled" | "not_approved", severity: AlertSeverity): Omit<AlertWording, "severity"> {
+  if (outcome === "not_approved") return { area: "shopify", title: `Shopify hasn't approved bizinsights to read ${SYNC_WHAT[kind] ?? "your store data"} yet`, body: NOT_APPROVED_BODY };
   if (kind === "install_pixel") {
     return {
       area: "shopify",
@@ -88,8 +95,8 @@ export function describeAlert(alert: { code: string; severity: string; message: 
   const severity = (SEVERITIES.includes(alert.severity) ? alert.severity : "warning") as AlertSeverity;
   const { code, message } = alert;
 
-  const sync = /^sync_(.+)_(failed|stalled)$/.exec(code);
-  if (sync) return { severity, ...syncWording(sync[1]!, sync[2] as "failed" | "stalled", severity) };
+  const sync = /^sync_(.+)_(failed|stalled|not_approved)$/.exec(code);
+  if (sync) return { severity, ...syncWording(sync[1]!, sync[2] as "failed" | "stalled" | "not_approved", severity) };
   if (code === "webhook_failed") {
     return {
       severity,
@@ -120,6 +127,8 @@ export function describeAlert(alert: { code: string; severity: string; message: 
   if (ads) return { severity, area: "ads", title: ADS_TITLE[ads[1]!]!, body: message || "Open Settings → Advertising to see what it needs." };
   if (code.startsWith("email_account_reauth:")) return { severity, area: "email", title: "An email account needs reconnecting", body: message };
   if (code.startsWith("email_sender_rejected:")) return { severity, area: "email", title: "A sender address was refused", body: message };
+  // Composed from the app's wording and the store's own counts (core's inventory alerts).
+  if (code === "inventory_stock") return { severity, area: "inventory", title: "Stock is running low", body: message };
   if (code === "staff_open_shifts") return { severity, area: "staff", title: "Shifts left open", body: message };
   // The text a merchant wrote in a WhatsApp automation's "notify the team" step.
   if (code.startsWith("wa_rule_")) return { severity, area: "whatsapp", title: "WhatsApp automation", body: message };

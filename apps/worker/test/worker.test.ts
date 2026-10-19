@@ -31,6 +31,7 @@ import {
   type SyncJobData,
 } from "@app/core";
 import { aggregateDaily, localDay, summarize } from "@app/shared";
+import { syncProblem } from "@app/core/reports";
 import { BACKFILL_DAYS, failStaleJobs, importedFrom, ordersSearch, pixelIngestUrl, processWebhook, RECONCILE_ORDER_DAYS, reconcileOrderDays, runAggregate, runSync, scheduleReconcile, seedAfterMove, seedSalesRereads, type WorkerDeps } from "../src/handlers.js";
 import { consume, CRON, runScheduled, type QueueMessage } from "../src/index.js";
 import { agreement, sale, saleMoney, salesAnswer, shopifySales } from "./shopifySales.js";
@@ -790,18 +791,27 @@ describe("aggregation parity", () => {
     const LINES = ["SHIPPING", "GIFT_CARD", "TIP", "DUTY", "ADJUSTMENT", "ADDITIONAL_FEE", "SHIPPING"];
     for (let i = 0; i < 25; i++) {
       const placed = new Date(Date.UTC(2026, 0, 1 + (i % 5), (i * 7) % 24)).toISOString();
+      // Some orders reached Shopify days after the sale (imported, POS offline): created later,
+      // processed (and so counted) when placed. Some hold only a gift card: no order, but an item.
+      const imported = i % 5 === 1;
+      const giftCardOnly = i % 8 === 3;
       const agreements = [
         agreement(placed, [
           sale({
+            lineType: giftCardOnly ? "GIFT_CARD" : "PRODUCT",
             quantity: 1 + (i % 3),
             totalAmount: saleMoney(`${10 + i}.25`),
-            totalDiscountAmountBeforeTaxes: saleMoney(i % 2 ? "1.10" : "0"),
-            totalTaxAmount: saleMoney(i % 3 ? "0.93" : "0"),
+            totalDiscountAmountBeforeTaxes: saleMoney(i % 2 && !giftCardOnly ? "1.10" : "0"),
+            totalTaxAmount: saleMoney(i % 3 && !giftCardOnly ? "0.93" : "0"),
             lineItem: { id: `gid://shopify/LineItem/${5000 + i}` },
           }),
-          sale({ lineType: LINES[i % LINES.length], quantity: null, totalAmount: saleMoney("4.40"), totalTaxAmount: saleMoney("0.40") }),
+          ...(giftCardOnly ? [] : [sale({ lineType: LINES[i % LINES.length], quantity: null, totalAmount: saleMoney("4.40"), totalTaxAmount: saleMoney("0.40") })]),
         ]),
       ];
+      // Edits adding an item: gross sales on the edit's day either way, the order's value only when
+      // made the day it was placed (as Shopify's AOV counts them).
+      if (i % 5 === 2) agreements.push(agreement("2026-01-08T05:00:00Z", [sale({ quantity: 1, totalAmount: saleMoney("7.70"), totalTaxAmount: saleMoney("0.70") })]));
+      if (i % 5 === 4) agreements.push(agreement(placed, [sale({ quantity: 1, totalAmount: saleMoney("3.30"), totalTaxAmount: saleMoney("0.30") })]));
       // Refunds late on 6 Jan UTC (7 Jan in Tokyo), some with adjustment lines of both signs (a refund
       // that differs from the items' value); edits; cancellations.
       if (i % 4 === 0) agreements.push(agreement("2026-01-06T23:30:00Z", [sale({ actionType: "RETURN", totalAmount: saleMoney("-3.33"), totalTaxAmount: saleMoney("-0.30") })]));
@@ -819,11 +829,12 @@ describe("aggregation parity", () => {
         store,
         normalizeGraphqlOrder(
           gOrder(2000 + i, {
-            createdAt: placed,
-            updatedAt: placed,
+            createdAt: imported ? "2026-01-09T12:00:00Z" : placed,
+            processedAt: placed,
+            updatedAt: imported ? "2026-01-09T12:00:00Z" : placed,
             cancelledAt: i % 9 === 0 ? "2026-01-10T00:00:00Z" : null,
             customer: i % 3 === 0 ? null : { id: `gid://shopify/Customer/${i % 4}`, numberOfOrders: String(1 + (i % 2)) },
-            lineItems: { pageInfo: { hasNextPage: false }, nodes: [gLine(5000 + i)] },
+            lineItems: { pageInfo: { hasNextPage: false }, nodes: [gLine(5000 + i, { isGiftCard: giftCardOnly })] },
             agreements: { pageInfo: { hasNextPage: false }, nodes: agreements },
           }),
         ),
@@ -835,7 +846,14 @@ describe("aggregation parity", () => {
 
     const dbOrders = await systemDb.order.findMany({ include: { sales: true } });
     const ref = aggregateDaily(
-      dbOrders.map((o) => ({ createdAt: o.shopifyCreatedAt, customerKey: o.customerKey, isReturningCustomer: o.isReturningCustomer })),
+      dbOrders.map((o) => ({
+        id: o.id,
+        createdAt: o.shopifyCreatedAt,
+        processedAt: o.shopifyProcessedAt,
+        giftCardOnly: o.giftCardOnly,
+        customerKey: o.customerKey,
+        isReturningCustomer: o.isReturningCustomer,
+      })),
       dbOrders.flatMap((o) =>
         o.sales.map((x) => ({
           orderId: o.id,
@@ -861,6 +879,7 @@ describe("aggregation parity", () => {
         shipping: toNumber(r.shipping),
         taxes: toNumber(r.taxes),
         totalSales: toNumber(r.totalSales),
+        orderValue: toNumber(r.orderValue ?? 0),
       })),
     );
     expect(sqlSummary).toEqual(summarize([...ref.values()]));
@@ -871,10 +890,16 @@ describe("aggregation parity", () => {
       expect(r.units).toBe(t.units);
       expect(r.refundedOrders).toBe(t.refundedOrders);
       expect(r.returningCustomerOrders).toBe(t.returningCustomerOrders);
-      for (const k of ["grossSales", "discounts", "refunds", "shipping", "taxes", "totalSales"] as const) expect(toNumber(r[k])).toBeCloseTo(t[k], 2);
+      for (const k of ["grossSales", "discounts", "refunds", "shipping", "taxes", "totalSales", "orderValue"] as const) expect(toNumber(r[k] ?? 0)).toBeCloseTo(t[k], 2);
     }
     // The cancellations are orders of the days they were placed, with their reversal on the 10th.
     expect(sql.find((r) => r.day === "2026-01-10")).toMatchObject({ orders: 0 });
+    // Orders created on 9 Jan count on the days they were processed, as Shopify's reports put them.
+    expect(sql.find((r) => r.day === "2026-01-09")).toBeUndefined();
+    // Gift-card-only orders aren't orders, but their gift cards are items sold.
+    const placedOrders = dbOrders.filter((o) => !o.giftCardOnly).length;
+    expect(sql.reduce((a, r) => a + r.orders, 0)).toBe(placedOrders);
+    expect(dbOrders.filter((o) => o.giftCardOnly).length).toBeGreaterThan(0);
   });
 
   // Regression (2026-10-17 audit): two PixMagic refunds as Shopify recorded them. Every return line
@@ -1105,6 +1130,41 @@ describe("queue consumer", () => {
       // Not lost access: the store isn't marked for reconnecting.
       expect((await systemDb.store.findUniqueOrThrow({ where: { id: store.id } })).status).toBe("active");
     }
+  });
+
+  it("stops at once when Shopify hasn't approved the app for protected customer data, and says so rather than 'reconnect'", async () => {
+    // A merchant's store on the App Store app, 2026-10-18: four attempts in 36 s, each answered the
+    // same, and the store would then have read as one to reconnect (syncProblem "other").
+    const store = await systemDb.store.update({ where: { id: (await makeStore(["read_orders"], "UTC")).id }, data: { status: "active", lastSyncedAt: new Date() } });
+    const ws = store.workspaceId;
+    const owner = await systemDb.user.create({ data: { firebaseUid: "u-pcd", email: "pcd@x.com", emailVerified: true } });
+    await systemDb.membership.create({ data: { workspaceId: ws, userId: owner.id, role: "owner" } });
+    const job = await systemDb.syncJob.create({ data: { workspaceId: ws, storeId: store.id, kind: "orders" } });
+    const refused = {
+      data: null,
+      errors: [
+        {
+          message: "This app is not approved to access the Order object. See https://shopify.dev/docs/apps/launch/protected-customer-data for more details.",
+          extensions: { code: "ACCESS_DENIED" },
+        },
+      ],
+    };
+    const first = message({ storeId: store.id, kind: "orders", syncJobId: job.id, sinceDays: 2 }, 1);
+    await consume("sync", first.msg, { ...deps, fetchImpl: async () => new Response(JSON.stringify(refused), { status: 200 }) });
+    expect(first.m).toMatchObject({ acked: true, retried: undefined });
+    const failed = await systemDb.syncJob.findUniqueOrThrow({ where: { id: job.id } });
+    expect(failed).toMatchObject({ status: "failed", error: expect.stringContaining("not approved to access the Order object") });
+    expect(syncProblem(failed.error)).toBe("not_approved");
+    // Its data has stopped, so the dashboard explains it; its own alert, a warning, worded without "reconnect".
+    expect((await systemDb.store.findUniqueOrThrow({ where: { id: store.id } })).status).toBe("error");
+    expect(await systemDb.alert.findFirstOrThrow({ where: { workspaceId: ws, storeId: store.id } })).toMatchObject({ code: "sync_orders_not_approved", severity: "warning" });
+
+    // Once Shopify approves, the next good run closes it.
+    const again = await systemDb.syncJob.create({ data: { workspaceId: ws, storeId: store.id, kind: "orders" } });
+    const ok = message({ storeId: store.id, kind: "orders", syncJobId: again.id, sinceDays: 2 }, 1);
+    await consume("sync", ok.msg, { ...deps, fetchImpl: async () => new Response(JSON.stringify({ data: ordersPage([]) }), { status: 200 }) });
+    expect(ok.m.acked).toBe(true);
+    expect((await systemDb.alert.findFirstOrThrow({ where: { workspaceId: ws, storeId: store.id } })).resolvedAt).not.toBeNull();
   });
 
   it("has the next reconcile recompute the days of an aggregate job that gave up", async () => {
@@ -2684,16 +2744,25 @@ describe("moving to a new address", () => {
 
 describe("sales records a release left missing", () => {
   /** An order stored `daysAgo` days ago, with or without its sales records read. */
-  async function storedOrder(store: { id: string; workspaceId: string }, n: number, daysAgo: number, salesRead: boolean) {
+  /** `processedRead`: stored with its processed date (orders stored before 2026-10-19 have none). */
+  async function storedOrder(store: { id: string; workspaceId: string }, n: number, daysAgo: number, salesRead: boolean, processedRead = salesRead) {
     const at = new Date(Date.now() - daysAgo * 86_400_000);
     await systemDb.order.create({
       data: {
         workspaceId: store.workspaceId, storeId: store.id, shopifyId: `gid://shopify/Order/${n}`, name: `#${n}`, currency: "AUD",
-        localDay: at.toISOString().slice(0, 10), shopifyCreatedAt: at, shopifyUpdatedAt: at, subtotal: 10, totalDiscounts: 0, totalTax: 0,
-        totalShipping: 0, totalPrice: 10, trafficSource: "direct", salesUpdatedAt: salesRead ? at : null,
+        localDay: at.toISOString().slice(0, 10), shopifyCreatedAt: at, shopifyProcessedAt: processedRead ? at : null, shopifyUpdatedAt: at,
+        subtotal: 10, totalDiscounts: 0, totalTax: 0, totalShipping: 0, totalPrice: 10, trafficSource: "direct", salesUpdatedAt: salesRead ? at : null,
       },
     });
   }
+
+  it("re-reads a store whose orders were stored before their processed date was read", async () => {
+    const before = await makeStore(["read_orders"], "UTC", "d.myshopify.com");
+    await systemDb.store.update({ where: { id: before.id }, data: { status: "active" } });
+    await storedOrder(before, 5, 4, true, false);
+    expect(await seedSalesRereads(deps)).toBe(1);
+    expect(queues.sent.sync.map((m) => [m.storeId, m.kind, m.sinceDays])).toEqual([[before.id, "orders", BACKFILL_DAYS]]);
+  });
 
   it("queues a re-read of the import window for each active store missing them, once a day", async () => {
     const missing = await makeStore(["read_orders"], "UTC", "a.myshopify.com");
