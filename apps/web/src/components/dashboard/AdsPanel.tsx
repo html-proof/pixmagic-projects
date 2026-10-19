@@ -126,8 +126,17 @@ function SalesVsSpend({ a, ov }: { a: AdsModule; ov: Overview }) {
   const money = (n: number) => fmtMoney(n, a.currency);
   const one = fmtMoneyWhole(1, a.currency);
   const label = s.previous && a.compared ? `vs ${fmtSpan(a.compared.previous.from, a.compared.previous.to)}` : null;
-  const change = (d: number | null, kind: "neutral" | "good" | "cost", fallback: string) =>
-    label ? (kind === "neutral" ? <NeutralDelta value={d} label={label} /> : <Delta value={d} invert={kind === "cost"} label={label} />) : fallback;
+  /** The change against the dates compared with, and the figure before; without a comparison, what the figure is. */
+  const change = (d: number | null, kind: "neutral" | "good" | "cost", fallback: string, before: string | null) =>
+    label ? (
+      <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
+        {kind === "neutral" ? <NeutralDelta value={d} label={label} /> : <Delta value={d} invert={kind === "cost"} label={label} />}
+        {before !== null && <span>before: {before}</span>}
+      </span>
+    ) : (
+      fallback
+    );
+  const p = s.previous;
   const sourced = a.sourced ?? null;
   return (
     <Panel
@@ -136,11 +145,15 @@ function SalesVsSpend({ a, ov }: { a: AdsModule; ov: Overview }) {
       help={`Your store's own figures for ${fmtRange(ov.range.from, ov.range.to)}, set against everything spent on ads, in ${a.currency}. ${label ? "Changes compare whole dates with whole dates." : "Changes show once the dates picked are over."}`}
     >
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-5" data-testid="ads-vs-sales">
-        <Stat label="Net sales (Shopify)" value={money(s.netSales)} note={change(s.deltas.netSales, "good", "Every sale, whatever brought it")} />
-        <Stat label="Orders (Shopify)" value={fmtNum(s.orders)} note={change(s.deltas.orders, "good", "Every order, whatever brought it")} />
-        <Stat label={`Sales per ${one} of ads (MER)`} value={fmtTimes(s.salesPerSpend)} note={change(s.deltas.salesPerSpend, "good", "Net sales ÷ ad spend")} />
+        <Stat label="Net sales (Shopify)" value={money(s.netSales)} note={change(s.deltas.netSales, "good", "Every sale, whatever brought it", p ? money(p.netSales) : null)} />
+        <Stat label="Orders (Shopify)" value={fmtNum(s.orders)} note={change(s.deltas.orders, "good", "Every order, whatever brought it", p ? fmtNum(p.orders) : null)} />
+        <Stat label={`Sales per ${one} of ads (MER)`} value={fmtTimes(s.salesPerSpend)} note={change(s.deltas.salesPerSpend, "good", "Net sales ÷ ad spend", p ? fmtTimes(p.salesPerSpend) : null)} />
         <Stat label="Ads as share of sales" value={fmtPct(s.shareOfSales)} note="Ad spend ÷ net sales" />
-        <Stat label="Cost per Shopify order" value={s.costPerOrder === null ? "—" : money(s.costPerOrder)} note={change(s.deltas.costPerOrder, "cost", "Ad spend ÷ every order, whatever brought it")} />
+        <Stat
+          label="Cost per Shopify order"
+          value={s.costPerOrder === null ? "—" : money(s.costPerOrder)}
+          note={change(s.deltas.costPerOrder, "cost", "Ad spend ÷ every order, whatever brought it", p ? (p.costPerOrder === null ? "—" : money(p.costPerOrder)) : null)}
+        />
       </div>
       <p className="mt-3 text-xs text-muted">
         Sales per {one} of ads (the marketing efficiency ratio) counts every sale your store made, not only the ones the platforms credit to their ads: it is your store&apos;s own measure, and
