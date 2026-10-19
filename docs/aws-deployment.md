@@ -200,9 +200,10 @@ affect:
   `packages/shared`, the e2e stand-ins (`infra/cognito-local`, `infra/postgres`,
   `docker-compose.yml`), the dependencies or `ci.yml`, or has the label `e2e` (labels are read per
   push: add it, then push). A push to `main` always needs them before Deploy to AWS.
-- Each pull-request job that passes records the tree it tested (an artifact `passed-<job>-<tree>`,
-  14 days). The push to `main` that merges it looks these up first (job "Already passed on a pull
-  request?", about a minute) and skips each job that already passed on exactly its tree. That holds
+- Each pull-request job that passes records the tree it tested: a commit status `ci/passed-<job>`
+  ("tree <tree>") on the pull request's head. The push to `main` that merges it looks these up first
+  (job "Already passed on a pull request?", about a minute) and skips each job that already passed
+  on exactly its tree. That holds
   when `main` hasn't moved since the pull request's last run: of several pull requests merged back to
   back, only the first saves anything.
 - The integration tests (`pnpm test:integration` and the migrations check, ~4 of the checks job's
@@ -210,10 +211,18 @@ affect:
   job hashes the git ids of `apps/api`, `apps/worker`, `packages/`, `test-support/`,
   `infra/postgres/`, the root `package.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`,
   `tsconfig.base.json`, `.gitattributes` and `ci.yml`, with the runner's OS and Node version, and
-  looks for an artifact `passed-integration-<key>` (14 days) from a pull request's run or `main`'s.
+  looks for a commit status `ci/passed-integration` ("key <key>") on the pull request's newest 30
+  commits, on the `main` commit it starts from, that commit's parents and the head of the pull
+  request it merged. Every pass records it again on its own commit, so records move forward.
   Unlike the tree check above, this also holds when `main` moved, as long as what moved is outside
   that list (the UI, the CDK app, docs). Tests that start reading a file outside the list need it
   added there (step "What the integration tests read").
+- The records are commit statuses because they take no storage. Until 2026-10-19 they were
+  artifacts, which count against the account's Actions storage (GitHub Free: 500 MB for all its
+  private repositories together, artifacts and Packages). Once that was used up, every upload
+  failed with "Artifact storage quota has been hit", no pass was recorded, and every push to `main`
+  ran the whole ~45-minute suite. The only artifact left is the Playwright report of a failed e2e
+  run (7 days).
 - A newer push cancels the older run on the same pull request. On `main` it waits: the run in
   progress finishes and deploys, then the newest waiting push runs (older waiting ones are dropped).
   So merges minutes apart still deploy, at most one run behind. Before 2026-10-18 `main` cancelled
@@ -445,9 +454,11 @@ job signs in only with the OIDC deploy role and checks that it did.
   A busy PC (demos, other test runs) makes the integration tests 2-3 times slower and can time one
   out: re-run the job.
 - While the runner deploys, nobody deploys by hand: the two don't share a lock.
-- Pass records (`passed-*` artifacts) can't be stored while the account's artifact storage quota is
-  used up ("Artifact storage quota has been hit"). Then every push to `main` runs the checks again
-  (about 40 minutes on the PC) instead of reusing a pull request's pass. It costs only time.
+- "Artifact storage quota has been hit" on the Playwright report step: the account's 500 MB of
+  Actions storage is used up (see the CI list above). Only that report is lost; the pass records
+  are commit statuses. Storage per private repository:
+  `gh api repos/html-proof/<repo>/actions/artifacts --paginate --jq '.artifacts[].size_in_bytes'`.
+  Deleting artifacts frees it once GitHub recounts (it says every 6-12 hours).
 - Job code still runs on the owner's PC: it can reach anything listening on localhost there, and
   what one pull request's job leaves behind the next job on that runner runs with. With the runner
   for main that stops short of main's CI and the deploy; without it, they run with it too. Only
