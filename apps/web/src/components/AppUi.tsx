@@ -144,6 +144,7 @@ export function ConfirmDialog({
   confirmLabel,
   danger = false,
   busy = false,
+  confirmDisabled = false,
   onConfirm,
   onCancel,
 }: {
@@ -152,7 +153,10 @@ export function ConfirmDialog({
   children: ReactNode;
   confirmLabel: string;
   danger?: boolean;
+  /** Something is under way: both buttons wait, and the confirm button says so. */
   busy?: boolean;
+  /** Not ready to confirm yet (a field to fill in): only the confirm button waits; Cancel still works. */
+  confirmDisabled?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
@@ -165,7 +169,8 @@ export function ConfirmDialog({
   useEffect(() => {
     if (!open) return;
     const prev = document.activeElement as HTMLElement | null;
-    ref.current?.querySelector<HTMLElement>("button")?.focus();
+    // A field to fill in comes first; otherwise the first button (Cancel).
+    (ref.current?.querySelector<HTMLElement>("input:not([type=hidden]), textarea, select") ?? ref.current?.querySelector<HTMLElement>("button"))?.focus();
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") cancel.current();
     };
@@ -182,15 +187,24 @@ export function ConfirmDialog({
         <h2 id={id} className="text-lg font-semibold">
           {title}
         </h2>
-        <div className="mt-2 space-y-2 text-sm text-muted">{children}</div>
-        <div className="mt-5 flex flex-wrap justify-end gap-2">
-          <button type="button" className="btn-secondary" onClick={onCancel} disabled={busy}>
-            Cancel
-          </button>
-          <button type="button" className={danger ? "btn-danger" : "btn-primary"} onClick={onConfirm} disabled={busy}>
-            {busy ? "Working…" : confirmLabel}
-          </button>
-        </div>
+        {/* A form, so Enter in a field confirms like the button does. */}
+        <form
+          noValidate
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!busy && !confirmDisabled) onConfirm();
+          }}
+        >
+          <div className="mt-2 space-y-2 text-sm text-muted">{children}</div>
+          <div className="mt-5 flex flex-wrap justify-end gap-2">
+            <button type="button" className="btn-secondary" onClick={onCancel} disabled={busy}>
+              Cancel
+            </button>
+            <button type="submit" className={danger ? "btn-danger" : "btn-primary"} disabled={busy || confirmDisabled}>
+              {busy ? "Working…" : confirmLabel}
+            </button>
+          </div>
+        </form>
       </div>
     </div>
   );

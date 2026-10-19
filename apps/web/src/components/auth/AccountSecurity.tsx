@@ -363,7 +363,8 @@ function MethodsSection({ account: a, onChanged }: { account: AccountInfo; onCha
         open={confirmingLink}
         title="Confirm it's you"
         confirmLabel={busy ? "Checking…" : "Continue to Google"}
-        busy={busy || !linkPassword}
+        busy={busy}
+        confirmDisabled={!linkPassword}
         onCancel={cancelLink}
         onConfirm={() => void linkWithPassword()}
       >
@@ -377,7 +378,8 @@ function MethodsSection({ account: a, onChanged }: { account: AccountInfo; onCha
         title={`Remove ${removing ? METHOD_NAMES[removing.method] : ""}?`}
         confirmLabel={busy ? "Removing…" : "Remove"}
         danger
-        busy={busy || cantConfirm || (needsPassword && !password)}
+        busy={busy}
+        confirmDisabled={cantConfirm || (needsPassword && !password)}
         onCancel={cancel}
         onConfirm={() => void remove()}
       >
@@ -647,7 +649,8 @@ function DeleteSection({ account: a, router }: { account: AccountInfo; router: R
         title="Delete your account?"
         confirmLabel={busy ? "Deleting…" : "Delete account"}
         danger
-        busy={busy || typed !== "DELETE" || cantConfirm || (needsPassword && !password)}
+        busy={busy}
+        confirmDisabled={typed !== "DELETE" || cantConfirm || (needsPassword && !password)}
         onCancel={cancel}
         onConfirm={() => void remove()}
       >
