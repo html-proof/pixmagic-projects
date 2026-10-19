@@ -23,6 +23,7 @@ import {
 } from "@app/core";
 import {
   AccessRevokedError,
+  NotApprovedError,
   failStaleJobs,
   processWebhook,
   refreshExpiringTokens,
@@ -212,7 +213,11 @@ async function onFailure(queue: QueueName, body: unknown, err: Error, final: boo
     // when the store's import was in progress and this was part of it. A catalog refresh, a daily
     // reconcile or a pixel install giving up on an otherwise healthy store is not that: flipping it
     // turned one Shopify 5xx streak into a "your store is broken" banner and a critical alert.
-    const flippable: StoreStatus[] = err instanceof AccessRevokedError ? ["active", "syncing"] : data.kind === "install_pixel" ? [] : ["syncing"];
+    // Shopify not having approved the app for protected customer data stops every orders job too,
+    // but nothing the merchant does fixes it: its own code (worded as such in @app/shared/alerts,
+    // resolved by the next good run like a failure) and never critical.
+    const notApproved = err instanceof NotApprovedError;
+    const flippable: StoreStatus[] = err instanceof AccessRevokedError || notApproved ? ["active", "syncing"] : data.kind === "install_pixel" ? [] : ["syncing"];
     const flipped = flippable.length
       ? await systemDb.store.updateMany({ where: { id: store.id, status: { in: flippable } }, data: { status: "error" } })
       : { count: 0 };
@@ -220,8 +225,8 @@ async function onFailure(queue: QueueName, body: unknown, err: Error, final: boo
       {
         workspaceId: store.workspaceId,
         storeId: store.id,
-        severity: (flipped.count || store.status === "error") ? "critical" : "warning",
-        code: `sync_${data.kind}_failed`,
+        severity: !notApproved && (flipped.count || store.status === "error") ? "critical" : "warning",
+        code: `sync_${data.kind}_${notApproved ? "not_approved" : "failed"}`,
         message: `We couldn't sync ${data.kind} for ${store.shopDomain}: ${err.message}`,
       },
       deps.mailer,

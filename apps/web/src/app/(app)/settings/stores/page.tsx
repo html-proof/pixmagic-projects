@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
-import { canManage, StoresPending, useApp } from "@/components/AppContext";
+import { canManage, StoresPending, useApp, type StoreSummary } from "@/components/AppContext";
 import { ShopifyConnect } from "@/components/ShopifyConnect";
 import { OAUTH_ERRORS } from "@/lib/shopifyErrors";
 import { Alert, EmptyState } from "@/components/ui";
@@ -14,7 +14,7 @@ function modulesNeeding(scope: string): string[] {
 }
 
 /** Plain words for a status a merchant has no reason to know the internal name of. */
-function statusLabel(status: string): { text: string; tone: string } {
+function statusLabel(status: string, problem?: StoreSummary["syncProblem"]): { text: string; tone: string } {
   switch (status) {
     case "active":
       return { text: "Connected", tone: "text-good" };
@@ -25,6 +25,10 @@ function statusLabel(status: string): { text: string; tone: string } {
     case "uninstalled":
       return { text: "Removed in Shopify", tone: "text-muted" };
     case "error":
+      // Reconnecting fixes lost access (and is the best guess when Shopify didn't say), not these.
+      if (problem === "not_approved") return { text: "Waiting for Shopify to approve bizinsights to read orders", tone: "text-muted" };
+      if (problem === "shop_unavailable" || problem === "shop_locked") return { text: "Shopify has paused this store — syncing resumes once it's back", tone: "text-danger" };
+      if (problem === "shop_gone") return { text: "Shopify can't find this store any more", tone: "text-danger" };
       return { text: "Something went wrong — reconnect to fix it", tone: "text-danger" };
     default:
       return { text: status, tone: "text-muted" };
@@ -138,7 +142,7 @@ To stop bizinsights' access in Shopify too, uninstall the app from your Shopify 
         <EmptyState title="No stores yet" body={manage ? "Connect a Shopify store above to start seeing metrics." : "Ask a workspace admin to connect a Shopify store."} />
       )}
       {stores.map((s) => {
-        const status = statusLabel(s.status);
+        const status = statusLabel(s.status, s.syncProblem);
         // write_X implies read_X, so a store granted write_pixels satisfies a read_pixels need.
         const granted = expandScopes(s.grantedScopes);
         const modules = CAPABILITIES.map((c) => ({

@@ -5,7 +5,7 @@
 import type { Store } from "@app/db";
 import { env, withAccessToken, graphqlOrderOverflow, logger, normalizeGraphqlSales, ORDER_LINE_ITEMS_QUERY, parseShopify, replaceOrderSales, storedSalesState, graphqlAgreementListSchema, graphqlOrderSchema, shopifyGraphqlWithCost, ShopifyGraphqlError, ShopifyHttpError, StoreDisconnectedError, orderSalesQuery, orderCustomerHistorySchema, orderIndex, type CustomerHistory, type GraphqlOrder, type SyncJobData } from "@app/core";
 import { expandScopes } from "@app/shared";
-import { AccessRevokedError, enqueueAggregate, sleep, UnrecoverableError, type WorkerDeps } from "./common.js";
+import { AccessRevokedError, enqueueAggregate, NotApprovedError, sleep, UnrecoverableError, type WorkerDeps } from "./common.js";
 
 /** Ceiling on the cost-budget delay we hand to the next message, in seconds. */
 export const MAX_PACE_DELAY_S = 60;
@@ -60,9 +60,21 @@ export async function gql<T>(deps: WorkerDeps, store: Store, pace: Pace, query: 
     // same answer. The message stays Shopify's ("Shopify 402: ..."): the dashboard reads it
     // (syncProblem). Not AccessRevokedError: the store's access is fine and comes back with the shop.
     if (err instanceof ShopifyHttpError && SHOP_UNAVAILABLE.has(err.status)) throw new UnrecoverableError(err.message);
+    // The app isn't approved for protected customer data: lasts until Shopify approves it, so six
+    // attempts only repeated it, and the store then read as one to reconnect (production, 2026-10-18).
+    if (err instanceof ShopifyGraphqlError && NOT_APPROVED.test(err.message)) {
+      logger.warn({ shop: store.shopDomain, app: store.shopifyAppKey, reason: err.message }, "Shopify hasn't approved the app for protected customer data");
+      throw new NotApprovedError(`Shopify hasn't approved the app for protected customer data yet: ${err.message}`);
+    }
     throw err;
   }
 }
+
+/**
+ * Shopify's answer to an app it hasn't approved for protected customer data ("This app is not
+ * approved to access the Order object. See .../protected-customer-data ...").
+ */
+const NOT_APPROVED = /not approved to (access|use)|protected[- ]customer[- ]data/i;
 
 export interface Page<N> {
   pageInfo: { hasNextPage: boolean; endCursor?: string | null };
@@ -105,7 +117,7 @@ export async function fetchPage<T>(
   // apps not (yet) approved for protected customer data. Retrying can't help; say so plainly.
   const withheld = Object.entries((d ?? {}) as Record<string, unknown>).filter(([, v]) => v === null).map(([k]) => k);
   if (withheld.length) {
-    throw new UnrecoverableError(
+    throw new NotApprovedError(
       `Shopify withheld ${withheld.join(", ")} (access denied). The app needs Shopify's approval for protected customer data before it can read them.`,
     );
   }
@@ -241,9 +253,10 @@ async function refreshOrderSales(deps: WorkerDeps, store: Store, shopifyId: stri
 
 /**
  * `refreshOrderSales` for a webhook, whose own write (`written`: the days it touched) must reach
- * the dashboard whatever happens to the read. Shopify refusing our access is not this delivery's
- * failure: the order keeps what it has (its provisional sales) and the store's sync reports the
- * access. Any other failure aggregates what was written and throws, for the queue to retry.
+ * the dashboard whatever happens to the read. Shopify refusing our access, or not having approved
+ * the app for protected customer data, is not this delivery's failure: the order keeps what it has
+ * (its provisional sales) and the store's sync reports why. Any other failure aggregates what was
+ * written and throws, for the queue to retry.
  */
 export async function readSalesAfterWebhook(
   deps: WorkerDeps,
@@ -256,7 +269,7 @@ export async function readSalesAfterWebhook(
   try {
     return await refreshOrderSales(deps, store, shopifyId, salesKey, force);
   } catch (err) {
-    if (err instanceof AccessRevokedError) {
+    if (err instanceof AccessRevokedError || err instanceof NotApprovedError) {
       logger.warn({ storeId: store.id, order: shopifyId, err: err.message }, "couldn't read the order's sales from Shopify; keeping what is stored");
       return new Set();
     }

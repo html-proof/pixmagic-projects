@@ -16,9 +16,12 @@ import { shopifyModules } from "./shopify.js";
  * last failed job (packages/core/src/shopify.ts). 402 is a frozen, paused or closed store (an unpaid
  * Shopify bill, an ended trial), 404 a store Shopify can't find, 423 a locked one: reconnecting
  * fixes none of them. 401/403 or a missing token is lost access, which reconnecting does fix.
+ * `not_approved`: Shopify hasn't approved the app for protected customer data (the worker's
+ * NotApprovedError), which only Shopify's approval fixes.
  */
-export function syncProblem(error: string | null | undefined): "shop_unavailable" | "shop_gone" | "shop_locked" | "access" | "other" {
+export function syncProblem(error: string | null | undefined): "shop_unavailable" | "shop_gone" | "shop_locked" | "access" | "not_approved" | "other" {
   if (!error) return "other";
+  if (/protected customer data/i.test(error)) return "not_approved";
   if (/^Shopify 402\b/.test(error)) return "shop_unavailable";
   if (/^Shopify 404\b/.test(error)) return "shop_gone";
   if (/^Shopify 423\b/.test(error)) return "shop_locked";
@@ -279,7 +282,18 @@ export async function workspaceStores(tx: Tx, ws: string) {
   const countBy = (rows: Array<{ storeId: string; _count: { _all: number } }>) => new Map(rows.map((r) => [r.storeId, r._count._all]));
   const orderCount = countBy(orders);
   const productCount = countBy(products);
-  return stores.map((store) => ({ store, imported: { orders: orderCount.get(store.id) ?? 0, products: productCount.get(store.id) ?? 0 } }));
+  // Why a store that stopped syncing stopped, as the dashboard says it: the card's status line must
+  // not send someone to reconnect a store that reconnecting doesn't fix. Only stores in error, which are few.
+  const problems = new Map<string, ReturnType<typeof syncProblem>>();
+  for (const s of stores.filter((s) => s.status === "error")) {
+    const failed = await tx.syncJob.findFirst({ where: { storeId: s.id, workspaceId: ws, status: "failed" }, orderBy: { createdAt: "desc" }, select: { error: true } });
+    problems.set(s.id, syncProblem(failed?.error));
+  }
+  return stores.map((store) => ({
+    store,
+    imported: { orders: orderCount.get(store.id) ?? 0, products: productCount.get(store.id) ?? 0 },
+    syncProblem: problems.get(store.id) ?? null,
+  }));
 }
 
 /** A store's 20 latest sync jobs, newest first. */

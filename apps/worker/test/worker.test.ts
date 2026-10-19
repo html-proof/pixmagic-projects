@@ -31,6 +31,7 @@ import {
   type SyncJobData,
 } from "@app/core";
 import { aggregateDaily, localDay, summarize } from "@app/shared";
+import { syncProblem } from "@app/core/reports";
 import { BACKFILL_DAYS, failStaleJobs, importedFrom, ordersSearch, pixelIngestUrl, processWebhook, RECONCILE_ORDER_DAYS, reconcileOrderDays, runAggregate, runSync, scheduleReconcile, seedAfterMove, seedSalesRereads, type WorkerDeps } from "../src/handlers.js";
 import { consume, CRON, runScheduled, type QueueMessage } from "../src/index.js";
 import { agreement, sale, saleMoney, salesAnswer, shopifySales } from "./shopifySales.js";
@@ -1129,6 +1130,41 @@ describe("queue consumer", () => {
       // Not lost access: the store isn't marked for reconnecting.
       expect((await systemDb.store.findUniqueOrThrow({ where: { id: store.id } })).status).toBe("active");
     }
+  });
+
+  it("stops at once when Shopify hasn't approved the app for protected customer data, and says so rather than 'reconnect'", async () => {
+    // A merchant's store on the App Store app, 2026-10-18: four attempts in 36 s, each answered the
+    // same, and the store would then have read as one to reconnect (syncProblem "other").
+    const store = await systemDb.store.update({ where: { id: (await makeStore(["read_orders"], "UTC")).id }, data: { status: "active", lastSyncedAt: new Date() } });
+    const ws = store.workspaceId;
+    const owner = await systemDb.user.create({ data: { firebaseUid: "u-pcd", email: "pcd@x.com", emailVerified: true } });
+    await systemDb.membership.create({ data: { workspaceId: ws, userId: owner.id, role: "owner" } });
+    const job = await systemDb.syncJob.create({ data: { workspaceId: ws, storeId: store.id, kind: "orders" } });
+    const refused = {
+      data: null,
+      errors: [
+        {
+          message: "This app is not approved to access the Order object. See https://shopify.dev/docs/apps/launch/protected-customer-data for more details.",
+          extensions: { code: "ACCESS_DENIED" },
+        },
+      ],
+    };
+    const first = message({ storeId: store.id, kind: "orders", syncJobId: job.id, sinceDays: 2 }, 1);
+    await consume("sync", first.msg, { ...deps, fetchImpl: async () => new Response(JSON.stringify(refused), { status: 200 }) });
+    expect(first.m).toMatchObject({ acked: true, retried: undefined });
+    const failed = await systemDb.syncJob.findUniqueOrThrow({ where: { id: job.id } });
+    expect(failed).toMatchObject({ status: "failed", error: expect.stringContaining("not approved to access the Order object") });
+    expect(syncProblem(failed.error)).toBe("not_approved");
+    // Its data has stopped, so the dashboard explains it; its own alert, a warning, worded without "reconnect".
+    expect((await systemDb.store.findUniqueOrThrow({ where: { id: store.id } })).status).toBe("error");
+    expect(await systemDb.alert.findFirstOrThrow({ where: { workspaceId: ws, storeId: store.id } })).toMatchObject({ code: "sync_orders_not_approved", severity: "warning" });
+
+    // Once Shopify approves, the next good run closes it.
+    const again = await systemDb.syncJob.create({ data: { workspaceId: ws, storeId: store.id, kind: "orders" } });
+    const ok = message({ storeId: store.id, kind: "orders", syncJobId: again.id, sinceDays: 2 }, 1);
+    await consume("sync", ok.msg, { ...deps, fetchImpl: async () => new Response(JSON.stringify({ data: ordersPage([]) }), { status: 200 }) });
+    expect(ok.m.acked).toBe(true);
+    expect((await systemDb.alert.findFirstOrThrow({ where: { workspaceId: ws, storeId: store.id } })).resolvedAt).not.toBeNull();
   });
 
   it("has the next reconcile recompute the days of an aggregate job that gave up", async () => {
