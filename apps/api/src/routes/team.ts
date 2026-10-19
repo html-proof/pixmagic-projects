@@ -378,6 +378,19 @@ export function teamRoutes(app: App, deps: Deps) {
     await limit(deps.coord, `rl:invite-open:${inv.id}`, LIMITS.inviteAcceptUser);
 
     const user = inv.reopenUserId ? await systemDb.user.findUniqueOrThrow({ where: { id: inv.reopenUserId } }) : await userForInvitee(inv.email);
+    // An account for this address that nobody has proved the address of, but that someone can sign in
+    // to (a password set by whoever made it): a link that may have been passed around doesn't prove the
+    // inbox either, so the invitation never lands there. It waits until the address is verified.
+    if (inv.status === "pending" && !user.emailVerified && (await systemDb.authIdentity.count({ where: { userId: user.id } })) > 0) {
+      logger.warn({ event: "invite_open_unverified_account", invitationId: inv.id, userId: user.id, ip: clientIp(c) }, "invitation link refused: the address's account isn't verified");
+      return c.json(
+        {
+          error: "account_unverified",
+          message: "This email address already has a bizinsights account that hasn't been confirmed. Sign in to it and confirm the email address first (or continue with Google using that address), then open this link again.",
+        },
+        409,
+      );
+    }
     if (inv.status === "pending") await acceptTeamInvitation(user, token, clientIp(c), { viaLink: true });
     const m = await systemDb.membership.findUnique({ where: { workspaceId_userId: { workspaceId: inv.workspaceId, userId: user.id } }, select: { accessExpiresAt: true } });
     const ends = [inv.expiresAt, m?.accessExpiresAt].filter((d): d is Date => !!d).sort((x, y) => x.getTime() - y.getTime())[0] ?? null;
