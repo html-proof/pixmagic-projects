@@ -11,11 +11,12 @@
 export type AlertSeverity = "info" | "warning" | "critical";
 
 /** Where the problem gets fixed: the bell and the alert email link each to its page. */
-export type AlertArea = "shopify" | "email" | "staff" | "whatsapp" | "privacy" | "general";
+export type AlertArea = "shopify" | "ads" | "email" | "staff" | "whatsapp" | "privacy" | "general";
 
 /** The app page each area's alerts link to (a path: the email puts APP_URL in front of it). */
 export const ALERT_PATH: Record<AlertArea, string> = {
   shopify: "/settings/stores",
+  ads: "/settings/ads",
   email: "/settings/email/accounts",
   staff: "/staff/timesheets",
   whatsapp: "/whatsapp/automations",
@@ -74,6 +75,14 @@ function syncWording(kind: string, outcome: "failed" | "stalled", severity: Aler
   };
 }
 
+/** An ad account's alerts (core's adConnections/alerts.ts): one per kind and connection, `ads_<kind>:<connection id>`. */
+const ADS_TITLE: Record<string, string> = {
+  reconnect: "An ad account needs reconnecting",
+  expiring: "Meta access ends soon",
+  failing: "An ad account stopped updating",
+  unavailable: "An ad account isn't available",
+};
+
 /** The merchant-facing wording of an alert, from its code (and, for safe codes only, its message). */
 export function describeAlert(alert: { code: string; severity: string; message: string }): AlertWording {
   const severity = (SEVERITIES.includes(alert.severity) ? alert.severity : "warning") as AlertSeverity;
@@ -105,7 +114,10 @@ export function describeAlert(alert: { code: string; severity: string; message: 
       body: "They asked through Shopify for the data bizinsights holds about them. Download it from Settings → Privacy requests and send it to them: Shopify gives 30 days to answer.",
     };
   }
-  // These messages are composed from the app's wording and the merchant's own addresses and counts.
+  // These messages are composed from the app's wording and the merchant's own addresses and counts
+  // (an ad account's: its name and the wording of its error code, adErrorMessage in ./ads).
+  const ads = /^ads_(reconnect|expiring|failing|unavailable):/.exec(code);
+  if (ads) return { severity, area: "ads", title: ADS_TITLE[ads[1]!]!, body: message || "Open Settings → Advertising to see what it needs." };
   if (code.startsWith("email_account_reauth:")) return { severity, area: "email", title: "An email account needs reconnecting", body: message };
   if (code.startsWith("email_sender_rejected:")) return { severity, area: "email", title: "A sender address was refused", body: message };
   if (code === "staff_open_shifts") return { severity, area: "staff", title: "Shifts left open", body: message };

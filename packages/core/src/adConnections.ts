@@ -6,9 +6,11 @@
  * rest of core imports them from.
  */
 export * from "./adConnections/config.js";
-// aad (the tokens' encryption context) stays inside adConnections/.
-export { adAccessToken, encryptAdTokens, reencryptAdTokens } from "./adConnections/credentials.js";
+// aad (the tokens' encryption context) and sameSignIn stay inside adConnections/.
+export { adAccessToken, encryptAdTokens, learnAdPerson, reencryptAdTokens } from "./adConnections/credentials.js";
 export * from "./adConnections/connect.js";
 export * from "./adConnections/sync.js";
 export * from "./adConnections/reports.js";
 export * from "./adConnections/status.js";
+export * from "./adConnections/alerts.js";
+export * from "./adConnections/budget.js";

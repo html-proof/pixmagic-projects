@@ -4,13 +4,15 @@
  */
 import { systemDb, type AdConnection } from "@app/db";
 import { decrypt, type AdProvider } from "@app/shared";
-import { googleRevoke, metaRevokeAdsRead, type AdAccount, type TokenSet } from "../ads.js";
+import { AdsAuthError, classifyAdError, googleRevoke, metaRevokeAdsRead, type AdAccount, type TokenSet } from "../ads.js";
 import type { Coord } from "../coord.js";
 import { logger } from "../logger.js";
 import type { FetchLike } from "../shopify.js";
 import { keyring } from "../tokens.js";
+import { resolveAdAlerts } from "./alerts.js";
 import { metaConfig } from "./config.js";
-import { aad, encryptAdTokens } from "./credentials.js";
+import { aad, accessTokenAndPerson, encryptAdTokens, learnAdPerson, sameSignIn } from "./credentials.js";
+import { recordAdFailure } from "./status.js";
 
 export const ADS_PENDING_TTL_S = 900;
 
@@ -32,6 +34,10 @@ export interface PendingAdConnect {
 }
 
 const pendingKey = (nonce: string) => `ads-pending:${nonce}`;
+/** Google Ads and AdSense sign in through one Google client, so one person's grant covers both. */
+const grantFamily = (provider: string): AdProvider[] => (provider === "meta" ? ["meta"] : ["google", "adsense"]);
+/** The choices one person has waiting, so dropping one grant can't pull the tokens out from under another. */
+const personPendingKey = (provider: string, externalUserId: string) => `ads-pending-person:${provider === "meta" ? "meta" : "google"}:${externalUserId}`;
 
 export async function holdPendingAdConnect(
   coord: Coord,
@@ -53,6 +59,22 @@ export async function holdPendingAdConnect(
     expiresAt: Date.now() + ADS_PENDING_TTL_S * 1000,
   };
   await coord.put(pendingKey(nonce), JSON.stringify(pending), ADS_PENDING_TTL_S);
+  if (input.externalUserId) {
+    // Best effort: without it, dropUnusedGrant only sees the choice it is asked about.
+    const key = personPendingKey(input.provider, input.externalUserId);
+    const held = (await pendingOf(coord, key)).filter((p) => p.expiresAt > Date.now());
+    await coord.put(key, JSON.stringify([...held, { nonce, expiresAt: pending.expiresAt }].slice(-20)), ADS_PENDING_TTL_S).catch(() => undefined);
+  }
+}
+
+async function pendingOf(coord: Coord, key: string): Promise<Array<{ nonce: string; expiresAt: number }>> {
+  try {
+    const raw = await coord.peek(key);
+    const list = raw ? (JSON.parse(raw) as unknown) : [];
+    return Array.isArray(list) ? list.filter((p): p is { nonce: string; expiresAt: number } => typeof p?.nonce === "string" && typeof p?.expiresAt === "number") : [];
+  } catch {
+    return [];
+  }
 }
 
 /** Read a pending choice without using it up. */
@@ -84,7 +106,8 @@ export function pendingTokens(p: PendingAdConnect): TokenSet {
 
 /**
  * Save the ad accounts someone just connected. New accounts start enabled; accounts connected
- * before get the new token and come back from "reconnect" / "error", keeping their on/off choice.
+ * before get the new token and come back from "reconnect" / "permission" / "error", keeping their
+ * on/off choice and their stored days. Their alerts are closed: connecting again is the fix.
  */
 export async function saveAdConnections(input: {
   workspaceId: string;
@@ -107,6 +130,8 @@ export async function saveAdConnections(input: {
   for (const a of input.accounts) {
     const where = { storeId_provider_accountId: { storeId: input.storeId, provider: input.provider, accountId: a.accountId } };
     const before = await systemDb.adConnection.findUnique({ where, select: { id: true } });
+    // The account's health at the platform, when the listing said it.
+    const health = a.status ? { accountStatus: a.status, accountStatusDetail: a.statusDetail ?? null } : {};
     const row = await systemDb.adConnection.upsert({
       where,
       create: {
@@ -119,6 +144,7 @@ export async function saveAdConnections(input: {
         timezone: a.timezone,
         loginCustomerId: a.loginCustomerId ?? null,
         connectedByUserId: input.userId,
+        ...health,
         ...tokens,
       },
       update: {
@@ -129,17 +155,18 @@ export async function saveAdConnections(input: {
         loginCustomerId: a.loginCustomerId ?? null,
         connectedByUserId: input.userId,
         status: "active",
+        errorCode: null,
         lastError: null,
+        consecutiveFailures: 0,
+        ...health,
         ...tokens,
       },
     });
+    if (before) await resolveAdAlerts(row).catch((err: unknown) => logger.warn({ err, connectionId: row.id }, "ad alerts not resolved"));
     out.push({ ...row, isNew: !before });
   }
   return out;
 }
-
-/** Google Ads and AdSense sign in through one Google client, so one person's grant covers both. */
-const grantFamily = (provider: string): AdProvider[] => (provider === "meta" ? ["meta"] : ["google", "adsense"]);
 
 /**
  * A refresh token this person already gave bizinsights, for a sign-in where Google didn't send a new
@@ -157,35 +184,231 @@ export async function reusableRefreshToken(provider: AdProvider, externalUserId:
 
 export type RevokeOutcome = "revoked" | "still_used" | "unknown_person" | "not_configured" | "failed";
 
+/** Rows that still hold a working grant: not waiting for a reconnect (whose grant is dead), and with a token. */
+const holdsGrant = { status: { not: "reconnect" }, accessTokenEnc: { not: "" } };
+
+/** At most this many unknown persons are looked up while someone waits for a disconnect; past it the grant is kept. */
+const PERSON_LOOKUPS = 10;
+
+/** Rows grouped by sign-in (the accounts connected in one go share its token and its person), first row first. */
+function bySignIn(rows: AdConnection[]): Array<[AdConnection, ...AdConnection[]]> {
+  const groups = new Map<string, [AdConnection, ...AdConnection[]]>();
+  for (const r of rows) {
+    const key = signInKey(r);
+    const g = groups.get(key);
+    if (g) g.push(r);
+    else groups.set(key, [r]);
+  }
+  return [...groups.values()];
+}
+
+const signInKey = (r: AdConnection) => `${r.storeId}|${r.provider}|${r.refreshTokenEnc ?? r.accessTokenEnc}`;
+
+/**
+ * Who granted this connection's access, asked of the platform with its own token (refreshed first for
+ * Google), and stored on its sign-in's rows. "ended": the token no longer works, so the rows are marked
+ * "reconnect" (their grant can't be relied on). Null: the platform didn't say, or didn't answer.
+ */
+async function resolvePerson(conn: AdConnection, fetchImpl?: FetchLike): Promise<string | "ended" | null> {
+  try {
+    const { token, person } = await accessTokenAndPerson(conn, fetchImpl);
+    return person !== undefined ? person : await learnAdPerson(conn, token, fetchImpl);
+  } catch (err) {
+    if (err instanceof AdsAuthError) {
+      const failure = classifyAdError(err);
+      for (const r of await systemDb.adConnection.findMany({ where: { ...sameSignIn(conn), externalUserId: null }, select: { id: true } })) await recordAdFailure(r.id, failure, "sync");
+      return "ended";
+    }
+    logger.info({ err, connectionId: conn.id }, "ad connection: who granted access couldn't be looked up");
+    return null;
+  }
+}
+
+/**
+ * Whether anything else relies on this person's grant: a connection on the same grant (Google Ads and
+ * AdSense share one), anywhere, by them, or by a person bizinsights doesn't know yet who turns out to
+ * be them. Those are looked up now (a few at a time; the rest, and any that can't be looked up, keep
+ * the grant, to be safe: revoking at Google ends every connection on it).
+ */
+async function grantStillUsed(provider: string, externalUserId: string, exceptId: string | null, fetchImpl?: FetchLike): Promise<boolean> {
+  const family = { provider: { in: grantFamily(provider) }, ...(exceptId ? { NOT: { id: exceptId } } : {}), ...holdsGrant };
+  if ((await systemDb.adConnection.count({ where: { ...family, externalUserId } })) > 0) return true;
+  const unknown = await systemDb.adConnection.findMany({ where: { ...family, externalUserId: null }, orderBy: { updatedAt: "desc" }, take: 500 });
+  const signIns = bySignIn(unknown);
+  if (unknown.length >= 500 || signIns.length > PERSON_LOOKUPS) return true;
+  let unsure = false;
+  for (const [r] of signIns) {
+    const person = await resolvePerson(r, fetchImpl);
+    if (person === externalUserId) return true;
+    if (person === null) unsure = true;
+  }
+  return unsure;
+}
+
+/** Take back the grant: Google's whole grant to bizinsights' client; Meta's ads_read only (WhatsApp keeps working). */
+async function revokeGrant(provider: string, tokens: { accessToken: string; refreshToken: string | null }, externalUserId: string, fetchImpl?: FetchLike): Promise<RevokeOutcome> {
+  if (provider === "meta") {
+    const cfg = metaConfig(fetchImpl);
+    if (!cfg) return "not_configured";
+    await metaRevokeAdsRead(cfg, tokens.accessToken, externalUserId);
+  } else {
+    // Revoking the refresh token ends its access tokens too.
+    await googleRevoke({ fetchImpl }, tokens.refreshToken ?? tokens.accessToken);
+  }
+  return "revoked";
+}
+
 /**
  * After a disconnect: take back the platform access too, unless another connection still relies
  * on the same person's grant (another store, or AdSense next to Google Ads). Google revokes the
  * person's whole grant to bizinsights' client; Meta drops only ads_read (WhatsApp keeps working).
+ * The connection's alerts are closed: there is nothing left to fix.
  * Best effort: the connection is already gone whatever the platform answers.
  */
 export async function revokeAdAccessIfUnused(conn: AdConnection, fetchImpl?: FetchLike): Promise<RevokeOutcome> {
-  if (!conn.externalUserId) return "unknown_person";
+  await resolveAdAlerts(conn).catch((err: unknown) => logger.warn({ err, connectionId: conn.id }, "ad alerts not resolved"));
+  if (!conn.accessTokenEnc) return "unknown_person";
+  // A connection that never learned who granted it asks the platform now, with its own token (what it
+  // learns is kept on the rest of its sign-in; this row is gone). Access that ended has nothing to revoke.
+  const person = conn.externalUserId ?? (await resolvePerson(conn, fetchImpl).catch(() => null));
+  if (!person || person === "ended") return "unknown_person";
   const k = keyring();
   try {
-    // Any connection on the same grant (Google Ads and AdSense share one), anywhere, by this person, or by
-    // a person bizinsights doesn't know yet (connected before identities were kept, or their lookup failed),
-    // keeps it. Those unknown rows learn their person at their next token refresh.
-    const others = await systemDb.adConnection.count({
-      where: { provider: { in: grantFamily(conn.provider) }, NOT: { id: conn.id }, OR: [{ externalUserId: conn.externalUserId }, { externalUserId: null }] },
-    });
-    if (others > 0) return "still_used";
-    if (conn.provider === "meta") {
-      const cfg = metaConfig(fetchImpl);
-      if (!cfg) return "not_configured";
-      await metaRevokeAdsRead(cfg, decrypt(conn.accessTokenEnc, k, aad(conn.storeId, conn.provider, "access")));
-    } else {
-      // Revoking the refresh token ends its access tokens too.
-      const token = conn.refreshTokenEnc ? decrypt(conn.refreshTokenEnc, k, aad(conn.storeId, conn.provider, "refresh")) : decrypt(conn.accessTokenEnc, k, aad(conn.storeId, conn.provider, "access"));
-      await googleRevoke({ fetchImpl }, token);
-    }
-    return "revoked";
+    if (await grantStillUsed(conn.provider, person, conn.id, fetchImpl)) return "still_used";
+    const tokens = {
+      accessToken: decrypt(conn.accessTokenEnc, k, aad(conn.storeId, conn.provider, "access")),
+      refreshToken: conn.refreshTokenEnc ? decrypt(conn.refreshTokenEnc, k, aad(conn.storeId, conn.provider, "refresh")) : null,
+    };
+    return await revokeGrant(conn.provider, tokens, person, fetchImpl);
   } catch (err) {
     logger.warn({ err, connectionId: conn.id, provider: conn.provider }, "ad access revoke failed");
     return "failed";
   }
+}
+
+/**
+ * A sign-in that ended without a connection (the person cancelled the account choice, the platform
+ * refused after the code exchange, nothing could be connected): take back the grant it made, so
+ * nothing is left at Google or Meta that bizinsights doesn't use. Only when it is safe:
+ *
+ * - who signed in is known (`externalUserId`), and no connection on the same grant is theirs, or
+ *   could be (unknown persons are looked up; any that can't be keep the grant);
+ * - the refresh token is the sign-in's own: one taken from their other connections
+ *   (`reusedRefreshToken`, see reusableRefreshToken), or a Google sign-in without one (they gave one
+ *   before, which may be in use), is left alone;
+ * - with `coord`: they have no other account choice waiting (`exceptPending` is the one being dropped).
+ *
+ * A choice left to expire is not revoked: nothing runs when it does. Best effort; never throws.
+ */
+export async function dropUnusedGrant(
+  provider: AdProvider,
+  tokens: TokenSet,
+  externalUserId: string | null | undefined,
+  fetchImpl?: FetchLike,
+  opts: { coord?: Coord; exceptPending?: string; reusedRefreshToken?: boolean } = {},
+): Promise<RevokeOutcome> {
+  if (!externalUserId) return "unknown_person";
+  if (opts.reusedRefreshToken || (provider !== "meta" && !tokens.refreshToken)) return "still_used";
+  try {
+    if (opts.coord) {
+      for (const p of await pendingOf(opts.coord, personPendingKey(provider, externalUserId))) {
+        if (p.nonce !== opts.exceptPending && p.expiresAt > Date.now() && (await peekPendingAdConnect(opts.coord, p.nonce))) return "still_used";
+      }
+    }
+    if (await grantStillUsed(provider, externalUserId, null, fetchImpl)) return "still_used";
+    return await revokeGrant(provider, tokens, externalUserId, fetchImpl);
+  } catch (err) {
+    logger.warn({ err, provider }, "unused ad grant not revoked");
+    return "failed";
+  }
+}
+
+/**
+ * Someone whose login powers ad connections leaves: their bizinsights account is deleted, or (with
+ * `workspaceId`) they are removed from that workspace. Their connections stop using their grant: the
+ * tokens are deleted and the rows wait for a reconnect ("connector_left"), keeping the days already
+ * stored; then the grant is taken back unless another connection still relies on it.
+ */
+export async function releaseUserAdGrants(
+  userId: string,
+  workspaceId?: string,
+  fetchImpl?: FetchLike,
+): Promise<{ released: number; outcomes: RevokeOutcome[] }> {
+  const rows = await systemDb.adConnection.findMany({ where: { connectedByUserId: userId, ...(workspaceId ? { workspaceId } : {}), accessTokenEnc: { not: "" } } });
+  const k = keyring();
+  let released = 0;
+  const outcomes: RevokeOutcome[] = [];
+  for (const group of bySignIn(rows)) {
+    const first = group[0];
+    let tokens: { accessToken: string; refreshToken: string | null } | null = null;
+    try {
+      tokens = {
+        accessToken: decrypt(first.accessTokenEnc, k, aad(first.storeId, first.provider, "access")),
+        refreshToken: first.refreshTokenEnc ? decrypt(first.refreshTokenEnc, k, aad(first.storeId, first.provider, "refresh")) : null,
+      };
+    } catch (err) {
+      logger.warn({ err, connectionId: first.id }, "ad tokens of a leaving person couldn't be read; deleted without a revoke");
+    }
+    const person = first.externalUserId ?? (tokens ? await resolvePerson(first, fetchImpl) : null);
+    const { count } = await systemDb.adConnection.updateMany({
+      where: { id: { in: group.map((r) => r.id) } },
+      data: {
+        status: "reconnect",
+        errorCode: "connector_left",
+        lastError: null,
+        accessTokenEnc: "",
+        refreshTokenEnc: null,
+        accessTokenExpiresAt: null,
+        externalUserId: null,
+        connectedByUserId: null,
+        syncRequestedAt: null,
+      },
+    });
+    released += count;
+    // Without a working token or a known person there is no telling whose grant it was.
+    if (!tokens || !person || person === "ended") {
+      outcomes.push("unknown_person");
+      continue;
+    }
+    try {
+      outcomes.push((await grantStillUsed(first.provider, person, null, fetchImpl)) ? "still_used" : await revokeGrant(first.provider, tokens, person, fetchImpl));
+    } catch (err) {
+      logger.warn({ err, connectionId: first.id }, "ad access revoke failed");
+      outcomes.push("failed");
+    }
+  }
+  if (released) logger.info({ userId, workspaceId: workspaceId ?? null, released, outcomes }, "ad connections released from a leaving person");
+  return { released, outcomes };
+}
+
+/**
+ * Fill in who granted access for connections that don't know it yet (made before bizinsights kept it,
+ * or the look-up failed when they were made), so a disconnect can tell whether anyone else relies on
+ * a grant (see grantStillUsed). A token that no longer works marks its rows "reconnect". One look-up per
+ * sign-in, at most `limit` of them (200), so it is safe to run again: rows already known are skipped.
+ * `remaining`: rows still unknown (the platform wouldn't say, or more than `limit` sign-ins were left).
+ */
+export async function fillAdPersons(opts: { fetchImpl?: FetchLike; limit?: number } = {}): Promise<{ learned: number; ended: number; unknown: number; remaining: number }> {
+  const where = { provider: { in: ["meta", "google", "adsense"] }, externalUserId: null, ...holdsGrant };
+  const out = { learned: 0, ended: 0, unknown: 0, remaining: 0 };
+  const limit = opts.limit ?? 200;
+  const tried = new Set<string>();
+  let cursor: string | undefined;
+  while (tried.size < limit) {
+    const page = await systemDb.adConnection.findMany({ where: { ...where, ...(cursor ? { id: { gt: cursor } } : {}) }, orderBy: { id: "asc" }, take: 200 });
+    if (!page.length) break;
+    cursor = page[page.length - 1]!.id;
+    for (const [r] of bySignIn(page)) {
+      const key = signInKey(r);
+      if (tried.has(key) || tried.size >= limit) continue;
+      tried.add(key);
+      const person = await resolvePerson(r, opts.fetchImpl);
+      if (person === "ended") out.ended++;
+      else if (person) out.learned++;
+      else out.unknown++;
+    }
+  }
+  out.remaining = await systemDb.adConnection.count({ where });
+  logger.info(out, "ad connections: who granted access filled in");
+  return out;
 }

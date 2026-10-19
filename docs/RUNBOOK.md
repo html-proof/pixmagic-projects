@@ -100,14 +100,20 @@ OPS_SHOP=shop.myshopify.com pnpm --filter @app/worker ops:recompute
 | Task | What it does |
 | --- | --- |
 | `ops:recompute` | Rebuilds `daily_store_metrics` for `OPS_SHOP` from its orders and refunds. |
-| `ops:reencrypt` | Re-encrypts everything stored under `TOKEN_ENCRYPTION_KEYS` with the active key: Shopify and ad-platform tokens, WhatsApp connection secrets, contacts, message parameters and links, tracking and review tokens, abandoned checkouts. Also re-wraps the email module's data keys (OAuth tokens, SMTP passwords, domain challenges, event data, recipients) under the active `EMAIL_CREDENTIAL_KEYS` key (or `TOKEN_ENCRYPTION_KEYS` when that is unset). |
+| `ops:reencrypt` | Re-encrypts everything stored under `TOKEN_ENCRYPTION_KEYS` with the active key: Shopify and ad-platform tokens, WhatsApp connection secrets, contacts, message parameters and links, tracking and review tokens, abandoned checkouts. Also re-wraps the email module's data keys (OAuth tokens, SMTP passwords, domain challenges, event data, recipients) under the active `EMAIL_CREDENTIAL_KEYS` key (or `TOKEN_ENCRYPTION_KEYS` when that is unset). Ad connections are picked by both ciphertexts (access and refresh token), not by `token_key_version`, and each sign-in's rows are rewritten together, only over what was read. |
+| `ops:ad-persons` | Fills in who granted access (`ad_connections.external_user_id`: Google's account id, Meta's app-scoped user id) for ad connections that don't know it, one look-up per sign-in (Google: a token refresh first). Until a connection knows, a Disconnect looks the unknown ones up itself (10 sign-ins at most) and keeps the grant at Google or Meta for any it can't place, so run this once after this version is deployed, and again while it prints connections still without a person. A token that no longer works marks its connections "reconnect"; ones the platform wouldn't place stay unknown (their next sync tries again). Safe to repeat (`OPS_LIMIT` caps the sign-ins per run, default 200). |
 
 ## Routine operations
 
 ### Rotate the token encryption key
 1. Generate a key (`openssl rand -base64 32`) and prepend it: `TOKEN_ENCRYPTION_KEYS=2:<new>,1:<old>`. Set it in the app secret (`node infra/cdk/scripts/put-secrets.mjs --set TOKEN_ENCRYPTION_KEYS`, then fresh function instances) and in the `.env` the maintenance tasks use. New writes use v2; v1 still decrypts.
 2. Re-encrypt existing data: `pnpm --filter @app/worker ops:reencrypt` (prints how many rows it rewrote).
-3. Run it again: it must print `re-encrypted 0 rows` (rows written by the app between step 1 and step 2 are already on v2). Only then remove `1:<old>` from both places. Someone in the middle of choosing which ad accounts to connect at that moment has to sign in to the platform again; nothing else is lost.
+3. Run it again: it must print `re-encrypted 0 rows` (rows written by the app between step 1 and step 2 are already on v2: a Google or AdSense token refresh re-seals the refresh token too, for every account of the sign-in). A run that meets a token it can't decrypt still re-encrypts everything else, then fails instead of printing 0, naming the part (the error log has the rows); deal with those rows and run it again. One case it settles itself: an ad sign-in still sealed with a key removed in an earlier rotation (an older version left Google refresh tokens behind) can't be read by anyone, so its tokens are deleted and its accounts wait for a reconnect (the merchant gets the "needs reconnecting" alert); the connection ids are logged as `ad tokens sealed with a removed key`. Before removing the old key, check both ad token columns with the owner-role connection; both counts must be 0:
+   ```sql
+   SELECT count(*) FROM ad_connections WHERE access_token_enc <> '' AND access_token_enc NOT LIKE 'v<new>.%';
+   SELECT count(*) FROM ad_connections WHERE refresh_token_enc IS NOT NULL AND refresh_token_enc NOT LIKE 'v<new>.%';
+   ```
+   Only then remove `1:<old>` from both places. Someone in the middle of choosing which ad accounts to connect at that moment has to sign in to the platform again; nothing else is lost.
 
 ### Rotate the email credential key
 Same steps as above with `EMAIL_CREDENTIAL_KEYS` (when it is set; otherwise the email module uses `TOKEN_ENCRYPTION_KEYS` and the steps above cover it). Each email secret has its own data key; `ops:reencrypt` only re-wraps those data keys, so it is quick. Set the same value in the maintenance `.env`.

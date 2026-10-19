@@ -15,7 +15,7 @@ import {
   metaAuthorizeUrl,
   metaCampaignDays,
   metaExchangeCode,
-  ADS_BACKFILL_DAYS,
+  ADS_GOOGLE_RECHECK_DAYS,
   ADS_RECHECK_DAYS,
   recheckDays,
   type FetchLike,
@@ -214,16 +214,16 @@ describe("AdSense", () => {
 });
 
 describe("the daily re-check of an ad account", () => {
-  it("fetches the first sync's whole 90 days while the stored history falls short of them", () => {
+  it("re-reads as far back as each platform keeps revising: Google 90 days, Meta 30, AdSense the month before early in a month", () => {
     const now = new Date("2026-10-17T12:00:00Z");
-    const conn = (lastSyncedAt: Date | null, historyFrom: string | null) => ({ timezone: "UTC", lastSyncedAt, historyFrom });
-    // 90 days up to 17 Oct start on 20 Jul.
-    expect(recheckDays(conn(now, "2026-07-20"), now)).toBe(ADS_RECHECK_DAYS);
-    expect(recheckDays(conn(now, "2026-05-01"), now)).toBe(ADS_RECHECK_DAYS);
-    // Its first sync failed and a later one worked, or it was connected before its start was recorded.
-    expect(recheckDays(conn(now, "2026-09-18"), now)).toBe(ADS_BACKFILL_DAYS);
-    expect(recheckDays(conn(now, null), now)).toBe(ADS_BACKFILL_DAYS);
-    // Never synced yet: the first sync, queued on connecting, is on its way.
-    expect(recheckDays(conn(null, null), now)).toBe(ADS_RECHECK_DAYS);
+    expect(recheckDays({ provider: "google", timezone: "UTC" }, now)).toBe(ADS_GOOGLE_RECHECK_DAYS);
+    expect(recheckDays({ provider: "meta", timezone: "UTC" }, now)).toBe(ADS_RECHECK_DAYS);
+    expect(recheckDays({ provider: "adsense", timezone: "UTC" }, now)).toBe(ADS_RECHECK_DAYS);
+    // 5 Oct: September's estimated earnings are being finalized, so all of September comes again (35 days).
+    expect(recheckDays({ provider: "adsense", timezone: "UTC" }, new Date("2026-10-05T12:00:00Z"))).toBe(35);
+    // 10 March: all of February (28 days) and ten days of March.
+    expect(recheckDays({ provider: "adsense", timezone: "UTC" }, new Date("2026-03-10T12:00:00Z"))).toBe(38);
+    // January looks back into December of the year before.
+    expect(recheckDays({ provider: "adsense", timezone: "UTC" }, new Date("2027-01-02T12:00:00Z"))).toBe(33);
   });
 });

@@ -181,13 +181,16 @@ describe("ad account sync", () => {
       return json({ error: { message: "(#200) Requires ads_read permission", code: 200 } }, 403);
     };
     await consume("sync", message({ kind: "ads", connectionId: revoked.id, since: today(), until: today() }).msg, deps);
-    expect((await systemDb.adConnection.findUniqueOrThrow({ where: { id: revoked.id } })).status).toBe("reconnect");
+    expect(await systemDb.adConnection.findUniqueOrThrow({ where: { id: revoked.id } })).toMatchObject({ status: "reconnect", errorCode: "scope_missing" });
 
-    // Still granted: this login lost the account itself, which reconnecting can't fix.
-    await systemDb.adConnection.update({ where: { id: revoked.id }, data: { status: "active", lastError: null } });
+    // Still granted: this login lost the account itself, which reconnecting with it can't fix, and
+    // retrying every hour can't either (the daily look asks whether it's back).
+    await systemDb.adConnection.update({ where: { id: revoked.id }, data: { status: "active", errorCode: null, lastError: null } });
     adsRead = "granted";
-    await consume("sync", message({ kind: "ads", connectionId: revoked.id, since: today(), until: today() }).msg, deps);
-    expect(await systemDb.adConnection.findUniqueOrThrow({ where: { id: revoked.id } })).toMatchObject({ status: "error", lastError: expect.stringContaining("ads_read") });
+    const lost = message({ kind: "ads", connectionId: revoked.id, since: today(), until: today() });
+    await consume("sync", lost.msg, deps);
+    expect(lost.m).toMatchObject({ acked: true, retried: null });
+    expect(await systemDb.adConnection.findUniqueOrThrow({ where: { id: revoked.id } })).toMatchObject({ status: "permission", errorCode: "no_access", lastError: expect.stringContaining("ads_read") });
   });
 
   it("rate limits are retried, and only the last attempt marks the account", async () => {
@@ -204,7 +207,8 @@ describe("ad account sync", () => {
   });
 
   it("the 15-minute tick refreshes recent days hourly and re-checks 30 days once a day, skipping accounts awaiting a reconnect", async () => {
-    const a = await connection("meta");
+    // Connected a while ago (a new connection is left to its first sync for an hour).
+    const a = await connection("meta", { createdAt: new Date(Date.now() - 2 * 3600_000) });
     await systemDb.adConnection.create({
       data: { ...(({ id: _id, createdAt: _c, updatedAt: _u, ...rest }) => rest)(a), accountId: "act_2", status: "reconnect" },
     });
@@ -223,19 +227,22 @@ describe("ad account sync", () => {
     expect(await runScheduled(CRON.refreshTokens, deps)).toMatchObject({ adsSynced: 1 });
   });
 
-  it("the daily re-check fetches the whole 90 days for an account whose history falls short of them", async () => {
-    // Synced before, with no start recorded (connected before it was), or one its first sync never reached.
-    const short = await connection("meta", { lastSyncedAt: new Date(), historyFrom: null });
-    expect(await scheduleAdsSync(deps)).toBe(1);
-    expect(queues.sent.sync[0]).toMatchObject({ connectionId: short.id, since: addDays(today(), -89), until: today() });
-    await systemDb.adConnection.update({ where: { id: short.id }, data: { historyFrom: addDays(today(), -20) } });
-    coord.clear();
+  it("an account whose stored history falls short of 25 months has it walked back, 90 days at a time", async () => {
+    // Synced before, its stored days starting 20 days back (its first sync's window, or one cut short).
+    const short = await connection("meta", { lastSyncedAt: new Date(), historyFrom: addDays(today(), -20), syncedThrough: today() });
+    expect(await scheduleAdsSync(deps)).toBe(2);
+    expect(queues.sent.sync).toEqual([
+      expect.objectContaining({ connectionId: short.id, since: addDays(today(), -29), until: today(), trigger: "schedule", health: true }),
+      { kind: "ads", connectionId: short.id, since: addDays(today(), -110), until: addDays(today(), -21), trigger: "history" },
+    ]);
+    // A window on its way holds the walk: the next tick doesn't queue it again.
     await scheduleAdsSync(deps);
-    expect(queues.sent.sync[1]).toMatchObject({ connectionId: short.id, since: addDays(today(), -89) });
-    // Once the 90 days are in, it goes back to 30.
-    await systemDb.adConnection.update({ where: { id: short.id }, data: { historyFrom: addDays(today(), -89) } });
+    expect(queues.sent.sync.filter((j) => (j as unknown as AdsSyncData).trigger === "history")).toHaveLength(1);
+    // Once 25 months are in, there is nothing left to walk.
+    await systemDb.adConnection.update({ where: { id: short.id }, data: { historyFrom: addDays(today(), -759) } });
     coord.clear();
+    queues.clear();
     await scheduleAdsSync(deps);
-    expect(queues.sent.sync[2]).toMatchObject({ connectionId: short.id, since: addDays(today(), -29) });
+    expect(queues.sent.sync.map((j) => (j as unknown as AdsSyncData).trigger)).toEqual(["schedule"]);
   });
 });
