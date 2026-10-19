@@ -84,6 +84,8 @@ export const LIMITS = {
   adsReport: { max: 30, windowSec: 600 },
   /** The status page of a Meta data deletion request, per IP (a code is 80 random bits; this only slows guessing). */
   metaDeletionStatusIp: { max: 60, windowSec: 600 },
+  /** Meta's callbacks refused (a signed_request that doesn't verify), per IP: past it they're answered 429 and no longer logged. Meta's own aren't counted. */
+  metaCallbackRefusedIp: { max: 20, windowSec: 600 },
   /** WhatsApp: connecting a number (Meta calls each), per store. */
   waConnect: { max: 10, windowSec: 600 },
   /** WhatsApp: "Refresh" (number and templates from Meta), per store. */

@@ -111,6 +111,7 @@ export async function metaDataDeletion(userId: string, coord?: Coord): Promise<{
 /** Where a data deletion request stands, by its confirmation code: done (and when), or not one bizinsights knows. */
 export async function metaDataDeletionStatus(code: string): Promise<{ status: "done"; at: string } | { status: "unknown" }> {
   if (!/^[a-f0-9]{20}$/.test(code)) return { status: "unknown" };
-  const row = await systemDb.authEvent.findFirst({ where: { type: META_DELETION_EVENT, metadata: { path: ["code"], equals: code } }, select: { createdAt: true } });
+  // user_id NULL (as they are stored) puts the look-up on the (user_id, created_at) index, not every sign-in event ever kept.
+  const row = await systemDb.authEvent.findFirst({ where: { userId: null, type: META_DELETION_EVENT, metadata: { path: ["code"], equals: code } }, select: { createdAt: true } });
   return row ? { status: "done", at: row.createdAt.toISOString() } : { status: "unknown" };
 }

@@ -159,6 +159,47 @@ describe("Meta's data deletion callback", () => {
     expect((await callback("data-deletion", signedRequest({ algorithm: "HMAC-SHA256", issued_at: Math.floor(Date.now() / 1000), user_id: "31337" }, "nope"))).statusCode).toBe(401);
   });
 
+  it("reaches the accounts of someone who left the workspace: their rows waited for a reconnect, and now they go with their figures", async () => {
+    const leaver = await signIn(ctx, "meta-cb-leaver", "leaver@x.com");
+    const member = await systemDb.membership.create({ data: { workspaceId: ws, userId: leaver.user.id, role: "admin" } });
+    const conn = await connection("meta", "act_1", { connectedByUserId: leaver.user.id });
+    ctx.setFetch(async () => new Response(JSON.stringify({ success: true }), { headers: { "content-type": "application/json" } }));
+    expect((await ctx.app.inject({ method: "DELETE", url: `/workspaces/${ws}/team/members/${member.id}`, headers })).statusCode).toBe(200);
+    expect(await systemDb.adConnection.findUniqueOrThrow({ where: { id: conn.id } })).toMatchObject({ errorCode: "connector_left", accessTokenEnc: "", externalUserId: PERSON });
+    expect((await callback("data-deletion", fromMeta())).statusCode).toBe(200);
+    expect(await systemDb.adConnection.count({ where: { id: conn.id } })).toBe(0);
+    expect(await systemDb.adCampaignDaily.count({ where: { connectionId: conn.id } })).toBe(0);
+  });
+
+  it("the same signed request sent again gets the first answer back, and records nothing more", async () => {
+    await connection("meta", "act_1");
+    const signed = fromMeta();
+    const first = (await callback("data-deletion", signed)).json();
+    const again = (await callback("data-deletion", signed)).json();
+    expect(again).toEqual(first);
+    expect(await systemDb.authEvent.count({ where: { type: "meta_data_deletion" } })).toBe(1);
+    // A new request from Meta (signed at another time) is a request of its own.
+    const later = (await callback("data-deletion", fromMeta(PERSON, { issued_at: Math.floor(Date.now() / 1000) - 60 }))).json();
+    expect(later.confirmation_code).not.toBe(first.confirmation_code);
+  });
+
+  it("refusals are limited per address: past the limit they're answered 429 and no longer logged", async () => {
+    const warned: unknown[] = [];
+    vi.spyOn(logger, "warn").mockImplementation((...a: unknown[]) => void warned.push(a));
+    try {
+      for (let i = 0; i < 20; i++) expect((await callback("data-deletion", "forged.request")).statusCode).toBe(401);
+      expect(warned).toHaveLength(20);
+      const over = await callback("data-deletion", "forged.request");
+      expect(over.statusCode).toBe(429);
+      expect(over.json()).toEqual({ error: "rate_limited" });
+      expect(warned).toHaveLength(20);
+      // Meta's own still get through from there.
+      expect((await callback("deauthorize", fromMeta())).statusCode).toBe(200);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
   it("the status page is limited per address", async () => {
     for (let i = 0; i < 60; i++) expect((await ctx.app.inject({ method: "GET", url: "/meta/data-deletion/0123456789abcdef0123" })).statusCode).toBe(200);
     expect((await ctx.app.inject({ method: "GET", url: "/meta/data-deletion/0123456789abcdef0123" })).statusCode).toBe(429);
