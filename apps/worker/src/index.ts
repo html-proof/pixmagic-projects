@@ -262,7 +262,6 @@ async function onFailure(queue: QueueName, body: unknown, err: Error, final: boo
     // but nothing the merchant does fixes it: its own code (worded as such in @app/shared/alerts,
     // resolved by the next good run like a failure) and never critical.
     const notApproved = err instanceof NotApprovedError;
-    const flippable: StoreStatus[] = err instanceof AccessRevokedError || notApproved ? ["active", "syncing"] : data.kind === "install_pixel" || data.kind === "inventory" ? [] : ["syncing"];
     const flippable: StoreStatus[] =
       err instanceof AccessRevokedError || notApproved ? ["active", "syncing"] : data.kind === "install_pixel" || data.kind === "inventory" ? [] : ["syncing"];
     const flipped = flippable.length
