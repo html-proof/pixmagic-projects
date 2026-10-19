@@ -1,7 +1,8 @@
+import { createHmac, randomInt } from "node:crypto";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { z } from "zod";
 import { systemDb } from "@app/db";
-import { appStoreWorkspace, employmentsForUser, env, logger, sessionAccess } from "@app/core";
+import { appStoreWorkspace, authEmail, employmentsForUser, env, logger, sessionAccess } from "@app/core";
 import { ACCESS_KEYS, accountPasswordProblem, DISPLAY_NAME_MAX, EMAIL_CODE_RE, hasFullAccess, pkcePair, randomToken, safeEqual, sha256Hex } from "@app/shared";
 import { body, clientIp, HttpError, isLinkSession, loadUser, pickSession, requireAppOrigin, requireUser, sessionOf, SESSION_COOKIE, sharedWorkspace, type Ctx, type Deps } from "../context.js";
 import { CognitoError, CognitoUnavailableError, unguessablePassword, type CognitoTokens, type CognitoUser, type FederatedProvider, type SignInResult } from "../cognito.js";
@@ -59,6 +60,20 @@ interface PendingCode {
   session: string;
   keep?: false;
 }
+
+/**
+ * A code we emailed to claim an address nobody proved (see `unproven` below), in the coordinator
+ * under claimKey: only its hash, the Cognito user it was for, and the sign-up's name.
+ */
+interface AddressClaim {
+  username: string;
+  codeHash: string;
+  name: string | null;
+}
+/** As long as Cognito keeps its own codes for the same step (the emails say so). */
+const CLAIM_TTL_S = { signup: 24 * 3600, reset: 3600 } as const;
+const claimKey = (email: string) => `auth:claim:${sha256Hex(email)}`;
+const claimCodeHash = (email: string, code: string) => createHmac("sha256", env().OTP_PEPPER).update(`address-claim:${email}:${code}`).digest("hex");
 
 /** Where linking Google from Settings goes back to when the page didn't say. */
 const LINK_RETURN = "/settings/security";
@@ -340,17 +355,114 @@ export function authRoutes(app: App, deps: Deps) {
     if (input.password !== input.confirmPassword) throw new HttpError(400, "The two passwords don't match.", "password_mismatch");
     try {
       await deps.auth.signUp({ email: input.email, password: input.password, name: input.name });
+      // Cognito's own code from here: a claim of the address from before is over.
+      await deps.coord.take(claimKey(input.email)).catch(() => null);
     } catch (err) {
       if (!isCognito(err, "UsernameExistsException")) throw cognitoFailure(err, "signup");
-      // Signed up before but never entered the code: carry on to the code screen rather than
-      // calling the account taken.
       const existing = await deps.auth.adminGetUser(input.email).catch(() => null);
-      if (existing?.status !== "UNCONFIRMED") throw cognitoFailure(err, "signup");
-      await limit(deps.coord, `rl:code:email:${sha256Hex(input.email)}`, LIMITS.codeEmail);
-      await signUpAgain(c, input, existing);
+      if (existing?.status === "UNCONFIRMED") {
+        // Signed up before but never entered the code: carry on to the code screen rather than
+        // calling the account taken.
+        await limit(deps.coord, `rl:code:email:${sha256Hex(input.email)}`, LIMITS.codeEmail);
+        await signUpAgain(c, input, existing);
+      } else if (existing && (await unproven(existing))) {
+        // Someone opened an account with this address without proving it: the code (ours) decides.
+        await limit(deps.coord, `rl:code:email:${sha256Hex(input.email)}`, LIMITS.codeEmail);
+        await startClaim(c, input.email, "signup", existing, input.name);
+      } else {
+        throw cognitoFailure(err, "signup");
+      }
     }
     return c.json({ ok: true, next: "confirm", email: input.email });
   });
+
+  // ---------------- Claiming an address nobody proved ----------------
+
+  /**
+   * Whether `existing`, the address's confirmed password user, never proved the address, and nor
+   * did its account. Anyone can open such an account for someone else's address (an employee added
+   * with it, the copied link), and Cognito sends no code to an address it hasn't verified: the
+   * address's owner could neither sign up ("account exists") nor reset a password. So we send the
+   * code ourselves (a claim): whoever enters it proves the inbox and gets a password user of their
+   * own for the address, which takes the account over (identity.ts, takeOverUnverified). Until
+   * then nothing changes, so a claim started by someone else costs the account nothing.
+   */
+  async function unproven(existing: CognitoUser): Promise<boolean> {
+    if (existing.status !== "CONFIRMED" || existing.emailVerified) return false;
+    const linked = await systemDb.authIdentity
+      .findUnique({ where: { provider_subject: { provider: "cognito", subject: existing.sub } }, include: { user: { select: { emailVerified: true } } } })
+      .catch(dbOutage(SIGN_IN_UNAVAILABLE));
+    return !linked?.user.emailVerified;
+  }
+
+  /** The address's claimable password user (unproven), or null. */
+  async function claimable(email: string): Promise<CognitoUser | null> {
+    const existing = await deps.auth.adminGetUser(email);
+    return existing && (await unproven(existing)) ? existing : null;
+  }
+
+  /** Email our own code for a claim of `email` (a new one replaces any earlier), kept as long as Cognito keeps its own. */
+  async function startClaim(c: Ctx, email: string, kind: "signup" | "reset", existing: CognitoUser, name: string | null) {
+    const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
+    const claim: AddressClaim = { username: existing.username, codeHash: claimCodeHash(email, code), name };
+    await deps.coord.put(claimKey(email), JSON.stringify(claim), CLAIM_TTL_S[kind]).catch((err: unknown) => {
+      logger.error({ err }, "could not store an address claim");
+      throw new HttpError(503, UNAVAILABLE, "auth_unavailable");
+    });
+    const mail = authEmail({ trigger: kind === "signup" ? "CustomEmailSender_SignUp" : "CustomEmailSender_ForgotPassword", code, name, email, appUrl: env().APP_URL })!;
+    await deps.mailer.send(email, mail.subject, mail.text, mail.html).catch((err: unknown) => {
+      logger.error({ err }, "could not email an address claim's code");
+      throw new HttpError(503, "We couldn't send you an email right now. Please try again in a moment.", "email_unavailable");
+    });
+    const linked = await systemDb.authIdentity.findUnique({ where: { provider_subject: { provider: "cognito", subject: existing.sub } } }).catch(() => null);
+    await recordAuthEvent("address_claim_started", linked?.userId ?? null, clientIp(c), { cognitoSub: existing.sub, via: kind });
+  }
+
+  /**
+   * The code for a pending claim of `email` (sign-up confirmation or password reset), with the
+   * password chosen with it. undefined: no claim stands (none, or one for a user that has gone
+   * since), so Cognito's own code applies. Wrong: invalid_code, a few times an hour at most. Right:
+   * the unproven password user goes, the person gets their own (address verified, this password),
+   * and resolveUser takes the account over; the tokens of that new user's first sign-in.
+   */
+  async function redeemClaim(c: Ctx, email: string, code: string, password: string | undefined): Promise<CognitoTokens | undefined> {
+    const key = claimKey(email);
+    const raw = await deps.coord.peek(key).catch(() => {
+      throw new HttpError(503, UNAVAILABLE, "auth_unavailable");
+    });
+    if (!raw) return undefined;
+    const claim = JSON.parse(raw) as AddressClaim;
+    const current = await claimable(email).catch((err: unknown) => {
+      throw cognitoFailure(err, "address claim");
+    });
+    if (current?.username !== claim.username) {
+      await deps.coord.take(key).catch(() => null);
+      return undefined;
+    }
+    await limit(deps.coord, `rl:claim:email:${sha256Hex(email)}`, LIMITS.claimVerifyEmail);
+    if (!safeEqual(claim.codeHash, claimCodeHash(email, code))) throw new HttpError(400, "That code isn't right. Check the email and try again.", "invalid_code");
+    if (!password) throw new HttpError(400, "Enter the password you chose, then the code again.", "password_required");
+    const weak = accountPasswordProblem(password);
+    if (weak) throw new HttpError(400, weak, "weak_password");
+    if (!(await deps.coord.take(key).catch(() => null))) throw new HttpError(400, "That code has expired or was already used. Ask for a new one.", "expired_code");
+    const fail = (err: unknown): never => {
+      throw cognitoFailure(err, "address claim");
+    };
+    // The other person's password stops working before anything else happens.
+    await deps.auth.adminDeleteUser(current.username).catch(fail);
+    const create = () => deps.auth.adminCreateUser({ email, emailVerified: true, name: claim.name, password });
+    await create().catch(async (err: unknown) => {
+      if (!isCognito(err, "UsernameExistsException")) return fail(err);
+      // A sign-up someone started in the moment between: never confirmed, so the code's owner wins.
+      const raced = await deps.auth.adminGetUser(email).catch(fail);
+      if (raced?.status !== "UNCONFIRMED") throw new HttpError(409, "An account with that email already exists. Log in instead, or reset your password if you've forgotten it.", "account_exists");
+      await deps.auth.adminDeleteUser(raced.username).catch(fail);
+      return create().catch(fail);
+    });
+    await recordAuthEvent("address_claimed", null, clientIp(c), { replacedCognitoSub: current.sub });
+    const signedIn = await deps.auth.passwordSignIn(email, password).catch(fail);
+    return tokensOrChallenge(signedIn);
+  }
 
   /**
    * A sign-up over an earlier one that was never confirmed. With the same password (the button
@@ -401,6 +513,13 @@ export function authRoutes(app: App, deps: Deps) {
     requireAppOrigin(c);
     const input = z.object({ email: emailSchema, code: codeSchema, password: passwordSchema.optional(), keep: keepSchema }).parse(await body(c));
     await limit(deps.coord, `rl:code:verify:${clientIp(c)}`, LIMITS.codeVerifyIp);
+    // Our code for an address someone else opened an account with (startClaim): signs in, and
+    // the account becomes this person's.
+    const claimed = await redeemClaim(c, input.email, input.code, input.password);
+    if (claimed) {
+      const user = await finishSignIn(c, claimed, { keep: input.keep });
+      return c.json({ ok: true, user: publicUser(user) });
+    }
     try {
       await deps.auth.confirmSignUp(input.email, input.code);
     } catch (err) {
@@ -456,6 +575,12 @@ export function authRoutes(app: App, deps: Deps) {
     const { email } = z.object({ email: emailSchema }).parse(await body(c));
     await limit(deps.coord, `rl:code:ip:${clientIp(c)}`, LIMITS.codeIp);
     await limit(deps.coord, `rl:code:email:${sha256Hex(email)}`, LIMITS.codeEmail);
+    // A claim under way: a new code of ours (Cognito has none to send for that user).
+    const claim = await claimInProgress(email);
+    if (claim) {
+      await startClaim(c, email, "signup", claim.user, claim.name);
+      return c.json({ ok: true, message: CODE_SENT });
+    }
     await deps.auth.resendSignUpCode(email).catch((err: unknown) => {
       // Unknown or already confirmed: the same answer, so this can't be used to find accounts.
       if (isCognito(err, "UserNotFoundException", "InvalidParameterException", "NotAuthorizedException")) return;
@@ -463,6 +588,17 @@ export function authRoutes(app: App, deps: Deps) {
     });
     return c.json({ ok: true, message: CODE_SENT });
   });
+
+  /** A claim of `email` that still stands (its user is still the address's unproven one), or null. */
+  async function claimInProgress(email: string): Promise<{ user: CognitoUser; name: string | null } | null> {
+    const raw = await deps.coord.peek(claimKey(email)).catch(() => null);
+    if (!raw) return null;
+    const claim = JSON.parse(raw) as AddressClaim;
+    const user = await claimable(email).catch((err: unknown) => {
+      throw cognitoFailure(err, "address claim");
+    });
+    return user?.username === claim.username ? { user, name: claim.name } : null;
+  }
 
   app.post("/auth/password/forgot", async (c) => {
     requireAppOrigin(c);
@@ -472,7 +608,10 @@ export function authRoutes(app: App, deps: Deps) {
     await limit(deps.coord, `rl:code:email:${sha256Hex(email)}`, LIMITS.codeEmail);
     try {
       await provisionMovedAccount(email, ip);
-      await deps.auth.forgotPassword(email);
+      // An address someone else opened an account with: Cognito won't email it, so we do (startClaim).
+      const unprovenUser = await claimable(email);
+      if (unprovenUser) await startClaim(c, email, "reset", unprovenUser, null);
+      else await deps.auth.forgotPassword(email);
     } catch (err) {
       // No account, or none that can get a code: the same answer as success (no enumeration).
       if (!isCognito(err, "UserNotFoundException", "InvalidParameterException", "NotAuthorizedException")) throw cognitoFailure(err, "forgot password");
@@ -487,6 +626,18 @@ export function authRoutes(app: App, deps: Deps) {
     const weak = accountPasswordProblem(input.password);
     if (weak) throw new HttpError(400, weak, "weak_password");
     if (input.password !== input.confirmPassword) throw new HttpError(400, "The two passwords don't match.", "password_mismatch");
+    // Our code for an address someone else opened an account with: the account becomes this
+    // person's (resolveUser takes it over now, not at their next sign-in), with this password.
+    const claimed = await redeemClaim(c, input.email, input.code, input.password);
+    if (claimed) {
+      const claims = await deps.auth.verifyIdToken(claimed.idToken).catch((err: unknown) => {
+        throw cognitoFailure(err, "verify ID token");
+      });
+      await resolveUser(claims, { ip: clientIp(c), auth: deps.auth }).catch(dbOutage(SIGN_IN_UNAVAILABLE));
+      // Signing in is the sign-in page's job, as after any reset.
+      if (claimed.refreshToken) await deps.auth.revokeRefreshToken(claimed.refreshToken).catch((err: unknown) => logger.warn({ err }, "could not revoke a claim's refresh token"));
+      return c.json({ ok: true, otherMethods: [] });
+    }
     await deps.auth.confirmForgotPassword(input.email, input.code, input.password).catch((err: unknown) => {
       // Cognito answers an unknown address like a wrong code once user-existence errors are hidden.
       throw cognitoFailure(isCognito(err, "UserNotFoundException") ? new CognitoError("CodeMismatchException", "") : err, "reset password");

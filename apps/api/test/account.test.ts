@@ -382,6 +382,67 @@ describe("an account whose address nobody has proved", () => {
     expect((await owner.get("/me")).json().user.id).toBe(account.id);
   });
 
+  /** The code we emailed `to` last (an address claim's: Cognito sends no code to an address it hasn't verified). */
+  const ourCode = (to: string) => {
+    const mail = [...ctx.mailer.sent].reverse().find((m) => m.to === to && /\b\d{6}\b/.test(m.text));
+    if (!mail) throw new Error(`no code emailed to ${to}`);
+    return /\b(\d{6})\b/.exec(mail.text)![1]!;
+  };
+
+  it("doesn't lock the owner out of signing up: our code to the address, and whoever enters it takes the account over", async () => {
+    // Cognito holds the address for the squatter's password user, so a sign-up used to answer
+    // "account exists" and "Forgot password?" sent nothing (Cognito won't email an unverified address).
+    const { squatter, account, password } = await squatted();
+    const owner = testBrowser(ctx);
+    const signup = await owner.post("/auth/signup", { name: "Vic", email: "victim@gmail.com", password: "owners-password", confirmPassword: "owners-password", acceptTerms: true });
+    expect(signup.json()).toMatchObject({ ok: true, next: "confirm", email: "victim@gmail.com" });
+    const code = ourCode("victim@gmail.com");
+    expect(ctx.mailer.sent.at(-1)).toMatchObject({ subject: "Your bizinsights verification code", html: expect.stringContaining(code) });
+    // Until the code is entered nothing changes: a claim anyone starts costs the account nothing.
+    expect((await post("/auth/login", { email: "victim@gmail.com", password })).statusCode).toBe(200);
+    expect((await owner.post("/auth/signup/confirm", { email: "victim@gmail.com", code: code === "000000" ? "111111" : "000000", password: "owners-password" })).json().error).toBe("invalid_code");
+    expect((await owner.post("/auth/signup/confirm", { email: "victim@gmail.com", code })).json().error).toBe("password_required");
+
+    const res = await owner.post("/auth/signup/confirm", { email: "victim@gmail.com", code, password: "owners-password", keep: false });
+    expect(res.json()).toMatchObject({ ok: true, user: { id: account.id, email: "victim@gmail.com", emailVerified: true, displayName: "Vic" } });
+    expect(String(res.headers["set-cookie"])).not.toMatch(/__session=[^;]+;[^,]*Max-Age/);
+    expect((await squatter.get("/me")).statusCode).toBe(401);
+    expect((await post("/auth/login", { email: "victim@gmail.com", password })).statusCode).toBe(401);
+    expect((await post("/auth/login", { email: "victim@gmail.com", password: "owners-password" })).json().user.id).toBe(account.id);
+    expect(await systemDb.authIdentity.count({ where: { userId: account.id } })).toBe(1);
+    expect(await systemDb.authEvent.count({ where: { type: "unverified_identity_removed", userId: account.id } })).toBe(1);
+    // The code worked once; Cognito's own rules apply again from here.
+    expect((await post("/auth/signup", { name: "X", email: "victim@gmail.com", password: "another-password", confirmPassword: "another-password", acceptTerms: true })).json().error).toBe("account_exists");
+  });
+
+  it("lets the owner reset a password for such an address, with our code", async () => {
+    const { squatter, account, password } = await squatted();
+    expect((await post("/auth/password/forgot", { email: "victim@gmail.com" })).statusCode).toBe(200);
+    expect(ctx.auth.calls).not.toContain("forgotPassword");
+    const code = ourCode("victim@gmail.com");
+    expect(ctx.mailer.sent.at(-1)!.subject).toBe("Reset your bizinsights password");
+    const reset = await post("/auth/password/reset", { email: "victim@gmail.com", code, password: "owners-password", confirmPassword: "owners-password" });
+    expect(reset.json()).toEqual({ ok: true, otherMethods: [] });
+    // Taken over at once, not at the owner's next sign-in.
+    expect((await squatter.get("/me")).statusCode).toBe(401);
+    expect(await systemDb.user.findUniqueOrThrow({ where: { id: account.id } })).toMatchObject({ emailVerified: true });
+    expect((await post("/auth/login", { email: "victim@gmail.com", password })).statusCode).toBe(401);
+    expect((await post("/auth/login", { email: "victim@gmail.com", password: "owners-password" })).json().user).toMatchObject({ id: account.id, emailVerified: true });
+  });
+
+  it("allows a few guesses an hour at our code, and a new code from \"Resend\"", async () => {
+    await squatted();
+    await post("/auth/signup", { name: "Vic", email: "victim@gmail.com", password: "owners-password", confirmPassword: "owners-password", acceptTerms: true });
+    const first = ourCode("victim@gmail.com");
+    expect((await post("/auth/signup/resend", { email: "victim@gmail.com" })).statusCode).toBe(200);
+    const second = ourCode("victim@gmail.com");
+    const wrong = ["000000", "111111", "222222", "333333", "444444"].filter((c) => c !== second);
+    for (const guess of wrong.slice(0, 4)) expect((await post("/auth/signup/confirm", { email: "victim@gmail.com", code: guess, password: "owners-password" })).json().error).toBe("invalid_code");
+    if (first !== second) expect((await post("/auth/signup/confirm", { email: "victim@gmail.com", code: first, password: "owners-password" })).json().error).toBe("invalid_code");
+    else expect((await post("/auth/signup/confirm", { email: "victim@gmail.com", code: wrong[4]!, password: "owners-password" })).json().error).toBe("invalid_code");
+    expect((await post("/auth/signup/confirm", { email: "victim@gmail.com", code: second, password: "owners-password" })).statusCode).toBe(429);
+  });
+
   it("verifies with the code sent to its own address", async () => {
     const { squatter, account } = await squatted();
     expect((await squatter.post("/auth/account/verify-email/send")).statusCode).toBe(200);
