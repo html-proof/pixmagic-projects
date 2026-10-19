@@ -433,6 +433,30 @@ describe("what the dates are compared with", () => {
     expect(before.modules.ads.previous.spend).toBe(500);
   });
 
+  it("sets the store's own sales against the ad spend, and counts the orders Shopify's visit record credits to each platform's ads", async () => {
+    const { a, ws, store } = await owner();
+    const [from, to] = [d(-10), d(-8)];
+    // Three orders in the dates: one from a Facebook ad, one from an Instagram post (no ad tag), one direct.
+    await seedOrder(store, { id: "F1", createdAt: at(d(-9)), lines: [{ qty: 1, price: 100 }], traffic: { source: "facebook", medium: "paid", campaign: "spring" } });
+    await seedOrder(store, { id: "I1", createdAt: at(d(-9)), lines: [{ qty: 1, price: 40 }], traffic: { source: "instagram", medium: "unpaid" } });
+    await seedOrder(store, { id: "D1", createdAt: at(to), lines: [{ qty: 1, price: 60 }], traffic: { source: "direct", medium: "direct" } });
+    // The dates before (whole, from their first day, so they count as imported): one order for $20 of ads, so the change can be worked out.
+    await seedOrder(store, { id: "P1", createdAt: at(d(-13)), lines: [{ qty: 1, price: 50 }] });
+    await recomputeDays(store, [d(-13), d(-9), to]);
+    await seedAds(store, [[d(-9), 40, 10], [d(-12), 20, 5]]);
+
+    const m = (await overview(a.headers, ws, store.id, `preset=custom&from=${from}&to=${to}`)).json().modules;
+    expect(m.sales_overview.current).toMatchObject({ netSales: 200, orders: 3 });
+    // $200 of sales for $40 of ads: 5× (MER), $13.33 of ads per order; before, $50 for $20: 2.5× and $20.
+    expect(m.ads.sales).toMatchObject({ netSales: 200, orders: 3, salesPerSpend: 5, shareOfSales: 0.2, costPerOrder: 13.33, previous: { netSales: 50, orders: 1, salesPerSpend: 2.5, costPerOrder: 20 }, deltas: { netSales: 3, orders: 2, salesPerSpend: 1 } });
+    expect(m.ads.sales.deltas.costPerOrder).toBeCloseTo(-0.3335, 3);
+    // Shopify credits the order from the Facebook ad to Meta: $100 of sales for Meta's $40. The Instagram post carried no ad tag, and the direct order isn't anyone's.
+    expect(m.ads.sourced).toEqual([{ provider: "meta", orders: 1, sales: 100, salesPerSpend: 2.5 }]);
+    // Today in the dates: the ads' change stops at yesterday, so the store's whole-range figures aren't compared.
+    const running = (await overview(a.headers, ws, store.id, "preset=30d")).json().modules;
+    expect(running.ads.sales).toMatchObject({ netSales: 250, orders: 4, previous: null, deltas: { salesPerSpend: null, costPerOrder: null } });
+  });
+
   it("compares with custom dates, even after the dates picked, ads included", async () => {
     const { a, ws, store } = await owner();
     await seedOrder(store, { id: "C1", createdAt: at(d(-19)), lines: [{ qty: 1, price: 30 }] });

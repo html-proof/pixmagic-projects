@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { systemDb, withDb } from "@app/db";
 import { adAccessToken, syncAdConnection, type AdsSyncData, type FetchLike } from "@app/core";
-import { addDays, adErrorMessage, LEGACY_GRANTS, localDay } from "@app/shared";
+import { addDays, adErrorMessage, LEGACY_GRANTS, localDay, META_OBJECT_FIELDS } from "@app/shared";
 import { clean, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
 
 /**
@@ -708,7 +708,9 @@ describe("the Meta Ads report", () => {
     ]);
     expect(body.report.rows[0]).toMatchObject({ purchases: 6, purchaseValue: 482, costPerPurchase: 16.67, roas: 4.82, linkCtr: 180 / 8000 });
     expect(body.report.rows[1]).toMatchObject({ purchases: 0, costPerPurchase: null, roas: 0 });
-    expect(calls.sort()).toEqual(["insights:account", "insights:campaign", "status:id,effective_status"]);
+    // The account's campaigns counted by state, from the same list the statuses came from.
+    expect(body.report.campaigns).toEqual({ active: 1, paused: 0, other: 2, total: 3, complete: true });
+    expect(calls.sort()).toEqual(["insights:account", "insights:campaign", `status:${META_OBJECT_FIELDS.campaign}`]);
 
     // Asked again: from the cache, not from Meta.
     const again = await ctx.app.inject({ method: "GET", url: reportUrl(conn.id), headers });

@@ -603,6 +603,8 @@ function redactFields(modules: Obj, g: ReadonlySet<AccessKey>): Obj {
   }
   const ads = out.ads;
   if (isObj(ads) && !g.has("marketing.campaigns")) out.ads = omit(ads, ["campaigns"]);
+  // Orders Shopify's visit record credits to each platform's ads: attribution, like the traffic module's paid figures.
+  if (isObj(out.ads) && !g.has("marketing.attribution")) out.ads = omit(out.ads, ["sourced"]);
   const codes = out.discount_codes;
   if (isObj(codes) && Array.isArray(codes.items) && !g.has("discounts.performance")) {
     out.discount_codes = { ...codes, items: codes.items.map((i: unknown) => omit(i, ["discount", "sales"])) };

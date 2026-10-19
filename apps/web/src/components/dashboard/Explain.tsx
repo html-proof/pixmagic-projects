@@ -5,7 +5,7 @@ import { bestEntryPage, biggestDropOff, dropOffSection } from "@app/shared/journ
 import { dailyBreakdown } from "@app/shared/sales";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { SECTION_LABEL, STEP_LABEL } from "./Funnel";
-import { hourRange, plural, weekdayName } from "./format";
+import { fmtTimes, hourRange, plural, weekdayName } from "./format";
 import { Icon } from "./Icons";
 import { comparedOnWholeDays } from "./Narrative";
 import { Panel } from "./Primitives";
@@ -188,6 +188,15 @@ function nextSteps(topic: Topic, ov: Overview, currency: string): ReactNode[] {
       const worst = a.campaigns?.find((c) => c.complete !== false && c.spend > 0 && c.purchases === 0 && c.conversions === 0);
       if (worst) out.push(<>&ldquo;{worst.name}&rdquo; spent {fmtMoney(worst.spend, a.currency)} with no purchase or other conversion counted. Check whether it&apos;s meant to bring sales, or something else such as awareness.</>);
       if (a.shareOfSales !== null) out.push(<>Ads cost {fmtPct(a.shareOfSales)} of your net sales. Compare that with your profit margin: if ads cost more than you make on a sale, they lose money even when they bring sales.</>);
+      // Every sale the store made against everything spent on ads (MER): the store's own measure, beside the platforms' claims.
+      if (a.sales?.salesPerSpend != null && a.current.roas !== null) {
+        out.push(
+          <>
+            Counting every sale, your store made {fmtTimes(a.sales.salesPerSpend)} what you spent on ads; the platforms credit themselves with {fmtTimes(a.current.roas)} by their own counts. The gap is
+            sales from everything else you do (repeat customers, search, word of mouth) and sales the platforms claim that would have happened anyway.
+          </>,
+        );
+      }
       break;
     }
     case "adsense": {

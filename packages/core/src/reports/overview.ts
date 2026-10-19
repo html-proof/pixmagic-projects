@@ -150,9 +150,20 @@ export async function storeOverview(tx: Tx, store: Store, dates: { range: DateRa
   if (enabled.has("funnel")) modules.funnel = await funnel(tx, scope, range, previous, store);
 
   // Not a Shopify capability: present once an ad account is connected to the store.
-  const netSales = (modules.sales_overview as { current?: { netSales?: number } } | undefined)?.current?.netSales ?? null;
-  // The store's own time zone and this answer's now: the same "today" as the dates above, with no second look-up.
-  const adsOpts = { timeZone: store.timezone, now };
+  type SalesFigures = { netSales?: number; orders?: number };
+  const salesModule = modules.sales_overview as { current?: SalesFigures; previous?: SalesFigures | null } | undefined;
+  const netSales = salesModule?.current?.netSales ?? null;
+  // The store's own time zone and this answer's now: the same "today" as the dates above, with no
+  // second look-up. Its orders and the dates compared with go with the net sales (the ads module sets
+  // them against the spend); which orders Shopify credits to each platform's ads is read when the
+  // store's traffic sources are read at all (the channels capability, and the member sees them).
+  const adsOpts = {
+    timeZone: store.timezone,
+    now,
+    orders: salesModule?.current?.orders ?? null,
+    before: salesModule?.previous ? { netSales: salesModule.previous.netSales ?? null, orders: salesModule.previous.orders ?? null } : null,
+    attribution: enabled.has("channels"),
+  };
   if (sees("ads")) {
     const ads = await adsModule(tx, scope, range, previous, store.currency, netSales, adsOpts);
     if (ads) modules.ads = ads;

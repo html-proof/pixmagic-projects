@@ -21,7 +21,7 @@ const OPEN_FULFILLMENT_STATUSES = [
  * them count as orders of the range (not orders of gift cards only, which Shopify's reports don't
  * count). Grouped by the caller, so every grouping adds up to net sales.
  */
-function salesByOrder(ws: string, storeId: string, r: DateRange) {
+export function salesByOrder(ws: string, storeId: string, r: DateRange) {
   return Prisma.sql`
     SELECT o.*, (o.local_day BETWEEN ${r.from} AND ${r.to} AND NOT o.gift_card_only) AS placed, COALESCE(v.sales, 0) AS sales
     FROM orders o
