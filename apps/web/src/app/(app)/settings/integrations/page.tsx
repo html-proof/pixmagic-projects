@@ -10,6 +10,7 @@ import { Alert } from "@/components/ui";
 import { AdPlatformCard } from "@/components/integrations/AdPlatformCard";
 import { DisconnectDialog, NoteAlert, StateAnnouncer } from "@/components/integrations/AdUi";
 import { AD_PLATFORM_ORDER, AD_PLATFORMS } from "@/components/integrations/adPlatforms";
+import { GoogleAccountCard } from "@/components/integrations/GoogleAccountCard";
 import { Facts, IntegrationCard, StatusBadge } from "@/components/integrations/IntegrationCard";
 import { useAdConnections } from "@/components/integrations/useAdConnections";
 import { EmbeddedSignup } from "@/components/whatsapp/EmbeddedSignup";
@@ -19,7 +20,7 @@ import { AD_STATE } from "@/lib/adConnections";
 import { actionError, api, friendlyError, useApi } from "@/lib/api";
 
 // ---------------------------------------------------------------------------
-// "Connect your business": Shopify, WhatsApp, Google Ads, Meta Ads and
+// "Connect your business": the Google Account sign-in, Shopify, WhatsApp, Google Ads, Meta Ads and
 // Google AdSense on one page, each with one button that opens the platform's own sign-in, and a
 // plain status. Nothing here asks for an app id, a key or a token: bizinsights' own Shopify, Google
 // and Meta apps do that part. The detailed pages (Shopify, WhatsApp, Advertising) stay where things
@@ -63,7 +64,7 @@ function whatsappState(o: WaOverview | null, failed: boolean): State {
 }
 
 export default function IntegrationsPage() {
-  const { workspace, store, storesStatus, offers, allowed } = useApp();
+  const { workspace, store, storesStatus, offers, allowed, me } = useApp();
   // Connecting a Shopify store needs owner or admin rights; WhatsApp and ad accounts, "Manage integrations".
   const manageStores = canManage(workspace.role);
   const manage = allowed("integrations.manage");
@@ -142,6 +143,9 @@ export default function IntegrationsPage() {
       )}
 
       <div className="grid gap-4">
+        {/* The account's own sign-in: not for a dashboard opened from a shared link, which isn't signed in to an account. */}
+        {!me.shared && <GoogleAccountCard />}
+
         <IntegrationCard
           testid="int-shopify"
           state={shopState}
