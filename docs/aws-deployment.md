@@ -650,6 +650,10 @@ for f in api jobs cron; do n=insights-production-$f; d=$(aws lambda get-function
 Check first that `$LATEST` holds the live code (same `CodeSha256` as the alias's version), or this
 would ship whatever `$LATEST` has.
 
+A Deploy to AWS run does this by itself when the deploy changed `/insights/production/runtime` (its
+step "Restart the functions on changed runtime settings", with the run's id in the description): a
+secret changed in Secrets Manager alone still needs the loop above.
+
 ## Sign-in emails (Cognito's codes)
 
 Cognito doesn't send its own emails in production: sign-up and email-change codes, password-reset
@@ -693,8 +697,9 @@ share Resend's limits with the app's email (free tier: 100 a day, 3,000 a month)
   `https://insights-605411278365.auth.ap-southeast-2.amazoncognito.com/oauth2/idpresponse`, its secret
   through `put-secrets.mjs --set GOOGLE_SIGNIN_CLIENT_SECRET`, the GitHub `production` environment
   variable `GOOGLE_SIGNIN_CLIENT_ID`, then a Deploy to AWS run (no hand deploy), which restarts the
-  functions when the runtime settings change (once the deploy role may read the runtime parameter
-  and publish the functions; until then restart them by hand: "Restarting the functions", above).
+  functions when the runtime settings change. The run that first gives the deploy role that
+  permission (ci-stack.ts) read the settings before it had it, so it can't tell and only warns: if
+  that same run switched Google on, restart them by hand once ("Restarting the functions", above).
   Sign-in codes already go out through Resend
   ("Sign-in emails" above).
 - **Provider secrets** not on this PC: META_APP_SECRET, GOOGLE_ADS_CLIENT_SECRET, WHATSAPP_APP_SECRET,

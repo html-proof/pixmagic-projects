@@ -301,7 +301,9 @@ with `no-store`.
 
 **Tests.** "members and API keys" (2 tests), scenario 3.
 
-**Remaining risk.** No MFA for owners (needs Firebase Identity Platform).
+**Remaining risk.** Two-step verification is opt-in: Cognito TOTP for password accounts
+([cognito-setup.md](../cognito-setup.md), section 6); Google sign-ins rely on Google's own 2-Step
+Verification. Nothing requires owners to turn it on.
 
 ### 15. Update vulnerable dependencies: PASS
 
