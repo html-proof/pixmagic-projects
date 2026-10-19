@@ -10,11 +10,11 @@ CloudFront `d2mr8m2p1qkh58.cloudfront.net` behind Cloudflare's proxy), and every
 the cloudfront.net address and on www get a 301 to bizinsights.io. The OAuth callbacks are built from `APP_URL`
 (`adsRedirectUri` in `packages/core/src/adConnections/config.ts`, `emailRedirectUri` in
 `packages/core/src/email/oauth.ts`), so since that deploy the app sends only `https://bizinsights.io/api/...` as its
-redirect URI. Google and Meta must have exactly those registered, or Connect fails with a redirect mismatch. The old
-addresses (`insights.imeseban.workers.dev`, `d2mr8m2p1qkh58.cloudfront.net`) are still registered with Google and
-Meta in places; each pack says what to replace.
+redirect URI. Google and Meta must have exactly those registered, or Connect fails with a redirect mismatch. Of the
+old addresses, only the two `insights.imeseban.workers.dev` redirect URIs on the Google client "Insights web" remain
+(kept until the old Worker is retired); Meta holds the bizinsights.io callback alone since 2026-10-20.
 
-## Where things stand (2026-10-19)
+## Where things stand (2026-10-20)
 
 Done:
 
@@ -25,9 +25,12 @@ Done:
   with no redirect and no login (checked 2026-10-19). The homepage footer's Privacy link is `/privacy`.
 - **Brand.** The homepage and every other page say "bizinsights" (renamed 2026-10-16, PR #26). The page title is
   "bizinsights — Shopify Business Intelligence".
-- **Contact facts.** `apps/web/src/lib/contact.ts` was filled in on 2026-10-16: legalName "bizinsights",
-  supportEmail sales@ikorex.com.au, jurisdiction Victoria, Australia. postalAddress is blank, and the pages leave it
-  out. `/support` shows sales@ikorex.com.au, and no page shows a "[not set" marker or the "incomplete" banner.
+- **Contact facts.** `apps/web/src/lib/contact.ts` was filled in on 2026-10-16 and corrected on 2026-10-20 (PR #152):
+  legalName "Zodiix Pty Ltd", companyNumber "ACN 613 577 834" (from the ASIC certificate of registration dated
+  11 July 2016), supportEmail sales@ikorex.com.au, jurisdiction Victoria, Australia. postalAddress is blank, and the
+  pages leave it out. `/support` shows sales@ikorex.com.au, and no page shows a "[not set" marker or the
+  "incomplete" banner. ABN Lookup (2026-10-20) agrees: Zodiix Pty Ltd, ABN 40 613 577 834, active from 11 Jul 2016,
+  GST-registered from 1 Jul 2017, main business location VIC 3977, registered business name "PixMagic" (19 Jul 2016).
 - **/privacy covers Google user data.** Its section "Google user data" (`#google-user-data`) carries the Limited Use
   statement. "Advertising accounts" (in section 3, `#optional-features`) lists what is read from Google Ads and
   AdSense; says bizinsights keeps Google's account ID and the permissions granted with each connection; says
@@ -40,62 +43,65 @@ Done:
 - **Search Console Domain property for bizinsights.io**: verified on 2026-10-19 (DNS TXT record in Cloudflare).
 - **The homepage explains the Google data.** The section "Google Ads and Google AdSense" (`id="google-data"`,
   `apps/web/src/components/landing/AdPlatforms.tsx`) says what is read from Google Ads, AdSense and Meta Ads and why,
-  that Disconnect deletes the tokens and figures, and carries the Limited Use sentence. It is on the branch
-  `claude/google-meta-oauth-integrations-dec503` and is live at https://bizinsights.io/#google-data once that branch's
-  Deploy to AWS run has succeeded (check before citing it). A build test keeps it on the page.
-- **Meta's deauthorize and data deletion callbacks** exist in the code on the same branch:
-  `https://bizinsights.io/api/webhooks/meta/deauthorize` and `https://bizinsights.io/api/webhooks/meta/data-deletion`
-  (live with the same deploy). The ads calls send `appsecret_proof`, so "Require App Secret" can be turned on after it.
-- **Google Cloud (2026-10-11).** Explorer access granted; `adwords` added under Data Access with a justification.
-- **Meta (2026-10-11).** App "Insights" (971575545351940) set up with an icon, app domain, privacy policy, data
-  deletion page, Facebook Login for Business configuration and the app secret, all on the old workers.dev address.
+  that Disconnect deletes the tokens and figures, and carries the Limited Use sentence. Live at
+  https://bizinsights.io/#google-data since release 77 (2026-10-19). A build test keeps it on the page.
+- **Meta's deauthorize and data deletion callbacks** are live (release 77) and registered in the app (2026-10-19):
+  `https://bizinsights.io/api/webhooks/meta/deauthorize` and `https://bizinsights.io/api/webhooks/meta/data-deletion`.
+  The ads calls send `appsecret_proof`, and "Require App Secret" is on.
+- **Google Cloud.** Explorer access granted (2026-10-11); `adwords` and `adsense.readonly` under Data Access with the
+  justification; authorized domain bizinsights.io, the bizinsights.io redirect URIs on "Insights web", and branding
+  verified and published (2026-10-19).
+- **Meta.** App "Insights" (971575545351940) set up 2026-10-11 with an icon, app domain, privacy policy, data
+  deletion page, Facebook Login for Business configuration and the app secret; every URL moved to bizinsights.io on
+  2026-10-19, and the workers.dev redirect URI was removed on 2026-10-20, so Valid OAuth Redirect URIs holds only
+  `https://bizinsights.io/api/ads/meta/callback`.
 
-Still open (details in each pack):
+Still open (details in each pack; checked 2026-10-20). Each of these needs the owner's login, certificate or payment
+method; Claude has nothing left to do alone until one of them moves.
 
-- **Google branding not saved yet.** The owner filled in the Branding form on 2026-10-19 but hasn't saved it, so
-  Verify Branding hasn't been pressed. Google step 6.
+- **A Google Ads account with figures for the demo.** On the demo login sebanceo@gmail.com the manager account
+  bizinsights 892-467-3464 is finished (Australia, Sydney Time, AUD), but managers hold no campaigns, and the client
+  bizinsights 745-450-4478 under it stays "Setup in progress" until a payments profile exists on its billing page
+  (legal name, address, payment method: owner only). Its draft Search campaign (A$1/day, Page views goal) publishes
+  after that. Until then bizinsights' connect gets CUSTOMER_NOT_ENABLED for the client. Google step 10.
+- **The demo video and the Verification Center submission.** Script, justification and reviewer text are below; the
+  owner records, uploads (unlisted) and submits. Google steps 11 to 13.
+- **A Meta business portfolio for the app's admin account, then Business Verification.** The app admin is the
+  sebanceo@gmail.com Facebook account, which has no portfolio; "Testbusiness" (1754818672920174) belongs to the other
+  Facebook account (imeseban@gmail.com) and the WhatsApp app. Verify as **Zodiix Pty Ltd** (ABN Lookup, 2026-10-20:
+  ACN 613 577 834, ABN 40 613 577 834, GST-registered, main business location VIC 3977, registered business name
+  "PixMagic" only). "bizinsights" is not a registered business name of that ABN, and "Bizinsights Pty Ltd" (ABN
+  89 156 153 196, QLD 4740, since 2012) is an unrelated company, so a portfolio named "bizinsights" would not match
+  the certificate. The registered address and phone are on the certificate and nowhere in the repo. Meta steps 4 to
+  6; the values to paste are under "Meta Business Settings > Business portfolio" in the Meta form answers.
 - **No mailbox on bizinsights.io.** The zone has no MX record, so no @bizinsights.io address receives mail. The
-  support and contact address is sales@ikorex.com.au, which is fine for Google. For Meta's Business Verification an
-  email address on the website's domain helps (unverified): confirm the domain by DNS instead, or add mail to the
-  domain first. Meta step 6.
-- **Redirect URIs on bizinsights.io.** Whether the owner has already added `https://bizinsights.io/api/ads/google/callback`
-  and `.../adsense/callback` to "Insights web", and `https://bizinsights.io/api/ads/meta/callback` to Facebook Login
-  for Business, isn't recorded. Until they are, Connect for that platform fails in production. Google step 6, Meta
-  step 7.
+  support and contact address is sales@ikorex.com.au, which is fine for Google. For Meta's Business Verification,
+  confirm by phone or by domain (a DNS TXT record in Cloudflare, which Claude adds on the owner's word). Meta step 6.
 - **The Limited Use paragraph is short.** `#google-user-data` says Google data is used only for the merchant's own
   reports and emails, isn't sold, isn't used for advertising and isn't read by people. That paragraph doesn't say
   the data isn't transferred except to the listed service providers, or that it isn't used to train AI or
   machine-learning models ("How we use information" says the latter for all data). Replacement wording is in the
-  Google form answers.
-- **Google branding verification** failed twice on 2026-10-11, for site ownership and for a privacy policy with blank
-  business details. The privacy cause is fixed and the Domain property is verified (2026-10-19).
-  Re-request it after Google step 6.
-- **legalName is the brand name.** The rename of 2026-10-16 set `CONTACT.legalName` to "bizinsights". Google reads
-  it as the controller, and Meta's Business Verification compares the business with its registration documents. If
-  "bizinsights" isn't the registered name of a business, set legalName to the entity that is.
-- **Meta.** The app's URLs are still on workers.dev, and the deauthorize and data deletion callbacks aren't
-  registered yet (Meta step 7, after the deploy). There is no business portfolio, so no Business Verification, App
-  Review or Access Verification yet.
+  Google form answers. Optional.
+- **A separate development Cloud project** (Google step 5, owner only). Not a blocker for the review.
 
 ## Google: Google OAuth verification pack (corrected 2026-10-11, URLs updated 2026-10-19): sensitive scope https://www.googleapis.com/auth/adwords plus non-sensitive https://www.googleapis.com/auth/adsense.readonly for "bizinsights" (Cloud project insights-511119, OAuth client "Insights web")
 
-### Remaining gaps (fix before submitting; checked 2026-10-19)
+### Remaining gaps (fix before submitting; checked 2026-10-20)
 
 No longer gaps: the privacy policy's disclosures (Google account ID, granted permissions, conditional revoke, what
 happens when access is removed at Google), the Google section of /data-deletion, a real support address on /support,
-the homepage brand "bizinsights", and /terms.
+the homepage brand "bizinsights" and its `#google-data` section (live since release 77), /terms, `CONTACT.legalName`
+(Zodiix Pty Ltd, ACN 613 577 834, since PR #152), the authorized domain bizinsights.io, the bizinsights.io redirect
+URIs on "Insights web", and branding (verified and published 2026-10-19 with the 120x120 green-bars logo).
 
-- OAuth 2.0 Policies: you 'must' use separate Cloud projects for each deployment tier, and delete OAuth clients that are not ready for production (sensitive-scope page and FAQ). Move any localhost redirect out of insights-511119 (step 5).
-- Branding order: add the authorized domain bizinsights.io first (Cloud Branding help). Before Verify Branding, remove from 'Insights web' the redirect URIs on other hosts (`insights.imeseban.workers.dev`, `d2mr8m2p1qkh58.cloudfront.net`), any localhost URI and any JS origins, because every authorized domain, including those of redirect URIs, must be verified (step 6). Removing the workers.dev callback stops only new Google connections on the old Cloudflare deployment; refresh tokens don't use a redirect URI, so connections made there keep syncing.
-- Confirm that https://bizinsights.io/#google-data shows the 'Google Ads and Google AdSense' section (it ships with this branch's deploy) before citing it.
-- Optional: tighten the Limited Use paragraph on /privacy (wording in the form answers).
-- Reviewer and demo setup: a bizinsights login with the owner or admin role on an active (not frozen) Shopify store, a real Google Ads account with spend, and an AdSense account.
-- Video: disconnect AdSense before Google Ads so the revoke narration is true. bizinsights' own 'Continue with Google' sign-in (Amazon Cognito) is off in production (`/api/auth/config` says google:false, 2026-10-18); if it is turned on later, don't record it: it is not part of this review.
-- Owner decision on the unverified period: production already requests adwords, and each new merchant uses one of the 100 lifetime user slots, which cannot be reset.
+- The demo Google Ads account (step 10): manager bizinsights 892-467-3464 on sebanceo@gmail.com is finished but holds no campaigns; client bizinsights 745-450-4478 under it is "Setup in progress" until the owner creates a payments profile on its billing page (https://ads.google.com/aw/signup/payment?ocid=8614814876&ascid=8596781735&authuser=0). Then its draft Search campaign (A$1/day) can be published; pause it, or let it run a few days so the video shows spend (owner's call). Don't create more accounts: the two stray "Setup in progress" ones (133-520-0897, 944-886-6737) can be removed from the account chooser.
+- Reviewer and demo setup: a bizinsights login with the owner or admin role on an active (not frozen) Shopify store, that Google Ads account, and an AdSense account (sebanceo@gmail.com has had one connected in production since 2026-10-19; disconnect it before recording).
+- Video: disconnect AdSense before Google Ads so the revoke narration is true. bizinsights' own 'Continue with Google' sign-in (Amazon Cognito, Cloud project bizinsights-sign-in) has been on in production since 2026-10-19 (release 75): don't record it, it is a different client and not part of this review. Sign in to bizinsights by email for the recording.
+- Owner decision on the unverified period: production already requests adwords, and each new merchant uses one of the 100 lifetime user slots, which cannot be reset (1 of 100 used on 2026-10-19).
 - Finalise branding before submitting: changes are not permitted while verification is in progress.
-- Make the consent-screen logo match the homepage mark (the green-bars logo, `apps/web/src/components/Brand.tsx`).
+- OAuth 2.0 Policies: you 'must' use separate Cloud projects for each deployment tier, and delete OAuth clients that are not ready for production (sensitive-scope page and FAQ). Move any localhost redirect out of insights-511119 (step 5). The two `insights.imeseban.workers.dev` redirect URIs still on 'Insights web' did not stop branding verification; remove them when the old Worker is retired (refresh tokens don't use a redirect URI, so connections made there keep syncing).
 - Data at rest (User Data Policy): production data is in Amazon RDS with storage encryption on (`infra/cdk/lib/data-stack.ts`). The old Cloudflare deployment's database on the owner's PC still holds that deployment's data until it is retired: close the 2026-10-10 exposure there (firewall, rotated non-default credentials) or retire it before attesting that data is secure at rest.
-- Check that `CONTACT.legalName` ("bizinsights") is the registered name of the business that controls the data (see "Where things stand").
+- Optional: tighten the Limited Use paragraph on /privacy (wording in the form answers).
 
 ### Before you submit
 
@@ -229,6 +235,20 @@ the homepage brand "bizinsights", and /terms.
 
 > Thank you for the review. bizinsights only reads Google Ads reports. Google's Google Ads API documentation (developers.google.com/google-ads/api/rest/auth) names https://www.googleapis.com/auth/adwords as the scope for Google Ads API access, and Google offers no read-only or narrower Google Ads scope. With any other scope, bizinsights could not call googleAds:searchStream, and the Advertising section of the merchant's dashboard would show nothing: spend, clicks, conversions and ROAS by day, campaign, ad group, device and country. bizinsights makes no mutate calls and never changes campaigns, ads, budgets or billing. Disconnect deletes the token and data, bizinsights revokes its grant once no other connection uses that Google sign-in, and bizinsights follows the Limited Use requirements. The demo video at <link> shows each of these points. Unable to use narrower scopes.
 
+**Google Ads API > Access levels > Basic access application (draft, 2026-10-20; the form's field names are unverified, so put each answer under the field that asks for it; only needed past roughly 60 busy accounts)**
+
+> Developer / company: Zodiix Pty Ltd (ACN 613 577 834, ABN 40 613 577 834), Victoria, Australia, operating the product "bizinsights". Website https://bizinsights.io. Contact sales@ikorex.com.au. Cloud project insights-511119, OAuth client "Insights web".
+>
+> What the tool does: bizinsights is a reporting dashboard for Shopify merchants. A merchant connects their own Google Ads account with OAuth (scope https://www.googleapis.com/auth/adwords) and sees spend, impressions, clicks, CTR, CPC, CPM, conversions, conversion value and ROAS per day, broken down by campaign, ad group, device and country, next to their Shopify sales.
+>
+> Who uses it: external users (Shopify merchants), each on the Google Ads accounts their own Google sign-in can reach. No agency work and no management of accounts on anyone's behalf.
+>
+> API usage: read-only reporting. CustomerService.ListAccessibleCustomers to find the accounts a sign-in can reach, then GoogleAdsService.SearchStream with GAQL SELECT queries on campaign, ad_group and the device and geographic segments. No mutate calls: nothing is created, edited, paused or deleted, and budgets, billing and users are never touched.
+>
+> Volume: one scheduled sync per connected account plus on-demand refreshes. The app caps its own calls with a daily operations setting so it stays inside the granted level; Basic access is requested so more than about 60 busy accounts can connect without hitting the Explorer limit.
+>
+> Design and demo: the live app at https://bizinsights.io, the same demo video as the OAuth verification, and screenshots of the dashboard's Advertising section and the Google Ads report on request. Privacy policy https://bizinsights.io/privacy, terms https://bizinsights.io/terms.
+
 **Reference (not a form field): expected timelines**
 
 > Brand verification: the automated check after 'Verify Branding' usually takes a few minutes; a manual review 'usually takes 2-3 business days'; you then publish within 7 days. Sensitive-scope verification 'typically takes 3-5 business days' (developers.google.com, updated 2026-08-19). The Cloud FAQ (answer/13463817) table says 10 business days, notes 'these estimates are not guaranteed', and says timing varies with how quickly you respond. The 'Unverified apps' page says verification 'might require several months'. Restricted scope (only if the console lists adwords as restricted): 'several weeks', about 6 weeks per the FAQ, plus an annual CASA security assessment. Until verification, the 100-new-user cap applies for the project's whole lifetime and 'cannot be reset or changed'.
@@ -321,16 +341,14 @@ Privacy policy and Limited Use disclosure: https://bizinsights.io/privacy. Suppo
 
 ## Meta: Meta App Review pack for bizinsights (App ID 971575545351940): Advanced Access to ads_read and public_profile, with Business Verification, Access Verification and the Marketing API Access Tier (checked against developers.facebook.com and the code on 2026-10-11; URLs updated to bizinsights.io 2026-10-19)
 
-### Remaining gaps (fix before submitting; checked 2026-10-19)
+### Remaining gaps (fix before submitting; checked 2026-10-20)
 
-No longer gaps: contact.ts is filled in (2026-10-16), /privacy and /data-deletion show no "[not set" marker, and /terms exists. All of /, /privacy, /terms, /data-deletion and /support return 200 on bizinsights.io.
+No longer gaps: contact.ts is filled in (legalName Zodiix Pty Ltd, ACN 613 577 834 since PR #152; supportEmail sales@ikorex.com.au), /privacy and /data-deletion show no "[not set" marker, /terms exists, and all of /, /privacy, /terms, /data-deletion and /support return 200 on bizinsights.io. The app's settings and its only Valid OAuth Redirect URI are on bizinsights.io (2026-10-19 and 2026-10-20), the deauthorize and data deletion callbacks are registered, and Require App Secret is on.
 
-- Register the deauthorize and data deletion callbacks and turn on Require App Secret, after this branch's deploy (step 7).
-- Move every URL in the app's settings from workers.dev to bizinsights.io (step 7). Until https://bizinsights.io/api/ads/meta/callback is a Valid OAuth Redirect URI in Facebook Login for Business, "Continue with Meta Ads" fails in production, because the app sends only that callback.
+- Business portfolio and Business Verification (steps 4 to 6). The app admin's Facebook account (sebanceo@gmail.com) has no portfolio; "Testbusiness" (1754818672920174) belongs to the imeseban@gmail.com account and the WhatsApp app. Verify as **Zodiix Pty Ltd**: ABN Lookup on 2026-10-20 shows ACN 613 577 834, ABN 40 613 577 834, Australian private company, GST-registered, main business location VIC 3977, and "PixMagic" as the only business name registered to it. "bizinsights" is not a registered business name of that ABN, and "Bizinsights Pty Ltd" (ABN 89 156 153 196, QLD 4740, since 2012) is an unrelated company. The registered address and phone are on the certificate and not in the repo. Claude does not create the portfolio, upload documents or automate business.facebook.com (Meta blocked the admin's developer account twice in October after automated clicking).
+- App icon: whether a 1024x1024 version is in place is unconfirmed (step 3); the icon uploaded on 2026-10-11 was the 1200x1200 listing icon.
 - Cloudflare now proxies bizinsights.io, so every page and API response, including the Meta figures shown to merchants, passes through it. The data handling answers below name it next to AWS.
-- No mailbox on bizinsights.io: the zone has no MX record. The contact address is sales@ikorex.com.au. This matters for Business Verification's email confirmation (step 6).
-- Check that `CONTACT.legalName` ("bizinsights", set by the 2026-10-16 rename) is the registered name of the business that Business Verification will check; if it isn't, set it to the entity that is.
-- Still missing: a confirmed 1024x1024 app icon, a Meta business portfolio, and Business Verification.
+- No mailbox on bizinsights.io: the zone has no MX record. The contact address is sales@ikorex.com.au. For Business Verification, confirm by phone or by domain, not by email (step 6).
 - Reviewer account conditions taken from the code: the email is verified (otherwise 'Verify your email first'), and the role is Owner or Admin of the workspace (otherwise there is no connect button).
 - Keep production reachable for the whole review window: up to a week for App Review and about 5 days for Access Verification. Production runs on AWS (docs/aws-deployment.md): keep it deployed and its alarms quiet. A reviewer who can't reach the app is a stated rejection reason.
 - Before you answer the data handling questions or later security questions, close the exposure of the old deployment's database on the owner's PC found in the 2026-10-10 security audit, if it is still open (it was reachable on the LAN with default credentials), or retire that deployment: firewall or recreate the container, and rotate the credentials. Production data is in Amazon RDS with storage encryption on.
@@ -342,10 +360,10 @@ No longer gaps: contact.ts is filled in (2026-10-16), /privacy and /data-deletio
 
 Read this first. Four rules from Meta's docs set the order. (1) Since February 1, 2023, an app that needs Advanced Access must be connected to a business that has passed Business Verification. Until it is, people from other businesses can't grant the app permissions. (2) Facebook Login for Business needs Advanced Access to public_profile before the app goes live, and apps with Advanced Access go through Ongoing Review to keep it. That page's portfolio rules (the app belongs to a portfolio the developer fully controls; onboarding businesses need a portfolio) are listed for system-user tokens. bizinsights' configuration 'Insights ads reporting' uses a user access token, so merchants need no portfolio. bizinsights itself still needs one, for Business Verification. (3) ads_read is on Meta's Access Verification (Tech Provider) list. That process is separate from App Review, needs Business Verification first, and a business Admin completes it. (4) Meta's changelog entry dated 05/04/2026 renamed Ads Management Standard Access to the Marketing API Access Tier, with two levels, Limited and Full, and dropped the screen recording for tier upgrades. You can use the Upgrade button once the app has made 500 or more Marketing API calls in the last 15 days, with errors under 15% in the last 500 calls. Meta's pages disagree on whether Limited is enough for other businesses' accounts. The authorization page says both tiers allow unlimited ad accounts. The features reference ties reading reports for owner-granted accounts to this feature plus ads_read. The use-cases page says unlimited accounts and higher limits need approval. So upgrade as soon as the app qualifies.
 
-1. [DONE 2026-10-16] Contact facts in apps/web/src/lib/contact.ts: legalName "bizinsights", supportEmail sales@ikorex.com.au, jurisdiction Victoria, Australia; postalAddress is blank and the pages leave it out. Checked live on 2026-10-19: https://bizinsights.io/privacy and /data-deletion return 200 with no '[not set' marker and no 'This policy is incomplete' banner, and step 3 of /data-deletion gives sales@ikorex.com.au. Meta's privacy-policy rules: the policy is your own, clearly titled as a privacy policy, public, reachable by Meta's crawler and not geo-blocked. It says what is collected and why, and gives a working way (email or form) to ask for deletion. Because bizinsights.io is behind Cloudflare's proxy, check in Meta's Sharing Debugger that https://bizinsights.io/privacy returns 200 to Meta's crawler (Bot Fight Mode is off, so it shouldn't be challenged).
+1. [DONE 2026-10-16, legalName corrected 2026-10-20 in PR #152] Contact facts in apps/web/src/lib/contact.ts: legalName "Zodiix Pty Ltd", companyNumber "ACN 613 577 834", supportEmail sales@ikorex.com.au, jurisdiction Victoria, Australia; postalAddress is blank and the pages leave it out. Checked live on 2026-10-19: https://bizinsights.io/privacy and /data-deletion return 200 with no '[not set' marker and no 'This policy is incomplete' banner, and step 3 of /data-deletion gives sales@ikorex.com.au. Meta's privacy-policy rules: the policy is your own, clearly titled as a privacy policy, public, reachable by Meta's crawler and not geo-blocked. It says what is collected and why, and gives a working way (email or form) to ask for deletion. Because bizinsights.io is behind Cloudflare's proxy, check in Meta's Sharing Debugger that https://bizinsights.io/privacy returns 200 to Meta's crawler (Bot Fight Mode is off, so it shouldn't be challenged).
 2. [DONE 2026-10-16] Terms of Service page: https://bizinsights.io/terms. Enter it in Settings > Basic (step 7); Meta's Basic Settings page lists it among the fields required to switch to Live mode.
 3. [OWNER ONLY] Upload a 1024x1024 app icon under Settings > Basic > App Icon (size from Meta's submission guide), if the current icon isn't that size. It must contain no Meta trademarks or logos, and must not include 'Facebook' or 'FB'. Use the bizinsights green-bars mark.
-4. [OWNER ONLY] Create a Meta business portfolio for the same legal entity as CONTACT.legalName. Using the same entity is advice, not a stated Meta rule. Its legal name, address, phone and website (https://bizinsights.io) should match your registration documents. Make the Facebook account that owns the app an Admin of the portfolio: only a business Admin can complete Business Verification and Access Verification.
+4. [OWNER ONLY] Create a Meta business portfolio for Zodiix Pty Ltd, the entity in CONTACT.legalName and on the ASIC certificate, signed in to business.facebook.com as the Facebook account that administers the app (sebanceo@gmail.com), so that account is the portfolio's Admin from the start: only a business Admin can complete Business Verification and Access Verification. The existing "Testbusiness" portfolio (1754818672920174) is on the other Facebook account (imeseban@gmail.com) with the WhatsApp app; reuse it only if that account first makes sebanceo an Admin and you rename it and fill in its business info. The values for Create a business portfolio and Business info are under "Meta Business Settings > Business portfolio" in the form answers: name it Zodiix Pty Ltd (not "bizinsights", which is not a registered business name of ABN 40 613 577 834 and is the company name of an unrelated Queensland company), and use the registered address and phone from the certificate, which are not in the repo.
 5. [OWNER ONLY: app Admin] Connect the app to the portfolio. In the App Dashboard, go to Settings > Basic > Verification > Start Verification and pick the portfolio.
 6. [OWNER ONLY: business Admin] Complete Business Verification in Business Manager or Business Suite. Meta's developer docs send you to the Business Help Center for the document list. Those pages don't render outside a browser, so these points come from search summaries and are (unverified): the legal name, address, phone and an HTTPS website must match your documents; a registration or incorporation document is needed if Meta can't find the business; confirmation is by email, phone or domain; an email domain that matches the website helps. The website is https://bizinsights.io. It has no MX record, so no @bizinsights.io address can receive Meta's confirmation email: confirm by phone, or by domain (a DNS TXT record added in Cloudflare, zone bizinsights.io, as in Google step 2; Meta's exact domain methods unverified), or add mail to the domain first. Verification isn't required to go Live, but the app can't access data you don't own until it is complete.
 7. [OWNER] Move the app to bizinsights.io and finish Settings > Basic, using the form answers below: Display name, Contact email (an inbox you read, because App Review notices go there), Privacy Policy URL, Terms of Service URL, User data deletion instructions URL, App icon, Category, App Purpose 'Clients', App Domains and the Website platform Site URL. In Facebook Login for Business > Settings, add https://bizinsights.io/api/ads/meta/callback to Valid OAuth Redirect URIs and press the Save Changes button at the bottom of the page: the 'Changes saved' toast alone doesn't keep it, so reload to confirm. Remove any d2mr8m2p1qkh58.cloudfront.net callback (the app never sends it). Once this branch's Deploy to AWS run has succeeded: in Facebook Login for Business > Settings, set Deauthorize callback URL to https://bizinsights.io/api/webhooks/meta/deauthorize; in Settings > Basic > User data deletion, choose the callback option and enter https://bizinsights.io/api/webhooks/meta/data-deletion (Meta then shows people https://bizinsights.io/data-deletion?code=... with their request's status); and in Settings > Advanced > Security turn on Require App Secret (every ads call already sends appsecret_proof). Both callbacks need META_APP_SECRET in production (otherwise they answer 503). Keep the insights.imeseban.workers.dev callback and app domain only while the old Cloudflare deployment still serves Meta connections, then remove them. Do this before submitting: changing basic or advanced settings after submitting may need a new review.
@@ -362,6 +380,20 @@ Read this first. Four rules from Meta's docs set the order. (1) Since February 1
 18. [OWNER, as soon as eligible] Upgrade the Marketing API Access Tier from Limited to Full with the Upgrade button on that feature. You need 500 or more Marketing API calls in the last 15 days and errors under 15% in the last 500. No screen recording is needed. Limited's Ads Insights quota per ad account per hour is 600, plus 400 for each active ad. Full's base is 190,000.
 
 ### Form answers (paste as written)
+
+**Meta Business Settings > Business portfolio (create it as sebanceo@gmail.com, the app's admin; the same values go into Business info and into Security Center > Start verification)**
+
+> Business portfolio name: Zodiix Pty Ltd
+> Your name: as on your Facebook profile
+> Business email: sales@ikorex.com.au   (an inbox you read; Meta sends its confirmation there; bizinsights.io has no mailbox)
+> Legal business name: Zodiix Pty Ltd
+> Country: Australia
+> Business number: ABN 40 613 577 834   (the ASIC certificate shows ACN 613 577 834; give whichever the field asks for)
+> Address: the registered office address on the certificate   [OWNER: not in the repo; ABN Lookup shows only "VIC 3977"]
+> Phone: the number on your documents   [OWNER: not in the repo]
+> Website: https://bizinsights.io
+> Document for Business Verification: the ASIC certificate of registration for Zodiix Pty Ltd dated 11 July 2016, plus a document showing the same address if Meta asks for one.
+> Then App Dashboard > App settings > Basic > Verification: pick this portfolio (step 5).
 
 **Settings > Basic > Display name**
 
