@@ -47,8 +47,15 @@ async function ownerWithStore(page: Page) {
 }
 
 test("an owner opens Inventory: the figures from the stock held, a search, and a product's stock per location", async ({ page }) => {
-  await ownerWithStore(page);
+  const { store } = await ownerWithStore(page);
+  // The dashboard's first poll is what queues a store's background refresh (apps/api sync.ts,
+  // autoRefresh): the first import again for a store without last_synced_at, whose stock pass then
+  // read as "Checking every stock level against Shopify…" (CI runs 39234248011, 39237161498). On a
+  // fast machine the click below beat that poll, so the check passed or failed by timing. Let the
+  // poll land first, every run, and check the strip after it.
+  const dashboardPolled = page.waitForResponse((r) => r.url().includes(`/stores/${store}/overview`));
   await page.goto("/dashboard");
+  await dashboardPolled;
   const nav = page.getByRole("complementary").getByRole("navigation", { name: "App" });
   await nav.getByRole("link", { name: "Inventory", exact: true }).click();
   await expect(page).toHaveURL(/\/inventory\/?$/);
