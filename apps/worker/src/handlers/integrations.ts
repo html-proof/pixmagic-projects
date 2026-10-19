@@ -71,6 +71,13 @@ const ADS_HISTORY_RETRY_MS = 6 * HOUR;
 const ADS_NEW_GRACE_MS = HOUR;
 /** Spread a tick's ad syncs over a few minutes, so a busy server doesn't hit Google's and Meta's quotas in one burst. */
 const ADS_SPREAD_S = 300;
+/**
+ * Walks back through history the schedule starts (or picks up again) per tick, across every account.
+ * Each walk is a chain of windows a few minutes apart, and Meta's run as long report jobs on the queue
+ * Shopify's imports use: after a deploy, when every account is short of history at once, they start
+ * a few at a time (about a dozen an hour) instead of all together.
+ */
+export const ADS_HISTORY_STARTS_PER_TICK = 3;
 
 /**
  * How often an account's last few days are fetched again (null: only the daily re-check). Hourly;
@@ -113,6 +120,7 @@ export async function scheduleAdsSync(deps: WorkerDeps) {
   if (google) logger.info({ googleAdsOperations: google.used, allowance: google.limit, paused: google.paused }, "google ads operations in the last 24 hours");
   const spread = () => ({ delaySeconds: Math.floor(Math.random() * ADS_SPREAD_S) });
   let sent = 0;
+  let historyStarts = 0;
   for (const c of conns) {
     if (!c.lastSyncedAt && c.createdAt.getTime() > now - ADS_NEW_GRACE_MS) continue;
     if (c.provider === "google" && google && !googleAdsBudgetAllows(google, "schedule")) continue;
@@ -134,9 +142,14 @@ export async function scheduleAdsSync(deps: WorkerDeps) {
       );
       sent++;
     }
-    // A walk back through history that broke off (a window failed, or waited for Google's allowance).
-    if (c.status === "active" && nextHistoryWindow(c) && (c.provider !== "google" || (google && googleAdsBudgetAllows(google, "history")))) {
-      if (await enqueueAdHistory(deps.queues, deps.coord, c, { leaseMs: ADS_HISTORY_RETRY_MS, ...spread() })) sent++;
+    // A walk back through history that broke off (a window failed, or waited for Google's allowance),
+    // or one never started (accounts connected before history was walked). A few per tick; the lease
+    // keeps a walk that is on its way from being started twice, the others wait for a later tick.
+    if (historyStarts < ADS_HISTORY_STARTS_PER_TICK && c.status === "active" && nextHistoryWindow(c) && (c.provider !== "google" || (google && googleAdsBudgetAllows(google, "history")))) {
+      if (await enqueueAdHistory(deps.queues, deps.coord, c, { leaseMs: ADS_HISTORY_RETRY_MS, ...spread() })) {
+        sent++;
+        historyStarts++;
+      }
     }
   }
   return sent;

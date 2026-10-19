@@ -12,12 +12,13 @@ import {
   memoryMailer,
   memoryQueues,
   pauseGoogleAds,
+  releaseUserAdGrants,
   resetEnvCache,
   type AdsSyncData,
   type FetchLike,
 } from "@app/core";
 import { addDays, localDay } from "@app/shared";
-import { scheduleAdsSync, sweepAdConnectionAlerts, type WorkerDeps } from "../src/handlers.js";
+import { ADS_HISTORY_STARTS_PER_TICK, scheduleAdsSync, sweepAdConnectionAlerts, type WorkerDeps } from "../src/handlers.js";
 import { consume, CRON, runScheduled, type QueueMessage } from "../src/index.js";
 
 /**
@@ -160,6 +161,23 @@ describe("storing an account's days", () => {
     }
     expect(await systemDb.adCampaignDaily.count()).toBe(0);
     expect(await systemDb.adsenseDaily.count()).toBe(0);
+  });
+
+  it("the person who connected it leaving while the sync runs: the account keeps waiting for a reconnect, and says so", async () => {
+    const conn = await connection("meta", { connectedByUserId: "user-1", externalUserId: "2001", status: "error", errorCode: "temporary", consecutiveFailures: 2 });
+    const d1 = addDays(today(), -1);
+    fetchImpl = async () => {
+      // Their bizinsights account is deleted while Meta is still answering.
+      await releaseUserAdGrants("user-1", undefined, async () => json({ success: true }));
+      return json({ data: [{ campaign_id: "7", campaign_name: "Spring", date_start: d1, spend: "5", impressions: "9", clicks: "3" }] });
+    };
+    const m = await run({ kind: "ads", connectionId: conn.id, since: d1, until: today() });
+    expect(m).toMatchObject({ acked: true, retried: null });
+    expect(await row(conn.id)).toMatchObject({ status: "reconnect", errorCode: "connector_left", accessTokenEnc: "", consecutiveFailures: 2 });
+    // The days fetched before it are kept, as a release keeps the others; the alert asks for a reconnect.
+    expect(await systemDb.adCampaignDaily.count({ where: { connectionId: conn.id } })).toBe(1);
+    await sweepAdConnectionAlerts(deps);
+    expect(await systemDb.alert.findFirst({ where: { code: `ads_reconnect:${conn.id}`, resolvedAt: null } })).toMatchObject({ message: expect.stringContaining("no longer has access") });
   });
 });
 
@@ -325,6 +343,21 @@ describe("the schedule", () => {
     }
   });
 
+  it("starts walks back through history a few per tick, not every account's at once (as after a deploy)", async () => {
+    const old = new Date(Date.now() - 2 * 3600_000);
+    const ids: string[] = [];
+    for (let i = 0; i < ADS_HISTORY_STARTS_PER_TICK + 2; i++) {
+      ids.push((await connection("meta", { createdAt: old, lastSyncedAt: new Date(), historyFrom: addDays(today(), -89), syncedThrough: today() })).id);
+    }
+    const history = () => sent().filter((j) => j.trigger === "history").map((j) => j.connectionId);
+    await scheduleAdsSync(deps);
+    expect(history()).toHaveLength(ADS_HISTORY_STARTS_PER_TICK);
+    // The next tick starts the rest; the walks on their way aren't started twice.
+    await scheduleAdsSync(deps);
+    expect(history()).toHaveLength(ADS_HISTORY_STARTS_PER_TICK + 2);
+    expect(new Set(history())).toEqual(new Set(ids));
+  });
+
   it("asks an account with nothing new to read only once a day whether it's back; one that is catches up", async () => {
     const old = new Date(Date.now() - 2 * 3600_000);
     const lost = await connection("meta", { createdAt: old, status: "permission", errorCode: "no_access", historyFrom: addDays(today(), -100), syncedThrough: addDays(today(), -10) });
@@ -337,8 +370,41 @@ describe("the schedule", () => {
       return json({ error: { message: "unexpected" } }, 400);
     };
     await run(sent()[0]!);
-    expect(await row(lost.id)).toMatchObject({ status: "active", errorCode: null, accountStatus: "active" });
+    // Readable again: the days it missed are fetched, and that sync is what puts it back to normal.
+    expect(await row(lost.id)).toMatchObject({ status: "permission", errorCode: "no_access", accountStatus: "active" });
     expect(sent()[1]).toMatchObject({ connectionId: lost.id, since: addDays(today(), -13), until: today(), trigger: "schedule" });
+    fetchImpl = metaInsights([]);
+    await run(sent()[1]!);
+    expect(await row(lost.id)).toMatchObject({ status: "active", errorCode: null, syncedThrough: today() });
+  });
+
+  it("an account readable again whose reports are still refused stays as it was, with its one alert, not a new one each day", async () => {
+    const old = new Date(Date.now() - 2 * 3600_000);
+    const lost = await connection("meta", { createdAt: old, status: "permission", errorCode: "no_access", historyFrom: addDays(today(), -100), syncedThrough: addDays(today(), -10) });
+    expect(await sweepAdConnectionAlerts(deps)).toEqual({ raised: 1, resolved: 0 });
+    // The account node answers; insights are refused (ads_read is still granted).
+    fetchImpl = async (input) => {
+      const u = new URL(String(input));
+      if (u.pathname.endsWith("/act_1")) return json({ account_status: 1, name: "Shop ads", currency: "USD", timezone_name: "UTC" });
+      if (u.pathname.endsWith("/me/permissions")) return json({ data: [{ permission: "ads_read", status: "granted" }] });
+      return json({ error: { message: "(#10) Ad account owner has NOT grant ads_management or ads_read permission", code: 10 } }, 400);
+    };
+    for (let day = 0; day < 2; day++) {
+      await run({ kind: "ads", connectionId: lost.id, since: today(), until: today(), trigger: "schedule", healthOnly: true });
+      const catchUp = sent().filter((j) => !j.healthOnly).at(-1)!;
+      expect(await run(catchUp)).toMatchObject({ acked: true, retried: null });
+      expect(await row(lost.id)).toMatchObject({ status: "permission", errorCode: "no_access" });
+      expect(await sweepAdConnectionAlerts(deps)).toEqual({ raised: 0, resolved: 0 });
+    }
+    expect(await systemDb.alert.count({ where: { code: `ads_reconnect:${lost.id}` } })).toBe(1);
+  });
+
+  it("Refresh on an account that is still closed ends with the look at it: nothing to catch up, no 'Synchronizing' left", async () => {
+    const closed = await connection("meta", { status: "unavailable", errorCode: "account_closed", accountStatus: "closed", syncRequestedAt: new Date() });
+    fetchImpl = async (input) => (new URL(String(input)).pathname.endsWith("/act_1") ? json({ account_status: 101, name: "Shop ads", currency: "USD", timezone_name: "UTC" }) : json({ error: { message: "unexpected" } }, 400));
+    await run({ kind: "ads", connectionId: closed.id, since: today(), until: today(), healthOnly: true });
+    expect(await row(closed.id)).toMatchObject({ status: "unavailable", accountStatus: "closed", syncRequestedAt: null });
+    expect(sent()).toEqual([]);
   });
 
   it("the daily re-check keeps the account's status, name, currency and time zone; a health read that fails doesn't fail the sync", async () => {

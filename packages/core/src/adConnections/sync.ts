@@ -432,7 +432,10 @@ async function syncWindow(conn: AdConnection, since: string, until: string, trig
   }
   if (trigger !== "history") {
     const done = await systemDb.adConnection.updateMany({
-      where: { id: conn.id },
+      // Not over a release made while this ran (releaseUserAdGrants: the person who connected it left):
+      // that row waits for a reconnect, and marking it working would hide that. Not over the token read
+      // either: a refresh in this sync changed it.
+      where: { id: conn.id, accessTokenEnc: { not: "" }, OR: [{ errorCode: null }, { errorCode: { not: "connector_left" } }] },
       data: {
         status: "active",
         errorCode: null,
@@ -443,7 +446,10 @@ async function syncWindow(conn: AdConnection, since: string, until: string, trig
         ...(continued && trigger === "request" ? {} : { syncRequestedAt: null }),
       },
     });
-    if (!done.count) return { skipped: true, reason: "gone" };
+    if (!done.count) {
+      const still = await systemDb.adConnection.count({ where: { id: conn.id } });
+      return { skipped: true, reason: still ? "no_token" : "gone" };
+    }
     if (conn.status !== "active" || conn.consecutiveFailures > 0) {
       await resolveAdAlerts(conn, ["ads_reconnect", "ads_failing", "ads_unavailable"]).catch((err: unknown) => logger.warn({ err, connectionId: conn.id }, "ad alerts not resolved"));
     }
@@ -464,9 +470,14 @@ async function queueNextHistory(conn: AdConnection, queues: Queues, coord?: Coor
 
 /**
  * The daily look at an account with nothing new to read: closed at the platform, or one this login
- * lost. When it's readable again it goes back to normal, and the days it missed are fetched.
+ * lost. When it looks readable again, the days it missed are fetched; that sync, when it works, is
+ * what puts the account back to normal and closes its alerts. The account itself can be readable
+ * while its reports are still refused, and an account marked working and lost again every day would
+ * mean a new alert, and email, every day.
  */
 async function healthCheck(conn: AdConnection, fetchImpl: FetchLike | undefined, opts: AdSyncOptions): Promise<AdSyncResult> {
+  // Someone pressed Refresh: the card stops saying "Synchronizing" when this ends, unless a catch-up follows.
+  const endRequest = () => systemDb.adConnection.updateMany({ where: { id: conn.id, syncRequestedAt: { not: null } }, data: { syncRequestedAt: null } });
   let health: AdAccountHealth;
   try {
     health = await readAccountHealth(conn, await adAccessToken(conn, fetchImpl), fetchImpl);
@@ -474,17 +485,18 @@ async function healthCheck(conn: AdConnection, fetchImpl: FetchLike | undefined,
     const failure = classifyAdError(err);
     // Only access that ended is news here; anything else waits for tomorrow's look.
     if (failure.status === "reconnect") await recordAdFailure(conn.id, failure, "sync");
+    else await endRequest();
     logger.info({ connectionId: conn.id, errorCode: failure.code }, "ad account health check failed");
     return { skipped: true, reason: "health_failed" };
   }
   await storeHealth(conn, health);
   const today = adToday(conn);
-  const back = conn.status === "permission" || (conn.status === "unavailable" && health.status === "active");
+  const back = !!opts.queues && (conn.status === "permission" || (conn.status === "unavailable" && health.status === "active"));
   if (back) {
-    await systemDb.adConnection.updateMany({ where: { id: conn.id, status: conn.status }, data: { status: "active", errorCode: null, lastError: null, consecutiveFailures: 0 } });
-    await resolveAdAlerts(conn, ["ads_reconnect", "ads_unavailable"]).catch((err: unknown) => logger.warn({ err, connectionId: conn.id }, "ad alerts not resolved"));
-    if (opts.queues) await enqueueAdCatchUp(opts.queues, conn, { trigger: "schedule" });
-    logger.info({ connectionId: conn.id, was: conn.status }, "ad account readable again");
+    await enqueueAdCatchUp(opts.queues!, conn, { trigger: opts.trigger === "request" ? "request" : "schedule" });
+    logger.info({ connectionId: conn.id, status: conn.status }, "ad account readable again; catching up");
+  } else {
+    await endRequest();
   }
   return { skipped: false, stored: 0, since: today, until: today, continued: back, health };
 }
