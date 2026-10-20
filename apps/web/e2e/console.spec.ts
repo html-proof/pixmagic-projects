@@ -1,7 +1,7 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 import pg from "pg";
-import { E2E_ENV } from "../playwright.config";
-import { signUp, uniqueEmail } from "./helpers";
+import { E2E_BASE_URL, E2E_ENV } from "../playwright.config";
+import { createWorkspace, insertStore, signUp, uniqueEmail } from "./helpers";
 
 /**
  * The browser console stays free of two things that once filled it:
@@ -11,6 +11,10 @@ import { signUp, uniqueEmail } from "./helpers";
  *   unused preload again a few seconds after each later request, so on the polling dashboard three
  *   of them became hundreds.
  * - Content-Security-Policy violations, the Report-Only policy's included (public/_headers).
+ *
+ * One test per page and viewport, signed out and in. Each opens its page once, so the suite's
+ * slowest machine (the PC runner under load runs it 2-3x slower) can't push one test past its
+ * budget, and a failure names the page. The signed-in tests share one account, created once.
  */
 
 const db = new pg.Pool({ connectionString: E2E_ENV.DATABASE_URL });
@@ -46,26 +50,12 @@ const hoverLinks = (page: Page) =>
     for (const a of document.querySelectorAll("a[href]")) if (a.getClientRects().length) a.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
   });
 
-/** Open a page, give every link on it (menus included) the chance to prefetch, then look. */
-async function check(page: Page, path: string, heading: RegExp, where: string) {
-  await page.goto(path);
-  await expect(page.getByRole("heading", { name: heading }).first()).toBeVisible();
-  await hoverLinks(page);
-  // The account menu, the notifications panel and (on a phone) the navigation drawer hold links too.
-  for (const menu of [page.getByRole("button", { name: "Account menu" }), page.getByTestId("notifications-bell"), page.getByRole("button", { name: "Open navigation" })]) {
-    if (!(await menu.isVisible())) continue;
-    await menu.click();
-    await hoverLinks(page);
-    await page.keyboard.press("Escape");
-  }
-  // Prefetches start on hover and finish in the background.
-  await page.waitForTimeout(1_500);
-  expect(await unusedPreloads(page), `unused preloads on ${path} ${where}`).toEqual([]);
-  expect(await page.evaluate(() => (window as unknown as { cspViolations: string[] }).cspViolations), `CSP violations on ${path} ${where}`).toEqual([]);
-}
-
-test("pages preload nothing they don't use and break no content policy, signed out and in, on desktop and phone", async ({ page }) => {
-  test.setTimeout(180_000);
+/**
+ * Open a page, give every link on it (menus included) the chance to prefetch, then look: at the
+ * preloads in the page, at the policy reports the page saw, and at Chrome's own warnings.
+ */
+async function check(page: Page, path: string, heading: RegExp) {
+  const where = `${path} at ${page.viewportSize()?.width}px`;
   const warnings: string[] = [];
   page.on("console", (m) => {
     if (PRELOAD_WARNING.test(m.text())) warnings.push(`${page.url()}: ${m.text()}`);
@@ -76,8 +66,29 @@ test("pages preload nothing they don't use and break no content policy, signed o
     document.addEventListener("securitypolicyviolation", (e) => w.cspViolations.push(`${e.disposition} ${e.effectiveDirective} ${e.blockedURI}`));
   });
 
-  // Signed out: the landing page, the sign-in and legal pages (Geist), and the plain account pages
-  // (AuthCard) an invitation or a failed sign-in opens.
+  await page.goto(path);
+  await expect(page.getByRole("heading", { name: heading }).first()).toBeVisible();
+  await hoverLinks(page);
+  // The account menu, the notifications panel and (on a phone) the navigation drawer hold links too.
+  for (const menu of [page.getByRole("button", { name: "Account menu" }), page.getByTestId("notifications-bell"), page.getByRole("button", { name: "Open navigation" })]) {
+    if (!(await menu.isVisible())) continue;
+    await menu.click();
+    await hoverLinks(page);
+    await page.keyboard.press("Escape");
+  }
+  // Prefetches start on hover and finish in the background. Chrome runs its own unused-preload
+  // check about 3 s after the page's last request (the menus' included), so it has reported by now.
+  await page.waitForTimeout(3_500);
+  expect(await unusedPreloads(page), `unused preloads on ${where}`).toEqual([]);
+  expect(await page.evaluate(() => (window as unknown as { cspViolations: string[] }).cspViolations), `CSP violations on ${where}`).toEqual([]);
+  expect(warnings, `Chrome's preload warnings on ${where}`).toEqual([]);
+}
+
+const title = (path: string) => `${path} preloads nothing it doesn't use and breaks no content policy`;
+
+// Signed out: the landing page, the sign-in and legal pages (Geist), and the plain account pages
+// (AuthCard) an invitation or a failed sign-in opens.
+test.describe("signed out", () => {
   const publicPages: ReadonlyArray<readonly [string, RegExp]> = [
     ["/", /./],
     ["/login", /Welcome Back/],
@@ -90,19 +101,24 @@ test("pages preload nothing they don't use and break no content policy, signed o
     ["/invite?token=not-a-real-invitation", /./],
     ["/auth/error", /couldn't sign you in/],
   ];
-  for (const [path, heading] of publicPages) await check(page, path, heading, "signed out");
+  for (const [path, heading] of publicPages) test(title(path), ({ page }) => check(page, path, heading));
+});
 
-  await signUp(page, uniqueEmail("console"));
-  const ws = await page.evaluate(async () => {
-    const r = await fetch("/api/workspaces", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Console Co" }) });
-    if (!r.ok) throw new Error(`POST /workspaces failed: ${r.status}`);
-    return ((await r.json()) as { workspace: { id: string } }).workspace.id;
+test.describe("signed in", () => {
+  // One account with a workspace and a store, created before the first test; every test's browser
+  // context starts from its session (the API's cookie), so none has to sign in itself.
+  let signedIn: Awaited<ReturnType<BrowserContext["storageState"]>> | undefined;
+  test.beforeAll(async ({ browser }) => {
+    const page = await browser.newPage({ baseURL: E2E_BASE_URL });
+    await signUp(page, uniqueEmail("console"));
+    const ws = await createWorkspace(page, "Console Co");
+    await insertStore(db, ws, `console-${Date.now()}.myshopify.com`);
+    signedIn = await page.context().storageState();
+    await page.context().close();
   });
-  await db.query(
-    `INSERT INTO stores (id, workspace_id, shop_domain, status, timezone, currency, granted_scopes, pixel_ingest_key, created_at, updated_at)
-     VALUES (gen_random_uuid()::text, $1, $2, 'active', 'UTC', 'USD', $3, gen_random_uuid()::text, now(), now())`,
-    [ws, `console-${Date.now()}.myshopify.com`, ["read_orders", "read_products"]],
-  );
+  // (A fixture's first parameter is its dependency list, empty here; `provide` is Playwright's `use`.)
+  // eslint-disable-next-line no-empty-pattern
+  test.use({ storageState: async ({}, provide) => provide(signedIn) });
 
   const appPages: ReadonlyArray<readonly [string, RegExp]> = [
     ["/dashboard", /./],
@@ -113,14 +129,13 @@ test("pages preload nothing they don't use and break no content policy, signed o
     ["/staff", /./],
     ["/whatsapp", /./],
   ];
-  for (const viewport of [
-    { width: 1366, height: 860 },
-    { width: 390, height: 844 },
-  ]) {
-    await page.setViewportSize(viewport);
-    for (const [path, heading] of appPages) await check(page, path, heading, `at ${viewport.width}px`);
+  for (const [name, viewport] of [
+    ["on desktop", { width: 1366, height: 860 }],
+    ["on a phone", { width: 390, height: 844 }],
+  ] as const) {
+    test.describe(name, () => {
+      test.use({ viewport });
+      for (const [path, heading] of appPages) test(title(path), ({ page }) => check(page, path, heading));
+    });
   }
-  // Chrome's own check runs a few seconds after load and again after later requests.
-  await page.waitForTimeout(3_500);
-  expect(warnings).toEqual([]);
 });
