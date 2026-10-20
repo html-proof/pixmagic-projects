@@ -526,7 +526,7 @@ a hosted zone that isn't the registrar's nameservers would only be a second, ign
 | `_629bb4707c1bf383a6f9ecec0cb165bf` | CNAME | `_70137766a706c2c3a6f74580a42334a6.wzccmgtwzk.acm-validations.aws` | DNS only |
 | `_66e52976e7c4c9a179bf51623272d845.www` | CNAME | `_4a5b10a140cad564c7f3420dc090c8dd.wzccmgtwzk.acm-validations.aws` | DNS only |
 | `_eab665a4a171b7418b4d9e90cb9d56bd.auth` | CNAME | `_442b2e17b5d149c6ab91d07e32ce1239.wzccmgtwzk.acm-validations.aws` | DNS only |
-| `auth` | CNAME | the Auth stack's output `CustomDomainTarget` (Cognito's CloudFront distribution), once step one of cognito-setup.md "Own sign-in domain" is deployed | DNS only |
+| `auth` | CNAME | `db11p1sm9fnn5.cloudfront.net` (the Auth stack's output `CustomDomainTarget`: Cognito's CloudFront distribution for the own sign-in domain; added 2026-10-20) | DNS only |
 | `_dmarc` | TXT | `v=DMARC1; p=quarantine; adkim=r; aspf=r; rua=mailto:dmarc_rua@onsecureserver.net;` (from GoDaddy, kept) | DNS only |
 | `_domainconnect` | CNAME | `_domainconnect.gd.domaincontrol.com` (from GoDaddy, kept) | as imported |
 
