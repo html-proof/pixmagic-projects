@@ -14,6 +14,7 @@
  */
 import { Prisma, systemDb, type Store } from "@app/db";
 import { localDay, VELOCITY_DAYS, addDays, historyStart, daysBetweenInclusive } from "@app/shared";
+import { ITEM_SALES, SALE_UNITS, SALE_VALUE } from "../reports/common.js";
 import { hasCapabilityScopes } from "./access.js";
 import { hasFinishedPass } from "./levels.js";
 import { inventorySettings } from "./settings.js";
@@ -92,16 +93,19 @@ export function variantStockCte(s: StockScope): Prisma.Sql {
 export const STATUS = Prisma.sql`(CASE WHEN NOT tracked OR available IS NULL THEN 'untracked' WHEN available <= 0 THEN 'out' WHEN available <= threshold THEN 'low' ELSE 'in_stock' END)`;
 
 /**
- * `sold`: units per variant in orders placed `from`..`to` (store-local days), cancelled orders
- * left out (the dashboard's top products count them the same way).
+ * `sold`: items sold per variant (`units`) and their net sales before tax (`revenue`, text) from
+ * the sales that happened `from`..`to` (store-local days), read from Shopify's sales records
+ * (order_sales) exactly as the dashboard's top products read them (`SALE_UNITS`): an order's
+ * items count, a return's come off, a cancelled order's reversal takes its items back out, an
+ * order never read yet counts as placed. Test orders are never stored.
  */
-export function soldCte(s: Pick<StockScope, "ws" | "storeId">, from: string, to: string, name = "sold"): Prisma.Sql {
+export function soldCte(scope: Pick<StockScope, "ws" | "storeId">, from: string, to: string, name = "sold"): Prisma.Sql {
   return Prisma.sql`${Prisma.raw(name)} AS (
-    SELECT li.variant_shopify_id AS variant_id, SUM(li.quantity)::int AS units
-    FROM order_line_items li
-    JOIN orders o ON o.id = li.order_id
-    WHERE li.workspace_id = ${s.ws} AND li.store_id = ${s.storeId} AND o.workspace_id = ${s.ws} AND o.store_id = ${s.storeId}
-      AND o.cancelled_at IS NULL AND o.local_day BETWEEN ${from} AND ${to} AND li.variant_shopify_id IS NOT NULL
+    SELECT li.variant_shopify_id AS variant_id, SUM(${SALE_UNITS})::int AS units, SUM(${SALE_VALUE})::text AS revenue
+    FROM order_sales s
+    JOIN order_line_items li ON li.store_id = s.store_id AND li.shopify_id = s.line_item_shopify_id
+    WHERE s.workspace_id = ${scope.ws} AND s.store_id = ${scope.storeId} AND li.workspace_id = ${scope.ws}
+      AND ${ITEM_SALES} AND s.local_day BETWEEN ${from} AND ${to} AND li.variant_shopify_id IS NOT NULL
     GROUP BY li.variant_shopify_id)`;
 }
 

@@ -261,7 +261,7 @@ export function ProductPanel({ productId }: { productId: string }) {
                     height="h-28"
                   />
                 </div>
-                <p className="mt-2 text-xs text-muted">From the orders bizinsights has imported ({fmtNum(data.sales.salesDays)} of the last 30 days covered), cancelled orders left out.</p>
+                <p className="mt-2 text-xs text-muted">Items sold less items returned, from the Shopify sales records bizinsights has imported ({fmtNum(data.sales.salesDays)} of the last 30 days covered).</p>
               </Section>
 
               {data.history && (

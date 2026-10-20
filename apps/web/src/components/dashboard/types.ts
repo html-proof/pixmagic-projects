@@ -325,7 +325,8 @@ export interface InventoryModule {
     outOfStock: number;
     lowStock: number;
   };
-  lowStockItems: Array<{ productTitle: string; variantTitle: string; sku: string | null; quantity: number; dailySales: number; daysOfCover: number | null }>;
+  /** Low as the Inventory section counts it (at or under the low-stock threshold), the ones about to run out first; a rate needs 14 days of imported orders. */
+  lowStockItems: Array<{ productTitle: string; variantTitle: string; sku: string | null; quantity: number; dailySales: number | null; daysOfCover: number | null }>;
 }
 
 export interface CatalogModule {

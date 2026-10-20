@@ -34,6 +34,24 @@ Two sources, never mixed in one answer (`stockSource` in `packages/core/src/inve
 Totals count each item at each location once and leave out untracked items (counted on their own)
 and archived products.
 
+## Items sold, and the order of the lists
+
+Every sales figure in the section (units sold today and this month, top sellers and slow movers,
+sales rates and days of stock, fast- and slow-moving, a product's sales) counts items from
+Shopify's sales records (`order_sales`), exactly as the dashboard's top products do (`SALE_UNITS`
+in `packages/core/src/reports/common.ts`): an order's items count, a return's or a cancellation's
+come off, an edit's own line counts neither way; revenue is net sales before tax. Gift card
+products sold as goods count as items (they leave stock). The dashboard's Stock card reads the same
+stock, the same low and out of stock and the same rates (`inventory` in
+`packages/core/src/reports/catalog.ts`), so the two never disagree about a store.
+
+Lists come in a fixed order, the same every time they are opened: the stock list by what it is
+sorted by, then catalog order (product title, the variant's position in its product, its title,
+its id); the overview's low and out of stock by fewest available first; top sellers by most items
+sold, then most net sales; slow movers by fewest sold, then most stock held; the dashboard's
+"Restock soon" by fewest days of cover (unknown last), then fewest units; ties everywhere in
+catalog order.
+
 ## Keeping it in step with Shopify
 
 | How | When | Code |

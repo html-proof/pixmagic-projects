@@ -136,7 +136,7 @@ export default function InventoryReportsPage() {
             )}
           </Card>
 
-          <Card title="Top sellers" note={`Units in orders placed in the period, cancelled orders left out.${data.products.ordersCoverRange ? "" : " The imported orders don't cover the whole period."}`}>
+          <Card title="Top sellers" note={`Items sold in the period less items returned, as Shopify's sales by product count them; revenue is net sales before tax. Most sold first.${data.products.ordersCoverRange ? "" : " The imported orders don't cover the whole period."}`}>
             <PerfTable rows={data.products.top} currency={currency} empty="Nothing sold in this period." money={!!status?.can.costs} />
           </Card>
           <Card title="Slow movers" note="Items with stock available that sold the fewest units in the period.">

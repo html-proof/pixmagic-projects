@@ -122,8 +122,8 @@ const TERMS: Record<Topic, Terms> = {
     ["Units in stock", "Everything on hand across all your locations, for products where Shopify tracks quantity."],
     ["Stock value at cost", "What you paid for the stock you hold, from the cost per item you entered in Shopify."],
     ["Retail value", "What that stock would bring in at today's prices."],
-    ["Running low", "5 or fewer left, or less than 2 weeks of sales left at the last 30 days' pace."],
-    ["Sells per day", "Average units sold per day over the last 30 days."],
+    ["Running low", "At or under the low-stock threshold (10 unless you set one in Inventory → Stock settings), counting every location: the same rule as the Inventory section."],
+    ["Sells per day", "Average items sold per day over the last 30 days, returns taken off. Needs 14 days of imported orders."],
     ["Runs out in", "Units left divided by sells per day."],
   ],
   discounts: [

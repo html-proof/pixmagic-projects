@@ -198,6 +198,60 @@ describe("what the overview and the stock list show", () => {
     expect(d.sales.units30).toBe(2);
   });
 
+  it("counts items sold as Shopify's sales records do, returns taken off, on every page", async () => {
+    const b = await business();
+    await sale(b.store, 1, "11", 3);
+    await sale(b.store, 2, "21", 1);
+    // One tee returned: Shopify records a return against the line item (stored by the sales read).
+    const order = await systemDb.order.findFirstOrThrow({ where: { storeId: b.store.id, shopifyId: "1" } });
+    const now = new Date();
+    await systemDb.orderSale.create({
+      data: { workspaceId: b.ws, storeId: b.store.id, orderId: order.id, shopifyId: "return-1", localDay: localDay(now, b.store.timezone), happenedAt: now, actionType: "return", lineType: "product", lineItemShopifyId: "10", quantity: 1, amount: -30, discount: 0, tax: 0 },
+    });
+    const o = ok(await call("GET", `${b.base}/overview?preset=30d`, b.owner.headers));
+    expect(o.kpis.unitsToday.value).toBe(3);
+    expect(o.kpis.unitsMonth.value).toBe(3);
+    const r = ok(await call("GET", `${b.base}/reports?preset=7d`, b.owner.headers));
+    expect(r.products.unitsSold).toBe(3);
+    // Most sold first; revenue is net sales before tax, the return taken off.
+    expect(r.products.top.map((x: { variantId: string; units: number; revenue: number }) => [x.variantId, x.units, x.revenue])).toEqual([
+      ["11", 2, 60],
+      ["21", 1, 30],
+    ]);
+    const d = ok(await call("GET", `${b.base}/products/1`, b.owner.headers));
+    expect(d.variants[0].sales.units30).toBe(2);
+    expect(d.sales).toMatchObject({ units30: 2, revenue30: 60 });
+    const tee = ok(await call("GET", `${b.base}/stock?q=SKU-11`, b.owner.headers)).rows[0];
+    expect(tee.sold30).toBe(2);
+  });
+
+  it("lists that tie keep catalog order: product title, then each variant's position", async () => {
+    const b = await business();
+    // Two beanies with as much stock as the tote (4 available), their positions the reverse of their titles.
+    await systemDb.product.create({ data: { workspaceId: b.ws, storeId: b.store.id, shopifyId: "5", title: "Beanie", status: "active", shopifyUpdatedAt: new Date() } });
+    const beanie = (shopifyId: string, title: string, position: number) =>
+      systemDb.productVariant.create({ data: { workspaceId: b.ws, storeId: b.store.id, productShopifyId: "5", shopifyId, title, price: 10, inventoryQuantity: 4, inventoryItemId: `9${shopifyId}`, position, shopifyUpdatedAt: new Date() } });
+    await beanie("51", "Red", 2);
+    await beanie("52", "Blue", 1);
+    const now = new Date();
+    for (const item of ["951", "952"]) {
+      await systemDb.inventoryLevel.create({
+        data: { workspaceId: b.ws, storeId: b.store.id, inventoryItemId: item, locationShopifyId: "100", available: 4, onHand: 4, committed: 0, incoming: 0, reserved: 0, damaged: 0, safetyStock: 0, qualityControl: 0, shopifyUpdatedAt: now, syncedAt: now },
+      });
+    }
+    const ids = (rows: Array<{ variantId: string }>) => rows.map((r) => r.variantId);
+    // By available: the ties at 4 come as Beanie Blue (position 1), Beanie Red, Canvas Tote; the untracked gift wrap holds 5.
+    const stock = ok(await call("GET", `${b.base}/stock?sort=available&dir=asc`, b.owner.headers));
+    expect(ids(stock.rows)).toEqual(["12", "52", "51", "21", "31", "11"]);
+    const o = ok(await call("GET", `${b.base}/overview?preset=30d`, b.owner.headers));
+    expect(ids(o.lowStock.rows)).toEqual(["52", "51", "21"]);
+    // Nothing sold: the slow movers tie at 0 and come by stock held, then catalog order.
+    const slow = async () => ids(ok(await call("GET", `${b.base}/reports?preset=30d`, b.owner.headers)).products.slow);
+    expect(await slow()).toEqual(["11", "52", "51", "21"]);
+    // The same answer every time it's opened.
+    expect(await slow()).toEqual(["11", "52", "51", "21"]);
+  });
+
   it("the trend shows recorded days only: nothing is reconstructed for days without a record", async () => {
     const b = await business();
     const today = localDay(new Date(), b.store.timezone);

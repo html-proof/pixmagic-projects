@@ -381,8 +381,8 @@ export const KPI_INFO: Record<InventoryKpi, { label: string; definition: string 
     definition: "On-hand units × cost per item, for the variants whose cost is recorded in Shopify. Incomplete when some have none: their units aren't counted, and selling prices never stand in for costs.",
   },
   retailValue: { label: "Potential retail value", definition: "On-hand units × selling price. What the stock would bring in if all of it sold at today's prices: not sales, and not profit." },
-  unitsToday: { label: "Units sold today", definition: "Units in today's orders (store time), cancelled orders left out." },
-  unitsMonth: { label: "Units sold this month", definition: "Units in this month's orders so far, cancelled orders left out." },
+  unitsToday: { label: "Units sold today", definition: "Items in today's orders (store time) less items returned, as Shopify's sales count them." },
+  unitsMonth: { label: "Units sold this month", definition: "Items in this month's orders so far, less items returned, as Shopify's sales count them." },
   fastMoving: { label: "Fast-moving variants", definition: "The best sellers of the last 30 days that together make up 80% of the units sold." },
   slowMoving: { label: "Slow-moving variants", definition: "Tracked variants with stock available that sold nothing in the last 30 days." },
   turnover: {
