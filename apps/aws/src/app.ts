@@ -21,8 +21,13 @@ export function apiPath(pathname: string): string | null {
 /** Time limit for calls to Cognito (sign-in, token exchange, session re-checks). */
 const AUTH_TIMEOUT_MS = 10_000;
 
-/** Requests a minute per client address across the whole API (AWS WAF stops floods before this). */
-const GLOBAL_LIMIT_PER_MIN = 300;
+/**
+ * Requests a minute per client address across the whole API (AWS WAF stops floods before this,
+ * with the same figure: edge-stack.ts). One address is often many people (an office, a mobile
+ * carrier's NAT), so this is about a hundred dashboard loads a minute from one address, not one
+ * person's pace.
+ */
+const GLOBAL_LIMIT_PER_MIN = 1500;
 
 export function apiDeps(jobs: WorkerDeps): Deps {
   // Cognito sits on the sign-in path: a shorter limit than other providers.

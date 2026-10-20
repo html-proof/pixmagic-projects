@@ -5,6 +5,15 @@ import { CLOUDFLARE_CLIENT_IP_HEADER, CLOUDFLARE_IPV4, CLOUDFLARE_IPV6 } from ".
 import type { EnvConfig } from "./config.js";
 
 /**
+ * API requests a minute from one client address before WAF answers 429. One address is often many
+ * people (an office, a campus, a mobile carrier's NAT), so this is sized for a shared address
+ * (about a hundred dashboard loads a minute), not one person's pace; floods are still cut off
+ * before they cost an invocation. The app applies the same figure itself (apps/aws/src/app.ts,
+ * GLOBAL_LIMIT_PER_MIN) and finer limits per endpoint (apps/api/src/rateLimit.ts).
+ */
+const API_REQUESTS_PER_MINUTE_PER_IP = 1500;
+
+/**
  * AWS WAF in front of CloudFront. A CloudFront web ACL must live in us-east-1, so this is its own
  * stack there; the App stack in Sydney references it (crossRegionReferences).
  *
@@ -73,7 +82,7 @@ export class EdgeStack extends Stack {
             rateBasedStatement: {
               aggregateKeyType: "IP",
               evaluationWindowSec: 60,
-              limit: 300,
+              limit: API_REQUESTS_PER_MINUTE_PER_IP,
               scopeDownStatement: { andStatement: { statements: [...limitedApi, notFromCloudflare] } },
             },
           },
@@ -88,7 +97,7 @@ export class EdgeStack extends Stack {
               aggregateKeyType: "FORWARDED_IP",
               forwardedIpConfig: { headerName: CLOUDFLARE_CLIENT_IP_HEADER, fallbackBehavior: "NO_MATCH" },
               evaluationWindowSec: 60,
-              limit: 300,
+              limit: API_REQUESTS_PER_MINUTE_PER_IP,
               scopeDownStatement: { andStatement: { statements: [...limitedApi, fromCloudflare] } },
             },
           },
