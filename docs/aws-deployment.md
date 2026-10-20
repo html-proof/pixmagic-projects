@@ -622,7 +622,7 @@ AWS** (Actions → Run workflow) after setting one. The Cloudflare commands belo
    phone hashes are not re-keyed by this: with contacts present, carry production's value over as
    `CUSTOMER_HASH_KEY` instead.
 7. Smoke tests, the owner signs in (a Cognito account links to the copied user by its verified
-   email; an account merged in from the old database gets back in through "Forgot password?", its Firebase password no longer works: [cognito-setup.md](cognito-setup.md), section 4), stop the admin host. Other integrations
+   email; an account merged in from the old database gets back in by signing up again with the same address, its old password no longer works: [cognito-setup.md](cognito-setup.md), section 4), stop the admin host. Other integrations
    (Meta, WhatsApp webhook, email providers, Cognito's Google) when they are in use
    (aws-architecture.md section 7).
 8. Watch the dashboard and alarms; keep Cloudflare as the rollback for two quiet weeks, then retire it

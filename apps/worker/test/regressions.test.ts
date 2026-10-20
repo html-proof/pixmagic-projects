@@ -56,7 +56,7 @@ async function makeStore(status: "active" | "syncing" | "uninstalled" = "active"
     data: encryptTokenFields(store.id, { accessToken: "shpat_x", scopes: ["read_orders"], accessTokenExpiresAt: null, refreshToken: null, refreshTokenExpiresAt: null }),
   });
   for (const [i, email] of owners.entries()) {
-    const user = await systemDb.user.create({ data: { firebaseUid: `o${i}`, email, emailVerified: true } });
+    const user = await systemDb.user.create({ data: { email, emailVerified: true } });
     await systemDb.membership.create({ data: { workspaceId: ws.id, userId: user.id, role: i === 0 ? "owner" : "admin" } });
   }
   return store;

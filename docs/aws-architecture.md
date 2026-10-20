@@ -36,7 +36,7 @@ Principles:
 | Invitations, alerts, staff emails | **Amazon SES** (domain identity with DKIM/SPF/DMARC) | Also Cognito's sender (raises the 50/day limit) and enables passwordless codes. |
 | Merchants' own SMTP accounts (email integrations) | Node `net`/`tls` from Lambda through the NAT gateway | Plain outbound TCP; ports 465/587/2525. |
 | Logs, traces | **CloudWatch Logs**, metric filters, alarms, **X-Ray** (sampled) | One place for logs, metrics and alarms. |
-| Sign-in | **Cognito** (Phase 1) | Replaced Firebase Authentication; since 2026-10-18 the app never calls Firebase ([cognito-setup.md](cognito-setup.md), section 4). |
+| Sign-in | **Cognito** (Phase 1) | Replaced Firebase Authentication, of which nothing is left in the app ([cognito-setup.md](cognito-setup.md), section 4). |
 | Session, encryption, OAuth client secrets | **Secrets Manager** (+ **KMS** key) | Read at cold start; rotation for database passwords. |
 | Safe deploys, instant rollback | **Lambda versions + aliases** with **CodeDeploy** canary | 10% for 5 minutes, automatic rollback on alarms. |
 | Backups | RDS automated backups (14 days) + **AWS Backup** monthly copy | Point-in-time restore to any second. |

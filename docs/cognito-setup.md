@@ -203,28 +203,25 @@ nothing: every environment uses the same UI build.
 
 ## 4. Accounts from before Cognito
 
-The move from Firebase is over, and the app no longer talks to Firebase at all:
+Sign-in before Cognito was Firebase Authentication. Nothing of it is left in the app: the API never
+calls Firebase, and there is no Firebase setting, key or library. The two columns that marked an
+account from that time, `users.firebase_uid` and `auth_identities.migrated_from_firebase_uid`, are
+no longer read or written (`@ignore` in `schema.prisma`, so a running release can't miss them);
+the next migration drops them, once the release that stopped using them is the one a deploy would
+roll back to (a release that still selected them must never meet a database without them). The
+password check against Firebase at a first Cognito sign-in ended on 2026-10-18
+(`git log --diff-filter=D -- apps/api/src/legacyFirebase.ts` finds the commit that removed it);
+production had no account from Firebase by then: no `users.firebase_uid` set, no identity created
+by a move, and no Firebase sign-in in the API's logs since 2026-10-15.
 
-- Until 2026-10-18 a password sign-in that Cognito refused was checked against Firebase once
-  (`LEGACY_FIREBASE_API_KEY`), and the Cognito user was created with that password. That check, and
-  the `ops:cognito-plan` / `ops:cognito-verify` tasks that planned the move, were removed
-  (`git log --diff-filter=D -- apps/api/src/legacyFirebase.ts` finds the commit; its parent still
-  has them). On that day production's database had no account left from
-  Firebase: no `users.firebase_uid` set, no identity created by a move, and the API's logs since
-  2026-10-15 show no Firebase sign-in at all.
-- The old deployment's database (on the owner's PC; [aws-deployment.md](aws-deployment.md),
-  "Cutover") still holds Firebase accounts. If any of them are merged in, they keep their
-  `users.firebase_uid` and come back without Firebase: "Forgot password?" (or the emailed-code sign-in)
-  creates their Cognito user (no email to them, random password) and Cognito emails a code; proving
-  the inbox gets them into the same `users.id`, workspaces and stores. Continue with Google, or
-  signing up again with the same address, links to it too, on the verified address. Their old
-  password is not kept anywhere.
-- `users.firebase_uid` stays: it is what "Forgot password?" recognises such an account by.
-  `auth_identities.migrated_from_firebase_uid` is no longer written (no production row has it set);
-  dropping it is a migration of its own.
-
-Nothing is merged on an unverified address, and every step is recorded in `auth_events`. The old
-deployment keeps signing its own users in with Firebase until it is retired
+The old deployment's database (on the owner's PC; [aws-deployment.md](aws-deployment.md),
+"Cutover") still holds accounts that signed in with Firebase. If any are merged in, they come back
+without Firebase, on their verified address: signing up again with the same email (or Continue with
+Google) links the new Cognito user to the same `users.id`, workspaces and stores (`resolveUser` in
+`apps/api/src/identity.ts`). "Forgot password?" alone can't get them in: it asks Cognito for a code,
+and Cognito has no user for them yet. Their old password is kept nowhere, nothing is merged on an
+unverified address, and every link is recorded in `auth_events`. The old deployment keeps signing
+its own users in with Firebase until it is retired
 ([aws-deployment.md](aws-deployment.md#retiring-the-old-cloudflare-deployment)).
 
 ## 5. Local development and tests
@@ -325,8 +322,8 @@ ID tokens are unaffected (their issuer and keys are the pool's, not the domain's
 - **Every sign-in says "We can't reach the sign-in service"**: `COGNITO_USER_POOL_ID` /
   `COGNITO_CLIENT_ID` unset (the API logs it at startup), or Cognito unreachable. CloudWatch Logs
   `/aws/lambda/insights-production-api`.
-- **"That email and password don't match" for an account from before Cognito**: its old Firebase
-  password no longer works anywhere; "Forgot password?" gets them in (section 4).
+- **"That email and password don't match" for an account from before Cognito**: its old password
+  works nowhere any more; signing up again with the same address links to its account (section 4).
 - **Google: `redirect_mismatch` / `invalid_request` at Cognito**: the app client's callback URL
   must be exactly `<APP_URL>/auth/callback`; Google's must be the stack's `ProviderRedirectUri`.
 - **`/api/auth/config` still says `"google": false` after section 2**: the GitHub variable is on

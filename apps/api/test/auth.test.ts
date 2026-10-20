@@ -61,7 +61,6 @@ describe("creating an account with email and password", () => {
     const me = await get("/me", { cookie: cookiesFrom(login) });
     expect(me.json().user).toMatchObject({ email: "ada@example.com", emailVerified: true, displayName: "Ada Lovelace" });
     const user = await systemDb.user.findUniqueOrThrow({ where: { email: "ada@example.com" }, include: { identities: true } });
-    expect(user.firebaseUid).toBeNull();
     expect(user.identities).toEqual([expect.objectContaining({ provider: "cognito", method: "password", email: "ada@example.com" })]);
   });
 
@@ -321,16 +320,16 @@ describe("forgot password", () => {
   });
 });
 
-describe("accounts from before Cognito", () => {
-  /** A merchant from before the move: a users row with its Firebase uid and a workspace, no Cognito user. */
-  async function earlierMerchant() {
-    const user = await systemDb.user.create({ data: { firebaseUid: "fb-1", email: "old@x.com", emailVerified: true, displayName: "Old Timer" } });
+describe("an account with no Cognito user yet", () => {
+  /** A users row with a workspace and no sign-in: merged in from another database, say. */
+  async function accountWithoutSignIn() {
+    const user = await systemDb.user.create({ data: { email: "old@x.com", emailVerified: true, displayName: "Old Timer" } });
     const ws = await systemDb.workspace.create({ data: { name: "Old Shop", memberships: { create: { userId: user.id, role: "owner" } } } });
     return { user, ws };
   }
 
-  it("refuses their old password without sending it anywhere but Cognito, and creates nothing", async () => {
-    await earlierMerchant();
+  it("refuses a password without sending it anywhere but Cognito, and creates nothing", async () => {
+    await accountWithoutSignIn();
     const outbound: string[] = [];
     ctx.setFetch(async (input) => {
       outbound.push(String(input));
@@ -343,16 +342,29 @@ describe("accounts from before Cognito", () => {
     expect(ctx.auth.users.size).toBe(0);
   });
 
-  it("lets them reset their password with a code, and keeps their user and everything it owns", async () => {
-    const { user, ws } = await earlierMerchant();
-    expect((await post("/auth/password/forgot", { email: "old@x.com" })).statusCode).toBe(200);
-    expect(await systemDb.authEvent.count({ where: { type: "firebase_account_provisioned", userId: user.id } })).toBe(1);
-    const code = ctx.auth.code("reset", "old@x.com");
-    expect((await post("/auth/password/reset", { email: "old@x.com", code, password: "fresh-password", confirmPassword: "fresh-password" })).statusCode).toBe(200);
+  it("\"Forgot password?\" creates nothing for it either, and answers like an unknown address", async () => {
+    const { user } = await accountWithoutSignIn();
+    const known = await post("/auth/password/forgot", { email: "old@x.com" });
+    const unknown = await post("/auth/password/forgot", { email: "nobody@x.com" });
+    expect(known.statusCode).toBe(200);
+    expect(known.json()).toEqual(unknown.json());
+    expect(ctx.auth.users.size).toBe(0);
+    expect(ctx.auth.sent).toEqual([]);
+    expect(await systemDb.authEvent.count({ where: { userId: user.id } })).toBe(0);
+  });
+
+  it("signing up again with the same address links the new sign-in to the same user and everything it owns", async () => {
+    const { user, ws } = await accountWithoutSignIn();
+    const signup = await post("/auth/signup", { name: "Old Timer", email: "old@x.com", password: "fresh-password", confirmPassword: "fresh-password", acceptTerms: true });
+    expect(signup.statusCode).toBe(200);
+    expect((await post("/auth/signup/confirm", { email: "old@x.com", code: ctx.auth.code("signup", "old@x.com") })).statusCode).toBe(200);
     const login = await post("/auth/login", { email: "old@x.com", password: "fresh-password" });
+    expect(login.statusCode).toBe(200);
     expect(login.json().user.id).toBe(user.id);
+    expect(await systemDb.user.count()).toBe(1);
     const me = await get("/me", { cookie: cookiesFrom(login) });
     expect(me.json().workspaces).toEqual([expect.objectContaining({ id: ws.id, role: "owner" })]);
+    expect(await systemDb.authEvent.count({ where: { type: "identity_linked", userId: user.id } })).toBe(1);
   });
 });
 

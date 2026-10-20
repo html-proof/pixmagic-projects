@@ -92,7 +92,7 @@ beforeEach(async () => {
     }
     throw new Error(`unexpected fetch ${url}`);
   };
-  const user = await systemDb.user.create({ data: { firebaseUid: "w-owner", email: "owner@shopmail.com", emailVerified: true } });
+  const user = await systemDb.user.create({ data: { email: "owner@shopmail.com", emailVerified: true } });
   userId = user.id;
   const w = await systemDb.workspace.create({ data: { name: "Shop", memberships: { create: { userId, role: "owner" } } } });
   ws = w.id;

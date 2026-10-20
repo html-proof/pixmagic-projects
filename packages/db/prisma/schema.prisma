@@ -51,10 +51,11 @@ enum JobStatus {
 
 model User {
   id            String       @id @default(cuid())
-  /// The Firebase Authentication account this user signed in with before the move to Cognito.
-  /// Marks an account from before the move: "Forgot password?" creates its Cognito user
-  /// (apps/api/src/routes/auth.ts). Firebase itself is never called. New accounts have none.
-  firebaseUid   String?      @unique @map("firebase_uid")
+  /// Left over from the sign-in provider before Cognito. Nothing reads or writes it (@ignore
+  /// keeps it out of the client). The next migration drops it, once this release is the one a
+  /// deploy would roll back to: a release that still selected it must never meet a database
+  /// without it.
+  firebaseUid   String?      @unique @map("firebase_uid") @ignore
   email         String       @unique
   emailVerified Boolean      @default(false) @map("email_verified")
   displayName   String?      @map("display_name")
@@ -90,10 +91,9 @@ model AuthIdentity {
   /// How this Cognito user signs in: "password" or "google".
   method            String
   email             String?
-  /// Set when this identity was created by moving a Firebase account over at its first sign-in
-  /// (audit trail). That move ended on 2026-10-18 and no production identity has it set; nothing
-  /// writes it any more.
-  migratedFromFirebaseUid String? @map("migrated_from_firebase_uid")
+  /// Left over from the move to Cognito (never set in production). Nothing reads or writes it
+  /// (@ignore); the next migration drops it, with users.firebase_uid.
+  migratedFromFirebaseUid String? @map("migrated_from_firebase_uid") @ignore
   createdAt         DateTime  @default(now()) @map("created_at")
   lastUsedAt        DateTime? @map("last_used_at")
   user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -103,8 +103,8 @@ model AuthIdentity {
   @@map("auth_identities")
 }
 
-/// Account-level security events (sign-in identity linked, earlier account provisioned, password or
-/// email changed, signed out everywhere, account deleted). Workspace actions go to audit_logs.
+/// Account-level security events (sign-in identity linked, password or email changed, signed out
+/// everywhere, account deleted). Workspace actions go to audit_logs.
 model AuthEvent {
   id        String   @id @default(cuid())
   /// Null once the account is deleted (the row stays, with no link to a person).
