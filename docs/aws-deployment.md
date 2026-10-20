@@ -1004,3 +1004,20 @@ The five red security checks on 2026-10-18 and what answers each:
 
 Trusted Advisor re-reads these on its own schedule (about daily); "Refresh" on a check, or
 `aws support refresh-trusted-advisor-check --check-id <id> --region us-east-1`, asks sooner.
+
+## Capacity: what binds first (checked 2026-10-20)
+
+The design (Cognito, Lambda, Postgres, DynamoDB, CloudFront) holds a million accounts; the
+configuration is sized for a small merchant base and the US$80 budget. In the order they bind:
+
+| Limit | Today | Lifts with |
+| --- | --- | --- |
+| Google sign-ups a day | 10,000 new token grants a day per Google project (the Overview page of `bizinsights-sign-in` shows the figure) | "Raise daily token limit" on that page: a Google form. (Owner, or Claude in the owner's Chrome on their word) |
+| Email sign-ups a day | About 100 a day: Resend's free tier for the emailed codes, shared with the app's own email; SES is still in the sandbox (production access denied 2026-10-16) | A paid Resend plan (owner's billing), or SES production access |
+| Simultaneous requests | The account's Lambda "Concurrent executions" quota in ap-southeast-2 is already 1,000 (Service Quotas, checked 2026-10-20; the new-account value of 10 that older notes mention is gone). The functions reserve none of it, and each concurrent API invocation holds a database connection, so the database binds first (next row). The jobs queues still take 2 invocations each (`sources` in `app-stack.ts`, sized when the quota was 10) | Reserved concurrency per function (`app-stack.ts`) once the database class is chosen, so the API never opens more connections than the instance allows; the queues' concurrency can rise with it |
+| Database | db.t4g.micro (1 GB memory, about 80 connections), storage 20 GB growing to 100 | t4g.small or medium when the `db-*` alarms say so (one failover, about a minute); RDS Proxy later (aws-architecture.md: the pinning check first) |
+| Cognito cost | Essentials plan: the first 10,000 monthly active users free, then about US$0.015 each a month | Nothing to configure. A million active users is about US$15,000 a month for sign-in alone, so `monthlyBudgetUsd` (config.ts) moves first |
+| Per-address limits | WAF and the app: 1,500 API requests a minute per address; sign-ups 60 an hour per address; Google sign-ins 100 per five minutes per address (`apps/api/src/rateLimit.ts`) | Raised 2026-10-20 for shared addresses (offices, mobile carriers). Accounts are protected by the per-address-of-email, per-account and Cognito limits, which did not move |
+
+What does not bind: Google's 100-user cap (the sign-in project is in production, brand-verified, and
+asks only for name and email), DynamoDB (on-demand), CloudFront and S3.

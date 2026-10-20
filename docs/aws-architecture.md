@@ -26,7 +26,7 @@ Principles:
 | The web UI (Next.js static export) | **S3** (private) + **CloudFront** (Origin Access Control) | Static files at the edge, cached; no compute. |
 | `/api/*`, `/webhooks/*`, `/pixel/*`, `/shopify/*`, health (the Hono API) | **Lambda** (Node 22, arm64) behind **CloudFront** (function URL origin) | Per-request code; scales to zero. Only requests carrying CloudFront's secret origin header are served (section 2). |
 | The app's address | A custom domain + **ACM** certificate: https://bizinsights.io since 2026-10-16 (DNS at Cloudflare, not Route 53) | A custom domain is what Google's OAuth app verification asks for. |
-| Coarse API flood protection (300 requests/min/IP) | **AWS WAF** rate-based rule on CloudFront, plus AWS managed rule groups | Blocks floods before they cost a Lambda invocation. |
+| Coarse API flood protection (1,500 requests/min/IP) | **AWS WAF** rate-based rule on CloudFront, plus AWS managed rule groups | Blocks floods before they cost a Lambda invocation. |
 | Per-key rate limits, one-time OAuth state, locks, signed-out sessions, export grants (the coordinator) | **DynamoDB** table (on-demand, TTL) | `apps/aws/src/dynamoCoord.ts`; the local server keeps it in memory. |
 | Webhook bodies too big for a queue message (over 100 KB) | **S3** bucket `payloads` (7-day lifecycle) | Only the rare large body; the message carries its key. |
 | Background jobs (sync, webhooks, aggregate, email), retries with backoff | **SQS** standard queues + a DLQ; **Lambda** consumers (event source mappings) | At-least-once delivery; the handlers are idempotent (below). |
@@ -104,8 +104,8 @@ Slack) call back on the app's address (section 7).
 | aggregate | 5 (1 s) | 4 | 5 min | 6 |
 | email | 10 (2 s) | 5 | 2 min | 6 |
 
-What is built is smaller while the account's Lambda concurrency is 10 (`sources` in
-`infra/cdk/lib/app-stack.ts`; a message goes to the DLQ after 10 receives).
+What is built is smaller than this table (`sources` in
+`infra/cdk/lib/app-stack.ts`, sized when the account's Lambda concurrency was 10; it is 1,000 since 2026-10-20 at the latest, so the queues can grow with the database; a message goes to the DLQ after 10 receives).
 
 A job's `retry({ delaySeconds })` is `ChangeMessageVisibility` (up to 12 h, so the 15-minute
 backoff cap fits), `ack()` a successful batch item, `attempts` the message's `ApproximateReceiveCount`
