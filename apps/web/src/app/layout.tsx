@@ -4,9 +4,10 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "bizinsights for Shopify",
   description: "Plain-language store analytics.",
-  // Google Search Console ownership (account sebanceo@gmail.com) of the app's earlier address,
-  // insights.imeseban.workers.dev, which Google's OAuth branding verification required. Keep it while
-  // that verification stands: removing it un-verifies the site.
+  // Google Search Console ownership tag (account sebanceo@gmail.com), added for the app's earlier
+  // address on the old Cloudflare Worker, which Google's OAuth branding verification required then.
+  // https://bizinsights.io/ is verified on its own as a Domain property (DNS TXT record). Keep the
+  // tag while that earlier verification stands: removing it un-verifies the site.
   verification: { google: "s7xwK411UchDkBKH6KSUy1m8_qG8EQHbw0A2fp2Zuro" },
 };
 

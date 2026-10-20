@@ -638,9 +638,9 @@ stand-in for the move (`apps/cloudflare/moved`), `wrangler`, the `cloudflared` s
 docker-compose.yml and the Cloudflare deployment guide were removed after commit **`a861bd9`**, the
 last one that has them. Until it is retired, this is still running outside the repository:
 
-- Cloudflare account `b45818e0a9b504baa7a9862d43827456`: the Worker `insights` at
-  https://insights.imeseban.workers.dev (with its Durable Object `Coordinator` and its two cron
-  triggers), the queues `insights-sync`, `insights-webhooks`, `insights-aggregate`, `insights-email`
+- Cloudflare account `b45818e0a9b504baa7a9862d43827456`: the Worker `insights` on its workers.dev
+  address (with its Durable Object `Coordinator` and its two cron triggers; the app's address is
+  https://bizinsights.io/), the queues `insights-sync`, `insights-webhooks`, `insights-aggregate`, `insights-email`
   and `insights-dlq`, two Hyperdrive configurations (`eec0593e76144cbcb0c4bb653a0cb647`,
   `5646bc5ea5424144bf2f12167be10dec`) and the tunnel they reach the database through.
 - On the owner's PC: Docker containers `saas-project20-postgres-1` (port 5434, database `app`: the
@@ -672,8 +672,9 @@ Retiring it, on the owner's go-ahead, once AWS has been production for two quiet
    (keep its volume until the backup has been restored somewhere once, as a check).
 4. In this repository: drop Cloudflare from the providers on the privacy page
    (`apps/web/src/app/privacy/page.tsx`) and the old-deployment notes in `docker-compose.yml`.
-   Google Search Console verifies the workers.dev address through the tag in
-   `apps/web/src/app/layout.tsx`: verify the new address before removing it.
+   Google Search Console verifies the old Worker's address through the tag in
+   `apps/web/src/app/layout.tsx`; https://bizinsights.io/ is verified on its own as a Domain property
+   (DNS TXT record, 2026-10-19), so the tag can go with the Worker.
 5. `git worktree remove ..\insights-cloudflare`.
 
 ## App email (invitations, alerts)

@@ -140,7 +140,7 @@ Not verified in a browser:
 
 | Check | Result |
 | --- | --- |
-| `GET http://insights.imeseban.workers.dev/login` | `200 OK` over plain HTTP (finding #10, fixed in code, not deployed) |
+| `GET http://…/login` (the old Cloudflare Worker, production then) | `200 OK` over plain HTTP (finding #10, fixed in code, not deployed) |
 | `GET http://…/api/healthz` | `200 OK` over plain HTTP |
 | `GET https://…/login` headers | HSTS, CSP (frame-ancestors etc.), nosniff, DENY: as configured before this audit |
 | `GET https://…/api/healthz` headers | `no-store`, `default-src 'none'`, DENY, nosniff; no HSTS (added in code) |
