@@ -307,8 +307,12 @@ ID tokens are unaffected (their issuer and keys are the pool's, not the domain's
 3. **DNS**: `CustomDomainTarget` (`….cloudfront.net`) → Cloudflare → DNS → CNAME `auth` → that
    target, **DNS only (grey cloud)**: Cognito's CloudFront serves the certificate itself, and
    Cloudflare's proxy in front would break it. It can take up to an hour;
-   `curl -s https://auth.bizinsights.io/.well-known/openid-configuration` answering the pool's
-   OpenID configuration (JSON, not a connection or certificate error) shows it serves.
+   `curl -sI https://auth.bizinsights.io/oauth2/authorize` answering `302` to
+   `https://auth.bizinsights.io/error?error=Required+parameters+missing` (Cognito's own answer,
+   not a connection or certificate error) shows it serves. Hosted-UI domains publish no
+   `/.well-known/openid-configuration` (404 on the prefix domain too; checked 2026-10-20): the
+   pool's OpenID configuration lives at
+   `https://cognito-idp.ap-southeast-2.amazonaws.com/<pool id>/.well-known/openid-configuration`.
 4. **Google**: on the sign-in OAuth client add the redirect URI `https://auth.bizinsights.io/oauth2/idpresponse`
    (`CustomDomainRedirectUri`) and the JavaScript origin `https://auth.bizinsights.io`, keeping the
    `amazoncognito.com` ones for now.
