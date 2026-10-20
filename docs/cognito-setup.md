@@ -148,9 +148,14 @@ Cognito's documentation asks for SES: verify a domain in SES in the same region,
 
 ## 2. Google
 
-Continue with Google is off in production until this is done (`GET /api/auth/config` answers
-`"google": false`, and the sign-in pages show no Google button). The owner's steps, in this order.
-Nothing is clicked in the Cognito console, and nobody runs `cdk deploy` by hand.
+Done in production on 2026-10-19 (`GET /api/auth/config` answers `"google": true`); kept as the
+recipe for another environment, or for redoing it. While it is not done, `/api/auth/config` answers
+`"google": false` and the sign-in pages show no Google button. The owner's steps, in this order.
+Nothing is clicked in the Cognito console, and nobody runs `cdk deploy` by hand. Two things found
+on 2026-10-20 that the steps below now include: the consent screen's publishing status must be
+**In production** (in "Testing" only listed test users can sign in, and the project owner's own
+account passing hides that), and a logo plus brand verification are what make Google's screen say
+"bizinsights" instead of the redirect domain (docs/integrations-readiness.md).
 
 1. **A Google Cloud project for sign-in only.** Create a new project (for example "bizinsights
    sign-in"); don't use `insights-511119`, the Google Ads and AdSense project. Its consent screen
@@ -279,8 +284,8 @@ Google's sign-in pages name the pool's OAuth domain, `insights-605411278365.auth
 which the owner can't verify with Google: Google's screen shows an app's name and logo only once
 the project's branding is verified, and until then the domain of the redirect URI, so Continue
 with Google says "to continue to insights-605411278365.auth.ap-southeast-2.amazoncognito.com".
-`cognitoCustomDomain` (`infra/cdk/lib/config.ts`, unset in production: nothing changes until it is
-set) gives the pool its own domain beside the prefix one (a resource of its own,
+`cognitoCustomDomain` (`infra/cdk/lib/config.ts`; production has `auth.bizinsights.io` in use since
+release 81, 2026-10-20, done in the order below) gives the pool its own domain beside the prefix one (a resource of its own,
 `CustomUserPoolDomain`: the prefix domain is never replaced and keeps working). Its `inUse` flag
 moves sign-in over in a second step, so Continue with Google keeps working throughout: with
 `inUse: false` the domain exists (its CloudFront target, for the DNS record) while the app
