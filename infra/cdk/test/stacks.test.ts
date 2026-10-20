@@ -636,18 +636,18 @@ describe("Cognito sign-in", () => {
     expect(runtime.DependsOn ?? []).not.toContain("CustomUserPoolDomain");
   });
 
-  it("production: the own domain auth.bizinsights.io exists, with its own us-east-1 certificate, while sign-in stays on the prefix domain", () => {
-    // Step one of docs/cognito-setup.md "Own sign-in domain": inUse flips in step two.
+  it("production: sign-in goes through the own domain auth.bizinsights.io, with its own us-east-1 certificate, the prefix domain kept beside it", () => {
+    // Step two of docs/cognito-setup.md "Own sign-in domain" (2026-10-20).
     expect(envConfig(() => undefined).cognitoCustomDomain).toEqual({
       name: "auth.bizinsights.io",
       certificateArn: "arn:aws:acm:us-east-1:605411278365:certificate/b0849d46-9714-4de4-b893-a9ab1171761d",
-      inUse: false,
+      inUse: true,
     });
     expect(resource(t.auth, "CustomUserPoolDomain").Properties).toMatchObject({ Domain: "auth.bizinsights.io", ManagedLoginVersion: 2 });
     expect(resource(t.auth, "UserPoolDomain").Properties).toEqual({ UserPoolId: { Ref: "UserPool" }, Domain: "insights-605411278365", ManagedLoginVersion: 2 });
-    expect(JSON.stringify(t.auth.toJSON())).toContain(`\\"COGNITO_DOMAIN\\":\\"${PREFIX_DOMAIN}\\"`);
+    expect(JSON.stringify(t.auth.toJSON())).toContain('\\"COGNITO_DOMAIN\\":\\"https://auth.bizinsights.io\\"');
     const runtime = Object.values(t.auth.findResources("AWS::SSM::Parameter"))[0] as Resource;
-    expect(runtime.DependsOn ?? []).not.toContain("CustomUserPoolDomain");
+    expect(runtime.DependsOn).toContain("CustomUserPoolDomain");
   });
 
   it("adds an own domain beside the prefix domain and, until it is in use, leaves sign-in on the prefix domain", () => {
