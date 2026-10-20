@@ -14,28 +14,32 @@ export interface Limit {
  */
 export const LIMITS = {
   // ---- Sign-in (per IP unless named otherwise). Cognito throttles and locks out on top. ----
+  // One address is often many people (an office, a campus, a mobile carrier's NAT puts thousands
+  // behind one), so the per-IP limits only cap what one address can cost us (emails, Cognito
+  // calls) and leave the protection of accounts to the per-address and per-account limits and to
+  // Cognito's own lockouts. Sized for a shared address carrying a few hundred merchants.
   /** POST /auth/login, per IP and per address (a password guesser spreads over neither). */
-  loginIp: { max: 30, windowSec: 300 },
+  loginIp: { max: 150, windowSec: 300 },
   loginEmail: { max: 10, windowSec: 900 },
   /** POST /auth/signup: each one emails a code. */
-  signupIp: { max: 10, windowSec: 3600 },
+  signupIp: { max: 60, windowSec: 3600 },
   /** Codes Cognito emails on request (sign-up, password reset, sign-in), per address and per IP. */
   codeEmail: { max: 3, windowSec: 900 },
-  codeIp: { max: 10, windowSec: 3600 },
+  codeIp: { max: 60, windowSec: 3600 },
   /** Guesses at emailed codes (sign-up confirmation, password reset, sign-in), per IP. */
-  codeVerifyIp: { max: 20, windowSec: 900 },
+  codeVerifyIp: { max: 100, windowSec: 900 },
   /**
    * Guesses at a code we email ourselves to claim an address nobody proved (auth.ts, address
    * claims), per address: Cognito's own lockout doesn't stand behind these.
    */
   claimVerifyEmail: { max: 5, windowSec: 3600 },
-  /** "Continue with Google" started and finished, per IP. */
-  oauthIp: { max: 30, windowSec: 300 },
+  /** "Continue with Google" started and finished (two hits per sign-in), per IP. */
+  oauthIp: { max: 200, windowSec: 300 },
   /**
    * Codes from an authenticator app (two-step verification: signing in, setting it up), per IP
    * and per account. Six digits are a million guesses; Cognito also ends a sign-in after a few wrong ones.
    */
-  mfaVerifyIp: { max: 20, windowSec: 900 },
+  mfaVerifyIp: { max: 100, windowSec: 900 },
   mfaVerifyAccount: { max: 10, windowSec: 900 },
   /** Password, email and account changes, per user. */
   accountChange: { max: 10, windowSec: 3600 },
