@@ -51,11 +51,6 @@ enum JobStatus {
 
 model User {
   id            String       @id @default(cuid())
-  /// Left over from the sign-in provider before Cognito. Nothing reads or writes it (@ignore
-  /// keeps it out of the client). The next migration drops it, once this release is the one a
-  /// deploy would roll back to: a release that still selected it must never meet a database
-  /// without it.
-  firebaseUid   String?      @unique @map("firebase_uid") @ignore
   email         String       @unique
   emailVerified Boolean      @default(false) @map("email_verified")
   displayName   String?      @map("display_name")
@@ -91,9 +86,6 @@ model AuthIdentity {
   /// How this Cognito user signs in: "password" or "google".
   method            String
   email             String?
-  /// Left over from the move to Cognito (never set in production). Nothing reads or writes it
-  /// (@ignore); the next migration drops it, with users.firebase_uid.
-  migratedFromFirebaseUid String? @map("migrated_from_firebase_uid") @ignore
   createdAt         DateTime  @default(now()) @map("created_at")
   lastUsedAt        DateTime? @map("last_used_at")
   user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)

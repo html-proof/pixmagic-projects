@@ -210,11 +210,12 @@ nothing: every environment uses the same UI build.
 
 Sign-in before Cognito was Firebase Authentication. Nothing of it is left in the app: the API never
 calls Firebase, and there is no Firebase setting, key or library. The two columns that marked an
-account from that time, `users.firebase_uid` and `auth_identities.migrated_from_firebase_uid`, are
-no longer read or written (`@ignore` in `schema.prisma`, so a running release can't miss them);
-the next migration drops them, once the release that stopped using them is the one a deploy would
-roll back to (a release that still selected them must never meet a database without them). The
-password check against Firebase at a first Cognito sign-in ended on 2026-10-18
+account from that time, `users.firebase_uid` and `auth_identities.migrated_from_firebase_uid`, were
+dropped by the migration `20261020120000_drop_firebase_columns`, in a release of its own: the
+release before it (PR #163) had already stopped reading them (`@ignore` in `schema.prisma`) and was
+live, so the release a failed deploy rolls back to can't miss them (a release that still selected
+them must never meet a database without them). The password check against Firebase at a first
+Cognito sign-in ended on 2026-10-18
 (`git log --diff-filter=D -- apps/api/src/legacyFirebase.ts` finds the commit that removed it);
 production had no account from Firebase by then: no `users.firebase_uid` set, no identity created
 by a move, and no Firebase sign-in in the API's logs since 2026-10-15.
