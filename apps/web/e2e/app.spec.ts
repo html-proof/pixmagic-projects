@@ -147,8 +147,8 @@ test("signing up checks the form, confirms the emailed code, refuses a taken ema
   await page.reload();
   await expect(page).toHaveURL(/\/dashboard/);
   await expect(page.getByRole("button", { name: "Account menu" })).toBeVisible();
-  const user = await db.query("SELECT u.firebase_uid, i.method FROM users u JOIN auth_identities i ON i.user_id = u.id WHERE u.email = $1", [email]);
-  expect(user.rows).toEqual([{ firebase_uid: null, method: "password" }]);
+  const user = await db.query("SELECT i.method FROM users u JOIN auth_identities i ON i.user_id = u.id WHERE u.email = $1", [email]);
+  expect(user.rows).toEqual([{ method: "password" }]);
 
   // The same email can't be signed up twice.
   await page.context().clearCookies();

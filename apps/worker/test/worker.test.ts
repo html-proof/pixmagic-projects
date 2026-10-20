@@ -978,7 +978,7 @@ describe("stale job watchdog", () => {
 
   it("fails a job whose consumer died and moves the store out of syncing", async () => {
     const store = await makeStore();
-    const owner = await systemDb.user.create({ data: { firebaseUid: "w1", email: "owner@w.com", emailVerified: true } });
+    const owner = await systemDb.user.create({ data: { email: "owner@w.com", emailVerified: true } });
     await systemDb.membership.create({ data: { workspaceId: store.workspaceId, userId: owner.id, role: "owner" } });
     const job = await wedged(store, 7 * 60);
 
@@ -1093,7 +1093,7 @@ describe("queue consumer", () => {
   it("retries with backoff, then marks the job failed and alerts on the final attempt", async () => {
     const store = await makeStore();
     const ws = store.workspaceId;
-    const owner = await systemDb.user.create({ data: { firebaseUid: "u", email: "owner@x.com", emailVerified: true } });
+    const owner = await systemDb.user.create({ data: { email: "owner@x.com", emailVerified: true } });
     await systemDb.membership.create({ data: { workspaceId: ws, userId: owner.id, role: "owner" } });
     const job = await systemDb.syncJob.create({ data: { workspaceId: ws, storeId: store.id, kind: "shop" } });
     const body = { storeId: store.id, kind: "shop", syncJobId: job.id };
@@ -1153,7 +1153,7 @@ describe("queue consumer", () => {
     // same, and the store would then have read as one to reconnect (syncProblem "other").
     const store = await systemDb.store.update({ where: { id: (await makeStore(["read_orders"], "UTC")).id }, data: { status: "active", lastSyncedAt: new Date() } });
     const ws = store.workspaceId;
-    const owner = await systemDb.user.create({ data: { firebaseUid: "u-pcd", email: "pcd@x.com", emailVerified: true } });
+    const owner = await systemDb.user.create({ data: { email: "pcd@x.com", emailVerified: true } });
     await systemDb.membership.create({ data: { workspaceId: ws, userId: owner.id, role: "owner" } });
     const job = await systemDb.syncJob.create({ data: { workspaceId: ws, storeId: store.id, kind: "orders" } });
     const refused = {

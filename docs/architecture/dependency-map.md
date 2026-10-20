@@ -113,7 +113,6 @@ Locally nothing runs on a schedule: `POST /__scheduled?cron=<expression>` runs o
 | WhatsApp Cloud API (Meta Graph) | messages, templates, Embedded Signup | `core/whatsapp/graph.ts` on `core/metaGraph.ts` | Bearer system/business token, app token | worker, api |
 | WhatsApp webhooks | message status, inbound | `routes/whatsappPublic.ts` | `X-Hub-Signature-256` | inbound |
 | Amazon Cognito | sign-in, sign-up, emailed codes, Google federation, admin calls | `apps/api/src/cognito.ts` | app client secret; admin calls signed with the `api` function's role | api |
-| Firebase (migration window only) | a first sign-in with a password Cognito doesn't know yet | `apps/api/src/legacyFirebase.ts` | public web API key | api |
 | Amazon SES | invitations, alerts, staff emails (Mailpit locally) | `apps/aws/src/sesMailer.ts` (core's `Mailer`) | function role | api, worker |
 | Slack (optional) | alerts | `core/notify.ts` | incoming webhook URL | worker |
 | Shopify web pixel | storefront events | `routes/pixel.ts` | per-store ingest key | inbound |

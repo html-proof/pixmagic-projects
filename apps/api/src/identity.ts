@@ -120,7 +120,7 @@ export async function notifyMethodRemoved(mailer: Mailer, user: NoticeUser, remo
  * takes the account over. Whoever set up the account's other sign-in methods never proved the
  * inbox (anyone can create an employee with someone's address and open the copied link
  * themselves), so those methods are removed in Cognito and here, and every session of the account
- * ends, before the new identity is linked. The same rule Firebase applies to unverified providers.
+ * ends, before the new identity is linked.
  *
  * What that person set up with the account is theirs, not the address's owner's, and goes too
  * (relinquishSetUp): otherwise the owner would inherit a workspace its maker can still read (an

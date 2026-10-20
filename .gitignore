@@ -10,10 +10,6 @@ coverage
 playwright-report
 test-results
 
-# Firebase service account keys
-*-firebase-adminsdk-*.json
-serviceAccountKey*.json
-
 # Local Postgres TLS cert (generated; see docker-compose.yml)
 infra/postgres/certs/
 

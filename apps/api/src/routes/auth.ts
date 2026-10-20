@@ -256,26 +256,6 @@ export function authRoutes(app: App, deps: Deps) {
     return c.json({ next: "mfa" as const });
   }
 
-  /**
-   * An account from before the move to Cognito (users.firebase_uid: the old deployment's users, if
-   * they are merged in) that has no Cognito user yet: create one, without emailing them, so Cognito
-   * can send them a reset or sign-in code. Their password stays unknown (random), so this grants
-   * nobody access by itself; their old password is never checked anywhere.
-   */
-  async function provisionMovedAccount(email: string, ip: string) {
-    const row = await systemDb.user.findUnique({ where: { email }, include: { identities: { where: { method: "password" } } } }).catch(() => null);
-    if (!row?.firebaseUid || row.identities.length) return;
-    if (await deps.auth.adminGetUser(email)) return;
-    try {
-      // The address is the one the code goes to, so marking it verified lets Cognito send it;
-      // the code itself is the proof.
-      const created = await deps.auth.adminCreateUser({ email, emailVerified: true, name: row.displayName });
-      await recordAuthEvent("firebase_account_provisioned", row.id, ip, { firebaseUid: row.firebaseUid, cognitoSub: created.sub });
-    } catch (err) {
-      if (!isCognito(err, "UsernameExistsException")) throw err;
-    }
-  }
-
   // ---------------- What the sign-in pages offer ----------------
 
   app.get("/auth/config", (c) => {
@@ -607,7 +587,6 @@ export function authRoutes(app: App, deps: Deps) {
     await limit(deps.coord, `rl:code:ip:${ip}`, LIMITS.codeIp);
     await limit(deps.coord, `rl:code:email:${sha256Hex(email)}`, LIMITS.codeEmail);
     try {
-      await provisionMovedAccount(email, ip);
       // An address someone else opened an account with: Cognito won't email it, so we do (startClaim).
       const unprovenUser = await claimable(email);
       if (unprovenUser) await startClaim(c, email, "reset", unprovenUser, null);
@@ -672,7 +651,6 @@ export function authRoutes(app: App, deps: Deps) {
     await limit(deps.coord, `rl:code:ip:${ip}`, LIMITS.codeIp);
     await limit(deps.coord, `rl:code:email:${sha256Hex(email)}`, LIMITS.codeEmail);
     try {
-      await provisionMovedAccount(email, ip);
       const { session } = await deps.auth.startEmailOtp(email);
       setCookie(c, OTP_COOKIE, session, { ...cookieBase(), path: otpCookiePath(), maxAge: 180 });
     } catch (err) {
