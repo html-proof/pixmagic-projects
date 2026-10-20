@@ -346,13 +346,13 @@ export function InventoryCard({ m, currency }: { m: InventoryModule; currency: s
         ? `Based on ${fmtNum(c.variantsWithCost)} of ${plural(c.trackedVariants, "variant")} with a cost.`
         : "What you paid for the stock you hold.";
   return (
-    <Panel id="inventory" title="Inventory" help="Stock on hand across all locations for active and draft products. “Running low” uses the last 30 days of sales." aside={<OpenInventory />}>
+    <Panel id="inventory" title="Inventory" help="Stock across all locations for active and draft products, as the Inventory section counts it. Running low: at or under the low-stock threshold (10 unless you set one in Inventory → Stock settings)." aside={<OpenInventory />}>
       <div className={`grid grid-cols-2 gap-3 ${valued ? "lg:grid-cols-5" : "lg:grid-cols-3"}`}>
         <Stat label="Units in stock" value={fmtNum(c.unitsInStock)} note={`Across ${plural(c.trackedVariants, "tracked variant")}.`} />
         {valued && <Stat label="Stock value at cost" value={fmtMoney(c.stockValueAtCost, currency)} note={costNote} />}
         {valued && <Stat label="Retail value" value={fmtMoney(c.retailValue, currency)} note="If everything sold at today's prices." />}
         <Stat label="Out of stock" value={fmtNum(c.outOfStock)} tone={c.outOfStock > 0 ? "danger" : "good"} note="Variants with nothing left to sell." />
-        <Stat className="col-span-2 lg:col-span-1" label="Running low" value={fmtNum(c.lowStock)} tone={c.lowStock > 0 ? "warn" : "good"} note="5 or fewer left, or under 2 weeks of sales." />
+        <Stat className="col-span-2 lg:col-span-1" label="Running low" value={fmtNum(c.lowStock)} tone={c.lowStock > 0 ? "warn" : "good"} note="At or under the low-stock threshold, counting every location." />
       </div>
       <h3 className="mt-6 text-sm font-medium">Restock soon</h3>
       {m.lowStockItems.length === 0 ? (
@@ -369,7 +369,7 @@ export function InventoryCard({ m, currency }: { m: InventoryModule; currency: s
                   {[i.variantTitle !== "Default Title" ? i.variantTitle : null, i.sku].filter(Boolean).join(" · ") || "—"}
                 </p>
                 <p className="text-xs text-muted">
-                  {fmtNum(i.quantity)} left{i.dailySales > 0 ? ` · sells ${new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(i.dailySales)}/day` : ""}
+                  {fmtNum(i.quantity)} left{i.dailySales ? ` · sells ${new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(i.dailySales)}/day` : ""}
                 </p>
               </div>
               <Badge tone={coverTone(i.daysOfCover, i.quantity)}>{coverLabel(i.daysOfCover)}</Badge>
@@ -396,7 +396,7 @@ export function InventoryCard({ m, currency }: { m: InventoryModule; currency: s
                   </td>
                   <td className="px-1 py-2 font-mono text-xs text-muted">{i.sku ?? "—"}</td>
                   <td className="px-1 py-2 text-right tabular-nums">{fmtNum(i.quantity)}</td>
-                  <td className="px-1 py-2 text-right tabular-nums">{i.dailySales > 0 ? new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(i.dailySales) : "—"}</td>
+                  <td className="px-1 py-2 text-right tabular-nums">{i.dailySales ? new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(i.dailySales) : "—"}</td>
                   <td className="px-1 py-2">
                     <Badge tone={coverTone(i.daysOfCover, i.quantity)}>{coverLabel(i.daysOfCover)}</Badge>
                   </td>

@@ -196,7 +196,7 @@ export async function storeOverview(tx: Tx, store: Store, dates: { range: DateRa
   if (enabled.has("fulfillment")) modules.fulfillment = await fulfillment(tx, scope, range, today);
   if (enabled.has("discount_codes")) modules.discount_codes = await discountCodes(tx, scope, range);
   if (enabled.has("recent_orders")) modules.recent_orders = await recentOrders(tx, scope);
-  if (enabled.has("inventory")) modules.inventory = await inventory(tx, scope, today);
+  if (enabled.has("inventory")) modules.inventory = await inventory(tx, store, today);
   if (enabled.has("catalog")) modules.catalog = await catalog(tx, scope, range);
 
   const freshness = await dataFreshness(tx, scope, store, now);

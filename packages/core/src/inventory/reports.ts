@@ -27,7 +27,7 @@ import {
   type DateRange,
   type StockQuery,
 } from "@app/shared";
-import { localMoment } from "../reports/common.js";
+import { ITEM_SALES, localMoment, SALE_UNITS, SALE_VALUE } from "../reports/common.js";
 import type { StoreInventorySettings } from "./settings.js";
 import { soldCte, STATUS, variantStockCte, type StockScope } from "./stock.js";
 import { livePassWhere } from "./sync.js";
@@ -139,14 +139,17 @@ async function totals(tx: Tx, scope: StockScope, sold30From: string, today: stri
   return t!;
 }
 
-/** Units in orders placed on `days` (store-local), the last one counted up to `until` ("HH:MM:SS") when given. */
+/**
+ * Items sold on `from`..`to` (store-local days) from Shopify's sales records, returns taken off
+ * (`SALE_UNITS`); the last day counted up to `until` ("HH:MM:SS") when given.
+ */
 async function unitsSold(tx: Tx, store: Pick<Store, "id" | "workspaceId" | "timezone">, from: string, to: string, until?: string): Promise<number> {
-  const cut = until ? Prisma.sql`AND (o.local_day < ${to} OR o.shopify_created_at <= ${localMoment(to, until, store.timezone)})` : Prisma.empty;
+  const cut = until ? Prisma.sql`AND (s.local_day < ${to} OR s.happened_at <= ${localMoment(to, until, store.timezone)})` : Prisma.empty;
   const [r] = await tx.$queryRaw<Array<{ units: number | null }>>`
-    SELECT SUM(li.quantity)::int AS units
-    FROM order_line_items li JOIN orders o ON o.id = li.order_id
-    WHERE li.workspace_id = ${store.workspaceId} AND li.store_id = ${store.id} AND o.workspace_id = ${store.workspaceId} AND o.store_id = ${store.id}
-      AND o.cancelled_at IS NULL AND o.local_day BETWEEN ${from} AND ${to} ${cut}`;
+    SELECT SUM(${SALE_UNITS})::int AS units
+    FROM order_sales s
+    WHERE s.workspace_id = ${store.workspaceId} AND s.store_id = ${store.id} AND ${ITEM_SALES}
+      AND s.local_day BETWEEN ${from} AND ${to} ${cut}`;
   return num(r?.units);
 }
 
@@ -315,18 +318,24 @@ function stockFilters(q: StockQuery): Prisma.Sql {
   return Prisma.join(parts, " AND ");
 }
 
+/**
+ * The stock list's order. Whatever it is sorted by, rows that tie come in catalog order (product
+ * title, then the variant's position in its product, then its title, then its id), so the list
+ * reads the same every time it is opened and from page to page.
+ */
 function stockOrder(q: StockQuery, see: SeeOpts): Prisma.Sql {
   const dir = q.dir === "desc" ? Prisma.sql`DESC` : Prisma.sql`ASC`;
   const nulls = Prisma.sql`NULLS LAST`;
+  const catalog = Prisma.sql`product_title ASC, position ASC NULLS LAST, variant_title ASC, variant_id ASC`;
   const by: Record<StockQuery["sort"], Prisma.Sql> = {
-    product: Prisma.sql`product_title ${dir}, position ASC NULLS LAST, variant_title ASC`,
-    sku: Prisma.sql`sku ${dir} ${nulls}, product_title ASC`,
-    available: Prisma.sql`available ${dir} ${nulls}, product_title ASC`,
-    on_hand: Prisma.sql`on_hand ${dir} ${nulls}, product_title ASC`,
-    committed: Prisma.sql`committed ${dir} ${nulls}, product_title ASC`,
-    incoming: Prisma.sql`incoming ${dir} ${nulls}, product_title ASC`,
-    value: see.costs ? Prisma.sql`(GREATEST(COALESCE(on_hand, available), 0) * unit_cost) ${dir} ${nulls}, product_title ASC` : Prisma.sql`product_title ASC`,
-    updated: Prisma.sql`stock_updated_at ${dir} ${nulls}, product_title ASC`,
+    product: Prisma.sql`product_title ${dir}, position ASC NULLS LAST, variant_title ASC, variant_id ASC`,
+    sku: Prisma.sql`sku ${dir} ${nulls}, ${catalog}`,
+    available: Prisma.sql`available ${dir} ${nulls}, ${catalog}`,
+    on_hand: Prisma.sql`on_hand ${dir} ${nulls}, ${catalog}`,
+    committed: Prisma.sql`committed ${dir} ${nulls}, ${catalog}`,
+    incoming: Prisma.sql`incoming ${dir} ${nulls}, ${catalog}`,
+    value: see.costs ? Prisma.sql`(GREATEST(COALESCE(on_hand, available), 0) * unit_cost) ${dir} ${nulls}, ${catalog}` : catalog,
+    updated: Prisma.sql`stock_updated_at ${dir} ${nulls}, ${catalog}`,
   };
   return by[q.sort];
 }
@@ -528,15 +537,17 @@ export async function productDetail(
         WHERE l.workspace_id = ${store.workspaceId} AND l.store_id = ${store.id} AND l.inventory_item_id = ANY(${items}::text[])
         ORDER BY loc.is_active DESC, loc.name`
     : [];
-  // Sales: units per day over the last 30 days, and per variant over 7, 30 and 90 days.
+  // Sales: items sold per day over the last 30 days, and per variant over 7, 30 and 90 days, from
+  // Shopify's sales records (returns taken off; revenue is net sales before tax), as `soldCte`.
   const ids = variants.map((v) => v.shopifyId);
   const from90 = addDays(today, -89);
   const daily = ids.length
     ? await tx.$queryRaw<Array<{ day: string; variant: string; units: number; revenue: string }>>`
-        SELECT o.local_day AS day, li.variant_shopify_id AS variant, SUM(li.quantity)::int AS units, SUM(li.price * li.quantity - li.discount)::text AS revenue
-        FROM order_line_items li JOIN orders o ON o.id = li.order_id
-        WHERE li.workspace_id = ${store.workspaceId} AND li.store_id = ${store.id} AND o.workspace_id = ${store.workspaceId} AND o.store_id = ${store.id}
-          AND o.cancelled_at IS NULL AND o.local_day BETWEEN ${from90} AND ${today} AND li.variant_shopify_id = ANY(${ids}::text[])
+        SELECT s.local_day AS day, li.variant_shopify_id AS variant, SUM(${SALE_UNITS})::int AS units, SUM(${SALE_VALUE})::text AS revenue
+        FROM order_sales s
+        JOIN order_line_items li ON li.store_id = s.store_id AND li.shopify_id = s.line_item_shopify_id
+        WHERE s.workspace_id = ${store.workspaceId} AND s.store_id = ${store.id} AND li.workspace_id = ${store.workspaceId} AND ${ITEM_SALES}
+          AND s.local_day BETWEEN ${from90} AND ${today} AND li.variant_shopify_id = ANY(${ids}::text[])
         GROUP BY 1, 2`
     : [];
   const unitsSince = (variant: string | null, from: string) => daily.filter((d) => (variant === null || d.variant === variant) && d.day >= from).reduce((n, d) => n + d.units, 0);
@@ -865,21 +876,19 @@ export async function inventoryReports(tx: Tx, store: Pick<Store, "id" | "worksp
     };
   });
 
-  // Product performance over the range.
+  // Product performance over the range: items sold and net sales from Shopify's sales records.
   const rangeDays = daysBetweenInclusive(range.from, range.to);
-  const perf = await tx.$queryRaw<Array<{ variant_id: string; product_id: string; product_title: string; variant_title: string; sku: string | null; units: number; revenue: string; on_hand: number | null; available: number | null; tracked: boolean; unit_cost: string | null }>>`
-    WITH ${variantStockCte(scope)}, ${soldCte(scope, range.from, range.to)},
-    rev AS (
-      SELECT li.variant_shopify_id AS variant_id, SUM(li.price * li.quantity - li.discount)::text AS revenue
-      FROM order_line_items li JOIN orders o ON o.id = li.order_id
-      WHERE li.workspace_id = ${s.ws} AND li.store_id = ${s.storeId} AND o.workspace_id = ${s.ws} AND o.store_id = ${s.storeId}
-        AND o.cancelled_at IS NULL AND o.local_day BETWEEN ${range.from} AND ${range.to} AND li.variant_shopify_id IS NOT NULL
-      GROUP BY 1
-    )
-    SELECT vs.variant_id, vs.product_id, vs.product_title, vs.variant_title, vs.sku, COALESCE(sold.units, 0)::int AS units, COALESCE(rev.revenue, '0') AS revenue,
+  const perf = await tx.$queryRaw<Array<{ variant_id: string; product_id: string; product_title: string; variant_title: string; sku: string | null; position: number | null; units: number; revenue: string; on_hand: number | null; available: number | null; tracked: boolean; unit_cost: string | null }>>`
+    WITH ${variantStockCte(scope)}, ${soldCte(scope, range.from, range.to)}
+    SELECT vs.variant_id, vs.product_id, vs.product_title, vs.variant_title, vs.sku, vs.position, COALESCE(sold.units, 0)::int AS units, COALESCE(sold.revenue, '0') AS revenue,
            vs.on_hand, vs.available, vs.tracked, vs.unit_cost
-    FROM vs LEFT JOIN sold ON sold.variant_id = vs.variant_id LEFT JOIN rev ON rev.variant_id = vs.variant_id`;
+    FROM vs LEFT JOIN sold ON sold.variant_id = vs.variant_id`;
   const rangeCovered = !!sales.historyFrom && sales.historyFrom <= range.from;
+  // Ties come in catalog order (product title, the variant's position, its title, its id), so the
+  // lists read the same every time.
+  const catalogOrder = (a: (typeof perf)[number], b: (typeof perf)[number]) =>
+    a.product_title.localeCompare(b.product_title) || (a.position ?? Number.MAX_SAFE_INTEGER) - (b.position ?? Number.MAX_SAFE_INTEGER) || a.variant_title.localeCompare(b.variant_title) || a.variant_id.localeCompare(b.variant_id);
+  const held = (r: (typeof perf)[number]) => r.on_hand ?? r.available ?? 0;
   const row = (r: (typeof perf)[number]) => {
     const onHand = r.on_hand ?? r.available ?? 0;
     return {
@@ -899,8 +908,18 @@ export async function inventoryReports(tx: Tx, store: Pick<Store, "id" | "worksp
       onHand: r.tracked ? onHand : null,
     };
   };
-  const top = perf.filter((r) => r.units > 0).sort((a, b) => b.units - a.units).slice(0, 10).map(row);
-  const slow = perf.filter((r) => r.tracked && (r.available ?? 0) > 0).sort((a, b) => a.units - b.units || (b.on_hand ?? b.available ?? 0) - (a.on_hand ?? a.available ?? 0)).slice(0, 10).map(row);
+  // Top sellers: most items sold first, then the most net sales; slow movers: fewest items sold
+  // first, then the most stock held.
+  const top = perf
+    .filter((r) => r.units > 0)
+    .sort((a, b) => b.units - a.units || Number(b.revenue) - Number(a.revenue) || catalogOrder(a, b))
+    .slice(0, 10)
+    .map(row);
+  const slow = perf
+    .filter((r) => r.tracked && (r.available ?? 0) > 0)
+    .sort((a, b) => a.units - b.units || held(b) - held(a) || catalogOrder(a, b))
+    .slice(0, 10)
+    .map(row);
   const unitsTotal = perf.reduce((n, r) => n + r.units, 0);
   const onHandTotal = perf.filter((r) => r.tracked).reduce((n, r) => n + Math.max(0, r.on_hand ?? r.available ?? 0), 0);
   const overallSellThrough = sellThrough(unitsTotal, onHandTotal);
@@ -911,7 +930,7 @@ export async function inventoryReports(tx: Tx, store: Pick<Store, "id" | "worksp
     FROM inventory_movements
     WHERE workspace_id = ${s.ws} AND store_id = ${s.storeId} AND quantity_name = 'available' AND before > 0 AND after <= 0
       AND observed_at >= ${dayStart(range.from, store.timezone)} AND observed_at < ${dayStart(addDays(range.to, 1), store.timezone)}
-    GROUP BY 1 ORDER BY 4 DESC LIMIT 10`;
+    GROUP BY 1 ORDER BY 4 DESC, 2 ASC NULLS LAST, 3 ASC NULLS LAST, 1 ASC NULLS LAST LIMIT 10`;
   const turnoverResult = see.costs ? await turnover(tx, scope, range) : null;
   const locations = await locationsReport(tx, scope, see);
 

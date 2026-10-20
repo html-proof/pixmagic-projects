@@ -1,7 +1,7 @@
 import { Prisma, toNumber, type Tx } from "@app/db";
 import { addDays, eachDay, type Comparison, type DailyMetricsRow, type DateRange } from "@app/shared";
 import { dayTotals } from "../persist.js";
-import { localMoment, r2, SALE_VALUE, type Scope } from "./common.js";
+import { localMoment, r2, SALE_UNITS, SALE_VALUE, type Scope } from "./common.js";
 
 export async function dailyRows(tx: Tx, workspaceId: string, storeId: string, r: DateRange): Promise<DailyMetricsRow[]> {
   const rows = await tx.dailyStoreMetrics.findMany({
@@ -142,7 +142,7 @@ export async function topProducts(tx: Tx, { ws, storeId }: Scope, range: DateRan
   const top = await tx.$queryRaw<Array<{ product_shopify_id: string | null; title: string; revenue: string; units: bigint }>>`
     SELECT li.product_shopify_id, COALESCE(MAX(p.title), MAX(li.title)) AS title,
            SUM(${SALE_VALUE})::text AS revenue,
-           SUM(CASE s.action_type WHEN 'order' THEN ABS(COALESCE(s.quantity, 0)) WHEN 'return' THEN -ABS(COALESCE(s.quantity, 0)) ELSE 0 END) AS units
+           SUM(${SALE_UNITS}) AS units
     FROM order_sales s
     JOIN order_line_items li ON li.store_id = s.store_id AND li.shopify_id = s.line_item_shopify_id
     LEFT JOIN products p ON p.workspace_id = ${ws} AND p.store_id = li.store_id AND p.shopify_id = li.product_shopify_id
@@ -150,7 +150,7 @@ export async function topProducts(tx: Tx, { ws, storeId }: Scope, range: DateRan
       AND s.line_type = 'product' AND s.local_day BETWEEN ${range.from} AND ${range.to}
     GROUP BY li.product_shopify_id
     HAVING SUM(${SALE_VALUE}) > 0
-    ORDER BY SUM(${SALE_VALUE}) DESC
+    ORDER BY SUM(${SALE_VALUE}) DESC, SUM(${SALE_UNITS}) DESC, 2 ASC, 1 ASC
     LIMIT 5`;
   return {
     items: top.map((t) => ({ productId: t.product_shopify_id, title: t.title, revenue: Number(t.revenue), units: Number(t.units) })),

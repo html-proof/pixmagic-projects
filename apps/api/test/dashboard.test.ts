@@ -925,7 +925,7 @@ describe("live updates (dashboard polls every 15 s)", () => {
 });
 
 describe("inventory module", () => {
-  it("values stock and flags variants about to run out using 30-day velocity", async () => {
+  it("values stock and flags low stock as the Inventory section does, the ones about to run out first", async () => {
     const { a, ws, store } = await owner();
     const today = localDay(new Date(), TZ);
     const at = (day: string) => `${day}T16:00:00Z`; // midday in New York: same local day
@@ -940,7 +940,7 @@ describe("inventory module", () => {
     await seedVariant(store, "p2", "v4", { qty: 50, price: 20, cost: 8 }); // archived product: ignored
     await seedVariant(store, "p3", "v5", { qty: 40, price: 10 });
     await seedVariant(store, "p3", "v6", { qty: null, price: 10 }); // not tracked: ignored
-    await seedVariant(store, "gone", "v7", { qty: 2, price: 15 }); // product row missing: still counted
+    await seedVariant(store, "gone", "v7", { qty: 2, price: 15 }); // product not imported yet: left out, as in the Inventory section
 
     // Velocity window is the last 30 store-local days including today.
     await seedOrder(store, { id: "o1", createdAt: at(addDays(today, -29)), subtotal: 6000, lines: [{ product: "p1", variant: "v2", qty: 300, price: 20 }] });
@@ -951,20 +951,19 @@ describe("inventory module", () => {
     const res = await overview(a.headers, ws, store.id);
     expect(res.statusCode).toBe(200);
     const { inventory, catalog } = res.json().modules;
+    // The Inventory section's figures: units available (the oversold variant counts against them),
+    // low = at or under the store's threshold of 10, out = nothing available.
     expect(inventory.current).toEqual({
-      trackedVariants: 6,
-      unitsInStock: 145,
+      trackedVariants: 5,
+      unitsInStock: 141,
       stockValueAtCost: 824,
       variantsWithCost: 3,
-      retailValue: 2490,
+      retailValue: 2460,
       outOfStock: 2,
-      lowStock: 3,
+      lowStock: 1,
     });
-    expect(inventory.lowStockItems).toEqual([
-      { productTitle: "Tee", variantTitle: "Medium", sku: "TEE-M", quantity: 100, dailySales: 10, daysOfCover: 10 },
-      { productTitle: "Tee", variantTitle: "Small", sku: "TEE-S", quantity: 3, dailySales: 0.1, daysOfCover: 30 },
-      { productTitle: "Unknown product", variantTitle: "Default Title", sku: null, quantity: 2, dailySales: 0, daysOfCover: null },
-    ]);
+    // The small tee sold 3 in the 30 days the orders cover: 0.1 a day, 30 days of cover.
+    expect(inventory.lowStockItems).toEqual([{ productTitle: "Tee", variantTitle: "Small", sku: "TEE-S", quantity: 3, dailySales: 0.1, daysOfCover: 30 }]);
 
     expect(catalog.products).toEqual({ active: 1, draft: 1, archived: 1, total: 3 });
     expect(catalog.variants).toBe(8);
@@ -1017,7 +1016,8 @@ describe("scopes and tenancy", () => {
     expect(mine.modules.discount_codes.items).toEqual([{ code: "A", orders: 1, discount: 0, sales: 10 }]);
     expect(mine.modules.recent_orders.items).toHaveLength(1);
     expect(mine.modules.inventory.current).toMatchObject({ trackedVariants: 1, unitsInStock: 1 });
-    expect(mine.modules.inventory.lowStockItems).toEqual([{ productTitle: "Tee", variantTitle: "Default Title", sku: null, quantity: 1, dailySales: 0.03, daysOfCover: 30 }]);
+    // One day of orders is too little history for a sales rate (the Inventory section's rule).
+    expect(mine.modules.inventory.lowStockItems).toEqual([{ productTitle: "Tee", variantTitle: "Default Title", sku: null, quantity: 1, dailySales: null, daysOfCover: null }]);
     expect(mine.modules.catalog.topVendors).toEqual([{ vendor: "Acme", revenue: 10, units: 1 }]);
     expect(mine.data).toMatchObject({ orders: 1, products: 1, variants: 1 });
   });

@@ -17,6 +17,17 @@ import { Prisma } from "@app/db";
 export const SALE_VALUE = Prisma.sql`(s.amount - s.tax)`;
 
 /**
+ * Items sold in a sale, as Shopify's sales by product count them: the quantity of an order's sale,
+ * less a return's (a refund, a cancellation); the quantity on an edit's own sale counts neither
+ * way. For a query whose order_sales alias is `s`. Every place that counts items (the dashboard's
+ * top products and vendors, the Inventory section's sales figures) uses this one expression.
+ */
+export const SALE_UNITS = Prisma.sql`(CASE s.action_type WHEN 'order' THEN ABS(COALESCE(s.quantity, 0)) WHEN 'return' THEN -ABS(COALESCE(s.quantity, 0)) ELSE 0 END)`;
+
+/** The sales of items that come out of stock: product lines, and gift card products sold as goods. */
+export const ITEM_SALES = Prisma.sql`s.line_type IN ('product', 'gift_card')`;
+
+/**
  * A store-local wall-clock moment (`day` at `time`, "HH:MM:SS", in the store's zone) as the UTC
  * timestamps the tables hold. Wall-clock, so a comparison across a daylight-saving change still
  * stops at the same time of day.
