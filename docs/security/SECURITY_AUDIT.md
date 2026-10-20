@@ -26,7 +26,7 @@ merchants.
 
 | Layer | Technology |
 | --- | --- |
-| Hosting | One Cloudflare Worker (`apps/cloudflare`) on `insights.imeseban.workers.dev`: static UI from Workers Static Assets, API, Queue consumers, Cron |
+| Hosting | One Cloudflare Worker (`apps/cloudflare`) on its `workers.dev` address (the app has since moved to https://bizinsights.io/ on AWS): static UI from Workers Static Assets, API, Queue consumers, Cron |
 | Frontend | Next.js 16 App Router, static export, React 19 (`apps/web`) |
 | Backend | Hono (`apps/api`), queue/cron handlers (`apps/worker`), shared logic (`packages/core`, `packages/shared`) |
 | Database | PostgreSQL 17 via Prisma 7 and Hyperdrive; two roles: `app` (owner, bypasses RLS) and `app_rls` (row-level security). The production database is a Docker container on the owner's PC, reached through Workers VPC + Cloudflare Tunnel |

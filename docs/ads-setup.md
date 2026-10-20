@@ -188,7 +188,7 @@ The app builds every address from `APP_URL` (`https://bizinsights.io`), so they 
 | Meta app → Facebook Login for Business → Settings → Deauthorize callback URL | `https://bizinsights.io/api/webhooks/meta/deauthorize` |
 | Meta app → App settings → Basic → User data deletion → Data deletion callback URL | `https://bizinsights.io/api/webhooks/meta/data-deletion` |
 
-The old `d2mr8m2p1qkh58.cloudfront.net` and `insights.imeseban.workers.dev` callbacks are never sent; remove them
+The old `d2mr8m2p1qkh58.cloudfront.net` and Cloudflare Worker (workers.dev) callbacks are never sent; remove them
 (Google's branding verification accepts only verified domains).
 
 In the Meta app dashboard, the Valid OAuth Redirect URIs and App domains fields are token lists: type the value, then
