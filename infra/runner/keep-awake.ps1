@@ -2,11 +2,12 @@
 # the jobs that may land on the self-hosted runner (ci.yml checks and e2e, aws-deploy.yml deploy).
 #
 # The PC is a laptop with Modern Standby. Unplugged, it turns the screen off and sleeps 3 minutes
-# after the last input (powercfg VIDEOIDLE and STANDBYIDLE are 180 s on battery, never on AC), and
-# asleep it drops the network and does no work while a test's clock keeps running. On 2026-10-19 a 78 s sleep
-# in the middle of `pnpm test:integration` failed test/shopify.test.ts with "Hook timed out in
-# 60000ms" (its beforeEach, resetDb, was in flight), and earlier sleeps lost whole jobs ("The
-# self-hosted runner lost communication with the server").
+# after the last input (powercfg VIDEOIDLE and STANDBYIDLE are 180 s on battery; on AC the screen
+# goes off after 120 s and it never sleeps), and asleep it drops the network and does no work while
+# a test's clock keeps running. On 2026-10-19 a 78 s sleep in the middle of `pnpm test:integration`
+# failed test/shopify.test.ts with "Hook timed out in 60000ms" (its beforeEach, resetDb, was in
+# flight), and earlier sleeps lost whole jobs ("The self-hosted runner lost communication with the
+# server").
 #
 # Run by the step with no arguments, it finds the job's Runner.Worker process above itself, starts
 # a second copy of itself detached, following that process, and returns at once (a child that
@@ -17,8 +18,14 @@
 # job's RUNNER_TRACKING_ID), and it gives up by itself after 3 hours, longer than any job's
 # timeout-minutes. By hand, outside a job, `-Worker <pid>` names the process to follow.
 #
-# A closed lid still sleeps the PC whatever requests are held, unless the lid action is "do nothing"
-# on battery as well as on AC (docs/aws-deployment.md, "The PC must be on and awake").
+# What it has not done: on 2026-10-20, with the request held for the whole of two e2e jobs (the
+# runner ended the holder with each job, as the job logs show), the screen still went off 120 s
+# after the owner's last input, and the PC, on battery, spent 279 s in DRIPS in the middle of the
+# suite. Held from the runner's service session, not the signed-in user's, the request evidently
+# doesn't reset this Modern Standby laptop's screen-off timer, and the screen going off is its way
+# into standby. A closed lid sleeps it as well, whatever is held. What does keep it awake while
+# jobs run is the owner's power settings (docs/aws-deployment.md, "The PC must be on and awake");
+# power-report.ps1, the last step of each job on the PC, shows in the job's log when it slept anyway.
 param(
   # Hold the request (the detached copy) rather than start it.
   [switch]$Hold,

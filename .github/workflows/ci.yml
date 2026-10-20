@@ -151,10 +151,13 @@ jobs:
             core.info(run ? `Browser tests run (${hit ?? "3,000+ files"} changed).` : "Browser tests skipped: nothing they drive changed.");
             core.setOutput("e2e", String(run));
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # The PC is a laptop that, unplugged, sleeps 3 minutes after its screen turns off; asleep it
-      # loses the job, or a test's clock runs on while nothing happens ("Hook timed out in 60000ms").
-      # A power request held until the job ends keeps it awake (a closed lid is a power setting of
-      # the owner's: docs/aws-deployment.md). Never worth failing a job over.
+      # The PC is a laptop that, unplugged, turns its screen off 3 minutes after the last input and
+      # sleeps; asleep it loses the job, or a test's clock runs on while nothing happens ("Hook
+      # timed out in 60000ms"). The job holds a power request until it ends. Held from the runner's
+      # service session, it has not kept this Modern Standby laptop from turning its screen off and
+      # sleeping on battery (2026-10-20), so the job's last step reports what the PC did meanwhile;
+      # keeping it awake is the owner's power settings (docs/aws-deployment.md). Never worth failing
+      # a job over.
       - name: Keep the PC awake for this job (self-hosted runner)
         if: runner.os == 'Windows'
         continue-on-error: true
@@ -286,6 +289,13 @@ jobs:
           script: |
             const tree = (await exec.getExecOutput("git", ["rev-parse", "HEAD^{tree}"], { silent: true })).stdout.trim();
             await github.rest.repos.createCommitStatus({ ...context.repo, sha: context.payload.pull_request.head.sha, state: "success", context: "ci/passed-checks", description: `tree ${tree}` });
+      # What the PC did meanwhile, in this log: each Modern Standby it entered during the job (a
+      # test running then could only time out) and whether it ran on battery (2-3 times slower, and
+      # the screen-off timer then sleeps it). Read-only; the owner's power settings are the fix.
+      - name: Did the PC sleep during this job? (self-hosted runner)
+        if: always() && runner.os == 'Windows'
+        continue-on-error: true
+        run: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File infra/runner/power-report.ps1
 
   e2e:
     name: End-to-end (Playwright)
@@ -312,7 +322,7 @@ jobs:
           echo %ProgramFiles%\Git\bin>>"%GITHUB_PATH%"
           echo npm_config_store_dir=%RUNNER_TOOL_CACHE%\pnpm-store>>"%GITHUB_ENV%"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # As in the checks job: the laptop holds a power request until the job ends.
+      # As in the checks job: the laptop holds a power request until the job ends (its limits: there).
       - name: Keep the PC awake for this job (self-hosted runner)
         if: runner.os == 'Windows'
         continue-on-error: true
@@ -356,6 +366,11 @@ jobs:
           fi
           pnpm --filter @app/web exec playwright install --with-deps chromium
       - run: pnpm e2e
+      # As in the checks job: the standbys and battery time that overlapped this job, in its log.
+      - name: Did the PC sleep during this job? (self-hosted runner)
+        if: always() && runner.os == 'Windows'
+        continue-on-error: true
+        run: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File infra/runner/power-report.ps1
       # For the push to main that merges this pull request (tested job), as in the checks job.
       - name: Record the tree that passed
         if: github.event_name == 'pull_request'

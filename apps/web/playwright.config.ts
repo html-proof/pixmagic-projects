@@ -49,6 +49,19 @@ export default defineConfig({
   globalSetup: "./e2e/global-setup.ts",
   timeout: 60_000,
   workers: 1,
+  // One line per test with its duration, on CI too (there the default, dot, prints a dot per test):
+  // a slow run names its slow tests in the job's log.
+  reporter: "list",
+  /**
+   * On the self-hosted runner only, a test that fails runs once more (in a fresh worker) before the
+   * run fails, and passes as "flaky". That PC (the owner's laptop) runs the suite 2-3 times slower
+   * on battery or under the owner's other work, and on battery its screen-off timer puts it into
+   * Modern Standby for minutes in the middle of a job (2026-10-20: 279 s asleep inside one test's
+   * budget), so one test times out and the rest pass; which one depends on when the stall came
+   * (docs/aws-deployment.md, "The PC must be on and awake"). A real failure fails twice and still
+   * fails the run. GitHub's runners and local runs get no retry: a flake there should show.
+   */
+  retries: process.env.RUNNER_ENVIRONMENT === "self-hosted" ? 1 : 0,
   use: { baseURL: E2E_BASE_URL, trace: "retain-on-failure" },
   webServer: [
     {
@@ -84,7 +97,10 @@ export default defineConfig({
         COGNITO_IDENTITY_PROVIDERS: "Google",
       },
       reuseExistingServer: false,
-      timeout: 240_000,
+      // The build and the server's start: ~45 s on the PC runner awake and plugged in, 190 s on
+      // 2026-10-20 while it ran on battery and dipped into standby, against the 240 s this was.
+      // A server that never comes up fails the whole run (no test retry covers that).
+      timeout: 420_000,
     },
   ],
 });
