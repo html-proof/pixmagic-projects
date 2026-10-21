@@ -2112,6 +2112,33 @@ describe("writeOrderBatch matches upsertOrder", () => {
     ...over,
   });
 
+  it.each(["single", "batch"] as const)("retains historical line identity after product deletion in the %s path", async (path) => {
+    const store = await makeStore(["read_orders"], "UTC", `history-${path}.myshopify.com`);
+    const write = async (orders: ReturnType<typeof normalizeGraphqlOrder>[]) => {
+      if (path === "batch") await writeOrderBatch(store, orders);
+      else for (const order of orders) await upsertOrder(store, order);
+    };
+    const first = normalizeGraphqlOrder(gqlOrder(1));
+    const second = normalizeGraphqlOrder(gqlOrder(2));
+    second.lineItems[0]!.variantShopifyId = "10";
+    second.lineItems[0]!.sku = "TEE-2";
+    await write([first, second]);
+    const deleted = [first, second].map(order => ({ ...order, updatedAt: new Date("2026-03-04T00:00:00Z"),
+      lineItems: order.lineItems.map(line => ({ ...line, productShopifyId: null, variantShopifyId: null, sku: null, title: "", price: 70 })) }));
+    await write(deleted);
+    await write(deleted); // A duplicate refresh must preserve identity without duplicating lines.
+    const lines = await systemDb.orderLineItem.findMany({ where: { storeId: store.id }, orderBy: { shopifyId: "asc" } });
+    expect(lines).toHaveLength(2);
+    expect(lines.map(line => [line.productShopifyId, line.variantShopifyId, line.sku, line.title, toNumber(line.price)])).toEqual([
+      ["50", "9", "TEE-1", first.lineItems[0]!.title, 70],
+      ["50", "10", "TEE-2", second.lineItems[0]!.title, 70],
+    ]);
+    const corrected = { ...first, updatedAt: new Date("2026-03-05T00:00:00Z"),
+      lineItems: first.lineItems.map(line => ({ ...line, productShopifyId: "60", variantShopifyId: "11", sku: "CORRECTED", title: "Corrected" })) };
+    await write([corrected]);
+    expect(await systemDb.orderLineItem.findFirst({ where: { storeId: store.id, shopifyId: first.lineItems[0]!.shopifyId } })).toMatchObject({ productShopifyId: "60", variantShopifyId: "11", sku: "CORRECTED", title: "Corrected" });
+  });
+
   const readStore = async (storeId: string) => {
     const orders = await systemDb.order.findMany({ where: { storeId }, orderBy: { shopifyId: "asc" } });
     const out = [];

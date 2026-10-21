@@ -1131,10 +1131,7 @@ describe("top 100 product performance", () => {
     await systemDb.store.update({ where: { id: store.id }, data: { ordersHistoryFrom: new Date(0), status: "active" } });
     await seedOrder(store, { id: "deleted", createdAt: "2026-03-08T18:00:00Z", lines: [{ qty: 2, price: 10 }, { qty: 3, price: 20 }] });
     const res = await request(a.headers, ws, store.id);
-    expect(res.json().items).toHaveLength(2);
-    expect(res.json().items.map((p: { units: number }) => p.units)).toEqual([3,2]);
-    expect(res.json().baseline).toBe(true);
-    expect(res.json().items[0].growth).toBeNull();
+    expect(res.json()).toMatchObject({ complete: false, baseline: false, unknownIdentitySales: 2, items: [] });
   });
   it("validates filters, checks scopes and isolates tenant stores", async () => {
     const { a, ws, store } = await owner();

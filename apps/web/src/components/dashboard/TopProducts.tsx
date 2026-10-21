@@ -41,7 +41,7 @@ export function TopProducts({ ov, currency }: { ov: Overview; currency: string }
     </div>
     {error && <p role="alert">Product sales could not be loaded: {error.message}</p>}
     {failing && report && <p role="status">Refresh is delayed. Showing the last successful response.</p>}
-    {report && !report.complete && <p role="status" className="mb-3 text-sm">Rankings are unavailable until all sales for this period are imported and verified. Imported history starts {report.historyFrom ?? "after synchronization completes"}. A longer range may require approved historical order access.</p>}
+    {report && !report.complete && <p role="status" className="mb-3 text-sm">{report.unknownIdentitySales ? "Some historical sales no longer have a recoverable product ID. Rankings are withheld because those sales cannot be grouped reliably; historical records are needed to repair them." : <>Rankings are unavailable until all sales for this period are imported and verified. Imported history starts {report.historyFrom ?? "after synchronization completes"}. A longer range may require approved historical order access.</>}</p>}
     {report && !report.baseline && <p className="mb-3 text-sm text-muted">No complete previous period: growth and trending scores are unavailable.</p>}
     {ov.freshness && (ov.freshness.waiting > 0 || ov.freshness.failed > 0) && <p role="status">Sales updates are pending or failed. Figures may be behind Shopify.</p>}
     {loading && !report ? <div aria-label="Loading product sales" className="h-48 animate-pulse rounded bg-border" /> : !error && items.length === 0 ? report?.complete && <p>No product sales match these dates and filters.</p> : <div className="max-h-[620px] overflow-auto">
