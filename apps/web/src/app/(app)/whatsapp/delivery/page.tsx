@@ -1,6 +1,6 @@
 "use client";
-import { KindsSection, PageHeader } from "@/components/whatsapp/common";
-import { OrdersList } from "@/components/whatsapp/orders";
+import { KindsSection, PageHeader } from "@/components/whatsapp/Common";
+import { OrdersList } from "@/components/whatsapp/Orders";
 
 export default function DeliveryUpdates() {
   return (

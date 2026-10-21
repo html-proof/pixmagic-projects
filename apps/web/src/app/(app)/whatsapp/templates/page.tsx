@@ -1,11 +1,11 @@
 "use client";
 import { useState } from "react";
 import { previewText, TEMPLATE_LIBRARY } from "@app/shared/whatsapp";
-import { Badge, Empty } from "@/components/dashboard/primitives";
+import { Badge, Empty } from "@/components/dashboard/Primitives";
 import { fmtRelative } from "@/components/dashboard/format";
 import { LoadError } from "@/components/LoadError";
 import { api, useApi } from "@/lib/api";
-import { bodyText, PageHeader, Skeleton, TEMPLATE_STATUS, useAction, useWa, type WaTemplate } from "@/components/whatsapp/common";
+import { bodyText, PageHeader, Skeleton, TEMPLATE_STATUS, useAction, useWa, type WaTemplate } from "@/components/whatsapp/Common";
 import type { Overview } from "@/components/whatsapp/types";
 
 const buttonsOf = (t: WaTemplate) => t.components.find((c) => c.type.toUpperCase() === "BUTTONS")?.buttons ?? [];

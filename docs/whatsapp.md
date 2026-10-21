@@ -235,11 +235,11 @@ shows "coming soon". The steps below are what's left, in order.
    product WhatsApp Cloud API, asset WhatsApp accounts, permissions `whatsapp_business_management` and
    `whatsapp_business_messaging`, token expiration **Never**. Its id is `WHATSAPP_CONFIG_ID`.
 4. Permissions `whatsapp_business_messaging` and `whatsapp_business_management` with **Advanced Access** (App Review).
-5. App settings: add `insights.imeseban.workers.dev` to **App domains**, **Allowed domains for the JavaScript SDK**
+5. App settings: add `bizinsights.io` to **App domains**, **Allowed domains for the JavaScript SDK**
    and **Valid OAuth redirect URIs** (Embedded Signup only returns ids to listed HTTPS domains).
 6. The app's WhatsApp **webhook** needs no clicking: once `WHATSAPP_APP_SECRET` (or `META_APP_SECRET`) and
    `WHATSAPP_WEBHOOK_VERIFY_TOKEN` are set, the */15 cron (`ensurePlatformWebhook`, at most every 6 hours) points it
-   at `https://insights.imeseban.workers.dev/api/webhooks/whatsapp` with `messages`, `message_template_status_update`,
+   at `https://bizinsights.io/api/webhooks/whatsapp` with `messages`, `message_template_status_update`,
    `template_category_update`, `message_template_quality_update`, `phone_number_quality_update`, `account_update` and
    `user_preferences`. A webhook already pointing at another URL is left alone (logged); set it by hand in WhatsApp →
    Configuration → Webhook then.

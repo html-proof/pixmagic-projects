@@ -2,12 +2,12 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { libraryTemplate, OCCASIONS, type Audience, type TemplateMapping } from "@app/shared/whatsapp";
-import { Badge, Empty, type Tone } from "@/components/dashboard/primitives";
+import { Badge, Empty, type Tone } from "@/components/dashboard/Primitives";
 import { LoadError } from "@/components/LoadError";
 import { ApiError, actionError, api, fmtMoney, fmtNum, fmtPct, useApi } from "@/lib/api";
 import { useApp } from "@/components/AppContext";
 import { Alert } from "@/components/ui";
-import { ConfirmDialog, fmtWhen, PageHeader, Skeleton, TemplateMapper, useAction, useToast, useWa, type SettingsResponse } from "@/components/whatsapp/common";
+import { ConfirmDialog, fmtWhen, PageHeader, Skeleton, TemplateMapper, useAction, useToast, useWa, type SettingsResponse } from "@/components/whatsapp/Common";
 import type { Overview } from "@/components/whatsapp/types";
 
 interface Metrics {

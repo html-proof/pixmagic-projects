@@ -1,11 +1,11 @@
 "use client";
 import { useState } from "react";
 import { addDays, eachDay } from "@app/shared/dates";
-import { Stat } from "@/components/dashboard/primitives";
-import { LineChart } from "@/components/dashboard/lineChart";
+import { Stat } from "@/components/dashboard/Primitives";
+import { LineChart } from "@/components/dashboard/LineChart";
 import { LoadError } from "@/components/LoadError";
 import { fmtMoney, fmtNum, fmtPct, useApi } from "@/lib/api";
-import { PageHeader, Skeleton, useWa } from "@/components/whatsapp/common";
+import { PageHeader, Skeleton, useWa } from "@/components/whatsapp/Common";
 
 interface Analytics {
   days: number;

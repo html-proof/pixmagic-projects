@@ -17,7 +17,7 @@ import {
   type KindSetting,
 } from "@app/shared/whatsapp";
 import { useApp } from "@/components/AppContext";
-import { Badge, type Tone } from "@/components/dashboard/primitives";
+import { Badge, type Tone } from "@/components/dashboard/Primitives";
 import { actionError, api, useApi } from "@/lib/api";
 
 // ---------------------------------------------------------------------------

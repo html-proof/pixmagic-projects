@@ -84,8 +84,8 @@ Where a new piece of code goes:
 ```
 src/app/            routes (App Router). (app)/ is the signed-in shell: AppProvider + top bar.
 src/components/     UI. dashboard/, whatsapp/, landing/ per area; app-wide pieces at the top.
-src/hooks/          animation hooks for the landing page.
-src/lib/            non-UI modules: the API client and hooks, Firebase/session, storage, types of
+src/hooks/          server-data hooks (useApi.ts) and landing-page animation hooks.
+src/lib/            non-UI modules: API transport, formatting, public config, Firebase/session, storage, types of
                     API responses shared by several pages.
 ```
 
@@ -94,7 +94,7 @@ of truth and almost every screen is "load, show, edit, save".
 
 | State | Where it lives |
 | --- | --- |
-| Server data | `useApi(path)` (`lib/api.ts`): each answer is kept with the request it answers, transient failures retry by themselves, `reload()` and `setData()` for edits. `useLiveApi(path, ms)` for data that must stay live (the dashboard). |
+| Server data | `useApi(path)` (`hooks/useApi.ts`, re-exported by `lib/api.ts`): each answer is kept with the request it answers, transient failures retry by themselves, `reload()` and `setData()` for edits. `useLiveApi(path, ms)` for data that must stay live (the dashboard). |
 | Session, workspaces, current workspace and store | `AppContext` (`useApp()`), signed-in pages only. |
 | The dashboard's date range and open detail | The URL (`?from=&to=`, `?view=`), so a link reproduces the view. |
 | Per-device preferences | `lib/storage.ts` (`readLocal` / `writeLocal`): never throws, so blocked storage only loses the preference. |
@@ -113,8 +113,8 @@ pages. Unknown paths get `app/not-found.tsx`.
 
 **Business logic.** Pages and components format and arrange what the API returns; rules and
 calculations belong in `@app/shared` (shared with the API) or the API itself. Several dashboard
-components still hold grading rules and derived figures (`overview.tsx`, `explain.tsx`,
-`previews.tsx`); move them when those files are next reworked.
+components still hold grading rules and derived figures (`Overview.tsx`, `Explain.tsx`,
+`Previews.tsx`); move them when those files are next reworked.
 
 ## Configuration
 
@@ -123,7 +123,7 @@ components still hold grading rules and derived figures (`overview.tsx`, `explai
 | Worker vars (public: URLs, app ids, API versions, scopes) | `apps/cloudflare/wrangler.jsonc` `vars`; locally overridden by `apps/cloudflare/.dev.vars` | `env()` in `packages/core/src/env.ts` |
 | Worker secrets (session, encryption keys, client secrets) | `npx wrangler secret put NAME`; locally `.dev.vars` (from `.dev.vars.example`) | `env()` |
 | Bindings (Hyperdrive, Queues, R2, Durable Object, Email) | `wrangler.jsonc` | `apps/cloudflare/src/index.ts`, passed as `Deps` |
-| UI build-time values (`NEXT_PUBLIC_FIREBASE_*`) | `apps/web/.env.local` / `.env.production` / CI (from `apps/web/.env.example`) | `apps/web/src/lib/firebase.ts` |
+| UI build-time values (`NEXT_PUBLIC_FIREBASE_*`) | `apps/web/.env.local` / `.env.production` / CI (from `apps/web/.env.example`) | `apps/web/src/lib/config.ts`, consumed by Firebase |
 | Local tooling (docker compose, Prisma CLI, `ops:*` tasks) | repo-root `.env` (from `.env.example`) | those tools only |
 
 `env()` validates the whole Worker config with Zod on first use and, in production, refuses to
@@ -136,10 +136,7 @@ Shopify secrets whose names are dynamic (`SHOPIFY_APP_SECRET_<KEY>`).
 ## Naming
 
 - **Files**: React component files are PascalCase (`StoreHeader.tsx`, `LoadError.tsx`); modules of
-  helpers, hooks or types are camelCase (`format.ts`, `storage.ts`). Most of `components/dashboard`
-  and `components/whatsapp` predate this and use camelCase for component files; rename them when no
-  other branch has work in progress on them (a rename under someone's edits turns their merge into
-  a conflict).
+  helpers, hooks or types are camelCase (`format.ts`, `storage.ts`). Dashboard and WhatsApp component filenames follow this convention; helper and type files remain camelCase.
 - **Exports**: components and helpers are named exports; only Next.js pages, layouts and boundaries
   use default exports.
 - **Errors**: `XxxError extends Error` and sets `this.name`, so logs say which.
@@ -163,12 +160,31 @@ A bug fix comes with the test that would have caught it.
 Deliberately not moved yet, because the files are under active work elsewhere and a move would turn
 that work into conflicts. Each is safe to do on its own.
 
-- `apps/api/src/routes/dashboard.ts`: ~585 lines of reporting SQL and data shaping inside the route
-  file. Target: `packages/core/src/reports/`, leaving the route to parse, authorize and call.
+- `packages/core/src/reports/dashboard.ts` now owns dashboard SQL and data shaping. Its report
+  modules can be split further as individual reporting features grow.
 - `apps/api/src/routes/whatsappOps.ts` / `whatsapp.ts`: campaign and automation rules, cart
-  eligibility and analytics grouping inline; four copies of cursor pagination. Target: core's
-  `whatsapp/` modules and one pagination helper.
+  eligibility and analytics grouping inline. Cursor page shaping and integer limits are now shared
+  through `packages/shared/src/pagination.ts`. Target for the remaining rules: core's
+  `whatsapp/` modules.
 - Two Meta Graph clients (`core/ads.ts`, `core/whatsapp/graph.ts`) with different auth and error
   handling.
-- Dashboard components: the camelCase file names above, and small helpers repeated across
-  `overview.tsx`, `details.tsx` and `explain.tsx` (bold wrapper, change wording, drop-off maths).
+- Dashboard components still repeat small presentation helpers across `Overview.tsx`,
+  `Details.tsx` and `Explain.tsx` (bold wrapper, change wording, drop-off maths).
+
+## Module entry points after the structure cleanup
+
+- `packages/core/src/reports/dashboard.ts`: tenant-scoped report generation, callable from HTTP or jobs.
+  It accepts the caller's transaction and never authorizes HTTP requests itself.
+- `apps/api/src/routes/dashboard.ts`: permissions, query validation, transaction lifetime and sync refresh.
+- `apps/web/src/lib/apiClient.ts`: HTTP transport and consistent error classification; no React dependency.
+- `apps/web/src/hooks/useApi.ts`: request-scoped loading state, retries and live polling.
+- `apps/web/src/lib/format.ts`: reusable display formatting.
+- `apps/web/src/lib/config.ts`: public frontend environment values. Server secrets stay in Worker config.
+- `apps/web/src/lib/api.ts`: compatibility exports for existing callers; new modules can import directly.
+
+Keep server data in the existing request-scoped hooks, workspace/session selections in AppContext,
+form drafts in local React state, and shareable filters in the URL. Add a global state library only
+when a concrete cross-screen state requirement warrants it. Never copy server reports into a second store.
+
+The cleanup preserves endpoint paths and response shapes. It does not establish that every remaining
+module is free of unused exports or missing error handling. The debts above remain explicit follow-up work.

@@ -38,7 +38,7 @@ Overview ("Access levels → Manage"):
 3. ~~`"GOOGLE_ADS_ENABLED": "1"`~~ (done).
 
 Verified 2026-10-11 against the real Google: the "Insights web" client accepts the production callback
-(`https://insights.imeseban.workers.dev/api/ads/google/callback`) and `http://localhost:8789/...` with the `adwords`
+(`https://bizinsights.io/api/ads/google/callback`) and `http://localhost:8789/...` with the `adwords`
 scope and a PKCE challenge: Google's own "Sign in to continue to Insights" page opens, with no error.
 
 **The integrations page** is for management only:
@@ -79,9 +79,9 @@ Run the `wrangler secret put` commands from `apps/cloudflare`, then deploy.
 
 The redirect (callback) addresses, which both platforms must have registered **exactly**:
 
-- Meta: `https://insights.imeseban.workers.dev/api/ads/meta/callback`
-- Google Ads: `https://insights.imeseban.workers.dev/api/ads/google/callback`
-- Google AdSense: `https://insights.imeseban.workers.dev/api/ads/adsense/callback` (on the same Google OAuth client)
+- Meta: `https://bizinsights.io/api/ads/meta/callback`
+- Google Ads: `https://bizinsights.io/api/ads/google/callback`
+- Google AdSense: `https://bizinsights.io/api/ads/adsense/callback` (on the same Google OAuth client)
 
 (For local development: `http://localhost:8787/api/ads/<provider>/callback`, with the keys in `apps/cloudflare/.dev.vars`.)
 
@@ -90,7 +90,7 @@ The redirect (callback) addresses, which both platforms must have registered **e
 **Insights' Meta Ads app (set up 2026-10-11):** "Insights", App ID `971575545351940`, owned by the Facebook account
 sebanceo@gmail.com, Development mode, no business portfolio yet. Use case "Measure ad performance data with Marketing
 API" (ads_read ready for testing). Facebook Login for Business: redirect URI
-`https://insights.imeseban.workers.dev/api/ads/meta/callback` (strict mode, HTTPS); configuration "Insights ads reporting"
+`https://bizinsights.io/api/ads/meta/callback` (strict mode, HTTPS); configuration "Insights ads reporting"
 `1521935306664882` (General, user access token, ads_read only) = `META_CONFIG_ID`. Basic settings: app domain, privacy policy
 `/privacy`, data deletion instructions `/data-deletion`, category Business and pages, Website platform. Still to do: the
 app secret (`META_APP_SECRET`, pasted by the owner), an app icon, then a business portfolio + verification and App Review
@@ -112,7 +112,7 @@ for Advanced Access to ads_read before merchants outside the app's roles can con
 4. In **App settings → Basic**:
    - copy the **App ID** into `META_APP_ID`;
    - copy the **App secret** into `META_APP_SECRET`.
-   - Fill in the privacy policy URL (`https://insights.imeseban.workers.dev/privacy`) and an app icon. Both are needed before the app can go live.
+   - Fill in the privacy policy URL (`https://bizinsights.io/privacy`) and an app icon. Both are needed before the app can go live.
 5. **Who can connect.** While the app is in **Development** mode, only people with a role on the app (and their ad accounts) can connect. Add yourself and your test users under **App roles**.
 
    To let any merchant connect their own ad accounts, the app needs **Advanced Access to `ads_read`** through **App Review**, and Meta **Business Verification**. Meta asks for:
@@ -134,8 +134,8 @@ access for real accounts** (Explorer or above). Developer tokens are gone (2026-
 1. At <https://console.cloud.google.com/>, create or pick a project and enable the **Google Ads API** (APIs & Services → Library).
 2. **OAuth consent screen**:
    - User type: **External**. App name: Insights.
-   - Support email; app domain and privacy policy `https://insights.imeseban.workers.dev/privacy`.
-   - Authorized domain: `insights.imeseban.workers.dev`.
+   - Support email; app domain and privacy policy `https://bizinsights.io/privacy`.
+   - Authorized domain: `bizinsights.io`.
    - Add the scope `https://www.googleapis.com/auth/adwords`.
 3. **Credentials → Create credentials → OAuth client ID**, application type **Web application**:
    - add the Google callback address above under **Authorized redirect URIs**;

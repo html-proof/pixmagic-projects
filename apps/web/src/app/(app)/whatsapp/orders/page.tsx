@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
-import { KindsSection, PageHeader } from "@/components/whatsapp/common";
-import { OrdersList } from "@/components/whatsapp/orders";
+import { KindsSection, PageHeader } from "@/components/whatsapp/Common";
+import { OrdersList } from "@/components/whatsapp/Orders";
 
 export default function OrderNotifications() {
   return (

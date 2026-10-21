@@ -1,6 +1,6 @@
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { hourRange, plural } from "./format";
-import type { IconName } from "./icons";
+import type { IconName } from "./Icons";
 import type { Overview } from "./types";
 
 /** Everything a dashboard card can open, each as its own detail panel (?view=<topic>). */

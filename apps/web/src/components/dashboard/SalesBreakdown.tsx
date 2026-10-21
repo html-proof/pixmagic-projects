@@ -3,7 +3,7 @@ import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode 
 import { dailyBreakdown, weekdayOf, type BreakdownDay, type SalesDay, type SalesMonth, type YearBreakdown } from "@app/shared/sales";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { fmtDay, fmtLongDay, fmtMonth, fmtMoneyCompact, fmtMoneyWhole, fmtSpan, fmtWeekday } from "./format";
-import { Delta } from "./primitives";
+import { Delta } from "./Primitives";
 
 // ---------------------------------------------------------------------------
 // The chart: columns over a running-total strip that shares their x positions.

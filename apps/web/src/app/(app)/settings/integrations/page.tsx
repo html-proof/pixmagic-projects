@@ -5,10 +5,10 @@ import { canManage, StoresPending, useApp, type StoreSummary } from "@/component
 import { GoogleIcon, MetaIcon } from "@/components/BrandIcons";
 import { ShopifyIcon } from "@/components/ShopifyIcon";
 import { fmtRelative } from "@/components/dashboard/format";
-import { Badge, type Tone } from "@/components/dashboard/primitives";
+import { Badge, type Tone } from "@/components/dashboard/Primitives";
 import { Alert } from "@/components/ui";
 import { EmbeddedSignup } from "@/components/whatsapp/EmbeddedSignup";
-import { WhatsappIcon } from "@/components/whatsapp/common";
+import { WhatsappIcon } from "@/components/whatsapp/Common";
 import { quality, tier, type Overview as WaOverview } from "@/components/whatsapp/types";
 import type { AdsState } from "@/lib/adConnections";
 import { actionError, api, ApiError, useApi } from "@/lib/api";

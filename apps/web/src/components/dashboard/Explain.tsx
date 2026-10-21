@@ -2,10 +2,10 @@
 import type { ReactNode } from "react";
 import { dailyBreakdown } from "@app/shared/sales";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
-import { SECTION_LABEL, STEP_LABEL } from "./funnel";
+import { SECTION_LABEL, STEP_LABEL } from "./Funnel";
 import { hourRange, plural } from "./format";
-import { Icon } from "./icons";
-import { Panel } from "./primitives";
+import { Icon } from "./Icons";
+import { Panel } from "./Primitives";
 import type { Topic } from "./topics";
 import type { Overview } from "./types";
 

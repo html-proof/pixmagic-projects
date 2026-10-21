@@ -24,8 +24,8 @@
   // `wrangler secret put`; for local dev put everything in apps/cloudflare/.dev.vars.
   "vars": {
     "NODE_ENV": "production",
-    "APP_URL": "https://insights.imeseban.workers.dev",
-    "API_URL": "https://insights.imeseban.workers.dev/api",
+    "APP_URL": "https://bizinsights.io",
+    "API_URL": "https://bizinsights.io/api",
     "FIREBASE_PROJECT_ID": "saas-89329",
     // Public web API key (same as NEXT_PUBLIC_FIREBASE_API_KEY): redeems emailed sign-in links.
     "FIREBASE_WEB_API_KEY": "AIzaSyDsrFIOe52bv3ZD0PM_h_l6_Tm9q7Uzq4s",

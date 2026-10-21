@@ -58,12 +58,12 @@ The deployed Worker already holds the callback URL, so no toml edit and no
 
 | | |
 | --- | --- |
-| App URL | `https://insights.imeseban.workers.dev/api/shopify/launch` |
-| Redirect URL | `https://insights.imeseban.workers.dev/api/shopify/callback` |
+| App URL | `https://bizinsights.io/api/shopify/launch` |
+| Redirect URL | `https://bizinsights.io/api/shopify/callback` |
 | Scopes | `read_orders,read_products` |
 | Embedded | `false` (this is an external dashboard, not an admin-embedded app) |
 
-1. Open `https://insights.imeseban.workers.dev/signup`, create an account and confirm your email.
+1. Open `https://bizinsights.io/signup`, create an account and confirm your email.
 2. On the connect page, **Continue with Shopify** (or enter the store address) and approve on
    Shopify. The workspace and store are created and the first import starts (see
    [shopify-setup.md](shopify-setup.md) section 3).
@@ -87,7 +87,7 @@ that covers a missed delivery, so a dropped webhook costs freshness, never corre
 Fire one by hand:
 
 ```bash
-npx shopify app webhook trigger --topic orders/create --address https://insights.imeseban.workers.dev/api/webhooks/shopify
+npx shopify app webhook trigger --topic orders/create --address https://bizinsights.io/api/webhooks/shopify
 ```
 
 ## 4. Comparing against third-party apps

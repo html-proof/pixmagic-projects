@@ -102,13 +102,13 @@ describe("Firebase Auth emulator setting", () => {
 
   it("recognises local app URLs only", () => {
     for (const url of ["http://localhost:3001", "http://127.0.0.1:8789", "http://[::1]:8787", "http://app.localhost", "http://insights.test"]) expect(isLocalUrl(url), url).toBe(true);
-    for (const url of ["https://insights.imeseban.workers.dev", "https://localhost.evil.com", "not a url"]) expect(isLocalUrl(url), url).toBe(false);
+    for (const url of ["https://bizinsights.io", "https://localhost.evil.com", "not a url"]) expect(isLocalUrl(url), url).toBe(false);
   });
 
   it("refuses to run against the emulator on a deployed app URL", () => {
     // The emulator accepts unsigned tokens: carried to production, it would be an auth bypass.
     process.env.FIREBASE_AUTH_EMULATOR_HOST = "127.0.0.1:9099";
-    process.env.APP_URL = "https://insights.imeseban.workers.dev";
+    process.env.APP_URL = "https://bizinsights.io";
     resetEnvCache();
     expect(() => firebaseAuthProvider()).toThrow(/must never be configured on a deployed app/);
     process.env.APP_URL = "http://localhost:8787";

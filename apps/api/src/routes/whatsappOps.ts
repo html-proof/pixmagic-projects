@@ -23,6 +23,8 @@ import {
 } from "@app/core";
 import {
   audienceSchema,
+  pageLimit,
+  cursorPage,
   automationActionSchema,
   AUTOMATION_TRIGGERS,
   conditionSchema,
@@ -110,7 +112,7 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
     await requireWorkspace(c, deps, ws, "customers:contact");
     await waStore(ws, storeId);
     const q = c.req.query();
-    const take = Math.min(100, Math.max(1, Number(q.limit) || 50));
+    const take = pageLimit(q.limit, 50);
     const created = range(q);
     const where: Prisma.WhatsappMessageWhereInput = {
       storeId,
@@ -125,7 +127,7 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
     const rows = await withTenant(ws, (tx) =>
       tx.whatsappMessage.findMany({ where, orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: take + 1, ...(q.cursor ? { cursor: { id: q.cursor }, skip: 1 } : {}) }),
     );
-    const page = rows.slice(0, take);
+    const { items: page, nextCursor } = cursorPage(rows, take);
     const campaignIds = [...new Set(page.map((m) => m.campaignId).filter((x): x is string => !!x))];
     const campaigns = campaignIds.length ? await withTenant(ws, (tx) => tx.whatsappCampaign.findMany({ where: { id: { in: campaignIds }, workspaceId: ws }, select: { id: true, name: true } })) : [];
     return c.json({
@@ -160,7 +162,7 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
         canRetry: !!m.paramsEnc && ["failed", "skipped", "cancelled"].includes(m.status),
         canCancel: m.status === "scheduled",
       })),
-      nextCursor: rows.length > take ? page[page.length - 1]!.id : null,
+      nextCursor,
     });
   });
 
@@ -201,7 +203,7 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
     await requireWorkspace(c, deps, ws, "customers:contact");
     await waStore(ws, storeId);
     const q = c.req.query();
-    const take = Math.min(100, Math.max(1, Number(q.limit) || 30));
+    const take = pageLimit(q.limit, 30);
     const rows = await withTenant(ws, (tx) =>
       tx.orderTracking.findMany({
         where: { storeId, workspaceId: ws, ...(q.status ? { status: q.status } : {}), ...(q.q ? { orderName: { contains: q.q.slice(0, 40), mode: "insensitive" } } : {}) },
@@ -210,7 +212,7 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
         ...(q.cursor ? { cursor: { id: q.cursor }, skip: 1 } : {}),
       }),
     );
-    const page = rows.slice(0, take);
+    const { items: page, nextCursor } = cursorPage(rows, take);
     const ids = page.map((t) => t.id);
     const contactIds = page.map((t) => t.contactId).filter((x): x is string => !!x);
     const [contacts, msgs] = await withTenant(ws, (tx) =>
@@ -231,7 +233,7 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
         liveTracking: t.carrierEvents,
         messages: Object.fromEntries(msgs.filter((m) => m.trackingId === t.id).map((m) => [m.status, m._count._all])),
       })),
-      nextCursor: rows.length > take ? page[page.length - 1]!.id : null,
+      nextCursor,
     });
   });
 
@@ -295,7 +297,7 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
     await requireWorkspace(c, deps, ws, "customers:contact");
     await waStore(ws, storeId);
     const q = c.req.query();
-    const take = Math.min(100, Math.max(1, Number(q.limit) || 30));
+    const take = pageLimit(q.limit, 30);
     const [rows, counts] = await withTenant(ws, (tx) =>
       Promise.all([
         tx.abandonedCheckout.findMany({
@@ -307,7 +309,7 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
         tx.abandonedCheckout.groupBy({ by: ["status"], where: { storeId, workspaceId: ws }, _count: { _all: true } }),
       ]),
     );
-    const page = rows.slice(0, take);
+    const { items: page, nextCursor } = cursorPage(rows, take);
     const reminders = await withTenant(ws, (tx) =>
       tx.whatsappMessage.findMany({
         where: { checkoutId: { in: page.map((r) => r.id) }, workspaceId: ws },
@@ -334,7 +336,7 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
         completedAt: r.completedAt,
         reminders: reminders.filter((m) => m.checkoutId === r.id).map(({ checkoutId: _x, ...m }) => m),
       })),
-      nextCursor: rows.length > take ? page[page.length - 1]!.id : null,
+      nextCursor,
     });
   });
 
@@ -395,7 +397,7 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
     await requireWorkspace(c, deps, ws, "customers:contact");
     await waStore(ws, storeId);
     const q = c.req.query();
-    const take = Math.min(100, Math.max(1, Number(q.limit) || 30));
+    const take = pageLimit(q.limit, 30);
     // A rating that isn't 1-5 is ignored, like a malformed date in range().
     const rating = Number(q.rating);
     const scope = { storeId, workspaceId: ws };
@@ -412,7 +414,7 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
         tx.customerReview.aggregate({ where: { ...scope, status: { in: ["published", "pending"] } }, _avg: { rating: true }, _count: { _all: true } }),
       ]),
     );
-    const page = rows.slice(0, take);
+    const { items: page, nextCursor } = cursorPage(rows, take);
     return c.json({
       summary: {
         // Rejected reviews are left out of the average, and counted below so suppression stays visible.
@@ -435,7 +437,7 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
         editedAt: r.editedAt,
         moderatedAt: r.moderatedAt,
       })),
-      nextCursor: rows.length > take ? page[page.length - 1]!.id : null,
+      nextCursor,
     });
   });
 

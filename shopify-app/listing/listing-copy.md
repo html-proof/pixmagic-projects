@@ -68,13 +68,13 @@ All charges run through Shopify's Billing API (`appSubscriptionCreate`).
 **Privacy policy URL**
 
 ```
-https://insights.imeseban.workers.dev/privacy
+https://bizinsights.io/privacy
 ```
 
 **Support URL / contact**
 
 ```
-https://insights.imeseban.workers.dev/support
+https://bizinsights.io/support
 ```
 
 > Both pages render from `apps/web/src/lib/contact.ts`, which is still **blank**. They show a
@@ -104,7 +104,7 @@ nothing back to the store.
 
 Install and first run
 
-1. Go to https://insights.imeseban.workers.dev/signup and create an account with an email
+1. Go to https://bizinsights.io/signup and create an account with an email
    address you can receive mail at.
 2. Confirm the address with the link we email you.
 3. On "Let's get your store set up", click "Continue with Shopify" and approve the two

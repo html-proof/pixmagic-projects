@@ -2,7 +2,7 @@
 import type { ReactNode } from "react";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { fmtDay, fmtMoneyWhole, fmtRelative, fmtWeekday } from "./format";
-import type { Health } from "./overview";
+import type { Health } from "./Overview";
 import type { Topic } from "./topics";
 import type { Overview } from "./types";
 

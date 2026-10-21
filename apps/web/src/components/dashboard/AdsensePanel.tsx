@@ -5,9 +5,9 @@ import { weekdayOf } from "@app/shared/sales";
 import { GoogleIcon } from "@/components/BrandIcons";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { fmtDay, fmtLongDay, fmtMoneyCompact, fmtMoneyWhole, fmtRange, fmtRelative, fmtSpan, fmtWeekday, plural } from "./format";
-import { Icon } from "./icons";
-import { Delta, Panel, Stat } from "./primitives";
-import { ColumnsWithTotal, type Column } from "./salesBreakdown";
+import { Icon } from "./Icons";
+import { Delta, Panel, Stat } from "./Primitives";
+import { ColumnsWithTotal, type Column } from "./SalesBreakdown";
 import type { AdsenseModule, Overview } from "./types";
 
 // ---------------------------------------------------------------------------

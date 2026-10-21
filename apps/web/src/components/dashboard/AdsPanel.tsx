@@ -5,11 +5,11 @@ import { weekdayOf } from "@app/shared/sales";
 import { GoogleIcon, MetaIcon } from "@/components/BrandIcons";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { fmtDay, fmtLongDay, fmtMoneyCompact, fmtMoneyWhole, fmtRange, fmtRelative, fmtSpan, fmtTimes, fmtWeekday, plural } from "./format";
-import { Icon } from "./icons";
-import { GoogleReportPanel } from "./googleReport";
-import { MetaReportPanel } from "./metaReport";
-import { Delta, NeutralDelta, Panel, Stat } from "./primitives";
-import { ColumnsWithTotal, type Column } from "./salesBreakdown";
+import { Icon } from "./Icons";
+import { GoogleReportPanel } from "./GoogleReport";
+import { MetaReportPanel } from "./MetaReport";
+import { Delta, NeutralDelta, Panel, Stat } from "./Primitives";
+import { ColumnsWithTotal, type Column } from "./SalesBreakdown";
 import type { AdsModule, Overview } from "./types";
 
 // ---------------------------------------------------------------------------

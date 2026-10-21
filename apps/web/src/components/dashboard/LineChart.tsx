@@ -1,7 +1,7 @@
 "use client";
 import { useId, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { fmtDay, fmtLongDay } from "./format";
-import { niceTicks, useWidth } from "./salesBreakdown";
+import { niceTicks, useWidth } from "./SalesBreakdown";
 
 // ---------------------------------------------------------------------------
 // A small multi-series line chart: one shared y-axis (never two), one line per series, a crosshair

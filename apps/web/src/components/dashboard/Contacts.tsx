@@ -6,8 +6,8 @@ import { Alert } from "@/components/ui";
 import { actionError, api, fmtMoney, fmtNum } from "@/lib/api";
 import { readLocal, removeLocal, writeLocal } from "@/lib/storage";
 import { fmtRelative, plural } from "./format";
-import { Icon, type IconName } from "./icons";
-import { Empty, Panel } from "./primitives";
+import { Icon, type IconName } from "./Icons";
+import { Empty, Panel } from "./Primitives";
 import type { AbandonedContact, ContactPerson, Contacts, CustomerContact } from "./types";
 
 type Tab = "abandoned" | "subscribers" | "recent";
