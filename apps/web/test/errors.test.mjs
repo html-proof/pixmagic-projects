@@ -44,7 +44,7 @@ test("support references reject private text and markup", () => {
 test("Meta sign-in refusals give safe recovery instructions", async () => {
   const original = globalThis.fetch;
   try {
-    globalThis.fetch = async () => new Response(JSON.stringify({ error: "exchange_failed", message: "private provider token=secret" }), { status: 400 });
+    globalThis.fetch = async () => new globalThis.Response(JSON.stringify({ error: "exchange_failed", message: "private provider token=secret" }), { status: 400 });
     await assert.rejects(api("/workspaces/ws/stores/store/whatsapp/embedded", { method: "POST", body: { code: "expired" } }), (error) => {
       const text = actionError(error, "finish connecting", { exchange_failed: "Meta didn't accept the sign-in. Please connect again." });
       assert.match(text, /Meta didn't accept the sign-in/);
