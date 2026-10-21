@@ -40,6 +40,21 @@ test("support references reject private text and markup", () => {
   assert.equal(safeCorrelationId("req_123-ab"), "req_123-ab");
   for (const bad of ["<script>", "email@example.com", "a".repeat(101), "line\nbreak", null]) assert.equal(safeCorrelationId(bad), undefined);
 });
+
+test("Meta sign-in refusals give safe recovery instructions", async () => {
+  const original = globalThis.fetch;
+  try {
+    globalThis.fetch = async () => new Response(JSON.stringify({ error: "exchange_failed", message: "private provider token=secret" }), { status: 400 });
+    await assert.rejects(api("/workspaces/ws/stores/store/whatsapp/embedded", { method: "POST", body: { code: "expired" } }), (error) => {
+      const text = actionError(error, "finish connecting", { exchange_failed: "Meta didn't accept the sign-in. Please connect again." });
+      assert.match(text, /Meta didn't accept the sign-in/);
+      assert.match(text, /connect again/);
+      assert.ok(!text.includes("secret"));
+      assert.ok(!actionError(error, "save").includes("Meta"));
+      return true;
+    });
+  } finally { globalThis.fetch = original; }
+});
 test("HTTP errors keep status and diagnostic reference without exposing response text", async () => {
   const original = globalThis.fetch;
   try {

@@ -46,9 +46,10 @@ export function friendlyError(e: unknown): string {
  * Message for a failed action (a save, a delete). Unlike a load, nothing retries an action on its
  * own, so an outage has to say "try again" rather than friendlyError's "we'll keep trying".
  */
-export function actionError(e: unknown, what: string): string {
+export function actionError(e: unknown, what: string, messages: Readonly<Record<string, string>> = {}): string {
   if (e instanceof ApiError && e.status === 408) return "The request timed out. Check whether it completed before trying again.";
   if (isTransient(e)) return `We couldn't reach bizinsights to ${what}. Please try again in a moment.`;
+  if (e instanceof ApiError && Object.hasOwn(messages, e.code)) return messages[e.code]!;
   return friendlyError(e);
 }
 
