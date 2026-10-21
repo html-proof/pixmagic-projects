@@ -20,7 +20,7 @@ export interface ProductMetrics {
 export const TREND_WEIGHTS = { units: .3, unitGrowth: .2, revenueGrowth: .15, orders: .15, velocity: .1, consistency: .1 };
 export const MIN_TREND_UNITS = 5;
 const positive = (n: number) => Math.max(0, n);
-const momentum = (current: number, previous: number) => positive(current - previous) / Math.max(1, Math.abs(current), Math.abs(previous));
+const momentum = (current: number, previous: number) => Math.min(1, positive(current - previous) / Math.max(1, Math.abs(current), Math.abs(previous)));
 
 /** Normalized to [0,100]; new one-sale products never qualify for momentum ranking. */
 export function rankProducts(rows: ProductMetrics[], days: number, baseline: boolean, options: ProductOptions = {}) {
