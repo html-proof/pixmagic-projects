@@ -182,6 +182,11 @@ describe("the demo's figures", () => {
     expect(ads.accounts[0]).toMatchObject({ accountId: DEMO_ACCOUNT_ID, demo: true, counted: true });
     expect(ads.byProvider[0]).toMatchObject({ provider: "google", demo: true });
     expect(ads.byProvider[0].spend).toBeGreaterThan(0);
+    // The downloadable report names the demo's rows as simulated.
+    const csv = await get(`/workspaces/${ws}/stores/${storeId}/export?section=ads&preset=7d`);
+    expect(csv.statusCode).toBe(200);
+    expect(csv.body).toContain("Google Ads (demo, simulated)");
+    expect(csv.body).toContain("Search Advertising");
   });
 
   it("answer the live Google Ads report without Google", async () => {

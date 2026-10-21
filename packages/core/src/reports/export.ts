@@ -1,4 +1,4 @@
-import { calculationName, customApplied, customSales, type AccessKey, type SalesCalculation } from "@app/shared";
+import { calculationName, customApplied, customSales, DEMO_ACCOUNT_ID, type AccessKey, type SalesCalculation } from "@app/shared";
 
 /**
  * The dashboard sections that can be downloaded as CSV ("Export approved reports"), each with the
@@ -124,7 +124,8 @@ export function exportTable(section: ExportSection, modules: Obj): { header: str
       const campaigns = list(a.campaigns);
       if (!campaigns.length) return platformTable(list(a.byProvider));
       // A campaign whose account's figures stop before the range ends adds up only the days stored.
-      const out = table(campaigns.map((c) => ({ ...c, provider: platformName(c.provider) })), [...AD_COLUMNS, ["Complete", "complete"]]);
+      // The Google Ads demo's campaigns are named as simulated, as everywhere its figures show.
+      const out = table(campaigns.map((c) => ({ ...c, provider: platformName(c.provider, c.accountId === DEMO_ACCOUNT_ID) })), [...AD_COLUMNS, ["Complete", "complete"]]);
       const complete = out.header.indexOf("Complete");
       if (complete >= 0) out.rows = campaigns.map((c, i) => out.rows[i]!.map((cell, j) => (j === complete ? (c.complete === false ? "no" : "yes") : cell)));
       return out;
@@ -152,7 +153,8 @@ const AD_COLUMNS: Array<[label: string, key: string]> = [
 ];
 
 const PLATFORM_NAMES: Record<string, string> = { meta: "Meta Ads", google: "Google Ads" };
-const platformName = (p: unknown) => (typeof p === "string" ? (PLATFORM_NAMES[p] ?? p) : null);
+/** The platform's name; a demo's (the Google Ads demo, docs/ads-demo.md) says it is simulated. */
+const platformName = (p: unknown, demo = false) => (typeof p === "string" ? `${PLATFORM_NAMES[p] ?? p}${demo ? " (demo, simulated)" : ""}` : null);
 
 /**
  * Each platform's totals, when the range has no campaign. A platform whose accounts don't have every
@@ -166,7 +168,7 @@ function platformTable(platforms: Obj[]) {
     const coverage = isObj(p.coverage) ? p.coverage : {};
     const soFar = isObj(p.soFar) && isObj(p.soFar.totals) ? p.soFar : null;
     const partial = isObj(p.partial) ? p.partial : null;
-    const name = platformName(p.provider);
+    const name = platformName(p.provider, p.demo === true);
     if (coverage.complete === true) return [name, ...metrics.map(([, k]) => val(p, k)), "yes", null];
     if (soFar) return [name, ...metrics.map(([, k]) => val(soFar.totals as Obj, k)), `up to ${String(soFar.to)}`, "Up to the last day stored: the days after it aren't over yet."];
     const note = partial ? `Figures are stored for ${String(partial.from)} to ${String(partial.to)} only.` : "No figures are stored for these dates yet.";
