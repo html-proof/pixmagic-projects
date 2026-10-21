@@ -20,6 +20,7 @@ const TOPIC_MODULE: Partial<Record<Topic, AppModule>> = { ads: "ads", adsense: "
 
 /** The pages of each part of the app a workspace may leave out, by path prefix. */
 const MODULE_PAGES: Array<[prefix: string, part: AppModule]> = [
+  ["/ads", "ads"],
   ["/inventory", "inventory"],
   ["/whatsapp", "whatsapp"],
   ["/staff", "staff"],
@@ -100,6 +101,7 @@ export function landingPath(access: MemberAccess, staffRole: StaffRole | null, o
  */
 const PAGE_NEED: Array<[prefix: string, need: AccessNeed | "full" | "staff" | "dashboard"]> = [
   ["/dashboard", "dashboard"],
+  ["/ads", "marketing.ads"],
   ["/inventory", "inventory.view"],
   ["/team", "members:manage"],
   ["/staff", "staff"],

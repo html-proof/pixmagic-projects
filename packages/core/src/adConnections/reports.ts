@@ -17,6 +17,7 @@ import {
   type GoogleReport,
   type MetaReport,
 } from "../ads.js";
+import { googleAdsSource, isDemoConnection } from "../ads/googleAdsSource.js";
 import type { Coord } from "../coord.js";
 import { fetchUntil } from "../http.js";
 import { logger } from "../logger.js";
@@ -103,6 +104,8 @@ export async function googleReportForConnection(
   fetchImpl?: FetchLike,
   opts: { coord?: Coord; deadline?: number } = {},
 ): Promise<GoogleReport> {
+  // A demo's report is generated, not fetched: no client, no token, none of Google's operations spent.
+  if (isDemoConnection(conn)) return liveReport(conn, () => googleAdsSource(conn, { cfg: null, accessToken: "" }).report(level, since, until));
   const cfg = googleClient(fetchImpl);
   if (!cfg) throw notSetUp("google");
   if (opts.coord && (await googleAdsPaused(opts.coord))) throw googleAllowanceUsed();

@@ -639,6 +639,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             { id: "inventory-settings", label: "Stock settings", group: "Inventory", icon: Settings, keywords: "thresholds alerts low stock", go: go("/inventory/settings") },
           ]
         : []),
+      ...(offers("ads") && allowed("marketing.ads") ? [{ id: "google-ads", label: "Google Ads analytics", group: "Insights", icon: Megaphone, keywords: "google ads demo campaigns spend conversions", go: go("/ads/google") }] : []),
       ...(offers("whatsapp") && allowed("marketing.campaigns") ? [{ id: "whatsapp", label: "WhatsApp", group: "Apps", icon: MessageCircle, keywords: "messages campaigns", go: go("/whatsapp") }] : []),
       ...(staff ? [{ id: "staff", label: "Staff", group: "Apps", icon: Users, keywords: "employees payroll timesheets roster", go: go("/staff") }] : []),
       ...(me.employments?.length ? [{ id: "portal", label: "My work", group: "Apps", icon: Briefcase, go: go("/portal") }] : []),

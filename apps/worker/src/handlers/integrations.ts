@@ -106,7 +106,7 @@ export async function scheduleAdsSync(deps: WorkerDeps) {
   const all = await systemDb.adConnection.findMany({
     where: { enabled: true, status: { in: ["active", "error", "permission", "unavailable"] } },
     select: {
-      id: true, provider: true, timezone: true, storeId: true, status: true, accountStatus: true, consecutiveFailures: true,
+      id: true, provider: true, timezone: true, storeId: true, status: true, accountStatus: true, consecutiveFailures: true, isDemo: true,
       lastSyncedAt: true, createdAt: true, historyFrom: true, syncedThrough: true,
     },
   });
@@ -116,14 +116,15 @@ export async function scheduleAdsSync(deps: WorkerDeps) {
     (await systemDb.store.findMany({ where: { id: { in: [...new Set(all.map((c) => c.storeId))] }, status: "uninstalled" }, select: { id: true } })).map((s) => s.id),
   );
   const conns = all.filter((c) => !gone.has(c.storeId));
-  const google = conns.some((c) => c.provider === "google") ? await googleAdsBudget(deps.coord) : null;
+  // Google's daily allowance concerns real accounts only: a demo's figures are generated, not fetched.
+  const google = conns.some((c) => c.provider === "google" && !c.isDemo) ? await googleAdsBudget(deps.coord) : null;
   if (google) logger.info({ googleAdsOperations: google.used, allowance: google.limit, paused: google.paused }, "google ads operations in the last 24 hours");
   const spread = () => ({ delaySeconds: Math.floor(Math.random() * ADS_SPREAD_S) });
   let sent = 0;
   let historyStarts = 0;
   for (const c of conns) {
     if (!c.lastSyncedAt && c.createdAt.getTime() > now - ADS_NEW_GRACE_MS) continue;
-    if (c.provider === "google" && google && !googleAdsBudgetAllows(google, "schedule")) continue;
+    if (c.provider === "google" && !c.isDemo && google && !googleAdsBudgetAllows(google, "schedule")) continue;
     const wide = `ads-recheck:${c.id}`;
     // Nothing new to read: once a day, ask the platform whether the account is back.
     if (c.status === "permission" || c.status === "unavailable" || c.accountStatus === "closed") {
@@ -145,7 +146,7 @@ export async function scheduleAdsSync(deps: WorkerDeps) {
     // A walk back through history that broke off (a window failed, or waited for Google's allowance),
     // or one never started (accounts connected before history was walked). A few per tick; the lease
     // keeps a walk that is on its way from being started twice, the others wait for a later tick.
-    if (historyStarts < ADS_HISTORY_STARTS_PER_TICK && c.status === "active" && nextHistoryWindow(c) && (c.provider !== "google" || (google && googleAdsBudgetAllows(google, "history")))) {
+    if (historyStarts < ADS_HISTORY_STARTS_PER_TICK && c.status === "active" && nextHistoryWindow(c) && (c.provider !== "google" || c.isDemo || (google && googleAdsBudgetAllows(google, "history")))) {
       if (await enqueueAdHistory(deps.queues, deps.coord, c, { leaseMs: ADS_HISTORY_RETRY_MS, ...spread() })) {
         sent++;
         historyStarts++;

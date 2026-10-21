@@ -1,10 +1,12 @@
 "use client";
+import Link from "next/link";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { adAccountStatusLabel, sameDays } from "@app/shared/ads";
+import { DEMO_BADGE, DEMO_PERMISSIONS } from "@app/shared/adsDemo";
 import { ConfirmDialog } from "@/components/AppUi";
 import { fmtDay, fmtRelative } from "@/components/dashboard/format";
 import { Alert } from "@/components/ui";
-import { AD_STATE, accountLabel, connectionState, firstSyncOverdue, grantedPermissions, type AdConnection, type AdState } from "@/lib/adConnections";
+import { AD_STATE, accountLabel, connectionState, firstSyncOverdue, grantedPermissions, stateInfo, type AdConnection, type AdState } from "@/lib/adConnections";
 import { AD_PLATFORMS } from "./adPlatforms";
 import { Facts, StatusBadge } from "./IntegrationCard";
 
@@ -14,9 +16,9 @@ import { Facts, StatusBadge } from "./IntegrationCard";
 // region that reads out a card's state when it changes.
 // ---------------------------------------------------------------------------
 
-/** An ad connection's (or platform's) state as a badge. */
-export function StateBadge({ state, testid }: { state: AdState; testid?: string }) {
-  const s = AD_STATE[state];
+/** An ad connection's (or platform's) state as a badge; a demo's named as such ("Demo connected"). */
+export function StateBadge({ state, testid, demo = false }: { state: AdState; testid?: string; demo?: boolean }) {
+  const s = stateInfo(state, demo);
   return <StatusBadge label={s.label} tone={s.tone} busy={s.busy} testid={testid} state={state} />;
 }
 
@@ -52,6 +54,7 @@ export function AdAccountRow({
   busy,
   onToggle,
   onDisconnect,
+  demoActions,
   children,
 }: {
   c: AdConnection;
@@ -60,10 +63,12 @@ export function AdAccountRow({
   busy: boolean;
   onToggle: () => void;
   onDisconnect: () => void;
+  /** The Google Ads demo's own actions (for those who manage integrations). */
+  demoActions?: { onSync: () => void; onReset: () => void };
   children?: ReactNode;
 }) {
   const state = connectionState(c);
-  const tone = AD_STATE[state].tone;
+  const tone = stateInfo(state, c.demo).tone;
   const name = accountLabel(c);
   const P = AD_PLATFORMS[c.provider];
   // A sync asked for is running: that's the news, even for an account whose last update failed.
@@ -74,6 +79,16 @@ export function AdAccountRow({
   const accountStatus = adAccountStatusLabel(c.accountStatus, c.provider) ?? (c.accountStatus === "active" ? "Active" : null);
 
   const facts: Array<[string, ReactNode]> = [
+    // A demo says what it is where a real account says who it belongs to.
+    ...(c.demo
+      ? ([
+          ["Account type", "Demo advertising account (simulated)"],
+          ["Data source", "Generated sample data"],
+          ["Billing", "Not applicable: demo"],
+          ["Verification", "Not verified by Google"],
+          ["Demo seed", String(c.demoSeed ?? "—")],
+        ] as Array<[string, ReactNode]>)
+      : []),
     ["Last successful sync", c.lastSyncedAt ? <span title={exact(c.lastSyncedAt)}>{fmtRelative(c.lastSyncedAt)}</span> : "Not yet"],
     ["Data through", c.syncedThrough ? `${fmtDay(c.syncedThrough)}${c.historyFrom ? ` (from ${fmtDay(c.historyFrom)})` : ""}` : "Nothing stored yet"],
   ];
@@ -89,7 +104,7 @@ export function AdAccountRow({
         <div className="min-w-0">
           <p className="flex flex-wrap items-center gap-2 font-medium">
             <span className="break-words">{name}</span>
-            <StateBadge state={state} testid="account-state" />
+            <StateBadge state={state} demo={c.demo} testid="account-state" />
             {!c.enabled && <span className="text-xs font-normal text-muted">Hidden from the dashboard</span>}
           </p>
           <p className="text-xs text-muted">
@@ -97,6 +112,11 @@ export function AdAccountRow({
             {c.currency ? ` · ${c.currency}` : ""}
             {c.timezone ? ` · ${c.timezone}` : ""}
           </p>
+          {c.demo && (
+            <p className="mt-1 inline-flex rounded-full border border-warn/40 bg-warn/10 px-2 py-0.5 text-xs font-medium text-warn" data-testid="demo-badge">
+              {DEMO_BADGE}
+            </p>
+          )}
         </div>
         {manage && (
           <div className="flex flex-wrap items-center gap-2">
@@ -106,7 +126,7 @@ export function AdAccountRow({
               Show on dashboard
             </label>
             <button type="button" className="btn-secondary h-8 px-3 text-xs" onClick={onDisconnect} disabled={busy} aria-label={`Disconnect ${name}`} data-testid="account-disconnect">
-              Disconnect
+              {c.demo ? "Disconnect demo" : "Disconnect"}
             </button>
           </div>
         )}
@@ -131,10 +151,17 @@ export function AdAccountRow({
           ...facts,
           [
             "Permissions granted",
-            <>
-              {permissions.length ? permissions.join(" · ") : "Not listed by the platform"}
-              {c.provider === "google" && <span className="block text-xs text-muted">Google has no read-only permission for Google Ads; bizinsights only reads.</span>}
-            </>,
+            c.demo ? (
+              <>
+                Demo data access (simulated): {DEMO_PERMISSIONS.join(" · ")}.
+                <span className="block text-xs text-muted">Fictional application permissions, not Google OAuth scopes: no Google permission was requested or granted.</span>
+              </>
+            ) : (
+              <>
+                {permissions.length ? permissions.join(" · ") : "Not listed by the platform"}
+                {c.provider === "google" && <span className="block text-xs text-muted">Google has no read-only permission for Google Ads; bizinsights only reads.</span>}
+              </>
+            ),
           ],
         ]}
       />
@@ -150,6 +177,23 @@ export function AdAccountRow({
             {c.consecutiveFailures > 1 && <p>Updates in a row that didn&apos;t work: {c.consecutiveFailures}</p>}
           </div>
         </details>
+      )}
+      {c.demo && (
+        <div className="flex flex-wrap items-center gap-2" data-testid="demo-actions">
+          <Link className="btn-primary h-8 px-3 text-xs" href="/ads/google">
+            Open demo dashboard
+          </Link>
+          {manage && demoActions && (
+            <>
+              <button type="button" className="btn-secondary h-8 px-3 text-xs" onClick={demoActions.onSync} disabled={busy} data-testid="demo-sync">
+                Sync demo data
+              </button>
+              <button type="button" className="btn-secondary h-8 px-3 text-xs" onClick={demoActions.onReset} disabled={busy} data-testid="demo-reset">
+                Reset demo data
+              </button>
+            </>
+          )}
+        </div>
       )}
       {children}
     </li>
@@ -194,7 +238,13 @@ export function DisconnectDialog({ c, busy, onConfirm, onCancel }: { c: AdConnec
   const P = c ? AD_PLATFORMS[c.provider] : null;
   return (
     <ConfirmDialog open={!!c} title={c ? `Disconnect ${accountLabel(c)}?` : ""} confirmLabel="Disconnect" danger busy={busy} onConfirm={onConfirm} onCancel={onCancel}>
-      {c && P && (
+      {c?.demo && (
+        <p>
+          The demo&apos;s simulated figures are deleted from bizinsights. No Google access was ever granted for it, so there is nothing to hand back, and your real ad accounts
+          aren&apos;t touched. You can connect the demo again at any time.
+        </p>
+      )}
+      {c && P && !c.demo && (
         <p>
           bizinsights deletes its access to this {P.name} account and every figure it fetched for it, and stops reading it. It then hands its access back to{" "}
           {c.provider === "meta" ? "Meta" : "Google"} once no other account here was connected with the same login. Your {c.provider === "adsense" ? "site and its ads" : "ads"} keep

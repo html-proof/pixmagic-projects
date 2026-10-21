@@ -32,6 +32,9 @@ export function AdPlatformCard({
   onRefresh,
   onToggle,
   onDisconnect,
+  onTryDemo,
+  onDemoSync,
+  onDemoReset,
   rowExtra,
 }: {
   provider: AdProvider;
@@ -40,7 +43,8 @@ export function AdPlatformCard({
   loadError: unknown;
   /** This platform's connections. */
   connections: AdConnection[];
-  view: { state: AdState; hidden: boolean };
+  /** Where the card stands, and whether every account it shows is the demo. */
+  view: { state: AdState; hidden: boolean; demo?: boolean };
   store: StoreSummary | null;
   manage: boolean;
   /** The action running on the page, if any (every button waits for it). */
@@ -53,6 +57,10 @@ export function AdPlatformCard({
   onRefresh: () => void;
   onToggle: (c: AdConnection) => void;
   onDisconnect: (c: AdConnection) => void;
+  /** Google Ads: open the demo's connection flow (offered while this server switches the demo on and none is connected). */
+  onTryDemo?: () => void;
+  onDemoSync?: () => void;
+  onDemoReset?: () => void;
   rowExtra?: (c: AdConnection) => ReactNode;
 }) {
   const P = AD_PLATFORMS[provider];
@@ -63,20 +71,30 @@ export function AdPlatformCard({
   const reconnect = RECONNECT_STATES.has(view.state) || connections.some((c) => c.status === "reconnect");
   const readable = connections.some((c) => c.enabled && c.status !== "reconnect");
   const canAct = manage && !!store && !!answer;
+  // The demo (Google Ads): offered by this server, and not connected yet. The real sign-in's button is about real accounts only.
+  const real = connections.filter((c) => !c.demo);
+  const demoOffered = provider === "google" && !!answer?.demo?.google;
+  const demoConnected = connections.some((c) => c.demo);
+  const missing = answer?.missing?.[provider] ?? [];
 
-  const connectLabel = leaving ? P.opening : !connections.length ? P.button : reconnect ? "Reconnect" : "Change accounts";
+  const connectLabel = leaving ? P.opening : !real.length ? P.button : reconnect ? "Reconnect" : "Change accounts";
   const actions = (
     <>
       {canAct && configured && (
         <button
           type="button"
-          className={connections.length && !reconnect ? "btn-secondary" : "btn-primary"}
+          className={real.length && !reconnect ? "btn-secondary" : "btn-primary"}
           onClick={onConnect}
           disabled={!!busy}
-          aria-label={connections.length && !leaving ? `${connectLabel}: ${P.name}` : undefined}
+          aria-label={real.length && !leaving ? `${connectLabel}: ${P.name}` : undefined}
           data-testid={hub ? `int-${provider}-connect` : `connect-${provider}`}
         >
-          {!connections.length && <P.Icon size={16} />} {connectLabel}
+          {!real.length && <P.Icon size={16} />} {connectLabel}
+        </button>
+      )}
+      {canAct && demoOffered && !demoConnected && onTryDemo && (
+        <button type="button" className={configured ? "btn-secondary" : "btn-primary"} onClick={onTryDemo} disabled={!!busy} data-testid={hub ? "int-google-try-demo" : "try-demo-google"}>
+          Try demo
         </button>
       )}
       {canAct && configured && readable && (
@@ -108,6 +126,7 @@ export function AdPlatformCard({
             busy={!!busy}
             onToggle={() => onToggle(c)}
             onDisconnect={() => onDisconnect(c)}
+            demoActions={c.demo && onDemoSync && onDemoReset ? { onSync: onDemoSync, onReset: onDemoReset } : undefined}
           >
             {rowExtra?.(c)}
           </AdAccountRow>
@@ -116,8 +135,18 @@ export function AdPlatformCard({
     );
   } else if (!configured) {
     body = (
-      <p className="rounded-lg border border-dashed border-border px-3 py-2 text-muted">
-        {P.name} sign-in is being switched on for bizinsights. Once it&apos;s on, this card shows a &ldquo;{P.button}&rdquo; button: there are no keys or codes to copy.
+      <p className="rounded-lg border border-dashed border-border px-3 py-2 text-muted" data-testid={`${testid}-not-configured`}>
+        {manage && missing.length ? (
+          <>
+            The real {P.name} sign-in isn&apos;t set up on this server yet: it still needs {missing.join(", ")} (docs/ads-setup.md).
+            {demoOffered ? " Meanwhile, Try demo connects a simulated account that needs none of them." : ""}
+          </>
+        ) : (
+          <>
+            {P.name} sign-in is being switched on for bizinsights. Once it&apos;s on, this card shows a &ldquo;{P.button}&rdquo; button: there are no keys or codes to copy.
+            {demoOffered && manage ? " Meanwhile, Try demo connects a simulated account." : ""}
+          </>
+        )}
       </p>
     );
   } else body = <p className="text-muted">{P.how}</p>;
@@ -139,7 +168,7 @@ export function AdPlatformCard({
       sub={P.sub}
       badge={
         <>
-          <StateBadge state={view.state} testid="platform-state" />
+          <StateBadge state={view.state} demo={view.demo ?? false} testid="platform-state" />
           {view.hidden && (
             <span className="text-xs text-muted" data-testid="platform-hidden">
               Hidden from the dashboard
@@ -150,6 +179,11 @@ export function AdPlatformCard({
       actions={actions}
     >
       {body}
+      {demoConnected && real.length === 0 && configured && canAct && (
+        <p className="text-xs text-muted" data-testid="demo-switch-production">
+          Ready for the real thing? &ldquo;{P.button}&rdquo; above opens Google&apos;s own sign-in for a real account; the demo stays until you disconnect it.
+        </p>
+      )}
       {notes}
       {hub && store && answer && <p className="text-xs text-muted">Turns on: {P.features.join(" · ")}</p>}
     </IntegrationCard>

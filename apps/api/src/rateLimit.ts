@@ -96,6 +96,8 @@ export const LIMITS = {
   adsConnect: { max: 10, windowSec: 600 },
   /** Ad accounts "Sync now", per store and user: each queues a sync per connected account. */
   adsSync: { max: 6, windowSec: 600 },
+  /** The Google Ads demo connected, reset or disconnected, per user: each writes rows and queues a 90-day sync. */
+  adsDemo: { max: 10, windowSec: 600 },
   /** Meta, Google Ads and AdSense reports, per store and user: each one is a few platform calls (a cached answer doesn't count). */
   adsReport: { max: 30, windowSec: 600 },
   /** The status page of a Meta data deletion request, per IP (a code is 80 random bits; this only slows guessing). */
