@@ -16,6 +16,7 @@ beforeEach(async () => clean(ctx));
 
 describe("API response headers", () => {
   const expectHardened = (headers: Record<string, string>) => {
+    expect(headers["x-request-id"]).toMatch(/^[a-f0-9-]{36}$/);
     expect(headers["x-content-type-options"]).toBe("nosniff");
     expect(headers["cache-control"]).toBe("no-store");
     expect(headers["content-security-policy"]).toBe("default-src 'none'; frame-ancestors 'none'");

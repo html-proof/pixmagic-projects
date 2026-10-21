@@ -2,6 +2,8 @@
 import Link from "next/link";
 import { useEffect, useState, type ReactNode } from "react";
 import { useApp, canManage, StoresPending } from "@/components/AppContext";
+import { ErrorNotice } from "@/components/ErrorNotice";
+import { LoadError } from "@/components/LoadError";
 import { EmptyState, Alert } from "@/components/ui";
 import { StoreHeader, type LiveState } from "@/components/dashboard/StoreHeader";
 import { DateRangeBar, useDateRange } from "@/components/dashboard/DateRange";
@@ -187,7 +189,7 @@ export default function DashboardPage() {
   // an import running and relaxes again as soon as that import reports it is done.
   const [everySec, setEverySec] = useState(LIVE_EVERY_SEC);
   const path = store && asking ? `/workspaces/${workspace.id}/stores/${store.id}/overview?${asking.qs}` : null;
-  const { data, dataPath, error, loading, checkedAt, failing } = useLiveApi<Overview>(path, everySec * 1000);
+  const { data, dataPath, error, loading, checkedAt, failing, reload } = useLiveApi<Overview>(path, everySec * 1000);
   const syncState = data?.store?.status;
   const adsFetching = !!data && [...(data.modules.ads?.accounts ?? []), ...(data.modules.adsense?.accounts ?? [])].some((a) => a.status === "active" && !a.lastSyncedAt);
   useEffect(() => {
@@ -299,11 +301,11 @@ export default function DashboardPage() {
         <StoreHeader key={headerStore.id} store={headerStore} data={ov?.data} live={live} everySec={everySec} />
       )}
 
-      <DateRangeBar r={dates} shown={ov && { range: ov.range, previous: ov.previous, timezone: ov.store.timezone }} />
+      <div id="dashboard-filters" tabIndex={-1}><DateRangeBar r={dates} shown={ov && { range: ov.range, previous: ov.previous, timezone: ov.store.timezone }} /></div>
 
       {adsNotice && <Alert kind="success">{adsNotice}</Alert>}
 
-      {error && !ov && <Alert kind={isTransient(error) ? "info" : "error"}>{friendlyError(error)}</Alert>}
+      {error && !ov && <LoadError what="your dashboard" error={error} onRetry={() => void reload()} busy={loading} />}
       {error && ov && olderAnswer && (
         <Alert kind={isTransient(error) ? "info" : "error"}>
           Couldn&apos;t load {asking?.label}, so the numbers below are still for {fmtRange(ov.range.from, ov.range.to)}. {friendlyError(error)}
@@ -317,7 +319,7 @@ export default function DashboardPage() {
       )}
       {ov && ov.store.status === "syncing" && <Alert kind="info">We&apos;re still importing your history. Numbers will fill in over the next few minutes; this page updates by itself.</Alert>}
       {ov && ov.store.status === "error" && (
-        <Alert>
+        <ErrorNotice kind="sync" title="Data sync failed">
           {/* What `autoRefresh` actually does: the failed *job* is given up on, but the store is
               re-seeded once every 30 minutes — from this page's own poll, for the store being
               looked at. Saying "it will not clear on its own" was true of neither half, and sent
@@ -357,11 +359,11 @@ export default function DashboardPage() {
               )}
             </>
           )}
-        </Alert>
+        </ErrorNotice>
       )}
 
       {ov && !ov.hasData && ov.store.status !== "syncing" && s && (
-        <EmptyState title="No orders in this period" body="Try a longer date range. New orders show up here within a minute of being placed." />
+        <EmptyState title="No data available" body="No orders match the selected date range. Try a longer period to see your store’s activity." action={<button type="button" className="btn-primary mt-2" onClick={() => { const filters = document.getElementById("dashboard-filters"); filters?.scrollIntoView({ block: "center" }); filters?.querySelector<HTMLElement>("button, select, input")?.focus(); }}>Adjust filters</button>} />
       )}
 
       {/* The main page says each thing once: one sentence, four numbers, and one list of every

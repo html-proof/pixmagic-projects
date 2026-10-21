@@ -2,9 +2,10 @@
 import { useEffect, useState } from "react";
 import { can } from "@app/shared/roles";
 import { useApp } from "@/components/AppContext";
+import { ErrorState } from "@/components/ErrorState";
 import { Alert } from "@/components/ui";
 import { LoadError } from "@/components/LoadError";
-import { actionError, api, useApi } from "@/lib/api";
+import { actionError, api, ApiError, useApi } from "@/lib/api";
 
 interface Billing {
   /** `plan` is the plan in force; `pendingPlan` a change still awaiting approval in Shopify. */
@@ -16,6 +17,7 @@ export default function BillingPage() {
   const { workspace, store, storesStatus } = useApp();
   const { data, error: loadError, loading, reload } = useApi<Billing>(`/workspaces/${workspace.id}/billing`);
   const [error, setError] = useState<string | null>(null);
+  const [billingFailure, setBillingFailure] = useState<ApiError | null>(null);
   const isOwner = can(workspace.role, "billing:manage");
   // Shopify sends the merchant back here after the approval screen; the plan itself changes when
   // Shopify confirms the charge (a webhook), which can land a few seconds after they arrive.
@@ -28,10 +30,13 @@ export default function BillingPage() {
     // No store yet is only true once the list has loaded; before that we just don't know which one.
     if (!store && storesStatus !== "ready") return setError("Your stores haven't loaded yet. Please try again in a moment.");
     if (!store) return setError("Connect a store first. Plans are billed through your Shopify invoice.");
+    setError(null);
+    setBillingFailure(null);
     try {
       const { confirmationUrl } = await api<{ confirmationUrl: string }>(`/workspaces/${workspace.id}/billing/subscribe`, { method: "POST", body: { plan, storeId: store.id } });
       window.location.assign(confirmationUrl);
     } catch (e) {
+      if (e instanceof ApiError && (e.code === "billing_error" || e.status === 402)) { setBillingFailure(e); return; }
       setError(actionError(e, "start the plan change"));
     }
   }
@@ -47,6 +52,7 @@ export default function BillingPage() {
           {sub && sub.status !== "active" ? ` (${sub.status})` : ""}. Charges appear on the Shopify bill of the selected store.
         </p>
       )}
+      {(billingFailure || (sub && ["declined", "frozen", "past_due"].includes(sub.status))) && <ErrorState kind="payment" correlationId={billingFailure?.correlationId} onRetry={() => { void reload().then((ok) => { if (ok) setBillingFailure(null); }); }} retryLabel="Check billing status" busy={loading} />}
       {sub?.pendingPlan && (
         <Alert kind="info">
           {returned

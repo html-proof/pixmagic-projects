@@ -1,4 +1,5 @@
 "use client";
+import { ValidatedInput } from "@/components/FieldError";
 import { useState, type FormEvent } from "react";
 import { sendPasswordResetEmail } from "firebase/auth";
 import { useApp } from "@/components/AppContext";
@@ -39,7 +40,7 @@ export default function ProfilePage() {
         </div>
         <div>
           <label className="label" htmlFor="name">Display name</label>
-          <input id="name" className="input" value={name} maxLength={80} onChange={(e) => setName(e.target.value)} />
+          <ValidatedInput id="name" className="input" value={name} maxLength={80} onChange={(e) => setName(e.target.value)} />
         </div>
         <div>
           <label className="label" htmlFor="tz">Your time zone</label>

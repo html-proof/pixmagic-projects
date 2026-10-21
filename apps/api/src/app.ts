@@ -49,6 +49,7 @@ export function buildApp(deps: Deps): App {
   const app = new Hono<AppEnv>();
 
   app.use("*", async (c, next) => {
+    c.header("x-request-id", crypto.randomUUID());
     await next();
     for (const [name, value] of Object.entries(API_HEADERS)) {
       if (!c.res.headers.has(name)) c.res.headers.set(name, value);
@@ -98,7 +99,7 @@ export function buildApp(deps: Deps): App {
     if (err instanceof ZodError) {
       return c.json({ error: "validation", message: err.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ") }, 400);
     }
-    logger.error({ err, path: c.req.path }, "unhandled error");
+    logger.error({ err, requestId: c.res.headers.get("x-request-id"), path: c.req.path }, "unhandled error");
     return c.json({ error: "internal", message: "Something went wrong" }, 500);
   });
 

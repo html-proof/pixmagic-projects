@@ -1,5 +1,6 @@
 "use client";
 import Link from "next/link";
+import { ValidatedInput } from "@/components/FieldError";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { createUserWithEmailAndPassword, sendEmailVerification, updateProfile, type User } from "firebase/auth";
@@ -106,15 +107,15 @@ export default function SignupPage() {
       <form onSubmit={onSubmit} className="space-y-3" noValidate>
         <div>
           <label className="label" htmlFor="name">Your name</label>
-          <input id="name" className="input" autoComplete="name" required maxLength={NAME_MAX} value={name} onChange={(e) => setName(e.target.value)} />
+          <ValidatedInput id="name" className="input" autoComplete="name" required maxLength={NAME_MAX} value={name} onChange={(e) => setName(e.target.value)} />
         </div>
         <div>
           <label className="label" htmlFor="email">Email</label>
-          <input id="email" className="input" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
+          <ValidatedInput id="email" className="input" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
         </div>
         <div>
           <label className="label" htmlFor="password">Password</label>
-          <input id="password" className="input" type="password" autoComplete="new-password" minLength={PASSWORD_MIN} required value={password} onChange={(e) => setPassword(e.target.value)} />
+          <ValidatedInput id="password" className="input" type="password" autoComplete="new-password" minLength={PASSWORD_MIN} required value={password} onChange={(e) => setPassword(e.target.value)} />
           <p className="mt-1 text-xs text-muted">At least {PASSWORD_MIN} characters.</p>
         </div>
         <button className="btn-primary w-full" disabled={busy}>{busy ? "Creating your account…" : "Create account"}</button>

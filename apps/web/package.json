@@ -7,8 +7,9 @@
     "dev": "next dev -p 3001",
     "build": "next build && node scripts/fix-export-prefetch.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "echo 'web: see e2e'",
-    "e2e": "playwright test"
+    "test": "node --test test/*.test.mjs",
+    "e2e": "playwright test",
+    "test:errors-ui": "playwright test --config playwright.errors.config.ts"
   },
   "dependencies": {
     "@app/shared": "workspace:*",

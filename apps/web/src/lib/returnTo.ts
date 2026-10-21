@@ -30,7 +30,7 @@ export function setReturnTo(path: string) {
  */
 export function signInAndReturn(router: { replace(href: string): void }) {
   setReturnTo(window.location.pathname + window.location.search);
-  router.replace("/login");
+  router.replace("/login?reason=session_expired");
 }
 
 /** The pending path, consumed; null when there is none or it has expired. */

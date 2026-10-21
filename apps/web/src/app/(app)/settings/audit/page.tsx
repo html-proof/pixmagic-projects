@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { canManage, useApp } from "@/components/AppContext";
+import { ErrorState } from "@/components/ErrorState";
 import { Alert } from "@/components/ui";
 import { friendlyError, api } from "@/lib/api";
 
@@ -65,7 +66,7 @@ export default function AuditPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspace.id, allowed]);
 
-  if (!allowed) return <Alert kind="info">Only owners and admins can view the audit log.</Alert>;
+  if (!allowed) return <ErrorState kind="forbidden" />;
   return (
     <section className="card space-y-3">
       <h1 className="text-lg font-semibold">Audit log</h1>

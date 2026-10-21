@@ -1,4 +1,5 @@
 "use client";
+import { ValidatedInput } from "@/components/FieldError";
 import { useState, type FormEvent } from "react";
 import { can, ROLES } from "@app/shared/roles";
 import { useApp } from "@/components/AppContext";
@@ -94,7 +95,7 @@ export default function MembersPage() {
       </ul>
       {manage && (
         <form onSubmit={invite} className="flex flex-wrap gap-2">
-          <input aria-label="Email to invite" className="input flex-1" type="email" required placeholder="teammate@company.com" value={email} onChange={(e) => setEmail(e.target.value)} />
+          <div className="min-w-0 flex-1"><ValidatedInput id="invitation-email" aria-label="Email to invite" className="input flex-1" type="email" required placeholder="teammate@company.com" value={email} onChange={(e) => setEmail(e.target.value)} /></div>
           <select aria-label="Role" className="input w-auto" value={role} onChange={(e) => setRole(e.target.value)}>
             {["admin", "analyst", "viewer"].map((r) => <option key={r}>{r}</option>)}
           </select>

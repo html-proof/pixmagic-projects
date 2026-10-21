@@ -1,4 +1,5 @@
 "use client";
+import { ValidatedInput } from "@/components/FieldError";
 import { useEffect, useState, type FormEvent } from "react";
 import { canManage, useApp } from "@/components/AppContext";
 import { Alert } from "@/components/ui";
@@ -53,7 +54,7 @@ export default function WorkspacePage() {
         {msg && <Alert kind="info">{msg}</Alert>}
         <form onSubmit={rename} className="space-y-3">
           <label className="label" htmlFor="ws-name">Name</label>
-          <input id="ws-name" className="input" disabled={!editable} value={name} onChange={(e) => setName(e.target.value)} />
+          <ValidatedInput id="ws-name" className="input" disabled={!editable} value={name} onChange={(e) => setName(e.target.value)} />
           {editable && <button className="btn-primary">Save</button>}
         </form>
         <p className="text-sm text-muted">Your role here: {workspace.role}. You belong to {me.workspaces.length} workspace(s).</p>
@@ -62,7 +63,7 @@ export default function WorkspacePage() {
         <h2 className="font-semibold">Create another workspace</h2>
         <p className="text-sm text-muted">Workspaces are fully separate: stores, members and data never mix.</p>
         <form onSubmit={create} className="flex gap-2">
-          <input aria-label="New workspace name" className="input" required value={newName} onChange={(e) => setNewName(e.target.value)} />
+          <div className="min-w-0 flex-1"><ValidatedInput id="new-workspace-name" aria-label="New workspace name" className="input" required value={newName} onChange={(e) => setNewName(e.target.value)} /></div>
           <button className="btn-secondary">Create</button>
         </form>
       </section>

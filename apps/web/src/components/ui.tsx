@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
+import { StateIllustration } from "@/components/StateIllustration";
 
 export function AuthShell({ title, subtitle, children }: { title: string; subtitle?: string; children: ReactNode }) {
   return (
@@ -32,9 +33,10 @@ export function Alert({ kind = "error", children }: { kind?: "error" | "info" | 
 
 export function EmptyState({ title, body, action }: { title: string; body: string; action?: ReactNode }) {
   return (
-    <div className="card flex flex-col items-start gap-2 border-dashed">
-      <h3 className="font-medium">{title}</h3>
-      <p className="text-sm text-muted">{body}</p>
+    <div role="status" className="card flex flex-col items-center gap-3 px-5 py-10 text-center sm:py-14">
+      <StateIllustration kind="empty" />
+      <h3 className="text-xl font-semibold">{title}</h3>
+      <p className="max-w-md text-sm leading-relaxed text-muted">{body}</p>
       {action}
     </div>
   );

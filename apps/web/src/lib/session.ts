@@ -1,6 +1,6 @@
 "use client";
 import type { User } from "firebase/auth";
-import { api } from "./api";
+import { api, friendlyError } from "./api";
 import { takeReturnTo } from "./returnTo";
 
 /**
@@ -57,5 +57,5 @@ export const authErrorMessage = (e: unknown): string => {
     console.error("[auth]", code, e);
     return "Something went wrong signing you in. Please try again.";
   }
-  return (e as Error)?.message || "Something went wrong.";
+  return friendlyError(e);
 };

@@ -2,6 +2,7 @@
 import { useState, type FormEvent } from "react";
 import { can } from "@app/shared/roles";
 import { useApp } from "@/components/AppContext";
+import { ErrorState } from "@/components/ErrorState";
 import { Alert, EmptyState } from "@/components/ui";
 import { actionError, api, ApiError, useApi } from "@/lib/api";
 
@@ -15,7 +16,7 @@ export default function ApiKeysPage() {
   const [secret, setSecret] = useState<string | null>(null);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
 
-  if (!allowed) return <Alert kind="info">Only owners and admins can manage API keys.</Alert>;
+  if (!allowed) return <ErrorState kind="forbidden" />;
 
   async function create(e: FormEvent) {
     e.preventDefault();

@@ -93,7 +93,7 @@ function platformStatus(configured: boolean, mine: Connection[]): { tone: Tone; 
 function StatusLine({ c }: { c: Connection }) {
   if (!c.enabled) return <span className="text-muted">Hidden from the dashboard</span>;
   if (c.status === "reconnect") return <span className="text-danger">Access has ended. Press Reconnect to keep the numbers coming.</span>;
-  if (c.status === "error") return <span className="text-warn">The last update didn&apos;t work{c.lastError ? `: ${c.lastError}` : ""}. We&apos;ll keep trying.</span>;
+  if (c.status === "error") return <span className="text-warn">The last update didn&apos;t work. We&apos;ll keep trying.</span>;
   if (!c.lastSyncedAt) return <span className="text-muted">Syncing: fetching the last 90 days…</span>;
   const left = c.provider === "meta" ? daysUntil(c.accessExpiresAt) : null;
   return (

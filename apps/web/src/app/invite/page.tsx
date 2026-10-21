@@ -1,9 +1,10 @@
 "use client";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
-import { actionError, api, isSignedOut } from "@/lib/api";
+import { actionError, api, ApiError, isSignedOut } from "@/lib/api";
 import { setReturnTo } from "@/lib/returnTo";
 import { WORKSPACE_KEY, writeLocal } from "@/lib/storage";
+import { ErrorState } from "@/components/ErrorState";
 import { Alert, AuthShell } from "@/components/ui";
 
 function Invite() {
@@ -11,6 +12,8 @@ function Invite() {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
 
+  const [reference, setReference] = useState<string | undefined>();
+  const [expired, setExpired] = useState(false);
   const [busy, setBusy] = useState(false);
 
   async function accept() {
@@ -29,10 +32,13 @@ function Invite() {
         router.push("/login");
         return;
       }
+      if (e instanceof ApiError && e.code === "invalid_invite") { setExpired(true); setReference(e.correlationId); }
       setError(actionError(e, "accept the invitation"));
       setBusy(false);
     }
   }
+
+  if (!token || expired) return <main className="px-4"><ErrorState kind="invite" correlationId={reference} fullPage /></main>;
 
   return (
     <AuthShell title="Join workspace" subtitle="Sign in with the email address the invitation was sent to, then accept.">

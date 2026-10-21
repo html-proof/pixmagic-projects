@@ -1,0 +1,98 @@
+import { expect, test } from "@playwright/test";
+
+test.beforeEach(async ({ page }) => {
+  await page.route("**/api/auth/whoami", (route) => route.fulfill({ status: 401, contentType: "application/json", body: JSON.stringify({ error: "unauthorized" }) }));
+});
+
+test("missing invitation has an actionable dedicated state", async ({ page }) => {
+  await page.goto("/invite");
+  await expect(page.getByRole("heading", { name: "Invitation link expired" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Contact support" })).toHaveAttribute("href", "/support");
+  await expect(page.getByRole("button", { name: "Accept invitation" })).toHaveCount(0);
+});
+
+test("session recovery explains why sign-in is needed", async ({ page }) => {
+  await page.goto("/login?reason=session_expired");
+  await expect(page.getByRole("status")).toContainText("Session expired");
+});
+
+test("invalid fields are associated with inline validation messages", async ({ page }) => {
+  await page.goto("/login");
+  await page.getByRole("button", { name: "Log in", exact: true }).click();
+  const email = page.getByLabel("Email", { exact: true });
+  await expect(email).toHaveAttribute("aria-invalid", "true");
+  await expect(page.locator("#email-error")).toHaveText("This field is required.");
+  await email.fill("merchant@example.com");
+  await expect(email).not.toHaveAttribute("aria-invalid");
+});
+
+test("offline banner clears when connectivity returns on mobile", async ({ page, context }) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.goto("/login");
+  await context.setOffline(true);
+  await expect(page.getByRole("status").filter({ hasText: "Connection lost" })).toBeVisible();
+  await context.setOffline(false);
+  await expect(page.getByText("Connection lost", { exact: true })).toHaveCount(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+});
+
+for (const [status, title] of [[403, "Access denied"], [500, "Something went wrong"], [503, "Service temporarily unavailable"]] as const) {
+  test(`API ${status} keeps its meaning and shows a safe support reference`, async ({ page }) => {
+    await page.route("**/api/me", (route) => route.fulfill({ status, contentType: "application/json", headers: { "x-request-id": "test-ref-123" }, body: JSON.stringify({ error: "failure", message: "private-database-password" }) }));
+    await page.goto("/dashboard");
+    await expect(page.getByRole("heading", { name: title, exact: true })).toBeVisible();
+    await expect(page.getByText("Support reference: test-ref-123")).toBeVisible();
+    await expect(page.getByText("private-database-password")).toHaveCount(0);
+    await expect(page).toHaveURL(/dashboard/);
+    if (status === 403) {
+      await expect(page.getByRole("link", { name: "Return to dashboard" })).toBeVisible();
+      await page.screenshot({ path: test.info().outputPath("access-desktop.png") });
+      await page.setViewportSize({ width: 375, height: 812 });
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      await page.screenshot({ path: test.info().outputPath("access-mobile.png") });
+    }
+    if (status >= 500) await expect(page.getByRole("button", { name: "Try again" })).toBeVisible();
+  });
+}
+
+test("unknown paths keep the 404 status and dashboard recovery", async ({ page }) => {
+  const response = await page.goto("/this-page-does-not-exist");
+  expect(response?.status()).toBe(404);
+  await expect(page.getByRole("heading", { name: "Page Not Found" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Go to Dashboard", exact: true })).toHaveAttribute("href", "/dashboard");
+});
+
+test("an expired invitation response opens the illustrated recovery page", async ({ page }) => {
+  await page.route("**/api/invitations/accept", (route) => route.fulfill({ status: 400, contentType: "application/json", body: JSON.stringify({ error: "invalid_invite", message: "private token details" }) }));
+  await page.goto("/invite?token=expired-invitation-example");
+  await page.getByRole("button", { name: "Accept invitation" }).click();
+  await expect(page.getByRole("heading", { name: "Invitation link expired" })).toBeVisible();
+  await expect(page.getByText("private token details")).toHaveCount(0);
+});
+
+test("billing failure offers status recovery without submitting a second charge", async ({ page }) => {
+  const json = (body: unknown) => ({ contentType: "application/json", body: JSON.stringify(body) });
+  await page.route("**/api/me", (route) => route.fulfill(json({ user: { id: "u", email: "owner@example.com", emailVerified: true, displayName: "Owner", timezone: "UTC" }, workspaces: [{ id: "ws", name: "Demo", role: "owner" }] })));
+  await page.route("**/api/workspaces/ws/stores", (route) => route.fulfill(json({ stores: [{ id: "store", name: "Demo store", shopDomain: "demo.myshopify.com", status: "active", timezone: "UTC", currency: "USD", grantedScopes: [], revocableScopes: [], pixelInstalled: true, lastSyncedAt: null }] })));
+  await page.route("**/api/workspaces/ws/billing", (route) => route.fulfill(json({ subscription: { plan: "free", status: "active" }, plans: [{ id: "pro", name: "Pro", priceUsd: 29, features: [] }] })));
+  let submissions = 0;
+  await page.route("**/api/workspaces/ws/billing/subscribe", (route) => { submissions++; return route.fulfill({ status: 400, ...json({ error: "billing_error", message: "private payment details" }) }); });
+  await page.goto("/settings/billing");
+  await page.getByRole("button", { name: "Choose Pro" }).click();
+  await expect(page.getByRole("heading", { name: "Payment failed" })).toBeVisible();
+  await expect(page.getByText("private payment details")).toHaveCount(0);
+  await page.screenshot({ path: test.info().outputPath("payment-recovery.png") });
+  await page.getByRole("button", { name: "Check billing status" }).click();
+  await expect(page.getByRole("heading", { name: "Payment failed" })).toHaveCount(0);
+  expect(submissions).toBe(1);
+});
+
+test("retrying a service outage requests the page again", async ({ page }) => {
+  let unavailable = true;
+  await page.route("**/api/me", (route) => { return route.fulfill({ status: unavailable ? 503 : 403, contentType: "application/json", body: "{}" }); });
+  await page.goto("/dashboard");
+  await expect(page.getByRole("heading", { name: "Service temporarily unavailable" })).toBeVisible();
+  unavailable = false;
+  await page.getByRole("button", { name: "Try again" }).click();
+  await expect(page.getByRole("heading", { name: "Access denied" })).toBeVisible();
+});

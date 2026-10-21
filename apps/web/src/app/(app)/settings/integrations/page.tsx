@@ -6,6 +6,7 @@ import { GoogleIcon, MetaIcon } from "@/components/BrandIcons";
 import { ShopifyIcon } from "@/components/ShopifyIcon";
 import { fmtRelative } from "@/components/dashboard/format";
 import { Badge, type Tone } from "@/components/dashboard/Primitives";
+import { StateIllustration } from "@/components/StateIllustration";
 import { Alert } from "@/components/ui";
 import { EmbeddedSignup } from "@/components/whatsapp/EmbeddedSignup";
 import { WhatsappIcon } from "@/components/whatsapp/Common";
@@ -122,6 +123,10 @@ function Card({
         </div>
         <Badge tone={s.tone}>{s.label}</Badge>
       </div>
+      {state === "permission_expired" && <div role="status" className="flex flex-col items-center gap-3 rounded-xl border border-border bg-bg px-4 py-3 sm:flex-row">
+        <StateIllustration kind="integration" compact />
+        <div><h3 className="font-semibold">Integration disconnected</h3><p className="mt-1 text-sm text-muted">{name} access has expired or been revoked. Reconnect your account to resume updates.</p></div>
+      </div>}
       {children && <div className="text-sm">{children}</div>}
       {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
     </section>
@@ -247,7 +252,7 @@ export default function IntegrationsPage() {
             <>
               {manage && ads.data.configured[p] && (
                 <button type="button" className={conns.length ? "btn-secondary" : "btn-primary"} onClick={() => void connectAds(p)} disabled={!!leaving} data-testid={`int-${p}-connect`}>
-                  <P.Icon size={16} /> {leaving === p ? (conns.length ? "Reconnecting…" : P.opening) : conns.length ? "Reconnect or add accounts" : P.button}
+                  <P.Icon size={16} /> {leaving === p ? (conns.length ? "Reconnecting…" : P.opening) : state === "permission_expired" ? "Reconnect account" : conns.length ? "Reconnect or add accounts" : P.button}
                 </button>
               )}
               {conns.length > 0 && (
@@ -286,7 +291,7 @@ export default function IntegrationsPage() {
                   state === "permission_expired"
                     ? `${P.name} access ended: reconnect`
                     : state === "failed"
-                      ? (conns.find((c) => c.status === "error")?.lastError ?? "The last update didn't work")
+                      ? "The last update failed. Open Manage to check your connection."
                       : soonest !== undefined && soonest <= 14
                         ? `Access ends in ${soonest} day${soonest === 1 ? "" : "s"}: reconnect to keep it`
                         : P.access,
@@ -401,7 +406,7 @@ export default function IntegrationsPage() {
                         : waState === "permission_expired"
                           ? "Meta access ended: reconnect"
                           : waState === "failed"
-                            ? (waConn.lastError ?? "Meta reported a problem")
+                            ? "The last update failed. Open Manage to check your connection."
                             : `Working · quality ${quality(waConn.qualityRating).toLowerCase()} · ${tier(waConn.messagingLimitTier)}`,
                   ],
                 ]}

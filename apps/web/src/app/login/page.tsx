@@ -1,5 +1,6 @@
 "use client";
 import Link from "next/link";
+import { ValidatedInput } from "@/components/FieldError";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { signInWithCustomToken, signInWithEmailAndPassword } from "firebase/auth";
@@ -8,6 +9,7 @@ import { api, isTransient, keepRetrying } from "@/lib/api";
 import { afterSignIn, authErrorMessage, establishSession } from "@/lib/session";
 import { emailLinkCode, linkEmail, rememberLinkEmail, signInWithEmailLinkCode } from "@/lib/emailLink";
 import { Alert, AuthShell, Divider } from "@/components/ui";
+import { StateIllustration } from "@/components/StateIllustration";
 import { SocialButtons } from "@/components/SocialButtons";
 
 export default function LoginPage() {
@@ -24,6 +26,13 @@ export default function LoginPage() {
   const linkStarted = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+  const [sessionExpired, setSessionExpired] = useState(false);
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("reason") === "session_expired") {
+      setSessionExpired(true);
+      setInfo("Session expired. Sign in again to continue where you left off.");
+    }
+  }, []);
   const [busy, setBusy] = useState(false);
 
   async function run(fn: () => Promise<void>) {
@@ -138,7 +147,8 @@ export default function LoginPage() {
   };
 
   return (
-    <AuthShell title="Log in" subtitle="Welcome back. Log in to see your store's numbers.">
+    <AuthShell title={sessionExpired ? "Session expired" : "Log in"} subtitle={sessionExpired ? "Sign in again to securely return to your workspace." : "Welcome back. Log in to see your store's numbers."}>
+      {sessionExpired && <div className="flex justify-center rounded-xl border border-border bg-surface py-3"><StateIllustration kind="session" compact /></div>}
       <SocialButtons />
       <Divider label="or with your email" />
       <div className="flex gap-2 text-sm" role="tablist">
@@ -157,7 +167,7 @@ export default function LoginPage() {
           <p className="text-sm">{busy ? "Signing you in…" : "Confirm the email address the sign-in link was sent to."}</p>
           <div>
             <label className="label" htmlFor="link-email">Email</label>
-            <input id="link-email" className="input" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
+            <ValidatedInput id="link-email" className="input" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
           </div>
           <button className="btn-primary w-full" disabled={busy}>Log in</button>
         </form>
@@ -165,11 +175,11 @@ export default function LoginPage() {
         <form onSubmit={onPassword} className="space-y-3">
           <div>
             <label className="label" htmlFor="email">Email</label>
-            <input id="email" className="input" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
+            <ValidatedInput id="email" className="input" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
           </div>
           <div>
             <label className="label" htmlFor="password">Password</label>
-            <input id="password" className="input" type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} />
+            <ValidatedInput id="password" className="input" type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} />
           </div>
           <button className="btn-primary w-full" disabled={busy}>{busy ? "Logging in…" : "Log in"}</button>
           <Link href="/reset" className="block text-sm text-muted underline">Forgot your password?</Link>
@@ -178,7 +188,7 @@ export default function LoginPage() {
         <form onSubmit={sendCode} className="space-y-3">
           <div>
             <label className="label" htmlFor="otp-email">Email</label>
-            <input id="otp-email" className="input" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
+            <ValidatedInput id="otp-email" className="input" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
           </div>
           <button className="btn-primary w-full" disabled={busy}>Send me a code</button>
         </form>
@@ -192,7 +202,7 @@ export default function LoginPage() {
         <form onSubmit={verifyCode} className="space-y-3">
           <div>
             <label className="label" htmlFor="otp">6-digit code</label>
-            <input id="otp" className="input tracking-[0.5em]" inputMode="numeric" autoComplete="one-time-code" pattern="\d{6}" maxLength={6} required value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))} />
+            <ValidatedInput id="otp" className="input tracking-[0.5em]" inputMode="numeric" autoComplete="one-time-code" pattern="\d{6}" maxLength={6} required value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))} />
           </div>
           <button className="btn-primary w-full" disabled={busy || code.length !== 6}>Verify and sign in</button>
           <button type="button" className="text-sm text-muted underline" onClick={() => sendCode()} disabled={busy}>Send a new code</button>

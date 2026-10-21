@@ -34,9 +34,11 @@ export function keepRetrying(attempt: () => Promise<boolean>): () => void {
     stopped = true;
     window.clearTimeout(timer);
     window.removeEventListener("online", wake);
+    window.removeEventListener("insights:retry", wake);
     document.removeEventListener("visibilitychange", wake);
   }
   window.addEventListener("online", wake);
+  window.addEventListener("insights:retry", wake);
   document.addEventListener("visibilitychange", wake);
   timer = window.setTimeout(run, RETRY_BACKOFF_MS[tries++]);
   return stop;
@@ -168,11 +170,15 @@ export function useLiveApi<T>(path: string | null, intervalMs: number) {
     };
     const timer = window.setInterval(tick, intervalMs);
     document.addEventListener("visibilitychange", tick);
+    window.addEventListener("online", tick);
+    window.addEventListener("insights:retry", tick);
     return () => {
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", tick);
+      window.removeEventListener("online", tick);
+      window.removeEventListener("insights:retry", tick);
     };
   }, [path, intervalMs, check]);
 
-  return { data: answer?.value ?? null, dataPath: answer?.path ?? null, error, loading, checkedAt, failing };
+  return { data: answer?.value ?? null, dataPath: answer?.path ?? null, error, loading, checkedAt, failing, reload: () => check(true) };
 }
