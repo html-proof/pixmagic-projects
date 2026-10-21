@@ -6,7 +6,7 @@ import { Panel } from "./Primitives";
 import type { Overview, ProductPerformance } from "./types";
 
 export function TopProducts({ ov, currency }: { ov: Overview; currency: string }) {
-  const { workspace } = useApp();
+  const { workspace, allowed } = useApp();
   const [sort, setSort] = useState("units");
   const [direction, setDirection] = useState("desc");
   const [search, setSearch] = useState("");
@@ -23,6 +23,7 @@ export function TopProducts({ ov, currency }: { ov: Overview; currency: string }
   const money = (n: number) => fmtMoney(n, currency);
   const synchronizedAt = ov.freshness?.asOf ?? report?.lastSyncedAt;
   const csv = () => {
+    if (!allowed("reports.export")) return;
     const values = [["Rank", "Product ID", "Product", "SKU", "Net units", "Gross units", "Returned units", "Gross sales", "Discounts", "Returns and adjustments", "Net revenue", "Orders", "Growth %", "Trend", "Last sold"],
       ...items.map(p => [p.rank, p.productId, p.title, p.sku, p.units, p.grossUnits, p.returnedUnits, p.grossSales, p.discounts, p.returns, p.revenue, p.orders, p.growth, p.trend, p.lastSold])];
     const text = values.map(row => row.map(v => `"${(typeof v === "string" && /^\s*[=+\-@\t\r]/.test(v) ? "'" + v : String(v ?? "")).replaceAll('"', '""')}"`).join(",")).join("\r\n");
@@ -36,7 +37,7 @@ export function TopProducts({ ov, currency }: { ov: Overview; currency: string }
       </select></label>
       <label>Order <select aria-label="Order" value={direction} onChange={e => { setDirection(e.target.value); setPage(1); }}><option value="desc">Highest first</option><option value="asc">Lowest first</option></select></label>
       <label>Search <input className="rounded border bg-surface p-2" aria-label="Search" value={search} onChange={e => { setSearch(e.target.value); setPage(1); }} placeholder="Product, SKU or ID" /></label>
-      <button className="rounded border px-3" disabled={!items.length} onClick={csv}>Export CSV</button>
+      {allowed("reports.export") && <button className="rounded border px-3" disabled={!items.length} onClick={csv}>Export CSV</button>}
     </div>
     {error && <p role="alert">Product sales could not be loaded: {error.message}</p>}
     {failing && report && <p role="status">Refresh is delayed. Showing the last successful response.</p>}
