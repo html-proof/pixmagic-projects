@@ -1,11 +1,21 @@
 import { Prisma, systemDb, type Store } from "@app/db";
 import { expandScopes, hmacSha256Hex, localDay } from "@app/shared";
 import { env } from "./env.js";
-import type { NormalizedOrder, NormalizedProduct, NormalizedSale, NormalizedVariant } from "./normalize.js";
+import type { NormalizedLineItem, NormalizedOrder, NormalizedProduct, NormalizedSale, NormalizedVariant } from "./normalize.js";
 import { revokeAdAccessIfUnused } from "./adConnections.js";
 import type { FetchLike } from "./shopify.js";
 
 type StoreCtx = Pick<Store, "id" | "workspaceId" | "timezone" | "grantedScopes">;
+
+const historicalLineSelect = { shopifyId: true, productShopifyId: true, variantShopifyId: true, sku: true, title: true } as const;
+type HistoricalLine = Pick<NormalizedLineItem, "productShopifyId" | "variantShopifyId" | "sku" | "title">;
+
+/** Deleted products/variants become null in GraphQL; keep identities already learned for this line. */
+function retainLineHistory(line: NormalizedLineItem, before?: HistoricalLine): NormalizedLineItem {
+  return { ...line, productShopifyId: line.productShopifyId ?? before?.productShopifyId ?? null,
+    variantShopifyId: line.variantShopifyId ?? before?.variantShopifyId ?? null,
+    sku: line.sku ?? before?.sku ?? null, title: line.title.trim() ? line.title : before?.title ?? "" };
+}
 
 /**
  * Customers are never stored; only a keyed hash scoped to the store, and only
@@ -103,10 +113,14 @@ export async function upsertOrder(store: StoreCtx, o: NormalizedOrder): Promise<
       create: { ...data, workspaceId: store.workspaceId, storeId: store.id, shopifyId: o.shopifyId },
       update: data,
     });
+    const previousLines = current ? await tx.orderLineItem.findMany({
+      where: { workspaceId: store.workspaceId, storeId: store.id, orderId: order.id }, select: historicalLineSelect,
+    }) : [];
+    const previousById = new Map(previousLines.map(line => [line.shopifyId, line]));
     await tx.orderLineItem.deleteMany({ where: { orderId: order.id } });
     if (o.lineItems.length) {
       await tx.orderLineItem.createMany({
-        data: o.lineItems.map((li) => ({
+        data: o.lineItems.map(line => retainLineHistory(line, previousById.get(line.shopifyId))).map((li) => ({
           workspaceId: store.workspaceId,
           storeId: store.id,
           orderId: order.id,
@@ -385,12 +399,16 @@ export async function writeOrderBatch(store: StoreCtx, orders: NormalizedOrder[]
     const idFor = new Map(written.map((w) => [w.shopify_id, w.id]));
     if (!idFor.size) return;
 
+    const previousLines = await tx.orderLineItem.findMany({
+      where: { workspaceId: store.workspaceId, storeId: store.id, orderId: { in: [...idFor.values()] } }, select: historicalLineSelect,
+    });
+    const previousById = new Map(previousLines.map(line => [line.shopifyId, line]));
     await tx.$executeRaw`DELETE FROM order_line_items WHERE order_id = ANY(${[...idFor.values()]}::text[])`;
 
     const items = rows.flatMap((o) => {
       const orderId = idFor.get(o.shopifyId);
       return orderId
-        ? o.lineItems.map((li) => ({
+        ? o.lineItems.map(line => retainLineHistory(line, previousById.get(line.shopifyId))).map((li) => ({
             order_id: orderId,
             shopify_id: li.shopifyId,
             product_shopify_id: li.productShopifyId,

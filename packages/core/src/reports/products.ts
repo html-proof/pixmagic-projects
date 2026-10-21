@@ -61,14 +61,14 @@ export async function productPerformance(tx: Tx, scope: Scope, store: Store, ran
   const data = await importedData(tx, scope, store);
   const previous = resolvePreset("custom", now, store.timezone, range).previous;
   const baseline = comparisonImported(previous, data.historyFrom);
-  const [quality] = await tx.$queryRaw<Array<{ provisional: number; unmatched: number; previous_unverified: number }>>`
+  const [quality] = await tx.$queryRaw<Array<{ provisional: number; unmatched: number; unknown_identity: number; previous_unverified: number }>>`
     WITH checked AS MATERIALIZED (
       -- Bounded unique-key probes avoid a quadratic join plan immediately after a large import,
       -- before PostgreSQL has collected statistics for the new tenant's rows.
       SELECT s.order_id, s.local_day,
         (SELECT o.sales_updated_at IS NULL FROM orders o
          WHERE o.workspace_id = ${ws} AND o.store_id = ${storeId} AND o.id = s.order_id LIMIT 1) AS provisional,
-        (SELECT TRUE FROM order_line_items li
+        (SELECT li.product_shopify_id IS NOT NULL FROM order_line_items li
          WHERE li.workspace_id = ${ws} AND li.store_id = ${storeId} AND li.shopify_id = s.line_item_shopify_id
            AND li.order_id = s.order_id LIMIT 1) AS mapped
       FROM order_sales s
@@ -77,12 +77,13 @@ export async function productPerformance(tx: Tx, scope: Scope, store: Store, ran
     )
     SELECT COUNT(DISTINCT order_id) FILTER (WHERE provisional AND local_day >= ${range.from})::int AS provisional,
       COUNT(*) FILTER (WHERE mapped IS NULL AND local_day >= ${range.from})::int AS unmatched,
-      COUNT(*) FILTER (WHERE (mapped IS NULL OR provisional) AND local_day < ${range.from})::int AS previous_unverified
+      COUNT(*) FILTER (WHERE mapped = FALSE AND local_day >= ${range.from})::int AS unknown_identity,
+      COUNT(*) FILTER (WHERE (mapped IS NOT TRUE OR provisional) AND local_day < ${range.from})::int AS previous_unverified
     FROM checked`;
   const pendingOrders = await tx.order.count({ where: { workspaceId: ws, storeId, localDay: { gte: range.from, lte: range.to }, salesUpdatedAt: null } });
   const pendingBaselineOrders = await tx.order.count({ where: { workspaceId: ws, storeId, localDay: { gte: previous.from, lte: previous.to }, salesUpdatedAt: null } });
   const complete = store.ordersHistoryFrom !== null && data.historyFrom !== null && range.from >= data.historyFrom &&
-    store.status === "active" && pendingOrders === 0 && !quality?.provisional && !quality?.unmatched;
+    store.status === "active" && pendingOrders === 0 && !quality?.provisional && !quality?.unmatched && !quality?.unknown_identity;
   const comparisonComplete = baseline && complete && pendingBaselineOrders === 0 && !quality?.previous_unverified;
   const current = Prisma.sql`s.local_day BETWEEN ${range.from} AND ${range.to}`;
   const before = Prisma.sql`s.local_day BETWEEN ${previous.from} AND ${previous.to} ${previous.until ? Prisma.sql`AND s.happened_at < ${localMoment(previous.to, previous.until, store.timezone)}` : Prisma.empty}`;
@@ -168,5 +169,5 @@ export async function productPerformance(tx: Tx, scope: Scope, store: Store, ran
   const eligible = [...products.values()].filter(p => active.has(p.key) && (!search || [p.title, p.productId, ...p.variants.map(v => v.sku)].some(v => v?.toLowerCase().includes(search))));
   const result = rankProducts(eligible, daysBetweenInclusive(range.from, range.to), comparisonComplete, options);
   return { ...result, items: complete ? result.items.map(p => ({ ...p, variants: products.get(p.key)!.variants })) : [], total: complete ? result.total : 0,
-    complete, baseline: comparisonComplete, pendingOrders, pendingBaselineOrders, unmatchedSales: quality?.unmatched ?? 0, previous, historyFrom: data.historyFrom, lastSyncedAt: store.lastSyncedAt, weights: TREND_WEIGHTS, minimumTrendUnits: MIN_TREND_UNITS };
+    complete, baseline: comparisonComplete, pendingOrders, pendingBaselineOrders, unmatchedSales: quality?.unmatched ?? 0, unknownIdentitySales: quality?.unknown_identity ?? 0, previous, historyFrom: data.historyFrom, lastSyncedAt: store.lastSyncedAt, weights: TREND_WEIGHTS, minimumTrendUnits: MIN_TREND_UNITS };
 }

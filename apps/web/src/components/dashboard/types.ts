@@ -428,7 +428,7 @@ export interface ProductPerformance {
     orders: number; growth: number | null; trend: string; trendScore: number | null; lastSold: string | null;
     variants: Array<{ variantId: string | null; sku: string | null; units: number; revenue: number }>;
   }>;
-  total: number; complete: boolean; baseline: boolean; lastSyncedAt: string | null;
+  total: number; complete: boolean; baseline: boolean; lastSyncedAt: string | null; unknownIdentitySales?: number;
   historyFrom: string | null; previous: { from: string; to: string };
 }
 
