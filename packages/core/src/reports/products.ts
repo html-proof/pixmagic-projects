@@ -62,14 +62,23 @@ export async function productPerformance(tx: Tx, scope: Scope, store: Store, ran
   const previous = resolvePreset("custom", now, store.timezone, range).previous;
   const baseline = comparisonImported(previous, data.historyFrom);
   const [quality] = await tx.$queryRaw<Array<{ provisional: number; unmatched: number; previous_unverified: number }>>`
-    SELECT COUNT(DISTINCT o.id) FILTER (WHERE o.sales_updated_at IS NULL AND s.local_day >= ${range.from})::int AS provisional,
-      COUNT(*) FILTER (WHERE li.id IS NULL AND s.local_day >= ${range.from})::int AS unmatched,
-      COUNT(*) FILTER (WHERE (li.id IS NULL OR o.sales_updated_at IS NULL) AND s.local_day < ${range.from})::int AS previous_unverified
-    FROM order_sales s
-    JOIN orders o ON o.workspace_id = ${ws} AND o.store_id = s.store_id AND o.id = s.order_id
-    LEFT JOIN order_line_items li ON li.workspace_id = ${ws} AND li.store_id = s.store_id AND li.order_id = s.order_id AND li.shopify_id = s.line_item_shopify_id
-    WHERE s.workspace_id = ${ws} AND s.store_id = ${storeId} AND s.line_type = 'product'
-      AND s.local_day BETWEEN ${previous.from} AND ${range.to}`;
+    WITH checked AS MATERIALIZED (
+      -- Bounded unique-key probes avoid a quadratic join plan immediately after a large import,
+      -- before PostgreSQL has collected statistics for the new tenant's rows.
+      SELECT s.order_id, s.local_day,
+        (SELECT o.sales_updated_at IS NULL FROM orders o
+         WHERE o.workspace_id = ${ws} AND o.store_id = ${storeId} AND o.id = s.order_id LIMIT 1) AS provisional,
+        (SELECT TRUE FROM order_line_items li
+         WHERE li.workspace_id = ${ws} AND li.store_id = ${storeId} AND li.shopify_id = s.line_item_shopify_id
+           AND li.order_id = s.order_id LIMIT 1) AS mapped
+      FROM order_sales s
+      WHERE s.workspace_id = ${ws} AND s.store_id = ${storeId} AND s.line_type = 'product'
+        AND s.local_day BETWEEN ${previous.from} AND ${range.to}
+    )
+    SELECT COUNT(DISTINCT order_id) FILTER (WHERE provisional AND local_day >= ${range.from})::int AS provisional,
+      COUNT(*) FILTER (WHERE mapped IS NULL AND local_day >= ${range.from})::int AS unmatched,
+      COUNT(*) FILTER (WHERE (mapped IS NULL OR provisional) AND local_day < ${range.from})::int AS previous_unverified
+    FROM checked`;
   const pendingOrders = await tx.order.count({ where: { workspaceId: ws, storeId, localDay: { gte: range.from, lte: range.to }, salesUpdatedAt: null } });
   const pendingBaselineOrders = await tx.order.count({ where: { workspaceId: ws, storeId, localDay: { gte: previous.from, lte: previous.to }, salesUpdatedAt: null } });
   const complete = store.ordersHistoryFrom !== null && data.historyFrom !== null && range.from >= data.historyFrom &&
@@ -96,8 +105,15 @@ export async function productPerformance(tx: Tx, scope: Scope, store: Store, ran
       COALESCE(SUM(${SALE_UNITS}) FILTER (WHERE ${before}), 0) AS previous_units,
       COALESCE(SUM(${SALE_VALUE}) FILTER (WHERE ${before}), 0)::text AS previous_revenue
     FROM order_sales s
-    JOIN order_line_items li ON li.workspace_id = ${ws} AND li.store_id = s.store_id AND li.order_id = s.order_id AND li.shopify_id = s.line_item_shopify_id
-    LEFT JOIN products p ON p.workspace_id = ${ws} AND p.store_id = s.store_id AND p.shopify_id = li.product_shopify_id
+    JOIN LATERAL (
+      SELECT li.product_shopify_id, li.variant_shopify_id, li.title, li.sku, li.shopify_id
+      FROM order_line_items li WHERE li.workspace_id = ${ws} AND li.store_id = ${storeId}
+        AND li.shopify_id = s.line_item_shopify_id AND li.order_id = s.order_id LIMIT 1
+    ) li ON TRUE
+    LEFT JOIN LATERAL (
+      SELECT p.title, p.image_url, p.collections FROM products p
+      WHERE p.workspace_id = ${ws} AND p.store_id = ${storeId} AND p.shopify_id = li.product_shopify_id LIMIT 1
+    ) p ON TRUE
     WHERE s.workspace_id = ${ws} AND s.store_id = ${storeId} AND s.line_type = 'product'
       AND s.local_day BETWEEN ${previous.from} AND ${range.to}
       ${options.productId ? Prisma.sql`AND li.product_shopify_id = ${options.productId}` : Prisma.empty}
@@ -127,7 +143,11 @@ export async function productPerformance(tx: Tx, scope: Scope, store: Store, ran
   const counts = await tx.$queryRaw<Array<{ key: string; orders: bigint; days: bigint }>>`
     SELECT COALESCE(li.product_shopify_id, 'variant:' || li.variant_shopify_id, 'line:' || li.shopify_id) AS key,
       COUNT(DISTINCT s.order_id) AS orders, COUNT(DISTINCT s.local_day) AS days
-    FROM order_sales s JOIN order_line_items li ON li.workspace_id = ${ws} AND li.store_id = s.store_id AND li.order_id = s.order_id AND li.shopify_id = s.line_item_shopify_id
+    FROM order_sales s JOIN LATERAL (
+      SELECT li.product_shopify_id, li.variant_shopify_id, li.shopify_id
+      FROM order_line_items li WHERE li.workspace_id = ${ws} AND li.store_id = ${storeId}
+        AND li.shopify_id = s.line_item_shopify_id AND li.order_id = s.order_id LIMIT 1
+    ) li ON TRUE
     WHERE s.workspace_id = ${ws} AND s.store_id = ${storeId} AND s.line_type = 'product' AND s.action_type = 'order' AND ${current}
     GROUP BY key`;
   for (const r of counts) { const p = products.get(r.key); if (p) { p.orders = Number(r.orders); p.activeDays = Number(r.days); } }
