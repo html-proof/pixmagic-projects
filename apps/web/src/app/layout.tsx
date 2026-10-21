@@ -1,5 +1,9 @@
 import type { Metadata } from "next";
 import "./globals.css";
+// Next includes the root not-found boundary in every route's Flight data and preloads its CSS.
+// Apply the same scoped module from the layout so that preload is consumed on every route.
+import "./not-found.module.css";
+import { ConnectionStatus } from "@/components/ConnectionStatus";
 
 export const metadata: Metadata = {
   title: "bizinsights for Shopify",
@@ -14,7 +18,7 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body className="min-h-screen antialiased">{children}</body>
+      <body className="min-h-screen antialiased"><ConnectionStatus />{children}</body>
     </html>
   );
 }

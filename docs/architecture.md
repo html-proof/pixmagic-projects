@@ -250,6 +250,26 @@ the migrations produce exactly `schema.prisma`, and that the Lambda package buil
 
 ## Known structural debt
 
+### Frontend transport and recovery
+
+`lib/api.ts` remains the compatibility entry point. HTTP transport, shared-tab session selection,
+permission signals and `ApiError` now live in `lib/apiClient.ts`; React data hooks and polling live
+in `hooks/useApi.ts`; number formatting lives in `lib/format.ts`. Both entry points use the same
+error class. Transport changes must retain auth challenge data, access-fingerprint notifications,
+and suppression of late shared-session sign-outs. Public customer links omit credentials and
+never change merchant permissions or session state.
+
+`ErrorState`, `ErrorNotice` and `PublicLinkError` provide recovery views; the last keeps customers
+on the store's public link. Retry-After hints disable manual retries and delay automatic retries.
+Use `pnpm --filter @app/web test` for transport and recovery tests and
+`pnpm --filter @app/web test:errors-ui` for browser checks independent of Postgres and Cognito.
+
+`pnpm check:boundaries` enforces package dependencies in the seven source trees, including the
+current AWS entry point. It checks static imports, re-exports and literal dynamic imports or
+require calls; computed imports are outside its scope. Frontend code must use browser-safe
+shared subpaths rather than the server barrel. Existing state ownership and the shared health
+grading API remain unchanged.
+
 The planned moves are all done (below, by date); what is left needs a decision or a pass of its own,
 for the reason given on each item. (Done in the 2026-10-14 restructuring:
 dashboard reporting moved to `packages/core/src/reports/`, one cursor-paging helper, dashboard

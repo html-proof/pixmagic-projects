@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { allows, type AccessNeed, type MemberAccess } from "@app/shared/access";
 import { can, type Role } from "@app/shared/roles";
 import type { StaffRole } from "@app/shared/staff";
-import { api, contextHeaders, isSharedTab, isSignedOut, isTransient, keepRetrying, onSessionGone, setSharedTab, signedOutHere } from "@/lib/api";
+import { ApiError, api, contextHeaders, isSharedTab, isSignedOut, isTransient, keepRetrying, onSessionGone, setSharedTab, signedOutHere } from "@/lib/api";
 import { ACCESS_CHANGED_EVENT, onAccessSignal } from "@/lib/access";
 import { offersModule, type AppModule } from "@/lib/features";
 import { LoadError, Unreachable } from "@/components/LoadError";
@@ -199,7 +199,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // without this a deleted or signed-out account would stay on the page until the next reload.
   useEffect(() => onSessionGone(sessionGone), [sessionGone]);
   const meFailing = meError !== null;
-  useEffect(() => (meFailing ? keepRetrying(loadMe) : undefined), [meFailing, loadMe]);
+  useEffect(() => (meFailing ? keepRetrying(loadMe, () => meError instanceof ApiError ? meError.retryAt ?? 0 : 0) : undefined), [meFailing, meError, loadMe]);
 
   const current = me?.workspaces.find((w) => w.id === wsId) ?? null;
   const currentActive = !!current && isActive(current);
@@ -230,7 +230,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (currentActive) void loadStores();
   }, [loadStores, currentActive]);
   const storesRetrying = storesStatus === "error" && isTransient(storesError);
-  useEffect(() => (storesRetrying ? keepRetrying(loadStores) : undefined), [storesRetrying, loadStores]);
+  useEffect(() => (storesRetrying ? keepRetrying(loadStores, () => storesError instanceof ApiError ? storesError.retryAt ?? 0 : 0) : undefined), [storesRetrying, storesError, loadStores]);
 
   // ---- Team & Access: keep this member's permissions current ----
   const fingerprint = useRef<string | undefined>(undefined);

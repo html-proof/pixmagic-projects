@@ -1,40 +1,24 @@
 "use client";
-import Link from "next/link";
-import { friendlyError, isTransient } from "@/lib/api";
-import { Alert } from "@/components/ui";
-import { BrandLogo } from "@/components/Brand";
+import { ApiError } from "@/lib/api";
+import { ErrorNotice } from "@/components/ErrorNotice";
+import { ErrorState } from "@/components/ErrorState";
+import { errorKind, canRetryLoad } from "@/lib/errorKind";
 
 /**
  * A load that failed, why, and a way to ask again. An outage is told calmly (the loads behind these
  * pages retry it on their own); the button is for the merchant who doesn't want to wait.
  */
 export function LoadError({ what, error, onRetry, busy = false }: { what: string; error: unknown; onRetry: () => void; busy?: boolean }) {
-  return (
-    <Alert kind={isTransient(error) ? "info" : "error"}>
-      We couldn&apos;t load {what}. {friendlyError(error)}{" "}
-      <button type="button" className="underline disabled:opacity-50" onClick={onRetry} disabled={busy}>
-        {busy ? "Trying…" : "Try again"}
-      </button>
-    </Alert>
-  );
+  const status = error instanceof ApiError ? error.status : 0;
+  if (status === 0) return <ErrorNotice kind="network" title="Connection lost" action={<button type="button" className="btn-secondary" disabled={busy} onClick={onRetry}>{busy ? "Trying…" : "Try again"}</button>}>We couldn't load {what}. Check your internet connection and try again.</ErrorNotice>;
+  return <ErrorState kind={errorKind(status)} onRetry={canRetryLoad(status) ? onRetry : undefined} busy={busy} retryAt={error instanceof ApiError ? error.retryAt : undefined} correlationId={error instanceof ApiError ? error.correlationId : undefined} retryLabel={status === 409 ? "Reload latest details" : "Try again"} />;
 }
 
 /**
- * The whole page while bizinsights can't be reached and nothing has loaded yet. The session is not
- * gone (only a 401 says that) and the caller keeps retrying, so this waits it out with the merchant
- * instead of sending them to sign in; "Sign in again" is only an escape hatch.
+ * The whole page while Insights can't be reached and nothing has loaded yet. The session is not
+ * gone (only a 401 says that) and the caller keeps retrying, so this waits it out with the merchant.
  */
 export function Unreachable({ error, onRetry }: { error: unknown; onRetry: () => void }) {
-  return (
-    <main className="mx-auto max-w-md space-y-3 px-4 py-12">
-      <p>
-        <BrandLogo size={24} className="text-[15px] text-text" />
-      </p>
-      <Alert kind={isTransient(error) ? "info" : "error"}>{friendlyError(error)}</Alert>
-      <div className="flex items-center gap-4 text-sm">
-        <button type="button" className="btn-secondary" onClick={onRetry}>Try again</button>
-        <Link prefetch={false} className="text-muted underline" href="/login">Sign in again</Link>
-      </div>
-    </main>
-  );
+  const status = error instanceof ApiError ? error.status : 0;
+  return <ErrorState kind={errorKind(status)} onRetry={canRetryLoad(status) ? onRetry : undefined} correlationId={error instanceof ApiError ? error.correlationId : undefined} retryAt={error instanceof ApiError ? error.retryAt : undefined} fullPage />;
 }

@@ -1,3 +1,4 @@
+import { StateIllustration } from "@/components/StateIllustration";
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { X } from "lucide-react";
@@ -74,6 +75,7 @@ export function Alert({ kind = "error", children, onDismiss }: { kind?: AlertKin
 export function EmptyState({ title, body, action }: { title: string; body: string; action?: ReactNode }) {
   return (
     <div className="card flex flex-col items-start gap-2 border-dashed">
+      <StateIllustration kind="empty" compact />
       <h3 className="font-medium">{title}</h3>
       <p className="text-sm text-muted">{body}</p>
       {action}

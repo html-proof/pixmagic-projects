@@ -82,6 +82,7 @@ export default function LoginPage() {
     const q = new URLSearchParams(window.location.search);
     const key = Object.keys(NOTICES).find((k) => q.has(k));
     if (key) setNotice(NOTICES[key]!);
+    else if (q.get("reason") === "session_expired") setNotice({ kind: "info", text: "Session expired. Sign in again to continue to your workspace." });
     setEmail(recallEmail());
     authConfig()
       .then((c) => c.emailOtp && setCodeSignIn("available"))

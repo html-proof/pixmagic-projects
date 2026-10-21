@@ -118,7 +118,7 @@ export function EmbeddedSignup({
         notify("success", text);
         onConnected();
       } catch (e) {
-        setPhase({ kind: "stopped", text: actionError(e, "finish connecting"), tone: "error" });
+        setPhase({ kind: "stopped", text: actionError(e, "finish connecting", { exchange_failed: "Meta didn't accept the sign-in. It may have expired. Please connect again." }), tone: "error" });
       }
     },
     [base, notify, onConnected],

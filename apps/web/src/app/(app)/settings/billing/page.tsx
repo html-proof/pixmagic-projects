@@ -5,6 +5,7 @@ import { can } from "@app/shared/roles";
 import { useApp } from "@/components/AppContext";
 import { ConfirmDialog } from "@/components/AppUi";
 import { Alert } from "@/components/ui";
+import { ErrorState } from "@/components/ErrorState";
 import { LoadError } from "@/components/LoadError";
 import { actionError, api, useApi } from "@/lib/api";
 import { BILLING_PAGE } from "@/lib/features";
@@ -41,6 +42,7 @@ function BillingPlans() {
   const { data, error: loadError, loading, reload } = useApi<Billing>(`/workspaces/${workspace.id}/billing`);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [paymentFailed, setPaymentFailed] = useState(false);
   const [confirmFree, setConfirmFree] = useState(false);
   const [busy, setBusy] = useState(false);
   const isOwner = can(workspace.role, "billing:manage");
@@ -63,6 +65,7 @@ function BillingPlans() {
       const { confirmationUrl } = await api<{ confirmationUrl: string }>(`/workspaces/${workspace.id}/billing/subscribe`, { method: "POST", body: { plan, storeId: store.id } });
       window.location.assign(confirmationUrl);
     } catch (e) {
+      setPaymentFailed(true);
       setError(actionError(e, "start the plan change"));
     }
   }
@@ -80,6 +83,7 @@ function BillingPlans() {
       );
       await reload();
     } catch (e) {
+      setPaymentFailed(true);
       setError(actionError(e, "switch to Free"));
     } finally {
       setBusy(false);
@@ -103,6 +107,8 @@ function BillingPlans() {
       </button>
     );
   }
+
+  if (paymentFailed) return <ErrorState kind="payment" action={<button type="button" className="btn-primary" disabled={loading} onClick={async () => { if (await reload()) { setPaymentFailed(false); setError(null); } }}>Check billing status</button>} />;
 
   return (
     <section className="space-y-4">
