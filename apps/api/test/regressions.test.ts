@@ -42,6 +42,8 @@ describe("sign-in requests must come from the app (login CSRF)", () => {
       { url: "/auth/signup", payload: { name: "E", email: "e@x.com", password: "long-enough", confirmPassword: "long-enough", acceptTerms: true } },
       { url: "/auth/signup/confirm", payload: { email: "e@x.com", code: "123456" } },
       { url: "/auth/signup/resend", payload: { email: "e@x.com" } },
+      { url: "/auth/login/code", payload: { code: "123456" } },
+      { url: "/auth/login/code/resend", payload: {} },
       { url: "/auth/password/forgot", payload: { email: "evil@x.com" } },
       { url: "/auth/password/reset", payload: { email: "evil@x.com", code: "123456", password: "new-password", confirmPassword: "new-password" } },
       { url: "/auth/oauth/callback", payload: { state: "s", code: "c" } },

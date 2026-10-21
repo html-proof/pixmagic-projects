@@ -33,13 +33,16 @@ describe("Cognito's emails, as bizinsights sends them", () => {
     }
   });
 
-  it("words each one for what it's for, with Cognito's lifetimes", () => {
-    expect(authEmail({ ...base, trigger: "CustomEmailSender_SignUp" })!.text).toContain("finish creating your account");
-    expect(authEmail({ ...base, trigger: "CustomEmailSender_SignUp" })!.text).toContain("expires in 24 hours");
+  it("words each one for what it's for, with each code's lifetime", () => {
+    expect(authEmail({ ...base, trigger: "CustomEmailSender_SignUp" })!.text).toContain("verification code is");
+    expect(authEmail({ ...base, trigger: "CustomEmailSender_SignUp" })!.text).toContain("expires in 1 minute");
+    expect(authEmail({ ...base, trigger: "CustomEmailSender_ResendCode" })!.text).toContain("expires in 1 minute");
+    expect(authEmail({ ...base, trigger: "CustomEmailSender_Authentication" })!.text).toContain("expires in 1 minute and works once");
+    expect(authEmail({ ...base, trigger: "CustomEmailSender_VerifyUserAttribute" })!.text).toContain("expires in 24 hours");
     expect(authEmail({ ...base, trigger: "CustomEmailSender_ForgotPassword" })!.text).toContain("expires in 1 hour");
     expect(authEmail({ ...base, trigger: "CustomEmailSender_ForgotPassword" })!.text).toContain("your password stays the same");
     expect(authEmail({ ...base, trigger: "CustomEmailSender_UpdateUserAttribute" })!.text).toContain("keeps its current address");
-    expect(authEmail({ ...base, trigger: "CustomEmailSender_Authentication" })!.subject).toBe("Your bizinsights sign-in code");
+    expect(authEmail({ ...base, trigger: "CustomEmailSender_Authentication" })!.subject).toBe("Your bizinsights verification code");
     const invite = authEmail({ ...base, trigger: "CustomEmailSender_AdminCreateUser", code: "Tmp-9x!" })!;
     expect(invite.text).toContain("Email: merchant@example.test");
     expect(invite.text).toContain("Temporary password: Tmp-9x!");

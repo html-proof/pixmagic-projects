@@ -1,11 +1,35 @@
-import { createHmac, randomInt } from "node:crypto";
+import { createHmac } from "node:crypto";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { z } from "zod";
 import { systemDb } from "@app/db";
-import { appStoreWorkspace, authEmail, employmentsForUser, env, logger, sessionAccess } from "@app/core";
-import { ACCESS_KEYS, accountPasswordProblem, DISPLAY_NAME_MAX, EMAIL_CODE_RE, hasFullAccess, pkcePair, randomToken, safeEqual, sha256Hex } from "@app/shared";
+import { appStoreWorkspace, authEmail, employmentsForUser, env, keyring, logger, sessionAccess } from "@app/core";
+import { ACCESS_KEYS, accountPasswordProblem, decrypt, DISPLAY_NAME_MAX, EMAIL_CODE_RE, encrypt, hasFullAccess, pkcePair, randomToken, safeEqual, sha256Hex } from "@app/shared";
 import { body, clientIp, HttpError, isLinkSession, loadUser, pickSession, requireAppOrigin, requireUser, sessionOf, SESSION_COOKIE, sharedWorkspace, type Ctx, type Deps } from "../context.js";
 import { CognitoError, CognitoUnavailableError, unguessablePassword, type CognitoTokens, type CognitoUser, type FederatedProvider, type SignInResult } from "../cognito.js";
+import {
+  challengeTiming,
+  CODE_EXPIRED,
+  CODE_INCORRECT,
+  CODE_RESENT,
+  CODE_UNAVAILABLE,
+  codeExpired,
+  codeHash,
+  coordinatorDown,
+  countAttempt,
+  discardSignUpCode,
+  expiredCode,
+  incorrectCode,
+  limitCodeSends,
+  MAX_ATTEMPTS,
+  newCode,
+  pendingSignUpCode,
+  recordSignUpCode,
+  requireLiveSignUpCode,
+  requireResendAllowed,
+  RESEND_AFTER_S,
+  tooManyAttempts,
+  type CodeChallenge,
+} from "../emailCode.js";
 import { cognitoUsernameKey, notifyMethodAdded, recordAuthEvent, resolveUser } from "../identity.js";
 import { apiPath, clearSessionCookies, clearShareCookie, linkProofKey, newSession, provesAddress, readRefreshToken, readSession, retiredSessionKey, setSessionCookies, signedInRecently } from "../session.js";
 import type { App } from "../app.js";
@@ -35,6 +59,13 @@ const OTP_COOKIE = "__otp";
  */
 const MFA_COOKIE = "__mfa";
 const MFA_TTL_S = 180;
+/**
+ * Between the password and the emailed code (emailCode.ts): names the pending sign-in in the
+ * coordinator, which holds Cognito's tokens (encrypted) until the code is entered. A pending
+ * sign-in lives this long: room for a few codes, each of which lives a minute.
+ */
+const LOGIN_COOKIE = "__login";
+const LOGIN_PENDING_TTL_S = 600;
 const TOKEN_RE = /^[A-Za-z0-9_-]{16,64}$/;
 const pendingStates = (cookie: string | undefined) => (cookie ?? "").split(".").filter((n) => TOKEN_RE.test(n));
 const totpSchema = z.string().trim().regex(/^\d{6}$/, "Enter the 6-digit code from your authenticator app.");
@@ -58,6 +89,23 @@ interface PendingCode {
   /** Cognito's name for the user, from its challenge: what the answer must give. */
   username: string;
   session: string;
+  keep?: false;
+}
+
+/**
+ * A password sign-in waiting for the emailed code (askForEmailedCode), in the coordinator under
+ * auth:login:<id>. Nothing of it reaches the browser but the id, in an httpOnly cookie.
+ */
+interface PendingLogin {
+  v: 1;
+  /** The address signed in with (the code went there; the per-address limits). */
+  email: string;
+  /** Cognito's tokens from the password step, AES-GCM under TOKEN_ENCRYPTION_KEYS, bound to the id. */
+  tokens: string;
+  /** The code's HMAC (emailCode.ts codeHash), never the code. */
+  codeHash: string;
+  /** When the code was emailed: it lives CODE_TTL_S from here. */
+  issuedAt: number;
   keep?: false;
 }
 
@@ -117,6 +165,9 @@ export function enabledProviders(): Set<FederatedProvider> {
   );
 }
 
+/** Whether a password sign-in also asks for the emailed code (AUTH_LOGIN_EMAIL_CODE; apps/aws/src/settings.ts). */
+export const loginCodeOn = () => env().AUTH_LOGIN_EMAIL_CODE === "1";
+
 /** Same-origin paths only (the web app's isSafePath). */
 // eslint-disable-next-line no-control-regex -- rejecting control characters is the point
 const safePath = (p: unknown): p is string => typeof p === "string" && p.startsWith("/") && !p.startsWith("//") && !/[\\\u0000-\u001f\u007f]/.test(p) && p.length < 1000;
@@ -151,9 +202,9 @@ export function cognitoFailure(err: unknown, at: string): HttpError {
     case "InvalidPasswordException":
       return new HttpError(400, "Choose a stronger password: at least 8 characters, with no spaces at the start or end.", "weak_password");
     case "CodeMismatchException":
-      return new HttpError(400, "That code isn't right. Check the email and try again.", "invalid_code");
+      return new HttpError(400, CODE_INCORRECT, "invalid_code");
     case "ExpiredCodeException":
-      return new HttpError(400, "That code has expired or was already used. Ask for a new one.", "expired_code");
+      return new HttpError(400, CODE_EXPIRED, "expired_code");
     case "LimitExceededException":
     case "TooManyRequestsException":
     case "TooManyFailedAttemptsException":
@@ -263,6 +314,8 @@ export function authRoutes(app: App, deps: Deps) {
     return c.json({
       providers: { google: providers.has("Google") },
       emailOtp: env().COGNITO_EMAIL_OTP === "1",
+      // A password sign-in also asks for a code emailed by the app (askForEmailedCode).
+      loginCode: loginCodeOn(),
     });
   });
 
@@ -279,7 +332,11 @@ export function authRoutes(app: App, deps: Deps) {
     });
     const codeStep = await askForCode(c, input.email, result, input.keep);
     if (codeStep) return codeStep;
-    const user = await finishSignIn(c, tokensOrChallenge(result), { keep: input.keep });
+    const tokens = tokensOrChallenge(result);
+    // No authenticator app: the emailed code is the second step (when the deployment asks for one).
+    const emailedStep = await askForEmailedCode(c, input.email, tokens, input.keep);
+    if (emailedStep) return emailedStep;
+    const user = await finishSignIn(c, tokens, { keep: input.keep });
     return c.json({ user: publicUser(user) });
   });
 
@@ -318,6 +375,190 @@ export function authRoutes(app: App, deps: Deps) {
     return c.json({ user: publicUser(user) });
   });
 
+  // ---------------- The emailed code after the password (emailCode.ts) ----------------
+
+  const loginKey = (id: string) => `auth:login:${id}`;
+  /** The counter of guesses at the code a pending sign-in was emailed at `issuedAt`, and what its hash is bound to. */
+  const loginCodeScope = (id: string, issuedAt: number) => `login:${id}:${issuedAt}`;
+  const tokensAad = (id: string) => `login-code-tokens-v1:${id}`;
+  const clearLoginCookie = (c: Ctx) => deleteCookie(c, LOGIN_COOKIE, { ...cookieBase(), path: mfaCookiePath() });
+  const loginTimedOut = (c: Ctx) => {
+    clearLoginCookie(c);
+    return new HttpError(400, "That sign-in has timed out. Enter your email and password again.", "login_expired");
+  };
+  /** The account's name for the email's greeting; nothing when the address has no account here yet. */
+  const greetingName = (email: string) =>
+    systemDb.user
+      .findUnique({ where: { email }, select: { displayName: true } })
+      .then((u) => u?.displayName ?? null)
+      .catch(() => null);
+
+  /**
+   * The password was right and the account has no authenticator app: hold Cognito's tokens here
+   * (encrypted, under an id only this browser's httpOnly cookie knows), email a 6-digit code, and
+   * answer `{ next: "code" }`. The session is set only once the code is entered (POST
+   * /auth/login/code), so nothing of the sign-in exists in the browser until then. `null` when the
+   * deployment doesn't ask for the code (AUTH_LOGIN_EMAIL_CODE).
+   */
+  async function askForEmailedCode(c: Ctx, email: string, tokens: CognitoTokens, keep: boolean | undefined) {
+    if (!loginCodeOn()) return null;
+    const id = randomToken(24);
+    const pending = { v: 1 as const, email, tokens: encrypt(JSON.stringify(tokens), keyring(), tokensAad(id)), ...(keep === false && { keep: false as const }) };
+    try {
+      await limitCodeSends(deps.coord, email, clientIp(c));
+      const challenge = await emailLoginCode(id, pending, await greetingName(email));
+      setCookie(c, LOGIN_COOKIE, id, { ...cookieBase(), path: mfaCookiePath(), maxAge: LOGIN_PENDING_TTL_S });
+      return c.json({ next: "code" as const, email, challenge });
+    } catch (err) {
+      // Nothing of this sign-in may outlive the refusal: the tokens Cognito issued are handed back.
+      if (tokens.refreshToken) await deps.auth.revokeRefreshToken(tokens.refreshToken).catch((e: unknown) => logger.warn({ err: e }, "could not revoke a refused sign-in's refresh token"));
+      throw err;
+    }
+  }
+
+  /**
+   * A new code for the pending sign-in `id`, emailed, and the sign-in recorded with its hash and
+   * the moment it was issued (from which its minute runs). The email goes first: a sign-in whose
+   * code couldn't be sent is never recorded as waiting for one.
+   */
+  async function emailLoginCode(id: string, pending: Omit<PendingLogin, "codeHash" | "issuedAt">, name: string | null): Promise<CodeChallenge> {
+    const now = Date.now();
+    const code = newCode();
+    const mail = authEmail({ trigger: "CustomEmailSender_Authentication", code, name, email: pending.email, appUrl: env().APP_URL })!;
+    await deps.mailer.send(pending.email, mail.subject, mail.text, mail.html).catch((err: unknown) => {
+      logger.error({ err }, "could not email a sign-in code");
+      throw new HttpError(503, CODE_UNAVAILABLE, "email_unavailable");
+    });
+    const record: PendingLogin = { ...pending, codeHash: codeHash(loginCodeScope(id, now), code), issuedAt: now };
+    await deps.coord.put(loginKey(id), JSON.stringify(record), LOGIN_PENDING_TTL_S).catch((err: unknown) => {
+      logger.error({ err }, "could not store a pending sign-in");
+      throw coordinatorDown();
+    });
+    return challengeTiming(now, now);
+  }
+
+  /** The pending sign-in this browser's cookie names, or null (no cookie, or none standing any more). */
+  async function pendingLogin(c: Ctx): Promise<{ id: string; pending: PendingLogin } | null> {
+    const id = getCookie(c, LOGIN_COOKIE);
+    if (!id || !TOKEN_RE.test(id)) return null;
+    const raw = await deps.coord.peek(loginKey(id)).catch((err: unknown) => {
+      logger.error({ err }, "could not read a pending sign-in");
+      throw coordinatorDown();
+    });
+    if (!raw) return null;
+    const pending = JSON.parse(raw) as PendingLogin;
+    return pending?.v === 1 && typeof pending.issuedAt === "number" ? { id, pending } : null;
+  }
+
+  /** Cognito's tokens held for a pending sign-in; null if they don't decrypt for this id (never a sign-in). */
+  function heldTokens(id: string, pending: PendingLogin): CognitoTokens | null {
+    try {
+      return JSON.parse(decrypt(pending.tokens, keyring(), tokensAad(id))) as CognitoTokens;
+    } catch {
+      return null;
+    }
+  }
+
+  /** A pending sign-in ends unsigned: its record goes, and Cognito's tokens are handed back. */
+  async function dropPendingLogin(c: Ctx, id: string, pending: PendingLogin) {
+    await deps.coord.take(loginKey(id)).catch(() => null);
+    clearLoginCookie(c);
+    const tokens = heldTokens(id, pending);
+    if (tokens?.refreshToken) await deps.auth.revokeRefreshToken(tokens.refreshToken).catch((err: unknown) => logger.warn({ err }, "could not revoke a pending sign-in's refresh token"));
+  }
+
+  /** Where the sign-in page stands after a reload: the pending sign-in's address and countdowns, or nothing. */
+  app.get("/auth/login/code", async (c) => {
+    const found = loginCodeOn() ? await pendingLogin(c) : null;
+    if (!found) {
+      if (getCookie(c, LOGIN_COOKIE)) clearLoginCookie(c);
+      return c.json({ pending: false as const });
+    }
+    return c.json({ pending: true as const, email: found.pending.email, challenge: challengeTiming(found.pending.issuedAt) });
+  });
+
+  /**
+   * The emailed code after the password. Its minute and its five guesses are checked before the
+   * code is looked at; the right code is spent with one atomic delete, so of two answers racing
+   * only one signs in; then the session, "Keep me signed in" as ticked with the password.
+   */
+  app.post("/auth/login/code", async (c) => {
+    requireAppOrigin(c);
+    const { code } = z.object({ code: codeSchema }).parse(await body(c));
+    await limit(deps.coord, `rl:code:verify:${clientIp(c)}`, LIMITS.codeVerifyIp);
+    const found = await pendingLogin(c);
+    if (!found) throw loginTimedOut(c);
+    const { id, pending } = found;
+    if (codeExpired(pending.issuedAt)) throw expiredCode();
+    const scope = loginCodeScope(id, pending.issuedAt);
+    const attempt = await countAttempt(deps.coord, scope);
+    if (!safeEqual(pending.codeHash, codeHash(scope, code))) {
+      if (attempt >= MAX_ATTEMPTS) {
+        // The fifth wrong guess ends the code and the sign-in with it: the password again, then a new code.
+        await dropPendingLogin(c, id, pending);
+        throw tooManyAttempts();
+      }
+      throw incorrectCode();
+    }
+    const spent = await deps.coord.take(loginKey(id)).catch((err: unknown) => {
+      logger.error({ err }, "could not spend a sign-in code");
+      throw coordinatorDown();
+    });
+    if (!spent) throw expiredCode();
+    clearLoginCookie(c);
+    const tokens = heldTokens(id, pending);
+    if (!tokens) {
+      logger.error("a pending sign-in's tokens did not decrypt");
+      throw loginTimedOut(c);
+    }
+    const user = await finishSignIn(c, tokens, { keep: pending.keep });
+    return c.json({ user: publicUser(user) });
+  });
+
+  /** Another code for the pending sign-in, once the last one's minute is up (429 with the countdowns before that). */
+  app.post("/auth/login/code/resend", async (c) => {
+    requireAppOrigin(c);
+    const found = await pendingLogin(c);
+    if (!found) throw loginTimedOut(c);
+    const { id, pending } = found;
+    requireResendAllowed(pending.issuedAt);
+    await limitCodeSends(deps.coord, pending.email, clientIp(c));
+    const challenge = await emailLoginCode(id, pending, await greetingName(pending.email));
+    setCookie(c, LOGIN_COOKIE, id, { ...cookieBase(), path: mfaCookiePath(), maxAge: LOGIN_PENDING_TTL_S });
+    return c.json({ ok: true, message: CODE_RESENT, challenge });
+  });
+
+  /** "Use a different email" or "Back to sign in" on the code step: the pending sign-in ends, its tokens handed back. */
+  app.delete("/auth/login/code", async (c) => {
+    requireAppOrigin(c);
+    const found = await pendingLogin(c);
+    if (found) await dropPendingLogin(c, found.id, found.pending);
+    else clearLoginCookie(c);
+    return c.json({ ok: true });
+  });
+
+  // ---------------- Sign-up: the account, then the code that confirms the address ----------------
+
+  /** A sign-up code was issued for `email` just now: its minute runs from here. The countdowns for the page. */
+  async function signUpCodeIssued(email: string): Promise<CodeChallenge> {
+    const now = Date.now();
+    await recordSignUpCode(deps.coord, email, now);
+    return challengeTiming(now, now);
+  }
+
+  /**
+   * The sign-up code standing for `email`, while it may not be replaced yet (the form sent twice, a
+   * page reloaded and filled in again: the code already in the inbox is the one to enter), else a
+   * new one through `send`. Either way the page gets the countdowns of the code that counts.
+   */
+  async function standingOrNewSignUpCode(email: string, send: () => Promise<unknown>): Promise<CodeChallenge> {
+    const current = await pendingSignUpCode(deps.coord, email);
+    const now = Date.now();
+    if (current && now < current.issuedAt + RESEND_AFTER_S * 1000) return challengeTiming(current.issuedAt, now);
+    await send();
+    return signUpCodeIssued(email);
+  }
+
   app.post("/auth/signup", async (c) => {
     requireAppOrigin(c);
     const input = z
@@ -329,31 +570,35 @@ export function authRoutes(app: App, deps: Deps) {
         acceptTerms: z.literal(true, { errorMap: () => ({ message: "Accept the terms and privacy policy to create an account." }) }),
       })
       .parse(await body(c));
-    await limit(deps.coord, `rl:signup:ip:${clientIp(c)}`, LIMITS.signupIp);
+    const ip = clientIp(c);
+    await limit(deps.coord, `rl:signup:ip:${ip}`, LIMITS.signupIp);
     const weak = accountPasswordProblem(input.password);
     if (weak) throw new HttpError(400, weak, "weak_password");
     if (input.password !== input.confirmPassword) throw new HttpError(400, "The two passwords don't match.", "password_mismatch");
+    // Every sign-up emails a code (Cognito's SignUp sends it itself), so the address's and the IP's
+    // caps on codes come first.
+    await limitCodeSends(deps.coord, input.email, ip);
+    let challenge: CodeChallenge;
     try {
       await deps.auth.signUp({ email: input.email, password: input.password, name: input.name });
       // Cognito's own code from here: a claim of the address from before is over.
       await deps.coord.take(claimKey(input.email)).catch(() => null);
+      challenge = await signUpCodeIssued(input.email);
     } catch (err) {
       if (!isCognito(err, "UsernameExistsException")) throw cognitoFailure(err, "signup");
       const existing = await deps.auth.adminGetUser(input.email).catch(() => null);
       if (existing?.status === "UNCONFIRMED") {
         // Signed up before but never entered the code: carry on to the code screen rather than
         // calling the account taken.
-        await limit(deps.coord, `rl:code:email:${sha256Hex(input.email)}`, LIMITS.codeEmail);
-        await signUpAgain(c, input, existing);
+        challenge = await signUpAgain(c, input, existing);
       } else if (existing && (await unproven(existing))) {
         // Someone opened an account with this address without proving it: the code (ours) decides.
-        await limit(deps.coord, `rl:code:email:${sha256Hex(input.email)}`, LIMITS.codeEmail);
-        await startClaim(c, input.email, "signup", existing, input.name);
+        challenge = await standingOrNewSignUpCode(input.email, () => startClaim(c, input.email, "signup", existing, input.name));
       } else {
         throw cognitoFailure(err, "signup");
       }
     }
-    return c.json({ ok: true, next: "confirm", email: input.email });
+    return c.json({ ok: true, next: "confirm", email: input.email, challenge });
   });
 
   // ---------------- Claiming an address nobody proved ----------------
@@ -383,7 +628,7 @@ export function authRoutes(app: App, deps: Deps) {
 
   /** Email our own code for a claim of `email` (a new one replaces any earlier), kept as long as Cognito keeps its own. */
   async function startClaim(c: Ctx, email: string, kind: "signup" | "reset", existing: CognitoUser, name: string | null) {
-    const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
+    const code = newCode();
     const claim: AddressClaim = { username: existing.username, codeHash: claimCodeHash(email, code), name };
     await deps.coord.put(claimKey(email), JSON.stringify(claim), CLAIM_TTL_S[kind]).catch((err: unknown) => {
       logger.error({ err }, "could not store an address claim");
@@ -452,7 +697,7 @@ export function authRoutes(app: App, deps: Deps) {
    * account the inbox's owner then confirms. An unconfirmed sign-up never proved the inbox and
    * has nothing of ours behind it (a user row only exists after a sign-in), so nothing is lost.
    */
-  async function signUpAgain(c: Ctx, input: { email: string; password: string; name: string }, existing: CognitoUser) {
+  async function signUpAgain(c: Ctx, input: { email: string; password: string; name: string }, existing: CognitoUser): Promise<CodeChallenge> {
     // Cognito checks the password before it says the user isn't confirmed.
     const same = await deps.auth.passwordSignIn(input.email, input.password).then(
       () => {
@@ -466,13 +711,20 @@ export function authRoutes(app: App, deps: Deps) {
       },
     );
     if (same) {
-      await deps.auth.resendSignUpCode(input.email).catch((e: unknown) => logger.warn({ err: e }, "resending a sign-up code failed"));
-      return;
+      // The code already sent while its minute lasts; after that, a fresh one.
+      return standingOrNewSignUpCode(input.email, () =>
+        deps.auth.resendSignUpCode(input.email).catch((err: unknown) => {
+          throw cognitoFailure(err, "resend signup code");
+        }),
+      );
     }
     // Never one that is somebody's sign-in already (a confirmed user can't become unconfirmed; this is a guard).
     if (await systemDb.authIdentity.findUnique({ where: { provider_subject: { provider: "cognito", subject: existing.sub } } }).catch(dbOutage(SIGN_IN_UNAVAILABLE))) {
       throw new HttpError(409, "An account with that email already exists. Log in instead, or reset your password if you've forgotten it.", "account_exists");
     }
+    // Replacing the sign-up emails a new code: not before the last one's minute is up.
+    const current = await pendingSignUpCode(deps.coord, input.email);
+    if (current) requireResendAllowed(current.issuedAt);
     await deps.auth.adminDeleteUser(existing.username).catch((err: unknown) => {
       throw cognitoFailure(err, "replace unconfirmed sign-up");
     });
@@ -480,6 +732,7 @@ export function authRoutes(app: App, deps: Deps) {
       throw cognitoFailure(err, "signup");
     });
     await recordAuthEvent("unconfirmed_signup_replaced", null, clientIp(c), { cognitoSub: existing.sub });
+    return signUpCodeIssued(input.email);
   }
 
   /**
@@ -493,10 +746,25 @@ export function authRoutes(app: App, deps: Deps) {
     requireAppOrigin(c);
     const input = z.object({ email: emailSchema, code: codeSchema, password: passwordSchema.optional(), keep: keepSchema }).parse(await body(c));
     await limit(deps.coord, `rl:code:verify:${clientIp(c)}`, LIMITS.codeVerifyIp);
+    // The code's minute and its five guesses (emailCode.ts) come before anything looks at the code:
+    // a code past its minute is refused here whatever Cognito would still make of it.
+    const { attempt } = await requireLiveSignUpCode(deps.coord, input.email);
+    const wrong = async (): Promise<never> => {
+      if (attempt >= MAX_ATTEMPTS) {
+        // The fifth wrong guess ends the code: a new one has to be asked for.
+        await discardSignUpCode(deps.coord, input.email);
+        throw tooManyAttempts();
+      }
+      throw incorrectCode();
+    };
     // Our code for an address someone else opened an account with (startClaim): signs in, and
     // the account becomes this person's.
-    const claimed = await redeemClaim(c, input.email, input.code, input.password);
+    const claimed = await redeemClaim(c, input.email, input.code, input.password).catch((err: unknown) => {
+      if (err instanceof HttpError && err.code === "invalid_code") return wrong();
+      throw err;
+    });
     if (claimed) {
+      await discardSignUpCode(deps.coord, input.email);
       const user = await finishSignIn(c, claimed, { keep: input.keep });
       return c.json({ ok: true, user: publicUser(user) });
     }
@@ -505,9 +773,19 @@ export function authRoutes(app: App, deps: Deps) {
     } catch (err) {
       // Already confirmed (a second tab, a double press): nothing left to do here. Never a
       // sign-in: this request proved nothing (the page signs in through /auth/login instead).
-      if (isCognito(err, "NotAuthorizedException") && /CONFIRMED/i.test((err as Error).message)) return c.json({ ok: true });
+      if (isCognito(err, "NotAuthorizedException") && /CONFIRMED/i.test((err as Error).message)) {
+        await discardSignUpCode(deps.coord, input.email);
+        return c.json({ ok: true });
+      }
+      if (isCognito(err, "CodeMismatchException")) return wrong();
+      if (isCognito(err, "ExpiredCodeException")) {
+        await discardSignUpCode(deps.coord, input.email);
+        throw expiredCode();
+      }
       throw cognitoFailure(err, "confirm signup");
     }
+    // Spent: the same code again, or another guess, starts from "ask for a new one".
+    await discardSignUpCode(deps.coord, input.email);
     if (!input.password) return c.json({ ok: true });
     const signIn = () =>
       deps.auth.passwordSignIn(input.email, input.password!).catch((err: unknown) => {
@@ -550,23 +828,29 @@ export function authRoutes(app: App, deps: Deps) {
     await recordAuthEvent("signup_password_replaced", linked?.userId ?? null, clientIp(c), { cognitoSub: cu.sub });
   }
 
+  /**
+   * A new sign-up code, once the last one's minute is up (429 with the standing code's countdowns
+   * before that), within the address's hourly and daily caps. The answer is the same whether or
+   * not the address has a sign-up waiting, so this can't be used to find accounts.
+   */
   app.post("/auth/signup/resend", async (c) => {
     requireAppOrigin(c);
     const { email } = z.object({ email: emailSchema }).parse(await body(c));
-    await limit(deps.coord, `rl:code:ip:${clientIp(c)}`, LIMITS.codeIp);
-    await limit(deps.coord, `rl:code:email:${sha256Hex(email)}`, LIMITS.codeEmail);
+    const current = await pendingSignUpCode(deps.coord, email);
+    if (current) requireResendAllowed(current.issuedAt);
+    await limitCodeSends(deps.coord, email, clientIp(c));
     // A claim under way: a new code of ours (Cognito has none to send for that user).
     const claim = await claimInProgress(email);
     if (claim) {
       await startClaim(c, email, "signup", claim.user, claim.name);
-      return c.json({ ok: true, message: CODE_SENT });
+      return c.json({ ok: true, message: CODE_RESENT, challenge: await signUpCodeIssued(email) });
     }
     await deps.auth.resendSignUpCode(email).catch((err: unknown) => {
       // Unknown or already confirmed: the same answer, so this can't be used to find accounts.
       if (isCognito(err, "UserNotFoundException", "InvalidParameterException", "NotAuthorizedException")) return;
       throw cognitoFailure(err, "resend signup code");
     });
-    return c.json({ ok: true, message: CODE_SENT });
+    return c.json({ ok: true, message: CODE_RESENT, challenge: await signUpCodeIssued(email) });
   });
 
   /** A claim of `email` that still stands (its user is still the address's unproven one), or null. */

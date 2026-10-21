@@ -41,6 +41,8 @@ export class HttpError extends Error {
     public code = "error",
     /** Sent as Retry-After (seconds) with a 429 or 503. */
     public retryAfterSec?: number,
+    /** More for the page than words (sent as `detail`): e.g. the countdowns a refused resend still has to show. */
+    public detail?: unknown,
   ) {
     super(message);
     this.name = "HttpError";

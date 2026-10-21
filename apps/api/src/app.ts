@@ -127,7 +127,11 @@ export function buildApp(deps: Deps): App {
 
   app.onError(async (err, c) => {
     if (err instanceof HttpError) {
-      return c.json({ error: err.code, message: err.message }, err.statusCode as ContentfulStatusCode, err.retryAfterSec ? { "retry-after": String(err.retryAfterSec) } : {});
+      return c.json(
+        { error: err.code, message: err.message, ...(err.detail !== undefined ? { detail: err.detail } : {}) },
+        err.statusCode as ContentfulStatusCode,
+        err.retryAfterSec ? { "retry-after": String(err.retryAfterSec) } : {},
+      );
     }
     // A rule the person broke or a step they must take first (StaffError, EmailError, WhatsappError):
     // its message is written for them.

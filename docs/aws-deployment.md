@@ -748,8 +748,14 @@ share Resend's limits with the app's email (free tier: 100 a day, 3,000 a month)
 - **Cost**: the KMS key US$1/month (no rotation: nothing stays encrypted under it), the alarm
   US$0.10/month; the KMS requests and invocations fit the free tiers at this volume.
 - Passwordless sign-in (`COGNITO_EMAIL_OTP`, `EMAIL_OTP` as a first factor) is unchanged, still off:
-  Cognito's documentation lists SES email configuration as its requirement (not tried with the
-  custom sender). The trigger already words the code (`CustomEmailSender_Authentication`).
+  Cognito's documentation lists SES email configuration as its requirement (checked again on
+  2026-10-21: "Requires Essentials feature plan or higher and Amazon SES email configuration", also
+  for email as a second factor), which a custom sender doesn't replace.
+- **The code after the password** (`AUTH_LOGIN_EMAIL_CODE=1` in `apps/aws/src/settings.ts`, since
+  2026-10-21) is the API's own, sent by the API function through Resend, not by this trigger:
+  [cognito-setup.md](cognito-setup.md) section 8. Its failures are in the API function's log
+  ("could not email a sign-in code"), not in this alarm. Sign-up codes still come through here, and
+  the API accepts them for 60 seconds only (the email says so), whatever Cognito's 24 hours.
 
 ## Owner-only steps
 

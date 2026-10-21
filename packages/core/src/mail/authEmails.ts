@@ -25,17 +25,19 @@ export type AuthEmailKind = (typeof AUTH_EMAIL_KINDS)[AuthEmailTrigger];
 export const isAuthEmailTrigger = (trigger: string): trigger is AuthEmailTrigger => Object.hasOwn(AUTH_EMAIL_KINDS, trigger);
 
 /**
- * Lifetimes are Cognito's: confirmation and attribute codes 24 hours, password-reset codes 1 hour,
- * temporary passwords TemporaryPasswordValidityDays (7, infra/aws/cognito.yaml), sign-in codes
- * the app client's AuthSessionValidity (3 minutes).
+ * Lifetimes: a sign-up code and a sign-in code last 60 seconds, the API's rule (apps/api/src/emailCode.ts:
+ * Cognito itself keeps a confirmation code 24 hours, but every code reaches it through the API,
+ * which refuses one older than a minute). The others are Cognito's: attribute codes 24 hours,
+ * password-reset codes 1 hour, temporary passwords TemporaryPasswordValidityDays (7,
+ * infra/aws/cognito.yaml).
  */
 const COPY: Record<AuthEmailKind, { subject: string; heading: string; lead: string; expires: string; ignore: string; preview: string }> = {
   signup: {
     subject: "Your bizinsights verification code",
-    heading: "Confirm your email address",
-    lead: "Enter this code in bizinsights to finish creating your account:",
-    expires: "The code expires in 24 hours.",
-    ignore: "If you didn't create a bizinsights account, you can ignore this email.",
+    heading: "Verify your email address",
+    lead: "Your bizinsights verification code is:",
+    expires: "This code expires in 1 minute.",
+    ignore: "If you did not request this code, you can ignore this email.",
     preview: "Your code to finish creating your bizinsights account.",
   },
   reset: {
@@ -63,12 +65,12 @@ const COPY: Record<AuthEmailKind, { subject: string; heading: string; lead: stri
     preview: "Your code to verify your email address.",
   },
   signin: {
-    subject: "Your bizinsights sign-in code",
-    heading: "Your sign-in code",
-    lead: "Enter this code in bizinsights to sign in:",
-    expires: "The code expires in a few minutes and works once.",
-    ignore: "If you didn't try to sign in, you can ignore this email. Nobody can sign in with it without this code.",
-    preview: "Your code to sign in to bizinsights.",
+    subject: "Your bizinsights verification code",
+    heading: "Verify it's you",
+    lead: "Your bizinsights verification code is:",
+    expires: "This code expires in 1 minute and works once.",
+    ignore: "If you did not request this code, you can ignore this email. Nobody can sign in with your password alone.",
+    preview: "Your code to finish signing in to bizinsights.",
   },
   invite: {
     subject: "Your bizinsights account is ready",

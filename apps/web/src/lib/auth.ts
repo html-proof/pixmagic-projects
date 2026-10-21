@@ -16,10 +16,33 @@ export interface SignedInUser {
   displayName: string | null;
 }
 
-/** Which "Continue with ..." options this deployment offers. */
+/** Which "Continue with ..." options this deployment offers, and which code steps it asks for. */
 export interface AuthConfig {
   providers: { google: boolean };
+  /** Passwordless sign-in with a code Cognito emails (off unless the deployment has SES). */
   emailOtp: boolean;
+  /** A password sign-in also asks for a code the app emails (accounts without an authenticator app). */
+  loginCode: boolean;
+}
+
+/**
+ * The countdowns of an emailed code, on the server's clock (apps/api/src/emailCode.ts): when it
+ * stops being accepted and when another may be asked for. `now` is the server's clock as it
+ * answered, so the page places both moments on its own clock whatever the device's time is.
+ */
+export interface CodeChallenge {
+  issuedAt: number;
+  expiresAt: number;
+  resendAt: number;
+  now: number;
+}
+
+/** The countdowns a refused resend still names (429 `resend_cooldown`: the standing code's), or null. */
+export function challengeFromError(e: unknown): CodeChallenge | null {
+  if (!(e instanceof ApiError)) return null;
+  const detail = e.data.detail as { challenge?: CodeChallenge } | undefined;
+  const ch = detail?.challenge;
+  return ch && typeof ch.expiresAt === "number" && typeof ch.resendAt === "number" && typeof ch.now === "number" ? ch : null;
 }
 
 export type SocialProvider = "google";
@@ -36,16 +59,30 @@ export const authConfig = () =>
 /**
  * `keep` false: "Keep me signed in" unticked, so the session ends when the browser closes.
  * `next: "mfa"`: the password was right and the account has two-step verification: the code from
- * the authenticator app finishes signing in (finishMfaSignIn).
+ * the authenticator app finishes signing in (finishMfaSignIn). `next: "code"`: the password was
+ * right and a 6-digit code was emailed to `email`: it finishes signing in (finishEmailedSignIn).
  */
-export const signIn = (email: string, password: string, keep = true) =>
-  api<{ user: SignedInUser } | { next: "mfa" }>("/auth/login", { method: "POST", body: { email, password, keep } });
+export type SignInStart = { user: SignedInUser } | { next: "mfa" } | { next: "code"; email: string; challenge: CodeChallenge };
+export const signIn = (email: string, password: string, keep = true) => api<SignInStart>("/auth/login", { method: "POST", body: { email, password, keep } });
 
 /** The authenticator app's code after the password (the API kept the rest of the sign-in, for this browser only). */
 export const finishMfaSignIn = (code: string) => api<{ user: SignedInUser }>("/auth/login/mfa", { method: "POST", body: { code } });
 
+/** The emailed code after the password (the API holds the rest of the sign-in, for this browser only). */
+export const finishEmailedSignIn = (code: string) => api<{ user: SignedInUser }>("/auth/login/code", { method: "POST", body: { code } });
+
+/** Another code for the sign-in waiting in this browser; refused (429 `resend_cooldown`) while the last one's minute lasts. */
+export const resendSignInCode = () => api<{ ok: true; message: string; challenge: CodeChallenge }>("/auth/login/code/resend", { method: "POST" });
+
+/** A sign-in waiting for its emailed code in this browser (it survives a reload), with its countdowns; or nothing. */
+export const pendingSignInCode = () => api<{ pending: false } | { pending: true; email: string; challenge: CodeChallenge }>("/auth/login/code");
+
+/** Give up the sign-in waiting for its code ("Use a different email"): nothing of it is kept. */
+export const cancelSignInCode = () => api<{ ok: true }>("/auth/login/code", { method: "DELETE" });
+
+/** `challenge`: the countdowns of the code emailed to `email` (or of the one already sent, when the form was sent twice). */
 export const signUp = (input: { name: string; email: string; password: string; confirmPassword: string; acceptTerms: boolean }) =>
-  api<{ ok: true; next: "confirm"; email: string }>("/auth/signup", { method: "POST", body: input });
+  api<{ ok: true; next: "confirm"; email: string; challenge: CodeChallenge }>("/auth/signup", { method: "POST", body: input });
 
 /**
  * The sign-up code. With `signIn` (the password chosen on this page) it signs in too, and that
@@ -56,7 +93,8 @@ export const signUp = (input: { name: string; email: string; password: string; c
 export const confirmSignUp = (email: string, code: string, signIn?: { password: string; keep?: boolean }) =>
   api<{ ok: true; user?: SignedInUser }>("/auth/signup/confirm", { method: "POST", body: { email, code, ...signIn } });
 
-export const resendSignUpCode = (email: string) => api<{ ok: true; message: string }>("/auth/signup/resend", { method: "POST", body: { email } });
+/** A new sign-up code; refused (429 `resend_cooldown`, with the standing code's countdowns) while the last one's minute lasts. */
+export const resendSignUpCode = (email: string) => api<{ ok: true; message: string; challenge: CodeChallenge }>("/auth/signup/resend", { method: "POST", body: { email } });
 
 export const forgotPassword = (email: string) => api<{ ok: true; message: string }>("/auth/password/forgot", { method: "POST", body: { email } });
 

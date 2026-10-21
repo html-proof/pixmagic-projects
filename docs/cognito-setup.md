@@ -1,10 +1,10 @@
 # Sign-in: Amazon Cognito
 
 bizinsights signs people in with an Amazon Cognito user pool: email and password (with emailed codes
-for sign-up and password resets, and opt-in two-step verification with an authenticator app),
-Continue with Google, and optionally a passwordless emailed code (Sign in with Apple was removed on
-2026-10-16). It replaced Firebase Authentication; this page covers how it works, how to set it up,
-and what is left of the move.
+for sign-up and password resets, a 6-digit code emailed after the password at every sign-in, and
+opt-in two-step verification with an authenticator app), Continue with Google, and optionally a
+passwordless emailed code (Sign in with Apple was removed on 2026-10-16). It replaced Firebase
+Authentication; this page covers how it works, how to set it up, and what is left of the move.
 
 ## How it works
 
@@ -99,8 +99,9 @@ browser ──► /api/auth/* (API)    ──► Cognito user-pool API          
 | Route | What |
 | --- | --- |
 | `GET /api/auth/config` | which "Continue with ..." buttons work; whether emailed-code sign-in is on |
-| `POST /api/auth/signup`, `/signup/confirm`, `/signup/resend` | create an account; confirm the emailed code (with `password`: and sign in, that password becoming the account's) |
-| `POST /api/auth/login`, `/login/mfa` | email + password (`{ next: "mfa" }` when the account has two-step verification); then the app's code |
+| `POST /api/auth/signup`, `/signup/confirm`, `/signup/resend` | create an account (`challenge`: the code's countdowns, section 8); confirm the emailed code within its minute (with `password`: and sign in, that password becoming the account's); a new code once the minute is up |
+| `POST /api/auth/login`, `/login/mfa` | email + password (`{ next: "mfa" }` when the account has two-step verification, `{ next: "code", email, challenge }` otherwise); then the authenticator app's code |
+| `POST /api/auth/login/code`, `/login/code/resend`; `GET`, `DELETE /api/auth/login/code` | the emailed code after the password (section 8): enter it; another one after a minute; where this browser's sign-in stands after a reload; give it up |
 | `POST /api/auth/password/forgot`, `/password/reset` | reset code by email; new password |
 | `POST /api/auth/otp/start`, `/otp/verify` | passwordless code (only with `COGNITO_EMAIL_OTP=1`) |
 | `GET /api/auth/oauth/google/start` | to Google to sign in, with state, PKCE and a nonce. `?keep=0`: "Keep me signed in" unticked. (`?link=1` no longer links: back to `returnTo` with `?link_error=start_again`) |
@@ -327,6 +328,57 @@ ID tokens are unaffected (their issuer and keys are the pool's, not the domain's
    homepage, privacy and terms on bizinsights.io → Verification Center), so Google's screen shows
    the name and logo instead of the domain (docs/integrations-readiness.md).
 
+## 8. Emailed codes: a minute, five guesses, one a minute
+
+Every 6-digit code the sign-in pages ask for (the sign-up code that confirms the address, and the
+code emailed after the password) follows the same rules, enforced by the API on its own clock
+(`apps/api/src/emailCode.ts`); the pages' countdowns only show them:
+
+- **A code lives 60 seconds** from the moment it is issued. The page counts down from the server's
+  `challenge` (`issuedAt`, `expiresAt`, `resendAt`, and the server's `now`, so a device whose clock
+  is off still counts the right minute); a code offered later is refused (`expired_code`, "This
+  code has expired. Request a new code.") before anything looks at it. A reload doesn't reset it:
+  the sign-in page asks `GET /api/auth/login/code` where its pending sign-in stands, and a sign-up
+  form sent again within the minute gets the code already sent, with the time it has left.
+- **Five wrong guesses** end the code (`too_many_attempts`, 429): a new one has to be asked for. The
+  guesses are counted in the coordinator (DynamoDB), so they add up across function instances; the
+  per-IP limit `codeVerifyIp` sits on top.
+- **Another code after a minute**: a resend before that is refused (`resend_cooldown`, 429 with
+  `Retry-After` and the standing code's `challenge` in `detail`), so at most one code stands at a
+  time and a new one always replaces an expired one. One address gets at most
+  `AUTH_CODE_LIMIT_HOURLY` codes an hour and `AUTH_CODE_LIMIT_DAILY` a day (sign-up and sign-in
+  together; 6 and 20 in `apps/aws/src/settings.ts`), one IP at most `codeIp` (60 an hour).
+- **The sign-up code is Cognito's** (`SignUp` sends it through the custom email sender,
+  `ConfirmSignUp` checks it and marks the address verified), and Cognito itself would keep it for
+  24 hours: that lifetime can't be changed. The code never reaches Cognito except through the API
+  (the app client is confidential, its secret signs every call), and the API refuses it after the
+  minute and discards it once it has worked, so the minute is the only lifetime that counts.
+- **The sign-in code is the app's own.** Cognito's email one-time codes (passwordless `EMAIL_OTP`,
+  and email as a second factor) need an Amazon SES email configuration in the pool, and this
+  account's SES is still in the sandbox (production access denied, [aws-deployment.md](aws-deployment.md)),
+  so they can't be used; Cognito's challenge sessions also last at least 3 minutes
+  (`AuthSessionValidity`), never one. So after a right password (`InitiateAuth`), the API keeps
+  Cognito's tokens in the coordinator, AES-GCM under `TOKEN_ENCRYPTION_KEYS` and bound to an id
+  that only this browser's httpOnly cookie `__login` (path `/api/auth/login`, 10 minutes) names,
+  emails a code of its own through the app's mail provider (Resend, `CustomEmailSender_Authentication`
+  wording), and stores only the code's HMAC (`OTP_PEPPER`). `POST /api/auth/login/code` checks the
+  minute and the guesses, compares in constant time, spends the record with one atomic delete (two
+  right answers racing: one signs in), and only then sets the session (`finishSignIn`, "Keep me
+  signed in" as ticked with the password). A pending sign-in given up (`DELETE`), ended by wrong
+  guesses or refused (the email couldn't be sent, the caps) hands its refresh token back to Cognito.
+  Nothing of the sign-in reaches the browser before the code: no session, no token.
+- **Accounts with an authenticator app keep that step** (section 6): Cognito's `SOFTWARE_TOKEN_MFA`
+  challenge comes first and the emailed code isn't asked for as well, so nothing is downgraded.
+  Google sign-ins have Google's own verification and get neither.
+- **Off switch**: `AUTH_LOGIN_EMAIL_CODE` empty (`apps/aws/src/settings.ts`, then a deploy) and the
+  password alone signs in, as before; `GET /api/auth/config` says `loginCode`.
+- The pages: six boxes (`OtpInput` in `apps/web/src/components/auth/CodeStep.tsx`: typing moves on,
+  Backspace back, a pasted or autofilled code fills them all and the sixth digit sends), "Code
+  expires in 00:59", "Resend code in 00:59" then "Resend verification code", "Use a different email
+  address", and the messages "The verification code is incorrect. Please try again.", "This code
+  has expired. Request a new code.", "A new verification code has been sent.", "Too many attempts.
+  Please try again later." and "Email verified successfully."
+
 ## Troubleshooting
 
 - **Every sign-in says "We can't reach the sign-in service"**: `COGNITO_USER_POOL_ID` /
@@ -347,7 +399,13 @@ ID tokens are unaffected (their issuer and keys are the pool's, not the domain's
 - **"This sign-in didn't start in this browser"**: the state cookie (`__oauth`, 10 minutes) is gone:
   third-party cookie blocking doesn't affect it (it's first-party), but a different browser or an
   expired attempt does. Start again.
-- **Codes don't arrive**: production sends them through Resend (the `cognito-email` function): check
-  the spam folder, the alarm `insights-production-cognito-email-errors` and the function's log (its
-  trigger and Resend's message id), then Resend's dashboard for that message and its daily quota.
-  Without the trigger (`-c cognitoEmail=off`, staging) Cognito's own sender allows 50 emails a day.
+- **Codes don't arrive**: production sends them through Resend. Sign-up codes go through the
+  `cognito-email` function: check the spam folder, the alarm `insights-production-cognito-email-errors`
+  and the function's log (its trigger and Resend's message id), then Resend's dashboard for that
+  message and its daily quota. Without the trigger (`-c cognitoEmail=off`, staging) Cognito's own
+  sender allows 50 emails a day. The code after the password is sent by the API function itself
+  (`could not email a sign-in code` in `/aws/lambda/insights-production-api`; the person then sees
+  "We couldn't send you an email right now", 503, and nothing is signed in).
+- **"This code has expired" straight away, or every code**: the API's clock and the coordinator
+  (DynamoDB) decide, not the device's; a function instance whose clock was off would show in the
+  `challenge.now` the pages receive. Codes live 60 seconds from the API's `issuedAt` (section 8).

@@ -180,7 +180,7 @@ describe("the configuration report", () => {
     expect(r.ads).toEqual({ configured: { meta: true, google: true, adsense: true }, restricted: { meta: true, google: false, adsense: false } });
     expect(r.whatsapp).toEqual({ embeddedSignup: true, embeddedSignupNeeds: [], webhookVerifyToken: true });
     expect(r.email).toEqual({ google: true, microsoft: true, resend: true });
-    expect(r.auth).toEqual({ cognito: true, google: true, emailOtp: false });
+    expect(r.auth).toEqual({ cognito: true, google: true, emailOtp: false, loginCode: false });
     expect(r.halfConfigured).toEqual([]);
   });
 
@@ -226,7 +226,7 @@ describe("the configuration report", () => {
     setEnv({ COGNITO_DOMAIN: "https://auth.example.test", COGNITO_IDENTITY_PROVIDERS: " Google ,Facebook" });
     expect(configReport().auth.google).toBe(true);
     setEnv({ COGNITO_DOMAIN: "https://auth.example.test", COGNITO_IDENTITY_PROVIDERS: "" });
-    expect(configReport().auth).toEqual({ cognito: false, google: false, emailOtp: false });
+    expect(configReport().auth).toEqual({ cognito: false, google: false, emailOtp: false, loginCode: false });
   });
 });
 
