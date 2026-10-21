@@ -115,7 +115,7 @@ jobs:
           --health-cmd "pg_isready -U app" --health-interval 5s --health-retries 10
     steps:
       # Windows runner: Git Bash for the run steps, and a pnpm store that outlives the job
-      # (pnpm/action-setup deletes its own folder, where the store would be, every run).
+      # (the package manager and dependency store both live outside the checkout).
       - name: Git Bash and a lasting pnpm store (Windows runner)
         if: runner.os == 'Windows'
         shell: cmd
@@ -139,11 +139,18 @@ jobs:
             const dirs = ["apps/web/", "apps/aws/", "packages/shared/", "infra/cognito-local/", "infra/postgres/"];
             const files = ["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "docker-compose.yml", ".github/workflows/ci.yml"];
             let changed;
-            try {
-              changed = await github.paginate(github.rest.pulls.listFiles, { ...context.repo, pull_number: pr.number, per_page: 100 });
-            } catch (err) {
-              core.warning(`Couldn't list the changed files (${err.message}): running the browser tests.`);
-              return core.setOutput("e2e", "true");
+            for (let attempt = 0; attempt < 3; attempt++) {
+              try {
+                changed = await github.paginate(github.rest.pulls.listFiles, { ...context.repo, pull_number: pr.number, per_page: 100 });
+                break;
+              } catch (err) {
+                if (attempt === 2) {
+                  core.warning(`Couldn't list the changed files after 3 attempts (${err.message}): running the browser tests.`);
+                  return core.setOutput("e2e", "true");
+                }
+                core.info(`Changed-file lookup failed; retrying (${attempt + 1}/2).`);
+                await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
+              }
             }
             const hit = changed.flatMap((f) => [f.filename, f.previous_filename]).find((p) => p && (files.includes(p) || dirs.some((d) => p.startsWith(d))));
             // GitHub lists at most 3,000 files: a pull request that size runs them regardless.
@@ -151,6 +158,10 @@ jobs:
             core.info(run ? `Browser tests run (${hit ?? "3,000+ files"} changed).` : "Browser tests skipped: nothing they drive changed.");
             core.setOutput("e2e", String(run));
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: core.longpaths
+          GIT_CONFIG_VALUE_0: "true"
       # The PC is a laptop that, unplugged, turns its screen off 3 minutes after the last input and
       # sleeps; asleep it loses the job, or a test's clock runs on while nothing happens ("Hook
       # timed out in 60000ms"). The job holds a power request until it ends. Held from the runner's
@@ -162,7 +173,15 @@ jobs:
         if: runner.os == 'Windows'
         continue-on-error: true
         run: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File infra/runner/keep-awake.ps1
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      # Set up Node before installing the exact pnpm from package.json. The action's
+      # bootstrap self-update adds registry lookups that timed out on the Windows runner.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Install the pinned pnpm (cached on this runner)
+        run: |
+          node --test infra/runner/setup-pnpm.test.mjs
+          node infra/runner/setup-pnpm.mjs
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
@@ -314,7 +333,7 @@ jobs:
     timeout-minutes: 30
     steps:
       # Windows runner: Git Bash for the run steps, and a pnpm store that outlives the job
-      # (pnpm/action-setup deletes its own folder, where the store would be, every run).
+      # (the package manager and dependency store both live outside the checkout).
       - name: Git Bash and a lasting pnpm store (Windows runner)
         if: runner.os == 'Windows'
         shell: cmd
@@ -322,12 +341,22 @@ jobs:
           echo %ProgramFiles%\Git\bin>>"%GITHUB_PATH%"
           echo npm_config_store_dir=%RUNNER_TOOL_CACHE%\pnpm-store>>"%GITHUB_ENV%"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: core.longpaths
+          GIT_CONFIG_VALUE_0: "true"
       # As in the checks job: the laptop holds a power request until the job ends (its limits: there).
       - name: Keep the PC awake for this job (self-hosted runner)
         if: runner.os == 'Windows'
         continue-on-error: true
         run: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File infra/runner/keep-awake.ps1
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      # Set up Node before installing the exact pnpm from package.json. The action's
+      # bootstrap self-update adds registry lookups that timed out on the Windows runner.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Install the pinned pnpm (cached on this runner)
+        run: node infra/runner/setup-pnpm.mjs
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24

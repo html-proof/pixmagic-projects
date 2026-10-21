@@ -1120,3 +1120,20 @@ configuration is sized for a small merchant base and the US$80 budget. In the or
 
 What does not bind: Google's 100-user cap (the sign-in project is in production, brand-verified, and
 asks only for name and email), DynamoDB (on-demand), CloudFront and S3.
+
+## CI bootstrap troubleshooting
+
+The CI and deployment workflows set `core.longpaths=true` through Git's environment configuration
+on the checkout step itself. This lets its initial clean/reset remove the long paths in a previous
+pnpm dependency tree on Windows, without changing the runner account's global Git configuration.
+
+Node 24 is set up before `infra/runner/setup-pnpm.mjs` installs the exact `packageManager` version
+from package.json. The CLI is cached under `RUNNER_TOOL_CACHE/project-pnpm/<version>` outside the
+checkout; warm jobs verify and reuse it. Cold jobs use npm's normal package integrity checks with
+bounded download retries, without a second pnpm version-switch bootstrap. Hosted jobs still restore
+the pnpm store through the following setup-node step.
+
+For `Couldn't list the changed files`, the browser-test scope lookup tries three times, then runs
+the tests if the API is still unavailable. It never treats a failed lookup as permission to skip tests.
+Bootstrap regression checks run with `node --test infra/runner/setup-pnpm.test.mjs` and require no
+project dependency installation.
