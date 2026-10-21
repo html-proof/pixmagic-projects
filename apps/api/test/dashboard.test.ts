@@ -1,5 +1,5 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { recomputeDays } from "@app/core";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { logger, recomputeDays } from "@app/core";
 import { systemDb, withTenant } from "@app/db";
 import { addDays, localDay, resolvePreset, yearEarlier } from "@app/shared";
 import { storeOverview, syncProblem } from "@app/core/reports";
@@ -1180,8 +1180,32 @@ describe("product reporting completeness and reversals", () => {
     await systemDb.order.createMany({ data: ids.map(id => ({ id, workspaceId: ws, storeId: store.id, shopifyId: id, name: id, currency: "USD", localDay: "2026-03-08", shopifyCreatedAt: at, shopifyUpdatedAt: at, salesUpdatedAt: at, subtotal: 1, totalDiscounts: 0, totalTax: 0, totalShipping: 0, totalPrice: 1 })) });
     await systemDb.orderLineItem.createMany({ data: ids.map(id => ({ workspaceId: ws, storeId: store.id, orderId: id, shopifyId: id, productShopifyId: "popular", title: "Popular", quantity: 1, price: 1, discount: 0 })) });
     await systemDb.orderSale.createMany({ data: ids.map(id => ({ workspaceId: ws, storeId: store.id, orderId: id, shopifyId: id, lineItemShopifyId: id, localDay: "2026-03-08", happenedAt: at, actionType: "order", lineType: "product", quantity: 1, amount: 1, discount: 0, tax: 0 })) });
+    const errors = vi.spyOn(logger, "error");
     const result = await report(a.headers, ws, store.id);
-    expect(result.statusCode).toBe(200);
+    const diagnostics = JSON.stringify(errors.mock.calls, (_key, value) => value instanceof Error ? { name: value.name, message: value.message } : value);
+    errors.mockRestore();
+    expect(result.statusCode, diagnostics).toBe(200);
     expect(result.json().items[0]).toMatchObject({ units: 10001, revenue: 10001, orders: 10001 });
   }, 60000);
+});
+
+describe("comparison coverage for product rankings", () => {
+  it("withholds only growth when previous orders or their line mappings are unverified", async () => {
+    const { a, ws, store } = await owner();
+    await systemDb.store.update({ where: { id: store.id }, data: { ordersHistoryFrom: new Date(0), status: "active" } });
+    await seedOrder(store, { id: "prior-unverified", createdAt: "2026-03-07T18:00:00Z", lines: [{ product: "p", qty: 10, price: 10 }] });
+    await seedOrder(store, { id: "verified-current", createdAt: "2026-03-08T18:00:00Z", lines: [{ product: "p", qty: 20, price: 10 }] });
+    const prior = await systemDb.order.findFirstOrThrow({ where: { storeId: store.id, shopifyId: "prior-unverified" } });
+    await systemDb.order.update({ where: { id: prior.id }, data: { salesUpdatedAt: null } });
+    const request = () => ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${store.id}/analytics/products/top-selling?dateFrom=2026-03-08&dateTo=2026-03-08`, headers: a.headers });
+    let res = await request();
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ complete: true, baseline: false, pendingBaselineOrders: 1 });
+    expect(res.json().items[0]).toMatchObject({ units: 20, revenue: 200, growth: null, trendScore: null });
+    await systemDb.order.update({ where: { id: prior.id }, data: { salesUpdatedAt: new Date() } });
+    await systemDb.orderLineItem.deleteMany({ where: { orderId: prior.id } });
+    res = await request();
+    expect(res.json()).toMatchObject({ complete: true, baseline: false, pendingBaselineOrders: 0 });
+    expect(res.json().items[0]).toMatchObject({ units: 20, growth: null });
+  });
 });

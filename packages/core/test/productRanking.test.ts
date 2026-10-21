@@ -35,4 +35,11 @@ describe("product ranking over the entire aggregated population", () => {
     expect(rankProducts(rows, 7, true, { sortBy: "growth" }).items[0]!.key).toBe("growth");
     expect(rankProducts(rows, 7, true, { sortBy: "lowest" }).items[0]!.key).toBe("returns");
   });
+  it("keeps normalized scores bounded when the previous period had net returns", () => {
+    const p = { ...product("recovery", 10, 100, -10), activeDays: 7 };
+    const ranked = rankProducts([p], 7, true).items[0]!;
+    expect(ranked.growth).toBeNull();
+    expect(ranked.trend).toBe("No baseline");
+    expect(ranked.trendScore).toBeLessThanOrEqual(100);
+  });
 });
