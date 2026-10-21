@@ -39,8 +39,8 @@ export function ErrorState({ kind, onRetry, busy = false, correlationId, fullPag
     <div className="flex flex-wrap justify-center gap-3">
       {action}
       {onRetry && <button type="button" className="btn-primary" onClick={onRetry} disabled={busy || remaining > 0}>{remaining > 0 ? `Try again in ${remaining}s` : busy ? "Checking…" : retryLabel}</button>}
-      {kind === "session" ? <Link className="btn-primary" href="/login" onClick={() => setReturnTo(window.location.pathname + window.location.search)}>Sign in again</Link> : kind === "integration" ? <Link className="btn-primary" href="/settings/integrations">Manage connections</Link> : <Link className={kind === "forbidden" ? "btn-primary" : "btn-secondary"} href="/dashboard">{kind === "forbidden" ? "Return to dashboard" : "Go to dashboard"}</Link>}
-      <Link className="btn-secondary" href="/support">Contact support</Link>
+      {kind === "session" ? <Link prefetch={false} className="btn-primary" href="/login" onClick={() => setReturnTo(window.location.pathname + window.location.search)}>Sign in again</Link> : kind === "integration" ? <Link className="btn-primary" href="/settings/integrations">Manage connections</Link> : <Link className={kind === "forbidden" ? "btn-primary" : "btn-secondary"} href="/dashboard">{kind === "forbidden" ? "Return to dashboard" : "Go to dashboard"}</Link>}
+      <Link prefetch={false} className="btn-secondary" href="/support">Contact support</Link>
     </div>
     {reference && <p className="break-all text-xs text-muted">Support reference: {reference}</p>}
   </section>;
