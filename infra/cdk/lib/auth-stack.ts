@@ -135,7 +135,7 @@ export class AuthStack extends Stack {
     const fn = new lambda.Function(this, "CognitoEmail", {
       functionName: `${prefix}-cognito-email`,
       description: "Sends Cognito's emails (codes, temporary passwords) through the app's mail provider",
-      runtime: lambda.Runtime.NODEJS_22_X,
+      runtime: lambda.Runtime.NODEJS_24_X,
       architecture: lambda.Architecture.ARM_64,
       handler: "cognito-email.handler",
       code: lambda.Code.fromAsset(FUNCTION_DIR),

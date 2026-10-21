@@ -1,8 +1,10 @@
-import { Stack, type StackProps } from "aws-cdk-lib";
+import { RemovalPolicy, Stack, type StackProps } from "aws-cdk-lib";
+import * as logs from "aws-cdk-lib/aws-logs";
 import * as wafv2 from "aws-cdk-lib/aws-wafv2";
 import type { Construct } from "constructs";
 import { CLOUDFLARE_CLIENT_IP_HEADER, CLOUDFLARE_IPV4, CLOUDFLARE_IPV6 } from "./cloudflare.js";
 import type { EnvConfig } from "./config.js";
+import { accessLogBucket, bootstrapAssetsBucket, logBucketAccess } from "./s3-access-logs.js";
 
 /**
  * API requests a minute from one client address before WAF answers 429. One address is often many
@@ -15,7 +17,9 @@ const API_REQUESTS_PER_MINUTE_PER_IP = 1500;
 
 /**
  * AWS WAF in front of CloudFront. A CloudFront web ACL must live in us-east-1, so this is its own
- * stack there; the App stack in Sydney references it (crossRegionReferences).
+ * stack there; the App stack in Sydney references it (crossRegionReferences). Being the account's
+ * only stack in us-east-1, production's also holds the Region's S3 access log bucket, for the
+ * bucket `cdk bootstrap` made there (s3-access-logs.ts).
  *
  * Rules, in order:
  *  1. Per-IP rate limit on the API: 300 requests a minute, as the app's own globalLimit. Webhooks,
@@ -127,5 +131,17 @@ export class EdgeStack extends Stack {
       ],
     });
     this.webAclArn = acl.attrArn;
+
+    // S3 delivers access logs within a Region only, so CDK's bucket here needs a log bucket here.
+    // Production's, since that bucket is the account's (staging deploys through it too).
+    if (cfg.name === "production") {
+      const accessLogs = accessLogBucket(this, "AccessLogs", `insights-${cfg.name}-s3-logs-${this.region}-${cfg.account}`);
+      const setup = logBucketAccess(this, "BootstrapBucketLogging", {
+        bucketName: bootstrapAssetsBucket(cfg.account, this.region),
+        target: accessLogs,
+        logGroup: new logs.LogGroup(this, "BootstrapBucketLoggingLogs", { retention: logs.RetentionDays.ONE_MONTH, removalPolicy: RemovalPolicy.DESTROY }),
+      });
+      setup.node.addDependency(accessLogs.policy!);
+    }
   }
 }

@@ -32,6 +32,7 @@ const DB_SIZES: Record<string, { connections: number; lowMemoryMb: number }> = {
   "t4g.medium": { connections: 400, lowMemoryMb: 300 },
 };
 import type { DataStack } from "./data-stack.js";
+import { loggedBucket } from "./s3-access-logs.js";
 import { viewerRequestCode } from "./viewer-request.js";
 
 type QueueName = "sync" | "webhooks" | "aggregate" | "email";
@@ -134,7 +135,7 @@ export class AppStack extends Stack {
       const f = new lambda.Function(this, `Fn-${name}`, {
         functionName: `${prefix}-${name}`,
         description: `${description} (${shortCommit})`,
-        runtime: lambda.Runtime.NODEJS_22_X,
+        runtime: lambda.Runtime.NODEJS_24_X,
         architecture: lambda.Architecture.ARM_64,
         handler: "index.handler",
         code,
@@ -216,7 +217,8 @@ export class AppStack extends Stack {
     const buildFiles = join(FUNCTION_DIR, "public/_next/static");
     if (!existsSync(buildFiles)) throw new Error(`No UI build files at ${buildFiles}: build the package without --skip-web`);
     const site = new s3.Bucket(this, "Site", {
-      bucketName: `${prefix}-site-${cfg.account}`,
+      // Logs its requests to the Data stack's log bucket (s3-access-logs.ts).
+      ...loggedBucket(`${prefix}-site-${cfg.account}`, s3.Bucket.fromBucketName(this, "AccessLogs", data.accessLogs.bucketName)),
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       encryption: s3.BucketEncryption.S3_MANAGED,
       enforceSSL: true,
