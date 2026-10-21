@@ -6,6 +6,7 @@ import { bestEntryPage, biggestDropOff, dropOffSection } from "@app/shared/journ
 import { useApp } from "@/components/AppContext";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { BarRow, StackedBar } from "./Charts";
+import { TopProducts } from "./TopProducts";
 import { ContactsCard } from "./Contacts";
 import { comparisonHelp, noEarlierData, versusWords } from "./DateRange";
 import { FunnelCard, JourneyCard, SECTION_LABEL, STEP_LABEL } from "./Funnel";
@@ -212,7 +213,6 @@ function ProductsDetail({ ov, currency }: { ov: Overview; currency: string }) {
   const share = (n: number) => (base && base > 0 ? n / base : null);
   const top = items[0];
   const topTotal = items.reduce((a, i) => a + i.revenue, 0);
-  const topRevenue = Math.max(0, ...items.map((i) => i.revenue));
   return (
     <>
       <InShort>
@@ -229,39 +229,10 @@ function ProductsDetail({ ov, currency }: { ov: Overview; currency: string }) {
             )}
           </>
         ) : (
-          <p>No product sales in these dates yet.</p>
+          <p>{ov.modules.top_products?.complete === false ? "Product rankings are waiting for complete sales data for these dates." : "No product sales in these dates yet."}</p>
         )}
       </InShort>
-      {ov.modules.top_products && (
-        <Panel id="d-top-products" title="Top products" help="Ranked by net sales in these dates (after discounts and returns, before tax), as Shopify's sales by product counts them.">
-          {items.length === 0 ? (
-            <p className="text-sm text-muted">No product sales in these dates yet.</p>
-          ) : (
-            <ul className="space-y-4">
-              {items.map((p, rank) => (
-                <BarRow
-                  key={p.productId ?? p.title}
-                  label={
-                    <>
-                      <span className={`mr-2 inline-flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-semibold ${rank === 0 ? "bg-accent-2 text-white" : "bg-border text-muted"}`}>{rank + 1}</span>
-                      {p.title}
-                    </>
-                  }
-                  value={money(p.revenue)}
-                  fraction={topRevenue > 0 ? p.revenue / topRevenue : 0}
-                  sub={[
-                    plural(p.units, "unit"),
-                    p.units ? `${money(r2(p.revenue / p.units))} each on average` : null,
-                    share(p.revenue) !== null ? `${fmtPct(share(p.revenue))} of sales` : null,
-                  ]
-                    .filter(Boolean)
-                    .join(" · ")}
-                />
-              ))}
-            </ul>
-          )}
-        </Panel>
-      )}
+      {ov.modules.top_products && <TopProducts ov={ov} currency={currency} />}
       {ov.modules.catalog && <CatalogCard m={ov.modules.catalog} currency={currency} />}
     </>
   );

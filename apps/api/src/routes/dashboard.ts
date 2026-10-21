@@ -12,7 +12,7 @@ import {
   storeSalesCalculation,
   type ReportRequest,
 } from "@app/core";
-import { recentSyncJobs, storeOverview, workspaceStores } from "@app/core/reports";
+import { PRODUCT_SORTS, productPerformance, recentSyncJobs, storeOverview, workspaceStores } from "@app/core/reports";
 import { body, clientIp, HttpError, requireWorkspace, type Deps } from "../context.js";
 import type { App } from "../app.js";
 import { autoRefresh } from "../sync.js";
@@ -76,6 +76,26 @@ export function publicStore(s: {
 }
 
 export function dashboardRoutes(app: App, deps: Deps) {
+  app.get("/workspaces/:ws/stores/:storeId/analytics/products/top-selling", async (c) => {
+    const { ws, storeId } = c.req.param();
+    await requireWorkspace(c, deps, ws, "products.performance");
+    const q = z.object({
+      ...datesQuery,
+      dateFrom: z.string().optional(), dateTo: z.string().optional(),
+      sortBy: z.enum(PRODUCT_SORTS).default("units"), direction: z.enum(["asc", "desc"]).optional(),
+      limit: z.coerce.number().int().min(1).max(100).default(100), page: z.coerce.number().int().min(1).max(100).default(1),
+      search: z.string().max(200).optional(), productId: z.string().max(100).optional(), collectionId: z.string().max(100).optional(),
+    }).parse(c.req.query());
+    return c.json(await withTenant(ws, async tx => {
+      const store = await tx.store.findFirst({ where: { id: storeId, workspaceId: ws } });
+      if (!store) throw new HttpError(404, "Not found", "not_found");
+      if (!["orders", "products"].every(resource => store.grantedScopes.some(s => s === `read_${resource}` || s === `write_${resource}`))) throw new HttpError(403, "Order and product access are required. Reconnect the store with the required access.", "missing_scope");
+      if (!!q.dateFrom !== !!q.dateTo) throw new HttpError(400, "Both dateFrom and dateTo are required", "invalid_range");
+      const now = new Date();
+      const dates = resolveQueryDates(q.dateFrom && q.dateTo ? { ...q, preset: "custom", from: q.dateFrom, to: q.dateTo } : q, now, store.timezone);
+      return productPerformance(tx, { ws, storeId }, store, dates.range, q, now);
+    }));
+  });
   app.get("/workspaces/:ws/stores", async (c) => {
     const { ws } = c.req.param();
     await requireWorkspace(c, deps, ws, "dashboard:read");

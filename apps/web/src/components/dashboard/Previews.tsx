@@ -222,7 +222,7 @@ export function AreaPreview({ topic, ov, currency, health }: { topic: Topic; ov:
     case "products": {
       const items = m.top_products?.items ?? [];
       if (!items.length) return null;
-      return <MiniBars rows={items.slice(0, 3).map((p, i) => ({ label: <>{i + 1}. {p.title}</>, value: p.revenue, display: whole(p.revenue) }))} />;
+      return <MiniBars rows={items.slice(0, 3).map((p, i) => ({ label: <>{i + 1}. {p.title}</>, value: p.units, display: `${p.units} net units` }))} />;
     }
     case "timing": {
       const t = m.order_timing;
