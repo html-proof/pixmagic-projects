@@ -444,23 +444,48 @@ job signs in only with the OIDC deploy role and checks that it did.
   may write there), then run harden-runner.ps1 again:
   `Copy-Item -Recurse -Force C:\Users\<account>\AppData\Local\ms-playwright\* C:\ms-playwright`.
   Never copy from `C:\ms-playwright` into `C:\ms-playwright-main`: pull-request jobs can change the first.
-- The PC must be on and awake: queued jobs wait up to 24 hours for the runner, then are cancelled.
-  It's a laptop with Modern Standby: unplugged, it turns the screen off and sleeps 3 minutes after
-  the last input (on AC the screen stays on: `monitor-timeout-ac 0` is set), and it sleeps when
-  the lid closes. Asleep, it drops the network and does no work while a test's clock keeps
-  running, so a job is lost or a test times out: on 2026-10-18 it slept twice mid-pipeline, and on
-  2026-10-19 a 78 s sleep (unplugged with the lid closed) failed `pnpm test:integration` with
-  "Hook timed out in 60000ms" in a `beforeEach`. Every job on the PC therefore holds a power
-  request from its first steps to its end (`infra/runner/keep-awake.ps1`, step "Keep the PC awake
-  for this job"): the PC won't idle into sleep while a job runs, plugged in or not. A closed lid
-  still sleeps it, whatever requests are held, unless the lid action is "do nothing" on battery as
-  well as on AC: in an elevated PowerShell, `powercfg /setacvalueindex SCHEME_CURRENT SUB_BUTTONS LIDACTION 0`,
-  `powercfg /setdcvalueindex SCHEME_CURRENT SUB_BUTTONS LIDACTION 0`, then
-  `powercfg /setactive SCHEME_CURRENT`. Which sleep a failure was: the System log's Kernel-Power
-  events 506 (entering standby, with `LidOpenState`), 507 (leaving, `DurationInUs`) and 105
-  (plugged in or out). The PC's clock is UTC+5:30, and so is vitest's "Start at".
-  A busy PC (demos, other test runs) makes the integration tests 2-3 times slower and can time one
-  out: re-run the job.
+- The PC must be on, awake and plugged in: queued jobs wait up to 24 hours for the runner, then are
+  cancelled. It's a laptop with Modern Standby, where the screen going off is the way into standby.
+  Its screen goes off 2 minutes after the last input on AC and 3 on battery (as of 2026-10-20). On
+  AC it then never sleeps (`standby-timeout-ac` is 0) and a job runs on at full speed with the
+  screen off; on battery it sleeps right after (DRIPS: the CPU runs nothing) while a test's clock
+  keeps running, and it sleeps when the lid closes. On battery it also runs a job 2-3 times slower
+  (the 5-minute e2e suite took 10-14). What that did: on 2026-10-18 it slept twice mid-pipeline;
+  on 2026-10-19 a 78 s sleep (unplugged with the lid closed) failed `pnpm test:integration` with
+  "Hook timed out in 60000ms" in a `beforeEach`; and the e2e job failed on 2026-10-19 at 21:50Z and
+  twice on 2026-10-20 (05:51Z and 06:07Z, pull request #162) on a different test each time with the
+  other 58 passing. Each of those ran on battery and 2-3 times slower, and in two of the three the
+  PC entered standby in the middle of the suite (06:16-06:21Z: 279 s in DRIPS, inside one test's
+  180 s budget). The test that fails is whichever has the least slack when the stall comes: the
+  longest ones (the team spec's shared-link test, 150 s; the console spec), not the first after a
+  wake (they were the 25th and the 55th of 59). The third attempt, plugged in, passed in 5 minutes.
+  Every job on the PC holds a power request from its first steps to its end
+  (`infra/runner/keep-awake.ps1`, step "Keep the PC awake for this job"), and the job logs show it
+  held until each job ended, but from the runner's service session it evidently doesn't reset the
+  screen-off timer: the screen went off 120 s after the owner's last input with the request held.
+  So, two things in the repository and one for the owner:
+  - On the PC runner a failed e2e test runs once more before the run fails (`retries: 1` in
+    `apps/web/playwright.config.ts`, only while `RUNNER_ENVIRONMENT` is `self-hosted`) and the run
+    passes with that test marked flaky; a real failure fails twice. The reporter lists each test
+    with its duration, so a slow run names its slow tests. The build's budget is 7 minutes (190 s
+    was seen on battery).
+  - The last step of each job on the PC, "Did the PC sleep during this job?"
+    (`infra/runner/power-report.ps1`), prints the standbys that overlapped the job (from the
+    System log's Kernel-Power events 506 and 507: when, how long, how much of it in DRIPS, idle
+    timer or lid, battery or AC) as a warning annotation, and whether the job ran on battery as a
+    notice. Read it before re-running a job that timed out.
+  - The owner's power settings, in an elevated PowerShell, keep the PC awake on battery while jobs
+    run: `powercfg /change monitor-timeout-dc 0` (the screen stays on; off is the way into standby)
+    and `powercfg /change standby-timeout-dc 0`. A closed lid still sleeps it unless the lid action
+    is "do nothing" on battery as well as on AC: `powercfg /setacvalueindex SCHEME_CURRENT SUB_BUTTONS LIDACTION 0`,
+    `powercfg /setdcvalueindex SCHEME_CURRENT SUB_BUTTONS LIDACTION 0`, then
+    `powercfg /setactive SCHEME_CURRENT`. Or keep it plugged in while jobs run.
+  Which sleep a failure was, by hand: the System log's Kernel-Power events 506 (entering standby,
+  with `Reason`, 12 = the idle timer, and `LidOpenState`), 507 (leaving, `DurationInUs` and
+  `DripsResidencyInUs`) and 105 (plugged in or out, `AcOnline`). The PC's clock is UTC+5:30, and so
+  is vitest's "Start at". A busy PC (demos, other test runs, other sessions' builds) makes the
+  integration tests and the e2e suite 2-3 times slower too and can time a test out even plugged in
+  and awake (2026-10-19 20:28Z): re-run the job once the PC is quiet.
 - While the runner deploys, nobody deploys by hand: the two don't share a lock.
 - "Artifact storage quota has been hit" on the Playwright report step: the account's 500 MB of
   Actions storage is used up (see the CI list above). Only that report is lost; the pass records
