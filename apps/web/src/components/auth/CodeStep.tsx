@@ -15,21 +15,25 @@ const clock = (ms: number) => {
 };
 
 /**
- * The server's countdowns on this device's clock. The server said `now` as it answered, so the
- * difference to this clock is the offset: a device whose time is off still counts the right minute.
- * Re-read four times a second; the moments themselves never move.
+ * The server's countdowns on this device's clock. The server said `now` as it answered; the time
+ * that has passed on this device since the answer arrived is added to it, so a device whose clock
+ * is off still counts the right minute. Re-read four times a second; the moments never move.
  */
 function useCountdown(challenge: CodeChallenge | null | undefined) {
   const [tick, setTick] = useState(0);
+  /** When this challenge arrived here (this device's clock). */
+  const received = useRef<{ challenge: CodeChallenge; at: number } | null>(null);
   useEffect(() => {
     if (!challenge) return;
+    received.current = { challenge, at: Date.now() };
+    setTick((n) => n + 1);
     const t = window.setInterval(() => setTick((n) => n + 1), 250);
     return () => window.clearInterval(t);
   }, [challenge]);
   if (!challenge) return null;
   void tick;
-  const offset = challenge.now - Date.now();
-  const serverNow = Date.now() + offset;
+  const elapsed = received.current?.challenge === challenge ? Date.now() - received.current.at : 0;
+  const serverNow = challenge.now + elapsed;
   return { expiresIn: challenge.expiresAt - serverNow, resendIn: challenge.resendAt - serverNow };
 }
 
@@ -62,6 +66,13 @@ export function OtpInput({
   const digits = Array.from({ length: CODE_LENGTH }, (_, i) => value[i] ?? "");
 
   const focus = (i: number) => boxes.current[Math.max(0, Math.min(CODE_LENGTH - 1, i))]?.focus();
+
+  // A refused code: the boxes were disabled while it was checked (which drops focus), so put the
+  // cursor back on the last digit for the correction.
+  useEffect(() => {
+    if (!disabled && invalid && value.length === CODE_LENGTH) focus(CODE_LENGTH - 1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only when the check ends with a refusal
+  }, [disabled, invalid]);
 
   /** `typed` landed in box `at`: write its digits from there on (one key, a paste, an autofill). */
   const write = (at: number, typed: string) => {
