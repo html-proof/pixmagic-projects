@@ -61,17 +61,20 @@ export async function productPerformance(tx: Tx, scope: Scope, store: Store, ran
   const data = await importedData(tx, scope, store);
   const previous = resolvePreset("custom", now, store.timezone, range).previous;
   const baseline = comparisonImported(previous, data.historyFrom);
-  const [quality] = await tx.$queryRaw<Array<{ provisional: number; unmatched: number }>>`
-    SELECT COUNT(DISTINCT o.id) FILTER (WHERE o.sales_updated_at IS NULL)::int AS provisional,
-      COUNT(*) FILTER (WHERE li.id IS NULL)::int AS unmatched
+  const [quality] = await tx.$queryRaw<Array<{ provisional: number; unmatched: number; previous_unverified: number }>>`
+    SELECT COUNT(DISTINCT o.id) FILTER (WHERE o.sales_updated_at IS NULL AND s.local_day >= ${range.from})::int AS provisional,
+      COUNT(*) FILTER (WHERE li.id IS NULL AND s.local_day >= ${range.from})::int AS unmatched,
+      COUNT(*) FILTER (WHERE (li.id IS NULL OR o.sales_updated_at IS NULL) AND s.local_day < ${range.from})::int AS previous_unverified
     FROM order_sales s
     JOIN orders o ON o.workspace_id = ${ws} AND o.store_id = s.store_id AND o.id = s.order_id
     LEFT JOIN order_line_items li ON li.workspace_id = ${ws} AND li.store_id = s.store_id AND li.order_id = s.order_id AND li.shopify_id = s.line_item_shopify_id
     WHERE s.workspace_id = ${ws} AND s.store_id = ${storeId} AND s.line_type = 'product'
-      AND s.local_day BETWEEN ${range.from} AND ${range.to}`;
-  const pendingOrders = await tx.order.count({ where: { workspaceId: ws, storeId, localDay: { gte: previous.from, lte: range.to }, salesUpdatedAt: null } });
+      AND s.local_day BETWEEN ${previous.from} AND ${range.to}`;
+  const pendingOrders = await tx.order.count({ where: { workspaceId: ws, storeId, localDay: { gte: range.from, lte: range.to }, salesUpdatedAt: null } });
+  const pendingBaselineOrders = await tx.order.count({ where: { workspaceId: ws, storeId, localDay: { gte: previous.from, lte: previous.to }, salesUpdatedAt: null } });
   const complete = store.ordersHistoryFrom !== null && data.historyFrom !== null && range.from >= data.historyFrom &&
     store.status === "active" && pendingOrders === 0 && !quality?.provisional && !quality?.unmatched;
+  const comparisonComplete = baseline && complete && pendingBaselineOrders === 0 && !quality?.previous_unverified;
   const current = Prisma.sql`s.local_day BETWEEN ${range.from} AND ${range.to}`;
   const before = Prisma.sql`s.local_day BETWEEN ${previous.from} AND ${previous.to} ${previous.until ? Prisma.sql`AND s.happened_at < ${localMoment(previous.to, previous.until, store.timezone)}` : Prisma.empty}`;
   const rows = await tx.$queryRaw<Raw[]>`
@@ -143,7 +146,7 @@ export async function productPerformance(tx: Tx, scope: Scope, store: Store, ran
   const search = options.search?.trim().toLowerCase();
   for (const p of products.values()) for (const field of ["revenue", "grossSales", "discounts", "returns", "previousRevenue"] as const) p[field] = r2(p[field]);
   const eligible = [...products.values()].filter(p => active.has(p.key) && (!search || [p.title, p.productId, ...p.variants.map(v => v.sku)].some(v => v?.toLowerCase().includes(search))));
-  const result = rankProducts(eligible, daysBetweenInclusive(range.from, range.to), baseline && complete, options);
+  const result = rankProducts(eligible, daysBetweenInclusive(range.from, range.to), comparisonComplete, options);
   return { ...result, items: complete ? result.items.map(p => ({ ...p, variants: products.get(p.key)!.variants })) : [], total: complete ? result.total : 0,
-    complete, baseline: baseline && complete, pendingOrders, unmatchedSales: quality?.unmatched ?? 0, previous, historyFrom: data.historyFrom, lastSyncedAt: store.lastSyncedAt, weights: TREND_WEIGHTS, minimumTrendUnits: MIN_TREND_UNITS };
+    complete, baseline: comparisonComplete, pendingOrders, pendingBaselineOrders, unmatchedSales: quality?.unmatched ?? 0, previous, historyFrom: data.historyFrom, lastSyncedAt: store.lastSyncedAt, weights: TREND_WEIGHTS, minimumTrendUnits: MIN_TREND_UNITS };
 }

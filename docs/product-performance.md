@@ -27,7 +27,7 @@ The default is descending net units, then descending net revenue, then stable ke
 
 The comparison is the immediately preceding equal number of calendar days, independently of a dashboard year/custom comparison. A running final day compares with the same elapsed local time on the previous period's final day, including DST conversion. Growth = (current net units - previous net units) / previous net units * 100. Zero baseline is New; negative or unavailable baseline is No baseline.
 
-The exported, testable weights are: current units 30%, unit momentum 20%, revenue momentum 15%, distinct orders 15%, recent velocity 10%, consistency 10%. Units, orders and recent three-day net units are divided by their positive population maxima; momentum = max(0, current - previous) / max(1, abs(current), abs(previous)); consistency = active sale days / reporting days, capped at one. The weighted sum is multiplied by 100. Fewer than five current net units score zero; unavailable baseline scores null. Scoring and actual money/units stay separate. Scores normalize over the active search/filter population.
+The exported, testable weights are: current units 30%, unit momentum 20%, revenue momentum 15%, distinct orders 15%, recent velocity 10%, consistency 10%. Units, orders and recent three-day net units are divided by their positive population maxima; momentum = min(1, max(0, current - previous) / max(1, abs(current), abs(previous))); consistency = active sale days / reporting days, capped at one. The weighted sum is multiplied by 100. Fewer than five current net units score zero; unavailable baseline scores null. Scoring and actual money/units stay separate. Scores normalize over the active search/filter population.
 
 ## API and UI
 
