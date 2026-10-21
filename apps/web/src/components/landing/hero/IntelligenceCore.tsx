@@ -2,8 +2,7 @@
 import { motion, useTransform, type MotionValue } from "motion/react";
 import { useId, useRef, type ReactNode } from "react";
 import { usePauseWhenHidden } from "@/hooks/usePauseWhenHidden";
-import { MARK } from "../shared/InsightMark";
-import { CORE_EXTENT, CORE_R, OUTER_RING_R, RINGS } from "./HeroLayout";
+import { CORE_EXTENT, CORE_R, OUTER_RING_GAP, OUTER_RING_R, RINGS } from "./heroLayout";
 
 /** SVG units per sphere radius. The core's SVGs use a viewBox centred on the sphere. */
 const U = 100;
@@ -13,10 +12,10 @@ const VIEWBOX = `${-HALF} ${-HALF} ${HALF * 2} ${HALF * 2}`;
 const rad = (deg: number) => (deg * Math.PI) / 180;
 const pt = (r: number, deg: number) => `${(r * Math.cos(rad(deg))).toFixed(2)} ${(r * Math.sin(rad(deg))).toFixed(2)}`;
 
-/** The open outer ring, with its gap where the Insight mark has it (top right). */
+/** The open outer ring, with its gap at the top right. */
 const OUTER = (() => {
   const r = OUTER_RING_R * U;
-  return `M ${pt(r, MARK.ringStart)} A ${r} ${r} 0 1 1 ${pt(r, MARK.ringEnd)}`;
+  return `M ${pt(r, OUTER_RING_GAP.start)} A ${r} ${r} 0 1 1 ${pt(r, OUTER_RING_GAP.end)}`;
 })();
 
 /**
@@ -120,8 +119,8 @@ export interface CoreMotion {
 }
 
 /**
- * The Insight intelligence core: a shaded sphere with soft violet/blue energy inside, three
- * tilted orbital rings each carrying one orbit point, and the open outer ring of the Insight mark.
+ * The bizinsights intelligence core: a shaded sphere with soft violet/blue energy inside, three
+ * tilted orbital rings each carrying one orbit point, and an open outer ring.
  * Sized as a share of the visual box (`CORE_R`), so the canvas particles can orbit it exactly.
  * Purely decorative; the hero describes the story for screen readers.
  */
@@ -145,11 +144,11 @@ export function IntelligenceCore({ motion: m, still = false }: { motion: CoreMot
       <motion.div
         ref={coreRef}
         {...paused}
-        className="absolute left-1/2 top-1/2 aspect-square -translate-x-1/2 -translate-y-1/2 will-change-transform"
+        className="lp-layer absolute left-1/2 top-1/2 aspect-square -translate-x-1/2 -translate-y-1/2"
         style={{ width: size, scale: m.scale, opacity: m.opacity }}
       >
         <motion.div
-          className="absolute inset-[12%] rounded-full"
+          className="lp-layer absolute inset-[12%] rounded-full"
           style={{
             opacity: halo,
             background:
@@ -157,7 +156,7 @@ export function IntelligenceCore({ motion: m, still = false }: { motion: CoreMot
           }}
         />
 
-        <motion.div ref={backRef} {...paused} className="absolute inset-0" style={{ opacity: m.rings }}>
+        <motion.div ref={backRef} {...paused} className="lp-layer absolute inset-0" style={{ opacity: m.rings }}>
           <svg viewBox={VIEWBOX} className={`absolute inset-0 size-full overflow-visible ${spin}`} style={still ? undefined : { animationDuration: "160s" }} fill="none">
             <path d={OUTER} stroke="rgb(255 255 255 / 0.17)" strokeWidth={1} strokeLinecap="round" vectorEffect="non-scaling-stroke" />
           </svg>
@@ -189,7 +188,7 @@ export function IntelligenceCore({ motion: m, still = false }: { motion: CoreMot
           />
         </div>
 
-        <motion.div ref={frontRef} {...paused} className="absolute inset-0" style={{ opacity: m.rings }}>
+        <motion.div ref={frontRef} {...paused} className="lp-layer absolute inset-0" style={{ opacity: m.rings }}>
           <svg viewBox={VIEWBOX} className="absolute inset-0 size-full overflow-visible" fill="none">
             <defs>
               <linearGradient id={gradient} x1="-250" y1="0" x2="250" y2="0" gradientUnits="userSpaceOnUse">

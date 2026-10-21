@@ -1,20 +1,20 @@
 import { Prisma, systemDb } from "@app/db";
-import { INLINE_PAYLOAD_LIMIT, logger, shopifyApps, type WebhookJobData } from "@app/core";
+import { DEFAULT_APP, INLINE_PAYLOAD_LIMIT, logger, shopifyApps, type WebhookJobData } from "@app/core";
 import { randomToken, verifyShopifyWebhookHmac } from "@app/shared";
 import { clientIp, type Deps } from "../context.js";
 import type { App } from "../app.js";
 
 /**
  * Once a delivery has been recorded (or re-armed) this long, the request that did it is over:
- * Shopify gives up at 5s and the Worker is cancelled with it. Shopify's first retry can come about
- * a second later, so a retry inside this window is answered 503, never 200 (see redelivery).
+ * Shopify gives up waiting at 5s. Shopify's first retry can come about a second later, so a retry
+ * inside this window is answered 503, never 200 (see redelivery).
  */
 const REARM_AFTER_MS = 30_000;
 
 /**
  * A retry of a delivery we already recorded. The row is committed before the queue send, so it can
- * exist with nothing behind it: the DB tunnel dropped after the INSERT committed (we answered 500),
- * or Shopify gave up at 5s and the Worker was cancelled before the send. A 200 ends Shopify's
+ * exist with nothing behind it: the database connection dropped after the INSERT committed (we
+ * answered 500), or the request was cut off before the send. A 200 ends Shopify's
  * retries, so answering one for such a row loses the event for good (uninstall, redact,
  * products/delete: the payload was never stored). Only a consumer touching the row proves it was
  * queued, so:
@@ -60,6 +60,14 @@ function payloadShop(payload: unknown): string | null {
 }
 
 /**
+ * Topics that delete data or tokens. Shopify's payload for each names its shop (`shop_domain`, or
+ * `myshopify_domain` on the shop object app/uninstalled sends), so one that doesn't is not genuine:
+ * the shop and topic headers are unsigned, and without this a signed body of any other topic could
+ * be replayed under one of these names at someone else's store.
+ */
+const SHOP_NAMED_TOPICS = new Set(["app/uninstalled", "shop/redact", "customers/redact", "customers/data_request"]);
+
+/**
  * Shopify webhook intake. Contract:
  *  - HMAC of the *raw* body is verified before anything else (401 otherwise).
  *  - X-Shopify-Webhook-Id is recorded under a unique constraint, so retries
@@ -95,9 +103,17 @@ export function webhookRoutes(app: App, deps: Deps) {
     // the body names its shop - the GDPR topics and app/uninstalled, the ones that delete data or
     // tokens - it must be the shop the headers say, or a signed body could be replayed at another store.
     const claimed = payloadShop(payload);
-    if (claimed !== null && claimed !== shop) {
-      logger.warn({ topic, shop, claimed, ip: clientIp(c) }, "webhook rejected: payload is for another shop");
+    if ((claimed !== null && claimed !== shop) || (claimed === null && SHOP_NAMED_TOPICS.has(topic))) {
+      logger.warn({ topic, shop, claimed, ip: clientIp(c) }, "webhook rejected: payload is for another shop, or names none");
       return c.json({ error: "shop_mismatch" }, 401);
+    }
+    // A client's custom-distribution app installs only on that client's store, so its signature
+    // vouches for nothing else: otherwise whoever holds that one app's secret could aim orders,
+    // product deletions or redactions at any store. (The main app's allowlist only gates new
+    // installs, so stores connected before it changed keep their webhooks.)
+    if (app.key !== DEFAULT_APP && app.shops.length && !app.shops.includes(shop)) {
+      logger.warn({ topic, shop, app: app.key, ip: clientIp(c) }, "webhook rejected: signed by an app that can't be installed on this shop");
+      return c.json({ error: "wrong_app" }, 401);
     }
 
     const store = await systemDb.store.findUnique({ where: { shopDomain: shop }, select: { id: true, workspaceId: true } });

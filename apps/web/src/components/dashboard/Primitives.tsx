@@ -48,7 +48,7 @@ export function Stat({ label, value, note, tone, className = "" }: { label: stri
 
 /** Quiet text shown when a card has nothing to plot yet. */
 export function Empty({ children }: { children: ReactNode }) {
-  return <div role="status" className="flex flex-col items-center rounded-lg border border-dashed border-border px-3 py-6 text-center text-sm text-muted"><StateIllustration kind="empty" compact /><p className="max-w-md">{children}</p></div>;
+  return <div className="flex flex-col items-center gap-2 rounded-lg border border-dashed border-border px-3 py-6 text-center text-sm text-muted"><StateIllustration kind="empty" compact /><p>{children}</p></div>;
 }
 
 export type Tone = "good" | "warn" | "danger" | "neutral";
@@ -78,16 +78,16 @@ export function Badge({ tone, children }: { tone: Tone; children: ReactNode }) {
 
 /** Change against the previous period, coloured by whether it's good news (`invert` for costs). */
 /** A change with no good or bad direction (spending more isn't good or bad by itself). */
-export function NeutralDelta({ value }: { value: number | null }) {
+export function NeutralDelta({ value, label = "vs before" }: { value: number | null; label?: string }) {
   if (value === null) return <span className="text-xs text-muted">nothing to compare with</span>;
   return (
     <span className="inline-flex w-fit items-center gap-1 rounded-full bg-border/60 px-2 py-0.5 text-xs text-muted">
-      {value > 0 ? "▲" : value < 0 ? "▼" : "■"} {fmtPct(Math.abs(value))} <span className="opacity-80">vs before</span>
+      {value > 0 ? "▲" : value < 0 ? "▼" : "■"} {fmtPct(Math.abs(value))} <span className="opacity-80">{label}</span>
     </span>
   );
 }
 
-export function Delta({ value, invert = false, label = "vs previous period" }: { value: number | null | undefined; invert?: boolean; label?: string }) {
+export function Delta({ value, invert = false, label = "vs before" }: { value: number | null | undefined; invert?: boolean; label?: string }) {
   if (value === null || value === undefined) return <span className="text-xs text-muted">no earlier data to compare</span>;
   const good = invert ? value < 0 : value > 0;
   const arrow = value > 0 ? "▲" : value < 0 ? "▼" : "■";
@@ -96,5 +96,16 @@ export function Delta({ value, invert = false, label = "vs previous period" }: {
     <span className={`inline-flex w-fit items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${tone}`}>
       {arrow} {fmtPct(Math.abs(value))} <span className="font-normal opacity-80">{label}</span>
     </span>
+  );
+}
+
+/** What a chart shows, picked from a short list (the sales charts: Custom sales, net sales...). */
+export function ChartChoice<T extends string>({ label, value, options, onChange }: { label: string; value: T; options: Array<[T, string]>; onChange: (v: T) => void }) {
+  return (
+    <select aria-label={label} className="input h-9 w-auto cursor-pointer py-1 pr-8 text-xs font-medium shadow-[var(--shadow)]" value={value} onChange={(e) => onChange(e.target.value as T)}>
+      {options.map(([v, l]) => (
+        <option key={v} value={v}>{l}</option>
+      ))}
+    </select>
   );
 }

@@ -2,34 +2,31 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
-
-const ITEMS = [
-  ["profile", "Profile"],
-  ["workspace", "Workspace"],
-  ["integrations", "Connect your business"],
-  ["stores", "Shopify"],
-  ["ads", "Advertising"],
-  ["members", "Members & roles"],
-  ["notifications", "Notifications"],
-  ["api-keys", "API keys"],
-  ["billing", "Billing"],
-  ["audit", "Audit log"],
-] as const;
+import { useApp } from "@/components/AppContext";
+import { canOpenPage } from "@/lib/access";
+import { SETTINGS_PAGES } from "@/lib/settingsNav";
 
 export default function SettingsLayout({ children }: { children: ReactNode }) {
   const path = usePathname();
+  const { me, access, workspace, offers } = useApp();
+  // Only the pages this member may open (Team & Access) of what the workspace offers: someone from
+  // outside the business sees their own account.
+  const pages = SETTINGS_PAGES.map((p) => ({ ...p, to: p.href ?? `/settings/${p.slug}` })).filter((p) => canOpenPage(p.to, access, workspace.staffRole ?? null, !!me.shared, offers));
   return (
     <div className="grid gap-6 md:grid-cols-[12rem_1fr]">
       <nav aria-label="Settings" className="flex gap-1 overflow-x-auto md:flex-col">
-        {ITEMS.map(([slug, label]) => {
-          const active = path.replace(/\/$/, "") === `/settings/${slug}`;
+        {pages.map(({ slug, label, icon: Glyph, to }) => {
+          const here = path.replace(/\/$/, "");
+          // Email integrations has pages of its own under it.
+          const active = here === to || (slug === "email" && here.startsWith("/settings/email/"));
           return (
             <Link
               key={slug}
-              href={`/settings/${slug}`}
+              href={to}
               aria-current={active ? "page" : undefined}
-              className={`whitespace-nowrap rounded-lg px-3 py-2 text-sm ${active ? "bg-surface font-semibold" : "text-muted"}`}
+              className={`inline-flex items-center gap-2 whitespace-nowrap rounded-lg px-3 py-2 text-sm transition-colors ${active ? "bg-accent/10 font-semibold text-text" : "text-muted hover:text-text"}`}
             >
+              <Glyph size={16} strokeWidth={1.8} aria-hidden="true" />
               {label}
             </Link>
           );

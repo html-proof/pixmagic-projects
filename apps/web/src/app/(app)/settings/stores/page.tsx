@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
-import { canManage, StoresPending, useApp } from "@/components/AppContext";
+import { canManage, StoresPending, useApp, type StoreSummary } from "@/components/AppContext";
 import { ShopifyConnect } from "@/components/ShopifyConnect";
 import { OAUTH_ERRORS } from "@/lib/shopifyErrors";
 import { Alert, EmptyState } from "@/components/ui";
@@ -14,7 +14,7 @@ function modulesNeeding(scope: string): string[] {
 }
 
 /** Plain words for a status a merchant has no reason to know the internal name of. */
-function statusLabel(status: string): { text: string; tone: string } {
+function statusLabel(status: string, problem?: StoreSummary["syncProblem"]): { text: string; tone: string } {
   switch (status) {
     case "active":
       return { text: "Connected", tone: "text-good" };
@@ -25,6 +25,10 @@ function statusLabel(status: string): { text: string; tone: string } {
     case "uninstalled":
       return { text: "Removed in Shopify", tone: "text-muted" };
     case "error":
+      // Reconnecting fixes lost access (and is the best guess when Shopify didn't say), not these.
+      if (problem === "not_approved") return { text: "Waiting for Shopify to approve bizinsights to read orders", tone: "text-muted" };
+      if (problem === "shop_unavailable" || problem === "shop_locked") return { text: "Shopify has paused this store — syncing resumes once it's back", tone: "text-danger" };
+      if (problem === "shop_gone") return { text: "Shopify can't find this store any more", tone: "text-danger" };
       return { text: "Something went wrong — reconnect to fix it", tone: "text-danger" };
     default:
       return { text: status, tone: "text-muted" };
@@ -37,6 +41,9 @@ export default function StoresPage() {
   /** `${storeId}:${scope}` while that one revoke is in flight, so only its button is busy. */
   const [revoking, setRevoking] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** The store whose "Sync now" is in flight, and the last one that was started. */
+  const [syncing, setSyncing] = useState<string | null>(null);
+  const [synced, setSynced] = useState<string | null>(null);
   /** Just back from Shopify with a store connected (`?connected=<store id>`). */
   const [connected, setConnected] = useState<string | null>(null);
 
@@ -61,9 +68,9 @@ export default function StoresPage() {
   async function disconnect(id: string, domain: string) {
     // Disconnecting is ours alone: the app stays installed in the merchant's Shopify admin until
     // they uninstall it there, so say so rather than imply Shopify access ends here.
-    if (!confirm(`Disconnect ${domain}? Its synced data will be deleted from Insights. You can reconnect later.
+    if (!confirm(`Disconnect ${domain}? Its synced data will be deleted from bizinsights. You can reconnect later.
 
-To stop Insights' access in Shopify too, uninstall the app from your Shopify admin.`)) return;
+To stop bizinsights' access in Shopify too, uninstall the app from your Shopify admin.`)) return;
     setError(null);
     try {
       await api(`/workspaces/${workspace.id}/stores/${id}`, { method: "DELETE" });
@@ -73,6 +80,22 @@ To stop Insights' access in Shopify too, uninstall the app from your Shopify adm
     // Either way: a failure can come after the store was already marked disconnected (the data
     // purge runs last), so the card should show what is true now. Disconnecting again is safe.
     await reloadStores().catch(() => {});
+  }
+
+  /** Re-read the store from Shopify now: orders of the whole import window, products and stock. */
+  async function syncNow(id: string, domain: string) {
+    setSyncing(id);
+    setError(null);
+    setSynced(null);
+    try {
+      await api(`/workspaces/${workspace.id}/stores/${id}/resync`, { method: "POST" });
+      setSynced(domain);
+      await reloadStores().catch(() => {});
+    } catch (e) {
+      setError(actionError(e, `sync ${domain}`));
+    } finally {
+      setSyncing(null);
+    }
   }
 
   /**
@@ -85,7 +108,7 @@ To stop Insights' access in Shopify too, uninstall the app from your Shopify adm
     const consequence = affected.length
       ? `${affected.join(", ")} will stop working until you grant it again.`
       : "Nothing on your dashboard uses it today.";
-    if (!confirm(`Stop letting Insights read ${scopeLabel(scope).toLowerCase()} for ${domain}?\n\n${consequence}`)) return;
+    if (!confirm(`Stop letting bizinsights read ${scopeLabel(scope).toLowerCase()} for ${domain}?\n\n${consequence}`)) return;
     setRevoking(`${id}:${scope}`);
     setError(null);
     try {
@@ -108,13 +131,18 @@ To stop Insights' access in Shopify too, uninstall the app from your Shopify adm
         </Alert>
       )}
       {error && <Alert>{error}</Alert>}
+      {synced && (
+        <Alert kind="success">
+          Syncing {synced} with Shopify: its orders, products and stock are being read again. The dashboard fills in as they land.
+        </Alert>
+      )}
       {manage && <ShopifyConnect workspaceId={workspace.id} />}
       <StoresPending />
       {storesStatus === "ready" && stores.length === 0 && (
         <EmptyState title="No stores yet" body={manage ? "Connect a Shopify store above to start seeing metrics." : "Ask a workspace admin to connect a Shopify store."} />
       )}
       {stores.map((s) => {
-        const status = statusLabel(s.status);
+        const status = statusLabel(s.status, s.syncProblem);
         // write_X implies read_X, so a store granted write_pixels satisfies a read_pixels need.
         const granted = expandScopes(s.grantedScopes);
         const modules = CAPABILITIES.map((c) => ({
@@ -140,15 +168,16 @@ To stop Insights' access in Shopify too, uninstall the app from your Shopify adm
 
             {empty && (
               <p className="rounded-lg border border-border bg-bg p-3 text-sm" data-testid="store-empty">
-                Connected, but there was nothing to import: this store has no orders or products in Shopify yet. Add a product or
-                place a test order and it will appear here on its own.
+                Connected, but there was nothing to import: this store has no orders or products in Shopify yet. Add a product, or create
+                an order in Shopify (Orders → Create order, then mark it as paid), and press Sync now. Test orders aren&apos;t counted, as in
+                Shopify&apos;s reports.
               </p>
             )}
 
             {/* What the app can read. Lead with what the data *is*, because the scope string is
                 the one part of this page a merchant has no way to interpret. */}
             <div className="space-y-2">
-              <h2 className="text-sm font-medium">What Insights can read from this store</h2>
+              <h2 className="text-sm font-medium">What bizinsights can read from this store</h2>
               {s.grantedScopes.length === 0 ? (
                 <p className="text-sm text-muted">Nothing yet — reconnect the store to grant access.</p>
               ) : (
@@ -234,13 +263,26 @@ To stop Insights' access in Shopify too, uninstall the app from your Shopify adm
                 // hover — in the *store's* zone, not the viewer's: the line above this card states
                 // the store's time zone, so a timestamp in another one reads as a contradiction.
                 <p className="text-xs text-muted" title={`${fmtDateTime(s.lastSyncedAt, s.timezone)} (${s.timezone})`}>
-                  Last updated {fmtRelative(s.lastSyncedAt) ?? "just now"} · Insights keeps this current on its own
+                  Last updated {fmtRelative(s.lastSyncedAt) ?? "just now"} · bizinsights keeps this current on its own
                 </p>
               ) : (
                 <span />
               )}
               {manage && (
-                <button className="btn-danger" aria-label={`Disconnect ${s.shopDomain}`} onClick={() => disconnect(s.id, s.shopDomain)}>Disconnect</button>
+                <div className="flex flex-wrap gap-2">
+                  {(s.status === "active" || s.status === "error") && (
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      aria-label={`Sync ${s.shopDomain} with Shopify now`}
+                      disabled={syncing === s.id}
+                      onClick={() => syncNow(s.id, s.shopDomain)}
+                    >
+                      {syncing === s.id ? "Starting…" : "Sync now"}
+                    </button>
+                  )}
+                  <button className="btn-danger" aria-label={`Disconnect ${s.shopDomain}`} onClick={() => disconnect(s.id, s.shopDomain)}>Disconnect</button>
+                </div>
               )}
             </div>
           </div>

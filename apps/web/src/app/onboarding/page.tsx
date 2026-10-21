@@ -4,6 +4,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { api, fmtNum, friendlyError, isSignedOut, keepRetrying, type ApiError } from "@/lib/api";
 import { Alert } from "@/components/ui";
+import { BrandLogo } from "@/components/Brand";
 import type { Me } from "@/components/AppContext";
 import { ShopifyIcon } from "@/components/ShopifyIcon";
 import { signInAndReturn } from "@/lib/returnTo";
@@ -220,7 +221,9 @@ function Onboarding() {
 
   return (
     <main className="mx-auto max-w-xl px-4 py-12">
-      <p className="text-sm font-semibold text-accent">Insights</p>
+      <p>
+        <BrandLogo size={24} className="text-[15px] text-text" />
+      </p>
       <h1 className="mt-2 text-2xl font-semibold">{step === 2 ? "Importing your store" : "Let’s get your store set up"}</h1>
       <ol className="mt-6 flex flex-wrap gap-2 text-xs" aria-label="Progress">
         {STEP_LABELS.map((l, i) => (
@@ -252,14 +255,14 @@ function Onboarding() {
               You&apos;ll sign in to Shopify, pick your store and approve read-only access. We only ask for what the dashboard uses, and you can disconnect any time.
             </p>
             <button type="button" className="btn-primary w-full sm:w-auto" disabled={!!busy} onClick={connectWithShopify}>
-              <ShopifyIcon />
+              <ShopifyIcon onAccent />
               {busy === "oneclick" ? "Opening Shopify…" : "Continue with Shopify"}
             </button>
-            {!manual ? (
-              <button type="button" className="block text-sm text-muted underline" onClick={() => setManual(true)}>
-                Enter store address instead
-              </button>
-            ) : (
+            {/* Shopify's own store picker is the way in (App Store requirement 2.3.1: never ask
+                a merchant to type their store's address). The address form appears only when the
+                API says the picker can't reach this merchant's app (shop_required), or prefilled
+                when Shopify itself named the store (?shop=). */}
+            {manual && (
               <form onSubmit={connect} className="space-y-3 border-t border-border pt-4">
                 <label className="label" htmlFor="shop">Your store address</label>
                 <div className="flex items-center gap-2">
@@ -289,7 +292,7 @@ function Onboarding() {
                 {ready
                   ? "All set. Your numbers are ready."
                   : sync?.store.status === "error"
-                    ? "We hit a problem importing your store. Open your dashboard: Insights retries the import from there, and shows whatever has arrived so far."
+                    ? "We hit a problem importing your store. Open your dashboard: bizinsights retries the import from there, and shows whatever has arrived so far."
                     : "We're importing your orders, products and inventory. This usually takes a minute or two, and it's fine to leave this page."}
               </p>
             </div>
@@ -322,9 +325,9 @@ function Onboarding() {
       </div>
       {/* The errors above tell merchants to contact support; this page has no AuthShell, so link it here. */}
       <p className="mt-6 text-center text-xs text-muted">
-        <Link className="underline" href="/support">Support</Link>
+        <Link prefetch={false} className="underline" href="/support">Support</Link>
         {" · "}
-        <Link className="underline" href="/privacy">Privacy</Link>
+        <Link prefetch={false} className="underline" href="/privacy">Privacy</Link>
       </p>
     </main>
   );

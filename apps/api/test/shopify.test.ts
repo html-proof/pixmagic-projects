@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { systemDb } from "@app/db";
 import { signShopifyQuery, signWebhookBody } from "@app/shared";
-import { getAccessToken, INLINE_PAYLOAD_LIMIT } from "@app/core";
+import { encryptTokenFields, getAccessToken, INLINE_PAYLOAD_LIMIT } from "@app/core";
 import { clean, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
 
 let ctx: TestCtx;
@@ -48,10 +48,10 @@ describe("Shopify OAuth", () => {
     ctx.setFetch(async (input, init) => {
       expect(String(input)).toBe("https://demo-shop.myshopify.com/admin/oauth/access_token");
       const body = JSON.parse(String(init?.body));
-      expect(body).toMatchObject({ code: "authcode", client_secret: SECRET });
-      expect(body).not.toHaveProperty("expiring");
+      // An expiring offline token: Shopify flags a non-expiring one as deprecated.
+      expect(body).toMatchObject({ code: "authcode", client_secret: SECRET, expiring: "1" });
       return new Response(
-        JSON.stringify({ access_token: "shpat_PLAINTEXT", scope: "read_orders" }),
+        JSON.stringify({ access_token: "shpat_PLAINTEXT", scope: "read_orders", expires_in: 3600, refresh_token: "shprt_PLAINTEXT", refresh_token_expires_in: 7_776_000 }),
         { status: 200, headers: { "content-type": "application/json" } },
       );
     });
@@ -68,6 +68,8 @@ describe("Shopify OAuth", () => {
     expect(store.workspaceId).toBe(ws);
     expect(store.grantedScopes).toEqual(["read_orders"]);
     expect(store.accessTokenEnc).toBeTruthy();
+    expect(store.refreshTokenEnc).toBeTruthy();
+    expect(store.accessTokenExpiresAt!.getTime()).toBeGreaterThan(Date.now() + 59 * 60_000);
     expect(JSON.stringify(store)).not.toContain("PLAINTEXT");
     expect(await getAccessToken(store, ctx.deps.coord)).toBe("shpat_PLAINTEXT");
 
@@ -84,6 +86,32 @@ describe("Shopify OAuth", () => {
       headers: { cookie: `${cookie}; ${stateCookie}` },
     });
     expect(replay.headers.location).toContain("error=state_expired");
+  });
+
+  it("puts a re-authorization's token on the store even when the connect goes no further", async () => {
+    const { res, ws, cookie } = await startInstall();
+    const store = await createStore(ws, "demo-shop.myshopify.com", ["read_orders"], { shopifyAppKey: "default" });
+    const hour = new Date(Date.now() + 3600_000);
+    await systemDb.store.update({
+      where: { id: store.id },
+      data: encryptTokenFields(store.id, { accessToken: "shpat_OLD", refreshToken: "shprt_OLD", scopes: ["read_orders"], accessTokenExpiresAt: hour, refreshTokenExpiresAt: hour }),
+    });
+    const state = new URL(res.json().url).searchParams.get("state")!;
+    // Shopify answers without read_orders, so this connect stops there. It has retired shprt_OLD all
+    // the same, and a store left on it would lose its access within the hour.
+    ctx.setFetch(async () =>
+      new Response(JSON.stringify({ access_token: "shpat_NEW", scope: "read_products", expires_in: 3600, refresh_token: "shprt_NEW", refresh_token_expires_in: 7_776_000 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    const cb = await ctx.app.inject({
+      method: "GET",
+      url: callbackUrl({ code: "authcode", shop: "demo-shop.myshopify.com", state, timestamp: String(Math.floor(Date.now() / 1000)) }),
+      headers: { cookie: `${cookie}; shopify_oauth_state=${state}` },
+    });
+    expect(cb.headers.location).toContain("error=missing_required_scopes");
+    expect(await getAccessToken(store, ctx.deps.coord)).toBe("shpat_NEW");
   });
 
   it.each([
@@ -163,18 +191,23 @@ describe("Shopify OAuth", () => {
       expect(res.headers.location).toBe("http://localhost:3001/onboarding?error=launch_unverified");
     });
 
-    it("launch without a session (or signup) sends the visitor to the in-app connect page with the shop", async () => {
-      // Shopify connects only from inside the app: that page signs the visitor in (or up) first.
+    it("launch without a session authorizes the store at once (App Store requirement 2.3.2)", async () => {
+      // The rest of the install-from-Shopify flow is in shopifyInstall.test.ts.
       const res = await ctx.app.inject({ method: "GET", url: launchUrl() });
       expect(res.statusCode).toBe(302);
-      expect(res.headers.location).toMatch(/\/onboarding\?shop=demo-shop\.myshopify\.com$/);
+      expect(new URL(String(res.headers.location)).pathname).toBe("/admin/oauth/authorize");
     });
 
-    it("launch for a signed-in but unverified user still goes to onboarding", async () => {
-      const { cookie } = await signIn(ctx, "unv", "unv@x.com", false);
-      const res = await ctx.app.inject({ method: "GET", url: launchUrl(), headers: { cookie } });
-      expect(res.statusCode).toBe(302);
-      expect(res.headers.location).toMatch(/\/onboarding\?shop=demo-shop\.myshopify\.com$/);
+    it("a one-click connect started by someone else's session doesn't carry over to this one", async () => {
+      const { res } = await start();
+      const pending = cookieValue(res.headers["set-cookie"], "shopify_pending")!;
+      const other = await signIn(ctx, "other", "other@x.com");
+      await createWorkspace(ctx, other.headers, "One");
+      await createWorkspace(ctx, other.headers, "Two");
+      const launch = await ctx.app.inject({ method: "GET", url: launchUrl(), headers: { cookie: `${other.cookie}; shopify_pending=${pending}` } });
+      const state = new URL(String(launch.headers.location)).searchParams.get("state")!;
+      // Authorized as an install: where the store goes is decided by the callback, not the stray choice.
+      expect(JSON.parse((await ctx.deps.coord.take(`oauth:state:${state}`))!)).toMatchObject({ mode: "install", shop: "demo-shop.myshopify.com" });
     });
   });
 
@@ -263,6 +296,89 @@ describe("Shopify OAuth", () => {
     });
     expect(cb.headers.location).toContain("error=state_mismatch");
   });
+
+  describe("refusals are logged", () => {
+    /** Log lines written while `fn` runs, parsed. The suite runs with LOG_LEVEL=silent otherwise. */
+    async function logsOf(fn: () => Promise<unknown>) {
+      const prev = process.env.LOG_LEVEL;
+      process.env.LOG_LEVEL = "info";
+      const lines: Array<Record<string, unknown>> = [];
+      const take = (s: unknown) => lines.push(JSON.parse(String(s)) as Record<string, unknown>);
+      const spies = [vi.spyOn(console, "log"), vi.spyOn(console, "warn"), vi.spyOn(console, "error")].map((s) => s.mockImplementation(take));
+      try {
+        await fn();
+      } finally {
+        spies.forEach((s) => s.mockRestore());
+        process.env.LOG_LEVEL = prev;
+      }
+      return lines;
+    }
+    const now = () => String(Math.floor(Date.now() / 1000));
+
+    it("a callback with a bad signature: one line with the reason and the link's shape, no secrets", async () => {
+      const q = new URLSearchParams({ code: "CODE_VALUE_42", shop: "demo-shop.myshopify.com", state: "st", timestamp: now(), hmac: "badc0ffee0ddf00d" });
+      const lines = await logsOf(async () => {
+        const cb = await ctx.app.inject({ method: "GET", url: `/shopify/callback?${q}`, headers: { "sec-fetch-dest": "document" } });
+        expect(cb.headers.location).toContain("error=invalid_hmac");
+      });
+      const refused = lines.filter((l) => l.event === "shopify_callback_rejected");
+      expect(refused).toHaveLength(1);
+      expect(refused[0]).toMatchObject({
+        level: "warn",
+        reason: "invalid_hmac",
+        params: ["code", "hmac", "shop", "state", "timestamp"],
+        hmacPresent: true,
+        shop: "demo-shop.myshopify.com",
+        app: null,
+        appsChecked: expect.any(Number),
+        fetchDest: "document",
+      });
+      const all = JSON.stringify(lines);
+      expect(all).not.toContain("badc0ffee0ddf00d");
+      expect(all).not.toContain("CODE_VALUE_42");
+      expect(all).not.toContain(SECRET);
+    });
+
+    it("a callback refused after its signature checked out names the app that signed it", async () => {
+      const lines = await logsOf(async () => {
+        const cb = await ctx.app.inject({ method: "GET", url: callbackUrl({ code: "CODE_VALUE_42", shop: "demo-shop.myshopify.com", state: "st", timestamp: now() }) });
+        expect(cb.headers.location).toContain("error=state_mismatch");
+      });
+      const refused = lines.filter((l) => l.event === "shopify_callback_rejected");
+      expect(refused).toHaveLength(1);
+      expect(refused[0]).toMatchObject({ reason: "state_mismatch", app: "default", hmacPresent: true, fetchDest: null });
+      expect(refused[0]).not.toHaveProperty("appsChecked");
+      expect(JSON.stringify(lines)).not.toContain("CODE_VALUE_42");
+    });
+
+    it("a launch with a bad signature: one line with the reason and the link's shape, no secrets", async () => {
+      const q = new URLSearchParams({ shop: "demo-shop.myshopify.com", host: "aG9zdA", timestamp: now(), id_token: "ID_TOKEN_VALUE", session: "SESSION_VALUE", hmac: "badc0ffee0ddf00d" });
+      const lines = await logsOf(async () => {
+        const res = await ctx.app.inject({ method: "GET", url: `/shopify/launch?${q}`, headers: { "sec-fetch-dest": "iframe" } });
+        expect(res.headers.location).toBe("http://localhost:3001/onboarding?error=launch_unverified");
+      });
+      const refused = lines.filter((l) => l.event === "shopify_launch_rejected");
+      expect(refused).toHaveLength(1);
+      expect(refused[0]).toMatchObject({
+        level: "warn",
+        reason: "invalid_hmac",
+        params: ["hmac", "host", "id_token", "session", "shop", "timestamp"],
+        hmacPresent: true,
+        shop: "demo-shop.myshopify.com",
+        app: null,
+        fetchDest: "iframe",
+      });
+      const all = JSON.stringify(lines);
+      for (const secret of ["badc0ffee0ddf00d", "ID_TOKEN_VALUE", "SESSION_VALUE", SECRET]) expect(all).not.toContain(secret);
+    });
+
+    it("a launch with no signature at all says so", async () => {
+      const lines = await logsOf(() => ctx.app.inject({ method: "GET", url: "/shopify/launch?shop=demo-shop.myshopify.com" }));
+      const refused = lines.filter((l) => l.event === "shopify_launch_rejected");
+      expect(refused).toHaveLength(1);
+      expect(refused[0]).toMatchObject({ reason: "invalid_hmac", params: ["shop"], hmacPresent: false, app: null });
+    });
+  });
 });
 
 describe("webhook security & idempotency", () => {
@@ -301,8 +417,8 @@ describe("webhook security & idempotency", () => {
     expect(ctx.deps.queues.sent.webhooks).toHaveLength(1);
   });
 
-  // The row is committed before the queue send. A tunnel drop after the commit (500), or Shopify
-  // giving up at 5s and the Worker being cancelled, leaves it queued and untouched with no message.
+  // The row is committed before the queue send. A connection drop after the commit (500), or the
+  // request being cut off before the send, leaves it queued and untouched with no message.
   const recorded = (id: string, extra: { status?: "queued" | "running" | "succeeded" | "failed"; attempts?: number; ageMs?: number } = {}) =>
     systemDb.webhookEvent.create({
       data: {

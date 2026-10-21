@@ -1,22 +1,26 @@
 "use client";
 import Link from "next/link";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
+import { CircleDollarSign, Gem, Package, ShoppingCart } from "lucide-react";
 import { useApp, canManage, StoresPending } from "@/components/AppContext";
-import { ErrorNotice } from "@/components/ErrorNotice";
-import { LoadError } from "@/components/LoadError";
 import { EmptyState, Alert } from "@/components/ui";
-import { StoreHeader, type LiveState } from "@/components/dashboard/StoreHeader";
-import { DateRangeBar, useDateRange } from "@/components/dashboard/DateRange";
-import { availableTopics, TopicDetail, useDetailView } from "@/components/dashboard/Details";
-import { AreaList, StoreSummary } from "@/components/dashboard/Overview";
+import { AboutThisData, EmptyStoreNote, StoreStatus, type LiveState } from "@/components/dashboard/StoreHeader";
+import { CompareDates, comparedWith, CompareSelect, CustomDates, DateRangeSelect, periodWords, useDateRange, versusWords, type Shown } from "@/components/dashboard/DateRange";
+import { TopicDetail } from "@/components/dashboard/TopicDetail";
+import { availableTopics, useDetailView } from "@/components/dashboard/topics";
+import { AreaList, HealthOverview, StoreSummary } from "@/components/dashboard/Overview";
 import { AdvertisingSection } from "@/components/dashboard/Advertising";
 import { fmtRange, fmtRelative } from "@/components/dashboard/format";
-import { Icon, type IconName } from "@/components/dashboard/Icons";
-import { AnimatedNumber, Sparkline } from "@/components/dashboard/Motion";
-import { Delta } from "@/components/dashboard/Primitives";
+import { KpiCard, SummaryCard, TrendCharts } from "@/components/dashboard/HomeCards";
+import { appliedCustom } from "@/components/dashboard/redacted";
+import { AnimatedNumber } from "@/components/dashboard/Motion";
 import type { Capability, Overview } from "@/components/dashboard/types";
-import { api, ApiError, fmtMoney, fmtNum, fmtPct, friendlyError, isTransient, useLiveApi } from "@/lib/api";
+import { signInFinished } from "@/lib/adSignIn";
+import { api, ApiError, apiHref, fmtMoney, fmtNum, friendlyError, isTransient, useLiveApi } from "@/lib/api";
 import { scopeList } from "@app/shared/capabilities";
+import { hasFullAccess, ROLE_INFO } from "@app/shared/access";
+import { NoAccessAssigned } from "@/components/team/AccessStates";
+import { hasDashboardAccess, seesTopic, TOPIC_EXPORT } from "@/lib/access";
 
 /**
  * Set just before we hand the browser to Shopify's optional-scope screen, and read when the
@@ -40,7 +44,7 @@ const AWAITING_GRANT_KEY = "insights:awaiting-scope-grant";
  * it, so it resolves itself and the card just says so.
  */
 function LockedModule({ c, onRequest, pending }: { c: Capability; onRequest: (c: Capability) => void; pending: boolean }) {
-  const { workspace } = useApp();
+  const { workspace, store } = useApp();
   const reconnect = c.reconnectableScopes.length > 0;
   const requestable = !reconnect && c.missingScopes.length > 0 && c.requestableScopes.length === c.missingScopes.length;
   return (
@@ -53,13 +57,13 @@ function LockedModule({ c, onRequest, pending }: { c: Capability; onRequest: (c:
         {c.missingScopes.length === 0
           ? "Setting up storefront tracking. This page will update by itself."
           : reconnect
-            ? `Insights needs access to ${scopeList(c.missingScopes)}. Reconnect the store to grant it.`
+            ? `bizinsights needs access to ${scopeList(c.missingScopes)}. Reconnect the store to grant it.`
             : requestable
               ? `Needs your permission in Shopify to read ${scopeList(c.missingScopes)}. We'll take you there to approve it.`
               : `Needs access to ${scopeList(c.missingScopes)}. We're waiting on Shopify to approve our access to that data — it isn't something you can turn on.`}
       </p>
-      {reconnect && canManage(workspace.role) && (
-        <Link className="btn-primary mt-2 inline-block" href="/onboarding">Reconnect</Link>
+      {reconnect && canManage(workspace.role) && store && (
+        <Link className="btn-primary mt-2 inline-block" href={reconnectHref(workspace.id, store.shopDomain)}>Reconnect</Link>
       )}
       {requestable && canManage(workspace.role) && (
         <button className="btn-primary mt-2" onClick={() => onRequest(c)} disabled={pending}>
@@ -69,6 +73,12 @@ function LockedModule({ c, onRequest, pending }: { c: Capability; onRequest: (c:
     </li>
   );
 }
+
+/**
+ * Reconnecting a store: onboarding authorizes it again by name, through the app it is connected
+ * with (apps/api `connectApp`), so a merchant is never sent to an app their store may refuse.
+ */
+const reconnectHref = (ws: string, shop: string) => `/onboarding?${new URLSearchParams({ ws, shop })}`;
 
 /**
  * The dashboard re-checks the backend this often and only redraws when something changed.
@@ -101,6 +111,7 @@ function useAdsConnectedNotice(): string | null {
     const url = new URL(window.location.href);
     const provider = url.searchParams.get("adsConnected");
     if (!provider) return;
+    signInFinished();
     const target = url.searchParams.get("store");
     if (target && stores.some((s) => s.id === target)) setStoreId(target);
     const n = Number(url.searchParams.get("accounts") ?? 0);
@@ -114,73 +125,31 @@ function useAdsConnectedNotice(): string | null {
   return notice;
 }
 
-/** One headline number. Tapping it opens the full details behind it. */
-function Metric({
-  title,
-  value,
-  help,
-  delta,
-  invert,
-  icon,
-  spark,
-  i = 0,
-  onClick,
-}: {
-  title: string;
-  value: ReactNode;
-  help: string;
-  delta?: number | null;
-  invert?: boolean;
-  icon: IconName;
-  /** Daily values for a small trend line under the figure. */
-  spark?: number[];
-  i?: number;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="card lift animate-rise group relative flex flex-col overflow-hidden text-left"
-      style={{ ["--i" as string]: i }}
-      data-testid={`metric-${title}`}
-      aria-label={`${title}: open details`}
-    >
-      <span className="flex w-full items-start justify-between gap-2">
-        <span className="text-sm text-muted">{title}</span>
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent/12 text-accent">
-          <Icon name={icon} className="h-4 w-4" />
-        </span>
-      </span>
-      <span className="mt-1 block text-xl font-semibold sm:text-2xl">{value}</span>
-      {/* "vs before": the tiles sit two to a row on a phone, where the long label wrapped three times. */}
-      {delta !== undefined && <Delta value={delta} invert={invert} label="vs before" />}
-      {spark && spark.length > 1 && <Sparkline values={spark} className="mt-3 h-9 w-full" />}
-      <span className="mt-auto flex w-full items-end gap-1 pt-2 text-xs text-muted">
-        <span className="min-w-0 flex-1">{help}</span>
-        <Icon name="chevronRight" className="h-4 w-4 shrink-0 transition-transform group-hover:translate-x-0.5" />
-      </span>
-    </button>
-  );
-}
-
-/** Placeholder shapes while the first numbers load, instead of a blank page. */
+/** Placeholder shapes while the first numbers load, in the page's own layout, instead of a blank page. */
 function DashboardSkeleton() {
   return (
     <div className="space-y-4" aria-hidden>
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {[0, 1, 2].map((i) => <div key={i} className="skeleton h-20" />)}
+      <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
+        {[0, 1, 2, 3].map((i) => <div key={i} className="skeleton h-32" />)}
       </div>
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {[0, 1, 2, 3].map((i) => <div key={i} className="skeleton h-36" />)}
+      <div className="grid gap-4 xl:grid-cols-2">
+        {[0, 1].map((i) => <div key={i} className="skeleton h-80" />)}
       </div>
-      <div className="skeleton h-64" />
+      <div className="grid gap-4 lg:grid-cols-5">
+        <div className="skeleton h-40 lg:col-span-3" />
+        <div className="skeleton h-40 lg:col-span-2" />
+      </div>
     </div>
   );
 }
 
+/** "Sebastian" from "Sebastian Tran", for the greeting; nothing when the account has no name. */
+const firstName = (name: string | null) => name?.trim().split(/\s+/)[0] || null;
+
 export default function DashboardPage() {
-  const { workspace, stores, storesStatus, store } = useApp();
+  const { me, workspace, stores, storesStatus, store, access, allowed, offers } = useApp();
+  // Team & Access: a member with nothing shared yet asks for no numbers at all.
+  const sharesData = hasDashboardAccess(access);
   const adsNotice = useAdsConnectedNotice();
   const dates = useDateRange(store?.timezone ?? "UTC");
   const detail = useDetailView();
@@ -188,15 +157,15 @@ export default function DashboardPage() {
   // Driven by the answer the poll itself brings back, so the page speeds up the moment it sees
   // an import running and relaxes again as soon as that import reports it is done.
   const [everySec, setEverySec] = useState(LIVE_EVERY_SEC);
-  const path = store && asking ? `/workspaces/${workspace.id}/stores/${store.id}/overview?${asking.qs}` : null;
-  const { data, dataPath, error, loading, checkedAt, failing, reload } = useLiveApi<Overview>(path, everySec * 1000);
+  const path = store && asking && sharesData ? `/workspaces/${workspace.id}/stores/${store.id}/overview?${asking.qs}` : null;
+  const { data, dataPath, error, loading, checkedAt, failing } = useLiveApi<Overview>(path, everySec * 1000);
   const syncState = data?.store?.status;
   const adsFetching = !!data && [...(data.modules.ads?.accounts ?? []), ...(data.modules.adsense?.accounts ?? [])].some((a) => a.status === "active" && !a.lastSyncedAt);
   useEffect(() => {
     setEverySec(syncState && IMPORTING.has(syncState) ? IMPORTING_EVERY_SEC : adsFetching ? ADS_FETCHING_EVERY_SEC : LIVE_EVERY_SEC);
   }, [syncState, adsFetching]);
-  // "Live" while the last successful check is recent (a missed check or two is fine: the odd
-  // request fails even when all is well, e.g. a Worker CPU-limit 1102); "checking" until the first
+  // The page's own connection: "live" while the last successful check is recent (a missed check or two is fine: the odd
+  // request fails even when all is well, e.g. a slow cold start); "checking" until the first
   // answer for this question arrives, or "Reconnecting…" straight away if that check failed
   // (otherwise an outage on arrival, or on picking new dates, reads "Checking…" for good).
   const [now, setNow] = useState(() => Date.now());
@@ -274,6 +243,7 @@ export default function DashboardPage() {
   // fails they would sit under the new dates' button as if they answered it, so say what they are.
   const olderAnswer = ov !== null && dataPath !== path;
 
+  if (!sharesData) return <NoAccessAssigned workspace={workspace.name} role={ROLE_INFO[access.role].label} />;
   // "No stores" only once the list has actually loaded: until then it means "not known yet".
   if (storesStatus !== "ready") return <StoresPending />;
   if (!stores.length) {
@@ -281,31 +251,61 @@ export default function DashboardPage() {
       <EmptyState
         title="Connect your first store"
         body="Once your Shopify store is connected we'll pull in your orders, products and stock levels and keep everything up to date automatically."
-        action={canManage(workspace.role) ? <Link className="btn-primary" href="/onboarding">Continue with Shopify</Link> : <p className="text-sm text-muted">Ask a workspace admin to connect a store.</p>}
+        action={canManage(workspace.role) ? <Link className="btn-primary" href={`/onboarding?ws=${encodeURIComponent(workspace.id)}`}>Continue with Shopify</Link> : <p className="text-sm text-muted">Ask a workspace admin to connect a store.</p>}
       />
     );
   }
 
   const cur = ov?.store.currency ?? store?.currency ?? "USD";
   const m = ov?.modules;
-  const disabled = ov?.capabilities.filter((c) => !c.enabled) ?? [];
+  // Unlocking more data is the store's owners' and admins' business, not a shared member's.
+  // The Inventory pages ask for their own access (stock levels, stock changes): not a dashboard card.
+  const disabled = hasFullAccess(access.role) ? (ov?.capabilities.filter((c) => !c.enabled && c.area !== "inventory") ?? []) : [];
+  const exportSection = detail.view && allowed("reports.export") && seesTopic(access, detail.view, offers) ? TOPIC_EXPORT[detail.view] : undefined;
+  const exportHref = exportSection && store && asking ? apiHref(`/workspaces/${workspace.id}/stores/${store.id}/export?section=${exportSection}&${asking.qs}`) : null;
   const headerStore = ov?.store ?? store;
   const contactsOn = ov?.capabilities.some((c) => c.id === "contacts" && c.enabled) ?? false;
   const topics = ov ? availableTopics(ov, contactsOn) : [];
   const s = m?.sales_overview;
-  const f = m?.funnel;
+  const custom = appliedCustom(s);
+
+  const shown: Shown = ov && { range: ov.range, previous: ov.previous, timezone: ov.store.timezone };
+  const compared = comparedWith(shown);
+  const versus = versusWords(shown);
+  const name = firstName(me.user.displayName);
 
   return (
     <div className="space-y-6">
-      {headerStore && (
-        <StoreHeader key={headerStore.id} store={headerStore} data={ov?.data} live={live} everySec={everySec} />
-      )}
-
-      <div id="dashboard-filters" tabIndex={-1}><DateRangeBar r={dates} shown={ov && { range: ov.range, previous: ov.previous, timezone: ov.store.timezone }} /></div>
+      <header className="flex flex-wrap items-start justify-between gap-x-6 gap-y-4">
+        <div className="min-w-0">
+          <h1 className="text-2xl font-bold tracking-tight sm:text-[1.75rem]">
+            Welcome back{name ? `, ${name}` : ""}! <span aria-hidden>👋</span>
+          </h1>
+          <p className="mt-1 text-sm text-muted sm:text-base">
+            Here&apos;s what&apos;s happening with {hasFullAccess(access.role) ? "your store" : workspace.name} {periodWords(dates, shown)}.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2.5">
+          {headerStore && <StoreStatus key={headerStore.id} store={headerStore} live={live} freshness={ov?.freshness} check={ov?.store.id === headerStore.id ? ov?.check : undefined} now={now} />}
+          <DateRangeSelect r={dates} shown={shown} id="date-range" label="Dates" />
+          {/* What the ▲ ▼ changes are on, as Shopify Analytics' second date chip. */}
+          <CompareSelect r={dates} shown={shown} current={!olderAnswer} id="compare-with" label="Compare with" />
+        </div>
+        {dates.preset === "custom" && (
+          <div className="flex w-full justify-end">
+            <CustomDates r={dates} />
+          </div>
+        )}
+        {dates.compare === "custom" && (
+          <div className="flex w-full justify-end">
+            <CompareDates r={dates} />
+          </div>
+        )}
+      </header>
 
       {adsNotice && <Alert kind="success">{adsNotice}</Alert>}
 
-      {error && !ov && <LoadError what="your dashboard" error={error} onRetry={() => void reload()} busy={loading} />}
+      {error && !ov && <Alert kind={isTransient(error) ? "info" : "error"}>{friendlyError(error)}</Alert>}
       {error && ov && olderAnswer && (
         <Alert kind={isTransient(error) ? "info" : "error"}>
           Couldn&apos;t load {asking?.label}, so the numbers below are still for {fmtRange(ov.range.from, ov.range.to)}. {friendlyError(error)}
@@ -319,7 +319,7 @@ export default function DashboardPage() {
       )}
       {ov && ov.store.status === "syncing" && <Alert kind="info">We&apos;re still importing your history. Numbers will fill in over the next few minutes; this page updates by itself.</Alert>}
       {ov && ov.store.status === "error" && (
-        <ErrorNotice kind="sync" title="Data sync failed">
+        <Alert>
           {/* What `autoRefresh` actually does: the failed *job* is given up on, but the store is
               re-seeded once every 30 minutes — from this page's own poll, for the store being
               looked at. Saying "it will not clear on its own" was true of neither half, and sent
@@ -337,6 +337,15 @@ export default function DashboardPage() {
               </p>
               <a className="btn-primary mt-2 inline-block" href={`https://${ov.store.shopDomain}/admin/settings/plan`} target="_blank" rel="noreferrer">Open Shopify admin</a>
             </>
+          ) : ov.syncProblem === "not_approved" ? (
+            <>
+              <p>Shopify hasn&apos;t approved bizinsights to read {ov.store.name ?? ov.store.shopDomain}&apos;s orders yet.</p>
+              <p className="mt-1 text-xs">
+                Shopify has to approve an app before it can read orders, which hold customer details, on merchants&apos; stores, and bizinsights is still waiting on that
+                approval. There&apos;s nothing to do on your side, and reconnecting won&apos;t change it. We try again about every half hour while this page is open, so
+                your orders import by themselves once Shopify approves.
+              </p>
+            </>
           ) : ov.syncProblem === "shop_locked" ? (
             <>
               <p>Shopify has locked {ov.store.name ?? ov.store.shopDomain}, so it can&apos;t be read right now.</p>
@@ -351,48 +360,80 @@ export default function DashboardPage() {
               </p>
               <p className="mt-1 text-xs">
                 {ov.syncProblem === "access"
-                  ? "Shopify stopped accepting Insights' access. Reconnecting grants it again and restarts the import straight away."
+                  ? "Shopify stopped accepting bizinsights' access. Reconnecting grants it again and restarts the import straight away."
                   : "If it keeps coming back, Shopify has most likely stopped accepting our access. Reconnecting grants it again and restarts the import straight away."}
               </p>
               {canManage(workspace.role) && (
-                <Link className="btn-primary mt-2 inline-block" href="/onboarding">Reconnect</Link>
+                <Link className="btn-primary mt-2 inline-block" href={reconnectHref(workspace.id, ov.store.shopDomain)}>Reconnect</Link>
               )}
             </>
           )}
-        </ErrorNotice>
+        </Alert>
       )}
 
-      {ov && !ov.hasData && ov.store.status !== "syncing" && s && (
-        <EmptyState title="No data available" body="No orders match the selected date range. Try a longer period to see your store’s activity." action={<button type="button" className="btn-primary mt-2" onClick={() => { const filters = document.getElementById("dashboard-filters"); filters?.scrollIntoView({ block: "center" }); filters?.querySelector<HTMLElement>("button, select, input")?.focus(); }}>Adjust filters</button>} />
-      )}
+      {ov && <EmptyStoreNote store={ov.store} data={ov.data} />}
 
-      {/* The main page says each thing once: one sentence, four numbers, and one list of every
-          area of the store (worst first). Every number and row opens the full details
-          (components/dashboard/details.tsx), so nothing is lost by keeping this page short. */}
+      {/* The page says each thing once: four numbers, their trend, one health check and one
+          sentence, then one card per area of the store (worst first). Every number and card opens
+          the full details (components/dashboard/TopicDetail.tsx), so nothing is lost by keeping
+          this page short. */}
       {s && (
-        <section aria-labelledby="numbers-h">
-          <h2 id="numbers-h" className="mb-1 flex items-center gap-2 font-semibold"><Icon name="chart" className="h-5 w-5 text-accent" />How your store is doing</h2>
-          <div className="mb-3">
-            {ov && <StoreSummary ov={ov} currency={cur} />}
-          </div>
-          <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
-            <Metric i={0} icon="bag" title="Net sales" value={<AnimatedNumber value={s.current.netSales} format={(n) => fmtMoney(n, cur)} />} delta={s.deltas.netSales} spark={s.series.map((x) => x.netSales)} help="What you kept, after discounts and refunds." onClick={() => detail.open("sales")} />
-            <Metric i={1} icon="receipt" title="Orders" value={<AnimatedNumber value={s.current.orders} format={fmtNum} />} delta={s.deltas.orders} spark={s.series.map((x) => x.orders)} help="Orders placed, not counting cancelled ones." onClick={() => detail.open("sales")} />
-            <Metric i={2} icon="cart" title="Average order value" value={<AnimatedNumber value={s.current.averageOrderValue} format={(n) => fmtMoney(n, cur)} />} delta={s.deltas.averageOrderValue} help="Typical spend per order." onClick={() => detail.open("sales")} />
-            {f && f.visits > 0 ? (
-              <Metric i={3} icon="eye" title="Visitors who bought" value={<AnimatedNumber value={f.conversionRate} format={fmtPct} />} delta={f.deltas.conversionRate} help={`Of ${fmtNum(f.visits)} visits to your store.`} onClick={() => detail.open("shoppers")} />
-            ) : (
-              <Metric i={3} icon="trendUp" title="Gross sales" value={<AnimatedNumber value={s.current.grossSales} format={(n) => fmtMoney(n, cur)} />} delta={s.deltas.grossSales} help="Full price of items sold." onClick={() => detail.open("sales")} />
-            )}
-          </div>
+        <section aria-label="Headline numbers" className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
+          {/* Total sales, as Shopify's home page headlines it: the same figure for the same dates. It
+              holds tax and shipping, so a member who may not see those (Team & Access) gets net sales. */}
+          {s.current.totalSales !== undefined ? (
+            <KpiCard
+              i={0}
+              icon={CircleDollarSign}
+              tint="green"
+              title="Total sales"
+              value={<AnimatedNumber value={s.current.totalSales} format={(n) => fmtMoney(n, cur)} />}
+              delta={s.deltas.totalSales ?? null}
+              compared={compared}
+              versus={versus}
+              // The store's own calculation, when it shows it: under Shopify's figure, named, never instead of it.
+              extra={
+                custom ? (
+                  <span data-testid="tile-custom-sales" title={`Custom sales · ${custom.name}: ${fmtMoney(custom.current, cur)}`}>
+                    Custom sales <span className="font-semibold text-text">{fmtMoney(custom.current, cur)}</span>
+                    <span className="block truncate">{custom.name}</span>
+                  </span>
+                ) : undefined
+              }
+              onClick={() => detail.open("sales")}
+            />
+          ) : (
+            <KpiCard i={0} icon={CircleDollarSign} tint="green" title="Net sales" value={<AnimatedNumber value={s.current.netSales} format={(n) => fmtMoney(n, cur)} />} delta={s.deltas.netSales} compared={compared} versus={versus} onClick={() => detail.open("sales")} />
+          )}
+          <KpiCard i={1} icon={ShoppingCart} tint="blue" title="Orders" value={<AnimatedNumber value={s.current.orders} format={fmtNum} />} delta={s.deltas.orders} compared={compared} versus={versus} onClick={() => detail.open("sales")} />
+          <KpiCard i={2} icon={Gem} tint="violet" title="Average order value" value={<AnimatedNumber value={s.current.averageOrderValue} format={(n) => fmtMoney(n, cur)} />} delta={s.deltas.averageOrderValue} compared={compared} versus={versus} onClick={() => detail.open("sales")} />
+          <KpiCard i={3} icon={Package} tint="amber" title="Total products sold" value={<AnimatedNumber value={s.current.units} format={fmtNum} />} delta={s.deltas.units} compared={compared} versus={versus} onClick={() => detail.open("products")} />
         </section>
       )}
 
-      {/* Ad platforms report about themselves, so they get their own section rather than a row in
-          the store's list: results when connected, one way in when not (components/dashboard/advertising.tsx). */}
-      {ov && <AdvertisingSection ov={ov} manage={canManage(workspace.role)} onOpen={detail.open} />}
+      {ov && s && <TrendCharts ov={ov} currency={cur} />}
+
+      {ov && (
+        <div className="grid gap-4 lg:grid-cols-5">
+          <div className={s ? "lg:col-span-3" : "lg:col-span-5"}>
+            <HealthOverview ov={ov} currency={cur} onOpen={detail.open} report={seesTopic(access, "overview")} />
+          </div>
+          {s && (
+            <div className="lg:col-span-2">
+              <SummaryCard aside={<DateRangeSelect r={dates} shown={shown} id="summary-range" label="Period" size="sm" />}>
+                <StoreSummary ov={ov} currency={cur} />
+              </SummaryCard>
+            </div>
+          )}
+        </div>
+      )}
 
       {ov && <AreaList ov={ov} currency={cur} topics={topics} onOpen={detail.open} />}
+
+      {/* Ad platforms report about themselves, so they get their own section rather than a card in
+          the store's list: results when connected, one way in when not (components/dashboard/Advertising.tsx).
+          Not in a workspace that leaves advertising out (lib/features.ts). */}
+      {ov && offers("ads") && <AdvertisingSection ov={ov} manage={allowed("integrations.manage")} onOpen={detail.open} />}
 
       {disabled.length > 0 && (
         <section aria-labelledby="more-h">
@@ -413,7 +454,22 @@ export default function DashboardPage() {
         </section>
       )}
 
-      {ov && detail.view && <TopicDetail topic={detail.view} ov={ov} currency={cur} contactsOn={contactsOn} onClose={detail.close} onOpen={detail.open} />}
+      {ov && (
+        <AboutThisData
+          store={ov.store}
+          data={ov.data}
+          freshness={ov.freshness}
+          everySec={everySec}
+          check={ov.check}
+          ws={workspace.id}
+          seesFigures={allowed("finance.breakdown")}
+          canCheck={allowed("integrations.manage")}
+        />
+      )}
+
+      {ov && detail.view && (
+        <TopicDetail topic={detail.view} ov={ov} currency={cur} contactsOn={contactsOn} onClose={detail.close} onOpen={detail.open} exportHref={exportHref} canPrint={hasFullAccess(access.role) || allowed("reports.export")} />
+      )}
     </div>
   );
 }

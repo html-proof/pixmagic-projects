@@ -2,29 +2,30 @@ import type { NextConfig } from "next";
 import { PHASE_DEVELOPMENT_SERVER } from "next/constants";
 
 // The UI is fully client-rendered, so it ships as a static export served by the
-// Cloudflare Worker (Workers Static Assets). The same Worker answers /api/*, so
-// the browser talks to one origin and session cookies stay first-party.
+// API's own server (apps/aws: the Lambda function behind CloudFront, or the local
+// server), which also answers /api/*, so the browser talks to one origin and
+// session cookies stay first-party.
 // Security headers for the static files live in public/_headers.
 export default function config(phase: string): NextConfig {
   const base: NextConfig = {
     images: { unoptimized: true },
     transpilePackages: ["@app/shared"],
+    // A page preloads every font in its CSS chunks. Turbopack's default chunking put Geist Mono's
+    // few hundred bytes of font CSS in with Geist Sans, so the sign-in and legal pages downloaded
+    // Mono (71 KB), which only the landing page uses. "graph" with no per-request cost gives each
+    // font its own chunk; globals.css stays one file. scripts/check-font-preloads.mjs holds the line.
+    experimental: { cssChunking: { type: "graph", requestCost: 0 } },
   };
   if (phase !== PHASE_DEVELOPMENT_SERVER) {
-    // NEXT_EXPORT_DIR builds into another folder than `out` (e.g. while `wrangler dev` is serving `out`).
+    // NEXT_EXPORT_DIR builds into another folder than `out` (e.g. while a local server is serving `out`).
     const exportDir = process.env.NEXT_EXPORT_DIR;
-    // `out` and `out-deploy` are what gets deployed (wrangler.jsonc, apps/cloudflare/scripts/deploy.mjs).
-    // A build wired to the Auth emulator (docs/local-dev.md has developers put it in .env.local,
-    // which `next build` reads) signs nobody in anywhere else.
-    if (["out", "out-deploy"].includes(exportDir || "out") && process.env.NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR) {
-      throw new Error(
-        `NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR is set, and this build goes to \`${exportDir || "out"}\`, which is what gets deployed. ` +
-          "Build into another folder (NEXT_EXPORT_DIR=out-local) or unset it.",
-      );
+    // Shows Settings → Billing while billing is off (src/lib/features.ts): the e2e build's alone.
+    if (process.env.NEXT_PUBLIC_E2E_BILLING && exportDir !== "out-e2e") {
+      throw new Error("NEXT_PUBLIC_E2E_BILLING is for the e2e build (NEXT_EXPORT_DIR=out-e2e) only");
     }
     return { ...base, output: "export", ...(exportDir ? { distDir: exportDir } : {}) };
   }
-  // `next dev` only: proxy /api/* to `wrangler dev` so the UI can hot-reload against the real Worker.
+  // `next dev` only: proxy /api/* to the local server so the UI can hot-reload against the real API.
   return {
     ...base,
     async rewrites() {

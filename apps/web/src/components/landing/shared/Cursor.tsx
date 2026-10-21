@@ -68,8 +68,9 @@ export function Cursor() {
   const ring = state.label ? 64 : state.hover ? 36 : 22;
   return (
     <div aria-hidden className="pointer-events-none fixed inset-0 z-[1000]" style={{ opacity: state.visible ? 1 : 0, transition: "opacity .25s" }}>
+      {/* Both pieces are their own layers: following the pointer only moves them, never repaints the page. */}
       <motion.div
-        className="absolute left-0 top-0 flex items-center justify-center rounded-full border"
+        className="lp-layer absolute left-0 top-0 flex items-center justify-center rounded-full border"
         style={{
           x: reduced ? x : ringX,
           y: reduced ? y : ringY,
@@ -78,8 +79,8 @@ export function Cursor() {
           marginLeft: -ring / 2,
           marginTop: -ring / 2,
           borderColor: state.hover ? "rgb(167 152 255 / 0.7)" : "rgb(255 255 255 / 0.18)",
-          background: state.label ? "rgb(140 123 255 / 0.14)" : state.hover ? "rgb(140 123 255 / 0.08)" : "transparent",
-          backdropFilter: state.label ? "blur(6px)" : undefined,
+          // No backdrop blur: under a moving ring it re-blurred the page behind it on every frame.
+          background: state.label ? "rgb(20 22 34 / 0.72)" : state.hover ? "rgb(140 123 255 / 0.08)" : "transparent",
           // Plain CSS transitions for size and colour only: `transform` (the position) must not ease.
           transition: "width .35s var(--lp-ease), height .35s var(--lp-ease), margin .35s var(--lp-ease), background-color .3s, border-color .3s, opacity .2s",
           opacity: state.down ? 0.6 : 1,
@@ -88,7 +89,7 @@ export function Cursor() {
         {state.label && <span className="font-lp-mono text-[9.5px] font-medium tracking-[0.16em] text-lp-text">{state.label}</span>}
       </motion.div>
       <motion.div
-        className="absolute left-0 top-0 size-[5px] rounded-full bg-lp-text"
+        className="lp-layer absolute left-0 top-0 size-[5px] rounded-full bg-lp-text"
         style={{ x, y, marginLeft: -2.5, marginTop: -2.5, opacity: state.label ? 0 : 1 }}
       />
     </div>

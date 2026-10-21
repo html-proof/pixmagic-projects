@@ -1,188 +1,48 @@
 "use client";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import Link from "next/link";
+import type { ReactNode } from "react";
+import type { CompareMode } from "@app/shared/dates";
+import { bestEntryPage, biggestDropOff, dropOffSection } from "@app/shared/journey";
+import { useApp } from "@/components/AppContext";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { BarRow, StackedBar } from "./Charts";
 import { ContactsCard } from "./Contacts";
+import { comparisonHelp, noEarlierData, versusWords } from "./DateRange";
 import { FunnelCard, JourneyCard, SECTION_LABEL, STEP_LABEL } from "./Funnel";
-import { fmtDuration, fmtRange, hourRange, plural } from "./format";
-import { Icon, type IconName } from "./Icons";
+import { fmtComparison, fmtDuration, fmtRange, hourRange, plural, weekdayNames } from "./format";
 import { CatalogCard, ChannelsCard, DiscountCodesCard, FulfillmentCard, InventoryCard, OrderTimingCard, RecentOrdersCard, TrafficCard } from "./Modules";
+import { shownFigures, upToWords } from "./adFigures";
 import { AdsDetail } from "./AdsPanel";
 import { AdsenseDetail } from "./AdsensePanel";
 import { Explained } from "./Explain";
+import { B, Change, comparedOn, InShort, upDown } from "./Narrative";
 import { OverviewDetail } from "./Overview";
 import { Delta, Panel, Stat } from "./Primitives";
 import { DailySalesCard, MonthlySalesCard } from "./SalesBreakdown";
-import { isTopic, topicInfo, TOPICS, type Topic } from "./topics";
+import { ProfitCard, ShopifyCheckCard, ShopifySessionsCard } from "./ShopifyReports";
+import type { Topic } from "./topics";
 import type { Overview } from "./types";
+import { appliedCustom, breakdownOf, salesLinesOf } from "./redacted";
+import { TotalSalesBreakdown } from "./TotalSalesBreakdown";
 
 export type { Topic } from "./topics";
 
 // ---------------------------------------------------------------------------
 // Topics (./topics.ts): everything the dashboard knows, one tap away from its summary card.
+// This is what goes inside the detail panel (./TopicDetail.tsx), loaded when a panel first opens.
 // ---------------------------------------------------------------------------
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
 
-/** The topics this store has data for, in the order the main page's list uses for equal statuses. */
-export function availableTopics(ov: Overview, contactsOn: boolean): Topic[] {
-  const m = ov.modules;
-  const has: Record<Topic, boolean> = {
-    // The overview has its own first row in the list; ads and AdSense have their own Advertising
-    // section on the main page (advertising.tsx), which opens their detail panels.
-    overview: false,
-    ads: false,
-    adsense: false,
-    sales: !!m.sales_overview,
-    products: !!(m.top_products || m.catalog),
-    shoppers: !!m.funnel,
-    timing: !!m.order_timing,
-    channels: !!m.channels,
-    shipping: !!m.fulfillment,
-    stock: !!m.inventory,
-    discounts: !!m.discount_codes,
-    customers: !!m.customers || contactsOn,
-    orders: !!m.recent_orders,
-  };
-  return TOPICS.filter((t) => has[t]);
-}
+/** A figure for the dates compared with, by how they were chosen. */
+const COMPARE_LABEL: Record<CompareMode, string> = { previous: "The period before", year: "Same dates last year", custom: "The dates compared" };
 
-// ---------------------------------------------------------------------------
-// Which topic is open lives in the address bar (?view=sales), so the phone's back button closes
-// the panel instead of leaving the dashboard, and a link can open straight onto one.
-// ---------------------------------------------------------------------------
-
-export function useDetailView() {
-  const [view, setView] = useState<Topic | null>(null);
-  const pushed = useRef(false);
-  useEffect(() => {
-    const read = () => {
-      const v = new URLSearchParams(window.location.search).get("view");
-      setView(isTopic(v) ? v : null);
-    };
-    read();
-    const onPop = () => {
-      pushed.current = false;
-      read();
-    };
-    window.addEventListener("popstate", onPop);
-    return () => window.removeEventListener("popstate", onPop);
-  }, []);
-
-  const open = (t: Topic) => {
-    const url = new URL(window.location.href);
-    url.searchParams.set("view", t);
-    window.history.pushState(window.history.state, "", url.href);
-    pushed.current = true;
-    setView(t);
-  };
-  const close = () => {
-    if (pushed.current) {
-      // Back to the entry before the panel opened; the popstate above clears `view`.
-      window.history.back();
-      return;
-    }
-    const url = new URL(window.location.href);
-    url.searchParams.delete("view");
-    window.history.replaceState(window.history.state, "", url.href);
-    setView(null);
-  };
-  return { view, open, close };
-}
-
-// ---------------------------------------------------------------------------
-// The panel: full screen on a phone, a wide side panel on a computer.
-// ---------------------------------------------------------------------------
-
-function DetailSheet({ title, icon, period, onClose, children }: { title: string; icon: IconName; period: string; onClose: () => void; children: ReactNode }) {
-  const panel = useRef<HTMLDivElement>(null);
-  const closeBtn = useRef<HTMLButtonElement>(null);
-  const onCloseRef = useRef(onClose);
-  onCloseRef.current = onClose;
-
-  useEffect(() => {
-    const before = document.activeElement as HTMLElement | null;
-    closeBtn.current?.focus();
-    const overflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onCloseRef.current();
-      if (e.key !== "Tab" || !panel.current) return;
-      // Keep keyboard focus inside the panel while it's open.
-      const focusable = panel.current.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), input, select, textarea, [tabindex]:not([tabindex="-1"])');
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (!first || !last) return;
-      if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault();
-        last.focus();
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault();
-        first.focus();
-      }
-    };
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("keydown", onKey);
-      document.body.style.overflow = overflow;
-      before?.focus?.();
-    };
-  }, []);
-
-  return (
-    <div className="fixed inset-0 z-50 flex justify-end" role="dialog" aria-modal="true" aria-labelledby="detail-title" data-testid="detail-panel" data-print-root>
-      <div className="animate-fade absolute inset-0 bg-black/45" onClick={onClose} aria-hidden data-print-hide />
-      <div ref={panel} className="animate-sheet relative flex h-full w-full max-w-4xl flex-col bg-bg shadow-2xl sm:border-l sm:border-border" data-print-panel>
-        <header className="flex items-center gap-3 border-b border-border bg-surface px-4 py-3 sm:px-6">
-          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent/12 text-accent">
-            <Icon name={icon} />
-          </span>
-          <div className="min-w-0">
-            <h2 id="detail-title" className="truncate text-lg font-semibold">{title}</h2>
-            <p className="truncate text-xs text-muted">{period}</p>
-          </div>
-          <button onClick={() => window.print()} className="ml-auto hidden h-10 shrink-0 items-center gap-2 rounded-full border border-border bg-surface px-3 text-sm text-muted transition hover:text-text sm:flex" data-print-hide>
-            <Icon name="printer" className="h-4 w-4" />
-            Print or save as PDF
-          </button>
-          <button ref={closeBtn} onClick={onClose} className="ml-auto flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-border bg-surface text-muted transition hover:text-text sm:ml-0" aria-label="Close details" data-print-hide>
-            <Icon name="close" />
-          </button>
-        </header>
-        <div className="flex-1 space-y-4 overflow-y-auto overscroll-contain px-4 py-4 sm:px-6 sm:py-6" data-print-scroll>{children}</div>
-      </div>
-    </div>
-  );
-}
-
-/** The plain-language answer first, before any table. */
-function InShort({ children }: { children: ReactNode }) {
-  return (
-    <div className="card flex items-start gap-3 border-accent/30 bg-accent/5">
-      <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent/12 text-accent">
-        <Icon name="sparkle" className="h-4 w-4" />
-      </span>
-      <div className="min-w-0 text-sm">
-        <p className="text-xs font-medium uppercase tracking-wide text-muted">In short</p>
-        <div className="mt-1 space-y-1 leading-relaxed">{children}</div>
-      </div>
-    </div>
-  );
-}
-
-const B = ({ children }: { children: ReactNode }) => <strong className="font-semibold">{children}</strong>;
-
-/** A change as words and an arrow, colored by whether it's good news. */
-function Change({ value, invert = false }: { value: number | null; invert?: boolean }) {
-  if (value === null) return <span className="text-muted">—</span>;
-  const good = invert ? value < 0 : value > 0;
-  return (
-    <span className={value === 0 ? "text-muted" : good ? "text-good" : "text-danger"}>
-      {value > 0 ? "▲" : value < 0 ? "▼" : "■"} {fmtPct(Math.abs(value))}
-    </span>
-  );
-}
-const upDown = (d: number | null) => (d === null ? null : d >= 0 ? `up ${fmtPct(d)}` : `down ${fmtPct(-d)}`);
+/** The sales comparison table's title, by what the dates are compared with. */
+const COMPARE_TITLE: Record<CompareMode, string> = {
+  previous: "This period and the one before",
+  year: "This period and the same dates last year",
+  custom: "This period and the dates compared",
+};
 
 // ---------------------------------------------------------------------------
 // Each topic.
@@ -193,82 +53,113 @@ function SalesDetail({ ov, currency }: { ov: Overview; currency: string }) {
   const c = s.current;
   const p = s.previous;
   const money = (n: number) => fmtMoney(n, currency);
-  const refunds = r2(c.grossSales - c.discounts - c.netSales);
+  // Gross sales, discounts, tax, shipping and total sales, and returns, each only for someone who
+  // may see them (Team & Access leaves them out of the answer otherwise). Returns follow from the
+  // breakdown, so whoever sees it sees them too.
+  const bd = breakdownOf(c);
+  const refunds = c.returns ?? (bd ? r2(bd.grossSales - bd.discounts - c.netSales) : null);
+  const total = c.totalSales ?? null;
   const r = ov.modules.refunds;
-  const prevPeriod = fmtRange(ov.previous.from, ov.previous.to);
-  const change = upDown(s.deltas.netSales);
+  const prevPeriod = fmtComparison(ov.previous);
+  const versus = versusWords(ov);
+  // Null when the imported orders don't reach back to the dates compared with: nothing is compared.
+  const missing = ov.previous.imported === false ? noEarlierData(ov.data?.historyFrom) : null;
+  const change = upDown(total !== null ? (s.deltas.totalSales ?? null) : s.deltas.netSales);
   const rows: Array<{ label: string; now: string; before: string; delta: number | null }> = [
-    { label: "Net sales", now: money(c.netSales), before: money(p.netSales), delta: s.deltas.netSales },
-    { label: "Gross sales", now: money(c.grossSales), before: money(p.grossSales), delta: s.deltas.grossSales },
-    { label: "Orders", now: fmtNum(c.orders), before: fmtNum(p.orders), delta: s.deltas.orders },
-    { label: "Average order", now: money(c.averageOrderValue ?? 0), before: p.averageOrderValue !== null ? money(p.averageOrderValue) : "—", delta: s.deltas.averageOrderValue },
+    ...(total !== null ? [{ label: "Total sales", now: money(total), before: p?.totalSales !== undefined ? money(p.totalSales) : "—", delta: s.deltas.totalSales ?? null }] : []),
+    { label: "Net sales", now: money(c.netSales), before: p ? money(p.netSales) : "—", delta: s.deltas.netSales },
+    ...(bd ? [{ label: "Gross sales", now: money(bd.grossSales), before: p?.grossSales !== undefined ? money(p.grossSales) : "—", delta: s.deltas.grossSales ?? null }] : []),
+    { label: "Orders", now: fmtNum(c.orders), before: p ? fmtNum(p.orders) : "—", delta: s.deltas.orders },
+    { label: "Average order", now: money(c.averageOrderValue ?? 0), before: p && p.averageOrderValue !== null ? money(p.averageOrderValue) : "—", delta: s.deltas.averageOrderValue },
   ];
-  const lines: Array<{ label: string; note: string; amount: number; sign: "" | "−" }> = [
-    { label: "Full price of items sold", note: "Gross sales: every item at its listed price.", amount: c.grossSales, sign: "" },
-    { label: "Discounts", note: "Codes and automatic discounts taken off.", amount: c.discounts, sign: "−" },
-    { label: "Refunds", note: "Money given back in these dates (on the day it was refunded).", amount: refunds, sign: "−" },
-  ];
+  // Shopify's "Total sales breakdown", in its order.
+  const lines: Array<{ label: string; note: string; amount: number; sign: "" | "−" }> = bd
+    ? [
+        { label: "Gross sales", note: "Every item sold at its listed price, before tax.", amount: bd.grossSales, sign: "" },
+        { label: "Discounts", note: "Codes and automatic discounts taken off.", amount: bd.discounts, sign: "−" },
+        { label: "Returns", note: "What refunds, cancellations and order edits took back, on the day they were made.", amount: refunds ?? 0, sign: "−" },
+      ]
+    : [];
+  // The store's own calculation (Custom sales), when it shows it on the dashboard: beside Shopify's figures, named.
+  const custom = appliedCustom(s);
 
   return (
     <>
       <InShort>
         <p>
-          You made <B>{money(c.netSales)}</B> in net sales from <B>{plural(c.orders, "order")}</B> ({plural(c.units, "item")} sold)
-          {change ? <>, <B>{change}</B> on {prevPeriod}</> : null}.
+          {total !== null ? (
+            <>
+              Your total sales were <B>{money(total)}</B> from <B>{plural(c.orders, "order")}</B> ({plural(c.units, "item")} sold)
+              {change ? <>, <B>{change}</B> on {prevPeriod}</> : null}. Before shipping and taxes, that&apos;s <B>{money(c.netSales)}</B> in net sales.
+            </>
+          ) : (
+            <>
+              You had <B>{money(c.netSales)}</B> in net sales from <B>{plural(c.orders, "order")}</B> ({plural(c.units, "item")} sold)
+              {change ? <>, <B>{change}</B> on {prevPeriod}</> : null}.
+            </>
+          )}
         </p>
         {c.orders > 0 && (
           <p>
-            A typical order was <B>{money(c.averageOrderValue ?? 0)}</B>. Discounts took off {money(c.discounts)}
-            {refunds > 0 ? <> and refunds {money(refunds)}</> : null}.
+            A typical order was <B>{money(c.averageOrderValue ?? 0)}</B>.
+            {bd ? (
+              <>
+                {" "}Discounts took off {money(bd.discounts)}
+                {refunds !== null && refunds > 0 ? <> and returns {money(refunds)}</> : null}.
+              </>
+            ) : null}
           </p>
         )}
       </InShort>
 
-      <Panel id="d-sales-glance" title="At a glance" help={`Compared with ${prevPeriod}, the same number of days just before.`}>
+      <Panel id="d-sales-glance" title="At a glance" help={missing ?? `Compared with ${comparisonHelp(ov.previous)}.`}>
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
-          <Stat label="Net sales" value={money(c.netSales)} note={<Delta value={s.deltas.netSales} />} />
-          <Stat label="Orders" value={fmtNum(c.orders)} note={<Delta value={s.deltas.orders} />} />
-          <Stat label="Average order" value={money(c.averageOrderValue ?? 0)} note={<Delta value={s.deltas.averageOrderValue} />} />
-          <Stat label="Gross sales" value={money(c.grossSales)} note={<Delta value={s.deltas.grossSales} />} />
+          {total !== null && <Stat label="Total sales" value={money(total)} note={<Delta value={s.deltas.totalSales ?? null} label={versus} />} />}
+          {custom && <Stat label={`Custom sales · ${custom.name}`} value={money(custom.current)} note={<Delta value={custom.delta} label={versus} />} />}
+          <Stat label="Net sales" value={money(c.netSales)} note={<Delta value={s.deltas.netSales} label={versus} />} />
+          <Stat label="Orders" value={fmtNum(c.orders)} note={<Delta value={s.deltas.orders} label={versus} />} />
+          <Stat label="Average order" value={money(c.averageOrderValue ?? 0)} note={<Delta value={s.deltas.averageOrderValue} label={versus} />} />
+          {total === null && bd && <Stat label="Gross sales" value={money(bd.grossSales)} note={<Delta value={s.deltas.grossSales ?? null} label={versus} />} />}
           <Stat label="Items sold" value={fmtNum(c.units)} note={c.orders ? `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(c.units / c.orders)} per order` : undefined} />
           {r ? (
-            <Stat label="Refunded" value={money(r.current.refunds)} note={<Delta value={r.deltas.refunds} invert />} />
-          ) : (
-            <Stat label="Refunded" value={money(refunds)} />
-          )}
+            <Stat label="Returns" value={money(r.current.refunds)} note={<Delta value={r.deltas.refunds} invert label={versus} />} />
+          ) : refunds !== null ? (
+            <Stat label="Returns" value={money(refunds)} />
+          ) : null}
         </div>
       </Panel>
 
-      <Panel id="d-sales-adds-up" title="How your net sales add up" help="Net sales is what you kept from your products, before tax and shipping.">
-        <ul className="divide-y divide-border text-sm">
-          {lines.map((l) => (
-            <li key={l.label} className="flex items-start justify-between gap-4 py-2.5">
-              <div className="min-w-0">
-                <p className="font-medium">{l.label}</p>
-                <p className="text-xs text-muted">{l.note}</p>
-              </div>
-              <p className="shrink-0 tabular-nums">{l.sign && l.amount > 0 ? `${l.sign} ` : ""}{money(l.amount)}</p>
+      {/* Net sales to total sales, line by line, and the store's own calculation from those lines. */}
+      {salesLinesOf(c) && <TotalSalesBreakdown ov={ov} currency={currency} />}
+
+      {bd && (
+        <Panel
+          id="d-sales-adds-up"
+          title="How your net sales add up"
+          help="The first lines of Shopify's total sales breakdown, from Shopify's own sales records. Test orders aren't counted."
+        >
+          <ul className="divide-y divide-border text-sm">
+            {lines.map((l) => (
+              <li key={l.label} className="flex items-start justify-between gap-4 py-2.5">
+                <div className="min-w-0">
+                  <p className="font-medium">{l.label}</p>
+                  <p className="text-xs text-muted">{l.note}</p>
+                </div>
+                <p className="shrink-0 tabular-nums">{l.sign && l.amount > 0 ? `${l.sign} ` : ""}{money(l.amount)}</p>
+              </li>
+            ))}
+            <li className="flex items-center justify-between gap-4 py-2.5 text-base">
+              <p className="font-semibold">= Net sales</p>
+              <p className="font-semibold tabular-nums">{money(c.netSales)}</p>
             </li>
-          ))}
-          <li className="flex items-center justify-between gap-4 py-2.5 text-base">
-            <p className="font-semibold">= Net sales</p>
-            <p className="font-semibold tabular-nums">{money(c.netSales)}</p>
-          </li>
-        </ul>
-        <div className="mt-3 grid grid-cols-2 gap-3 rounded-lg border border-dashed border-border p-3 text-sm">
-          <div>
-            <p className="text-xs text-muted">Tax collected</p>
-            <p className="font-medium tabular-nums">{money(c.tax)}</p>
-          </div>
-          <div>
-            <p className="text-xs text-muted">Shipping charged</p>
-            <p className="font-medium tabular-nums">{money(c.shipping)}</p>
-          </div>
-          <p className="col-span-2 text-xs text-muted">Collected on top of your sales and passed on or spent on postage, so they aren&apos;t counted above.</p>
-        </div>
-      </Panel>
+          </ul>
+        </Panel>
+      )}
 
-      <Panel id="d-sales-compare" title="This period and the one before" help={`${fmtRange(ov.range.from, ov.range.to)} against ${prevPeriod}.`}>
+      {ov.modules.shopify_check && <ShopifyCheckCard m={ov.modules.shopify_check} currency={currency} />}
+      {ov.modules.profit && <ProfitCard m={ov.modules.profit} currency={currency} versus={versus} />}
+
+      <Panel id="d-sales-compare" title={COMPARE_TITLE[ov.previous.compare ?? "previous"]} help={`${fmtRange(ov.range.from, ov.range.to)} against ${prevPeriod}.`}>
         <div className="-mx-1 overflow-x-auto">
           <table className="w-full min-w-[26rem] text-sm">
             <thead className="text-left text-xs text-muted">
@@ -291,23 +182,23 @@ function SalesDetail({ ov, currency }: { ov: Overview; currency: string }) {
             </tbody>
           </table>
         </div>
-        <p className="mt-2 text-xs text-muted">&quot;—&quot; means there were no sales before to compare with.</p>
+        <p className="mt-2 text-xs text-muted">{missing ?? <>&quot;—&quot; means there were no sales before to compare with.</>}</p>
       </Panel>
 
       {r && (
-        <Panel id="d-sales-refunds" title="Refunds" help="Booked on the day the refund was made, not the day of the order.">
+        <Panel id="d-sales-refunds" title="Returns" help="Refunds, cancellations and edits, booked on the day they were made, not the day of the order.">
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
-            <Stat label="Refunded" value={money(r.current.refunds)} note={<Delta value={r.deltas.refunds} invert />} />
-            <Stat label="Refund rate" value={fmtPct(r.current.refundRate)} note="Share of sales (after discounts) given back." />
-            <Stat label="Orders refunded" value={fmtNum(r.current.refundedOrders)} note="Orders with a refund in these dates." />
+            <Stat label="Returned" value={money(r.current.refunds)} note={<Delta value={r.deltas.refunds} invert label={versus} />} />
+            <Stat label="Return rate" value={fmtPct(r.current.refundRate)} note="Share of sales (after discounts) given back." />
+            <Stat label="Orders with a return" value={fmtNum(r.current.refundedOrders)} note="Orders refunded, cancelled or edited down in these dates." />
           </div>
         </Panel>
       )}
 
       {ov.hasData && s.series.length > 1 && (
-        <DailySalesCard series={s.series} range={ov.range} today={ov.today} historyFrom={ov.data?.oldestOrderDay ?? null} currency={currency} />
+        <DailySalesCard series={s.series} range={ov.range} today={ov.today} historyFrom={ov.data?.historyFrom ?? null} currency={currency} custom={custom} />
       )}
-      {s.year?.orders > 0 && <MonthlySalesCard year={s.year} historyFrom={ov.data?.oldestOrderDay ?? null} currency={currency} />}
+      {s.year && s.year.orders > 0 && <MonthlySalesCard year={s.year} historyFrom={ov.data?.historyFrom ?? null} currency={currency} custom={custom} />}
     </>
   );
 }
@@ -316,8 +207,8 @@ function ProductsDetail({ ov, currency }: { ov: Overview; currency: string }) {
   const items = ov.modules.top_products?.items ?? [];
   const c = ov.modules.sales_overview?.current;
   const money = (n: number) => fmtMoney(n, currency);
-  // Product sales are line prices less their discounts: the same footing as gross − discounts.
-  const base = c ? r2(c.grossSales - c.discounts) : null;
+  // Product sales are each product's net sales: together they make the store's net sales.
+  const base = c ? c.netSales : null;
   const share = (n: number) => (base && base > 0 ? n / base : null);
   const top = items[0];
   const topTotal = items.reduce((a, i) => a + i.revenue, 0);
@@ -342,7 +233,7 @@ function ProductsDetail({ ov, currency }: { ov: Overview; currency: string }) {
         )}
       </InShort>
       {ov.modules.top_products && (
-        <Panel id="d-top-products" title="Top products" help="Ranked by sales after discounts, in these dates. Refunds aren't taken off here.">
+        <Panel id="d-top-products" title="Top products" help="Ranked by net sales in these dates (after discounts and returns, before tax), as Shopify's sales by product counts them.">
           {items.length === 0 ? (
             <p className="text-sm text-muted">No product sales in these dates yet.</p>
           ) : (
@@ -376,12 +267,23 @@ function ProductsDetail({ ov, currency }: { ov: Overview; currency: string }) {
   );
 }
 
+/** Shopify's own sessions and visitors first, when granted; then what the pixel tracked. */
 function ShoppersDetail({ ov }: { ov: Overview }) {
-  const f = ov.modules.funnel!;
-  const leak = f.steps.length > 1 ? f.steps.slice(0, -1).reduce((a, b) => (b.left > a.left ? b : a)) : null;
-  const where = leak?.leftFrom.find((x) => x.section)?.section;
-  const bestEntry = [...f.entryPages].filter((p) => p.visits >= 5).sort((a, b) => b.purchases / b.visits - a.purchases / a.visits)[0];
-  const visitsChange = upDown(f.deltas.visits);
+  const s = ov.modules.shopify_sessions;
+  const f = ov.modules.funnel;
+  return (
+    <>
+      {s && <ShopifySessionsCard m={s} versus={versusWords(ov)} />}
+      {f && <FunnelDetail ov={ov} f={f} />}
+    </>
+  );
+}
+
+function FunnelDetail({ ov, f }: { ov: Overview; f: NonNullable<Overview["modules"]["funnel"]> }) {
+  const leak = biggestDropOff(f.steps);
+  const where = dropOffSection(leak);
+  const bestEntry = bestEntryPage(f.entryPages);
+  const visitsChange = f.previous.imported === false ? "no earlier data to compare" : upDown(f.deltas.visits);
   return (
     <>
       <InShort>
@@ -390,7 +292,7 @@ function ShoppersDetail({ ov }: { ov: Overview }) {
         ) : (
           <>
             <p>
-              Your store had <B>{plural(f.visits, "visit")}</B>{visitsChange ? <> ({visitsChange})</> : null}, and <B>{fmtPct(f.conversionRate)}</B> of them ended in a purchase ({plural(f.purchases, "purchase")}).
+              Your store had <B>{plural(f.visits, "tracked visit")}</B>{visitsChange ? <> ({visitsChange})</> : null}, and <B>{fmtPct(f.conversionRate)}</B> of them ended in a purchase ({plural(f.purchases, "purchase")}).
             </p>
             {leak && leak.left > 0 && (
               <p>
@@ -406,7 +308,7 @@ function ShoppersDetail({ ov }: { ov: Overview }) {
           </>
         )}
       </InShort>
-      <FunnelCard m={f} />
+      <FunnelCard m={f} versus={versusWords(ov)} />
       {f.visits > 0 && <JourneyCard m={f} />}
     </>
   );
@@ -415,7 +317,7 @@ function ShoppersDetail({ ov }: { ov: Overview }) {
 function TimingDetail({ ov }: { ov: Overview }) {
   const t = ov.modules.order_timing!;
   const total = t.byWeekday.reduce((a, b) => a + b, 0);
-  const days = Array.from({ length: 7 }, (_, i) => new Intl.DateTimeFormat(undefined, { weekday: "long", timeZone: "UTC" }).format(new Date(Date.UTC(2026, 0, 5 + i))));
+  const days = weekdayNames("long");
   const quietest = total ? t.byWeekday.indexOf(Math.min(...t.byWeekday)) : null;
   const weekend = total ? (t.byWeekday[5]! + t.byWeekday[6]!) / total : null;
   const topHours = t.byHour
@@ -557,14 +459,14 @@ function DiscountsDetail({ ov, currency }: { ov: Overview; currency: string }) {
         {top ? (
           <p>
             Customers used <B>{plural(items.length, "code")}</B>; <B>{top.code}</B> was used most, on {plural(top.orders, "order")}.
-            {c && c.grossSales > 0 ? <> All discounts together took {fmtMoney(c.discounts, currency)} off, {fmtPct(c.discounts / c.grossSales)} of full price.</> : null}
+            {c && c.grossSales !== undefined && c.discounts !== undefined && c.grossSales > 0 ? <> All discounts together took {fmtMoney(c.discounts, currency)} off, {fmtPct(c.discounts / c.grossSales)} of full price.</> : null}
           </p>
         ) : (
           <p>No discount codes were used in these dates.</p>
         )}
       </InShort>
       {items.length > 0 && (
-        <Panel id="d-codes-bars" title="Codes by orders" help="How often each code was used in these dates, and the sales those orders brought in.">
+        <Panel id="d-codes-bars" title="Codes by orders" help="How often each code was used in these dates, and the net sales those orders brought in.">
           <ul className="space-y-4">
             {items.map((d) => (
               <BarRow
@@ -572,7 +474,7 @@ function DiscountsDetail({ ov, currency }: { ov: Overview; currency: string }) {
                 label={<span className="font-mono">{d.code}</span>}
                 value={plural(d.orders, "order")}
                 fraction={items[0]!.orders > 0 ? d.orders / items[0]!.orders : 0}
-                sub={`${fmtMoney(d.sales, currency)} in sales · ${fmtMoney(d.discount, currency)} in discounts`}
+                sub={d.sales !== undefined && d.discount !== undefined ? `${fmtMoney(d.sales, currency)} in net sales · ${fmtMoney(d.discount, currency)} in discounts` : undefined}
               />
             ))}
           </ul>
@@ -596,25 +498,31 @@ function CustomersDetail({ ov, contactsOn }: { ov: Overview; contactsOn: boolean
               <p>No orders with a known customer in these dates yet.</p>
             ) : (
               <p>
-                <B>{fmtPct(rate)}</B> of orders came from people who had bought before
-                {before !== null ? <> (it was {fmtPct(before)} in the period before)</> : null}. The rest were first-time customers.
+                <B>{fmtPct(rate)}</B> of the {fmtNum(cu.current.customers)} {cu.current.customers === 1 ? "customer" : "customers"} who ordered had bought from you before
+                {before !== null ? <> (it was {fmtPct(before)} for {comparedOn(ov)})</> : null}. {fmtNum(cu.current.newCustomers)} made their first purchase.
               </p>
             )}
           </InShort>
-          <Panel id="d-customers" title="Returning customers" help="A customer counts as returning if Shopify says they have more than one order, or we have an earlier order from them.">
-            <div className="grid grid-cols-2 gap-3">
-              <Stat label="These dates" value={fmtPct(rate)} note="Orders from returning customers." />
-              <Stat label="The period before" value={fmtPct(before)} note={fmtRange(ov.previous.from, ov.previous.to)} />
+          <Panel
+            id="d-customers"
+            title="Returning customers"
+            help="As Shopify counts them: each customer once, however many orders. A customer is returning when an order of theirs in these dates came after an earlier one, and new when their very first purchase is in these dates (someone can be both)."
+          >
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <Stat label="Returning customer rate" value={fmtPct(rate)} note="Returning customers ÷ customers." />
+              <Stat label={COMPARE_LABEL[ov.previous.compare ?? "previous"]} value={fmtPct(before)} note={ov.previous.imported === false ? "No earlier data" : fmtComparison(ov.previous)} />
+              <Stat label="Customers" value={fmtNum(cu.current.customers)} note="Who ordered in these dates." />
+              <Stat label="New customers" value={fmtNum(cu.current.newCustomers)} note="Their first purchase ever." />
             </div>
             {rate !== null && (
               <div className="mt-5">
-                <p className="mb-2 text-xs text-muted">Orders with a known customer in these dates</p>
+                <p className="mb-2 text-xs text-muted">Customers who ordered in these dates</p>
                 <StackedBar
                   label="Returning and first-time customers"
                   format={(v) => fmtPct(v / 1000)}
                   segments={[
-                    { label: "Returning customers", value: Math.round(rate * 1000), fill: "bg-[var(--viz-cat-1)]" },
-                    { label: "First orders", value: Math.round((1 - rate) * 1000), fill: "bg-[var(--viz-cat-3)]" },
+                    { label: "Had bought before", value: Math.round(rate * 1000), fill: "bg-[var(--viz-cat-1)]" },
+                    { label: "First purchase only", value: Math.round((1 - rate) * 1000), fill: "bg-[var(--viz-cat-3)]" },
                   ]}
                 />
               </div>
@@ -647,47 +555,37 @@ function OrdersDetail({ ov, currency }: { ov: Overview; currency: string }) {
   );
 }
 
-export function TopicDetail({
+/** Everything inside the detail panel for one topic: its own figures, then what to do about them and what they mean. */
+export function TopicContents({
   topic,
   ov,
   currency,
   contactsOn,
-  onClose,
   onOpen,
 }: {
   topic: Topic;
   ov: Overview;
   currency: string;
   contactsOn: boolean;
-  onClose: () => void;
   /** Open another topic from inside this one (the overview's rows). */
   onOpen: (t: Topic) => void;
 }) {
-  const range = fmtRange(ov.range.from, ov.range.to);
-  const period: Record<Topic, string> = {
-    overview: `${range} · ${ov.store.name ?? ov.store.shopDomain}`,
-    sales: range,
-    ads: `${range} · each ad account's own days`,
-    adsense: `${range} · the AdSense account's own days`,
-    products: range,
-    shoppers: range,
-    timing: range,
-    channels: range,
-    shipping: `${range} · waiting orders from any date`,
-    stock: "Right now · sales speed from the last 30 days",
-    discounts: range,
-    customers: range,
-    orders: "The 10 latest orders, any date",
-  };
   const m = ov.modules;
   // A topic whose module isn't there (scopes changed, another store) shows nothing rather than crash.
   const body: ReactNode =
     topic === "overview" ? <OverviewDetail ov={ov} currency={currency} onOpen={onOpen} />
     : topic === "sales" && m.sales_overview ? <SalesDetail ov={ov} currency={currency} />
-    : topic === "ads" && m.ads ? <AdsDetail ov={ov} />
+    : topic === "ads" && m.ads ? (
+      <>
+        <AdsDetail ov={ov} />
+        {m.adsense && <AdsenseLink ov={ov} onOpen={onOpen} />}
+      </>
+    )
     : topic === "adsense" && m.adsense ? <AdsenseDetail ov={ov} />
+    // Marketing with only AdSense connected (or the ad accounts hidden): its earnings, not "nothing connected".
+    : topic === "ads" && m.adsense ? <AdsenseDetail ov={ov} />
     : topic === "products" && (m.top_products || m.catalog) ? <ProductsDetail ov={ov} currency={currency} />
-    : topic === "shoppers" && m.funnel ? <ShoppersDetail ov={ov} />
+    : topic === "shoppers" && (m.funnel || m.shopify_sessions) ? <ShoppersDetail ov={ov} />
     : topic === "timing" && m.order_timing ? <TimingDetail ov={ov} />
     : topic === "channels" && m.channels ? <ChannelsDetail ov={ov} currency={currency} />
     : topic === "shipping" && m.fulfillment ? <ShippingDetail ov={ov} />
@@ -695,13 +593,58 @@ export function TopicDetail({
     : topic === "discounts" && m.discount_codes ? <DiscountsDetail ov={ov} currency={currency} />
     : topic === "customers" && (m.customers || contactsOn) ? <CustomersDetail ov={ov} contactsOn={contactsOn} />
     : topic === "orders" && m.recent_orders ? <OrdersDetail ov={ov} currency={currency} />
+    // The sidebar's Marketing opens this before any ad account is connected, or with all of them hidden: say so, and where that's done.
+    : topic === "ads" ? <NoAdAccounts ov={ov} />
     : <p className="text-sm text-muted">There&apos;s nothing to show here for this store yet.</p>;
   return (
-    // Keyed by topic so moving from the overview to another topic starts at the top of the panel.
-    <DetailSheet key={topic} title={topicInfo(topic).title} icon={topicInfo(topic).icon} period={period[topic]} onClose={onClose}>
+    <>
       {body}
-      {/* Then, under every topic: what to do about it, and what each number means. */}
-      <Explained topic={topic} ov={ov} currency={currency} />
-    </DetailSheet>
+      {/* Then, under every topic: what to do about it, and what each number means (AdSense's when that's what Marketing shows). */}
+      <Explained topic={topic === "ads" && !m.ads && m.adsense ? "adsense" : topic} ov={ov} currency={currency} />
+    </>
+  );
+}
+
+/** Under the ads details, when AdSense is connected too: its estimated earnings, one tap away. */
+function AdsenseLink({ ov, onOpen }: { ov: Overview; onOpen: (t: Topic) => void }) {
+  const s = ov.modules.adsense!;
+  const { totals, through } = shownFigures(s);
+  return (
+    <div className="card flex flex-wrap items-center justify-between gap-2 text-sm" data-testid="ads-adsense-link">
+      <span>
+        <span className="font-medium">Google AdSense</span>
+        <span className="text-muted">
+          {" · "}
+          {totals ? `${fmtMoney(totals.earnings, s.currency)} estimated earnings from ads on your site${through ? ` ${upToWords(through)}` : ""}` : "estimated earnings from ads on your site"}
+        </span>
+      </span>
+      <button type="button" className="text-xs text-accent underline-offset-2 hover:underline" onClick={() => onOpen("adsense")}>
+        See details
+      </button>
+    </div>
+  );
+}
+
+function NoAdAccounts({ ov }: { ov: Overview }) {
+  const { allowed } = useApp();
+  const n = ov.modules.ad_connections;
+  const settings = (
+    <Link href="/settings/ads" className="font-medium text-accent underline">
+      Settings → Advertising
+    </Link>
+  );
+  if (n && n.hidden > 0 && n.meta + n.google + n.adsense > 0) {
+    return (
+      <p className="text-sm text-muted">
+        This store&apos;s ad accounts are hidden from the dashboard.{" "}
+        {allowed("integrations.manage") ? <>Turn on the ones that belong to this store in {settings} to see their results here.</> : "Ask a workspace owner or admin to turn them on."}
+      </p>
+    );
+  }
+  return (
+    <p className="text-sm text-muted">
+      No ad accounts are connected to this store yet. Connect Meta Ads or Google Ads to see what you spend, or Google AdSense to see what your site earns from ads,
+      in {settings}, and their results show up here.
+    </p>
   );
 }

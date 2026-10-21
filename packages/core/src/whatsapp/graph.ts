@@ -5,11 +5,10 @@
  */
 import { classifyGraphError, type ErrorAction, type TemplateComponent } from "@app/shared";
 import { env } from "../env.js";
+import { graphCall, type GraphFailure } from "../metaGraph.js";
 import type { FetchLike } from "../shopify.js";
 
-const GRAPH = "https://graph.facebook.com";
-
-/** Insights' own Meta app, for Embedded Signup. Null until it is configured (the button then says so). */
+/** bizinsights' own Meta app, for Embedded Signup. Null until it is configured (the button then says so). */
 export interface WaPlatformConfig {
   appId: string;
   appSecret: string;
@@ -57,60 +56,33 @@ export class WhatsappApiError extends Error {
   }
 }
 
-interface GraphErrorBody {
-  error?: { message?: string; type?: string; code?: number; error_subcode?: number; error_user_title?: string; error_user_msg?: string; error_data?: { details?: string } };
+/** A Graph API failure as WhatsApp sorts it (`classifyGraphError`: reconnect, retry or fail). */
+function waError(f: GraphFailure): WhatsappApiError {
+  // No answer at all: Meta or the network is down. Retryable (no code, 5xx-like).
+  if (f.reason === "network") return new WhatsappApiError(503, null, "network", f.message);
+  return new WhatsappApiError(f.status, f.code, f.userTitle || f.type || "error", f.details || f.userMessage || f.message || f.text || null);
 }
 
-export async function graph<T>(
+/** One Graph API call with the business's (or bizinsights' app) token. */
+export function graph<T>(
   fetchImpl: FetchLike,
   token: string,
   method: "GET" | "POST" | "DELETE",
   path: string,
   opts: { query?: Record<string, string>; body?: unknown; version?: string } = {},
 ): Promise<T> {
-  const url = new URL(`${GRAPH}/${opts.version ?? waVersion()}/${path.replace(/^\//, "")}`);
-  for (const [k, v] of Object.entries(opts.query ?? {})) url.searchParams.set(k, v);
-  let res: Response;
-  try {
-    res = await fetchImpl(url.toString(), {
-      method,
-      headers: { authorization: `Bearer ${token}`, ...(opts.body !== undefined ? { "content-type": "application/json" } : {}) },
-      body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
-    });
-  } catch (err) {
-    // No answer at all: Meta or the network is down. Retryable (no code, 5xx-like).
-    throw new WhatsappApiError(503, null, "network", err instanceof Error ? err.message : String(err));
-  }
-  const text = await res.text();
-  let json: unknown = null;
-  try {
-    json = text ? JSON.parse(text) : null;
-  } catch {
-    /* not JSON */
-  }
-  if (!res.ok) {
-    const e = (json as GraphErrorBody | null)?.error;
-    throw new WhatsappApiError(res.status, e?.code ?? null, e?.error_user_title || e?.type || "error", e?.error_data?.details || e?.error_user_msg || e?.message || text.slice(0, 300) || null);
-  }
-  return json as T;
+  return graphCall<T>(fetchImpl, { version: opts.version ?? waVersion(), method, path, token, query: opts.query, json: opts.body }, waError);
 }
 
 /** Embedded Signup returns a code that lives 30 seconds: exchange it for the business's token at once. */
 export async function waExchangeCode(cfg: WaPlatformConfig, code: string, fetchImpl: FetchLike): Promise<string> {
-  const url = new URL(`${GRAPH}/${cfg.version}/oauth/access_token`);
-  url.searchParams.set("client_id", cfg.appId);
-  url.searchParams.set("client_secret", cfg.appSecret);
-  url.searchParams.set("code", code);
-  let res: Response;
-  try {
-    res = await fetchImpl(url.toString(), { method: "GET" });
-  } catch (err) {
-    throw new WhatsappApiError(503, null, "network", err instanceof Error ? err.message : String(err));
-  }
-  const body = (await res.json().catch(() => ({}))) as { access_token?: string } & GraphErrorBody;
-  if (!res.ok || !body.access_token) {
-    throw new WhatsappApiError(res.status || 400, body.error?.code ?? null, body.error?.type ?? "oauth", body.error?.message ?? "The sign-in code was not accepted");
-  }
+  // The code exchange is the one call without a token: the app proves itself with its id and secret.
+  const body = await graphCall<{ access_token?: string }>(
+    fetchImpl,
+    { version: cfg.version, method: "GET", path: "oauth/access_token", query: { client_id: cfg.appId, client_secret: cfg.appSecret, code } },
+    (f) => (f.reason === "network" ? waError(f) : new WhatsappApiError(f.status || 400, f.code, f.type ?? "oauth", f.message ?? "The sign-in code was not accepted")),
+  );
+  if (!body.access_token) throw new WhatsappApiError(400, null, "oauth", "The sign-in code was not accepted");
   return body.access_token;
 }
 
@@ -168,7 +140,7 @@ export interface WaTokenInfo {
 /** What a token can reach: its app, its permissions and the WhatsApp accounts it was given. */
 /**
  * What Meta says about a token: its app, permissions and the WhatsApp accounts it was given.
- * `inspector` is the token that asks (Insights' app token `<id>|<secret>` for Embedded Signup
+ * `inspector` is the token that asks (bizinsights' app token `<id>|<secret>` for Embedded Signup
  * tokens); by default the token inspects itself.
  */
 export async function waTokenInfo(token: string, fetchImpl: FetchLike, inspector = token): Promise<WaTokenInfo> {
@@ -197,7 +169,7 @@ export async function waAccountNumbers(wabaId: string, token: string, fetchImpl:
   return r.data ?? [];
 }
 
-/** The webhook fields Insights reads (webhook.ts). */
+/** The webhook fields bizinsights reads (webhook.ts). */
 export const WA_WEBHOOK_FIELDS = [
   "messages",
   "user_preferences",
@@ -209,7 +181,7 @@ export const WA_WEBHOOK_FIELDS = [
 ];
 
 /**
- * Point a merchant's own Meta app's WhatsApp webhook at Insights, so they don't have to paste a
+ * Point a merchant's own Meta app's WhatsApp webhook at bizinsights, so they don't have to paste a
  * callback URL and verify token into Meta's dashboard. Meta checks the URL straight away (the
  * verify-token handshake), so the connection has to be saved first. An app whose WhatsApp webhook
  * already goes somewhere else is left alone ("in_use"): it may be feeding another tool.

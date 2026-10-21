@@ -13,9 +13,12 @@ export function fmtDay(day: string | null | undefined, opts: { year?: boolean } 
   }).format(d);
 }
 
-/** "1–9 Mar", "28 Feb – 8 Mar", with the year only when the span crosses one (in the viewer's order). */
-export function fmtSpan(from: string, to: string): string {
-  const year = from.slice(0, 4) !== to.slice(0, 4);
+/**
+ * "1–9 Mar", "28 Feb – 8 Mar", with the year only when the span crosses one (in the viewer's
+ * order), or always with `year`: "14 Mar 2026", "1–7 Mar 2026".
+ */
+export function fmtSpan(from: string, to: string, opts: { year?: boolean } = {}): string {
+  const year = opts.year || from.slice(0, 4) !== to.slice(0, 4);
   const f = new Intl.DateTimeFormat(undefined, { timeZone: "UTC", day: "numeric", month: "short", ...(year ? { year: "numeric" } : {}) });
   try {
     return f.formatRange(new Date(`${from}T00:00:00Z`), new Date(`${to}T00:00:00Z`));
@@ -28,6 +31,15 @@ export function fmtSpan(from: string, to: string): string {
 export function fmtWeekday(day: string): string {
   return new Intl.DateTimeFormat(undefined, { timeZone: "UTC", weekday: "short" }).format(new Date(`${day}T00:00:00Z`));
 }
+
+/** A weekday by its number, Monday = 0 … Sunday = 6 (as `weekdayOf` counts), in the viewer's language: "Monday" / "Mon". */
+export function weekdayName(i: number, style: "long" | "short"): string {
+  // 2026-01-05 is a Monday.
+  return new Intl.DateTimeFormat(undefined, { weekday: style, timeZone: "UTC" }).format(new Date(Date.UTC(2026, 0, 5 + i)));
+}
+
+/** The seven weekday names, Monday first. */
+export const weekdayNames = (style: "long" | "short"): string[] => Array.from({ length: 7 }, (_, i) => weekdayName(i, style));
 
 /** "Wed, 24 Jun 2026". */
 export function fmtLongDay(day: string): string {
@@ -54,6 +66,20 @@ export function fmtMoneyCompact(n: number, currency: string): string {
 /** "8 Mar 2026" for a single day, "1 Mar 2026 – 8 Mar 2026" for a span. */
 export function fmtRange(from: string, to: string): string {
   return from === to ? fmtDay(from) : `${fmtDay(from)} – ${fmtDay(to)}`;
+}
+
+/** A store-local time of day, "16:44:12" → "4:44 pm" (in the viewer's language). */
+export function fmtClock(time: string): string {
+  const [h = 0, m = 0] = time.split(":").map(Number);
+  return new Intl.DateTimeFormat(undefined, { timeZone: "UTC", hour: "numeric", minute: "2-digit" }).format(new Date(Date.UTC(2026, 0, 1, h, m)));
+}
+
+/**
+ * The dates the numbers are compared with: "16 Oct 2026 until 4:44 pm" while the dates picked are
+ * still running (their comparison stops at the same time of day), otherwise as `fmtRange`.
+ */
+export function fmtComparison(c: { from: string; to: string; until?: string }): string {
+  return c.until ? `${fmtRange(c.from, c.to)} until ${fmtClock(c.until)}` : fmtRange(c.from, c.to);
 }
 
 /** An instant shown in the store's time zone, e.g. "8 Mar, 3:30 pm". */

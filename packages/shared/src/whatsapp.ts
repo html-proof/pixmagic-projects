@@ -1,6 +1,6 @@
 /**
  * WhatsApp Business Platform (Cloud API): the pure parts. Phone numbers, which notification goes
- * out for which store event, the template library Insights can create for a merchant, how a Graph
+ * out for which store event, the template library bizinsights can create for a merchant, how a Graph
  * API error should be handled, quiet hours, and the automation rules' conditions. Everything that
  * touches the network or the database is in packages/core/src/whatsapp.
  */
@@ -270,8 +270,8 @@ export interface KindInfo {
 export const KIND_INFO: Record<NotificationKind, KindInfo> = {
   order_confirmation: { kind: "order_confirmation", label: "Order confirmed", when: "When Shopify reports a new order (never for abandoned checkouts or orders that fail at payment)", group: "orders", libraryTemplate: "insights_order_confirmation" },
   payment_confirmed: { kind: "payment_confirmed", label: "Payment confirmed", when: "When an order that wasn't paid at checkout (cash on delivery, bank transfer) is marked paid", group: "orders", libraryTemplate: "insights_payment_confirmed" },
-  order_processing: { kind: "order_processing", label: "Order processing", when: "When you mark the order processing: add the processing tag in Shopify, or press the button in Insights", group: "orders", libraryTemplate: "insights_order_processing" },
-  order_packed: { kind: "order_packed", label: "Order packed", when: "When you mark the order packed: add the packed tag in Shopify, or press the button in Insights", group: "orders", libraryTemplate: "insights_order_packed" },
+  order_processing: { kind: "order_processing", label: "Order processing", when: "When you mark the order processing: add the processing tag in Shopify, or press the button in bizinsights", group: "orders", libraryTemplate: "insights_order_processing" },
+  order_packed: { kind: "order_packed", label: "Order packed", when: "When you mark the order packed: add the packed tag in Shopify, or press the button in bizinsights", group: "orders", libraryTemplate: "insights_order_packed" },
   order_cancelled: { kind: "order_cancelled", label: "Order cancelled", when: "When the order is cancelled in Shopify", group: "orders", libraryTemplate: "insights_order_cancelled" },
   refund_processed: { kind: "refund_processed", label: "Refund processed", when: "When Shopify records a refund on the order", group: "orders", libraryTemplate: "insights_refund_processed" },
   order_shipped: { kind: "order_shipped", label: "Order shipped", when: "When the order is fulfilled in Shopify (with the courier and tracking number when there is one)", group: "delivery", libraryTemplate: "insights_order_shipped" },
@@ -283,6 +283,17 @@ export const KIND_INFO: Record<NotificationKind, KindInfo> = {
   review_request: { kind: "review_request", label: "Review request", when: "A few days after a confirmed delivery", group: "reviews", libraryTemplate: "insights_review_request" },
   review_reminder: { kind: "review_reminder", label: "Review reminder (optional)", when: "Once, if no review came in after the request", group: "reviews", libraryTemplate: "insights_review_request" },
 };
+
+export type KindGroup = KindInfo["group"];
+
+/** The notification kinds of one group (a page of the WhatsApp area), in NOTIFICATION_KINDS order. */
+export const kindsOf = (group: KindGroup): NotificationKind[] => NOTIFICATION_KINDS.filter((k) => KIND_INFO[k].group === group);
+
+/** The message kinds the message history shows for one filter (?group=): a notification group, or another sender. */
+export function messageKinds(group: string): string[] | null {
+  if (group === "orders" || group === "delivery" || group === "carts" || group === "reviews") return kindsOf(group);
+  return group === "campaign" || group === "automation" || group === "test" ? [group] : null;
+}
 
 /**
  * How far an order has got with its parcel. Webhooks arrive late, twice, and out of order:
@@ -337,7 +348,7 @@ export const TRACKING_STATUSES = [
 export type TrackingStatus = (typeof TRACKING_STATUSES)[number];
 
 // ---------------------------------------------------------------------------
-// Template library: what Insights can create in the merchant's WhatsApp account for review
+// Template library: what bizinsights can create in the merchant's WhatsApp account for review
 // ---------------------------------------------------------------------------
 
 export interface LibraryTemplate {
@@ -474,6 +485,16 @@ export const TEMPLATE_LIBRARY: LibraryTemplate[] = [
     urlButton: { text: "Explore the collection", base: "api", path: "/r/", example: "c7Hk2pQx9a" },
     stopButton: true,
     mapping: m(["occasion", "store_name", "discount_percentage", "end_date"], ["campaign_link_code"]),
+  },
+  // To the store's own team, not to customers: the Inventory module's low-stock alerts
+  // (Inventory → Stock settings picks it and the numbers it goes to).
+  {
+    name: "insights_stock_alert",
+    category: "UTILITY",
+    label: "Stock alert (to your team)",
+    body: "Stock alert for {{1}}: {{2}}\nOpen bizinsights to see which products need restocking.",
+    examples: ["Green Leaf Store", "3 products are out of stock and 5 are running low."],
+    mapping: m(["store_name", "custom_text"]),
   },
 ];
 
@@ -691,7 +712,7 @@ export function errorExplanation(code: string | number | null | undefined, fallb
     case 130429:
       return "WhatsApp's rate limit was reached; it will be retried.";
     case 190:
-      return "Meta no longer accepts Insights' access: reconnect WhatsApp.";
+      return "Meta no longer accepts bizinsights' access: reconnect WhatsApp.";
     case 368:
       return "Your WhatsApp account is temporarily blocked for policy violations.";
     default:
@@ -763,6 +784,29 @@ export const audienceSchema = z.object({
   countries: z.array(z.string().length(2).toUpperCase()).max(50).default([]),
 });
 export type Audience = z.infer<typeof audienceSchema>;
+
+export const CAMPAIGN_STATUSES = ["draft", "scheduled", "sending", "paused", "completed", "cancelled"] as const;
+export type CampaignStatus = (typeof CAMPAIGN_STATUSES)[number];
+export type CampaignAction = "pause" | "resume" | "cancel";
+
+const CAMPAIGN_ACTION_FROM: Record<CampaignAction, readonly string[]> = {
+  pause: ["scheduled", "sending"],
+  resume: ["paused"],
+  cancel: ["draft", "scheduled", "sending", "paused"],
+};
+
+/** Whether a campaign in this status can be paused, resumed or cancelled. */
+export const campaignCan = (status: string, action: CampaignAction) => CAMPAIGN_ACTION_FROM[action].includes(status);
+
+/** The status a campaign moves to: resuming one that never started schedules it again. */
+export function campaignStatusAfter(action: CampaignAction, started: boolean): CampaignStatus {
+  if (action === "pause") return "paused";
+  if (action === "resume") return started ? "sending" : "scheduled";
+  return "cancelled";
+}
+
+/** A campaign that hasn't started can still be edited; editing a scheduled one takes it back to draft. */
+export const campaignEditable = (status: string) => status === "draft" || status === "scheduled";
 
 // ---------------------------------------------------------------------------
 // Automation rules: trigger → conditions → action

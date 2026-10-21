@@ -1,8 +1,8 @@
 "use client";
 import type { ReactNode } from "react";
-import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
-import { fmtDay, fmtMoneyWhole, fmtRelative, fmtWeekday } from "./format";
 import type { Health } from "@app/shared/health";
+import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
+import { fmtDay, fmtMoneyWhole, fmtRelative, fmtWeekday, weekdayNames } from "./format";
 import type { Topic } from "./topics";
 import type { Overview } from "./types";
 
@@ -104,9 +104,9 @@ export function AreaPreview({ topic, ov, currency, health }: { topic: Topic; ov:
       return (
         <MiniStack
           segments={[
-            { label: "Needs attention", value: health.attention, color: "var(--danger)" },
-            { label: "Keep an eye on", value: health.watch, color: "var(--warn)" },
-            { label: "Looks good", value: health.good, color: "var(--good)" },
+            { label: "Needs attention", value: health.attention, color: "var(--fill-danger)" },
+            { label: "Keep an eye on", value: health.watch, color: "var(--fill-warn)" },
+            { label: "Looking good", value: health.good, color: "var(--fill-good)" },
           ]}
         />
       );
@@ -129,33 +129,35 @@ export function AreaPreview({ topic, ov, currency, health }: { topic: Topic; ov:
     }
     case "ads": {
       const a = m.ads;
-      if (!a || a.series.length < 2) return null;
-      const values = a.series.map((d) => d.spend);
+      // Only with every day known: a mini chart can't say which days are missing.
+      if (!a || !a.current || a.series.length < 2) return null;
+      const c = a.current;
+      const values = a.series.map((d) => d.spend ?? 0);
       const top = values.indexOf(Math.max(...values));
       const today = a.series.findIndex((d) => d.day === ov.today);
-      const split = a.byProvider.length > 1 && a.current.spend > 0 ? a.byProvider.map((p) => `${p.provider === "meta" ? "Meta" : "Google"} ${fmtPct(p.spend / a.current.spend)}`).join(" · ") : null;
+      const split = a.byProvider.length > 1 && c.spend > 0 ? a.byProvider.map((p) => `${p.provider === "meta" ? "Meta" : "Google"} ${fmtPct((p.spend ?? 0) / c.spend)}`).join(" · ") : null;
       return (
         <>
           <MiniColumns values={values} emphasis={values[top]! > 0 ? top : null} faded={today >= 0 ? today : null} />
           <Caption>
             Ad spend per day{split ? <> · {split}</> : null}
-            {a.current.roas !== null ? <> · platforms report {new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(a.current.roas)}× back</> : null}
+            {c.roas !== null ? <> · platforms credit {new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(c.roas)}× back in purchases</> : null}
           </Caption>
         </>
       );
     }
     case "adsense": {
       const a = m.adsense;
-      if (!a || a.series.length < 2) return null;
-      const values = a.series.map((d) => d.earnings);
+      if (!a || !a.current || a.series.length < 2) return null;
+      const values = a.series.map((d) => d.earnings ?? 0);
       const top = values.indexOf(Math.max(...values));
       const today = a.series.findIndex((d) => d.day === ov.today);
       return (
         <>
           <MiniColumns values={values} emphasis={values[top]! > 0 ? top : null} faded={today >= 0 ? today : null} />
           <Caption>
-            Ad earnings per day
-            {a.current.pageRpm !== null ? <> · {fmtMoney(a.current.pageRpm, a.currency)} per 1,000 views</> : null}
+            Estimated ad earnings per day
+            {a.current.pageRpm !== null ? <> · {fmtMoney(a.current.pageRpm, a.currency)} per 1,000 page views</> : null}
           </Caption>
         </>
       );
@@ -168,9 +170,9 @@ export function AreaPreview({ topic, ov, currency, health }: { topic: Topic; ov:
         <>
           <MiniStack
             segments={[
-              { label: "Shipped", value: c.fulfilled, color: "var(--good)" },
-              { label: "Partly shipped", value: c.partiallyFulfilled, color: "var(--warn)" },
-              { label: "Not shipped yet", value: c.unfulfilled, color: "var(--danger)" },
+              { label: "Shipped", value: c.fulfilled, color: "var(--fill-good)" },
+              { label: "Partly shipped", value: c.partiallyFulfilled, color: "var(--fill-warn)" },
+              { label: "Not shipped yet", value: c.unfulfilled, color: "var(--fill-danger)" },
             ]}
           />
           <Caption>Orders placed in these dates, by where they are now</Caption>
@@ -184,9 +186,9 @@ export function AreaPreview({ topic, ov, currency, health }: { topic: Topic; ov:
         <>
           <MiniStack
             segments={[
-              { label: "Plenty", value: Math.max(0, c.trackedVariants - c.lowStock - c.outOfStock), color: "var(--good)" },
-              { label: "Running low", value: c.lowStock, color: "var(--warn)" },
-              { label: "Sold out", value: c.outOfStock, color: "var(--danger)" },
+              { label: "Plenty", value: Math.max(0, c.trackedVariants - c.lowStock - c.outOfStock), color: "var(--fill-good)" },
+              { label: "Running low", value: c.lowStock, color: "var(--fill-warn)" },
+              { label: "Sold out", value: c.outOfStock, color: "var(--fill-danger)" },
             ]}
           />
           <Caption>Your {fmtNum(c.trackedVariants)} tracked variants, by how much stock is left</Caption>
@@ -226,8 +228,7 @@ export function AreaPreview({ topic, ov, currency, health }: { topic: Topic; ov:
       const t = m.order_timing;
       if (!t || !t.byWeekday.some((n) => n > 0)) return null;
       const busiest = t.byWeekday.indexOf(Math.max(...t.byWeekday));
-      // 2026-01-05 is a Monday.
-      const labels = Array.from({ length: 7 }, (_, i) => fmtWeekday(`2026-01-${String(5 + i).padStart(2, "0")}`).slice(0, 2));
+      const labels = weekdayNames("short").map((d) => d.slice(0, 2));
       return (
         <>
           <MiniColumns values={t.byWeekday} emphasis={busiest} labels={labels} />

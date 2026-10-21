@@ -1,6 +1,6 @@
 "use client";
 import { motion, useTransform, type MotionValue } from "motion/react";
-import { useId, useRef, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { usePauseWhenHidden } from "@/hooks/usePauseWhenHidden";
 import { segment } from "@/lib/motion";
 import {
@@ -16,7 +16,7 @@ import {
   wideFlowDraw,
   type FlowDef,
   type FlowGeometry,
-} from "./HeroLayout";
+} from "./heroLayout";
 
 type Box = (typeof BOX)[keyof typeof BOX];
 
@@ -25,11 +25,65 @@ const pctY = (box: Box, y: number) => `${(y / box.h) * 100}%`;
 
 const PULSE_SECONDS = [3.4, 3.9, 4.4];
 
+/** Every number in an absolute SVG path, multiplied by `k` (box units to CSS pixels). */
+const scalePath = (d: string, k: number) => d.replace(/-?\d+(\.\d+)?/g, (n) => (Number(n) * k).toFixed(2));
+
 /**
- * Line, light pulse and nodes of one flow, inside an SVG laid over the visual box. The line
- * draws itself with `draw`, each node lights up as the line reaches it, and once the whole path
- * exists a short bright dash keeps travelling along it: a CSS loop that only runs while the flow
- * is on screen and visible (`fade` is the opacity of the diagram it belongs to).
+ * The light pulse of one flow: a short bright dash that keeps travelling along the finished path.
+ * It is a small layer of its own riding the path (`offset-path`, in the box's pixels, re-measured
+ * on resize), so its movement is never a repaint of the diagram. A CSS loop that only runs while
+ * the flow is on screen and visible (`fade` is the opacity of the diagram it belongs to).
+ */
+function FlowPulse({
+  box,
+  d,
+  pulse,
+  fade,
+  index,
+  vertical,
+}: {
+  box: Box;
+  d: string;
+  pulse: MotionValue<number>;
+  fade: MotionValue<number>;
+  index: number;
+  vertical: boolean;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [scale, setScale] = useState(0);
+  usePauseWhenHidden(ref, [pulse, fade]);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setScale(el.clientWidth / box.w));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [box.w]);
+  // The SVG stroke this replaces: 2.6 (2 stacked) units thick and about 44 units long, round-capped.
+  const thick = (vertical ? 2 : 2.6) * scale;
+  const long = (vertical ? 26 : 44) * scale;
+  return (
+    <motion.div ref={ref} data-lp-paused="" aria-hidden className="pointer-events-none absolute inset-0" style={{ opacity: pulse }}>
+      {scale > 0 && (
+        <span
+          className="lp-loop lp-layer absolute left-0 top-0 block rounded-full bg-[#f7f9fc] shadow-[0_0_6px_rgb(167_152_255/0.8)]"
+          style={{
+            width: long,
+            height: thick,
+            offsetPath: `path("${scalePath(d, scale)}")`,
+            offsetRotate: "auto",
+            animation: `lp-flow-dash ${PULSE_SECONDS[index]}s linear ${index * 0.7}s infinite`,
+          }}
+        />
+      )}
+    </motion.div>
+  );
+}
+
+/**
+ * Line and nodes of one flow, inside an SVG laid over the visual box, plus its light pulse. The
+ * line draws itself with `draw`, each node lights up as the line reaches it, and once the whole
+ * path exists the pulse starts travelling along it.
  */
 function FlowLine({
   box,
@@ -52,47 +106,34 @@ function FlowLine({
   const shown = useTransform(draw, (d) => (d > 0.001 ? 1 : 0));
   const track = useTransform(draw, (d) => segment(d, 0, 0.08));
   const pulse = useTransform(draw, (d) => segment(d, 0.9, 1));
-  const svgRef = useRef<SVGSVGElement>(null);
-  usePauseWhenHidden(svgRef, [pulse, fade]);
   const first = geo.nodes[0];
   const last = geo.nodes[geo.nodes.length - 1];
   return (
-    <svg ref={svgRef} data-lp-paused="" viewBox={`0 0 ${box.w} ${box.h}`} className="absolute inset-0 size-full overflow-visible" fill="none">
-      <defs>
-        <linearGradient
-          id={id}
-          gradientUnits="userSpaceOnUse"
-          x1={vertical ? first.x : first.x - 200}
-          y1={vertical ? first.y - 60 : first.y}
-          x2={last.x}
-          y2={last.y}
-        >
-          <stop offset="0%" stopColor="#8c7bff" />
-          <stop offset="60%" stopColor="#5ea6ff" />
-          <stop offset="100%" stopColor="#65d8d0" />
-        </linearGradient>
-      </defs>
-      <motion.path d={geo.d} stroke="rgb(255 255 255 / 0.07)" strokeWidth={vertical ? 1.2 : 1.4} style={{ opacity: track }} />
-      <motion.path d={geo.d} stroke={`url(#${id})`} strokeWidth={vertical ? 1.4 : 1.8} style={{ pathLength: draw, opacity: shown }} />
-      {!still && (
-        <motion.g style={{ opacity: pulse }}>
-          <path
-            d={geo.d}
-            className="lp-loop"
-            stroke="#f7f9fc"
-            strokeWidth={vertical ? 2 : 2.6}
-            strokeLinecap="round"
-            pathLength={1}
-            strokeDasharray="0.05 1.2"
-            strokeDashoffset={0.05}
-            style={{ animation: `lp-flow-pulse ${PULSE_SECONDS[index]}s linear ${index * 0.7}s infinite` }}
-          />
-        </motion.g>
-      )}
-      {geo.nodes.map((n, j) => (
-        <FlowNode key={j} x={n.x} y={n.y} at={geo.at[j]} draw={draw} final={j === geo.nodes.length - 1} size={vertical ? 5 : 7} />
-      ))}
-    </svg>
+    <>
+      {/* Its own layer: the scroll redraws this line, and only this line, while the flow builds. */}
+      <svg viewBox={`0 0 ${box.w} ${box.h}`} className="absolute inset-0 size-full overflow-visible will-change-transform" fill="none">
+        <defs>
+          <linearGradient
+            id={id}
+            gradientUnits="userSpaceOnUse"
+            x1={vertical ? first.x : first.x - 200}
+            y1={vertical ? first.y - 60 : first.y}
+            x2={last.x}
+            y2={last.y}
+          >
+            <stop offset="0%" stopColor="#8c7bff" />
+            <stop offset="60%" stopColor="#5ea6ff" />
+            <stop offset="100%" stopColor="#65d8d0" />
+          </linearGradient>
+        </defs>
+        <motion.path d={geo.d} stroke="rgb(255 255 255 / 0.07)" strokeWidth={vertical ? 1.2 : 1.4} style={{ opacity: track }} />
+        <motion.path d={geo.d} stroke={`url(#${id})`} strokeWidth={vertical ? 1.4 : 1.8} style={{ pathLength: draw, opacity: shown }} />
+        {geo.nodes.map((n, j) => (
+          <FlowNode key={j} x={n.x} y={n.y} at={geo.at[j]} draw={draw} final={j === geo.nodes.length - 1} size={vertical ? 5 : 7} />
+        ))}
+      </svg>
+      {!still && <FlowPulse box={box} d={geo.d} pulse={pulse} fade={fade} index={index} vertical={vertical} />}
+    </>
   );
 }
 

@@ -5,18 +5,21 @@ import { Alert } from "@/components/ui";
 import { LoadError } from "@/components/LoadError";
 import { actionError, api, useApi } from "@/lib/api";
 
-type Prefs = { syncFailures: boolean; weeklyDigest: boolean; productNews: boolean };
+type Prefs = { syncFailures: boolean; weeklyDigest: boolean; productNews: boolean; stockAlerts: boolean };
 /**
- * Only emails Insights actually sends. The preferences API also stores `weeklyDigest` and
+ * Only emails bizinsights actually sends. The preferences API also stores `weeklyDigest` and
  * `productNews`, but nothing sends either yet, so offering them promised a Monday email that never
  * came. List them here once their senders exist.
  */
 const LABELS: Array<[keyof Prefs, string, string]> = [
   ["syncFailures", "Sync problems", "Email me if a store stops syncing (owners and admins)."],
+  ["stockAlerts", "Stock alerts", "Email me when items run low or sell out (for people who can see inventory)."],
 ];
 
 export default function NotificationsPage() {
-  const { workspace } = useApp();
+  const { workspace, allowed, offers } = useApp();
+  // Stock alerts go only to people who can see the stock.
+  const labels = LABELS.filter(([k]) => k !== "stockAlerts" || (offers("inventory") && allowed("inventory.view")));
   const { data, setData, error, loading, reload } = useApi<{ preferences: Prefs }>(`/workspaces/${workspace.id}/notifications`);
   const [saveError, setSaveError] = useState<string | null>(null);
   const prefs = data?.preferences;
@@ -39,9 +42,9 @@ export default function NotificationsPage() {
       {!prefs && error && <LoadError what="your notification settings" error={error} onRetry={() => void reload()} busy={loading} />}
       {saveError && <Alert>{saveError}</Alert>}
       {prefs &&
-        LABELS.map(([k, title, help]) => (
+        labels.map(([k, title, help]) => (
           <label key={k} className="flex items-start gap-3">
-            <input type="checkbox" className="mt-1" checked={prefs[k]} onChange={() => toggle(k)} />
+            <input type="checkbox" className="mt-1" checked={prefs[k] ?? true} onChange={() => toggle(k)} />
             <span>
               <span className="block text-sm font-medium">{title}</span>
               <span className="block text-xs text-muted">{help}</span>

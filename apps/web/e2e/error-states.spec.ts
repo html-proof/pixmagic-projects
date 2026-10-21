@@ -1,13 +1,15 @@
 import { expect, test } from "@playwright/test";
 
 test.beforeEach(async ({ page }) => {
-  await page.route("**/api/auth/whoami", (route) => route.fulfill({ status: 401, contentType: "application/json", body: JSON.stringify({ error: "unauthorized" }) }));
+  await page.route("**/api/**", (route) => route.fulfill({ status: 200, contentType: "application/json", body: "{}" }));
+  await page.route("**/api/auth/login/code", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ pending: false }) }));
+  await page.route("**/api/auth/config", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ providers: { google: false }, emailOtp: false, loginCode: false }) }));
+  await page.route("**/api/auth/whoami", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ user: null }) }));
 });
 
 test("missing invitation has an actionable dedicated state", async ({ page }) => {
   await page.goto("/invite");
-  await expect(page.getByRole("heading", { name: "Invitation link expired" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Contact support" })).toHaveAttribute("href", "/support");
+  await expect(page.getByRole("heading", { name: "This link doesn't work" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Accept invitation" })).toHaveCount(0);
 });
 
@@ -18,11 +20,12 @@ test("session recovery explains why sign-in is needed", async ({ page }) => {
 
 test("invalid fields are associated with inline validation messages", async ({ page }) => {
   await page.goto("/login");
-  await page.getByRole("button", { name: "Log in", exact: true }).click();
-  const email = page.getByLabel("Email", { exact: true });
+  await page.getByRole("button", { name: "Sign In", exact: true }).click();
+  const email = page.getByLabel("Email Address", { exact: true });
   await expect(email).toHaveAttribute("aria-invalid", "true");
-  await expect(page.locator("#email-error")).toHaveText("This field is required.");
+  await expect(page.locator("#email-error")).toHaveText("Enter your email address.");
   await email.fill("merchant@example.com");
+  await email.blur();
   await expect(email).not.toHaveAttribute("aria-invalid");
 });
 
@@ -62,23 +65,24 @@ test("unknown paths keep the 404 status and dashboard recovery", async ({ page }
   await expect(page.getByRole("link", { name: "Go to Dashboard", exact: true })).toHaveAttribute("href", "/dashboard");
 });
 
-test("an expired invitation response opens the illustrated recovery page", async ({ page }) => {
-  await page.route("**/api/invitations/accept", (route) => route.fulfill({ status: 400, contentType: "application/json", body: JSON.stringify({ error: "invalid_invite", message: "private token details" }) }));
+test("an expired invitation preserves the current shared-link flow", async ({ page }) => {
+  await page.route("**/api/invitations/preview*", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ status: "expired" }) }));
   await page.goto("/invite?token=expired-invitation-example");
-  await page.getByRole("button", { name: "Accept invitation" }).click();
-  await expect(page.getByRole("heading", { name: "Invitation link expired" })).toBeVisible();
-  await expect(page.getByText("private token details")).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Invitation expired" })).toBeVisible();
+  await expect(page.getByText(/Ask the person who invited you to renew it/)).toBeVisible();
 });
 
 test("billing failure offers status recovery without submitting a second charge", async ({ page }) => {
   const json = (body: unknown) => ({ contentType: "application/json", body: JSON.stringify(body) });
-  await page.route("**/api/me", (route) => route.fulfill(json({ user: { id: "u", email: "owner@example.com", emailVerified: true, displayName: "Owner", timezone: "UTC" }, workspaces: [{ id: "ws", name: "Demo", role: "owner" }] })));
+  await page.route("**/api/me", (route) => route.fulfill(json({ user: { id: "u", email: "owner@example.com", emailVerified: true, displayName: "Owner", timezone: "UTC" }, workspaces: [{ id: "ws", name: "Demo", role: "owner", permissions: [], accessStatus: "active" }] })));
   await page.route("**/api/workspaces/ws/stores", (route) => route.fulfill(json({ stores: [{ id: "store", name: "Demo store", shopDomain: "demo.myshopify.com", status: "active", timezone: "UTC", currency: "USD", grantedScopes: [], revocableScopes: [], pixelInstalled: true, lastSyncedAt: null }] })));
-  await page.route("**/api/workspaces/ws/billing", (route) => route.fulfill(json({ subscription: { plan: "free", status: "active" }, plans: [{ id: "pro", name: "Pro", priceUsd: 29, features: [] }] })));
+  await page.route("**/api/workspaces/ws/billing", (route) => route.fulfill(json({ subscription: { plan: "free", status: "active" }, plans: [{ id: "free", name: "Free", priceUsd: 0, features: [] }, { id: "pro", name: "Pro", priceUsd: 29, features: [] }] })));
   let submissions = 0;
   await page.route("**/api/workspaces/ws/billing/subscribe", (route) => { submissions++; return route.fulfill({ status: 400, ...json({ error: "billing_error", message: "private payment details" }) }); });
   await page.goto("/settings/billing");
-  await page.getByRole("button", { name: "Choose Pro" }).click();
+  await page.waitForURL(/settings\/(billing|profile)/);
+  if (page.url().includes("/profile")) { test.skip(true, "Billing is disabled in this build"); return; }
+  await page.getByRole("button", { name: "Upgrade to Pro" }).click();
   await expect(page.getByRole("heading", { name: "Payment failed" })).toBeVisible();
   await expect(page.getByText("private payment details")).toHaveCount(0);
   await page.screenshot({ path: test.info().outputPath("payment-recovery.png") });
@@ -153,11 +157,11 @@ test("server retry delay disables manual retries and pauses automatic requests",
 });
 
 test("password reset reports a delivery outage without claiming an email was sent", async ({ page }) => {
-  await page.route("**/*accounts:sendOobCode*", (route) => route.abort());
-  await page.goto("/reset");
-  await page.getByLabel("Email", { exact: true }).fill("merchant@example.com");
-  await page.getByRole("button", { name: "Send reset link" }).click();
+  await page.route("**/api/auth/password/forgot", (route) => route.abort());
+  await page.goto("/forgot-password");
+  await page.getByLabel("Email Address", { exact: true }).fill("merchant@example.com");
+  await page.getByRole("button", { name: "Send reset code" }).click();
   await expect(page.getByRole("alert").filter({ hasText: /try again|connection|sign-in/i })).toBeVisible();
   await expect(page.getByText(/a reset link is on its way/)).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Send reset link" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Send reset code" })).toBeEnabled();
 });

@@ -1,6 +1,6 @@
 import { withTenant } from "@app/db";
 import { audit, env, getAccessToken, logger, ShopifyGraphqlError, ShopifyHttpError, shopifyGraphql, StoreDisconnectedError } from "@app/core";
-import { hasCapability } from "@app/shared";
+import { allows, hasCapability, redactContact } from "@app/shared";
 import { clientIp, HttpError, requireWorkspace, type Deps } from "../context.js";
 import type { App } from "../app.js";
 import { limit, LIMITS } from "../rateLimit.js";
@@ -15,6 +15,11 @@ import { limit, LIMITS } from "../rateLimit.js";
  * entirely to Shopify. On a live store Shopify returns these fields only once the app is
  * approved for protected customer data (Level 2: name, email, phone); until then they come back
  * withheld and the response says `restricted`.
+ *
+ * Team & Access: the customer lists need "View customer list", unfinished checkouts "View checkout
+ * abandonment", and inside them names, contact details and order history each their own
+ * permission (`redactContact`). `shown` tells the page which, so it can say a detail is hidden
+ * rather than missing.
  */
 
 const PAGE = 25;
@@ -26,11 +31,11 @@ const CUSTOMER_FIELDS = `
   numberOfOrders
   amountSpent { amount currencyCode }
   defaultEmailAddress { emailAddress marketingState }
-  defaultPhoneNumber { phoneNumber marketingState }`;
+  defaultPhoneNumber { phoneNumber smsMarketingConsent { state } }`;
 
 const CONTACTS_QUERY = `#graphql
-  query Contacts($first: Int!) {
-    abandonedCheckouts(first: $first, sortKey: CREATED_AT, reverse: true, query: "status:open") {
+  query Contacts($first: Int!, $abandoned: Boolean!, $customers: Boolean!) {
+    abandonedCheckouts(first: $first, sortKey: CREATED_AT, reverse: true, query: "status:open") @include(if: $abandoned) {
       nodes {
         id
         createdAt
@@ -42,10 +47,10 @@ const CONTACTS_QUERY = `#graphql
         customer { ${CUSTOMER_FIELDS} }
       }
     }
-    subscribers: customers(first: $first, sortKey: CREATED_AT, reverse: true, query: "accepts_marketing:true") {
+    subscribers: customers(first: $first, sortKey: CREATED_AT, reverse: true, query: "accepts_marketing:true") @include(if: $customers) {
       nodes { ${CUSTOMER_FIELDS} }
     }
-    recent: customers(first: $first, sortKey: CREATED_AT, reverse: true) {
+    recent: customers(first: $first, sortKey: CREATED_AT, reverse: true) @include(if: $customers) {
       nodes { ${CUSTOMER_FIELDS} }
     }
   }`;
@@ -57,7 +62,7 @@ interface GqlCustomer {
   numberOfOrders: string | number | null;
   amountSpent: { amount: string; currencyCode: string } | null;
   defaultEmailAddress: { emailAddress: string | null; marketingState: string | null } | null;
-  defaultPhoneNumber: { phoneNumber: string | null; marketingState?: string | null } | null;
+  defaultPhoneNumber: { phoneNumber: string | null; smsMarketingConsent?: { state: string | null } | null } | null;
 }
 
 interface GqlAddress {
@@ -67,7 +72,7 @@ interface GqlAddress {
 }
 
 interface GqlContacts {
-  abandonedCheckouts: {
+  abandonedCheckouts?: {
     nodes: Array<{
       id: string;
       createdAt: string;
@@ -79,8 +84,8 @@ interface GqlContacts {
       customer: GqlCustomer | null;
     }>;
   } | null;
-  subscribers: { nodes: Array<GqlCustomer | null> } | null;
-  recent: { nodes: Array<GqlCustomer | null> } | null;
+  subscribers?: { nodes: Array<GqlCustomer | null> } | null;
+  recent?: { nodes: Array<GqlCustomer | null> } | null;
 }
 
 /** "gid://shopify/Customer/123" → "123". */
@@ -94,7 +99,7 @@ function person(c: GqlCustomer | null, shopDomain: string) {
     phone: c?.defaultPhoneNumber?.phoneNumber ?? null,
     subscribed: c?.defaultEmailAddress?.marketingState === "SUBSCRIBED",
     /** Agreed to marketing by text message (Shopify's SMS consent, which also covers WhatsApp here). */
-    smsSubscribed: c?.defaultPhoneNumber?.marketingState === "SUBSCRIBED",
+    smsSubscribed: c?.defaultPhoneNumber?.smsMarketingConsent?.state === "SUBSCRIBED",
     adminUrl: c ? `https://${shopDomain}/admin/customers/${encodeURIComponent(numericId(c.id))}` : null,
   };
 }
@@ -112,7 +117,14 @@ function customerRow(c: GqlCustomer, shopDomain: string) {
 export function contactRoutes(app: App, deps: Deps) {
   app.get("/workspaces/:ws/stores/:storeId/contacts", async (c) => {
     const { ws, storeId } = c.req.param();
-    const access = await requireWorkspace(c, deps, ws, "customers:contact");
+    const access = await requireWorkspace(c, deps, ws, ["customers.list", "analytics.abandonment"]);
+    const shown = {
+      abandoned: allows(access.access, "analytics.abandonment"),
+      customers: allows(access.access, "customers.list"),
+      names: allows(access.access, "customers.profiles"),
+      contact: allows(access.access, "customers.contact"),
+      orders: allows(access.access, "customers.orders"),
+    };
     await limit(deps.coord, `rl:contacts:${ws}:${access.user?.id ?? clientIp(c)}`, LIMITS.contacts);
     // Personal data: never let a browser or proxy keep a copy.
     c.header("cache-control", "no-store");
@@ -120,7 +132,7 @@ export function contactRoutes(app: App, deps: Deps) {
     const store = await withTenant(ws, (tx) => tx.store.findFirst({ where: { id: storeId, workspaceId: ws } }));
     if (!store || store.status === "uninstalled") throw new HttpError(404, "Not found", "not_found");
     if (!hasCapability(store.grantedScopes, "contacts")) {
-      throw new HttpError(403, "Insights needs access to your customers first.", "missing_scopes");
+      throw new HttpError(403, "bizinsights needs access to your customers first.", "missing_scopes");
     }
 
     let data: GqlContacts;
@@ -132,7 +144,8 @@ export function contactRoutes(app: App, deps: Deps) {
         accessToken: token,
         apiVersion: env().SHOPIFY_API_VERSION,
         query: CONTACTS_QUERY,
-        variables: { first: PAGE },
+        // Only the lists this member may see are asked for: the others never leave Shopify.
+        variables: { first: PAGE, abandoned: shown.abandoned, customers: shown.customers },
         fetchImpl: deps.fetchImpl,
         maxRetries: 2,
       });
@@ -169,7 +182,7 @@ export function contactRoutes(app: App, deps: Deps) {
         recoveryUrl: a.abandonedCheckoutUrl,
       };
     });
-    const rows = (list: { nodes: Array<GqlCustomer | null> } | null) =>
+    const rows = (list: { nodes: Array<GqlCustomer | null> } | null | undefined) =>
       (list?.nodes ?? []).filter((n): n is GqlCustomer => n !== null).map((n) => customerRow(n, store.shopDomain));
     const subscribers = rows(data.subscribers).filter((s) => s.subscribed);
     const recent = rows(data.recent);
@@ -180,7 +193,7 @@ export function contactRoutes(app: App, deps: Deps) {
     // A whole list withheld comes back as null, which a real answer never is.
     const all = [...abandoned, ...recent];
     if (all.length > 0 && all.every((p) => !p.email && !p.phone && !p.name)) restricted = true;
-    if (!data.abandonedCheckouts || !data.recent || !data.subscribers) restricted = true;
+    if ((shown.abandoned && !data.abandonedCheckouts) || (shown.customers && (!data.recent || !data.subscribers))) restricted = true;
 
     await audit({
       workspaceId: ws,
@@ -191,12 +204,14 @@ export function contactRoutes(app: App, deps: Deps) {
       ip: clientIp(c),
     }).catch((err: unknown) => logger.warn({ err }, "audit failed"));
 
+    const hide = <R extends Parameters<typeof redactContact>[0]>(rows: R[]) => rows.map((r) => redactContact(r, access.access));
     return c.json({
       fetchedAt: new Date().toISOString(),
       restricted,
-      abandoned: restricted ? [] : abandoned,
-      subscribers: restricted ? [] : subscribers,
-      recent: restricted ? [] : recent,
+      shown,
+      abandoned: restricted || !shown.abandoned ? [] : hide(abandoned),
+      subscribers: restricted || !shown.customers ? [] : hide(subscribers),
+      recent: restricted || !shown.customers ? [] : hide(recent),
     });
   });
 }

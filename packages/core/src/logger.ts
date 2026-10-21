@@ -1,8 +1,14 @@
 /**
  * Structured JSON logger (one line per entry) with a pino-like call shape:
- * `logger.info({ ...fields }, "message")`. Workers Logs indexes the JSON fields.
+ * `logger.info({ ...fields }, "message")`. CloudWatch Logs Insights reads the JSON fields.
  * Sensitive keys are redacted at any depth.
+ *
+ * Fields set with `withLogContext` (the API's request id, a queue job's id) are added to every
+ * line written inside that call, so one request's lines can be found together without passing
+ * the id to every function that logs.
  */
+import { AsyncLocalStorage } from "node:async_hooks";
+
 type Level = "debug" | "info" | "warn" | "error" | "silent";
 const ORDER: Record<Level, number> = { debug: 10, info: 20, warn: 30, error: 40, silent: 99 };
 
@@ -75,24 +81,68 @@ function threshold(): number {
   return ORDER[lvl] ?? ORDER.info;
 }
 
+/**
+ * An error's own identifying fields, kept beside its message: a Prisma or Node error `code`
+ * (P2002, ECONNRESET), an HTTP `status`. Logged as `errorCode` because `code` is redacted (it is
+ * also the name of an OAuth authorization code). Only short strings and numbers are kept.
+ */
+function errorDetails(err: Error): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  const e = err as Error & { code?: unknown; status?: unknown; statusCode?: unknown };
+  if ((typeof e.code === "string" && e.code.length <= 64) || typeof e.code === "number") out.errorCode = typeof e.code === "string" ? scrub(e.code) : e.code;
+  const status = typeof e.status === "number" ? e.status : typeof e.statusCode === "number" ? e.statusCode : undefined;
+  if (status !== undefined) out.status = status;
+  return out;
+}
+
 /** What a log entry's fields look like once secrets are removed (exported for tests). */
 export function redactForLog(value: unknown, depth = 0): unknown {
   if (typeof value === "string") return scrub(value);
   if (value instanceof Error) {
-    return { name: value.name, message: scrub(value.message), stack: value.stack === undefined ? undefined : scrub(value.stack) };
+    return {
+      name: value.name,
+      message: scrub(value.message),
+      ...errorDetails(value),
+      stack: value.stack === undefined ? undefined : scrub(value.stack),
+      // What the error wraps (a driver error inside Prisma's, a fetch failure inside ours).
+      ...(value.cause !== undefined && depth < 3 ? { cause: redactForLog(value.cause, depth + 1) } : {}),
+    };
   }
-  if (!value || typeof value !== "object" || depth > 5) return value;
+  if (!value || typeof value !== "object") return value;
+  // Deeper than this is never worth logging, and returning it as is would skip redaction.
+  if (depth > 5) return "[truncated]";
   if (Array.isArray(value)) return value.map((v) => redactForLog(v, depth + 1));
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(value)) out[k] = REDACT.has(k.toLowerCase()) ? "[redacted]" : redactForLog(v, depth + 1);
   return out;
 }
 
+const context = new AsyncLocalStorage<Record<string, unknown>>();
+
+/**
+ * Run `fn` with `fields` added to every log line written inside it (nested calls add to the
+ * outer fields). The fields are not redacted, so pass identifiers only, never credentials or
+ * personal data.
+ */
+export function withLogContext<T>(fields: Record<string, unknown>, fn: () => T): T {
+  return context.run({ ...context.getStore(), ...fields }, fn);
+}
+
+/** Add fields to the current log context, e.g. the user once a request has authenticated. */
+export function addLogContext(fields: Record<string, unknown>): void {
+  const store = context.getStore();
+  if (store) Object.assign(store, fields);
+}
+
 function write(level: Exclude<Level, "silent">, a: unknown, b?: string) {
   if (ORDER[level] < threshold()) return;
-  const fields = typeof a === "string" ? {} : (redactForLog(a) as Record<string, unknown>);
+  const redacted = typeof a === "string" ? {} : redactForLog(a);
+  const fields: Record<string, unknown> =
+    redacted === null || redacted === undefined ? {} : typeof redacted === "object" && !Array.isArray(redacted) ? (redacted as Record<string, unknown>) : { value: redacted };
   const msg = typeof a === "string" ? scrub(a) : b === undefined ? undefined : scrub(b);
-  const line = JSON.stringify({ level, msg, ...fields });
+  // A field may not replace the entry's own level or message: a `msg` field is kept as `detail`.
+  const { level: _level, msg: fieldMsg, ...rest } = fields;
+  const line = JSON.stringify({ level, msg, ...context.getStore(), ...rest, ...(fieldMsg === undefined ? {} : { detail: fieldMsg }) });
   if (level === "error") console.error(line);
   else if (level === "warn") console.warn(line);
   else console.log(line);

@@ -1,217 +1,373 @@
 "use client";
 import Link from "next/link";
-import { ValidatedInput } from "@/components/FieldError";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState, type FormEvent } from "react";
-import { signInWithCustomToken, signInWithEmailAndPassword } from "firebase/auth";
-import { firebaseAuth } from "@/lib/firebase";
-import { api, isTransient, keepRetrying } from "@/lib/api";
-import { afterSignIn, authErrorMessage, establishSession } from "@/lib/session";
-import { emailLinkCode, linkEmail, rememberLinkEmail, signInWithEmailLinkCode } from "@/lib/emailLink";
-import { Alert, AuthShell, Divider } from "@/components/ui";
-import { StateIllustration } from "@/components/StateIllustration";
+import { useEffect, useState, type FormEvent } from "react";
+import { ArrowRight, Lock } from "lucide-react";
+import {
+  afterSignIn,
+  authConfig,
+  authErrorMessage,
+  cancelSignInCode,
+  challengeFromError,
+  confirmSignUp,
+  errorCode,
+  finishEmailCodeSignIn,
+  finishEmailedSignIn,
+  finishMfaSignIn,
+  pendingSignInCode,
+  recallEmail,
+  rememberEmail,
+  resendSignInCode,
+  resendSignUpCode,
+  signIn,
+  startEmailCodeSignIn,
+  useRedirectIfSignedIn,
+  type CodeChallenge,
+  type SignInStart,
+} from "@/lib/auth";
+import { Alert, Divider } from "@/components/ui";
+import { emailProblem, useFieldErrors } from "@/components/auth/AuthCard";
+import { AuthSplitShell } from "@/components/auth/AuthSplitShell";
+import { CodeStep } from "@/components/auth/CodeStep";
+import { EmailField } from "@/components/auth/IconField";
+import { PasswordField } from "@/components/auth/PasswordField";
 import { SocialButtons } from "@/components/SocialButtons";
+
+/** What a redirect to this page came to say. */
+const NOTICES: Record<string, { kind: "info" | "success"; text: string }> = {
+  signedOut: { kind: "info", text: "You've been signed out." },
+  // A new password ends every session, but not the account's other ways in.
+  resetGoogle: {
+    kind: "success",
+    text: "Your password has been changed. Sign in with the new one. Your account can also be signed in to with Google: if you don't recognise that, remove it in Settings → Security.",
+  },
+  reset: { kind: "success", text: "Your password has been changed. Sign in with the new one." },
+  confirmedElsewhere: { kind: "info", text: "Your email address is already confirmed, with a different password. Sign in with that one, or use \"Forgot Password?\" to choose a new one." },
+  confirmed: { kind: "success", text: "Your email address is confirmed. Sign in to continue." },
+  deleted: { kind: "info", text: "Your account has been deleted." },
+};
+
+const CREATE_ACCOUNT = { href: "/signup", label: "Create Account" };
+type CodeSignIn = "off" | "available" | "email" | "code";
 
 export default function LoginPage() {
   const router = useRouter();
-  const [mode, setMode] = useState<"password" | "code">("password");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [code, setCode] = useState("");
-  const [codeSent, setCodeSent] = useState(false);
-  // How the last email went out: a 6-digit code, or (when codes can't be emailed) a sign-in link.
-  const [delivery, setDelivery] = useState<"code" | "link">("code");
-  // Opened from an emailed sign-in link: its code, until it has been redeemed.
-  const [linkCode, setLinkCode] = useState<string | null>(null);
-  const linkStarted = useRef(false);
-  const [error, setError] = useState<string | null>(null);
-  const [info, setInfo] = useState<string | null>(null);
-  const [sessionExpired, setSessionExpired] = useState(false);
-  useEffect(() => {
-    if (new URLSearchParams(window.location.search).get("reason") === "session_expired") {
-      setSessionExpired(true);
-      setInfo("Session expired. Sign in again to continue where you left off.");
-    }
-  }, []);
+  // Unticked: the session ends when the browser closes (the API sets cookies without a lifetime).
+  const [keep, setKeep] = useState(true);
+  // The account exists but its sign-up code was never entered: confirm, then finish signing in.
+  const [confirming, setConfirming] = useState<{ challenge: CodeChallenge | null } | null>(null);
+  // Passwordless: a code Cognito emails (only where the deployment switched it on).
+  const [codeSignIn, setCodeSignIn] = useState<CodeSignIn>("off");
+  // The password was right and the account has two-step verification: the app's code finishes it.
+  const [appCode, setAppCode] = useState(false);
+  // The password was right: the 6-digit code emailed to the address finishes signing in. Kept by the
+  // API for this browser, so a reload comes back here with the same countdowns.
+  const [emailCode, setEmailCode] = useState<{ email: string; challenge: CodeChallenge } | null>(null);
+  const [error, setError] = useState<{ text: string; hint?: string; reset?: boolean } | null>(null);
+  const [notice, setNotice] = useState<{ kind: "info" | "success"; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  const fields = useFieldErrors(
+    codeSignIn === "email"
+      ? { "otp-email": emailProblem(email) }
+      : codeSignIn === "code"
+        ? {}
+        : { email: emailProblem(email), password: password ? null : "Enter your password." },
+  );
 
-  async function run(fn: () => Promise<void>) {
+  useRedirectIfSignedIn(router);
+
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    const key = Object.keys(NOTICES).find((k) => q.has(k));
+    if (key) setNotice(NOTICES[key]!);
+    else if (q.get("reason") === "session_expired") setNotice({ kind: "info", text: "Session expired. Sign in again to continue to your workspace." });
+    setEmail(recallEmail());
+    authConfig()
+      .then((c) => c.emailOtp && setCodeSignIn("available"))
+      .catch(() => {});
+    // A sign-in waiting for its emailed code in this browser (the page was reloaded): carry on with it.
+    pendingSignInCode()
+      .then((p) => {
+        if (p.pending) {
+          setEmail(p.email);
+          setEmailCode({ email: p.email, challenge: p.challenge });
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  /** Swap between the password form and the emailed-code one, starting the new one clean. */
+  function switchTo(mode: CodeSignIn) {
+    fields.reset();
+    setError(null);
+    setCodeSignIn(mode);
+  }
+
+  /** Signed in, or on to the second step: the emailed code, or the authenticator app's. */
+  function afterFirstStep(r: SignInStart) {
+    if (!("next" in r)) router.replace(afterSignIn());
+    else if (r.next === "mfa") setAppCode(true);
+    else setEmailCode({ email: r.email, challenge: r.challenge });
+  }
+
+  /** Back to the password form from a code step (the pending sign-in, if any, is given up). */
+  function backToPassword(message?: string) {
+    setAppCode(false);
+    setEmailCode(null);
+    setConfirming(null);
+    setPassword("");
+    if (codeSignIn === "code") setCodeSignIn("available");
+    setError(message ? { text: message } : null);
+  }
+
+  async function onPassword(e: FormEvent) {
+    e.preventDefault();
+    if (!fields.submit()) return;
     setBusy(true);
     setError(null);
+    setNotice(null);
     try {
-      await fn();
-    } catch (e) {
-      setError(authErrorMessage(e));
+      afterFirstStep(await signIn(email.trim(), password, keep));
+    } catch (err) {
+      const code = errorCode(err);
+      if (code === "unconfirmed") {
+        // Cognito won't sign in an unconfirmed account: a fresh code (or the one still standing,
+        // with its time left) and ask for it here.
+        const challenge = await resendSignUpCode(email.trim())
+          .then((r) => r.challenge)
+          .catch((e: unknown) => challengeFromError(e));
+        setConfirming({ challenge });
+      } else {
+        rememberEmail(email);
+        setError({
+          text: authErrorMessage(err),
+          hint: code === "invalid_credentials" ? "Please check your credentials and try again." : undefined,
+          reset: code === "reset_required",
+        });
+      }
     } finally {
       setBusy(false);
     }
   }
 
-  const onPassword = (e: FormEvent) => {
-    e.preventDefault();
-    void run(async () => {
-      const cred = await signInWithEmailAndPassword(firebaseAuth(), email, password);
-      await establishSession(cred.user);
-      router.replace(afterSignIn());
-    });
-  };
+  if (confirming) {
+    return (
+      <AuthSplitShell title="Confirm your email" subtitle="One more step before you can sign in." action={CREATE_ACCOUNT}>
+        <CodeStep
+          email={email.trim()}
+          challenge={confirming.challenge}
+          submitLabel="Confirm and sign in"
+          large
+          onSubmit={async (code) => {
+            // The code signs in with the password typed here, which becomes the account's: the
+            // code proves the inbox, whatever password an earlier sign-up with it had set.
+            const confirmed = await confirmSignUp(email.trim(), code, { password, keep });
+            if (confirmed.user) {
+              setConfirming(null);
+              router.replace(afterSignIn());
+              return;
+            }
+            // Confirmed already (another tab): sign in as usual.
+            const r = await signIn(email.trim(), password, keep);
+            setConfirming(null);
+            afterFirstStep(r);
+          }}
+          onResend={() => resendSignUpCode(email.trim())}
+          onChangeEmail={() => backToPassword()}
+        />
+        <button type="button" className="text-sm text-muted underline" onClick={() => backToPassword()}>
+          Back to sign in
+        </button>
+      </AuthSplitShell>
+    );
+  }
 
-  const sendCode = (e?: FormEvent) => {
-    e?.preventDefault();
-    void run(async () => {
-      const { method } = await api<{ method?: "code" | "link" }>("/auth/otp/request", { method: "POST", body: { email } });
-      setCodeSent(true);
-      if (method === "link") {
-        rememberLinkEmail(email.trim().toLowerCase());
-        setDelivery("link");
-        setInfo(`If ${email} can receive email, a sign-in link is on its way. Open it on this device to finish signing in.`);
-      } else {
-        setDelivery("code");
-        setInfo(`If ${email} can receive email, a 6-digit code is on its way. It expires in 10 minutes.`);
-      }
-    });
-  };
+  if (emailCode) {
+    return (
+      <AuthSplitShell title="Check your email" subtitle="We sent a 6-digit verification code to your email address." action={CREATE_ACCOUNT}>
+        <CodeStep
+          email={emailCode.email}
+          challenge={emailCode.challenge}
+          intro={
+            <>
+              Enter the 6-digit code we emailed to <strong>{emailCode.email}</strong> to finish signing in.
+            </>
+          }
+          submitLabel="Verify and sign in"
+          successLabel="Email verified successfully. Taking you to your dashboard…"
+          large
+          onSubmit={async (code) => {
+            try {
+              await finishEmailedSignIn(code);
+              router.replace(afterSignIn());
+            } catch (err) {
+              // Too long since the password, or too many wrong codes: start again from it.
+              if (errorCode(err) !== "login_expired" && errorCode(err) !== "too_many_attempts") throw err;
+              backToPassword(authErrorMessage(err));
+            }
+          }}
+          onResend={resendSignInCode}
+          onChangeEmail={async () => {
+            await cancelSignInCode().catch(() => undefined);
+            backToPassword();
+          }}
+        />
+        <button
+          type="button"
+          className="text-sm text-muted underline"
+          onClick={() => {
+            void cancelSignInCode().catch(() => undefined);
+            backToPassword();
+          }}
+        >
+          Back to sign in
+        </button>
+      </AuthSplitShell>
+    );
+  }
 
-  /** Finish a sign-in started from an emailed link. */
-  const redeemLink = (address: string, oobCode: string) =>
-    run(async () => {
-      try {
-        await signInWithEmailLinkCode(address.trim().toLowerCase(), oobCode);
-      } catch (err) {
-        // A used or expired link can't be retried: start over from the email form.
-        setLinkCode(null);
-        throw err;
-      }
-      router.replace(afterSignIn());
-    });
+  if (appCode) {
+    return (
+      <AuthSplitShell title="Two-step verification" subtitle="One more step to keep your account safe." action={CREATE_ACCOUNT}>
+        <CodeStep
+          email={email.trim()}
+          intro={<>Open your authenticator app and enter the 6-digit code it shows for bizinsights.</>}
+          submitLabel="Sign In"
+          successLabel="Signed in. Taking you to your dashboard…"
+          large
+          onSubmit={async (code) => {
+            try {
+              await finishMfaSignIn(code);
+              router.replace(afterSignIn());
+            } catch (err) {
+              // Too long since the password (or too many wrong codes): start again from it.
+              if (errorCode(err) !== "mfa_expired") throw err;
+              backToPassword(authErrorMessage(err));
+            }
+          }}
+        />
+        <p className="text-sm text-muted">
+          Lost your phone?{" "}
+          <Link prefetch={false} href="/support" className="underline">
+            Contact support
+          </Link>{" "}
+          and we&apos;ll help you back in.
+        </p>
+        <button type="button" className="text-sm text-muted underline" onClick={() => backToPassword()}>
+          Back to sign in
+        </button>
+      </AuthSplitShell>
+    );
+  }
 
-  // Opened from a sign-in link (?mode=signIn&oobCode=…): finish right away when we know the email.
-  useEffect(() => {
-    if (linkStarted.current) return;
-    linkStarted.current = true;
-    const oob = emailLinkCode(window.location.search);
-    if (!oob) return;
-    setMode("code");
-    setLinkCode(oob);
-    const remembered = linkEmail();
-    if (remembered) {
-      setEmail(remembered);
-      void redeemLink(remembered, oob);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Already signed in (say, sent here during an outage by an older build, which took any failure
-  // for a sign-out): go back into the app instead of asking for credentials again. While the API
-  // is unreachable we can't tell, so keep asking until it answers. Not when finishing an emailed
-  // sign-in link (redeeming it is why we're here), and not right after signing out.
-  useEffect(() => {
-    const search = window.location.search;
-    if (emailLinkCode(search) || new URLSearchParams(search).has("signedOut")) return;
-    let stopped = false;
-    let stopRetrying: (() => void) | undefined;
-    const check = async () => {
-      try {
-        // /auth/whoami: a visitor is `user: null`, not a 401 the browser would log as an error.
-        const me = await api<{ user: { emailVerified: boolean } | null }>("/auth/whoami");
-        // Verified only, like /start: /verify-email sends an unverified session here, and sending
-        // it back into the app would bounce it straight back.
-        if (me.user?.emailVerified) router.replace(afterSignIn());
-        return true;
-      } catch (e) {
-        return !isTransient(e);
-      }
-    };
-    void check().then((done) => {
-      if (!done && !stopped) stopRetrying = keepRetrying(check);
-    });
-    return () => {
-      stopped = true;
-      stopRetrying?.();
-    };
-  }, [router]);
-
-  const confirmLinkEmail = (e: FormEvent) => {
-    e.preventDefault();
-    if (linkCode) void redeemLink(email, linkCode);
-  };
-
-  const verifyCode = (e: FormEvent) => {
-    e.preventDefault();
-    void run(async () => {
-      const { customToken } = await api<{ customToken: string }>("/auth/otp/verify", { method: "POST", body: { email, code } });
-      const cred = await signInWithCustomToken(firebaseAuth(), customToken);
-      await establishSession(cred.user);
-      router.replace(afterSignIn());
-    });
-  };
+  const keepSignedIn = (
+    <label className="flex cursor-pointer items-center gap-2.5 text-sm text-muted select-none">
+      <input type="checkbox" className="size-[18px] cursor-pointer rounded accent-[var(--accent)]" checked={keep} onChange={(e) => setKeep(e.target.checked)} />
+      Keep me signed in
+    </label>
+  );
 
   return (
-    <AuthShell title={sessionExpired ? "Session expired" : "Log in"} subtitle={sessionExpired ? "Sign in again to securely return to your workspace." : "Welcome back. Log in to see your store's numbers."}>
-      {sessionExpired && <div className="flex justify-center rounded-xl border border-border bg-surface py-3"><StateIllustration kind="session" compact /></div>}
-      <SocialButtons />
-      <Divider label="or with your email" />
-      <div className="flex gap-2 text-sm" role="tablist">
-        <button role="tab" aria-selected={mode === "password"} className={mode === "password" ? "font-semibold underline" : "text-muted"} onClick={() => setMode("password")}>
-          Password
-        </button>
-        <button role="tab" aria-selected={mode === "code"} className={mode === "code" ? "font-semibold underline" : "text-muted"} onClick={() => setMode("code")}>
-          Email me a code
-        </button>
-      </div>
-      {error && <Alert>{error}</Alert>}
-      {info && <Alert kind="info">{info}</Alert>}
+    <AuthSplitShell title="Welcome Back" subtitle="Sign in to your account to continue to your dashboard." action={CREATE_ACCOUNT}>
+      {notice && <Alert kind={notice.kind}>{notice.text}</Alert>}
+      {error && (
+        <Alert onDismiss={() => setError(null)}>
+          <p className="font-medium">{error.text}</p>
+          {error.hint && <p className="mt-0.5 text-[13px]">{error.hint}</p>}
+          {error.reset && (
+            <Link href="/reset-password" className="underline">
+              Enter the code
+            </Link>
+          )}
+        </Alert>
+      )}
 
-      {linkCode ? (
-        <form onSubmit={confirmLinkEmail} className="space-y-3">
-          <p className="text-sm">{busy ? "Signing you in…" : "Confirm the email address the sign-in link was sent to."}</p>
-          <div>
-            <label className="label" htmlFor="link-email">Email</label>
-            <ValidatedInput id="link-email" className="input" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
-          </div>
-          <button className="btn-primary w-full" disabled={busy}>Log in</button>
-        </form>
-      ) : mode === "password" ? (
-        <form onSubmit={onPassword} className="space-y-3">
-          <div>
-            <label className="label" htmlFor="email">Email</label>
-            <ValidatedInput id="email" className="input" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
-          </div>
-          <div>
-            <label className="label" htmlFor="password">Password</label>
-            <ValidatedInput id="password" className="input" type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} />
-          </div>
-          <button className="btn-primary w-full" disabled={busy}>{busy ? "Logging in…" : "Log in"}</button>
-          <Link href="/reset" className="block text-sm text-muted underline">Forgot your password?</Link>
-        </form>
-      ) : !codeSent ? (
-        <form onSubmit={sendCode} className="space-y-3">
-          <div>
-            <label className="label" htmlFor="otp-email">Email</label>
-            <ValidatedInput id="otp-email" className="input" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
-          </div>
-          <button className="btn-primary w-full" disabled={busy}>Send me a code</button>
-        </form>
-      ) : delivery === "link" ? (
-        <div className="space-y-2 text-sm">
-          <p className="text-muted">Didn&apos;t get it? Check your spam folder, or send another.</p>
-          <button type="button" className="btn-secondary w-full" onClick={() => sendCode()} disabled={busy}>Send a new link</button>
-          <button type="button" className="text-muted underline" onClick={() => { setCodeSent(false); setInfo(null); }} disabled={busy}>Use a different email</button>
-        </div>
+      {codeSignIn === "email" || codeSignIn === "code" ? (
+        codeSignIn === "email" ? (
+          <form
+            className="space-y-4"
+            noValidate
+            onSubmit={async (e) => {
+              e.preventDefault();
+              if (!fields.submit()) return;
+              setBusy(true);
+              setError(null);
+              try {
+                await startEmailCodeSignIn(email.trim());
+                switchTo("code");
+              } catch (err) {
+                setError({ text: authErrorMessage(err) });
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            <EmailField id="otp-email" value={email} onChange={setEmail} onBlur={fields.leave} error={fields.error("otp-email")} />
+            {keepSignedIn}
+            <button className="auth-cta" disabled={busy}>
+              {busy ? "Sending…" : "Email me a sign-in code"}
+            </button>
+            <button type="button" className="text-sm text-muted underline" onClick={() => switchTo("available")}>
+              Sign in with a password instead
+            </button>
+          </form>
+        ) : (
+          <CodeStep
+            email={email.trim()}
+            submitLabel="Sign In"
+            large
+            onSubmit={async (code) => afterFirstStep(await finishEmailCodeSignIn(email.trim(), code, keep))}
+            onResend={() => startEmailCodeSignIn(email.trim())}
+            onChangeEmail={() => switchTo("email")}
+          />
+        )
       ) : (
-        <form onSubmit={verifyCode} className="space-y-3">
-          <div>
-            <label className="label" htmlFor="otp">6-digit code</label>
-            <ValidatedInput id="otp" className="input tracking-[0.5em]" inputMode="numeric" autoComplete="one-time-code" pattern="\d{6}" maxLength={6} required value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))} />
+        <form onSubmit={onPassword} className="space-y-4" noValidate>
+          <EmailField id="email" value={email} onChange={setEmail} onBlur={fields.leave} error={fields.error("email")} />
+          <PasswordField
+            id="password"
+            label="Password"
+            autoComplete="current-password"
+            value={password}
+            onChange={setPassword}
+            icon={<Lock size={18} aria-hidden />}
+            inputClassName="auth-field"
+            onBlur={fields.leave}
+            error={fields.error("password")}
+          />
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            {keepSignedIn}
+            <Link href="/forgot-password" className="text-sm font-medium text-accent underline underline-offset-2" onClick={() => rememberEmail(email)}>
+              Forgot Password?
+            </Link>
           </div>
-          <button className="btn-primary w-full" disabled={busy || code.length !== 6}>Verify and sign in</button>
-          <button type="button" className="text-sm text-muted underline" onClick={() => sendCode()} disabled={busy}>Send a new code</button>
+          <button className="auth-cta" disabled={busy}>
+            {busy ? (
+              "Signing in…"
+            ) : (
+              <>
+                Sign In <ArrowRight size={18} aria-hidden />
+              </>
+            )}
+          </button>
+          {codeSignIn === "available" && (
+            <button type="button" className="text-sm text-muted underline" onClick={() => switchTo("email")}>
+              Email me a sign-in code instead
+            </button>
+          )}
         </form>
       )}
 
-      <p className="text-sm text-muted">
-        Don&apos;t have an account? <Link href="/signup" className="font-medium text-text underline">Sign up</Link>
+      <SocialButtons row keep={keep} terms before={<Divider label="OR CONTINUE WITH" />} />
+
+      <p className="pt-1 text-center text-[15px] text-muted">
+        Don&apos;t have an account?{" "}
+        <Link href="/signup" className="font-semibold text-accent hover:underline">
+          Create Account
+        </Link>
       </p>
-    </AuthShell>
+    </AuthSplitShell>
   );
 }

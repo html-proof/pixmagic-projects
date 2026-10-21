@@ -22,11 +22,14 @@ import {
   waPlatformConfig,
   waTokenInfo,
   WhatsappApiError,
-  WhatsappConnectError,
+  providerDetail,
+  sampleValues,
   connectionToken,
+  numberOptedOut,
   syncTemplates,
 } from "@app/core";
 import {
+  allows,
   KIND_INFO,
   kindSetting,
   libraryTemplate,
@@ -42,7 +45,7 @@ import { body, clientIp, HttpError, requireWorkspace, type Deps } from "../conte
 import type { App } from "../app.js";
 import { limit, LIMITS } from "../rateLimit.js";
 import { whatsappOpsRoutes } from "./whatsappOps.js";
-import { base, publicConnection, publicTemplate, sampleValues, waStore } from "./whatsappCommon.js";
+import { base, publicConnection, publicTemplate, waStore } from "./whatsappCommon.js";
 
 /**
  * WhatsApp for a store, for the signed-in merchant: connect the number (Meta's Embedded Signup,
@@ -67,9 +70,9 @@ function templateCheck(templates: WhatsappTemplate[], s: KindSetting): { state: 
   return { state: "ready", problem: null, category: t.category };
 }
 
+/** Meta refused a connect step: say so with Meta's reason (WhatsappConnectError answers itself, as a 400). */
 const connectError = (err: unknown): never => {
-  if (err instanceof WhatsappConnectError) throw new HttpError(400, err.message, err.code);
-  if (err instanceof WhatsappApiError) throw new HttpError(502, `Meta didn't accept the request: ${err.details ?? err.title}`, "meta_error");
+  if (err instanceof WhatsappApiError) throw new HttpError(502, `Meta didn't accept the request: ${providerDetail(err.details ?? err.title)}`, "meta_error");
   throw err;
 };
 
@@ -80,9 +83,10 @@ export function whatsappRoutes(app: App, deps: Deps) {
   /** Everything the WhatsApp overview needs, in one call. */
   app.get(base, async (c) => {
     const { ws, storeId } = c.req.param();
-    const access = await requireWorkspace(c, deps, ws, "dashboard:read");
+    const access = await requireWorkspace(c, deps, ws, ["marketing.campaigns", "integrations.status"]);
     const store = await waStore(ws, storeId);
-    const manage = access.role === "owner" || access.role === "admin";
+    // The manual connection's verify token: for whoever may manage the connection.
+    const manage = allows(access.access, "integrations.manage");
     const weekAgo = new Date(Date.now() - 7 * 86_400_000);
     const data = await withTenant(ws, async (tx) => {
       const [settings, conn, templates, byStatus, failed, rules, openCarts, pendingReviews, campaigns, scheduled] = await Promise.all([
@@ -155,7 +159,7 @@ export function whatsappRoutes(app: App, deps: Deps) {
    */
   app.post(`${base}/embedded`, async (c) => {
     const { ws, storeId } = c.req.param();
-    const access = await requireWorkspace(c, deps, ws, "stores:manage");
+    const access = await requireWorkspace(c, deps, ws, "integrations.manage");
     const store = await waStore(ws, storeId);
     await limit(deps.coord, `rl:wa-connect:${storeId}`, LIMITS.waConnect);
     // The ids come from Meta's message to the page; when that never arrived, they're asked of Meta below.
@@ -171,7 +175,7 @@ export function whatsappRoutes(app: App, deps: Deps) {
       .refine((v) => !!v.wabaId === !!v.phoneNumberId, "wabaId and phoneNumberId go together")
       .parse(await body(c));
     const cfg = waPlatformConfig();
-    if (!cfg) throw new HttpError(503, "Connect WhatsApp Business isn't set up on this Insights server yet.", "not_configured");
+    if (!cfg) throw new HttpError(503, "Connect WhatsApp Business isn't set up on this bizinsights server yet.", "not_configured");
     let token: string;
     try {
       token = await waExchangeCode(cfg, input.code, deps.fetchImpl);
@@ -181,7 +185,7 @@ export function whatsappRoutes(app: App, deps: Deps) {
     }
     let ids = input.wabaId && input.phoneNumberId ? { wabaId: input.wabaId, phoneNumberId: input.phoneNumberId } : null;
     if (ids) {
-      // The ids came from the browser: the account must be one this sign-up granted to Insights' app.
+      // The ids came from the browser: the account must be one this sign-up granted to bizinsights' app.
       // (connectWhatsapp then checks the number is in that account, with the business's own token.)
       const info = await waTokenInfo(token, deps.fetchImpl, `${cfg.appId}|${cfg.appSecret}`).catch((err: unknown) => {
         logger.warn({ err, storeId }, "whatsapp embedded signup: couldn't inspect the token; relying on the account checks");
@@ -189,7 +193,7 @@ export function whatsappRoutes(app: App, deps: Deps) {
       });
       if (info?.appId && info.appId !== cfg.appId) throw new HttpError(400, "That sign-in was for a different Meta app. Please press Continue with WhatsApp again.", "wrong_app");
       if (info?.wabaIds && !info.wabaIds.includes(ids.wabaId)) {
-        throw new HttpError(400, "Meta didn't give Insights access to that WhatsApp Business Account. Please press Continue with WhatsApp again and share it.", "waba_not_granted");
+        throw new HttpError(400, "Meta didn't give bizinsights access to that WhatsApp Business Account. Please press Continue with WhatsApp again and share it.", "waba_not_granted");
       }
     }
     if (!ids) {
@@ -223,7 +227,7 @@ export function whatsappRoutes(app: App, deps: Deps) {
    */
   app.post(`${base}/manual/discover`, async (c) => {
     const { ws, storeId } = c.req.param();
-    await requireWorkspace(c, deps, ws, "stores:manage");
+    await requireWorkspace(c, deps, ws, "integrations.manage");
     await waStore(ws, storeId);
     await limit(deps.coord, `rl:wa-connect:${storeId}`, LIMITS.waConnect);
     const { accessToken } = z.object({ accessToken: accessTokenSchema }).parse(await body(c));
@@ -233,12 +237,12 @@ export function whatsappRoutes(app: App, deps: Deps) {
 
   /**
    * The merchant's own Meta app: WABA id, phone number id, a system-user token and the app secret.
-   * The secret is checked against the token's app, and the app's webhook is pointed at Insights,
+   * The secret is checked against the token's app, and the app's webhook is pointed at bizinsights,
    * so there's nothing to paste into Meta's dashboard (unless Meta wouldn't let us).
    */
   app.post(`${base}/manual`, async (c) => {
     const { ws, storeId } = c.req.param();
-    const access = await requireWorkspace(c, deps, ws, "stores:manage");
+    const access = await requireWorkspace(c, deps, ws, "integrations.manage");
     const store = await waStore(ws, storeId);
     await limit(deps.coord, `rl:wa-connect:${storeId}`, LIMITS.waConnect);
     const input = z
@@ -246,7 +250,7 @@ export function whatsappRoutes(app: App, deps: Deps) {
         wabaId: idSchema,
         phoneNumberId: idSchema,
         accessToken: accessTokenSchema,
-        // Without it, Insights can't verify Meta's deliveries, so it would never hear STOP replies.
+        // Without it, bizinsights can't verify Meta's deliveries, so it would never hear STOP replies.
         appSecret: z.string().trim().regex(/^[a-f0-9]{32}$/i, "must be the 32-character app secret from your Meta app's Basic settings"),
       })
       .parse(await body(c));
@@ -261,7 +265,7 @@ export function whatsappRoutes(app: App, deps: Deps) {
   /** Register the number with the Cloud API (it can't send until it is). */
   app.post(`${base}/register`, async (c) => {
     const { ws, storeId } = c.req.param();
-    const access = await requireWorkspace(c, deps, ws, "stores:manage");
+    const access = await requireWorkspace(c, deps, ws, "integrations.manage");
     await waStore(ws, storeId);
     await limit(deps.coord, `rl:wa-connect:${storeId}`, LIMITS.waConnect);
     const { pin } = z.object({ pin: z.string().regex(/^\d{6}$/, "must be 6 digits") }).parse(await body(c));
@@ -274,17 +278,17 @@ export function whatsappRoutes(app: App, deps: Deps) {
 
   /**
    * The number's two-step verification PIN, for an owner or admin who needs it (to move the number
-   * to another provider, say). Only known when Insights registered the number or the merchant typed it.
+   * to another provider, say). Only known when bizinsights registered the number or the merchant typed it.
    */
   app.post(`${base}/pin`, async (c) => {
     const { ws, storeId } = c.req.param();
-    const access = await requireWorkspace(c, deps, ws, "stores:manage");
+    const access = await requireWorkspace(c, deps, ws, "integrations.manage");
     await waStore(ws, storeId);
     await limit(deps.coord, `rl:wa-pin:${storeId}`, LIMITS.waRefresh);
     const conn = await systemDb.whatsappConnection.findUnique({ where: { storeId } });
     if (!conn || conn.workspaceId !== ws) throw new HttpError(404, "Connect WhatsApp first.", "not_connected");
     const pin = connectionPin(conn);
-    if (!pin) throw new HttpError(404, "Insights doesn't know this number's PIN. You can set a new one in WhatsApp Manager → Phone numbers → Two-step verification.", "pin_unknown");
+    if (!pin) throw new HttpError(404, "bizinsights doesn't know this number's PIN. You can set a new one in WhatsApp Manager → Phone numbers → Two-step verification.", "pin_unknown");
     await audit({ workspaceId: ws, actorUserId: access.user!.id, action: "whatsapp.pin_viewed", targetType: "store", targetId: storeId, ip: clientIp(c) });
     c.header("cache-control", "no-store");
     return c.json({ pin });
@@ -293,7 +297,7 @@ export function whatsappRoutes(app: App, deps: Deps) {
   /** Read the number's status and the templates from Meta again. */
   app.post(`${base}/refresh`, async (c) => {
     const { ws, storeId } = c.req.param();
-    await requireWorkspace(c, deps, ws, "stores:manage");
+    await requireWorkspace(c, deps, ws, "integrations.manage");
     await waStore(ws, storeId);
     await limit(deps.coord, `rl:wa-refresh:${storeId}`, LIMITS.waRefresh);
     const conn = await systemDb.whatsappConnection.findUnique({ where: { storeId } });
@@ -302,14 +306,14 @@ export function whatsappRoutes(app: App, deps: Deps) {
       const updated = await refreshConnection(conn, deps.fetchImpl);
       return c.json({ connection: publicConnection(updated, true) });
     } catch (err) {
-      if (err instanceof WhatsappApiError) throw new HttpError(502, `Meta didn't answer as expected: ${err.details ?? err.title}`, "meta_error");
+      if (err instanceof WhatsappApiError) throw new HttpError(502, `Meta didn't answer as expected: ${providerDetail(err.details ?? err.title)}`, "meta_error");
       throw err;
     }
   });
 
   app.delete(base, async (c) => {
     const { ws, storeId } = c.req.param();
-    const access = await requireWorkspace(c, deps, ws, "stores:manage");
+    const access = await requireWorkspace(c, deps, ws, "integrations.manage");
     await waStore(ws, storeId);
     const conn = await systemDb.whatsappConnection.findUnique({ where: { storeId } });
     if (!conn || conn.workspaceId !== ws) throw new HttpError(404, "Not connected", "not_connected");
@@ -322,7 +326,7 @@ export function whatsappRoutes(app: App, deps: Deps) {
 
   app.get(`${base}/settings`, async (c) => {
     const { ws, storeId } = c.req.param();
-    await requireWorkspace(c, deps, ws, "dashboard:read");
+    await requireWorkspace(c, deps, ws, "marketing.campaigns");
     await waStore(ws, storeId);
     const [settings, templates] = await withTenant(ws, (tx) =>
       Promise.all([tx.whatsappSettings.findUnique({ where: { storeId } }), tx.whatsappTemplate.findMany({ where: { storeId }, orderBy: [{ name: "asc" }, { language: "asc" }] })]),
@@ -383,13 +387,13 @@ export function whatsappRoutes(app: App, deps: Deps) {
 
   app.get(`${base}/templates`, async (c) => {
     const { ws, storeId } = c.req.param();
-    await requireWorkspace(c, deps, ws, "dashboard:read");
+    await requireWorkspace(c, deps, ws, "marketing.campaigns");
     await waStore(ws, storeId);
     const templates = await withTenant(ws, (tx) => tx.whatsappTemplate.findMany({ where: { storeId, workspaceId: ws }, orderBy: [{ name: "asc" }, { language: "asc" }] }));
     return c.json({ templates: templates.map(publicTemplate) });
   });
 
-  /** Submit one of Insights' templates to Meta's review, in the merchant's account. */
+  /** Submit one of bizinsights' templates to Meta's review, in the merchant's account. */
   app.post(`${base}/templates`, async (c) => {
     const { ws, storeId } = c.req.param();
     const access = await requireWorkspace(c, deps, ws, "stores:manage");
@@ -422,7 +426,7 @@ export function whatsappRoutes(app: App, deps: Deps) {
           await syncTemplates(conn, connectionToken(conn), deps.fetchImpl);
           return c.json({ status: "EXISTS" });
         }
-        throw new HttpError(502, `Meta didn't accept the template: ${err.details ?? err.title}`, "meta_error");
+        throw new HttpError(502, `Meta didn't accept the template: ${providerDetail(err.details ?? err.title)}`, "meta_error");
       }
       throw err;
     }
@@ -447,6 +451,8 @@ export function whatsappRoutes(app: App, deps: Deps) {
       .parse(await body(c));
     const phone = normalizePhone(input.phone, null);
     if (!phone) throw new HttpError(400, "Enter the number in international format, starting with + and the country code.", "invalid_phone");
+    // A test skips the consent checks a real send makes, so it must at least respect a STOP.
+    if (await numberOptedOut(storeId, phone.waId)) throw new HttpError(409, "That number replied STOP to this store, so nothing (not even a test) can be sent to it.", "opted_out");
     const conn = await systemDb.whatsappConnection.findUnique({ where: { storeId } });
     if (!conn || conn.workspaceId !== ws) throw new HttpError(409, "Connect WhatsApp first.", "not_connected");
     const settings = await ensureSettings(store);
@@ -481,7 +487,7 @@ export function whatsappRoutes(app: App, deps: Deps) {
 
   app.get(`${base}/analytics`, async (c) => {
     const { ws, storeId } = c.req.param();
-    await requireWorkspace(c, deps, ws, "dashboard:read");
+    await requireWorkspace(c, deps, ws, "marketing.campaigns");
     const store = await waStore(ws, storeId);
     const days = z.coerce.number().int().min(1).max(180).default(30).parse(c.req.query("days") ?? undefined);
     const since = new Date(Date.now() - days * 86_400_000);

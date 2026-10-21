@@ -2,27 +2,16 @@ import { createHash } from "node:crypto";
 import { expect, test, type Page } from "@playwright/test";
 import pg from "pg";
 import { E2E_ENV, E2E_MAILPIT_URL } from "../playwright.config";
-import { latestOtp, signedWebhook, signUp, uniqueEmail, verifyEmailInEmulator } from "./helpers";
+import { signedWebhook, signUp, uniqueEmail } from "./helpers";
 
 /**
- * Settings, invitations, billing and the public pages, driven through the real Worker.
+ * Settings, invitations, billing and the public pages, driven through the real app.
  * Added by the full test pass (2026-10-06): none of these pages had e2e coverage, and each case
  * below pins a defect that pass fixed.
  */
 
 const db = new pg.Pool({ connectionString: E2E_ENV.DATABASE_URL });
 test.afterAll(() => db.end());
-
-/** Sign in with an emailed one-time code (creates the account; the code proves the email). */
-async function signInWithCode(page: Page, email: string) {
-  await page.goto("/login");
-  await page.getByRole("tab", { name: "Email me a code" }).click();
-  await page.getByLabel("Email").fill(email);
-  await page.getByRole("button", { name: "Send me a code" }).click();
-  await expect(page.getByRole("status")).toContainText("6-digit code");
-  await page.getByLabel("6-digit code").fill(await latestOtp(email));
-  await page.getByRole("button", { name: "Verify and sign in" }).click();
-}
 
 async function createWorkspace(page: Page, name: string): Promise<string> {
   return page.evaluate(async (n) => {
@@ -32,16 +21,10 @@ async function createWorkspace(page: Page, name: string): Promise<string> {
   }, name);
 }
 
-/**
- * A signed-in, verified owner with one workspace. Password sign-up, not a code: codes are limited
- * to 10 an hour per IP, and every test here comes from the same one.
- */
+/** A signed-in, verified owner with one workspace. */
 async function owner(page: Page, prefix: string, workspace = "Acme") {
   const email = uniqueEmail(prefix);
   await signUp(page, email);
-  await verifyEmailInEmulator(email);
-  await page.getByRole("button", { name: /verified my email/ }).click();
-  await expect(page).toHaveURL(/onboarding/);
   const ws = await createWorkspace(page, workspace);
   return { email, ws };
 }
@@ -95,36 +78,39 @@ test("renaming after switching workspaces renames the one selected", async ({ pa
 
 test("invitations: emailed, handed over as a link when email fails, and kept across sign-in", async ({ page, browser }) => {
   const { ws } = await owner(page, "inviter", "Team Co");
-  await page.goto("/settings/members");
+  await page.goto("/team");
+  const invite = async (email: string) => {
+    await page.getByRole("button", { name: "Invite Member" }).click();
+    const panel = page.getByTestId("invite-panel");
+    await panel.getByLabel("Email address").fill(email);
+    await panel.getByRole("radio", { name: /^Analyst/ }).check();
+    await panel.getByRole("button", { name: "Send Invitation" }).click();
+    return panel;
+  };
   const invitee = uniqueEmail("invitee");
-  await page.getByLabel("Email to invite").fill(invitee);
-  await page.getByLabel("Role", { exact: true }).selectOption("analyst");
-  await page.getByRole("button", { name: "Invite" }).click();
-  await expect(page.getByRole("status")).toContainText(`Invitation sent to ${invitee}`);
-  await expect(page.getByText(`${invitee} · invited`)).toBeVisible();
+  await invite(invitee);
+  await expect(page.getByText(`Invitation sent to ${invitee}.`)).toBeVisible();
+  await expect(page.getByTestId("team-row").filter({ visible: true }).filter({ hasText: invitee })).toContainText("Email sent");
 
   // When the email can't be sent the API still saves the invitation and returns its link. The
   // page used to say "sent" anyway and drop the link.
-  await page.route("**/api/workspaces/*/invitations", (route) =>
-    route.fulfill({ json: { ok: true, emailed: false, url: "http://localhost/invite?token=handed-over-token" } }),
+  await page.route("**/api/workspaces/*/team/invitations", (route) =>
+    route.fulfill({ json: { ok: true, emailed: false, url: "http://localhost/invite#token=handed-over-token", emailProblem: "not_allowed", replaced: 0 } }),
   );
   const unmailable = uniqueEmail("unmailable");
-  await page.getByLabel("Email to invite").fill(unmailable);
-  await page.getByRole("button", { name: "Invite" }).click();
-  await expect(page.getByTestId("invite-link")).toHaveValue("http://localhost/invite?token=handed-over-token");
+  const panel = await invite(unmailable);
+  await expect(panel.getByTestId("invite-link")).toHaveValue("http://localhost/invite#token=handed-over-token");
+  // Says why, so a refusal by the mail service doesn't read as a broken feature.
+  await expect(panel.getByTestId("email-problem")).toContainText("can't send to this address yet");
   await expect(page.getByText(`Invitation sent to ${unmailable}`)).toHaveCount(0);
-  await page.unroute("**/api/workspaces/*/invitations");
+  await page.unroute("**/api/workspaces/*/team/invitations");
+  await panel.getByRole("button", { name: "Done" }).click();
 
-  // The invitee opens the emailed link while signed out, signs in, and comes back to accept it.
-  const link = /\/invite\?token=[^\s]+/.exec(await latestMailText(invitee))![0];
+  // The invitee opens the emailed link: straight onto the dashboard, no sign-in or sign-up.
+  const link = /https?:\/\/\S+\/invite#token=[A-Za-z0-9_-]+/.exec(await latestMailText(invitee))![0];
   const ctx = await browser.newContext();
   const guest = await ctx.newPage();
   await guest.goto(link);
-  await guest.getByRole("button", { name: "Accept invitation" }).click();
-  await expect(guest).toHaveURL(/\/login/);
-  await signInWithCode(guest, invitee);
-  await expect(guest).toHaveURL(/\/invite\?token=/);
-  await guest.getByRole("button", { name: "Accept invitation" }).click();
   await expect(guest).toHaveURL(/\/dashboard/);
   // Joined the inviter's workspace, and did not get one of their own on the way.
   const { rows } = await db.query(
@@ -132,7 +118,9 @@ test("invitations: emailed, handed over as a link when email fails, and kept acr
     [invitee],
   );
   expect(rows).toEqual([{ workspace_id: ws, role: "analyst" }]);
-  expect(await guest.evaluate(() => localStorage.getItem("ws"))).toBe(ws);
+  // This tab is the shared dashboard's (its calls use the shared-link session); an account's
+  // saved workspace in this browser is left alone.
+  expect(await guest.evaluate(() => sessionStorage.getItem("bi:context"))).toBe("shared");
   await ctx.close();
 });
 
@@ -141,7 +129,7 @@ test("store permissions say which are optional for every role, and Disconnect re
   const shop = `perms-${Date.now()}.myshopify.com`;
   const storeId = await insertStore(ws, shop, ["read_orders", "read_customers"]);
   await page.goto("/settings/stores");
-  // e2e declares read_customers optional (SHOPIFY_OPTIONAL_SCOPES in worker.env).
+  // e2e declares read_customers optional (SHOPIFY_OPTIONAL_SCOPES in server.env).
   const optionalRow = page.getByRole("listitem").filter({ has: page.getByTestId("revoke-read_customers") });
   await expect(optionalRow).toContainText("Optional");
   // Named for the permission and the store, not a bare "Remove" repeated down the page.
@@ -149,7 +137,7 @@ test("store permissions say which are optional for every role, and Disconnect re
   expect(await page.getByTestId("revoke-read_customers").getAttribute("aria-label")).toContain(shop);
 
   // As an analyst: no Remove button, but the permission is still optional. It used to read "Required".
-  await db.query("UPDATE memberships SET role = 'analyst' WHERE workspace_id = $1 AND user_id = (SELECT id FROM users WHERE email = $2)", [ws, email]);
+  await db.query("UPDATE memberships SET role = 'analyst', permissions = ARRAY['integrations.status'] WHERE workspace_id = $1 AND user_id = (SELECT id FROM users WHERE email = $2)", [ws, email]);
   await page.reload();
   await expect(page.getByTestId("revoke-read_customers")).toHaveCount(0);
   await expect(page.locator("li", { hasText: "Optional" })).toHaveCount(1);
@@ -171,11 +159,15 @@ test("store permissions say which are optional for every role, and Disconnect re
   expect(dialogText).toContain("uninstall the app from your Shopify admin");
 });
 
+// Settings → Billing is hidden until paid plans launch (src/lib/features.ts), but the e2e build
+// shows it (NEXT_PUBLIC_E2E_BILLING, playwright.config.ts), so these run before launch.
 test("billing shows the plan in force, and a change awaiting Shopify as pending", async ({ page }) => {
   const { ws } = await owner(page, "billing");
   await page.goto("/settings/billing");
   await expect(page.getByText(/Current plan:\s*Free\./)).toBeVisible();
-  await expect(page.getByRole("button", { name: "Choose Growth" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Upgrade to Growth" })).toBeVisible();
+  // Nothing to switch away from on Free.
+  await expect(page.getByRole("button", { name: "Switch to Free" })).toHaveCount(0);
 
   await db.query("UPDATE subscriptions SET pending_plan = 'growth', pending_charge_id = 'gid://shopify/AppSubscription/9' WHERE workspace_id = $1", [ws]);
   await page.reload();
@@ -183,6 +175,28 @@ test("billing shows the plan in force, and a change awaiting Shopify as pending"
   await expect(page.getByRole("status").filter({ hasText: "waiting for approval in Shopify" })).toBeVisible();
   // The pending plan can be reopened; it used to hide its button as though it were already active.
   await expect(page.getByRole("button", { name: "Approve Growth in Shopify" })).toBeVisible();
+});
+
+test("an owner on a paid plan switches to Free from the billing page, without contacting anyone", async ({ page }) => {
+  const { ws } = await owner(page, "downgrade");
+  // Paid through a store the app has since been uninstalled from, so the API settles it without
+  // reaching Shopify (which e2e can't); the cancellation in Shopify is apps/api/test/billing.test.ts.
+  const storeId = await insertStore(ws, `downgrade-${Date.now()}.myshopify.com`, ["read_orders"]);
+  await db.query("UPDATE stores SET status = 'uninstalled' WHERE id = $1", [storeId]);
+  await db.query("UPDATE subscriptions SET plan = 'growth', shopify_charge_id = 'gid://shopify/AppSubscription/7', billing_store_id = $2 WHERE workspace_id = $1", [ws, storeId]);
+
+  await page.goto("/settings/billing");
+  await expect(page.getByText(/Current plan:\s*Growth\./)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Upgrade to Scale" })).toBeVisible();
+  await page.getByRole("button", { name: "Switch to Free" }).click();
+  const dialog = page.getByRole("dialog", { name: "Switch to Free?" });
+  await expect(dialog).toContainText("cancelled in Shopify now");
+  await dialog.getByRole("button", { name: "Switch to Free" }).click();
+
+  await expect(page.getByText(/Current plan:\s*Free\./)).toBeVisible();
+  await expect(page.getByText("You're on the Free plan now.")).toBeVisible();
+  const { rows } = await db.query("SELECT plan, shopify_charge_id FROM subscriptions WHERE workspace_id = $1", [ws]);
+  expect(rows[0]).toEqual({ plan: "free", shopify_charge_id: null });
 });
 
 test("the privacy and support pages describe what the product actually does", async ({ page }) => {
@@ -196,12 +210,12 @@ test("the privacy and support pages describe what the product actually does", as
   await expect(page.locator("main")).toContainText("Enable button");
 });
 
-test("a webhook bigger than one Durable Object value is stored and processed", async ({ page }) => {
+test("a webhook too big for a queue message is stored and processed", async ({ page }) => {
   const { ws } = await owner(page, "bigwebhook");
   const shop = `big-${Date.now()}.myshopify.com`;
   const storeId = await insertStore(ws, shop, ["read_orders", "read_products"]);
-  // R2 is not bound locally, so a payload over the inline limit goes to Durable Object storage,
-  // which caps a value at 2 MB. Webhook bodies may be 5 MB; this one is ~3 MB.
+  // A payload over the inline limit goes to the payload store (S3 on AWS, memory locally).
+  // Webhook bodies may be 5 MB; this one is ~3 MB.
   const filler = createHash("sha256").update("x").digest("hex").repeat(3 * 1024 * 1024 / 64);
   const now = new Date().toISOString();
   const id = `e2e-big-${Date.now()}`;

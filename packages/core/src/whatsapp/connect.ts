@@ -2,6 +2,7 @@
 import { systemDb, type WhatsappConnection } from "@app/db";
 import { keyVersionOf, randomToken, sha256Hex } from "@app/shared";
 import { env } from "../env.js";
+import { providerDetail } from "../errors.js";
 import { logger } from "../logger.js";
 import type { FetchLike } from "../shopify.js";
 import {
@@ -17,14 +18,14 @@ import {
   waTokenInfo,
   WhatsappApiError,
 } from "./graph.js";
+import { WhatsappError } from "./errors.js";
 import { connectionToken, ensureSettings, syncTemplates, waDecrypt, waEncrypt } from "./store.js";
 
-export class WhatsappConnectError extends Error {
-  constructor(
-    message: string,
-    readonly code: string,
-  ) {
-    super(message);
+/** Connecting can't go ahead until the merchant fixes what the message says (a 400). */
+export class WhatsappConnectError extends WhatsappError {
+  constructor(message: string, code: string) {
+    super(message, 400, code);
+    this.name = "WhatsappConnectError";
   }
 }
 
@@ -46,7 +47,7 @@ export interface ConnectInput {
  */
 export async function connectWhatsapp(input: ConnectInput, fetchImpl: FetchLike): Promise<WhatsappConnection> {
   const taken = await systemDb.whatsappConnection.findFirst({ where: { phoneNumberId: input.phoneNumberId, NOT: { storeId: input.store.id } }, select: { id: true } });
-  if (taken) throw new WhatsappConnectError("This WhatsApp number is already connected to another store in Insights. Disconnect it there first.", "number_in_use");
+  if (taken) throw new WhatsappConnectError("This WhatsApp number is already connected to another store in bizinsights. Disconnect it there first.", "number_in_use");
   let phone;
   let account;
   try {
@@ -60,7 +61,7 @@ export async function connectWhatsapp(input: ConnectInput, fetchImpl: FetchLike)
       if (err.action === "reconnect" || err.httpStatus === 401 || err.httpStatus === 403) {
         throw new WhatsappConnectError("Meta didn't accept that access token for this account. Check it has whatsapp_business_messaging and whatsapp_business_management permissions.", "token_rejected");
       }
-      if (err.httpStatus === 400 || err.httpStatus === 404) throw new WhatsappConnectError(`Meta couldn't find that account or number: ${err.details ?? err.title}`, "not_found");
+      if (err.httpStatus === 400 || err.httpStatus === 404) throw new WhatsappConnectError(`Meta couldn't find that account or number: ${providerDetail(err.details ?? err.title)}`, "not_found");
     }
     throw err;
   }
@@ -121,7 +122,7 @@ export interface DiscoveredNumber {
   id: string;
   displayPhoneNumber: string | null;
   verifiedName: string | null;
-  /** On the Cloud API already; otherwise Insights asks for a PIN after connecting. */
+  /** On the Cloud API already; otherwise bizinsights asks for a PIN after connecting. */
   registered: boolean;
 }
 
@@ -192,7 +193,7 @@ export async function checkManualApp(accessToken: string, appSecret: string, fet
 }
 
 /**
- * Point the merchant's app's webhook at Insights. "verified": Meta completed the handshake;
+ * Point the merchant's app's webhook at bizinsights. "verified": Meta completed the handshake;
  * "in_use": the app's WhatsApp webhook already goes elsewhere (left alone); "failed": do it by hand.
  */
 export async function setupManualWebhook(conn: WhatsappConnection, appId: string, appSecret: string, fetchImpl: FetchLike): Promise<"verified" | "in_use" | "failed"> {
@@ -215,14 +216,14 @@ export async function setupManualWebhook(conn: WhatsappConnection, appId: string
 }
 
 /**
- * Insights' own Meta app (Continue with WhatsApp): keep its WhatsApp webhook pointed at Insights,
+ * bizinsights' own Meta app (Continue with WhatsApp): keep its WhatsApp webhook pointed at bizinsights,
  * so the owner never pastes a callback URL into Meta. Needs the app id, secret and verify token.
  */
 export async function ensurePlatformWebhook(fetchImpl: FetchLike): Promise<"unconfigured" | "set" | "already" | "in_use"> {
   const cfg = waPlatformConfig();
   if (!cfg?.verifyToken) return "unconfigured";
   const r = await waSetAppWebhook({ appId: cfg.appId, appSecret: cfg.appSecret }, `${env().API_URL}/webhooks/whatsapp`, cfg.verifyToken, fetchImpl);
-  if (r === "in_use") logger.warn({ appId: cfg.appId }, "Insights' Meta app sends WhatsApp webhooks to another URL; left alone");
+  if (r === "in_use") logger.warn({ appId: cfg.appId }, "bizinsights' Meta app sends WhatsApp webhooks to another URL; left alone");
   return r;
 }
 
@@ -251,7 +252,7 @@ function randomPin(): string {
 /**
  * Right after Embedded Signup's Cloud API flow: register the new number so it can send, without
  * asking the merchant for anything. Meta's registration takes a PIN, which becomes the number's
- * two-step verification PIN when it has none; Insights picks one and keeps it (encrypted) so the
+ * two-step verification PIN when it has none; bizinsights picks one and keeps it (encrypted) so the
  * merchant can see it later. A number that already has a PIN refuses ours and stays "pending":
  * the merchant then types their own. Numbers kept on the WhatsApp Business app (coexistence) are
  * never registered here, since that would move them off the app.
@@ -267,7 +268,7 @@ export async function autoRegisterWhatsapp(conn: WhatsappConnection, fetchImpl: 
   }
 }
 
-/** The number's two-step verification PIN, when Insights knows it. */
+/** The number's two-step verification PIN, when bizinsights knows it. */
 export const connectionPin = (conn: Pick<WhatsappConnection, "storeId" | "pinEnc">) => (conn.pinEnc ? waDecrypt(conn.storeId, "pin", conn.pinEnc) : null);
 
 /** The verify token a manual connection's Meta app is given (shown to the store's admins). */
@@ -275,8 +276,11 @@ export const manualVerifyToken = (conn: Pick<WhatsappConnection, "storeId" | "ve
 
 /** Disconnect: the token and templates are deleted, waiting messages cancelled; history stays. */
 export async function disconnectWhatsapp(conn: WhatsappConnection, fetchImpl: FetchLike): Promise<void> {
-  // Best effort: stop Meta sending this account's webhooks to the app that was subscribed.
-  await graph(fetchImpl, connectionToken(conn), "DELETE", `${conn.wabaId}/subscribed_apps`).catch(() => undefined);
+  // Best effort: stop Meta sending this account's webhooks to the app that was subscribed, unless
+  // another store still relies on that subscription (stores can share one account): unsubscribing
+  // then would silently cut off its STOP replies and delivery statuses.
+  const others = await systemDb.whatsappConnection.count({ where: { wabaId: conn.wabaId, mode: conn.mode, id: { not: conn.id } } });
+  if (!others) await graph(fetchImpl, connectionToken(conn), "DELETE", `${conn.wabaId}/subscribed_apps`).catch(() => undefined);
   await systemDb.$transaction([
     systemDb.whatsappTemplate.deleteMany({ where: { connectionId: conn.id } }),
     systemDb.whatsappConnection.delete({ where: { id: conn.id } }),

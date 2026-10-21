@@ -1,13 +1,13 @@
 "use client";
-import { LoadError } from "@/components/LoadError";
 import { useState } from "react";
 import Link from "next/link";
-import { reasonLabel } from "@app/shared/whatsapp";
+import { kindsOf, reasonLabel } from "@app/shared/whatsapp";
 import { Badge, Empty, Stat, type Tone } from "@/components/dashboard/Primitives";
 import { fmtRelative } from "@/components/dashboard/format";
 import { useApp } from "@/components/AppContext";
 import { api, fmtMoney, fmtNum, useApi } from "@/lib/api";
-import { fmtWhen, KindsSection, MessageStatus, PageHeader, useAction, useWa } from "@/components/whatsapp/Common";
+import { fmtWhen, KindsSection, MessageStatus, useWa } from "@/components/whatsapp/WhatsappUi";
+import { PageHeader, useAction } from "@/components/AppUi";
 
 interface Cart {
   id: string;
@@ -60,7 +60,7 @@ export default function AbandonedCarts() {
         title="Abandoned cart recovery"
         sub={
           <>
-            When someone types their phone number at checkout and leaves without paying, Insights can send one or two WhatsApp reminders with a link back to their own
+            When someone types their phone number at checkout and leaves without paying, bizinsights can send one or two WhatsApp reminders with a link back to their own
             Shopify checkout. Only customers who agreed to WhatsApp marketing are reminded (cart reminders are marketing on WhatsApp); anonymous visitors are never
             contacted or stored. A reminder is cancelled the moment the order comes in.
           </>
@@ -69,7 +69,7 @@ export default function AbandonedCarts() {
 
       <KindsSection
         title="Reminders"
-        kinds={["abandoned_cart_1", "abandoned_cart_2"]}
+        kinds={kindsOf("carts")}
         extra={(cfg, set) => (
           <div className="mt-3 grid gap-3 border-t border-border pt-3 sm:grid-cols-2">
             <div>
@@ -114,7 +114,7 @@ export default function AbandonedCarts() {
             </div>
           </div>
           {error ? (
-            <div className="mt-3"><LoadError what="abandoned carts" error={error} onRetry={() => void reload()} /></div>
+            <p className="mt-3 text-sm text-danger">{error.message}</p>
           ) : !data ? (
             <div className="mt-3 space-y-2">{[0, 1, 2].map((i) => <div key={i} className="skeleton h-14" />)}</div>
           ) : !data.carts.length ? (

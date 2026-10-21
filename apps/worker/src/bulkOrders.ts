@@ -6,8 +6,10 @@ import {
   BULK_OPERATION_RUN_QUERY,
   bulkOrdersQuery,
   CURRENT_BULK_OPERATION,
+  graphqlOrderSchema,
   logger,
   normalizeGraphqlOrder,
+  parseShopifyList,
   writeOrderBatch,
   type BulkOperationStatus,
   type SyncJobData,
@@ -30,6 +32,9 @@ import type { WorkerDeps } from "./handlers.js";
  *   start   adopt or submit the operation
  *   poll    re-enqueue with `delaySeconds` until Shopify says COMPLETED
  *   ingest  read the JSONL a chunk at a time, each chunk its own message
+ *
+ * The export carries every order whole, its sales records included (see `bulkOrdersQuery`), so
+ * the ingest needs no call per order.
  *
  * Every failure falls back to the paged path instead of failing the job. The merchant should
  * see a slow import, never a broken one, and the paged path is already correct and tested.
@@ -70,50 +75,55 @@ export interface BulkApi {
 
 const lockKey = (storeId: string) => `bulk:orders:${storeId}`;
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
-type Line = Record<string, any>;
+/**
+ * One JSONL line: an order, or a child naming its parent in `__parentId`. Only what reassembly
+ * needs is read from it; the rest is checked once the order is whole (graphqlOrderSchema).
+ */
+type Line = Record<string, unknown>;
+
+/** A line that isn't a JSON object reads as an empty one: an order without an id, which the order schema skips (logged). */
+const asLine = (v: unknown): Line => (typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Line) : {});
 
 /**
  * Rebuild the order node `ordersQuery` would have returned from a run of JSONL lines.
  *
  * Shopify emits one line per object: a parent order with no `__parentId`, then its connection
- * children, each naming its parent. Plain list fields (`fulfillments`, `refunds`) are inlined
- * on the parent instead, so a refund's own line items name the *refund* as their parent.
+ * children, each naming its parent: line items and agreements name the order, a sale names its
+ * *agreement*. Plain list fields (`fulfillments`) are inlined on the parent instead.
  *
  * Children are matched by `__parentId`, never by position, so the only ordering this relies on
- * is Shopify's guarantee that a child follows its parent.
+ * is Shopify's guarantee that a child follows its parent. Under an order, an agreement is the child
+ * with a `happenedAt`; any other child is a line item.
  *
  * The result goes to the unchanged `normalizeGraphqlOrder`: one normalizer for both paths, so
  * money parsing, gid handling and time zones cannot drift apart between them.
  */
 export function reassembleOrders(lines: Line[]): Line[] {
   const orders: Line[] = [];
-  const byId = new Map<string, Line>();
-  // Which refund a refund-line-item belongs to, since those name the refund as their parent.
-  const refundById = new Map<string, Line>();
+  // Each order's line items and agreements, and each agreement's sales, by the parent's id.
+  const childrenOf = new Map<string, { lineItems: unknown[]; agreements: unknown[] }>();
+  const salesOf = new Map<string, unknown[]>();
 
   for (const line of lines) {
     if (!line.__parentId) {
-      const order: Line = { ...line, lineItems: { nodes: [] } };
-      order.refunds = (line.refunds ?? []).map((r: Line) => ({
-        ...r,
-        // Inlined by Shopify when that nesting is allowed; filled from child lines when not.
-        refundLineItems: { nodes: r.refundLineItems?.edges?.map((e: Line) => e.node) ?? r.refundLineItems?.nodes ?? [] },
-      }));
-      orders.push(order);
-      byId.set(String(line.id), order);
-      for (const r of order.refunds) refundById.set(String(r.id), r);
+      const children = { lineItems: [] as unknown[], agreements: [] as unknown[] };
+      orders.push({ ...line, lineItems: { nodes: children.lineItems }, agreements: { nodes: children.agreements } });
+      childrenOf.set(String(line.id), children);
       continue;
     }
     const parentId = String(line.__parentId);
-    const order = byId.get(parentId);
+    const order = childrenOf.get(parentId);
     if (order) {
-      order.lineItems.nodes.push(line);
+      if ("happenedAt" in line) {
+        const sales: unknown[] = [];
+        salesOf.set(String(line.id), sales);
+        order.agreements.push({ ...line, sales: { nodes: sales } });
+      } else order.lineItems.push(line);
       continue;
     }
-    const refund = refundById.get(parentId);
-    if (refund) {
-      refund.refundLineItems.nodes.push(line);
+    const sales = salesOf.get(parentId);
+    if (sales) {
+      sales.push(line);
       continue;
     }
     // Chunks are cut at parent boundaries precisely so this cannot happen. Dropping a line item
@@ -128,7 +138,7 @@ function parseLines(text: string, atEnd: boolean): { lines: Line[]; raw: string[
   const parts = text.split("\n");
   if (!atEnd) parts.pop(); // the range request may have cut mid-line
   const raw = parts.filter((l) => l.trim().length > 0);
-  return { lines: raw.map((l) => JSON.parse(l) as Line), raw };
+  return { lines: raw.map((l) => asLine(JSON.parse(l))), raw };
 }
 
 /**
@@ -136,8 +146,7 @@ function parseLines(text: string, atEnd: boolean): { lines: Line[]; raw: string[
  *
  * A chunk always starts at a parent (the previous one guaranteed it), so this keeps every
  * order whole within a single invocation and means no state has to be carried between them.
- * That matters here: R2 is not enabled and a Durable Object value caps at 2 MB, so there is
- * nowhere good to park a half-assembled order.
+ * That matters here: there is nowhere good to park a half-assembled order between invocations.
  */
 function cutAtLastParent(lines: Line[], raw: string[]): { lines: Line[]; raw: string[] } | null {
   for (let i = lines.length - 1; i > 0; i--) {
@@ -207,7 +216,7 @@ async function startBulk(data: SyncJobData, store: Store, deps: WorkerDeps, api:
     // The retry is this same job, and with the lock still held it would take itself for a
     // competing backfill. Freed, it re-acquires and adopts the export this attempt may already
     // have submitted. Best-effort: the Coordinator does not need Postgres, so this works through a
-    // tunnel outage, but a failed release must not hide the error that matters.
+    // database outage, but a failed release must not hide the error that matters.
     await deps.coord.release(lockKey(store.id)).catch(() => {});
     throw err;
   }
@@ -292,33 +301,36 @@ async function ingestBulk(data: SyncJobData, store: Store, deps: WorkerDeps, api
   // Re-resolved every chunk rather than carried in the message: the result link is a
   // short-lived signed URL, and re-reading it makes expiry a non-event instead of a failure.
   const op = await bulkStatus(api, id);
-  const url = op?.url ?? op?.partialDataUrl;
+  // The complete file only: a partial one (`partialDataUrl`, a failed export's) would be ingested
+  // to its end and the store then marked as fully imported with orders missing.
+  const url = op?.status === "COMPLETED" ? op.url : null;
   if (!url) return fallbackToPaged(data, deps, "bulk result url is gone");
   // The only URL we fetch that a response handed us (Shopify's signed result link): HTTPS only.
   if (!isHttpsUrl(url)) return fallbackToPaged(data, deps, "bulk result url is not https");
 
   const byteOffset = data.bulk?.byteOffset ?? 0;
   let chunk = CHUNK_BYTES;
-  let applied: { lines: Line[]; bytes: number; atEnd: boolean } | null = null;
+  let applied: { lines: Line[]; raw: string[]; atEnd: boolean } | null = null;
 
   while (chunk <= MAX_CHUNK_BYTES) {
     const res = await deps.fetchImpl(url, { headers: { Range: `bytes=${byteOffset}-${byteOffset + chunk - 1}` } });
     if (res.status !== 206 && res.status !== 200) return fallbackToPaged(data, deps, `bulk result fetch returned ${res.status}`);
-    const text = await res.text();
+    const body = new Uint8Array(await res.arrayBuffer());
+    // A 200 means the server ignored Range and sent the whole file, which is still correct -
+    // this chunk is simply the rest of it, once what earlier chunks read is skipped.
+    const text = new TextDecoder().decode(res.status === 200 ? body.subarray(byteOffset) : body);
     const range = res.headers.get("content-range");
     const total = range ? Number(range.split("/")[1]) : NaN;
-    // A 200 means the server ignored Range and sent the whole file, which is still correct -
-    // this chunk is simply the last one.
-    const atEnd = res.status === 200 || !Number.isFinite(total) || byteOffset + byteLength(text) >= total;
+    const atEnd = res.status === 200 || !Number.isFinite(total) || byteOffset + body.length >= total;
 
     const { lines, raw } = parseLines(text, atEnd);
     if (atEnd) {
-      applied = { lines, bytes: 0, atEnd: true };
+      applied = { lines, raw, atEnd: true };
       break;
     }
     const cut = cutAtLastParent(lines, raw);
     if (cut) {
-      applied = { lines: cut.lines, bytes: cut.raw.reduce((a, l) => a + byteLength(l) + 1, 0), atEnd: false };
+      applied = { ...cut, atEnd: false };
       break;
     }
     // One order's children filled the entire chunk: widen rather than split the order.
@@ -326,7 +338,9 @@ async function ingestBulk(data: SyncJobData, store: Store, deps: WorkerDeps, api
   }
   if (!applied) return fallbackToPaged(data, deps, `one order exceeds ${MAX_CHUNK_BYTES} bytes of JSONL`);
 
-  const orders = reassembleOrders(applied.lines).map(normalizeGraphqlOrder);
+  const orders = parseShopifyList(graphqlOrderSchema, reassembleOrders(applied.lines), "bulk order", { storeId: store.id, bulkId: id }).map(
+    normalizeGraphqlOrder,
+  );
   const days = new Set<string>();
   for (let i = 0; i < orders.length; i += WRITE_BATCH) {
     for (const d of await writeOrderBatch(store, orders.slice(i, i + WRITE_BATCH))) days.add(d);
@@ -345,7 +359,8 @@ async function ingestBulk(data: SyncJobData, store: Store, deps: WorkerDeps, api
   // Aggregate what has landed so the dashboard fills while the rest streams in; the final pass
   // at the end of the backfill recomputes every day once anyway.
   await enqueueDays(deps, store.id, days);
-  await deps.queues.sync.send({ ...data, progress, bulk: { phase: "ingest", id, byteOffset: byteOffset + applied.bytes } });
+  const bytes = applied.raw.reduce((a, l) => a + byteLength(l) + 1, 0);
+  await deps.queues.sync.send({ ...data, progress, bulk: { phase: "ingest", id, byteOffset: byteOffset + bytes } });
   return { done: false };
 }
 

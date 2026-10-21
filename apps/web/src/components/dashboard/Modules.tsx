@@ -1,8 +1,10 @@
 "use client";
-import { shippingHealth } from "@app/shared/health";
+import { gradeCover, gradeShipping, type Grade } from "@app/shared/health";
+import Link from "next/link";
+import { useApp } from "@/components/AppContext";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { BarRow, ColumnChart, StackedBar } from "./Charts";
-import { fmtDateTime, fmtDuration, hourLabel, hourRange, humanize, plural } from "./format";
+import { fmtDateTime, fmtDuration, hourLabel, hourRange, humanize, plural, weekdayNames } from "./format";
 import { Badge, Empty, Panel, Stat, type Tone } from "./Primitives";
 import type {
   CatalogModule,
@@ -14,6 +16,9 @@ import type {
   RecentOrder,
   TrafficModule,
 } from "./types";
+
+/** How a grade (@app/shared/health) is colored. */
+const GRADE_TONE: Record<Grade, Tone> = { good: "good", watch: "warn", attention: "danger" };
 
 export function ChannelsCard({ m, currency }: { m: ChannelsModule; currency: string }) {
   return (
@@ -54,7 +59,7 @@ export function TrafficCard({ m, currency }: { m: TrafficModule; currency: strin
       id="traffic"
       title="Where your sales come from"
       help="The visit Shopify recorded before each order: an ad, a post, a search, an email or a typed address. Sales after discounts, before tax and shipping."
-      aside={m.paid.sales > 0 ? <span className="text-xs text-muted">From tagged ads: <strong className="text-text">{fmtMoney(m.paid.sales, currency)}</strong> ({fmtPct(m.paid.share)})</span> : undefined}
+      aside={m.paid && m.paid.sales > 0 ? <span className="text-xs text-muted">From tagged ads: <strong className="text-text">{fmtMoney(m.paid.sales, currency)}</strong> ({fmtPct(m.paid.share)})</span> : undefined}
     >
       {m.pending > 0 && (
         <p className="mb-3 text-xs text-muted">
@@ -74,15 +79,15 @@ export function TrafficCard({ m, currency }: { m: TrafficModule; currency: strin
               sub={
                 <>
                   {plural(x.orders, "order")} · {fmtPct(x.share)} of sales
-                  {x.paidOrders > 0 && x.paidOrders < x.orders && <> · {fmtMoney(x.paidSales, currency)} from tagged ads</>}
-                  {x.paidOrders > 0 && x.paidOrders === x.orders && <> · all from tagged ads</>}
+                  {x.paidOrders !== undefined && x.paidOrders > 0 && x.paidOrders < x.orders && <> · {fmtMoney(x.paidSales, currency)} from tagged ads</>}
+                  {x.paidOrders !== undefined && x.paidOrders > 0 && x.paidOrders === x.orders && <> · all from tagged ads</>}
                 </>
               }
             />
           ))}
         </ul>
       )}
-      {m.campaigns.length > 0 && (
+      {m.campaigns && m.campaigns.length > 0 && (
         <div className="mt-5">
           <h3 className="text-sm font-medium">Campaigns</h3>
           <p className="text-xs text-muted">From the campaign name in your ad and email links (utm_campaign).</p>
@@ -110,19 +115,9 @@ export function TrafficCard({ m, currency }: { m: TrafficModule; currency: strin
   );
 }
 
-const shortWeekdays = () => {
-  const f = new Intl.DateTimeFormat(undefined, { weekday: "short", timeZone: "UTC" });
-  // 2026-01-05 is a Monday.
-  return Array.from({ length: 7 }, (_, i) => f.format(new Date(Date.UTC(2026, 0, 5 + i))));
-};
-const longWeekdays = () => {
-  const f = new Intl.DateTimeFormat(undefined, { weekday: "long", timeZone: "UTC" });
-  return Array.from({ length: 7 }, (_, i) => f.format(new Date(Date.UTC(2026, 0, 5 + i))));
-};
-
 export function OrderTimingCard({ m, timezone }: { m: OrderTimingModule; timezone: string }) {
   const total = m.byWeekday.reduce((a, b) => a + b, 0);
-  const days = longWeekdays();
+  const days = weekdayNames("long");
   const busiestDay = m.byWeekday.indexOf(Math.max(...m.byWeekday));
   const orders = (n: number) => plural(n, "order");
   return (
@@ -144,7 +139,7 @@ export function OrderTimingCard({ m, timezone }: { m: OrderTimingModule; timezon
         <Empty>Not enough orders in these dates to spot a pattern yet.</Empty>
       ) : (
         <div className="grid gap-6">
-          <ColumnChart label="Orders by day of the week" values={m.byWeekday} labels={days} tickLabels={shortWeekdays()} highlight={total ? busiestDay : null} format={orders} />
+          <ColumnChart label="Orders by day of the week" values={m.byWeekday} labels={days} tickLabels={weekdayNames("short")}highlight={total ? busiestDay : null} format={orders} />
           <ColumnChart
             label="Orders by hour of the day"
             values={m.byHour}
@@ -162,8 +157,7 @@ export function OrderTimingCard({ m, timezone }: { m: OrderTimingModule; timezon
 export function FulfillmentCard({ m }: { m: FulfillmentModule }) {
   const c = m.current;
   const other = Math.max(0, c.orders - c.fulfilled - c.partiallyFulfilled - c.unfulfilled);
-  const health = shippingHealth(m.openNow, m.oldestOpenDays);
-  const waitingTone: Tone = health === "good" ? "good" : health === "attention" ? "danger" : "warn";
+  const waitingTone: Tone = GRADE_TONE[gradeShipping(m.openNow, m.oldestOpenDays)];
   return (
     <Panel id="fulfillment" title="Fulfillment" help="How quickly orders ship, and what's still waiting.">
       <div className="grid gap-3 sm:grid-cols-3">
@@ -196,8 +190,10 @@ export function FulfillmentCard({ m }: { m: FulfillmentModule }) {
 }
 
 export function DiscountCodesCard({ m, currency }: { m: DiscountCodesModule; currency: string }) {
+  // Amounts per code need "View discount performance" (Team & Access).
+  const money = m.items.some((d) => d.sales !== undefined);
   return (
-    <Panel id="discount_codes" title="Discount codes" help="Codes customers used most in these dates. Amounts are the total discounts on the orders that used each code (including automatic discounts), so an order with several codes counts toward each.">
+    <Panel id="discount_codes" title="Discount codes" help="Codes customers used most in these dates. Amounts are the discounts on the items of the orders that used each code, automatic ones included, before tax, as in the Discounts line (shipping discounts are in shipping). An order with several codes counts toward each.">
       {m.items.length === 0 ? (
         <Empty>No discount codes were used in these dates.</Empty>
       ) : (
@@ -207,8 +203,8 @@ export function DiscountCodesCard({ m, currency }: { m: DiscountCodesModule; cur
               <tr>
                 <th className="px-1 pb-2 font-normal">Code</th>
                 <th className="px-1 pb-2 text-right font-normal">Orders</th>
-                <th className="px-1 pb-2 text-right font-normal">Discounts on these orders</th>
-                <th className="px-1 pb-2 text-right font-normal">Sales</th>
+                {money && <th className="px-1 pb-2 text-right font-normal">Discounts on these orders</th>}
+                {money && <th className="px-1 pb-2 text-right font-normal">Net sales</th>}
               </tr>
             </thead>
             <tbody>
@@ -218,8 +214,8 @@ export function DiscountCodesCard({ m, currency }: { m: DiscountCodesModule; cur
                     <span className="rounded border border-border bg-bg px-1.5 py-0.5 font-mono text-xs">{d.code}</span>
                   </td>
                   <td className="px-1 py-2 text-right tabular-nums">{fmtNum(d.orders)}</td>
-                  <td className="px-1 py-2 text-right tabular-nums">{fmtMoney(d.discount, currency)}</td>
-                  <td className="px-1 py-2 text-right tabular-nums">{fmtMoney(d.sales, currency)}</td>
+                  {money && <td className="px-1 py-2 text-right tabular-nums">{fmtMoney(d.discount, currency)}</td>}
+                  {money && <td className="px-1 py-2 text-right tabular-nums">{fmtMoney(d.sales, currency)}</td>}
                 </tr>
               ))}
             </tbody>
@@ -230,9 +226,9 @@ export function DiscountCodesCard({ m, currency }: { m: DiscountCodesModule; cur
   );
 }
 
-const financialTone = (s: string | null): Tone =>
+const financialTone = (s: string | null | undefined): Tone =>
   s === "paid" ? "good" : s === "pending" || s === "authorized" || s === "partially_paid" || s === "expired" ? "warn" : "neutral";
-const fulfillmentTone = (s: string | null): Tone =>
+const fulfillmentTone = (s: string | null | undefined): Tone =>
   s === "fulfilled" ? "good" : s === "restocked" || s === "request_declined" || s === null ? "neutral" : "warn";
 
 /** Order number, linking to the order in the merchant's Shopify admin when we know its id. */
@@ -246,13 +242,20 @@ function OrderName({ o, shopDomain }: { o: RecentOrder; shopDomain: string }) {
   );
 }
 
+// Payment, fulfillment and cancellation each need their own permission (Team & Access): a field
+// that isn't in the answer gets no badge, rather than a guess.
 const PaymentBadge = ({ o }: { o: RecentOrder }) =>
-  o.cancelled ? <Badge tone="danger">Cancelled</Badge> : <Badge tone={financialTone(o.financialStatus)}>{humanize(o.financialStatus)}</Badge>;
-const FulfillmentBadge = ({ o }: { o: RecentOrder }) => (
-  <Badge tone={fulfillmentTone(o.fulfillmentStatus)}>{o.fulfillmentStatus ? humanize(o.fulfillmentStatus) : "Not synced yet"}</Badge>
-);
+  o.cancelled ? (
+    <Badge tone="danger">Cancelled</Badge>
+  ) : o.financialStatus !== undefined ? (
+    <Badge tone={financialTone(o.financialStatus)}>{humanize(o.financialStatus)}</Badge>
+  ) : null;
+const FulfillmentBadge = ({ o }: { o: RecentOrder }) =>
+  o.fulfillmentStatus !== undefined ? <Badge tone={fulfillmentTone(o.fulfillmentStatus)}>{o.fulfillmentStatus ? humanize(o.fulfillmentStatus) : "Not synced yet"}</Badge> : null;
 
 export function RecentOrdersCard({ items, currency, timezone, shopDomain }: { items: RecentOrder[]; currency: string; timezone: string; shopDomain: string }) {
+  const showPayment = items.some((o) => o.financialStatus !== undefined || o.cancelled !== undefined);
+  const showFulfillment = items.some((o) => o.fulfillmentStatus !== undefined);
   return (
     <Panel id="recent_orders" title="Recent orders" help={`The 10 latest orders, whatever dates are selected. Times are in the store's time zone (${timezone}).`}>
       {items.length === 0 ? (
@@ -285,8 +288,8 @@ export function RecentOrdersCard({ items, currency, timezone, shopDomain }: { it
                 <th className="px-1 pb-2 font-normal">Placed</th>
                 <th className="px-1 pb-2 font-normal">Channel</th>
                 <th className="px-1 pb-2 text-right font-normal">Items</th>
-                <th className="px-1 pb-2 font-normal">Payment</th>
-                <th className="px-1 pb-2 font-normal">Fulfillment</th>
+                {showPayment && <th className="px-1 pb-2 font-normal">Payment</th>}
+                {showFulfillment && <th className="px-1 pb-2 font-normal">Fulfillment</th>}
                 <th className="px-1 pb-2 text-right font-normal">Total</th>
               </tr>
             </thead>
@@ -297,8 +300,8 @@ export function RecentOrdersCard({ items, currency, timezone, shopDomain }: { it
                   <td className="whitespace-nowrap px-1 py-2">{fmtDateTime(o.createdAt, timezone)}</td>
                   <td className="px-1 py-2">{o.channel}</td>
                   <td className="px-1 py-2 text-right tabular-nums">{fmtNum(o.units)}</td>
-                  <td className="px-1 py-2"><PaymentBadge o={o} /></td>
-                  <td className="px-1 py-2"><FulfillmentBadge o={o} /></td>
+                  {showPayment && <td className="px-1 py-2"><PaymentBadge o={o} /></td>}
+                  {showFulfillment && <td className="px-1 py-2"><FulfillmentBadge o={o} /></td>}
                   <td className="whitespace-nowrap px-1 py-2 text-right tabular-nums">{fmtMoney(o.total, currency)}</td>
                 </tr>
               ))}
@@ -312,17 +315,30 @@ export function RecentOrdersCard({ items, currency, timezone, shopDomain }: { it
 }
 
 const coverLabel = (d: number | null) => (d === null ? "No recent sales" : d < 1 ? "Under a day" : `About ${plural(Math.round(d), "day")}`);
-const coverTone = (d: number | null, qty: number): Tone => (d !== null && d < 7) || qty <= 2 ? "danger" : "warn";
+const coverTone = (d: number | null, qty: number): Tone => GRADE_TONE[gradeCover(d, qty)];
+
+/** The way from the dashboard's stock card to the Inventory section, for whoever may open it. */
+function OpenInventory() {
+  const { allowed, offers } = useApp();
+  if (!offers("inventory") || !allowed("inventory.view")) return null;
+  return (
+    <Link href="/inventory" className="text-accent underline">
+      Open Inventory
+    </Link>
+  );
+}
 
 export function InventoryCard({ m, currency }: { m: InventoryModule; currency: string }) {
   const c = m.current;
   if (c.trackedVariants === 0) {
     return (
-      <Panel id="inventory" title="Inventory" help="Stock on hand, what it's worth and what's about to run out.">
+      <Panel id="inventory" title="Inventory" help="Stock on hand, what it's worth and what's about to run out." aside={<OpenInventory />}>
         <Empty>No stock levels yet. They appear once your products and variants are imported, for items where Shopify tracks quantity.</Empty>
       </Panel>
     );
   }
+  // What the stock is worth needs "View stock value and prices" (Team & Access).
+  const valued = c.retailValue !== undefined;
   const costNote =
     c.stockValueAtCost === null
       ? "Add a cost per item in Shopify to see this."
@@ -330,13 +346,13 @@ export function InventoryCard({ m, currency }: { m: InventoryModule; currency: s
         ? `Based on ${fmtNum(c.variantsWithCost)} of ${plural(c.trackedVariants, "variant")} with a cost.`
         : "What you paid for the stock you hold.";
   return (
-    <Panel id="inventory" title="Inventory" help="Stock on hand across all locations for active and draft products. “Running low” uses the last 30 days of sales.">
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+    <Panel id="inventory" title="Inventory" help="Stock across all locations for active and draft products, as the Inventory section counts it. Running low: at or under the low-stock threshold (10 unless you set one in Inventory → Stock settings)." aside={<OpenInventory />}>
+      <div className={`grid grid-cols-2 gap-3 ${valued ? "lg:grid-cols-5" : "lg:grid-cols-3"}`}>
         <Stat label="Units in stock" value={fmtNum(c.unitsInStock)} note={`Across ${plural(c.trackedVariants, "tracked variant")}.`} />
-        <Stat label="Stock value at cost" value={fmtMoney(c.stockValueAtCost, currency)} note={costNote} />
-        <Stat label="Retail value" value={fmtMoney(c.retailValue, currency)} note="If everything sold at today's prices." />
+        {valued && <Stat label="Stock value at cost" value={fmtMoney(c.stockValueAtCost, currency)} note={costNote} />}
+        {valued && <Stat label="Retail value" value={fmtMoney(c.retailValue, currency)} note="If everything sold at today's prices." />}
         <Stat label="Out of stock" value={fmtNum(c.outOfStock)} tone={c.outOfStock > 0 ? "danger" : "good"} note="Variants with nothing left to sell." />
-        <Stat className="col-span-2 lg:col-span-1" label="Running low" value={fmtNum(c.lowStock)} tone={c.lowStock > 0 ? "warn" : "good"} note="5 or fewer left, or under 2 weeks of sales." />
+        <Stat className="col-span-2 lg:col-span-1" label="Running low" value={fmtNum(c.lowStock)} tone={c.lowStock > 0 ? "warn" : "good"} note="At or under the low-stock threshold, counting every location." />
       </div>
       <h3 className="mt-6 text-sm font-medium">Restock soon</h3>
       {m.lowStockItems.length === 0 ? (
@@ -353,7 +369,7 @@ export function InventoryCard({ m, currency }: { m: InventoryModule; currency: s
                   {[i.variantTitle !== "Default Title" ? i.variantTitle : null, i.sku].filter(Boolean).join(" · ") || "—"}
                 </p>
                 <p className="text-xs text-muted">
-                  {fmtNum(i.quantity)} left{i.dailySales > 0 ? ` · sells ${new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(i.dailySales)}/day` : ""}
+                  {fmtNum(i.quantity)} left{i.dailySales ? ` · sells ${new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(i.dailySales)}/day` : ""}
                 </p>
               </div>
               <Badge tone={coverTone(i.daysOfCover, i.quantity)}>{coverLabel(i.daysOfCover)}</Badge>
@@ -380,7 +396,7 @@ export function InventoryCard({ m, currency }: { m: InventoryModule; currency: s
                   </td>
                   <td className="px-1 py-2 font-mono text-xs text-muted">{i.sku ?? "—"}</td>
                   <td className="px-1 py-2 text-right tabular-nums">{fmtNum(i.quantity)}</td>
-                  <td className="px-1 py-2 text-right tabular-nums">{i.dailySales > 0 ? new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(i.dailySales) : "—"}</td>
+                  <td className="px-1 py-2 text-right tabular-nums">{i.dailySales ? new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(i.dailySales) : "—"}</td>
                   <td className="px-1 py-2">
                     <Badge tone={coverTone(i.daysOfCover, i.quantity)}>{coverLabel(i.daysOfCover)}</Badge>
                   </td>

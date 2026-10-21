@@ -33,3 +33,6 @@ export function removeLocal(key: string): void {
  */
 export const WORKSPACE_KEY = "ws";
 export const storeKey = (workspaceId: string) => `store:${workspaceId}`;
+
+/** Per workspace, the newest note (info alert) the bell has shown, so older ones don't light its dot again. */
+export const notesSeenKey = (workspaceId: string) => `notes-seen:${workspaceId}`;

@@ -1,20 +1,47 @@
+import { signalAccess } from "@/lib/access";
+
 export class ApiError extends Error {
+  /**
+   * A 401 for a session this tab no longer uses: the call was made as the shared-link session,
+   * which the tab was leaving or had left (leaveSharedSession) by the time the answer came. It
+   * says nothing about the session the tab uses now, so it is not "signed out" (isSignedOut).
+   */
+  sessionLeft = false;
   constructor(
     public status: number,
     public code: string,
-    _message: string,
+    message: string,
+    /** The rest of the error body (e.g. `detail`, `problems`), for the few callers that use it. */
+    public data: Record<string, unknown> = {},
     public correlationId?: string,
     public retryAt?: number,
   ) {
-    super(publicErrorMessage(status, code));
+    super(message);
     this.name = "ApiError";
   }
 }
 
-const UNREACHABLE = "We can't reach Insights right now. We'll keep trying.";
+const UNREACHABLE = "We can't reach bizinsights right now. We'll keep trying.";
 
-/** Only a 401 means the session is gone. Anything else must never sign the user out. */
-export const isSignedOut = (e: unknown) => e instanceof ApiError && e.status === 401;
+/**
+ * Only a 401 means the session is gone, and only one for the session the tab uses
+ * (ApiError.sessionLeft). Anything else must never sign the user out.
+ */
+export const isSignedOut = (e: unknown) => e instanceof ApiError && e.status === 401 && !e.sessionLeft;
+
+/**
+ * Dispatched on window whenever any call finds the session gone (the account was deleted or
+ * disabled, or signed out elsewhere), so the signed-in shells can send the person to sign in
+ * instead of leaving them on a page whose background checks quietly keep the last data up.
+ * Only `unauthenticated`: a 401 for a wrong password or a re-authentication is not "signed out".
+ */
+export const SIGNED_OUT_EVENT = "insights:signed-out";
+
+/** Calls `onSignedOut` whenever a call finds the session gone; returns the unsubscribe (an effect's cleanup). */
+export function onSessionGone(onSignedOut: () => void): () => void {
+  window.addEventListener(SIGNED_OUT_EVENT, onSignedOut);
+  return () => window.removeEventListener(SIGNED_OUT_EVENT, onSignedOut);
+}
 
 /**
  * Outage-shaped failures that go away on their own: no response (status 0), a 5xx (the API or its
@@ -22,6 +49,134 @@ export const isSignedOut = (e: unknown) => e instanceof ApiError && e.status ===
  */
 export const isTransient = (e: unknown) =>
   !(e instanceof ApiError) || e.status === 0 || e.status === 408 || e.status === 429 || e.status >= 500;
+
+/**
+ * Refused because of who is asking (Team & Access): no permission for this, or access to the
+ * workspace revoked. What was shown before must not stay on screen.
+ */
+export const isRefused = (e: unknown) => e instanceof ApiError && e.status === 403 && (e.code === "forbidden" || e.code === "access_revoked" || e.code === "access_expired");
+
+/** Message to show for a failed call: a calm "retrying" line for outages, the API's own text otherwise. */
+export function friendlyError(e: unknown): string {
+  if (!(e instanceof ApiError) || e.status === 0 || e.status >= 500) return UNREACHABLE;
+  return publicErrorMessage(e.status, e.code);
+}
+
+/**
+ * Message for a failed action (a save, a delete). Unlike a load, nothing retries an action on its
+ * own, so an outage has to say "try again" rather than friendlyError's "we'll keep trying".
+ */
+export function actionError(e: unknown, what: string): string {
+  if (e instanceof ApiError && e.status === 408) return "The request timed out. Check whether it completed before trying again.";
+  if (isTransient(e)) return `We couldn't reach bizinsights to ${what}. Please try again in a moment.`;
+  return friendlyError(e);
+}
+
+/**
+ * Whether this tab shows a shared dashboard opened from an invitation link. Kept per tab
+ * (sessionStorage): such a tab's calls use the shared-link session only (the API's __share cookie,
+ * chosen by the x-bi-context header), while the browser's other tabs stay in the account signed in
+ * there, if any. The two sessions never mix.
+ */
+const CONTEXT_KEY = "bi:context";
+
+export function isSharedTab(): boolean {
+  try {
+    return sessionStorage.getItem(CONTEXT_KEY) === "shared";
+  } catch {
+    return false;
+  }
+}
+
+export function setSharedTab(on: boolean) {
+  try {
+    if (on) sessionStorage.setItem(CONTEXT_KEY, "shared");
+    else sessionStorage.removeItem(CONTEXT_KEY);
+  } catch {
+    /* storage blocked: the API falls back to the shared session when no account is signed in */
+  }
+}
+
+/** The tab is closing its shared dashboard (leaveSharedSession): see signedOutHere. */
+let leaving = false;
+
+/**
+ * Whether a 401 for a call made as `asShared` (isSharedTab() when it was sent) means this tab
+ * is signed out. It does only while that is still the tab's session and the tab is not leaving
+ * it: closing a shared dashboard signs the shared-link session out while the dashboard's checks
+ * are still in flight as it, and those refusals say nothing about the account the tab goes on
+ * as (so they must not send it to sign in, or say the link has ended, as it leaves).
+ */
+export const signedOutHere = (asShared: boolean): boolean => asShared === isSharedTab() && !(asShared && leaving);
+
+/**
+ * Close the shared dashboard this tab shows: its shared-link session ends, and the tab is the
+ * account's from then on (or nobody's). The sign-out goes first, as the shared-link session,
+ * which the tab still is until it has answered: sent as the account's it would end that
+ * session instead, and the dashboard's checks meanwhile could re-adopt the link session.
+ */
+export async function leaveSharedSession(): Promise<void> {
+  leaving = true;
+  try {
+    await api("/auth/logout", { method: "POST" });
+  } catch {
+    // Unreachable: the session ends with its link anyway. The tab leaves it either way.
+  } finally {
+    setSharedTab(false);
+    leaving = false;
+  }
+}
+
+/** The header that says which session a call uses (none for an account's tab). */
+export const contextHeaders = (): Record<string, string> => (isSharedTab() ? { "x-bi-context": "shared" } : {});
+
+/** A same-origin API address for a plain link (a download), saying the same as contextHeaders where no header can be sent. */
+export const apiHref = (path: string) => `/api${path}${isSharedTab() ? `${path.includes("?") ? "&" : "?"}ctx=shared` : ""}`;
+
+/** Same-origin transport. Preserve shared-tab identity, access signals and auth challenge data. */
+export async function api<T = unknown>(path: string, init: { method?: string; body?: unknown; headers?: Record<string, string>; credentials?: RequestCredentials; referrerPolicy?: ReferrerPolicy; timeoutMs?: number } = {}): Promise<T> {
+  const authenticated = init.credentials !== "omit";
+  const asShared = authenticated && isSharedTab();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), init.timeoutMs ?? 30_000);
+  try {
+    const res = await fetch(`/api${path}`, {
+      method: init.method ?? "GET",
+      credentials: init.credentials ?? "same-origin",
+      referrerPolicy: init.referrerPolicy,
+      headers: { ...(init.body !== undefined ? { "content-type": "application/json" } : {}), ...(authenticated ? contextHeaders() : {}), ...init.headers },
+      body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
+      signal: controller.signal,
+    });
+    const fp = authenticated ? res.headers.get("x-access-fp") : null;
+    if (fp) {
+      const at = fp.lastIndexOf(":");
+      signalAccess({ workspaceId: fp.slice(0, at), fingerprint: fp.slice(at + 1) });
+    }
+    const text = await res.text();
+    let json: unknown = {};
+    try { if (text) json = JSON.parse(text); }
+    catch { if (res.ok) throw new ApiError(502, "bad_response", "Unexpected response from the server"); }
+    if (!res.ok) {
+      const failure = json && typeof json === "object" && !Array.isArray(json) ? json as Record<string, unknown> : {};
+      const code = typeof failure.error === "string" ? failure.error : "error";
+      const message = res.status >= 500 ? UNREACHABLE : !authenticated ? publicErrorMessage(res.status, code) : typeof failure.message === "string" ? failure.message : "Request failed";
+      const err = new ApiError(res.status, code, message, failure,
+        safeCorrelationId(res.headers.get("x-request-id") ?? res.headers.get("cf-ray")),
+        (res.status === 429 || res.status === 503) ? parseRetryAfter(res.headers.get("retry-after")) : undefined);
+      if (authenticated && res.status === 401 && err.code === "unauthenticated") {
+        if (signedOutHere(asShared)) window.dispatchEvent(new Event(SIGNED_OUT_EVENT));
+        else err.sessionLeft = true;
+      }
+      if (authenticated && isRefused(err)) signalAccess({ refused: err.code as "forbidden" | "access_revoked" | "access_expired" });
+      throw err;
+    }
+    return json as T;
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(controller.signal.aborted ? 408 : 0, controller.signal.aborted ? "timeout" : "network", UNREACHABLE);
+  } finally { clearTimeout(timer); }
+}
 
 /** Messages are selected locally; provider responses can contain private diagnostics. */
 function publicErrorMessage(status: number, code: string): string {
@@ -52,47 +207,6 @@ function publicErrorMessage(status: number, code: string): string {
   if (status === 422) return "Check the required fields and correct their formats.";
   if (status === 429) return "Too many requests. Wait a moment before trying again.";
   return "We couldn't complete this request. Check your details and try again.";
-}
-
-export function friendlyError(e: unknown): string {
-  return e instanceof ApiError ? e.message : UNREACHABLE;
-}
-
-/**
- * Message for a failed action (a save, a delete). Unlike a load, nothing retries an action on its
- * own, so an outage has to say "try again" rather than friendlyError's "we'll keep trying".
- */
-export function actionError(e: unknown, what: string): string {
-  if (e instanceof ApiError && e.status === 408) return "The request timed out. Check whether it completed before trying again.";
-  if (isTransient(e)) return `We couldn't reach Insights to ${what}. Please try again in a moment.`;
-  return friendlyError(e);
-}
-
-/** All calls go to same-origin /api/* (served by the Cloudflare Worker). */
-export async function api<T = unknown>(path: string, init: { method?: string; body?: unknown; credentials?: RequestCredentials; referrerPolicy?: ReferrerPolicy; timeoutMs?: number } = {}): Promise<T> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), init.timeoutMs ?? 30_000);
-  try {
-    const res = await fetch(`/api${path}`, {
-      method: init.method ?? "GET", credentials: init.credentials ?? "same-origin", referrerPolicy: init.referrerPolicy,
-      headers: init.body !== undefined ? { "content-type": "application/json" } : undefined,
-      body: init.body !== undefined ? JSON.stringify(init.body) : undefined, signal: controller.signal,
-    });
-    const text = await res.text();
-    let json: { error?: string; message?: string } = {};
-    try { if (text) json = JSON.parse(text); }
-    catch { if (res.ok) throw new ApiError(502, "bad_response", ""); }
-    if (!res.ok) {
-      const failure = json && typeof json === "object" ? json : {};
-      throw new ApiError(res.status, typeof failure.error === "string" ? failure.error : "error", "",
-        safeCorrelationId(res.headers.get("x-request-id") ?? res.headers.get("cf-ray")),
-        (res.status === 429 || res.status === 503) ? parseRetryAfter(res.headers.get("retry-after")) : undefined);
-    }
-    return json as T;
-  } catch (error) {
-    if (error instanceof ApiError) throw error;
-    throw new ApiError(controller.signal.aborted ? 408 : 0, controller.signal.aborted ? "timeout" : "network", "");
-  } finally { clearTimeout(timer); }
 }
 
 /** Retry-After accepts a delta in seconds or an HTTP date. Invalid hints are ignored. */

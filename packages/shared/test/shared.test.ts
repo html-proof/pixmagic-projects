@@ -2,32 +2,40 @@ import { describe, expect, it } from "vitest";
 import { randomBytes } from "node:crypto";
 import {
   aggregateDaily,
+  orderMoment,
   can,
   channelLabel,
+  ALL_HISTORY,
+  adsHistoryStart,
   clampCustomRange,
+  comparisonImported,
   customRangeProblem,
   decrypt,
   eachDay,
   delta,
   encrypt,
   expandScopes,
-  generateOtp,
-  hashOtp,
+  firstWholeDay,
+  historyStart,
   isDay,
   keyVersionOf,
   localDay,
+  localTime,
   normalizeShopDomain,
   parseKeyring,
   resolveCapabilities,
   resolvePreset,
+  saleValue,
   scopesForModule,
   signShopifyQuery,
   signWebhookBody,
   summarize,
   summarizeJourney,
-  verifyOtp,
   verifyShopifyQueryHmac,
   verifyShopifyWebhookHmac,
+  visitsHistoryStart,
+  yearEarlier,
+  type SaleInput,
 } from "../src/index.js";
 
 const SECRET = "shpss_test_secret";
@@ -91,17 +99,6 @@ describe("token encryption", () => {
   it("rejects bad keys", () => {
     expect(() => parseKeyring("1:short")).toThrow();
     expect(() => parseKeyring("")).toThrow();
-  });
-});
-
-describe("OTP", () => {
-  it("generates 6 digits and verifies only the right code for the right email", () => {
-    for (let i = 0; i < 50; i++) expect(generateOtp()).toMatch(/^\d{6}$/);
-    const h = hashOtp("012345", "A@x.com", "pep");
-    expect(verifyOtp("012345", "a@x.com", "pep", h)).toBe(true);
-    expect(verifyOtp("012346", "a@x.com", "pep", h)).toBe(false);
-    expect(verifyOtp("012345", "b@x.com", "pep", h)).toBe(false);
-    expect(verifyOtp("12345", "a@x.com", "pep", h)).toBe(false);
   });
 });
 
@@ -200,9 +197,26 @@ describe("dates & time zones", () => {
     const now = new Date("2026-10-02T12:00:00Z");
     const { range, previous } = resolvePreset("7d", now, "UTC");
     expect(range).toEqual({ from: "2026-09-26", to: "2026-10-02" });
-    expect(previous).toEqual({ from: "2026-09-19", to: "2026-09-25" });
+    expect(previous).toEqual({ from: "2026-09-19", to: "2026-09-25", until: "12:00:00" });
     expect(resolvePreset("mtd", now, "UTC").range.from).toBe("2026-10-01");
     expect(() => resolvePreset("custom", now, "UTC", { from: "2026-10-02", to: "2026-10-01" })).toThrow();
+  });
+
+  it("compares a range that is still running up to the same time of day, as Shopify does", () => {
+    // 17 Oct, 4:44:12 pm in Melbourne (AEDT, UTC+11).
+    const now = new Date("2026-10-17T05:44:12Z");
+    const tz = "Australia/Melbourne";
+    expect(localTime(now, tz)).toBe("16:44:12");
+    // Today so far against yesterday until the same moment, not the whole of yesterday.
+    expect(resolvePreset("today", now, tz)).toEqual({ range: { from: "2026-10-17", to: "2026-10-17" }, previous: { from: "2026-10-16", to: "2026-10-16", until: "16:44:12" } });
+    expect(resolvePreset("7d", now, tz).previous).toEqual({ from: "2026-10-04", to: "2026-10-10", until: "16:44:12" });
+    // A custom range ending today runs too; one that ended earlier doesn't.
+    expect(resolvePreset("custom", now, tz, { from: "2026-10-15", to: "2026-10-31" }).previous.until).toBe("16:44:12");
+    expect(resolvePreset("custom", now, tz, { from: "2026-10-01", to: "2026-10-16" }).previous.until).toBeUndefined();
+    // Finished days are compared whole.
+    for (const preset of ["yesterday", "lastmonth"] as const) expect(resolvePreset(preset, now, tz).previous.until, preset).toBeUndefined();
+    // Just after midnight: a few seconds of yesterday, on a 24-hour clock ("00", never "24").
+    expect(resolvePreset("today", new Date("2026-10-16T13:00:05Z"), tz).previous).toEqual({ from: "2026-10-16", to: "2026-10-16", until: "00:00:05" });
   });
 
   it("resolves last month as the whole calendar month, against the whole month before it", () => {
@@ -263,9 +277,10 @@ describe("dates & time zones", () => {
 
     // 1–31 Oct is reported as 1–9 Oct and compared with the 9 days before, not with 31.
     expect(customRangeProblem({ from: "2026-10-01", to: "2026-10-31" }, today)).toBeNull();
+    // The 9th is still running (01:00), so the 30th counts up to 01:00.
     expect(resolvePreset("custom", now, sydney, { from: "2026-10-01", to: "2026-10-31" })).toEqual({
       range: { from: "2026-10-01", to: "2026-10-09" },
-      previous: { from: "2026-09-22", to: "2026-09-30" },
+      previous: { from: "2026-09-22", to: "2026-09-30", until: "01:00:00" },
     });
     expect(clampCustomRange({ from: "2026-10-01", to: "2026-10-05" }, today)).toEqual({ from: "2026-10-01", to: "2026-10-05" });
 
@@ -282,62 +297,290 @@ describe("dates & time zones", () => {
   });
 });
 
+describe("what the dates are compared with", () => {
+  // 17 Oct 2026, 4:44:12 pm in Melbourne (AEDT, UTC+11).
+  const now = new Date("2026-10-17T05:44:12Z");
+  const tz = "Australia/Melbourne";
+
+  it("compares with the period just before unless asked otherwise", () => {
+    expect(resolvePreset("30d", now, tz, undefined, { mode: "previous" })).toEqual(resolvePreset("30d", now, tz));
+    expect(resolvePreset("lastmonth", now, tz, undefined, { mode: "previous" }).previous).toEqual({ from: "2026-08-01", to: "2026-08-31" });
+  });
+
+  it("compares with the same dates a year earlier, like for like while they run", () => {
+    // Today until 4:44 pm against 17 Oct 2025 until 4:44 pm.
+    expect(resolvePreset("today", now, tz, undefined, { mode: "year" })).toEqual({
+      range: { from: "2026-10-17", to: "2026-10-17" },
+      previous: { from: "2025-10-17", to: "2025-10-17", until: "16:44:12" },
+    });
+    expect(resolvePreset("mtd", now, tz, undefined, { mode: "year" }).previous).toEqual({ from: "2025-10-01", to: "2025-10-17", until: "16:44:12" });
+    // Finished dates are compared whole: September against September.
+    expect(resolvePreset("lastmonth", now, tz, undefined, { mode: "year" }).previous).toEqual({ from: "2025-09-01", to: "2025-09-30" });
+    expect(resolvePreset("custom", now, tz, { from: "2026-03-01", to: "2026-03-14" }, { mode: "year" }).previous).toEqual({ from: "2025-03-01", to: "2025-03-14" });
+  });
+
+  it("maps 29 February to the 28th a year earlier", () => {
+    expect(yearEarlier("2028-02-29")).toBe("2027-02-28");
+    expect(yearEarlier("2028-03-01")).toBe("2027-03-01");
+    expect(yearEarlier("2029-02-28")).toBe("2028-02-28");
+    // February 2028 (29 days) against February 2027 (28).
+    expect(resolvePreset("lastmonth", new Date("2028-03-05T12:00:00Z"), "UTC", undefined, { mode: "year" })).toEqual({
+      range: { from: "2028-02-01", to: "2028-02-29" },
+      previous: { from: "2027-02-01", to: "2027-02-28" },
+    });
+    expect(resolvePreset("custom", new Date("2028-03-05T12:00:00Z"), "UTC", { from: "2028-02-29", to: "2028-02-29" }, { mode: "year" }).previous).toEqual({
+      from: "2027-02-28",
+      to: "2027-02-28",
+    });
+  });
+
+  it("compares with custom dates, cut at the same time of day while the range runs", () => {
+    // Shopify's "Today" against 14 Mar 2026: that day until 4:44 pm.
+    expect(resolvePreset("today", now, tz, undefined, { mode: "custom", from: "2026-03-14", to: "2026-03-14" }).previous).toEqual({
+      from: "2026-03-14",
+      to: "2026-03-14",
+      until: "16:44:12",
+    });
+    // Any length, even overlapping the range; finished dates against whole days.
+    expect(resolvePreset("yesterday", now, tz, undefined, { mode: "custom", from: "2026-10-01", to: "2026-10-16" }).previous).toEqual({ from: "2026-10-01", to: "2026-10-16" });
+    // Running past the store's today: counted up to today, as a custom range is.
+    expect(resolvePreset("lastmonth", now, tz, undefined, { mode: "custom", from: "2026-10-01", to: "2026-10-31" }).previous).toEqual({ from: "2026-10-01", to: "2026-10-17" });
+  });
+
+  it("refuses custom comparison dates that can't be reported on", () => {
+    const custom = (from?: string, to?: string) => () => resolvePreset("7d", now, tz, undefined, { mode: "custom", from, to });
+    expect(custom()).toThrow("Invalid comparison dates");
+    expect(custom("2026-03-14")).toThrow("Invalid comparison dates");
+    expect(custom("2026-03-14", "2026-02-31")).toThrow("Invalid comparison dates");
+    expect(custom("2026-03-14", "2026-03-01")).toThrow("Invalid comparison dates");
+    expect(custom("0202-03-01", "2026-03-14")).toThrow("Invalid comparison dates");
+    expect(custom("2026-10-18", "2026-10-20")).toThrow("Comparison starts after today");
+    expect(custom("2025-01-01", "2026-01-02")).toThrow("Comparison too long");
+    // The dates picked are checked first.
+    expect(() => resolvePreset("custom", now, tz, { from: "2026-10-18", to: "2026-10-19" }, { mode: "custom" })).toThrow("Range starts after today");
+  });
+
+  it("knows when the imported orders don't reach back to the comparison", () => {
+    expect(comparisonImported({ from: "2026-08-18", to: "2026-09-16" }, "2026-08-18")).toBe(true);
+    // Partly before the first imported order: a period mostly missing, not a drop.
+    expect(comparisonImported({ from: "2026-08-17", to: "2026-09-16" }, "2026-08-18")).toBe(false);
+    expect(comparisonImported({ from: "2025-10-17", to: "2025-10-17" }, "2026-08-18")).toBe(false);
+    expect(comparisonImported({ from: "2026-10-16", to: "2026-10-16" }, null)).toBe(false);
+  });
+
+  it("starts the imported history where the import window did, not at a quiet store's first order", () => {
+    const tz = "Australia/Melbourne";
+    // Imported 17 Oct 2026 at 10:00 in Melbourne (23:00Z the day before): Shopify's 60 days begin
+    // at 10:00 on 18 Aug, a day only partly imported, so 19 Aug is the first whole day.
+    const window = new Date("2026-08-18T00:00:00Z");
+    // A quiet store: its first order came on 25 Aug, but 19 to 24 Aug were imported too (no orders).
+    expect(historyStart(window, tz, "2026-08-25")).toBe("2026-08-19");
+    const lastThirty = { from: "2026-08-19", to: "2026-09-17" };
+    expect(comparisonImported(lastThirty, historyStart(window, tz, "2026-08-25"))).toBe(true);
+    // What the first order alone used to say about the same comparison.
+    expect(comparisonImported(lastThirty, "2026-08-25")).toBe(false);
+    // Still not before the window: that is what Shopify didn't share.
+    expect(comparisonImported({ from: "2026-08-18", to: "2026-09-16" }, historyStart(window, tz, "2026-08-25"))).toBe(false);
+    // A window from the store's midnight covers that whole day.
+    expect(historyStart(new Date("2026-08-18T14:00:00Z"), tz, null)).toBe("2026-08-19");
+    expect(historyStart(new Date("2026-08-18T14:00:01Z"), tz, null)).toBe("2026-08-20");
+    // Orders older than the window (an earlier import, before the window was recorded) count from the first.
+    expect(historyStart(window, tz, "2026-07-02")).toBe("2026-07-02");
+    // A store whose import predates the record: the first order, as before.
+    expect(historyStart(null, tz, "2026-08-25")).toBe("2026-08-25");
+    expect(historyStart(null, tz, null)).toBeNull();
+    // Imported, no orders at all: the window is still known, and its days hold no sales.
+    expect(historyStart(window, tz, null)).toBe("2026-08-19");
+    // read_all_orders: the whole history, so no comparison is "before the import".
+    expect(historyStart(new Date(0), tz, "2026-08-25")).toBe(ALL_HISTORY);
+    expect(comparisonImported({ from: "2019-01-01", to: "2019-01-31" }, historyStart(new Date(0), tz, "2026-08-25"))).toBe(true);
+  });
+
+  it("counts store visits from the first whole day after the pixel was put in place", () => {
+    const tz = "Australia/Melbourne";
+    // Put in place at 10:00 on 18 Aug in Melbourne (00:00Z): the 18th was only partly counted.
+    const installed = new Date("2026-08-18T00:00:00Z");
+    expect(firstWholeDay(installed, tz)).toBe("2026-08-19");
+    // At the store's midnight, that day was counted whole.
+    expect(firstWholeDay(new Date("2026-08-18T14:00:00Z"), tz)).toBe("2026-08-19");
+    // Visits on the install day itself don't make it a whole day.
+    expect(visitsHistoryStart(installed, tz, "2026-08-18")).toBe("2026-08-19");
+    expect(visitsHistoryStart(installed, tz, "2026-08-25")).toBe("2026-08-19");
+    expect(visitsHistoryStart(installed, tz, null)).toBe("2026-08-19");
+    // Visits from an earlier day: a pixel already in place before bizinsights recorded it.
+    expect(visitsHistoryStart(installed, tz, "2026-08-10")).toBe("2026-08-10");
+    // No install recorded: the first visit's day.
+    expect(visitsHistoryStart(null, tz, "2026-08-25")).toBe("2026-08-25");
+    expect(visitsHistoryStart(null, tz, null)).toBeNull();
+    // The last 30 days on 17 Oct reach back before a pixel added at noon on 1 Oct: not compared.
+    const added = visitsHistoryStart(new Date("2026-10-01T02:00:00Z"), tz, "2026-10-01");
+    expect(added).toBe("2026-10-02");
+    expect(comparisonImported({ from: "2026-09-17", to: "2026-10-16" }, added)).toBe(false);
+    expect(comparisonImported({ from: "2026-10-02", to: "2026-10-09" }, added)).toBe(true);
+  });
+
+  it("compares ad figures from the latest start among the accounts counted", () => {
+    // Two accounts connected two months apart: only from the later one's start are both in.
+    expect(adsHistoryStart(["2026-05-01", "2026-07-20"])).toBe("2026-07-20");
+    expect(adsHistoryStart(["2026-07-20", "2026-05-01"])).toBe("2026-07-20");
+    // One not synced yet holds no figures, so it changes neither period: left out.
+    expect(adsHistoryStart(["2026-05-01", null])).toBe("2026-05-01");
+    expect(adsHistoryStart([null])).toBeNull();
+    expect(adsHistoryStart([])).toBeNull();
+    expect(comparisonImported({ from: "2026-07-19", to: "2026-08-17" }, adsHistoryStart(["2026-05-01", "2026-07-20"]))).toBe(false);
+  });
+});
+
 describe("KPIs", () => {
   const tz = "America/New_York";
   const orders = [
-    {
-      createdAt: new Date("2026-03-01T15:00:00Z"),
-      cancelledAt: null,
-      customerKey: "c1",
-      isReturningCustomer: false,
-      lineItems: [{ price: 50, quantity: 2, discount: 10 }],
-    },
-    {
-      createdAt: new Date("2026-03-01T16:00:00Z"),
-      cancelledAt: null,
-      customerKey: "c2",
-      isReturningCustomer: true,
-      lineItems: [{ price: 20, quantity: 1, discount: 0 }],
-    },
-    {
-      createdAt: new Date("2026-03-01T17:00:00Z"),
-      cancelledAt: new Date("2026-03-01T18:00:00Z"),
-      customerKey: null,
-      isReturningCustomer: false,
-      lineItems: [{ price: 999, quantity: 1, discount: 0 }],
-    },
-    {
-      // 01:00 UTC on Mar 2 is still Mar 1 in New York
-      createdAt: new Date("2026-03-02T01:00:00Z"),
-      cancelledAt: null,
-      customerKey: null,
-      isReturningCustomer: false,
-      lineItems: [{ price: 30, quantity: 1, discount: 0 }],
-    },
+    { id: "o1", createdAt: new Date("2026-03-01T15:00:00Z"), customerKey: "c1", isReturningCustomer: false },
+    { id: "o2", createdAt: new Date("2026-03-01T16:00:00Z"), customerKey: "c2", isReturningCustomer: true },
+    // Cancelled later: still an order of the day it was placed, as in Shopify's reports.
+    { id: "o3", createdAt: new Date("2026-03-01T17:00:00Z"), customerKey: null, isReturningCustomer: false },
+    // 01:00 UTC on Mar 2 is still Mar 1 in New York
+    { id: "o4", createdAt: new Date("2026-03-02T01:00:00Z"), customerKey: null, isReturningCustomer: false },
   ];
-  const refunds = [
-    { orderId: "o1", createdAt: new Date("2026-03-03T15:00:00Z"), lineSubtotal: 45 },
+  const sale = (over: Partial<SaleInput> & Pick<SaleInput, "orderId" | "happenedAt">): SaleInput => ({
+    actionType: "order",
+    lineType: "product",
+    quantity: 1,
+    amount: 0,
+    discount: 0,
+    tax: 0,
+    ...over,
+  });
+  const placed = new Date("2026-03-01T15:00:00Z");
+  const sales: SaleInput[] = [
+    // o1: two items at 50 less 10 discount, 10% tax on top, plus 5 shipping (tax 0.50).
+    sale({ orderId: "o1", happenedAt: placed, quantity: 2, amount: 99, discount: 10, tax: 9 }),
+    sale({ orderId: "o1", happenedAt: placed, lineType: "shipping", quantity: null, amount: 5.5, tax: 0.5 }),
+    // o2: a 22 item whose price includes 2 of tax (GST-style), and a gift card and a tip, which count nowhere.
+    sale({ orderId: "o2", happenedAt: new Date("2026-03-01T16:00:00Z"), amount: 22, tax: 2 }),
+    sale({ orderId: "o2", happenedAt: new Date("2026-03-01T16:00:00Z"), lineType: "gift_card", amount: 50 }),
+    sale({ orderId: "o2", happenedAt: new Date("2026-03-01T16:00:00Z"), lineType: "tip", amount: 3 }),
+    // o3: 999 sold, then cancelled the same evening (a return on the day of the cancellation).
+    sale({ orderId: "o3", happenedAt: new Date("2026-03-01T17:00:00Z"), amount: 999 }),
+    sale({ orderId: "o3", happenedAt: new Date("2026-03-01T18:00:00Z"), actionType: "return", amount: -999 }),
+    // o4: 30, late in the evening in New York.
+    sale({ orderId: "o4", happenedAt: new Date("2026-03-02T01:00:00Z"), amount: 30 }),
+    // o1 refunds one item on Mar 3 (45 + 4.50 tax).
+    sale({ orderId: "o1", happenedAt: new Date("2026-03-03T15:00:00Z"), actionType: "return", amount: -49.5, tax: -4.5 }),
   ];
 
-  it("aggregates per local day, excludes cancelled orders, books refunds on refund date", () => {
-    const daily = aggregateDaily(orders, refunds, tz, localDay);
+  it("counts orders on the day placed, cancelled ones too; sales on the day they happened", () => {
+    const daily = aggregateDaily(orders, sales, tz, localDay);
     const d1 = daily.get("2026-03-01")!;
-    expect(d1.orders).toBe(3);
-    expect(d1.grossSales).toBe(150);
-    expect(d1.discounts).toBe(10);
+    expect(d1.orders).toBe(4);
     expect(d1.ordersWithCustomer).toBe(2);
     expect(d1.returningCustomerOrders).toBe(1);
-    expect(daily.get("2026-03-03")!.refunds).toBe(45);
-    expect(daily.get("2026-03-03")!.refundedOrders).toBe(1);
+    // 100 (o1) + 20 (o2, its tax taken out) + 999 (o3) + 30 (o4)
+    expect(d1.grossSales).toBeCloseTo(1149, 6);
+    expect(d1.discounts).toBe(10);
+    // The cancellation is a return the same day.
+    expect(d1.refunds).toBe(999);
+    expect(d1.shipping).toBe(5);
+    expect(d1.taxes).toBeCloseTo(11.5, 6);
+    // Net 140 + shipping 5 + taxes 11.50; the gift card and the tip are in neither.
+    expect(d1.totalSales).toBeCloseTo(156.5, 6);
+    // The gift card is an item sold (Shopify's net items sold), though no sale; the tip isn't.
+    expect(d1.units).toBe(6 - 1);
+    expect(d1.refundedOrders).toBe(1);
+
+    const d3 = daily.get("2026-03-03")!;
+    expect(d3.orders).toBe(0);
+    expect(d3.refunds).toBe(45);
+    expect(d3.taxes).toBe(-4.5);
+    expect(d3.totalSales).toBe(-49.5);
+    expect(d3.units).toBe(-1);
+    expect(d3.refundedOrders).toBe(1);
+  });
+
+  // Found 2026-10-19 by checking a dev store of seeded orders against its own ShopifyQL sales report.
+  it("counts an order on the day Shopify processed it, as its reports do", () => {
+    // Imported (or synced from POS offline) on 5 Mar for a sale on 1 Mar: Shopify reports it on 1 Mar.
+    const imported = { createdAt: new Date("2026-03-05T15:00:00Z"), processedAt: new Date("2026-03-01T15:00:00Z"), customerKey: null, isReturningCustomer: false };
+    const daily = aggregateDaily([imported], [sale({ orderId: "i", happenedAt: imported.processedAt, amount: 40 })], tz, localDay);
+    expect(daily.get("2026-03-01")).toMatchObject({ orders: 1, grossSales: 40 });
+    expect(daily.has("2026-03-05")).toBe(false);
+    // Stored before its processed date was read: its creation stands in.
+    expect(orderMoment({ createdAt: imported.createdAt, processedAt: null })).toEqual(imported.createdAt);
+  });
+
+  it("leaves orders of gift cards only out of orders and customers, but counts their cards as items", () => {
+    const giftCards = { createdAt: placed, giftCardOnly: true, customerKey: "c9", isReturningCustomer: false };
+    const daily = aggregateDaily([giftCards], [sale({ orderId: "g", happenedAt: placed, lineType: "gift_card", quantity: 2, amount: 100 })], tz, localDay);
+    expect(daily.get("2026-03-01")).toMatchObject({ orders: 0, ordersWithCustomer: 0, grossSales: 0, totalSales: 0, units: 2 });
+    expect(summarize([...daily.values()]).averageOrderValue).toBeNull();
+  });
+
+  it("values the average order on the day it was placed: an edit that day counts, one on a later day doesn't", () => {
+    const o = { id: "e", createdAt: placed, customerKey: null, isReturningCustomer: false };
+    const daily = aggregateDaily(
+      [o],
+      [
+        sale({ orderId: "e", happenedAt: placed, amount: 110, discount: 10, tax: 10 }),
+        // Edited the same evening (still 1 Mar in New York), then again on 3 Mar.
+        sale({ orderId: "e", happenedAt: new Date("2026-03-01T20:00:00Z"), amount: 22, tax: 2 }),
+        sale({ orderId: "e", happenedAt: new Date("2026-03-03T15:00:00Z"), amount: 33, tax: 3 }),
+      ],
+      tz,
+      localDay,
+    );
+    const s = summarize([...daily.values()]);
+    expect(s.grossSales).toBe(160);
+    // (110 − 10) + (22 − 2): Shopify's AOV leaves out what an edit adds on a later day.
+    expect(s.averageOrderValue).toBe(120);
   });
 
   it("summarizes with documented formulas", () => {
-    const s = summarize([...aggregateDaily(orders, refunds, tz, localDay).values()]);
-    expect(s.grossSales).toBe(150);
-    expect(s.netSales).toBe(150 - 10 - 45);
-    expect(s.averageOrderValue).toBe(46.67);
-    expect(s.refundRate).toBeCloseTo(45 / 140);
+    const s = summarize([...aggregateDaily(orders, sales, tz, localDay).values()]);
+    expect(s.grossSales).toBe(1149);
+    expect(s.discounts).toBe(10);
+    expect(s.refunds).toBe(1044);
+    expect(s.netSales).toBe(1149 - 10 - 1044);
+    expect(s.shipping).toBe(5);
+    expect(s.taxes).toBe(7);
+    expect(s.totalSales).toBe(95 + 5 + 7);
+    // (gross − discounts) ÷ orders, before returns, as Shopify's average order value.
+    expect(s.averageOrderValue).toBe(284.75);
+    expect(s.refundRate).toBeCloseTo(1044 / 1139);
     expect(s.returningCustomerRate).toBe(0.5);
+  });
+
+  it("values a sale before tax, with the sign Shopify gave it", () => {
+    expect(saleValue({ actionType: "order", amount: 110, tax: 10 })).toEqual({ value: 100, tax: 10 });
+    expect(saleValue({ actionType: "return", amount: -110, tax: -10 })).toEqual({ value: -100, tax: -10 });
+    // A refund's adjustment lines come with both signs; each keeps its own.
+    expect(saleValue({ actionType: "return", amount: 225.1, tax: 0 })).toEqual({ value: 225.1, tax: 0 });
+    // An edit can go either way.
+    expect(saleValue({ actionType: "update", amount: -5, tax: 0 })).toEqual({ value: -5, tax: 0 });
+  });
+
+  // Regression: two PixMagic refunds as Shopify recorded them (2026-09). Forcing every return line
+  // negative counted A$586.70 of returns where Shopify counts A$45.50, so net and total sales were
+  // A$541.20 short.
+  it("adds a refund's adjustment lines up with their signs, as Shopify's reports do", () => {
+    const at = new Date("2026-09-11T05:33:05Z");
+    const refunds: SaleInput[] = [
+      // #2727S: the item (206.10 with 18.74 GST, 20.81 of it discount) and its shipping refunded, and
+      // a pair of adjustments that cancel out.
+      sale({ orderId: "a", happenedAt: at, actionType: "return", quantity: -1, amount: -206.1, discount: -20.81, tax: -18.74 }),
+      sale({ orderId: "a", happenedAt: at, actionType: "return", lineType: "shipping", quantity: null, amount: -19, tax: -1.73 }),
+      sale({ orderId: "a", happenedAt: at, actionType: "return", lineType: "adjustment", quantity: null, amount: 225.1 }),
+      sale({ orderId: "a", happenedAt: at, actionType: "return", lineType: "adjustment", quantity: null, amount: -225.1 }),
+      // #2804S: 45.50 given back with no item returned.
+      sale({ orderId: "b", happenedAt: at, actionType: "return", lineType: "adjustment", quantity: null, amount: 45.5 }),
+      sale({ orderId: "b", happenedAt: at, actionType: "return", lineType: "adjustment", quantity: null, amount: -45.5 }),
+      sale({ orderId: "b", happenedAt: at, actionType: "return", lineType: "adjustment", quantity: null, amount: -45.5 }),
+    ];
+    const d = aggregateDaily([], refunds, "Australia/Melbourne", localDay).get("2026-09-11")!;
+    expect(d.refunds).toBeCloseTo(187.36 + 45.5, 6);
+    expect(d.shipping).toBeCloseTo(-17.27, 6);
+    expect(d.taxes).toBeCloseTo(-20.47, 6);
+    expect(d.totalSales).toBeCloseTo(-(206.1 + 19 + 45.5), 6);
+    expect(d.units).toBe(-1);
+    expect(d.refundedOrders).toBe(2);
   });
 
   it("returns null ratios for empty data instead of fake zeros", () => {

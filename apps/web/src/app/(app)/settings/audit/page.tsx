@@ -1,9 +1,8 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { canManage, useApp } from "@/components/AppContext";
-import { LoadError } from "@/components/LoadError";
-import { ErrorState } from "@/components/ErrorState";
-import { api } from "@/lib/api";
+import { Alert } from "@/components/ui";
+import { friendlyError, api } from "@/lib/api";
 
 interface Item { id: string; action: string; actor: string | null; targetType: string | null; targetId: string | null; createdAt: string }
 
@@ -28,7 +27,11 @@ const DESCRIBE: Record<string, string> = {
   "billing.plan_changed": "Shopify approved a plan change",
   "billing.plan_change_ended": "a plan change was not approved in Shopify",
   "billing.subscription_ended": "the Shopify subscription ended; the workspace is on the free plan",
-  "gdpr.customer_data_request": "received a customer data request (no personal data is stored)",
+  "billing.cancelled": "switched to the Free plan (the Shopify subscription was cancelled)",
+  "gdpr.customer_data_request": "received a customer data request from Shopify (Settings, Privacy requests)",
+  "gdpr.data_request_downloaded": "downloaded a customer's data for a privacy request",
+  "gdpr.shop_redact_skipped": "kept a store's data: it was installed again before Shopify's deletion request arrived",
+  "workspace.claimed": "added a store installed from Shopify to their account",
   "gdpr.customer_redacted": "processed a customer deletion request",
   "gdpr.shop_redacted": "deleted all data for a store at Shopify's request",
 };
@@ -37,7 +40,7 @@ export default function AuditPage() {
   const { workspace } = useApp();
   const [items, setItems] = useState<Item[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
-  const [error, setError] = useState<unknown>(null);
+  const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const allowed = canManage(workspace.role);
   /** Bumped on every workspace switch: a response for the previous workspace is dropped. */
@@ -53,7 +56,7 @@ export default function AuditPage() {
       setItems((prev) => (c ? [...prev, ...r.items] : r.items));
       setCursor(r.nextCursor);
     } catch (e) {
-      if (gen === generation.current) setError(e);
+      if (gen === generation.current) setError(friendlyError(e));
     } finally {
       if (gen === generation.current) setLoading(false);
     }
@@ -66,11 +69,11 @@ export default function AuditPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspace.id, allowed]);
 
-  if (!allowed) return <ErrorState kind="forbidden" />;
+  if (!allowed) return <Alert kind="info">Only owners and admins can view the audit log.</Alert>;
   return (
     <section className="card space-y-3">
       <h1 className="text-lg font-semibold">Audit log</h1>
-      {error !== null && <LoadError what="the audit log" error={error} onRetry={() => void load(items.length ? cursor : null)} busy={loading} />}
+      {error && <Alert>{error}</Alert>}
       <ul className="divide-y divide-border text-sm">
         {items.map((i) => (
           <li key={i.id} className="flex flex-wrap gap-2 py-2">

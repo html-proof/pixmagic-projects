@@ -1,76 +1,109 @@
 "use client";
-import { GoogleAuthProvider, OAuthProvider, signInWithPopup } from "firebase/auth";
-import { useRouter } from "next/navigation";
-import { useState } from "react";
-import { firebaseAuth } from "@/lib/firebase";
-import { afterSignIn, authErrorMessage, establishSession } from "@/lib/session";
-import { Alert } from "./ui";
+import Link from "next/link";
+import { useEffect, useState, type ReactNode } from "react";
+import { authConfig, continueWith, type AuthConfig, type SocialProvider } from "@/lib/auth";
+import { peekReturnTo } from "@/lib/returnTo";
 
-/** Firebase's answers when a provider isn't switched on, or isn't set up, for this project. */
-const NOT_CONFIGURED = new Set([
-  "auth/operation-not-allowed",
-  "auth/configuration-not-found",
-  "auth/invalid-oauth-client-id",
-  "auth/unauthorized-domain",
-  // The build has no NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: popups have nowhere to sign in.
-  "auth/auth-domain-config-required",
-]);
+function GoogleMark() {
+  return (
+    <svg aria-hidden width="18" height="18" viewBox="0 0 48 48">
+      <path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z" />
+      <path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z" />
+      <path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-8l-6.5 5C9.5 39.6 16.2 44 24 44z" />
+      <path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z" />
+    </svg>
+  );
+}
 
-type Provider = { name: "Google" | "Apple"; make: () => GoogleAuthProvider | OAuthProvider };
-
-const PROVIDERS: Provider[] = [
-  { name: "Google", make: () => new GoogleAuthProvider() },
-  {
-    name: "Apple",
-    make: () => {
-      const p = new OAuthProvider("apple.com");
-      p.addScope("email");
-      p.addScope("name");
-      return p;
-    },
-  },
+const PROVIDERS: Array<{ id: SocialProvider; name: string; Mark: () => React.JSX.Element }> = [
+  { id: "google", name: "Google", Mark: GoogleMark },
 ];
 
 /**
- * "Continue with Google / Apple" for both the log-in and sign-up pages: Firebase creates the
- * account the first time, so the same button does both. The session is our httpOnly cookie
- * (POST /auth/session), not anything kept in the page.
+ * "Continue with Google" for both the sign-in and create-account pages: the user pool
+ * creates the account the first time, so the same button does both. A full-page redirect through
+ * Cognito to the provider and back to /auth/callback; the session is our httpOnly cookie.
+ * `row`: the split auth pages' compact buttons, centered under the "or continue with" divider
+ * (side by side if another provider is added later). `large` draws them stacked at AuthCard's size.
+ *
+ * Only the providers this deployment has switched on are drawn, and nothing at all (`before` and
+ * `after`, the divider, included) when it has none. If the settings can't be read, every button
+ * stays: the server says on its own page if one isn't set up. `keep` false: "Keep me signed in"
+ * was unticked on the page. `terms`: the notice that continuing accepts the Terms and Privacy Policy
+ * (the pages where it creates an account).
  */
-export function SocialButtons() {
-  const router = useRouter();
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+export function SocialButtons({
+  row = false,
+  large = false,
+  keep = true,
+  terms = false,
+  before,
+  after,
+}: {
+  row?: boolean;
+  large?: boolean;
+  keep?: boolean;
+  terms?: boolean;
+  before?: ReactNode;
+  after?: ReactNode;
+}) {
+  // undefined: still asking; null: couldn't tell.
+  const [config, setConfig] = useState<AuthConfig | null | undefined>(undefined);
+  const [leaving, setLeaving] = useState<SocialProvider | null>(null);
 
-  async function go(provider: Provider) {
-    setBusy(true);
-    setError(null);
-    try {
-      const cred = await signInWithPopup(firebaseAuth(), provider.make());
-      await establishSession(cred.user);
-      router.replace(afterSignIn());
-    } catch (e) {
-      const code = (e as { code?: string }).code ?? "";
-      if (NOT_CONFIGURED.has(code)) {
-        // Nothing the person can fix: say which option is unavailable, and leave the setting to
-        // fix where whoever deploys this will look (Firebase console → Authentication).
-        console.error(`[auth] ${provider.name} sign-in is not set up for this Firebase project (${code}): Authentication → Sign-in method / Settings → Authorized domains, and NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN in the web build`);
-        setError(`Sign in with ${provider.name} isn't available yet. Please use ${provider.name === "Google" ? "Apple" : "Google"} or your email address.`);
-      } else {
-        setError(authErrorMessage(e));
-      }
-    } finally {
-      setBusy(false);
-    }
-  }
+  useEffect(() => {
+    authConfig()
+      .then(setConfig)
+      .catch(() => setConfig(null));
+    // Back from the provider with the browser's Back button (a page restored from cache): usable again.
+    const reset = () => setLeaving(null);
+    window.addEventListener("pageshow", reset);
+    return () => window.removeEventListener("pageshow", reset);
+  }, []);
+
+  const shown = config === undefined ? [] : PROVIDERS.filter((p) => config === null || config.providers[p.id]);
+  if (!shown.length) return null;
 
   return (
-    <div className="space-y-2">
-      {error && <Alert>{error}</Alert>}
-      {PROVIDERS.map((p) => (
-        <button key={p.name} type="button" className="btn-secondary w-full" disabled={busy} onClick={() => go(p)}>
-          Continue with {p.name}
-        </button>
-      ))}
-    </div>
+    <>
+      {before}
+      <div className={row ? "flex flex-wrap justify-center gap-3" : large ? "space-y-3" : "space-y-2"}>
+        {shown.map(({ id, name, Mark }) => (
+          <button
+            key={id}
+            type="button"
+            className={
+              row
+                ? "btn-secondary h-12 w-full max-w-72 rounded-xl text-[15px] whitespace-nowrap shadow-[var(--shadow)]"
+                : large
+                  ? "btn-secondary h-12 w-full gap-3 rounded-xl text-[15px] font-semibold"
+                  : "btn-secondary w-full"
+            }
+            disabled={leaving !== null}
+            onClick={() => {
+              setLeaving(id);
+              continueWith(id, peekReturnTo(), keep);
+            }}
+          >
+            <Mark />
+            {leaving === id ? `Opening ${name}…` : `Continue with ${name}`}
+          </button>
+        ))}
+        {terms && (
+          <p className={row ? "basis-full text-center text-xs text-muted" : "text-center text-xs text-muted"}>
+            By continuing with {shown.map((p) => p.name).join(" or ")}, you agree to the{" "}
+            <Link prefetch={false} href="/terms" target="_blank" className="underline underline-offset-2">
+              Terms of Service
+            </Link>{" "}
+            and the{" "}
+            <Link prefetch={false} href="/privacy" target="_blank" className="underline underline-offset-2">
+              Privacy Policy
+            </Link>
+            .
+          </p>
+        )}
+      </div>
+      {after}
+    </>
   );
 }

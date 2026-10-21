@@ -1,14 +1,42 @@
 import { describe, expect, it } from "vitest";
-import { dailyBreakdown, dayTiers, eachDay, niceRound, tierOf, weekdayOf, yearBreakdown, type DailyMetricsRow, type SalesDay } from "../src/index.js";
+import {
+  customSalesMonths,
+  dailyBreakdown,
+  dayTiers,
+  eachDay,
+  NET_SALES_MONTHS,
+  niceRound,
+  SHOPIFY_STANDARD,
+  splitTotal,
+  tierOf,
+  weekdayOf,
+  yearBreakdown,
+  yearFigures,
+  type DailyMetricsRow,
+  type SalesDay,
+} from "../src/index.js";
 
-const day = (d: string, netSales: number, orders = netSales > 0 ? 1 : 0): SalesDay => ({ day: d, netSales, orders, refunds: 0, averageOrderValue: orders ? netSales / orders : null });
+const day = (d: string, netSales: number, orders = netSales > 0 ? 1 : 0): SalesDay => ({
+  day: d,
+  netSales,
+  totalSales: netSales,
+  orders,
+  refunds: 0,
+  averageOrderValue: orders ? netSales / orders : null,
+});
 
 const row = (d: string, grossSales: number, extra: Partial<DailyMetricsRow> = {}): DailyMetricsRow => ({
   day: d,
   grossSales,
   discounts: 0,
   refunds: 0,
+  shipping: 0,
+  taxes: 0,
+  duties: 0,
+  additionalFees: 0,
+  totalSales: grossSales,
   orders: grossSales > 0 ? 1 : 0,
+  orderValue: grossSales,
   units: 0,
   ordersWithCustomer: 0,
   returningCustomerOrders: 0,
@@ -70,7 +98,7 @@ describe("daily breakdown", () => {
     expect(b.total).toBe(140);
     expect(b.importedDays).toBe(3);
     expect(b.daysWithSales).toBe(2);
-    expect(b.best).toEqual({ day: "2026-06-29", netSales: 100 });
+    expect(b.best).toEqual({ day: "2026-06-29", value: 100 });
     // Two finished days are too few to grade.
     expect(b.tiers).toBeNull();
   });
@@ -89,6 +117,25 @@ describe("daily breakdown", () => {
     expect(dailyBreakdown(days, "2026-10-09", null).bestWeekday).toEqual({ weekday: 5, average: 300 });
     expect(dailyBreakdown(days.slice(1), "2026-10-09", null).bestWeekday).toBeNull();
     expect(dailyBreakdown([], "2026-10-09", null)).toMatchObject({ total: 0, average: null, best: null, tiers: null, fullMonths: [] });
+  });
+
+  it("measures the days by another figure when given one, and keeps each day's net sales as they are", () => {
+    // Net sales 100 every day; the measure adds shipping, which only Saturdays have (300).
+    const days = eachDay("2026-09-01", "2026-09-14").map((d) => ({ ...day(d, 100), shipping: weekdayOf(d) === 5 ? 300 : 0 }));
+    const net = dailyBreakdown(days, "2026-10-09", null);
+    expect(net).toMatchObject({ total: 1400, average: 100, best: { day: "2026-09-01", value: 100 } });
+    expect(net.days.every((d) => d.tier === 1)).toBe(true);
+
+    const b = dailyBreakdown(days, "2026-10-09", null, (d) => d.netSales + d.shipping);
+    expect(b.total).toBe(2000);
+    expect(b.average).toBe(142.86);
+    // Tiers, the best day and the best weekday follow the measure.
+    expect(b.tiers).toEqual({ strong: 200, best: 300 });
+    expect(b.days.filter((d) => d.tier === 3).map((d) => d.day)).toEqual(["2026-09-05", "2026-09-12"]);
+    expect(b.best).toEqual({ day: "2026-09-05", value: 400 });
+    expect(b.bestWeekday).toEqual({ weekday: 5, average: 400 });
+    expect(b.days.at(-1)!.cumulative).toBe(2000);
+    expect(b.days[4]).toMatchObject({ day: "2026-09-05", value: 400, netSales: 100 });
   });
 });
 
@@ -131,5 +178,71 @@ describe("year breakdown", () => {
     const march = yearBreakdown([row("2026-02-10", 100), row("2026-03-30", 50)], "2026-03-30", null).months.at(-1)!;
     expect(march.comparedWith).toEqual({ from: "2026-02-01", to: "2026-02-28" });
     expect(march.change).toBe(-0.5);
+  });
+});
+
+describe("the lines of total sales by month, and Custom sales from them", () => {
+  // Amounts a floating-point sum gets wrong (0.1 + 0.2...), so the cents must hold.
+  const lined = (d: string, gross: number, lines: Pick<DailyMetricsRow, "shipping" | "taxes" | "duties" | "additionalFees" | "totalSales">, extra: Partial<DailyMetricsRow> = {}) =>
+    row(d, gross, { ...lines, ...extra });
+  const rows = [
+    // Before the imported history: never counted.
+    lined("2026-07-20", 500, { shipping: 9, taxes: 50, duties: 0, additionalFees: 0, totalSales: 559 }),
+    lined("2026-08-05", 100.1, { shipping: 10.05, taxes: 11.02, duties: 0.3, additionalFees: 0.2, totalSales: 121.67 }),
+    lined("2026-08-06", 0.2, { shipping: 0.1, taxes: 0.02, duties: 0, additionalFees: 0, totalSales: 0.32 }),
+    lined("2026-08-20", 50, { shipping: 5, taxes: 5.5, duties: 1, additionalFees: 0.5, totalSales: 62 }),
+    lined("2026-09-02", 80, { shipping: 6.6, taxes: 7.3, duties: 0, additionalFees: 0.1, totalSales: 87 }, { discounts: 5, refunds: 2 }),
+  ];
+  const y = yearBreakdown(rows, "2026-09-10", "2026-08-01");
+  const [aug, sep] = y.months.slice(7);
+  const exclTax = { ...SHOPIFY_STANDARD, taxes: false };
+
+  it("adds up each month's lines, and the lines of the dates it is compared with", () => {
+    expect(aug).toMatchObject({ coverage: "full", netSales: 150.3, additionalFees: 0.7, duties: 1.3, shipping: 15.15, taxes: 16.54, totalSales: 183.99 });
+    // July wasn't imported, so August has nothing to compare with: no change, no lines for it.
+    expect(aug).toMatchObject({ change: null, comparedWith: null, comparedLines: null });
+    expect(sep).toMatchObject({ current: true, netSales: 73, additionalFees: 0.1, duties: 0, shipping: 6.6, taxes: 7.3, totalSales: 87 });
+    // September so far (1–10) against 1–10 August, line by line.
+    expect(sep!.comparedWith).toEqual({ from: "2026-08-01", to: "2026-08-10" });
+    expect(sep!.comparedLines).toEqual({ netSales: 100.3, additionalFees: 0.2, duties: 0.3, shipping: 10.15, taxes: 11.04, totalSales: 121.99 });
+    // The lines make total sales to the cent.
+    for (const m of [aug!, sep!, sep!.comparedLines!]) expect(splitTotal(m).unsplit).toBe(0);
+  });
+
+  it("keeps months before the imported history as not imported, with no lines", () => {
+    const before = y.months.slice(0, 7);
+    expect(before.every((m) => m.coverage === "none" && m.comparedLines === null)).toBe(true);
+    expect(before.every((m) => m.netSales === 0 && m.totalSales === 0 && m.taxes === 0 && m.shipping === 0)).toBe(true);
+    // The figures leave them out rather than count them as $0 months.
+    const f = yearFigures(y.months, customSalesMonths(exclTax));
+    expect(f.months.slice(0, 7).every((m) => m.cumulative === null && m.change === null)).toBe(true);
+  });
+
+  it("works out Custom sales per month in cents, with a change of its own", () => {
+    const custom = customSalesMonths(exclTax);
+    expect(custom.value(aug!)).toBe(167.45);
+    expect(custom.value(sep!)).toBe(79.7);
+    expect(custom.change(sep!)).toBeCloseTo(79.7 / 110.95 - 1, 12);
+    expect(custom.change(aug!)).toBeNull();
+    // Net sales' own change stays Shopify's figure.
+    expect(sep!.change).toBeCloseTo(73 / 100.3 - 1, 12);
+
+    const f = yearFigures(y.months, custom);
+    expect(f.months.slice(7)).toEqual([
+      { month: "2026-08", value: 167.45, change: null, cumulative: 167.45 },
+      { month: "2026-09", value: 79.7, change: custom.change(sep!), cumulative: 247.15 },
+    ]);
+    expect(f.total).toBe(247.15);
+    // Only finished, fully imported months make the average: August alone.
+    expect(f).toMatchObject({ average: 167.45, finishedMonths: 1, best: { month: "2026-08", value: 167.45 } });
+  });
+
+  it("gives net sales the same figures as the months carry", () => {
+    const f = yearFigures(y.months, NET_SALES_MONTHS);
+    expect(f.total).toBe(y.total);
+    expect(f.months.map((m) => m.change)).toEqual(y.months.map((m) => (m.coverage === "none" ? null : m.change)));
+    expect(f.months.at(-1)).toMatchObject({ value: 73, cumulative: 223.3 });
+    // Every line counted is Shopify's total sales.
+    expect(yearFigures(y.months, customSalesMonths(SHOPIFY_STANDARD)).total).toBe(270.99);
   });
 });

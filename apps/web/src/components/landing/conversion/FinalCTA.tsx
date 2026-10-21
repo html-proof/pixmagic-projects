@@ -1,11 +1,11 @@
 "use client";
-import { motion, useMotionValue, useSpring, useTransform, type MotionValue } from "motion/react";
+import { motion, useMotionValue, useTransform, type MotionValue } from "motion/react";
 import { useEffect, useRef } from "react";
 import { useReducedMotion } from "@/hooks/useReducedMotion";
 import { useScrollProgress } from "@/hooks/useScrollProgress";
 import { useViewportPerformance } from "@/hooks/useViewportPerformance";
 import { easeInOut, easeOut, segment } from "@/lib/motion";
-import { InsightMark } from "../shared/InsightMark";
+import { BrandMark } from "@/components/Brand";
 import { LoginPrompt, SignupButton } from "../shared/ui";
 import { CONVERGE, ConvergeCanvas } from "./ConvergeCanvas";
 
@@ -36,7 +36,7 @@ function useBeat(p: MotionValue<number>, forced: MotionValue<number>, [a, b]: re
 
 /**
  * G2 — the final conversion scene. Thousands of faint data points fill the screen, then gather
- * into the Insight mark at the centre of the screen as the visitor scrolls; the mark resolves,
+ * into the bizinsights mark at the centre of the screen as the visitor scrolls; the mark resolves,
  * crisp and calm, then rises into place as the closing line and the sign-up action appear
  * beneath it. Reduced motion: the mark, the copy and the actions, still.
  */
@@ -48,8 +48,8 @@ export function FinalCTA() {
   const reduced = useReducedMotion();
   const { particleScale, maxDpr } = useViewportPerformance();
 
-  const scroll = useScrollProgress(section, ["start 0.4", "end end"]);
-  const progress = useSpring(scroll, { stiffness: 120, damping: 28, mass: 0.5 });
+  // Follows the scroll exactly; the wheel itself is eased (useSmoothScroll).
+  const progress = useScrollProgress(section, ["start 0.4", "end end"]);
   const forced = useMotionValue(0);
   /** Distance (px) from the mark's resting place down to the optical centre of the screen. */
   const centreGap = useMotionValue(0);
@@ -119,31 +119,31 @@ export function FinalCTA() {
         >
           {/* The slot never moves (the canvas measures it); the mark inside it lifts and zooms. */}
           <div ref={slot} className="relative size-[clamp(112px,20svh,216px)] shrink-0 text-lp-text">
-            <motion.div className="absolute inset-0" style={reduced ? undefined : { y: lift, scale: zoom }}>
+            <motion.div className={`absolute inset-0 ${reduced ? "" : "lp-layer"}`} style={reduced ? undefined : { y: lift, scale: zoom }}>
               <motion.div
                 aria-hidden
-                className="pointer-events-none absolute -inset-[70%] rounded-full bg-[radial-gradient(closest-side,rgb(140_123_255/0.22),rgb(94_166_255/0.08)_45%,transparent_75%)]"
+                className="lp-layer pointer-events-none absolute -inset-[70%] rounded-full bg-[radial-gradient(closest-side,rgb(63_207_138/0.2),rgb(35_147_92/0.08)_45%,transparent_75%)]"
                 style={reduced ? undefined : { opacity: glow }}
               />
-              <motion.div className="relative size-full" style={reduced ? undefined : { opacity: markIn, scale: markScale }}>
-                <InsightMark size={216} className="size-full" />
+              <motion.div className={`relative size-full ${reduced ? "" : "lp-layer"}`} style={reduced ? undefined : { opacity: markIn, scale: markScale }}>
+                <BrandMark size={216} className="size-full" />
               </motion.div>
             </motion.div>
           </div>
 
           <motion.h2
             id="final-cta-title"
-            className="lp-heading mt-8 text-balance md:mt-10"
+            className={`lp-heading mt-8 text-balance md:mt-10 ${reduced ? "" : "lp-layer"}`}
             style={reduced ? undefined : heading}
           >
             See your business <span className="lp-gradient-text">clearly.</span>
           </motion.h2>
-          <motion.p className="lp-lead mt-5 max-w-[34rem] text-pretty md:mt-6" style={reduced ? undefined : lead}>
+          <motion.p className={`lp-lead mt-5 max-w-[34rem] text-pretty md:mt-6 ${reduced ? "" : "lp-layer"}`} style={reduced ? undefined : lead}>
             Connect your Shopify store and turn everyday commerce activity into decisions you can actually use.
           </motion.p>
-          <motion.div className="mt-8 flex w-full flex-col items-center gap-5 md:mt-10" style={reduced ? undefined : actions}>
+          <motion.div className={`mt-8 flex w-full flex-col items-center gap-5 md:mt-10 ${reduced ? "" : "lp-layer"}`} style={reduced ? undefined : actions}>
             <SignupButton size="lg" className="max-md:w-full max-md:max-w-[360px]">
-              Create your Insight account
+              Create your bizinsights account
             </SignupButton>
             <LoginPrompt />
           </motion.div>

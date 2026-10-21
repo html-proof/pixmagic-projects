@@ -1,6 +1,7 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, ApiError, isTransient } from "@/lib/apiClient";
+import { ACCESS_CHANGED_EVENT } from "@/lib/access";
+import { api, ApiError, isTransient, isRefused } from "@/lib/apiClient";
 
 /** Waits between retries of a load that failed: quick at first, then settling at every 30s. */
 const RETRY_BACKOFF_MS = [2_000, 5_000, 15_000, 30_000];
@@ -73,6 +74,8 @@ export function useApi<T>(path: string | null) {
       if (current.current !== path) return true;
       retryAt.current = e instanceof ApiError ? e.retryAt ?? 0 : 0;
       setFailure({ path, error: e as ApiError });
+      // Access taken away: what was shown goes with it.
+      if (isRefused(e)) setAnswer(null);
       return false;
     } finally {
       if (current.current === path) setLoading(false);
@@ -89,6 +92,13 @@ export function useApi<T>(path: string | null) {
     current.current = path;
     retryAt.current = 0;
     void load();
+  }, [path, load]);
+  // New permissions: ask again, so what is shown is what they may see now.
+  useEffect(() => {
+    if (!path) return;
+    const again = () => void load();
+    window.addEventListener(ACCESS_CHANGED_EVENT, again);
+    return () => window.removeEventListener(ACCESS_CHANGED_EVENT, again);
   }, [path, load]);
   // A first load that hit an outage fills in by itself once the outage is over, instead of leaving
   // the page empty until the merchant navigates away and back. Only while nothing has loaded: once
@@ -108,6 +118,13 @@ export function useApi<T>(path: string | null) {
  * one until the new answer lands, so the caller can say so when that answer is slow or failing.
  * `failing` is whether the latest check (first or background) failed.
  */
+/**
+ * Fired after a change that live answers carry (the store's sales calculation, say): every
+ * `useLiveApi` asks again at once instead of on its next tick.
+ */
+export const LIVE_DATA_CHANGED_EVENT = "insights:live-data-changed";
+export const liveDataChanged = () => window.dispatchEvent(new Event(LIVE_DATA_CHANGED_EVENT));
+
 export function useLiveApi<T>(path: string | null, intervalMs: number) {
   // The answer and its question are set together, so no render ever pairs one with the other's.
   const [answer, setAnswer] = useState<{ path: string; value: T } | null>(null);
@@ -119,11 +136,10 @@ export function useLiveApi<T>(path: string | null, intervalMs: number) {
   // Bumped whenever the question changes: answers to an older question are ignored.
   const generation = useRef(0);
   const inFlight = useRef(false);
-  const retryAt = useRef(0);
 
   const check = useCallback(
     async (initial: boolean) => {
-      if (!path || retryAt.current > Date.now() || (!initial && inFlight.current)) return;
+      if (!path || (!initial && inFlight.current)) return;
       const gen = generation.current;
       inFlight.current = true;
       if (initial) setLoading(true);
@@ -140,8 +156,14 @@ export function useLiveApi<T>(path: string | null, intervalMs: number) {
         setCheckedAt(Date.now());
       } catch (e) {
         if (gen !== generation.current) return;
-        retryAt.current = e instanceof ApiError ? e.retryAt ?? 0 : 0;
         setFailing(true);
+        // Refused (permissions changed): the last numbers go, and the refusal shows.
+        if (isRefused(e)) {
+          last.current = null;
+          setAnswer(null);
+          setError(e as ApiError);
+          return;
+        }
         // Only the first load reports errors; later checks keep showing the last good numbers.
         if (initial || last.current === null) setError(e as ApiError);
       } finally {
@@ -158,7 +180,6 @@ export function useLiveApi<T>(path: string | null, intervalMs: number) {
     // New question (other store or dates): the next answer always replaces what's shown, but the
     // old numbers stay up until it arrives instead of flashing an empty page.
     generation.current++;
-    retryAt.current = 0;
     last.current = null;
     inFlight.current = false;
     // The previous question's error and last success say nothing about this one. `failing` stays:
@@ -178,15 +199,21 @@ export function useLiveApi<T>(path: string | null, intervalMs: number) {
     };
     const timer = window.setInterval(tick, intervalMs);
     document.addEventListener("visibilitychange", tick);
+    // Permissions changed: the answer may hold more or less now, so ask at once.
+    const now = () => void check(false);
+    window.addEventListener(ACCESS_CHANGED_EVENT, now);
+    window.addEventListener(LIVE_DATA_CHANGED_EVENT, now);
     window.addEventListener("online", tick);
     window.addEventListener("insights:retry", tick);
     return () => {
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", tick);
+      window.removeEventListener(ACCESS_CHANGED_EVENT, now);
+      window.removeEventListener(LIVE_DATA_CHANGED_EVENT, now);
       window.removeEventListener("online", tick);
       window.removeEventListener("insights:retry", tick);
     };
   }, [path, intervalMs, check]);
 
-  return { data: answer?.value ?? null, dataPath: answer?.path ?? null, error, loading, checkedAt, failing, reload: () => check(true) };
+  return { data: answer?.value ?? null, dataPath: answer?.path ?? null, error, loading, checkedAt, failing };
 }

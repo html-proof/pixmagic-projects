@@ -1,0 +1,31 @@
+{
+  "name": "@app/aws",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/dev.ts",
+    "start": "tsx src/dev.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "build": "node scripts/build.mjs"
+  },
+  "dependencies": {
+    "@app/api": "workspace:*",
+    "@app/core": "workspace:*",
+    "@app/db": "workspace:*",
+    "@app/worker": "workspace:*",
+    "@aws-crypto/client-node": "^5.0.2",
+    "aws4fetch": "^1.0.20",
+    "hono": "^4.9.0",
+    "pg": "^8.16.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/pg": "^8.23.1",
+    "esbuild": "^0.28.2",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0",
+    "vitest": "^4.1.11"
+  }
+}

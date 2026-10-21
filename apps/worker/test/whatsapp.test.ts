@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { disconnectDb, systemDb, type Prisma, type Store } from "@app/db";
 import { resetDb } from "@app/db/testing";
 import {
@@ -9,6 +9,7 @@ import {
   memoryCoord,
   memoryMailer,
   memoryQueues,
+  pollShipments,
   sendWhatsappMessage,
   sweepWhatsapp,
   waEncrypt,
@@ -18,6 +19,7 @@ import {
 import { TEMPLATE_LIBRARY, WA_MAX_ATTEMPTS, whatsappConfigSchema, type NotificationKind } from "@app/shared";
 import { processWebhook, type WorkerDeps } from "../src/handlers.js";
 import { consume, type QueueMessage } from "../src/index.js";
+import { salesAnswer } from "./shopifySales.js";
 
 /**
  * WhatsApp end to end inside the worker: Shopify events → timeline and messages → the sender
@@ -50,6 +52,8 @@ beforeEach(async () => {
   sent = [];
   metaError = null;
   fetchImpl = async (input, init) => {
+    const sales = salesAnswer(input, init);
+    if (sales) return sales;
     const url = new URL(String(input));
     if (url.hostname === "graph.facebook.com" && url.pathname.endsWith("/messages")) {
       if (metaError) return json({ error: { code: metaError.code, message: metaError.message ?? "error", type: "OAuthException" } }, metaError.status);
@@ -98,8 +102,11 @@ async function setupStore(opts: { basis?: string; smsCounts?: boolean; kinds?: N
   const config = whatsappConfigSchema.parse({
     transactionalBasis: opts.basis ?? "checkout_notice",
     smsConsentCountsForMarketing: opts.smsCounts ?? false,
+    // Equal ends: always open. (0 to 23 closed the window from 23:00 UTC, and the suite failed for that hour.)
+    // Equal hours: no sending window, so these tests pass at any hour (0–23 held marketing during
+    // 23:00 UTC). The API won't save this; "holds marketing outside the store's sending hours" sets a real one.
     sendWindowStart: 0,
-    sendWindowEnd: 23,
+    sendWindowEnd: 0,
     notifications: Object.fromEntries(
       kinds.map((k) => {
         const t = TEMPLATE_LIBRARY.find((x) => x.name === KIND_TEMPLATE[k])!;
@@ -471,15 +478,83 @@ describe("opt-outs and callbacks", () => {
     expect(r.retry).toBe(true);
   });
 
+  const preference = (phoneNumberId: string | null, value: "stop" | "resume", at = Math.floor(Date.now() / 1000)) => ({
+    field: "user_preferences",
+    value: { ...(phoneNumberId ? { metadata: { phone_number_id: phoneNumberId } } : {}), user_preferences: [{ wa_id: "919876543210", category: "marketing_messages", value, timestamp: at }] },
+  });
+
   it("Meta's marketing preference and template reviews are applied", async () => {
     const store = await setupStore();
+    await applyMetaWebhook(inbound(store, "919876543210", "hi"), "all", deps); // the customer wrote to the store: a contact
     await applyMetaWebhook(
-      { object: "whatsapp_business_account", entry: [{ id: "1111111111", changes: [{ field: "user_preferences", value: { user_preferences: [{ wa_id: "919876543210", category: "marketing_messages", value: "resume", timestamp: 1 }] } }, { field: "message_template_status_update", value: { event: "REJECTED", message_template_id: "m-insights_order_shipped", message_template_name: "insights_order_shipped", message_template_language: "en", reason: "INCORRECT_CATEGORY" } }] }] },
+      { object: "whatsapp_business_account", entry: [{ id: "1111111111", changes: [preference("2222222222", "resume"), { field: "message_template_status_update", value: { event: "REJECTED", message_template_id: "m-insights_order_shipped", message_template_name: "insights_order_shipped", message_template_language: "en", reason: "INCORRECT_CATEGORY" } }] }] },
       "all",
       deps,
     );
     expect((await systemDb.whatsappContact.findFirstOrThrow({ where: { storeId: store.id } })).marketingStatus).toBe("opted_in");
     expect((await systemDb.whatsappTemplate.findFirstOrThrow({ where: { storeId: store.id, name: "insights_order_shipped" } })).status).toBe("REJECTED");
+  });
+
+  /** A second store, in another workspace, on the same WhatsApp Business Account with its own number and app. */
+  async function neighbour() {
+    const other = await setupStore({ connected: false });
+    const conn = await systemDb.whatsappConnection.create({
+      data: {
+        workspaceId: other.workspaceId,
+        storeId: other.id,
+        mode: "manual",
+        wabaId: "1111111111",
+        phoneNumberId: "3333333333",
+        registered: true,
+        status: "active",
+        accessTokenEnc: waEncrypt(other.id, "access", "EAAother"),
+        appSecretEnc: waEncrypt(other.id, "app_secret", "neighbour-secret"),
+        tokenKeyVersion: 1,
+        webhookVerifiedAt: new Date(),
+      },
+    });
+    return { other, conn };
+  }
+
+  it("a manual connection's own secret vouches for that connection only, not for others on the same account", async () => {
+    const victim = await setupStore({ kinds: ["order_confirmation"] });
+    const { conn } = await neighbour();
+    // Signed with the neighbour's secret, but naming the victim's number.
+    const r = await applyMetaWebhook(inbound(victim, "919876543210", "STOP"), new Set([conn.id]), deps);
+    expect(r.applied).toBe(0);
+    expect(await systemDb.whatsappContact.count({ where: { storeId: victim.id } })).toBe(0);
+    const victimConn = await systemDb.whatsappConnection.findFirstOrThrow({ where: { storeId: victim.id } });
+    expect(victimConn.lastWebhookAt).toBeNull();
+  });
+
+  it("a marketing preference reaches only the store whose number it names, and 'resume' creates nobody", async () => {
+    const store = await setupStore();
+    const { other } = await neighbour();
+    await applyMetaWebhook(inbound(store, "919876543210", "hi"), "all", deps); // the customer wrote to the first store only
+    // The neighbour's number: the customer resumes marketing there. They are not the neighbour's contact.
+    await applyMetaWebhook({ object: "whatsapp_business_account", entry: [{ id: "1111111111", changes: [preference("3333333333", "resume")] }] }, "all", deps);
+    expect(await systemDb.whatsappContact.count({ where: { storeId: other.id } })).toBe(0);
+    expect((await systemDb.whatsappContact.findFirstOrThrow({ where: { storeId: store.id } })).marketingStatus).not.toBe("opted_in");
+    // No number named: a "stop" still reaches the contact the store has, a "resume" opts nobody in.
+    await applyMetaWebhook({ object: "whatsapp_business_account", entry: [{ id: "1111111111", changes: [preference(null, "stop")] }] }, "all", deps);
+    expect((await systemDb.whatsappContact.findFirstOrThrow({ where: { storeId: store.id } })).marketingStatus).toBe("opted_out");
+    await applyMetaWebhook({ object: "whatsapp_business_account", entry: [{ id: "1111111111", changes: [preference(null, "resume", Math.floor(Date.now() / 1000) + 5)] }] }, "all", deps);
+    expect((await systemDb.whatsappContact.findFirstOrThrow({ where: { storeId: store.id } })).marketingStatus).toBe("opted_out");
+    expect(await systemDb.whatsappContact.count({ where: { storeId: other.id } })).toBe(0);
+  });
+
+  it("a START older than the customer's STOP (a late redelivery) doesn't opt them back in", async () => {
+    const store = await setupStore();
+    const at = (secondsAgo: number) => String(Math.floor(Date.now() / 1000) - secondsAgo);
+    const msg = (text: string, ts: string) => ({
+      object: "whatsapp_business_account",
+      entry: [{ id: "1111111111", changes: [{ field: "messages", value: { metadata: { phone_number_id: "2222222222" }, messages: [{ from: "919876543210", id: `in.${Math.random()}`, timestamp: ts, type: "text", text: { body: text } }] } }] }],
+    });
+    await applyMetaWebhook(msg("STOP", at(10)), "all", deps);
+    await applyMetaWebhook(msg("START", at(60)), "all", deps); // sent before the STOP, delivered after
+    expect(await systemDb.whatsappContact.findFirstOrThrow({ where: { storeId: store.id } })).toMatchObject({ optedOut: true, marketingStatus: "opted_out" });
+    await applyMetaWebhook(msg("START", at(0)), "all", deps); // a real, newer START
+    expect(await systemDb.whatsappContact.findFirstOrThrow({ where: { storeId: store.id } })).toMatchObject({ optedOut: false, marketingStatus: "opted_in" });
   });
 });
 
@@ -685,7 +760,7 @@ describe("connection health", () => {
     expect(await checkConnections(deps)).toBe(0);
     expect(calls).toHaveLength(before);
 
-    // Hours later the business has removed Insights' access.
+    // Hours later the business has removed bizinsights' access.
     await systemDb.whatsappConnection.update({ where: { id: conn.id }, data: { lastSyncedAt: new Date(Date.now() - 7 * 3600_000) } });
     coord.clear();
     revoked = true;
@@ -696,5 +771,148 @@ describe("connection health", () => {
     const after = calls.length;
     expect(await checkConnections(deps)).toBe(0);
     expect(calls).toHaveLength(after);
+  });
+});
+
+describe("payloads that don't fit", () => {
+  // Shopify's and Meta's bodies are checked against schemas (core's shopifyPayloads.ts and
+  // whatsapp/metaPayloads.ts): what doesn't fit is logged by field, never by value, and skipped.
+  let warnings: Array<Record<string, unknown>>;
+  let prevLevel: string | undefined;
+  beforeEach(() => {
+    warnings = [];
+    prevLevel = process.env.LOG_LEVEL;
+    process.env.LOG_LEVEL = "warn";
+    vi.spyOn(console, "warn").mockImplementation((line: unknown) => {
+      if (String(line).startsWith("{")) warnings.push(JSON.parse(String(line)) as Record<string, unknown>);
+    });
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    process.env.LOG_LEVEL = prevLevel;
+  });
+  const problems = () => warnings.flatMap((w) => (w.problems as string[] | undefined) ?? []);
+
+  it("an order WhatsApp can't read is skipped, not retried; analytics still takes it, and a readable copy is confirmed", async () => {
+    const store = await setupStore({ kinds: ["order_confirmation"] });
+    const o = order({ total_price: "free" });
+    const ev = await systemDb.webhookEvent.create({ data: { webhookId: "bad-total", topic: "orders/create", shopDomain: store.shopDomain, storeId: store.id, workspaceId: store.workspaceId } });
+    // Before the schema, the total went straight into a Decimal, which threw and failed the whole delivery.
+    expect(await processWebhook({ eventId: ev.id, topic: "orders/create", shop: store.shopDomain, payload: o }, deps)).toEqual({ ok: true });
+    expect((await systemDb.webhookEvent.findUniqueOrThrow({ where: { id: ev.id } })).status).toBe("succeeded");
+    expect(await systemDb.order.count({ where: { storeId: store.id } })).toBe(1);
+    expect(await systemDb.orderTracking.count({ where: { storeId: store.id } })).toBe(0);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatchObject({ payload: "orders/create", module: "whatsapp", storeId: store.id, problems: ["total_price: not an amount"] });
+    expect(JSON.stringify(warnings)).not.toContain("98765");
+
+    await event(store, "orders/create", { ...o, total_price: "1499.00" });
+    await drain();
+    expect(sent.map((s) => s.template)).toEqual(["insights_order_confirmation"]);
+  });
+
+  it("a parcel that can't be read costs only itself", async () => {
+    const store = await setupStore({ kinds: ["order_shipped"] });
+    const o = order();
+    await event(store, "orders/create", o);
+    const now = new Date().toISOString();
+    await event(store, "orders/updated", {
+      ...o,
+      fulfillments: [{ id: 91, status: "success", created_at: now }, { status: "success", created_at: now }, { id: 93, status: "success", created_at: "a while ago" }],
+    });
+    await drain();
+    const shipped = await systemDb.orderTrackingEvent.findMany({ where: { type: "shipped" } });
+    expect(shipped.map((e) => e.fulfillmentId)).toEqual(["91"]);
+    expect(sent.map((s) => s.template)).toEqual(["insights_order_shipped"]);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatchObject({ payload: "order fulfillment", skipped: 2, of: 3, problems: ["id: Required"] });
+  });
+
+  it("parcel and courier webhooks that don't name their parcel or order, and a checkout without a token, are skipped", async () => {
+    const store = await setupStore({ kinds: ["order_shipped", "out_for_delivery", "abandoned_cart_1"] });
+    const o = order();
+    await event(store, "orders/create", o);
+    const now = new Date().toISOString();
+    await event(store, "fulfillments/create", { id: 91, status: "success", created_at: now });
+    await event(store, "fulfillment_events/create", { id: 1, order_id: o.id, status: "out_for_delivery", happened_at: now });
+    await event(store, "checkouts/create", { token: 12345, phone: "+91 98765 43210", total_price: "10.00" });
+    expect(await systemDb.orderTrackingEvent.count({ where: { type: { in: ["shipped", "out_for_delivery"] } } })).toBe(0);
+    expect(await systemDb.abandonedCheckout.count()).toBe(0);
+    expect(problems()).toEqual(["order_id: Required", "fulfillment_id: Required", "token: Expected string, received number"]);
+  });
+
+  it("the shipment poll applies each parcel Shopify reports, skipping one it can't read", async () => {
+    const store = await setupStore({ kinds: ["order_shipped", "out_for_delivery"] });
+    const o = order();
+    const now = new Date().toISOString();
+    await event(store, "orders/create", o);
+    await event(store, "orders/updated", { ...o, fulfillments: [{ id: 91, status: "success", created_at: now }, { id: 92, status: "success", created_at: now }] });
+    const meta = fetchImpl;
+    fetchImpl = async (input, init) => {
+      if (!new URL(String(input)).hostname.endsWith(".myshopify.com")) return meta(input, init);
+      return json({
+        data: {
+          nodes: [
+            {
+              id: `gid://shopify/Order/${o.id}`,
+              fulfillments: [
+                { id: "gid://shopify/Fulfillment/91", status: "SUCCESS", displayStatus: "OUT_FOR_DELIVERY", updatedAt: now, trackingInfo: [{ company: "Blue Dart", number: "BD1", url: null }] },
+                { id: "gid://shopify/Fulfillment/92", status: "SUCCESS", displayStatus: "OUT_FOR_DELIVERY", updatedAt: "soon" },
+              ],
+            },
+            null,
+          ],
+        },
+      });
+    };
+    expect(await pollShipments(store, deps)).toBe(1);
+    const out = await systemDb.orderTrackingEvent.findMany({ where: { type: "out_for_delivery" } });
+    expect(out.map((e) => [e.fulfillmentId, e.courier, e.trackingNumber])).toEqual([["91", "Blue Dart", "BD1"]]);
+    expect(warnings[0]).toMatchObject({ payload: "GraphQL fulfillment", skipped: 1, of: 2, problems: ["updatedAt: not a timestamp"] });
+  });
+
+  it("Meta: the parts of a body that fit are applied, the rest logged by field without the numbers in them", async () => {
+    const store = await setupStore({ kinds: ["order_confirmation"] });
+    await event(store, "orders/create", order());
+    await drain();
+    const ts = String(Math.floor(Date.now() / 1000));
+    const r = await applyMetaWebhook(
+      {
+        object: "whatsapp_business_account",
+        entry: [
+          { changes: [] }, // no account id
+          {
+            id: "1111111111",
+            changes: [
+              {
+                field: "messages",
+                value: {
+                  metadata: { phone_number_id: "2222222222" },
+                  statuses: [{ status: "read", timestamp: ts, recipient_id: "919876543210" }, { id: "wamid.1", status: "delivered", timestamp: ts, recipient_id: "919876543210" }],
+                  messages: [{ from: 919876543210, id: "in.1", timestamp: ts, type: "text", text: { body: "STOP" } }],
+                },
+              },
+              { field: "message_template_status_update" }, // no value
+              { value: { event: "APPROVED" } }, // no field
+            ],
+          },
+        ],
+      },
+      "all",
+      deps,
+    );
+    expect(r).toEqual({ retry: false, applied: 1 });
+    expect((await systemDb.whatsappMessage.findFirstOrThrow({ where: { storeId: store.id } })).status).toBe("delivered");
+    // The STOP that couldn't be read opted nobody out.
+    expect(await systemDb.whatsappContact.count({ where: { storeId: store.id, optedOut: true } })).toBe(0);
+    expect(warnings.map((w) => [w.msg, w.payload])).toEqual([
+      ["Meta payload doesn't fit its schema; skipped", "webhook entry"],
+      ["Meta payload doesn't fit its schema; skipped", "webhook change"],
+      ["Meta payload doesn't fit its schema; skipped", "status"],
+      ["Meta payload doesn't fit its schema; skipped", "message"],
+      ["Meta payload doesn't fit its schema; skipped", "message_template_status_update"],
+    ]);
+    expect(problems()).toEqual(["id: Required", "field: Required", "id: Required", "from: Expected string, received number", "(payload): Required"]);
+    expect(JSON.stringify(warnings)).not.toContain("919876543210");
   });
 });

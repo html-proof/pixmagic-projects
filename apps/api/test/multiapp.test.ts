@@ -5,9 +5,10 @@ import { signShopifyQuery, signWebhookBody } from "@app/shared";
 import { clean, createStore, setup, signIn, teardown, testBrowser, type TestCtx } from "./helpers.js";
 
 /**
- * Several Shopify apps: the default one (test_key / test_secret) and "client", a
- * custom-distribution app for client-shop.myshopify.com (client_key / client_secret,
- * configured in test-support/env.ts).
+ * Several Shopify apps (test-support/env.ts): the default one (test_key / test_secret); "client", a
+ * custom-distribution app for client-shop.myshopify.com (client_key / client_secret); "appstore",
+ * the App Store app (appstore_key / appstore_secret); and "public", the first App Store app, kept
+ * for the stores connected through it (public_key / public_secret).
  */
 let ctx: TestCtx;
 beforeAll(async () => (ctx = await setup()));
@@ -19,16 +20,19 @@ const now = () => String(Math.floor(Date.now() / 1000));
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 const signedQuery = (params: Record<string, string>, secret: string) => new URLSearchParams({ ...params, hmac: signShopifyQuery(params, secret) });
 
-/** Fake Shopify token endpoint that only accepts the given app's credentials. */
+/** Fake Shopify token endpoint that only accepts the given app's credentials; returns the requests it saw. */
 function fakeShopifyFor(clientId: string, secret: string) {
+  const requests: Record<string, string>[] = [];
   ctx.setFetch(async (_input, init) => {
     const body = JSON.parse(String(init?.body));
+    requests.push(body);
     if (body.client_id !== clientId || body.client_secret !== secret) return json({ error: "invalid_client" }, 401);
     if (body.grant_type === "refresh_token") {
       return json({ access_token: "shpat_REFRESHED", scope: "read_orders", expires_in: 3600, refresh_token: "shprt_NEXT", refresh_token_expires_in: 7776000 });
     }
     return json({ access_token: "shpat_CLIENT", scope: "read_orders,read_products" });
   });
+  return requests;
 }
 
 /** A signed-in, verified owner in a browser (cookies kept), with a workspace of their own. */
@@ -61,11 +65,157 @@ describe("several Shopify apps", () => {
     expect(await getAccessToken(store, ctx.deps.coord)).toBe("shpat_CLIENT");
   });
 
+  // "appstore" is the App Store app; "public" is the first one, whose listing may still send installs.
+  for (const app of ["appstore", "public"]) {
+    it(`a store installed from the listing of App Store app "${app}" gets an expiring token and stays on that app`, async () => {
+      const requests = fakeShopifyFor(`${app}_key`, `${app}_secret`);
+      const b = testBrowser(ctx);
+      const shop = `listing-${app}.myshopify.com`;
+      const launch = await b.get(`/shopify/launch?${signedQuery({ shop, host: "aG9zdA", timestamp: now() }, `${app}_secret`)}`);
+      expect(launch.statusCode).toBe(302);
+      const authorize = new URL(String(launch.headers.location));
+      expect(`${authorize.origin}${authorize.pathname}`).toBe(`https://${shop}/admin/oauth/authorize`);
+      expect(authorize.searchParams.get("client_id")).toBe(`${app}_key`);
+
+      const cb = await approve(b, authorize.toString(), `${app}_secret`);
+      expect(cb.statusCode).toBe(302);
+      const store = await systemDb.store.findUniqueOrThrow({ where: { shopDomain: shop } });
+      expect(store.shopifyAppKey).toBe(app);
+      expect(await getAccessToken(store, ctx.deps.coord)).toBe("shpat_CLIENT");
+      // The code is exchanged, with that app's credentials, for an expiring offline token: Shopify
+      // refuses non-expiring ones from public apps registered after 2026-04-01.
+      expect(requests.find((r) => r.code)).toMatchObject({ client_id: `${app}_key`, expiring: "1" });
+
+      // Its webhooks are signed with that app's secret, for whichever store installed it.
+      const payload = JSON.stringify({ id: 1 });
+      const hook = await ctx.app.inject({
+        method: "POST",
+        url: "/webhooks/shopify",
+        headers: {
+          "content-type": "application/json",
+          "x-shopify-topic": "products/update",
+          "x-shopify-shop-domain": shop,
+          "x-shopify-webhook-id": `wh-${app}-1`,
+          "x-shopify-hmac-sha256": signWebhookBody(payload, `${app}_secret`),
+        },
+        payload,
+      });
+      expect(hook.statusCode).toBe(200);
+      expect(ctx.deps.queues.sent.webhooks.map((j) => j.app)).toEqual([app]);
+    });
+  }
+
+  describe("a shop with two of our apps installed", () => {
+    const shop = "two-apps.myshopify.com";
+    const launch = (secret: string) => testBrowser(ctx).get(`/shopify/launch?${signedQuery({ shop, host: "aG9zdA", timestamp: now() }, secret)}`);
+    /** A store connected through `app`, in an account (a workspace that isn't waiting for a claim). */
+    async function connected(app: string, extra: Record<string, unknown> = {}, awaitingClaim = false) {
+      const ws = await systemDb.workspace.create({ data: { name: "Acct", awaitingClaim } });
+      return createStore(ws.id, shop, ["read_orders"], { accessTokenEnc: "v1:x", shopifyAppKey: app, ...extra });
+    }
+
+    it("opening the other app doesn't move a store that works through its own", async () => {
+      const store = await connected("default");
+      const res = await launch("appstore_secret");
+      expect(res.headers.location).toMatch(/\/onboarding\?step=sync&store=/);
+      expect((await systemDb.store.findUniqueOrThrow({ where: { id: store.id } })).shopifyAppKey).toBe("default");
+    });
+
+    it("an unclaimed store is authorized again through the app it works with, not the one opened", async () => {
+      await connected("default", {}, true);
+      const authorize = new URL(String((await launch("appstore_secret")).headers.location));
+      expect(authorize.pathname).toBe("/admin/oauth/authorize");
+      expect(authorize.searchParams.get("client_id")).toBe("test_key");
+    });
+
+    it("a store whose own app Shopify refuses is authorized through the app opened", async () => {
+      const store = await connected("appstore", { status: "error" });
+      await systemDb.syncJob.create({
+        data: { workspaceId: store.workspaceId, storeId: store.id, kind: "shop", status: "failed", error: "Shopify rejected our access (403); merchant must reconnect" },
+      });
+      const authorize = new URL(String((await launch("test_secret")).headers.location));
+      expect(authorize.pathname).toBe("/admin/oauth/authorize");
+      expect(authorize.searchParams.get("client_id")).toBe("test_key");
+    });
+
+    it("a store whose own app was uninstalled moments ago (not applied yet) is authorized through the app opened", async () => {
+      const store = await connected("default");
+      await systemDb.store.update({
+        where: { id: store.id },
+        data: encryptTokenFields(store.id, { accessToken: "shpat_REVOKED", refreshToken: null, scopes: ["read_orders"], accessTokenExpiresAt: null, refreshTokenExpiresAt: null }),
+      });
+      ctx.setFetch(async () => json({ errors: "[API] Invalid API key or access token (unrecognized login or wrong password)" }, 401));
+      const authorize = new URL(String((await launch("appstore_secret")).headers.location));
+      expect(authorize.pathname).toBe("/admin/oauth/authorize");
+      expect(authorize.searchParams.get("client_id")).toBe("appstore_key");
+    });
+  });
+
   it("other stores keep using the default app", async () => {
     const { b, ws, install } = await owner();
     expect(new URL((await install("someone-else")).json().url).searchParams.get("client_id")).toBe("test_key");
     const oneClick = await b.post(`/workspaces/${ws}/shopify/start`);
     expect(oneClick.json().url).toContain("client_id=test_key");
+  });
+
+  /**
+   * A merchant who installed from the App Store listing must never be sent to the main app, which
+   * Shopify hasn't approved for their store; everyone else carries on as before.
+   */
+  describe("a workspace whose stores came through the App Store app", () => {
+    const LISTED = "listed-shop.myshopify.com";
+    const FIRST_LISTED = "first-listed-shop.myshopify.com";
+    const DIRECT = "direct-shop.myshopify.com";
+    const clientId = (url: string) => new URL(url).searchParams.get("client_id");
+    afterEach(() => ctx.setEnv({ SHOPIFY_APP_STORE_PREVIEW_SHOPS: "" }));
+
+    it("is marked as such on /me, and only that one", async () => {
+      const { b, ws } = await owner();
+      const other = (await b.post("/workspaces", { name: "Other" })).json().workspace.id as string;
+      const first = (await b.post("/workspaces", { name: "First" })).json().workspace.id as string;
+      await createStore(ws, LISTED, ["read_orders"], { shopifyAppKey: "appstore" });
+      await createStore(other, DIRECT, ["read_orders"], { shopifyAppKey: "default" });
+      // A store from the first App Store app still counts as an App Store install.
+      await createStore(first, FIRST_LISTED, ["read_orders"], { shopifyAppKey: "public" });
+      const flags = Object.fromEntries((await b.get("/me")).json().workspaces.map((w: { id: string; appStore: boolean }) => [w.id, w.appStore]));
+      expect(flags).toEqual({ [ws]: true, [other]: false, [first]: true });
+    });
+
+    it("adds stores through the App Store app, by Shopify's picker or by name", async () => {
+      const { b, ws, install } = await owner();
+      await createStore(ws, LISTED, ["read_orders"], { shopifyAppKey: "appstore", status: "uninstalled" });
+      expect((await b.post(`/workspaces/${ws}/shopify/start`)).json().url).toBe("https://admin.shopify.com/oauth/install?client_id=appstore_key");
+      expect(clientId((await install("another-shop")).json().url)).toBe("appstore_key");
+      // A client's store still goes to its own app.
+      expect(clientId((await install("client-shop")).json().url)).toBe("client_key");
+    });
+
+    it("reconnects a store through the app it came through", async () => {
+      const { ws, install } = await owner();
+      // The App Store reviewer's test store: on the main app, shown as an App Store install.
+      ctx.setEnv({ SHOPIFY_APP_STORE_PREVIEW_SHOPS: DIRECT });
+      await createStore(ws, DIRECT, ["read_orders"], { shopifyAppKey: "default", status: "error" });
+      expect(clientId((await install("direct-shop")).json().url)).toBe("test_key");
+      expect(clientId((await install("new-shop")).json().url)).toBe("appstore_key");
+    });
+
+    it("adds stores through the App Store app when the workspace came from the first one, and keeps that store on it", async () => {
+      const { b, ws, install } = await owner();
+      await createStore(ws, FIRST_LISTED, ["read_orders"], { shopifyAppKey: "public", status: "error" });
+      expect((await b.post(`/workspaces/${ws}/shopify/start`)).json().url).toBe("https://admin.shopify.com/oauth/install?client_id=appstore_key");
+      expect(clientId((await install("new-shop")).json().url)).toBe("appstore_key");
+      expect(clientId((await install("first-listed-shop")).json().url)).toBe("public_key");
+    });
+
+    it("leaves a workspace with a main-app store on the main app", async () => {
+      const { b, ws, install } = await owner();
+      await createStore(ws, DIRECT, ["read_orders"], { shopifyAppKey: "default" });
+      await createStore(ws, LISTED, ["read_orders"], { shopifyAppKey: "appstore" });
+      expect((await b.post(`/workspaces/${ws}/shopify/start`)).json().url).toContain("client_id=test_key");
+      expect(clientId((await install("new-shop")).json().url)).toBe("test_key");
+      // Its App Store store reconnects through the App Store app all the same.
+      expect(clientId((await install("listed-shop")).json().url)).toBe("appstore_key");
+    });
   });
 
   /**
@@ -131,7 +281,7 @@ describe("several Shopify apps", () => {
   });
 
   it("accepts webhooks signed by any of our apps and says which one", async () => {
-    const body = JSON.stringify({ id: 1 });
+    const body = JSON.stringify({ id: 1, myshopify_domain: CLIENT_SHOP });
     const send = (secret: string, id: string) =>
       ctx.app.inject({
         method: "POST",
@@ -147,8 +297,10 @@ describe("several Shopify apps", () => {
       });
     expect((await send("client_secret", "w1")).statusCode).toBe(200);
     expect((await send("test_secret", "w2")).statusCode).toBe(200);
-    expect((await send("forged", "w3")).statusCode).toBe(401);
-    expect(ctx.deps.queues.sent.webhooks.map((j) => j.app)).toEqual(["client", "default"]);
+    expect((await send("appstore_secret", "w3")).statusCode).toBe(200);
+    expect((await send("public_secret", "w4")).statusCode).toBe(200);
+    expect((await send("forged", "w5")).statusCode).toBe(401);
+    expect(ctx.deps.queues.sent.webhooks.map((j) => j.app)).toEqual(["client", "default", "appstore", "public"]);
   });
 
   it("refreshes a store's token with the app it connected through", async () => {

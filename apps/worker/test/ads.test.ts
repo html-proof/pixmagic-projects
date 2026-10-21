@@ -52,10 +52,13 @@ describe("ad account sync", () => {
     const conn = await connection("meta");
     const d1 = addDays(today(), -1);
     await systemDb.adCampaignDaily.create({ data: { workspaceId: conn.workspaceId, storeId: conn.storeId, connectionId: conn.id, provider: "meta", accountId: "act_1", campaignId: "gone", campaignName: "Deleted campaign", day: d1, spend: 99 } });
-    fetchImpl = async (input) => {
+    fetchImpl = async (input, init) => {
       const u = new URL(String(input));
-      expect(u.pathname).toBe("/v25.0/act_1/insights");
-      expect(u.searchParams.get("access_token")).toBe("ACCESS");
+      // The configured Marketing API version (META_API_VERSION's default).
+      expect(u.pathname).toBe("/v26.0/act_1/insights");
+      // The token goes in the header, never in the URL.
+      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer ACCESS");
+      expect(u.searchParams.has("access_token")).toBe(false);
       return json({ data: [{ campaign_id: "7", campaign_name: "Spring", date_start: d1, spend: "12.5", impressions: "900", clicks: "30", actions: [{ action_type: "omni_purchase", value: "2" }], action_values: [{ action_type: "omni_purchase", value: "88" }] }] });
     };
     const { msg, m } = message({ kind: "ads", connectionId: conn.id, since: addDays(today(), -2), until: today() });
@@ -66,6 +69,30 @@ describe("ad account sync", () => {
     const after = await systemDb.adConnection.findUniqueOrThrow({ where: { id: conn.id } });
     expect(after.status).toBe("active");
     expect(after.lastSyncedAt).toBeTruthy();
+    // Every day from the window's start on is stored: the account's history starts there.
+    expect(after.historyFrom).toBe(addDays(today(), -2));
+  });
+
+  it("keeps the earliest window any sync fetched in full as where the account's history starts", async () => {
+    const conn = await connection("meta");
+    fetchImpl = async () => json({ data: [] });
+    const sync = async (days: number) => {
+      const { msg, m } = message({ kind: "ads", connectionId: conn.id, since: addDays(today(), -(days - 1)), until: today() });
+      await consume("sync", msg, deps);
+      expect(m.acked).toBe(true);
+      return (await systemDb.adConnection.findUniqueOrThrow({ where: { id: conn.id } })).historyFrom;
+    };
+    // The first sync's 90 days, even with nothing spent in them.
+    expect(await sync(90)).toBe(addDays(today(), -89));
+    // The hourly refresh and the daily re-check fetch fewer days: the start stays.
+    expect(await sync(3)).toBe(addDays(today(), -89));
+    expect(await sync(30)).toBe(addDays(today(), -89));
+    // A sync that fails records nothing.
+    await systemDb.adConnection.update({ where: { id: conn.id }, data: { historyFrom: null } });
+    fetchImpl = async () => json({ error: { message: "Invalid OAuth access token", type: "OAuthException", code: 190 } }, 400);
+    const { msg } = message({ kind: "ads", connectionId: conn.id, since: addDays(today(), -89), until: today() });
+    await consume("sync", msg, deps);
+    expect((await systemDb.adConnection.findUniqueOrThrow({ where: { id: conn.id } })).historyFrom).toBeNull();
   });
 
   it("refreshes Google's hour-long access token before reading, and keeps the new one", async () => {
@@ -74,7 +101,7 @@ describe("ad account sync", () => {
     fetchImpl = async (input, init) => {
       const u = new URL(String(input));
       calls.push(u.host + u.pathname.replace(/\/v\d+\/.*/, ""));
-      // A connection made before Insights kept who granted it learns that after its refresh.
+      // A connection made before bizinsights kept who granted it learns that after its refresh.
       if (u.host === "oauth2.googleapis.com" && u.pathname === "/tokeninfo") return json({ aud: "c", sub: "777000" });
       if (u.host === "oauth2.googleapis.com") {
         expect(new URLSearchParams(String(init?.body)).get("refresh_token")).toBe("REFRESH");
@@ -155,30 +182,49 @@ describe("ad account sync", () => {
       return json({ error: { message: "(#200) Requires ads_read permission", code: 200 } }, 403);
     };
     await consume("sync", message({ kind: "ads", connectionId: revoked.id, since: today(), until: today() }).msg, deps);
-    expect((await systemDb.adConnection.findUniqueOrThrow({ where: { id: revoked.id } })).status).toBe("reconnect");
+    expect(await systemDb.adConnection.findUniqueOrThrow({ where: { id: revoked.id } })).toMatchObject({ status: "reconnect", errorCode: "scope_missing" });
 
-    // Still granted: this login lost the account itself, which reconnecting can't fix.
-    await systemDb.adConnection.update({ where: { id: revoked.id }, data: { status: "active", lastError: null } });
+    // Still granted: this login lost the account itself, which reconnecting with it can't fix, and
+    // retrying every hour can't either (the daily look asks whether it's back).
+    await systemDb.adConnection.update({ where: { id: revoked.id }, data: { status: "active", errorCode: null, lastError: null } });
     adsRead = "granted";
-    await consume("sync", message({ kind: "ads", connectionId: revoked.id, since: today(), until: today() }).msg, deps);
-    expect(await systemDb.adConnection.findUniqueOrThrow({ where: { id: revoked.id } })).toMatchObject({ status: "error", lastError: expect.stringContaining("ads_read") });
+    const lost = message({ kind: "ads", connectionId: revoked.id, since: today(), until: today() });
+    await consume("sync", lost.msg, deps);
+    expect(lost.m).toMatchObject({ acked: true, retried: null });
+    expect(await systemDb.adConnection.findUniqueOrThrow({ where: { id: revoked.id } })).toMatchObject({ status: "permission", errorCode: "no_access", lastError: expect.stringContaining("ads_read") });
   });
 
-  it("rate limits are retried, and only the last attempt marks the account", async () => {
+  it("a rate limit is waited for without spending a retry; once it has waited long enough, the last ordinary attempt marks the account", async () => {
     const conn = await connection("meta");
+    // Meta's code 17: the app is throttled, which says nothing about the account.
     fetchImpl = async () => json({ error: { message: "User request limit reached", code: 17 } }, 400);
-    const first = message({ kind: "ads", connectionId: conn.id, since: today(), until: today() }, 1);
+    const job: AdsSyncData = { kind: "ads", connectionId: conn.id, since: today(), until: today() };
+    const first = message(job, 1);
     await consume("sync", first.msg, deps);
-    expect(first.m.retried).not.toBeNull();
+    // Re-sent as a new message for later, and this one acked: no attempt spent, nothing marked.
+    expect(first.m).toEqual({ acked: true, retried: null });
+    expect(queues.sent.sync).toEqual([{ ...job, rateDeferral: { count: 1, since: expect.any(Number) } }]);
+    expect(queues.sentOpts.sync[0]!.delaySeconds).toBeGreaterThanOrEqual(30);
+    expect(await systemDb.adConnection.findUniqueOrThrow({ where: { id: conn.id } })).toMatchObject({ status: "active", errorCode: null, consecutiveFailures: 0 });
+
+    // Still throttled six hours on: the ordinary retries take over, and only the last one marks the account.
+    queues.clear();
+    const waited = { ...job, rateDeferral: { count: 12, since: Date.now() - 6 * 3600_000 - 60_000 } } as AdsSyncData;
+    const retry = message(waited, 1);
+    await consume("sync", retry.msg, deps);
+    expect(retry.m.acked).toBe(false);
+    expect(retry.m.retried).not.toBeNull();
+    expect(queues.sent.sync).toEqual([]);
     expect((await systemDb.adConnection.findUniqueOrThrow({ where: { id: conn.id } })).status).toBe("active");
-    const last = message({ kind: "ads", connectionId: conn.id, since: today(), until: today() }, 6);
+    const last = message(waited, 6);
     await consume("sync", last.msg, deps);
-    expect(last.m.acked).toBe(true);
-    expect((await systemDb.adConnection.findUniqueOrThrow({ where: { id: conn.id } })).status).toBe("error");
+    expect(last.m).toEqual({ acked: true, retried: null });
+    expect(await systemDb.adConnection.findUniqueOrThrow({ where: { id: conn.id } })).toMatchObject({ status: "error", errorCode: "rate_limited", consecutiveFailures: 1 });
   });
 
   it("the 15-minute tick refreshes recent days hourly and re-checks 30 days once a day, skipping accounts awaiting a reconnect", async () => {
-    const a = await connection("meta");
+    // Connected a while ago (a new connection is left to its first sync for an hour).
+    const a = await connection("meta", { createdAt: new Date(Date.now() - 2 * 3600_000) });
     await systemDb.adConnection.create({
       data: { ...(({ id: _id, createdAt: _c, updatedAt: _u, ...rest }) => rest)(a), accountId: "act_2", status: "reconnect" },
     });
@@ -195,5 +241,24 @@ describe("ad account sync", () => {
     // Wired into the cron.
     coord.clear();
     expect(await runScheduled(CRON.refreshTokens, deps)).toMatchObject({ adsSynced: 1 });
+  });
+
+  it("an account whose stored history falls short of 25 months has it walked back, 90 days at a time", async () => {
+    // Synced before, its stored days starting 20 days back (its first sync's window, or one cut short).
+    const short = await connection("meta", { lastSyncedAt: new Date(), historyFrom: addDays(today(), -20), syncedThrough: today() });
+    expect(await scheduleAdsSync(deps)).toBe(2);
+    expect(queues.sent.sync).toEqual([
+      expect.objectContaining({ connectionId: short.id, since: addDays(today(), -29), until: today(), trigger: "schedule", health: true }),
+      { kind: "ads", connectionId: short.id, since: addDays(today(), -110), until: addDays(today(), -21), trigger: "history" },
+    ]);
+    // A window on its way holds the walk: the next tick doesn't queue it again.
+    await scheduleAdsSync(deps);
+    expect(queues.sent.sync.filter((j) => (j as unknown as AdsSyncData).trigger === "history")).toHaveLength(1);
+    // Once 25 months are in, there is nothing left to walk.
+    await systemDb.adConnection.update({ where: { id: short.id }, data: { historyFrom: addDays(today(), -759) } });
+    coord.clear();
+    queues.clear();
+    await scheduleAdsSync(deps);
+    expect(queues.sent.sync.map((j) => (j as unknown as AdsSyncData).trigger)).toEqual(["schedule"]);
   });
 });

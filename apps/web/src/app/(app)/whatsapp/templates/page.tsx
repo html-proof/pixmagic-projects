@@ -5,7 +5,8 @@ import { Badge, Empty } from "@/components/dashboard/Primitives";
 import { fmtRelative } from "@/components/dashboard/format";
 import { LoadError } from "@/components/LoadError";
 import { api, useApi } from "@/lib/api";
-import { bodyText, PageHeader, Skeleton, TEMPLATE_STATUS, useAction, useWa, type WaTemplate } from "@/components/whatsapp/Common";
+import { bodyText, TEMPLATE_STATUS, useWa, type WaTemplate } from "@/components/whatsapp/WhatsappUi";
+import { PageHeader, Skeleton, useAction } from "@/components/AppUi";
 import type { Overview } from "@/components/whatsapp/types";
 
 const buttonsOf = (t: WaTemplate) => t.components.find((c) => c.type.toUpperCase() === "BUTTONS")?.buttons ?? [];
@@ -67,7 +68,7 @@ export default function Templates() {
         <section className="card animate-rise" aria-labelledby="mine-h">
           <h2 id="mine-h" className="font-semibold">In your WhatsApp account ({data.templates.length})</h2>
           {!data.templates.length ? (
-            <p className="mt-2 text-sm text-muted">None yet. Add Insights&apos; ready-made templates below, or create your own in WhatsApp Manager and press Refresh.</p>
+            <p className="mt-2 text-sm text-muted">None yet. Add bizinsights&apos; ready-made templates below, or create your own in WhatsApp Manager and press Refresh.</p>
           ) : (
             <ul className="mt-3 divide-y divide-border">
               {data.templates.map((t) => {
@@ -131,7 +132,7 @@ export default function Templates() {
       )}
 
       <section className="card animate-rise" aria-labelledby="lib-h">
-        <h2 id="lib-h" className="font-semibold">Insights&apos; ready-made templates</h2>
+        <h2 id="lib-h" className="font-semibold">bizinsights&apos; ready-made templates</h2>
         <p className="mt-1 text-sm text-muted">
           Written to Meta&apos;s guidelines and mapped to real order data. Submitting one adds it to your WhatsApp account for Meta&apos;s review, which usually takes minutes but can
           take up to a day. Links use your store&apos;s secure tracking and review pages.

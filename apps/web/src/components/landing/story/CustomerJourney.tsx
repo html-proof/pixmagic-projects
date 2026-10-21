@@ -17,7 +17,7 @@ import {
 
 /**
  * The questions the journey answers, one per stretch of the camera move. "Which pages lose them?"
- * stands where a device question might go: Insight reports the site section and exit page where
+ * stands where a device question might go: bizinsights reports the site section and exit page where
  * visits leave, not devices.
  */
 const QUESTIONS = [
@@ -58,12 +58,8 @@ function JourneyRunway() {
     <section ref={ref} aria-labelledby="journey-title" className="relative h-[260vh] bg-lp-bg md:h-[300vh] xl:h-[320vh]">
       <div className="sticky top-0 h-svh overflow-hidden">
         <div aria-hidden className={`lp-grid pointer-events-none absolute inset-0 ${GRID_MASK}`} />
-        {/* Soft side edges so labels and the stream slide in and out of view rather than being cut. */}
-        <JourneyVisual
-          progress={progress}
-          frame={RUNWAY_FRAME}
-          className="absolute inset-0 md:landscape:[mask-image:linear-gradient(90deg,transparent,black_6%,black_94%,transparent)]"
-        />
+        {/* Soft side edges (edgeFade) so labels and the stream slide in and out of view rather than being cut. */}
+        <JourneyVisual progress={progress} frame={RUNWAY_FRAME} edgeFade className="absolute inset-0" />
 
         <div className="pointer-events-none absolute inset-x-0 top-[max(96px,12svh)] md:top-[max(112px,13svh)]">
           <div className={GUTTER}>
@@ -72,14 +68,14 @@ function JourneyRunway() {
               <IllustrativeNote />
             </div>
             <div className="mt-4 grid max-w-[940px] md:mt-6">
-              <motion.h2 id="journey-title" style={{ opacity: headOpacity, y: headY }} className={`[grid-area:1/1] ${MESSAGE_TYPE}`}>
+              <motion.h2 id="journey-title" style={{ opacity: headOpacity, y: headY }} className={`[grid-area:1/1] lp-layer ${MESSAGE_TYPE}`}>
                 See where customers disappear.
               </motion.h2>
               {QUESTIONS.map((q, i) => (
                 <Question key={q} progress={progress} index={i} text={q} />
               ))}
-              <motion.p style={{ opacity: finalOpacity, y: finalY }} className={`[grid-area:1/1] ${MESSAGE_TYPE}`}>
-                Insight shows you <span className="lp-gradient-text">where to look.</span>
+              <motion.p style={{ opacity: finalOpacity, y: finalY }} className={`[grid-area:1/1] lp-layer ${MESSAGE_TYPE}`}>
+                bizinsights shows you <span className="lp-gradient-text">where to look.</span>
               </motion.p>
             </div>
           </div>
@@ -107,7 +103,7 @@ function Question({ progress, index, text }: { progress: MotionValue<number>; in
   const opacity = useTransform(progress, [a, b, c, d], [0, 1, 1, 0]);
   const y = useTransform(progress, [a, b, c, d], [32, 0, 0, -32]);
   return (
-    <motion.div style={{ opacity, y }} className="[grid-area:1/1]">
+    <motion.div style={{ opacity, y }} className="[grid-area:1/1] lp-layer">
       <p className={MESSAGE_TYPE}>{text}</p>
     </motion.div>
   );
@@ -178,7 +174,7 @@ function JourneyStatic() {
           ))}
         </ol>
         <p className="mt-12 text-balance text-[clamp(32px,4.4vw,64px)] font-[550] leading-[1] tracking-[-0.045em] text-lp-text">
-          Insight shows you <span className="lp-gradient-text">where to look.</span>
+          bizinsights shows you <span className="lp-gradient-text">where to look.</span>
         </p>
       </div>
     </section>

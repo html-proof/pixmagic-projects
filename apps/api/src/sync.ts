@@ -1,42 +1,7 @@
 import { systemDb, type Prisma, type Store } from "@app/db";
-import type { SyncKind } from "@app/core";
+import { seedResync, type SyncKind } from "@app/core";
 import { expandScopes } from "@app/shared";
 import type { Deps } from "./context.js";
-
-/**
- * Kinds that must wait for the "shop" job, because they bucket rows by the store's local day
- * and `shop` is what learns the time zone. Everything else can start immediately.
- *
- * Only orders (and the refunds that ride with them) carry a `local_day`; the catalog does not,
- * so making products and variants wait for a round trip to Shopify bought nothing and simply
- * added a serial hop to the front of every import. The worker fans these out after `shop`;
- * the rest are enqueued here, straight away.
- */
-const NEEDS_TIMEZONE = new Set<SyncKind>(["orders"]);
-
-/**
- * Create the initial sync job rows (visible as onboarding progress) and enqueue everything
- * that can start now. The worker runs `shop` first (it sets currency/time zone, which day
- * bucketing depends on) and then fans out the jobs that were waiting on it.
- */
-export async function seedInitialSync(deps: Pick<Deps, "queues">, store: Pick<Store, "id" | "workspaceId" | "grantedScopes">) {
-  const scopes = expandScopes(store.grantedScopes);
-  const kinds: SyncKind[] = ["shop", "orders"];
-  if (scopes.has("read_products")) kinds.push("products", "variants");
-  if (scopes.has("write_pixels")) kinds.push("install_pixel");
-
-  const jobs = [];
-  for (const kind of kinds) {
-    jobs.push(await systemDb.syncJob.create({ data: { workspaceId: store.workspaceId, storeId: store.id, kind } }));
-  }
-  // `shop` starts exactly these, not whatever else the store has queued (see runSync).
-  const waitingJobIds = jobs.filter((j) => NEEDS_TIMEZONE.has(j.kind as SyncKind)).map((j) => j.id);
-  for (const job of jobs) {
-    if (NEEDS_TIMEZONE.has(job.kind as SyncKind)) continue;
-    await deps.queues.sync.send({ storeId: store.id, kind: job.kind as SyncKind, syncJobId: job.id, ...(job.kind === "shop" ? { waitingJobIds } : {}) });
-  }
-  return jobs;
-}
 
 /** A job never picked up counts as waiting for a consumer for this long after it was created. */
 const QUEUED_WINDOW_MS = 30 * 60 * 1000;
@@ -69,10 +34,19 @@ export function liveSyncJobs(storeId: string, idleMs: number): Prisma.SyncJobWhe
  */
 export const AUTO_REFRESH = { ordersEverySec: 300, catalogEverySec: 1800, retryEverySec: 1800, orderDays: 2, sourcesEverySec: 86_400, sourcesDays: 60 } as const;
 
-/** Whether the store has orders in the import window that were stored without a source. */
-async function missingSources(storeId: string): Promise<boolean> {
+/**
+ * Whether the store has orders in the import window that were stored without something only a
+ * full read gives: where the customer came from, Shopify's sales records (orders stored before
+ * the sales totals were read from them, or known only from a webhook whose read failed), or when
+ * the order was processed (stored before that was read: the day it counts on, with its gift-card
+ * flag and its sales' agreements, which a read fills in too).
+ */
+async function needsReread(storeId: string): Promise<boolean> {
   const since = new Date(Date.now() - AUTO_REFRESH.sourcesDays * 86_400_000);
-  return !!(await systemDb.order.findFirst({ where: { storeId, trafficSource: null, shopifyCreatedAt: { gte: since } }, select: { id: true } }));
+  return !!(await systemDb.order.findFirst({
+    where: { storeId, shopifyCreatedAt: { gte: since }, OR: [{ trafficSource: null }, { salesUpdatedAt: null }, { shopifyProcessedAt: null }] },
+    select: { id: true },
+  }));
 }
 
 /**
@@ -102,9 +76,11 @@ export async function autoRefresh(
     return (await seedResync(deps, store)).map((j) => j.kind);
   }
   const kinds: Array<{ kind: SyncKind; sinceDays?: number }> = [];
-  // Orders stored before Insights recorded where customers came from: re-read the import window
-  // once (by creation date), which fills their sources in. At most daily, and only while any lack one.
-  if ((await due("sources", AUTO_REFRESH.sourcesEverySec)) && (await missingSources(store.id))) {
+  // Orders stored before bizinsights recorded where customers came from, or before the sales totals
+  // were read from Shopify's sales records: re-read the import window once (by creation date),
+  // which fills them in. At most daily, and only while any lack one. (The key was "sources" before
+  // the sales records: a new one, so every store re-reads on its first dashboard view.)
+  if ((await due("reread", AUTO_REFRESH.sourcesEverySec)) && (await needsReread(store.id))) {
     kinds.push({ kind: "orders", sinceDays: AUTO_REFRESH.sourcesDays });
   } else if (await due("orders", AUTO_REFRESH.ordersEverySec)) kinds.push({ kind: "orders", sinceDays: AUTO_REFRESH.orderDays });
   if (expandScopes(store.grantedScopes).has("read_products") && (await due("catalog", AUTO_REFRESH.catalogEverySec))) {
@@ -115,33 +91,4 @@ export async function autoRefresh(
     await deps.queues.sync.send({ storeId: store.id, kind: k.kind, syncJobId: job.id, ...(k.sinceDays ? { sinceDays: k.sinceDays } : {}) });
   }
   return kinds.map((k) => k.kind);
-}
-
-/** Days of orders a manual refresh re-pulls once the full backfill has completed. */
-export const REFRESH_ORDER_DAYS = 7;
-
-/**
- * "Refresh data": a store that never finished its first import gets the full initial sync
- * again; otherwise re-pull the catalog, stock levels and recently updated orders.
- */
-export async function seedResync(
-  deps: Pick<Deps, "queues">,
-  store: Pick<Store, "id" | "workspaceId" | "grantedScopes" | "lastSyncedAt">,
-) {
-  if (!store.lastSyncedAt) return seedInitialSync(deps, store);
-  const scopes = expandScopes(store.grantedScopes);
-  const kinds: SyncKind[] = ["orders"];
-  if (scopes.has("read_products")) kinds.push("products", "variants");
-  const jobs = [];
-  for (const kind of kinds) {
-    const job = await systemDb.syncJob.create({ data: { workspaceId: store.workspaceId, storeId: store.id, kind } });
-    await deps.queues.sync.send({
-      storeId: store.id,
-      kind,
-      syncJobId: job.id,
-      ...(kind === "orders" ? { sinceDays: REFRESH_ORDER_DAYS } : {}),
-    });
-    jobs.push(job);
-  }
-  return jobs;
 }

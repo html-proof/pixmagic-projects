@@ -1,15 +1,14 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { defineConfig } from "vitest/config";
-import { wasmModule } from "../../../test-support/wasmModule.js";
 
 /**
  * Runs the WhatsApp demo seed (wa-demo.seed.ts) against the LOCAL demo database only:
  *   WA_DEMO_EMAIL=you@example.com npx vitest run --config demo/vitest.config.ts   (from apps/worker)
- * It uses the demo Worker's own test keys (apps/web/e2e/worker.env), so the Worker can read what it writes.
+ * It uses the demo server's own test keys (apps/web/e2e/server.env), so the server can read what it writes.
  */
 const workerEnv = Object.fromEntries(
-  readFileSync(resolve(__dirname, "../../web/e2e/worker.env"), "utf8")
+  readFileSync(resolve(__dirname, "../../web/e2e/server.env"), "utf8")
     .split(/\r?\n/)
     .filter((l) => /^[A-Z_]+=/.test(l))
     .map((l) => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1)]),
@@ -18,7 +17,6 @@ const db = process.env.WA_DEMO_PG ?? "localhost:5447/wa_demo";
 if (!/wa_demo$/.test(db)) throw new Error("The WhatsApp demo seed only writes to a database named wa_demo");
 
 export default defineConfig({
-  plugins: [wasmModule()],
   test: {
     env: {
       ...workerEnv,

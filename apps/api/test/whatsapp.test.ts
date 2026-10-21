@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { systemDb, type Prisma } from "@app/db";
-import { ensurePlatformWebhook, newLinkToken, waEncrypt, type FetchLike } from "@app/core";
-import { sha256Hex, signMetaBody, TEMPLATE_LIBRARY, whatsappConfigSchema } from "@app/shared";
+import { cancelScheduled, ensurePlatformWebhook, newLinkToken, waEncrypt, type FetchLike } from "@app/core";
+import { LEGACY_GRANTS, sha256Hex, signMetaBody, TEMPLATE_LIBRARY, whatsappConfigSchema } from "@app/shared";
 import { clean, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
 
 /**
@@ -120,7 +120,7 @@ describe("connecting WhatsApp", () => {
   /**
    * Meta as the guided flow sees it: the token's app and accounts (debug_token), the account's
    * numbers, and the app's webhook settings, whose POST runs the verify handshake against
-   * Insights the way Meta does.
+   * bizinsights the way Meta does.
    */
   function guidedMeta(opts: { scopes?: string[]; otherWebhook?: string; listAccounts?: boolean } = {}) {
     const subscribed: Array<Record<string, string>> = [];
@@ -177,7 +177,7 @@ describe("connecting WhatsApp", () => {
     expect(unlisted.json()).toEqual({ appId: "777", accounts: [] });
   });
 
-  it("points the merchant's app's webhook at Insights, so there's nothing to paste into Meta", async () => {
+  it("points the merchant's app's webhook at bizinsights, so there's nothing to paste into Meta", async () => {
     const o = await owner();
     const meta = guidedMeta();
     ctx.setFetch(meta.fetch);
@@ -218,7 +218,7 @@ describe("connecting WhatsApp", () => {
     const exchanged: string[] = [];
     const fetch: FetchLike = async (input, init) => {
       const u = new URL(String(input));
-      // Insights' own app inspecting the business token Embedded Signup returned.
+      // bizinsights' own app inspecting the business token Embedded Signup returned.
       if (u.pathname.endsWith("/debug_token") && (init?.headers as Record<string, string> | undefined)?.authorization === "Bearer 123|platform_secret") {
         const scopes = ["whatsapp_business_management", "whatsapp_business_messaging"];
         return json({ data: { app_id: token.appId ?? "123", is_valid: true, scopes, granular_scopes: scopes.map((scope) => ({ scope, target_ids: token.granted ?? ["1111111111"] })) } });
@@ -253,7 +253,7 @@ describe("connecting WhatsApp", () => {
     expect(expired.json().error).toBe("exchange_failed");
   });
 
-  it("won't take the browser's word for the account: it must be one this sign-up granted to Insights' app", async () => {
+  it("won't take the browser's word for the account: it must be one this sign-up granted to bizinsights' app", async () => {
     const o = await owner();
     ctx.setFetch(embeddedMeta(1, { granted: ["3333333333"] }).fetch);
     const other = await ctx.app.inject({ method: "POST", url: `${o.base}/embedded`, headers: o.headers, payload: { code: "es-code-123456", wabaId: "1111111111", phoneNumberId: "2222222222" } });
@@ -324,7 +324,7 @@ describe("connecting WhatsApp", () => {
     expect(await systemDb.auditLog.count({ where: { action: "whatsapp.pin_viewed" } })).toBe(1);
 
     const me = await systemDb.user.findFirstOrThrow({ where: { email: "o@shop.test" } });
-    await systemDb.membership.update({ where: { workspaceId_userId: { workspaceId: o.ws, userId: me.id } }, data: { role: "analyst" } });
+    await systemDb.membership.update({ where: { workspaceId_userId: { workspaceId: o.ws, userId: me.id } }, data: { role: "analyst", permissions: [...LEGACY_GRANTS.analyst] } });
     expect((await ctx.app.inject({ method: "POST", url: `${o.base}/pin`, headers: o.headers })).statusCode).toBe(403);
   });
 
@@ -349,7 +349,7 @@ describe("connecting WhatsApp", () => {
     expect((await ctx.app.inject({ method: "POST", url: `${o.base}/pin`, headers: o.headers })).json().error).toBe("pin_unknown");
   });
 
-  it("points Insights' own Meta app's webhook here by itself, once", async () => {
+  it("points bizinsights' own Meta app's webhook here by itself, once", async () => {
     const subs: Array<{ object: string; callback_url: string; active: boolean; fields: Array<{ name: string }> }> = [];
     const posts: Array<Record<string, string>> = [];
     ctx.setFetch(async (input, init) => {
@@ -397,7 +397,7 @@ describe("tenant isolation", () => {
     const put = await ctx.app.inject({ method: "PUT", url: `${a.base}/settings`, headers: b.headers, payload: {} });
     expect(put.statusCode).toBe(404);
     // Their own workspace id with A's store id: still nothing.
-    const bWs = (await systemDb.membership.findFirstOrThrow({ where: { user: { firebaseUid: "b" } } })).workspaceId;
+    const bWs = (await systemDb.membership.findFirstOrThrow({ where: { user: { identities: { some: { subject: "b" } } } } })).workspaceId;
     const cross = await ctx.app.inject({ method: "GET", url: `/workspaces/${bWs}/stores/${a.store.id}/whatsapp`, headers: b.headers });
     expect(cross.statusCode).toBe(404);
   });
@@ -405,7 +405,7 @@ describe("tenant isolation", () => {
   it("viewers can look but not change, and API keys are read-only", async () => {
     const o = await owner();
     const v = await signIn(ctx, "v", "v@shop.test");
-    await systemDb.membership.create({ data: { workspaceId: o.ws, userId: v.user.id, role: "viewer" } });
+    await systemDb.membership.create({ data: { workspaceId: o.ws, userId: v.user.id, role: "viewer", permissions: [...LEGACY_GRANTS.viewer] } });
     expect((await ctx.app.inject({ method: "GET", url: o.base, headers: v.headers })).statusCode).toBe(200);
     expect((await ctx.app.inject({ method: "GET", url: `${o.base}/messages`, headers: v.headers })).statusCode).toBe(403);
     expect((await ctx.app.inject({ method: "PUT", url: `${o.base}/settings`, headers: v.headers, payload: {} })).statusCode).toBe(403);
@@ -464,7 +464,7 @@ describe("Meta's webhook", () => {
     expect(await systemDb.whatsappContact.count()).toBe(0);
   });
 
-  it("applies a delivery signed by the store's own app secret, or by Insights' app", async () => {
+  it("applies a delivery signed by the store's own app secret, or by bizinsights' app", async () => {
     const o = await owner();
     await connectManual(o);
     const raw = stop();
@@ -552,8 +552,8 @@ describe("reviews", () => {
   });
 });
 
-describe("campaigns", () => {
-  async function connectedStore() {
+/** A store with a registered number, verified webhooks, the seasonal offer template, and four contacts (two can get marketing). */
+async function connectedStore() {
     const o = await owner();
     await connectManual(o);
     await systemDb.whatsappConnection.updateMany({ where: { storeId: o.store.id }, data: { webhookVerifiedAt: new Date() } });
@@ -567,8 +567,9 @@ describe("campaigns", () => {
       await systemDb.whatsappContact.create({ data: { workspaceId: o.ws, storeId: o.store.id, phoneHash: `h${i}`, phoneEnc: waEncrypt(o.store.id, "phone", `91900000000${i}`), phoneMasked: `${i}`, marketingStatus: status, marketingSource: "whatsapp_keyword", optedOut } });
     }
     return o;
-  }
+}
 
+describe("campaigns", () => {
   const draft = {
     name: "Onam sale",
     occasion: "onam",
@@ -608,6 +609,137 @@ describe("campaigns", () => {
     const id = (await ctx.app.inject({ method: "POST", url: `${o.base}/campaigns`, headers: o.headers, payload: draft })).json().campaign.id;
     const res = await ctx.app.inject({ method: "POST", url: `${o.base}/campaigns/${id}/schedule`, headers: o.headers, payload: { confirmRecipients: 2 } });
     expect(res.json().error).toBe("webhook_unverified");
+  });
+
+  it("pauses, resumes and cancels only from the states that allow it, and cancelling stops what hasn't gone out", async () => {
+    const o = await connectedStore();
+    const act = (id: string, action: string) => ctx.app.inject({ method: "POST", url: `${o.base}/campaigns/${id}/${action}`, headers: o.headers });
+    const id = (await ctx.app.inject({ method: "POST", url: `${o.base}/campaigns`, headers: o.headers, payload: draft })).json().campaign.id;
+    const early = await act(id, "pause");
+    expect(early.statusCode).toBe(409);
+    expect(early.json()).toEqual({ error: "invalid_state", message: "A draft campaign can't be paused." });
+    await ctx.app.inject({ method: "POST", url: `${o.base}/campaigns/${id}/schedule`, headers: o.headers, payload: { confirmRecipients: 2 } });
+    expect((await act(id, "pause")).json()).toEqual({ ok: true, status: "paused" });
+    expect((await act(id, "pause")).statusCode).toBe(409);
+    // It never started, so resuming schedules it again rather than sending.
+    expect((await act(id, "resume")).json()).toEqual({ ok: true, status: "scheduled" });
+    const waiting = await systemDb.whatsappMessage.create({ data: { workspaceId: o.ws, storeId: o.store.id, kind: "campaign", dedupeKey: `campaign:${id}:x`, scheduledFor: new Date(), campaignId: id, paramsEnc: "p" } });
+    expect((await act(id, "cancel")).json()).toEqual({ ok: true, status: "cancelled" });
+    expect(await systemDb.whatsappMessage.findUniqueOrThrow({ where: { id: waiting.id } })).toMatchObject({ status: "cancelled", reason: "campaign_cancelled", paramsEnc: null });
+    expect((await act(id, "resume")).statusCode).toBe(409);
+    const del = await ctx.app.inject({ method: "DELETE", url: `${o.base}/campaigns/${id}`, headers: o.headers });
+    expect(del.json().error).toBe("not_draft");
+    expect(await systemDb.auditLog.count({ where: { action: { in: ["whatsapp.campaign_paused", "whatsapp.campaign_resumed", "whatsapp.campaign_cancelled"] } } })).toBe(3);
+  });
+});
+
+describe("message history", () => {
+  async function message(o: Awaited<ReturnType<typeof owner>>, kind: string, status: string, paramsEnc: string | null = "p") {
+    return systemDb.whatsappMessage.create({ data: { workspaceId: o.ws, storeId: o.store.id, kind, dedupeKey: `${kind}:${status}:${Math.random()}`, scheduledFor: new Date(), status, paramsEnc } });
+  }
+
+  it("filters by group, and offers retry only for what can be sent again", async () => {
+    const o = await owner();
+    await message(o, "abandoned_cart_1", "failed");
+    await message(o, "abandoned_cart_2", "sent");
+    await message(o, "order_confirmation", "failed", null);
+    const list = await ctx.app.inject({ method: "GET", url: `${o.base}/messages?group=carts`, headers: o.headers });
+    const rows = list.json().messages as Array<{ kind: string; status: string; canRetry: boolean }>;
+    expect(rows.map((m) => m.kind).sort()).toEqual(["abandoned_cart_1", "abandoned_cart_2"]);
+    expect(rows.find((m) => m.status === "failed")!.canRetry).toBe(true);
+    expect(rows.find((m) => m.status === "sent")!.canRetry).toBe(false);
+    const all = await ctx.app.inject({ method: "GET", url: `${o.base}/messages?group=nonsense`, headers: o.headers });
+    expect(all.json().messages).toHaveLength(3);
+  });
+
+  it("retries a failed message, and says why one that went out or was cleared can't be", async () => {
+    const o = await owner();
+    const failed = await message(o, "order_confirmation", "failed");
+    const sent = await message(o, "order_confirmation", "sent");
+    const cleared = await message(o, "order_confirmation", "failed", null);
+    const retry = (id: string) => ctx.app.inject({ method: "POST", url: `${o.base}/messages/${id}/retry`, headers: o.headers });
+    expect((await retry(failed.id)).statusCode).toBe(200);
+    expect((await systemDb.whatsappMessage.findUniqueOrThrow({ where: { id: failed.id } })).status).toBe("scheduled");
+    const refused = await retry(sent.id);
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json()).toEqual({ error: "not_retryable", message: "Only failed, skipped or cancelled messages can be retried" });
+    expect((await retry(cleared.id)).json().error).toBe("not_retryable");
+  });
+
+  it("cancels a message that hasn't gone out, once, and never another store's", async () => {
+    const o = await owner();
+    const other = await owner("u2", "p@shop.test");
+    const waiting = await message(o, "order_confirmation", "scheduled");
+    const theirs = await message(other, "order_confirmation", "scheduled");
+    const cancel = (id: string) => ctx.app.inject({ method: "POST", url: `${o.base}/messages/${id}/cancel`, headers: o.headers });
+    expect((await cancel(waiting.id)).statusCode).toBe(200);
+    expect(await systemDb.whatsappMessage.findUniqueOrThrow({ where: { id: waiting.id } })).toMatchObject({ status: "cancelled", reason: "cancelled_by_merchant" });
+    expect((await cancel(waiting.id)).json().error).toBe("not_cancellable");
+    expect((await cancel(theirs.id)).statusCode).toBe(409);
+    expect((await systemDb.whatsappMessage.findUniqueOrThrow({ where: { id: theirs.id } })).status).toBe("scheduled");
+  });
+
+  it("refuses to cancel without saying what (it would hit every store)", async () => {
+    await expect(cancelScheduled({}, "oops")).rejects.toThrow(/needs a message/);
+  });
+});
+
+describe("cart reminders sent by hand", () => {
+  async function cartStore() {
+    const o = await connectedStore();
+    const conn = await systemDb.whatsappConnection.findFirstOrThrow({ where: { storeId: o.store.id } });
+    const lib = TEMPLATE_LIBRARY.find((t) => t.name === "insights_cart_reminder")!;
+    await systemDb.whatsappTemplate.create({
+      data: { workspaceId: o.ws, storeId: o.store.id, connectionId: conn.id, metaId: "c", name: lib.name, language: "en", category: "MARKETING", status: "APPROVED", components: [{ type: "BODY", text: lib.body }] },
+    });
+    const config = whatsappConfigSchema.parse({ notifications: { abandoned_cart_1: { enabled: true, templateName: lib.name, language: "en", mapping: lib.mapping } } });
+    await systemDb.whatsappSettings.update({ where: { storeId: o.store.id }, data: { config: config as unknown as Prisma.InputJsonValue } });
+    return o;
+  }
+
+  async function checkout(o: Awaited<ReturnType<typeof owner>>, phoneHash: string, status = "open") {
+    const contact = await systemDb.whatsappContact.findFirstOrThrow({ where: { storeId: o.store.id, phoneHash } });
+    return systemDb.abandonedCheckout.create({
+      data: {
+        workspaceId: o.ws,
+        storeId: o.store.id,
+        checkoutToken: `ck-${phoneHash}-${status}`,
+        contactId: contact.id,
+        phoneMasked: contact.phoneMasked,
+        currency: "INR",
+        totalPrice: 2499,
+        items: [],
+        recoveryUrlEnc: waEncrypt(o.store.id, "recovery", "https://shop.test/checkouts/abc"),
+        status,
+        checkoutCreatedAt: new Date(),
+        lastActivityAt: new Date(),
+      },
+    });
+  }
+
+  it("sends once to a customer who agreed to marketing, and says why not otherwise", async () => {
+    const o = await cartStore();
+    const remind = (id: string) => ctx.app.inject({ method: "POST", url: `${o.base}/carts/${id}/remind`, headers: o.headers });
+    const ok = await checkout(o, "h1");
+    const sent = await remind(ok.id);
+    expect(sent.statusCode).toBe(200);
+    expect(sent.json().status).toBe("scheduled");
+    expect(await systemDb.whatsappMessage.findUniqueOrThrow({ where: { id: sent.json().messageId } })).toMatchObject({ kind: "abandoned_cart_1", checkoutId: ok.id });
+    expect((await remind(ok.id)).json().error).toBe("already_reminded");
+    // h4 never agreed to WhatsApp marketing, and cart reminders are marketing.
+    expect((await remind((await checkout(o, "h4")).id)).json().error).toBe("no_marketing_consent");
+    expect((await remind((await checkout(o, "h2", "completed")).id)).json()).toEqual({ error: "checkout_closed", message: "This checkout has been completed or has expired." });
+  });
+});
+
+describe("consent summary", () => {
+  it("counts Shopify SMS consent as marketing consent only when the merchant says it covers WhatsApp", async () => {
+    const o = await connectedStore();
+    await systemDb.whatsappContact.create({ data: { workspaceId: o.ws, storeId: o.store.id, phoneHash: "h5", phoneEnc: waEncrypt(o.store.id, "phone", "919000000005"), phoneMasked: "5", marketingStatus: "opted_in", marketingSource: "shopify_sms", optedOut: false } });
+    const summary = () => ctx.app.inject({ method: "GET", url: `${o.base}/contacts/summary`, headers: o.headers }).then((r) => r.json());
+    expect(await summary()).toEqual({ contacts: 5, marketingEligible: 2, optedInViaShopifySms: 1, marketingOptedOut: 0, optedOutOfEverything: 1 });
+    await systemDb.whatsappSettings.update({ where: { storeId: o.store.id }, data: { config: whatsappConfigSchema.parse({ smsConsentCountsForMarketing: true }) as unknown as Prisma.InputJsonValue } });
+    expect((await summary()).marketingEligible).toBe(3);
   });
 });
 
@@ -653,6 +785,26 @@ describe("limits and automations", () => {
     expect(undo.statusCode).toBe(409);
     const missing = await ctx.app.inject({ method: "POST", url: `${o.base}/automations`, headers: o.headers, payload: { name: "X", enabled: false, trigger: "order_created", action: { type: "send_template", templateName: "nope", language: "en" } } });
     expect(missing.json().error).toBe("template_missing");
+  });
+
+  it("tests a rule without acting, and sends its template only to a valid number", async () => {
+    const o = await owner();
+    await connectManual(o);
+    const lib = TEMPLATE_LIBRARY[0]!;
+    const rule = await ctx.app.inject({
+      method: "POST",
+      url: `${o.base}/automations`,
+      headers: o.headers,
+      payload: { name: "Thanks", enabled: false, trigger: "order_created", action: { type: "send_template", templateName: lib.name, language: "en", mapping: lib.mapping } },
+    });
+    const test = (payload: object) => ctx.app.inject({ method: "POST", url: `${o.base}/automations/${rule.json().id}/test`, headers: o.headers, payload });
+    const dry = await test({});
+    expect(dry.json()).toMatchObject({ valid: true, wouldRun: true, order: null, testMessageId: null });
+    expect((await test({ phone: "not a number" })).json().error).toBe("invalid_phone");
+    const sent = await test({ phone: "+91 98765 43210" });
+    expect(sent.json().testMessageId).toEqual(expect.any(String));
+    // Each test that ran is in the rule's history; the refused number never got that far.
+    expect(await systemDb.whatsappAutomationRun.count({ where: { outcome: "test" } })).toBe(2);
   });
 });
 

@@ -1,0 +1,68 @@
+import { AwsClient } from "aws4fetch";
+import type { FetchLike } from "@app/core";
+
+/**
+ * Secrets for AWS hosting come from Secrets Manager at cold start, never from the function's
+ * environment (which anyone who can read the function's configuration can see):
+ *
+ *  - APP_SECRET_ARN (insights/<env>/app): every key it holds is copied, whatever its name. The
+ *    app's own: SESSION_SECRET, TOKEN_ENCRYPTION_KEYS, OTP_PEPPER, APP_RLS_PASSWORD. The providers'
+ *    (each set with infra/cdk/scripts/put-secrets.mjs; one missing turns that provider off):
+ *    META_APP_SECRET, GOOGLE_ADS_CLIENT_SECRET, GOOGLE_SIGNIN_CLIENT_SECRET, WHATSAPP_APP_SECRET,
+ *    WHATSAPP_WEBHOOK_VERIFY_TOKEN, EMAIL_GOOGLE_CLIENT_SECRET, EMAIL_MICROSOFT_CLIENT_SECRET,
+ *    EMAIL_CREDENTIAL_KEYS, RESEND_API_KEY, RESEND_WEBHOOK_SECRET, SHOPIFY_API_SECRET and
+ *    SHOPIFY_APP_SECRET_<KEY> (one per Shopify app)
+ *  - COGNITO_WORKER_SECRET_ARN: COGNITO_CLIENT_SECRET, COGNITO_ADMIN_* (infra/aws/cognito.yaml)
+ *  - DB_SECRET_ARN: the database owner's secret ({ username, password })
+ *  - RUNTIME_PARAM: an SSM parameter (JSON, not secret) with APP_URL and the Cognito ids
+ *
+ * Each JSON key becomes a process.env entry, then the database URLs are built from the pieces
+ * (verify-full TLS against the RDS CA bundled as NODE_EXTRA_CA_CERTS). Nothing is logged.
+ */
+export async function loadSecrets(env: NodeJS.ProcessEnv = process.env, fetchImpl: FetchLike = fetch) {
+  const region = env.AWS_REGION ?? "";
+  const creds = { accessKeyId: env.AWS_ACCESS_KEY_ID ?? "", secretAccessKey: env.AWS_SECRET_ACCESS_KEY ?? "", sessionToken: env.AWS_SESSION_TOKEN };
+  const signer = new AwsClient({ ...creds, service: "secretsmanager", region });
+  const get = async (secretId: string): Promise<Record<string, string>> => {
+    const signed = await signer.sign(`https://secretsmanager.${region}.amazonaws.com/`, {
+      method: "POST",
+      headers: { "content-type": "application/x-amz-json-1.1", "x-amz-target": "secretsmanager.GetSecretValue" },
+      body: JSON.stringify({ SecretId: secretId }),
+    });
+    const res = await fetchImpl(signed.url, { method: "POST", headers: signed.headers, body: await signed.text() });
+    const json = (await res.json().catch(() => ({}))) as { SecretString?: string; __type?: string };
+    // The secret's name is fine to report; its value never is.
+    if (!res.ok || !json.SecretString) throw new Error(`Reading secret ${secretId} failed (${res.status} ${json.__type ?? ""})`);
+    return JSON.parse(json.SecretString) as Record<string, string>;
+  };
+
+  for (const name of ["APP_SECRET_ARN", "COGNITO_WORKER_SECRET_ARN"] as const) {
+    const id = env[name];
+    if (!id) continue;
+    for (const [k, v] of Object.entries(await get(id))) if (typeof v === "string" && !env[k]) env[k] = v;
+  }
+  // Settings that aren't secret but are only known after the stack that owns them is deployed
+  // (APP_URL, the Cognito pool and client): an SSM parameter holding JSON, written by the CDK app.
+  if (env.RUNTIME_PARAM) {
+    const ssm = new AwsClient({ ...creds, service: "ssm", region });
+    const signed = await ssm.sign(`https://ssm.${region}.amazonaws.com/`, {
+      method: "POST",
+      headers: { "content-type": "application/x-amz-json-1.1", "x-amz-target": "AmazonSSM.GetParameter" },
+      body: JSON.stringify({ Name: env.RUNTIME_PARAM }),
+    });
+    const res = await fetchImpl(signed.url, { method: "POST", headers: signed.headers, body: await signed.text() });
+    const json = (await res.json().catch(() => ({}))) as { Parameter?: { Value?: string }; __type?: string };
+    if (!res.ok || !json.Parameter?.Value) throw new Error(`Reading parameter ${env.RUNTIME_PARAM} failed (${res.status} ${json.__type ?? ""})`);
+    for (const [k, v] of Object.entries(JSON.parse(json.Parameter.Value) as Record<string, unknown>)) {
+      if (typeof v === "string" && !env[k]) env[k] = v;
+    }
+  }
+  if (env.DB_SECRET_ARN && env.DB_HOST && env.DB_NAME) {
+    const master = await get(env.DB_SECRET_ARN);
+    const port = env.DB_PORT ?? "5432";
+    const url = (user: string, password: string) =>
+      `postgresql://${encodeURIComponent(user)}:${encodeURIComponent(password)}@${env.DB_HOST}:${port}/${encodeURIComponent(env.DB_NAME!)}?sslmode=verify-full`;
+    env.DATABASE_URL ??= url(master.username!, master.password!);
+    if (env.APP_RLS_PASSWORD) env.APP_DATABASE_URL ??= url("app_rls", env.APP_RLS_PASSWORD);
+  }
+}

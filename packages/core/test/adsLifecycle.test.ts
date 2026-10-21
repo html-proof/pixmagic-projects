@@ -3,6 +3,7 @@ import { pkceChallenge, pkcePair } from "@app/shared";
 import {
   adsenseAuthorizeUrl,
   AdsAuthError,
+  AdsNoAccountsError,
   AdsNotApprovedError,
   googleAdAccounts,
   AdsRetryableError,
@@ -12,6 +13,7 @@ import {
   googleReport,
   googleRevoke,
   googleUserId,
+  metaAdAccounts,
   metaCampaignDays,
   metaExchangeCode,
   metaReport,
@@ -87,7 +89,7 @@ describe("sign-in security and lifecycle", () => {
     await expect(googleRevoke({ fetchImpl: down.fetchImpl }, "RT")).rejects.toBeInstanceOf(AdsRetryableError);
   });
 
-  it("Meta: a system-user token (no expiry) is kept as it is; revoking drops ads_read only, with the token in the body", async () => {
+  it("Meta: a system-user token (no expiry) is kept as it is; revoking drops ads_read only, with the token in the header", async () => {
     const f = fake(() => json({ access_token: "SYSTEM_USER" }));
     expect(await metaExchangeCode(meta(f.fetchImpl), "CODE", "https://app/cb")).toEqual({ accessToken: "SYSTEM_USER", refreshToken: null, expiresAt: null });
     expect(f.calls).toHaveLength(1);
@@ -98,14 +100,72 @@ describe("sign-in security and lifecycle", () => {
     const del = fake(async (u, init) => {
       expect(init?.method).toBe("DELETE");
       expect(u.pathname).toBe("/v25.0/me/permissions/ads_read");
-      expect(u.search).toBe("");
-      expect(new URLSearchParams(String(init?.body)).get("access_token")).toBe("T");
+      // Only the token's proof, never the token itself.
+      expect([...u.searchParams.keys()]).toEqual(["appsecret_proof"]);
+      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer T");
+      expect(String(init?.body ?? "")).toBe("");
       return json({ success: true });
     });
-    await metaRevokeAdsRead(meta(del.fetchImpl), "T");
+    expect(await metaRevokeAdsRead(meta(del.fetchImpl), "T")).toBe("revoked");
     expect(del.calls).toHaveLength(1);
-    const expired = fake(() => json({ error: { message: "Session has expired", code: 190 } }, 400));
-    await expect(metaRevokeAdsRead(meta(expired.fetchImpl), "T")).resolves.toBeUndefined();
+  });
+
+  it("Meta: a token that stopped working doesn't end the grant: bizinsights' app token takes ads_read back for the person", async () => {
+    const userTokenDead = (appToken: (u: URL, init?: RequestInit) => Response) =>
+      fake((u, init) => {
+        const auth = new Headers(init?.headers).get("authorization");
+        if (auth === "Bearer T") return json({ error: { message: "Error validating access token: Session has expired", code: 190, error_subcode: 463 } }, 400);
+        expect(auth).toBe("Bearer app1|sec");
+        // The app token holds the secret itself: no proof goes with it.
+        expect(u.searchParams.has("appsecret_proof")).toBe(false);
+        return appToken(u, init);
+      });
+    const ok = userTokenDead((u, init) => {
+      expect(init?.method).toBe("DELETE");
+      expect(u.pathname).toBe("/v25.0/5550001/permissions/ads_read");
+      return json({ success: true });
+    });
+    expect(await metaRevokeAdsRead(meta(ok.fetchImpl), "T", "5550001")).toBe("revoked");
+    expect(ok.calls).toHaveLength(2);
+
+    // Meta refuses, and lists the person's grants without ads_read: there was nothing left to take back.
+    const gone = userTokenDead((u, init) =>
+      init?.method === "DELETE" ? json({ error: { message: "(#100) Invalid parameter", code: 100 } }, 400) : json({ data: [{ permission: "whatsapp_business_messaging", status: "granted" }, { permission: "ads_read", status: "declined" }] }),
+    );
+    expect(await metaRevokeAdsRead(meta(gone.fetchImpl), "T", "5550001")).toBe("not_granted");
+    // Meta refuses and ads_read is still granted: not revoked, and said so.
+    const still = userTokenDead((_u, init) => (init?.method === "DELETE" ? json({ error: { message: "(#100) Invalid parameter", code: 100 } }, 400) : json({ data: [{ permission: "ads_read", status: "granted" }] })));
+    await expect(metaRevokeAdsRead(meta(still.fetchImpl), "T", "5550001")).rejects.toMatchObject({ code: 100 });
+    // Without the person's id, Meta's token inspector is asked whose token it was; when it can't say,
+    // nothing can take it back: never reported as revoked.
+    const unknown = userTokenDead(() => json({ error: { message: "unexpected" } }, 400));
+    await expect(metaRevokeAdsRead(meta(unknown.fetchImpl), "T")).rejects.toBeInstanceOf(AdsAuthError);
+    await expect(metaRevokeAdsRead(meta(unknown.fetchImpl), "T", "../me")).rejects.toBeInstanceOf(AdsAuthError);
+    expect(unknown.calls.map((c) => c.url.pathname)).toEqual(["/v25.0/me/permissions/ads_read", "/v25.0/debug_token", "/v25.0/me/permissions/ads_read", "/v25.0/debug_token"]);
+  });
+
+  it("Meta: with no person id kept, the token inspector says whose expired token it was, and the app token takes ads_read back", async () => {
+    // debug_token answers for a token that no longer works: is_valid false, Meta's error, and user_id.
+    const inspected = (data: Record<string, unknown>) =>
+      fake((u, init) => {
+        const auth = new Headers(init?.headers).get("authorization");
+        if (auth === "Bearer T") return json({ error: { message: "Error validating access token: Session has expired", code: 190, error_subcode: 463 } }, 400);
+        expect(auth).toBe("Bearer app1|sec");
+        if (u.pathname === "/v25.0/debug_token") {
+          expect(u.searchParams.get("input_token")).toBe("T");
+          return json({ data: { is_valid: false, error: { code: 190, subcode: 463, message: "Session has expired" }, ...data } });
+        }
+        expect(init?.method).toBe("DELETE");
+        expect(u.pathname).toBe("/v25.0/5550002/permissions/ads_read");
+        return json({ success: true });
+      });
+    const ours = inspected({ app_id: "app1", user_id: "5550002" });
+    expect(await metaRevokeAdsRead(meta(ours.fetchImpl), "T")).toBe("revoked");
+    expect(ours.calls).toHaveLength(3);
+    // Another app's token, or no usable id: not ours to take back.
+    await expect(metaRevokeAdsRead(meta(inspected({ app_id: "other", user_id: "5550002" }).fetchImpl), "T")).rejects.toBeInstanceOf(AdsAuthError);
+    await expect(metaRevokeAdsRead(meta(inspected({ app_id: "app1", user_id: "me/../x" }).fetchImpl), "T")).rejects.toBeInstanceOf(AdsAuthError);
+    await expect(metaRevokeAdsRead(meta(inspected({ app_id: "app1" }).fetchImpl), "T")).rejects.toBeInstanceOf(AdsAuthError);
   });
 
   it("Meta: a range too big for one answer runs as a report job", async () => {
@@ -114,7 +174,8 @@ describe("sign-in security and lifecycle", () => {
         expect(u.pathname).toBe("/v25.0/act_1/insights");
         const form = new URLSearchParams(String(init.body));
         expect(form.get("time_increment")).toBe("1");
-        expect(form.get("access_token")).toBe("T");
+        expect(form.has("access_token")).toBe(false);
+        expect(new Headers(init.headers).get("authorization")).toBe("Bearer T");
         expect(form.has("limit")).toBe(false);
         return json({ report_run_id: "777" });
       }
@@ -155,13 +216,74 @@ describe("Google Ads access level", () => {
       return json([notApproved], 403);
     });
     await expect(googleAdAccounts(google(f.fetchImpl), "AT")).rejects.toBeInstanceOf(AdsNotApprovedError);
-    // A cancelled account is still just skipped.
+    // A cancelled account is still just skipped; when it's the only one, the person is told why nothing connects.
     const cancelled = fake(async (u) =>
       u.pathname.endsWith("customers:listAccessibleCustomers")
         ? json({ resourceNames: ["customers/111"] })
         : json([{ error: { message: "The customer account can't be accessed because it is not yet enabled or has been deactivated.", status: "PERMISSION_DENIED" } }], 403),
     );
-    expect(await googleAdAccounts(google(cancelled.fetchImpl), "AT")).toEqual([]);
+    await expect(googleAdAccounts(google(cancelled.fetchImpl), "AT")).rejects.toMatchObject({ reason: "not_ready" });
+  });
+});
+
+describe("a Google login with nothing to connect says why", () => {
+  it("no Google Ads account at all: NOT_ADS_USER, or an empty list", async () => {
+    const notAdsUser = fake(async () =>
+      json({ error: { code: 401, message: "The user's Google Account isn't associated with any Google Ads accounts.", status: "UNAUTHENTICATED", details: [{ errors: [{ errorCode: { authenticationError: "NOT_ADS_USER" } }] }] } }, 401),
+    );
+    const err = await googleAdAccounts(google(notAdsUser.fetchImpl), "AT").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AdsNoAccountsError);
+    expect(err).toMatchObject({ reason: "no_ads_account" });
+    const empty = fake(async () => json({}));
+    await expect(googleAdAccounts(google(empty.fetchImpl), "AT")).rejects.toMatchObject({ reason: "no_ads_account" });
+  });
+
+  it("a manager account with no active ad account under it", async () => {
+    const f = fake(async (u, init) => {
+      if (u.pathname.endsWith("customers:listAccessibleCustomers")) return json({ resourceNames: ["customers/222"] });
+      if (queryOf(init).endsWith("FROM customer")) return json([{ results: [{ customer: { id: "222", descriptiveName: "My manager", manager: true } }] }]);
+      return json([{ results: [] }]);
+    });
+    await expect(googleAdAccounts(google(f.fetchImpl), "AT")).rejects.toMatchObject({ reason: "manager_only" });
+  });
+
+  it("Google's account chooser is shown every time, so another login can be picked", () => {
+    const url = new URL(googleAuthorizeUrl(google(fetch), "https://app/cb", "st"));
+    expect(url.searchParams.get("prompt")?.split(" ").sort()).toEqual(["consent", "select_account"]);
+  });
+});
+
+describe("a Meta login with nothing to connect says why", () => {
+  /** Meta answering an empty account list, and its token inspector answering `debug`. */
+  const emptyMeta = (debug: () => Response) =>
+    fake((u) => {
+      if (u.pathname.endsWith("/me/adaccounts")) return json({ data: [] });
+      if (u.pathname.endsWith("/debug_token")) return debug();
+      return json({ error: { message: "unexpected" } }, 400);
+    });
+
+  it("a login that reaches no ad account: ads_read covers everything it can reach, which is nothing", async () => {
+    const f = emptyMeta(() => json({ data: { is_valid: true, scopes: ["ads_read"], granular_scopes: [{ scope: "ads_read" }] } }));
+    const err = await metaAdAccounts(meta(f.fetchImpl), "USER_T").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AdsNoAccountsError);
+    expect(err).toMatchObject({ reason: "no_ads_account" });
+    // Meta's inspector is asked with the app's own token about the person's.
+    const inspect = f.calls.find((c) => c.url.pathname.endsWith("/debug_token"))!;
+    expect(inspect.url.searchParams.get("input_token")).toBe("USER_T");
+    expect(inspect.url.searchParams.has("access_token")).toBe(false);
+    expect(new Headers(inspect.init?.headers).get("authorization")).toBe("Bearer app1|sec");
+  });
+
+  it("the person picked accounts on Facebook's screen and none came through", async () => {
+    const none = emptyMeta(() => json({ data: { granular_scopes: [{ scope: "ads_read", target_ids: [] }] } }));
+    await expect(metaAdAccounts(meta(none.fetchImpl), "T")).rejects.toMatchObject({ reason: "none_shared" });
+    const unreadable = emptyMeta(() => json({ data: { granular_scopes: [{ scope: "ads_read", target_ids: ["act_9"] }] } }));
+    await expect(metaAdAccounts(meta(unreadable.fetchImpl), "T")).rejects.toMatchObject({ reason: "none_shared", message: expect.stringContaining("act_9") });
+  });
+
+  it("the inspector failing still says 'no ad account', never 'try again'", async () => {
+    const f = emptyMeta(() => json({ error: { message: "Invalid OAuth access token", code: 190 } }, 400));
+    await expect(metaAdAccounts(meta(f.fetchImpl), "T")).rejects.toMatchObject({ reason: "no_ads_account" });
   });
 });
 
@@ -246,7 +368,7 @@ describe("live reports", () => {
           ],
         });
       }
-      if (u.searchParams.get("breakdowns") === "impression_device") return json({ data: [{ impression_device: "android_smartphone", spend: "1" }] });
+      if (u.searchParams.get("breakdowns") === "publisher_platform,impression_device") return json({ data: [{ publisher_platform: "facebook", impression_device: "android_smartphone", spend: "1" }] });
       if (u.searchParams.get("breakdowns") === "country") return json({ data: [{ country: "GB", spend: "2" }] });
       return json({ data: [{ spend: "10", impressions: "300", reach: "200" }] });
     });

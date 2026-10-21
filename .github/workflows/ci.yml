@@ -1,66 +1,389 @@
 name: CI
 
+# GitHub-hosted minutes are limited (GitHub Free: 2,000 a month for private repositories), so CI runs
+# only what a change can affect:
+# - A change of only Markdown files or docs/ starts no run at all: nothing to test, and on main
+#   nothing for Deploy to AWS to ship (it starts only when a CI run on main succeeds).
+# - Pull requests run the browser tests (e2e) only when they change what those tests drive, or
+#   carry the label "e2e" (checks job, first step). Pushes to main always need them before Deploy.
+# - A push to main whose tree a pull request's run already passed, job by job, skips that job
+#   (tested job below): merging an up-to-date pull request costs about a minute, not twelve.
+# - The integration tests run only when something they read changed since a run (pull request or
+#   main) where they passed (checks job, "What the integration tests read").
 on:
   push:
     branches: [main]
+    paths-ignore: ["**.md", "docs/**"]
   pull_request:
+    paths-ignore: ["**.md", "docs/**"]
 
+# A newer push cancels the older run on the same pull request. On main it waits instead: the run in
+# progress finishes and deploys, then the newest waiting push runs (GitHub drops older waiting runs
+# in a group). With the checks taking ~25 min on the PC, cancelling there meant merges a few
+# minutes apart never deployed at all.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
-# Checks only read the repository; nothing here should be able to push or edit issues/PRs.
+# Checks only read the repository (and a pull request's list of changed files); nothing here should
+# be able to push or edit issues/PRs.
 permissions:
   contents: read
+  pull-requests: read
 
 env:
   PG_PORT: 5434
 
+# Runners: GitHub's ubuntu-latest, unless the repository variable SELF_HOSTED_RUNNER holds a JSON
+# label list such as ["self-hosted","bizinsights-pc"] (the owner's Windows PC, while GitHub-hosted
+# jobs can't start). Pushes to main run on the PC's runner for main instead when SELF_HOSTED_MAIN_RUNNER
+# names it: its own account, which only main's code ever runs as, also runs the deploys
+# (aws-deploy.yml), and main never queues behind pull-request jobs (docs/aws-deployment.md).
+# The PC has no Docker: Postgres and Mailpit run there as local processes on
+# free ports (5434 on that PC is the old deployment's database), and the runner ends them with the
+# job. Every `run:` is bash: on Windows, Git Bash (the first step of each job that runs commands
+# puts it ahead of C:\Windows\System32\bash.exe, which is WSL). That step is cmd, not PowerShell: a
+# runner service's PowerShell may not run scripts (execution policy).
+defaults:
+  run:
+    shell: bash
+
 jobs:
+  # Merging a pull request that is up to date with main leaves main with exactly the tree that the
+  # pull request's last run tested. Each pull-request job that passes records its tree as a commit
+  # status on the pull request's head (context ci/passed-<job>, description "tree <tree>"); on a
+  # push to main this looks them up, and a job that already passed on this exact tree is skipped.
+  # Anything it can't confirm runs as usual. Statuses, not artifacts: artifacts count against the
+  # account's Actions storage (500 MB on GitHub Free, shared by all its private repositories), and
+  # once that is used up no upload works and every record was lost.
+  tested:
+    name: Already passed on a pull request?
+    if: github.event_name == 'push'
+    runs-on: ${{ fromJSON(vars.SELF_HOSTED_RUNNER && (github.event_name == 'push' && vars.SELF_HOSTED_MAIN_RUNNER || vars.SELF_HOSTED_RUNNER) || '"ubuntu-latest"') }}
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+      statuses: read
+    outputs:
+      checks: ${{ steps.find.outputs.checks }}
+      e2e: ${{ steps.find.outputs.e2e }}
+    steps:
+      - id: find
+        continue-on-error: true
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const tree = context.payload.head_commit?.tree_id;
+            // Where a pull request's run left its records: the commits this one was made from, and
+            // the head of the pull request it merged (whatever the merge method).
+            const refs = new Set();
+            const { data: commit } = await github.rest.git.getCommit({ ...context.repo, commit_sha: context.sha });
+            for (const p of commit.parents) refs.add(p.sha);
+            const { data: prs } = await github.rest.repos.listPullRequestsAssociatedWithCommit({ ...context.repo, commit_sha: context.sha });
+            for (const pr of prs) if (pr.merged_at && pr.head.repo?.id === context.payload.repository.id) refs.add(pr.head.sha);
+            const statuses = [];
+            for (const ref of refs) statuses.push(...(await github.paginate(github.rest.repos.listCommitStatusesForRef, { ...context.repo, ref, per_page: 100 })));
+            for (const job of ["checks", "e2e"]) {
+              // Only this workflow's own records count: a fork's pull request can't write statuses.
+              const passed = !!tree && statuses.some((s) => s.context === `ci/passed-${job}` && s.state === "success" && s.description === `tree ${tree}` && s.creator?.login === "github-actions[bot]");
+              core.info(`${job}: ${passed ? "passed on a pull request with this exact tree, skipped" : "runs"}`);
+              core.setOutput(job, String(passed));
+            }
+
   checks:
-    name: Typecheck, unit & integration tests, build
-    runs-on: ubuntu-latest
+    name: Lint, typecheck, unit & integration tests, build
+    needs: tested
+    if: ${{ !cancelled() && needs.tested.outputs.checks != 'true' }}
+    runs-on: ${{ fromJSON(vars.SELF_HOSTED_RUNNER && (github.event_name == 'push' && vars.SELF_HOSTED_MAIN_RUNNER || vars.SELF_HOSTED_RUNNER) || '"ubuntu-latest"') }}
+    # statuses: write for the pass records (ci/passed-checks, ci/passed-integration).
+    permissions:
+      contents: read
+      pull-requests: read
+      statuses: write
+    # A busy PC runs the integration tests 2-3 times slower than a GitHub runner.
+    timeout-minutes: ${{ vars.SELF_HOSTED_RUNNER != '' && 45 || 30 }}
+    outputs:
+      e2e: ${{ steps.scope.outputs.e2e }}
     services:
       postgres:
-        image: postgres:17-alpine
+        # An empty image skips the container (service containers need a Linux runner).
+        image: ${{ vars.SELF_HOSTED_RUNNER == '' && 'postgres:17-alpine' || '' }}
         env: { POSTGRES_USER: app, POSTGRES_PASSWORD: app, POSTGRES_DB: app }
         ports: ["5434:5432"]
         options: >-
           --health-cmd "pg_isready -U app" --health-interval 5s --health-retries 10
     steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
-        with: { node-version: 24, cache: pnpm }
+      # Windows runner: Git Bash for the run steps, and a pnpm store that outlives the job
+      # (pnpm/action-setup deletes its own folder, where the store would be, every run).
+      - name: Git Bash and a lasting pnpm store (Windows runner)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          echo %ProgramFiles%\Git\bin>>"%GITHUB_PATH%"
+          echo npm_config_store_dir=%RUNNER_TOOL_CACHE%\pnpm-store>>"%GITHUB_ENV%"
+      # The browser tests drive the UI on the local server (apps/aws) with their own sign-in and mail
+      # stand-ins. A pull request that changes none of that (or the UI's shared package, the
+      # dependencies or this workflow) leaves them to the push to main, unless it has the label
+      # "e2e": add it, then push again (a re-run reuses the old labels). Only an answer of "no" skips
+      # them: if this step fails, they run.
+      - name: Does this pull request need the browser tests?
+        id: scope
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            if (pr.labels.some((l) => l.name === "e2e")) return core.setOutput("e2e", "true");
+            const dirs = ["apps/web/", "apps/aws/", "packages/shared/", "infra/cognito-local/", "infra/postgres/"];
+            const files = ["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "docker-compose.yml", ".github/workflows/ci.yml"];
+            let changed;
+            try {
+              changed = await github.paginate(github.rest.pulls.listFiles, { ...context.repo, pull_number: pr.number, per_page: 100 });
+            } catch (err) {
+              core.warning(`Couldn't list the changed files (${err.message}): running the browser tests.`);
+              return core.setOutput("e2e", "true");
+            }
+            const hit = changed.flatMap((f) => [f.filename, f.previous_filename]).find((p) => p && (files.includes(p) || dirs.some((d) => p.startsWith(d))));
+            // GitHub lists at most 3,000 files: a pull request that size runs them regardless.
+            const run = hit !== undefined || changed.length >= 3000;
+            core.info(run ? `Browser tests run (${hit ?? "3,000+ files"} changed).` : "Browser tests skipped: nothing they drive changed.");
+            core.setOutput("e2e", String(run));
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The PC is a laptop that, unplugged, turns its screen off 3 minutes after the last input and
+      # sleeps; asleep it loses the job, or a test's clock runs on while nothing happens ("Hook
+      # timed out in 60000ms"). The job holds a power request until it ends. Held from the runner's
+      # service session, it has not kept this Modern Standby laptop from turning its screen off and
+      # sleeping on battery (2026-10-20), so the job's last step reports what the PC did meanwhile;
+      # keeping it awake is the owner's power settings (docs/aws-deployment.md). Never worth failing
+      # a job over.
+      - name: Keep the PC awake for this job (self-hosted runner)
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        run: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File infra/runner/keep-awake.ps1
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          # A self-hosted runner keeps its pnpm store between runs (first step): no cache to move.
+          cache: ${{ vars.SELF_HOSTED_RUNNER == '' && 'pnpm' || '' }}
+      # Its superuser gets a password of its own each job (TEST_PG_PASSWORD; the tests read it): the
+      # PC may run another runner's job at the same time, and a superuser can run programs as the
+      # account that started the server. Server and clients use 127.0.0.1 only: with "localhost"
+      # the server takes whichever of ::1 and 127.0.0.1 it can, clients try ::1 first, and another
+      # job holding [::1]:port could ask them for the password in clear. psql and createdb refuse
+      # anything but SCRAM (PGREQUIREAUTH) besides.
+      - name: Throwaway Postgres (self-hosted runner)
+        if: vars.SELF_HOSTED_RUNNER != ''
+        run: |
+          pgbin="${PG_BIN:-C:/Program Files/PostgreSQL/18/bin}"
+          data="$(cygpath -m "$RUNNER_TEMP")/pg"
+          port=$(node -e "const s=require('net').createServer().listen(0,'127.0.0.1',()=>{console.log(s.address().port);s.close()})")
+          pw=$(node -e "process.stdout.write(require('crypto').randomBytes(24).toString('hex'))")
+          echo "::add-mask::$pw"
+          export PGREQUIREAUTH=scram-sha-256
+          rm -rf "$data" && printf %s "$pw" > "$RUNNER_TEMP/pgpw"
+          "$pgbin/initdb" -D "$data" -U app --pwfile="$RUNNER_TEMP/pgpw" --auth=scram-sha-256 -E UTF8 --locale=C --no-instructions >/dev/null
+          "$pgbin/pg_ctl" -D "$data" -l "$data.log" -o "-p $port -c listen_addresses=127.0.0.1 -c fsync=off" -w start >"$data.ctl.log" 2>&1 </dev/null
+          PGPASSWORD="$pw" "$pgbin/createdb" -h 127.0.0.1 -p "$port" -U app app
+          echo "$pgbin" >> "$GITHUB_PATH"
+          { echo "TEST_PG_PORT=$port"; echo "TEST_PG_PASSWORD=$pw"; echo "PGREQUIREAUTH=scram-sha-256"; } >> "$GITHUB_ENV"
       - run: pnpm install --frozen-lockfile
+      # Known vulnerabilities in any dependency (direct or transitive) fail the build.
+      - name: Dependency audit (high and critical advisories)
+        run: pnpm audit --audit-level high
+      - run: pnpm lint
       - name: Create tenant DB role
-        run: PGPASSWORD=app psql -h localhost -p 5434 -U app -d app -f infra/postgres/init.sql
+        run: PGPASSWORD="${TEST_PG_PASSWORD:-app}" psql -h 127.0.0.1 -p "${TEST_PG_PORT:-5434}" -U app -d app -f infra/postgres/init.sql
       - run: pnpm typecheck
       - run: pnpm test
-      - run: pnpm test:integration
-      - run: pnpm --filter @app/web build
+      # The integration tests and the migrations check after them (about 4 of this job's 7.5 minutes)
+      # read only these: @app/api and @app/worker, the packages they build on (@app/core, @app/db,
+      # @app/shared), the test setup, the role grants, the dependencies, the TypeScript base config,
+      # .gitattributes (line endings on checkout) and this file; .npmrc counts once there is one. Their
+      # git ids, with the runner's OS and Node version, make a content key. A run where the two passed
+      # records it (a commit status ci/passed-integration, description "key <key>"), and a later run
+      # with the same key skips them. A listed path missing from the commit fails this step: then they
+      # run.
+      - name: What the integration tests read (content key)
+        id: integration
+        continue-on-error: true
+        run: |
+          inputs=(apps/api apps/worker packages test-support infra/postgres package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json .gitattributes .github/workflows/ci.yml)
+          listing=$(git ls-tree HEAD -- "${inputs[@]}" .npmrc)
+          for p in "${inputs[@]}"; do
+            grep -qFx -- "$p" < <(cut -f2 <<<"$listing") || { echo "::warning::$p isn't in this commit: the integration tests run."; exit 1; }
+          done
+          printf '%s %s %s\n%s\n' "$RUNNER_OS" "$RUNNER_ARCH" "$(node --version | tr -d '\r')" "$listing" > "$RUNNER_TEMP/passed-integration.txt"
+          key=$(git hash-object --stdin < "$RUNNER_TEMP/passed-integration.txt")
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+      # Only an answer of "yes" skips them: if this step fails, they run. Records are looked for on
+      # this commit; on a pull request also its newest 30 commits; and on the main commit it starts
+      # from (a pull request's base, or this push's commit): that one, the commits it was made from,
+      # and the head of the pull request it merged (a push to main that skipped the checks job
+      # records nothing itself). Each pass records again on its own commit, so records move forward.
+      - name: Integration tests already passed on this content?
+        id: integration_passed
+        if: steps.integration.outputs.key != ''
+        continue-on-error: true
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
-          NEXT_PUBLIC_FIREBASE_API_KEY: ci
-          NEXT_PUBLIC_FIREBASE_PROJECT_ID: demo-insights
-      - name: Bundle the Worker (wrangler dry run)
-        run: pnpm --filter @app/cloudflare build
+          KEY: ${{ steps.integration.outputs.key }}
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const refs = [];
+            if (pr) {
+              const commits = await github.paginate(github.rest.pulls.listCommits, { ...context.repo, pull_number: pr.number, per_page: 100 });
+              refs.push(...commits.slice(-30).reverse().map((c) => c.sha));
+            }
+            const from = pr ? pr.base.sha : context.sha;
+            refs.push(from);
+            const { data: commit } = await github.rest.git.getCommit({ ...context.repo, commit_sha: from });
+            refs.push(...commit.parents.map((p) => p.sha));
+            const { data: merged } = await github.rest.repos.listPullRequestsAssociatedWithCommit({ ...context.repo, commit_sha: from });
+            refs.push(...merged.filter((m) => m.merged_at && m.head.repo?.id === context.payload.repository.id).map((m) => m.head.sha));
+            let passed = false;
+            for (const ref of new Set(refs)) {
+              const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, { ...context.repo, ref, per_page: 100 });
+              // Only this workflow's own records count: a fork's pull request can't write statuses.
+              passed = statuses.some((s) => s.context === "ci/passed-integration" && s.state === "success" && s.description === `key ${process.env.KEY}` && s.creator?.login === "github-actions[bot]");
+              if (passed) break;
+            }
+            core.info(passed ? `Passed before with key ${process.env.KEY}: integration tests and migrations check skipped.` : "Integration tests run.");
+            core.setOutput("passed", String(passed));
+      - run: pnpm test:integration
+        if: steps.integration_passed.outputs.passed != 'true'
+      # The integration setup migrated app_test from the migrations folder: it must match
+      # schema.prisma exactly, or a schema change was committed without its migration.
+      - name: Migrations match the schema
+        if: steps.integration_passed.outputs.passed != 'true'
+        run: |
+          DATABASE_URL="postgresql://app:${TEST_PG_PASSWORD:-app}@127.0.0.1:${TEST_PG_PORT:-5434}/app_test" \
+            pnpm --filter @app/db exec prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --exit-code
+      # For later runs with the same content key, on a pull request or on main: on the pull
+      # request's head, or the commit pushed to main. Reached only when the two steps above passed
+      # here or were skipped on an earlier pass; failing to record only means a later run tests again.
+      - name: Record the integration tests' pass
+        if: steps.integration.outputs.key != ''
+        continue-on-error: true
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          KEY: ${{ steps.integration.outputs.key }}
+        with:
+          script: |
+            const sha = context.payload.pull_request?.head.sha ?? context.sha;
+            await github.rest.repos.createCommitStatus({ ...context.repo, sha, state: "success", context: "ci/passed-integration", description: `key ${process.env.KEY}` });
+      # What Deploy to AWS ships: the UI (Next.js export) and the bundled function.
+      - name: Build the Lambda package (UI + function)
+        run: pnpm --filter @app/aws build
+      # For the push to main that merges this pull request (tested job): the tree this run tested
+      # (the pull request merged into main), on the pull request's head. Failing to record only
+      # means that push runs this job again.
+      - name: Record the tree that passed
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const tree = (await exec.getExecOutput("git", ["rev-parse", "HEAD^{tree}"], { silent: true })).stdout.trim();
+            await github.rest.repos.createCommitStatus({ ...context.repo, sha: context.payload.pull_request.head.sha, state: "success", context: "ci/passed-checks", description: `tree ${tree}` });
+      # What the PC did meanwhile, in this log: each Modern Standby it entered during the job (a
+      # test running then could only time out) and whether it ran on battery (2-3 times slower, and
+      # the screen-off timer then sleeps it). Read-only; the owner's power settings are the fix.
+      - name: Did the PC sleep during this job? (self-hosted runner)
+        if: always() && runner.os == 'Windows'
+        continue-on-error: true
+        run: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File infra/runner/power-report.ps1
 
   e2e:
     name: End-to-end (Playwright)
-    runs-on: ubuntu-latest
-    needs: checks
+    runs-on: ${{ fromJSON(vars.SELF_HOSTED_RUNNER && (github.event_name == 'push' && vars.SELF_HOSTED_MAIN_RUNNER || vars.SELF_HOSTED_RUNNER) || '"ubuntu-latest"') }}
+    needs: [tested, checks]
+    # After the checks pass (or were skipped because they passed on this tree), unless the browser
+    # tests passed on this tree too, or a pull request doesn't need them (checks job, first step).
+    if: >-
+      ${{ !cancelled() && needs.tested.outputs.e2e != 'true'
+      && (needs.checks.result == 'success' || (needs.checks.result == 'skipped' && needs.tested.outputs.checks == 'true'))
+      && (github.event_name != 'pull_request' || needs.checks.outputs.e2e != 'false') }}
+    # statuses: write for the pass record (ci/passed-e2e).
+    permissions:
+      contents: read
+      statuses: write
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
-        with: { node-version: 24, cache: pnpm }
+      # Windows runner: Git Bash for the run steps, and a pnpm store that outlives the job
+      # (pnpm/action-setup deletes its own folder, where the store would be, every run).
+      - name: Git Bash and a lasting pnpm store (Windows runner)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          echo %ProgramFiles%\Git\bin>>"%GITHUB_PATH%"
+          echo npm_config_store_dir=%RUNNER_TOOL_CACHE%\pnpm-store>>"%GITHUB_ENV%"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # As in the checks job: the laptop holds a power request until the job ends (its limits: there).
+      - name: Keep the PC awake for this job (self-hosted runner)
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        run: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File infra/runner/keep-awake.ps1
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: ${{ vars.SELF_HOSTED_RUNNER == '' && 'pnpm' || '' }}
       - run: pnpm install --frozen-lockfile
-      - name: Start dev stack (Postgres, Mailpit, Firebase emulator)
-        run: docker compose up -d --wait postgres mailpit && docker compose up -d firebase-emulator
-      - name: Wait for Firebase emulator
-        run: timeout 240 bash -c 'until curl -s http://127.0.0.1:9099 >/dev/null; do sleep 3; done'
-      - run: pnpm --filter @app/web exec playwright install --with-deps chromium
+      # The suite starts its own Cognito emulator and managed-login stand-in (playwright.config.ts).
+      - name: Start dev stack (Postgres, Mailpit)
+        if: vars.SELF_HOSTED_RUNNER == ''
+        run: docker compose up -d --wait postgres mailpit
+      # Without Docker: the same two as local processes, and every e2e port free (8789 and the
+      # emulator ports may be a local demo on that PC).
+      - name: Start dev stack without Docker (self-hosted runner)
+        if: vars.SELF_HOSTED_RUNNER != ''
+        run: |
+          pgbin="${PG_BIN:-C:/Program Files/PostgreSQL/18/bin}"
+          data="$(cygpath -m "$RUNNER_TEMP")/pg"
+          read -r pg mail app cognito login < <(node -e "const n=require('net');Promise.all([1,2,3,4,5].map(()=>new Promise(r=>{const s=n.createServer().listen(0,'127.0.0.1',()=>r(s))}))).then(ss=>{console.log(ss.map(s=>s.address().port).join(' '));ss.forEach(s=>s.close())})")
+          # A superuser password of its own and 127.0.0.1 only, as in the checks job (Throwaway Postgres).
+          pw=$(node -e "process.stdout.write(require('crypto').randomBytes(24).toString('hex'))")
+          echo "::add-mask::$pw"
+          rm -rf "$data" && printf %s "$pw" > "$RUNNER_TEMP/pgpw"
+          "$pgbin/initdb" -D "$data" -U app --pwfile="$RUNNER_TEMP/pgpw" --auth=scram-sha-256 -E UTF8 --locale=C --no-instructions >/dev/null
+          "$pgbin/pg_ctl" -D "$data" -l "$data.log" -o "-p $pg -c listen_addresses=127.0.0.1 -c fsync=off" -w start >"$data.ctl.log" 2>&1 </dev/null
+          node -e "require('child_process').spawn(process.execPath,['apps/web/e2e/mailpit-stub.mjs',process.argv[1]],{detached:true,stdio:'ignore',windowsHide:true}).unref()" "$mail"
+          { echo "TEST_PG_PORT=$pg"; echo "TEST_PG_PASSWORD=$pw"; echo "PGREQUIREAUTH=scram-sha-256"; echo "E2E_MAILPIT_URL=http://127.0.0.1:$mail"; echo "E2E_PORT=$app"; echo "E2E_COGNITO_PORT=$cognito"; echo "E2E_LOGIN_PORT=$login"; } >> "$GITHUB_ENV"
+          # The runner uses browsers kept on the PC; the step below then only checks them, and
+          # downloads only when Playwright moves to a new browser build (docs/aws-deployment.md).
+          echo "PLAYWRIGHT_BROWSERS_PATH=${PW_BROWSERS:-C:\\ms-playwright}" >> "$GITHUB_ENV"
+      # The PC's network hands out IPv6 addresses with no route behind them, and Playwright's
+      # downloader always tries IPv6 first and gives up on each attempt after 5 s. There, its
+      # lookups get IPv4 addresses only (e2e/ipv4-only.mjs): for the download, not the tests.
+      - name: Browser for the tests
+        run: |
+          if [[ "${{ vars.SELF_HOSTED_RUNNER != '' }}" == true ]]; then
+            export NODE_OPTIONS="--import=file:///$(cygpath -m "$GITHUB_WORKSPACE")/apps/web/e2e/ipv4-only.mjs"
+          fi
+          pnpm --filter @app/web exec playwright install --with-deps chromium
       - run: pnpm e2e
+      # As in the checks job: the standbys and battery time that overlapped this job, in its log.
+      - name: Did the PC sleep during this job? (self-hosted runner)
+        if: always() && runner.os == 'Windows'
+        continue-on-error: true
+        run: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File infra/runner/power-report.ps1
+      # For the push to main that merges this pull request (tested job), as in the checks job.
+      - name: Record the tree that passed
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const tree = (await exec.getExecOutput("git", ["rev-parse", "HEAD^{tree}"], { silent: true })).stdout.trim();
+            await github.rest.repos.createCommitStatus({ ...context.repo, sha: context.payload.pull_request.head.sha, state: "success", context: "ci/passed-e2e", description: `tree ${tree}` });
+      # The failed tests' traces, for a week. This is the workflow's only artifact: they count against
+      # the account's 500 MB of Actions storage, and while that is used up the upload fails (the job
+      # has failed already; this step's failure adds nothing).
       - if: failure()
-        uses: actions/upload-artifact@v7
-        with: { name: playwright-report, path: apps/web/test-results }
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with: { name: playwright-report, path: apps/web/test-results, retention-days: 7 }

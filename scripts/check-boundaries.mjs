@@ -14,7 +14,7 @@ const layers = {
   "apps/web": ["packages/shared"],
   "apps/api": ["packages/shared", "packages/db", "packages/core"],
   "apps/worker": ["packages/shared", "packages/db", "packages/core"],
-  "apps/cloudflare": ["packages/shared", "packages/db", "packages/core", "apps/api", "apps/worker"],
+  "apps/aws": ["packages/shared", "packages/db", "packages/core", "apps/api", "apps/worker"],
 };
 const names = new Map();
 for (const layer of Object.keys(layers)) {

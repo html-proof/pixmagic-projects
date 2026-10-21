@@ -1,6 +1,8 @@
 "use client";
-import { KindsSection, PageHeader } from "@/components/whatsapp/Common";
-import { OrdersList } from "@/components/whatsapp/Orders";
+import { kindsOf } from "@app/shared/whatsapp";
+import { KindsSection } from "@/components/whatsapp/WhatsappUi";
+import { PageHeader } from "@/components/AppUi";
+import { OrdersList } from "@/components/whatsapp/OrdersList";
 
 export default function DeliveryUpdates() {
   return (
@@ -11,7 +13,7 @@ export default function DeliveryUpdates() {
       />
       <KindsSection
         title="What customers are told"
-        kinds={["order_shipped", "out_for_delivery", "order_delivered", "delivery_failed"]}
+        kinds={kindsOf("delivery")}
         help={
           <ul className="mt-1 list-disc space-y-1 pl-5">
             <li>
@@ -22,7 +24,7 @@ export default function DeliveryUpdates() {
               Many couriers don&apos;t report progress to Shopify. For those, customers get &ldquo;Shipped&rdquo; with the tracking number and link, and their tracking page says live
               delivery status isn&apos;t available, rather than inventing one.
             </li>
-            <li>Insights also asks Shopify every two hours where parcels in transit are, so updates arrive even when a webhook doesn&apos;t.</li>
+            <li>bizinsights also asks Shopify every two hours where parcels in transit are, so updates arrive even when a webhook doesn&apos;t.</li>
           </ul>
         }
       />

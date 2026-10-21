@@ -1,11 +1,11 @@
 "use client";
-import { LoadError } from "@/components/LoadError";
 import { useState } from "react";
-import { MODERATION_LABEL, MODERATION_REASONS, type ModerationReason } from "@app/shared/whatsapp";
+import { kindsOf, MODERATION_LABEL, MODERATION_REASONS, type ModerationReason } from "@app/shared/whatsapp";
 import { Badge, Empty, Stat, type Tone } from "@/components/dashboard/Primitives";
 import { useApp } from "@/components/AppContext";
 import { api, fmtNum, useApi } from "@/lib/api";
-import { fmtWhen, KindsSection, PageHeader, useAction, useWa } from "@/components/whatsapp/Common";
+import { fmtWhen, KindsSection, useWa } from "@/components/whatsapp/WhatsappUi";
+import { PageHeader, useAction } from "@/components/AppUi";
 
 interface Review {
   id: string;
@@ -97,7 +97,7 @@ export default function Reviews() {
 
       <KindsSection
         title="Review requests"
-        kinds={["review_request", "review_reminder"]}
+        kinds={kindsOf("reviews")}
         extra={(cfg, set) => (
           <div className="mt-3 grid gap-3 border-t border-border pt-3 sm:grid-cols-3">
             <div>
@@ -160,7 +160,7 @@ export default function Reviews() {
               </div>
             </div>
             {error ? (
-              <div className="mt-3"><LoadError what="customer reviews" error={error} onRetry={() => void reload()} /></div>
+              <p className="mt-3 text-sm text-danger">{error.message}</p>
             ) : !data ? (
               <div className="mt-3 space-y-2">{[0, 1].map((i) => <div key={i} className="skeleton h-16" />)}</div>
             ) : !data.reviews.length ? (

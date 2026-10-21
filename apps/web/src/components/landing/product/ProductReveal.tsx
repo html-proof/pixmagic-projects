@@ -1,5 +1,5 @@
 "use client";
-import { animate, motion, useInView, useMotionValue, useSpring, useTransform } from "motion/react";
+import { animate, motion, useInView, useMotionValue, useTransform } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 import { useReducedMotion } from "@/hooks/useReducedMotion";
 import { useScrollProgress } from "@/hooks/useScrollProgress";
@@ -14,12 +14,12 @@ const MODE = { scroll: 0, timed: 1, still: 2 } as const;
 const BUILT = REVEAL_STAGES.health[1] + 0.02;
 
 const WINDOW_LABEL =
-  "Illustrative Insight dashboard. A top bar with a store selector and search; a sidebar with Overview, Sales, Orders, Customers, Funnel, Products, Inventory, Fulfillment and Settings; " +
+  "Illustrative bizinsights dashboard. A top bar with a store selector and search; a sidebar with Overview, Sales, Orders, Customers, Funnel, Products, Inventory, Fulfillment and Settings; " +
   "empty key figures for sales, orders, conversion and net sales; a sales-over-time chart compared with the previous period; a business health panel; the shopping funnel from visit to purchase; " +
   "new versus returning customers; and product activity. No real figures are shown.";
 
 /**
- * G1 — the product reveal. The Insight application assembles itself part by part as the visitor
+ * G1 — the product reveal. The bizinsights application assembles itself part by part as the visitor
  * scrolls (sidebar, top bar, key figures, chart, customers, funnel, health), then the tilted
  * window settles flat, as if it had physically landed. Phones play the same build once on a timer
  * without the 3D; reduced motion shows the finished window.
@@ -40,11 +40,9 @@ export function ProductReveal() {
 
   // Starts while the runway is still entering, so the sidebar is arriving as the window pins.
   const scroll = useScrollProgress(runway, ["start 0.55", "end end"]);
-  // A little inertia on scroll so the window settles rather than snapping with each wheel tick.
-  const smooth = useSpring(scroll, { stiffness: 140, damping: 30, mass: 0.5 });
   const timed = useMotionValue(0);
   const mode = useMotionValue<number>(MODE.scroll);
-  const progress = useTransform([smooth, timed, mode], ([s, t, m]: number[]) => (m === MODE.still ? 1 : m === MODE.timed ? t * BUILT : s));
+  const progress = useTransform([scroll, timed, mode], ([s, t, m]: number[]) => (m === MODE.still ? 1 : m === MODE.timed ? t * BUILT : s));
 
   useEffect(() => {
     mode.set(reduced ? MODE.still : wide ? MODE.scroll : MODE.timed);
@@ -76,7 +74,7 @@ export function ProductReveal() {
         <SectionIntro
           id="product-reveal-title"
           align="center"
-          eyebrow="The Insight dashboard"
+          eyebrow="The bizinsights dashboard"
           title="Everything comes together here."
           lead="Sales, orders, customers, the funnel, products and stock, read from your Shopify store and laid out in one calm overview."
         />
@@ -95,7 +93,7 @@ export function ProductReveal() {
           <div className="relative w-full max-w-[1220px]" style={{ perspective: 1800 }}>
             <motion.div
               aria-hidden
-              className="pointer-events-none absolute -inset-x-[8%] -bottom-[14%] top-[30%] rounded-[50%] bg-[radial-gradient(closest-side,rgb(140_123_255/0.16),rgb(94_166_255/0.06)_55%,transparent)]"
+              className="lp-layer pointer-events-none absolute -inset-x-[8%] -bottom-[14%] top-[30%] rounded-[50%] bg-[radial-gradient(closest-side,rgb(140_123_255/0.16),rgb(94_166_255/0.06)_55%,transparent)]"
               style={{ opacity: glow }}
             />
             <motion.div
@@ -103,7 +101,7 @@ export function ProductReveal() {
               role="img"
               aria-label={WINDOW_LABEL}
               data-cursor="VIEW"
-              className={`relative max-md:[transform:none]! ${reduced ? "md:h-[660px]" : "md:h-[clamp(440px,calc(100svh-160px),700px)]"}`}
+              className={`relative max-md:[transform:none]! ${reduced ? "md:h-[660px]" : "md:h-[clamp(440px,calc(100svh-160px),700px)] md:lp-layer"}`}
               style={{ rotateX, scale, y, transformOrigin: "50% 60%" }}
             >
               <ProductRevealWindow progress={progress} />
@@ -111,7 +109,7 @@ export function ProductReveal() {
           </div>
           <div className="relative mt-5 flex flex-wrap items-center justify-center gap-x-3 gap-y-2 text-center md:mt-4 md:[@media(max-height:700px)]:mt-3!">
             <IllustrativeNote>Illustrative interface</IllustrativeNote>
-            <span className="text-[13px] text-lp-muted">Shows how Insight is laid out, not real figures.</span>
+            <span className="text-[13px] text-lp-muted">Shows how bizinsights is laid out, not real figures.</span>
           </div>
         </div>
       </div>
