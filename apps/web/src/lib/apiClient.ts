@@ -1,27 +1,7 @@
 import { signalAccess } from "@/lib/access";
 
-export class ApiError extends Error {
-  /**
-   * A 401 for a session this tab no longer uses: the call was made as the shared-link session,
-   * which the tab was leaving or had left (leaveSharedSession) by the time the answer came. It
-   * says nothing about the session the tab uses now, so it is not "signed out" (isSignedOut).
-   */
-  sessionLeft = false;
-  constructor(
-    public status: number,
-    public code: string,
-    message: string,
-    /** The rest of the error body (e.g. `detail`, `problems`), for the few callers that use it. */
-    public data: Record<string, unknown> = {},
-    public correlationId?: string,
-    public retryAt?: number,
-  ) {
-    super(message);
-    this.name = "ApiError";
-  }
-}
-
-const UNREACHABLE = "We can't reach bizinsights right now. We'll keep trying.";
+import { ApiError, apiFailure, readApiResponse, UNREACHABLE } from "./apiResponse";
+export { ApiError } from "./apiResponse";
 
 /**
  * Only a 401 means the session is gone, and only one for the session the tab uses
@@ -153,17 +133,13 @@ export async function api<T = unknown>(path: string, init: { method?: string; bo
       const at = fp.lastIndexOf(":");
       signalAccess({ workspaceId: fp.slice(0, at), fingerprint: fp.slice(at + 1) });
     }
-    const text = await res.text();
-    let json: unknown = {};
-    try { if (text) json = JSON.parse(text); }
-    catch { if (res.ok) throw new ApiError(502, "bad_response", "Unexpected response from the server"); }
+    const json = await readApiResponse(res);
     if (!res.ok) {
-      const failure = json && typeof json === "object" && !Array.isArray(json) ? json as Record<string, unknown> : {};
-      const code = typeof failure.error === "string" ? failure.error : "error";
-      const message = res.status >= 500 ? UNREACHABLE : !authenticated ? publicErrorMessage(res.status, code) : typeof failure.message === "string" ? failure.message : "Request failed";
-      const err = new ApiError(res.status, code, message, failure,
-        safeCorrelationId(res.headers.get("x-request-id") ?? res.headers.get("cf-ray")),
-        (res.status === 429 || res.status === 503) ? parseRetryAfter(res.headers.get("retry-after")) : undefined);
+      const err = apiFailure(res.status, json);
+      if (res.status >= 500) err.message = UNREACHABLE;
+      else if (!authenticated) err.message = publicErrorMessage(res.status, err.code);
+      err.correlationId = safeCorrelationId(res.headers.get("x-request-id") ?? res.headers.get("cf-ray"));
+      err.retryAt = (res.status === 429 || res.status === 503) ? parseRetryAfter(res.headers.get("retry-after")) : undefined;
       if (authenticated && res.status === 401 && err.code === "unauthenticated") {
         if (signedOutHere(asShared)) window.dispatchEvent(new Event(SIGNED_OUT_EVENT));
         else err.sessionLeft = true;
@@ -173,7 +149,7 @@ export async function api<T = unknown>(path: string, init: { method?: string; bo
     }
     return json as T;
   } catch (error) {
-    if (error instanceof ApiError) throw error;
+    if (error instanceof ApiError && !(controller.signal.aborted && error.status === 0)) throw error;
     throw new ApiError(controller.signal.aborted ? 408 : 0, controller.signal.aborted ? "timeout" : "network", UNREACHABLE);
   } finally { clearTimeout(timer); }
 }

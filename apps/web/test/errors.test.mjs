@@ -5,9 +5,14 @@ import { readFile } from "node:fs/promises";
 import ts from "typescript";
 const source = await readFile(new URL("../src/lib/apiClient.ts", import.meta.url), "utf8");
 const { outputText } = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } });
+const responseExports = {};
+const responseSource = await readFile(new URL("../src/lib/apiResponse.ts", import.meta.url), "utf8");
+const responseCompiled = ts.transpileModule(responseSource, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
+new Function("exports", responseCompiled)(responseExports);
 const accessSignals = [];
 const clientExports = {};
 new Function("require", "exports", outputText)((id) => {
+  if (id === "./apiResponse") return responseExports;
   assert.equal(id, "@/lib/access");
   return { signalAccess: (detail) => accessSignals.push(detail) };
 }, clientExports);
