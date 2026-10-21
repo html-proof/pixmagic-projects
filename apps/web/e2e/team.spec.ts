@@ -304,11 +304,16 @@ test("a browser signed in to another account opens a shared link: the account st
   // on the client's own (store-less) dashboard, with nothing of Shared Co in it, as their own
   // account, and the shared-link session is over. (The homepage is passed through too quickly to
   // be asserted on: only where the tab ends up is.)
+  // The link opened straight onto the Best sellers panel (the one topic shared with them), a
+  // dialog that takes the keyboard focus the moment the store's figures arrive. It is closed
+  // first, as anyone would before using the account menu behind it: driven while it may still be
+  // opening, a key meant for the menu can land on the panel's own Close button instead.
   await shared.bringToFront();
-  await shared.getByRole("button", { name: "Account menu" }).focus();
-  await shared.keyboard.press("Enter");
-  await shared.getByRole("button", { name: "Close the shared dashboard" }).focus();
-  await shared.keyboard.press("Enter");
+  await expect(shared.getByTestId("detail-panel")).toBeVisible({ timeout: 15_000 });
+  await shared.getByRole("button", { name: "Close details" }).click();
+  await expect(shared.getByTestId("detail-panel")).toHaveCount(0);
+  await shared.getByRole("button", { name: "Account menu" }).click();
+  await shared.getByRole("button", { name: "Close the shared dashboard" }).click();
   await expect(shared.getByRole("heading", { name: "Connect your first store" })).toBeVisible({ timeout: 15_000 });
   await expect(shared).toHaveURL(/\/dashboard/);
   await expect(shared.getByTestId("member-badge")).toHaveCount(0);
