@@ -9,7 +9,8 @@ import { catalog, importedData, inventory } from "./catalog.js";
 import type { Scope } from "./common.js";
 import { funnel } from "./funnel.js";
 import { channels, discountCodes, fulfillment, orderTiming, recentOrders, traffic } from "./orders.js";
-import { comparisonRows, customerCounts, dailyRows, dailySeries, topProducts } from "./sales.js";
+import { comparisonRows, customerCounts, dailyRows, dailySeries } from "./sales.js";
+import { productPerformance } from "./products.js";
 import { shopifyModules } from "./shopify.js";
 
 /**
@@ -145,7 +146,7 @@ export async function storeOverview(tx: Tx, store: Store, dates: { range: DateRa
     }
   }
 
-  if (enabled.has("top_products")) modules.top_products = await topProducts(tx, scope, range);
+  if (enabled.has("top_products")) modules.top_products = await productPerformance(tx, scope, store, range, {}, now);
 
   if (enabled.has("funnel")) modules.funnel = await funnel(tx, scope, range, previous, store);
 

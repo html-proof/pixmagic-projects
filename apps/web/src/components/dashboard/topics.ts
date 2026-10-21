@@ -138,7 +138,8 @@ export function topicSummary(t: Topic, ov: Overview, currency: string): string {
     }
     case "products": {
       const top = m.top_products?.items[0];
-      if (top) return `${top.title} leads with ${money(top.revenue)}`;
+      if (top) return `${top.title} leads with ${plural(top.units, "net unit")}`;
+      if (m.top_products?.complete === false) return "Awaiting complete sales history";
       return m.catalog ? `${plural(m.catalog.products.total, "product")} in your catalog` : "No product sales yet";
     }
     case "shoppers": {

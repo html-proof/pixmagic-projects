@@ -54,7 +54,7 @@ export const CAPABILITIES: readonly CapabilityDef[] = [
   {
     id: "top_products",
     title: "Top products",
-    description: "Which products bring in the most revenue.",
+    description: "Products ranked by net units, revenue, returns and sales momentum.",
     requiredScopes: ["read_orders", "read_products"],
   },
   {

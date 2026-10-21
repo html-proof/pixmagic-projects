@@ -1094,3 +1094,94 @@ describe("where sales come from", () => {
   });
 });
 
+
+describe("top 100 product performance", () => {
+  const range = "dateFrom=2026-03-08&dateTo=2026-03-09";
+  async function request(headers: Record<string, string>, ws: string, storeId: string, params = range) {
+    return ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${storeId}/analytics/products/top-selling?${params}`, headers });
+  }
+  it("groups variants without duplicating orders, retains previous-only variants, and uses real net metrics", async () => {
+    const { a, ws, store } = await owner();
+    await systemDb.store.update({ where: { id: store.id }, data: { ordersHistoryFrom: new Date(0), status: "active" } });
+    await seedProduct(store, "p1", "Renamed product", "active");
+    await seedOrder(store, { id: "before", createdAt: "2026-03-06T18:00:00Z", lines: [{ product: "p1", variant: "old", qty: 4, price: 10 }] });
+    await seedOrder(store, { id: "now", createdAt: "2026-03-08T18:00:00Z", lines: [{ product: "p1", variant: "v1", qty: 3, price: 10, discount: 5 }, { product: "p1", variant: "v2", qty: 5, price: 20 }] });
+    await seedOrder(store, { id: "cancelled", createdAt: "2026-03-08T19:00:00Z", cancelled: true, lines: [{ product: "p1", variant: "v1", qty: 2, price: 10 }] });
+    const res = await request(a.headers, ws, store.id);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ total: 1, complete: true, baseline: true });
+    expect(res.json().items[0]).toMatchObject({ rank: 1, title: "Renamed product", units: 8, grossUnits: 10, returnedUnits: 2, revenue: 125, grossSales: 150, discounts: 5, returns: 20, orders: 2, growth: 100, previousUnits: 4 });
+    expect(res.json().items[0].variants).toHaveLength(3);
+  });
+  it("ranks all products before limiting and pages ranks through 100", async () => {
+    const { a, ws, store } = await owner();
+    await systemDb.store.update({ where: { id: store.id }, data: { ordersHistoryFrom: new Date(0), status: "active" } });
+    await seedOrder(store, { id: "many", createdAt: "2026-03-08T18:00:00Z", lines: Array.from({length: 125}, (_,i) => ({ product: `p${i}`, qty: i + 1, price: 1 })) });
+    const res = await request(a.headers, ws, store.id, `${range}&limit=25&page=4`);
+    expect(res.statusCode).toBe(200);
+    expect(res.json().total).toBe(100);
+    expect(res.json().items[0]).toMatchObject({ rank: 76, productId: "p49", units: 50 });
+    expect(res.json().items.at(-1)).toMatchObject({ rank: 100, productId: "p25", units: 26 });
+    const revenue = await request(a.headers, ws, store.id, `${range}&sortBy=revenue&search=p124`);
+    expect(revenue.json().items).toHaveLength(1);
+    expect(revenue.json().items[0].productId).toBe("p124");
+  });
+  it("does not combine unrelated historical lines with missing product IDs", async () => {
+    const { a, ws, store } = await owner();
+    await systemDb.store.update({ where: { id: store.id }, data: { ordersHistoryFrom: new Date(0), status: "active" } });
+    await seedOrder(store, { id: "deleted", createdAt: "2026-03-08T18:00:00Z", lines: [{ qty: 2, price: 10 }, { qty: 3, price: 20 }] });
+    const res = await request(a.headers, ws, store.id);
+    expect(res.json().items).toHaveLength(2);
+    expect(res.json().items.map((p: { units: number }) => p.units)).toEqual([3,2]);
+    expect(res.json().baseline).toBe(true);
+    expect(res.json().items[0].growth).toBeNull();
+  });
+  it("validates filters, checks scopes and isolates tenant stores", async () => {
+    const { a, ws, store } = await owner();
+    await systemDb.store.update({ where: { id: store.id }, data: { ordersHistoryFrom: new Date(0), status: "active" } });
+    expect((await request(a.headers, ws, store.id, `${range}&limit=101`)).statusCode).toBe(400);
+    expect((await request(a.headers, ws, store.id, "dateFrom=2026-03-08")).statusCode).toBe(400);
+    expect((await request(a.headers, ws, store.id, "dateFrom=2026-02-30&dateTo=2026-03-09")).statusCode).toBe(400);
+    const other = await createWorkspace(ctx, a.headers, "Other");
+    const foreign = await createStore(other, "foreign.myshopify.com", ALL_SCOPES);
+    expect((await request(a.headers, ws, foreign.id)).statusCode).toBe(404);
+    await systemDb.store.update({ where: { id: store.id }, data: { grantedScopes: ["read_products"] } });
+    expect((await request(a.headers, ws, store.id)).statusCode).toBe(403);
+  });
+});
+
+describe("product reporting completeness and reversals", () => {
+  async function report(headers: Record<string, string>, ws: string, storeId: string, from = "2026-03-08", to = from) {
+    return ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${storeId}/analytics/products/top-selling?dateFrom=${from}&dateTo=${to}`, headers });
+  }
+  it("withholds rankings for an incomplete import instead of ranking a partial population", async () => {
+    const { a, ws, store } = await owner();
+    await seedOrder(store, { id: "partial", createdAt: "2026-03-08T18:00:00Z", lines: [{ product: "p", qty: 3, price: 10 }] });
+    expect((await report(a.headers, ws, store.id)).json()).toMatchObject({ complete: false, items: [], total: 0 });
+    await systemDb.store.update({ where: { id: store.id }, data: { ordersHistoryFrom: new Date("2026-03-01T00:00:00Z"), status: "active" } });
+    const order = await systemDb.order.findFirstOrThrow({ where: { storeId: store.id } });
+    await systemDb.order.update({ where: { id: order.id }, data: { salesUpdatedAt: null } });
+    expect((await report(a.headers, ws, store.id)).json()).toMatchObject({ complete: false, pendingOrders: 1, items: [] });
+  });
+  it("books partial refunds on the reversal date and retains return-only negative products", async () => {
+    const { a, ws, store } = await owner();
+    await systemDb.store.update({ where: { id: store.id }, data: { ordersHistoryFrom: new Date(0), status: "active" } });
+    await seedOrder(store, { id: "partialRefund", createdAt: "2026-03-08T18:00:00Z", lines: [{ product: "p", qty: 3, price: 20, discount: 5 }] });
+    const order = await systemDb.order.findFirstOrThrow({ where: { storeId: store.id } });
+    await systemDb.orderSale.create({ data: { workspaceId: ws, storeId: store.id, orderId: order.id, shopifyId: "partialRefund-return", localDay: "2026-03-09", happenedAt: new Date("2026-03-09T18:00:00Z"), actionType: "return", lineType: "product", lineItemShopifyId: "partialRefund-0", quantity: 1, amount: -18.33, discount: 0, tax: 0 } });
+    expect((await report(a.headers, ws, store.id, "2026-03-08", "2026-03-09")).json().items[0]).toMatchObject({ units: 2, grossUnits: 3, returnedUnits: 1, grossSales: 60, discounts: 5, returns: 18.33, revenue: 36.67 });
+    expect((await report(a.headers, ws, store.id, "2026-03-09")).json().items[0]).toMatchObject({ units: -1, revenue: -18.33, orders: 0, returnedUnits: 1 });
+  });
+  it("aggregates more than 10,000 orders without a retrieval cap", async () => {
+    const { a, ws, store } = await owner();
+    await systemDb.store.update({ where: { id: store.id }, data: { ordersHistoryFrom: new Date(0), status: "active" } });
+    const at = new Date("2026-03-08T18:00:00Z");
+    const ids = Array.from({length: 10001}, (_, i) => `scale-${i}`);
+    await systemDb.order.createMany({ data: ids.map(id => ({ id, workspaceId: ws, storeId: store.id, shopifyId: id, name: id, currency: "USD", localDay: "2026-03-08", shopifyCreatedAt: at, shopifyUpdatedAt: at, salesUpdatedAt: at, subtotal: 1, totalDiscounts: 0, totalTax: 0, totalShipping: 0, totalPrice: 1 })) });
+    await systemDb.orderLineItem.createMany({ data: ids.map(id => ({ workspaceId: ws, storeId: store.id, orderId: id, shopifyId: id, productShopifyId: "popular", title: "Popular", quantity: 1, price: 1, discount: 0 })) });
+    await systemDb.orderSale.createMany({ data: ids.map(id => ({ workspaceId: ws, storeId: store.id, orderId: id, shopifyId: id, lineItemShopifyId: id, localDay: "2026-03-08", happenedAt: at, actionType: "order", lineType: "product", quantity: 1, amount: 1, discount: 0, tax: 0 })) });
+    const result = await report(a.headers, ws, store.id);
+    expect(result.statusCode).toBe(200);
+    expect(result.json().items[0]).toMatchObject({ units: 10001, revenue: 10001, orders: 10001 });
+  }, 60000);
+});

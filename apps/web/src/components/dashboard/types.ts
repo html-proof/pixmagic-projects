@@ -421,6 +421,17 @@ export interface Freshness {
   failed: number;
 }
 
+export interface ProductPerformance {
+  items: Array<{
+    key: string; rank: number; productId: string | null; title: string; imageUrl: string | null; sku: string | null;
+    units: number; grossUnits: number; returnedUnits: number; revenue: number; grossSales: number; discounts: number; returns: number;
+    orders: number; growth: number | null; trend: string; trendScore: number | null; lastSold: string | null;
+    variants: Array<{ variantId: string | null; sku: string | null; units: number; revenue: number }>;
+  }>;
+  total: number; complete: boolean; baseline: boolean; lastSyncedAt: string | null;
+  historyFrom: string | null; previous: { from: string; to: string };
+}
+
 export interface Overview {
   store: OverviewStore;
   /** While the store is in error: why Shopify stopped the sync (see syncProblem in the API). */
@@ -451,7 +462,7 @@ export interface Overview {
     refunds?: { current: { refunds: number; refundRate: number | null; refundedOrders: number }; deltas: { refunds: number | null } };
     /** Customers counted once each, as Shopify's reports count them; rate = returning ÷ customers. */
     customers?: { current: CustomerCounts; previous: { [K in keyof CustomerCounts]: CustomerCounts[K] | null } };
-    top_products?: { items: Array<{ productId: string | null; title: string; revenue: number; units: number }> };
+    top_products?: ProductPerformance;
     funnel?: FunnelModule;
     channels?: ChannelsModule;
     traffic?: TrafficModule;

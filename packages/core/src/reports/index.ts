@@ -4,6 +4,8 @@
  * and call these; they hold no SQL of their own.
  */
 export { recentSyncJobs, storeOverview, syncProblem, workspaceStores } from "./overview.js";
+export { productPerformance, PRODUCT_SORTS } from "./products.js";
+export { productCheck } from "./productCheck.js";
 export { quantizeUntil, reconcileSales, reportStale, reportWindows, shopifyModules, type CheckRow, type ReportStatus } from "./shopify.js";
 export { CHECK_PERIODS, checkReportTable, shopifyCheckReport, type CheckReportPeriod, type CheckReportRow, type CheckStatus } from "./shopifyCheck.js";
 export { EXPORT_SECTION_IDS, EXPORT_SECTIONS, exportTable, type ExportSection } from "./export.js";

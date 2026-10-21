@@ -7,7 +7,7 @@ import { handle } from "hono/aws-lambda";
 import { buildApp, CLIENT_IP_HEADER, type App } from "@app/api";
 import { consume, runScheduled, seedAfterMove, seedSalesRereads, settleAllCustomers, startChecks, type WorkerDeps } from "@app/worker";
 import { configReport, logger, memoryBlobs, memoryCoord, warnHalfConfigured, withLogContext, withTimeout, type Coord, type Queues } from "@app/core";
-import { shopifyCheckReport } from "@app/core/reports";
+import { productCheck, shopifyCheckReport } from "@app/core/reports";
 import { systemDb } from "@app/db";
 import { apiDeps, apiPath } from "./app.js";
 import { roleCredentials } from "./awsClient.js";
@@ -182,13 +182,15 @@ const http = handle(root);
 
 /** Direct invocations (not through the URL): maintenance actions for the deploy scripts. */
 interface Action {
-  action: "migrate" | "counts" | "after-move" | "reread" | "verify" | "shopify-check" | "cost-report" | "config";
+  action: "migrate" | "counts" | "after-move" | "reread" | "verify" | "shopify-check" | "product-check" | "cost-report" | "config";
   /** verify: one store (its myshopify domain) instead of every connected one; shopify-check: the store. */
   shop?: string;
   /** verify: how many finished days back (7 by default). */
   days?: number;
   /** verify: record what differs, repair nothing. */
   dryRun?: boolean;
+  dateFrom?: string;
+  dateTo?: string;
 }
 interface CronEvent {
   cron: string;
@@ -251,6 +253,17 @@ export const handler = async (event: unknown, context: unknown) => {
     const store = shop ? await systemDb.store.findUnique({ where: { shopDomain: shop } }) : null;
     if (!store) return { error: "unknown_shop" };
     return shopifyCheckReport(systemDb, store, deps);
+  }
+  if (action === "product-check") {
+    const e = event as Partial<Action>;
+    const deps = await jobs();
+    const stores = await systemDb.store.findMany({ where: { status: "active", ...(e.shop ? { shopDomain: e.shop } : {}) } });
+    const results = [];
+    for (const store of stores) {
+      try { results.push(await productCheck(systemDb, store, deps, e.dateFrom && e.dateTo ? { from: e.dateFrom, to: e.dateTo } : undefined)); }
+      catch (err) { results.push({ shop: store.shopDomain, status: "not_verifiable", reason: err instanceof Error ? err.message : "Report failed" }); }
+    }
+    return { results };
   }
   if (action === "cost-report") {
     // The owner's daily AWS cost email (costReport.ts): one Cost Explorer call, sent through Resend.
