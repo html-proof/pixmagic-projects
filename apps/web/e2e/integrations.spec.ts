@@ -5,9 +5,11 @@ import { createWorkspace, insertAdConnection, insertStore, PASSWORD, signUp, uni
 
 /**
  * Settings → Connect your business and Settings → Advertising, through the real app. Google, Meta
- * and AdSense can't run here and e2e/server.env sets none of them up, so their cards say Coming soon
- * until an account is connected; connected accounts are written straight into ad_connections, one
- * per state, and both pages must word each the same (lib/adConnections.ts).
+ * and AdSense can't run here and e2e/server.env sets none of them up, so the Meta and AdSense cards
+ * say Coming soon until an account is connected, while Google Ads offers its demo instead (server.env
+ * sets GOOGLE_ADS_DEMO_ENABLED; e2e/adsDemo.spec.ts drives it): Not connected, with Try demo as its
+ * only button. Connected accounts are written straight into ad_connections, one per state, and both
+ * pages must word each the same (lib/adConnections.ts).
  */
 
 const db = new pg.Pool({ connectionString: E2E_ENV.DATABASE_URL });
@@ -39,7 +41,7 @@ async function apiSendsReasons(page: Page, ws: string, storeId: string): Promise
   }, [ws, storeId] as const);
 }
 
-test("Connect your business lists every card, Google Account first, and ad platforms not set up say Coming soon", async ({ page }) => {
+test("Connect your business lists every card, Google Account first, and ad platforms not set up say Coming soon or offer their demo", async ({ page }) => {
   await ownerWithStore(page, "hub");
   await quietMeta(page);
   await page.goto("/settings/integrations");
@@ -59,9 +61,8 @@ test("Connect your business lists every card, Google Account first, and ad platf
   await expect(platform(page, "int-shopify")).toHaveText("Connected");
   await expect(platform(page, "int-whatsapp")).toHaveText("Not connected");
 
-  // Not set up on this server: "Coming soon", never "Not connected", and no button to press.
+  // Not set up on this server and no demo to offer: "Coming soon", never "Not connected", and no button to press.
   for (const [testid, name, button] of [
-    ["int-google-ads", "Google Ads", "Continue with Google Ads"],
     ["int-meta-ads", "Meta Ads", "Continue with Meta Ads"],
     ["int-adsense-ads", "Google AdSense", "Continue with Google AdSense"],
   ] as const) {
@@ -71,10 +72,22 @@ test("Connect your business lists every card, Google Account first, and ad platf
     await expect(card).toContainText(`shows a “${button}” button`);
     await expect(card.getByRole("button")).toHaveCount(0);
   }
+  // Google Ads isn't set up either, but offers its demo: "Not connected" (never "Coming soon" with a
+  // button under it), the settings the real sign-in still lacks, and Try demo as the only button.
+  const googleAds = page.getByTestId("int-google-ads");
+  await expect(googleAds.getByRole("heading", { name: "Google Ads" })).toBeVisible();
+  await expect(platform(page, "int-google-ads")).toHaveText("Not connected");
+  await expect(googleAds.getByTestId("int-google-ads-not-configured")).toContainText("it still needs GOOGLE_ADS_");
+  await expect(googleAds.getByTestId("int-google-ads-not-configured")).toContainText("Try demo connects a simulated account");
+  await expect(googleAds.getByRole("button", { name: "Continue with Google Ads" })).toHaveCount(0);
+  await expect(googleAds.getByRole("button")).toHaveCount(1);
+  await expect(googleAds.getByTestId("int-google-try-demo")).toHaveText("Try demo");
 
   // Settings → Advertising has the same three cards, in the same words.
   await page.goto("/settings/ads");
-  for (const p of ["google", "meta", "adsense"]) await expect(platform(page, `ads-provider-${p}`)).toHaveText("Coming soon");
+  await expect(platform(page, "ads-provider-google")).toHaveText("Not connected");
+  await expect(page.getByTestId("ads-provider-google").getByTestId("try-demo-google")).toHaveText("Try demo");
+  for (const p of ["meta", "adsense"]) await expect(platform(page, `ads-provider-${p}`)).toHaveText("Coming soon");
 });
 
 test("each connected account shows its state, the same way on both pages", async ({ page }) => {
@@ -349,9 +362,10 @@ test("disconnecting asks first, then says bizinsights couldn't hand the access b
   const { rows } = await db.query("SELECT count(*)::int AS n FROM ad_connections WHERE store_id = $1", [storeId]);
   expect(rows[0].n).toBe(0);
 
-  // Another store chosen at the top (the page stays): the note and "Disconnected" were about the first one.
+  // Another store chosen at the top (the page stays): the note and "Disconnected" were about the first
+  // one. Nothing is connected for this store, so the card is back to offering the demo.
   await page.getByTestId("store-switcher").selectOption(otherStore);
-  await expect(platform(page, "int-google-ads")).toHaveText("Coming soon");
+  await expect(platform(page, "int-google-ads")).toHaveText("Not connected");
   await expect(page.getByTestId("action-note")).toHaveCount(0);
 });
 
