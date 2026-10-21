@@ -32,7 +32,7 @@ function synth(context: Record<string, string> = {}) {
   const appStack = new AppStack(app, "A", cfg, data, edge.webAclArn, { env, crossRegionReferences: true });
   const auth = new AuthStack(app, "U", cfg, { env, appUrl: appStack.appUrl, apiRole: appStack.apiRole, runtimeParam: appStack.runtimeParam });
   const ci = new CiStack(app, "C", cfg, { env });
-  const audit = new AuditStack(app, "T", cfg, { env });
+  const audit = new AuditStack(app, "T", cfg, { env, accessLogsBucketName: data.accessLogs.bucketName });
   return { edge: Template.fromStack(edge), data: Template.fromStack(data), app: Template.fromStack(appStack), auth: Template.fromStack(auth), ci: Template.fromStack(ci), audit: Template.fromStack(audit) };
 }
 
@@ -76,20 +76,22 @@ describe("the data stack", () => {
     }
   });
 
-  it("blocks public access to both buckets and requires TLS", () => {
+  it("blocks public access to every bucket and requires TLS", () => {
     const buckets = Object.values(t.data.findResources("AWS::S3::Bucket"));
-    expect(buckets).toHaveLength(2);
+    expect(buckets).toHaveLength(3);
     for (const b of buckets) {
       expect(b.Properties.PublicAccessBlockConfiguration).toEqual({ BlockPublicAcls: true, BlockPublicPolicy: true, IgnorePublicAcls: true, RestrictPublicBuckets: true });
     }
-    t.data.hasResourceProperties("AWS::S3::BucketPolicy", {
-      PolicyDocument: { Statement: Match.arrayWith([Match.objectLike({ Effect: "Deny", Condition: { Bool: { "aws:SecureTransport": "false" } } })]) },
-    });
+    const policies = Object.values(t.data.findResources("AWS::S3::BucketPolicy"));
+    expect(policies).toHaveLength(3);
+    for (const p of policies) {
+      expect(p.Properties.PolicyDocument.Statement).toEqual(expect.arrayContaining([expect.objectContaining({ Effect: "Deny", Condition: { Bool: { "aws:SecureTransport": "false" } } })]));
+    }
   });
 
   it("versions every bucket and lets old versions expire (Trusted Advisor S3 Bucket Versioning)", () => {
-    const buckets = [...Object.values(t.data.findResources("AWS::S3::Bucket")), ...Object.values(t.app.findResources("AWS::S3::Bucket"))];
-    expect(buckets).toHaveLength(3);
+    const buckets = ["data", "app", "audit", "edge"].flatMap((stack) => Object.values(t[stack as keyof typeof t].findResources("AWS::S3::Bucket")));
+    expect(buckets).toHaveLength(6);
     for (const b of buckets) {
       expect(b.Properties.VersioningConfiguration).toEqual({ Status: "Enabled" });
       const rules = b.Properties.LifecycleConfiguration.Rules as Array<{ NoncurrentVersionExpiration?: { NoncurrentDays: number } }>;
@@ -790,6 +792,123 @@ describe("IAM", () => {
     for (const needed of ["rds:DescribeDBInstances", "s3:GetBucketPublicAccessBlock", "sqs:GetQueueUrl", "sqs:GetQueueAttributes", "logs:DescribeLogStreams", "cloudwatch:GetMetricStatistics", "lambda:GetAlias"]) {
       expect(actions).toContain(needed);
     }
+  });
+});
+
+describe("S3 access logs (Trusted Advisor Amazon S3 Server Access Logs Enabled)", () => {
+  type Bucket = { Properties: { BucketName: string; LoggingConfiguration?: { DestinationBucketName: unknown; LogFilePrefix: string } } };
+  const isLogBucket = (b: Bucket) => /-s3-logs-/.test(b.Properties.BucketName);
+  const buckets = (stack: "data" | "app" | "audit" | "edge") => Object.values(t[stack].findResources("AWS::S3::Bucket")) as Bucket[];
+
+  it("has one log bucket per Region: Sydney in the Data stack, us-east-1 in the Edge stack", () => {
+    expect(buckets("data").filter(isLogBucket).map((b) => b.Properties.BucketName)).toEqual(["insights-production-s3-logs-605411278365"]);
+    expect(buckets("edge").filter(isLogBucket).map((b) => b.Properties.BucketName)).toEqual(["insights-production-s3-logs-us-east-1-605411278365"]);
+    expect(buckets("app").filter(isLogBucket)).toEqual([]);
+    expect(buckets("audit").filter(isLogBucket)).toEqual([]);
+  });
+
+  it("logs every other bucket's requests to its Region's log bucket, under the bucket's name", () => {
+    const logged = (["data", "app", "audit"] as const).flatMap((stack) => buckets(stack).filter((b) => !isLogBucket(b)));
+    expect(logged.map((b) => b.Properties.BucketName).sort()).toEqual([
+      "insights-account-trail-605411278365",
+      "insights-production-artifacts-605411278365",
+      "insights-production-payloads-605411278365",
+      "insights-production-site-605411278365",
+    ]);
+    for (const b of logged) {
+      expect(b.Properties.LoggingConfiguration?.DestinationBucketName, b.Properties.BucketName).toBeDefined();
+      expect(b.Properties.LoggingConfiguration?.LogFilePrefix).toBe(`${b.Properties.BucketName}/`);
+    }
+    // The Data stack's own two name the bucket itself; the others import its name from that stack.
+    const [sydney] = buckets("data").filter(isLogBucket);
+    const logicalId = Object.entries(t.data.findResources("AWS::S3::Bucket")).find(([, b]) => b === sydney)![0];
+    for (const b of buckets("data").filter((b) => !isLogBucket(b))) expect(b.Properties.LoggingConfiguration?.DestinationBucketName).toEqual({ Ref: logicalId });
+    for (const b of [...buckets("app"), ...buckets("audit")]) expect(JSON.stringify(b.Properties.LoggingConfiguration?.DestinationBucketName)).toContain("Fn::ImportValue");
+  });
+
+  it("never logs a log bucket (S3: a destination bucket should not have logging on)", () => {
+    for (const b of [...buckets("data"), ...buckets("edge")].filter(isLogBucket)) expect(b.Properties.LoggingConfiguration).toBeUndefined();
+  });
+
+  it("keeps log files 90 days in a private, versioned bucket under S3's own keys, and lets S3's logging service write from this account's buckets only", () => {
+    for (const stack of ["data", "edge"] as const) {
+      const [bucket] = buckets(stack).filter(isLogBucket) as Array<Bucket & { Properties: Record<string, any> }>; // eslint-disable-line @typescript-eslint/no-explicit-any
+      expect(bucket!.Properties.PublicAccessBlockConfiguration).toEqual({ BlockPublicAcls: true, BlockPublicPolicy: true, IgnorePublicAcls: true, RestrictPublicBuckets: true });
+      expect(bucket!.Properties.VersioningConfiguration).toEqual({ Status: "Enabled" });
+      expect(bucket!.Properties.OwnershipControls).toEqual({ Rules: [{ ObjectOwnership: "BucketOwnerEnforced" }] });
+      expect(bucket!.Properties.BucketEncryption.ServerSideEncryptionConfiguration).toEqual([{ ServerSideEncryptionByDefault: { SSEAlgorithm: "AES256" } }]);
+      expect(bucket!.Properties.LifecycleConfiguration.Rules).toEqual(
+        expect.arrayContaining([expect.objectContaining({ ExpirationInDays: 90, NoncurrentVersionExpiration: { NoncurrentDays: 1 } }), expect.objectContaining({ ExpiredObjectDeleteMarker: true })]),
+      );
+      t[stack].hasResource("AWS::S3::Bucket", { Properties: { BucketName: bucket!.Properties.BucketName }, DeletionPolicy: "Retain" });
+      t[stack].hasResourceProperties("AWS::S3::BucketPolicy", {
+        PolicyDocument: {
+          Statement: Match.arrayWith([
+            {
+              Sid: "S3ServerAccessLogsPolicy",
+              Effect: "Allow",
+              Principal: { Service: "logging.s3.amazonaws.com" },
+              Action: "s3:PutObject",
+              Resource: { "Fn::Join": ["", [Match.anyValue(), "/*"]] },
+              Condition: { StringEquals: { "aws:SourceAccount": "605411278365" } },
+            },
+          ]),
+        },
+      });
+    }
+  });
+
+  it("turns logging on for the bucket cdk bootstrap made in each Region, which no stack owns, and off again if the resource goes", () => {
+    for (const [stack, bucket] of [
+      ["audit", "cdk-hnb659fds-assets-605411278365-ap-southeast-2"],
+      ["edge", "cdk-hnb659fds-assets-605411278365-us-east-1"],
+    ] as const) {
+      const calls = Object.values(t[stack].findResources("Custom::AWS")).map((r) => r.Properties as Record<string, unknown>);
+      expect(calls, stack).toHaveLength(1);
+      const [call] = calls;
+      for (const when of ["Create", "Update"]) {
+        const text = JSON.stringify(call![when]);
+        expect(text).toContain('\\"action\\":\\"putBucketLogging\\"');
+        expect(text).toContain(`\\"Bucket\\":\\"${bucket}\\"`);
+        expect(text).toContain(`\\"TargetPrefix\\":\\"${bucket}/\\"`);
+        // The log bucket's name: the Edge stack's own (Ref), the Data stack's for the audit stack (import).
+        expect(text).toMatch(stack === "edge" ? /TargetBucket.{0,40}"Ref"/ : /TargetBucket.{0,40}"Fn::ImportValue"/);
+      }
+      expect(JSON.stringify(call!.Delete)).toContain('\\"BucketLoggingStatus\\":{}');
+      expect(call!.InstallLatestAwsSdk).toBeFalsy();
+      // May set that one bucket's logging and nothing else.
+      const policies = Object.values(t[stack].findResources("AWS::IAM::Policy")).map((p) => p.Properties.PolicyDocument.Statement as Array<{ Action: unknown; Resource: unknown }>);
+      expect(policies.flat().filter((s) => JSON.stringify(s.Action).includes("s3:"))).toEqual([{ Effect: "Allow", Action: "s3:PutBucketLogging", Resource: `arn:aws:s3:::${bucket}` }]);
+    }
+  });
+
+  it("gives staging its own Sydney log bucket and leaves the account's buckets to production", () => {
+    const staging = synth({ env: "staging" });
+    const names = Object.values(staging.data.findResources("AWS::S3::Bucket")).map((b) => b.Properties.BucketName as string);
+    expect(names).toContain("insights-staging-s3-logs-605411278365");
+    expect(Object.values(staging.edge.findResources("AWS::S3::Bucket"))).toEqual([]);
+    expect(Object.values(staging.edge.findResources("Custom::AWS"))).toEqual([]);
+  });
+});
+
+describe("Lambda runtimes (Trusted Advisor AWS Lambda Functions Using Deprecated Runtimes)", () => {
+  it("runs every Node function, the app's and CDK's helpers alike, on Node 24", () => {
+    const fns = (["edge", "data", "app", "auth", "ci", "audit"] as const).flatMap((stack) =>
+      Object.values(t[stack].findResources("AWS::Lambda::Function")).filter((f) => String(f.Properties.Runtime).startsWith("nodejs")),
+    );
+    // api, jobs, cron, cognito-email, and CDK's own providers (custom resources, cross-region exports).
+    expect(fns.length).toBeGreaterThanOrEqual(5);
+    for (const f of fns) expect(f.Properties.Runtime, String(f.Properties.FunctionName ?? f.Properties.Description)).toBe("nodejs24.x");
+    expect(fns.map((f) => f.Properties.FunctionName).filter((name) => String(name).startsWith("insights-")).sort()).toEqual([
+      "insights-production-api",
+      "insights-production-cognito-email",
+      "insights-production-cron",
+      "insights-production-jobs",
+    ]);
+  });
+
+  it("bundles the package for that Node", () => {
+    expect(readFileSync(join(REPO_ROOT, "apps/aws/scripts/build.mjs"), "utf8")).toContain('target: "node24"');
   });
 });
 

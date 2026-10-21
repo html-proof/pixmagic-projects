@@ -14,6 +14,7 @@ import * as cr from "aws-cdk-lib/custom-resources";
 import type { Construct } from "constructs";
 import type { EnvConfig } from "./config.js";
 import { NatInstancePerAz, SWAP_FILE_COMMANDS } from "./nat-instances.js";
+import { accessLogBucket, loggedBucket } from "./s3-access-logs.js";
 
 /** PostgreSQL 17, as on the PC (minor upgrades are automatic in the maintenance window). */
 const PG_VERSION = "17.11";
@@ -45,6 +46,8 @@ export class DataStack extends Stack {
   readonly coordTable: dynamodb.Table;
   readonly payloads: s3.Bucket;
   readonly artifacts: s3.Bucket;
+  /** Where every bucket in the Region writes its server access logs (s3-access-logs.ts). */
+  readonly accessLogs: s3.Bucket;
   readonly adminHost: ec2.Instance;
 
   constructor(scope: Construct, id: string, cfg: EnvConfig, props: StackProps) {
@@ -180,6 +183,13 @@ export class DataStack extends Stack {
       removalPolicy: RemovalPolicy.RETAIN,
     });
 
+    // Every bucket in the Region logs its requests here (s3-access-logs.ts): this stack's two, the
+    // App stack's build files, and in production the audit stack's trail bucket and the one `cdk
+    // bootstrap` made. Its own policy comes first: a logging configuration that names it must find
+    // the grant in place.
+    this.accessLogs = accessLogBucket(this, "AccessLogs", `${prefix}-s3-logs-${cfg.account}`);
+    const accessLogs = s3.Bucket.fromBucketName(this, "AccessLogsTarget", this.accessLogs.bucketName);
+
     const privateBucket = { blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL, encryption: s3.BucketEncryption.S3_MANAGED, enforceSSL: true, objectOwnership: s3.ObjectOwnership.BUCKET_OWNER_ENFORCED };
     // Webhook bodies too large for a queue message; processed ones are deleted at once. Versioned
     // (Trusted Advisor "S3 Bucket Versioning"), so a body deleted or overwritten by mistake can be
@@ -187,7 +197,7 @@ export class DataStack extends Stack {
     // processed bodies isn't kept longer than that.
     this.payloads = new s3.Bucket(this, "Payloads", {
       ...privateBucket,
-      bucketName: `${prefix}-payloads-${cfg.account}`,
+      ...loggedBucket(`${prefix}-payloads-${cfg.account}`, accessLogs),
       versioned: true,
       lifecycleRules: [
         { expiration: Duration.days(7), noncurrentVersionExpiration: Duration.days(1), abortIncompleteMultipartUploadAfter: Duration.days(1) },
@@ -198,11 +208,12 @@ export class DataStack extends Stack {
     // Database dumps for moves and restores (kept 30 days), and anything else the deploy hands over.
     this.artifacts = new s3.Bucket(this, "Artifacts", {
       ...privateBucket,
-      bucketName: `${prefix}-artifacts-${cfg.account}`,
+      ...loggedBucket(`${prefix}-artifacts-${cfg.account}`, accessLogs),
       versioned: true,
       lifecycleRules: [{ expiration: Duration.days(30), noncurrentVersionExpiration: Duration.days(7), abortIncompleteMultipartUploadAfter: Duration.days(1) }],
       removalPolicy: RemovalPolicy.RETAIN,
     });
+    for (const bucket of [this.payloads, this.artifacts]) bucket.node.addDependency(this.accessLogs.policy!);
 
     // A small host for database administration (restores, psql) reached only through Systems
     // Manager: no SSH, no inbound rule, no public address. Stopped when not in use: a new Amazon

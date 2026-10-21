@@ -967,10 +967,24 @@ AZ's instance (`describe-route-tables`), and traffic through both instances (`Ne
 and nat-b in CloudWatch; on 2026-10-18 about 10 MB and 25 MB a day). "Single AZ Application Check"
 reads egress traffic patterns, so it clears once AWS reads traffic from after 06:22Z.
 
-**Buckets** (Trusted Advisor "Amazon S3 Bucket Versioning"): all three are versioned. Earlier
-versions expire by themselves: build files (`site`) after 30 days, database dumps (`artifacts`)
-after 7, webhook bodies (`payloads`) after one day, since processed bodies hold customer data.
-Together that is a few cents a month at most.
+**Buckets** (Trusted Advisor "Amazon S3 Bucket Versioning"): all are versioned. Earlier versions
+expire by themselves: build files (`site`) after 30 days, database dumps (`artifacts`) after 7,
+webhook bodies (`payloads`) after one day, since processed bodies hold customer data. Together that
+is a few cents a month at most.
+
+**Access logs** (Trusted Advisor "Amazon S3 Server Access Logs Enabled"; infra/cdk/lib/s3-access-logs.ts):
+every bucket writes a line per request (who, what, when, from where, the result) to its Region's
+log bucket, under `<bucket name>/`. `insights-production-s3-logs-605411278365` (Data stack) takes
+the five in Sydney: `payloads`, `artifacts`, `site`, the trail bucket, and
+`cdk-hnb659fds-assets-605411278365-ap-southeast-2`, the bucket `cdk bootstrap` made, which no stack
+owns, so the audit stack sets its logging by a call (a custom resource; removing it turns the
+logging off). `insights-production-s3-logs-us-east-1-605411278365` (Edge stack) takes CDK's bucket
+in us-east-1 the same way, since S3 delivers within a Region only. Files are kept 90 days;
+delivery is free and the storage cents. S3's logging service may write only from this account's
+buckets (`aws:SourceAccount`). Files arrive within a few hours, best effort. The log buckets log
+nothing themselves (S3: a destination bucket should not have logging on, or its own deliveries
+would log each other without end), so Trusted Advisor lists those two rows, excluded. Staging gets
+its own Sydney log bucket; CDK's two buckets are logged by production alone.
 
 **Instance disks** (Trusted Advisor "Amazon EBS Snapshots", check `H7IgTzjTYb`, red on 2026-10-17
 for the NAT instances' and the admin host's disks): Data Lifecycle Manager's default policy
@@ -1036,6 +1050,59 @@ The five red security checks on 2026-10-18 and what answers each:
 
 Trusted Advisor re-reads these on its own schedule (about daily); "Refresh" on a check, or
 `aws support refresh-trusted-advisor-check --check-id <id> --region us-east-1`, asks sooner.
+
+### The checks left on 2026-10-21
+
+One red and six yellow that day (the dashboard said "1 action, 5 investigation"; the sixth appeared
+the same morning), and what answers each:
+
+- **MFA on Root Account** (red): the owner's step, still; nothing in this repository can do it.
+- **AWS Lambda Functions Using Deprecated Runtimes** (yellow, the four functions): they ran Node
+  22, which Lambda retires on 2027-04-30, and the check lists a runtime from 180 days out. They run
+  Node 24 since 2026-10-21 (`NODEJS_24_X` in app-stack.ts and auth-stack.ts, `target: "node24"` in
+  apps/aws/scripts/build.mjs; a CDK test keeps every function, CDK's helpers included, on it).
+  Refresh with check `L4dfs2Q4C5`.
+- **Amazon S3 Server Access Logs Enabled** (yellow, all six buckets): every bucket now logs its
+  requests (Fault tolerance, "Access logs"). The two log buckets can't log themselves, so their
+  rows are excluded and the check is green with them so. Refresh with check `c1fd6b96l4`.
+- **CloudFront Alternate Domain Names** (yellow, `bizinsights.io` and `www`): the check resolves
+  each alternate name and expects the distribution; both resolve to Cloudflare's proxy (Domain:
+  bizinsights.io), which forwards to it, and the check's own text says names whose DNS is outside
+  the account can be listed that way. Working as designed, so both rows are excluded (2026-10-21).
+- **IAM SAML 2.0 Identity Provider** (yellow): the account has no SAML provider and no IAM Identity
+  Center; the one person signs in as root, and deploys use GitHub's OIDC role. Its row is excluded
+  (2026-10-21) as a choice, not a fix: if the owner wants sign-in through Google Workspace or another
+  identity provider, that is IAM Identity Center, and the row should be included again.
+- **Low Utilization Amazon EC2 Instances** (yellow, the two NAT instances): t4g.nano is the
+  smallest type there is, under 1% CPU and a few MB a day is what a small app's NAT looks like, and
+  one per AZ is what Fault tolerance (above) needs. Both rows excluded (2026-10-21). A deploy that
+  replaces the instances (a new Amazon Linux image) gives them new ids, so the rows return about
+  four days later and need excluding again. The admin host is not listed only while it is stopped:
+  it was started on 2026-10-18 for database work and left running, and stopped by hand on
+  2026-10-21 (`aws ec2 stop-instances --region ap-southeast-2 --instance-ids <id>`). Its user data
+  stops it on a fresh image's first boot only, so after any start, stop it.
+- **Single AZ Application Check** (yellow, the VPC): current, not stale: AWS re-reads it daily
+  about 12:52Z and the row's Last Updated Time moves. The facts say otherwise: egress leaves through
+  both NAT instances (NetworkOut 2026-10-18..20: nat-a 34, 47 and 47 MB a day, nat-b 41, 63 and
+  42), the functions run in both AZs and the database is Multi-AZ. What AWS infers from "egress
+  network patterns", and over what window, is not documented; the one-AZ NAT gateway went on
+  2026-10-17 06:22Z. Wait for it: if it is still yellow on about 2026-10-31 (a 14-day window fully
+  past), open a support case (Business Support until 2026-11-14) rather than excluding it. Its row
+  is the VPC itself, so excluding it would hide every future finding.
+
+Exclusions are per row, in the Trusted Advisor API (a console "Exclude" does the same). To list
+them, and to undo one:
+
+```
+aws trustedadvisor list-recommendation-resources --region us-east-1 --exclusion-status excluded --recommendation-identifier arn:aws:trustedadvisor::605411278365:recommendation/<id>
+aws trustedadvisor batch-update-recommendation-resource-exclusion --region us-east-1 --recommendation-resource-exclusions arn=<row arn>,isExcluded=false
+```
+
+Recommendation ids: CloudFront Alternate Domain Names `d5fec7b3-ce62-4f9a-8b52-8ddaf15ebe61`, IAM
+SAML 2.0 Identity Provider `dcc32e48-00e8-11ef-9055-da5f9b677d4d`, Low Utilization Amazon EC2
+Instances `b8fd5938-4576-428f-8f65-cccf23441f4b`, Amazon S3 Server Access Logs Enabled
+`df160a32-d80d-487f-9a69-f4403afe83b4`, NAT Gateway AZ Independence
+`34a38636-05cc-41bc-b246-71e606cdb3ff` (one stale row excluded on 2026-10-18).
 
 ## Capacity: what binds first (checked 2026-10-20)
 

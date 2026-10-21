@@ -10,12 +10,12 @@ import { EdgeStack } from "../lib/edge-stack.js";
 
 /**
  * Insights on AWS. Stacks, deployed in this order (cdk works it out from the references):
- *   InsightsEdge-<env>  us-east-1        WAF web ACL for CloudFront
- *   InsightsData-<env>  ap-southeast-2   VPC, NAT, RDS PostgreSQL, DynamoDB, S3, secrets, admin host
+ *   InsightsEdge-<env>  us-east-1        WAF web ACL for CloudFront; production: the Region's S3 access log bucket
+ *   InsightsData-<env>  ap-southeast-2   VPC, NAT, RDS PostgreSQL, DynamoDB, S3 (and the Region's access log bucket), secrets, admin host
  *   InsightsApp-<env>   ap-southeast-2   SQS, Lambda (api, jobs, cron), CloudFront, schedules, alarms, budget
  *   InsightsAuth-<env>  ap-southeast-2   Cognito (infra/aws/cognito.yaml) + the runtime parameter
  *   InsightsCi-<env>    ap-southeast-2   GitHub OIDC deploy role
- *   InsightsAudit-production  ap-southeast-2   CloudTrail (all Regions), IAM Access Analyzer in every Region (account-wide, production only)
+ *   InsightsAudit-production  ap-southeast-2   CloudTrail (all Regions), IAM Access Analyzer in every Region, access logs of CDK's bucket (account-wide, production only)
  * Context: -c env=production|staging, -c schedules=on (at cutover), -c alertEmail=..., -c budgetEmail=..., -c googleClientId=...
  * docs/aws-deployment.md is the runbook.
  */
@@ -37,7 +37,9 @@ new AuthStack(app, name("Auth"), cfg, {
 });
 new CiStack(app, name("Ci"), cfg, { env, description: "Insights: GitHub Actions deploy role (OIDC)" });
 // Account-wide (one trail and one analyzer per Region is enough), so staging doesn't get a copy.
-if (cfg.name === "production") new AuditStack(app, name("Audit"), cfg, { env, description: "Insights: CloudTrail and IAM Access Analyzer for the whole account" });
+if (cfg.name === "production") {
+  new AuditStack(app, name("Audit"), cfg, { env, description: "Insights: CloudTrail and IAM Access Analyzer for the whole account", accessLogsBucketName: data.accessLogs.bucketName });
+}
 
 Tags.of(app).add("app", "insights");
 Tags.of(app).add("environment", cfg.name);

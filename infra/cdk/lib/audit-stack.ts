@@ -1,9 +1,16 @@
 import { CfnStackSet, Duration, RemovalPolicy, Stack, type StackProps } from "aws-cdk-lib";
 import * as cloudtrail from "aws-cdk-lib/aws-cloudtrail";
 import * as iam from "aws-cdk-lib/aws-iam";
+import * as logs from "aws-cdk-lib/aws-logs";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import type { Construct } from "constructs";
 import type { EnvConfig } from "./config.js";
+import { bootstrapAssetsBucket, logBucketAccess, loggedBucket } from "./s3-access-logs.js";
+
+export interface AuditStackProps extends StackProps {
+  /** The Data stack's log bucket (s3-access-logs.ts): the trail bucket and CDK's bucket log to it. */
+  accessLogsBucketName: string;
+}
 
 /**
  * The account's enabled Regions (`aws account list-regions --region-opt-status-contains ENABLED
@@ -46,9 +53,10 @@ export const ANALYZER_NAME = "insights-account";
  * GuardDuty was turned on by hand (docs/aws-deployment.md, Cost).
  */
 export class AuditStack extends Stack {
-  constructor(scope: Construct, id: string, cfg: EnvConfig, props: StackProps) {
+  constructor(scope: Construct, id: string, cfg: EnvConfig, props: AuditStackProps) {
     super(scope, id, { ...props, terminationProtection: true });
     const account = cfg.account;
+    const accessLogs = s3.Bucket.fromBucketName(this, "AccessLogs", props.accessLogsBucketName);
 
     // StackSets assumes the administration role, which may only assume the execution role, which
     // may only manage stacks and analyzers.
@@ -102,9 +110,9 @@ export class AuditStack extends Stack {
     });
 
     // Versioned (Trusted Advisor "S3 Bucket Versioning"): a log file deleted by mistake or on purpose
-    // stays recoverable for 30 days. Kept a year.
+    // stays recoverable for 30 days. Kept a year. Its own requests are logged like every bucket's.
     const trailBucket = new s3.Bucket(this, "TrailLogs", {
-      bucketName: `insights-account-trail-${account}`,
+      ...loggedBucket(`insights-account-trail-${account}`, accessLogs),
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       encryption: s3.BucketEncryption.S3_MANAGED,
       enforceSSL: true,
@@ -157,5 +165,14 @@ export class AuditStack extends Stack {
       }),
     });
     analyzers.node.addDependency(trail);
+
+    // The bucket `cdk bootstrap` made in this Region belongs to no stack (it holds every stack's
+    // templates and function packages): the account's stack turns its logging on, into the same
+    // log bucket. Staging deploys through the same bucket and has no copy of this stack.
+    logBucketAccess(this, "BootstrapBucketLogging", {
+      bucketName: bootstrapAssetsBucket(account, cfg.region),
+      target: accessLogs,
+      logGroup: new logs.LogGroup(this, "BootstrapBucketLoggingLogs", { retention: logs.RetentionDays.ONE_MONTH, removalPolicy: RemovalPolicy.DESTROY }),
+    });
   }
 }
