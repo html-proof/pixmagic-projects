@@ -1,9 +1,10 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { disconnectDb, systemDb } from "@app/db";
 import { resetDb } from "@app/db/testing";
-import { encryptTokenFields, MAX_ATTEMPTS, memoryBlobs, memoryCoord, memoryMailer, memoryQueues, resetEnvCache, type FetchLike, type Mailer } from "@app/core";
-import { applySubscriptionUpdate, processWebhook, type WorkerDeps } from "../src/handlers.js";
+import { applySubscriptionUpdate, encryptTokenFields, env, MAX_ATTEMPTS, memoryBlobs, memoryCoord, memoryMailer, memoryQueues, resetEnvCache, type FetchLike, type Mailer } from "@app/core";
+import { processWebhook, type WorkerDeps } from "../src/handlers.js";
 import { consume, type QueueMessage } from "../src/index.js";
+import { salesAnswer } from "./shopifySales.js";
 
 /**
  * Regressions found by the full test pass (2026-10-06). Each case failed before its fix.
@@ -33,7 +34,9 @@ beforeEach(async () => {
   coord.clear();
   sent.sent.length = 0;
   mailer = sent;
-  fetchImpl = async () => {
+  fetchImpl = async (url, init) => {
+    const sales = salesAnswer(url, init);
+    if (sales) return sales;
     throw new Error("unexpected fetch");
   };
 });
@@ -53,7 +56,7 @@ async function makeStore(status: "active" | "syncing" | "uninstalled" = "active"
     data: encryptTokenFields(store.id, { accessToken: "shpat_x", scopes: ["read_orders"], accessTokenExpiresAt: null, refreshToken: null, refreshTokenExpiresAt: null }),
   });
   for (const [i, email] of owners.entries()) {
-    const user = await systemDb.user.create({ data: { firebaseUid: `o${i}`, email, emailVerified: true } });
+    const user = await systemDb.user.create({ data: { email, emailVerified: true } });
     await systemDb.membership.create({ data: { workspaceId: ws.id, userId: user.id, role: i === 0 ? "owner" : "admin" } });
   }
   return store;
@@ -128,6 +131,39 @@ describe("alerts", () => {
       resetEnvCache();
     }
   });
+
+  it("email the bell's wording with a link, and keep the error's own text out of email and Slack", async () => {
+    process.env.ALERT_SLACK_WEBHOOK_URL = "https://hooks.slack.test/x";
+    resetEnvCache();
+    try {
+      const store = await makeStore("syncing");
+      const slack: string[] = [];
+      await syncOnce(store, "shop", async (input, init) => {
+        if (String(input).startsWith("https://hooks.slack.test")) {
+          slack.push(String(init?.body));
+          return new Response("ok");
+        }
+        return shopBroken(input, init);
+      });
+      const [alert] = await openAlerts(store.id);
+      // The stored message keeps Shopify's error ("boom") for the logs...
+      expect(alert!.message).toContain("boom");
+      // ...and the email says what the bell says, with where to fix it. Before: subject
+      // "[critical] sync_shop_failed" and the stored message as the body.
+      const [mail] = sent.sent;
+      expect(mail).toMatchObject({ to: "owner@r.com", subject: "Couldn't sync your store details" });
+      expect(mail!.text).toContain("Reconnect it in Settings → Shopify");
+      expect(mail!.text).toContain(`Store: ${SHOP} · Workspace: R`);
+      expect(mail!.text).toContain(`${env().APP_URL}/settings/stores`);
+      expect(slack).toHaveLength(1);
+      expect(slack[0]).toContain("sync_shop_failed");
+      expect(slack[0]).toContain(alert!.id);
+      for (const part of [mail!.subject, mail!.text, mail!.html, slack[0]]) expect(part).not.toContain("boom");
+    } finally {
+      delete process.env.ALERT_SLACK_WEBHOOK_URL;
+      resetEnvCache();
+    }
+  });
 });
 
 describe("a sync job that gives up", () => {
@@ -196,5 +232,19 @@ describe("app_subscriptions/update", () => {
     // Before: only `status` changed, so a cancelled Growth subscription stayed Growth.
     await applySubscriptionUpdate(ws, CURRENT, "cancelled");
     expect(await sub()).toMatchObject({ plan: "free", status: "active", shopifyChargeId: null, pendingPlan: "scale" });
+  });
+
+  it("keeps the new plan when the old charge's cancellation is processed at the same time as the activation", async () => {
+    // Shopify sends both together when a plan change is approved. Processed concurrently, each
+    // read the row before the other wrote; the cancellation's unconditional write then set the
+    // workspace back to free after the new plan had been applied.
+    for (let i = 0; i < 10; i++) {
+      await systemDb.subscription.update({
+        where: { workspaceId: ws },
+        data: { plan: "growth", status: "active", shopifyChargeId: CURRENT, pendingPlan: "scale", pendingChargeId: NEXT },
+      });
+      await Promise.all([applySubscriptionUpdate(ws, NEXT, "active"), applySubscriptionUpdate(ws, CURRENT, "cancelled")]);
+      expect(await sub()).toMatchObject({ plan: "scale", status: "active", shopifyChargeId: NEXT, pendingPlan: null, pendingChargeId: null });
+    }
   });
 });

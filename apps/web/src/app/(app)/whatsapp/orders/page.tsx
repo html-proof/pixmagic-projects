@@ -1,7 +1,9 @@
 "use client";
 import Link from "next/link";
-import { KindsSection, PageHeader } from "@/components/whatsapp/Common";
-import { OrdersList } from "@/components/whatsapp/Orders";
+import { kindsOf } from "@app/shared/whatsapp";
+import { KindsSection } from "@/components/whatsapp/WhatsappUi";
+import { PageHeader } from "@/components/AppUi";
+import { OrdersList } from "@/components/whatsapp/OrdersList";
 
 export default function OrderNotifications() {
   return (
@@ -19,7 +21,7 @@ export default function OrderNotifications() {
       <KindsSection
         title="What customers are told"
         help="Turn each message on and choose its approved template. Processing and Packed come from tags you add to the order in Shopify (set the tag names in Settings), or from the buttons on an order's timeline."
-        kinds={["order_confirmation", "payment_confirmed", "order_processing", "order_packed", "order_cancelled", "refund_processed"]}
+        kinds={kindsOf("orders")}
       />
       <OrdersList title="Recent orders" empty="Orders appear here as Shopify reports them, from when WhatsApp was turned on." />
     </div>

@@ -1,33 +1,38 @@
 # Webhooks
 
-Webhooks drive all updates after the initial backfill. Endpoint: `POST https://APP_DOMAIN/api/webhooks/shopify` (`apps/api/src/routes/webhooks.ts`, served by the Worker in `apps/cloudflare`). The endpoint is exempt from the global per-IP rate limit: Shopify sends every store's webhooks from a small pool of addresses, and each delivery is HMAC-verified instead.
+Webhooks drive all updates after the initial backfill. Endpoint: `POST <APP_URL>/api/webhooks/shopify`, in production `https://bizinsights.io/api/webhooks/shopify` (`apps/api/src/routes/webhooks.ts`, served by the `api` Lambda function built from `apps/aws`). The endpoint is exempt from the global per-IP rate limit: Shopify sends every store's webhooks from a small pool of addresses, and each delivery is HMAC-verified instead.
 
 ## Intake contract
 
 1. **Verify first.** HMAC-SHA256 of the *raw* body with the app secret, compared in constant time to `X-Shopify-Hmac-Sha256`. Failure → `401`, nothing stored.
-2. **Deduplicate.** `X-Shopify-Webhook-Id` is inserted into `webhook_events` under a unique constraint. The row is written before the queue send, so it alone does not prove the delivery was queued: the DB tunnel can drop after the insert committed, or Shopify can give up at 5 s and the request be cancelled before the send. A `200` ends Shopify's retries, so a repeated delivery is answered by the state of its row:
+2. **Deduplicate.** `X-Shopify-Webhook-Id` is inserted into `webhook_events` under a unique constraint. The row is written before the queue send, so it alone does not prove the delivery was queued: the database connection can drop after the insert committed, or Shopify can give up at 5 s and the request be cancelled before the send. A `200` ends Shopify's retries, so a repeated delivery is answered by the state of its row:
    - a consumer has picked it up (`running`, `succeeded`, `failed`, or `attempts > 0`) → `200 {duplicate:true}`, not re-queued;
    - still `queued` with `attempts=0` more than 30 s after it was recorded → nothing can still be sending it, so the retry takes a lease on it (re-stamps `received_at`) and queues it again with the retry's payload. Rarely this queues a second copy of a message that was only waiting out a DB outage; processing is idempotent (below) and each copy has its own payload blob, which a copy that finds the event already processed deletes, so that is harmless;
    - still `queued` with `attempts=0` and younger than that (Shopify's first retry can come about a second after it gave up), or a lease another request holds → `503 {error:"in_progress"}`, so Shopify retries again later.
 
    If the queue send fails, a row this request inserted is removed again (when the DB allows) so the retry starts afresh; a re-armed row is kept for any earlier message still behind it. Either way the API answers `500` so Shopify retries.
-3. **Queue, then ack.** The payload goes to the `webhooks` Cloudflare Queue (the message carries the event id); the API replies `200` in milliseconds. Payloads over 100 KB are kept in R2, or, while R2 is not bound, in Durable Object storage split into chunks (a stored value is capped at 2 MB, a webhook body at 5 MB). Payloads are never written to Postgres.
+3. **Queue, then ack.** The payload goes to the `webhooks` SQS queue (the message carries the event id); the API replies `200` in milliseconds. Payloads over 100 KB are kept in the S3 payloads bucket (deleted after 7 days) and the message carries their key. Payloads are never written to Postgres.
 
-## Processing (worker, `apps/worker/src/handlers.ts`)
+## Processing (worker, `apps/worker/src/handlers/webhooks.ts`)
 
 | Topic | Effect |
 | --- | --- |
 | `orders/create`, `orders/updated`, `orders/paid`, `orders/cancelled`, `orders/fulfilled`, `orders/partially_fulfilled` | Upsert order + line items + embedded refunds; enqueue re-aggregation of affected days. With WhatsApp on: order timeline, tracking link, notifications (docs/whatsapp.md) |
 | `checkouts/create`, `checkouts/update` | WhatsApp only: abandoned-checkout rows (only with a phone number) and cart reminders; `completed_at` cancels them |
-| `fulfillments/create`, `fulfillments/update`, `fulfillment_events/create` | WhatsApp only: parcel stages. Need `read_fulfillments`, which isn't requested today, so they aren't subscribed; the worker reads shipment status from order payloads and a GraphQL poll instead |
-| `refunds/create` | Upsert refund (booked on refund date). If the order isn't known yet the job throws and retries with backoff |
-| `products/create`, `products/update`, `products/delete` | Upsert / delete product |
-| `app/uninstalled` | Store → `uninstalled`, tokens wiped. Data kept until `shop/redact` |
+| `fulfillments/create`, `fulfillments/update`, `fulfillment_events/create` | WhatsApp only: parcel stages. Need `read_fulfillments`, which isn't requested today, so they aren't subscribed; the jobs read shipment status from order payloads and a GraphQL poll instead |
+| `orders/delete` | Remove the order, its line items and sales records, and recompute its days: Shopify's reports stop counting a deleted order. The daily check against Shopify (docs/kpis.md, "Checked against Shopify") finds deletions whose webhook was missed |
+| `refunds/create` | Read the order's sales records again (the refund is one of them) and recompute the days they fall on |
+| `products/create`, `products/update`, `products/delete` | Upsert / delete product (with the product information the Inventory pages show); a deleted product's stock levels go with it |
+| `inventory_levels/update`, `inventory_levels/connect` | Inventory: read the level again from Shopify (every quantity state) and store it unless a newer one is stored; the variant's alerts are re-evaluated. Shop-specific subscriptions, made once the store grants `read_inventory` (docs/inventory.md) |
+| `inventory_levels/disconnect` | Inventory: the item is no longer stocked at the location; its level goes |
+| `inventory_items/update` | Inventory: cost per item, tracking on or off, SKU, shipping, on the variant that owns the item |
+| `locations/create`, `update`, `delete`, `activate`, `deactivate` | Inventory: the location read again; a deleted one is kept as deleted (history names it) and its stock goes. Needs `read_locations` |
+| `app/uninstalled` | Store → `uninstalled`, tokens wiped; a plan billed on the store ends (Free). Data kept until `shop/redact`. Shopify revokes an app's tokens on uninstall, so the store's token is checked live first: one Shopify still accepts belongs to a later installation (whatever `installedAt` says) and the delivery is set aside, only re-reading the store's charges. One older than `installedAt` is set aside unless Shopify refuses the token (401/403): a frozen or locked shop (402/423), or a row whose reinstall hasn't written its token yet, proves nothing |
 | `app/scopes_update` | Replace granted scopes → dashboard modules update immediately |
-| `app_subscriptions/update` | Update billing status |
+| `app_subscriptions/update` | The pending charge active → it becomes the plan; the charge in force cancelled, declined or expired → Free (`packages/core/src/billing.ts`) |
 | `customers/data_request` | Audit entry, with how many WhatsApp contacts the store holds for that customer (analytics hold no PII) |
 | `customers/redact` | Null the hashed customer key on that customer's orders; delete the customer's WhatsApp number, messages, timelines and reviews |
-| `shop/redact` | Delete all synced data for the store, WhatsApp included |
+| `shop/redact` | Delete all synced data for the store, WhatsApp included, and the store row. Comes 48 h after an uninstall, and also when a shop closes, with no `app/uninstalled` first (App Review's test stores). Skipped only for a store still installed: installed after Shopify made the request, or holding a token Shopify accepts (asked live). A status other than `uninstalled` alone proves nothing. If Shopify can't be asked, the last retry erases anyway (nothing redelivers it), and a plan billed on the store ends as on an uninstall. The erase is recorded in its own transaction (`gdpr.shop_redacted`, naming the shop): in the workspace's audit log, or, when the workspace nobody claimed went with the store, as a system row with no workspace (`audit_logs.workspace_id` null, which RLS shows to no tenant) |
 
 ### Idempotency guarantees
 
@@ -46,5 +51,5 @@ Jobs get 6 attempts with exponential backoff (5 s base). After the final attempt
 - Manual against a running API:
 
 ```bash
-npx shopify app webhook trigger --topic orders/create --api-version 2025-10 --delivery-method http --address http://localhost:8787/api/webhooks/shopify
+npx shopify app webhook trigger --topic orders/create --api-version 2026-10 --delivery-method http --address http://localhost:8787/api/webhooks/shopify
 ```

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   buildComponents,
+  campaignCan,
+  campaignEditable,
+  campaignStatusAfter,
   classifyGraphError,
   cleanParam,
   evaluateConditions,
@@ -9,7 +12,9 @@ import {
   isStopKeyword,
   isStopPromotionsReply,
   kindSetting,
+  kindsOf,
   maskPhone,
+  messageKinds,
   nextSendTime,
   normalizePhone,
   previewText,
@@ -197,5 +202,28 @@ describe("Meta signatures", () => {
     expect(verifyMetaSignature(raw, sig, "other")).toBe(false);
     expect(verifyMetaSignature(raw, undefined, "secret")).toBe(false);
     expect(verifyMetaSignature(raw, sig.replace("sha256=", ""), "secret")).toBe(false);
+  });
+});
+
+describe("message groups and the campaign lifecycle (shared by the API and the UI)", () => {
+  it("groups notification kinds as KIND_INFO says, and filters the history by group", () => {
+    expect(kindsOf("orders")).toEqual(["order_confirmation", "payment_confirmed", "order_processing", "order_packed", "order_cancelled", "refund_processed"]);
+    expect(kindsOf("delivery")).toEqual(["order_shipped", "out_for_delivery", "order_delivered", "delivery_failed"]);
+    expect(kindsOf("carts")).toEqual(["abandoned_cart_1", "abandoned_cart_2"]);
+    expect(kindsOf("reviews")).toEqual(["review_request", "review_reminder"]);
+    expect(messageKinds("carts")).toEqual(["abandoned_cart_1", "abandoned_cart_2"]);
+    expect(messageKinds("campaign")).toEqual(["campaign"]);
+    expect(messageKinds("anything else")).toBeNull();
+  });
+
+  it("allows each campaign action only from the states it makes sense in", () => {
+    expect(["draft", "scheduled", "sending", "paused", "completed", "cancelled"].filter((s) => campaignCan(s, "pause"))).toEqual(["scheduled", "sending"]);
+    expect(["draft", "scheduled", "sending", "paused", "completed", "cancelled"].filter((s) => campaignCan(s, "resume"))).toEqual(["paused"]);
+    expect(["draft", "scheduled", "sending", "paused", "completed", "cancelled"].filter((s) => campaignCan(s, "cancel"))).toEqual(["draft", "scheduled", "sending", "paused"]);
+    expect(campaignStatusAfter("resume", false)).toBe("scheduled");
+    expect(campaignStatusAfter("resume", true)).toBe("sending");
+    expect(campaignStatusAfter("pause", true)).toBe("paused");
+    expect(campaignEditable("scheduled")).toBe(true);
+    expect(campaignEditable("sending")).toBe(false);
   });
 });

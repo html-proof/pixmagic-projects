@@ -1,51 +1,47 @@
+import { resolve } from "node:path";
 import { defineConfig } from "@playwright/test";
 
 /**
- * E2E runs the real Worker (`wrangler dev`: static UI + API + queue consumers)
- * against the Firebase Auth emulator, Mailpit and a dedicated app_e2e database
- * (docker compose up -d first).
+ * E2E runs the real app on the local server (apps/aws/src/local.ts: static UI + API + jobs)
+ * against its own Cognito emulator (started here, empty every run), a stand-in for the user pool's
+ * managed login (e2e/fake-managed-login.mjs: "Continue with Google"), Mailpit and a dedicated
+ * app_e2e database (docker compose up -d postgres mailpit first).
  *
  * Ports default to the docker compose stack. Override them to run e2e beside a local demo, which
- * uses the same Worker port, emulator and Mailpit: global setup wipes every emulator account and
- * every Mailpit message, which signs the demo out from under whoever is using it.
- *   E2E_PORT (8789), E2E_AUTH_EMULATOR_HOST (127.0.0.1:9099), E2E_MAILPIT_URL (http://localhost:8025)
+ * uses the same server port and Mailpit: global setup wipes every Mailpit message.
+ *   E2E_PORT (8789), E2E_COGNITO_PORT (9249), E2E_LOGIN_PORT (9259), E2E_MAILPIT_URL (http://localhost:8025)
  */
 export const E2E_PORT = Number(process.env.E2E_PORT ?? 8789);
 export const E2E_BASE_URL = `http://localhost:${E2E_PORT}`;
-export const E2E_AUTH_EMULATOR_HOST = process.env.E2E_AUTH_EMULATOR_HOST ?? "127.0.0.1:9099";
+export const E2E_COGNITO_PORT = Number(process.env.E2E_COGNITO_PORT ?? 9249);
+export const E2E_LOGIN_PORT = Number(process.env.E2E_LOGIN_PORT ?? 9259);
+/** The emulator's working directory (its database: codes it "emails" are read from there). */
+export const E2E_COGNITO_DATA = resolve(import.meta.dirname, ".e2e/cognito");
 export const E2E_MAILPIT_URL = process.env.E2E_MAILPIT_URL ?? "http://localhost:8025";
+const COGNITO_ENDPOINT = `http://127.0.0.1:${E2E_COGNITO_PORT}`;
+const CLIENT = { id: "insightslocalwebclient00", secret: "insights-local-client-secret" };
 
 // TEST_PG_PORT points e2e at another Postgres server (e.g. a throwaway container); default 5434.
 const PG_PORT = process.env.TEST_PG_PORT ?? "5434";
+// The superuser's password: "app" (docker compose), or the one a CI job on the PC gave its server.
+const PG_PASSWORD = encodeURIComponent(process.env.TEST_PG_PASSWORD ?? "app");
 
 export const E2E_ENV = {
-  DATABASE_URL: `postgresql://app:app@localhost:${PG_PORT}/app_e2e`,
-  APP_DATABASE_URL: `postgresql://app_rls:app_rls@localhost:${PG_PORT}/app_e2e`,
+  DATABASE_URL: `postgresql://app:${PG_PASSWORD}@127.0.0.1:${PG_PORT}/app_e2e`,
+  APP_DATABASE_URL: `postgresql://app_rls:app_rls@127.0.0.1:${PG_PORT}/app_e2e`,
 };
 
 const env = {
   ...process.env,
+  // The local server's database (owner and app_rls roles).
   ...E2E_ENV,
-  // Point the Worker's Hyperdrive bindings at the e2e database.
-  CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE: E2E_ENV.DATABASE_URL,
-  CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE_RLS: E2E_ENV.APP_DATABASE_URL,
-  // Baked into the static UI at build time.
-  NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR: `http://${E2E_AUTH_EMULATOR_HOST}`,
-  NEXT_PUBLIC_FIREBASE_PROJECT_ID: "demo-insights",
-  NEXT_PUBLIC_FIREBASE_API_KEY: "demo-key",
-  // Popup sign-in (Google, Apple) needs an auth domain even against the emulator.
-  NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: "demo-insights.firebaseapp.com",
   /**
-   * Build into our own folder, and serve that folder below.
-   *
-   * Without this the e2e build lands in `apps/web/out` — the directory `wrangler.jsonc` serves
-   * and `wrangler deploy` ships — and silently replaces the real build with one wired to the
-   * Firebase Auth emulator on 127.0.0.1:9099. Running the e2e suite then breaks `wrangler dev`
-   * for everyone afterwards (sign-in fails with `auth/internal-error`, because the emulator
-   * isn't there), and a deploy from that checkout would carry it to production. The demo server
-   * already avoided this the same way (`NEXT_EXPORT_DIR=out-demo`); e2e did not.
+   * Build into our own folder, and serve that folder below, so a test build never lands in
+   * `apps/web/out`: the folder a local server serves by default.
    */
   NEXT_EXPORT_DIR: "out-e2e",
+  /** Settings → Billing is tested before paid plans launch (src/lib/features.ts). */
+  NEXT_PUBLIC_E2E_BILLING: "1",
 } as Record<string, string>;
 
 export default defineConfig({
@@ -53,23 +49,58 @@ export default defineConfig({
   globalSetup: "./e2e/global-setup.ts",
   timeout: 60_000,
   workers: 1,
+  // One line per test with its duration, on CI too (there the default, dot, prints a dot per test):
+  // a slow run names its slow tests in the job's log.
+  reporter: "list",
+  /**
+   * On the self-hosted runner only, a test that fails runs once more (in a fresh worker) before the
+   * run fails, and passes as "flaky". That PC (the owner's laptop) runs the suite 2-3 times slower
+   * on battery or under the owner's other work, and on battery its screen-off timer puts it into
+   * Modern Standby for minutes in the middle of a job (2026-10-20: 279 s asleep inside one test's
+   * budget), so one test times out and the rest pass; which one depends on when the stall came
+   * (docs/aws-deployment.md, "The PC must be on and awake"). A real failure fails twice and still
+   * fails the run. GitHub's runners and local runs get no retry: a flake there should show.
+   */
+  retries: process.env.RUNNER_ENVIRONMENT === "self-hosted" ? 1 : 0,
   use: { baseURL: E2E_BASE_URL, trace: "retain-on-failure" },
   webServer: [
     {
-      // --assets must match NEXT_EXPORT_DIR above; it overrides the `assets.directory` in
-      // wrangler.jsonc, which points at the real build.
-      // The --var overrides follow the ports above (worker.env holds the defaults). The Worker's
-      // local state starts empty each run: rate-limit windows kept from an earlier run within the
-      // hour (10 sign-in codes per IP, and every test is 127.0.0.1) failed later runs' sign-ins.
-      command:
-        `node -e "require('fs').rmSync('../cloudflare/.wrangler/e2e',{recursive:true,force:true})" && ` +
-        `pnpm --filter @app/web build && pnpm --filter @app/cloudflare exec wrangler dev --port ${E2E_PORT} --env-file ../web/e2e/worker.env ` +
-        `--var APP_URL:${E2E_BASE_URL} --var API_URL:${E2E_BASE_URL}/api --var MAILPIT_URL:${E2E_MAILPIT_URL} --var FIREBASE_AUTH_EMULATOR_HOST:${E2E_AUTH_EMULATOR_HOST} ` +
-        `--persist-to .wrangler/e2e --assets ../web/out-e2e`,
-      url: `${E2E_BASE_URL}/api/healthz`,
-      env,
+      // The Cognito emulator, from the seed (no users) every run.
+      command: `node ../../infra/cognito-local/start.mjs --port ${E2E_COGNITO_PORT} --data "${E2E_COGNITO_DATA}" --fresh`,
+      port: E2E_COGNITO_PORT,
       reuseExistingServer: false,
-      timeout: 240_000,
+      timeout: 180_000,
+    },
+    {
+      // Google, as far as the app can tell (the user pool's managed login domain).
+      command: `node e2e/fake-managed-login.mjs ${E2E_LOGIN_PORT} ${COGNITO_ENDPOINT}/local_insights ${CLIENT.id} ${CLIENT.secret}`,
+      port: E2E_LOGIN_PORT,
+      reuseExistingServer: false,
+      timeout: 30_000,
+    },
+    {
+      // --assets must match NEXT_EXPORT_DIR above. e2e/server.env holds the settings; the
+      // addresses follow the ports above (the environment wins over the env file). The server
+      // keeps its state in memory, so each run starts empty: rate-limit windows kept from an
+      // earlier run (10 sign-in codes per IP, and every test is 127.0.0.1) can't fail its sign-ins.
+      command:
+        `pnpm --filter @app/web build && ` +
+        `pnpm --filter @app/aws exec tsx src/dev.ts --port ${E2E_PORT} --settings ../web/e2e/server.env --assets ../web/out-e2e`,
+      url: `${E2E_BASE_URL}/api/healthz`,
+      env: {
+        ...env,
+        APP_URL: E2E_BASE_URL,
+        API_URL: `${E2E_BASE_URL}/api`,
+        MAILPIT_URL: E2E_MAILPIT_URL,
+        COGNITO_ENDPOINT,
+        COGNITO_DOMAIN: `http://127.0.0.1:${E2E_LOGIN_PORT}`,
+        COGNITO_IDENTITY_PROVIDERS: "Google",
+      },
+      reuseExistingServer: false,
+      // The build and the server's start: ~45 s on the PC runner awake and plugged in, 190 s on
+      // 2026-10-20 while it ran on battery and dipped into standby, against the 240 s this was.
+      // A server that never comes up fails the whole run (no test retry covers that).
+      timeout: 420_000,
     },
   ],
 });

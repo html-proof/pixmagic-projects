@@ -1,13 +1,26 @@
 "use client";
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
+import { useRouter } from "next/navigation";
 import { can } from "@app/shared/roles";
 import { useApp } from "@/components/AppContext";
 import { Alert, EmptyState } from "@/components/ui";
 import { actionError, api, ApiError, useApi } from "@/lib/api";
+import { API_KEYS_ENABLED } from "@/lib/features";
 
 interface Key { id: string; name: string; prefix: string; createdAt: string; lastUsedAt: string | null; revokedAt: string | null }
 
 export default function ApiKeysPage() {
+  return API_KEYS_ENABLED ? <ApiKeys /> : <ApiKeysHidden />;
+}
+
+/** API keys are switched off (see `lib/features.ts`): an old link or bookmark lands on Settings instead. */
+function ApiKeysHidden() {
+  const router = useRouter();
+  useEffect(() => router.replace("/settings/profile"), [router]);
+  return null;
+}
+
+function ApiKeys() {
   const { workspace } = useApp();
   const allowed = can(workspace.role, "apikeys:manage");
   const { data, reload, error } = useApi<{ keys: Key[] }>(allowed ? `/workspaces/${workspace.id}/api-keys` : null);

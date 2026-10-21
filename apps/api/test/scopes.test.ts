@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { encryptTokenFields, type FetchLike } from "@app/core";
 import { systemDb } from "@app/db";
 import { clean, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
+import { LEGACY_GRANTS } from "@app/shared";
 
 /**
  * The dynamic optional-scope flow (apps/api/src/routes/scopes.ts): requesting a scope, learning
@@ -195,7 +196,7 @@ describe("optional scope requests", () => {
     it("refuses a viewer: granting scopes is managing the store", async () => {
       const store = await connectedStore(ws, ["read_orders"]);
       const viewer = await signIn(ctx, "u2", "viewer@example.com");
-      await systemDb.membership.create({ data: { workspaceId: ws, userId: viewer.user.id, role: "viewer" } });
+      await systemDb.membership.create({ data: { workspaceId: ws, userId: viewer.user.id, role: "viewer", permissions: [...LEGACY_GRANTS.viewer] } });
       const res = await ctx.app.inject({
         method: "POST",
         url: `/workspaces/${ws}/stores/${store.id}/scopes/request`,
@@ -394,7 +395,7 @@ describe("optional scope requests", () => {
       it("refuses a viewer: giving permissions up is managing the store", async () => {
         const store = await connectedStore(ws, ["read_orders", "read_customers"]);
         const viewer = await signIn(ctx, "u2", "viewer@example.com");
-        await systemDb.membership.create({ data: { workspaceId: ws, userId: viewer.user.id, role: "viewer" } });
+        await systemDb.membership.create({ data: { workspaceId: ws, userId: viewer.user.id, role: "viewer", permissions: [...LEGACY_GRANTS.viewer] } });
         const res = await ctx.app.inject({
           method: "POST",
           url: revokeUrl(store.id),

@@ -6,8 +6,8 @@
 generator client {
   provider     = "prisma-client"
   output       = "../src/generated"
-  // Same generated client runs on Workers (via Hyperdrive) and in Node (tests, scripts).
-  runtime      = "workerd"
+  // Node everywhere: the Lambda functions, the local server, tests and scripts.
+  runtime      = "nodejs"
   moduleFormat = "esm"
 }
 
@@ -15,11 +15,23 @@ datasource db {
   provider = "postgresql"
 }
 
+/// Owners and admins run the workspace. Every other role sees exactly the permissions granted to it
+/// (memberships.permissions, packages/shared/src/access.ts); the role is the template they came from.
 enum Role {
   owner
   admin
   analyst
   viewer
+  manager
+  custom
+}
+
+/// A member's role in Staff Management, on top of their workspace role (owners and admins have
+/// every staff permission already). See packages/shared/src/staff/access.ts.
+enum StaffRole {
+  hr_manager
+  payroll_manager
+  supervisor
 }
 
 enum StoreStatus {
@@ -39,22 +51,72 @@ enum JobStatus {
 
 model User {
   id            String       @id @default(cuid())
-  firebaseUid   String       @unique @map("firebase_uid")
   email         String       @unique
   emailVerified Boolean      @default(false) @map("email_verified")
   displayName   String?      @map("display_name")
   timezone      String       @default("UTC")
+  /// "Sign out everywhere": sessions issued before this instant are no longer accepted.
+  sessionsValidAfter DateTime? @map("sessions_valid_after")
   createdAt     DateTime     @default(now()) @map("created_at")
   updatedAt     DateTime     @updatedAt @map("updated_at")
   memberships   Membership[]
+  identities    AuthIdentity[]
+  /// Members and invitations this person brought into a workspace (Team & Access).
+  invitedMembers     Membership[] @relation("MembershipInviter")
+  sentInvitations    Invitation[] @relation("InvitationInviter")
+  /// Employee records this account signs in as (employee portal).
+  employments   Employee[]   @relation("EmployeeAccount")
+  /// Employees this person is the assigned manager of.
+  managedStaff  Employee[]   @relation("EmployeeManager")
 
   @@map("users")
+}
+
+/// A sign-in identity of a user: one Cognito user (password or Google). Several can point at
+/// the same user, which is how an account is linked across sign-in methods; users.id never changes.
+model AuthIdentity {
+  id                String    @id @default(cuid())
+  userId            String    @map("user_id")
+  /// "cognito".
+  provider          String
+  /// The Cognito user's `sub`.
+  subject           String
+  /// The Cognito user name (what refresh and admin calls address it by).
+  username          String
+  /// How this Cognito user signs in: "password" or "google".
+  method            String
+  email             String?
+  createdAt         DateTime  @default(now()) @map("created_at")
+  lastUsedAt        DateTime? @map("last_used_at")
+  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, subject])
+  @@index([userId])
+  @@map("auth_identities")
+}
+
+/// Account-level security events (sign-in identity linked, password or email changed, signed out
+/// everywhere, account deleted). Workspace actions go to audit_logs.
+model AuthEvent {
+  id        String   @id @default(cuid())
+  /// Null once the account is deleted (the row stays, with no link to a person).
+  userId    String?  @map("user_id")
+  type      String
+  ip        String?
+  metadata  Json?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([userId, createdAt])
+  @@map("auth_events")
 }
 
 model Workspace {
   id           String        @id @default(cuid())
   name         String
   createdAt    DateTime      @default(now()) @map("created_at")
+  /// Made for a store installed from Shopify before anyone had a login for it, and not claimed yet
+  /// (apps/api/src/routes/shopify.ts). Only such a workspace can be claimed, or left for another.
+  awaitingClaim Boolean      @default(false) @map("awaiting_claim")
   memberships  Membership[]
   stores       Store[]
   apiKeys      ApiKey[]
@@ -62,6 +124,23 @@ model Workspace {
   alerts       Alert[]
   invitations  Invitation[]
   subscription Subscription?
+  staffSettings      StaffSettings?
+  employees          Employee[]
+  departments        Department[]
+  overtimePolicies   OvertimePolicy[]
+  breakPolicies      BreakPolicy[]
+  staffHolidays      StaffHoliday[]
+  payrollPeriods     PayrollPeriod[]
+  emailSettings      EmailSettings?
+  emailAccounts      EmailAccount[]
+  emailDomains       EmailDomain[]
+  emailTemplates     EmailTemplate[]
+  emailRules         EmailAutomationRule[]
+  emailEvents        EmailBusinessEvent[]
+  emailSuppressions  EmailSuppression[]
+  dataRequests       DataRequest[]
+  emailIngestKeys    EmailIngestKey[]
+  emailDeliveries    EmailDelivery[]
 
   @@map("workspaces")
 }
@@ -71,28 +150,104 @@ model Membership {
   workspaceId String    @map("workspace_id")
   userId      String    @map("user_id")
   role        Role
+  /// Staff Management role for members who are not owners or admins (null: no staff access).
+  staffRole   StaffRole? @map("staff_role")
+  /// Team & Access: the permissions granted to a restricted role (packages/shared/src/access.ts).
+  /// Owners and admins have every permission and keep this empty.
+  permissions String[]  @default([])
+  /// Access revoked by an owner or admin: the membership stays, so it can be restored, but grants
+  /// nothing until then. Every access check refuses a revoked membership.
+  revokedAt   DateTime? @map("revoked_at")
+  /// Who invited them (null for a workspace's creator and members from before Team & Access).
+  invitedById String?   @map("invited_by_id")
+  /// When their role or permissions last changed.
+  accessChangedAt DateTime? @map("access_changed_at")
+  /// Access given by an invitation ends here (60 days unless the inviter chose less) until an owner
+  /// or admin renews it; null: no end (owners, and members from before invitations expired).
+  accessExpiresAt DateTime? @map("access_expires_at")
   createdAt   DateTime  @default(now()) @map("created_at")
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  invitedBy   User?     @relation("MembershipInviter", fields: [invitedById], references: [id], onDelete: SetNull)
 
   @@unique([workspaceId, userId])
   @@index([userId])
+  @@index([invitedById])
   @@map("memberships")
 }
 
+/// An invitation to a workspace (Team & Access). Single use: only the token's hash is stored, and
+/// accepting, revoking or expiry ends it for good. Kept after it ends, for the team page's counts and
+/// the audit trail, until the daily retention sweep removes it (apps/worker, pruneTeamRecords).
 model Invitation {
   id          String    @id @default(cuid())
   workspaceId String    @map("workspace_id")
   email       String
   role        Role
+  staffRole   StaffRole? @map("staff_role")
+  /// The permissions the member will have once they accept (restricted roles only).
+  permissions String[]  @default([])
+  /// The inviter's note, shown in the email and on the invitation page.
+  message     String?
   tokenHash   String    @unique @map("token_hash")
   expiresAt   DateTime  @map("expires_at")
   acceptedAt  DateTime? @map("accepted_at")
+  acceptedById String?  @map("accepted_by_id")
+  revokedAt   DateTime? @map("revoked_at")
+  invitedById String?   @map("invited_by_id")
+  /// The last time the email went out, and the last time sending it failed.
+  sentAt      DateTime? @map("sent_at")
+  sendFailedAt DateTime? @map("send_failed_at")
+  sendCount   Int       @default(0) @map("send_count")
+  /// The link's token, encrypted with the app's keyring (AES-256-GCM, bound to this invitation), so an
+  /// owner or admin can copy the same link again. Never stored in the clear: a copy of the database
+  /// alone opens nothing. Null for invitations from before (their link can only be replaced).
+  tokenSealed String?   @map("token_sealed")
+  /// The last time the link opened the dashboard, and how many times it has.
+  lastOpenedAt DateTime? @map("last_opened_at")
+  openCount   Int       @default(0) @map("open_count")
   createdAt   DateTime  @default(now()) @map("created_at")
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  invitedBy   User?     @relation("InvitationInviter", fields: [invitedById], references: [id], onDelete: SetNull)
+  deliveries  EmailDelivery[]
 
   @@index([workspaceId])
+  @@index([workspaceId, email])
+  @@index([invitedById])
   @@map("invitations")
+}
+
+/// One transactional email handed to the mail provider (a Team & Access invitation for now): which
+/// provider took it, its id there, and what the provider has reported since (delivered, bounced,
+/// marked as spam). No address or content is kept here; the invitation holds the address.
+model EmailDelivery {
+  id                String    @id @default(cuid())
+  workspaceId       String    @map("workspace_id")
+  invitationId      String?   @map("invitation_id")
+  /// "team_invitation"
+  kind              String
+  /// "resend", "ses", "mailpit", "log"
+  provider          String
+  providerMessageId String?   @map("provider_message_id")
+  /// queued, sent, delivered, delayed, bounced, complained, failed, not_allowed (packages/core/src/mail)
+  status            String
+  errorCode         String?   @map("error_code")
+  /// What the provider said, without the recipient's address.
+  errorMessage      String?   @map("error_message")
+  attempts          Int       @default(0)
+  sentAt            DateTime? @map("sent_at")
+  deliveredAt       DateTime? @map("delivered_at")
+  /// The provider's last event (delivered, bounced, complained) as it timed it.
+  lastEventAt       DateTime? @map("last_event_at")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+  workspace         Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  invitation        Invitation? @relation(fields: [invitationId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerMessageId])
+  @@index([invitationId, createdAt])
+  @@index([workspaceId])
+  @@map("email_deliveries")
 }
 
 model NotificationPreference {
@@ -101,6 +256,8 @@ model NotificationPreference {
   syncFailures Boolean @default(true) @map("sync_failures")
   weeklyDigest Boolean @default(false) @map("weekly_digest")
   productNews  Boolean @default(false) @map("product_news")
+  // Low-stock and out-of-stock emails (the Inventory module's alerts).
+  stockAlerts  Boolean @default(true) @map("stock_alerts")
 
   @@id([userId, workspaceId])
   @@map("notification_preferences")
@@ -125,13 +282,33 @@ model Store {
   tokenKeyVersion       Int?        @map("token_key_version")
   grantedScopes         String[]    @map("granted_scopes")
   pixelInstalled        Boolean     @default(false) @map("pixel_installed")
+  // From when the web pixel counts the store's visits: when bizinsights first had it in place (the
+  // install_pixel job, or the first event accepted before it), keeping the earliest; null with no
+  // pixel yet. The dashboard compares visits only with dates from then on ("No earlier data").
+  pixelInstalledAt      DateTime?   @map("pixel_installed_at")
   pixelIngestKey        String?     @unique @map("pixel_ingest_key")
   installedAt           DateTime?   @map("installed_at")
   uninstalledAt         DateTime?   @map("uninstalled_at")
   lastSyncedAt          DateTime?   @map("last_synced_at")
+  // From when every Shopify order of the store is imported: the start of the earliest completed
+  // import window (Shopify shares 60 days without read_all_orders), the epoch when the whole
+  // history was imported, null when no import has recorded it. Set by the worker's orders sync.
+  ordersHistoryFrom     DateTime?   @map("orders_history_from")
   createdAt             DateTime    @default(now()) @map("created_at")
   updatedAt             DateTime    @updatedAt @map("updated_at")
   workspace             Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  billedSubscriptions   Subscription[]
+  shopifyReports        ShopifyReport[]
+  reconciliations       Reconciliation[]
+  inventoryLocations    InventoryLocation[]
+  inventoryLevels       InventoryLevel[]
+  inventoryMovements    InventoryMovement[]
+  inventorySnapshots    InventorySnapshot[]
+  inventoryAdjustments  InventoryAdjustment[]
+  inventorySettings     InventorySettings?
+  salesCalculation      SalesCalculation?
+  inventoryAlerts       InventoryAlert[]
+  inventorySyncRuns     InventorySyncRun[]
 
   @@index([workspaceId])
   @@map("stores")
@@ -152,20 +329,35 @@ model WebhookEvent {
 
   @@index([shopDomain, topic])
   @@index([status])
+  // The dashboard's freshness (reports/overview.ts dataFreshness) reads one store's recent events on every poll.
+  @@index([storeId, receivedAt])
   @@map("webhook_events")
 }
 
 model Product {
-  id          String   @id @default(cuid())
-  workspaceId String   @map("workspace_id")
-  storeId     String   @map("store_id")
-  shopifyId   String   @map("shopify_id")
-  title       String
-  status      String?
-  vendor      String?
-  productType String?  @map("product_type")
-  shopifyCreatedAt DateTime? @map("shopify_created_at")
-  shopifyUpdatedAt DateTime @map("shopify_updated_at")
+  id                String    @id @default(cuid())
+  workspaceId       String    @map("workspace_id")
+  storeId           String    @map("store_id")
+  shopifyId         String    @map("shopify_id")
+  title             String
+  status            String?
+  vendor            String?
+  productType       String?   @map("product_type")
+  shopifyCreatedAt  DateTime? @map("shopify_created_at")
+  shopifyUpdatedAt  DateTime  @map("shopify_updated_at")
+  // Product information for the Inventory module (null on rows stored before it read them; the
+  // next catalog sync fills them in). `description` is Shopify's plain-text description, cut at
+  // 5,000 characters; `category` the taxonomy category's full name; `collections` [{id, title}]
+  // (the first 10, numeric ids); `imageUrl` the featured image.
+  handle            String?
+  description       String?
+  tags              String[]  @default([])
+  category          String?
+  collections       Json?
+  imageUrl          String?   @map("image_url")
+  onlineStoreUrl    String?   @map("online_store_url")
+  // The merchant's own low-stock threshold for every variant of the product (null: the store's).
+  lowStockThreshold Int?      @map("low_stock_threshold")
 
   @@unique([storeId, shopifyId])
   @@index([workspaceId])
@@ -174,23 +366,287 @@ model Product {
 
 // One row per product variant: price, stock and unit cost (inventory module).
 model ProductVariant {
-  id                String   @id @default(cuid())
-  workspaceId       String   @map("workspace_id")
-  storeId           String   @map("store_id")
-  productShopifyId  String   @map("product_shopify_id")
-  shopifyId         String   @map("shopify_id")
+  id                String    @id @default(cuid())
+  workspaceId       String    @map("workspace_id")
+  storeId           String    @map("store_id")
+  productShopifyId  String    @map("product_shopify_id")
+  shopifyId         String    @map("shopify_id")
   title             String
   sku               String?
-  price             Decimal  @db.Decimal(18, 2)
+  price             Decimal   @db.Decimal(18, 2)
   // Total sellable quantity across locations; null when Shopify doesn't track inventory for it.
-  inventoryQuantity Int?     @map("inventory_quantity")
-  unitCost          Decimal? @map("unit_cost") @db.Decimal(18, 2)
-  shopifyUpdatedAt  DateTime @map("shopify_updated_at")
+  inventoryQuantity Int?      @map("inventory_quantity")
+  unitCost          Decimal?  @map("unit_cost") @db.Decimal(18, 2)
+  shopifyUpdatedAt  DateTime  @map("shopify_updated_at")
+  // The variant's InventoryItem (numeric id; one per variant): what its stock levels are keyed by
+  // (inventory_levels.inventory_item_id). Null until a catalog sync since the Inventory module read it.
+  inventoryItemId   String?   @map("inventory_item_id")
+  barcode           String?
+  compareAtPrice    Decimal?  @map("compare_at_price") @db.Decimal(18, 2)
+  // [{name, value}]: size, colour, material...
+  options           Json?
+  taxable           Boolean?
+  // "deny" | "continue": whether Shopify keeps selling it when it is out of stock.
+  inventoryPolicy   String?   @map("inventory_policy")
+  requiresShipping  Boolean?  @map("requires_shipping")
+  weight            Decimal?  @db.Decimal(18, 4)
+  // GRAMS | KILOGRAMS | OUNCES | POUNDS, as Shopify names them.
+  weightUnit        String?   @map("weight_unit")
+  position          Int?
+  shopifyCreatedAt  DateTime? @map("shopify_created_at")
+  // The merchant's own low-stock threshold for this variant (null: the product's, else the store's).
+  lowStockThreshold Int?      @map("low_stock_threshold")
 
   @@unique([storeId, shopifyId])
   @@index([storeId, productShopifyId])
+  @@index([storeId, inventoryItemId])
   @@index([workspaceId])
   @@map("product_variants")
+}
+
+// ------------------------------------------------------------------ Inventory module
+// docs/inventory.md. Shopify keeps stock per InventoryItem (one per variant) per Location, in
+// separate quantity states; these tables mirror that and nothing is ever derived from guesses.
+// Ids are Shopify's numeric ids (gid://shopify/<Type>/<id> without the prefix), as elsewhere.
+
+// A Shopify location (warehouse, shop, app-managed). Kept with `deletedAt` once Shopify drops it,
+// so the stock history that names it still can.
+model InventoryLocation {
+  id                   String    @id @default(cuid())
+  workspaceId          String    @map("workspace_id")
+  storeId              String    @map("store_id")
+  shopifyId            String    @map("shopify_id")
+  name                 String
+  isActive             Boolean   @map("is_active")
+  // Managed by a fulfillment service app (Shopify's "legacy" locations).
+  isFulfillmentService Boolean   @default(false) @map("is_fulfillment_service")
+  fulfillsOnlineOrders Boolean?  @map("fulfills_online_orders")
+  // {address1, address2, city, province, zip, country, countryCode}; null when Shopify gave none.
+  address              Json?
+  formattedAddress     String?   @map("formatted_address")
+  syncedAt             DateTime  @map("synced_at")
+  deletedAt            DateTime? @map("deleted_at")
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, shopifyId])
+  @@index([workspaceId])
+  @@map("inventory_locations")
+}
+
+// One inventory item at one location, with every quantity state Shopify reports for it, as last
+// read from Shopify. `on_hand` = available + committed + reserved + damaged + safety_stock +
+// quality_control (Shopify's rule); `incoming` is separate.
+model InventoryLevel {
+  id                String   @id @default(cuid())
+  workspaceId       String   @map("workspace_id")
+  storeId           String   @map("store_id")
+  inventoryItemId   String   @map("inventory_item_id")
+  locationShopifyId String   @map("location_shopify_id")
+  available         Int
+  onHand            Int      @map("on_hand")
+  committed         Int
+  incoming          Int
+  reserved          Int
+  damaged           Int
+  safetyStock       Int      @map("safety_stock")
+  qualityControl    Int      @map("quality_control")
+  // InventoryLevel.updatedAt: older reads never overwrite newer ones (webhooks arrive out of order).
+  shopifyUpdatedAt  DateTime @map("shopify_updated_at")
+  // When bizinsights last read it from Shopify (a sync, a check, a webhook's re-read).
+  syncedAt          DateTime @map("synced_at")
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, inventoryItemId, locationShopifyId])
+  @@index([storeId, locationShopifyId])
+  @@index([workspaceId])
+  @@map("inventory_levels")
+}
+
+// A change in a quantity state that bizinsights saw: the value before (null the first time it was
+// seen) and after. `source` says how it was seen: "webhook" (Shopify announced it and we read the
+// level), "sync" (an import or refresh found it), "reconcile" (the scheduled check found a change no
+// webhook had reported), "adjustment" (made in bizinsights and confirmed by Shopify:
+// `adjustmentId`). Shopify's own adjustment history is not readable through its API, so every row
+// here is an observation of Shopify's state, never a reconstruction. Names are copied in so the
+// history still reads after a product or location is deleted.
+model InventoryMovement {
+  id                String   @id @default(cuid())
+  workspaceId       String   @map("workspace_id")
+  storeId           String   @map("store_id")
+  inventoryItemId   String   @map("inventory_item_id")
+  locationShopifyId String   @map("location_shopify_id")
+  variantShopifyId  String?  @map("variant_shopify_id")
+  productShopifyId  String?  @map("product_shopify_id")
+  productTitle      String?  @map("product_title")
+  variantTitle      String?  @map("variant_title")
+  sku               String?
+  locationName      String?  @map("location_name")
+  // available | on_hand | committed | incoming | reserved | damaged | safety_stock | quality_control
+  quantityName      String   @map("quantity_name")
+  before            Int?
+  after             Int
+  delta             Int
+  source            String
+  adjustmentId      String?  @map("adjustment_id")
+  shopifyUpdatedAt  DateTime @map("shopify_updated_at")
+  observedAt        DateTime @default(now()) @map("observed_at")
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([storeId, observedAt])
+  @@index([storeId, variantShopifyId, observedAt])
+  @@index([workspaceId])
+  @@map("inventory_movements")
+}
+
+// The store's stock at the end of a store-local day (updated through the day; the last write is the
+// day's close), storewide (`locationKey` "all") and per location (its numeric id). Trend charts
+// read these and only these: a day without one shows as not recorded.
+model InventorySnapshot {
+  id                String   @id @default(cuid())
+  workspaceId       String   @map("workspace_id")
+  storeId           String   @map("store_id")
+  day               String
+  locationKey       String   @map("location_key")
+  trackedVariants   Int      @map("tracked_variants")
+  untrackedVariants Int      @map("untracked_variants")
+  available         Int
+  onHand            Int      @map("on_hand")
+  committed         Int
+  incoming          Int
+  lowStock          Int      @map("low_stock")
+  outOfStock        Int      @map("out_of_stock")
+  // Cost of the units on hand, for the variants whose cost is known (`variantsWithCost` of
+  // `variantsInStock`); null when none is.
+  costValue         Decimal? @map("cost_value") @db.Decimal(18, 2)
+  variantsWithCost  Int      @map("variants_with_cost")
+  variantsInStock   Int      @map("variants_in_stock")
+  retailValue       Decimal  @map("retail_value") @db.Decimal(18, 2)
+  takenAt           DateTime @map("taken_at")
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, day, locationKey])
+  @@index([workspaceId])
+  @@map("inventory_snapshots")
+}
+
+// A stock change asked for in bizinsights, and what Shopify said. Written "pending" before the
+// mutation is sent and settled once (confirmed | failed | unknown), never edited after: a database
+// trigger refuses any other update (migration 20261019120000), and the tenant role may only read.
+// `idempotencyKey` is the client's, sent to Shopify as @idempotent(key:), so a retried request
+// changes stock once.
+model InventoryAdjustment {
+  id                String    @id @default(cuid())
+  workspaceId       String    @map("workspace_id")
+  storeId           String    @map("store_id")
+  idempotencyKey    String    @map("idempotency_key")
+  actorUserId       String?   @map("actor_user_id")
+  inventoryItemId   String    @map("inventory_item_id")
+  locationShopifyId String    @map("location_shopify_id")
+  variantShopifyId  String?   @map("variant_shopify_id")
+  productShopifyId  String?   @map("product_shopify_id")
+  productTitle      String?   @map("product_title")
+  variantTitle      String?   @map("variant_title")
+  sku               String?
+  locationName      String?   @map("location_name")
+  // increase | decrease | set | correction | damaged | stocktake
+  kind              String
+  // The quantity state changed: available, on_hand (stocktake), damaged (moved from available).
+  quantityName      String    @map("quantity_name")
+  // Shopify's reason code (correction, received, damaged, cycle_count_available, ...).
+  reason            String
+  note              String?
+  referenceId       String?   @map("reference_id")
+  // The change asked for: a delta (increase, decrease, correction, damaged) or a new quantity (set, stocktake).
+  delta             Int?
+  quantity          Int?
+  // The quantity the person saw when they asked; sent as changeFromQuantity, so Shopify refuses
+  // the change if the stock moved in the meantime.
+  expectedBefore    Int?      @map("expected_before")
+  status            String
+  errorCode         String?   @map("error_code")
+  // inventoryAdjustmentGroup.id from Shopify's answer.
+  shopifyGroupId    String?   @map("shopify_group_id")
+  // The quantity read back from Shopify right after it confirmed the change.
+  resultQuantity    Int?      @map("result_quantity")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  completedAt       DateTime? @map("completed_at")
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, idempotencyKey])
+  @@index([storeId, createdAt])
+  @@index([workspaceId])
+  @@map("inventory_adjustments")
+}
+
+// The store's inventory settings (thresholds, alerts, the check's schedule). No row = defaults
+// (@app/shared/inventory INVENTORY_DEFAULTS).
+model InventorySettings {
+  storeId           String   @id @map("store_id")
+  workspaceId       String   @map("workspace_id")
+  lowStockThreshold Int      @default(10) @map("low_stock_threshold")
+  emailAlerts       Boolean  @default(true) @map("email_alerts")
+  dashboardAlerts   Boolean  @default(true) @map("dashboard_alerts")
+  whatsappAlerts    Boolean  @default(false) @map("whatsapp_alerts")
+  // The approved WhatsApp template the alert is sent with, and the numbers it goes to
+  // (AES-256-GCM, never returned: the API sends them masked).
+  whatsappTemplate  String?  @map("whatsapp_template")
+  whatsappToEnc     String?  @map("whatsapp_to_enc")
+  // Hours between full checks of every stock level against Shopify (1 to 24).
+  reconcileHours    Int      @default(6) @map("reconcile_hours")
+  // For restock suggestions: days a reorder takes to arrive, and days of sales it should cover.
+  leadTimeDays      Int      @default(14) @map("lead_time_days")
+  coverDays         Int      @default(30) @map("cover_days")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@map("inventory_settings")
+}
+
+// A variant's stock alert (out_of_stock | low_stock | fast_movement): one row per variant and kind,
+// opened when the variant crosses into it and resolved when it leaves. `notifiedAt` is when people
+// were told, so an alert that stays open is announced once (and one that flaps at most once a day).
+model InventoryAlert {
+  id               String    @id @default(cuid())
+  workspaceId      String    @map("workspace_id")
+  storeId          String    @map("store_id")
+  variantShopifyId String    @map("variant_shopify_id")
+  kind             String
+  available        Int
+  threshold        Int?
+  openedAt         DateTime  @map("opened_at")
+  resolvedAt       DateTime? @map("resolved_at")
+  notifiedAt       DateTime? @map("notified_at")
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, variantShopifyId, kind])
+  @@index([storeId, resolvedAt])
+  @@index([workspaceId])
+  @@map("inventory_alerts")
+}
+
+// One full pass over a store's stock (the import, a manual refresh, or the scheduled check against
+// Shopify): how many levels it read and how many differed from what bizinsights held.
+model InventorySyncRun {
+  id            String    @id @default(cuid())
+  workspaceId   String    @map("workspace_id")
+  storeId       String    @map("store_id")
+  // import | manual | reconcile
+  trigger       String
+  status        String
+  locations     Int       @default(0)
+  levelsChecked Int       @default(0) @map("levels_checked")
+  differences   Int       @default(0)
+  // Up to 20 of the differences: [{inventoryItemId, locationId, name, ours, shopify}].
+  sample        Json?
+  error         String?
+  startedAt     DateTime  @map("started_at")
+  finishedAt    DateTime? @map("finished_at")
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([storeId, startedAt])
+  @@index([workspaceId])
+  @@map("inventory_sync_runs")
 }
 
 model Order {
@@ -200,9 +656,16 @@ model Order {
   shopifyId           String          @map("shopify_id")
   name                String
   currency            String
+  /// Store-local day of shopifyProcessedAt (shopifyCreatedAt while that is null), as Shopify's reports date the order.
   localDay            String          @map("local_day")
   shopifyCreatedAt    DateTime        @map("shopify_created_at")
+  /// Order.processedAt: when the sale happened, the date Shopify's reports use. Earlier than
+  /// shopifyCreatedAt for an imported, POS-offline or marketplace order. Null on orders stored
+  /// before it was read (the re-read fills it in).
+  shopifyProcessedAt  DateTime?       @map("shopify_processed_at")
   shopifyUpdatedAt    DateTime        @map("shopify_updated_at")
+  /// Every item a gift card. Shopify's reports count neither the order nor its customer.
+  giftCardOnly        Boolean         @default(false) @map("gift_card_only")
   cancelledAt         DateTime?       @map("cancelled_at")
   financialStatus     String?         @map("financial_status")
   subtotal            Decimal         @db.Decimal(18, 2)
@@ -220,7 +683,7 @@ model Order {
   fulfilledAt         DateTime?       @map("fulfilled_at")
   discountCodes       String[]        @default([]) @map("discount_codes")
   /// Where the customer came from (packages/shared/src/traffic.ts): facebook | instagram | google | ... | direct | other | unknown.
-  /// Null on orders stored before Insights recorded it (the dashboard re-reads those once).
+  /// Null on orders stored before bizinsights recorded it (the dashboard re-reads those once).
   trafficSource       String?         @map("traffic_source")
   /// paid | unpaid | email | direct | referral | unknown
   trafficMedium       String?         @map("traffic_medium")
@@ -228,11 +691,28 @@ model Order {
   trafficCampaign     String?         @map("traffic_campaign")
   /// The referring site's host only.
   referrerHost        String?         @map("referrer_host")
+  /// The order's Shopify updated_at when its sales (order_sales) were last read from Shopify; null
+  /// while they never were (an order known only from a webhook, or stored before sales were read).
+  salesUpdatedAt      DateTime?       @map("sales_updated_at")
+  /// The money state of the REST payload the stored sales were read for (`salesKey` in
+  /// packages/core/src/normalize.ts): a webhook whose state matches needs no new read.
+  salesKey            String?         @map("sales_key")
+  /// Shopify's position of this order in its customer's order history (CustomerJourneySummary
+  /// .customerOrderIndex: 1 = the customer's first purchase; test orders not counted). Null when
+  /// Shopify gave none (no journey, e.g. POS) or the order was only seen in a webhook so far.
+  customerOrderIndex  Int?            @map("customer_order_index")
+  /// The customer's lifetime order count (Customer.numberOfOrders) when this order was read; a
+  /// fallback for orders without customerOrderIndex (settleReturningCustomers in core).
+  customerOrderCount  Int?            @map("customer_order_count")
   lineItems           OrderLineItem[]
+  /// No longer written: returns are read from Shopify's sales (order_sales) instead.
   refunds             Refund[]
+  sales               OrderSale[]
 
   @@unique([storeId, shopifyId])
   @@index([storeId, localDay])
+  // A customer's earlier orders (returning-customer flag, redaction, campaign audiences).
+  @@index([storeId, customerKey, shopifyCreatedAt])
   @@index([workspaceId])
   @@map("orders")
 }
@@ -273,14 +753,141 @@ model Refund {
   @@map("refunds")
 }
 
+// Shopify's own report figures (ShopifyQL, scope read_reports; packages/core/src/shopifyReports.ts):
+// one answer per store, dataset ("sales" | "profit" | "sessions") and store-local window
+// ("from|to|until"), kept so the dashboard's polls never wait on Shopify. `values` holds the figures
+// in our names; `error` why Shopify gave none ("access_denied" | "unsupported" | "failed"), next to
+// the last figures it did give when a refresh failed.
+model ShopifyReport {
+  id          String   @id @default(cuid())
+  workspaceId String   @map("workspace_id")
+  storeId     String   @map("store_id")
+  dataset     String
+  window      String   @map("time_window")
+  values      Json?
+  error       String?
+  fetchedAt   DateTime @map("fetched_at")
+  store       Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, dataset, window])
+  @@index([workspaceId])
+  @@index([fetchedAt])
+  @@map("shopify_reports")
+}
+
+// One check of a store's figures against Shopify for a window of store-local days
+// (packages/core/src/reconcile.ts, docs/kpis.md "Checked against Shopify"). `source` is what the
+// figures were checked against: "shopify_records" (Shopify's orders and sales records, read again)
+// or "shopify_reports" (Shopify's own report totals, ShopifyQL). `findings` holds the order-level
+// causes found (missing, outdated, deleted orders, sales that differ, stale day totals) with a few
+// order ids each; `actions` what was repaired. Kept 90 days.
+model Reconciliation {
+  id            String                 @id @default(cuid())
+  workspaceId   String                 @map("workspace_id")
+  storeId       String                 @map("store_id")
+  source        String
+  trigger       String
+  fromDay       String                 @map("from_day")
+  toDay         String                 @map("to_day")
+  timezone      String
+  currency      String
+  /// running | verified | repaired | differences | incomplete | failed
+  status        String
+  ordersChecked Int                    @default(0) @map("orders_checked")
+  findings      Json?
+  actions       Json?
+  /// Where a running check has got to (its cursor, Shopify's totals so far): cleared when it ends.
+  state         Json?
+  error         String?
+  startedAt     DateTime               @map("started_at")
+  finishedAt    DateTime?              @map("finished_at")
+  store         Store                  @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  results       ReconciliationResult[]
+
+  @@index([storeId, startedAt])
+  @@index([workspaceId])
+  @@map("reconciliations")
+}
+
+// One metric of a reconciliation: Shopify's figure, ours before and after any repair, and why
+// they differed. Money in the store's currency.
+model ReconciliationResult {
+  id               String         @id @default(cuid())
+  workspaceId      String         @map("workspace_id")
+  reconciliationId String         @map("reconciliation_id")
+  metric           String
+  shopifyValue     Decimal?       @map("shopify_value") @db.Decimal(18, 2)
+  beforeValue      Decimal?       @map("before_value") @db.Decimal(18, 2)
+  afterValue       Decimal?       @map("after_value") @db.Decimal(18, 2)
+  /// match | repaired | difference | sync_delay | not_verifiable
+  status           String
+  cause            String?
+  reconciliation   Reconciliation @relation(fields: [reconciliationId], references: [id], onDelete: Cascade)
+
+  @@unique([reconciliationId, metric])
+  @@index([workspaceId])
+  @@map("reconciliation_results")
+}
+
+// One of Shopify's sales records for an order (Order.agreements → sales): what was sold, returned
+// or changed, on the day it happened. Shopify's own reports are built from these, so the dashboard's
+// sales totals are too (docs/kpis.md). Amounts are in the store's currency and signed as Shopify
+// sends them; a return is negative.
+model OrderSale {
+  id                String   @id @default(cuid())
+  workspaceId       String   @map("workspace_id")
+  storeId           String   @map("store_id")
+  orderId           String   @map("order_id")
+  shopifyId         String   @map("shopify_id")
+  /// Store-local day of `happenedAt`.
+  localDay          String   @map("local_day")
+  happenedAt        DateTime @map("happened_at")
+  /// order | return | update | unknown (Shopify's SaleActionType, lowercase).
+  actionType        String   @map("action_type")
+  /// product | shipping | gift_card | tip | duty | fee | additional_fee | adjustment | unknown (SaleLineType).
+  lineType          String   @map("line_type")
+  /// The line item of a product sale (OrderLineItem.shopifyId).
+  lineItemShopifyId String?  @map("line_item_shopify_id")
+  quantity          Int?
+  /// totalAmount: after discounts, taxes included.
+  amount            Decimal  @db.Decimal(18, 2)
+  /// totalDiscountAmountBeforeTaxes.
+  discount          Decimal  @db.Decimal(18, 2)
+  /// totalTaxAmount.
+  tax               Decimal  @db.Decimal(18, 2)
+  order             Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, shopifyId])
+  @@index([storeId, localDay])
+  @@index([orderId])
+  @@index([workspaceId])
+  @@map("order_sales")
+}
+
 model DailyStoreMetrics {
   workspaceId             String  @map("workspace_id")
   storeId                 String  @map("store_id")
   day                     String
   grossSales              Decimal @default(0) @map("gross_sales") @db.Decimal(18, 2)
   discounts               Decimal @default(0) @db.Decimal(18, 2)
+  /// Returns: what refunds, cancellations and edits took back (Shopify's "sales reversals").
   refunds                 Decimal @default(0) @db.Decimal(18, 2)
+  /// Shipping charged after shipping discounts and refunds, before tax.
+  shipping                Decimal @default(0) @db.Decimal(18, 2)
+  taxes                   Decimal @default(0) @db.Decimal(18, 2)
+  /// Import duties charged, before tax.
+  duties                  Decimal @default(0) @db.Decimal(18, 2)
+  /// Shopify's fees and additional fees (and any sale it gives no type), before tax.
+  additionalFees          Decimal @default(0) @map("additional_fees") @db.Decimal(18, 2)
+  /// Net sales + shipping + taxes + duties + additional fees: Shopify's "Total sales".
+  totalSales              Decimal @default(0) @map("total_sales") @db.Decimal(18, 2)
+  /// Orders placed that day, gift-card-only orders left out (as Shopify's reports count them).
   orders                  Int     @default(0)
+  /// What those orders sold on the day they were placed (items after discounts, before tax; no gift
+  /// cards, no edits made on a later day): average order value's numerator. Null on rows from before
+  /// it was kept.
+  orderValue              Decimal? @map("order_value") @db.Decimal(18, 2)
+  /// Items sold less items returned, gift cards included (Shopify's net items sold).
   units                   Int     @default(0)
   ordersWithCustomer      Int     @default(0) @map("orders_with_customer")
   returningCustomerOrders Int     @default(0) @map("returning_customer_orders")
@@ -289,6 +896,27 @@ model DailyStoreMetrics {
   @@id([storeId, day])
   @@index([workspaceId])
   @@map("daily_store_metrics")
+}
+
+// A store's own sales calculation ("Custom sales", docs/kpis.md): which lines of Shopify's total
+// sales it counts, and whether the dashboard shows it. Only the choice is kept, never an amount:
+// the figures always come from the store's sales records for the dates on screen.
+model SalesCalculation {
+  storeId          String   @id @map("store_id")
+  workspaceId      String   @map("workspace_id")
+  /// { netSales, additionalFees, duties, shipping, taxes } as booleans (salesCalculationInput in @app/shared).
+  components       Json
+  /// The merchant's name for a calculation of their own.
+  label            String?
+  applyToDashboard Boolean  @default(false) @map("apply_to_dashboard")
+  /// Calculations kept to switch between: [{ name, components }], at most 10.
+  presets          Json     @default("[]")
+  updatedByUserId  String?  @map("updated_by_user_id")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+  store            Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@map("sales_calculations")
 }
 
 model FunnelDaily {
@@ -347,10 +975,42 @@ model AdConnection {
   loginCustomerId      String?   @map("login_customer_id")
   /** Shown on the dashboard and synced. Turned off from Settings without losing the connection. */
   enabled              Boolean   @default(true)
-  /** "active" | "reconnect" (access ended: connect again) | "error" (see last_error). */
+  /**
+   * "active" | "reconnect" (access ended: connect again) | "permission" (this login lost access to
+   * this one account; connect with a login that has it) | "unavailable" (the platform won't report on
+   * the account: closed, disabled, sign-up unfinished) | "error" (a failure a retry may fix).
+   * AD_CONNECTION_STATUSES in @app/shared/ads.
+   */
   status               String    @default("active")
+  /** Why it isn't active, as a code the UI words (AD_ERROR_CODES in @app/shared/ads); null when active. */
+  errorCode            String?   @map("error_code")
+  /** The platform's own reason, through providerDetail(): for the logs and support, never shown raw. */
   lastError            String?   @map("last_error")
   lastSyncedAt         DateTime? @map("last_synced_at")
+  /**
+   * The ad account's own health at the platform, normalized (AD_ACCOUNT_STATUSES in @app/shared/ads):
+   * Meta's account_status, AdSense's state and pending tasks. Null until read.
+   */
+  accountStatus        String?   @map("account_status")
+  /** What the platform says about that status (Meta's disable reason, AdSense's pending tasks). */
+  accountStatusDetail  String?   @map("account_status_detail")
+  /** AdSense: the sites (DOMAIN_CODE) whose earnings belong to this store; empty = every site. */
+  sites                String[]  @default([])
+  /**
+   * The last day (the account's own, YYYY-MM-DD) up to which every day from history_from on is
+   * stored without a gap. A sync that leaves a gap after it fetches the gap first.
+   */
+  syncedThrough        String?   @map("synced_through")
+  /** A sync was asked for (connect, Refresh) and hasn't finished yet: the card says "Synchronizing". */
+  syncRequestedAt      DateTime? @map("sync_requested_at")
+  /** Syncs that failed in a row; reset by one that works. Failing accounts are tried less often. */
+  consecutiveFailures  Int       @default(0) @map("consecutive_failures")
+  /**
+   * The first day (the account's own, YYYY-MM-DD) from which every day's figures are stored: the
+   * start of the earliest window a sync fetched in full (the first sync fetches 90 days), keeping
+   * the earliest; null before any sync worked. The dashboard compares only from then on.
+   */
+  historyFrom          String?   @map("history_from")
   accessTokenEnc       String    @map("access_token_enc")
   refreshTokenEnc      String?   @map("refresh_token_enc")
   accessTokenExpiresAt DateTime? @map("access_token_expires_at")
@@ -360,8 +1020,17 @@ model AdConnection {
   externalUserId       String?   @map("external_user_id")
   /** The permissions that person granted (checked when connecting). */
   grantedScopes        String[]  @default([]) @map("granted_scopes")
+  /**
+   * A demo connection ("Try demo" on the Google Ads card, docs/ads-demo.md): its figures are generated
+   * by bizinsights from demoSeed, never read from Google; it holds no token, and nothing it shows is
+   * Google-verified. Added by migration 20261020150000 (the same rules as every other column).
+   */
+  isDemo               Boolean   @default(false) @map("is_demo")
+  demoSeed             Int?      @map("demo_seed")
   createdAt            DateTime  @default(now()) @map("created_at")
   updatedAt            DateTime  @updatedAt @map("updated_at")
+  campaignDays         AdCampaignDaily[]
+  adsenseDays          AdsenseDaily[]
 
   @@unique([storeId, provider, accountId])
   @@index([workspaceId])
@@ -381,12 +1050,20 @@ model AdCampaignDaily {
   day             String
   spend           Decimal  @default(0) @db.Decimal(18, 2)
   impressions     Int      @default(0)
+  /** Every click the platform counts (Meta's "clicks (all)" include likes, comments and profile clicks). */
   clicks          Int      @default(0)
+  /** Clicks on the ad's link: Meta's inline_link_clicks, Google's clicks. Null until read (rows from before 2026-10-19). */
+  linkClicks      Int?     @map("link_clicks")
+  /** The platform's own conversions: Meta's purchases, Google's every primary conversion action (leads, calls...). */
   conversions     Decimal  @default(0) @db.Decimal(18, 2)
   conversionValue Decimal  @default(0) @map("conversion_value") @db.Decimal(18, 2)
+  /** Purchases only, as the platform credits them (Google: conversion actions of category PURCHASE). Null until read. */
+  purchases       Decimal? @db.Decimal(18, 2)
+  purchaseValue   Decimal? @map("purchase_value") @db.Decimal(18, 2)
   leads           Int      @default(0)
   currency        String?
   updatedAt       DateTime @updatedAt @map("updated_at")
+  connection      AdConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
 
   @@id([connectionId, campaignId, day])
   @@index([workspaceId])
@@ -410,6 +1087,7 @@ model AdsenseDaily {
   clicks       Int      @default(0)
   currency     String?
   updatedAt    DateTime @updatedAt @map("updated_at")
+  connection   AdConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
 
   @@id([connectionId, site, day])
   @@index([workspaceId])
@@ -424,6 +1102,7 @@ model PixelEventSeen {
   seenAt   DateTime @default(now()) @map("seen_at")
 
   @@id([storeId, eventId])
+  @@index([seenAt])
   @@map("pixel_events_seen")
 }
 
@@ -444,6 +1123,8 @@ model SyncJob {
   createdAt      DateTime  @default(now()) @map("created_at")
 
   @@index([storeId, kind])
+  // The 15-minute sweep for stalled jobs reads the few that are queued or running.
+  @@index([status])
   @@index([workspaceId])
   @@map("sync_jobs")
 }
@@ -481,7 +1162,10 @@ model ApiKey {
 
 model AuditLog {
   id          String    @id @default(cuid())
-  workspaceId String    @map("workspace_id")
+  /// Null for a system record that outlives the workspace it was about: a GDPR shop/redact that
+  /// erased the store's unclaimed workspace with it (apps/worker/src/handlers/webhooks.ts). RLS shows
+  /// such a row to no workspace, and a deleted workspace's own rows still go with it (Cascade).
+  workspaceId String?   @map("workspace_id")
   actorUserId String?   @map("actor_user_id")
   action      String
   targetType  String?   @map("target_type")
@@ -489,7 +1173,7 @@ model AuditLog {
   metadata    Json?
   ip          String?
   createdAt   DateTime  @default(now()) @map("created_at")
-  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workspace   Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
   @@index([workspaceId, createdAt])
   @@map("audit_logs")
@@ -506,8 +1190,14 @@ model Subscription {
   /// leaves it untouched.
   pendingPlan      String?   @map("pending_plan")
   pendingChargeId  String?   @map("pending_charge_id")
+  /// The store whose Shopify bill carries the charges above (Shopify bills an app per store, and
+  /// only that store's token can cancel them). Both the charge in force and a pending one live
+  /// there: a plan change is always made through it while a charge is in force.
+  billingStoreId   String?   @map("billing_store_id")
   workspace        Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  billingStore     Store?    @relation(fields: [billingStoreId], references: [id], onDelete: SetNull)
 
+  @@index([billingStoreId])
   @@map("subscriptions")
 }
 
@@ -537,7 +1227,7 @@ model WhatsappConnection {
   id                 String    @id @default(cuid())
   workspaceId        String    @map("workspace_id")
   storeId            String    @unique @map("store_id")
-  /** "embedded" (Embedded Signup through Insights' Meta app) | "manual" (the merchant's own app and system-user token). */
+  /** "embedded" (Embedded Signup through bizinsights' Meta app) | "manual" (the merchant's own app and system-user token). */
   mode               String
   businessId         String?   @map("business_id")
   wabaId             String    @map("waba_id")
@@ -560,7 +1250,7 @@ model WhatsappConnection {
   /** Manual mode: the verify token the merchant enters in their Meta app's webhook settings. */
   verifyTokenEnc     String?   @map("verify_token_enc")
   verifyTokenHash    String?   @unique @map("verify_token_hash")
-  /** The number's two-step verification PIN, encrypted: the one Insights set when registering it, or the one the merchant entered. */
+  /** The number's two-step verification PIN, encrypted: the one bizinsights set when registering it, or the one the merchant entered. */
   pinEnc             String?   @map("pin_enc")
   tokenKeyVersion    Int       @map("token_key_version")
   /** When Meta last proved it can reach our webhook for this number (challenge or signed delivery). */
@@ -938,4 +1628,1028 @@ model WhatsappAutomationRun {
   @@index([storeId, createdAt])
   @@index([workspaceId])
   @@map("whatsapp_automation_runs")
+}
+
+// ---------------------------------------------------------------------------------------------
+// Staff Management, Time & Attendance and Payroll (docs/staff.md).
+//
+// Every table carries workspace_id (the organization) and has the tenant_isolation RLS policy.
+// Money is integer minor units (bigint, `*_minor`) in the row's `currency`; rates and multipliers
+// are fixed-point decimals. Instants are UTC timestamps written by the server; "days"
+// (YYYY-MM-DD) are the organization's local calendar days. Partial unique indexes that Prisma
+// cannot express (one open shift per employee, one open break per shift, one live invitation per
+// employee) live in the migration SQL.
+// ---------------------------------------------------------------------------------------------
+
+/// Organization-level payroll settings (organization_payroll_settings). One row per workspace.
+model StaffSettings {
+  workspaceId              String    @id @map("workspace_id")
+  /// IANA zone every "day", "week" and "hour" in staff reports is counted in.
+  timezone                 String    @default("UTC")
+  currency                 String    @default("USD")
+  /// daily | weekly | biweekly | semimonthly | monthly
+  payCycle                 String    @default("weekly") @map("pay_cycle")
+  /// A day that starts a weekly or two-weekly period.
+  payCycleAnchor           String    @default("2026-01-05") @map("pay_cycle_anchor")
+  /// 0 = Sunday ... 6 = Saturday.
+  weekStartsOn             Int       @default(1) @map("week_starts_on")
+  invitationExpiryHours    Int       @default(48) @map("invitation_expiry_hours")
+  /// An open shift older than this is flagged "forgot to clock out?" and stops adding paid time.
+  staleSessionHours        Int       @default(14) @map("stale_session_hours")
+  lateGraceMinutes         Int       @default(5) @map("late_grace_minutes")
+  /// Hours must be approved before payroll can include them.
+  requireApproval          Boolean   @default(true) @map("require_approval")
+  allowEmployeeCorrections Boolean   @default(true) @map("allow_employee_corrections")
+  /// Free-text region label (e.g. "AU-NSW"), shown on payslips. No statutory rules are applied.
+  jurisdiction             String?
+  supportEmail             String?   @map("support_email")
+  defaultOvertimePolicyId  String?   @map("default_overtime_policy_id")
+  defaultBreakPolicyId     String?   @map("default_break_policy_id")
+  nextEmployeeNumber       Int       @default(1) @map("next_employee_number")
+  updatedByUserId          String?   @map("updated_by_user_id")
+  createdAt                DateTime  @default(now()) @map("created_at")
+  updatedAt                DateTime  @updatedAt @map("updated_at")
+  workspace                Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@map("organization_payroll_settings")
+}
+
+model Department {
+  id          String     @id @default(cuid())
+  workspaceId String     @map("workspace_id")
+  name        String
+  createdAt   DateTime   @default(now()) @map("created_at")
+  workspace   Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  employees   Employee[]
+
+  @@unique([workspaceId, name])
+  @@map("departments")
+}
+
+/// Overtime rules. Thresholds in minutes; null switches a rule off. Multipliers like 1.5.
+model OvertimePolicy {
+  id                              String     @id @default(cuid())
+  workspaceId                     String     @map("workspace_id")
+  name                            String
+  dailyThresholdMinutes           Int?       @map("daily_threshold_minutes")
+  weeklyThresholdMinutes          Int?       @map("weekly_threshold_minutes")
+  multiplier                      Decimal    @default(1.5) @db.Decimal(8, 4)
+  doubleTimeDailyThresholdMinutes Int?       @map("double_time_daily_threshold_minutes")
+  doubleTimeMultiplier            Decimal?   @map("double_time_multiplier") @db.Decimal(8, 4)
+  holidayMultiplier               Decimal    @default(1) @map("holiday_multiplier") @db.Decimal(8, 4)
+  createdAt                       DateTime   @default(now()) @map("created_at")
+  updatedAt                       DateTime   @updatedAt @map("updated_at")
+  workspace                       Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  employees                       Employee[]
+
+  @@unique([workspaceId, name])
+  @@map("overtime_policies")
+}
+
+/// Which breaks are paid and what counts as too many or too long (flagged for review, never blocked mid-shift).
+model BreakPolicy {
+  id                String     @id @default(cuid())
+  workspaceId       String     @map("workspace_id")
+  name              String
+  restBreaksPaid    Boolean    @default(true) @map("rest_breaks_paid")
+  mealBreaksPaid    Boolean    @default(false) @map("meal_breaks_paid")
+  maxBreaksPerShift Int?       @map("max_breaks_per_shift")
+  maxBreakMinutes   Int?       @map("max_break_minutes")
+  createdAt         DateTime   @default(now()) @map("created_at")
+  updatedAt         DateTime   @updatedAt @map("updated_at")
+  workspace         Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  employees         Employee[]
+
+  @@unique([workspaceId, name])
+  @@map("break_policies")
+}
+
+/// A public holiday: no one is "absent" on it, and work on it earns the holiday multiplier.
+model StaffHoliday {
+  id          String    @id @default(cuid())
+  workspaceId String    @map("workspace_id")
+  day         String
+  name        String
+  createdAt   DateTime  @default(now()) @map("created_at")
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, day])
+  @@map("staff_holidays")
+}
+
+model Employee {
+  id                    String                @id @default(cuid())
+  workspaceId           String                @map("workspace_id")
+  /// "EMP-0001": generated, unique within the organization.
+  employeeNumber        String                @map("employee_number")
+  fullName              String                @map("full_name")
+  email                 String
+  phone                 String?
+  jobTitle              String                @map("job_title")
+  departmentId          String?               @map("department_id")
+  /// full_time | part_time | casual | contract
+  employmentType        String                @map("employment_type")
+  joinedOn              String                @map("joined_on")
+  currency              String
+  standardWeeklyMinutes Int                   @default(2400) @map("standard_weekly_minutes")
+  /// Regular working days, 0 = Sunday.
+  workingDays           Int[]                 @default([1, 2, 3, 4, 5]) @map("working_days")
+  managerUserId         String?               @map("manager_user_id")
+  overtimePolicyId      String?               @map("overtime_policy_id")
+  breakPolicyId         String?               @map("break_policy_id")
+  timezone              String
+  /// active | on_leave | inactive (deactivated)
+  status                String                @default("active")
+  notes                 String?
+  /// The sign-in account (employee_auth_links): set when the invitation is accepted.
+  userId                String?               @map("user_id")
+  accountLinkedAt       DateTime?             @map("account_linked_at")
+  deactivatedAt         DateTime?             @map("deactivated_at")
+  deactivatedByUserId   String?               @map("deactivated_by_user_id")
+  deactivationReason    String?               @map("deactivation_reason")
+  createdByUserId       String?               @map("created_by_user_id")
+  createdAt             DateTime              @default(now()) @map("created_at")
+  updatedAt             DateTime              @updatedAt @map("updated_at")
+  workspace             Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  department            Department?           @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  user                  User?                 @relation("EmployeeAccount", fields: [userId], references: [id], onDelete: SetNull)
+  manager               User?                 @relation("EmployeeManager", fields: [managerUserId], references: [id], onDelete: SetNull)
+  overtimePolicy        OvertimePolicy?       @relation(fields: [overtimePolicyId], references: [id], onDelete: SetNull)
+  breakPolicy           BreakPolicy?          @relation(fields: [breakPolicyId], references: [id], onDelete: SetNull)
+  invitations           EmployeeInvitation[]
+  payRates              PayRate[]
+  schedules             ShiftSchedule[]
+  sessions              AttendanceSession[]
+  events                AttendanceEvent[]
+  adjustments           TimesheetAdjustment[]
+  payrollItems          PayrollItem[]
+  payrollAdjustments    PayrollAdjustment[]
+  payments              PayrollPayment[]
+
+  @@unique([workspaceId, employeeNumber])
+  @@unique([workspaceId, email])
+  @@unique([workspaceId, userId])
+  @@index([workspaceId, status])
+  @@index([userId])
+  @@index([managerUserId])
+  @@map("employees")
+}
+
+/// A single-use invitation to create the employee's account. Only the token's SHA-256 is stored.
+model EmployeeInvitation {
+  id              String    @id @default(cuid())
+  workspaceId     String    @map("workspace_id")
+  employeeId      String    @map("employee_id")
+  email           String
+  tokenHash       String    @unique @map("token_hash")
+  expiresAt       DateTime  @map("expires_at")
+  /// Sent by email (opening it proves the inbox) vs. a link copied by an admin (the account then
+  /// has to verify its email before it can be used).
+  emailed         Boolean   @default(false)
+  linkRevealed    Boolean   @default(false) @map("link_revealed")
+  emailError      String?   @map("email_error")
+  acceptedAt      DateTime? @map("accepted_at")
+  acceptedUserId  String?   @map("accepted_user_id")
+  revokedAt       DateTime? @map("revoked_at")
+  revokedByUserId String?   @map("revoked_by_user_id")
+  createdByUserId String?   @map("created_by_user_id")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  employee        Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, createdAt])
+  @@index([employeeId])
+  @@map("employee_invitations")
+}
+
+/// Effective-dated hourly rates (pay_rate_history): a rate applies from its local day until the next.
+model PayRate {
+  id              String   @id @default(cuid())
+  workspaceId     String   @map("workspace_id")
+  employeeId      String   @map("employee_id")
+  hourlyRate      Decimal  @map("hourly_rate") @db.Decimal(14, 4)
+  currency        String
+  effectiveFrom   String   @map("effective_from")
+  reason          String?
+  createdByUserId String?  @map("created_by_user_id")
+  createdAt       DateTime @default(now()) @map("created_at")
+  employee        Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@unique([employeeId, effectiveFrom])
+  @@index([workspaceId])
+  @@map("pay_rate_history")
+}
+
+model ShiftSchedule {
+  id              String              @id @default(cuid())
+  workspaceId     String              @map("workspace_id")
+  employeeId      String              @map("employee_id")
+  startsAt        DateTime            @map("starts_at")
+  endsAt          DateTime            @map("ends_at")
+  /// Planned unpaid break, for the schedule's expected hours only.
+  breakMinutes    Int                 @default(0) @map("break_minutes")
+  location        String?
+  note            String?
+  createdByUserId String?             @map("created_by_user_id")
+  createdAt       DateTime            @default(now()) @map("created_at")
+  updatedAt       DateTime            @updatedAt @map("updated_at")
+  employee        Employee            @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  sessions        AttendanceSession[]
+
+  @@index([workspaceId, startsAt])
+  @@index([employeeId, startsAt])
+  @@map("shift_schedules")
+}
+
+/// One shift: clock-in to clock-out. At most one open (clock_out_at IS NULL) per employee.
+model AttendanceSession {
+  id               String                @id @default(cuid())
+  workspaceId      String                @map("workspace_id")
+  employeeId       String                @map("employee_id")
+  scheduleId       String?               @map("schedule_id")
+  clockInAt        DateTime              @map("clock_in_at")
+  clockOutAt       DateTime?             @map("clock_out_at")
+  /// web | mobile | admin | system
+  clockInSource    String                @map("clock_in_source")
+  clockOutSource   String?               @map("clock_out_source")
+  /// The employee's zone at clock-in (display only; pay rules use the organization's zone).
+  timezone         String
+  /// pending | approved | rejected
+  approvalStatus   String                @default("pending") @map("approval_status")
+  approvedAt       DateTime?             @map("approved_at")
+  approvedByUserId String?               @map("approved_by_user_id")
+  rejectedReason   String?               @map("rejected_reason")
+  /// late, early_departure, unscheduled, overnight, stale, long_break, ... (attendance.ts)
+  flags            String[]              @default([])
+  /// Bumped by every correction; the before/after of each is in attendance_events.
+  revision         Int                   @default(0)
+  /// Set once an approved payroll includes this shift: it cannot be changed after that.
+  lockedAt         DateTime?             @map("locked_at")
+  note             String?
+  staleAlertedAt   DateTime?             @map("stale_alerted_at")
+  createdAt        DateTime              @default(now()) @map("created_at")
+  updatedAt        DateTime              @updatedAt @map("updated_at")
+  employee         Employee              @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  schedule         ShiftSchedule?        @relation(fields: [scheduleId], references: [id], onDelete: SetNull)
+  breaks           BreakSession[]
+  events           AttendanceEvent[]
+  adjustments      TimesheetAdjustment[]
+  approvals        TimesheetApproval[]
+
+  @@index([workspaceId, clockInAt])
+  @@index([employeeId, clockInAt])
+  @@index([workspaceId, approvalStatus])
+  @@map("attendance_sessions")
+}
+
+model BreakSession {
+  id          String            @id @default(cuid())
+  workspaceId String            @map("workspace_id")
+  sessionId   String            @map("session_id")
+  employeeId  String            @map("employee_id")
+  startAt     DateTime          @map("start_at")
+  endAt       DateTime?         @map("end_at")
+  /// rest | meal
+  kind        String
+  /// Whether the break policy paid this kind of break when it started.
+  paid        Boolean
+  createdAt   DateTime          @default(now()) @map("created_at")
+  session     AttendanceSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@index([workspaceId])
+  @@map("break_sessions")
+}
+
+/// Append-only record of every clock action and correction, with what the device claimed.
+model AttendanceEvent {
+  id             String             @id @default(cuid())
+  workspaceId    String             @map("workspace_id")
+  employeeId     String             @map("employee_id")
+  sessionId      String?            @map("session_id")
+  /// clock_in | clock_out | break_start | break_end | correction | manual_entry | approval | rejection | reopen | auto_flag | deactivation_close
+  type           String
+  /// Server time of the action (authoritative).
+  at             DateTime
+  /// What the device said the time was (audit only, never used for pay).
+  clientTime     DateTime?          @map("client_time")
+  clientTimezone String?            @map("client_timezone")
+  source         String
+  actorUserId    String?            @map("actor_user_id")
+  /// The client's Idempotency-Key: a retried request finds this row instead of acting twice.
+  idempotencyKey String?            @map("idempotency_key")
+  ip             String?
+  userAgent      String?            @map("user_agent")
+  before         Json?
+  after          Json?
+  note           String?
+  createdAt      DateTime           @default(now()) @map("created_at")
+  employee       Employee           @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  session        AttendanceSession? @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([employeeId, idempotencyKey])
+  @@index([sessionId])
+  @@index([workspaceId, at])
+  @@map("attendance_events")
+}
+
+/// A requested or applied change to a shift (or a missing shift to add).
+model TimesheetAdjustment {
+  id                 String             @id @default(cuid())
+  workspaceId        String             @map("workspace_id")
+  employeeId         String             @map("employee_id")
+  /// Null: add a shift that was never clocked.
+  sessionId          String?            @map("session_id")
+  requestedByUserId  String?            @map("requested_by_user_id")
+  /// The employee asked (else a manager made it directly).
+  byEmployee         Boolean            @default(false) @map("by_employee")
+  proposedClockInAt  DateTime?          @map("proposed_clock_in_at")
+  proposedClockOutAt DateTime?          @map("proposed_clock_out_at")
+  /// [{ startAt, endAt, kind }] replacing the shift's breaks, when given.
+  proposedBreaks     Json?              @map("proposed_breaks")
+  reason             String
+  /// pending | approved | rejected | cancelled
+  status             String             @default("pending")
+  decidedByUserId    String?            @map("decided_by_user_id")
+  decidedAt          DateTime?          @map("decided_at")
+  decisionNote       String?            @map("decision_note")
+  createdAt          DateTime           @default(now()) @map("created_at")
+  employee           Employee           @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  session            AttendanceSession? @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, status])
+  @@index([employeeId])
+  @@map("timesheet_adjustments")
+}
+
+/// Each approve / reject / reopen of a shift's hours.
+model TimesheetApproval {
+  id          String            @id @default(cuid())
+  workspaceId String            @map("workspace_id")
+  sessionId   String            @map("session_id")
+  /// approved | rejected | reopened
+  action      String
+  revision    Int
+  actorUserId String?           @map("actor_user_id")
+  note        String?
+  createdAt   DateTime          @default(now()) @map("created_at")
+  session     AttendanceSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@index([workspaceId])
+  @@map("timesheet_approvals")
+}
+
+model PayrollPeriod {
+  id                 String              @id @default(cuid())
+  workspaceId        String              @map("workspace_id")
+  startDate          String              @map("start_date")
+  endDate            String              @map("end_date")
+  payCycle           String              @map("pay_cycle")
+  payDate            String?             @map("pay_date")
+  /// draft | pending_approval | approved | partially_paid | paid | cancelled | correction_required | payment_failed | reversed
+  status             String              @default("draft")
+  timezone           String
+  /// Bumped by every calculation; approval names the version that was reviewed.
+  version            Int                 @default(0)
+  calculatedAt       DateTime?           @map("calculated_at")
+  calculatedByUserId String?             @map("calculated_by_user_id")
+  submittedAt        DateTime?           @map("submitted_at")
+  submittedByUserId  String?             @map("submitted_by_user_id")
+  approvedAt         DateTime?           @map("approved_at")
+  approvedByUserId   String?             @map("approved_by_user_id")
+  lockedAt           DateTime?           @map("locked_at")
+  cancelledAt        DateTime?           @map("cancelled_at")
+  notes              String?
+  createdByUserId    String?             @map("created_by_user_id")
+  createdAt          DateTime            @default(now()) @map("created_at")
+  updatedAt          DateTime            @updatedAt @map("updated_at")
+  workspace          Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  items              PayrollItem[]
+  adjustments        PayrollAdjustment[]
+  approvals          PayrollApproval[]
+
+  @@index([workspaceId, startDate])
+  @@map("payroll_periods")
+}
+
+/// One employee's pay for one period. Frozen (with its line breakdown) once the period is approved.
+model PayrollItem {
+  id                 String              @id @default(cuid())
+  workspaceId        String              @map("workspace_id")
+  periodId           String              @map("period_id")
+  employeeId         String              @map("employee_id")
+  currency           String
+  regularSeconds     Int                 @default(0) @map("regular_seconds")
+  overtimeSeconds    Int                 @default(0) @map("overtime_seconds")
+  doubleTimeSeconds  Int                 @default(0) @map("double_time_seconds")
+  holidaySeconds     Int                 @default(0) @map("holiday_seconds")
+  paidBreakSeconds   Int                 @default(0) @map("paid_break_seconds")
+  unpaidBreakSeconds Int                 @default(0) @map("unpaid_break_seconds")
+  unpricedSeconds    Int                 @default(0) @map("unpriced_seconds")
+  grossMinor         BigInt              @default(0) @map("gross_minor")
+  otherEarningsMinor BigInt              @default(0) @map("other_earnings_minor")
+  deductionsMinor    BigInt              @default(0) @map("deductions_minor")
+  /// gross + other earnings - deductions. An estimate: no statutory tax is calculated.
+  netMinor           BigInt              @default(0) @map("net_minor")
+  /// Sum of this item's allocations from completed payments (kept in the same transaction).
+  paidMinor          BigInt              @default(0) @map("paid_minor")
+  /// [{ category, hourlyRate, multiplier, seconds, amountMinor }]
+  lines              Json                @default("[]")
+  /// The shifts (and their revisions) the figures were calculated from.
+  sessions           Json                @default("[]")
+  warnings           String[]            @default([])
+  createdAt          DateTime            @default(now()) @map("created_at")
+  updatedAt          DateTime            @updatedAt @map("updated_at")
+  period             PayrollPeriod       @relation(fields: [periodId], references: [id], onDelete: Cascade)
+  employee           Employee            @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  allocations        PaymentAllocation[]
+
+  @@unique([periodId, employeeId])
+  @@index([workspaceId])
+  @@index([employeeId])
+  @@map("payroll_items")
+}
+
+/// An authorized earning (bonus, allowance) or deduction added to an employee's pay for a period.
+model PayrollAdjustment {
+  id              String        @id @default(cuid())
+  workspaceId     String        @map("workspace_id")
+  periodId        String        @map("period_id")
+  employeeId      String        @map("employee_id")
+  /// earning | deduction
+  kind            String
+  label           String
+  amountMinor     BigInt        @map("amount_minor")
+  reason          String?
+  createdByUserId String?       @map("created_by_user_id")
+  createdAt       DateTime      @default(now()) @map("created_at")
+  removedAt       DateTime?     @map("removed_at")
+  removedByUserId String?       @map("removed_by_user_id")
+  period          PayrollPeriod @relation(fields: [periodId], references: [id], onDelete: Cascade)
+  employee        Employee      @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([periodId])
+  @@index([workspaceId])
+  @@map("payroll_adjustments")
+}
+
+/// Every step of a period's approval workflow.
+model PayrollApproval {
+  id          String        @id @default(cuid())
+  workspaceId String        @map("workspace_id")
+  periodId    String        @map("period_id")
+  /// calculated | submitted | approved | rejected | cancelled | reversed
+  action      String
+  version     Int
+  actorUserId String?       @map("actor_user_id")
+  comment     String?
+  createdAt   DateTime      @default(now()) @map("created_at")
+  period      PayrollPeriod @relation(fields: [periodId], references: [id], onDelete: Cascade)
+
+  @@index([periodId])
+  @@index([workspaceId])
+  @@map("payroll_approvals")
+}
+
+/// A record that an employee was paid (bank transfer, cash, ...). Recording is not transferring:
+/// no money moves through bizinsights.
+model PayrollPayment {
+  id                    String              @id @default(cuid())
+  workspaceId           String              @map("workspace_id")
+  employeeId            String              @map("employee_id")
+  currency              String
+  amountMinor           BigInt              @map("amount_minor")
+  paidOn                String              @map("paid_on")
+  /// bank_transfer | cash | cheque | external_provider | other
+  method                String
+  reference             String?
+  remarks               String?
+  /// completed | failed | reversed
+  status                String              @default("completed")
+  /// The client's Idempotency-Key: the same form submitted twice records one payment.
+  idempotencyKey        String              @map("idempotency_key")
+  recordedByUserId      String?             @map("recorded_by_user_id")
+  failedAt              DateTime?           @map("failed_at")
+  reversedAt            DateTime?           @map("reversed_at")
+  statusChangedByUserId String?             @map("status_changed_by_user_id")
+  statusReason          String?             @map("status_reason")
+  createdAt             DateTime            @default(now()) @map("created_at")
+  employee              Employee            @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  allocations           PaymentAllocation[]
+
+  @@unique([workspaceId, idempotencyKey])
+  @@index([workspaceId, paidOn])
+  @@index([employeeId])
+  @@map("payroll_payments")
+}
+
+/// Which pay item(s) a payment settles, and how much of each.
+model PaymentAllocation {
+  id            String         @id @default(cuid())
+  workspaceId   String         @map("workspace_id")
+  paymentId     String         @map("payment_id")
+  payrollItemId String         @map("payroll_item_id")
+  amountMinor   BigInt         @map("amount_minor")
+  createdAt     DateTime       @default(now()) @map("created_at")
+  payment       PayrollPayment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  item          PayrollItem    @relation(fields: [payrollItemId], references: [id], onDelete: Cascade)
+
+  @@unique([paymentId, payrollItemId])
+  @@index([payrollItemId])
+  @@index([workspaceId])
+  @@map("payment_allocations")
+}
+
+// ---------------------------------------------------------------------------------------------
+// Email integrations and automation (docs/email.md).
+//
+// A workspace is the organization (tenant): every table carries workspace_id and the
+// tenant_isolation RLS policy, and every reference between email tables is a composite
+// (id, workspace_id) foreign key, so a rule can't point at another workspace's sender or template
+// even through a bug in the code. OAuth tokens and SMTP passwords are envelope encrypted
+// (packages/core/src/email/vault.ts) and never leave the server. Recipients' addresses are kept
+// encrypted, with a keyed hash for lookups (suppressions, frequency limits, redaction) and a
+// masked form for lists. Partial unique indexes Prisma can't express live in the migration SQL.
+// ---------------------------------------------------------------------------------------------
+
+/// Organization-level email settings (email_settings). One row per workspace, created on first save.
+model EmailSettings {
+  workspaceId     String    @id @map("workspace_id")
+  /// Shown as {{business.name}} (the workspace name when empty).
+  businessName    String?   @map("business_name")
+  /// Printed in marketing footers: anti-spam laws require a postal address.
+  businessAddress String?   @map("business_address")
+  /// Messages a day for the whole workspace (null: EMAIL_DEFAULT_DAILY_LIMIT).
+  dailyLimit      Int?      @map("daily_limit")
+  /// Paused by the workspace's own admins: queued mail waits, nothing is lost.
+  sendingPaused   Boolean   @default(false) @map("sending_paused")
+  /// Suspended by the platform operator (abuse, complaints). Set by an ops task, never by the API.
+  suspendedAt     DateTime? @map("suspended_at")
+  suspendedReason String?   @map("suspended_reason")
+  updatedByUserId String?   @map("updated_by_user_id")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+  workspace       Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@map("email_settings")
+}
+
+/// A mailbox the workspace sends from. Disconnecting deletes its credentials and keeps the row
+/// (deleted_at) so the activity history still says who sent what.
+model EmailAccount {
+  id                   String                @id @default(cuid())
+  workspaceId          String                @map("workspace_id")
+  /// gmail | google_workspace | outlook | microsoft_365 | smtp
+  provider             String
+  /// oauth_google | oauth_microsoft | smtp
+  connectionMethod     String                @map("connection_method")
+  /// Lowercased. For OAuth accounts: the address the provider signed in as, never typed in.
+  emailAddress         String                @map("email_address")
+  displayName          String?               @map("display_name")
+  replyToAddress       String?               @map("reply_to_address")
+  /// Google `sub` / Microsoft `oid`: the same mailbox reconnecting updates this row.
+  providerAccountId    String?               @map("provider_account_id")
+  /// Microsoft `tid` (directory) / Google `hd` (Workspace domain).
+  providerTenantId     String?               @map("provider_tenant_id")
+  /// pending | connected | testing | degraded | reauthorization_required | disabled | revoked | failed
+  status               String                @default("pending")
+  /// Why it is in that status (an error code from ERROR_LABEL).
+  statusReason         String?               @map("status_reason")
+  grantedScopes        String[]              @default([]) @map("granted_scopes")
+  /// Messages a day from this account (null: the provider's default in PROVIDER_LIMITS).
+  dailyLimit           Int?                  @map("daily_limit")
+  connectedByUserId    String?               @map("connected_by_user_id")
+  lastVerifiedAt       DateTime?             @map("last_verified_at")
+  lastSuccessfulSendAt DateTime?             @map("last_successful_send_at")
+  lastErrorCode        String?               @map("last_error_code")
+  lastErrorAt          DateTime?             @map("last_error_at")
+  createdAt            DateTime              @default(now()) @map("created_at")
+  updatedAt            DateTime              @updatedAt @map("updated_at")
+  deletedAt            DateTime?             @map("deleted_at")
+  workspace            Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  oauthCredential      EmailOAuthCredential?
+  smtpCredential       EmailSmtpCredential?
+  senders              EmailSenderIdentity[]
+  messages             EmailMessage[]
+
+  @@unique([id, workspaceId])
+  @@index([workspaceId, status])
+  @@map("email_accounts")
+}
+
+/// An OAuth account's tokens (oauth_credentials). `credential_version` changes with every refresh,
+/// so two refreshes racing can't overwrite each other's rotated refresh token.
+model EmailOAuthCredential {
+  id                   String       @id @default(cuid())
+  workspaceId          String       @map("workspace_id")
+  emailAccountId       String       @map("email_account_id")
+  refreshTokenEnc      String       @map("refresh_token_enc")
+  accessTokenEnc       String?      @map("access_token_enc")
+  tokenExpiresAt       DateTime?    @map("token_expires_at")
+  encryptionKeyVersion Int          @map("encryption_key_version")
+  credentialVersion    Int          @default(1) @map("credential_version")
+  lastRefreshedAt      DateTime?    @map("last_refreshed_at")
+  createdAt            DateTime     @default(now()) @map("created_at")
+  updatedAt            DateTime     @updatedAt @map("updated_at")
+  account              EmailAccount @relation(fields: [emailAccountId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
+
+  @@unique([emailAccountId, workspaceId])
+  @@index([workspaceId])
+  @@map("email_oauth_credentials")
+}
+
+/// An SMTP account's server and password (smtp_credentials). The password is write-only.
+model EmailSmtpCredential {
+  id                   String       @id @default(cuid())
+  workspaceId          String       @map("workspace_id")
+  emailAccountId       String       @map("email_account_id")
+  host                 String
+  port                 Int
+  /// tls (implicit, 465) | starttls (587, 2525). There is no unencrypted mode.
+  encryptionMode       String       @map("encryption_mode")
+  username             String
+  secretEnc            String       @map("secret_enc")
+  encryptionKeyVersion Int          @map("encryption_key_version")
+  createdAt            DateTime     @default(now()) @map("created_at")
+  updatedAt            DateTime     @updatedAt @map("updated_at")
+  account              EmailAccount @relation(fields: [emailAccountId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
+
+  @@unique([emailAccountId, workspaceId])
+  @@index([workspaceId])
+  @@map("email_smtp_credentials")
+}
+
+/// A sending domain and its DNS checks (verified_domains). Several workspaces may each prove the
+/// same domain; each has its own challenge.
+model EmailDomain {
+  id                    String    @id @default(cuid())
+  workspaceId           String    @map("workspace_id")
+  domain                String
+  /// dns_txt
+  verificationMethod    String    @default("dns_txt") @map("verification_method")
+  /// The challenge is compared by hash; the encrypted copy is only for showing the record again.
+  verificationTokenHash String    @map("verification_token_hash")
+  verificationTokenEnc  String    @map("verification_token_enc")
+  /// unverified | pending | verified | failed | expired | recheck_required
+  verificationStatus    String    @default("unverified") @map("verification_status")
+  ownershipVerifiedAt   DateTime? @map("ownership_verified_at")
+  verificationExpiresAt DateTime  @map("verification_expires_at")
+  /// google | microsoft | other: which SPF include and DKIM selectors to look for.
+  sendingService        String    @default("other") @map("sending_service")
+  dkimSelectors         String[]  @default([]) @map("dkim_selectors")
+  /// pass | warn | fail | missing | unknown (null: not checked yet)
+  spfStatus             String?   @map("spf_status")
+  dkimStatus            String?   @map("dkim_status")
+  dmarcStatus           String?   @map("dmarc_status")
+  /// What the last check found, record by record, with explanations.
+  dnsResults            Json?     @map("dns_results")
+  consecutiveFailures   Int       @default(0) @map("consecutive_failures")
+  lastCheckedAt         DateTime? @map("last_checked_at")
+  nextCheckAt           DateTime? @map("next_check_at")
+  createdByUserId       String?   @map("created_by_user_id")
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+  workspace             Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, domain])
+  @@unique([id, workspaceId])
+  @@index([verificationStatus, nextCheckAt])
+  @@map("email_domains")
+}
+
+/// A From address an account may send as (sender_identities). Only `verified` ones send.
+model EmailSenderIdentity {
+  id                        String                @id @default(cuid())
+  workspaceId               String                @map("workspace_id")
+  emailAccountId            String                @map("email_account_id")
+  /// The verified domain that authorized it (domain_ownership), if any.
+  domainId                  String?               @map("domain_id")
+  senderEmail               String                @map("sender_email")
+  senderName                String?               @map("sender_name")
+  /// pending | verified | revoked
+  authorizationStatus       String                @default("pending") @map("authorization_status")
+  /// provider_oauth | smtp_confirmation | domain_ownership
+  verificationMethod        String?               @map("verification_method")
+  verificationCodeHash      String?               @map("verification_code_hash")
+  verificationCodeExpiresAt DateTime?             @map("verification_code_expires_at")
+  verificationAttempts      Int                   @default(0) @map("verification_attempts")
+  verifiedAt                DateTime?             @map("verified_at")
+  /// The workspace's default sender (at most one: a partial unique index).
+  isDefault                 Boolean               @default(false) @map("is_default")
+  createdAt                 DateTime              @default(now()) @map("created_at")
+  updatedAt                 DateTime              @updatedAt @map("updated_at")
+  account                   EmailAccount          @relation(fields: [emailAccountId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
+  rules                     EmailAutomationRule[]
+
+  @@unique([emailAccountId, senderEmail])
+  @@unique([id, workspaceId])
+  @@index([workspaceId])
+  @@map("email_sender_identities")
+}
+
+/// An email template. Saving an active template's content makes a new version; the old ones stay
+/// in email_template_versions (history, restore).
+model EmailTemplate {
+  id               String                 @id @default(cuid())
+  workspaceId      String                 @map("workspace_id")
+  name             String
+  description      String?
+  /// transactional | marketing
+  category         String                 @default("transactional")
+  /// The event whose variables it uses (null: customer and business variables only).
+  eventType        String?                @map("event_type")
+  subjectTemplate  String                 @map("subject_template")
+  /// Sanitized on save (sanitizeHtml), and again after rendering.
+  htmlTemplate     String                 @map("html_template")
+  textTemplate     String                 @map("text_template")
+  /// The variables it uses, checked against the event on save.
+  allowedVariables String[]               @default([]) @map("allowed_variables")
+  version          Int                    @default(1)
+  /// draft | active | archived
+  status           String                 @default("draft")
+  replyToAddress   String?                @map("reply_to_address")
+  createdByUserId  String?                @map("created_by_user_id")
+  updatedByUserId  String?                @map("updated_by_user_id")
+  createdAt        DateTime               @default(now()) @map("created_at")
+  updatedAt        DateTime               @updatedAt @map("updated_at")
+  deletedAt        DateTime?              @map("deleted_at")
+  workspace        Workspace              @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  versions         EmailTemplateVersion[]
+  rules            EmailAutomationRule[]
+
+  @@unique([id, workspaceId])
+  @@index([workspaceId, status])
+  @@map("email_templates")
+}
+
+model EmailTemplateVersion {
+  id              String        @id @default(cuid())
+  workspaceId     String        @map("workspace_id")
+  templateId      String        @map("template_id")
+  version         Int
+  category        String
+  eventType       String?       @map("event_type")
+  subjectTemplate String        @map("subject_template")
+  htmlTemplate    String        @map("html_template")
+  textTemplate    String        @map("text_template")
+  createdByUserId String?       @map("created_by_user_id")
+  createdAt       DateTime      @default(now()) @map("created_at")
+  template        EmailTemplate @relation(fields: [templateId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
+
+  @@unique([templateId, version])
+  @@index([workspaceId])
+  @@map("email_template_versions")
+}
+
+/// Event → conditions → send this template from this sender to this recipient, after a delay.
+model EmailAutomationRule {
+  id               String                     @id @default(cuid())
+  workspaceId      String                     @map("workspace_id")
+  name             String
+  description      String?
+  eventType        String                     @map("event_type")
+  /// Only events from this Shopify store (null: any).
+  storeId          String?                    @map("store_id")
+  /// The condition tree (conditionNodeSchema); null runs for every event.
+  conditionJson    Json?                      @map("condition_json")
+  /// { type: "send_email", recipient: { type: "customer" } | { type: "fixed", address } }
+  actionJson       Json                       @map("action_json")
+  senderIdentityId String                     @map("sender_identity_id")
+  templateId       String                     @map("template_id")
+  delayMinutes     Int                        @default(0) @map("delay_minutes")
+  /// frequencySchema
+  frequencyPolicy  Json                       @map("frequency_policy")
+  maxAttempts      Int                        @default(5) @map("max_attempts")
+  enabled          Boolean                    @default(false)
+  /// Lower runs first when several rules match one event.
+  priority         Int                        @default(100)
+  lastTriggeredAt  DateTime?                  @map("last_triggered_at")
+  createdByUserId  String?                    @map("created_by_user_id")
+  updatedByUserId  String?                    @map("updated_by_user_id")
+  createdAt        DateTime                   @default(now()) @map("created_at")
+  updatedAt        DateTime                   @updatedAt @map("updated_at")
+  deletedAt        DateTime?                  @map("deleted_at")
+  workspace        Workspace                  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  sender           EmailSenderIdentity        @relation(fields: [senderIdentityId, workspaceId], references: [id, workspaceId], onDelete: NoAction)
+  template         EmailTemplate              @relation(fields: [templateId, workspaceId], references: [id, workspaceId], onDelete: NoAction)
+  executions       EmailAutomationExecution[]
+
+  @@unique([id, workspaceId])
+  @@index([workspaceId, eventType, enabled])
+  @@map("email_automation_rules")
+}
+
+/// A business event (from Shopify or the event API), normalized. Its data is encrypted and kept
+/// only as long as automations may still need it (retention clears it).
+model EmailBusinessEvent {
+  id            String                     @id @default(cuid())
+  workspaceId   String                     @map("workspace_id")
+  storeId       String?                    @map("store_id")
+  /// shopify | api
+  source        String
+  eventType     String                     @map("event_type")
+  /// The source's own id for it: the same event arriving twice is stored once.
+  externalId    String                     @map("external_id")
+  occurredAt    DateTime                   @map("occurred_at")
+  /// Keyed hash of the customer's email (finds their events for GDPR redaction).
+  recipientHash String?                    @map("recipient_hash")
+  payloadEnc    String?                    @map("payload_enc")
+  /// pending_detection (an abandoned checkout still being watched) | received | processed | cancelled | failed
+  status        String                     @default("received")
+  /// pending_detection: when it counts as abandoned if nothing else happens.
+  detectAfter   DateTime?                  @map("detect_after")
+  rulesMatched  Int                        @default(0) @map("rules_matched")
+  processedAt   DateTime?                  @map("processed_at")
+  error         String?
+  createdAt     DateTime                   @default(now()) @map("created_at")
+  updatedAt     DateTime                   @updatedAt @map("updated_at")
+  workspace     Workspace                  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  executions    EmailAutomationExecution[]
+
+  @@unique([workspaceId, source, externalId])
+  @@unique([id, workspaceId])
+  @@index([status, detectAfter])
+  @@index([workspaceId, createdAt])
+  @@index([storeId, recipientHash])
+  @@map("email_business_events")
+}
+
+/// One rule evaluated against one event (automation_executions). The idempotency key makes a
+/// redelivered event or a retried job evaluate each rule once.
+model EmailAutomationExecution {
+  id             String              @id @default(cuid())
+  workspaceId    String              @map("workspace_id")
+  ruleId         String              @map("rule_id")
+  eventId        String              @map("event_id")
+  recipientHash  String?             @map("recipient_hash")
+  /// rule:<ruleId>:event:<eventId>
+  idempotencyKey String              @map("idempotency_key")
+  /// pending | skipped | scheduled | suppressed | failed | cancelled
+  status         String              @default("pending")
+  /// What happened, in words.
+  detail         String?
+  /// An ERROR_LABEL code, when it didn't send.
+  failureReason  String?             @map("failure_reason")
+  messageId      String?             @map("message_id")
+  evaluatedAt    DateTime            @default(now()) @map("evaluated_at")
+  scheduledAt    DateTime?           @map("scheduled_at")
+  completedAt    DateTime?           @map("completed_at")
+  createdAt      DateTime            @default(now()) @map("created_at")
+  rule           EmailAutomationRule @relation(fields: [ruleId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
+  event          EmailBusinessEvent  @relation(fields: [eventId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
+
+  @@unique([workspaceId, idempotencyKey])
+  @@index([ruleId, createdAt])
+  @@index([ruleId, recipientHash, createdAt])
+  @@index([eventId])
+  @@map("email_automation_executions")
+}
+
+/// Every email: the queue (queued → processing → accepted_by_provider, or deferred / failed /
+/// suppressed / cancelled / unknown) and the history. The body is never stored: it is rendered from
+/// the template and the event when sent.
+model EmailMessage {
+  id                  String              @id @default(cuid())
+  workspaceId         String              @map("workspace_id")
+  emailAccountId      String              @map("email_account_id")
+  senderIdentityId    String?             @map("sender_identity_id")
+  ruleId              String?             @map("rule_id")
+  executionId         String?             @map("execution_id")
+  eventId             String?             @map("event_id")
+  templateId          String?             @map("template_id")
+  templateVersion     Int?                @map("template_version")
+  storeId             String?             @map("store_id")
+  /// automation | test | verification
+  kind                String
+  /// transactional | marketing
+  category            String              @default("transactional")
+  provider            String
+  senderAddress       String              @map("sender_address")
+  recipientEnc        String              @map("recipient_enc")
+  recipientHash       String              @map("recipient_hash")
+  recipientMasked     String              @map("recipient_masked")
+  subject             String
+  /// One message per purpose (automation: the execution's key; tests: random).
+  idempotencyKey      String              @map("idempotency_key")
+  /// Our Message-ID header (without angle brackets).
+  internetMessageId   String              @map("internet_message_id")
+  /// Gmail's message id, or the SMTP server's queue id. Microsoft's sendMail returns none.
+  providerMessageId   String?             @map("provider_message_id")
+  /// queued | processing | accepted_by_provider | delivered | bounced | deferred | failed | suppressed | cancelled | unknown
+  status              String              @default("queued")
+  attempts            Int                 @default(0)
+  maxAttempts         Int                 @default(5) @map("max_attempts")
+  scheduledAt         DateTime            @map("scheduled_at")
+  enqueuedAt          DateTime?           @map("enqueued_at")
+  processingStartedAt DateTime?           @map("processing_started_at")
+  providerAcceptedAt  DateTime?           @map("provider_accepted_at")
+  deliveredAt         DateTime?           @map("delivered_at")
+  failedAt            DateTime?           @map("failed_at")
+  cancelledAt         DateTime?           @map("cancelled_at")
+  lastErrorCode       String?             @map("last_error_code")
+  /// Sanitized: never a token, password or the provider's raw response.
+  lastErrorMessage    String?             @map("last_error_message")
+  createdAt           DateTime            @default(now()) @map("created_at")
+  updatedAt           DateTime            @updatedAt @map("updated_at")
+  account             EmailAccount        @relation(fields: [emailAccountId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
+  events              EmailMessageEvent[]
+
+  @@unique([workspaceId, idempotencyKey])
+  @@unique([id, workspaceId])
+  @@index([status, scheduledAt])
+  @@index([workspaceId, createdAt])
+  @@index([emailAccountId, createdAt])
+  @@index([ruleId, createdAt])
+  @@index([workspaceId, recipientHash])
+  @@index([storeId])
+  @@map("email_messages")
+}
+
+/// What happened to a message, in order (email_events). Insert-only: a trigger refuses updates.
+model EmailMessageEvent {
+  id              String       @id @default(cuid())
+  workspaceId     String       @map("workspace_id")
+  messageId       String       @map("message_id")
+  /// queued | processing | accepted | retry_scheduled | failed | bounced | suppressed | cancelled | unknown | delivered
+  eventType       String       @map("event_type")
+  providerEventId String?      @map("provider_event_id")
+  eventTimestamp  DateTime     @default(now()) @map("event_timestamp")
+  /// Sanitized details (error code, attempt, retry time). Never message content or credentials.
+  metadata        Json?
+  createdAt       DateTime     @default(now()) @map("created_at")
+  message         EmailMessage @relation(fields: [messageId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
+
+  @@index([messageId, eventTimestamp])
+  @@index([workspaceId])
+  @@map("email_message_events")
+}
+
+/// Addresses not to email (suppression_entries), by keyed hash: the list itself holds no address.
+model EmailSuppression {
+  id              String    @id @default(cuid())
+  workspaceId     String    @map("workspace_id")
+  emailHash       String    @map("email_hash")
+  emailMasked     String    @map("email_masked")
+  /// unsubscribed | bounced | complained | manual | invalid
+  reason          String
+  /// marketing | all
+  scope           String    @default("all")
+  /// unsubscribe_link | one_click | manual | smtp_rejection | api
+  source          String
+  createdByUserId String?   @map("created_by_user_id")
+  messageId       String?   @map("message_id")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  workspace       Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, emailHash, scope])
+  @@index([workspaceId, createdAt])
+  @@map("email_suppressions")
+}
+
+/// Keys for POST /api/v1/events (custom business events). Only the hash is stored.
+model EmailIngestKey {
+  id              String    @id @default(cuid())
+  workspaceId     String    @map("workspace_id")
+  name            String
+  prefix          String
+  keyHash         String    @unique @map("key_hash")
+  createdByUserId String    @map("created_by_user_id")
+  lastUsedAt      DateTime? @map("last_used_at")
+  revokedAt       DateTime? @map("revoked_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  workspace       Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@map("email_ingest_keys")
+}
+
+/// A customer's request, through Shopify, for the data bizinsights holds about them (the mandatory
+/// customers/data_request webhook). Shopify asks the app to give that data to the store owner, so
+/// the owner downloads it from Settings → Privacy requests: the export is compiled from the live
+/// records when they do (packages/core/src/privacy.ts), and this row keeps only what identifies
+/// the customer, as the same keyed hashes the records carry, never their email or number.
+model DataRequest {
+  id               String    @id @default(cuid())
+  workspaceId      String    @map("workspace_id")
+  storeId          String    @map("store_id")
+  /// Shopify's id for the request (data_request.id); a redelivery records nothing new.
+  shopifyRequestId String    @map("shopify_request_id")
+  /// The Shopify customer id, as Shopify sent it.
+  customerId       String?   @map("customer_id")
+  /// orders.customer_key / whatsapp_contacts.customer_key for this customer.
+  customerKey      String?   @map("customer_key")
+  /// whatsapp_contacts.phone_hash for the number Shopify sent.
+  phoneHash        String?   @map("phone_hash")
+  /// email_messages.recipient_hash for the address Shopify sent.
+  emailHash        String?   @map("email_hash")
+  /// Shopify order ids the request names.
+  ordersRequested  String[]  @default([]) @map("orders_requested")
+  receivedAt       DateTime  @default(now()) @map("received_at")
+  /// When someone in the workspace last downloaded the export.
+  downloadedAt     DateTime? @map("downloaded_at")
+  workspace        Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, shopifyRequestId])
+  @@index([workspaceId, receivedAt])
+  @@map("data_requests")
 }

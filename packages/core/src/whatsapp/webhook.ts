@@ -12,10 +12,26 @@ import { errorExplanation, isStartKeyword, isStopKeyword, isStopPromotionsReply,
 import { logger } from "../logger.js";
 import { runAutomations } from "./automations.js";
 import type { WaDeps } from "./messages.js";
+import {
+  metaAccountValueSchema,
+  metaChangeSchema,
+  metaEntrySchema,
+  metaInboundSchema,
+  metaMessagesValueSchema,
+  metaPreferenceSchema,
+  metaPreferencesValueSchema,
+  metaStatusSchema,
+  metaTemplateValueSchema,
+  metaWebhookSchema,
+  parseMeta,
+  parseMetaList,
+  type MetaAccountValue,
+  type MetaInbound,
+  type MetaPreference,
+  type MetaStatus,
+  type MetaTemplateValue,
+} from "./metaPayloads.js";
 import { applyMarketing, optInContact, optOutContact, parseConfig, phoneHash, upsertContact } from "./store.js";
-
-/* eslint-disable @typescript-eslint/no-explicit-any */
-type Value = Record<string, any>;
 
 export interface MetaWebhookResult {
   /** Statuses for messages we sent a moment ago but haven't recorded the id of yet: ask Meta to retry. */
@@ -31,15 +47,14 @@ const tsDate = (ts: unknown) => {
   return Number.isFinite(n) && n > 0 ? new Date(n * 1000) : new Date();
 };
 
-async function applyStatus(conn: WhatsappConnection, s: Value): Promise<"ok" | "unknown" | "ignored"> {
-  if (!s?.id || !s?.status) return "ignored";
-  const msg = await systemDb.whatsappMessage.findUnique({ where: { providerMessageId: String(s.id) } });
+async function applyStatus(conn: WhatsappConnection, s: MetaStatus): Promise<"ok" | "unknown" | "ignored"> {
+  const msg = await systemDb.whatsappMessage.findUnique({ where: { providerMessageId: s.id } });
   if (!msg) return Date.now() / 1000 - Number(s.timestamp ?? 0) < UNKNOWN_STATUS_GRACE_S ? "unknown" : "ignored";
   // Another store's message named in this store's webhook: never applied.
   if (msg.storeId !== conn.storeId) return "ignored";
-  const status = String(s.status);
+  const status = s.status;
   const at = tsDate(s.timestamp);
-  const err = Array.isArray(s.errors) ? s.errors[0] : null;
+  const err = s.errors?.[0] ?? null;
   const code = err?.code !== undefined ? String(err.code) : null;
   try {
     await systemDb.whatsappMessageEvent.create({
@@ -73,27 +88,29 @@ async function applyStatus(conn: WhatsappConnection, s: Value): Promise<"ok" | "
       if (contact) await applyMarketing(contact, { status: "opted_out", source: "meta_preferences" }, at);
     }
   }
-  const pricing = s.pricing as Value | undefined;
+  const pricing = s.pricing;
   if (pricing) {
     if (typeof pricing.billable === "boolean") data.billable = pricing.billable;
-    if (pricing.category) data.pricingCategory = String(pricing.category);
+    if (pricing.category) data.pricingCategory = pricing.category;
   }
   if (Object.keys(data).length) await systemDb.whatsappMessage.update({ where: { id: msg.id }, data });
   return "ok";
 }
 
-async function applyInbound(conn: WhatsappConnection, store: Store, m: Value, deps: Pick<WaDeps, "queues">) {
-  const phone = normalizePhone(m?.from ? `+${m.from}` : null, null);
+async function applyInbound(conn: WhatsappConnection, store: Store, m: MetaInbound, deps: Pick<WaDeps, "queues">) {
+  const phone = normalizePhone(`+${m.from}`, null);
   if (!phone) return;
   const at = tsDate(m.timestamp);
   const contact = await upsertContact(store, phone, { inboundAt: at });
-  const text: string | null = m.text?.body ?? m.button?.text ?? m.interactive?.button_reply?.title ?? null;
+  const text = m.text?.body ?? m.button?.text ?? m.interactive?.button_reply?.title ?? null;
   if (isStopPromotionsReply(text)) {
     // The marketing template's own button: no more offers; order updates continue.
     await applyMarketing(contact, { status: "opted_out", source: "whatsapp" }, at);
   } else if (isStopKeyword(text)) {
     await optOutContact(contact, "whatsapp_keyword", at);
   } else if (isStartKeyword(text)) {
+    // Meta redelivers: a START older than the last change (a STOP sent after it) must not undo it.
+    if (contact.marketingUpdatedAt && at <= contact.marketingUpdatedAt) return;
     const before = contact.marketingStatus;
     const updated = await optInContact(contact, "whatsapp_keyword", at);
     if (before !== "opted_in") await customerOptedIn(store, updated, deps);
@@ -117,43 +134,50 @@ async function customerOptedIn(store: Store, contact: Awaited<ReturnType<typeof 
   );
 }
 
-/** Meta's own "stop/resume marketing messages" setting in WhatsApp. */
-async function applyPreference(store: Store, p: Value, deps: Pick<WaDeps, "queues">) {
-  if (String(p?.category ?? "") !== "marketing_messages") return;
-  const phone = normalizePhone(p?.wa_id ? `+${p.wa_id}` : null, null);
+/**
+ * Meta's own "stop/resume marketing messages" setting in WhatsApp. `named` is whether the change
+ * named this store's number: only then may it create a contact (to remember a "stop") or opt one in.
+ * A "resume" never creates a contact: someone who never was this store's customer doesn't become one.
+ */
+async function applyPreference(store: Store, p: MetaPreference, deps: Pick<WaDeps, "queues">, named: boolean) {
+  if (p.category !== "marketing_messages") return;
+  const phone = normalizePhone(`+${p.wa_id}`, null);
   if (!phone) return;
   const at = tsDate(p.timestamp);
   const existing = await systemDb.whatsappContact.findUnique({ where: { storeId_phoneHash: { storeId: store.id, phoneHash: phoneHash(store.id, phone.waId) } } });
-  const contact = existing ?? (await upsertContact(store, phone));
-  if (String(p.value) === "stop") await applyMarketing(contact, { status: "opted_out", source: "meta_preferences" }, at);
-  else if (String(p.value) === "resume") {
-    const updated = await applyMarketing(contact, { status: "opted_in", source: "meta_preferences" }, at);
-    if (contact.marketingStatus !== "opted_in") await customerOptedIn(store, updated, deps);
+  if (p.value === "stop") {
+    const contact = existing ?? (named ? await upsertContact(store, phone) : null);
+    if (contact) await applyMarketing(contact, { status: "opted_out", source: "meta_preferences" }, at);
+  } else if (p.value === "resume" && named && existing) {
+    // A redelivered "resume" older than the last change must not undo a later "stop".
+    if (existing.marketingUpdatedAt && at <= existing.marketingUpdatedAt) return;
+    const updated = await applyMarketing(existing, { status: "opted_in", source: "meta_preferences" }, at);
+    if (existing.marketingStatus !== "opted_in") await customerOptedIn(store, updated, deps);
   }
 }
 
-async function applyTemplateUpdate(conn: WhatsappConnection, v: Value, field: string) {
+async function applyTemplateUpdate(conn: WhatsappConnection, v: MetaTemplateValue, field: string) {
   if (field === "message_template_status_update") {
     const status = String(v.event ?? "").toUpperCase();
     if (!status) return;
     await systemDb.whatsappTemplate.updateMany({
       where: { connectionId: conn.id, OR: [{ metaId: String(v.message_template_id ?? "") }, { name: String(v.message_template_name ?? ""), language: String(v.message_template_language ?? "") }] },
-      data: { status, rejectedReason: v.reason && v.reason !== "NONE" ? String(v.reason).slice(0, 300) : null },
+      data: { status, rejectedReason: v.reason && v.reason !== "NONE" ? v.reason.slice(0, 300) : null },
     });
   } else if (field === "template_category_update") {
     const category = String(v.new_category ?? "").toUpperCase();
     if (category) await systemDb.whatsappTemplate.updateMany({ where: { connectionId: conn.id, metaId: String(v.message_template_id ?? "") }, data: { category } });
   } else if (field === "message_template_quality_update") {
-    await systemDb.whatsappTemplate.updateMany({ where: { connectionId: conn.id, metaId: String(v.message_template_id ?? "") }, data: { qualityScore: v.new_quality_score ? String(v.new_quality_score) : null } });
+    await systemDb.whatsappTemplate.updateMany({ where: { connectionId: conn.id, metaId: String(v.message_template_id ?? "") }, data: { qualityScore: v.new_quality_score || null } });
   }
 }
 
-async function applyAccountUpdate(conns: WhatsappConnection[], v: Value, field: string) {
+async function applyAccountUpdate(conns: WhatsappConnection[], v: MetaAccountValue, field: string) {
   if (field === "phone_number_quality_update") {
     const display = String(v.display_phone_number ?? "").replace(/\D/g, "");
     for (const c of conns) {
       if (display && (c.displayPhoneNumber ?? "").replace(/\D/g, "") !== display) continue;
-      await systemDb.whatsappConnection.update({ where: { id: c.id }, data: { ...(v.current_limit ? { messagingLimitTier: String(v.current_limit) } : {}), ...(v.event ? { qualityRating: String(v.event) } : {}) } });
+      await systemDb.whatsappConnection.update({ where: { id: c.id }, data: { ...(v.current_limit ? { messagingLimitTier: v.current_limit } : {}), ...(v.event ? { qualityRating: v.event } : {}) } });
     }
   } else if (field === "account_update" && /DISABLED|BAN|RESTRICT/i.test(String(v.event ?? ""))) {
     for (const c of conns) await systemDb.whatsappConnection.update({ where: { id: c.id }, data: { status: "error", lastError: `WhatsApp account ${String(v.event).toLowerCase().replace(/_/g, " ")}` } });
@@ -161,50 +185,68 @@ async function applyAccountUpdate(conns: WhatsappConnection[], v: Value, field: 
 }
 
 /**
- * Apply one signed webhook body. `trusted` is the set of accounts (WABA ids) whose signature
- * matched, or "all" when Insights' own app secret signed it.
+ * Apply one signed webhook body. `trusted` is the set of connections (ids) whose own app secret
+ * signed it, or "all" when Insights' own app secret did (Meta only signs with it what it delivers
+ * to Insights' app, so it is genuine for every connection on the account). A part of the body that
+ * doesn't fit its schema (metaPayloads.ts) is logged and skipped; the rest is applied.
+ * signed it, or "all" when bizinsights' own app secret did (Meta only signs with it what it delivers
+ * to bizinsights' app, so it is genuine for every connection on the account).
  */
 export async function applyMetaWebhook(payload: unknown, trusted: Set<string> | "all", deps: Pick<WaDeps, "queues">): Promise<MetaWebhookResult> {
-  const body = (payload ?? {}) as Value;
   const result: MetaWebhookResult = { retry: false, applied: 0 };
-  if (body.object !== "whatsapp_business_account" || !Array.isArray(body.entry)) return result;
-  for (const entry of body.entry) {
-    const wabaId = String(entry?.id ?? "");
-    if (!wabaId || (trusted !== "all" && !trusted.has(wabaId))) continue;
-    const conns = await systemDb.whatsappConnection.findMany({ where: { wabaId } });
+  const body = parseMeta(metaWebhookSchema, payload, "webhook");
+  if (body?.object !== "whatsapp_business_account" || !body.entry) return result;
+  for (const entry of parseMetaList(metaEntrySchema, body.entry, "webhook entry")) {
+    const wabaId = String(entry.id);
+    const onAccount = await systemDb.whatsappConnection.findMany({ where: { wabaId } });
+    // A manual connection's secret speaks for that connection only, never for others on the account.
+    const conns = trusted === "all" ? onAccount : onAccount.filter((c) => trusted.has(c.id));
     if (!conns.length) continue;
     const now = new Date();
-    await systemDb.whatsappConnection.updateMany({ where: { wabaId }, data: { lastWebhookAt: now, webhookVerifiedAt: now } });
-    for (const change of Array.isArray(entry.changes) ? entry.changes : []) {
-      const field = String(change?.field ?? "");
-      const v = (change?.value ?? {}) as Value;
+    await systemDb.whatsappConnection.updateMany({ where: { id: { in: conns.map((c) => c.id) } }, data: { lastWebhookAt: now, webhookVerifiedAt: now } });
+    for (const change of parseMetaList(metaChangeSchema, entry.changes ?? [], "webhook change", { wabaId })) {
+      const field = change.field;
+      const ids = { wabaId, field };
       try {
         if (field === "messages") {
+          const v = parseMeta(metaMessagesValueSchema, change.value, field, ids);
+          if (!v) continue;
           // Statuses and messages name the number they're for: only that number's store hears them.
           const conn = conns.find((c) => c.phoneNumberId === String(v.metadata?.phone_number_id ?? ""));
           if (!conn) continue;
           const store = await systemDb.store.findUnique({ where: { id: conn.storeId } });
           if (!store) continue;
-          for (const s of Array.isArray(v.statuses) ? v.statuses : []) {
+          for (const s of parseMetaList(metaStatusSchema, v.statuses ?? [], "status", ids)) {
             const r = await applyStatus(conn, s);
             if (r === "unknown") result.retry = true;
             if (r === "ok") result.applied++;
           }
-          for (const m of Array.isArray(v.messages) ? v.messages : []) {
+          for (const m of parseMetaList(metaInboundSchema, v.messages ?? [], "message", ids)) {
             await applyInbound(conn, store, m, deps);
             result.applied++;
           }
         } else if (field === "user_preferences") {
-          for (const conn of conns) {
+          const v = parseMeta(metaPreferencesValueSchema, change.value, field, ids);
+          if (!v) continue;
+          const preferences = parseMetaList(metaPreferenceSchema, v.user_preferences ?? [], "preference", ids);
+          // The change names the number it was made on: that store's contact changes. Without a
+          // number, a "stop" still reaches contacts the other stores already have (the safe way
+          // round), and nothing is opted in or created anywhere.
+          const named = conns.find((c) => c.phoneNumberId === String(v.metadata?.phone_number_id ?? ""));
+          for (const conn of named ? [named] : conns) {
             const store = await systemDb.store.findUnique({ where: { id: conn.storeId } });
             if (!store) continue;
-            for (const p of Array.isArray(v.user_preferences) ? v.user_preferences : []) await applyPreference(store, p, deps);
+            for (const p of preferences) await applyPreference(store, p, deps, !!named);
           }
           result.applied++;
         } else if (field.startsWith("message_template") || field === "template_category_update") {
+          const v = parseMeta(metaTemplateValueSchema, change.value, field, ids);
+          if (!v) continue;
           for (const conn of conns) await applyTemplateUpdate(conn, v, field);
           result.applied++;
         } else if (field === "phone_number_quality_update" || field === "account_update") {
+          const v = parseMeta(metaAccountValueSchema, change.value, field, ids);
+          if (!v) continue;
           await applyAccountUpdate(conns, v, field);
           result.applied++;
         }

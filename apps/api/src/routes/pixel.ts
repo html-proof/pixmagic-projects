@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { systemDb } from "@app/db";
+import { env } from "@app/core";
 import { EVENT_STEP, foldVisit, localDay, sha256Hex, type PixelEventIn, type PixelEventName } from "@app/shared";
 import { clientIp, type Deps } from "../context.js";
 import type { App } from "../app.js";
@@ -14,11 +15,26 @@ const eventSchema = z.object({
   clientId: z.string().min(1).max(200),
   timestamp: z.string().datetime({ offset: true }),
   // The page it happened on (location.pathname). Optional: pixels deployed before it existed send none.
+  // Up to the 2048 characters the pixel sends (shopify-app/extensions/insights-pixel): one longer
+  // path used to fail the whole batch, and the pixel drops a refused batch, so those visits were
+  // lost. What is stored is cut down by cleanPath (MAX_PATH).
   path: z.string().max(2048).optional(),
 });
 const bodySchema = z.object({ events: z.array(eventSchema).min(1).max(50) });
 /** Clock skew tolerated on a shopper's device. */
 const PIXEL_MAX_FUTURE_MS = 3600_000;
+/**
+ * How old an event may be. A real pixel reports within seconds (a beacon held by an offline
+ * device, within hours), so anything older is a replay or someone writing history into a store's
+ * funnel with its public key. Production only: the local demo backfills weeks of visits.
+ */
+export const PIXEL_MAX_AGE_MS = 48 * 3600_000;
+
+/** Whether an event's timestamp is one a real pixel could send now (see the two limits above). */
+export function pixelEventInWindow(timestamp: string, now: number, production: boolean): boolean {
+  const t = Date.parse(timestamp);
+  return t <= now + PIXEL_MAX_FUTURE_MS && (!production || t >= now - PIXEL_MAX_AGE_MS);
+}
 
 /**
  * Web pixel ingest. The ingest key identifies the store; it is embedded in the
@@ -43,7 +59,8 @@ export function pixelRoutes(app: App, deps: Deps) {
     await limit(deps.coord, `rl:pixel:${clientIp(c)}`, LIMITS.pixelIp);
     // navigator.sendBeacon posts text/plain, so parse the raw text whatever the content type.
     const raw = await c.req.text();
-    if (raw.length > 64 * 1024) return c.json({ error: "invalid_body" }, 413);
+    // 50 events (the pixel's largest batch) with 2048-character paths fit.
+    if (raw.length > 128 * 1024) return c.json({ error: "invalid_body" }, 413);
     let json: unknown;
     try {
       json = JSON.parse(raw);
@@ -57,8 +74,9 @@ export function pixelRoutes(app: App, deps: Deps) {
     // The ingest key is public, so the timestamp is whatever the caller says. A real pixel reports
     // after the fact; an event dated in the future (beyond clock skew) would sit in days that have
     // not happened yet and inflate them when they arrive, so it is dropped rather than counted.
-    const latest = Date.now() + PIXEL_MAX_FUTURE_MS;
-    const events = parsed.data.events.filter((e) => Date.parse(e.timestamp) <= latest);
+    const now = Date.now();
+    const production = env().NODE_ENV === "production";
+    const events = parsed.data.events.filter((e) => pixelEventInWindow(e.timestamp, now, production));
     if (!events.length) return c.json({ ok: true, accepted: 0 });
 
     // One transaction, so an event is never marked seen without being counted. The pixel sends a
@@ -113,6 +131,11 @@ export function pixelRoutes(app: App, deps: Deps) {
 
     if (accepted && !store.pixelInstalled) {
       await systemDb.store.update({ where: { id: store.id }, data: { pixelInstalled: true } });
+    }
+    // A pixel in place before bizinsights recorded one (made before the record existed, or kept
+    // through a reinstall): its visits count from now, for the dashboard's "No earlier data".
+    if (accepted && !store.pixelInstalledAt) {
+      await systemDb.store.updateMany({ where: { id: store.id, pixelInstalledAt: null }, data: { pixelInstalledAt: new Date() } });
     }
     return c.json({ ok: true, accepted });
   });

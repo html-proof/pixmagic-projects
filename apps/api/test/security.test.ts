@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { systemDb } from "@app/db";
+import { CLIENT_IP_HEADER } from "../src/context.js";
 import { signWebhookBody } from "@app/shared";
 import { buildApp } from "../src/app.js";
 import { LIMITS } from "../src/rateLimit.js";
@@ -26,7 +27,7 @@ describe("API response headers", () => {
     expectHardened((await ctx.app.inject({ method: "GET", url: "/healthz" })).headers);
     expectHardened((await ctx.app.inject({ method: "GET", url: "/no-such-route" })).headers);
     expectHardened((await ctx.app.inject({ method: "GET", url: "/me" })).headers);
-    expectHardened((await ctx.app.inject({ method: "POST", url: "/auth/session", headers: { origin: "https://evil.example" }, payload: {} })).headers);
+    expectHardened((await ctx.app.inject({ method: "POST", url: "/auth/login", headers: { origin: "https://evil.example" }, payload: {} })).headers);
     const limited = await buildApp({ ...ctx.deps, globalLimit: async () => false }).request("/me");
     expect(limited.status).toBe(429);
     expect(limited.headers.get("x-content-type-options")).toBe("nosniff");
@@ -76,34 +77,35 @@ describe("rate limits on email-sending and creation endpoints", () => {
   });
 });
 
-describe("one-time code guessing", () => {
-  const request = (email: string) => ctx.app.inject({ method: "POST", url: "/auth/otp/request", headers: ORIGIN, payload: { email } });
-  const verify = (email: string, code: string, ip = "1.1.1.1") =>
-    ctx.app.inject({ method: "POST", url: "/auth/otp/verify", headers: { ...ORIGIN, "cf-connecting-ip": ip }, payload: { email, code } });
-  const lastCode = () => /(\d{6})/.exec(ctx.mailer.sent.at(-1)!.subject)![1]!;
+describe("emailed code guessing and sending", () => {
+  const reset = (code: string, ip = "1.1.1.1") =>
+    ctx.app.inject({
+      method: "POST",
+      url: "/auth/password/reset",
+      headers: { ...ORIGIN, [CLIENT_IP_HEADER]: ip },
+      payload: { email: "victim@x.com", code, password: "a-new-password", confirmPassword: "a-new-password" },
+    });
 
-  it("caps guesses per address per day, however many IPs and codes they are spread over", async () => {
-    // Earlier codes for this address that were guessed at, each to its own limit.
-    const spent = Math.ceil(LIMITS.otpGuessesPerEmail.max / 5);
-    for (let i = 0; i < spent; i++) {
-      await systemDb.emailOtp.create({ data: { email: "victim@x.com", codeHash: "x", expiresAt: new Date(Date.now() - 1000), attempts: 5, consumedAt: new Date() } });
-    }
-    await request("victim@x.com");
-    const code = lastCode();
-    // Even the right code, from a fresh IP, is refused once the day's guesses are used up.
-    const res = await verify("victim@x.com", code, "9.9.9.9");
-    expect(res.statusCode).toBe(429);
-    expect(res.json().customToken).toBeUndefined();
+  it("caps guesses per IP, so even the right code is refused once they're spent (Cognito's own lockout comes on top)", async () => {
+    ctx.auth.addUser({ sub: "v", email: "victim@x.com" });
+    await ctx.app.inject({ method: "POST", url: "/auth/password/forgot", headers: ORIGIN, payload: { email: "victim@x.com" } });
+    const right = ctx.auth.code("reset", "victim@x.com");
+    const wrong = right === "000000" ? "111111" : "000000";
+    for (let i = 0; i < LIMITS.codeVerifyIp.max; i++) expect((await reset(wrong)).json().error).toBe("invalid_code");
+    expect((await reset(right)).statusCode).toBe(429);
+    // Another IP is not affected.
+    expect((await reset(right, "9.9.9.9")).statusCode).toBe(200);
   });
 
-  it("does not count guesses older than the window, or at other addresses", async () => {
-    const old = new Date(Date.now() - (LIMITS.otpGuessesPerEmail.windowSec + 60) * 1000);
-    for (let i = 0; i < 10; i++) {
-      await systemDb.emailOtp.create({ data: { email: "me@x.com", codeHash: "x", expiresAt: old, attempts: 5, consumedAt: old, createdAt: old } });
-      await systemDb.emailOtp.create({ data: { email: "other@x.com", codeHash: "x", expiresAt: new Date(), attempts: 5, consumedAt: new Date() } });
+  it("caps the codes sent to one address, whichever IP asks", async () => {
+    ctx.auth.addUser({ sub: "v", email: "victim@x.com" });
+    for (let i = 0; i < LIMITS.codeEmail.max; i++) {
+      const res = await ctx.app.inject({ method: "POST", url: "/auth/password/forgot", headers: { ...ORIGIN, [CLIENT_IP_HEADER]: `10.0.0.${i}` }, payload: { email: "victim@x.com" } });
+      expect(res.statusCode).toBe(200);
     }
-    await request("me@x.com");
-    expect((await verify("me@x.com", lastCode())).statusCode).toBe(200);
+    const more = await ctx.app.inject({ method: "POST", url: "/auth/password/forgot", headers: { ...ORIGIN, [CLIENT_IP_HEADER]: "10.0.1.1" }, payload: { email: "victim@x.com" } });
+    expect(more.statusCode).toBe(429);
+    expect(ctx.auth.sent.filter((s) => s.email === "victim@x.com")).toHaveLength(LIMITS.codeEmail.max);
   });
 });
 
@@ -212,9 +214,11 @@ describe("row level security coverage", () => {
     const owned = await systemDb.$queryRaw<Array<{ tablename: string }>>`
       SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tableowner = 'app_rls'`;
     expect(owned).toEqual([]);
-    const [grants] = await systemDb.$queryRaw<Array<{ otps: boolean; seen: boolean }>>`
+    const [grants] = await systemDb.$queryRaw<Array<{ otps: boolean; seen: boolean; identities: boolean; events: boolean }>>`
       SELECT has_table_privilege('app_rls', 'public.email_otps', 'SELECT') AS otps,
-             has_table_privilege('app_rls', 'public.pixel_events_seen', 'SELECT') AS seen`;
-    expect(grants).toEqual({ otps: false, seen: false });
+             has_table_privilege('app_rls', 'public.pixel_events_seen', 'SELECT') AS seen,
+             has_table_privilege('app_rls', 'public.auth_identities', 'SELECT') AS identities,
+             has_table_privilege('app_rls', 'public.auth_events', 'SELECT') AS events`;
+    expect(grants).toEqual({ otps: false, seen: false, identities: false, events: false });
   });
 });

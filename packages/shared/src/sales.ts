@@ -2,16 +2,25 @@
  * The day-by-day and month-by-month sales breakdowns on the dashboard. Pure functions over the
  * daily aggregates, so the API (months) and the web app (days) share one tested definition.
  *
- * Days and months before the store's first imported order are "not imported", never zero:
- * Shopify only shares the last 60 days of orders with most apps, and drawing those days as
- * $0 would read as a store that sold nothing.
+ * Days and months before the store's imported history starts (`historyFrom`, from `historyStart`
+ * in ./dates) are "not imported", never zero: Shopify only shares the last 60 days of orders with
+ * most apps, and drawing those days as $0 would read as a store that sold nothing.
+ *
+ * Both measure net sales unless they are given another measure: the store's Custom sales
+ * (./salesCalculation), worked out from each day's or month's lines of total sales. Shopify's own
+ * figures stay on every day and month whatever is measured.
  */
 // Without the ".js" the rest of the package uses: the web app imports this file directly
 // (@app/shared/sales), and its bundler doesn't map "./dates.js" to dates.ts.
 import { addDays, daysBetweenInclusive } from "./dates";
 import { delta, type DailyMetricsRow } from "./kpi";
+import { customSales, type ComponentSelection, type SalesLines } from "./salesCalculation";
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
+/** The lines of total sales besides net sales, as daily rows hold them. */
+const LINE_KEYS = ["additionalFees", "duties", "shipping", "taxes", "totalSales"] as const;
+const NOTHING = { netSales: 0, refunds: 0, orders: 0, additionalFees: 0, duties: 0, shipping: 0, taxes: 0, totalSales: 0 };
+const linesOf = (x: SalesLines): SalesLines => ({ netSales: x.netSales, additionalFees: x.additionalFees, duties: x.duties, shipping: x.shipping, taxes: x.taxes, totalSales: x.totalSales });
 const nextMonth = (month: string) => addDays(`${month}-28`, 7).slice(0, 7);
 const prevMonth = (month: string) => addDays(`${month}-01`, -1).slice(0, 7);
 const monthEnd = (month: string) => addDays(`${nextMonth(month)}-01`, -1);
@@ -20,6 +29,8 @@ const monthEnd = (month: string) => addDays(`${nextMonth(month)}-01`, -1);
 export interface SalesDay {
   day: string;
   netSales: number;
+  /** Net sales + shipping + taxes + duties and fees (Shopify's "Total sales"). */
+  totalSales: number;
   orders: number;
   refunds: number;
   averageOrderValue: number | null;
@@ -66,21 +77,24 @@ export type DayStatus = "complete" | "today" | "not_imported";
 /** Finished days a range needs before its days are graded as ordinary, strong or best. */
 export const MIN_TIER_DAYS = 14;
 
-export interface BreakdownDay extends SalesDay {
+export type BreakdownDay<D extends SalesDay = SalesDay> = D & {
   status: DayStatus;
-  /** Net sales from the first imported day of the range to the end of this one; null before it. */
+  /** The day's figure under the measure (net sales unless another is given). */
+  value: number;
+  /** The measure from the first imported day of the range to the end of this one; null before it. */
   cumulative: number | null;
   tier: 1 | 2 | 3;
-}
+};
 
-export interface DailyBreakdown {
-  days: BreakdownDay[];
+/** Every figure below is of the measure: net sales unless `dailyBreakdown` was given another. */
+export interface DailyBreakdown<D extends SalesDay = SalesDay> {
+  days: Array<BreakdownDay<D>>;
   total: number;
   orders: number;
-  /** Net sales per finished day (today and days not imported left out); null with none. */
+  /** Per finished day (today and days not imported left out); null with none. */
   average: number | null;
   tiers: DayTiers | null;
-  best: { day: string; netSales: number } | null;
+  best: { day: string; value: number } | null;
   daysWithSales: number;
   /** Imported days, today included. */
   importedDays: number;
@@ -90,31 +104,40 @@ export interface DailyBreakdown {
   fullMonths: string[];
 }
 
-export function dailyBreakdown(series: SalesDay[], today: string, historyFrom: string | null): DailyBreakdown {
+/**
+ * The days of a range, graded against the store's own average day. `measure` is what each day is
+ * measured by: net sales unless the store's Custom sales is given (a day's lines, `customSales`).
+ */
+export function dailyBreakdown<D extends SalesDay>(
+  series: D[],
+  today: string,
+  historyFrom: string | null,
+  measure: (d: D) => number = (d) => d.netSales,
+): DailyBreakdown<D> {
   const statusOf = (day: string): DayStatus =>
     historyFrom !== null && day < historyFrom ? "not_imported" : day === today ? "today" : "complete";
-  const finished = series.filter((d) => statusOf(d.day) === "complete");
-  const average = finished.length ? r2(finished.reduce((a, d) => a + d.netSales, 0) / finished.length) : null;
+  const valued = series.map((d) => ({ d, value: measure(d), status: statusOf(d.day) }));
+  const finished = valued.filter((x) => x.status === "complete");
+  const average = finished.length ? r2(finished.reduce((a, x) => a + x.value, 0) / finished.length) : null;
   // A week's average is one good day away from another: tiers wait for two weeks of finished days.
   const tiers = finished.length >= MIN_TIER_DAYS ? dayTiers(average) : null;
 
   let running = 0;
-  const days = series.map((d): BreakdownDay => {
-    const status = statusOf(d.day);
-    if (status !== "not_imported") running = r2(running + d.netSales);
-    return { ...d, status, cumulative: status === "not_imported" ? null : running, tier: tierOf(d.netSales, tiers) };
+  const days = valued.map(({ d, value, status }): BreakdownDay<D> => {
+    if (status !== "not_imported") running = r2(running + value);
+    return { ...d, status, value, cumulative: status === "not_imported" ? null : running, tier: tierOf(value, tiers) };
   });
   const imported = days.filter((d) => d.status !== "not_imported");
 
   let best: DailyBreakdown["best"] = null;
-  for (const d of imported) if (d.netSales > 0 && (!best || d.netSales > best.netSales)) best = { day: d.day, netSales: d.netSales };
+  for (const d of imported) if (d.value > 0 && (!best || d.value > best.value)) best = { day: d.day, value: d.value };
 
   let bestWeekday: DailyBreakdown["bestWeekday"] = null;
   if (finished.length >= 14) {
     const sum = Array<number>(7).fill(0);
     const count = Array<number>(7).fill(0);
-    for (const d of finished) {
-      sum[weekdayOf(d.day)]! += d.netSales;
+    for (const { d, value } of finished) {
+      sum[weekdayOf(d.day)]! += value;
       count[weekdayOf(d.day)]! += 1;
     }
     for (let w = 0; w < 7; w++) {
@@ -137,7 +160,7 @@ export function dailyBreakdown(series: SalesDay[], today: string, historyFrom: s
 
   return {
     days,
-    total: r2(imported.reduce((a, d) => a + d.netSales, 0)),
+    total: r2(imported.reduce((a, d) => a + d.value, 0)),
     orders: imported.reduce((a, d) => a + d.orders, 0),
     average,
     tiers,
@@ -165,12 +188,28 @@ export interface SalesMonth {
   refunds: number;
   averageOrderValue: number | null;
   /**
-   * Change on the month before. The current month is compared with the same days of the month
-   * before (1–9 Oct with 1–9 Sep), not with all of it. Null when either side isn't fully imported.
+   * The other lines of Shopify's total sales (net sales + additional fees + duties + shipping +
+   * taxes), so the store's Custom sales can be worked out for the month. Team & Access: they go
+   * with "View gross sales, discounts, tax and shipping" (`MONTH_LINES`).
+   */
+  additionalFees: number;
+  duties: number;
+  shipping: number;
+  taxes: number;
+  totalSales: number;
+  /**
+   * Net sales' change on the month before. The current month is compared with the same days of the
+   * month before (1–9 Oct with 1–9 Sep), not with all of it. Null when either side isn't fully imported.
    */
   change: number | null;
   comparedWith: { from: string; to: string } | null;
+  /** The lines of total sales for `comparedWith`, so Custom sales has a change of its own; null with it. */
+  comparedLines: SalesLines | null;
 }
+
+/** A month's fields that hold the lines of total sales (Team & Access: `finance.breakdown`). */
+export const MONTH_LINES = ["additionalFees", "duties", "shipping", "taxes", "totalSales", "comparedLines"] as const;
+export type MonthLine = (typeof MONTH_LINES)[number];
 
 export interface YearBreakdown {
   year: number;
@@ -189,16 +228,21 @@ export function yearBreakdown(rows: DailyMetricsRow[], today: string, historyFro
     let discounts = 0;
     let refunds = 0;
     let orders = 0;
+    let orderValue = 0;
+    const lines = { additionalFees: 0, duties: 0, shipping: 0, taxes: 0, totalSales: 0 };
     for (const r of rows) {
       if (r.day < from || r.day > to) continue;
       gross += r.grossSales;
       discounts += r.discounts;
       refunds += r.refunds;
       orders += r.orders;
+      orderValue += r.orderValue;
+      for (const k of LINE_KEYS) lines[k] += r[k];
     }
     // Rounded to cents before subtracting, as `summarize` does, so totals agree with the tiles.
     const beforeRefunds = r2(r2(gross) - r2(discounts));
-    return { netSales: r2(beforeRefunds - r2(refunds)), refunds: r2(refunds), orders, averageOrderValue: orders > 0 ? r2(beforeRefunds / orders) : null };
+    for (const k of LINE_KEYS) lines[k] = r2(lines[k]);
+    return { netSales: r2(beforeRefunds - r2(refunds)), refunds: r2(refunds), orders, averageOrderValue: orders > 0 ? r2(r2(orderValue) / orders) : null, ...lines };
   };
   const coverage = (from: string, to: string): MonthCoverage =>
     historyFrom === null || from >= historyFrom ? "full" : to < historyFrom ? "none" : "partial";
@@ -220,15 +264,18 @@ export function yearBreakdown(rows: DailyMetricsRow[], today: string, historyFro
     const sameDays = addDays(pFrom, daysBetweenInclusive(from, to) - 1);
     const pTo = current && sameDays < pEnd ? sameDays : pEnd;
     const comparable = cov === "full" && coverage(pFrom, pTo) === "full";
+    const before = comparable ? sum(pFrom, pTo) : null;
     months.push({
       month: m,
       from,
       to,
       current,
       coverage: cov,
-      ...(cov === "none" ? { netSales: 0, refunds: 0, orders: 0, averageOrderValue: null } : own),
-      change: comparable ? delta(own.netSales, sum(pFrom, pTo).netSales) : null,
-      comparedWith: comparable ? { from: pFrom, to: pTo } : null,
+      // A month not imported holds nothing, and the cards draw it as such, never as $0.
+      ...(cov === "none" ? { ...NOTHING, averageOrderValue: null } : own),
+      change: before ? delta(own.netSales, before.netSales) : null,
+      comparedWith: before ? { from: pFrom, to: pTo } : null,
+      comparedLines: before ? linesOf(before) : null,
     });
   }
   return {
@@ -236,5 +283,57 @@ export function yearBreakdown(rows: DailyMetricsRow[], today: string, historyFro
     months,
     total: r2(months.reduce((a, m) => a + m.netSales, 0)),
     orders: months.reduce((a, m) => a + m.orders, 0),
+  };
+}
+
+/** What a month card measures: net sales, or the store's Custom sales from the month's lines. */
+export interface MonthMeasure<M> {
+  value: (m: M) => number;
+  /** Change on the dates the month is compared with (`comparedWith`); null without them. */
+  change: (m: M) => number | null;
+}
+
+/** Shopify's net sales, as the months carry it. */
+export const NET_SALES_MONTHS: MonthMeasure<Pick<SalesMonth, "netSales" | "change">> = { value: (m) => m.netSales, change: (m) => m.change };
+
+/**
+ * The store's Custom sales month by month: the lines its calculation counts, added up in cents
+ * (`customSales`), and compared on the same lines of the dates the month is compared with.
+ */
+export function customSalesMonths(selection: ComponentSelection): MonthMeasure<Omit<SalesLines, "totalSales"> & Pick<SalesMonth, "comparedLines">> {
+  return {
+    value: (m) => customSales(m, selection),
+    change: (m) => (m.comparedLines ? delta(customSales(m, selection), customSales(m.comparedLines, selection)) : null),
+  };
+}
+
+export interface YearFigures {
+  /** Each month under the measure, with the year's running total to its end (null while not imported). */
+  months: Array<{ month: string; value: number; change: number | null; cumulative: number | null }>;
+  total: number;
+  /** Per finished, fully imported month; null with none. */
+  average: number | null;
+  finishedMonths: number;
+  best: { month: string; value: number } | null;
+}
+
+/** The month card's figures under one measure (`NET_SALES_MONTHS` or `customSalesMonths`). */
+export function yearFigures<M extends Pick<SalesMonth, "month" | "current" | "coverage">>(months: M[], measure: MonthMeasure<M>): YearFigures {
+  let running = 0;
+  const out = months.map((m) => {
+    const imported = m.coverage !== "none";
+    const value = imported ? measure.value(m) : 0;
+    if (imported) running = r2(running + value);
+    return { month: m.month, value, change: imported ? measure.change(m) : null, cumulative: imported ? running : null };
+  });
+  const finished = out.filter((_, i) => !months[i]!.current && months[i]!.coverage === "full");
+  let best: YearFigures["best"] = null;
+  for (const m of out) if (m.cumulative !== null && m.value > 0 && (!best || m.value > best.value)) best = { month: m.month, value: m.value };
+  return {
+    months: out,
+    total: running,
+    average: finished.length ? r2(finished.reduce((a, m) => a + m.value, 0) / finished.length) : null,
+    finishedMonths: finished.length,
+    best,
   };
 }

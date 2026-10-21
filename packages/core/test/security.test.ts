@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { env, logger, publicSecrets, redactForLog, resetEnvCache } from "../src/index.js";
+import { hmacSha256Hex } from "@app/shared";
+import { customerKey, developmentSettings, env, logger, phoneHash, publicSecrets, redactForLog, resetEnvCache } from "../src/index.js";
 
 describe("log redaction", () => {
   it("drops credential fields at any depth, whatever their case", () => {
@@ -74,8 +75,55 @@ describe("production secrets", () => {
     resetEnvCache();
     expect(env().OTP_PEPPER).toBe("change-me-otp-pepper");
 
-    Object.assign(process.env, strong, { NODE_ENV: "production" });
+    Object.assign(process.env, strong, PROD_URLS, { NODE_ENV: "production" });
     resetEnvCache();
     expect(env().NODE_ENV).toBe("production");
+  });
+
+  const PROD_URLS = { APP_URL: "https://insights.example.com", API_URL: "https://insights.example.com/api" };
+
+  it("refuses development settings in production, and only there", () => {
+    const dev = { COGNITO_ENDPOINT: "http://127.0.0.1:9229", MAILPIT_URL: "http://localhost:8025", APP_URL: "http://localhost:8787", API_URL: "http://127.0.0.1:8787/api" };
+    expect(developmentSettings({ ...PROD_URLS, COGNITO_ENDPOINT: "", MAILPIT_URL: "" })).toEqual([]);
+    expect(developmentSettings(dev).map((s) => s.split(" ")[0])).toEqual(["COGNITO_ENDPOINT", "MAILPIT_URL", "APP_URL", "API_URL"]);
+
+    for (const [name, value] of Object.entries(dev)) {
+      process.env = { ...saved, ...strong, ...PROD_URLS, NODE_ENV: "production", [name]: value };
+      resetEnvCache();
+      expect(() => env(), name).toThrow(new RegExp(`Development settings in a production configuration: ${name}`));
+    }
+    // Development (the local server, e2e, demos) keeps all of them.
+    process.env = { ...saved, ...strong, ...dev, NODE_ENV: "development" };
+    resetEnvCache();
+    expect(env().MAILPIT_URL).toBe("http://localhost:8025");
+  });
+});
+
+describe("customer hash key", () => {
+  const SECRETS = { SESSION_SECRET: "q8v2Zk1mR7wT4yN0pL5sD9fH3jC6xB1e", TOKEN_ENCRYPTION_KEYS: "1:3q2+7wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" };
+  const saved = { ...process.env };
+  afterEach(() => {
+    process.env = { ...saved };
+    resetEnvCache();
+  });
+
+  it("is OTP_PEPPER unless set, so the hashes stored before it existed keep matching", () => {
+    process.env = { ...saved, ...SECRETS, OTP_PEPPER: "pepper-one-123", CUSTOMER_HASH_KEY: "" };
+    resetEnvCache();
+    expect(env().CUSTOMER_HASH_KEY).toBe("pepper-one-123");
+    const before = customerKey({ id: "st_1" }, "42");
+
+    // Rotating the OTP pepper with the old value kept as the hash key changes no stored hash.
+    process.env = { ...saved, ...SECRETS, OTP_PEPPER: "pepper-two-456", CUSTOMER_HASH_KEY: "pepper-one-123" };
+    resetEnvCache();
+    expect(customerKey({ id: "st_1" }, "42")).toBe(before);
+    expect(phoneHash("st_1", "61400000000")).toBe(hmacSha256Hex("pepper-one-123", "wa:st_1:61400000000"));
+  });
+
+  it("counts as a production secret when set to a published value", () => {
+    const strong = { SESSION_SECRET: "q8v2Zk1mR7wT4yN0pL5sD9fH3jC6xB1e", OTP_PEPPER: "Yt6uI9oP2aS5dF8gH1jK4lZ7xC0vB3nM", TOKEN_ENCRYPTION_KEYS: "1:3q2+7wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" };
+    expect(publicSecrets({ ...strong, CUSTOMER_HASH_KEY: "test-pepper-123" })).toEqual(["CUSTOMER_HASH_KEY"]);
+    // Defaulted from OTP_PEPPER: reported once, under OTP_PEPPER's name.
+    expect(publicSecrets({ ...strong, OTP_PEPPER: "test-pepper-123", CUSTOMER_HASH_KEY: "test-pepper-123" })).toEqual(["OTP_PEPPER"]);
   });
 });

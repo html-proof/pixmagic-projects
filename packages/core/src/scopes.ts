@@ -221,6 +221,11 @@ export class ScopeRevokeError extends Error {
  *    silently read as 100% new until the orders are re-imported, which is worse than the
  *    module staying locked. The re-import is deliberately a FULL one (no `sinceDays`): the
  *    gap is the whole history, not the last few days.
+ *  - `read_all_orders` lifts Shopify's 60-day limit, but the orders older than that are still
+ *    not here: until they are imported, a comparison with earlier dates (a Shopify screen set to
+ *    14 Mar against 18 Oct) keeps saying "No earlier data". The same full import reads them all
+ *    (`ordersSearch` drops its date filter once the scope is held) and records the history as
+ *    complete (`importedFrom` → the epoch).
  *  - `write_pixels` only grants permission to create the web pixel; nothing has created it
  *    yet, and until it exists the storefront sends no events, so the funnel stays empty with
  *    no indication why.
@@ -231,9 +236,15 @@ export class ScopeRevokeError extends Error {
 export function scopeFollowUpKinds(newlyGranted: string[]): SyncKind[] {
   const granted = new Set(newlyGranted);
   const kinds: SyncKind[] = [];
-  if (granted.has("read_customers")) kinds.push("orders");
+  if (granted.has("read_customers") || granted.has("read_all_orders")) kinds.push("orders");
   if (granted.has("read_products")) kinds.push("products", "variants");
   if (granted.has("write_pixels")) kinds.push("install_pixel");
+  // Stock levels (read_inventory, read_locations; write_inventory implies the first): the catalog
+  // again, so every variant has its inventory item, then a full pass over every location's levels.
+  if (granted.has("read_inventory") || granted.has("write_inventory") || granted.has("read_locations")) {
+    if (!kinds.includes("variants")) kinds.push("variants");
+    kinds.push("inventory");
+  }
   return kinds;
 }
 
@@ -251,13 +262,15 @@ export async function seedScopeFollowUp(
   deps: { queues: Pick<Queues, "sync"> },
   store: Pick<Store, "id" | "workspaceId">,
   newlyGranted: string[],
+  /** Hold the jobs back this long: for a caller that saves the new scopes *after* seeding. */
+  opts: { delaySeconds?: number } = {},
 ) {
   const jobs = [];
   for (const kind of scopeFollowUpKinds(newlyGranted)) {
     const job = await systemDb.syncJob.create({ data: { workspaceId: store.workspaceId, storeId: store.id, kind } });
     // Deliberately no `sinceDays`: a scope that changes what the orders query asks for leaves a
     // gap the whole way back, not just in recent days (see scopeFollowUpKinds).
-    await deps.queues.sync.send({ storeId: store.id, kind, syncJobId: job.id });
+    await deps.queues.sync.send({ storeId: store.id, kind, syncJobId: job.id }, opts.delaySeconds ? { delaySeconds: opts.delaySeconds } : undefined);
     jobs.push(job);
   }
   return jobs;

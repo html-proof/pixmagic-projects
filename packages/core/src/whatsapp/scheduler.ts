@@ -13,7 +13,7 @@ import { refreshConnection } from "./store.js";
 import { pollShipments } from "./events.js";
 import { enqueueSend, waQueue, type WaDeps } from "./messages.js";
 
-/** Messages stuck in "sending" this long were cut off mid-send (the Worker was killed). */
+/** Messages stuck in "sending" this long were cut off mid-send (the process was killed). */
 const STUCK_SENDING_MS = 10 * 60_000;
 const DISPATCH_LEASE_MS = 10 * 60_000;
 const SHIPMENT_POLL_LEASE_MS = 2 * 3600_000;
@@ -107,10 +107,10 @@ export async function sweepWhatsapp(deps: WaDeps) {
 
   out.checked = await checkConnections(deps);
 
-  // Insights' own Meta app: its webhook points here (checked a few times a day; a failure retries next tick).
+  // bizinsights' own Meta app: its webhook points here (checked a few times a day; a failure retries next tick).
   if (await deps.coord.acquire("wa-platform-webhook", PLATFORM_WEBHOOK_LEASE_MS)) {
     out.platformWebhook = await ensurePlatformWebhook(deps.fetchImpl).catch(async (err: unknown) => {
-      logger.warn({ err }, "couldn't check Insights' WhatsApp webhook with Meta; the next tick tries again");
+      logger.warn({ err }, "couldn't check bizinsights' WhatsApp webhook with Meta; the next tick tries again");
       await deps.coord.release("wa-platform-webhook").catch(() => {});
       return "failed" as const;
     });

@@ -4,7 +4,8 @@ import { reasonLabel } from "@app/shared/whatsapp";
 import { Empty } from "@/components/dashboard/Primitives";
 import { useApp } from "@/components/AppContext";
 import { actionError, api } from "@/lib/api";
-import { fmtWhen, kindLabel, MessageStatus, PageHeader, useAction, useWa } from "@/components/whatsapp/Common";
+import { fmtWhen, kindLabel, MessageStatus, useWa } from "@/components/whatsapp/WhatsappUi";
+import { PageHeader, useAction } from "@/components/AppUi";
 
 interface Message {
   id: string;
@@ -100,7 +101,7 @@ export default function MessageHistory() {
 
   return (
     <div className="space-y-4">
-      <PageHeader title="Message history" sub="Every WhatsApp message Insights scheduled, sent or held back, and why. Customers' numbers are masked. Kept for 180 days." />
+      <PageHeader title="Message history" sub="Every WhatsApp message bizinsights scheduled, sent or held back, and why. Customers' numbers are masked. Kept for 180 days." />
       {!contact ? (
         <div className="card text-sm text-muted">Your role can&apos;t see customers&apos; messages. Ask an owner or admin.</div>
       ) : (

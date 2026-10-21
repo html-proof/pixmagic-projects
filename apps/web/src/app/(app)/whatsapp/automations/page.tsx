@@ -17,7 +17,8 @@ import { fmtRelative } from "@/components/dashboard/format";
 import { LoadError } from "@/components/LoadError";
 import { Alert } from "@/components/ui";
 import { actionError, api, useApi } from "@/lib/api";
-import { PageHeader, Skeleton, TemplateMapper, useAction, useToast, useWa, type SettingsResponse } from "@/components/whatsapp/Common";
+import { TemplateMapper, useWa, type SettingsResponse } from "@/components/whatsapp/WhatsappUi";
+import { PageHeader, Skeleton, useAction, useToast } from "@/components/AppUi";
 
 interface Rule {
   id: string;
@@ -47,7 +48,7 @@ const ACTIONS: Array<[AutomationAction["type"], string]> = [
   ["send_template", "Send an approved WhatsApp template"],
   ["schedule_reminder", "Send an approved template later (reminder)"],
   ["cancel_pending", "Cancel pending messages"],
-  ["internal_notification", "Notify your team (in Insights)"],
+  ["internal_notification", "Notify your team (in bizinsights)"],
   ["record_event", "Record an event in the audit log"],
 ];
 

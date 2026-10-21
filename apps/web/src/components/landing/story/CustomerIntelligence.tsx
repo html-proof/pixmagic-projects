@@ -83,7 +83,7 @@ function Intro() {
       <motion.div {...riseIn(0.25)} className="mt-8 flex flex-col items-start gap-3 md:mt-10">
         <IllustrativeNote />
         <p className="max-w-md text-[14px] leading-relaxed text-lp-muted">
-          Groups and sizes are illustrative. Insight shows new and returning customers, sales by channel and when customers
+          Groups and sizes are illustrative. bizinsights shows new and returning customers, sales by channel and when customers
           buy.
         </p>
       </motion.div>
@@ -135,7 +135,7 @@ function LensTab({ name, index, progress }: { name: string; index: number; progr
         {name}
       </motion.span>
       <span className="absolute inset-x-0 bottom-0 h-px overflow-hidden bg-lp-line">
-        <motion.span className="absolute inset-0 origin-left bg-lp-violet-bright/80" style={{ scaleX: fill }} />
+        <motion.span className="lp-layer absolute inset-0 origin-left bg-lp-violet-bright/80" style={{ scaleX: fill }} />
       </span>
     </div>
   );

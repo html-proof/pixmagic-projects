@@ -1,127 +1,233 @@
 "use client";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState, type FormEvent } from "react";
-import { createUserWithEmailAndPassword, sendEmailVerification, updateProfile, type User } from "firebase/auth";
-import { firebaseAuth } from "@/lib/firebase";
-import { api, isTransient, keepRetrying } from "@/lib/api";
-import { afterSignIn, authErrorMessage, establishSession } from "@/lib/session";
-import { Alert, AuthShell, Divider } from "@/components/ui";
+import { useState, type FormEvent } from "react";
+import { ArrowRight, Lock, UserRound } from "lucide-react";
+import { accountPasswordProblem, ACCOUNT_PASSWORD_MIN, DISPLAY_NAME_MAX } from "@app/shared/auth";
+import { afterSignIn, authErrorMessage, confirmSignUp, errorCode, rememberEmail, resendSignUpCode, signIn, signUp, useRedirectIfSignedIn, type CodeChallenge } from "@/lib/auth";
+import { Alert, Divider } from "@/components/ui";
+import { emailProblem, useFieldErrors } from "@/components/auth/AuthCard";
+import { AuthSplitShell } from "@/components/auth/AuthSplitShell";
+import { CodeStep } from "@/components/auth/CodeStep";
+import { EmailField, FieldError, IconField } from "@/components/auth/IconField";
+import { PasswordField } from "@/components/auth/PasswordField";
 import { SocialButtons } from "@/components/SocialButtons";
 
-/** PATCH /me's limit on a display name. */
-const NAME_MAX = 80;
-const PASSWORD_MIN = 8;
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-/** What's wrong with the form, in plain words, before anything is sent. */
-function problem(name: string, email: string, password: string): string | null {
-  if (!name.trim()) return "Enter your name.";
-  if (name.trim().length > NAME_MAX) return `Keep your name under ${NAME_MAX} characters.`;
-  if (!EMAIL_RE.test(email.trim())) return "Enter a valid email address.";
-  if (password.length < PASSWORD_MIN) return `Use at least ${PASSWORD_MIN} characters for your password.`;
-  return null;
+/** What's wrong with each field (by input id, in form order), in plain words, before anything is sent. */
+function problems(f: { name: string; email: string; password: string; confirm: string; terms: boolean }) {
+  return {
+    name: !f.name.trim() ? "Enter your full name." : f.name.trim().length > DISPLAY_NAME_MAX ? `Keep your name under ${DISPLAY_NAME_MAX} characters.` : null,
+    email: emailProblem(f.email),
+    password: accountPasswordProblem(f.password),
+    "confirm-password": !f.confirm ? "Enter your password again to confirm it." : f.password !== f.confirm ? "The two passwords don't match." : null,
+    terms: f.terms ? null : "Accept the Terms of Service and Privacy Policy to create an account.",
+  };
 }
+
+const SIGN_IN = { href: "/login", label: "Sign In" };
 
 export default function SignupPage() {
   const router = useRouter();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [terms, setTerms] = useState(false);
+  /** The server's refusal (taken email, too many tries, offline). */
   const [error, setError] = useState<string | null>(null);
   const [taken, setTaken] = useState(false);
   const [busy, setBusy] = useState(false);
-  /** The account an earlier attempt created, when signing it in then failed (an outage). */
-  const created = useRef<User | null>(null);
+  /**
+   * Created: the address the verification code went to, and the server's countdowns for it (the
+   * code lasts a minute; the next one may be asked for after a minute). The form is kept behind
+   * it, so "Use a different email address" comes back to it filled in.
+   */
+  const [sent, setSent] = useState<{ email: string; challenge: CodeChallenge } | null>(null);
+  const formProblems = problems({ name, email, password, confirm, terms });
+  const fields = useFieldErrors(formProblems);
+  /** Every field filled in correctly and the terms accepted: only then can the account be created. */
+  const complete = !Object.values(formProblems).some(Boolean);
 
   // Already signed in (and verified): there is nothing to sign up for, go into the app.
-  useEffect(() => {
-    let stopped = false;
-    let stopRetrying: (() => void) | undefined;
-    const check = async () => {
-      try {
-        // /auth/whoami: a visitor is `user: null`, not a 401 the browser would log as an error.
-        const me = await api<{ user: { emailVerified: boolean } | null }>("/auth/whoami");
-        if (me.user?.emailVerified) router.replace(afterSignIn());
-        return true;
-      } catch (e) {
-        return !isTransient(e);
-      }
-    };
-    void check().then((done) => {
-      if (!done && !stopped) stopRetrying = keepRetrying(check);
-    });
-    return () => {
-      stopped = true;
-      stopRetrying?.();
-    };
-  }, [router]);
+  useRedirectIfSignedIn(router, !sent);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
-    const invalid = problem(name, email, password);
     setTaken(false);
-    if (invalid) return setError(invalid);
-    setBusy(true);
     setError(null);
+    if (!fields.submit()) return;
+    setBusy(true);
     try {
-      const address = email.trim();
-      // A retry after the session step failed: the Firebase account already exists, so creating
-      // it again would only answer "email already in use".
-      let user = created.current?.email === address.toLowerCase() ? created.current : null;
-      if (!user) {
-        user = (await createUserWithEmailAndPassword(firebaseAuth(), address, password)).user;
-        created.current = user;
-        // Before the session: the ID token sent to the API then carries the name.
-        await updateProfile(user, { displayName: name.trim() }).catch(() => {});
-      }
-      await establishSession(user);
-      // Not fatal: /verify-email can send it again, and a throttled send must not strand an
-      // account that already exists with no way back into it.
-      await sendEmailVerification(user, { url: `${window.location.origin}/verify-email` }).catch(() => {});
-      router.replace("/verify-email");
+      // A second press while the first is on its way is disabled; a retry after a failure that
+      // did create the account (or a page filled in again) gets the code already sent, with the
+      // time it has left, rather than another one (the API answers "confirm" again).
+      const r = await signUp({ name: name.trim(), email: email.trim(), password, confirmPassword: confirm, acceptTerms: terms });
+      setSent({ email: r.email, challenge: r.challenge });
     } catch (err) {
-      setTaken((err as { code?: string }).code === "auth/email-already-in-use");
+      setTaken(errorCode(err) === "account_exists");
       setError(authErrorMessage(err));
     } finally {
       setBusy(false);
     }
   }
 
+  if (sent) {
+    return (
+      <AuthSplitShell title="Verify your email" subtitle="We sent a 6-digit verification code to your email address." action={SIGN_IN}>
+        <CodeStep
+          email={sent.email}
+          challenge={sent.challenge}
+          submitLabel="Verify and continue"
+          busyLabel="Verifying…"
+          successLabel="Email verified successfully. Taking you to your dashboard…"
+          large
+          onSubmit={async (code) => {
+            // With the password chosen here: the code signs in, and this password is the account's,
+            // whoever else signed up with the address in the meantime.
+            const r = await confirmSignUp(sent.email, code, { password });
+            if (!r.user) {
+              // Confirmed already, in another tab: sign in as usual.
+              try {
+                const signedIn = await signIn(sent.email, password);
+                if ("next" in signedIn) {
+                  // The account asks for a second step now (a code, an authenticator app): the sign-in page runs it.
+                  rememberEmail(sent.email);
+                  router.replace("/login?confirmed=1");
+                  return;
+                }
+              } catch (err) {
+                // Confirmed elsewhere with another password: the sign-in page says so and offers "Forgot password?".
+                if (errorCode(err) !== "invalid_credentials") throw err;
+                rememberEmail(sent.email);
+                router.replace("/login?confirmedElsewhere=1");
+                return;
+              }
+            }
+            // Through the app shell, which sends a new merchant to onboarding.
+            router.replace(afterSignIn());
+          }}
+          onResend={() => resendSignUpCode(sent.email)}
+          onChangeEmail={() => setSent(null)}
+        />
+      </AuthSplitShell>
+    );
+  }
+
+  const termsError = fields.error("terms");
   return (
-    <AuthShell title="Create your account" subtitle="Free to start. You'll connect your Shopify store from your dashboard.">
-      <SocialButtons />
-      <Divider label="or sign up with your email" />
-      {error && (
-        <Alert>
+    <AuthSplitShell title="Create your account" subtitle="Free to start. You'll connect your Shopify store from your dashboard." action={SIGN_IN}>
+      <SocialButtons row terms after={<Divider label="OR SIGN UP WITH YOUR EMAIL" />} />
+      {error ? (
+        <Alert onDismiss={() => setError(null)}>
           {error}
           {taken && (
             <>
               {" "}
-              <Link href="/login" className="underline">Log in</Link>
+              <Link href="/login" className="underline">
+                Sign in
+              </Link>
+              {" · "}
+              <Link href="/forgot-password" className="underline">
+                Reset password
+              </Link>
             </>
           )}
         </Alert>
+      ) : (
+        fields.invalid && <Alert>Please review the highlighted fields before continuing.</Alert>
       )}
-      <form onSubmit={onSubmit} className="space-y-3" noValidate>
-        <div>
-          <label className="label" htmlFor="name">Your name</label>
-          <input id="name" className="input" autoComplete="name" required maxLength={NAME_MAX} value={name} onChange={(e) => setName(e.target.value)} />
+      <form onSubmit={onSubmit} className="space-y-4" noValidate>
+        <IconField
+          id="name"
+          label="Full name"
+          icon={<UserRound size={18} aria-hidden />}
+          autoComplete="name"
+          required
+          maxLength={DISPLAY_NAME_MAX}
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onBlur={fields.leave}
+          error={fields.error("name")}
+        />
+        <EmailField id="email" value={email} onChange={setEmail} onBlur={fields.leave} error={fields.error("email")} />
+        {/* Side by side where both fit, stacked otherwise. */}
+        <div className="grid grid-cols-[repeat(auto-fit,minmax(13rem,1fr))] items-start gap-4">
+          <PasswordField
+            id="password"
+            label="Password"
+            autoComplete="new-password"
+            minLength={ACCOUNT_PASSWORD_MIN}
+            value={password}
+            onChange={setPassword}
+            hint={`At least ${ACCOUNT_PASSWORD_MIN} characters.`}
+            icon={<Lock size={18} aria-hidden />}
+            inputClassName="auth-field"
+            onBlur={fields.leave}
+            error={fields.error("password")}
+          />
+          <PasswordField
+            id="confirm-password"
+            label="Confirm password"
+            autoComplete="new-password"
+            value={confirm}
+            onChange={setConfirm}
+            icon={<Lock size={18} aria-hidden />}
+            inputClassName="auth-field"
+            onBlur={fields.leave}
+            error={fields.error("confirm-password")}
+          />
         </div>
         <div>
-          <label className="label" htmlFor="email">Email</label>
-          <input id="email" className="input" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
+          <div className="flex items-start gap-2.5 text-sm text-muted">
+            <input
+              id="terms"
+              type="checkbox"
+              className={`mt-0.5 size-[18px] shrink-0 cursor-pointer rounded accent-[var(--accent)] ${termsError ? "outline-2 outline-offset-2 outline-danger" : ""}`}
+              checked={terms}
+              onChange={(e) => {
+                setTerms(e.target.checked);
+                fields.touch("terms");
+              }}
+              required
+              aria-invalid={termsError ? true : undefined}
+              aria-describedby={termsError ? "terms-error" : undefined}
+            />
+            <label htmlFor="terms" className="cursor-pointer">
+              I agree to the{" "}
+              <Link href="/terms" className="font-medium text-accent underline underline-offset-2" target="_blank">
+                Terms of Service
+              </Link>{" "}
+              and the{" "}
+              <Link href="/privacy" className="font-medium text-accent underline underline-offset-2" target="_blank">
+                Privacy Policy
+              </Link>
+              .
+            </label>
+          </div>
+          {termsError && <FieldError id="terms">{termsError}</FieldError>}
         </div>
-        <div>
-          <label className="label" htmlFor="password">Password</label>
-          <input id="password" className="input" type="password" autoComplete="new-password" minLength={PASSWORD_MIN} required value={password} onChange={(e) => setPassword(e.target.value)} />
-          <p className="mt-1 text-xs text-muted">At least {PASSWORD_MIN} characters.</p>
-        </div>
-        <button className="btn-primary w-full" disabled={busy}>{busy ? "Creating your account…" : "Create account"}</button>
+        {/* Locked until the whole form is filled in and the terms are accepted. */}
+        <button className="auth-cta" disabled={busy || !complete} aria-describedby={complete ? undefined : "signup-incomplete"}>
+          {busy ? (
+            "Creating your account…"
+          ) : (
+            <>
+              Create Account <ArrowRight size={18} aria-hidden />
+            </>
+          )}
+        </button>
+        {!complete && (
+          <p id="signup-incomplete" className="text-center text-sm text-muted">
+            Fill in every field and accept the terms to create your account.
+          </p>
+        )}
       </form>
-      <p className="text-sm text-muted">
-        Already have an account? <Link href="/login" className="font-medium text-text underline">Log in</Link>
+      <p className="pt-1 text-center text-[15px] text-muted">
+        Already have an account?{" "}
+        <Link href="/login" className="font-semibold text-accent hover:underline">
+          Sign In
+        </Link>
       </p>
-    </AuthShell>
+    </AuthSplitShell>
   );
 }

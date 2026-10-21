@@ -1,0 +1,67 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { halfConfigured, logger, resetConfigWarning, resetEnvCache } from "@app/core";
+import { handler } from "../src/index.js";
+import { APP_SETTINGS } from "../src/settings.js";
+
+/**
+ * The cron action the deploy's smoke test invokes ({"action":"config"}): what this deployment has
+ * set up, with each provider whose public id is in the shipped settings but whose secret is missing.
+ */
+
+const SECRETS = {
+  SESSION_SECRET: "session-secret-for-this-test",
+  TOKEN_ENCRYPTION_KEYS: "1:" + Buffer.alloc(32, 7).toString("base64"),
+  OTP_PEPPER: "pepper-for-this-test",
+  META_APP_SECRET: "0123456789abcdef0123456789abcdef",
+};
+const KEYS = [...Object.keys(APP_SETTINGS), ...Object.keys(SECRETS)];
+const saved = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]));
+
+afterEach(() => {
+  for (const k of KEYS) {
+    if (saved[k] === undefined) delete process.env[k];
+    else process.env[k] = saved[k];
+  }
+  resetEnvCache();
+  resetConfigWarning();
+  vi.restoreAllMocks();
+});
+
+describe("the shipped settings", () => {
+  it("name, with no secrets at all, every provider whose secret Secrets Manager must hold", () => {
+    expect(halfConfigured({ ...APP_SETTINGS }).map((c) => `${c.provider}: ${c.secretSetting}`)).toEqual([
+      "Shopify: SHOPIFY_API_SECRET",
+      "Shopify app pixmagic: SHOPIFY_APP_SECRET_PIXMAGIC",
+      "Shopify app public: SHOPIFY_APP_SECRET_PUBLIC",
+      "Shopify app appstore: SHOPIFY_APP_SECRET_APPSTORE",
+      "Meta Ads: META_APP_SECRET",
+      "Google Ads and Google AdSense: GOOGLE_ADS_CLIENT_SECRET",
+    ]);
+  });
+
+  it("leave WhatsApp alone until its Embedded Signup configuration is set", () => {
+    // WHATSAPP_APP_ID is shipped, WHATSAPP_CONFIG_ID is empty: Embedded Signup is off on purpose, so
+    // its secret missing is no warning. Once the configuration id is set, it is.
+    expect(APP_SETTINGS.WHATSAPP_CONFIG_ID).toBe("");
+    const withSignup = { ...APP_SETTINGS, WHATSAPP_CONFIG_ID: "1234567890" };
+    expect(halfConfigured(withSignup).map((c) => c.provider)).toContain("WhatsApp (Embedded Signup)");
+  });
+});
+
+describe('the cron action {"action":"config"}', () => {
+  it("answers what is set up, by setting name, without a value", async () => {
+    Object.assign(process.env, APP_SETTINGS, SECRETS);
+    resetEnvCache();
+    const warn = vi.spyOn(logger, "warn").mockImplementation(() => {});
+
+    const report = (await handler({ action: "config" }, {})) as { ads: unknown; whatsapp: unknown; halfConfigured: string[] };
+
+    expect(report.ads).toEqual({ configured: { meta: true, google: false, adsense: false }, restricted: { meta: true, google: false, adsense: false } });
+    expect(report.halfConfigured).toEqual(["Shopify", "Shopify app pixmagic", "Shopify app public", "Shopify app appstore", "Google Ads and Google AdSense"]);
+    expect(report.whatsapp).toEqual({ embeddedSignup: false, embeddedSignupNeeds: ["WHATSAPP_CONFIG_ID", "WHATSAPP_APP_SECRET"], webhookVerifyToken: false });
+    const text = JSON.stringify(report);
+    for (const value of [...Object.values(SECRETS), APP_SETTINGS.META_APP_ID, APP_SETTINGS.GOOGLE_ADS_CLIENT_ID, APP_SETTINGS.SHOPIFY_API_KEY]) expect(text).not.toContain(value);
+    // The cold start already said it in the logs, once per provider.
+    expect(warn.mock.calls.filter(([, msg]) => msg === "public id set but secret missing").map(([obj]) => (obj as { provider: string }).provider)).toEqual(report.halfConfigured);
+  });
+});

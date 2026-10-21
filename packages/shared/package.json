@@ -7,14 +7,25 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
+    "./access": "./src/access.ts",
     "./ads": "./src/ads.ts",
+    "./adsAnalytics": "./src/adsAnalytics.ts",
+    "./adsDemo": "./src/adsDemo.ts",
+    "./alerts": "./src/alerts.ts",
+    "./auth": "./src/auth.ts",
     "./capabilities": "./src/capabilities.ts",
     "./dates": "./src/dates.ts",
+    "./health": "./src/health.ts",
+    "./inventory": "./src/inventory.ts",
     "./journey": "./src/journey.ts",
     "./roles": "./src/roles.ts",
     "./sales": "./src/sales.ts",
+    "./salesCalculation": "./src/salesCalculation.ts",
     "./whatsapp": "./src/whatsapp.ts",
-    "./traffic": "./src/traffic.ts"
+    "./traffic": "./src/traffic.ts",
+    "./staff": "./src/staff/index.ts",
+    "./team": "./src/team.ts",
+    "./email": "./src/email/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

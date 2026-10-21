@@ -3,7 +3,7 @@ import Link from "next/link";
 import { motion } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 import { EASE } from "@/lib/motion";
-import { InsightMark } from "../shared/InsightMark";
+import { BrandMark } from "@/components/Brand";
 import { ROUTES, SignupButton } from "../shared/ui";
 
 /**
@@ -44,7 +44,7 @@ export function Navbar({ revealed = true, brandVisible = true }: { revealed?: bo
         <nav aria-label="Main" className="flex h-full items-center justify-between pl-4 pr-2 md:pl-6 md:pr-3">
           <Link
             href="/"
-            aria-label="Insight home"
+            aria-label="bizinsights home"
             className="lp-focus flex items-center gap-2.5 rounded-lg text-lp-text"
             onClick={(e) => {
               // Already home: glide back to the top instead of reloading the page.
@@ -54,14 +54,14 @@ export function Navbar({ revealed = true, brandVisible = true }: { revealed?: bo
           >
             {/* No opacity transition on these two: the intro's mark lands exactly here and the swap must be instant. */}
             <span data-nav-mark className="lp-enter block size-7" style={{ opacity: brandVisible ? 1 : 0 }}>
-              <InsightMark size={28} />
+              <BrandMark size={28} />
             </span>
             <span
               data-nav-wordmark
-              className="lp-enter text-[14px] font-semibold tracking-[0.16em] md:text-[15px]"
+              className="lp-enter text-[15px] font-semibold tracking-[-0.01em] md:text-[16px]"
               style={{ opacity: brandVisible ? 1 : 0 }}
             >
-              INSIGHT
+              bizinsights
             </span>
           </Link>
           <div className="flex items-center gap-1 md:gap-2">

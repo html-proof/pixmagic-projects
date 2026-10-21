@@ -7,6 +7,7 @@ export const OAUTH_ERRORS: Record<string, string> = {
   state_mismatch: "The connection was started in a different browser or tab. Please start again here.",
   state_expired: "That connection link expired. Please start again.",
   session_mismatch: "You were signed out during the connection. Sign in and try again.",
+  not_allowed: "You no longer have permission to connect stores to this workspace. Ask an owner or admin.",
   missing_required_scopes: "We need permission to read orders to show any metrics. Please approve access.",
   store_taken: "That store is already connected to another workspace.",
   exchange_failed: "Shopify didn't complete the connection. Please try again.",
@@ -17,6 +18,6 @@ export const OAUTH_ERRORS: Record<string, string> = {
   invalid_shop: "Enter your store's address or store ID, e.g. your-store.myshopify.com or your-store.",
   shop_required: "Enter your store's myshopify.com address so we can open the right install page.",
   app_unavailable: "This store can't install our app yet. Please contact support so we can set it up for your store.",
-  launch_unverified: "That link didn't come through from Shopify intact. Open Insights again from your Shopify admin, or enter your store address below.",
+  launch_unverified: "That link didn't come through from Shopify intact. Open bizinsights again from your Shopify admin, or enter your store address below.",
   temporarily_unavailable: "We couldn't reach our servers. Please try again in a minute.",
 };

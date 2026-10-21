@@ -3,23 +3,48 @@ import { getCookie } from "hono/cookie";
 import { bodyLimit } from "hono/body-limit";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { ZodError } from "zod";
-import { systemDb } from "@app/db";
-import { env, logger } from "@app/core";
-import { clientIp, HttpError, SESSION_COOKIE, type AppEnv, type Deps } from "./context.js";
+import { dbReachable, systemDb } from "@app/db";
+import { AppError, env, logger } from "@app/core";
+import { ReportRangeError } from "@app/shared/staff";
+import { clientIp, HttpError, SESSION_COOKIE, SHARE_COOKIE, type AppEnv, type Deps } from "./context.js";
+import { probeDb, tenantDb, type ProbeResult } from "@app/db";
+import { requestContext } from "./requestContext.js";
 import { authRoutes } from "./routes/auth.js";
+import { accountRoutes } from "./routes/account.js";
 import { shopifyRoutes } from "./routes/shopify.js";
 import { webhookRoutes } from "./routes/webhooks.js";
+import { mailEventRoutes } from "./routes/mailEvents.js";
 import { pixelRoutes } from "./routes/pixel.js";
 import { dashboardRoutes } from "./routes/dashboard.js";
 import { workspaceRoutes } from "./routes/workspaces.js";
 import { scopeRoutes } from "./routes/scopes.js";
 import { contactRoutes } from "./routes/contacts.js";
 import { adsRoutes } from "./routes/ads.js";
+import { adsGoogleDemoRoutes } from "./routes/adsGoogleDemo.js";
+import { metaWebhookRoutes } from "./routes/metaWebhooks.js";
 import { whatsappRoutes } from "./routes/whatsapp.js";
 import { whatsappPublicRoutes } from "./routes/whatsappPublic.js";
+import { staffRoutes } from "./routes/staff.js";
+import { staffAttendanceRoutes } from "./routes/staffAttendance.js";
+import { staffPayrollRoutes } from "./routes/staffPayroll.js";
+import { staffReportRoutes } from "./routes/staffReports.js";
+import { staffPortalRoutes } from "./routes/staffPortal.js";
+import { emailAccountRoutes } from "./routes/emailAccounts.js";
+import { emailContentRoutes } from "./routes/emailContent.js";
+import { emailActivityRoutes } from "./routes/emailActivity.js";
+import { emailPublicRoutes } from "./routes/emailPublic.js";
+import { privacyRoutes } from "./routes/privacy.js";
+import { teamRoutes } from "./routes/team.js";
+import { exportRoutes } from "./routes/exports.js";
+import { inventoryRoutes } from "./routes/inventory.js";
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
-const CSRF_EXEMPT = [/^\/webhooks\//, /^\/pixel\//];
+/**
+ * Machine endpoints with their own authentication: webhooks (HMAC), the pixel (ingest key), the
+ * event API (event key, no cookie) and one-click unsubscribe (a signed token; mail providers POST
+ * it from their own servers, RFC 8058).
+ */
+const CSRF_EXEMPT = [/^\/webhooks\//, /^\/pixel\//, /^\/v1\/events/, /^\/email\/unsubscribe\//];
 /**
  * Not subject to the global per-IP limit. Shopify delivers every store's webhooks from a small
  * pool of addresses, so a per-IP cap meant one busy merchant (or a backfill burst) could get
@@ -33,7 +58,7 @@ export type App = Hono<AppEnv>;
 
 /**
  * On every API response, including errors and early 413/429s. public/_headers covers the static
- * UI, but Workers Static Assets never applies it to responses the Worker generates. API responses
+ * UI files only (apps/aws/src/staticSite.ts), never responses the API generates. API responses
  * are JSON or redirects, never a page: nothing may sniff them into HTML, render them, frame them,
  * or keep a copy (they carry account and customer data).
  */
@@ -48,17 +73,25 @@ const API_HEADERS: Record<string, string> = {
 export function buildApp(deps: Deps): App {
   const app = new Hono<AppEnv>();
 
+  // First, so every response carries the request id and every log line below can be matched to it.
+  app.use("*", requestContext());
+
   app.use("*", async (c, next) => {
     await next();
+    // A response that names who may frame it (Shopify's admin, routes/shopify.ts) can't also say DENY.
+    const framable = /frame-ancestors (?!'none')/.test(c.res.headers.get("content-security-policy") ?? "");
     for (const [name, value] of Object.entries(API_HEADERS)) {
+      if (framable && name === "x-frame-options") continue;
       if (!c.res.headers.has(name)) c.res.headers.set(name, value);
     }
+    // Only over https (CloudFront redirects everything else; local development is plain http).
+    if (c.req.url.startsWith("https:")) c.res.headers.set("strict-transport-security", "max-age=31536000; includeSubDomains");
   });
 
-  // Webhooks carry up to 5 MB; everything else is small JSON.
+  // Shopify webhooks carry up to 5 MB; everything else (Meta's webhooks included) is small JSON.
   app.use("*", (c, next) =>
     bodyLimit({
-      maxSize: c.req.path.startsWith("/webhooks/") ? 5 * MB : MB,
+      maxSize: c.req.path === "/webhooks/shopify" ? 5 * MB : MB,
       onError: (c) => c.json({ error: "request", message: "Request body too large" }, 413),
     })(c, next),
   );
@@ -66,7 +99,7 @@ export function buildApp(deps: Deps): App {
   app.use("*", async (c, next) => {
     if (deps.globalLimit && !GLOBAL_LIMIT_EXEMPT.some((r) => r.test(c.req.path))) {
       if (!(await deps.globalLimit(clientIp(c)))) {
-        return c.json({ error: "rate_limited", message: "Rate limit exceeded, retry in a minute" }, 429);
+        return c.json({ error: "rate_limited", message: "Rate limit exceeded, retry in a minute" }, 429, { "retry-after": "60" });
       }
     }
     await next();
@@ -78,7 +111,7 @@ export function buildApp(deps: Deps): App {
    * belt to that pair of braces.) API-key requests carry no cookie.
    */
   app.use("*", async (c, next) => {
-    if (SAFE_METHODS.has(c.req.method) || CSRF_EXEMPT.some((r) => r.test(c.req.path)) || !getCookie(c, SESSION_COOKIE)) {
+    if (SAFE_METHODS.has(c.req.method) || CSRF_EXEMPT.some((r) => r.test(c.req.path)) || (!getCookie(c, SESSION_COOKIE) && !getCookie(c, SHARE_COOKIE))) {
       return next();
     }
     const origin = c.req.header("origin") ?? c.req.header("referer");
@@ -93,10 +126,30 @@ export function buildApp(deps: Deps): App {
     await next();
   });
 
-  app.onError((err, c) => {
-    if (err instanceof HttpError) return c.json({ error: err.code, message: err.message }, err.statusCode as ContentfulStatusCode);
+  app.onError(async (err, c) => {
+    if (err instanceof HttpError) {
+      return c.json(
+        { error: err.code, message: err.message, ...(err.detail !== undefined ? { detail: err.detail } : {}) },
+        err.statusCode as ContentfulStatusCode,
+        err.retryAfterSec ? { "retry-after": String(err.retryAfterSec) } : {},
+      );
+    }
+    // A rule the person broke or a step they must take first (StaffError, EmailError, WhatsappError):
+    // its message is written for them.
+    if (err instanceof AppError) {
+      return c.json({ error: err.code, message: err.message, ...(err.detail !== undefined ? { detail: err.detail } : {}) }, err.status as ContentfulStatusCode);
+    }
+    if (err instanceof ReportRangeError) return c.json({ error: "invalid_range", message: err.message }, 400);
     if (err instanceof ZodError) {
       return c.json({ error: "validation", message: err.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ") }, 400);
+    }
+    // A query that died because Postgres went away is an outage, not a bug: answer "try again"
+    // (503) as loadUser does. The driver's error can't say so reliably (see dbReachable), so ask
+    // the database itself. While it answers, the error is ours and stays a 500.
+    if (!(await (deps.dbHealthy ?? (() => dbReachable(2_000)))())) {
+      logger.warn({ err, path: c.req.path }, "database unreachable");
+      c.header("retry-after", "5");
+      return c.json({ error: "db_unavailable", message: "We can't reach your data right now. Please try again in a moment." }, 503);
     }
     logger.error({ err, path: c.req.path }, "unhandled error");
     return c.json({ error: "internal", message: "Something went wrong" }, 500);
@@ -105,33 +158,74 @@ export function buildApp(deps: Deps): App {
   app.notFound((c) => c.json({ error: "not_found", message: "Not found" }, 404));
 
   app.get("/healthz", (c) => c.json({ ok: true }));
+  /**
+   * Which release answers at this address, so a deploy can be checked from outside (smoke.mjs):
+   * the package's commit and build time, the environment, and the Lambda version serving it.
+   * Nothing secret: no settings, hosts or account details.
+   */
+  app.get("/version", (c) => {
+    const e = env();
+    return c.json({
+      app: "bizinsights",
+      environment: e.APP_ENVIRONMENT || e.NODE_ENV,
+      commit: e.APP_COMMIT || null,
+      builtAt: e.APP_BUILT_AT || null,
+      release: e.AWS_LAMBDA_FUNCTION_VERSION || null,
+    });
+  });
+  /**
+   * Ready to serve: both database connections (the owner role, and `app_rls`, which every tenant
+   * read uses) and the coordinator answer. Each probe is bounded, so a stalled tunnel makes this
+   * say "not ready" in seconds instead of hanging, and a failed probe is logged with its reason.
+   */
   app.get("/readyz", async (c) => {
-    const checks = { db: false, coord: false };
-    try {
-      await systemDb.$queryRaw`SELECT 1`;
-      checks.db = true;
-    } catch {
-      /* not ready */
+    const [system, tenant, coord] = await Promise.all([
+      deps.dbHealthy
+        ? deps.dbHealthy().then((up): ProbeResult => (up ? { ok: true } : { ok: false, error: "database health check failed" }))
+        : probeDb(() => systemDb.$queryRaw`SELECT 1`),
+      probeDb(() => tenantDb.$queryRaw`SELECT 1`),
+      deps.coord.ping().then(
+        (up): ProbeResult => (up ? { ok: true } : { ok: false, error: "coordinator did not answer" }),
+        (error: unknown): ProbeResult => ({ ok: false, error }),
+      ),
+    ]);
+    const checks = { db: system.ok, coord: coord.ok, tenantDb: tenant.ok };
+    const ok = checks.db && checks.coord && checks.tenantDb;
+    if (!ok) {
+      const reason = (r: ProbeResult) => (r.ok ? undefined : r.error);
+      logger.error({ checks, db: reason(system), tenantDb: reason(tenant), coord: reason(coord) }, "not ready");
     }
-    try {
-      checks.coord = await deps.coord.ping();
-    } catch {
-      /* not ready */
-    }
-    const ok = checks.db && checks.coord;
     return c.json({ ok, checks }, ok ? 200 : 503);
   });
 
   authRoutes(app, deps);
+  accountRoutes(app, deps);
   shopifyRoutes(app, deps);
   webhookRoutes(app, deps);
+  mailEventRoutes(app, deps);
   pixelRoutes(app, deps);
   dashboardRoutes(app, deps);
   workspaceRoutes(app, deps);
   scopeRoutes(app, deps);
   contactRoutes(app, deps);
   adsRoutes(app, deps);
+  adsGoogleDemoRoutes(app, deps);
+  // Meta's deauthorize and data deletion callbacks: /webhooks/*, so CSRF- and global-limit-exempt above.
+  metaWebhookRoutes(app, deps);
   whatsappRoutes(app, deps);
   whatsappPublicRoutes(app, deps);
+  staffRoutes(app, deps);
+  staffAttendanceRoutes(app, deps);
+  staffPayrollRoutes(app, deps);
+  staffReportRoutes(app, deps);
+  staffPortalRoutes(app, deps);
+  emailAccountRoutes(app, deps);
+  emailContentRoutes(app, deps);
+  emailActivityRoutes(app, deps);
+  emailPublicRoutes(app, deps);
+  privacyRoutes(app, deps);
+  teamRoutes(app, deps);
+  exportRoutes(app, deps);
+  inventoryRoutes(app, deps);
   return app;
 }

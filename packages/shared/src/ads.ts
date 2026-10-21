@@ -9,13 +9,226 @@
  */
 // Without the ".js" the rest of the package uses: the web app imports this file directly
 // (@app/shared/ads), and its bundler doesn't map "./dates.js" to dates.ts.
-import { addDays, eachDay, isDay } from "./dates";
+import { addDays, eachDay, isDay, localDay, localTime } from "./dates";
 
 /** Everything that can be connected on Settings → Ad accounts. */
 export const AD_PROVIDERS = ["meta", "google", "adsense"] as const;
 export type AdProvider = (typeof AD_PROVIDERS)[number];
 /** The platforms a store pays to advertise on. AdSense pays the store instead, so it is never added into spend. */
 export type AdSpendProvider = Exclude<AdProvider, "adsense">;
+
+// ---------------------------------------------------------------------------
+// Where a connection stands, and why: what ad_connections.status, error_code and account_status hold.
+// The API, the worker and both settings pages read these, so a state is named and worded once.
+// ---------------------------------------------------------------------------
+
+/**
+ * ad_connections.status. "reconnect": the sign-in ended (expired, revoked, permission taken back), so
+ * connecting again fixes it. "permission": this login can no longer read this one account (removed
+ * from it, the manager link is gone), so connecting with a login that has access fixes it.
+ * "unavailable": the platform won't report on the account (closed, cancelled, set-up unfinished).
+ * "error": a failure a retry may fix; syncs keep trying, less often after several in a row.
+ */
+export const AD_CONNECTION_STATUSES = ["active", "reconnect", "permission", "unavailable", "error"] as const;
+export type AdConnectionStatus = (typeof AD_CONNECTION_STATUSES)[number];
+
+/**
+ * Why a connection isn't working (ad_connections.error_code). The platform's own words go to the
+ * logs (through providerDetail()); people read the wording below.
+ */
+export const AD_ERROR_CODES = [
+  /** The sign-in expired or was revoked (Google invalid_grant, Meta 190/102). */
+  "auth_expired",
+  /** The reporting permission was taken back or never granted. */
+  "scope_missing",
+  /** The person whose login powered it has left bizinsights or the workspace. */
+  "connector_left",
+  /** This login can no longer read this account. */
+  "no_access",
+  /** The platform closed or cancelled the account. */
+  "account_closed",
+  /** The platform disabled or suspended the account. */
+  "account_disabled",
+  /** The account's set-up at the platform isn't finished (or awaits the platform's approval). */
+  "account_not_ready",
+  /** bizinsights' own app isn't approved for this yet (Google Ads API access level, Meta App Review): on our side. */
+  "not_approved",
+  /** The platform's API isn't switched on for bizinsights: on our side. */
+  "not_configured",
+  /** The platform asked bizinsights to slow down for a while. */
+  "rate_limited",
+  /** bizinsights' daily allowance at the platform is used up (Google Ads API operations). */
+  "quota_exhausted",
+  /** The platform or the network didn't answer. */
+  "temporary",
+  /** The platform refused for another reason. */
+  "provider_error",
+  /** Something went wrong in bizinsights. */
+  "internal",
+] as const;
+export type AdErrorCode = (typeof AD_ERROR_CODES)[number];
+
+export const isAdErrorCode = (v: unknown): v is AdErrorCode => typeof v === "string" && (AD_ERROR_CODES as readonly string[]).includes(v);
+
+/** The status each code leaves a connection in. */
+export const AD_ERROR_STATUS: Record<AdErrorCode, AdConnectionStatus> = {
+  auth_expired: "reconnect",
+  scope_missing: "reconnect",
+  connector_left: "reconnect",
+  no_access: "permission",
+  account_closed: "unavailable",
+  account_disabled: "unavailable",
+  account_not_ready: "unavailable",
+  not_approved: "error",
+  not_configured: "error",
+  rate_limited: "error",
+  quota_exhausted: "error",
+  temporary: "error",
+  provider_error: "error",
+  internal: "error",
+};
+
+/** Codes that are bizinsights' to fix, never the merchant's: worded as such, and alerted to the operator. */
+export const AD_ERROR_OURS: ReadonlySet<AdErrorCode> = new Set(["not_approved", "not_configured", "quota_exhausted", "internal"]);
+
+const PLATFORM_NAME: Record<AdProvider, string> = { meta: "Meta", google: "Google Ads", adsense: "Google AdSense" };
+const PLATFORM_HOME_NAME: Record<AdProvider, string> = { meta: "Meta Ads Manager", google: "ads.google.com", adsense: "AdSense" };
+
+/** The code that words each status when a connection has none of its own (marked before codes were kept, or by another status). */
+const STATUS_CODE: Record<Exclude<AdConnectionStatus, "active">, AdErrorCode> = { reconnect: "auth_expired", permission: "no_access", unavailable: "account_not_ready", error: "provider_error" };
+
+/**
+ * The code a connection's status is worded by: its own code when that code belongs to the status
+ * (AD_ERROR_STATUS), else the status's own wording; null when it is active. A code left over from an
+ * earlier failure (a writer that changed only the status) would word the status as something else.
+ */
+export function adStatusCode(status: string, errorCode: string | null | undefined): AdErrorCode | null {
+  if (status === "active") return null;
+  if (isAdErrorCode(errorCode) && AD_ERROR_STATUS[errorCode] === status) return errorCode;
+  return STATUS_CODE[status as Exclude<AdConnectionStatus, "active">] ?? "provider_error";
+}
+
+/** What a code means for the merchant, in one or two plain sentences. Null code: nothing is wrong. */
+export function adErrorMessage(code: AdErrorCode | null | undefined, provider: AdProvider): string | null {
+  if (!code) return null;
+  const p = PLATFORM_NAME[provider];
+  const home = PLATFORM_HOME_NAME[provider];
+  switch (code) {
+    case "auth_expired":
+      return `bizinsights' access to ${p} has ended. Press Reconnect and sign in again to keep the numbers coming.`;
+    case "scope_missing":
+      return `The permission to read ${p} reports was taken back. Press Reconnect and leave it ticked on ${provider === "meta" ? "Facebook's" : "Google's"} screen.`;
+    case "connector_left":
+      return "The person who connected this account no longer has access to bizinsights. Someone with access to the account needs to press Reconnect.";
+    case "no_access":
+      return provider === "meta"
+        ? "This Facebook login can no longer see this ad account. Ask the account's admin to assign you to it in Meta Business settings, or reconnect with a login that has access."
+        : `This Google login can no longer read this ${provider === "adsense" ? "AdSense" : "Google Ads"} account. Ask its owner to add you as a user, or reconnect with a Google account that has access.`;
+    case "account_closed":
+      return `${p} says this account is closed, so there is nothing new to read. Its earlier numbers stay on the dashboard.`;
+    case "account_disabled":
+      return `${p} has disabled this account. Check it in ${home}; the numbers resume once ${p} enables it again.`;
+    case "account_not_ready":
+      return `This account isn't ready at ${p} yet (its set-up isn't finished or awaits ${p}'s approval). Finish it in ${home}, then press Refresh.`;
+    case "not_approved":
+      return `${p} is still approving bizinsights for this. It's on our side, not yours: the numbers start once it's approved.`;
+    case "not_configured":
+      return `${p} isn't fully switched on for bizinsights yet. It's on our side, not yours: we're on it.`;
+    case "rate_limited":
+      return `${p} asked bizinsights to slow down for a while. The next update tries again by itself.`;
+    case "quota_exhausted":
+      return `bizinsights has used today's allowance of ${p} requests. Updates resume by themselves tomorrow; nothing is lost.`;
+    case "temporary":
+      return `${p} didn't answer the last update. bizinsights tries again by itself.`;
+    case "provider_error":
+      return `${p} refused the last update. bizinsights tries again by itself; if it keeps happening, reconnect.`;
+    case "internal":
+      return "Something went wrong on our side with the last update. We'll try again by ourselves.";
+  }
+}
+
+/**
+ * The ad account's own health at the platform (ad_connections.account_status), normalized. Meta's
+ * account_status, Google's customer status and AdSense's account state all map onto these.
+ */
+export const AD_ACCOUNT_STATUSES = ["active", "payment_issue", "under_review", "disabled", "closing", "closed", "needs_attention", "setup_unfinished"] as const;
+export type AdAccountStatus = (typeof AD_ACCOUNT_STATUSES)[number];
+
+export const isAdAccountStatus = (v: unknown): v is AdAccountStatus => typeof v === "string" && (AD_ACCOUNT_STATUSES as readonly string[]).includes(v);
+
+/**
+ * Meta's account_status code (https://developers.facebook.com/docs/marketing-api/reference/ad-account/):
+ * 1 ACTIVE, 2 DISABLED, 3 UNSETTLED, 7 PENDING_RISK_REVIEW, 8 PENDING_SETTLEMENT, 9 IN_GRACE_PERIOD,
+ * 100 PENDING_CLOSURE, 101 CLOSED, 201 ANY_ACTIVE, 202 ANY_CLOSED.
+ */
+export function metaAccountStatus(code: number | string | null | undefined): AdAccountStatus | null {
+  switch (Number(code)) {
+    case 1:
+    case 201:
+      return "active";
+    case 2:
+      return "disabled";
+    case 3:
+    case 8:
+    case 9:
+      return "payment_issue";
+    case 7:
+      return "under_review";
+    case 100:
+      return "closing";
+    case 101:
+    case 202:
+      return "closed";
+    default:
+      return null;
+  }
+}
+
+/** Google Ads customer.status: ENABLED, CANCELED, SUSPENDED, CLOSED. */
+export function googleAccountStatus(status: string | null | undefined): AdAccountStatus | null {
+  switch (status) {
+    case "ENABLED":
+      return "active";
+    case "SUSPENDED":
+      return "disabled";
+    case "CANCELED":
+    case "CLOSED":
+      return "closed";
+    default:
+      return null;
+  }
+}
+
+/** AdSense v2 Account.state (READY, NEEDS_ATTENTION, CLOSED) and its pendingTasks. */
+export function adsenseAccountStatus(state: string | null | undefined, pendingTasks: readonly string[] = []): AdAccountStatus | null {
+  if (state === "CLOSED") return "closed";
+  if (state === "NEEDS_ATTENTION") return "needs_attention";
+  if (state === "READY") return pendingTasks.length ? "setup_unfinished" : "active";
+  return null;
+}
+
+/** A short label for an account status that isn't plain "active" (null for active or unknown). */
+export function adAccountStatusLabel(status: AdAccountStatus | null | undefined, provider: AdProvider): string | null {
+  const p = PLATFORM_NAME[provider];
+  switch (status) {
+    case "payment_issue":
+      return `Payment needed at ${p}`;
+    case "under_review":
+      return `Under review by ${p}`;
+    case "disabled":
+      return `Disabled by ${p}`;
+    case "closing":
+      return "Closing";
+    case "closed":
+      return "Closed";
+    case "needs_attention":
+      return `Needs attention in ${p}`;
+    case "setup_unfinished":
+      return "Set-up not finished";
+    default:
+      return null;
+  }
+}
 
 /** One campaign on one day, as stored (ad_campaign_daily). */
 export interface AdDayRow {
@@ -27,35 +240,72 @@ export interface AdDayRow {
   day: string;
   spend: number;
   impressions: number;
+  /** Every click the platform counts: Meta's "clicks (all)" include likes, comments and profile clicks. */
   clicks: number;
-  /** Purchases (Meta) or conversions (Google), as the platform counts them. */
+  /** Clicks on the ad's link (Meta's inline_link_clicks; Google's clicks). Null: not read yet (older rows). */
+  linkClicks: number | null;
+  /** The platform's own conversions: Meta's purchases; Google's every primary conversion action (leads, sign-ups, calls, purchases...). */
   conversions: number;
   conversionValue: number;
+  /** Purchases only, as the platform credits them (Google: conversion actions of category PURCHASE). Null: not read yet. */
+  purchases: number | null;
+  purchaseValue: number | null;
   /** Leads from lead forms and lead events (Meta); 0 where the platform has none. */
   leads: number;
 }
 
+/**
+ * A set of campaign-days added up. Clicks, click-through rate and cost per click are on link clicks,
+ * the one click every platform means the same way (Meta's "clicks (all)" count likes and comments
+ * too). Purchases, their value and return on ad spend are on purchases only: Google's conversions
+ * count every action set as one (leads, sign-ups, calls...), so they stay as "conversions" and are
+ * never called purchases. A figure some day doesn't have yet (rows stored before it was read) makes
+ * the total null, never a short count.
+ */
 export interface AdTotals {
   spend: number;
   impressions: number;
+  /** Every click the platform counts (Meta's include likes, comments and profile clicks). */
   clicks: number;
+  /** Clicks on the ad's link (Google: clicks on the ad); null while some day's aren't read yet. */
+  linkClicks: number | null;
+  /** The platform's own conversions: Meta's purchases; Google's every conversion action in "Conversions". */
   conversions: number;
   conversionValue: number;
+  /** Purchases as the platform credits them to its ads; null while some day's aren't read yet. */
+  purchases: number | null;
+  purchaseValue: number | null;
   leads: number;
-  /** Clicks per impression. */
+  /** Link clicks per impression. */
   ctr: number | null;
-  /** Spend per click. */
+  /** Spend per link click. */
   cpc: number | null;
   /** Spend per thousand impressions. */
   cpm: number | null;
-  /** Spend per conversion. */
+  /** Spend per conversion (the platform's own, every conversion action). */
   costPerConversion: number | null;
-  /** Conversion value per unit of spend ("return on ad spend"). */
+  /** Spend per purchase. */
+  costPerPurchase: number | null;
+  /** Purchase value per unit of spend: the platform's own return on ad spend. */
   roas: number | null;
 }
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const ratio = (a: number, b: number) => (b > 0 ? a / b : null);
+/** a ÷ b when both are known. */
+const known = (a: number | null, b: number | null) => (a === null || b === null ? null : ratio(a, b));
+const cents = (n: number | null) => (n === null ? null : r2(n));
+
+/** The sum of a figure some rows may not have yet: null as soon as one hasn't. */
+function sumKnown<R>(rows: R[], pick: (r: R) => number | null): number | null {
+  let sum = 0;
+  for (const r of rows) {
+    const v = pick(r);
+    if (v === null) return null;
+    sum += v;
+  }
+  return sum;
+}
 
 export function adTotals(rows: AdDayRow[]): AdTotals {
   const t = rows.reduce(
@@ -71,46 +321,178 @@ export function adTotals(rows: AdDayRow[]): AdTotals {
     { spend: 0, impressions: 0, clicks: 0, conversions: 0, conversionValue: 0, leads: 0 },
   );
   const spend = r2(t.spend);
-  const conversions = Math.round(t.conversions * 100) / 100;
-  const cpc = ratio(spend, t.clicks);
-  const cpm = ratio(spend * 1000, t.impressions);
-  const cpa = ratio(spend, conversions);
+  const conversions = r2(t.conversions);
+  const linkClicks = sumKnown(rows, (r) => r.linkClicks);
+  const purchases = cents(sumKnown(rows, (r) => r.purchases));
+  const purchaseValue = cents(sumKnown(rows, (r) => r.purchaseValue));
   return {
     spend,
     impressions: t.impressions,
     clicks: t.clicks,
+    linkClicks,
     conversions,
     conversionValue: r2(t.conversionValue),
+    purchases,
+    purchaseValue,
     leads: t.leads,
-    ctr: ratio(t.clicks, t.impressions),
-    cpc: cpc === null ? null : r2(cpc),
-    cpm: cpm === null ? null : r2(cpm),
-    costPerConversion: cpa === null ? null : r2(cpa),
-    roas: ratio(r2(t.conversionValue), spend),
+    ctr: known(linkClicks, t.impressions),
+    cpc: cents(known(spend, linkClicks)),
+    cpm: cents(ratio(spend * 1000, t.impressions)),
+    costPerConversion: cents(ratio(spend, conversions)),
+    costPerPurchase: cents(known(spend, purchases)),
+    roas: known(purchaseValue, spend),
   };
 }
 
-/** One point per day of the range: spend, clicks, conversions and their value, quiet days as zero. */
-export function adSeries(rows: AdDayRow[], range: { from: string; to: string }) {
-  const by = new Map<string, { spend: number; clicks: number; conversions: number; conversionValue: number; impressions: number }>();
+// ---------------------------------------------------------------------------
+// What the stored days cover. A day an ad account has no figures stored for (it was never read, its
+// syncs stopped, or the day hasn't started yet in the account's time zone) is missing: it is never
+// added in as 0, and a total that would need it isn't given.
+// ---------------------------------------------------------------------------
+
+/** The days an account's stored figures cover, both included (the account's own days); null: none stored. */
+export interface AdCoverage {
+  from: string | null;
+  through: string | null;
+}
+
+const NO_COVERAGE: AdCoverage = { from: null, through: null };
+
+/** A closed ad account: the platform says so (error code or the account's own status). */
+export const isClosedAdAccount = (c: { errorCode?: string | null; accountStatus?: string | null }) => c.errorCode === "account_closed" || c.accountStatus === "closed";
+
+/**
+ * The days one account covers: from where its history starts (history_from) to the last day stored
+ * without a gap (synced_through). A closed account spends and earns nothing after it closed, so its
+ * days run on to its own today as real zeros; any other account whose syncs stopped covers only what
+ * it stored. Never synced: nothing.
+ */
+export function accountCoverage(
+  c: { historyFrom: string | null; syncedThrough: string | null; errorCode?: string | null; accountStatus?: string | null },
+  accountToday: string,
+): AdCoverage {
+  if (!c.historyFrom || !c.syncedThrough || c.syncedThrough < c.historyFrom) return NO_COVERAGE;
+  return { from: c.historyFrom, through: isClosedAdAccount(c) && accountToday > c.syncedThrough ? accountToday : c.syncedThrough };
+}
+
+/** Whether a comparison can be worked out from these days: it starts on or after the day they start. */
+export const canCompareFrom = (c: AdCoverage, previous: { from: string }) => c.from !== null && previous.from >= c.from;
+
+/** The days every one of these accounts covers: the latest start to the earliest end (nothing if one has none). */
+export function commonCoverage(list: AdCoverage[]): AdCoverage {
+  if (!list.length) return NO_COVERAGE;
+  let from = "";
+  let through = "9999-12-31";
+  for (const c of list) {
+    if (c.from === null || c.through === null) return NO_COVERAGE;
+    if (c.from > from) from = c.from;
+    if (c.through < through) through = c.through;
+  }
+  return from > through ? NO_COVERAGE : { from, through };
+}
+
+/** The days of `c` after `day` (nothing when none are left). */
+export function coverageAfter(c: AdCoverage, day: string): AdCoverage {
+  if (c.from === null || c.through === null) return NO_COVERAGE;
+  const next = addDays(day, 1);
+  const from = next > c.from ? next : c.from;
+  return from > c.through ? NO_COVERAGE : { from, through: c.through };
+}
+
+/** Whether `c` covers every day of `w`. */
+export const coversDays = (c: AdCoverage, w: { from: string; to: string }) => c.from !== null && c.through !== null && c.from <= w.from && w.to <= c.through;
+
+/** The part of `range` that `c` covers, or null when they don't meet. */
+export function coveredPart(c: AdCoverage, range: { from: string; to: string }): { from: string; to: string } | null {
+  if (c.from === null || c.through === null) return null;
+  const from = c.from > range.from ? c.from : range.from;
+  const to = c.through < range.to ? c.through : range.to;
+  return from <= to ? { from, to } : null;
+}
+
+/**
+ * The days a change is worked out on. Ad platforms report whole days, and a day still running (the
+ * store's today, or an ad account's today in its own zone) holds only part of its figures: set
+ * against a whole day it reads as a drop that never happened. So while the range reaches past
+ * `lastWholeDay` (the last day finished everywhere), the range and the comparison both lose that
+ * many days at their end, and the change is "through" the range's last whole day. A range of running
+ * days only (Today) has nothing to compare: null.
+ */
+export function adComparisonWindows(range: { from: string; to: string }, previous: { from: string; to: string }, lastWholeDay: string) {
+  if (range.to <= lastWholeDay) return { current: { from: range.from, to: range.to }, previous: { from: previous.from, to: previous.to }, trimmed: 0 };
+  if (lastWholeDay < range.from) return null;
+  const trimmed = eachDay(addDays(lastWholeDay, 1), range.to).length;
+  const prevTo = addDays(previous.to, -trimmed);
+  if (prevTo < previous.from) return null;
+  return { current: { from: range.from, to: lastWholeDay }, previous: { from: previous.from, to: prevTo }, trimmed };
+}
+
+/** The last day that is over for the store and for each of these ad accounts, in its own time zone. */
+export function lastWholeAdDay(storeToday: string, accountTodays: readonly string[]): string {
+  let today = storeToday;
+  for (const t of accountTodays) if (t < today) today = t;
+  return addDays(today, -1);
+}
+
+/**
+ * Whether two time zones have the same calendar days: the same local date and time now and half a
+ * year either side (so summer time counts). "Australia/Melbourne" and "Australia/Sydney" do.
+ */
+export function sameDays(a: string, b: string, now: Date): boolean {
+  if (a === b) return true;
+  try {
+    return [0, 182, -182].every((n) => {
+      const t = new Date(now.getTime() + n * 86_400_000);
+      return localDay(t, a) === localDay(t, b) && localTime(t, a).slice(0, 5) === localTime(t, b).slice(0, 5);
+    });
+  } catch {
+    // A zone Intl doesn't know: nothing to tell the merchant.
+    return true;
+  }
+}
+
+/** One day of the ads chart. Every figure is null on a day a counted account has no figures for. */
+export interface AdSeriesDay {
+  day: string;
+  spend: number | null;
+  impressions: number | null;
+  /** Every click the platforms count. */
+  clicks: number | null;
+  /** Link clicks; also null on a covered day whose link clicks aren't read yet. */
+  linkClicks: number | null;
+  conversions: number | null;
+  conversionValue: number | null;
+  /** Also null on a covered day whose purchases aren't read yet. */
+  purchases: number | null;
+  purchaseValue: number | null;
+}
+
+/**
+ * One point per day of the range. A day `coverage` includes and nothing ran on is a real 0; a day
+ * outside it is missing (every figure null). Without a coverage every day counts as covered.
+ */
+export function adSeries(rows: AdDayRow[], range: { from: string; to: string }, coverage?: AdCoverage): AdSeriesDay[] {
+  const by = new Map<string, AdDayRow[]>();
   for (const r of rows) {
-    const d = by.get(r.day) ?? { spend: 0, clicks: 0, conversions: 0, conversionValue: 0, impressions: 0 };
-    d.spend += r.spend;
-    d.clicks += r.clicks;
-    d.conversions += r.conversions;
-    d.conversionValue += r.conversionValue;
-    d.impressions += r.impressions;
-    by.set(r.day, d);
+    const list = by.get(r.day) ?? [];
+    list.push(r);
+    by.set(r.day, list);
   }
   return eachDay(range.from, range.to).map((day) => {
-    const d = by.get(day);
+    if (coverage && !coversDays(coverage, { from: day, to: day })) {
+      return { day, spend: null, impressions: null, clicks: null, linkClicks: null, conversions: null, conversionValue: null, purchases: null, purchaseValue: null };
+    }
+    const t = adTotals(by.get(day) ?? []);
     return {
       day,
-      spend: r2(d?.spend ?? 0),
-      clicks: d?.clicks ?? 0,
-      impressions: d?.impressions ?? 0,
-      conversions: Math.round((d?.conversions ?? 0) * 100) / 100,
-      conversionValue: r2(d?.conversionValue ?? 0),
+      spend: t.spend,
+      impressions: t.impressions,
+      clicks: t.clicks,
+      linkClicks: t.linkClicks,
+      conversions: t.conversions,
+      conversionValue: t.conversionValue,
+      purchases: t.purchases,
+      purchaseValue: t.purchaseValue,
     };
   });
 }
@@ -168,11 +550,18 @@ export interface MetaInsightRow {
   spend?: string;
   impressions?: string;
   clicks?: string;
+  inline_link_clicks?: string;
   actions?: MetaAction[];
   action_values?: MetaAction[];
 }
 
-export function fromMetaInsight(accountId: string, r: MetaInsightRow): AdDayRow {
+/**
+ * One campaign-day as stored. `linkClicks` is null only when the row didn't come from a query that
+ * asked for inline_link_clicks (Meta leaves the field out on a day without link clicks: zero then).
+ */
+export function fromMetaInsight(accountId: string, r: MetaInsightRow, opts: { linkClicksAsked?: boolean } = { linkClicksAsked: true }): AdDayRow {
+  const purchases = firstAction(r.actions, META_PURCHASE);
+  const purchaseValue = r2(firstAction(r.action_values, META_PURCHASE));
   return {
     provider: "meta",
     accountId,
@@ -182,8 +571,12 @@ export function fromMetaInsight(accountId: string, r: MetaInsightRow): AdDayRow 
     spend: r2(Number(r.spend ?? 0)),
     impressions: Number(r.impressions ?? 0),
     clicks: Number(r.clicks ?? 0),
-    conversions: firstAction(r.actions, META_PURCHASE),
-    conversionValue: r2(firstAction(r.action_values, META_PURCHASE)),
+    linkClicks: r.inline_link_clicks !== undefined ? Math.round(Number(r.inline_link_clicks) || 0) : opts.linkClicksAsked ? 0 : null,
+    // Meta's conversions are its purchases: the same figure.
+    conversions: purchases,
+    conversionValue: purchaseValue,
+    purchases,
+    purchaseValue,
     leads: Math.round(firstAction(r.actions, META_LEAD)),
   };
 }
@@ -196,8 +589,11 @@ export function fromMetaInsight(accountId: string, r: MetaInsightRow): AdDayRow 
 export const META_REPORT_LEVELS = ["campaign", "adset", "ad"] as const;
 export type MetaReportLevel = (typeof META_REPORT_LEVELS)[number];
 
-/** Whole-account splits: where the ads ran (Facebook Feed, Instagram Stories...), on which devices, in which countries. */
-export const META_REPORT_BREAKDOWNS = ["placement", "device", "country"] as const;
+/**
+ * Whole-account splits: where the ads ran (Facebook Feed, Instagram Stories...), on which devices, in
+ * which countries, and to which age groups and genders (Meta's own aggregates; nothing about a person).
+ */
+export const META_REPORT_BREAKDOWNS = ["placement", "device", "country", "age", "gender"] as const;
 export type MetaReportBreakdown = (typeof META_REPORT_BREAKDOWNS)[number];
 
 /** Every way the Meta Ads report can be cut. */
@@ -206,11 +602,18 @@ export type MetaReportView = (typeof META_REPORT_VIEWS)[number];
 
 export const isMetaBreakdown = (v: MetaReportView): v is MetaReportBreakdown => (META_REPORT_BREAKDOWNS as readonly string[]).includes(v);
 
-/** The Insights API `breakdowns` for each split. */
+/**
+ * The Insights API `breakdowns` for each split. The device split asks for one of Meta's documented
+ * combinations, publisher_platform with impression_device
+ * (https://developers.facebook.com/docs/marketing-api/insights/breakdowns), and its rows are added up
+ * per device afterwards (core's metaReport).
+ */
 export const META_BREAKDOWN_PARAM: Record<MetaReportBreakdown, string> = {
   placement: "publisher_platform,platform_position",
-  device: "impression_device",
+  device: "publisher_platform,impression_device",
   country: "country",
+  age: "age",
+  gender: "gender",
 };
 
 /** One row of GET /act_<id>/insights for a whole range (no time_increment). */
@@ -226,6 +629,10 @@ export interface MetaRangeInsight {
   platform_position?: string;
   impression_device?: string;
   country?: string;
+  /** "18-24", "25-34", ... "65+", "Unknown". */
+  age?: string;
+  /** "female", "male", "unknown". */
+  gender?: string;
   spend?: string;
   impressions?: string;
   reach?: string;
@@ -262,6 +669,32 @@ export interface MetaReportMetrics {
   leads: number;
 }
 
+/**
+ * What a campaign, ad set or ad is set to at Meta (read from the account's own list of them, with
+ * its delivery status): its objective, budget, schedule and bidding. Money is in the ad account's
+ * currency. A field Meta didn't say, or that doesn't apply to the level, is null.
+ */
+export interface MetaObjectDetails {
+  /** Campaigns: Meta's objective (OUTCOME_SALES, OUTCOME_LEADS...; see metaObjectiveLabel). */
+  objective: string | null;
+  /** Campaigns: AUCTION or RESERVED. */
+  buyingType: string | null;
+  /** Campaigns and ad sets: the daily budget, or the lifetime budget, whichever is set. */
+  dailyBudget: number | null;
+  lifetimeBudget: number | null;
+  /** Campaigns and ad sets: when delivery is scheduled to start and end (ISO 8601; end null when open-ended). */
+  startTime: string | null;
+  endTime: string | null;
+  /** Campaigns and ad sets: LOWEST_COST_WITHOUT_CAP, COST_CAP... (see metaWords). */
+  bidStrategy: string | null;
+  /** Ad sets: what delivery is optimized for (OFFSITE_CONVERSIONS, LINK_CLICKS...) and what is billed (IMPRESSIONS, LINK_CLICKS). */
+  optimizationGoal: string | null;
+  billingEvent: string | null;
+  /** Ads: Meta's shareable preview of the ad, and its creative's id. */
+  previewLink: string | null;
+  creativeId: string | null;
+}
+
 export interface MetaReportRow extends MetaReportMetrics {
   id: string;
   name: string;
@@ -273,6 +706,191 @@ export interface MetaReportRow extends MetaReportMetrics {
   status: string | null;
   /** How Meta credited purchases, e.g. "7d_click_1d_view". */
   attribution: string | null;
+  /** The object's own settings at Meta (campaign, ad set and ad levels); absent or null when not read. */
+  details?: MetaObjectDetails | null;
+}
+
+/** How many campaigns an ad account has in each state at Meta now (its whole list, not only the ones that spent). */
+export interface MetaCampaignCounts {
+  /** effective_status ACTIVE. */
+  active: number;
+  /** PAUSED (by the advertiser). */
+  paused: number;
+  /** Everything else: archived, deleted, in review, with issues. */
+  other: number;
+  total: number;
+  /** False when the list was cut short (more campaigns than were read): the counts are of those read. */
+  complete: boolean;
+}
+
+/** The empty counts, to add campaigns into (metaCountCampaign). */
+export const noMetaCampaignCounts = (): MetaCampaignCounts => ({ active: 0, paused: 0, other: 0, total: 0, complete: true });
+
+/** Count one campaign by its effective_status into `counts`. */
+export function metaCountCampaign(counts: MetaCampaignCounts, effectiveStatus: string | null | undefined): void {
+  counts.total++;
+  if (effectiveStatus === "ACTIVE") counts.active++;
+  else if (effectiveStatus === "PAUSED") counts.paused++;
+  else counts.other++;
+}
+
+/** The fields each level's list is read with: the delivery status, and the object's settings (MetaObjectDetails). */
+export const META_OBJECT_FIELDS: Record<MetaReportLevel, string> = {
+  campaign: "id,effective_status,objective,buying_type,daily_budget,lifetime_budget,start_time,stop_time,bid_strategy",
+  adset: "id,effective_status,optimization_goal,billing_event,bid_strategy,daily_budget,lifetime_budget,start_time,end_time",
+  ad: "id,effective_status,preview_shareable_link,creative{id}",
+};
+
+/** One campaign, ad set or ad as Meta lists it (the fields of META_OBJECT_FIELDS; each level leaves out the others'). */
+export interface MetaListedObject {
+  id?: string;
+  effective_status?: string;
+  objective?: string;
+  buying_type?: string;
+  /** Budgets come in the currency's minor unit (cents for most currencies), as strings. */
+  daily_budget?: string | number;
+  lifetime_budget?: string | number;
+  start_time?: string;
+  /** Campaigns say stop_time, ad sets end_time. */
+  stop_time?: string;
+  end_time?: string;
+  bid_strategy?: string;
+  optimization_goal?: string;
+  billing_event?: string;
+  preview_shareable_link?: string;
+  creative?: { id?: string };
+}
+
+/**
+ * How many of a currency's minor units make one unit: 100 for most, 1 for currencies without a
+ * minor unit (JPY, KRW...), 1000 for a few (KWD, BHD), as ISO 4217 has them (Intl knows the list).
+ * Meta states budgets in minor units.
+ */
+export function minorUnitsPerUnit(currency: string | null | undefined): number {
+  if (!currency) return 100;
+  try {
+    const digits = new Intl.NumberFormat("en", { style: "currency", currency }).resolvedOptions().maximumFractionDigits ?? 2;
+    return 10 ** digits;
+  } catch {
+    return 100;
+  }
+}
+
+/** A budget as Meta states it (minor units) in the account's currency; null when not set or not a number. */
+export function metaBudget(minor: string | number | null | undefined, currency: string | null | undefined): number | null {
+  if (minor === null || minor === undefined || minor === "") return null;
+  const n = Number(minor);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return r2(n / minorUnitsPerUnit(currency));
+}
+
+/** A listed campaign, ad set or ad → its settings (MetaObjectDetails), budgets in `currency`. */
+export function metaObjectDetails(o: MetaListedObject, currency: string | null | undefined): MetaObjectDetails {
+  const text = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null);
+  const creativeId = text(o.creative?.id);
+  const preview = text(o.preview_shareable_link);
+  return {
+    objective: text(o.objective),
+    buyingType: text(o.buying_type),
+    dailyBudget: metaBudget(o.daily_budget, currency),
+    lifetimeBudget: metaBudget(o.lifetime_budget, currency),
+    startTime: text(o.start_time),
+    endTime: text(o.stop_time ?? o.end_time),
+    bidStrategy: text(o.bid_strategy),
+    optimizationGoal: text(o.optimization_goal),
+    billingEvent: text(o.billing_event),
+    // Only Meta's own preview pages: a link elsewhere would be shown as if Meta's.
+    previewLink: preview && /^https:\/\/(www\.|business\.)?facebook\.com\//i.test(preview) ? preview : null,
+    creativeId: creativeId && /^\d{1,30}$/.test(creativeId) ? creativeId : null,
+  };
+}
+
+/** Meta's campaign objectives in everyday words (the ODAX ones, and the older ones still on old campaigns). */
+const META_OBJECTIVE: Record<string, string> = {
+  OUTCOME_SALES: "Sales",
+  OUTCOME_LEADS: "Leads",
+  OUTCOME_TRAFFIC: "Traffic",
+  OUTCOME_ENGAGEMENT: "Engagement",
+  OUTCOME_AWARENESS: "Awareness",
+  OUTCOME_APP_PROMOTION: "App promotion",
+  CONVERSIONS: "Conversions",
+  LINK_CLICKS: "Traffic",
+  LEAD_GENERATION: "Lead generation",
+  MESSAGES: "Messages",
+  POST_ENGAGEMENT: "Post engagement",
+  PAGE_LIKES: "Page likes",
+  EVENT_RESPONSES: "Event responses",
+  VIDEO_VIEWS: "Video views",
+  REACH: "Reach",
+  BRAND_AWARENESS: "Brand awareness",
+  APP_INSTALLS: "App installs",
+  PRODUCT_CATALOG_SALES: "Catalog sales",
+  STORE_VISITS: "Store visits",
+  LOCAL_AWARENESS: "Local awareness",
+};
+
+/** "OUTCOME_SALES" → "Sales"; anything else as Meta wrote it, in words. Null for none. */
+export function metaObjectiveLabel(objective: string | null | undefined): string | null {
+  if (!objective) return null;
+  return META_OBJECTIVE[objective] ?? metaWords(objective);
+}
+
+/** "LOWEST_COST_WITHOUT_CAP" → "Lowest cost without cap": Meta's constants as words. Null for none. */
+export function metaWords(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const words = value.replace(/_/g, " ").trim().toLowerCase();
+  return words ? words[0]!.toUpperCase() + words.slice(1) : null;
+}
+
+/**
+ * Where a row's delivery status puts it, for the report's status filter: ACTIVE is "active"; PAUSED,
+ * CAMPAIGN_PAUSED and ADSET_PAUSED are "paused"; anything else (archived, deleted, in review, with
+ * issues, billing needed) is "other"; unknown statuses fall under "other" too.
+ */
+export type MetaStatusGroup = "active" | "paused" | "other";
+export function metaStatusGroup(status: string | null | undefined): MetaStatusGroup {
+  if (status === "ACTIVE") return "active";
+  if (status === "PAUSED" || status === "CAMPAIGN_PAUSED" || status === "ADSET_PAUSED") return "paused";
+  return "other";
+}
+
+// ---------------------------------------------------------------------------
+// The store's own sales next to its ad spend: Shopify's figures (net sales, orders), never an ad
+// platform's attribution. Two measures, kept apart on purpose: a platform's ROAS is the purchase
+// value it credits to its own ads ÷ what it charged (its claim); the store's sales per unit of ad
+// spend (MER, marketing efficiency ratio) is every sale the store made ÷ everything spent on ads.
+// ---------------------------------------------------------------------------
+
+export interface AdsVsSales {
+  /** The store's net sales and orders for the same dates (Shopify's own figures, in the store's currency). */
+  netSales: number;
+  orders: number;
+  /** Net sales ÷ ad spend: the store's sales per unit of ad spend (MER); null while nothing was spent. */
+  salesPerSpend: number | null;
+  /** Ad spend ÷ net sales; null while there were no sales. */
+  shareOfSales: number | null;
+  /** Ad spend ÷ the store's orders (every order, whatever brought it): a derived cost, not an attribution; null without orders. */
+  costPerOrder: number | null;
+}
+
+/** The store's sales set against `spend` (adsVsSales is null when either side isn't known). */
+export function adsVsSales(spend: number | null, netSales: number | null, orders: number | null): AdsVsSales | null {
+  if (spend === null || netSales === null || orders === null) return null;
+  const sps = ratio(netSales, spend);
+  return {
+    netSales,
+    orders,
+    salesPerSpend: sps === null ? null : Math.round(sps * 100) / 100,
+    shareOfSales: ratio(spend, netSales),
+    costPerOrder: cents(ratio(spend, orders)),
+  };
+}
+
+/** The ad platforms a Shopify traffic source belongs to: Facebook and Instagram are Meta's, Google and YouTube are Google Ads'. */
+export function trafficSourcePlatform(source: string | null | undefined): AdSpendProvider | null {
+  if (source === "facebook" || source === "instagram") return "meta";
+  if (source === "google" || source === "youtube") return "google";
+  return null;
 }
 
 const num = (s: string | undefined) => {
@@ -335,6 +953,8 @@ const META_DEVICE: Record<string, string> = {
   unknown: "Unknown",
 };
 
+const META_GENDER: Record<string, string> = { female: "Women", male: "Men", unknown: "Unknown" };
+
 /** "instagram_stories" → "Stories", "an_classic" → "Classic": the position without its platform's prefix. */
 const positionLabel = (p: string) => {
   const words = p.replace(/^(facebook|instagram|messenger|an|threads)_/, "").replace(/_/g, " ").trim();
@@ -363,6 +983,12 @@ export function fromMetaBreakdownInsight(breakdown: MetaReportBreakdown, r: Meta
   } else if (breakdown === "device") {
     id = r.impression_device ?? "unknown";
     name = META_DEVICE[id] ?? positionLabel(id);
+  } else if (breakdown === "age") {
+    id = r.age ?? "unknown";
+    name = !r.age || r.age.toLowerCase() === "unknown" ? "Unknown age" : `Aged ${r.age}`;
+  } else if (breakdown === "gender") {
+    id = r.gender ?? "unknown";
+    name = META_GENDER[id] ?? "Unknown";
   } else {
     id = r.country ?? "unknown";
     name = r.country ? countryName(r.country) : "Unknown";
@@ -402,10 +1028,41 @@ export function fromGoogleAdsRow(accountId: string, r: GoogleAdsRow): AdDayRow |
     spend: r2(Number(m.costMicros ?? 0) / 1_000_000),
     impressions: Number(m.impressions ?? 0),
     clicks: Number(m.clicks ?? 0),
+    // Google's clicks are clicks on the ad (its link, call button, ...): the comparable figure.
+    linkClicks: Number(m.clicks ?? 0),
     conversions: Math.round(Number(m.conversions ?? 0) * 100) / 100,
     conversionValue: r2(Number(m.conversionsValue ?? 0)),
+    // Purchases need their own query (conversion segments can't sit next to cost): merged in by the caller.
+    purchases: null,
+    purchaseValue: null,
     leads: 0,
   };
+}
+
+/** One result of the purchase-only query: conversions of category PURCHASE per campaign per day. */
+export interface GooglePurchaseRow {
+  campaign?: { id?: string | number };
+  segments?: { date?: string };
+  metrics?: { conversions?: string | number; conversionsValue?: string | number };
+}
+
+/**
+ * Put each campaign-day's purchases (from the purchase-only query) on its row. Rows the purchase query
+ * didn't return had none: zero, since that query ran for the same days.
+ */
+export function withGooglePurchases(rows: AdDayRow[], purchases: GooglePurchaseRow[]): AdDayRow[] {
+  const by = new Map<string, { n: number; v: number }>();
+  for (const p of purchases) {
+    const key = `${String(p.campaign?.id ?? "account")}|${p.segments?.date ?? ""}`;
+    const d = by.get(key) ?? { n: 0, v: 0 };
+    d.n += Number(p.metrics?.conversions ?? 0) || 0;
+    d.v += Number(p.metrics?.conversionsValue ?? 0) || 0;
+    by.set(key, d);
+  }
+  return rows.map((r) => {
+    const d = by.get(`${r.campaignId}|${r.day}`);
+    return { ...r, purchases: Math.round((d?.n ?? 0) * 100) / 100, purchaseValue: r2(d?.v ?? 0) };
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -555,7 +1212,7 @@ export interface AdsenseDayRow {
   /** Estimated earnings: AdSense finalizes them after the month ends. */
   earnings: number;
   pageViews: number;
-  /** Ads shown. */
+  /** AdSense's IMPRESSIONS: ad requests where at least one ad was shown (not each ad shown). */
   impressions: number;
   clicks: number;
 }
@@ -569,7 +1226,7 @@ export interface AdsenseTotals {
   pageRpm: number | null;
   /** Earnings per click. */
   perClick: number | null;
-  /** Clicks per ad shown. */
+  /** Clicks per impression (AdSense's impression CTR). */
   ctr: number | null;
 }
 
@@ -598,8 +1255,20 @@ export function adsenseTotals(rows: AdsenseDayRow[]): AdsenseTotals {
   };
 }
 
-/** One point per day of the range, quiet days as zero. */
-export function adsenseSeries(rows: AdsenseDayRow[], range: { from: string; to: string }) {
+/** One day of the AdSense chart: every figure null on a day a counted account has no figures for. */
+export interface AdsenseSeriesDay {
+  day: string;
+  earnings: number | null;
+  pageViews: number | null;
+  impressions: number | null;
+  clicks: number | null;
+}
+
+/**
+ * One point per day of the range: a covered day without earnings is a real 0, a day outside
+ * `coverage` is missing (null). Without a coverage every day counts as covered.
+ */
+export function adsenseSeries(rows: AdsenseDayRow[], range: { from: string; to: string }, coverage?: AdCoverage): AdsenseSeriesDay[] {
   const by = new Map<string, { earnings: number; pageViews: number; impressions: number; clicks: number }>();
   for (const r of rows) {
     const d = by.get(r.day) ?? { earnings: 0, pageViews: 0, impressions: 0, clicks: 0 };
@@ -610,9 +1279,20 @@ export function adsenseSeries(rows: AdsenseDayRow[], range: { from: string; to: 
     by.set(r.day, d);
   }
   return eachDay(range.from, range.to).map((day) => {
+    if (coverage && !coversDays(coverage, { from: day, to: day })) return { day, earnings: null, pageViews: null, impressions: null, clicks: null };
     const d = by.get(day);
     return { day, earnings: r2(d?.earnings ?? 0), pageViews: d?.pageViews ?? 0, impressions: d?.impressions ?? 0, clicks: d?.clicks ?? 0 };
   });
+}
+
+/**
+ * Whether an AdSense row's site belongs to the store: the connection's chosen sites
+ * (ad_connections.sites, AdSense's DOMAIN_CODE values), or every site when none are chosen.
+ */
+export function adsenseSiteChosen(sites: readonly string[], site: string): boolean {
+  if (!sites.length) return true;
+  const s = site.trim().toLowerCase();
+  return sites.some((x) => x.trim().toLowerCase() === s);
 }
 
 /** Totals per site, biggest earner first. */
@@ -633,6 +1313,24 @@ export function siteTotals(rows: AdsenseDayRow[], limit = 10) {
 export interface AdsenseReport {
   headers?: Array<{ name?: string; type?: string; currencyCode?: string }>;
   rows?: Array<{ cells?: Array<{ value?: string }> }>;
+  /** The whole report's totals: a row like the others, its dimension cells empty. */
+  totals?: { cells?: Array<{ value?: string }> };
+}
+
+/**
+ * A report's totals: AdSense's own totals row when it sent one (it covers every matched row, also the
+ * ones a cut-off report leaves out), else the sum of `rows`.
+ */
+export function adsenseReportTotals(report: AdsenseReport, rows: readonly AdsenseTotals[]): AdsenseTotals {
+  const headers = report.headers ?? [];
+  const cells = report.totals?.cells;
+  const col = (name: string) => headers.findIndex((h) => h.name === name);
+  const at = { earnings: col("ESTIMATED_EARNINGS"), pageViews: col("PAGE_VIEWS"), impressions: col("IMPRESSIONS"), clicks: col("CLICKS") };
+  const num = (i: number) => (cells && i >= 0 ? Number(cells[i]?.value ?? 0) || 0 : 0);
+  type Counts = Pick<AdsenseTotals, "earnings" | "pageViews" | "impressions" | "clicks">;
+  const sum = (list: readonly Counts[]) => adsenseTotals(list.map((r) => ({ accountId: "", site: "", day: "", earnings: r.earnings, pageViews: r.pageViews, impressions: r.impressions, clicks: r.clicks })));
+  if (cells && at.earnings >= 0) return sum([{ earnings: num(at.earnings), pageViews: Math.round(num(at.pageViews)), impressions: Math.round(num(at.impressions)), clicks: Math.round(num(at.clicks)) }]);
+  return sum(rows);
 }
 
 /**
@@ -664,3 +1362,57 @@ export function fromAdsenseReport(accountId: string, report: AdsenseReport): { r
 
 /** AdSense names accounts "accounts/pub-<digits>"; the publisher id is the part after the slash. */
 export const adsenseAccountId = (name: string) => name.replace(/^accounts\//, "");
+
+// ---------------------------------------------------------------------------
+// The AdSense report: one date range at a time, asked of AdSense directly, by site, country or
+// device type (AdSense's PLATFORM_TYPE: desktop, high-end mobile, tablet...).
+// ---------------------------------------------------------------------------
+
+export const ADSENSE_REPORT_LEVELS = ["site", "country", "platform"] as const;
+export type AdsenseReportLevel = (typeof ADSENSE_REPORT_LEVELS)[number];
+
+/** The AdSense dimensions each level is split by (reports:generate `dimensions`): an id, then a name when AdSense has one. */
+export const ADSENSE_REPORT_DIMENSIONS: Record<AdsenseReportLevel, string[]> = {
+  site: ["DOMAIN_CODE"],
+  country: ["COUNTRY_CODE", "COUNTRY_NAME"],
+  platform: ["PLATFORM_TYPE_CODE", "PLATFORM_TYPE_NAME"],
+};
+
+/** The metrics the report asks for (estimated: AdSense finalizes earnings after the month ends). */
+export const ADSENSE_REPORT_METRICS = ["ESTIMATED_EARNINGS", "PAGE_VIEWS", "IMPRESSIONS", "CLICKS"] as const;
+
+export interface AdsenseReportRow extends AdsenseTotals {
+  id: string;
+  name: string;
+}
+
+/** A report split by one level → its rows, biggest earner first, and the currency its money is in. */
+export function adsenseReportRows(level: AdsenseReportLevel, report: AdsenseReport): { rows: AdsenseReportRow[]; currency: string | null } {
+  const headers = report.headers ?? [];
+  const col = (name: string) => headers.findIndex((h) => h.name === name);
+  const [idDim, nameDim] = ADSENSE_REPORT_DIMENSIONS[level];
+  const at = { id: col(idDim!), name: nameDim ? col(nameDim) : -1, earnings: col("ESTIMATED_EARNINGS"), pageViews: col("PAGE_VIEWS"), impressions: col("IMPRESSIONS"), clicks: col("CLICKS") };
+  const num = (cells: Array<{ value?: string }>, i: number) => (i < 0 ? 0 : Number(cells[i]?.value ?? 0) || 0);
+  const groups = new Map<string, { name: string; rows: AdsenseDayRow[] }>();
+  for (const r of report.rows ?? []) {
+    const cells = r.cells ?? [];
+    const id = (at.id < 0 ? "" : cells[at.id]?.value) || "unknown";
+    const label = at.name >= 0 ? cells[at.name]?.value : undefined;
+    const name = label || (level === "country" ? countryName(id === "unknown" ? null : id) : id === "unknown" ? "Unknown" : id);
+    const g = groups.get(id) ?? { name, rows: [] };
+    g.rows.push({
+      accountId: "",
+      site: level === "site" ? id : "",
+      day: "",
+      earnings: num(cells, at.earnings),
+      pageViews: Math.round(num(cells, at.pageViews)),
+      impressions: Math.round(num(cells, at.impressions)),
+      clicks: Math.round(num(cells, at.clicks)),
+    });
+    groups.set(id, g);
+  }
+  const rows = [...groups.entries()]
+    .map(([id, g]) => ({ id, name: g.name, ...adsenseTotals(g.rows) }))
+    .sort((a, b) => b.earnings - a.earnings || b.pageViews - a.pageViews || a.name.localeCompare(b.name));
+  return { rows, currency: headers.find((h) => h.type === "METRIC_CURRENCY")?.currencyCode ?? null };
+}

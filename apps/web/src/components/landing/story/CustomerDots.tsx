@@ -1,9 +1,10 @@
 "use client";
 import { motion, useTransform, type MotionValue } from "motion/react";
-import { useMemo, useRef, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useMemo, useRef, type PointerEvent as ReactPointerEvent } from "react";
 import { useCanvasLoop, type CanvasFrame } from "@/hooks/useCanvasLoop";
 import { useViewportPerformance } from "@/hooks/useViewportPerformance";
 import { RGB, easeInOut, easeOut, lerp, seeded, segment } from "@/lib/motion";
+import { SHAPE, createParticles, rgbOf, type Particles } from "../shared/particles";
 
 /*
  * Customer intelligence: customers as dots that regroup by the dimensions the dashboard really
@@ -293,26 +294,13 @@ interface Pointer {
   anyFocus: number;
 }
 
-/** Soft round dot with a faint halo, pre-rendered once per colour (no canvas shadows per frame). */
-const SPRITE_PX = 48;
-/** Core radius as a share of the sprite's half-size. */
+/**
+ * Each dot is a soft round core with a faint halo: the particle renderer's "bead" profile, whose
+ * solid core is this share of the dot's radius (keep the two in step).
+ */
 const CORE = 0.26;
-function makeSprite(rgb: string) {
-  const c = document.createElement("canvas");
-  c.width = c.height = SPRITE_PX;
-  const g = c.getContext("2d");
-  if (!g) return c;
-  const h = SPRITE_PX / 2;
-  const grad = g.createRadialGradient(h, h, 0, h, h, h);
-  grad.addColorStop(0, `rgba(${rgb}, 1)`);
-  grad.addColorStop(CORE * 0.82, `rgba(${rgb}, 1)`);
-  grad.addColorStop(CORE, `rgba(${rgb}, 0.32)`);
-  grad.addColorStop(0.55, `rgba(${rgb}, 0.07)`);
-  grad.addColorStop(1, `rgba(${rgb}, 0)`);
-  g.fillStyle = grad;
-  g.fillRect(0, 0, SPRITE_PX, SPRITE_PX);
-  return c;
-}
+/** Palette as numbers, for the particle renderer. */
+const PALETTE_RGB = PALETTE.map((tone) => rgbOf(TONE_RGB[tone]));
 
 function rebuild(model: DotModel, width: number, height: number): Geometry {
   const small = width < 560;
@@ -380,13 +368,19 @@ export function CustomerDots({ progress }: { progress: MotionValue<number> }) {
   const model = useMemo(() => buildModel(count), [count]);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const glRef = useRef<HTMLCanvasElement>(null);
+  const particles = useRef<Particles | null>(null);
+  // Created on mount so its WebGL setup can wait for an idle moment (see particles.ts).
+  useEffect(() => {
+    particles.current ??= createParticles(glRef.current);
+  }, []);
   const geo = useRef<Geometry | null>(null);
-  const sprites = useRef<HTMLCanvasElement[] | null>(null);
   const labelEls = useRef<(HTMLDivElement | null)[][]>(LENSES.map((l) => l.groups.map(() => null)));
   const pointer = useRef<Pointer>({ x: 0, y: 0, inside: false, influence: 0, focus: new Float32Array(4), anyFocus: 0 });
 
   const draw = (ctx: CanvasRenderingContext2D, { width, height, time, dt, resized }: CanvasFrame) => {
-    if (!sprites.current) sprites.current = PALETTE.map((tone) => makeSprite(TONE_RGB[tone]));
+    const pts = (particles.current ??= createParticles(glRef.current));
+    pts.begin(width, height, (canvasRef.current?.width ?? width) / width);
     let G = geo.current;
     if (!G || resized || G.model !== model || G.width !== width || G.height !== height) {
       G = rebuild(model, width, height);
@@ -496,25 +490,21 @@ export function CustomerDots({ progress }: { progress: MotionValue<number> }) {
     }
     ctx.setLineDash(NO_DASH);
 
-    // Dots, batched by colour; a dot changing group cross-fades between its two colours.
-    // Drawn so the solid core is about 2.3px across the radius on desktop.
+    // Dots; a dot changing group cross-fades between its two colours. Drawn so the solid core is
+    // about 2.3px across the radius on desktop.
     const half = (2.3 / CORE) * G.dotScale;
-    const sp = sprites.current;
-    for (let c = 0; c < sp.length; c++) {
-      const img = sp[c];
-      for (let i = 0; i < n; i++) {
-        const s = half * size[i];
-        if (G.cFrom[i] === c && G.aFrom[i] > 0.01) {
-          ctx.globalAlpha = G.aFrom[i];
-          ctx.drawImage(img, G.x[i] - s, G.y[i] - s, s * 2, s * 2);
-        }
-        if (G.cTo[i] === c && G.aTo[i] > 0.01) {
-          ctx.globalAlpha = G.aTo[i];
-          ctx.drawImage(img, G.x[i] - s, G.y[i] - s, s * 2, s * 2);
-        }
+    for (let i = 0; i < n; i++) {
+      const s = half * size[i] * 2;
+      if (G.aFrom[i] > 0.01) {
+        const [r, g, b] = PALETTE_RGB[G.cFrom[i]];
+        pts.add(G.x[i], G.y[i], s, s, SHAPE.bead, r, g, b, G.aFrom[i]);
+      }
+      if (G.aTo[i] > 0.01) {
+        const [r, g, b] = PALETTE_RGB[G.cTo[i]];
+        pts.add(G.x[i], G.y[i], s, s, SHAPE.bead, r, g, b, G.aTo[i]);
       }
     }
-    ctx.globalAlpha = 1;
+    pts.flush(ctx, "normal");
   };
 
   useCanvasLoop(canvasRef, draw, { maxDpr });
@@ -539,6 +529,8 @@ export function CustomerDots({ progress }: { progress: MotionValue<number> }) {
         onPointerMove={onPointerMove}
         onPointerLeave={onPointerLeave}
       />
+      {/* The dots (WebGL), over the rings drawn on the canvas above; lets the pointer through to it. */}
+      <canvas ref={glRef} aria-hidden className="pointer-events-none absolute inset-0 h-full w-full" />
       {LENSES.map((lens, L) => (
         <LensLabels
           key={lens.name}
@@ -576,7 +568,7 @@ function LensLabels({
   });
   const y = useTransform(opacity, (o) => (1 - o) * 8);
   return (
-    <motion.div aria-hidden className="pointer-events-none absolute inset-0" style={{ opacity, y }}>
+    <motion.div aria-hidden className="lp-layer pointer-events-none absolute inset-0" style={{ opacity, y }}>
       {lens.groups.map((group, g) => (
         <div
           key={group.label}

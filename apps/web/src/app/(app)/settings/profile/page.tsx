@@ -1,16 +1,15 @@
 "use client";
+import Link from "next/link";
 import { useState, type FormEvent } from "react";
-import { sendPasswordResetEmail } from "firebase/auth";
 import { useApp } from "@/components/AppContext";
 import { Alert } from "@/components/ui";
 import { actionError, api } from "@/lib/api";
-import { firebaseAuth } from "@/lib/firebase";
 
 export default function ProfilePage() {
   const { me, reloadMe } = useApp();
   const [name, setName] = useState(me.user.displayName ?? "");
   const [tz, setTz] = useState(me.user.timezone);
-  const [msg, setMsg] = useState<{ kind: "error" | "success" | "info"; text: string } | null>(null);
+  const [msg, setMsg] = useState<{ kind: "error" | "success"; text: string } | null>(null);
   // Browsers' list omits "UTC" (every account's default), so a select without it showed the first
   // zone in the list (Africa/Abidjan) as the user's time zone. Keep UTC and the saved zone in it.
   const known = typeof Intl.supportedValuesOf === "function" ? Intl.supportedValuesOf("timeZone") : [];
@@ -51,16 +50,13 @@ export default function ProfilePage() {
         <button className="btn-primary">Save</button>
       </form>
       <hr className="border-border" />
-      <button
-        className="btn-secondary"
-        onClick={() =>
-          sendPasswordResetEmail(firebaseAuth(), me.user.email)
-            .then(() => setMsg({ kind: "info", text: "We emailed you a link to set a new password." }))
-            .catch(() => setMsg({ kind: "error", text: "Couldn't send the email right now." }))
-        }
-      >
-        Change password
-      </button>
+      <p className="text-sm text-muted">
+        Password, email address and sign-in methods are under{" "}
+        <Link href="/settings/security" className="underline">
+          Security
+        </Link>
+        .
+      </p>
     </section>
   );
 }

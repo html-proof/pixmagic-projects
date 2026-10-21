@@ -2,11 +2,11 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "cloudflare",
+      "name": "local",
       "runtimeExecutable": "pnpm",
       "runtimeArgs": [
         "--filter",
-        "@app/cloudflare",
+        "@app/aws",
         "dev"
       ],
       "port": 8787
@@ -53,6 +53,42 @@
         "--no-mail"
       ],
       "port": 8789
+    },
+    {
+      "name": "staff-demo",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        ".claude/staff-demo-server.mjs"
+      ],
+      "port": 8795
+    },
+    {
+      "name": "staff-demo-nodocker",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        ".claude/staff-demo-server.mjs",
+        "--pg",
+        "5440",
+        "--auth",
+        "127.0.0.1:9199",
+        "--mail",
+        "http://localhost:8125"
+      ],
+      "port": 8795
+    },
+    {
+      "name": "email-demo-nodocker",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        ".claude/email-demo-server.mjs",
+        "--pg",
+        "5443",
+        "--auth",
+        "127.0.0.1:9299",
+        "--mail",
+        "http://localhost:8126"
+      ],
+      "port": 8797
     }
   ]
 }

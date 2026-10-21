@@ -5,13 +5,14 @@ import { fmtRelative } from "@/components/dashboard/format";
 import { LoadError } from "@/components/LoadError";
 import { Alert } from "@/components/ui";
 import { actionError, api, useApi } from "@/lib/api";
-import { ConfirmDialog, PageHeader, Skeleton, useAction, useToast, useWa, WhatsappIcon } from "@/components/whatsapp/Common";
+import { useWa, WhatsappIcon } from "@/components/whatsapp/WhatsappUi";
+import { ConfirmDialog, PageHeader, Skeleton, useAction, useToast } from "@/components/AppUi";
 import { EmbeddedSignup } from "@/components/whatsapp/EmbeddedSignup";
 import { connectionStatus, quality, tier, type Overview } from "@/components/whatsapp/types";
 
 // ---------------------------------------------------------------------------
-// The merchant's own Meta app, as three steps: paste the token, pick the number Insights found
-// with it, paste the app secret. Insights points the app's webhook at itself, so nothing has to
+// The merchant's own Meta app, as three steps: paste the token, pick the number bizinsights found
+// with it, paste the app secret. bizinsights points the app's webhook at itself, so nothing has to
 // be copied back into Meta.
 // ---------------------------------------------------------------------------
 
@@ -105,7 +106,7 @@ function ManualConnect({ onConnected, reconnect }: { onConnected: () => void; re
       toast(
         "success",
         r.webhook === "verified"
-          ? "WhatsApp is connected. Delivery updates and replies will reach Insights automatically."
+          ? "WhatsApp is connected. Delivery updates and replies will reach bizinsights automatically."
           : "WhatsApp is connected. One more thing: set up the webhook below.",
       );
       setToken("");
@@ -249,7 +250,7 @@ function ManualConnect({ onConnected, reconnect }: { onConnected: () => void; re
           <form onSubmit={(e) => void connect(e)} className="space-y-3">
             <p className="text-muted">
               <Ext href={secretLink}>{found?.appId ? "Open your app's settings" : "Open your Meta apps"}</Ext>, click <em>Show</em> next to <em>App secret</em>, and copy it. It lets
-              Insights check that updates really come from Meta.
+              bizinsights check that updates really come from Meta.
             </p>
             <div className="max-w-md">
               <label className="label" htmlFor="wa-secret">
@@ -344,7 +345,7 @@ export default function ConnectWhatsapp() {
         title="Connect WhatsApp"
         sub={
           <>
-            Insights sends messages through Meta&apos;s official WhatsApp Business Platform (Cloud API) from your own business number. Customers see your business
+            bizinsights sends messages through Meta&apos;s official WhatsApp Business Platform (Cloud API) from your own business number. Customers see your business
             name; replies go to your WhatsApp Business account.
           </>
         }
@@ -411,11 +412,11 @@ export default function ConnectWhatsapp() {
             Webhook {c.webhookVerifiedAt ? <Badge tone="good">Verified</Badge> : <Badge tone="warn">Not verified yet</Badge>}
           </h2>
           <p className="mt-1 text-sm text-muted">
-            Meta tells Insights when messages are delivered and read, and when a customer replies STOP. Without it, marketing campaigns stay locked, because opt-outs couldn&apos;t
+            Meta tells bizinsights when messages are delivered and read, and when a customer replies STOP. Without it, marketing campaigns stay locked, because opt-outs couldn&apos;t
             reach us.
           </p>
           {c.mode === "manual" && c.webhookVerifiedAt ? (
-            <p className="mt-2 text-sm text-muted">Set up: Meta sends updates for this number to Insights. Nothing to do.</p>
+            <p className="mt-2 text-sm text-muted">Set up: Meta sends updates for this number to bizinsights. Nothing to do.</p>
           ) : c.mode === "manual" ? (
             <div className="mt-3 space-y-2 text-sm">
               <p>In your Meta app: WhatsApp → Configuration → Webhook → Edit, enter these two values, then subscribe to the <strong>messages</strong>, <strong>message_template_status_update</strong> and <strong>user_preferences</strong> fields.</p>
@@ -423,10 +424,10 @@ export default function ConnectWhatsapp() {
               {c.verifyToken && <div><p className="text-xs text-muted">Verify token</p><Copy value={c.verifyToken} label="Verify token" /></div>}
             </div>
           ) : (
-            <p className="mt-2 text-sm text-muted">Numbers connected through Meta&apos;s sign-up use Insights&apos; own webhook; nothing to set up.</p>
+            <p className="mt-2 text-sm text-muted">Numbers connected through Meta&apos;s sign-up use bizinsights&apos; own webhook; nothing to set up.</p>
           )}
           <p className="mt-2 text-xs text-muted">
-            {c.webhookVerifiedAt ? `Meta reached Insights ${fmtRelative(c.webhookVerifiedAt)}.` : "Waiting for Meta's first call."}
+            {c.webhookVerifiedAt ? `Meta reached bizinsights ${fmtRelative(c.webhookVerifiedAt)}.` : "Waiting for Meta's first call."}
             {c.lastWebhookAt ? ` Last delivery ${fmtRelative(c.lastWebhookAt)}.` : ""}
           </p>
         </section>
@@ -454,7 +455,7 @@ export default function ConnectWhatsapp() {
             </>
           ) : (
             <div className="mt-4">
-              {/* The one-click button, shown but off until Insights' Meta app is configured (docs/whatsapp.md). */}
+              {/* The one-click button, shown but off until bizinsights' Meta app is configured (docs/whatsapp.md). */}
               {!c && (
                 <div className="mb-6 flex flex-wrap items-center gap-3 rounded-lg border border-dashed border-border px-3 py-3">
                   <button
@@ -481,7 +482,7 @@ export default function ConnectWhatsapp() {
       {c && manage && (
         <section className="card border-danger/40" aria-labelledby="dis-h">
           <h2 id="dis-h" className="font-semibold">Disconnect</h2>
-          <p className="mt-1 text-sm text-muted">Insights deletes its access to the number and stops sending. Messages waiting to go out are cancelled; your message history stays.</p>
+          <p className="mt-1 text-sm text-muted">bizinsights deletes its access to the number and stops sending. Messages waiting to go out are cancelled; your message history stays.</p>
           <button type="button" className="btn-danger mt-3" onClick={() => setConfirmDisconnect(true)}>Disconnect WhatsApp</button>
           <ConfirmDialog
             open={confirmDisconnect}

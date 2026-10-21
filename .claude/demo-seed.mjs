@@ -14,7 +14,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const BASE = "http://localhost:8789";
 const SHOP = "demo-boutique.myshopify.com";
 const email = process.argv[2] ?? "demo.merchant@example.com";
-const secret = /^SHOPIFY_API_SECRET=(.*)$/m.exec(readFileSync(resolve(root, "apps/web/e2e/worker.env"), "utf8"))[1].trim();
+const secret = /^SHOPIFY_API_SECRET=(.*)$/m.exec(readFileSync(resolve(root, "apps/web/e2e/server.env"), "utf8"))[1].trim();
 
 const sql = (q) =>
   execFileSync("docker", ["exec", "-i", "saas-project20-postgres-1", "psql", "-U", "app", "-d", "app_demo", "-tA", "-v", "ON_ERROR_STOP=1"], { input: q }).toString().trim();

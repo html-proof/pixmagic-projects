@@ -87,7 +87,7 @@ interface Registry {
    * main one may not be installed on it, so the fallback hands the merchant a Shopify install
    * link their store is refused: the dead-end "This installation link can't be used" page,
    * which Shopify never calls back from, so nothing on our side records the failure either.
-   * It has happened: `SHOPIFY_EXTRA_APPS` was edited into wrangler.jsonc but never deployed,
+   * It has happened: `SHOPIFY_EXTRA_APPS` was edited into the app's settings but never deployed,
    * so the client's store was offered the unapproved main app and the only trace was one log
    * line nobody was looking for. Fail closed instead - `appForShop` returns null for these
    * stores, so the merchant gets our own `app_unavailable` message, which names the problem.
@@ -149,8 +149,19 @@ export function shopifyApp(key: string | null | undefined): ShopifyApp {
 export const servesAnyShop = (app: ShopifyApp): boolean => app.shops.length === 0;
 
 /**
- * The app to install on `shop`: the one distributed to that store, else the main app when it
- * may be installed anywhere. Null when no app of ours can be installed there — the merchant
+ * The app stores without one of their own install (SHOPIFY_INSTALL_APP): the App Store app once
+ * Shopify approves it, the main app until then. Only an app that may go on any store qualifies;
+ * otherwise, or for a key no app has, the main app.
+ */
+export function installTarget(): ShopifyApp {
+  const apps = shopifyApps();
+  const chosen = apps.find((a) => a.key === env().SHOPIFY_INSTALL_APP);
+  return chosen && servesAnyShop(chosen) ? chosen : apps[0]!;
+}
+
+/**
+ * The app to install on `shop`: the one distributed to that store, else the install target
+ * (`installTarget`) when it may be installed anywhere. Null when no app of ours can be installed there — the merchant
  * needs their own app (docs/shopify-setup.md "A client's store with its own app").
  */
 export function appForShop(shop: string): ShopifyApp | null {
@@ -159,8 +170,81 @@ export function appForShop(shop: string): ShopifyApp | null {
   if (own) return own;
   // A store whose own app is misconfigured must not fall through to the main app: see `blocked`.
   if (blocked.has(shop)) return null;
-  const main = apps[0]!;
+  const main = installTarget();
   return servesAnyShop(main) ? main : null;
+}
+
+/**
+ * The App Store app's key (shopify-app/shopify.app.appstore.toml): the app of ours submitted to the
+ * Shopify App Store, which App Store workspaces connect new stores through (`connectApp`).
+ */
+export const APP_STORE_APP = "appstore";
+
+/**
+ * Every key whose stores came from an App Store listing: the App Store app, and "public"
+ * (shopify.app.public.toml, 658431ae), the first App Store app, replaced 2026-10-18 when its
+ * submission was started over with a new app. Stores connected through "public" stay on it (their
+ * tokens, webhooks and reconnects use its credentials), and their workspaces keep looking the way
+ * the listing describes.
+ */
+export const APP_STORE_APPS: readonly string[] = [APP_STORE_APP, "public"];
+
+/** A store as far as choosing its app goes. */
+export interface StoreApp {
+  shopDomain: string;
+  shopifyAppKey: string;
+}
+
+/**
+ * Whether a workspace is shown as a merchant who installed from the App Store sees bizinsights: only
+ * what the listing describes (apps/web/src/lib/features.ts, APP_STORE_MODULES), with in-app connects
+ * going through the App Store app (`connectApp`). True when it holds a store and every one of them
+ * came through an App Store app (`APP_STORE_APPS`) or is one of SHOPIFY_APP_STORE_PREVIEW_SHOPS.
+ * `stores` includes disconnected and uninstalled ones, which keep their app. A workspace with a
+ * store from any other of our apps keeps everything it had.
+ */
+export function appStoreWorkspace(stores: readonly StoreApp[]): boolean {
+  if (!stores.length) return false;
+  const preview = new Set(
+    env()
+      .SHOPIFY_APP_STORE_PREVIEW_SHOPS.split(",")
+      .map((s) => normalizeShopDomain(s.trim()))
+      .filter(Boolean),
+  );
+  return stores.every((s) => APP_STORE_APPS.includes(s.shopifyAppKey) || preview.has(s.shopDomain));
+}
+
+/**
+ * The app an in-app connect goes through, for `shop` (null: Shopify's store picker chooses the store)
+ * in a workspace holding `stores`. `existing` is the shop's store, wherever it is, when it has one.
+ *
+ * - A store with an app of its own gets that one, and none while that app is misconfigured
+ *   (`appForShop`).
+ * - A store connected before keeps the app it came through, when that app may go on any store: a
+ *   reconnect never moves a merchant to an app their store may refuse.
+ * - An App Store workspace adds stores through the App Store app (`APP_STORE_APP`, also for a
+ *   workspace whose stores came through the earlier "public"), so a merchant who installed from
+ *   the listing is never sent to an app Shopify hasn't approved for their store.
+ * - Everyone else: the install target.
+ *
+ * Null when no app of ours may be installed there (by name), or picked on Shopify (no name).
+ */
+export function connectApp(shop: string | null, stores: readonly StoreApp[], existing?: StoreApp | null): ShopifyApp | null {
+  const { apps, blocked } = registry();
+  if (shop) {
+    const own = apps.find((a) => a.shops.includes(shop));
+    if (own) return own;
+    if (blocked.has(shop)) return null;
+    const kept = existing ? apps.find((a) => a.key === existing.shopifyAppKey) : undefined;
+    if (kept && servesAnyShop(kept)) return kept;
+  }
+  // The App Store app, or while it is misconfigured (its secret missing) the first one: both are in
+  // the organization whose development stores an App Store workspace's merchant can install on.
+  const listed = appStoreWorkspace(stores)
+    ? APP_STORE_APPS.map((k) => apps.find((a) => a.key === k)).find((a) => a && servesAnyShop(a))
+    : undefined;
+  const target = listed ?? installTarget();
+  return servesAnyShop(target) ? target : null;
 }
 
 /** For tests. */

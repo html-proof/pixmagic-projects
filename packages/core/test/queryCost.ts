@@ -1,12 +1,13 @@
 /**
  * Test-only estimator of Shopify's *requested* query cost, derived from the query text
- * so the arithmetic in src/normalize.ts can't silently drift from the queries:
+ * so the arithmetic in src/shopifyQueries.ts can't silently drift from the queries:
  *   - scalar / enum (field without a selection set) = 0
  *   - object = 1 + its selections
  *   - connection (a `first` argument and a `nodes` selection) = 2 + other selections
  *     (pageInfo counts 1) + first × (1 + node selections)
  *   - list with a `first` argument (no `nodes`) = first × (1 + element selections)
- * Handles the subset of GraphQL our read queries use (no fragments, no aliases).
+ *   - an inline fragment (`... on Type { … }`) = its selections, counted as the parent's own
+ * Handles the subset of GraphQL our read queries use (inline fragments only, no aliases).
  */
 interface Field {
   name: string;
@@ -16,7 +17,7 @@ interface Field {
 
 function tokenize(src: string): string[] {
   const tokens: string[] = [];
-  const re = /\s+|,|#[^\n]*|"(?:[^"\\]|\\.)*"|\$?[_A-Za-z][_0-9A-Za-z]*|-?\d+(?:\.\d+)?|[{}():!\[\]=@]/y;
+  const re = /\s+|,|#[^\n]*|"(?:[^"\\]|\\.)*"|\.\.\.|\$?[_A-Za-z][_0-9A-Za-z]*|-?\d+(?:\.\d+)?|[{}():![\]=@]/y;
   let pos = 0;
   while (pos < src.length) {
     re.lastIndex = pos;
@@ -69,6 +70,13 @@ function parse(query: string): Field[] {
     take("{");
     const fields: Field[] = [];
     while (peek() !== "}") {
+      if (peek() === "...") {
+        take("...");
+        take("on");
+        take();
+        fields.push(...selectionSet());
+        continue;
+      }
       const name = take();
       const a = args();
       fields.push({ name, args: a, selection: peek() === "{" ? selectionSet() : null });

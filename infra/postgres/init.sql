@@ -18,9 +18,24 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO app_rls;
 DO $$
 DECLARE t text;
 BEGIN
-  FOREACH t IN ARRAY ARRAY['email_otps', 'pixel_events_seen', '_prisma_migrations'] LOOP
+  FOREACH t IN ARRAY ARRAY['email_otps', 'pixel_events_seen', 'auth_identities', 'auth_events', '_prisma_migrations'] LOOP
     IF to_regclass(format('public.%I', t)) IS NOT NULL THEN
       EXECUTE format('REVOKE ALL ON %I FROM app_rls', t);
     END IF;
   END LOOP;
+  -- Read-only or append-only for tenant requests (also in migration 20261016100000_security_hardening,
+  -- repeated here because the blanket GRANT above would otherwise hand the rights back).
+  IF to_regclass('public.audit_logs') IS NOT NULL THEN
+    REVOKE UPDATE, DELETE, TRUNCATE ON audit_logs FROM app_rls;
+  END IF;
+  IF to_regclass('public.users') IS NOT NULL THEN
+    REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON users FROM app_rls;
+  END IF;
+  -- The stock history and the adjustments made in bizinsights (migration 20261019120000_inventory_module).
+  IF to_regclass('public.inventory_adjustments') IS NOT NULL THEN
+    REVOKE UPDATE, DELETE, TRUNCATE ON inventory_adjustments FROM app_rls;
+  END IF;
+  IF to_regclass('public.inventory_movements') IS NOT NULL THEN
+    REVOKE UPDATE, DELETE, TRUNCATE ON inventory_movements FROM app_rls;
+  END IF;
 END $$;

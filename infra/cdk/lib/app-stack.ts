@@ -1,0 +1,457 @@
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { CfnOutput, Duration, RemovalPolicy, SecretValue, Stack, type StackProps } from "aws-cdk-lib";
+import * as budgets from "aws-cdk-lib/aws-budgets";
+import * as acm from "aws-cdk-lib/aws-certificatemanager";
+import * as cloudfront from "aws-cdk-lib/aws-cloudfront";
+import * as origins from "aws-cdk-lib/aws-cloudfront-origins";
+import * as cloudwatch from "aws-cdk-lib/aws-cloudwatch";
+import * as cwActions from "aws-cdk-lib/aws-cloudwatch-actions";
+import * as ec2 from "aws-cdk-lib/aws-ec2";
+import * as iam from "aws-cdk-lib/aws-iam";
+import * as lambda from "aws-cdk-lib/aws-lambda";
+import * as destinations from "aws-cdk-lib/aws-lambda-destinations";
+import { SqsEventSource } from "aws-cdk-lib/aws-lambda-event-sources";
+import * as logs from "aws-cdk-lib/aws-logs";
+import * as rds from "aws-cdk-lib/aws-rds";
+import * as s3 from "aws-cdk-lib/aws-s3";
+import * as s3deploy from "aws-cdk-lib/aws-s3-deployment";
+import * as scheduler from "aws-cdk-lib/aws-scheduler";
+import * as sns from "aws-cdk-lib/aws-sns";
+import * as subs from "aws-cdk-lib/aws-sns-subscriptions";
+import * as sqs from "aws-cdk-lib/aws-sqs";
+import type { Construct } from "constructs";
+import { appVars, FUNCTION_DIR, REPO_ROOT, type EnvConfig } from "./config.js";
+
+/** Per RDS class: its connection limit (approximate) and the free memory that means "too small". */
+const DB_SIZES: Record<string, { connections: number; lowMemoryMb: number }> = {
+  "t4g.micro": { connections: 80, lowMemoryMb: 100 },
+  "t4g.small": { connections: 200, lowMemoryMb: 150 },
+  "t4g.medium": { connections: 400, lowMemoryMb: 300 },
+};
+import type { DataStack } from "./data-stack.js";
+import { loggedBucket } from "./s3-access-logs.js";
+import { viewerRequestCode } from "./viewer-request.js";
+
+type QueueName = "sync" | "webhooks" | "aggregate" | "email";
+
+/**
+ * The application: queues, the three functions (one package), CloudFront, schedules, alarms,
+ * the dashboard and the budget. Redeployed on every release.
+ *
+ * Traffic: viewer → CloudFront (+ WAF) → the `api` function URL, which serves the pages and the API
+ * on one origin (first-party session cookie, the same routing as the local server). Next's hashed build
+ * files, `/_next/static/*`, come from an S3 bucket instead and are cached at the edge for a year.
+ * CloudFront adds a secret header the function checks, so the function URL can't be used to go
+ * around WAF, and a viewer-request function passes on the viewer's real address and host. With a
+ * domain of its own (config.ts `domain`), CloudFront answers on it with the ACM certificate and the
+ * viewer-request function sends page requests on its other names there.
+ */
+export class AppStack extends Stack {
+  readonly distribution: cloudfront.Distribution;
+  /** The app's origin (APP_URL): https://<domain>, or https://<distribution>.cloudfront.net. */
+  readonly appUrl: string;
+  readonly apiRole: iam.IRole;
+  readonly runtimeParam: string;
+
+  constructor(scope: Construct, id: string, cfg: EnvConfig, data: DataStack, webAclArn: string, props: StackProps) {
+    super(scope, id, props);
+    const prefix = `insights-${cfg.name}`;
+    this.runtimeParam = `/insights/${cfg.name}/runtime`;
+
+    if (!existsSync(FUNCTION_DIR)) throw new Error(`No Lambda package at ${FUNCTION_DIR}: run \`pnpm --filter @app/aws build\` first`);
+    // The commit the package was built from and when (apps/aws/scripts/build.mjs writes build.json);
+    // git's HEAD for a package without one. GET /api/version shows both.
+    const build = (() => {
+      try {
+        return JSON.parse(readFileSync(join(FUNCTION_DIR, "build.json"), "utf8")) as { commit: string; builtAt: string };
+      } catch {
+        return undefined;
+      }
+    })();
+    const commit =
+      build?.commit ??
+      (() => {
+        try {
+          return execFileSync("git", ["rev-parse", "HEAD"], { cwd: REPO_ROOT, encoding: "utf8" }).trim();
+        } catch {
+          return "unknown";
+        }
+      })();
+    const shortCommit = commit.replace(/^([0-9a-f]{7})[0-9a-f]+/, "$1");
+
+    // --- Queues (sync, webhooks, aggregate, email + a dead-letter queue).
+    // Visibility timeout covers the jobs function's 15 minutes. consume() settles every message
+    // within MAX_ATTEMPTS (6); maxReceiveCount 10 only catches what it never settles (crashes).
+    const dlq = new sqs.Queue(this, "Dlq", { queueName: `${prefix}-dlq`, retentionPeriod: Duration.days(14), encryption: sqs.QueueEncryption.SQS_MANAGED, enforceSSL: true });
+    const queue = (name: QueueName) =>
+      new sqs.Queue(this, `Queue-${name}`, {
+        queueName: `${prefix}-${name}`,
+        visibilityTimeout: Duration.seconds(960),
+        retentionPeriod: Duration.days(4),
+        encryption: sqs.QueueEncryption.SQS_MANAGED,
+        enforceSSL: true,
+        deadLetterQueue: { queue: dlq, maxReceiveCount: 10 },
+      });
+    const queues: Record<QueueName, sqs.Queue> = { sync: queue("sync"), webhooks: queue("webhooks"), aggregate: queue("aggregate"), email: queue("email") };
+
+    // --- Functions.
+    const code = lambda.Code.fromAsset(FUNCTION_DIR);
+    const environment: Record<string, string> = {
+      ...appVars(),
+      NODE_ENV: "production",
+      LOG_LEVEL: "info",
+      APP_COMMIT: commit,
+      ...(build ? { APP_BUILT_AT: build.builtAt } : {}),
+      APP_ENVIRONMENT: cfg.name,
+      // Database TLS is verified against Amazon's RDS CA (bundled with the package).
+      NODE_EXTRA_CA_CERTS: "/var/task/rds-ca.pem",
+      APP_SECRET_ARN: data.appSecret.secretArn,
+      RUNTIME_PARAM: this.runtimeParam,
+      DB_SECRET_ARN: data.dbSecret.secretArn,
+      DB_HOST: data.db.dbInstanceEndpointAddress,
+      DB_PORT: data.db.dbInstanceEndpointPort,
+      DB_NAME: "app",
+      COORD_TABLE: data.coordTable.tableName,
+      PAYLOADS_BUCKET: data.payloads.bucketName,
+      QUEUE_URLS: Stack.of(this).toJsonString(Object.fromEntries(Object.entries(queues).map(([k, q]) => [k, q.queueUrl]))),
+      SES_REGION: cfg.region,
+      // A domain is known before the deploy, so the functions get it with the release (no window in
+      // which a fresh instance reads the previous address from the runtime parameter). Without one,
+      // the address is CloudFront's, which the runtime parameter carries.
+      ...(cfg.domain ? { APP_URL: `https://${cfg.domain.name}`, API_URL: `https://${cfg.domain.name}/api` } : {}),
+    };
+    // Lambda caps a function's environment at 4 KB; leave room for what AWS adds.
+    const envBytes = Object.entries(environment).reduce((n, [k, v]) => n + k.length + (v.startsWith("${Token") ? 200 : v.length), 0);
+    if (envBytes > 3600) throw new Error(`The functions' environment is ~${envBytes} bytes; Lambda allows 4 KB`);
+    // Only the API signs people in: the Cognito app client secret is read by that function alone.
+    const cognitoSecret = `insights/${cfg.name}/worker-cognito`;
+    // The owner's daily cost email (config.ts costReport) goes where the budget's emails go, from cron alone.
+    const costReportTo = cfg.costReport ? cfg.budgetEmail || cfg.alertEmail : "";
+    const fn = (name: "api" | "jobs" | "cron", memory: number, timeout: Duration, description: string) => {
+      const logGroup = new logs.LogGroup(this, `Logs-${name}`, { logGroupName: `/aws/lambda/${prefix}-${name}`, retention: cfg.logRetentionDays as logs.RetentionDays, removalPolicy: RemovalPolicy.RETAIN });
+      const f = new lambda.Function(this, `Fn-${name}`, {
+        functionName: `${prefix}-${name}`,
+        description: `${description} (${shortCommit})`,
+        runtime: lambda.Runtime.NODEJS_24_X,
+        architecture: lambda.Architecture.ARM_64,
+        handler: "index.handler",
+        code,
+        memorySize: memory,
+        timeout,
+        environment: {
+          ...environment,
+          ...(name === "api" ? { COGNITO_WORKER_SECRET_ARN: cognitoSecret } : {}),
+          ...(name === "cron" && costReportTo ? { COST_REPORT_TO: costReportTo } : {}),
+        },
+        vpc: data.vpc,
+        vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
+        securityGroups: [data.appSg],
+        logGroup,
+        tracing: lambda.Tracing.ACTIVE,
+        // Each release publishes a version; keeping the old ones is what scripts/rollback.mjs moves
+        // the `live` alias back to (CloudFormation would otherwise delete them on the next deploy).
+        currentVersionOptions: { removalPolicy: RemovalPolicy.RETAIN },
+      });
+      data.appSecret.grantRead(f);
+      data.dbSecret.grantRead(f);
+      data.coordTable.grantReadWriteData(f);
+      data.payloads.grantReadWrite(f);
+      for (const q of Object.values(queues)) q.grantSendMessages(f);
+      if (name === "api") {
+        f.addToRolePolicy(new iam.PolicyStatement({ actions: ["secretsmanager:GetSecretValue"], resources: [`arn:aws:secretsmanager:${cfg.region}:${cfg.account}:secret:${cognitoSecret}-*`] }));
+      }
+      f.addToRolePolicy(new iam.PolicyStatement({ actions: ["ssm:GetParameter"], resources: [`arn:aws:ssm:${cfg.region}:${cfg.account}:parameter${this.runtimeParam}`] }));
+      f.addToRolePolicy(new iam.PolicyStatement({ actions: ["ses:SendEmail", "ses:SendRawEmail"], resources: [`arn:aws:ses:${cfg.region}:${cfg.account}:identity/*`, `arn:aws:ses:${cfg.region}:${cfg.account}:configuration-set/*`] }));
+      // Releases move the `live` alias; rolling back moves it to the previous version (scripts/rollback.mjs).
+      const alias = new lambda.Alias(this, `Live-${name}`, { aliasName: "live", version: f.currentVersion });
+      return { fn: f, alias };
+    };
+    const api = fn("api", 1024, Duration.seconds(55), "Insights web UI + API");
+    const jobs = fn("jobs", 1024, Duration.seconds(900), "Insights background jobs (SQS)");
+    const cron = fn("cron", 1024, Duration.seconds(900), "Insights scheduled sweeps + maintenance actions");
+    this.apiRole = api.fn.role!;
+    // The cost email's one Cost Explorer call a day (it has no resource-level permissions).
+    if (costReportTo) cron.fn.addToRolePolicy(new iam.PolicyStatement({ actions: ["ce:GetCostAndUsage"], resources: ["*"] }));
+
+    // The jobs function's queues. Concurrency per queue at least 2 (SQS's minimum) and small
+    // (sized when the account's Lambda concurrency was 10; it is 1,000 now, so these can rise
+    // with the database's connection limit: each running job holds a connection).
+    const sources: Array<[QueueName, number, number, number]> = [
+      ["sync", 1, 0, 2],
+      ["webhooks", 10, 2, 2],
+      ["aggregate", 5, 1, 2],
+      ["email", 10, 2, 2],
+    ];
+    for (const [name, batchSize, windowS, maxConcurrency] of sources) {
+      jobs.alias.addEventSource(
+        new SqsEventSource(queues[name], {
+          batchSize,
+          maxBatchingWindow: windowS ? Duration.seconds(windowS) : undefined,
+          maxConcurrency,
+          reportBatchItemFailures: true,
+        }),
+      );
+      queues[name].grant(jobs.fn, "sqs:ChangeMessageVisibility");
+    }
+
+    // --- Public entry: function URL behind CloudFront.
+    const url = api.alias.addFunctionUrl({ authType: lambda.FunctionUrlAuthType.NONE, invokeMode: lambda.InvokeMode.BUFFERED });
+    const originVerify = SecretValue.secretsManager(data.appSecret.secretArn, { jsonField: "ORIGIN_VERIFY" }).unsafeUnwrap();
+    const origin = new origins.FunctionUrlOrigin(url, {
+      customHeaders: { "x-origin-verify": originVerify },
+      readTimeout: Duration.seconds(60),
+      keepaliveTimeout: Duration.seconds(60),
+      connectionAttempts: 3,
+    });
+
+    // --- Next's hashed build files from S3, not the function. A first page load asks for dozens
+    // of chunks at once; through the function each one took a Lambda slot, and past the account's
+    // concurrency Lambda answered 429 with a JSON body, which the browser refused to run as a script.
+    // Files of earlier builds stay (prune: false), so a page opened before a release, or served
+    // again after a rollback of the `live` alias, still finds its chunks. Versioned (Trusted Advisor
+    // "S3 Bucket Versioning"): a file deleted or overwritten by mistake comes back from its earlier
+    // version for 30 days (a deploy re-uploading the same file leaves one too).
+    const buildFiles = join(FUNCTION_DIR, "public/_next/static");
+    if (!existsSync(buildFiles)) throw new Error(`No UI build files at ${buildFiles}: build the package without --skip-web`);
+    const site = new s3.Bucket(this, "Site", {
+      // Logs its requests to the Data stack's log bucket (s3-access-logs.ts).
+      ...loggedBucket(`${prefix}-site-${cfg.account}`, s3.Bucket.fromBucketName(this, "AccessLogs", data.accessLogs.bucketName)),
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      enforceSSL: true,
+      objectOwnership: s3.ObjectOwnership.BUCKET_OWNER_ENFORCED,
+      versioned: true,
+      lifecycleRules: [{ noncurrentVersionExpiration: Duration.days(30), expiredObjectDeleteMarker: true, abortIncompleteMultipartUploadAfter: Duration.days(1) }],
+      removalPolicy: RemovalPolicy.RETAIN,
+    });
+    const upload = (id: string, files: Pick<s3deploy.BucketDeploymentProps, "include" | "exclude" | "contentType">) =>
+      new s3deploy.BucketDeployment(this, id, {
+        sources: [s3deploy.Source.asset(buildFiles)],
+        destinationBucket: site,
+        destinationKeyPrefix: "_next/static/",
+        prune: false,
+        cacheControl: [s3deploy.CacheControl.fromString("public, max-age=31536000, immutable")],
+        memoryLimit: 512,
+        ...files,
+      });
+    // The upload's CLI types files by name and doesn't know .woff2 (binary/octet-stream otherwise).
+    const siteFiles = [upload("SiteFiles", { exclude: ["*.woff2"] }), upload("SiteFonts", { exclude: ["*"], include: ["*.woff2"], contentType: "font/woff2" })];
+    // LIST as well as READ: a missing file is then a 404, not S3's 403.
+    const siteOrigin = origins.S3BucketOrigin.withOriginAccessControl(site, { originAccessLevels: [cloudfront.AccessLevel.READ, cloudfront.AccessLevel.LIST] });
+
+    const viewer = new cloudfront.Function(this, "ViewerRequest", {
+      functionName: `${prefix}-viewer-request`,
+      comment: cfg.domain
+        ? `Pass the viewer's address and host to the origin; page requests on other names go to ${cfg.domain.name}`
+        : "Pass the viewer's address and host to the origin (overwriting anything the client sent)",
+      runtime: cloudfront.FunctionRuntime.JS_2_0,
+      code: cloudfront.FunctionCode.fromInline(viewerRequestCode(cfg.domain?.name)),
+    });
+    const securityHeaders = new cloudfront.ResponseHeadersPolicy(this, "SecurityHeaders", {
+      responseHeadersPolicyName: `${prefix}-security`,
+      comment: "Defaults for responses that don't set their own (the app sets most of these itself)",
+      securityHeadersBehavior: {
+        strictTransportSecurity: { accessControlMaxAge: Duration.days(365), includeSubdomains: true, override: false },
+        contentTypeOptions: { override: false },
+        frameOptions: { frameOption: cloudfront.HeadersFrameOption.DENY, override: false },
+        referrerPolicy: { referrerPolicy: cloudfront.HeadersReferrerPolicy.STRICT_ORIGIN_WHEN_CROSS_ORIGIN, override: false },
+      },
+      removeHeaders: ["x-powered-by"],
+    });
+    this.distribution = new cloudfront.Distribution(this, "Cdn", {
+      comment: `Insights ${cfg.name}`,
+      defaultBehavior: {
+        origin,
+        viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+        cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+        originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+        responseHeadersPolicy: securityHeaders,
+        functionAssociations: [{ function: viewer, eventType: cloudfront.FunctionEventType.VIEWER_REQUEST }],
+      },
+      additionalBehaviors: {
+        "/_next/static/*": {
+          origin: siteOrigin,
+          viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+          allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD,
+          cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
+          responseHeadersPolicy: securityHeaders,
+          compress: true,
+        },
+      },
+      ...(cfg.domain
+        ? {
+            domainNames: [cfg.domain.name, ...cfg.domain.redirects],
+            certificate: acm.Certificate.fromCertificateArn(this, "Certificate", cfg.domain.certificateArn),
+            minimumProtocolVersion: cloudfront.SecurityPolicyProtocol.TLS_V1_2_2021,
+          }
+        : {}),
+      priceClass: cloudfront.PriceClass.PRICE_CLASS_ALL,
+      httpVersion: cloudfront.HttpVersion.HTTP2_AND_3,
+      webAclId: webAclArn,
+    });
+    // A release's chunks are in the bucket before CloudFront reads from it, and before the API
+    // serves pages that name them.
+    this.distribution.node.addDependency(...siteFiles);
+    api.alias.node.addDependency(...siteFiles);
+    this.appUrl = cfg.domain ? `https://${cfg.domain.name}` : `https://${this.distribution.distributionDomainName}`;
+
+    // --- Schedules (Cron Triggers "*/15 * * * *" and "15 3 * * *", UTC). Off until cutover (config.ts).
+    // A tick that never ran lands in a queue instead of vanishing: one Scheduler couldn't hand to
+    // Lambda (retried for 10 minutes), or one Lambda gave up on (failed three times, or couldn't
+    // start before the next tick was due). The sweeps take over on the next tick either way.
+    const missedTicks = new sqs.Queue(this, "MissedTicks", { queueName: `${prefix}-cron-missed`, retentionPeriod: Duration.days(14), encryption: sqs.QueueEncryption.SQS_MANAGED, enforceSSL: true });
+    cron.alias.configureAsyncInvoke({ onFailure: new destinations.SqsDestination(missedTicks), retryAttempts: 2, maxEventAge: Duration.minutes(15) });
+    const schedulerRole = new iam.Role(this, "SchedulerRole", { roleName: `${prefix}-scheduler`, assumedBy: new iam.ServicePrincipal("scheduler.amazonaws.com") });
+    cron.alias.grantInvoke(schedulerRole);
+    missedTicks.grantSendMessages(schedulerRole);
+    // Scheduler retries only a hand-over Lambda refused (throttled, unavailable), never a run that
+    // failed, so a retry can't run a tick twice.
+    const target = (input: Record<string, string>): scheduler.CfnSchedule.TargetProperty => ({
+      arn: cron.alias.functionArn,
+      roleArn: schedulerRole.roleArn,
+      input: JSON.stringify(input),
+      retryPolicy: { maximumRetryAttempts: 5, maximumEventAgeInSeconds: 600 },
+      deadLetterConfig: { arn: missedTicks.queueArn },
+    });
+    const schedule = (id: string, expression: string, workerCron: string) =>
+      new scheduler.CfnSchedule(this, id, {
+        name: `${prefix}-${id.toLowerCase()}`,
+        description: `Insights cron "${workerCron}" (apps/worker CRON)`,
+        scheduleExpression: expression,
+        scheduleExpressionTimezone: "UTC",
+        flexibleTimeWindow: { mode: "OFF" },
+        state: cfg.schedulesEnabled ? "ENABLED" : "DISABLED",
+        target: target({ cron: workerCron }),
+      });
+    schedule("Every15Min", "cron(0/15 * * * ? *)", "*/15 * * * *");
+    schedule("Nightly", "cron(15 3 * * ? *)", "15 3 * * *");
+    // The owner's daily AWS cost email (apps/aws costReport.ts): 07:00 in Victoria, ~20 hours after
+    // the UTC day it reports ended, so Cost Explorer has it. On whatever `schedules` says: it reads
+    // the bill and touches no store.
+    if (costReportTo) {
+      new scheduler.CfnSchedule(this, "CostReport", {
+        name: `${prefix}-costreport`,
+        description: "The owner's daily AWS cost email (apps/aws costReport.ts)",
+        scheduleExpression: "cron(0 7 * * ? *)",
+        scheduleExpressionTimezone: "Australia/Melbourne",
+        flexibleTimeWindow: { mode: "OFF" },
+        state: "ENABLED",
+        target: target({ action: "cost-report" }),
+      });
+    }
+
+    // --- Alarms → SNS → email.
+    const topic = new sns.Topic(this, "Alarms", { topicName: `${prefix}-alarms`, displayName: `Insights ${cfg.name} alarms` });
+    if (cfg.alertEmail) topic.addSubscription(new subs.EmailSubscription(cfg.alertEmail));
+    const alarm = (id: string, metric: cloudwatch.IMetric, threshold: number, description: string, periods = 1, op = cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD) => {
+      const a = new cloudwatch.Alarm(this, id, {
+        alarmName: `${prefix}-${id}`,
+        alarmDescription: description,
+        metric,
+        threshold,
+        evaluationPeriods: periods,
+        comparisonOperator: op,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      });
+      a.addAlarmAction(new cwActions.SnsAction(topic));
+      a.addOkAction(new cwActions.SnsAction(topic));
+      return a;
+    };
+    const five = Duration.minutes(5);
+    alarm("api-errors", api.fn.metricErrors({ period: five }), 5, "API function errors (uncaught exceptions, timeouts)");
+    alarm("api-throttles", api.fn.metricThrottles({ period: five }), 1, "API requests throttled: the account's Lambda concurrency is exhausted");
+    alarm("api-p95-latency", api.fn.metricDuration({ period: five, statistic: "p95" }), 10_000, "API p95 duration above 10 s", 3);
+    alarm("jobs-errors", jobs.fn.metricErrors({ period: five }), 5, "Background job function errors");
+    alarm("cron-errors", cron.fn.metricErrors({ period: Duration.minutes(15) }), 2, "Scheduled sweeps failing", 2);
+    alarm("dlq-not-empty", dlq.metricApproximateNumberOfMessagesVisible({ period: five, statistic: "Maximum" }), 1, "Jobs parked in the dead-letter queue: inspect, then redrive");
+    for (const [name, q] of Object.entries(queues)) {
+      alarm(`queue-${name}-age`, q.metricApproximateAgeOfOldestMessage({ period: five, statistic: "Maximum" }), 1800, `Oldest ${name} job waiting over 30 minutes`, 2);
+    }
+    const dbMetric = (metricName: string, statistic = "Average") =>
+      new cloudwatch.Metric({ namespace: "AWS/RDS", metricName, dimensionsMap: { DBInstanceIdentifier: data.db.instanceIdentifier }, period: five, statistic });
+    alarm("db-cpu", dbMetric("CPUUtilization"), 80, "Database CPU above 80% for 15 minutes", 3);
+    alarm("db-free-storage", dbMetric("FreeStorageSpace", "Minimum"), 2 * 1024 ** 3, "Database free storage below 2 GB (storage autoscaling should add more)", 1, cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD);
+    // PostgreSQL's default max_connections is about the instance's memory / 9.5 MB.
+    const dbSize = DB_SIZES[cfg.dbInstanceType] ?? DB_SIZES["t4g.small"]!;
+    alarm("db-free-memory", dbMetric("FreeableMemory", "Minimum"), dbSize.lowMemoryMb * 1024 ** 2, `Database freeable memory below ${dbSize.lowMemoryMb} MB: time for a bigger dbInstanceType`, 3, cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD);
+    alarm("db-connections", dbMetric("DatabaseConnections", "Maximum"), Math.round(dbSize.connections * 0.75), `Database connections above 75% of the ~${dbSize.connections} limit on ${cfg.dbInstanceType}`, 2);
+    alarm("cron-missed-ticks", missedTicks.metricApproximateNumberOfMessagesVisible({ period: five, statistic: "Maximum" }), 1, "A scheduled run never ran (Scheduler couldn't invoke the cron function, or Lambda gave up on it): the message says which");
+    // The NAT instances' alarms (recover, reboot, busy) are in the data stack, beside them.
+
+    // RDS's own word about the database (stopped, failed, failed over, out of storage, back again):
+    // the one thing every request needs, so it goes to the same topic. A
+    // topic policy replaces SNS's default one, so it names CloudWatch (the alarms above) as well.
+    topic.addToResourcePolicy(
+      new iam.PolicyStatement({
+        principals: [new iam.ServicePrincipal("cloudwatch.amazonaws.com"), new iam.ServicePrincipal("events.rds.amazonaws.com")],
+        actions: ["sns:Publish"],
+        resources: [topic.topicArn],
+        conditions: { StringEquals: { "aws:SourceAccount": cfg.account } },
+      }),
+    );
+    new rds.CfnEventSubscription(this, "DbEvents", {
+      subscriptionName: `${prefix}-db-events`,
+      snsTopicArn: topic.topicArn,
+      sourceType: "db-instance",
+      sourceIds: [data.db.instanceIdentifier],
+      eventCategories: ["availability", "failure", "failover", "low storage", "maintenance", "recovery", "restoration"],
+      enabled: true,
+    });
+    // Error lines from the app's logger (console.error → Lambda's ERROR level).
+    for (const [name, f] of [["api", api.fn], ["jobs", jobs.fn], ["cron", cron.fn]] as const) {
+      const filter = new logs.MetricFilter(this, `ErrorLines-${name}`, {
+        logGroup: f.logGroup,
+        filterPattern: logs.FilterPattern.anyTerm("ERROR"),
+        metricNamespace: "Insights",
+        metricName: `${cfg.name}-${name}-error-lines`,
+        metricValue: "1",
+        defaultValue: 0,
+      });
+      alarm(`${name}-error-lines`, filter.metric({ period: five, statistic: "Sum" }), name === "api" ? 20 : 50, `Many error log lines from ${name}`, 2);
+    }
+
+    new cloudwatch.Dashboard(this, "Dashboard", {
+      dashboardName: prefix,
+      widgets: [
+        [
+          new cloudwatch.GraphWidget({ title: "API requests / errors", left: [api.fn.metricInvocations({ period: five })], right: [api.fn.metricErrors({ period: five }), api.fn.metricThrottles({ period: five })], width: 8 }),
+          new cloudwatch.GraphWidget({ title: "API duration (p50 / p95)", left: [api.fn.metricDuration({ period: five, statistic: "p50" }), api.fn.metricDuration({ period: five, statistic: "p95" })], width: 8 }),
+          new cloudwatch.GraphWidget({ title: "Jobs / cron", left: [jobs.fn.metricInvocations({ period: five }), cron.fn.metricInvocations({ period: five })], right: [jobs.fn.metricErrors({ period: five }), cron.fn.metricErrors({ period: five })], width: 8 }),
+        ],
+        [
+          new cloudwatch.GraphWidget({ title: "Queue depth", left: [...Object.values(queues), dlq].map((q) => q.metricApproximateNumberOfMessagesVisible({ period: five, statistic: "Maximum" })), width: 8 }),
+          new cloudwatch.GraphWidget({ title: "Database CPU / connections", left: [dbMetric("CPUUtilization")], right: [dbMetric("DatabaseConnections", "Maximum")], width: 8 }),
+          new cloudwatch.GraphWidget({ title: "Database latency (s)", left: [dbMetric("ReadLatency"), dbMetric("WriteLatency")], width: 8 }),
+        ],
+      ],
+    });
+
+    // --- Budget: the owner's ceiling (US$50-80/month, 2026-10-18), tax included. Emails when the
+    // month's spend passes 50, 75, 90 and 100% of it, and when AWS forecasts the month above it
+    // (five: the most a budget takes). Nothing is stopped at any threshold.
+    const budgetEmail = cfg.budgetEmail || cfg.alertEmail;
+    const budgetAlerts: budgets.CfnBudget.NotificationWithSubscribersProperty[] | undefined = budgetEmail
+      ? [
+          ...[50, 75, 90, 100].map((threshold) => ({ notificationType: "ACTUAL", threshold })),
+          { notificationType: "FORECASTED", threshold: 100 },
+        ].map((n) => ({ notification: { ...n, comparisonOperator: "GREATER_THAN", thresholdType: "PERCENTAGE" }, subscribers: [{ subscriptionType: "EMAIL", address: budgetEmail }] }))
+      : undefined;
+    // CloudFormation replaces a budget whose alerts change (they can't be updated in place), and the
+    // replacement can't take the old one's name; a digest of the alerts in the name lets it.
+    const alertsDigest = budgetAlerts ? `-${createHash("sha256").update(JSON.stringify(budgetAlerts)).digest("hex").slice(0, 8)}` : "";
+    new budgets.CfnBudget(this, "Budget", {
+      budget: { budgetName: `${prefix}-monthly${alertsDigest}`, budgetType: "COST", timeUnit: "MONTHLY", budgetLimit: { amount: cfg.monthlyBudgetUsd, unit: "USD" } },
+      notificationsWithSubscribers: budgetAlerts,
+    });
+
+    new CfnOutput(this, "AppUrl", { value: this.appUrl, description: "The app" });
+    new CfnOutput(this, "CloudFrontDomain", { value: this.distribution.distributionDomainName, description: "CloudFront's own name: the DNS target of the app's domain" });
+    new CfnOutput(this, "ApiFunctionUrl", { value: url.url, description: "Direct function URL (answers 403 to anything not from CloudFront)" });
+    new CfnOutput(this, "CronFunction", { value: cron.alias.functionArn, description: "Invoke with {\"action\":\"migrate\"} or {\"action\":\"counts\"}" });
+    new CfnOutput(this, "AlarmTopic", { value: topic.topicArn });
+  }
+}

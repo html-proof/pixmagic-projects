@@ -1,21 +1,27 @@
 /**
- * Job contracts for Cloudflare Queues. Producers are thin wrappers over Queue
- * bindings (apps/cloudflare); tests use memoryQueues(). Delivery is
- * at-least-once, so every consumer is idempotent.
+ * Job contracts for the background queues. Producers are thin wrappers over
+ * SQS on AWS (apps/aws/src/sqsQueues.ts) and in-process queues locally
+ * (localQueues.ts); tests use memoryQueues(). Delivery is at-least-once, so
+ * every consumer is idempotent.
  */
 export const QUEUE = {
   sync: "sync",
   webhooks: "webhooks",
   aggregate: "aggregate",
+  email: "email",
 } as const;
 export type QueueName = keyof typeof QUEUE;
 
-/** Attempts before a job is marked failed (first delivery + retries). Keep in sync with wrangler max_retries + 1. */
+/** Attempts before a job is marked failed (first delivery + retries). The SQS queues' maxReceiveCount stays above it (infra/cdk). */
 export const MAX_ATTEMPTS = 6;
 /** Exponential backoff: 5s, 10s, 20s, ... capped at 15 minutes. */
 export const backoffSeconds = (attempt: number) => Math.min(900, 5 * 2 ** Math.max(0, attempt - 1));
 
-export type SyncKind = "shop" | "products" | "variants" | "orders" | "install_pixel";
+/** `inventory`: every location and stock level of the store, read from Shopify (core/inventory). */
+export type SyncKind = "shop" | "products" | "variants" | "orders" | "install_pixel" | "inventory";
+
+/** How an inventory pass came about, which is also what it records its differences as. */
+export type InventoryTrigger = "import" | "manual" | "reconcile";
 
 export interface SyncJobData {
   storeId: string;
@@ -61,6 +67,21 @@ export interface SyncJobData {
    * starts once it has learned it. Absent on messages sent before the ids were carried.
    */
   waitingJobIds?: string[];
+  /**
+   * Where an inventory pass has got to: the locations first (paged by `cursor`), then each
+   * location's stock levels in turn (`index` into `locations`, paged by `cursor`). `runId` is its
+   * inventory_sync_runs row, which counts what it read and what differed.
+   */
+  inventory?: {
+    trigger: InventoryTrigger;
+    runId?: string;
+    phase: "locations" | "levels";
+    /** Location ids to read levels at, in order. */
+    locations?: string[];
+    index?: number;
+    /** ISO time the pass started: levels at a location it didn't see since then are gone. */
+    startedAt: string;
+  };
 }
 
 export interface WebhookJobData {
@@ -86,6 +107,13 @@ export interface AggregateJobData {
   days: string[];
 }
 
+/**
+ * Email integrations (packages/core/src/email): send one message, or run the automations for one
+ * business event. And the app's own invitation emails (core/mail): another attempt at one that hit
+ * a transient failure. The rows carry the state; a message only says which one to look at.
+ */
+export type EmailJob = { kind: "email_send"; messageId: string } | { kind: "email_event"; eventId: string } | { kind: "team_invitation"; deliveryId: string };
+
 export interface Producer<T> {
   send(body: T, opts?: { delaySeconds?: number }): Promise<void>;
 }
@@ -94,6 +122,7 @@ export interface Queues {
   sync: Producer<SyncJobData>;
   webhooks: Producer<WebhookJobData>;
   aggregate: Producer<AggregateJobData>;
+  email: Producer<EmailJob>;
 }
 
 /** Large payload storage (R2 in production). */
@@ -103,7 +132,7 @@ export interface BlobStore {
   delete(key: string): Promise<void>;
 }
 
-/** Cloudflare Queues messages are limited to 128 KB; leave headroom for the envelope. */
+/** Bodies above this go to the BlobStore instead of the queue message (well under SQS's message size limit). */
 export const INLINE_PAYLOAD_LIMIT = 100 * 1024;
 
 export type SendOptions = { delaySeconds?: number };
@@ -121,8 +150,13 @@ export type MemoryQueues = Queues & {
 };
 
 export function memoryQueues(): MemoryQueues {
-  const sent = { sync: [] as SyncJobData[], webhooks: [] as WebhookJobData[], aggregate: [] as AggregateJobData[] };
-  const sentOpts = { sync: [] as Array<SendOptions | undefined>, webhooks: [] as Array<SendOptions | undefined>, aggregate: [] as Array<SendOptions | undefined> };
+  const sent = { sync: [] as SyncJobData[], webhooks: [] as WebhookJobData[], aggregate: [] as AggregateJobData[], email: [] as EmailJob[] };
+  const sentOpts = {
+    sync: [] as Array<SendOptions | undefined>,
+    webhooks: [] as Array<SendOptions | undefined>,
+    aggregate: [] as Array<SendOptions | undefined>,
+    email: [] as Array<SendOptions | undefined>,
+  };
   const producer = <T>(list: T[], opts: Array<SendOptions | undefined>): Producer<T> => ({
     async send(body, o) {
       list.push(structuredClone(body));
@@ -135,8 +169,9 @@ export function memoryQueues(): MemoryQueues {
     sync: producer(sent.sync, sentOpts.sync),
     webhooks: producer(sent.webhooks, sentOpts.webhooks),
     aggregate: producer(sent.aggregate, sentOpts.aggregate),
+    email: producer(sent.email, sentOpts.email),
     clear() {
-      for (const k of ["sync", "webhooks", "aggregate"] as const) {
+      for (const k of ["sync", "webhooks", "aggregate", "email"] as const) {
         sent[k].length = 0;
         sentOpts[k].length = 0;
       }

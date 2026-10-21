@@ -5,7 +5,8 @@ import { Badge, Stat } from "@/components/dashboard/Primitives";
 import { fmtRelative } from "@/components/dashboard/format";
 import { fmtNum, fmtPct, useApi } from "@/lib/api";
 import { LoadError } from "@/components/LoadError";
-import { fmtWhen, Skeleton, useWa, WhatsappIcon } from "@/components/whatsapp/Common";
+import { fmtWhen, useWa, WhatsappIcon } from "@/components/whatsapp/WhatsappUi";
+import { Skeleton } from "@/components/AppUi";
 import { connectionStatus, quality, tier, type Overview } from "@/components/whatsapp/types";
 
 function Step({ done, children, href }: { done: boolean; children: React.ReactNode; href?: string }) {
@@ -113,7 +114,7 @@ export default function WhatsappOverview() {
               Register the number with WhatsApp&apos;s Cloud API
             </Step>
             <Step done={data.setup.webhookVerified} href="/whatsapp/connect">
-              Let Meta reach Insights (webhook), so delivery reports and STOP replies arrive
+              Let Meta reach bizinsights (webhook), so delivery reports and STOP replies arrive
             </Step>
             <Step done={data.setup.consentBasis !== "none"} href="/whatsapp/settings">
               Choose how customers agree to WhatsApp order updates

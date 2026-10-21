@@ -3,7 +3,7 @@ import { animate, motion, useMotionTemplate, useMotionValue, useTransform, type 
 import { useEffect, useId, useRef } from "react";
 import { flushSync } from "react-dom";
 import { EASE, easeInOut, easeOut, lerp, segment } from "@/lib/motion";
-import { CORE_STOPS, MARK, ORBIT_POINTS, RING_PATH } from "../shared/InsightMark";
+import { MARK, MarkGradient, barPath } from "@/components/Brand";
 
 /**
  * Every stage reads one master clock `t` (design seconds), so the whole build is a pure function
@@ -12,12 +12,9 @@ import { CORE_STOPS, MARK, ORBIT_POINTS, RING_PATH } from "../shared/InsightMark
  * real time (see introPace), so these 2.3 design seconds play in about 1.25 s.
  */
 const T = {
-  core: [0.1, 0.6],
-  orbit: [0.28, 1.0],
-  orbitStagger: 0.06,
-  lines: [0.92, 1.2],
-  lineStagger: 0.06,
-  ring: [0.98, 1.6],
+  spark: [0.1, 0.55],
+  bar: [0.15, 0.75],
+  barStagger: 0.16,
   lift: [1.0, 1.75],
   word: [1.06, 1.62],
   tagIn: [1.28, 1.58],
@@ -56,13 +53,8 @@ const FLIGHT = { type: "spring", stiffness: 100, damping: 20, mass: 1, restDelta
 const early = (p: number) => 1 - (1 - p) ** 3;
 const late = (p: number) => p ** 1.35;
 
-/** How far (degrees) each orbit point travels round the core before it settles. */
-const SWEEP = 150;
-/** Longest trail an orbit point leaves behind it, in degrees. */
-const TRAIL = 70;
-
-const C = MARK.center;
-const rad = (deg: number) => (deg * Math.PI) / 180;
+/** Where the point of light sits: the middle of the mark. */
+const SPARK = { x: 14, y: 15.5 };
 
 type Stage = "intro" | "handoff" | "done";
 type Stoppable = { stop: () => void };
@@ -85,8 +77,8 @@ function headerShift(el: Element) {
 const centreOf = (r: DOMRect) => ({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
 
 /**
- * Opening sequence: one point of light becomes the Insight mark (core, orbit points, connection
- * lines, open ring), the wordmark arrives under it, then the overlay dissolves into the hero
+ * Opening sequence: one point of light becomes the bizinsights mark (its three bars rise out of the
+ * baseline one after another), the wordmark arrives under it, then the overlay dissolves into the hero
  * while the mark and wordmark fly into their slots in the nav and are swapped for the nav's own.
  */
 export function IntroAnimation({ onHandoff, onDone }: { onHandoff: () => void; onDone: () => void }) {
@@ -331,7 +323,7 @@ export function IntroAnimation({ onHandoff, onDone }: { onHandoff: () => void; o
             scale: haloScale,
             y: groupY,
             background:
-              "radial-gradient(circle, rgb(140 123 255 / 0.17), rgb(94 166 255 / 0.06) 38%, rgb(101 216 208 / 0.02) 55%, transparent 70%)",
+              "radial-gradient(circle, rgb(63 207 138 / 0.16), rgb(35 147 92 / 0.06) 38%, rgb(101 216 208 / 0.02) 55%, transparent 70%)",
           }}
         />
       </motion.div>
@@ -344,13 +336,13 @@ export function IntroAnimation({ onHandoff, onDone }: { onHandoff: () => void; o
         <div ref={textRef} className="absolute left-0 top-[62px] flex -translate-x-1/2 flex-col items-center md:top-[80px]">
           <span
             ref={wordRef}
-            className="mr-[-0.16em] block whitespace-nowrap text-[22px] font-semibold leading-[1.5] tracking-[0.16em] md:text-[28px]"
+            className="block whitespace-nowrap text-[23px] font-semibold leading-[1.5] tracking-[-0.01em] md:text-[29px]"
           >
             <motion.span
               className="block"
               style={{ opacity: wordOpacity, y: wordY, maskImage: wordMask, WebkitMaskImage: wordMask }}
             >
-              INSIGHT
+              bizinsights
             </motion.span>
           </span>
           <motion.p className="lp-eyebrow mr-[-0.16em] mt-2.5 whitespace-nowrap text-lp-text-2 md:mt-3 md:text-[12.5px]" style={{ opacity: tagOpacity, y: tagY }}>
@@ -363,104 +355,48 @@ export function IntroAnimation({ onHandoff, onDone }: { onHandoff: () => void; o
 }
 
 /**
- * The mark, built up from `t`. Its end state uses exactly InsightMark's geometry and paint, so
- * scaled down into the nav it is indistinguishable from the real thing.
+ * The mark, built up from `t`: a point of light, then the bars rising out of the baseline, shortest
+ * first. Its end state is exactly BrandMark's geometry and paint, so scaled down into the nav it is
+ * indistinguishable from the real thing.
  */
 function IntroMark({ t }: { t: MotionValue<number> }) {
   const id = useId().replace(/:/g, "");
-  const coreP = useTransform(t, (v) => easeOut(segment(v, T.core[0], T.core[1])));
-  const coreR = useTransform(coreP, (p) => (p >= 1 ? MARK.coreR : lerp(1.15, MARK.coreR, p)));
-  const glowR = useTransform(coreP, (p) => (p >= 1 ? 9 : lerp(3.2, 9, p)));
-  const sparkR = useTransform(coreP, (p) => lerp(1.15, 2.4, p));
-  const sparkOpacity = useTransform(t, (v) => 1 - segment(v, 0.15, 0.55));
-  const ringP = useTransform(t, (v) => easeOut(segment(v, T.ring[0], T.ring[1])));
-  const ringOpacity = useTransform(ringP, (p) => (p > 0.002 ? 1 : 0));
+  const sparkP = useTransform(t, (v) => easeOut(segment(v, T.spark[0], T.spark[1])));
+  const glowR = useTransform(sparkP, (p) => lerp(3.2, 12, p));
+  const sparkR = useTransform(sparkP, (p) => lerp(1.15, 2.2, p));
+  const sparkOpacity = useTransform(t, (v) => 1 - segment(v, 0.2, 0.6));
 
   return (
-    <svg viewBox="0 0 32 32" width="100%" height="100%" fill="none" className="block overflow-visible">
+    <svg viewBox="0 0 28 28" width="100%" height="100%" fill="none" className="block overflow-visible">
       <defs>
-        <linearGradient id={`intro-core-${id}`} x1="10" y1="10" x2="22" y2="22" gradientUnits="userSpaceOnUse">
-          {CORE_STOPS.map((s) => (
-            <stop key={s.offset} offset={s.offset} stopColor={s.color} />
-          ))}
-        </linearGradient>
-        <radialGradient id={`intro-glow-${id}`} cx="16" cy="16" r="9" gradientUnits="userSpaceOnUse">
-          <stop offset="0%" stopColor="#8C7BFF" stopOpacity="0.55" />
-          <stop offset="100%" stopColor="#8C7BFF" stopOpacity="0" />
+        <MarkGradient id={`intro-bar-${id}`} />
+        <radialGradient id={`intro-glow-${id}`} cx="0.5" cy="0.5" r="0.5">
+          <stop offset="0%" stopColor="#3fcf8a" stopOpacity="0.42" />
+          <stop offset="100%" stopColor="#3fcf8a" stopOpacity="0" />
         </radialGradient>
+        {/* The baseline: bars rise from below it, so each one comes up through it with its rounded top first. */}
+        <clipPath id={`intro-floor-${id}`}>
+          <rect x="0" y="-12" width="28" height={MARK.baseline + 12} />
+        </clipPath>
       </defs>
-      <motion.circle cx="16" cy="16" r={glowR} fill={`url(#intro-glow-${id})`} />
-      <motion.path
-        d={RING_PATH}
-        stroke="currentColor"
-        strokeOpacity="0.85"
-        strokeWidth="1.6"
-        strokeLinecap="round"
-        style={{ pathLength: ringP, opacity: ringOpacity }}
-      />
-      {ORBIT_POINTS.map((_, i) => (
-        <ConnectionLine key={`l${i}`} t={t} index={i} />
-      ))}
-      {ORBIT_POINTS.map((_, i) => (
-        <OrbitPoint key={`d${i}`} t={t} index={i} />
-      ))}
-      <motion.circle cx="16" cy="16" r={coreR} fill={`url(#intro-core-${id})`} />
-      <motion.circle cx="16" cy="16" r={sparkR} fill="#F7F9FC" style={{ opacity: sparkOpacity }} />
+      <motion.circle cx={SPARK.x} cy={SPARK.y} r={glowR} fill={`url(#intro-glow-${id})`} />
+      <g clipPath={`url(#intro-floor-${id})`}>
+        {MARK.bars.map((_, i) => (
+          <RisingBar key={i} t={t} index={i} fill={`url(#intro-bar-${id})`} />
+        ))}
+      </g>
+      <motion.circle cx={SPARK.x} cy={SPARK.y} r={sparkR} fill="#F7F9FC" style={{ opacity: sparkOpacity }} />
     </svg>
   );
 }
 
-/** Fine line from the core out to one settled orbit point, drawn outward. */
-function ConnectionLine({ t, index }: { t: MotionValue<number>; index: number }) {
-  const p = ORBIT_POINTS[index];
-  const a = T.lines[0] + index * T.lineStagger;
-  const b = T.lines[1] + index * T.lineStagger;
-  const draw = useTransform(t, (v) => easeOut(segment(v, a, b)));
-  const opacity = useTransform(draw, (d) => (d > 0 ? 1 : 0));
-  return (
-    <motion.path
-      d={`M 16 16 L ${p.x.toFixed(3)} ${p.y.toFixed(3)}`}
-      stroke="currentColor"
-      strokeOpacity="0.35"
-      strokeWidth="0.9"
-      style={{ pathLength: draw, opacity }}
-    />
-  );
-}
-
-/** One orbit point: leaves the core, sweeps round it with a fading trail, settles at its angle. */
-function OrbitPoint({ t, index }: { t: MotionValue<number>; index: number }) {
-  const final = MARK.orbitAngles[index];
-  const end = ORBIT_POINTS[index];
-  const a = T.orbit[0] + index * T.orbitStagger;
-  const b = T.orbit[1] + index * T.orbitStagger;
+/** One bar: rises from under the baseline to its place, fading in as it comes. */
+function RisingBar({ t, index, fill }: { t: MotionValue<number>; index: number; fill: string }) {
+  const bar = MARK.bars[index];
+  const a = T.bar[0] + index * T.barStagger;
+  const b = T.bar[1] + index * T.barStagger;
   const p = useTransform(t, (v) => easeOut(segment(v, a, b)));
-  const radius = (q: number) => lerp(MARK.coreR * 0.5, MARK.orbitR, q);
-  const angle = (q: number) => final - SWEEP * (1 - q);
-
-  const cx = useTransform(p, (q) => (q >= 1 ? end.x : C + radius(q) * Math.cos(rad(angle(q)))));
-  const cy = useTransform(p, (q) => (q >= 1 ? end.y : C + radius(q) * Math.sin(rad(angle(q)))));
-  const r = useTransform(p, (q) => (q >= 1 ? MARK.dotR : lerp(MARK.dotR * 0.45, MARK.dotR, q)));
-  const opacity = useTransform(t, (v) => segment(v, a, a + 0.18));
-
-  const trail = useTransform(p, (q) => {
-    const length = TRAIL * (1 - q);
-    if (q <= 0 || length < 0.5) return "M 16 16";
-    const r0 = radius(q);
-    const to = angle(q);
-    const from = to - length;
-    const sx = C + r0 * Math.cos(rad(from));
-    const sy = C + r0 * Math.sin(rad(from));
-    const ex = C + r0 * Math.cos(rad(to));
-    const ey = C + r0 * Math.sin(rad(to));
-    return `M ${sx.toFixed(3)} ${sy.toFixed(3)} A ${r0.toFixed(3)} ${r0.toFixed(3)} 0 0 1 ${ex.toFixed(3)} ${ey.toFixed(3)}`;
-  });
-  const trailOpacity = useTransform(p, (q) => (q > 0 && q < 1 ? Math.sin(Math.PI * q) * 0.55 : 0));
-
-  return (
-    <>
-      <motion.path d={trail} stroke="#A798FF" strokeWidth="0.7" strokeLinecap="round" style={{ opacity: trailOpacity }} />
-      <motion.circle cx={cx} cy={cy} r={r} fill="currentColor" style={{ opacity }} />
-    </>
-  );
+  const y = useTransform(p, (q) => (q >= 1 ? 0 : (1 - q) * (MARK.baseline - bar.top)));
+  const opacity = useTransform(p, (q) => bar.opacity * Math.min(1, q * 2.5));
+  return <motion.path d={barPath(index)} fill={fill} style={{ y, opacity }} />;
 }

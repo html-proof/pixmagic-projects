@@ -6,7 +6,8 @@ import { hourLabel } from "@/components/dashboard/format";
 import { useApp } from "@/components/AppContext";
 import { LoadError } from "@/components/LoadError";
 import { actionError, api, fmtNum, useApi } from "@/lib/api";
-import { PageHeader, Skeleton, useAction, useSettings, useToast, useWa, type SettingsResponse } from "@/components/whatsapp/Common";
+import { useSettings, useWa, type SettingsResponse } from "@/components/whatsapp/WhatsappUi";
+import { PageHeader, Skeleton, useAction, useToast } from "@/components/AppUi";
 
 const BASES: Array<{ id: TransactionalBasis; title: string; body: string }> = [
   { id: "none", title: "Not chosen yet", body: "No order or delivery updates are sent." },
@@ -210,7 +211,7 @@ export default function WhatsappSettings() {
       </section>
 
       <section className="card text-sm text-muted">
-        <h2 className="font-semibold text-text">Data Insights keeps for WhatsApp</h2>
+        <h2 className="font-semibold text-text">Data bizinsights keeps for WhatsApp</h2>
         <ul className="mt-1 list-disc space-y-1 pl-5">
           <li>Customers&apos; WhatsApp numbers and first names, encrypted, to send their messages and honour opt-outs. The dashboard only shows masked numbers.</li>
           <li>Message history for 180 days; the details used to write a message are deleted once it&apos;s sent.</li>

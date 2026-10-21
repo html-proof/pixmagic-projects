@@ -4,6 +4,7 @@ import { useEffect, useRef } from "react";
 import { RGB, clamp01, easeInOut, easeOut, lerp, seeded, segment } from "@/lib/motion";
 import { useCanvasLoop, type CanvasFrame } from "@/hooks/useCanvasLoop";
 import { useViewportPerformance } from "@/hooks/useViewportPerformance";
+import { SHAPE, createParticles, onIdle, rgbOf, type Particles } from "../shared/particles";
 import { SrOnly } from "../shared/ui";
 
 /* ---- Journey geometry -------------------------------------------------------------------------
@@ -309,35 +310,38 @@ const LEAVE_COLOR = [C_MUTED, C_WARNING, C_WARNING, C_NEGATIVE];
 /** Exit branch colour, by gate. */
 const BRANCH_RGB = [RGB.muted, RGB.warning, RGB.warning, RGB.negative];
 
+/** The stream's colours as numbers, for the particle renderer. */
+const SPRITE_COLORS = SPRITE_RGB.map(rgbOf);
+
+/** Soft violet light under the gate the camera looks at (2D; a few stamps a frame). */
 interface Sprites {
-  dot: HTMLCanvasElement[];
   halo: HTMLCanvasElement[];
 }
 
-function makeSprite(rgb: string, stops: [number, number][]) {
-  const size = 48;
-  const c = document.createElement("canvas");
-  c.width = c.height = size;
-  const g = c.getContext("2d");
-  if (g) {
-    const grad = g.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
-    for (const [at, a] of stops) grad.addColorStop(at, `rgba(${rgb}, ${a})`);
-    g.fillStyle = grad;
-    g.fillRect(0, 0, size, size);
-  }
-  return c;
-}
-
 function makeSprites(): Sprites {
-  return {
-    dot: SPRITE_RGB.map((rgb) => makeSprite(rgb, [[0, 1], [0.18, 0.92], [0.4, 0.28], [1, 0]])),
-    halo: SPRITE_RGB.map((rgb) => makeSprite(rgb, [[0, 0.55], [0.4, 0.16], [1, 0]])),
-  };
+  const size = 48;
+  const halo = SPRITE_RGB.map((rgb) => {
+    const c = document.createElement("canvas");
+    c.width = c.height = size;
+    const g = c.getContext("2d");
+    if (g) {
+      const grad = g.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+      for (const [at, a] of [[0, 0.55], [0.4, 0.16], [1, 0]] as const) grad.addColorStop(at, `rgba(${rgb}, ${a})`);
+      g.fillStyle = grad;
+      g.fillRect(0, 0, size, size);
+    }
+    return c;
+  });
+  return { halo };
 }
 
 /** Per-frame projection state, reused (no allocation per particle). */
-const view = { horizontal: true, w: 0, h: 0, L: 0, cf: 0.5, z: 1, zy: 1, ya: 0.5, cx: 0.5, top: 0, span: 1, unit: 1, exitV: EXIT_V, exitDu: EXIT_DU };
+// `fade`: width of the soft side edges applied to the WebGL particles (0 = none; see the frame loop).
+const view = { horizontal: true, w: 0, h: 0, L: 0, cf: 0.5, z: 1, zy: 1, ya: 0.5, cx: 0.5, top: 0, span: 1, unit: 1, exitV: EXIT_V, exitDu: EXIT_DU, fade: 0 };
 const pt = { x: 0, y: 0 };
+
+/** Opacity of the soft side edges at screen x, for particles on the WebGL canvas. */
+const edgeAlpha = (x: number) => (view.fade > 0 ? clamp01(x / view.fade) * clamp01((view.w - x) / view.fade) : 1);
 
 function project(u: number, v: number) {
   if (view.horizontal) {
@@ -388,18 +392,64 @@ const RIBBON_PASSES: [number, number][] = [
   [0.24, 0.035],
 ];
 
-function traceRibbon(ctx: CanvasRenderingContext2D, scale: number) {
-  ctx.beginPath();
-  for (let k = 0; k <= RIBBON_N; k++) {
-    project(RIBBON_U[k], -RIBBON_HALF[k] * scale);
-    if (k === 0) ctx.moveTo(pt.x, pt.y);
-    else ctx.lineTo(pt.x, pt.y);
+/** How far across the flow (in `v`) the widest glow pass reaches: the baked ribbon's half-height. */
+const RIBBON_REACH = Math.max(...RIBBON_PASSES.map(([scale]) => scale)) * Math.max(...RIBBON_HALF) + 0.01;
+
+/**
+ * The glow passes drawn once into their own canvas, in journey space: `u` along x at `pxU` pixels
+ * per unit, `v` down y at `pxV` pixels per unit, centre line at RIBBON_REACH. Only the camera
+ * changes from frame to frame, and the camera is an affine map, so each frame stamps this image
+ * with one transformed drawImage instead of filling eleven screen-wide polygons.
+ */
+interface RibbonBake {
+  canvas: HTMLCanvasElement;
+  /** The same pixels as an ImageBitmap once ready: rasterised now, and cheaper to stamp than a canvas. */
+  image: ImageBitmap | null;
+  pxU: number;
+  pxV: number;
+  key: string;
+}
+
+function bakeRibbon(pxU: number, pxV: number, key: string): RibbonBake {
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.ceil((CORE - RIBBON_U0) * pxU);
+  canvas.height = Math.ceil(2 * RIBBON_REACH * pxV);
+  const g = canvas.getContext("2d");
+  if (g) {
+    const grad = g.createLinearGradient(0, 0, canvas.width, 0);
+    for (const [t, c] of RIBBON_STOPS) grad.addColorStop(t, c);
+    g.fillStyle = grad;
+    g.globalCompositeOperation = "lighter";
+    for (const [scale, alpha] of RIBBON_PASSES) {
+      g.globalAlpha = alpha;
+      g.beginPath();
+      for (let k = 0; k <= RIBBON_N; k++) g.lineTo((RIBBON_U[k] - RIBBON_U0) * pxU, (RIBBON_REACH - RIBBON_HALF[k] * scale) * pxV);
+      for (let k = RIBBON_N; k >= 0; k--) g.lineTo((RIBBON_U[k] - RIBBON_U0) * pxU, (RIBBON_REACH + RIBBON_HALF[k] * scale) * pxV);
+      g.closePath();
+      g.fill();
+    }
   }
-  for (let k = RIBBON_N; k >= 0; k--) {
-    project(RIBBON_U[k], RIBBON_HALF[k] * scale);
-    ctx.lineTo(pt.x, pt.y);
+  const bake: RibbonBake = { canvas, image: null, pxU, pxV, key };
+  if (typeof createImageBitmap === "function") {
+    void createImageBitmap(canvas).then(
+      (image) => (bake.image = image),
+      () => {},
+    );
   }
-  ctx.closePath();
+  return bake;
+}
+
+/**
+ * A bake sharp enough for the closest camera: 0.75 of the on-screen resolution (the glow is soft;
+ * the crisp edges are stroked live), and never wider than 4096px.
+ */
+function ribbonBakeFor(frame: JourneyFrame): RibbonBake {
+  const { horizontal, w, h } = view;
+  const key = `${horizontal}:${w}:${h}:${frame.world}`;
+  const alongPx = horizontal ? frame.world * w : h * (frame.bottom - frame.top);
+  const acrossPx = horizontal ? h : Math.min(w, h * 0.5);
+  const k = Math.min(0.75, 4096 / (alongPx * (CORE - RIBBON_U0)));
+  return bakeRibbon(alongPx * k, acrossPx * k, key);
 }
 
 function traceEdge(ctx: CanvasRenderingContext2D, side: number, scale: number) {
@@ -412,26 +462,35 @@ function traceEdge(ctx: CanvasRenderingContext2D, side: number, scale: number) {
 }
 
 const SIDES = [-1, 1] as const;
+/** Share of the width over which the horizontal journey fades out at each side. */
+const EDGE_FADE = 0.06;
 /** Unfocused labels dim only this far, so their small secondary text stays at lp-muted contrast or better. */
 const LABEL_DIM = 0.78;
 /** The band's visible edge, as a multiple of the particle half-width. */
 const EDGE = 1.18;
 
 /** The luminous stream: a band that narrows gate by gate, coloured violet → green along the way. */
-function drawRibbon(ctx: CanvasRenderingContext2D) {
+function drawRibbon(ctx: CanvasRenderingContext2D, bake: RibbonBake) {
+  // The baked glow, mapped through the camera (see `project`).
+  ctx.save();
+  if (view.horizontal) {
+    const along = view.L * view.z;
+    ctx.transform(along / bake.pxU, 0, 0, view.unit / bake.pxV, view.w * 0.5 + (RIBBON_U0 - view.cf) * along, view.ya * view.h - RIBBON_REACH * view.unit);
+  } else {
+    const along = view.h * view.span;
+    ctx.transform(0, along / bake.pxU, view.unit / bake.pxV, 0, view.cx * view.w - RIBBON_REACH * view.unit, view.h * (view.top + RIBBON_U0 * view.span));
+  }
+  ctx.globalAlpha = 1;
+  ctx.drawImage(bake.image ?? bake.canvas, 0, 0);
+  ctx.restore();
+
   project(RIBBON_U0, 0);
   const x0 = pt.x;
   const y0 = pt.y;
   project(CORE, 0);
   const grad = ctx.createLinearGradient(x0, y0, pt.x, pt.y);
   for (const [t, c] of RIBBON_STOPS) grad.addColorStop(t, c);
-  ctx.fillStyle = grad;
   ctx.strokeStyle = grad;
-  for (const [scale, alpha] of RIBBON_PASSES) {
-    ctx.globalAlpha = alpha;
-    traceRibbon(ctx, scale);
-    ctx.fill();
-  }
   // Crisp luminous edges give the band a defined shape.
   ctx.globalAlpha = 0.32;
   ctx.lineWidth = 1;
@@ -531,23 +590,19 @@ function drawGates(ctx: CanvasRenderingContext2D, sprites: Sprites, p: number, f
   ctx.globalAlpha = 1;
 }
 
-function drawCore(ctx: CanvasRenderingContext2D, sprites: Sprites, time: number) {
+function drawCore(pts: Particles, time: number) {
   project(CORE, 0);
   const s = view.horizontal ? 0.6 + 0.4 * view.zy : 0.75;
   const breathe = 1 + 0.06 * Math.sin(time * 0.0016);
   const r = 230 * s * breathe;
-  ctx.globalAlpha = 0.55;
-  ctx.drawImage(sprites.halo[C_POSITIVE], pt.x - r / 2, pt.y - r / 2, r, r);
-  ctx.globalAlpha = 1;
-  ctx.drawImage(sprites.dot[C_POSITIVE], pt.x - 14 * s, pt.y - 14 * s, 28 * s, 28 * s);
-  ctx.strokeStyle = `rgba(${RGB.positive}, 0.6)`;
-  ctx.lineWidth = 1.25;
-  ctx.beginPath();
-  ctx.arc(pt.x, pt.y, 13 * s, 0, Math.PI * 2);
-  ctx.stroke();
+  const e = edgeAlpha(pt.x);
+  const [cr, cg, cb] = SPRITE_COLORS[C_POSITIVE];
+  pts.add(pt.x, pt.y, r, r, SHAPE.halo, cr, cg, cb, 0.55 * e);
+  pts.add(pt.x, pt.y, 28 * s, 28 * s, SHAPE.dot, cr, cg, cb, e);
+  pts.add(pt.x, pt.y, 13 * s, 1.25, SHAPE.ring, cr, cg, cb, 0.6 * e);
 }
 
-function drawParticles(ctx: CanvasRenderingContext2D, s: Sim, sprites: Sprites, time: number) {
+function drawParticles(pts: Particles, s: Sim, time: number) {
   const { w, h, horizontal } = view;
   const grow = horizontal ? 0.6 + 0.4 * view.zy : 0.85;
   const along = 16 * grow;
@@ -583,10 +638,9 @@ function drawParticles(ctx: CanvasRenderingContext2D, s: Sim, sprites: Sprites, 
     if (alpha < 0.02) continue;
     const sw = (horizontal ? along : across) * scale;
     const sh = (horizontal ? across : along) * scale;
-    ctx.globalAlpha = alpha;
-    ctx.drawImage(sprites.dot[color], x - sw / 2, y - sh / 2, sw, sh);
+    const [cr, cg, cb] = SPRITE_COLORS[color];
+    pts.add(x, y, sw, sh, SHAPE.dot, cr, cg, cb, alpha * edgeAlpha(x));
   }
-  ctx.globalAlpha = 1;
 }
 
 /* ---- Component -------------------------------------------------------------------------------- */
@@ -603,12 +657,15 @@ export function JourneyVisual({
   progress,
   frame,
   still = false,
+  edgeFade = false,
   // Must establish a containing block (relative/absolute): canvas and labels are absolutely placed.
   className = "relative",
 }: {
   progress: MotionValue<number>;
   frame: JourneyFrame;
   still?: boolean;
+  /** Fade the horizontal journey out at the left and right edges (the camera scene). */
+  edgeFade?: boolean;
   className?: string;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -616,6 +673,9 @@ export function JourneyVisual({
   const count = Math.max(200, Math.round(BASE_PARTICLES * particleScale));
   const simRef = useRef<Sim | null>(null);
   const spritesRef = useRef<Sprites | null>(null);
+  const ribbonRef = useRef<RibbonBake | null>(null);
+  const glRef = useRef<HTMLCanvasElement>(null);
+  const particlesRef = useRef<Particles | null>(null);
   // Must agree with which label layer CSS shows (`md:landscape:`).
   const horizontalRef = useRef(true);
 
@@ -629,6 +689,21 @@ export function JourneyVisual({
     mq.addEventListener("change", sync);
     return () => mq.removeEventListener("change", sync);
   }, []);
+
+  // Set up ahead of time, in idle moments, not in the first frame the scene is on screen: the
+  // particle renderer joins the WebGL setup queue (particles.ts) and the ribbon glow is baked.
+  useEffect(() => {
+    if (still) return;
+    particlesRef.current ??= createParticles(glRef.current);
+    return onIdle(() => {
+      const canvas = canvasRef.current;
+      if (!canvas || ribbonRef.current || !canvas.clientWidth || !canvas.clientHeight) return;
+      view.horizontal = horizontalRef.current;
+      view.w = canvas.clientWidth;
+      view.h = canvas.clientHeight;
+      ribbonRef.current = ribbonBakeFor(frame);
+    });
+  }, [still, frame]);
 
   useCanvasLoop(
     canvasRef,
@@ -665,16 +740,41 @@ export function JourneyVisual({
       const sim = simRef.current;
       const sprites = spritesRef.current;
       if (!still) step(sim, Math.min(0.05, f.dt / 1000), rate, view.exitV);
+      const bakeKey = `${horizontal}:${w}:${h}:${frame.world}`;
+      if (ribbonRef.current?.key !== bakeKey) {
+        ribbonRef.current?.image?.close();
+        ribbonRef.current = ribbonBakeFor(frame);
+      }
+
+      // The shoppers and the core are batched (WebGL on the canvas over this one; 2D for a still frame).
+      const pts = (particlesRef.current ??= createParticles(still ? null : glRef.current));
+      pts.begin(w, h, ctx.canvas.width / w);
+      view.fade = edgeFade && horizontal && pts.gpu ? w * EDGE_FADE : 0;
 
       ctx.clearRect(0, 0, w, h);
       ctx.globalCompositeOperation = "lighter";
-      drawRibbon(ctx);
+      drawRibbon(ctx, ribbonRef.current);
       drawBranches(ctx, p, frame);
       ctx.globalCompositeOperation = "source-over";
       drawGates(ctx, sprites, p, frame, still);
-      ctx.globalCompositeOperation = "lighter";
-      drawParticles(ctx, sim, sprites, still ? 0 : f.time);
-      drawCore(ctx, sprites, still ? 0 : f.time);
+      drawParticles(pts, sim, still ? 0 : f.time);
+      drawCore(pts, still ? 0 : f.time);
+      pts.flush(ctx, "add");
+      // Soft side edges, so the stream slides in and out of view rather than being cut. Erased
+      // here rather than with a CSS mask, which made the browser composite the whole scene
+      // through an extra full-screen pass on every frame.
+      if (edgeFade && horizontal) {
+        const fw = w * EDGE_FADE;
+        ctx.globalCompositeOperation = "destination-out";
+        for (const side of SIDES) {
+          const x0 = side < 0 ? 0 : w;
+          const fade = ctx.createLinearGradient(x0, 0, x0 - side * fw, 0);
+          fade.addColorStop(0, "rgba(0, 0, 0, 1)");
+          fade.addColorStop(1, "rgba(0, 0, 0, 0)");
+          ctx.fillStyle = fade;
+          ctx.fillRect(side < 0 ? 0 : w - fw, 0, fw, h);
+        }
+      }
       ctx.globalCompositeOperation = "source-over";
     },
     { still, maxDpr },
@@ -686,14 +786,15 @@ export function JourneyVisual({
   return (
     <div className={className} data-cursor="VIEW">
       <canvas ref={canvasRef} aria-hidden className="absolute inset-0 h-full w-full" />
+      {!still && <canvas ref={glRef} aria-hidden className="pointer-events-none absolute inset-0 h-full w-full" />}
 
       {/* Horizontal labels, projected with the camera. */}
       <div aria-hidden className="pointer-events-none absolute inset-0 hidden overflow-hidden md:landscape:block">
         {STAGES.map((s, i) => (
-          <StageLabel key={s.name} index={i} progress={progress} frame={frame} scale={labelScale} />
+          <StageLabel key={s.name} index={i} progress={progress} frame={frame} scale={labelScale} edgeFade={edgeFade} />
         ))}
         {EXITS.map((e, k) => (
-          <ExitMarker key={e.label} index={k} progress={progress} frame={frame} scale={labelScale} />
+          <ExitMarker key={e.label} index={k} progress={progress} frame={frame} scale={labelScale} edgeFade={edgeFade} />
         ))}
       </div>
 
@@ -729,15 +830,25 @@ function useAnchor(progress: MotionValue<number>, frame: JourneyFrame, u: number
   return { x, y };
 }
 
-type LabelProps = { index: number; progress: MotionValue<number>; frame: JourneyFrame; scale: MotionValue<number> };
+type LabelProps = { index: number; progress: MotionValue<number>; frame: JourneyFrame; scale: MotionValue<number>; edgeFade: boolean };
 
-function StageLabel({ index, progress, frame, scale }: LabelProps) {
+/** 1 in the middle of the scene, falling to 0 at the side edges: the canvas's edge fade, for a label at flow point `u`. */
+function edgeAt(p: number, frame: JourneyFrame, u: number) {
+  const { cf, z } = cameraAt(p, frame.world);
+  const x = 0.5 + (u - cf) * frame.world * z;
+  return clamp01(x / EDGE_FADE) * clamp01((1 - x) / EDGE_FADE);
+}
+
+function StageLabel({ index, progress, frame, scale, edgeFade }: LabelProps) {
   const anchor = useAnchor(progress, frame, GATES[index], LABEL_V);
-  const opacity = useTransform(progress, (p) => LABEL_DIM + (1 - LABEL_DIM) * focusAt(p, index, frame.world));
+  const opacity = useTransform(
+    progress,
+    (p) => (LABEL_DIM + (1 - LABEL_DIM) * focusAt(p, index, frame.world)) * (edgeFade ? edgeAt(p, frame, GATES[index]) : 1),
+  );
   const stage = STAGES[index];
   const last = index === STAGES.length - 1;
   return (
-    <motion.div className="absolute inset-0" style={anchor}>
+    <motion.div className="absolute inset-0 will-change-transform" style={anchor}>
       <motion.div
         className="absolute left-0 top-0 origin-bottom whitespace-nowrap text-center"
         style={{ x: "-50%", y: "-100%", scale, opacity }}
@@ -750,17 +861,20 @@ function StageLabel({ index, progress, frame, scale }: LabelProps) {
   );
 }
 
-function ExitMarker({ index, progress, frame, scale }: LabelProps) {
+function ExitMarker({ index, progress, frame, scale, edgeFade }: LabelProps) {
   const exit = EXITS[index];
   const anchor = useAnchor(progress, frame, GATES[exit.gate] + EXIT_DU, EXIT_V);
-  const opacity = useTransform(progress, (p) => 0.35 + 0.65 * exitEmphasis(p, index, frame.world));
+  const opacity = useTransform(
+    progress,
+    (p) => (0.35 + 0.65 * exitEmphasis(p, index, frame.world)) * (edgeFade ? edgeAt(p, frame, GATES[exit.gate] + EXIT_DU) : 1),
+  );
   const negative = exit.tone === "negative";
   return (
-    <motion.div className="absolute inset-0" style={anchor}>
+    <motion.div className="absolute inset-0 will-change-transform" style={anchor}>
       <motion.div className="absolute left-0 top-0 flex origin-top flex-col items-center whitespace-nowrap" style={{ x: "-50%", scale, opacity }}>
         <span className={`h-5 w-px bg-gradient-to-b ${negative ? "from-lp-negative/60" : "from-lp-warning/60"} to-transparent`} />
         <span
-          className={`flex items-center gap-2 rounded-full border px-3 py-1.5 backdrop-blur-[2px] ${negative ? "border-lp-negative/40 bg-lp-negative/[0.12]" : "border-lp-warning/40 bg-lp-warning/[0.12]"}`}
+          className={`flex items-center gap-2 rounded-full border px-3 py-1.5 ${negative ? "border-lp-negative/40 [background:linear-gradient(rgb(255_114_114/0.12),rgb(255_114_114/0.12)),rgb(8_10_13/0.6)]" : "border-lp-warning/40 [background:linear-gradient(rgb(244_184_90/0.12),rgb(244_184_90/0.12)),rgb(8_10_13/0.6)]"}`}
         >
           <span className={`size-1.5 rounded-full ${negative ? "bg-lp-negative" : "bg-lp-warning"}`} />
           <span className="text-[13px] font-medium text-lp-text">{exit.label}</span>

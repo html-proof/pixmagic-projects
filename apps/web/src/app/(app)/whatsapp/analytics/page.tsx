@@ -5,7 +5,8 @@ import { Stat } from "@/components/dashboard/Primitives";
 import { LineChart } from "@/components/dashboard/LineChart";
 import { LoadError } from "@/components/LoadError";
 import { fmtMoney, fmtNum, fmtPct, useApi } from "@/lib/api";
-import { PageHeader, Skeleton, useWa } from "@/components/whatsapp/Common";
+import { useWa } from "@/components/whatsapp/WhatsappUi";
+import { PageHeader, Skeleton } from "@/components/AppUi";
 
 interface Analytics {
   days: number;

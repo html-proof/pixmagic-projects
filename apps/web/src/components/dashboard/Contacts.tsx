@@ -1,6 +1,5 @@
 "use client";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { can } from "@app/shared/roles";
 import { useApp } from "@/components/AppContext";
 import { Alert } from "@/components/ui";
 import { actionError, api, fmtMoney, fmtNum } from "@/lib/api";
@@ -203,6 +202,9 @@ function SendButton({ label, icon, href, onClick, disabledReason, primary, testI
   );
 }
 
+type Shown = NonNullable<Contacts["shown"]>;
+const ALL_SHOWN: Shown = { abandoned: true, customers: true, names: true, contact: true, orders: true };
+
 function ContactRow({
   p,
   i,
@@ -211,6 +213,7 @@ function ContactRow({
   storeName,
   abandoned,
   customer,
+  shown = ALL_SHOWN,
 }: {
   p: ContactPerson;
   i: number;
@@ -219,6 +222,8 @@ function ContactRow({
   storeName: string;
   abandoned?: AbandonedContact;
   customer?: CustomerContact;
+  /** What this member may see (Team & Access): hidden details are said to be hidden, not missing. */
+  shown?: Shown;
 }) {
   const h = hue(p);
   const when = fmtRelative(abandoned?.createdAt ?? customer?.createdAt);
@@ -247,26 +252,30 @@ function ContactRow({
             {initials(p)}
           </span>
           <div className="min-w-0">
-            <p className={`truncate font-medium ${p.name ? "" : "text-muted"}`}>{p.name ?? "Guest shopper"}</p>
+            <p className={`truncate font-medium ${p.name ? "" : "text-muted"}`}>{p.name ?? (!shown.names && p.customerId ? `Customer #${p.customerId}` : "Guest shopper")}</p>
             {abandoned && abandoned.items.length > 0 && (
               <p className="truncate text-xs text-muted">{abandoned.items.map((it) => `${it.title}${it.quantity > 1 ? ` ×${it.quantity}` : ""}`).join(" · ")}</p>
             )}
-            {customer && <p className="text-xs text-muted">{customer.orders > 0 ? `${plural(customer.orders, "order")} so far` : "No orders yet"}</p>}
+            {customer && customer.orders !== null && <p className="text-xs text-muted">{customer.orders > 0 ? `${plural(customer.orders, "order")} so far` : "No orders yet"}</p>}
           </div>
         </div>
         <div className="text-right">
           {abandoned && <p className="font-semibold tabular-nums">{fmtMoney(abandoned.total, abandoned.currency)}</p>}
-          {customer && customer.orders > 0 && <p className="font-semibold tabular-nums">{fmtMoney(customer.spent, customer.currency ?? undefined)}</p>}
+          {customer && customer.orders !== null && customer.orders > 0 && <p className="font-semibold tabular-nums">{fmtMoney(customer.spent, customer.currency ?? undefined)}</p>}
           <p className="text-xs text-muted">{abandoned ? `left ${when ?? ""}` : `joined ${when ?? ""}`}</p>
         </div>
       </div>
 
+      {!shown.contact ? (
+        <p className="mt-3 text-xs text-muted" data-testid="contact-hidden">Contact details aren&apos;t shared with you.</p>
+      ) : (
+      <>
       <div className="mt-3 grid gap-2 sm:grid-cols-2">
         <ContactBox kind="email" value={p.email} agreed={p.subscribed} />
         <ContactBox kind="phone" value={p.phone} agreed={p.smsSubscribed} />
       </div>
 
-      {abandoned && (
+      {abandoned?.recoveryUrl && (
         <div className="mt-2 rounded-lg border border-border bg-bg px-3 py-2">
           <p className="flex items-center gap-1.5 text-xs text-muted">
             <Icon name="link" className="h-3.5 w-3.5" />
@@ -280,12 +289,12 @@ function ContactRow({
               <button
                 type="button"
                 className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-surface px-2.5 text-xs font-medium text-muted transition hover:border-accent hover:text-accent"
-                onClick={() => void copyLink(abandoned.recoveryUrl)}
+                onClick={() => void copyLink(abandoned.recoveryUrl!)}
               >
                 <Icon name={copiedLink ? "check" : "copy"} className={`h-3.5 w-3.5 ${copiedLink ? "text-good" : ""}`} />
                 {copiedLink ? "Copied" : "Copy link"}
               </button>
-              <IconButton label="Open the checkout" icon="external" href={abandoned.recoveryUrl} external />
+              <IconButton label="Open the checkout" icon="external" href={abandoned.recoveryUrl!} external />
             </div>
           </div>
         </div>
@@ -309,6 +318,8 @@ function ContactRow({
           {p.adminUrl && <IconButton label="Open in Shopify" icon="external" href={p.adminUrl} external />}
         </div>
       </div>
+      </>
+      )}
     </li>
   );
 }
@@ -381,12 +392,15 @@ const Note = ({ children }: { children: ReactNode }) => (
  * link back to an unfinished checkout by WhatsApp, email, text message or any other app.
  * Loaded when the card appears and on "Refresh" (not on the dashboard's 15-second poll): it's a
  * live call to Shopify, and the data is personal, so we fetch it only when someone is looking.
- * Messages are sent from the merchant's own apps; Insights never sends or stores them.
+ * Messages are sent from the merchant's own apps; bizinsights never sends or stores them.
  */
 export function ContactsCard({ storeId, storeName, shopDomain }: { storeId: string; storeName: string; shopDomain: string }) {
-  const { workspace } = useApp();
-  const allowed = can(workspace.role, "customers:contact");
-  const [tab, setTab] = useState<Tab>("abandoned");
+  const { workspace, allowed: may } = useApp();
+  // Team & Access: the customer lists and the unfinished checkouts each need their own permission.
+  const tabs = TABS.filter((t) => (t.id === "abandoned" ? may("analytics.abandonment") : may("customers.list")));
+  const allowed = tabs.length > 0;
+  const [chosen, setTab] = useState<Tab>("abandoned");
+  const tab = tabs.some((t) => t.id === chosen) ? chosen : (tabs[0]?.id ?? "abandoned");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [templates, setTemplates] = useState<Record<Tab, string>>(DEFAULT_MESSAGE);
@@ -420,16 +434,17 @@ export function ContactsCard({ storeId, storeName, shopDomain }: { storeId: stri
     setTemplates({ abandoned: readMessage(storeId, "abandoned"), subscribers: readMessage(storeId, "subscribers"), recent: readMessage(storeId, "recent") });
   }, [storeId]);
 
-  const help = "People who gave your store a way to reach them, so you can get back in touch. Fetched from Shopify each time; Insights doesn't keep a copy, and messages go from your own apps.";
+  const help = "People who gave your store a way to reach them, so you can get back in touch. Fetched from Shopify each time; bizinsights doesn't keep a copy, and messages go from your own apps.";
   if (!allowed) {
     return (
       <Panel id="contacts" title="Customers to follow up" help={help}>
-        <Empty>Ask a workspace owner, admin or analyst to see customers&apos; contact details.</Empty>
+        <Empty>Customer lists aren&apos;t shared with you. Ask an owner or admin of the workspace if you need them.</Empty>
       </Panel>
     );
   }
 
   const lists = { abandoned: data?.abandoned ?? [], subscribers: data?.subscribers ?? [], recent: data?.recent ?? [] };
+  const shown: Shown = data?.shown ?? ALL_SHOWN;
   const current = TABS.find((t) => t.id === tab)!;
   const people: ContactPerson[] = lists[tab];
   const emails = people.map((x) => x.email).filter((e): e is string => !!e);
@@ -452,7 +467,7 @@ export function ContactsCard({ storeId, storeName, shopDomain }: { storeId: stri
       }
     >
       <div className="flex gap-1 overflow-x-auto rounded-xl border border-border bg-bg p-1" role="tablist" aria-label="Which customers">
-        {TABS.map((t) => {
+        {tabs.map((t) => {
           const n = lists[t.id].length;
           const active = t.id === tab;
           return (
@@ -479,7 +494,7 @@ export function ContactsCard({ storeId, storeName, shopDomain }: { storeId: stri
       {data?.restricted && (
         <div className="mt-3">
           <Alert kind="info">
-            Shopify hasn&apos;t approved Insights to show customers&apos; names, emails and phone numbers for this store yet. You can still see them in{" "}
+            Shopify hasn&apos;t approved bizinsights to show customers&apos; names, emails and phone numbers for this store yet. You can still see them in{" "}
             <a className="underline" href={`https://${shopDomain}/admin/${tab === "abandoned" ? "checkouts" : "customers"}`} target="_blank" rel="noopener noreferrer">your Shopify admin</a>.
           </Alert>
         </div>
@@ -489,8 +504,8 @@ export function ContactsCard({ storeId, storeName, shopDomain }: { storeId: stri
           <div className="mt-3"><Empty>{current.empty}</Empty></div>
         ) : (
           <>
-            <MessageEditor tab={tab} value={templates[tab]} onChange={setTemplate} />
-            {(emails.length > 1 || phones.length > 1) && (
+            {shown.contact && <MessageEditor tab={tab} value={templates[tab]} onChange={setTemplate} />}
+            {shown.contact && (emails.length > 1 || phones.length > 1) && (
               <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1">
                 {emails.length > 1 && <CopyAll values={emails} what="emails" />}
                 {phones.length > 1 && <CopyAll values={phones} what="phone numbers" />}
@@ -498,13 +513,13 @@ export function ContactsCard({ storeId, storeName, shopDomain }: { storeId: stri
             )}
             <ul key={tab} className="mt-3 space-y-3" aria-label={current.label}>
               {tab === "abandoned"
-                ? lists.abandoned.map((a, i) => <ContactRow key={a.id} p={a} i={i} tab={tab} template={templates[tab]} storeName={storeName} abandoned={a} />)
-                : lists[tab].map((c, i) => <ContactRow key={c.customerId ?? i} p={c} i={i} tab={tab} template={templates[tab]} storeName={storeName} customer={c} />)}
+                ? lists.abandoned.map((a, i) => <ContactRow key={a.id} p={a} i={i} tab={tab} template={templates[tab]} storeName={storeName} abandoned={a} shown={shown} />)
+                : lists[tab].map((c, i) => <ContactRow key={c.customerId ?? i} p={c} i={i} tab={tab} template={templates[tab]} storeName={storeName} customer={c} shown={shown} />)}
             </ul>
           </>
         )
       )}
-      {data && !data.restricted && (
+      {data && !data.restricted && shown.contact && (
         <Note>
           WhatsApp, Email and Text message open your own app with the message ready: check it and press send. Rules differ by country: send offers only
           to people who agreed (shown under each email and phone number), and keep cart reminders short and personal.

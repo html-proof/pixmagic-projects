@@ -35,7 +35,7 @@ export const waEncrypt = (storeId: string, kind: WaSecretKind, plaintext: string
 export const waDecrypt = (storeId: string, kind: WaSecretKind, ciphertext: string) => decrypt(ciphertext, keyring(), aad(storeId, kind));
 
 /** Finds a contact from a webhook's wa_id without decrypting anything. */
-export const phoneHash = (storeId: string, waId: string) => hmacSha256Hex(env().OTP_PEPPER, `wa:${storeId}:${waId}`);
+export const phoneHash = (storeId: string, waId: string) => hmacSha256Hex(env().CUSTOMER_HASH_KEY, `wa:${storeId}:${waId}`);
 
 /** A random link token and the hash it is looked up by. */
 export function newLinkToken(): { token: string; hash: string } {
@@ -144,6 +144,12 @@ export async function applyMarketing(contact: WhatsappContact, signal: Marketing
     where: { id: contact.id },
     data: { marketingStatus: signal.status, marketingSource: signal.source, marketingUpdatedAt: at },
   });
+}
+
+/** Whether this number sent the store STOP: then nothing goes to it, test messages included. */
+export async function numberOptedOut(storeId: string, waId: string): Promise<boolean> {
+  const c = await systemDb.whatsappContact.findUnique({ where: { storeId_phoneHash: { storeId, phoneHash: phoneHash(storeId, waId) } }, select: { optedOut: true } });
+  return !!c?.optedOut;
 }
 
 /** STOP: nothing at all goes to this number any more (order updates included). */
@@ -291,7 +297,7 @@ async function forEachRow<R extends { id: string }>(load: (afterId?: string) => 
  * checkouts. Part of key rotation (reencryptAllTokens, docs/RUNBOOK.md). Values already on the
  * active key are skipped, so a second run changes nothing. Returns the number of rows rewritten.
  *
- * It runs while the Worker keeps writing these rows, so each write applies only if the row's
+ * It runs while the app keeps writing these rows, so each write applies only if the row's
  * encrypted values are still the ones read (a message sent meanwhile has had its parameters
  * cleared, and must not get them back); a row changed in between is left for the next run. And it
  * keeps `updatedAt`, which the retention sweeps measure from.

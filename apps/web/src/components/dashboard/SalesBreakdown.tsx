@@ -1,344 +1,17 @@
 "use client";
-import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { dailyBreakdown, weekdayOf, type BreakdownDay, type SalesDay, type SalesMonth, type YearBreakdown } from "@app/shared/sales";
+import { useState, type ReactNode } from "react";
+import { customSalesMonths, dailyBreakdown, NET_SALES_MONTHS, weekdayOf, yearFigures } from "@app/shared/sales";
+import { customSales, type ComponentSelection } from "@app/shared/salesCalculation";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
-import { fmtDay, fmtLongDay, fmtMonth, fmtMoneyCompact, fmtMoneyWhole, fmtSpan, fmtWeekday } from "./format";
-import { Delta } from "./Primitives";
+import { fmtDay, fmtLongDay, fmtMonth, fmtMoneyCompact, fmtMoneyWhole, fmtSpan, fmtWeekday, weekdayName } from "./format";
+import { ChartChoice, Delta } from "./Primitives";
+import { asSalesDays, dayLinesOf, hasMonthLines, showsRefunds } from "./redacted";
+import { type Column, ColumnsWithTotal } from "./ColumnsWithTotal";
+import type { SalesOverview, YearMonth } from "./types";
 
-// ---------------------------------------------------------------------------
-// The chart: columns over a running-total strip that shares their x positions.
-//
-// The running total gets its own strip and scale rather than a second y-axis on the columns:
-// two scales on one plot line up arbitrarily, so the line's crossings would read as meaning
-// something. Hovering (or arrowing through) a column reads out both at once.
-// ---------------------------------------------------------------------------
-
-export interface Column {
-  key: string;
-  value: number;
-  fill: string;
-  /** A period still running, or only partly imported: drawn lighter. */
-  faded?: boolean;
-  /** Not imported at all: a quiet band instead of a column. */
-  missing?: boolean;
-  /** Weekend days get a faint band behind them. */
-  shaded?: boolean;
-  running: number | null;
-  tick: { top: string; bottom?: string; strong?: boolean; major?: boolean };
-  /** Value written on the column's cap, when there's room for every one. */
-  label?: string;
-  /** Labelled even when the others can't be (best day, today). */
-  keepLabel?: boolean;
-  /** A short change readout above the label (month on month). */
-  note?: { text: string; tone: "good" | "danger" };
-}
-
-const MARGIN = { left: 52, right: 10 };
-const PLOT_H = 190;
-const RUN_H = 64;
-const FONT = 11;
-/** Rough width of a label at 11px, for deciding what fits without measuring the DOM. */
-const textWidth = (s: string) => s.length * 6.3 + 6;
-
-/** Gridline steps a person would pick: 1, 2, 2.5 or 5 × a power of ten. */
-export function niceTicks(max: number, count: number): number[] {
-  if (!(max > 0)) return [0];
-  const raw = max / count;
-  const mag = 10 ** Math.floor(Math.log10(raw));
-  const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= raw)!;
-  const ticks: number[] = [];
-  // From a whole-number index, not a running sum: no drift, and sub-cent steps stay distinct.
-  for (let i = 0; i * step < max + step * 0.999; i++) ticks.push(Number((i * step).toPrecision(12)));
-  return ticks;
-}
-
-/** A column with a 4px rounded data end and a square foot on the baseline. */
-function columnPath(x: number, w: number, y0: number, y1: number): string {
-  const up = y1 <= y0;
-  const h = Math.abs(y0 - y1);
-  const r = Math.min(4, w / 2, h);
-  if (up) {
-    return `M${x},${y0}V${y1 + r}Q${x},${y1} ${x + r},${y1}H${x + w - r}Q${x + w},${y1} ${x + w},${y1 + r}V${y0}Z`;
-  }
-  return `M${x},${y0}V${y1 - r}Q${x},${y1} ${x + r},${y1}H${x + w - r}Q${x + w},${y1} ${x + w},${y1 - r}V${y0}Z`;
-}
-
-export function useWidth() {
-  const ref = useRef<HTMLDivElement>(null);
-  const [width, setWidth] = useState(0);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    setWidth(el.clientWidth);
-    if (typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(([e]) => setWidth(Math.round(e!.contentRect.width)));
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-  return [ref, width] as const;
-}
-
-export function ColumnsWithTotal({
-  columns,
-  label,
-  fmtAxis,
-  reference,
-  runningLabel,
-  fmtRunning,
-  tooltip,
-  describe,
-  missingLabel,
-}: {
-  columns: Column[];
-  /** What the chart shows, for assistive technology. */
-  label: string;
-  fmtAxis: (n: number) => string;
-  /** A hairline across the plot (the average day). */
-  reference?: number | null;
-  runningLabel: string;
-  fmtRunning: (n: number) => string;
-  tooltip: (i: number) => ReactNode;
-  describe: (i: number) => string;
-  missingLabel: string;
-}) {
-  const [ref, width] = useWidth();
-  const hatchId = `hatch-${useId().replace(/:/g, "")}`;
-  const [active, setActive] = useState<number | null>(null);
-  const n = columns.length;
-  const plotW = Math.max(0, width - MARGIN.left - MARGIN.right);
-  const slot = n ? plotW / n : 0;
-  const barW = slot >= 6 ? Math.min(24, slot - 2) : Math.max(1, slot - 1);
-  const cx = (i: number) => MARGIN.left + slot * (i + 0.5);
-
-  // Labels on every cap only when each fits its slot; otherwise just the ones that matter.
-  const labelled = columns.filter((c) => c.label && !c.missing);
-  const allFit = labelled.every((c) => textWidth(c.label!) <= slot + 2);
-  const showLabel = (c: Column) => !!c.label && !c.missing && (allFit || c.keepLabel);
-  const showNotes = allFit && columns.some((c) => c.note);
-  const top = showNotes ? 34 : columns.some(showLabel) ? 20 : 10;
-
-  const values = columns.filter((c) => !c.missing).map((c) => c.value);
-  const max = Math.max(0, ...values, reference ?? 0);
-  const min = Math.min(0, ...values);
-  const yTicks = niceTicks(max, 4);
-  const yMax = yTicks.at(-1)! || 1;
-  const yMin = min < 0 ? -niceTicks(-min, 1).at(-1)! : 0;
-  const y = (v: number) => top + (1 - (v - yMin) / (yMax - yMin)) * PLOT_H;
-
-  const allTicks = slot >= 26;
-  const twoLineTicks = allTicks && columns.some((c) => c.tick.bottom);
-  const tickH = twoLineTicks ? 30 : 18;
-  const runTop = top + PLOT_H + tickH + 30;
-
-  const runs = columns.map((c) => c.running);
-  const runMax = Math.max(0, ...runs.filter((r): r is number => r !== null));
-  const runMin = Math.min(0, ...runs.filter((r): r is number => r !== null));
-  const runTicks = niceTicks(runMax, 3);
-  const rMax = runTicks.at(-1)! || 1;
-  const yr = (v: number) => runTop + (1 - (v - runMin) / (rMax - runMin)) * RUN_H;
-  const height = runTop + RUN_H + 8;
-
-  // The running total as line segments, broken across days that weren't imported.
-  const segments: Array<Array<[number, number]>> = [];
-  runs.forEach((r, i) => {
-    if (r === null) return;
-    const prev = i > 0 ? runs[i - 1] : null;
-    if (prev === null || prev === undefined || !segments.length) segments.push([]);
-    segments.at(-1)!.push([cx(i), yr(r)]);
-  });
-  const lastRun = runs.reduce<number | null>((a, r, i) => (r !== null ? i : a), null);
-
-  // Contiguous stretches that weren't imported, drawn as one band each.
-  const missingRuns: Array<[number, number]> = [];
-  columns.forEach((c, i) => {
-    if (!c.missing) return;
-    const last = missingRuns.at(-1);
-    if (last && last[1] === i - 1) last[1] = i;
-    else missingRuns.push([i, i]);
-  });
-
-  // Ticks: every column when they fit, otherwise the major ones that don't collide.
-  const ticks: number[] = [];
-  let lastRight = -Infinity;
-  columns.forEach((c, i) => {
-    if (allTicks) return ticks.push(i);
-    if (!c.tick.major) return;
-    const w = textWidth(c.tick.top);
-    if (cx(i) - w / 2 < lastRight + 4) return;
-    ticks.push(i);
-    lastRight = cx(i) + w / 2;
-  });
-
-  const indexAt = (clientX: number, rect: DOMRect) => {
-    const i = Math.floor((clientX - rect.left - MARGIN.left) / slot);
-    return i >= 0 && i < n ? i : null;
-  };
-  const onKey = (e: KeyboardEvent) => {
-    const at = active ?? n - 1;
-    const next = e.key === "ArrowLeft" ? at - 1 : e.key === "ArrowRight" ? at + 1 : e.key === "Home" ? 0 : e.key === "End" ? n - 1 : null;
-    if (e.key === "Escape") return setActive(null);
-    if (next === null) return;
-    e.preventDefault();
-    setActive(Math.max(0, Math.min(n - 1, next)));
-  };
-
-  const tipLeft = active === null ? 0 : cx(active);
-  const tipAlign = tipLeft < 130 ? "translateX(-12px)" : tipLeft > width - 130 ? "translateX(calc(-100% + 12px))" : "translateX(-50%)";
-
-  return (
-    <div
-      ref={ref}
-      className="relative mt-4 select-none rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
-      tabIndex={0}
-      role="group"
-      aria-label={`${label}. Use the left and right arrow keys to read each column.`}
-      onKeyDown={onKey}
-      onFocus={() => setActive((a) => a ?? (n ? n - 1 : null))}
-      onBlur={() => setActive(null)}
-    >
-      <p className="sr-only" aria-live="polite">{active !== null ? describe(active) : ""}</p>
-      {width > 0 && n > 0 && (
-        <svg
-          width={width}
-          height={height}
-          className="block touch-pan-y"
-          aria-hidden
-          onPointerMove={(e) => setActive(indexAt(e.clientX, e.currentTarget.getBoundingClientRect()))}
-          onPointerDown={(e) => setActive(indexAt(e.clientX, e.currentTarget.getBoundingClientRect()))}
-          onPointerLeave={() => setActive(null)}
-        >
-          <defs>
-            {/* Days that weren't imported: hatched, so they never pass for weekend bands or $0 days. */}
-            <pattern id={hatchId} width={6} height={6} patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
-              <rect width={6} height={6} fill="var(--border)" opacity={0.25} />
-              <line x1={0} y1={0} x2={0} y2={6} stroke="var(--border)" strokeWidth={2} />
-            </pattern>
-          </defs>
-          {/* Weekend bands, then the stretch nobody imported. */}
-          {columns.map((c, i) =>
-            c.shaded && !c.missing ? (
-              <rect key={`w${c.key}`} x={MARGIN.left + slot * i} y={top} width={slot} height={PLOT_H} fill="var(--border)" opacity={0.35} />
-            ) : null,
-          )}
-          {missingRuns.map(([a, b]) => {
-            const x = MARGIN.left + slot * a;
-            const w = slot * (b - a + 1);
-            return (
-              <g key={`m${a}`}>
-                <rect x={x} y={top} width={w} height={PLOT_H} fill={`url(#${hatchId})`} />
-                {w >= textWidth(missingLabel) + 8 && (
-                  <>
-                    <rect x={x + w / 2 - textWidth(missingLabel) / 2} y={top + 8} width={textWidth(missingLabel)} height={18} rx={4} fill="var(--surface)" />
-                    <text x={x + w / 2} y={top + 21} textAnchor="middle" fontSize={FONT} fill="var(--muted)">{missingLabel}</text>
-                  </>
-                )}
-              </g>
-            );
-          })}
-
-          {/* Grid and axis: solid hairlines, labels in muted ink. */}
-          {yTicks.map((t) => (
-            <g key={`g${t}`}>
-              <line x1={MARGIN.left} x2={width - MARGIN.right} y1={y(t)} y2={y(t)} stroke="var(--border)" />
-              <text x={MARGIN.left - 8} y={y(t) + 4} textAnchor="end" fontSize={FONT} fill="var(--muted)" className="tabular-nums">{fmtAxis(t)}</text>
-            </g>
-          ))}
-          {yMin < 0 && <line x1={MARGIN.left} x2={width - MARGIN.right} y1={y(0)} y2={y(0)} stroke="var(--muted)" opacity={0.6} />}
-          {reference != null && reference > 0 && (
-            <line x1={MARGIN.left} x2={width - MARGIN.right} y1={y(reference)} y2={y(reference)} stroke="var(--text)" opacity={0.45} />
-          )}
-
-          {columns.map((c, i) => {
-            if (c.missing) return null;
-            const h = Math.abs(y(c.value) - y(0));
-            const yTop = c.value === 0 ? y(0) : h < 2 ? y(0) - Math.sign(c.value) * 2 : y(c.value);
-            const dim = active !== null && active !== i;
-            return (
-              <g key={c.key} opacity={dim ? 0.45 : 1} style={{ transition: "opacity 120ms" }}>
-                {c.value !== 0 && <path d={columnPath(cx(i) - barW / 2, barW, y(0), yTop)} fill={c.fill} opacity={c.faded ? 0.45 : 1} />}
-                {showLabel(c) && (
-                  <text
-                    x={Math.min(Math.max(cx(i), MARGIN.left + textWidth(c.label!) / 2), width - MARGIN.right - textWidth(c.label!) / 2)}
-                    y={Math.min(yTop, y(0)) - 5}
-                    textAnchor="middle"
-                    fontSize={FONT}
-                    fontWeight={c.keepLabel ? 600 : 500}
-                    fill="var(--text)"
-                    className="tabular-nums"
-                  >
-                    {c.label}
-                  </text>
-                )}
-                {showNotes && c.note && (
-                  <text x={cx(i)} y={Math.min(yTop, y(0)) - 19} textAnchor="middle" fontSize={FONT} fontWeight={600} fill={c.note.tone === "good" ? "var(--good)" : "var(--danger)"}>
-                    {c.note.text}
-                  </text>
-                )}
-              </g>
-            );
-          })}
-
-          {ticks.map((i) => {
-            const t = columns[i]!.tick;
-            return (
-              <g key={`t${i}`} fontSize={FONT} textAnchor="middle">
-                <text x={cx(i)} y={top + PLOT_H + 14} fill={t.strong ? "var(--text)" : "var(--muted)"} fontWeight={t.strong ? 600 : 400}>{t.top}</text>
-                {twoLineTicks && t.bottom && (
-                  <text x={cx(i)} y={top + PLOT_H + 27} fill={t.strong ? "var(--text)" : "var(--muted)"} fontWeight={t.strong ? 600 : 400} fontSize={10}>{t.bottom}</text>
-                )}
-              </g>
-            );
-          })}
-
-          {/* Running total strip. */}
-          <text x={MARGIN.left} y={runTop - 8} fontSize={FONT} fill="var(--muted)">{runningLabel}</text>
-          {runTicks.map((t) => (
-            <g key={`r${t}`}>
-              <line x1={MARGIN.left} x2={width - MARGIN.right} y1={yr(t)} y2={yr(t)} stroke="var(--border)" />
-              <text x={MARGIN.left - 8} y={yr(t) + 4} textAnchor="end" fontSize={FONT} fill="var(--muted)" className="tabular-nums">{fmtAxis(t)}</text>
-            </g>
-          ))}
-          {segments.map((pts, k) => {
-            const line = pts.map(([px, py], j) => `${j ? "L" : "M"}${px.toFixed(1)},${py.toFixed(1)}`).join("");
-            const area = `${line}L${pts.at(-1)![0].toFixed(1)},${yr(Math.max(0, runMin)).toFixed(1)}L${pts[0]![0].toFixed(1)},${yr(Math.max(0, runMin)).toFixed(1)}Z`;
-            return (
-              <g key={`s${k}`}>
-                <path d={area} fill="var(--viz-total)" opacity={0.1} />
-                <path d={line} fill="none" stroke="var(--viz-total)" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
-              </g>
-            );
-          })}
-          {lastRun !== null && (
-            <>
-              <circle cx={cx(lastRun)} cy={yr(runs[lastRun]!)} r={4} fill="var(--viz-total)" stroke="var(--surface)" strokeWidth={2} />
-              <text x={Math.min(cx(lastRun), width - MARGIN.right)} y={yr(runs[lastRun]!) - 9} textAnchor="end" fontSize={FONT} fontWeight={600} fill="var(--text)" className="tabular-nums">
-                {fmtRunning(runs[lastRun]!)}
-              </text>
-            </>
-          )}
-
-          {active !== null && (
-            <>
-              <line x1={cx(active)} x2={cx(active)} y1={top} y2={runTop + RUN_H} stroke="var(--muted)" opacity={0.5} />
-              {runs[active] !== null && (
-                <circle cx={cx(active)} cy={yr(runs[active]!)} r={4} fill="var(--viz-total)" stroke="var(--surface)" strokeWidth={2} />
-              )}
-            </>
-          )}
-        </svg>
-      )}
-      {width === 0 && <div style={{ height: PLOT_H + RUN_H + 90 }} />}
-      {active !== null && width > 0 && (
-        <div
-          className="pointer-events-none absolute z-10 min-w-40 rounded-md border border-border bg-surface px-3 py-2 text-xs shadow-lg"
-          style={{ left: tipLeft, top: 0, transform: `${tipAlign} translateY(-100%)` }}
-        >
-          {tooltip(active)}
-        </div>
-      )}
-    </div>
-  );
-}
+// The sales cards: day by day for the dates picked, and month by month for this calendar year,
+// each drawn with ColumnsWithTotal. Each measures net sales, or the store's Custom sales while it
+// shows it on the dashboard (named, with Shopify's net sales beside it).
 
 /** A short colored key beside a legend label (identity is never color alone: the label says it). */
 function Key({ kind, color, faded, children }: { kind: "box" | "line" | "band" | "hatch"; color: string; faded?: boolean; children: ReactNode }) {
@@ -381,9 +54,44 @@ function fullMonthsText(months: string[]): string | null {
   return `${months.map((m) => fmtMonth(m)).join(" and ")} complete`;
 }
 
-// ---------------------------------------------------------------------------
-// Day by day, for the dates picked.
-// ---------------------------------------------------------------------------
+/** The store's Custom sales when it shows it on the dashboard (`appliedCustom` in ./redacted). */
+type AppliedCustom = { name: string; components: ComponentSelection };
+type Measure = "custom" | "net";
+
+/**
+ * What a sales card measures: the store's Custom sales while it shows it on the dashboard (until
+ * another is picked, as the sales chart on the home page), else net sales. Shopify's net sales
+ * stays one pick away and on every day and month of the card, so Custom sales never stands in for it.
+ */
+function useMeasure(custom: AppliedCustom | null) {
+  const [picked, setPicked] = useState<Measure | null>(null);
+  const measure: Measure = custom && (picked ?? "custom") === "custom" ? "custom" : "net";
+  return [measure, setPicked] as const;
+}
+
+function MeasureChoice({ custom, value, onChange }: { custom: AppliedCustom | null; value: Measure; onChange: (m: Measure) => void }) {
+  if (!custom) return null;
+  return (
+    <ChartChoice<Measure>
+      label="Sales card shows"
+      value={value}
+      onChange={onChange}
+      options={[
+        ["custom", `Custom sales · ${custom.name}`],
+        ["net", "Net sales"],
+      ]}
+    />
+  );
+}
+
+/** Under the headline while Custom sales is measured: its name, and Shopify's figure beside it. */
+function CustomNote({ custom, net, money }: { custom: AppliedCustom; net: number; money: (n: number) => string }) {
+  return (
+    <p className="mt-0.5 text-xs text-muted" data-testid="custom-measure">
+      Custom sales · {custom.name}, not Shopify&apos;s figure. Shopify&apos;s net sales: <span className="tabular-nums">{money(net)}</span>
+    </p>
+  );
+}
 
 export function DailySalesCard({
   series,
@@ -391,28 +99,44 @@ export function DailySalesCard({
   today,
   historyFrom,
   currency,
+  custom = null,
 }: {
-  series: SalesDay[];
+  /** Days without `refunds` (Team & Access: "View refunds") show no refunds column. */
+  series: SalesOverview["series"];
   range: { from: string; to: string };
   today: string;
   historyFrom: string | null;
   currency: string;
+  /** Offered as what the days are measured by, named; each day's lines make it (`dayLinesOf`). */
+  custom?: AppliedCustom | null;
 }) {
   const [table, setTable] = useState(false);
-  const b = dailyBreakdown(series, today, historyFrom);
+  const [measure, setMeasure] = useMeasure(custom);
+  const showRefunds = showsRefunds(series);
+  const days = asSalesDays(series);
+  const net = dailyBreakdown(days, today, historyFrom);
+  const shown = measure === "custom" && custom ? custom : null;
+  const b = shown
+    ? dailyBreakdown(days, today, historyFrom, (d) => {
+        const lines = dayLinesOf(d);
+        return lines ? customSales(lines, shown.components) : 0;
+      })
+    : net;
+  const name = shown ? `Custom sales · ${shown.name}` : "Net sales";
   const money = (n: number) => fmtMoney(n, currency);
   const whole = (n: number) => fmtMoneyWhole(n, currency);
   const hasToday = b.days.some((d) => d.status === "today");
   const hasMissing = b.days.some((d) => d.status === "not_imported");
   const n = b.days.length;
   const t = b.tiers;
-  const fillOf = (d: BreakdownDay) => (t ? TIER_FILL[d.tier] : PLAIN_FILL);
+  type Day = (typeof b.days)[number];
+  const fillOf = (d: Day) => (t ? TIER_FILL[d.tier] : PLAIN_FILL);
 
   const columns: Column[] = b.days.map((d) => {
     const weekend = weekdayOf(d.day) >= 5;
     return {
       key: d.day,
-      value: d.netSales,
+      value: d.value,
       fill: fillOf(d),
       faded: d.status === "today",
       missing: d.status === "not_imported",
@@ -425,12 +149,12 @@ export function DailySalesCard({
         // Long ranges label Mondays, very long ones the first of each month.
         major: n <= 31 || (n <= 120 ? weekdayOf(d.day) === 0 : d.day.endsWith("-01")),
       },
-      label: d.netSales !== 0 ? whole(d.netSales) : undefined,
+      label: d.value !== 0 ? whole(d.value) : undefined,
       keepLabel: d.day === b.best?.day || d.status === "today",
     };
   });
 
-  const tip = (d: BreakdownDay) => {
+  const tip = (d: Day) => {
     if (d.status === "not_imported") {
       return (
         <>
@@ -439,13 +163,19 @@ export function DailySalesCard({
         </>
       );
     }
-    const vsAvg = b.average && d.status === "complete" ? (d.netSales - b.average) / b.average : null;
+    const vsAvg = b.average && d.status === "complete" ? (d.value - b.average) / b.average : null;
     return (
       <>
         <div className="text-muted">{fmtLongDay(d.day)}{d.status === "today" ? " · today so far" : ""}</div>
-        <div className="mt-0.5 text-sm font-semibold tabular-nums">{money(d.netSales)}</div>
+        <div className="mt-0.5 text-sm font-semibold tabular-nums">{money(d.value)}</div>
+        {shown && (
+          <>
+            <TipRow>{name}</TipRow>
+            <TipRow>Net sales {money(d.netSales)}</TipRow>
+          </>
+        )}
         <TipRow>{d.orders === 1 ? "1 order" : `${fmtNum(d.orders)} orders`}{d.averageOrderValue !== null ? ` · ${money(d.averageOrderValue)} average` : ""}</TipRow>
-        {d.refunds > 0 && <TipRow>Refunds {money(d.refunds)}</TipRow>}
+        {showRefunds && d.refunds > 0 && <TipRow>Refunds {money(d.refunds)}</TipRow>}
         {vsAvg !== null && <TipRow>{vsAvg >= 0 ? "▲" : "▼"} {fmtPct(Math.abs(vsAvg))} {vsAvg >= 0 ? "above" : "below"} an average day</TipRow>}
         {d.cumulative !== null && (
           <div className="mt-1 flex items-center gap-1.5 text-muted">
@@ -459,7 +189,8 @@ export function DailySalesCard({
   const describe = (i: number) => {
     const d = b.days[i]!;
     if (d.status === "not_imported") return `${fmtLongDay(d.day)}: not imported.`;
-    return `${fmtLongDay(d.day)}${d.status === "today" ? ", today so far" : ""}: ${money(d.netSales)} net sales from ${fmtNum(d.orders)} orders. ${money(d.cumulative ?? 0)} so far in this range.`;
+    const what = shown ? `${name} (net sales ${money(d.netSales)})` : "net sales";
+    return `${fmtLongDay(d.day)}${d.status === "today" ? ", today so far" : ""}: ${money(d.value)} ${what} from ${fmtNum(d.orders)} orders. ${money(d.cumulative ?? 0)} so far in this range.`;
   };
 
   const notes = [
@@ -467,6 +198,7 @@ export function DailySalesCard({
     hasToday ? `${fmtDay(today, { year: false })} is today (so far)` : null,
     hasMissing ? `orders before ${fmtDay(historyFrom, { year: false })} weren't shared by Shopify` : null,
   ].filter(Boolean);
+  const valueColumns = 4 + (showRefunds ? 1 : 0) + (shown ? 1 : 0);
 
   return (
     <div className="card animate-rise mt-4 min-w-0" style={{ ["--i" as string]: 4 }} data-testid="daily-sales">
@@ -474,38 +206,43 @@ export function DailySalesCard({
         <div className="min-w-0">
           <p className="text-xs font-medium uppercase tracking-wide text-muted">{fmtSpan(range.from, range.to)} · Daily</p>
           <p className="mt-1 text-3xl font-semibold">{money(b.total)}</p>
+          {shown && <CustomNote custom={shown} net={net.total} money={money} />}
           {notes.length > 0 && <p className="mt-0.5 text-xs text-muted first-letter:uppercase">{notes.join(" · ")}</p>}
         </div>
-        <button className="text-xs text-muted underline" onClick={() => setTable((x) => !x)}>{table ? "Show chart" : "Show table"}</button>
+        <div className="flex flex-wrap items-center gap-3">
+          <MeasureChoice custom={custom} value={measure} onChange={setMeasure} />
+          <button className="text-xs text-muted underline" onClick={() => setTable((x) => !x)}>{table ? "Show chart" : "Show table"}</button>
+        </div>
       </div>
 
       <dl className="mt-4 grid grid-cols-2 gap-2 lg:grid-cols-4">
         <Figure label="Average day" value={b.average !== null ? money(b.average) : "—"} note={hasToday ? "finished days only" : `${fmtNum(b.importedDays)} days`} />
-        <Figure label="Best day" value={b.best ? money(b.best.netSales) : "—"} note={b.best ? fmtLongDay(b.best.day) : "no sales yet"} />
+        <Figure label="Best day" value={b.best ? money(b.best.value) : "—"} note={b.best ? fmtLongDay(b.best.day) : "no sales yet"} />
         <Figure label="Days with sales" value={`${fmtNum(b.daysWithSales)} of ${fmtNum(b.importedDays)}`} note={b.importedDays ? `${fmtPct(b.daysWithSales / b.importedDays)} of days` : undefined} />
         {b.bestWeekday ? (
           <Figure
             label="Best weekday"
-            value={new Intl.DateTimeFormat(undefined, { weekday: "long", timeZone: "UTC" }).format(new Date(Date.UTC(2026, 0, 5 + b.bestWeekday.weekday)))}
+            value={weekdayName(b.bestWeekday.weekday, "long")}
             note={`${money(b.bestWeekday.average)} on average`}
           />
         ) : (
-          <Figure label="Orders" value={fmtNum(b.orders)} note={b.orders ? `${money(Math.round((b.total / b.orders) * 100) / 100)} net per order` : undefined} />
+          <Figure label="Orders" value={fmtNum(b.orders)} note={b.orders ? `${money(Math.round((b.total / b.orders) * 100) / 100)} ${shown ? "Custom sales" : "net"} per order` : undefined} />
         )}
       </dl>
 
       {table ? (
         <div className="mt-4 max-h-96 overflow-auto">
           <table className="w-full text-sm">
-            <caption className="sr-only">Net sales per day</caption>
+            <caption className="sr-only">{name} per day</caption>
             <thead className="sticky top-0 bg-surface text-left text-xs text-muted">
               <tr>
                 <th className="py-1 font-normal">Day</th>
+                {shown && <th className="py-1 text-right font-normal">{name}</th>}
                 <th className="py-1 text-right font-normal">Net sales</th>
                 <th className="py-1 text-right font-normal">Orders</th>
                 <th className="py-1 text-right font-normal">Average order</th>
-                <th className="py-1 text-right font-normal">Refunds</th>
-                <th className="py-1 text-right font-normal">So far</th>
+                {showRefunds && <th className="py-1 text-right font-normal">Refunds</th>}
+                <th className="py-1 text-right font-normal">{shown ? "Custom sales so far" : "So far"}</th>
               </tr>
             </thead>
             <tbody>
@@ -513,13 +250,14 @@ export function DailySalesCard({
                 <tr key={d.day} className="border-t border-border">
                   <td className="py-1">{fmtLongDay(d.day)}{d.status === "today" ? " (so far)" : ""}</td>
                   {d.status === "not_imported" ? (
-                    <td colSpan={5} className="py-1 text-right text-muted">Not imported</td>
+                    <td colSpan={valueColumns} className="py-1 text-right text-muted">Not imported</td>
                   ) : (
                     <>
+                      {shown && <td className="py-1 text-right tabular-nums">{money(d.value)}</td>}
                       <td className="py-1 text-right tabular-nums">{money(d.netSales)}</td>
                       <td className="py-1 text-right tabular-nums">{fmtNum(d.orders)}</td>
                       <td className="py-1 text-right tabular-nums">{d.averageOrderValue !== null ? money(d.averageOrderValue) : "—"}</td>
-                      <td className="py-1 text-right tabular-nums">{d.refunds ? money(d.refunds) : "—"}</td>
+                      {showRefunds && <td className="py-1 text-right tabular-nums">{d.refunds ? money(d.refunds) : "—"}</td>}
                       <td className="py-1 text-right tabular-nums">{money(d.cumulative ?? 0)}</td>
                     </>
                   )}
@@ -531,6 +269,7 @@ export function DailySalesCard({
       ) : (
         <>
           <div className="mt-4 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
+            {shown && <span className="font-medium text-text">{name}</span>}
             {t ? (
               <>
                 {t.best !== null && <Key kind="box" color={TIER_FILL[3]}>≥ {whole(t.best)}</Key>}
@@ -545,7 +284,7 @@ export function DailySalesCard({
           </div>
           <ColumnsWithTotal
             columns={columns}
-            label={`Net sales per day, ${fmtSpan(range.from, range.to)}, with the running total below`}
+            label={`${name} per day, ${fmtSpan(range.from, range.to)}, with the running total below`}
             fmtAxis={(v) => fmtMoneyCompact(v, currency)}
             reference={b.average}
             runningLabel="Running total"
@@ -560,43 +299,56 @@ export function DailySalesCard({
   );
 }
 
-// ---------------------------------------------------------------------------
-// Month by month, for this calendar year.
-// ---------------------------------------------------------------------------
-
-export function MonthlySalesCard({ year, historyFrom, currency }: { year: YearBreakdown; historyFrom: string | null; currency: string }) {
+export function MonthlySalesCard({
+  year,
+  historyFrom,
+  currency,
+  custom = null,
+}: {
+  year: NonNullable<SalesOverview["year"]>;
+  historyFrom: string | null;
+  currency: string;
+  /** Offered as what the months are measured by, named; each month's lines make it (`customSalesMonths`). */
+  custom?: AppliedCustom | null;
+}) {
   const [table, setTable] = useState(false);
+  const months = year.months;
+  // Custom sales month by month needs every month's lines (an answer from before they came has none).
+  const lined = months.every(hasMonthLines) ? months : null;
+  const offered = lined ? custom : null;
+  const [measure, setMeasure] = useMeasure(offered);
+  const shown = measure === "custom" && offered ? offered : null;
+  const f = shown && lined ? yearFigures(lined, customSalesMonths(shown.components)) : yearFigures(months, NET_SALES_MONTHS);
+  const name = shown ? `Custom sales · ${shown.name}` : "Net sales";
   const money = (n: number) => fmtMoney(n, currency);
   const whole = (n: number) => fmtMoneyWhole(n, currency);
-  const months = year.months;
   const current = months.at(-1);
-
-  let running = 0;
-  const cumulative = months.map((m) => (m.coverage === "none" ? null : (running = Math.round((running + m.netSales) * 100) / 100)));
-  const finished = months.filter((m) => !m.current && m.coverage === "full");
-  const average = finished.length ? finished.reduce((a, m) => a + m.netSales, 0) / finished.length : null;
-  const best = months.filter((m) => m.coverage !== "none" && m.netSales > 0).reduce<SalesMonth | null>((a, m) => (!a || m.netSales > a.netSales ? m : a), null);
+  const currentFigure = f.months.at(-1);
   const firstImported = months.find((m) => m.coverage !== "none");
   const anyMissing = months.some((m) => m.coverage !== "full");
 
   const changeText = (c: number) => `${c >= 0 ? "▲" : "▼"} ${fmtPct(Math.abs(c))}`;
-  const columns: Column[] = months.map((m, i) => ({
-    key: m.month,
-    value: m.netSales,
-    fill: "var(--viz-tier-2)",
-    faded: m.current || m.coverage === "partial",
-    missing: m.coverage === "none",
-    running: cumulative[i]!,
-    tick: { top: fmtMonth(m.month, { short: true }), bottom: m.current ? "so far" : m.coverage === "partial" ? "partial" : undefined, strong: m.current, major: true },
-    label: whole(m.netSales),
-    keepLabel: m.current || m.month === best?.month,
-    note: m.change !== null && !m.current ? { text: changeText(m.change), tone: m.change >= 0 ? "good" : "danger" } : undefined,
-  }));
+  const columns: Column[] = months.map((m, i) => {
+    const x = f.months[i]!;
+    return {
+      key: m.month,
+      value: x.value,
+      fill: "var(--viz-tier-2)",
+      faded: m.current || m.coverage === "partial",
+      missing: m.coverage === "none",
+      running: x.cumulative,
+      tick: { top: fmtMonth(m.month, { short: true }), bottom: m.current ? "so far" : m.coverage === "partial" ? "partial" : undefined, strong: m.current, major: true },
+      label: whole(x.value),
+      keepLabel: m.current || m.month === f.best?.month,
+      note: x.change !== null && !m.current ? { text: changeText(x.change), tone: x.change >= 0 ? "good" : "danger" } : undefined,
+    };
+  });
 
-  const comparedText = (m: SalesMonth) =>
+  const comparedText = (m: YearMonth) =>
     !m.comparedWith ? null : m.current ? `vs ${fmtSpan(m.comparedWith.from, m.comparedWith.to)}` : `vs ${fmtMonth(m.comparedWith.from.slice(0, 7))}`;
   const tip = (i: number) => {
     const m = months[i]!;
+    const x = f.months[i]!;
     if (m.coverage === "none") {
       return (
         <>
@@ -608,22 +360,31 @@ export function MonthlySalesCard({ year, historyFrom, currency }: { year: YearBr
     return (
       <>
         <div className="text-muted">{fmtMonth(m.month, { year: true })}{m.current ? ` · to ${fmtDay(m.to, { year: false })}` : ""}</div>
-        <div className="mt-0.5 text-sm font-semibold tabular-nums">{money(m.netSales)}</div>
+        <div className="mt-0.5 text-sm font-semibold tabular-nums">{money(x.value)}</div>
+        {shown && (
+          <>
+            <TipRow>{name}</TipRow>
+            <TipRow>Net sales {money(m.netSales)}</TipRow>
+          </>
+        )}
         <TipRow>{m.orders === 1 ? "1 order" : `${fmtNum(m.orders)} orders`}{m.averageOrderValue !== null ? ` · ${money(m.averageOrderValue)} average` : ""}</TipRow>
-        {m.refunds > 0 && <TipRow>Refunds {money(m.refunds)}</TipRow>}
-        {m.change !== null && <TipRow>{changeText(m.change)} {comparedText(m)}</TipRow>}
+        {/* Months without `refunds` (Team & Access: "View refunds") show no refunds. */}
+        {m.refunds !== undefined && m.refunds > 0 && <TipRow>Refunds {money(m.refunds)}</TipRow>}
+        {x.change !== null && <TipRow>{changeText(x.change)} {comparedText(m)}</TipRow>}
         {m.coverage === "partial" && <TipRow>Only from {fmtDay(historyFrom, { year: false })}: earlier orders weren&apos;t shared by Shopify.</TipRow>}
         <div className="mt-1 flex items-center gap-1.5 text-muted">
           <span aria-hidden className="inline-block h-0.5 w-3 rounded" style={{ background: "var(--viz-total)" }} />
-          <span className="font-medium tabular-nums text-text">{money(cumulative[i] ?? 0)}</span> this year so far
+          <span className="font-medium tabular-nums text-text">{money(x.cumulative ?? 0)}</span> this year so far
         </div>
       </>
     );
   };
   const describe = (i: number) => {
     const m = months[i]!;
+    const x = f.months[i]!;
     if (m.coverage === "none") return `${fmtMonth(m.month, { year: true })}: not imported.`;
-    return `${fmtMonth(m.month, { year: true })}${m.current ? " so far" : ""}: ${money(m.netSales)} net sales from ${fmtNum(m.orders)} orders${m.change !== null ? `, ${m.change >= 0 ? "up" : "down"} ${fmtPct(Math.abs(m.change))} ${comparedText(m)}` : ""}.`;
+    const what = shown ? `${name} (net sales ${money(m.netSales)})` : "net sales";
+    return `${fmtMonth(m.month, { year: true })}${m.current ? " so far" : ""}: ${money(x.value)} ${what} from ${fmtNum(m.orders)} orders${x.change !== null ? `, ${x.change >= 0 ? "up" : "down"} ${fmtPct(Math.abs(x.change))} ${comparedText(m)}` : ""}.`;
   };
 
   return (
@@ -631,25 +392,29 @@ export function MonthlySalesCard({ year, historyFrom, currency }: { year: YearBr
       <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
         <div className="min-w-0">
           <p className="text-xs font-medium uppercase tracking-wide text-muted">This year · Monthly</p>
-          <p className="mt-1 text-3xl font-semibold">{money(year.total)}</p>
+          <p className="mt-1 text-3xl font-semibold">{money(f.total)}</p>
+          {shown && <CustomNote custom={shown} net={year.total} money={money} />}
           <p className="mt-0.5 text-xs text-muted">
             {fmtSpan(`${year.year}-01-01`, current?.to ?? `${year.year}-01-01`)}
             {current ? ` · ${fmtMonth(current.month)} is month to date` : ""}
             {anyMissing && firstImported ? ` · orders before ${fmtDay(historyFrom, { year: false })} weren't shared by Shopify` : ""}
           </p>
         </div>
-        <button className="text-xs text-muted underline" onClick={() => setTable((x) => !x)}>{table ? "Show chart" : "Show table"}</button>
+        <div className="flex flex-wrap items-center gap-3">
+          <MeasureChoice custom={offered} value={measure} onChange={setMeasure} />
+          <button className="text-xs text-muted underline" onClick={() => setTable((x) => !x)}>{table ? "Show chart" : "Show table"}</button>
+        </div>
       </div>
 
       <dl className="mt-4 grid grid-cols-2 gap-2 lg:grid-cols-4">
-        <Figure label="Average month" value={average !== null ? money(average) : "—"} note={finished.length ? `over ${finished.length} full month${finished.length === 1 ? "" : "s"}` : "no full month yet"} />
-        <Figure label="Best month" value={best ? money(best.netSales) : "—"} note={best ? fmtMonth(best.month) : "no sales yet"} />
-        <Figure label="Orders this year" value={fmtNum(year.orders)} note={year.orders ? `${money(Math.round((year.total / year.orders) * 100) / 100)} net per order` : undefined} />
-        {current && (
+        <Figure label="Average month" value={f.average !== null ? money(f.average) : "—"} note={f.finishedMonths ? `over ${f.finishedMonths} full month${f.finishedMonths === 1 ? "" : "s"}` : "no full month yet"} />
+        <Figure label="Best month" value={f.best ? money(f.best.value) : "—"} note={f.best ? fmtMonth(f.best.month) : "no sales yet"} />
+        <Figure label="Orders this year" value={fmtNum(year.orders)} note={year.orders ? `${money(Math.round((f.total / year.orders) * 100) / 100)} ${shown ? "Custom sales" : "net"} per order` : undefined} />
+        {current && currentFigure && (
           <Figure
             label={`${fmtMonth(current.month)} so far`}
-            value={money(current.netSales)}
-            note={current.change !== null ? <Delta value={current.change} label={comparedText(current)!} /> : "nothing comparable before it"}
+            value={money(currentFigure.value)}
+            note={currentFigure.change !== null ? <Delta value={currentFigure.change} label={comparedText(current)!} /> : "nothing comparable before it"}
           />
         )}
       </dl>
@@ -657,48 +422,53 @@ export function MonthlySalesCard({ year, historyFrom, currency }: { year: YearBr
       {table ? (
         <div className="mt-4 overflow-auto">
           <table className="w-full text-sm">
-            <caption className="sr-only">Net sales per month this year</caption>
+            <caption className="sr-only">{name} per month this year</caption>
             <thead className="text-left text-xs text-muted">
               <tr>
                 <th className="py-1 font-normal">Month</th>
+                {shown && <th className="py-1 text-right font-normal">{name}</th>}
                 <th className="py-1 text-right font-normal">Net sales</th>
                 <th className="py-1 text-right font-normal">Orders</th>
                 <th className="py-1 text-right font-normal">Average order</th>
-                <th className="py-1 text-right font-normal">Change</th>
-                <th className="py-1 text-right font-normal">Year so far</th>
+                <th className="py-1 text-right font-normal">{shown ? "Custom sales change" : "Change"}</th>
+                <th className="py-1 text-right font-normal">{shown ? "Custom sales, year so far" : "Year so far"}</th>
               </tr>
             </thead>
             <tbody>
-              {months.map((m, i) => (
-                <tr key={m.month} className="border-t border-border">
-                  <td className="py-1">{fmtMonth(m.month)}{m.current ? " (so far)" : m.coverage === "partial" ? " (partly imported)" : ""}</td>
-                  {m.coverage === "none" ? (
-                    <td colSpan={5} className="py-1 text-right text-muted">Not imported</td>
-                  ) : (
-                    <>
-                      <td className="py-1 text-right tabular-nums">{money(m.netSales)}</td>
-                      <td className="py-1 text-right tabular-nums">{fmtNum(m.orders)}</td>
-                      <td className="py-1 text-right tabular-nums">{m.averageOrderValue !== null ? money(m.averageOrderValue) : "—"}</td>
-                      <td className="py-1 text-right tabular-nums">{m.change !== null ? `${changeText(m.change)} ${comparedText(m)}` : "—"}</td>
-                      <td className="py-1 text-right tabular-nums">{money(cumulative[i] ?? 0)}</td>
-                    </>
-                  )}
-                </tr>
-              ))}
+              {months.map((m, i) => {
+                const x = f.months[i]!;
+                return (
+                  <tr key={m.month} className="border-t border-border">
+                    <td className="py-1">{fmtMonth(m.month)}{m.current ? " (so far)" : m.coverage === "partial" ? " (partly imported)" : ""}</td>
+                    {m.coverage === "none" ? (
+                      <td colSpan={shown ? 6 : 5} className="py-1 text-right text-muted">Not imported</td>
+                    ) : (
+                      <>
+                        {shown && <td className="py-1 text-right tabular-nums">{money(x.value)}</td>}
+                        <td className="py-1 text-right tabular-nums">{money(m.netSales)}</td>
+                        <td className="py-1 text-right tabular-nums">{fmtNum(m.orders)}</td>
+                        <td className="py-1 text-right tabular-nums">{m.averageOrderValue !== null ? money(m.averageOrderValue) : "—"}</td>
+                        <td className="py-1 text-right tabular-nums">{x.change !== null ? `${changeText(x.change)} ${comparedText(m)}` : "—"}</td>
+                        <td className="py-1 text-right tabular-nums">{money(x.cumulative ?? 0)}</td>
+                      </>
+                    )}
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
       ) : (
         <>
           <div className="mt-4 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
-            <Key kind="box" color="var(--viz-tier-2)">Net sales</Key>
+            <Key kind="box" color="var(--viz-tier-2)">{name}</Key>
             {current && <Key kind="box" color="var(--viz-tier-2)" faded>Month so far{anyMissing ? " / partly imported" : ""}</Key>}
             {months.some((m) => m.coverage === "none") && <Key kind="hatch" color="var(--muted)">Not imported</Key>}
             <span>▲▼ change on the month before</span>
           </div>
           <ColumnsWithTotal
             columns={columns}
-            label={`Net sales per month in ${year.year}, with the year's running total below`}
+            label={`${name} per month in ${year.year}, with the year's running total below`}
             fmtAxis={(v) => fmtMoneyCompact(v, currency)}
             runningLabel="Year so far"
             fmtRunning={whole}

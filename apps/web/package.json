@@ -5,15 +5,15 @@
   "type": "module",
   "scripts": {
     "dev": "next dev -p 3001",
-    "build": "next build && node scripts/fix-export-prefetch.mjs",
+    "build": "next build && node scripts/fix-export-prefetch.mjs && node scripts/check-font-preloads.mjs",
     "typecheck": "tsc --noEmit",
     "test": "echo 'web: see e2e'",
     "e2e": "playwright test"
   },
   "dependencies": {
     "@app/shared": "workspace:*",
-    "firebase": "^12.3.0",
     "geist": "^1.7.2",
+    "lenis": "1.3.26",
     "lucide-react": "^1.52.0",
     "motion": "^14.0.0",
     "next": "^16.0.0",

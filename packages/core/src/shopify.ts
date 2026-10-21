@@ -67,21 +67,22 @@ async function tokenRequest(
     body: JSON.stringify(body),
   });
   if (!res.ok) {
-    throw new ShopifyHttpError(`Token request failed (${res.status})`, res.status);
+    // Shopify's OAuth errors are `{"error": "<code>"}` (invalid_request, invalid_subject_token...):
+    // the code tells a dead token from a passing failure, and never carries anything secret.
+    const code = ((await res.json().catch(() => null)) as { error?: unknown } | null)?.error;
+    const detail = typeof code === "string" ? ` ${code.slice(0, 60)}` : "";
+    throw new ShopifyHttpError(`Token request failed (${res.status}${detail})`, res.status);
   }
   return parseTokenResponse((await res.json()) as Record<string, unknown>);
 }
 
 /**
- * Authorization-code exchange for the *permanent* offline token background sync runs on.
- *
- * Sending `expiring: 1` here would opt into Shopify's expiring tokens instead: a 1-hour access
- * token plus a single-use 90-day refresh token. That is deliberately not done. Rotation then
- * became a liveness requirement for every store - a store whose refresh failed once was dead,
- * and the refresh token is invalidated by any later authorize for the same app and shop, so an
- * abandoned authorize could kill a live store's token while leaving its row untouched. A permanent
- * offline token has no expiry and no refresh token, so there is nothing to rotate and nothing to
- * invalidate; it stays valid until the merchant uninstalls.
+ * Authorization-code exchange for the offline token background sync runs on: an *expiring* one
+ * (`expiring=1`), a 1-hour access token plus a 90-day refresh token that `getAccessToken` rotates.
+ * Shopify requires them of public apps (new ones since 2026-04-01, all of them from 2027-01-01,
+ * when it stops accepting non-expiring tokens) and flags every use of a non-expiring one in the
+ * Dev Dashboard's API health as "Deprecated offline token". Shopify decides offline vs online from
+ * the authorize URL (no `grant_options[]=per-user`), not from this request.
  */
 export function exchangeCodeForToken(
   cfg: ShopifyAppConfig,
@@ -89,10 +90,47 @@ export function exchangeCodeForToken(
   code: string,
   fetchImpl: FetchLike = fetch,
 ): Promise<TokenResponse> {
-  return tokenRequest(shop, { client_id: cfg.apiKey, client_secret: cfg.apiSecret, code }, fetchImpl);
+  return tokenRequest(shop, { client_id: cfg.apiKey, client_secret: cfg.apiSecret, code, expiring: "1" }, fetchImpl);
 }
 
-/** Rotate: Shopify returns a new access token AND a new refresh token. */
+/** OAuth token exchange (RFC 8693), and Shopify's name for an offline access token in it. */
+const TOKEN_EXCHANGE_GRANT = "urn:ietf:params:oauth:grant-type:token-exchange";
+const OFFLINE_ACCESS_TOKEN = "urn:shopify:params:oauth:token-type:offline-access-token";
+
+/**
+ * Trade a store's non-expiring offline token for an expiring one, with no merchant involved.
+ * Shopify stops accepting the old token for GraphQL the moment this succeeds, so the answer has to
+ * be stored before anything else; a lost answer comes back unchanged if the same request is made
+ * again within 7 days. 400 `invalid_subject_token`: the token isn't an active non-expiring offline
+ * token of this app on this shop (revoked, or already traded).
+ */
+export function exchangeForExpiringToken(
+  cfg: Pick<ShopifyAppConfig, "apiKey" | "apiSecret">,
+  shop: string,
+  nonExpiringToken: string,
+  fetchImpl: FetchLike = fetch,
+): Promise<TokenResponse> {
+  return tokenRequest(
+    shop,
+    {
+      client_id: cfg.apiKey,
+      client_secret: cfg.apiSecret,
+      grant_type: TOKEN_EXCHANGE_GRANT,
+      subject_token: nonExpiringToken,
+      subject_token_type: OFFLINE_ACCESS_TOKEN,
+      requested_token_type: OFFLINE_ACCESS_TOKEN,
+      expiring: "1",
+    },
+    fetchImpl,
+  );
+}
+
+/**
+ * Rotate: Shopify returns a new access token AND a new refresh token. Presenting the new refresh
+ * token retires the one before it; until then the one presented here still works, so a refresh
+ * whose answer was lost can simply be made again. 401 `invalid_request`: the refresh token is
+ * expired, retired or otherwise dead, and only the merchant opening the app again gets a new one.
+ */
 export function refreshAccessToken(
   cfg: Pick<ShopifyAppConfig, "apiKey" | "apiSecret">,
   shop: string,
@@ -142,6 +180,14 @@ export class ShopifyHttpError extends Error {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** `: <Shopify's errors text>` from a failed response, at most 200 characters; empty when it has none. */
+async function errorDetail(res: Response): Promise<string> {
+  const body = (await res.json().catch(() => null)) as { errors?: unknown } | null;
+  const errors = body?.errors;
+  const text = typeof errors === "string" ? errors : Array.isArray(errors) || (errors && typeof errors === "object") ? JSON.stringify(errors) : "";
+  return text ? `: ${text.slice(0, 200)}` : "";
+}
+
 /** The cost accounting Shopify returns on every Admin GraphQL response, in `extensions.cost`. */
 export interface ShopifyCost {
   requestedQueryCost: number;
@@ -187,22 +233,20 @@ export async function shopifyGraphqlWithCost<T>(opts: ShopifyCallOptions): Promi
       body: JSON.stringify({ query: opts.query, variables: opts.variables ?? {} }),
     });
     if (res.status === 401 || res.status === 403) {
-      throw new ShopifyHttpError(`Shopify auth error ${res.status}`, res.status);
+      // Shopify says why ("[API] Invalid API key or access token", a missing scope, an app it
+      // won't serve on this shop): without it a 403 can't be told apart from a revoked token.
+      throw new ShopifyHttpError(`Shopify auth error ${res.status}${await errorDetail(res)}`, res.status);
     }
     if (res.status === 429 || res.status >= 500) {
       if (attempt >= maxRetries) throw new ShopifyHttpError(`Shopify ${res.status}`, res.status);
       const retryAfter = Number(res.headers.get("retry-after") ?? 0);
-      await sleep(retryAfter > 0 ? retryAfter * 1000 : Math.min(30_000, 500 * 2 ** attempt));
+      await sleep(retryAfter > 0 ? retryAfter * 1000 : backoffMs(attempt));
       continue;
     }
     // Any other failure (402 for a frozen or unpaid store, 404 for one that is gone, 423 for a
     // locked one) answers `{"errors": "<text>"}`, a string rather than GraphQL's array, and asking
     // again won't change it.
-    if (!res.ok) {
-      const body = (await res.json().catch(() => null)) as { errors?: unknown } | null;
-      const detail = typeof body?.errors === "string" ? `: ${body.errors}` : "";
-      throw new ShopifyHttpError(`Shopify ${res.status}${detail}`, res.status);
-    }
+    if (!res.ok) throw new ShopifyHttpError(`Shopify ${res.status}${await errorDetail(res)}`, res.status);
     const json = (await res.json()) as {
       data?: T;
       errors?: Array<{ message: string; extensions?: { code?: string } }>;
@@ -214,7 +258,7 @@ export async function shopifyGraphqlWithCost<T>(opts: ShopifyCallOptions): Promi
       const cost = json.extensions?.cost;
       const wait = cost
         ? Math.ceil(((cost.requestedQueryCost - cost.throttleStatus.currentlyAvailable) / cost.throttleStatus.restoreRate) * 1000)
-        : 1000 * 2 ** attempt;
+        : backoffMs(attempt + 1);
       await sleep(Math.max(250, wait));
       continue;
     }
@@ -230,6 +274,16 @@ export async function shopifyGraphqlWithCost<T>(opts: ShopifyCallOptions): Promi
     }
     return { data: json.data as T, requiredDelayMs: pacingDelayMs(json.extensions?.cost, opts.shop) };
   }
+}
+
+/**
+ * Exponential backoff with jitter: half the step plus a random share of the other half, capped at
+ * 30 s. Without the random part, every job that met the same 429 or 5xx (one store's sync chain,
+ * its webhooks) asked again at the same instants and met it again.
+ */
+function backoffMs(attempt: number): number {
+  const step = Math.min(30_000, 500 * 2 ** attempt);
+  return Math.round(step / 2 + Math.random() * (step / 2));
 }
 
 /**

@@ -1,0 +1,14 @@
+# Keeps the actions in .github/workflows current. They are pinned to commit SHAs (a tag can be moved
+# to other code, a SHA can't), each with its version in a comment; Dependabot updates both. Monthly
+# and all in one pull request: each one costs a full CI run on the runner (docs/aws-deployment.md).
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: ci

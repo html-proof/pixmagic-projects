@@ -2,8 +2,8 @@
 import { motion, useTransform, type MotionValue } from "motion/react";
 import { useId, type ReactNode } from "react";
 import { easeOut, lerp, segment } from "@/lib/motion";
-import { InsightMark } from "../shared/InsightMark";
-import { EMBLEM_IN, ORB, ORB_POINT, SLOTS, type SlotId } from "./HeroLayout";
+import { BrandMark } from "@/components/Brand";
+import { EMBLEM_IN, ORB, ORB_POINT, SLOTS, type SlotId } from "./heroLayout";
 
 /**
  * When each card forms, as windows of stage 4 (p 0.60–0.80). Business health grows out of the
@@ -49,7 +49,7 @@ function HealthContent({ reveal, emblem }: { reveal: MotionValue<number>; emblem
   return (
     <>
       <motion.span
-        className="absolute top-1/2 aspect-square -translate-x-1/2 -translate-y-1/2 rounded-full"
+        className="lp-layer absolute top-1/2 aspect-square -translate-x-1/2 -translate-y-1/2 rounded-full"
         style={{
           opacity: emblem,
           left: `${ORB.x}%`,
@@ -65,7 +65,7 @@ function HealthContent({ reveal, emblem }: { reveal: MotionValue<number>; emblem
           <p className="mt-1 font-lp-mono text-[18px] leading-none text-lp-text @md:text-[24px]">—</p>
           <p className="mt-2 hidden text-[11.5px] text-lp-muted @lg:block">vs previous period</p>
         </div>
-        <motion.ul className="min-w-0 flex-1 space-y-2.5 border-l border-lp-line pl-4 @lg:pl-6" style={{ opacity: lines }}>
+        <motion.ul className="lp-layer min-w-0 flex-1 space-y-2.5 border-l border-lp-line pl-4 @lg:pl-6" style={{ opacity: lines }}>
           {[
             { dot: "bg-lp-positive", w: "w-[82%]" },
             { dot: "bg-lp-warning", w: "w-[64%]" },
@@ -91,7 +91,7 @@ function SalesContent({ reveal }: { reveal: MotionValue<number> }) {
   return (
     <div className="flex h-full flex-col">
       <CardHeader title="Sales" />
-      <motion.div className="relative mt-auto h-[58%]" style={{ clipPath: clip }}>
+      <motion.div className="lp-layer relative mt-auto h-[58%]" style={{ clipPath: clip }}>
         <svg viewBox="0 0 200 60" preserveAspectRatio="none" className="absolute inset-0 size-full overflow-visible" fill="none">
           <defs>
             <linearGradient id={id} x1="0" y1="0" x2="0" y2="1">
@@ -130,7 +130,7 @@ function FunnelBar({ height, index, reveal }: { height: number; index: number; r
   const scaleY = useTransform(reveal, (r) => easeOut(segment(r, index * 0.1, 0.5 + index * 0.1)));
   return (
     <motion.span
-      className="block flex-1 origin-bottom rounded-[4px] bg-gradient-to-t from-lp-violet/25 to-lp-blue/70"
+      className="lp-layer block flex-1 origin-bottom rounded-[4px] bg-gradient-to-t from-lp-violet/25 to-lp-blue/70"
       style={{ height: `${height}%`, scaleY, opacity: 0.45 + (1 - index / FUNNEL.length) * 0.55 }}
     />
   );
@@ -142,7 +142,7 @@ function CustomersContent({ reveal }: { reveal: MotionValue<number> }) {
     <div className="flex h-full flex-col">
       <CardHeader title="Customers" value={false} />
       <div className="mt-auto space-y-3">
-        <motion.div className="flex h-2.5 origin-left gap-1 overflow-hidden rounded-full" style={{ scaleX }}>
+        <motion.div className="lp-layer flex h-2.5 origin-left gap-1 overflow-hidden rounded-full" style={{ scaleX }}>
           <span className="h-full w-[38%] rounded-full bg-lp-violet" />
           <span className="h-full flex-1 rounded-full bg-lp-cyan/80" />
         </motion.div>
@@ -189,7 +189,7 @@ function ProductRow({ index, row, reveal }: { index: number; row: (typeof PRODUC
   const opacity = useTransform(reveal, (r) => segment(r, index * 0.12, 0.4 + index * 0.12));
   const x = useTransform(opacity, (o) => (1 - o) * -8);
   return (
-    <motion.li className={`${index === 3 ? "hidden @3xs:grid" : "grid"} grid-cols-[1.1em_1fr_1fr] items-center gap-2`} style={{ opacity, x }}>
+    <motion.li className={`lp-layer ${index === 3 ? "hidden @3xs:grid" : "grid"} grid-cols-[1.1em_1fr_1fr] items-center gap-2`} style={{ opacity, x }}>
       <span className="font-lp-mono text-[10.5px] text-lp-muted">{index + 1}</span>
       <Skeleton className={row.name} />
       <span className="flex justify-end">
@@ -240,7 +240,7 @@ function EmergingCard({
   return (
     <motion.div className="absolute inset-0" style={{ x, y }}>
       <motion.div
-        className="@container absolute overflow-hidden border border-lp-line bg-[linear-gradient(180deg,#171c24,#12161c)] p-3 shadow-[0_24px_60px_-24px_rgb(0_0_0/0.7)] will-change-transform @3xs:p-4"
+        className="lp-layer @container absolute overflow-hidden border border-lp-line bg-[linear-gradient(180deg,#171c24,#12161c)] p-3 shadow-[0_24px_60px_-24px_rgb(0_0_0/0.7)] @3xs:p-4"
         style={{
           left: `${slot.x}%`,
           top: `${slot.y}%`,
@@ -260,7 +260,7 @@ function EmergingCard({
 }
 
 /**
- * Stage 4–5: the core turns into the Insight dashboard. Business health grows out of the core
+ * Stage 4–5: the core turns into the bizinsights dashboard. Business health grows out of the core
  * first (the sphere shrinks into its emblem), then Sales, Conversion, Customers and Products
  * scale out to their grid slots and the window frame forms around them. Values are "—" and
  * skeleton bars: this shows the shape of the product, never invented numbers.
@@ -281,12 +281,12 @@ export function HeroDashboardReveal({
   return (
     <div aria-hidden className="absolute inset-0">
       <motion.div
-        className="absolute inset-x-0 bottom-[2%] top-[1%] rounded-[20px] border border-lp-line bg-[linear-gradient(180deg,rgb(21_26_33/0.7),rgb(13_16_21/0.55))] shadow-[0_40px_120px_-40px_rgb(0_0_0/0.8)] will-change-transform md:rounded-[26px]"
+        className="lp-layer absolute inset-x-0 bottom-[2%] top-[1%] rounded-[20px] border border-lp-line bg-[linear-gradient(180deg,rgb(21_26_33/0.7),rgb(13_16_21/0.55))] shadow-[0_40px_120px_-40px_rgb(0_0_0/0.8)] md:rounded-[26px]"
         style={{ opacity: frame, scale: frameScale }}
       >
         <div className="flex h-[9%] items-center justify-between px-[3%]">
           <span className="flex items-center gap-2 text-[11.5px] font-medium text-lp-text-2 md:text-[12.5px]">
-            <InsightMark size={16} className="text-lp-text" />
+            <BrandMark size={16} />
             Overview
           </span>
           <span className="lp-eyebrow rounded-full border border-lp-line px-2.5 py-1 text-[9.5px] md:text-[10.5px]">vs previous period</span>
