@@ -21,6 +21,7 @@ export function TopProducts({ ov, currency }: { ov: Overview; currency: string }
   const currentPage = Math.min(page, Math.max(1, Math.ceil(items.length / size)));
   const detail = items.find(p => p.key === selected);
   const money = (n: number) => fmtMoney(n, currency);
+  const synchronizedAt = ov.freshness?.asOf ?? report?.lastSyncedAt;
   const csv = () => {
     const values = [["Rank", "Product ID", "Product", "SKU", "Net units", "Gross units", "Returned units", "Gross sales", "Discounts", "Returns and adjustments", "Net revenue", "Orders", "Growth %", "Trend", "Last sold"],
       ...items.map(p => [p.rank, p.productId, p.title, p.sku, p.units, p.grossUnits, p.returnedUnits, p.grossSales, p.discounts, p.returns, p.revenue, p.orders, p.growth, p.trend, p.lastSold])];
@@ -58,9 +59,9 @@ export function TopProducts({ ov, currency }: { ov: Overview; currency: string }
     <div className="mt-4 flex flex-wrap items-center gap-3 text-sm">
       <label>Rows <select value={size} onChange={e => { setSize(Number(e.target.value)); setPage(1); }}>{[10,25,50,100].map(n => <option key={n}>{n}</option>)}</select></label>
       <button disabled={currentPage <= 1} onClick={() => setPage(currentPage - 1)}>Previous</button><span>Page {currentPage} of {Math.max(1, Math.ceil(items.length / size))} · {items.length} products</span><button disabled={currentPage * size >= items.length} onClick={() => setPage(currentPage + 1)}>Next</button>
-      <span className="text-muted">Last synchronized: {report?.lastSyncedAt ? new Date(report.lastSyncedAt).toLocaleString() : "Awaiting sync"} · {currency}</span>
+      <span className="text-muted">Last synchronized: {synchronizedAt ? new Date(synchronizedAt).toLocaleString() : "Awaiting sync"} · {currency}</span>
     </div>
-    {detail && <aside aria-label={`${detail.title} details`} className="mt-4 rounded border p-4">
+    {detail && <aside aria-label={`${detail.title} details`} className="fixed inset-y-0 right-0 z-50 w-full max-w-xl overflow-y-auto border-l border-border bg-surface p-6 shadow-xl">
       <button className="float-right underline" onClick={() => setSelected(null)}>Close details</button><h3 className="font-semibold">{detail.title}</h3>
       <p>Gross units: {detail.grossUnits} · Returned units: {detail.returnedUnits} · Net units: {detail.units}</p>
       <p>Gross sales: {money(detail.grossSales)} · Discounts: {money(detail.discounts)} · Returns and adjustments: {money(detail.returns)} · Net revenue: {money(detail.revenue)}</p>

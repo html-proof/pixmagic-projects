@@ -26,6 +26,8 @@ export async function productCheck(tx: Tx, store: Store, deps: ReportFetchDeps, 
   if (!["product_id", "net_items_sold", "net_sales"].every(name => report.columns.some(c => c.name === name)))
     return { ...metadata, status: "not_verifiable", reason: "Shopify omitted required product report columns" };
   const cell = (row: unknown, name: string): unknown => Array.isArray(row) ? row[report.columns.findIndex(c => c.name === name)] : row && typeof row === "object" ? (row as Record<string, unknown>)[name] : undefined;
+  if (report.rows.some(r => cell(r, "product_id") != null && ["net_items_sold", "net_sales"].some(name => cell(r, name) == null || cell(r, name) === "")))
+    return { ...metadata, status: "not_verifiable", reason: "Shopify returned missing product metrics" };
   const known = report.rows.filter(r => cell(r, "product_id") != null).map(r => ({ productId: String(cell(r, "product_id")).split("/").at(-1)!, units: Number(cell(r, "net_items_sold")), revenue: Number(cell(r, "net_sales")) }));
   if (known.some(r => !Number.isFinite(r.units) || !Number.isFinite(r.revenue)))
     return { ...metadata, status: "not_verifiable", reason: "Shopify returned nonnumeric product metrics" };
