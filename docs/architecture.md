@@ -145,6 +145,10 @@ Write a hand-made `api()` call in an effect only when `useApi` can't express it 
 with the request it belongs to, or ignore any response that isn't the latest (see
 `components/dashboard/Contacts.tsx` and `app/(app)/whatsapp/messages/page.tsx`).
 
+The API response reader (`lib/apiResponse.ts`) owns `ApiError`, body parsing and error-envelope
+normalization. It has no React dependency, so response failures can be tested independently.
+`lib/api.ts` re-exports the same error class and retains session, access-change and retry behavior.
+
 **Loading and errors.** While loading: `Skeleton`. When a load fails: `LoadError` (says what failed,
 treats an outage calmly, offers Try again), including when a *second* load on the page fails. A
 failed action (save, delete): `actionError(e, "what you tried")` in a toast or an `Alert`. A crash

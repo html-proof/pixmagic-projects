@@ -2,25 +2,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ACCESS_CHANGED_EVENT, signalAccess } from "@/lib/access";
 
-export class ApiError extends Error {
-  /**
-   * A 401 for a session this tab no longer uses: the call was made as the shared-link session,
-   * which the tab was leaving or had left (leaveSharedSession) by the time the answer came. It
-   * says nothing about the session the tab uses now, so it is not "signed out" (isSignedOut).
-   */
-  sessionLeft = false;
-  constructor(
-    public status: number,
-    public code: string,
-    message: string,
-    /** The rest of the error body (e.g. `detail`, `problems`), for the few callers that use it. */
-    public data: Record<string, unknown> = {},
-  ) {
-    super(message);
-  }
-}
-
-const UNREACHABLE = "We can't reach bizinsights right now. We'll keep trying.";
+import { ApiError, apiFailure, readApiResponse, UNREACHABLE } from "./apiResponse";
+export { ApiError } from "./apiResponse";
 
 /**
  * Only a 401 means the session is gone, and only one for the session the tab uses
@@ -193,16 +176,9 @@ export async function api<T = unknown>(path: string, init: { method?: string; bo
     const at = fp.lastIndexOf(":");
     signalAccess({ workspaceId: fp.slice(0, at), fingerprint: fp.slice(at + 1) });
   }
-  const text = await res.text();
-  let json: { error?: string; message?: string; [k: string]: unknown } = {};
-  try {
-    if (text) json = JSON.parse(text);
-  } catch {
-    // Non-JSON body (e.g. a CDN error page): report the status instead of a parse error.
-    if (res.ok) throw new ApiError(res.status, "bad_response", "Unexpected response from the server");
-  }
+  const json = await readApiResponse(res);
   if (!res.ok) {
-    const err = new ApiError(res.status, json.error ?? "error", json.message ?? "Request failed", json);
+    const err = apiFailure(res.status, json);
     if (res.status === 401 && err.code === "unauthenticated") {
       if (signedOutHere(asShared)) window.dispatchEvent(new Event(SIGNED_OUT_EVENT));
       else err.sessionLeft = true;
