@@ -77,6 +77,12 @@ Who can open a workspace's dashboard, and what of it they see. Owners and admins
   on the same browser: a tab showing a shared dashboard sends `x-bi-context: shared` (per tab,
   sessionStorage) and its requests use `__share` only; every other tab uses the account's session
   (or `__share` when no account is signed in there). The two are never merged (`pickSession`).
+  - A 401 answers for the session the call was made as. Closing a shared dashboard
+    (`leaveSharedSession` in lib/api.ts) signs the shared-link session out while the dashboard's
+    checks may still be in flight as it; `api` notes which session each call used and, unless
+    that is still the tab's session and the tab is not leaving it (`signedOutHere`), marks the
+    refusal `sessionLeft` instead of treating the tab as signed out, so the tab goes to the
+    homepage, not to sign in or to "This shared dashboard has closed".
   - **View-only**: a link session holds the member's view and export permissions only, never a
     "manage" one, and an owner's or admin's link is a viewer of everything (`linkSessionAccess`,
     `readOnlyStaffAccess`). Managing the team, stores, billing, integrations or staff always needs

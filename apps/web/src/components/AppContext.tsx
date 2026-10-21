@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { allows, type AccessNeed, type MemberAccess } from "@app/shared/access";
 import { can, type Role } from "@app/shared/roles";
 import type { StaffRole } from "@app/shared/staff";
-import { api, contextHeaders, isSharedTab, isSignedOut, isTransient, keepRetrying, onSessionGone, setSharedTab } from "@/lib/api";
+import { api, contextHeaders, isSharedTab, isSignedOut, isTransient, keepRetrying, onSessionGone, setSharedTab, signedOutHere } from "@/lib/api";
 import { ACCESS_CHANGED_EVENT, onAccessSignal } from "@/lib/access";
 import { offersModule, type AppModule } from "@/lib/features";
 import { LoadError, Unreachable } from "@/components/LoadError";
@@ -246,6 +246,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const ws = currentWs.current;
     if (!ws || checking.current) return;
     checking.current = true;
+    // As which session the check is made: a refusal answers for that one (signedOutHere).
+    const asShared = isSharedTab();
     try {
       const res = await fetch(`/api/workspaces/${ws}/access`, {
         credentials: "same-origin",
@@ -269,7 +271,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       else if (res.status === 403 && body.error === "access_expired") patchWorkspace(ws, { status: "expired", permissions: [] });
       // Removed from the workspace altogether: /me knows where they can still go.
       else if (res.status === 404) void loadMe();
-      else if (res.status === 401) sessionGone();
+      else if (res.status === 401 && signedOutHere(asShared)) sessionGone();
     } catch {
       // Offline or an outage: the next check tries again; nothing on screen changes meanwhile.
     } finally {

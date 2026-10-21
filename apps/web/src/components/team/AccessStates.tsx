@@ -3,7 +3,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { CalendarX2, LinkIcon, LockKeyhole, ShieldOff } from "lucide-react";
 import { BrandLogo } from "@/components/Brand";
-import { setSharedTab } from "@/lib/api";
+import { leaveSharedSession, setSharedTab } from "@/lib/api";
 import { leaveTo, signOut } from "@/lib/auth";
 
 // ---------------------------------------------------------------------------
@@ -11,10 +11,13 @@ import { leaveTo, signOut } from "@/lib/auth";
 // (the whole app), or no permissions chosen yet (the dashboard). Neither shows any business data.
 // ---------------------------------------------------------------------------
 
-/** Leave a shared dashboard: its shared-link session ends (an account signed in on this browser stays signed in). */
+/**
+ * Leave a shared dashboard: its shared-link session ends (an account signed in on this browser
+ * stays signed in: leaveSharedSession), and the tab goes to the homepage, which sends a signed-in
+ * browser on to its own dashboard.
+ */
 export async function closeSharedDashboard(router: { replace(href: string): void }) {
-  await signOut();
-  setSharedTab(false);
+  await leaveSharedSession();
   router.replace("/");
 }
 

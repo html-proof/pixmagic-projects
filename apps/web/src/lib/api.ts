@@ -3,6 +3,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ACCESS_CHANGED_EVENT, signalAccess } from "@/lib/access";
 
 export class ApiError extends Error {
+  /**
+   * A 401 for a session this tab no longer uses: the call was made as the shared-link session,
+   * which the tab was leaving or had left (leaveSharedSession) by the time the answer came. It
+   * says nothing about the session the tab uses now, so it is not "signed out" (isSignedOut).
+   */
+  sessionLeft = false;
   constructor(
     public status: number,
     public code: string,
@@ -16,8 +22,11 @@ export class ApiError extends Error {
 
 const UNREACHABLE = "We can't reach bizinsights right now. We'll keep trying.";
 
-/** Only a 401 means the session is gone. Anything else must never sign the user out. */
-export const isSignedOut = (e: unknown) => e instanceof ApiError && e.status === 401;
+/**
+ * Only a 401 means the session is gone, and only one for the session the tab uses
+ * (ApiError.sessionLeft). Anything else must never sign the user out.
+ */
+export const isSignedOut = (e: unknown) => e instanceof ApiError && e.status === 401 && !e.sessionLeft;
 
 /**
  * Dispatched on window whenever any call finds the session gone (the account was deleted or
@@ -126,6 +135,36 @@ export function setSharedTab(on: boolean) {
   }
 }
 
+/** The tab is closing its shared dashboard (leaveSharedSession): see signedOutHere. */
+let leaving = false;
+
+/**
+ * Whether a 401 for a call made as `asShared` (isSharedTab() when it was sent) means this tab
+ * is signed out. It does only while that is still the tab's session and the tab is not leaving
+ * it: closing a shared dashboard signs the shared-link session out while the dashboard's checks
+ * are still in flight as it, and those refusals say nothing about the account the tab goes on
+ * as (so they must not send it to sign in, or say the link has ended, as it leaves).
+ */
+export const signedOutHere = (asShared: boolean): boolean => asShared === isSharedTab() && !(asShared && leaving);
+
+/**
+ * Close the shared dashboard this tab shows: its shared-link session ends, and the tab is the
+ * account's from then on (or nobody's). The sign-out goes first, as the shared-link session,
+ * which the tab still is until it has answered: sent as the account's it would end that
+ * session instead, and the dashboard's checks meanwhile could re-adopt the link session.
+ */
+export async function leaveSharedSession(): Promise<void> {
+  leaving = true;
+  try {
+    await api("/auth/logout", { method: "POST" });
+  } catch {
+    // Unreachable: the session ends with its link anyway. The tab leaves it either way.
+  } finally {
+    setSharedTab(false);
+    leaving = false;
+  }
+}
+
 /** The header that says which session a call uses (none for an account's tab). */
 export const contextHeaders = (): Record<string, string> => (isSharedTab() ? { "x-bi-context": "shared" } : {});
 
@@ -134,6 +173,8 @@ export const apiHref = (path: string) => `/api${path}${isSharedTab() ? `${path.i
 
 /** All calls go to same-origin /api/* (proxied to the Node API by next.config.ts). */
 export async function api<T = unknown>(path: string, init: { method?: string; body?: unknown; headers?: Record<string, string> } = {}): Promise<T> {
+  // As which of the browser's sessions the call is made (contextHeaders): a 401 answers for it.
+  const asShared = isSharedTab();
   let res: Response;
   try {
     res = await fetch(`/api${path}`, {
@@ -162,7 +203,10 @@ export async function api<T = unknown>(path: string, init: { method?: string; bo
   }
   if (!res.ok) {
     const err = new ApiError(res.status, json.error ?? "error", json.message ?? "Request failed", json);
-    if (res.status === 401 && err.code === "unauthenticated") window.dispatchEvent(new Event(SIGNED_OUT_EVENT));
+    if (res.status === 401 && err.code === "unauthenticated") {
+      if (signedOutHere(asShared)) window.dispatchEvent(new Event(SIGNED_OUT_EVENT));
+      else err.sessionLeft = true;
+    }
     if (isRefused(err)) signalAccess({ refused: err.code as "forbidden" | "access_revoked" | "access_expired" });
     throw err;
   }
