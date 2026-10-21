@@ -14,4 +14,5 @@ export * from "./ads/common.js";
 export * from "./ads/meta.js";
 export * from "./ads/googleOAuth.js";
 export * from "./ads/googleAds.js";
+export * from "./ads/googleAdsSource.js";
 export * from "./ads/adsense.js";

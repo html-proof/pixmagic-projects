@@ -6,6 +6,7 @@
  */
 import { AD_CONNECTION_STATUSES, AD_ERROR_STATUS, adErrorMessage, isAdAccountStatus, isAdErrorCode } from "@app/shared/ads";
 import type { AdAccountStatus, AdConnectionStatus, AdErrorCode, AdProvider } from "@app/shared/ads";
+import type { GoogleAdsConnectionStatus } from "@app/shared/adsDemo";
 
 export type { AdProvider };
 
@@ -50,6 +51,18 @@ export interface AdConnection {
   sites: string[];
   /** AdSense: the sites seen for this account plus the chosen ones. */
   availableSites: string[];
+  /**
+   * The Google Ads demo (docs/ads-demo.md): simulated figures and no Google grant, nothing verified by
+   * Google. Said by the API from the row alone; never true of a real account.
+   */
+  demo: boolean;
+  connectionType: "demo" | "production";
+  /** "simulated" for the demo; "authorized" when the person authorized the account at the platform. */
+  verificationStatus: "simulated" | "authorized";
+  /** Google Ads: where it stands in the status endpoint's words; null for other platforms. */
+  connectionStatus: GoogleAdsConnectionStatus | null;
+  /** The demo's seed, so its figures can be reproduced; null for a real account. */
+  demoSeed: number | null;
 }
 
 /** One connection as the API sends it. An API from before 2026-10-19 leaves out the fields marked optional; adConnectionsOf fills them in. */
@@ -66,6 +79,10 @@ export interface AdsState {
    */
   restricted: Record<AdProvider, boolean>;
   connections: ConnectionAnswer[];
+  /** Which platforms offer a simulated account ("Try demo"); absent from older answers. */
+  demo?: Partial<Record<AdProvider, boolean>>;
+  /** The settings each platform's real sign-in still lacks on this server, by name (never a value). */
+  missing?: Partial<Record<AdProvider, string[]>>;
 }
 
 /** The account list after a sign-in that sees several accounts (GET .../ads/pending/:nonce). */
@@ -129,6 +146,11 @@ export function adConnectionsOf(state: AdsState | null): AdConnection[] {
       connectedBy: raw.connectedBy ?? null,
       sites: raw.sites ?? [],
       availableSites: raw.availableSites ?? [],
+      demo: raw.demo ?? false,
+      connectionType: raw.connectionType ?? "production",
+      verificationStatus: raw.verificationStatus ?? "authorized",
+      connectionStatus: raw.connectionStatus ?? null,
+      demoSeed: raw.demoSeed ?? null,
     };
   });
 }
@@ -199,6 +221,21 @@ export const AD_STATE: Record<AdState, { label: string; tone: StateTone; /** Som
   disconnected: { label: "Disconnected", tone: "neutral" },
 };
 
+/**
+ * The same states for the Google Ads demo, named as such wherever the demo shows: a demo is never shown
+ * as plainly "Connected", so nobody takes a simulated account for a real one. Orange, as a demo badge.
+ */
+const DEMO_STATE: Partial<Record<AdState, { label: string; tone: StateTone; busy?: boolean }>> = {
+  connecting: { label: "Connecting demo", tone: "warn", busy: true },
+  synchronizing: { label: "Demo synchronizing", tone: "warn", busy: true },
+  connected: { label: "Demo connected", tone: "warn" },
+  sync_failed: { label: "Demo sync failed", tone: "danger" },
+  disconnected: { label: "Demo disconnected", tone: "neutral" },
+};
+
+/** A state's badge wording: the demo's when it is a demo. */
+export const stateInfo = (state: AdState, demo = false) => (demo ? (DEMO_STATE[state] ?? AD_STATE[state]) : AD_STATE[state]);
+
 /** States that signing in again (Reconnect) fixes. */
 export const RECONNECT_STATES: ReadonlySet<AdState> = new Set(["reconnect_required", "authorization_required", "permission_missing"]);
 
@@ -263,24 +300,30 @@ export interface PlatformInput {
   connecting?: boolean;
   /** Its last account was just disconnected on this page. */
   justDisconnected?: boolean;
+  /** The connection under way, or the one just disconnected, is the demo. */
+  connectingDemo?: boolean;
+  justDisconnectedDemo?: boolean;
 }
 
 /**
  * Where a platform's card stands, and whether every one of its accounts is hidden from the
  * dashboard (the card then says so beside the badge).
  */
-export function platformState(provider: AdProvider, input: PlatformInput, now = Date.now()): { state: AdState; hidden: boolean } {
-  if (input.connecting) return { state: "connecting", hidden: false };
-  if (!input.answer) return { state: input.failed ? "unknown" : "checking", hidden: false };
+export function platformState(provider: AdProvider, input: PlatformInput, now = Date.now()): { state: AdState; hidden: boolean; demo: boolean } {
+  if (input.connecting) return { state: "connecting", hidden: false, demo: !!input.connectingDemo };
+  if (!input.answer) return { state: input.failed ? "unknown" : "checking", hidden: false, demo: false };
   const mine = input.connections.filter((c) => c.provider === provider);
   if (!mine.length) {
-    if (input.justDisconnected) return { state: "disconnected", hidden: false };
-    if (!input.answer.configured[provider]) return { state: "coming_soon", hidden: false };
-    return { state: input.answer.restricted[provider] ? "verification_pending" : "not_connected", hidden: false };
+    if (input.justDisconnected) return { state: "disconnected", hidden: false, demo: !!input.justDisconnectedDemo };
+    // A platform not set up on this server offers its demo where it has one: never "Coming soon" with a button under it.
+    if (!input.answer.configured[provider]) return { state: input.answer.demo?.[provider] ? "not_connected" : "coming_soon", hidden: false, demo: false };
+    return { state: input.answer.restricted[provider] ? "verification_pending" : "not_connected", hidden: false, demo: false };
   }
   const shown = mine.filter((c) => c.enabled);
-  const states = new Set((shown.length ? shown : mine).map((c) => connectionState(c, now)));
-  return { state: PRECEDENCE.find((s) => states.has(s)) ?? "connected", hidden: !shown.length };
+  const counted = shown.length ? shown : mine;
+  const states = new Set(counted.map((c) => connectionState(c, now)));
+  // The card reads as a demo only when every account it shows is one.
+  return { state: PRECEDENCE.find((s) => states.has(s)) ?? "connected", hidden: !shown.length, demo: counted.every((c) => c.demo) };
 }
 
 // ---------------------------------------------------------------------------
@@ -301,7 +344,9 @@ const SCOPE_WORDS: Record<string, string> = {
 };
 
 /** The permissions this connection was granted, in words (the needed one when the platform didn't list them). */
-export function grantedPermissions(c: Pick<AdConnection, "grantedScopes" | "permission">): string[] {
+export function grantedPermissions(c: Pick<AdConnection, "grantedScopes" | "permission" | "demo">): string[] {
+  // A demo holds no Google permission at all: its row names its own, fictional ones instead.
+  if (c.demo) return [];
   const scopes = c.grantedScopes.length ? c.grantedScopes : c.permission ? [c.permission] : [];
   return [...new Set(scopes.map((s) => SCOPE_WORDS[s] ?? s))];
 }

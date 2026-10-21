@@ -11,6 +11,7 @@ import { AdPlatformCard } from "@/components/integrations/AdPlatformCard";
 import { DisconnectDialog, NoteAlert, StateAnnouncer } from "@/components/integrations/AdUi";
 import { AD_PLATFORM_ORDER, AD_PLATFORMS } from "@/components/integrations/adPlatforms";
 import { GoogleAccountCard } from "@/components/integrations/GoogleAccountCard";
+import { GoogleAdsDemoDialog } from "@/components/integrations/GoogleAdsDemoDialog";
 import { Facts, IntegrationCard, StatusBadge } from "@/components/integrations/IntegrationCard";
 import { useAdConnections } from "@/components/integrations/useAdConnections";
 import { EmbeddedSignup } from "@/components/whatsapp/EmbeddedSignup";
@@ -276,10 +277,14 @@ export default function IntegrationsPage() {
               onRefresh={() => void ads.refresh(p)}
               onToggle={(c) => void ads.toggle(c)}
               onDisconnect={ads.askDisconnect}
+              onTryDemo={ads.openDemo}
+              onDemoSync={() => void ads.syncDemo()}
+              onDemoReset={() => void ads.resetDemo()}
             />
           ))}
       </div>
 
+      <GoogleAdsDemoDialog open={ads.demoOpen} store={store} onClose={ads.closeDemo} onConnect={ads.connectDemo} onDisconnect={ads.disconnectDemo} />
       <DisconnectDialog c={ads.confirming} busy={!!ads.busy} onConfirm={() => void ads.disconnect()} onCancel={ads.cancelDisconnect} />
     </div>
   );

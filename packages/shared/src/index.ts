@@ -9,6 +9,8 @@ export * from "./roles.js";
 export * from "./access.js";
 export * from "./sales.js";
 export * from "./ads.js";
+export * from "./adsAnalytics.js";
+export * from "./adsDemo.js";
 export * from "./alerts.js";
 export * from "./whatsapp.js";
 export * from "./traffic.js";

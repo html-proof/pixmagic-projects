@@ -127,6 +127,8 @@ export interface AdAccount<P extends AdProvider = AdProvider> {
   lastSyncedAt: string | null;
   /** Added up: in the currency the module is in. */
   counted: boolean;
+  /** The Google Ads demo: simulated figures, shown as such and never set against the store's sales. Absent from older answers. */
+  demo?: boolean;
   timezone?: string | null;
   /** Its days follow another time zone than the store's. */
   otherTimeZone?: boolean;
@@ -197,7 +199,14 @@ export interface AdsDeltas {
 }
 
 /** One platform's figures (byProvider): its totals flat on the entry too (null when unavailable). */
-export type AdsProviderFigures = AdFigures<AdTotals> & { [K in keyof AdTotals]: AdTotals[K] | null } & { provider: AdSpendProvider; accounts: string[]; previous: AdsComparison; deltas: AdsDeltas };
+export type AdsProviderFigures = AdFigures<AdTotals> & { [K in keyof AdTotals]: AdTotals[K] | null } & {
+  provider: AdSpendProvider;
+  accounts: string[];
+  previous: AdsComparison;
+  deltas: AdsDeltas;
+  /** Every account of this platform here is the demo: its card says so. */
+  demo?: boolean;
+};
 
 /** What connected Meta / Google ad accounts report for the dates (see adsFigures in the API). */
 export interface AdsModule extends AdFigures<AdTotals> {
@@ -214,8 +223,10 @@ export interface AdsModule extends AdFigures<AdTotals> {
   seriesByProvider: Array<{ provider: AdSpendProvider; series: AdSeriesDay[] }>;
   /** Team & Access: "View campaigns and their performance". `complete` false: its account's figures stop before the range ends. */
   campaigns?: Array<AdTotals & { provider: AdSpendProvider; accountId: string; campaignId: string; name: string; complete?: boolean }>;
-  /** Ad spend divided by the store's net sales (same currency, every day known). */
+  /** Ad spend divided by the store's net sales (same currency, every day known); null with a demo among the accounts. */
   shareOfSales: number | null;
+  /** A demo account (simulated figures) is among the counted accounts: the store's own sales are left out of this module. */
+  demo?: boolean;
   /**
    * The store's own sales (Shopify's net sales and orders for the same dates) set against the ad
    * spend: sales per unit of spend (MER), the spend's share of sales, the cost per order; with the

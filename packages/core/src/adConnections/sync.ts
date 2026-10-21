@@ -17,8 +17,6 @@ import {
   adsenseAccountHealth,
   adsenseSiteDays,
   classifyAdError,
-  googleAccountHealth,
-  googleCampaignDays,
   isMetaPermissionError,
   metaAccountHealth,
   metaCampaignDays,
@@ -27,6 +25,7 @@ import {
   type AdFailure,
   type MetaConfig,
 } from "../ads.js";
+import { googleAdsSource, isDemoConnection } from "../ads/googleAdsSource.js";
 import type { Coord } from "../coord.js";
 import { logger } from "../logger.js";
 import type { Producer, Queues } from "../queues.js";
@@ -278,9 +277,9 @@ async function fetchAndStore(conn: AdConnection, token: string, since: string, u
     return storeAdDays(conn, since, until, rows);
   }
   if (conn.provider === "google") {
-    const cfg = googleClient(fetchImpl);
-    if (!cfg) throw notSetUp("google");
-    return storeAdDays(conn, since, until, await googleCampaignDays(cfg, token, conn, since, until));
+    // A demo connection reads bizinsights' generator; a real one Google, through the OAuth client (ads/googleAdsSource.ts).
+    const source = googleAdsSource(conn, { cfg: isDemoConnection(conn) ? null : googleClient(fetchImpl), accessToken: token });
+    return storeAdDays(conn, since, until, await source.campaignDays(since, until));
   }
   if (conn.provider === "adsense") {
     const cfg = adsenseConfig(fetchImpl);
@@ -303,9 +302,7 @@ async function readAccountHealth(conn: AdConnection, token: string, fetchImpl?: 
     }
   }
   if (conn.provider === "google") {
-    const cfg = googleClient(fetchImpl);
-    if (!cfg) throw notSetUp("google");
-    return googleAccountHealth(cfg, token, conn);
+    return googleAdsSource(conn, { cfg: isDemoConnection(conn) ? null : googleClient(fetchImpl), accessToken: token }).accountHealth();
   }
   const cfg = adsenseConfig(fetchImpl);
   if (!cfg) throw notSetUp("adsense");
@@ -366,12 +363,13 @@ export async function syncAdConnection(connectionId: string, since: string, unti
   if (!conn) return { skipped: true, reason: "gone" };
   // Hidden, or the person whose login it used has left (releaseUserAdGrants: no token until someone
   // connects it again): nothing is read, and a card that said "Synchronizing" for this job stops saying so.
-  if (!conn.enabled || !conn.accessTokenEnc) {
+  if (!conn.enabled || (!conn.accessTokenEnc && !isDemoConnection(conn))) {
     if (conn.syncRequestedAt) await systemDb.adConnection.updateMany({ where: { id: conn.id, syncRequestedAt: { not: null } }, data: { syncRequestedAt: null } });
     return { skipped: true, reason: conn.enabled ? "no_token" : "hidden" };
   }
   const trigger = opts.trigger ?? "request";
-  const google = conn.provider === "google";
+  // A demo spends none of Google's operations: the daily allowance and its pauses don't apply to it.
+  const google = conn.provider === "google" && !isDemoConnection(conn);
   if (google && opts.coord) {
     if (await googleAdsPaused(opts.coord)) {
       // Someone asked: say why nothing changed. The schedule simply comes back later.
@@ -404,7 +402,8 @@ async function syncWindow(conn: AdConnection, since: string, until: string, trig
   if (trigger === "history" && conn.historyFrom && since >= conn.historyFrom) return { skipped: true, reason: "nothing" };
   const w = planAdSyncWindow(conn, since, until, trigger);
   if (!w) return { skipped: true, reason: "nothing" };
-  const { token, person } = await accessTokenAndPerson(conn, fetchImpl);
+  // A demo holds no token and no person: nothing to refresh, nobody to look up.
+  const { token, person } = isDemoConnection(conn) ? { token: "", person: null } : await accessTokenAndPerson(conn, fetchImpl);
   const stored = await fetchAndStore(conn, token, w.since, w.until, fetchImpl);
   if (stored === null) return { skipped: true, reason: "gone" };
 
@@ -438,7 +437,7 @@ async function syncWindow(conn: AdConnection, since: string, until: string, trig
       // Not over a release made while this ran (releaseUserAdGrants: the person who connected it left):
       // that row waits for a reconnect, and marking it working would hide that. Not over the token read
       // either: a refresh in this sync changed it.
-      where: { id: conn.id, accessTokenEnc: { not: "" }, OR: [{ errorCode: null }, { errorCode: { not: "connector_left" } }] },
+      where: { id: conn.id, ...(isDemoConnection(conn) ? {} : { accessTokenEnc: { not: "" } }), OR: [{ errorCode: null }, { errorCode: { not: "connector_left" } }] },
       data: {
         status: "active",
         errorCode: null,
@@ -483,7 +482,7 @@ async function healthCheck(conn: AdConnection, fetchImpl: FetchLike | undefined,
   const endRequest = () => systemDb.adConnection.updateMany({ where: { id: conn.id, syncRequestedAt: { not: null } }, data: { syncRequestedAt: null } });
   let health: AdAccountHealth;
   try {
-    health = await readAccountHealth(conn, await adAccessToken(conn, fetchImpl), fetchImpl);
+    health = await readAccountHealth(conn, isDemoConnection(conn) ? "" : await adAccessToken(conn, fetchImpl), fetchImpl);
   } catch (err) {
     const failure = classifyAdError(err);
     // Only access that ended is news here; anything else waits for tomorrow's look.

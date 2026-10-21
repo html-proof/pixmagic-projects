@@ -143,6 +143,14 @@ const schema = z.object({
    */
   GOOGLE_ADS_DAILY_OPERATIONS: z.preprocess((v) => (v === "" ? undefined : v), z.coerce.number().int().positive().optional()),
   /**
+   * "1": the Google Ads card offers "Try demo", a simulated Google Ads account whose figures bizinsights
+   * generates itself (packages/shared/src/adsDemo.ts, docs/ads-demo.md). It needs none of the Google
+   * settings above, reads nothing from Google and never stands in for a real account: a demo
+   * connection is marked as one everywhere it is shown. Off, the button isn't offered and the demo
+   * endpoints answer 503 `demo_disabled`; demo connections already made keep working.
+   */
+  GOOGLE_ADS_DEMO_ENABLED: z.string().optional().default(""),
+  /**
    * WhatsApp Business Platform (Cloud API). Embedded Signup ("Connect WhatsApp Business") needs
    * the Meta app's id and secret (the ad accounts' Meta app is used when these are empty) and the
    * Facebook Login for Business configuration id of its WhatsApp Embedded Signup variation. The

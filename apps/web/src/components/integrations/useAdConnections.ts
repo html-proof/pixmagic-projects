@@ -5,6 +5,7 @@ import { leavingForSignIn, useBackFromSignIn } from "@/lib/adSignIn";
 import { actionError, api, ApiError, useApi } from "@/lib/api";
 import { AD_PLATFORMS } from "./adPlatforms";
 import type { Note } from "./AdUi";
+import type { DemoConnected } from "./GoogleAdsDemoDialog";
 
 /** How often a card that is synchronizing looks again, until it settles. */
 const POLL_MS = 5_000;
@@ -31,8 +32,10 @@ export function useAdConnections(base: string | null) {
   const [note, setNote] = useState<Note | null>(null);
   const [leaving, setLeaving] = useState<AdProvider | null>(null);
   const [choosing, setChoosing] = useState<AdProvider | null>(null);
-  // Platforms whose last account was just disconnected here: "Disconnected" until the next action.
-  const [gone, setGone] = useState<ReadonlySet<AdProvider>>(new Set());
+  // Platforms whose last account was just disconnected here: "Disconnected" until the next action (and whether it was the demo).
+  const [gone, setGone] = useState<ReadonlyMap<AdProvider, boolean>>(new Map());
+  // The Google Ads demo's connection flow (GoogleAdsDemoDialog) is open.
+  const [demoOpen, setDemoOpen] = useState(false);
   const [confirming, setConfirming] = useState<AdConnection | null>(null);
   // Back from Facebook's own page without connecting: Facebook never says why to bizinsights, so the page does.
   const [backFromMeta, setBackFromMeta] = useState(false);
@@ -44,7 +47,8 @@ export function useAdConnections(base: string | null) {
     setStoreBase(base);
     if (storeBase !== null) {
       setNote(null);
-      setGone(new Set());
+      setGone(new Map());
+      setDemoOpen(false);
       setChoosing(null);
       setConfirming(null);
       setBackFromMeta(false);
@@ -77,7 +81,7 @@ export function useAdConnections(base: string | null) {
   busyNow.current = busy;
 
   const view = (p: AdProvider) =>
-    platformState(p, { answer: ads.data, failed: !!ads.error && !ads.data, connections, connecting: leaving === p || choosing === p, justDisconnected: gone.has(p) });
+    platformState(p, { answer: ads.data, failed: !!ads.error && !ads.data, connections, connecting: leaving === p || choosing === p, justDisconnected: gone.has(p), justDisconnectedDemo: gone.get(p) === true });
 
   // A sync is running for an account on the dashboard: look again until it settles, so the badge
   // moves on by itself. Not during an action, which looks again itself when it's done.
@@ -100,7 +104,7 @@ export function useAdConnections(base: string | null) {
     if (!base) return;
     begin(`connect-${p}`);
     setLeaving(p);
-    setGone((s) => new Set([...s].filter((x) => x !== p)));
+    setGone((s) => new Map([...s].filter(([x]) => x !== p)));
     try {
       const { url } = await api<{ url: string }>(`${base}/ads/${p}/connect`, { method: "POST" });
       leavingForSignIn(p);
@@ -162,7 +166,7 @@ export function useAdConnections(base: string | null) {
           ? { kind: "info", text: `${text} ${after.text}`, link: after.link, focus: true }
           : { kind: "success", text: after ? `${text} ${after.text}` : text, focus: true },
       );
-      if (!connections.some((x) => x.provider === c.provider && x.id !== c.id)) setGone((s) => new Set([...s, c.provider]));
+      if (!connections.some((x) => x.provider === c.provider && x.id !== c.id)) setGone((s) => new Map([...s, [c.provider, c.demo]]));
     } catch (e) {
       setNote({ kind: "error", text: actionError(e, "disconnect that account") });
     } finally {
@@ -174,6 +178,50 @@ export function useAdConnections(base: string | null) {
   };
 
   const cancelDisconnect = useCallback(() => setConfirming(null), []);
+
+  // ---- The Google Ads demo: a simulated account, connected and managed without any Google sign-in.
+  const demoConnection = connections.find((c) => c.provider === "google" && c.demo) ?? null;
+  const openDemo = () => {
+    setNote(null);
+    setGone((s) => new Map([...s].filter(([x]) => x !== "google")));
+    setDemoOpen(true);
+  };
+  const closeDemo = useCallback(() => setDemoOpen(false), []);
+  /** The dialog's fourth screen: the real request; the dialog words a failure itself. */
+  const connectDemo = async (): Promise<DemoConnected> => {
+    if (!base) throw new Error("No store");
+    const r = await api<DemoConnected>(`${base}/ads/google/demo/connect`, { method: "POST", body: {} });
+    await reload();
+    return r;
+  };
+  const demoAction = async (what: "sync" | "reset", said: string) => {
+    if (!base) return;
+    begin(`demo-${what}`);
+    try {
+      await api(`${base}/ads/google/demo/${what}`, { method: "POST", body: {} });
+      setNote({ kind: "success", text: said });
+      await reload();
+    } catch (e) {
+      setNote({ kind: "error", text: actionError(e, what === "sync" ? "sync the demo data" : "reset the demo data") });
+    } finally {
+      setBusy(null);
+    }
+  };
+  const syncDemo = () => demoAction("sync", "Syncing the demo data: it takes a minute or two; the badge says Demo synchronizing until it's done, and the dashboard follows by itself.");
+  const resetDemo = () => demoAction("reset", "Demo data reset: new figures are being generated from a new seed. The dashboard follows within a minute or two.");
+  /** From the dialog's last screen (the row's own Disconnect goes through the confirm dialog). */
+  const disconnectDemo = async () => {
+    if (!base) return;
+    begin("demo-disconnect");
+    try {
+      await api(`${base}/ads/google/demo/disconnect`, { method: "POST", body: {} });
+      setNote({ kind: "success", text: "The demo is disconnected: its simulated figures are deleted from bizinsights. Nothing was ever granted at Google, so there is nothing to hand back." });
+      if (!connections.some((x) => x.provider === "google" && !x.demo)) setGone((s) => new Map([...s, ["google", true]]));
+    } finally {
+      setBusy(null);
+      await reload();
+    }
+  };
 
   return {
     /** GET .../ads, once answered. */
@@ -200,5 +248,15 @@ export function useAdConnections(base: string | null) {
     askDisconnect: setConfirming,
     disconnect,
     cancelDisconnect,
+    /** The Google Ads demo. */
+    demoEnabled: !!ads.data?.demo?.google,
+    demoConnection,
+    demoOpen,
+    openDemo,
+    closeDemo,
+    connectDemo,
+    syncDemo,
+    resetDemo,
+    disconnectDemo,
   };
 }

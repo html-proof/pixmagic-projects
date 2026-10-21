@@ -2,7 +2,8 @@
 
 What a merchant sees, what the owner sets up, and how the connections behave. The owner's checklist of what
 is done and what is still open at Google, Meta and AWS is [integrations-readiness.md](integrations-readiness.md);
-paste-ready review material is [ads-review-packs.md](ads-review-packs.md).
+paste-ready review material is [ads-review-packs.md](ads-review-packs.md). A simulated Google Ads account for development,
+demonstrations and tests, which needs none of what follows and never stands in for it: [ads-demo.md](ads-demo.md).
 
 ## How a merchant uses it
 

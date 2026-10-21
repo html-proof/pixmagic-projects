@@ -61,6 +61,8 @@ export interface AdConn {
   syncedThrough: string | null;
   /** AdSense: the sites (DOMAIN_CODE) whose earnings belong to the store; empty = every site. */
   sites?: string[];
+  /** Google Ads: a demo connection, whose figures bizinsights generates (never set against the store's real sales). */
+  isDemo?: boolean;
 }
 
 /** The dates asked about, and the store they're asked for. */
@@ -106,6 +108,7 @@ const SELECT = {
   lastSyncedAt: true,
   historyFrom: true,
   syncedThrough: true,
+  isDemo: true,
 } as const;
 
 /**
@@ -133,6 +136,8 @@ function accountView(c: AdConn, counted: boolean, ask: AdsAsk) {
     accountStatus: c.accountStatus,
     lastSyncedAt: c.lastSyncedAt,
     counted,
+    /** Its figures are simulated (the Google Ads demo): shown as such, and never set against the store's own sales. */
+    demo: !!c.isDemo,
     timezone: c.timezone,
     /** Its days follow another time zone than the store's: they don't start and end with the store's. */
     otherTimeZone: !!c.timezone && !sameDays(c.timezone, ask.storeTimeZone, ask.now),
@@ -316,9 +321,14 @@ export function adsFigures(conns: AdConn[], rows: Array<AdDayRow & { connectionI
   const providers = [...new Set(counted.map((a) => a.provider as AdSpendProvider))];
   const inRange = mine.filter((r) => r.day >= ask.range.from && r.day <= ask.range.to);
   const byProvider = providers.map((p) => {
-    const f = adsBlock(figures(counted.filter((a) => a.provider === p), mine.filter((r) => r.provider === p), adTotals, ask, storeToday));
-    return { provider: p, ...(f.current ?? NULL_AD_TOTALS), ...f, accounts: counted.filter((a) => a.provider === p).map((a) => a.id) };
+    const own = counted.filter((a) => a.provider === p);
+    const f = adsBlock(figures(own, mine.filter((r) => r.provider === p), adTotals, ask, storeToday));
+    return { provider: p, ...(f.current ?? NULL_AD_TOTALS), ...f, accounts: own.map((a) => a.id), /** Every account of this platform here is a demo: its card says so. */ demo: own.every((a) => a.demo) };
   });
+  // Simulated figures are never set against the store's real sales, not even as part of a total: a demo
+  // among the counted accounts leaves the store's own figures out (the Google Ads analytics page sets
+  // the demo against a simulated store instead).
+  const demo = counted.some((a) => a.demo);
   const covering = new Set(counted.filter((a) => a.coversRange).map((a) => `${a.provider}:${a.accountId}`));
   return {
     currency,
@@ -332,15 +342,17 @@ export function adsFigures(conns: AdConn[], rows: Array<AdDayRow & { connectionI
     /** The campaigns that spent most; `complete` false: its account's figures stop before the range ends. */
     campaigns: campaignTotals(inRange, 10).map((c) => ({ ...c, complete: covering.has(`${c.provider}:${c.accountId}`) })),
     /** Ad spend as a share of the store's net sales: same currency and every day known only. */
-    shareOfSales: all.current && currency === ask.storeCurrency && ask.netSales !== null && ask.netSales > 0 ? all.current.spend / ask.netSales : null,
-    /** The store's own sales (Shopify's net sales and orders) set against the ad spend, with the change (salesVsSpend). */
-    sales: salesVsSpend(all, ask, currency),
+    shareOfSales: !demo && all.current && currency === ask.storeCurrency && ask.netSales !== null && ask.netSales > 0 ? all.current.spend / ask.netSales : null,
+    /** The store's own sales (Shopify's net sales and orders) set against the ad spend, with the change (salesVsSpend); null with a demo among the accounts. */
+    sales: demo ? null : salesVsSpend(all, ask, currency),
+    /** A demo account (simulated figures) is among the counted accounts: the page marks the figures and leaves the store's own out. */
+    demo,
     /**
      * Per platform, the orders Shopify's visit record credits to its ads (sourcedOrders) and the store's
      * sales from them per unit of that platform's spend: the store's attribution, next to the platform's
      * own purchases. Team & Access "View conversion attribution"; null when the sources weren't read.
      */
-    sourced: ask.sourced
+    sourced: ask.sourced && !demo
       ? providers.map((p) => {
           const s = ask.sourced!.find((x) => x.provider === p);
           const spend = byProvider.find((b) => b.provider === p)?.current?.spend ?? null;

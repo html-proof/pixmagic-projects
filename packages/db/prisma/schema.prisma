@@ -1023,12 +1023,10 @@ model AdConnection {
   /**
    * A demo connection ("Try demo" on the Google Ads card, docs/ads-demo.md): its figures are generated
    * by bizinsights from demoSeed, never read from Google; it holds no token, and nothing it shows is
-   * Google-verified. Columns marked @ignore exist in the database (migration 20261020150000) but not
-   * yet in the client: the workflow migrates after the new code is live, so code that reads them
-   * can only land once the migration has run. The next change removes @ignore.
+   * Google-verified. Added by migration 20261020150000 (the same rules as every other column).
    */
-  isDemo               Boolean   @default(false) @map("is_demo") @ignore
-  demoSeed             Int?      @map("demo_seed") @ignore
+  isDemo               Boolean   @default(false) @map("is_demo")
+  demoSeed             Int?      @map("demo_seed")
   createdAt            DateTime  @default(now()) @map("created_at")
   updatedAt            DateTime  @updatedAt @map("updated_at")
   campaignDays         AdCampaignDaily[]

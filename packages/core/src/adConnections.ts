@@ -15,3 +15,4 @@ export * from "./adConnections/status.js";
 export * from "./adConnections/alerts.js";
 export * from "./adConnections/budget.js";
 export * from "./adConnections/metaCallbacks.js";
+export * from "./adConnections/demo.js";

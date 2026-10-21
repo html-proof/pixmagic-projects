@@ -120,7 +120,14 @@ describe("connecting ad accounts", () => {
   it("says when a platform isn't set up, instead of sending people to an error page", async () => {
     ctx.setEnv(NO_KEYS);
     const list = await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${storeId}/ads`, headers });
-    expect(list.json()).toEqual({ configured: { meta: false, google: false, adsense: false }, restricted: { meta: false, google: false, adsense: false }, connections: [] });
+    expect(list.json()).toEqual({
+      configured: { meta: false, google: false, adsense: false },
+      restricted: { meta: false, google: false, adsense: false },
+      connections: [],
+      // The Google Ads demo (docs/ads-demo.md) is offered only when switched on; the real sign-in says what it lacks.
+      demo: { google: false },
+      missing: { google: ["GOOGLE_ADS_CLIENT_ID", "GOOGLE_ADS_CLIENT_SECRET", "GOOGLE_ADS_ENABLED"] },
+    });
     const res = await connect("meta");
     expect(res.statusCode).toBe(503);
     expect(res.json().error).toBe("not_configured");

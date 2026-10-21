@@ -9,6 +9,8 @@
     ".": "./src/index.ts",
     "./access": "./src/access.ts",
     "./ads": "./src/ads.ts",
+    "./adsAnalytics": "./src/adsAnalytics.ts",
+    "./adsDemo": "./src/adsDemo.ts",
     "./alerts": "./src/alerts.ts",
     "./auth": "./src/auth.ts",
     "./capabilities": "./src/capabilities.ts",

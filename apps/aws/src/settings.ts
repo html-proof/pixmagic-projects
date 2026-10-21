@@ -98,6 +98,10 @@ export const APP_SETTINGS = {
   // Center: branding first, then data access with the demo video). Until then Google shows "Google
   // hasn't verified this app" before its consent screen, so Settings warns first. AdSense is unaffected.
   "GOOGLE_ADS_OAUTH_VERIFIED": "",
+  // "1": the Google Ads card offers "Try demo", a simulated account whose figures bizinsights generates
+  // itself (docs/ads-demo.md): nothing is read from Google, and the demo is marked as one wherever it
+  // shows. Offered to members who may manage integrations; empty hides the button.
+  "GOOGLE_ADS_DEMO_ENABLED": "1",
   // WhatsApp Business Platform (Cloud API), docs/whatsapp.md. "Connect WhatsApp Business" (Meta's
   // Embedded Signup) needs the Meta app id (empty: META_APP_ID is used), the Facebook Login for
   // Business configuration id of its WhatsApp Embedded Signup variation, and the secrets

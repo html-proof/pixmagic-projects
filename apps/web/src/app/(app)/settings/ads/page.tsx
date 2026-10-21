@@ -6,6 +6,7 @@ import { LoadError } from "@/components/LoadError";
 import { BackFromFacebook } from "@/components/MetaAdsAccess";
 import { Alert } from "@/components/ui";
 import { AdPlatformCard } from "@/components/integrations/AdPlatformCard";
+import { GoogleAdsDemoDialog } from "@/components/integrations/GoogleAdsDemoDialog";
 import { DisconnectDialog, NoteAlert, StateAnnouncer } from "@/components/integrations/AdUi";
 import { AD_PLATFORM_ORDER, AD_PLATFORMS } from "@/components/integrations/adPlatforms";
 import { useAdConnections } from "@/components/integrations/useAdConnections";
@@ -165,6 +166,9 @@ export default function AdAccountsPage() {
           onRefresh={() => void ads.refresh(p)}
           onToggle={(c) => void ads.toggle(c)}
           onDisconnect={ads.askDisconnect}
+          onTryDemo={ads.openDemo}
+          onDemoSync={() => void ads.syncDemo()}
+          onDemoReset={() => void ads.resetDemo()}
           rowExtra={(c) => (c.provider === "adsense" ? <AdsenseSites c={c} base={base} manage={manage} onSaved={ads.reload} /> : null)}
         />
       ))}
@@ -189,6 +193,7 @@ export default function AdAccountsPage() {
         </ul>
       </div>
 
+      <GoogleAdsDemoDialog open={ads.demoOpen} store={store} onClose={ads.closeDemo} onConnect={ads.connectDemo} onDisconnect={ads.disconnectDemo} />
       <DisconnectDialog c={ads.confirming} busy={!!ads.busy} onConfirm={() => void ads.disconnect()} onCancel={ads.cancelDisconnect} />
     </div>
   );

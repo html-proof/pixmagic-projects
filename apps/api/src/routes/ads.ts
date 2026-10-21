@@ -38,6 +38,11 @@ import {
   googleUserId,
   holdPendingAdConnect,
   holdsReusableRefreshToken,
+  disconnectGoogleAdsDemo,
+  googleAdsConnectionStatus,
+  googleAdsDemoEnabled,
+  googleProductionMissing,
+  isDemoConnection,
   logger,
   providerDetail,
   metaAdAccounts,
@@ -161,6 +166,8 @@ function publicConnection(c: AdConnection, ctx: ConnectionContext) {
   const wording = adStatusCode(status, c.errorCode);
   const connector = c.connectedByUserId ? ctx.connectors.get(c.connectedByUserId) : undefined;
   const adsense = provider === "adsense";
+  // The Google Ads demo: simulated figures and no Google grant. Decided by the row alone, never by anything a browser sends.
+  const demo = isDemoConnection(c);
   return {
     id: c.id,
     provider: c.provider,
@@ -185,8 +192,8 @@ function publicConnection(c: AdConnection, ctx: ConnectionContext) {
     // Meta access lasts about 60 days; Settings warns before it runs out. Google's renews itself.
     accessExpiresAt: provider === "meta" ? c.accessTokenExpiresAt : null,
     connectedAt: c.createdAt,
-    /** The one read-only permission this connection was granted (checked when connecting). */
-    permission: REQUIRED_AD_SCOPE[provider] ?? null,
+    /** The one read-only permission this connection was granted (checked when connecting); none for a demo, which holds no Google permission. */
+    permission: demo ? null : (REQUIRED_AD_SCOPE[provider] ?? null),
     /** Every permission that was granted, when the platform said. */
     grantedScopes: c.grantedScopes ?? [],
     /** Google Ads: the manager account the account is reached through. */
@@ -194,11 +201,20 @@ function publicConnection(c: AdConnection, ctx: ConnectionContext) {
     connectedBy: connector ? { name: connector.name, email: ctx.seesEmail ? connector.email : null, you: c.connectedByUserId === ctx.viewerId } : null,
     sites: adsense ? c.sites : [],
     availableSites: adsense ? [...new Set([...(ctx.seenSites.get(c.id) ?? []), ...c.sites])].sort() : [],
+    /** The Google Ads demo (docs/ads-demo.md): simulated figures, no Google grant, nothing verified by Google. Never true of a real account. */
+    demo,
+    connectionType: demo ? "demo" : "production",
+    /** "simulated": bizinsights' own demo; "authorized": the person authorized the account at the platform (which says nothing about the platform verifying bizinsights). */
+    verificationStatus: demo ? "simulated" : "authorized",
+    /** Google Ads: where it stands in the status endpoint's words (connected_demo, demo_syncing, connected_production...). */
+    connectionStatus: provider === "google" ? googleAdsConnectionStatus(c) : null,
+    /** A demo's seed, so its figures can be reproduced or reset; null for a real account. */
+    demoSeed: demo ? c.demoSeed : null,
   };
 }
 
 /** Connections as the browser sees them, with who connected each (of this workspace's members) and the sites AdSense reported. */
-async function publicConnections(ws: string, rows: AdConnection[], viewer: { id: string | null; seesEmail: boolean }) {
+export async function publicConnections(ws: string, rows: AdConnection[], viewer: { id: string | null; seesEmail: boolean }) {
   const userIds = [...new Set(rows.map((r) => r.connectedByUserId).filter((id): id is string => !!id))];
   const adsenseIds = rows.filter((r) => r.provider === "adsense").map((r) => r.id);
   const [members, sites] = await withTenant(ws, async (tx) => [
@@ -215,7 +231,7 @@ async function publicConnections(ws: string, rows: AdConnection[], viewer: { id:
   return rows.map((r) => publicConnection(r, ctx));
 }
 
-async function storeInWorkspace(ws: string, storeId: string) {
+export async function storeInWorkspace(ws: string, storeId: string) {
   const store = await withTenant(ws, (tx) => tx.store.findFirst({ where: { id: storeId, workspaceId: ws }, select: { id: true, status: true } }));
   if (!store || store.status === "uninstalled") throw new HttpError(404, "Not found", "not_found");
   return store;
@@ -266,7 +282,7 @@ async function connectAccounts(
  * whether a job was sent (one already on its way isn't sent again).
  */
 async function queueRefresh(deps: Deps, conn: AdConnection): Promise<boolean> {
-  if (!conn.enabled || conn.status === "reconnect" || !conn.accessTokenEnc) return false;
+  if (!conn.enabled || conn.status === "reconnect" || (!conn.accessTokenEnc && !isDemoConnection(conn))) return false;
   if (conn.status === "permission" || conn.status === "unavailable") {
     await enqueueAdSync(deps.queues, conn, 1, { healthOnly: true, interactive: true });
     return true;
@@ -452,7 +468,15 @@ export function adsRoutes(app: App, deps: Deps) {
     await storeInWorkspace(ws, storeId);
     const rows = await withTenant(ws, (tx) => tx.adConnection.findMany({ where: { workspaceId: ws, storeId }, orderBy: [{ provider: "asc" }, { createdAt: "asc" }] }));
     const connections = await publicConnections(ws, rows, { id: access.user?.id ?? null, seesEmail: allows(access.access, "integrations.manage") });
-    return c.json({ configured: adsConfigured(), restricted: adsRestricted(), connections });
+    return c.json({
+      configured: adsConfigured(),
+      restricted: adsRestricted(),
+      connections,
+      /** Which platforms offer a simulated account ("Try demo"): Google Ads, when this server switches it on. */
+      demo: { google: googleAdsDemoEnabled() },
+      /** The settings each platform's real sign-in still lacks on this server, by name (empty once set up). */
+      missing: { google: googleProductionMissing() },
+    });
   });
 
   /** Step 1: where to send the browser to approve read access to ads. */
@@ -757,6 +781,12 @@ export function adsRoutes(app: App, deps: Deps) {
     const access = await requireWorkspace(c, deps, ws, "integrations.manage");
     const conn = await withTenant(ws, (tx) => tx.adConnection.findFirst({ where: { id, workspaceId: ws, storeId } }));
     if (!conn) throw new HttpError(404, "Not found", "not_found");
+    // The demo: its figures and row go. There is no grant to hand back, and no other connection is touched.
+    if (isDemoConnection(conn)) {
+      await disconnectGoogleAdsDemo(conn);
+      await audit({ workspaceId: ws, actorUserId: access.user?.id ?? null, action: "ads.demo_disconnected", targetType: "store", targetId: storeId, metadata: { accountId: conn.accountId }, ip: clientIp(c) }).catch((err: unknown) => logger.warn({ err }, "audit failed"));
+      return c.json({ ok: true });
+    }
     await systemDb.$transaction([
       systemDb.adCampaignDaily.deleteMany({ where: { connectionId: conn.id } }),
       systemDb.adsenseDaily.deleteMany({ where: { connectionId: conn.id } }),
@@ -891,7 +921,8 @@ export function adsRoutes(app: App, deps: Deps) {
     await limit(deps.coord, `rl:ads-sync:${storeId}:${access.user?.id ?? clientIp(c)}`, LIMITS.adsSync);
     await storeInWorkspace(ws, storeId);
     const conns = await withTenant(ws, (tx) =>
-      tx.adConnection.findMany({ where: { workspaceId: ws, storeId, enabled: true, status: { not: "reconnect" }, accessTokenEnc: { not: "" }, ...(provider ? { provider } : {}) } }),
+      // Accounts with a working grant, and the demo, which needs none.
+      tx.adConnection.findMany({ where: { workspaceId: ws, storeId, enabled: true, status: { not: "reconnect" }, OR: [{ accessTokenEnc: { not: "" } }, { isDemo: true }], ...(provider ? { provider } : {}) } }),
     );
     let queued = 0;
     for (const conn of conns) if (await queueRefresh(deps, conn)) queued++;
