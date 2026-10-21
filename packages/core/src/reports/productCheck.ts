@@ -13,7 +13,9 @@ export async function productCheck(tx: Tx, store: Store, deps: ReportFetchDeps, 
   // Validate operator-supplied dates with the same rules as the authenticated endpoint.
   const dates = resolvePreset("custom", now, store.timezone, window).range;
   const ours = await productPerformance(tx, { ws: store.workspaceId, storeId: store.id }, store, dates, {}, now);
-  const metadata = { shop: store.shopDomain, range: dates, timezone: store.timezone, currency: store.currency, complete: ours.complete, products: ours.total, historyFrom: ours.historyFrom };
+  const metadata = { shop: store.shopDomain, range: dates, timezone: store.timezone, currency: store.currency,
+    complete: ours.complete, products: ours.total, historyFrom: ours.historyFrom, historyRecorded: store.ordersHistoryFrom != null,
+    pendingOrders: ours.pendingOrders, unmatchedSales: ours.unmatchedSales, unknownIdentitySales: ours.unknownIdentitySales, lastSyncedAt: ours.lastSyncedAt };
   if (!store.grantedScopes.includes("read_reports")) return { ...metadata, status: "not_verifiable", reason: "read_reports not granted" };
   const query = `FROM sales SHOW net_items_sold, net_sales GROUP BY product_id SINCE ${dates.from} UNTIL ${dates.to} ORDER BY net_items_sold DESC, net_sales DESC, product_id ASC LIMIT 1000`;
   const accessToken = await getAccessToken(store, deps.coord, deps.fetchImpl);
