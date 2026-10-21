@@ -45,6 +45,17 @@ const schema = z.object({
   COGNITO_IDENTITY_PROVIDERS: z.string().optional().default(""),
   /** "1": passwordless sign-in with a code Cognito emails (needs the Essentials plan and SES email). */
   COGNITO_EMAIL_OTP: z.string().optional().default(""),
+  /**
+   * "1": a password sign-in also asks for a 6-digit code emailed by the app (apps/api/src/emailCode.ts),
+   * for accounts without an authenticator app. Anything else: the password alone signs in.
+   */
+  AUTH_LOGIN_EMAIL_CODE: z.string().optional().default(""),
+  /**
+   * How many sign-up and sign-in codes one address may be emailed an hour and a day (each code also
+   * waits 60 seconds for the next). Empty: 6 and 20.
+   */
+  AUTH_CODE_LIMIT_HOURLY: z.string().optional().default(""),
+  AUTH_CODE_LIMIT_DAILY: z.string().optional().default(""),
   /** "1" when the app client has refresh-token rotation on. */
   COGNITO_REFRESH_ROTATION: z.string().optional().default(""),
   /** Credentials for the user pool's admin calls (on AWS: the function's own role, set at cold start). */

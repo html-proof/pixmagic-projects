@@ -97,6 +97,7 @@ export function configCheck(invoke, envName) {
     `WhatsApp Embedded Signup ${report.whatsapp.embeddedSignup ? "on" : `off${needs}`}`,
     `email ${on({ gmail: report.email.google, outlook: report.email.microsoft, resend: report.email.resend })}`,
     `Google sign-in ${report.auth.google ? "on" : "off"}`,
+    `emailed sign-in code ${report.auth.loginCode ? "on" : "off"}`,
     half.length ? `missing a secret: ${half.map((c) => c.provider).join(", ")}` : "every provider with an id has its secret",
   ].join("; ");
   return { detail, warnings };

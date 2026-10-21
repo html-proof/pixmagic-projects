@@ -20,6 +20,12 @@ afterEach(() => vi.useRealTimers());
 const post = (url: string, payload: unknown, headers: Record<string, string> = {}) => ctx.app.inject({ method: "POST", url, headers: { ...ORIGIN, ...headers }, payload });
 const get = (url: string, headers: Record<string, string> = {}) => ctx.app.inject({ method: "GET", url, headers });
 
+/** Time travel (Date only): the API's clocks and the in-memory coordinator read Date.now(). */
+function advance(ms: number) {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(Date.now() + ms);
+}
+
 /** Env settings for one test, put back afterwards. */
 function withEnv(vars: Record<string, string>) {
   const saved = Object.fromEntries(Object.keys(vars).map((k) => [k, process.env[k]]));
@@ -73,10 +79,20 @@ describe("creating an account with email and password", () => {
   });
 
   it("says an address is taken once its account is confirmed, but just resends the code to one that never was", async () => {
-    await signup();
+    const first = await signup();
+    // Sent again within the code's minute (a double press, a reload): the code already in the
+    // inbox is the one to enter, with the time it has left; no second email.
+    const twice = await signup();
+    expect(twice.statusCode).toBe(200);
+    const { now: _now, ...standing } = first.json().challenge;
+    expect(twice.json().challenge).toMatchObject(standing);
+    expect(ctx.auth.sent.filter((s) => s.kind === "signup")).toHaveLength(1);
+    // Past the minute: a fresh code.
+    advance(61_000);
     const again = await signup();
     expect(again.statusCode).toBe(200);
     expect(again.json().next).toBe("confirm");
+    expect(again.json().challenge.issuedAt).toBeGreaterThan(first.json().challenge.issuedAt);
     expect(ctx.auth.sent.filter((s) => s.kind === "signup")).toHaveLength(2);
 
     await post("/auth/signup/confirm", { email: "ada@example.com", code: ctx.auth.code("signup", "ada@example.com") });
@@ -90,6 +106,12 @@ describe("creating an account with email and password", () => {
     // Whoever typed the address first (anyone can) must not keep a password on the account its inbox's owner confirms.
     await signup({ password: "squatters-password", confirmPassword: "squatters-password" });
     const firstCode = ctx.auth.code("signup", "ada@example.com");
+    // Another password emails a new code, which waits for the last one's minute like any other.
+    const tooSoon = await signup({ password: "owners-password", confirmPassword: "owners-password" });
+    expect(tooSoon.statusCode).toBe(429);
+    expect(tooSoon.json().error).toBe("resend_cooldown");
+    expect(ctx.auth.calls).not.toContain("adminDeleteUser");
+    advance(61_000);
     const again = await signup({ password: "owners-password", confirmPassword: "owners-password" });
     expect(again.statusCode).toBe(200);
     expect(again.json()).toMatchObject({ next: "confirm", email: "ada@example.com" });
@@ -104,18 +126,29 @@ describe("creating an account with email and password", () => {
     expect(await systemDb.authEvent.count({ where: { type: "unconfirmed_signup_replaced" } })).toBe(1);
   });
 
-  it("limits how often signing up again can email the same address", async () => {
-    await signup();
-    for (let i = 0; i < 3; i++) expect((await signup()).statusCode).toBe(200);
-    const res = await signup();
-    expect(res.statusCode).toBe(429);
-    expect(ctx.auth.sent.filter((s) => s.kind === "signup")).toHaveLength(4);
+  it("limits how often signing up again can email the same address (AUTH_CODE_LIMIT_HOURLY)", async () => {
+    const restore = withEnv({ AUTH_CODE_LIMIT_HOURLY: "3" });
+    try {
+      await signup();
+      for (let i = 0; i < 2; i++) {
+        advance(61_000);
+        expect((await signup()).statusCode).toBe(200);
+      }
+      advance(61_000);
+      const res = await signup();
+      expect(res.statusCode).toBe(429);
+      expect(res.json().error).toBe("too_many_codes");
+      expect(ctx.auth.sent.filter((s) => s.kind === "signup")).toHaveLength(3);
+    } finally {
+      restore();
+    }
   });
 
   it("the code decides whose password the account keeps: confirming with the password chosen here replaces one a later sign-up set", async () => {
     // The owner signs up; someone else then signs up again with their address and another
     // password (each try replaces the pending sign-up and emails the owner a new code).
     await signup({ password: "owners-password", confirmPassword: "owners-password" });
+    advance(61_000);
     await signup({ password: "squatters-password", confirmPassword: "squatters-password" });
     // The owner enters the newest code from their inbox; their sign-up page sends their password with it.
     const confirm = await post("/auth/signup/confirm", { email: "ada@example.com", code: ctx.auth.code("signup", "ada@example.com"), password: "owners-password" });
@@ -131,6 +164,7 @@ describe("creating an account with email and password", () => {
 
   it("ends the session of anyone who signed in with the replaced password in the moment before it was replaced", async () => {
     await signup({ password: "owners-password", confirmPassword: "owners-password" });
+    advance(61_000);
     await signup({ password: "squatters-password", confirmPassword: "squatters-password" });
     const confirmSignUp = ctx.auth.confirmSignUp;
     let squatter = "";
@@ -179,23 +213,38 @@ describe("creating an account with email and password", () => {
   it("never signs in, or sets a password, for a sign-up that was already confirmed", async () => {
     await signup();
     expect((await post("/auth/signup/confirm", { email: "ada@example.com", code: ctx.auth.code("signup", "ada@example.com") })).json()).toEqual({ ok: true });
-    // Nothing is proved by a second confirmation, whatever code and password come with it: it
-    // can't be a way to try passwords outside the sign-in page's limits.
+    // The code was spent: a second confirmation is refused before Cognito is asked, whatever code
+    // and password come with it, so it can't be a way to try passwords outside the sign-in page's limits.
     for (const password of ["a-guessed-password", "correct-horse"]) {
       const again = await post("/auth/signup/confirm", { email: "ada@example.com", code: "123456", password });
-      expect(again.json()).toEqual({ ok: true });
+      expect(again.statusCode).toBe(400);
+      expect(again.json().error).toBe("expired_code");
       expect(again.headers["set-cookie"] ?? "").not.toMatch(/__session=[^;]/);
     }
+    expect(ctx.auth.calls.filter((c) => c === "confirmSignUp")).toHaveLength(1);
+    // A second tab that confirmed while this one's code still stood: "already confirmed", no sign-in.
+    advance(61_000);
+    await post("/auth/signup/resend", { email: "ada@example.com" });
+    const other = await post("/auth/signup/confirm", { email: "ada@example.com", code: "123456", password: "correct-horse" });
+    expect(other.json()).toEqual({ ok: true });
+    expect(other.headers["set-cookie"] ?? "").not.toMatch(/__session=[^;]/);
     expect(ctx.auth.calls).not.toContain("adminSetPassword");
     expect((await post("/auth/login", { email: "ada@example.com", password: "correct-horse" })).statusCode).toBe(200);
   });
 
   it("resends a code without saying whether the address has an account", async () => {
     await signup();
+    // Past the first code's minute (the clock stands still from here, so the two answers' countdowns match).
+    advance(61_000);
     const known = await post("/auth/signup/resend", { email: "ada@example.com" });
     const unknown = await post("/auth/signup/resend", { email: "nobody@example.com" });
     expect(known.json()).toEqual(unknown.json());
     expect(known.statusCode).toBe(unknown.statusCode);
+    // And asking again too soon is refused the same way for both.
+    const knownAgain = await post("/auth/signup/resend", { email: "ada@example.com" });
+    const unknownAgain = await post("/auth/signup/resend", { email: "nobody@example.com" });
+    expect(knownAgain.statusCode).toBe(429);
+    expect(knownAgain.json()).toEqual(unknownAgain.json());
   });
 });
 
@@ -561,7 +610,7 @@ describe("Continue with Google", () => {
     restore = withEnv({ COGNITO_DOMAIN: "https://auth.example.test", COGNITO_IDENTITY_PROVIDERS: "SignInWithApple" });
     expect((await get("/auth/oauth/google/start")).headers.location).toBe("http://localhost:3001/auth/error?reason=provider_unavailable&provider=google");
     expect((await get("/auth/oauth/apple/start")).headers.location).toBe("http://localhost:3001/auth/error?reason=provider_unavailable&provider=apple");
-    expect((await get("/auth/config")).json()).toEqual({ providers: { google: false }, emailOtp: false });
+    expect((await get("/auth/config")).json()).toEqual({ providers: { google: false }, emailOtp: false, loginCode: false });
   });
 
   it("signs out of the user pool's own session too after a federated sign-in", async () => {

@@ -7,16 +7,23 @@ import {
   afterSignIn,
   authConfig,
   authErrorMessage,
+  cancelSignInCode,
+  challengeFromError,
   confirmSignUp,
   errorCode,
   finishEmailCodeSignIn,
+  finishEmailedSignIn,
   finishMfaSignIn,
+  pendingSignInCode,
   recallEmail,
   rememberEmail,
+  resendSignInCode,
   resendSignUpCode,
   signIn,
   startEmailCodeSignIn,
   useRedirectIfSignedIn,
+  type CodeChallenge,
+  type SignInStart,
 } from "@/lib/auth";
 import { Alert, Divider } from "@/components/ui";
 import { emailProblem, useFieldErrors } from "@/components/auth/AuthCard";
@@ -50,11 +57,14 @@ export default function LoginPage() {
   // Unticked: the session ends when the browser closes (the API sets cookies without a lifetime).
   const [keep, setKeep] = useState(true);
   // The account exists but its sign-up code was never entered: confirm, then finish signing in.
-  const [confirming, setConfirming] = useState(false);
+  const [confirming, setConfirming] = useState<{ challenge: CodeChallenge | null } | null>(null);
   // Passwordless: a code Cognito emails (only where the deployment switched it on).
   const [codeSignIn, setCodeSignIn] = useState<CodeSignIn>("off");
   // The password was right and the account has two-step verification: the app's code finishes it.
   const [appCode, setAppCode] = useState(false);
+  // The password was right: the 6-digit code emailed to the address finishes signing in. Kept by the
+  // API for this browser, so a reload comes back here with the same countdowns.
+  const [emailCode, setEmailCode] = useState<{ email: string; challenge: CodeChallenge } | null>(null);
   const [error, setError] = useState<{ text: string; hint?: string; reset?: boolean } | null>(null);
   const [notice, setNotice] = useState<{ kind: "info" | "success"; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -76,6 +86,15 @@ export default function LoginPage() {
     authConfig()
       .then((c) => c.emailOtp && setCodeSignIn("available"))
       .catch(() => {});
+    // A sign-in waiting for its emailed code in this browser (the page was reloaded): carry on with it.
+    pendingSignInCode()
+      .then((p) => {
+        if (p.pending) {
+          setEmail(p.email);
+          setEmailCode({ email: p.email, challenge: p.challenge });
+        }
+      })
+      .catch(() => {});
   }, []);
 
   /** Swap between the password form and the emailed-code one, starting the new one clean. */
@@ -85,10 +104,21 @@ export default function LoginPage() {
     setCodeSignIn(mode);
   }
 
-  /** Signed in, or on to the authenticator app's code. */
-  function afterFirstStep(r: Awaited<ReturnType<typeof signIn>>) {
-    if ("next" in r) setAppCode(true);
-    else router.replace(afterSignIn());
+  /** Signed in, or on to the second step: the emailed code, or the authenticator app's. */
+  function afterFirstStep(r: SignInStart) {
+    if (!("next" in r)) router.replace(afterSignIn());
+    else if (r.next === "mfa") setAppCode(true);
+    else setEmailCode({ email: r.email, challenge: r.challenge });
+  }
+
+  /** Back to the password form from a code step (the pending sign-in, if any, is given up). */
+  function backToPassword(message?: string) {
+    setAppCode(false);
+    setEmailCode(null);
+    setConfirming(null);
+    setPassword("");
+    if (codeSignIn === "code") setCodeSignIn("available");
+    setError(message ? { text: message } : null);
   }
 
   async function onPassword(e: FormEvent) {
@@ -102,9 +132,12 @@ export default function LoginPage() {
     } catch (err) {
       const code = errorCode(err);
       if (code === "unconfirmed") {
-        // Cognito won't sign in an unconfirmed account: send a fresh code and ask for it here.
-        await resendSignUpCode(email.trim()).catch(() => {});
-        setConfirming(true);
+        // Cognito won't sign in an unconfirmed account: a fresh code (or the one still standing,
+        // with its time left) and ask for it here.
+        const challenge = await resendSignUpCode(email.trim())
+          .then((r) => r.challenge)
+          .catch((e: unknown) => challengeFromError(e));
+        setConfirming({ challenge });
       } else {
         rememberEmail(email);
         setError({
@@ -123,6 +156,7 @@ export default function LoginPage() {
       <AuthSplitShell title="Confirm your email" subtitle="One more step before you can sign in." action={CREATE_ACCOUNT}>
         <CodeStep
           email={email.trim()}
+          challenge={confirming.challenge}
           submitLabel="Confirm and sign in"
           large
           onSubmit={async (code) => {
@@ -130,18 +164,63 @@ export default function LoginPage() {
             // code proves the inbox, whatever password an earlier sign-up with it had set.
             const confirmed = await confirmSignUp(email.trim(), code, { password, keep });
             if (confirmed.user) {
-              setConfirming(false);
+              setConfirming(null);
               router.replace(afterSignIn());
               return;
             }
             // Confirmed already (another tab): sign in as usual.
             const r = await signIn(email.trim(), password, keep);
-            setConfirming(false);
+            setConfirming(null);
             afterFirstStep(r);
           }}
           onResend={() => resendSignUpCode(email.trim())}
+          onChangeEmail={() => backToPassword()}
         />
-        <button type="button" className="text-sm text-muted underline" onClick={() => setConfirming(false)}>
+        <button type="button" className="text-sm text-muted underline" onClick={() => backToPassword()}>
+          Back to sign in
+        </button>
+      </AuthSplitShell>
+    );
+  }
+
+  if (emailCode) {
+    return (
+      <AuthSplitShell title="Check your email" subtitle="We sent a 6-digit verification code to your email address." action={CREATE_ACCOUNT}>
+        <CodeStep
+          email={emailCode.email}
+          challenge={emailCode.challenge}
+          intro={
+            <>
+              Enter the 6-digit code we emailed to <strong>{emailCode.email}</strong> to finish signing in.
+            </>
+          }
+          submitLabel="Verify and sign in"
+          successLabel="Email verified successfully. Taking you to your dashboard…"
+          large
+          onSubmit={async (code) => {
+            try {
+              await finishEmailedSignIn(code);
+              router.replace(afterSignIn());
+            } catch (err) {
+              // Too long since the password, or too many wrong codes: start again from it.
+              if (errorCode(err) !== "login_expired" && errorCode(err) !== "too_many_attempts") throw err;
+              backToPassword(authErrorMessage(err));
+            }
+          }}
+          onResend={resendSignInCode}
+          onChangeEmail={async () => {
+            await cancelSignInCode().catch(() => undefined);
+            backToPassword();
+          }}
+        />
+        <button
+          type="button"
+          className="text-sm text-muted underline"
+          onClick={() => {
+            void cancelSignInCode().catch(() => undefined);
+            backToPassword();
+          }}
+        >
           Back to sign in
         </button>
       </AuthSplitShell>
@@ -155,6 +234,7 @@ export default function LoginPage() {
           email={email.trim()}
           intro={<>Open your authenticator app and enter the 6-digit code it shows for bizinsights.</>}
           submitLabel="Sign In"
+          successLabel="Signed in. Taking you to your dashboard…"
           large
           onSubmit={async (code) => {
             try {
@@ -163,10 +243,7 @@ export default function LoginPage() {
             } catch (err) {
               // Too long since the password (or too many wrong codes): start again from it.
               if (errorCode(err) !== "mfa_expired") throw err;
-              setAppCode(false);
-              setPassword("");
-              if (codeSignIn === "code") setCodeSignIn("available");
-              setError({ text: authErrorMessage(err) });
+              backToPassword(authErrorMessage(err));
             }
           }}
         />
@@ -177,15 +254,7 @@ export default function LoginPage() {
           </Link>{" "}
           and we&apos;ll help you back in.
         </p>
-        <button
-          type="button"
-          className="text-sm text-muted underline"
-          onClick={() => {
-            setAppCode(false);
-            setPassword("");
-            if (codeSignIn === "code") setCodeSignIn("available");
-          }}
-        >
+        <button type="button" className="text-sm text-muted underline" onClick={() => backToPassword()}>
           Back to sign in
         </button>
       </AuthSplitShell>
@@ -250,6 +319,7 @@ export default function LoginPage() {
             large
             onSubmit={async (code) => afterFirstStep(await finishEmailCodeSignIn(email.trim(), code, keep))}
             onResend={() => startEmailCodeSignIn(email.trim())}
+            onChangeEmail={() => switchTo("email")}
           />
         )
       ) : (

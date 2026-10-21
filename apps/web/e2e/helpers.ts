@@ -1,7 +1,7 @@
 import { createHmac } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { expect, type Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 import type pg from "pg";
 import { E2E_BASE_URL, E2E_COGNITO_DATA, E2E_COGNITO_PORT, E2E_MAILPIT_URL } from "../playwright.config";
 
@@ -70,19 +70,55 @@ export function totpCode(key: string, at = Date.now()): string {
   return String((h.readUInt32BE(o) & 0x7fffffff) % 1_000_000).padStart(6, "0");
 }
 
+/** The emails the app sent to `email`, newest first (Mailpit, or its stand-in). */
+async function mailTo(email: string): Promise<Array<{ ID: string; Subject: string }>> {
+  const res = await fetch(`${E2E_MAILPIT_URL}/api/v1/search?${new URLSearchParams({ query: `to:${email}` })}`);
+  const body = (await res.json()) as { messages?: Array<{ ID: string; Subject: string }> };
+  return body.messages ?? [];
+}
+
 /** The subjects of the emails the app sent to `email`, newest first (Mailpit, or its stand-in). */
 export async function mailSubjects(email: string): Promise<string[]> {
-  const res = await fetch(`${E2E_MAILPIT_URL}/api/v1/search?${new URLSearchParams({ query: `to:${email}` })}`);
-  const body = (await res.json()) as { messages?: Array<{ Subject: string }> };
-  return (body.messages ?? []).map((m) => m.Subject);
+  return (await mailTo(email)).map((m) => m.Subject);
+}
+
+/** The id of the newest email to `email` with this subject, or null: taken before an action, so the one it sends can be told apart. */
+export async function newestMailId(email: string, subject = /verification code/i): Promise<string | null> {
+  return (await mailTo(email)).find((m) => subject.test(m.Subject))?.ID ?? null;
+}
+
+/**
+ * The 6-digit code in the newest email the app itself sent to `email` (the code after the
+ * password: the app's own, through the mailer, unlike Cognito's sign-up codes in the emulator).
+ * `after`: wait for one newer than this id (newestMailId before the action that sends it).
+ */
+export async function latestMailCode(email: string, after: string | null = null, subject = /verification code/i): Promise<string> {
+  for (let i = 0; i < 150; i++) {
+    const newest = (await mailTo(email)).find((m) => subject.test(m.Subject));
+    if (newest && newest.ID !== after) {
+      const full = (await (await fetch(`${E2E_MAILPIT_URL}/api/v1/message/${newest.ID}`)).json()) as { Text?: string };
+      const code = /\b(\d{6})\b/.exec(full.Text ?? "")?.[1];
+      if (code) return code;
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  throw new Error(`no code emailed to ${email}`);
+}
+
+/**
+ * Type a 6-digit code into the code step's six boxes (role group "Verification code"). The sixth
+ * digit sends the form by itself, so nothing needs clicking afterwards.
+ */
+export async function fillCode(scope: Page | Locator, code: string) {
+  const boxes = scope.getByRole("group", { name: "Verification code" }).getByRole("textbox");
+  await boxes.first().fill(code);
 }
 
 /** A signed-in account whose email isn't verified sits on /verify-email: send the code and enter it. */
 export async function verifyEmail(page: Page, email: string) {
   await expect(page).toHaveURL(/verify-email/);
   await page.getByRole("button", { name: "Email me a verification code" }).click();
-  await page.getByLabel("Verification code").fill(await latestCode(email, "verify"));
-  await page.getByRole("button", { name: "Verify email" }).click();
+  await fillCode(page, await latestCode(email, "verify"));
 }
 
 /**
@@ -110,8 +146,7 @@ export async function confirmSignUp(page: Page, email: string) {
   await page.getByRole("button", { name: "Create Account" }).click();
   await expect(page.getByRole("heading", { name: "Verify your email" })).toBeVisible();
   await verifiedOnConfirm(email);
-  await page.getByLabel("Verification code").fill(await latestCode(email));
-  await page.getByRole("button", { name: "Verify and continue" }).click();
+  await fillCode(page, await latestCode(email));
 }
 
 /**
@@ -126,12 +161,29 @@ export async function signUp(page: Page, email: string) {
   await expect(page).toHaveURL(/onboarding/);
 }
 
-/** Sign in on /login with email and password. */
+/** The app's own alerts (Next.js also renders an empty role="alert" route announcer). */
+export const appAlert = (page: Page) => page.locator('[role="alert"]:not(#__next-route-announcer__)');
+
+/**
+ * Sign in on /login with email and password. A right password is followed by the code the app
+ * emails to the address (every account without an authenticator app): it is read from the mail
+ * stand-in and entered here, so the caller sees the signed-in app next. A wrong password's
+ * message, or the authenticator app's step, is left for the caller.
+ */
 export async function logIn(page: Page, email: string, password = PASSWORD) {
   await asNewVisitor(page);
   await page.getByLabel("Email Address").fill(email);
   await page.getByLabel("Password", { exact: true }).fill(password);
+  const before = await newestMailId(email);
   await page.getByRole("button", { name: "Sign In", exact: true }).click();
+  const settle = <T,>(p: Promise<unknown>, v: T) => p.then(() => v, () => null);
+  const next = await Promise.race([
+    settle(page.getByRole("heading", { name: "Check your email" }).waitFor(), "code" as const),
+    settle(page.getByRole("heading", { name: "Two-step verification" }).waitFor(), "mfa" as const),
+    settle(appAlert(page).waitFor(), "alert" as const),
+    settle(page.waitForURL((u) => !u.pathname.startsWith("/login")), "in" as const),
+  ]);
+  if (next === "code") await fillCode(page, await latestMailCode(email, before));
 }
 
 /** Our App URL as Shopify opens it (after a managed install, or from the admin): signed query string. */

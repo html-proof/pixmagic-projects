@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import pg from "pg";
 import { E2E_ENV } from "../playwright.config";
-import { fillSignUp, latestCode, logIn, PASSWORD, signedLaunchUrl, signedWebhook, signOutFromMenu, signUp, stubShopify, uniqueEmail, verifyEmail } from "./helpers";
+import { fillCode, fillSignUp, latestCode, logIn, PASSWORD, signedLaunchUrl, signedWebhook, signOutFromMenu, signUp, stubShopify, uniqueEmail, verifyEmail } from "./helpers";
 
 /** The app's own alerts (Next.js also renders an empty role="alert" route announcer). */
 const alert = (page: import("@playwright/test").Page) => page.locator('[role="alert"]:not(#__next-route-announcer__)');
@@ -131,12 +131,12 @@ test("signing up checks the form, confirms the emailed code, refuses a taken ema
   await fillSignUp(page, email);
   await page.getByRole("button", { name: "Create Account" }).click();
   await expect(page.getByRole("heading", { name: "Verify your email" })).toBeVisible();
+  // The six boxes send the code by themselves once the sixth digit is in; the minute it lasts is counted down.
+  await expect(page.getByTestId("code-expires-in")).toHaveText(/^00:[0-5]\d$/);
   const code = await latestCode(email);
-  await page.getByLabel("Verification code").fill(code === "000000" ? "111111" : "000000");
-  await page.getByRole("button", { name: "Verify and continue" }).click();
-  await expect(alert(page)).toContainText("isn't right");
-  await page.getByLabel("Verification code").fill(code);
-  await page.getByRole("button", { name: "Verify and continue" }).click();
+  await fillCode(page, code === "000000" ? "111111" : "000000");
+  await expect(alert(page)).toContainText("The verification code is incorrect");
+  await fillCode(page, code);
   await verifyEmail(page, email);
   await expect(page).toHaveURL(/onboarding/);
   // Refreshing keeps the account signed in.
@@ -202,7 +202,7 @@ test("forgot password: a code by email, a new password, then signing in with it"
   await page.getByLabel("Email Address").fill(email);
   await page.getByRole("button", { name: "Send reset code" }).click();
   await expect(page.getByRole("heading", { name: "Choose a new password" })).toBeVisible();
-  await page.getByLabel("Verification code").fill(await latestCode(email));
+  await fillCode(page, await latestCode(email));
   await page.getByLabel("New password", { exact: true }).fill("a-brand-new-password");
   await page.getByLabel("Confirm new password", { exact: true }).fill("a-brand-new-password");
   await page.getByRole("button", { name: "Reset password" }).click();

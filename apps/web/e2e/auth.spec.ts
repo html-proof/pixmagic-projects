@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import pg from "pg";
 import { E2E_ENV } from "../playwright.config";
-import { asNewVisitor, fillSignUp, latestCode, logIn, mailSubjects, PASSWORD, poolMfa, signOutFromMenu, signUp, totpCode, uniqueEmail, verifiedOnConfirm } from "./helpers";
+import { asNewVisitor, fillCode, fillSignUp, latestCode, latestMailCode, logIn, mailSubjects, newestMailId, PASSWORD, poolMfa, signOutFromMenu, signUp, totpCode, uniqueEmail, verifiedOnConfirm } from "./helpers";
 
 /**
  * Sign-in and Settings → Security as a person meets them: the sign-up code that signs in by
@@ -47,9 +47,8 @@ test("signing up: the emailed code signs the new account in by itself", async ({
   await page.getByRole("button", { name: "Create Account" }).click();
   await expect(page.getByRole("heading", { name: "Verify your email" })).toBeVisible();
   await verifiedOnConfirm(email);
-  await page.getByLabel("Verification code").fill(await latestCode(email));
   const confirmed = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/auth/signup/confirm");
-  await page.getByRole("button", { name: "Verify and continue" }).click();
+  await fillCode(page, await latestCode(email));
   // The code came with the password chosen here: the answer is the signed-in account.
   const res = await confirmed;
   expect(res.status()).toBe(200);
@@ -58,6 +57,54 @@ test("signing up: the emailed code signs the new account in by itself", async ({
   expect(logins).toEqual([]);
   await page.reload();
   await expect(page).toHaveURL(/\/onboarding/);
+});
+
+test("signing in: the password, then the code emailed to the address, with its minute counted down (and kept across a reload)", async ({ page }) => {
+  const email = uniqueEmail("login-code");
+  await signUp(page, email);
+  await createWorkspace(page, "Code Co");
+  await page.goto("/dashboard");
+  await signOutFromMenu(page);
+  await expect(page).toHaveURL(/\/login/);
+
+  await asNewVisitor(page);
+  await page.getByLabel("Email Address").fill(email);
+  await page.getByLabel("Password", { exact: true }).fill(PASSWORD);
+  const before = await newestMailId(email);
+  await page.getByRole("button", { name: "Sign In", exact: true }).click();
+  // The password alone signs nobody in: the code step, with no session behind it yet.
+  await expect(page.getByRole("heading", { name: "Check your email" })).toBeVisible();
+  await expect(page.getByText(email.toLowerCase())).toBeVisible();
+  const boxes = page.getByRole("group", { name: "Verification code" }).getByRole("textbox");
+  await expect(boxes).toHaveCount(6);
+  await expect(page.getByTestId("code-expires-in")).toHaveText(/^00:[0-5]\d$/);
+  await expect(page.getByTestId("code-resend-in")).toContainText(/Resend code in 00:[0-5]\d/);
+  await expect(page.getByRole("button", { name: "Resend verification code" })).toHaveCount(0);
+  const shown = await page.getByTestId("code-expires-in").textContent();
+  // A reload comes back to the same code and the same countdown (the server's clock, not the page's).
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Check your email" })).toBeVisible();
+  const afterReload = await page.getByTestId("code-expires-in").textContent();
+  const secs = (t: string | null) => Number(t!.split(":")[0]) * 60 + Number(t!.split(":")[1]);
+  expect(secs(afterReload)).toBeLessThanOrEqual(secs(shown));
+  expect(secs(afterReload)).toBeGreaterThan(secs(shown) - 15);
+
+  const code = await latestMailCode(email, before);
+  expect((await mailSubjects(email.toLowerCase()))[0]).toBe("Your bizinsights verification code");
+  // A wrong code is refused; typing moves from box to box, Backspace moves back.
+  await boxes.first().click();
+  await page.keyboard.type(code === "000000" ? "111111" : "000000");
+  await expect(alert(page)).toContainText("The verification code is incorrect");
+  await expect(page).toHaveURL(/\/login/);
+  await page.keyboard.press("Backspace");
+  await expect(boxes.nth(5)).toHaveValue("");
+  // Pasting the whole code fills every box and sends it.
+  await boxes.first().click();
+  await page.evaluate((c) => navigator.clipboard.writeText(c), code).catch(() => undefined);
+  await fillCode(page, code);
+  await expect(page).toHaveURL(/\/dashboard/);
+  await page.reload();
+  await expect(page).toHaveURL(/\/dashboard/);
 });
 
 test.describe("two-step verification", () => {
@@ -73,8 +120,7 @@ test.describe("two-step verification", () => {
     await twoStep.getByLabel("Current password", { exact: true }).fill(PASSWORD);
     await twoStep.getByRole("button", { name: "Set up two-step verification" }).click();
     const key = (await twoStep.getByLabel("Your authenticator key").textContent())!;
-    await twoStep.getByLabel("Verification code").fill(totpCode(key));
-    await twoStep.getByRole("button", { name: "Turn on two-step verification" }).click();
+    await fillCode(twoStep, totpCode(key));
     await expect(twoStep.getByText("Two-step verification is on.")).toBeVisible();
 
     await page.goto("/dashboard");
@@ -84,11 +130,9 @@ test.describe("two-step verification", () => {
     // The password was right: now the app's code, on its own step.
     await expect(page.getByRole("heading", { name: "Two-step verification" })).toBeVisible();
     const now = totpCode(key);
-    await page.getByLabel("Verification code").fill(now === "000000" ? "111111" : "000000");
-    await page.getByRole("button", { name: "Sign In", exact: true }).click();
+    await fillCode(page, now === "000000" ? "111111" : "000000");
     await expect(alert(page)).toContainText("isn't right");
-    await page.getByLabel("Verification code").fill(totpCode(key));
-    await page.getByRole("button", { name: "Sign In", exact: true }).click();
+    await fillCode(page, totpCode(key));
     await expect(page).toHaveURL(/\/dashboard/);
     // "Back to sign in" from the code step starts again from the password.
     await signOutFromMenu(page);

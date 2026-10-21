@@ -154,6 +154,7 @@ export function testBrowser(ctx: TestCtx) {
     jar,
     get: async (url: string) => absorb(await ctx.app.inject({ method: "GET", url, headers: headers() })),
     post: async (url: string, payload: unknown = {}) => absorb(await ctx.app.inject({ method: "POST", url, headers: headers(ORIGIN), payload })),
+    delete: async (url: string) => absorb(await ctx.app.inject({ method: "DELETE", url, headers: headers(ORIGIN) })),
     /** Sign in with email and password, like the web app's login page. */
     async signIn(uid: string, email: string, verified = true) {
       const u = ctx.auth.addUser({ sub: uid, email, emailVerified: verified });

@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 import { ArrowRight, Lock, UserRound } from "lucide-react";
 import { accountPasswordProblem, ACCOUNT_PASSWORD_MIN, DISPLAY_NAME_MAX } from "@app/shared/auth";
-import { afterSignIn, authErrorMessage, confirmSignUp, errorCode, rememberEmail, resendSignUpCode, signIn, signUp, useRedirectIfSignedIn } from "@/lib/auth";
+import { afterSignIn, authErrorMessage, confirmSignUp, errorCode, rememberEmail, resendSignUpCode, signIn, signUp, useRedirectIfSignedIn, type CodeChallenge } from "@/lib/auth";
 import { Alert, Divider } from "@/components/ui";
 import { emailProblem, useFieldErrors } from "@/components/auth/AuthCard";
 import { AuthSplitShell } from "@/components/auth/AuthSplitShell";
@@ -37,15 +37,19 @@ export default function SignupPage() {
   const [error, setError] = useState<string | null>(null);
   const [taken, setTaken] = useState(false);
   const [busy, setBusy] = useState(false);
-  /** Created: the address the confirmation code went to. */
-  const [sentTo, setSentTo] = useState<string | null>(null);
+  /**
+   * Created: the address the verification code went to, and the server's countdowns for it (the
+   * code lasts a minute; the next one may be asked for after a minute). The form is kept behind
+   * it, so "Use a different email address" comes back to it filled in.
+   */
+  const [sent, setSent] = useState<{ email: string; challenge: CodeChallenge } | null>(null);
   const formProblems = problems({ name, email, password, confirm, terms });
   const fields = useFieldErrors(formProblems);
   /** Every field filled in correctly and the terms accepted: only then can the account be created. */
   const complete = !Object.values(formProblems).some(Boolean);
 
   // Already signed in (and verified): there is nothing to sign up for, go into the app.
-  useRedirectIfSignedIn(router, !sentTo);
+  useRedirectIfSignedIn(router, !sent);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -55,9 +59,10 @@ export default function SignupPage() {
     setBusy(true);
     try {
       // A second press while the first is on its way is disabled; a retry after a failure that
-      // did create the account just sends a new code (the API answers "confirm" again).
+      // did create the account (or a page filled in again) gets the code already sent, with the
+      // time it has left, rather than another one (the API answers "confirm" again).
       const r = await signUp({ name: name.trim(), email: email.trim(), password, confirmPassword: confirm, acceptTerms: terms });
-      setSentTo(r.email);
+      setSent({ email: r.email, challenge: r.challenge });
     } catch (err) {
       setTaken(errorCode(err) === "account_exists");
       setError(authErrorMessage(err));
@@ -66,26 +71,34 @@ export default function SignupPage() {
     }
   }
 
-  if (sentTo) {
+  if (sent) {
     return (
-      <AuthSplitShell title="Verify your email" subtitle="Enter the code we sent you to finish creating your account." action={SIGN_IN}>
+      <AuthSplitShell title="Verify your email" subtitle="We sent a 6-digit verification code to your email address." action={SIGN_IN}>
         <CodeStep
-          email={sentTo}
+          email={sent.email}
+          challenge={sent.challenge}
           submitLabel="Verify and continue"
           busyLabel="Verifying…"
+          successLabel="Email verified successfully. Taking you to your dashboard…"
           large
           onSubmit={async (code) => {
             // With the password chosen here: the code signs in, and this password is the account's,
             // whoever else signed up with the address in the meantime.
-            const r = await confirmSignUp(sentTo, code, { password });
+            const r = await confirmSignUp(sent.email, code, { password });
             if (!r.user) {
               // Confirmed already, in another tab: sign in as usual.
               try {
-                await signIn(sentTo, password);
+                const signedIn = await signIn(sent.email, password);
+                if ("next" in signedIn) {
+                  // The account asks for a second step now (a code, an authenticator app): the sign-in page runs it.
+                  rememberEmail(sent.email);
+                  router.replace("/login?confirmed=1");
+                  return;
+                }
               } catch (err) {
                 // Confirmed elsewhere with another password: the sign-in page says so and offers "Forgot password?".
                 if (errorCode(err) !== "invalid_credentials") throw err;
-                rememberEmail(sentTo);
+                rememberEmail(sent.email);
                 router.replace("/login?confirmedElsewhere=1");
                 return;
               }
@@ -93,11 +106,9 @@ export default function SignupPage() {
             // Through the app shell, which sends a new merchant to onboarding.
             router.replace(afterSignIn());
           }}
-          onResend={() => resendSignUpCode(sentTo)}
+          onResend={() => resendSignUpCode(sent.email)}
+          onChangeEmail={() => setSent(null)}
         />
-        <button type="button" className="text-sm text-muted underline" onClick={() => setSentTo(null)}>
-          Use a different email address
-        </button>
       </AuthSplitShell>
     );
   }

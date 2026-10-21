@@ -430,17 +430,27 @@ describe("an account whose address nobody has proved", () => {
     expect((await post("/auth/login", { email: "victim@gmail.com", password: "owners-password" })).json().user).toMatchObject({ id: account.id, emailVerified: true });
   });
 
-  it("allows a few guesses an hour at our code, and a new code from \"Resend\"", async () => {
+  it("allows five guesses at our code, which lasts a minute, and a new code from \"Resend\" after that minute", async () => {
     await squatted();
     await post("/auth/signup", { name: "Vic", email: "victim@gmail.com", password: "owners-password", confirmPassword: "owners-password", acceptTerms: true });
     const first = ourCode("victim@gmail.com");
+    // Not before the first code's minute is up.
+    expect((await post("/auth/signup/resend", { email: "victim@gmail.com" })).statusCode).toBe(429);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + 61_000);
     expect((await post("/auth/signup/resend", { email: "victim@gmail.com" })).statusCode).toBe(200);
     const second = ourCode("victim@gmail.com");
-    const wrong = ["000000", "111111", "222222", "333333", "444444"].filter((c) => c !== second);
-    for (const guess of wrong.slice(0, 4)) expect((await post("/auth/signup/confirm", { email: "victim@gmail.com", code: guess, password: "owners-password" })).json().error).toBe("invalid_code");
-    if (first !== second) expect((await post("/auth/signup/confirm", { email: "victim@gmail.com", code: first, password: "owners-password" })).json().error).toBe("invalid_code");
-    else expect((await post("/auth/signup/confirm", { email: "victim@gmail.com", code: wrong[4]!, password: "owners-password" })).json().error).toBe("invalid_code");
-    expect((await post("/auth/signup/confirm", { email: "victim@gmail.com", code: second, password: "owners-password" })).statusCode).toBe(429);
+    expect(second).not.toBe(first);
+    // The first code went with the resend (and its minute is over anyway).
+    expect((await post("/auth/signup/confirm", { email: "victim@gmail.com", code: first, password: "owners-password" })).json().error).toBe("invalid_code");
+    const wrong = ["000000", "111111", "222222", "333333", "444444", "555555"].filter((c) => c !== second).slice(0, 5);
+    for (const guess of wrong.slice(0, 3)) expect((await post("/auth/signup/confirm", { email: "victim@gmail.com", code: guess, password: "owners-password" })).json().error).toBe("invalid_code");
+    // The fifth wrong guess ends the code.
+    const fifth = await post("/auth/signup/confirm", { email: "victim@gmail.com", code: wrong[3]!, password: "owners-password" });
+    expect(fifth.statusCode).toBe(429);
+    expect(fifth.json().error).toBe("too_many_attempts");
+    expect((await post("/auth/signup/confirm", { email: "victim@gmail.com", code: second, password: "owners-password" })).json().error).toBe("expired_code");
+    vi.useRealTimers();
   });
 
   it("verifies with the code sent to its own address", async () => {

@@ -56,6 +56,13 @@ export const APP_SETTINGS = {
   // address on a domain verified there (bizinsights.io, records in Cloudflare DNS). The domain has
   // no mailbox, so replies go where a message names (an invitation: its sender).
   "EMAIL_FROM": "bizinsights <no-reply@bizinsights.io>",
+  // Sign-in asks for a 6-digit code emailed by the app after the password (accounts with an
+  // authenticator app keep that code instead). "" turns the step off; the password alone then
+  // signs in. The codes last 60 seconds and one address gets at most these many an hour and a
+  // day (apps/api/src/emailCode.ts; docs/cognito-setup.md, "Emailed codes").
+  "AUTH_LOGIN_EMAIL_CODE": "1",
+  "AUTH_CODE_LIMIT_HOURLY": "6",
+  "AUTH_CODE_LIMIT_DAILY": "20",
   // Ad accounts ("Continue with Meta" / "Continue with Google Ads" / "Continue with Google AdSense"
   // on Settings → Ad accounts). Empty until the apps exist: the buttons then say the platform isn't
   // set up. GOOGLE_ADS_CLIENT_ID is the Google Cloud OAuth client "Insights web" (project

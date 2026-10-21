@@ -38,8 +38,8 @@ export interface ConfigReport {
   whatsapp: { embeddedSignup: boolean; embeddedSignupNeeds: string[]; webhookVerifyToken: boolean };
   /** The email integrations ("Connect Gmail", "Connect Outlook"), and Resend for the app's own email. */
   email: Record<OAuthProvider, boolean> & { resend: boolean };
-  /** Sign-in: the Cognito pool and app client, "Continue with Google", and codes by email. */
-  auth: { cognito: boolean; google: boolean; emailOtp: boolean };
+  /** Sign-in: the Cognito pool and app client, "Continue with Google", Cognito's passwordless codes, and the app's emailed code after the password. */
+  auth: { cognito: boolean; google: boolean; emailOtp: boolean; loginCode: boolean };
   credentials: ProviderCredentials[];
   /** The providers in `credentials` whose public id is set and whose secret is missing. */
   halfConfigured: string[];
@@ -155,6 +155,7 @@ export function configReport(): ConfigReport {
       // As the sign-in pages are told (apps/api routes/auth.ts enabledProviders): needs the pool's domain too.
       google: !!e.COGNITO_DOMAIN && e.COGNITO_IDENTITY_PROVIDERS.split(",").some((p) => p.trim() === "Google"),
       emailOtp: e.COGNITO_EMAIL_OTP === "1",
+      loginCode: e.AUTH_LOGIN_EMAIL_CODE === "1",
     },
     credentials,
     halfConfigured: credentials.filter(isHalf).map((c) => c.provider),

@@ -74,7 +74,7 @@ describe("the custom email sender", () => {
       ["CustomEmailSender_ForgotPassword", "Reset your bizinsights password"],
       ["CustomEmailSender_UpdateUserAttribute", "Confirm your new bizinsights email address"],
       ["CustomEmailSender_VerifyUserAttribute", "Your bizinsights verification code"],
-      ["CustomEmailSender_Authentication", "Your bizinsights sign-in code"],
+      ["CustomEmailSender_Authentication", "Your bizinsights verification code"],
       ["CustomEmailSender_AdminCreateUser", "Your bizinsights account is ready"],
     ] as const) {
       const { mailer, sent } = recordingMailer();

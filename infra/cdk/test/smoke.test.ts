@@ -28,7 +28,7 @@ const REPORT = {
   ads: { configured: { meta: false, google: false, adsense: false }, restricted: { meta: false, google: false, adsense: false } },
   whatsapp: { embeddedSignup: false, embeddedSignupNeeds: ["WHATSAPP_CONFIG_ID", "WHATSAPP_APP_SECRET"], webhookVerifyToken: false },
   email: { google: false, microsoft: false, resend: true },
-  auth: { cognito: true, google: false, emailOtp: false },
+  auth: { cognito: true, google: false, emailOtp: false, loginCode: true },
   credentials: [
     credential("Shopify", "SHOPIFY_API_KEY", "SHOPIFY_API_SECRET", true, true, "stores can't install the Shopify app or refresh their access"),
     credential("Meta Ads", "META_APP_ID", "META_APP_SECRET", true, false, 'Meta Ads says "Coming soon" and its connections stop syncing'),
@@ -63,7 +63,7 @@ describe("the configuration check", () => {
         "Copy the secret, run node infra/cdk/scripts/put-secrets.mjs --env production --set META_APP_SECRET, then run Deploy to AWS (Actions, Run workflow, on main) so the functions read it (docs/aws-deployment.md).",
     ]);
     expect(detail).toBe(
-      "ads none (restricted none); WhatsApp Embedded Signup off (needs WHATSAPP_CONFIG_ID, WHATSAPP_APP_SECRET); email resend; Google sign-in off; missing a secret: Meta Ads",
+      "ads none (restricted none); WhatsApp Embedded Signup off (needs WHATSAPP_CONFIG_ID, WHATSAPP_APP_SECRET); email resend; Google sign-in off; emailed sign-in code on; missing a secret: Meta Ads",
     );
   });
 
