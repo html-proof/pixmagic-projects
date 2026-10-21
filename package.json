@@ -15,7 +15,8 @@
     "db:generate": "pnpm --filter @app/db generate",
     "db:migrate": "pnpm --filter @app/db migrate:deploy",
     "db:migrate:dev": "pnpm --filter @app/db migrate:dev",
-    "test:all": "pnpm test && pnpm test:integration"
+    "test:all": "pnpm test && pnpm test:integration",
+    "check:boundaries": "node scripts/check-boundaries.mjs"
   },
   "pnpm": {
     "overrides": {

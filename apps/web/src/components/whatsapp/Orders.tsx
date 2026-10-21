@@ -200,7 +200,7 @@ export function OrdersList({ statuses, title, empty }: { statuses?: string[]; ti
   const [q, setQ] = useState("");
   const [open, setOpen] = useState<string | null>(null);
   const params = new URLSearchParams({ limit: "30", ...(status ? { status } : {}), ...(q ? { q } : {}) });
-  const { data, error } = useApi<{ orders: OrderRow[]; nextCursor: string | null }>(contact && base ? `${base}/orders?${params}` : null);
+  const { data, error, reload } = useApi<{ orders: OrderRow[]; nextCursor: string | null }>(contact && base ? `${base}/orders?${params}` : null);
   if (!contact) return null;
   const rows = (data?.orders ?? []).filter((o) => !statuses || statuses.includes(o.status));
   return (
@@ -220,7 +220,7 @@ export function OrdersList({ statuses, title, empty }: { statuses?: string[]; ti
         </div>
       </div>
       {error ? (
-        <p className="mt-3 text-sm text-danger">{error.message}</p>
+        <div className="mt-3"><LoadError what="orders" error={error} onRetry={() => void reload()} /></div>
       ) : !data ? (
         <div className="mt-3 space-y-2">{[0, 1, 2].map((i) => <div key={i} className="skeleton h-10" />)}</div>
       ) : !rows.length ? (

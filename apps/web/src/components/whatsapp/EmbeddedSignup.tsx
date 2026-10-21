@@ -151,7 +151,7 @@ export function EmbeddedSignup({
       } else if (data.event === "CANCEL") {
         cancelled.current = { step: data.data?.current_step, error: data.data?.error_message };
       } else if (data.event === "ERROR") {
-        stop(`Meta reported a problem: ${data.data?.error_message ?? "unknown error"}. Please try again.`);
+        stop("Meta could not complete setup. Please try again.");
       }
     };
     window.addEventListener("message", onMessage);
@@ -169,7 +169,7 @@ export function EmbeddedSignup({
     try {
       FB = await loadFacebookSdk(platform.appId, platform.version ?? "v25.0");
     } catch (e) {
-      stop((e as Error).message);
+      stop("We couldn't open the connection service. Check your internet connection and try again.");
       return;
     }
     openedAt.current = Date.now();
@@ -186,9 +186,9 @@ export function EmbeddedSignup({
         if (done.current) return;
         // The window closed without a code: nothing is connected.
         const c = cancelled.current;
-        if (c?.error) stop(`Meta reported a problem: ${c.error}. Nothing was connected; please try again.`);
+        if (c?.error) stop("Meta could not complete setup. Nothing was connected; please try again.");
         else if (Date.now() - openedAt.current < BLOCKED_MS && !c) stop("Meta's window didn't open. Allow pop-ups for this site in your browser, then press the button again.");
-        else stop(`Meta's window was closed${c?.step ? ` while ${STEP[c.step] ?? c.step.toLowerCase().replace(/_/g, " ")}` : ""} before the setup finished. Nothing was connected.`, "info");
+        else stop(`Meta's window was closed${c?.step ? ` while ${STEP[c.step] ?? "completing setup"}` : ""} before the setup finished. Nothing was connected.`, "info");
       },
       { config_id: platform.configId, response_type: "code", override_default_response_type: true, extras: { setup: {} } },
     );

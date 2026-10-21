@@ -96,7 +96,7 @@ export default function WhatsappOverview() {
             </div>
           </dl>
         )}
-        {c?.lastError && c.status !== "active" && <p className="mt-3 rounded-lg border border-danger px-3 py-2 text-sm text-danger">{c.lastError}</p>}
+        {c?.lastError && c.status !== "active" && <p className="mt-3 rounded-lg border border-danger px-3 py-2 text-sm text-danger">{c.status === "reconnect" ? "Integration disconnected. Reconnect your account to resume updates." : "The last update failed. Check your connection settings and try again."}</p>}
       </section>
 
       {(!data.setup.connected || !data.setup.registered || !data.setup.webhookVerified || data.setup.consentBasis === "none" || data.setup.notificationsReady === 0) && (

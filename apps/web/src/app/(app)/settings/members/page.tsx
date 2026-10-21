@@ -1,5 +1,6 @@
 "use client";
 import { ValidatedInput } from "@/components/FieldError";
+import { LoadError } from "@/components/LoadError";
 import { useState, type FormEvent } from "react";
 import { can, ROLES } from "@app/shared/roles";
 import { useApp } from "@/components/AppContext";
@@ -60,7 +61,7 @@ export default function MembersPage() {
   return (
     <section className="card space-y-4">
       <h1 className="text-lg font-semibold">Members & roles</h1>
-      {error && <Alert>{error.message}</Alert>}
+      {error && <LoadError what="workspace members" error={error} onRetry={() => void reload()} />}
       {msg && <Alert kind={msg.kind}>{msg.text}</Alert>}
       {inviteLink && (
         <Alert kind="info">

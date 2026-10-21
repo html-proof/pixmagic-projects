@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState, type FormEvent } from "react";
-import { api, ApiError } from "@/lib/api";
+import { api, ApiError, actionError } from "@/lib/api";
 import { OAUTH_ERRORS } from "@/lib/shopifyErrors";
 import { Alert } from "@/components/ui";
 import { ShopifyIcon } from "@/components/ShopifyIcon";
@@ -47,7 +47,7 @@ export function ShopifyConnect({ workspaceId }: { workspaceId: string }) {
     } catch (e) {
       const code = e instanceof ApiError ? e.code : "";
       if (code === "shop_required") setPickerOk(false);
-      setError(OAUTH_ERRORS[code] ?? (e as Error).message);
+      setError(OAUTH_ERRORS[code] ?? actionError(e, "connect your store"));
       setBusy(null);
     }
   }

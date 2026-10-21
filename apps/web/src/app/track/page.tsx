@@ -1,6 +1,8 @@
 "use client";
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { api, ApiError } from "@/lib/apiClient";
+import { PublicLinkError } from "@/components/PublicLinkError";
 
 // ---------------------------------------------------------------------------
 // The customer's order tracking page, opened from a WhatsApp message. The link carries a long
@@ -55,33 +57,24 @@ const money = (n: number, c: string) => {
 
 export default function TrackPage() {
   const [data, setData] = useState<Tracking | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
 
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
+    let live = true;
+    setError(null);
     const token = new URLSearchParams(window.location.search).get("t");
     if (!token) {
-      setError("This link is missing its code. Open it again from the WhatsApp message.");
+      setError(new ApiError(410, "expired_link", ""));
       return;
     }
-    fetch(`/api/public/track/${encodeURIComponent(token)}`, { credentials: "omit", referrerPolicy: "no-referrer" })
-      .then(async (r) => {
-        const body = await r.json().catch(() => ({}));
-        if (!r.ok) throw new Error(body.message ?? (r.status === 429 ? "Too many requests. Please try again in a minute." : "We couldn't load your order. Please try again."));
-        setData(body as Tracking);
-      })
-      .catch((e: Error) => setError(e.message));
-  }, []);
+    api<Tracking>(`/public/track/${encodeURIComponent(token)}`, { credentials: "omit", referrerPolicy: "no-referrer" })
+      .then((body) => { if (live) setData(body); })
+      .catch((error: unknown) => { if (live) setError(error); });
+    return () => { live = false; };
+  }, [attempt]);
 
-  if (error) {
-    return (
-      <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-4 py-10">
-        <div className="card text-center">
-          <h1 className="text-lg font-semibold">We can&apos;t show this order</h1>
-          <p className="mt-2 text-sm text-muted">{error}</p>
-        </div>
-      </main>
-    );
-  }
+  if (error) return <main className="mx-auto max-w-md px-4 py-10"><PublicLinkError error={error} onRetry={() => setAttempt((n) => n + 1)} /></main>;
   if (!data) {
     return (
       <main className="mx-auto max-w-md space-y-3 px-4 py-10" aria-busy="true">

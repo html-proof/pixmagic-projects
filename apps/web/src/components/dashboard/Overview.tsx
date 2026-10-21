@@ -1,5 +1,6 @@
 "use client";
 import type { ReactNode } from "react";
+import { trendHealth, refundHealth, stockHealth, shippingHealth, worstHealth, type Health } from "@app/shared/health";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { fmtDay, fmtMonth, fmtRange, fmtRelative, hourRange, plural } from "./format";
 import { STEP_LABEL } from "./Funnel";
@@ -14,7 +15,7 @@ import type { Overview } from "./types";
 // page already has, each opening the area's own details.
 // ---------------------------------------------------------------------------
 
-export type Health = "attention" | "watch" | "good" | "info";
+export type { Health } from "@app/shared/health";
 
 export interface Check {
   id: string;
@@ -31,16 +32,6 @@ const HEALTH: Record<Health, { label: string; tone: Tone; order: number }> = {
   info: { label: "For your info", tone: "neutral", order: 3 },
 };
 
-/**
- * Rules, kept deliberately plain so a merchant can predict them (also in docs/kpis.md):
- * - a number that should grow: up or level is good, down by less than 10% is one to watch,
- *   down by 10% or more needs attention; nothing to compare with is information only;
- * - refunds: up to 5% of sales is good, up to 10% to watch, more needs attention;
- * - stock: anything sold out needs attention, anything running low is one to watch;
- * - shipping: an order waiting over 3 days needs attention, any waiting is one to watch.
- * While the only day picked is today, it isn't over, so it isn't graded against a whole day.
- */
-const trend = (d: number | null, running: boolean): Health => (running || d === null ? "info" : d >= 0 ? "good" : d > -0.1 ? "watch" : "attention");
 
 const changeWords = (d: number | null) => (d === null ? "" : d === 0 ? ", level with the period before" : `, ${d > 0 ? "up" : "down"} ${fmtPct(Math.abs(d))} on the period before`);
 
@@ -54,37 +45,37 @@ export function businessHealth(ov: Overview, currency: string): Check[] {
   const s = m.sales_overview;
   if (s) {
     const c = s.current;
-    out.push({ id: "net", topic: "sales", area: "Sales", health: trend(s.deltas.netSales, running), text: `${money(c.netSales)} in net sales${changeWords(s.deltas.netSales)}.${still}` });
-    out.push({ id: "orders", topic: "sales", area: "Orders", health: trend(s.deltas.orders, running), text: `${plural(c.orders, "order")}${changeWords(s.deltas.orders)}.${still}` });
+    out.push({ id: "net", topic: "sales", area: "Sales", health: trendHealth(s.deltas.netSales, running), text: `${money(c.netSales)} in net sales${changeWords(s.deltas.netSales)}.${still}` });
+    out.push({ id: "orders", topic: "sales", area: "Orders", health: trendHealth(s.deltas.orders, running), text: `${plural(c.orders, "order")}${changeWords(s.deltas.orders)}.${still}` });
     if (c.averageOrderValue !== null) {
-      out.push({ id: "aov", topic: "sales", area: "Average order", health: trend(s.deltas.averageOrderValue, running), text: `${money(c.averageOrderValue)} per order${changeWords(s.deltas.averageOrderValue)}.` });
+      out.push({ id: "aov", topic: "sales", area: "Average order", health: trendHealth(s.deltas.averageOrderValue, running), text: `${money(c.averageOrderValue)} per order${changeWords(s.deltas.averageOrderValue)}.` });
     }
   }
   const r = m.refunds?.current;
   if (r && r.refundRate !== null) {
-    const health: Health = r.refundRate <= 0.05 ? "good" : r.refundRate <= 0.1 ? "watch" : "attention";
+    const health: Health = refundHealth(r.refundRate);
     out.push({ id: "refunds", topic: "sales", area: "Refunds", health, text: `${fmtPct(r.refundRate)} of sales refunded (${money(r.refunds)} on ${plural(r.refundedOrders, "order")}).` });
   }
   const f = m.funnel;
   if (f && f.visits > 0) {
-    out.push({ id: "conversion", topic: "shoppers", area: "Visitors who bought", health: trend(f.deltas.conversionRate, running), text: `${fmtPct(f.conversionRate)} of ${plural(f.visits, "visit")} ended in a purchase${changeWords(f.deltas.conversionRate)}.` });
+    out.push({ id: "conversion", topic: "shoppers", area: "Visitors who bought", health: trendHealth(f.deltas.conversionRate, running), text: `${fmtPct(f.conversionRate)} of ${plural(f.visits, "visit")} ended in a purchase${changeWords(f.deltas.conversionRate)}.` });
   }
   const cu = m.customers;
   if (cu && cu.current.returningCustomerRate !== null) {
     const now = cu.current.returningCustomerRate;
     const before = cu.previous.returningCustomerRate;
     const d = before !== null && before > 0 ? (now - before) / before : null;
-    out.push({ id: "returning", topic: "customers", area: "Returning customers", health: trend(d, running), text: `${fmtPct(now)} of orders came from returning customers${before !== null ? ` (${fmtPct(before)} before)` : ""}.` });
+    out.push({ id: "returning", topic: "customers", area: "Returning customers", health: trendHealth(d, running), text: `${fmtPct(now)} of orders came from returning customers${before !== null ? ` (${fmtPct(before)} before)` : ""}.` });
   }
   const inv = m.inventory?.current;
   if (inv && inv.trackedVariants > 0) {
-    const health: Health = inv.outOfStock > 0 ? "attention" : inv.lowStock > 0 ? "watch" : "good";
+    const health: Health = stockHealth(inv.outOfStock, inv.lowStock);
     const text = inv.outOfStock + inv.lowStock === 0 ? "Nothing is running low." : `${fmtNum(inv.outOfStock)} sold out and ${fmtNum(inv.lowStock)} running low.`;
     out.push({ id: "stock", topic: "stock", area: "Stock", health, text });
   }
   const ful = m.fulfillment;
   if (ful) {
-    const health: Health = ful.openNow === 0 ? "good" : (ful.oldestOpenDays ?? 0) > 3 ? "attention" : "watch";
+    const health: Health = shippingHealth(ful.openNow, ful.oldestOpenDays);
     const text = ful.openNow === 0 ? "Every order has shipped." : `${plural(ful.openNow, "order")} waiting to ship${ful.oldestOpenDays !== null ? `, the oldest for ${plural(ful.oldestOpenDays, "day")}` : ""}.`;
     out.push({ id: "shipping", topic: "shipping", area: "Shipping", health, text });
   }
@@ -126,7 +117,6 @@ function countsOf(checks: Check[]) {
 
 const B = ({ children }: { children: ReactNode }) => <strong className="font-semibold">{children}</strong>;
 
-const worst = (hs: Health[]): Health => hs.reduce<Health>((a, h) => (HEALTH[h].order < HEALTH[a].order ? h : a), "info");
 
 interface AreaRow {
   topic: Topic;
@@ -144,7 +134,7 @@ export function areaRows(ov: Overview, currency: string, topics: Topic[]): AreaR
   const m = ov.modules;
   const rows = topics.map((t): AreaRow => {
     const own = byTopic(t);
-    const health = worst(own.map((c) => c.health));
+    const health = worstHealth(own.map((c) => c.health));
     let text = own.find((c) => c.health === health)?.text ?? own[0]?.text ?? topicSummary(t, ov, currency);
     if (t === "sales") text = own.find((c) => c.id === "net")?.text ?? text;
     if (t === "shoppers" && m.funnel && m.funnel.visits > 0) {

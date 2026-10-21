@@ -1,4 +1,5 @@
 "use client";
+import { LoadError } from "@/components/LoadError";
 import { useState } from "react";
 import { MODERATION_LABEL, MODERATION_REASONS, type ModerationReason } from "@app/shared/whatsapp";
 import { Badge, Empty, Stat, type Tone } from "@/components/dashboard/Primitives";
@@ -159,7 +160,7 @@ export default function Reviews() {
               </div>
             </div>
             {error ? (
-              <p className="mt-3 text-sm text-danger">{error.message}</p>
+              <div className="mt-3"><LoadError what="customer reviews" error={error} onRetry={() => void reload()} /></div>
             ) : !data ? (
               <div className="mt-3 space-y-2">{[0, 1].map((i) => <div key={i} className="skeleton h-16" />)}</div>
             ) : !data.reviews.length ? (

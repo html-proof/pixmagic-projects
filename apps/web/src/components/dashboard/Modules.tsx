@@ -1,4 +1,5 @@
 "use client";
+import { shippingHealth } from "@app/shared/health";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { BarRow, ColumnChart, StackedBar } from "./Charts";
 import { fmtDateTime, fmtDuration, hourLabel, hourRange, humanize, plural } from "./format";
@@ -161,7 +162,8 @@ export function OrderTimingCard({ m, timezone }: { m: OrderTimingModule; timezon
 export function FulfillmentCard({ m }: { m: FulfillmentModule }) {
   const c = m.current;
   const other = Math.max(0, c.orders - c.fulfilled - c.partiallyFulfilled - c.unfulfilled);
-  const waitingTone: Tone = m.openNow === 0 ? "good" : (m.oldestOpenDays ?? 0) > 3 ? "danger" : "warn";
+  const health = shippingHealth(m.openNow, m.oldestOpenDays);
+  const waitingTone: Tone = health === "good" ? "good" : health === "attention" ? "danger" : "warn";
   return (
     <Panel id="fulfillment" title="Fulfillment" help="How quickly orders ship, and what's still waiting.">
       <div className="grid gap-3 sm:grid-cols-3">

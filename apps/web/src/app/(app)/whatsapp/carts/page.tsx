@@ -1,4 +1,5 @@
 "use client";
+import { LoadError } from "@/components/LoadError";
 import { useState } from "react";
 import Link from "next/link";
 import { reasonLabel } from "@app/shared/whatsapp";
@@ -113,7 +114,7 @@ export default function AbandonedCarts() {
             </div>
           </div>
           {error ? (
-            <p className="mt-3 text-sm text-danger">{error.message}</p>
+            <div className="mt-3"><LoadError what="abandoned carts" error={error} onRetry={() => void reload()} /></div>
           ) : !data ? (
             <div className="mt-3 space-y-2">{[0, 1, 2].map((i) => <div key={i} className="skeleton h-14" />)}</div>
           ) : !data.carts.length ? (

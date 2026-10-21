@@ -1,3 +1,4 @@
+import { StateIllustration } from "@/components/StateIllustration";
 import type { ReactNode } from "react";
 import { fmtPct } from "@/lib/api";
 
@@ -47,7 +48,7 @@ export function Stat({ label, value, note, tone, className = "" }: { label: stri
 
 /** Quiet text shown when a card has nothing to plot yet. */
 export function Empty({ children }: { children: ReactNode }) {
-  return <p className="rounded-lg border border-dashed border-border px-3 py-6 text-center text-sm text-muted">{children}</p>;
+  return <div role="status" className="flex flex-col items-center rounded-lg border border-dashed border-border px-3 py-6 text-center text-sm text-muted"><StateIllustration kind="empty" compact /><p className="max-w-md">{children}</p></div>;
 }
 
 export type Tone = "good" | "warn" | "danger" | "neutral";

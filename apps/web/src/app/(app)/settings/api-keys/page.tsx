@@ -1,4 +1,5 @@
 "use client";
+import { LoadError } from "@/components/LoadError";
 import { useState, type FormEvent } from "react";
 import { can } from "@app/shared/roles";
 import { useApp } from "@/components/AppContext";
@@ -51,7 +52,7 @@ export default function ApiKeysPage() {
         Read-only keys for pulling your metrics into other tools. Send as <code>Authorization: Bearer sk_live_…</code> to
         <code> /api/workspaces/{workspace.id}/…</code>.
       </p>
-      {error && <Alert>{error.message}</Alert>}
+      {error && <LoadError what="your API keys" error={error} onRetry={() => void reload()} />}
       {actionMsg && <Alert>{actionMsg}</Alert>}
       {secret && (
         <Alert kind="success">

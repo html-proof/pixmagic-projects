@@ -44,18 +44,21 @@ export default function VerifyEmailPage() {
     }
   }
 
+  const [resending, setResending] = useState(false);
   async function resend() {
     if (!user) return router.replace("/login");
+    setResending(true);
     await sendEmailVerification(user, { url: `${window.location.origin}/verify-email` })
       .then(() => setMsg({ kind: "success", text: "Sent. Check your inbox (and spam folder)." }))
-      .catch(() => setMsg({ kind: "error", text: "Please wait a minute before asking for another email." }));
+      .catch((error: unknown) => setMsg({ kind: "error", text: authErrorMessage(error) }))
+      .finally(() => setResending(false));
   }
 
   return (
     <AuthShell title="Check your email" subtitle={`We sent a verification link to ${user?.email ?? "your inbox"}. Verifying keeps your store data safe.`}>
       {msg && <Alert kind={msg.kind}>{msg.text}</Alert>}
       <button className="btn-primary w-full" onClick={check} disabled={busy || !authReady}>I&apos;ve verified my email</button>
-      <button className="btn-secondary w-full" onClick={resend} disabled={!authReady}>Resend the email</button>
+      <button className="btn-secondary w-full" onClick={resend} disabled={!authReady || resending}>{resending ? "Sending…" : "Resend the email"}</button>
     </AuthShell>
   );
 }

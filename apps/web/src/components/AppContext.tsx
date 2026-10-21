@@ -2,7 +2,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { can, type Role } from "@app/shared/roles";
-import { api, isSignedOut, isTransient, keepRetrying } from "@/lib/api";
+import { api, ApiError, isSignedOut, isTransient, keepRetrying } from "@/lib/api";
 import { LoadError, Unreachable } from "@/components/LoadError";
 import { signInAndReturn } from "@/lib/returnTo";
 import { readLocal, storeKey, WORKSPACE_KEY, writeLocal } from "@/lib/storage";
@@ -72,14 +72,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
    * unreachable, a dropped connection, a rate limit) keeps the merchant where they are with what is
    * already on screen, and is retried below. Resolves true once there is nothing left to retry.
    */
+  const meRetryAt = useRef(0);
   const loadMe = useCallback(async () => {
+    if (meRetryAt.current > Date.now()) return false;
     let m: Me;
     try {
       m = await api<Me>("/me");
     } catch (e) {
       if (!isSignedOut(e)) {
+        meRetryAt.current = e instanceof ApiError ? e.retryAt ?? 0 : 0;
         setMeError(e);
-        return false;
+        return !isTransient(e);
       }
       signInAndReturn(router);
       return true;
@@ -115,7 +118,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => void loadMe(), [loadMe]);
   const meFailing = meError !== null;
-  useEffect(() => (meFailing ? keepRetrying(loadMe) : undefined), [meFailing, loadMe]);
+  const meRetrying = meFailing && isTransient(meError);
+  useEffect(() => (meRetrying ? keepRetrying(loadMe, () => meRetryAt.current) : undefined), [meRetrying, loadMe]);
 
   /**
    * Each workspace's first stores load, and its retries. A failure is not "no stores": the views
@@ -123,6 +127,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
    * and only an outage is worth retrying; anything else (no longer a member of this workspace) will
    * not change by asking again. Resolves true once nothing is left to retry.
    */
+  const storesRetryAt = useRef(0);
   const loadStores = useCallback(async () => {
     try {
       await reloadStores();
@@ -133,6 +138,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         signInAndReturn(router);
         return true;
       }
+      storesRetryAt.current = e instanceof ApiError ? e.retryAt ?? 0 : 0;
       setStoresError(e);
       setStoresStatus("error");
       return !isTransient(e);
@@ -141,7 +147,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => void loadStores(), [loadStores]);
   const storesRetrying = storesStatus === "error" && isTransient(storesError);
-  useEffect(() => (storesRetrying ? keepRetrying(loadStores) : undefined), [storesRetrying, loadStores]);
+  useEffect(() => (storesRetrying ? keepRetrying(loadStores, () => storesRetryAt.current) : undefined), [storesRetrying, loadStores]);
 
   const value = useMemo<Ctx | null>(() => {
     if (!me || !wsId) return null;

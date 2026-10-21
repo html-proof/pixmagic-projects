@@ -372,7 +372,7 @@ export default function ConnectWhatsapp() {
             <div><dt className="text-xs text-muted">Connected</dt><dd>{fmtRelative(c.connectedAt)} · {c.mode === "embedded" ? "through Meta's sign-up" : "with your own Meta app"}</dd></div>
             <div><dt className="text-xs text-muted">Last checked</dt><dd>{c.lastSyncedAt ? fmtRelative(c.lastSyncedAt) : "—"}</dd></div>
           </dl>
-          {c.lastError && c.status !== "active" && <div className="mt-3"><Alert>{c.lastError}</Alert></div>}
+          {c.lastError && c.status !== "active" && <div className="mt-3"><Alert>{c.status === "reconnect" ? "Integration disconnected. Reconnect your account to resume updates." : "The last update failed. Check your connection settings and try again."}</Alert></div>}
           {c.registered && c.hasPin && manage && base && <PinReveal base={base} />}
 
           {!c.registered && manage && (

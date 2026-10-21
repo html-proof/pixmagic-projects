@@ -3,6 +3,7 @@ import Link from "next/link";
 import { useEffect, useState, type ReactNode } from "react";
 import { canManage, StoresPending, useApp } from "@/components/AppContext";
 import { GoogleIcon, MetaIcon } from "@/components/BrandIcons";
+import { LoadError } from "@/components/LoadError";
 import { Alert } from "@/components/ui";
 import type { AdConnection, AdProvider, AdsState } from "@/lib/adConnections";
 import { actionError, api, useApi } from "@/lib/api";
@@ -322,7 +323,7 @@ export default function AdAccountsPage() {
 
       {notice && <Alert kind="success">{notice}</Alert>}
       {error && <Alert>{error}</Alert>}
-      {loadError && <Alert>{actionError(loadError, "load your ad accounts")}</Alert>}
+      {loadError && <LoadError what="your ad accounts" error={loadError} onRetry={() => void reload()} />}
 
       {pick && manage && (
         <ChooseAccounts

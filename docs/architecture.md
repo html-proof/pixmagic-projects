@@ -147,6 +147,16 @@ Shopify secrets whose names are dynamic (`SHOPIFY_APP_SECRET_<KEY>`).
 
 ## Tests
 
+Run `pnpm check:boundaries` after structural changes. It parses static imports, re-exports,
+literal dynamic imports and require calls in all seven source trees, enforcing the dependency
+table above (including relative imports across package boundaries). It also prevents frontend
+imports from the server-only shared barrel. Computed imports are outside this check's scope.
+
+Store health thresholds live in `packages/shared/src/health.ts` (browser-safe export:
+`@app/shared/health`). Trend, refund, stock and shipping classifications are pure functions;
+components own their wording and visual styles. Missing or non-finite comparisons are information
+only. Shipping cards and overview checks use the same rule; `health.test.ts` covers thresholds.
+
 | Kind | Where | Runs with |
 | --- | --- | --- |
 | Unit (pure logic, config files) | `packages/shared/test`, `packages/core/test` | `pnpm test` |

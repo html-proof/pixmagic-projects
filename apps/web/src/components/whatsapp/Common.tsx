@@ -18,6 +18,7 @@ import {
 } from "@app/shared/whatsapp";
 import { useApp } from "@/components/AppContext";
 import { Badge, type Tone } from "@/components/dashboard/Primitives";
+import { LoadError } from "@/components/LoadError";
 import { actionError, api, useApi } from "@/lib/api";
 
 // ---------------------------------------------------------------------------
@@ -523,14 +524,14 @@ export function KindEditor({
 /** A section of notification kinds with one Save button. */
 export function KindsSection({ title, help, kinds, extra }: { title: string; help?: ReactNode; kinds: NotificationKind[]; extra?: (cfg: SettingsResponse["config"], set: (c: SettingsResponse["config"]) => void) => ReactNode }) {
   const { manage } = useWa();
-  const { data, error, save } = useSettings();
+  const { data, error, save, reload } = useSettings();
   const toast = useToast();
   const [draft, setDraft] = useState<SettingsResponse["config"] | null>(null);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     if (data) setDraft(data.config);
   }, [data]);
-  if (error) return <div className="card text-sm text-danger">{actionError(error, "load the settings")}</div>;
+  if (error) return <LoadError what="notification settings" error={error} onRetry={() => void reload()} />;
   if (!data || !draft) return <Skeleton lines={4} />;
   const dirty = JSON.stringify(draft) !== JSON.stringify(data.config);
   const onSave = async () => {

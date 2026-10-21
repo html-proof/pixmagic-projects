@@ -3,8 +3,9 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import type { GoogleReportLevel, GoogleReportMetrics, GoogleReportRow } from "@app/shared/ads";
 import { useApp } from "@/components/AppContext";
-import { Alert } from "@/components/ui";
-import { actionError, api, ApiError, fmtMoney, fmtNum, fmtPct } from "@/lib/api";
+import { ErrorNotice } from "@/components/ErrorNotice";
+import { LoadError } from "@/components/LoadError";
+import { api, ApiError, fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { fmtRange } from "./format";
 import { Badge, Panel, type Tone } from "./Primitives";
 import type { AdsModule, Overview } from "./types";
@@ -90,7 +91,8 @@ export function GoogleReportPanel({ ov, accounts }: { ov: Overview; accounts: Ad
   const [connection, setConnection] = useState(google[0]?.id ?? "");
   const [level, setLevel] = useState<GoogleReportLevel>("campaign");
   const [answer, setAnswer] = useState<Answer | null>(null);
-  const [error, setError] = useState<{ message: string; reconnect: boolean } | null>(null);
+  const [error, setError] = useState<ApiError | null>(null);
+  const [attempt, setAttempt] = useState(0);
   const [loading, setLoading] = useState(false);
   const { from, to } = ov.range;
   const chosen = google.find((a) => a.id === connection) ?? google[0];
@@ -106,14 +108,14 @@ export function GoogleReportPanel({ ov, accounts }: { ov: Overview; accounts: Ad
       .catch((e: unknown) => {
         if (!live) return;
         setAnswer(null);
-        setError({ message: actionError(e, "load the Google Ads report"), reconnect: e instanceof ApiError && e.code === "reconnect" });
+        setError(e instanceof ApiError ? e : new ApiError(0, "network", ""));
       })
       .finally(() => live && setLoading(false));
     return () => {
       live = false;
     };
     // The account's status changes on every poll; only a different question asks Google again.
-  }, [workspace.id, ov.store.id, chosen?.id, level, from, to]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [workspace.id, ov.store.id, chosen?.id, level, from, to, attempt]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!chosen) return null;
   const r = answer?.report;
@@ -161,14 +163,8 @@ export function GoogleReportPanel({ ov, accounts }: { ov: Overview; accounts: Ad
       </div>
 
       {error ? (
-        <Alert kind={error.reconnect ? "error" : "info"}>
-          {error.message}{" "}
-          {error.reconnect && (
-            <Link className="font-medium underline" href="/settings/ads">
-              Reconnect Google Ads
-            </Link>
-          )}
-        </Alert>
+        error.code === "reconnect" ? <ErrorNotice kind="integration" title="Integration disconnected" correlationId={error.correlationId} action={<Link className="btn-primary" href="/settings/ads">Reconnect Google Ads</Link>}>Access to this ad account has ended. Reconnect it to resume reports.</ErrorNotice>
+        : <LoadError what="the Google Ads report" error={error} onRetry={() => setAttempt((n) => n + 1)} busy={loading} />
       ) : !r ? (
         <div className="skeleton h-40" aria-hidden="true" />
       ) : (

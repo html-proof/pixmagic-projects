@@ -5,7 +5,7 @@ import { readFile } from "node:fs/promises";
 import ts from "typescript";
 const source = await readFile(new URL("../src/lib/apiClient.ts", import.meta.url), "utf8");
 const { outputText } = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } });
-const { api, ApiError, friendlyError, actionError, isSignedOut, isTransient, safeCorrelationId } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`);
+const { api, ApiError, friendlyError, actionError, isSignedOut, isTransient, safeCorrelationId, parseRetryAfter } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`);
 
 test("only 401 signs out; outages remain retryable", () => {
   for (const status of [0, 400, 401, 403, 404, 429, 500, 503]) {
@@ -48,7 +48,7 @@ const require = createRequire(import.meta.url);
 function localRequire(id) {
   if (id === "@/lib/apiClient") return { safeCorrelationId };
   if (!id.startsWith("@/")) return require(id);
-  const source = readFileSync(new URL(`../src/${id.slice(2)}.tsx`, import.meta.url), "utf8");
+  const source = readFileSync(new URL(`../src/${id.slice(2)}${id.startsWith("@/hooks/") ? ".ts" : ".tsx"}`, import.meta.url), "utf8");
   const compiled = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText;
   const exports = {};
   new Function("require", "exports", compiled)(localRequire, exports);
@@ -92,4 +92,51 @@ test("every error variant has a decorative illustration and a labelled recovery 
   assert.match(markup, /role="status"/);
   assert.match(markup, /Last successful data/);
   assert.ok(!markup.includes("secret"));
+});
+
+test("remaining HTTP failures keep distinct recovery meanings", async () => {
+  const source = await readFile(new URL("../src/lib/errorKind.ts", import.meta.url), "utf8");
+  const compiled = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText;
+  const { errorKind, canRetryLoad } = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString("base64")}`);
+  for (const [status, kind] of [[400, "request"], [408, "timeout"], [409, "conflict"], [410, "gone"], [413, "tooLarge"], [422, "validation"], [429, "rateLimit"], [502, "gateway"], [504, "gatewayTimeout"]]) {
+    assert.equal(errorKind(status), kind);
+    const markup = renderToStaticMarkup(React.createElement(componentExports.ErrorState, { kind }));
+    assert.match(markup, /<svg/);
+    assert.match(markup, /aria-labelledby=/);
+    assert.equal(canRetryLoad(status), [408, 409, 429, 502, 504].includes(status));
+  }
+});
+
+test("customer requests omit credentials and referrers and never expose provider text", async () => {
+  const original = globalThis.fetch;
+  try {
+    let options;
+    globalThis.fetch = async (_url, init) => { options = init; return new Response(JSON.stringify({ message: "private provider token" }), { status: 410 }); };
+    await assert.rejects(api("/public/track/example", { credentials: "omit", referrerPolicy: "no-referrer" }), (error) => error.status === 410 && !error.message.includes("provider"));
+    assert.equal(options.credentials, "omit");
+    assert.equal(options.referrerPolicy, "no-referrer");
+  } finally { globalThis.fetch = original; }
+});
+
+test("requests have a bounded timeout and mutations warn about uncertain completion", async () => {
+  const original = globalThis.fetch;
+  try {
+    globalThis.fetch = (_url, init) => new Promise((_resolve, reject) => init.signal.addEventListener("abort", () => reject(new Error("private abort diagnostics"))));
+    await assert.rejects(api("/slow", { timeoutMs: 5 }), (error) => error.status === 408 && !error.message.includes("private"));
+    assert.match(actionError(new ApiError(408, "timeout", ""), "save"), /whether it completed/);
+  } finally { globalThis.fetch = original; }
+});
+
+test("rate limit response carries a validated server retry time", async () => {
+  const now = Date.now();
+  assert.equal(parseRetryAfter("10", now), now + 10_000);
+  assert.equal(parseRetryAfter("invalid", now), undefined);
+  assert.equal(parseRetryAfter("-1", now), undefined);
+  assert.equal(parseRetryAfter("0", now), undefined);
+  assert.equal(parseRetryAfter(new Date(now - 10_000).toUTCString(), now), undefined);
+  const original = globalThis.fetch;
+  try {
+    globalThis.fetch = async () => new Response("{}", { status: 429, headers: { "retry-after": "10" } });
+    await assert.rejects(api("/limited"), (error) => error.status === 429 && error.retryAt >= now + 10_000);
+  } finally { globalThis.fetch = original; }
 });

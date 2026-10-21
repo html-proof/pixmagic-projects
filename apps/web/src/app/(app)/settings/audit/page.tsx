@@ -1,9 +1,9 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { canManage, useApp } from "@/components/AppContext";
+import { LoadError } from "@/components/LoadError";
 import { ErrorState } from "@/components/ErrorState";
-import { Alert } from "@/components/ui";
-import { friendlyError, api } from "@/lib/api";
+import { api } from "@/lib/api";
 
 interface Item { id: string; action: string; actor: string | null; targetType: string | null; targetId: string | null; createdAt: string }
 
@@ -37,7 +37,7 @@ export default function AuditPage() {
   const { workspace } = useApp();
   const [items, setItems] = useState<Item[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const [loading, setLoading] = useState(true);
   const allowed = canManage(workspace.role);
   /** Bumped on every workspace switch: a response for the previous workspace is dropped. */
@@ -53,7 +53,7 @@ export default function AuditPage() {
       setItems((prev) => (c ? [...prev, ...r.items] : r.items));
       setCursor(r.nextCursor);
     } catch (e) {
-      if (gen === generation.current) setError(friendlyError(e));
+      if (gen === generation.current) setError(e);
     } finally {
       if (gen === generation.current) setLoading(false);
     }
@@ -70,7 +70,7 @@ export default function AuditPage() {
   return (
     <section className="card space-y-3">
       <h1 className="text-lg font-semibold">Audit log</h1>
-      {error && <Alert>{error}</Alert>}
+      {error !== null && <LoadError what="the audit log" error={error} onRetry={() => void load(items.length ? cursor : null)} busy={loading} />}
       <ul className="divide-y divide-border text-sm">
         {items.map((i) => (
           <li key={i.id} className="flex flex-wrap gap-2 py-2">

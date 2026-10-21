@@ -1,5 +1,7 @@
 /** Lightweight, theme-aware illustrations; the surrounding text carries their meaning. */
-export function StateIllustration({ kind, compact = false }: { kind: "forbidden" | "session" | "empty" | "integration" | "server" | "unavailable" | "network" | "sync" | "invite" | "payment" | "validation"; compact?: boolean }) {
+export function StateIllustration({ kind: requestedKind, compact = false }: { kind: "forbidden" | "session" | "empty" | "integration" | "server" | "unavailable" | "network" | "sync" | "invite" | "payment" | "validation" | "request" | "timeout" | "conflict" | "gone" | "tooLarge" | "rateLimit" | "gateway" | "gatewayTimeout" | "missing"; compact?: boolean }) {
+  const aliases: Record<string, string> = { request: "validation", timeout: "session", conflict: "sync", gone: "invite", tooLarge: "validation", rateLimit: "session", gateway: "unavailable", gatewayTimeout: "session", missing: "empty" };
+  const kind = aliases[requestedKind] ?? requestedKind;
   return <svg viewBox="0 0 320 180" aria-hidden="true" focusable="false" className={compact ? "h-24 w-40 max-w-full shrink-0 text-accent" : "h-auto w-72 max-w-full text-accent"}>
     <ellipse cx="160" cy="163" rx="129" ry="9" fill="currentColor" opacity=".07" />
     <circle cx="160" cy="88" r="72" fill="currentColor" opacity=".05" />

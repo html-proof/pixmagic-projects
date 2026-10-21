@@ -4,6 +4,7 @@ export class ApiError extends Error {
     public code: string,
     _message: string,
     public correlationId?: string,
+    public retryAt?: number,
   ) {
     super(publicErrorMessage(status, code));
     this.name = "ApiError";
@@ -20,7 +21,7 @@ export const isSignedOut = (e: unknown) => e instanceof ApiError && e.status ===
  * database is unreachable), or a rate limit. Callers retry these instead of showing a dead end.
  */
 export const isTransient = (e: unknown) =>
-  !(e instanceof ApiError) || e.status === 0 || e.status === 429 || e.status >= 500;
+  !(e instanceof ApiError) || e.status === 0 || e.status === 408 || e.status === 429 || e.status >= 500;
 
 /** Messages are selected locally; provider responses can contain private diagnostics. */
 function publicErrorMessage(status: number, code: string): string {
@@ -44,6 +45,11 @@ function publicErrorMessage(status: number, code: string): string {
   if (status === 401) return "Your session has expired. Sign in again to continue.";
   if (status === 403) return "You don't have permission to access this. Ask your workspace owner for access.";
   if (status === 404) return "We couldn't find this item. It may have been removed.";
+  if (status === 408) return "The request timed out. Check your connection and try again.";
+  if (status === 409) return "This item has changed. Reload its latest details before trying again.";
+  if (status === 410) return "This link has expired or the item has been removed. Request a new link.";
+  if (status === 413) return "This request is too large. Reduce its size and try again.";
+  if (status === 422) return "Check the required fields and correct their formats.";
   if (status === 429) return "Too many requests. Wait a moment before trying again.";
   return "We couldn't complete this request. Check your details and try again.";
 }
@@ -57,45 +63,44 @@ export function friendlyError(e: unknown): string {
  * own, so an outage has to say "try again" rather than friendlyError's "we'll keep trying".
  */
 export function actionError(e: unknown, what: string): string {
+  if (e instanceof ApiError && e.status === 408) return "The request timed out. Check whether it completed before trying again.";
   if (isTransient(e)) return `We couldn't reach Insights to ${what}. Please try again in a moment.`;
   return friendlyError(e);
 }
 
 /** All calls go to same-origin /api/* (served by the Cloudflare Worker). */
-export async function api<T = unknown>(path: string, init: { method?: string; body?: unknown } = {}): Promise<T> {
-  let res: Response;
+export async function api<T = unknown>(path: string, init: { method?: string; body?: unknown; credentials?: RequestCredentials; referrerPolicy?: ReferrerPolicy; timeoutMs?: number } = {}): Promise<T> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), init.timeoutMs ?? 30_000);
   try {
-    res = await fetch(`/api${path}`, {
-      method: init.method ?? "GET",
-      credentials: "same-origin",
+    const res = await fetch(`/api${path}`, {
+      method: init.method ?? "GET", credentials: init.credentials ?? "same-origin", referrerPolicy: init.referrerPolicy,
       headers: init.body !== undefined ? { "content-type": "application/json" } : undefined,
-      body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
+      body: init.body !== undefined ? JSON.stringify(init.body) : undefined, signal: controller.signal,
     });
-  } catch {
-    // No response at all (offline, DNS, connection reset): status 0, so callers can tell it from a 401.
-    throw new ApiError(0, "network", UNREACHABLE);
-  }
-  let text: string;
-  try {
-    text = await res.text();
-  } catch {
-    throw new ApiError(0, "network", UNREACHABLE);
-  }
-  let json: { error?: string; message?: string } = {};
-  try {
-    if (text) json = JSON.parse(text);
-  } catch {
-    // Non-JSON body (e.g. a Cloudflare error page): report the status instead of a parse error.
-    if (res.ok) throw new ApiError(res.status, "bad_response", "Unexpected response from the server");
-  }
-  if (!res.ok) {
-    const failure = json && typeof json === "object" ? json : {};
-    throw new ApiError(res.status,
-      typeof failure.error === "string" ? failure.error : "error",
-      typeof failure.message === "string" ? failure.message : "Request failed",
-      safeCorrelationId(res.headers.get("x-request-id") ?? res.headers.get("cf-ray")));
-  }
-  return json as T;
+    const text = await res.text();
+    let json: { error?: string; message?: string } = {};
+    try { if (text) json = JSON.parse(text); }
+    catch { if (res.ok) throw new ApiError(502, "bad_response", ""); }
+    if (!res.ok) {
+      const failure = json && typeof json === "object" ? json : {};
+      throw new ApiError(res.status, typeof failure.error === "string" ? failure.error : "error", "",
+        safeCorrelationId(res.headers.get("x-request-id") ?? res.headers.get("cf-ray")),
+        (res.status === 429 || res.status === 503) ? parseRetryAfter(res.headers.get("retry-after")) : undefined);
+    }
+    return json as T;
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(controller.signal.aborted ? 408 : 0, controller.signal.aborted ? "timeout" : "network", "");
+  } finally { clearTimeout(timer); }
+}
+
+/** Retry-After accepts a delta in seconds or an HTTP date. Invalid hints are ignored. */
+export function parseRetryAfter(value: string | null, now = Date.now()): number | undefined {
+  if (!value?.trim()) return undefined;
+  const hint = value.trim();
+  const at = /^\d+$/.test(hint) ? now + Number(hint) * 1000 : /[a-z]/i.test(hint) ? Date.parse(hint) : NaN;
+  return Number.isFinite(at) && at > now ? at : undefined;
 }
 
 /** Only opaque diagnostic identifiers belong in user-facing support references. */

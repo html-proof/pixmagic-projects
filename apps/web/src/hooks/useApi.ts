@@ -11,13 +11,14 @@ const RETRY_BACKOFF_MS = [2_000, 5_000, 15_000, 30_000];
  * likely ended, so the backoff starts over there). `attempt` resolves true once nothing is left to
  * retry. Returns the function that stops it, so it can be an effect's cleanup.
  */
-export function keepRetrying(attempt: () => Promise<boolean>): () => void {
+export function keepRetrying(attempt: () => Promise<boolean>, notBefore: () => number = () => 0): () => void {
   let stopped = false;
   let running = false;
   let tries = 0;
   let timer: number | undefined;
   const run = async () => {
     if (stopped || running) return;
+    if (notBefore() > Date.now()) { window.clearTimeout(timer); timer = window.setTimeout(run, Math.min(notBefore() - Date.now(), 2_147_483_647)); return; }
     window.clearTimeout(timer);
     running = true;
     const done = await attempt().catch(() => false);
@@ -40,7 +41,7 @@ export function keepRetrying(attempt: () => Promise<boolean>): () => void {
   window.addEventListener("online", wake);
   window.addEventListener("insights:retry", wake);
   document.addEventListener("visibilitychange", wake);
-  timer = window.setTimeout(run, RETRY_BACKOFF_MS[tries++]);
+  timer = window.setTimeout(run, Math.min(Math.max(RETRY_BACKOFF_MS[tries++], notBefore() - Date.now()), 2_147_483_647));
   return stop;
 }
 
@@ -56,9 +57,11 @@ export function useApi<T>(path: string | null) {
   const error = failure && failure.path === path ? failure.error : null;
   // The question being asked now, for the loads and edits that finish after it changed.
   const current = useRef(path);
+  const retryAt = useRef(0);
   /** Resolves true when the load succeeded, there was nothing to load, or the question changed. */
   const load = useCallback(async () => {
     if (!path) return true;
+    if (retryAt.current > Date.now()) return false;
     setLoading(true);
     try {
       const value = await api<T>(path);
@@ -68,6 +71,7 @@ export function useApi<T>(path: string | null) {
       return true;
     } catch (e) {
       if (current.current !== path) return true;
+      retryAt.current = e instanceof ApiError ? e.retryAt ?? 0 : 0;
       setFailure({ path, error: e as ApiError });
       return false;
     } finally {
@@ -83,13 +87,14 @@ export function useApi<T>(path: string | null) {
   );
   useEffect(() => {
     current.current = path;
+    retryAt.current = 0;
     void load();
   }, [path, load]);
   // A first load that hit an outage fills in by itself once the outage is over, instead of leaving
   // the page empty until the merchant navigates away and back. Only while nothing has loaded: once
   // there is data the page edits it optimistically (setData), and a late answer must not undo that.
   const retrying = data === null && error !== null && isTransient(error);
-  useEffect(() => (retrying ? keepRetrying(load) : undefined), [retrying, load]);
+  useEffect(() => (retrying ? keepRetrying(load, () => retryAt.current) : undefined), [retrying, load]);
   return { data, error, loading, reload: load, setData };
 }
 
@@ -114,10 +119,11 @@ export function useLiveApi<T>(path: string | null, intervalMs: number) {
   // Bumped whenever the question changes: answers to an older question are ignored.
   const generation = useRef(0);
   const inFlight = useRef(false);
+  const retryAt = useRef(0);
 
   const check = useCallback(
     async (initial: boolean) => {
-      if (!path || (!initial && inFlight.current)) return;
+      if (!path || retryAt.current > Date.now() || (!initial && inFlight.current)) return;
       const gen = generation.current;
       inFlight.current = true;
       if (initial) setLoading(true);
@@ -134,6 +140,7 @@ export function useLiveApi<T>(path: string | null, intervalMs: number) {
         setCheckedAt(Date.now());
       } catch (e) {
         if (gen !== generation.current) return;
+        retryAt.current = e instanceof ApiError ? e.retryAt ?? 0 : 0;
         setFailing(true);
         // Only the first load reports errors; later checks keep showing the last good numbers.
         if (initial || last.current === null) setError(e as ApiError);
@@ -151,6 +158,7 @@ export function useLiveApi<T>(path: string | null, intervalMs: number) {
     // New question (other store or dates): the next answer always replaces what's shown, but the
     // old numbers stay up until it arrives instead of flashing an empty page.
     generation.current++;
+    retryAt.current = 0;
     last.current = null;
     inFlight.current = false;
     // The previous question's error and last success say nothing about this one. `failing` stays:
