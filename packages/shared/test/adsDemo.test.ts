@@ -103,11 +103,11 @@ describe("the campaigns' days", () => {
     expect(demoCampaignDay(ctx, pmax, addDays(start, -1))).toBeNull();
     expect(demoCampaignDay(ctx, pmax, start)).not.toBeNull();
     const paused = DEMO_CAMPAIGNS.find((c) => c.status === "PAUSED")!;
-    const { end } = demoCampaignDays(ctx, paused);
+    const end = demoCampaignDays(ctx, paused).end!;
     expect(end).toBe(addDays(ctx.epoch, -20));
     expect(demoCampaignDay(ctx, paused, end)).not.toBeNull();
-    expect(demoCampaignDay(ctx, paused, addDays(end!, 1))).toBeNull();
-    expect(rows.filter((r) => r.campaignId === paused.id && r.day > end!)).toHaveLength(0);
+    expect(demoCampaignDay(ctx, paused, addDays(end, 1))).toBeNull();
+    expect(rows.filter((r) => r.campaignId === paused.id && r.day > end)).toHaveLength(0);
   });
 
   it("gives leads only to the lead generation campaign", () => {
