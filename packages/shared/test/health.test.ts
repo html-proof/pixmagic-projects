@@ -8,6 +8,9 @@ describe("GRADE", () => {
 });
 
 describe("gradeTrend", () => {
+  it.each([NaN, Infinity, -Infinity])("does not grade a non-finite comparison (%s)", (change) => {
+    expect(gradeTrend(change)).toBe("info");
+  });
   it.each([
     [0.25, "good"],
     [0.0001, "good"],

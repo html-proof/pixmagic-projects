@@ -1,5 +1,6 @@
 "use client";
 import Link from "next/link";
+import { StateIllustration } from "@/components/StateIllustration";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Building2, CalendarClock, ShieldCheck, UserRound } from "lucide-react";
@@ -151,6 +152,7 @@ export default function InvitePage() {
     const e = ENDED[preview.status];
     return (
       <AuthCard title={e.title} subtitle={preview.workspace ? `${preview.workspace}${preview.inviter ? `, shared by ${preview.inviter}` : ""}` : undefined}>
+        <StateIllustration kind="invite" compact />
         <Alert kind="error">{e.body}</Alert>
         {preview.status === "accepted" && (
           <Link prefetch={false} className="btn-secondary w-full" href="/login">

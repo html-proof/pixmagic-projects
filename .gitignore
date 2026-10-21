@@ -32,3 +32,6 @@ apps/web/.e2e/
 
 # AWS CDK synth output
 cdk.out
+
+# Local remnants of the retired Worker deployment (may contain secrets).
+apps/cloudflare/

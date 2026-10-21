@@ -11,6 +11,8 @@ export class ApiError extends Error {
     message: string,
     /** The rest of the error body (e.g. `detail`, `problems`), for the few callers that use it. */
     public data: Record<string, unknown> = {},
+    public correlationId?: string,
+    public retryAt?: number,
   ) {
     super(message);
     this.name = "ApiError";

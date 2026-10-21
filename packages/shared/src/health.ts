@@ -38,7 +38,7 @@ export const GRADE = {
  * picked): it isn't over, so it isn't graded against a whole one.
  */
 export const gradeTrend = (change: number | null, running = false): Health =>
-  running || change === null ? "info" : change >= 0 ? "good" : change > -GRADE.trendDrop ? "watch" : "attention";
+  running || change === null || !Number.isFinite(change) ? "info" : change >= 0 ? "good" : change > -GRADE.trendDrop ? "watch" : "attention";
 
 /** Refunds as a share of sales (after discounts). */
 export const gradeRefundRate = (rate: number): Grade => (rate <= GRADE.refundRateGood ? "good" : rate <= GRADE.refundRateWatch ? "watch" : "attention");

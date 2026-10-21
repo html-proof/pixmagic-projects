@@ -1,5 +1,7 @@
 "use client";
 import { useEffect, useId, useState } from "react";
+import { api, ApiError, actionError } from "@/lib/apiClient";
+import { PublicLinkError } from "@/components/PublicLinkError";
 
 // ---------------------------------------------------------------------------
 // The customer's review form, linked from the delivered / review-request messages. One review of
@@ -54,24 +56,27 @@ export default function ReviewPage() {
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState<"published" | "pending" | null>(null);
 
+  const [loadError, setLoadError] = useState<unknown>(null);
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
+    let live = true;
+    setLoadError(null);
     const t = new URLSearchParams(window.location.search).get("t");
     if (!t) {
-      setError("This link is missing its code. Open it again from the WhatsApp message.");
+      setLoadError(new ApiError(410, "expired_link", ""));
       return;
     }
     setToken(t);
-    fetch(`/api/public/review/${encodeURIComponent(t)}`, { credentials: "omit", referrerPolicy: "no-referrer" })
-      .then(async (r) => {
-        const body = await r.json().catch(() => ({}));
-        if (!r.ok) throw new Error(body.message ?? "We couldn't open the review form. Please try again.");
-        const f = body as Form;
+    api<Form>(`/public/review/${encodeURIComponent(t)}`, { credentials: "omit", referrerPolicy: "no-referrer" })
+      .then((f) => {
+        if (!live) return;
         setForm(f);
         setEntries(Object.fromEntries(f.existing.map((e) => [e.productId, { rating: e.rating, body: e.body }])));
         setName(f.existing[0]?.reviewerName ?? "");
       })
-      .catch((e: Error) => setError(e.message));
-  }, []);
+      .catch((error: unknown) => { if (live) setLoadError(error); });
+    return () => { live = false; };
+  }, [attempt]);
 
   const submit = async () => {
     if (!token) return;
@@ -85,18 +90,12 @@ export default function ReviewPage() {
     setBusy(true);
     setError(null);
     try {
-      const r = await fetch(`/api/public/review/${encodeURIComponent(token)}`, {
-        method: "POST",
-        credentials: "omit",
-        referrerPolicy: "no-referrer",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ reviewerName: name, reviews }),
+      const body = await api<{ status: string }>(`/public/review/${encodeURIComponent(token)}`, {
+        method: "POST", credentials: "omit", referrerPolicy: "no-referrer", body: { reviewerName: name, reviews },
       });
-      const body = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(body.message ?? "Your review couldn't be sent. Please try again.");
       setDone(body.status === "published" ? "published" : "pending");
     } catch (e) {
-      setError((e as Error).message);
+      setError(actionError(e, "send your review"));
     } finally {
       setBusy(false);
     }
@@ -119,12 +118,9 @@ export default function ReviewPage() {
   }
   if (!form) {
     return (
-      <main className="mx-auto max-w-md space-y-3 px-4 py-10" aria-busy={!error}>
-        {error ? (
-          <div className="card text-center">
-            <h1 className="text-lg font-semibold">We can&apos;t open this review</h1>
-            <p className="mt-2 text-sm text-muted">{error}</p>
-          </div>
+      <main className="mx-auto max-w-md space-y-3 px-4 py-10" aria-busy={!loadError}>
+        {loadError ? (
+          <PublicLinkError error={loadError} onRetry={() => setAttempt((n) => n + 1)} />
         ) : (
           <>
             <div className="skeleton h-8 w-2/3" />
