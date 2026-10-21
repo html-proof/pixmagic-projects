@@ -5,7 +5,7 @@ import { createWorkspace, insertStore, signUp, uniqueEmail } from "./helpers";
 const db = new pg.Pool({ connectionString: E2E_ENV.DATABASE_URL });
 test.afterAll(() => db.end());
 
-test("top products ranks real sales before paging, sorts, searches, exports and shows variant details", async ({page}) => {
+test("top products ranks real sales before paging, sorts, searches, exports and shows variant details", async ({page}, testInfo) => {
   await signUp(page, uniqueEmail("product-ranking"));
   const ws = await createWorkspace(page, "Product rankings");
   const store = await insertStore(db, ws, `ranking-${Date.now()}.myshopify.com`);
@@ -28,6 +28,7 @@ test("top products ranks real sales before paging, sorts, searches, exports and 
   await expect(panel.locator("tbody tr").first()).toContainText("Product 115");
   await panel.getByLabel("Rows", {exact:true}).selectOption("100");
   await expect(panel.locator("tbody tr")).toHaveCount(100);
+  await page.screenshot({path:testInfo.outputPath("top-products-desktop.png"),fullPage:true});
   const download = page.waitForEvent("download");
   await panel.getByRole("button", {name:"Export CSV"}).click();
   expect((await download).suggestedFilename()).toContain("top-products-");
@@ -40,4 +41,5 @@ test("top products ranks real sales before paging, sorts, searches, exports and 
   await expect(panel.getByLabel("Product 125 details")).toContainText("sku-125");
   await page.setViewportSize({width:390,height:844});
   await expect(panel.getByRole("table")).toBeVisible();
+  await page.screenshot({path:testInfo.outputPath("top-products-mobile.png"),fullPage:true});
 });

@@ -31,11 +31,11 @@ export function TopProducts({ ov, currency }: { ov: Overview; currency: string }
   };
   return <Panel id="d-top-products" title="Top 100 products" help="Net units sold by default, with net revenue breaking ties. Returns and cancellations count on the date of their sales reversal. Growth compares the immediately preceding period, with the same elapsed time for a running day.">
     <div className="mb-4 flex flex-wrap gap-3">
-      <label>Ranking <select className="rounded border bg-surface p-2" value={sort} onChange={e => { setSort(e.target.value); setDirection(e.target.value === "lowest" ? "asc" : "desc"); setPage(1); }}>
+      <label>Ranking <select className="rounded border bg-surface p-2" aria-label="Ranking" value={sort} onChange={e => { setSort(e.target.value); setDirection(e.target.value === "lowest" ? "asc" : "desc"); setPage(1); }}>
         <option value="units">Top selling by units</option><option value="revenue">Highest revenue</option><option value="trending">Trending</option><option value="growth">Fastest growing</option><option value="returned">Most returned</option><option value="lowest">Lowest performing</option>
       </select></label>
-      <label>Order <select value={direction} onChange={e => { setDirection(e.target.value); setPage(1); }}><option value="desc">Highest first</option><option value="asc">Lowest first</option></select></label>
-      <label>Search <input className="rounded border bg-surface p-2" value={search} onChange={e => { setSearch(e.target.value); setPage(1); }} placeholder="Product, SKU or ID" /></label>
+      <label>Order <select aria-label="Order" value={direction} onChange={e => { setDirection(e.target.value); setPage(1); }}><option value="desc">Highest first</option><option value="asc">Lowest first</option></select></label>
+      <label>Search <input className="rounded border bg-surface p-2" aria-label="Search" value={search} onChange={e => { setSearch(e.target.value); setPage(1); }} placeholder="Product, SKU or ID" /></label>
       <button className="rounded border px-3" disabled={!items.length} onClick={csv}>Export CSV</button>
     </div>
     {error && <p role="alert">Product sales could not be loaded: {error.message}</p>}
@@ -57,7 +57,7 @@ export function TopProducts({ ov, currency }: { ov: Overview; currency: string }
         </tr>)}</tbody>
       </table></div>}
     <div className="mt-4 flex flex-wrap items-center gap-3 text-sm">
-      <label>Rows <select value={size} onChange={e => { setSize(Number(e.target.value)); setPage(1); }}>{[10,25,50,100].map(n => <option key={n}>{n}</option>)}</select></label>
+      <label>Rows <select aria-label="Rows" value={size} onChange={e => { setSize(Number(e.target.value)); setPage(1); }}>{[10,25,50,100].map(n => <option key={n}>{n}</option>)}</select></label>
       <button disabled={currentPage <= 1} onClick={() => setPage(currentPage - 1)}>Previous</button><span>Page {currentPage} of {Math.max(1, Math.ceil(items.length / size))} · {items.length} products</span><button disabled={currentPage * size >= items.length} onClick={() => setPage(currentPage + 1)}>Next</button>
       <span className="text-muted">Last synchronized: {synchronizedAt ? new Date(synchronizedAt).toLocaleString() : "Awaiting sync"} · {currency}</span>
     </div>
