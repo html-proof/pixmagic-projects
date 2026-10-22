@@ -1,4 +1,5 @@
 import { dbReachable, systemDb, type StoreStatus } from "@app/db";
+import { SIGN_IN_ACTIVITY_DAYS, SIGN_IN_EVENT, SIGN_IN_FAILED_EVENT } from "@app/shared";
 import {
   AdsRateLimitedError,
   backoffSeconds,
@@ -341,6 +342,25 @@ export async function prunePixelDedupe(batch = 20_000): Promise<number> {
 }
 
 /**
+ * Settings → Security's records: a device row a month after its session ended (signed out, removed,
+ * or expired), and the sign-in activity (auth_events signed_in / sign_in_failed) after
+ * SIGN_IN_ACTIVITY_DAYS, a bounded batch per tick. The account's other auth_events stay: they are
+ * its security trail (and some of them are checked at sign-in).
+ */
+const ENDED_SESSION_KEEP_MS = 30 * 86_400_000;
+export async function pruneSignIns(batch = 5_000) {
+  const now = Date.now();
+  const ended = new Date(now - ENDED_SESSION_KEEP_MS);
+  const activity = new Date(now - SIGN_IN_ACTIVITY_DAYS * 86_400_000);
+  const sessions = await systemDb.$executeRaw`
+    DELETE FROM user_sessions WHERE id IN (SELECT id FROM user_sessions WHERE ended_at < ${ended} OR expires_at < ${ended} LIMIT ${batch})`;
+  const events = await systemDb.$executeRaw`
+    DELETE FROM auth_events WHERE id IN (
+      SELECT id FROM auth_events WHERE type IN (${SIGN_IN_EVENT}, ${SIGN_IN_FAILED_EVENT}) AND created_at < ${activity} LIMIT ${batch})`;
+  return { sessions, events };
+}
+
+/**
  * Team & Access retention (core's pruneTeamRecords) once a day, on whichever tick first gets the
  * day's lease: it scans the audit log, which no tick needs to do more often. A failed run gives the
  * lease back, so the next tick tries again.
@@ -430,6 +450,10 @@ export async function runScheduled(cron: string, deps: WorkerDeps) {
       logger.error({ err }, "pixel dedupe prune failed; the next tick tries again");
       return null;
     });
+    const signInsPruned = await pruneSignIns().catch((err: unknown) => {
+      logger.error({ err }, "sign-in records prune failed; the next tick tries again");
+      return null;
+    });
     const teamPruned = await pruneTeamDaily(deps).catch((err: unknown) => {
       logger.error({ err }, "team retention sweep failed; the next tick tries again");
       return null;
@@ -455,7 +479,7 @@ export async function runScheduled(cron: string, deps: WorkerDeps) {
       logger.error({ err }, "ad sync records prune failed; the next tick tries again");
       return null;
     });
-    return { refreshed, staleJobsFailed, reconciled, salesRereads, adsSynced, adAlerts, whatsapp, staffOpenShifts, email, sms, pixelDedupePruned, teamPruned, checksPruned, shopifyReportsPruned, inventory, inventoryPruned, adSyncRunsPruned };
+    return { refreshed, staleJobsFailed, reconciled, salesRereads, adsSynced, adAlerts, whatsapp, staffOpenShifts, email, sms, pixelDedupePruned, signInsPruned, teamPruned, checksPruned, shopifyReportsPruned, inventory, inventoryPruned, adSyncRunsPruned };
   }
   logger.warn({ cron }, "unknown cron trigger");
   return {};

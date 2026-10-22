@@ -6,6 +6,7 @@ import type { StaffAccess, StaffRole } from "@app/shared/staff";
 import { addLogContext, env, logger, memberState, sessionAccess, type BlobStore, type Coord, type FetchLike, type Mailer, type Queues, type SmtpConnect } from "@app/core";
 import type { SmsProvider } from "@app/core/sms";
 import { CognitoError, CognitoUnavailableError, type CognitoAuth } from "./cognito.js";
+import { endSessions, touchSession } from "./devices.js";
 import { clearSessionCookies, readRefreshToken, readSession, retiredSessionKey, REVALIDATE_MS, SESSION_CONTEXT_HEADER, SESSION_COOKIE, setSessionCookies, SHARE_COOKIE, type SessionClaims } from "./session.js";
 
 export { retiredSessionKey, SESSION_COOKIE, SHARE_COOKIE };
@@ -209,8 +210,11 @@ async function loadSessionUser(c: Ctx, deps: Deps): Promise<User | null> {
     const checked = await revalidate(c, deps, s, user.email);
     if (checked === "revoked") {
       clearSessionCookies(c);
+      await endSessions({ sid: s.sid });
       return null;
     }
+    // Once a minute at most: the device list's "last active", and its row for a session older than the list.
+    if (checked !== "skipped") await touchSession(c, s, clientIp(c));
     if (checked === "verified" && !user.emailVerified) {
       user = await systemDb.user.update({ where: { id: user.id }, data: { emailVerified: true } }).catch(() => user!);
     }

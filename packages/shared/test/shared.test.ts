@@ -234,6 +234,18 @@ describe("dates & time zones", () => {
     expect(resolvePreset("lastmonth", new Date("2026-10-31T20:00:00Z"), "Australia/Sydney").range).toEqual({ from: "2026-10-01", to: "2026-10-31" });
   });
 
+  it("resolves this year from 1 January, and last year as the whole calendar year against the year before it", () => {
+    const now = new Date("2026-10-22T12:00:00Z");
+    // This year so far, against as many days just before it, up to the same time of day.
+    expect(resolvePreset("ytd", now, "UTC")).toEqual({ range: { from: "2026-01-01", to: "2026-10-22" }, previous: { from: "2025-03-12", to: "2025-12-31", until: "12:00:00" } });
+    expect(resolvePreset("ytd", now, "UTC", undefined, { mode: "year" }).previous).toEqual({ from: "2025-01-01", to: "2025-10-22", until: "12:00:00" });
+    // A whole year is over: compared whole, with the whole year before, leap years included.
+    expect(resolvePreset("lastyear", now, "UTC")).toEqual({ range: { from: "2025-01-01", to: "2025-12-31" }, previous: { from: "2024-01-01", to: "2024-12-31" } });
+    expect(resolvePreset("lastyear", new Date("2029-02-01T12:00:00Z"), "UTC").range).toEqual({ from: "2028-01-01", to: "2028-12-31" });
+    // The store's own calendar: 1 Jan in Sydney is still December in UTC.
+    expect(resolvePreset("ytd", new Date("2026-12-31T20:00:00Z"), "Australia/Sydney").range).toEqual({ from: "2027-01-01", to: "2027-01-01" });
+  });
+
   it("only treats a finished, in-order custom range as one to report on", () => {
     const now = new Date("2026-10-02T12:00:00Z");
     expect(customRangeProblem({ from: "2026-09-01", to: "2026-09-15" })).toBeNull();

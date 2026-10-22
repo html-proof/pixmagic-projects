@@ -21,6 +21,7 @@ const TOPIC_MODULE: Partial<Record<Topic, AppModule>> = { ads: "ads", adsense: "
 /** The pages of each part of the app a workspace may leave out, by path prefix. */
 const MODULE_PAGES: Array<[prefix: string, part: AppModule]> = [
   ["/ads", "ads"],
+  ["/advertising", "ads"],
   ["/inventory", "inventory"],
   ["/whatsapp", "whatsapp"],
   ["/messaging", "sms"],
@@ -53,7 +54,7 @@ export const seesTopic = (access: MemberAccess, t: Topic, offers: Offers = ALL) 
   return (!part || offers(part)) && allows(access, TOPIC_NEED[t]);
 };
 
-/** Which dashboard section a topic downloads as CSV (core's EXPORT_SECTIONS), if any. */
+/** Which dashboard section a topic downloads as CSV (core's EXPORT_SECTIONS), if any. Advertising's are on its Reports page. */
 export const TOPIC_EXPORT: Partial<Record<Topic, string>> = {
   sales: "sales",
   products: "products",
@@ -62,8 +63,13 @@ export const TOPIC_EXPORT: Partial<Record<Topic, string>> = {
   discounts: "discounts",
   channels: "channels",
   timing: "timing",
-  ads: "ads",
 };
+
+/**
+ * The dashboard topics that have pages of their own in the Advertising area: the dashboard sends
+ * ?view=ads and ?view=adsense there (with its dates), so old links keep working.
+ */
+export const TOPIC_PAGE: Partial<Record<Topic, string>> = { ads: "/advertising", adsense: "/advertising/adsense" };
 
 /** A member with permissions in at least one dashboard area (everything but Integrations, Staff and Reports alone). */
 export function hasDashboardAccess(access: MemberAccess): boolean {
@@ -87,7 +93,7 @@ const TOPIC_ORDER: Topic[] = ["sales", "products", "customers", "ads", "discount
 export function landingPath(access: MemberAccess, staffRole: StaffRole | null, offers: Offers = ALL): string {
   if (showsDashboardHome(access)) return "/dashboard";
   const topic = TOPIC_ORDER.find((t) => seesTopic(access, t, offers));
-  if (topic) return `/dashboard?view=${topic}`;
+  if (topic) return TOPIC_PAGE[topic] ?? `/dashboard?view=${topic}`;
   if (offers("inventory") && allows(access, "inventory.view")) return "/inventory";
   if (offers("staff") && staffAccess(access.role, staffRole, access.permissions).permissions.length) return "/staff";
   if (offers("whatsapp") && allows(access, "marketing.campaigns")) return "/whatsapp";
@@ -104,6 +110,8 @@ export function landingPath(access: MemberAccess, staffRole: StaffRole | null, o
 const PAGE_NEED: Array<[prefix: string, need: AccessNeed | "full" | "staff" | "dashboard"]> = [
   ["/dashboard", "dashboard"],
   ["/ads", "marketing.ads"],
+  ["/advertising", "marketing.ads"],
+  ["/advertising/campaigns", "marketing.campaigns"],
   ["/inventory", "inventory.view"],
   ["/team", "members:manage"],
   ["/staff", "staff"],

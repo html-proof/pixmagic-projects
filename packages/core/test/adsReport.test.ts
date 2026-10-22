@@ -407,3 +407,43 @@ describe("the store's own sales next to the ad spend", () => {
     expect(adsFigures([eur], daily(eur, d(-13), TODAY), week({ sourced: [{ provider: "meta", orders: 2, sales: 50 }] }))!.sourced).toEqual([{ provider: "meta", orders: 2, sales: 50, salesPerSpend: null }]);
   });
 });
+
+describe("every campaign, for the campaign comparison", () => {
+  it("lists every campaign with its change on the totals' whole days, a campaign new in the range unchanged rather than up from $0", () => {
+    const meta = conn({ id: "m" });
+    const google = conn({ id: "g", provider: "google", accountId: "111" });
+    const rows = [
+      // Spring ran both weeks: $10 a day, then $20 a day in the range.
+      ...daily(meta, d(-13), d(-7)),
+      ...daily(meta, d(-6), TODAY, { spend: 20, purchaseValue: 100 }),
+      // Brand (Google) only started in the range.
+      ...daily(google, d(-6), TODAY, { campaignId: "7", campaignName: "Brand", spend: 5 }),
+      // Eleven small Meta campaigns: more than the dashboard's ten.
+      ...Array.from({ length: 11 }, (_, i) => row(meta, d(-2), { campaignId: `s${i}`, campaignName: `Small ${i}`, spend: 1 })),
+    ];
+    const top = adsFigures([meta, google], rows, week())!;
+    expect(top.campaigns).toHaveLength(10);
+    expect(top.campaigns[0]).not.toHaveProperty("change");
+
+    const all = adsFigures([meta, google], rows, week({ allCampaigns: true }))!;
+    expect(all.campaigns).toHaveLength(13);
+    const spring = all.campaigns.find((c) => c.name === "Spring")!;
+    // Today is still running: both sides stop at yesterday, as the totals' change does.
+    expect(spring.change).toEqual({
+      from: d(-13),
+      to: d(-8),
+      previous: { spend: 60, linkClicks: 120, purchases: 6, purchaseValue: 240, roas: 4 },
+      deltas: { spend: 1, linkClicks: 0, purchases: 0, purchaseValue: 1.5, roas: 0.25 },
+    });
+    const brand = all.campaigns.find((c) => c.name === "Brand")!;
+    expect(brand.change).toMatchObject({ previous: { spend: 0, roas: null }, deltas: { spend: null, roas: null } });
+  });
+
+  it("gives no campaign a change when the totals have none: never against days that aren't stored", () => {
+    // Its history starts in the range: the dates compared with aren't stored.
+    const meta = conn({ id: "m", historyFrom: d(-6) });
+    const m = adsFigures([meta], daily(meta, d(-6), TODAY), week({ allCampaigns: true }))!;
+    expect(m.notCompared).toBe("no_history");
+    expect(m.campaigns).toEqual([expect.objectContaining({ name: "Spring", spend: 70, change: null })]);
+  });
+});

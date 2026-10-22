@@ -271,11 +271,28 @@ test("Account Security: change the password, see how the account signs in, sign 
   await page.goto("/settings/security");
   await expect(page.getByRole("heading", { name: "Security", exact: true })).toBeVisible();
   await expect(page.getByText("Email and password", { exact: true })).toBeVisible();
-  const passwordSection = page.locator("section", { has: page.getByRole("heading", { name: "Password", exact: true }) });
-  await passwordSection.getByLabel("Current password", { exact: true }).fill(PASSWORD);
-  await passwordSection.getByLabel("New password", { exact: true }).fill("changed-password-9");
-  await passwordSection.getByLabel("Confirm new password", { exact: true }).fill("changed-password-9");
-  await passwordSection.getByRole("button", { name: "Change password" }).click();
+  // Both devices are listed, this one first; the other can be signed out from here.
+  const devices = page.locator("section", { has: page.getByRole("heading", { name: "Your sign-in devices", exact: true }) });
+  await expect(devices.getByText("Current device").filter({ visible: true })).toHaveCount(1);
+  await devices.getByRole("button", { name: /^Remove / }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Remove", exact: true }).click();
+  await expect(devices.getByText(/is signed out\.$/)).toBeVisible();
+  await expect(devices.getByRole("button", { name: /^Remove / })).toHaveCount(0);
+  await other.goto("/dashboard");
+  await expect(other).toHaveURL(/\/login/);
+  await logIn(other, email);
+  await expect(other).toHaveURL(/\/dashboard/);
+  // Its sign-ins are in the activity.
+  await page.reload();
+  const activity = page.locator("section", { has: page.getByRole("heading", { name: "Recent sign-in activity", exact: true }) });
+  await expect(activity.getByText("Success").filter({ visible: true })).toHaveCount(3);
+
+  await page.locator("section", { has: page.getByRole("heading", { name: "Password", exact: true }) }).getByRole("button", { name: "Change", exact: true }).click();
+  const passwordDialog = page.getByRole("dialog", { name: "Change password" });
+  await passwordDialog.getByLabel("Current password", { exact: true }).fill(PASSWORD);
+  await passwordDialog.getByLabel("New password", { exact: true }).fill("changed-password-9");
+  await passwordDialog.getByLabel("Confirm new password", { exact: true }).fill("changed-password-9");
+  await passwordDialog.getByRole("button", { name: "Change password" }).click();
   await expect(page.getByText("Password changed.")).toBeVisible();
   // This device stays signed in; the other one is out.
   await page.reload();
@@ -283,7 +300,7 @@ test("Account Security: change the password, see how the account signs in, sign 
   await other.goto("/dashboard");
   await expect(other).toHaveURL(/\/login/);
 
-  await page.getByRole("button", { name: "Sign out of all devices" }).click();
+  await page.getByRole("button", { name: "Sign out of all devices" }).first().click();
   await page.getByRole("button", { name: "Sign out everywhere" }).click();
   await expect(page).toHaveURL(/\/login/);
   await page.goto("/dashboard");
@@ -502,7 +519,7 @@ test("a workspace installed from the App Store shows only what the listing descr
   const nav = page.getByRole("navigation", { name: "App" });
   await expect(nav.getByRole("link", { name: "Settings" })).toBeVisible();
   await expect(nav.getByRole("link", { name: "Sales & Orders" })).toBeVisible();
-  for (const name of ["WhatsApp", "Staff", "Marketing", "Customer Messaging"]) await expect(nav.getByRole("link", { name, exact: true })).toHaveCount(0);
+  for (const name of ["WhatsApp", "Staff", "Advertising", "Customer Messaging"]) await expect(nav.getByRole("link", { name, exact: true })).toHaveCount(0);
   await expect(page.getByTestId("about-data")).toBeVisible();
   await expect(page.getByTestId("ads-onboarding")).toHaveCount(0);
 
@@ -515,7 +532,7 @@ test("a workspace installed from the App Store shows only what the listing descr
   for (const name of ["Advertising", "Email integrations"]) await expect(settings.getByRole("link", { name })).toHaveCount(0);
 
   // Their pages are closed as well, typed in or bookmarked.
-  for (const path of ["/whatsapp", "/messaging", "/staff", "/settings/ads", "/settings/email"]) {
+  for (const path of ["/whatsapp", "/messaging", "/staff", "/settings/ads", "/settings/email", "/advertising"]) {
     await page.goto(path);
     await expect(page.getByTestId("access-notice")).toContainText("You don't have access to that page.");
     await expect(page).toHaveURL(/\/dashboard/);

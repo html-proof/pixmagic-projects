@@ -578,6 +578,11 @@ a hosted zone that isn't the registrar's nameservers would only be a second, ign
   - **Bot Fight Mode off.** On the Free plan it covers the whole zone and no rule can skip it, so it
     challenges Shopify's and Meta's webhooks and the deploy's smoke tests from GitHub (a failed smoke
     test rolls the deploy back). Bot traffic is handled by AWS WAF's rate limits and managed rules.
+  - **Where a device signed in from** (Settings → Security's device list and sign-in activity): the
+    viewer-request function passes Cloudflare's `CF-IPCountry` on as `x-insights-viewer-geo`, and
+    `CF-Region` / `CF-IPCity` too once the zone sends them: Rules → Transform Rules → Managed
+    Transforms → **Add visitor location headers** (any plan). Without it the list shows the country
+    only. Requests that don't come through Cloudflare get CloudFront's own `CloudFront-Viewer-*`.
   - **AI Labyrinth** on; **Security.txt** set with the same lines as
     `apps/web/public/.well-known/security.txt` (Cloudflare answers that path at its edge). Both
     expire 2027-10-15: renew the `Expires` line in both before then.

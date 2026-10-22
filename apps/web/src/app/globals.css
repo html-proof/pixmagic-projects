@@ -14,6 +14,8 @@
   --warn: #a15c07;
   --good: #1f7a46;
   --info: #2f62a3;
+  /* A third hue for things that are neither good nor bad (Settings → Security's password card). */
+  --violet: #6e56cf;
   --chart: #18794e;
   /* Status as a filled shape (health bars, stock bars, status dots): brighter than the text
      colours above, which have to stay readable as text. Always next to a label. */
@@ -52,6 +54,7 @@
     --warn: #f0b048;
     --good: #6fcf97;
     --info: #7aa7e6;
+    --violet: #a594f9;
     --chart: #6fbf94;
     --fill-danger: #f2555a;
     --fill-warn: #f0b429;
@@ -81,6 +84,7 @@
   --color-warn: var(--warn);
   --color-good: var(--good);
   --color-info: var(--info);
+  --color-violet: var(--violet);
   --color-fill-danger: var(--fill-danger);
   --color-fill-warn: var(--fill-warn);
   --color-fill-good: var(--fill-good);
@@ -146,6 +150,50 @@ body {
 @utility alert-warn {
   --tone: var(--warn);
 }
+/* ---- Settings → Security: cards, icon discs, pills and buttons tinted with their own `--tone` ----- */
+@utility tone-card {
+  border-color: color-mix(in oklab, var(--tone) 30%, var(--border));
+  background: linear-gradient(135deg, color-mix(in oklab, var(--tone) 9%, var(--surface)) 0%, var(--surface) 75%);
+}
+@utility tone-icon {
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+  border-radius: 9999px;
+  background: color-mix(in oklab, var(--tone) 15%, transparent);
+  color: var(--tone);
+}
+@utility tone-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  white-space: nowrap;
+  border-radius: 9999px;
+  padding: 0.125rem 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.125rem;
+  background: color-mix(in oklab, var(--tone) 15%, transparent);
+  color: color-mix(in oklab, var(--tone) 85%, var(--text));
+}
+@utility tone-button {
+  @apply btn;
+  border: 1px solid color-mix(in oklab, var(--tone) 55%, var(--border));
+  background: color-mix(in oklab, var(--tone) 12%, var(--surface));
+  color: color-mix(in oklab, var(--tone) 70%, var(--text));
+  &:hover:not(:disabled) {
+    background: color-mix(in oklab, var(--tone) 20%, var(--surface));
+  }
+}
+@utility tone-solid {
+  @apply btn;
+  background: var(--tone);
+  color: var(--surface);
+  &:hover:not(:disabled) {
+    opacity: 0.9;
+  }
+}
+
 @keyframes alert-in {
   from { opacity: 0; transform: translateY(-4px); }
   to { opacity: 1; transform: none; }

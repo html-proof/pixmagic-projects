@@ -58,7 +58,7 @@ test("Try demo: the connection flow, a demo that syncs by itself, the analytics 
   expect(connectCalls).toBe(1);
   await expect(dialog.getByTestId("demo-status")).toHaveText("Demo Connected");
   await expect(dialog.getByTestId("demo-verification")).toHaveText("Simulated — Not verified by Google");
-  await expect(dialog.getByRole("link", { name: "Open Demo Dashboard" })).toHaveAttribute("href", "/ads/google");
+  await expect(dialog.getByRole("link", { name: "Open Demo Dashboard" })).toHaveAttribute("href", "/advertising/google/analytics");
   await dialog.getByRole("button", { name: "Done" }).click();
   await expect(dialog).toHaveCount(0);
 
@@ -81,7 +81,7 @@ test("Try demo: the connection flow, a demo that syncs by itself, the analytics 
 
   // The analytics page: every section marked as demo, the campaign table searched and paged.
   await row.getByRole("link", { name: "Open demo dashboard" }).click();
-  await expect(page).toHaveURL(/\/ads\/google/);
+  await expect(page).toHaveURL(/\/advertising\/google\/analytics/);
   await expect(page.getByRole("heading", { name: /Google Ads Analytics/ })).toBeVisible();
   await expect(page.getByTestId("ga-disclaimer")).toContainText("Simulated");
   await expect(page.getByTestId("ga-overview-cards")).toBeVisible();
@@ -111,11 +111,16 @@ test("Try demo: the connection flow, a demo that syncs by itself, the analytics 
   await expect(page.getByTestId("ga-combined-totals")).toBeVisible();
   await expect(page.getByTestId("ga-combined-spend-vs-revenue")).toBeVisible();
 
-  // The dashboard: the demo's figures are marked, and never set against the store's own sales.
+  // Advertising (the dashboard's old ads panel address opens it): the demo's figures are marked, and never set against the store's own sales.
   await page.goto("/dashboard?preset=7d&view=ads");
+  await expect(page).toHaveURL(/\/advertising\?preset=7d$/);
   await expect(page.getByTestId("ads-demo-note")).toBeVisible();
   await expect(page.getByTestId("ads-vs-sales")).toHaveCount(0);
+  await expect(page.getByTestId("kpi-mer")).toContainText("Not with the demo's simulated spend");
   await expect(page.getByTestId("ads-card-google").getByTestId("demo-chip")).toBeVisible();
+  await page.getByTestId("ads-card-google-details").click();
+  await expect(page).toHaveURL(/\/advertising\/google/);
+  await expect(page.getByTestId("ads-demo-note")).toBeVisible();
 
   // Sync and reset from the card; then the way out.
   await page.goto("/settings/ads");
@@ -152,7 +157,9 @@ test("a member who may only view sees the demo as a demo and gets no buttons", a
   await expect(row.getByTestId("demo-badge")).toBeVisible();
   await expect(row.getByTestId("demo-sync")).toHaveCount(0);
   await expect(page.getByTestId("int-google-try-demo")).toHaveCount(0);
+  // The page's old address still opens it, in the Advertising area.
   await page.goto("/ads/google");
+  await expect(page).toHaveURL(/\/advertising\/google\/analytics/);
   await expect(page.getByTestId("ga-disclaimer")).toBeVisible();
   await expect(page.getByText("Campaign figures need the", { exact: false })).toBeVisible();
   expect((await db.query("SELECT is_demo FROM ad_connections WHERE store_id = $1", [storeId])).rows[0].is_demo).toBe(true);

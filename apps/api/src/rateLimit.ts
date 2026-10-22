@@ -43,6 +43,8 @@ export const LIMITS = {
   mfaVerifyAccount: { max: 10, windowSec: 900 },
   /** Password, email and account changes, per user. */
   accountChange: { max: 10, windowSec: 3600 },
+  /** Signing other devices out (Settings → Security), one at a time. */
+  sessionRemove: { max: 30, windowSec: 600 },
 
   // ---- Signed-in actions ----
   /** Customer contact details, fetched live from Shopify (per workspace and user). */

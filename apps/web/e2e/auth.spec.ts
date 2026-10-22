@@ -116,12 +116,14 @@ test.describe("two-step verification", () => {
     await signUp(page, email);
     await createWorkspace(page, "Two Step Co");
     await page.goto("/settings/security");
-    const twoStep = section(page, "Two-step verification");
+    await section(page, "Two-step verification").getByRole("button", { name: "Set up", exact: true }).click();
+    const twoStep = page.getByRole("dialog", { name: "Two-step verification" });
     await twoStep.getByLabel("Current password", { exact: true }).fill(PASSWORD);
     await twoStep.getByRole("button", { name: "Set up two-step verification" }).click();
     const key = (await twoStep.getByLabel("Your authenticator key").textContent())!;
     await fillCode(twoStep, totpCode(key));
-    await expect(twoStep.getByText("Two-step verification is on.")).toBeVisible();
+    await expect(page.getByText("Two-step verification is on.")).toBeVisible();
+    await expect(section(page, "Two-step verification").getByText("Enabled", { exact: true })).toBeVisible();
 
     await page.goto("/dashboard");
     await signOutFromMenu(page);
@@ -192,12 +194,13 @@ test("a Google-only account adds a password in Settings, then signs in with it",
   await expect(page).toHaveURL(/\/onboarding/, { timeout: 20_000 });
   await createWorkspace(page, "Google Only Co");
   await page.goto("/settings/security");
-  const password = section(page, "Password");
-  await expect(password).toContainText("You sign in with Google only");
+  await expect(section(page, "Password")).toContainText("You sign in with Google only");
+  await section(page, "Password").getByRole("button", { name: "Add", exact: true }).click();
+  const password = page.getByRole("dialog", { name: "Add a password" });
   await password.getByLabel("Password", { exact: true }).fill("a-new-password-1");
   await password.getByLabel("Confirm password", { exact: true }).fill("a-new-password-1");
   await password.getByRole("button", { name: "Add a password" }).click();
-  await expect(password.getByText("Password added.")).toBeVisible();
+  await expect(page.getByText("Password added.")).toBeVisible();
   expect((await methodsOf(email)).map((m) => m.method)).toEqual(["google", "password"]);
 
   await page.context().clearCookies();

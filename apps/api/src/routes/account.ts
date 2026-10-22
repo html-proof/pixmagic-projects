@@ -1,10 +1,11 @@
 import { z } from "zod";
 import { systemDb, type User } from "@app/db";
 import { detachUserAdGrants, logger, revokeReleasedAdGrants } from "@app/core";
-import { accountPasswordProblem, EMAIL_CODE_RE } from "@app/shared";
+import { accountPasswordProblem, EMAIL_CODE_RE, SIGN_IN_FAILED_EVENT } from "@app/shared";
 import { accessTokenFor, body, clientIp, HttpError, requireUser, sessionOf, sessionProvesAddress, type Ctx, type Deps } from "../context.js";
 import { CognitoError, type CognitoUser, type SignInMethod } from "../cognito.js";
 import { cognitoUsernameKey, notifyMethodAdded, notifyMethodRemoved, recordAuthEvent } from "../identity.js";
+import { endSessions, recordSession } from "../devices.js";
 import {
   clearSessionCookies,
   LINK_PROOF_TTL_S,
@@ -24,6 +25,8 @@ const codeSchema = z.string().trim().regex(EMAIL_CODE_RE, "Enter the 6-digit cod
 const totpSchema = z.string().trim().regex(/^\d{6}$/, "Enter the 6-digit code from your authenticator app.");
 const isUniqueViolation = (err: unknown) => (err as { code?: string })?.code === "P2002";
 const isCognito = (err: unknown, ...codes: string[]) => err instanceof CognitoError && codes.includes(err.code);
+/** How far back GET /auth/account counts failed sign-ins (the Security page's "suspicious activity"). */
+const FAILED_SIGN_INS_WINDOW_MS = 7 * 86_400_000;
 
 /**
  * Cognito refusing this session's own access token means the session can't make this change: it
@@ -120,6 +123,10 @@ export function accountRoutes(app: App, deps: Deps) {
           },
         )
       : false;
+    const [passwordEvent, failedSignIns] = await Promise.all([
+      password ? systemDb.authEvent.findFirst({ where: { userId: user.id, type: { in: ["password_changed", "password_reset"] } }, orderBy: { createdAt: "desc" }, select: { createdAt: true } }) : null,
+      systemDb.authEvent.count({ where: { userId: user.id, type: SIGN_IN_FAILED_EVENT, createdAt: { gte: new Date(Date.now() - FAILED_SIGN_INS_WINDOW_MS) } } }),
+    ]);
     return c.json({
       user: publicUser(user),
       signedInWith: s.m,
@@ -139,6 +146,10 @@ export function accountRoutes(app: App, deps: Deps) {
       // What removing a method or deleting the account asks for (reauthenticate).
       confirmWith: await confirmWith(c, user),
       mfaEnabled,
+      // When the password was last set (changed, reset, or added): null without one.
+      passwordChangedAt: password ? (passwordEvent?.createdAt ?? password.createdAt) : null,
+      // Sign-ins to this account stopped at the password or the code, in the last week.
+      failedSignIns,
     });
   });
 
@@ -167,17 +178,17 @@ export function accountRoutes(app: App, deps: Deps) {
     // then this browser signs in again too.
     await deps.auth.globalSignOut(accessToken).catch((err: unknown) => logger.warn({ err }, "Cognito sign-out after a password change failed"));
     await systemDb.user.update({ where: { id: user.id }, data: { sessionsValidAfter: new Date() } });
+    await endSessions({ userId: user.id });
     const fresh = await deps.auth.passwordSignIn(user.email, input.password).catch((err: unknown) => {
       throw cognitoFailure(err, "sign in after password change");
     });
     let signedIn = false;
     if ("tokens" in fresh) {
       const claims = await deps.auth.verifyIdToken(fresh.tokens.idToken);
-      setSessionCookies(
-        c,
-        newSession({ userId: user.id, sub: claims.sub, username: claims.username, method: "password", authTime: claims.authTime, keep: s.keep, ownAddress: provesAddress(claims, user.email) }),
-        fresh.tokens.refreshToken,
-      );
+      const next = newSession({ userId: user.id, sub: claims.sub, username: claims.username, method: "password", authTime: claims.authTime, keep: s.keep, ownAddress: provesAddress(claims, user.email) });
+      setSessionCookies(c, next, fresh.tokens.refreshToken);
+      // The same device, under its new session: no new sign-in in the activity.
+      await recordSession(c, next, clientIp(c), { activity: false });
       signedIn = true;
     } else {
       clearSessionCookies(c);
@@ -294,6 +305,8 @@ export function accountRoutes(app: App, deps: Deps) {
         data: { type: "identity_removed", userId: user.id, ip: clientIp(c), metadata: { cognitoSub: target.subject, method: target.method, cognitoUsername: cognitoUsernameKey(target.username) } },
       }),
     ]);
+    // Its sessions end on their next request (above): off the device list now.
+    await endSessions({ userId: user.id, method: target.method });
     await notifyMethodRemoved(deps.mailer, user, {
       method: target.method as SignInMethod,
       email: target.email,

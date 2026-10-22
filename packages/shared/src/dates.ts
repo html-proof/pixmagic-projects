@@ -24,7 +24,7 @@ export function daysBetweenInclusive(from: string, to: string): number {
   return Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000) + 1;
 }
 
-export const DATE_PRESETS = ["today", "yesterday", "7d", "30d", "90d", "mtd", "lastmonth", "custom"] as const;
+export const DATE_PRESETS = ["today", "yesterday", "7d", "30d", "90d", "mtd", "lastmonth", "ytd", "lastyear", "custom"] as const;
 export type DatePreset = (typeof DATE_PRESETS)[number];
 
 export interface DateRange {
@@ -104,7 +104,7 @@ const CUSTOM_RANGE_ERROR: Record<CustomRangeProblem, string> = {
 /**
  * What the dates picked are compared with, as Shopify Analytics' second date chip offers:
  * - `previous`: the period just before them (the default): as many days, immediately before; last
- *   month against the whole month before it.
+ *   month against the whole month before it, last year against the whole year before it.
  * - `year`: the same dates a year earlier (29 February, which most years lack, becomes the 28th).
  * - `custom`: dates the merchant picks (`from`/`to`), under the same rules as a custom range.
  */
@@ -147,6 +147,13 @@ function presetRange(preset: DatePreset, today: string, custom?: DateRange): Dat
       const lastDay = addDays(`${today.slice(0, 8)}01`, -1);
       return { from: `${lastDay.slice(0, 8)}01`, to: lastDay };
     }
+    case "ytd":
+      return { from: `${today.slice(0, 4)}-01-01`, to: today };
+    case "lastyear": {
+      // The whole calendar year before this one.
+      const year = String(Number(today.slice(0, 4)) - 1).padStart(4, "0");
+      return { from: `${year}-01-01`, to: `${year}-12-31` };
+    }
     case "custom": {
       const problem = customRangeProblem(custom ?? {}, today);
       if (problem) throw new Error(CUSTOM_RANGE_ERROR[problem]);
@@ -170,6 +177,11 @@ function comparisonDays(range: DateRange, preset: DatePreset, compare: CompareCh
         // The whole month before, whatever its length.
         const prevLast = addDays(range.from, -1);
         return { from: `${prevLast.slice(0, 8)}01`, to: prevLast };
+      }
+      if (preset === "lastyear") {
+        // The whole year before, leap or not.
+        const year = String(Number(range.from.slice(0, 4)) - 1).padStart(4, "0");
+        return { from: `${year}-01-01`, to: `${year}-12-31` };
       }
       const len = daysBetweenInclusive(range.from, range.to);
       return { from: addDays(range.from, -len), to: addDays(range.from, -1) };
