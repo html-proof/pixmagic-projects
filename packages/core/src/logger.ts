@@ -45,6 +45,9 @@ const REDACT = new Set(
     "hmac",
     "x-shopify-access-token",
     "x-shopify-hmac-sha256",
+    "x-nango-hmac-sha256",
+    "x-nango-signature",
+    "sessionToken",
     // WhatsApp: the customer's number and the merchant's credentials.
     "x-hub-signature-256",
     "phone",

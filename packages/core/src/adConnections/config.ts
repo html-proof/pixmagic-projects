@@ -1,6 +1,6 @@
 /** Which ad platforms are set up: each one's keys from the config, its name, and its OAuth callback. */
 import type { AdProvider } from "@app/shared";
-import type { AdsenseConfig, GoogleConfig, MetaConfig, SupermetricsConfig } from "../ads.js";
+import type { AdsenseConfig, GoogleConfig, MetaConfig, NangoConfig, SupermetricsConfig } from "../ads.js";
 import { env, switchedOn } from "../env.js";
 import type { FetchLike } from "../shopify.js";
 
@@ -71,6 +71,40 @@ export function supermetricsProviders(): Record<AdProvider, boolean> {
   );
   return { meta: on && listed.has("meta"), google: on && listed.has("google"), adsense: on && listed.has("adsense") };
 }
+
+/** bizinsights' Nango environment (docs/nango.md), or null while its secret key isn't set: every Connect button then signs in directly. */
+export function nangoConfig(fetchImpl?: FetchLike): NangoConfig | null {
+  const e = env();
+  if (!e.NANGO_SECRET_KEY) return null;
+  return { secretKey: e.NANGO_SECRET_KEY, apiUrl: e.NANGO_API_URL, fetchImpl };
+}
+
+/**
+ * The platforms whose Connect button goes through Nango: those NANGO_PROVIDERS lists, once the key is
+ * set and the platform's own app is set up on this server (its tokens are read and checked with it).
+ * Google Ads only when new Google Ads connections are open at all (GOOGLE_ADS_ENABLED).
+ */
+export function nangoProviders(): Record<AdProvider, boolean> {
+  const on = nangoConfig() !== null;
+  const listed = new Set(
+    env()
+      .NANGO_PROVIDERS.split(",")
+      .map((s) => s.trim().toLowerCase()),
+  );
+  return {
+    meta: on && listed.has("meta") && metaConfig() !== null,
+    google: on && listed.has("google") && googleConfig() !== null,
+    adsense: on && listed.has("adsense") && adsenseConfig() !== null,
+  };
+}
+
+/**
+ * Where Nango sends the browser back from the platform's consent screen: bizinsights' own address,
+ * which forwards to Nango's callback (routes/adsNango.ts). Registered with Meta and Google, and set as
+ * the Nango environment's callback URL, so the consent screens name bizinsights.io, a domain Google
+ * has verified, never nango.dev.
+ */
+export const nangoCallbackUri = () => `${env().APP_URL}/api/ads/nango/oauth-callback`;
 
 /** The platform's name in messages. */
 export const AD_PROVIDER_NAME: Record<AdProvider, string> = { meta: "Meta", google: "Google Ads", adsense: "Google AdSense" };

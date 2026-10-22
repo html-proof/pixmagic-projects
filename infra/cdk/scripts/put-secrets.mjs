@@ -64,6 +64,10 @@ const SHAPES = {
   RESEND_WEBHOOK_SECRET: [/^whsec_[A-Za-z0-9+/=]{20,}$/, "a Resend webhook signing secret (it starts with whsec_)"],
   // bizinsights' Supermetrics team (docs/supermetrics.md): Supermetrics Hub → API keys. No documented prefix, so only its length and characters.
   SUPERMETRICS_API_KEY: [/^[A-Za-z0-9_.-]{20,}$/, "a Supermetrics API key (Supermetrics Hub → API keys; letters, digits, _ . -)"],
+  // bizinsights' Nango environment (docs/nango.md): Environment Settings → API Keys, and → Webhooks → signing key.
+  // Older keys are UUIDs; no prefix is documented, so only their length and characters.
+  NANGO_SECRET_KEY: [/^[A-Za-z0-9_-]{32,}$/, "a Nango secret API key (Nango → Environment Settings → API Keys)"],
+  NANGO_WEBHOOK_SECRET: [/^[A-Za-z0-9_-]{16,}$/, "a Nango webhook signing key (Nango → Environment Settings → Webhooks)"],
 };
 
 /** Copied from --from files when present there. */
@@ -82,6 +86,8 @@ const COPY = [
   "EMAIL_CREDENTIAL_KEYS",
   "TURNSTILE_SECRET",
   "SUPERMETRICS_API_KEY",
+  "NANGO_SECRET_KEY",
+  "NANGO_WEBHOOK_SECRET",
 ];
 const COPY_PREFIX = /^SHOPIFY_APP_SECRET_[A-Z0-9_]+$/;
 /** Values anyone can read in this repository (packages/core/src/env.ts PUBLIC_SECRET_MARKERS). */
