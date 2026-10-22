@@ -274,7 +274,6 @@ export default function IntegrationsPage() {
               leaving={ads.leaving === p}
               showMetaNote={!ads.backFromMeta}
               onConnect={() => void ads.connect(p)}
-              onConnectSupermetrics={(c) => void ads.connectSupermetrics(p, c)}
               base={storeBase}
               onRefresh={() => void ads.refresh(p)}
               onToggle={(c) => void ads.toggle(c)}

@@ -29,7 +29,6 @@ const KEYS = {
   NANGO_SECRET_KEY: NANGO_KEY,
   NANGO_WEBHOOK_SECRET: WEBHOOK_KEY,
   NANGO_PROVIDERS: "meta,adsense",
-  SUPERMETRICS_API_KEY: "",
 };
 
 /** When the Meta token Nango holds ends (about 60 days out). */

@@ -63,8 +63,6 @@ export interface AdConn {
   sites?: string[];
   /** Google Ads: a demo connection, whose figures bizinsights generates (never set against the store's real sales). */
   isDemo?: boolean;
-  /** "direct" or "supermetrics" (ad_connections.source). */
-  source?: string;
 }
 
 /** The dates asked about, and the store they're asked for. */
@@ -113,7 +111,6 @@ const SELECT = {
   historyFrom: true,
   syncedThrough: true,
   isDemo: true,
-  source: true,
 } as const;
 
 /**
@@ -143,8 +140,6 @@ function accountView(c: AdConn, counted: boolean, ask: AdsAsk) {
     counted,
     /** Its figures are simulated (the Google Ads demo): shown as such, and never set against the store's own sales. */
     demo: !!c.isDemo,
-    /** How its figures are read: "direct" or "supermetrics" (docs/supermetrics.md); its refresh cadence follows. */
-    source: c.source === "supermetrics" ? ("supermetrics" as const) : ("direct" as const),
     timezone: c.timezone,
     /** Its days follow another time zone than the store's: they don't start and end with the store's. */
     otherTimeZone: !!c.timezone && !sameDays(c.timezone, ask.storeTimeZone, ask.now),

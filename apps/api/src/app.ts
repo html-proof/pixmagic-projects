@@ -22,7 +22,6 @@ import { scopeRoutes } from "./routes/scopes.js";
 import { contactRoutes } from "./routes/contacts.js";
 import { adsRoutes } from "./routes/ads.js";
 import { adsGoogleDemoRoutes } from "./routes/adsGoogleDemo.js";
-import { adsSupermetricsRoutes } from "./routes/adsSupermetrics.js";
 import { adsNangoRoutes } from "./routes/adsNango.js";
 import { metaWebhookRoutes } from "./routes/metaWebhooks.js";
 import { whatsappRoutes } from "./routes/whatsapp.js";
@@ -214,9 +213,8 @@ export function buildApp(deps: Deps): App {
   workspaceRoutes(app, deps);
   scopeRoutes(app, deps);
   contactRoutes(app, deps);
-  // Before adsRoutes: its /ads/:provider/callback would otherwise take /ads/supermetrics/callback (routes match in order).
-  adsSupermetricsRoutes(app, deps);
-  // Nango (docs/nango.md): its session/finish routes and /ads/nango/oauth-callback, also before adsRoutes; /webhooks/nango.
+  // Nango (docs/nango.md): its session/finish routes, and /ads/nango/oauth-callback before adsRoutes (whose
+  // /ads/:provider/callback would otherwise take it: routes match in order); /webhooks/nango.
   adsNangoRoutes(app, deps);
   adsRoutes(app, deps);
   adsGoogleDemoRoutes(app, deps);

@@ -116,7 +116,7 @@ export function missingReason(acc: AdAccount, range: { from: string; to: string 
       return `${name} follows the ad account's time zone, ${acc.timezone}, where ${fmtDay(range.to)} hasn't started yet.`;
     }
     // As often as the worker refreshes it (apps/worker handlers/integrations.ts recentLeaseMs).
-    const next = acc.source === "supermetrics" ? "within six hours" : acc.provider === "google" ? "within three hours" : "within the hour";
+    const next = acc.provider === "google" ? "within three hours" : "within the hour";
     return `${name} has figures up to ${fmtDay(through)}; the next update, ${next}, brings the rest.`;
   }
   return `${name} has figures from ${fmtDay(from)} on: an account brings the 90 days before it was connected.`;

@@ -45,7 +45,6 @@ import {
   googleProductionMissing,
   isDemoConnection,
   isNangoConnection,
-  isSupermetricsConnection,
   NANGO_INTEGRATION,
   nangoProviders,
   logger,
@@ -65,9 +64,7 @@ import {
   REQUIRED_AD_SCOPE,
   reusableRefreshToken,
   revokeAdAccessIfUnused,
-  revokeSupermetricsLoginIfUnused,
   saveAdConnections,
-  supermetricsProviders,
   takePendingAdConnect,
   type AdAccountList,
   type AdsenseLiveReport,
@@ -176,8 +173,6 @@ function publicConnection(c: AdConnection, ctx: ConnectionContext) {
   const adsense = provider === "adsense";
   // The Google Ads demo: simulated figures and no Google grant. Decided by the row alone, never by anything a browser sends.
   const demo = isDemoConnection(c);
-  // Read through Supermetrics (docs/supermetrics.md): no permission granted to bizinsights itself, and nothing that expires on bizinsights' side.
-  const supermetrics = isSupermetricsConnection(c);
   // Authorized through Nango (docs/nango.md): bizinsights' own permission, its token kept and renewed by Nango.
   const nango = isNangoConnection(c);
   return {
@@ -197,8 +192,8 @@ function publicConnection(c: AdConnection, ctx: ConnectionContext) {
     lastSyncedAt: c.lastSyncedAt,
     /** When the last sync started, whatever came of it ("Last attempted"). */
     lastSyncAttemptAt: c.lastSyncAttemptAt,
-    /** How the figures are read: "direct" (bizinsights' own sign-in with the platform), "nango" (the same, authorized through Nango) or "supermetrics". */
-    source: supermetrics ? "supermetrics" : nango ? "nango" : "direct",
+    /** How the figures are read: "direct" (bizinsights' own sign-in with the platform) or "nango" (the same, authorized through Nango). */
+    source: nango ? "nango" : "direct",
     /** The last day (the account's own) stored without a gap from historyFrom on. */
     syncedThrough: c.syncedThrough,
     historyFrom: c.historyFrom,
@@ -206,13 +201,10 @@ function publicConnection(c: AdConnection, ctx: ConnectionContext) {
     syncRequestedAt: c.syncRequestedAt,
     consecutiveFailures: c.consecutiveFailures,
     // Meta access lasts about 60 days; Settings warns before it runs out. Google's renews itself.
-    accessExpiresAt: provider === "meta" && !supermetrics ? c.accessTokenExpiresAt : null,
+    accessExpiresAt: provider === "meta" ? c.accessTokenExpiresAt : null,
     connectedAt: c.createdAt,
-    /**
-     * The one read-only permission this connection granted bizinsights (checked when connecting); none for
-     * a demo, which holds no Google permission, nor for Supermetrics, where the person granted Supermetrics.
-     */
-    permission: demo || supermetrics ? null : (REQUIRED_AD_SCOPE[provider] ?? null),
+    /** The one read-only permission this connection was granted (checked when connecting); none for a demo, which holds no Google permission. */
+    permission: demo ? null : (REQUIRED_AD_SCOPE[provider] ?? null),
     /** Every permission that was granted, when the platform said. */
     grantedScopes: c.grantedScopes ?? [],
     /** Google Ads: the manager account the account is reached through. */
@@ -283,10 +275,10 @@ export async function connectAccounts(
     tokens: TokenSet;
     userId: string;
     externalUserId?: string | null;
-    /** Through Supermetrics: the login the accounts are read with (routes/adsSupermetrics.ts); through Nango, the connection. */
+    /** Through Nango: the connection the accounts are read with (routes/adsNango.ts). */
     sourceLoginId?: string | null;
-    /** Default: "supermetrics" with a sourceLoginId, else "direct". */
-    source?: "direct" | "supermetrics" | "nango";
+    /** Default: "direct". */
+    source?: "direct" | "nango";
     nangoIntegrationKey?: string | null;
   },
 ) {
@@ -300,7 +292,7 @@ export async function connectAccounts(
     action: "ads.connected",
     targetType: "store",
     targetId: input.storeId,
-    metadata: { provider: input.provider, accounts: saved.length, source: input.source ?? (input.sourceLoginId ? "supermetrics" : "direct") },
+    metadata: { provider: input.provider, accounts: saved.length, source: input.source ?? "direct" },
     ip,
   }).catch((err: unknown) => logger.warn({ err }, "audit failed"));
   return saved;
@@ -336,18 +328,18 @@ async function ownPending(deps: Deps, nonce: string, userId: string | undefined,
  * through a tunnel that drops for 10-20 seconds at a time, and the person has just been through the
  * platform's sign-in, which is not theirs to repeat because of us.
  */
-export const CALLBACK_DB_WAIT_MS = 20_000;
+const CALLBACK_DB_WAIT_MS = 20_000;
 const DB_POLL_MS = 1_000;
 
 /** The database didn't answer before the callback's deadline. `cause` is the step's own error. */
-export class DbUnavailable extends Error {}
+class DbUnavailable extends Error {}
 
 /**
  * Run one database step of the callback, waiting out an outage: when the step fails and the database
  * doesn't answer, wait for it to answer again (until `deadline`) and run the step again. A failure while
  * the database answers is the step's own, and is thrown as it is.
  */
-export async function waitingOutDb<T>(deps: Deps, deadline: number, step: () => Promise<T>): Promise<T> {
+async function waitingOutDb<T>(deps: Deps, deadline: number, step: () => Promise<T>): Promise<T> {
   const answers = deps.dbHealthy ?? (() => dbReachable());
   for (;;) {
     try {
@@ -508,8 +500,6 @@ export function adsRoutes(app: App, deps: Deps) {
       demo: { google: googleAdsDemoEnabled() },
       /** The settings each platform's real sign-in still lacks on this server, by name (empty once set up). */
       missing: { google: googleProductionMissing() },
-      /** Which platforms can be connected through Supermetrics on this server ("Connect through Supermetrics"). */
-      supermetrics: supermetricsProviders(),
       /** Which platforms' Connect button opens Nango's Connect UI on this server instead of a full-page sign-in (docs/nango.md). */
       nango: nangoProviders(),
     });
@@ -534,7 +524,7 @@ export function adsRoutes(app: App, deps: Deps) {
     return c.json({
       runs: found.runs.map((r) => ({
         ...r,
-        // A failure worded from its code, as the card words the connection's own (never Supermetrics' or a platform's raw text).
+        // A failure worded from its code, as the card words the connection's own (never a platform's raw text).
         message: r.outcome === "failed" && isAdErrorCode(r.reason) ? adErrorMessage(r.reason, found.provider) : null,
       })),
     });
@@ -796,10 +786,8 @@ export function adsRoutes(app: App, deps: Deps) {
     const access = await requireWorkspace(c, deps, ws, "integrations.manage");
     await ownPending(deps, nonce, access.user?.id, ws, storeId);
     const taken = await takePendingAdConnect(deps.coord, nonce);
-    // Through Supermetrics: the login goes back unless a connection already reads with it (a reconnect).
-    if (taken && pendingSource(taken) === "supermetrics") await revokeSupermetricsLoginIfUnused(taken.sourceLoginId, deps.fetchImpl);
     // Through Nango: the grant goes back and the Nango connection is deleted, unless a connection already reads through it.
-    else if (taken && pendingSource(taken) === "nango") {
+    if (taken && pendingSource(taken) === "nango") {
       await abandonNangoConnection(taken.provider, taken.sourceLoginId!, taken.nangoIntegrationKey ?? NANGO_INTEGRATION[taken.provider], taken.externalUserId, deps.fetchImpl, {
         coord: deps.coord,
         exceptPending: nonce,

@@ -1061,10 +1061,9 @@ model AdConnection {
   demoSeed             Int?      @map("demo_seed")
   /**
    * How the figures are read: "direct" (bizinsights' own sign-in with the platform; the token is the
-   * platform's) or "supermetrics" (through bizinsights' Supermetrics team, which the merchant signed in
-   * to the platform through a Supermetrics login link: the token is the Supermetrics login's data
-   * source username and the account's id at Supermetrics, and sourceLoginId the login's id;
-   * docs/supermetrics.md). Added by migration 20261022120000 (the same rules as every other column).
+   * platform's) or "nango" (the same sign-in authorized through Nango, which keeps the token;
+   * sourceLoginId is the Nango connection's id; docs/nango.md). sourceLoginId is null for "direct".
+   * Added by migration 20261022120000 (the same rules as every other column).
    */
   source               String    @default("direct")
   sourceLoginId        String?   @map("source_login_id")
@@ -1090,7 +1089,7 @@ model AdSyncRun {
   storeId      String   @map("store_id")
   connectionId String   @map("connection_id")
   provider     String
-  // direct | supermetrics (ad_connections.source when it ran)
+  // direct | nango (ad_connections.source when it ran)
   source       String
   // request | schedule | history (AdsSyncTrigger)
   trigger      String
