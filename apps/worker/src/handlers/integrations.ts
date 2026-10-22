@@ -10,6 +10,7 @@ import {
   googleAdsBudgetAllows,
   nextHistoryWindow,
   recheckDays,
+  sweepNangoOrphans,
   sweepAdAlerts,
   syncAdConnection,
   type AdsSyncData,
@@ -21,6 +22,7 @@ import {
   sendEmailMessage,
   type EmailJob,
 } from "@app/core";
+import { applySmsEvent, noSmsProvider, sendSmsJob, type SmsJob } from "@app/core/sms";
 import { UnrecoverableError, type WorkerDeps } from "./common.js";
 
 /** One WhatsApp message, or a store's due messages in a batch (campaigns, catch-up). */
@@ -35,6 +37,16 @@ export async function runEmailJob(job: EmailJob, deps: WorkerDeps) {
 export async function runWhatsappJob(job: WhatsappJob, deps: WorkerDeps) {
   if (job.kind === "whatsapp") return { outcome: await sendWhatsappMessage(job.messageId, deps) };
   return dispatchStore(job.storeId, deps);
+}
+
+/** One text (Customer Messaging). The row carries its state; the send path never throws for an SMS failure. */
+export async function runSmsJob(job: SmsJob, deps: WorkerDeps) {
+  return { outcome: await sendSmsJob(job.jobId, { ...deps, sms: deps.sms ?? noSmsProvider }) };
+}
+
+/** One AWS delivery event. One that came before its send was recorded throws (SmsEventNotYetKnown), so the queue brings it back. */
+export async function runSmsEvent(body: unknown, deps: WorkerDeps) {
+  return { outcome: await applySmsEvent(body, deps) };
 }
 
 /**
@@ -169,4 +181,9 @@ async function sendOrRelease(deps: WorkerDeps, lease: string, send: () => Promis
 /** Ad connections' alerts (core's sweepAdAlerts): raised from what the connections say, closed once nothing calls for them. */
 export async function sweepAdConnectionAlerts(deps: Pick<WorkerDeps, "mailer" | "fetchImpl">) {
   return sweepAdAlerts({ mailer: deps.mailer, fetchImpl: deps.fetchImpl });
+}
+
+/** Nango connections a merchant authorized but never finished connecting (docs/nango.md): let go after a grace period. */
+export async function sweepNangoLeftovers(deps: Pick<WorkerDeps, "coord" | "fetchImpl">) {
+  return sweepNangoOrphans(deps.coord, deps.fetchImpl);
 }

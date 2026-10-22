@@ -20,6 +20,9 @@ export const metadata: Metadata = {
  *   - WhatsApp messaging, only once a merchant turns it on, stores customers' WhatsApp numbers and
  *     first names encrypted, with the retention in packages/core/src/whatsapp/scheduler.ts
  *     (RETENTION) and redaction in packages/core/src/whatsapp/events.ts (redactWhatsappCustomer);
+ *   - Customer Messaging (SMS), only once a merchant sets up a sender, stores customers' mobile numbers
+ *     and first names encrypted, their SMS consent history and opt-outs, with the retention in
+ *     packages/core/src/sms/sweep.ts (SMS_RETENTION) and redaction in packages/core/src/sms/privacy.ts;
  *   - tokens are AES-256-GCM encrypted at rest (packages/core/src/tokens.ts);
  *   - uninstall wipes tokens and the compliance webhooks redact/purge (apps/worker/src/handlers.ts);
  *   - the funnel stores hashed browser ids and cleaned page paths only (apps/api/src/routes/pixel.ts,
@@ -100,6 +103,7 @@ const PROVIDERS = [
   },
   { name: "Shopify", purpose: "The source of your store data." },
   { name: "Meta (WhatsApp Business Platform)", purpose: "Delivers WhatsApp messages, only for stores that connect WhatsApp." },
+  { name: "Amazon Web Services (AWS End User Messaging SMS)", purpose: "Delivers text messages, only for stores that set up Customer Messaging, and reports whether each was delivered and what it cost." },
   {
     name: "Meta (Marketing API) and Google (Google Ads API, AdSense)",
     purpose: "The source of advertising reports, only for stores that connect an advertising account.",
@@ -182,7 +186,7 @@ export default function PrivacyPage() {
         <p>
           The analytics we store contain none of your customers&apos; personal data: no names, email addresses, postal addresses or
           phone numbers are saved for the dashboard. The one feature that shows them, Customers to follow up, reads them from Shopify
-          while you look. WhatsApp messaging, if you turn it on, is the only exception. Both are described in section 3. Where the
+          while you look. WhatsApp and text messaging, if you turn them on, are the only exceptions. They are described in section 3. Where the
           dashboard distinguishes new from returning buyers, it uses a one-way keyed hash of the Shopify customer ID, scoped to a
           single store, from which no identity can be recovered.
         </p>
@@ -226,6 +230,22 @@ export default function PrivacyPage() {
           Message history is kept for 180 days, unfinished-checkout links and names for 30 days, and order timelines for one year.
           Customer reviews are kept until you delete your store from bizinsights. When Shopify asks us to erase a customer or your store,
           all of it is deleted.
+        </p>
+
+        <h3>Text messages (Customer Messaging)</h3>
+        <p>
+          To send the order updates, checkout reminders and campaigns you set up, bizinsights keeps each customer&apos;s mobile number
+          and first name, encrypted with AES-256-GCM, together with a one-way keyed hash of the number. The dashboard shows numbers
+          masked. We keep the customer&apos;s text-message marketing consent as Shopify reports it, a history of every change to it with
+          where it came from, and every opt-out, so that nobody who opted out is texted again. Marketing texts go only to customers
+          who agreed to them in Shopify, and each one carries a link that stops them at once. Texts are sent through AWS End User
+          Messaging, which reports whether each one was delivered and what it cost.
+        </p>
+        <p>
+          The words of each text are kept for 30 days after it is delivered or fails, delivery reports for 180 days, unfinished
+          checkouts for 90 days (their links for 30), and the record of which texts were sent, and what they cost, for 13 months. When
+          Shopify asks us to erase a customer, their numbers, consent history and texts are deleted; we keep only a one-way hash of an
+          opted-out number, so that their opt-out keeps working. When Shopify asks us to erase your store, all of it is deleted.
         </p>
 
         <h3>Advertising accounts</h3>

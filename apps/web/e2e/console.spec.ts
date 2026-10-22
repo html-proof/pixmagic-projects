@@ -128,6 +128,7 @@ test.describe("signed in", () => {
     ["/settings/profile", /Profile/],
     ["/staff", /./],
     ["/whatsapp", /./],
+    ["/messaging", /./],
   ];
   for (const [name, viewport] of [
     ["on desktop", { width: 1366, height: 860 }],

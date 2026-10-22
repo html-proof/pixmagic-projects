@@ -39,14 +39,14 @@ export function sqsQueues(urls: Record<QueueName, string>, o: SqsOptions): Queue
   const producer = <T>(name: QueueName): Producer<T> => ({
     send: (body, opts) => sqsSend(call, urls[name], body, opts?.delaySeconds, o.now),
   });
-  return { sync: producer("sync"), webhooks: producer("webhooks"), aggregate: producer("aggregate"), email: producer("email") };
+  return { sync: producer("sync"), webhooks: producer("webhooks"), aggregate: producer("aggregate"), email: producer("email"), smsEvents: producer("smsEvents") };
 }
 
 /** QUEUE_URLS (set by the CDK app): {"sync":"https://sqs...","webhooks":...}. */
 export function parseQueueUrls(raw: string | undefined): Record<QueueName, string> | null {
   if (!raw) return null;
   const parsed = JSON.parse(raw) as Partial<Record<QueueName, string>>;
-  const names: QueueName[] = ["sync", "webhooks", "aggregate", "email"];
+  const names: QueueName[] = ["sync", "webhooks", "aggregate", "email", "smsEvents"];
   for (const n of names) if (!parsed[n]) throw new Error(`QUEUE_URLS has no "${n}" queue`);
   return parsed as Record<QueueName, string>;
 }

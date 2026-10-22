@@ -24,6 +24,7 @@ const MODULE_PAGES: Array<[prefix: string, part: AppModule]> = [
   ["/advertising", "ads"],
   ["/inventory", "inventory"],
   ["/whatsapp", "whatsapp"],
+  ["/messaging", "sms"],
   ["/staff", "staff"],
   ["/settings/ads", "ads"],
   ["/settings/email", "email"],
@@ -96,6 +97,7 @@ export function landingPath(access: MemberAccess, staffRole: StaffRole | null, o
   if (offers("inventory") && allows(access, "inventory.view")) return "/inventory";
   if (offers("staff") && staffAccess(access.role, staffRole, access.permissions).permissions.length) return "/staff";
   if (offers("whatsapp") && allows(access, "marketing.campaigns")) return "/whatsapp";
+  if (offers("sms") && allows(access, "marketing.campaigns")) return "/messaging";
   if (allows(access, "integrations.status")) return "/settings/integrations";
   // Nothing granted yet: the dashboard says so ("No access assigned").
   return "/dashboard";
@@ -115,6 +117,7 @@ const PAGE_NEED: Array<[prefix: string, need: AccessNeed | "full" | "staff" | "d
   ["/staff", "staff"],
   ["/whatsapp", "marketing.campaigns"],
   ["/whatsapp/connect", "integrations.manage"],
+  ["/messaging", "marketing.campaigns"],
   ["/settings/workspace", "members:manage"],
   ["/settings/members", "members:manage"],
   ["/settings/integrations", "integrations.status"],

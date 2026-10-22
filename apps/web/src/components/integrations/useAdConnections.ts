@@ -3,6 +3,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { adConnectionsOf, accountLabel, connectionState, platformState, revokeNote, type AdConnection, type AdProvider, type AdsState, type RevokeOutcome } from "@/lib/adConnections";
 import { leavingForSignIn, useBackFromSignIn } from "@/lib/adSignIn";
 import { actionError, api, ApiError, useApi } from "@/lib/api";
+import { openNangoConnect } from "@/lib/nangoConnect";
+import { callbackErrorMessage } from "../settings/ads/callbackErrors";
 import { AD_PLATFORMS } from "./adPlatforms";
 import type { Note } from "./AdUi";
 import type { DemoConnected } from "./GoogleAdsDemoDialog";
@@ -14,6 +16,7 @@ const POLL_MS = 5_000;
 function connectError(e: unknown, name: string): string {
   if (e instanceof ApiError && e.code === "rate_limited") return `You started connecting several times in the last few minutes. Wait a few minutes, then press the ${name} button again.`;
   if (e instanceof ApiError && e.code === "not_configured") return `${name} isn't switched on for bizinsights yet, so there's nothing to connect to. Please try again later.`;
+  if (e instanceof ApiError && e.code === "nango_busy") return `The ${name} sign-in window couldn't be opened just now. Please try again in a minute.`;
   return actionError(e, `start connecting ${name}`);
 }
 
@@ -102,6 +105,8 @@ export function useAdConnections(base: string | null) {
 
   const connect = async (p: AdProvider) => {
     if (!base) return;
+    // Through Nango on this server (docs/nango.md): its Connect UI opens over the page instead of leaving it.
+    if (ads.data?.nango?.[p]) return connectNango(p);
     begin(`connect-${p}`);
     setLeaving(p);
     setGone((s) => new Map([...s].filter(([x]) => x !== p)));
@@ -114,6 +119,70 @@ export function useAdConnections(base: string | null) {
       setLeaving(null);
       setBusy(null);
       setNote({ kind: "error", text: connectError(e, AD_PLATFORMS[p].name) });
+    }
+  };
+
+  /**
+   * "Continue with …" through Nango (docs/nango.md): Nango's Connect UI opens over this page with a
+   * session token from bizinsights, the person authorizes on the platform's own consent screen (a popup),
+   * and the page then hands bizinsights the connection Nango made, which bizinsights checks with Nango
+   * itself. One account (or a reconnect) lands on the dashboard; several go to the choice, as the
+   * full-page sign-in's do. Closing the window ends it with nothing connected.
+   */
+  const connectNango = async (p: AdProvider) => {
+    if (!base) return;
+    const name = AD_PLATFORMS[p].name;
+    const storeId = base.split("/").pop()!;
+    begin(`connect-${p}`);
+    setLeaving(p);
+    setGone((s) => new Map([...s].filter(([x]) => x !== p)));
+    const stop = (n?: Note) => {
+      setLeaving(null);
+      setBusy(null);
+      if (n) setNote(n);
+    };
+    let session: { token: string; nonce: string };
+    try {
+      session = await api<{ token: string; nonce: string }>(`${base}/ads/${p}/nango/session`, { method: "POST", body: {} });
+    } catch (e) {
+      return stop({ kind: "error", text: connectError(e, name) });
+    }
+    let outcome: Awaited<ReturnType<typeof openNangoConnect>>;
+    try {
+      outcome = await openNangoConnect(session.token);
+    } catch {
+      // The sign-in window's code didn't load (offline, or a blocked chunk).
+      outcome = { kind: "error", type: "load_timeout", message: "" };
+    }
+    if (outcome.kind !== "connected") {
+      await api(`${base}/ads/${p}/nango/cancel`, { method: "POST", body: { nonce: session.nonce } }).catch(() => undefined);
+      if (outcome.kind === "closed") return stop();
+      return stop({
+        kind: "error",
+        text:
+          outcome.type === "load_timeout"
+            ? `The ${name} sign-in window couldn't be opened. Check your connection (or any blocker that stops sign-in windows) and press the button again.`
+            : outcome.type === "window_closed"
+              ? callbackErrorMessage("denied", p)
+              : `${name} didn't finish the sign-in, so nothing was connected. Please press the button again.`,
+      });
+    }
+    try {
+      // Longer than the API's own limit (55 s): listing a big login's accounts and saving them can take a while.
+      const r = await api<{ connected?: number; choose?: string }>(`${base}/ads/${p}/nango/finish`, {
+        method: "POST",
+        body: { nonce: session.nonce, connectionId: outcome.connectionId },
+        timeoutMs: 58_000,
+      });
+      // Where the full-page sign-in lands too: the choice on Settings → Advertising, or the numbers.
+      if (r.choose) window.location.assign(`/settings/ads?${new URLSearchParams({ choose: r.choose, provider: p, store: storeId })}`);
+      else window.location.assign(`/dashboard?${new URLSearchParams({ adsConnected: p, accounts: String(r.connected ?? 0), store: storeId })}`);
+    } catch (e) {
+      // The finish's own answers carry the direct callback's codes: worded the same way. A timeout, the
+      // network or an ended session isn't one of them ("check whether it completed": the reload shows it).
+      const own = e instanceof ApiError && e.status !== 0 && e.status !== 408 && e.status !== 401 && !!e.code;
+      stop({ kind: "error", text: own ? callbackErrorMessage((e as ApiError).code!, p) : actionError(e, `finish connecting ${name}`) });
+      await reload();
     }
   };
 
@@ -242,6 +311,8 @@ export function useAdConnections(base: string | null) {
     backFromMeta,
     setBackFromMeta,
     connect,
+    /** Which platforms' Connect button opens Nango's Connect UI on this server. */
+    nango: (p: AdProvider) => !!ads.data?.nango?.[p],
     refresh,
     toggle,
     confirming,

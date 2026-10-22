@@ -4,15 +4,28 @@
  */
 import { systemDb, type AdConnection } from "@app/db";
 import { decrypt, type AdProvider } from "@app/shared";
-import { AdsAuthError, classifyAdError, googleRevoke, metaRevokeAdsRead, type AdAccount, type AdAccountList, type TokenSet } from "../ads.js";
+import { AdsAuthError, classifyAdError, googleRevoke, metaRevokeAdsRead, NANGO_INTEGRATION, nangoDeleteConnection, type AdAccount, type AdAccountList, type TokenSet } from "../ads.js";
 import type { Coord } from "../coord.js";
 import { fetchUntil } from "../http.js";
 import { logger } from "../logger.js";
 import type { FetchLike } from "../shopify.js";
 import { keyring } from "../tokens.js";
 import { resolveAdAlerts } from "./alerts.js";
-import { metaConfig } from "./config.js";
-import { aad, accessTokenAndPerson, encryptAdTokens, learnAdPerson, sameSignIn } from "./credentials.js";
+import { metaConfig, nangoConfig } from "./config.js";
+import {
+  aad,
+  accessTokenAndPerson,
+  encryptAdTokens,
+  encryptNangoCredential,
+  forgetNangoToken,
+  isNangoConnection,
+  learnAdPerson,
+  nangoCredential,
+  nangoTokenFor,
+  platformPerson,
+  sameSignIn,
+  type NangoCredential,
+} from "./credentials.js";
 import { recordAdFailure } from "./status.js";
 
 export const ADS_PENDING_TTL_S = 900;
@@ -37,6 +50,14 @@ export interface PendingAdConnect {
    * none): cancelling the choice must not revoke it (dropUnusedGrant's `reusedRefreshToken`).
    */
   reusedRefreshToken?: boolean;
+  /**
+   * Nango (docs/nango.md, `source` "nango"): the Nango connection's id; the "access token" held is that
+   * id too, and `nangoIntegrationKey` its integration.
+   */
+  sourceLoginId?: string;
+  /** How the accounts are read once connected; absent: "direct". */
+  source?: "nango";
+  nangoIntegrationKey?: string;
   /** Epoch ms after which the choice is gone. */
   expiresAt: number;
 }
@@ -65,6 +86,9 @@ export async function holdPendingAdConnect(
     externalUserId?: string | null;
     truncated?: boolean;
     reusedRefreshToken?: boolean;
+    sourceLoginId?: string;
+    source?: "nango";
+    nangoIntegrationKey?: string;
   },
 ) {
   const enc = encryptAdTokens(input.storeId, input.provider, input.tokens);
@@ -81,6 +105,9 @@ export async function holdPendingAdConnect(
     externalUserId: input.externalUserId ?? null,
     truncated: !!(input.truncated ?? input.accounts.truncated),
     ...(input.reusedRefreshToken ? { reusedRefreshToken: true } : {}),
+    ...(input.sourceLoginId ? { sourceLoginId: input.sourceLoginId } : {}),
+    ...(input.source ? { source: input.source } : {}),
+    ...(input.nangoIntegrationKey ? { nangoIntegrationKey: input.nangoIntegrationKey } : {}),
     expiresAt: Date.now() + ADS_PENDING_TTL_S * 1000,
   };
   await coord.put(pendingKey(nonce), JSON.stringify(pending), ADS_PENDING_TTL_S);
@@ -120,15 +147,38 @@ export async function takePendingAdConnect(coord: Coord, nonce: string): Promise
 
 /**
  * Use up, unanswered, every account choice one person (the platform's id for them) has waiting: their
- * access ended or they asked for their data to be deleted. Returns how many there were. Best effort.
+ * access ended or they asked for their data to be deleted. Returns the choices dropped (a Nango one's
+ * connection is the caller's to let go). Best effort.
  */
-export async function dropPendingAdConnectsOf(coord: Coord, provider: AdProvider, externalUserId: string): Promise<number> {
+export async function dropPendingAdConnectsOf(coord: Coord, provider: AdProvider, externalUserId: string): Promise<PendingAdConnect[]> {
   const key = personPendingKey(provider, externalUserId);
-  let dropped = 0;
-  for (const p of await pendingOf(coord, key)) if (await coord.take(pendingKey(p.nonce)).catch(() => null)) dropped++;
+  const dropped: PendingAdConnect[] = [];
+  for (const p of await pendingOf(coord, key)) {
+    const raw = await coord.take(pendingKey(p.nonce)).catch(() => null);
+    if (!raw) continue;
+    try {
+      dropped.push(JSON.parse(raw) as PendingAdConnect);
+    } catch {
+      // Unreadable: dropped all the same.
+    }
+  }
   await coord.take(key).catch(() => null);
   return dropped;
 }
+
+/**
+ * Whether this person (the platform's id) has an account choice waiting other than `exceptPending`:
+ * its sign-in's grant is about to be used, so it must not be taken back. Best effort.
+ */
+async function personHasPending(coord: Coord, provider: string, externalUserId: string, exceptPending?: string): Promise<boolean> {
+  for (const p of await pendingOf(coord, personPendingKey(provider, externalUserId))) {
+    if (p.nonce !== exceptPending && p.expiresAt > Date.now() && (await peekPendingAdConnect(coord, p.nonce))) return true;
+  }
+  return false;
+}
+
+/** How a pending choice's accounts are read once connected. */
+export const pendingSource = (p: Pick<PendingAdConnect, "source">): "direct" | "nango" => p.source ?? "direct";
 
 /** The sign-in's tokens back from a pending choice. */
 export function pendingTokens(p: PendingAdConnect): TokenSet {
@@ -145,6 +195,11 @@ export function pendingTokens(p: PendingAdConnect): TokenSet {
  * Save the ad accounts someone just connected. New accounts start enabled; accounts connected
  * before get the new token and come back from "reconnect" / "permission" / "error", keeping their
  * on/off choice and their stored days. Their alerts are closed: connecting again is the fix.
+ *
+ * With `source` "nango", `sourceLoginId` is the Nango connection the platform was authorized through:
+ * every row of the sign-in holds the one sealed credential naming it (encryptNangoCredential). An
+ * account connected before another way (directly, or through another Nango connection) keeps its row
+ * and its stored days, and the credential it held is given back unless something else still uses it.
  */
 export async function saveAdConnections(input: {
   workspaceId: string;
@@ -155,18 +210,38 @@ export async function saveAdConnections(input: {
   userId: string | null;
   /** The platform's id for the person who signed in (see externalUserId on the model). */
   externalUserId?: string | null;
+  /** Nango: the connection the accounts are read through. */
+  sourceLoginId?: string | null;
+  /** Default: "direct". */
+  source?: "direct" | "nango";
+  /** Nango: the integration the connection belongs to. */
+  nangoIntegrationKey?: string | null;
+  /** For giving back a credential an account no longer uses. */
+  fetchImpl?: FetchLike;
 }): Promise<Array<AdConnection & { isNew: boolean }>> {
+  const source = input.source ?? "direct";
+  if (source === "nango" && !input.sourceLoginId) throw new Error("A Nango connection needs its connection id");
+  if (source === "nango" && !input.nangoIntegrationKey) throw new Error("A Nango connection needs its integration");
   const tokens = {
-    ...encryptAdTokens(input.storeId, input.provider, input.tokens),
+    ...(source === "nango"
+      ? encryptNangoCredential(input.storeId, input.provider, { connectionId: input.sourceLoginId!, integrationKey: input.nangoIntegrationKey! }, input.tokens.expiresAt)
+      : encryptAdTokens(input.storeId, input.provider, input.tokens)),
     // Who granted it belongs to the token stored next to it: an unknown signer never inherits the previous one
     // (a disconnect then answers "unknown_person" instead of revoking someone else's grant).
     externalUserId: input.externalUserId ?? null,
     grantedScopes: (input.tokens.grantedScopes ?? []).slice(0, 50),
+    source,
+    sourceLoginId: source === "nango" ? input.sourceLoginId! : null,
   };
   const out: Array<AdConnection & { isNew: boolean }> = [];
+  const replaced: AdConnection[] = [];
   for (const a of input.accounts) {
     const where = { storeId_provider_accountId: { storeId: input.storeId, provider: input.provider, accountId: a.accountId } };
-    const before = await systemDb.adConnection.findUnique({ where, select: { id: true } });
+    const before = await systemDb.adConnection.findUnique({ where });
+    // The credential it held before, now unused by this row: given back below unless something else uses it.
+    // A Nango row whose credential was cleared (its person left) still names its connection, which goes too.
+    const held = !!before && (!!before.accessTokenEnc || (isNangoConnection(before) && !!before.sourceLoginId));
+    if (held && (before!.source !== tokens.source || (source !== "direct" && before!.sourceLoginId !== input.sourceLoginId))) replaced.push(before!);
     // The account's health at the platform, when the listing said it.
     const health = a.status ? { accountStatus: a.status, accountStatusDetail: a.statusDetail ?? null } : {};
     const row = await systemDb.adConnection.upsert({
@@ -205,6 +280,12 @@ export async function saveAdConnections(input: {
     if (before) await resolveAdAlerts(row).catch((err: unknown) => logger.warn({ err, connectionId: row.id }, "ad alerts not resolved"));
     out.push({ ...row, isNew: !before });
   }
+  for (const old of replaced) {
+    // The row stays, now holding the new sign-in: when that is the same person's grant to bizinsights' app
+    // (direct and Nango alike), it is still used, and only the old container (a Nango connection) goes.
+    const outcome = await revokeAdAccessIfUnused(old, input.fetchImpl, { rowKept: true }).catch(() => "failed" as const);
+    logger.info({ connectionId: old.id, from: old.source, to: source, outcome }, "ad connection now reads another way; its old access released");
+  }
   return out;
 }
 
@@ -221,6 +302,9 @@ export async function reusableRefreshToken(provider: AdProvider, externalUserId:
   if (!row?.refreshTokenEnc) return null;
   return decrypt(row.refreshTokenEnc, keyring(), aad(row.storeId, row.provider, "refresh"));
 }
+
+/** The sources whose rows hold a grant to bizinsights' own Meta app or Google client. */
+const GRANT_SOURCES = ["direct", "nango"];
 
 /** Rows that still hold a working grant: not waiting for a reconnect (whose grant is dead), and with a token. */
 const holdsGrant = { status: { not: "reconnect" }, accessTokenEnc: { not: "" } };
@@ -285,7 +369,8 @@ async function resolvePerson(conn: AdConnection, fetchImpl?: FetchLike): Promise
  * the grant, to be safe: revoking at Google ends every connection on it).
  */
 async function grantStillUsed(provider: string, externalUserId: string, exceptId: string | null, fetchImpl?: FetchLike): Promise<boolean> {
-  const family = { provider: { in: grantFamily(provider) }, ...(exceptId ? { NOT: { id: exceptId } } : {}), ...holdsGrant };
+  // A Nango row's grant is to bizinsights' own app too (Nango only keeps the token): revoking the person's grant ends it.
+  const family = { provider: { in: grantFamily(provider) }, source: { in: GRANT_SOURCES }, ...(exceptId ? { NOT: { id: exceptId } } : {}), ...holdsGrant };
   if ((await systemDb.adConnection.count({ where: { ...family, externalUserId } })) > 0) return true;
   const unknown = await systemDb.adConnection.findMany({ where: { ...family, externalUserId: null }, orderBy: { updatedAt: "desc" }, take: 500 });
   const signIns = bySignIn(unknown);
@@ -326,8 +411,19 @@ async function revokeGrant(provider: string, tokens: { accessToken: string; refr
  * The connection's alerts are closed: there is nothing left to fix.
  * Best effort: the connection is already gone whatever the platform answers.
  */
-export async function revokeAdAccessIfUnused(conn: AdConnection, fetchImpl?: FetchLike): Promise<RevokeOutcome> {
+export async function revokeAdAccessIfUnused(
+  conn: AdConnection,
+  fetchImpl?: FetchLike,
+  /** `rowKept`: the row lives on with another credential (saveAdConnections), so it counts as a user of the grant it now holds. */
+  opts: { rowKept?: boolean } = {},
+): Promise<RevokeOutcome> {
   await resolveAdAlerts(conn).catch((err: unknown) => logger.warn({ err, connectionId: conn.id }, "ad alerts not resolved"));
+  const exceptId = opts.rowKept ? null : conn.id;
+  // Authorized through Nango: the grant, then the Nango connection, once no other connection uses them.
+  if (isNangoConnection(conn)) {
+    const cred = nangoCredentialOf(conn);
+    return cred ? releaseNangoConnectionIfUnused({ provider: conn.provider as AdProvider, ...cred, externalUserId: conn.externalUserId, exceptId: conn.id, grantExceptId: exceptId }, fetchImpl) : "unknown_person";
+  }
   if (!conn.accessTokenEnc) return "unknown_person";
   // A connection that never learned who granted it asks the platform now, with its own token (what it
   // learns is kept on the rest of its sign-in; this row is gone). Access that ended has nothing to revoke.
@@ -335,7 +431,7 @@ export async function revokeAdAccessIfUnused(conn: AdConnection, fetchImpl?: Fet
   if (!person || person === "ended") return "unknown_person";
   const k = keyring();
   try {
-    if (await grantStillUsed(conn.provider, person, conn.id, fetchImpl)) return "still_used";
+    if (await grantStillUsed(conn.provider, person, exceptId, fetchImpl)) return "still_used";
     const tokens = {
       accessToken: decrypt(conn.accessTokenEnc, k, aad(conn.storeId, conn.provider, "access")),
       refreshToken: conn.refreshTokenEnc ? decrypt(conn.refreshTokenEnc, k, aad(conn.storeId, conn.provider, "refresh")) : null,
@@ -455,6 +551,17 @@ export async function revokeReleasedAdGrants(grants: ReleasedAdGrant[], fetchImp
   const decided = new Map<string, RevokeOutcome>();
   for (const { first, ids, tokens } of grants) {
     try {
+      // Authorized through Nango: `first` still holds the sealed credential (its rows' are deleted now).
+      if (isNangoConnection(first)) {
+        const cred = nangoCredentialOf(first);
+        const key = `nango:${cred?.connectionId ?? ""}`;
+        const outcome =
+          decided.get(key) ??
+          (cred ? await releaseNangoConnectionIfUnused({ provider: first.provider as AdProvider, ...cred, externalUserId: first.externalUserId }, f) : ("unknown_person" as const));
+        decided.set(key, outcome);
+        outcomes.push(outcome);
+        continue;
+      }
       // Without a working token or a known person there is no telling whose grant it was.
       const person = first.externalUserId ?? (tokens ? await resolvePerson(first, f) : null);
       if (!tokens || !person || person === "ended") {
@@ -503,7 +610,7 @@ export async function releaseUserAdGrants(
  * `remaining`: rows still unknown (the platform wouldn't say, or more than `limit` sign-ins were left).
  */
 export async function fillAdPersons(opts: { fetchImpl?: FetchLike; limit?: number } = {}): Promise<{ learned: number; ended: number; unknown: number; remaining: number }> {
-  const where = { provider: { in: ["meta", "google", "adsense"] }, externalUserId: null, ...holdsGrant };
+  const where = { provider: { in: ["meta", "google", "adsense"] }, source: { in: GRANT_SOURCES }, externalUserId: null, ...holdsGrant };
   const out = { learned: 0, ended: 0, unknown: 0, remaining: 0 };
   const limit = opts.limit ?? 200;
   const tried = new Set<string>();
@@ -525,4 +632,70 @@ export async function fillAdPersons(opts: { fetchImpl?: FetchLike; limit?: numbe
   out.remaining = await systemDb.adConnection.count({ where });
   logger.info(out, "ad connections: who granted access filled in");
   return out;
+}
+
+/** A Nango row's credential: its sealed one, or (a row whose credential was cleared) its connection id and the platform's integration. */
+function nangoCredentialOf(conn: AdConnection): NangoCredential | null {
+  try {
+    if (conn.accessTokenEnc) return nangoCredential(conn);
+  } catch (err) {
+    logger.warn({ err, connectionId: conn.id }, "nango credential unreadable; falling back to the row's connection id");
+  }
+  return conn.sourceLoginId ? { connectionId: conn.sourceLoginId, integrationKey: NANGO_INTEGRATION[conn.provider as AdProvider] } : null;
+}
+
+/** Connections that still read through this Nango connection (a released one holds no credential). */
+export async function nangoConnectionUsers(connectionId: string, exceptId?: string | null): Promise<number> {
+  return systemDb.adConnection.count({ where: { source: "nango", sourceLoginId: connectionId, accessTokenEnc: { not: "" }, ...(exceptId ? { NOT: { id: exceptId } } : {}) } });
+}
+
+/**
+ * Let go of a Nango connection nothing reads through any more (`exceptId`: the row being let go): the
+ * person's grant to bizinsights' app is taken back first, as for a direct connection, unless another
+ * connection relies on it (grantStillUsed counts direct and Nango rows alike); then the connection is
+ * deleted at Nango, with the tokens it held. "still_used": another row reads through it (nothing is
+ * deleted), or the grant is relied on (the Nango connection is deleted all the same). With `coord`, an
+ * account choice the person has waiting (other than `exceptPending`) relies on the grant too, as for
+ * dropUnusedGrant. `grantExceptId`: the row left out when counting the grant's users (default
+ * `exceptId`; null when the row lives on with the new sign-in). Best effort; never throws.
+ */
+export async function releaseNangoConnectionIfUnused(
+  input: {
+    provider: AdProvider;
+    connectionId: string;
+    integrationKey: string;
+    externalUserId?: string | null;
+    exceptId?: string | null;
+    grantExceptId?: string | null;
+    coord?: Coord;
+    exceptPending?: string;
+  },
+  fetchImpl?: FetchLike,
+): Promise<RevokeOutcome> {
+  try {
+    if ((await nangoConnectionUsers(input.connectionId, input.exceptId)) > 0) return "still_used";
+    const cfg = nangoConfig(fetchImpl);
+    if (!cfg) return "not_configured";
+    let outcome: RevokeOutcome = "unknown_person";
+    try {
+      const { token } = await nangoTokenFor({ connectionId: input.connectionId, integrationKey: input.integrationKey }, fetchImpl);
+      const person = input.externalUserId ?? (await platformPerson(input.provider, token, fetchImpl));
+      if (person) {
+        const grantExcept = input.grantExceptId !== undefined ? input.grantExceptId : (input.exceptId ?? null);
+        const used =
+          (input.coord ? await personHasPending(input.coord, input.provider, person, input.exceptPending) : false) || (await grantStillUsed(input.provider, person, grantExcept, fetchImpl));
+        outcome = used ? "still_used" : await revokeGrant(input.provider, { accessToken: token, refreshToken: null }, person, fetchImpl);
+      }
+    } catch (err) {
+      // The grant ended already (Nango couldn't renew it), or the platform didn't answer: the connection still goes.
+      logger.info({ err, provider: input.provider }, "nango connection's grant not revoked before deleting it");
+    }
+    const deleted = await nangoDeleteConnection(cfg, input.integrationKey, input.connectionId);
+    forgetNangoToken(input.connectionId);
+    logger.info({ provider: input.provider, outcome, deleted }, "nango connection released");
+    return outcome;
+  } catch (err) {
+    logger.warn({ err, provider: input.provider }, "nango connection release failed");
+    return "failed";
+  }
 }

@@ -62,6 +62,10 @@ const SHAPES = {
   // The app's email provider (packages/core/src/mail; docs/aws-deployment.md "App email").
   RESEND_API_KEY: [/^re_[A-Za-z0-9_]{20,}$/, "a Resend API key (it starts with re_)"],
   RESEND_WEBHOOK_SECRET: [/^whsec_[A-Za-z0-9+/=]{20,}$/, "a Resend webhook signing secret (it starts with whsec_)"],
+  // bizinsights' Nango environment (docs/nango.md): Environment Settings → API Keys, and → Webhooks → signing key.
+  // Older keys are UUIDs; no prefix is documented, so only their length and characters.
+  NANGO_SECRET_KEY: [/^[A-Za-z0-9_-]{32,}$/, "a Nango secret API key (Nango → Environment Settings → API Keys)"],
+  NANGO_WEBHOOK_SECRET: [/^[A-Za-z0-9_-]{16,}$/, "a Nango webhook signing key (Nango → Environment Settings → Webhooks)"],
 };
 
 /** Copied from --from files when present there. */
@@ -79,6 +83,8 @@ const COPY = [
   "EMAIL_MICROSOFT_CLIENT_SECRET",
   "EMAIL_CREDENTIAL_KEYS",
   "TURNSTILE_SECRET",
+  "NANGO_SECRET_KEY",
+  "NANGO_WEBHOOK_SECRET",
 ];
 const COPY_PREFIX = /^SHOPIFY_APP_SECRET_[A-Z0-9_]+$/;
 /** Values anyone can read in this repository (packages/core/src/env.ts PUBLIC_SECRET_MARKERS). */

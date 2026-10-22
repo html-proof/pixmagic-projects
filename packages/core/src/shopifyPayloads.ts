@@ -196,6 +196,9 @@ const decimal = z.union([z.number().finite(), z.string().regex(/^-?\d+(\.\d+)?$/
 
 const automationLineItem = obj({ product_id: restId.nullish(), title: str, variant_title: str, quantity: z.number().nullish(), price: amount.nullish() });
 
+/** A customer's SMS marketing consent on REST payloads (customers, and the customer on orders and checkouts). */
+const smsMarketingConsent = obj({ state: str, opt_in_level: str, consent_updated_at: str, consent_collected_from: str }).nullish().catch(null);
+
 /** Who is buying, how to reach them and what they agreed to: the same fields on orders and checkouts. */
 const buyer = {
   email: str,
@@ -211,7 +214,7 @@ const buyer = {
     phone: str,
     accepts_marketing: z.boolean().nullish(),
     email_marketing_consent: obj({ state: str }).nullish(),
-    sms_marketing_consent: obj({ state: str }).nullish(),
+    sms_marketing_consent: smsMarketingConsent,
     default_address: address,
   }).nullish(),
   shipping_address: address,
@@ -271,6 +274,20 @@ export const automationCheckoutSchema = obj({
   completed_at: timestamp.nullish(),
   abandoned_checkout_url: str,
 });
+
+/**
+ * customers/create, customers/update and customers_marketing_consent/update, as Customer
+ * Messaging reads them: the customer's number and SMS marketing consent (read_customers).
+ */
+export const customerConsentSchema = obj({
+  id: restId,
+  first_name: str,
+  phone: str,
+  sms_marketing_consent: smsMarketingConsent,
+  default_address: address,
+  updated_at: timestamp.nullish(),
+});
+export type CustomerConsentPayload = z.output<typeof customerConsentSchema>;
 
 /** refunds/create, for what was paid back. */
 export const automationRefundSchema = obj({

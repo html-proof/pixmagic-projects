@@ -127,6 +127,8 @@ describe("connecting ad accounts", () => {
       // The Google Ads demo (docs/ads-demo.md) is offered only when switched on; the real sign-in says what it lacks.
       demo: { google: false },
       missing: { google: ["GOOGLE_ADS_CLIENT_ID", "GOOGLE_ADS_CLIENT_SECRET", "GOOGLE_ADS_ENABLED"] },
+      // Nango (docs/nango.md) only with bizinsights' Nango key, and only for a platform whose own app is set up.
+      nango: { meta: false, google: false, adsense: false },
     });
     const res = await connect("meta");
     expect(res.statusCode).toBe(503);

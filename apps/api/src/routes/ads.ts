@@ -2,6 +2,7 @@ import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { z } from "zod";
 import { dbReachable, systemDb, withTenant, type AdConnection } from "@app/db";
 import {
+  abandonNangoConnection,
   AD_PROVIDER_NAME,
   adsConfigured,
   adsRestricted,
@@ -43,6 +44,9 @@ import {
   googleAdsDemoEnabled,
   googleProductionMissing,
   isDemoConnection,
+  isNangoConnection,
+  NANGO_INTEGRATION,
+  nangoProviders,
   logger,
   providerDetail,
   metaAdAccounts,
@@ -55,6 +59,7 @@ import {
   metaUserId,
   pauseGoogleAds,
   peekPendingAdConnect,
+  pendingSource,
   pendingTokens,
   REQUIRED_AD_SCOPE,
   reusableRefreshToken,
@@ -168,6 +173,8 @@ function publicConnection(c: AdConnection, ctx: ConnectionContext) {
   const adsense = provider === "adsense";
   // The Google Ads demo: simulated figures and no Google grant. Decided by the row alone, never by anything a browser sends.
   const demo = isDemoConnection(c);
+  // Authorized through Nango (docs/nango.md): bizinsights' own permission, its token kept and renewed by Nango.
+  const nango = isNangoConnection(c);
   return {
     id: c.id,
     provider: c.provider,
@@ -185,6 +192,8 @@ function publicConnection(c: AdConnection, ctx: ConnectionContext) {
     lastSyncedAt: c.lastSyncedAt,
     /** When the last sync started, whatever came of it ("Last attempted"). */
     lastSyncAttemptAt: c.lastSyncAttemptAt,
+    /** How the figures are read: "direct" (bizinsights' own sign-in with the platform) or "nango" (the same, authorized through Nango). */
+    source: nango ? "nango" : "direct",
     /** The last day (the account's own) stored without a gap from historyFrom on. */
     syncedThrough: c.syncedThrough,
     historyFrom: c.historyFrom,
@@ -258,9 +267,22 @@ export async function mayStillConnect(ws: string, storeId: string, userId: strin
 export async function connectAccounts(
   deps: Deps,
   ip: string | undefined,
-  input: { workspaceId: string; storeId: string; provider: AdProvider; accounts: AdAccountList; tokens: TokenSet; userId: string; externalUserId?: string | null },
+  input: {
+    workspaceId: string;
+    storeId: string;
+    provider: AdProvider;
+    accounts: AdAccountList;
+    tokens: TokenSet;
+    userId: string;
+    externalUserId?: string | null;
+    /** Through Nango: the connection the accounts are read with (routes/adsNango.ts). */
+    sourceLoginId?: string | null;
+    /** Default: "direct". */
+    source?: "direct" | "nango";
+    nangoIntegrationKey?: string | null;
+  },
 ) {
-  const saved = await saveAdConnections(input);
+  const saved = await saveAdConnections({ ...input, fetchImpl: deps.fetchImpl });
   for (const conn of saved) {
     if (conn.enabled) await enqueueAdCatchUp(deps.queues, conn, { interactive: true });
   }
@@ -270,7 +292,7 @@ export async function connectAccounts(
     action: "ads.connected",
     targetType: "store",
     targetId: input.storeId,
-    metadata: { provider: input.provider, accounts: saved.length },
+    metadata: { provider: input.provider, accounts: saved.length, source: input.source ?? "direct" },
     ip,
   }).catch((err: unknown) => logger.warn({ err }, "audit failed"));
   return saved;
@@ -478,6 +500,8 @@ export function adsRoutes(app: App, deps: Deps) {
       demo: { google: googleAdsDemoEnabled() },
       /** The settings each platform's real sign-in still lacks on this server, by name (empty once set up). */
       missing: { google: googleProductionMissing() },
+      /** Which platforms' Connect button opens Nango's Connect UI on this server instead of a full-page sign-in (docs/nango.md). */
+      nango: nangoProviders(),
     });
   });
 
@@ -749,6 +773,9 @@ export function adsRoutes(app: App, deps: Deps) {
       tokens: pendingTokens(taken),
       userId: access.user!.id,
       externalUserId: taken.externalUserId ?? null,
+      sourceLoginId: taken.sourceLoginId ?? null,
+      source: pendingSource(taken),
+      nangoIntegrationKey: taken.nangoIntegrationKey ?? null,
     });
     return c.json({ provider: taken.provider, connected: saved.length });
   });
@@ -759,7 +786,13 @@ export function adsRoutes(app: App, deps: Deps) {
     const access = await requireWorkspace(c, deps, ws, "integrations.manage");
     await ownPending(deps, nonce, access.user?.id, ws, storeId);
     const taken = await takePendingAdConnect(deps.coord, nonce);
-    if (taken) {
+    // Through Nango: the grant goes back and the Nango connection is deleted, unless a connection already reads through it.
+    if (taken && pendingSource(taken) === "nango") {
+      await abandonNangoConnection(taken.provider, taken.sourceLoginId!, taken.nangoIntegrationKey ?? NANGO_INTEGRATION[taken.provider], taken.externalUserId, deps.fetchImpl, {
+        coord: deps.coord,
+        exceptPending: nonce,
+      });
+    } else if (taken) {
       await dropUnusedGrant(taken.provider, pendingTokens(taken), taken.externalUserId, deps.fetchImpl, { coord: deps.coord, exceptPending: nonce, reusedRefreshToken: !!taken.reusedRefreshToken });
     }
     return c.json({ ok: true });

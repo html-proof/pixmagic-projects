@@ -1,7 +1,7 @@
 -- Supermetrics is removed: an ad account read through it can't be read any more. Each such connection
 -- goes as a disconnect takes it: its open alerts are closed (adConnections/alerts.ts adAlertCode), and
 -- the row is deleted with its stored days and sync records (ON DELETE CASCADE). Data only: the
--- columns stay (ad_connections.source and source_login_id serve other ways of reading an account).
+-- columns stay (ad_connections.source and source_login_id also serve Nango connections).
 UPDATE "alerts" SET "resolved_at" = CURRENT_TIMESTAMP
 WHERE "resolved_at" IS NULL
   AND "code" IN (

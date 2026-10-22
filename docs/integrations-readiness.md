@@ -83,6 +83,16 @@ The detail behind each line: [ads-setup.md](ads-setup.md) (how the integrations 
 | This branch deployed | Completed | On production since release 77 (built from `ee7206c`, which includes it): the Meta callbacks answer and the deploy applied migration `20261019120000_ad_connection_health`. | None. (Claude) |
 | Meta API version | Completed | v26.0 since this branch. The build fails 90 days before a version's end, so a red build is the reminder. | Re-read Meta's changelog by 2027-04-17 (ads-setup.md, "Keeping the API versions current"). (Claude) |
 
+## Nango (one-click Connect UI for Meta Ads and AdSense: [nango.md](nango.md))
+
+| Requirement | Status | Why | Next action (who) |
+| --- | --- | --- | --- |
+| Connecting through Nango in bizinsights | Completed (2026-10-22, switched off) | Built and tested against Nango's documented API: connect sessions, finish checked against Nango's tags, sync with Nango's token, revoke and delete on disconnect, signed webhooks, leftover sweep. Nango signs in with bizinsights' own Meta app and Google client, so it does not get around Meta App Review (rows above). | None until the key. (Claude) |
+| Nango account, prod environment | Completed (2026-10-22) | Account of Aby Thomas (tangoenery2004@gmail.com), free plan (10 connections; then Pay-as-you-go, US$50/month minimum). Prod environment: Callback URL `https://bizinsights.io/api/ads/nango/oauth-callback`, primary Webhook URL `https://bizinsights.io/api/webhooks/nango`, auth webhooks (new connection, token refresh, deletion) on; both saved in the owner's Chrome. | Upgrade before an 11th connection. (Owner) |
+| `NANGO_SECRET_KEY`, `NANGO_WEBHOOK_SECRET` in production | Completed (2026-10-22) | Stored with `put-secrets.mjs --set` from the clipboard (prod Default API key, webhook signing key; no value shown anywhere). `nango-setup.mjs --apply` then created `bizinsights-meta-ads` (provider facebook, Meta app 971575545351940) and `bizinsights-google-adsense` (provider google, client "Insights web"); `--check` says both ok. Read by the functions at cold start: live with the next deploy. | None. (Claude, done) |
+| Nango callback registered with Meta and Google | Completed (2026-10-22) | `https://bizinsights.io/api/ads/nango/oauth-callback` added to FLfB Valid OAuth Redirect URIs (still listed after a reload, next to `/api/ads/meta/callback`) and to "Insights web" Authorized redirect URIs ("OAuth client saved"). | None. (Claude, on the owner's word) |
+| Figures checked against the platforms | Blocked (key) | Nothing read through a live Nango environment yet. | nango.md step 7. (Owner with Claude) |
+
 ## What is left, in order (checked 2026-10-20)
 
 Everything Claude can do alone is done: the code is live, both secrets are in AWS, the Meta callbacks and settings

@@ -22,6 +22,7 @@ import { scopeRoutes } from "./routes/scopes.js";
 import { contactRoutes } from "./routes/contacts.js";
 import { adsRoutes } from "./routes/ads.js";
 import { adsGoogleDemoRoutes } from "./routes/adsGoogleDemo.js";
+import { adsNangoRoutes } from "./routes/adsNango.js";
 import { metaWebhookRoutes } from "./routes/metaWebhooks.js";
 import { whatsappRoutes } from "./routes/whatsapp.js";
 import { whatsappPublicRoutes } from "./routes/whatsappPublic.js";
@@ -38,6 +39,8 @@ import { privacyRoutes } from "./routes/privacy.js";
 import { teamRoutes } from "./routes/team.js";
 import { exportRoutes } from "./routes/exports.js";
 import { inventoryRoutes } from "./routes/inventory.js";
+import { smsRoutes } from "./routes/sms.js";
+import { smsPublicRoutes } from "./routes/smsPublic.js";
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 /**
@@ -210,6 +213,9 @@ export function buildApp(deps: Deps): App {
   workspaceRoutes(app, deps);
   scopeRoutes(app, deps);
   contactRoutes(app, deps);
+  // Nango (docs/nango.md): its session/finish routes, and /ads/nango/oauth-callback before adsRoutes (whose
+  // /ads/:provider/callback would otherwise take it: routes match in order); /webhooks/nango.
+  adsNangoRoutes(app, deps);
   adsRoutes(app, deps);
   adsGoogleDemoRoutes(app, deps);
   // Meta's deauthorize and data deletion callbacks: /webhooks/*, so CSRF- and global-limit-exempt above.
@@ -229,5 +235,7 @@ export function buildApp(deps: Deps): App {
   teamRoutes(app, deps);
   exportRoutes(app, deps);
   inventoryRoutes(app, deps);
+  smsRoutes(app, deps);
+  smsPublicRoutes(app, deps);
   return app;
 }

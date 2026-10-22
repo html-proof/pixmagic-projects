@@ -4,6 +4,8 @@ What a merchant sees, what the owner sets up, and how the connections behave. Th
 is done and what is still open at Google, Meta and AWS is [integrations-readiness.md](integrations-readiness.md);
 paste-ready review material is [ads-review-packs.md](ads-review-packs.md). A simulated Google Ads account for development,
 demonstrations and tests, which needs none of what follows and never stands in for it: [ads-demo.md](ads-demo.md).
+The same sign-ins can run through Nango's Connect UI (one window over the page, tokens kept by Nango):
+[nango.md](nango.md).
 
 ## How a merchant uses it
 

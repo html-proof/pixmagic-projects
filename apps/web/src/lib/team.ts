@@ -67,7 +67,7 @@ export interface Catalog {
  */
 export function offeredCatalog(catalog: Catalog, offers: Offers): Catalog {
   const ads = offers("ads");
-  const campaigns = ads || offers("whatsapp");
+  const campaigns = ads || offers("whatsapp") || offers("sms");
   const accounts = campaigns || offers("email");
   const hidden = new Set<string>([
     ...(ads ? [] : ["marketing.ads"]),

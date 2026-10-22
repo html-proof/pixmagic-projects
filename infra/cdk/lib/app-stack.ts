@@ -19,6 +19,7 @@ import * as rds from "aws-cdk-lib/aws-rds";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as s3deploy from "aws-cdk-lib/aws-s3-deployment";
 import * as scheduler from "aws-cdk-lib/aws-scheduler";
+import * as smsvoice from "aws-cdk-lib/aws-smsvoice";
 import * as sns from "aws-cdk-lib/aws-sns";
 import * as subs from "aws-cdk-lib/aws-sns-subscriptions";
 import * as sqs from "aws-cdk-lib/aws-sqs";
@@ -35,7 +36,7 @@ import type { DataStack } from "./data-stack.js";
 import { loggedBucket } from "./s3-access-logs.js";
 import { viewerRequestCode } from "./viewer-request.js";
 
-type QueueName = "sync" | "webhooks" | "aggregate" | "email";
+type QueueName = "sync" | "webhooks" | "aggregate" | "email" | "smsEvents";
 
 /**
  * The application: queues, the three functions (one package), CloudFront, schedules, alarms,
@@ -82,7 +83,7 @@ export class AppStack extends Stack {
       })();
     const shortCommit = commit.replace(/^([0-9a-f]{7})[0-9a-f]+/, "$1");
 
-    // --- Queues (sync, webhooks, aggregate, email + a dead-letter queue).
+    // --- Queues (sync, webhooks, aggregate, email, smsEvents + a dead-letter queue).
     // Visibility timeout covers the jobs function's 15 minutes. consume() settles every message
     // within MAX_ATTEMPTS (6); maxReceiveCount 10 only catches what it never settles (crashes).
     const dlq = new sqs.Queue(this, "Dlq", { queueName: `${prefix}-dlq`, retentionPeriod: Duration.days(14), encryption: sqs.QueueEncryption.SQS_MANAGED, enforceSSL: true });
@@ -95,7 +96,31 @@ export class AppStack extends Stack {
         enforceSSL: true,
         deadLetterQueue: { queue: dlq, maxReceiveCount: 10 },
       });
-    const queues: Record<QueueName, sqs.Queue> = { sync: queue("sync"), webhooks: queue("webhooks"), aggregate: queue("aggregate"), email: queue("email") };
+    const queues: Record<QueueName, sqs.Queue> = { sync: queue("sync"), webhooks: queue("webhooks"), aggregate: queue("aggregate"), email: queue("email"), smsEvents: queue("smsEvents") };
+
+    // --- Customer Messaging: AWS End User Messaging SMS (docs/sms.md). The configuration set sends
+    // every SMS event (accepted, delivered, failed, opted out...) to a topic only this account's SMS
+    // service may publish to, which hands each one, raw, to the smsEvents queue the jobs function
+    // reads (core/sms/delivery.ts). Texts are sent with this configuration set, so each one's
+    // outcome and price come back; origination identities (sender IDs, numbers) are registered by
+    // the owner in the console and tagged for the workspace that may use them (docs/sms.md).
+    const smsConfigurationSet = `${prefix}-sms`;
+    const smsTopic = new sns.Topic(this, "SmsEvents", { topicName: `${prefix}-sms-events`, displayName: `Insights ${cfg.name} SMS delivery events` });
+    smsTopic.addToResourcePolicy(
+      new iam.PolicyStatement({
+        principals: [new iam.ServicePrincipal("sms-voice.amazonaws.com")],
+        actions: ["sns:Publish"],
+        resources: [smsTopic.topicArn],
+        conditions: { StringEquals: { "aws:SourceAccount": cfg.account } },
+      }),
+    );
+    smsTopic.addSubscription(new subs.SqsSubscription(queues.smsEvents, { rawMessageDelivery: true }));
+    const smsConfig = new smsvoice.CfnConfigurationSet(this, "SmsConfigurationSet", {
+      configurationSetName: smsConfigurationSet,
+      eventDestinations: [{ eventDestinationName: "to-jobs", enabled: true, matchingEventTypes: ["TEXT_ALL"], snsDestination: { topicArn: smsTopic.topicArn } }],
+    });
+    // AWS checks it may publish to the topic when the destination is created: the policy first.
+    smsConfig.node.addDependency(smsTopic);
 
     // --- Functions.
     const code = lambda.Code.fromAsset(FUNCTION_DIR);
@@ -118,6 +143,7 @@ export class AppStack extends Stack {
       PAYLOADS_BUCKET: data.payloads.bucketName,
       QUEUE_URLS: Stack.of(this).toJsonString(Object.fromEntries(Object.entries(queues).map(([k, q]) => [k, q.queueUrl]))),
       SES_REGION: cfg.region,
+      SMS_CONFIGURATION_SET: smsConfigurationSet,
       // A domain is known before the deploy, so the functions get it with the release (no window in
       // which a fresh instance reads the previous address from the runtime parameter). Without one,
       // the address is CloudFront's, which the runtime parameter carries.
@@ -173,6 +199,29 @@ export class AppStack extends Stack {
     const jobs = fn("jobs", 1024, Duration.seconds(900), "Insights background jobs (SQS)");
     const cron = fn("cron", 1024, Duration.seconds(900), "Insights scheduled sweeps + maintenance actions");
     this.apiRole = api.fn.role!;
+    // Customer Messaging's calls to AWS End User Messaging SMS, each function only what it does.
+    // Sending is scoped to this account's configuration sets and origination identities, in any
+    // region (Indian local routes are in ap-south-1); the Describe calls have no resource-level
+    // permissions. The API sends test texts and verifies test numbers and senders; the jobs send;
+    // the cron reads the opt-out lists and re-checks senders daily.
+    const smsArns = (...types: string[]) => types.map((t) => `arn:aws:sms-voice:*:${cfg.account}:${t}/*`);
+    const smsSend = new iam.PolicyStatement({ actions: ["sms-voice:SendTextMessage"], resources: smsArns("configuration-set", "phone-number", "sender-id", "pool", "protect-configuration") });
+    const smsDescribe = new iam.PolicyStatement({
+      actions: ["sms-voice:DescribeAccountAttributes", "sms-voice:DescribeSpendLimits", "sms-voice:DescribePhoneNumbers", "sms-voice:DescribeSenderIds", "sms-voice:DescribePools", "sms-voice:DescribeRegistrations", "sms-voice:ListTagsForResource"],
+      resources: ["*"],
+    });
+    jobs.fn.addToRolePolicy(smsSend);
+    api.fn.addToRolePolicy(smsSend);
+    api.fn.addToRolePolicy(smsDescribe);
+    api.fn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["sms-voice:CreateVerifiedDestinationNumber", "sms-voice:SendDestinationNumberVerificationCode", "sms-voice:VerifyDestinationNumber", "sms-voice:DeleteVerifiedDestinationNumber", "sms-voice:TagResource"],
+        resources: ["*"],
+      }),
+    );
+    cron.fn.addToRolePolicy(smsDescribe);
+    cron.fn.addToRolePolicy(new iam.PolicyStatement({ actions: ["sms-voice:DescribeOptedOutNumbers"], resources: smsArns("opt-out-list") }));
+
     // The cost email's one Cost Explorer call a day (it has no resource-level permissions).
     if (costReportTo) cron.fn.addToRolePolicy(new iam.PolicyStatement({ actions: ["ce:GetCostAndUsage"], resources: ["*"] }));
 
@@ -184,6 +233,7 @@ export class AppStack extends Stack {
       ["webhooks", 10, 2, 2],
       ["aggregate", 5, 1, 2],
       ["email", 10, 2, 2],
+      ["smsEvents", 10, 2, 2],
     ];
     for (const [name, batchSize, windowS, maxConcurrency] of sources) {
       jobs.alias.addEventSource(
@@ -412,6 +462,19 @@ export class AppStack extends Stack {
         defaultValue: 0,
       });
       alarm(`${name}-error-lines`, filter.metric({ period: five, statistic: "Sum" }), name === "api" ? 20 : 50, `Many error log lines from ${name}`, 2);
+    }
+    // Customer Messaging on hold: AWS failing repeatedly (circuit open), the account's SMS spending
+    // limit reached, or bizinsights' own monthly ceiling (SMS_ACCOUNT_MONTHLY_LIMIT_USD) reached.
+    for (const [name, f] of [["jobs", jobs.fn], ["api", api.fn]] as const) {
+      const smsHold = new logs.MetricFilter(this, `SmsHold-${name}`, {
+        logGroup: f.logGroup,
+        filterPattern: logs.FilterPattern.anyTerm("sms circuit opened", "sms held", "sms platform monthly limit reached"),
+        metricNamespace: "Insights",
+        metricName: `${cfg.name}-${name}-sms-hold`,
+        metricValue: "1",
+        defaultValue: 0,
+      });
+      alarm(`sms-hold-${name}`, smsHold.metric({ period: five, statistic: "Sum" }), 1, `Texts are on hold (${name}): AWS failing, the SMS spending limit, or the platform's monthly SMS ceiling; see docs/sms.md`);
     }
 
     new cloudwatch.Dashboard(this, "Dashboard", {

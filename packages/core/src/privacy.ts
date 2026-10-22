@@ -18,6 +18,7 @@ import { normalizeEmail } from "@app/shared/email";
 import { customerKey } from "./persist.js";
 import { contactFirstName, contactWaId, phoneHash, waDecrypt } from "./whatsapp/store.js";
 import { isUniqueViolation, recipientHash } from "./email/common.js";
+import { smsExportFor } from "./sms/privacy.js";
 
 export interface DataRequestInput {
   /** Shopify's id for the request (data_request.id). */
@@ -211,5 +212,6 @@ export async function customerDataExport(tx: Tx, request: DataRequest) {
       })),
       events: emailEvents.map((e) => ({ type: e.eventType, source: e.source, occurredAt: e.occurredAt.toISOString(), status: e.status })),
     },
+    sms: await smsExportFor(tx, workspaceId, storeId, { customerKey: request.customerKey, customerId: request.customerId, ordersRequested: request.ordersRequested }),
   };
 }

@@ -25,7 +25,7 @@ export const BILLING_PAGE: boolean = BILLING_ENABLED || process.env.NEXT_PUBLIC_
 export const API_KEYS_ENABLED: boolean = false;
 
 /** The parts of the app beyond the Shopify dashboard, each built on another company's accounts. */
-export type AppModule = "whatsapp" | "staff" | "ads" | "email" | "inventory";
+export type AppModule = "whatsapp" | "staff" | "ads" | "email" | "inventory" | "sms";
 
 /**
  * What a workspace whose stores came in through the App Store app offers (`MeWorkspace.appStore`,
@@ -42,7 +42,10 @@ export type AppModule = "whatsapp" | "staff" | "ads" | "email" | "inventory";
 // Inventory (stock per location, stock changes) asks Shopify for scopes the App Store app's
 // listing doesn't describe yet: on there once its toml declares them (shopify app deploy
 // --config appstore) and the listing says so (docs/inventory.md, "Turning it on").
-export const APP_STORE_MODULES: Record<AppModule, boolean> = { whatsapp: false, staff: false, ads: false, email: false, inventory: false };
+//
+// Customer Messaging (SMS through AWS) isn't offered to App Store workspaces until the listing
+// describes it.
+export const APP_STORE_MODULES: Record<AppModule, boolean> = { whatsapp: false, staff: false, ads: false, email: false, inventory: false, sms: false };
 
 /** Whether a workspace offers `part` of the app (`appStore`: it came in through the App Store app). */
 export const offersModule = (appStore: boolean | undefined, part: AppModule): boolean => !appStore || APP_STORE_MODULES[part];
