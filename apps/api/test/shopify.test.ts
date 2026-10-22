@@ -219,8 +219,8 @@ describe("Shopify OAuth", () => {
       }),
     );
 
-  it("callback refuses a store another workspace connected in the meantime", async () => {
-    const { res, cookie } = await startInstall();
+  it("callback leaves a store another account connected in the meantime, and opens the dashboard saying so", async () => {
+    const { res, ws, cookie } = await startInstall();
     const state = new URL(res.json().url).searchParams.get("state")!;
     const rival = await signIn(ctx, "rival", "rival@x.com");
     const rivalWs = await createWorkspace(ctx, rival.headers, "Rival");
@@ -231,8 +231,54 @@ describe("Shopify OAuth", () => {
       url: callbackUrl({ code: "c", shop: "demo-shop.myshopify.com", state, timestamp: String(Math.floor(Date.now() / 1000)) }),
       headers: { cookie: `${cookie}; shopify_oauth_state=${state}` },
     });
-    expect(cb.headers.location).toMatch(/\/onboarding\?error=store_taken$/);
+    expect(cb.headers.location).toBe(`http://localhost:3001/dashboard?ws=${ws}&taken=demo-shop.myshopify.com`);
     expect((await systemDb.store.findUniqueOrThrow({ where: { shopDomain: "demo-shop.myshopify.com" } })).workspaceId).toBe(rivalWs);
+  });
+
+  describe("a store already connected to another workspace", () => {
+    const SHOP = "demo-shop.myshopify.com";
+    const launchUrl = () => {
+      const params = { shop: SHOP, host: "aG9zdA", timestamp: String(Math.floor(Date.now() / 1000)) };
+      return `/shopify/launch?${new URLSearchParams({ ...params, hmac: signShopifyQuery(params, SECRET) })}`;
+    };
+    /** A one-click connect from `ws` that comes back from Shopify with SHOP: where the launch sends the browser. */
+    async function oneClick(signedIn: { cookie: string; headers: Record<string, string> }, ws: string, from?: "settings") {
+      const start = await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/shopify/start`, headers: signedIn.headers, payload: from ? { from } : {} });
+      const pending = String(start.headers["set-cookie"]).match(/shopify_pending=([^;]+)/)![1];
+      const launch = await ctx.app.inject({ method: "GET", url: launchUrl(), headers: { cookie: `${signedIn.cookie}; shopify_pending=${pending}` } });
+      expect(launch.statusCode).toBe(302);
+      return String(launch.headers.location);
+    }
+
+    it("opens it for someone who is a member there, whichever way they connect", async () => {
+      const me = await signIn(ctx, "owner", "owner@x.com");
+      const home = await createWorkspace(ctx, me.headers, "Home");
+      const store = await createStore(home, SHOP, ["read_orders"], { accessTokenEnc: "v1:x", shopifyAppKey: "default" });
+      const second = await createWorkspace(ctx, me.headers, "Second");
+      const dashboard = `http://localhost:3001/dashboard?ws=${home}&store=${store.id}`;
+
+      expect(await oneClick(me, second)).toBe(dashboard);
+      const typed = await ctx.app.inject({ method: "POST", url: `/workspaces/${second}/shopify/install`, headers: me.headers, payload: { shop: SHOP } });
+      expect(typed.statusCode).toBe(200);
+      expect(typed.json().url).toBe(dashboard);
+      // Nothing moved or was authorized again.
+      expect((await systemDb.store.findUniqueOrThrow({ where: { id: store.id } })).workspaceId).toBe(home);
+      expect(await systemDb.auditLog.count({ where: { action: "store.connected" } })).toBe(0);
+    });
+
+    it("sends anyone else to their own dashboard, or back to Settings when they connected from there", async () => {
+      const owner = await signIn(ctx, "owner", "owner@x.com");
+      const theirs = await createWorkspace(ctx, owner.headers, "Theirs");
+      await createStore(theirs, SHOP, ["read_orders"], { accessTokenEnc: "v1:x", shopifyAppKey: "default" });
+      const other = await signIn(ctx, "other", "other@x.com");
+      const mine = await createWorkspace(ctx, other.headers, "Mine");
+
+      expect(await oneClick(other, mine)).toBe(`http://localhost:3001/dashboard?ws=${mine}&taken=${SHOP}`);
+      expect(await oneClick(other, mine, "settings")).toBe("http://localhost:3001/settings/stores?error=store_taken");
+      // A membership that was revoked opens nothing.
+      await systemDb.membership.create({ data: { workspaceId: theirs, userId: other.user.id, role: "viewer", revokedAt: new Date() } });
+      expect(await oneClick(other, mine)).toBe(`http://localhost:3001/dashboard?ws=${mine}&taken=${SHOP}`);
+    });
   });
 
   it("revives a store uninstalled from another workspace, dropping its old data", async () => {

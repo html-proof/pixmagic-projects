@@ -9,7 +9,7 @@ export const OAUTH_ERRORS: Record<string, string> = {
   session_mismatch: "You were signed out during the connection. Sign in and try again.",
   not_allowed: "You no longer have permission to connect stores to this workspace. Ask an owner or admin.",
   missing_required_scopes: "We need permission to read orders to show any metrics. Please approve access.",
-  store_taken: "That store is already connected to another workspace.",
+  store_taken: "That store is already connected to another bizinsights account. Ask its owner to invite you, or connect a different store.",
   exchange_failed: "Shopify didn't complete the connection. Please try again.",
   stale_request: "That request was too old. Please try again.",
   shop_mismatch: "Shopify returned a different store than the one you picked. Please try again.",
