@@ -19,6 +19,7 @@ import { nodeSmtpConnect } from "./nodeSmtp.js";
 import { s3Blobs } from "./s3Blobs.js";
 import { loadSecrets } from "./secrets.js";
 import { chooseMailer } from "./mailers.js";
+import { awsSmsProvider } from "./smsProvider.js";
 import { parseQueueUrls, sqsApi, sqsQueues } from "./sqsQueues.js";
 import { staticSite } from "./staticSite.js";
 
@@ -27,7 +28,7 @@ import { staticSite } from "./staticSite.js";
  * memory, timeout and trigger, so the UI, the API and the jobs always run the same build:
  *   - api:  the Lambda function URL behind CloudFront. The static UI (the Next.js export) and the
  *           API on one origin, so the session cookie stays first-party.
- *   - jobs: SQS event source mappings (sync, webhooks, aggregate, email) → the worker's consume().
+ *   - jobs: SQS event source mappings (sync, webhooks, aggregate, email, smsEvents) → the worker's consume().
  *   - cron: EventBridge Scheduler ({ "cron": "..." }) → runScheduled(), plus maintenance actions
  *           invoked directly ({ "action": "migrate" | "counts" | "after-move" | "reread" }, or
  *           { "action": "shopify-check", "shop": "<shop>.myshopify.com" }), and the owner's daily
@@ -51,7 +52,7 @@ function droppedQueues(): Queues {
       logger.warn({ queue }, "no queues in this environment: job dropped");
     },
   });
-  return { sync: drop("sync"), webhooks: drop("webhooks"), aggregate: drop("aggregate"), email: drop("email") };
+  return { sync: drop("sync"), webhooks: drop("webhooks"), aggregate: drop("aggregate"), email: drop("email"), smsEvents: drop("smsEvents") };
 }
 
 function coordinator(): Coord {
@@ -83,6 +84,8 @@ function workerDeps(): WorkerDeps {
     // Every outbound call the API and the jobs make goes through this, so each gets a time limit.
     fetchImpl: withTimeout((input, init) => fetch(input, init)),
     smtpConnect: nodeSmtpConnect,
+    // Customer Messaging: AWS End User Messaging SMS with the function's role (region per call).
+    sms: awsSmsProvider({ credentials, fetchImpl: withTimeout((i, init) => fetch(i, init), 10_000) }),
   };
 }
 

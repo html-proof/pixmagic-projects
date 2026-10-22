@@ -38,4 +38,14 @@ BEGIN
   IF to_regclass('public.inventory_movements') IS NOT NULL THEN
     REVOKE UPDATE, DELETE, TRUNCATE ON inventory_movements FROM app_rls;
   END IF;
+  -- SMS consent history, AWS's delivery events and the audit trail (migration 20261022170000_sms_customer_messaging).
+  IF to_regclass('public.sms_consent_records') IS NOT NULL THEN
+    REVOKE UPDATE, DELETE, TRUNCATE ON sms_consent_records FROM app_rls;
+  END IF;
+  IF to_regclass('public.sms_delivery_events') IS NOT NULL THEN
+    REVOKE UPDATE, DELETE, TRUNCATE ON sms_delivery_events FROM app_rls;
+  END IF;
+  IF to_regclass('public.sms_audit_logs') IS NOT NULL THEN
+    REVOKE UPDATE, DELETE, TRUNCATE ON sms_audit_logs FROM app_rls;
+  END IF;
 END $$;

@@ -4,6 +4,7 @@ import { systemDb, type User } from "@app/db";
 import { allows, hasFullAccess, LEGACY_GRANTS, sha256Hex, type AccessNeed, type MemberAccess, type Role } from "@app/shared";
 import type { StaffAccess, StaffRole } from "@app/shared/staff";
 import { addLogContext, env, logger, memberState, sessionAccess, type BlobStore, type Coord, type FetchLike, type Mailer, type Queues, type SmtpConnect } from "@app/core";
+import type { SmsProvider } from "@app/core/sms";
 import { CognitoError, CognitoUnavailableError, type CognitoAuth } from "./cognito.js";
 import { clearSessionCookies, readRefreshToken, readSession, retiredSessionKey, REVALIDATE_MS, SESSION_CONTEXT_HEADER, SESSION_COOKIE, setSessionCookies, SHARE_COOKIE, type SessionClaims } from "./session.js";
 
@@ -20,6 +21,8 @@ export interface Deps {
   fetchImpl: FetchLike;
   /** Outbound TCP for SMTP email accounts (apps/aws/src/nodeSmtp.ts). Absent: SMTP accounts can't connect. */
   smtpConnect?: SmtpConnect;
+  /** AWS End User Messaging SMS (apps/aws/src/smsProvider.ts). Absent: Customer Messaging can't reach AWS. */
+  sms?: SmsProvider;
   /** Coarse per-IP limiter (apps/aws/src/app.ts, on the coordinator). Returns false when over the limit. */
   globalLimit?: (key: string) => Promise<boolean>;
   /** Whether the database answers right now. Defaults to `dbReachable()`; tests inject an outage. */

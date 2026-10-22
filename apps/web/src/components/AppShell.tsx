@@ -21,6 +21,7 @@ import {
   Menu,
   MessageCircle,
   MessageCircleMore,
+  MessageSquareText,
   OctagonAlert,
   Package,
   Plug,
@@ -147,6 +148,7 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   ];
   const inventory = offers("inventory") && allowed("inventory.view");
   const store: NavItem[] = [...topic("orders", "Orders", ReceiptText), ...(inventory ? [] : topic("stock", "Stock", Boxes)), ...topic("shipping", "Shipping", Truck), ...topic("channels", "Sales channels", Store)];
+  const marketing: NavItem[] = [...(offers("sms") && allowed("marketing.campaigns") ? [area("/messaging", "Customer Messaging", MessageSquareText)] : [])];
   const apps: NavItem[] = [
     ...(offers("whatsapp") && allowed("marketing.campaigns") ? [area("/whatsapp", "WhatsApp", MessageCircle)] : []),
     ...(offers("staff") && staffAccess(workspace.role, workspace.staffRole, workspace.permissions).permissions.length > 0 ? [area("/staff", "Staff", Users)] : []),
@@ -177,6 +179,7 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
       )}
       <NavGroup items={main} onNavigate={onNavigate} />
       <NavGroup title="Store" items={store} onNavigate={onNavigate} />
+      <NavGroup title="Marketing" items={marketing} onNavigate={onNavigate} />
       <NavGroup title={full ? "Apps & integrations" : "More"} items={apps} onNavigate={onNavigate} />
       <div className="mt-auto rounded-2xl border border-border bg-gradient-to-br from-accent/[0.07] to-transparent p-4">
         <span aria-hidden className="flex h-9 w-9 items-center justify-center rounded-full bg-accent/12 text-accent">
@@ -640,6 +643,9 @@ export function AppShell({ children }: { children: ReactNode }) {
           ]
         : []),
       ...(offers("ads") && allowed("marketing.ads") ? [{ id: "google-ads", label: "Google Ads analytics", group: "Insights", icon: Megaphone, keywords: "google ads demo campaigns spend conversions", go: go("/ads/google") }] : []),
+      ...(offers("sms") && allowed("marketing.campaigns")
+        ? [{ id: "messaging", label: "Customer Messaging", group: "Marketing", icon: MessageSquareText, keywords: "sms text messages campaigns automations templates opt-out", go: go("/messaging") }]
+        : []),
       ...(offers("whatsapp") && allowed("marketing.campaigns") ? [{ id: "whatsapp", label: "WhatsApp", group: "Apps", icon: MessageCircle, keywords: "messages campaigns", go: go("/whatsapp") }] : []),
       ...(staff ? [{ id: "staff", label: "Staff", group: "Apps", icon: Users, keywords: "employees payroll timesheets roster", go: go("/staff") }] : []),
       ...(me.employments?.length ? [{ id: "portal", label: "My work", group: "Apps", icon: Briefcase, go: go("/portal") }] : []),

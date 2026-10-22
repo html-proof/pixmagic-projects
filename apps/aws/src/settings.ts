@@ -111,6 +111,15 @@ export const APP_SETTINGS = {
   "WHATSAPP_APP_ID": "1799660384680551",
   "WHATSAPP_CONFIG_ID": "",
   "WHATSAPP_API_VERSION": "v25.0",
+  // Customer Messaging: SMS through AWS End User Messaging (docs/sms.md). "sandbox": merchants can
+  // set up senders, templates and rules and send test texts to numbers they verified with AWS;
+  // rules and campaigns only record dry runs, so no customer is texted. "live" once the account is
+  // out of AWS's SMS sandbox, its spending limit is raised and a sender is registered (docs/sms.md,
+  // "Going live"). Marketing texts have their own switch, off. The configuration set comes from
+  // the App stack.
+  "SMS_MODE": "sandbox",
+  "SMS_MARKETING_ENABLED": "",
+  "SMS_ACCOUNT_MONTHLY_LIMIT_USD": "20",
   // Email integrations (docs/email.md): "Connect Gmail / Google Workspace" and "Connect Outlook /
   // Microsoft 365". Empty until the OAuth clients exist (the buttons say so; SMTP works regardless).
   // Their secrets are in Secrets Manager. "common" accepts work, school and personal Microsoft accounts.

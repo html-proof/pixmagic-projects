@@ -1,6 +1,7 @@
 /** The webhooks queue: each Shopify topic applied to the store's data (orders, products, refunds, app and GDPR topics). */
 import { systemDb, type Store } from "@app/db";
 import { applySubscriptionUpdate, audit, customerKey, deleteProduct, endBillingForStore, env, getAccessToken, gidToId, INSTALLATION_QUERY, logger, MAX_ATTEMPTS, shopifyGraphql, ShopifyHttpError, StoreDisconnectedError, withAccessToken, normalizeRestOrder, normalizeRestProduct, normalizeRestProductVariants, parseShopify, pruneVariants, purgeStoreData, raiseAlert, recordDataRequest, resolveAlerts, customersDataRequestSchema, customersRedactSchema, restOrderSchema, restProductDeleteSchema, restOrderDeleteSchema, removeOrders, restProductSchema, restRefundWebhookSchema, scopesUpdateSchema, subscriptionUpdateSchema, syncBillingFromShopify, upsertOrder, upsertProduct, upsertVariant, seedScopeFollowUp, type WebhookJobData, redactWhatsappCustomer, whatsappOnShopifyEvent, emailOnShopifyEvent, purgeEmailStoreData, redactEmailCustomer, onInventoryItemWebhook, onLevelDisconnect, onLevelWebhook, onLocationWebhook } from "@app/core";
+import { redactSmsCustomer, smsOnShopifyEvent } from "@app/core/sms";
 import { enqueueAggregate, UnrecoverableError, type WorkerDeps } from "./common.js";
 import { readSalesAfterWebhook, SHOP_UNAVAILABLE, shopifyReader } from "./shopifyRead.js";
 
@@ -369,9 +370,10 @@ export async function processWebhook(data: WebhookJobData, deps: WorkerDeps) {
         const whatsappRecords = await redactWhatsappCustomer(store, redact);
         // Email automations: the customer's events and the messages sent to them from this store.
         const emailRecords = await redactEmailCustomer(store, redact.customer?.email);
+        const smsRecords = await redactSmsCustomer(store, redact);
         // A data request for the same customer names them too (by hashes): it goes as well.
         if (redact.customer?.id != null) await systemDb.dataRequest.deleteMany({ where: { storeId: store.id, customerId: String(redact.customer.id) } });
-        await audit({ workspaceId: store.workspaceId, action: "gdpr.customer_redacted", metadata: { whatsappRecords, emailRecords } });
+        await audit({ workspaceId: store.workspaceId, action: "gdpr.customer_redacted", metadata: { whatsappRecords, emailRecords, smsRecords } });
         break;
       }
       case "shop/redact": {
@@ -401,14 +403,16 @@ export async function processWebhook(data: WebhookJobData, deps: WorkerDeps) {
         break;
       }
       default:
-        // checkouts/* and fulfillments/* are only for WhatsApp (below).
-        if (!data.topic.startsWith("checkouts/") && !data.topic.startsWith("fulfillment")) logger.info({ topic: data.topic }, "unhandled webhook topic");
+        // checkouts/* and fulfillments/* are only for WhatsApp, customers/* only for SMS consent (below).
+        if (!data.topic.startsWith("checkouts/") && !data.topic.startsWith("fulfillment") && !data.topic.startsWith("customers")) logger.info({ topic: data.topic }, "unhandled webhook topic");
     }
     // WhatsApp order updates, delivery updates and cart reminders (a no-op unless the store turned them on).
     // After the analytics write, and idempotent, so a retry of this delivery repeats nothing.
     await whatsappOnShopifyEvent(store, data.topic, p, deps);
     // Email automations listening to orders and checkouts (a no-op unless one is enabled). Idempotent too.
     await emailOnShopifyEvent(store, data.topic, p, deps);
+    // Customer Messaging: contacts, consent, attribution and SMS rules (a no-op without a sender). Idempotent too.
+    await smsOnShopifyEvent(store, data.topic, p, deps, { webhookId: data.eventId });
   }
   await systemDb.webhookEvent.update({ where: { id: ev.id }, data: { status: "succeeded", processedAt: new Date(), error: null } });
   if (data.payloadKey) await deps.payloads.delete(data.payloadKey).catch(() => {});
