@@ -84,8 +84,10 @@ Settings → Integrations / Advertising card — "Continue with Meta Ads" (or Go
   A platform goes through Nango only when it is listed **and** its own app's keys are set here
   (`META_APP_ID/SECRET`, `GOOGLE_ADS_CLIENT_ID/SECRET`). Its tokens are checked against them.
 - The integration keys are fixed: `bizinsights-meta-ads` (Nango provider `facebook`, not `meta-marketing-api`:
-  only `facebook` gets Nango's long-lived-token renewal), `bizinsights-google-adsense` (provider `google`, scope
-  `https://www.googleapis.com/auth/adsense.readonly`), `bizinsights-google-ads` (provider `google`, scope `adwords`).
+  only `facebook` gets Nango's long-lived-token renewal), `bizinsights-google-adsense` (provider `google`, scopes
+  `https://www.googleapis.com/auth/adsense.readonly,openid`), `bizinsights-google-ads` (provider `google`, scopes
+  `adwords,openid`). `openid` is who the Google account is: Google's tokeninfo didn't name the person for an
+  adsense.readonly-only token (first real connect, 2026-10-22), so its disconnect couldn't revoke the grant.
 - The browser never sees a token: the session token is Nango's, single-integration and 30 minutes; the API's
   answers carry `source: "nango"` and nothing else of the credential.
 

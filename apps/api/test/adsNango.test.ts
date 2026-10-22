@@ -57,6 +57,8 @@ interface World {
   adsRead: "granted" | "declined";
   /** Google: which client the token was issued to. */
   googleAud: string;
+  /** Google's tokeninfo names the person (as it does for some tokens); false: only userinfo does, for a token with openid. */
+  tokeninfoSub: boolean;
 }
 
 /** Nango's API, Meta's Graph API and Google's tokeninfo/revoke/AdSense, enough for one sign-in of each. */
@@ -71,6 +73,7 @@ function world(): World {
     metaAccounts: [{ id: "act_1", name: "Shop ads" }],
     adsRead: "granted",
     googleAud: "g_client",
+    tokeninfoSub: true,
     fetchImpl: async (input, init) => {
       const u = new URL(String(input));
       const method = init?.method ?? "GET";
@@ -113,7 +116,12 @@ function world(): World {
         if (u.pathname.endsWith("/me")) return json({ id: "4242" });
         return json({ error: { message: `unexpected ${u.pathname}`, code: 100 } }, 400);
       }
-      if (u.host === "oauth2.googleapis.com" && u.pathname === "/tokeninfo") return json({ aud: w.googleAud, sub: "100200300", scope: "https://www.googleapis.com/auth/adsense.readonly" });
+      if (u.host === "oauth2.googleapis.com" && u.pathname === "/tokeninfo") {
+        return json({ aud: w.googleAud, ...(w.tokeninfoSub ? { sub: "100200300" } : {}), scope: "https://www.googleapis.com/auth/adsense.readonly openid" });
+      }
+      if (u.host === "openidconnect.googleapis.com" && u.pathname === "/v1/userinfo") {
+        return new Headers(init?.headers).get("authorization")?.startsWith("Bearer ") ? json({ sub: "100200300" }) : json({ error: "invalid_token" }, 401);
+      }
       if (u.host === "oauth2.googleapis.com" && u.pathname === "/revoke") {
         w.googleRevoked.push(new URLSearchParams(String(init?.body)).get("token")!);
         return json({});
@@ -402,6 +410,18 @@ describe("disconnecting a Nango connection", () => {
     expect(del.json().revoked).toBe("still_used");
     expect(w.googleRevoked).toEqual([]);
     // The Nango connection itself is no longer used by anything: it goes.
+    expect(w.deleted).toEqual([connectionId]);
+  });
+
+  it("knows whose Google grant it is through openid when tokeninfo doesn't say, and takes it back on disconnect", async () => {
+    // Production 2026-10-22: tokeninfo named nobody for an adsense.readonly-only token, so a disconnect couldn't revoke.
+    w.tokeninfoSub = false;
+    const { connectionId } = await connectThrough("adsense");
+    const row = await systemDb.adConnection.findFirstOrThrow({ where: { storeId } });
+    expect(row.externalUserId).toBe("100200300");
+    const del = await ctx.app.inject({ method: "DELETE", url: `${adsUrl()}/connections/${row.id}`, headers });
+    expect(del.json().revoked).toBe("revoked");
+    expect(w.googleRevoked).toHaveLength(1);
     expect(w.deleted).toEqual([connectionId]);
   });
 

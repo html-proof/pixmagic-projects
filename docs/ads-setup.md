@@ -31,7 +31,10 @@ belong to this store; none picked means every site. Accounts that can't be split
 totals for the whole account ("All sites").
 
 Access is **read-only**: Google's `adwords` scope (the only Google Ads scope there is, used only to read),
-`adsense.readonly`, and Meta's `ads_read`. bizinsights never creates, changes or pauses an ad.
+`adsense.readonly`, and Meta's `ads_read`. bizinsights never creates, changes or pauses an ad. Google sign-ins also
+ask for `openid` (only which Google account it is, nothing about it; non-sensitive): without it Google's tokeninfo
+may not say whose a token is, and a disconnect then can't take the Google grant back (it never revokes a grant
+whose person it doesn't know). Connections made before 2026-10-23 learn it when they reconnect.
 
 ## The card states
 
