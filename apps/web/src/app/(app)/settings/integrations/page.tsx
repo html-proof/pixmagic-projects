@@ -25,7 +25,7 @@ import { actionError, api, friendlyError, useApi } from "@/lib/api";
 // Google AdSense on one page, each with one button that opens the platform's own sign-in, and a
 // plain status. Nothing here asks for an app id, a key or a token: bizinsights' own Shopify, Google
 // and Meta apps do that part. The detailed pages (Shopify, WhatsApp, Advertising) stay where things
-// are managed in depth. The ad cards are the ones Settings → Advertising shows (components/integrations).
+// are managed in depth. The ad cards follow the same rules as Settings → Advertising's (components/integrations).
 // ---------------------------------------------------------------------------
 
 /** Shopify's and WhatsApp's states. The ad cards' are in lib/adConnections.ts (AD_STATE). */
@@ -263,7 +263,6 @@ export default function IntegrationsPage() {
             <AdPlatformCard
               key={p}
               provider={p}
-              variant="hub"
               answer={ads.answer}
               loadError={ads.loadError}
               connections={ads.connections.filter((c) => c.provider === p)}

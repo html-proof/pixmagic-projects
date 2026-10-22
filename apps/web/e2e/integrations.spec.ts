@@ -154,7 +154,7 @@ test("each connected account shows its state, the same way on both pages", async
     const failed = account(page, "act_333");
     await expect(failed.getByTestId("account-message")).toContainText("Meta refused the last update");
     await expect(failed.getByTestId("account-message")).not.toContainText("#100");
-    await failed.getByText("Details").click();
+    await failed.locator("summary", { hasText: /^Details/ }).click();
     await expect(failed).toContainText("(#100) Unsupported get request");
     await expect(account(page, "act_444").getByTestId("account-message")).toContainText("can no longer see this ad account");
     await expect(account(page, "act_888").getByTestId("account-message")).toContainText("Press Reconnect");

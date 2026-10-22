@@ -5,12 +5,13 @@ import { canManage, StoresPending, useApp } from "@/components/AppContext";
 import { LoadError } from "@/components/LoadError";
 import { BackFromFacebook } from "@/components/MetaAdsAccess";
 import { Alert } from "@/components/ui";
-import { AdPlatformCard } from "@/components/integrations/AdPlatformCard";
 import { GoogleAdsDemoDialog } from "@/components/integrations/GoogleAdsDemoDialog";
 import { DisconnectDialog, NoteAlert, StateAnnouncer } from "@/components/integrations/AdUi";
 import { AD_PLATFORM_ORDER, AD_PLATFORMS } from "@/components/integrations/adPlatforms";
 import { useAdConnections } from "@/components/integrations/useAdConnections";
+import { AdPlatformPanel } from "@/components/settings/ads/AdPlatformPanel";
 import { AdsenseSites } from "@/components/settings/ads/AdsenseSites";
+import { AdvertisingHero } from "@/components/settings/ads/AdvertisingHero";
 import { ChooseAccounts } from "@/components/settings/ads/ChooseAccounts";
 import { callbackErrorMessage, isAdProvider, WRONG_LOGIN } from "@/components/settings/ads/callbackErrors";
 import { AD_STATE, type AdProvider } from "@/lib/adConnections";
@@ -19,8 +20,9 @@ import { signInFinished } from "@/lib/adSignIn";
 // ---------------------------------------------------------------------------
 // Advertising integrations: connect and manage. The numbers themselves live on the dashboard's
 // Advertising section; this page is where accounts are connected, chosen, refreshed, reconnected,
-// shown or hidden, narrowed to sites (AdSense) and disconnected. The cards are the same as on
-// Connect your business (components/integrations).
+// shown or hidden, narrowed to sites (AdSense) and disconnected. Drawn after the owner's design
+// (components/settings/ads); the cards follow the same rules as Connect your business's
+// (components/integrations/adPlatformParts.tsx).
 // ---------------------------------------------------------------------------
 
 export default function AdAccountsPage() {
@@ -67,15 +69,14 @@ export default function AdAccountsPage() {
   if (storesStatus !== "ready") return <StoresPending />;
   if (!store || !base) {
     return (
-      <div className="card">
-        <h1 className="text-lg font-semibold">Advertising integrations</h1>
-        <p className="mt-1 text-sm text-muted">Connect a Shopify store first; ad accounts are connected to a store.</p>
+      <AdvertisingHero>
+        <p className="text-muted">Connect a Shopify store first; ad accounts are connected to a store.</p>
         {canManage(workspace.role) && (
-          <Link href="/onboarding" className="btn-primary mt-3 inline-flex">
+          <Link href="/onboarding" className="btn-primary inline-flex">
             Connect a store
           </Link>
         )}
-      </div>
+      </AdvertisingHero>
     );
   }
 
@@ -89,34 +90,14 @@ export default function AdAccountsPage() {
   const views = Object.fromEntries(AD_PLATFORM_ORDER.map((p) => [p, ads.view(p)])) as Record<AdProvider, ReturnType<typeof ads.view>>;
 
   return (
-    <div className="space-y-4">
-      <div className="card">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h1 className="text-lg font-semibold">Advertising integrations</h1>
-            <p className="mt-1 text-sm text-muted">
-              Connect Google Ads and Meta Ads to see what you spend on ads and what it brings, and Google AdSense to see what your site earns from ads.
-              Once connected, the numbers appear on your{" "}
-              <Link className="text-accent underline" href="/dashboard">
-                dashboard
-              </Link>{" "}
-              and refresh by themselves. bizinsights only reads: it can&apos;t create, change or pause your ads, or spend money.
-            </p>
-            <p className="mt-2 text-sm">
-              For <strong>{storeName}</strong>
-              {stores.length > 1 ? <span className="text-muted"> (switch store at the top of the page)</span> : null}
-            </p>
-            {!manage && (
-              <p className="mt-2 text-sm text-muted">You can see how each account stands. Connecting, refreshing or disconnecting needs the Manage integrations permission: ask an owner or admin.</p>
-            )}
-          </div>
-          {ads.connections.length > 0 && (
-            <Link className="btn-secondary shrink-0" href="/dashboard">
-              View results
-            </Link>
-          )}
-        </div>
-      </div>
+    <div className="space-y-5">
+      <AdvertisingHero>
+        <p>
+          For <strong>{storeName}</strong>
+          {stores.length > 1 ? <span className="text-muted"> (switch store at the top of the page)</span> : null}
+        </p>
+        {!manage && <p className="text-muted">You can see how each account stands. Connecting, refreshing or disconnecting needs the Manage integrations permission: ask an owner or admin.</p>}
+      </AdvertisingHero>
 
       <StateAnnouncer items={AD_PLATFORM_ORDER.map((p) => [AD_PLATFORMS[p].name, AD_STATE[views[p].state].label])} />
       {ads.note && <NoteAlert note={ads.note} onDismiss={() => ads.setNote(null)} />}
@@ -149,10 +130,9 @@ export default function AdAccountsPage() {
       {pick && manage && <ChooseAccounts pick={pick} base={base} storeId={store.id} storeName={storeName} onLoaded={setChoosing} onDone={closePick} />}
 
       {AD_PLATFORM_ORDER.map((p) => (
-        <AdPlatformCard
+        <AdPlatformPanel
           key={p}
           provider={p}
-          variant="settings"
           answer={data}
           loadError={ads.loadError}
           connections={ads.connections.filter((c) => c.provider === p)}
@@ -177,7 +157,7 @@ export default function AdAccountsPage() {
       {manage && ads.connections.some((c) => data?.configured[c.provider]) && (
         <div className="flex flex-wrap items-center gap-3">
           <button type="button" className="btn-secondary" onClick={() => void ads.refresh()} disabled={!!ads.busy}>
-            {ads.busy === "sync-all" ? "Starting…" : "Refresh all"}
+            {ads.busy === "sync-all" ? "Starting…" : "Sync all now"}
           </button>
           <p className="text-xs text-muted">Numbers refresh by themselves through the day, and recent weeks are checked again daily for late conversions.</p>
         </div>

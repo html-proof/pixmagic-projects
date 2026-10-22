@@ -10,11 +10,15 @@ The same sign-ins can run through Nango's Connect UI (one window over the page, 
 ## How a merchant uses it
 
 1. The dashboard's **Advertising** section offers **Connect advertising accounts** while nothing is connected.
-2. That opens **Settings → Advertising** (`/settings/ads`, "Advertising integrations"). The same cards are also on
-   **Settings → Integrations** (`/settings/integrations`, "Connect your business"), next to the **Google Account**
-   (Continue with Google sign-in), Shopify and WhatsApp cards. Card order for ads: Google Ads, Meta Ads, Google AdSense.
-3. They press **Continue with Google Ads**, **Continue with Meta Ads** or **Continue with Google AdSense** and
-   approve on the platform's own screen. Connecting needs the integrations permission (`integrations.manage`:
+2. That opens **Settings → Advertising** (`/settings/ads`, "Advertising integrations", drawn after the owner's
+   design in `components/settings/ads/`): one card per platform with what bizinsights reads from it; while nothing
+   is connected, what connecting brings and what it needs; once connected, each account's details and data status
+   beside how the integration stands. **Settings → Integrations** (`/settings/integrations`, "Connect your
+   business") has shorter cards for the same platforms, next to the **Google Account** (Continue with Google
+   sign-in), Shopify and WhatsApp cards. Both follow the same rules (`components/integrations/adPlatformParts.tsx`).
+   Card order for ads: Google Ads, Meta Ads, Google AdSense.
+3. They press **Connect with Google Ads**, **Connect with Meta Ads** or **Connect with Google AdSense** (on Connect
+   your business: **Continue with …**) and approve on the platform's own screen. Connecting needs the integrations permission (`integrations.manage`:
    owners and admins, unless the owner gave it to another role) and a verified email address.
 4. When the login can see several accounts and some are new, they tick the ones that belong to this store.
    - The sign-in waits on the server, encrypted, for 15 minutes.
