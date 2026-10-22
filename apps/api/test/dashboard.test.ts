@@ -664,6 +664,54 @@ describe("ad figures only for the days the accounts have stored", () => {
     }
   };
 
+  it("answers the Advertising pages with their modules only, narrowed to a platform or an account, part of the spend never set against the store's sales", async () => {
+    const { a, ws, store } = await owner();
+    const meta = await adAccount(store, "meta", "act_1");
+    const google = await adAccount(store, "google", "123");
+    const sense = await adAccount(store, "adsense", "pub-1");
+    await spendDays(store, meta, d(-13), today, 10);
+    await spendDays(store, google, d(-13), today, 5);
+    await earnDays(store, sense, "", d(-13), today, 2);
+    await seedOrder(store, { id: "S1", createdAt: `${d(-2)}T17:00:00Z`, lines: [{ qty: 1, price: 210 }] });
+    await recomputeDays(store, [d(-2)]);
+    const ask = async (qs: string) => (await overview(a.headers, ws, store.id, `preset=7d&parts=advertising${qs}`)).json().modules;
+
+    const all = await ask("");
+    // Only what the Advertising pages show: the rest of the dashboard isn't computed.
+    expect(all).toHaveProperty("sales_overview");
+    for (const left of ["top_products", "recent_orders", "inventory", "catalog", "order_timing"]) expect(all).not.toHaveProperty(left);
+    expect(all.ads.byProvider.map((p: { provider: string }) => p.provider).sort()).toEqual(["google", "meta"]);
+    // Every spend platform together: Shopify's net sales per unit of all of it (MER).
+    expect(all.ads.sales).toMatchObject({ netSales: 210, salesPerSpend: 2 });
+    expect(all.adsense.current.earnings).toBe(14);
+    // Every campaign, each with its change on the totals' whole days (today isn't over: through yesterday).
+    expect(all.ads.campaigns).toEqual(expect.arrayContaining([expect.objectContaining({ provider: "meta", name: "Spring", spend: 70, change: expect.objectContaining({ previous: expect.objectContaining({ spend: 60 }), deltas: expect.objectContaining({ spend: 0 }) }) })]));
+
+    // One platform: its own figures, not set against the store's sales; no AdSense.
+    const metaOnly = await ask("&platform=meta");
+    expect(metaOnly.ads.byProvider.map((p: { provider: string }) => p.provider)).toEqual(["meta"]);
+    expect(metaOnly.ads.current.spend).toBe(70);
+    expect(metaOnly.ads.sales).toBeNull();
+    expect(metaOnly.ads.shareOfSales).toBeNull();
+    expect(metaOnly).not.toHaveProperty("adsense");
+    // One account: its own figures only.
+    const one = await ask(`&account=${google.id}`);
+    expect(one.ads.accounts.map((x: { id: string }) => x.id)).toEqual([google.id]);
+    expect(one.ads.current.spend).toBe(35);
+    expect(one.ads.sales).toBeNull();
+    expect(one).not.toHaveProperty("adsense");
+    // AdSense alone: money in, its earnings next to the store's sales, no spend.
+    const earned = await ask("&platform=adsense");
+    expect(earned).not.toHaveProperty("ads");
+    expect(earned.adsense).toMatchObject({ current: { earnings: 14 }, vsSales: 14 / 210 });
+
+    // The dashboard's own question isn't narrowed, and keeps its top ten campaigns without changes.
+    const dash = (await overview(a.headers, ws, store.id, "preset=7d&platform=meta")).json().modules;
+    expect(dash.ads.byProvider).toHaveLength(2);
+    expect(dash).toHaveProperty("adsense");
+    expect(dash.ads.campaigns[0]).not.toHaveProperty("change");
+  });
+
   it("never shows 0 for an account whose access ended or that was never read, and keeps a healthy platform's figures", async () => {
     const { a, ws, store } = await owner();
     const meta = await adAccount(store, "meta", "act_1");

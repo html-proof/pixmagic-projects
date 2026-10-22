@@ -1,5 +1,5 @@
 import type { Store, Tx } from "@app/db";
-import { comparisonImported, delta, localDay, resolveCapabilities, summarize, yearBreakdown, type Comparison, type DailyMetricsRow, type DateRange } from "@app/shared";
+import { comparisonImported, delta, localDay, resolveCapabilities, summarize, yearBreakdown, type AdProvider, type Comparison, type DailyMetricsRow, type DateRange } from "@app/shared";
 import { adsConfigured } from "../adConnections.js";
 import { latestReconciliation } from "../reconcile.js";
 import { storeSalesCalculation } from "../salesCalculation.js";
@@ -33,6 +33,21 @@ export function syncProblem(error: string | null | undefined): "shop_unavailable
 }
 
 /**
+ * What the Advertising pages ask of the ad modules beyond the dashboard's question: one platform's or
+ * one account's figures, and every campaign. Figures for some of the accounts are never set against
+ * the store's whole sales (MER, share of sales, cost per order): only the accounts' own figures, and,
+ * for a whole platform, the orders Shopify credits to that platform's ads.
+ */
+export interface AdsView {
+  /** Only this platform's accounts. */
+  platform?: AdProvider;
+  /** Only this account (an ad connection's id). */
+  account?: string;
+  /** Every campaign, each with its change, rather than the 10 that spent most. */
+  allCampaigns?: boolean;
+}
+
+/**
  * Everything the dashboard shows for one store and one date range, in one transaction (`tx` from
  * `withTenant`, so RLS applies). Modules are included ONLY when the store's granted scopes enable
  * them; disabled modules come back in `capabilities` with the missing scopes so the UI can
@@ -42,9 +57,18 @@ export function syncProblem(error: string | null | undefined): "shop_unavailable
  * @app/shared/access): the others are not even computed. The route still passes the answer through
  * `redactOverview`, which also takes out the fields inside a module that need their own permission.
  *
+ * `adsView` narrows the ad modules for the Advertising pages (AdsView).
+ *
  * The caller has checked that `store` belongs to the workspace and resolved the dates.
  */
-export async function storeOverview(tx: Tx, store: Store, dates: { range: DateRange; previous: Comparison }, now = new Date(), sees: (module: string) => boolean = () => true) {
+export async function storeOverview(
+  tx: Tx,
+  store: Store,
+  dates: { range: DateRange; previous: Comparison },
+  now = new Date(),
+  sees: (module: string) => boolean = () => true,
+  adsView: AdsView = {},
+) {
   const { range, previous } = dates;
   const ws = store.workspaceId;
   const storeId = store.id;
@@ -158,19 +182,25 @@ export async function storeOverview(tx: Tx, store: Store, dates: { range: DateRa
   // second look-up. Its orders and the dates compared with go with the net sales (the ads module sets
   // them against the spend); which orders Shopify credits to each platform's ads is read when the
   // store's traffic sources are read at all (the channels capability, and the member sees them).
+  // Some of the spend (one platform, one account) is never set against the whole store's sales; one
+  // AdSense account's earnings neither.
+  const { platform, account } = adsView;
+  const someSpend = !!(platform || account);
   const adsOpts = {
     timeZone: store.timezone,
     now,
-    orders: salesModule?.current?.orders ?? null,
-    before: salesModule?.previous ? { netSales: salesModule.previous.netSales ?? null, orders: salesModule.previous.orders ?? null } : null,
-    attribution: enabled.has("channels"),
+    orders: someSpend ? null : (salesModule?.current?.orders ?? null),
+    before: !someSpend && salesModule?.previous ? { netSales: salesModule.previous.netSales ?? null, orders: salesModule.previous.orders ?? null } : null,
+    attribution: !account && enabled.has("channels"),
+    connections: account ? [account] : undefined,
+    allCampaigns: adsView.allCampaigns,
   };
-  if (sees("ads")) {
-    const ads = await adsModule(tx, scope, range, previous, store.currency, netSales, adsOpts);
+  if (sees("ads") && platform !== "adsense") {
+    const ads = await adsModule(tx, scope, range, previous, store.currency, someSpend ? null : netSales, { ...adsOpts, provider: platform });
     if (ads) modules.ads = ads;
   }
-  if (sees("adsense")) {
-    const adsense = await adsenseModule(tx, scope, range, previous, store.currency, netSales, adsOpts);
+  if (sees("adsense") && (!platform || platform === "adsense")) {
+    const adsense = await adsenseModule(tx, scope, range, previous, store.currency, account ? null : netSales, adsOpts);
     if (adsense) modules.adsense = adsense;
   }
   if (sees("ad_connections")) {

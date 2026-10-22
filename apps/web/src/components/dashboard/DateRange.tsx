@@ -22,6 +22,8 @@ export const PRESETS = [
   { id: "90d", label: "Last 90 days" },
   { id: "mtd", label: "This month" },
   { id: "lastmonth", label: "Last month" },
+  { id: "ytd", label: "This year" },
+  { id: "lastyear", label: "Last year" },
   { id: "custom", label: "Custom" },
 ] as const;
 export type PresetId = (typeof PRESETS)[number]["id"];
@@ -194,6 +196,8 @@ export const comparedWith = (shown: Shown) => {
   return `Compared with ${comparisonDates(p)}${cut}${missing}`;
 };
 
+const wholeYear = (r: DateRange) => r.from.endsWith("-01-01") && r.to.endsWith("-12-31") && r.from.slice(0, 4) === r.to.slice(0, 4);
+
 /**
  * What a change is on, short enough for under a headline number: "vs same time yesterday",
  * "vs 17 Oct", "vs previous 30 days", "vs same day last year", "vs 14 Mar 2026". Last month is
@@ -208,6 +212,8 @@ export function versusWords(shown: { range: DateRange; previous: ShownComparison
   // A finished day names the day it is compared with: "the day before" left it to be worked out,
   // next to a Shopify screen comparing with a date of its own.
   if (days === 1) return p.until ? "vs same time yesterday" : `vs ${fmtDay(p.from, { year: false })}`;
+  // Last year is compared with the whole year before, leap or not; last month with the whole month before.
+  if (wholeYear(range) && wholeYear(p)) return "vs the year before";
   if (daysBetweenInclusive(p.from, p.to) !== days) return "vs the month before";
   return `vs previous ${days} days`;
 }
@@ -439,6 +445,10 @@ export function periodWords(r: DateRangeState, shown: Shown): string {
       return "this month";
     case "lastmonth":
       return "last month";
+    case "ytd":
+      return "this year";
+    case "lastyear":
+      return "last year";
     case "custom":
       return shown ? (shown.range.from === shown.range.to ? `on ${fmtDay(shown.range.from)}` : `from ${fmtSpan(shown.range.from, shown.range.to)}`) : "in the dates you picked";
     default:

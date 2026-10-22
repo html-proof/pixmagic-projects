@@ -221,8 +221,12 @@ export interface AdsModule extends AdFigures<AdTotals> {
   byProvider: AdsProviderFigures[];
   /** Each platform's own days (missing where its accounts have none). */
   seriesByProvider: Array<{ provider: AdSpendProvider; series: AdSeriesDay[] }>;
-  /** Team & Access: "View campaigns and their performance". `complete` false: its account's figures stop before the range ends. */
-  campaigns?: Array<AdTotals & { provider: AdSpendProvider; accountId: string; campaignId: string; name: string; complete?: boolean }>;
+  /**
+   * Team & Access: "View campaigns and their performance". `complete` false: its account's figures stop
+   * before the range ends. The dashboard gets the 10 that spent most; the Advertising pages
+   * (?parts=advertising) every one, each with its `change`.
+   */
+  campaigns?: Array<AdTotals & { provider: AdSpendProvider; accountId: string; campaignId: string; name: string; complete?: boolean; change?: CampaignChange | null }>;
   /** Ad spend divided by the store's net sales (same currency, every day known); null with a demo among the accounts. */
   shareOfSales: number | null;
   /** A demo account (simulated figures) is among the counted accounts: the store's own sales are left out of this module. */
@@ -241,6 +245,18 @@ export interface AdsModule extends AdFigures<AdTotals> {
    * "View conversion attribution"; null when the sources weren't read. Absent from older answers.
    */
   sourced?: Array<{ provider: AdSpendProvider; orders: number; sales: number; salesPerSpend: number | null }> | null;
+}
+
+/**
+ * A campaign's change on the same whole days as the totals' (`compared`); null when the totals have
+ * none. A campaign that ran on no day of the dates compared with has a spend of 0 then, and no change.
+ */
+export interface CampaignChange {
+  /** The dates compared with. */
+  from: string;
+  to: string;
+  previous: { spend: number | null; linkClicks: number | null; purchases: number | null; purchaseValue: number | null; roas: number | null };
+  deltas: { spend: number | null; linkClicks: number | null; purchases: number | null; purchaseValue: number | null; roas: number | null };
 }
 
 /** adsVsSales (@app/shared/ads) with the dates compared with and the changes (salesVsSpend in the API). */

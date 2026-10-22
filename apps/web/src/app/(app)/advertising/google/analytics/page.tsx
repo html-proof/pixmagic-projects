@@ -179,8 +179,8 @@ export default function GoogleAdsAnalyticsPage() {
           {!demo && (
             <p className="text-xs text-muted">
               A real account&apos;s spend is set against your store&apos;s own sales on the{" "}
-              <Link className="text-accent underline" href="/dashboard?view=ads">
-                dashboard&apos;s Marketing panel
+              <Link className="text-accent underline" href="/advertising">
+                Advertising overview
               </Link>
               .
             </p>

@@ -83,6 +83,8 @@ export interface AdsAsk {
   now: Date;
   /** False: the comparison's days weren't read (see `daysToRead`), so nothing is compared rather than set against $0. */
   previousRead?: boolean;
+  /** Every campaign, each with its change (`campaignChanges`), rather than the 10 that spent most: the Advertising area's campaign comparison. */
+  allCampaigns?: boolean;
 }
 
 /** Orders (and their net sales, in the store's currency) that Shopify's visit record credits to one platform's ads. */
@@ -252,6 +254,35 @@ function adsBlock(f: ReturnType<typeof figures<AdDayRow, AdTotals>>) {
   };
 }
 
+/** A campaign as campaignTotals gives it. */
+type CampaignFigures = ReturnType<typeof campaignTotals>[number];
+const campaignKey = (c: Pick<CampaignFigures, "provider" | "accountId" | "campaignId">) => `${c.provider}:${c.accountId}:${c.campaignId}`;
+
+/**
+ * Each campaign's change, on the same whole days as the totals' (`compared`: both windows covered by
+ * every counted account, so a campaign with no row in one of them spent nothing then, never a day
+ * missing). Null for every campaign when the totals aren't compared.
+ */
+function campaignChanges(rows: AdDayRow[], compared: { current: DateRange; previous: DateRange } | null) {
+  if (!compared) return () => null;
+  const on = (w: DateRange) => new Map(campaignTotals(rows.filter((r) => r.day >= w.from && r.day <= w.to), Number.POSITIVE_INFINITY).map((c) => [campaignKey(c), c]));
+  const now = on(compared.current);
+  const before = on(compared.previous);
+  return (c: CampaignFigures) => {
+    const n = now.get(campaignKey(c));
+    const b = before.get(campaignKey(c));
+    const pick = (t: CampaignFigures | undefined, k: "spend" | "linkClicks" | "purchases" | "purchaseValue" | "roas") => (t ? t[k] : k === "roas" ? null : 0);
+    const keys = ["spend", "linkClicks", "purchases", "purchaseValue", "roas"] as const;
+    return {
+      /** The days each side is worked out on (`compared`'s). */
+      from: compared.previous.from,
+      to: compared.previous.to,
+      previous: Object.fromEntries(keys.map((k) => [k, pick(b, k)])) as Record<(typeof keys)[number], number | null>,
+      deltas: Object.fromEntries(keys.map((k) => [k, delta(pick(n, k), pick(b, k))])) as Record<(typeof keys)[number], number | null>,
+    };
+  };
+}
+
 /**
  * The store's own sales set against the ad spend (adsVsSales in @app/shared): Shopify's net sales and
  * orders for the same dates, the sales per unit of spend (MER) and the cost per order, and their
@@ -330,6 +361,7 @@ export function adsFigures(conns: AdConn[], rows: Array<AdDayRow & { connectionI
   // the demo against a simulated store instead).
   const demo = counted.some((a) => a.demo);
   const covering = new Set(counted.filter((a) => a.coversRange).map((a) => `${a.provider}:${a.accountId}`));
+  const changeOf = ask.allCampaigns ? campaignChanges(mine, all.compared) : null;
   return {
     currency,
     accounts,
@@ -339,8 +371,15 @@ export function adsFigures(conns: AdConn[], rows: Array<AdDayRow & { connectionI
     /** Each platform's own days, missing where that platform's accounts have none. */
     seriesByProvider: byProvider.map((p) => ({ provider: p.provider, series: adSeries(inRange.filter((r) => r.provider === p.provider), ask.range, p.coverage) })),
     byProvider,
-    /** The campaigns that spent most; `complete` false: its account's figures stop before the range ends. */
-    campaigns: campaignTotals(inRange, 10).map((c) => ({ ...c, complete: covering.has(`${c.provider}:${c.accountId}`) })),
+    /**
+     * The campaigns that spent most (every one, with `allCampaigns`, each with its `change`); `complete`
+     * false: its account's figures stop before the range ends.
+     */
+    campaigns: campaignTotals(inRange, ask.allCampaigns ? Number.POSITIVE_INFINITY : 10).map((c) => ({
+      ...c,
+      complete: covering.has(`${c.provider}:${c.accountId}`),
+      ...(changeOf ? { change: changeOf(c) } : {}),
+    })),
     /** Ad spend as a share of the store's net sales: same currency and every day known only. */
     shareOfSales: !demo && all.current && currency === ask.storeCurrency && ask.netSales !== null && ask.netSales > 0 ? all.current.spend / ask.netSales : null,
     /** The store's own sales (Shopify's net sales and orders) set against the ad spend, with the change (salesVsSpend); null with a demo among the accounts. */
@@ -463,6 +502,12 @@ async function storeTimeZone(tx: Tx, { ws, storeId }: Scope) {
 
 /** Who asks, beyond the dates: the store's zone (read when absent) and the time to work today out from. */
 export interface AdsOptions {
+  /** Only these accounts (ad connection ids), of the ones shown on the store. */
+  connections?: string[];
+  /** Only this platform's accounts (Meta Ads or Google Ads; the ads module only). */
+  provider?: AdSpendProvider;
+  /** Every campaign, each with its change (AdsAsk.allCampaigns). */
+  allCampaigns?: boolean;
   timeZone?: string;
   now?: Date;
   /** The store's orders for the range, and its net sales and orders for the dates compared with (AdsAsk). */
@@ -477,7 +522,7 @@ export async function adsModule(tx: Tx, scope: Scope, range: DateRange, previous
   const { ws, storeId } = scope;
   const conns = await tx.adConnection.findMany({
     // Spend only: AdSense accounts earn money for the store and have their own module below.
-    where: { workspaceId: ws, storeId, enabled: true, provider: { in: ["meta", "google"] } },
+    where: { workspaceId: ws, storeId, enabled: true, provider: opts.provider ?? { in: ["meta", "google"] }, ...(opts.connections ? { id: { in: opts.connections } } : {}) },
     select: SELECT,
     orderBy: [{ provider: "asc" }, { createdAt: "asc" }],
   });
@@ -492,6 +537,7 @@ export async function adsModule(tx: Tx, scope: Scope, range: DateRange, previous
     sourced: opts.attribution ? await sourcedOrders(tx, scope, range) : null,
     now: opts.now ?? new Date(),
     storeTimeZone: opts.timeZone ?? (await storeTimeZone(tx, scope)),
+    allCampaigns: opts.allCampaigns,
   };
   const read = daysToRead(conns, ask);
   const raw = await tx.adCampaignDaily.findMany({ where: { workspaceId: ws, storeId, connectionId: { in: read.ids }, OR: read.OR } });
@@ -519,7 +565,7 @@ export async function adsModule(tx: Tx, scope: Scope, range: DateRange, previous
 export async function adsenseModule(tx: Tx, scope: Scope, range: DateRange, previous: Comparison, storeCurrency: string, netSales: number | null, opts: AdsOptions = {}) {
   const { ws, storeId } = scope;
   const conns = await tx.adConnection.findMany({
-    where: { workspaceId: ws, storeId, enabled: true, provider: "adsense" },
+    where: { workspaceId: ws, storeId, enabled: true, provider: "adsense", ...(opts.connections ? { id: { in: opts.connections } } : {}) },
     select: { ...SELECT, sites: true },
     orderBy: { createdAt: "asc" },
   });
