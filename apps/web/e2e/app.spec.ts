@@ -571,7 +571,7 @@ test("a workspace installed from the App Store shows only what the listing descr
   // Settings: Shopify, without the advertising, email and WhatsApp connections.
   await page.goto("/settings/integrations");
   await expect(page.getByTestId("int-shopify")).toBeVisible();
-  for (const id of ["int-whatsapp", "int-google-ads", "int-meta-ads"]) await expect(page.getByTestId(id)).toHaveCount(0);
+  for (const id of ["int-whatsapp", "int-google", "int-meta"]) await expect(page.getByTestId(id)).toHaveCount(0);
   const settings = page.getByRole("navigation", { name: "Settings" });
   await expect(settings.getByRole("link", { name: "Shopify" })).toBeVisible();
   for (const name of ["Advertising", "Email integrations"]) await expect(settings.getByRole("link", { name })).toHaveCount(0);

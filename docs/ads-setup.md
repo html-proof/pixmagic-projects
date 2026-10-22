@@ -10,11 +10,15 @@ The same sign-ins can run through Nango's Connect UI (one window over the page, 
 ## How a merchant uses it
 
 1. The dashboard's **Advertising** section offers **Connect advertising accounts** while nothing is connected.
-2. That opens **Settings → Advertising** (`/settings/ads`, "Advertising integrations"). The same cards are also on
-   **Settings → Integrations** (`/settings/integrations`, "Connect your business"), next to the **Google Account**
-   (Continue with Google sign-in), Shopify and WhatsApp cards. Card order for ads: Google Ads, Meta Ads, Google AdSense.
-3. They press **Continue with Google Ads**, **Continue with Meta Ads** or **Continue with Google AdSense** and
-   approve on the platform's own screen. Connecting needs the integrations permission (`integrations.manage`:
+2. That opens **Settings → Advertising** (`/settings/ads`, "Advertising integrations"): a card per platform, in the
+   order Google Ads, Meta Ads, Google AdSense, with every account. **Settings → Connect your business**
+   (`/settings/integrations`) offers just three choices, **Shopify**, **Google** and **Meta**: **Connect Google** asks
+   "Which Google do you use?" (Google Ads or Google AdSense), **Connect Meta** goes straight to Facebook (after a
+   "Before you go to Facebook" note while Meta lets only its testers in), and once connected each choice links to
+   Settings → Advertising (**Manage**, or **Fix it** when an account needs attention). Signing in with Google is on
+   Settings → Security.
+3. They press **Continue with Google Ads**, **Continue with Meta Ads** or **Continue with Google AdSense** (or choose
+   on Connect your business) and approve on the platform's own screen. Connecting needs the integrations permission (`integrations.manage`:
    owners and admins, unless the owner gave it to another role) and a verified email address.
 4. When the login can see several accounts and some are new, they tick the ones that belong to this store.
    - The sign-in waits on the server, encrypted, for 15 minutes.

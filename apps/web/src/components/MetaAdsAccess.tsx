@@ -36,7 +36,7 @@ function HowToBeAdded() {
       <a className={link} href={REQUESTS_URL} target="_blank" rel="noopener noreferrer">
         developers.facebook.com → Requests
       </a>{" "}
-      and press Continue with Meta Ads again.
+      and connect Meta Ads again.
     </>
   );
 }

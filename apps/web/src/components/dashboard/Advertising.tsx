@@ -119,7 +119,8 @@ function Onboarding({ hiddenOnly, offer }: { hiddenOnly: boolean; offer: Provide
             </div>
           )}
         </div>
-        <Link className="btn-primary shrink-0 self-start sm:self-center" href="/settings/ads" data-testid="connect-advertising">
+        {/* Connecting starts from the three choices (Shopify, Google, Meta); hidden accounts are switched on where they're listed. */}
+        <Link className="btn-primary shrink-0 self-start sm:self-center" href={hiddenOnly ? "/settings/ads" : "/settings/integrations"} data-testid="connect-advertising">
           {hiddenOnly ? "Manage ad accounts" : "Connect advertising accounts"}
         </Link>
       </div>
