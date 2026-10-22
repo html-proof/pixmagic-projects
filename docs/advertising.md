@@ -3,9 +3,8 @@
 Every ad platform's figures for the store picked in the top bar, in one place: the sidebar's
 **Advertising** (`/advertising`). It shows what the dashboard already worked out for its ads and
 AdSense modules (`packages/core/src/reports/ads.ts`), arranged per platform; no figure is computed
-in the browser. Every source of an account's days (a direct connection, or Supermetrics once that
-is switched on) lands in the same tables (`ad_connections`, `ad_campaign_daily`, `adsense_daily`), so
-they show here the same way.
+in the browser. An account's days land in the same tables (`ad_connections`, `ad_campaign_daily`,
+`adsense_daily`) whichever platform they come from, so they show here the same way.
 
 | Page | Path | What it shows |
 | --- | --- | --- |

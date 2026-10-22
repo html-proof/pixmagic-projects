@@ -129,8 +129,6 @@ export interface AdAccount<P extends AdProvider = AdProvider> {
   counted: boolean;
   /** The Google Ads demo: simulated figures, shown as such and never set against the store's sales. Absent from older answers. */
   demo?: boolean;
-  /** How its figures are read: bizinsights' own sign-in or through Supermetrics (docs/supermetrics.md). Absent from older answers. */
-  source?: "direct" | "supermetrics";
   timezone?: string | null;
   /** Its days follow another time zone than the store's. */
   otherTimeZone?: boolean;

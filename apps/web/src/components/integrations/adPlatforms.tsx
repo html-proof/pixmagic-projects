@@ -64,12 +64,5 @@ export const AD_PLATFORMS: Record<AdProvider, AdPlatformInfo> = {
   },
 };
 
-/**
- * What "Connect through Supermetrics" does (docs/supermetrics.md), said before anyone is sent there: it
- * is Supermetrics' own page and the platform names Supermetrics on its screen, never bizinsights.
- */
-export const SUPERMETRICS_HOW =
-  "Supermetrics, the reporting service bizinsights can read your figures through, opens its own page where you sign in to the platform and allow it to read your reports. The platform's screen names Supermetrics, not bizinsights. Nothing in your ad accounts is changed, and you can disconnect at any time.";
-
 /** The order the cards appear in, on both pages. */
 export const AD_PLATFORM_ORDER: AdProvider[] = ["google", "meta", "adsense"];

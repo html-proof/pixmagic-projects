@@ -44,13 +44,12 @@ function activeLine(c: AdConnection, state: AdState): string | null {
 }
 
 /** How often an account's recent days are fetched again by itself, as the worker schedules it (apps/worker handlers/integrations.ts). */
-function refreshCadence(c: Pick<AdConnection, "provider" | "source">): string {
-  if (c.source === "supermetrics") return "about every 6 hours";
+function refreshCadence(c: Pick<AdConnection, "provider">): string {
   return c.provider === "google" ? "about every 3 hours" : "about every hour";
 }
 
 /** How current the stored figures are: the last day stored, against the account's own today. */
-function freshness(c: Pick<AdConnection, "syncedThrough" | "timezone" | "provider" | "source">, now = new Date()): string {
+function freshness(c: Pick<AdConnection, "syncedThrough" | "timezone" | "provider">, now = new Date()): string {
   if (!c.syncedThrough) return "Nothing stored yet";
   let today: string;
   try {
@@ -128,7 +127,6 @@ export function AdAccountRow({
   onToggle,
   onDisconnect,
   demoActions,
-  onReconnectSupermetrics,
   syncsPath,
   children,
 }: {
@@ -140,8 +138,6 @@ export function AdAccountRow({
   onDisconnect: () => void;
   /** The Google Ads demo's own actions (for those who manage integrations). */
   demoActions?: { onSync: () => void; onReset: () => void };
-  /** A connection read through Supermetrics: sign in again through Supermetrics (offered while it needs reconnecting). */
-  onReconnectSupermetrics?: () => void;
   /** Where its recent syncs are read from; none, no list. */
   syncsPath?: string | null;
   children?: ReactNode;
@@ -156,7 +152,6 @@ export function AdAccountRow({
   const accessLeft = c.provider === "meta" ? daysUntil(c.accessExpiresAt) : null;
   const permissions = grantedPermissions(c);
   const accountStatus = adAccountStatusLabel(c.accountStatus, c.provider) ?? (c.accountStatus === "active" ? "Active" : null);
-  const supermetrics = c.source === "supermetrics";
 
   const facts: Array<[string, ReactNode]> = [
     // A demo says what it is where a real account says who it belongs to.
@@ -169,7 +164,6 @@ export function AdAccountRow({
           ["Demo seed", String(c.demoSeed ?? "—")],
         ] as Array<[string, ReactNode]>)
       : []),
-    ...(c.demo ? [] : ([["Read through", supermetrics ? "Supermetrics" : `Direct connection to ${P.name}`]] as Array<[string, ReactNode]>)),
     ["Last successful sync", c.lastSyncedAt ? <span title={exact(c.lastSyncedAt)}>{fmtRelative(c.lastSyncedAt)}</span> : "Not yet"],
     ["Last attempted sync", c.lastSyncAttemptAt ? <span title={exact(c.lastSyncAttemptAt)}>{fmtRelative(c.lastSyncAttemptAt)}</span> : "Not yet"],
     ["Data through", c.syncedThrough ? `${fmtDay(c.syncedThrough)}${c.historyFrom ? ` (from ${fmtDay(c.historyFrom)})` : ""}` : "Nothing stored yet"],
@@ -239,11 +233,6 @@ export function AdAccountRow({
                 Demo data access (simulated): {DEMO_PERMISSIONS.join(" · ")}.
                 <span className="block text-xs text-muted">Fictional application permissions, not Google OAuth scopes: no Google permission was requested or granted.</span>
               </>
-            ) : supermetrics ? (
-              <>
-                Granted to Supermetrics on {c.provider === "meta" ? "Facebook's" : "Google's"} screen, not to bizinsights.
-                <span className="block text-xs text-muted">bizinsights only reads reports through bizinsights&apos; Supermetrics team; disconnecting ends that Supermetrics login.</span>
-              </>
             ) : (
               <>
                 {permissions.length ? permissions.join(" · ") : "Not listed by the platform"}
@@ -254,18 +243,13 @@ export function AdAccountRow({
         ]}
       />
 
-      {manage && onReconnectSupermetrics && c.status === "reconnect" && (
-        <button type="button" className="btn-primary h-8 px-3 text-xs" onClick={onReconnectSupermetrics} disabled={busy} aria-label={`Reconnect ${name} through Supermetrics`} data-testid="account-reconnect-supermetrics">
-          Reconnect through Supermetrics
-        </button>
-      )}
       {(c.lastError || c.accountStatusDetail) && (
         <details className="text-xs text-muted">
           <summary className="cursor-pointer select-none">
             Details<span className="sr-only"> for {name}</span>
           </summary>
           <div className="mt-1 space-y-1 break-words">
-            {c.lastError && <p>What {supermetrics ? "Supermetrics" : P.name} said: {c.lastError}</p>}
+            {c.lastError && <p>What {P.name} said: {c.lastError}</p>}
             {c.accountStatusDetail && <p>About the account: {c.accountStatusDetail}</p>}
             {c.consecutiveFailures > 1 && <p>Updates in a row that didn&apos;t work: {c.consecutiveFailures}</p>}
           </div>
@@ -338,13 +322,7 @@ export function DisconnectDialog({ c, busy, onConfirm, onCancel }: { c: AdConnec
           aren&apos;t touched. You can connect the demo again at any time.
         </p>
       )}
-      {c && P && !c.demo && c.source === "supermetrics" && (
-        <p>
-          bizinsights deletes every figure it fetched for this {P.name} account and stops reading it. It then ends the Supermetrics login it was read through, once no other
-          account here is read through the same login. Your {c.provider === "adsense" ? "site and its ads" : "ads"} keep running.
-        </p>
-      )}
-      {c && P && !c.demo && c.source !== "supermetrics" && (
+      {c && P && !c.demo && (
         <p>
           bizinsights deletes its access to this {P.name} account and every figure it fetched for it, and stops reading it. It then hands its access back to{" "}
           {c.provider === "meta" ? "Meta" : "Google"} once no other account here was connected with the same login. Your {c.provider === "adsense" ? "site and its ads" : "ads"} keep

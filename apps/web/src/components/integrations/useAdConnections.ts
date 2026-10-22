@@ -14,8 +14,6 @@ const POLL_MS = 5_000;
 function connectError(e: unknown, name: string): string {
   if (e instanceof ApiError && e.code === "rate_limited") return `You started connecting several times in the last few minutes. Wait a few minutes, then press the ${name} button again.`;
   if (e instanceof ApiError && e.code === "not_configured") return `${name} isn't switched on for bizinsights yet, so there's nothing to connect to. Please try again later.`;
-  if (e instanceof ApiError && e.code === "not_licensed") return `bizinsights' Supermetrics plan doesn't include ${name} yet, so it can't be connected through Supermetrics. It's on our side, not yours.`;
-  if (e instanceof ApiError && e.code === "supermetrics_busy") return "Supermetrics didn't answer just now. Please try again in a minute.";
   return actionError(e, `start connecting ${name}`);
 }
 
@@ -119,26 +117,6 @@ export function useAdConnections(base: string | null) {
     }
   };
 
-  /**
-   * "Connect through Supermetrics" (docs/supermetrics.md): to Supermetrics' own sign-in page for the
-   * platform. `reconnect`: a Supermetrics connection whose login ended, signed in again by the same user.
-   */
-  const connectSupermetrics = async (p: AdProvider, reconnect?: AdConnection) => {
-    if (!base) return;
-    begin(`supermetrics-${p}`);
-    setLeaving(p);
-    setGone((s) => new Map([...s].filter(([x]) => x !== p)));
-    try {
-      const { url } = await api<{ url: string }>(`${base}/ads/${p}/supermetrics/connect`, { method: "POST", body: reconnect ? { reconnect: reconnect.id } : {} });
-      leavingForSignIn(p);
-      window.location.assign(url);
-    } catch (e) {
-      setLeaving(null);
-      setBusy(null);
-      setNote({ kind: "error", text: connectError(e, `${AD_PLATFORMS[p].name} through Supermetrics`) });
-    }
-  };
-
   const refresh = async (p?: AdProvider) => {
     if (!base) return;
     begin(`sync-${p ?? "all"}`);
@@ -180,7 +158,7 @@ export function useAdConnections(base: string | null) {
         if (e instanceof ApiError && e.status === 404) return { ok: true as const, revoked: undefined };
         throw e;
       });
-      const after = revokeNote(c.provider, r.revoked, c.source);
+      const after = revokeNote(c.provider, r.revoked);
       const text = `${accountLabel(c)} is disconnected: its access and the figures fetched for it are deleted from bizinsights.`;
       // The note takes the focus: the row whose Disconnect button had it goes with the reload.
       setNote(
@@ -264,9 +242,6 @@ export function useAdConnections(base: string | null) {
     backFromMeta,
     setBackFromMeta,
     connect,
-    connectSupermetrics,
-    /** Which platforms can be connected through Supermetrics on this server. */
-    supermetrics: (p: AdProvider) => !!ads.data?.supermetrics?.[p],
     refresh,
     toggle,
     confirming,
