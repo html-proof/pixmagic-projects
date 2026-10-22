@@ -112,8 +112,12 @@ async function approvedTemplate(store: Store, body: string, category: "transacti
   return template;
 }
 
+// No quiet hours unless the test sets them: a rule's default (21:00-09:00 in the customer's zone)
+// would hold the text whenever CI happens to run inside that window.
+const ANY_HOUR = { quietStart: 0, quietEnd: 0 };
+
 async function activeRule(store: Store, input: Record<string, unknown>) {
-  const rule = await createRule(store, { dryRun: false, ...input }, actor);
+  const rule = await createRule(store, { dryRun: false, ...ANY_HOUR, ...input }, actor);
   await ruleAction(store, rule.id, "submit", actor);
   return ruleAction(store, rule.id, "approve", actor);
 }
@@ -522,7 +526,7 @@ describe("the send path", () => {
   it("records a dry run (with its text) instead of sending, for a rule in dry-run mode and while the platform isn't live", async () => {
     const store = await setupStore();
     const t = await approvedTemplate(store, "Order {{order_number}} confirmed.");
-    const rule = await createRule(store, { name: "Confirm", trigger: "order_created", templateId: t.id }, actor);
+    const rule = await createRule(store, { name: "Confirm", trigger: "order_created", templateId: t.id, ...ANY_HOUR }, actor);
     await ruleAction(store, rule.id, "submit", actor);
     await ruleAction(store, rule.id, "approve", actor);
     const o = order();
