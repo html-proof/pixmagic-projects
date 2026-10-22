@@ -1027,15 +1027,58 @@ model AdConnection {
    */
   isDemo               Boolean   @default(false) @map("is_demo")
   demoSeed             Int?      @map("demo_seed")
+  /**
+   * How the figures are read: "direct" (bizinsights' own sign-in with the platform; the token is the
+   * platform's) or "supermetrics" (through bizinsights' Supermetrics team, which the merchant signed in
+   * to the platform through a Supermetrics login link: the token is the Supermetrics login's data
+   * source username, and sourceLoginId the login's id; docs/supermetrics.md). Columns marked @ignore
+   * exist in the database (migration 20261022120000) but not yet in the client: the workflow migrates
+   * after the new code is live, so code that reads them can only land once the migration has run.
+   * The next change removes @ignore.
+   */
+  source               String    @default("direct") @ignore
+  sourceLoginId        String?   @map("source_login_id") @ignore
+  /** When a sync of this account last started, whatever came of it (lastSyncedAt is the last that worked). */
+  lastSyncAttemptAt    DateTime? @map("last_sync_attempt_at") @ignore
   createdAt            DateTime  @default(now()) @map("created_at")
   updatedAt            DateTime  @updatedAt @map("updated_at")
   campaignDays         AdCampaignDaily[]
   adsenseDays          AdsenseDaily[]
+  syncRuns             AdSyncRun[]
 
   @@unique([storeId, provider, accountId])
   @@index([workspaceId])
   @@index([externalUserId])
   @@map("ad_connections")
+}
+
+// Each sync of one ad account, as it ended: when, what it was asked to fetch and by whom, and what came
+// of it. The settings cards show the last few; kept 90 days (pruned by the daily sweep).
+model AdSyncRun {
+  id           String   @id @default(cuid())
+  workspaceId  String   @map("workspace_id")
+  storeId      String   @map("store_id")
+  connectionId String   @map("connection_id")
+  provider     String
+  // direct | supermetrics (ad_connections.source when it ran)
+  source       String
+  // request | schedule | history (AdsSyncTrigger)
+  trigger      String
+  /** The days fetched (the account's own), when the sync got that far. */
+  since        String?
+  until        String?
+  // synced | skipped | failed
+  outcome      String
+  rows         Int      @default(0)
+  /** A skipped sync's reason, or a failed one's error code (AD_ERROR_CODES in @app/shared/ads). */
+  reason       String?
+  startedAt    DateTime @map("started_at")
+  finishedAt   DateTime @map("finished_at")
+  connection   AdConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@index([connectionId, startedAt])
+  @@index([workspaceId])
+  @@map("ad_sync_runs")
 }
 
 // What an ad platform reports for one campaign on one day (the ad account's own calendar day).
