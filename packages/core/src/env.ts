@@ -151,27 +151,6 @@ const schema = z.object({
    */
   GOOGLE_ADS_DEMO_ENABLED: z.string().optional().default(""),
   /**
-   * Supermetrics (docs/supermetrics.md): the API key of bizinsights' Supermetrics team, a secret (Secrets
-   * Manager, put-secrets.mjs --set SUPERMETRICS_API_KEY). With it, the Meta, Google Ads and AdSense cards
-   * offer "Connect through Supermetrics": the merchant signs in to the platform on Supermetrics' own
-   * login-link page, and bizinsights reads the figures through Supermetrics' API. Empty: not offered.
-   */
-  SUPERMETRICS_API_KEY: z.string().optional().default(""),
-  /** The API's base URL (Supermetrics' Data and Management APIs share it). */
-  SUPERMETRICS_API_URL: z.string().default("https://api.supermetrics.com"),
-  /**
-   * The platforms offered through Supermetrics, comma-separated (meta, google, adsense): the data sources
-   * the team's licence includes. One the licence turns out not to include is refused when a merchant
-   * connects (the API's LICENSE_ACCESS_DATA_SOURCE), so list only what was bought.
-   */
-  SUPERMETRICS_SOURCES: z.string().optional().default("meta,google,adsense"),
-  /**
-   * How many days back the team's licence lets a query reach (Supermetrics licences limit historical
-   * days: LICENSE_HISTORICAL_RANGE_EXCEEDED). Unset: as far as each platform reports and bizinsights
-   * walks back (25 months). Set it to the licence's figure so history isn't asked beyond it.
-   */
-  SUPERMETRICS_HISTORY_DAYS: z.preprocess((v) => (v === "" ? undefined : v), z.coerce.number().int().positive().optional()),
-  /**
    * Nango (docs/nango.md): the secret API key of bizinsights' Nango environment, a secret (Secrets
    * Manager, put-secrets.mjs --set NANGO_SECRET_KEY). With it, "Continue with Meta Ads" / "Continue with
    * Google AdSense" open Nango's Connect UI for the platforms NANGO_PROVIDERS lists: the merchant

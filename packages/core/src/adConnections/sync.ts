@@ -21,24 +21,19 @@ import {
   metaAccountHealth,
   metaCampaignDays,
   metaGrantedPermissions,
-  supermetricsAccountHealth,
-  supermetricsAdsenseDays,
-  supermetricsGoogleDays,
-  supermetricsMetaDays,
   type AdAccountHealth,
   type AdFailure,
   type MetaConfig,
 } from "../ads.js";
 import { googleAdsSource, isDemoConnection } from "../ads/googleAdsSource.js";
 import type { Coord } from "../coord.js";
-import { env } from "../env.js";
 import { logger } from "../logger.js";
 import type { Producer, Queues } from "../queues.js";
 import type { FetchLike } from "../shopify.js";
 import { resolveAdAlerts } from "./alerts.js";
 import { countGoogleAdsOperations, countingGoogleAdsFetch, googleAdsBudget, googleAdsBudgetAllows, googleAdsPaused, pauseGoogleAds } from "./budget.js";
-import { AD_PROVIDER_NAME, adsenseConfig, googleClient, metaConfig, supermetricsConfig } from "./config.js";
-import { accessTokenAndPerson, adAccessToken, isSupermetricsConnection, learnAdPerson, supermetricsCredential } from "./credentials.js";
+import { AD_PROVIDER_NAME, adsenseConfig, googleClient, metaConfig } from "./config.js";
+import { accessTokenAndPerson, adAccessToken, learnAdPerson } from "./credentials.js";
 import { recordAdFailure } from "./status.js";
 
 /** How far back a first connection fetches before its history is walked back. */
@@ -65,12 +60,7 @@ const ADS_HISTORY_SPACING_S = 120;
 /** While a history window is on its way nobody else queues one; past this the chain is taken as broken. */
 export const ADS_HISTORY_LEASE_MS = 30 * 60_000;
 
-/** How far back an account can be read: the platform's limit, and through Supermetrics also its licence's (SUPERMETRICS_HISTORY_DAYS). */
-const maxLookback = (conn: { provider: string; source?: string | null }) => {
-  const platform = ADS_MAX_LOOKBACK_DAYS[conn.provider as AdProvider] ?? ADS_MAX_LOOKBACK_DAYS.google;
-  const licence = conn.source === "supermetrics" ? env().SUPERMETRICS_HISTORY_DAYS : undefined;
-  return licence ? Math.min(platform, licence) : platform;
-};
+const maxLookback = (provider: string) => ADS_MAX_LOOKBACK_DAYS[provider as AdProvider] ?? ADS_MAX_LOOKBACK_DAYS.google;
 const later = (a: string, b: string) => (a > b ? a : b);
 const earlier = (a: string, b: string) => (a < b ? a : b);
 
@@ -196,13 +186,13 @@ type Coverage = Pick<AdConnection, "historyFrom" | "syncedThrough">;
  * longer reports are left out. Null: nothing left to fetch.
  */
 export function planAdSyncWindow(
-  conn: Pick<AdConnection, "provider" | "timezone"> & { source?: string | null } & Coverage,
+  conn: Pick<AdConnection, "provider" | "timezone"> & Coverage,
   since: string,
   until: string,
   trigger: AdsSyncTrigger,
   now = new Date(),
 ): { since: string; until: string; rest: { since: string; until: string } | null } | null {
-  const oldest = addDays(adToday(conn, now), -(maxLookback(conn) - 1));
+  const oldest = addDays(adToday(conn, now), -(maxLookback(conn.provider) - 1));
   let s = later(since, oldest);
   const u = until;
   if (u < s) return null;
@@ -230,13 +220,13 @@ export function mergeCoverage(cov: Coverage, since: string, until: string): { hi
 }
 
 /** Where the history walk stops: 25 months back, or as far as the platform still reports. */
-export function historyTarget(conn: Pick<AdConnection, "provider" | "timezone"> & { source?: string | null }, now = new Date()): string {
+export function historyTarget(conn: Pick<AdConnection, "provider" | "timezone">, now = new Date()): string {
   const today = adToday(conn, now);
-  return later(addDays(today, -(ADS_HISTORY_DAYS - 1)), addDays(today, -(maxLookback(conn) - 1)));
+  return later(addDays(today, -(ADS_HISTORY_DAYS - 1)), addDays(today, -(maxLookback(conn.provider) - 1)));
 }
 
 /** The next window of the walk back (the 90 days before history_from), or null once history reaches far enough. */
-export function nextHistoryWindow(conn: Pick<AdConnection, "provider" | "timezone"> & { source?: string | null } & Coverage, now = new Date()): { since: string; until: string } | null {
+export function nextHistoryWindow(conn: Pick<AdConnection, "provider" | "timezone"> & Coverage, now = new Date()): { since: string; until: string } | null {
   if (!conn.historyFrom || !conn.syncedThrough) return null;
   const target = historyTarget(conn, now);
   if (conn.historyFrom <= target) return null;
@@ -273,29 +263,8 @@ async function metaPermissionProblem(cfg: MetaConfig, token: string, err: unknow
 
 const notSetUp = (provider: string) => new AdsApiError(`${AD_PROVIDER_NAME[provider as AdProvider] ?? provider} isn't set up on this server`, 503, undefined, "not_configured");
 
-const supermetricsNotSetUp = () => new AdsApiError("Supermetrics isn't set up on this server", 503, undefined, "not_configured");
-
-/**
- * A connection read through Supermetrics (docs/supermetrics.md): [since, until] from Supermetrics' API.
- * Meta's and Google's rows say the account's currency and time zone (and Meta's its status): kept
- * before the rows are, so the rows are stored in it.
- */
-async function fetchAndStoreSupermetrics(conn: AdConnection, since: string, until: string, fetchImpl?: FetchLike): Promise<number | null> {
-  const cfg = supermetricsConfig(fetchImpl);
-  if (!cfg) throw supermetricsNotSetUp();
-  const cred = supermetricsCredential(conn);
-  if (conn.provider === "adsense") {
-    const r = await supermetricsAdsenseDays(cfg, cred, since, until, conn.currency);
-    return storeAdsenseDays(conn, since, until, r.rows, r.currency);
-  }
-  const days = conn.provider === "meta" ? await supermetricsMetaDays(cfg, cred, since, until) : await supermetricsGoogleDays(cfg, cred, since, until);
-  await storeHealth(conn, days.account);
-  return storeAdDays({ ...conn, currency: days.account.currency?.slice(0, 10) ?? conn.currency }, since, until, days.rows);
-}
-
 /** Fetch [since, until] and store it. Null when the connection was deleted meanwhile. */
 async function fetchAndStore(conn: AdConnection, token: string, since: string, until: string, fetchImpl?: FetchLike): Promise<number | null> {
-  if (isSupermetricsConnection(conn)) return fetchAndStoreSupermetrics(conn, since, until, fetchImpl);
   if (conn.provider === "meta") {
     const cfg = metaConfig(fetchImpl);
     if (!cfg) throw notSetUp("meta");
@@ -323,13 +292,6 @@ async function fetchAndStore(conn: AdConnection, token: string, since: string, u
 
 /** The account's health at the platform now (its status, name, currency, time zone): one cheap call. */
 async function readAccountHealth(conn: AdConnection, token: string, fetchImpl?: FetchLike): Promise<AdAccountHealth> {
-  if (isSupermetricsConnection(conn)) {
-    // Through Supermetrics: whether its login still works and still reaches the account (no query spent).
-    const cfg = supermetricsConfig(fetchImpl);
-    if (!cfg) throw supermetricsNotSetUp();
-    if (!conn.sourceLoginId) throw new AdsAuthError("The Supermetrics connection names no login");
-    return supermetricsAccountHealth(cfg, conn.provider as AdProvider, conn.sourceLoginId, supermetricsCredential(conn).dsAccount);
-  }
   if (conn.provider === "meta") {
     const cfg = metaConfig(fetchImpl);
     if (!cfg) throw notSetUp("meta");
@@ -406,9 +368,8 @@ export async function syncAdConnection(connectionId: string, since: string, unti
     return { skipped: true, reason: conn.enabled ? "no_token" : "hidden" };
   }
   const trigger = opts.trigger ?? "request";
-  // A demo spends none of Google's operations, nor does an account read through Supermetrics (Supermetrics
-  // calls Google with its own): the daily allowance and its pauses don't apply to them.
-  const google = conn.provider === "google" && !isDemoConnection(conn) && !isSupermetricsConnection(conn);
+  // A demo spends none of Google's operations: the daily allowance and its pauses don't apply to it.
+  const google = conn.provider === "google" && !isDemoConnection(conn);
   if (google && opts.coord) {
     if (await googleAdsPaused(opts.coord)) {
       // Someone asked: say why nothing changed. The schedule simply comes back later.
@@ -486,9 +447,8 @@ async function syncWindow(conn: AdConnection, since: string, until: string, trig
   if (trigger === "history" && conn.historyFrom && since >= conn.historyFrom) return { skipped: true, reason: "nothing" };
   const w = planAdSyncWindow(conn, since, until, trigger);
   if (!w) return { skipped: true, reason: "nothing" };
-  // A demo holds no token and no person: nothing to refresh, nobody to look up. Nor does an account read
-  // through Supermetrics, which reads with its sealed credential (fetchAndStoreSupermetrics).
-  const { token, person } = isDemoConnection(conn) || isSupermetricsConnection(conn) ? { token: "", person: null } : await accessTokenAndPerson(conn, fetchImpl);
+  // A demo holds no token and no person: nothing to refresh, nobody to look up.
+  const { token, person } = isDemoConnection(conn) ? { token: "", person: null } : await accessTokenAndPerson(conn, fetchImpl);
   const stored = await fetchAndStore(conn, token, w.since, w.until, fetchImpl);
   if (stored === null) return { skipped: true, reason: "gone" };
 
@@ -567,7 +527,7 @@ async function healthCheck(conn: AdConnection, fetchImpl: FetchLike | undefined,
   const endRequest = () => systemDb.adConnection.updateMany({ where: { id: conn.id, syncRequestedAt: { not: null } }, data: { syncRequestedAt: null } });
   let health: AdAccountHealth;
   try {
-    health = await readAccountHealth(conn, isDemoConnection(conn) || isSupermetricsConnection(conn) ? "" : await adAccessToken(conn, fetchImpl), fetchImpl);
+    health = await readAccountHealth(conn, isDemoConnection(conn) ? "" : await adAccessToken(conn, fetchImpl), fetchImpl);
   } catch (err) {
     const failure = classifyAdError(err);
     // Only access that ended is news here; anything else waits for tomorrow's look.
@@ -649,9 +609,9 @@ export async function enqueueAdSync(
  * platforms revise recent days) to today, or the first sync's 90 days when nothing is stored yet;
  * never further back than the platform reports.
  */
-export function catchUpWindow(conn: Pick<AdConnection, "provider" | "timezone"> & { source?: string | null } & Coverage, now = new Date()): { since: string; until: string } {
+export function catchUpWindow(conn: Pick<AdConnection, "provider" | "timezone"> & Coverage, now = new Date()): { since: string; until: string } {
   const today = adToday(conn, now);
-  const oldest = addDays(today, -(maxLookback(conn) - 1));
+  const oldest = addDays(today, -(maxLookback(conn.provider) - 1));
   const from = conn.historyFrom && conn.syncedThrough ? addDays(conn.syncedThrough, -ADS_RECENT_DAYS) : addDays(today, -(ADS_BACKFILL_DAYS - 1));
   return { since: earlier(later(from, oldest), today), until: today };
 }

@@ -45,10 +45,8 @@ export default function AdAccountsPage() {
     const code = q.get("error");
     const choose = q.get("choose");
     const provider = q.get("provider");
-    // Back from Supermetrics' own sign-in page (routes/adsSupermetrics.ts), not the platform's.
-    const supermetrics = q.get("via") === "supermetrics";
-    if (code) setError(callbackErrorMessage(code, provider, supermetrics));
-    if (code && WRONG_LOGIN.has(code) && isAdProvider(provider) && !supermetrics) setRetry(provider);
+    if (code) setError(callbackErrorMessage(code, provider));
+    if (code && WRONG_LOGIN.has(code) && isAdProvider(provider)) setRetry(provider);
     // It becomes part of an API path: only ever the nonce the callback put there.
     if (choose && /^[A-Za-z0-9_-]{16,64}$/.test(choose)) setPick(choose);
     if (code || choose) signInFinished();
@@ -165,11 +163,6 @@ export default function AdAccountsPage() {
           leaving={ads.leaving === p}
           showMetaNote={!ads.backFromMeta}
           onConnect={() => connect(p)}
-          onConnectSupermetrics={(c) => {
-            setError(null);
-            setRetry(null);
-            void ads.connectSupermetrics(p, c);
-          }}
           base={base}
           onRefresh={() => void ads.refresh(p)}
           onToggle={(c) => void ads.toggle(c)}

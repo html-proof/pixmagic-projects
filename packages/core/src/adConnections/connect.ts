@@ -17,10 +17,8 @@ import {
   accessTokenAndPerson,
   encryptAdTokens,
   encryptNangoCredential,
-  encryptSupermetricsCredential,
   forgetNangoToken,
   isNangoConnection,
-  isSupermetricsConnection,
   learnAdPerson,
   nangoCredential,
   nangoTokenFor,
@@ -29,7 +27,6 @@ import {
   type NangoCredential,
 } from "./credentials.js";
 import { recordAdFailure } from "./status.js";
-import { revokeSupermetricsLoginIfUnused } from "./supermetrics.js";
 
 export const ADS_PENDING_TTL_S = 900;
 
@@ -54,14 +51,12 @@ export interface PendingAdConnect {
    */
   reusedRefreshToken?: boolean;
   /**
-   * Supermetrics (docs/supermetrics.md): the login the accounts are read through. The "access token"
-   * held is then the login's username, and each account's Supermetrics id is on the account.
    * Nango (docs/nango.md, `source` "nango"): the Nango connection's id; the "access token" held is that
    * id too, and `nangoIntegrationKey` its integration.
    */
   sourceLoginId?: string;
-  /** How the accounts are read once connected; absent: "supermetrics" with a sourceLoginId (choices held before Nango), else "direct". */
-  source?: "supermetrics" | "nango";
+  /** How the accounts are read once connected; absent: "direct". */
+  source?: "nango";
   nangoIntegrationKey?: string;
   /** Epoch ms after which the choice is gone. */
   expiresAt: number;
@@ -92,7 +87,7 @@ export async function holdPendingAdConnect(
     truncated?: boolean;
     reusedRefreshToken?: boolean;
     sourceLoginId?: string;
-    source?: "supermetrics" | "nango";
+    source?: "nango";
     nangoIntegrationKey?: string;
   },
 ) {
@@ -183,7 +178,7 @@ async function personHasPending(coord: Coord, provider: string, externalUserId: 
 }
 
 /** How a pending choice's accounts are read once connected. */
-export const pendingSource = (p: Pick<PendingAdConnect, "source" | "sourceLoginId">): "direct" | "supermetrics" | "nango" => p.source ?? (p.sourceLoginId ? "supermetrics" : "direct");
+export const pendingSource = (p: Pick<PendingAdConnect, "source">): "direct" | "nango" => p.source ?? "direct";
 
 /** The sign-in's tokens back from a pending choice. */
 export function pendingTokens(p: PendingAdConnect): TokenSet {
@@ -201,12 +196,10 @@ export function pendingTokens(p: PendingAdConnect): TokenSet {
  * before get the new token and come back from "reconnect" / "permission" / "error", keeping their
  * on/off choice and their stored days. Their alerts are closed: connecting again is the fix.
  *
- * With `sourceLoginId` the accounts are read through that Supermetrics login (`tokens.accessToken` is
- * its username): each row holds its own sealed credential (encryptSupermetricsCredential). With `source`
- * "nango", `sourceLoginId` is the Nango connection the platform was authorized through: every row of the
- * sign-in holds the one sealed credential naming it (encryptNangoCredential). An account connected
- * before another way (directly, through Supermetrics, or another Nango connection) keeps its row and
- * its stored days, and the credential it held is given back unless something else still uses it.
+ * With `source` "nango", `sourceLoginId` is the Nango connection the platform was authorized through:
+ * every row of the sign-in holds the one sealed credential naming it (encryptNangoCredential). An
+ * account connected before another way (directly, or through another Nango connection) keeps its row
+ * and its stored days, and the credential it held is given back unless something else still uses it.
  */
 export async function saveAdConnections(input: {
   workspaceId: string;
@@ -217,48 +210,34 @@ export async function saveAdConnections(input: {
   userId: string | null;
   /** The platform's id for the person who signed in (see externalUserId on the model). */
   externalUserId?: string | null;
-  /** Supermetrics: the login the accounts are read through; Nango: the connection. */
+  /** Nango: the connection the accounts are read through. */
   sourceLoginId?: string | null;
-  /** Default: "supermetrics" with a sourceLoginId, else "direct". */
-  source?: "direct" | "supermetrics" | "nango";
+  /** Default: "direct". */
+  source?: "direct" | "nango";
   /** Nango: the integration the connection belongs to. */
   nangoIntegrationKey?: string | null;
   /** For giving back a credential an account no longer uses. */
   fetchImpl?: FetchLike;
 }): Promise<Array<AdConnection & { isNew: boolean }>> {
-  const source = input.source ?? (input.sourceLoginId ? "supermetrics" : "direct");
-  const supermetrics = source === "supermetrics";
-  if (source !== "direct" && !input.sourceLoginId) throw new Error(`A ${source} connection needs its login or connection id`);
+  const source = input.source ?? "direct";
+  if (source === "nango" && !input.sourceLoginId) throw new Error("A Nango connection needs its connection id");
   if (source === "nango" && !input.nangoIntegrationKey) throw new Error("A Nango connection needs its integration");
-  const direct = supermetrics
-    ? null
-    : {
-        ...(source === "nango"
-          ? encryptNangoCredential(input.storeId, input.provider, { connectionId: input.sourceLoginId!, integrationKey: input.nangoIntegrationKey! }, input.tokens.expiresAt)
-          : encryptAdTokens(input.storeId, input.provider, input.tokens)),
-        // Who granted it belongs to the token stored next to it: an unknown signer never inherits the previous one
-        // (a disconnect then answers "unknown_person" instead of revoking someone else's grant).
-        externalUserId: input.externalUserId ?? null,
-        grantedScopes: (input.tokens.grantedScopes ?? []).slice(0, 50),
-        source,
-        sourceLoginId: source === "nango" ? input.sourceLoginId! : null,
-      };
+  const tokens = {
+    ...(source === "nango"
+      ? encryptNangoCredential(input.storeId, input.provider, { connectionId: input.sourceLoginId!, integrationKey: input.nangoIntegrationKey! }, input.tokens.expiresAt)
+      : encryptAdTokens(input.storeId, input.provider, input.tokens)),
+    // Who granted it belongs to the token stored next to it: an unknown signer never inherits the previous one
+    // (a disconnect then answers "unknown_person" instead of revoking someone else's grant).
+    externalUserId: input.externalUserId ?? null,
+    grantedScopes: (input.tokens.grantedScopes ?? []).slice(0, 50),
+    source,
+    sourceLoginId: source === "nango" ? input.sourceLoginId! : null,
+  };
   const out: Array<AdConnection & { isNew: boolean }> = [];
   const replaced: AdConnection[] = [];
   for (const a of input.accounts) {
     const where = { storeId_provider_accountId: { storeId: input.storeId, provider: input.provider, accountId: a.accountId } };
     const before = await systemDb.adConnection.findUnique({ where });
-    const tokens = direct ?? {
-      ...encryptSupermetricsCredential(input.storeId, input.provider, {
-        dsUser: input.tokens.accessToken,
-        dsAccount: a.sourceAccountId ?? a.accountId,
-        ...(input.provider === "adsense" ? { adsenseCurrency: adsenseCurrencyFor(before) } : {}),
-      }),
-      externalUserId: null,
-      grantedScopes: [],
-      source: "supermetrics",
-      sourceLoginId: input.sourceLoginId!,
-    };
     // The credential it held before, now unused by this row: given back below unless something else uses it.
     // A Nango row whose credential was cleared (its person left) still names its connection, which goes too.
     const held = !!before && (!!before.accessTokenEnc || (isNangoConnection(before) && !!before.sourceLoginId));
@@ -308,17 +287,6 @@ export async function saveAdConnections(input: {
     logger.info({ connectionId: old.id, from: old.source, to: source, outcome }, "ad connection now reads another way; its old access released");
   }
   return out;
-}
-
-/**
- * Which currency an AdSense account read through Supermetrics keeps its earnings in: its own when it
- * was read before in a currency bizinsights knows (from AdSense directly, which names it; its stored
- * days are in it), else Supermetrics' US dollars (Supermetrics names no currency for an AdSense
- * account; ads/supermetrics.ts admMoney). A row read through Supermetrics before stays as it was: its
- * currency is USD exactly when it was read in dollars, and reading a USD account in dollars is the same.
- */
-function adsenseCurrencyFor(before: AdConnection | null): "account" | "usd" {
-  return before?.currency && (before.source !== "supermetrics" || before.currency !== "USD") ? "account" : "usd";
 }
 
 /**
@@ -401,7 +369,6 @@ async function resolvePerson(conn: AdConnection, fetchImpl?: FetchLike): Promise
  * the grant, to be safe: revoking at Google ends every connection on it).
  */
 async function grantStillUsed(provider: string, externalUserId: string, exceptId: string | null, fetchImpl?: FetchLike): Promise<boolean> {
-  // Only bizinsights' own sign-ins hold a grant to bizinsights' apps: a Supermetrics row reads with Supermetrics' own.
   // A Nango row's grant is to bizinsights' own app too (Nango only keeps the token): revoking the person's grant ends it.
   const family = { provider: { in: grantFamily(provider) }, source: { in: GRANT_SOURCES }, ...(exceptId ? { NOT: { id: exceptId } } : {}), ...holdsGrant };
   if ((await systemDb.adConnection.count({ where: { ...family, externalUserId } })) > 0) return true;
@@ -451,8 +418,6 @@ export async function revokeAdAccessIfUnused(
   opts: { rowKept?: boolean } = {},
 ): Promise<RevokeOutcome> {
   await resolveAdAlerts(conn).catch((err: unknown) => logger.warn({ err, connectionId: conn.id }, "ad alerts not resolved"));
-  // Read through Supermetrics: its login goes back once no other connection reads with it.
-  if (isSupermetricsConnection(conn)) return revokeSupermetricsLoginIfUnused(conn.sourceLoginId, fetchImpl, conn.id);
   const exceptId = opts.rowKept ? null : conn.id;
   // Authorized through Nango: the grant, then the Nango connection, once no other connection uses them.
   if (isNangoConnection(conn)) {
@@ -586,14 +551,6 @@ export async function revokeReleasedAdGrants(grants: ReleasedAdGrant[], fetchImp
   const decided = new Map<string, RevokeOutcome>();
   for (const { first, ids, tokens } of grants) {
     try {
-      // Read through Supermetrics: its login goes back once no connection holds its credential (each login once).
-      if (isSupermetricsConnection(first)) {
-        const key = `supermetrics:${first.sourceLoginId ?? ""}`;
-        const outcome = decided.get(key) ?? (await revokeSupermetricsLoginIfUnused(first.sourceLoginId, f));
-        decided.set(key, outcome);
-        outcomes.push(outcome);
-        continue;
-      }
       // Authorized through Nango: `first` still holds the sealed credential (its rows' are deleted now).
       if (isNangoConnection(first)) {
         const cred = nangoCredentialOf(first);

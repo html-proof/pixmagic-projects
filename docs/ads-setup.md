@@ -5,7 +5,7 @@ is done and what is still open at Google, Meta and AWS is [integrations-readines
 paste-ready review material is [ads-review-packs.md](ads-review-packs.md). A simulated Google Ads account for development,
 demonstrations and tests, which needs none of what follows and never stands in for it: [ads-demo.md](ads-demo.md).
 The same sign-ins can run through Nango's Connect UI (one window over the page, tokens kept by Nango):
-[nango.md](nango.md); or through Supermetrics' own apps: [supermetrics.md](supermetrics.md).
+[nango.md](nango.md).
 
 ## How a merchant uses it
 

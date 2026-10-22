@@ -38,20 +38,13 @@ const ERRORS: Record<string, string> = {
   not_approved_meta: "Meta is still reviewing bizinsights for this, so nothing was connected. This is on our side, not yours; please try again later.",
   not_configured: "This platform isn't switched on for bizinsights yet, so nothing was connected. It's on our side: please try again later.",
   rate_limited: "You started connecting several times in the last few minutes. Wait a few minutes, then press the button again.",
-  // Back from Supermetrics' sign-in page (apps/api/src/routes/adsSupermetrics.ts): `<code>_supermetrics` wins over the rest.
-  denied_supermetrics: "The sign-in on Supermetrics' page wasn't finished, so nothing was connected. Press Connect through Supermetrics again when you're ready.",
-  no_accounts_supermetrics:
-    "That login can't reach any account Supermetrics can report on, so nothing was connected. Sign in with the login your ads run on (or ask the account's owner to give it access), then press Connect through Supermetrics again.",
-  not_configured_supermetrics: "Connecting through Supermetrics isn't available right now, so nothing was connected. It's on our side, not yours: please try again later.",
-  exchange_failed_supermetrics: "Supermetrics didn't confirm the sign-in. Nothing was connected; please try again in a moment.",
-  temporarily_unavailable_supermetrics: "Supermetrics was slow to answer, or something went wrong on our side. Nothing was connected; please try again in a minute.",
 };
 
 /** Only the wording above: the code comes from the address bar ("constructor" is not a message). */
 const said = (key: string) => (Object.hasOwn(ERRORS, key) ? ERRORS[key] : undefined);
 
-export function callbackErrorMessage(code: string, provider: string | null, supermetrics = false): string {
-  return (supermetrics ? said(`${code}_supermetrics`) : undefined) ?? (provider ? said(`${code}_${provider}`) : undefined) ?? said(code) ?? "Connecting didn't work. Please try again.";
+export function callbackErrorMessage(code: string, provider: string | null): string {
+  return (provider ? said(`${code}_${provider}`) : undefined) ?? said(code) ?? "Connecting didn't work. Please try again.";
 }
 
 /**
