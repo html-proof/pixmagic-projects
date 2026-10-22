@@ -274,7 +274,7 @@ export function AdAccountRow({
       {syncsPath && !c.demo && <RecentSyncs path={syncsPath} name={name} />}
       {c.demo && (
         <div className="flex flex-wrap items-center gap-2" data-testid="demo-actions">
-          <Link className="btn-primary h-8 px-3 text-xs" href="/ads/google">
+          <Link className="btn-primary h-8 px-3 text-xs" href="/advertising/google/analytics">
             Open demo dashboard
           </Link>
           {manage && demoActions && (

@@ -1,5 +1,6 @@
 "use client";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { CircleDollarSign, Gem, Package, ShoppingCart } from "lucide-react";
 import { useApp, canManage, StoresPending } from "@/components/AppContext";
@@ -20,7 +21,7 @@ import { api, ApiError, apiHref, fmtMoney, fmtNum, friendlyError, isTransient, u
 import { scopeList } from "@app/shared/capabilities";
 import { hasFullAccess, ROLE_INFO } from "@app/shared/access";
 import { NoAccessAssigned } from "@/components/team/AccessStates";
-import { hasDashboardAccess, seesTopic, TOPIC_EXPORT } from "@/lib/access";
+import { hasDashboardAccess, seesTopic, TOPIC_EXPORT, TOPIC_PAGE } from "@/lib/access";
 
 /**
  * Set just before we hand the browser to Shopify's optional-scope screen, and read when the
@@ -154,6 +155,16 @@ export default function DashboardPage() {
   const dates = useDateRange(store?.timezone ?? "UTC");
   const detail = useDetailView();
   const asking = dates.asking;
+  // Advertising has its own pages now: ?view=ads (an old link, a bookmark, the health check's row)
+  // opens them, with the dates on screen.
+  const router = useRouter();
+  const page = detail.view ? TOPIC_PAGE[detail.view] : undefined;
+  useEffect(() => {
+    if (!page) return;
+    const url = new URL(window.location.href);
+    url.searchParams.delete("view");
+    router.replace(`${page}${url.search}`);
+  }, [page, router]);
   // Driven by the answer the poll itself brings back, so the page speeds up the moment it sees
   // an import running and relaxes again as soon as that import reports it is done.
   const [everySec, setEverySec] = useState(LIVE_EVERY_SEC);
@@ -433,7 +444,7 @@ export default function DashboardPage() {
       {/* Ad platforms report about themselves, so they get their own section rather than a card in
           the store's list: results when connected, one way in when not (components/dashboard/Advertising.tsx).
           Not in a workspace that leaves advertising out (lib/features.ts). */}
-      {ov && offers("ads") && <AdvertisingSection ov={ov} manage={allowed("integrations.manage")} onOpen={detail.open} />}
+      {ov && offers("ads") && <AdvertisingSection ov={ov} manage={allowed("integrations.manage")} />}
 
       {disabled.length > 0 && (
         <section aria-labelledby="more-h">
@@ -467,7 +478,7 @@ export default function DashboardPage() {
         />
       )}
 
-      {ov && detail.view && (
+      {ov && detail.view && !page && (
         <TopicDetail topic={detail.view} ov={ov} currency={cur} contactsOn={contactsOn} onClose={detail.close} onOpen={detail.open} exportHref={exportHref} canPrint={hasFullAccess(access.role) || allowed("reports.export")} />
       )}
     </div>

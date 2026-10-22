@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { withTenant } from "@app/db";
-import { COMPARE_MODES, DATE_PRESETS, redactOverview, resolvePreset, salesCalculationInput, seesModule } from "@app/shared";
+import { AD_PROVIDERS, COMPARE_MODES, DATE_PRESETS, redactOverview, resolvePreset, salesCalculationInput, seesModule } from "@app/shared";
 import {
   audit,
   latestReconciliation,
@@ -12,7 +12,7 @@ import {
   storeSalesCalculation,
   type ReportRequest,
 } from "@app/core";
-import { PRODUCT_SORTS, productPerformance, recentSyncJobs, storeOverview, workspaceStores } from "@app/core/reports";
+import { PRODUCT_SORTS, productPerformance, recentSyncJobs, storeOverview, workspaceStores, type AdsView } from "@app/core/reports";
 import { body, clientIp, HttpError, requireWorkspace, type Deps } from "../context.js";
 import type { App } from "../app.js";
 import { autoRefresh } from "../sync.js";
@@ -31,8 +31,24 @@ export const datesQuery = {
   cfrom: z.string().optional(),
   cto: z.string().optional(),
 };
-const querySchema = z.object(datesQuery);
-type DatesQuery = z.infer<typeof querySchema>;
+type DatesQuery = z.infer<z.ZodObject<typeof datesQuery>>;
+
+/**
+ * What the Advertising pages narrow the ad figures to: `platform=meta|google|adsense`, `account=<an ad
+ * connection's id>` (AdsView in core: figures for some of the spend are never set against the store's
+ * whole sales).
+ */
+export const adsViewQuery = {
+  platform: z.enum(AD_PROVIDERS).optional(),
+  account: z.string().min(1).max(64).optional(),
+};
+
+/**
+ * `parts=advertising`: only what the Advertising pages show (the ad modules, and the store's sales
+ * and traffic they're set against), with every campaign; the rest of the dashboard isn't computed.
+ */
+const ADVERTISING_MODULES: ReadonlySet<string> = new Set(["ads", "adsense", "ad_connections", "ad_configured", "sales_overview", "channels", "traffic"]);
+const overviewQuery = z.object({ ...datesQuery, ...adsViewQuery, parts: z.enum(["advertising"]).optional() });
 
 /** The dates in the store's zone; custom dates or comparison dates that can't be reported on are a 400 `invalid_range`. */
 export function resolveQueryDates(q: DatesQuery, now: Date, timeZone: string) {
@@ -123,7 +139,10 @@ export function dashboardRoutes(app: App, deps: Deps) {
   app.get("/workspaces/:ws/stores/:storeId/overview", async (c) => {
     const { ws, storeId } = c.req.param();
     const { access } = await requireWorkspace(c, deps, ws, "dashboard:read");
-    const q = querySchema.parse(c.req.query());
+    const q = overviewQuery.parse(c.req.query());
+    const advertising = q.parts === "advertising";
+    const adsView: AdsView = advertising ? { platform: q.platform, account: q.account, allCampaigns: true } : {};
+    const sees = (m: string) => (!advertising || ADVERTISING_MODULES.has(m)) && seesModule(access, m);
 
     let polled: Parameters<typeof autoRefresh>[1] | null = null;
     let reports: ReportRequest[] = [];
@@ -133,7 +152,7 @@ export function dashboardRoutes(app: App, deps: Deps) {
       polled = store;
       const now = new Date();
       const dates = resolveQueryDates(q, now, store.timezone);
-      const report = redactOverview(await storeOverview(tx, store, dates, now, (m) => seesModule(access, m)), access);
+      const report = redactOverview(await storeOverview(tx, store, dates, now, sees, adsView), access);
       reports = report.shopifyRefresh;
       return {
         store: publicStore(store),

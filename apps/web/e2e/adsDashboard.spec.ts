@@ -4,10 +4,12 @@ import { E2E_ENV } from "../playwright.config";
 import { createWorkspace, insertAdConnection, insertStore, signUp, uniqueEmail } from "./helpers";
 
 /**
- * The dashboard's Ads panel with a Meta ad account whose days are stored: the store's own sales set
- * against the spend (sales per unit of spend, cost per order, with the change on whole dates), the
- * orders Shopify's visit record credits to Meta's ads beside Meta's own purchases, and one figure
- * drawn over the days. Meta itself can't run in e2e: the live report says so and nothing else waits on it.
+ * The Advertising area with a Meta ad account whose days are stored: the dashboard's old ads panel
+ * address opens it with its dates; the overview sets the store's own sales against the spend (sales
+ * per unit of spend, cost per order, with the change on whole dates) and compares the spend with the
+ * week before; the Meta Ads page draws one figure over the days and credits orders by Shopify's
+ * visit record beside Meta's own purchases; the campaign comparison and the reports show the same
+ * campaign. Meta itself can't run in e2e: the live report says so and nothing else waits on it.
  */
 
 const db = new pg.Pool({ connectionString: E2E_ENV.DATABASE_URL });
@@ -41,7 +43,7 @@ async function seedOrder(ws: string, storeId: string, id: string, on: string, pr
   );
 }
 
-test("the Ads panel sets the store's sales against the spend, credits orders by Shopify's visit record, and draws a figure over the days", async ({ page }) => {
+test("the Advertising area sets the store's sales against the spend, compares it with the week before, and shows each platform, campaign and report", async ({ page }) => {
   const email = uniqueEmail("ads-panel");
   await signUp(page, email);
   const ws = await createWorkspace(page, "Ads Panel Co");
@@ -51,8 +53,9 @@ test("the Ads panel sets the store's sales against the spend, credits orders by 
   for (let n = -14; n <= -1; n++) {
     await db.query(
       `INSERT INTO ad_campaign_daily (workspace_id, store_id, connection_id, provider, account_id, campaign_id, campaign_name, day, spend, impressions, clicks, link_clicks, conversions, conversion_value, purchases, purchase_value, leads, currency, updated_at)
-       VALUES ($1, $2, $3, 'meta', 'act_1', '1', 'Spring', $4, 10, 1000, 30, 20, 1, 40, 1, 40, 0, 'USD', now())`,
-      [ws, storeId, conn, day(n)],
+       VALUES ($1, $2, $3, 'meta', 'act_1', '1', 'Spring', $4, $5, 1000, 30, 20, 1, 40, 1, 40, 0, 'USD', now())`,
+      // The week picked spends $10 a day, the week before $5: twice as much now.
+      [ws, storeId, conn, day(n), n >= -7 ? 10 : 5],
     );
   }
   // The dates picked (the last seven whole days): an order from a Facebook ad and a direct one. The seven before: one direct order.
@@ -60,27 +63,60 @@ test("the Ads panel sets the store's sales against the spend, credits orders by 
   await seedOrder(ws, storeId, "D1", day(-3), 60, { source: "direct", medium: "direct" });
   await seedOrder(ws, storeId, "P1", day(-14), 50, null);
 
-  await page.goto(`/dashboard?preset=custom&from=${day(-7)}&to=${day(-1)}&view=ads`);
+  // The dashboard's old ads panel opens the Advertising overview, with the dates kept.
+  const dates = `preset=custom&from=${day(-7)}&to=${day(-1)}`;
+  await page.goto(`/dashboard?${dates}&view=ads`);
+  await expect(page).toHaveURL(`/advertising?${dates}`);
+  const nav = page.getByRole("complementary").getByRole("navigation", { name: "App" });
+  await expect(nav.getByRole("link", { name: "Advertising" })).toHaveAttribute("aria-current", "page");
+
+  // Spend against the week before: $70 now, $35 then, up 100%, and what was compared.
+  const spend = page.getByTestId("kpi-spend");
+  await expect(spend.getByTestId("kpi-spend-value")).toHaveText("$70.00");
+  await expect(spend).toContainText("▲ 100%");
+  await expect(spend.getByTestId("kpi-spend-compared")).toContainText("$35.00");
+  // Meta's own purchases, named as Meta's count: 7 both weeks.
+  await expect(page.getByTestId("kpi-purchases")).toContainText("Platforms' own count");
+  await expect(page.getByTestId("kpi-purchases")).toContainText("■ 0%");
+
+  // $160 of sales for $70 of ads: 2.29 per unit of spend; $35 of ads per order. Before: $50 for $35, $35 per order.
   const vs = page.getByTestId("ads-vs-sales");
   await expect(vs).toBeVisible();
-  // $160 of sales for $70 of ads: 2.29 per unit of spend; $35 of ads per order. Before: $50 for $70, $70 per order.
   await expect(vs).toContainText("$160.00");
   await expect(vs).toContainText("2.29×");
   await expect(vs).toContainText("$35.00");
-  await expect(vs).toContainText("before: 0.71×");
-  await expect(vs).toContainText("▼ 50% vs");
-  await expect(vs).toContainText("before: $70.00");
+  await expect(vs).toContainText("before: 1.43×");
+  await expect(page.getByTestId("kpi-mer")).toContainText("2.29×");
   // Shopify credits the order from the Facebook ad to Meta: 1 order, $100, 1.43 per unit of Meta's spend; Meta's own count says 7 purchases worth $280.
   const meta = page.getByTestId("ads-attribution-meta");
   await expect(meta).toContainText("$100.00");
   await expect(meta).toContainText("1.43×");
   await expect(meta).toContainText("$280.00");
-  // One figure over the days, by platform, picked from the list.
+
+  // Meta Ads, from the area's menu: one figure over the days, by platform, picked from the list.
+  await page.getByRole("navigation", { name: "Advertising" }).getByRole("link", { name: "Meta Ads" }).click();
+  await expect(page).toHaveURL(/\/advertising\/meta\?preset=custom/);
   const trend = page.getByTestId("ads-trend");
   await expect(trend).toHaveAttribute("data-metric", "spend");
   await page.getByRole("combobox", { name: "Figure" }).selectOption("roas");
   await expect(trend).toHaveAttribute("data-metric", "roas");
   await expect(trend.locator("[aria-label*='ROAS (platforms\\' own) per day by platform']")).toBeVisible();
-  // Meta itself can't be asked here (no Meta app in e2e): the live report says it couldn't be loaded instead of breaking the panel.
+  // One platform's spend isn't set against the whole store's sales.
+  await expect(page.getByTestId("ads-vs-sales")).toHaveCount(0);
+  // Meta itself can't be asked here (no Meta app in e2e): the live report says it couldn't be loaded instead of breaking the page.
   await expect(page.getByRole("region", { name: "Meta Ads report" })).toContainText("load the Meta Ads report");
+
+  // Every campaign side by side, with its change on the same whole days.
+  await page.getByRole("navigation", { name: "Advertising" }).getByRole("link", { name: "Campaign comparison" }).click();
+  const row = page.getByTestId("campaign-row").filter({ hasText: "Spring" });
+  await expect(row).toContainText("$70.00");
+  await expect(row).toContainText("Shop ads");
+  await expect(row).toContainText("▲ 100%");
+
+  // Reports: the campaigns table as it downloads, and the download for the same question.
+  await page.getByRole("navigation", { name: "Advertising" }).getByRole("link", { name: "Reports" }).click();
+  await page.getByTestId("report-ads_campaigns").click();
+  await expect(page.getByTestId("report-table")).toContainText("Ad campaigns");
+  await expect(page.getByTestId("report-row").filter({ hasText: "Spring" })).toContainText("act_1");
+  await expect(page.getByTestId("download-ads_campaigns")).toHaveAttribute("href", new RegExp(`section=ads_campaigns&preset=custom&from=${day(-7)}&to=${day(-1)}`));
 });

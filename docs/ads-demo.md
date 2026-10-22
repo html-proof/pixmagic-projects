@@ -25,9 +25,10 @@ a separate mode that never falls back to the demo.
    data**, **Reset demo data**, **Disconnect demo**. "Continue with Google Ads" stays beside it for
    the real thing.
 4. Its figures show wherever a Google Ads account's do, marked **DEMO DATA**: the dashboard's
-   Advertising section and Marketing panel (its spend is **not** set against the store's own sales:
-   `sales`, `shareOfSales` and `sourced` are left out of the ads module while a demo is among the
-   accounts), the Google Ads live report, and the **Google Ads Analytics** page (`/ads/google`).
+   Advertising section and the Advertising area's pages ([advertising.md](advertising.md); its spend
+   is **not** set against the store's own sales: `sales`, `shareOfSales` and `sourced` are left out of
+   the ads module while a demo is among the accounts), the Google Ads live report, and the **Google
+   Ads Analytics** page (`/advertising/google/analytics`; the old `/ads/google` opens it).
 5. **Disconnect** deletes the demo and its figures; nothing is handed back (there was no grant) and
    no other connection is touched.
 
@@ -129,7 +130,7 @@ Local server ([local-dev.md](local-dev.md)): `pnpm --filter @app/aws dev --setti
 `GOOGLE_ADS_DEMO_ENABLED=1` (the example env sets it). Sign in, connect a store (or insert one as
 the e2e helpers do), open Settings → Connect your business → **Try demo**. The local server runs the
 queue in-process, so the demo's 90 days land within seconds; **Open demo dashboard** opens
-`/ads/google`.
+`/advertising/google/analytics`.
 
 Tests:
 

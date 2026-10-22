@@ -237,7 +237,7 @@ export function GoogleAdsDemoDialog({
               <button type="button" className="btn-secondary" onClick={close} disabled={busy}>
                 Done
               </button>
-              <Link className="btn-primary" data-primary href="/ads/google" onClick={close}>
+              <Link className="btn-primary" data-primary href="/advertising/google/analytics" onClick={close}>
                 Open Demo Dashboard
               </Link>
             </>
