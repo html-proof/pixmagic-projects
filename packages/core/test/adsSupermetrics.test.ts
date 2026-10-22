@@ -105,11 +105,14 @@ describe("every request carries the key in a header, and the login's username ne
     });
   });
 
-  it("a link without an https address to send the person to is refused", async () => {
-    const f = fake(() => json({ data: { link_id: "lnk_1", login_url: "javascript:alert(1)" } }, 201));
-    await expect(
-      supermetricsCreateLoginLink(cfg(f.fetchImpl), { dsId: "FA", description: "x", expiresAt: new Date(), redirectUrl: "https://bizinsights.io/cb" }),
-    ).rejects.toBeInstanceOf(AdsApiError);
+  it("a link without an https address to send the person to is refused (plain http only on this machine)", async () => {
+    const linkTo = (login_url: string) =>
+      supermetricsCreateLoginLink(cfg(fake(() => json({ data: { link_id: "lnk_1", login_url } }, 201)).fetchImpl), { dsId: "FA", description: "x", expiresAt: new Date(), redirectUrl: "https://bizinsights.io/cb" });
+    await expect(linkTo("javascript:alert(1)")).rejects.toBeInstanceOf(AdsApiError);
+    await expect(linkTo("http://hub.supermetrics.com/login/link/abc")).rejects.toBeInstanceOf(AdsApiError);
+    await expect(linkTo("not a url")).rejects.toBeInstanceOf(AdsApiError);
+    // A local stand-in for Supermetrics (development).
+    await expect(linkTo("http://127.0.0.1:9361/login/link/lnk_1")).resolves.toMatchObject({ linkId: "lnk_1" });
   });
 });
 

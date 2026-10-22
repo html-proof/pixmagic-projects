@@ -232,8 +232,18 @@ export async function supermetricsCreateLoginLink(
     },
   });
   const link = linkOf(res.data);
-  if (!/^https:\/\//.test(link.loginUrl)) throw new AdsApiError("Supermetrics' login link has no usable address", 502);
+  if (!usableLoginUrl(link.loginUrl)) throw new AdsApiError("Supermetrics' login link has no usable address", 502);
   return link;
+}
+
+/** Where a browser may be sent: an https page, or plain http on this machine only (a local stand-in for Supermetrics). */
+function usableLoginUrl(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return u.protocol === "https:" || (u.protocol === "http:" && (u.hostname === "127.0.0.1" || u.hostname === "localhost"));
+  } catch {
+    return false;
+  }
 }
 
 /** The link as it stands now: whether someone authenticated through it, and the login that made. */
