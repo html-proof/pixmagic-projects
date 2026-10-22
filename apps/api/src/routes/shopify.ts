@@ -10,6 +10,7 @@ import {
   exchangeCodeForToken,
   logger,
   managedInstallUrl,
+  memberState,
   obtainStoreToken,
   shopifyApp,
   shopifyApps,
@@ -154,6 +155,23 @@ const SETTINGS_STORES = "/settings/stores";
 const connectPage = (from: ConnectFrom | undefined) => (from === "settings" ? SETTINGS_STORES : "/onboarding");
 const connectedPage = (from: ConnectFrom | undefined, storeId: string) =>
   from === "settings" ? `${SETTINGS_STORES}?connected=${encodeURIComponent(storeId)}` : syncPage(storeId);
+
+/**
+ * Where a connect of `shop` to `workspaceId` goes when the store is live in another account's
+ * workspace (storeTakenElsewhere), instead of a dead end on the connect page. Someone who is a
+ * member there has it already: its dashboard opens (the web app's AppContext picks `?ws=` and
+ * `?store=`). Anyone else gets this workspace's dashboard, which says the store belongs to another
+ * account and offers to connect a different one (`?taken=`). Null for a connect started in
+ * Settings → Stores: that page explains the refusal itself, beside its connect button.
+ */
+async function takenLanding(userId: string, shop: string, workspaceId: string, from: ConnectFrom | undefined): Promise<string | null> {
+  const store = await systemDb.store.findUnique({ where: { shopDomain: shop }, select: { id: true, workspaceId: true } });
+  const m = store ? await systemDb.membership.findUnique({ where: { workspaceId_userId: { workspaceId: store.workspaceId, userId } } }) : null;
+  const member = !!m && memberState(m) === "active";
+  logger.info({ event: "shopify_store_taken", shop, workspaceId, member }, "store already connected to another workspace");
+  if (store && member) return `/dashboard?${new URLSearchParams({ ws: store.workspaceId, store: store.id })}`;
+  return from === "settings" ? null : `/dashboard?${new URLSearchParams({ ws: workspaceId, taken: shop })}`;
+}
 
 /** Create single-use OAuth state, bind it to this browser and return Shopify's authorize URL. */
 export async function authorizeRedirect(c: Ctx, deps: Deps, state: OAuthState): Promise<string> {
@@ -383,6 +401,9 @@ export function shopifyRoutes(app: App, deps: Deps) {
     await limit(deps.coord, `rl:shopify-install:${user.id}`, LIMITS.shopifyInstall);
 
     if (await storeTakenElsewhere(shop, ws)) {
+      // `url` is where the browser goes next: here a dashboard rather than Shopify (takenLanding).
+      const page = await takenLanding(user.id, shop, ws, from);
+      if (page) return c.json({ url: `${env().APP_URL}${page}` });
       throw new HttpError(409, "This store is already connected to another workspace", "store_taken");
     }
     const full = await storeLimitReached(ws, shop);
@@ -484,7 +505,10 @@ export function shopifyRoutes(app: App, deps: Deps) {
         const store = await attachStore(deps, { workspaceId: state.workspaceId, shop, token, appKey: app.key, actorUserId: user.id, ip: clientIp(c) });
         return c.redirect(`${appUrl}${connectedPage(state.from, store.id)}`);
       } catch (err) {
-        if (err instanceof HttpError && err.code === "store_taken") return fail("store_taken");
+        if (err instanceof HttpError && err.code === "store_taken") {
+          const page = await takenLanding(user.id, shop, state.workspaceId, state.from);
+          return page ? c.redirect(`${appUrl}${page}`) : fail("store_taken");
+        }
         throw err;
       }
     } catch (err) {
@@ -566,8 +590,11 @@ export function shopifyRoutes(app: App, deps: Deps) {
         // A workspace that filled up since /start checked (a second connect at the same time) can't
         // take it; the store is installed by now, so it goes on as if nobody was known (4. below).
         if (ws && verified && !(await storeLimitReached(ws, shop))) {
-          if (await storeTakenElsewhere(shop, ws)) return c.redirect(`${appUrl}/onboarding?error=store_taken`);
           const from = connectFromSchema.catch(undefined).parse(pending?.from);
+          if (await storeTakenElsewhere(shop, ws)) {
+            const page = await takenLanding(verified.id, shop, ws, from);
+            return c.redirect(`${appUrl}${page ?? `${connectPage(from)}?error=store_taken`}`);
+          }
           return c.redirect(await beginAuthorize(c, deps, verified.id, ws, shop, via.key, from));
         }
       }

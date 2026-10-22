@@ -126,6 +126,29 @@ function useAdsConnectedNotice(): string | null {
   return notice;
 }
 
+/** A store's Shopify address: the only thing `?taken=` may put on the page. */
+const SHOP_DOMAIN = /^[a-z0-9][a-z0-9-]*\.myshopify\.com$/;
+
+/**
+ * Coming back from connecting a store another account already has (the API's takenLanding sends
+ * /dashboard?ws=…&taken=<shop>, or ?ws=…&store=… when that store is open to this person): say so
+ * once, then tidy the address. AppContext has opened the workspace and store by then.
+ */
+function useStoreTakenNotice(): [string | null, () => void] {
+  const { storesStatus } = useApp();
+  const [taken, setTaken] = useState<string | null>(null);
+  useEffect(() => {
+    if (storesStatus !== "ready") return;
+    const url = new URL(window.location.href);
+    if (!["taken", "ws", "store"].some((k) => url.searchParams.has(k)) || url.searchParams.has("adsConnected")) return;
+    const shop = url.searchParams.get("taken");
+    if (shop && SHOP_DOMAIN.test(shop)) setTaken(shop);
+    for (const k of ["taken", "ws", "store"]) url.searchParams.delete(k);
+    window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+  }, [storesStatus]);
+  return [taken, () => setTaken(null)];
+}
+
 /** Placeholder shapes while the first numbers load, in the page's own layout, instead of a blank page. */
 function DashboardSkeleton() {
   return (
@@ -152,6 +175,7 @@ export default function DashboardPage() {
   // Team & Access: a member with nothing shared yet asks for no numbers at all.
   const sharesData = hasDashboardAccess(access);
   const adsNotice = useAdsConnectedNotice();
+  const [taken, dismissTaken] = useStoreTakenNotice();
   const dates = useDateRange(store?.timezone ?? "UTC");
   const detail = useDetailView();
   const asking = dates.asking;
@@ -254,16 +278,34 @@ export default function DashboardPage() {
   // fails they would sit under the new dates' button as if they answered it, so say what they are.
   const olderAnswer = ov !== null && dataPath !== path;
 
+  // The store asked for belongs to another account: what to do instead, the connect button below
+  // (no stores yet) or the link here, which the store switcher offers too.
+  const takenNotice = taken && (
+    <Alert kind="info" onDismiss={dismissTaken}>
+      <span className="font-medium">{taken}</span> is already connected to another bizinsights account, so it wasn&apos;t added here. To see it, ask that
+      account&apos;s owner to invite you, or connect a different store.
+      {stores.length > 0 && canManage(workspace.role) && (
+        <>
+          {" "}
+          <Link className="font-medium underline" href="/settings/stores">Connect another store</Link>
+        </>
+      )}
+    </Alert>
+  );
+
   if (!sharesData) return <NoAccessAssigned workspace={workspace.name} role={ROLE_INFO[access.role].label} />;
   // "No stores" only once the list has actually loaded: until then it means "not known yet".
   if (storesStatus !== "ready") return <StoresPending />;
   if (!stores.length) {
     return (
-      <EmptyState
-        title="Connect your first store"
-        body="Once your Shopify store is connected we'll pull in your orders, products and stock levels and keep everything up to date automatically."
-        action={canManage(workspace.role) ? <Link className="btn-primary" href={`/onboarding?ws=${encodeURIComponent(workspace.id)}`}>Continue with Shopify</Link> : <p className="text-sm text-muted">Ask a workspace admin to connect a store.</p>}
-      />
+      <div className="space-y-4">
+        {takenNotice}
+        <EmptyState
+          title="Connect your first store"
+          body="Once your Shopify store is connected we'll pull in your orders, products and stock levels and keep everything up to date automatically."
+          action={canManage(workspace.role) ? <Link className="btn-primary" href={`/onboarding?ws=${encodeURIComponent(workspace.id)}`}>Continue with Shopify</Link> : <p className="text-sm text-muted">Ask a workspace admin to connect a store.</p>}
+        />
+      </div>
     );
   }
 
@@ -315,6 +357,7 @@ export default function DashboardPage() {
       </header>
 
       {adsNotice && <Alert kind="success">{adsNotice}</Alert>}
+      {takenNotice}
 
       {error && !ov && <Alert kind={isTransient(error) ? "info" : "error"}>{friendlyError(error)}</Alert>}
       {error && ov && olderAnswer && (

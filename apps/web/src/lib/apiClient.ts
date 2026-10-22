@@ -166,7 +166,7 @@ function publicErrorMessage(status: number, code: string): string {
     email_in_use: "That email address belongs to another account. Sign in with an email code to prove it's yours.",
     invalid_shop: "Enter your store's myshopify.com address.",
     shop_required: "Enter your store's myshopify.com address.",
-    store_taken: "This store is already connected to another workspace.",
+    store_taken: "This store is already connected to another bizinsights account. Ask its owner to invite you, or connect a different store.",
     invalid_range: "Choose a valid date range and try again.",
     reconnect: "Integration disconnected. Reconnect it in Settings to resume updates.",
     pending_expired: "That account selection has expired. Connect again to choose your accounts.",

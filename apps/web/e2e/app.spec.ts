@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import pg from "pg";
 import { E2E_ENV } from "../playwright.config";
-import { fillCode, fillSignUp, latestCode, logIn, PASSWORD, signedLaunchUrl, signedWebhook, signOutFromMenu, signUp, stubShopify, uniqueEmail, verifyEmail } from "./helpers";
+import { fillCode, fillSignUp, insertStore, latestCode, logIn, PASSWORD, signedLaunchUrl, signedWebhook, signOutFromMenu, signUp, stubShopify, uniqueEmail, verifyEmail } from "./helpers";
 
 /** The app's own alerts (Next.js also renders an empty role="alert" route announcer). */
 const alert = (page: import("@playwright/test").Page) => page.locator('[role="alert"]:not(#__next-route-announcer__)');
@@ -415,6 +415,51 @@ test("sign up with a password, verify email, connect from onboarding", async ({ 
 
   // The workspace was created on the first click and reused on the retries.
   expect(await workspaceCount(email)).toBe(1);
+});
+
+test("connecting a store another account has opens the dashboard instead, which offers another store", async ({ page }) => {
+  await stubShopify(page);
+  const email = uniqueEmail("taken");
+  await signUp(page, email);
+  // The store lives in a workspace someone else's account has claimed.
+  const shop = `e2e-taken-${Date.now()}.myshopify.com`;
+  const theirs = (await db.query("INSERT INTO workspaces (id, name) VALUES (gen_random_uuid()::text, 'Theirs') RETURNING id")).rows[0].id as string;
+  const takenId = await insertStore(db, theirs, shop);
+
+  // One click: Shopify comes back with that store (the launch it opens after the install).
+  const install = page.waitForRequest((r) => r.url().startsWith("https://admin.shopify.com/oauth/install"));
+  await page.getByRole("button", { name: "Continue with Shopify" }).click();
+  await install;
+  await page.goto(signedLaunchUrl(shop));
+  await expect(page).toHaveURL(/\/dashboard$/);
+  const note = page.getByRole("status").filter({ hasText: "already connected to another bizinsights account" });
+  await expect(note).toContainText(shop);
+  await expect(page.getByRole("heading", { name: "Connect your first store" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Continue with Shopify" })).toBeVisible();
+
+  // With a store of its own, the store switcher offers the next one.
+  const mine = (await db.query("SELECT m.workspace_id FROM memberships m JOIN users u ON u.id = m.user_id WHERE u.email = $1", [email])).rows[0].workspace_id as string;
+  await insertStore(db, mine, `e2e-mine-${Date.now()}.myshopify.com`);
+  await page.goto("/dashboard");
+  await page.getByTestId("store-switcher").selectOption({ label: "+ Connect another store" });
+  await expect(page).toHaveURL(/\/settings\/stores$/);
+  await expect(page.getByTestId("shopify-connect")).toBeVisible();
+
+  // A member of the store's workspace connecting it from another one: no message, its dashboard opens.
+  const userId = (await db.query("SELECT id FROM users WHERE email = $1", [email])).rows[0].id as string;
+  await db.query("INSERT INTO memberships (id, workspace_id, user_id, role) VALUES (gen_random_uuid()::text, $1, $2, 'owner')", [theirs, userId]);
+  const fresh = await page.evaluate(async () => {
+    const r = await fetch("/api/workspaces", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Fresh" }) });
+    const ws = ((await r.json()) as { workspace: { id: string } }).workspace.id;
+    await fetch(`/api/workspaces/${ws}/shopify/start`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+    return ws;
+  });
+  expect(fresh).toBeTruthy();
+  await page.goto(signedLaunchUrl(shop));
+  await expect(page).toHaveURL(/\/dashboard$/);
+  await expect(page.getByTestId("store-switcher")).toHaveValue(takenId);
+  await expect(page.getByLabel("Workspace")).toHaveValue(theirs);
+  await expect(page.getByText("already connected to another bizinsights account")).toHaveCount(0);
 });
 
 test("dashboard shows webhook-driven metrics and only granted modules", async ({ page }) => {

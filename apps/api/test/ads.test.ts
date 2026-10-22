@@ -204,7 +204,7 @@ describe("connecting ad accounts", () => {
     const { start, cb } = await connectFlow("google");
     const url = new URL(start.json().url);
     expect(url.searchParams.get("access_type")).toBe("offline");
-    expect(url.searchParams.get("scope")).toBe("https://www.googleapis.com/auth/adwords");
+    expect(url.searchParams.get("scope")).toBe("https://www.googleapis.com/auth/adwords openid");
     // One account: nothing to choose, straight to the numbers.
     expect(cb.headers.location).toBe(`http://localhost:3001/dashboard?adsConnected=google&accounts=1&store=${storeId}`);
     const row = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, provider: "google" } });
@@ -223,7 +223,7 @@ describe("connecting ad accounts", () => {
     ctx.setFetch(adsensePlatform());
     const { start, cb } = await connectFlow("adsense");
     const url = new URL(start.json().url);
-    expect(url.searchParams.get("scope")).toBe("https://www.googleapis.com/auth/adsense.readonly");
+    expect(url.searchParams.get("scope")).toBe("https://www.googleapis.com/auth/adsense.readonly openid");
     expect(url.searchParams.get("access_type")).toBe("offline");
     expect(url.searchParams.get("redirect_uri")).toBe("http://localhost:3001/api/ads/adsense/callback");
     expect(cb.headers.location).toBe(`http://localhost:3001/dashboard?adsConnected=adsense&accounts=1&store=${storeId}`);
