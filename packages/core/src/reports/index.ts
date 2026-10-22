@@ -3,7 +3,7 @@
  * store list return, as functions of a tenant transaction (`withTenant`). Routes parse, authorize
  * and call these; they hold no SQL of their own.
  */
-export { recentSyncJobs, storeOverview, syncProblem, workspaceStores } from "./overview.js";
+export { recentSyncJobs, storeOverview, syncProblem, workspaceStores, type AdsView } from "./overview.js";
 export { productPerformance, PRODUCT_SORTS } from "./products.js";
 export { productCheck } from "./productCheck.js";
 export { quantizeUntil, reconcileSales, reportStale, reportWindows, shopifyModules, type CheckRow, type ReportStatus } from "./shopify.js";

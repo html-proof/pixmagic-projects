@@ -9,7 +9,7 @@ const links = [
   { label: "Products", icon: Box, href: "/dashboard?view=products" },
   { label: "Customers", icon: Users, href: "/dashboard?view=customers" },
   { label: "Analytics", icon: BarChart3, href: "/dashboard?view=overview" },
-  { label: "Marketing", icon: Megaphone, href: "/dashboard?view=ads" },
+  { label: "Advertising", icon: Megaphone, href: "/advertising" },
   { label: "Discounts", icon: Tag, href: "/dashboard?view=discounts" },
   { label: "Apps", icon: Grid2X2, href: "/settings/integrations" },
   { label: "Reports", icon: FileText, href: "/dashboard?view=sales" },

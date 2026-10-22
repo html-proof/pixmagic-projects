@@ -368,6 +368,34 @@ describe("tenants and self-service (scenarios 13-14)", () => {
 });
 
 describe("exports and sensitive fields (scenarios 15-16)", () => {
+  it("shows the Advertising area's reports on screen to whoever may see advertising, and downloads them only with the export permission", async () => {
+    const b = await business();
+    const today = new Date().toISOString().slice(0, 10);
+    const conn = await systemDb.adConnection.create({
+      data: { workspaceId: b.ws, storeId: b.store.id, provider: "meta", accountId: "act_1", accountName: "Shop ads", currency: "USD", timezone: "UTC", accessTokenEnc: "x", tokenKeyVersion: 1, historyFrom: "2026-01-01", syncedThrough: today, lastSyncedAt: new Date() },
+    });
+    await systemDb.adCampaignDaily.create({ data: { workspaceId: b.ws, storeId: b.store.id, connectionId: conn.id, provider: "meta", accountId: "act_1", campaignId: "1", campaignName: "Spring", day: today, spend: 12, impressions: 100, clicks: 4, linkClicks: 2 } });
+    const qs = "section=ads_campaigns&preset=7d&platform=meta";
+    const { guest, memberId } = await inviteAndJoin(b, "ads@example.com", "custom", ["analytics.sales"]);
+    // Without "View advertising analytics" and "View campaigns": neither on screen nor downloaded.
+    expect((await call("GET", `/workspaces/${b.ws}/stores/${b.store.id}/export/table?${qs}`, guest.headers)).statusCode).toBe(403);
+    ok(await setAccess(b, memberId, "custom", ["marketing.ads", "marketing.campaigns"]));
+    const table = await call("GET", `/workspaces/${b.ws}/stores/${b.store.id}/export/table?${qs}`, guest.headers);
+    expect(table.statusCode).toBe(200);
+    expect(table.json()).toMatchObject({ section: "ads_campaigns", label: "Ad campaigns", rows: [["Meta Ads", "act_1", "Spring", 12, 100, 4, 2, 0, 0, null, null, null, 0, null, null, null, "yes"]] });
+    // On screen isn't a download: nothing in the audit log, and the download itself still needs the export permission.
+    expect(await systemDb.auditLog.count({ where: { workspaceId: b.ws, action: "report.exported" } })).toBe(0);
+    expect((await call("GET", `/workspaces/${b.ws}/stores/${b.store.id}/export?${qs}`, guest.headers)).statusCode).toBe(403);
+    ok(await setAccess(b, memberId, "custom", ["marketing.ads", "marketing.campaigns", "reports.export"]));
+    const csv = await call("GET", `/workspaces/${b.ws}/stores/${b.store.id}/export?${qs}`, guest.headers);
+    expect(csv.statusCode).toBe(200);
+    expect(csv.headers["content-disposition"]).toMatch(/attachment; filename="bizinsights-acme-ads_campaigns-/);
+    // The same rows as on screen: a spend before of $0 (nothing ran in the week before), so no change from it.
+    expect(csv.body.trim().split("\r\n")).toHaveLength(1 + table.json().rows.length);
+    expect(csv.body).toContain('"Meta Ads","act_1","Spring",12,100,4,2');
+    expect(await systemDb.auditLog.findFirst({ where: { workspaceId: b.ws, action: "report.exported" }, select: { metadata: true } })).toMatchObject({ metadata: { section: "ads_campaigns", platform: "meta" } });
+  });
+
   it("exports only with the export permission, and only what the member can see", async () => {
     const b = await business();
     const { guest, memberId } = await inviteAndJoin(b, "csv@example.com", "custom", ["analytics.sales"]);

@@ -21,12 +21,11 @@ import { noEarlierData } from "./DateRange";
 import { fmtDay, fmtMoneyCompact, fmtMoneyWhole, fmtRange, fmtRelative, fmtTimes, plural } from "./format";
 import { Icon } from "./Icons";
 import { LineChart, type LineSeries } from "./LineChart";
-import type { Topic } from "./topics";
 import type { AdAccount, AdFigures, AdsenseModule, AdsModule, AdsProviderFigures, Overview } from "./types";
 
 // ---------------------------------------------------------------------------
-// Advertising on the main dashboard: what connected ad platforms report for the dates picked, one
-// card per platform. Money out (Meta Ads, Google Ads spend) and money in (Google AdSense earnings)
+// Advertising on the main dashboard (and the Advertising area's overview, /advertising): what connected
+// ad platforms report for the dates picked, one card per platform, each opening its Advertising page. Money out (Meta Ads, Google Ads spend) and money in (Google AdSense earnings)
 // are kept apart in every number; across platforms only the measures that mean the same thing on
 // each are compared (impressions, link clicks, click-through rate). A figure is shown only for days
 // every account behind it has stored: otherwise it is "Unavailable", with why, never 0.
@@ -139,7 +138,7 @@ function SummaryCard({
   source,
   fig,
   today,
-  onOpen,
+  href,
   children,
   note,
   testid,
@@ -154,7 +153,8 @@ function SummaryCard({
   /** How fresh the figures are: when the least recently updated account synced, and the last day they all have. */
   fig: Pick<AdFigures<unknown>, "updatedAt" | "coverage">;
   today: string;
-  onOpen: () => void;
+  /** Its page in the Advertising area. */
+  href: string;
   children: ReactNode;
   note?: string | null;
   testid: string;
@@ -169,9 +169,9 @@ function SummaryCard({
           {title}
           {demo && <DemoChip />}
         </h3>
-        <button type="button" className="text-xs text-accent underline-offset-2 hover:underline" onClick={onOpen}>
+        <Link href={href} className="text-xs text-accent underline-offset-2 hover:underline" data-testid={`${testid}-details`}>
           See details
-        </button>
+        </Link>
       </div>
       <p className="mt-0.5 text-xs text-muted">{explain}</p>
       <div className="mt-3 flex-1">{children}</div>
@@ -250,7 +250,7 @@ function Facts({ items }: { items: Array<[string, string]> }) {
 /** Why a change isn't there: "No earlier data" in full when that's the reason. */
 const historyNote = (fig: Pick<AdFigures<unknown>, "notCompared" | "historyFrom">, source: "ads" | "adsense") => (fig.notCompared === "no_history" ? noEarlierData(fig.historyFrom, source) : null);
 
-function SpendCard({ a, p, ov, onOpen }: { a: AdsModule; p: AdsProviderFigures; ov: Overview; onOpen: () => void }) {
+function SpendCard({ a, p, ov }: { a: AdsModule; p: AdsProviderFigures; ov: Overview }) {
   const P = PLATFORM[p.provider];
   const money = (n: number) => fmtMoney(n, a.currency);
   const accounts = a.accounts.filter((acc) => acc.counted && acc.provider === p.provider);
@@ -273,7 +273,7 @@ function SpendCard({ a, p, ov, onOpen }: { a: AdsModule; p: AdsProviderFigures; 
       source={P.name}
       fig={p}
       today={ov.today}
-      onOpen={onOpen}
+      href={`/advertising/${p.provider}`}
       note={[timeZoneNote(accounts), historyNote(p, "ads"), p.demo ? "Simulated figures from the Google Ads demo: not set against your store's sales. The Google Ads analytics page sets them against a simulated store." : null].filter(Boolean).join(" ") || null}
       testid={`ads-card-${p.provider}`}
       demo={!!p.demo}
@@ -285,7 +285,7 @@ function SpendCard({ a, p, ov, onOpen }: { a: AdsModule; p: AdsProviderFigures; 
 }
 
 /** Every spend platform added up: only when two or more are counted, which are then in one currency. */
-function TotalSpendCard({ a, ov, onOpen }: { a: AdsModule; ov: Overview; onOpen: () => void }) {
+function TotalSpendCard({ a, ov }: { a: AdsModule; ov: Overview }) {
   const money = (n: number) => fmtMoney(n, a.currency);
   const names = a.byProvider.map((p) => PLATFORM[p.provider].name).join(" and ");
   const { totals: c, through } = shownFigures(a);
@@ -296,7 +296,7 @@ function TotalSpendCard({ a, ov, onOpen }: { a: AdsModule; ov: Overview; onOpen:
       source={names}
       fig={a}
       today={ov.today}
-      onOpen={onOpen}
+      href="/advertising"
       note={[historyNote(a, "ads"), a.demo ? "Includes the Google Ads demo's simulated spend, so the store's own sales aren't set against this total." : null].filter(Boolean).join(" ") || null}
       testid="ads-spend"
       demo={!!a.demo}
@@ -325,7 +325,7 @@ function TotalSpendCard({ a, ov, onOpen }: { a: AdsModule; ov: Overview; onOpen:
   );
 }
 
-function EarningsCard({ a, ov, onOpen }: { a: AdsenseModule; ov: Overview; onOpen: () => void }) {
+function EarningsCard({ a, ov }: { a: AdsenseModule; ov: Overview }) {
   const money = (n: number) => fmtMoney(n, a.currency);
   const { totals: c, through } = shownFigures(a);
   const accounts = a.accounts.filter((acc) => acc.counted);
@@ -338,7 +338,7 @@ function EarningsCard({ a, ov, onOpen }: { a: AdsenseModule; ov: Overview; onOpe
       source="Google AdSense"
       fig={a}
       today={ov.today}
-      onOpen={onOpen}
+      href="/advertising/adsense"
       note={[timeZoneNote(accounts), historyNote(a, "adsense"), leftOut].filter(Boolean).join(" ") || null}
       testid="ads-earnings"
     >
@@ -574,7 +574,11 @@ function ConnectMore({ ov }: { ov: Overview }) {
   );
 }
 
-export function AdvertisingSection({ ov, manage, onOpen }: { ov: Overview; manage: boolean; onOpen: (t: Topic) => void }) {
+/**
+ * `embedded`: on the Advertising area's overview, whose page has its title and its headline tiles
+ * already: no heading and no total spend card.
+ */
+export function AdvertisingSection({ ov, manage, embedded = false }: { ov: Overview; manage: boolean; embedded?: boolean }) {
   const ads = ov.modules.ads;
   const sense = ov.modules.adsense;
   if (!ads && !sense) {
@@ -588,13 +592,13 @@ export function AdvertisingSection({ ov, manage, onOpen }: { ov: Overview; manag
   const fetching = accounts.some((a) => a.status === "active" && !a.lastSyncedAt);
   const left = accounts.filter((a) => !a.counted);
   return (
-    <section aria-labelledby="ads-h" data-testid="advertising">
-      <SectionHeading manage={manage} />
+    <section aria-labelledby={embedded ? undefined : "ads-h"} aria-label={embedded ? "Advertising by platform" : undefined} data-testid="advertising">
+      {!embedded && <SectionHeading manage={manage} />}
       <AdStatusNotes accounts={accounts} manage={manage} />
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {ads && ads.byProvider.length >= 2 && <TotalSpendCard a={ads} ov={ov} onOpen={() => onOpen("ads")} />}
-        {ads?.byProvider.map((p) => <SpendCard key={p.provider} a={ads} p={p} ov={ov} onOpen={() => onOpen("ads")} />)}
-        {sense && <EarningsCard a={sense} ov={ov} onOpen={() => onOpen("adsense")} />}
+        {ads && ads.byProvider.length >= 2 && !embedded && <TotalSpendCard a={ads} ov={ov} />}
+        {ads?.byProvider.map((p) => <SpendCard key={p.provider} a={ads} p={p} ov={ov} />)}
+        {sense && <EarningsCard a={sense} ov={ov} />}
       </div>
       <Trends ov={ov} fetching={fetching} />
       <Comparison ov={ov} />

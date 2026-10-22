@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "next dev -p 3001",
-    "build": "next build && node scripts/fix-export-prefetch.mjs && node scripts/check-font-preloads.mjs",
+    "dev": "node scripts/copy-flags.mjs && next dev -p 3001",
+    "build": "node scripts/copy-flags.mjs && next build && node scripts/fix-export-prefetch.mjs && node scripts/check-font-preloads.mjs",
     "typecheck": "tsc --noEmit",
     "test": "node --test test/*.test.mjs",
     "e2e": "playwright test",
@@ -29,6 +29,7 @@
     "@types/pg": "^8.23.1",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
+    "country-flag-icons": "1.6.20",
     "pg": "^8.16.0",
     "tailwindcss": "^4.1.0",
     "typescript": "^5.9.0"

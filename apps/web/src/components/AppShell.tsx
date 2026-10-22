@@ -55,20 +55,23 @@ import { ALERT_PATH, type AlertSeverity, type AlertView } from "@app/shared/aler
 import { hasFullAccess, ROLE_INFO } from "@app/shared/access";
 import { staffAccess } from "@app/shared/staff";
 import { Alert } from "@/components/ui";
-import { canOpenPage, landingPath, seesTopic, showsDashboardHome } from "@/lib/access";
+import { canOpenPage, landingPath, seesTopic, showsDashboardHome, TOPIC_PAGE } from "@/lib/access";
 
 // ---------------------------------------------------------------------------
 // The signed-in frame: a top bar (store, search, notifications, account) over a sidebar that
 // lists the dashboard's topics and the other areas. On a phone the sidebar slides in from the
-// menu button. Topics open the dashboard's detail panels (?view=…), the same ones its cards open.
+// menu button. Topics open the dashboard's detail panels (?view=…), the same ones its cards open;
+// advertising has an area of its own (/advertising).
 // ---------------------------------------------------------------------------
 
 const DASHBOARD = "/dashboard";
 const isDashboard = (path: string) => path.replace(/\/$/, "") === DASHBOARD;
 
-/** Go to a dashboard topic: open its panel in place on the dashboard, or load the dashboard with it open. */
+/** Go to a dashboard topic: open its panel in place on the dashboard, or load the dashboard with it open; or its own page. */
 function goToTopic(topic: Topic, path: string, push: (href: string) => void) {
-  if (isDashboard(path)) openView(topic);
+  const page = TOPIC_PAGE[topic];
+  if (page) push(page);
+  else if (isDashboard(path)) openView(topic);
   else push(`${DASHBOARD}?view=${topic}`);
 }
 
@@ -141,7 +144,8 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
     // dashboard's Stock panel in the menu for whoever can open it; the panel stays on the dashboard.
     ...(offers("inventory") && allowed("inventory.view") ? [area("/inventory", "Inventory", Boxes)] : []),
     ...topic("customers", "Customers", UsersRound),
-    ...topic("ads", "Marketing", Megaphone),
+    // Every ad platform: an area of its own, shown to whoever the dashboard's ads panel was (Team & Access, and what the workspace offers).
+    ...(seesTopic(access, "ads", offers) ? [area("/advertising", "Advertising", Megaphone)] : []),
     ...topic("discounts", "Discounts", BadgePercent),
     ...topic("shoppers", "Analytics", ChartColumn),
   ];
@@ -639,7 +643,15 @@ export function AppShell({ children }: { children: ReactNode }) {
             { id: "inventory-settings", label: "Stock settings", group: "Inventory", icon: Settings, keywords: "thresholds alerts low stock", go: go("/inventory/settings") },
           ]
         : []),
-      ...(offers("ads") && allowed("marketing.ads") ? [{ id: "google-ads", label: "Google Ads analytics", group: "Insights", icon: Megaphone, keywords: "google ads demo campaigns spend conversions", go: go("/ads/google") }] : []),
+      ...(seesTopic(access, "ads", offers)
+        ? [
+            { id: "advertising-meta", label: "Meta Ads", group: "Advertising", icon: Megaphone, keywords: "facebook instagram ads spend purchases roas", go: go("/advertising/meta") },
+            { id: "advertising-google", label: "Google Ads", group: "Advertising", icon: Megaphone, keywords: "google ads spend conversions roas", go: go("/advertising/google") },
+            { id: "google-ads", label: "Google Ads analytics", group: "Advertising", icon: Megaphone, keywords: "google ads demo campaigns devices audience recommendations", go: go("/advertising/google/analytics") },
+            ...(allowed("marketing.campaigns") ? [{ id: "advertising-campaigns", label: "Campaign comparison", group: "Advertising", icon: Megaphone, keywords: "campaigns meta google side by side", go: go("/advertising/campaigns") }] : []),
+            { id: "advertising-reports", label: "Advertising reports", group: "Advertising", icon: Megaphone, keywords: "csv export download ads", go: go("/advertising/reports") },
+          ]
+        : []),
       ...(offers("whatsapp") && allowed("marketing.campaigns") ? [{ id: "whatsapp", label: "WhatsApp", group: "Apps", icon: MessageCircle, keywords: "messages campaigns", go: go("/whatsapp") }] : []),
       ...(staff ? [{ id: "staff", label: "Staff", group: "Apps", icon: Users, keywords: "employees payroll timesheets roster", go: go("/staff") }] : []),
       ...(me.employments?.length ? [{ id: "portal", label: "My work", group: "Apps", icon: Briefcase, go: go("/portal") }] : []),

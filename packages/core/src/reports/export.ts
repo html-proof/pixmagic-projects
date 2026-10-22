@@ -14,6 +14,12 @@ export const EXPORT_SECTIONS = {
   channels: { label: "Sales channels", need: ["analytics.traffic"], modules: ["channels", "traffic"] },
   timing: { label: "Busiest times", need: ["analytics.behavior"], modules: ["order_timing"] },
   ads: { label: "Advertising", need: ["marketing.ads"], modules: ["ads"] },
+  // The Advertising area's reports (apps/web/src/app/(app)/advertising), each what one of its pages shows.
+  ads_summary: { label: "Advertising summary", need: ["marketing.ads"], modules: ["ads", "adsense", "sales_overview"] },
+  ads_platforms: { label: "Advertising by platform", need: ["marketing.ads"], modules: ["ads"] },
+  ads_daily: { label: "Advertising by day", need: ["marketing.ads"], modules: ["ads"] },
+  ads_campaigns: { label: "Ad campaigns", need: ["marketing.campaigns"], modules: ["ads"] },
+  adsense_daily: { label: "AdSense by day", need: ["marketing.ads"], modules: ["adsense"] },
 } as const satisfies Record<string, { label: string; need: readonly AccessKey[]; modules: readonly string[] }>;
 export type ExportSection = keyof typeof EXPORT_SECTIONS;
 export const EXPORT_SECTION_IDS = Object.keys(EXPORT_SECTIONS) as ExportSection[];
@@ -130,7 +136,129 @@ export function exportTable(section: ExportSection, modules: Obj): { header: str
       if (complete >= 0) out.rows = campaigns.map((c, i) => out.rows[i]!.map((cell, j) => (j === complete ? (c.complete === false ? "no" : "yes") : cell)));
       return out;
     }
+    case "ads_summary":
+      return summaryTable(isObj(modules.ads) ? modules.ads : null, isObj(modules.adsense) ? modules.adsense : null);
+    case "ads_platforms":
+      return platformTable(isObj(modules.ads) ? list(modules.ads.byProvider) : []);
+    case "ads_daily": {
+      const a = isObj(modules.ads) ? modules.ads : {};
+      const demo = a.demo === true;
+      const rows: Cell[][] = [];
+      for (const p of list(a.seriesByProvider)) {
+        for (const d of list(p.series)) {
+          // A day the platform's accounts have no figures for says so: never a 0.
+          if (d.spend === null) rows.push([val(d, "day"), platformName(p.provider, demo && p.provider === "google"), "No figures", null, null, null, null, null]);
+          else rows.push([val(d, "day"), platformName(p.provider, demo && p.provider === "google"), val(d, "spend"), val(d, "impressions"), val(d, "clicks"), val(d, "linkClicks"), val(d, "purchases"), val(d, "purchaseValue")]);
+        }
+      }
+      rows.sort((x, y) => String(x[0]).localeCompare(String(y[0])));
+      return { header: ["Day", "Platform", "Spend", "Impressions", "Clicks (all)", "Link clicks", "Purchases (platform's count)", "Purchase value (platform's count)"], rows };
+    }
+    case "ads_campaigns": {
+      const a = isObj(modules.ads) ? modules.ads : {};
+      const campaigns = list(a.campaigns);
+      const header = ["Platform", "Account", "Campaign", ...AD_COLUMNS.slice(2).map(([label]) => label), "Spend before", "Spend change (%)", "ROAS before", "ROAS change (%)", "Complete"];
+      const rows = campaigns.map((c): Cell[] => {
+        const change = isObj(c.change) ? c.change : null;
+        const before = change && isObj(change.previous) ? change.previous : {};
+        const deltas = change && isObj(change.deltas) ? change.deltas : {};
+        return [
+          platformName(c.provider, c.accountId === DEMO_ACCOUNT_ID),
+          val(c, "accountId"),
+          val(c, "name"),
+          ...AD_COLUMNS.slice(2).map(([, k]) => val(c, k)),
+          change ? val(before, "spend") : null,
+          change ? pct(deltas.spend) : null,
+          change ? val(before, "roas") : null,
+          change ? pct(deltas.roas) : null,
+          c.complete === false ? "no" : "yes",
+        ];
+      });
+      return { header, rows };
+    }
+    case "adsense_daily": {
+      const s = isObj(modules.adsense) ? modules.adsense : {};
+      const rows = list(s.series).map((d): Cell[] => (d.earnings === null ? [val(d, "day"), "No figures", null, null, null] : [val(d, "day"), val(d, "earnings"), val(d, "pageViews"), val(d, "impressions"), val(d, "clicks")]));
+      return { header: ["Day", "Estimated earnings", "Page views", "Impressions", "Clicks"], rows };
+    }
   }
+}
+
+/** A change (a fraction) as a percentage with one decimal; null when there is none. */
+const pct = (v: unknown): Cell => (typeof v === "number" ? Math.round(v * 1000) / 10 : null);
+
+/** Figures as a page shows them: the whole range, or the days so far (dated), or none. */
+function shownTotals(fig: Obj): { totals: Obj | null; through: string | null } {
+  if (isObj(fig.current)) return { totals: fig.current, through: null };
+  const soFar = isObj(fig.soFar) && isObj(fig.soFar.totals) ? fig.soFar : null;
+  return soFar ? { totals: soFar.totals as Obj, through: String(soFar.to) } : { totals: null, through: null };
+}
+
+const NOT_COMPARED: Record<string, string> = {
+  running: "Not compared: the dates are still running.",
+  no_history: "Not compared: no earlier data.",
+  incomplete: "Not compared: some days are missing.",
+};
+
+/**
+ * The Advertising overview's figures, one per row: each with the figure compared with and the change,
+ * on the same whole days as the page (an ad module's `compared`: while the dates include a day not
+ * over yet, both sides stop at the last whole day, so the figure for the days compared is a column of
+ * its own beside the whole dates'), or the reason there is none. Spend
+ * and the platforms' own counts first, then the store's own sales set against the spend (Shopify's,
+ * never the platforms'), then AdSense's estimated earnings, money in, never added to the spend.
+ */
+function summaryTable(ads: Obj | null, adsense: Obj | null) {
+  const rows: Cell[][] = [];
+  const unavailable = (fig: Obj) => (isObj(fig.partial) ? `Figures are stored for ${String(fig.partial.from)} to ${String(fig.partial.to)} only.` : "No figures are stored for these dates yet.");
+  const add = (fig: Obj, measures: Array<[label: string, key: string, compared: boolean]>) => {
+    const { totals, through } = shownTotals(fig);
+    const before = isObj(fig.previous) ? fig.previous : {};
+    const deltas = isObj(fig.deltas) ? fig.deltas : {};
+    const why = typeof fig.notCompared === "string" ? (NOT_COMPARED[fig.notCompared] ?? null) : null;
+    const c = isObj(fig.compared) && isObj(fig.compared.current) && isObj(fig.compared.current.totals) ? fig.compared : null;
+    const now = c ? (c.current as Obj).totals as Obj : {};
+    const days = c && Number(c.trimmed) > 0 ? `Compared through ${String((c.current as Obj).to)}: whole days only.` : null;
+    for (const [label, key, compared] of measures) {
+      if (!totals) {
+        rows.push([label, "Unavailable", null, null, null, unavailable(fig)]);
+        continue;
+      }
+      const on = compared && c;
+      const note = [through ? `Up to ${through}: the days after it aren't over yet.` : null, compared ? why : null, on ? days : null].filter(Boolean).join(" ") || null;
+      rows.push([label, val(totals, key), on ? val(now, key) : null, on ? val(before, key) : null, on ? pct(deltas[key]) : null, note]);
+    }
+  };
+  if (ads) {
+    if (ads.demo === true) rows.push(["Simulated figures", "Includes the Google Ads demo", null, null, null, "Generated by bizinsights, not read from Google, and never set against the store's sales."]);
+    add(ads, [
+      ["Ad spend", "spend", true],
+      ["Impressions", "impressions", false],
+      ["Link clicks", "linkClicks", true],
+      ["Purchases (platforms' count)", "purchases", true],
+      ["Purchase value (platforms' count)", "purchaseValue", true],
+      ["Return on ad spend (platforms' own)", "roas", true],
+      ["Conversions (all conversion actions)", "conversions", true],
+    ]);
+    const s = isObj(ads.sales) ? ads.sales : null;
+    if (s) {
+      const before = isObj(s.previous) ? s.previous : null;
+      const deltas = isObj(s.deltas) ? s.deltas : {};
+      const why = before ? null : "Not compared: needs whole dates on both sides, with the store's orders imported for them.";
+      for (const [label, key] of [
+        ["Net sales (Shopify)", "netSales"],
+        ["Orders (Shopify)", "orders"],
+        ["Sales per unit of ad spend (MER)", "salesPerSpend"],
+        ["Cost per Shopify order", "costPerOrder"],
+      ] as const) {
+        // Compared only on whole dates, so the days compared are the dates themselves.
+        rows.push([label, val(s, key), before ? val(s, key) : null, before ? val(before, key) : null, before ? pct(deltas[key]) : null, why]);
+      }
+      rows.push(["Ads as share of sales", val(s, "shareOfSales"), null, null, null, null]);
+    }
+  }
+  if (adsense) add(adsense, [["AdSense estimated earnings (money in, not ad spend)", "earnings", true], ["AdSense page views", "pageViews", true]]);
+  return { header: ["Measure", "Value", "Value on the days compared", "Before", "Change (%)", "Note"], rows };
 }
 
 /**

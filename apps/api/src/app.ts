@@ -11,6 +11,7 @@ import { probeDb, tenantDb, type ProbeResult } from "@app/db";
 import { requestContext } from "./requestContext.js";
 import { authRoutes } from "./routes/auth.js";
 import { accountRoutes } from "./routes/account.js";
+import { sessionRoutes } from "./routes/sessions.js";
 import { shopifyRoutes } from "./routes/shopify.js";
 import { webhookRoutes } from "./routes/webhooks.js";
 import { mailEventRoutes } from "./routes/mailEvents.js";
@@ -202,6 +203,7 @@ export function buildApp(deps: Deps): App {
 
   authRoutes(app, deps);
   accountRoutes(app, deps);
+  sessionRoutes(app, deps);
   shopifyRoutes(app, deps);
   webhookRoutes(app, deps);
   mailEventRoutes(app, deps);

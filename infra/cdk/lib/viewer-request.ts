@@ -6,7 +6,10 @@ import { CLOUDFLARE_CLIENT_IP_HEADER, CLOUDFLARE_IPV4, CLOUDFLARE_IPV6 } from ".
  * Every request: the viewer's address and host go to the origin in headers of our own, overwriting
  * anything the client sent (the function only believes them on requests that carry the origin secret).
  * When the viewer is Cloudflare's proxy (an address in its ranges, cloudflare.ts), the address passed
- * on is the client's, from `CF-Connecting-IP`; from anywhere else that header is ignored.
+ * on is the client's, from `CF-Connecting-IP`; from anywhere else that header is ignored. Where the
+ * client is goes along the same way, as "country|region|city" (each part URI-encoded): from
+ * Cloudflare's visitor-location headers (`CF-IPCountry`, and `CF-Region` / `CF-IPCity` when the zone
+ * adds them) behind its proxy, otherwise from CloudFront's own `CloudFront-Viewer-*` headers.
  *
  * With an address of its own (`canonicalHost`), page requests (GET, HEAD) that arrive on any other
  * name CloudFront answers on (www, the *.cloudfront.net address) are sent there with a 301: sessions,
@@ -42,6 +45,9 @@ export function viewerRequestCode(canonicalHost?: string): string {
     "  }",
     "  return false;",
     "}",
+    "function hv(r, n) {",
+    "  return r.headers[n] ? r.headers[n].value : '';",
+    "}",
     "function query(q) {",
     "  var out = [];",
     "  for (var k in q) {",
@@ -61,10 +67,16 @@ export function viewerRequestCode(canonicalHost?: string): string {
     "    };",
     "  }",
     "  var ip = event.viewer.ip;",
+    "  var viaCf = fromCloudflare(ip);",
     `  var client = r.headers['${CLOUDFLARE_CLIENT_IP_HEADER}'];`,
-    "  if (client && /^[0-9A-Fa-f:.]{2,45}$/.test(client.value) && fromCloudflare(ip)) ip = client.value;",
+    "  if (client && /^[0-9A-Fa-f:.]{2,45}$/.test(client.value) && viaCf) ip = client.value;",
     "  r.headers['x-insights-viewer-ip'] = { value: ip };",
     "  r.headers['x-insights-viewer-host'] = { value: host };",
+    "  var geo = viaCf",
+    "    ? [hv(r, 'cf-ipcountry'), hv(r, 'cf-region'), hv(r, 'cf-ipcity')]",
+    "    : [hv(r, 'cloudfront-viewer-country'), hv(r, 'cloudfront-viewer-country-region-name'), hv(r, 'cloudfront-viewer-city')];",
+    "  if (geo[0] || geo[1] || geo[2]) r.headers['x-insights-viewer-geo'] = { value: geo.map(encodeURIComponent).join('|') };",
+    "  else delete r.headers['x-insights-viewer-geo'];",
     "  return r;",
     "}",
   ].join("\n");
