@@ -52,7 +52,7 @@ export function platformFacts({ provider, answer, connections, view, store, mana
 }
 
 /** The platform isn't set up on this server: what it still needs (for those who can set it up), or that it is on its way. */
-export function NotConfiguredNote({ P, manage, missing, demoOffered, button, testid }: { P: AdPlatformInfo; manage: boolean; missing: string[]; demoOffered: boolean; button: string; testid: string }) {
+export function NotConfiguredNote({ P, manage, missing, demoOffered, testid }: { P: AdPlatformInfo; manage: boolean; missing: string[]; demoOffered: boolean; testid: string }) {
   return (
     <p className="rounded-lg border border-dashed border-border px-3 py-2 text-sm text-muted" data-testid={testid}>
       {manage && missing.length ? (
@@ -62,7 +62,7 @@ export function NotConfiguredNote({ P, manage, missing, demoOffered, button, tes
         </>
       ) : (
         <>
-          {P.name} sign-in is being switched on for bizinsights. Once it&apos;s on, this card shows a &ldquo;{button}&rdquo; button: there are no keys or codes to copy.
+          {P.name} sign-in is being switched on for bizinsights. Once it&apos;s on, this card shows a &ldquo;{P.button}&rdquo; button: there are no keys or codes to copy.
           {demoOffered && manage ? " Meanwhile, Try demo connects a simulated account." : ""}
         </>
       )}

@@ -135,8 +135,8 @@ buttons go back to the direct sign-in, and connections made through Nango keep w
 
 ## A merchant connecting an account
 
-1. Settings → Integrations, on the store's card: **Continue with Meta Ads** or **Continue with Google AdSense**
-   (on Settings → Advertising: **Connect with …**). Owners, admins, or members given "Manage integrations".
+1. Settings → Integrations (or Settings → Advertising), on the store's card: **Continue with Meta Ads** or
+   **Continue with Google AdSense** (owners, admins, or members given "Manage integrations").
 2. A window opens over the page. It shows Facebook's or Google's own screen for **bizinsights**, which asks for
    read-only access (`ads_read` / view AdSense data). Choose the login and, on Facebook, the ad accounts to share.
 3. Back on the page: one account lands on the dashboard straight away. Several accounts lead to a list to tick

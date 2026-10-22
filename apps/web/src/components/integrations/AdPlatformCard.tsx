@@ -72,7 +72,7 @@ export function AdPlatformCard(props: AdPlatformProps) {
       </ul>
     );
   } else if (!configured) {
-    body = <NotConfiguredNote P={P} manage={manage} missing={missing} demoOffered={demoOffered} button={P.button} testid={`${testid}-not-configured`} />;
+    body = <NotConfiguredNote P={P} manage={manage} missing={missing} demoOffered={demoOffered} testid={`${testid}-not-configured`} />;
   } else body = <p className="text-muted">{P.how}</p>;
 
   return (

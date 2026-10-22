@@ -31,10 +31,8 @@ export interface AdPlatformInfo {
   name: string;
   /** What it brings, under the name. */
   sub: string;
-  /** The button that opens the platform's sign-in, before anything is connected. */
+  /** The button that opens the platform's sign-in, before anything is connected (both pages: the review packs quote it). */
   button: string;
-  /** The same button on Settings → Advertising. */
-  connect: string;
   /** The same button while the browser leaves. */
   opening: string;
   Icon: (p: { size?: number }) => ReactNode;
@@ -64,7 +62,6 @@ export const AD_PLATFORMS: Record<AdProvider, AdPlatformInfo> = {
     name: "Google Ads",
     sub: "Search, Shopping, YouTube and Performance Max: spend, clicks, conversions and the campaigns behind them",
     button: "Continue with Google Ads",
-    connect: "Connect with Google Ads",
     opening: "Opening Google…",
     Icon: GoogleAdsIcon,
     features: ["Campaign performance and spend", "Ad groups, devices and countries", "Clicks, conversions and their value", "Ad spend next to your sales, with ROAS"],
@@ -95,7 +92,6 @@ export const AD_PLATFORMS: Record<AdProvider, AdPlatformInfo> = {
     name: "Meta Ads",
     sub: "Facebook and Instagram ads: spend, reach, clicks and the purchases Meta reports",
     button: "Continue with Meta Ads",
-    connect: "Connect with Meta Ads",
     opening: "Opening Meta…",
     Icon: MetaIcon,
     features: ["Campaign performance and spend", "Ad set and ad level figures", "Placements, devices, countries, age and gender", "Reach, purchases and ROAS next to your sales"],
@@ -129,7 +125,6 @@ export const AD_PLATFORMS: Record<AdProvider, AdPlatformInfo> = {
     name: "Google AdSense",
     sub: "What your site earns from ads shown on it: earnings, page views, impressions and clicks",
     button: "Continue with Google AdSense",
-    connect: "Connect with Google AdSense",
     opening: "Opening Google…",
     Icon: AdsenseIcon,
     features: ["Estimated earnings, day by day", "Page views, impressions and clicks", "Earnings by site, country and device", "Ad earnings next to your sales"],

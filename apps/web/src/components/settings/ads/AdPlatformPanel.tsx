@@ -107,7 +107,7 @@ export function AdPlatformPanel(props: AdPlatformProps & { rowExtra?: (c: AdConn
 
   const headerActions = (
     <>
-      {canAct && configured && !real.length && connectButton(P.connect, "btn-primary", `connect-${provider}`)}
+      {canAct && configured && !real.length && connectButton(P.button, "btn-primary", `connect-${provider}`)}
       {/* Not beside a real account: the demo is for trying bizinsights before connecting one. */}
       {canAct && demoOffered && !demoConnected && !real.length && onTryDemo && (
         <button type="button" className={configured ? "btn-secondary" : "btn-primary"} onClick={onTryDemo} disabled={!!busy} data-testid="try-demo-google">
@@ -155,7 +155,7 @@ export function AdPlatformPanel(props: AdPlatformProps & { rowExtra?: (c: AdConn
         </div>
         {demoConnected && real.length === 0 && configured && canAct && (
           <p className="text-xs text-muted" data-testid="demo-switch-production">
-            Ready for the real thing? &ldquo;{P.connect}&rdquo; above opens Google&apos;s own sign-in for a real account; the demo stays until you disconnect it.
+            Ready for the real thing? &ldquo;{P.button}&rdquo; above opens Google&apos;s own sign-in for a real account; the demo stays until you disconnect it.
           </p>
         )}
         {canAct && configured && restricted && <RestrictedNotes provider={provider} connected showMetaNote={showMetaNote} />}
@@ -218,7 +218,7 @@ export function AdPlatformPanel(props: AdPlatformProps & { rowExtra?: (c: AdConn
             {canAct && configured ? (
               connectButton(P.promo.button, "btn-primary self-start")
             ) : !configured ? (
-              <NotConfiguredNote P={P} manage={manage} missing={missing} demoOffered={demoOffered} button={P.connect} testid={`${testid}-not-configured`} />
+              <NotConfiguredNote P={P} manage={manage} missing={missing} demoOffered={demoOffered} testid={`${testid}-not-configured`} />
             ) : null}
           </Promo>
         </div>

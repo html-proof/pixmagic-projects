@@ -17,8 +17,8 @@ The same sign-ins can run through Nango's Connect UI (one window over the page, 
    business") has shorter cards for the same platforms, next to the **Google Account** (Continue with Google
    sign-in), Shopify and WhatsApp cards. Both follow the same rules (`components/integrations/adPlatformParts.tsx`).
    Card order for ads: Google Ads, Meta Ads, Google AdSense.
-3. They press **Connect with Google Ads**, **Connect with Meta Ads** or **Connect with Google AdSense** (on Connect
-   your business: **Continue with …**) and approve on the platform's own screen. Connecting needs the integrations permission (`integrations.manage`:
+3. They press **Continue with Google Ads**, **Continue with Meta Ads** or **Continue with Google AdSense** (the same
+   words on both pages: the review packs quote them) and approve on the platform's own screen. Connecting needs the integrations permission (`integrations.manage`:
    owners and admins, unless the owner gave it to another role) and a verified email address.
 4. When the login can see several accounts and some are new, they tick the ones that belong to this store.
    - The sign-in waits on the server, encrypted, for 15 minutes.
@@ -63,7 +63,8 @@ The cards show these as one badge (`AD_STATE` in `apps/web/src/lib/adConnections
 Connecting, Synchronizing, Connected, Authorization required, Permission missing, Verification pending, Sync failed,
 Reconnect required, Disconnected, plus Checking… and Status unavailable while the page loads. A platform's card shows
 the worst of its accounts. Each account row shows who connected it, when, the permission granted, the last sync,
-and **Refresh**, **Show on dashboard** and **Disconnect**.
+and **Refresh**, **Show on dashboard** and **Disconnect** (on Settings → Advertising: **Sync data now**, **Show on
+dashboard**, **Disconnect**, and who connected it and the permission behind **View data details**).
 
 Two notes appear before anyone is sent to a platform:
 - **Google Ads**: while `GOOGLE_ADS_OAUTH_VERIFIED` isn't `"1"`, the card warns that Google first shows "Google
