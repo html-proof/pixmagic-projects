@@ -56,8 +56,9 @@ const providerSchema = z.enum(AD_PROVIDERS);
 
 /**
  * The Nango sessions this browser started, newest first: the platform's consent comes back through
- * bizinsights' callback forward (below) only in a browser that holds one. Without it, a session token
- * handed to someone else's page would bring that person's consent back to the starter's store.
+ * bizinsights' callback forward (below) only in a browser that holds one, for the person signed in who
+ * started it. Without it, a session token handed to someone else's page would bring that person's
+ * consent back to the starter's store.
  */
 const SESSION_COOKIE = "ads_nango_state";
 const MAX_SESSIONS = 5;
@@ -231,9 +232,11 @@ export function adsNangoRoutes(app: App, deps: Deps) {
   /**
    * Nango's OAuth callback, at bizinsights' own address: the platform sends the browser here after its
    * consent screen (this is the redirect URI registered with Meta and Google, and the Nango environment's
-   * callback URL), and it goes on to Nango's, query and all (308 keeps the method). Only in a browser that
-   * started a Nango session that is still open, and (when signed in) for the person who started it: a
-   * consent given anywhere else never reaches Nango, so no connection is made from it.
+   * callback URL), and it goes on to Nango's, query and all (308 keeps the method). Only for a person
+   * signed in here who started a Nango session in this browser that is still open: a consent given
+   * anywhere else (signed out, someone else signed in, no open session of theirs) never reaches Nango, so
+   * no connection is made from it. Which of those sessions the consent is for can't be told here: the
+   * query's `state` is Nango's own, and Nango's API has no lookup for it (docs/nango.md).
    */
   app.get("/ads/nango/oauth-callback", async (c) => {
     const cfg = nangoConfig();
@@ -241,9 +244,10 @@ export function adsNangoRoutes(app: App, deps: Deps) {
     const states = (await Promise.all(sessionsOf(getCookie(c, SESSION_COOKIE)).map((n) => peekNangoSessionState(deps.coord, n).catch(() => null)))).filter(
       (s): s is NonNullable<typeof s> => !!s,
     );
-    const user = states.length ? await loadUser(c, deps).catch(() => undefined) : undefined;
-    if (!states.length || (user && !states.some((s) => s.userId === user.id))) {
-      logger.warn({ ip: clientIp(c), sessions: states.length }, "nango callback refused: this browser started no open Nango session");
+    // Not knowing who is signed in (an outage) refuses too: the person presses the button again.
+    const user = states.length ? await loadUser(c, deps).catch(() => null) : null;
+    if (!user || !states.some((s) => s.userId === user.id)) {
+      logger.warn({ ip: clientIp(c), sessions: states.length, signedIn: !!user }, "nango callback refused: no open Nango session in this browser of the person signed in");
       return c.redirect(`${env().APP_URL}/settings/ads?${new URLSearchParams({ error: "state_mismatch" })}`);
     }
     const search = new URL(c.req.url).search;

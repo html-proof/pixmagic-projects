@@ -75,10 +75,15 @@ Settings → Integrations / Advertising card — "Continue with Meta Ads" (or Go
 - **The OAuth callback is bizinsights'.** Nango's environment uses `https://bizinsights.io/api/ads/nango/oauth-callback`
   as its callback URL. That route 308-redirects to `https://api.nango.dev/oauth/callback` with the query intact.
   So the consent screens and the redirect URIs registered with Meta and Google name bizinsights.io, the domain
-  Google has verified, never nango.dev. **It forwards only in the browser that started an open Nango session**
-  (cookie `ads_nango_state`, and the signed-in person must be its starter): a session token handed to someone
-  else's page can't bring that person's consent back to the starter's store, because their consent never
-  reaches Nango.
+  Google has verified, never nango.dev. **It forwards only for a person signed in to bizinsights who started an
+  open Nango session in that browser** (cookie `ads_nango_state`). Signed out, someone else signed in, or no
+  open session of theirs: refused, back to `/settings/ads?error=state_mismatch`. So a session token handed to
+  someone else's page can't bring that person's consent back to the starter's store, because their consent
+  never reaches Nango. What is left: bizinsights can't tell which session a consent is for. The callback's
+  `state` is Nango's own, made when Nango's popup opens, and Nango's API has no lookup for it. So a person who
+  has their own open session in that browser (started in the last 30 minutes, not finished or cancelled), and
+  who authorizes on another person's page, still has their consent forwarded. Closing that gap would mean
+  sending Nango's whole API and its WebSocket through bizinsights.io (the Connect UI's `apiURL`).
 - Configuration (`packages/core/src/env.ts`): `NANGO_SECRET_KEY` and `NANGO_WEBHOOK_SECRET` (secrets),
   `NANGO_PROVIDERS` (default `meta,adsense`; add `google` once Google Ads connections are open), `NANGO_API_URL`.
   A platform goes through Nango only when it is listed **and** its own app's keys are set here
