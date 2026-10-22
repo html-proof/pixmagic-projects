@@ -102,6 +102,11 @@ export const APP_SETTINGS = {
   // itself (docs/ads-demo.md): nothing is read from Google, and the demo is marked as one wherever it
   // shows. Offered to members who may manage integrations; empty hides the button.
   "GOOGLE_ADS_DEMO_ENABLED": "1",
+  // Supermetrics (docs/supermetrics.md): offered once the secret SUPERMETRICS_API_KEY (bizinsights'
+  // Supermetrics team's API key) is in Secrets Manager; until then nothing about it shows. The
+  // platforms its licence includes (meta, google, adsense): list only the data sources bought.
+  "SUPERMETRICS_API_URL": "https://api.supermetrics.com",
+  "SUPERMETRICS_SOURCES": "meta,google,adsense",
   // WhatsApp Business Platform (Cloud API), docs/whatsapp.md. "Connect WhatsApp Business" (Meta's
   // Embedded Signup) needs the Meta app id (empty: META_APP_ID is used), the Facebook Login for
   // Business configuration id of its WhatsApp Embedded Signup variation, and the secrets

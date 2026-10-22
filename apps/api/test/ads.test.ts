@@ -127,6 +127,8 @@ describe("connecting ad accounts", () => {
       // The Google Ads demo (docs/ads-demo.md) is offered only when switched on; the real sign-in says what it lacks.
       demo: { google: false },
       missing: { google: ["GOOGLE_ADS_CLIENT_ID", "GOOGLE_ADS_CLIENT_SECRET", "GOOGLE_ADS_ENABLED"] },
+      // Supermetrics (docs/supermetrics.md) is offered only with bizinsights' Supermetrics key.
+      supermetrics: { meta: false, google: false, adsense: false },
     });
     const res = await connect("meta");
     expect(res.statusCode).toBe(503);

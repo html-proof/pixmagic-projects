@@ -1,7 +1,7 @@
 /** A connection's tokens: encrypted at rest, refreshed when they expire, re-encrypted on key rotation. */
 import { systemDb, type AdConnection } from "@app/db";
 import { decrypt, encrypt, keyVersionOf, type AdProvider } from "@app/shared";
-import { AdsApiError, AdsAuthError, googleRefresh, googleUserId, metaUserId, REQUIRED_AD_SCOPE, type TokenSet } from "../ads.js";
+import { AdsApiError, AdsAuthError, googleRefresh, googleUserId, metaUserId, REQUIRED_AD_SCOPE, type SupermetricsCredential, type TokenSet } from "../ads.js";
 import { logger } from "../logger.js";
 import type { FetchLike } from "../shopify.js";
 import { keyring } from "../tokens.js";
@@ -19,6 +19,29 @@ export function encryptAdTokens(storeId: string, provider: AdProvider, t: TokenS
     accessTokenExpiresAt: t.expiresAt,
     tokenKeyVersion: keyVersionOf(accessTokenEnc),
   };
+}
+
+/** A connection read through Supermetrics (docs/supermetrics.md): it holds no platform token, only its Supermetrics credential. */
+export const isSupermetricsConnection = (conn: Pick<AdConnection, "source">): boolean => conn.source === "supermetrics";
+
+/**
+ * A Supermetrics connection's credential, sealed in access_token_enc like a token (same AAD, so it can't
+ * move to another store's row, and re-encrypted on key rotation like one): the login's username at the
+ * platform and the account's id at Supermetrics. Never a token: nothing in it opens the platform; only
+ * bizinsights' Supermetrics key can use it, and only for what the login was granted.
+ */
+export function encryptSupermetricsCredential(storeId: string, provider: AdProvider, cred: SupermetricsCredential) {
+  const k = keyring();
+  const accessTokenEnc = encrypt(JSON.stringify({ u: cred.dsUser, a: cred.dsAccount, ...(cred.adsenseCurrency ? { m: cred.adsenseCurrency } : {}) }), k, aad(storeId, provider, "access"));
+  return { accessTokenEnc, refreshTokenEnc: null, accessTokenExpiresAt: null, tokenKeyVersion: keyVersionOf(accessTokenEnc) };
+}
+
+/** The credential back from a Supermetrics connection. One that can't be read means connecting again. */
+export function supermetricsCredential(conn: Pick<AdConnection, "storeId" | "provider" | "accessTokenEnc">): SupermetricsCredential {
+  if (!conn.accessTokenEnc) throw new AdsAuthError("The Supermetrics connection holds no credential");
+  const raw = JSON.parse(decrypt(conn.accessTokenEnc, keyring(), aad(conn.storeId, conn.provider, "access"))) as { u?: unknown; a?: unknown; m?: unknown };
+  if (typeof raw.u !== "string" || typeof raw.a !== "string" || !raw.u || !raw.a) throw new AdsAuthError("The Supermetrics credential is incomplete");
+  return { dsUser: raw.u, dsAccount: raw.a, ...(raw.m === "account" || raw.m === "usd" ? { adsenseCurrency: raw.m } : {}) };
 }
 
 /** The Google OAuth client a Google Ads or AdSense connection refreshes through. */
@@ -51,6 +74,8 @@ export async function accessTokenAndPerson(conn: AdConnection, fetchImpl?: Fetch
   const k = keyring();
   const soon = Date.now() + 5 * 60_000;
   const access = () => decrypt(conn.accessTokenEnc, k, aad(conn.storeId, conn.provider, "access"));
+  // Supermetrics: the sealed credential (supermetricsCredential reads it); nothing to refresh, and no platform person.
+  if (isSupermetricsConnection(conn)) return { token: access(), person: null };
   if (conn.provider === "meta") {
     if (conn.accessTokenExpiresAt && conn.accessTokenExpiresAt.getTime() < Date.now()) throw new AdsAuthError("Meta access has expired");
     return { token: access() };
@@ -94,6 +119,8 @@ async function rememberPerson(conn: Pick<AdConnection, "storeId" | "provider" | 
  */
 export async function learnAdPerson(conn: AdConnection, accessToken: string, fetchImpl?: FetchLike): Promise<string | null> {
   if (conn.externalUserId) return conn.externalUserId;
+  // A Supermetrics login is the platform person's grant to Supermetrics, not to bizinsights: no id of theirs to learn.
+  if (isSupermetricsConnection(conn)) return null;
   let person: string | null = null;
   if (conn.provider === "meta") {
     const cfg = metaConfig(fetchImpl);
