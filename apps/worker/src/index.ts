@@ -5,6 +5,7 @@ import {
   flagStaleSessions,
   logger,
   MAX_ATTEMPTS,
+  pruneAdSyncRuns,
   pruneShopifyReports,
   pruneTeamRecords,
   raiseAlert,
@@ -344,6 +345,17 @@ export async function pruneTeamDaily(deps: Pick<WorkerDeps, "coord">) {
   }
 }
 
+/** Ad sync records past their keeping (core's pruneAdSyncRuns) once a day, like the team retention above. */
+export async function pruneAdSyncRunsDaily(deps: Pick<WorkerDeps, "coord">) {
+  if (!(await deps.coord.acquire("sweep:ad-sync-runs", TEAM_RETENTION_LEASE_MS))) return null;
+  try {
+    return await pruneAdSyncRuns();
+  } catch (err) {
+    await deps.coord.release("sweep:ad-sync-runs").catch(() => {});
+    throw err;
+  }
+}
+
 export async function runScheduled(cron: string, deps: WorkerDeps) {
   if (cron === CRON.reconcile) return { reconciled: await scheduleReconcile(deps) };
   // Shares the */15 trigger rather than adding a schedule: both are cheap sweeps, and a stale
@@ -423,7 +435,11 @@ export async function runScheduled(cron: string, deps: WorkerDeps) {
       logger.error({ err }, "inventory prune failed; the next tick tries again");
       return null;
     });
-    return { refreshed, staleJobsFailed, reconciled, salesRereads, adsSynced, adAlerts, whatsapp, staffOpenShifts, email, pixelDedupePruned, teamPruned, checksPruned, shopifyReportsPruned, inventory, inventoryPruned };
+    const adSyncRunsPruned = await pruneAdSyncRunsDaily(deps).catch((err: unknown) => {
+      logger.error({ err }, "ad sync records prune failed; the next tick tries again");
+      return null;
+    });
+    return { refreshed, staleJobsFailed, reconciled, salesRereads, adsSynced, adAlerts, whatsapp, staffOpenShifts, email, pixelDedupePruned, teamPruned, checksPruned, shopifyReportsPruned, inventory, inventoryPruned, adSyncRunsPruned };
   }
   logger.warn({ cron }, "unknown cron trigger");
   return {};

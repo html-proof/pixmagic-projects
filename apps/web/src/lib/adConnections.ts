@@ -30,6 +30,10 @@ export interface AdConnection {
   accountStatusDetail: string | null;
   /** The last sync that worked. */
   lastSyncedAt: string | null;
+  /** When the last sync started, whatever came of it. */
+  lastSyncAttemptAt: string | null;
+  /** How the figures are read: bizinsights' own sign-in with the platform, or through Supermetrics (docs/supermetrics.md). */
+  source: "direct" | "supermetrics";
   /** The account's own last day (YYYY-MM-DD) stored without a gap, and the first. */
   syncedThrough: string | null;
   historyFrom: string | null;
@@ -83,6 +87,23 @@ export interface AdsState {
   demo?: Partial<Record<AdProvider, boolean>>;
   /** The settings each platform's real sign-in still lacks on this server, by name (never a value). */
   missing?: Partial<Record<AdProvider, string[]>>;
+  /** Which platforms can be connected through Supermetrics on this server; absent from older answers. */
+  supermetrics?: Partial<Record<AdProvider, boolean>>;
+}
+
+/** One sync of a connection as it ended (GET .../ads/connections/:id/syncs). */
+export interface AdSyncRun {
+  trigger: "request" | "schedule" | "history" | string;
+  since: string | null;
+  until: string | null;
+  outcome: "synced" | "skipped" | "failed" | string;
+  rows: number;
+  reason: string | null;
+  source: string;
+  startedAt: string;
+  finishedAt: string;
+  /** A failure, worded from its code; null otherwise. */
+  message: string | null;
 }
 
 /** The account list after a sign-in that sees several accounts (GET .../ads/pending/:nonce). */
@@ -135,6 +156,8 @@ export function adConnectionsOf(state: AdsState | null): AdConnection[] {
       accountStatus: isAdAccountStatus(raw.accountStatus) ? raw.accountStatus : null,
       accountStatusDetail: raw.accountStatusDetail ?? null,
       lastSyncedAt: raw.lastSyncedAt ?? null,
+      lastSyncAttemptAt: raw.lastSyncAttemptAt ?? null,
+      source: raw.source === "supermetrics" ? "supermetrics" : "direct",
       syncedThrough: raw.syncedThrough ?? null,
       historyFrom: raw.historyFrom ?? null,
       syncRequestedAt: raw.syncRequestedAt ?? null,
@@ -315,9 +338,10 @@ export function platformState(provider: AdProvider, input: PlatformInput, now = 
   const mine = input.connections.filter((c) => c.provider === provider);
   if (!mine.length) {
     if (input.justDisconnected) return { state: "disconnected", hidden: false, demo: !!input.justDisconnectedDemo };
-    // A platform not set up on this server offers its demo where it has one: never "Coming soon" with a button under it.
-    if (!input.answer.configured[provider]) return { state: input.answer.demo?.[provider] ? "not_connected" : "coming_soon", hidden: false, demo: false };
-    return { state: input.answer.restricted[provider] ? "verification_pending" : "not_connected", hidden: false, demo: false };
+    // A platform not set up on this server offers its demo, or Supermetrics, where it has one: never "Coming soon" with a button under it.
+    if (!input.answer.configured[provider]) return { state: input.answer.demo?.[provider] || input.answer.supermetrics?.[provider] ? "not_connected" : "coming_soon", hidden: false, demo: false };
+    // Supermetrics' own sign-in isn't held back by bizinsights' app reviews.
+    return { state: input.answer.restricted[provider] && !input.answer.supermetrics?.[provider] ? "verification_pending" : "not_connected", hidden: false, demo: false };
   }
   const shown = mine.filter((c) => c.enabled);
   const counted = shown.length ? shown : mine;
@@ -362,7 +386,19 @@ export const REMOVE_ACCESS: Record<AdProvider, { url: string; label: string }> =
 };
 
 /** What to tell the person after a disconnect about bizinsights' access at the platform (null: nothing to add). */
-export function revokeNote(provider: AdProvider, outcome: RevokeOutcome | undefined): { kind: "success" | "info"; text: string; link?: { url: string; label: string } } | null {
+export function revokeNote(provider: AdProvider, outcome: RevokeOutcome | undefined, source: AdConnection["source"] = "direct"): { kind: "success" | "info"; text: string; link?: { url: string; label: string } } | null {
+  if (source === "supermetrics") {
+    if (outcome === "revoked") return { kind: "success", text: "bizinsights also ended the Supermetrics login it was read through." };
+    if (outcome === "still_used") return { kind: "info", text: "The Supermetrics login stays for now: another account here is read through it. It's ended with the last of them." };
+    if (outcome) {
+      return {
+        kind: "info",
+        text: "bizinsights couldn't end the Supermetrics login by itself. Nothing is read any more; to remove Supermetrics' access at the platform too, open",
+        link: REMOVE_ACCESS[provider],
+      };
+    }
+    return null;
+  }
   const google = provider !== "meta";
   switch (outcome) {
     case "revoked":
