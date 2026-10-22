@@ -1082,13 +1082,17 @@ the same morning), and what answers each:
   2026-10-21 (`aws ec2 stop-instances --region ap-southeast-2 --instance-ids <id>`). Its user data
   stops it on a fresh image's first boot only, so after any start, stop it.
 - **Single AZ Application Check** (yellow, the VPC): current, not stale: AWS re-reads it daily
-  about 12:52Z and the row's Last Updated Time moves. The facts say otherwise: egress leaves through
-  both NAT instances (NetworkOut 2026-10-18..20: nat-a 34, 47 and 47 MB a day, nat-b 41, 63 and
-  42), the functions run in both AZs and the database is Multi-AZ. What AWS infers from "egress
-  network patterns", and over what window, is not documented; the one-AZ NAT gateway went on
-  2026-10-17 06:22Z. Wait for it: if it is still yellow on about 2026-10-31 (a 14-day window fully
-  past), open a support case (Business Support until 2026-11-14) rather than excluding it. Its row
-  is the VPC itself, so excluding it would hide every future finding.
+  about 12:52Z and the row's Last Updated Time moves. The facts say otherwise, checked again on
+  2026-10-22: six subnets over 2a and 2b, the functions' network interfaces in both app subnets,
+  the database Multi-AZ (primary 2b, standby 2a), only gateway endpoints (no AZ), no NAT gateway,
+  and egress through both NAT instances every day since 2026-10-17 (NetworkOut 2026-10-18..21:
+  nat-a 34, 47, 47 and 18 MB a day, nat-b 41, 63, 42 and 22). What AWS infers from "egress network
+  patterns", and over what window, is not documented, and the check can't be refreshed; the one-AZ
+  NAT gateway went on 2026-10-17 06:22Z, five days before. On the owner's "fix it" the VPC's row was
+  excluded on 2026-10-22 (fault tolerance all green). An excluded row keeps being evaluated and
+  shows its live status (`list-recommendation-resources ... --exclusion-status excluded`): once it
+  reads ok, include it again, so a real single-AZ regression counts once more. If it is still yellow
+  in November, ask AWS Support what the check sees (Business Support until 2026-11-14).
 
 Exclusions are per row, in the Trusted Advisor API (a console "Exclude" does the same). To list
 them, and to undo one:
