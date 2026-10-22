@@ -246,8 +246,9 @@ describe("installing from Shopify", () => {
     expect(res.headers.location).toMatch(/\/onboarding\?step=sync&store=/);
     const { headers } = await signIn(ctx, "taker", "taker@x.com");
     const mine = await createWorkspace(ctx, headers, "Mine");
-    const taken = await ctx.app.inject({ method: "POST", url: `/workspaces/${mine}/shopify/install`, headers, payload: { shop: SHOP } });
+    const taken = await ctx.app.inject({ method: "POST", url: `/workspaces/${mine}/shopify/install`, headers, payload: { shop: SHOP, from: "settings" } });
     expect(taken.json().error).toBe("store_taken");
+    expect((await systemDb.store.findUniqueOrThrow({ where: { shopDomain: SHOP } })).workspaceId).toBe(ws.id);
   });
 
   it("a claim for a store connected to an account another way since has expired", async () => {
@@ -319,9 +320,15 @@ describe("installing from Shopify", () => {
 
     const { headers } = await signIn(ctx, "rival", "rival@x.com");
     const ws = await createWorkspace(ctx, headers, "Rival");
-    const res = await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/shopify/install`, headers, payload: { shop: SHOP } });
+    const res = await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/shopify/install`, headers, payload: { shop: SHOP, from: "settings" } });
     expect(res.statusCode).toBe(409);
     expect(res.json().error).toBe("store_taken");
+    // From onboarding: on to the rival's own dashboard, which says the store is someone else's.
+    const onboarding = await ctx.app.inject({ method: "POST", url: `/workspaces/${ws}/shopify/install`, headers, payload: { shop: SHOP } });
+    expect(onboarding.json().url).toBe(`http://localhost:3001/dashboard?ws=${ws}&taken=${SHOP}`);
+    const store = await systemDb.store.findUniqueOrThrow({ where: { shopDomain: SHOP } });
+    expect(store.workspaceId).not.toBe(ws);
+    expect(await systemDb.membership.count({ where: { workspaceId: store.workspaceId } })).toBe(1);
   });
 
   it("sends a failed install back to the page that explains it", async () => {

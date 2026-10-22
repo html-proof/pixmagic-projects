@@ -40,7 +40,7 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { useApp } from "@/components/AppContext";
+import { canManage, useApp } from "@/components/AppContext";
 import { BrandLogo } from "@/components/Brand";
 import { CommandPalette, type PaletteItem } from "@/components/CommandPalette";
 import { ShopifyIcon } from "@/components/ShopifyIcon";
@@ -201,9 +201,13 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   );
 }
 
+/** The switcher's last entry for those who manage stores: Settings → Stores, where another store is connected. */
+const CONNECT_STORE = "connect";
+
 /** The store picker: a card showing the store, with the native select laid over it (keyboard and screen readers get a real select). */
 function StoreSwitcher() {
-  const { stores, store, setStoreId } = useApp();
+  const { stores, store, setStoreId, workspace } = useApp();
+  const router = useRouter();
   if (!stores.length) return null;
   const title = store?.name ?? store?.shopDomain ?? "Choose a store";
   return (
@@ -221,11 +225,12 @@ function StoreSwitcher() {
         data-testid="store-switcher"
         className="absolute inset-0 h-full w-full cursor-pointer appearance-none opacity-0"
         value={store?.id ?? ""}
-        onChange={(e) => setStoreId(e.target.value)}
+        onChange={(e) => (e.target.value === CONNECT_STORE ? router.push("/settings/stores") : setStoreId(e.target.value))}
       >
         {stores.map((s) => (
           <option key={s.id} value={s.id}>{s.name ?? s.shopDomain}</option>
         ))}
+        {canManage(workspace.role) && <option value={CONNECT_STORE}>+ Connect another store</option>}
       </select>
     </div>
   );

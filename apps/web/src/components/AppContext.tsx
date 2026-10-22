@@ -104,6 +104,12 @@ const AppCtx = createContext<Ctx | null>(null);
 const isActive = (w: MeWorkspace) => !w.status || w.status === "active";
 
 /**
+ * The workspace (`?ws=`) or store (`?store=`) the address names: the API's redirects after a
+ * connect open the one they are about. Only picks among the person's own, and only on arrival.
+ */
+const linked = (name: "ws" | "store") => new URLSearchParams(window.location.search).get(name);
+
+/**
  * How often the open workspace's permissions are checked while the tab is visible. The check is
  * one tiny request answered 304 while nothing changed; any other response that shows a different
  * fingerprint, or a refusal, checks at once. Enforcement never waits for it: the API checks every
@@ -170,8 +176,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setMe(m);
       const active = m.workspaces.filter(isActive);
       if (!currentWs.current || !m.workspaces.some((w) => w.id === currentWs.current)) {
+        const asked = active.find((w) => w.id === linked("ws"));
+        if (asked) writeLocal(WORKSPACE_KEY, asked.id);
         const saved = readLocal(WORKSPACE_KEY);
-        const pick = active.find((w) => w.id === saved) ?? active[0] ?? m.workspaces[0]!;
+        const pick = asked ?? active.find((w) => w.id === saved) ?? active[0] ?? m.workspaces[0]!;
         currentWs.current = pick.id;
       }
       setWsId(currentWs.current);
@@ -190,7 +198,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (currentWs.current !== wsId) return;
     setStores(stores);
     setStoresStatus("ready");
-    const saved = readLocal(storeKey(wsId));
+    const asked = stores.find((s) => s.id === linked("store"))?.id;
+    if (asked) writeLocal(storeKey(wsId), asked);
+    const saved = asked ?? readLocal(storeKey(wsId));
     setStoreIdState((cur) => (stores.some((s) => s.id === cur) ? cur : stores.some((s) => s.id === saved) ? saved : (stores[0]?.id ?? null)));
   }, [wsId]);
 
