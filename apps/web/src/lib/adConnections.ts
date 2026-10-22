@@ -32,8 +32,11 @@ export interface AdConnection {
   lastSyncedAt: string | null;
   /** When the last sync started, whatever came of it. */
   lastSyncAttemptAt: string | null;
-  /** How the figures are read: bizinsights' own sign-in with the platform, or through Supermetrics (docs/supermetrics.md). */
-  source: "direct" | "supermetrics";
+  /**
+   * How the figures are read: bizinsights' own sign-in with the platform ("direct"), the same sign-in
+   * authorized through Nango, which keeps the token (docs/nango.md), or through Supermetrics (docs/supermetrics.md).
+   */
+  source: "direct" | "nango" | "supermetrics";
   /** The account's own last day (YYYY-MM-DD) stored without a gap, and the first. */
   syncedThrough: string | null;
   historyFrom: string | null;
@@ -89,6 +92,8 @@ export interface AdsState {
   missing?: Partial<Record<AdProvider, string[]>>;
   /** Which platforms can be connected through Supermetrics on this server; absent from older answers. */
   supermetrics?: Partial<Record<AdProvider, boolean>>;
+  /** Which platforms' Connect button opens Nango's Connect UI on this server (docs/nango.md); absent from older answers. */
+  nango?: Partial<Record<AdProvider, boolean>>;
 }
 
 /** One sync of a connection as it ended (GET .../ads/connections/:id/syncs). */
@@ -157,7 +162,7 @@ export function adConnectionsOf(state: AdsState | null): AdConnection[] {
       accountStatusDetail: raw.accountStatusDetail ?? null,
       lastSyncedAt: raw.lastSyncedAt ?? null,
       lastSyncAttemptAt: raw.lastSyncAttemptAt ?? null,
-      source: raw.source === "supermetrics" ? "supermetrics" : "direct",
+      source: raw.source === "supermetrics" || raw.source === "nango" ? raw.source : "direct",
       syncedThrough: raw.syncedThrough ?? null,
       historyFrom: raw.historyFrom ?? null,
       syncRequestedAt: raw.syncRequestedAt ?? null,

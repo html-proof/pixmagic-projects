@@ -25,8 +25,9 @@ for (const name of readdirSync(chunks).filter((n) => n.endsWith(".css"))) {
     const family = /font-family:([^;]+)/.exec(body)?.[1];
     for (const [, url] of body.matchAll(/url\(["']?([^)"']+\.woff2?)["']?\)/g)) if (family) familyOfFile.set(basename(url), unquote(family));
   }
-  // next/font's rules: `.x__className{font-family:F,...}` and `.x__variable{--font-y:"F", ...}`.
-  for (const [, cls, value] of css.matchAll(/\.([\w-]+__(?:className|variable))\s*\{(?:font-family|--[\w-]+):([^;}]+)/g)) {
+  // next/font's rules: `.x__className{font-family:F,...}` and `.x__variable{--font-y:"F", ...}` (Next 16.4 writes
+  // one underscore: `.f_SjWG_className`).
+  for (const [, cls, value] of css.matchAll(/\.([\w-]+_(?:className|variable))\s*\{(?:font-family|--[\w-]+):([^;}]+)/g)) {
     const family = unquote(value);
     classesOfFamily.set(family, [...(classesOfFamily.get(family) ?? []), cls]);
   }

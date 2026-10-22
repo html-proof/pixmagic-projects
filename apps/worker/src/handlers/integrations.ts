@@ -10,6 +10,7 @@ import {
   googleAdsBudgetAllows,
   nextHistoryWindow,
   recheckDays,
+  sweepNangoOrphans,
   sweepAdAlerts,
   syncAdConnection,
   type AdsSyncData,
@@ -186,4 +187,9 @@ async function sendOrRelease(deps: WorkerDeps, lease: string, send: () => Promis
 /** Ad connections' alerts (core's sweepAdAlerts): raised from what the connections say, closed once nothing calls for them. */
 export async function sweepAdConnectionAlerts(deps: Pick<WorkerDeps, "mailer" | "fetchImpl">) {
   return sweepAdAlerts({ mailer: deps.mailer, fetchImpl: deps.fetchImpl });
+}
+
+/** Nango connections a merchant authorized but never finished connecting (docs/nango.md): let go after a grace period. */
+export async function sweepNangoLeftovers(deps: Pick<WorkerDeps, "coord" | "fetchImpl">) {
+  return sweepNangoOrphans(deps.coord, deps.fetchImpl);
 }
