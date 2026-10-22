@@ -491,7 +491,7 @@ describe("Nango's webhooks", () => {
 });
 
 describe("bizinsights' address for Nango's OAuth callback", () => {
-  it("forwards the platform's answer to Nango's callback, query and all, in the browser that started the session", async () => {
+  it("forwards the platform's answer to Nango's callback, query and all, only for the signed-in person who started the session in this browser", async () => {
     const started = await session("adsense");
     const browser = `${headers.cookie}; ${cookiesFrom(started)}`;
     expect(browser).toContain("ads_nango_state=");
@@ -502,6 +502,10 @@ describe("bizinsights' address for Nango's OAuth callback", () => {
     const elsewhere = await ctx.app.inject({ method: "GET", url: "/ads/nango/oauth-callback?code=abc&state=xyz" });
     expect(elsewhere.statusCode).toBe(302);
     expect(elsewhere.headers.location).toContain("/settings/ads?error=state_mismatch");
+    // The session cookie with nobody signed in (signed out since, or a browser it was copied to): refused.
+    const signedOut = await ctx.app.inject({ method: "GET", url: "/ads/nango/oauth-callback?code=abc&state=xyz", headers: { cookie: cookiesFrom(started) } });
+    expect(signedOut.statusCode).toBe(302);
+    expect(signedOut.headers.location).toContain("/settings/ads?error=state_mismatch");
     // Someone else signed in, holding this browser's session cookie: refused too.
     const other = await signIn(ctx, "nango-other", "other@x.com");
     const mixed = await ctx.app.inject({ method: "GET", url: "/ads/nango/oauth-callback?code=abc", headers: { cookie: `${other.cookie}; ${cookiesFrom(started)}` } });
