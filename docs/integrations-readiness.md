@@ -83,6 +83,15 @@ The detail behind each line: [ads-setup.md](ads-setup.md) (how the integrations 
 | This branch deployed | Completed | On production since release 77 (built from `ee7206c`, which includes it): the Meta callbacks answer and the deploy applied migration `20261019120000_ad_connection_health`. | None. (Claude) |
 | Meta API version | Completed | v26.0 since this branch. The build fails 90 days before a version's end, so a red build is the reminder. | Re-read Meta's changelog by 2027-04-17 (ads-setup.md, "Keeping the API versions current"). (Claude) |
 
+## Supermetrics (optional second way to connect: [supermetrics.md](supermetrics.md))
+
+| Requirement | Status | Why | Next action (who) |
+| --- | --- | --- | --- |
+| "Connect through Supermetrics" in bizinsights | Completed (2026-10-22, switched off) | Built and tested against Supermetrics' documented API: login links, sync, live reports, sync records, revoke on disconnect. Shows only once the key below is stored. Merchants sign in with Supermetrics' Meta and Google apps, which don't wait on bizinsights' Meta App Review or Google `adwords` verification above. | None until the licence. (Claude) |
+| Supermetrics API licence for bizinsights' team | Blocked (no Supermetrics account) | Checked 2026-10-22: the owner's Chrome isn't signed in to hub.supermetrics.com and no key was ever stored. Needs data sources FA, AW, ADM and the Management API's login links; Supermetrics should confirm in writing that links may go to bizinsights' customers. | Buy it, or ask Supermetrics for a trial with login links (supermetrics.md, "What the owner has to do", step 1). (Owner) |
+| `SUPERMETRICS_API_KEY` in production | Blocked (licence) | Read from `insights/production/app` at cold start; empty hides every Supermetrics button. | `node infra/cdk/scripts/put-secrets.mjs --set SUPERMETRICS_API_KEY`, then a deploy or a function restart. (Owner) |
+| Figures checked against the platforms | Blocked (key) | Nothing has been read from the live Supermetrics API yet. | Claude connects one account per platform with you and compares a week with Ads Manager, Google Ads and AdSense (supermetrics.md step 5). (Owner with Claude) |
+
 ## What is left, in order (checked 2026-10-20)
 
 Everything Claude can do alone is done: the code is live, both secrets are in AWS, the Meta callbacks and settings
