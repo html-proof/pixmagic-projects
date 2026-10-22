@@ -11,7 +11,7 @@ import type { OAuthProvider } from "@app/shared/email";
 import { adsConfigured, adsRestricted } from "./adConnections/config.js";
 import { appSecretVar } from "./apps.js";
 import { emailOAuthConfigured } from "./email/oauth.js";
-import { env } from "./env.js";
+import { env, switchedOn } from "./env.js";
 import { logger } from "./logger.js";
 import { waPlatformConfig } from "./whatsapp/graph.js";
 
@@ -40,6 +40,8 @@ export interface ConfigReport {
   email: Record<OAuthProvider, boolean> & { resend: boolean };
   /** Sign-in: the Cognito pool and app client, "Continue with Google", Cognito's passwordless codes, and the app's emailed code after the password. */
   auth: { cognito: boolean; google: boolean; emailOtp: boolean; loginCode: boolean };
+  /** Customer Messaging: the platform's mode (off | sandbox | live), the marketing switch, and whether the delivery events' configuration set and a shared sender are set. */
+  sms: { mode: string; marketing: boolean; configurationSet: boolean; sharedSender: boolean };
   credentials: ProviderCredentials[];
   /** The providers in `credentials` whose public id is set and whose secret is missing. */
   halfConfigured: string[];
@@ -157,6 +159,7 @@ export function configReport(): ConfigReport {
       emailOtp: e.COGNITO_EMAIL_OTP === "1",
       loginCode: e.AUTH_LOGIN_EMAIL_CODE === "1",
     },
+    sms: { mode: e.SMS_MODE, marketing: switchedOn(e.SMS_MARKETING_ENABLED), configurationSet: !!e.SMS_CONFIGURATION_SET.trim(), sharedSender: !!e.SMS_SHARED_SENDER.trim() },
     credentials,
     halfConfigured: credentials.filter(isHalf).map((c) => c.provider),
   };

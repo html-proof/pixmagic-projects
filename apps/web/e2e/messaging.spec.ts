@@ -1,0 +1,83 @@
+import { expect, test, type Page } from "@playwright/test";
+import pg from "pg";
+import { E2E_ENV } from "../playwright.config";
+import { insertStore, signUp, uniqueEmail } from "./helpers";
+
+/**
+ * Customer Messaging in the browser, against the local server's stand-in for AWS (apps/aws
+ * local.ts: a shared sender LOCALTEST, texts that never leave the machine, "delivered" a moment
+ * later through the delivery-events queue). The rules are covered by apps/api/test/sms.test.ts and
+ * apps/worker/test/sms.test.ts; this checks the pages show and drive them.
+ */
+
+const db = new pg.Pool({ connectionString: E2E_ENV.DATABASE_URL });
+test.afterAll(() => db.end());
+
+async function ownerWithStore(page: Page) {
+  await signUp(page, uniqueEmail("sms"));
+  const ws = await page.evaluate(async () => {
+    const r = await fetch("/api/workspaces", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Green Leaf" }) });
+    return ((await r.json()) as { workspace: { id: string } }).workspace.id;
+  });
+  const store = await insertStore(db, ws, `sms-${Date.now()}.myshopify.com`);
+  await db.query(`UPDATE stores SET name = 'Green Leaf', last_synced_at = now() WHERE id = $1`, [store]);
+  return { ws, store, base: `/api/workspaces/${ws}/stores/${store}/sms` };
+}
+
+/** A JSON call from the page (its session cookie and origin). */
+const call = (page: Page, method: string, url: string, body?: unknown) =>
+  page.evaluate(
+    async ([m, u, b]) => {
+      const r = await fetch(u as string, { method: m as string, headers: { "content-type": "application/json" }, body: b === undefined ? undefined : JSON.stringify(b) });
+      return { status: r.status, json: (await r.json().catch(() => null)) as Record<string, never> };
+    },
+    [method, url, body] as const,
+  );
+
+test("an owner sets up a sender, verifies a test number, writes a template and texts it to themself", async ({ page }) => {
+  const { base } = await ownerWithStore(page);
+
+  await page.goto("/dashboard");
+  await page.getByRole("complementary").getByRole("navigation", { name: "App" }).getByRole("link", { name: "Customer Messaging" }).click();
+  await expect(page).toHaveURL(/\/messaging\/?$/);
+  await expect(page.getByRole("heading", { name: /Customer Messaging/ }).first()).toBeVisible();
+
+  // The sender, checked with (the stand-in for) AWS.
+  const saved = await call(page, "PUT", `${base}/sender`, { senderType: "sender_id", originationIdentity: "LOCALTEST", countries: ["AU"], monthlyBudgetUsd: 5, hardStop: true, transactionalBasis: "checkout_notice", quietStart: 0, quietEnd: 0, maxPerCustomerDay: 3, maxMarketingPerWeek: 2 });
+  expect(saved.status).toBe(200);
+  await page.goto("/messaging/sender");
+  await page.getByRole("button", { name: "Check with AWS" }).click();
+  await expect(page.getByText("Verified with AWS").first()).toBeVisible();
+
+  // A test number, verified with the code AWS "texted" it.
+  const added = await call(page, "POST", `${base}/test-numbers`, { number: "0412 345 678", country: "AU" });
+  expect(added.status).toBe(201);
+  const id = (added.json as { testNumber: { id: string } }).testNumber.id;
+  expect((await call(page, "POST", `${base}/test-numbers/${id}/verify`, { code: "123456" })).status).toBe(200);
+
+  // A template, written in the editor's API and seen in its list with its parts.
+  const t = await call(page, "POST", `${base}/templates`, { name: "Order confirmed", category: "transactional", body: "Hi {{customer_name}}, {{store_name}} got order {{order_number}}." });
+  expect(t.status).toBe(201);
+  await page.goto("/messaging/templates");
+  await expect(page.getByText("Order confirmed").first()).toBeVisible();
+
+  // The test text: accepted by AWS, then delivered (the stand-in's delivery event).
+  await page.goto("/messaging/send");
+  // Options read "<name> · <category> · <state>": pick it by its id.
+  await page.getByLabel("Template").first().selectOption((t.json as { template: { id: string } }).template.id);
+  await page.getByLabel("Test number").selectOption({ index: 1 });
+  await expect(page.getByText("Hi Sam, Acme Outfitters got order #1042.")).toBeVisible();
+  await page.getByRole("button", { name: "Send test" }).click();
+  await expect(page.getByText(/Accepted by AWS|Delivered/).first()).toBeVisible();
+  await expect
+    .poll(async () => ((await call(page, "GET", `${base}/messages?purpose=test`)).json as { messages: Array<{ status: string }> }).messages[0]?.status, { timeout: 15_000 })
+    .toBe("delivered");
+  await page.goto("/messaging/history");
+  // (The status filter lists "Delivered" too, as a hidden option.)
+  await expect(page.getByText("Delivered", { exact: true }).filter({ visible: true }).first()).toBeVisible();
+});
+
+test("the opt-out page says so for a link that names nothing", async ({ page }) => {
+  await page.goto("/stop?c=Nothing1234");
+  await expect(page.getByText(/isn't valid any more/)).toBeVisible();
+});

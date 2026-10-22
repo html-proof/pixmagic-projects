@@ -217,7 +217,8 @@ describe("the app stack", () => {
   it("emails the owner the day's AWS cost every morning, letting only the cron function read Cost Explorer", () => {
     const costSchedules = (tpl: Template) => Object.values(tpl.findResources("AWS::Scheduler::Schedule", { Properties: { Target: { Input: '{"action":"cost-report"}' } } }));
     const ceGrants = (tpl: Template) =>
-      Object.values(tpl.findResources("AWS::IAM::Policy")).filter((p) => JSON.stringify(p.Properties.PolicyDocument).includes("ce:"));
+      // The ce: service prefix itself, not "sms-voice:", which ends in "ce:" too.
+      Object.values(tpl.findResources("AWS::IAM::Policy")).filter((p) => JSON.stringify(p.Properties.PolicyDocument).includes('"ce:'));
     // Once a day at 07:00 in Victoria, on even while the sweeps' schedules are off.
     const [report, ...others] = costSchedules(t.app);
     expect(others).toHaveLength(0);
@@ -232,7 +233,7 @@ describe("the app stack", () => {
     const grants = ceGrants(t.app);
     expect(grants).toHaveLength(1);
     const statements = grants[0]!.Properties.PolicyDocument.Statement as Array<{ Action: unknown; Resource: unknown }>;
-    expect(statements.filter((st) => JSON.stringify(st.Action).includes("ce:"))).toEqual([{ Action: "ce:GetCostAndUsage", Effect: "Allow", Resource: "*" }]);
+    expect(statements.filter((st) => [st.Action].flat().some((a) => String(a).startsWith("ce:")))).toEqual([{ Action: "ce:GetCostAndUsage", Effect: "Allow", Resource: "*" }]);
     expect(grants[0]!.Properties.Roles).toEqual([{ Ref: expect.stringMatching(/^FncronServiceRole/) }]);
     // The budget's address, on the cron function only.
     const vars = (name: string) => Object.values(t.app.findResources("AWS::Lambda::Function", { Properties: { FunctionName: name } }))[0]!.Properties.Environment.Variables as Record<string, unknown>;
@@ -249,13 +250,44 @@ describe("the app stack", () => {
 
   it("gives every job queue a dead-letter queue and covers the jobs timeout", () => {
     const queues = Object.values(t.app.findResources("AWS::SQS::Queue")).filter((q) => q.Properties.RedrivePolicy);
-    expect(queues).toHaveLength(4);
+    expect(queues).toHaveLength(5);
     for (const q of queues) {
       expect(q.Properties.RedrivePolicy.maxReceiveCount).toBe(10);
       expect(q.Properties.VisibilityTimeout).toBeGreaterThanOrEqual(900);
     }
-    t.app.resourceCountIs("AWS::Lambda::EventSourceMapping", 4);
+    t.app.resourceCountIs("AWS::Lambda::EventSourceMapping", 5);
     t.app.allResourcesProperties("AWS::Lambda::EventSourceMapping", { FunctionResponseTypes: ["ReportBatchItemFailures"] });
+  });
+
+  it("routes SMS delivery events from the configuration set to the jobs function, publishable only by this account's SMS service", () => {
+    t.app.hasResourceProperties("AWS::SMSVOICE::ConfigurationSet", {
+      ConfigurationSetName: "insights-production-sms",
+      EventDestinations: [Match.objectLike({ Enabled: true, MatchingEventTypes: ["TEXT_ALL"], SnsDestination: { TopicArn: { Ref: Match.stringLikeRegexp("^SmsEvents") } } })],
+    });
+    t.app.hasResourceProperties("AWS::SNS::TopicPolicy", {
+      Topics: [{ Ref: Match.stringLikeRegexp("^SmsEvents") }],
+      PolicyDocument: { Statement: Match.arrayWith([Match.objectLike({ Action: "sns:Publish", Principal: { Service: "sms-voice.amazonaws.com" }, Condition: { StringEquals: { "aws:SourceAccount": Match.anyValue() } } })]) },
+    });
+    t.app.hasResourceProperties("AWS::SNS::Subscription", { Protocol: "sqs", RawMessageDelivery: true, Endpoint: { "Fn::GetAtt": [Match.stringLikeRegexp("^QueuesmsEvents"), "Arn"] } });
+    t.app.hasResourceProperties("AWS::Lambda::EventSourceMapping", { EventSourceArn: { "Fn::GetAtt": [Match.stringLikeRegexp("^QueuesmsEvents"), "Arn"] }, FunctionResponseTypes: ["ReportBatchItemFailures"] });
+    const vars = (name: string) => Object.values(t.app.findResources("AWS::Lambda::Function", { Properties: { FunctionName: name } }))[0]!.Properties.Environment.Variables as Record<string, unknown>;
+    expect(vars("insights-production-jobs").SMS_CONFIGURATION_SET).toBe("insights-production-sms");
+  });
+
+  it("gives each function only the SMS calls it makes, and sending only on this account's own SMS resources", () => {
+    const policies = Object.values(t.app.findResources("AWS::IAM::Policy"));
+    const statementsOf = (role: RegExp) =>
+      policies.filter((p) => (p.Properties.Roles as Array<{ Ref: string }>).some((r) => role.test(r.Ref))).flatMap((p) => p.Properties.PolicyDocument.Statement as Array<{ Action: string | string[]; Resource: unknown }>);
+    const smsActions = (role: RegExp) => statementsOf(role).flatMap((st) => [st.Action].flat()).filter((a) => a.startsWith("sms-voice:"));
+    expect(smsActions(/^FnjobsServiceRole/)).toEqual(["sms-voice:SendTextMessage"]);
+    expect(smsActions(/^FncronServiceRole/)).toContain("sms-voice:DescribeOptedOutNumbers");
+    expect(smsActions(/^FncronServiceRole/)).not.toContain("sms-voice:SendTextMessage");
+    expect(smsActions(/^FnapiServiceRole/)).toEqual(expect.arrayContaining(["sms-voice:SendTextMessage", "sms-voice:CreateVerifiedDestinationNumber", "sms-voice:DescribeSenderIds", "sms-voice:ListTagsForResource"]));
+    for (const st of statementsOf(/ServiceRole/)) {
+      if ([st.Action].flat().includes("sms-voice:SendTextMessage")) {
+        for (const r of [st.Resource].flat()) expect(JSON.stringify(r)).toMatch(/arn:aws:sms-voice:\*:\d+:(configuration-set|phone-number|sender-id|pool|protect-configuration)\/\*/);
+      }
+    }
   });
 
   it("parks a scheduled run that never ran, instead of dropping it", () => {
@@ -291,8 +323,8 @@ describe("the app stack", () => {
     const alerts = budget!.Properties.NotificationsWithSubscribers as Array<{ Notification: Record<string, unknown>; Subscribers: unknown[] }>;
     expect(alerts.map((a) => [a.Notification.NotificationType, a.Notification.Threshold])).toEqual([["ACTUAL", 50], ["ACTUAL", 75], ["ACTUAL", 90], ["ACTUAL", 100], ["FORECASTED", 100]]);
     for (const a of alerts) expect(a.Subscribers).toEqual([{ SubscriptionType: "EMAIL", Address: "aby@zodiix.com" }]);
-    // The alarms stay off email unless alertEmail is given.
-    t.app.resourceCountIs("AWS::SNS::Subscription", 0);
+    // The alarms stay off email unless alertEmail is given (the one subscription is SMS events → their queue).
+    expect(Object.values(t.app.findResources("AWS::SNS::Subscription")).filter((s) => s.Properties.Protocol === "email")).toHaveLength(0);
     // A change to the alerts replaces the budget, so it gets a name of its own.
     const name = budget!.Properties.Budget.BudgetName as string;
     expect(name).toMatch(/^insights-production-monthly-[0-9a-f]{8}$/);
