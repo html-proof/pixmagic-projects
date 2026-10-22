@@ -129,6 +129,8 @@ describe("connecting ad accounts", () => {
       missing: { google: ["GOOGLE_ADS_CLIENT_ID", "GOOGLE_ADS_CLIENT_SECRET", "GOOGLE_ADS_ENABLED"] },
       // Supermetrics (docs/supermetrics.md) is offered only with bizinsights' Supermetrics key.
       supermetrics: { meta: false, google: false, adsense: false },
+      // Nango (docs/nango.md) only with bizinsights' Nango key, and only for a platform whose own app is set up.
+      nango: { meta: false, google: false, adsense: false },
     });
     const res = await connect("meta");
     expect(res.statusCode).toBe(503);

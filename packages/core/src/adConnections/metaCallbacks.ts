@@ -15,7 +15,9 @@ import type { Coord } from "../coord.js";
 import { logger } from "../logger.js";
 import { audit } from "../notify.js";
 import { resolveAdAlerts } from "./alerts.js";
-import { dropPendingAdConnectsOf } from "./connect.js";
+import { dropPendingAdConnectsOf, releaseNangoConnectionIfUnused } from "./connect.js";
+import { isNangoConnection, nangoCredential } from "./credentials.js";
+import { releaseDroppedNangoChoices } from "./nango.js";
 
 /** How old a signed request may be (its issued_at), and how far ahead of this server's clock. */
 export const META_SIGNED_REQUEST_MAX_AGE_S = 24 * 3600;
@@ -73,8 +75,12 @@ async function auditByStore(rows: Array<{ workspaceId: string; storeId: string; 
  * dropped: its token no longer works. Returns how many connections were marked.
  */
 export async function metaDeauthorized(userId: string, coord?: Coord): Promise<number> {
-  if (coord) await dropPendingAdConnectsOf(coord, "meta", userId);
-  const rows = await systemDb.adConnection.findMany({ where: { provider: "meta", externalUserId: userId, accessTokenEnc: { not: "" } }, select: { id: true, workspaceId: true, storeId: true, accountId: true } });
+  // A choice they had waiting through Nango: its connection holds their token, which goes too.
+  if (coord) await releaseDroppedNangoChoices(await dropPendingAdConnectsOf(coord, "meta", userId));
+  const rows = await systemDb.adConnection.findMany({
+    where: { provider: "meta", externalUserId: userId, accessTokenEnc: { not: "" } },
+    select: { id: true, workspaceId: true, storeId: true, provider: true, accountId: true, source: true, sourceLoginId: true, accessTokenEnc: true },
+  });
   if (!rows.length) return 0;
   const { count } = await systemDb.adConnection.updateMany({
     where: { id: { in: rows.map((r) => r.id) } },
@@ -82,6 +88,7 @@ export async function metaDeauthorized(userId: string, coord?: Coord): Promise<n
     data: { status: "reconnect", errorCode: "auth_expired", lastError: null, accessTokenEnc: "", refreshTokenEnc: null, accessTokenExpiresAt: null, syncRequestedAt: null },
   });
   await auditByStore(rows, "ads.access_removed", "meta_deauthorize");
+  await releaseNangoConnections(rows, userId);
   logger.info({ connections: count }, "meta: bizinsights removed on Facebook; its ad connections wait for a reconnect");
   return count;
 }
@@ -97,11 +104,13 @@ export const META_DELETION_EVENT = "meta_data_deletion";
  * Meta asks) for its status page; the record holds the code, when, and how many connections went.
  */
 export async function metaDataDeletion(userId: string, coord?: Coord): Promise<{ confirmationCode: string; deleted: number }> {
-  if (coord) await dropPendingAdConnectsOf(coord, "meta", userId);
+  if (coord) await releaseDroppedNangoChoices(await dropPendingAdConnectsOf(coord, "meta", userId));
   const rows = await systemDb.adConnection.findMany({ where: { provider: "meta", externalUserId: userId } });
   const { count } = rows.length ? await systemDb.adConnection.deleteMany({ where: { id: { in: rows.map((r) => r.id) } } }) : { count: 0 };
   for (const r of rows) await resolveAdAlerts(r).catch((err: unknown) => logger.warn({ err, connectionId: r.id }, "ad alerts not resolved"));
   await auditByStore(rows, "ads.disconnected", "meta_data_deletion");
+  // Nango keeps the person's token for bizinsights' app: that goes too.
+  await releaseNangoConnections(rows, userId);
   const confirmationCode = randomBytes(10).toString("hex");
   await systemDb.authEvent.create({ data: { type: META_DELETION_EVENT, userId: null, ip: null, metadata: { code: confirmationCode, deleted: count } } });
   logger.info({ connections: count }, "meta: data deletion request; the person's ad connections and figures deleted");
@@ -114,4 +123,24 @@ export async function metaDataDeletionStatus(code: string): Promise<{ status: "d
   // user_id NULL (as they are stored) puts the look-up on the (user_id, created_at) index, not every sign-in event ever kept.
   const row = await systemDb.authEvent.findFirst({ where: { userId: null, type: META_DELETION_EVENT, metadata: { path: ["code"], equals: code } }, select: { createdAt: true } });
   return row ? { status: "done", at: row.createdAt.toISOString() } : { status: "unknown" };
+}
+
+/**
+ * The Nango connections (docs/nango.md) a deauthorize or data deletion request left with nothing reading
+ * through them: deleted at Nango, with the token Nango kept for the person. Rows as they were before the
+ * callback cleared or deleted them. Best effort; never throws.
+ */
+async function releaseNangoConnections(rows: Array<{ id: string; storeId: string; provider: string; source: string; sourceLoginId: string | null; accessTokenEnc: string }>, userId: string) {
+  const done = new Set<string>();
+  for (const r of rows) {
+    if (!isNangoConnection(r) || !r.accessTokenEnc) continue;
+    try {
+      const cred = nangoCredential(r);
+      if (done.has(cred.connectionId)) continue;
+      done.add(cred.connectionId);
+      await releaseNangoConnectionIfUnused({ provider: "meta", ...cred, externalUserId: userId });
+    } catch (err) {
+      logger.warn({ err, connectionId: r.id }, "meta callback: nango connection not released");
+    }
+  }
 }
