@@ -1,6 +1,6 @@
 /** Which ad platforms are set up: each one's keys from the config, its name, and its OAuth callback. */
 import type { AdProvider } from "@app/shared";
-import type { AdsenseConfig, GoogleConfig, MetaConfig } from "../ads.js";
+import type { AdsenseConfig, GoogleConfig, MetaConfig, SupermetricsConfig } from "../ads.js";
 import { env, switchedOn } from "../env.js";
 import type { FetchLike } from "../shopify.js";
 
@@ -53,6 +53,24 @@ export const adsRestricted = (): Record<AdProvider, boolean> => ({
   google: googleConfig() !== null && !switchedOn(env().GOOGLE_ADS_OAUTH_VERIFIED),
   adsense: false,
 });
+
+/** bizinsights' Supermetrics team (docs/supermetrics.md), or null while its API key isn't set: nothing about Supermetrics is offered then. */
+export function supermetricsConfig(fetchImpl?: FetchLike): SupermetricsConfig | null {
+  const e = env();
+  if (!e.SUPERMETRICS_API_KEY) return null;
+  return { apiKey: e.SUPERMETRICS_API_KEY, baseUrl: e.SUPERMETRICS_API_URL, fetchImpl };
+}
+
+/** The platforms offered through Supermetrics: those SUPERMETRICS_SOURCES lists, once the key is set. */
+export function supermetricsProviders(): Record<AdProvider, boolean> {
+  const on = supermetricsConfig() !== null;
+  const listed = new Set(
+    env()
+      .SUPERMETRICS_SOURCES.split(",")
+      .map((s) => s.trim().toLowerCase()),
+  );
+  return { meta: on && listed.has("meta"), google: on && listed.has("google"), adsense: on && listed.has("adsense") };
+}
 
 /** The platform's name in messages. */
 export const AD_PROVIDER_NAME: Record<AdProvider, string> = { meta: "Meta", google: "Google Ads", adsense: "Google AdSense" };

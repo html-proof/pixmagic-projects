@@ -23,6 +23,11 @@ vi.mock("../src/adConnections/credentials.js", () => ({
     if (tokenError) throw tokenError;
     return "TOKEN";
   },
+  // Every connection here is read directly (Supermetrics' reports: test/adsSupermetrics.test.ts and the API's).
+  isSupermetricsConnection: (conn: { source?: string }) => conn.source === "supermetrics",
+  supermetricsCredential: () => {
+    throw new Error("not a Supermetrics connection");
+  },
 }));
 let configured = true;
 vi.mock("../src/adConnections/config.js", () => ({
@@ -31,6 +36,7 @@ vi.mock("../src/adConnections/config.js", () => ({
   // Reports go through googleClient: switching new Google Ads connections off (googleConfig) leaves them.
   googleClient: (fetchImpl?: FetchLike) => (configured ? { clientId: "cid", clientSecret: "csec", version: "v25", fetchImpl } : null),
   adsenseConfig: (fetchImpl?: FetchLike) => (configured ? { clientId: "cid", clientSecret: "csec", fetchImpl } : null),
+  supermetricsConfig: () => null,
 }));
 
 const { adsenseReportForConnection, googleReportForConnection, metaReportForConnection } = await import("../src/adConnections/reports.js");

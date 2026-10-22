@@ -141,6 +141,8 @@ export interface AdAccount {
   status?: AdAccountStatus | null;
   /** What the platform says about that status (Meta's disable reason, AdSense's pending tasks). */
   statusDetail?: string | null;
+  /** Supermetrics: the account's id as Supermetrics lists it (sent on its queries); accountId is bizinsights' spelling. */
+  sourceAccountId?: string | null;
 }
 
 /**

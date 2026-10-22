@@ -1063,15 +1063,13 @@ model AdConnection {
    * How the figures are read: "direct" (bizinsights' own sign-in with the platform; the token is the
    * platform's) or "supermetrics" (through bizinsights' Supermetrics team, which the merchant signed in
    * to the platform through a Supermetrics login link: the token is the Supermetrics login's data
-   * source username, and sourceLoginId the login's id; docs/supermetrics.md). Columns marked @ignore
-   * exist in the database (migration 20261022120000) but not yet in the client: the workflow migrates
-   * after the new code is live, so code that reads them can only land once the migration has run.
-   * The next change removes @ignore.
+   * source username and the account's id at Supermetrics, and sourceLoginId the login's id;
+   * docs/supermetrics.md). Added by migration 20261022120000 (the same rules as every other column).
    */
-  source               String    @default("direct") @ignore
-  sourceLoginId        String?   @map("source_login_id") @ignore
+  source               String    @default("direct")
+  sourceLoginId        String?   @map("source_login_id")
   /** When a sync of this account last started, whatever came of it (lastSyncedAt is the last that worked). */
-  lastSyncAttemptAt    DateTime? @map("last_sync_attempt_at") @ignore
+  lastSyncAttemptAt    DateTime? @map("last_sync_attempt_at")
   createdAt            DateTime  @default(now()) @map("created_at")
   updatedAt            DateTime  @updatedAt @map("updated_at")
   campaignDays         AdCampaignDaily[]

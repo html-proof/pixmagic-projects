@@ -789,10 +789,13 @@ share Resend's limits with the app's email (free tier: 100 a day, 3,000 a month)
 
 ## Owner-only steps
 
-- **MFA on the root user** (Trusted Advisor "MFA on Root Account", red): sign in as root → account
-  menu (top right) → **Security credentials** → **Multi-factor authentication (MFA)** → **Assign MFA
-  device**, a passkey/security key or an authenticator app. It needs the owner's own device, so no
-  deploy can do it. `aws login` keeps working after it (the browser sign-in asks for the code).
+- **MFA on the root user** (Trusted Advisor "MFA on Root Account"): **done 2026-10-22**, a
+  passkey/security key (`aws iam list-mfa-devices` as root lists it; `aws iam get-account-summary`
+  says `AccountMFAEnabled` 1). To add or replace one: sign in as root → account menu (top right) →
+  **Security credentials** → **Multi-factor authentication (MFA)** → **Assign MFA device**. Root
+  can hold up to eight, so a second one kept elsewhere means a lost key doesn't lock the account.
+  It needs the owner's own device, so no deploy can do it. `aws login` keeps working (the browser
+  sign-in asks for the key).
 - **Alerts**: an email address for the alarms (`-c alertEmail=...`; confirm the SNS email). The
   budget already emails `budgetEmail` (config.ts) and needs no confirmation.
 - **Support plan**: the account signed up with a paid plan (Business Support+, the greater of
@@ -1051,7 +1054,7 @@ The five red security checks on 2026-10-18 and what answers each:
   the StackSet made it again. Its roles: `insights-account-stackset-admin` (only this account's
   StackSets may assume it) and `insights-account-stackset-exec` (stacks and analyzers only).
   Findings: IAM console → Access analyzer, per Region.
-- **MFA on Root Account**: the owner's step (Owner-only steps above).
+- **MFA on Root Account**: the owner's step (Owner-only steps above), done 2026-10-22.
 
 Trusted Advisor re-reads these on its own schedule (about daily); "Refresh" on a check, or
 `aws support refresh-trusted-advisor-check --check-id <id> --region us-east-1`, asks sooner.
@@ -1061,7 +1064,9 @@ Trusted Advisor re-reads these on its own schedule (about daily); "Refresh" on a
 One red and six yellow that day (the dashboard said "1 action, 5 investigation"; the sixth appeared
 the same morning), and what answers each:
 
-- **MFA on Root Account** (red): the owner's step, still; nothing in this repository can do it.
+- **MFA on Root Account** (red): the owner's step; nothing in this repository can do it. The owner
+  added a passkey/security key on 2026-10-22 13:49Z and the check read green at 13:50Z, which left
+  every Trusted Advisor check green (the excluded rows aside).
 - **AWS Lambda Functions Using Deprecated Runtimes** (yellow, the four functions): they ran Node
   22, which Lambda retires on 2027-04-30, and the check lists a runtime from 180 days out. They run
   Node 24 since 2026-10-21 (`NODEJS_24_X` in app-stack.ts and auth-stack.ts, `target: "node24"` in
