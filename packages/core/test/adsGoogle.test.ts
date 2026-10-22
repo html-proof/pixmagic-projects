@@ -418,4 +418,23 @@ describe("Google sign-in", () => {
     const bad = fake(() => json({ aud: "cid", sub: "not-digits" }));
     expect(await googleUserId(google(bad.fetchImpl), "AT")).toBeNull();
   });
+
+  it("who signed in, when tokeninfo leaves it out: Google's userinfo, only for a token that carries openid", async () => {
+    const withOpenid = fake((u) =>
+      u.pathname === "/tokeninfo" ? json({ aud: "cid", scope: "https://www.googleapis.com/auth/adsense.readonly openid" }) : json({ sub: "112233445566" }),
+    );
+    expect(await googleUserId(google(withOpenid.fetchImpl), "AT")).toBe("112233445566");
+    const userinfo = withOpenid.calls.find((c) => c.url.host === "openidconnect.googleapis.com")!;
+    expect(userinfo.url.pathname).toBe("/v1/userinfo");
+    // The token goes in the header, never the address.
+    expect(new Headers(userinfo.init?.headers).get("authorization")).toBe("Bearer AT");
+    expect(userinfo.url.search).toBe("");
+    // A token without openid (connected before it was asked for): no further call, the person stays unknown.
+    const without = fake(() => json({ aud: "cid", scope: "https://www.googleapis.com/auth/adsense.readonly" }));
+    expect(await googleUserId(google(without.fetchImpl), "AT")).toBeNull();
+    expect(without.calls).toHaveLength(1);
+    // userinfo refusing (or down) leaves it unknown rather than failing the connect.
+    const refused = fake((u) => (u.pathname === "/tokeninfo" ? json({ aud: "cid", scope: "openid" }) : json({ error: "invalid_token" }, 401)));
+    expect(await googleUserId(google(refused.fetchImpl), "AT")).toBeNull();
+  });
 });

@@ -94,7 +94,7 @@ describe("Meta", () => {
 describe("Google", () => {
   it("asks for offline access to Google Ads reporting", async () => {
     const url = new URL(googleAuthorizeUrl(google(fetch), "https://app/cb", "st"));
-    expect(url.searchParams.get("scope")).toBe("https://www.googleapis.com/auth/adwords");
+    expect(url.searchParams.get("scope")).toBe("https://www.googleapis.com/auth/adwords openid");
     expect(url.searchParams.get("access_type")).toBe("offline");
 
     const f = fake(async (_u, init) => {
@@ -158,7 +158,7 @@ describe("AdSense", () => {
   it("asks for offline, read-only access to AdSense, with no developer token", () => {
     const url = new URL(adsenseAuthorizeUrl(adsense(fetch), "https://app/api/ads/adsense/callback", "st"));
     expect(url.origin + url.pathname).toBe("https://accounts.google.com/o/oauth2/v2/auth");
-    expect(url.searchParams.get("scope")).toBe("https://www.googleapis.com/auth/adsense.readonly");
+    expect(url.searchParams.get("scope")).toBe("https://www.googleapis.com/auth/adsense.readonly openid");
     expect(url.searchParams.get("access_type")).toBe("offline");
     expect(url.searchParams.get("redirect_uri")).toBe("https://app/api/ads/adsense/callback");
   });
