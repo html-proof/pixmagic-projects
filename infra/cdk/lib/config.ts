@@ -143,8 +143,8 @@ const ENVIRONMENTS: Record<EnvConfig["name"], Omit<EnvConfig, "schedulesEnabled"
       inUse: true,
     },
     cognitoCustomEmail: true,
-    // The owner's address at AWS (it also gets Cost Anomaly Detection's daily alerts).
-    budgetEmail: "aby@zodiix.com",
+    // The owner's address for AWS costs: the budget, the daily cost email and Cost Anomaly Detection's daily alerts.
+    budgetEmail: "bizinsightsaus@yahoo.com",
     // The owner's ceiling, US$50-80 a month (2026-10-18; docs/aws-deployment.md, Cost).
     monthlyBudgetUsd: 80,
     costReport: true,

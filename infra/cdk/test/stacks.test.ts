@@ -237,7 +237,7 @@ describe("the app stack", () => {
     expect(grants[0]!.Properties.Roles).toEqual([{ Ref: expect.stringMatching(/^FncronServiceRole/) }]);
     // The budget's address, on the cron function only.
     const vars = (name: string) => Object.values(t.app.findResources("AWS::Lambda::Function", { Properties: { FunctionName: name } }))[0]!.Properties.Environment.Variables as Record<string, unknown>;
-    expect(vars("insights-production-cron").COST_REPORT_TO).toBe("aby@zodiix.com");
+    expect(vars("insights-production-cron").COST_REPORT_TO).toBe("bizinsightsaus@yahoo.com");
     expect(vars("insights-production-api").COST_REPORT_TO).toBeUndefined();
     expect(vars("insights-production-jobs").COST_REPORT_TO).toBeUndefined();
     // Off in staging (the account's bill is production's email) and with -c costReport=off: no schedule, no grant, no address.
@@ -322,7 +322,7 @@ describe("the app stack", () => {
     expect(budget!.Properties.Budget).toMatchObject({ BudgetType: "COST", TimeUnit: "MONTHLY", BudgetLimit: { Amount: 80, Unit: "USD" } });
     const alerts = budget!.Properties.NotificationsWithSubscribers as Array<{ Notification: Record<string, unknown>; Subscribers: unknown[] }>;
     expect(alerts.map((a) => [a.Notification.NotificationType, a.Notification.Threshold])).toEqual([["ACTUAL", 50], ["ACTUAL", 75], ["ACTUAL", 90], ["ACTUAL", 100], ["FORECASTED", 100]]);
-    for (const a of alerts) expect(a.Subscribers).toEqual([{ SubscriptionType: "EMAIL", Address: "aby@zodiix.com" }]);
+    for (const a of alerts) expect(a.Subscribers).toEqual([{ SubscriptionType: "EMAIL", Address: "bizinsightsaus@yahoo.com" }]);
     // The alarms stay off email unless alertEmail is given (the one subscription is SMS events → their queue).
     expect(Object.values(t.app.findResources("AWS::SNS::Subscription")).filter((s) => s.Properties.Protocol === "email")).toHaveLength(0);
     // A change to the alerts replaces the budget, so it gets a name of its own.

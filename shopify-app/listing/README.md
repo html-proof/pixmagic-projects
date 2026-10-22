@@ -62,7 +62,7 @@ capabilities, AI self-review.
 What follows is the first app's record.
 
 **Submitted for review on 2026-10-18 at 17:01 UTC.** Shopify shows "Submitted - We're assigning a
-reviewer to your submission"; it emails sales@ikorex.com.au if anything needs changing. Don't press
+reviewer to your submission"; it emails the submission email (sales@ikorex.com.au then; bizinsightsaus@yahoo.com once changed in the Partner Dashboard) if anything needs changing. Don't press
 **Withdraw** on that page: it takes the app out of the review queue. If the reviewer asks for
 changes, fix them and use **Submit fixes** on the same page for this app; never start a new listing
 or app.
