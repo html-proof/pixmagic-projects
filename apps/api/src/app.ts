@@ -22,6 +22,7 @@ import { contactRoutes } from "./routes/contacts.js";
 import { adsRoutes } from "./routes/ads.js";
 import { adsGoogleDemoRoutes } from "./routes/adsGoogleDemo.js";
 import { adsSupermetricsRoutes } from "./routes/adsSupermetrics.js";
+import { adsNangoRoutes } from "./routes/adsNango.js";
 import { metaWebhookRoutes } from "./routes/metaWebhooks.js";
 import { whatsappRoutes } from "./routes/whatsapp.js";
 import { whatsappPublicRoutes } from "./routes/whatsappPublic.js";
@@ -211,6 +212,8 @@ export function buildApp(deps: Deps): App {
   contactRoutes(app, deps);
   // Before adsRoutes: its /ads/:provider/callback would otherwise take /ads/supermetrics/callback (routes match in order).
   adsSupermetricsRoutes(app, deps);
+  // Nango (docs/nango.md): its session/finish routes and /ads/nango/oauth-callback, also before adsRoutes; /webhooks/nango.
+  adsNangoRoutes(app, deps);
   adsRoutes(app, deps);
   adsGoogleDemoRoutes(app, deps);
   // Meta's deauthorize and data deletion callbacks: /webhooks/*, so CSRF- and global-limit-exempt above.

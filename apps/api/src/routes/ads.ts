@@ -2,6 +2,7 @@ import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { z } from "zod";
 import { dbReachable, systemDb, withTenant, type AdConnection } from "@app/db";
 import {
+  abandonNangoConnection,
   AD_PROVIDER_NAME,
   adsConfigured,
   adsRestricted,
@@ -43,7 +44,10 @@ import {
   googleAdsDemoEnabled,
   googleProductionMissing,
   isDemoConnection,
+  isNangoConnection,
   isSupermetricsConnection,
+  NANGO_INTEGRATION,
+  nangoProviders,
   logger,
   providerDetail,
   metaAdAccounts,
@@ -56,6 +60,7 @@ import {
   metaUserId,
   pauseGoogleAds,
   peekPendingAdConnect,
+  pendingSource,
   pendingTokens,
   REQUIRED_AD_SCOPE,
   reusableRefreshToken,
@@ -173,6 +178,8 @@ function publicConnection(c: AdConnection, ctx: ConnectionContext) {
   const demo = isDemoConnection(c);
   // Read through Supermetrics (docs/supermetrics.md): no permission granted to bizinsights itself, and nothing that expires on bizinsights' side.
   const supermetrics = isSupermetricsConnection(c);
+  // Authorized through Nango (docs/nango.md): bizinsights' own permission, its token kept and renewed by Nango.
+  const nango = isNangoConnection(c);
   return {
     id: c.id,
     provider: c.provider,
@@ -190,8 +197,8 @@ function publicConnection(c: AdConnection, ctx: ConnectionContext) {
     lastSyncedAt: c.lastSyncedAt,
     /** When the last sync started, whatever came of it ("Last attempted"). */
     lastSyncAttemptAt: c.lastSyncAttemptAt,
-    /** How the figures are read: "direct" (bizinsights' own sign-in with the platform) or "supermetrics". */
-    source: supermetrics ? "supermetrics" : "direct",
+    /** How the figures are read: "direct" (bizinsights' own sign-in with the platform), "nango" (the same, authorized through Nango) or "supermetrics". */
+    source: supermetrics ? "supermetrics" : nango ? "nango" : "direct",
     /** The last day (the account's own) stored without a gap from historyFrom on. */
     syncedThrough: c.syncedThrough,
     historyFrom: c.historyFrom,
@@ -276,8 +283,11 @@ export async function connectAccounts(
     tokens: TokenSet;
     userId: string;
     externalUserId?: string | null;
-    /** Through Supermetrics: the login the accounts are read with (routes/adsSupermetrics.ts). */
+    /** Through Supermetrics: the login the accounts are read with (routes/adsSupermetrics.ts); through Nango, the connection. */
     sourceLoginId?: string | null;
+    /** Default: "supermetrics" with a sourceLoginId, else "direct". */
+    source?: "direct" | "supermetrics" | "nango";
+    nangoIntegrationKey?: string | null;
   },
 ) {
   const saved = await saveAdConnections({ ...input, fetchImpl: deps.fetchImpl });
@@ -290,7 +300,7 @@ export async function connectAccounts(
     action: "ads.connected",
     targetType: "store",
     targetId: input.storeId,
-    metadata: { provider: input.provider, accounts: saved.length, source: input.sourceLoginId ? "supermetrics" : "direct" },
+    metadata: { provider: input.provider, accounts: saved.length, source: input.source ?? (input.sourceLoginId ? "supermetrics" : "direct") },
     ip,
   }).catch((err: unknown) => logger.warn({ err }, "audit failed"));
   return saved;
@@ -500,6 +510,8 @@ export function adsRoutes(app: App, deps: Deps) {
       missing: { google: googleProductionMissing() },
       /** Which platforms can be connected through Supermetrics on this server ("Connect through Supermetrics"). */
       supermetrics: supermetricsProviders(),
+      /** Which platforms' Connect button opens Nango's Connect UI on this server instead of a full-page sign-in (docs/nango.md). */
+      nango: nangoProviders(),
     });
   });
 
@@ -772,6 +784,8 @@ export function adsRoutes(app: App, deps: Deps) {
       userId: access.user!.id,
       externalUserId: taken.externalUserId ?? null,
       sourceLoginId: taken.sourceLoginId ?? null,
+      source: pendingSource(taken),
+      nangoIntegrationKey: taken.nangoIntegrationKey ?? null,
     });
     return c.json({ provider: taken.provider, connected: saved.length });
   });
@@ -783,8 +797,14 @@ export function adsRoutes(app: App, deps: Deps) {
     await ownPending(deps, nonce, access.user?.id, ws, storeId);
     const taken = await takePendingAdConnect(deps.coord, nonce);
     // Through Supermetrics: the login goes back unless a connection already reads with it (a reconnect).
-    if (taken?.sourceLoginId) await revokeSupermetricsLoginIfUnused(taken.sourceLoginId, deps.fetchImpl);
-    else if (taken) {
+    if (taken && pendingSource(taken) === "supermetrics") await revokeSupermetricsLoginIfUnused(taken.sourceLoginId, deps.fetchImpl);
+    // Through Nango: the grant goes back and the Nango connection is deleted, unless a connection already reads through it.
+    else if (taken && pendingSource(taken) === "nango") {
+      await abandonNangoConnection(taken.provider, taken.sourceLoginId!, taken.nangoIntegrationKey ?? NANGO_INTEGRATION[taken.provider], taken.externalUserId, deps.fetchImpl, {
+        coord: deps.coord,
+        exceptPending: nonce,
+      });
+    } else if (taken) {
       await dropUnusedGrant(taken.provider, pendingTokens(taken), taken.externalUserId, deps.fetchImpl, { coord: deps.coord, exceptPending: nonce, reusedRefreshToken: !!taken.reusedRefreshToken });
     }
     return c.json({ ok: true });

@@ -169,7 +169,9 @@ export function AdAccountRow({
           ["Demo seed", String(c.demoSeed ?? "—")],
         ] as Array<[string, ReactNode]>)
       : []),
-    ...(c.demo ? [] : ([["Read through", supermetrics ? "Supermetrics" : `Direct connection to ${P.name}`]] as Array<[string, ReactNode]>)),
+    ...(c.demo
+      ? []
+      : ([["Read through", supermetrics ? "Supermetrics" : c.source === "nango" ? `Direct connection to ${P.name} (sign-in kept by Nango)` : `Direct connection to ${P.name}`]] as Array<[string, ReactNode]>)),
     ["Last successful sync", c.lastSyncedAt ? <span title={exact(c.lastSyncedAt)}>{fmtRelative(c.lastSyncedAt)}</span> : "Not yet"],
     ["Last attempted sync", c.lastSyncAttemptAt ? <span title={exact(c.lastSyncAttemptAt)}>{fmtRelative(c.lastSyncAttemptAt)}</span> : "Not yet"],
     ["Data through", c.syncedThrough ? `${fmtDay(c.syncedThrough)}${c.historyFrom ? ` (from ${fmtDay(c.historyFrom)})` : ""}` : "Nothing stored yet"],

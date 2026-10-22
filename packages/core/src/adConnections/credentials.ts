@@ -1,11 +1,11 @@
 /** A connection's tokens: encrypted at rest, refreshed when they expire, re-encrypted on key rotation. */
 import { systemDb, type AdConnection } from "@app/db";
 import { decrypt, encrypt, keyVersionOf, type AdProvider } from "@app/shared";
-import { AdsApiError, AdsAuthError, googleRefresh, googleUserId, metaUserId, REQUIRED_AD_SCOPE, type SupermetricsCredential, type TokenSet } from "../ads.js";
+import { AdsApiError, AdsAuthError, googleRefresh, googleUserId, isNangoConnectionId, metaUserId, nangoAccessToken, REQUIRED_AD_SCOPE, type SupermetricsCredential, type TokenSet } from "../ads.js";
 import { logger } from "../logger.js";
 import type { FetchLike } from "../shopify.js";
 import { keyring } from "../tokens.js";
-import { AD_PROVIDER_NAME, adsenseConfig, googleClient, metaConfig } from "./config.js";
+import { AD_PROVIDER_NAME, adsenseConfig, googleClient, metaConfig, nangoConfig } from "./config.js";
 
 /** Binds a ciphertext to its store and platform, so it can't be moved to another store's row. */
 export const aad = (storeId: string, provider: string, kind: "access" | "refresh") => `ads:${provider}:${storeId}:${kind}`;
@@ -44,6 +44,82 @@ export function supermetricsCredential(conn: Pick<AdConnection, "storeId" | "pro
   return { dsUser: raw.u, dsAccount: raw.a, ...(raw.m === "account" || raw.m === "usd" ? { adsenseCurrency: raw.m } : {}) };
 }
 
+/**
+ * A connection authorized through Nango (docs/nango.md): bizinsights' own Meta app or Google client was
+ * granted, but the tokens are kept and renewed by Nango; the row holds only which Nango connection to
+ * ask. Read with the platform's own clients, as a direct connection is.
+ */
+export const isNangoConnection = (conn: Pick<AdConnection, "source">): boolean => conn.source === "nango";
+
+/** A Nango connection's address at Nango: its id and the integration it belongs to. */
+export interface NangoCredential {
+  connectionId: string;
+  integrationKey: string;
+}
+
+/**
+ * A Nango connection's credential, sealed in access_token_enc like a token (same AAD, re-encrypted on key
+ * rotation). Never a token: only bizinsights' Nango secret key can turn it into one. Every account of
+ * one sign-in shares the one ciphertext, as a direct sign-in's accounts share their token's (sameSignIn).
+ */
+export function encryptNangoCredential(storeId: string, provider: AdProvider, cred: NangoCredential, expiresAt: Date | null = null) {
+  const k = keyring();
+  const accessTokenEnc = encrypt(JSON.stringify({ n: cred.connectionId, k: cred.integrationKey }), k, aad(storeId, provider, "access"));
+  // Meta's: when the long-lived token Nango holds ends (about 60 days; renewing it doesn't move that), for the "access ending" warning.
+  return { accessTokenEnc, refreshTokenEnc: null, accessTokenExpiresAt: provider === "meta" ? expiresAt : null, tokenKeyVersion: keyVersionOf(accessTokenEnc) };
+}
+
+/** The credential back from a Nango connection. One that can't be read means connecting again. */
+export function nangoCredential(conn: Pick<AdConnection, "storeId" | "provider" | "accessTokenEnc">): NangoCredential {
+  if (!conn.accessTokenEnc) throw new AdsAuthError("The Nango connection holds no credential");
+  const raw = JSON.parse(decrypt(conn.accessTokenEnc, keyring(), aad(conn.storeId, conn.provider, "access"))) as { n?: unknown; k?: unknown };
+  if (!isNangoConnectionId(raw.n) || typeof raw.k !== "string" || !raw.k) throw new AdsAuthError("The Nango credential is incomplete");
+  return { connectionId: raw.n, integrationKey: raw.k };
+}
+
+/**
+ * Access tokens Nango handed out, kept a few minutes (Nango's advice is at most 5) so a sync, its health
+ * read and a report don't each ask. Keyed by the Nango connection; dropped on any failure.
+ */
+const nangoTokens = new Map<string, { token: string; expiresAt: Date | null; until: number }>();
+const NANGO_TOKEN_CACHE_MS = 4 * 60_000;
+
+/** For tests, and after a connection is deleted at Nango. */
+export function forgetNangoToken(connectionId?: string) {
+  if (connectionId) nangoTokens.delete(connectionId);
+  else nangoTokens.clear();
+}
+
+/** A working access token for a Nango connection (and when it ends, when Nango says), from the cache or from Nango. */
+export async function nangoTokenFor(cred: NangoCredential, fetchImpl?: FetchLike): Promise<{ token: string; expiresAt: Date | null }> {
+  const cached = nangoTokens.get(cred.connectionId);
+  if (cached && cached.until > Date.now()) return { token: cached.token, expiresAt: cached.expiresAt };
+  const cfg = nangoConfig(fetchImpl);
+  if (!cfg) throw new AdsApiError("Nango isn't set up on this server", 503, undefined, "not_configured");
+  try {
+    const t = await nangoAccessToken(cfg, cred.integrationKey, cred.connectionId);
+    // Never past the token's own end (a Google token Nango is about to renew).
+    const until = Math.min(Date.now() + NANGO_TOKEN_CACHE_MS, t.expiresAt ? t.expiresAt.getTime() - 60_000 : Infinity);
+    if (until > Date.now()) nangoTokens.set(cred.connectionId, { token: t.accessToken, expiresAt: t.expiresAt, until });
+    return { token: t.accessToken, expiresAt: t.expiresAt };
+  } catch (err) {
+    nangoTokens.delete(cred.connectionId);
+    throw err;
+  }
+}
+
+/**
+ * Keep when a Nango Meta connection's token ends on its rows, so the "access ending" warning (alerts.ts)
+ * comes before Meta asks the person to sign in again. Best effort.
+ */
+async function noteNangoMetaExpiry(conn: AdConnection, expiresAt: Date | null) {
+  if (!expiresAt || !conn.sourceLoginId) return;
+  if (conn.accessTokenExpiresAt && Math.abs(conn.accessTokenExpiresAt.getTime() - expiresAt.getTime()) < 60_000) return;
+  await systemDb.adConnection
+    .updateMany({ where: { source: "nango", sourceLoginId: conn.sourceLoginId, provider: "meta", accessTokenEnc: { not: "" } }, data: { accessTokenExpiresAt: expiresAt } })
+    .catch((err: unknown) => logger.warn({ err, connectionId: conn.id }, "nango meta token expiry not stored"));
+}
+
 /** The Google OAuth client a Google Ads or AdSense connection refreshes through. */
 const googleOAuthFor = (provider: string, fetchImpl?: FetchLike) => (provider === "adsense" ? adsenseConfig(fetchImpl) : googleClient(fetchImpl));
 
@@ -76,6 +152,12 @@ export async function accessTokenAndPerson(conn: AdConnection, fetchImpl?: Fetch
   const access = () => decrypt(conn.accessTokenEnc, k, aad(conn.storeId, conn.provider, "access"));
   // Supermetrics: the sealed credential (supermetricsCredential reads it); nothing to refresh, and no platform person.
   if (isSupermetricsConnection(conn)) return { token: access(), person: null };
+  // Nango: the platform's token, renewed by Nango; who granted it is learned as for a direct one (learnAdPerson).
+  if (isNangoConnection(conn)) {
+    const t = await nangoTokenFor(nangoCredential(conn), fetchImpl);
+    if (conn.provider === "meta") await noteNangoMetaExpiry(conn, t.expiresAt);
+    return { token: t.token };
+  }
   if (conn.provider === "meta") {
     if (conn.accessTokenExpiresAt && conn.accessTokenExpiresAt.getTime() < Date.now()) throw new AdsAuthError("Meta access has expired");
     return { token: access() };
@@ -121,18 +203,23 @@ export async function learnAdPerson(conn: AdConnection, accessToken: string, fet
   if (conn.externalUserId) return conn.externalUserId;
   // A Supermetrics login is the platform person's grant to Supermetrics, not to bizinsights: no id of theirs to learn.
   if (isSupermetricsConnection(conn)) return null;
-  let person: string | null = null;
-  if (conn.provider === "meta") {
-    const cfg = metaConfig(fetchImpl);
-    if (!cfg) return null;
-    person = await metaUserId(cfg, accessToken);
-  } else {
-    const cfg = googleOAuthFor(conn.provider, fetchImpl);
-    if (!cfg) return null;
-    person = await googleUserId(cfg, accessToken);
-  }
+  const person = await platformPerson(conn.provider, accessToken, fetchImpl);
   if (person) await rememberPerson(conn, person);
   return person;
+}
+
+/**
+ * Who an access token of bizinsights' own app belongs to: Meta's app-scoped user id, Google's `sub`
+ * (Google also checks the token was issued to bizinsights' client: AdsAuthError when it wasn't). Null
+ * when the platform doesn't say, or isn't set up here.
+ */
+export async function platformPerson(provider: string, accessToken: string, fetchImpl?: FetchLike): Promise<string | null> {
+  if (provider === "meta") {
+    const cfg = metaConfig(fetchImpl);
+    return cfg ? metaUserId(cfg, accessToken) : null;
+  }
+  const cfg = googleOAuthFor(provider, fetchImpl);
+  return cfg ? googleUserId(cfg, accessToken) : null;
 }
 
 /**
