@@ -22,6 +22,7 @@ import {
   sendEmailMessage,
   type EmailJob,
 } from "@app/core";
+import { applySmsEvent, noSmsProvider, sendSmsJob, type SmsJob } from "@app/core/sms";
 import { UnrecoverableError, type WorkerDeps } from "./common.js";
 
 /** One WhatsApp message, or a store's due messages in a batch (campaigns, catch-up). */
@@ -36,6 +37,16 @@ export async function runEmailJob(job: EmailJob, deps: WorkerDeps) {
 export async function runWhatsappJob(job: WhatsappJob, deps: WorkerDeps) {
   if (job.kind === "whatsapp") return { outcome: await sendWhatsappMessage(job.messageId, deps) };
   return dispatchStore(job.storeId, deps);
+}
+
+/** One text (Customer Messaging). The row carries its state; the send path never throws for an SMS failure. */
+export async function runSmsJob(job: SmsJob, deps: WorkerDeps) {
+  return { outcome: await sendSmsJob(job.jobId, { ...deps, sms: deps.sms ?? noSmsProvider }) };
+}
+
+/** One AWS delivery event. One that came before its send was recorded throws (SmsEventNotYetKnown), so the queue brings it back. */
+export async function runSmsEvent(body: unknown, deps: WorkerDeps) {
+  return { outcome: await applySmsEvent(body, deps) };
 }
 
 /**

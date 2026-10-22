@@ -201,6 +201,32 @@ const schema = z.object({
   WHATSAPP_CONFIG_ID: z.string().optional().default(""),
   WHATSAPP_API_VERSION: z.string().default("v25.0"),
   WHATSAPP_WEBHOOK_VERIFY_TOKEN: z.string().optional().default(""),
+  /**
+   * Customer Messaging: SMS through AWS End User Messaging (docs/sms.md).
+   *  - off: nothing is sent to AWS. The pages work; rules and campaigns record dry runs.
+   *  - sandbox: test texts only, to numbers a merchant verified with AWS (AWS's own sandbox
+   *    allows no others); rules and campaigns still record dry runs.
+   *  - live: rules and campaigns text customers, after every consent, budget and sender check.
+   */
+  SMS_MODE: z.enum(["off", "sandbox", "live"]).default("off"),
+  /** Marketing texts (campaigns, abandoned checkouts, win-back, VIP): a switch of their own, off until the platform owner turns it on. */
+  SMS_MARKETING_ENABLED: z.string().optional().default(""),
+  /** The AWS region SMS calls go to unless a store's sender names another (Indian local routes: ap-south-1). Empty: AWS_REGION. */
+  SMS_DEFAULT_REGION: z.string().optional().default(""),
+  /** The configuration set whose event destination reports delivery (infra/cdk): one name, or JSON per region. */
+  SMS_CONFIGURATION_SET: z.string().optional().default(""),
+  /** A platform-owned origination identity stores may share (its AWS tags must say bizinsights:shared=true). Empty: none. */
+  SMS_SHARED_SENDER: z.string().optional().default(""),
+  /** bizinsights' own ceiling on what all stores together may spend on texts in a month (US$), below AWS's account spending limit. */
+  SMS_ACCOUNT_MONTHLY_LIMIT_USD: z.coerce.number().min(0).default(20),
+  /** The most AWS may charge for one part of a text (MaxPrice is this times the parts); a dearer route refuses the text. */
+  SMS_MAX_PRICE_PER_PART_USD: z.coerce.number().min(0.001).max(5).default(0.25),
+  /** Price per part by country (US$), copied from AWS's price list, for estimates before AWS has billed any text there: {"AU":0.05}. */
+  SMS_PRICE_TABLE: z.string().optional().default("{}"),
+  /** Parts per second one sender may send (the origination identity's MPS at AWS). */
+  SMS_PARTS_PER_SECOND: z.coerce.number().int().min(1).max(1000).default(1),
+  /** Most recipients one campaign may have. */
+  SMS_CAMPAIGN_MAX_RECIPIENTS: z.coerce.number().int().min(1).max(1_000_000).default(2000),
   EMAIL_FROM: z.string().default("bizinsights <no-reply@localhost>"),
   /**
    * Email integrations (docs/email.md). "Connect Gmail / Google Workspace" needs a Google OAuth

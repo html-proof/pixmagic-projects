@@ -11,7 +11,7 @@
 export type AlertSeverity = "info" | "warning" | "critical";
 
 /** Where the problem gets fixed: the bell and the alert email link each to its page. */
-export type AlertArea = "shopify" | "ads" | "email" | "staff" | "whatsapp" | "privacy" | "inventory" | "general";
+export type AlertArea = "shopify" | "ads" | "email" | "staff" | "whatsapp" | "sms" | "privacy" | "inventory" | "general";
 
 /** The app page each area's alerts link to (a path: the email puts APP_URL in front of it). */
 export const ALERT_PATH: Record<AlertArea, string> = {
@@ -20,6 +20,7 @@ export const ALERT_PATH: Record<AlertArea, string> = {
   email: "/settings/email/accounts",
   staff: "/staff/timesheets",
   whatsapp: "/whatsapp/automations",
+  sms: "/messaging/billing",
   privacy: "/settings/privacy",
   inventory: "/inventory/low-stock",
   general: "/support",
@@ -132,5 +133,25 @@ export function describeAlert(alert: { code: string; severity: string; message: 
   if (code === "staff_open_shifts") return { severity, area: "staff", title: "Shifts left open", body: message };
   // The text a merchant wrote in a WhatsApp automation's "notify the team" step.
   if (code.startsWith("wa_rule_")) return { severity, area: "whatsapp", title: "WhatsApp automation", body: message };
+  // Customer Messaging (core/sms): worded here from the code alone.
+  const budget = /^sms_budget_(50|80|100)$/.exec(code);
+  if (budget) {
+    const pct = budget[1]!;
+    return {
+      severity,
+      area: "sms",
+      title: pct === "100" ? "Your SMS budget for this month is used up" : `You've used ${pct}% of this month's SMS budget`,
+      body:
+        pct === "100"
+          ? "Texts that would go over the budget aren't sent while its hard stop is on. Raise the budget in Customer Messaging → SMS billing, or wait for next month."
+          : "Customer Messaging → SMS billing shows what was spent, by country and campaign, from what AWS charged for each text.",
+    };
+  }
+  if (code === "sms_sender_problem") {
+    return { severity, area: "sms", title: "Your SMS sender needs attention", body: "AWS refused the sender this store texts from, so texts are on hold. Customer Messaging → Sender configuration shows what AWS reported." };
+  }
+  if (code === "sms_account_limit") {
+    return { severity, area: "sms", title: "Texts are on hold: the SMS spending limit is reached", body: "The account's monthly SMS spending limit is reached, so texts wait until it is raised or the month ends. Contact support if this stays." };
+  }
   return { severity, area: "general", title: "Something needs your attention", body: "If this keeps showing, contact support and we'll look into it." };
 }

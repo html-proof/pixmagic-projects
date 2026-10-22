@@ -40,6 +40,8 @@ import { privacyRoutes } from "./routes/privacy.js";
 import { teamRoutes } from "./routes/team.js";
 import { exportRoutes } from "./routes/exports.js";
 import { inventoryRoutes } from "./routes/inventory.js";
+import { smsRoutes } from "./routes/sms.js";
+import { smsPublicRoutes } from "./routes/smsPublic.js";
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 /**
@@ -235,5 +237,7 @@ export function buildApp(deps: Deps): App {
   teamRoutes(app, deps);
   exportRoutes(app, deps);
   inventoryRoutes(app, deps);
+  smsRoutes(app, deps);
+  smsPublicRoutes(app, deps);
   return app;
 }

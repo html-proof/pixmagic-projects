@@ -11,6 +11,7 @@ const urls = {
   webhooks: "https://sqs.ap-southeast-2.amazonaws.com/123/insights-test-webhooks",
   aggregate: "https://sqs.ap-southeast-2.amazonaws.com/123/insights-test-aggregate",
   email: "https://sqs.ap-southeast-2.amazonaws.com/123/insights-test-email",
+  smsEvents: "https://sqs.ap-southeast-2.amazonaws.com/123/insights-test-smsEvents",
 };
 
 /** An SQS that records the calls it gets (JSON protocol). */

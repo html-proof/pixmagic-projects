@@ -9,5 +9,5 @@ export { BACKFILL_DAYS, AGG_EAGER_ORDERS, ordersSearch, importedFrom, pixelInges
 export { processWebhook } from "./handlers/webhooks.js";
 export { runAggregate, rememberFailedAggregate } from "./handlers/aggregate.js";
 export { RECONCILE_ORDER_DAYS, VERIFY_AFTER_RECONCILE_S, reconcileOrderDays, seedAfterMove, settleAllCustomers, seedSalesRereads, scheduleReconcile, failStaleJobs, refreshExpiringTokens } from "./handlers/sweeps.js";
-export { runEmailJob, runWhatsappJob, runAdsSync, scheduleAdsSync, sweepAdConnectionAlerts, sweepNangoLeftovers, ADS_HISTORY_STARTS_PER_TICK } from "./handlers/integrations.js";
+export { runEmailJob, runWhatsappJob, runSmsJob, runSmsEvent, runAdsSync, scheduleAdsSync, sweepAdConnectionAlerts, sweepNangoLeftovers, ADS_HISTORY_STARTS_PER_TICK } from "./handlers/integrations.js";
 export { runInventoryStep, sweepInventory, pruneInventory } from "./handlers/inventory.js";

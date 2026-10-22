@@ -9,6 +9,8 @@ export const QUEUE = {
   webhooks: "webhooks",
   aggregate: "aggregate",
   email: "email",
+  /** AWS End User Messaging's SMS delivery events (configuration set → SNS → this queue; core/sms/delivery.ts). */
+  smsEvents: "smsEvents",
 } as const;
 export type QueueName = keyof typeof QUEUE;
 
@@ -114,6 +116,9 @@ export interface AggregateJobData {
  */
 export type EmailJob = { kind: "email_send"; messageId: string } | { kind: "email_event"; eventId: string } | { kind: "team_invitation"; deliveryId: string };
 
+/** One SMS delivery event as AWS publishes it (raw SNS delivery), checked by core/sms smsEventSchema. */
+export type SmsEventMessage = Record<string, unknown>;
+
 export interface Producer<T> {
   send(body: T, opts?: { delaySeconds?: number }): Promise<void>;
 }
@@ -123,6 +128,7 @@ export interface Queues {
   webhooks: Producer<WebhookJobData>;
   aggregate: Producer<AggregateJobData>;
   email: Producer<EmailJob>;
+  smsEvents: Producer<SmsEventMessage>;
 }
 
 /** Large payload storage (R2 in production). */
@@ -150,12 +156,13 @@ export type MemoryQueues = Queues & {
 };
 
 export function memoryQueues(): MemoryQueues {
-  const sent = { sync: [] as SyncJobData[], webhooks: [] as WebhookJobData[], aggregate: [] as AggregateJobData[], email: [] as EmailJob[] };
+  const sent = { sync: [] as SyncJobData[], webhooks: [] as WebhookJobData[], aggregate: [] as AggregateJobData[], email: [] as EmailJob[], smsEvents: [] as SmsEventMessage[] };
   const sentOpts = {
     sync: [] as Array<SendOptions | undefined>,
     webhooks: [] as Array<SendOptions | undefined>,
     aggregate: [] as Array<SendOptions | undefined>,
     email: [] as Array<SendOptions | undefined>,
+    smsEvents: [] as Array<SendOptions | undefined>,
   };
   const producer = <T>(list: T[], opts: Array<SendOptions | undefined>): Producer<T> => ({
     async send(body, o) {
@@ -170,8 +177,9 @@ export function memoryQueues(): MemoryQueues {
     webhooks: producer(sent.webhooks, sentOpts.webhooks),
     aggregate: producer(sent.aggregate, sentOpts.aggregate),
     email: producer(sent.email, sentOpts.email),
+    smsEvents: producer(sent.smsEvents, sentOpts.smsEvents),
     clear() {
-      for (const k of ["sync", "webhooks", "aggregate", "email"] as const) {
+      for (const k of ["sync", "webhooks", "aggregate", "email", "smsEvents"] as const) {
         sent[k].length = 0;
         sentOpts[k].length = 0;
       }
