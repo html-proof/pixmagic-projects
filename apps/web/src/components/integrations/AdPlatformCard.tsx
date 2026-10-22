@@ -5,9 +5,9 @@ import { GoogleUnverified } from "@/components/GoogleAdsAccess";
 import { MetaTestersOnly } from "@/components/MetaAdsAccess";
 import type { StoreSummary } from "@/components/AppContext";
 import { friendlyError } from "@/lib/api";
-import { RECONNECT_STATES, type AdConnection, type AdProvider, type AdsState, type AdState } from "@/lib/adConnections";
+import { connectionState, RECONNECT_STATES, type AdConnection, type AdProvider, type AdsState, type AdState } from "@/lib/adConnections";
 import { AdAccountRow, StateBadge } from "./AdUi";
-import { AD_PLATFORMS } from "./adPlatforms";
+import { AD_PLATFORMS, SUPERMETRICS_HOW } from "./adPlatforms";
 import { IntegrationCard } from "./IntegrationCard";
 
 /**
@@ -29,6 +29,8 @@ export function AdPlatformCard({
   leaving,
   showMetaNote,
   onConnect,
+  onConnectSupermetrics,
+  base,
   onRefresh,
   onToggle,
   onDisconnect,
@@ -54,6 +56,10 @@ export function AdPlatformCard({
   /** Meta's testers-only note (not again right after coming back from Facebook, which explains it). */
   showMetaNote: boolean;
   onConnect: () => void;
+  /** "Connect through Supermetrics" (offered once this server holds bizinsights' Supermetrics key); with a connection, its reconnect. */
+  onConnectSupermetrics?: (reconnect?: AdConnection) => void;
+  /** The account rows' recent syncs are read from `${base}/ads/connections/:id/syncs`. */
+  base?: string | null;
   onRefresh: () => void;
   onToggle: (c: AdConnection) => void;
   onDisconnect: (c: AdConnection) => void;
@@ -68,28 +74,48 @@ export function AdPlatformCard({
   const testid = hub ? `int-${provider}-ads` : `ads-provider-${provider}`;
   const configured = answer?.configured[provider] ?? false;
   const restricted = answer?.restricted[provider] ?? false;
-  const reconnect = RECONNECT_STATES.has(view.state) || connections.some((c) => c.status === "reconnect");
-  const readable = connections.some((c) => c.enabled && c.status !== "reconnect");
+  // Through Supermetrics (docs/supermetrics.md): offered next to bizinsights' own sign-in, or alone where that isn't set up.
+  const viaSupermetrics = !!answer?.supermetrics?.[provider] && !!onConnectSupermetrics;
   const canAct = manage && !!store && !!answer;
   // The demo (Google Ads): offered by this server, and not connected yet. The real sign-in's button is about real accounts only.
   const real = connections.filter((c) => !c.demo);
+  // bizinsights' own sign-in's button is about the accounts read with it; Supermetrics' rows reconnect through Supermetrics.
+  const direct = real.filter((c) => c.source !== "supermetrics");
+  const mixed = direct.length !== real.length;
+  const reconnect = mixed
+    ? direct.some((c) => c.status === "reconnect" || RECONNECT_STATES.has(connectionState(c)))
+    : RECONNECT_STATES.has(view.state) || connections.some((c) => c.status === "reconnect");
+  const readable = connections.some((c) => c.enabled && c.status !== "reconnect");
   const demoOffered = provider === "google" && !!answer?.demo?.google;
   const demoConnected = connections.some((c) => c.demo);
   const missing = answer?.missing?.[provider] ?? [];
 
-  const connectLabel = leaving ? P.opening : !real.length ? P.button : reconnect ? "Reconnect" : "Change accounts";
+  const connectLabel = leaving ? P.opening : !direct.length ? P.button : reconnect ? "Reconnect" : "Change accounts";
+  const supermetricsLabel = busy === `supermetrics-${provider}` ? "Opening Supermetrics…" : real.some((c) => c.source === "supermetrics") ? "Add accounts through Supermetrics" : "Connect through Supermetrics";
   const actions = (
     <>
       {canAct && configured && (
         <button
           type="button"
-          className={real.length && !reconnect ? "btn-secondary" : "btn-primary"}
+          className={direct.length && !reconnect ? "btn-secondary" : "btn-primary"}
           onClick={onConnect}
           disabled={!!busy}
-          aria-label={real.length && !leaving ? `${connectLabel}: ${P.name}` : undefined}
+          aria-label={direct.length && !leaving ? `${connectLabel}: ${P.name}` : undefined}
           data-testid={hub ? `int-${provider}-connect` : `connect-${provider}`}
         >
-          {!real.length && <P.Icon size={16} />} {connectLabel}
+          {!direct.length && <P.Icon size={16} />} {connectLabel}
+        </button>
+      )}
+      {canAct && viaSupermetrics && (
+        <button
+          type="button"
+          className={configured || real.length ? "btn-secondary" : "btn-primary"}
+          onClick={() => onConnectSupermetrics?.()}
+          disabled={!!busy}
+          aria-label={`${supermetricsLabel}: ${P.name}`}
+          data-testid={hub ? `int-${provider}-supermetrics` : `supermetrics-${provider}`}
+        >
+          {supermetricsLabel}
         </button>
       )}
       {canAct && demoOffered && !demoConnected && onTryDemo && (
@@ -97,7 +123,7 @@ export function AdPlatformCard({
           Try demo
         </button>
       )}
-      {canAct && configured && readable && (
+      {canAct && (configured || viaSupermetrics) && readable && (
         <button type="button" className="btn-secondary" onClick={onRefresh} disabled={!!busy} aria-label={`Refresh ${P.name}`} data-testid={hub ? `int-${provider}-refresh` : `refresh-${provider}`}>
           {busy === `sync-${provider}` ? "Starting…" : "Refresh"}
         </button>
@@ -127,11 +153,19 @@ export function AdPlatformCard({
             onToggle={() => onToggle(c)}
             onDisconnect={() => onDisconnect(c)}
             demoActions={c.demo && onDemoSync && onDemoReset ? { onSync: onDemoSync, onReset: onDemoReset } : undefined}
+            onReconnectSupermetrics={c.source === "supermetrics" && viaSupermetrics ? () => onConnectSupermetrics?.(c) : undefined}
+            syncsPath={base ? `${base}/ads/connections/${c.id}/syncs` : null}
           >
             {rowExtra?.(c)}
           </AdAccountRow>
         ))}
       </ul>
+    );
+  } else if (!configured && viaSupermetrics) {
+    body = (
+      <p className="text-muted" data-testid={`${testid}-supermetrics-how`}>
+        {SUPERMETRICS_HOW}
+      </p>
     );
   } else if (!configured) {
     body = (
@@ -149,7 +183,13 @@ export function AdPlatformCard({
         )}
       </p>
     );
-  } else body = <p className="text-muted">{P.how}</p>;
+  } else
+    body = (
+      <>
+        <p className="text-muted">{P.how}</p>
+        {viaSupermetrics && canAct && <p className="text-xs text-muted">Or connect through Supermetrics: {SUPERMETRICS_HOW}</p>}
+      </>
+    );
 
   // Read before going to the platform: who it lets in, and what it shows first.
   const notes = canAct && configured && restricted && (

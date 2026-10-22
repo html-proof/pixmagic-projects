@@ -14,6 +14,9 @@ import {
   META_REPORT_JOB,
   metaClassifyPermissionError,
   metaReport,
+  supermetricsAdsenseReport,
+  supermetricsGoogleReport,
+  supermetricsMetaReport,
   type GoogleReport,
   type MetaReport,
 } from "../ads.js";
@@ -23,9 +26,12 @@ import { fetchUntil } from "../http.js";
 import { logger } from "../logger.js";
 import type { FetchLike } from "../shopify.js";
 import { countGoogleAdsOperations, countingGoogleAdsFetch, googleAdsPaused, pauseGoogleAds } from "./budget.js";
-import { AD_PROVIDER_NAME, adsenseConfig, googleClient, metaConfig } from "./config.js";
-import { adAccessToken } from "./credentials.js";
+import { AD_PROVIDER_NAME, adsenseConfig, googleClient, metaConfig, supermetricsConfig } from "./config.js";
+import { adAccessToken, isSupermetricsConnection, supermetricsCredential } from "./credentials.js";
 import { recordAdFailure } from "./status.js";
+
+/** A connection read through Supermetrics on a server without bizinsights' Supermetrics key: ours to fix. */
+const supermetricsNotSetUp = () => new AdsApiError("Supermetrics isn't set up on this server", 503, undefined, "not_configured");
 
 /**
  * How long a Google Ads or AdSense live report's calls may take in all (the token refresh included),
@@ -73,9 +79,14 @@ export async function metaReportForConnection(
   fetchImpl?: FetchLike,
   opts: { deadline?: number; statuses?: boolean } = {},
 ): Promise<MetaReport> {
+  const deadline = opts.deadline ?? Date.now() + META_REPORT_JOB.budgetMs;
+  if (isSupermetricsConnection(conn)) {
+    const sm = supermetricsConfig(fetchImpl);
+    if (!sm) throw supermetricsNotSetUp();
+    return liveReport(conn, () => supermetricsMetaReport(sm, supermetricsCredential(conn), level, since, until, { deadline }));
+  }
   const cfg = metaConfig(fetchImpl);
   if (!cfg) throw notSetUp("meta");
-  const deadline = opts.deadline ?? Date.now() + META_REPORT_JOB.budgetMs;
   return liveReport(conn, async () => {
     const token = await adAccessToken(conn, fetchImpl);
     try {
@@ -106,6 +117,12 @@ export async function googleReportForConnection(
 ): Promise<GoogleReport> {
   // A demo's report is generated, not fetched: no client, no token, none of Google's operations spent.
   if (isDemoConnection(conn)) return liveReport(conn, () => googleAdsSource(conn, { cfg: null, accessToken: "" }).report(level, since, until));
+  // Through Supermetrics: none of bizinsights' Google Ads operations are spent (Supermetrics calls Google with its own).
+  if (isSupermetricsConnection(conn)) {
+    const sm = supermetricsConfig(fetchImpl);
+    if (!sm) throw supermetricsNotSetUp();
+    return liveReport(conn, () => supermetricsGoogleReport(sm, supermetricsCredential(conn), level, since, until, { deadline: opts.deadline ?? Date.now() + AD_REPORT_BUDGET_MS }));
+  }
   const cfg = googleClient(fetchImpl);
   if (!cfg) throw notSetUp("google");
   if (opts.coord && (await googleAdsPaused(opts.coord))) throw googleAllowanceUsed();
@@ -151,10 +168,18 @@ export async function adsenseReportForConnection(
   fetchImpl?: FetchLike,
   opts: { deadline?: number } = {},
 ): Promise<AdsenseLiveReport> {
+  const sites = conn.sites ?? [];
+  if (isSupermetricsConnection(conn)) {
+    const sm = supermetricsConfig(fetchImpl);
+    if (!sm) throw supermetricsNotSetUp();
+    return liveReport(conn, async () => {
+      const r = await supermetricsAdsenseReport(sm, supermetricsCredential(conn), level, since, until, sites, conn.currency, { deadline: opts.deadline ?? Date.now() + AD_REPORT_BUDGET_MS });
+      return { level, since, until, currency: r.currency, rows: r.rows, totals: r.totals, truncated: r.truncated, sites };
+    });
+  }
   const f = reportFetch("adsense", fetchImpl, opts.deadline);
   const cfg = adsenseConfig(f);
   if (!cfg) throw notSetUp("adsense");
-  const sites = conn.sites ?? [];
   return liveReport(conn, async () => {
     const r = await adsenseReport(cfg, await adAccessToken(conn, f), conn.accountId, level, since, until, sites);
     return { level, since, until, currency: r.currency ?? conn.currency, rows: r.rows, totals: r.totals, truncated: r.truncated, sites };

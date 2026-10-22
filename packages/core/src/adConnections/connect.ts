@@ -12,8 +12,9 @@ import type { FetchLike } from "../shopify.js";
 import { keyring } from "../tokens.js";
 import { resolveAdAlerts } from "./alerts.js";
 import { metaConfig } from "./config.js";
-import { aad, accessTokenAndPerson, encryptAdTokens, learnAdPerson, sameSignIn } from "./credentials.js";
+import { aad, accessTokenAndPerson, encryptAdTokens, encryptSupermetricsCredential, isSupermetricsConnection, learnAdPerson, sameSignIn } from "./credentials.js";
 import { recordAdFailure } from "./status.js";
+import { revokeSupermetricsLoginIfUnused } from "./supermetrics.js";
 
 export const ADS_PENDING_TTL_S = 900;
 
@@ -37,6 +38,11 @@ export interface PendingAdConnect {
    * none): cancelling the choice must not revoke it (dropUnusedGrant's `reusedRefreshToken`).
    */
   reusedRefreshToken?: boolean;
+  /**
+   * Supermetrics (docs/supermetrics.md): the login the accounts are read through. The "access token"
+   * held is then the login's username, and each account's Supermetrics id is on the account.
+   */
+  sourceLoginId?: string;
   /** Epoch ms after which the choice is gone. */
   expiresAt: number;
 }
@@ -65,6 +71,7 @@ export async function holdPendingAdConnect(
     externalUserId?: string | null;
     truncated?: boolean;
     reusedRefreshToken?: boolean;
+    sourceLoginId?: string;
   },
 ) {
   const enc = encryptAdTokens(input.storeId, input.provider, input.tokens);
@@ -81,6 +88,7 @@ export async function holdPendingAdConnect(
     externalUserId: input.externalUserId ?? null,
     truncated: !!(input.truncated ?? input.accounts.truncated),
     ...(input.reusedRefreshToken ? { reusedRefreshToken: true } : {}),
+    ...(input.sourceLoginId ? { sourceLoginId: input.sourceLoginId } : {}),
     expiresAt: Date.now() + ADS_PENDING_TTL_S * 1000,
   };
   await coord.put(pendingKey(nonce), JSON.stringify(pending), ADS_PENDING_TTL_S);
@@ -145,6 +153,11 @@ export function pendingTokens(p: PendingAdConnect): TokenSet {
  * Save the ad accounts someone just connected. New accounts start enabled; accounts connected
  * before get the new token and come back from "reconnect" / "permission" / "error", keeping their
  * on/off choice and their stored days. Their alerts are closed: connecting again is the fix.
+ *
+ * With `sourceLoginId` the accounts are read through that Supermetrics login (`tokens.accessToken` is
+ * its username): each row holds its own sealed credential (encryptSupermetricsCredential). An account
+ * connected before the other way (directly, or through another Supermetrics login) keeps its row and
+ * its stored days, and the credential it held is given back unless something else still uses it.
  */
 export async function saveAdConnections(input: {
   workspaceId: string;
@@ -155,18 +168,41 @@ export async function saveAdConnections(input: {
   userId: string | null;
   /** The platform's id for the person who signed in (see externalUserId on the model). */
   externalUserId?: string | null;
+  /** Supermetrics: the login the accounts are read through. */
+  sourceLoginId?: string | null;
+  /** For giving back a credential an account no longer uses. */
+  fetchImpl?: FetchLike;
 }): Promise<Array<AdConnection & { isNew: boolean }>> {
-  const tokens = {
-    ...encryptAdTokens(input.storeId, input.provider, input.tokens),
-    // Who granted it belongs to the token stored next to it: an unknown signer never inherits the previous one
-    // (a disconnect then answers "unknown_person" instead of revoking someone else's grant).
-    externalUserId: input.externalUserId ?? null,
-    grantedScopes: (input.tokens.grantedScopes ?? []).slice(0, 50),
-  };
+  const supermetrics = !!input.sourceLoginId;
+  const direct = supermetrics
+    ? null
+    : {
+        ...encryptAdTokens(input.storeId, input.provider, input.tokens),
+        // Who granted it belongs to the token stored next to it: an unknown signer never inherits the previous one
+        // (a disconnect then answers "unknown_person" instead of revoking someone else's grant).
+        externalUserId: input.externalUserId ?? null,
+        grantedScopes: (input.tokens.grantedScopes ?? []).slice(0, 50),
+        source: "direct",
+        sourceLoginId: null,
+      };
   const out: Array<AdConnection & { isNew: boolean }> = [];
+  const replaced: AdConnection[] = [];
   for (const a of input.accounts) {
     const where = { storeId_provider_accountId: { storeId: input.storeId, provider: input.provider, accountId: a.accountId } };
-    const before = await systemDb.adConnection.findUnique({ where, select: { id: true } });
+    const before = await systemDb.adConnection.findUnique({ where });
+    const tokens = direct ?? {
+      ...encryptSupermetricsCredential(input.storeId, input.provider, {
+        dsUser: input.tokens.accessToken,
+        dsAccount: a.sourceAccountId ?? a.accountId,
+        ...(input.provider === "adsense" ? { adsenseCurrency: adsenseCurrencyFor(before) } : {}),
+      }),
+      externalUserId: null,
+      grantedScopes: [],
+      source: "supermetrics",
+      sourceLoginId: input.sourceLoginId!,
+    };
+    // The credential it held before, now unused by this row: given back below unless something else uses it.
+    if (before?.accessTokenEnc && (before.source !== tokens.source || (supermetrics && before.sourceLoginId !== input.sourceLoginId))) replaced.push(before);
     // The account's health at the platform, when the listing said it.
     const health = a.status ? { accountStatus: a.status, accountStatusDetail: a.statusDetail ?? null } : {};
     const row = await systemDb.adConnection.upsert({
@@ -205,7 +241,22 @@ export async function saveAdConnections(input: {
     if (before) await resolveAdAlerts(row).catch((err: unknown) => logger.warn({ err, connectionId: row.id }, "ad alerts not resolved"));
     out.push({ ...row, isNew: !before });
   }
+  for (const old of replaced) {
+    const outcome = await revokeAdAccessIfUnused(old, input.fetchImpl).catch(() => "failed" as const);
+    logger.info({ connectionId: old.id, from: old.source, to: supermetrics ? "supermetrics" : "direct", outcome }, "ad connection now reads another way; its old access released");
+  }
   return out;
+}
+
+/**
+ * Which currency an AdSense account read through Supermetrics keeps its earnings in: its own when it
+ * was read before in a currency bizinsights knows (from AdSense directly, which names it; its stored
+ * days are in it), else Supermetrics' US dollars (Supermetrics names no currency for an AdSense
+ * account; ads/supermetrics.ts admMoney). A row read through Supermetrics before stays as it was: its
+ * currency is USD exactly when it was read in dollars, and reading a USD account in dollars is the same.
+ */
+function adsenseCurrencyFor(before: AdConnection | null): "account" | "usd" {
+  return before?.currency && (before.source !== "supermetrics" || before.currency !== "USD") ? "account" : "usd";
 }
 
 /**
@@ -285,7 +336,8 @@ async function resolvePerson(conn: AdConnection, fetchImpl?: FetchLike): Promise
  * the grant, to be safe: revoking at Google ends every connection on it).
  */
 async function grantStillUsed(provider: string, externalUserId: string, exceptId: string | null, fetchImpl?: FetchLike): Promise<boolean> {
-  const family = { provider: { in: grantFamily(provider) }, ...(exceptId ? { NOT: { id: exceptId } } : {}), ...holdsGrant };
+  // Only bizinsights' own sign-ins hold a grant to bizinsights' apps: a Supermetrics row reads with Supermetrics' own.
+  const family = { provider: { in: grantFamily(provider) }, source: "direct", ...(exceptId ? { NOT: { id: exceptId } } : {}), ...holdsGrant };
   if ((await systemDb.adConnection.count({ where: { ...family, externalUserId } })) > 0) return true;
   const unknown = await systemDb.adConnection.findMany({ where: { ...family, externalUserId: null }, orderBy: { updatedAt: "desc" }, take: 500 });
   const signIns = bySignIn(unknown);
@@ -328,6 +380,8 @@ async function revokeGrant(provider: string, tokens: { accessToken: string; refr
  */
 export async function revokeAdAccessIfUnused(conn: AdConnection, fetchImpl?: FetchLike): Promise<RevokeOutcome> {
   await resolveAdAlerts(conn).catch((err: unknown) => logger.warn({ err, connectionId: conn.id }, "ad alerts not resolved"));
+  // Read through Supermetrics: its login goes back once no other connection reads with it.
+  if (isSupermetricsConnection(conn)) return revokeSupermetricsLoginIfUnused(conn.sourceLoginId, fetchImpl, conn.id);
   if (!conn.accessTokenEnc) return "unknown_person";
   // A connection that never learned who granted it asks the platform now, with its own token (what it
   // learns is kept on the rest of its sign-in; this row is gone). Access that ended has nothing to revoke.
@@ -455,6 +509,14 @@ export async function revokeReleasedAdGrants(grants: ReleasedAdGrant[], fetchImp
   const decided = new Map<string, RevokeOutcome>();
   for (const { first, ids, tokens } of grants) {
     try {
+      // Read through Supermetrics: its login goes back once no connection holds its credential (each login once).
+      if (isSupermetricsConnection(first)) {
+        const key = `supermetrics:${first.sourceLoginId ?? ""}`;
+        const outcome = decided.get(key) ?? (await revokeSupermetricsLoginIfUnused(first.sourceLoginId, f));
+        decided.set(key, outcome);
+        outcomes.push(outcome);
+        continue;
+      }
       // Without a working token or a known person there is no telling whose grant it was.
       const person = first.externalUserId ?? (tokens ? await resolvePerson(first, f) : null);
       if (!tokens || !person || person === "ended") {
@@ -503,7 +565,7 @@ export async function releaseUserAdGrants(
  * `remaining`: rows still unknown (the platform wouldn't say, or more than `limit` sign-ins were left).
  */
 export async function fillAdPersons(opts: { fetchImpl?: FetchLike; limit?: number } = {}): Promise<{ learned: number; ended: number; unknown: number; remaining: number }> {
-  const where = { provider: { in: ["meta", "google", "adsense"] }, externalUserId: null, ...holdsGrant };
+  const where = { provider: { in: ["meta", "google", "adsense"] }, source: "direct", externalUserId: null, ...holdsGrant };
   const out = { learned: 0, ended: 0, unknown: 0, remaining: 0 };
   const limit = opts.limit ?? 200;
   const tried = new Set<string>();
