@@ -15,6 +15,7 @@
     "./auth": "./src/auth.ts",
     "./capabilities": "./src/capabilities.ts",
     "./dates": "./src/dates.ts",
+    "./device": "./src/device.ts",
     "./health": "./src/health.ts",
     "./inventory": "./src/inventory.ts",
     "./journey": "./src/journey.ts",
