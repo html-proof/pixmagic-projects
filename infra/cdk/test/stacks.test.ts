@@ -438,6 +438,21 @@ describe("the viewer-request function", () => {
     expect(via("172.70.1.2", "1.2.3.4, 5.6.7.8")).toBe("172.70.1.2");
   });
 
+  it("passes on where the client is: Cloudflare's location behind its proxy, CloudFront's otherwise, never the client's own", () => {
+    const geo = (viewerIp: string, headers: Record<string, string>) =>
+      run("bizinsights.io", {
+        method: "POST",
+        headers: { host: { value: "bizinsights.io" }, ...Object.fromEntries(Object.entries(headers).map(([k, value]) => [k, { value }])) },
+      }, viewerIp).headers["x-insights-viewer-geo"]?.value;
+    const both = { "cf-ipcountry": "IN", "cf-region": "Kerala", "cf-ipcity": "Kochi", "cloudfront-viewer-country": "US", "cloudfront-viewer-country-region-name": "Virginia", "cloudfront-viewer-city": "Ashburn" };
+    expect(geo("172.70.1.2", both)).toBe("IN|Kerala|Kochi");
+    expect(geo("203.0.113.9", both)).toBe("US|Virginia|Ashburn");
+    expect(geo("172.70.1.2", { "cf-ipcountry": "IN" })).toBe("IN||");
+    expect(geo("203.0.113.9", { "cloudfront-viewer-country": "SG", "cloudfront-viewer-city": "New York" })).toBe("SG||New%20York");
+    // Sent by the client itself (not from Cloudflare's addresses): ignored, and its own header dropped.
+    expect(geo("203.0.113.9", { "cf-ipcountry": "KP", "x-insights-viewer-geo": "KP||" })).toBeUndefined();
+  });
+
   it("sends page requests on other names to the domain, path and query parameters as received", () => {
     const querystring = { shop: { value: "a.myshopify.com" }, hmac: { value: "ab%2Bc" }, embedded: { value: "" }, id: { value: "1", multiValue: [{ value: "1" }, { value: "2" }] } };
     for (const host of ["d2mr8m2p1qkh58.cloudfront.net", "www.bizinsights.io", "WWW.BizInsights.io"]) {

@@ -61,6 +61,8 @@ model User {
   updatedAt     DateTime     @updatedAt @map("updated_at")
   memberships   Membership[]
   identities    AuthIdentity[]
+  /// Where this account is signed in (Settings → Security).
+  sessions      UserSession[]
   /// Members and invitations this person brought into a workspace (Team & Access).
   invitedMembers     Membership[] @relation("MembershipInviter")
   sentInvitations    Invitation[] @relation("InvitationInviter")
@@ -108,6 +110,36 @@ model AuthEvent {
 
   @@index([userId, createdAt])
   @@map("auth_events")
+}
+
+/// A signed-in browser: one row per session (apps/api/src/session.ts), for the device list in
+/// Settings → Security and for signing one device out. The session itself is the cookie; this row
+/// only describes it. Ended rows (signed out, removed, or past expires_at) are deleted by a sweep.
+model UserSession {
+  id         String    @id @default(cuid())
+  userId     String    @map("user_id")
+  /// The session's id (SessionClaims.sid): what signing this device out retires.
+  sid        String    @unique
+  /// How it signed in: "password" or "google".
+  method     String
+  /// What the browser says about itself (DeviceInfo in @app/shared/device).
+  device     Json?
+  /// Where it was last seen from: its address, and the country (ISO code), region and city the
+  /// edge read from it. Approximate, for recognising a device only.
+  ip         String?
+  country    String?
+  region     String?
+  city       String?
+  createdAt  DateTime  @default(now()) @map("created_at")
+  lastSeenAt DateTime  @default(now()) @map("last_seen_at")
+  expiresAt  DateTime  @map("expires_at")
+  /// Signed out on that device, or removed from another one.
+  endedAt    DateTime? @map("ended_at")
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, lastSeenAt])
+  @@index([expiresAt])
+  @@map("user_sessions")
 }
 
 model Workspace {

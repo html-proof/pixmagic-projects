@@ -115,7 +115,9 @@ export default function PortalAccount() {
         )}
       </section>
 
-      <AccountSecurity />
+      <div className="pt-2">
+        <AccountSecurity heading="h2" intro="Your email, password, the devices you're signed in on, and your recent sign-ins." />
+      </div>
     </>
   );
 }

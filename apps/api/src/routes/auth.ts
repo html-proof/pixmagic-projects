@@ -31,6 +31,7 @@ import {
   type CodeChallenge,
 } from "../emailCode.js";
 import { cognitoUsernameKey, notifyMethodAdded, recordAuthEvent, resolveUser } from "../identity.js";
+import { endSessions, recordFailedSignIn, recordSession } from "../devices.js";
 import { apiPath, clearSessionCookies, clearShareCookie, linkProofKey, newSession, provesAddress, readRefreshToken, readSession, retiredSessionKey, setSessionCookies, signedInRecently } from "../session.js";
 import type { App } from "../app.js";
 import { limit, LIMITS } from "../rateLimit.js";
@@ -278,6 +279,8 @@ export function authRoutes(app: App, deps: Deps) {
     setSessionCookies(c, s, tokens.refreshToken);
     // Security trail: who signed in, how and from where (user id, never the email or a token).
     logger.info({ event: "session_created", userId: user.id, method: claims.method, ip: clientIp(c) }, "signed in");
+    // Settings → Security: this device, and the sign-in in the account's activity.
+    await recordSession(c, s, clientIp(c));
     return user;
   }
 
@@ -327,7 +330,9 @@ export function authRoutes(app: App, deps: Deps) {
     const ip = clientIp(c);
     await limit(deps.coord, `rl:login:ip:${ip}`, LIMITS.loginIp);
     await limit(deps.coord, `rl:login:email:${sha256Hex(input.email)}`, LIMITS.loginEmail);
-    const result = await deps.auth.passwordSignIn(input.email, input.password).catch((err: unknown) => {
+    const result = await deps.auth.passwordSignIn(input.email, input.password).catch(async (err: unknown) => {
+      // A wrong password for an account here is in that account's sign-in activity.
+      if (isCognito(err, "NotAuthorizedException")) await recordFailedSignIn(c, input.email, ip, "password");
       throw cognitoFailure(err, "login");
     });
     const codeStep = await askForCode(c, input.email, result, input.keep);
@@ -360,7 +365,10 @@ export function authRoutes(app: App, deps: Deps) {
     // Per account as well as per IP: six digits are guessable without both.
     await limit(deps.coord, `rl:mfa:email:${sha256Hex(pending.email)}`, LIMITS.mfaVerifyAccount);
     const result = await deps.auth.answerTotpChallenge(pending.username, pending.session, input.code).catch(async (err: unknown) => {
-      if (isCognito(err, "CodeMismatchException")) throw new HttpError(400, "That code isn't right. Enter the code your authenticator app shows now.", "invalid_code");
+      if (isCognito(err, "CodeMismatchException")) {
+        await recordFailedSignIn(c, pending.email, clientIp(c), "code");
+        throw new HttpError(400, "That code isn't right. Enter the code your authenticator app shows now.", "invalid_code");
+      }
       // Cognito's session has ended (too long, or too many wrong codes): start again.
       if (isCognito(err, "NotAuthorizedException", "ExpiredCodeException")) {
         await deps.coord.take(key).catch(() => null);
@@ -493,6 +501,7 @@ export function authRoutes(app: App, deps: Deps) {
     const scope = loginCodeScope(id, pending.issuedAt);
     const attempt = await countAttempt(deps.coord, scope);
     if (!safeEqual(pending.codeHash, codeHash(scope, code))) {
+      await recordFailedSignIn(c, pending.email, clientIp(c), "code");
       if (attempt >= MAX_ATTEMPTS) {
         // The fifth wrong guess ends the code and the sign-in with it: the password again, then a new code.
         await dropPendingLogin(c, id, pending);
@@ -1178,6 +1187,7 @@ export function authRoutes(app: App, deps: Deps) {
       await deps.coord
         .put(retiredSessionKey(s.sid), "1", Math.max(60, Math.ceil((s.exp - Date.now()) / 1000)))
         .catch((err: unknown) => logger.error({ err }, "could not retire the signed-out session"));
+      await endSessions({ sid: s.sid });
       const rt = readRefreshToken(c, s);
       // This device's refresh token (and the access tokens from it) end in Cognito too.
       if (rt) await deps.auth.revokeRefreshToken(rt).catch((err: unknown) => logger.warn({ err }, "could not revoke the refresh token"));
@@ -1197,6 +1207,7 @@ export function authRoutes(app: App, deps: Deps) {
     for (const id of identities) {
       await deps.auth.adminGlobalSignOut(id.username).catch((err: unknown) => logger.warn({ err }, "Cognito global sign-out failed"));
     }
+    await endSessions({ userId: user.id });
     await recordAuthEvent("signed_out_everywhere", user.id, clientIp(c));
     const s = sessionOf(c);
     clearSessionCookies(c);

@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Hono } from "hono";
 import { handle } from "hono/aws-lambda";
-import { buildApp, CLIENT_IP_HEADER, type App } from "@app/api";
+import { buildApp, CLIENT_GEO_HEADER, CLIENT_IP_HEADER, type App } from "@app/api";
 import { consume, runScheduled, seedAfterMove, seedSalesRereads, settleAllCustomers, startChecks, type WorkerDeps } from "@app/worker";
 import { configReport, logger, memoryBlobs, memoryCoord, warnHalfConfigured, withLogContext, withTimeout, type Coord, type Queues } from "@app/core";
 import { productCheck, shopifyCheckReport } from "@app/core/reports";
@@ -42,6 +42,8 @@ const here = dirname(fileURLToPath(import.meta.url));
 /** Set by the CloudFront viewer-request function from what CloudFront itself saw (infra/cdk). */
 const VIEWER_IP = "x-insights-viewer-ip";
 const VIEWER_HOST = "x-insights-viewer-host";
+/** Where the viewer is ("country|region|city"), from Cloudflare's visitor-location headers or CloudFront's own. */
+const VIEWER_GEO = "x-insights-viewer-geo";
 /** CloudFront adds this to every origin request; without it the function URL was called directly. */
 const ORIGIN_VERIFY = "x-origin-verify";
 
@@ -174,8 +176,11 @@ root.all("*", async (c) => {
   // requests that carry the origin secret), and on a bare function URL the address Lambda saw.
   const headers = new Headers(request.headers);
   const clientIp = viaCloudFront ? request.headers.get(VIEWER_IP) : (event?.requestContext?.http?.sourceIp ?? null);
-  for (const h of ["x-real-ip", CLIENT_IP_HEADER, VIEWER_IP, VIEWER_HOST, ORIGIN_VERIFY]) headers.delete(h);
+  // Where the client is (Settings → Security's device list), the same way: only what the viewer function set.
+  const clientGeo = viaCloudFront ? request.headers.get(VIEWER_GEO) : null;
+  for (const h of ["x-real-ip", CLIENT_IP_HEADER, CLIENT_GEO_HEADER, VIEWER_IP, VIEWER_HOST, VIEWER_GEO, ORIGIN_VERIFY]) headers.delete(h);
   if (clientIp) headers.set(CLIENT_IP_HEADER, clientIp);
+  if (clientGeo) headers.set(CLIENT_GEO_HEADER, clientGeo);
   return app.fetch(new Request(url, { method: request.method, headers, body: request.body, duplex: "half" } as RequestInit));
 });
 const http = handle(root);

@@ -15,6 +15,7 @@ export * from "./alerts.js";
 export * from "./whatsapp.js";
 export * from "./traffic.js";
 export * from "./auth.js";
+export * from "./device.js";
 export * from "./team.js";
 export * from "./inventory.js";
 export * from "./salesCalculation.js";

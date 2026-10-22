@@ -214,11 +214,12 @@ describe("row level security coverage", () => {
     const owned = await systemDb.$queryRaw<Array<{ tablename: string }>>`
       SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tableowner = 'app_rls'`;
     expect(owned).toEqual([]);
-    const [grants] = await systemDb.$queryRaw<Array<{ otps: boolean; seen: boolean; identities: boolean; events: boolean }>>`
+    const [grants] = await systemDb.$queryRaw<Array<{ otps: boolean; seen: boolean; identities: boolean; events: boolean; sessions: boolean }>>`
       SELECT has_table_privilege('app_rls', 'public.email_otps', 'SELECT') AS otps,
              has_table_privilege('app_rls', 'public.pixel_events_seen', 'SELECT') AS seen,
              has_table_privilege('app_rls', 'public.auth_identities', 'SELECT') AS identities,
-             has_table_privilege('app_rls', 'public.auth_events', 'SELECT') AS events`;
-    expect(grants).toEqual({ otps: false, seen: false, identities: false, events: false });
+             has_table_privilege('app_rls', 'public.auth_events', 'SELECT') AS events,
+             has_table_privilege('app_rls', 'public.user_sessions', 'SELECT') AS sessions`;
+    expect(grants).toEqual({ otps: false, seen: false, identities: false, events: false, sessions: false });
   });
 });
