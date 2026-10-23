@@ -93,8 +93,45 @@ shipping, taxes and total sales as Shopify's sales reports for the same dates.
 ## Conventions
 
 - **Currency:** the store's currency (Shopify `shop_money`). Presentment currencies are ignored. Money totals are rounded to cents before ratios are derived.
-- **Day:** calendar day in the **store's IANA time zone** (from `shop.ianaTimezone`), not the viewer's and not UTC. Date presets (`today`, `7d`, `mtd`, …) resolve in that zone too.
-- **Custom ranges** run from 2000-01-01 at the earliest, cover at most 366 days, and are reported only up to the store's today: picking 1–31 Oct on 9 Oct reports 1–9 Oct. A range that starts after today is refused (`400 invalid_range`).
+- **Day:** calendar day in the **store's IANA time zone** (from `shop.ianaTimezone`), not the viewer's and not UTC. Date presets resolve in that zone too.
+- **Date presets** (`preset=` in the overview and export query; `DATE_PRESETS` and `resolvePreset`
+  in packages/shared/src/dates.ts): Today (`today`), Yesterday, Last 7 / 30 / 90 days (`7d`, `30d`,
+  `90d`, each ending today), This week (`wtd`: Monday to today; weeks start on Monday, as ISO 8601
+  counts them. Shopify's ShopifyQL docs don't say which day its `this_week` starts on: if a store's
+  Shopify screen differs, check that first), This month (`mtd`), Last month (`lastmonth`), This year
+  (`ytd`), Last year (`lastyear`), All time (`all`) and Custom (`custom&from=…&to=…`).
+- **The store's first day** (`startDay` in the overview's `data` and in the store list;
+  `storeStartDay`): the store-local day Shopify created the store (`Shop.createdAt` from the Admin
+  API, kept in `stores.shop_created_at`, `createdDay` in `data`), or an earlier order's day: an order
+  brought in from another platform keeps the day it was processed there, which can be before the
+  store existed on Shopify, and is never left out. The shop sync job reads the creation date with
+  the store's name, currency and time zone, on the first import; a store connected before it was
+  read gets it on its next dashboard view (`autoRefresh` queues a shop job, at most daily, until it
+  is known). It needs no access scope. It is not the day the store was connected or the app
+  installed. Until it is known, the first day is the first order's.
+- **All time** runs from the store's first day to the store's today. Nothing before it can be
+  compared, so All time has no comparison: whatever `compare` asks, it is "compared" with the period
+  just before (`previous.compare` says `previous`), which lies before the store existed, and every
+  change is `null`; the comparison pill says "No comparison".
+- **Custom ranges** may start on the store's first day at the earliest once Shopify's creation date
+  is known (`400 invalid_range`, "Range starts before the store's first day", before it; the date
+  boxes offer no earlier day and say why), from 2000-01-01 while it isn't (the first order alone
+  isn't a limit: a quiet first month before it is still the store's), are any length, and are
+  reported only up to the store's today: picking 1–31 Oct on 9 Oct reports 1–9 Oct. A range that
+  starts after today is refused (`400 invalid_range`). The same limits go for custom comparison
+  dates. (The SMS and ad-report endpoints keep their own one-year limit.)
+- **Before the imported history:** dates that reach back before `historyFrom` (below: Shopify
+  shares 60 days of orders without `read_all_orders`) are still reported, and the dashboard says
+  under its heading from which day the order figures count ("Order figures count from 24 August
+  2026: Shopify shared orders from then on"), so days with nothing imported never read as days
+  without sales. The heading line also states the dates exactly ("Store created: 15 March 2022 ·
+  Showing data: 15 March 2022 – 23 October 2026 (Australia/Melbourne)").
+- **Ranges over a year** (All time, long custom dates; `DAILY_CHART_MAX_DAYS`): the API still answers
+  one point per day (the series and the Sales download), and the charts add them up a month at a
+  time (`rowsByMonth`; rates from the month's sums). The ad platforms' own reports (Meta, Google,
+  AdSense: asked live) cover up to a year at a time, so their panels say so instead of asking. The
+  dashboard checks for new figures once a minute instead of every 15 s on these ranges: each check
+  adds up every order in them.
 - **Comparison period:** what the % changes compare with, chosen beside the dates as in Shopify
   Analytics' second date chip (`compare` in the overview and export query; `resolvePreset` in
   packages/shared/src/dates.ts):
@@ -104,9 +141,12 @@ shipping, taxes and total sales as Shopify's sales reports for the same dates.
   - **Previous year** (`compare=year`): the same dates a year earlier. 29 February, which most years
     lack, becomes the 28th, so February 2028 is compared with 1–28 February 2027.
   - **Custom** (`compare=custom&cfrom=…&cto=…`): any dates, under the custom-range rules above (from
-    2000-01-01, at most 366 days, reported up to the store's today, not starting after it). They may
-    have another length than the range, sit after it or overlap it. A pair that breaks a rule is
+    the store's first day, any length, reported up to the store's today, not starting after it). They
+    may have another length than the range, sit after it or overlap it. A pair that breaks a rule is
     refused with `400 invalid_range`, as a bad custom range is.
+  - **This week** against the period before is against the same days of the week before (Monday to
+    Thursday against last Monday to Thursday), not the days just before, which would set a weekend
+    against weekdays.
 
   The answer's `previous` holds the dates (`from`, `to`, `until`), `compare`, and `imported`. The
   comparison pill shows those dates ("vs 17 Oct 2026"), as Shopify's comparison chip shows its own
@@ -169,7 +209,25 @@ shipping, taxes and total sales as Shopify's sales reports for the same dates.
   forgets the window. Stores imported before the record existed were given 60 days before their last
   successful orders sweep (a start they surely hold), and their next window import makes it exact.
   `oldestOrderDay`/`newestOrderDay` stay the orders actually held ("Orders from … to …").
-- **Daily series** (the sales chart and sparklines) has one point per day of the range; days without orders or sales are 0.
+- **Daily series** (the sales chart and sparklines) has one point per day of the range; days without orders or sales are 0. Over a year the charts draw it a month at a time (above).
+- **Which date each figure goes by.** Every figure is filtered on the date that answers its
+  question, never one date for everything:
+
+  | Figures | Date | Kind |
+  | --- | --- | --- |
+  | Orders, average order value, customers (new, returning), channels, traffic sources, order timing, discount codes, recent orders, fulfillment rates | The day Shopify processed the order (`processedAt`, below) | Order date |
+  | Gross sales, discounts, net sales, shipping, duties, fees, taxes, total sales, items sold, top products and vendors | The day each sale happened (the agreement's `happenedAt`): the order's own sales on its day, a refund, return, edit or cancellation on its own day | Transaction date |
+  | Returns (sales reversals), refunded orders | The day of the refund, return or cancellation | Transaction date |
+  | Orders cancelled (Orders details) | The day of the cancellation (`cancelled_at`), whenever the order was placed | Transaction date |
+  | Orders waiting to ship, oldest waiting | Now (a live state, labelled as such), never the dates picked | Current |
+  | Stock levels and value | Now; stock changes on the Inventory pages go by when each change happened, from when bizinsights started recording them | Current / movement date |
+  | Store visits (pixel) | When each visit started | Visit date |
+  | Ad spend and results, AdSense earnings | The ad account's own days | Platform date |
+
+  An order's financial status today is never taken as its status on an earlier date: a refund
+  counts on the day it was made, in the sales records, so last month's figures don't change when an
+  order is refunded this month. bizinsights has no payment-transaction module: payment gateways,
+  fees and payouts are not imported, so no figure is shown for them.
 - **An order counts on the day Shopify processed it** (`Order.processedAt`), the date its reports and
   its order list use. For an order placed in the store that is the moment it was created; an order
   imported from another platform, synced from POS offline or brought in by a marketplace app was

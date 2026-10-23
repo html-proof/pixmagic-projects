@@ -2,7 +2,7 @@
 import Link from "next/link";
 import { Fragment, type ReactNode } from "react";
 import { adAccountStatusLabel, adErrorMessage, isAdAccountStatus, isAdErrorCode, isClosedAdAccount, type AdErrorCode, type AdProvider } from "@app/shared/ads";
-import { addDays } from "@app/shared/dates";
+import { addDays, daysBetweenInclusive, MAX_CUSTOM_DAYS } from "@app/shared/dates";
 import { weekdayOf } from "@app/shared/sales";
 import { Alert } from "@/components/ui";
 import { upToWords } from "./adFigures";
@@ -21,6 +21,22 @@ import type { AdAccount, AdFigures, Overview } from "./types";
 // ---------------------------------------------------------------------------
 
 export const PLATFORM_NAME: Record<AdProvider, string> = { meta: "Meta Ads", google: "Google Ads", adsense: "Google AdSense" };
+
+/**
+ * The platforms' own reports (Meta, Google, AdSense: asked of them live, GET .../ads/<platform>/report)
+ * cover up to a year at a time. Over a year (All time, long custom dates) the panel says so rather
+ * than ask: the figures above it still cover every day picked.
+ */
+export const reportTooLong = (r: { from: string; to: string }) => daysBetweenInclusive(r.from, r.to) > MAX_CUSTOM_DAYS;
+
+export function LongRangeNote({ name }: { name: string }) {
+  return (
+    <p className="rounded-lg border border-dashed border-border px-3 py-6 text-center text-sm text-muted" data-testid="report-too-long">
+      {name} reports cover up to a year at a time. Pick a year or less (This year, Last year or your own dates) to see it here; the figures above cover
+      every day picked.
+    </p>
+  );
+}
 
 /** What a figure some account lacks days of reads as. */
 export const UNAVAILABLE = "Unavailable";

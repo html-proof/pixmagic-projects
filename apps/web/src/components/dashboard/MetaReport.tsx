@@ -16,7 +16,7 @@ import {
 import { useApp } from "@/components/AppContext";
 import { Alert } from "@/components/ui";
 import { actionError, api, ApiError, fmtMoney, fmtNum, fmtPct } from "@/lib/api";
-import { Definitions } from "./AdsCommon";
+import { Definitions, LongRangeNote, reportTooLong } from "./AdsCommon";
 import { fmtDay, fmtRange, fmtSpan, fmtTimes, plural } from "./format";
 import { Badge, Delta, NeutralDelta, Panel, type Tone } from "./Primitives";
 import { ReportChange, reportChange } from "./ReportCompare";
@@ -306,9 +306,10 @@ export function MetaReportPanel({ ov, accounts }: { ov: Overview; accounts: AdsM
   const cfrom = ended ? ov.previous.from : null;
   const cto = ended ? ov.previous.to : null;
   const chosen = meta.find((a) => a.id === connection) ?? meta[0];
+  const tooLong = reportTooLong(ov.range);
 
   useEffect(() => {
-    if (!chosen) return;
+    if (!chosen || tooLong) return;
     let live = true;
     setLoading(true);
     setError(null);
@@ -325,9 +326,16 @@ export function MetaReportPanel({ ov, accounts }: { ov: Overview; accounts: AdsM
       live = false;
     };
     // The account's status changes on every poll; only a different question asks Meta again.
-  }, [workspace.id, ov.store.id, chosen?.id, level, from, to, cfrom, cto]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [workspace.id, ov.store.id, chosen?.id, level, from, to, cfrom, cto, tooLong]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!chosen) return null;
+  if (tooLong) {
+    return (
+      <Panel id="d-meta-report" title="Meta Ads report" help={`${fmtRange(from, to)}.`}>
+        <LongRangeNote name="Meta Ads" />
+      </Panel>
+    );
+  }
   const r = answer?.report;
   const currency = answer?.account.currency ?? chosen.currency ?? "USD";
   const money = (n: number | null) => (n === null ? NA : fmtMoney(n, currency));

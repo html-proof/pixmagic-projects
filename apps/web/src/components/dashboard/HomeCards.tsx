@@ -6,6 +6,7 @@ import { fmtMoneyCompact } from "./format";
 import { LineChart } from "./LineChart";
 import type { Overview } from "./types";
 import { customSales } from "@app/shared/salesCalculation";
+import { DAILY_CHART_MAX_DAYS, rowsByMonth } from "@app/shared/dates";
 import { appliedCustom, dayLinesOf, showsRefunds, showsTotalSales } from "./redacted";
 import { ChartChoice } from "./Primitives";
 
@@ -145,13 +146,17 @@ export function TrendCharts({ ov, currency }: { ov: Overview; currency: string }
   const [salesView, setSalesView] = useState<SalesView | null>(null);
   const [ordersView, setOrdersView] = useState<OrdersView>("daily");
   if (!s) return null;
-  const days = s.series.map((d) => d.day);
+  // Over a year (All time, long custom dates) a day's column would be a sliver: a month each.
+  const monthly = s.series.length > DAILY_CHART_MAX_DAYS;
+  const rows = monthly ? rowsByMonth(s.series) : s.series;
+  const per = monthly ? "month" : "day";
+  const days = rows.map((d) => d.day);
   const money = (v: number) => fmtMoney(v, currency);
   // Whole amounts are short; gridlines less than a unit apart need the cents.
   const axis = (v: number, step: number) => (step < 1 ? fmtMoney(v, currency) : fmtMoneyCompact(v, currency));
   const count = (v: number) => fmtNum(v);
 
-  const net = s.series.map((d) => d.netSales);
+  const net = rows.map((d) => d.netSales);
   // Refunds and total sales per day only for someone who may see them (Team & Access).
   const refundsShown = showsRefunds(s.series);
   const totalShown = showsTotalSales(s.series);
@@ -162,30 +167,31 @@ export function TrendCharts({ ov, currency }: { ov: Overview; currency: string }
     (wanted === "refunds" && !refundsShown) || (wanted === "sales" && !totalShown) || (wanted === "custom" && !custom) ? (totalShown ? "sales" : "net") : wanted;
   const salesValues =
     view === "refunds"
-      ? s.series.map((d) => d.refunds ?? 0)
+      ? rows.map((d) => d.refunds ?? 0)
       : view === "running"
         ? running(net)
         : view === "sales"
-          ? s.series.map((d) => d.totalSales ?? 0)
+          ? rows.map((d) => d.totalSales ?? 0)
           : view === "custom" && custom
-            ? s.series.map((d) => {
+            ? rows.map((d) => {
                 const lines = dayLinesOf(d);
                 return lines ? customSales(lines, custom.components) : 0;
               })
             : net;
   const salesEmpty = salesValues.every((v) => v === 0);
-  const orders = s.series.map((d) => d.orders);
+  const orders = rows.map((d) => d.orders);
   const orderValues = ordersView === "total" ? running(orders) : orders;
   const ordersEmpty = orderValues.every((v) => v === 0);
 
   const salesLabel = {
-    sales: "Total sales per day (Shopify)",
-    custom: `Custom sales per day · ${custom?.name ?? ""}`,
-    net: "Net sales per day",
+    sales: `Total sales per ${per} (Shopify)`,
+    custom: `Custom sales per ${per} · ${custom?.name ?? ""}`,
+    net: `Net sales per ${per}`,
     running: "Net sales, running total",
-    refunds: "Returns per day",
+    refunds: `Returns per ${per}`,
   }[view];
-  const ordersLabel = ordersView === "total" ? "Orders, running total" : "Orders per day";
+  const ordersLabel = ordersView === "total" ? "Orders, running total" : `Orders per ${per}`;
+  const points = `${days.length} ${per}${days.length === 1 ? "" : "s"}`;
 
   return (
     <div className="grid gap-4 xl:grid-cols-2">
@@ -216,11 +222,12 @@ export function TrendCharts({ ov, currency }: { ov: Overview; currency: string }
             series={salesEmpty ? [] : [{ key: view, label: salesLabel, color: view === "refunds" ? "var(--danger)" : "var(--accent)", values: salesValues }]}
             format={money}
             fmtAxis={axis}
-            label={`${salesLabel}, ${days.length} days`}
+            label={`${salesLabel}, ${points}`}
             today={ov.today}
             height={220}
             floor={salesEmpty ? 4 : 0}
             bars
+            grain={per}
           />
           {salesEmpty &&
             (salesView === "refunds" ? (
@@ -255,11 +262,12 @@ export function TrendCharts({ ov, currency }: { ov: Overview; currency: string }
             series={ordersEmpty ? [] : [{ key: ordersView, label: ordersLabel, color: "var(--viz-cat-1)", values: orderValues }]}
             format={count}
             fmtAxis={(v) => count(v)}
-            label={`${ordersLabel}, ${days.length} days`}
+            label={`${ordersLabel}, ${points}`}
             today={ov.today}
             height={220}
             integer
             bars
+            grain={per}
           />
           {ordersEmpty && <EmptyChart icon={ShoppingCart} title="No orders in this period" body="New orders show up here within a few minutes while this page is open. Test orders aren't counted, as in Shopify's reports." />}
         </div>

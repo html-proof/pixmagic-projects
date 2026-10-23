@@ -87,8 +87,19 @@ export async function runSync(data: SyncJobData, deps: WorkerDeps) {
 
   switch (data.kind) {
     case "shop": {
-      const d = await gql<{ shop: { name: string; currencyCode: string; ianaTimezone: string } }>(deps, store, pace, SHOP_QUERY);
-      await systemDb.store.update({ where: { id: store.id }, data: { name: d.shop.name, currency: d.shop.currencyCode, timezone: d.shop.ianaTimezone } });
+      const d = await gql<{ shop: { name: string; currencyCode: string; ianaTimezone: string; createdAt?: string | null } }>(deps, store, pace, SHOP_QUERY);
+      // When Shopify created the store: where the dashboard's dates begin (All time). Kept as it was
+      // when Shopify's answer has none that reads as a time.
+      const created = d.shop.createdAt ? new Date(d.shop.createdAt) : null;
+      await systemDb.store.update({
+        where: { id: store.id },
+        data: {
+          name: d.shop.name,
+          currency: d.shop.currencyCode,
+          timezone: d.shop.ianaTimezone,
+          ...(created && !Number.isNaN(created.getTime()) ? { shopCreatedAt: created } : {}),
+        },
+      });
       // Fan out the jobs that were waiting on the time zone. Only day-bucketed kinds wait here
       // (see NEEDS_TIMEZONE in packages/core/src/seedSync.ts); the catalog was enqueued at seed time and
       // is already running, so re-sending it would duplicate the work.

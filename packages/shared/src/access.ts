@@ -592,7 +592,7 @@ function redactFields(modules: Obj, g: ReadonlySet<AccessKey>): Obj {
       ...(g.has("orders.fulfillment") ? [] : ["fulfillmentStatus"]),
       ...(g.has("orders.cancellations") ? [] : ["cancelled"]),
     ];
-    if (drop.length) out.recent_orders = { ...recent, items: recent.items.map((i: unknown) => omit(i, drop)) };
+    if (drop.length) out.recent_orders = { ...((g.has("orders.cancellations") ? recent : omit(recent, ["cancelledInRange"])) as Obj), items: recent.items.map((i: unknown) => omit(i, drop)) };
   }
   const traffic = out.traffic;
   if (isObj(traffic) && !g.has("marketing.attribution")) {

@@ -785,6 +785,23 @@ describe("initial sync", () => {
     expect(queues.sent.sync).toEqual([{ storeId: store.id, kind: "orders", syncJobId: ordersJob.id }]);
   });
 
+  it("keeps when Shopify created the store, where the dashboard's dates begin, and starts nothing with an empty list", async () => {
+    const store = await makeStore(["read_orders"]);
+    // An orders row queued alongside (the dashboard's refresh queues both): not this shop job's to start.
+    await makeJob(store, "orders");
+    const shopJob = await makeJob(store, "shop");
+    fetchImpl = async () => gqlJson({ shop: { name: "Shop", currencyCode: "AUD", ianaTimezone: "Australia/Sydney", createdAt: "2022-03-14T14:00:00Z" } });
+    await runSync({ storeId: store.id, kind: "shop", syncJobId: shopJob.id, waitingJobIds: [] }, deps);
+    expect(await systemDb.store.findUniqueOrThrow({ where: { id: store.id } })).toMatchObject({ timezone: "Australia/Sydney", shopCreatedAt: new Date("2022-03-14T14:00:00Z") });
+    expect(queues.sent.sync).toEqual([]);
+
+    // An answer without a date that reads as one leaves the known date as it was.
+    const again = await makeJob(store, "shop");
+    fetchImpl = async () => gqlJson({ shop: { name: "Shop", currencyCode: "AUD", ianaTimezone: "Australia/Sydney", createdAt: "not a date" } });
+    await runSync({ storeId: store.id, kind: "shop", syncJobId: again.id, waitingJobIds: [] }, deps);
+    expect((await systemDb.store.findUniqueOrThrow({ where: { id: store.id } })).shopCreatedAt).toEqual(new Date("2022-03-14T14:00:00Z"));
+  });
+
   it("treats Shopify 401 as unrecoverable", async () => {
     const store = await makeStore();
     const job = await systemDb.syncJob.create({ data: { workspaceId: store.workspaceId, storeId: store.id, kind: "shop" } });

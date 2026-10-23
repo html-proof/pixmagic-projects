@@ -257,9 +257,9 @@ export function RecentOrdersCard({ items, currency, timezone, shopDomain }: { it
   const showPayment = items.some((o) => o.financialStatus !== undefined || o.cancelled !== undefined);
   const showFulfillment = items.some((o) => o.fulfillmentStatus !== undefined);
   return (
-    <Panel id="recent_orders" title="Recent orders" help={`The 10 latest orders, whatever dates are selected. Times are in the store's time zone (${timezone}).`}>
+    <Panel id="recent_orders" title="Recent orders" help={`The 10 latest orders placed in these dates. Times are in the store's time zone (${timezone}).`}>
       {items.length === 0 ? (
-        <Empty>No orders have been imported yet. They appear here as soon as they arrive from Shopify.</Empty>
+        <Empty>No orders were placed in these dates. New orders appear here as soon as they arrive from Shopify.</Empty>
       ) : (
         <>
         {/* Phones: stacked rows instead of a wide table. */}

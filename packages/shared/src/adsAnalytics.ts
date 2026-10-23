@@ -9,7 +9,7 @@
  */
 // Without the ".js" the rest of the package uses: the web app imports this file directly
 // (@app/shared/adsAnalytics), and its bundler doesn't map "./dates.js" to dates.ts.
-import { addDays, daysBetweenInclusive, eachDay } from "./dates";
+import { addDays, daysBetweenInclusive, eachDay, weekStart } from "./dates";
 import type { AdDayRow, GoogleReportMetrics } from "./ads";
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
@@ -90,11 +90,8 @@ export interface AdsPeriod extends AdsMetrics {
   key: string;
 }
 
-/** The Monday of the week `day` is in. */
-export function weekStart(day: string): string {
-  const wd = new Date(`${day}T00:00:00Z`).getUTCDay();
-  return addDays(day, -((wd + 6) % 7));
-}
+/** The Monday of the week `day` is in (the dashboard's This week starts on it too). */
+export { weekStart };
 
 /** ISO week label, "2026-W42". */
 export function weekKey(day: string): string {

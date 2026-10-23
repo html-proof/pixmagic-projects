@@ -6,7 +6,7 @@ import { CircleDollarSign, Gem, Package, ShoppingCart } from "lucide-react";
 import { useApp, canManage, StoresPending } from "@/components/AppContext";
 import { EmptyState, Alert } from "@/components/ui";
 import { AboutThisData, EmptyStoreNote, StoreStatus, type LiveState } from "@/components/dashboard/StoreHeader";
-import { CompareDates, comparedWith, CompareSelect, CustomDates, DateRangeSelect, periodWords, useDateRange, versusWords, type Shown } from "@/components/dashboard/DateRange";
+import { CompareDates, comparedWith, CompareSelect, CustomDates, DateRangeSelect, periodWords, RangeLabel, useDateRange, versusWords, type Shown } from "@/components/dashboard/DateRange";
 import { TopicDetail } from "@/components/dashboard/TopicDetail";
 import { availableTopics, useDetailView } from "@/components/dashboard/topics";
 import { AreaList, HealthOverview, StoreSummary } from "@/components/dashboard/Overview";
@@ -19,6 +19,7 @@ import type { Capability, Overview } from "@/components/dashboard/types";
 import { signInFinished } from "@/lib/adSignIn";
 import { api, ApiError, apiHref, fmtMoney, fmtNum, friendlyError, isTransient, useLiveApi } from "@/lib/api";
 import { scopeList } from "@app/shared/capabilities";
+import { DAILY_CHART_MAX_DAYS, daysBetweenInclusive } from "@app/shared/dates";
 import { hasFullAccess, ROLE_INFO } from "@app/shared/access";
 import { NoAccessAssigned } from "@/components/team/AccessStates";
 import { hasDashboardAccess, seesTopic, TOPIC_EXPORT, TOPIC_PAGE } from "@/lib/access";
@@ -96,6 +97,11 @@ const IMPORTING_EVERY_SEC = 2;
 const IMPORTING = new Set(["syncing", "pending"]);
 /** Just after an ad account is connected, its first 90 days arrive within a minute or two: look more often until they do. */
 const ADS_FETCHING_EVERY_SEC = 5;
+/**
+ * Dates over a year (All time, long custom dates) add up every order the store has had on each
+ * check, and their figures move by a few orders at most between two: check once a minute.
+ */
+const LONG_RANGE_EVERY_SEC = 60;
 
 const AD_PLATFORM_NAME: Record<string, string> = { meta: "Meta Ads", google: "Google Ads", adsense: "Google AdSense" };
 
@@ -176,7 +182,13 @@ export default function DashboardPage() {
   const sharesData = hasDashboardAccess(access);
   const adsNotice = useAdsConnectedNotice();
   const [taken, dismissTaken] = useStoreTakenNotice();
-  const dates = useDateRange(store?.timezone ?? "UTC");
+  // The store's first day (when Shopify created it, or an earlier order's): where the date pickers
+  // begin. The store list knows it before the first numbers load; each answer brings the latest
+  // (the creation date arrives once the store's details have been read).
+  const [answeredStart, setAnsweredStart] = useState<{ store: string; day: string | null; created: boolean } | null>(null);
+  const answered = answeredStart && answeredStart.store === store?.id ? answeredStart : null;
+  const start = answered?.day ?? store?.startDay ?? null;
+  const dates = useDateRange(store?.timezone ?? "UTC", start, answered?.created || !!store?.shopCreatedAt);
   const detail = useDetailView();
   const asking = dates.asking;
   // Advertising has its own pages now: ?view=ads (an old link, a bookmark, the health check's row)
@@ -196,9 +208,18 @@ export default function DashboardPage() {
   const { data, dataPath, error, loading, checkedAt, failing } = useLiveApi<Overview>(path, everySec * 1000);
   const syncState = data?.store?.status;
   const adsFetching = !!data && [...(data.modules.ads?.accounts ?? []), ...(data.modules.adsense?.accounts ?? [])].some((a) => a.status === "active" && !a.lastSyncedAt);
+  const longRange = !!data && daysBetweenInclusive(data.range.from, data.range.to) > DAILY_CHART_MAX_DAYS;
   useEffect(() => {
-    setEverySec(syncState && IMPORTING.has(syncState) ? IMPORTING_EVERY_SEC : adsFetching ? ADS_FETCHING_EVERY_SEC : LIVE_EVERY_SEC);
-  }, [syncState, adsFetching]);
+    setEverySec(
+      syncState && IMPORTING.has(syncState) ? IMPORTING_EVERY_SEC : adsFetching ? ADS_FETCHING_EVERY_SEC : longRange ? LONG_RANGE_EVERY_SEC : LIVE_EVERY_SEC,
+    );
+  }, [syncState, adsFetching, longRange]);
+  const answeredStore = data?.store.id;
+  const answeredDay = data?.data?.startDay;
+  const answeredCreated = !!data?.data?.createdDay;
+  useEffect(() => {
+    if (answeredStore && answeredDay !== undefined) setAnsweredStart({ store: answeredStore, day: answeredDay, created: answeredCreated });
+  }, [answeredStore, answeredDay, answeredCreated]);
   // The page's own connection: "live" while the last successful check is recent (a missed check or two is fine: the odd
   // request fails even when all is well, e.g. a slow cold start); "checking" until the first
   // answer for this question arrives, or "Reconnecting…" straight away if that check failed
@@ -322,7 +343,7 @@ export default function DashboardPage() {
   const s = m?.sales_overview;
   const custom = appliedCustom(s);
 
-  const shown: Shown = ov && { range: ov.range, previous: ov.previous, timezone: ov.store.timezone };
+  const shown: Shown = ov && { range: ov.range, previous: ov.previous, timezone: ov.store.timezone, start: ov.data?.startDay ?? null };
   const compared = comparedWith(shown);
   const versus = versusWords(shown);
   const name = firstName(me.user.displayName);
@@ -337,6 +358,12 @@ export default function DashboardPage() {
           <p className="mt-1 text-sm text-muted sm:text-base">
             Here&apos;s what&apos;s happening with {hasFullAccess(access.role) ? "your store" : workspace.name} {periodWords(dates, shown)}.
           </p>
+          {/* Exactly which days the numbers below cover, and from when the store's data exists. */}
+          {!olderAnswer && (
+            <div className="mt-2">
+              <RangeLabel shown={shown} createdDay={ov?.data?.createdDay} historyFrom={ov?.data?.historyFrom} />
+            </div>
+          )}
         </div>
         <div className="flex flex-wrap items-center gap-2.5">
           {headerStore && <StoreStatus key={headerStore.id} store={headerStore} live={live} freshness={ov?.freshness} check={ov?.store.id === headerStore.id ? ov?.check : undefined} now={now} />}

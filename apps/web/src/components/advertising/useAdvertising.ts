@@ -63,7 +63,7 @@ function useAccountParam(storeId: string | undefined) {
  */
 export function useAdvertisingQuestion(platform?: AdProvider | null) {
   const { store } = useApp();
-  const dates = useDateRange(store?.timezone ?? "UTC");
+  const dates = useDateRange(store?.timezone ?? "UTC", store?.startDay ?? null, !!store?.shopCreatedAt);
   const [account, setAccount] = useAccountParam(store?.id);
   const narrowed = `${platform ? `&platform=${platform}` : ""}${account ? `&account=${encodeURIComponent(account)}` : ""}`;
   return { dates, account, setAccount, query: dates.asking ? `${dates.asking.qs}${narrowed}` : null };

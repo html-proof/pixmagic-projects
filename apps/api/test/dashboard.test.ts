@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { logger, recomputeDays } from "@app/core";
 import { systemDb, withTenant } from "@app/db";
-import { addDays, localDay, resolvePreset, yearEarlier } from "@app/shared";
+import { addDays, daysBetweenInclusive, localDay, resolvePreset, weekStart, yearEarlier } from "@app/shared";
 import { storeOverview, syncProblem } from "@app/core/reports";
 import { clean, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
 
@@ -222,20 +222,29 @@ describe("order modules (store time zone, DST weekend)", () => {
     ]);
     expect(m.catalog.products).toEqual({ active: 2, draft: 0, archived: 0, total: 2 });
 
-    expect(data).toEqual({ orders: 6, products: 2, variants: 0, oldestOrderDay: "2026-03-06", newestOrderDay: "2026-03-09", historyFrom: "2026-03-06" });
+    // Shopify's creation date isn't read yet: the store's first day is its first order's.
+    expect(data).toEqual({ orders: 6, products: 2, variants: 0, oldestOrderDay: "2026-03-06", newestOrderDay: "2026-03-09", historyFrom: "2026-03-06", createdDay: null, startDay: "2026-03-06" });
   });
 
-  it("lists the latest orders overall, flagging cancelled ones", async () => {
+  it("lists the latest orders placed in the dates, flagging cancelled ones, and counts cancellations on their own day", async () => {
     const { a, ws, store } = await owner();
     await seedWeekend(store);
-    // A 7-day preset around "now" does not include March, but recent orders are not range-limited.
-    const res = await overview(a.headers, ws, store.id, "preset=7d");
-    const items = res.json().modules.recent_orders.items;
-    expect(items.map((o: { name: string }) => o.name)).toEqual(["#F", "#E", "#D", "#C", "#B", "#A"]);
+    // A was placed on Friday evening in New York, before the range.
+    const res = await overview(a.headers, ws, store.id, RANGE);
+    const { items, cancelledInRange } = res.json().modules.recent_orders;
+    expect(items.map((o: { name: string }) => o.name)).toEqual(["#F", "#E", "#D", "#C", "#B"]);
     expect(items[0]).toMatchObject({ shopifyId: "F", createdAt: "2026-03-09T20:00:00.000Z", total: 600, cancelled: true, channel: "Online Store", units: 5, fulfillmentStatus: "unfulfilled", financialStatus: "paid" });
     expect(items[4]).toMatchObject({ name: "#B", total: 113, units: 3, cancelled: false, fulfillmentStatus: "fulfilled" });
     expect(items[1]).toMatchObject({ channel: "Unknown", fulfillmentStatus: null });
     expect(typeof items[0].id).toBe("string");
+    // F was cancelled on 9 March: once, in these dates.
+    expect(cancelledInRange).toBe(1);
+
+    // Dates without orders list none, never the latest orders of other dates.
+    expect((await overview(a.headers, ws, store.id, "preset=7d")).json().modules.recent_orders).toEqual({ items: [], cancelledInRange: 0 });
+    // A cancellation counts on the day it was made, whenever its order was placed.
+    await systemDb.order.updateMany({ where: { storeId: store.id, shopifyId: "A" }, data: { cancelledAt: new Date() } });
+    expect((await overview(a.headers, ws, store.id, "preset=7d")).json().modules.recent_orders).toEqual({ items: [], cancelledInRange: 1 });
   });
 
   it("returns empty, honest module values for a store without data", async () => {
@@ -254,7 +263,7 @@ describe("order modules (store time zone, DST weekend)", () => {
     });
     expect(m.catalog).toEqual({ products: { active: 0, draft: 0, archived: 0, total: 0 }, variants: 0, topVendors: [] });
     expect(m.sales_overview.current).toMatchObject({ tax: 0, shipping: 0 });
-    expect(data).toEqual({ orders: 0, products: 0, variants: 0, oldestOrderDay: null, newestOrderDay: null, historyFrom: null });
+    expect(data).toEqual({ orders: 0, products: 0, variants: 0, oldestOrderDay: null, newestOrderDay: null, historyFrom: null, createdDay: null, startDay: null });
   });
 });
 
@@ -360,6 +369,78 @@ describe("date ranges", () => {
     const { modules: y } = await report("yesterday");
     expect(y.sales_overview.current).toMatchObject({ grossSales: 170, returns: 40, netSales: 130, orders: 3 });
     expect(y.funnel.visits).toBe(3);
+  });
+
+  it("reports All time from the day Shopify created the store, in the store's time zone, with nothing earlier to compare with", async () => {
+    const { a, ws, store } = await owner();
+    // 03:30 UTC on 2 November 2025 was still 1 November in New York.
+    await systemDb.store.update({ where: { id: store.id }, data: { shopCreatedAt: new Date("2025-11-02T03:30:00Z") } });
+    const today = localDay(new Date(), TZ);
+    await seedOrder(store, { id: "A", createdAt: "2025-12-06T17:00:00Z", lines: [{ qty: 1, price: 40 }] });
+    await seedOrder(store, { id: "T", createdAt: new Date(), lines: [{ qty: 2, price: 30 }] });
+    await recomputeDays(store, ["2025-12-06", today]);
+
+    // A comparison asked for alongside is ignored: there is nothing before the store to compare with.
+    const res = await overview(a.headers, ws, store.id, "preset=all&compare=year");
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.range).toEqual({ from: "2025-11-01", to: today });
+    expect(body.store.shopCreatedAt).toBe("2025-11-02T03:30:00.000Z");
+    expect(body.data).toMatchObject({ createdDay: "2025-11-01", startDay: "2025-11-01", oldestOrderDay: "2025-12-06" });
+    expect(body.previous).toMatchObject({ to: "2025-10-31", compare: "previous" });
+    const s = body.modules.sales_overview;
+    expect(s.current).toMatchObject({ netSales: 100, orders: 2 });
+    expect(s.deltas.netSales).toBeNull();
+    // One point per day, from the store's first day to today.
+    expect(s.series).toHaveLength(daysBetweenInclusive("2025-11-01", today));
+    expect(s.series[0].day).toBe("2025-11-01");
+    expect(s.series.at(-1).day).toBe(today);
+  });
+
+  it("reports custom dates of any length from the store's first day, and refuses earlier ones once Shopify's creation date is known", async () => {
+    const { a, ws, store } = await owner();
+    await seedOrder(store, { id: "A", createdAt: "2024-03-06T17:00:00Z", lines: [{ qty: 1, price: 40 }] });
+    await recomputeDays(store, ["2024-03-06"]);
+    // Before it is read, the first order only starts All time: a quiet month before it is still the store's.
+    expect((await overview(a.headers, ws, store.id, "preset=custom&from=2024-01-01&to=2024-12-31")).statusCode).toBe(200);
+    expect((await overview(a.headers, ws, store.id, "preset=all")).json().range.from).toBe("2024-03-06");
+
+    await systemDb.store.update({ where: { id: store.id }, data: { shopCreatedAt: new Date("2023-05-10T15:00:00Z") } });
+    const long = (await overview(a.headers, ws, store.id, "preset=custom&from=2023-05-10&to=2025-06-30")).json();
+    expect(long.range).toEqual({ from: "2023-05-10", to: "2025-06-30" });
+    expect(long.modules.sales_overview.current).toMatchObject({ netSales: 40, orders: 1 });
+    expect(long.modules.sales_overview.series).toHaveLength(daysBetweenInclusive("2023-05-10", "2025-06-30"));
+    for (const qs of ["preset=custom&from=2023-05-09&to=2023-06-30", "preset=30d&compare=custom&cfrom=2023-01-01&cto=2023-01-31"]) {
+      const res = await overview(a.headers, ws, store.id, qs);
+      expect(res.statusCode, qs).toBe(400);
+      expect(res.json().error, qs).toBe("invalid_range");
+    }
+    // The downloads answer the same dates, under the same limits.
+    const download = (qs: string) => ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${store.id}/export?section=sales&${qs}`, headers: a.headers });
+    expect((await download("preset=all")).headers["content-disposition"]).toContain(`2023-05-10-to-${localDay(new Date(), TZ)}`);
+    expect((await download("preset=custom&from=2023-05-09&to=2023-06-30")).statusCode).toBe(400);
+
+    // An order Shopify processed before the store was created (brought in from another platform) moves the first day back.
+    await seedOrder(store, { id: "OLD", createdAt: "2022-01-15T17:00:00Z", subtotal: 10 });
+    expect((await overview(a.headers, ws, store.id, "preset=custom&from=2022-01-15&to=2022-12-31")).statusCode).toBe(200);
+    expect((await overview(a.headers, ws, store.id, "preset=all")).json().range.from).toBe("2022-01-15");
+  });
+
+  it("reports this week from Monday, compared with the same days of the week before", async () => {
+    const { a, ws, store } = await owner();
+    const body = (await overview(a.headers, ws, store.id, "preset=wtd")).json();
+    const today = localDay(new Date(), TZ);
+    expect(body.range).toEqual({ from: weekStart(today), to: today });
+    expect(body.previous).toMatchObject({ from: addDays(weekStart(today), -7), to: addDays(today, -7) });
+  });
+
+  it("tells the store list where each store's dates begin", async () => {
+    const { a, ws, store } = await owner();
+    await seedOrder(store, { id: "A", createdAt: "2025-12-06T17:00:00Z", subtotal: 10 });
+    const listed = async () => (await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores`, headers: a.headers })).json().stores[0];
+    expect(await listed()).toMatchObject({ shopCreatedAt: null, startDay: "2025-12-06" });
+    await systemDb.store.update({ where: { id: store.id }, data: { shopCreatedAt: new Date("2025-11-02T03:30:00Z") } });
+    expect(await listed()).toMatchObject({ shopCreatedAt: "2025-11-02T03:30:00.000Z", startDay: "2025-11-01" });
   });
 
   it("refuses ranges it can't report on with a 400, never a 500", async () => {
@@ -611,12 +692,13 @@ describe("what the dates are compared with", () => {
       "preset=7d&compare=custom&cfrom=2026-03-09&cto=2026-03-01",
       "preset=7d&compare=custom&cfrom=2026-02-30&cto=2026-03-02",
       `preset=7d&compare=custom&cfrom=${d(1)}&cto=${d(3)}`,
-      "preset=7d&compare=custom&cfrom=2025-01-01&cto=2026-01-02",
     ]) {
       const res = await overview(a.headers, ws, store.id, qs);
       expect(res.statusCode, qs).toBe(400);
       expect(res.json().error, qs).toBe("invalid_range");
     }
+    // Any length is a real question: the store's dates have no one-year cap.
+    expect((await overview(a.headers, ws, store.id, "preset=7d&compare=custom&cfrom=2025-01-01&cto=2026-01-02")).statusCode).toBe(200);
     expect((await overview(a.headers, ws, store.id, "preset=7d&compare=lastweek")).json().error).toBe("validation");
 
     const download = (qs: string) => ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${store.id}/export?section=sales&${qs}`, headers: a.headers });
@@ -921,7 +1003,7 @@ describe("live updates (dashboard polls every 15 s)", () => {
 
   it("re-pulls recent orders and the catalog from Shopify at most once per window, however often it is polled", async () => {
     const { a, ws, store } = await owner();
-    await systemDb.store.update({ where: { id: store.id }, data: { lastSyncedAt: new Date() } });
+    await systemDb.store.update({ where: { id: store.id }, data: { lastSyncedAt: new Date(), shopCreatedAt: new Date("2021-05-01T00:00:00Z") } });
     ctx.deps.queues.clear();
     expect((await overview(a.headers, ws, store.id)).statusCode).toBe(200);
     expect(sent()).toEqual(["orders:2", "products:-", "variants:-"]);
@@ -937,7 +1019,7 @@ describe("live updates (dashboard polls every 15 s)", () => {
 
   it("a sync still making progress holds refreshes off; one that died in an outage does not", async () => {
     const { a, ws, store } = await owner(["read_orders"]);
-    await systemDb.store.update({ where: { id: store.id }, data: { lastSyncedAt: new Date() } });
+    await systemDb.store.update({ where: { id: store.id }, data: { lastSyncedAt: new Date(), shopCreatedAt: new Date("2021-05-01T00:00:00Z") } });
     const ago = (min: number) => new Date(Date.now() - min * 60_000);
     // A refresh started 15 minutes ago; its last page landed a minute ago.
     const job = await systemDb.syncJob.create({
@@ -950,6 +1032,28 @@ describe("live updates (dashboard polls every 15 s)", () => {
     // Its chain died in a database outage instead, still running as far as its row says. Counting
     // the row kept the dashboard from refreshing for half an hour after the database came back.
     await systemDb.syncJob.update({ where: { id: job.id }, data: { lastActivityAt: ago(14) } });
+    await overview(a.headers, ws, store.id);
+    expect(sent()).toEqual(["orders:2"]);
+  });
+
+  it("reads the store's details again, once a day, until Shopify's creation date is known", async () => {
+    const { a, ws, store } = await owner(["read_orders"]);
+    await systemDb.store.update({ where: { id: store.id }, data: { lastSyncedAt: new Date() } });
+    ctx.deps.queues.clear();
+    await overview(a.headers, ws, store.id);
+    expect(sent()).toEqual(["orders:2", "shop:-"]);
+    // No jobs wait on it: the worker starts none of the orders rows queued alongside it.
+    expect(ctx.deps.queues.sent.sync.find((j) => j.kind === "shop")).toMatchObject({ waitingJobIds: [] });
+
+    // Once a day at most, however often the page is polled.
+    await systemDb.syncJob.updateMany({ where: { storeId: store.id }, data: { status: "succeeded" } });
+    ctx.deps.queues.clear();
+    await overview(a.headers, ws, store.id);
+    expect(sent()).toEqual([]);
+
+    // Known: never again.
+    ctx.deps.coord.clear();
+    await systemDb.store.update({ where: { id: store.id }, data: { shopCreatedAt: new Date("2022-03-14T14:00:00Z") } });
     await overview(a.headers, ws, store.id);
     expect(sent()).toEqual(["orders:2"]);
   });
@@ -1034,7 +1138,7 @@ describe("scopes and tenancy", () => {
     const o = (await overview(a.headers, ws, ordersOnly.id)).json();
     expect(Object.keys(o.modules).sort()).toEqual(["channels", "discount_codes", "fulfillment", "order_timing", "recent_orders", "refunds", "sales_overview", "traffic"]);
     expect(o.capabilities.find((c: { id: string }) => c.id === "inventory").missingScopes).toEqual(["read_products"]);
-    expect(o.data).toEqual({ orders: 0, products: 0, variants: 0, oldestOrderDay: null, newestOrderDay: null, historyFrom: null });
+    expect(o.data).toEqual({ orders: 0, products: 0, variants: 0, oldestOrderDay: null, newestOrderDay: null, historyFrom: null, createdDay: null, startDay: null });
 
     const p = (await overview(a.headers, ws, productsOnly.id)).json();
     expect(Object.keys(p.modules).sort()).toEqual(["catalog", "inventory"]);

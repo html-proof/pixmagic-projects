@@ -201,9 +201,11 @@ export function StoreSummary({ ov, currency }: { ov: Overview; currency: string 
   const s = ov.modules.sales_overview;
   if (!s) return null;
   const attention = businessHealth(ov, currency).filter((c) => c.health === "attention").length;
+  // With the years when the dates cross one (All time, long custom dates), as "From Apr 11 to Oct 23" can't say which.
+  const year = ov.range.from.slice(0, 4) !== ov.range.to.slice(0, 4);
   const when =
     ov.range.from !== ov.range.to
-      ? `From ${fmtDay(ov.range.from, { year: false })} to ${fmtDay(ov.range.to, { year: false })}`
+      ? `From ${fmtDay(ov.range.from, { year })} to ${fmtDay(ov.range.to, { year })}`
       : ov.range.to === ov.today
         ? "So far today"
         : `On ${fmtDay(ov.range.to, { year: false })}`;

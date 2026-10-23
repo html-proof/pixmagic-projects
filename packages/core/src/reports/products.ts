@@ -59,7 +59,8 @@ type Raw = Record<"units" | "gross_units" | "returned_units" | "revenue" | "gros
 export async function productPerformance(tx: Tx, scope: Scope, store: Store, range: DateRange, options: ProductOptions = {}, now = new Date()) {
   const { ws, storeId } = scope;
   const data = await importedData(tx, scope, store);
-  const previous = resolvePreset("custom", now, store.timezone, range).previous;
+  // The range was checked when it was asked for, against the store's own limits (any length).
+  const previous = resolvePreset("custom", now, store.timezone, range, undefined, { maxDays: null }).previous;
   const baseline = comparisonImported(previous, data.historyFrom);
   const [quality] = await tx.$queryRaw<Array<{ provisional: number; unmatched: number; unknown_identity: number; previous_unverified: number }>>`
     WITH checked AS MATERIALIZED (

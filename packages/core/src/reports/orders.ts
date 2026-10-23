@@ -1,6 +1,6 @@
 import { Prisma, type Tx } from "@app/db";
-import { channelLabel, daysBetweenInclusive, TRAFFIC_LABEL, TRAFFIC_SOURCES, type DateRange, type TrafficSource } from "@app/shared";
-import { argMax, MERCHANDISE, num, numOrNull, r1, r2, SALE_VALUE, type Scope } from "./common.js";
+import { addDays, channelLabel, daysBetweenInclusive, TRAFFIC_LABEL, TRAFFIC_SOURCES, type DateRange, type TrafficSource } from "@app/shared";
+import { argMax, localMoment, MERCHANDISE, num, numOrNull, r1, r2, SALE_VALUE, type Scope } from "./common.js";
 
 const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"] as const;
 
@@ -225,8 +225,13 @@ export async function discountCodes(tx: Tx, { ws, storeId }: Scope, r: DateRange
   return { items: rows.map((x) => ({ code: x.code, orders: num(x.orders), discount: num(x.discount), sales: num(x.sales) })) };
 }
 
-/** Latest 10 orders regardless of range; cancelled ones are included and flagged. */
-export async function recentOrders(tx: Tx, { ws, storeId }: Scope) {
+/**
+ * The 10 latest orders placed in the range (on the day Shopify processed them, as every order
+ * figure counts them), cancelled ones included and flagged; and how many orders were cancelled in
+ * the range, on the day each was cancelled (transaction date, whenever the order was placed), so a
+ * cancellation counts in the dates it happened, once.
+ */
+export async function recentOrders(tx: Tx, { ws, storeId }: Scope, r: DateRange, timeZone: string) {
   const rows = await tx.$queryRaw<
     Array<{
       id: string;
@@ -242,7 +247,7 @@ export async function recentOrders(tx: Tx, { ws, storeId }: Scope) {
     }>
   >`
     SELECT o.id, o.shopify_id, o.name,
-           to_char(o.shopify_created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS created_at,
+           to_char(COALESCE(o.shopify_processed_at, o.shopify_created_at), 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS created_at,
            o.total_price::text AS total, o.financial_status, o.fulfillment_status, o.source_name,
            (o.cancelled_at IS NOT NULL) AS cancelled,
            COALESCE((
@@ -250,10 +255,15 @@ export async function recentOrders(tx: Tx, { ws, storeId }: Scope) {
              WHERE li.workspace_id = ${ws} AND li.store_id = ${storeId} AND li.order_id = o.id
            ), 0)::int AS units
     FROM orders o
-    WHERE o.workspace_id = ${ws} AND o.store_id = ${storeId}
-    ORDER BY o.shopify_created_at DESC, o.id DESC
+    WHERE o.workspace_id = ${ws} AND o.store_id = ${storeId} AND o.local_day BETWEEN ${r.from} AND ${r.to}
+    ORDER BY COALESCE(o.shopify_processed_at, o.shopify_created_at) DESC, o.id DESC
     LIMIT 10`;
+  const [cancelled] = await tx.$queryRaw<Array<{ n: number }>>`
+    SELECT COUNT(*)::int AS n FROM orders o
+    WHERE o.workspace_id = ${ws} AND o.store_id = ${storeId}
+      AND o.cancelled_at >= ${localMoment(r.from, "00:00:00", timeZone)} AND o.cancelled_at < ${localMoment(addDays(r.to, 1), "00:00:00", timeZone)}`;
   return {
+    cancelledInRange: num(cancelled?.n),
     items: rows.map((x) => ({
       id: x.id,
       shopifyId: x.shopify_id,

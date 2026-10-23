@@ -163,7 +163,7 @@ const report = () => ({
     },
     top_products: { items: [{ title: "Hat", revenue: 100, units: 4 }] },
     inventory: { current: { trackedVariants: 1, unitsInStock: 2, stockValueAtCost: 80, variantsWithCost: 1, retailValue: 200, outOfStock: 0, lowStock: 1 }, lowStockItems: [] },
-    recent_orders: { items: [{ id: "o", name: "#1", total: 100, financialStatus: "paid", fulfillmentStatus: null, cancelled: false, units: 1, channel: "web" }] },
+    recent_orders: { items: [{ id: "o", name: "#1", total: 100, financialStatus: "paid", fulfillmentStatus: null, cancelled: false, units: 1, channel: "web" }], cancelledInRange: 2 },
     traffic: { items: [{ id: "t", source: "google", label: "Google", orders: 1, sales: 10, paidOrders: 1, paidSales: 10, share: 1 }], paid: { orders: 1, sales: 10, share: 1 }, campaigns: [{ campaign: "x" }], pending: 0 },
     channels: { items: [] },
     discount_codes: { items: [{ code: "SAVE", orders: 2, discount: 5, sales: 50 }] },
@@ -203,6 +203,8 @@ describe("redactOverview", () => {
     expect(out.modules.inventory.current).not.toHaveProperty("stockValueAtCost");
     expect(out.modules.inventory.current).not.toHaveProperty("retailValue");
     expect(out.modules.recent_orders.items[0]).toEqual({ id: "o", name: "#1", total: 100, units: 1, channel: "web" });
+    // How many orders were cancelled in the dates is cancellation detail too.
+    expect(out.modules.recent_orders).not.toHaveProperty("cancelledInRange");
     expect(out.modules.traffic).not.toHaveProperty("campaigns");
     expect(out.modules.traffic).not.toHaveProperty("paid");
     expect(out.modules.traffic.items[0]).not.toHaveProperty("paidSales");
@@ -261,6 +263,7 @@ describe("redactOverview", () => {
     expect(out.modules.sales_overview.year.months[0]).toMatchObject({ taxes: 5, totalSales: 115, comparedLines: { shipping: 6 } });
     expect(out.modules.inventory.current.retailValue).toBe(200);
     expect(out.modules.recent_orders.items[0]!.financialStatus).toBe("paid");
+    expect(out.modules.recent_orders.cancelledInRange).toBe(2);
   });
 });
 

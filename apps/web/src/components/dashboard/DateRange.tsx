@@ -7,6 +7,7 @@ import {
   isDay,
   localDay,
   MIN_CUSTOM_DAY,
+  storeRangeLimits,
   type CompareMode,
   type Comparison,
   type CustomRangeProblem,
@@ -20,10 +21,12 @@ export const PRESETS = [
   { id: "7d", label: "Last 7 days" },
   { id: "30d", label: "Last 30 days" },
   { id: "90d", label: "Last 90 days" },
+  { id: "wtd", label: "This week" },
   { id: "mtd", label: "This month" },
   { id: "lastmonth", label: "Last month" },
   { id: "ytd", label: "This year" },
   { id: "lastyear", label: "Last year" },
+  { id: "all", label: "All time" },
   { id: "custom", label: "Custom" },
 ] as const;
 export type PresetId = (typeof PRESETS)[number]["id"];
@@ -35,12 +38,21 @@ export const COMPARISONS: ReadonlyArray<{ id: CompareMode; label: string }> = [
   { id: "custom", label: "Custom" },
 ];
 
-const CUSTOM_HINT: Record<CustomRangeProblem, string> = {
-  incomplete: "Pick a start and an end date.",
-  reversed: "The start date is after the end date.",
-  future: "The start date hasn't happened yet in the store's time zone.",
-  too_long: "Pick up to a year at a time.",
-};
+/** What is wrong with dates picked, in a line under them. `start` is the store's first day. */
+function customHint(problem: CustomRangeProblem, start: string | null): string {
+  switch (problem) {
+    case "incomplete":
+      return "Pick a start and an end date.";
+    case "reversed":
+      return "The start date is after the end date.";
+    case "future":
+      return "The start date hasn't happened yet in the store's time zone.";
+    case "before_start":
+      return `The store's data starts on ${fmtDay(start)}. Pick dates from then on.`;
+    case "too_long":
+      return "Pick up to a year at a time.";
+  }
+}
 
 /**
  * What a question looks like in the address bar and in the API call: `preset=7d`,
@@ -77,6 +89,8 @@ function parseChoice(search: string | null): Choice | null {
 function questionOf(c: Choice): Question {
   const dates = c.preset === "custom" ? `preset=custom&from=${c.from}&to=${c.to}` : `preset=${c.preset}`;
   const label = c.preset === "custom" ? fmtRange(c.from, c.to) : PRESETS.find((p) => p.id === c.preset)!.label;
+  // All time has nothing before it to compare with (resolvePreset ignores the choice).
+  if (c.preset === "all") return { qs: dates, label };
   if (c.compare === "year") return { qs: `${dates}&compare=year`, label: `${label} against the previous year` };
   if (c.compare === "custom") return { qs: `${dates}&compare=custom&cfrom=${c.cfrom}&cto=${c.cto}`, label: `${label} against ${fmtSpan(c.cfrom, c.cto, { year: true })}` };
   return { qs: dates, label };
@@ -100,7 +114,10 @@ function readStored(): string | null {
 }
 
 /**
- * The dates the dashboard reports on, and what their changes compare with.
+ * The dates the dashboard reports on, and what their changes compare with. `start` is the store's
+ * first day (`startDay`: when Shopify created it, or an earlier order's): All time starts on it,
+ * and once Shopify's creation date is known (`created`) custom dates can't start before it, as the
+ * API checks (`storeRangeLimits`).
  *
  * `asking` is the question to send. Custom dates (to report on or to compare with) only take over
  * once they are finished and valid: asking for each half-typed one (a year arrives as 0002, 0020,
@@ -111,18 +128,27 @@ function readStored(): string | null {
  * back button, a shared link or a trip to Settings and back no longer drops it to the last 30 days.
  * `asking` stays null until that has been read, so the page doesn't first load the default dates.
  */
-export function useDateRange(timeZone: string) {
+export function useDateRange(timeZone: string, start: string | null = null, created = false) {
   const [choice, setChoice] = useState<Choice>({ preset: "30d", from: "", to: "", compare: "previous", cfrom: "", cto: "" });
   const [restored, setRestored] = useState(false);
   const [asking, setAsking] = useState<Question>(DEFAULT);
   // The store's today: custom dates can't start after it, and are reported up to it at most.
   const today = storeToday(timeZone);
-  const problem = choice.preset === "custom" ? customRangeProblem(choice, today) : null;
-  const compareProblem = choice.compare === "custom" ? customRangeProblem({ from: choice.cfrom, to: choice.cto }, today) : null;
+  // The same limits the API checks: from the store's first day, any length.
+  const limits = storeRangeLimits(start, created);
+  const problem = choice.preset === "custom" ? customRangeProblem(choice, today, limits) : null;
+  // All time has nothing before it to compare with: its comparison isn't asked about.
+  const compareProblem = choice.compare === "custom" && choice.preset !== "all" ? customRangeProblem({ from: choice.cfrom, to: choice.cto }, today, limits) : null;
 
-  if (restored && !problem && !compareProblem) {
+  if (restored) {
     const q = questionOf(choice);
-    if (q.qs !== asking.qs) setAsking(q);
+    if (!problem && !compareProblem) {
+      if (q.qs !== asking.qs) setAsking(q);
+    } else if (q.qs === asking.qs) {
+      // Dates asked for before the store's limits were known (a link, the tab's last dates, another
+      // store's) that turn out to lie outside them: the default dates, never a question the API refuses.
+      setAsking(DEFAULT);
+    }
   }
 
   useEffect(() => {
@@ -158,6 +184,8 @@ export function useDateRange(timeZone: string) {
   return {
     ...choice,
     today,
+    // How early the date boxes go: the store's first day once Shopify's creation date is known.
+    earliest: limits.earliest ?? null,
     problem,
     compareProblem,
     asking: restored ? asking : null,
@@ -178,8 +206,14 @@ export type DateRangeState = ReturnType<typeof useDateRange>;
  */
 export type ShownComparison = Comparison & { compare?: CompareMode; imported?: boolean };
 
-/** What the numbers on the page are for, once they have loaded. */
-export type Shown = { range: DateRange; previous: ShownComparison; timezone: string } | null;
+/**
+ * What the numbers on the page are for, once they have loaded. `start` is the store's first day
+ * (the overview's `data.startDay`), when known.
+ */
+export type Shown = { range: DateRange; previous: ShownComparison; timezone: string; start?: string | null } | null;
+
+/** Whether the comparison lies wholly before the store's first day (All time's always does): nothing to compare with. */
+const beforeStore = (shown: Shown) => !!shown?.start && shown.previous.to < shown.start;
 
 /** The dates compared with, with their year unless they are just before the dates picked. */
 const comparisonDates = (p: ShownComparison) => (p.compare && p.compare !== "previous" ? fmtSpan(p.from, p.to, { year: true }) : fmtSpan(p.from, p.to));
@@ -190,6 +224,7 @@ const comparisonDates = (p: ShownComparison) => (p.compare && p.compare !== "pre
  */
 export const comparedWith = (shown: Shown) => {
   if (!shown) return undefined;
+  if (beforeStore(shown)) return `Nothing to compare with: the store's data starts on ${fmtDay(shown.start)}`;
   const p = shown.previous;
   const cut = p.until ? ` until ${fmtClock(p.until)}, the same time of day` : "";
   const missing = p.imported === false ? ". No orders were imported from that far back, so nothing is compared" : "";
@@ -357,6 +392,19 @@ export function CompareSelect({
   label: string;
   size?: "sm" | "md";
 }) {
+  if (r.preset === "all") {
+    // All time starts on the store's first day: there is no earlier period of the same kind.
+    return (
+      <span
+        className={`inline-flex min-w-0 items-center gap-2 rounded-xl border border-dashed border-border font-medium text-muted ${size === "sm" ? "h-9 px-3 text-xs" : "h-10 px-3.5 text-sm"}`}
+        title="All time starts on the store's first day, so there is nothing earlier to compare it with."
+        data-testid="compare-dates"
+      >
+        {size === "md" && <ArrowLeftRight aria-hidden className="h-4 w-4 shrink-0" strokeWidth={1.8} />}
+        No comparison
+      </span>
+    );
+  }
   const mode = COMPARISONS.find((c) => c.id === r.compare)!.label;
   const answered = current && shown && (shown.previous.compare ?? "previous") === r.compare ? shown.previous : null;
   const text =
@@ -387,11 +435,16 @@ export function CompareSelect({
   );
 }
 
-/** Two date boxes, and what is wrong with them while they don't make a range yet. */
+/**
+ * Two date boxes, and what is wrong with them while they don't make a range yet. They offer no day
+ * before the store's first (`min`), as far as the browser's own calendar allows; a date typed
+ * before it anyway is named by the hint and never asked for.
+ */
 function DatePair({
   labels,
   from,
   to,
+  min,
   max,
   problem,
   setFrom,
@@ -400,6 +453,7 @@ function DatePair({
   labels: [from: string, to: string];
   from: string;
   to: string;
+  min: string | null;
   max: string;
   problem: CustomRangeProblem | null;
   setFrom: (v: string) => void;
@@ -408,11 +462,11 @@ function DatePair({
   return (
     <div className="flex flex-col items-end gap-1.5">
       <span className="flex flex-wrap items-center justify-end gap-2 text-sm">
-        <input aria-label={labels[0]} type="date" min={MIN_CUSTOM_DAY} max={max} className="input w-auto py-1.5" value={from} onChange={(e) => setFrom(e.target.value)} />
+        <input aria-label={labels[0]} type="date" min={min ?? MIN_CUSTOM_DAY} max={max} className="input w-auto py-1.5" value={from} onChange={(e) => setFrom(e.target.value)} />
         to
-        <input aria-label={labels[1]} type="date" min={MIN_CUSTOM_DAY} max={max} className="input w-auto py-1.5" value={to} onChange={(e) => setTo(e.target.value)} />
+        <input aria-label={labels[1]} type="date" min={min ?? MIN_CUSTOM_DAY} max={max} className="input w-auto py-1.5" value={to} onChange={(e) => setTo(e.target.value)} />
       </span>
-      {problem && <p className={`text-xs ${problem === "incomplete" ? "text-muted" : "text-warn"}`} role="status">{CUSTOM_HINT[problem]}</p>}
+      {problem && <p className={`text-xs ${problem === "incomplete" ? "text-muted" : "text-warn"}`} role="status">{customHint(problem, min)}</p>}
     </div>
   );
 }
@@ -420,16 +474,61 @@ function DatePair({
 /** With "Pick dates…" chosen: the two date boxes. */
 export function CustomDates({ r }: { r: DateRangeState }) {
   if (r.preset !== "custom") return null;
-  return <DatePair labels={["From", "To"]} from={r.from} to={r.to} max={r.today} problem={r.problem} setFrom={r.setFrom} setTo={r.setTo} />;
+  return <DatePair labels={["From", "To"]} from={r.from} to={r.to} min={r.earliest} max={r.today} problem={r.problem} setFrom={r.setFrom} setTo={r.setTo} />;
 }
 
 /** With "Pick dates…" chosen to compare with: its two date boxes, named so they aren't mistaken for the dates reported on. */
 export function CompareDates({ r }: { r: DateRangeState }) {
-  if (r.compare !== "custom") return null;
+  if (r.compare !== "custom" || r.preset === "all") return null;
   return (
     <div className="flex flex-wrap items-start justify-end gap-x-2 gap-y-1">
       <span className="py-1.5 text-sm text-muted">Compare with</span>
-      <DatePair labels={["Compare from", "Compare to"]} from={r.cfrom} to={r.cto} max={r.today} problem={r.compareProblem} setFrom={r.setCompareFrom} setTo={r.setCompareTo} />
+      <DatePair labels={["Compare from", "Compare to"]} from={r.cfrom} to={r.cto} min={r.earliest} max={r.today} problem={r.compareProblem} setFrom={r.setCompareFrom} setTo={r.setCompareTo} />
+    </div>
+  );
+}
+
+/** "15 March 2022": a day written out in full, for the line that states the dates. */
+function fmtFullDay(day: string): string {
+  return new Intl.DateTimeFormat(undefined, { timeZone: "UTC", day: "numeric", month: "long", year: "numeric" }).format(new Date(`${day}T00:00:00Z`));
+}
+
+/**
+ * The line under the dashboard's heading that says exactly what the numbers cover: "Store created:
+ * 15 March 2022 · Showing data: 15 March 2022 – 23 October 2026", days in the store's time zone. When
+ * the dates reach back before the orders Shopify shared (`historyFrom`: 60 days without access to
+ * all orders), it says from when the figures really count, so days with nothing imported never
+ * read as days without sales.
+ */
+export function RangeLabel({ shown, createdDay, historyFrom }: { shown: Shown; createdDay: string | null | undefined; historyFrom: string | null | undefined }) {
+  if (!shown) return null;
+  const { range } = shown;
+  const showing = range.from === range.to ? fmtFullDay(range.from) : `${fmtFullDay(range.from)} – ${fmtFullDay(range.to)}`;
+  const from = historyFrom && range.from < historyFrom ? historyFrom : null;
+  return (
+    <div className="space-y-0.5 text-xs text-muted" data-testid="range-label">
+      <p>
+        {createdDay && (
+          <>
+            <span data-testid="store-created">
+              Store created: <span className="font-medium text-text">{fmtFullDay(createdDay)}</span>
+            </span>
+            <span aria-hidden> · </span>
+          </>
+        )}
+        <span data-testid="showing-dates">
+          Showing data: <span className="font-medium text-text">{showing}</span>
+        </span>
+        <span className="whitespace-nowrap"> ({shown.timezone})</span>
+      </p>
+      {from && (
+        <p className="text-warn" data-testid="range-before-history">
+          {range.to < from
+            ? `No orders from these dates were imported: Shopify shared orders from ${fmtFullDay(from)} on.`
+            : `Order figures count from ${fmtFullDay(from)}: Shopify shared orders from then on.`}{" "}
+          Without access to all orders, Shopify shares only the last 60 days.
+        </p>
+      )}
     </div>
   );
 }
@@ -441,6 +540,10 @@ export function periodWords(r: DateRangeState, shown: Shown): string {
       return "today";
     case "yesterday":
       return "yesterday";
+    case "wtd":
+      return "this week";
+    case "all":
+      return shown ? `since ${fmtDay(shown.range.from)}` : "since the store was created";
     case "mtd":
       return "this month";
     case "lastmonth":

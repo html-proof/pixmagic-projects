@@ -5,7 +5,8 @@ import { ShopifyConnect } from "@/components/ShopifyConnect";
 import { OAUTH_ERRORS } from "@/lib/shopifyErrors";
 import { Alert, EmptyState } from "@/components/ui";
 import { actionError, api, ApiError } from "@/lib/api";
-import { fmtDateTime, fmtRelative } from "@/components/dashboard/format";
+import { fmtDateTime, fmtDay, fmtRelative } from "@/components/dashboard/format";
+import { localDay } from "@app/shared/dates";
 import { CAPABILITIES, SCOPE_LABELS, expandScopes, scopeLabel, scopeList } from "@app/shared/capabilities";
 
 /** The modules that stop working without `scope`, so a confirm can name them. */
@@ -33,6 +34,38 @@ function statusLabel(status: string, problem?: StoreSummary["syncProblem"]): { t
     default:
       return { text: status, tone: "text-muted" };
   }
+}
+
+/** The day a store-local instant falls on, or null in a zone this browser doesn't know. */
+function storeDay(iso: string, timeZone: string): string | null {
+  try {
+    return localDay(new Date(iso), timeZone);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * When Shopify created the store (where the dashboard's dates begin, All time) and how far back its
+ * orders can be read: Shopify shares 60 days of orders unless the store granted access to all of
+ * them (read_all_orders).
+ */
+function StoreDates({ s }: { s: StoreSummary }) {
+  const created = s.shopCreatedAt ? storeDay(s.shopCreatedAt, s.timezone) : null;
+  const allOrders = expandScopes(s.grantedScopes).has("read_all_orders");
+  return (
+    <p className="text-xs text-muted" data-testid="store-dates">
+      {created ? (
+        <>
+          Created on Shopify <span className="text-text">{fmtDay(created)}</span>
+        </>
+      ) : (
+        "Creation date not read from Shopify yet"
+      )}
+      {" · "}
+      {allOrders ? "Orders readable back to the store's first" : "Orders readable for the last 60 days (Shopify shares older ones only with access to all orders)"}
+    </p>
+  );
 }
 
 export default function StoresPage() {
@@ -162,6 +195,7 @@ To stop bizinsights' access in Shopify too, uninstall the app from your Shopify 
               <div>
                 <p className="font-medium">{s.name ?? s.shopDomain}</p>
                 <p className="text-xs text-muted">{s.shopDomain} · {s.currency} · {s.timezone}</p>
+                <StoreDates s={s} />
               </div>
               <span className={`text-xs ${status.tone}`}>● {status.text}</span>
             </div>

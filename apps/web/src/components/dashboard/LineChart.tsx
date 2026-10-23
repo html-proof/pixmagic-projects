@@ -1,6 +1,6 @@
 "use client";
 import { useId, useState, type KeyboardEvent, type PointerEvent } from "react";
-import { fmtDay, fmtLongDay } from "./format";
+import { fmtDay, fmtLongDay, fmtMonth } from "./format";
 import { columnPath, columnWidth, niceTicks, useWidth } from "./chartUtils";
 
 // ---------------------------------------------------------------------------
@@ -8,7 +8,8 @@ import { columnPath, columnWidth, niceTicks, useWidth } from "./chartUtils";
 // that reads every series at the hovered day, arrow keys for the same, and a table for screen
 // readers. Identity is never colour alone: a legend names each line and short labels sit at the
 // line ends. With `bars`, each day is a column instead (series side by side), and the hovered day
-// stays solid while the rest dim.
+// stays solid while the rest dim. With `grain="month"` each point is a month (rows added up with
+// `rowsByMonth` in @app/shared/dates, for ranges over a year) and is labelled as one.
 // ---------------------------------------------------------------------------
 
 export interface LineSeries {
@@ -51,6 +52,7 @@ export function LineChart({
   grid = false,
   floor = 0,
   bars = false,
+  grain = "day",
 }: {
   days: string[];
   series: LineSeries[];
@@ -72,6 +74,11 @@ export function LineChart({
   floor?: number;
   /** A column per day instead of a line (`area` is ignored). Today's column is lighter: the day isn't over. */
   bars?: boolean;
+  /**
+   * What each point is: a day (`days` are days), or a month (`days` are each month's first day in
+   * the range). The month today is in is lighter and "so far", as today is.
+   */
+  grain?: "day" | "month";
 }) {
   const [ref, width] = useWidth();
   const [hover, setAt] = useState<number | null>(null);
@@ -116,7 +123,13 @@ export function LineChart({
     } else if (e.key === "Escape") setAt(null);
   };
 
-  const describe = (i: number) => `${fmtLongDay(days[i]!)}${days[i] === today ? " (today so far)" : ""}: ${series.map((s) => `${s.label} ${show(s.values[i])}`).join(", ")}.`;
+  const monthly = grain === "month";
+  // The point still running: today, or the month today is in.
+  const running = (i: number) => !!today && (monthly ? days[i]?.slice(0, 7) === today.slice(0, 7) : days[i] === today);
+  const tickText = (d: string, i: number) => (monthly ? fmtMonth(d.slice(0, 7), { short: true, year: true }) : running(i) ? "Today" : fmtDay(d, { year: false }));
+  const longName = (i: number) => (monthly ? fmtMonth(days[i]!.slice(0, 7), { year: true }) : fmtLongDay(days[i]!));
+  const soFar = (i: number) => (running(i) ? (monthly ? " · so far" : " · today so far") : "");
+  const describe = (i: number) => `${longName(i)}${running(i) ? (monthly ? " (so far)" : " (today so far)") : ""}: ${series.map((s) => `${s.label} ${show(s.values[i])}`).join(", ")}.`;
 
   return (
     <div className="min-w-0">
@@ -134,7 +147,7 @@ export function LineChart({
         ref={ref}
         className="relative select-none rounded-md outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
         role="figure"
-        aria-label={`${label}. Use the left and right arrow keys to read each day.`}
+        aria-label={`${label}. Use the left and right arrow keys to read each ${monthly ? "month" : "day"}.`}
         tabIndex={0}
         onKeyDown={keys}
         onBlur={() => setAt(null)}
@@ -165,7 +178,7 @@ export function LineChart({
             ))}
             {xTicks.map(({ d, i }) => (
               <text key={d} x={tickX(i)} y={height - 6} textAnchor={n <= 1 ? "middle" : i === 0 ? "start" : i === n - 1 ? "end" : "middle"} fontSize={11} fill="var(--muted)">
-                {d === today ? "Today" : fmtDay(d, { year: false })}
+                {tickText(d, i)}
               </text>
             ))}
             {bars &&
@@ -176,7 +189,7 @@ export function LineChart({
                     const w = barW / series.length;
                     // A day with very little still shows a sliver, so it never reads as nothing.
                     const yTop = Math.abs(y(v) - y(0)) < 2 ? y(0) - Math.sign(v) * 2 : y(v);
-                    const dim = (at !== null && at !== i ? 0.45 : 1) * (days[i] === today ? 0.45 : 1);
+                    const dim = (at !== null && at !== i ? 0.45 : 1) * (running(i) ? 0.45 : 1);
                     return <path key={i} d={columnPath(x(i) - barW / 2 + j * w, w, y(0), yTop)} opacity={dim} style={{ transition: "opacity 120ms" }} />;
                   })}
                 </g>
@@ -244,7 +257,7 @@ export function LineChart({
             className="pointer-events-none absolute z-10 min-w-[10rem] rounded-lg border border-border bg-surface px-3 py-2 text-xs shadow-lg"
             style={{ top: MARGIN.top, left: Math.min(Math.max(0, x(at) + 12), Math.max(0, width - 176)) }}
           >
-            <div className="text-muted">{fmtLongDay(days[at]!)}{days[at] === today ? " · today so far" : ""}</div>
+            <div className="text-muted">{longName(at)}{soFar(at)}</div>
             {series.map((s) => (
               <div key={s.key} className="mt-1 flex items-center gap-2">
                 <span aria-hidden className={bars ? "inline-block h-2.5 w-2.5 shrink-0 rounded-sm" : "inline-block h-0.5 w-3 shrink-0 rounded"} style={{ background: s.color }} />
@@ -264,7 +277,7 @@ export function LineChart({
           <caption>{label}</caption>
           <thead>
             <tr>
-              <th scope="col">Day</th>
+              <th scope="col">{monthly ? "Month" : "Day"}</th>
               {series.map((s) => (
                 <th key={s.key} scope="col">{s.label}</th>
               ))}
@@ -273,7 +286,7 @@ export function LineChart({
           <tbody>
             {days.map((d, i) => (
               <tr key={d}>
-                <th scope="row">{fmtLongDay(d)}</th>
+                <th scope="row">{longName(i)}</th>
                 {series.map((s) => (
                   <td key={s.key}>{show(s.values[i])}</td>
                 ))}

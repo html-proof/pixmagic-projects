@@ -129,7 +129,7 @@ and an abandoned signup could kill a live store's token):
 
 | Data | Query | Notes |
 | --- | --- | --- |
-| Store details | `shop` | name, currency, time zone |
+| Store details | `shop` | name, currency, time zone, and when Shopify created the store (`createdAt`, kept in `stores.shop_created_at`): where the dashboard's dates begin (All time, the earliest custom date; docs/kpis.md). No scope needed. A store connected before it was read gets it on its next dashboard view |
 | Orders | `orders` (5 per page) | totals, tax, shipping, discounts + codes, sales channel, fulfillment status and time, line items (product, variant, SKU), test flag, and Shopify's sales records (`agreements` → `sales`: what was sold, returned, cancelled or edited, and when), which the sales figures are built from (docs/kpis.md). Orders with more lines/sales than fit in a page are completed with per-order queries. Last 60 days, or all history once `read_all_orders` is granted |
 | Products | `products` (100 per page) | title, status, vendor, type |
 | Variants | `productVariants` (100 per page) | price, stock on hand, unit cost |
@@ -148,7 +148,8 @@ What keeps a store complete, and its limits:
   per 5 minutes per store.
 - **History.** Shopify gives 60 days of orders without `read_all_orders`; that scope has to be
   requested in the Partner Dashboard (API access requests) and approved for each app before a
-  store can grant it. Ranges reaching further back show only what was imported.
+  store can grant it. Ranges reaching further back (All time from the store's creation, say) show
+  only what was imported, and the dashboard says from which day the order figures count.
 - **Scheduled jobs** (reconcile, stale import reaper, token refresh) run only with the GitHub
   variable `AWS_SCHEDULES=on`; without it, missed webhooks are repaired only while a dashboard is
   open, by "Sync now", or by the re-read above.

@@ -6,7 +6,7 @@ import { useApp } from "@/components/AppContext";
 import { Alert } from "@/components/ui";
 import { actionError, api, ApiError, fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { DemoChip } from "./Advertising";
-import { Definitions } from "./AdsCommon";
+import { Definitions, LongRangeNote, reportTooLong } from "./AdsCommon";
 import { fmtRange, fmtSpan } from "./format";
 import { Badge, Panel, type Tone } from "./Primitives";
 import { ReportChange, reportChange } from "./ReportCompare";
@@ -116,9 +116,10 @@ export function GoogleReportPanel({ ov, accounts }: { ov: Overview; accounts: Ad
   const cfrom = ended ? ov.previous.from : null;
   const cto = ended ? ov.previous.to : null;
   const chosen = google.find((a) => a.id === connection) ?? google[0];
+  const tooLong = reportTooLong(ov.range);
 
   useEffect(() => {
-    if (!chosen) return;
+    if (!chosen || tooLong) return;
     let live = true;
     setLoading(true);
     setError(null);
@@ -135,9 +136,16 @@ export function GoogleReportPanel({ ov, accounts }: { ov: Overview; accounts: Ad
       live = false;
     };
     // The account's status changes on every poll; only a different question asks Google again.
-  }, [workspace.id, ov.store.id, chosen?.id, level, from, to, cfrom, cto]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [workspace.id, ov.store.id, chosen?.id, level, from, to, cfrom, cto, tooLong]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!chosen) return null;
+  if (tooLong) {
+    return (
+      <Panel id="d-google-report" title="Google Ads report" help={`${fmtRange(from, to)}.`}>
+        <LongRangeNote name="Google Ads" />
+      </Panel>
+    );
+  }
   const r = answer?.report;
   const currency = answer?.account.currency ?? chosen.currency ?? "USD";
   const money = (n: number | null) => (n === null ? NA : fmtMoney(n, currency));

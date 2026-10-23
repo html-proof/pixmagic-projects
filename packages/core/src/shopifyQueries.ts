@@ -321,8 +321,9 @@ export const VARIANTS_QUERY = /* GraphQL */ `
     }
   }`;
 
+/** The store's details: its name, currency and time zone, and when Shopify created it (where the dashboard's dates begin). */
 export const SHOP_QUERY = /* GraphQL */ `
-  query Shop { shop { name currencyCode ianaTimezone } }`;
+  query Shop { shop { name currencyCode ianaTimezone createdAt } }`;
 
 export const WEB_PIXEL_CREATE = /* GraphQL */ `
   mutation WebPixelCreate($settings: JSON!) {

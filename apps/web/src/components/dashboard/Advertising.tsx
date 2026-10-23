@@ -3,6 +3,7 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 import { GoogleIcon, MetaIcon } from "@/components/BrandIcons";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
+import { DAILY_CHART_MAX_DAYS, rowsByMonth } from "@app/shared/dates";
 import {
   AD_DEFINITIONS,
   ADSENSE_DEFINITIONS,
@@ -380,14 +381,21 @@ function perPlatform(pick: (p: Provider) => Array<number | null> | null): LineSe
 function Trends({ ov, fetching }: { ov: Overview; fetching: boolean }) {
   const ads = ov.modules.ads;
   const sense = ov.modules.adsense;
-  const days = (ads?.series ?? sense?.series ?? []).map((d) => d.day);
-  const byP = (p: "meta" | "google") => ads?.seriesByProvider.find((s) => s.provider === p)?.series ?? null;
+  // Over a year, a month a point (rowsByMonth): every figure drawn here adds up.
+  const monthly = (ads?.series ?? sense?.series ?? []).length > DAILY_CHART_MAX_DAYS;
+  const rowsOf = <T extends { day: string }>(rows: T[]) => (monthly ? rowsByMonth(rows) : rows);
+  const days = rowsOf<{ day: string }>(ads?.series ?? sense?.series ?? []).map((d) => d.day);
+  const senseRows = sense ? rowsOf(sense.series) : null;
+  const byP = (p: "meta" | "google") => {
+    const rows = ads?.seriesByProvider.find((s) => s.provider === p)?.series;
+    return rows ? rowsOf(rows) : null;
+  };
   const sameMoney = !ads || !sense || ads.currency === sense.currency;
   const spendSeries = perPlatform((p) => (p === "adsense" ? null : (byP(p)?.map((d) => d.spend) ?? null))).map((s) => ({ ...s, label: `${s.label} spend` }));
-  const earnSeries: LineSeries[] = sense ? [{ key: "adsense", label: "AdSense estimated earnings", color: PLATFORM.adsense.color, values: sense.series.map((d) => d.earnings) }] : [];
-  const impressions = perPlatform((p) => (p === "adsense" ? (sense?.series.map((d) => d.impressions) ?? null) : (byP(p)?.map((d) => d.impressions) ?? null)));
+  const earnSeries: LineSeries[] = senseRows ? [{ key: "adsense", label: "AdSense estimated earnings", color: PLATFORM.adsense.color, values: senseRows.map((d) => d.earnings) }] : [];
+  const impressions = perPlatform((p) => (p === "adsense" ? (senseRows?.map((d) => d.impressions) ?? null) : (byP(p)?.map((d) => d.impressions) ?? null)));
   // Link clicks for the ad platforms; AdSense's clicks are clicks on the ads on your site.
-  const clicks = perPlatform((p) => (p === "adsense" ? (sense?.series.map((d) => d.clicks) ?? null) : (byP(p)?.map((d) => d.linkClicks) ?? null)));
+  const clicks = perPlatform((p) => (p === "adsense" ? (senseRows?.map((d) => d.clicks) ?? null) : (byP(p)?.map((d) => d.linkClicks) ?? null)));
   const unread = (s: LineSeries[]) => s.every((x) => x.values.every((v) => v === null));
   const quiet = (s: LineSeries[]) => s.every((x) => x.values.every((v) => v === null || v === 0));
 
@@ -399,7 +407,7 @@ function Trends({ ov, fetching }: { ov: Overview; fetching: boolean }) {
     ) : quiet(series) && series.every((x) => x.values.every((v) => v !== null)) ? (
       <p className="rounded-lg border border-dashed border-border px-3 py-6 text-center text-sm text-muted">No ad activity in these dates.</p>
     ) : (
-      <LineChart days={days} series={series} format={format} fmtAxis={fmtAxis} label={label} today={ov.today} integer={integer} />
+      <LineChart days={days} series={series} format={format} fmtAxis={fmtAxis} label={label} today={ov.today} integer={integer} grain={monthly ? "month" : "day"} />
     );
 
   const moneyCur = ads?.currency ?? sense?.currency ?? "USD";

@@ -1,5 +1,5 @@
 import type { Store, Tx } from "@app/db";
-import { comparisonImported, delta, localDay, resolveCapabilities, summarize, yearBreakdown, type AdProvider, type Comparison, type DailyMetricsRow, type DateRange } from "@app/shared";
+import { comparisonImported, delta, localDay, resolveCapabilities, storeStartDay, summarize, yearBreakdown, type AdProvider, type Comparison, type DailyMetricsRow, type DateRange } from "@app/shared";
 import { adsConfigured } from "../adConnections.js";
 import { latestReconciliation } from "../reconcile.js";
 import { storeSalesCalculation } from "../salesCalculation.js";
@@ -226,7 +226,7 @@ export async function storeOverview(
   if (enabled.has("order_timing")) modules.order_timing = await orderTiming(tx, scope, range, store.timezone);
   if (enabled.has("fulfillment")) modules.fulfillment = await fulfillment(tx, scope, range, today);
   if (enabled.has("discount_codes")) modules.discount_codes = await discountCodes(tx, scope, range);
-  if (enabled.has("recent_orders")) modules.recent_orders = await recentOrders(tx, scope);
+  if (enabled.has("recent_orders")) modules.recent_orders = await recentOrders(tx, scope, range, store.timezone);
   if (enabled.has("inventory")) modules.inventory = await inventory(tx, store, today);
   if (enabled.has("catalog")) modules.catalog = await catalog(tx, scope, range);
 
@@ -332,10 +332,11 @@ export async function workspaceStores(tx: Tx, ws: string) {
   // "connected and holding nothing", which look identical from scopes and lastSyncedAt alone.
   // Two grouped queries for the whole workspace, not one pair per store.
   const stores = await tx.store.findMany({ where: { workspaceId: ws, status: { not: "uninstalled" } }, orderBy: { createdAt: "asc" } });
-  const orders = await tx.order.groupBy({ by: ["storeId"], where: { workspaceId: ws }, _count: { _all: true } });
+  const orders = await tx.order.groupBy({ by: ["storeId"], where: { workspaceId: ws }, _count: { _all: true }, _min: { localDay: true } });
   const products = await tx.product.groupBy({ by: ["storeId"], where: { workspaceId: ws }, _count: { _all: true } });
   const countBy = (rows: Array<{ storeId: string; _count: { _all: number } }>) => new Map(rows.map((r) => [r.storeId, r._count._all]));
   const orderCount = countBy(orders);
+  const oldestOrderDay = new Map(orders.map((r) => [r.storeId, r._min.localDay]));
   const productCount = countBy(products);
   // Why a store that stopped syncing stopped, as the dashboard says it: the card's status line must
   // not send someone to reconnect a store that reconnecting doesn't fix. Only stores in error, which are few.
@@ -348,6 +349,8 @@ export async function workspaceStores(tx: Tx, ws: string) {
     store,
     imported: { orders: orderCount.get(store.id) ?? 0, products: productCount.get(store.id) ?? 0 },
     syncProblem: problems.get(store.id) ?? null,
+    // Where the store's dates begin (storeStartDay), so the date pickers know before the first numbers load.
+    startDay: storeStartDay(store.shopCreatedAt, store.timezone, oldestOrderDay.get(store.id) ?? null),
   }));
 }
 

@@ -24,7 +24,11 @@ export function daysBetweenInclusive(from: string, to: string): number {
   return Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000) + 1;
 }
 
-export const DATE_PRESETS = ["today", "yesterday", "7d", "30d", "90d", "mtd", "lastmonth", "ytd", "lastyear", "custom"] as const;
+/**
+ * The dates the dashboard can report on. `wtd` is this week so far (weeks start on Monday, as ISO
+ * 8601 counts them), `all` everything from the store's first day (`storeStartDay`) to today.
+ */
+export const DATE_PRESETS = ["today", "yesterday", "7d", "30d", "90d", "wtd", "mtd", "lastmonth", "ytd", "lastyear", "all", "custom"] as const;
 export type DatePreset = (typeof DATE_PRESETS)[number];
 
 export interface DateRange {
@@ -67,7 +71,45 @@ export function eachDay(from: string, to: string): string[] {
 export const MIN_CUSTOM_DAY = "2000-01-01";
 export const MAX_CUSTOM_DAYS = 366;
 
-export type CustomRangeProblem = "incomplete" | "reversed" | "future" | "too_long";
+/** The week a day is in starts on its Monday (ISO 8601): "2026-10-25" (a Sunday) → "2026-10-19". */
+export function weekStart(day: string): string {
+  // getUTCDay counts Sunday as 0.
+  return addDays(day, -((new Date(`${day}T00:00:00Z`).getUTCDay() + 6) % 7));
+}
+
+/**
+ * The first store-local day a store has anything from: the day Shopify created it (shop.createdAt,
+ * stores.shop_created_at), or an earlier order's day. Orders brought in from another platform keep
+ * the day they were processed there, which can be before the store existed on Shopify, and are
+ * never left out. Null while neither is known (the store's details not read yet, and no orders).
+ */
+export function storeStartDay(createdAt: Date | null, timeZone: string, oldestOrderDay: string | null): string | null {
+  const created = createdAt ? localDay(createdAt, timeZone) : null;
+  if (created === null || oldestOrderDay === null) return created ?? oldestOrderDay;
+  return oldestOrderDay < created ? oldestOrderDay : created;
+}
+
+/**
+ * What custom dates may span: from `earliest` on (null or absent: MIN_CUSTOM_DAY), at most
+ * `maxDays` long (absent: MAX_CUSTOM_DAYS; null: any length). All time starts at `allFrom`
+ * (absent: `earliest`; neither: today alone).
+ */
+export interface RangeLimits {
+  earliest?: string | null;
+  maxDays?: number | null;
+  allFrom?: string | null;
+}
+
+/**
+ * The dashboard's limits for a store whose first day is `start` (`storeStartDay`): All time starts
+ * on it, and any length after it is a real question ("1 Jan 2023 – 30 Jun 2025"). Custom dates may
+ * not start before it once Shopify's creation date is known (`created`): nothing happened in the
+ * store before then. Until it is, `start` is only the first order's day, and a quiet first month
+ * before that order is still the store's: no earlier limit than 2000 is set.
+ */
+export const storeRangeLimits = (start: string | null, created: boolean): RangeLimits => ({ earliest: created ? start : null, allFrom: start, maxDays: null });
+
+export type CustomRangeProblem = "incomplete" | "reversed" | "future" | "before_start" | "too_long";
 
 /**
  * Why a custom range can't be reported on, or null when it can. The API refuses these and the
@@ -75,13 +117,16 @@ export type CustomRangeProblem = "incomplete" | "reversed" | "future" | "too_lon
  *
  * With `today` (the store's), a range may run past it, because it is reported only up to today
  * (see `clampCustomRange`), but it can't start after it, and its length is counted to today.
+ * `limits` bound how early it may start and how long it may be (RangeLimits).
  */
-export function customRangeProblem(r: { from?: string; to?: string }, today?: string): CustomRangeProblem | null {
+export function customRangeProblem(r: { from?: string; to?: string }, today?: string, limits: RangeLimits = {}): CustomRangeProblem | null {
   const { from, to } = r;
   if (!isDay(from) || !isDay(to) || from < MIN_CUSTOM_DAY || to < MIN_CUSTOM_DAY) return "incomplete";
   if (from > to) return "reversed";
   if (today && from > today) return "future";
-  if (daysBetweenInclusive(from, clampCustomRange({ from, to }, today).to) > MAX_CUSTOM_DAYS) return "too_long";
+  if (limits.earliest && from < limits.earliest) return "before_start";
+  const maxDays = limits.maxDays === undefined ? MAX_CUSTOM_DAYS : limits.maxDays;
+  if (maxDays !== null && daysBetweenInclusive(from, clampCustomRange({ from, to }, today).to) > maxDays) return "too_long";
   return null;
 }
 
@@ -98,6 +143,7 @@ const CUSTOM_RANGE_ERROR: Record<CustomRangeProblem, string> = {
   incomplete: "Invalid custom range",
   reversed: "Invalid custom range",
   future: "Range starts after today",
+  before_start: "Range starts before the store's first day",
   too_long: "Range too long",
 };
 
@@ -123,10 +169,11 @@ const CUSTOM_COMPARISON_ERROR: Record<CustomRangeProblem, string> = {
   incomplete: "Invalid comparison dates",
   reversed: "Invalid comparison dates",
   future: "Comparison starts after today",
+  before_start: "Comparison starts before the store's first day",
   too_long: "Comparison too long",
 };
 
-function presetRange(preset: DatePreset, today: string, custom?: DateRange): DateRange {
+function presetRange(preset: DatePreset, today: string, custom: DateRange | undefined, limits: RangeLimits): DateRange {
   switch (preset) {
     case "today":
       return { from: today, to: today };
@@ -140,6 +187,8 @@ function presetRange(preset: DatePreset, today: string, custom?: DateRange): Dat
       return { from: addDays(today, -29), to: today };
     case "90d":
       return { from: addDays(today, -89), to: today };
+    case "wtd":
+      return { from: weekStart(today), to: today };
     case "mtd":
       return { from: `${today.slice(0, 8)}01`, to: today };
     case "lastmonth": {
@@ -154,8 +203,13 @@ function presetRange(preset: DatePreset, today: string, custom?: DateRange): Dat
       const year = String(Number(today.slice(0, 4)) - 1).padStart(4, "0");
       return { from: `${year}-01-01`, to: `${year}-12-31` };
     }
+    case "all": {
+      // From the store's first day; today alone while it isn't known yet.
+      const start = limits.allFrom === undefined ? limits.earliest : limits.allFrom;
+      return { from: start && start < today ? start : today, to: today };
+    }
     case "custom": {
-      const problem = customRangeProblem(custom ?? {}, today);
+      const problem = customRangeProblem(custom ?? {}, today, limits);
       if (problem) throw new Error(CUSTOM_RANGE_ERROR[problem]);
       return clampCustomRange(custom!, today);
     }
@@ -163,12 +217,12 @@ function presetRange(preset: DatePreset, today: string, custom?: DateRange): Dat
 }
 
 /** The whole days `range` is compared with (see COMPARE_MODES); throws on custom dates that can't be. */
-function comparisonDays(range: DateRange, preset: DatePreset, compare: CompareChoice, today: string): DateRange {
+function comparisonDays(range: DateRange, preset: DatePreset, compare: CompareChoice, today: string, limits: RangeLimits): DateRange {
   switch (compare.mode) {
     case "year":
       return { from: yearEarlier(range.from), to: yearEarlier(range.to) };
     case "custom": {
-      const problem = customRangeProblem(compare, today);
+      const problem = customRangeProblem(compare, today, limits);
       if (problem) throw new Error(CUSTOM_COMPARISON_ERROR[problem]);
       return clampCustomRange({ from: compare.from!, to: compare.to! }, today);
     }
@@ -177,6 +231,11 @@ function comparisonDays(range: DateRange, preset: DatePreset, compare: CompareCh
         // The whole month before, whatever its length.
         const prevLast = addDays(range.from, -1);
         return { from: `${prevLast.slice(0, 8)}01`, to: prevLast };
+      }
+      if (preset === "wtd") {
+        // The same days of the week before: Monday to Thursday against last Monday to Thursday,
+        // never against the Thursday to Sunday just before, a weekend against weekdays.
+        return { from: addDays(range.from, -7), to: addDays(range.to, -7) };
       }
       if (preset === "lastyear") {
         // The whole year before, leap or not.
@@ -193,6 +252,11 @@ function comparisonDays(range: DateRange, preset: DatePreset, compare: CompareCh
  * The dates a preset reports on in the store's zone, and what they are compared with (`compare`,
  * the period just before when not given). Throws, with a message the API answers 400
  * `invalid_range` with, on custom dates or comparison dates that can't be reported on.
+ *
+ * `limits` are the store's (`storeRangeLimits`): All time starts at its first day, and custom
+ * dates may not start before it once Shopify's creation date is known. All time is always
+ * "compared" with the period just before it, which lies before the store's first day and so holds
+ * nothing: its changes come back null, never a comparison with dates the store didn't trade on.
  */
 export function resolvePreset(
   preset: DatePreset,
@@ -200,10 +264,11 @@ export function resolvePreset(
   timeZone: string,
   custom?: DateRange,
   compare: CompareChoice = { mode: "previous" },
+  limits: RangeLimits = {},
 ): { range: DateRange; previous: Comparison } {
   const today = localDay(now, timeZone);
-  const range = presetRange(preset, today, custom);
-  const previous = comparisonDays(range, preset, compare, today);
+  const range = presetRange(preset, today, custom, limits);
+  const previous = comparisonDays(range, preset, preset === "all" ? { mode: "previous" } : compare, today, limits);
   // Today isn't over: whatever it is compared with is counted up to this moment of its own last day.
   return { range, previous: range.to === today ? { ...previous, until: localTime(now, timeZone) } : previous };
 }
@@ -272,4 +337,35 @@ export function adsHistoryStart(starts: Array<string | null>): string | null {
  */
 export function comparisonImported(previous: DateRange, historyFrom: string | null): boolean {
   return historyFrom !== null && previous.from >= historyFrom;
+}
+
+/**
+ * Charts draw a column (or point) per day up to this many days; a longer range (All time, or
+ * custom dates over a year) is drawn a month at a time, where a day's column would be a sliver.
+ */
+export const DAILY_CHART_MAX_DAYS = 366;
+
+/**
+ * Day rows added up a month at a time, for a chart of a range too long to draw day by day
+ * (DAILY_CHART_MAX_DAYS). Each month keeps the `day` of its first row (the range's own first day
+ * for the month it starts in); each number is the sum of its days', null only when none of them
+ * has one (a gap stays a gap, never a 0). Other fields keep the first day's value. Only for figures
+ * that add up: a rate is worked out from the month's sums, never added.
+ */
+export function rowsByMonth<T extends { day: string }>(rows: readonly T[]): T[] {
+  const months = new Map<string, Record<string, unknown>>();
+  for (const row of rows) {
+    const key = row.day.slice(0, 7);
+    const month = months.get(key);
+    if (!month) {
+      months.set(key, { ...row });
+      continue;
+    }
+    for (const [k, v] of Object.entries(row)) {
+      if (k === "day" || typeof v !== "number") continue;
+      const sum = month[k];
+      month[k] = typeof sum === "number" ? sum + v : v;
+    }
+  }
+  return [...months.values()] as T[];
 }

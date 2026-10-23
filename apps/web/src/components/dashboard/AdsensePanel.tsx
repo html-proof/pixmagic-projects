@@ -15,7 +15,9 @@ import {
   ComparedLine,
   dailyMoneyColumns,
   Definitions,
+  LongRangeNote,
   missingReasons,
+  reportTooLong,
   runningWords,
   throughLabel,
   timeZoneNote,
@@ -110,9 +112,17 @@ function AdsenseReportTables({ ov, accounts, currency }: { ov: Overview; account
   const [connection, setConnection] = useState(accounts[0]?.id ?? "");
   const [level, setLevel] = useState<(typeof REPORT_LEVELS)[number]["id"]>("country");
   const chosen = accounts.find((a) => a.id === connection) ?? accounts[0];
-  const qs = chosen ? new URLSearchParams({ connection: chosen.id, level, from: ov.range.from, to: ov.range.to }) : null;
+  const tooLong = reportTooLong(ov.range);
+  const qs = chosen && !tooLong ? new URLSearchParams({ connection: chosen.id, level, from: ov.range.from, to: ov.range.to }) : null;
   const report = useApi<AdsenseReportAnswer>(qs ? `/workspaces/${workspace.id}/stores/${ov.store.id}/ads/adsense/report?${qs}` : null);
   if (!chosen) return null;
+  if (tooLong) {
+    return (
+      <Panel id="d-adsense-report" title="Where the earnings came from" help={`${fmtRange(ov.range.from, ov.range.to)}.`}>
+        <LongRangeNote name="AdSense" />
+      </Panel>
+    );
+  }
   const r = report.data;
   const money = (n: number | null) => (n === null ? "—" : fmtMoney(n, r?.currency ?? chosen.currency ?? currency));
   const notThere = report.error instanceof ApiError && report.error.status === 404;

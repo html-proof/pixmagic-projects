@@ -2,6 +2,7 @@
 import Link from "next/link";
 import { useState, type ReactNode } from "react";
 import type { AdSeriesDay, AdTotals } from "@app/shared/ads";
+import { DAILY_CHART_MAX_DAYS, rowsByMonth } from "@app/shared/dates";
 import { useApp } from "@/components/AppContext";
 import { GoogleIcon, MetaIcon } from "@/components/BrandIcons";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
@@ -275,8 +276,11 @@ function PerformanceTrend({ a, ov }: { a: AdsModule; ov: Overview }) {
   const kind = metric === "spend" || metric === "purchaseValue" || metric === "cpc" || metric === "cpm" ? "money" : metric === "ctr" ? "rate" : metric === "roas" ? "times" : "count";
   const format = kind === "money" ? money : kind === "rate" ? (v: number) => fmtPct(v) : kind === "times" ? (v: number) => fmtTimes(v) : fmtNum;
   const fmtAxis = kind === "money" ? axisMoney : kind === "rate" ? (v: number) => fmtPct(v) : kind === "times" ? (v: number) => fmtTimes(v) : (v: number) => compact(v);
-  const series: LineSeries[] = a.seriesByProvider.map((s) => ({ key: s.provider, label: PLATFORM[s.provider].name, color: PLATFORM_COLOR[s.provider], values: s.series.map((d) => trendValue(d, metric)) }));
-  const days = a.series.map((d) => d.day);
+  // Over a year, a month a point: each month's rates from its sums (rowsByMonth).
+  const monthly = a.series.length > DAILY_CHART_MAX_DAYS;
+  const rowsOf = <T extends { day: string }>(rows: T[]) => (monthly ? rowsByMonth(rows) : rows);
+  const series: LineSeries[] = a.seriesByProvider.map((s) => ({ key: s.provider, label: PLATFORM[s.provider].name, color: PLATFORM_COLOR[s.provider], values: rowsOf(s.series).map((d) => trendValue(d, metric)) }));
+  const days = rowsOf(a.series).map((d) => d.day);
   const title = TREND_METRICS.find(([m]) => m === metric)![1];
   const empty = series.every((s) => s.values.every((v) => v === null));
   return (
@@ -290,7 +294,7 @@ function PerformanceTrend({ a, ov }: { a: AdsModule; ov: Overview }) {
         {empty ? (
           <p className="rounded-lg border border-dashed border-border px-3 py-6 text-center text-sm text-muted">No figures for this in these dates yet.</p>
         ) : (
-          <LineChart days={days} series={series} format={format} fmtAxis={fmtAxis} label={`${title} per day by platform, ${fmtSpan(ov.range.from, ov.range.to)}`} today={ov.today} integer={kind === "count"} />
+          <LineChart days={days} series={series} format={format} fmtAxis={fmtAxis} label={`${title} per ${monthly ? "month" : "day"} by platform, ${fmtSpan(ov.range.from, ov.range.to)}`} today={ov.today} integer={kind === "count"} grain={monthly ? "month" : "day"} />
         )}
       </div>
       {(metric === "purchases" || metric === "purchaseValue" || metric === "roas") && (

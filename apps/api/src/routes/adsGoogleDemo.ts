@@ -20,7 +20,7 @@ import {
   resetGoogleAdsDemo,
   type GoogleReport,
 } from "@app/core";
-import { googleAdsAnalytics, type GoogleAdsAnalytics } from "@app/core/reports";
+import { googleAdsAnalytics, storeLimits, type GoogleAdsAnalytics } from "@app/core/reports";
 import { allows, CAMPAIGN_SORTS, DEMO_BADGE, DEMO_DISCLAIMER, pageCampaigns, type DemoBreakdownRow, type GoogleReportRow } from "@app/shared";
 import { body, clientIp, HttpError, requireWorkspace, type Ctx, type Deps } from "../context.js";
 import type { App } from "../app.js";
@@ -212,8 +212,13 @@ export function adsGoogleDemoRoutes(app: App, deps: Deps) {
     const conn: AdConnection | null = await withTenant(ws, (tx) => tx.adConnection.findFirst({ where, orderBy: { createdAt: "asc" } }));
     if (!conn) throw new HttpError(404, query.connection ? "Not found" : "No Google Ads demo is connected to this store.", query.connection ? "not_found" : "no_demo");
     const now = new Date();
-    // Days in the ad account's own time zone: that is what its figures are stored by.
-    const dates = resolveQueryDates(query, now, conn.timezone || "UTC");
+    // The dashboard's dates, within the store's limits (All time from its first day), in the ad
+    // account's own time zone: that is what its figures are stored by.
+    const limits = await withTenant(ws, async (tx) => {
+      const store = await tx.store.findFirst({ where: { id: storeId, workspaceId: ws } });
+      return store ? storeLimits(tx, { ws, storeId }, store) : {};
+    });
+    const dates = resolveQueryDates(query, now, conn.timezone || "UTC", limits);
     const campaigns = allows(access.access, "marketing.campaigns");
     const analytics: GoogleAdsAnalytics = await withTenant(ws, (tx) => googleAdsAnalytics(tx, conn, dates.range, dates.previous, { now, campaigns }));
     return { conn, campaigns, analytics, q: query };

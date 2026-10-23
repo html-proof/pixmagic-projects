@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { withTenant } from "@app/db";
-import { AD_PROVIDERS, COMPARE_MODES, DATE_PRESETS, redactOverview, resolvePreset, salesCalculationInput, seesModule } from "@app/shared";
+import { AD_PROVIDERS, COMPARE_MODES, DATE_PRESETS, redactOverview, resolvePreset, salesCalculationInput, seesModule, type RangeLimits } from "@app/shared";
 import {
   audit,
   latestReconciliation,
@@ -12,7 +12,7 @@ import {
   storeSalesCalculation,
   type ReportRequest,
 } from "@app/core";
-import { PRODUCT_SORTS, productPerformance, recentSyncJobs, storeOverview, workspaceStores, type AdsView } from "@app/core/reports";
+import { PRODUCT_SORTS, productPerformance, recentSyncJobs, storeLimits, storeOverview, workspaceStores, type AdsView } from "@app/core/reports";
 import { body, clientIp, HttpError, requireWorkspace, type Deps } from "../context.js";
 import type { App } from "../app.js";
 import { autoRefresh } from "../sync.js";
@@ -50,10 +50,23 @@ export const adsViewQuery = {
 const ADVERTISING_MODULES: ReadonlySet<string> = new Set(["ads", "adsense", "ad_connections", "ad_configured", "sales_overview", "channels", "traffic"]);
 const overviewQuery = z.object({ ...datesQuery, ...adsViewQuery, parts: z.enum(["advertising"]).optional() });
 
-/** The dates in the store's zone; custom dates or comparison dates that can't be reported on are a 400 `invalid_range`. */
-export function resolveQueryDates(q: DatesQuery, now: Date, timeZone: string) {
+/**
+ * The dates in the store's zone, within its `limits` (`storeLimits` in core): All time from its first
+ * day, custom dates no earlier than Shopify's creation date, of any length. Without them (the
+ * Inventory pages, which offer neither All time nor more than a year) the general limits apply:
+ * from 2000, up to a year. Custom dates or comparison dates that can't be reported on are a 400
+ * `invalid_range`.
+ */
+export function resolveQueryDates(q: DatesQuery, now: Date, timeZone: string, limits: RangeLimits = {}) {
   try {
-    return resolvePreset(q.preset, now, timeZone, q.from && q.to ? { from: q.from, to: q.to } : undefined, { mode: q.compare, from: q.cfrom, to: q.cto });
+    return resolvePreset(
+      q.preset,
+      now,
+      timeZone,
+      q.from && q.to ? { from: q.from, to: q.to } : undefined,
+      { mode: q.compare, from: q.cfrom, to: q.cto },
+      limits,
+    );
   } catch (e) {
     throw new HttpError(400, (e as Error).message, "invalid_range");
   }
@@ -75,6 +88,7 @@ export function publicStore(s: {
   pixelInstalled: boolean;
   lastSyncedAt: Date | null;
   installedAt: Date | null;
+  shopCreatedAt: Date | null;
 }) {
   return {
     id: s.id,
@@ -88,6 +102,8 @@ export function publicStore(s: {
     pixelInstalled: s.pixelInstalled,
     lastSyncedAt: s.lastSyncedAt,
     installedAt: s.installedAt,
+    // When Shopify created the store (null until its details are read): where its dates begin.
+    shopCreatedAt: s.shopCreatedAt,
   };
 }
 
@@ -108,7 +124,8 @@ export function dashboardRoutes(app: App, deps: Deps) {
       if (!["orders", "products"].every(resource => store.grantedScopes.some(s => s === `read_${resource}` || s === `write_${resource}`))) throw new HttpError(403, "Order and product access are required. Reconnect the store with the required access.", "missing_scope");
       if (!!q.dateFrom !== !!q.dateTo) throw new HttpError(400, "Both dateFrom and dateTo are required", "invalid_range");
       const now = new Date();
-      const dates = resolveQueryDates(q.dateFrom && q.dateTo ? { ...q, preset: "custom", from: q.dateFrom, to: q.dateTo } : q, now, store.timezone);
+      const limits = await storeLimits(tx, { ws, storeId }, store);
+      const dates = resolveQueryDates(q.dateFrom && q.dateTo ? { ...q, preset: "custom", from: q.dateFrom, to: q.dateTo } : q, now, store.timezone, limits);
       return productPerformance(tx, { ws, storeId }, store, dates.range, q, now);
     }));
   });
@@ -116,7 +133,7 @@ export function dashboardRoutes(app: App, deps: Deps) {
     const { ws } = c.req.param();
     await requireWorkspace(c, deps, ws, "dashboard:read");
     const stores = await withTenant(ws, (tx) => workspaceStores(tx, ws));
-    return c.json({ stores: stores.map(({ store, imported, syncProblem }) => ({ ...publicStore(store), imported, syncProblem })) });
+    return c.json({ stores: stores.map(({ store, imported, syncProblem, startDay }) => ({ ...publicStore(store), imported, syncProblem, startDay })) });
   });
 
   // The import's progress and its failures: the Shopify connection's status page.
@@ -151,7 +168,7 @@ export function dashboardRoutes(app: App, deps: Deps) {
       if (!store) throw new HttpError(404, "Not found", "not_found");
       polled = store;
       const now = new Date();
-      const dates = resolveQueryDates(q, now, store.timezone);
+      const dates = resolveQueryDates(q, now, store.timezone, await storeLimits(tx, { ws, storeId }, store));
       const report = redactOverview(await storeOverview(tx, store, dates, now, sees, adsView), access);
       reports = report.shopifyRefresh;
       return {
@@ -159,7 +176,8 @@ export function dashboardRoutes(app: App, deps: Deps) {
         syncProblem: report.syncProblem,
         range: dates.range,
         // What the range is compared with, how it was chosen, and whether the imported orders reach back to it.
-        previous: { ...dates.previous, compare: q.compare, imported: report.previousImported },
+        // All time is compared with the period before it whatever was asked (resolvePreset).
+        previous: { ...dates.previous, compare: q.preset === "all" ? "previous" : q.compare, imported: report.previousImported },
         today: report.today,
         // When the numbers last matched Shopify, and any changes still waiting (dataFreshness in core).
         freshness: report.freshness,

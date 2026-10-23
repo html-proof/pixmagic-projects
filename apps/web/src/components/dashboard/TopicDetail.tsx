@@ -149,7 +149,7 @@ export function TopicDetail({
     stock: "Right now · sales speed from the last 30 days",
     discounts: range,
     customers: range,
-    orders: "The 10 latest orders, any date",
+    orders: "The 10 latest orders placed in these dates",
   };
   return (
     // Keyed by topic so moving from the overview to another topic starts at the top of the panel.

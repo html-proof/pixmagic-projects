@@ -36,6 +36,8 @@ export interface OverviewStore {
   pixelInstalled: boolean;
   lastSyncedAt: string | null;
   installedAt?: string | null;
+  /** When Shopify created the store; null until its details are read. */
+  shopCreatedAt?: string | null;
 }
 
 /**
@@ -428,6 +430,10 @@ export interface ImportedData {
    * the first order, which a quiet store has days later.
    */
   historyFrom?: string | null;
+  /** The store-local day Shopify created the store; null until its details are read. */
+  createdDay?: string | null;
+  /** The store's first day (that, or an earlier order's): where All time starts, and how early custom dates may start. */
+  startDay?: string | null;
 }
 
 export interface Freshness {
@@ -485,7 +491,8 @@ export interface Overview {
     order_timing?: OrderTimingModule;
     fulfillment?: FulfillmentModule;
     discount_codes?: DiscountCodesModule;
-    recent_orders?: { items: RecentOrder[] };
+    /** The latest orders placed in the dates; `cancelledInRange`: orders cancelled in them (needs "View cancellations"). */
+    recent_orders?: { items: RecentOrder[]; cancelledInRange?: number };
     inventory?: InventoryModule;
     catalog?: CatalogModule;
     ads?: AdsModule;
