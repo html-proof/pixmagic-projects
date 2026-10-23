@@ -120,7 +120,7 @@ function parse(d: Draft) {
   };
   return {
     ok: false as const,
-    problems: r.error.issues.map((i) => `${LABEL[String(i.path[0])] ?? String(i.path[0])}: ${i.message === "Expected number, received nan" ? "enter a number" : i.message}`),
+    problems: r.error.issues.map((i) => `${LABEL[String(i.path[0])] ?? String(i.path[0])}: ${i.code === "invalid_type" && i.expected === "number" ? "enter a number" : i.message}`),
   };
 }
 

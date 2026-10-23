@@ -825,7 +825,7 @@ describe("payloads that don't fit", () => {
     expect(shipped.map((e) => e.fulfillmentId)).toEqual(["91"]);
     expect(sent.map((s) => s.template)).toEqual(["insights_order_shipped"]);
     expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toMatchObject({ payload: "order fulfillment", skipped: 2, of: 3, problems: ["id: Required"] });
+    expect(warnings[0]).toMatchObject({ payload: "order fulfillment", skipped: 2, of: 3, problems: ["id: Invalid input: expected number, received undefined"] });
   });
 
   it("parcel and courier webhooks that don't name their parcel or order, and a checkout without a token, are skipped", async () => {
@@ -838,7 +838,7 @@ describe("payloads that don't fit", () => {
     await event(store, "checkouts/create", { token: 12345, phone: "+91 98765 43210", total_price: "10.00" });
     expect(await systemDb.orderTrackingEvent.count({ where: { type: { in: ["shipped", "out_for_delivery"] } } })).toBe(0);
     expect(await systemDb.abandonedCheckout.count()).toBe(0);
-    expect(problems()).toEqual(["order_id: Required", "fulfillment_id: Required", "token: Expected string, received number"]);
+    expect(problems()).toEqual(["order_id: Invalid input: expected number, received undefined", "fulfillment_id: Invalid input: expected number, received undefined", "token: Invalid input: expected string, received number"]);
   });
 
   it("the shipment poll applies each parcel Shopify reports, skipping one it can't read", async () => {
@@ -912,7 +912,7 @@ describe("payloads that don't fit", () => {
       ["Meta payload doesn't fit its schema; skipped", "message"],
       ["Meta payload doesn't fit its schema; skipped", "message_template_status_update"],
     ]);
-    expect(problems()).toEqual(["id: Required", "field: Required", "id: Required", "from: Expected string, received number", "(payload): Required"]);
+    expect(problems()).toEqual(["id: Invalid input: expected string, received undefined", "field: Invalid input: expected string, received undefined", "id: Invalid input: expected string, received undefined", "from: Invalid input: expected string, received number", "(payload): Invalid input: expected object, received undefined"]);
     expect(JSON.stringify(warnings)).not.toContain("919876543210");
   });
 });

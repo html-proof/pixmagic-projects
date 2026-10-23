@@ -704,7 +704,7 @@ export function authRoutes(app: App, deps: Deps) {
         email: emailSchema,
         password: z.string().max(256),
         confirmPassword: z.string().max(256),
-        acceptTerms: z.literal(true, { errorMap: () => ({ message: "Accept the terms and privacy policy to create an account." }) }),
+        acceptTerms: z.literal(true, { error: "Accept the terms and privacy policy to create an account." }),
       })
       .parse(await body(c));
     const ip = clientIp(c);

@@ -1,6 +1,7 @@
 // Request shapes shared by the API (which enforces them) and the UI (which builds them).
 
-import { z } from "zod";
+import { z } from "../zod";
+import { partialUpdate } from "../partialUpdate";
 import { displayNameOk, headerSafe, isEmail } from "./address";
 import { conditionNodeSchema } from "./conditions";
 import { EMAIL_CATEGORIES, SMTP_ENCRYPTION_MODES, SUPPRESSION_REASONS, SUPPRESSION_SCOPES } from "./constants";
@@ -60,7 +61,7 @@ export const domainCreateSchema = z.object({
   sendingService: z.enum(SENDING_SERVICES).default("other"),
   dkimSelectors: z.array(z.string().trim().toLowerCase().max(63).regex(DKIM_SELECTOR_RE, "Invalid DKIM selector")).max(5).default([]),
 });
-export const domainUpdateSchema = domainCreateSchema.omit({ domain: true }).partial();
+export const domainUpdateSchema = partialUpdate(domainCreateSchema.omit({ domain: true }));
 
 export const templateInputSchema = z.object({
   name: z.string().trim().min(1).max(100),
@@ -76,7 +77,7 @@ export const templateInputSchema = z.object({
   status: z.enum(["draft", "active"]).default("draft"),
 });
 export type TemplateInput = z.infer<typeof templateInputSchema>;
-export const templateUpdateSchema = templateInputSchema.partial().extend({ status: z.enum(["draft", "active", "archived"]).optional() });
+export const templateUpdateSchema = partialUpdate(templateInputSchema).extend({ status: z.enum(["draft", "active", "archived"]).optional() });
 
 export const recipientSchema = z.discriminatedUnion("type", [
   /** The customer the event is about (customer.email). */
@@ -116,7 +117,7 @@ export const ruleInputSchema = z.object({
   priority: z.number().int().min(0).max(1000).default(100),
 });
 export type RuleInput = z.infer<typeof ruleInputSchema>;
-export const ruleUpdateSchema = ruleInputSchema.partial();
+export const ruleUpdateSchema = partialUpdate(ruleInputSchema);
 
 /** POST /api/v1/events: one business event from the customer's own systems. */
 export const ingestEventSchema = z.object({
@@ -133,7 +134,7 @@ export const ingestEventSchema = z.object({
     })
     .strict()
     .optional(),
-  data: z.record(z.unknown()).optional(),
+  data: z.record(z.string(), z.unknown()).optional(),
 });
 export type IngestEvent = z.infer<typeof ingestEventSchema>;
 

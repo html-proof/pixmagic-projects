@@ -7,7 +7,7 @@
 //
 // Imported by the UI through `@app/shared/inventory`: no I/O, relative imports stay extensionless.
 
-import { z } from "zod";
+import { z } from "./zod";
 import { addDays } from "./dates";
 
 // ---------------------------------------------------------------------------

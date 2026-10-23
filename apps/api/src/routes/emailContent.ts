@@ -184,7 +184,7 @@ export function emailContentRoutes(app: App, deps: Deps) {
     const { ws, id } = c.req.param();
     const { user } = await requireEmail(c, deps, ws, "email:read");
     await limit(deps.coord, `rl:email:preview:${user.id}`, LIMITS.emailPreview);
-    const { data } = z.object({ data: z.record(z.unknown()).optional() }).parse(await body(c));
+    const { data } = z.object({ data: z.record(z.string(), z.unknown()).optional() }).parse(await body(c));
     const t = await getTemplate(ws, id);
     return c.json({ preview: await previewTemplate(ws, { subject: t.subjectTemplate, html: t.htmlTemplate, text: t.textTemplate, category: t.category, eventType: t.eventType }, data) });
   });
@@ -194,7 +194,7 @@ export function emailContentRoutes(app: App, deps: Deps) {
     const ws = c.req.param("ws");
     const { user } = await requireEmail(c, deps, ws, "email:automate");
     await limit(deps.coord, `rl:email:preview:${user.id}`, LIMITS.emailPreview);
-    const input = templateInputSchema.extend({ data: z.record(z.unknown()).optional() }).parse(await body(c));
+    const input = templateInputSchema.extend({ data: z.record(z.string(), z.unknown()).optional() }).parse(await body(c));
     return c.json({ preview: await previewTemplate(ws, { subject: input.subject, html: input.html, text: input.text, category: input.category, eventType: input.eventType }, input.data) });
   });
 
@@ -243,7 +243,7 @@ export function emailContentRoutes(app: App, deps: Deps) {
     const ws = c.req.param("ws");
     const { user } = await requireEmail(c, deps, ws, "email:automate");
     await limit(deps.coord, `rl:email:preview:${user.id}`, LIMITS.emailPreview);
-    const input = ruleInputSchema.extend({ data: z.record(z.unknown()).optional() }).parse(await body(c));
+    const input = ruleInputSchema.extend({ data: z.record(z.string(), z.unknown()).optional() }).parse(await body(c));
     const { data, ...rule } = input;
     return c.json(await dryRunRule(ws, rule, data));
   });
@@ -280,7 +280,7 @@ export function emailContentRoutes(app: App, deps: Deps) {
     const { ws, id } = c.req.param();
     const { user } = await requireEmail(c, deps, ws, "email:automate");
     await limit(deps.coord, `rl:email:preview:${user.id}`, LIMITS.emailPreview);
-    const { data } = z.object({ data: z.record(z.unknown()).optional() }).parse(await body(c));
+    const { data } = z.object({ data: z.record(z.string(), z.unknown()).optional() }).parse(await body(c));
     const rule = await getRule(ws, id);
     return c.json(await dryRunSavedRule(ws, rule, data));
   });

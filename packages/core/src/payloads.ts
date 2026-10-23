@@ -8,13 +8,13 @@ import type { z } from "zod";
 import { logger } from "./logger.js";
 
 /**
- * Where a payload didn't fit, e.g. `line_items.0.price: Expected string, received object`. Paths
+ * Where a payload didn't fit, e.g. `line_items.0.price: Invalid input: expected string, received object`. Paths
  * and Zod's messages only, never the values: a payload can carry a customer's details.
  */
 function problems(error: z.ZodError): string[] {
   return error.issues.slice(0, 5).map((i) => {
     // A union's own message is "Invalid input"; its first alternative's says what was wrong.
-    const message = (i.code === "invalid_union" ? i.unionErrors[0]?.issues[0]?.message : undefined) ?? i.message;
+    const message = (i.code === "invalid_union" ? i.errors[0]?.[0]?.message : undefined) ?? i.message;
     return `${i.path.join(".") || "(payload)"}: ${message}`;
   });
 }
