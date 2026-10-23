@@ -176,19 +176,29 @@ Detail panels load on demand (`components/dashboard/TopicDetail.tsx`): keep code
 needs out of the page's first load.
 
 **Landing page motion.** On integrated graphics the page drops frames on GPU work, not JavaScript,
-so every effect has to be cheap for the GPU process:
+so every effect has to be cheap for the GPU process. Many laptops also refresh at 120–144 Hz, which
+leaves 7–8 ms per frame:
 
+- Nothing may make the browser scroll on the main thread: no `background-attachment: fixed` (the
+  app-wide washes sit on a fixed `body::before` layer instead) and no non-passive wheel or touch
+  listeners. A fixed background made every scroll frame repaint the whole window.
 - Anything whose transform or opacity follows the scroll gets its own layer (`lp-layer`), so the
   GPU moves it instead of the browser repainting the area around it. Avoid animating `filter`,
   `backdrop-filter`, `mask-image`, `border-radius`, `clip-path` or colours on large elements:
-  each frame of those is a repaint.
+  each frame of those is a repaint. No `backdrop-filter` on the fixed nav: what scrolls under it
+  changes on every frame, so it was re-blurred on every frame.
 - Particles go through `components/landing/shared/particles.ts`: one batched WebGL draw per frame
   (2D fallback included), set up in idle time after the intro. Don't stamp hundreds of shapes with
-  the 2D canvas API.
-- Ambient loops are composited CSS animations (`lp-loop`, paused off screen by `usePauseWhenHidden`);
-  no SVG `stroke-dashoffset`/SMIL loops and no motion `repeat: Infinity` on unpromoted elements.
-- Wheel scrolling is eased by `hooks/useSmoothScroll.ts` (Lenis), so scroll-driven scenes follow the
-  scroll directly: don't add `useSpring` on top of scroll progress.
+  the 2D canvas API. `hooks/useCanvasLoop.ts` draws at most every 9.5 ms (every other frame on a
+  120–144 Hz screen); hide a canvas layer while it has nothing on it.
+- Ambient loops are composited CSS animations (`lp-loop`, paused off screen by `usePauseWhenHidden`),
+  one animation per moving element: while the page draws frames for anything else, Chrome updates
+  the style of every running animation on each of them. No SVG `stroke-dashoffset`/SMIL loops, no
+  `offset-path` (it runs on the main thread: sample the path into transform keyframes, as
+  `HeroFlows` does) and no motion `repeat: Infinity` (it runs in JavaScript on every frame).
+- Wheel scrolling is eased by `hooks/useSmoothScroll.ts` (Lenis) on 60 Hz-class screens only; faster
+  screens keep the browser's own smooth scrolling, which doesn't wait for the main thread. Either
+  way scroll-driven scenes follow the scroll directly: don't add `useSpring` on top of scroll progress.
 
 ## Configuration
 
