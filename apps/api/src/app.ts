@@ -181,13 +181,18 @@ export function buildApp(deps: Deps): App {
    * Ready to serve: both database connections (the owner role, and `app_rls`, which every tenant
    * read uses) and the coordinator answer. Each probe is bounded, so a stalled tunnel makes this
    * say "not ready" in seconds instead of hanging, and a failed probe is logged with its reason.
+   * The tenant connection must also be one row-level security binds: a superuser or a BYPASSRLS
+   * role there would answer every query, for every workspace.
    */
   app.get("/readyz", async (c) => {
     const [system, tenant, coord] = await Promise.all([
       deps.dbHealthy
         ? deps.dbHealthy().then((up): ProbeResult => (up ? { ok: true } : { ok: false, error: "database health check failed" }))
         : probeDb(() => systemDb.$queryRaw`SELECT 1`),
-      probeDb(() => tenantDb.$queryRaw`SELECT 1`),
+      probeDb(async () => {
+        const [role] = await tenantDb.$queryRaw<Array<{ bypasses: boolean }>>`SELECT (rolsuper OR rolbypassrls) AS bypasses FROM pg_roles WHERE rolname = current_user`;
+        if (!role || role.bypasses) throw new Error("the tenant connection's role bypasses row-level security");
+      }),
       deps.coord.ping().then(
         (up): ProbeResult => (up ? { ok: true } : { ok: false, error: "coordinator did not answer" }),
         (error: unknown): ProbeResult => ({ ok: false, error }),

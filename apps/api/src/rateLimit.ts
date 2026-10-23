@@ -202,6 +202,12 @@ export const LIMITS = {
    * which webhooks are exempt from.
    */
   waUnsignedIp: { max: 300, windowSec: 60 },
+  /**
+   * Password resets tried with one address's code, per address, whichever IPs they come from
+   * (auth.ts, POST /auth/password/reset): codeVerifyIp alone lets guesses spread over many IPs,
+   * leaving Cognito's own lockout as the only guard. As many as claimVerifyEmail allows.
+   */
+  resetVerifyEmail: { max: 5, windowSec: 3600 },
 } as const satisfies Record<string, Limit>;
 
 /** Fixed-window limiter. Throws 429 once more than `max` hits occur within `windowSec`. */

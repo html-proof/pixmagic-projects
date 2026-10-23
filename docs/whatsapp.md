@@ -93,7 +93,10 @@ Analytics still store no customer personal data. WhatsApp, once connected, keeps
   text-message marketing consent.
 - The category Meta actually gave a template decides which rule applies, not the category bizinsights asked for.
 - **STOP** (and similar words) stops everything; the marketing templates' **Stop promotions** button and Meta's
-  `user_preferences` webhook stop marketing only. Merchants can record an opt-out given another way.
+  `user_preferences` webhook stop marketing only. Merchants can record an opt-out given another way
+  (`POST …/whatsapp/contacts/opt-out`): it stops everything and only the customer's START undoes it, so it
+  needs the store's managers (`stores:manage`) with "View contact information", as for SMS; a shared-link
+  session or an API key can't.
 
 #### The `whatsapp_opt_in` cart attribute
 

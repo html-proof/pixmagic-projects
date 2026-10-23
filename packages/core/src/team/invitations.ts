@@ -21,7 +21,9 @@ import { teamInvitationEmail, teamInvitationUrl } from "./email.js";
  * the shared dashboard, on any device, until the invitation's end date: 60 days unless the inviter
  * chose less, extended only when an owner or admin renews it. The access it gives ends then too
  * (memberships.access_expires_at). Revoking or removing the member ends both at once. A resend sends
- * the same link again; "Replace link" issues a new one and the old one stops working.
+ * the same link again; "Replace link" issues a new one and the old one stops working. An owner or
+ * admin who leaves, or no longer manages the team, takes no working link along (retireLinksOf).
+ * An address that already has an account isn't joined by the link alone: it accepts signed in.
  */
 
 export const INVITE_DAYS_DEFAULT = 60;
@@ -353,6 +355,43 @@ export async function replaceInvitationLink(actor: TeamActor, id: string): Promi
   });
 }
 
+/** What an owner or admin did that handed them an invitation's link (besides sending it: `invitedById`). */
+const LINK_HANDED_OVER = ["member.invitation_link_copied", "member.invitation_link_replaced", "member.invitation_resent"];
+
+/**
+ * Someone who could hand out the team's links no longer can (removed, revoked, or no longer an
+ * owner or admin): no link they may still hold keeps working. Invitations they sent that nobody
+ * has accepted are cancelled; every other one whose link they had (sent, copied, resent or
+ * replaced, from the audit log) gets a new link, the old one stops working at once (sessions
+ * already open carry on while the access lasts, as with "Replace link"). Their own invitation keeps
+ * its link: it opens only their own access. Called inside the member change's transaction, under
+ * the team lock.
+ */
+export async function retireLinksOf(tx: Tx, workspaceId: string, userId: string, now = new Date()): Promise<{ invitationsCancelled: number; linksReplaced: number }> {
+  const cancelled = await tx.invitation.updateMany({ where: { workspaceId, invitedById: userId, acceptedAt: null, revokedAt: null }, data: { revokedAt: now } });
+  const handedOver = await tx.auditLog.findMany({ where: { workspaceId, actorUserId: userId, action: { in: LINK_HANDED_OVER }, targetType: "invitation" }, select: { targetId: true } });
+  const ids = [...new Set(handedOver.map((a) => a.targetId).filter((id): id is string => !!id))];
+  const held = await tx.invitation.findMany({
+    where: {
+      workspaceId,
+      revokedAt: null,
+      AND: [{ OR: [{ invitedById: userId }, { id: { in: ids } }] }, { OR: [{ acceptedById: null }, { acceptedById: { not: userId } }] }],
+    },
+    select: { id: true },
+  });
+  for (const inv of held) {
+    const token = randomToken(32);
+    await tx.invitation.update({ where: { id: inv.id }, data: { tokenHash: sha256Hex(token), tokenSealed: sealToken(inv.id, token) } });
+  }
+  return { invitationsCancelled: cancelled.count, linksReplaced: held.length };
+}
+
+/** A member is removed: the invitations they joined from stop opening anything, even if they are invited back later (that's a new invitation). */
+export async function endLinksOfMember(tx: Tx, workspaceId: string, userId: string, now = new Date()): Promise<number> {
+  const r = await tx.invitation.updateMany({ where: { workspaceId, acceptedById: userId, revokedAt: null }, data: { revokedAt: now } });
+  return r.count;
+}
+
 /** Cancel an invitation not yet accepted: its link stops working at once. Cancelling one already cancelled is a no-op. */
 export async function revokeTeamInvitation(actor: TeamActor, id: string) {
   if (!hasFullAccess(actor.role)) throw new TeamError(403, "forbidden", "Only owners and admins can manage the team.");
@@ -531,7 +570,9 @@ export async function recordLinkOpened(inv: { id: string; workspaceId: string; e
  * keeps what they have.
  *
  * `viaLink`: accepted by opening the link itself (POST /invitations/open). The link was sent to the
- * invited address, so it stands in for a verified email.
+ * invited address, so it stands in for a verified email. Only ever for an address with no account
+ * someone signs in to: whoever holds a link may not be the person (the inviter can copy it), so an
+ * account accepts signed in as itself.
  */
 export async function acceptTeamInvitation(user: User, token: string, ip?: string, opts: { viaLink?: boolean } = {}): Promise<{ workspaceId: string; joined: boolean }> {
   const inv = await systemDb.invitation.findUnique({ where: { tokenHash: sha256Hex(token) } });

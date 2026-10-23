@@ -22,7 +22,7 @@
     "@app/worker": "workspace:*",
     "@types/node": "^24.0.0",
     "typescript": "^5.9.0",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   },
   "main": "./src/index.ts",
   "types": "./src/index.ts",

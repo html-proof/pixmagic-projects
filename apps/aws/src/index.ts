@@ -1,4 +1,3 @@
-import { timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,7 +8,7 @@ import { consume, runScheduled, seedAfterMove, seedSalesRereads, settleAllCustom
 import { configReport, logger, memoryBlobs, memoryCoord, warnHalfConfigured, withLogContext, withTimeout, type Coord, type Queues } from "@app/core";
 import { productCheck, shopifyCheckReport } from "@app/core/reports";
 import { systemDb } from "@app/db";
-import { apiDeps, apiPath } from "./app.js";
+import { apiDeps, apiPath, originCheck } from "./app.js";
 import { roleCredentials } from "./awsClient.js";
 import { consumeSqs, isSqsEvent } from "./consumer.js";
 import { costReportDeps, sendCostReport } from "./costReport.js";
@@ -141,13 +140,6 @@ function staticFiles() {
   return site;
 }
 
-function sameSecret(given: string | null, expected: string): boolean {
-  if (!given) return false;
-  const a = Buffer.from(given);
-  const b = Buffer.from(expected);
-  return a.length === b.length && timingSafeEqual(a, b);
-}
-
 type UrlEvent = { requestContext?: { domainName?: string; http?: { sourceIp?: string } } };
 
 const root = new Hono();
@@ -163,10 +155,14 @@ root.all("*", async (c) => {
   }
 
   await ensureSecrets();
-  const expected = process.env.ORIGIN_VERIFY;
-  const viaCloudFront = !!expected && sameSecret(request.headers.get(ORIGIN_VERIFY), expected);
+  const caller = originCheck(request.headers.get(ORIGIN_VERIFY), process.env.ORIGIN_VERIFY, process.env.NODE_ENV === "production");
   // Behind CloudFront, only CloudFront may call the API: that is what puts WAF in front of it.
-  if (expected && !viaCloudFront) return Response.json({ error: "forbidden" }, { status: 403 });
+  if (caller === "forbidden") return Response.json({ error: "forbidden" }, { status: 403 });
+  if (caller === "unconfigured") {
+    logger.error({}, "ORIGIN_VERIFY is missing from the app's secret: API requests refused");
+    return Response.json({ error: "unavailable" }, { status: 503 });
+  }
+  const viaCloudFront = caller === "cloudfront";
 
   const viewerHost = viaCloudFront ? request.headers.get(VIEWER_HOST) : null;
   const origin = viewerHost ? `https://${viewerHost}` : event?.requestContext?.domainName ? `https://${event.requestContext.domainName}` : null;

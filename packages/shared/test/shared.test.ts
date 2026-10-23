@@ -88,6 +88,13 @@ describe("token encryption", () => {
     expect(() => decrypt(ct, ring, "store-2")).toThrow();
   });
 
+  it("refuses a truncated authentication tag", () => {
+    const ring = parseKeyring(`1:${k1}`);
+    const [v, iv, tag, data] = encrypt("shpat_secret", ring).split(".");
+    const short = Buffer.from(tag!, "base64").subarray(0, 4).toString("base64");
+    expect(() => decrypt([v, iv, short, data].join("."), ring)).toThrow();
+  });
+
   it("supports key rotation", () => {
     const old = parseKeyring(`1:${k1}`);
     const ct = encrypt("tok", old);

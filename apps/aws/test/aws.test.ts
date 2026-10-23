@@ -1,7 +1,8 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { originCheck } from "../src/app.js";
 import { dynamoCoord } from "../src/dynamoCoord.js";
 import { loadSecrets } from "../src/secrets.js";
 import { parseHeaders, staticSite } from "../src/staticSite.js";
@@ -128,6 +129,46 @@ describe("the static UI", () => {
     expect((await get("/_next/static/chunks/a.js")).headers.get("cache-control")).toContain("immutable");
     for (const p of ["/../package.json", "/%2e%2e/secret", "/_headers"]) expect((await get(p)).status).toBe(404);
     expect(parseHeaders("/*\n  A: 1\n")).toEqual({ A: "1" });
+  });
+
+  it("enforces the pages' Content-Security-Policy: where scripts load from and what they may reach", () => {
+    const shipped = parseHeaders(readFileSync(new URL("../../web/public/_headers", import.meta.url), "utf8"));
+    // Enforced, not only reported: a report-only policy stops nothing.
+    expect(shipped["Content-Security-Policy-Report-Only"]).toBeUndefined();
+    const directives = new Map(
+      shipped["Content-Security-Policy"]!.split(";").map((d) => {
+        const [name, ...sources] = d.trim().split(/\s+/);
+        return [name!, sources] as const;
+      }),
+    );
+    expect(directives.get("default-src")).toEqual(["'self'"]);
+    for (const name of ["script-src", "connect-src", "frame-src"]) {
+      const sources = directives.get(name)!;
+      expect(sources, name).toContain("'self'");
+      // Only named hosts: no wildcard, no scheme on its own, no eval.
+      for (const s of sources) expect(s, `${name} ${s}`).not.toMatch(/^(\*|https?:|data:|blob:|'unsafe-eval')$/);
+    }
+    expect(directives.get("object-src")).toEqual(["'none'"]);
+    expect(directives.get("frame-ancestors")).toEqual(["'none'"]);
+    expect(directives.get("base-uri")).toEqual(["'self'"]);
+    expect(directives.get("form-action")).toEqual(["'self'"]);
+  });
+});
+
+describe("the function URL's origin check", () => {
+  const secret = "s3cret-origin-value-0123456789";
+  it("serves the API only to requests carrying CloudFront's secret", () => {
+    expect(originCheck(secret, secret, true)).toBe("cloudfront");
+    expect(originCheck(null, secret, true)).toBe("forbidden");
+    expect(originCheck("wrong", secret, true)).toBe("forbidden");
+    expect(originCheck(`${secret}x`, secret, true)).toBe("forbidden");
+  });
+
+  it("refuses in production when the secret is missing, instead of letting anyone around WAF", () => {
+    expect(originCheck(null, undefined, true)).toBe("unconfigured");
+    expect(originCheck("anything", "", true)).toBe("unconfigured");
+    // Locally there is no CloudFront.
+    expect(originCheck(null, undefined, false)).toBe("direct");
   });
 });
 

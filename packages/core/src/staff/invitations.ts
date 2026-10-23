@@ -1,6 +1,8 @@
 import { systemDb, withTenant, type Employee, type EmployeeInvitation } from "@app/db";
 import { randomToken, sha256Hex } from "@app/shared";
+import { staffCan } from "@app/shared/staff";
 import { env } from "../env.js";
+import { sessionAccess } from "../team/common.js";
 import { logger } from "../logger.js";
 import { audit, type Mailer } from "../notify.js";
 import { isUniqueViolation, notFound, scopedEmployee, serverNow, StaffError, type StaffActor } from "./common.js";
@@ -239,6 +241,14 @@ export async function releaseInvitation(invitationId: string) {
   await systemDb.employeeInvitation.update({ where: { id: invitationId }, data: { acceptedAt: null } });
 }
 
+/** Whether `userId` may see pay in the workspace now: an active member whose staff access has `pay:view`. */
+async function seesPay(workspaceId: string, userId: string) {
+  const m = await systemDb.membership.findUnique({ where: { workspaceId_userId: { workspaceId, userId } } });
+  if (!m) return false;
+  const eff = sessionAccess(m);
+  return eff.state === "active" && staffCan(eff.staff, "pay:view");
+}
+
 /**
  * Link the employee record to the account that accepted the invitation. One account per employee
  * record, and one employee record per account in an organization.
@@ -248,6 +258,16 @@ export async function linkEmployeeAccount(invitationId: string, userId: string) 
   if (!inv) throw notFound("That invitation");
   const e = inv.employee;
   if (e.userId && e.userId !== userId) throw new StaffError(409, "already_registered", "This employee record already has an account.");
+  // Separation of duties for pay: someone who may not see pay (an HR manager, say) never claims an
+  // employee record through an invitation they sent themselves, or the portal would show them that
+  // record's pay. Someone else sends theirs (anyone who may see pay can claim their own).
+  if (inv.createdByUserId === userId && !(await seesPay(e.workspaceId, userId))) {
+    throw new StaffError(
+      403,
+      "own_invitation",
+      "You sent this invitation yourself, and your access doesn't include pay. Ask an owner, admin or payroll manager to send it to you: whoever accepts it sees this employee's pay.",
+    );
+  }
   const other = await systemDb.employee.findFirst({ where: { workspaceId: e.workspaceId, userId, id: { not: e.id } } });
   if (other) throw new StaffError(409, "account_in_use", "That account is already linked to another employee in this organization.");
   const now = serverNow();

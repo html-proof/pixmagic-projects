@@ -94,6 +94,35 @@ export async function takeNangoSessionState(coord: Coord, nonce: string): Promis
   return raw ? (JSON.parse(raw) as NangoSessionState) : null;
 }
 
+const consentKey = (nonce: string) => `oauth:ads-nango-consent:${nonce}`;
+
+/**
+ * Which platforms a consent arriving at bizinsights' OAuth callback can be for, from what the platform
+ * sends back with it: Google names the scopes granted (`scope`), so its consent is for the Google
+ * platforms whose read-only scope it carries; Meta sends no scope. Null when it carries no authorization
+ * code (the person declined, or an error at the platform): no connection can be made from it.
+ */
+export function nangoConsentProviders(query: URLSearchParams): AdProvider[] | null {
+  if (!query.get("code")) return null;
+  const scope = query.get("scope");
+  if (scope === null) return ["meta"];
+  const granted = new Set(scope.split(/[\s,]+/).filter(Boolean));
+  return (["adsense", "google"] as const).filter((p) => granted.has(REQUIRED_AD_SCOPE[p]));
+}
+
+/**
+ * A session's consent came back through bizinsights' callback: noted once per session (false when one
+ * already did), so a started session forwards at most one consent. Its finish requires the note.
+ */
+export async function claimNangoConsent(coord: Coord, nonce: string): Promise<boolean> {
+  return coord.acquire(consentKey(nonce), NANGO_SESSION_TTL_S * 1000);
+}
+
+/** Whether a consent for this session came back through bizinsights' callback (claimNangoConsent). */
+export async function nangoConsentReturned(coord: Coord, nonce: string): Promise<boolean> {
+  return (await coord.peek(consentKey(nonce))) !== null;
+}
+
 /** The connection the browser named isn't one this session made (another session's, or someone else's). */
 export class NangoConnectionMismatchError extends Error {}
 

@@ -9,6 +9,7 @@ import {
   AdsAuthError,
   AdsRateLimitedError,
   AdsRetryableError,
+  claimNangoConsent,
   countGoogleAdsOperations,
   countingGoogleAdsFetch,
   finishNangoSignIn,
@@ -20,6 +21,8 @@ import {
   logger,
   nangoConfig,
   nangoConnectionFromSession,
+  nangoConsentProviders,
+  nangoConsentReturned,
   NangoPermissionMissingError,
   nangoProviders,
   parseNangoWebhook,
@@ -61,6 +64,12 @@ const providerSchema = z.enum(AD_PROVIDERS);
  * consent back to the starter's store.
  */
 const SESSION_COOKIE = "ads_nango_state";
+/**
+ * The sessions whose platform consent came back through bizinsights' callback in this browser, newest
+ * first (the receipt the forward leaves): a finish needs its session's. A consent given in someone
+ * else's browser is noted against that person's own session, never this one's.
+ */
+const CONSENT_COOKIE = "ads_nango_consent";
 const MAX_SESSIONS = 5;
 const sessionsOf = (cookie: string | undefined) => (cookie ?? "").split(".").filter((n) => /^[A-Za-z0-9_-]{16,64}$/.test(n));
 const cookieOpts = () => ({ path: "/", httpOnly: true, sameSite: "Lax" as const, secure: env().NODE_ENV === "production", maxAge: 30 * 60 });
@@ -136,6 +145,14 @@ export function adsNangoRoutes(app: App, deps: Deps) {
     const state = await takeNangoSessionState(deps.coord, input.nonce);
     if (!state) throw finishError("state_expired");
     if (state.userId !== user.id || state.workspaceId !== ws || state.storeId !== storeId || state.provider !== provider) throw finishError("session_mismatch", 403);
+    // The platform's consent for this session came back through the callback in this browser. Without
+    // it, the connection carrying this session's tags was made from a consent given somewhere else (the
+    // session's platform link handed to someone signed in with an open session of their own): never
+    // touched, as for a connection that isn't this session's.
+    if (!sessionsOf(getCookie(c, CONSENT_COOKIE)).includes(input.nonce) || !(await nangoConsentReturned(deps.coord, input.nonce))) {
+      logger.warn({ provider, storeId, ip: clientIp(c) }, "nango finish refused: no consent for this session came back through this browser");
+      throw finishError("state_mismatch", 403);
+    }
     let ours: boolean;
     try {
       ours = await nangoConnectionFromSession(cfg, state, input.nonce, input.connectionId);
@@ -235,23 +252,46 @@ export function adsNangoRoutes(app: App, deps: Deps) {
    * callback URL), and it goes on to Nango's, query and all (308 keeps the method). Only for a person
    * signed in here who started a Nango session in this browser that is still open: a consent given
    * anywhere else (signed out, someone else signed in, no open session of theirs) never reaches Nango, so
-   * no connection is made from it. Which of those sessions the consent is for can't be told here: the
-   * query's `state` is Nango's own, and Nango's API has no lookup for it (docs/nango.md).
+   * no connection is made from it.
+   *
+   * Which session a consent is for can't be read from it (the query's `state` is Nango's own, and Nango's
+   * API has no lookup for it), so a consent uses up one session of the platform it is for (Google names
+   * its scopes, Meta none): the newest of this person's open sessions in this browser that hasn't had one,
+   * noted for that session's finish (the receipt cookie and the coordinator). Each session forwards one
+   * consent; a consent for a platform this person has no open session for is refused. A callback without
+   * a code (declined, an error) can't make a connection: it goes on to Nango and uses nothing up.
    */
   app.get("/ads/nango/oauth-callback", async (c) => {
     const cfg = nangoConfig();
     if (!cfg) return c.json({ error: "not_configured" }, 404);
-    const states = (await Promise.all(sessionsOf(getCookie(c, SESSION_COOKIE)).map((n) => peekNangoSessionState(deps.coord, n).catch(() => null)))).filter(
-      (s): s is NonNullable<typeof s> => !!s,
-    );
+    const url = new URL(c.req.url);
+    const open = (
+      await Promise.all(sessionsOf(getCookie(c, SESSION_COOKIE)).map(async (nonce) => ({ nonce, state: await peekNangoSessionState(deps.coord, nonce).catch(() => null) })))
+    ).filter((s): s is { nonce: string; state: NonNullable<typeof s.state> } => !!s.state);
     // Not knowing who is signed in (an outage) refuses too: the person presses the button again.
-    const user = states.length ? await loadUser(c, deps).catch(() => null) : null;
-    if (!user || !states.some((s) => s.userId === user.id)) {
-      logger.warn({ ip: clientIp(c), sessions: states.length, signedIn: !!user }, "nango callback refused: no open Nango session in this browser of the person signed in");
+    const user = open.length ? await loadUser(c, deps).catch(() => null) : null;
+    const mine = user ? open.filter((s) => s.state.userId === user.id) : [];
+    const refuse = (why: string) => {
+      logger.warn({ ip: clientIp(c), sessions: open.length, signedIn: !!user }, `nango callback refused: ${why}`);
       return c.redirect(`${env().APP_URL}/settings/ads?${new URLSearchParams({ error: "state_mismatch" })}`);
+    };
+    if (!mine.length) return refuse("no open Nango session in this browser of the person signed in");
+    const platforms = nangoConsentProviders(url.searchParams);
+    if (platforms) {
+      const candidates = mine.filter((s) => platforms.includes(s.state.provider));
+      if (!candidates.length) return refuse("no open Nango session of this person for the platform the consent is for");
+      let claimed: string | null = null;
+      for (const s of candidates) {
+        // A coordinator that doesn't answer claims nothing: refused, the person presses the button again.
+        if (await claimNangoConsent(deps.coord, s.nonce).catch(() => false)) {
+          claimed = s.nonce;
+          break;
+        }
+      }
+      if (!claimed) return refuse("every matching Nango session of this person already had its consent");
+      setCookie(c, CONSENT_COOKIE, [claimed, ...sessionsOf(getCookie(c, CONSENT_COOKIE))].slice(0, MAX_SESSIONS).join("."), cookieOpts());
     }
-    const search = new URL(c.req.url).search;
-    return c.redirect(`${cfg.apiUrl.replace(/\/+$/, "")}/oauth/callback${search}`, 308);
+    return c.redirect(`${cfg.apiUrl.replace(/\/+$/, "")}/oauth/callback${url.search}`, 308);
   });
 
   /**

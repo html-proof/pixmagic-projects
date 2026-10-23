@@ -31,7 +31,7 @@ import {
   tooManyAttempts,
   type CodeChallenge,
 } from "../emailCode.js";
-import { cognitoUsernameKey, LinkRequired, notifyMethodAdded, recordAuthEvent, resolveUser, withPicture } from "../identity.js";
+import { cognitoUsernameKey, LinkRequired, notifyMethodAdded, notifyPasswordChanged, recordAuthEvent, resolveUser, withPicture } from "../identity.js";
 import { endSessions, recordFailedSignIn, recordSession } from "../devices.js";
 import { apiPath, clearSessionCookies, clearShareCookie, linkProofKey, newSession, provesAddress, readRefreshToken, readSession, retiredSessionKey, setSessionCookies, signedInRecently } from "../session.js";
 import type { App } from "../app.js";
@@ -1026,6 +1026,9 @@ export function authRoutes(app: App, deps: Deps) {
     const weak = accountPasswordProblem(input.password);
     if (weak) throw new HttpError(400, weak, "weak_password");
     if (input.password !== input.confirmPassword) throw new HttpError(400, "The two passwords don't match.", "password_mismatch");
+    // Guesses at one address's code, from however many addresses they come: the per-IP limit alone
+    // leaves a code to whoever spreads them out. Counted whether or not the address has an account.
+    await limit(deps.coord, `rl:reset:email:${sha256Hex(input.email)}`, LIMITS.resetVerifyEmail);
     // Our code for an address someone else opened an account with: the account becomes this
     // person's (resolveUser takes it over now, not at their next sign-in), with this password.
     const claimed = await redeemClaim(c, input.email, input.code, input.password);
@@ -1045,18 +1048,46 @@ export function authRoutes(app: App, deps: Deps) {
     // A new password ends every session, everywhere: whoever knew the old one is out. Other ways
     // in (a linked Google account) stay, so the answer names them: the page asks the person to
     // check them in Settings → Security, where they can be removed. Only whoever holds the code
-    // (the inbox) sees that.
-    const user = await systemDb.user.findUnique({ where: { email: input.email }, include: { identities: true } }).catch(() => null);
+    // (the inbox) sees that. A reset whose sessions couldn't be ended says so (503) rather than
+    // "done": it is how someone recovers an account another person is signed in to.
+    const user = await accountOfPasswordUser(input.email).catch((err: unknown) => {
+      logger.error({ err }, "could not find the account after a password reset");
+      throw sessionsNotEnded();
+    });
     if (user) {
-      await systemDb.user.update({ where: { id: user.id }, data: { sessionsValidAfter: new Date() } }).catch((err: unknown) => logger.error({ err }, "could not end sessions after a password reset"));
+      await systemDb.user.update({ where: { id: user.id }, data: { sessionsValidAfter: new Date() } }).catch((err: unknown) => {
+        logger.error({ err }, "could not end sessions after a password reset");
+        throw sessionsNotEnded();
+      });
       for (const id of user.identities.filter((i) => i.method === "password")) {
         await deps.auth.adminGlobalSignOut(id.username).catch((err: unknown) => logger.warn({ err }, "Cognito sign-out after a password reset failed"));
       }
+      await endSessions({ userId: user.id });
       await recordAuthEvent("password_reset", user.id, clientIp(c));
+      await notifyPasswordChanged(deps.mailer, user, "reset");
     }
     const otherMethods = [...new Set((user?.identities ?? []).filter((i) => i.method !== "password").map((i) => i.method))];
     return c.json({ ok: true, otherMethods });
   });
+
+  /**
+   * The account a password Cognito user signs in to: the one its identity is linked to, found by
+   * the Cognito user's sub. Not by users.email, which a Google sign-in can move to another address
+   * while the password user keeps this one (identity.ts). An address whose password user no account
+   * is linked to yet (an account from before Cognito) falls back to the address.
+   */
+  async function accountOfPasswordUser(email: string) {
+    const cognitoUser = await deps.auth.adminGetUser(email);
+    const linked = cognitoUser && (await systemDb.authIdentity.findUnique({ where: { provider_subject: { provider: "cognito", subject: cognitoUser.sub } }, select: { userId: true } }));
+    return systemDb.user.findUnique({ where: linked ? { id: linked.userId } : { email }, include: { identities: true } });
+  }
+
+  const sessionsNotEnded = () =>
+    new HttpError(
+      503,
+      "Your new password is set, but we couldn't sign out the devices signed in to your account. Sign in with the new password, then choose \"Sign out of all devices\" in Settings > Security.",
+      "sessions_not_ended",
+    );
 
   // ---------------- Passwordless: a code Cognito emails (when switched on) ----------------
 

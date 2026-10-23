@@ -2,7 +2,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { systemDb, type Prisma } from "@app/db";
 import { cancelScheduled, ensurePlatformWebhook, newLinkToken, waEncrypt, type FetchLike } from "@app/core";
 import { LEGACY_GRANTS, sha256Hex, signMetaBody, TEMPLATE_LIBRARY, whatsappConfigSchema } from "@app/shared";
-import { clean, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
+import { newLinkSession, signSession } from "../src/session.js";
+import { clean, createStore, createWorkspace, ORIGIN, setup, signIn, teardown, type TestCtx } from "./helpers.js";
 
 /**
  * WhatsApp routes: connecting a number, the merchant's views and actions (always scoped to their
@@ -410,6 +411,27 @@ describe("tenant isolation", () => {
     expect((await ctx.app.inject({ method: "GET", url: `${o.base}/messages`, headers: v.headers })).statusCode).toBe(403);
     expect((await ctx.app.inject({ method: "PUT", url: `${o.base}/settings`, headers: v.headers, payload: {} })).statusCode).toBe(403);
     expect((await ctx.app.inject({ method: "POST", url: `${o.base}/manual`, headers: v.headers, payload: {} })).statusCode).toBe(403);
+  });
+
+  it("only the store's managers record an opt-out: not someone who only views contacts, a shared link or an API key", async () => {
+    const o = await owner();
+    expect((await connectManual(o)).statusCode).toBe(200);
+    const optOut = (headers: Record<string, string>) => ctx.app.inject({ method: "POST", url: `${o.base}/contacts/opt-out`, headers, payload: { phone: "+919876543210" } });
+    // Sees WhatsApp and customers' contact details, changes nothing.
+    const looker = await signIn(ctx, "looker", "looker@shop.test");
+    await systemDb.membership.create({ data: { workspaceId: o.ws, userId: looker.user.id, role: "custom", permissions: ["marketing.campaigns", "customers.list", "customers.contact"] } });
+    expect((await optOut(looker.headers)).statusCode).toBe(403);
+    // The owner's own dashboard, opened from a shared link: every view, nothing that changes.
+    const shared = { cookie: `__share=${signSession(newLinkSession({ userId: o.user.id, workspaceId: o.ws }))}`, ...ORIGIN };
+    expect((await ctx.app.inject({ method: "GET", url: o.base, headers: shared })).statusCode).toBe(200);
+    expect((await optOut(shared)).statusCode).toBe(403);
+    const key = (await ctx.app.inject({ method: "POST", url: `/workspaces/${o.ws}/api-keys`, headers: o.headers, payload: { name: "BI" } })).json().secret as string;
+    expect((await optOut({ authorization: `Bearer ${key}` })).statusCode).toBe(403);
+    expect(await systemDb.whatsappContact.count()).toBe(0);
+
+    const res = await optOut(o.headers);
+    expect(res.statusCode).toBe(200);
+    expect((await systemDb.whatsappContact.findFirstOrThrow({ where: { storeId: o.store.id } })).optedOutAt).not.toBeNull();
   });
 });
 

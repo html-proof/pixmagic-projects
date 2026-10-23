@@ -74,15 +74,29 @@ function scope(): Scope {
   const s = als.getStore();
   if (s) return s;
   nodeScope ??= {
-    urls: { system: process.env.DATABASE_URL ?? "", tenant: process.env.APP_DATABASE_URL ?? process.env.DATABASE_URL },
+    urls: { system: process.env.DATABASE_URL ?? "", tenant: process.env.APP_DATABASE_URL },
   };
   return nodeScope;
+}
+
+/**
+ * The tenant role's connection string. Development and tests may run both roles on one login;
+ * production never does: there, tenant queries on the owner's login would run without row-level
+ * security and nothing would say so, so a missing APP_DATABASE_URL (APP_RLS_PASSWORD not in the
+ * environment's secret) fails every tenant query instead.
+ */
+function tenantUrl(urls: DbUrls): string {
+  if (urls.tenant) return urls.tenant;
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("APP_DATABASE_URL is not set: tenant queries would run on the owner's login, outside row-level security. Set APP_RLS_PASSWORD (infra/cdk/scripts/put-secrets.mjs).");
+  }
+  return urls.system;
 }
 
 /** The current scope's connection pool for `role`, opened on first use. */
 function connection(role: Role): Promise<Adapter> {
   const s = scope();
-  const url = role === "system" ? s.urls.system : (s.urls.tenant ?? s.urls.system);
+  const url = role === "system" ? s.urls.system : tenantUrl(s.urls);
   // A function instance serves one request at a time: three connections per role cover a
   // request's parallel queries without crowding RDS's connection limit across many instances.
   return (s[role] ??= new PrismaPg({ connectionString: url, max: 3 }).connect());

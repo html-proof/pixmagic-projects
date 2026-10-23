@@ -4,6 +4,8 @@ import { systemDb } from "@app/db";
 import { buildApp } from "../src/app.js";
 import { unconfiguredCognito } from "../src/cognito.js";
 import { signSession, readSession, REVALIDATE_MS } from "../src/session.js";
+import { CLIENT_IP_HEADER } from "../src/context.js";
+import { LIMITS } from "../src/rateLimit.js";
 import { totpCode } from "./fakeCognito.js";
 import { clean, cookiesFrom, createWorkspace, ORIGIN, setup, signIn, teardown, testBrowser, userOf, type TestCtx } from "./helpers.js";
 
@@ -346,6 +348,64 @@ describe("forgot password", () => {
     expect((await get("/me", before.headers)).statusCode).toBe(401);
     expect((await post("/auth/login", { email: "a@x.com", password: "brand-new-pass" })).statusCode).toBe(200);
     expect(await systemDb.authEvent.count({ where: { type: "password_reset" } })).toBe(1);
+  });
+
+  it("emails the account's address that the password was reset", async () => {
+    await signIn(ctx, "u1", "a@x.com");
+    await post("/auth/password/forgot", { email: "a@x.com" });
+    const sentBefore = ctx.mailer.sent.length;
+    const code = ctx.auth.code("reset", "a@x.com");
+    expect((await post("/auth/password/reset", { email: "a@x.com", code, password: "brand-new-pass", confirmPassword: "brand-new-pass" })).statusCode).toBe(200);
+    const notice = ctx.mailer.sent.slice(sentBefore);
+    expect(notice).toEqual([expect.objectContaining({ to: "a@x.com", subject: "Your bizinsights password was reset" })]);
+    expect(notice[0]!.text).toContain("http://localhost:3001/forgot-password");
+  });
+
+  it("ends the sessions of the account the password signs in to, even after a Google sign-in moved the account to another address", async () => {
+    const { headers, user } = await signIn(ctx, "u1", "a@x.com");
+    // The account's address is now another one; the password user still has the old one.
+    await systemDb.user.update({ where: { id: user.id }, data: { email: "renamed@gmail.com" } });
+    await post("/auth/password/forgot", { email: "a@x.com" });
+    const reset = await post("/auth/password/reset", { email: "a@x.com", code: ctx.auth.code("reset", "a@x.com"), password: "brand-new-pass", confirmPassword: "brand-new-pass" });
+    expect(reset.statusCode).toBe(200);
+    expect((await get("/me", headers)).statusCode).toBe(401);
+    expect(await systemDb.authEvent.count({ where: { type: "password_reset", userId: user.id } })).toBe(1);
+  });
+
+  it("says so (503), never \"done\", when the sessions can't be ended", async () => {
+    const { headers } = await signIn(ctx, "u1", "a@x.com");
+    await post("/auth/password/forgot", { email: "a@x.com" });
+    const update = vi.spyOn(systemDb.user, "update").mockRejectedValueOnce(new Error("database unreachable"));
+    try {
+      const res = await post("/auth/password/reset", { email: "a@x.com", code: ctx.auth.code("reset", "a@x.com"), password: "brand-new-pass", confirmPassword: "brand-new-pass" });
+      expect(res.statusCode).toBe(503);
+      expect(res.json().error).toBe("sessions_not_ended");
+    } finally {
+      update.mockRestore();
+    }
+    // Nothing was recorded as reset: signing out everywhere is still to do, and the page says so.
+    expect(await systemDb.authEvent.count({ where: { type: "password_reset" } })).toBe(0);
+    expect((await get("/me", headers)).statusCode).toBe(200);
+  });
+
+  it("caps guesses at one address's code, whichever IPs they come from, and answers an unknown address the same", async () => {
+    ctx.auth.addUser({ sub: "v", email: "victim@x.com" });
+    await post("/auth/password/forgot", { email: "victim@x.com" });
+    const right = ctx.auth.code("reset", "victim@x.com");
+    const wrong = right === "000000" ? "111111" : "000000";
+    const reset = (email: string, code: string, i: number) =>
+      post("/auth/password/reset", { email, code, password: "a-new-password", confirmPassword: "a-new-password" }, { [CLIENT_IP_HEADER]: `10.0.1.${i}` });
+    for (let i = 0; i < LIMITS.resetVerifyEmail.max; i++) {
+      expect((await reset("victim@x.com", wrong, i)).json().error).toBe("invalid_code");
+      expect((await reset("nobody@x.com", wrong, i)).json().error).toBe("invalid_code");
+    }
+    // Even the right code, from yet another address.
+    const capped = await reset("victim@x.com", right, 99);
+    expect(capped.statusCode).toBe(429);
+    const unknown = await reset("nobody@x.com", wrong, 99);
+    expect(unknown.statusCode).toBe(429);
+    expect(unknown.json()).toEqual(capped.json());
+    expect(ctx.auth.users.get("v")!.password).not.toBe("a-new-password");
   });
 
   it("names the account's other ways to sign in, which a new password doesn't end", async () => {
@@ -800,6 +860,7 @@ describe("account security", () => {
       post("/auth/account/password", { currentPassword, password, confirmPassword }, here.headers);
     expect((await change("not-the-password")).json().error).toBe("wrong_password");
     expect((await change(old, "short")).json().error).toBe("weak_password");
+    const sentBefore = ctx.mailer.sent.length;
     const res = await change(old);
     expect(res.statusCode).toBe(200);
     const nowHere = { cookie: cookiesFrom(res), ...ORIGIN };
@@ -807,6 +868,34 @@ describe("account security", () => {
     expect((await get("/me", there.headers)).statusCode).toBe(401);
     expect((await post("/auth/login", { email: "a@x.com", password: old })).statusCode).toBe(401);
     expect((await post("/auth/login", { email: "a@x.com", password: "a-better-password" })).statusCode).toBe(200);
+    // The account's address hears of it (only the change that went through).
+    expect(ctx.mailer.sent.slice(sentBefore)).toEqual([expect.objectContaining({ to: "a@x.com", subject: "Your bizinsights password was changed" })]);
+  });
+
+  it("tells the old address when the email changes, and signs out every other device but keeps this one", async () => {
+    const here = await signIn(ctx, "u1", "a@x.com");
+    const there = await signIn(ctx, "u1", "a@x.com");
+    const password = ctx.auth.users.get("u1")!.password!;
+    expect((await post("/auth/account/email", { email: "new@x.com", password }, here.headers)).statusCode).toBe(200);
+    const sentBefore = ctx.mailer.sent.length;
+    const done = await post("/auth/account/email/confirm", { code: ctx.auth.code("verify", "new@x.com") }, here.headers);
+    expect(done.statusCode).toBe(200);
+    // This browser carries on under its new session cookie; the old one and the other device's are refused.
+    const nowHere = { cookie: cookiesFrom(done), ...ORIGIN };
+    expect((await get("/me", nowHere)).json().user.email).toBe("new@x.com");
+    expect((await get("/me", there.headers)).statusCode).toBe(401);
+    expect((await get("/me", here.headers)).statusCode).toBe(401);
+    // Its device stays listed as signed in; the other one doesn't.
+    const devices = await systemDb.userSession.findMany({ where: { userId: here.user.id, endedAt: null } });
+    expect(devices).toHaveLength(1);
+    const session = nowHere.cookie.split("; ").find((c) => c.startsWith("__session="))!.slice("__session=".length);
+    expect(readSession(session)!.sid).toBe(devices[0]!.sid);
+    // Only the old address is told, and it sees the new one masked.
+    const notice = ctx.mailer.sent.slice(sentBefore);
+    expect(notice).toEqual([expect.objectContaining({ to: "a@x.com", subject: "The email address of your bizinsights account was changed" })]);
+    expect(notice[0]!.text).toContain("n***w@x.com");
+    expect(notice[0]!.text).not.toContain("new@x.com");
+    expect(notice[0]!.text).toContain("http://localhost:3001/support");
   });
 
   it("changes the email only after a code sent to the new address, and never onto someone else's", async () => {

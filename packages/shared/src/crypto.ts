@@ -42,7 +42,9 @@ export function decrypt(payload: string, ring: Keyring, aad = ""): string {
   }
   const key = ring.keys.get(Number(v.slice(1)));
   if (!key) throw new Error(`Unknown key version ${v}`);
-  const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(ivB64, "base64"));
+  // The full 16-byte tag only: Node would otherwise accept a truncated one (down to 4 bytes),
+  // which a forger can guess.
+  const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(ivB64, "base64"), { authTagLength: 16 });
   decipher.setAAD(Buffer.from(aad));
   decipher.setAuthTag(Buffer.from(tagB64, "base64"));
   return Buffer.concat([decipher.update(Buffer.from(dataB64, "base64")), decipher.final()]).toString("utf8");

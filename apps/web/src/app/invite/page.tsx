@@ -5,8 +5,9 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Building2, CalendarClock, ShieldCheck, UserRound } from "lucide-react";
 import type { Role } from "@app/shared/roles";
-import { actionError, api, setSharedTab } from "@/lib/api";
+import { actionError, api, ApiError, isSignedOut, setSharedTab } from "@/lib/api";
 import { landingPath } from "@/lib/access";
+import { setReturnTo } from "@/lib/returnTo";
 import { Alert } from "@/components/ui";
 import { AuthCard, AuthSubmit } from "@/components/auth/AuthCard";
 
@@ -90,7 +91,9 @@ function Shared({ preview }: { preview: Preview }) {
  * browser a view-only session for the shared workspace only, in a cookie of its own: an account
  * signed in on this browser stays signed in, untouched, in its other tabs. This tab then shows the
  * shared dashboard (setSharedTab) from the first page shared with them. The link keeps working
- * (another device, later) until its end date, unless the owner takes the access away.
+ * (another device, later) until its end date, unless the owner takes the access away. For an
+ * address that already has a bizinsights account, the link alone doesn't join it: the person
+ * accepts signed in to that account (accept).
  */
 export default function InvitePage() {
   const router = useRouter();
@@ -98,6 +101,8 @@ export default function InvitePage() {
   const [preview, setPreview] = useState<Preview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** The invited address has an account: it accepts signed in (POST /invitations/accept). */
+  const [signIn, setSignIn] = useState(false);
   const started = useRef(false);
 
   /** Into the workspace, on the first page this member may see there. */
@@ -109,6 +114,29 @@ export default function InvitePage() {
     [router],
   );
 
+  /**
+   * The invited address has an account of its own: it accepts signed in as itself, never through
+   * the link alone. Accepted at once when this browser is signed in to it; signed out, the page
+   * offers to sign in and come back here.
+   */
+  const accept = useCallback(
+    async (t: string): Promise<"accepted" | "signed_out" | "refused"> => {
+      // As the account signed in on this browser, never a shared-link session this tab had before.
+      setSharedTab(false);
+      try {
+        const r = await api<{ workspaceId: string }>("/invitations/accept", { method: "POST", body: { token: t } });
+        await goTo(r.workspaceId);
+        return "accepted";
+      } catch (e) {
+        if (isSignedOut(e)) return "signed_out";
+        // Signed in as someone else, say: its message says whose invitation it is.
+        setError(actionError(e, "accept the invitation"));
+        return "refused";
+      }
+    },
+    [goTo],
+  );
+
   const open = useCallback(
     async (t: string) => {
       setBusy(true);
@@ -118,12 +146,27 @@ export default function InvitePage() {
         setSharedTab(true);
         await goTo(r.workspaceId);
       } catch (e) {
-        setError(actionError(e, "open the shared dashboard"));
+        const code = e instanceof ApiError ? e.code : "";
+        const signedIn = code === "sign_in_required" ? await accept(t) : null;
+        if (signedIn === "accepted") return;
+        if (signedIn !== "refused") setError(actionError(e, "open the shared dashboard"));
+        setSignIn(signedIn === "signed_out" || code === "account_unverified");
         setBusy(false);
       }
     },
-    [goTo],
+    [goTo, accept],
   );
+
+  /** To sign in and back: the token waits in this tab's sessionStorage (as the layout keeps it), never in the address bar or localStorage. */
+  function signInHere() {
+    try {
+      sessionStorage.setItem("bi:invite-token", token);
+    } catch {
+      /* storage blocked: back here, the page asks to open the link from the email again */
+    }
+    setReturnTo("/invite");
+    router.push("/login");
+  }
 
   useEffect(() => {
     if (started.current) return;
@@ -167,7 +210,14 @@ export default function InvitePage() {
     <AuthCard title={`${preview.workspace}`} subtitle="A business dashboard shared with you">
       <Shared preview={preview} />
       {preview.message && <blockquote className="whitespace-pre-wrap rounded-lg border-l-4 border-accent bg-accent/[0.06] px-4 py-3 text-sm">{preview.message}</blockquote>}
-      {error ? (
+      {error && signIn ? (
+        <>
+          <Alert kind="info">{error}</Alert>
+          <AuthSubmit type="button" onClick={signInHere} data-testid="invite-sign-in">
+            Sign in to accept
+          </AuthSubmit>
+        </>
+      ) : error ? (
         <>
           <Alert>{error}</Alert>
           <AuthSubmit type="button" onClick={() => void open(token)} busy={busy} busyLabel="Opening…">
@@ -179,7 +229,7 @@ export default function InvitePage() {
           Opening the dashboard…
         </p>
       )}
-      <p className="text-xs text-muted">No account or password needed, and it&apos;s view-only. If you weren&apos;t expecting this, you can close this page.</p>
+      {!signIn && <p className="text-xs text-muted">No account or password needed, and it&apos;s view-only. If you weren&apos;t expecting this, you can close this page.</p>}
     </AuthCard>
   );
 }

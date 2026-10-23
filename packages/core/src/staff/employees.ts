@@ -231,6 +231,15 @@ async function departmentFor(tx: Tx, ws: string, input: Partial<EmployeeInput>):
  * anything but what they already are (or, for a new employee, the organization's defaults) needs
  * `pay:manage`. HR managers have `staff:manage` only: they edit people, not pay.
  */
+/** Whether the employee has a pay rate or a payroll item: something the portal would show them about pay. */
+async function hasPayRecords(tx: Tx, workspaceId: string, employeeId: string) {
+  const [rates, items] = await Promise.all([
+    tx.payRate.count({ where: { workspaceId, employeeId } }),
+    tx.payrollItem.count({ where: { workspaceId, employeeId } }),
+  ]);
+  return rates + items > 0;
+}
+
 function assertPayFieldsAllowed(
   actor: StaffActor,
   input: Partial<Pick<EmployeeInput, "overtimePolicyId" | "breakPolicyId" | "currency">>,
@@ -329,6 +338,11 @@ export async function updateEmployee(actor: StaffActor, id: string, patch: Parti
     await validateRefs(tx, ws, patch);
     if (patch.email && patch.email.toLowerCase() !== e.email && e.userId) {
       throw new StaffError(409, "email_locked", "This employee already has an account. They sign in with the email address they registered with.");
+    }
+    // Whoever signs up with the address sees this record's pay in the portal, so pointing a record
+    // that has pay at another inbox (one's own, say) is for those who may see that pay.
+    if (patch.email !== undefined && patch.email.trim().toLowerCase() !== e.email && !staffCan(actor.access, "pay:view") && (await hasPayRecords(tx, ws, id))) {
+      throw new StaffError(403, "pay_restricted", "This employee has pay records, so only payroll managers, admins and owners can change their email address: whoever signs up with it sees their pay.");
     }
     if (patch.currency && patch.currency !== e.currency) {
       const paid = await tx.payrollItem.count({ where: { employeeId: id, workspaceId: ws } });
