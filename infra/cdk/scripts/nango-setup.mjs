@@ -23,7 +23,8 @@
 // (<APP_URL>/api/webhooks/nango) can only be set in Nango's dashboard: see docs/nango.md.
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { fileURLToPath, URLSearchParams } from "node:url";
+import { fileURLToPath } from "node:url";
+import { metaAcceptsSecret } from "./meta-secret.mjs";
 
 const args = process.argv.slice(2);
 const opt = (name) => {
@@ -82,22 +83,6 @@ export function differences(def, data, want) {
   return { problems, fatal };
 }
 
-/**
- * Whether Meta takes `appSecret` as the secret of app `appId`: an app token (client_credentials) comes
- * back. Null when Meta didn't answer. The secret goes to Meta only, in the request body.
- */
-export async function metaAcceptsSecret(appId, appSecret, version = "v26.0", fetchImpl = fetch) {
-  const res = await fetchImpl(`https://graph.facebook.com/${version}/oauth/access_token`, {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ client_id: appId, client_secret: appSecret, grant_type: "client_credentials" }).toString(),
-  }).catch(() => null);
-  if (!res) return null;
-  const json = await res.json().catch(() => ({}));
-  if (res.ok && typeof json.access_token === "string") return true;
-  return res.status >= 500 ? null : false;
-}
-
 async function nango(key, method, path, body) {
   const res = await fetch(`https://api.nango.dev${path}`, {
     method,
@@ -125,12 +110,12 @@ async function main() {
     // The Meta secret every call is signed with must be the app's own: never copied to Nango when Meta refuses it.
     let secretRefused = false;
     if (p === "meta") {
-      const accepted = await metaAcceptsSecret(want.clientId, want.clientSecret, s.META_API_VERSION || undefined);
+      const { accepted, detail } = await metaAcceptsSecret(want.clientId, want.clientSecret, s.META_API_VERSION || undefined);
       secretRefused = accepted === false;
       console.log(
         accepted === true ? `  Meta accepts META_APP_SECRET for app ${want.clientId}`
-        : accepted === false ? `  Meta REFUSES META_APP_SECRET for app ${want.clientId}: copy the App secret (developers.facebook.com → App settings → Basic), run node infra/cdk/scripts/put-secrets.mjs --env ${envName} --set META_APP_SECRET, restart the functions, then run this with --apply`
-        : `  Meta didn't answer whether META_APP_SECRET is app ${want.clientId}'s: run this again`,
+        : accepted === false ? `  Meta REFUSES META_APP_SECRET for app ${want.clientId} (${detail}): copy the App secret (developers.facebook.com → App settings → Basic), run node infra/cdk/scripts/put-secrets.mjs --env ${envName} --set META_APP_SECRET, restart the functions, then run this with --apply`
+        : `  Meta didn't answer whether META_APP_SECRET is app ${want.clientId}'s (${detail}): run this again`,
       );
     }
     const got = await nango(secret.NANGO_SECRET_KEY, "GET", `/integrations/${def.key}?include=credentials`);

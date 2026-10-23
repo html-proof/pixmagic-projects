@@ -157,8 +157,9 @@ the proof bizinsights signs each call with. First seen 2026-10-23 20:41Z (it sho
 accept the sign-in" then). `node infra/cdk/scripts/nango-setup.mjs --check` says which side is wrong: "Meta
 accepts META_APP_SECRET" plus "client secret isn't the one in the app secret" means Nango's copy is stale, and
 `--apply` copies AWS's to Nango. "Meta REFUSES META_APP_SECRET" means AWS's copy is wrong: store the App secret
-from developers.facebook.com → App settings → Basic with `put-secrets.mjs --set META_APP_SECRET`, restart the
-functions, then run `--apply`.
+from developers.facebook.com → App settings → Basic with `put-secrets.mjs --set META_APP_SECRET` (it asks Meta
+first and refuses a secret that isn't the app's), restart the functions, then run `--apply`. On 2026-10-24 the
+check said "Meta REFUSES META_APP_SECRET ... Error validating client secret." with Nango holding the same value.
 
 ## A merchant connecting an account
 
