@@ -35,6 +35,7 @@ import {
   MODERATION_REASONS,
   normalizePhone,
   OCCASIONS,
+  partialUpdate,
   ruleConflicts,
   templateMappingSchema,
 } from "@app/shared";
@@ -72,7 +73,7 @@ const campaignInput = z.object({
   mediaUrl: httpsUrl.nullable().optional(),
   linkUrl: httpsUrl.nullable().optional(),
   discountCode: z.string().trim().max(40).regex(/^[A-Za-z0-9_-]*$/, "letters, numbers, - and _ only").nullable().optional(),
-  audience: audienceSchema.default({}),
+  audience: audienceSchema.prefault({}),
   startAt: z.coerce.date(),
   endAt: z.coerce.date().nullable().optional(),
 });
@@ -443,7 +444,7 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
     await waStore(ws, storeId);
     // Counts up to every contact of the store: an API key (read access) mustn't be able to loop it.
     await limit(deps.coord, `rl:wa-estimate:${storeId}`, LIMITS.waEstimate);
-    const { audience } = z.object({ audience: audienceSchema.default({}) }).parse(await body(c));
+    const { audience } = z.object({ audience: audienceSchema.prefault({}) }).parse(await body(c));
     const settings = await systemDb.whatsappSettings.findUnique({ where: { storeId } });
     return c.json({ recipients: await estimateAudience(storeId, audience, parseConfig(settings?.config)) });
   });
@@ -503,7 +504,7 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
     await waStore(ws, storeId);
     const camp = await ownCampaign(ws, storeId, id);
     if (!campaignEditable(camp.status)) throw new HttpError(409, "Only a campaign that hasn't started can be edited.", "not_editable");
-    const input = campaignInput.partial().parse(await body(c));
+    const input = partialUpdate(campaignInput).parse(await body(c));
     const startAt = input.startAt ?? camp.startAt;
     const endAt = input.endAt === undefined ? camp.endAt : input.endAt;
     if (endAt && endAt <= startAt) throw new HttpError(400, "The end must be after the start.", "invalid_dates");
@@ -632,7 +633,7 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
     const rule = await withTenant(ws, (tx) => tx.whatsappAutomationRule.findFirst({ where: { id, storeId, workspaceId: ws } }));
     if (!rule) throw new HttpError(404, "Not found", "not_found");
     const current = parseRule(rule);
-    const patch = ruleInput.partial().parse(await body(c));
+    const patch = partialUpdate(ruleInput).parse(await body(c));
     const merged = ruleInput.parse({
       name: patch.name ?? rule.name,
       enabled: patch.enabled ?? rule.enabled,

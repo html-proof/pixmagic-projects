@@ -168,7 +168,7 @@ describe("the app and GDPR topics", () => {
     expect(parsed(scopesUpdateSchema, { current: ["read_orders"], previous: [] }).current).toEqual(["read_orders"]);
     expect(parsed(scopesUpdateSchema, { current: "read_orders,read_products" }).current).toBe("read_orders,read_products");
     expect(parseShopify(scopesUpdateSchema, { previous: ["read_orders"] }, "app/scopes_update")).toBeNull();
-    expect(warnings[0]!.problems).toEqual(["current: Required"]);
+    expect(warnings[0]!.problems).toEqual(["current: Invalid input: expected array, received undefined"]);
   });
 
   it("app_subscriptions/update names the charge", () => {
@@ -182,7 +182,7 @@ describe("the app and GDPR topics", () => {
     parsed(customersRedactSchema, { customer: null, orders_to_redact: [1] });
     expect(parseShopify(customersRedactSchema, { customer: {}, orders_to_redact: [] }, "customers/redact")).toBeNull();
     expect(parseShopify(customersRedactSchema, { customer: { id: 7 }, orders_to_redact: "1,2" }, "customers/redact")).toBeNull();
-    expect(warnings.map((w) => w.problems)).toEqual([["(payload): names no customer and no orders"], ["orders_to_redact: Expected array, received string"]]);
+    expect(warnings.map((w) => w.problems)).toEqual([["(payload): names no customer and no orders"], ["orders_to_redact: Invalid input: expected array, received string"]]);
   });
 
   it("customers/data_request", () => {
@@ -209,7 +209,7 @@ describe("Meta's WhatsApp webhooks", () => {
     const list = [status, { ...status, id: "" }, { status: "read", recipient_id: "919876543210" }, { ...status, id: "wamid.2" }];
     expect(parseMetaList(metaStatusSchema, list, "status", { wabaId: "1" }).map((s) => s.id)).toEqual(["wamid.1", "wamid.2"]);
     expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toMatchObject({ payload: "status", wabaId: "1", skipped: 2, of: 4, problems: ["id: String must contain at least 1 character(s)"] });
+    expect(warnings[0]).toMatchObject({ payload: "status", wabaId: "1", skipped: 2, of: 4, problems: ["id: Too small: expected string to have >=1 characters"] });
     expect(warnings[0]!.msg).toBe("Meta payload doesn't fit its schema; skipped");
     expect(JSON.stringify(warnings)).not.toContain("919876543210");
   });

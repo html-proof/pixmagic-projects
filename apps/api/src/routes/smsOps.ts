@@ -162,7 +162,7 @@ export function smsOpsRoutes(app: App, deps: Deps) {
     await requireWorkspace(c, deps, ws, SMS_READ);
     await smsStore(ws, storeId);
     await limit(deps.coord, `rl:sms-estimate:${storeId}`, LIMITS.smsEstimate);
-    const input = z.object({ filter: z.unknown() }).parse(await body(c));
+    const input = z.object({ filter: z.unknown().optional() }).parse(await body(c));
     const filter = segmentFilterSchema.parse(input.filter ?? {});
     return c.json({ ...(await estimateSegment(storeId, filter)), description: describeSegment(filter) });
   });
@@ -171,7 +171,7 @@ export function smsOpsRoutes(app: App, deps: Deps) {
     const { ws, storeId } = c.req.param();
     const a = await requireWorkspace(c, deps, ws, SMS_MANAGE);
     const store = await smsStore(ws, storeId);
-    const input = z.object({ name: z.string().max(80), filter: z.unknown() }).parse(await body(c));
+    const input = z.object({ name: z.string().max(80), filter: z.unknown().optional() }).parse(await body(c));
     const s = await saveSegment(store, null, input.name, input.filter, actorOf(c, a));
     return c.json({ segment: { id: s.id, name: s.name } }, 201);
   });
@@ -181,7 +181,7 @@ export function smsOpsRoutes(app: App, deps: Deps) {
     const a = await requireWorkspace(c, deps, ws, SMS_MANAGE);
     const store = await smsStore(ws, storeId);
     await segmentOf(storeId, id);
-    const input = z.object({ name: z.string().max(80), filter: z.unknown() }).parse(await body(c));
+    const input = z.object({ name: z.string().max(80), filter: z.unknown().optional() }).parse(await body(c));
     const s = await saveSegment(store, id, input.name, input.filter, actorOf(c, a));
     return c.json({ segment: { id: s.id, name: s.name } });
   });
@@ -222,7 +222,7 @@ export function smsOpsRoutes(app: App, deps: Deps) {
     await requireWorkspace(c, deps, ws, SMS_READ);
     const store = await smsStore(ws, storeId);
     await limit(deps.coord, `rl:sms-estimate:${storeId}`, LIMITS.smsEstimate);
-    const input = z.object({ templateId: z.string().min(1).max(40), segmentId: z.string().max(40).nullish(), filter: z.unknown() }).parse(await body(c));
+    const input = z.object({ templateId: z.string().min(1).max(40), segmentId: z.string().max(40).nullish(), filter: z.unknown().optional() }).parse(await body(c));
     return c.json(await estimateCampaign(store, { templateId: input.templateId, segmentId: input.segmentId ?? null, filter: (input.filter ?? {}) as never }));
   });
 

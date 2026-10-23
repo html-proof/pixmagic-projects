@@ -240,7 +240,7 @@ export const templateMappingSchema = z.object({
   /** One entry per dynamic URL button, in button order. */
   buttons: z.array(z.enum(PARAM_SOURCES)).max(2).default([]),
   /** Values for `custom_text`, by position ("body.2", "header", "button.0"). */
-  fixed: z.record(z.string().max(200)).default({}),
+  fixed: z.record(z.string(), z.string().max(200)).default({}),
 });
 export type TemplateMapping = z.infer<typeof templateMappingSchema>;
 
@@ -513,7 +513,7 @@ export const kindSettingSchema = z.object({
   enabled: z.boolean().default(false),
   templateName: z.string().max(512).nullable().default(null),
   language: z.string().max(15).default("en"),
-  mapping: templateMappingSchema.default({}),
+  mapping: templateMappingSchema.prefault({}),
 });
 export type KindSetting = z.infer<typeof kindSettingSchema>;
 
@@ -532,7 +532,7 @@ export type TransactionalBasis = (typeof TRANSACTIONAL_BASES)[number];
 const hour = z.number().int().min(0).max(23);
 
 export const whatsappConfigSchema = z.object({
-  notifications: z.record(z.enum(NOTIFICATION_KINDS), kindSettingSchema).default({}),
+  notifications: z.partialRecord(z.enum(NOTIFICATION_KINDS), kindSettingSchema).default({}),
   transactionalBasis: z.enum(TRANSACTIONAL_BASES).default("none"),
   /** Count Shopify's SMS marketing consent as consent to WhatsApp marketing (only if the store's wording covers WhatsApp). */
   smsConsentCountsForMarketing: z.boolean().default(false),
@@ -855,12 +855,12 @@ export const conditionSchema = z.object({
 export type Condition = z.infer<typeof conditionSchema>;
 
 export const automationActionSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("send_template"), templateName: z.string().min(1).max(512), language: z.string().max(15).default("en"), mapping: templateMappingSchema.default({}) }),
+  z.object({ type: z.literal("send_template"), templateName: z.string().min(1).max(512), language: z.string().max(15).default("en"), mapping: templateMappingSchema.prefault({}) }),
   z.object({
     type: z.literal("schedule_reminder"),
     templateName: z.string().min(1).max(512),
     language: z.string().max(15).default("en"),
-    mapping: templateMappingSchema.default({}),
+    mapping: templateMappingSchema.prefault({}),
     delayMinutes: z.number().int().min(5).max(43_200),
   }),
   z.object({ type: z.literal("cancel_pending"), kinds: z.array(z.enum([...NOTIFICATION_KINDS, "automation"] as const)).min(1).max(20) }),

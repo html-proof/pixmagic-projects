@@ -431,7 +431,7 @@ export const graphqlOrderSchema = obj({
    * journeySummarySchema): a journey that doesn't fit costs the visit, not the whole order.
    * Absent when the query didn't ask for it, which is told apart from null.
    */
-  customerJourneySummary: z.unknown(),
+  customerJourneySummary: z.unknown().optional(),
   subtotalPriceSet: moneyBag,
   totalDiscountsSet: moneyBag,
   totalTaxSet: moneyBag,
