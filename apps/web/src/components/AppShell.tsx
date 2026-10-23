@@ -243,6 +243,23 @@ function initialsOf(name: string | null, email: string): string {
   return email.slice(0, 2).toUpperCase();
 }
 
+/**
+ * The account menu's button face: the Google profile picture when the account has one (sent
+ * without a Referer, so Google isn't told which page shows it), else the initials, which also
+ * stand in if the picture doesn't load.
+ */
+function AccountAvatar({ user }: { user: { displayName: string | null; email: string; avatarUrl?: string | null } }) {
+  const [broken, setBroken] = useState(false);
+  if (user.avatarUrl && !broken) {
+    return <img src={user.avatarUrl} alt="" aria-hidden width={36} height={36} referrerPolicy="no-referrer" className="h-9 w-9 rounded-full object-cover" onError={() => setBroken(true)} />;
+  }
+  return (
+    <span aria-hidden className="flex h-9 w-9 items-center justify-center rounded-full bg-accent text-sm font-semibold text-accent-ink">
+      {initialsOf(user.displayName, user.email)}
+    </span>
+  );
+}
+
 /** Closes a popover on a click outside it or on Escape. */
 function useDismiss(open: boolean, close: () => void) {
   const ref = useRef<HTMLDivElement>(null);
@@ -300,9 +317,7 @@ function AccountMenu() {
         aria-label="Account menu"
         className="flex items-center gap-1 rounded-full p-0.5 pr-1 transition-colors hover:bg-text/[0.05]"
       >
-        <span aria-hidden className="flex h-9 w-9 items-center justify-center rounded-full bg-accent text-sm font-semibold text-accent-ink">
-          {initialsOf(me.user.displayName, me.user.email)}
-        </span>
+        <AccountAvatar user={me.user} />
         <ChevronDown aria-hidden className={`h-4 w-4 text-muted transition-transform ${open ? "rotate-180" : ""}`} />
       </button>
       {open && (

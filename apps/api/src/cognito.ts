@@ -64,6 +64,8 @@ export interface IdentityClaims {
   email: string | null;
   emailVerified: boolean;
   name: string | null;
+  /** The profile picture's address (Google's, mapped to `picture` in infra/aws/cognito.yaml): https only. */
+  picture?: string | null;
   method: SignInMethod;
   /** When the person last proved who they are (seconds). */
   authTime: number;
@@ -205,6 +207,16 @@ function attr(attrs: Array<{ Name: string; Value: string }> | undefined, name: s
 
 /** Cognito writes some booleans as strings, notably email_verified for federated users. */
 const truthy = (v: unknown) => v === true || v === "true";
+
+/** A picture address fit to show as an image: https, and no longer than Cognito keeps an attribute. */
+export function pictureUrl(v: unknown): string | null {
+  if (typeof v !== "string" || v.length > 2048) return null;
+  try {
+    return new URL(v).protocol === "https:" ? v : null;
+  } catch {
+    return null;
+  }
+}
 
 function methodOf(claims: JWTPayload & { identities?: unknown }): SignInMethod {
   const ids = Array.isArray(claims.identities) ? (claims.identities as Array<{ providerName?: string; providerType?: string }>) : [];
@@ -414,6 +426,7 @@ export function cognitoAuth(cfg: CognitoConfig, fetchImpl: FetchLike = fetch): C
         email: typeof payload.email === "string" ? payload.email.toLowerCase() : null,
         emailVerified: truthy(payload.email_verified),
         name: typeof payload.name === "string" && payload.name ? payload.name : given || null,
+        picture: pictureUrl(payload.picture),
         method: methodOf(payload),
         authTime: Number(payload.auth_time ?? payload.iat ?? 0),
       };

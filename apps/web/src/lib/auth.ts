@@ -15,6 +15,8 @@ export interface SignedInUser {
   email: string;
   emailVerified: boolean;
   displayName: string | null;
+  /** The profile picture from Google (https), when the account has one. */
+  avatarUrl?: string | null;
 }
 
 /** Which "Continue with ..." options this deployment offers, and which code steps it asks for. */
@@ -221,10 +223,21 @@ export function linkErrorMessage(code: string): string {
 
 /**
  * /auth/callback hands back what the provider (via Cognito) put in its address. A sign-in answers
- * with the user; a link from Settings with `linked` and where to go back to.
+ * with the user (a new Google account's is created there and then); a link from Settings with
+ * `linked` and where to go back to; a Google account whose address is an existing account's with
+ * `next: "link"`: the API holds it until this browser signs in to that account (pendingGoogleLink).
  */
 export const finishOAuth = (params: { state: string; code?: string; error?: string; error_description?: string }) =>
-  api<{ user: SignedInUser; redirect: string | null } | { linked: "google"; redirect: string }>("/auth/oauth/callback", { method: "POST", body: params });
+  api<{ user: SignedInUser; redirect: string | null } | { linked: "google"; redirect: string } | { next: "link"; provider: "google"; email: string }>("/auth/oauth/callback", {
+    method: "POST",
+    body: params,
+  });
+
+/** A Google account held in this browser for the existing account with its address, which signing in to that account links. */
+export const pendingGoogleLink = () => api<{ pending: false } | { pending: true; provider: "google"; email: string }>("/auth/pending-link");
+
+/** "Don't link Google": the held Google account is let go, and nothing is linked. */
+export const cancelGoogleLink = () => api<{ ok: true }>("/auth/pending-link", { method: "DELETE" });
 
 /**
  * Sign this browser out. After Google the user pool's own session in this browser is
