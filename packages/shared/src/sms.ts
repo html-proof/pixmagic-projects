@@ -943,7 +943,7 @@ export const ruleConditionSchema = z.discriminatedUnion("field", [
   z.object({ field: z.literal("customer_orders"), op: z.enum(["gte", "lte"]), value: z.number().int().min(0).max(1e6) }),
   z.object({ field: z.literal("customer_spent"), op: z.enum(["gte", "lte"]), value: z.number().min(0).max(1e9) }),
   z.object({ field: z.literal("days_since_last_order"), op: z.enum(["gte", "lte"]), value: z.number().int().min(0).max(3650) }),
-  z.object({ field: z.literal("country"), op: z.enum(["in", "not_in"]), value: z.array(z.string().regex(/^[A-Z]{2}$/)).min(1).max(50) }),
+  z.object({ field: z.literal("country"), op: z.enum(["in", "not_in"]), value: z.array(z.string().regex(/^[A-Z]{2}$/, "Use two-letter country codes, like AU or NZ.")).min(1).max(50) }),
   z.object({ field: z.literal("product"), op: z.enum(["contains"]), value: z.string().trim().min(1).max(100) }),
   z.object({ field: z.literal("tag"), op: z.enum(["has", "lacks"]), value: z.string().trim().min(1).max(60) }),
 ]);
@@ -1195,7 +1195,7 @@ export const smsSenderSchema = z.object({
     .trim()
     .min(1)
     .max(256)
-    .regex(/^[A-Za-z0-9_:/+-]+$/),
+    .regex(/^[A-Za-z0-9_:/+-]+$/, "Paste it exactly as AWS shows it, with no spaces."),
   /** Destination countries this sender may reach. */
   countries: z
     .array(z.string().regex(/^[A-Z]{2}$/))

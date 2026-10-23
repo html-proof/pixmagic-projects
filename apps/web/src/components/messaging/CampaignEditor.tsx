@@ -2,6 +2,7 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { DEFAULT_ATTRIBUTION_DAYS, smsCampaignSchema, templateVariables } from "@app/shared/sms";
+import { formIssue } from "@app/shared/zod";
 import { useToast } from "@/components/AppUi";
 import { Alert } from "@/components/ui";
 import { api, fmtNum } from "@/lib/api";
@@ -44,7 +45,7 @@ function parseDraft(d: Draft) {
     filter: d.audience === "filter" && f.ok ? f.filter : { countries: [] },
     discountCode: d.discountCode.trim() || null,
     attributionDays: Number(d.attributionDays),
-  });
+  }, { error: formIssue });
   if (r.success) return { ok: true as const, input: r.data };
   const LABEL: Record<string, string> = { name: "Name", templateId: "Template", segmentId: "Segment", discountCode: "Discount code", attributionDays: "Attribution window" };
   return { ok: false as const, problems: r.error.issues.map((i) => `${LABEL[String(i.path[0])] ?? String(i.path[0])}: ${i.message}`) };

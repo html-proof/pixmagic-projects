@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useId, useRef, useState } from "react";
 import { describeSegment, segmentFilterSchema, type SegmentFilter } from "@app/shared/sms";
+import { formIssue } from "@app/shared/zod";
 import { api, fmtNum } from "@/lib/api";
 import { countryName, CountryPicker, smsError } from "./MessagingUi";
 import type { SegmentEstimate } from "./types";
@@ -43,7 +44,7 @@ const raw = (d: FilterDraft) => ({
 
 /** The draft as a filter, or what is wrong with it. */
 export function parseFilter(d: FilterDraft): { ok: true; filter: SegmentFilter } | { ok: false; problems: string[] } {
-  const r = segmentFilterSchema.safeParse(raw(d));
+  const r = segmentFilterSchema.safeParse(raw(d), { error: formIssue });
   if (r.success) return { ok: true, filter: r.data };
   const LABEL: Record<string, string> = { minOrders: "At least … orders", maxOrders: "At most … orders", minSpent: "Spent at least", orderedWithinDays: "Ordered in the last … days", inactiveForDays: "No order for … days", countries: "Countries" };
   return { ok: false, problems: r.error.issues.map((i) => `${LABEL[String(i.path[0])] ?? String(i.path[0])}: ${i.message}`) };

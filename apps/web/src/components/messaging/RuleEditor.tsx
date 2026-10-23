@@ -15,6 +15,7 @@ import {
   type SmsRuleInput,
   type SmsTrigger,
 } from "@app/shared/sms";
+import { formIssue } from "@app/shared/zod";
 import { ConfirmDialog, Skeleton, useToast } from "@/components/AppUi";
 import { LoadError } from "@/components/LoadError";
 import { Badge } from "@/components/dashboard/Primitives";
@@ -177,13 +178,12 @@ const PATH_LABEL: Record<string, string> = {
 
 /** The schema's complaints, said in the form's words. */
 function problemsOf(d: Draft): string[] {
-  const r = smsRuleSchema.safeParse(toInput(d));
+  const r = smsRuleSchema.safeParse(toInput(d), { error: formIssue });
   if (r.success) return [];
   return r.error.issues.map((i) => {
     const [head, index] = i.path;
     const where = head === "conditions" && typeof index === "number" ? `Condition ${index + 1}` : (PATH_LABEL[String(head)] ?? String(head));
-    const msg = i.code === "invalid_type" && i.expected === "number" ? "enter a number" : i.message;
-    return `${where}: ${msg}`;
+    return `${where}: ${i.message}`;
   });
 }
 

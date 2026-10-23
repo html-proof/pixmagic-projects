@@ -10,6 +10,7 @@ import {
   type SenderType,
   type SmsTransactionalBasis,
 } from "@app/shared/sms";
+import { formIssue } from "@app/shared/zod";
 import { ConfirmDialog, PageHeader, Skeleton, useToast } from "@/components/AppUi";
 import { LoadError } from "@/components/LoadError";
 import { Badge, type Tone } from "@/components/dashboard/Primitives";
@@ -106,7 +107,7 @@ function parse(d: Draft) {
     maxPerCustomerDay: num(d.maxPerCustomerDay),
     maxMarketingPerWeek: num(d.maxMarketingPerWeek),
     dltEntityId: d.countries.includes("IN") && d.dltEntityId.trim() ? d.dltEntityId.trim() : null,
-  });
+  }, { error: formIssue });
   if (r.success) return { ok: true as const, input: r.data };
   const LABEL: Record<string, string> = {
     senderType: "Sender type",
@@ -120,7 +121,7 @@ function parse(d: Draft) {
   };
   return {
     ok: false as const,
-    problems: r.error.issues.map((i) => `${LABEL[String(i.path[0])] ?? String(i.path[0])}: ${i.code === "invalid_type" && i.expected === "number" ? "enter a number" : i.message}`),
+    problems: r.error.issues.map((i) => `${LABEL[String(i.path[0])] ?? String(i.path[0])}: ${i.message}`),
   };
 }
 

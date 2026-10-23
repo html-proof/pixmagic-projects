@@ -274,4 +274,25 @@ describe("events and rules", () => {
     expect(ruleInputSchema.safeParse({ name: "x", eventType: "order.paid", senderIdentityId: "s", templateId: "t", delayMinutes: 50_000 }).success).toBe(false);
     expect(ingestEventSchema.safeParse({ id: "evt 1", type: "a.b" }).success).toBe(false);
   });
+
+  it("takes occurred_at in the ISO 8601 forms senders use, at the same instant", () => {
+    const at = (occurred_at?: string) => ingestEventSchema.safeParse({ id: "evt_1", type: "a.b", occurred_at });
+    for (const [sent, instant] of [
+      ["2026-10-24T10:00:00+05:30", "2026-10-24T04:30:00.000Z"],
+      ["2026-10-24T10:00:00+0530", "2026-10-24T04:30:00.000Z"],
+      ["2026-10-24T10:00:00.000+0000", "2026-10-24T10:00:00.000Z"],
+      ["2026-10-24T01:23:45-0400", "2026-10-24T05:23:45.000Z"],
+      ["2026-10-24T10:00Z", "2026-10-24T10:00:00.000Z"],
+      ["2026-10-24T10:00+1000", "2026-10-24T00:00:00.000Z"],
+      ["2026-10-24T10:00:00.123456Z", "2026-10-24T10:00:00.123Z"],
+    ]) {
+      const r = at(sent);
+      expect(r.success, sent).toBe(true);
+      expect(new Date(r.data!.occurred_at!).toISOString(), sent).toBe(instant);
+    }
+    expect(at(undefined).success).toBe(true);
+    for (const bad of ["2026-10-24T10:00:00", "2026-10-24T10:00:00+05", "2026-10-24T10:00:00+99:99", "2026-02-30T10:00:00Z", "2026-10-24 10:00:00Z", "yesterday"]) {
+      expect(at(bad).success, bad).toBe(false);
+    }
+  });
 });

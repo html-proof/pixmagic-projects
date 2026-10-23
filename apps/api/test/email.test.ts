@@ -421,6 +421,10 @@ describe("templates", () => {
     expect(p.html).toContain("Alex");
     expect(p.html).toContain("Unsubscribe");
     expect(p.text).toContain("1 Main St");
+    // A new template has no name yet: its live preview still renders.
+    const unnamed = await api("POST", "/templates/preview", { name: "", subject: "Hi {{customer.first_name}}", html: "<p>x</p>" });
+    expect(unnamed.statusCode).toBe(200);
+    expect(unnamed.json().preview.subject).toBe("Hi Alex");
   });
 });
 

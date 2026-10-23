@@ -12,3 +12,39 @@ import { z } from "zod";
 if (typeof document !== "undefined") z.config({ jitless: true });
 
 export { z };
+
+/**
+ * Plain words for zod's own messages, for forms that list a schema's problems as "<label>: <text>":
+ * `schema.safeParse(draft, { error: formIssue })`. A message the schema sets itself still wins, and
+ * anything not covered here keeps zod's wording. Zod 4's defaults read like developer text ("Too
+ * small: expected string to have >=1 characters", or a regex's source).
+ */
+export const formIssue: z.core.$ZodErrorMap = (issue) => {
+  switch (issue.code) {
+    case "invalid_type":
+      if (issue.input === undefined) return "required";
+      if (issue.expected === "int") return "enter a whole number";
+      if (issue.expected === "number") return "enter a number";
+      return undefined;
+    case "too_small": {
+      const n = issue.minimum;
+      if (issue.origin === "string") return n === 1 ? "required" : `at least ${n} characters`;
+      if (issue.origin === "array" || issue.origin === "set") return n === 1 ? "add at least one" : `add at least ${n}`;
+      if (issue.origin === "number" || issue.origin === "int") return issue.inclusive === false ? `more than ${n}` : `at least ${n}`;
+      return undefined;
+    }
+    case "too_big": {
+      const n = issue.maximum;
+      if (issue.origin === "string") return `at most ${n} characters`;
+      if (issue.origin === "array" || issue.origin === "set") return `at most ${n}`;
+      if (issue.origin === "number" || issue.origin === "int") return issue.inclusive === false ? `less than ${n}` : `at most ${n}`;
+      return undefined;
+    }
+    case "invalid_format":
+      return issue.format === "email" ? "enter a valid email address" : "isn't valid";
+    case "invalid_value":
+      return "choose one of the options";
+    default:
+      return undefined;
+  }
+};

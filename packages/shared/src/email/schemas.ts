@@ -64,7 +64,7 @@ export const domainCreateSchema = z.object({
 export const domainUpdateSchema = partialUpdate(domainCreateSchema.omit({ domain: true }));
 
 export const templateInputSchema = z.object({
-  name: z.string().trim().min(1).max(100),
+  name: z.string().trim().min(1, "Give it a name.").max(100),
   description: z.string().trim().max(500).nullable().optional(),
   category: z.enum(EMAIL_CATEGORIES).default("transactional"),
   /** The event whose variables the template uses (null: customer and business variables only). */
@@ -101,16 +101,16 @@ export type FrequencyPolicy = z.infer<typeof frequencySchema>;
 export const MAX_DELAY_MINUTES = 43_200;
 
 export const ruleInputSchema = z.object({
-  name: z.string().trim().min(1).max(100),
+  name: z.string().trim().min(1, "Give it a name.").max(100),
   description: z.string().trim().max(500).nullable().optional(),
   eventType: z.string().trim().min(3).max(130),
   /** Only events from this Shopify store (null: every source). */
   storeId: z.string().max(64).nullable().default(null),
   conditions: conditionNodeSchema.nullable().default(null),
   senderIdentityId: z.string().min(1).max(64),
-  templateId: z.string().min(1).max(64),
+  templateId: z.string().min(1, "Choose a template.").max(64),
   recipient: recipientSchema.default({ type: "customer" }),
-  delayMinutes: z.number().int().min(0).max(MAX_DELAY_MINUTES).default(0),
+  delayMinutes: z.number().int().min(0).max(MAX_DELAY_MINUTES, "Wait at most 30 days.").default(0),
   frequency: frequencySchema.default({ type: "once_per_event" }),
   /** Send attempts before the message counts as failed (temporary failures only). */
   maxAttempts: z.number().int().min(1).max(8).default(5),
@@ -124,7 +124,16 @@ export const ingestEventSchema = z.object({
   /** The sender's own id for the event: sending it again is a no-op. */
   id: z.string().min(1).max(200).regex(/^[A-Za-z0-9_.:-]+$/, "Use letters, digits and _ . : - only"),
   type: z.string().min(3).max(130),
-  occurred_at: z.string().datetime({ offset: true }).optional(),
+  /**
+   * RFC 3339, plus the ISO 8601 forms zod 3 let through and that common libraries send: an offset
+   * without its colon (+0530: PHP DATE_ISO8601, strftime %z) and no seconds (Java drops ":00").
+   */
+  occurred_at: z
+    .preprocess(
+      (v) => (typeof v === "string" ? v.replace(/T(\d{2}:\d{2})(?=Z|[+-])/, "T$1:00").replace(/([+-]\d{2})(\d{2})$/, "$1:$2") : v),
+      z.iso.datetime({ offset: true, error: "Use an ISO 8601 date-time with a zone, like 2026-10-24T10:00:00+10:00." }),
+    )
+    .optional(),
   customer: z
     .object({
       email: z.string().max(254).optional(),

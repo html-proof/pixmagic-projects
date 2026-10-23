@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
 import { conditionNodeSchema, CONDITION_LIMITS, isGroup, OPERATOR_LABEL, OPERATORS_FOR, type ComparisonOperator, type ConditionLeaf, type ConditionNode, type EventField, type Scalar } from "@app/shared/email";
+import { formIssue } from "@app/shared/zod";
 
 /**
  * The automation builder's conditions: a list of "field operator value" rows joined by "all" or
@@ -35,8 +36,10 @@ export function ConditionBuilder({ value, onChange, fields, customEvent, disable
                 setJsonErr(null);
                 return;
               }
-              const r = conditionNodeSchema.safeParse(parsed);
-              if (!r.success) throw new Error(r.error.issues[0]?.message ?? "Invalid conditions");
+              const r = conditionNodeSchema.safeParse(parsed, { error: formIssue });
+              const issue = r.success ? null : r.error.issues[0];
+              if (issue) throw new Error(issue.path.length ? `${issue.path.join(".")}: ${issue.message}` : issue.message);
+              if (!r.success) throw new Error("Invalid conditions");
               onChange(r.data);
               setJsonErr(null);
             } catch (err) {

@@ -194,7 +194,8 @@ export function emailContentRoutes(app: App, deps: Deps) {
     const ws = c.req.param("ws");
     const { user } = await requireEmail(c, deps, ws, "email:automate");
     await limit(deps.coord, `rl:email:preview:${user.id}`, LIMITS.emailPreview);
-    const input = templateInputSchema.extend({ data: z.record(z.string(), z.unknown()).optional() }).parse(await body(c));
+    // No name needed to preview: a new template has none until the merchant types one.
+    const input = templateInputSchema.extend({ name: z.string().max(100).optional(), data: z.record(z.string(), z.unknown()).optional() }).parse(await body(c));
     return c.json({ preview: await previewTemplate(ws, { subject: input.subject, html: input.html, text: input.text, category: input.category, eventType: input.eventType }, input.data) });
   });
 
