@@ -18,11 +18,6 @@ import { quality, tier, type Overview as WaOverview } from "@/components/whatsap
 import { actionError, api, friendlyError, useApi } from "@/lib/api";
 
 // ---------------------------------------------------------------------------
-// "Connect your business": the Google Account sign-in, Shopify, WhatsApp, Google Ads, Meta Ads and
-// Google AdSense on one page, each with one button that opens the platform's own sign-in, and a
-// plain status. Nothing here asks for an app id, a key or a token: bizinsights' own Shopify, Google
-// and Meta apps do that part. The detailed pages (Shopify, WhatsApp, Advertising) stay where things
-// are managed in depth. The ad cards follow the same rules as Settings → Advertising's (components/integrations).
 // "Connect your business": three choices, Shopify, Google and Meta, each with one button that opens
 // the platform's own sign-in and a plain status (components/integrations/ConnectChoices.tsx). Nothing
 // here asks for an app id, a key or a token: bizinsights' own Shopify, Google and Meta apps do that
@@ -259,33 +254,6 @@ export default function IntegrationsPage() {
               <p className="text-muted">Meta opens a window: log in, choose your business and number (or add one) and confirm the code Meta texts you. About 3 minutes.</p>
             )}
           </IntegrationCard>
-        )}
-
-        {showAds &&
-          AD_PLATFORM_ORDER.map((p) => (
-            <AdPlatformCard
-              key={p}
-              provider={p}
-              answer={ads.answer}
-              loadError={ads.loadError}
-              connections={ads.connections.filter((c) => c.provider === p)}
-              view={store ? views[p] : { state: "not_connected", hidden: false }}
-              store={store}
-              manage={manage}
-              busy={ads.busy}
-              leaving={ads.leaving === p}
-              showMetaNote={!ads.backFromMeta}
-              onConnect={() => void ads.connect(p)}
-              base={storeBase}
-              onRefresh={() => void ads.refresh(p)}
-              onToggle={(c) => void ads.toggle(c)}
-              onDisconnect={ads.askDisconnect}
-              onTryDemo={ads.openDemo}
-              onDemoSync={() => void ads.syncDemo()}
-              onDemoReset={() => void ads.resetDemo()}
-            />
-          ))}
-      </div>
         </section>
       )}
 

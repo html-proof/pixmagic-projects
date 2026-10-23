@@ -24,8 +24,8 @@ import type { AdProvider } from "@/lib/adConnections";
 export type ChipTone = "info" | "violet" | "good" | "orange" | "rose";
 
 /**
- * What differs between the Google Ads, Meta Ads and Google AdSense cards on Settings → Connect your
- * business (AdPlatformCard) and Settings → Advertising (AdPlatformPanel).
+ * What differs between the Google Ads, Meta Ads and Google AdSense cards on Settings → Advertising
+ * (AdPlatformPanel), and their names and icons on Settings → Connect your business (ConnectChoices).
  */
 export interface AdPlatformInfo {
   name: string;
