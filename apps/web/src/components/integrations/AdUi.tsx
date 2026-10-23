@@ -10,12 +10,12 @@ import { Alert } from "@/components/ui";
 import { useApi } from "@/lib/api";
 import { AD_STATE, accountLabel, connectionState, firstSyncOverdue, grantedPermissions, stateInfo, type AdConnection, type AdState, type AdSyncRun } from "@/lib/adConnections";
 import { AD_PLATFORMS } from "./adPlatforms";
-import { Facts, StatusBadge } from "./IntegrationCard";
+import { StatusBadge } from "./IntegrationCard";
 
 // ---------------------------------------------------------------------------
-// The pieces both integrations pages build their ad cards from: the state badge, one connected
-// account with everything known about it, the disconnect dialog and its outcome, and the live
-// region that reads out a card's state when it changes.
+// The pieces both integrations pages build their ad cards from: the state badge, what is known
+// about a connected account, the disconnect dialog and its outcome, and the live region that reads
+// out a card's state when it changes.
 // ---------------------------------------------------------------------------
 
 /** An ad connection's (or platform's) state as a badge; a demo's named as such ("Demo connected"). */
@@ -60,8 +60,6 @@ export function dataAge(c: Pick<AdConnection, "syncedThrough" | "timezone">, now
   const behind = Math.round((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${c.syncedThrough}T00:00:00Z`)) / 86_400_000);
   return behind <= 0 ? "Includes today (still coming in)" : behind === 1 ? "Through yesterday" : `${behind} days behind`;
 }
-
-const freshness = (c: Pick<AdConnection, "syncedThrough" | "timezone" | "provider">) => (c.syncedThrough ? `${dataAge(c)} · refreshes ${refreshCadence(c)}` : dataAge(c));
 
 const TRIGGER_WORDS: Record<string, string> = { request: "Asked for", schedule: "Scheduled", history: "History" };
 const SKIP_WORDS: Record<string, string> = {
@@ -117,8 +115,8 @@ export function RecentSyncs({ path, name }: { path: string; name: string }) {
 type Row = [string, ReactNode];
 
 /**
- * Everything known about one connected account, each as a label and its value, worded once for both
- * pages' rows (AdAccountRow here, AccountPanel on Settings → Advertising), which order them their own way.
+ * Everything known about one connected account, each as a label and its value, for its panel on
+ * Settings → Advertising (AccountPanel), which orders them its own way.
  */
 export function accountFacts(c: AdConnection) {
   const P = AD_PLATFORMS[c.provider];
@@ -249,92 +247,6 @@ export function ShowOnDashboard({ c, busy, onToggle }: { c: AdConnection; busy: 
       <input type="checkbox" className="h-4 w-4 accent-[var(--accent)]" checked={c.enabled} onChange={onToggle} disabled={busy} aria-label={`Show on dashboard: ${accountLabel(c)}`} />
       Show on dashboard
     </label>
-  );
-}
-
-/**
- * One connected ad account on Settings → Connect your business: its name and id, currency and time
- * zone, how it stands and why, when it last synced and how far its figures go, the permissions
- * granted, who connected it, and (for those allowed) its "Show on dashboard" switch and Disconnect.
- */
-export function AdAccountRow({
-  c,
-  storeTimezone,
-  manage,
-  busy,
-  onToggle,
-  onDisconnect,
-  demoActions,
-  syncsPath,
-}: {
-  c: AdConnection;
-  storeTimezone: string | null;
-  manage: boolean;
-  busy: boolean;
-  onToggle: () => void;
-  onDisconnect: () => void;
-  /** The Google Ads demo's own actions (for those who manage integrations). */
-  demoActions?: { onSync: () => void; onReset: () => void };
-  /** Where its recent syncs are read from; none, no list. */
-  syncsPath?: string | null;
-}) {
-  const state = connectionState(c);
-  const name = accountLabel(c);
-  const f = accountFacts(c);
-
-  return (
-    <li className="space-y-2 px-3 py-3" data-testid="ad-account" data-state={state} data-account={c.accountId}>
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="flex flex-wrap items-center gap-2 font-medium">
-            <span className="break-words">{name}</span>
-            <StateBadge state={state} demo={c.demo} testid="account-state" />
-            {!c.enabled && <span className="text-xs font-normal text-muted">Hidden from the dashboard</span>}
-          </p>
-          <p className="text-xs text-muted">
-            {c.accountId}
-            {c.currency ? ` · ${c.currency}` : ""}
-            {c.timezone ? ` · ${c.timezone}` : ""}
-          </p>
-          {c.demo && (
-            <div className="mt-1">
-              <DemoBadge />
-            </div>
-          )}
-        </div>
-        {manage && (
-          <div className="flex flex-wrap items-center gap-2">
-            <ShowOnDashboard c={c} busy={busy} onToggle={onToggle} />
-            <button type="button" className="btn-secondary h-8 px-3 text-xs" onClick={onDisconnect} disabled={busy} aria-label={`Disconnect ${name}`} data-testid="account-disconnect">
-              {c.demo ? "Disconnect demo" : "Disconnect"}
-            </button>
-          </div>
-        )}
-      </div>
-
-      <AccountMessages c={c} storeTimezone={storeTimezone} />
-
-      <Facts
-        rows={present([
-          ...f.demo,
-          f.readThrough,
-          f.lastSynced,
-          f.lastAttempt,
-          f.dataThrough,
-          ["Data freshness", freshness(c)],
-          f.accountStatus,
-          f.reachedThrough,
-          f.connectedBy,
-          f.connected,
-          f.accessEnds,
-          f.permissions,
-        ])}
-      />
-
-      <AccountProblems c={c} />
-      {syncsPath && !c.demo && <RecentSyncs path={syncsPath} name={name} />}
-      {c.demo && <DemoActions manage={manage} busy={busy} actions={demoActions} />}
-    </li>
   );
 }
 

@@ -4,7 +4,7 @@ import type { StoreSummary } from "@/components/AppContext";
 import { RECONNECT_STATES, type AdConnection, type AdProvider, type AdsState, type AdState } from "@/lib/adConnections";
 import { AD_PLATFORMS, type AdPlatformInfo } from "./adPlatforms";
 
-/** What an ad platform's card is given, on Settings → Connect your business (AdPlatformCard) and Settings → Advertising (AdPlatformPanel). */
+/** What an ad platform's card is given, on Settings → Advertising (AdPlatformPanel). */
 export interface AdPlatformProps {
   provider: AdProvider;
   answer: AdsState | null;
