@@ -166,7 +166,7 @@ export default function IntegrationsPage() {
         <IntegrationRow
           testid="int-shopify"
           state={shopState}
-          logo={<ShopifyIcon size={38} />}
+          logo={<ShopifyIcon size={44} />}
           name="Shopify"
           sub="Track your orders, products, customers and sales."
           pill={pill(shopState)}
@@ -200,7 +200,7 @@ export default function IntegrationsPage() {
           <IntegrationRow
             testid="int-whatsapp"
             state={shownWa}
-            logo={<WhatsappIcon size={40} />}
+            logo={<WhatsappIcon size={46} />}
             name="WhatsApp"
             sub="Send order updates, cart reminders and campaigns to your customers from your own business number."
             pill={pill(shownWa)}

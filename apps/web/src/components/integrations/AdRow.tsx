@@ -121,7 +121,7 @@ export function AdRow({ provider: p, ads, store, manage }: { provider: AdProvide
       <IntegrationRow
         testid={`int-${p}`}
         state={state}
-        logo={<P.Icon size={p === "meta" ? 38 : 34} />}
+        logo={<P.Icon size={p === "meta" ? 46 : 42} />}
         name={P.name}
         sub={SUB[p]}
         pill={<RowPill label={s.label} tone={s.tone} busy={s.busy} state={state} />}

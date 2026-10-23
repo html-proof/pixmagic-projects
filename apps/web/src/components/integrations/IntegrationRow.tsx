@@ -61,7 +61,11 @@ export function IntegrationRow({
       data-testid={testid}
       data-state={state}
     >
-      <span className="grid size-14 shrink-0 place-items-center rounded-2xl border border-border bg-white shadow-[var(--shadow)] sm:size-[4.5rem]" aria-hidden>
+      {/* A smaller tile on a phone, its logo with it. */}
+      <span
+        className="grid size-14 shrink-0 place-items-center rounded-2xl border border-border bg-white shadow-[var(--shadow)] max-sm:[&_img]:size-9 max-sm:[&_svg]:size-9 sm:size-[4.5rem]"
+        aria-hidden
+      >
         {logo}
       </span>
       <div className="min-w-0 space-y-3">
