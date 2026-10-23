@@ -204,6 +204,8 @@ Resources:
         name: name
         given_name: given_name
         family_name: family_name
+        # The profile picture's address, kept on the account (users.avatar_url) and shown in the account menu.
+        picture: picture
 
   WebClient:
     Type: AWS::Cognito::UserPoolClient
