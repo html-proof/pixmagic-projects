@@ -4,6 +4,8 @@ import { systemDb } from "@app/db";
 import { buildApp } from "../src/app.js";
 import { unconfiguredCognito } from "../src/cognito.js";
 import { signSession, readSession, REVALIDATE_MS } from "../src/session.js";
+import { CLIENT_IP_HEADER } from "../src/context.js";
+import { LIMITS } from "../src/rateLimit.js";
 import { totpCode } from "./fakeCognito.js";
 import { clean, cookiesFrom, createWorkspace, ORIGIN, setup, signIn, teardown, testBrowser, userOf, type TestCtx } from "./helpers.js";
 

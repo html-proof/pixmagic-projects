@@ -31,8 +31,7 @@ import {
   tooManyAttempts,
   type CodeChallenge,
 } from "../emailCode.js";
-import { cognitoUsernameKey, notifyMethodAdded, notifyPasswordChanged, recordAuthEvent, resolveUser } from "../identity.js";
-import { cognitoUsernameKey, LinkRequired, notifyMethodAdded, recordAuthEvent, resolveUser, withPicture } from "../identity.js";
+import { cognitoUsernameKey, LinkRequired, notifyMethodAdded, notifyPasswordChanged, recordAuthEvent, resolveUser, withPicture } from "../identity.js";
 import { endSessions, recordFailedSignIn, recordSession } from "../devices.js";
 import { apiPath, clearSessionCookies, clearShareCookie, linkProofKey, newSession, provesAddress, readRefreshToken, readSession, retiredSessionKey, setSessionCookies, signedInRecently } from "../session.js";
 import type { App } from "../app.js";
