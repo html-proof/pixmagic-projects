@@ -4,20 +4,9 @@ import type { WorkerDeps } from "@app/worker";
 import { logger, withTimeout } from "@app/core";
 
 /**
- * What the Lambda functions (index.ts) and the local server (local.ts) share: which requests are
- * the API's, and the API's dependencies on top of the jobs' own.
+ * What the Lambda functions (index.ts) and the local server (local.ts) share: the origin check and
+ * the API's dependencies on top of the jobs' own. Which requests are the API's is paths.ts.
  */
-
-/** API paths served without the /api prefix (webhooks, pixel, Shopify, health checks). */
-const BARE_API = /^\/(webhooks|pixel|shopify)\/|^\/(healthz|readyz)$/;
-const API_PREFIX = /^\/api(\/|$)/;
-
-/** The API route a path is for (`/api/me` → `/me`), or null for the static UI. */
-export function apiPath(pathname: string): string | null {
-  if (API_PREFIX.test(pathname)) return pathname.slice(4) || "/";
-  if (BARE_API.test(pathname)) return pathname;
-  return null;
-}
 
 /**
  * Who sent an API request to the function URL: CloudFront (it carries the origin secret CloudFront

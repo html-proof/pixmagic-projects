@@ -153,6 +153,22 @@ async function main() {
     const r = await get(`${base}/no-such-page-${randomBytes(4).toString("hex")}`);
     expect(r.status === 404, `status ${r.status}`);
   });
+  // What CloudFront shows for a page while the function can't answer (app-stack.ts): asked of the
+  // fallback directly, since the app is up. Any path is the page, as a 503, and its styles and
+  // scripts load through the app's address from S3, which doesn't need the function.
+  await check("page shown while the app can't answer", async () => {
+    const r = await get(`https://${app.FallbackDomain}/dashboard`);
+    const html = await r.text();
+    expect(r.status === 503, `status ${r.status}`);
+    expect(/Service temporarily unavailable/.test(html), "not the unavailable page");
+    expect(/no-store/.test(r.headers.get("cache-control") ?? ""), `cache-control ${r.headers.get("cache-control")}`);
+    const assets = [...new Set(html.match(/\/_next\/static\/[^"'\s)]+\.(?:css|js)/g) ?? [])];
+    expect(assets.some((a) => a.endsWith(".css")), "no stylesheet in the page");
+    const rs = await Promise.all(assets.map((a) => get(`${base}${a}`)));
+    const bad = rs.map((res, i) => [assets[i], res]).filter(([, res]) => res.status !== 200 || !fromS3(res));
+    expect(!bad.length, bad.map(([a, res]) => `${a}: ${res.status} ${res.headers.get("server")}`).join("; "));
+    return `${assets.length} files`;
+  });
   await check("static assets cached at the edge", async () => {
     const html = await (await get(`${base}/login`)).text();
     const asset = /\/_next\/static\/[^"']+\.js/.exec(html)?.[0];

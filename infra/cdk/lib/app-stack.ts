@@ -24,6 +24,7 @@ import * as sns from "aws-cdk-lib/aws-sns";
 import * as subs from "aws-cdk-lib/aws-sns-subscriptions";
 import * as sqs from "aws-cdk-lib/aws-sqs";
 import type { Construct } from "constructs";
+import { API_PATH_PATTERNS } from "../../../apps/aws/src/paths.js";
 import { appVars, FUNCTION_DIR, REPO_ROOT, type EnvConfig } from "./config.js";
 
 /** Per RDS class: its connection limit (approximate) and the free memory that means "too small". */
@@ -45,6 +46,8 @@ type QueueName = "sync" | "webhooks" | "aggregate" | "email" | "smsEvents";
  * Traffic: viewer → CloudFront (+ WAF) → the `api` function URL, which serves the pages and the API
  * on one origin (first-party session cookie, the same routing as the local server). Next's hashed build
  * files, `/_next/static/*`, come from an S3 bucket instead and are cached at the edge for a year.
+ * A page the function can't answer is the site's "temporarily unavailable" page, from that bucket
+ * through a second distribution; the API's paths always get the function's own answer.
  * CloudFront adds a secret header the function checks, so the function URL can't be used to go
  * around WAF, and a viewer-request function passes on the viewer's real address and host. With a
  * domain of its own (config.ts `domain`), CloudFront answers on it with the ACM certificate and the
@@ -311,17 +314,61 @@ export class AppStack extends Stack {
       },
       removeHeaders: ["x-powered-by"],
     });
+
+    // --- While the function can't answer a page (down, timing out, out of Lambda capacity), the
+    // site's own "temporarily unavailable" page as a 503, at the address asked for, not CloudFront's
+    // bare error page or Lambda's JSON. Pages only: the API's paths (paths.ts) keep their own
+    // answers, the app's 502s and 503s ("Google is still approving bizinsights…") included. A custom
+    // error page can't be scoped like that (it is the whole distribution's), so pages go to an origin
+    // group whose fallback is a second, tiny distribution: every address there is missing from the
+    // bucket's _fallback/, and its error page is the page (apps/web's /unavailable, which the build
+    // moves out of the function's files). Its styles and scripts are /_next/static/*, the bucket.
+    const fallbackFiles = join(FUNCTION_DIR, "fallback");
+    if (!existsSync(join(fallbackFiles, "unavailable.html"))) throw new Error(`No unavailable page at ${fallbackFiles}: build the package without --skip-web`);
+    const fallbackPage = new s3deploy.BucketDeployment(this, "FallbackPage", {
+      sources: [s3deploy.Source.asset(fallbackFiles)],
+      destinationBucket: site,
+      destinationKeyPrefix: "_fallback/",
+      // A browser asks again next time instead of keeping the outage as that address's page.
+      cacheControl: [s3deploy.CacheControl.fromString("no-store")],
+      memoryLimit: 512,
+    });
+    const fallback = new cloudfront.Distribution(this, "FallbackCdn", {
+      comment: `Insights ${cfg.name}: the page shown while the app can't answer`,
+      defaultBehavior: {
+        // Read only, no list: a missing file is S3's 403.
+        origin: origins.S3BucketOrigin.withOriginAccessControl(site, { originPath: "/_fallback", originAccessLevels: [cloudfront.AccessLevel.READ] }),
+        viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.HTTPS_ONLY,
+        allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD,
+        cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+      },
+      errorResponses: [403, 404].map((httpStatus) => ({ httpStatus, responseHttpStatus: 503, responsePagePath: "/unavailable.html", ttl: Duration.seconds(0) })),
+      priceClass: cloudfront.PriceClass.PRICE_CLASS_ALL,
+      httpVersion: cloudfront.HttpVersion.HTTP2_AND_3,
+    });
+    fallback.node.addDependency(fallbackPage);
+    const pages = new origins.OriginGroup({
+      primaryOrigin: origin,
+      fallbackOrigin: new origins.HttpOrigin(fallback.distributionDomainName, { protocolPolicy: cloudfront.OriginProtocolPolicy.HTTPS_ONLY, originSslProtocols: [cloudfront.OriginSslPolicy.TLS_V1_2] }),
+      // 503 also covers CloudFront failing to connect, 504 the function taking too long, 429 Lambda's
+      // concurrency running out. The static UI never answers any of them itself.
+      fallbackStatusCodes: [429, 500, 502, 503, 504],
+    });
+
+    const toFunction: cloudfront.BehaviorOptions = {
+      origin,
+      viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+      allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+      cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+      originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+      responseHeadersPolicy: securityHeaders,
+      functionAssociations: [{ function: viewer, eventType: cloudfront.FunctionEventType.VIEWER_REQUEST }],
+    };
     this.distribution = new cloudfront.Distribution(this, "Cdn", {
       comment: `Insights ${cfg.name}`,
-      defaultBehavior: {
-        origin,
-        viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-        allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
-        cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
-        originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
-        responseHeadersPolicy: securityHeaders,
-        functionAssociations: [{ function: viewer, eventType: cloudfront.FunctionEventType.VIEWER_REQUEST }],
-      },
+      // The pages (everything but the API's paths), GET and HEAD as the static UI answers: CloudFront
+      // fails over for those methods only.
+      defaultBehavior: { ...toFunction, origin: pages, allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD },
       additionalBehaviors: {
         "/_next/static/*": {
           origin: siteOrigin,
@@ -331,6 +378,7 @@ export class AppStack extends Stack {
           responseHeadersPolicy: securityHeaders,
           compress: true,
         },
+        ...Object.fromEntries(API_PATH_PATTERNS.map((pattern) => [pattern, toFunction])),
       },
       ...(cfg.domain
         ? {
@@ -513,6 +561,7 @@ export class AppStack extends Stack {
 
     new CfnOutput(this, "AppUrl", { value: this.appUrl, description: "The app" });
     new CfnOutput(this, "CloudFrontDomain", { value: this.distribution.distributionDomainName, description: "CloudFront's own name: the DNS target of the app's domain" });
+    new CfnOutput(this, "FallbackDomain", { value: fallback.distributionDomainName, description: "Where CloudFront gets the page it shows while the app can't answer (any path; a 503)" });
     new CfnOutput(this, "ApiFunctionUrl", { value: url.url, description: "Direct function URL (answers 403 to anything not from CloudFront)" });
     new CfnOutput(this, "CronFunction", { value: cron.alias.functionArn, description: "Invoke with {\"action\":\"migrate\"} or {\"action\":\"counts\"}" });
     new CfnOutput(this, "AlarmTopic", { value: topic.topicArn });
