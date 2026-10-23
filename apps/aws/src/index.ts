@@ -8,13 +8,14 @@ import { consume, runScheduled, seedAfterMove, seedSalesRereads, settleAllCustom
 import { configReport, logger, memoryBlobs, memoryCoord, warnHalfConfigured, withLogContext, withTimeout, type Coord, type Queues } from "@app/core";
 import { productCheck, shopifyCheckReport } from "@app/core/reports";
 import { systemDb } from "@app/db";
-import { apiDeps, apiPath, originCheck } from "./app.js";
+import { apiDeps, originCheck } from "./app.js";
 import { roleCredentials } from "./awsClient.js";
 import { consumeSqs, isSqsEvent } from "./consumer.js";
 import { costReportDeps, sendCostReport } from "./costReport.js";
 import { dynamoCoord } from "./dynamoCoord.js";
 import { migrate, tableCounts } from "./migrate.js";
 import { nodeSmtpConnect } from "./nodeSmtp.js";
+import { apiPath } from "./paths.js";
 import { s3Blobs } from "./s3Blobs.js";
 import { loadSecrets } from "./secrets.js";
 import { chooseMailer } from "./mailers.js";

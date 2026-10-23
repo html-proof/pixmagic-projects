@@ -3,6 +3,7 @@
 //   index.mjs        the function (API + static UI), bundled with esbuild
 //   cognito-email.mjs  the user pool's Custom Email Sender trigger (src/cognitoEmail.ts), on its own
 //   public/          the web UI (Next.js export, built into apps/web/out-aws)
+//   fallback/        the export's /unavailable page, which CloudFront shows while the function can't answer
 //   migrations/, init.sql   applied by the function itself ({ "action": "migrate" })
 //   rds-ca.pem       Amazon RDS's CA bundle (NODE_EXTRA_CA_CERTS: TLS to the database is verified)
 //   build.json       the commit it was built from and when (infra/cdk's APP_COMMIT, APP_BUILT_AT)
@@ -11,7 +12,7 @@
 //
 // infra/cdk deploys dist/function.
 import { execFileSync, spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
@@ -36,6 +37,11 @@ if (!process.argv.includes("--skip-web")) {
   if (r.status !== 0) throw new Error("web build failed");
 }
 cpSync(resolve(root, "apps/web/out-aws"), resolve(out, "public"), { recursive: true });
+// The page CloudFront shows while the function can't answer (apps/web/src/app/unavailable): not one
+// the function serves, so it moves to fallback/, which infra/cdk uploads to the site bucket.
+mkdirSync(resolve(out, "fallback"));
+renameSync(resolve(out, "public/unavailable.html"), resolve(out, "fallback/unavailable.html"));
+for (const f of ["unavailable.txt", "unavailable"]) rmSync(resolve(out, "public", f), { recursive: true, force: true });
 
 // Two bundles from one build: the app's functions, and Cognito's email trigger, which loads only
 // what it needs (the AWS Encryption SDK and the mailer), not the API and the jobs.

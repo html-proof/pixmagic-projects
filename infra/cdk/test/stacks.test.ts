@@ -11,6 +11,8 @@ writeFileSync(join(fnDir, "index.mjs"), "export const handler = async () => ({})
 writeFileSync(join(fnDir, "cognito-email.mjs"), "export const handler = async () => ({});\n");
 mkdirSync(join(fnDir, "public/_next/static/chunks"), { recursive: true });
 writeFileSync(join(fnDir, "public/_next/static/chunks/main.js"), "void 0;\n");
+mkdirSync(join(fnDir, "fallback"));
+writeFileSync(join(fnDir, "fallback/unavailable.html"), "<!doctype html><title>unavailable</title>\n");
 writeFileSync(join(fnDir, "build.json"), `${JSON.stringify({ commit: "0123456789abcdef0123456789abcdef01234567", builtAt: "2026-10-17T09:00:00.000Z" })}\n`);
 process.env.INSIGHTS_FUNCTION_DIR = fnDir;
 
@@ -22,6 +24,7 @@ const { AuthStack } = await import("../lib/auth-stack.js");
 const { CiStack } = await import("../lib/ci-stack.js");
 const { AuditStack, ACCOUNT_REGIONS, ANALYZER_NAME } = await import("../lib/audit-stack.js");
 const { viewerRequestCode } = await import("../lib/viewer-request.js");
+const { API_PATH_PATTERNS } = await import("../../../apps/aws/src/paths.js");
 
 function synth(context: Record<string, string> = {}) {
   const app = new App({ context });
@@ -40,6 +43,14 @@ let t: ReturnType<typeof synth>;
 beforeAll(() => {
   t = synth();
 });
+
+type Json = any; // eslint-disable-line @typescript-eslint/no-explicit-any
+/** The app's distribution and the small one that serves its "temporarily unavailable" page. */
+function distributions(app: Template): { main: Json; fallback: Json } {
+  const all = Object.values(app.findResources("AWS::CloudFront::Distribution")).map((r) => r.Properties.DistributionConfig);
+  expect(all).toHaveLength(2);
+  return { main: all.find((d) => !/can't answer/.test(d.Comment)), fallback: all.find((d) => /can't answer/.test(d.Comment)) };
+}
 
 describe("the data stack", () => {
   it("keeps the database private, encrypted, backed up and protected, with a standby in the other AZ", () => {
@@ -376,13 +387,14 @@ describe("the app stack", () => {
   });
 
   it("serves Next's build files from a private bucket, never through the function", () => {
-    const dist = Object.values(t.app.findResources("AWS::CloudFront::Distribution"))[0]!.Properties.DistributionConfig;
-    const byId = Object.fromEntries((dist.Origins as Array<{ Id: string }>).map((o) => [o.Id, o])) as Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
-    const assets = (dist.CacheBehaviors as Array<{ PathPattern: string; TargetOriginId: string }>).find((b) => b.PathPattern === "/_next/static/*")!;
+    const { main: dist } = distributions(t.app);
+    const byId = Object.fromEntries((dist.Origins as Array<{ Id: string }>).map((o) => [o.Id, o])) as Record<string, Json>;
+    const behavior = (pattern: string) => (dist.CacheBehaviors as Array<{ PathPattern: string; TargetOriginId: string }>).find((b) => b.PathPattern === pattern)!;
+    const assets = behavior("/_next/static/*");
     expect(byId[assets.TargetOriginId].S3OriginConfig).toBeDefined();
     expect(byId[assets.TargetOriginId].OriginAccessControlId).toBeDefined();
     expect(byId[assets.TargetOriginId].OriginCustomHeaders).toBeUndefined();
-    expect(byId[dist.DefaultCacheBehavior.TargetOriginId].OriginCustomHeaders).toBeDefined();
+    expect(byId[behavior("/api/*").TargetOriginId].OriginCustomHeaders).toBeDefined();
 
     const site = Object.values(t.app.findResources("AWS::S3::Bucket"));
     expect(site).toHaveLength(1);
@@ -391,7 +403,9 @@ describe("the app stack", () => {
       PolicyDocument: { Statement: Match.arrayWith([Match.objectLike({ Effect: "Allow", Principal: { Service: "cloudfront.amazonaws.com" }, Action: ["s3:GetObject", "s3:ListBucket"] })]) },
     });
     // Old builds' chunks stay for pages still open; fonts get their type (the upload's CLI can't tell).
-    const uploads = Object.values(t.app.findResources("Custom::CDKBucketDeployment")).map((r) => r.Properties);
+    const resources = t.app.toJSON().Resources as Record<string, { Type: string; Properties: Json; DependsOn?: string[] }>;
+    const ids = Object.keys(resources).filter((id) => resources[id]!.Type === "Custom::CDKBucketDeployment" && resources[id]!.Properties.DestinationBucketKeyPrefix !== "_fallback/");
+    const uploads = ids.map((id) => resources[id]!.Properties);
     expect(uploads).toHaveLength(2);
     for (const u of uploads) {
       expect(u).toMatchObject({ Prune: false, DestinationBucketKeyPrefix: "_next/static/", SystemMetadata: { "cache-control": "public, max-age=31536000, immutable" } });
@@ -399,11 +413,62 @@ describe("the app stack", () => {
     expect(uploads.find((u) => u.Include)).toMatchObject({ Include: ["*.woff2"], SystemMetadata: { "content-type": "font/woff2" } });
     expect(uploads.find((u) => !u.Include)).toMatchObject({ Exclude: ["*.woff2"] });
     // CloudFront and the API's live alias wait for both uploads.
-    const resources = t.app.toJSON().Resources as Record<string, { Type: string; DependsOn?: string[] }>;
-    const ids = Object.keys(resources).filter((id) => resources[id]!.Type === "Custom::CDKBucketDeployment");
     const waiting = (type: string) => Object.values(resources).filter((r) => r.Type === type && ids.every((id) => r.DependsOn?.includes(id))).length;
     expect(waiting("AWS::CloudFront::Distribution")).toBe(1);
     expect(waiting("AWS::Lambda::Alias")).toBe(1);
+  });
+});
+
+describe("a page the function can't answer", () => {
+  const origins = (dist: Json) => Object.fromEntries((dist.Origins as Array<{ Id: string }>).map((o) => [o.Id, o])) as Record<string, Json>;
+  const members = (dist: Json) => (dist.OriginGroups.Items[0].Members.Items as Array<{ OriginId: string }>).map((m) => m.OriginId);
+
+  it("gets the site's own page from the fallback, for the pages only (GET and HEAD, which CloudFront fails over)", () => {
+    const { main } = distributions(t.app);
+    expect(main.OriginGroups.Quantity).toBe(1);
+    expect(main.DefaultCacheBehavior.TargetOriginId).toBe(main.OriginGroups.Items[0].Id);
+    expect(main.DefaultCacheBehavior.AllowedMethods).toEqual(["GET", "HEAD"]);
+    // 503 includes failing to connect, 504 timing out, 429 Lambda out of concurrency.
+    expect([...main.OriginGroups.Items[0].FailoverCriteria.StatusCodes.Items].sort()).toEqual([429, 500, 502, 503, 504]);
+    const [primary, secondary] = members(main).map((id) => origins(main)[id]);
+    expect(primary.OriginCustomHeaders).toEqual([expect.objectContaining({ HeaderName: "x-origin-verify" })]);
+    expect(secondary.DomainName).toEqual({ "Fn::GetAtt": [expect.stringMatching(/^FallbackCdn/), "DomainName"] });
+    // The origin secret stays with the function.
+    expect(secondary.OriginCustomHeaders).toBeUndefined();
+    expect(secondary.CustomOriginConfig).toMatchObject({ OriginProtocolPolicy: "https-only", OriginSSLProtocols: ["TLSv1.2"] });
+  });
+
+  it("never stands in for the API: its paths keep the function's own answers, every method, the same policies", () => {
+    const { main } = distributions(t.app);
+    const api = (main.CacheBehaviors as Json[]).filter((b) => b.PathPattern !== "/_next/static/*");
+    expect(api.map((b) => b.PathPattern)).toEqual([...API_PATH_PATTERNS]);
+    // The function URL as an origin of its own: CDK binds a group's primary separately.
+    const fn = origins(main)[members(main)[0]!];
+    for (const b of api) {
+      const target = origins(main)[b.TargetOriginId];
+      expect(target, b.PathPattern).toBeDefined();
+      expect([target.DomainName, target.OriginCustomHeaders, target.CustomOriginConfig], b.PathPattern).toEqual([fn.DomainName, fn.OriginCustomHeaders, fn.CustomOriginConfig]);
+      expect(b.AllowedMethods, b.PathPattern).toHaveLength(7);
+      for (const k of ["CachePolicyId", "OriginRequestPolicyId", "ResponseHeadersPolicyId", "FunctionAssociations", "ViewerProtocolPolicy"]) {
+        expect(b[k], `${b.PathPattern} ${k}`).toEqual(main.DefaultCacheBehavior[k]);
+      }
+    }
+    // No error page of the main distribution's own: it would replace the API's 502s and 503s too.
+    expect(main.CustomErrorResponses).toBeUndefined();
+  });
+
+  it("answers every address of the fallback with the unavailable page, as a 503 nobody keeps", () => {
+    const { fallback } = distributions(t.app);
+    expect(fallback.CustomErrorResponses).toEqual([403, 404].map((ErrorCode) => ({ ErrorCode, ResponseCode: 503, ResponsePagePath: "/unavailable.html", ErrorCachingMinTTL: 0 })));
+    expect(fallback.Origins).toHaveLength(1);
+    expect(fallback.Origins[0]).toMatchObject({ OriginPath: "/_fallback", OriginAccessControlId: expect.anything(), S3OriginConfig: expect.anything() });
+    expect(fallback.DefaultCacheBehavior).toMatchObject({ ViewerProtocolPolicy: "https-only", AllowedMethods: ["GET", "HEAD"] });
+    const resources = t.app.toJSON().Resources as Record<string, { Type: string; Properties: Json; DependsOn?: string[] }>;
+    const [id, upload] = Object.entries(resources).find(([, r]) => r.Type === "Custom::CDKBucketDeployment" && r.Properties.DestinationBucketKeyPrefix === "_fallback/")!;
+    expect(upload.Properties.SystemMetadata).toEqual({ "cache-control": "no-store" });
+    const dist = Object.values(resources).find((r) => r.Type === "AWS::CloudFront::Distribution" && r.Properties.DistributionConfig.Comment === fallback.Comment)!;
+    expect(dist.DependsOn).toContain(id);
+    t.app.hasOutput("FallbackDomain", { Value: { "Fn::GetAtt": [Match.stringLikeRegexp("^FallbackCdn"), "DomainName"] } });
   });
 });
 
@@ -433,7 +498,7 @@ describe("the app's domain", () => {
 
   it("leaves an environment without one on CloudFront's address", () => {
     const staging = synth({ env: "staging" });
-    const dist = Object.values(staging.app.findResources("AWS::CloudFront::Distribution"))[0]!.Properties.DistributionConfig;
+    const dist = distributions(staging.app).main;
     expect(dist.Aliases).toBeUndefined();
     expect(dist.ViewerCertificate).toBeUndefined();
     for (const f of Object.values(staging.app.findResources("AWS::Lambda::Function")).filter((f) => f.Properties.Handler === "index.handler" && String(f.Properties.Runtime).startsWith("nodejs"))) {
