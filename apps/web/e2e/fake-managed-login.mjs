@@ -104,6 +104,8 @@ createServer(async (req, res) => {
         email: p.email,
         email_verified: "true",
         name: "Social Person",
+        // Google's picture (mapped by the pool) only for "pic-" addresses: a test that wants one answers Google's image host itself.
+        ...(p.email.startsWith("pic-") && { picture: `https://lh3.googleusercontent.com/a/e2e-${userId}=s96-c` }),
         "cognito:username": `${prefix}_${userId}`,
         identities: [{ userId, providerName: p.provider, providerType: p.provider, primary: "true" }],
       }),

@@ -36,7 +36,7 @@ export interface MeWorkspace {
 }
 
 export interface Me {
-  user: { id: string; email: string; emailVerified: boolean; displayName: string | null; timezone: string };
+  user: { id: string; email: string; emailVerified: boolean; displayName: string | null; timezone: string; avatarUrl?: string | null };
   workspaces: MeWorkspace[];
   /** Organizations this account works for as an employee (the employee portal at /portal). */
   employments?: Array<{ workspaceId: string; organization: string; employeeId: string; fullName: string; jobTitle: string; status: string }>;
