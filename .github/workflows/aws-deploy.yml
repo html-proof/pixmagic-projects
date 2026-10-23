@@ -190,12 +190,21 @@ jobs:
       # they may do) or a socket never connects, and the deploy fails with nothing in AWS changed
       # (2026-10-19, and twice on 2026-10-23). cdk deploy is safe to repeat, so a failure that reads
       # like the network is tried again a minute later, three attempts in all. Any other failure goes
-      # straight to the rollback below.
+      # straight to the rollback below. "no credentials have been configured" is the account lookup,
+      # STS's first call, that didn't get through: this job always has the deploy role's credentials.
+      # The CLI (aws-cdk 2.1143.0) gives S3 and CloudFormation calls 7 tries of 10 s to connect, the
+      # account lookup 3, and assuming its roles the SDK's default of 3 (about 30 s), which only
+      # AWS_MAX_ATTEMPTS changes: at 10 (about 2 minutes) a short drop there doesn't fail the run.
+      # Node tries each of a host's addresses for 250 ms before the next, under the hotspot's ~300 ms
+      # round trip: 6 of 15 connects to CDK's us-east-1 bucket got through within 10 s, against 10 of
+      # 15 at 5000 ms (2026-10-23). infra/cdk/test/deploy-network.test.ts checks `network` against
+      # the failed runs' logs.
       - name: Deploy (CDK)
         working-directory: infra/cdk
+        env: { AWS_MAX_ATTEMPTS: "10", NODE_OPTIONS: "--network-family-autoselection-attempt-timeout=5000" }
         run: |
           deploy=(npx cdk deploy --all --require-approval never --concurrency 3 -c env=production -c "schedules=${{ vars.AWS_SCHEDULES || 'off' }}" -c "alertEmail=${{ vars.AWS_ALERT_EMAIL }}" -c "googleClientId=${{ vars.GOOGLE_SIGNIN_CLIENT_ID }}")
-          network='could not be used to assume|did not establish a connection|ETIMEDOUT|ECONNRESET|ECONNREFUSED|EAI_AGAIN|ENOTFOUND|getaddrinfo|socket hang up|TimeoutError|NetworkingError'
+          network='could not be used to assume|no credentials have been configured|did not establish a connection|ETIMEDOUT|ECONNRESET|ECONNREFUSED|EAI_AGAIN|ENOTFOUND|getaddrinfo|socket hang up|TimeoutError|NetworkingError'
           log=$(mktemp)
           for attempt in 1 2 3; do
             if "${deploy[@]}" 2>&1 | tee "$log"; then exit 0; fi

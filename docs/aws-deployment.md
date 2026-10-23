@@ -131,11 +131,23 @@ It is two jobs, so the app's dependencies never run where the deploy role is rea
 When the PC's connection drops calls, CDK can't reach STS: the log says its bootstrap roles
 "could not be used to assume ... Proceeding anyway". It then falls back to the deploy role, which
 is refused what only those roles may do (`ssm:GetParameter` on `/cdk-bootstrap/hnb659fds/version`),
-or a socket "did not establish a connection". Either way nothing in AWS changed. So "Deploy (CDK)"
+or a socket "did not establish a connection". When the CLI's very first call, the account lookup,
+doesn't get through, all it says is "Need to perform AWS calls for account ..., but no credentials
+have been configured" (the job always has them). Either way nothing in AWS changed. So "Deploy (CDK)"
 tries `cdk deploy` again a minute later when its output reads like the network, three attempts in
 all; any other failure goes straight to the rollback. Three network failures in a row: put the PC
 on a steadier connection, then re-run the `deploy` job. CloudTrail tells the two apart: a real
 refusal shows `AssumeRole` events with `AccessDenied`, while a dropped connection shows none.
+
+How much one run survives (aws-cdk 2.1143.0, from its source): every AWS call gets 10 s to connect;
+S3 and CloudFormation calls get 7 tries (about 90 s), the account lookup 3. Assuming CDK's roles
+gets the SDK's default of 3 tries (about 30 s), the one figure `AWS_MAX_ATTEMPTS` changes: the step
+sets it to 10 (about 2 minutes), so a drop of a minute there no longer fails the run. The step also
+sets the `NODE_OPTIONS` above: Node gives each of a host's addresses 250 ms before trying the next,
+less than the hotspot's ~300 ms round trip, and S3 names 16 of them, so most connects came down to
+the last address alone (6 of 15 to CDK's us-east-1 bucket got through within 10 s on 2026-10-23,
+10 of 15 at 5000 ms). A hand deploy from this PC on the hotspot does well to set both
+(`$env:AWS_MAX_ATTEMPTS = "10"`).
 
 Dependency install scripts run, anywhere this repository is installed (CI, the deploy, a
 developer's machine), only for the packages `pnpm.onlyBuiltDependencies` in the root
