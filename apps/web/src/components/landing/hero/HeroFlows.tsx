@@ -25,14 +25,35 @@ const pctY = (box: Box, y: number) => `${(y / box.h) * 100}%`;
 
 const PULSE_SECONDS = [3.4, 3.9, 4.4];
 
-/** Every number in an absolute SVG path, multiplied by `k` (box units to CSS pixels). */
-const scalePath = (d: string, k: number) => d.replace(/-?\d+(\.\d+)?/g, (n) => (Number(n) * k).toFixed(2));
+/** Points sampled along a flow for its pulse's keyframes. */
+const PULSE_STEPS = 64;
+
+/**
+ * Keyframes that carry a dash along `path` (box units) at constant speed, `k` CSS pixels per unit:
+ * its centre on the line, turned with it, fading in and out at the ends. Plain transform and
+ * opacity, so the compositor runs them; riding `offset-path` instead, Chrome ran the loop on the
+ * main thread and rebuilt the page's layers on every frame of it.
+ */
+function pulseKeyframes(name: string, path: SVGPathElement, k: number) {
+  const length = path.getTotalLength();
+  const points = Array.from({ length: PULSE_STEPS + 1 }, (_, i) => path.getPointAtLength((length * i) / PULSE_STEPS));
+  let turn = 0;
+  const frames = points.map((p, i) => {
+    const a = points[Math.min(i, PULSE_STEPS - 1)];
+    const b = points[Math.min(i + 1, PULSE_STEPS)];
+    const angle = Math.atan2(b.y - a.y, b.x - a.x);
+    // Unwrapped, so the dash never spins the long way round between two samples.
+    turn = i === 0 ? angle : turn + Math.atan2(Math.sin(angle - turn), Math.cos(angle - turn));
+    return `${((i / PULSE_STEPS) * 100).toFixed(3)}%{transform:translate(${(p.x * k).toFixed(2)}px,${(p.y * k).toFixed(2)}px) rotate(${turn.toFixed(4)}rad) translate(-50%,-50%)}`;
+  });
+  return `@keyframes ${name}{${frames.join("")}0%{opacity:0}6%,94%{opacity:1}100%{opacity:0}}`;
+}
 
 /**
  * The light pulse of one flow: a short bright dash that keeps travelling along the finished path.
- * It is a small layer of its own riding the path (`offset-path`, in the box's pixels, re-measured
- * on resize), so its movement is never a repaint of the diagram. A CSS loop that only runs while
- * the flow is on screen and visible (`fade` is the opacity of the diagram it belongs to).
+ * It is a small layer of its own moved by keyframes sampled from the path (in the box's pixels,
+ * re-measured on resize), so its movement is never a repaint of the diagram. A CSS loop that only
+ * runs while the flow is on screen and visible (`fade` is the opacity of the diagram it belongs to).
  */
 function FlowPulse({
   box,
@@ -50,31 +71,39 @@ function FlowPulse({
   vertical: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
-  const [scale, setScale] = useState(0);
+  const pathRef = useRef<SVGPathElement>(null);
+  const name = `lp-pulse-${useId().replace(/:/g, "")}`;
+  const [css, setCss] = useState<{ scale: number; keyframes: string } | null>(null);
   usePauseWhenHidden(ref, [pulse, fade]);
   useEffect(() => {
     const el = ref.current;
-    if (!el) return;
-    const ro = new ResizeObserver(() => setScale(el.clientWidth / box.w));
+    const path = pathRef.current;
+    if (!el || !path) return;
+    const ro = new ResizeObserver(() => {
+      const scale = el.clientWidth / box.w;
+      setCss((prev) => (prev?.scale === scale ? prev : { scale, keyframes: scale > 0 ? pulseKeyframes(name, path, scale) : "" }));
+    });
     ro.observe(el);
     return () => ro.disconnect();
-  }, [box.w]);
+  }, [box.w, name]);
+  const scale = css?.scale ?? 0;
   // The SVG stroke this replaces: 2.6 (2 stacked) units thick and about 44 units long, round-capped.
   const thick = (vertical ? 2 : 2.6) * scale;
   const long = (vertical ? 26 : 44) * scale;
   return (
     <motion.div ref={ref} data-lp-paused="" aria-hidden className="pointer-events-none absolute inset-0" style={{ opacity: pulse }}>
-      {scale > 0 && (
-        <span
-          className="lp-loop lp-layer absolute left-0 top-0 block rounded-full bg-[#f7f9fc] shadow-[0_0_6px_rgb(167_152_255/0.8)]"
-          style={{
-            width: long,
-            height: thick,
-            offsetPath: `path("${scalePath(d, scale)}")`,
-            offsetRotate: "auto",
-            animation: `lp-flow-dash ${PULSE_SECONDS[index]}s linear ${index * 0.7}s infinite`,
-          }}
-        />
+      {/* The path, only to measure it. */}
+      <svg className="invisible absolute size-0">
+        <path ref={pathRef} d={d} />
+      </svg>
+      {css && scale > 0 && (
+        <>
+          <style>{css.keyframes}</style>
+          <span
+            className="lp-loop lp-layer absolute left-0 top-0 block origin-top-left rounded-full bg-[#f7f9fc] shadow-[0_0_6px_rgb(167_152_255/0.8)]"
+            style={{ width: long, height: thick, animation: `${name} ${PULSE_SECONDS[index]}s linear ${index * 0.7}s infinite` }}
+          />
+        </>
       )}
     </motion.div>
   );
