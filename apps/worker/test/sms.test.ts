@@ -650,6 +650,8 @@ describe("opt-out lists and campaigns", () => {
     expect((await sweepSms(deps)).optOuts).toBe(0);
   });
 
+  // 320 contacts and 300 texts, one at a time against real Postgres: 7-11 s on an idle PC, past the
+  // 20 s default when the PC runner is busy (several test databases at once), so it gets its own limit.
   it("sends a 300-customer campaign once each, to subscribed customers only, paced and attributed", async () => {
     const store = await setupStore({ budget: 100 });
     const t = await approvedTemplate(store, "{{store_name}}: 20% off today with {{discount_code}}. Opt out: {{opt_out_url}}", "marketing");
@@ -681,7 +683,7 @@ describe("opt-out lists and campaigns", () => {
     const credited = await systemDb.smsMessageJob.findMany({ where: { campaignId: c.id, attributedOrderId: { not: null } } });
     expect(credited).toHaveLength(1);
     expect(Number(credited[0]!.attributedRevenue)).toBe(150);
-  });
+  }, 60_000);
 
   it("refuses to schedule a campaign while marketing is switched off, or beyond the budget", async () => {
     const store = await setupStore({ budget: 0.01 });
