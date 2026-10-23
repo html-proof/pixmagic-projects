@@ -368,6 +368,7 @@ export function inventoryRoutes(app: App, deps: Deps) {
     await requireWorkspace(c, deps, ws, "inventory.view");
     return c.json(
       await withTenant(ws, async (tx) => {
+        await loadStore(tx, ws, storeId);
         const rows = await tx.$queryRaw<Array<{ id: string; kind: string; variant_id: string; available: number; threshold: number | null; opened_at: Date; product_id: string | null; product_title: string | null; variant_title: string | null; sku: string | null }>>`
           SELECT a.id, a.kind, a.variant_shopify_id AS variant_id, a.available, a.threshold, a.opened_at,
                  v.product_shopify_id AS product_id, p.title AS product_title, v.title AS variant_title, v.sku
@@ -387,7 +388,10 @@ export function inventoryRoutes(app: App, deps: Deps) {
   app.get(`${base}/whatsapp-templates`, async (c) => {
     const { ws, storeId } = c.req.param();
     await requireWorkspace(c, deps, ws, "inventory.alerts");
-    const rows = await withTenant(ws, (tx) => tx.whatsappTemplate.findMany({ where: { workspaceId: ws, storeId, status: "APPROVED" }, orderBy: { name: "asc" } }));
+    const rows = await withTenant(ws, async (tx) => {
+      await loadStore(tx, ws, storeId);
+      return tx.whatsappTemplate.findMany({ where: { workspaceId: ws, storeId, status: "APPROVED" }, orderBy: { name: "asc" } });
+    });
     return c.json({
       templates: rows
         .filter((t) => {
