@@ -1,8 +1,8 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
-import { env } from "../env.js";
 import type { Mailer } from "../notify.js";
 import type { FetchLike } from "../shopify.js";
+import { fromHeader } from "./senders.js";
 import { MailError, withoutAddresses, type DeliveryStatus, type MailFailure } from "./types.js";
 
 /**
@@ -31,7 +31,7 @@ export function resendMailer(o: { apiKey: string; fetchImpl?: FetchLike }): Mail
   return {
     async send(to, subject, text, html, opts) {
       // Read before the request: a configuration problem is ours to fix, not a network failure to retry.
-      const from = env().EMAIL_FROM;
+      const from = fromHeader(opts?.purpose);
       let res: Response;
       try {
         res = await fetchImpl(API, {

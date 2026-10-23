@@ -597,7 +597,8 @@ a hosted zone that isn't the registrar's nameservers would only be a second, ign
   serves other methods where they arrive (webhooks and pixel events don't follow redirects).
 - **HSTS**: CloudFront's security headers send `max-age=31536000; includeSubDomains`, so every name
   under bizinsights.io must serve HTTPS.
-- **Email**: the domain has no MX (no mailbox). SES sends from it (`no-reply@bizinsights.io`):
+- **Email**: the domain has no MX (no mailbox; "App email" says how to forward support@ and link@).
+  SES sends from it (`no-reply@`, `support@`, `link@`):
   identity `bizinsights.io` in ap-southeast-2 with Easy DKIM, its three `<token>._domainkey` CNAMEs
   → `<token>.dkim.amazonses.com` in this zone, DNS only (added 2026-10-16). The existing `_dmarc`
   record (p=quarantine, relaxed) passes on the DKIM signature. Replies go to a message's Reply-To.
@@ -742,6 +743,33 @@ retried twice while the owner waits, then from the `email` queue after 1, 5 and 
     answers 401 `invalid_signature` (404 `not_configured` means the secret isn't loaded).
   To go back to SES, set `EMAIL_PROVIDER=ses` (settings) or remove the key.
 
+**Who each email comes from** (`packages/core/src/mail/senders.ts`, settings in
+`apps/aws/src/settings.ts`). A message names its purpose (`MailOptions.purpose`), and the provider
+takes the From address from the settings for that purpose; nothing a request carries can name a
+sender.
+
+| Purpose | From | Settings |
+| --- | --- | --- |
+| Sign-up, sign-in, email verification and password-reset codes; the temporary password | `BizInsights Support <support@bizinsights.io>` | `OTP_FROM_EMAIL`, `OTP_FROM_NAME` |
+| Dashboard invitations (shared links), employee portal invitations | `BizInsights <link@bizinsights.io>` | `LINK_FROM_EMAIL`, `LINK_FROM_NAME` |
+| Everything else (alerts, stock alerts, sign-in method notices, the daily cost report) | `bizinsights <no-reply@bizinsights.io>` | `EMAIL_FROM` |
+
+The codes sign off with the support address and the invitations add "Need help with bizinsights?
+Contact support@bizinsights.io" (`SUPPORT_EMAIL`); invitations still send replies to the person who
+sent them. An empty `OTP_FROM_EMAIL` or `LINK_FROM_EMAIL` sends those emails from `EMAIL_FROM` again.
+
+- **Sending** from any `@bizinsights.io` address needs nothing more: Resend and SES both verify the
+  domain, not single addresses (checked 2026-10-23: `resend._domainkey` DKIM, SPF on `send.`, DMARC
+  `p=quarantine` with relaxed alignment, which Resend's DKIM passes). A sender on another domain
+  would be refused (`not_allowed`).
+- **Receiving**: bizinsights.io has **no MX record** (checked 2026-10-23), so mail to `support@` or
+  `link@` bounces until it is forwarded. Owner step: Cloudflare dashboard → bizinsights.io → **Email**
+  → **Email Routing** → *Get started* (it adds its MX and SPF records on the apex; they don't touch
+  Resend's on `send.` and `resend._domainkey`), add the destination `bizinsightsaus@yahoo.com` and
+  confirm the email Cloudflare sends it, then routes `support@bizinsights.io` and
+  `link@bizinsights.io` → that destination. Check: an email to support@bizinsights.io arrives in the
+  Yahoo inbox.
+
 **Restarting the functions after a secret changes.** They read secrets at a cold start, and the `live`
 aliases point at published versions, so changing `$LATEST` alone restarts nothing live. Publish the
 same code again and move the alias (what was done for v47 on 2026-10-16; the next CDK deploy publishes
@@ -766,7 +794,9 @@ Lambda `insights-production-cognito-email` (Auth stack; `apps/aws/src/cognitoEma
 `cognito-email.mjs` in the same package). Cognito encrypts each code with the KMS key
 `alias/insights-production-cognito-email`; the function decrypts it (AWS Encryption SDK), words the
 email for its trigger (`packages/core/src/mail/authEmails.ts`) and sends it through the app's mail
-provider (Resend, `RESEND_API_KEY` from `insights/production/app`) from `no-reply@bizinsights.io`.
+provider (Resend, `RESEND_API_KEY` from `insights/production/app`) from `support@bizinsights.io`
+(the support sender, "Who each email comes from" above; the Auth stack gives the function
+`OTP_FROM_EMAIL`, `OTP_FROM_NAME` and `SUPPORT_EMAIL`).
 So these emails aren't held to Cognito's own 50 a day from `no-reply@verificationemail.com`; they
 share Resend's limits with the app's email (free tier: 100 a day, 3,000 a month).
 
@@ -791,6 +821,10 @@ share Resend's limits with the app's email (free tier: 100 a day, 3,000 a month)
 
 ## Owner-only steps
 
+- **Mail to support@ and link@** (not done as of 2026-10-23): turn on Cloudflare Email Routing and
+  forward both addresses to `bizinsightsaus@yahoo.com` ("Who each email comes from", above). Until
+  then the codes and invitations go out fine, but a reply or a question sent to those addresses
+  bounces.
 - **MFA on the root user** (Trusted Advisor "MFA on Root Account"): **done 2026-10-22**, a
   passkey/security key (`aws iam list-mfa-devices` as root lists it; `aws iam get-account-summary`
   says `AccountMFAEnabled` 1). To add or replace one: sign in as root → account menu (top right) →

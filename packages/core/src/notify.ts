@@ -4,10 +4,16 @@ import { escapeHtml } from "@app/shared/email";
 import { env } from "./env.js";
 import { logger } from "./logger.js";
 import type { FetchLike } from "./shopify.js";
+import { fromHeader, type EmailPurpose } from "./mail/senders.js";
 import type { MailReceipt } from "./mail/types.js";
 
 export interface MailOptions {
-  /** Where replies go instead of EMAIL_FROM (whose mailbox doesn't exist): an invitation's replies reach the person who sent it. */
+  /**
+   * What the email is for, which decides who it comes from (core/mail/senders.ts): a code from the
+   * support sender, a shared link from the link sender. Absent: EMAIL_FROM. Never a raw address.
+   */
+  purpose?: EmailPurpose;
+  /** Where replies go instead of the sender (whose mailbox may not exist): an invitation's replies reach the person who sent it. */
   replyTo?: string;
   /**
    * The same key for every attempt at one message: a provider that supports it (Resend) sends it
@@ -40,7 +46,7 @@ export function parseFrom(from: string): string | { email: string; name: string 
 export function mailpitMailer(baseUrl: string, fetchImpl: FetchLike = fetch): Mailer {
   return {
     async send(to, subject, text, html, opts) {
-      const from = parseFrom(env().EMAIL_FROM);
+      const from = parseFrom(fromHeader(opts?.purpose));
       const res = await fetchImpl(`${baseUrl.replace(/\/$/, "")}/api/v1/send`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -65,10 +71,10 @@ export function mailpitMailer(baseUrl: string, fetchImpl: FetchLike = fetch): Ma
  * recipient), one per entry, until it is empty again.
  */
 export function memoryMailer(): Mailer & {
-  sent: Array<{ to: string; subject: string; text: string; html?: string; replyTo?: string; idempotencyKey?: string; messageId: string }>;
+  sent: Array<{ to: string; from: string; subject: string; text: string; html?: string; replyTo?: string; idempotencyKey?: string; messageId: string }>;
   fail: Error[];
 } {
-  const sent: Array<{ to: string; subject: string; text: string; html?: string; replyTo?: string; idempotencyKey?: string; messageId: string }> = [];
+  const sent: Array<{ to: string; from: string; subject: string; text: string; html?: string; replyTo?: string; idempotencyKey?: string; messageId: string }> = [];
   const fail: Error[] = [];
   return {
     sent,
@@ -77,7 +83,7 @@ export function memoryMailer(): Mailer & {
       const err = fail.shift();
       if (err) throw err;
       const messageId = `mem-${sent.length + 1}`;
-      sent.push({ to, subject, text, messageId, ...(html ? { html } : {}), ...(opts?.replyTo ? { replyTo: opts.replyTo } : {}), ...(opts?.idempotencyKey ? { idempotencyKey: opts.idempotencyKey } : {}) });
+      sent.push({ to, from: fromHeader(opts?.purpose), subject, text, messageId, ...(html ? { html } : {}), ...(opts?.replyTo ? { replyTo: opts.replyTo } : {}), ...(opts?.idempotencyKey ? { idempotencyKey: opts.idempotencyKey } : {}) });
       return { provider: "memory", messageId };
     },
   };

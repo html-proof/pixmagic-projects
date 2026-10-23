@@ -56,6 +56,16 @@ export const APP_SETTINGS = {
   // address on a domain verified there (bizinsights.io, records in Cloudflare DNS). The domain has
   // no mailbox, so replies go where a message names (an invitation: its sender).
   "EMAIL_FROM": "bizinsights <no-reply@bizinsights.io>",
+  // Who the codes and the shared links come from (core/mail/senders.ts): sign-up, sign-in,
+  // verification and password-reset codes from support@, dashboard and employee invitations from
+  // link@; everything else from EMAIL_FROM. All on bizinsights.io, so Resend sends them as it does
+  // EMAIL_FROM. The emails tell people to write to SUPPORT_EMAIL: bizinsights.io receives mail only
+  // once Cloudflare Email Routing forwards these addresses (docs/aws-deployment.md, "App email").
+  "OTP_FROM_EMAIL": "support@bizinsights.io",
+  "OTP_FROM_NAME": "BizInsights Support",
+  "LINK_FROM_EMAIL": "link@bizinsights.io",
+  "LINK_FROM_NAME": "BizInsights",
+  "SUPPORT_EMAIL": "support@bizinsights.io",
   // Sign-in asks for a 6-digit code emailed by the app after the password (accounts with an
   // authenticator app keep that code instead). "" turns the step off; the password alone then
   // signs in. The codes last 60 seconds and one address gets at most these many an hour and a

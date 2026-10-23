@@ -1,5 +1,8 @@
 import { z } from "zod";
 
+/** A display name that is safe unquoted in a From header: no line breaks, angle brackets, quotes or address punctuation. */
+const HEADER_NAME_RE = /^[^\r\n<>"@,;:\\]*$/;
+
 /**
  * Plain-string configuration from `process.env`: on AWS the functions' environment plus the
  * secrets and runtime parameter loaded at cold start (apps/aws/src/secrets.ts), locally the
@@ -209,6 +212,18 @@ const schema = z.object({
   /** Most recipients one campaign may have. */
   SMS_CAMPAIGN_MAX_RECIPIENTS: z.coerce.number().int().min(1).max(1_000_000).default(2000),
   EMAIL_FROM: z.string().default("bizinsights <no-reply@localhost>"),
+  /**
+   * The senders of the codes (OTP_*: sign-up, sign-in, verification and password-reset codes) and
+   * of shared links (LINK_*: dashboard and employee invitations), core/mail/senders.ts. An empty
+   * address sends from EMAIL_FROM. Names go into the From header as they are, so they may not
+   * hold the characters that would need quoting there.
+   */
+  OTP_FROM_EMAIL: z.union([z.literal(""), z.string().email()]).default(""),
+  OTP_FROM_NAME: z.string().regex(HEADER_NAME_RE).max(64).default(""),
+  LINK_FROM_EMAIL: z.union([z.literal(""), z.string().email()]).default(""),
+  LINK_FROM_NAME: z.string().regex(HEADER_NAME_RE).max(64).default(""),
+  /** Where the app's emails send people with questions ("contact support@..."). Empty: no such line. */
+  SUPPORT_EMAIL: z.union([z.literal(""), z.string().email()]).default(""),
   /**
    * Email integrations (docs/email.md). "Connect Gmail / Google Workspace" needs a Google OAuth
    * client whose consent screen lists gmail.send; "Connect Outlook / Microsoft 365" an Entra app

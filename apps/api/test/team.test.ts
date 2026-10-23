@@ -135,9 +135,11 @@ describe("inviting someone with Customers access only (scenarios 1-6)", () => {
     expect(mail.html).toContain("Open Shared Dashboard");
     // No tracking: no images or pixels, and the only links are the invitation's own.
     expect(mail.html).not.toMatch(/<img/i);
-    // Replies reach the owner who sent it (the sender address has no mailbox).
+    // From the shared-link sender, never the codes' support sender; replies reach the owner who sent it.
+    expect(mail.from).toBe("BizInsights <link@bizinsights.io>");
     expect(mail.replyTo).toBe(b.owner.user.email);
     expect(mail.text).toContain("Questions? Reply to this email to reach");
+    expect(mail.text).toContain("Need help with bizinsights? Contact support@bizinsights.io.");
     const token = tokenFrom(mail.text)!;
     expect(mail.text).toContain(`/invite#token=${token}`);
     // Only the token's hash is stored, and the invitation is scoped to the workspace.

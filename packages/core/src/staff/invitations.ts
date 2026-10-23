@@ -110,7 +110,8 @@ export async function createInvitation(actor: StaffActor, employeeId: string, de
       support: settings.supportEmail ?? inviter?.email ?? "your manager",
     });
     try {
-      await mailer.send(employee.email, msg.subject, msg.text, msg.html);
+      // From the link sender (core/mail/senders.ts), like the dashboard invitations.
+      await mailer.send(employee.email, msg.subject, msg.text, msg.html, { purpose: "staff_invitation" });
       emailed = true;
     } catch (err) {
       // The invitation stands; hand the link to the inviter instead (it is now "revealed", so the

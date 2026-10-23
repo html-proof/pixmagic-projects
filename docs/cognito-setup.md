@@ -162,8 +162,8 @@ aws cloudformation describe-stacks --stack-name InsightsAuth-production --region
 Emails: left to itself Cognito sends codes from `no-reply@verificationemail.com`, limited to 50 a
 day. Production doesn't: the Auth stack gives the pool a Custom Email Sender trigger (template
 parameters `CustomEmailSenderState`, `CustomEmailSenderArn`, `CustomEmailKmsKeyArn`), a function
-that sends every code through the app's mail provider (Resend) from `no-reply@bizinsights.io`
-([aws-deployment.md](aws-deployment.md), "Sign-in emails"). For the passwordless code (`EMAIL_OTP`)
+that sends every code through the app's mail provider (Resend) from `support@bizinsights.io`
+([aws-deployment.md](aws-deployment.md), "Sign-in emails" and "Who each email comes from"). For the passwordless code (`EMAIL_OTP`)
 Cognito's documentation asks for SES: verify a domain in SES in the same region, get production access, and pass
 `SesFromEmail` and `SesIdentityArn` to the template (`parameters` in `infra/cdk/lib/auth-stack.ts`).
 

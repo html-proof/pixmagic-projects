@@ -35,5 +35,11 @@ export const testEnv = {
   SHOPIFY_APP_SECRET_CLIENT: "client_secret",
   SHOPIFY_APP_SECRET_PUBLIC: "public_secret",
   SHOPIFY_APP_SECRET_APPSTORE: "appstore_secret",
+  // The senders production has (apps/aws/src/settings.ts; core/mail/senders.ts).
+  OTP_FROM_EMAIL: "support@bizinsights.io",
+  OTP_FROM_NAME: "BizInsights Support",
+  LINK_FROM_EMAIL: "link@bizinsights.io",
+  LINK_FROM_NAME: "BizInsights",
+  SUPPORT_EMAIL: "support@bizinsights.io",
   LOG_LEVEL: "silent",
 };

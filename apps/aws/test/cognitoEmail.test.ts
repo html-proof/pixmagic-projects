@@ -29,11 +29,11 @@ function event(triggerSource: string, overrides: Partial<CognitoEmailEvent["requ
 }
 
 function recordingMailer(fail?: Error) {
-  const sent: Array<{ to: string; subject: string; text: string; html?: string; idempotencyKey?: string }> = [];
+  const sent: Array<{ to: string; subject: string; text: string; html?: string; idempotencyKey?: string; purpose?: string }> = [];
   const mailer: Mailer = {
     async send(to, subject, text, html, opts) {
       if (fail) throw fail;
-      sent.push({ to, subject, text, html, idempotencyKey: opts?.idempotencyKey });
+      sent.push({ to, subject, text, html, idempotencyKey: opts?.idempotencyKey, purpose: opts?.purpose });
       return { provider: "resend", messageId: `re_${sent.length}` };
     },
   };
@@ -87,6 +87,24 @@ describe("the custom email sender", () => {
       expect(sent[0]!.html).toContain("482913");
       expect(sent[0]!.subject).not.toContain("482913");
     }
+  });
+
+  it("asks for the support sender (a code's purpose, never an address) and signs off as it", async () => {
+    const senders = {
+      EMAIL_FROM: "bizinsights <no-reply@bizinsights.io>",
+      OTP_FROM_EMAIL: "support@bizinsights.io",
+      OTP_FROM_NAME: "BizInsights Support",
+      LINK_FROM_EMAIL: "link@bizinsights.io",
+      LINK_FROM_NAME: "BizInsights",
+      SUPPORT_EMAIL: "support@bizinsights.io",
+    };
+    const { mailer, sent } = recordingMailer();
+    const deps = { decrypt: async () => "482913", mailer, appUrl, senders };
+    await sendCognitoEmail(event("CustomEmailSender_SignUp"), deps);
+    await sendCognitoEmail(event("CustomEmailSender_ForgotPassword"), deps);
+    await sendCognitoEmail(event("CustomEmailSender_VerifyUserAttribute"), deps);
+    expect(sent.map((m) => m.purpose)).toEqual(["signup_code", "password_reset_code", "verification_code"]);
+    for (const m of sent) expect(m.text).toContain("BizInsights Support");
   });
 
   it("sends a temporary password as typed, with the sign-in link", async () => {

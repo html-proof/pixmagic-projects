@@ -1,6 +1,7 @@
 import { ACCESS_MODULE_INFO, modulesOf, type Role } from "@app/shared";
 import { escapeHtml } from "@app/shared/email";
 import { env } from "../env.js";
+import { signatureFor, type SenderSettings } from "../mail/senders.js";
 
 /**
  * The link in an invitation email. The token rides in the fragment (`#token=`), which browsers
@@ -27,7 +28,9 @@ export function accessModuleNames(access: { role: Role; permissions: readonly st
  * The invitation email: a short, plain transactional message with one button, a plain-text part,
  * no images, tracking pixels or tracked links. Built from tables with inline styles (Gmail strips
  * <style> in some views; Outlook renders with Word), the button is a padded table cell that works
- * in both, and the layout narrows to the screen on phones (max-width, no fixed widths).
+ * in both, and the layout narrows to the screen on phones (max-width, no fixed widths). It goes
+ * out from the link sender (purpose "team_invitation", core/mail/senders.ts); `senders` (env() in
+ * the app) signs it off as that sender, with the support address. Without it: "bizinsights Team".
  */
 export function teamInvitationEmail(input: {
   workspace: string;
@@ -38,6 +41,7 @@ export function teamInvitationEmail(input: {
   url: string;
   expiresAt: Date;
   timezone: string;
+  senders?: SenderSettings;
 }) {
   // "October 23, 2026 at 3:00 PM GMT+11", in the inviter's time zone (UTC when theirs is unknown).
   const when = (timeZone: string) =>
@@ -50,6 +54,7 @@ export function teamInvitationEmail(input: {
   }
   const who = input.inviter ? (input.inviter.name ? `${input.inviter.name} (${input.inviter.email})` : input.inviter.email) : null;
   const areas = accessModuleNames(input);
+  const sig = input.senders ? signatureFor("team_invitation", input.senders) : null;
   // A workspace name is the owner's own text: no line breaks into a mail header.
   const subject = "You've been invited to view a bizinsights dashboard";
   const store = input.workspace.replace(/[\r\n]+/g, " ");
@@ -73,14 +78,16 @@ export function teamInvitationEmail(input: {
     "",
     "The dashboard owner can change or revoke access at any time.",
     ...(input.inviter ? ["", `Questions? Reply to this email to reach ${input.inviter.name ?? input.inviter.email}.`] : []),
+    ...(sig?.support ? ["", `Need help with bizinsights? Contact ${sig.support}.`] : []),
     "",
     "If you were not expecting this invitation, you can ignore this email.",
     "",
-    "bizinsights Team",
+    ...(sig ? ["Regards,", sig.name, ...(sig.email ? [sig.email] : [])] : ["bizinsights Team"]),
   ].join("\n");
   const e = escapeHtml;
   const p = (body: string, extra = "") => `<p style="margin:0 0 14px;font-size:15px;line-height:22px;color:#1b1b18;${extra}">${body}</p>`;
   const small = (body: string) => `<p style="margin:0 0 10px;font-size:13px;line-height:19px;color:#5f5f57">${body}</p>`;
+  const mailto = (addr: string) => `<a href="mailto:${e(addr)}" style="color:#2f6f4f">${e(addr)}</a>`;
   const html = `<!doctype html>
 <html lang="en" xmlns="http://www.w3.org/1999/xhtml">
 <head>
@@ -117,10 +124,11 @@ ${p("The dashboard owner can change or revoke access at any time.")}
 ${small(`Button not working? Copy this link into your browser:<br><a href="${e(input.url)}" style="color:#2f6f4f;word-break:break-all">${e(input.url)}</a>`)}
 ${small("Anyone with this link can open the shared dashboard, so please don't forward it.")}
 ${input.inviter ? small(`Questions? Reply to this email to reach ${e(input.inviter.name ?? input.inviter.email)}.`) : ""}
+${sig?.support ? small(`Need help with bizinsights? Contact ${mailto(sig.support)}.`) : ""}
 </td></tr>
 <tr><td style="padding:8px 28px 24px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">
 ${small("If you were not expecting this invitation, you can ignore this email.")}
-<p style="margin:0;font-size:13px;line-height:19px;color:#5f5f57">bizinsights Team</p>
+<p style="margin:0;font-size:13px;line-height:19px;color:#5f5f57">${sig ? `Regards,<br>${e(sig.name)}${sig.email ? `<br>${mailto(sig.email)}` : ""}` : "bizinsights Team"}</p>
 </td></tr>
 </table>
 <!--[if mso]></td></tr></table><![endif]-->

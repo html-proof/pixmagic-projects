@@ -618,6 +618,10 @@ describe("Cognito's emails", () => {
       APP_URL: "https://bizinsights.io",
       API_URL: "https://bizinsights.io/api",
       EMAIL_FROM: "bizinsights <no-reply@bizinsights.io>",
+      // The codes come from the support sender, signed with the support address.
+      OTP_FROM_EMAIL: "support@bizinsights.io",
+      OTP_FROM_NAME: "BizInsights Support",
+      SUPPORT_EMAIL: "support@bizinsights.io",
       APP_SECRET_ARN: "insights/production/app",
       COGNITO_EMAIL_KEY_ARN: { "Fn::GetAtt": [keyId, "Arn"] },
     });

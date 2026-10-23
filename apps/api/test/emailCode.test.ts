@@ -180,7 +180,10 @@ describe("the code emailed after the password", () => {
     expect(mail.subject).toBe("Your bizinsights verification code");
     const code = emailedCode("a@x.com");
     expect(mail.subject).not.toContain(code);
-    expect(mail.text).toContain("expires in 1 minute");
+    expect(mail.text).toContain("expires in 60 seconds");
+    // From the support sender, signed by it; never the shared-link sender.
+    expect(mail.from).toBe("BizInsights Support <support@bizinsights.io>");
+    expect(mail.text).toMatch(/Regards,\nBizInsights Support\nsupport@bizinsights\.io$/);
     // No account here yet (the first sign-in makes it), so no name to greet by.
     expect(mail.text).toMatch(/^Hello,/);
 

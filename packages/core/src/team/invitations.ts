@@ -1,6 +1,7 @@
 import { systemDb, withTenant, type Invitation, type Tx, type User } from "@app/db";
 import { ACCESS_MODULE_INFO, decrypt, encrypt, hasFullAccess, modulesOf, randomToken, ROLE_INFO, sha256Hex, type Role } from "@app/shared";
 import type { StaffRole } from "@app/shared/staff";
+import { env } from "../env.js";
 import { logger } from "../logger.js";
 import { attemptDelivery, deliveryRetryDelaySec, startDelivery } from "../mail/deliveries.js";
 import type { DeliveryStatus } from "../mail/types.js";
@@ -172,9 +173,10 @@ async function invitationMessage(invitation: Invitation, url: string) {
     url,
     expiresAt: invitation.expiresAt,
     timezone: inviter?.timezone ?? "UTC",
+    senders: env(),
   });
-  // Replies reach the person who invited them (EMAIL_FROM is a no-reply address).
-  return { to: invitation.email, subject: mail.subject, text: mail.text, html: mail.html, opts: inviter ? { replyTo: inviter.email } : undefined };
+  // From the link sender; replies reach the person who invited them.
+  return { to: invitation.email, subject: mail.subject, text: mail.text, html: mail.html, opts: { purpose: "team_invitation" as const, ...(inviter ? { replyTo: inviter.email } : {}) } };
 }
 
 /**
