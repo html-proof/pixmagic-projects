@@ -3,8 +3,9 @@ import { extname, join, relative, sep } from "node:path";
 
 /**
  * The static UI (the Next.js export) served from the function's own package (and by the local
- * server): /login is login.html, unknown paths get 404.html with a 404, and the rules in
- * public/_headers (security headers) apply to every file.
+ * server): /login is login.html, unknown paths get 404.html with a 404 (an address that can't be
+ * decoded gets the same page with a 400), and the rules in public/_headers (security headers) apply
+ * to every file.
  */
 const TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -73,7 +74,7 @@ export function staticSite(root: string) {
     try {
       path = decodeURIComponent(new URL(request.url).pathname);
     } catch {
-      return new Response("Bad request", { status: 400 });
+      return respond404(400);
     }
     if (path.includes("\0") || path.split("/").includes("..") || path === "/_headers") return respond404();
     const bare = path.length > 1 ? path.replace(/\/+$/, "") : path;
@@ -83,7 +84,7 @@ export function staticSite(root: string) {
     return respond404();
   };
 
-  function respond404() {
-    return files.has("/404.html") ? respond("/404.html", 404) : new Response("Not found", { status: 404 });
+  function respond404(status = 404) {
+    return files.has("/404.html") ? respond("/404.html", status) : new Response(status === 404 ? "Not found" : "Bad request", { status });
   }
 }
