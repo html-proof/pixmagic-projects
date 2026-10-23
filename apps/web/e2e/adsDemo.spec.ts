@@ -28,12 +28,10 @@ test("Try demo: the connection flow, a demo that syncs by itself, the analytics 
   const { storeId } = await ownerWithStore(page, "gdemo");
   await quietMeta(page);
   await page.goto("/settings/integrations");
-  const card = page.getByTestId("int-google-ads");
-  // Not set up on this server: the card says which settings the real sign-in lacks, and offers the demo instead of "Coming soon".
+  const card = page.getByTestId("int-google");
+  // Google isn't set up on this server: the Google choice offers the demo instead of "Coming soon".
   await expect(card.getByTestId("platform-state")).toHaveText("Not connected");
-  // (The local server starts from the production settings, so here only the secret is missing.)
-  await expect(card.getByTestId("int-google-ads-not-configured")).toContainText("it still needs GOOGLE_ADS_");
-  await expect(card.getByRole("button", { name: "Continue with Google Ads" })).toHaveCount(0);
+  await expect(card.getByRole("button", { name: "Connect Google" })).toHaveCount(0);
 
   // The five screens: no Google page, no password, a real request on the fourth.
   await card.getByTestId("int-google-try-demo").click();
@@ -62,12 +60,18 @@ test("Try demo: the connection flow, a demo that syncs by itself, the analytics 
   await dialog.getByRole("button", { name: "Done" }).click();
   await expect(dialog).toHaveCount(0);
 
-  // The row: a demo, never plain "Connected"; the local server's queue runs its sync, so it settles by itself.
+  // A demo, never plain "Connected"; the local server's queue runs its sync, so it settles by itself.
+  await expect(card.getByTestId("platform-state")).toHaveText("Demo connected", { timeout: 45_000 });
+  await expect(card.getByTestId("int-google-accounts")).toContainText("Google Ads: Demo Business Marketing (demo)");
+  await expect(card.getByTestId("int-google-try-demo")).toHaveCount(0);
+
+  // Its row, on Settings → Advertising (Manage).
+  await card.getByRole("link", { name: "Manage Google" }).click();
+  await expect(page).toHaveURL(/\/settings\/ads$/);
   const row = page.locator('[data-testid="ad-account"][data-account="DEMO-ADS-001"]');
   await expect(row).toBeVisible();
   await expect(row.getByTestId("demo-badge")).toHaveText("Simulated — Not verified by Google");
-  await expect(row.getByTestId("account-state")).toHaveText("Demo connected", { timeout: 45_000 });
-  await expect(card.getByTestId("platform-state")).toHaveText("Demo connected");
+  await expect(row.getByTestId("account-state")).toHaveText("Demo connected");
   await expect(row).toContainText("Demo advertising account (simulated)");
   await expect(row).toContainText("Fictional application permissions");
   await expect(row.getByTestId("demo-actions")).toBeVisible();
@@ -144,7 +148,7 @@ test("a member who may only view sees the demo as a demo and gets no buttons", a
   const { email, storeId, ws } = await ownerWithStore(page, "gdemo-view");
   await quietMeta(page);
   await page.goto("/settings/integrations");
-  await page.getByTestId("int-google-ads").getByTestId("int-google-try-demo").click();
+  await page.getByTestId("int-google").getByTestId("int-google-try-demo").click();
   const dialog = page.getByTestId("google-ads-demo-dialog");
   await dialog.getByRole("button", { name: "Continue with Demo" }).click();
   await dialog.getByRole("button", { name: "Connect Demo Account" }).click();
@@ -153,10 +157,12 @@ test("a member who may only view sees the demo as a demo and gets no buttons", a
   await dialog.getByRole("button", { name: "Done" }).click();
   await db.query("UPDATE memberships SET role = 'custom', permissions = $3 WHERE workspace_id = $1 AND user_id = (SELECT id FROM users WHERE email = $2)", [ws, email, ["integrations.status", "marketing.ads"]]);
   await page.goto("/settings/integrations");
+  await expect(page.getByTestId("int-google").getByTestId("platform-state")).toHaveText(/^Demo /);
+  await expect(page.getByTestId("int-google-try-demo")).toHaveCount(0);
+  await page.goto("/settings/ads");
   const row = page.locator('[data-testid="ad-account"][data-account="DEMO-ADS-001"]');
   await expect(row.getByTestId("demo-badge")).toBeVisible();
   await expect(row.getByTestId("demo-sync")).toHaveCount(0);
-  await expect(page.getByTestId("int-google-try-demo")).toHaveCount(0);
   // The page's old address still opens it, in the Advertising area.
   await page.goto("/ads/google");
   await expect(page).toHaveURL(/\/advertising\/google\/analytics/);

@@ -7,28 +7,26 @@ import { ShopifyIcon } from "@/components/ShopifyIcon";
 import { fmtRelative } from "@/components/dashboard/format";
 import type { Tone } from "@/components/dashboard/Primitives";
 import { Alert } from "@/components/ui";
-import { AdPlatformCard } from "@/components/integrations/AdPlatformCard";
-import { DisconnectDialog, NoteAlert, StateAnnouncer } from "@/components/integrations/AdUi";
-import { AD_PLATFORM_ORDER, AD_PLATFORMS } from "@/components/integrations/adPlatforms";
-import { GoogleAccountCard } from "@/components/integrations/GoogleAccountCard";
+import { NoteAlert, StateAnnouncer } from "@/components/integrations/AdUi";
+import { AdChoices, ChoiceTile } from "@/components/integrations/ConnectChoices";
 import { GoogleAdsDemoDialog } from "@/components/integrations/GoogleAdsDemoDialog";
 import { Facts, IntegrationCard, StatusBadge } from "@/components/integrations/IntegrationCard";
 import { useAdConnections } from "@/components/integrations/useAdConnections";
 import { EmbeddedSignup } from "@/components/whatsapp/EmbeddedSignup";
 import { WhatsappIcon } from "@/components/whatsapp/WhatsappUi";
 import { quality, tier, type Overview as WaOverview } from "@/components/whatsapp/types";
-import { AD_STATE } from "@/lib/adConnections";
 import { actionError, api, friendlyError, useApi } from "@/lib/api";
 
 // ---------------------------------------------------------------------------
-// "Connect your business": the Google Account sign-in, Shopify, WhatsApp, Google Ads, Meta Ads and
-// Google AdSense on one page, each with one button that opens the platform's own sign-in, and a
-// plain status. Nothing here asks for an app id, a key or a token: bizinsights' own Shopify, Google
-// and Meta apps do that part. The detailed pages (Shopify, WhatsApp, Advertising) stay where things
-// are managed in depth. The ad cards are the ones Settings → Advertising shows (components/integrations).
+// "Connect your business": three choices, Shopify, Google and Meta, each with one button that opens
+// the platform's own sign-in and a plain status (components/integrations/ConnectChoices.tsx). Nothing
+// here asks for an app id, a key or a token: bizinsights' own Shopify, Google and Meta apps do that
+// part. Accounts are managed in depth on Settings → Shopify and Settings → Advertising; signing in
+// with Google is on Settings → Security. WhatsApp, which sends messages rather than reading figures,
+// sits under the three.
 // ---------------------------------------------------------------------------
 
-/** Shopify's and WhatsApp's states. The ad cards' are in lib/adConnections.ts (AD_STATE). */
+/** Shopify's and WhatsApp's states. The ad tiles' are in lib/adConnections.ts (AD_STATE). */
 type State = "checking" | "unknown" | "not_connected" | "connecting" | "connected" | "action_required" | "permission_expired" | "failed" | "unavailable";
 
 const STATE: Record<State, { label: string; tone: Tone; busy?: boolean }> = {
@@ -65,7 +63,7 @@ function whatsappState(o: WaOverview | null, failed: boolean): State {
 }
 
 export default function IntegrationsPage() {
-  const { workspace, store, storesStatus, offers, allowed, me } = useApp();
+  const { workspace, store, storesStatus, offers, allowed } = useApp();
   // Connecting a Shopify store needs owner or admin rights; WhatsApp and ad accounts, "Manage integrations".
   const manageStores = canManage(workspace.role);
   const manage = allowed("integrations.manage");
@@ -87,7 +85,7 @@ export default function IntegrationsPage() {
 
   const waState = whatsappState(wa.data, !!wa.error);
 
-  // While WhatsApp is still being set up, look again until it settles (the ad cards do the same for a sync).
+  // While WhatsApp is still being set up, look again until it settles (the ad tiles do the same for a sync).
   useEffect(() => {
     if (waState !== "connecting") return;
     const t = window.setInterval(() => void reloadWa(), 10_000);
@@ -118,20 +116,15 @@ export default function IntegrationsPage() {
 
   const waConn = wa.data?.connection ?? null;
   const shopState = shopifyState(store);
-  const views = Object.fromEntries(AD_PLATFORM_ORDER.map((p) => [p, ads.view(p)])) as Record<(typeof AD_PLATFORM_ORDER)[number], ReturnType<typeof ads.view>>;
-  const announced: Array<[string, string]> = [
-    ["Shopify", STATE[shopState].label],
-    ...(showWa && store ? [["WhatsApp", STATE[waState].label] as [string, string]] : []),
-    ...(showAds && store ? AD_PLATFORM_ORDER.map((p): [string, string] => [AD_PLATFORMS[p].name, AD_STATE[views[p].state].label]) : []),
-  ];
+  const announced: Array<[string, string]> = [["Shopify", STATE[shopState].label], ...(showWa && store ? [["WhatsApp", STATE[waState].label] as [string, string]] : [])];
 
   return (
     <div className="space-y-4">
       <div className="card">
         <h1 className="text-lg font-semibold">Connect your business</h1>
         <p className="mt-1 text-sm text-muted">
-          Press a button, sign in on the platform&apos;s own page and choose what to share. bizinsights finds your accounts and fills in the dashboard by itself: there are no keys or
-          codes to copy.
+          {showAds ? "Pick what you use: Shopify, Google or Meta. " : ""}Press its button, sign in on its own page and choose what to share. bizinsights fills in your
+          dashboard by itself: there are no keys or codes to copy.
         </p>
         {!manage && (
           <p className="mt-2 text-sm text-muted">
@@ -149,49 +142,54 @@ export default function IntegrationsPage() {
         </Alert>
       )}
 
-      <div className="grid gap-4">
-        {/* The account's own sign-in: not for a dashboard opened from a shared link, which isn't signed in to an account. */}
-        {!me.shared && <GoogleAccountCard />}
-
-        <IntegrationCard
+      <div className={`grid gap-4 ${showAds ? "lg:grid-cols-3" : ""}`}>
+        <ChoiceTile
           testid="int-shopify"
           state={shopState}
-          icon={<ShopifyIcon size={22} />}
+          icon={<ShopifyIcon size={26} />}
           name="Shopify"
           sub="Your store's orders, products, customers and sales"
           badge={badge(shopState)}
           actions={
             !store ? (
               manageStores && (
-                <Link className="btn-primary" href={`/onboarding?ws=${encodeURIComponent(workspace.id)}`}>
-                  Continue with Shopify
+                <Link className="btn-primary" href={`/onboarding?ws=${encodeURIComponent(workspace.id)}`} data-testid="int-shopify-connect">
+                  Connect Shopify
                 </Link>
               )
             ) : (
-              <Link className="btn-secondary" href="/settings/stores">
-                Manage
+              <Link className={shopState === "failed" ? "btn-primary" : "btn-secondary"} href="/settings/stores" aria-label={`${shopState === "failed" ? "Fix" : "Manage"} Shopify`}>
+                {shopState === "failed" ? "Fix it" : "Manage"}
               </Link>
             )
           }
         >
           {store ? (
             <>
-              <Facts
-                rows={[
-                  ["Store", store.name ?? store.shopDomain],
-                  ["Address", store.shopDomain],
-                  ["Last synchronized", store.lastSyncedAt ? fmtRelative(store.lastSyncedAt) : "Not yet"],
-                  ["Health", shopState === "connected" ? "Working" : shopState === "failed" ? "Couldn't sync: see Manage" : "Importing your data"],
-                ]}
-              />
-              <p className="text-xs text-muted">Turns on: Sales dashboard · Products and stock · Customers to follow up</p>
+              <p>
+                <span className="text-muted">Store:</span> {store.name ?? store.shopDomain}
+              </p>
+              <p className="text-xs text-muted">
+                {shopState === "failed"
+                  ? "Couldn't sync: see Manage"
+                  : shopState === "connecting"
+                    ? "Importing your data"
+                    : `Last synchronized ${store.lastSyncedAt ? fmtRelative(store.lastSyncedAt) : "not yet"}`}
+              </p>
             </>
           ) : (
             !manageStores && <p className="text-muted">Only a workspace owner or admin can connect a Shopify store.</p>
           )}
-        </IntegrationCard>
+        </ChoiceTile>
 
-        {showWa && (
+        {showAds && <AdChoices ads={ads} store={store} manage={manage} />}
+      </div>
+
+      {showWa && (
+        <section className="space-y-3" aria-labelledby="int-more-h">
+          <h2 id="int-more-h" className="pt-2 text-sm font-semibold text-muted">
+            Customer messaging
+          </h2>
           <IntegrationCard
             testid="int-whatsapp"
             state={store ? waState : "not_connected"}
@@ -256,37 +254,10 @@ export default function IntegrationsPage() {
               <p className="text-muted">Meta opens a window: log in, choose your business and number (or add one) and confirm the code Meta texts you. About 3 minutes.</p>
             )}
           </IntegrationCard>
-        )}
-
-        {showAds &&
-          AD_PLATFORM_ORDER.map((p) => (
-            <AdPlatformCard
-              key={p}
-              provider={p}
-              variant="hub"
-              answer={ads.answer}
-              loadError={ads.loadError}
-              connections={ads.connections.filter((c) => c.provider === p)}
-              view={store ? views[p] : { state: "not_connected", hidden: false }}
-              store={store}
-              manage={manage}
-              busy={ads.busy}
-              leaving={ads.leaving === p}
-              showMetaNote={!ads.backFromMeta}
-              onConnect={() => void ads.connect(p)}
-              base={storeBase}
-              onRefresh={() => void ads.refresh(p)}
-              onToggle={(c) => void ads.toggle(c)}
-              onDisconnect={ads.askDisconnect}
-              onTryDemo={ads.openDemo}
-              onDemoSync={() => void ads.syncDemo()}
-              onDemoReset={() => void ads.resetDemo()}
-            />
-          ))}
-      </div>
+        </section>
+      )}
 
       <GoogleAdsDemoDialog open={ads.demoOpen} store={store} onClose={ads.closeDemo} onConnect={ads.connectDemo} onDisconnect={ads.disconnectDemo} />
-      <DisconnectDialog c={ads.confirming} busy={!!ads.busy} onConfirm={() => void ads.disconnect()} onCancel={ads.cancelDisconnect} />
     </div>
   );
 }
