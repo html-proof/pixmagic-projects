@@ -48,6 +48,10 @@ defaults:
   run:
     shell: bash
 
+# The PC's connection to GitHub drops now and then for a few seconds, and an API call made then fails
+# with "Connect Timeout Error" (main's tested job, 2026-10-23). Every github-script step retries its
+# calls 3 times (after 1, 4 and 9 s; a failed connect takes 10 s itself) before the step fails.
+
 jobs:
   # Merging a pull request that is up to date with main leaves main with exactly the tree that the
   # pull request's last run tested. Each pull-request job that passes records its tree as a commit
@@ -73,6 +77,7 @@ jobs:
         continue-on-error: true
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
+          retries: 3
           script: |
             const tree = context.payload.head_commit?.tree_id;
             // Where a pull request's run left its records: the commits this one was made from, and
@@ -133,24 +138,18 @@ jobs:
         continue-on-error: true
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
+          retries: 3
           script: |
             const pr = context.payload.pull_request;
             if (pr.labels.some((l) => l.name === "e2e")) return core.setOutput("e2e", "true");
             const dirs = ["apps/web/", "apps/aws/", "packages/shared/", "infra/cognito-local/", "infra/postgres/"];
             const files = ["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "docker-compose.yml", ".github/workflows/ci.yml"];
             let changed;
-            for (let attempt = 0; attempt < 3; attempt++) {
-              try {
-                changed = await github.paginate(github.rest.pulls.listFiles, { ...context.repo, pull_number: pr.number, per_page: 100 });
-                break;
-              } catch (err) {
-                if (attempt === 2) {
-                  core.warning(`Couldn't list the changed files after 3 attempts (${err.message}): running the browser tests.`);
-                  return core.setOutput("e2e", "true");
-                }
-                core.info(`Changed-file lookup failed; retrying (${attempt + 1}/2).`);
-                await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
-              }
+            try {
+              changed = await github.paginate(github.rest.pulls.listFiles, { ...context.repo, pull_number: pr.number, per_page: 100 });
+            } catch (err) {
+              core.warning(`Couldn't list the changed files (${err.message}): running the browser tests.`);
+              return core.setOutput("e2e", "true");
             }
             const hit = changed.flatMap((f) => [f.filename, f.previous_filename]).find((p) => p && (files.includes(p) || dirs.some((d) => p.startsWith(d))));
             // GitHub lists at most 3,000 files: a pull request that size runs them regardless.
@@ -250,6 +249,7 @@ jobs:
         env:
           KEY: ${{ steps.integration.outputs.key }}
         with:
+          retries: 3
           script: |
             const pr = context.payload.pull_request;
             const refs = [];
@@ -291,6 +291,7 @@ jobs:
         env:
           KEY: ${{ steps.integration.outputs.key }}
         with:
+          retries: 3
           script: |
             const sha = context.payload.pull_request?.head.sha ?? context.sha;
             await github.rest.repos.createCommitStatus({ ...context.repo, sha, state: "success", context: "ci/passed-integration", description: `key ${process.env.KEY}` });
@@ -305,6 +306,7 @@ jobs:
         continue-on-error: true
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
+          retries: 3
           script: |
             const tree = (await exec.getExecOutput("git", ["rev-parse", "HEAD^{tree}"], { silent: true })).stdout.trim();
             await github.rest.repos.createCommitStatus({ ...context.repo, sha: context.payload.pull_request.head.sha, state: "success", context: "ci/passed-checks", description: `tree ${tree}` });
@@ -406,6 +408,7 @@ jobs:
         continue-on-error: true
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
+          retries: 3
           script: |
             const tree = (await exec.getExecOutput("git", ["rev-parse", "HEAD^{tree}"], { silent: true })).stdout.trim();
             await github.rest.repos.createCommitStatus({ ...context.repo, sha: context.payload.pull_request.head.sha, state: "success", context: "ci/passed-e2e", description: `tree ${tree}` });
