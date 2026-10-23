@@ -170,43 +170,6 @@ test("each connected account shows its state, and Connect your business the most
     ["pub-555", "verification_pending", "Verification pending"],
   ];
 
-  await page.route("https://connect.facebook.net/**", (route) => route.fulfill({ status: 200, contentType: "text/javascript", body: "" }));
-  for (const [path, prefix] of [
-    ["/settings/integrations", "int-"],
-    ["/settings/ads", "ads-provider-"],
-  ] as const) {
-    await page.goto(path);
-    const card = (p: string) => (prefix === "int-" ? `int-${p}-ads` : `ads-provider-${p}`);
-    // A card shows its most pressing account: hidden accounts don't count (Lapsed Promo would outrank them all).
-    await expect(platform(page, card("google"))).toHaveText("Synchronizing");
-    await expect(page.getByTestId(card("google")).getByTestId("platform-hidden")).toHaveCount(0);
-    await expect(platform(page, card("meta"))).toHaveText("Reconnect required");
-    await expect(platform(page, card("adsense"))).toHaveText("Verification pending");
-    for (const [id, state, label] of expected) {
-      await expect(account(page, id)).toHaveAttribute("data-state", state);
-      await expect(account(page, id).getByTestId("account-state")).toHaveText(label);
-    }
-
-    // What failed is said in plain words; the platform's own text only behind Details.
-    const failed = account(page, "act_333");
-    await expect(failed.getByTestId("account-message")).toContainText("Meta refused the last update");
-    await expect(failed.getByTestId("account-message")).not.toContainText("#100");
-    await failed.locator("summary", { hasText: /^Details/ }).click();
-    await expect(failed).toContainText("(#100) Unsupported get request");
-    await expect(account(page, "act_444").getByTestId("account-message")).toContainText("can no longer see this ad account");
-    await expect(account(page, "act_888").getByTestId("account-message")).toContainText("Press Reconnect");
-
-    const connected = account(page, "111-111-1111");
-    await expect(connected).toContainText("1 hour ago");
-    await expect(connected).toContainText("Read Google Ads reports");
-    await expect(connected).toContainText("Google has no read-only permission for Google Ads; bizinsights only reads.");
-    await expect(connected).toContainText("Data through");
-    await expect(account(page, "222-222-2222").getByTestId("timezone-note")).toContainText("America/Los_Angeles");
-    await expect(account(page, "777-777-7777")).toContainText("Hidden from the dashboard");
-    // Every row's controls are named for their account.
-    await expect(page.getByRole("checkbox", { name: "Show on dashboard: Brand Search" })).toBeChecked();
-    await expect(page.getByRole("checkbox", { name: "Show on dashboard: Old Promo" })).not.toBeChecked();
-    await expect(page.getByRole("button", { name: "Disconnect Agency Ads" })).toBeVisible();
   await quietMeta(page);
   // Connect your business: each choice shows its most pressing account, and sends there to fix it. Google
   // counts Google Ads (Synchronizing: hidden accounts don't count, or Lapsed Promo would outrank them all)
@@ -235,7 +198,7 @@ test("each connected account shows its state, and Connect your business the most
   const failed = account(page, "act_333");
   await expect(failed.getByTestId("account-message")).toContainText("Meta refused the last update");
   await expect(failed.getByTestId("account-message")).not.toContainText("#100");
-  await failed.getByText("Details").click();
+  await failed.locator("summary", { hasText: /^Details/ }).click();
   await expect(failed).toContainText("(#100) Unsupported get request");
   await expect(account(page, "act_444").getByTestId("account-message")).toContainText("can no longer see this ad account");
   await expect(account(page, "act_888").getByTestId("account-message")).toContainText("Press Reconnect");
