@@ -11,16 +11,10 @@ The same sign-ins can run through Nango's Connect UI (one window over the page, 
 
 1. The dashboard's **Advertising** section offers **Connect advertising accounts** while nothing is connected.
 2. That opens **Settings → Advertising** (`/settings/ads`, "Advertising integrations", drawn after the owner's
-   design in `components/settings/ads/`): one card per platform with what bizinsights reads from it; while nothing
-   is connected, what connecting brings and what it needs; once connected, each account's details and data status
-   beside how the integration stands. **Settings → Integrations** (`/settings/integrations`, "Connect your
-   business") has shorter cards for the same platforms, next to the **Google Account** (Continue with Google
-   sign-in), Shopify and WhatsApp cards. Both follow the same rules (`components/integrations/adPlatformParts.tsx`).
-   Card order for ads: Google Ads, Meta Ads, Google AdSense.
-3. They press **Continue with Google Ads**, **Continue with Meta Ads** or **Continue with Google AdSense** (the same
-   words on both pages: the review packs quote them) and approve on the platform's own screen. Connecting needs the integrations permission (`integrations.manage`:
-2. That opens **Settings → Advertising** (`/settings/ads`, "Advertising integrations"): a card per platform, in the
-   order Google Ads, Meta Ads, Google AdSense, with every account. **Settings → Connect your business**
+   design in `components/settings/ads/`): one card per platform, in the order Google Ads, Meta Ads, Google AdSense,
+   with what bizinsights reads from it; while nothing is connected, what connecting brings and what it needs; once
+   connected, each account's details and data status beside how the integration stands (rules in
+   `components/integrations/adPlatformParts.tsx`). **Settings → Connect your business**
    (`/settings/integrations`) offers just three choices, **Shopify**, **Google** and **Meta**: **Connect Google** asks
    "Which Google do you use?" (Google Ads or Google AdSense), **Connect Meta** goes straight to Facebook (after a
    "Before you go to Facebook" note while Meta lets only its testers in), and once connected each choice links to
