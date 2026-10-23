@@ -44,12 +44,12 @@ function activeLine(c: AdConnection, state: AdState): string | null {
 }
 
 /** How often an account's recent days are fetched again by itself, as the worker schedules it (apps/worker handlers/integrations.ts). */
-function refreshCadence(c: Pick<AdConnection, "provider">): string {
+export function refreshCadence(c: Pick<AdConnection, "provider">): string {
   return c.provider === "google" ? "about every 3 hours" : "about every hour";
 }
 
 /** How current the stored figures are: the last day stored, against the account's own today. */
-function freshness(c: Pick<AdConnection, "syncedThrough" | "timezone" | "provider">, now = new Date()): string {
+export function dataAge(c: Pick<AdConnection, "syncedThrough" | "timezone">, now = new Date()): string {
   if (!c.syncedThrough) return "Nothing stored yet";
   let today: string;
   try {
@@ -58,9 +58,10 @@ function freshness(c: Pick<AdConnection, "syncedThrough" | "timezone" | "provide
     today = localDay(now, "UTC");
   }
   const behind = Math.round((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${c.syncedThrough}T00:00:00Z`)) / 86_400_000);
-  const when = behind <= 0 ? "Includes today (still coming in)" : behind === 1 ? "Through yesterday" : `${behind} days behind`;
-  return `${when} · refreshes ${refreshCadence(c)}`;
+  return behind <= 0 ? "Includes today (still coming in)" : behind === 1 ? "Through yesterday" : `${behind} days behind`;
 }
+
+const freshness = (c: Pick<AdConnection, "syncedThrough" | "timezone" | "provider">) => (c.syncedThrough ? `${dataAge(c)} · refreshes ${refreshCadence(c)}` : dataAge(c));
 
 const TRIGGER_WORDS: Record<string, string> = { request: "Asked for", schedule: "Scheduled", history: "History" };
 const SKIP_WORDS: Record<string, string> = {
@@ -74,7 +75,7 @@ const SKIP_WORDS: Record<string, string> = {
 };
 
 /** The last syncs of one account (GET .../syncs), read only when someone opens the list. */
-function RecentSyncs({ path, name }: { path: string; name: string }) {
+export function RecentSyncs({ path, name }: { path: string; name: string }) {
   const [open, setOpen] = useState(false);
   const runs = useApi<{ runs: AdSyncRun[] }>(open ? path : null);
   return (
@@ -113,11 +114,148 @@ function RecentSyncs({ path, name }: { path: string; name: string }) {
   );
 }
 
+type Row = [string, ReactNode];
+
 /**
- * One connected ad account: its name and id, currency and time zone, how it stands and why, when it
- * last synced and how far its figures go, the permissions granted, who connected it, and (for
- * those allowed) its "Show on dashboard" switch and Disconnect. `children`: more for this account
- * (the AdSense sites).
+ * Everything known about one connected account, each as a label and its value, worded once for both
+ * pages' rows (AdAccountRow here, AccountPanel on Settings → Advertising), which order them their own way.
+ */
+export function accountFacts(c: AdConnection) {
+  const P = AD_PLATFORMS[c.provider];
+  const accessLeft = c.provider === "meta" ? daysUntil(c.accessExpiresAt) : null;
+  const accountStatus = adAccountStatusLabel(c.accountStatus, c.provider) ?? (c.accountStatus === "active" ? "Active" : null);
+  const permissions = grantedPermissions(c);
+  const row = (label: string, value: ReactNode): Row => [label, value];
+  return {
+    // A demo says what it is where a real account says who it belongs to.
+    demo: c.demo
+      ? [
+          row("Account type", "Demo advertising account (simulated)"),
+          row("Data source", "Generated sample data"),
+          row("Billing", "Not applicable: demo"),
+          row("Verification", "Not verified by Google"),
+          row("Demo seed", String(c.demoSeed ?? "—")),
+        ]
+      : [],
+    readThrough: c.demo ? null : row("Read through", c.source === "nango" ? `Direct connection to ${P.name} (sign-in kept by Nango)` : `Direct connection to ${P.name}`),
+    lastSynced: row("Last successful sync", c.lastSyncedAt ? <span title={exact(c.lastSyncedAt)}>{fmtRelative(c.lastSyncedAt)}</span> : "Not yet"),
+    lastAttempt: row("Last attempted sync", c.lastSyncAttemptAt ? <span title={exact(c.lastSyncAttemptAt)}>{fmtRelative(c.lastSyncAttemptAt)}</span> : "Not yet"),
+    dataThrough: row("Data through", c.syncedThrough ? `${fmtDay(c.syncedThrough)}${c.historyFrom ? ` (from ${fmtDay(c.historyFrom)})` : ""}` : "Nothing stored yet"),
+    accountStatus: accountStatus ? row(`Account at ${P.name}`, accountStatus) : null,
+    reachedThrough: c.loginCustomerId ? row("Reached through", `Manager account ${c.loginCustomerId}`) : null,
+    connectedBy: c.connectedBy ? row("Connected by", c.connectedBy.you ? "You" : (c.connectedBy.name ?? c.connectedBy.email ?? "A member of this workspace")) : null,
+    connected: row("Connected", <span title={exact(c.connectedAt)}>{fmtRelative(c.connectedAt)}</span>),
+    accessEnds: accessLeft !== null ? row("Meta access ends", accessLeft <= 0 ? "Ended" : `In ${accessLeft} day${accessLeft === 1 ? "" : "s"}`) : null,
+    permissions: row(
+      "Permissions granted",
+      c.demo ? (
+        <>
+          Demo data access (simulated): {DEMO_PERMISSIONS.join(" · ")}.
+          <span className="block text-xs text-muted">Fictional application permissions, not Google OAuth scopes: no Google permission was requested or granted.</span>
+        </>
+      ) : (
+        <>
+          {permissions.length ? permissions.join(" · ") : "Not listed by the platform"}
+          {c.provider === "google" && <span className="block text-xs text-muted">Google has no read-only permission for Google Ads; bizinsights only reads.</span>}
+        </>
+      ),
+    ),
+  };
+}
+
+/** The facts that apply, in the order given. */
+export const present = (rows: Array<Row | null>): Row[] => rows.filter((r): r is Row => r !== null);
+
+/**
+ * What an account is doing, or what went wrong, in a sentence; that its Meta access ends soon; and that
+ * its days are another time zone's than the store's.
+ */
+export function AccountMessages({ c, storeTimezone }: { c: AdConnection; storeTimezone: string | null }) {
+  const state = connectionState(c);
+  const tone = stateInfo(state, c.demo).tone;
+  // A sync asked for is running: that's the news, even for an account whose last update failed.
+  const headline = state === "synchronizing" ? activeLine(c, state) : (c.message ?? activeLine(c, state));
+  const otherDays = !!c.timezone && !!storeTimezone && !sameDays(c.timezone, storeTimezone, new Date());
+  const accessLeft = c.provider === "meta" ? daysUntil(c.accessExpiresAt) : null;
+  return (
+    <>
+      {headline && (
+        <p className={`text-sm ${tone === "good" ? "text-muted" : TONE_TEXT[tone]}`} data-testid="account-message">
+          {headline}
+        </p>
+      )}
+      {accessLeft !== null && accessLeft > 0 && accessLeft <= 14 && c.status === "active" && (
+        <p className="text-sm text-warn">Meta access ends in {accessLeft} day{accessLeft === 1 ? "" : "s"}: reconnect to keep the numbers coming.</p>
+      )}
+      {otherDays && (
+        <p className="text-xs text-warn" data-testid="timezone-note">
+          Note: this account&apos;s days follow {c.timezone}, the store&apos;s follow {storeTimezone}. Each day&apos;s ad figures cover different hours than the store&apos;s day.
+        </p>
+      )}
+    </>
+  );
+}
+
+/** The platform's own words about an account's last failure or its status, behind "Details". */
+export function AccountProblems({ c }: { c: AdConnection }) {
+  if (!c.lastError && !c.accountStatusDetail) return null;
+  return (
+    <details className="text-xs text-muted">
+      <summary className="cursor-pointer select-none">
+        Details<span className="sr-only"> for {accountLabel(c)}</span>
+      </summary>
+      <div className="mt-1 space-y-1 break-words">
+        {c.lastError && <p>What {AD_PLATFORMS[c.provider].name} said: {c.lastError}</p>}
+        {c.accountStatusDetail && <p>About the account: {c.accountStatusDetail}</p>}
+        {c.consecutiveFailures > 1 && <p>Updates in a row that didn&apos;t work: {c.consecutiveFailures}</p>}
+      </div>
+    </details>
+  );
+}
+
+export function DemoBadge() {
+  return (
+    <p className="inline-flex rounded-full border border-warn/40 bg-warn/10 px-2 py-0.5 text-xs font-medium text-warn" data-testid="demo-badge">
+      {DEMO_BADGE}
+    </p>
+  );
+}
+
+/** The Google Ads demo's own buttons: its dashboard, and (for those who manage integrations) a sync or a reset of its figures. */
+export function DemoActions({ manage, busy, actions }: { manage: boolean; busy: boolean; actions?: { onSync: () => void; onReset: () => void } }) {
+  return (
+    <div className="flex flex-wrap items-center gap-2" data-testid="demo-actions">
+      <Link className="btn-primary h-8 px-3 text-xs" href="/advertising/google/analytics">
+        Open demo dashboard
+      </Link>
+      {manage && actions && (
+        <>
+          <button type="button" className="btn-secondary h-8 px-3 text-xs" onClick={actions.onSync} disabled={busy} data-testid="demo-sync">
+            Sync demo data
+          </button>
+          <button type="button" className="btn-secondary h-8 px-3 text-xs" onClick={actions.onReset} disabled={busy} data-testid="demo-reset">
+            Reset demo data
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** An account's "Show on dashboard" box, named for the account (the visible words first): every row has one. */
+export function ShowOnDashboard({ c, busy, onToggle }: { c: AdConnection; busy: boolean; onToggle: () => void }) {
+  return (
+    <label className="inline-flex cursor-pointer items-center gap-2 text-sm">
+      <input type="checkbox" className="h-4 w-4 accent-[var(--accent)]" checked={c.enabled} onChange={onToggle} disabled={busy} aria-label={`Show on dashboard: ${accountLabel(c)}`} />
+      Show on dashboard
+    </label>
+  );
+}
+
+/**
+ * One connected ad account on Settings → Connect your business: its name and id, currency and time
+ * zone, how it stands and why, when it last synced and how far its figures go, the permissions
+ * granted, who connected it, and (for those allowed) its "Show on dashboard" switch and Disconnect.
  */
 export function AdAccountRow({
   c,
@@ -128,7 +266,6 @@ export function AdAccountRow({
   onDisconnect,
   demoActions,
   syncsPath,
-  children,
 }: {
   c: AdConnection;
   storeTimezone: string | null;
@@ -140,43 +277,10 @@ export function AdAccountRow({
   demoActions?: { onSync: () => void; onReset: () => void };
   /** Where its recent syncs are read from; none, no list. */
   syncsPath?: string | null;
-  children?: ReactNode;
 }) {
   const state = connectionState(c);
-  const tone = stateInfo(state, c.demo).tone;
   const name = accountLabel(c);
-  const P = AD_PLATFORMS[c.provider];
-  // A sync asked for is running: that's the news, even for an account whose last update failed.
-  const headline = state === "synchronizing" ? activeLine(c, state) : (c.message ?? activeLine(c, state));
-  const otherDays = !!c.timezone && !!storeTimezone && !sameDays(c.timezone, storeTimezone, new Date());
-  const accessLeft = c.provider === "meta" ? daysUntil(c.accessExpiresAt) : null;
-  const permissions = grantedPermissions(c);
-  const accountStatus = adAccountStatusLabel(c.accountStatus, c.provider) ?? (c.accountStatus === "active" ? "Active" : null);
-
-  const facts: Array<[string, ReactNode]> = [
-    // A demo says what it is where a real account says who it belongs to.
-    ...(c.demo
-      ? ([
-          ["Account type", "Demo advertising account (simulated)"],
-          ["Data source", "Generated sample data"],
-          ["Billing", "Not applicable: demo"],
-          ["Verification", "Not verified by Google"],
-          ["Demo seed", String(c.demoSeed ?? "—")],
-        ] as Array<[string, ReactNode]>)
-      : []),
-    ...(c.demo
-      ? []
-      : ([["Read through", c.source === "nango" ? `Direct connection to ${P.name} (sign-in kept by Nango)` : `Direct connection to ${P.name}`]] as Array<[string, ReactNode]>)),
-    ["Last successful sync", c.lastSyncedAt ? <span title={exact(c.lastSyncedAt)}>{fmtRelative(c.lastSyncedAt)}</span> : "Not yet"],
-    ["Last attempted sync", c.lastSyncAttemptAt ? <span title={exact(c.lastSyncAttemptAt)}>{fmtRelative(c.lastSyncAttemptAt)}</span> : "Not yet"],
-    ["Data through", c.syncedThrough ? `${fmtDay(c.syncedThrough)}${c.historyFrom ? ` (from ${fmtDay(c.historyFrom)})` : ""}` : "Nothing stored yet"],
-    ["Data freshness", freshness(c)],
-  ];
-  if (accountStatus) facts.push([`Account at ${P.name}`, accountStatus]);
-  if (c.loginCustomerId) facts.push(["Reached through", `Manager account ${c.loginCustomerId}`]);
-  if (c.connectedBy) facts.push(["Connected by", c.connectedBy.you ? "You" : (c.connectedBy.name ?? c.connectedBy.email ?? "A member of this workspace")]);
-  facts.push(["Connected", <span key="at" title={exact(c.connectedAt)}>{fmtRelative(c.connectedAt)}</span>]);
-  if (accessLeft !== null) facts.push(["Meta access ends", accessLeft <= 0 ? "Ended" : `In ${accessLeft} day${accessLeft === 1 ? "" : "s"}`]);
+  const f = accountFacts(c);
 
   return (
     <li className="space-y-2 px-3 py-3" data-testid="ad-account" data-state={state} data-account={c.accountId}>
@@ -193,18 +297,14 @@ export function AdAccountRow({
             {c.timezone ? ` · ${c.timezone}` : ""}
           </p>
           {c.demo && (
-            <p className="mt-1 inline-flex rounded-full border border-warn/40 bg-warn/10 px-2 py-0.5 text-xs font-medium text-warn" data-testid="demo-badge">
-              {DEMO_BADGE}
-            </p>
+            <div className="mt-1">
+              <DemoBadge />
+            </div>
           )}
         </div>
         {manage && (
           <div className="flex flex-wrap items-center gap-2">
-            <label className="inline-flex cursor-pointer items-center gap-2 text-sm">
-              {/* Named for the account (the visible words first): every row has one. */}
-              <input type="checkbox" className="h-4 w-4 accent-[var(--accent)]" checked={c.enabled} onChange={onToggle} disabled={busy} aria-label={`Show on dashboard: ${name}`} />
-              Show on dashboard
-            </label>
+            <ShowOnDashboard c={c} busy={busy} onToggle={onToggle} />
             <button type="button" className="btn-secondary h-8 px-3 text-xs" onClick={onDisconnect} disabled={busy} aria-label={`Disconnect ${name}`} data-testid="account-disconnect">
               {c.demo ? "Disconnect demo" : "Disconnect"}
             </button>
@@ -212,71 +312,28 @@ export function AdAccountRow({
         )}
       </div>
 
-      {headline && (
-        <p className={`text-sm ${tone === "good" ? "text-muted" : TONE_TEXT[tone]}`} data-testid="account-message">
-          {headline}
-        </p>
-      )}
-      {accessLeft !== null && accessLeft > 0 && accessLeft <= 14 && c.status === "active" && (
-        <p className="text-sm text-warn">Meta access ends in {accessLeft} day{accessLeft === 1 ? "" : "s"}: reconnect to keep the numbers coming.</p>
-      )}
-      {otherDays && (
-        <p className="text-xs text-warn" data-testid="timezone-note">
-          Note: this account&apos;s days follow {c.timezone}, the store&apos;s follow {storeTimezone}. Each day&apos;s ad figures cover different hours than the store&apos;s day.
-        </p>
-      )}
+      <AccountMessages c={c} storeTimezone={storeTimezone} />
 
       <Facts
-        rows={[
-          ...facts,
-          [
-            "Permissions granted",
-            c.demo ? (
-              <>
-                Demo data access (simulated): {DEMO_PERMISSIONS.join(" · ")}.
-                <span className="block text-xs text-muted">Fictional application permissions, not Google OAuth scopes: no Google permission was requested or granted.</span>
-              </>
-            ) : (
-              <>
-                {permissions.length ? permissions.join(" · ") : "Not listed by the platform"}
-                {c.provider === "google" && <span className="block text-xs text-muted">Google has no read-only permission for Google Ads; bizinsights only reads.</span>}
-              </>
-            ),
-          ],
-        ]}
+        rows={present([
+          ...f.demo,
+          f.readThrough,
+          f.lastSynced,
+          f.lastAttempt,
+          f.dataThrough,
+          ["Data freshness", freshness(c)],
+          f.accountStatus,
+          f.reachedThrough,
+          f.connectedBy,
+          f.connected,
+          f.accessEnds,
+          f.permissions,
+        ])}
       />
 
-      {(c.lastError || c.accountStatusDetail) && (
-        <details className="text-xs text-muted">
-          <summary className="cursor-pointer select-none">
-            Details<span className="sr-only"> for {name}</span>
-          </summary>
-          <div className="mt-1 space-y-1 break-words">
-            {c.lastError && <p>What {P.name} said: {c.lastError}</p>}
-            {c.accountStatusDetail && <p>About the account: {c.accountStatusDetail}</p>}
-            {c.consecutiveFailures > 1 && <p>Updates in a row that didn&apos;t work: {c.consecutiveFailures}</p>}
-          </div>
-        </details>
-      )}
+      <AccountProblems c={c} />
       {syncsPath && !c.demo && <RecentSyncs path={syncsPath} name={name} />}
-      {c.demo && (
-        <div className="flex flex-wrap items-center gap-2" data-testid="demo-actions">
-          <Link className="btn-primary h-8 px-3 text-xs" href="/advertising/google/analytics">
-            Open demo dashboard
-          </Link>
-          {manage && demoActions && (
-            <>
-              <button type="button" className="btn-secondary h-8 px-3 text-xs" onClick={demoActions.onSync} disabled={busy} data-testid="demo-sync">
-                Sync demo data
-              </button>
-              <button type="button" className="btn-secondary h-8 px-3 text-xs" onClick={demoActions.onReset} disabled={busy} data-testid="demo-reset">
-                Reset demo data
-              </button>
-            </>
-          )}
-        </div>
-      )}
-      {children}
+      {c.demo && <DemoActions manage={manage} busy={busy} actions={demoActions} />}
     </li>
   );
 }

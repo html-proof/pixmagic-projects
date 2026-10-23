@@ -144,7 +144,8 @@ buttons go back to the direct sign-in, and connections made through Nango keep w
 4. The card says **Synchronizing** while the first 90 days are read, then **Connected**, with the last
    successful sync, data through, freshness and recent syncs. History is then walked back to 25 months. Recent
    days are refreshed about every hour, and recent conversions and AdSense's month-end figures are re-checked daily.
-5. **Refresh**, **Reconnect**, **Change accounts** and **Disconnect** are on the card. Disconnecting deletes the
+5. **Refresh**, **Reconnect**, **Change accounts** and **Disconnect** are on the card (on Settings → Advertising:
+   **Sync data now**, **View data details**, **Reconnect account** and **Disconnect**). Disconnecting deletes the
    account's figures from bizinsights and hands bizinsights' access back to the platform once nothing else
    relies on it.
 

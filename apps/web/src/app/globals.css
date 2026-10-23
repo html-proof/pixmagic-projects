@@ -16,6 +16,8 @@
   --info: #2f62a3;
   /* A third hue for things that are neither good nor bad (Settings → Security's password card). */
   --violet: #6e56cf;
+  /* A fourth decorative hue, for icon tiles that only tell items apart (Settings → Advertising's chips). */
+  --rose: #c2417a;
   --chart: #18794e;
   /* Status as a filled shape (health bars, stock bars, status dots): brighter than the text
      colours above, which have to stay readable as text. Always next to a label. */
@@ -55,6 +57,7 @@
     --good: #6fcf97;
     --info: #7aa7e6;
     --violet: #a594f9;
+    --rose: #f27aa6;
     --chart: #6fbf94;
     --fill-danger: #f2555a;
     --fill-warn: #f0b429;
@@ -85,6 +88,7 @@
   --color-good: var(--good);
   --color-info: var(--info);
   --color-violet: var(--violet);
+  --color-rose: var(--rose);
   --color-fill-danger: var(--fill-danger);
   --color-fill-warn: var(--fill-warn);
   --color-fill-good: var(--fill-good);
