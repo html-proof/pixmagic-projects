@@ -375,7 +375,7 @@ test("a member who may only view integrations gets no buttons; Manage integratio
   await grant(["integrations.status"]);
   await page.goto("/settings/integrations");
   await expect(platform(page, "int-google")).toHaveText("Connected");
-  await expect(page.getByTestId("int-google-accounts")).toContainText("Google Ads: Shop Search");
+  await expect(page.getByTestId("int-google-accounts")).toContainText("Account: Shop Search");
   await expect(page.getByText("needs the Manage integrations permission")).toBeVisible();
   await expect(platform(page, "int-whatsapp")).toHaveText("Not connected");
   await expect(page.getByTestId("wa-connect")).toHaveCount(0);
