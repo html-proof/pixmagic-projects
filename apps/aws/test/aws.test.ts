@@ -119,6 +119,8 @@ describe("the static UI", () => {
     expect(await get("/auth/callback")).toMatchObject({ status: 200, text: "callback" });
     const missing = await get("/nope");
     expect(missing).toMatchObject({ status: 404, text: "missing" });
+    // An address that can't be decoded is a bad request, shown with the same page.
+    expect(await get("/%E0%A4%A")).toMatchObject({ status: 400, text: "missing" });
   });
 
   it("applies the _headers rules, caches only hashed files, and never serves outside the folder", async () => {

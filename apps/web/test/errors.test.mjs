@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import ts from "typescript";
 const source = await readFile(new URL("../src/lib/apiClient.ts", import.meta.url), "utf8");
@@ -77,7 +77,8 @@ const require = createRequire(import.meta.url);
 function localRequire(id) {
   if (id === "@/lib/apiClient") return clientExports;
   if (!id.startsWith("@/")) return require(id);
-  const source = readFileSync(new URL(`../src/${id.slice(2)}${id.startsWith("@/hooks/") ? ".ts" : ".tsx"}`, import.meta.url), "utf8");
+  const base = new URL(`../src/${id.slice(2)}`, import.meta.url).href;
+  const source = readFileSync(new URL(existsSync(new URL(`${base}.tsx`)) ? `${base}.tsx` : `${base}.ts`), "utf8");
   const compiled = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText;
   const exports = {};
   new Function("require", "exports", compiled)(localRequire, exports);
@@ -110,7 +111,7 @@ test("route boundaries expose the installed Next.js retry callback", async () =>
 });
 
 test("every error variant has a decorative illustration and a labelled recovery region", () => {
-  for (const kind of ["forbidden", "server", "unavailable", "session", "network", "sync", "integration", "empty", "invite", "payment", "validation"]) {
+  for (const kind of ["forbidden", "server", "unavailable", "session", "notFound", "network", "sync", "integration", "empty", "invite", "payment", "validation"]) {
     const markup = renderToStaticMarkup(React.createElement(componentExports.ErrorState, { kind }));
     assert.match(markup, /<svg[^>]+aria-hidden="true"/);
     assert.match(markup, /aria-labelledby=/);
@@ -121,6 +122,19 @@ test("every error variant has a decorative illustration and a labelled recovery 
   assert.match(markup, /role="status"/);
   assert.match(markup, /Last successful data/);
   assert.ok(!markup.includes("secret"));
+});
+
+test("full-page errors sit in the site's frame and show their status code", () => {
+  const markup = renderToStaticMarkup(React.createElement(componentExports.ErrorState, { kind: "notFound", fullPage: true }));
+  assert.match(markup, /aria-label="bizinsights home"/);
+  assert.match(markup, />404<\/text>/);
+  assert.match(markup, /Error 404/);
+  assert.match(markup, /Page not found/);
+  assert.match(markup, /Go back/);
+  const offline = renderToStaticMarkup(React.createElement(componentExports.ErrorState, { kind: "network" }));
+  assert.ok(!offline.includes("Error "));
+  assert.ok(!offline.includes("bizinsights home"));
+  assert.match(offline, /Offline/);
 });
 
 test("remaining HTTP failures keep distinct recovery meanings", async () => {

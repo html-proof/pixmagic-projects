@@ -270,7 +270,10 @@ and suppression of late shared-session sign-outs. Public customer links omit cre
 never change merchant permissions or session state.
 
 `ErrorState`, `ErrorNotice` and `PublicLinkError` provide recovery views; the last keeps customers
-on the store's public link. Retry-After hints disable manual retries and delay automatic retries.
+on the store's public link. Every error card (the 404 page, crashes, failed loads, customer links) is
+`ErrorPanel` in `components/ErrorState.tsx`: the status code in the logo's green, or an illustration
+for a failure without one, and a `fullPage` one sits in the site's frame (`ErrorPage`), so a new error
+screen uses it rather than a design of its own. Retry-After hints disable manual retries and delay automatic retries.
 Use `pnpm --filter @app/web test` for transport and recovery tests and
 `pnpm --filter @app/web test:errors-ui` for browser checks independent of Postgres and Cognito.
 
