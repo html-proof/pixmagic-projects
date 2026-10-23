@@ -1,4 +1,4 @@
-Contact: mailto:sales@ikorex.com.au
+Contact: mailto:bizinsightsaus@yahoo.com
 Expires: 2027-10-15T00:00:00.000Z
 Preferred-Languages: en
 Canonical: https://bizinsights.io/.well-known/security.txt

@@ -904,7 +904,9 @@ monitor, so it is not in CDK. Detection needs about 10 days of history (from ~26
 AWS's default: `aws ce update-anomaly-subscription --region us-east-1 --subscription-arn
 arn:aws:ce::605411278365:anomalysubscription/b4c7c83e-dfb5-4310-b5c3-83da07099523
 --threshold-expression` with `{"And":[...]}` of `ANOMALY_TOTAL_IMPACT_ABSOLUTE` ≥ 100 and
-`ANOMALY_TOTAL_IMPACT_PERCENTAGE` ≥ 40.
+`ANOMALY_TOTAL_IMPACT_PERCENTAGE` ≥ 40. Its subscriber is set by hand too, so a new `budgetEmail` needs
+the same command with `--subscribers Address=<address>,Type=EMAIL` (done 2026-10-22 for
+bizinsightsaus@yahoo.com).
 
 **Daily cost email** (`costReport` in config.ts, on in production only): every morning at 07:00
 Melbourne time the `CostReport` schedule runs the cron function's `{"action":"cost-report"}`

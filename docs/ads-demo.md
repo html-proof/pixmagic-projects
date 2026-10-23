@@ -10,9 +10,10 @@ a separate mode that never falls back to the demo.
 
 ## What a merchant sees
 
-1. Settings → **Connect your business** (or Settings → **Advertising**): the Google Ads card offers
-   **Try demo** next to (or, while the real sign-in isn't set up on this server, instead of)
-   **Continue with Google Ads**. Members with "Manage integrations" see it.
+1. Settings → **Advertising**: the Google Ads card offers **Try demo** next to (or, while the real
+   sign-in isn't set up on this server, instead of) **Continue with Google Ads**. On Settings →
+   **Connect your business**, the **Google** choice offers it under "Which Google do you use?" (or as
+   its only button while no Google sign-in is set up). Members with "Manage integrations" see it.
 2. **Try demo** opens bizinsights' own five-screen flow: an explanation (no Google account or data is
    used), the demo account (`DEMO-ADS-001`, "Demo Business Marketing", the store's currency and time
    zone), the demo's fictional data permissions (not Google OAuth scopes), "Connecting…" while the
