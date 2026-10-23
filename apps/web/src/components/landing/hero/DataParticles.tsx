@@ -210,6 +210,11 @@ interface LoopState {
   sprites: HTMLCanvasElement[] | null;
   /** Something was drawn on the 2D canvas last frame (so it needs clearing). */
   drawn: boolean;
+  /**
+   * Whether the 2D canvas is showing. Hidden while it is blank (past the stage-1 guides and
+   * stage-2 labels): an empty full-screen layer still costs the GPU a full-screen blend per frame.
+   */
+  shown: boolean;
   /** Lane guide stroke, rebuilt when the focus point or the size changes. */
   guide: CanvasGradient | null;
   guideKey: number;
@@ -230,6 +235,7 @@ function newLoopState(): LoopState {
     ctxFont: "",
     sprites: null,
     drawn: true,
+    shown: true,
     guide: null,
     guideKey: -1,
   };
@@ -318,7 +324,17 @@ export function DataParticles({ progress, enter, coreX, coreY, coreScale, wide, 
     if (!still) particles.current ??= createParticles(glRef.current);
   }, [still]);
 
-  const draw = (ctx: CanvasRenderingContext2D, { width: w, height: h, time: t, resized }: CanvasFrame) => {
+  const draw = (ctx: CanvasRenderingContext2D, frame: CanvasFrame) => {
+    drawField(ctx, frame);
+    const canvas = canvasRef.current;
+    const s = state.current;
+    if (canvas && s && s.drawn !== s.shown) {
+      s.shown = s.drawn;
+      canvas.style.visibility = s.drawn ? "" : "hidden";
+    }
+  };
+
+  const drawField = (ctx: CanvasRenderingContext2D, { width: w, height: h, time: t, resized }: CanvasFrame) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const f = (FIELD ??= buildField());

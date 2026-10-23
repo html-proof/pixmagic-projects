@@ -326,6 +326,7 @@ export async function sendSmsJob(jobId: string, deps: SmsDeps): Promise<SendOutc
   values.store_name ??= store.name ?? store.shopDomain.replace(/\.myshopify\.com$/, "");
   if (contact && values.customer_name === undefined) values.customer_name = contactFirstName(contact);
   const uses = templateVariables(version.body).used;
+  if (uses.includes("business_name") && !values.business_name) values.business_name = (await businessNameOf(store.id)) ?? values.store_name;
   let optOut: { code: string; hash: string } | null = null;
   if (uses.includes("opt_out_url")) {
     optOut = newOptOutCode();
@@ -482,16 +483,35 @@ export async function settleStuckSends(olderThanMs = 10 * 60_000): Promise<numbe
 // Test texts and one-off sends from the Send SMS page
 // ---------------------------------------------------------------------------
 
-/** Sample values for a test text: what the preview shows. */
+/** What {{business_name}} says for a store: the name given in Set up SMS, or null (then the store's name). */
+async function businessNameOf(storeId: string): Promise<string | null> {
+  const setup = await systemDb.smsSetup.findUnique({ where: { storeId }, select: { businessName: true } });
+  return setup?.businessName?.trim() || null;
+}
+
+/** Sample values for a test text: what the preview shows. The store's and business's names are the store's own, filled in when it is sent. */
 export function sampleValues(): SmsValues {
   const out: SmsValues = {};
-  for (const [k, info] of Object.entries(SMS_VARIABLE_INFO)) if (k !== "opt_out_url" && k !== "store_name") out[k as keyof SmsValues] = info.sample;
+  for (const [k, info] of Object.entries(SMS_VARIABLE_INFO)) if (k !== "opt_out_url" && k !== "store_name" && k !== "business_name") out[k as keyof SmsValues] = info.sample;
   return out;
 }
 
-/** Send an approved template (or the latest version, for a test) to one of the team's verified test numbers, now. */
-export async function sendTestSms(store: Store, templateId: string, testNumberId: string, deps: SmsDeps, actor: Actor): Promise<SmsMessageJob> {
+/** How long the same test text to the same number is refused after one went: a double click, or a second press while the first is on its way. */
+export const TEST_REPEAT_WAIT_S = 30;
+
+/**
+ * Send an approved template (or the latest version, for a test) to one of the team's verified test
+ * numbers, now. `requestId` (the browser's, one per press of the button) makes a retried request
+ * return the text already sent instead of sending another; the same template to the same number
+ * again within TEST_REPEAT_WAIT_S is refused.
+ */
+export async function sendTestSms(store: Store, templateId: string, testNumberId: string, deps: SmsDeps, actor: Actor, requestId?: string | null): Promise<SmsMessageJob> {
   if (smsMode() === "off") throw new SmsError("SMS isn't switched on for bizinsights yet.", 409, "platform_off");
+  const dedupeKey = requestId ? `test:req:${requestId}` : `test:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 8)}`;
+  if (requestId) {
+    const already = await systemDb.smsMessageJob.findUnique({ where: { storeId_dedupeKey: { storeId: store.id, dedupeKey } } });
+    if (already) return already;
+  }
   const tn = await systemDb.smsTestNumber.findFirst({ where: { id: testNumberId, storeId: store.id } });
   if (!tn) throw new SmsError("Test number not found.", 404, "not_found");
   if (tn.status !== "verified") throw new SmsError("Verify this number with the code AWS texted it first.", 409, "test_number_unverified");
@@ -502,12 +522,15 @@ export async function sendTestSms(store: Store, templateId: string, testNumberId
   if (!v) throw new SmsError("Template not found.", 404, "not_found");
   const sender = await senderOf(store.id);
   if (!sender || sender.identityCheck !== "verified") throw new SmsError("Verify the sender with AWS first (Sender configuration).", 409, "sender_unverified");
+  if ((await deps.coord.hit(`sms:test-repeat:${tn.id}:${templateId}`, TEST_REPEAT_WAIT_S)) > 1) {
+    throw new SmsError(`A test text just went to this number. Wait ${TEST_REPEAT_WAIT_S} seconds and check your phone before sending another.`, 429, "test_repeat");
+  }
   const { job } = await scheduleSms(
     {
       store,
       purpose: "test",
       category: v.category as SmsCategory,
-      dedupeKey: `test:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 8)}`,
+      dedupeKey,
       templateId,
       templateVersion: v.version,
       testNumber: tn,

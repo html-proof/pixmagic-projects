@@ -80,8 +80,8 @@ export function MessagingOverview() {
               </p>
             )}
           </div>
-          <Link href="/messaging/sender" className={setup.sender ? "btn-secondary" : "btn-primary"}>
-            {setup.sender ? "Sender configuration" : "Set up the sender"}
+          <Link href={setup.sending ? "/messaging/settings" : "/messaging/setup"} className={setup.sending ? "btn-secondary" : "btn-primary"}>
+            {setup.sending ? "SMS Settings" : "Set up SMS"}
           </Link>
         </div>
       </section>
@@ -99,7 +99,13 @@ export function MessagingOverview() {
           <h2 id="setup-h" className="font-semibold">
             Finish setting up <span className="text-sm font-normal text-muted">({steps.length - todo} of {steps.length} done)</span>
           </h2>
-          <p className="text-sm text-muted">No text reaches a customer until each step is done.</p>
+          <p className="text-sm text-muted">
+            No text reaches a customer until each step is done. The quickest way:{" "}
+            <Link className="text-accent underline-offset-2 hover:underline" href="/messaging/setup">
+              Set up SMS
+            </Link>{" "}
+            takes you through it in five short steps.
+          </p>
           <ol className="mt-2 divide-y divide-border">
             {steps.map(([done, href, text]) => (
               <Step key={text} done={done} href={href}>

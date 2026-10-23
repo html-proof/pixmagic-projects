@@ -1,6 +1,7 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { actionError, api } from "@/lib/api";
+import { Link2 } from "lucide-react";
 import { WhatsappIcon } from "./WhatsappUi";
 import type { Overview } from "./types";
 
@@ -77,6 +78,7 @@ export function EmbeddedSignup({
   onConnected,
   notify,
   label = "Continue with WhatsApp",
+  look = "whatsapp",
 }: {
   /** The store's WhatsApp API path (/workspaces/:ws/stores/:storeId/whatsapp). */
   base: string;
@@ -85,6 +87,8 @@ export function EmbeddedSignup({
   /** Where to announce a finished connection (the WhatsApp pages' toasts, or a line on the page). */
   notify: (kind: "success" | "error", text: string) => void;
   label?: string;
+  /** "row": the button of a row on Settings → Integrations (the page's Connect) instead of WhatsApp's own green. */
+  look?: "whatsapp" | "row";
 }) {
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
   const session = useRef<{ waba_id?: string; phone_number_id?: string; business_id?: string; event?: string } | null>(null);
@@ -206,18 +210,24 @@ export function EmbeddedSignup({
     <div className="space-y-2">
       <button
         type="button"
-        className="inline-flex h-11 items-center gap-2 rounded-lg bg-[#25D366] px-5 text-sm font-semibold text-[#0b3d20] shadow-sm transition hover:brightness-95 disabled:opacity-60"
+        className={
+          look === "row"
+            ? "btn-primary h-11 px-5 font-semibold"
+            : "inline-flex h-11 items-center gap-2 rounded-lg bg-[#25D366] px-5 text-sm font-semibold text-[#0b3d20] shadow-sm transition hover:brightness-95 disabled:opacity-60"
+        }
         onClick={() => void start()}
         disabled={busy}
+        // A row's "Connect" is named for its platform: the page has one per row.
+        aria-label={look === "row" && !busy && phase.kind !== "stopped" ? `${label} WhatsApp` : undefined}
         data-testid="wa-connect"
       >
-        <WhatsappIcon size={20} /> {busy ? "Waiting for Meta…" : phase.kind === "stopped" ? "Try again" : label}
+        {look === "row" ? <Link2 size={17} strokeWidth={2.2} aria-hidden /> : <WhatsappIcon size={20} />} {busy ? "Waiting for Meta…" : phase.kind === "stopped" ? "Try again" : label}
       </button>
       {status && (
         <p
           role={phase.kind === "stopped" && phase.tone === "error" ? "alert" : "status"}
           aria-live="polite"
-          className={`flex items-start gap-2 text-sm ${phase.kind === "stopped" && phase.tone === "error" ? "text-danger" : "text-muted"}`}
+          className={`flex items-start gap-2 text-sm ${look === "row" ? "max-w-xs" : ""} ${phase.kind === "stopped" && phase.tone === "error" ? "text-danger" : "text-muted"}`}
           data-testid="wa-connect-status"
           data-phase={phase.kind}
         >

@@ -110,7 +110,9 @@ export function toGsmFriendly(text: string): string {
 export const SMS_VARIABLES = [
   "customer_name",
   "store_name",
+  "business_name",
   "order_number",
+  "order_status",
   "order_total",
   "currency",
   "product_name",
@@ -134,7 +136,9 @@ export interface VariableInfo {
 export const SMS_VARIABLE_INFO: Record<SmsVariable, VariableInfo> = {
   customer_name: { label: "Customer first name", sample: "Sam", maxLength: 24, kind: "text", description: "The first name on the order or checkout. Only letters, spaces, hyphens and apostrophes are kept." },
   store_name: { label: "Store name", sample: "Acme Outfitters", maxLength: 40, kind: "text", description: "Your store's name in Shopify." },
+  business_name: { label: "Business name", sample: "Acme", maxLength: 40, kind: "text", description: "The business name you gave in SMS setup (your store's name until you give one)." },
   order_number: { label: "Order number", sample: "#1042", maxLength: 20, kind: "code", description: "The order's name in Shopify, such as #1042." },
+  order_status: { label: "Order status", sample: "confirmed", maxLength: 20, kind: "text", description: "What happened to the order, in a word: confirmed, paid, shipped, delivered, cancelled or refunded." },
   order_total: { label: "Order total", sample: "89.95", maxLength: 16, kind: "money", description: "The order total, two decimals, without a currency sign." },
   currency: { label: "Currency", sample: "AUD", maxLength: 3, kind: "currency", description: "The order's three-letter currency code." },
   product_name: { label: "Product name", sample: "Merino Crew Sweater", maxLength: 40, kind: "text", description: "The first item on the order or checkout, shortened to 40 characters; links are taken out." },
@@ -168,6 +172,37 @@ export function templateVariables(body: string): TemplateVariables {
   }
   const rest = body.replace(PLACEHOLDER, "");
   return { used, unknown, malformed: /\{\{|\}\}/.test(rest) };
+}
+
+/**
+ * Names people write for a variable that has another name here ({{order_id}} for
+ * {{order_number}}): the editor offers to fix them, and the "unknown variable" error says which
+ * one was meant.
+ */
+export const SMS_VARIABLE_ALIASES: Record<string, SmsVariable> = {
+  order_id: "order_number",
+  order: "order_number",
+  order_no: "order_number",
+  name: "customer_name",
+  first_name: "customer_name",
+  customer: "customer_name",
+  business: "business_name",
+  brand: "business_name",
+  company_name: "business_name",
+  shop_name: "store_name",
+  status: "order_status",
+  total: "order_total",
+  tracking_link: "tracking_url",
+  tracking: "tracking_url",
+  product: "product_name",
+};
+
+/** The body with every aliased placeholder written as the variable it means ({{order_id}} → {{order_number}}). */
+export function fixVariableAliases(body: string): string {
+  return body.replace(PLACEHOLDER, (whole, name: string) => {
+    const meant = SMS_VARIABLE_ALIASES[name.toLowerCase()] ?? (isSmsVariable(name.toLowerCase()) ? name.toLowerCase() : null);
+    return meant ? `{{${meant}}}` : whole;
+  });
 }
 
 /** Control characters and the bidirectional overrides that can make a text read differently from what it says. */
@@ -214,7 +249,10 @@ export function cleanVariable(variable: SmsVariable, raw: string | number | null
       const name = first.replace(/[^\p{L}\p{M}'’-]/gu, "");
       return name ? clip(name, info.maxLength) : null;
     }
+    case "order_status":
+      return /^[a-z][a-z ]{0,19}$/.test(text) ? text : null;
     case "store_name":
+    case "business_name":
     case "product_name": {
       const v = text.replace(LINK_LIKE, "").replace(/\s{2,}/g, " ").trim();
       return v ? clip(v, info.maxLength) : null;
@@ -347,7 +385,11 @@ export function checkTemplate(t: TemplateCheckInput): TemplateIssue[] {
   const vars = templateVariables(body);
   if (!body.trim()) out.push({ level: "error", code: "empty", message: "Write the message." });
   if (Array.from(body).length > SMS_MAX_BODY) out.push({ level: "error", code: "too_long", message: `Messages can be at most ${SMS_MAX_BODY} characters.` });
-  if (vars.unknown.length) out.push({ level: "error", code: "unknown_variable", message: `Unknown variable${vars.unknown.length > 1 ? "s" : ""}: ${vars.unknown.map((u) => `{{${u}}}`).join(", ")}.` });
+  if (vars.unknown.length) {
+    const meant = vars.unknown.map((u) => [u, SMS_VARIABLE_ALIASES[u.toLowerCase()] ?? (isSmsVariable(u.toLowerCase()) ? u.toLowerCase() : null)] as const).filter((p): p is readonly [string, SmsVariable] => !!p[1]);
+    const hint = meant.length ? ` Did you mean ${meant.map(([, v]) => `{{${v}}}`).join(", ")}?` : "";
+    out.push({ level: "error", code: "unknown_variable", message: `Unknown variable${vars.unknown.length > 1 ? "s" : ""}: ${vars.unknown.map((u) => `{{${u}}}`).join(", ")}.${hint}` });
+  }
   if (vars.malformed) out.push({ level: "error", code: "malformed", message: "A variable isn't closed: write it as {{variable_name}}." });
   if (t.category === "transactional") {
     const promo = vars.used.filter((v) => MARKETING_ONLY.includes(v));
@@ -356,7 +398,7 @@ export function checkTemplate(t: TemplateCheckInput): TemplateIssue[] {
   }
   if (t.category === "marketing") {
     if (!vars.used.includes("opt_out_url")) out.push({ level: "error", code: "no_opt_out", message: "Marketing messages must tell customers how to stop them: add {{opt_out_url}} (for example \"Opt out: {{opt_out_url}}\")." });
-    if (!vars.used.includes("store_name")) out.push({ level: "warning", code: "no_sender_name", message: "Say who the message is from: add {{store_name}}, unless your sender ID already shows it." });
+    if (!vars.used.includes("store_name") && !vars.used.includes("business_name")) out.push({ level: "warning", code: "no_sender_name", message: "Say who the message is from: add {{business_name}}, unless your sender ID already shows it." });
   }
   if (SHORTENERS.test(body)) out.push({ level: "warning", code: "link_shortener", message: "Carriers often block texts with public link shorteners. Use your own domain's links." });
   const worst = worstCaseSegments(body);
@@ -438,7 +480,7 @@ export interface TriggerInfo {
   defaultDelay: number;
 }
 
-const ORDER_VARS: SmsVariable[] = ["customer_name", "store_name", "order_number", "order_total", "currency", "product_name"];
+const ORDER_VARS: SmsVariable[] = ["customer_name", "store_name", "order_number", "order_status", "order_total", "currency", "product_name"];
 
 export const TRIGGER_INFO: Record<SmsTrigger, TriggerInfo> = {
   order_created: { label: "Order created", category: "transactional", source: "orders/create webhook", variables: ORDER_VARS, available: true, defaultDelay: 0 },
@@ -489,9 +531,19 @@ export const TRIGGER_INFO: Record<SmsTrigger, TriggerInfo> = {
   },
 };
 
-/** Variables a template uses that a trigger can't fill (the rule can't be approved with them). */
+/** {{order_status}} for each order event: the word a text says about the order. */
+export const ORDER_STATUS_WORD: Partial<Record<SmsTrigger, string>> = {
+  order_created: "confirmed",
+  payment_completed: "paid",
+  fulfillment_created: "shipped",
+  delivery_confirmed: "delivered",
+  order_cancelled: "cancelled",
+  refund_issued: "refunded",
+};
+
+/** Variables a template uses that a trigger can't fill (the rule can't be approved with them). The store's and business's names are always there. */
 export function missingForTrigger(body: string, trigger: SmsTrigger): SmsVariable[] {
-  const can = new Set<SmsVariable>([...TRIGGER_INFO[trigger].variables, "store_name"]);
+  const can = new Set<SmsVariable>([...TRIGGER_INFO[trigger].variables, "store_name", "business_name"]);
   return templateVariables(body).used.filter((v) => !can.has(v));
 }
 
@@ -1131,7 +1183,7 @@ export const COUNTRY_RULES: Record<string, { label: string; region: string; regi
   NZ: { label: "New Zealand", region: "ap-southeast-2", registration: "Sender IDs aren't supported: use a long code or a shared short code." },
   US: { label: "United States", region: "ap-southeast-2", registration: "Needs a registered 10DLC campaign, a verified toll-free number or a short code. Unregistered traffic is blocked." },
   CA: { label: "Canada", region: "ap-southeast-2", registration: "Needs a toll-free number (verified) or a long code; sender IDs aren't supported." },
-  GB: { label: "United Kingdom", region: "ap-southeast-2", registration: "Sender IDs work without registration; register with the UK SMS SenderID Protection Registry if you want carriers to protect your brand." },
+  GB: { label: "United Kingdom", region: "ap-southeast-2", registration: "Sender IDs must be registered (AWS console → Registrations → UK sender ID; AWS user guide, checked 2026-10-23)." },
   IN: { label: "India", region: "ap-south-1", registration: "Local routes need a DLT-registered entity (Entity ID), a registered sender ID (header) and each template's DLT Template ID; AWS sends Indian local traffic only from Mumbai (ap-south-1) or Hyderabad (ap-south-2)." },
 };
 
@@ -1169,3 +1221,256 @@ export type SmsSenderInput = z.infer<typeof smsSenderSchema>;
 
 /** Masked number for the UI. Re-exported so pages import one module. */
 export const maskedNumber = (e164: string) => maskPhone(e164);
+
+// ---------------------------------------------------------------------------
+// Sender names (alphanumeric sender IDs) and the simple setup
+// ---------------------------------------------------------------------------
+
+/**
+ * Whether customers in a country can see a business's name as the sender, per AWS End User
+ * Messaging SMS ("Supported countries and regions", column "Supports Sender IDs", checked
+ * 2026-10-23):
+ *  - registered: only a sender ID registered with the country's regulator or carriers (through
+ *    AWS's registrations). Unregistered, AWS sends as "NOTICE" or carriers mark it "Likely scam".
+ *  - dynamic: any sender ID, no registration.
+ *  - none: names aren't shown there: customers see a phone number (or a short code).
+ * Countries missing here: not known to bizinsights yet, checked by hand when a merchant asks.
+ * This is AWS End User Messaging SMS's sender ID resource, not Amazon SNS's sender ID attribute
+ * (which bizinsights doesn't use).
+ */
+export type SenderIdSupport = "registered" | "dynamic" | "none";
+
+export const SENDER_ID_SUPPORT: Record<string, SenderIdSupport> = {
+  AU: "registered",
+  NZ: "none",
+  US: "none",
+  CA: "none",
+  GB: "registered",
+  IE: "registered",
+  IN: "registered",
+  SG: "registered",
+  PH: "registered",
+  AE: "registered",
+  SA: "registered",
+  QA: "registered",
+  KE: "registered",
+  ES: "registered",
+  TH: "registered",
+  ID: "registered",
+  VN: "registered",
+  TR: "registered",
+  LK: "registered",
+  EG: "registered",
+  HK: "dynamic",
+  JP: "dynamic",
+  DE: "dynamic",
+  FR: "dynamic",
+  NL: "dynamic",
+  IT: "dynamic",
+  AT: "dynamic",
+  DK: "dynamic",
+  FI: "dynamic",
+  NO: "dynamic",
+  SE: "dynamic",
+  CH: "dynamic",
+  PL: "dynamic",
+  PT: "dynamic",
+  IL: "dynamic",
+  MX: "dynamic",
+  NG: "dynamic",
+  PK: "dynamic",
+  MY: "none",
+  ZA: "none",
+  BE: "none",
+  BR: "none",
+  AR: "none",
+  CL: "none",
+  CO: "none",
+  KR: "none",
+  TW: "none",
+  CN: "none",
+};
+
+export const senderIdSupport = (country: string | null | undefined): SenderIdSupport | "unknown" => (country ? (SENDER_ID_SUPPORT[country.toUpperCase()] ?? "unknown") : "unknown");
+
+/** AWS's limits on a sender ID: 1 to 11 of a-z, A-Z, 0-9 and "-" (not first or last), at least one letter, no spaces. bizinsights asks for 3 or more, as AWS recommends. */
+export const SENDER_NAME_MIN = 3;
+export const SENDER_NAME_MAX = 11;
+
+/** Names carriers treat as generic or that AWS uses itself: they say nothing about who sent the text. */
+const GENERIC_SENDER_NAMES = new Set(["NOTICE", "INFO", "SMS", "TEXT", "ALERT", "ALERTS", "MESSAGE", "VERIFY", "OTP", "TEST", "AWS", "AMAZON", "BANK", "SUPPORT", "SERVICE", "NOREPLY"]);
+
+export interface SenderNameCheck {
+  /** The name as it would be used (trimmed; the case is kept: carriers show it as written). */
+  name: string;
+  /** Problems with the name itself; empty when it can be asked for. */
+  problems: string[];
+  support: SenderIdSupport | "unknown";
+  /** What a customer in that country sees as the sender, in words. */
+  customerSees: string;
+  /** What has to happen before it can be used there. */
+  next: string;
+}
+
+/**
+ * Whether `raw` can be a sender name for customers in `country`, and what they would see. The
+ * same check runs in the browser (as the merchant types) and on the server (before a request is
+ * recorded). It says what is possible; only AWS saying the sender ID exists, is set up for the
+ * workspace and is registered (where that is required) makes it usable.
+ */
+export function checkSenderName(raw: string, country: string | null | undefined): SenderNameCheck {
+  const name = (raw ?? "").trim();
+  const problems: string[] = [];
+  if (!name) problems.push("Enter the name your customers should see.");
+  else {
+    const compact = name.replace(/\s+/g, "");
+    if (/\s/.test(name)) problems.push(`Sender names can't have spaces: try "${compact.slice(0, SENDER_NAME_MAX)}".`);
+    if (/[^A-Za-z0-9\s-]/.test(name)) problems.push("Use only letters, numbers and hyphens (no accents, symbols or emoji).");
+    if (compact.length > SENDER_NAME_MAX) problems.push(`At most ${SENDER_NAME_MAX} characters: this one has ${compact.length}.`);
+    else if (compact.length < SENDER_NAME_MIN) problems.push(`At least ${SENDER_NAME_MIN} characters, so customers can tell who it is.`);
+    if (!/[A-Za-z]/.test(name)) problems.push("Include at least one letter: names of only numbers are read as phone numbers.");
+    if (/^-|-$/.test(compact)) problems.push("A hyphen can't be the first or last character.");
+    if (country?.toUpperCase() === "FR" && name.includes("-")) problems.push("France doesn't allow hyphens in sender names (since 1 March 2026).");
+    if (GENERIC_SENDER_NAMES.has(compact.toUpperCase())) problems.push(`"${compact}" doesn't say who you are, and carriers block generic names: use your business's name.`);
+  }
+  const support = senderIdSupport(country);
+  const where = country ? countryLabel(country) : "your customers' country";
+  const shown = name || "Your name";
+  const sees: Record<SenderIdSupport | "unknown", { customerSees: string; next: string }> = {
+    registered: {
+      customerSees: `${shown}, once it is registered`,
+      next: `${where} only shows registered sender names. bizinsights registers it with AWS for you; texts can't use it until the registration is approved.`,
+    },
+    dynamic: { customerSees: shown, next: `${where} shows sender names without registration. bizinsights sets it up with AWS for you after checking the name is yours to use.` },
+    none: {
+      customerSees: "A phone number (or a short code)",
+      next: `Phones in ${where} don't show sender names: your texts come from a number. Say who you are in the message itself, for example "{{business_name}}: …".`,
+    },
+    unknown: { customerSees: `${shown}, if ${where} allows it`, next: `bizinsights checks AWS's rules for ${where} when you ask for the name, and tells you what it needs.` },
+  };
+  return { name, problems, support, ...sees[support] };
+}
+
+/** A sender name made from a business name: letters and digits only, at most 11, upper case ("Ikorex Store" → "IKOREXSTORE"). */
+export function suggestSenderName(business: string): string {
+  // NFKD splits "é" into "e" and its accent; the accent is then dropped with everything else that isn't a-z, 0-9.
+  return Array.from(business.normalize("NFKD"))
+    .filter((ch) => /[A-Za-z0-9]/.test(ch))
+    .join("")
+    .slice(0, SENDER_NAME_MAX)
+    .toUpperCase();
+}
+
+/** A country's name from its code without Intl (this module stays free of browser APIs): COUNTRY_RULES's label, else the code. */
+function countryLabel(code: string): string {
+  return COUNTRY_RULES[code.toUpperCase()]?.label ?? code.toUpperCase();
+}
+
+/**
+ * A store's sender name, as far as anyone can tell:
+ *  - draft: typed and saved, not asked for yet
+ *  - requested: sent to bizinsights, which sets it up (and registers it) with AWS
+ *  - pending: AWS has it for this workspace; its registration isn't complete yet
+ *  - approved: AWS has it for this workspace and it may be used (registered, or none needed)
+ *  - needs_changes: the registration was sent back or closed
+ *  - unavailable: AWS has this name for another business
+ */
+export const SENDER_NAME_STATUSES = ["draft", "requested", "pending", "approved", "needs_changes", "unavailable"] as const;
+export type SenderNameStatus = (typeof SENDER_NAME_STATUSES)[number];
+
+/**
+ * The state from what AWS reported (null: AWS has no such sender ID) and whether it was asked for.
+ * `registration` is AWS's registration status (null where the country needs none); a name is only
+ * ever "approved" on AWS's word, never because it was asked for.
+ */
+export function senderNameStatus(found: { mine: boolean; registration: string | null } | null, requested: boolean): SenderNameStatus {
+  if (!found) return requested ? "requested" : "draft";
+  if (!found.mine) return "unavailable";
+  const r = (found.registration ?? "").toUpperCase();
+  if (!r || r === "COMPLETE" || r === "REGISTERED" || r === "ACTIVE" || r === "NOT_REQUIRED") return "approved";
+  if (/REQUIRES_UPDATES|CLOSED|DELETED|DENIED|REJECTED/.test(r)) return "needs_changes";
+  return "pending";
+}
+
+/** The setup's steps, in order. */
+export const SETUP_STEPS = ["connect", "sender", "message", "test", "automate"] as const;
+export type SetupStep = (typeof SETUP_STEPS)[number];
+
+export interface SetupAutomation {
+  /** The Shopify event it runs on; null when Shopify has no such event. */
+  trigger: SmsTrigger | null;
+  key: string;
+  label: string;
+  /** What the merchant reads under the label. */
+  help: string;
+  /** The message the setup starts from. */
+  body: string;
+  /** Why it can't be turned on, when it can't. */
+  unavailable?: string;
+}
+
+/** What the setup's "Automatic SMS" step offers: order updates (transactional), one message each. Marketing texts are on the advanced pages. */
+export const SETUP_AUTOMATIONS: SetupAutomation[] = [
+  {
+    trigger: "order_created",
+    key: "order_created",
+    label: "New order confirmed",
+    help: "Sent when a customer places an order.",
+    body: "Hi {{customer_name}}, your order {{order_number}} has been {{order_status}}. Thank you for shopping with {{business_name}}!",
+  },
+  {
+    trigger: "payment_completed",
+    key: "payment_completed",
+    label: "Payment confirmation",
+    help: "Sent when an order that wasn't paid at checkout is paid. Card payments come with the order, so most stores need only one of these two.",
+    body: "Hi {{customer_name}}, we've received your payment for order {{order_number}}. Thank you, {{business_name}}.",
+  },
+  {
+    trigger: "fulfillment_created",
+    key: "fulfillment_created",
+    label: "Order shipped",
+    help: "Sent when you fulfill an order. An order shipped without a tracking link doesn't get this text while it shows the link.",
+    body: "Good news {{customer_name}}! Your {{business_name}} order {{order_number}} is on its way. Track it: {{tracking_url}}",
+  },
+  {
+    trigger: "delivery_confirmed",
+    key: "delivery_confirmed",
+    label: "Order delivered",
+    help: "Sent when the carrier tells Shopify the parcel arrived (only carriers that report deliveries).",
+    body: "Hi {{customer_name}}, your order {{order_number}} has been delivered. Enjoy, from {{business_name}}!",
+  },
+  {
+    trigger: null,
+    key: "appointment_reminder",
+    label: "Appointment reminder",
+    help: "A reminder before a booked appointment.",
+    body: "",
+    unavailable: "Shopify doesn't record appointments, so there is no appointment to remind customers of.",
+  },
+];
+
+export const setupAutomation = (trigger: string) => SETUP_AUTOMATIONS.find((a) => a.trigger === trigger) ?? null;
+
+/** The setup's first message (step 3): the order confirmation. */
+export const SETUP_FIRST_MESSAGE = SETUP_AUTOMATIONS[0]!.body;
+
+/** Variables the setup's message editor offers as buttons, in order. */
+export const SETUP_VARIABLES: SmsVariable[] = ["customer_name", "business_name", "order_number", "order_status", "tracking_url", "order_total", "product_name"];
+
+/** The setup's suggested monthly budget (US$). */
+export const SETUP_DEFAULT_BUDGET_USD = 20;
+
+/** What "Save draft" keeps. Every field is optional: a draft is whatever the merchant has so far. */
+export const smsSetupDraftSchema = z.object({
+  step: z.enum(SETUP_STEPS).optional(),
+  businessName: z.string().trim().max(40).nullish(),
+  senderName: z.string().trim().max(30).nullish(),
+  country: z
+    .string()
+    .regex(/^[A-Z]{2}$/)
+    .nullish(),
+  message: z.string().max(2000).nullish(),
+  monthlyBudgetUsd: z.number().min(0).max(100_000).nullish(),
+  transactionalBasis: z.enum(SMS_TRANSACTIONAL_BASES).nullish(),
+});
+export type SmsSetupDraft = z.infer<typeof smsSetupDraftSchema>;

@@ -224,6 +224,7 @@ describe("ID token verification", () => {
     email_verified: "true",
     given_name: "Ada",
     family_name: "L",
+    picture: "https://lh3.googleusercontent.com/a/ada=s96-c",
     auth_time: now - 5,
     nonce: "n1",
     identities: [{ providerName: "Google", providerType: "Google", userId: "42" }],
@@ -244,9 +245,18 @@ describe("ID token verification", () => {
       email: "person@gmail.com",
       emailVerified: true,
       name: "Ada L",
+      picture: "https://lh3.googleusercontent.com/a/ada=s96-c",
       method: "google",
       authTime: now - 5,
     });
+  });
+
+  it("keeps a picture only at an https address of sensible length", async () => {
+    for (const picture of ["http://lh3.googleusercontent.com/a/ada", "javascript:alert(1)", "not a url", `https://lh3.googleusercontent.com/${"a".repeat(2100)}`, 42]) {
+      expect((await auth.verifyIdToken(await sign({ ...good, picture }))).picture).toBeNull();
+    }
+    const { picture: _none, ...withoutPicture } = good;
+    expect((await auth.verifyIdToken(await sign(withoutPicture))).picture).toBeNull();
   });
 
   it("rejects another pool, another app client, an access token, a stale token and a replayed nonce", async () => {

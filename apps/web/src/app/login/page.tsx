@@ -7,6 +7,7 @@ import {
   afterSignIn,
   authConfig,
   authErrorMessage,
+  cancelGoogleLink,
   cancelSignInCode,
   challengeFromError,
   confirmSignUp,
@@ -14,6 +15,7 @@ import {
   finishEmailCodeSignIn,
   finishEmailedSignIn,
   finishMfaSignIn,
+  pendingGoogleLink,
   pendingSignInCode,
   recallEmail,
   rememberEmail,
@@ -45,6 +47,7 @@ const NOTICES: Record<string, { kind: "info" | "success"; text: string }> = {
   confirmedElsewhere: { kind: "info", text: "Your email address is already confirmed, with a different password. Sign in with that one, or use \"Forgot Password?\" to choose a new one." },
   confirmed: { kind: "success", text: "Your email address is confirmed. Sign in to continue." },
   deleted: { kind: "info", text: "Your account has been deleted." },
+  googleCancelled: { kind: "info", text: "Google sign-in was cancelled. Nothing was changed and no account was created. You can try again below." },
 };
 
 const CREATE_ACCOUNT = { href: "/signup", label: "Create Account" };
@@ -67,6 +70,9 @@ export default function LoginPage() {
   const [emailCode, setEmailCode] = useState<{ email: string; challenge: CodeChallenge } | null>(null);
   const [error, setError] = useState<{ text: string; hint?: string; reset?: boolean } | null>(null);
   const [notice, setNotice] = useState<{ kind: "info" | "success"; text: string } | null>(null);
+  // Continue with Google met this address's existing account: the API holds the Google account
+  // for this browser until it signs in to that account here, which links it.
+  const [linking, setLinking] = useState<{ email: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const fields = useFieldErrors(
     codeSignIn === "email"
@@ -86,6 +92,18 @@ export default function LoginPage() {
     setEmail(recallEmail());
     authConfig()
       .then((c) => c.emailOtp && setCodeSignIn("available"))
+      .catch(() => {});
+    // A Google account held for an existing account (from /auth/callback, or still standing after a
+    // password reset): ask for that account's sign-in, with its address filled in.
+    pendingGoogleLink()
+      .then((p) => {
+        if (p.pending) {
+          setEmail(p.email);
+          setLinking({ email: p.email });
+        } else if (q.has("link")) {
+          setNotice({ kind: "info", text: "That Google sign-in has timed out. Sign in below, or continue with Google again." });
+        }
+      })
       .catch(() => {});
     // A sign-in waiting for its emailed code in this browser (the page was reloaded): carry on with it.
     pendingSignInCode()
@@ -270,8 +288,32 @@ export default function LoginPage() {
   );
 
   return (
-    <AuthSplitShell title="Welcome Back" subtitle="Sign in to your account to continue to your dashboard." action={CREATE_ACCOUNT}>
+    <AuthSplitShell
+      title={linking ? "Link your Google account" : "Welcome Back"}
+      subtitle={linking ? "Sign in to your existing account once to finish." : "Sign in to your account to continue to your dashboard."}
+      action={CREATE_ACCOUNT}
+    >
       {notice && <Alert kind={notice.kind}>{notice.text}</Alert>}
+      {linking && (
+        <Alert kind="info">
+          <p className="font-medium">
+            You already have a bizinsights account with <strong>{linking.email}</strong>.
+          </p>
+          <p className="mt-0.5 text-[13px]">
+            To keep it safe, sign in to it below the way you usually do. Your Google account is then linked to it, and from then on Continue with Google signs you straight in.
+          </p>
+          <button
+            type="button"
+            className="mt-1 text-[13px] underline"
+            onClick={() => {
+              void cancelGoogleLink().catch(() => undefined);
+              setLinking(null);
+            }}
+          >
+            Don&apos;t link Google
+          </button>
+        </Alert>
+      )}
       {error && (
         <Alert onDismiss={() => setError(null)}>
           <p className="font-medium">{error.text}</p>
@@ -360,7 +402,8 @@ export default function LoginPage() {
         </form>
       )}
 
-      <SocialButtons row keep={keep} terms before={<Divider label="OR CONTINUE WITH" />} />
+      {/* Linking: Google would only bring the same Google account back here. */}
+      {!linking && <SocialButtons row keep={keep} terms before={<Divider label="OR CONTINUE WITH" />} />}
 
       <p className="pt-1 text-center text-[15px] text-muted">
         Don&apos;t have an account?{" "}

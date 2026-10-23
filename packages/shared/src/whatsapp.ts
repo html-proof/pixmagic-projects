@@ -77,6 +77,11 @@ const COUNTRIES: Record<string, { code: string; trunk?: string; len?: [number, n
   ZA: { code: "27", trunk: "0", len: [9, 9] },
 };
 
+/** Countries whose numbers can be typed without "+" (a country picker's choices). */
+export const PHONE_COUNTRIES: readonly string[] = Object.keys(COUNTRIES);
+/** A country's calling code ("61" for AU), or null when we don't know its rules. */
+export const callingCode = (country: string): string | null => COUNTRIES[country.toUpperCase()]?.code ?? null;
+
 /** Where countries share a calling code, the one a number is said to be from. */
 const SHARED_CODE_COUNTRY: Record<string, string> = { "1": "US" };
 

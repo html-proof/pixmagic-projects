@@ -14,7 +14,9 @@ import {
   ruleAction,
   saveCampaign,
   saveSender,
+  saveSetupDraft,
   sendManualSms,
+  setSetupAutomation,
   sendSmsJob,
   settleStuckSends,
   smsOnShopifyEvent,
@@ -199,6 +201,25 @@ describe("order events", () => {
     const contact = await systemDb.smsContact.findFirstOrThrow({ where: { storeId: store.id } });
     expect(contact.phoneMasked).toMatch(/^\+61 •+ 678$/);
     expect(contact.phoneEnc).not.toContain("412345678");
+  });
+
+  it("runs the order updates Set up SMS turned on, with the business's name and the order's status", async () => {
+    const store = await setupStore();
+    await saveSetupDraft(store, { businessName: "IKOREX" }, actor);
+    await setSetupAutomation(store, "order_created", { on: true, confirm: true }, actor);
+    await setSetupAutomation(store, "fulfillment_created", { on: true, confirm: true }, actor);
+    const o = order();
+    await event(store, "orders/create", o);
+    await event(store, "orders/fulfilled", { ...o, fulfillments: [{ id: 501, status: "success", created_at: new Date().toISOString(), tracking_url: "https://track.example.com/AB1" }] });
+    await drain();
+    expect(sms.sent.map((s) => s.body)).toEqual([
+      `Hi Sam, your order ${o.name} has been confirmed. Thank you for shopping with IKOREX!`,
+      `Good news Sam! Your IKOREX order ${o.name} is on its way. Track it: https://track.example.com/AB1`,
+    ]);
+    expect((await jobs(store.id)).map((j) => [j.trigger, j.status])).toEqual([
+      ["order_created", "accepted"],
+      ["fulfillment_created", "accepted"],
+    ]);
   });
 
   it("sends once when Shopify delivers the same order twice, or orders/updated follows", async () => {

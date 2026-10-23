@@ -128,6 +128,10 @@ export const LIMITS = {
   smsVerificationCheck: { max: 10, windowSec: 3600 },
   /** Test texts to the team's own numbers, per store. */
   smsTest: { max: 10, windowSec: 600 },
+  /** Set up SMS: "Request sender name" (each one emails the platform owner), per store. */
+  smsSenderRequest: { max: 5, windowSec: 3600 },
+  /** Set up SMS: Connect, and the setup's other changes (drafts, messages, automatic texts), per store. */
+  smsSetup: { max: 120, windowSec: 600 },
   /** One-off texts to a customer from the Send SMS page, per store. */
   smsManual: { max: 30, windowSec: 600 },
   /** The template editor's live preview (as the merchant types), per store. */

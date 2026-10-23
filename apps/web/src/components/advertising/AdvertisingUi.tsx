@@ -129,7 +129,7 @@ export function NotConnected({ ov, platform }: { ov: Overview; platform?: AdProv
         body={body.trim()}
         action={
           manage ? (
-            // One platform's page goes to its card; the overview, to the three choices on Connect your business.
+            // One platform's page goes to its card; the overview, to every platform on Settings → Integrations.
             <Link className="btn-primary" href={hidden || platform ? "/settings/ads" : "/settings/integrations"}>
               {hidden ? "Manage ad accounts" : `Connect ${platform ? name : "advertising accounts"}`}
             </Link>

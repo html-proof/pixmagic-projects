@@ -1,4 +1,4 @@
-import type { SegmentFilter, SegmentInfo, SmsCategory, SmsRuleInput, SmsStatus, TemplateIssue } from "@app/shared/sms";
+import type { SegmentFilter, SegmentInfo, SenderIdSupport, SenderNameStatus, SetupStep, SmsCategory, SmsRuleInput, SmsStatus, SmsTransactionalBasis, SmsTrigger, TemplateIssue } from "@app/shared/sms";
 
 // ---------------------------------------------------------------------------
 // What the Customer Messaging API answers (apps/api/src/routes/sms*.ts), as the pages read it.
@@ -371,4 +371,52 @@ export interface Suppression {
   note: string | null;
   liftable: boolean;
   createdAt: string;
+}
+
+/** GET …/sms/setup (apps/api/src/routes/smsSetup.ts): Set up SMS and SMS Settings. */
+export interface SmsSetupState {
+  mode: SmsMode;
+  step: SetupStep;
+  businessName: string | null;
+  defaultBusinessName: string;
+  connection: {
+    status: "not_connected" | "connected" | "failed" | "disconnected";
+    error: "platform_off" | "not_configured" | "aws_unreachable" | null;
+    checkedAt: string | null;
+    connectedAt: string | null;
+    region: string;
+    provider: string;
+  };
+  senderName: {
+    name: string | null;
+    country: string | null;
+    countryChosen: boolean;
+    status: SenderNameStatus;
+    support: SenderIdSupport | "unknown";
+    requestedAt: string | null;
+    checkedAt: string | null;
+    registration: string | null;
+    sharedAvailable: boolean;
+  };
+  sender: PublicSender | null;
+  message: string;
+  templateId: string | null;
+  automations: Array<{
+    key: string;
+    trigger: SmsTrigger | null;
+    label: string;
+    help: string;
+    unavailable: string | null;
+    body: string;
+    on: boolean;
+    ruleStatus: string | null;
+    templateId: string | null;
+    templateStatus: string | null;
+  }>;
+  sending: { monthlyBudgetUsd: number | null; transactionalBasis: SmsTransactionalBasis; on: boolean };
+  price: { country: string | null; perPartUsd: number; source: "aws_billed" | "price_list" } | null;
+  testNumbers: TestNumber[];
+  lastTest: SmsMessage | null;
+  completedAt: string | null;
+  done: Record<SetupStep, boolean>;
 }

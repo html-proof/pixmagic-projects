@@ -39,6 +39,7 @@ import { limit, LIMITS } from "../rateLimit.js";
 import { actorNames, actorOf, base, publicMessage, publicSender, publicTemplate, publicVersion, requireSmsContacts, SMS_MANAGE, SMS_READ, smsDeps, smsStore } from "./smsCommon.js";
 import { smsActivityRoutes } from "./smsActivity.js";
 import { smsOpsRoutes } from "./smsOps.js";
+import { smsSetupRoutes } from "./smsSetup.js";
 
 /**
  * Customer Messaging: the overview, the sender, test numbers, templates and one-off sends
@@ -264,8 +265,17 @@ export function smsRoutes(app: App, deps: Deps) {
     const a = await requireWorkspace(c, deps, ws, SMS_MANAGE);
     const store = await smsStore(ws, storeId);
     await limit(deps.coord, `rl:sms-test:${storeId}`, LIMITS.smsTest);
-    const input = z.object({ testNumberId: z.string().min(1).max(40) }).parse(await body(c));
-    const job = await sendTestSms(store, id, input.testNumberId, smsDeps(deps), actorOf(c, a));
+    // requestId: one per press of the button, so a retried request returns the text already sent.
+    const input = z
+      .object({
+        testNumberId: z.string().min(1).max(40),
+        requestId: z
+          .string()
+          .regex(/^[A-Za-z0-9-]{8,64}$/)
+          .nullish(),
+      })
+      .parse(await body(c));
+    const job = await sendTestSms(store, id, input.testNumberId, smsDeps(deps), actorOf(c, a), input.requestId);
     return c.json({ message: publicMessage(job, true) });
   });
 
@@ -312,4 +322,5 @@ export function smsRoutes(app: App, deps: Deps) {
 
   smsOpsRoutes(app, deps);
   smsActivityRoutes(app, deps);
+  smsSetupRoutes(app, deps);
 }

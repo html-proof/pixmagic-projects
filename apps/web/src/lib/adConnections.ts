@@ -1,7 +1,7 @@
 /**
  * Ad connections as the UI sees them: what GET /workspaces/:ws/stores/:storeId/ads answers
  * (apps/api/src/routes/ads.ts, publicConnection), and where each connection and each platform
- * stands. Settings → Connect your business and Settings → Advertising both word a connection
+ * stands. Settings → Integrations and Settings → Advertising both word a connection
  * through this module, so a state has one name and one badge on both pages.
  */
 import { AD_CONNECTION_STATUSES, AD_ERROR_STATUS, adErrorMessage, isAdAccountStatus, isAdErrorCode } from "@app/shared/ads";

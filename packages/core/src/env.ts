@@ -196,6 +196,8 @@ const schema = z.object({
   SMS_CONFIGURATION_SET: z.string().optional().default(""),
   /** A platform-owned origination identity stores may share (its AWS tags must say bizinsights:shared=true). Empty: none. */
   SMS_SHARED_SENDER: z.string().optional().default(""),
+  /** Where merchants' sender-name requests go (the platform owner, who sets them up and registers them with AWS). Empty: they are recorded and logged only. */
+  SMS_SENDER_REQUESTS_TO: z.string().optional().default(""),
   /** bizinsights' own ceiling on what all stores together may spend on texts in a month (US$), below AWS's account spending limit. */
   SMS_ACCOUNT_MONTHLY_LIMIT_USD: z.coerce.number().min(0).default(20),
   /** The most AWS may charge for one part of a text (MaxPrice is this times the parts); a dearer route refuses the text. */

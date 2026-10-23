@@ -30,8 +30,27 @@ browser ──► /api/auth/* (API)    ──► Cognito user-pool API          
 - **Accounts**: `users.id` never changes. Each Cognito user (password, Google) is linked to
   it in `auth_identities` (provider, Cognito `sub`, user name, method). Several identities can point
   at one user (`apps/api/src/identity.ts`):
+  - **Continue with Google is sign-up and sign-in in one** (the same button on `/login` and
+    `/signup`): a Google account new to bizinsights, at an address no account has, becomes a new
+    account on the spot, with the name, verified address and picture Google gives (`users.avatar_url`,
+    the pool's `picture` mapping) and its Google identity (`auth_identities`: the Cognito user
+    `google_<Google sub>`, method `google`); no form, no role anywhere until it makes or joins a
+    workspace. Two first sign-ins at once make one account (the unique `(provider, subject)` and
+    `users.email`). A returning Google account is found by its Cognito user.
   - A sign-in links to the existing account with the same address only when Cognito vouches for
     the address (a confirmed sign-up code; Google's `email_verified`). Never on an unverified one.
+  - **A new Google account never joins an account that has its own ways in by its address alone**
+    (Google's word for an address isn't proof the account is this person's, and it would skip the
+    account's two-step verification). The callback answers `{ next: "link", email }` instead, with
+    no session (the Google sign-in's refresh token is handed back) and nothing created: who the
+    Google account is waits in the coordinator for 15 minutes under an id in an httpOnly cookie
+    (`__link`, path `/api/auth`; `identity_link_pending`). The sign-in page says the address
+    already has an account and asks the person to sign in to it the usual way (the password, its
+    emailed code or the authenticator app's). That sign-in, in that browser, links the Google
+    account (`identity_linked` with `via: "sign_in"`) and the account's address is emailed; a
+    sign-in to another account links nothing and ends the hold; "Don't link Google" lets it go
+    (`DELETE /api/auth/pending-link`). An account that already has a different Google account is
+    refused (`google_other_linked`: one per account, as in Settings).
   - When that existing account's own address was never verified (an employee account made from a
     copied invitation link, whose password whoever opened the link chose), the verified sign-in
     takes it over: the account's other Cognito users are deleted, their identities removed, every
@@ -106,7 +125,8 @@ browser ──► /api/auth/* (API)    ──► Cognito user-pool API          
 | `POST /api/auth/otp/start`, `/otp/verify` | passwordless code (only with `COGNITO_EMAIL_OTP=1`) |
 | `GET /api/auth/oauth/google/start` | to Google to sign in, with state, PKCE and a nonce. `?keep=0`: "Keep me signed in" unticked. (`?link=1` no longer links: back to `returnTo` with `?link_error=start_again`) |
 | `POST /api/auth/oauth/google/link` `{ returnTo }` | link Google to the signed-in account, from our own pages: `{ redirect }` to Google's account chooser (a sign-in in the last 15 minutes, or `POST /api/auth/account/methods/google/prepare` with the password first); back to `<returnTo>?linked=google` or `?link_error=<code>`; refusals are errors whose code the page puts there |
-| `POST /api/auth/oauth/callback` | what the provider sent back (from the `/auth/callback` page) |
+| `POST /api/auth/oauth/callback` | what the provider sent back (from the `/auth/callback` page): `{ user, redirect }`, `{ linked, redirect }` (Settings), or `{ next: "link", provider, email }` (the address is an existing account's: sign in to it to link) |
+| `GET`, `DELETE /api/auth/pending-link` | the Google account held in this browser for an existing account (`{ pending, provider, email }`); let it go |
 | `POST /api/auth/logout`, `/logout-all` | this browser; every device |
 | `GET /api/auth/session`, `/api/auth/whoami`, `/api/me` | the session |
 | `GET /api/auth/account` | Settings → Security: methods (with `id`), `hasPassword`, `canLinkGoogle`, `canAddPassword`, `confirmWith` (`password`, `recent_sign_in` or `own_address_sign_in`: what removing a method or deleting the account asks for), `mfaEnabled` (null: Cognito couldn't be asked) |
@@ -196,6 +216,12 @@ account passing hides that), and a logo plus brand verification are what make Go
    `https://insights-605411278365.auth.ap-southeast-2.amazoncognito.com/oauth2/authorize?…identity_provider=Google…`;
    then Continue with Google on `/login` in a private window ends on the dashboard (or onboarding,
    for a new account).
+
+The identity provider (`GoogleProvider` in `infra/aws/cognito.yaml`) asks Google for `openid email
+profile` and maps `email`, `email_verified` (without it no Google address counts as verified, and
+nothing links), `name`, `given_name`, `family_name` and `picture` (the account's profile picture)
+to the pool's attributes. Changing the mapping is an in-place update of the provider, made by the
+Deploy run like any other change; a user's attributes follow at their next Google sign-in.
 
 To switch it off again, delete the GitHub variable and run Deploy to AWS.
 
