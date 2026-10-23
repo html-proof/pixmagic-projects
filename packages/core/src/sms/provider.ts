@@ -83,6 +83,8 @@ export interface SmsProvider {
   account(region: string): Promise<SmsAccountInfo>;
   /** The origination identity (ARN or id), or null when AWS has none by that name. */
   identity(region: string, identity: string, country?: string | null): Promise<SmsIdentityInfo | null>;
+  /** Phone numbers (long codes, toll-free, 10DLC, short codes) for `country` carrying the tag `key=value`: how a number set up for a workspace is found. */
+  taggedNumbers(region: string, country: string, key: string, value: string): Promise<SmsIdentityInfo[]>;
   /** Numbers on an opt-out list (STOP replies, numbers opted out by hand in the AWS console), newest first. */
   optedOut(region: string, optOutList: string, since: Date | null): Promise<SmsOptedOutNumber[]>;
   /** AWS's sandbox verification of a test number: create it, send it a code, check the code. */
@@ -102,6 +104,7 @@ export const noSmsProvider: SmsProvider = {
   },
   account: async () => ({ tier: "NOT_CONFIGURED", sandbox: true, spendLimitUsd: null, spendLimitMaxUsd: null }),
   identity: async () => null,
+  taggedNumbers: async () => [],
   optedOut: async () => [],
   createVerifiedNumber: async () => {
     throw notConfigured();
@@ -177,6 +180,9 @@ export function fakeSmsProvider(o: { identities?: SmsIdentityInfo[]; account?: P
     },
     async identity(_region, identity) {
       return identities.get(identity) ?? null;
+    },
+    async taggedNumbers(_region, country, key, value) {
+      return [...new Set(identities.values())].filter((i) => i.kind !== "sender_id" && i.kind !== "pool" && i.country === country && i.tags[key] === value);
     },
     async optedOut(_region, _list, since) {
       return optOuts.filter((x) => !since || x.at > since);

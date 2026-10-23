@@ -8,6 +8,8 @@ import { SectionLayout, ToastProvider } from "@/components/AppUi";
 
 const ITEMS = [
   ["", "Overview"],
+  ["setup", "Set up SMS"],
+  ["settings", "SMS Settings"],
   ["send", "Send SMS"],
   ["templates", "Message Templates"],
   ["automations", "Automated Workflows"],

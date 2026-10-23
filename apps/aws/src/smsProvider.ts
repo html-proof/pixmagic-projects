@@ -181,6 +181,38 @@ export function awsSmsProvider(o: SmsProviderOptions): SmsProvider {
       }
     },
 
+    async taggedNumbers(region: string, country: string, key: string, value: string): Promise<SmsIdentityInfo[]> {
+      // DescribePhoneNumbers can't filter by tag: the country's numbers, then each one's tags (an account has a handful).
+      const out: SmsIdentityInfo[] = [];
+      let next: string | undefined;
+      for (let page = 0; page < 5; page++) {
+        const r = await call<{ PhoneNumbers?: Array<{ PhoneNumberArn: string; PhoneNumberId: string; PhoneNumber: string; Status?: string; IsoCountryCode?: string; NumberType?: string; TwoWayEnabled?: boolean; OptOutListName?: string; RegistrationId?: string }>; NextToken?: string }>(
+          region,
+          "DescribePhoneNumbers",
+          { Filters: [{ Name: "iso-country-code", Values: [country] }], MaxResults: 20, ...(next ? { NextToken: next } : {}) },
+        );
+        for (const p of r.PhoneNumbers ?? []) {
+          const t = await tags(region, p.PhoneNumberArn);
+          if (t[key] !== value) continue;
+          out.push({
+            kind: NUMBER_KIND[p.NumberType ?? ""] ?? "long_code",
+            arn: p.PhoneNumberArn,
+            id: p.PhoneNumberId,
+            label: p.PhoneNumber,
+            country: p.IsoCountryCode ?? country,
+            status: p.Status ?? null,
+            twoWay: !!p.TwoWayEnabled,
+            optOutList: p.OptOutListName ?? null,
+            registrationStatus: await registrationStatus(region, p.RegistrationId),
+            tags: t,
+          });
+        }
+        next = r.NextToken;
+        if (!next) break;
+      }
+      return out;
+    },
+
     async optedOut(region: string, optOutList: string, since: Date | null): Promise<SmsOptedOutNumber[]> {
       const out: SmsOptedOutNumber[] = [];
       let next: string | undefined;

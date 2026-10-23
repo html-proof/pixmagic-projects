@@ -975,6 +975,7 @@ export async function purgeStoreData(storeId: string, fetchImpl?: FetchLike) {
     systemDb.smsTestNumber.deleteMany({ where: { storeId } }),
     systemDb.smsAuditLog.deleteMany({ where: { storeId } }),
     systemDb.smsSenderConfiguration.deleteMany({ where: { storeId } }),
+    systemDb.smsSetup.deleteMany({ where: { storeId } }),
     // The orders and visits are gone, and where their history started with them: the next import
     // and pixel record their own.
     systemDb.store.updateMany({ where: { id: storeId }, data: { ordersHistoryFrom: null, pixelInstalledAt: null } }),

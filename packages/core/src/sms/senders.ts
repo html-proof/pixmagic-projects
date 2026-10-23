@@ -11,7 +11,7 @@
  */
 import { systemDb, type SmsSenderConfiguration, type Store } from "@app/db";
 import { maskPhone, normalizePhone } from "@app/shared";
-import { COUNTRY_RULES, type SmsSenderInput } from "@app/shared/sms";
+import { COUNTRY_RULES, senderIdSupport, type SmsSenderInput } from "@app/shared/sms";
 import { env } from "../env.js";
 import { logger } from "../logger.js";
 import { configurationSetFor, smsAudit, smsEncrypt, SmsError, smsMode, smsPhoneHash, smsRegion, type SmsDeps } from "./common.js";
@@ -100,7 +100,9 @@ export async function verifySender(store: Pick<Store, "id" | "workspaceId">, dep
     logger.warn({ err, storeId: store.id }, "sms identity check failed");
     check = "error";
   }
-  const registration = info?.registrationStatus ? (REGISTERED.has(info.registrationStatus.toUpperCase()) ? "complete" : /REVIEW|SUBMITTED|PROVISIONING|CREATED/i.test(info.registrationStatus) ? "in_review" : "required") : info ? "not_required" : "unknown";
+  // A sender ID AWS reports no registration for still needs one where the country requires it (AWS only says so for some).
+  const reported = info?.registrationStatus ?? (info?.kind === "sender_id" && senderIdSupport(info.country) === "registered" ? "REQUIRED" : null);
+  const registration = reported ? (REGISTERED.has(reported.toUpperCase()) ? "complete" : /REVIEW|SUBMITTED|PROVISIONING|CREATED/i.test(reported) ? "in_review" : "required") : info ? "not_required" : "unknown";
   const updated = await systemDb.smsSenderConfiguration.update({
     where: { id: s.id },
     data: {
