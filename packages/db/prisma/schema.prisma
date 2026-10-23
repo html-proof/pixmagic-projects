@@ -326,6 +326,12 @@ model Store {
   // import window (Shopify shares 60 days without read_all_orders), the epoch when the whole
   // history was imported, null when no import has recorded it. Set by the worker's orders sync.
   ordersHistoryFrom     DateTime?   @map("orders_history_from")
+  // When Shopify created the store (Shop.createdAt), read with its details by the "shop" sync job;
+  // null until it has been. The dashboard's dates begin on its day (All time, custom dates).
+  // @ignore: the column exists in the database (migration 20261023150000) but not yet in the
+  // client, because the workflow migrates after the new code is live; the change that reads it
+  // removes @ignore once this migration has run.
+  shopCreatedAt         DateTime?   @map("shop_created_at") @ignore
   createdAt             DateTime    @default(now()) @map("created_at")
   updatedAt             DateTime    @updatedAt @map("updated_at")
   workspace             Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
