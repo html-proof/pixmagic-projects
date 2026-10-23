@@ -61,8 +61,9 @@ for (const [status, title] of [[403, "Access denied"], [500, "Something went wro
 test("unknown paths keep the 404 status and dashboard recovery", async ({ page }) => {
   const response = await page.goto("/this-page-does-not-exist");
   expect(response?.status()).toBe(404);
-  await expect(page.getByRole("heading", { name: "Page Not Found" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Go to Dashboard", exact: true })).toHaveAttribute("href", "/dashboard");
+  await expect(page.getByRole("heading", { name: "Page not found" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Go to dashboard", exact: true })).toHaveAttribute("href", "/dashboard");
+  await expect(page.getByRole("button", { name: "Go back" })).toBeVisible();
 });
 
 test("an expired invitation preserves the current shared-link flow", async ({ page }) => {

@@ -185,9 +185,25 @@ jobs:
         run: |
           d=$(aws ssm get-parameter --name /insights/production/runtime --query Parameter.Value --output text 2>/dev/null | sha256sum | cut -c1-64) || d=""
           echo "digest=${d:-unknown}" >> "$GITHUB_OUTPUT"
+      # The PC's connection drops calls now and then: CDK then can't assume its bootstrap roles
+      # ("could not be used to assume ... Proceeding anyway", and the base role is refused what only
+      # they may do) or a socket never connects, and the deploy fails with nothing in AWS changed
+      # (2026-10-19, and twice on 2026-10-23). cdk deploy is safe to repeat, so a failure that reads
+      # like the network is tried again a minute later, three attempts in all. Any other failure goes
+      # straight to the rollback below.
       - name: Deploy (CDK)
         working-directory: infra/cdk
-        run: npx cdk deploy --all --require-approval never --concurrency 3 -c env=production -c schedules=${{ vars.AWS_SCHEDULES || 'off' }} -c alertEmail=${{ vars.AWS_ALERT_EMAIL }} -c googleClientId=${{ vars.GOOGLE_SIGNIN_CLIENT_ID }}
+        run: |
+          deploy=(npx cdk deploy --all --require-approval never --concurrency 3 -c env=production -c "schedules=${{ vars.AWS_SCHEDULES || 'off' }}" -c "alertEmail=${{ vars.AWS_ALERT_EMAIL }}" -c "googleClientId=${{ vars.GOOGLE_SIGNIN_CLIENT_ID }}")
+          network='could not be used to assume|did not establish a connection|ETIMEDOUT|ECONNRESET|ECONNREFUSED|EAI_AGAIN|ENOTFOUND|getaddrinfo|socket hang up|TimeoutError|NetworkingError'
+          log=$(mktemp)
+          for attempt in 1 2 3; do
+            if "${deploy[@]}" 2>&1 | tee "$log"; then exit 0; fi
+            if ! grep -qE "$network" "$log"; then exit 1; fi
+            if (( attempt < 3 )); then echo "::warning::cdk deploy failed on the network (attempt $attempt of 3); trying again in 60 s."; sleep 60; fi
+          done
+          echo "::error::cdk deploy failed on the network three times: check the PC's connection (docs/aws-deployment.md, Deploy (GitHub Actions))."
+          exit 1
       # Runtime settings changed (Google switched on, say): an instance that started between the App
       # stack's alias move and the Auth stack's update holds the old ones for its lifetime. Publish
       # the same code again and move `live` (docs/aws-deployment.md, "Restarting the functions"),
