@@ -5,31 +5,33 @@ import { canManage, StoresPending, useApp, type StoreSummary } from "@/component
 import { BackFromFacebook } from "@/components/MetaAdsAccess";
 import { ShopifyIcon } from "@/components/ShopifyIcon";
 import { fmtRelative } from "@/components/dashboard/format";
-import type { Tone } from "@/components/dashboard/Primitives";
 import { Alert } from "@/components/ui";
+import { AdRow, rowState } from "@/components/integrations/AdRow";
 import { NoteAlert, StateAnnouncer } from "@/components/integrations/AdUi";
-import { AdChoices, ChoiceTile } from "@/components/integrations/ConnectChoices";
+import { AD_PLATFORMS } from "@/components/integrations/adPlatforms";
 import { GoogleAdsDemoDialog } from "@/components/integrations/GoogleAdsDemoDialog";
-import { Facts, IntegrationCard, StatusBadge } from "@/components/integrations/IntegrationCard";
+import { ConnectButton, IntegrationRow, ManageLink, OneClickSetup, RowPill } from "@/components/integrations/IntegrationRow";
 import { useAdConnections } from "@/components/integrations/useAdConnections";
 import { EmbeddedSignup } from "@/components/whatsapp/EmbeddedSignup";
 import { WhatsappIcon } from "@/components/whatsapp/WhatsappUi";
 import { quality, tier, type Overview as WaOverview } from "@/components/whatsapp/types";
+import { stateInfo, type AdProvider, type StateTone } from "@/lib/adConnections";
 import { actionError, api, friendlyError, useApi } from "@/lib/api";
 
 // ---------------------------------------------------------------------------
-// "Connect your business": three choices, Shopify, Google and Meta, each with one button that opens
-// the platform's own sign-in and a plain status (components/integrations/ConnectChoices.tsx). Nothing
-// here asks for an app id, a key or a token: bizinsights' own Shopify, Google and Meta apps do that
-// part. Accounts are managed in depth on Settings → Shopify and Settings → Advertising; signing in
-// with Google is on Settings → Security. WhatsApp, which sends messages rather than reading figures,
-// sits under the three.
+// Settings → Integrations (the owner's design, 2026-10-23): the "One Click Setup" banner, then a card
+// per platform, Google Ads, Shopify, WhatsApp, Meta Ads and Google AdSense, each with where it stands,
+// one button that opens the platform's own sign-in (Manage once connected) and what it brings
+// (components/integrations/IntegrationRow.tsx, AdRow.tsx). Nothing here asks for an app id, a key or a
+// token: bizinsights' own Shopify, Google and Meta apps do that part. Accounts are managed in depth on
+// Settings → Shopify, Settings → Advertising and WhatsApp's own pages; signing in with Google is on
+// Settings → Security.
 // ---------------------------------------------------------------------------
 
-/** Shopify's and WhatsApp's states. The ad tiles' are in lib/adConnections.ts (AD_STATE). */
+/** Shopify's and WhatsApp's states. The ad rows' are in lib/adConnections.ts (AD_STATE). */
 type State = "checking" | "unknown" | "not_connected" | "connecting" | "connected" | "action_required" | "permission_expired" | "failed" | "unavailable";
 
-const STATE: Record<State, { label: string; tone: Tone; busy?: boolean }> = {
+const STATE: Record<State, { label: string; tone: StateTone; busy?: boolean }> = {
   checking: { label: "Checking…", tone: "neutral", busy: true },
   unknown: { label: "Status unavailable", tone: "neutral" },
   not_connected: { label: "Not connected", tone: "neutral" },
@@ -41,7 +43,7 @@ const STATE: Record<State, { label: string; tone: Tone; busy?: boolean }> = {
   unavailable: { label: "Coming soon", tone: "neutral" },
 };
 
-const badge = (s: State) => <StatusBadge {...STATE[s]} state={s} />;
+const pill = (s: State) => <RowPill {...STATE[s]} state={s} />;
 
 function shopifyState(s: StoreSummary | null): State {
   if (!s || s.status === "uninstalled") return "not_connected";
@@ -61,6 +63,8 @@ function whatsappState(o: WaOverview | null, failed: boolean): State {
   if (!c.webhookVerifiedAt) return "connecting";
   return "connected";
 }
+
+const AD_ROWS: AdProvider[] = ["google", "meta", "adsense"];
 
 export default function IntegrationsPage() {
   const { workspace, store, storesStatus, offers, allowed } = useApp();
@@ -85,7 +89,7 @@ export default function IntegrationsPage() {
 
   const waState = whatsappState(wa.data, !!wa.error);
 
-  // While WhatsApp is still being set up, look again until it settles (the ad tiles do the same for a sync).
+  // While WhatsApp is still being set up, look again until it settles (the ad rows do the same for a sync).
   useEffect(() => {
     if (waState !== "connecting") return;
     const t = window.setInterval(() => void reloadWa(), 10_000);
@@ -116,22 +120,36 @@ export default function IntegrationsPage() {
 
   const waConn = wa.data?.connection ?? null;
   const shopState = shopifyState(store);
-  const announced: Array<[string, string]> = [["Shopify", STATE[shopState].label], ...(showWa && store ? [["WhatsApp", STATE[waState].label] as [string, string]] : [])];
+  const shownWa: State = store ? waState : "not_connected";
+  const announced: Array<[string, string]> = [
+    ["Shopify", STATE[shopState].label],
+    ...(showWa && store ? [["WhatsApp", STATE[waState].label] as [string, string]] : []),
+    ...(showAds
+      ? AD_ROWS.map((p): [string, string] => {
+          const r = rowState(ads, store, p);
+          return [AD_PLATFORMS[p].name, stateInfo(r.state, r.demo).label];
+        })
+      : []),
+  ];
+  const adRow = (p: AdProvider) => showAds && <AdRow provider={p} ads={ads} store={store} manage={manage} />;
 
   return (
-    <div className="space-y-4">
-      <div className="card">
-        <h1 className="text-lg font-semibold">Connect your business</h1>
-        <p className="mt-1 text-sm text-muted">
-          {showAds ? "Pick what you use: Shopify, Google or Meta. " : ""}Press its button, sign in on its own page and choose what to share. bizinsights fills in your
-          dashboard by itself: there are no keys or codes to copy.
+    <div className="space-y-6">
+      <header>
+        <h1 className="text-3xl font-bold tracking-tight">Integrations</h1>
+        <p className="mt-2 max-w-2xl leading-relaxed text-muted">
+          {showAds
+            ? "Connect your business accounts and get your data from Shopify, Google Ads, Meta Ads and AdSense, all in one place. Track performance, optimize campaigns and grow your business effortlessly."
+            : "Connect your Shopify store and get its orders, products, customers and sales in one place. Track performance and grow your business effortlessly."}
         </p>
         {!manage && (
           <p className="mt-2 text-sm text-muted">
             You can see how each connection stands. Connecting or disconnecting WhatsApp and ad accounts needs the Manage integrations permission: ask an owner or admin.
           </p>
         )}
-      </div>
+      </header>
+
+      <OneClickSetup adPlatforms={showAds} />
 
       <StateAnnouncer items={announced} />
       {note && <Alert kind={note.kind}>{note.text}</Alert>}
@@ -142,120 +160,109 @@ export default function IntegrationsPage() {
         </Alert>
       )}
 
-      <div className={`grid gap-4 ${showAds ? "lg:grid-cols-3" : ""}`}>
-        <ChoiceTile
+      <div className="space-y-5">
+        {adRow("google")}
+
+        <IntegrationRow
           testid="int-shopify"
           state={shopState}
-          icon={<ShopifyIcon size={26} />}
+          logo={<ShopifyIcon size={44} />}
           name="Shopify"
-          sub="Your store's orders, products, customers and sales"
-          badge={badge(shopState)}
-          actions={
+          sub="Track your orders, products, customers and sales."
+          pill={pill(shopState)}
+          action={
             !store ? (
-              manageStores && (
-                <Link className="btn-primary" href={`/onboarding?ws=${encodeURIComponent(workspace.id)}`} data-testid="int-shopify-connect">
-                  Connect Shopify
-                </Link>
-              )
+              manageStores && <ConnectButton name="Shopify" href={`/onboarding?ws=${encodeURIComponent(workspace.id)}`} testid="int-shopify-connect" />
             ) : (
-              <Link className={shopState === "failed" ? "btn-primary" : "btn-secondary"} href="/settings/stores" aria-label={`${shopState === "failed" ? "Fix" : "Manage"} Shopify`}>
-                {shopState === "failed" ? "Fix it" : "Manage"}
-              </Link>
+              <ManageLink name="Shopify" href="/settings/stores" attention={shopState === "failed"} />
             )
           }
+          brings={["Orders", "Products", "Customers", "Sales"]}
         >
           {store ? (
-            <>
-              <p>
-                <span className="text-muted">Store:</span> {store.name ?? store.shopDomain}
-              </p>
-              <p className="text-xs text-muted">
+            <p>
+              <span className="text-muted">Store:</span> {store.name ?? store.shopDomain}
+              <span className="text-muted">
+                {" · "}
                 {shopState === "failed"
-                  ? "Couldn't sync: see Manage"
+                  ? "Couldn't sync: see Fix it"
                   : shopState === "connecting"
                     ? "Importing your data"
                     : `Last synchronized ${store.lastSyncedAt ? fmtRelative(store.lastSyncedAt) : "not yet"}`}
-              </p>
-            </>
+              </span>
+            </p>
           ) : (
             !manageStores && <p className="text-muted">Only a workspace owner or admin can connect a Shopify store.</p>
           )}
-        </ChoiceTile>
+        </IntegrationRow>
 
-        {showAds && <AdChoices ads={ads} store={store} manage={manage} />}
-      </div>
-
-      {showWa && (
-        <section className="space-y-3" aria-labelledby="int-more-h">
-          <h2 id="int-more-h" className="pt-2 text-sm font-semibold text-muted">
-            Customer messaging
-          </h2>
-          <IntegrationCard
+        {showWa && (
+          <IntegrationRow
             testid="int-whatsapp"
-            state={store ? waState : "not_connected"}
-            icon={<WhatsappIcon size={22} />}
+            state={shownWa}
+            logo={<WhatsappIcon size={46} />}
             name="WhatsApp"
-            sub="Order and delivery updates, cart reminders and reviews from your own business number"
-            badge={badge(store ? waState : "not_connected")}
-            actions={
-              store && wa.data && storeBase ? (
-                <>
-                  {manage && wa.data.platform.embeddedSignup && (
-                    <EmbeddedSignup
-                      base={`${storeBase}/whatsapp`}
-                      platform={wa.data.platform}
-                      label={waConn ? "Reconnect with WhatsApp" : "Continue with WhatsApp"}
-                      onConnected={() => void wa.reload()}
-                      notify={(kind, text) => setNote({ kind, text })}
-                    />
-                  )}
-                  <Link className="btn-secondary" href="/whatsapp/connect">
-                    {waConn ? "Manage" : wa.data.platform.embeddedSignup ? "Other ways to connect" : "Set up WhatsApp"}
-                  </Link>
-                  {manage && waConn && (
-                    <button type="button" className="text-sm text-danger underline-offset-2 hover:underline" onClick={() => void disconnectWa()} disabled={busy}>
-                      {busy ? "Disconnecting…" : "Disconnect"}
-                    </button>
-                  )}
-                </>
-              ) : null
+            sub="Send order updates, cart reminders and campaigns to your customers from your own business number."
+            pill={pill(shownWa)}
+            action={
+              !store || !wa.data || !storeBase ? null : waConn ? (
+                <ManageLink name="WhatsApp" href="/whatsapp/connect" attention={waState === "action_required" || waState === "permission_expired" || waState === "failed"} />
+              ) : !manage ? null : wa.data.platform.embeddedSignup ? (
+                <EmbeddedSignup base={`${storeBase}/whatsapp`} platform={wa.data.platform} label="Connect" look="row" onConnected={() => void wa.reload()} notify={(kind, text) => setNote({ kind, text })} />
+              ) : (
+                // One-click sign-up isn't switched on here: WhatsApp's own page connects with the business's own Meta app.
+                <ConnectButton name="WhatsApp" href="/whatsapp/connect" />
+              )
             }
+            brings={["Messages", "Templates", "Campaigns"]}
           >
             {!store ? (
               <p className="text-muted">Connect your Shopify store first: WhatsApp messages are about its orders.</p>
             ) : !wa.data ? (
-              wa.error ? <p className="text-muted">We couldn&apos;t check WhatsApp just now. {friendlyError(wa.error)}</p> : <div className="skeleton h-10" aria-hidden />
+              wa.error ? <p className="text-muted">We couldn&apos;t check WhatsApp just now. {friendlyError(wa.error)}</p> : null
             ) : waConn ? (
               <>
-                <Facts
-                  rows={[
-                    ["Business account", waConn.wabaName ?? "WhatsApp Business Account"],
-                    ["Number", `${waConn.displayPhoneNumber ?? "—"}${waConn.verifiedName ? ` · ${waConn.verifiedName}` : ""}`],
-                    ["Last synchronized", waConn.lastSyncedAt ? fmtRelative(waConn.lastSyncedAt) : "Not yet"],
-                    [
-                      "Health",
-                      waState === "action_required"
-                        ? "Register the number to start sending (Manage)"
-                        : waState === "connecting"
-                          ? "Waiting for Meta's first message"
-                          : waState === "permission_expired"
-                            ? "Meta access ended: reconnect"
-                            : waState === "failed"
-                              ? "Meta reported a problem with this number: see Manage"
-                              : `Working · quality ${quality(waConn.qualityRating).toLowerCase()} · ${tier(waConn.messagingLimitTier)}`,
-                    ],
-                  ]}
-                />
-                <p className="text-xs text-muted">Turns on: Messages and delivery status · Message templates · Order updates · Cart reminders · Reviews</p>
+                <p>
+                  <span className="text-muted">Number:</span> {waConn.displayPhoneNumber ?? "—"}
+                  {waConn.verifiedName ? ` · ${waConn.verifiedName}` : ""}
+                  <span className="text-muted"> · {waConn.wabaName ?? "WhatsApp Business Account"}</span>
+                </p>
+                <p className="text-muted">
+                  {waState === "action_required"
+                    ? "Register the number to start sending: see Fix it."
+                    : waState === "connecting"
+                      ? "Waiting for Meta's first message."
+                      : waState === "permission_expired"
+                        ? "Meta access ended: reconnect from Fix it."
+                        : waState === "failed"
+                          ? "Meta reported a problem with this number: see Fix it."
+                          : `Working · quality ${quality(waConn.qualityRating).toLowerCase()} · ${tier(waConn.messagingLimitTier)} · last synchronized ${waConn.lastSyncedAt ? fmtRelative(waConn.lastSyncedAt) : "not yet"}`}
+                  {manage && (
+                    <>
+                      {" · "}
+                      <button type="button" className="text-danger underline-offset-2 hover:underline" onClick={() => void disconnectWa()} disabled={busy}>
+                        {busy ? "Disconnecting…" : "Disconnect"}
+                      </button>
+                    </>
+                  )}
+                </p>
               </>
-            ) : !wa.data.platform.embeddedSignup ? (
-              <p className="text-muted">One-click WhatsApp sign-up is being switched on. You can already connect with your own Meta app from Set up WhatsApp.</p>
+            ) : !manage ? null : !wa.data.platform.embeddedSignup ? (
+              <p className="text-muted">One-click WhatsApp sign-up is being switched on. Meanwhile, Connect sets it up with your own Meta app.</p>
             ) : (
-              <p className="text-muted">Meta opens a window: log in, choose your business and number (or add one) and confirm the code Meta texts you. About 3 minutes.</p>
+              <p className="text-muted">
+                Meta opens a window: log in, choose your business and number (or add one) and confirm the code Meta texts you. About 3 minutes.{" "}
+                <Link className="text-accent underline-offset-2 hover:underline" href="/whatsapp/connect">
+                  Other ways to connect
+                </Link>
+              </p>
             )}
-          </IntegrationCard>
-        </section>
-      )}
+          </IntegrationRow>
+        )}
+
+        {adRow("meta")}
+        {adRow("adsense")}
+      </div>
 
       <GoogleAdsDemoDialog open={ads.demoOpen} store={store} onClose={ads.closeDemo} onConnect={ads.connectDemo} onDisconnect={ads.disconnectDemo} />
     </div>

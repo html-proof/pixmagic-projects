@@ -21,7 +21,7 @@ import { signInFinished } from "@/lib/adSignIn";
 // Advertising integrations: connect and manage. The numbers themselves live on the dashboard's
 // Advertising section; this page is where accounts are connected, chosen, refreshed, reconnected,
 // shown or hidden, narrowed to sites (AdSense) and disconnected. Drawn after the owner's design
-// (components/settings/ads); the cards follow the same rules as Connect your business's
+// (components/settings/ads); the cards follow the same rules as Settings → Integrations' rows
 // (components/integrations/adPlatformParts.tsx).
 // ---------------------------------------------------------------------------
 

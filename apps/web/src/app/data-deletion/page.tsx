@@ -54,9 +54,9 @@ export default function DataDeletionPage() {
     >
       <LegalSection {...section("disconnect")}>
         <p>
-          <strong>Takes effect immediately.</strong> Sign in to bizinsights and open <strong>Settings → Connect your business</strong> (or{" "}
-          <strong>Settings → Advertising</strong>), then select <strong>Disconnect</strong> next to Google Ads, Google AdSense, Meta Ads
-          or WhatsApp.
+          <strong>Takes effect immediately.</strong> Sign in to bizinsights and open <strong>Settings → Advertising</strong> (Google Ads, Google
+          AdSense and Meta Ads) or <strong>Settings → Integrations</strong> (WhatsApp), then select <strong>Disconnect</strong> next to the
+          account.
         </p>
         <ul>
           <li>

@@ -29,9 +29,9 @@ test("Try demo: the connection flow, a demo that syncs by itself, the analytics 
   await quietMeta(page);
   await page.goto("/settings/integrations");
   const card = page.getByTestId("int-google");
-  // Google isn't set up on this server: the Google choice offers the demo instead of "Coming soon".
+  // Google Ads isn't set up on this server: its card offers the demo instead of "Coming soon".
   await expect(card.getByTestId("platform-state")).toHaveText("Not connected");
-  await expect(card.getByRole("button", { name: "Connect Google" })).toHaveCount(0);
+  await expect(card.getByRole("button", { name: "Connect Google Ads" })).toHaveCount(0);
 
   // The five screens: no Google page, no password, a real request on the fourth.
   await card.getByTestId("int-google-try-demo").click();
@@ -62,11 +62,11 @@ test("Try demo: the connection flow, a demo that syncs by itself, the analytics 
 
   // A demo, never plain "Connected"; the local server's queue runs its sync, so it settles by itself.
   await expect(card.getByTestId("platform-state")).toHaveText("Demo connected", { timeout: 45_000 });
-  await expect(card.getByTestId("int-google-accounts")).toContainText("Google Ads: Demo Business Marketing (demo)");
+  await expect(card.getByTestId("int-google-accounts")).toContainText("Account: Demo Business Marketing (demo)");
   await expect(card.getByTestId("int-google-try-demo")).toHaveCount(0);
 
   // Its row, on Settings → Advertising (Manage).
-  await card.getByRole("link", { name: "Manage Google" }).click();
+  await card.getByRole("link", { name: "Manage Google Ads" }).click();
   await expect(page).toHaveURL(/\/settings\/ads$/);
   const row = page.locator('[data-testid="ad-account"][data-account="DEMO-ADS-001"]');
   await expect(row).toBeVisible();
