@@ -4,7 +4,7 @@ import { E2E_ENV } from "../playwright.config";
 import { createWorkspace, insertStore, signUp, uniqueEmail } from "./helpers";
 
 /**
- * Google AdSense (Connect your business → Google) through Nango's Connect UI (docs/nango.md), through the real app and the
+ * Google AdSense (Settings → Integrations) through Nango's Connect UI (docs/nango.md), through the real app and the
  * real @nangohq/frontend SDK. Nango can't run here: its Connect UI page (connect.nango.dev, framed by the
  * SDK) is answered with a stand-in that speaks the SDK's messages, and the API's Nango answers (which need
  * a Nango environment) are answered as the API would. What is tested is the card: the session, the frame,
@@ -23,11 +23,10 @@ async function ownerWithStore(page: Page, prefix: string) {
 
 const NONCE = "e2e-nango-session-nonce-01";
 
-/** Connect your business: Google's button, then Google AdSense in its choice. The Google tile, for what follows. */
+/** Settings → Integrations: Google AdSense's Connect. Its card, for what follows. */
 async function chooseAdsense(page: Page) {
-  const card = page.getByTestId("int-google");
-  await card.getByRole("button", { name: "Connect Google" }).click();
-  await page.getByRole("dialog", { name: "Which Google do you use?" }).getByRole("button", { name: /^Google AdSense/ }).click();
+  const card = page.getByTestId("int-adsense");
+  await card.getByRole("button", { name: "Connect Google AdSense" }).click();
   return card;
 }
 
@@ -68,7 +67,7 @@ async function nangoHere(page: Page, ws: string, storeId: string, then: "connect
   return calls;
 }
 
-test("Google AdSense (the Google choice) opens Nango's Connect UI over the page and lands on the dashboard once connected", async ({ page }) => {
+test("Google AdSense's Connect opens Nango's Connect UI over the page and lands on the dashboard once connected", async ({ page }) => {
   const { ws, storeId } = await ownerWithStore(page, "nango-ok");
   const calls = await nangoHere(page, ws, storeId, "connect");
   await page.route(`**/api/workspaces/${ws}/stores/${storeId}/ads/adsense/nango/finish`, (route) => {
@@ -92,7 +91,7 @@ test("closing the Connect UI ends the session and leaves the card as it was", as
   expect(calls[1]!.body).toEqual({ nonce: NONCE });
   await expect(page.locator("iframe#connect-ui")).toHaveCount(0);
   await expect(card.getByTestId("platform-state")).toHaveText("Not connected");
-  await expect(card.getByRole("button", { name: "Connect Google" })).toBeEnabled();
+  await expect(card.getByRole("button", { name: "Connect Google AdSense" })).toBeEnabled();
 });
 
 test("a refused finish is worded like the full-page sign-in's", async ({ page }) => {

@@ -4,8 +4,8 @@ import { E2E_ENV } from "../playwright.config";
 import { createWorkspace, insertAdConnection, insertStore, signUp, uniqueEmail } from "./helpers";
 
 /**
- * Settings → Connect your business (three choices: Shopify, Google, Meta) and Settings → Advertising
- * (every ad account), through the real app. Google, Meta and AdSense can't run here and
+ * Settings → Integrations (a card each for Google Ads, Shopify, WhatsApp, Meta Ads and Google AdSense)
+ * and Settings → Advertising (every ad account), through the real app. Google, Meta and AdSense can't run here and
  * e2e/server.env sets none of them up, so Meta and AdSense say Coming soon until an account is
  * connected, while Google Ads offers its demo instead (server.env sets GOOGLE_ADS_DEMO_ENABLED;
  * e2e/adsDemo.spec.ts drives it): Not connected, with Try demo as its only button. Connected accounts
@@ -41,32 +41,47 @@ async function apiSendsReasons(page: Page, ws: string, storeId: string): Promise
   }, [ws, storeId] as const);
 }
 
-test("Connect your business offers three choices, Shopify, Google and Meta, with WhatsApp under them; one not set up says Coming soon or offers its demo", async ({ page }) => {
+test("Integrations shows Google Ads, Shopify, WhatsApp, Meta Ads and Google AdSense; one not set up says Coming soon or offers its demo", async ({ page }) => {
   await ownerWithStore(page, "hub");
   await quietMeta(page);
   await page.goto("/settings/integrations");
 
+  await expect(page.getByRole("heading", { level: 1, name: "Integrations" })).toBeVisible();
   const cards = page.locator('section[data-testid^="int-"]');
-  await expect(cards).toHaveCount(4);
-  expect(await cards.evaluateAll((els) => els.map((e) => e.getAttribute("data-testid")))).toEqual(["int-shopify", "int-google", "int-meta", "int-whatsapp"]);
-  // Signing in with Google is Settings → Security's, not one of the choices.
+  await expect(cards).toHaveCount(5);
+  expect(await cards.evaluateAll((els) => els.map((e) => e.getAttribute("data-testid")))).toEqual(["int-google", "int-shopify", "int-whatsapp", "int-meta", "int-adsense"]);
+  // Signing in with Google is Settings → Security's, not one of the cards.
   await expect(page.getByRole("button", { name: "Continue with Google" })).toHaveCount(0);
+  // One Click Setup: Learn more says how, and folds away again.
+  const setup = page.getByTestId("one-click-setup");
+  await setup.getByRole("button", { name: "Learn more" }).click();
+  await expect(setup.getByRole("button", { name: "Learn more" })).toHaveAttribute("aria-expanded", "true");
+  await expect(setup.getByRole("listitem")).toHaveCount(3);
+  await expect(setup).toContainText("There are no keys or codes to copy");
+  await setup.getByRole("button", { name: "Learn more" }).click();
+  await expect(setup.getByRole("listitem")).toHaveCount(0);
   await expect(platform(page, "int-shopify")).toHaveText("Connected");
   await expect(page.getByTestId("int-shopify").getByRole("link", { name: "Manage Shopify" })).toHaveAttribute("href", "/settings/stores");
   await expect(platform(page, "int-whatsapp")).toHaveText("Not connected");
 
-  // Meta isn't set up on this server and has no demo: "Coming soon", never "Not connected", and nothing to press.
-  const meta = page.getByTestId("int-meta");
-  await expect(meta.getByRole("heading", { name: "Meta" })).toBeVisible();
-  await expect(platform(page, "int-meta")).toHaveText("Coming soon");
-  await expect(meta).toContainText("Meta sign-in is being switched on");
-  await expect(meta.getByRole("button")).toHaveCount(0);
-  // Neither Google product is set up either, but the Google Ads demo is offered: "Not connected" (never
-  // "Coming soon" with a button under it), and Try demo as the only button.
+  // Meta and AdSense aren't set up on this server and have no demo: "Coming soon", never "Not connected", and nothing to press.
+  for (const [id, name] of [
+    ["int-meta", "Meta Ads"],
+    ["int-adsense", "Google AdSense"],
+  ] as const) {
+    const card = page.getByTestId(id);
+    await expect(card.getByRole("heading", { name })).toBeVisible();
+    await expect(platform(page, id)).toHaveText("Coming soon");
+    await expect(card).toContainText(`${name} sign-in is being switched on`);
+    await expect(card.getByRole("button")).toHaveCount(0);
+  }
+  await expect(page.getByTestId("int-meta").getByRole("list", { name: "What Meta Ads brings" })).toContainText("Spend & ROAS");
+  // Google Ads isn't set up either, but its demo is offered: "Not connected" (never "Coming soon" with
+  // a button under it), and Try demo as the only button.
   const google = page.getByTestId("int-google");
-  await expect(google.getByRole("heading", { name: "Google" })).toBeVisible();
+  await expect(google.getByRole("heading", { name: "Google Ads" })).toBeVisible();
   await expect(platform(page, "int-google")).toHaveText("Not connected");
-  await expect(google.getByRole("button", { name: "Connect Google" })).toHaveCount(0);
+  await expect(google.getByRole("button", { name: "Connect Google Ads" })).toHaveCount(0);
   await expect(google.getByRole("button")).toHaveCount(1);
   await expect(google.getByTestId("int-google-try-demo")).toHaveText("Try demo");
 
@@ -78,7 +93,7 @@ test("Connect your business offers three choices, Shopify, Google and Meta, with
   for (const p of ["meta", "adsense"]) await expect(platform(page, `ads-provider-${p}`)).toHaveText("Coming soon");
 });
 
-test("Google is one choice for Google Ads and AdSense: its button asks which, and Meta warns before Facebook while Meta lets only its testers in", async ({ page }) => {
+test("Google Ads and Meta Ads say what their screen shows first while their platform still reviews bizinsights; AdSense goes straight to Google", async ({ page }) => {
   const { ws, storeId } = await ownerWithStore(page, "choose");
   await quietMeta(page);
   // This server as if every platform's sign-in were set up, with Google Ads and Meta still under their platform's review.
@@ -101,33 +116,36 @@ test("Google is one choice for Google Ads and AdSense: its button asks which, an
 
   const google = page.getByTestId("int-google");
   await expect(platform(page, "int-google")).toHaveText("Not connected");
-  await google.getByRole("button", { name: "Connect Google" }).click();
-  const choice = page.getByRole("dialog", { name: "Which Google do you use?" });
-  await expect(choice.getByRole("button", { name: /^Google Ads/ })).toContainText("You pay Google for ads");
-  await expect(choice.getByRole("button", { name: /^Google AdSense/ })).toContainText("Google pays you for ads shown on your website");
-  // Google Ads is still unverified: what Google's screen will say, before going there.
-  await expect(choice.getByTestId("google-unverified")).toBeVisible();
-  await expect(choice.getByTestId("int-google-try-demo")).toBeVisible();
-  // The keyboard: it opens on the first choice, and Escape closes it.
-  await expect(choice.getByRole("button", { name: /^Google Ads/ })).toBeFocused();
+  // The real sign-in is set up, so the demo is a line under it, not the button.
+  await expect(google.getByTestId("int-google-try-demo")).toBeVisible();
+  // Google Ads is still unverified: what Google's screen will say, before going there. Escape closes it.
+  await google.getByRole("button", { name: "Connect Google Ads" }).click();
+  const beforeGoogle = page.getByRole("dialog", { name: "Before you go to Google" });
+  await expect(beforeGoogle.getByTestId("google-unverified")).toBeVisible();
   await page.keyboard.press("Escape");
-  await expect(choice).toHaveCount(0);
-  await google.getByRole("button", { name: "Connect Google" }).click();
-  await choice.getByRole("button", { name: /^Google AdSense/ }).click();
+  await expect(beforeGoogle).toHaveCount(0);
+  expect(started).toEqual([]);
+  await google.getByRole("button", { name: "Connect Google Ads" }).click();
+  await beforeGoogle.getByRole("button", { name: "Continue to Google" }).click();
   // The page leaves by itself: wait for it to arrive, or a goto of ours would be aborted by it.
+  await page.waitForURL(/\/settings\/integrations\?back=google$/);
+  expect(started).toEqual(["google"]);
+
+  // AdSense never meets Google's unverified screen: straight to Google.
+  await page.getByTestId("int-adsense").getByRole("button", { name: "Connect Google AdSense" }).click();
   await page.waitForURL(/\/settings\/integrations\?back=adsense$/);
-  expect(started).toEqual(["adsense"]);
+  expect(started).toEqual(["google", "adsense"]);
 
   // Meta: Facebook would show anyone but a tester "Feature Unavailable", so the page says so first.
-  await page.getByTestId("int-meta").getByRole("button", { name: "Connect Meta" }).click();
+  await page.getByTestId("int-meta").getByRole("button", { name: "Connect Meta Ads" }).click();
   const before = page.getByRole("dialog", { name: "Before you go to Facebook" });
   await expect(before.getByTestId("meta-testers-only")).toBeVisible();
   await before.getByRole("button", { name: "Continue to Facebook" }).click();
   await page.waitForURL(/\/settings\/integrations\?back=meta$/);
-  expect(started).toEqual(["adsense", "meta"]);
+  expect(started).toEqual(["google", "adsense", "meta"]);
 });
 
-test("each connected account shows its state, and Connect your business the most pressing one per choice", async ({ page }) => {
+test("each connected account shows its state, and Integrations the most pressing one per platform", async ({ page }) => {
   const { ws, storeId } = await ownerWithStore(page, "states");
   const at = { workspaceId: ws, storeId };
   await insertAdConnection(db, {
@@ -171,16 +189,18 @@ test("each connected account shows its state, and Connect your business the most
   ];
 
   await quietMeta(page);
-  // Connect your business: each choice shows its most pressing account, and sends there to fix it. Google
-  // counts Google Ads (Synchronizing: hidden accounts don't count, or Lapsed Promo would outrank them all)
-  // and AdSense (Verification pending) together.
+  // Integrations: each platform shows its most pressing account, and sends there to fix it. Google Ads is
+  // Synchronizing: hidden accounts don't count, or Lapsed Promo would outrank them all.
   await page.goto("/settings/integrations");
-  await expect(platform(page, "int-google")).toHaveText("Verification pending");
-  await expect(page.getByTestId("int-google-accounts")).toContainText("AdSense: My Site");
-  await expect(page.getByTestId("int-google").getByRole("link", { name: "Fix Google" })).toHaveAttribute("href", "/settings/ads");
+  await expect(platform(page, "int-google")).toHaveText("Synchronizing");
+  await expect(page.getByTestId("int-google-accounts")).toContainText("+3 more");
+  await expect(page.getByTestId("int-google").getByRole("link", { name: "Manage Google Ads" })).toHaveAttribute("href", "/settings/ads");
+  await expect(platform(page, "int-adsense")).toHaveText("Verification pending");
+  await expect(page.getByTestId("int-adsense-accounts")).toContainText("Account: My Site");
+  await expect(page.getByTestId("int-adsense").getByRole("link", { name: "Fix Google AdSense" })).toHaveAttribute("href", "/settings/ads");
   await expect(platform(page, "int-meta")).toHaveText("Reconnect required");
   await expect(page.getByTestId("int-meta-accounts")).toContainText("+2 more");
-  await expect(page.getByTestId("int-meta").getByRole("link", { name: "Fix Meta" })).toHaveAttribute("href", "/settings/ads");
+  await expect(page.getByTestId("int-meta").getByRole("link", { name: "Fix Meta Ads" })).toHaveAttribute("href", "/settings/ads");
   await expect(page.getByTestId("ad-account")).toHaveCount(0);
 
   // Settings → Advertising: every account, each worded as lib/adConnections.ts says.
