@@ -73,6 +73,17 @@
     --shadow-lift: 0 2px 6px rgb(0 0 0 / 0.35), 0 24px 48px -18px rgb(0 0 0 / 0.85);
   }
 }
+/* The list a select opens, in both schemes. Chrome and Edge on Windows draw it on white when the
+   select's own background is see-through (the dashboard's Dates and Compare pills, the store
+   switcher, Top products' menus) yet keep the page's text colour, so in dark mode the choices
+   were near-white on white. */
+@layer base {
+  option,
+  optgroup {
+    background-color: var(--surface);
+    color: var(--text);
+  }
+}
 
 @theme inline {
   --color-bg: var(--bg);
