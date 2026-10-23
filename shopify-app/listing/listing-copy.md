@@ -94,7 +94,7 @@ Never capture a live merchant's store.
 | Field | Value |
 | --- | --- |
 | Preferred support channel | Support email |
-| Support email | `sales@ikorex.com.au` (`apps/web/src/lib/contact.ts`) |
+| Support email | `bizinsightsaus@yahoo.com` (`apps/web/src/lib/contact.ts`) |
 | Support portal | https://bizinsights.io/support |
 | Privacy policy | https://bizinsights.io/privacy |
 | Developer website, FAQ | left empty: the homepage still promises live updates the App Store app doesn't have (see README) |
@@ -125,7 +125,7 @@ Never list Growth or Scale (`PLANS` in `packages/core/src/billing.ts`) while bil
 - Sales channel: "My app doesn't require the Shopify Online Store or Shopify POS". Orders from
   every channel are counted; only the optional Shopping funnel needs a storefront.
 - Geographic requirements: none (each store is reported in its own currency).
-- Merchant review email and app submission email: `sales@ikorex.com.au`. Allow `noreply@shopify.com`.
+- Merchant review email and app submission email: `bizinsightsaus@yahoo.com`. Allow `noreply@shopify.com`.
 
 ---
 
@@ -152,7 +152,7 @@ The optional "More insights you can unlock" cards each ask Shopify for an extra 
 
 Data: read_orders and read_products only. The reports store no customer name, email, address or phone. Tokens are encrypted (AES-256-GCM). customers/data_request appears in Settings > Privacy requests; customers/redact and shop/redact are handled.
 
-Support: sales@ikorex.com.au
+Support: bizinsightsaus@yahoo.com
 ```
 
 Revised 2026-10-18 for the pull request that hides WhatsApp, Staff, advertising and email from App
