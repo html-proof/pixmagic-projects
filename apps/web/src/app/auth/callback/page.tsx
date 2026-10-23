@@ -38,6 +38,9 @@ export default function OAuthCallbackPage() {
     const linkingFrom = takeLinkReturn();
     finishOAuth(params)
       .then((r) => {
+        // An account already has this address: sign in to it once to link Google (the sign-in
+        // page asks). Where they were headed stays in this tab for after that sign-in.
+        if ("next" in r) return router.replace("/login?link=google");
         // Only ever a page of this site, as the browser will read it (the API checks too).
         if ("linked" in r) return router.replace(isSafeDestination(r.redirect) ? r.redirect : withQuery(linkingFrom ?? "/settings/security", "linked", "google"));
         // The server's copy of where they were headed wins; the browser's is then spent too.
@@ -48,6 +51,8 @@ export default function OAuthCallbackPage() {
         const back = e instanceof ApiError ? e.data.redirect : null;
         if (isSafeDestination(back)) return router.replace(back);
         if (linkingFrom) return router.replace(withQuery(linkingFrom, "link_error", errorCode(e) ?? "failed"));
+        // Cancelled at Google: back to the sign-in page, nothing created.
+        if (errorCode(e) === "cancelled") return router.replace("/login?googleCancelled=1");
         setError({ text: authErrorMessage(e), code: errorCode(e) });
       });
   }, [router]);
@@ -67,7 +72,7 @@ export default function OAuthCallbackPage() {
     <AuthCard title={error.code === "cancelled" ? "Sign-in cancelled" : "We couldn't sign you in"} subtitle="Nothing was changed. You can try again below.">
       <Alert>
         {error.text}
-        {(error.code === "email_in_use" || error.code === "google_removed") && (
+        {(error.code === "email_in_use" || error.code === "google_removed" || error.code === "google_other_linked") && (
           <>
             {" "}
             <Link prefetch={false} href="/login" className="underline">

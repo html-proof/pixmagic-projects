@@ -17,6 +17,8 @@ export interface FakeUser {
   emailVerified: boolean;
   pendingEmail?: string;
   name: string | null;
+  /** A Google user's picture (the pool maps Google's `picture`). */
+  picture?: string | null;
   password: string | null;
   status: "CONFIRMED" | "UNCONFIRMED";
   enabled: boolean;
@@ -76,7 +78,7 @@ export function fakeCognito() {
   };
   const idToken = (u: FakeUser, nonce?: string) =>
     `fake.${Buffer.from(
-      JSON.stringify({ sub: u.sub, username: u.username, email: u.email, emailVerified: u.emailVerified, name: u.name, method: u.method, authTime: Math.floor(Date.now() / 1000), nonce }),
+      JSON.stringify({ sub: u.sub, username: u.username, email: u.email, emailVerified: u.emailVerified, name: u.name, picture: u.picture ?? null, method: u.method, authTime: Math.floor(Date.now() / 1000), nonce }),
     ).toString("base64url")}`;
   const issue = (u: FakeUser, nonce?: string): CognitoTokens => {
     const n = ++seq;
@@ -184,7 +186,7 @@ export function fakeCognito() {
         if (!token.startsWith("fake.")) throw err("InvalidToken", "not a fake token");
         const c = JSON.parse(Buffer.from(token.slice(5), "base64url").toString()) as IdentityClaims & { nonce?: string };
         if (opts.nonce !== undefined && c.nonce !== opts.nonce) throw err("InvalidToken", "nonce");
-        return { sub: c.sub, username: c.username, email: c.email, emailVerified: c.emailVerified, name: c.name, method: c.method, authTime: c.authTime };
+        return { sub: c.sub, username: c.username, email: c.email, emailVerified: c.emailVerified, name: c.name, picture: c.picture ?? null, method: c.method, authTime: c.authTime };
       }),
     ),
     forgotPassword: track("forgotPassword", (email) =>
@@ -397,7 +399,7 @@ export function fakeCognito() {
      * The person finishes at Google (the URL our start route redirected to): their federated
      * Cognito user exists from now on, and the code Cognito would send back is returned.
      */
-    federatedSignIn(authorizeUrl: string, person: { id: string; email: string | null; emailVerified?: boolean; name?: string }) {
+    federatedSignIn(authorizeUrl: string, person: { id: string; email: string | null; emailVerified?: boolean; name?: string; picture?: string }) {
       const q = new URL(authorizeUrl).searchParams;
       const provider = q.get("identity_provider") as FederatedProvider;
       if (provider !== "Google") throw new Error(`unexpected identity provider ${provider}`);
@@ -409,6 +411,7 @@ export function fakeCognito() {
           email: person.email ?? "",
           emailVerified: person.emailVerified ?? true,
           name: person.name ?? null,
+          picture: person.picture ?? null,
           password: null,
           status: "CONFIRMED",
           enabled: true,

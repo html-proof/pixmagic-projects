@@ -31,6 +31,13 @@ import {
   templateVariables,
   toGsmFriendly,
   worstCaseSegments,
+  checkSenderName,
+  fixVariableAliases,
+  ORDER_STATUS_WORD,
+  senderIdSupport,
+  senderNameStatus,
+  SETUP_AUTOMATIONS,
+  suggestSenderName,
 } from "../src/sms.js";
 
 describe("smsSegments", () => {
@@ -314,5 +321,81 @@ describe("rules", () => {
     expect(smsPeriodRange("this_month", "2026-10-22")).toEqual({ from: "2026-10-01", to: "2026-10-22" });
     expect(smsPeriodRange("custom", "2026-10-22", { from: "2026-09-01", to: "2026-09-30" })).toEqual({ from: "2026-09-01", to: "2026-09-30" });
     expect(() => smsPeriodRange("custom", "2026-10-22", { from: "2026-10-30", to: "2026-10-01" })).toThrow();
+  });
+});
+
+describe("sender names (Set up SMS)", () => {
+  it("accepts AWS's sender ID shape and says what is wrong with anything else", () => {
+    expect(checkSenderName("IKOREX", "AU").problems).toEqual([]);
+    expect(checkSenderName("Acme-Shop", "GB").problems).toEqual([]);
+    expect(checkSenderName("  ikorex ", "AU").name).toBe("ikorex");
+    expect(checkSenderName("", "AU").problems).toEqual(["Enter the name your customers should see."]);
+    expect(checkSenderName("ACME SHOP", "AU").problems[0]).toMatch(/can't have spaces: try "ACMESHOP"/);
+    expect(checkSenderName("IKÖREX", "AU").problems.join(" ")).toMatch(/only letters, numbers and hyphens/);
+    expect(checkSenderName("TWELVECHARSX", "AU").problems.join(" ")).toMatch(/At most 11 characters: this one has 12/);
+    expect(checkSenderName("AB", "AU").problems.join(" ")).toMatch(/At least 3 characters/);
+    expect(checkSenderName("12345", "AU").problems.join(" ")).toMatch(/at least one letter/);
+    expect(checkSenderName("-ACME", "AU").problems.join(" ")).toMatch(/hyphen can't be the first or last/);
+    expect(checkSenderName("NOTICE", "AU").problems.join(" ")).toMatch(/doesn't say who you are/);
+    // France, since 1 March 2026: no hyphens.
+    expect(checkSenderName("Acme-Shop", "FR").problems.join(" ")).toMatch(/France doesn't allow hyphens/);
+  });
+
+  it("tells registration countries, free countries and number-only countries apart (AWS's country table)", () => {
+    expect(senderIdSupport("AU")).toBe("registered");
+    expect(senderIdSupport("GB")).toBe("registered");
+    expect(senderIdSupport("DE")).toBe("dynamic");
+    expect(senderIdSupport("US")).toBe("none");
+    expect(senderIdSupport("ZZ")).toBe("unknown");
+    expect(senderIdSupport(null)).toBe("unknown");
+    expect(checkSenderName("IKOREX", "AU").customerSees).toBe("IKOREX, once it is registered");
+    expect(checkSenderName("IKOREX", "US").customerSees).toMatch(/phone number/);
+    expect(checkSenderName("IKOREX", "DE").customerSees).toBe("IKOREX");
+  });
+
+  it("is approved only on AWS's word: found, the workspace's, and registered where required", () => {
+    expect(senderNameStatus(null, false)).toBe("draft");
+    // Asked for, but AWS has nothing yet: never approved for having been asked.
+    expect(senderNameStatus(null, true)).toBe("requested");
+    expect(senderNameStatus({ mine: false, registration: "COMPLETE" }, true)).toBe("unavailable");
+    expect(senderNameStatus({ mine: true, registration: "REQUIRED" }, true)).toBe("pending");
+    expect(senderNameStatus({ mine: true, registration: "AWS_REVIEWING" }, true)).toBe("pending");
+    expect(senderNameStatus({ mine: true, registration: "REQUIRES_UPDATES" }, true)).toBe("needs_changes");
+    expect(senderNameStatus({ mine: true, registration: "COMPLETE" }, true)).toBe("approved");
+    // A country that needs no registration.
+    expect(senderNameStatus({ mine: true, registration: null }, false)).toBe("approved");
+  });
+
+  it("suggests a sender name from the business's", () => {
+    expect(suggestSenderName("Ikorex Store")).toBe("IKOREXSTORE");
+    expect(suggestSenderName("Café Délice & Co.")).toBe("CAFEDELICEC");
+  });
+});
+
+describe("the setup's variables and messages", () => {
+  it("renders {{business_name}} and {{order_status}}, and fills the order status per event", () => {
+    expect(renderSms("Hi {{customer_name}}, your order {{order_number}} has been {{order_status}}. Thank you for shopping with {{business_name}}!", { customer_name: "Sarah", order_number: "#1042", order_status: "confirmed", business_name: "IKOREX" })).toMatchObject({
+      ok: true,
+      text: "Hi Sarah, your order #1042 has been confirmed. Thank you for shopping with IKOREX!",
+    });
+    expect(cleanVariable("order_status", "shipped")).toBe("shipped");
+    expect(cleanVariable("order_status", "<b>x</b>")).toBeNull();
+    expect(ORDER_STATUS_WORD.fulfillment_created).toBe("shipped");
+    expect(missingForTrigger("{{business_name}} {{order_status}} {{order_number}}", "order_created")).toEqual([]);
+    expect(missingForTrigger("{{tracking_url}}", "order_created")).toEqual(["tracking_url"]);
+  });
+
+  it("names the variable an alias meant, and fixes it", () => {
+    const issues = checkTemplate({ category: "transactional", body: "Order {{order_id}} from {{business}}" });
+    expect(issues.find((i) => i.code === "unknown_variable")?.message).toMatch(/Did you mean \{\{order_number\}\}, \{\{business_name\}\}\?/);
+    expect(fixVariableAliases("Order {{order_id}} from {{ Business }} for {{Customer_Name}} {{nope}}")).toBe("Order {{order_number}} from {{business_name}} for {{customer_name}} {{nope}}");
+  });
+
+  it("offers only order updates its events can fill, and says why an appointment reminder can't run", () => {
+    for (const a of SETUP_AUTOMATIONS.filter((x) => x.trigger)) {
+      expect(hasErrors(checkTemplate({ category: "transactional", body: a.body })), a.key).toBe(false);
+      expect(missingForTrigger(a.body, a.trigger!), a.key).toEqual([]);
+    }
+    expect(SETUP_AUTOMATIONS.find((a) => a.key === "appointment_reminder")).toMatchObject({ trigger: null, unavailable: expect.stringMatching(/appointments/) });
   });
 });

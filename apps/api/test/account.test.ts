@@ -48,6 +48,8 @@ async function googleSignIn(person: { id: string; email: string }) {
   const back = ctx.auth.federatedSignIn(start.headers.location!, person);
   const res = await browser.post("/auth/oauth/callback", { code: back.code, state: back.state });
   expect(res.statusCode).toBe(200);
+  // Not held for an existing account's sign-in ({ next: "link" }): signed in.
+  expect(res.json().user).toBeDefined();
   return { browser, user: res.json().user as { id: string } };
 }
 
@@ -644,6 +646,12 @@ describe("removing a sign-in method", () => {
     expect((await del(`/auth/account/methods/${theirs!.id}`, headers, { password })).statusCode).toBe(404);
     expect(ctx.auth.users.has("u2")).toBe(true);
 
+    // Google with the account's address: held at its first sign-in, linked by the password's in that browser.
+    const linking = testBrowser(ctx);
+    const start = await linking.get("/auth/oauth/google/start");
+    const back = ctx.auth.federatedSignIn(start.headers.location!, { id: "g-1", email: "owner@shop.com" });
+    expect((await linking.post("/auth/oauth/callback", { code: back.code, state: back.state })).json().next).toBe("link");
+    expect((await linking.post("/auth/login", { email: "owner@shop.com", password })).statusCode).toBe(200);
     // Signed in with Google: the password can go (a recent Google sign-in is the proof), Google can't.
     const { browser } = await googleSignIn({ id: "g-1", email: "owner@shop.com" });
     const methods = (await browser.get("/auth/account")).json().methods as Array<{ id: string; method: string }>;

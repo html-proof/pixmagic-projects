@@ -130,6 +130,10 @@ export const APP_SETTINGS = {
   "SMS_MODE": "sandbox",
   "SMS_MARKETING_ENABLED": "",
   "SMS_ACCOUNT_MONTHLY_LIMIT_USD": "20",
+  // A merchant asking for a sender name in Set up SMS emails this address: the platform owner
+  // requests it from AWS, registers it where the country requires that, and tags it for the
+  // workspace (docs/sms.md, "Sender names from Set up SMS").
+  "SMS_SENDER_REQUESTS_TO": "bizinsightsaus@yahoo.com",
   // Email integrations (docs/email.md): "Connect Gmail / Google Workspace" and "Connect Outlook /
   // Microsoft 365". Empty until the OAuth clients exist (the buttons say so; SMTP works regardless).
   // Their secrets are in Secrets Manager. "common" accepts work, school and personal Microsoft accounts.

@@ -79,7 +79,7 @@ const ButtonMark = ({ P }: { P: AdPlatformInfo }) => (
  * and data status beside how the integration stands, with Sync data now, View data details and
  * Reconnect account under them. While nothing is connected: what connecting brings, what it needs,
  * and the button again. The rules (who may press what, which state, the demo) are the same as on
- * Connect your business (components/integrations/adPlatformParts.tsx).
+ * Settings → Integrations (components/integrations/adPlatformParts.tsx).
  */
 export function AdPlatformPanel(props: AdPlatformProps & { rowExtra?: (c: AdConnection) => ReactNode }) {
   const { provider, answer, loadError, connections, view, store, manage, busy, leaving, showMetaNote, onConnect, base, onRefresh, onToggle, onDisconnect, onTryDemo, onDemoSync, onDemoReset, rowExtra } = props;

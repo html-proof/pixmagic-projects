@@ -215,7 +215,15 @@ test("forgot password: a code by email, a new password, then signing in with it"
 });
 
 test.describe("Continue with Google (through the user pool's managed login)", () => {
-  test("Continue with Google signs a new person in, and the session survives a refresh", async ({ page }) => {
+  const methodsOf = async (email: string) =>
+    (await db.query("SELECT i.method FROM users u JOIN auth_identities i ON i.user_id = u.id WHERE u.email = $1 ORDER BY i.created_at", [email.toLowerCase()])).rows.map((r) => r.method as string);
+  const userCount = async (email: string) => Number((await db.query("SELECT count(*) FROM users WHERE email = $1", [email.toLowerCase()])).rows[0].count);
+
+  test("Continue with Google signs a new person up and in with no form, the session survives a refresh, and the same button signs them back in", async ({ page }) => {
+    // The stand-in sends a picture for "pic-" addresses; Google's image host, answered here.
+    await page.route("https://lh3.googleusercontent.com/**", (route) =>
+      route.fulfill({ contentType: "image/png", body: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==", "base64") }),
+    );
     await page.goto("/login");
     await page.getByRole("button", { name: "Continue with Google" }).click();
     // The provider's own screen (here: the stand-in), reached with PKCE and a nonce.
@@ -223,7 +231,7 @@ test.describe("Continue with Google (through the user pool's managed login)", ()
     const authorize = new URL(page.url());
     expect(authorize.searchParams.get("code_challenge_method")).toBe("S256");
     expect(authorize.searchParams.get("nonce")).toBeTruthy();
-    const email = uniqueEmail("google");
+    const email = uniqueEmail("pic-google");
     await page.getByLabel("Email").fill(email);
     await page.getByRole("button", { name: "Continue" }).click();
     // Back on /auth/callback, which finishes the sign-in: a brand-new account goes to connect a store.
@@ -231,11 +239,37 @@ test.describe("Continue with Google (through the user pool's managed login)", ()
     await expect(page.getByRole("button", { name: "Continue with Shopify" })).toBeVisible();
     await page.reload();
     await expect(page).toHaveURL(/\/onboarding/);
-    const rows = await db.query("SELECT i.method FROM users u JOIN auth_identities i ON i.user_id = u.id WHERE u.email = $1", [email]);
-    expect(rows.rows).toEqual([{ method: "google" }]);
+    expect(await methodsOf(email)).toEqual(["google"]);
+    const made = (await db.query("SELECT display_name, email_verified, avatar_url FROM users WHERE email = $1", [email.toLowerCase()])).rows[0];
+    expect(made).toEqual({ display_name: "Social Person", email_verified: true, avatar_url: expect.stringMatching(/^https:\/\/lh3\.googleusercontent\.com\//) });
+
+    // With a workspace, the account menu shows the Google picture; signed out, the same button on
+    // the create-account page signs in to the same account, straight to its dashboard.
+    await createWorkspace(page, "Google Co");
+    await page.goto("/dashboard");
+    await expect(page.getByRole("button", { name: "Account menu" }).locator("img")).toHaveAttribute("src", made.avatar_url);
+    await signOutFromMenu(page);
+    await expect(page).toHaveURL(/\/login/);
+    await page.goto("/signup");
+    await page.getByRole("button", { name: "Continue with Google" }).click();
+    await page.getByLabel("Email").fill(email);
+    await page.getByRole("button", { name: "Continue" }).click();
+    await expect(page).toHaveURL(/\/dashboard/, { timeout: 20_000 });
+    expect(await userCount(email)).toBe(1);
+    expect(await workspaceCount(email)).toBe(1);
   });
 
-  test("links Google to an existing password account with the same address, and handles a cancelled sign-in", async ({ page }) => {
+  test("a cancelled Google sign-in goes back to the sign-in page and creates nothing", async ({ page }) => {
+    await page.goto("/login");
+    await page.getByRole("button", { name: "Continue with Google" }).click();
+    await expect(page.getByRole("heading", { name: "Sign in with Google (test)" })).toBeVisible();
+    await page.getByRole("link", { name: "Cancel" }).click();
+    await expect(page).toHaveURL(/\/login\?googleCancelled=1/, { timeout: 20_000 });
+    await expect(page.getByText("Google sign-in was cancelled. Nothing was changed and no account was created.")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Continue with Google" })).toBeEnabled();
+  });
+
+  test("Google with an existing password account's address: sign in to that account once to link it, then Google signs straight in", async ({ page }) => {
     const email = uniqueEmail("linked");
     await signUp(page, email);
     await createWorkspace(page, "Linked Co");
@@ -243,18 +277,31 @@ test.describe("Continue with Google (through the user pool's managed login)", ()
 
     await page.goto("/login");
     await page.getByRole("button", { name: "Continue with Google" }).click();
-    await page.getByRole("link", { name: "Cancel" }).click();
-    await expect(page.getByRole("heading", { name: "Sign-in cancelled" })).toBeVisible();
-    await expect(alert(page)).toContainText("cancelled");
+    await page.getByLabel("Email").fill(email);
+    await page.getByRole("button", { name: "Continue" }).click();
+    // Not a second account, and not linked by the address alone: the account's own sign-in first.
+    await expect(page).toHaveURL(/\/login\?link=google/, { timeout: 20_000 });
+    await expect(page.getByRole("heading", { name: "Link your Google account" })).toBeVisible();
+    await expect(page.getByText("You already have a bizinsights account with")).toContainText(email.toLowerCase());
+    await expect(page.getByLabel("Email Address")).toHaveValue(email.toLowerCase());
+    await expect(page.getByRole("button", { name: "Continue with Google" })).toHaveCount(0);
+    expect(await methodsOf(email)).toEqual(["password"]);
+    expect(await userCount(email)).toBe(1);
 
+    // The password and its emailed code, as at any sign-in: then Google is one of the account's ways in.
+    await logIn(page, email);
+    await expect(page).toHaveURL(/\/dashboard/, { timeout: 20_000 });
+    expect(await workspaceCount(email)).toBe(1);
+    expect(await methodsOf(email)).toEqual(["password", "google"]);
+
+    // From now on the same button signs straight in to it.
+    await page.context().clearCookies();
+    await page.goto("/login");
     await page.getByRole("button", { name: "Continue with Google" }).click();
     await page.getByLabel("Email").fill(email);
     await page.getByRole("button", { name: "Continue" }).click();
-    // The existing account (with its workspace), not a new one.
     await expect(page).toHaveURL(/\/dashboard/, { timeout: 20_000 });
-    expect(await workspaceCount(email)).toBe(1);
-    const methods = await db.query("SELECT i.method FROM users u JOIN auth_identities i ON i.user_id = u.id WHERE u.email = $1 ORDER BY i.created_at", [email]);
-    expect(methods.rows.map((r) => r.method)).toEqual(["password", "google"]);
+    expect(await userCount(email)).toBe(1);
   });
 });
 
@@ -571,7 +618,7 @@ test("a workspace installed from the App Store shows only what the listing descr
   // Settings: Shopify, without the advertising, email and WhatsApp connections.
   await page.goto("/settings/integrations");
   await expect(page.getByTestId("int-shopify")).toBeVisible();
-  for (const id of ["int-whatsapp", "int-google", "int-meta"]) await expect(page.getByTestId(id)).toHaveCount(0);
+  for (const id of ["int-whatsapp", "int-google", "int-meta", "int-adsense"]) await expect(page.getByTestId(id)).toHaveCount(0);
   const settings = page.getByRole("navigation", { name: "Settings" });
   await expect(settings.getByRole("link", { name: "Shopify" })).toBeVisible();
   for (const name of ["Advertising", "Email integrations"]) await expect(settings.getByRole("link", { name })).toHaveCount(0);

@@ -14,14 +14,14 @@ The same sign-ins can run through Nango's Connect UI (one window over the page, 
    design in `components/settings/ads/`): one card per platform, in the order Google Ads, Meta Ads, Google AdSense,
    with what bizinsights reads from it; while nothing is connected, what connecting brings and what it needs; once
    connected, each account's details and data status beside how the integration stands (rules in
-   `components/integrations/adPlatformParts.tsx`). **Settings → Connect your business**
-   (`/settings/integrations`) offers just three choices, **Shopify**, **Google** and **Meta**: **Connect Google** asks
-   "Which Google do you use?" (Google Ads or Google AdSense), **Connect Meta** goes straight to Facebook (after a
-   "Before you go to Facebook" note while Meta lets only its testers in), and once connected each choice links to
-   Settings → Advertising (**Manage**, or **Fix it** when an account needs attention). Signing in with Google is on
-   Settings → Security.
-3. They press **Continue with Google Ads**, **Continue with Meta Ads** or **Continue with Google AdSense** (or choose
-   on Connect your business) and approve on the platform's own screen. Connecting needs the integrations permission (`integrations.manage`:
+   `components/integrations/adPlatformParts.tsx`). **Settings → Integrations** (`/settings/integrations`, the owner's
+   2026-10-23 design: `components/integrations/IntegrationRow.tsx`, `AdRow.tsx`) shows a card each for Google Ads,
+   Shopify, WhatsApp, Meta Ads and Google AdSense with a **Connect** button: Google Ads and Meta Ads first show what
+   their platform's screen will say while it still reviews bizinsights ("Before you go to Google" / "Before you go to
+   Facebook"), AdSense goes straight to Google, and once connected each card links to Settings → Advertising
+   (**Manage**, or **Fix it** when an account needs attention). Signing in with Google is on Settings → Security.
+3. They press **Continue with Google Ads**, **Continue with Meta Ads** or **Continue with Google AdSense** (or
+   **Connect** on Settings → Integrations) and approve on the platform's own screen. Connecting needs the integrations permission (`integrations.manage`:
    owners and admins, unless the owner gave it to another role) and a verified email address.
 4. When the login can see several accounts and some are new, they tick the ones that belong to this store.
    - The sign-in waits on the server, encrypted, for 15 minutes.

@@ -11,7 +11,7 @@
  * per subject even when two rules match.
  */
 import { systemDb, type SmsAutomationRule, type SmsContact, type Store } from "@app/db";
-import { evaluateRuleConditions, missingForTrigger, mayReceive, RULE_STATUS_AFTER, ruleCan, smsRuleSchema, TRIGGER_INFO, type RuleAction, type RuleFacts, type SmsRuleInput, type SmsTrigger, type SmsValues } from "@app/shared/sms";
+import { evaluateRuleConditions, missingForTrigger, mayReceive, ORDER_STATUS_WORD, RULE_STATUS_AFTER, ruleCan, smsRuleSchema, TRIGGER_INFO, type RuleAction, type RuleFacts, type SmsRuleInput, type SmsTrigger, type SmsValues } from "@app/shared/sms";
 import { logger } from "../logger.js";
 import { senderOf, smsAudit, SmsError, smsMode, transactionalBasisOf, type SmsDeps } from "./common.js";
 import { scheduleSms } from "./messages.js";
@@ -204,7 +204,7 @@ export async function runSmsRules(trigger: SmsTrigger, subject: RuleSubject, dep
         templateId: cfg.templateId,
         templateVersion: version?.version ?? 0,
         contact: subject.contact,
-        values: { ...subject.values, ...(cfg.discountCode ? { discount_code: cfg.discountCode } : {}) },
+        values: { order_status: ORDER_STATUS_WORD[trigger] ?? null, ...subject.values, ...(cfg.discountCode ? { discount_code: cfg.discountCode } : {}) },
         sendAfter: new Date(subject.at.getTime() + cfg.delayMinutes * 60_000),
         dryRun: cfg.dryRun || smsMode() !== "live",
         skip,
