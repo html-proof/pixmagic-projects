@@ -8,6 +8,7 @@ export { env } from "./env.js";
 export { logger, withLogContext } from "./logger.js";
 export { withTimeout } from "./http.js";
 export * from "./mail/types.js";
+export * from "./mail/senders.js";
 export * from "./mail/resend.js";
 export * from "./mail/authEmails.js";
 export type { Mailer, MailOptions } from "./notify.js";

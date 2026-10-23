@@ -432,8 +432,8 @@ export function authRoutes(app: App, deps: Deps) {
   async function emailLoginCode(id: string, pending: Omit<PendingLogin, "codeHash" | "issuedAt">, name: string | null): Promise<CodeChallenge> {
     const now = Date.now();
     const code = newCode();
-    const mail = authEmail({ trigger: "CustomEmailSender_Authentication", code, name, email: pending.email, appUrl: env().APP_URL })!;
-    await deps.mailer.send(pending.email, mail.subject, mail.text, mail.html).catch((err: unknown) => {
+    const mail = authEmail({ trigger: "CustomEmailSender_Authentication", code, name, email: pending.email, appUrl: env().APP_URL, senders: env() })!;
+    await deps.mailer.send(pending.email, mail.subject, mail.text, mail.html, { purpose: mail.purpose }).catch((err: unknown) => {
       logger.error({ err }, "could not email a sign-in code");
       throw new HttpError(503, CODE_UNAVAILABLE, "email_unavailable");
     });
@@ -643,8 +643,8 @@ export function authRoutes(app: App, deps: Deps) {
       logger.error({ err }, "could not store an address claim");
       throw new HttpError(503, UNAVAILABLE, "auth_unavailable");
     });
-    const mail = authEmail({ trigger: kind === "signup" ? "CustomEmailSender_SignUp" : "CustomEmailSender_ForgotPassword", code, name, email, appUrl: env().APP_URL })!;
-    await deps.mailer.send(email, mail.subject, mail.text, mail.html).catch((err: unknown) => {
+    const mail = authEmail({ trigger: kind === "signup" ? "CustomEmailSender_SignUp" : "CustomEmailSender_ForgotPassword", code, name, email, appUrl: env().APP_URL, senders: env() })!;
+    await deps.mailer.send(email, mail.subject, mail.text, mail.html, { purpose: mail.purpose }).catch((err: unknown) => {
       logger.error({ err }, "could not email an address claim's code");
       throw new HttpError(503, "We couldn't send you an email right now. Please try again in a moment.", "email_unavailable");
     });

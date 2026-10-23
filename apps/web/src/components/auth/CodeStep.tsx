@@ -1,5 +1,7 @@
 "use client";
+import { ClipboardPaste } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
+import { codeInText } from "@app/shared/auth";
 import { Alert } from "@/components/ui";
 import { authErrorMessage, challengeFromError, errorCode, type CodeChallenge } from "@/lib/auth";
 import { AuthSubmit } from "./AuthCard";
@@ -7,6 +9,26 @@ import { AuthSubmit } from "./AuthCard";
 /** Seconds before "Send a new code" works again where the server names no countdown (the older code flows). */
 const RESEND_WAIT_S = 30;
 const CODE_LENGTH = 6;
+
+// What "Paste code" says. The code itself is never shown, logged or kept: it goes into the boxes.
+export const PASTED = "Code pasted from your clipboard.";
+export const NO_CODE_ON_CLIPBOARD = "There's no 6-digit code on your clipboard. Copy the code from the email, then try again.";
+export const CLIPBOARD_BLOCKED = "Your browser didn't let bizinsights read the clipboard. Paste the code into the first box instead (press and hold it, or right-click it, and choose Paste), or type it.";
+
+/**
+ * The code on the clipboard, read when the person asks ("Paste code"). Reading needs their
+ * permission: the browser asks, or shows its own Paste button, and may refuse (a denied permission,
+ * an older browser, a page in a frame). `codeInText` finds the code in whatever was copied.
+ */
+async function readCodeFromClipboard(): Promise<{ code: string } | { problem: "none" | "blocked" }> {
+  try {
+    const text = await navigator.clipboard.readText();
+    const code = codeInText(text);
+    return code ? { code } : { problem: "none" };
+  } catch {
+    return { problem: "blocked" };
+  }
+}
 
 /** "00:59": whole seconds left, never negative. */
 const clock = (ms: number) => {
@@ -163,6 +185,10 @@ export function OtpInput({
  * expired; the server enforces both whatever the page shows. A resend's answer, or a refused
  * resend (`resend_cooldown`), carries the countdowns of the code that now counts.
  *
+ * "Paste code" (where the browser can read the clipboard on request) puts the code copied from the
+ * email into the boxes and sends it; a code can also be pasted into any box, or filled in by the
+ * phone from the email (autocomplete="one-time-code").
+ *
  * `large`: the split sign-in pages' field and button (AuthSplitShell). `card`: AuthCard's field and
  * button (the raised-card pages).
  */
@@ -209,7 +235,11 @@ export function CodeStep({
   const [info, setInfo] = useState<string | null>(null);
   const [challenge, setChallenge] = useState<CodeChallenge | null>(initialChallenge ?? null);
   const [wait, setWait] = useState(RESEND_WAIT_S);
+  /** Whether this browser can read the clipboard on request (decided after hydration: the export has no navigator). */
+  const [canPaste, setCanPaste] = useState(false);
   const submittedFor = useRef<string | null>(null);
+
+  useEffect(() => setCanPaste(typeof navigator !== "undefined" && typeof navigator.clipboard?.readText === "function"), []);
 
   // A new code from the caller (another tab's resend, a reload): its countdowns replace these.
   useEffect(() => setChallenge(initialChallenge ?? null), [initialChallenge]);
@@ -233,10 +263,12 @@ export function CodeStep({
       }
       setBusy(true);
       setError(null);
-      setInfo(null);
+      // "Code pasted" stays while the pasted code is checked; other notices go.
+      setInfo((m) => (m === PASTED ? m : null));
       try {
         await onSubmit(value);
         setDone(true);
+        setInfo(null);
       } catch (err) {
         setError(authErrorMessage(err));
         // A spent or ended code: the boxes are cleared for the next one.
@@ -263,7 +295,25 @@ export function CodeStep({
   function onCodeChange(value: string) {
     setCode(value);
     if (error && value.length < CODE_LENGTH) setError(null);
-    if (value.length < CODE_LENGTH) submittedFor.current = null;
+    if (value.length < CODE_LENGTH) {
+      submittedFor.current = null;
+      setInfo((m) => (m === PASTED ? null : m));
+    }
+  }
+
+  /** "Paste code": the code copied from the email goes into the boxes and is sent, as if typed. */
+  async function pasteCode() {
+    if (busy || done || expired) return;
+    setError(null);
+    setInfo(null);
+    const r = await readCodeFromClipboard();
+    if ("problem" in r) {
+      setInfo(r.problem === "none" ? NO_CODE_ON_CLIPBOARD : CLIPBOARD_BLOCKED);
+      return;
+    }
+    onCodeChange(r.code);
+    setInfo(PASTED);
+    onComplete(r.code);
   }
 
   async function resend() {
@@ -339,9 +389,22 @@ export function CodeStep({
 
   const boxes = (
     <div>
-      <p className={card ? "mb-2 block text-[15px] font-semibold text-text" : "label"} id="code-label">
-        Verification code
-      </p>
+      <div className={`flex items-center justify-between gap-3 ${card ? "mb-2" : ""}`}>
+        <p className={card ? "block text-[15px] font-semibold text-text" : "label"} id="code-label">
+          Verification code
+        </p>
+        {canPaste && (
+          <button
+            type="button"
+            className="-my-1.5 inline-flex min-h-9 items-center gap-1.5 rounded-lg px-2 text-sm font-semibold text-accent transition hover:bg-[color-mix(in_oklab,var(--accent)_10%,transparent)] focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none disabled:opacity-60"
+            onClick={() => void pasteCode()}
+            disabled={busy || done || expired}
+          >
+            <ClipboardPaste size={16} aria-hidden />
+            Paste code
+          </button>
+        )}
+      </div>
       <OtpInput value={code} onChange={onCodeChange} onComplete={onComplete} disabled={busy || done || expired} invalid={!!error} large={large || card} autoFocus />
     </div>
   );

@@ -1,6 +1,6 @@
 import { createHmac, randomInt } from "node:crypto";
 import { env, logger, type Coord } from "@app/core";
-import { sha256Hex } from "@app/shared";
+import { EMAIL_CODE_TTL_S, sha256Hex } from "@app/shared";
 import { HttpError } from "./context.js";
 import { limit, LIMITS, type Limit } from "./rateLimit.js";
 
@@ -25,8 +25,8 @@ import { limit, LIMITS, type Limit } from "./rateLimit.js";
  * with one atomic delete, so two answers can't both succeed.
  */
 
-/** A code's life, in seconds, from the moment it is issued. */
-export const CODE_TTL_S = 60;
+/** A code's life, in seconds, from the moment it is issued (the email says so too: @app/shared/auth). */
+export const CODE_TTL_S = EMAIL_CODE_TTL_S;
 /** Seconds after a code was issued before another one may be asked for. */
 export const RESEND_AFTER_S = 60;
 /** Wrong guesses one code takes; the one that reaches this ends the code. */
