@@ -116,9 +116,18 @@ and reviewer instructions are written. The rest needs your logins, your certific
    ads-review-packs.md), then Access Verification.
 7. **After each approval.** Claude flips `GOOGLE_ADS_OAUTH_VERIFIED` or `META_ADS_ADVANCED_ACCESS` and ships it.
 8. **Any time, optional.** Google Ads API Basic access (draft answers in ads-review-packs.md).
-9. **You, 5 minutes each.** The contact address became bizinsightsaus@yahoo.com on 2026-10-22: the website,
-   `security.txt`, the AWS budget, the daily cost email and Cost Anomaly Detection use it. These still hold
-   sales@ikorex.com.au, and Shopify, Meta and Google reply there until you change them: Shopify Partner Dashboard
-   (listing support email, merchant review and app submission emails), the Meta portfolio's business email
-   (Business settings → Business info) and, if offered, Google Cloud's consent-screen contacts (ads-review-packs.md).
-   The answers already sent to sales@ikorex.com.au (Google's new-user limit, Meta's verification) keep going there.
+9. **Contact address, checked 2026-10-23.** bizinsightsaus@yahoo.com since 2026-10-22: the website (live
+   release 97), `security.txt` (Cloudflare's own copy switched off), the AWS budget, the daily cost email and
+   Cost Anomaly Detection use it. Outside the code:
+   - Shopify Partners (Pixmagic 5229240): the account's emails never were sales@ikorex.com.au (business
+     sebanceo@gmail.com, support and emergency imeseban@gmail.com), and review emails for the App Store app
+     (cf5c717d) go to imeseban@gmail.com. Only the listing's support email still says sales@ikorex.com.au, and
+     Shopify locks the listing during review: change it on **Submit fixes** or after approval
+     (listing-copy.md has the new text). Never Withdraw to edit it.
+   - **You:** the Meta portfolio's business email (Business settings → Business info); Claude doesn't automate
+     Meta's business pages.
+   - **You:** Google Cloud's consent-screen contacts in `bizinsights-sign-in` and `insights-511119`, if either still
+     names sales@ikorex.com.au (Branding → Developer contact information takes any address; the user support
+     email only the signed-in account or a Group).
+   - Answers to what was already sent from sales@ikorex.com.au (Google's new-user limit, Meta's verification)
+     still arrive there.
