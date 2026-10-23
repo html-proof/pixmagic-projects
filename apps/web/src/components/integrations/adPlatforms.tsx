@@ -25,7 +25,7 @@ export type ChipTone = "info" | "violet" | "good" | "orange" | "rose";
 
 /**
  * What differs between the Google Ads, Meta Ads and Google AdSense cards on Settings → Advertising
- * (AdPlatformPanel), and their names and icons on Settings → Connect your business (ConnectChoices).
+ * (AdPlatformPanel), and their names, icons and chips on Settings → Integrations (AdRow).
  */
 export interface AdPlatformInfo {
   name: string;
@@ -36,9 +36,9 @@ export interface AdPlatformInfo {
   /** The same button while the browser leaves. */
   opening: string;
   Icon: (p: { size?: number }) => ReactNode;
-  /** What connecting turns on (Connect your business; "What you'll get" on Settings → Advertising). */
+  /** What connecting turns on ("What you'll get" on Settings → Advertising). */
   features: string[];
-  /** What bizinsights reads from it, in the order the platform nests it (Settings → Advertising). */
+  /** What bizinsights reads from it, in the order the platform nests it (Settings → Advertising; the chips on Settings → Integrations). */
   reads: Array<{ label: string; icon: LucideIcon; tone: ChipTone }>;
   /** What someone needs before pressing the button (Settings → Advertising). */
   needs: Array<{ label: string; icon: LucideIcon }>;

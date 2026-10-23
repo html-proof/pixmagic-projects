@@ -10,7 +10,7 @@ export const SETTINGS_PAGES: ReadonlyArray<{ slug: string; label: string; icon: 
   { slug: "profile", label: "Profile", icon: UserRound, keywords: "name time zone account" },
   { slug: "security", label: "Security", icon: ShieldCheck, keywords: "password sign out devices" },
   { slug: "workspace", label: "Workspace", icon: Building2, keywords: "rename" },
-  { slug: "integrations", label: "Connect your business", icon: Plug, keywords: "integrations connect" },
+  { slug: "integrations", label: "Integrations", icon: Plug, keywords: "connect your business shopify whatsapp google meta adsense" },
   { slug: "stores", label: "Shopify", icon: Store, keywords: "stores connect disconnect" },
   { slug: "ads", label: "Advertising", icon: Megaphone, keywords: "meta google ads adsense" },
   { slug: "email", label: "Email integrations", icon: Mail, keywords: "gmail outlook smtp" },
