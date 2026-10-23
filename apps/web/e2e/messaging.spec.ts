@@ -77,6 +77,64 @@ test("an owner sets up a sender, verifies a test number, writes a template and t
   await expect(page.getByText("Delivered", { exact: true }).filter({ visible: true }).first()).toBeVisible();
 });
 
+test("an owner goes through Set up SMS: connect, sender name, message, a delivered test, and order confirmations on", async ({ page }) => {
+  await ownerWithStore(page);
+  await page.goto("/messaging/setup");
+  await expect(page.getByRole("heading", { name: "Set up SMS" })).toBeVisible();
+
+  // 1. Connect (the local server's stand-in for AWS answers).
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  await expect(page.getByText("Connected", { exact: true }).first()).toBeVisible();
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+
+  // 2. The sender name: checked as it is typed, asked for, and the shared sender used meanwhile.
+  await page.getByLabel("Business name").fill("IKOREX");
+  await page.getByLabel("Where are most of your customers?").selectOption("AU");
+  await page.getByLabel("Sender name", { exact: true }).fill("IKOREX STORE");
+  await expect(page.getByText(/can't have spaces/)).toBeVisible();
+  await page.getByLabel("Sender name", { exact: true }).fill("IKOREX");
+  await expect(page.getByTestId("preview-sender")).toHaveText("IKOREX");
+  await expect(page.getByText("Sender name not approved yet")).toBeVisible();
+  await page.getByRole("button", { name: "Register sender name" }).click();
+  await expect(page.getByText("Requested", { exact: true }).first()).toBeVisible();
+  await page.getByRole("button", { name: /Use bizinsights' shared sender/ }).click();
+  await expect(page.getByText(/Texts now come from/)).toBeVisible();
+  await expect(page.getByTestId("preview-sender")).toHaveText("LOCALTEST");
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+
+  // 3. The message, with the business's name in the preview.
+  await expect(page.getByTestId("preview-text")).toHaveText("Hi Sarah, your order #1042 has been confirmed. Thank you for shopping with IKOREX!");
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+
+  // 4. A test text to a verified number, followed to the phone's receipt.
+  await page.getByLabel("Mobile number").fill("0412 345 678");
+  await page.getByRole("button", { name: "Text me a code" }).click();
+  await page.getByPlaceholder("Code").fill("123456");
+  await page.getByRole("button", { name: "Confirm" }).click();
+  await expect(page.getByText("Verified", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Send Test SMS" }).click();
+  await expect(page.getByRole("button", { name: /Send again in/ })).toBeDisabled();
+  await expect(page.getByText("Delivered: the phone confirmed it arrived.")).toBeVisible({ timeout: 20_000 });
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+
+  // 5. Spending limit and consent, then order confirmations on (confirmed first), then the master switch.
+  await page.getByText("My checkout tells customers order updates come by text").click();
+  await page.getByRole("button", { name: "Save limit and consent" }).click();
+  await expect(page.getByText("Saved.").first()).toBeVisible();
+  await page.getByRole("switch", { name: "New order confirmed" }).click();
+  await expect(page.getByRole("dialog")).toContainText("bizinsights is in test mode");
+  await page.getByRole("dialog").getByRole("button", { name: "Turn on" }).click();
+  await expect(page.getByRole("switch", { name: "New order confirmed" })).toBeChecked();
+  await page.getByRole("switch", { name: "Enable Automatic SMS" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Turn on" }).click();
+  await expect(page.getByRole("switch", { name: "Enable Automatic SMS" })).toBeChecked();
+
+  await page.getByRole("button", { name: "Finish" }).click();
+  await expect(page).toHaveURL(/\/messaging\/settings/);
+  await expect(page.getByRole("heading", { name: "SMS Settings" })).toBeVisible();
+  await expect(page.getByText("Connected", { exact: true }).first()).toBeVisible();
+});
+
 test("the opt-out page says so for a link that names nothing", async ({ page }) => {
   await page.goto("/stop?c=Nothing1234");
   await expect(page.getByText(/isn't valid any more/)).toBeVisible();

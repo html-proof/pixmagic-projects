@@ -30,6 +30,7 @@ Nothing reaches a customer until all of these are true, and none is true by defa
 | Shopify events, consent webhooks | `events.ts` |
 | The 15-minute sweep, retention | `sweep.ts` |
 | Figures (overview, analytics, billing); GDPR | `analytics.ts`, `privacy.ts` |
+| Set up SMS (the five-step setup) and SMS Settings | `setup.ts`; rules in `@app/shared/sms` (`checkSenderName`, `SENDER_ID_SUPPORT`, `SETUP_AUTOMATIONS`); API `apps/api/src/routes/smsSetup.ts`; pages `/messaging/setup`, `/messaging/settings` (`components/messaging/Setup.tsx`, `SmsSettings.tsx`, `PhonePreview.tsx`) |
 | AWS adapter (signed calls to sms-voice) | `apps/aws/src/smsProvider.ts` |
 | API | `apps/api/src/routes/sms.ts`, `smsOps.ts`, `smsActivity.ts`, `smsPublic.ts` |
 | Worker | `apps/worker/src/handlers/integrations.ts` (`runSmsJob`, `runSmsEvent`), `webhooks.ts`, `index.ts` (sweep) |
@@ -158,6 +159,76 @@ delivery events and the audit trail are append-only for tenant requests (migrati
   removed store erase every table (`purgeStoreData`); `customers/data_request` exports their
   numbers, consent history and texts.
 
+## Set up SMS (for merchants)
+
+Customer Messaging → **Set up SMS** (`/messaging/setup`) is the simple way in: five steps next to a
+phone showing the text as a customer gets it, with **Save draft** and **Continue later** (the step
+and everything typed are kept in `sms_setups`). It drives the same rows as the advanced pages
+(sender, templates, rules, test texts), with the same checks; nothing is sent another way.
+**SMS Settings** (`/messaging/settings`) shows the result: the connection (with Disconnect and
+Reconnect), the sender name and its approval, the messages and automatic texts, the last test,
+recent texts with their delivery status, and this month's spend.
+
+1. **Connect.** The API asks AWS End User Messaging SMS about the platform's account with the
+   function's role (`DescribeAccountAttributes`, `DescribeSpendLimits`). The merchant has no AWS
+   account and gives no keys; nothing secret reaches the browser. *Connected* means AWS answered;
+   *Connection failed* says why (`platform_off`: `SMS_MODE=off`; `aws_unreachable`). Disconnect
+   turns sending off (waiting texts are cancelled) and keeps everything else.
+2. **Sender name.** The business name (`{{business_name}}`), the country most customers are in and
+   the sender name, checked as typed and again on the server (`checkSenderName`: AWS's sender ID
+   rules, 3 to 11 of A-Z a-z 0-9 and inner hyphens, a letter, no generic names; France: no
+   hyphens). What customers in that country will see comes from `SENDER_ID_SUPPORT` (AWS's
+   "Supported countries" table, checked 2026-10-23): `registered` (AU, GB, IE, SG, IN…: only a
+   registered name shows), `dynamic` (DE, FR, NL, HK…: no registration), `none` (US, CA, NZ, MY,
+   ZA…: a number). **Register / Request sender name** records the request and emails
+   `SMS_SENDER_REQUESTS_TO` once (below); where names aren't shown it asks for a number instead.
+   **Check status** asks AWS: the name is *Approved* only when AWS has that sender ID in that
+   country, tagged `bizinsights:workspace=<id>`, with its registration `COMPLETE` (or none
+   required), and then it becomes the store's sender (verified like Sender Configuration's).
+   Other states: *Requested* (AWS has nothing yet), *Pending approval* (tagged, registration not
+   complete), *Needs changes* (registration sent back or closed), *Not available* (another
+   workspace's). India is refused here: it needs the merchant's own DLT registration (Sender
+   Configuration). Where `SMS_SHARED_SENDER` is set, *Use bizinsights' shared sender for now*.
+3. **Message.** The order confirmation, with buttons for the details (customer name, business
+   name, order number, order status, tracking link where the event has one, order total,
+   product); *Appointment date* is shown switched off (Shopify records no appointments). Aliases
+   (`{{order_id}}`, `{{business}}`…) are named and fixed (`fixVariableAliases`). Saved as a draft
+   template, approved when the merchant turns it on in step 5.
+4. **Test SMS.** A verified test number (AWS texts a code first, so tests reach only a phone the
+   member holds), then **Send Test SMS**: one `requestId` per press, so a retried request returns
+   the text already sent; the same message to the same number again within 30 seconds is refused
+   (`test_repeat`). The page follows the text to its outcome: *Accepted by AWS* is said to be not
+   yet a delivery; *Delivered* only on AWS's `DELIVERED` event; failures come with a suggested fix.
+5. **Automatic SMS.** The monthly spending limit and the basis for order updates (the same fields
+   as Sender Configuration), then the order updates: *New order confirmed*, *Payment confirmation*,
+   *Order shipped*, *Order delivered* (each its own message; *Appointment reminder* shown as not
+   available). Turning one on asks for confirmation (the API refuses it without `confirm`) and
+   then approves its template and rule in the member's name (audited, `selfApproved`) and starts
+   it with `dryRun: false`; off pauses it. **Enable Automatic SMS** is the store's sending switch
+   (Sender Configuration's *Send texts*): on needs the connection, an approved sender, a basis and
+   a budget above 0, and asks first. With `SMS_MODE=sandbox` the dialogs say no customer is texted.
+
+New variables: `{{business_name}}` (the setup's business name, else the store's name, filled at
+send time) and `{{order_status}}` (`ORDER_STATUS_WORD`: confirmed, paid, shipped, delivered,
+cancelled, refunded, filled by `runSmsRules`).
+
+### Sender names from Set up SMS (platform owner)
+
+A request emails `SMS_SENDER_REQUESTS_TO` (`apps/aws/src/settings.ts`) with the store, the
+workspace id, who asked, and the commands. bizinsights doesn't create sender IDs or submit
+registrations from a merchant's click: the AWS account and its registrations are the platform's,
+and a name is someone's brand, so check it is theirs first. Then, in ap-southeast-2:
+
+```bash
+aws pinpoint-sms-voice-v2 request-sender-id --region ap-southeast-2 --sender-id <NAME> --iso-country-code <CC> --message-types TRANSACTIONAL --tags Key=bizinsights:workspace,Value=<workspace id>
+```
+
+Where the country requires registration (AU: ACMA's register; GB, IE, SG…): AWS console →
+Registrations → the country's sender ID registration with the merchant's business details, and
+associate the sender ID. For a country without sender names, provision a number that can text it
+(US: toll-free with verification, or 10DLC) and tag it the same way. Nothing else is needed in
+bizinsights: the merchant's *Check status* finds it by its tag.
+
 ## Setting it up
 
 ### What exists in AWS after the deploy
@@ -233,6 +304,7 @@ platform switch too).
 | `SMS_PARTS_PER_SECOND` | 1 | A sender's MPS at AWS; campaigns are paced to it |
 | `SMS_CAMPAIGN_MAX_RECIPIENTS` | 2000 | Largest campaign |
 | `SMS_SHARED_SENDER` | empty | A shared, tagged origination identity |
+| `SMS_SENDER_REQUESTS_TO` | empty (production: the owner's address) | Where Set up SMS's sender-name requests are emailed |
 | `SMS_DEFAULT_REGION` | `AWS_REGION` | SMS region unless a sender's countries need another |
 | `SMS_CONFIGURATION_SET` | set by the App stack | Name, or JSON per region |
 
@@ -259,7 +331,11 @@ Monthly estimate = Σ over countries (texts × parts per text × price per part)
 - Birthday texts need a birthday source Shopify doesn't have.
 - "Delivery confirmed" only where carriers report delivery to Shopify.
 - Attribution is "an order followed a text", last touch, within the window: not incremental revenue.
-- Registrations (AU sender IDs, 10DLC, DLT) are done in the AWS console, not from the dashboard.
+- Registrations (AU sender IDs, 10DLC, DLT) are done in the AWS console, not from the dashboard:
+  Set up SMS records the merchant's request and emails the platform owner, and approves the name
+  only once AWS has it registered and tagged.
+- Set up SMS sets one sender for one country (the one most customers are in); more countries, or
+  a pool, are set in Sender Configuration.
 
 ## Testing
 
@@ -272,7 +348,7 @@ TEST_PG_PORT=5463 TEST_DB=sms_test pnpm --filter @app/worker exec vitest run tes
 ```
 
 ```bash
-TEST_PG_PORT=5463 TEST_DB=sms_test pnpm --filter @app/api exec vitest run test/sms.test.ts
+TEST_PG_PORT=5463 TEST_DB=sms_test pnpm --filter @app/api exec vitest run test/sms.test.ts test/smsSetup.test.ts
 ```
 
 ```bash

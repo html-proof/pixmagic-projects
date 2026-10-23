@@ -2790,6 +2790,51 @@ model SmsSenderConfiguration {
   @@map("sms_sender_configurations")
 }
 
+/// The simple SMS setup (Customer Messaging → Set up SMS): the step the merchant is on, the
+/// connection check, what they typed so far and the sender name they asked for. The sender,
+/// templates and rules live in their own tables; this row points at the ones the setup made.
+model SmsSetup {
+  id                  String    @id @default(cuid())
+  workspaceId         String    @map("workspace_id")
+  storeId             String    @unique @map("store_id")
+  /// connect | sender | message | test | automate: where "Continue later" picks up.
+  step                String    @default("connect")
+  /// connected | failed | disconnected; null until the merchant first presses Connect.
+  connection          String?
+  /// Why the last connection check failed (platform_off, aws_unreachable…).
+  connectionError     String?   @map("connection_error")
+  connectionCheckedAt DateTime? @map("connection_checked_at")
+  connectedBy         String?   @map("connected_by")
+  connectedAt         DateTime? @map("connected_at")
+  /// What {{business_name}} says (the store's name until it is set).
+  businessName        String?   @map("business_name")
+  /// The sender ID asked for, and the country most customers are in (where it is checked and registered).
+  senderName          String?   @map("sender_name")
+  country             String?
+  /// SENDER_NAME_STATUSES (@app/shared/sms): approved only on AWS's word.
+  senderNameStatus    String    @default("draft") @map("sender_name_status")
+  senderRequestedAt   DateTime? @map("sender_requested_at")
+  senderRequestedBy   String?   @map("sender_requested_by")
+  senderCheckedAt     DateTime? @map("sender_checked_at")
+  /// AWS's registration status at the last check (null: none needed, or AWS has no such sender ID).
+  senderRegistration  String?   @map("sender_registration")
+  /// The message step's text until it is saved as its template, and that template.
+  message             String?
+  templateId          String?   @map("template_id")
+  /// Per trigger, the template and rule the Automatic SMS step made: {"order_created": {"templateId": "…", "ruleId": "…"}}.
+  automations         Json      @default("{}")
+  /// The budget and the basis for order updates chosen before the store had a sender (the sender's own after).
+  monthlyBudgetUsd    Decimal?  @map("monthly_budget_usd") @db.Decimal(12, 4)
+  transactionalBasis  String?   @map("transactional_basis")
+  completedAt         DateTime? @map("completed_at")
+  updatedBy           String?   @map("updated_by")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+
+  @@index([workspaceId])
+  @@map("sms_setups")
+}
+
 /// A message template. Each edit is a new version; messages use the approved one.
 model SmsTemplate {
   id              String               @id @default(cuid())
