@@ -1,6 +1,6 @@
 // Request shapes shared by the API (which enforces them) and the UI (which builds them).
 
-import { z } from "zod";
+import { z } from "../zod";
 import { partialUpdate } from "../partialUpdate";
 import { displayNameOk, headerSafe, isEmail } from "./address";
 import { conditionNodeSchema } from "./conditions";

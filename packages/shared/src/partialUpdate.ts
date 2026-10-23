@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "./zod";
 
 /**
  * `schema.partial()` for an update request: a field the request leaves out stays out. Zod 4's own

@@ -4,7 +4,7 @@
  * API error should be handled, quiet hours, and the automation rules' conditions. Everything that
  * touches the network or the database is in packages/core/src/whatsapp.
  */
-import { z } from "zod";
+import { z } from "./zod";
 
 // ---------------------------------------------------------------------------
 // Phone numbers

@@ -8,7 +8,7 @@
  *
  * Imported by the UI through `@app/shared/sms`: no I/O, no node: imports.
  */
-import { z } from "zod";
+import { z } from "./zod";
 import { addDays, customRangeProblem, isDay } from "./dates";
 import { maskPhone, nextSendTime } from "./whatsapp";
 
