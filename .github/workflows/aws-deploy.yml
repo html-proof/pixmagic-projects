@@ -199,9 +199,15 @@ jobs:
       # round trip: 6 of 15 connects to CDK's us-east-1 bucket got through within 10 s, against 10 of
       # 15 at 5000 ms (2026-10-23). infra/cdk/test/deploy-network.test.ts checks `network` against
       # the failed runs' logs.
+      # A call whose connection goes quiet would wait for ever: the CLI's 5-minute request limit only
+      # logs a warning. scripts/stall-guard.cjs ends it after 2 minutes without a byte, with
+      # ETIMEDOUT, which the SDK retries (Deploy 40032504218 sat 57 minutes on one in Modern
+      # Standby). And the step stops at 45 minutes, so whatever still hangs fails it and the
+      # rollback runs: a job cancelled at its own limit skips every step after this one.
       - name: Deploy (CDK)
         working-directory: infra/cdk
-        env: { AWS_MAX_ATTEMPTS: "10", NODE_OPTIONS: "--network-family-autoselection-attempt-timeout=5000" }
+        timeout-minutes: 45
+        env: { AWS_MAX_ATTEMPTS: "10", NODE_OPTIONS: "--network-family-autoselection-attempt-timeout=5000 --require ${{ github.workspace }}/infra/cdk/scripts/stall-guard.cjs" }
         run: |
           deploy=(npx cdk deploy --all --require-approval never --concurrency 3 -c env=production -c "schedules=${{ vars.AWS_SCHEDULES || 'off' }}" -c "alertEmail=${{ vars.AWS_ALERT_EMAIL }}" -c "googleClientId=${{ vars.GOOGLE_SIGNIN_CLIENT_ID }}")
           network='could not be used to assume|no credentials have been configured|did not establish a connection|ETIMEDOUT|ECONNRESET|ECONNREFUSED|EAI_AGAIN|ENOTFOUND|getaddrinfo|socket hang up|TimeoutError|NetworkingError'
