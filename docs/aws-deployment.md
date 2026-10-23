@@ -128,6 +128,15 @@ It is two jobs, so the app's dependencies never run where the deploy role is rea
   (aws-cdk-lib, the CDK CLI, tsx) with `--ignore-scripts`, restores the package
   (`fail-on-cache-miss`), and does the rest. A re-run of only `deploy` finds the same package.
 
+When the PC's connection drops calls, CDK can't reach STS: the log says its bootstrap roles
+"could not be used to assume ... Proceeding anyway". It then falls back to the deploy role, which
+is refused what only those roles may do (`ssm:GetParameter` on `/cdk-bootstrap/hnb659fds/version`),
+or a socket "did not establish a connection". Either way nothing in AWS changed. So "Deploy (CDK)"
+tries `cdk deploy` again a minute later when its output reads like the network, three attempts in
+all; any other failure goes straight to the rollback. Three network failures in a row: put the PC
+on a steadier connection, then re-run the `deploy` job. CloudTrail tells the two apart: a real
+refusal shows `AssumeRole` events with `AccessDenied`, while a dropped connection shows none.
+
 Dependency install scripts run, anywhere this repository is installed (CI, the deploy, a
 developer's machine), only for the packages `pnpm.onlyBuiltDependencies` in the root
 `package.json` names (esbuild, prisma, @prisma/engines). A new dependency that needs its install
