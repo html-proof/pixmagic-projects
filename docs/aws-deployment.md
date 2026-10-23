@@ -583,9 +583,11 @@ a hosted zone that isn't the registrar's nameservers would only be a second, ign
     `CF-Region` / `CF-IPCity` too once the zone sends them: Rules → Transform Rules → Managed
     Transforms → **Add visitor location headers** (any plan). Without it the list shows the country
     only. Requests that don't come through Cloudflare get CloudFront's own `CloudFront-Viewer-*`.
-  - **AI Labyrinth** on; **Security.txt** set with the same lines as
-    `apps/web/public/.well-known/security.txt` (Cloudflare answers that path at its edge). Both
-    expire 2027-10-15: renew the `Expires` line in both before then.
+  - **AI Labyrinth** on. Cloudflare's own **Security.txt** (Security → Settings) is **off** since
+    2026-10-23: while on, Cloudflare answered `/.well-known/security.txt` at its edge and hid the
+    site's `apps/web/public/.well-known/security.txt` (it still gave the old contact address after
+    the site's file changed). The site's file is the one to edit; it expires 2027-10-15, so renew its
+    `Expires` line before then. Cloudflare's copy is kept, switched off: don't switch it back on.
   - Rollback: switch the two records back to **DNS only**. Nothing in AWS has to change: from
     anywhere but Cloudflare's ranges `CF-Connecting-IP` is ignored.
 - **One origin**: the session cookie, the CSRF check and every OAuth callback use APP_URL
