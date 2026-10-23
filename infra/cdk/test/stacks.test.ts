@@ -527,6 +527,25 @@ describe("the edge stack", () => {
     expect(rules["aws-ip-reputation"].OverrideAction).toEqual({ None: {} });
     expect(rules["aws-common-count-only"].OverrideAction).toEqual({ Count: {} });
   });
+
+  it("matches the API and its exempt paths the way the app routes them, so /api/webhooks/../auth/login is limited", () => {
+    const acl = Object.values(t.edge.findResources("AWS::WAFv2::WebACL"))[0]!.Properties;
+    type ByteMatch = { FieldToMatch: Record<string, unknown>; SearchString: string; TextTransformations: unknown };
+    const byteMatches: ByteMatch[] = [];
+    const walk = (v: unknown): void => {
+      if (Array.isArray(v)) v.forEach(walk);
+      else if (v && typeof v === "object") {
+        for (const [k, x] of Object.entries(v)) {
+          if (k === "ByteMatchStatement") byteMatches.push(x as ByteMatch);
+          walk(x);
+        }
+      }
+    };
+    walk(acl.Rules);
+    const onPath = byteMatches.filter((m) => "UriPath" in m.FieldToMatch);
+    expect(onPath.map((m) => m.SearchString)).toEqual(expect.arrayContaining(["/api/", "/api/webhooks/", "/pixel/"]));
+    for (const m of onPath) expect(m.TextTransformations, m.SearchString).toEqual([{ Priority: 0, Type: "URL_DECODE" }, { Priority: 1, Type: "NORMALIZE_PATH" }]);
+  });
 });
 
 describe("the edge stack behind Cloudflare", () => {
@@ -775,6 +794,28 @@ describe("IAM", () => {
     const workflow = readFileSync(join(REPO_ROOT, ".github/workflows/aws-deploy.yml"), "utf8");
     expect(workflow).toMatch(/^\s+environment: production\s*$/m);
     expect(workflow).toMatch(/^\s+id-token: write\s*$/m);
+  });
+
+  it("lets only the deploy job ask for the token, and keeps the app's dependencies out of that job", () => {
+    const workflow = readFileSync(join(REPO_ROOT, ".github/workflows/aws-deploy.yml"), "utf8");
+    const [top, rest] = workflow.split(/^jobs:\s*$/m) as [string, string];
+    const [build, deploy] = rest.split(/^ {2}deploy:\s*$/m) as [string, string];
+    // Not for the whole workflow, not for the job that installs and builds everything.
+    expect(top).not.toMatch(/id-token/);
+    expect(build).not.toMatch(/id-token/);
+    expect(build).not.toMatch(/environment: production/);
+    expect(build).not.toMatch(/configure-aws-credentials/);
+    expect(build).toContain("pnpm --filter @app/aws build");
+    // The deploy job: the token, the CDK tools only and no install scripts, and the package built above.
+    expect(deploy).toMatch(/^\s+id-token: write\s*$/m);
+    expect(deploy).toMatch(/^\s+needs: build\s*$/m);
+    const installs = deploy.match(/pnpm install[^\r\n]*/g) ?? [];
+    expect(installs).toEqual(["pnpm install --frozen-lockfile --ignore-scripts --filter @infra/cdk"]);
+    expect(deploy).not.toMatch(/--filter @app\/aws (build|test)|pnpm (--filter \S+ )*test/);
+    expect(deploy).toContain("fail-on-cache-miss: true");
+    // Dependency install scripts, anywhere this repository is installed, only for these.
+    const pkg = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as { pnpm: { onlyBuiltDependencies: string[] } };
+    expect(pkg.pnpm.onlyBuiltDependencies).toEqual(["@prisma/engines", "esbuild", "prisma"]);
   });
 
   it("proves the deploy role's next trust on roles that grant nothing: one must admit the deploy workflow, two must refuse it", () => {

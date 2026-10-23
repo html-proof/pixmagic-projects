@@ -15,6 +15,17 @@ export async function requireWaContacts(c: Ctx, deps: Deps, ws: string) {
   return a;
 }
 
+/**
+ * Changing what a customer receives (an opt-out recorded by hand stops every message to them, and
+ * only their own START undoes it): the store's managers, with "View contact information", as for
+ * SMS. A shared-link session and API keys only look, so never.
+ */
+export async function requireWaContactsManage(c: Ctx, deps: Deps, ws: string) {
+  const a = await requireWorkspace(c, deps, ws, "stores:manage");
+  if (!allows(a.access, "customers.contact")) throw new HttpError(403, "You don't have permission to see customers' contact details", "forbidden");
+  return a;
+}
+
 export async function waStore(ws: string, storeId: string): Promise<Store> {
   const store = await withTenant(ws, (tx) => tx.store.findFirst({ where: { id: storeId, workspaceId: ws } }));
   if (!store || store.status === "uninstalled") throw new HttpError(404, "Not found", "not_found");

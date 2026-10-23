@@ -110,11 +110,15 @@ function Onboarding() {
   // Connect into the workspace the user came from: `?ws=`, else the one the app shell has selected.
   // Always taking the first one attached a store connected from a second workspace to the wrong
   // workspace, and made Reconnect fail with "store taken" for a store living in another one.
+  // Without `?ws=`, only a workspace of their own: someone else's workspace is first or selected
+  // when an invitation put them in it (one they may never have asked for: an invitation link opens
+  // for its address without them), and their store would then be that owner's to read. With none
+  // of their own, the first click makes one (ensureWorkspace).
   const wantedWs = params.get("ws");
-  const ws = me
-    ? (me.workspaces.find((w) => w.id === wantedWs) ?? me.workspaces.find((w) => w.id === readLocal(WORKSPACE_KEY)) ?? me.workspaces[0])
-    : undefined;
-  const step = !me || !me.user.emailVerified ? 0 : ws && storeId ? 2 : 1;
+  const owned = me?.workspaces.filter((w) => w.role === "owner") ?? [];
+  const ws = me ? (me.workspaces.find((w) => w.id === wantedWs) ?? owned.find((w) => w.id === readLocal(WORKSPACE_KEY)) ?? owned[0]) : undefined;
+  // Back from Shopify with `?store=`: its workspace is found among all of theirs (below).
+  const step = !me || !me.user.emailVerified ? 0 : me.workspaces.length > 0 && storeId ? 2 : 1;
 
   // Find the store's workspace, and make it (and the store) the dashboard's selection.
   useEffect(() => {

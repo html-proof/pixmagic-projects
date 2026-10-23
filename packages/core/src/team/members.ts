@@ -4,7 +4,7 @@ import type { StaffRole } from "@app/shared/staff";
 import type { DeliveryStatus, TeamRow, TeamRowStatus, TeamSummary } from "@app/shared/team";
 import { latestDeliveries } from "../mail/deliveries.js";
 import { accessFingerprint, checkAssignment, lockTeam, memberState, TeamError, teamNotFound, type AssignableRole, type TeamActor } from "./common.js";
-import { invitationStatus } from "./invitations.js";
+import { endLinksOfMember, invitationStatus, retireLinksOf } from "./invitations.js";
 
 // ---------------------------------------------------------------------------
 // The team page's data (its shapes: @app/shared/team)
@@ -230,6 +230,9 @@ async function revokeKeysOf(tx: Tx, workspaceId: string, userId: string): Promis
 
 const OWN_ACCESS = "You can't change your own access. Ask another owner or admin.";
 
+/** For a change that leaves the team's links alone (retireLinksOf's counts). */
+const NO_LINKS = { invitationsCancelled: 0, linksReplaced: 0 };
+
 /**
  * Set a member's role and permissions (and staff role) in one change, so the two never disagree.
  * `basedOn` is the fingerprint of the access the editor started from: when someone else changed it
@@ -266,6 +269,8 @@ export async function updateMemberAccess(
     const updatedRow = await tx.membership.update({ where: { id: m.id }, data: { ...updated, accessChangedAt: new Date() } });
     // Keys they made keep working after they can no longer manage keys: retire them with the role.
     const keysRevoked = !can(next.role, "apikeys:manage") ? await revokeKeysOf(tx, actor.workspaceId, m.userId) : 0;
+    // So would the invitation links they sent or copied, after they can no longer manage the team.
+    const links = can(m.role, "members:manage") && !can(next.role, "members:manage") ? await retireLinksOf(tx, actor.workspaceId, m.userId) : NO_LINKS;
     const before = new Set(previous.permissions);
     const after = new Set(updated.permissions);
     await tx.auditLog.create({
@@ -282,6 +287,7 @@ export async function updateMemberAccess(
           added: updated.permissions.filter((k) => !before.has(k)),
           removed: previous.permissions.filter((k) => !after.has(k)),
           keysRevoked,
+          ...links,
         },
         ip: actor.ip,
       },
@@ -292,8 +298,9 @@ export async function updateMemberAccess(
 
 /**
  * Revoke a member's access: from their next request they can see nothing in this workspace, and
- * the API keys they made stop working. The membership stays, so access can be restored. Owners
- * can't be revoked (another owner changes their role first); nobody revokes themselves.
+ * the API keys they made and the invitation links they sent or copied stop working. The
+ * membership stays, so access can be restored. Owners can't be revoked (another owner changes
+ * their role first); nobody revokes themselves.
  */
 export async function revokeMember(actor: TeamActor, memberId: string) {
   if (!hasFullAccess(actor.role)) throw new TeamError(403, "forbidden", "Only owners and admins can manage the team.");
@@ -305,8 +312,11 @@ export async function revokeMember(actor: TeamActor, memberId: string) {
     if (m.revokedAt) return { keysRevoked: 0 };
     await tx.membership.update({ where: { id: m.id }, data: { revokedAt: new Date(), accessChangedAt: new Date() } });
     const keysRevoked = await revokeKeysOf(tx, actor.workspaceId, m.userId);
+    // The links they sent or copied (an admin's). Their own link stays theirs: it opens nothing while
+    // they are revoked, and their access again once it's restored.
+    const links = await retireLinksOf(tx, actor.workspaceId, m.userId);
     await tx.auditLog.create({
-      data: { workspaceId: actor.workspaceId, actorUserId: actor.userId, action: "member.access_revoked", targetType: "member", targetId: m.id, metadata: { targetUserId: m.userId, role: m.role, permissions: m.permissions, keysRevoked }, ip: actor.ip },
+      data: { workspaceId: actor.workspaceId, actorUserId: actor.userId, action: "member.access_revoked", targetType: "member", targetId: m.id, metadata: { targetUserId: m.userId, role: m.role, permissions: m.permissions, keysRevoked, ...links }, ip: actor.ip },
     });
     return { keysRevoked };
   });
@@ -328,7 +338,8 @@ export async function restoreMember(actor: TeamActor, memberId: string) {
 
 /**
  * Remove someone from the workspace altogether (inviting them again starts afresh). Only an owner
- * removes an owner, and never the last one. The API keys they made are retired.
+ * removes an owner, and never the last one. The API keys they made are retired, and so are the
+ * invitation links they sent or copied and their own.
  */
 export async function removeMember(actor: TeamActor, memberId: string, opts: { allowSelf?: boolean } = {}) {
   if (!hasFullAccess(actor.role)) throw new TeamError(403, "forbidden", "Only owners and admins can manage the team.");
@@ -343,8 +354,20 @@ export async function removeMember(actor: TeamActor, memberId: string, opts: { a
     await tx.membership.delete({ where: { id: m.id } });
     // An API key outlives its creator's membership otherwise (keys never expire).
     const keysRevoked = await revokeKeysOf(tx, actor.workspaceId, m.userId);
+    // So do invitation links: the ones they sent or copied, and their own, which would open again
+    // if they were ever added back.
+    const links = await retireLinksOf(tx, actor.workspaceId, m.userId);
+    const ownLinksEnded = await endLinksOfMember(tx, actor.workspaceId, m.userId);
     await tx.auditLog.create({
-      data: { workspaceId: actor.workspaceId, actorUserId: actor.userId, action: "member.removed", targetType: "member", targetId: m.id, metadata: { targetUserId: m.userId, role: m.role, permissions: m.permissions, keysRevoked }, ip: actor.ip },
+      data: {
+        workspaceId: actor.workspaceId,
+        actorUserId: actor.userId,
+        action: "member.removed",
+        targetType: "member",
+        targetId: m.id,
+        metadata: { targetUserId: m.userId, role: m.role, permissions: m.permissions, keysRevoked, ...links, ownLinksEnded },
+        ip: actor.ip,
+      },
     });
     return { keysRevoked };
   });

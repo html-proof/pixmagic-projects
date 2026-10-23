@@ -4,7 +4,7 @@ import { detachUserAdGrants, logger, revokeReleasedAdGrants } from "@app/core";
 import { accountPasswordProblem, EMAIL_CODE_RE, SIGN_IN_FAILED_EVENT } from "@app/shared";
 import { accessTokenFor, body, clientIp, HttpError, requireUser, sessionOf, sessionProvesAddress, type Ctx, type Deps } from "../context.js";
 import { CognitoError, type CognitoUser, type SignInMethod } from "../cognito.js";
-import { cognitoUsernameKey, notifyMethodAdded, notifyMethodRemoved, recordAuthEvent } from "../identity.js";
+import { cognitoUsernameKey, notifyEmailChanged, notifyMethodAdded, notifyMethodRemoved, notifyPasswordChanged, notifyTwoStepChanged, recordAuthEvent } from "../identity.js";
 import { endSessions, recordSession } from "../devices.js";
 import {
   clearSessionCookies,
@@ -194,6 +194,7 @@ export function accountRoutes(app: App, deps: Deps) {
       clearSessionCookies(c);
     }
     await recordAuthEvent("password_changed", user.id, clientIp(c));
+    await notifyPasswordChanged(deps.mailer, user, "changed");
     return c.json({ ok: true, signedIn });
   });
 
@@ -358,6 +359,7 @@ export function accountRoutes(app: App, deps: Deps) {
       throw accountFailure(err, "turn on two-step verification");
     });
     await recordAuthEvent("mfa_enabled", user.id, clientIp(c), { method: "totp" });
+    await notifyTwoStepChanged(deps.mailer, user, true);
     return c.json({ ok: true, mfaEnabled: true });
   });
 
@@ -392,6 +394,7 @@ export function accountRoutes(app: App, deps: Deps) {
         throw accountFailure(err, "turn off two-step verification");
       });
       await recordAuthEvent("mfa_disabled", user.id, clientIp(c), { method: "totp" });
+      await notifyTwoStepChanged(deps.mailer, user, false);
     }
     // Those tokens were only for this check.
     if (refreshToken) await deps.auth.revokeRefreshToken(refreshToken).catch((err: unknown) => logger.warn({ err }, "could not revoke a check's refresh token"));
@@ -454,12 +457,28 @@ export function accountRoutes(app: App, deps: Deps) {
     // What Cognito now says the address is.
     const claims = await cognitoAddress(c, "read changed email");
     if (!claims.email || !claims.emailVerified) throw new HttpError(400, "That code isn't right. Check the email and try again.", "invalid_code");
-    const updated = await systemDb.user.update({ where: { id: user.id }, data: { email: claims.email, emailVerified: true } }).catch((err: unknown) => {
+    // Every other device is signed out, as after a password change: whoever moved the address may
+    // be signed in on one of them. This browser carries on under a new session id issued at the
+    // cut-off (the same sign-in, ending when it would have). The other devices' Cognito refresh
+    // tokens aren't revoked, which would end this one's too with no password here to sign in
+    // again: they only ever work beside a session of ours, and those are all refused (context.ts).
+    const cutoff = new Date();
+    const updated = await systemDb.user.update({ where: { id: user.id }, data: { email: claims.email, emailVerified: true, sessionsValidAfter: cutoff } }).catch((err: unknown) => {
       if (isUniqueViolation(err)) throw new HttpError(409, "That email address belongs to another account.", "email_in_use");
       throw err;
     });
     await systemDb.authIdentity.updateMany({ where: { userId: user.id, subject: s.sub }, data: { email: claims.email } });
+    const next = {
+      ...newSession({ userId: user.id, sub: s.sub, username: s.un, method: s.m as SignInMethod, authTime: s.at, keep: s.keep, ownAddress: s.own }, cutoff.getTime()),
+      exp: s.exp,
+    };
+    setSessionCookies(c, next, readRefreshToken(c, s) ?? undefined);
+    await endSessions({ userId: user.id });
+    // The same device, under its new session: no new sign-in in the activity.
+    await recordSession(c, next, clientIp(c), { activity: false });
     await recordAuthEvent("email_changed", user.id, clientIp(c), { from: user.email, to: claims.email });
+    // The old address hears of it: from now on everything else goes to the new one.
+    await notifyEmailChanged(deps.mailer, user, claims.email);
     return c.json({ user: publicUser(updated) });
   });
 

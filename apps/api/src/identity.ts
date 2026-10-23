@@ -1,5 +1,6 @@
 import { systemDb, type AuthIdentity, type Tx, type User } from "@app/db";
 import { env, logger, type Mailer } from "@app/core";
+import { maskEmail } from "@app/shared/email";
 import type { CognitoAuth, IdentityClaims, SignInMethod } from "./cognito.js";
 import { HttpError } from "./context.js";
 
@@ -70,7 +71,71 @@ function noticeTime(user: NoticeUser, at: Date) {
 /** A security notice to the account's address. Plain text; best effort: a failure is logged and changes nothing. */
 async function sendNotice(mailer: Mailer, user: NoticeUser, subject: string, lines: string[]) {
   const text = ["Hello,", "", ...lines, "", "bizinsights Team"].join("\n");
-  await mailer.send(user.email, subject, text).catch((err: unknown) => logger.warn({ err, userId: user.id, subject }, "could not email a sign-in method's notice"));
+  await mailer.send(user.email, subject, text).catch((err: unknown) => logger.warn({ err, userId: user.id, subject }, "could not email a security notice"));
+}
+
+/**
+ * Tells the account's OLD address that the account moved to another one (Settings → Security).
+ * Whoever has the password and a session could otherwise take the account to their own inbox
+ * unnoticed, after which "Forgot password?" goes to them too. `user` is the account as it was.
+ */
+export async function notifyEmailChanged(mailer: Mailer, user: NoticeUser, newEmail: string, at = new Date()) {
+  const app = env().APP_URL;
+  await sendNotice(mailer, user, "The email address of your bizinsights account was changed", [
+    `The email address of your bizinsights account was changed from ${user.email} to ${maskEmail(newEmail)} on ${noticeTime(user, at)}. Signing in, password resets and our emails now use the new address, and every other device was signed out.`,
+    "",
+    "If this was you, there's nothing more to do.",
+    "",
+    "If it wasn't you, someone else knows your password and was signed in to your account. A password reset now goes to the new address, so:",
+    `1. Contact us right away (${app}/support), from this address, and we'll help you get the account back.`,
+    "2. Change the password of this email account too, in case that is how they got in.",
+  ]);
+}
+
+/**
+ * Tells the account's address that its password was changed (Settings → Security) or reset (a
+ * code to the address). Either one signs every other device out, so it should never be news.
+ */
+export async function notifyPasswordChanged(mailer: Mailer, user: NoticeUser, how: "changed" | "reset", at = new Date()) {
+  const app = env().APP_URL;
+  const reset = how === "reset";
+  await sendNotice(mailer, user, reset ? "Your bizinsights password was reset" : "Your bizinsights password was changed", [
+    reset
+      ? `The password of your bizinsights account (${user.email}) was reset with a code sent to this address on ${noticeTime(user, at)}. Every device signed in to the account was signed out.`
+      : `The password of your bizinsights account (${user.email}) was changed on ${noticeTime(user, at)}. Every other device was signed out.`,
+    "",
+    "If this was you, there's nothing more to do.",
+    "",
+    reset
+      ? "If it wasn't you, someone else can read this inbox:"
+      : "If it wasn't you, someone else knew your password and was signed in to your account:",
+    reset ? "1. Change the password of this email account first." : `1. Reset your password (${app}/forgot-password). That signs everyone out.`,
+    reset
+      ? `2. Then reset your bizinsights password again (${app}/forgot-password), and check the ways to sign in in Settings > Security (${app}/settings/security).`
+      : `2. Sign in and check the ways to sign in in Settings > Security (${app}/settings/security), removing any you don't recognise.`,
+  ]);
+}
+
+/**
+ * Tells the account's address that two-step verification was turned on or off. Turning it off
+ * leaves the password alone between someone and the account; turning it on with someone else's
+ * authenticator app would lock the owner out.
+ */
+export async function notifyTwoStepChanged(mailer: Mailer, user: NoticeUser, enabled: boolean, at = new Date()) {
+  const app = env().APP_URL;
+  await sendNotice(mailer, user, enabled ? "Two-step verification was turned on for your bizinsights account" : "Two-step verification was turned off for your bizinsights account", [
+    enabled
+      ? `Two-step verification was turned on for your bizinsights account (${user.email}) on ${noticeTime(user, at)}. Signing in now asks for a code from the authenticator app it was set up with.`
+      : `Two-step verification was turned off for your bizinsights account (${user.email}) on ${noticeTime(user, at)}. Signing in now asks for the password only.`,
+    "",
+    "If this was you, there's nothing more to do.",
+    "",
+    "If it wasn't you, someone else knows your password and was signed in to your account:",
+    `1. Reset your password (${app}/forgot-password). That signs everyone out.`,
+    enabled
+      ? `2. If the next sign-in asks for a code you can't get, contact us (${app}/support).`
+      : `2. Sign in and turn two-step verification back on in Settings > Security (${app}/settings/security).`,
+  ]);
 }
 
 /**

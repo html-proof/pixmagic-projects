@@ -48,6 +48,18 @@ const REDACT = new Set(
     "x-nango-hmac-sha256",
     "x-nango-signature",
     "sessionToken",
+    // SMTP logins (nodemailer's auth.pass), CloudFront's origin secret, API keys, AWS keys, PKCE
+    // verifiers, Google Ads' developer token header and Meta's signed requests.
+    "pass",
+    "x-origin-verify",
+    "apiKey",
+    "api_key",
+    "x-api-key",
+    "developer-token",
+    "secretAccessKey",
+    "codeVerifier",
+    "code_verifier",
+    "signed_request",
     // WhatsApp: the customer's number and the merchant's credentials.
     "x-hub-signature-256",
     "phone",
@@ -62,15 +74,24 @@ const REDACT = new Set(
 
 /**
  * Credentials and personal data that can turn up inside free text (an error message, a URL):
- * Shopify tokens and secrets, bearer credentials, our API keys, and email addresses (kept
- * recognisable for debugging: first character and domain).
+ * Shopify tokens and secrets, bearer credentials, our API keys, Google and AWS credentials, JWTs,
+ * OAuth parameters in a query string, and email addresses (kept recognisable for debugging: first
+ * character and domain).
  */
 const SCRUB: Array<[RegExp, string]> = [
   [/\bshp(?:at|ua|ca|ss|pa)_[A-Za-z0-9]+/g, "[redacted]"],
-  [/\bsk_live_[A-Za-z0-9_-]+/g, "[redacted]"],
+  [/\b(?:sk|ek)_live_[A-Za-z0-9_-]+/g, "[redacted]"],
   // Meta access tokens (user, business and system-user tokens all start with EA).
   [/\bEA[A-Za-z0-9]{40,}/g, "[redacted]"],
   [/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]"],
+  // Google access and refresh tokens, Resend keys, AWS access key ids, any JWT (Cognito's ID token).
+  [/\bya29\.[A-Za-z0-9._-]+/g, "[redacted]"],
+  [/(^|[^A-Za-z0-9])1\/\/[A-Za-z0-9._-]{20,}/g, "$1[redacted]"],
+  [/\bre_[A-Za-z0-9]{8,}_[A-Za-z0-9]{8,}/g, "[redacted]"],
+  [/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g, "[redacted]"],
+  [/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]*/g, "[redacted]"],
+  // A URL's OAuth and credential parameters (a provider error that quotes the request it refused).
+  [/([?&](?:code|access_token|refresh_token|id_token|client_secret|fb_exchange_token|code_verifier|token|key|signature)=)[^&\s"']+/gi, "$1[redacted]"],
   [/\b([A-Za-z0-9])[A-Za-z0-9._%+-]*@([A-Za-z0-9.-]+\.[A-Za-z]{2,})\b/g, "$1***@$2"],
 ];
 

@@ -42,7 +42,7 @@ import { body, clientIp, HttpError, requireWorkspace, type Deps } from "../conte
 import type { App } from "../app.js";
 import { limit, LIMITS } from "../rateLimit.js";
 import { cursorPage } from "../pagination.js";
-import { base, requireWaContacts, waStore } from "./whatsappCommon.js";
+import { base, requireWaContacts, requireWaContactsManage, waStore } from "./whatsappCommon.js";
 
 /** Day boundaries from ?from=YYYY-MM-DD&to=YYYY-MM-DD (UTC), each optional. */
 function range(q: Record<string, string>) {
@@ -711,7 +711,7 @@ export function whatsappOpsRoutes(app: App, deps: Deps) {
   /** Record an opt-out the customer gave another way (email, phone call): nothing more is sent to them. */
   app.post(`${base}/contacts/opt-out`, async (c) => {
     const { ws, storeId } = c.req.param();
-    const access = await requireWaContacts(c, deps, ws);
+    const access = await requireWaContactsManage(c, deps, ws);
     const store = await waStore(ws, storeId);
     const { phone: raw } = z.object({ phone: z.string().min(6).max(30) }).parse(await body(c));
     const phone = normalizePhone(raw, null);

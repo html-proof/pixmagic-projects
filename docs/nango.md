@@ -28,9 +28,11 @@ Settings → Integrations / Advertising card — "Continue with Meta Ads" (or Go
     ← {token (30 min), nonce}. Session state kept in the coordinator, bound to the person, workspace, store, platform.
   Browser: @nangohq/frontend openConnectUI (iframe connect.nango.dev) → platform consent popup
     → platform redirects to https://bizinsights.io/api/ads/nango/oauth-callback → 308 → api.nango.dev/oauth/callback
+      (uses up this person's newest open session for that platform here; receipt cookie ads_nango_consent)
   Connect UI says {type: "connect", connectionId}
   POST .../ads/:provider/nango/finish {nonce, connectionId}
-    → state used up; Nango: GET /connections?connectionId= must carry the session's tags (else refused, untouched)
+    → state used up; the session's consent came back through this browser (receipt + coordinator), else refused, untouched
+    → Nango: GET /connections?connectionId= must carry the session's tags (else refused, untouched)
     → Nango: GET /connections/{id}?provider_config_key= → access token
     → Meta: /me/permissions has ads_read, /me (person), /me/adaccounts — every call signed with bizinsights' app secret
       Google: tokeninfo (person; refuses a token issued to another client), scope adsense.readonly, AdSense accounts
@@ -79,11 +81,26 @@ Settings → Integrations / Advertising card — "Continue with Meta Ads" (or Go
   open Nango session in that browser** (cookie `ads_nango_state`). Signed out, someone else signed in, or no
   open session of theirs: refused, back to `/settings/ads?error=state_mismatch`. So a session token handed to
   someone else's page can't bring that person's consent back to the starter's store, because their consent
-  never reaches Nango. What is left: bizinsights can't tell which session a consent is for. The callback's
-  `state` is Nango's own, made when Nango's popup opens, and Nango's API has no lookup for it. So a person who
-  has their own open session in that browser (started in the last 30 minutes, not finished or cancelled), and
-  who authorizes on another person's page, still has their consent forwarded. Closing that gap would mean
-  sending Nango's whole API and its WebSocket through bizinsights.io (the Connect UI's `apiURL`).
+  never reaches Nango.
+- **Each consent uses up one session, and a finish needs its own.** bizinsights can't tell which session a
+  consent is for (the callback's `state` is Nango's own, made when Nango's popup opens, and Nango's API has no
+  lookup for it), so the callback attributes it to the platform it is for: Google names the scopes granted
+  (`scope`: AdSense's or Google Ads' read-only scope), Meta sends none. A consent uses up the newest of the
+  signed-in person's open sessions *for that platform* in that browser that hasn't had one (coordinator
+  `oauth:ads-nango-consent:<nonce>`, once per session), and leaves a receipt for it (httpOnly cookie
+  `ads_nango_consent`, 30 minutes). A consent for a platform with no such session is refused. A callback
+  without a code (declined, an error) goes on to Nango and uses nothing up. `/nango/finish` refuses
+  (`state_mismatch`) a session whose consent didn't come back through this browser: both the receipt and the
+  coordinator's note are needed, so a cookie made up by hand doesn't do. This closes the case of a person with
+  an open session of their own who authorizes on another person's link: their consent is noted against their
+  own session, and the starter's finish, never having had a consent come back in the starter's browser, is
+  refused (the connection is left to the leftover sweep, which deletes it and gives the grant back).
+  What is left: if the starter *also* completes a consent of their own in the same Nango session (from its
+  Connect UI, in their own browser), their finish holds a receipt and could name the other person's
+  connection, which carries the same session's tags. That needs the other person to authorize on the starter's
+  link within the same 30 minutes while holding an open session of their own for the same platform. Closing it
+  fully would mean sending Nango's whole API and its WebSocket through bizinsights.io (the Connect UI's
+  `apiURL`), so the callback could see which Nango session a consent belongs to.
 - Configuration (`packages/core/src/env.ts`): `NANGO_SECRET_KEY` and `NANGO_WEBHOOK_SECRET` (secrets),
   `NANGO_PROVIDERS` (default `meta,adsense`; add `google` once Google Ads connections are open), `NANGO_API_URL`.
   A platform goes through Nango only when it is listed **and** its own app's keys are set here

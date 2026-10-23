@@ -116,6 +116,22 @@ If Node's connections time out on this PC's network (IPv6-only hotspot with NAT6
 `.github/workflows/aws-deploy.yml` runs after CI passes on `main` (or by hand): build → `cdk
 deploy` → migrate → smoke tests → automatic rollback of the `live` aliases if anything fails. It
 signs in with GitHub OIDC (role in the `InsightsCi-production` stack), no AWS keys in GitHub.
+
+It is two jobs, so the app's dependencies never run where the deploy role is reachable:
+
+- `build` installs everything, runs the AWS and CDK unit tests and builds the Lambda package
+  (`apps/aws/dist/function`, API + UI). It has no `id-token` permission: nothing in it can ask
+  GitHub for the token the deploy role trusts. The package goes to the Actions cache under a key
+  made of the run id and the commit (artifact storage is full on this plan; caches made on `main`
+  can't be written by pull requests).
+- `deploy` (environment `production`, `id-token: write`) installs only `infra/cdk`'s tools
+  (aws-cdk-lib, the CDK CLI, tsx) with `--ignore-scripts`, restores the package
+  (`fail-on-cache-miss`), and does the rest. A re-run of only `deploy` finds the same package.
+
+Dependency install scripts run, anywhere this repository is installed (CI, the deploy, a
+developer's machine), only for the packages `pnpm.onlyBuiltDependencies` in the root
+`package.json` names (esbuild, prisma, @prisma/engines). A new dependency that needs its install
+script is added there on purpose, after a look at what the script does.
 One-time setup in the repository's Settings → Environments → `production`: variable
 `AWS_DEPLOY_ROLE_ARN` (the stack's `DeployRoleArn` output), optional `AWS_ALERT_EMAIL`,
 `GOOGLE_SIGNIN_CLIENT_ID` and `AWS_SCHEDULES` (`on` since 2026-10-16). Required reviewers and branch

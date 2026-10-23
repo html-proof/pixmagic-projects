@@ -184,7 +184,7 @@ export default function WhatsappSettings() {
         ) : (
           <div className="skeleton h-20" />
         )}
-        {contact && (
+        {manage && contact && (
           <form
             className="flex flex-wrap items-end gap-2"
             onSubmit={(e) => {

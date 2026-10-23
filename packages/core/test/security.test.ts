@@ -26,6 +26,37 @@ describe("log redaction", () => {
     expect(out.note).toBe("mail to j***@example.com failed");
   });
 
+  it("scrubs Google, AWS and Resend credentials, JWTs and OAuth query parameters out of free text", () => {
+    const jwt = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyLTEyMyJ9.c2lnbmF0dXJlLXBhcnQ";
+    const text = [
+      "token ya29.a0AfB_byC-xyz123 refused",
+      "refresh 1//0gAbCdEfGhIjKlMnOpQrStUvWxYz expired",
+      "key re_AbCd1234_EfGh5678IjKl rejected",
+      "aws AKIAABCDEFGHIJKLMNOP denied",
+      `id ${jwt} invalid`,
+      "GET https://graph.facebook.com/oauth/access_token?client_id=1&client_secret=s3cr3t&code=AQDx&fb_exchange_token=EAAB failed",
+      "ingest ek_live_abc123",
+    ].join("; ");
+    const out = redactForLog({ note: text }) as { note: string };
+    for (const secret of ["ya29.a0AfB", "1//0gAbCd", "re_AbCd1234", "AKIAABCDEFGHIJKLMNOP", jwt, "s3cr3t", "AQDx", "EAAB", "ek_live_abc123"]) {
+      expect(out.note).not.toContain(secret);
+    }
+    // What identifies the call stays.
+    expect(out.note).toContain("client_id=1");
+    expect(out.note).toContain("https://graph.facebook.com/oauth/access_token");
+  });
+
+  it("drops SMTP passwords, origin secrets, API keys, PKCE verifiers and signed requests by key", () => {
+    const out = redactForLog({
+      auth: { user: "shop@example.com", pass: "smtp-password" },
+      headers: { "x-origin-verify": "o", "X-Api-Key": "k", "developer-token": "d" },
+      body: { apiKey: "a", api_key: "b", code_verifier: "v", codeVerifier: "w", signed_request: "s", secretAccessKey: "x" },
+    }) as Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
+    expect(out.auth.pass).toBe("[redacted]");
+    expect(Object.values(out.headers)).toEqual(["[redacted]", "[redacted]", "[redacted]"]);
+    expect(Object.values(out.body).every((v) => v === "[redacted]")).toBe(true);
+  });
+
   it("applies to what the logger actually writes, message included", () => {
     const prev = process.env.LOG_LEVEL;
     process.env.LOG_LEVEL = "info";

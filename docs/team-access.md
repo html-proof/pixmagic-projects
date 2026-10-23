@@ -99,9 +99,21 @@ Who can open a workspace's dashboard, and what of it they see. Owners and admins
   - No Cognito identity behind it. The membership is checked on every request, as for anyone.
   - Someone new gets a user record with no sign-in of its own. Signing up later with that address
     (verified) links to it (`identity.ts`).
+  - **An address that already has an account someone signs in to is never joined by the link
+    alone** (409 `sign_in_required`; `account_unverified` while nobody has proved its address):
+    whoever holds a link may not be its person (an owner or admin can always copy it), and opening
+    it would otherwise make that account a member of their workspace without them. The invite page
+    accepts at once if this browser is signed in to that account (`POST /invitations/accept`: the
+    invited, verified address), and otherwise offers "Sign in to accept" and comes back to the
+    invitation (the token waits in the tab's sessionStorage, never in the address bar or
+    localStorage). After that, the link reopens their view-only shared dashboard like anyone's.
+  - Onboarding connects a store into the workspace named by `?ws=`, otherwise only into one the
+    person owns (the selected one, else their first), and makes them one of their own when they
+    own none: never into another business's workspace just because an invitation put them in it.
 - After the first opening the link keeps opening the dashboard (another device, a session that
   ended) until its end date, while the member's access lasts: revoking or removing them ends it at
-  once. Signed in already to an account (theirs or anyone's), the account stays signed in and
+  once. Removing them also cancels it for good (`revoked_at`), so inviting them back later never
+  revives an old link. Signed in already to an account (theirs or anyone's), the account stays signed in and
   untouched in its own tabs. Only from our own pages (login CSRF). Opening on arrival is safe with
   email scanners because the link isn't used up (a scanner that runs scripts counts as an opening).
 - The web app (`Me.shared`) hides the account's own pages (profile, sign-in and security), shows
@@ -109,6 +121,13 @@ Who can open a workspace's dashboard, and what of it they see. Owners and admins
 - The optional message is plain text, at most 500 characters, without links (every invitation is an
   email from our domain).
 - If the email can't be sent, the invitation is kept and the inviter gets the link to pass on.
+- **An owner or admin who is removed, revoked, or no longer an owner or admin takes no working link
+  along** (`retireLinksOf`, in the same transaction as the change): the invitations they sent that
+  nobody accepted are cancelled, and every other invitation whose link they had (sent, copied,
+  resent or replaced, from the audit log) gets a new link, so the old one stops working (dashboards
+  already open carry on while the access lasts; an owner copies the new link from the team list).
+  Their own invitation keeps its link while they stay a member. The counts go into the change's
+  audit entry (`invitationsCancelled`, `linksReplaced`, and `ownLinksEnded` on removal).
 
 ## Email delivery
 

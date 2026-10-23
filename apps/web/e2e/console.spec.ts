@@ -10,7 +10,8 @@ import { createWorkspace, insertStore, signUp, uniqueEmail } from "./helpers";
  *   stylesheet on the current one (docs/architecture.md, "Fonts and prefetch"). Chrome lists every
  *   unused preload again a few seconds after each later request, so on the polling dashboard three
  *   of them became hundreds.
- * - Content-Security-Policy violations, the Report-Only policy's included (public/_headers).
+ * - Content-Security-Policy violations (public/_headers: enforced, so one is something the page
+ *   needed and the browser refused).
  *
  * One test per page and viewport, signed out and in. Each opens its page once, so the suite's
  * slowest machine (the PC runner under load runs it 2-3x slower) can't push one test past its

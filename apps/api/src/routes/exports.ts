@@ -93,7 +93,9 @@ export function exportRoutes(app: App, deps: Deps) {
     const { ws, storeId } = c.req.param();
     const a = await requireWorkspace(c, deps, ws, "finance.reports");
     const csvWanted = c.req.query("format") === "csv";
-    await limit(deps.coord, `rl:shopify-check:${storeId}`, LIMITS.shopifyCheck, "Checked against Shopify a moment ago. Wait a few minutes and try again.");
+    // Keyed by workspace too: the store isn't checked to be this workspace's yet, and another
+    // workspace naming it must not use up the store's own allowance.
+    await limit(deps.coord, `rl:shopify-check:${ws}:${storeId}`, LIMITS.shopifyCheck, "Checked against Shopify a moment ago. Wait a few minutes and try again.");
     const report = await withTenant(ws, async (tx) => {
       const store = await tx.store.findFirst({ where: { id: storeId, workspaceId: ws } });
       if (!store) throw new HttpError(404, "Not found", "not_found");

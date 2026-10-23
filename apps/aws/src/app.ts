@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import { cognitoAuth, cognitoConfig, unconfiguredCognito, type Deps } from "@app/api";
 import type { WorkerDeps } from "@app/worker";
 import { logger, withTimeout } from "@app/core";
@@ -16,6 +17,21 @@ export function apiPath(pathname: string): string | null {
   if (API_PREFIX.test(pathname)) return pathname.slice(4) || "/";
   if (BARE_API.test(pathname)) return pathname;
   return null;
+}
+
+/**
+ * Who sent an API request to the function URL: CloudFront (it carries the origin secret CloudFront
+ * adds, compared in constant time), someone calling the URL directly ("forbidden": that would go
+ * around WAF), or nobody can tell because the secret isn't configured. In production it always is
+ * (the Data stack creates it in the app's secret, CloudFront sends it), so a missing one is a broken
+ * configuration and is refused too ("unconfigured"); elsewhere there is no CloudFront ("direct").
+ */
+export function originCheck(given: string | null, expected: string | undefined, production: boolean): "cloudfront" | "forbidden" | "unconfigured" | "direct" {
+  if (!expected) return production ? "unconfigured" : "direct";
+  if (!given) return "forbidden";
+  const a = Buffer.from(given);
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b) ? "cloudfront" : "forbidden";
 }
 
 /** Time limit for calls to Cognito (sign-in, token exchange, session re-checks). */

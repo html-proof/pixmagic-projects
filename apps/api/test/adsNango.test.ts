@@ -173,13 +173,42 @@ function authorize(sessionIndex: number, connectionId = `conn-${sessionIndex}`, 
   return connectionId;
 }
 
-/** Start a session, authorize it at "Nango", and finish it. */
-async function connectThrough(provider: string) {
-  const res = await session(provider);
+/** What each platform sends back to the OAuth callback after its consent screen: Google names the scopes granted, Meta doesn't. */
+const CONSENT: Record<string, string> = {
+  meta: "code=AQmeta-code&state=nango-state",
+  adsense: `code=4%2Fgoogle-code&state=nango-state&scope=${encodeURIComponent("https://www.googleapis.com/auth/adsense.readonly openid")}`,
+  google: `code=4%2Fgoogle-code&state=nango-state&scope=${encodeURIComponent("https://www.googleapis.com/auth/adwords openid")}`,
+};
+const callback = (query: string, cookie?: string) => ctx.app.inject({ method: "GET", url: `/ads/nango/oauth-callback?${query}`, headers: cookie ? { cookie } : {} });
+
+/** A browser's cookies after each answer: a later cookie replaces an earlier one of the same name. */
+function jar(...parts: string[]) {
+  const cookies = new Map<string, string>();
+  for (const pair of parts.flatMap((p) => p.split("; ")).filter((p) => p.includes("="))) cookies.set(pair.slice(0, pair.indexOf("=")), pair.slice(pair.indexOf("=") + 1));
+  return [...cookies].map(([k, v]) => `${k}=${v}`).join("; ");
+}
+
+/** Start a session in a browser signed in with `h`: the session, its nonce, and the browser's cookies after it. */
+async function start(provider: string, h = headers, w2 = ws, s = storeId) {
+  const res = await session(provider, h, w2, s);
   expect(res.statusCode).toBe(200);
+  return { res, nonce: res.json().nonce as string, browser: jar(h.cookie!, cookiesFrom(res)) };
+}
+
+/** The platform's consent coming back through the callback in `browser`: forwarded to Nango, with the browser's cookies after it (its receipt). */
+async function consent(provider: string, browser: string) {
+  const res = await callback(CONSENT[provider]!, browser);
+  expect(res.statusCode).toBe(308);
+  return jar(browser, cookiesFrom(res));
+}
+
+/** Start a session, authorize it at "Nango" (the consent coming back through the callback in this browser), and finish it. */
+async function connectThrough(provider: string) {
+  const { res, nonce, browser } = await start(provider);
   const connectionId = authorize(w.sessions.length - 1);
-  const done = await finish(provider, { nonce: res.json().nonce, connectionId });
-  return { res, done, connectionId, nonce: res.json().nonce as string };
+  const after = await consent(provider, browser);
+  const done = await finish(provider, { nonce, connectionId }, { ...headers, cookie: after });
+  return { res, done, connectionId, nonce };
 }
 
 const sign = (raw: string, key = WEBHOOK_KEY) => createHmac("sha256", key).update(raw).digest("hex");
@@ -326,17 +355,53 @@ describe("finishing a Nango sign-in", () => {
   });
 
   it("refuses a connection this session didn't make, and leaves it alone", async () => {
-    const res = await session("adsense");
+    const { nonce, browser } = await start("adsense");
+    const after = await consent("adsense", browser);
     // Someone else's connection, tagged for another session.
     w.connections.set("someone-else", { key: "bizinsights-google-adsense", tags: { bi_session: "x".repeat(32) }, token: "THEIRS" });
-    const done = await finish("adsense", { nonce: res.json().nonce, connectionId: "someone-else" });
+    const done = await finish("adsense", { nonce, connectionId: "someone-else" }, { ...headers, cookie: after });
     expect(done.statusCode).toBe(403);
     expect(done.json().error).toBe("state_mismatch");
     expect(w.deleted).toEqual([]);
     expect(w.tokenFetches).toBe(0);
     // The session is used up: it can't be tried again with another id.
     authorize(0, "conn-late");
-    expect((await finish("adsense", { nonce: res.json().nonce, connectionId: "conn-late" })).json().error).toBe("state_expired");
+    expect((await finish("adsense", { nonce, connectionId: "conn-late" }, { ...headers, cookie: after })).json().error).toBe("state_expired");
+  });
+
+  it("refuses a connection whose consent didn't come back through this browser: someone else's consent can't land on this store", async () => {
+    // A starts a session for their store, and hands the platform's consent link (Nango's state) to B.
+    const a = await start("meta");
+    const connectionId = authorize(0);
+    // B, signed in with an open Meta session of their own in their browser, approves on that link: the
+    // consent is forwarded, but noted against B's own session, never A's.
+    const other = await signIn(ctx, "nango-victim", "victim@x.com");
+    const theirWs = await createWorkspace(ctx, other.headers);
+    const theirStore = (await createStore(theirWs, "victim.myshopify.com", ["read_orders"])).id;
+    const b = await start("meta", other.headers, theirWs, theirStore);
+    await consent("meta", b.browser);
+    // Nango made the connection under A's session (its tags are A's): A's finish is refused, without a receipt or with one forged in A's browser.
+    const refused = await finish("meta", { nonce: a.nonce, connectionId }, { ...headers, cookie: a.browser });
+    expect(refused.statusCode).toBe(403);
+    expect(refused.json().error).toBe("state_mismatch");
+    const a2 = await start("meta");
+    authorize(2, "conn-forged");
+    const forged = await finish("meta", { nonce: a2.nonce, connectionId: "conn-forged" }, { ...headers, cookie: jar(a2.browser, `ads_nango_consent=${a2.nonce}`) });
+    expect(forged.json().error).toBe("state_mismatch");
+    // Nothing attached to A's store, the connection left alone (it isn't A's to give back), no token read.
+    expect(await systemDb.adConnection.count()).toBe(0);
+    expect(w.deleted).toEqual([]);
+    expect(w.tokenFetches).toBe(0);
+  });
+
+  it("a receipt from one session doesn't finish another", async () => {
+    const first = await start("adsense");
+    const after = await consent("adsense", first.browser);
+    const second = await start("adsense", { ...headers, cookie: after });
+    const connectionId = authorize(1);
+    const done = await finish("adsense", { nonce: second.nonce, connectionId }, { ...headers, cookie: second.browser });
+    expect(done.json().error).toBe("state_mismatch");
+    expect(await systemDb.adConnection.count()).toBe(0);
   });
 
   it("is answered for the person who started it only", async () => {
@@ -494,22 +559,75 @@ describe("bizinsights' address for Nango's OAuth callback", () => {
     const started = await session("adsense");
     const browser = `${headers.cookie}; ${cookiesFrom(started)}`;
     expect(browser).toContain("ads_nango_state=");
-    const res = await ctx.app.inject({ method: "GET", url: "/ads/nango/oauth-callback?code=abc&state=xyz", headers: { cookie: browser } });
-    expect(res.statusCode).toBe(308);
-    expect(res.headers.location).toBe("https://api.nango.dev/oauth/callback?code=abc&state=xyz");
     // Another browser (a consent given on a page the session token was handed to): never reaches Nango.
-    const elsewhere = await ctx.app.inject({ method: "GET", url: "/ads/nango/oauth-callback?code=abc&state=xyz" });
+    const elsewhere = await callback(CONSENT.adsense!);
     expect(elsewhere.statusCode).toBe(302);
     expect(elsewhere.headers.location).toContain("/settings/ads?error=state_mismatch");
     // The session cookie with nobody signed in (signed out since, or a browser it was copied to): refused.
-    const signedOut = await ctx.app.inject({ method: "GET", url: "/ads/nango/oauth-callback?code=abc&state=xyz", headers: { cookie: cookiesFrom(started) } });
+    const signedOut = await callback(CONSENT.adsense!, cookiesFrom(started));
     expect(signedOut.statusCode).toBe(302);
     expect(signedOut.headers.location).toContain("/settings/ads?error=state_mismatch");
     // Someone else signed in, holding this browser's session cookie: refused too.
     const other = await signIn(ctx, "nango-other", "other@x.com");
-    const mixed = await ctx.app.inject({ method: "GET", url: "/ads/nango/oauth-callback?code=abc", headers: { cookie: `${other.cookie}; ${cookiesFrom(started)}` } });
+    const mixed = await callback(CONSENT.adsense!, `${other.cookie}; ${cookiesFrom(started)}`);
     expect(mixed.statusCode).toBe(302);
+    // Its own person, in its own browser: forwarded, with a receipt for this session.
+    const res = await callback(CONSENT.adsense!, browser);
+    expect(res.statusCode).toBe(308);
+    expect(res.headers.location).toBe(`https://api.nango.dev/oauth/callback?${CONSENT.adsense}`);
+    expect(cookiesFrom(res)).toBe(`ads_nango_consent=${started.json().nonce}`);
     ctx.setEnv({ NANGO_SECRET_KEY: "" });
-    expect((await ctx.app.inject({ method: "GET", url: "/ads/nango/oauth-callback?code=abc", headers: { cookie: browser } })).statusCode).toBe(404);
+    expect((await callback(CONSENT.adsense!, browser)).statusCode).toBe(404);
+  });
+
+  it("forwards one consent per session: a second one is refused", async () => {
+    const { browser } = await start("adsense");
+    expect((await callback(CONSENT.adsense!, browser)).statusCode).toBe(308);
+    const again = await callback(CONSENT.adsense!, browser);
+    expect(again.statusCode).toBe(302);
+    expect(again.headers.location).toContain("/settings/ads?error=state_mismatch");
+  });
+
+  it("forwards a consent only for a platform the person has an open session for", async () => {
+    // Only an AdSense session open: Meta's consent (no scope named) and a Google Ads one are refused.
+    const { browser } = await start("adsense");
+    for (const query of [CONSENT.meta!, CONSENT.google!, "code=4%2Fgoogle-code&state=nango-state&scope=openid"]) {
+      const res = await callback(query, browser);
+      expect(res.statusCode).toBe(302);
+      expect(res.headers.location).toContain("/settings/ads?error=state_mismatch");
+    }
+    // Its own platform's still goes through: the refusals used nothing up.
+    expect((await callback(CONSENT.adsense!, browser)).statusCode).toBe(308);
+  });
+
+  it("uses up the newest open session of the consent's platform, each once", async () => {
+    const meta = await start("meta");
+    const older = await start("adsense", { ...headers, cookie: meta.browser });
+    const newer = await start("adsense", { ...headers, cookie: older.browser });
+    // This browser holds all three, newest first: each AdSense consent uses up one AdSense session, the newest first.
+    const r1 = await callback(CONSENT.adsense!, newer.browser);
+    expect(cookiesFrom(r1)).toBe(`ads_nango_consent=${newer.nonce}`);
+    const r2 = await callback(CONSENT.adsense!, jar(newer.browser, cookiesFrom(r1)));
+    expect(cookiesFrom(r2)).toBe(`ads_nango_consent=${older.nonce}.${newer.nonce}`);
+    expect((await callback(CONSENT.adsense!, newer.browser)).statusCode).toBe(302);
+    // The Meta session is still there for Meta's consent.
+    expect((await callback(CONSENT.meta!, newer.browser)).statusCode).toBe(308);
+  });
+
+  it("a declined consent (no code) goes on to Nango and uses nothing up", async () => {
+    const { browser } = await start("meta");
+    const declined = await callback("error=access_denied&error_reason=user_denied&state=nango-state", browser);
+    expect(declined.statusCode).toBe(308);
+    expect(cookiesFrom(declined)).toBe("");
+    expect((await callback(CONSENT.meta!, browser)).statusCode).toBe(308);
+  });
+
+  it("the whole flow in one browser connects both platforms", async () => {
+    for (const provider of ["meta", "adsense"]) {
+      const { done } = await connectThrough(provider);
+      expect(done.statusCode).toBe(200);
+      expect(done.json()).toEqual({ connected: 1, provider });
+    }
+    expect(await systemDb.adConnection.count()).toBe(2);
   });
 });

@@ -75,10 +75,13 @@ describe("setting it up (Settings → Security)", () => {
     expect((await get("/auth/account", headers)).json().mfaEnabled).toBe(false);
     expect((await post("/auth/account/mfa/verify", { code: wrongCode(secret) }, headers)).json().error).toBe("invalid_code");
     expect((await post("/auth/account/mfa/verify", { code: "12345" }, headers)).statusCode).toBe(400);
+    const sentBefore = ctx.mailer.sent.length;
     const verified = await post("/auth/account/mfa/verify", { code: totpCode(secret) }, headers);
     expect(verified.json()).toEqual({ ok: true, mfaEnabled: true });
     expect((await get("/auth/account", headers)).json().mfaEnabled).toBe(true);
     expect(await systemDb.authEvent.count({ where: { type: "mfa_enabled", userId: user.id } })).toBe(1);
+    // The account's address hears of it: someone else's app would lock the owner out.
+    expect(ctx.mailer.sent.slice(sentBefore)).toEqual([expect.objectContaining({ to: "a@x.com", subject: "Two-step verification was turned on for your bizinsights account" })]);
     // This session carries on; the next sign-in asks for a code.
     expect((await get("/me", headers)).statusCode).toBe(200);
     const password = ctx.auth.users.get("u1")!.password!;
@@ -209,15 +212,22 @@ describe("turning it off", () => {
     const { headers, user } = await signIn(ctx, "u1", "a@x.com");
     const password = ctx.auth.users.get("u1")!.password!;
     const secret = ctx.auth.enableTotp("u1");
+    const sentBefore = ctx.mailer.sent.length;
     expect((await get("/auth/account", headers)).json().mfaEnabled).toBe(true);
     expect((await post("/auth/account/mfa/disable", { code: totpCode(secret) }, headers)).statusCode).toBe(400);
     expect((await post("/auth/account/mfa/disable", { password: "not-the-password", code: totpCode(secret) }, headers)).json().error).toBe("wrong_password");
     expect((await post("/auth/account/mfa/disable", { password, code: wrongCode(secret) }, headers)).json().error).toBe("invalid_code");
     expect((await get("/auth/account", headers)).json().mfaEnabled).toBe(true);
+    // Refused attempts tell nobody anything.
+    expect(ctx.mailer.sent.slice(sentBefore)).toEqual([]);
     const res = await post("/auth/account/mfa/disable", { password, code: totpCode(secret) }, headers);
     expect(res.json()).toEqual({ ok: true, mfaEnabled: false });
     expect((await get("/auth/account", headers)).json().mfaEnabled).toBe(false);
     expect(await systemDb.authEvent.count({ where: { type: "mfa_disabled", userId: user.id } })).toBe(1);
+    // The account's address hears of it: the password alone now stands between someone and the account.
+    const notice = ctx.mailer.sent.slice(sentBefore);
+    expect(notice).toEqual([expect.objectContaining({ to: "a@x.com", subject: "Two-step verification was turned off for your bizinsights account" })]);
+    expect(notice[0]!.text).toContain("http://localhost:3001/settings/security");
     // The check's own tokens were handed back.
     expect(ctx.auth.calls).toContain("revokeRefreshToken");
     expect((await post("/auth/login", { email: "a@x.com", password })).json().user).toMatchObject({ id: user.id });

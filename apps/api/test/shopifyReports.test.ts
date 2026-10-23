@@ -158,6 +158,17 @@ describe("the reconciliation report (GET .../shopify-check)", () => {
     expect(csv.body).toContain("Net sales");
   });
 
+  it("another workspace naming the store can't use up the store's own allowance", async () => {
+    const { a, ws, store } = await owner(["read_orders", "read_products"]);
+    const b = await signIn(ctx, "ub", "b@x.com");
+    const other = await createWorkspace(ctx, b.headers, "B");
+    for (let i = 0; i < 3; i++) {
+      const res = await ctx.app.inject({ method: "GET", url: `/workspaces/${other}/stores/${store.id}/shopify-check`, headers: b.headers });
+      expect(res.statusCode).toBe(404);
+    }
+    expect((await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${store.id}/shopify-check`, headers: a.headers })).statusCode).toBe(200);
+  });
+
   it("needs financial reports access (it shows every sales figure and Shopify's profit)", async () => {
     const { ws, store } = await owner();
     const v = await signIn(ctx, "uv", "v@x.com");

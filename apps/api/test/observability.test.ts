@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetEnvCache } from "@app/core";
+import { tenantDb, withDb } from "@app/db";
 import { clean, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
 
 let ctx: TestCtx;
@@ -113,6 +114,28 @@ describe("readiness", () => {
     });
     expect(status).toBe(503);
     expect(lines.find((l) => l.msg === "not ready")).toMatchObject({ level: "error", db: "database health check failed" });
+  });
+
+  it("says not ready when the tenant connection's role isn't bound by row-level security", async () => {
+    // The owner's login (a superuser here, rds_superuser on AWS) where app_rls belongs.
+    const owner = process.env.DATABASE_URL!;
+    const r = await withDb({ system: owner, tenant: owner }, () => ctx.app.inject({ method: "GET", url: "/readyz" }));
+    expect(r.statusCode).toBe(503);
+    expect(r.json().checks).toEqual({ db: true, coord: true, tenantDb: false });
+  });
+
+  it("in production, fails tenant queries rather than run them on the owner's login when APP_DATABASE_URL is missing", async () => {
+    const was = process.env.NODE_ENV;
+    await withDb({ system: process.env.DATABASE_URL! }, async () => {
+      process.env.NODE_ENV = "production";
+      try {
+        await expect(tenantDb.$queryRaw`SELECT 1`).rejects.toThrow(/APP_DATABASE_URL is not set/);
+      } finally {
+        process.env.NODE_ENV = was;
+      }
+      // Development and tests may share one login.
+      await expect(tenantDb.$queryRaw`SELECT 1`).resolves.toBeDefined();
+    });
   });
 
   it("says not ready when the coordinator fails", async () => {

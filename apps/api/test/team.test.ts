@@ -706,11 +706,41 @@ describe("opening the dashboard straight from the invitation link", () => {
     expect((await call("POST", `/workspaces/${b.ws}/team/members/${m.id}/renew`, b.owner.headers, { days: 61 })).statusCode).toBe(400);
   });
 
+  it("never joins an account that already has the address: whoever holds the link may be the inviter", async () => {
+    const b = await business();
+    // V: their own business and a sign-in of their own.
+    const v = await signIn(ctx, "victim", "victim@example.com");
+    await createWorkspace(ctx, v.headers, "Victim's business");
+    // B's owner invites V as an admin, copies the link and opens it without V.
+    ok(await call("POST", `/workspaces/${b.ws}/team/invitations`, b.owner.headers, { email: "victim@example.com", role: "admin", permissions: [] }));
+    const inv = await systemDb.invitation.findFirstOrThrow({ where: { workspaceId: b.ws, email: "victim@example.com" } });
+    const copied = tokenFrom(ok(await call("POST", `/workspaces/${b.ws}/team/invitations/${inv.id}/link`, b.owner.headers)).url)!;
+    const res = await open(copied);
+    expect(res.statusCode, res.body).toBe(409);
+    expect(res.json().error).toBe("sign_in_required");
+    expect(res.headers["set-cookie"] ?? "").not.toContain("__share=");
+    expect(await systemDb.membership.count({ where: { workspaceId: b.ws, userId: v.user.id } })).toBe(0);
+    expect((await systemDb.invitation.findUniqueOrThrow({ where: { id: inv.id } })).acceptedAt).toBeNull();
+    // Signed in as itself, V's account accepts (its address verified, and it is the invited one).
+    expect(ok(await call("POST", "/invitations/accept", v.headers, { token: copied }))).toMatchObject({ workspaceId: b.ws, joined: true });
+    expect(await systemDb.membership.count({ where: { workspaceId: b.ws, userId: v.user.id } })).toBe(1);
+    // Someone else's account can't accept it for V.
+    const other = await signIn(ctx, "other", "other@example.com");
+    ok(await call("POST", `/workspaces/${b.ws}/team/invitations`, b.owner.headers, { email: "late@example.com", role: "viewer", permissions: ["products.view"] }));
+    const late = await signIn(ctx, "late", "late@example.com");
+    const lateToken = tokenFrom(lastMailTo("late@example.com")!.text)!;
+    expect((await open(lateToken)).json().error).toBe("sign_in_required");
+    expect((await call("POST", "/invitations/accept", other.headers, { token: lateToken })).json().error).toBe("invite_email_mismatch");
+    expect(await systemDb.membership.count({ where: { workspaceId: b.ws, userId: late.user.id } })).toBe(0);
+  });
+
   it("opens only the shared workspace: not the account, nor its other workspaces", async () => {
     const b = await business();
     const existing = await signIn(ctx, "existing", "existing@example.com");
     const own = await createWorkspace(ctx, existing.headers, "Their own");
     const token = await sendInvite(b, "existing@example.com");
+    // An account accepts signed in; its link then opens the shared workspace on any device.
+    ok(await call("POST", "/invitations/accept", existing.headers, { token }));
     const res = await open(token);
     expect(res.json()).toMatchObject({ workspaceId: b.ws, signedIn: true });
     const link = sessionOf(res);
@@ -779,6 +809,9 @@ describe("opening the dashboard straight from the invitation link", () => {
     ok(await call("POST", `/workspaces/${b.ws}/team/invitations`, b.owner.headers, { email: "invited@example.com", role: "manager", permissions: ["integrations.status", "integrations.manage"] }));
     const token = tokenFrom(lastMailTo("invited@example.com")!.text)!;
     const invited = await signIn(ctx, "invited", "invited@example.com");
+    // The link alone doesn't join their account, signed in or not: they accept as themselves.
+    expect((await open(token, invited.headers)).json().error).toBe("sign_in_required");
+    ok(await call("POST", "/invitations/accept", invited.headers, { token }));
     const res = await open(token, invited.headers);
     expect(ok(res)).toMatchObject({ workspaceId: b.ws, signedIn: true });
     expect(cookiesFrom(res)).not.toContain("__session=");
@@ -1081,5 +1114,85 @@ describe("shared dashboards: who can see what, and for how long", () => {
     ok(await overview(b, b.owner.headers));
     // Asking for the shared context with only an account session gets no session (never the account's).
     expect((await call("GET", "/me", { ...b.owner.headers, "x-bi-context": "shared" })).statusCode).toBe(401);
+  });
+});
+
+describe("an owner or admin who leaves takes no working link along", () => {
+  const open = (token: string) => call("POST", "/invitations/open", ORIGIN, { token });
+  const copyLink = async (ws: string, invitationId: string, headers: Headers) => tokenFrom(ok(await call("POST", `/workspaces/${ws}/team/invitations/${invitationId}/link`, headers)).url)!;
+
+  /** Owner O, admin M (signed in), viewer X who joined from O's link; M has copied X's link and invited m2@ as an admin. */
+  async function teamWithAdmin() {
+    const b = await business();
+    const m = await inviteAndJoin(b, "m@example.com", "admin", []);
+    ok(await call("POST", `/workspaces/${b.ws}/team/invitations`, b.owner.headers, { email: "x@example.com", role: "viewer", permissions: ["products.view"] }));
+    const xToken = tokenFrom(lastMailTo("x@example.com")!.text)!;
+    ok(await open(xToken));
+    const xInvitation = await systemDb.invitation.findFirstOrThrow({ where: { workspaceId: b.ws, email: "x@example.com" } });
+    const copied = await copyLink(b.ws, xInvitation.id, m.guest.headers);
+    expect(copied).toBe(xToken);
+    ok(await call("POST", `/workspaces/${b.ws}/team/invitations`, m.guest.headers, { email: "m2@example.com", role: "admin", permissions: [] }));
+    const m2Token = tokenFrom(lastMailTo("m2@example.com")!.text)!;
+    return { b, m, xInvitation, copied, m2Token };
+  }
+
+  /** Neither link M kept opens anything any more; X's access goes on, through a new link from an owner. */
+  async function expectLinksRetired(t: Awaited<ReturnType<typeof teamWithAdmin>>) {
+    expect((await open(t.copied)).statusCode).toBe(400);
+    const m2 = await open(t.m2Token);
+    expect(m2.statusCode).toBe(400);
+    expect(m2.json().detail).toEqual({ status: "revoked" });
+    expect(await systemDb.membership.count({ where: { workspaceId: t.b.ws, user: { email: "m2@example.com" } } })).toBe(0);
+    const fresh = await copyLink(t.b.ws, t.xInvitation.id, t.b.owner.headers);
+    expect(fresh).not.toBe(t.copied);
+    ok(await open(fresh));
+  }
+
+  it("removing an admin cancels the invitations they sent and replaces the links they copied", async () => {
+    const t = await teamWithAdmin();
+    ok(await call("DELETE", `/workspaces/${t.b.ws}/team/members/${t.m.memberId}`, t.b.owner.headers));
+    await expectLinksRetired(t);
+    const entry = await systemDb.auditLog.findFirstOrThrow({ where: { workspaceId: t.b.ws, action: "member.removed" } });
+    expect(entry.metadata).toMatchObject({ invitationsCancelled: 1, linksReplaced: 1, ownLinksEnded: 1 });
+  });
+
+  it("demoting an admin does the same; their own link keeps opening their own, smaller access", async () => {
+    const t = await teamWithAdmin();
+    // A change that leaves them an admin retires nothing.
+    ok(await setAccess(t.b, t.m.memberId, "admin", []));
+    ok(await open(t.copied));
+    expect(ok(await call("POST", "/invitations/preview", {}, { token: t.m2Token })).status).toBe("pending");
+    ok(await setAccess(t.b, t.m.memberId, "viewer", ["products.view"]));
+    await expectLinksRetired(t);
+    ok(await open(t.m.token));
+    const entries = await systemDb.auditLog.findMany({ where: { workspaceId: t.b.ws, action: "member.access_changed" }, orderBy: { createdAt: "asc" } });
+    expect(entries.map((e) => e.metadata)).toMatchObject([
+      { invitationsCancelled: 0, linksReplaced: 0 },
+      { invitationsCancelled: 1, linksReplaced: 1 },
+    ]);
+  });
+
+  it("revoking an admin does the same; restoring them gives back their own link only", async () => {
+    const t = await teamWithAdmin();
+    ok(await call("POST", `/workspaces/${t.b.ws}/team/members/${t.m.memberId}/revoke`, t.b.owner.headers));
+    await expectLinksRetired(t);
+    expect((await open(t.m.token)).statusCode).toBe(400);
+    ok(await call("POST", `/workspaces/${t.b.ws}/team/members/${t.m.memberId}/restore`, t.b.owner.headers));
+    ok(await open(t.m.token));
+    expect((await open(t.m2Token)).statusCode).toBe(400);
+  });
+
+  it("a removed member's old link stays dead when they are invited back", async () => {
+    const b = await business();
+    ok(await call("POST", `/workspaces/${b.ws}/team/invitations`, b.owner.headers, { email: "x@example.com", role: "viewer", permissions: ["products.view"] }));
+    const first = tokenFrom(lastMailTo("x@example.com")!.text)!;
+    ok(await open(first));
+    const x = await systemDb.membership.findFirstOrThrow({ where: { workspaceId: b.ws, user: { email: "x@example.com" } } });
+    ok(await call("DELETE", `/workspaces/${b.ws}/team/members/${x.id}`, b.owner.headers));
+    ok(await call("POST", `/workspaces/${b.ws}/team/invitations`, b.owner.headers, { email: "x@example.com", role: "viewer", permissions: ["products.view"] }));
+    const again = tokenFrom(lastMailTo("x@example.com")!.text)!;
+    expect(again).not.toBe(first);
+    ok(await open(again));
+    expect((await open(first)).statusCode).toBe(400);
   });
 });

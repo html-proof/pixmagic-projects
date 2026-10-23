@@ -629,6 +629,63 @@ describe("access control and tenant isolation", () => {
     expect((await call("GET", `/workspaces/${ws}/staff/employees`, viewer.headers)).statusCode).toBe(403);
   });
 
+  it("HR can't reach an employee's pay by pointing the record at their own inbox or accepting their own invitation", async () => {
+    const member = async (ws: string, uid: string, access: { staffRole: "hr_manager" } | { permissions: string[] }) => {
+      const u = await signIn(ctx, uid, `${uid}@example.com`);
+      const data = "staffRole" in access ? { role: "viewer" as const, staffRole: access.staffRole, permissions: [...LEGACY_GRANTS.viewer] } : { role: "custom" as const, permissions: access.permissions };
+      await systemDb.membership.create({ data: { workspaceId: ws, userId: u.user.id, ...data } });
+      return u;
+    };
+    const linkToken = async (h: Headers, ws: string, employeeId: string) => {
+      const inv = ok(await call("POST", `/workspaces/${ws}/staff/employees/${employeeId}/invitations`, h, { delivery: "link" }));
+      return decodeURIComponent(/token=([^&]+)/.exec(inv.url)![1]!);
+    };
+
+    const a = await org("Acme");
+    const hr = await member(a.ws, "hr", { staffRole: "hr_manager" });
+    const paid = await hire(a.h, a.ws, "Jane Doe", "jane@example.com"); // with a pay rate
+    const unpaid = await hire(a.h, a.ws, "Sam Lee", "sam@example.com", { hourlyRate: null });
+    // HR still corrects people's details, addresses included, where there is no pay to see.
+    ok(await call("PATCH", `/workspaces/${a.ws}/staff/employees/${unpaid.id}`, hr.headers, { email: "sam.lee@example.com" }));
+    // Not the address of someone with pay: whoever signs up with it sees that pay.
+    const moved = await call("PATCH", `/workspaces/${a.ws}/staff/employees/${paid.id}`, hr.headers, { email: "hr@example.com" });
+    expect(moved.statusCode).toBe(403);
+    expect(moved.json().error).toBe("pay_restricted");
+    expect((await systemDb.employee.findUniqueOrThrow({ where: { id: paid.id } })).email).toBe("jane@example.com");
+
+    // Even with the record pointed at HR's address (by the owner here), HR's own invitation doesn't claim it.
+    ok(await call("PATCH", `/workspaces/${a.ws}/staff/employees/${paid.id}`, a.h, { email: "hr@example.com" }));
+    const token = await linkToken(hr.headers, a.ws, paid.id);
+    const claimed = await call("POST", "/staff/invitations/accept-existing", hr.headers, { token });
+    expect(claimed.statusCode).toBe(403);
+    expect(claimed.json().error).toBe("own_invitation");
+    expect((await systemDb.employee.findUniqueOrThrow({ where: { id: paid.id } })).userId).toBeNull();
+    expect((await call("GET", `/employee/${a.ws}/pay`, hr.headers)).statusCode).toBe(404);
+    // The refusal gives the invitation back: it still works for whoever it's meant for.
+    expect(ok(await call("GET", `/staff/invitations/lookup?token=${encodeURIComponent(token)}`, {})).ok).toBe(true);
+
+    // Another organization, the ordinary way: the address corrected by the owner, the invitation
+    // emailed, the real person joins and sees their pay. A member who may see pay claims their own
+    // record with their own invitation; an HR manager joins with one somebody else sent.
+    const b = await org("Beta");
+    const bob = await signIn(ctx, "bob", "bob@example.com");
+    const e = await hire(b.h, b.ws, "Bob Ray", "bob.old@example.com");
+    ok(await call("PATCH", `/workspaces/${b.ws}/staff/employees/${e.id}`, b.h, { email: "bob@example.com" }));
+    ok(await call("POST", `/workspaces/${b.ws}/staff/employees/${e.id}/invitations`, b.h, { delivery: "email" }));
+    ok(await call("POST", "/staff/invitations/accept-existing", bob.headers, { token: tokenFromMail("bob@example.com") }));
+    expect(ok(await call("GET", `/employee/${b.ws}/pay`, bob.headers)).items).toEqual([]);
+
+    const manager = await member(b.ws, "manager", { permissions: ["staff.manage", "staff.payroll"] });
+    const own = await hire(b.h, b.ws, "Max Manager", "manager@example.com");
+    ok(await call("POST", "/staff/invitations/accept-existing", manager.headers, { token: await linkToken(manager.headers, b.ws, own.id) }));
+    expect((await call("GET", `/employee/${b.ws}/pay`, manager.headers)).statusCode).toBe(200);
+
+    const bHr = await member(b.ws, "hr-beta", { staffRole: "hr_manager" });
+    const hrOwn = await hire(b.h, b.ws, "Harper HR", "hr-beta@example.com");
+    ok(await call("POST", "/staff/invitations/accept-existing", bHr.headers, { token: await linkToken(b.h, b.ws, hrOwn.id) }));
+    expect((await call("GET", `/employee/${b.ws}/pay`, bHr.headers)).statusCode).toBe(200);
+  });
+
   it("keeps organizations completely apart", async () => {
     at("2026-10-14T09:00:00Z");
     const one = await org("One");
