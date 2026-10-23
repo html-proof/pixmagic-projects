@@ -92,9 +92,10 @@ test("Google is one choice for Google Ads and AdSense: its button asks which, an
   });
   const started: string[] = [];
   await page.route(`**/api/workspaces/${ws}/stores/${storeId}/ads/*/connect`, (route) => {
-    started.push(new URL(route.request().url()).pathname.split("/").at(-2)!);
-    // Back to this page instead of the platform's sign-in.
-    return route.fulfill({ json: { url: "/settings/integrations" } });
+    const p = new URL(route.request().url()).pathname.split("/").at(-2)!;
+    started.push(p);
+    // Back to this page instead of the platform's sign-in, marked so the test can wait until the browser is there.
+    return route.fulfill({ json: { url: `/settings/integrations?back=${p}` } });
   });
   await page.goto("/settings/integrations");
 
@@ -113,15 +114,17 @@ test("Google is one choice for Google Ads and AdSense: its button asks which, an
   await expect(choice).toHaveCount(0);
   await google.getByRole("button", { name: "Connect Google" }).click();
   await choice.getByRole("button", { name: /^Google AdSense/ }).click();
-  await expect.poll(() => started).toEqual(["adsense"]);
+  // The page leaves by itself: wait for it to arrive, or a goto of ours would be aborted by it.
+  await page.waitForURL(/\/settings\/integrations\?back=adsense$/);
+  expect(started).toEqual(["adsense"]);
 
   // Meta: Facebook would show anyone but a tester "Feature Unavailable", so the page says so first.
-  await page.goto("/settings/integrations");
   await page.getByTestId("int-meta").getByRole("button", { name: "Connect Meta" }).click();
   const before = page.getByRole("dialog", { name: "Before you go to Facebook" });
   await expect(before.getByTestId("meta-testers-only")).toBeVisible();
   await before.getByRole("button", { name: "Continue to Facebook" }).click();
-  await expect.poll(() => started).toEqual(["adsense", "meta"]);
+  await page.waitForURL(/\/settings\/integrations\?back=meta$/);
+  expect(started).toEqual(["adsense", "meta"]);
 });
 
 test("each connected account shows its state, and Connect your business the most pressing one per choice", async ({ page }) => {
