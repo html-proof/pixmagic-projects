@@ -5,18 +5,25 @@
 //   node infra/cdk/scripts/nango-setup.mjs [--env production] [--providers meta,adsense] [--check]
 //
 // --check      only read: says which integrations exist, from which Nango provider, with which
-//              client id, and what --apply would change. The default.
-// --apply      create the missing integrations and update the ones whose client or scopes differ.
+//              client id, whether Nango holds the same client secret, whether Meta accepts
+//              META_APP_SECRET for the Meta app, and what --apply would change. The default.
+// --apply      create the missing integrations and update the ones whose client, secret or scopes
+//              differ. A Meta secret Meta refuses is never sent to Nango.
 //
 // It reads NANGO_SECRET_KEY, META_APP_SECRET and GOOGLE_ADS_CLIENT_SECRET from the app secret
 // (insights/<env>/app, `aws login` first) and the public ids from apps/aws/src/settings.ts, and sends
-// the client secrets to Nango only (over HTTPS, in a request body): they are never printed or written.
+// the client secrets only to Nango and the Meta secret to Meta (over HTTPS, in a request body): they
+// are never printed or written.
+//
+// Why the secret matters: bizinsights signs every Meta call with META_APP_SECRET (appsecret_proof). A
+// Nango integration holding another secret or app makes tokens Meta then refuses with "Invalid
+// appsecret_proof", and "Continue with Meta Ads" ends in "isn't set up correctly on bizinsights' side".
 //
 // The environment's callback URL (<APP_URL>/api/ads/nango/oauth-callback) and webhook URL
 // (<APP_URL>/api/webhooks/nango) can only be set in Nango's dashboard: see docs/nango.md.
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, URLSearchParams } from "node:url";
 
 const args = process.argv.slice(2);
 const opt = (name) => {
@@ -56,6 +63,41 @@ export function wanted(provider, s, secret) {
   return { clientId: s.GOOGLE_ADS_CLIENT_ID, clientSecret: secret.GOOGLE_ADS_CLIENT_SECRET, scopes: `${scope},openid` };
 }
 
+/**
+ * What differs between an integration as Nango holds it (`data`, from GET /integrations/<key>?include=credentials)
+ * and what it must hold. Never says a secret, only whether it matches. `fatal`: only deleting it in Nango's
+ * dashboard fixes it (made from another Nango provider), so --apply leaves it.
+ */
+export function differences(def, data, want) {
+  const cred = data.credentials ?? {};
+  const problems = [];
+  let fatal = false;
+  if (data.provider && data.provider !== def.provider) {
+    problems.push(`made from provider ${data.provider}, not ${def.provider} (delete it in Nango's dashboard and run --apply again)`);
+    fatal = true;
+  }
+  if (cred.client_id && cred.client_id !== want.clientId) problems.push(`client id ${cred.client_id}, not ${want.clientId}`);
+  if (typeof cred.client_secret === "string" && cred.client_secret !== want.clientSecret) problems.push("client secret isn't the one in the app secret");
+  if (cred.scopes !== undefined && (cred.scopes ?? "") !== want.scopes) problems.push(`scopes "${cred.scopes ?? ""}", not "${want.scopes}"`);
+  return { problems, fatal };
+}
+
+/**
+ * Whether Meta takes `appSecret` as the secret of app `appId`: an app token (client_credentials) comes
+ * back. Null when Meta didn't answer. The secret goes to Meta only, in the request body.
+ */
+export async function metaAcceptsSecret(appId, appSecret, version = "v26.0", fetchImpl = fetch) {
+  const res = await fetchImpl(`https://graph.facebook.com/${version}/oauth/access_token`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ client_id: appId, client_secret: appSecret, grant_type: "client_credentials" }).toString(),
+  }).catch(() => null);
+  if (!res) return null;
+  const json = await res.json().catch(() => ({}));
+  if (res.ok && typeof json.access_token === "string") return true;
+  return res.status >= 500 ? null : false;
+}
+
 async function nango(key, method, path, body) {
   const res = await fetch(`https://api.nango.dev${path}`, {
     method,
@@ -80,12 +122,23 @@ async function main() {
       console.log(`  ${def.key}: SKIPPED, ${p === "meta" ? "META_APP_ID/META_APP_SECRET" : "GOOGLE_ADS_CLIENT_ID/GOOGLE_ADS_CLIENT_SECRET"} not set`);
       continue;
     }
+    // The Meta secret every call is signed with must be the app's own: never copied to Nango when Meta refuses it.
+    let secretRefused = false;
+    if (p === "meta") {
+      const accepted = await metaAcceptsSecret(want.clientId, want.clientSecret, s.META_API_VERSION || undefined);
+      secretRefused = accepted === false;
+      console.log(
+        accepted === true ? `  Meta accepts META_APP_SECRET for app ${want.clientId}`
+        : accepted === false ? `  Meta REFUSES META_APP_SECRET for app ${want.clientId}: copy the App secret (developers.facebook.com → App settings → Basic), run node infra/cdk/scripts/put-secrets.mjs --env ${envName} --set META_APP_SECRET, restart the functions, then run this with --apply`
+        : `  Meta didn't answer whether META_APP_SECRET is app ${want.clientId}'s: run this again`,
+      );
+    }
     const got = await nango(secret.NANGO_SECRET_KEY, "GET", `/integrations/${def.key}?include=credentials`);
     if (got.status === 401 || got.status === 403) throw new Error(`Nango refused the key (${got.status}): check NANGO_SECRET_KEY`);
     const body = { unique_key: def.key, provider: def.provider, display_name: def.name, credentials: { type: "OAUTH2", client_id: want.clientId, client_secret: want.clientSecret, scopes: want.scopes } };
     if (got.status === 404) {
-      if (!apply) {
-        console.log(`  ${def.key}: MISSING (would be created from provider ${def.provider}, client ${want.clientId})`);
+      if (!apply || secretRefused) {
+        console.log(`  ${def.key}: MISSING (${secretRefused ? "not created while Meta refuses the secret" : "would be created"} from provider ${def.provider}, client ${want.clientId})`);
         continue;
       }
       const made = await nango(secret.NANGO_SECRET_KEY, "POST", "/integrations", body);
@@ -93,16 +146,13 @@ async function main() {
       continue;
     }
     const data = got.json?.data ?? {};
-    const cred = data.credentials ?? {};
-    const problems = [];
-    if (data.provider && data.provider !== def.provider) problems.push(`made from provider ${data.provider}, not ${def.provider} (delete it in Nango's dashboard and run --apply again)`);
-    if (cred.client_id && cred.client_id !== want.clientId) problems.push(`client id ${cred.client_id}, not ${want.clientId}`);
-    if (cred.scopes !== undefined && (cred.scopes ?? "") !== want.scopes) problems.push(`scopes "${cred.scopes ?? ""}", not "${want.scopes}"`);
+    const { problems, fatal } = differences(def, data, want);
+    if (typeof data.credentials?.client_secret !== "string") console.log(`  ${def.key}: Nango didn't show its client secret, so it wasn't compared`);
     if (!problems.length) {
       console.log(`  ${def.key}: ok (provider ${data.provider ?? def.provider}, client ${want.clientId})`);
       continue;
     }
-    if (!apply || (data.provider && data.provider !== def.provider)) {
+    if (!apply || fatal || secretRefused) {
       console.log(`  ${def.key}: DIFFERS: ${problems.join("; ")}`);
       continue;
     }
